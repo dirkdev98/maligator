@@ -1427,6 +1427,7 @@ export type BytecodeInstruction =
 			found: number;
 			value: number;
 			nameStringIndex: number;
+			strict: boolean;
 	  }
 	| {
 			opcode: "IS_EMPTY";
@@ -4688,6 +4689,7 @@ function lowerInstructionToBytecodeInstruction(
 				found: instruction.registers[0],
 				value: instruction.registers[1],
 				nameStringIndex: instruction.nameStringIndex,
+				strict: instruction.strict === true,
 			};
 		case "isEmpty":
 			return {

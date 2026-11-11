@@ -6232,6 +6232,7 @@ function compileWithDynamicWrite(
 		type: "withSet",
 		registers: [found, value],
 		nameStringIndex: getOrCreateStringConstant(program, identifier.name),
+		...(isSloppyFunction(fn) ? {} : { strict: true as const }),
 	});
 
 	const skipJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
@@ -14656,6 +14657,19 @@ function compileDirectEvalCall(
 			value = loadRegisterFromLocation(fn, cursor.block, location);
 		}
 		const key = compileStaticString(program, fn, cursor, name);
+		if (binding.kind === "const" || binding.immutableSelfReference) {
+			// Immutable bindings reject eval's writes: a const one always throws, a
+			// function's own name only in strict code, which its configurability
+			// tells the runtime's with-store.
+			cursor.block.emitter.emit({
+				type: "defineProperty",
+				registers: [scopeObject, key, value],
+				enumerable: true,
+				writable: false,
+				configurable: binding.kind !== "const",
+			});
+			continue;
+		}
 		cursor.block.emitter.emit({
 			type: "storeProperty",
 			registers: [scopeObject, key, value],
@@ -14798,10 +14812,10 @@ function compileDirectEvalCall(
 		],
 	});
 
-	// Write mutated bindings back (const can't be reassigned; the eval throws if
-	// it tries, so there is nothing to write back).
+	// Write mutated bindings back. Eval's writes to immutable bindings throw or are
+	// ignored, so those have nothing to write back.
 	for (const [name, binding] of bindings) {
-		if (binding.kind === "const") {
+		if (binding.kind === "const" || binding.immutableSelfReference) {
 			continue;
 		}
 		const location = getOrCreateBindingLocation(program, fn, binding);

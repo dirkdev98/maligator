@@ -16334,7 +16334,7 @@ class NativeInstructionEmission {
 				// Assign through the with-envs; `found` (always boxed-rep) reports whether a
 				// binding matched so the IR can fall back to the static binding on a miss.
 				return [
-					`r${instruction.found} = ${this.profileCall("boxing", `mal_value_new_boolean(mal_vm_op_with_set(vm, env, ${this.context.relocation.stringIndex(instruction.nameStringIndex)}, ${this.boxed(instruction.value)}))`)};`,
+					`r${instruction.found} = ${this.profileCall("boxing", `mal_value_new_boolean(mal_vm_op_with_set(vm, env, ${this.context.relocation.stringIndex(instruction.nameStringIndex)}, ${this.boxed(instruction.value)}, ${instruction.strict ? "true" : "false"}))`)};`,
 					this.throwCheck(),
 				];
 			case "CHECK_SUPER_CLASS":

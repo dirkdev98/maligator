@@ -1829,7 +1829,28 @@ void mal_op_with_resolve_base(MalCallable *callable, const MalInstruction *instr
 // from value equality, which is wrong for NaN and for a same-value Set through
 // an accessor). Ordinary `with` env records have slot_count 1, so this is a
 // no-op for them.
-bool mal_vm_op_with_set(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue value) {
+/*
+ * Object environment SetMutableBinding: a rejected Set throws in strict code. A
+ * direct eval's scope object (the env that also carries a dirty tracker) holds the
+ * caller's immutable bindings as non-writable properties; a non-configurable one is
+ * a const, whose assignment throws in sloppy code too.
+ */
+static void mal_vm_with_set_rejected(
+    MalVm *vm, const MalEnv *e, MalValue object, MalKey key, bool strict
+) {
+    bool constant = false;
+    if (e->slot_count > 1 && mal_value_is_object(e->slots[1]) && mal_value_is_object(object)) {
+        MalPropertyLookup own = mal_object_get_own(mal_value_to_object(object), key);
+        constant = own.present && (own.desc.flags & MAL_PROPERTY_CONFIGURABLE) == 0;
+    }
+    if (strict || constant) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Assignment to constant variable.");
+    }
+}
+
+bool mal_vm_op_with_set(
+    MalVm *vm, MalEnv *env, i32 name_string_index, MalValue value, bool strict
+) {
     MalValue name = mal_value_from_string(mal_vm_string_constant(vm, name_string_index));
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
@@ -1840,7 +1861,12 @@ bool mal_vm_op_with_set(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue 
             }
             MalValue object = e->slots[0];
             if (mal_vm_with_has_binding(vm, object, key)) {
-                mal_vm_set_property(vm, object, key, value, object);
+                if (!mal_vm_set_property(vm, object, key, value, object)) {
+                    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+                        mal_vm_with_set_rejected(vm, e, object, key, strict);
+                    }
+                    return true;
+                }
                 if (e->slot_count > 1 && mal_value_is_object(e->slots[1])) {
                     mal_vm_set_property(
                         vm, e->slots[1], key, mal_value_new_boolean(true), e->slots[1]);
@@ -1855,7 +1881,8 @@ bool mal_vm_op_with_set(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue 
 void mal_op_with_set(MalCallable *callable, const MalInstruction *instruction) {
     bool found = mal_vm_op_with_set(
         callable->vm, callable->env, instruction->as.with_set.name_string_index,
-        callable->registers[instruction->as.with_set.value]
+        callable->registers[instruction->as.with_set.value],
+        instruction->as.with_set.strict
     );
     callable->registers[instruction->as.with_set.found] = mal_value_new_boolean(found);
 }

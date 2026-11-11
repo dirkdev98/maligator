@@ -384,7 +384,7 @@ describe("Test262 VM image merger", () => {
 				nameIndices: [0],
 				slots: [0],
 			},
-			{ opcode: "WITH_SET", found: 0, value: 1, nameStringIndex: 0 },
+			{ opcode: "WITH_SET", found: 0, value: 1, nameStringIndex: 0, strict: false },
 			{
 				opcode: "INIT_GLOBAL_VARS",
 				nameStringIndices: [0],

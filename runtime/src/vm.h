@@ -323,6 +323,7 @@ typedef struct MalInstruction {
             // [found] = whether a with-object provided the name (and was written
             // [value]); false → the compiler falls back to the static store.
             i32 found, value, name_string_index;
+            bool strict;
         } with_set;
 
         struct {

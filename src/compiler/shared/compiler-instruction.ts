@@ -1131,6 +1131,8 @@ type CompilerOperation =
 			registers: [number, number];
 
 			nameStringIndex: number;
+			/** Strict code: a rejected Set throws, as object environments require. */
+			strict?: true;
 	  }
 	| {
 			// [destination] = ([source] is the EMPTY sentinel). Lets the compiler

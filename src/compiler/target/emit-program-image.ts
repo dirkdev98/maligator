@@ -3467,7 +3467,7 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 		case "WITH_RESOLVE_BASE":
 			return `{ .opcode = MAL_OP_WITH_RESOLVE_BASE, .as.with_resolve_base = { .dst = ${instruction.dst}, .name_string_index = ${instruction.nameStringIndex} } }`;
 		case "WITH_SET":
-			return `{ .opcode = MAL_OP_WITH_SET, .as.with_set = { .found = ${instruction.found}, .value = ${instruction.value}, .name_string_index = ${instruction.nameStringIndex} } }`;
+			return `{ .opcode = MAL_OP_WITH_SET, .as.with_set = { .found = ${instruction.found}, .value = ${instruction.value}, .name_string_index = ${instruction.nameStringIndex}, .strict = ${instruction.strict ? "true" : "false"} } }`;
 		case "IS_EMPTY":
 			return `{ .opcode = MAL_OP_IS_EMPTY, .as.is_empty = { .dst = ${instruction.dst}, .src = ${instruction.src} } }`;
 		case "REQUIRE_COERCIBLE":
