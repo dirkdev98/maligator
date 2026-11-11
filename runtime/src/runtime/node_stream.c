@@ -170,7 +170,7 @@ static bool stream_emit(
 }
 
 static void stream_init_events(MalVm *vm, MalValue receiver, i32 kind) {
-    MalValue events = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    MalValue events = mal_value_from_object(mal_object_new_reserved(&vm->heap, nullptr, 4));
     MalRootSpan root;
     mal_gc_root(&root, &events, 1);
     static const char *const names[] = {

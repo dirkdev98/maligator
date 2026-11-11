@@ -70,6 +70,18 @@ static bool ee_require_receiver(MalVm *vm, MalValue receiver, MalObject **out) {
     return true;
 }
 
+/*
+ * A constructed emitter's own fields, with room for the few a subclass constructor
+ * adds, and the event table's first event names, so neither grows malloc'd slot
+ * storage for the common case.
+ */
+#define EE_RECEIVER_SLOTS 8
+#define EE_EVENT_TABLE_SLOTS 4
+
+static MalObject *ee_new_event_table(MalVm *vm) {
+    return mal_object_new_reserved(&vm->heap, nullptr, EE_EVENT_TABLE_SLOTS);
+}
+
 /* EventEmitter intentionally uses Node's ordinary, visible state properties. This
  * makes EventEmitter.call(obj) and prototype mixins work without a new heap type;
  * the null-prototype event table and its listener arrays are traced normally. */
@@ -86,7 +98,7 @@ static MalObject *ee_events(MalVm *vm, MalValue receiver, bool create) {
         return nullptr;
     }
 
-    MalValue events_value = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    MalValue events_value = mal_value_from_object(ee_new_event_table(vm));
     MalRootSpan root;
     mal_gc_root(&root, &events_value, 1);
     mal_object_set(object, ee_hot_key(vm, MAL_HOT_KEY_EVENTS), events_value);
@@ -429,12 +441,22 @@ static MalValue ee_constructor(
             prototype = mal_value_to_object(prototype_value);
         }
     }
-    MalValue instance = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    MalValue roots[] = {
+        mal_value_from_object(mal_object_new_reserved(&vm->heap, prototype, EE_RECEIVER_SLOTS)),
+        mal_value_from_object(ee_new_event_table(vm)),
+    };
     MalRootSpan root;
-    mal_gc_root(&root, &instance, 1);
-    ee_events(vm, instance, true);
+    mal_gc_root(&root, roots, countof(roots));
+    MalKey keys[] = {
+        ee_hot_key(vm, MAL_HOT_KEY_EVENTS), ee_hot_key(vm, MAL_HOT_KEY_EVENTS_COUNT),
+        ee_name_key(vm, "_maxListeners"),
+    };
+    MalValue values[] = {roots[1], mal_value_from_i32(0), mal_value_new_undefined()};
+    static MAL_ISOLATE_LOCAL MalObjectFieldsCache fields;
+    mal_object_set_fields(
+        &vm->heap, mal_value_to_object(roots[0]), &fields, keys, values, countof(keys));
     mal_gc_unroot(&root);
-    return instance;
+    return roots[0];
 }
 
 static MalValue ee_on(
