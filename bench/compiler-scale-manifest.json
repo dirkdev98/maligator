@@ -113,6 +113,7 @@
 				"src/compiler/core/core-analysis-scratch.ts",
 				"src/compiler/core/core-array-initialization.ts",
 				"src/compiler/core/core-array-iteration.ts",
+				"src/compiler/core/core-bigint-wrap.ts",
 				"src/compiler/core/core-builder.ts",
 				"src/compiler/core/core-builtin-effects.ts",
 				"src/compiler/core/core-builtin-result-projections.ts",
