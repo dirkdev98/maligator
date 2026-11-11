@@ -3178,6 +3178,10 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_construct_super(frame, instruction));
                 break;
             }
+            MAL_VM_CASE(CONSTRUCT_SUPER_FORWARD) {
+                MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_construct_super_forward(frame, instruction));
+                break;
+            }
             MAL_VM_CASE(CONSTRUCT_SUPER_SPREAD) {
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_construct_super_spread(frame, instruction));
                 break;

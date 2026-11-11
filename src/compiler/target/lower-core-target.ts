@@ -191,6 +191,7 @@ const RAW_ARGUMENT_OPCODES: ReadonlySet<string> = new Set([
 	"createRestArguments",
 	"createRestArgumentsState",
 	"callRestArguments",
+	"constructSuperForward",
 ]);
 
 export function coreSupportsDirectEntries(fn: CoreFunctionStore): boolean {

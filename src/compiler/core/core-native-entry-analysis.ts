@@ -536,6 +536,7 @@ export function coreArgumentObservation(fn: CoreFunctionStore): CoreArgumentObse
 		if (
 			opcode === "createArgumentsObject" ||
 			opcode === "callRestArguments" ||
+			opcode === "constructSuperForward" ||
 			opcode === "loadDynamicArgument"
 		)
 			return { kind: "general" };

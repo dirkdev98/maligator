@@ -52,6 +52,7 @@ const PARAMETER_ALIAS_OPCODES = new Set([
 	"createArgumentsObject",
 	"createRestArguments",
 	"callRestArguments",
+	"constructSuperForward",
 ]);
 
 export function coreReadOnlyParameterFields(

@@ -4507,6 +4507,28 @@ void mal_op_construct_super(MalCallable *callable, const MalInstruction *instruc
     vm->frames[caller_frame_index].registers[instruction->as.construct_super.dst] = bound_this;
 }
 
+void mal_op_construct_super_forward(MalCallable *callable, const MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    i32 caller_frame_index = vm->frame_count - 1;
+    MalValue bound_this;
+    // The frame's arguments sit below its registers on the fixed-capacity value
+    // stack, so they stay put and rooted while the parent runs.
+    MalCompletion completion = mal_vm_op_construct_super_arguments(
+        vm,
+        callable->registers[instruction->as.construct_super_forward.parent],
+        callable->arguments,
+        callable->argument_count,
+        callable->new_target,
+        callable->this_value,
+        &bound_this
+    );
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        return;
+    }
+    vm->frames[caller_frame_index].this_value = bound_this;
+    vm->frames[caller_frame_index].registers[instruction->as.construct_super_forward.dst] = bound_this;
+}
+
 void mal_op_construct_super_spread(MalCallable *callable, const MalInstruction *instruction) {
     MalVm *vm = callable->vm;
     // Frames may relocate while the parent constructor runs; address the caller

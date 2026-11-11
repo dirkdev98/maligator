@@ -556,6 +556,9 @@ void mal_op_construct_spread(MalCallable *callable, const MalInstruction *instru
  */
 void mal_op_construct_super(MalCallable *callable, const MalInstruction *instruction);
 
+/** The default derived constructor's super(): mal_op_construct_super with this frame's arguments. */
+void mal_op_construct_super_forward(MalCallable *callable, const MalInstruction *instruction);
+
 /** `super(...args)`: mal_op_construct_super with the arguments in an array register. */
 void mal_op_construct_super_spread(MalCallable *callable, const MalInstruction *instruction);
 

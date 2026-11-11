@@ -298,6 +298,7 @@ function prototypeMembers(definition: ClassDefinition): OwnMembers {
 
 const SUPER_CONSTRUCTS: ReadonlySet<string> = new Set([
 	"constructSuper",
+	"constructSuperForward",
 	"constructSuperSpread",
 	"constructSuperExplicit",
 ]);

@@ -31,6 +31,7 @@ const NAME_SLOT_WRITERS: ReadonlySet<string> = new Set([
 
 const THIS_WRITERS: ReadonlySet<string> = new Set([
 	"constructSuper",
+	"constructSuperForward",
 	"constructSuperSpread",
 	"constructSuperExplicit",
 	"setThis",

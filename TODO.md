@@ -125,11 +125,6 @@ static generated-code size and helper counts do not establish runtime cost.
       performs. Scalar replacement only materializes at a `return`, so such a record
       is now allocated with its stores intact, and a returned field read stays boxed.
 
-- [ ] Forward a default derived constructor's own arguments to `super()` instead of
-      building a rest array (5M `new Implicit(x)`: 170 vs Node's 26 ms). The spec
-      passes the argument list through, so a forwarding op is also exact; it needs the
-      raw-argument planner lists that `createRestArguments` sits in.
-
 - [ ] Test bounded method target sets for one repeated Core-store receiver using existing
       provenance, target caps and incremental summaries. Track relevant property/prototype
       writes and retain open fallbacks. Stop if exactness needs whole-heap flow; require

@@ -1040,6 +1040,7 @@ describe("program-image-codec", () => {
 			"CONCAT_STRINGS",
 			"LOAD_DYNAMIC_ARGUMENT",
 			"CONSTRUCT_SUPER",
+			"CONSTRUCT_SUPER_FORWARD",
 		];
 		expect(WIRE_OPCODES.slice(-appended.length)).toEqual(appended);
 	});

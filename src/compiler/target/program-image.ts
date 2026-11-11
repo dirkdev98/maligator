@@ -1990,7 +1990,8 @@ export function validateNativeDirectEntry(
 		if (
 			instruction.opcode === "CREATE_ARGUMENTS_OBJECT" ||
 			instruction.opcode === "LOAD_DYNAMIC_ARGUMENT" ||
-			instruction.opcode === "CALL_REST_ARGUMENTS"
+			instruction.opcode === "CALL_REST_ARGUMENTS" ||
+			instruction.opcode === "CONSTRUCT_SUPER_FORWARD"
 		)
 			throw new RangeError("Native direct entry observes the general argument slice");
 	}

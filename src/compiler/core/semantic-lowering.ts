@@ -5604,21 +5604,14 @@ function compileDefaultConstructor(
 						),
 					);
 
-		// `constructor(...args) { super(...args); }`: forward every argument to
-		// the parent's [[Construct]] (with the active new.target) and bind the
-		// result as `this`.
-		const argumentsArray = nextCoreVariable(ctorFn);
-		cursor.block.emitter.emit({
-			type: "createRestArguments",
-			registers: [argumentsArray],
-			startIndex: 0,
-		});
-
+		// The default derived constructor passes its argument list to the
+		// parent's [[Construct]] (with the active new.target) as is, without
+		// iterating it, and binds the result as `this`.
 		const result = nextCoreVariable(ctorFn);
 		emitSuperConstruct(ctorFn, cursor, heritage, current, (parent) =>
 			cursor.block.emitter.emit({
-				type: "constructSuperSpread",
-				registers: [result, parent, argumentsArray],
+				type: "constructSuperForward",
+				registers: [result, parent],
 			}),
 		);
 	}

@@ -802,6 +802,10 @@ typedef struct MalInstruction {
         } construct_super;
 
         struct {
+            i32 dst, parent;
+        } construct_super_forward;
+
+        struct {
             i32 dst, parent, arguments_array;
         } construct_super_spread;
 

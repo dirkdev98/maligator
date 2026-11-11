@@ -337,6 +337,7 @@ const INLINE_UNSUPPORTED_OPCODES = new Set([
 	"createRestArguments",
 	"createRestArgumentsState",
 	"callRestArguments",
+	"constructSuperForward",
 	"loadCallee",
 	"storeCaptured",
 ]);
@@ -2252,6 +2253,7 @@ const CALLBACK_SPECIALIZATION_EXCLUDED_OPCODES: ReadonlySet<string> = new Set([
 	"loadStaticArgument",
 	"createArgumentsObject",
 	"createRestArguments",
+	"constructSuperForward",
 ]);
 
 // A clone created at the call site binds the caller's scope chain instead of the original's.

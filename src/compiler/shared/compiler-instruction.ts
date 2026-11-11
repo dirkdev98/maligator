@@ -880,6 +880,13 @@ type CompilerOperation =
 			registers: [number, number, ...Array<number>];
 	  }
 	| {
+			type: "constructSuperForward";
+
+			// [destination, parent]: the default derived constructor passes its own
+			// argument list through unchanged.
+			registers: [number, number];
+	  }
+	| {
 			type: "constructSuperSpread";
 
 			// [destination, parent, arguments_array]

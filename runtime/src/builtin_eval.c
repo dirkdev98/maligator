@@ -1,5 +1,6 @@
 #include "vm.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -114,7 +115,9 @@ static bool ensure_compiler(MalVm *vm) {
     const char *err = "ok";
     MalLoadedRuntimeImage *loaded = mal_runtime_image_load(bytes, len, &err);
     if (loaded == nullptr) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE, "eval: baked compiler failed to load");
+        char message[160];
+        snprintf(message, sizeof message, "eval: baked compiler failed to load: %s", err);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE, (const byte *) message);
         goto done;
     }
     mal_vm_retain_loaded_runtime_image(vm, loaded);

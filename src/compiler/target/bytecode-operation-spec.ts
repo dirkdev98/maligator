@@ -139,6 +139,7 @@ export const BYTECODE_OPERATIONS = [
 	"CONCAT_STRINGS",
 	"LOAD_DYNAMIC_ARGUMENT",
 	"CONSTRUCT_SUPER",
+	"CONSTRUCT_SUPER_FORWARD",
 ] as const;
 
 export type BytecodeOperation = (typeof BYTECODE_OPERATIONS)[number];

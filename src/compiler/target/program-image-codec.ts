@@ -45,7 +45,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 92;
+export const WIRE_VERSION = 93;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -1247,6 +1247,10 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.parent);
 			w.i32Array(i.arguments);
 			return;
+		case "CONSTRUCT_SUPER_FORWARD":
+			w.i32(i.dst);
+			w.i32(i.parent);
+			return;
 		case "CONSTRUCT_SUPER_SPREAD":
 			w.i32(i.dst);
 			w.i32(i.parent);
@@ -2296,6 +2300,8 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 			return { opcode, dst: r.i32(), callee: r.i32(), argumentsArray: r.i32() };
 		case "CONSTRUCT_SUPER":
 			return { opcode, dst: r.i32(), parent: r.i32(), arguments: r.i32Array() };
+		case "CONSTRUCT_SUPER_FORWARD":
+			return { opcode, dst: r.i32(), parent: r.i32() };
 		case "CONSTRUCT_SUPER_SPREAD":
 			return { opcode, dst: r.i32(), parent: r.i32(), argumentsArray: r.i32() };
 		case "CONSTRUCT_SUPER_EXPLICIT":

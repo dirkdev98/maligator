@@ -622,6 +622,7 @@ export function computeArgumentRetentionLimit(
 			case "CREATE_ARGUMENTS_OBJECT":
 			case "CREATE_REST_ARGUMENTS":
 			case "CALL_REST_ARGUMENTS":
+			case "CONSTRUCT_SUPER_FORWARD":
 			case "LOAD_ARGUMENT":
 			case "LOAD_DYNAMIC_ARGUMENT":
 				return 0x7fffffff;
@@ -1260,6 +1261,11 @@ export type BytecodeInstruction =
 			dst: number;
 			parent: number;
 			arguments: Array<number>;
+	  }
+	| {
+			opcode: "CONSTRUCT_SUPER_FORWARD";
+			dst: number;
+			parent: number;
 	  }
 	| {
 			opcode: "CONSTRUCT_SUPER_SPREAD";
@@ -4496,6 +4502,12 @@ function lowerInstructionToBytecodeInstruction(
 				dst: instruction.registers[0],
 				parent: instruction.registers[1],
 				arguments: instruction.registers.slice(2),
+			};
+		case "constructSuperForward":
+			return {
+				opcode: "CONSTRUCT_SUPER_FORWARD",
+				dst: instruction.registers[0],
+				parent: instruction.registers[1],
 			};
 		case "constructSuperSpread":
 			return {

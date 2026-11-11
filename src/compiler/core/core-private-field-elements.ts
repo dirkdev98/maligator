@@ -72,6 +72,7 @@ const CALLBACK_METHODS: ReadonlyMap<string, number> = new Map([
 const ARGUMENT_READERS: ReadonlySet<string> = new Set([
 	"loadDynamicArgument",
 	"callRestArguments",
+	"constructSuperForward",
 	"createArgumentsObject",
 	"createRestArguments",
 	"createRestArgumentsState",

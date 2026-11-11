@@ -4037,6 +4037,7 @@ function emitCompiledVariant(
 	const retainsIncomingArguments = fn.instructions.some(
 		(instruction) =>
 			instruction.opcode === "CALL_REST_ARGUMENTS" ||
+			instruction.opcode === "CONSTRUCT_SUPER_FORWARD" ||
 			instruction.opcode === "LOAD_DYNAMIC_ARGUMENT",
 	);
 	const deferredRestRootIp = retainsIncomingArguments
@@ -16362,6 +16363,17 @@ class NativeInstructionEmission {
 				const tmp = `construct_super_${this.ip}`;
 				return [
 					`MalCompletion ${tmp} = mal_vm_op_construct_super_arguments(vm, ${this.boxed(instruction.parent)}, ${argsExpr}, ${args.length}, ${nativeBodyReference(this.context.resources, "newTarget")}, ${this.thisRef}, &${this.thisRef});`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
+					`r${instruction.dst} = ${this.thisRef};`,
+					this.callPoll(),
+				];
+			}
+			case "CONSTRUCT_SUPER_FORWARD": {
+				// The default derived constructor's super(): this activation's own arguments.
+				if (this.context.directArgumentRepresentations !== undefined) return null;
+				const tmp = `construct_super_${this.ip}`;
+				return [
+					`MalCompletion ${tmp} = mal_vm_op_construct_super_arguments(vm, ${this.boxed(instruction.parent)}, args, arg_count, ${nativeBodyReference(this.context.resources, "newTarget")}, ${this.thisRef}, &${this.thisRef});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
 					`r${instruction.dst} = ${this.thisRef};`,
 					this.callPoll(),

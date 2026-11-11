@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 92u
+#define WIRE_VERSION 93u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1284,6 +1284,11 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             for (u32 i = 0; i < count; i++) side_data->data[side_data->count++] = rd_i32(r);
             return;
         }
+        case WIRE_CONSTRUCT_SUPER_FORWARD:
+            o->opcode = MAL_OP_CONSTRUCT_SUPER_FORWARD;
+            o->as.construct_super_forward.dst = rd_i32(r);
+            o->as.construct_super_forward.parent = rd_i32(r);
+            return;
         case WIRE_CONSTRUCT_SUPER_SPREAD:
             o->opcode = MAL_OP_CONSTRUCT_SUPER_SPREAD;
             o->as.construct_super_spread.dst = rd_i32(r);
@@ -1704,6 +1709,7 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_CALL_REST_ARGUMENTS, call_rest_arguments);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SPREAD, construct_spread);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SUPER, construct_super);
+        MAL_WRITES_DST(MAL_OP_CONSTRUCT_SUPER_FORWARD, construct_super_forward);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SUPER_SPREAD, construct_super_spread);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SUPER_EXPLICIT, construct_super_explicit);
         MAL_WRITES_DST(MAL_OP_CREATE_PRIVATE_NAME, create_private_name);
@@ -1817,6 +1823,7 @@ static i32 argument_retention_limit(const MalFunction *fn) {
         if (instruction->opcode == MAL_OP_CREATE_ARGUMENTS_OBJECT ||
             instruction->opcode == MAL_OP_CREATE_REST_ARGUMENTS ||
             instruction->opcode == MAL_OP_CALL_REST_ARGUMENTS ||
+            instruction->opcode == MAL_OP_CONSTRUCT_SUPER_FORWARD ||
             instruction->opcode == MAL_OP_LOAD_ARGUMENT ||
             instruction->opcode == MAL_OP_LOAD_DYNAMIC_ARGUMENT) {
             return INT32_MAX;
@@ -3075,6 +3082,15 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                         r.ok = false;
                     }
                 }
+            } else if (instruction->opcode == MAL_OP_CONSTRUCT_SUPER) {
+                const i32 *data = &fn->instruction_data[instruction->as.construct_super.data_offset];
+                if (instruction->as.construct_super.parent < 0 ||
+                    instruction->as.construct_super.parent >= fn->register_count) r.ok = false;
+                for (i32 index = 0; r.ok && index < data[0]; index++)
+                    if (data[index + 1] < 0 || data[index + 1] >= fn->register_count) r.ok = false;
+            } else if (instruction->opcode == MAL_OP_CONSTRUCT_SUPER_FORWARD) {
+                if (instruction->as.construct_super_forward.parent < 0 ||
+                    instruction->as.construct_super_forward.parent >= fn->register_count) r.ok = false;
             } else if (instruction->opcode == MAL_OP_CONSTRUCT) {
                 const i32 *data =
                     &fn->instruction_data[instruction->as.construct.data_offset];

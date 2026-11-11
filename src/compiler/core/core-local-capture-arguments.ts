@@ -78,6 +78,7 @@ function helperBody(
 				opcode === "createRestArguments" ||
 				opcode === "createRestArgumentsState" ||
 				opcode === "callRestArguments" ||
+				opcode === "constructSuperForward" ||
 				opcode === "storeCaptured" ||
 				opcode === "createPrivateNames" ||
 				opcode.startsWith("env") ||
