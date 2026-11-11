@@ -9869,13 +9869,6 @@ static void mal_vm_throw_private_reinstall(MalVm *vm) {
 static bool mal_vm_append_private_elements(
     MalVm *vm, MalObject *object, u32 count, const MalValue *keys, const MalValue *values
 ) {
-    // PrivateFieldAdd and PrivateMethodOrAccessorAdd reject a non-extensible receiver.
-    if (!mal_object_is_extensible(object)) {
-        mal_vm_throw_error(
-            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Cannot add private elements to a non-extensible object");
-        return false;
-    }
     MalShape *source = object->shape;
     u32 base = source->inline_count;
     // A private-only table could already hold one of the names, so only table-free objects qualify.
