@@ -2104,38 +2104,47 @@ static MalValue intl_number_format_resolved_options(MalVm *vm, MalValue this_val
     if (!intl_this(vm, this_value, MAL_INTL_NUMBER_FORMAT, &nf, "Intl.NumberFormat.prototype.resolvedOptions called on incompatible receiver")) {
         return mal_value_new_undefined();
     }
-    MalValue roots[] = {this_value, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalValue roots[15];
+    roots[0] = this_value;
+    for (usize i = 1; i < countof(roots); i++) roots[i] = mal_value_new_undefined();
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     MalI18nNumberResolved native;
     mal_i18n_number_formatter_resolved(nf->handle, &native);
-    MalObject *resolved = mal_intrinsic_new_object(vm);
-    roots[1] = mal_value_from_object(resolved);
-    roots[2] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.locale, native.locale_len));
-    intl_resolved_set(vm, resolved, "locale", roots[2]);
-    roots[2] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.numbering, native.numbering_len));
-    intl_resolved_set(vm, resolved, "numberingSystem", roots[2]);
     static const char *const STYLES[] = {"decimal", "percent", "currency", "unit"};
     static const char *const GROUPINGS[] = {"", "auto", "always", "min2"};
     static const char *const ROUNDINGS[] = {"halfExpand", "ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfTrunc", "halfEven"};
     static const char *const PRIORITIES[] = {"auto", "morePrecision", "lessPrecision"};
-    intl_resolved_set(vm, resolved, "style", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) STYLES[native.style])));
-    intl_resolved_set(vm, resolved, "minimumIntegerDigits", mal_value_from_i32(native.min_integer));
-    if (native.max_significant == 0 || native.priority != 0) {
-        intl_resolved_set(vm, resolved, "minimumFractionDigits", mal_value_from_i32(native.min_fraction));
-        intl_resolved_set(vm, resolved, "maximumFractionDigits", mal_value_from_i32(native.max_fraction));
+    static const char *const KEYS[] = {
+        "locale", "numberingSystem", "style", "minimumIntegerDigits", "minimumFractionDigits", "maximumFractionDigits",
+        "minimumSignificantDigits", "maximumSignificantDigits", "useGrouping", "signDisplay", "roundingIncrement",
+        "roundingMode", "roundingPriority", "trailingZeroDisplay",
+    };
+    roots[1] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.locale, native.locale_len));
+    roots[2] = mal_value_from_string(mal_string_new_ascii(&vm->heap, native.numbering, native.numbering_len));
+    roots[3] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) STYLES[native.style]));
+    roots[4] = mal_value_from_i32(native.min_integer);
+    roots[5] = mal_value_from_i32(native.min_fraction);
+    roots[6] = mal_value_from_i32(native.max_fraction);
+    roots[7] = mal_value_from_i32(native.min_significant);
+    roots[8] = mal_value_from_i32(native.max_significant);
+    roots[9] = native.grouping == 0 ? mal_value_new_boolean(false) : mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) GROUPINGS[native.grouping]));
+    roots[10] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) INTL_SIGN_DISPLAYS[native.sign_display]));
+    roots[11] = mal_value_from_i32(native.increment);
+    roots[12] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ROUNDINGS[native.rounding_mode]));
+    roots[13] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) PRIORITIES[native.priority]));
+    roots[14] = mal_value_from_string(mal_intrinsic_ascii(vm, native.strip_zero ? "stripIfInteger" : "auto"));
+    MalString *keys[countof(KEYS)];
+    MalValue values[countof(KEYS)];
+    u32 count = 0;
+    for (usize i = 0; i < countof(KEYS); i++) {
+        if ((i == 4 || i == 5) && native.max_significant > 0 && native.priority == 0) continue;
+        if ((i == 6 || i == 7) && native.max_significant == 0) continue;
+        keys[count] = mal_value_to_string(mal_intrinsic_string_key(vm, KEYS[i]).value);
+        values[count++] = roots[i + 1];
     }
-    if (native.max_significant > 0) {
-        intl_resolved_set(vm, resolved, "minimumSignificantDigits", mal_value_from_i32(native.min_significant));
-        intl_resolved_set(vm, resolved, "maximumSignificantDigits", mal_value_from_i32(native.max_significant));
-    }
-    intl_resolved_set(vm, resolved, "useGrouping", native.grouping == 0 ? mal_value_new_boolean(false) : mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) GROUPINGS[native.grouping])));
-    intl_resolved_set(vm, resolved, "signDisplay", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) INTL_SIGN_DISPLAYS[native.sign_display])));
-    intl_resolved_set(vm, resolved, "roundingIncrement", mal_value_from_i32(native.increment));
-    intl_resolved_set(vm, resolved, "roundingMode", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ROUNDINGS[native.rounding_mode])));
-    intl_resolved_set(vm, resolved, "roundingPriority", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) PRIORITIES[native.priority])));
-    intl_resolved_set(vm, resolved, "trailingZeroDisplay", mal_value_from_string(mal_intrinsic_ascii(vm, native.strip_zero ? "stripIfInteger" : "auto")));
-    MalValue result = roots[1];
+    MalShape *shape = mal_shape_from_string_keys(&vm->heap, keys, count);
+    MalValue result = mal_vm_create_object_shaped(vm, shape, values, count);
     mal_gc_unroot(&root);
     return result;
 }
