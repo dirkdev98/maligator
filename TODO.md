@@ -434,13 +434,21 @@ contracts or investigates costs still visible after the string follow-ups.
       Keep eval-created declarations distinct from script declarations, including
       deletability and restricted-global checks.
 
-- [ ] Preserve iterator [[Done]] semantics in positional destructuring. Keep abrupt
-      completion and iterator closing correct around exhausted iterators.
+- [ ] Preserve iterator [[Done]] semantics in positional destructuring: after a step
+      reports done, later elements and a rest element still call `next()`. Keep abrupt
+      completion and iterator closing correct around exhausted iterators. A frontend
+      branch on the done register per element is correct but breaks the straight step
+      corridor that entry-pair and dense pair virtualization match, and a done input on
+      `ITERATOR_STEP` needs a fifth register in the 20-byte `MalInstruction`. Either
+      teach those candidates the guarded shape or tie the done input to the done output.
 
 - [ ] Look up the super constructor when `super()` runs. GetSuperConstructor reads
       the active function's current prototype, so `Object.setPrototypeOf(C, other)`
       changes what `super()` constructs; the lowering uses the class heritage
       captured at definition. Keep a guarded fast path for the unchanged parent.
+      `constructSuper`'s parent operand is also the call-transfer callee and the class
+      layout analysis's parent slot, so a `loadPrototype` of the class binding needs
+      both to resolve it, or a guard that layout walking follows on its expected edge.
 
 - [ ] Parse CreateDynamicFunction parameters and body separately. `new Function("/*", "*/){")`
       compiles because the joined source is valid; the spec parses each part on
