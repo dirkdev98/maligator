@@ -29,6 +29,11 @@ themselves commit the project to optimizing every API.
       consumer, separating conversion, traversal and checksum cost. Preserve
       input-scaling coverage.
 
+- [ ] Reduce the remaining cost in `bigint-64-arithmetic` while preserving exact
+      modulo results, full-width intermediates, coercion order and fallible
+      allocation. Confirm savings on a representative consumer before extending
+      native specialization.
+
 - [ ] Diagnose the macOS node-fs-watch timeout with bounded phase evidence separating
       compilation, event delivery and teardown. Preserve watcher behavior and report an
       unreproduced or runner-only failure explicitly.
