@@ -3,11 +3,18 @@ import {
 	fstatSync,
 	lstat,
 	lstatSync,
+	mkdtempSync,
 	openSync,
 	promises,
+	rmSync,
 	stat,
 	statSync,
+	unwatchFile,
+	watchFile,
+	writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const fixture = new URL(import.meta.url).pathname;
 const describe = (stats) => {
@@ -46,4 +53,16 @@ results.push([
 	"exact",
 	String(statSync(fixture, { bigint: true }).ino === BigInt(statSync(fixture).ino)),
 ]);
+const directory = mkdtempSync(join(tmpdir(), "bigint-watch-"));
+const watched = join(directory, "watched.txt");
+writeFileSync(watched, "a");
+const watchResult = await new Promise((resolve) => {
+	watchFile(watched, { bigint: true, interval: 20 }, (current, previous) => {
+		unwatchFile(watched);
+		resolve(`${describe(current)} previous=${typeof previous.size} size=${current.size}`);
+	});
+	setTimeout(() => writeFileSync(watched, "bb"), 60);
+});
+rmSync(directory, { recursive: true });
+results.push(["watchFile", watchResult]);
 console.log(results.map((entry) => entry.join(" ")).join("\n"));

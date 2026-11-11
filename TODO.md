@@ -647,8 +647,6 @@ remains a Maligator extension and does not count as global fetch conformance.
       fork IPC support. Validate Linux teardown and platform event ownership, and compare
       exit latency and idle CPU separately from API correctness.
 
-- [ ] fs: honor watchFile's `bigint` option; its listener still receives number Stats.
-
 - [ ] fs: use FSEvents to reduce file-descriptor use for large macOS watch sets, Linux
       recursive-watch symlink entries (Node reports their events and link-target
       changes as 'rename'), fs.openAsBlob, readdir's

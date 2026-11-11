@@ -6921,6 +6921,8 @@ typedef struct NodeFsStatWatcher {
     MalPosixStat previous;
     i64 timer;
     bool initially_missing;
+    // The first watchFile on a path fixes BigIntStats or number Stats, as in Node.
+    bool bigint;
     struct NodeFsStatWatcher *next;
 } NodeFsStatWatcher;
 
@@ -7962,8 +7964,8 @@ static MalValue node_fs_stat_watcher_poll(
     MalRootSpan root;
     mal_gc_root(&root, values, countof(values));
     MalObject *proto = mal_value_to_object(state->stats_proto);
-    values[2] = node_fs_make_stats(vm, proto, &current, false);
-    values[3] = node_fs_make_stats(vm, proto, &previous, false);
+    values[2] = node_fs_make_stats(vm, proto, &current, state->bigint);
+    values[3] = node_fs_make_stats(vm, proto, &previous, state->bigint);
     MalValue emit_args[] = {values[0], values[2], values[3]};
     node_fs_watch_call(vm, values[1], "emit", emit_args, 3);
     mal_gc_unroot(&root);
@@ -8006,9 +8008,11 @@ static MalValue node_fs_watch_file(
     path = node_fs_path_cstr(vm, roots[0]);
     if (path == nullptr || !node_fs_watch_install(vm)) goto done;
     bool persistent = true;
+    bool bigint = false;
     f64 interval = 5007;
     if (mal_value_is_object(roots[1])) {
         MalValue value;
+        if (!node_fs_bigint_option(vm, roots[1], &bigint)) goto done;
         if (!mal_vm_get_property(vm, roots[1], mal_intrinsic_string_key(vm, (const byte *) "persistent"), &value)) {
             goto done;
         }
@@ -8036,6 +8040,7 @@ static MalValue node_fs_watch_file(
         state->vm = vm;
         state->receiver = roots[3];
         state->stats_proto = mal_value_from_object(node_fs_slot_proto(vm, callee));
+        state->bigint = bigint;
         state->path = path;
         path = nullptr;
         if (mal_posix_fs_stat(state->path, &state->previous) != 0) {
