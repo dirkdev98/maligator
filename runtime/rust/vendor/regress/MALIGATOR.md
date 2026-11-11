@@ -40,3 +40,12 @@ The runtime returns the preceding result's capture-range vector to the next
 execution only after its C consumer has finished. The matcher transfers that
 vector into the new owned result or drops it before returning without a match.
 Previously materialized JavaScript results retain their own strings and indices.
+
+# Start positions
+
+Upstream skips start predicates whenever the `utf16` feature is on. The local
+backend keeps the start anchor for every encoding, so a `^` pattern without the
+`m` flag tries only its first position. Byte inputs also search with the byte
+predicates: they hold UTF-8 first bytes, and Maligator's byte inputs are ASCII,
+where that byte is the code unit itself. UTF-16 and UCS-2 inputs still try every
+other start position.

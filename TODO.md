@@ -293,8 +293,9 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
-- [ ] Check and bound UTF-16 start-position filtering in the pinned RegExp backend using
-      the existing mixed-text/search workloads. Keep a backend change only with ordinary
+- [ ] Add code-unit start predicates for UTF-16 and UCS-2 subjects in the pinned RegExp
+      backend; start anchors and ASCII subjects already skip impossible positions. Use
+      the existing mixed-text/search workloads and keep a change only with ordinary
       first-pass/repeated-input gains and exact captures/UTF-16 semantics; do not bundle
       speculative possessive rewrites.
 
@@ -337,10 +338,10 @@ contracts or investigates costs still visible after the string follow-ups.
       filter's geometric growth, write barriers and generic fallback. Compare the measured
       output-store ceiling with compiler work, native build cost and generated size.
 
-- [ ] Trace the leading scanning or backtracking cost in `regexp-owned-miss`, keeping
-      named, unnamed, UTF-16 and repeated-subject controls. Preserve captures, lastIndex,
-      reentry and bounded scratch retention. Require representative application exposure
-      and ordinary paired savings before extending the backend further.
+- [ ] Trace the fixed per-exec cost in `regexp-owned-repeat`, where every exec matches
+      at `lastIndex`, so executor setup, start dispatch and result construction set the
+      time rather than scanning. Keep named, unnamed, UTF-16 and miss controls. Preserve
+      captures, lastIndex, reentry and bounded scratch retention.
 
 - [ ] Use the existing complete mixed-text workload to select one leading construction,
       replacement, JSON or checksum-traversal cost, including rope rebuilding where
