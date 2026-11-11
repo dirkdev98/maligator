@@ -352,11 +352,11 @@ contracts or investigates costs still visible after the string follow-ups.
 ## Modules and agents
 
 - [ ] Finish dynamic-import resolution, import attributes and evaluation order across
-      compiled, interpreted and runtime-loading paths. Static `text` and `bytes`
-      imports have their own module records; `import(x, { with: { type } })` does not
-      select them yet. `import()` from eval code and computed specifiers need runtime
-      loading of targets outside the static graph. Preserve top-level-await sibling
-      scheduling and fulfillment/rejection order.
+      compiled, interpreted and runtime-loading paths. `text` and `bytes` imports
+      resolve when the specifier and options are literals; computed options still load
+      the JavaScript module. `import()` from eval code and computed specifiers need
+      runtime loading of targets outside the static graph. Preserve top-level-await
+      sibling scheduling and fulfillment/rejection order.
 
 - [ ] Implement import-defer syntax and semantics. Integrate it with linking,
       evaluation state, cycles, and failure propagation.

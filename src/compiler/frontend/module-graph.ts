@@ -20,7 +20,7 @@ import {
 } from "./host-modules.ts";
 import { isImportMetaResolveCall } from "./import-meta.ts";
 import { staticModuleClosure } from "./module-closure.ts";
-import { moduleImportType } from "./module-import-type.ts";
+import { dynamicImportType, moduleImportType } from "./module-import-type.ts";
 import type { ModuleImportType } from "./module-import-type.ts";
 import { parseModule, parseScript } from "./parser.ts";
 import type { SemanticFile } from "./semantic-analysis.ts";
@@ -1310,9 +1310,15 @@ function extractDependencies(
 					...importTypeField(node),
 				});
 				break;
-			case "ImportExpression":
-				dependencies.push({ specifier: literalString(node.source), kind: "dynamic" });
+			case "ImportExpression": {
+				const importType = dynamicImportType(node.options);
+				dependencies.push({
+					specifier: literalString(node.source),
+					kind: "dynamic",
+					...(importType === undefined ? {} : { importType }),
+				});
 				break;
+			}
 			case "CallExpression": {
 				if (goal === "module" && isImportMetaResolveCall(node)) {
 					const specifier = literalString(node.arguments[0]);

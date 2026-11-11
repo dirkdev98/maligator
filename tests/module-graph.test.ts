@@ -690,7 +690,7 @@ test("links a file imported as text or bytes apart from its JavaScript module", 
 import text from "./data-target.mjs" with { type: "text" };
 import bytes from "./data-target.mjs" with { type: "bytes" };
 export { default as again } from "./data-target.mjs" with { type: "text" };
-globalThis.sink = [code, text, bytes];
+globalThis.sink = [code, text, bytes, import("./data-target.mjs", { with: { type: "text" } })];
 `,
 	);
 	write("data-target.mjs", `export default "code";\n`);
@@ -704,6 +704,7 @@ globalThis.sink = [code, text, bytes];
 
 	expect(new Set(targets).size).toBe(3);
 	expect(targets.filter((resolved) => resolved === target)).toHaveLength(1);
+	expect(targets.at(-1)).toBe(targets[1]);
 	for (const resolved of new Set(targets)) {
 		expect(graph.modules.get(resolved!)?.dependencies).toEqual([]);
 	}

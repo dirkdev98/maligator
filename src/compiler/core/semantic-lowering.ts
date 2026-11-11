@@ -38,6 +38,7 @@ import { linkModules } from "../frontend/linker.ts";
 import { planModuleEvaluation } from "../frontend/module-evaluation-plan.ts";
 import type { ModuleEvaluationPlan } from "../frontend/module-evaluation-plan.ts";
 import type { ImportMetaResolution } from "../frontend/module-graph.ts";
+import { dynamicImportType } from "../frontend/module-import-type.ts";
 import { COMMONJS_BINDINGS } from "../frontend/semantic-analysis.ts";
 import { FUNCTION_UNIT_NODE_TYPES } from "../frontend/semantic-analysis.ts";
 import type {
@@ -14846,7 +14847,7 @@ function compileImportExpression(
 	options?: ESTree.Expression | null,
 	phase?: string | null,
 ): number {
-	const targetPath = dynamicImportTargetPath(program, fn, source);
+	const targetPath = dynamicImportTargetPath(program, fn, source, options);
 	const specifier = compileExpression(program, fn, cursor, source);
 	const optionsRegister = options
 		? compileExpression(program, fn, cursor, options)
@@ -15123,15 +15124,19 @@ function dynamicImportTargetPath(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	source: ESTree.Expression,
+	options: ESTree.Expression | null | undefined,
 ): string | undefined {
 	if (source.type !== "Literal" || typeof source.value !== "string") {
 		return undefined;
 	}
+	const importType = dynamicImportType(options);
 	const record = program.semantic.graph?.modules.get(fn.semanticFile.path);
 	return (
 		record?.dependencies.find(
 			(dependency) =>
-				dependency.kind === "dynamic" && dependency.specifier === source.value,
+				dependency.kind === "dynamic" &&
+				dependency.specifier === source.value &&
+				dependency.importType === importType,
 		)?.resolvedPath ?? undefined
 	);
 }
