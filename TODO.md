@@ -291,6 +291,21 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
+- [ ] Close the in-process Express gap. `bench/http/express-in-process.cjs` in raw mode
+      serves about 83k requests/s against Node's 188k, although sockets and parsing put
+      Maligator ahead in the HTTP benchmark. JavaScript frames hold about 80% of the
+      main thread; non-monomorphic property probes (primitive, own-table and missing
+      rows reached out of line) take about 13%, host streams 6%, RegExp 6% and closure
+      creation 4%. Per request the census counts about 12 store and 9 load IC
+      fallbacks and 44 dictionary-table lookups, three quarters of them misses.
+      `run --profile=compiler` on the benchmark lists the leading sites.
+
+- [ ] Bring node:stream and EventEmitter construction closer to Node. A constructed
+      Readable still costs about 5x Node and a Writable 3.5x, mostly option reads
+      through `mal_vm_get_static` and per-object state allocation; `once` builds a
+      native wrapper function with its own `listener` property, and a hot `emit` costs
+      about 3x Node in key conversion, the listener lookup and the generic call.
+
 - [ ] Add code-unit start predicates for UTF-16 and UCS-2 subjects in the pinned RegExp
       backend; start anchors and ASCII subjects already skip impossible positions. Use
       the existing mixed-text/search workloads and keep a change only with ordinary
