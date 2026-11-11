@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 88u
+#define WIRE_VERSION 89u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -949,6 +949,7 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             o->as.yield.yielded_src = rd_i32(r);
             o->as.yield.value_dst = rd_i32(r);
             o->as.yield.mode_dst = rd_i32(r);
+            o->as.yield.delegated_result = rd_u8(r) != 0;
             return;
         case WIRE_TERMINAL_YIELD:
             o->opcode = MAL_OP_TERMINAL_YIELD;

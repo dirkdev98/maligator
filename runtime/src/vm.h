@@ -556,6 +556,8 @@ typedef struct MalInstruction {
          */
         struct {
             i32 yielded_src, value_dst, mode_dst;
+            // A sync yield* hands out its inner result object rather than a value.
+            bool delegated_result;
         } yield;
 
         /**

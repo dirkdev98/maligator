@@ -10076,11 +10076,12 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
 }
 
 void mal_vm_op_yield_compiled(
-    MalVm *vm, MalGeneratorObject *generator, MalValue yielded, i32 value_dst,
-    i32 mode_dst, i32 resume_ip, i32 suspend_position_entry, MalEnv *env) {
+    MalVm *vm, MalGeneratorObject *generator, MalValue yielded, bool delegated_result,
+    i32 value_dst, i32 mode_dst, i32 resume_ip, i32 suspend_position_entry, MalEnv *env) {
     // Snapshot replacement shades its old slots; these independently traced fields need barriers too.
     mal_gc_write_barrier(generator->yielded_value);
     generator->yielded_value = yielded;
+    generator->yielded_result = delegated_result;
     generator->resume_value_register = value_dst;
     generator->resume_mode_register = mode_dst;
     generator->state = MAL_GENERATOR_SUSPENDED_YIELD;

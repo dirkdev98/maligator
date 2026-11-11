@@ -185,7 +185,13 @@ describe("block suspension liveness", () => {
 					case 5:
 						return { opcode: "THROW", value: register };
 					case 6:
-						return { opcode: "YIELD", yieldedSrc: register, valueDst: 128, modeDst: 129 };
+						return {
+							opcode: "YIELD",
+							yieldedSrc: register,
+							valueDst: 128,
+							modeDst: 129,
+							delegatedResult: false,
+						};
 					case 7:
 						return { opcode: "TERMINAL_YIELD", yieldedSrc: register };
 					default:

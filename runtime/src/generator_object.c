@@ -41,6 +41,7 @@ static MalGeneratorObject *mal_generator_object_alloc(
     generator->is_async_generator = false;
     generator->agen_running = false;
     generator->terminal_yield_pending = false;
+    generator->yielded_result = false;
 
     if (with_async_data) {
         generator->async_data = (MalGeneratorAsyncData *) (generator + 1);

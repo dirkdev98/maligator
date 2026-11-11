@@ -114,7 +114,13 @@ describe("local native input admission", () => {
 						const instructions: Array<BytecodeInstruction> = isGenerator
 							? [
 									{ opcode: "GENERATOR_START" },
-									{ opcode: "YIELD", yieldedSrc: 0, valueDst: 4, modeDst: 5 },
+									{
+										opcode: "YIELD",
+										yieldedSrc: 0,
+										valueDst: 4,
+										modeDst: 5,
+										delegatedResult: false,
+									},
 								]
 							: [];
 						const ip = instructions.length;
@@ -242,6 +248,7 @@ describe("local native input admission", () => {
 												yieldedSrc: 0,
 												valueDst: 4,
 												modeDst: 5,
+												delegatedResult: false,
 											} as const,
 										]
 									: [

@@ -80,6 +80,8 @@ struct MalGeneratorObject {
     bool agen_running : 1;
     /** The current call must still package a terminal yield as done:false. */
     bool terminal_yield_pending : 1;
+    /** yielded_value is a sync yield*'s inner result object, handed out unchanged. */
+    bool yielded_result : 1;
 };
 
 static_assert(sizeof(MalGeneratorObject) <= (MAL_REALMS ? 208 : 192),

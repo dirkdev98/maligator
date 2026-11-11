@@ -336,7 +336,7 @@ const genFn: BytecodeFunction = {
 	instructions: [
 		{ opcode: "ASYNC_START" },
 		{ opcode: "AWAIT", awaitedSrc: 0, valueDst: 1, modeDst: 2 },
-		{ opcode: "YIELD", yieldedSrc: 1, valueDst: 0, modeDst: 2 },
+		{ opcode: "YIELD", yieldedSrc: 1, valueDst: 0, modeDst: 2, delegatedResult: true },
 		{ opcode: "TERMINAL_YIELD", yieldedSrc: 1 },
 		{ opcode: "RETURN", value: 0 },
 	],

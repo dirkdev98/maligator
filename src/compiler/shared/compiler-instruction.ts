@@ -828,6 +828,11 @@ type CompilerOperation =
 			 * next/return/throw behavior, so the runtime may release the activation now.
 			 */
 			terminal?: true;
+			/**
+			 * A sync `yield*` hands its inner iterator's result object to the caller
+			 * unchanged (GeneratorYield(innerResult)), so `yieldedSrc` is that object.
+			 */
+			delegatedResult?: true;
 
 			// [valueDst, modeDst, yieldedSrc] — yieldedSrc is handed out; on
 			// resume the sent value lands in valueDst and the resume mode code in

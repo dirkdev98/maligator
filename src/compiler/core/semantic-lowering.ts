@@ -10916,23 +10916,33 @@ function compileYieldStarExpression(
 			registers: [doneReg],
 			blocks: [doneIdx],
 		});
-		const valueReg = nextCoreVariable(fn);
-		checkBody.emitter.emit({
-			type: "loadProperty",
-			registers: [valueReg, result, stringRegister(checkBody, "value")],
-		});
 		// The inner yield: suspend the outer generator. On resume the sent value
 		// and resume mode drive the next loop iteration (no throw/return dispatch
-		// here — the mode is forwarded into the delegation above). The delegated
-		// value is NOT awaited: the spec's async delegate path is
-		// AsyncGeneratorYield(? IteratorValue(innerResult)) with no Await around
-		// it (only a plain `yield x` awaits x). Awaiting here would wrongly unwrap
-		// a promise yielded by a hand-written async iterator. For a sync operand
-		// the value is already awaited inside the AsyncFromSyncIterator wrapper.
-		checkBody.emitter.emit({
-			type: "yield",
-			registers: [sentValue, mode, valueReg],
-		});
+		// here — the mode is forwarded into the delegation above). A sync generator
+		// hands out the inner result object itself (GeneratorYield(innerResult)),
+		// never reading its `value`. The async delegated value is NOT awaited: the
+		// spec's async delegate path is AsyncGeneratorYield(? IteratorValue(innerResult))
+		// with no Await around it (only a plain `yield x` awaits x). Awaiting here
+		// would wrongly unwrap a promise yielded by a hand-written async iterator. For
+		// a sync operand the value is already awaited inside the AsyncFromSyncIterator
+		// wrapper.
+		if (isAsync) {
+			const valueReg = nextCoreVariable(fn);
+			checkBody.emitter.emit({
+				type: "loadProperty",
+				registers: [valueReg, result, stringRegister(checkBody, "value")],
+			});
+			checkBody.emitter.emit({
+				type: "yield",
+				registers: [sentValue, mode, valueReg],
+			});
+		} else {
+			checkBody.emitter.emit({
+				type: "yield",
+				registers: [sentValue, mode, result],
+				delegatedResult: true,
+			});
+		}
 		// AsyncGeneratorUnwrapYieldResumption: after AsyncGeneratorYield resumes,
 		// a return() resumption awaits its value before the loop dispatches it to
 		// the inner iterator's return (or, absent one, re-awaits + returns it). A

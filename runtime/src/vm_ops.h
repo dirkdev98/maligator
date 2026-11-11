@@ -4588,10 +4588,11 @@ MalObject *mal_vm_generator_instance_prototype(
 
 // YIELD (compiled): record the yielded value, resume registers, and resume IP on
 // the coroutine, save the current env, mark SUSPENDED_YIELD, and (for an async
-// generator) settle the front request. The compiled body then returns.
+// generator) settle the front request. The compiled body then returns. A
+// delegated result is a sync yield*'s inner result object, handed out unchanged.
 void mal_vm_op_yield_compiled(
-    MalVm *vm, MalGeneratorObject *generator, MalValue yielded, i32 value_dst,
-    i32 mode_dst, i32 resume_ip, i32 suspend_position_entry, MalEnv *env);
+    MalVm *vm, MalGeneratorObject *generator, MalValue yielded, bool delegated_result,
+    i32 value_dst, i32 mode_dst, i32 resume_ip, i32 suspend_position_entry, MalEnv *env);
 
 // TERMINAL_YIELD (compiled): preserve a final done:false result while completing
 // the generator. The emitted caller unlinks its root frame, then releases storage.

@@ -3329,7 +3329,7 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 		case "ASYNC_START":
 			return `{ .opcode = MAL_OP_ASYNC_START }`;
 		case "YIELD":
-			return `{ .opcode = MAL_OP_YIELD, .as.yield = { .yielded_src = ${instruction.yieldedSrc}, .value_dst = ${instruction.valueDst}, .mode_dst = ${instruction.modeDst} } }`;
+			return `{ .opcode = MAL_OP_YIELD, .as.yield = { .yielded_src = ${instruction.yieldedSrc}, .value_dst = ${instruction.valueDst}, .mode_dst = ${instruction.modeDst}, .delegated_result = ${instruction.delegatedResult} } }`;
 		case "TERMINAL_YIELD":
 			return `{ .opcode = MAL_OP_TERMINAL_YIELD, .as.terminal_yield = { .yielded_src = ${instruction.yieldedSrc} } }`;
 		case "AWAIT":

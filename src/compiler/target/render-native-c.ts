@@ -16398,7 +16398,7 @@ class NativeInstructionEmission {
 				return [
 					`MalValue yielded_${this.ip} = ${this.boxed(instruction.yieldedSrc)};`,
 					...this.suspendSnapshot(),
-					`${this.gcUnlink}mal_vm_op_yield_compiled(vm, __coro, yielded_${this.ip}, ${this.coro.suspension.valueSlot}, ${this.coro.suspension.modeSlot}, ${this.ip + 1}, ${this.coro.positionEntry(this.ip)}, env);`,
+					`${this.gcUnlink}mal_vm_op_yield_compiled(vm, __coro, yielded_${this.ip}, ${instruction.delegatedResult}, ${this.coro.suspension.valueSlot}, ${this.coro.suspension.modeSlot}, ${this.ip + 1}, ${this.coro.positionEntry(this.ip)}, env);`,
 					`return ${this.coroReturnValue};`,
 				];
 			}

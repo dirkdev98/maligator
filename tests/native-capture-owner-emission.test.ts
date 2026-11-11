@@ -302,7 +302,15 @@ describe("native lexical owner lookup contract", () => {
 					...(isGenerator ? [{ opcode: "GENERATOR_START" as const }] : []),
 					{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
 					...(isGenerator
-						? [{ opcode: "YIELD" as const, yieldedSrc: 0, valueDst: 1, modeDst: 2 }]
+						? [
+								{
+									opcode: "YIELD" as const,
+									yieldedSrc: 0,
+									valueDst: 1,
+									modeDst: 2,
+									delegatedResult: false,
+								},
+							]
 						: []),
 					{ opcode: "STORE_CAPTURED", src: 0, ownerFunctionIndex: 2, index: 0 },
 					{ opcode: "RETURN", value: 0 },
@@ -492,7 +500,13 @@ describe("native lexical owner lookup contract", () => {
 			[
 				{ opcode: "GENERATOR_START" },
 				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
-				{ opcode: "YIELD", yieldedSrc: 0, valueDst: 1, modeDst: 2 },
+				{
+					opcode: "YIELD",
+					yieldedSrc: 0,
+					valueDst: 1,
+					modeDst: 2,
+					delegatedResult: false,
+				},
 				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
 				{ opcode: "RETURN", value: 0 },
 			],
@@ -512,7 +526,13 @@ describe("native lexical owner lookup contract", () => {
 			[
 				{ opcode: "GENERATOR_START" },
 				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
-				{ opcode: "YIELD", yieldedSrc: 0, valueDst: 1, modeDst: 2 },
+				{
+					opcode: "YIELD",
+					yieldedSrc: 0,
+					valueDst: 1,
+					modeDst: 2,
+					delegatedResult: false,
+				},
 				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 5, index: 0 },
 				{ opcode: "RETURN", value: 0 },
 			],

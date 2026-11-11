@@ -3295,6 +3295,7 @@ static void mal_vm_run_until_frame_count(
                 // (root state until this suspend), so its slots need no shade.
                 mal_gc_write_barrier(generator->yielded_value);
                 generator->yielded_value = transfer_roots[1];
+                generator->yielded_result = instruction->as.yield.delegated_result;
                 frame->registers[instruction->as.yield.value_dst] = mal_value_new_undefined();
                 frame->registers[instruction->as.yield.mode_dst] = mal_value_new_undefined();
                 generator->resume_value_register = instruction->as.yield.value_dst;

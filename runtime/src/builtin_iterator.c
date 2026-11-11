@@ -1145,47 +1145,10 @@ static bool mal_vm_iterator_result_get(
     return mal_vm_get_property(vm, result, mal_intrinsic_hot_string_key(vm, key), out);
 }
 
-bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *value_out, bool *done_out) {
-    *value_out = mal_value_new_undefined();
-    *done_out = false;
-
-    if (mal_value_is_iterator_object(record->iterator) &&
-        mal_value_is_native_function_object(record->next_method)) {
-        MalIteratorObject *iterator = mal_value_to_iterator_object(record->iterator);
-        MalNativeFunctionCallback next_callback =
-            mal_native_function_object_callback(mal_value_to_native_function_object(record->next_method));
-        if (next_callback == mal_builtin_iterator_expected_next(iterator->kind)) {
-            if (mal_vm_iterator_try_step_in_place(iterator, value_out, done_out)) return true;
-            return mal_vm_iterator_step_protocol_cursor(
-                vm, iterator, record, value_out, done_out);
-        }
-    }
-
-    if (mal_value_is_heap_type(record->iterator, MAL_HEAP_GENERATOR_OBJECT)) {
-        int generator_step = mal_generator_try_exact_iterator_step(
-            vm, record->iterator, record->next_method, value_out, done_out);
-        if (generator_step != 0) {
-            return generator_step > 0;
-        }
-    } else if (mal_value_is_heap_type(record->iterator, MAL_HEAP_ITERATOR_HELPER_OBJECT)) {
-        int helper_step = mal_builtin_iterator_helper_try_step(
-            vm, record, value_out, done_out);
-        if (helper_step != 0) {
-            return helper_step > 0;
-        }
-    } else if (mal_value_is_heap_type(record->iterator, MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT)) {
-        int regexp_step = mal_regexp_try_exact_iterator_step(
-            vm, record->iterator, record->next_method, value_out, done_out);
-        if (regexp_step != 0) {
-            return regexp_step > 0;
-        }
-    }
-
-    MalValue result = mal_vm_call_cached_value(vm, record->next_method, record->iterator, nullptr, 0);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return false;
-    }
-
+/* IteratorComplete, then IteratorValue only for an unfinished result. */
+static bool mal_vm_iterator_read_result(
+    MalVm *vm, MalValue result, MalValue *value_out, bool *done_out
+) {
     if (!mal_value_is_object(result)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator result is not an object");
         return false;
@@ -1212,6 +1175,54 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
         vm, result, (const byte *) "value", MAL_HOT_KEY_VALUE, value_out);
     mal_gc_unroot(&result_span);
     return ok;
+}
+
+bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *value_out, bool *done_out) {
+    *value_out = mal_value_new_undefined();
+    *done_out = false;
+
+    if (mal_value_is_iterator_object(record->iterator) &&
+        mal_value_is_native_function_object(record->next_method)) {
+        MalIteratorObject *iterator = mal_value_to_iterator_object(record->iterator);
+        MalNativeFunctionCallback next_callback =
+            mal_native_function_object_callback(mal_value_to_native_function_object(record->next_method));
+        if (next_callback == mal_builtin_iterator_expected_next(iterator->kind)) {
+            if (mal_vm_iterator_try_step_in_place(iterator, value_out, done_out)) return true;
+            return mal_vm_iterator_step_protocol_cursor(
+                vm, iterator, record, value_out, done_out);
+        }
+    }
+
+    if (mal_value_is_heap_type(record->iterator, MAL_HEAP_GENERATOR_OBJECT)) {
+        int generator_step = mal_generator_try_exact_iterator_step(
+            vm, record->iterator, record->next_method, value_out, done_out);
+        if (generator_step == 2) {
+            MalValue result = *value_out;
+            *value_out = mal_value_new_undefined();
+            return mal_vm_iterator_read_result(vm, result, value_out, done_out);
+        }
+        if (generator_step != 0) {
+            return generator_step > 0;
+        }
+    } else if (mal_value_is_heap_type(record->iterator, MAL_HEAP_ITERATOR_HELPER_OBJECT)) {
+        int helper_step = mal_builtin_iterator_helper_try_step(
+            vm, record, value_out, done_out);
+        if (helper_step != 0) {
+            return helper_step > 0;
+        }
+    } else if (mal_value_is_heap_type(record->iterator, MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT)) {
+        int regexp_step = mal_regexp_try_exact_iterator_step(
+            vm, record->iterator, record->next_method, value_out, done_out);
+        if (regexp_step != 0) {
+            return regexp_step > 0;
+        }
+    }
+
+    MalValue result = mal_vm_call_cached_value(vm, record->next_method, record->iterator, nullptr, 0);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return false;
+    }
+    return mal_vm_iterator_read_result(vm, result, value_out, done_out);
 }
 
 static bool mal_vm_iterator_close_normal_impl(MalVm *vm, const MalIteratorRecord *record);

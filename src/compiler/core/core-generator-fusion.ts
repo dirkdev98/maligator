@@ -267,7 +267,11 @@ function generatorShape(
 			const opcode = fn.instructionOpcodeName(instruction);
 			const attrs = fn.instructionAttributes(instruction);
 			if (opcode === "yield") {
-				if (yieldInstruction !== undefined || results(fn, instruction).length !== 2)
+				if (
+					yieldInstruction !== undefined ||
+					results(fn, instruction).length !== 2 ||
+					attrs.delegatedResult === true
+				)
 					return undefined;
 				yieldInstruction = instruction;
 			} else if (opcode === "generatorStart") start++;

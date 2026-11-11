@@ -670,7 +670,11 @@ const annotateTerminalYieldSites: CoreFunctionPass = {
 			const alternate = copyTerminatorEdge(fn, terminator, 1);
 			const instructions = [...fn.bodyInstructionIds(block)];
 			for (const [index, instruction] of instructions.entries()) {
-				if (fn.instructionOpcodeName(instruction) !== "yield") continue;
+				if (
+					fn.instructionOpcodeName(instruction) !== "yield" ||
+					fn.instructionAttributes(instruction).delegatedResult === true
+				)
+					continue;
 				const yieldedValue = instructionResult(fn, instruction, 0);
 				const resumeMode = instructionResult(fn, instruction, 1);
 				if (

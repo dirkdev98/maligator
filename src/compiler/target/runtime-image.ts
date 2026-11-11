@@ -1012,6 +1012,7 @@ export type BytecodeInstruction =
 			yieldedSrc: number;
 			valueDst: number;
 			modeDst: number;
+			delegatedResult: boolean;
 	  }
 	| {
 			opcode: "TERMINAL_YIELD";
@@ -4245,6 +4246,7 @@ function lowerInstructionToBytecodeInstruction(
 				valueDst: instruction.registers[0],
 				modeDst: instruction.registers[1],
 				yieldedSrc: instruction.registers[2],
+				delegatedResult: instruction.delegatedResult === true,
 			};
 		case "await":
 			return {

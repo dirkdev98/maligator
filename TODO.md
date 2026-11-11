@@ -449,11 +449,6 @@ contracts or investigates costs still visible after the string follow-ups.
       changes what `super()` constructs; the lowering uses the class heritage
       captured at definition. Keep a guarded fast path for the unchanged parent.
 
-- [ ] Yield the inner result object unchanged from a sync `yield*`. The spec hands
-      `innerResult` to GeneratorYield without reading `value`; the `yield`
-      instruction always builds a new result, so a `return()` result with
-      `done: false` has its `value` getter called.
-
 - [ ] Parse CreateDynamicFunction parameters and body separately. `new Function("/*", "*/){")`
       compiles because the joined source is valid; the spec parses each part on
       its own. Check that the function's parameter list and body close at the

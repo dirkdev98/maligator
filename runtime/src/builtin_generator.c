@@ -17,11 +17,15 @@ static MalGeneratorObject *mal_generator_this(MalVm *vm, MalValue this_value, co
     return (MalGeneratorObject *) mal_value_to_object(this_value);
 }
 
+/* After a yield, `*value_out` is the yielded value with `*done_out` false, or, when
+ * `*result_out` is set, a sync yield*'s inner result object that GeneratorYield hands
+ * to the caller without reading its `done` or `value`. */
 static bool mal_generator_resume_pair(
     MalVm *vm, MalGeneratorObject *generator, MalValue value, i32 mode,
-    MalValue *value_out, bool *done_out
+    MalValue *value_out, bool *done_out, bool *result_out
 ) {
     mal_vm_resume_generator(vm, generator, value, mode);
+    *result_out = false;
 
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return false;
@@ -31,7 +35,9 @@ static bool mal_generator_resume_pair(
         generator->state == MAL_GENERATOR_SUSPENDED_YIELD) {
         *value_out = generator->yielded_value;
         *done_out = false;
+        *result_out = generator->yielded_result;
         generator->terminal_yield_pending = false;
+        generator->yielded_result = false;
         mal_gc_write_barrier(*value_out);
         generator->yielded_value = mal_value_new_undefined();
         return true;
@@ -44,17 +50,18 @@ static bool mal_generator_resume_pair(
 
 static MalValue mal_generator_resume_result(MalVm *vm, MalGeneratorObject *generator, MalValue value, i32 mode) {
     MalValue result_value;
-    bool done;
-    if (!mal_generator_resume_pair(vm, generator, value, mode, &result_value, &done)) {
+    bool done, result;
+    if (!mal_generator_resume_pair(vm, generator, value, mode, &result_value, &done, &result)) {
         return mal_value_new_undefined();
     }
-    return mal_vm_create_iter_result(vm, result_value, done);
+    return result ? result_value : mal_vm_create_iter_result(vm, result_value, done);
 }
 
 static bool mal_generator_next_pair(
     MalVm *vm, MalGeneratorObject *generator, MalValue sent,
-    MalValue *value_out, bool *done_out
+    MalValue *value_out, bool *done_out, bool *result_out
 ) {
+    *result_out = false;
     if (generator->state == MAL_GENERATOR_EXECUTING) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Generator is already running");
         return false;
@@ -67,7 +74,7 @@ static bool mal_generator_next_pair(
     }
 
     return mal_generator_resume_pair(
-        vm, generator, sent, MAL_GENERATOR_RESUME_NEXT, value_out, done_out);
+        vm, generator, sent, MAL_GENERATOR_RESUME_NEXT, value_out, done_out, result_out);
 }
 
 static MalValue mal_builtin_generator_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -81,11 +88,11 @@ static MalValue mal_builtin_generator_next(MalVm *vm, MalValue this_value, const
     MalValue sent = arg_count > 0 ? args[0] : mal_value_new_undefined();
 
     MalValue value;
-    bool done;
-    if (!mal_generator_next_pair(vm, generator, sent, &value, &done)) {
+    bool done, result;
+    if (!mal_generator_next_pair(vm, generator, sent, &value, &done, &result)) {
         return mal_value_new_undefined();
     }
-    return mal_vm_create_iter_result(vm, value, done);
+    return result ? value : mal_vm_create_iter_result(vm, value, done);
 }
 
 int mal_generator_try_exact_iterator_step(
@@ -119,17 +126,20 @@ int mal_generator_try_exact_iterator_step(
     MalRootSpan root_span;
     mal_gc_root(&root_span, &root, 1);
     vm->gc_native_frames++;
+    bool result = false;
     bool ok = mal_generator_next_pair(
-        vm, generator, mal_value_new_undefined(), value_out, done_out);
+        vm, generator, mal_value_new_undefined(), value_out, done_out, &result);
     vm->gc_native_frames--;
     mal_gc_unroot(&root_span);
 #if MAL_PROFILE && MAL_PERF_STATS
     vm->profile_current_site_id = saved_profile_site;
 #endif
-    if (ok && *done_out) {
+    if (!ok) return -1;
+    if (result) return 2;
+    if (*done_out) {
         *value_out = mal_value_new_undefined();
     }
-    return ok ? 1 : -1;
+    return 1;
 }
 
 static MalValue mal_builtin_generator_throw(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
