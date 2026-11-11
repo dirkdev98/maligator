@@ -158,6 +158,41 @@ assert.throws(() => 2n ** -1n, RangeError);
 assert.throws(() => 1n / 0n, RangeError);
 assert.throws(() => 1n << (1n << 200n), RangeError);
 assert.throws(() => 1n >>> 1n, TypeError);
+// An uncaptured loop-carried value keeps exact BigInt operand kinds without being
+// a constant, so operators take their typed paths.
+function exactBigIntOperations() {
+	let value = 3n;
+	const results = [];
+	for (let round = 0; round < 6; round++) {
+		value = value * -7n + 5n;
+		const zero = value - value;
+		results.push(
+			BigInt.asUintN(64, value * value * value).toString(),
+			BigInt.asIntN(64, value ** 25n).toString(),
+			Number(value & 65535n),
+			(value >> 3n).toString(),
+			(value % 5n).toString(),
+			(value ^ (value << 70n)).toString(16),
+		);
+		try {
+			results.push(String(value / zero));
+		} catch (error) {
+			results.push(error.name);
+		}
+		try {
+			results.push(String(value >>> 1n));
+		} catch (error) {
+			results.push(error.name);
+		}
+		try {
+			results.push(String(value << 1099511627776n));
+		} catch (error) {
+			results.push(error.name);
+		}
+	}
+	return results;
+}
+output.push(exactBigIntOperations());
 output.push(
 	retained.map((value) =>
 		typeof value === "bigint" ? value.toString() : value.value.toString(),

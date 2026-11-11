@@ -109,10 +109,15 @@ const MAY_BECOME_BIGINT = COMPILER_VALUE_KIND_BIGINT | COMPILER_VALUE_KIND_OBJEC
 const MAY_BECOME_NUMBER =
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE | COMPILER_VALUE_KIND_OBJECT;
 
+// Kinds ToNumeric turns into a Number; BigInts stay BigInts and Symbols throw.
+const MAY_BECOME_NUMERIC_NUMBER =
+	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE | COMPILER_VALUE_KIND_OBJECT;
+
 /**
  * Transfers normal result kinds; zero denotes an unseeded lattice value, not an
  * unknown kind. Numeric operators yield a BigInt only when both operands can become
- * BigInts, since mixing a BigInt with a Number throws; Symbols always throw.
+ * BigInts and a Number only when both can become Numbers, since mixing them throws.
+ * Operands that can only throw keep a Number result rather than an empty mask.
  */
 export function compilerNumericResultKind(
 	operation: "unary" | "binary" | "add",
@@ -121,11 +126,17 @@ export function compilerNumericResultKind(
 ): CompilerValueKindMask {
 	if (left === 0 || (operation !== "unary" && right === 0)) return 0;
 	const bigint = (operand: CompilerValueKindMask) => (operand & MAY_BECOME_BIGINT) !== 0;
+	const numericNumber = (operand: CompilerValueKindMask) =>
+		(operand & MAY_BECOME_NUMERIC_NUMBER) !== 0;
 	if (operation === "unary")
-		return COMPILER_VALUE_KIND_NUMBER | (bigint(left) ? COMPILER_VALUE_KIND_BIGINT : 0);
+		return (
+			(numericNumber(left) ? COMPILER_VALUE_KIND_NUMBER : 0) |
+				(bigint(left) ? COMPILER_VALUE_KIND_BIGINT : 0) || COMPILER_VALUE_KIND_NUMBER
+		);
 	const numeric =
-		COMPILER_VALUE_KIND_NUMBER |
-		(bigint(left) && bigint(right) ? COMPILER_VALUE_KIND_BIGINT : 0);
+		(numericNumber(left) && numericNumber(right) ? COMPILER_VALUE_KIND_NUMBER : 0) |
+			(bigint(left) && bigint(right) ? COMPILER_VALUE_KIND_BIGINT : 0) ||
+		COMPILER_VALUE_KIND_NUMBER;
 	if (operation === "binary") return numeric;
 	const number =
 		(left & MAY_BECOME_NUMBER) !== 0 && (right & MAY_BECOME_NUMBER) !== 0

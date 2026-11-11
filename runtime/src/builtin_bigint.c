@@ -150,6 +150,10 @@ MalValue mal_builtin_bigint_width_number(MalVm *vm, f64 number, MalValue input, 
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid bit count");
         return mal_value_new_undefined();
     }
+    // Callers keep their input rooted, so only a converted BigInt needs a root here.
+    if (mal_value_is_bigint(input))
+        return mal_value_from_bigint(
+            mal_bigint_width(&vm->heap, mal_value_to_bigint(input), (u64) index, is_signed));
     MalBigInt *value;
     // Index validation precedes conversion, including for a zero width.
     if (!mal_bigint_to_bigint(vm, input, &value)) return mal_value_new_undefined();

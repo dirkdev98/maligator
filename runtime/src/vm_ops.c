@@ -4490,20 +4490,19 @@ static MalValue mal_vm_bigint_arith(MalVm *vm, MalBinaryOp op, MalValue left, Ma
         return mal_value_new_undefined();
     }
 
-    const MalBigInt *a = mal_value_to_bigint(left), *b = mal_value_to_bigint(right);
-    MalBigInt *result;
     switch (op) {
-        case MAL_BIN_ADD: result = mal_bigint_add(&vm->heap, a, b); break;
-        case MAL_BIN_SUB: result = mal_bigint_subtract(&vm->heap, a, b); break;
-        case MAL_BIN_MUL: result = mal_bigint_multiply(&vm->heap, a, b); break;
-        case MAL_BIN_DIV: result = mal_bigint_divide(&vm->heap, a, b, false); break;
-        case MAL_BIN_REM: result = mal_bigint_divide(&vm->heap, a, b, true); break;
-        case MAL_BIN_POW: result = mal_bigint_power(&vm->heap, a, b); break;
-        case MAL_BIN_BIT_AND: result = mal_bigint_bitwise(&vm->heap, a, b, '&'); break;
-        case MAL_BIN_BIT_OR: result = mal_bigint_bitwise(&vm->heap, a, b, '|'); break;
-        case MAL_BIN_BIT_XOR: result = mal_bigint_bitwise(&vm->heap, a, b, '^'); break;
-        case MAL_BIN_SHL: result = mal_bigint_shift(&vm->heap, a, b, false); break;
-        case MAL_BIN_SHR: result = mal_bigint_shift(&vm->heap, a, b, true); break;
+        case MAL_BIN_ADD:
+        case MAL_BIN_SUB:
+        case MAL_BIN_MUL:
+        case MAL_BIN_DIV:
+        case MAL_BIN_REM:
+        case MAL_BIN_POW:
+        case MAL_BIN_BIT_AND:
+        case MAL_BIN_BIT_OR:
+        case MAL_BIN_BIT_XOR:
+        case MAL_BIN_SHL:
+        case MAL_BIN_SHR:
+            return mal_vm_bigint_binary(vm, op, left, right);
         case MAL_BIN_USHR:
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                 "BigInts have no unsigned right shift, use >> instead");
@@ -4512,7 +4511,6 @@ static MalValue mal_vm_bigint_arith(MalVm *vm, MalBinaryOp op, MalValue left, Ma
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Unsupported BigInt operation");
             return mal_value_new_undefined();
     }
-    return mal_value_from_bigint(result);
 }
 
 // Whether the operator's operands flow through ToNumeric (ToPrimitive(number)

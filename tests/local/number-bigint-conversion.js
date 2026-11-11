@@ -75,4 +75,27 @@ if (process.env.NUMBER_CONVERSION_PRIMORDIALS === "mutable") {
 }
 let extra = 0;
 check(Number(wide, extra++) === outputs[6] && extra === 1, "extra arguments evaluated");
-console.log(JSON.stringify({ outputs, events }));
+// Loop-carried BigInts keep exact kinds, so conversions and width operations take
+// their typed paths, including their errors.
+function exactConversions() {
+	let state = (1n << 63n) + 17n;
+	const results = [];
+	for (let round = 0; round < 8; round++) {
+		state = BigInt.asUintN(64, state * 6364136223846793005n + BigInt(round & 255));
+		const signed = BigInt.asIntN(64, state);
+		results.push(String(state), String(signed), Number(signed & 65535n), Number(signed));
+		try {
+			results.push(String(BigInt(round + 0.5)));
+		} catch (error) {
+			results.push(error.name);
+		}
+		try {
+			results.push(String(state / (signed - signed)));
+		} catch (error) {
+			results.push(error.name);
+		}
+	}
+	return results;
+}
+const exact = exactConversions();
+console.log(JSON.stringify({ outputs, events, exact }));

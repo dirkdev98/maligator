@@ -807,6 +807,31 @@ static inline void mal_perf_binary_number_fallback(MalBinaryOp op) {
  */
 MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue right);
 
+/**
+ * Arithmetic, bitwise or shift operator over two BigInt operands, excluding `>>>`.
+ * Compiled code calls it once both operand kinds are proven, so a constant operator
+ * reduces to one leaf call. Failures throw and return a null BigInt value.
+ */
+static inline MalValue mal_vm_bigint_binary(MalVm *vm, MalBinaryOp op, MalValue left, MalValue right) {
+    const MalBigInt *a = mal_value_to_bigint(left), *b = mal_value_to_bigint(right);
+    MalBigInt *result;
+    switch (op) {
+        case MAL_BIN_ADD: result = mal_bigint_add(&vm->heap, a, b); break;
+        case MAL_BIN_SUB: result = mal_bigint_subtract(&vm->heap, a, b); break;
+        case MAL_BIN_MUL: result = mal_bigint_multiply(&vm->heap, a, b); break;
+        case MAL_BIN_DIV: result = mal_bigint_divide(&vm->heap, a, b, false); break;
+        case MAL_BIN_REM: result = mal_bigint_divide(&vm->heap, a, b, true); break;
+        case MAL_BIN_POW: result = mal_bigint_power(&vm->heap, a, b); break;
+        case MAL_BIN_BIT_AND: result = mal_bigint_bitwise(&vm->heap, a, b, '&'); break;
+        case MAL_BIN_BIT_OR: result = mal_bigint_bitwise(&vm->heap, a, b, '|'); break;
+        case MAL_BIN_BIT_XOR: result = mal_bigint_bitwise(&vm->heap, a, b, '^'); break;
+        case MAL_BIN_SHL: result = mal_bigint_shift(&vm->heap, a, b, false); break;
+        case MAL_BIN_SHR: result = mal_bigint_shift(&vm->heap, a, b, true); break;
+        default: __builtin_unreachable();
+    }
+    return mal_value_from_bigint(result);
+}
+
 void mal_op_unary(MalCallable *callable, const MalInstruction *instruction);
 
 /**

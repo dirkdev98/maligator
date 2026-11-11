@@ -1295,6 +1295,20 @@ export function cF64Literal(value: number): string {
  * speculates every comparison, equality included: there the numeric prior is real.
  */
 const RELATIONAL_COMPARE = new Set<string>(["<", "<=", ">", ">="]);
+// `>>>` stays generic because it throws a TypeError for BigInt operands.
+const BIGINT_ARITHMETIC_OPERATORS = new Set<string>([
+	"+",
+	"-",
+	"*",
+	"/",
+	"%",
+	"**",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+]);
 const BOXED_COMPARE: Readonly<Record<string, string>> = {
 	"<": "mal_ops_less_than",
 	"<=": "mal_ops_less_equal",
@@ -11067,6 +11081,16 @@ class NativeInstructionEmission {
 		);
 		if (rangedComparison !== undefined)
 			return [this.storeBoolean(dst, String(rangedComparison))];
+		if (
+			BIGINT_ARITHMETIC_OPERATORS.has(operator) &&
+			this.reps[dst] === "boxed" &&
+			this.operandKind(left) === COMPILER_VALUE_KIND_BIGINT &&
+			this.operandKind(right) === COMPILER_VALUE_KIND_BIGINT
+		)
+			return [
+				`r${dst} = mal_vm_bigint_binary(vm, ${emitBinaryOperator(operator)}, ${this.boxed(left)}, ${this.boxed(right)});`,
+				this.throwCheck(),
+			];
 		if (this.context.numericFusionAction?.truncating) {
 			const fusion = this.context.numericFusionAction;
 			const integer = (register: number): string =>
@@ -12221,6 +12245,24 @@ class NativeInstructionEmission {
 					guard = "true";
 					direct = [
 						this.storeNumber(instruction.dst, `mal_ops_to_number(${input})`),
+						this.callPoll(),
+					];
+				} else if (
+					instruction.operation === "BigInt" &&
+					first !== undefined &&
+					this.operandKind(first) === COMPILER_VALUE_KIND_NUMBER
+				) {
+					// NumberToBigInt owns the RangeError for a fractional or non-finite Number.
+					const exact = this.exactInt32Operand(first);
+					const number =
+						this.nativeNumberOperand(first) ??
+						`mal_ops_number_as_f64(${this.boxedOperand(first)})`;
+					const result = `bigint_number_${this.ip}`;
+					guard = "true";
+					direct = [
+						`MalValue ${result} = mal_value_from_bigint(${exact === undefined ? `mal_bigint_from_number(&vm->heap, ${number})` : `mal_bigint_new(&vm->heap, (i128) ${exact})`});`,
+						this.throwCheck(),
+						`r${instruction.dst} = ${this.callValue(instruction.dst, result)};`,
 						this.callPoll(),
 					];
 				} else if (
