@@ -30,25 +30,14 @@ describe("bounded BigInt constant operations", () => {
 		["increment", 9007199254740992n, 9007199254740993n],
 		["decrement", 0n, -1n],
 		["decrement", -9007199254740992n, -9007199254740993n],
+		["increment", maximum, maximum + 1n],
+		["decrement", minimum, minimum - 1n],
 	] as const)("folds %s of %s exactly", (operator, input, expected) => {
 		expect(
 			evaluateConstantOperation(`bigint.unary:${operator}`, [
 				{ kind: "bigint", value: input },
 			]),
 		).toMatchObject({ kind: "value", value: { kind: "bigint", value: expected } });
-	});
-
-	it("leaves signed128 boundary updates to the target runtime", () => {
-		for (const [operator, value] of [
-			["increment", maximum],
-			["decrement", minimum],
-		] as const) {
-			expect(
-				evaluateConstantOperation(`bigint.unary:${operator}`, [
-					{ kind: "bigint", value },
-				]),
-			).toMatchObject({ kind: "unsupported", reason: "target-contract" });
-		}
 	});
 
 	it.each([
@@ -58,7 +47,7 @@ describe("bounded BigInt constant operations", () => {
 		["|", 9007199254740992n, 1n, 9007199254740993n],
 		["^", minimum, -1n, maximum],
 		["^", maximum, maximum, 0n],
-	] as const)("folds signed128 bitwise %s", (operator, left, right, expected) => {
+	] as const)("folds bitwise %s exactly", (operator, left, right, expected) => {
 		expect(
 			evaluateConstantOperation(`bigint.binary:${operator}`, [
 				{ kind: "bigint", value: left },
@@ -105,24 +94,36 @@ describe("bounded BigInt constant operations", () => {
 	});
 
 	it.each([
-		["<<", 1n, 127n],
-		["<<", -2n, 127n],
-		["<<", minimum, 1n],
-		[">>", maximum, -1n],
-		["<<", 1n, 128n],
+		["<<", 1n, 127n, 1n << 127n],
+		["<<", -2n, 127n, -(1n << 128n)],
+		["<<", minimum, 1n, minimum * 2n],
+		[">>", maximum, -1n, maximum * 2n],
+		["<<", 1n, 128n, 1n << 128n],
+		["<<", 0n, maximum + 1n, 0n],
+		["&", maximum + 1n, 0n, 0n],
+		["|", 0n, minimum - 1n, minimum - 1n],
+		["^", minimum - 1n, -1n, -minimum],
+	] as const)(
+		"folds %s beyond native-width boundaries",
+		(operator, left, right, expected) => {
+			expect(
+				evaluateConstantOperation(`bigint.binary:${operator}`, [
+					{ kind: "bigint", value: left },
+					{ kind: "bigint", value: right },
+				]),
+			).toMatchObject({ kind: "value", value: { kind: "bigint", value: expected } });
+		},
+	);
+	it.each([
 		[">>", -1n, minimum],
-		["<<", 0n, maximum + 1n],
 		[">>", 1n, minimum - 1n],
-		["&", maximum + 1n, 0n],
-		["|", 0n, minimum - 1n],
-		["^", minimum - 1n, -1n],
-	] as const)("retains target-dependent %s", (operator, left, right) => {
+	] as const)("declines expanding %s beyond the work budget", (operator, left, right) => {
 		expect(
 			evaluateConstantOperation(`bigint.binary:${operator}`, [
 				{ kind: "bigint", value: left },
 				{ kind: "bigint", value: right },
 			]),
-		).toMatchObject({ kind: "unsupported", reason: "target-contract" });
+		).toMatchObject({ kind: "unsupported", reason: "work-limit" });
 	});
 
 	it.each([
@@ -155,6 +156,12 @@ describe("bounded BigInt constant operations", () => {
 		[-2n, 127n, minimum],
 		[3n, 40n, 12157665459056928801n],
 		[-3n, 3n, -27n],
+		[2n, 127n, 1n << 127n],
+		[-2n, 128n, 1n << 128n],
+		[minimum, 2n, minimum * minimum],
+		[maximum, 2n, maximum * maximum],
+		[maximum + 1n, 0n, 1n],
+		[0n, maximum + 1n, 0n],
 	] as const)("folds exact power %s ** %s", (base, exponent, expected) => {
 		expect(
 			evaluateConstantOperation("bigint.binary:**", [
@@ -164,21 +171,13 @@ describe("bounded BigInt constant operations", () => {
 		).toMatchObject({ kind: "value", value: { kind: "bigint", value: expected } });
 	});
 
-	it.each([
-		[2n, 127n],
-		[-2n, 128n],
-		[minimum, 2n],
-		[maximum, 2n],
-		[2n, maximum],
-		[maximum + 1n, 0n],
-		[0n, maximum + 1n],
-	] as const)("retains target-dependent power %s ** %s", (base, exponent) => {
+	it("declines powers that exceed the limb-work budget", () => {
 		expect(
 			evaluateConstantOperation("bigint.binary:**", [
-				{ kind: "bigint", value: base },
-				{ kind: "bigint", value: exponent },
+				{ kind: "bigint", value: 2n },
+				{ kind: "bigint", value: maximum },
 			]),
-		).toMatchObject({ kind: "unsupported", reason: "target-contract" });
+		).toMatchObject({ kind: "unsupported", reason: "work-limit" });
 	});
 
 	it.each([
@@ -192,7 +191,7 @@ describe("bounded BigInt constant operations", () => {
 				{ kind: "bigint", value: base },
 				{ kind: "bigint", value: exponent },
 			]),
-		).toMatchObject({ kind: "unsupported", reason: "uncertified-operation" });
+		).toMatchObject({ kind: "throw", error: "RangeError", stage: "invocation" });
 	});
 
 	it.each([0, 1, 2, 3])("stops power evaluation within work limit %s", (workLimit) => {
@@ -224,13 +223,13 @@ describe("bounded BigInt constant operations", () => {
 					{ kind: "bigint", value: exponent },
 				],
 				undefined,
-				1,
+				16,
 			);
 			expect(evaluated).toMatchObject({
 				kind: "value",
 				value: { kind: "bigint", value: expected },
 			});
-			expect(evaluated.work).toBeLessThanOrEqual(1);
+			expect(evaluated.work).toBeLessThanOrEqual(16);
 		},
 	);
 
@@ -279,7 +278,7 @@ describe("bounded BigInt constant operations", () => {
 		expect(returnedBigint(result)).toBe(expected);
 	});
 
-	it.each(["2n ** -1n", "0n ** -1n", "2n ** 127n"])(
+	it.each(["2n ** -1n", "0n ** -1n"])(
 		"keeps runtime power behavior in %s",
 		(expression) => {
 			const result = inspectStaticValueFunction(

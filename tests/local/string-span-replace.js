@@ -102,8 +102,7 @@ if (mode.startsWith("primitive-")) {
 		0n,
 		170141183460469231731687303715884105727n,
 		-170141183460469231731687303715884105728n,
-		// Node parity requires the same signed 128-bit BigInt input domain as the runtime.
-		BigInt.asIntN(128, 1234567890123456789012345678901234567890n),
+		1234567890123456789012345678901234567890n,
 	];
 	for (const search of primitives) {
 		const text = String(search);
@@ -121,7 +120,7 @@ if (mode.startsWith("primitive-")) {
 	}
 	for (const replacement of primitives)
 		rows.push(visit(wrap("a😀a"), "a", replacement, null));
-	const huge = BigInt.asIntN(128, BigInt("7".repeat(350)));
+	const huge = BigInt("7".repeat(350));
 	rows.push(
 		visit(
 			wrap("x".repeat(1200) + huge + "é" + huge + "y".repeat(1200)),

@@ -49,9 +49,9 @@ globalThis.constants = [integer, floating, text, huge, true, null, undefined];`,
 			{
 				title: "BigInt pool",
 				explanation:
-					"BigInt literals use a separate 128-bit constant pool: low 64 bits followed by high 64 bits in MALW.",
+					"BigInt literals keep their sign and magnitude in a separate constant pool. MALW carries the limb count and little-endian 32-bit digits.",
 				queries: {
-					source: "0x123456789abcdef0123456789n",
+					source: "0x123456789abcdef0123456789abcdef0123456789n",
 					preCore: "createBigint",
 					optimizedCore: "createBigint",
 					target: "createBigint",

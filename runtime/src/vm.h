@@ -1213,8 +1213,8 @@ typedef struct MalRuntimeImage {
     MalString *string_constants;
 
     /**
-     * Immortal bigint constants, likewise baked into the image with their
-     * 128-bit value emitted at compile time. CREATE_BIGINT hands back a pointer.
+     * Immortal BigInt constants borrow their complete limb storage from the
+     * image. CREATE_BIGINT returns their address without GC allocation.
      */
     i32 bigint_constant_count;
     MalBigInt *bigint_constants;

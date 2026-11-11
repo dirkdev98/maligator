@@ -165,7 +165,7 @@ export function coreStaticDataQueryPlan(
 				? ({ kind: "undefined" } as const)
 				: analysis.constant(args[1], instruction);
 		if (needle === undefined) return undefined;
-		// Native literals wrap to i128; host equality is certified only inside that range.
+		// Certify complete BigInt values and bound limb work before host equality.
 		if (
 			needle.kind === "bigint" &&
 			evaluateConstantOperation("bigint.unary:tonumeric", [needle]).kind !== "value"

@@ -30,7 +30,7 @@ typedef struct MalGcBlock MalGcBlock;
 typedef struct MalGcLarge MalGcLarge;
 
 #define MAL_GC_BLOCK_SIZE (32u * 1024u)
-/* Every cell is 16-byte aligned: covers void*, f64, and MalBigInt's i128. */
+/* Heap tags and MalBigInt's inline payload require 16-byte aligned cells. */
 #define MAL_GC_CELL_ALIGN 16u
 /* Cells of this size or smaller are size-classed in blocks; larger -> LOS. */
 #define MAL_GC_LARGE_THRESHOLD (MAL_GC_BLOCK_SIZE / 4u)
@@ -298,10 +298,7 @@ typedef enum MalHeapType : u8 {
     MAL_HEAP_PRIMITIVE_WRAPPER_OBJECT,
     MAL_HEAP_STRING,
     MAL_HEAP_SYMBOL,
-    /**
-     * BigInt primitive (MalBigInt). Currently 128-bit backed, not arbitrary
-     * precision. BigInt still needs real arbitrary-precision digits.
-     */
+    /** Immutable BigInt limbs are leaf data, either inline or trailing their cell. */
     MAL_HEAP_BIGINT,
     MAL_HEAP_OBJECT,
     /** Arguments exotic object with a mutable formal-parameter map. */

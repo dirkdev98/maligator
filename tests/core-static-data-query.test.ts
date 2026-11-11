@@ -376,20 +376,26 @@ describe("constant static-array search results", () => {
 	);
 
 	it.each(["includes", "indexOf", "lastIndexOf"])(
-		"keeps native BigInt literal wrapping in %s comparisons",
+		"compares complete BigInt values in %s without wrapping",
 		(method) => {
 			for (const operands of [
 				"[340282366920938463463374607431768211456n].METHOD(0n)",
 				"[0n].METHOD(340282366920938463463374607431768211456n)",
 			]) {
 				const output = inspect(`return ${operands.replace("METHOD", method)};`);
+				const expected = method === "includes" ? false : -1;
 				expect(
-					output.core.some(
-						(operation) =>
-							operation.opcode === "queryStaticData" ||
-							(operation.opcode === "binary" && operation.attributes.operator === "==="),
-					),
-				).toBe(true);
+					output.core.some((operation) => operation.opcode === "queryStaticData"),
+				).toBe(false);
+				expect(
+					output.core
+						.filter(
+							(operation) =>
+								operation.opcode ===
+								(typeof expected === "boolean" ? "createBoolean" : "createNumber"),
+						)
+						.map((operation) => operation.attributes.value),
+				).toContain(expected);
 			}
 		},
 	);

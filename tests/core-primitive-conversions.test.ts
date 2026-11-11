@@ -20,11 +20,11 @@ describe("semantic kind union conversions", () => {
 	it.each([false, true])(
 		"carries primitive conversions through the artifact with profiling %s",
 		(profile) => {
-			for (const [operation, expression, operator, mask, allocation] of [
-				["Number", "flag ? +input : undefined", "+", 9, false],
-				["Number", "flag ? String(input) : undefined", "+", 17, false],
-				["String", "flag ? +input : undefined", "tostring", 9, true],
-				["String", "flag ? BigInt(input) : undefined", "tostring", 33, true],
+			for (const [operation, expression, operator, mask, allocation, throwing] of [
+				["Number", "flag ? +input : undefined", "+", 9, false, false],
+				["Number", "flag ? String(input) : undefined", "+", 17, false, false],
+				["String", "flag ? +input : undefined", "tostring", 9, true, false],
+				["String", "flag ? BigInt(input) : undefined", "tostring", 33, true, true],
 			] as const) {
 				const out = conversion(operation, expression, profile);
 				expect(
@@ -47,7 +47,7 @@ describe("semantic kind union conversions", () => {
 					allocation,
 					collection: allocation,
 					reentry: false,
-					throwing: false,
+					throwing,
 				});
 				expect(out.native.gc.safepoints.some((point) => point.instructionIp === ip)).toBe(
 					allocation,

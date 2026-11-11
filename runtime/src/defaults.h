@@ -20,8 +20,7 @@ typedef int32_t i32;
 typedef uint32_t u32;
 typedef int64_t i64;
 typedef uint64_t u64;
-// 128-bit integers back the current (non-arbitrary-precision) BigInt. They
-// cover the full i64/u64 ranges that BigInt64Array/BigUint64Array need.
+// Native 128-bit arithmetic supports checked BigInt fast paths and scalar ABI conversions.
 typedef __int128 i128;
 typedef unsigned __int128 u128;
 typedef float f32;
