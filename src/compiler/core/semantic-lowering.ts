@@ -12111,7 +12111,14 @@ function compileIdentifierAssignment(
 		// its side effects; the assignment expression yields that value.
 		let value: number;
 		if (assignmentExpression.operator === "=") {
-			value = compileExpression(program, fn, cursor, assignmentExpression.right);
+			// NamedEvaluation still names an anonymous right-hand side.
+			value = compileExpression(
+				program,
+				fn,
+				cursor,
+				assignmentExpression.right,
+				assignmentTargetName(assignmentExpression, binding.name),
+			);
 		} else {
 			const location = getOrCreateBindingLocation(program, fn, binding);
 			const current = loadRegisterFromLocation(fn, cursor.block, location);
