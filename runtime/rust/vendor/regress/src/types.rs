@@ -1,3 +1,8 @@
+#[cfg(not(feature = "std"))]
+use alloc::{boxed::Box, sync::Arc};
+#[cfg(feature = "std")]
+use std::sync::Arc;
+pub(crate) type GroupNames = Option<Arc<[Box<str>]>>;
 use crate::codepointset::CodePointSet;
 use crate::position::PositionType;
 #[cfg(not(feature = "std"))]

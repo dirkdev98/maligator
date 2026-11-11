@@ -404,7 +404,7 @@ fn successful_match<Input: InputIndexer>(
     input: Input,
     start: Input::Position,
     state: &State<Input::Position>,
-    group_names: Box<[Box<str>]>,
+    group_names: crate::types::GroupNames,
 ) -> Match {
     let group_to_offset = |mr: &GroupData<Input::Position>| -> Option<Range<usize>> {
         mr.as_range().map(|r| Range {

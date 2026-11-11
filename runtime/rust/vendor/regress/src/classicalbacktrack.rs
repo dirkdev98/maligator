@@ -14,29 +14,29 @@ use crate::matchers::CharProperties;
 use crate::position::PositionType;
 use crate::scm;
 use crate::scm::SingleCharMatcher;
-use crate::types::{CaptureGroupID, GroupData, IP, LoopData, LoopID, MAX_CAPTURE_GROUPS};
+use crate::types::{CaptureGroupID, GroupData, LoopData, LoopID, IP, MAX_CAPTURE_GROUPS};
 use crate::util::DebugCheckIndex;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 use core::ops::Range;
 
 #[derive(Clone, Debug)]
-enum BacktrackInsn<Input: InputIndexer> {
+enum BacktrackInsn<Position: PositionType> {
     /// Nothing more to backtrack.
     /// This "backstops" our stack.
     Exhausted,
 
     /// Restore the IP and position.
-    SetPosition { ip: IP, pos: Input::Position },
+    SetPosition { ip: IP, pos: Position },
 
     SetLoopData {
         id: LoopID,
-        data: LoopData<Input::Position>,
+        data: LoopData<Position>,
     },
 
     SetCaptureGroup {
         id: CaptureGroupID,
-        data: GroupData<Input::Position>,
+        data: GroupData<Position>,
     },
 
     EnterNonGreedyLoop {
@@ -45,20 +45,20 @@ enum BacktrackInsn<Input: InputIndexer> {
         ip: IP,
         // The input position of the loop before entering it.
         // This is used to set up backtracking that restores this position.
-        orig_pos: Input::Position,
-        data: LoopData<Input::Position>,
+        orig_pos: Position,
+        data: LoopData<Position>,
     },
 
     GreedyLoop1Char {
         continuation: IP,
-        min: Input::Position,
-        max: Input::Position,
+        min: Position,
+        max: Position,
     },
 
     NonGreedyLoop1Char {
         continuation: IP,
-        min: Input::Position,
-        max: Input::Position,
+        min: Position,
+        max: Position,
     },
 }
 
@@ -69,9 +69,104 @@ struct State<Position: PositionType> {
 }
 
 #[derive(Debug)]
+pub(crate) struct Scratch<Position: PositionType> {
+    bts: Vec<BacktrackInsn<Position>>,
+    loops: Vec<LoopData<Position>>,
+    groups: Vec<GroupData<Position>>,
+}
+impl<Position: PositionType> Default for Scratch<Position> {
+    fn default() -> Self {
+        Self {
+            bts: Vec::new(),
+            loops: Vec::new(),
+            groups: Vec::new(),
+        }
+    }
+}
+impl<Position: PositionType> Scratch<Position> {
+    fn retained_bytes(&self) -> usize {
+        self.bts
+            .capacity()
+            .saturating_mul(core::mem::size_of::<BacktrackInsn<Position>>())
+            .saturating_add(
+                self.loops
+                    .capacity()
+                    .saturating_mul(core::mem::size_of::<LoopData<Position>>()),
+            )
+            .saturating_add(
+                self.groups
+                    .capacity()
+                    .saturating_mul(core::mem::size_of::<GroupData<Position>>()),
+            )
+    }
+    fn clear_and_limit(&mut self, maximum: usize) {
+        self.bts.clear();
+        self.loops.clear();
+        self.groups.clear();
+        if self.retained_bytes() > maximum {
+            *self = Self::default();
+        }
+    }
+}
+
+/// Empty allocation capacity that can be rebound to an independent byte subject.
+#[derive(Debug, Default)]
+pub struct AsciiScratch(Scratch<crate::position::DefPosition<'static>>);
+impl AsciiScratch {
+    pub fn retained_bytes(&self) -> usize {
+        self.0.retained_bytes()
+    }
+    pub(crate) fn bind<'t>(self) -> Scratch<crate::position::DefPosition<'t>> {
+        self.0
+    }
+    pub(crate) fn from_bound<'t>(
+        mut state: Scratch<crate::position::DefPosition<'t>>,
+        maximum: usize,
+    ) -> Self {
+        state.clear_and_limit(maximum);
+        debug_assert!(state.bts.is_empty() && state.loops.is_empty() && state.groups.is_empty());
+        // All initialized positions are gone; only allocation capacity crosses this lifetime boundary.
+        Self(unsafe {
+            core::mem::transmute::<
+                Scratch<crate::position::DefPosition<'t>>,
+                Scratch<crate::position::DefPosition<'static>>,
+            >(state)
+        })
+    }
+}
+
+/// Empty allocation capacity shared by code-unit and Unicode UTF-16 execution.
+#[cfg(feature = "utf16")]
+#[derive(Debug, Default)]
+pub struct WideScratch(Scratch<crate::position::IndexPosition<'static>>);
+#[cfg(feature = "utf16")]
+impl WideScratch {
+    pub fn retained_bytes(&self) -> usize {
+        self.0.retained_bytes()
+    }
+    pub(crate) fn bind<'t>(self) -> Scratch<crate::position::IndexPosition<'t>> {
+        self.0
+    }
+    pub(crate) fn from_bound<'t>(
+        mut state: Scratch<crate::position::IndexPosition<'t>>,
+        maximum: usize,
+    ) -> Self {
+        state.clear_and_limit(maximum);
+        debug_assert!(state.bts.is_empty() && state.loops.is_empty() && state.groups.is_empty());
+        // Empty vectors retain no initialized subject positions, and the position layout is unchanged.
+        Self(unsafe {
+            core::mem::transmute::<
+                Scratch<crate::position::IndexPosition<'t>>,
+                Scratch<crate::position::IndexPosition<'static>>,
+            >(state)
+        })
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct MatchAttempter<'a, Input: InputIndexer> {
     re: &'a CompiledRegex,
-    bts: Vec<BacktrackInsn<Input>>,
+    bts: Vec<BacktrackInsn<Input::Position>>,
     s: State<Input::Position>,
 }
 
@@ -87,8 +182,38 @@ impl<'a, Input: InputIndexer> MatchAttempter<'a, Input> {
         }
     }
 
+    pub(crate) fn with_scratch(
+        re: &'a CompiledRegex,
+        entry: Input::Position,
+        mut scratch: Scratch<Input::Position>,
+    ) -> Self {
+        debug_assert!(
+            scratch.bts.is_empty() && scratch.loops.is_empty() && scratch.groups.is_empty()
+        );
+        scratch.bts.push(BacktrackInsn::Exhausted);
+        scratch
+            .loops
+            .resize(re.loops as usize, LoopData::new(entry));
+        scratch.groups.resize(re.groups as usize, GroupData::new());
+        Self {
+            re,
+            bts: scratch.bts,
+            s: State {
+                loops: scratch.loops,
+                groups: scratch.groups,
+            },
+        }
+    }
+    fn into_scratch(self) -> Scratch<Input::Position> {
+        Scratch {
+            bts: self.bts,
+            loops: self.s.loops,
+            groups: self.s.groups,
+        }
+    }
+
     #[inline(always)]
-    fn push_backtrack(&mut self, bt: BacktrackInsn<Input>) {
+    fn push_backtrack(&mut self, bt: BacktrackInsn<Input::Position>) {
         self.bts.push(bt)
     }
 
@@ -104,7 +229,7 @@ impl<'a, Input: InputIndexer> MatchAttempter<'a, Input> {
     }
 
     fn prepare_to_enter_loop(
-        bts: &mut Vec<BacktrackInsn<Input>>,
+        bts: &mut Vec<BacktrackInsn<Input::Position>>,
         pos: Input::Position,
         loop_fields: &LoopFields,
         loop_data: &mut LoopData<Input::Position>,
@@ -151,7 +276,12 @@ impl<'a, Input: InputIndexer> MatchAttempter<'a, Input> {
             }
             (true, false) => {
                 // Only entering is viable.
-                MatchAttempter::prepare_to_enter_loop(&mut self.bts, pos, loop_fields, loop_data);
+                MatchAttempter::<Input>::prepare_to_enter_loop(
+                    &mut self.bts,
+                    pos,
+                    loop_fields,
+                    loop_data,
+                );
                 Some(loop_taken_ip)
             }
             (true, true) if !loop_fields.greedy => {
@@ -172,7 +302,12 @@ impl<'a, Input: InputIndexer> MatchAttempter<'a, Input> {
                     ip: loop_not_taken_ip,
                     pos,
                 });
-                MatchAttempter::prepare_to_enter_loop(&mut self.bts, pos, loop_fields, loop_data);
+                MatchAttempter::<Input>::prepare_to_enter_loop(
+                    &mut self.bts,
+                    pos,
+                    loop_fields,
+                    loop_data,
+                );
                 Some(loop_taken_ip)
             }
         }
@@ -549,7 +684,7 @@ impl<'a, Input: InputIndexer> MatchAttempter<'a, Input> {
                         },
                     };
                     *loop_data = data;
-                    MatchAttempter::prepare_to_enter_loop(
+                    MatchAttempter::<Input>::prepare_to_enter_loop(
                         &mut self.bts,
                         *pos,
                         loop_fields,
@@ -735,12 +870,10 @@ impl<'a, Input: InputIndexer> MatchAttempter<'a, Input> {
                     ),
 
                     &Insn::Bracket(idx) => {
-                        next_or_bt!(
-                            scm::Bracket {
-                                bc: &self.re.brackets[idx]
-                            }
-                            .matches(input, dir, &mut pos)
-                        )
+                        next_or_bt!(scm::Bracket {
+                            bc: &self.re.brackets[idx]
+                        }
+                        .matches(input, dir, &mut pos))
                     }
 
                     Insn::MatchAny => {
@@ -1005,7 +1138,6 @@ pub struct BacktrackExecutor<'r, Input: InputIndexer> {
     matcher: MatchAttempter<'r, Input>,
 }
 
-#[cfg(feature = "utf16")]
 impl<'r, Input: InputIndexer> BacktrackExecutor<'r, Input> {
     pub(crate) fn new(input: Input, matcher: MatchAttempter<'r, Input>) -> Self {
         Self { input, matcher }
@@ -1013,6 +1145,29 @@ impl<'r, Input: InputIndexer> BacktrackExecutor<'r, Input> {
 }
 
 impl<Input: InputIndexer> BacktrackExecutor<'_, Input> {
+    pub(crate) fn into_scratch(self) -> Scratch<Input::Position> {
+        self.matcher.into_scratch()
+    }
+    pub(crate) fn retained_scratch_bytes(&self) -> usize {
+        self.matcher
+            .bts
+            .capacity()
+            .saturating_mul(core::mem::size_of::<BacktrackInsn<Input::Position>>())
+            .saturating_add(
+                self.matcher
+                    .s
+                    .loops
+                    .capacity()
+                    .saturating_mul(core::mem::size_of::<LoopData<Input::Position>>()),
+            )
+            .saturating_add(
+                self.matcher
+                    .s
+                    .groups
+                    .capacity()
+                    .saturating_mul(core::mem::size_of::<GroupData<Input::Position>>()),
+            )
+    }
     fn successful_match(&mut self, start: Input::Position, end: Input::Position) -> Match {
         // We want to simultaneously map our groups to offsets, and clear the groups.
         // A for loop is the easiest way to do this while satisfying the borrow checker.

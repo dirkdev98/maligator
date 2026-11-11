@@ -45,6 +45,12 @@ impl<Producer: MatchProducer> Matches<Producer> {
         let position = mp.initial_position(start);
         Matches { mp, position }
     }
+    pub(crate) fn into_producer(self) -> Producer {
+        self.mp
+    }
+    pub(crate) fn producer(&self) -> &Producer {
+        &self.mp
+    }
 }
 
 impl<Producer: MatchProducer> Iterator for Matches<Producer> {

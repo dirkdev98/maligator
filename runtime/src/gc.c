@@ -2394,7 +2394,7 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
             // finalizer is dead there — and mal_regexp_release (regress FFI) isn't linked.
             MalRegExpObject *re = (MalRegExpObject *) cell;
             if (re->matcher != nullptr && !re->matcher_borrowed) {
-                mal_regexp_release(re->matcher);
+                mal_gc_process_release(mal_regexp_release(re->matcher));
             }
             re->matcher = nullptr;
 #endif

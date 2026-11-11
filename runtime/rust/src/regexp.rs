@@ -21,19 +21,12 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use regress::{AsciiMatches, Flags, Match, Regex};
+use regress::{AsciiMatches, AsciiScratch, Flags, Match, Regex, WideScratch};
 
 use crate::ffi::{nullable_slice, nullable_u16_slice, write_utf8};
 
-/// ABI version, mirrored by MAL_REGEXP_ABI_VERSION in mal_regexp.h.
-/// v2: added `mal_regexp_free` (GC finalization).
-/// v3: added immutable-subject identity and execution-path reporting.
-/// v4: added conservative allocation-free literal/class execution plans.
-/// v5: added compact Latin-1 subject execution.
-/// v6: added fresh-state cloning of an existing compiled pattern.
-/// v7: added template cloning that leaves compile-cache recency alone.
-/// v8: handles are shared through `mal_regexp_retain`/`mal_regexp_release`.
-pub const MAL_REGEXP_ABI_VERSION: u32 = 8;
+/// Ownership and execution contract mirrored by `mal_regexp.h`.
+pub const MAL_REGEXP_ABI_VERSION: u32 = 9;
 
 const EXEC_ASCII: u32 = 1 << 0;
 const EXEC_CACHE_HIT: u32 = 1 << 1;
@@ -1066,6 +1059,9 @@ struct CompiledPattern {
     /// Ignore-case stays on UTF-16 because that backend documents only ASCII
     /// folding, while ECMAScript may require Unicode-aware canonicalization.
     ascii_eligible: bool,
+    ascii_scratch: AsciiScratch,
+    wide_scratch: WideScratch,
+    accounted_scratch_bytes: usize,
     subject_cache: Option<SubjectCache>,
     result_memo: Option<ResultMemo>,
     last: Option<Match>,
@@ -1073,6 +1069,7 @@ struct CompiledPattern {
     fast_last_captures: [i32; FAST_CAPTURE_SLOTS],
 }
 
+const SCRATCH_LIMIT_PER_ENCODING: usize = 32 * 1024;
 const RESULT_MEMO_SUBJECT_BYTES: usize = 256;
 const RESULT_MEMO_STARTS: usize = 8;
 
@@ -1124,6 +1121,9 @@ impl CompiledPattern {
             fast,
             unicode_mode,
             ascii_eligible,
+            ascii_scratch: AsciiScratch::default(),
+            wide_scratch: WideScratch::default(),
+            accounted_scratch_bytes: 0,
             subject_cache: None,
             result_memo: None,
             last: None,
@@ -1329,15 +1329,39 @@ pub unsafe extern "C" fn mal_regexp_retain(
 /// Drop one owner of a handle, freeing it with the last. Null-tolerant, so
 /// the GC finalizer (which nulls the field after the call) is idempotent.
 #[no_mangle]
-pub unsafe extern "C" fn mal_regexp_release(handle: *mut core::ffi::c_void) {
+pub unsafe extern "C" fn mal_regexp_release(handle: *mut core::ffi::c_void) -> usize {
     if handle.is_null() {
-        return;
+        return 0;
     }
     let pattern = unsafe { &mut *(handle as *mut CompiledPattern) };
     pattern.refs -= 1;
-    if pattern.refs == 0 {
-        drop(unsafe { Box::from_raw(handle as *mut CompiledPattern) });
+    if pattern.refs != 0 {
+        return 0;
     }
+    let bytes = pattern.accounted_scratch_bytes;
+    drop(unsafe { Box::from_raw(handle as *mut CompiledPattern) });
+    bytes
+}
+
+/// Drain the retained-capacity change once, for the owning VM's pressure account.
+#[no_mangle]
+pub unsafe extern "C" fn mal_regexp_scratch_delta(handle: *mut core::ffi::c_void) -> i64 {
+    if handle.is_null() {
+        return 0;
+    }
+    let pattern = unsafe { &mut *(handle as *mut CompiledPattern) };
+    let bytes = pattern.ascii_scratch.retained_bytes()
+        + pattern.wide_scratch.retained_bytes()
+        + pattern
+            .subject_cache
+            .as_ref()
+            .and_then(|cache| cache.continuation.as_ref())
+            .map_or(0, |continuation| {
+                continuation.matches.retained_scratch_bytes()
+            });
+    let delta = bytes as i64 - pattern.accounted_scratch_bytes as i64;
+    pattern.accounted_scratch_bytes = bytes;
+    delta
 }
 
 /// Write a match's group ranges into `out` as (start, end) i32 pairs (pair 0 is
@@ -1405,10 +1429,19 @@ fn fast_exec<U: SubjectUnit>(
     unsafe { copy_cached_captures(&cp.fast_last_captures, groups, caps_out, caps_cap) }
 }
 
+fn reclaim_ascii(cache: &mut SubjectCache, scratch: &mut AsciiScratch) {
+    if let Some(continuation) = cache.continuation.take() {
+        *scratch = continuation
+            .matches
+            .into_scratch(SCRATCH_LIMIT_PER_ENCODING);
+    }
+}
+
 /// The next match at or after `start`, resuming the cached iterator when the
 /// previous `exec` over this same subject ended exactly at `start`.
 fn next_ascii_match(
     cache: &mut SubjectCache,
+    scratch: &mut AsciiScratch,
     re: &Arc<Regex>,
     text: &str,
     start: usize,
@@ -1419,8 +1452,8 @@ fn next_ascii_match(
             && continuation.len == text.len()
     });
     if !resumable {
-        cache.continuation = None;
-        let matches = re.find_from_ascii(text, start);
+        reclaim_ascii(cache, scratch);
+        let matches = re.find_from_ascii_with_scratch(text, start, core::mem::take(scratch));
         // SAFETY: the continuation owns a clone of the regex Arc, and the text is
         // the subject's immutable bytes. The cache entry holding it is keyed by
         // heap epoch and string identity, and every sweep that can free the
@@ -1441,7 +1474,12 @@ fn next_ascii_match(
     match &found {
         // After an empty match the iterator steps past it, which `exec` does not.
         Some(m) if m.end() > m.start() => continuation.next_start = m.end(),
-        _ => cache.continuation = None,
+        _ => reclaim_ascii(cache, scratch),
+    }
+    if cache.continuation.as_ref().is_some_and(|continuation| {
+        continuation.matches.retained_scratch_bytes() > SCRATCH_LIMIT_PER_ENCODING
+    }) {
+        reclaim_ascii(cache, scratch);
     }
     found
 }
@@ -1466,11 +1504,17 @@ fn finish_exec(
     }
 }
 
-fn find_wide(re: &Regex, unicode_mode: bool, subject: &[u16], start: usize) -> Option<Match> {
+fn find_wide(
+    re: &Regex,
+    scratch: &mut WideScratch,
+    unicode_mode: bool,
+    subject: &[u16],
+    start: usize,
+) -> Option<Match> {
     if unicode_mode {
-        re.find_from_utf16(subject, start).next()
+        re.find_first_utf16_with_scratch(subject, start, scratch, SCRATCH_LIMIT_PER_ENCODING)
     } else {
-        re.find_from_ucs2(subject, start).next()
+        re.find_first_ucs2_with_scratch(subject, start, scratch, SCRATCH_LIMIT_PER_ENCODING)
     }
 }
 
@@ -1565,6 +1609,9 @@ unsafe fn exec_general(
             )
         });
         if !cache_hit {
+            if let Some(cache) = cp.subject_cache.as_mut() {
+                reclaim_ascii(cache, &mut cp.ascii_scratch);
+            }
             cp.subject_cache = Some(SubjectCache {
                 heap_identity,
                 heap_epoch,
@@ -1577,7 +1624,7 @@ unsafe fn exec_general(
                 continuation: None,
             });
             execution_flags |= EXEC_CACHE_FILL;
-            find_wide(&cp.re, cp.unicode_mode, subj, start)
+            find_wide(&cp.re, &mut cp.wide_scratch, cp.unicode_mode, subj, start)
         } else {
             let cache = cp.subject_cache.as_mut().expect("cache key matched");
             if !cache.classified {
@@ -1600,14 +1647,14 @@ unsafe fn exec_general(
                 // SAFETY: the copy is never modified after classification and the
                 // continuation is the only field the call below updates.
                 let text = unsafe { &*(ascii.as_str() as *const str) };
-                next_ascii_match(cache, &cp.re, text, start)
+                next_ascii_match(cache, &mut cp.ascii_scratch, &cp.re, text, start)
             } else {
                 execution_flags |= EXEC_NON_ASCII;
-                find_wide(&cp.re, cp.unicode_mode, subj, start)
+                find_wide(&cp.re, &mut cp.wide_scratch, cp.unicode_mode, subj, start)
             }
         }
     } else {
-        find_wide(&cp.re, cp.unicode_mode, subj, start)
+        find_wide(&cp.re, &mut cp.wide_scratch, cp.unicode_mode, subj, start)
     };
     if !execution_flags_out.is_null() {
         unsafe { *execution_flags_out = execution_flags };
@@ -1720,7 +1767,10 @@ unsafe fn exec_latin1_general(
     } else {
         // Keep one widening buffer per pattern so loops over many short
         // subjects do not allocate for every line.
-        let mut wide = cp.subject_cache.take().and_then(|cache| cache.wide);
+        let mut wide = cp.subject_cache.take().and_then(|mut cache| {
+            reclaim_ascii(&mut cache, &mut cp.ascii_scratch);
+            cache.wide
+        });
         if let Some(buffer) = wide.as_mut() {
             buffer.clear();
         }
@@ -1750,7 +1800,7 @@ unsafe fn exec_latin1_general(
         // Eligibility excludes ignore-case, whose ECMAScript canonicalization
         // can map non-ASCII pattern units onto ASCII subject units.
         let text = unsafe { core::str::from_utf8_unchecked(subj) };
-        next_ascii_match(cache, &cp.re, text, start)
+        next_ascii_match(cache, &mut cp.ascii_scratch, &cp.re, text, start)
     } else {
         execution_flags |= EXEC_NON_ASCII;
         let wide = cache.wide.get_or_insert_with(Vec::new);
@@ -1759,7 +1809,7 @@ unsafe fn exec_latin1_general(
         if wide.is_empty() {
             wide.extend(subj.iter().map(|unit| u16::from(*unit)));
         }
-        find_wide(&cp.re, cp.unicode_mode, wide, start)
+        find_wide(&cp.re, &mut cp.wide_scratch, cp.unicode_mode, wide, start)
     };
     if !execution_flags_out.is_null() {
         unsafe { *execution_flags_out = execution_flags };
@@ -1877,6 +1927,74 @@ mod tests {
 
     unsafe fn handle(pattern: &[u16], flags: u32) -> *mut core::ffi::c_void {
         unsafe { mal_regexp_compile(pattern.as_ptr(), pattern.len(), flags) }
+    }
+
+    #[test]
+    fn retained_scratch_is_bounded_and_charged_once_per_shared_handle() {
+        let pattern = utf16(r"(?<word>[a-z]+):\k<word>");
+        let compiled = unsafe { handle(&pattern, 0) };
+        assert!(!compiled.is_null());
+        let shared = unsafe { mal_regexp_retain(compiled) };
+        let mut charged = 0i64;
+        for index in 0..8 {
+            let word = "a".repeat(300 + index);
+            let text = format!("{word}:{word}");
+            let mut captures = [-1; 8];
+            let count = unsafe {
+                mal_regexp_exec_latin1(
+                    compiled,
+                    text.as_ptr(),
+                    text.len(),
+                    0,
+                    text.as_ptr().cast(),
+                    1,
+                    index as u32,
+                    captures.as_mut_ptr(),
+                    captures.len() as i32,
+                    core::ptr::null_mut(),
+                )
+            };
+            assert_eq!(count, 2);
+            assert_eq!(
+                &captures[..4],
+                &[0, text.len() as i32, 0, word.len() as i32]
+            );
+            charged += unsafe { mal_regexp_scratch_delta(compiled) };
+            assert!(charged > 0 && charged as usize <= SCRATCH_LIMIT_PER_ENCODING * 2);
+            assert_eq!(unsafe { mal_regexp_scratch_delta(shared) }, 0);
+        }
+        assert_eq!(unsafe { mal_regexp_release(compiled) }, 0);
+        assert_eq!(unsafe { mal_regexp_release(shared) }, charged as usize);
+    }
+
+    #[test]
+    fn oversized_execution_does_not_retain_its_scratch() {
+        let pattern = utf16(&("(a)".repeat(1500) + r"\1"));
+        let compiled = unsafe { handle(&pattern, 0) };
+        assert!(!compiled.is_null());
+        let text = "a".repeat(1501);
+        let mut captures = [-1; 4];
+        for epoch in 0..2 {
+            assert_eq!(
+                unsafe {
+                    mal_regexp_exec_latin1(
+                        compiled,
+                        text.as_ptr(),
+                        text.len(),
+                        0,
+                        text.as_ptr().cast(),
+                        1,
+                        epoch,
+                        captures.as_mut_ptr(),
+                        4,
+                        core::ptr::null_mut(),
+                    )
+                },
+                1501
+            );
+            assert_eq!(unsafe { mal_regexp_scratch_delta(compiled) }, 0);
+        }
+        assert_eq!(unsafe { mal_regexp_release(compiled) }, 0);
     }
 
     #[test]

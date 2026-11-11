@@ -21,15 +21,8 @@
 extern "C" {
 #endif
 
-/* Bump alongside MAL_REGEXP_ABI_VERSION in regexp.rs on breaking changes.
- * v2: added mal_regexp_free (GC finalization).
- * v3: added immutable-subject identity and execution-path reporting.
- * v4: added conservative allocation-free literal/class execution plans.
- * v5: added compact Latin-1 subject execution.
- * v6: added fresh-state cloning of an existing compiled pattern.
- * v7: added template cloning that leaves compile-cache recency alone.
- * v8: handles are shared through mal_regexp_retain/mal_regexp_release. */
-#define MAL_REGEXP_ABI_VERSION 8u
+/* Bump with regexp.rs when the ownership or execution contract changes. */
+#define MAL_REGEXP_ABI_VERSION 9u
 
 /* Returns the ABI version compiled into the linked archive. */
 uint32_t mal_regexp_abi_version(void);
@@ -60,8 +53,13 @@ void *mal_regexp_compile(const uint16_t *pattern, size_t pattern_len, uint32_t f
 void *mal_regexp_retain(void *handle);
 
 /* Drop one owner, freeing the handle with the last (null-tolerant, so the GC
- * finalizer is idempotent after nulling the field). */
-void mal_regexp_release(void *handle);
+ * finalizer is idempotent after nulling the field). Returns the capacity charge
+ * to release from the owning VM when the final owner is dropped. */
+size_t mal_regexp_release(void *handle);
+
+/* Drain the change in retained matcher scratch after an exec. A handle belongs
+ * to one VM, which charges positive deltas and releases negative deltas. */
+int64_t mal_regexp_scratch_delta(void *handle);
 
 /* Execute `handle` against `subject` (UTF-16) starting at code-unit index
  * `start`. `subject_identity` is the owning immutable MalString cell; the heap

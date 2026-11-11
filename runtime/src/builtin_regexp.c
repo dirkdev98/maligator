@@ -11,6 +11,7 @@
 #include "checked_size.h"
 #include "ecma_whitespace.h"
 #include "function_object.h"
+#include "gc_process.h"
 #include "heap_string.h"
 #include "intrinsics.h"
 #include "mal_regexp.h"
@@ -476,7 +477,7 @@ static void regexp_templates_free(MalVm *vm) {
     struct MalRegExpTemplates *templates = vm->regexp_templates;
     if (templates == nullptr) return;
     for (usize i = 0; i < templates->capacity; i++) {
-        mal_regexp_release(templates->entries[i].matcher);
+        mal_gc_process_release(mal_regexp_release(templates->entries[i].matcher));
     }
     free(templates->entries);
     free(templates);
@@ -880,6 +881,9 @@ static int32_t regexp_matcher_exec(
         : mal_regexp_exec(
             re->matcher, (const uint16_t *) subject.utf16_units, length, start, s,
             vm->heap.identity, vm->heap.epoch, caps, caps_cap, &execution_flags);
+    i64 scratch_delta = mal_regexp_scratch_delta(re->matcher);
+    if (scratch_delta > 0) mal_heap_charge_external(&vm->heap, (usize) scratch_delta);
+    else if (scratch_delta < 0) mal_gc_process_release((usize) -scratch_delta);
     MAL_PERF_COUNT(regexp_exec_calls);
     if ((execution_flags & MAL_REGEXP_EXEC_LATIN1) != 0) MAL_PERF_COUNT(regexp_latin1_exec_calls);
     if ((execution_flags & MAL_REGEXP_EXEC_FAST) != 0) {
@@ -1344,7 +1348,7 @@ static MalValue regexp_proto_compile(MalVm *vm, MalValue this_value, const MalVa
         return mal_value_new_undefined();
     }
     // No exec keeps the old matcher across user code, so it can go right away.
-    if (!re->matcher_borrowed) mal_regexp_release(re->matcher);
+    if (!re->matcher_borrowed) mal_gc_process_release(mal_regexp_release(re->matcher));
     re->matcher = matcher;
     re->matcher_borrowed = false;
     re->source = p_str;
@@ -2642,22 +2646,13 @@ static bool regexp_canonical_split(
     *out = mal_value_from_object((MalObject *) array);
     if (limit == 0) return true;
     usize size = mal_string_length(s);
-    MalStringSegment subject = mal_string_flat_segment(s);
     int32_t caps[64];
     u32 array_len = 0;
     usize p = 0;
     usize q = 0;
     do {
-        u32 execution_flags = 0;
-        int32_t ngroups = subject.latin1
-            ? mal_regexp_exec_latin1(
-                re->matcher, subject.latin1_units, size, q, s,
-                vm->heap.identity, vm->heap.epoch, caps, 64, &execution_flags)
-            : mal_regexp_exec(
-                re->matcher, (const uint16_t *) subject.utf16_units, size, q, s,
-                vm->heap.identity, vm->heap.epoch, caps, 64, &execution_flags);
+        int32_t ngroups = regexp_matcher_exec(vm, re, s, q, caps, 64);
         if (ngroups < 0) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "regular expression execution failed");
             *out = mal_value_new_undefined();
             return true;
         }

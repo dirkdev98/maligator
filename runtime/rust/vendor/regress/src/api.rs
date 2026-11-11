@@ -1,11 +1,14 @@
 use crate::classicalbacktrack;
+pub use crate::classicalbacktrack::AsciiScratch;
+#[cfg(feature = "utf16")]
+pub use crate::classicalbacktrack::WideScratch;
 use crate::emit;
 use crate::exec;
 use crate::indexing;
 use crate::insn::CompiledRegex;
 use crate::optimizer;
 use crate::parse;
-use crate::types::MAX_CAPTURE_GROUPS;
+use crate::types::{GroupNames, MAX_CAPTURE_GROUPS};
 
 #[cfg(feature = "utf16")]
 use crate::{
@@ -140,6 +143,16 @@ pub type Matches<'r, 't> = exec::Matches<backends::DefaultExecutor<'r, 't>>;
 /// only.
 pub type AsciiMatches<'r, 't> = exec::Matches<backends::DefaultAsciiExecutor<'r, 't>>;
 
+impl<'r, 't> AsciiMatches<'r, 't> {
+    /// Discard this subject and retain only empty scratch within the caller's byte limit.
+    pub fn into_scratch(self, maximum: usize) -> AsciiScratch {
+        AsciiScratch::from_bound(self.into_producer().into_scratch(), maximum)
+    }
+    pub fn retained_scratch_bytes(&self) -> usize {
+        self.producer().retained_scratch_bytes()
+    }
+}
+
 /// A Match represents a portion of a string which was found to match a Regex.
 #[derive(Debug, Clone)]
 pub struct Match {
@@ -158,7 +171,7 @@ pub struct Match {
     //   - Empty, if there were no named capture groups.
     //   - A list of names with length `captures.len()`, corresponding to the
     //     capture group names in order. Groups without names have an empty string.
-    pub(crate) group_names: Box<[Box<str>]>,
+    pub(crate) group_names: GroupNames,
 }
 
 impl Match {
@@ -183,7 +196,12 @@ impl Match {
         if name.is_empty() {
             return None;
         }
-        let pos = self.group_names.iter().position(|s| s.as_ref() == name)?;
+        let pos = self
+            .group_names
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .position(|s| s.as_ref() == name)?;
         self.captures[pos].clone()
     }
 
@@ -323,23 +341,23 @@ impl<'m> Iterator for NamedGroups<'m> {
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         // Increment next_group_idx until we find a non-empty name that we haven't seen yet.
-        debug_assert!(self.next_group_idx <= self.mat.group_names.len());
-        let end = self.mat.group_names.len();
+        debug_assert!(self.next_group_idx <= self.mat.group_names.as_deref().unwrap_or(&[]).len());
+        let end = self.mat.group_names.as_deref().unwrap_or(&[]).len();
 
         loop {
             let mut idx = self.next_group_idx;
             // Skip empty names
-            while idx < end && self.mat.group_names[idx].is_empty() {
+            while idx < end && self.mat.group_names.as_deref().unwrap_or(&[])[idx].is_empty() {
                 idx += 1;
             }
             if idx == end {
                 return None;
             }
 
-            let name = self.mat.group_names[idx].as_ref();
+            let name = self.mat.group_names.as_deref().unwrap_or(&[])[idx].as_ref();
 
             // Check if we've already returned this name (by looking backwards)
-            let already_seen = self.mat.group_names[..idx]
+            let already_seen = self.mat.group_names.as_deref().unwrap_or(&[])[..idx]
                 .iter()
                 .any(|n| n.as_ref() == name);
 
@@ -353,7 +371,7 @@ impl<'m> Iterator for NamedGroups<'m> {
             // Prefer a Some value over None when there are duplicate names.
             let mut best_range = self.mat.captures[idx].clone();
             for check_idx in (idx + 1)..end {
-                if self.mat.group_names[check_idx].as_ref() == name {
+                if self.mat.group_names.as_deref().unwrap_or(&[])[check_idx].as_ref() == name {
                     // Found a duplicate name. Prefer a Some value over None.
                     if best_range.is_none() && self.mat.captures[check_idx].is_some() {
                         best_range = self.mat.captures[check_idx].clone();
@@ -368,7 +386,7 @@ impl<'m> Iterator for NamedGroups<'m> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let size = self.mat.group_names[self.next_group_idx..]
+        let size = self.mat.group_names.as_deref().unwrap_or(&[])[self.next_group_idx..]
             .iter()
             .filter(|s| !s.is_empty())
             .count();
@@ -495,6 +513,80 @@ impl Regex {
     #[inline]
     pub fn find_from_ascii<'r, 't>(&'r self, text: &'t str, start: usize) -> AsciiMatches<'r, 't> {
         backends::find(self, text, start)
+    }
+
+    /// Resume-independent matching with owned byte-subject allocation capacity.
+    pub fn find_from_ascii_with_scratch<'r, 't>(
+        &'r self,
+        text: &'t str,
+        start: usize,
+        scratch: AsciiScratch,
+    ) -> AsciiMatches<'r, 't> {
+        use crate::indexing::InputIndexer;
+        let input = indexing::AsciiInput::new(text, self.cr.flags.unicode);
+        exec::Matches::new(
+            classicalbacktrack::BacktrackExecutor::new(
+                input,
+                classicalbacktrack::MatchAttempter::with_scratch(
+                    &self.cr,
+                    input.left_end(),
+                    scratch.bind(),
+                ),
+            ),
+            start,
+        )
+    }
+
+    /// Find one Unicode match, retaining only empty allocation capacity up to the caller's limit.
+    #[cfg(feature = "utf16")]
+    pub fn find_first_utf16_with_scratch(
+        &self,
+        text: &[u16],
+        start: usize,
+        scratch: &mut WideScratch,
+        maximum: usize,
+    ) -> Option<Match> {
+        let input = Utf16Input::new(text, self.cr.flags.unicode);
+        let mut matches = exec::Matches::new(
+            classicalbacktrack::BacktrackExecutor::new(
+                input,
+                MatchAttempter::with_scratch(
+                    &self.cr,
+                    input.left_end(),
+                    core::mem::take(scratch).bind(),
+                ),
+            ),
+            start,
+        );
+        let found = matches.next();
+        *scratch = WideScratch::from_bound(matches.into_producer().into_scratch(), maximum);
+        found
+    }
+
+    /// Find one code-unit match, retaining only empty allocation capacity up to the caller's limit.
+    #[cfg(feature = "utf16")]
+    pub fn find_first_ucs2_with_scratch(
+        &self,
+        text: &[u16],
+        start: usize,
+        scratch: &mut WideScratch,
+        maximum: usize,
+    ) -> Option<Match> {
+        let input = Ucs2Input::new(text, self.cr.flags.unicode);
+        let mut matches = exec::Matches::new(
+            classicalbacktrack::BacktrackExecutor::new(
+                input,
+                MatchAttempter::with_scratch(
+                    &self.cr,
+                    input.left_end(),
+                    core::mem::take(scratch).bind(),
+                ),
+            ),
+            start,
+        );
+        let found = matches.next();
+        *scratch = WideScratch::from_bound(matches.into_producer().into_scratch(), maximum);
+        found
     }
 
     /// Returns an iterator for matches found in 'text' starting at index `start`.
@@ -926,9 +1018,9 @@ pub use pattern_impl::*;
 // Currently there is only the classical backtracking, and PikeVM.
 #[doc(hidden)]
 pub mod backends {
-    use super::Regex;
     use super::exec;
     use super::indexing;
+    use super::Regex;
     pub use crate::emit::emit;
     pub use crate::optimizer::optimize;
     pub use crate::parse::try_parse;

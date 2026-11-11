@@ -451,23 +451,23 @@ pub fn emit(n: &ir::Regex) -> CompiledRegex {
             brackets: Vec::new(),
             loops: 0,
             groups: 0,
-            group_names: Box::new([]),
+            group_names: None,
             flags: n.flags,
             start_pred: startpredicate::predicate_for_re(n),
         },
     };
     emitter.emit_node(&n.node);
     let mut result = emitter.result;
-    // Populate group names, unless all are empty.
     debug_assert!(
-        result.group_names.is_empty(),
+        result.group_names.is_none(),
         "Group names should not be set"
     );
     if emitter.group_names.iter().any(|s| !s.is_empty()) {
-        result.group_names = emitter.group_names.into_boxed_slice();
+        result.group_names = Some(emitter.group_names.into());
     }
-    debug_assert!(
-        result.group_names.is_empty() || result.group_names.len() == result.groups as usize
-    );
+    debug_assert!(result
+        .group_names
+        .as_ref()
+        .is_none_or(|names| names.len() == result.groups as usize));
     result
 }

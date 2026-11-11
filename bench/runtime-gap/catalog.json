@@ -858,7 +858,7 @@
 			"owner": "short string concatenation",
 			"category": "memory-layout-usage",
 			"mechanisms": ["string-allocation", "string-concatenation"],
-			"inputShape": "18–23-unit dynamic template keys through 17–20-unit intermediates",
+			"inputShape": "18\u201323-unit dynamic template keys through 17\u201320-unit intermediates",
 			"unit": "concatenation chain",
 			"sourceSeam": "runtime/src/heap_string.c",
 			"controls": [
@@ -6461,6 +6461,76 @@
 			"sourceSeam": "runtime/src/heap_string.h",
 			"controls": ["string-concatenation"],
 			"fixture": "cases/string-cons-full-scan-32.mjs"
+		},
+		{
+			"id": "regexp-owned-named",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "RegExp matcher allocation ownership",
+			"category": "allocation-gc",
+			"mechanisms": ["regexp-execution", "owned-scratch"],
+			"inputShape": "32 rotating >256-unit named backreference subjects",
+			"unit": "exec",
+			"sourceSeam": "runtime/rust/src/regexp.rs",
+			"fixture": "cases/regexp-owned-named.mjs",
+			"controls": [],
+			"features": ["regexp"]
+		},
+		{
+			"id": "regexp-owned-unnamed",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "RegExp matcher allocation ownership",
+			"category": "allocation-gc",
+			"mechanisms": ["regexp-execution", "owned-scratch"],
+			"inputShape": "32 rotating >256-unit unnamed backreference subjects",
+			"unit": "exec",
+			"sourceSeam": "runtime/rust/src/regexp.rs",
+			"fixture": "cases/regexp-owned-unnamed.mjs",
+			"controls": [],
+			"features": ["regexp"]
+		},
+		{
+			"id": "regexp-owned-wide",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "RegExp matcher allocation ownership",
+			"category": "allocation-gc",
+			"mechanisms": ["regexp-execution", "owned-scratch"],
+			"inputShape": "32 rotating >256-unit wide backreference subjects",
+			"unit": "exec",
+			"sourceSeam": "runtime/rust/src/regexp.rs",
+			"fixture": "cases/regexp-owned-wide.mjs",
+			"controls": [],
+			"features": ["regexp"]
+		},
+		{
+			"id": "regexp-owned-miss",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "RegExp matcher allocation ownership",
+			"category": "allocation-gc",
+			"mechanisms": ["regexp-execution", "owned-scratch"],
+			"inputShape": "32 rotating >256-unit miss backreference subjects",
+			"unit": "exec",
+			"sourceSeam": "runtime/rust/src/regexp.rs",
+			"fixture": "cases/regexp-owned-miss.mjs",
+			"controls": [],
+			"features": ["regexp"]
+		},
+		{
+			"id": "regexp-owned-repeat",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "RegExp matcher allocation ownership",
+			"category": "allocation-gc",
+			"mechanisms": ["regexp-execution", "owned-scratch"],
+			"inputShape": "repeated immutable ASCII subject with global backreference",
+			"unit": "exec",
+			"sourceSeam": "runtime/rust/src/regexp.rs",
+			"fixture": "cases/regexp-owned-repeat.mjs",
+			"controls": [],
+			"features": ["regexp"]
 		}
 	]
 }

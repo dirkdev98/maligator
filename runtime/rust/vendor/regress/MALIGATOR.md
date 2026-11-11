@@ -3,7 +3,7 @@
 The runtime uses the published Regress 0.12.0 sources with Unicode 18 tables.
 The upstream generator comes from commit
 `aae35dee1596cc9a9caaad2425b088081c09e5d5`; its local changes accept an input
-directory and check formatting failures. Runtime matching code is unchanged.
+directory and check formatting failures.
 
 Regress's published tables predate Unicode 18, including simple case-folding
 equivalences used by ECMAScript regular expressions. Keep the backend's folding,
@@ -23,3 +23,15 @@ The command verifies the pinned input hashes before running the generator. Build
 output uses a disposable directory outside the runtime's Rust source tree.
 The upstream MIT and Apache licenses apply to the backend; Unicode data uses the
 license in `runtime/vendor/unicode/LICENSE.txt`.
+
+# Matcher allocation ownership
+
+The local backtracking backend can return empty stack, loop and capture-state
+capacity to a caller-owned scratch object. Rebinding clears every initialized
+subject position before changing its lifetime. The runtime bounds retained
+capacity separately for byte and UTF-16 execution and accounts it to the owning
+VM. A live byte iterator still resumes consecutive matches over the same
+immutable subject; discarded iterators return only empty capacity.
+
+Compiled named-group strings are shared with successful matches. Match ranges
+remain independently owned so a later execution cannot mutate an earlier result.
