@@ -1898,6 +1898,7 @@ typedef struct MalVm {
     /** Isolate-wide private symbol backing captured Error stacks. Rooted even
      * before any Error exists or a realm retains it. */
     MalValue error_stack_marker;
+    MalValue error_callsite_marker;
 #if MAL_REALMS
     /** Current-realm globals; aliases current_realm->globals and is not owned here. */
     MalValue *globals;

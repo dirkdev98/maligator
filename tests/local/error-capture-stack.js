@@ -133,6 +133,36 @@ check(
 		first.toString().indexOf("error-capture-stack.js:") !== -1,
 );
 check("script CallSites are not native", first.isNative() === false);
+const callsitePrototype = Object.getPrototypeOf(first);
+check(
+	"CallSites share prototype methods",
+	callsitePrototype === Object.getPrototypeOf(sites[1]) &&
+		!Object.hasOwn(first, "getFileName") &&
+		first.getLineNumber === sites[1].getLineNumber,
+);
+check(
+	"borrowed CallSite methods use their receiver's record",
+	first.getFunctionName.call(sites[1]) === sites[1].getFunctionName() &&
+		sites[1].getFunctionName() !== first.getFunctionName(),
+);
+let invalidCallsiteRejected = false;
+try {
+	first.getFileName.call(Object.create(first));
+} catch (error) {
+	invalidCallsiteRejected = error instanceof TypeError;
+}
+check("CallSite methods reject inherited records", invalidCallsiteRejected);
+const clonedCallsite = Object.create(null);
+for (const name of Object.getOwnPropertyNames(callsitePrototype)) {
+	if (typeof callsitePrototype[name] === "function") {
+		clonedCallsite[name] = () => callsitePrototype[name].call(first);
+	}
+}
+check(
+	"prototype-enumerating consumers can clone CallSite methods",
+	clonedCallsite.getFileName() === first.getFileName() &&
+		clonedCallsite.getLineNumber() === first.getLineNumber(),
+);
 check(
 	"CallSites expose their script source",
 	first.getScriptNameOrSourceURL() === first.getFileName(),

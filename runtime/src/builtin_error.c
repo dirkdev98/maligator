@@ -564,7 +564,6 @@ enum {
     MAL_CALLSITE_LINE,
     MAL_CALLSITE_COLUMN,
     MAL_CALLSITE_FUNCTION,
-    MAL_CALLSITE_METHOD,
     MAL_CALLSITE_SLOT_COUNT,
 };
 
@@ -580,14 +579,28 @@ enum {
 };
 
 static MalValue mal_error_callsite_method(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) this_value;
     (void) args;
     (void) arg_count;
     (void) new_target;
     MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
-    i32 method = mal_value_to_i32(mal_native_function_object_get_slot(function, MAL_CALLSITE_METHOD));
+    i32 method = mal_value_to_i32(mal_native_function_object_get_slot(function, 0));
+    MalPropertyLookup record = {0};
+    if (mal_value_is_object(this_value)) {
+        record = mal_object_get_own(mal_value_to_object(this_value),
+            mal_key_from_value(vm->error_callsite_marker));
+    }
+    if (!record.present || !mal_value_is_array_object(record.desc.value)
+        || mal_array_object_length(mal_value_to_array_object(record.desc.value)) != MAL_CALLSITE_SLOT_COUNT) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "CallSite method called on an incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    MalValue slots[MAL_CALLSITE_SLOT_COUNT];
+    for (u32 i = 0; i < MAL_CALLSITE_SLOT_COUNT; i++) {
+        (void) mal_array_object_dense_get(mal_value_to_array_object(record.desc.value), i, &slots[i]);
+    }
     if (method >= MAL_CALLSITE_FILE && method <= MAL_CALLSITE_FUNCTION) {
-        return mal_native_function_object_get_slot(function, method);
+        return slots[method];
     }
     if (method == MAL_CALLSITE_METHOD_IS_EVAL || method == MAL_CALLSITE_METHOD_IS_NATIVE) {
         return mal_value_new_boolean(false);
@@ -596,10 +609,10 @@ static MalValue mal_error_callsite_method(MalVm *vm, MalValue this_value, const 
         return mal_value_new_undefined();
     }
 
-    MalValue name = mal_native_function_object_get_slot(function, MAL_CALLSITE_FUNCTION);
-    MalValue file = mal_native_function_object_get_slot(function, MAL_CALLSITE_FILE);
-    MalValue line = mal_native_function_object_get_slot(function, MAL_CALLSITE_LINE);
-    MalValue column = mal_native_function_object_get_slot(function, MAL_CALLSITE_COLUMN);
+    MalValue name = slots[MAL_CALLSITE_FUNCTION];
+    MalValue file = slots[MAL_CALLSITE_FILE];
+    MalValue line = slots[MAL_CALLSITE_LINE];
+    MalValue column = slots[MAL_CALLSITE_COLUMN];
     MalValue result = mal_value_is_null(name)
         ? mal_value_from_string(mal_intrinsic_ascii(vm, "<anonymous>"))
         : name;
@@ -649,17 +662,16 @@ static void mal_error_callsite_define_method(
     MalVm *vm,
     MalObject *site,
     const byte *name,
-    i32 method,
-    MalValue *slots
+    i32 method
 ) {
-    slots[MAL_CALLSITE_METHOD] = mal_value_from_i32(method);
+    MalValue selector = mal_value_from_i32(method);
     MalNativeFunctionObject *function = mal_native_function_object_new_with_slots(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, name),
         mal_error_callsite_method,
-        slots,
-        MAL_CALLSITE_SLOT_COUNT
+        &selector,
+        1
     );
     mal_intrinsic_define_data(
         vm,
@@ -668,6 +680,25 @@ static void mal_error_callsite_define_method(
         mal_value_from_native_function_object(function),
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE
     );
+}
+
+static void mal_error_install_callsite_prototype(MalVm *vm) {
+    MalObject *prototype = mal_intrinsic_new_object(vm);
+    vm->intrinsics[MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE] = mal_value_from_object(prototype);
+    static const struct { const byte *name; i32 method; } methods[] = {
+        {"getFileName", MAL_CALLSITE_METHOD_GET_FILE},
+        {"getScriptNameOrSourceURL", MAL_CALLSITE_METHOD_GET_FILE},
+        {"getLineNumber", MAL_CALLSITE_METHOD_GET_LINE},
+        {"getColumnNumber", MAL_CALLSITE_METHOD_GET_COLUMN},
+        {"isEval", MAL_CALLSITE_METHOD_IS_EVAL},
+        {"isNative", MAL_CALLSITE_METHOD_IS_NATIVE},
+        {"getFunctionName", MAL_CALLSITE_METHOD_GET_FUNCTION},
+        {"getThis", MAL_CALLSITE_METHOD_GET_THIS},
+        {"toString", MAL_CALLSITE_METHOD_TO_STRING},
+    };
+    for (usize i = 0; i < countof(methods); i++) {
+        mal_error_callsite_define_method(vm, prototype, methods[i].name, methods[i].method);
+    }
 }
 
 static MalString *mal_error_file_string(MalVm *vm, i32 file_index) {
@@ -692,7 +723,7 @@ static MalObject *mal_error_new_callsite(MalVm *vm, i32 function_index, i32 pos_
             function_name = mal_value_from_string(name);
         }
     }
-    MalValue slots[MAL_CALLSITE_SLOT_COUNT] = {
+    MalValue slots[MAL_CALLSITE_SLOT_COUNT + 2] = {
         have_file
             ? mal_value_from_string(
                 mal_error_file_string(vm, function->file_index))
@@ -701,17 +732,23 @@ static MalObject *mal_error_new_callsite(MalVm *vm, i32 function_index, i32 pos_
         have_pos ? mal_value_from_i32(pos->column + 1) : mal_value_new_null(),
         function_name,
         mal_value_new_undefined(),
+        mal_value_new_undefined(),
     };
-    MalObject *site = mal_intrinsic_new_object(vm);
-    mal_error_callsite_define_method(vm, site, "getFileName", MAL_CALLSITE_METHOD_GET_FILE, slots);
-    mal_error_callsite_define_method(vm, site, "getScriptNameOrSourceURL", MAL_CALLSITE_METHOD_GET_FILE, slots);
-    mal_error_callsite_define_method(vm, site, "getLineNumber", MAL_CALLSITE_METHOD_GET_LINE, slots);
-    mal_error_callsite_define_method(vm, site, "getColumnNumber", MAL_CALLSITE_METHOD_GET_COLUMN, slots);
-    mal_error_callsite_define_method(vm, site, "isEval", MAL_CALLSITE_METHOD_IS_EVAL, slots);
-    mal_error_callsite_define_method(vm, site, "isNative", MAL_CALLSITE_METHOD_IS_NATIVE, slots);
-    mal_error_callsite_define_method(vm, site, "getFunctionName", MAL_CALLSITE_METHOD_GET_FUNCTION, slots);
-    mal_error_callsite_define_method(vm, site, "getThis", MAL_CALLSITE_METHOD_GET_THIS, slots);
-    mal_error_callsite_define_method(vm, site, "toString", MAL_CALLSITE_METHOD_TO_STRING, slots);
+    MalRootSpan root;
+    mal_gc_root(&root, slots, countof(slots));
+    MalObject *site = mal_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE]));
+    slots[MAL_CALLSITE_SLOT_COUNT] = mal_value_from_object(site);
+    MalArrayObject *record = mal_intrinsic_new_dense_array(vm, MAL_CALLSITE_SLOT_COUNT);
+    slots[MAL_CALLSITE_SLOT_COUNT + 1] = mal_value_from_array_object(record);
+    for (u32 i = 0; i < MAL_CALLSITE_SLOT_COUNT; i++) {
+        mal_array_object_store(record, mal_key_index(i), slots[i]);
+    }
+    MalPropertyDesc data = {
+        .value = slots[MAL_CALLSITE_SLOT_COUNT + 1], .flags = MAL_PROPERTY_NONE,
+    };
+    mal_object_define_own(site, mal_key_from_value(vm->error_callsite_marker), &data);
+    mal_gc_unroot(&root);
     return site;
 }
 
@@ -1201,6 +1238,10 @@ void mal_builtin_error_install(MalVm *vm) {
     if (mal_value_is_undefined(vm->error_stack_marker)) {
         vm->error_stack_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
     }
+    if (mal_value_is_undefined(vm->error_callsite_marker)) {
+        vm->error_callsite_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+    }
+    mal_error_install_callsite_prototype(vm);
 
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
 
