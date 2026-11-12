@@ -18,6 +18,7 @@
 #include "./heap_string.h"
 #include "./iterator_object.h"
 #include "./object.h"
+#include "./promise_object.h"
 #include "./perf_stats.h"
 #include "./profile.h"
 #include "./shape.h"
@@ -430,6 +431,10 @@ static bool mal_heap_dead_cell_finalizes(const MalHeap *heap, const MalHeapHeade
             const MalArrayBufferObject *buffer = (const MalArrayBufferObject *) cell;
             return mal_array_buffer_object_owns_storage(buffer) ||
                 mal_object_finalizes(&buffer->object);
+        }
+        case MAL_HEAP_PROMISE_OBJECT: {
+            const MalPromiseObject *promise = (const MalPromiseObject *) cell;
+            return promise->reactions_head != nullptr || mal_object_finalizes(&promise->object);
         }
         default:
             return false;

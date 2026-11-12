@@ -181,6 +181,8 @@ static void mal_promise_append_reaction_internal(
 #endif
 
     if (promise->reactions_tail == nullptr) {
+        // A promise collected while pending must return its reactions to the pool.
+        mal_heap_cell_needs_finalizer(&promise->object.header);
         promise->reactions_head = reaction;
     } else {
         promise->reactions_tail->next = reaction;
