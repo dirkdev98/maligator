@@ -52,7 +52,7 @@ static inline bool mal_string_equals_ascii(const MalString *string, const char *
     if (string->storage < MAL_STRING_STORAGE_DEPENDENT) {
         if (string->latin1) {
             return memcmp(string->storage == MAL_STRING_STORAGE_INLINE
-                ? string->inline_latin1_units : string->latin1_units, ascii, length) == 0;
+                ? mal_string_inline_latin1(string) : string->latin1_units, ascii, length) == 0;
         }
         for (usize i = 0; i < length; i++) {
             if (mal_string_flat_code_unit_at(string, i) != (c16) (u8) ascii[i]) return false;

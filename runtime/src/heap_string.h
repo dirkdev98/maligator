@@ -79,6 +79,25 @@ static_assert(sizeof(MalString) == 32, "MalString must fit its 32-byte cell");
 static_assert(offsetof(MalString, code_units) == 16, "string payload must follow its cached hash");
 #define MAL_STRING_INLINE_CODE_UNITS ((usize) 8)
 #define MAL_STRING_INLINE_LATIN1_CODE_UNITS ((usize) 16)
+/**
+ * A fresh Latin-1 string up to this length keeps its units in its own cell, past the
+ * struct's payload, so it needs no side buffer or finalizer. Inline payload readers
+ * take the extent from `length`, never from the struct size.
+ */
+#define MAL_STRING_CELL_LATIN1_CODE_UNITS ((usize) 240)
+
+static inline usize mal_string_inline_latin1_bytes(usize length) {
+    usize bytes = offsetof(MalString, inline_latin1_units) + length;
+    return bytes < sizeof(MalString) ? sizeof(MalString) : bytes;
+}
+
+/**
+ * Inline Latin-1 units, addressed from the cell rather than the 16-byte member so a
+ * longer payload in a larger cell is not indexed past a declared array bound.
+ */
+static inline u8 *mal_string_inline_latin1(const MalString *string) {
+    return (u8 *) string + offsetof(MalString, inline_latin1_units);
+}
 
 /** Engine string lengths are measured in UTF-16 code units. */
 #define MAL_STRING_MAX_CODE_UNITS ((usize) INT32_MAX)
@@ -225,7 +244,7 @@ static inline const c16 *mal_string_code_units(const MalString *string) {
 static inline c16 mal_string_flat_code_unit_at(const MalString *string, usize index) {
     if (string->latin1) {
         return string->storage == MAL_STRING_STORAGE_INLINE
-            ? string->inline_latin1_units[index] : string->latin1_units[index];
+            ? mal_string_inline_latin1(string)[index] : string->latin1_units[index];
     }
     return string->storage == MAL_STRING_STORAGE_INLINE
         ? string->inline_code_units[index] : string->code_units[index];
@@ -288,7 +307,7 @@ static inline MalStringSegment mal_string_flat_segment(MalString *string) {
     MalStringSegment segment = {.latin1 = string->latin1, .length = string->length};
     if (string->latin1) {
         segment.latin1_units = string->storage == MAL_STRING_STORAGE_INLINE
-            ? string->inline_latin1_units : string->latin1_units;
+            ? mal_string_inline_latin1(string) : string->latin1_units;
     } else {
         segment.utf16_units = string->storage == MAL_STRING_STORAGE_INLINE
             ? string->inline_code_units : string->code_units;

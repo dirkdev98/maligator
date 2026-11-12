@@ -163,7 +163,9 @@ static bool oversized_owned_queries_are_not_retained(MalVm *vm) {
     MalRootSpan span;
     mal_gc_root(&span, roots, countof(roots));
     MalMapObject *map = new_map(vm, &roots[0]);
-    roots[1] = flat(vm, 17);
+    // Shorter strings copy their units into the cell; only longer ones adopt a buffer.
+    usize units = MAL_STRING_CELL_LATIN1_CODE_UNITS + 1;
+    roots[1] = flat(vm, units);
     set(vm, roots[0], roots[1], 1);
     u32 original = mal_map_object_find_canonical(map, mal_collection_key_from_value(roots[1]).value);
     mal_gc_collect(vm);
@@ -172,9 +174,9 @@ static bool oversized_owned_queries_are_not_retained(MalVm *vm) {
     usize capacities[] = {1024, 32785};
     for (usize i = 0; i < countof(capacities); i++) {
         u8 *buffer = mal_heap_alloc_raw(&vm->heap, capacities[i]);
-        memset(buffer, 'q', 17);
+        memset(buffer, 'q', units);
         CHECK(mal_heap_raw_capacity(&vm->heap, buffer) == capacities[i]);
-        roots[2] = mal_value_from_string(mal_string_new_latin1_owned(&vm->heap, buffer, 17));
+        roots[2] = mal_value_from_string(mal_string_new_latin1_owned(&vm->heap, buffer, units));
         CHECK(mal_value_to_string(roots[2])->storage == MAL_STRING_STORAGE_OWNED);
         set(vm, roots[0], roots[2], (i32) i + 2);
         CHECK(mal_map_storage_key(map->entries, original) == roots[1]);
@@ -184,8 +186,8 @@ static bool oversized_owned_queries_are_not_retained(MalVm *vm) {
         mal_gc_collect(vm);
         CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes == raw_before);
     }
-    printf("Map representative over-reserved: 17 units, capacities=1024,32785 raw=%zu->%zu\n",
-        raw_before, mal_heap_usage(&vm->heap).raw_owned_bytes);
+    printf("Map representative over-reserved: %zu units, capacities=1024,32785 raw=%zu->%zu\n",
+        units, raw_before, mal_heap_usage(&vm->heap).raw_owned_bytes);
     mal_gc_unroot(&span);
     return true;
 }

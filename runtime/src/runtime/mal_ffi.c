@@ -230,7 +230,7 @@ bool mal_ffi_to_string(
         // A flat ASCII string is its own UTF-8: one byte-wide pass copies it and checks
         // for high bytes and NULs. Latin-1 then expands each high byte to two.
         const u8 *units_flat = string->storage == MAL_STRING_STORAGE_INLINE
-            ? string->inline_latin1_units : string->latin1_units;
+            ? mal_string_inline_latin1(string) : string->latin1_units;
         u8 high = 0;
         u8 zero = 0;
         for (usize index = 0; index < units; index++) {

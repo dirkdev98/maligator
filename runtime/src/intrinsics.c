@@ -280,7 +280,7 @@ static u32 mal_ascii_atom_cache_slot(const byte *name) {
 static bool mal_ascii_atom_cache_matches(const MalString *atom, const byte *name) {
     if (!atom->latin1 || atom->storage >= MAL_STRING_STORAGE_DEPENDENT) return false;
     const u8 *units = atom->storage == MAL_STRING_STORAGE_INLINE
-        ? atom->inline_latin1_units : atom->latin1_units;
+        ? mal_string_inline_latin1(atom) : atom->latin1_units;
     usize length = atom->length;
     for (usize i = 0; i < length; i++) {
         if (units[i] != (u8) name[i]) return false;

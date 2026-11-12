@@ -82,7 +82,7 @@ static inline bool mal_string_unit_span(MalValue value, MalStringUnitSpan *span)
     bool inline_units = flat->storage == MAL_STRING_STORAGE_INLINE;
     *span = (MalStringUnitSpan) {
         .latin1 = !flat->latin1 ? nullptr
-            : (inline_units ? flat->inline_latin1_units : flat->latin1_units) + offset,
+            : (inline_units ? mal_string_inline_latin1(flat) : flat->latin1_units) + offset,
         .units = flat->latin1 ? nullptr
             : (inline_units ? flat->inline_code_units : flat->code_units) + offset,
         .length = string->length,

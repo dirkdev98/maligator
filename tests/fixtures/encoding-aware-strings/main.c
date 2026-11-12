@@ -53,8 +53,14 @@ static bool physical_encodings_have_equal_content(MalVm *vm) {
     return true;
 }
 
+/** A fresh flat copy keeps Latin-1 units up to the cell limit in its own cell. */
+static MalStringStorage flat_copy_storage(usize length, bool latin1) {
+    return latin1 && length <= MAL_STRING_CELL_LATIN1_CODE_UNITS
+        ? MAL_STRING_STORAGE_INLINE : MAL_STRING_STORAGE_OWNED;
+}
+
 static bool inline_capacity_and_eight_unit_cache(MalVm *vm) {
-    u8 latin1[17];
+    u8 latin1[MAL_STRING_CELL_LATIN1_CODE_UNITS + 1];
     c16 utf16[9];
     c16 narrow_utf16[8];
     for (usize i = 0; i < countof(latin1); i++) latin1[i] = (u8) (0x80 + i);
@@ -79,11 +85,18 @@ static bool inline_capacity_and_eight_unit_cache(MalVm *vm) {
     memcpy(owned, latin1, 8);
     CHECK(mal_string_new_latin1_owned(&vm->heap, owned, 8) == cached);
 
-    compact = mal_string_new_latin1_copy(&vm->heap, latin1, 17);
+    // Latin-1 units past the struct payload stay in a larger cell up to the cell limit.
+    usize cell_units = MAL_STRING_CELL_LATIN1_CODE_UNITS;
+    compact = mal_string_new_latin1_copy(&vm->heap, latin1, cell_units);
+    CHECK(compact->storage == MAL_STRING_STORAGE_INLINE && compact->latin1);
+    CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes == raw_before);
+    for (usize i = 0; i < cell_units; i++) CHECK(mal_string_code_unit_at(compact, i) == latin1[i]);
+
+    compact = mal_string_new_latin1_copy(&vm->heap, latin1, cell_units + 1);
     wide = mal_string_new_copy(&vm->heap, utf16, 9);
     CHECK(compact->storage == MAL_STRING_STORAGE_OWNED && compact->latin1);
     CHECK(wide->storage == MAL_STRING_STORAGE_OWNED && !wide->latin1);
-    for (usize i = 0; i < 17; i++) CHECK(mal_string_code_unit_at(compact, i) == latin1[i]);
+    for (usize i = 0; i <= cell_units; i++) CHECK(mal_string_code_unit_at(compact, i) == latin1[i]);
     for (usize i = 0; i < 9; i++) CHECK(mal_string_code_unit_at(wide, i) == utf16[i]);
     return true;
 }
@@ -255,11 +268,13 @@ static bool ropes_stream_and_cross_leaf_slices_copy(MalVm *vm) {
     MalString *right = mal_string_new_external(&vm->heap, right_units, countof(right_units));
     MalString *rope;
     CHECK(mal_string_new_cons_checked(&vm->heap, left, right, &rope));
+    MalStringSegment left_flat;
+    CHECK(mal_string_try_get_segment(left, 0, left->length, &left_flat) && left_flat.latin1);
     MalStringSegment segment;
     CHECK(mal_string_try_get_segment(rope, 10, 16, &segment));
-    CHECK(segment.latin1 && segment.length == 16 && segment.latin1_units == left->latin1_units + 10);
+    CHECK(segment.latin1 && segment.length == 16 && segment.latin1_units == left_flat.latin1_units + 10);
     CHECK(!mal_string_try_get_segment(rope, 120, 16, &segment));
-    CHECK(segment.latin1 && segment.length == 16 && segment.latin1_units == left->latin1_units + 10);
+    CHECK(segment.latin1 && segment.length == 16 && segment.latin1_units == left_flat.latin1_units + 10);
     CHECK(mal_string_try_get_segment(rope, 136, 16, &segment));
     CHECK(!segment.latin1 && segment.utf16_units == right_units + 8);
     CHECK(mal_string_try_get_segment(rope, rope->length, 0, &segment));
@@ -273,7 +288,7 @@ static bool ropes_stream_and_cross_leaf_slices_copy(MalVm *vm) {
     CHECK(mal_string_new_slice(&vm->heap, rope, left->length, right->length) == right);
 
     MalString *slice = mal_string_new_slice(&vm->heap, rope, 32, 192);
-    CHECK(slice->storage == MAL_STRING_STORAGE_OWNED && slice->latin1);
+    CHECK(slice->storage == flat_copy_storage(192, true) && slice->latin1);
     u64 expected_hash = mal_string_hash_code_units(expected + 32, 192);
     CHECK(mal_string_hash(slice) == expected_hash && slice->hash_valid);
     CHECK(mal_string_hash(slice) == expected_hash && slice->hash == expected_hash);
@@ -386,8 +401,8 @@ static bool cached_rope_hashes_preserve_segments_and_slices(MalVm *vm) {
     CHECK(mal_string_hash(rope) == hash);
     CHECK(rope->storage == MAL_STRING_STORAGE_CONS && rope->hash_valid && rope->hash == hash);
     MalString *slice = mal_string_new_slice(&vm->heap, rope, 7, 26);
-    CHECK(slice->storage == MAL_STRING_STORAGE_OWNED && slice->latin1);
-    CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes - raw_before == mal_heap_allocation_charge(26));
+    CHECK(slice->storage == flat_copy_storage(26, true) && slice->latin1);
+    CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes == raw_before);
     raw_before = mal_heap_usage(&vm->heap).raw_owned_bytes;
     u64 slice_hash = mal_string_hash_code_units(units + 7, 26);
     CHECK(mal_string_hash(slice) == slice_hash && slice->hash_valid);
@@ -482,10 +497,10 @@ static bool deep_segment_stacks_and_retained_slices(MalVm *vm) {
     MalString *subtree = mal_string_new_slice(&vm->heap, large, 256, 256);
     CHECK(subtree->storage == MAL_STRING_STORAGE_CONS && subtree->length == 256);
     MalString *narrow = mal_string_new_slice(&vm->heap, large, 7, 129);
-    CHECK(narrow->latin1 && narrow->storage == MAL_STRING_STORAGE_OWNED);
+    CHECK(narrow->latin1 && narrow->storage == flat_copy_storage(129, true));
     usize start = large->length / 2 - 65;
     MalString *small = mal_string_new_slice(&vm->heap, large, start, 129);
-    CHECK(small->latin1 && small->storage == MAL_STRING_STORAGE_OWNED);
+    CHECK(small->latin1 && small->storage == flat_copy_storage(129, true));
     CHECK(large->storage == MAL_STRING_STORAGE_CONS);
     MalValue roots[] = {mal_value_from_string(narrow), mal_value_from_string(small)};
     MalRootSpan span;
@@ -531,13 +546,13 @@ static bool sliding_slices_release_previous_windows(MalVm *vm, usize length, boo
         CHECK(mal_string_new_cons_checked(&vm->heap, previous, suffix, &rope));
         roots[2] = mal_value_from_string(rope);
         MalString *window = mal_string_new_slice(&vm->heap, rope, countof(suffix_units), length);
-        CHECK(window->storage == MAL_STRING_STORAGE_OWNED && window->latin1 == !wide);
+        CHECK(window->storage == flat_copy_storage(length, !wide) && window->latin1 == !wide);
         CHECK(rope->storage == MAL_STRING_STORAGE_CONS && rope->left == previous && rope->right == suffix);
         roots[0] = mal_value_from_string(window);
         roots[1] = roots[2] = mal_value_new_undefined();
         start += countof(suffix_units);
         if (iteration % 8 == 7) mal_gc_collect(vm);
-        CHECK(window->length == length && window->storage == MAL_STRING_STORAGE_OWNED);
+        CHECK(window->length == length && window->storage == flat_copy_storage(length, !wide));
         for (usize i = 0; i < length; i++) {
             CHECK(mal_string_code_unit_at(window, i) == sliding_window_unit(start + i, wide));
         }
