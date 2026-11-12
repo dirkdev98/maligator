@@ -35,6 +35,12 @@ themselves commit the project to optimizing every API.
       comes from the small-BigInt cache. It needs a 64-bit BigInt representation for
       phis whose inputs are wrapping results. Wider `BigInt(int32)` leaves still box.
 
+- [ ] Find why `ffi-owner-fields` "collecting the last child releases the owning result"
+      fails only in the Linux ASan Native remainder lane: the owning result survives a
+      collection after the saved child leaves scope, while macOS normal and UBSan runs
+      pass. Conservative native-stack retention under ASan frames is the suspect; a
+      retry would hide a real retention bug.
+
 - [ ] Diagnose the macOS node-fs-watch timeout with bounded phase evidence separating
       compilation, event delivery and teardown. Preserve watcher behavior and report an
       unreproduced or runner-only failure explicitly.
@@ -192,6 +198,12 @@ Shared lifetime and fallback rules are recorded in
 An existing iterator cursor is not, by itself, permission to delete its language
 object. Retained loop experiments preserve effects, authoritative state and fallback.
 
+- [ ] Store inlined `map` and `filter` results as appends to their fresh Array with an
+      int32 index. `a.map((x) => x * 2)` over eight elements still costs 3.6x Node: the
+      result comes from an in-place `new Array(n)`, but every element passes the generic
+      define checks on an f64 index although the expansion proves the result fresh and
+      unreachable from the callback.
+
 - [ ] Bound one typed-store side-exit experiment to core-to-execution or optimizer-queue
       and the corresponding compiler loop. First establish removable executed cost; then
       preserve already-committed stores and continuation state without generic OSR.
@@ -305,10 +317,12 @@ contracts or investigates costs still visible after the string follow-ups.
       `includes` 1.8x, which take the primitive-method probe out of line and the generic
       native call; `startsWith`, `endsWith` and `replace` have unique names and could
       join the guarded builtin calls like `trim`, while `indexOf` and `includes` need a
-      receiver-kind guard. Also measured: `RegExp#test` 2.4-3x, template literals with
-      numbers 2.6x (each number allocates a string before concatenation), escaping
-      closures capturing a loop variable 2x, `for...in` over small objects 3.5x and
-      `Object.entries` 2x.
+      receiver-kind guard. Also measured: `RegExp#test` 2.4-3x, `slice().trim()` 3.4x,
+      template literals with numbers 1.1x (each number still allocates a string, and
+      joining the parts is about half of the template's cost), escaping closures
+      capturing a loop variable 2x, `for...in` over small objects 3.5x (the generic
+      array-iterator protocol and a snapshot check per key) and `Object.entries` 2x (one
+      pair array per entry).
 
 - [ ] Bring node:stream and EventEmitter construction closer to Node. A constructed
       Readable still costs about 5x Node and a Writable 3.5x, mostly option reads
