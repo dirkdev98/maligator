@@ -567,6 +567,16 @@ describe("Core IR lowering", () => {
 		expect(generator.profileSiteIds).toHaveLength(generator.instructions.length);
 		expect(image.profiling?.sites.length).toBeGreaterThan(0);
 		expect(vmSafepointRootMapsAreTrusted(generator)).toBe(true);
+		const native =
+			image.native.functions[image.runtime.functions.indexOf(generator)]!.body;
+		const portableYield = generator.instructions.findIndex(
+			({ opcode }) => opcode === "YIELD",
+		);
+		const nativeYield = native.instructions.findIndex(({ opcode }) => opcode === "YIELD");
+		expect(generator.profileSiteIds![portableYield]).toBeGreaterThanOrEqual(0);
+		expect(native.profileSiteIds![nativeYield]).toBe(
+			generator.profileSiteIds![portableYield],
+		);
 	});
 
 	it("resolves known shaped origins to dense VM cache rows", () => {

@@ -73,6 +73,7 @@ import {
 	compactRuntimeImageConstants,
 	decodeVmValueOperand,
 	lowerVerifiedTargetsToRuntimePlans,
+	materializePortableSuspensionCleanup,
 	validateRuntimeImageMetadata,
 	validateVmPropertyCacheLayout,
 	vmInstructionReadRegisters,
@@ -3287,9 +3288,8 @@ export function lowerVerifiedExecutionToProgramImage(
 	const plans = lowerVerifiedTargetsToRuntimePlans(
 		nativeProgram === program ? [program] : [program, nativeProgram],
 	);
-	const runtimePlan = plans[0]!;
-	const nativeRuntimePlan = plans[1] ?? runtimePlan;
-	const runtime = runtimePlan.compacted.runtime;
+	const originalRuntimePlan = plans[0]!;
+	const nativeRuntimePlan = plans[1] ?? originalRuntimePlan;
 	const context = program.context;
 	const nativeFunctions = nativeProgram.functions.map((fn, functionIndex) =>
 		lowerExecutionFunctionToNativePlan(
@@ -3299,6 +3299,8 @@ export function lowerVerifiedExecutionToProgramImage(
 			profile ? context.facts.instructionSites : undefined,
 		),
 	);
+	const runtimePlan = materializePortableSuspensionCleanup(program, originalRuntimePlan);
+	const runtime = runtimePlan.compacted.runtime;
 	const semanticProtectors = (
 		["primitive-methods", "watched-methods", "array-elements"] as const
 	).map((family) => {

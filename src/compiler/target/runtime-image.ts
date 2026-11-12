@@ -3490,7 +3490,117 @@ export function lowerVerifiedTargetsToRuntimePlans(
 export function lowerVerifiedExecutionToRuntimePlan(
 	program: ExecutionProgram,
 ): RuntimeProgramLoweringPlan {
-	return lowerVerifiedTargetsToRuntimePlans([program])[0]!;
+	return materializePortableSuspensionCleanup(
+		program,
+		lowerVerifiedTargetsToRuntimePlans([program])[0]!,
+	);
+}
+
+/** Portable images cannot rely on trusted root maps to expire dead suspended temporaries. */
+export function materializePortableSuspensionCleanup(
+	program: ExecutionProgram,
+	plan: RuntimeProgramLoweringPlan,
+): RuntimeProgramLoweringPlan {
+	let changed = false;
+	const compactedFunctions = [...plan.compacted.runtime.functions];
+	const functions = plan.functions.map((lowering, functionIndex) => {
+		const fn = program.functions[functionIndex]!;
+		if (!fn.isAsync && !fn.isGenerator) return lowering;
+		const suspensions = new Set(
+			fn.blocks.flatMap(({ instructions }) =>
+				instructions.filter(({ type }) => type === "await" || type === "yield"),
+			),
+		);
+		const roots = executionSafepointRoots(fn, suspensions);
+		const traced = fn.registerRepresentations.flatMap((representation, register) =>
+			representation === "boxed" || representation === "string" ? [register] : [],
+		);
+		const clears = new Map<number, ReadonlyArray<number>>();
+		for (const instruction of suspensions) {
+			const incoming = new Set(roots.get(instruction)!.incomingRootRegisters);
+			const dead = traced.filter((register) => !incoming.has(register));
+			if (dead.length > 0)
+				clears.set(lowering.instructionIndexByTargetInstruction.get(instruction)!, dead);
+		}
+		if (clears.size === 0) return lowering;
+		changed = true;
+		const entryIps: Array<number> = [];
+		const operationIps: Array<number> = [];
+		let next = 0;
+		for (let ip = 0; ip < lowering.bytecode.instructions.length; ip++) {
+			entryIps.push(next);
+			next += clears.get(ip)?.length ?? 0;
+			operationIps.push(next++);
+		}
+		entryIps.push(next);
+		const entryIp = (ip: number): number => entryIps[ip]!;
+		const operationIp = (ip: number): number => operationIps[ip]!;
+		const relocate = (bytecode: BytecodeFunction): BytecodeFunction => {
+			const instructions: Array<BytecodeInstruction> = [];
+			const positions: Array<number> = [];
+			for (const [ip, original] of bytecode.instructions.entries()) {
+				for (const dst of clears.get(ip) ?? []) {
+					instructions.push({ opcode: "CREATE_UNDEFINED", dst });
+					if (bytecode.positions.length > 0) positions.push(-1);
+				}
+				const instruction =
+					"targetIp" in original
+						? { ...original, targetIp: entryIp(original.targetIp) }
+						: original.opcode === "TRY_BEGIN"
+							? { ...original, handlerIp: entryIp(original.handlerIp) }
+							: original;
+				instructions.push(instruction);
+				if (bytecode.positions.length > 0) positions.push(bytecode.positions[ip]!);
+			}
+			const relocated: BytecodeFunction = {
+				...bytecode,
+				instructions,
+				positions,
+				handlers: bytecode.handlers.map((handler) => ({
+					startIp: entryIp(handler.startIp),
+					endIp: entryIp(handler.endIp),
+					handlerIp: entryIp(handler.handlerIp),
+				})),
+				...(bytecode.gcSafepoints === undefined
+					? {}
+					: {
+							gcSafepoints: bytecode.gcSafepoints.map((row) => ({
+								...row,
+								instructionIp: operationIp(row.instructionIp),
+							})),
+						}),
+			};
+			if (vmSafepointRootMapsAreTrusted(bytecode))
+				trustedVmSafepointRootMaps.set(
+					relocated,
+					vmSafepointRootMapTrustFingerprint(relocated),
+				);
+			return relocated;
+		};
+		compactedFunctions[functionIndex] = relocate(compactedFunctions[functionIndex]!);
+		return {
+			...lowering,
+			bytecode: relocate(lowering.bytecode),
+			blockStartIps: new Map(
+				[...lowering.blockStartIps].map(([block, ip]) => [block, entryIp(ip)]),
+			),
+			instructionIndexByTargetInstruction: new Map(
+				[...lowering.instructionIndexByTargetInstruction].map(([instruction, ip]) => [
+					instruction,
+					operationIp(ip),
+				]),
+			),
+		};
+	});
+	return changed
+		? {
+				functions,
+				compacted: {
+					...plan.compacted,
+					runtime: { ...plan.compacted.runtime, functions: compactedFunctions },
+				},
+			}
+		: plan;
 }
 
 export function lowerExecutionToRuntimeImage(program: ExecutionProgram): RuntimeImage {
