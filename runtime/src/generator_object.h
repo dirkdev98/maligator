@@ -114,5 +114,21 @@ MalGeneratorObject *mal_generator_object_new(MalHeap *heap, MalObject *prototype
 MalGeneratorObject *mal_generator_object_new_async(
     MalHeap *heap, MalObject *prototype, bool is_async_generator);
 
+/** A suspended frame or a queued request now holds storage the finalizer releases. */
+static inline void mal_generator_note_owned_storage(MalGeneratorObject *generator) {
+    mal_heap_cell_needs_finalizer(&generator->object.header);
+}
+
+/**
+ * After a completed coroutine released its frame, its death needs no finalizer unless
+ * an async generator still queues requests or ordinary object state owns storage.
+ */
+static inline void mal_generator_note_released_storage(MalGeneratorObject *generator) {
+    if ((generator->async_data == nullptr || generator->async_data->queue_head == nullptr) &&
+        !mal_object_finalizes(&generator->object)) {
+        mal_heap_cell_owns_nothing(&generator->object.header);
+    }
+}
+
 /** Shade, release, and null all malloc-owned storage in a coroutine frame. */
 void mal_generator_release_frame(MalVm *vm, MalGeneratorObject *generator);

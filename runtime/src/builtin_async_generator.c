@@ -349,6 +349,7 @@ static MalValue mal_agen_enqueue_and_drive(MalVm *vm, MalValue this_value, const
     request->value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
 
     if (agen->async_data->queue_tail == nullptr) {
+        mal_generator_note_owned_storage(agen);
         agen->async_data->queue_head = request;
     } else {
         agen->async_data->queue_tail->next = request;

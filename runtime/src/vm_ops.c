@@ -10308,6 +10308,7 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
     generator->frame.function_index = function_index;
     generator->frame.function = &vm->live_runtime_image.functions[function_index];
     generator->frame.registers = registers;
+    mal_generator_note_owned_storage(generator);
     generator->frame.compiled_register_count = register_count;
     generator->frame.compiled_suspend_position_entry = 0;
     generator->frame.is_compiled = true;
@@ -10388,6 +10389,7 @@ void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generato
     generator->state = MAL_GENERATOR_COMPLETED;
     // Shade and release before settlement can collect after the activation leaves the graph.
     mal_generator_release_frame(vm, generator);
+    mal_generator_note_released_storage(generator);
 
     if (generator->is_async_generator) {
         // Completing the async generator settles the front request { value, done: true }.
@@ -10423,6 +10425,7 @@ void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator
     mal_gc_root(&root_span, roots, 2);
     generator->state = MAL_GENERATOR_COMPLETED;
     mal_generator_release_frame(vm, generator);
+    mal_generator_note_released_storage(generator);
 
     if (generator->is_async_generator) {
         // Reject the front request with the pending exception and settle the agen.
@@ -10468,6 +10471,7 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
     state->frame.function_index = function_index;
     state->frame.function = &vm->live_runtime_image.functions[function_index];
     state->frame.registers = registers;
+    mal_generator_note_owned_storage(state);
     state->frame.compiled_register_count = register_count;
     state->frame.compiled_suspend_position_entry = 0;
     state->frame.is_compiled = true;

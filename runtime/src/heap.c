@@ -19,6 +19,7 @@
 #include "./iterator_object.h"
 #include "./object.h"
 #include "./promise_object.h"
+#include "./generator_object.h"
 #include "./perf_stats.h"
 #include "./profile.h"
 #include "./shape.h"
@@ -435,6 +436,15 @@ static bool mal_heap_dead_cell_finalizes(const MalHeap *heap, const MalHeapHeade
         case MAL_HEAP_PROMISE_OBJECT: {
             const MalPromiseObject *promise = (const MalPromiseObject *) cell;
             return promise->reactions_head != nullptr || mal_object_finalizes(&promise->object);
+        }
+        case MAL_HEAP_GENERATOR_OBJECT: {
+            const MalGeneratorObject *generator = (const MalGeneratorObject *) cell;
+            bool suspended = generator->state == MAL_GENERATOR_SUSPENDED_START ||
+                generator->state == MAL_GENERATOR_SUSPENDED_YIELD;
+            return (suspended &&
+                    (generator->frame.registers != nullptr || generator->frame.arguments != nullptr)) ||
+                (generator->async_data != nullptr && generator->async_data->queue_head != nullptr) ||
+                mal_object_finalizes(&generator->object);
         }
         default:
             return false;

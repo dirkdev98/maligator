@@ -3264,6 +3264,7 @@ static void mal_vm_run_until_frame_count(
                 i32 caller_frame_index = frame->caller_frame_index;
 
                 generator->frame = *frame;
+                mal_generator_note_owned_storage(generator);
                 generator->frame.generator = generator;
                 generator->frame.return_register = -1;
                 generator->frame.caller_frame_index = -1;
@@ -3314,6 +3315,7 @@ static void mal_vm_run_until_frame_count(
                     mal_gc_write_barrier_env(generator->frame.env);
                 }
                 generator->frame = *frame;
+                mal_generator_note_owned_storage(generator);
                 // Re-suspend: an old generator re-acquires its frame + yielded value,
                 // both potentially holding young objects produced since it last ran.
                 mal_gc_remember_if_old(&generator->object.header);
@@ -3347,6 +3349,7 @@ static void mal_vm_run_until_frame_count(
                 generator->state = MAL_GENERATOR_COMPLETED;
                 generator->terminal_yield_pending = true;
                 generator->frame = *frame;
+                mal_generator_note_owned_storage(generator);
                 mal_gc_remember_if_old(&generator->object.header);
 
                 // The result remains { done: false }, but no later call can resume
@@ -3390,6 +3393,7 @@ static void mal_vm_run_until_frame_count(
                     mal_gc_write_barrier_env(state->frame.env);
                 }
                 state->frame = *frame;
+                mal_generator_note_owned_storage(state);
                 // Re-suspend at await: old async state re-acquires its frame.
                 mal_gc_remember_if_old(&state->object.header);
 
