@@ -521,12 +521,13 @@ impl Regex {
         backends::find(self, text, start)
     }
 
-    /// Resume-independent matching with owned byte-subject allocation capacity.
+    /// Retain byte-subject scratch; `at_start_only` attempts only the supplied position.
     pub fn find_from_ascii_with_scratch<'r, 't>(
         &'r self,
         text: &'t str,
         start: usize,
         scratch: AsciiScratch,
+        at_start_only: bool,
     ) -> AsciiMatches<'r, 't> {
         use crate::indexing::InputIndexer;
         let input = indexing::AsciiInput::new(text, self.cr.flags.unicode);
@@ -538,12 +539,13 @@ impl Regex {
                     input.left_end(),
                     scratch.bind(),
                 ),
+                at_start_only,
             ),
             start,
         )
     }
 
-    /// Find one Unicode match, retaining only empty allocation capacity up to the caller's limit.
+    /// Retain Unicode scratch; `at_start_only` preserves the full subject for assertions.
     #[cfg(feature = "utf16")]
     pub fn find_first_utf16_with_scratch(
         &self,
@@ -552,6 +554,7 @@ impl Regex {
         scratch: &mut WideScratch,
         maximum: usize,
         previous: Option<Match>,
+        at_start_only: bool,
     ) -> Option<Match> {
         let input = Utf16Input::new(text, self.cr.flags.unicode);
         let mut matches = exec::Matches::new(
@@ -562,6 +565,7 @@ impl Regex {
                     input.left_end(),
                     core::mem::take(scratch).bind(),
                 ),
+                at_start_only,
             ),
             start,
         );
@@ -571,7 +575,7 @@ impl Regex {
         found
     }
 
-    /// Find one code-unit match, retaining only empty allocation capacity up to the caller's limit.
+    /// Retain code-unit scratch; `at_start_only` preserves the full subject for assertions.
     #[cfg(feature = "utf16")]
     pub fn find_first_ucs2_with_scratch(
         &self,
@@ -580,6 +584,7 @@ impl Regex {
         scratch: &mut WideScratch,
         maximum: usize,
         previous: Option<Match>,
+        at_start_only: bool,
     ) -> Option<Match> {
         let input = Ucs2Input::new(text, self.cr.flags.unicode);
         let mut matches = exec::Matches::new(
@@ -590,6 +595,7 @@ impl Regex {
                     input.left_end(),
                     core::mem::take(scratch).bind(),
                 ),
+                at_start_only,
             ),
             start,
         );
@@ -612,6 +618,7 @@ impl Regex {
             super::classicalbacktrack::BacktrackExecutor::new(
                 input,
                 MatchAttempter::new(&self.cr, input.left_end()),
+                false,
             ),
             start,
         )
@@ -630,6 +637,7 @@ impl Regex {
             super::classicalbacktrack::BacktrackExecutor::new(
                 input,
                 MatchAttempter::new(&self.cr, input.left_end()),
+                false,
             ),
             start,
         )

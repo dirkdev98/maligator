@@ -22,18 +22,19 @@ extern "C" {
 #endif
 
 /* Bump with regexp.rs when the ownership or execution contract changes. */
-#define MAL_REGEXP_ABI_VERSION 9u
+#define MAL_REGEXP_ABI_VERSION 10u
 
 /* Returns the ABI version compiled into the linked archive. */
 uint32_t mal_regexp_abi_version(void);
 
-/* Flag bitmask for mal_regexp_compile. g/y/d are engine-external (the C side
- * drives lastIndex, sticky anchoring, and the indices array) and have no bit. */
+/* Flag bitmask for mal_regexp_compile. The C side drives lastIndex and indices;
+ * sticky mode restricts each execution to its supplied start position. */
 #define MAL_REGEXP_FLAG_IGNORE_CASE  (1u << 0) /* i */
 #define MAL_REGEXP_FLAG_MULTILINE    (1u << 1) /* m */
 #define MAL_REGEXP_FLAG_DOT_ALL      (1u << 2) /* s */
 #define MAL_REGEXP_FLAG_UNICODE      (1u << 3) /* u */
 #define MAL_REGEXP_FLAG_UNICODE_SETS (1u << 4) /* v */
+#define MAL_REGEXP_FLAG_STICKY       (1u << 5) /* y */
 
 /* Execution-path flags written by mal_regexp_exec. */
 #define MAL_REGEXP_EXEC_ASCII       (1u << 0)

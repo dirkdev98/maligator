@@ -366,7 +366,6 @@ static MalString *regexp_canonical_flags_string(MalVm *vm, MalRegExpObject *re) 
     return mal_string_new_copy(&vm->heap, units, length);
 }
 
-// Translate JS flag bits to the regress-facing i/m/s/u/v subset.
 static u32 regexp_regress_flags(u32 js) {
     u32 r = 0;
     if (js & MAL_REGEXP_JS_IGNORE_CASE) r |= MAL_REGEXP_FLAG_IGNORE_CASE;
@@ -374,6 +373,7 @@ static u32 regexp_regress_flags(u32 js) {
     if (js & MAL_REGEXP_JS_DOT_ALL) r |= MAL_REGEXP_FLAG_DOT_ALL;
     if (js & MAL_REGEXP_JS_UNICODE) r |= MAL_REGEXP_FLAG_UNICODE;
     if (js & MAL_REGEXP_JS_UNICODE_SETS) r |= MAL_REGEXP_FLAG_UNICODE_SETS;
+    if (js & MAL_REGEXP_JS_STICKY) r |= MAL_REGEXP_FLAG_STICKY;
     return r;
 }
 
@@ -2661,9 +2661,10 @@ done:
 // ---------------------------------------------------------------------------
 
 // With RegExp.prototype and %RegExp% untouched, the sticky splitter SpeciesConstructor
-// builds is unobservable, and probing it at each position from q finds the match one
-// forward search from q finds. The receiver's lastIndex is never involved. False
-// leaves the specification path to run; true stores the result or a pending throw.
+// builds is unobservable. Non-sticky matchers can find the next separator in one
+// search; sticky matchers must advance past failed positions. The receiver's
+// lastIndex is never involved. False leaves the specification path to run;
+// true stores the result or a pending throw.
 static bool regexp_canonical_split(
     MalVm *vm, MalRegExpObject *re, MalString *s, u32 limit, MalValue *out
 ) {
@@ -2671,6 +2672,7 @@ static bool regexp_canonical_split(
     *out = mal_value_from_object((MalObject *) array);
     if (limit == 0) return true;
     usize size = mal_string_length(s);
+    bool full_unicode = (re->flag_bits & (MAL_REGEXP_JS_UNICODE | MAL_REGEXP_JS_UNICODE_SETS)) != 0;
     int32_t caps[64];
     u32 array_len = 0;
     usize p = 0;
@@ -2682,13 +2684,18 @@ static bool regexp_canonical_split(
             return true;
         }
         if (ngroups > 32) return false;
-        if (ngroups == 0 || (size > 0 && (usize) caps[0] >= size)) break;
+        if (ngroups == 0) {
+            if ((re->flag_bits & MAL_REGEXP_JS_STICKY) == 0 || q >= size) break;
+            q = (usize) regexp_advance_string_index(s, (i64) q, full_unicode);
+            continue;
+        }
+        if (size > 0 && (usize) caps[0] >= size) break;
         regexp_legacy_update(vm, s, caps, ngroups);
         if (size == 0) return true;
         q = (usize) caps[0];
         usize e = (usize) caps[1];
         if (e == p) {
-            q++;
+            q = (usize) regexp_advance_string_index(s, (i64) q, full_unicode);
             continue;
         }
         mal_array_object_store(

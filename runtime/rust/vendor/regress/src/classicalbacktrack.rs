@@ -1136,14 +1136,20 @@ pub struct BacktrackExecutor<'r, Input: InputIndexer> {
     input: Input,
     matcher: MatchAttempter<'r, Input>,
     capture_buffer: Vec<Option<Range<usize>>>,
+    at_start_only: bool,
 }
 
 impl<'r, Input: InputIndexer> BacktrackExecutor<'r, Input> {
-    pub(crate) fn new(input: Input, matcher: MatchAttempter<'r, Input>) -> Self {
+    pub(crate) fn new(
+        input: Input,
+        matcher: MatchAttempter<'r, Input>,
+        at_start_only: bool,
+    ) -> Self {
         Self {
             input,
             matcher,
             capture_buffer: Vec::new(),
+            at_start_only,
         }
     }
 }
@@ -1267,6 +1273,9 @@ impl<Input: InputIndexer> exec::MatchProducer for BacktrackExecutor<'_, Input> {
         pos: Input::Position,
         next_start: &mut Option<Input::Position>,
     ) -> Option<Match> {
+        if self.at_start_only {
+            return self.next_match_anchored(pos, next_start);
+        }
         // A start anchor holds in every encoding. Byte predicates hold UTF-8 first
         // bytes, so only byte inputs can search with them; Maligator's byte inputs are
         // ASCII, whose first byte is the code unit itself.
@@ -1324,6 +1333,7 @@ impl<'r, 't> exec::Executor<'r, 't> for BacktrackExecutor<'r, Utf8Input<'t>> {
             input,
             matcher: MatchAttempter::new(re, input.left_end()),
             capture_buffer: Vec::new(),
+            at_start_only: false,
         }
     }
 }
@@ -1337,6 +1347,7 @@ impl<'r, 't> exec::Executor<'r, 't> for BacktrackExecutor<'r, AsciiInput<'t>> {
             input,
             matcher: MatchAttempter::new(re, input.left_end()),
             capture_buffer: Vec::new(),
+            at_start_only: false,
         }
     }
 }

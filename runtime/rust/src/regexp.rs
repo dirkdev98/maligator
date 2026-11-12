@@ -14,8 +14,8 @@
 //!
 //! Encoding: a `u`/`v` pattern matches over code points (`find_from_utf16`,
 //! combining surrogate pairs); everything else over code units
-//! (`find_from_ucs2`). Positions are code-unit indices in both. g/y/d never
-//! reach here — the C side drives them.
+//! (`find_from_ucs2`). Positions are code-unit indices in both. The C side
+//! drives iteration; sticky patterns attempt only the supplied position.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -26,7 +26,7 @@ use regress::{AsciiMatches, AsciiScratch, Flags, Match, Regex, WideScratch};
 use crate::ffi::{nullable_slice, nullable_u16_slice, write_utf8};
 
 /// Ownership and execution contract mirrored by `mal_regexp.h`.
-pub const MAL_REGEXP_ABI_VERSION: u32 = 9;
+pub const MAL_REGEXP_ABI_VERSION: u32 = 10;
 
 const EXEC_ASCII: u32 = 1 << 0;
 const EXEC_CACHE_HIT: u32 = 1 << 1;
@@ -35,13 +35,13 @@ const EXEC_NON_ASCII: u32 = 1 << 3;
 const EXEC_FAST: u32 = 1 << 4;
 const EXEC_LATIN1: u32 = 1 << 5;
 
-// Flag bits, mirrored by MAL_REGEXP_FLAG_* in mal_regexp.h. g/y/d are
-// engine-external and deliberately absent.
+// Flag bits, mirrored by MAL_REGEXP_FLAG_* in mal_regexp.h.
 const FLAG_IGNORE_CASE: u32 = 1 << 0; // i
 const FLAG_MULTILINE: u32 = 1 << 1; // m
 const FLAG_DOT_ALL: u32 = 1 << 2; // s
 const FLAG_UNICODE: u32 = 1 << 3; // u
 const FLAG_UNICODE_SETS: u32 = 1 << 4; // v
+const FLAG_STICKY: u32 = 1 << 5; // y, execution only
 const COMPILE_FLAGS: u32 =
     FLAG_IGNORE_CASE | FLAG_MULTILINE | FLAG_DOT_ALL | FLAG_UNICODE | FLAG_UNICODE_SETS;
 
@@ -427,6 +427,7 @@ impl FastPattern {
         subject: &[U],
         start: usize,
         slots: &mut [i32; FAST_CAPTURE_SLOTS],
+        at_start_only: bool,
     ) -> bool {
         // A fill of fixed length is a few vector stores; a variable one calls memset.
         if self.capture_count <= 8 {
@@ -436,6 +437,9 @@ impl FastPattern {
         }
         if self.anchored_start {
             return start == 0 && self.match_at(subject, 0, slots);
+        }
+        if at_start_only {
+            return self.match_at(subject, start, slots);
         }
         let leading_unit = match self.nodes.first() {
             Some(FastNode::Literal(literal)) => Some(literal[0]),
@@ -1055,6 +1059,7 @@ struct CompiledPattern {
     fast: Option<Arc<FastPattern>>,
     /// `u`/`v` patterns match over code points; everything else over code units.
     unicode_mode: bool,
+    sticky: bool,
     /// The ASCII backend can use regress's anchored and literal-prefix searchers.
     /// Ignore-case stays on UTF-16 because that backend documents only ASCII
     /// folding, while ECMAScript may require Unicode-aware canonicalization.
@@ -1114,6 +1119,7 @@ impl CompiledPattern {
         fast: Option<Arc<FastPattern>>,
         unicode_mode: bool,
         ascii_eligible: bool,
+        sticky: bool,
     ) -> Self {
         Self {
             refs: 1,
@@ -1121,6 +1127,7 @@ impl CompiledPattern {
             fast,
             unicode_mode,
             ascii_eligible,
+            sticky,
             ascii_scratch: AsciiScratch::default(),
             wide_scratch: WideScratch::default(),
             accounted_scratch_bytes: 0,
@@ -1160,7 +1167,7 @@ struct SubjectCache {
     continuation: Option<AsciiContinuation>,
 }
 
-/// A global or sticky-free loop of `exec` calls over one ASCII subject resumes a
+/// A loop of `exec` calls over one ASCII subject resumes a
 /// single match iterator, whose backtracking stack keeps its capacity between
 /// matches instead of growing from empty on every call.
 struct AsciiContinuation {
@@ -1307,6 +1314,7 @@ pub unsafe extern "C" fn mal_regexp_compile(
                 fast,
                 unicode_mode,
                 flags & FLAG_IGNORE_CASE == 0,
+                flags & FLAG_STICKY != 0,
             ));
             Box::into_raw(boxed) as *mut core::ffi::c_void
         }
@@ -1420,7 +1428,7 @@ fn fast_exec<U: SubjectUnit>(
 ) -> i32 {
     cp.last = None;
     let fast = cp.fast.as_ref().expect("fast plan exists");
-    if !fast.find(subject, start, &mut cp.fast_last_captures) {
+    if !fast.find(subject, start, &mut cp.fast_last_captures, cp.sticky) {
         cp.fast_last_groups = 0;
         return 0;
     }
@@ -1446,6 +1454,7 @@ fn next_ascii_match(
     text: &str,
     start: usize,
     previous: Option<Match>,
+    sticky: bool,
 ) -> Option<Match> {
     let resumable = cache.continuation.as_ref().is_some_and(|continuation| {
         continuation.next_start == start
@@ -1454,7 +1463,8 @@ fn next_ascii_match(
     });
     if !resumable {
         reclaim_ascii(cache, scratch);
-        let matches = re.find_from_ascii_with_scratch(text, start, core::mem::take(scratch));
+        let matches =
+            re.find_from_ascii_with_scratch(text, start, core::mem::take(scratch), sticky);
         // SAFETY: the continuation owns a clone of the regex Arc, and the text is
         // the subject's immutable bytes. The cache entry holding it is keyed by
         // heap epoch and string identity, and every sweep that can free the
@@ -1512,6 +1522,7 @@ fn find_wide(
     subject: &[u16],
     start: usize,
     previous: Option<Match>,
+    sticky: bool,
 ) -> Option<Match> {
     if unicode_mode {
         re.find_first_utf16_with_scratch(
@@ -1520,6 +1531,7 @@ fn find_wide(
             scratch,
             SCRATCH_LIMIT_PER_ENCODING,
             previous,
+            sticky,
         )
     } else {
         re.find_first_ucs2_with_scratch(
@@ -1528,6 +1540,7 @@ fn find_wide(
             scratch,
             SCRATCH_LIMIT_PER_ENCODING,
             previous,
+            sticky,
         )
     }
 }
@@ -1646,6 +1659,7 @@ unsafe fn exec_general(
                 subj,
                 start,
                 previous,
+                cp.sticky,
             )
         } else {
             let cache = cp.subject_cache.as_mut().expect("cache key matched");
@@ -1669,7 +1683,15 @@ unsafe fn exec_general(
                 // SAFETY: the copy is never modified after classification and the
                 // continuation is the only field the call below updates.
                 let text = unsafe { &*(ascii.as_str() as *const str) };
-                next_ascii_match(cache, &mut cp.ascii_scratch, &cp.re, text, start, previous)
+                next_ascii_match(
+                    cache,
+                    &mut cp.ascii_scratch,
+                    &cp.re,
+                    text,
+                    start,
+                    previous,
+                    cp.sticky,
+                )
             } else {
                 execution_flags |= EXEC_NON_ASCII;
                 find_wide(
@@ -1679,6 +1701,7 @@ unsafe fn exec_general(
                     subj,
                     start,
                     previous,
+                    cp.sticky,
                 )
             }
         }
@@ -1690,6 +1713,7 @@ unsafe fn exec_general(
             subj,
             start,
             previous,
+            cp.sticky,
         )
     };
     if !execution_flags_out.is_null() {
@@ -1837,7 +1861,15 @@ unsafe fn exec_latin1_general(
         // Eligibility excludes ignore-case, whose ECMAScript canonicalization
         // can map non-ASCII pattern units onto ASCII subject units.
         let text = unsafe { core::str::from_utf8_unchecked(subj) };
-        next_ascii_match(cache, &mut cp.ascii_scratch, &cp.re, text, start, previous)
+        next_ascii_match(
+            cache,
+            &mut cp.ascii_scratch,
+            &cp.re,
+            text,
+            start,
+            previous,
+            cp.sticky,
+        )
     } else {
         execution_flags |= EXEC_NON_ASCII;
         let wide = cache.wide.get_or_insert_with(Vec::new);
@@ -1853,6 +1885,7 @@ unsafe fn exec_latin1_general(
             wide,
             start,
             previous,
+            cp.sticky,
         )
     };
     if !execution_flags_out.is_null() {
@@ -1971,6 +2004,74 @@ mod tests {
 
     unsafe fn handle(pattern: &[u16], flags: u32) -> *mut core::ffi::c_void {
         unsafe { mal_regexp_compile(pattern.as_ptr(), pattern.len(), flags) }
+    }
+
+    #[test]
+    fn sticky_execution_attempts_only_the_requested_position_on_the_full_subject() {
+        for (pattern, subject, flags, start, expected) in [
+            ("b", "ab", 0, 0, false),
+            ("b", "ab", 0, 1, true),
+            ("(?<=a)(b)", "ab", 0, 0, false),
+            ("(?<=a)(b)", "ab", 0, 1, true),
+            ("^b", "ab", 0, 1, false),
+            ("^b", "a\nb", FLAG_MULTILINE, 2, true),
+            ("(?<=é)b", "éb", 0, 1, true),
+            ("(?<=😀)b", "😀b", FLAG_UNICODE, 2, true),
+        ] {
+            let compiled = unsafe { handle(&utf16(pattern), flags | FLAG_STICKY) };
+            assert!(!compiled.is_null());
+            let wide = utf16(subject);
+            for _ in 0..2 {
+                let mut caps = [-1; 8];
+                let count = unsafe {
+                    mal_regexp_exec(
+                        compiled,
+                        wide.as_ptr(),
+                        wide.len(),
+                        start,
+                        wide.as_ptr().cast(),
+                        1,
+                        0,
+                        caps.as_mut_ptr(),
+                        caps.len() as i32,
+                        core::ptr::null_mut(),
+                    )
+                };
+                assert_eq!(count > 0, expected, "{pattern} on {subject} at {start}");
+                if expected {
+                    assert_eq!(caps[0], start as i32);
+                }
+            }
+            if wide.iter().all(|unit| *unit <= 255) {
+                let latin1: Vec<u8> = wide.iter().map(|unit| *unit as u8).collect();
+                for _ in 0..2 {
+                    let mut caps = [-1; 8];
+                    let count = unsafe {
+                        mal_regexp_exec_latin1(
+                            compiled,
+                            latin1.as_ptr(),
+                            latin1.len(),
+                            start,
+                            latin1.as_ptr().cast(),
+                            1,
+                            0,
+                            caps.as_mut_ptr(),
+                            caps.len() as i32,
+                            core::ptr::null_mut(),
+                        )
+                    };
+                    assert_eq!(
+                        count > 0,
+                        expected,
+                        "Latin-1 {pattern} on {subject} at {start}"
+                    );
+                    if expected {
+                        assert_eq!(caps[0], start as i32);
+                    }
+                }
+            }
+            unsafe { mal_regexp_release(compiled) };
+        }
     }
 
     #[test]
@@ -2282,7 +2383,7 @@ mod tests {
         start: usize,
     ) -> Option<Vec<Option<(usize, usize)>>> {
         let mut slots = [0; FAST_CAPTURE_SLOTS];
-        fast.find(subject, start, &mut slots).then(|| {
+        fast.find(subject, start, &mut slots, false).then(|| {
             (0..=fast.capture_count)
                 .map(|index| {
                     (slots[index * 2] >= 0)
