@@ -574,6 +574,7 @@ enum {
     MAL_CALLSITE_METHOD_GET_COLUMN = MAL_CALLSITE_COLUMN,
     MAL_CALLSITE_METHOD_GET_FUNCTION = MAL_CALLSITE_FUNCTION,
     MAL_CALLSITE_METHOD_IS_EVAL,
+    MAL_CALLSITE_METHOD_IS_NATIVE,
     MAL_CALLSITE_METHOD_GET_THIS,
     MAL_CALLSITE_METHOD_TO_STRING,
 };
@@ -588,7 +589,7 @@ static MalValue mal_error_callsite_method(MalVm *vm, MalValue this_value, const 
     if (method >= MAL_CALLSITE_FILE && method <= MAL_CALLSITE_FUNCTION) {
         return mal_native_function_object_get_slot(function, method);
     }
-    if (method == MAL_CALLSITE_METHOD_IS_EVAL) {
+    if (method == MAL_CALLSITE_METHOD_IS_EVAL || method == MAL_CALLSITE_METHOD_IS_NATIVE) {
         return mal_value_new_boolean(false);
     }
     if (method == MAL_CALLSITE_METHOD_GET_THIS) {
@@ -703,9 +704,11 @@ static MalObject *mal_error_new_callsite(MalVm *vm, i32 function_index, i32 pos_
     };
     MalObject *site = mal_intrinsic_new_object(vm);
     mal_error_callsite_define_method(vm, site, "getFileName", MAL_CALLSITE_METHOD_GET_FILE, slots);
+    mal_error_callsite_define_method(vm, site, "getScriptNameOrSourceURL", MAL_CALLSITE_METHOD_GET_FILE, slots);
     mal_error_callsite_define_method(vm, site, "getLineNumber", MAL_CALLSITE_METHOD_GET_LINE, slots);
     mal_error_callsite_define_method(vm, site, "getColumnNumber", MAL_CALLSITE_METHOD_GET_COLUMN, slots);
     mal_error_callsite_define_method(vm, site, "isEval", MAL_CALLSITE_METHOD_IS_EVAL, slots);
+    mal_error_callsite_define_method(vm, site, "isNative", MAL_CALLSITE_METHOD_IS_NATIVE, slots);
     mal_error_callsite_define_method(vm, site, "getFunctionName", MAL_CALLSITE_METHOD_GET_FUNCTION, slots);
     mal_error_callsite_define_method(vm, site, "getThis", MAL_CALLSITE_METHOD_GET_THIS, slots);
     mal_error_callsite_define_method(vm, site, "toString", MAL_CALLSITE_METHOD_TO_STRING, slots);

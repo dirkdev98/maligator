@@ -132,6 +132,11 @@ check(
 	first.toString().indexOf("captureCaller (") === 0 &&
 		first.toString().indexOf("error-capture-stack.js:") !== -1,
 );
+check("script CallSites are not native", first.isNative() === false);
+check(
+	"CallSites expose their script source",
+	first.getScriptNameOrSourceURL() === first.getFileName(),
+);
 
 Error.stackTraceLimit = 2;
 Error.prepareStackTrace = function limitPrepare(_target, callsites) {
