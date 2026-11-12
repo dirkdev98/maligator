@@ -42,6 +42,16 @@ function strip(source: string, filePath = "fixture.ts"): string {
 }
 
 describe("stripCompactTypes", () => {
+	test("preserves string module names beside erased inline type specifiers", () => {
+		const source = `import { "odd-name" as value, type Shape } from "package";
+const answer: number = value;
+export { answer as "module.exports", type Shape, answer as 'quoted"name' };`;
+		const stripped = strip(source);
+		expect(() => parseModule(stripped)).not.toThrow();
+		expect(stripped).toContain('"odd-name" as value');
+		expect(stripped).toContain('answer as "module.exports"');
+		expect(stripped).not.toContain("type Shape");
+	});
 	test.each([
 		[
 			"function expression",

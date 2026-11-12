@@ -14,7 +14,7 @@
  * can produce different output for source that already stripped successfully;
  * frontend, fragment, and test image caches key their stripped input on it.
  */
-export const TYPE_STRIPPER_IDENTITY = "compact-type-strip-v7";
+export const TYPE_STRIPPER_IDENTITY = "compact-type-strip-v8";
 
 /**
  * Erase types in place: every type span becomes spaces, so the result has the
@@ -834,6 +834,24 @@ function hasStatementBoundary(
 	return false;
 }
 
+function moduleNameAt(
+	source: string,
+	code: Array<boolean>,
+	start: number,
+): Word | undefined {
+	const word = wordAt(source, code, start);
+	if (word !== undefined) return word;
+	const quote = source[start];
+	if (quote !== '"' && quote !== "'") return undefined;
+	let end = start + 1;
+	while (end < source.length) {
+		if (source[end] === "\\") end += 2;
+		else if (source[end++] === quote)
+			return { start, end, text: source.slice(start, end) };
+	}
+	return undefined;
+}
+
 function blankInlineTypeSpecifiers(
 	source: string,
 	code: Array<boolean>,
@@ -856,11 +874,11 @@ function blankInlineTypeSpecifiers(
 		const close = matching(source, code, open, "{", "}", filePath);
 		let i = nextCodeIndex(source, code, open + 1);
 		while (i < close) {
-			const specifier = wordAt(source, code, i);
+			const specifier = moduleNameAt(source, code, i);
 			if (!specifier) fail(filePath, i, "malformed named import or export specifiers");
 			if (specifier.text === "type") {
 				let end = nextCodeIndex(source, code, specifier.end);
-				const imported = wordAt(source, code, end);
+				const imported = moduleNameAt(source, code, end);
 				if (!imported) {
 					if (source[end] === "," || source[end] === "}") {
 						i = source[end] === "," ? nextCodeIndex(source, code, end + 1) : end;
@@ -871,7 +889,11 @@ function blankInlineTypeSpecifiers(
 				end = nextCodeIndex(source, code, imported.end);
 				const asWord = wordAt(source, code, end);
 				if (asWord?.text === "as") {
-					const alias = wordAt(source, code, nextCodeIndex(source, code, asWord.end));
+					const alias = moduleNameAt(
+						source,
+						code,
+						nextCodeIndex(source, code, asWord.end),
+					);
 					if (!alias) fail(filePath, end, "malformed inline type specifiers");
 					end = nextCodeIndex(source, code, alias.end);
 				}
@@ -883,7 +905,7 @@ function blankInlineTypeSpecifiers(
 			i = nextCodeIndex(source, code, specifier.end);
 			const asWord = wordAt(source, code, i);
 			if (asWord?.text === "as") {
-				const alias = wordAt(source, code, nextCodeIndex(source, code, asWord.end));
+				const alias = moduleNameAt(source, code, nextCodeIndex(source, code, asWord.end));
 				if (!alias) fail(filePath, i, "malformed named import or export specifiers");
 				i = nextCodeIndex(source, code, alias.end);
 			}
