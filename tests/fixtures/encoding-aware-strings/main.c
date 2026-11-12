@@ -53,15 +53,15 @@ static bool physical_encodings_have_equal_content(MalVm *vm) {
     return true;
 }
 
-/** A fresh flat copy keeps Latin-1 units up to the cell limit in its own cell. */
+/** A fresh flat copy keeps units up to its encoding's cell limit in its own cell. */
 static MalStringStorage flat_copy_storage(usize length, bool latin1) {
-    return latin1 && length <= MAL_STRING_CELL_LATIN1_CODE_UNITS
+    return length <= (latin1 ? MAL_STRING_CELL_LATIN1_CODE_UNITS : MAL_STRING_CELL_CODE_UNITS)
         ? MAL_STRING_STORAGE_INLINE : MAL_STRING_STORAGE_OWNED;
 }
 
 static bool inline_capacity_and_eight_unit_cache(MalVm *vm) {
     u8 latin1[MAL_STRING_CELL_LATIN1_CODE_UNITS + 1];
-    c16 utf16[9];
+    c16 utf16[MAL_STRING_CELL_CODE_UNITS + 1];
     c16 narrow_utf16[8];
     for (usize i = 0; i < countof(latin1); i++) latin1[i] = (u8) (0x80 + i);
     for (usize i = 0; i < countof(utf16); i++) utf16[i] = (c16) (0x100 + i);
@@ -92,12 +92,18 @@ static bool inline_capacity_and_eight_unit_cache(MalVm *vm) {
     CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes == raw_before);
     for (usize i = 0; i < cell_units; i++) CHECK(mal_string_code_unit_at(compact, i) == latin1[i]);
 
+    usize wide_cell_units = MAL_STRING_CELL_CODE_UNITS;
+    wide = mal_string_new_copy(&vm->heap, utf16, wide_cell_units);
+    CHECK(wide->storage == MAL_STRING_STORAGE_INLINE && !wide->latin1);
+    CHECK(mal_heap_usage(&vm->heap).raw_owned_bytes == raw_before);
+    for (usize i = 0; i < wide_cell_units; i++) CHECK(mal_string_code_unit_at(wide, i) == utf16[i]);
+
     compact = mal_string_new_latin1_copy(&vm->heap, latin1, cell_units + 1);
-    wide = mal_string_new_copy(&vm->heap, utf16, 9);
+    wide = mal_string_new_copy(&vm->heap, utf16, wide_cell_units + 1);
     CHECK(compact->storage == MAL_STRING_STORAGE_OWNED && compact->latin1);
     CHECK(wide->storage == MAL_STRING_STORAGE_OWNED && !wide->latin1);
     for (usize i = 0; i <= cell_units; i++) CHECK(mal_string_code_unit_at(compact, i) == latin1[i]);
-    for (usize i = 0; i < 9; i++) CHECK(mal_string_code_unit_at(wide, i) == utf16[i]);
+    for (usize i = 0; i <= wide_cell_units; i++) CHECK(mal_string_code_unit_at(wide, i) == utf16[i]);
     return true;
 }
 

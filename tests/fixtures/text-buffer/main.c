@@ -287,28 +287,26 @@ static bool finish_bounds_retained_storage_and_tolerates_trim_failure(MalVm *vm)
             for (usize i = 1; i < 1024; i++) {
                 CHECK(mal_text_buffer_push(&buffer, (c16) (i % 128)) == MAL_TEXT_BUFFER_OK);
             }
-            // Above the cell limit, so a Latin-1 result also adopts the trimmed buffer.
-            usize kept = MAL_STRING_CELL_LATIN1_CODE_UNITS + 17;
-            mal_text_buffer_truncate(&buffer, kept);
+            mal_text_buffer_truncate(&buffer, 17);
             void *original = buffer.data;
             usize retained = mal_heap_usage(heap).raw_owned_bytes - before;
             CHECK(retained >= 32768 * width);
             heap->fail_next_raw_allocation = fail != 0;
             MalString *string = mal_text_buffer_finish(heap, &buffer);
-            CHECK(string != nullptr && string->length == kept);
+            CHECK(string != nullptr && string->length == 17);
             CHECK(buffer.data == nullptr && buffer.capacity == 0 && buffer.length == 0);
             CHECK(!heap->fail_next_raw_allocation);
             const void *payload = string->latin1
                 ? (const void *) string->latin1_units : (const void *) string->code_units;
             CHECK((payload == original) == (fail != 0));
-            usize expected = fail ? retained : mal_heap_allocation_charge(kept * width);
+            usize expected = fail ? retained : mal_heap_allocation_charge(17 * width);
             CHECK(mal_heap_usage(heap).raw_owned_bytes - before == expected);
             MalValue root = mal_value_from_string(string);
             MalRootSpan span;
             mal_gc_root(&span, &root, 1);
             mal_gc_collect(vm);
             CHECK(mal_string_code_unit_at(string, 0) == (width == 1 ? 'a' : 0x100));
-            for (usize i = 1; i < kept; i++) CHECK(mal_string_code_unit_at(string, i) == i % 128);
+            for (usize i = 1; i < 17; i++) CHECK(mal_string_code_unit_at(string, i) == i);
             CHECK(mal_heap_usage(heap).raw_owned_bytes - before == expected);
             mal_gc_unroot(&span);
             mal_gc_collect(vm);

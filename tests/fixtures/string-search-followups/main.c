@@ -561,7 +561,8 @@ static bool compact_result_boundaries_and_concat_growth(MalVm *vm) {
         MalString *repeated = mal_value_to_string(roots[3]);
         CHECK(upper->latin1 && repeated->latin1);
         CHECK(upper->length == length && repeated->length == length);
-        CHECK((upper->storage == MAL_STRING_STORAGE_INLINE) == (length <= 16));
+        // Narrowed case results within the cell limit keep their units in their cell.
+        CHECK(upper->storage == MAL_STRING_STORAGE_INLINE);
         CHECK((repeated->storage == MAL_STRING_STORAGE_INLINE) == (length <= 16));
         roots[3] = mal_builtin_string_pad_numeric(vm, mal_value_to_string(roots[0]), length, roots[0], false);
         CHECK(mal_value_to_string(roots[3])->latin1 && mal_string_equals(mal_value_to_string(roots[3]), mal_value_to_string(roots[1])));

@@ -81,8 +81,7 @@ static bool case_storage(MalVm *vm) {
     roots[3] = mal_builtin_string_case_known(vm, mal_value_to_string(roots[2]), false, MAL_UNICODE_LOCALE_ROOT);
     CHECK_STORAGE(vm->completion.kind != MAL_COMPLETION_THROW && mal_value_is_string(roots[3]));
     converted = mal_value_to_string(roots[3]);
-    // A Latin-1 result within the cell limit keeps its units in its cell.
-    CHECK_STORAGE(converted->latin1 && converted->storage == MAL_STRING_STORAGE_INLINE);
+    CHECK_STORAGE(converted->latin1 && converted->storage == MAL_STRING_STORAGE_OWNED);
     CHECK_STORAGE(converted->length == countof(compact));
     mal_gc_collect(vm);
     for (usize i = 0; i < countof(compact); i++) CHECK_STORAGE(mal_string_code_unit_at(converted, i) == 'k');

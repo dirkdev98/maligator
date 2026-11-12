@@ -262,7 +262,7 @@ bool mal_ffi_to_string(
     if (flat) {
         // Flat UTF-16 encodes directly; lone surrogates become U+FFFD, as in the general encoder.
         const c16 *units_flat = string->storage == MAL_STRING_STORAGE_INLINE
-            ? string->inline_code_units : string->code_units;
+            ? mal_string_inline_utf16(string) : string->code_units;
         if (units > (capacity - 1) / 3) {
             data = units > (SIZE_MAX - 1) / 3 ? nullptr : malloc(units * 3 + 1);
             if (data == nullptr) return mal_ffi_out_of_memory(vm);
