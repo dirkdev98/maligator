@@ -52,6 +52,16 @@ test("exposes body chunks before EOF and follows redirects", async () => {
 	await expect(response.text()).rejects.toThrow();
 });
 
+test("consumes binary response bodies as blobs with their media type", async () => {
+	const response = await fetch("data:application/octet-stream;base64,AAH/");
+	const blob = await response.blob();
+	expect(blob).toBeInstanceOf(Blob);
+	expect(blob.type).toBe("application/octet-stream");
+	expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array([0, 1, 255]));
+	expect(response.bodyUsed).toBe(true);
+	await expect(response.blob()).rejects.toThrow(TypeError);
+});
+
 test("preserves abort reasons while reading and permits cancellation", async () => {
 	const controller = new AbortController();
 	const response = await fetch(`${base}/stream`, { signal: controller.signal });

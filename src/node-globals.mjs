@@ -142,7 +142,7 @@ class MaligatorResponse {
 		this._native =
 			typeof globalThis.Response === "function" &&
 			globalThis.Response !== MaligatorResponse
-				? new globalThis.Response(this.body)
+				? new globalThis.Response(this.body, { headers: this.headers })
 				: undefined;
 	}
 
@@ -186,6 +186,12 @@ class MaligatorResponse {
 	async arrayBuffer() {
 		const bytes = await this.bytes();
 		return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+	}
+	async blob() {
+		if (this._native) return await this._native.blob();
+		return new Blob([await this.bytes()], {
+			type: this.headers.get("content-type") ?? "",
+		});
 	}
 }
 
