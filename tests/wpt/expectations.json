@@ -1,5 +1,78 @@
 {
 	"schemaVersion": 2,
 	"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd",
-	"expectations": []
+	"expectations": [
+		{
+			"path": "fetch/api/headers/header-setcookie.any.js",
+			"variant": "",
+			"backend": "compiled",
+			"mode": "normal",
+			"subtest": "Set-Cookie is a forbidden response header",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W2",
+			"reason": "Server-side Response headers expose editable Set-Cookie values, as Node does; browser response-header filtering does not apply.",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		},
+		{
+			"path": "fetch/api/headers/header-setcookie.any.js",
+			"variant": "",
+			"backend": "compiled",
+			"mode": "gc-stress",
+			"subtest": "Set-Cookie is a forbidden response header",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W2",
+			"reason": "Server-side Response headers expose editable Set-Cookie values, as Node does; browser response-header filtering does not apply.",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		},
+		{
+			"path": "fetch/api/headers/header-setcookie.any.js",
+			"variant": "",
+			"backend": "interpreted",
+			"mode": "normal",
+			"subtest": "Set-Cookie is a forbidden response header",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W2",
+			"reason": "Server-side Response headers expose editable Set-Cookie values, as Node does; browser response-header filtering does not apply.",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		},
+		{
+			"path": "fetch/api/headers/header-setcookie.any.js",
+			"variant": "",
+			"backend": "interpreted",
+			"mode": "gc-stress",
+			"subtest": "Set-Cookie is a forbidden response header",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W2",
+			"reason": "Server-side Response headers expose editable Set-Cookie values, as Node does; browser response-header filtering does not apply.",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		},
+		{
+			"path": "fetch/api/headers/header-setcookie.any.js",
+			"variant": "",
+			"backend": "wire",
+			"mode": "normal",
+			"subtest": "Set-Cookie is a forbidden response header",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W2",
+			"reason": "Server-side Response headers expose editable Set-Cookie values, as Node does; browser response-header filtering does not apply.",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		},
+		{
+			"path": "fetch/api/headers/header-setcookie.any.js",
+			"variant": "",
+			"backend": "wire",
+			"mode": "gc-stress",
+			"subtest": "Set-Cookie is a forbidden response header",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W2",
+			"reason": "Server-side Response headers expose editable Set-Cookie values, as Node does; browser response-header filtering does not apply.",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		}
+	]
 }

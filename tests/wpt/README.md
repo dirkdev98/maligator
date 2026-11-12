@@ -83,6 +83,10 @@ upstream revision. Wildcards, skips, file-wide entries, and schema-1 inputs are
 not accepted. Harness/setup errors are always runner failures and cannot be
 expected.
 
+Server-side `Response` headers expose editable `Set-Cookie` values. The pinned
+browser-only assertion that forbids those values has exact expectations; native
+coverage checks construction, mutation and wire output.
+
 `harness.ts` intentionally implements only the testharness primitives required
 by this curated server-main slice. It uses pinned testharness default-name
 suffixes for unnamed tests, preserves duplicate explicit names with occurrence
