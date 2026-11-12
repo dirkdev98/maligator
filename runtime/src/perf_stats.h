@@ -545,7 +545,6 @@ typedef struct MalPerfStats {
     u64 http_response_header_insertions;
     u64 http_response_header_replacements;
     u64 http_response_header_allocation_free_lookups;
-    u64 http_response_header_spills;
     u64 http_response_header_max_count;
     u64 http_codec_head_allocations;
     u64 http_codec_field_spills;

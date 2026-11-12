@@ -1260,7 +1260,7 @@ static void mal_perf_stats_print(void) {
         "response_header_name_materializations=%llu response_header_insertions=%llu "
         "response_header_replacements=%llu "
         "response_header_allocation_free_lookups=%llu "
-        "response_header_spills=%llu response_header_max_count=%llu "
+        "response_header_max_count=%llu "
         "codec_head_allocations=%llu codec_field_spills=%llu "
         "codec_arena_spills=%llu codec_body_growths=%llu "
         "codec_max_fields=%llu codec_max_head_bytes=%llu drain_calls=%llu "
@@ -1299,7 +1299,6 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.http_response_header_insertions,
         (unsigned long long) mal_perf_stats.http_response_header_replacements,
         (unsigned long long) mal_perf_stats.http_response_header_allocation_free_lookups,
-        (unsigned long long) mal_perf_stats.http_response_header_spills,
         (unsigned long long) mal_perf_stats.http_response_header_max_count,
         (unsigned long long) mal_perf_stats.http_codec_head_allocations,
         (unsigned long long) mal_perf_stats.http_codec_field_spills,

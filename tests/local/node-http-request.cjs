@@ -2,6 +2,7 @@ const http = require("node:http");
 
 const concurrentResponses = [];
 let completedResponse;
+let completedResponseHeader;
 let streamEvents = [];
 let failedWriteEvents = [];
 let endBeforeDrainEvents = [];
@@ -34,6 +35,15 @@ Object.defineProperty(http.ServerResponse.prototype, "__httpResponseRealmMarker"
 	enumerable: false,
 	configurable: true,
 });
+
+function errorFrom(callback) {
+	try {
+		callback();
+	} catch (error) {
+		return error;
+	}
+	return undefined;
+}
 
 function throwsMessage(callback, message) {
 	try {
@@ -389,6 +399,7 @@ const server = http.createServer(function (request, response) {
 				entry.response.end(entry.id);
 			}
 			completedResponse = batch[0].response;
+			completedResponseHeader = batch[0].id;
 		}
 		return;
 	}
@@ -396,25 +407,21 @@ const server = http.createServer(function (request, response) {
 	if (request.url === "/receiver-check") {
 		const prototype = http.ServerResponse.prototype;
 		const forged = {};
-		const constructed = new http.ServerResponse();
+		const constructed = new http.ServerResponse(request);
+		constructed.setHeader("x", "retained");
 		const checks = [
-			prototype.getHeader.call(forged, "x") === undefined,
-			prototype.hasHeader.call(forged, "x") === false,
-			prototype.removeHeader.call(forged, "x") === undefined,
+			errorFrom(() => prototype.getHeader.call(forged, "x")) instanceof TypeError,
+			errorFrom(() => prototype.hasHeader.call(forged, "x")) instanceof TypeError,
+			errorFrom(() => prototype.removeHeader.call(forged, "x")) instanceof TypeError,
 			Object.keys(prototype.getHeaders.call(forged)).length === 0,
-			prototype.getHeaderNames.call(forged).length === 0,
-			throwsMessage(
-				() => prototype.setHeader.call(forged, "x", "y"),
-				"ServerResponse is not writable",
-			),
-			throwsMessage(() => prototype.write.call(forged, "x"), "write after end"),
-			throwsMessage(() => prototype.end.call(forged), "write after end"),
-			constructed.getHeader("x") === undefined,
-			completedResponse.getHeader("x-index") === undefined,
-			throwsMessage(
-				() => completedResponse.setHeader("x", "y"),
-				"ServerResponse is not writable",
-			),
+			errorFrom(() => prototype.getHeaderNames.call(forged)) instanceof TypeError,
+			errorFrom(() => prototype.setHeader.call(forged, "x", "y")) instanceof TypeError,
+			errorFrom(() => prototype.write.call(forged, "x")) instanceof TypeError,
+			errorFrom(() => prototype.end.call(forged)) instanceof TypeError,
+			constructed.getHeader("x") === "retained",
+			completedResponse.getHeader("x-index") === completedResponseHeader,
+			errorFrom(() => completedResponse.setHeader("x", "y"))?.code ===
+				"ERR_HTTP_HEADERS_SENT",
 		];
 		response.statusCode = checks.every(Boolean) ? 200 : 500;
 		response.end(checks.every(Boolean) ? "ok" : "receiver mismatch");

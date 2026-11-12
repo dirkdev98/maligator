@@ -1899,6 +1899,7 @@ typedef struct MalVm {
      * before any Error exists or a realm retains it. */
     MalValue error_stack_marker;
     MalValue error_callsite_marker;
+    MalValue node_http_headers_marker;
 #if MAL_REALMS
     /** Current-realm globals; aliases current_realm->globals and is not owned here. */
     MalValue *globals;

@@ -2172,6 +2172,7 @@ static void mal_gc_scan_roots(MalVm *vm) {
     mal_gc_mark_value(vm->allocation_error);
     mal_gc_mark_value(vm->error_stack_marker);
     mal_gc_mark_value(vm->error_callsite_marker);
+    mal_gc_mark_value(vm->node_http_headers_marker);
     mal_gc_mark_value(vm->for_in_iterator_next);
     for (MalPreparedValue *entry = vm->prepared_values; entry != nullptr; entry = entry->next) {
         mal_gc_mark_value(entry->value);
