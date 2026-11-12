@@ -4715,6 +4715,7 @@ static void http_client_dispatch_head(
     http_define_own(vm, roots[0], "rawTrailers", roots[5]);
     http_define_own(vm, roots[0], "socket", roots[3]);
     http_define_own(vm, roots[0], "connection", roots[3]);
+    http_define_own(vm, roots[0], "req", state->request);
     state->response = roots[0];
     state->response_head_seen = true;
     MalValue emit_args[] = {

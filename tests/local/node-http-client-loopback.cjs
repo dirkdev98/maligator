@@ -157,6 +157,7 @@ server.listen(0, "127.0.0.1", () => {
 			},
 		},
 		(response) => {
+			if (response.req !== request) fail("response retains its request");
 			if (response.statusMessage !== "Too Early") fail("status message");
 			if (response.headers["content-type"] !== "text/plain") fail("response header");
 			if (response.headers["x-response-dup"] !== "first, second") {
