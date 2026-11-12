@@ -3113,15 +3113,12 @@ static MalValue http_client_destroy(
     return receiver;
 }
 
-/* Milliseconds of permitted socket inactivity. Zero is Node's "disable the socket
- * timeout", which this transport deliberately cannot express — every outbound
- * request stays bounded — so it is refused instead of silently reinterpreted. */
 static bool http_client_timeout_ms(MalVm *vm, MalValue value, u32 *out) {
     f64 number = mal_ops_is_number(value) ? mal_ops_number_as_f64(value) : (f64) NAN;
-    if (!isfinite(number) || floor(number) != number || number < 1
+    if (!isfinite(number) || floor(number) != number || number < 0
         || number > 2147483647.0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                           "HTTP request timeout must be an integer from 1 through "
+                           "HTTP request timeout must be an integer from 0 through "
                            "2147483647 milliseconds");
         return false;
     }

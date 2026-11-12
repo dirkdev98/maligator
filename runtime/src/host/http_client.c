@@ -19,7 +19,6 @@
 #define MAL_HTTP_CLIENT_READ_INIT 4096
 #define MAL_HTTP_CLIENT_READ_MAX (256 * 1024)
 #define MAL_HTTP_CLIENT_WRITE_MAX (256 * 1024)
-#define MAL_HTTP_CLIENT_DEFAULT_TIMEOUT_MS 300000u
 #define MAL_HTTP_CLIENT_IDLE_MAX 16
 #define MAL_HTTP_CLIENT_IDLE_NS 5000000000LL
 
@@ -372,13 +371,17 @@ static bool client_connect(
 }
 
 /*
- * One inactivity deadline covers the whole exchange: the connect handshake, the
+ * A configured inactivity deadline covers the whole exchange: the connect handshake, the
  * wait for response headers, and every gap between response body reads. Socket
  * progress in either direction re-arms it, so a transfer that is merely large stays
  * alive while a peer that accepts the connection and then goes silent does not.
  */
 static void client_arm_timeout(MalHttpClient *client) {
     if (client->operation == 0) return;
+    if (client->timeout_ns == 0) {
+        mal_reactor_cancel_timer(&client->host->reactor, &client->timeout);
+        return;
+    }
     i64 now = mal_reactor_now_ns();
     mal_reactor_rearm_timer(
         &client->host->reactor, &client->timeout,
@@ -914,8 +917,7 @@ bool mal_http_client_start(
     client->host_name = client_copy(host_name, strlen(host_name));
     if (client->host_name == nullptr) goto fail_client;
     client->timeout.waker = (MalWaker) {.fn = client_timeout_cb, .data = client};
-    client->timeout_ns = (i64) (timeout_ms == 0
-        ? MAL_HTTP_CLIENT_DEFAULT_TIMEOUT_MS : timeout_ms) * 1000000;
+    client->timeout_ns = (i64) timeout_ms * 1000000;
     client->head_request = head_request;
     if (secure) {
         if (mal_tcp_tls_create_client((const byte *)host_name, strlen(host_name),
@@ -1107,8 +1109,7 @@ bool mal_http_client_set_timeout(
     MalHost *host, MalHostHandle operation, u32 timeout_ms) {
     MalHttpClient *client = client_find(host, operation);
     if (client == nullptr) return false;
-    client->timeout_ns = (i64) (timeout_ms == 0
-        ? MAL_HTTP_CLIENT_DEFAULT_TIMEOUT_MS : timeout_ms) * 1000000;
+    client->timeout_ns = (i64) timeout_ms * 1000000;
     client_arm_timeout(client);
     return true;
 }

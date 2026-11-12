@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import type { Server, Socket } from "node:net";
 import * as os from "node:os";
@@ -42,6 +42,7 @@ describe("node:http hardening configuration", () => {
 	let limitBinaries: Array<string>;
 	let timeoutBinaries: Array<string>;
 	let setTimeoutBinaries: Array<string>;
+	let zeroTimeoutBinaries: Array<string>;
 	let silentServer: Server;
 	let silentPort: number;
 	const accepted: Array<Socket> = [];
@@ -67,11 +68,22 @@ describe("node:http hardening configuration", () => {
 			"tests/local/node-http-client-set-timeout.cjs",
 			"node-http-client-set-timeout",
 		);
-		// Accepts the connection and then answers nothing at all: the peer that an
-		// outbound deadline is the only defence against.
+		zeroTimeoutBinaries = build(
+			"tests/local/node-http-client-zero-timeout.cjs",
+			"node-http-client-zero-timeout",
+		);
 		silentServer = createServer((socket) => {
 			accepted.push(socket);
 			socket.on("error", () => undefined);
+			let requestHead = "";
+			socket.on("data", function readHead(chunk: Buffer) {
+				requestHead += chunk.toString();
+				if (!requestHead.includes("\r\n\r\n")) return;
+				socket.off("data", readHead);
+				if (!requestHead.startsWith("GET /timeout-disabled ")) return;
+				socket.write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n");
+				setTimeout(() => socket.end("ok"), 150);
+			});
 		});
 		await new Promise<void>((resolve, reject) => {
 			silentServer.once("error", reject);
@@ -89,6 +101,7 @@ describe("node:http hardening configuration", () => {
 		await new Promise<void>((resolve) => {
 			silentServer.close(() => resolve());
 		});
+		rmSync(outDir, { recursive: true, force: true });
 	});
 
 	it("exposes server limits as validated, live configuration", () => {
@@ -110,6 +123,15 @@ describe("node:http hardening configuration", () => {
 				MAL_HTTP_TIMEOUT_PORT: String(silentPort),
 			});
 			expect(output).toContain("HTTP CLIENT SET TIMEOUT PASS");
+		}
+	});
+
+	it("disables request timeouts before and during a request", async () => {
+		for (const binary of zeroTimeoutBinaries) {
+			const output = await runWithEnv(binary, {
+				MAL_HTTP_TIMEOUT_PORT: String(silentPort),
+			});
+			expect(output).toContain("HTTP CLIENT ZERO TIMEOUT PASS");
 		}
 	});
 });
