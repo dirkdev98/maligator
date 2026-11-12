@@ -464,6 +464,16 @@ static void mal_promise_trigger_reactions(MalVm *vm, MalPromiseReaction *list, b
     }
 }
 
+/** Settlement hands the reactions to their jobs; the promise then owns nothing. */
+static void mal_promise_detach_reactions(MalPromiseObject *promise) {
+    if (promise->reactions_head == nullptr) return;
+    promise->reactions_head = nullptr;
+    promise->reactions_tail = nullptr;
+    if (!mal_object_finalizes(&promise->object)) {
+        mal_heap_cell_owns_nothing(&promise->object.header);
+    }
+}
+
 void mal_promise_fulfill(MalVm *vm, MalPromiseObject *promise, MalValue value) {
     if (promise->state != MAL_PROMISE_PENDING) {
         return;
@@ -475,8 +485,7 @@ void mal_promise_fulfill(MalVm *vm, MalPromiseObject *promise, MalValue value) {
 
     MalPromiseReaction *reactions = promise->reactions_head;
     mal_promise_barrier_reactions(reactions);
-    promise->reactions_head = nullptr;
-    promise->reactions_tail = nullptr;
+    mal_promise_detach_reactions(promise);
     mal_promise_trigger_reactions(vm, reactions, false, value);
 }
 
@@ -491,8 +500,7 @@ void mal_promise_reject(MalVm *vm, MalPromiseObject *promise, MalValue reason) {
 
     MalPromiseReaction *reactions = promise->reactions_head;
     mal_promise_barrier_reactions(reactions);
-    promise->reactions_head = nullptr;
-    promise->reactions_tail = nullptr;
+    mal_promise_detach_reactions(promise);
 
     // A promise that rejects with no handler attached is a candidate unhandled
     // rejection; the microtask checkpoint re-checks is_handled before reporting.

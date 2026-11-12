@@ -828,6 +828,14 @@ static inline void mal_heap_cell_needs_finalizer(MalHeapHeader *cell) {
     mal_heap_cell_block(cell)->finalizable[unit / 64] |= UINT64_C(1) << (unit % 64);
 }
 
+/** Withdraw a mal_heap_cell_needs_finalizer report once the cell owns nothing again,
+ * so its death skips the finalizer. */
+static inline void mal_heap_cell_owns_nothing(MalHeapHeader *cell) {
+    if ((mal_heap_mark_load(cell) & MAL_MARK_BLOCK) == 0) return;
+    usize unit = mal_heap_cell_unit(cell);
+    mal_heap_cell_block(cell)->finalizable[unit / 64] &= ~(UINT64_C(1) << (unit % 64));
+}
+
 /** Report a young cell the minor mark reached, after setting its OLD bit. */
 static inline void mal_heap_note_minor_survivor(MalHeapHeader *cell, u8 mark) {
     if ((mark & MAL_MARK_BLOCK) == 0) return;
