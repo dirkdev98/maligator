@@ -171,7 +171,7 @@ MalValue mal_vm_concat_primitive_strings(MalVm *vm, MalValue left, MalValue righ
     return mal_vm_add(vm, left, right);
 }
 
-MalValue mal_vm_string_concat_length(
+MalValue mal_vm_string_concat_length_slow(
     MalVm *vm, MalValue prefix_length, MalValue part, u32 following_quasi_length
 ) {
     if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;

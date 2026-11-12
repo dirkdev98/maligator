@@ -436,7 +436,7 @@ MalValue mal_vm_add(MalVm *vm, MalValue left, MalValue right);
 MalValue mal_vm_concat_strings_known(MalVm *vm, MalString *left, MalString *right);
 // `+` over a String and a primitive whose ToString cannot call user code or throw.
 MalValue mal_vm_concat_primitive_strings(MalVm *vm, MalValue left, MalValue right);
-MalValue mal_vm_string_concat_length(
+MalValue mal_vm_string_concat_length_slow(
     MalVm *vm, MalValue prefix_length, MalValue part, u32 following_quasi_length
 );
 MalValue mal_vm_concat_strings(MalVm *vm, const MalValue *parts, i32 count);
@@ -3251,6 +3251,24 @@ static inline __attribute__((always_inline)) bool mal_vm_int32_index(MalValue ke
     u64 offset = key - MAL_VALUE_INT32;
     *index = (u32) offset;
     return offset <= INT32_MAX;
+}
+
+/**
+ * A template's running length after `part` and the quasi that follows it. An int32
+ * prefix and an in-range result stay inline; anything else, including the
+ * RangeError past the string limit, takes the out-of-line check.
+ */
+static inline __attribute__((always_inline)) MalValue mal_vm_string_concat_length(
+    MalVm *vm, MalValue prefix_length, MalValue part, u32 following_quasi_length
+) {
+    u32 prefix;
+    if (vm->completion.kind != MAL_COMPLETION_THROW && mal_vm_int32_index(prefix_length, &prefix) &&
+        mal_value_is_string(part)) {
+        u64 length = (u64) prefix + mal_string_length(mal_value_to_string(part)) +
+            following_quasi_length;
+        if (length <= MAL_STRING_MAX_CODE_UNITS) return mal_value_from_i32((i32) length);
+    }
+    return mal_vm_string_concat_length_slow(vm, prefix_length, part, following_quasi_length);
 }
 
 /** A boxed Number key reads its element without a detour through double when it is an int32. */
