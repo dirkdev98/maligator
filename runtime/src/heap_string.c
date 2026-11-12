@@ -898,11 +898,8 @@ bool mal_string_new_parts_checked(
     bool latin1 = true;
     for (usize i = 0; !flat_latin1 && i < count && latin1; i++)
         latin1 = mal_string_range_is_latin1(parts[i], 0, mal_string_length(parts[i]));
-    if (length <= (latin1 ? MAL_STRING_CELL_LATIN1_CODE_UNITS : MAL_STRING_CELL_CODE_UNITS)) {
-        MalString *string = mal_heap_alloc(heap,
-            latin1 ? mal_string_inline_latin1_bytes(length) : mal_string_inline_utf16_bytes(length),
-            MAL_HEAP_STRING);
-        mal_string_init_flat(string, MAL_STRING_STORAGE_INLINE, latin1, length);
+    MalString *string = mal_string_new_cell(heap, length, latin1);
+    if (string != nullptr) {
         usize offset = 0;
         for (usize i = 0; i < count; i++) {
             if (flat_latin1)
@@ -915,8 +912,6 @@ bool mal_string_new_parts_checked(
         }
         mal_perf_string_allocation(length);
         MAL_PERF_COUNT(string_inline_concat_results);
-        MAL_PERF_COUNT(string_inline_allocations);
-        MAL_PERF_ADD(string_inline_code_units, length);
         *out = string;
         return true;
     }
