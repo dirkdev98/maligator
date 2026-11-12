@@ -131805,6 +131805,19 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.Request.prototype\",\"signal\"]",
+			"owner": "globalThis.Request.prototype",
+			"ownerPaths": ["MAL_INTRINSIC_REQUEST_PROTOTYPE", "globalThis.Request.prototype"],
+			"key": "signal",
+			"kind": "accessor",
+			"operations": [
+				"globalThis.Request.prototype.signal<get>",
+				"globalThis.Request.prototype.body<set>"
+			],
+			"task": "N-02",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.Request.prototype\",\"destination\"]",
 			"owner": "globalThis.Request.prototype",
 			"ownerPaths": ["MAL_INTRINSIC_REQUEST_PROTOTYPE", "globalThis.Request.prototype"],
@@ -132661,6 +132674,46 @@
 			"id": "[\"globalThis.Request.prototype.referrerPolicy<set>\",\"name\"]",
 			"owner": "globalThis.Request.prototype.referrerPolicy<set>",
 			"ownerPaths": ["globalThis.Request.prototype.referrerPolicy<set>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Request.prototype.signal<get>\",\"length\"]",
+			"owner": "globalThis.Request.prototype.signal<get>",
+			"ownerPaths": ["globalThis.Request.prototype.signal<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Request.prototype.signal<get>\",\"name\"]",
+			"owner": "globalThis.Request.prototype.signal<get>",
+			"ownerPaths": ["globalThis.Request.prototype.signal<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Request.prototype.signal<set>\",\"length\"]",
+			"owner": "globalThis.Request.prototype.signal<set>",
+			"ownerPaths": ["globalThis.Request.prototype.signal<set>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Request.prototype.signal<set>\",\"name\"]",
+			"owner": "globalThis.Request.prototype.signal<set>",
+			"ownerPaths": ["globalThis.Request.prototype.signal<set>"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -278517,6 +278570,46 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.Request.prototype.signal<get>\",\"<call>\"]",
+			"owner": "globalThis.Request.prototype.signal<get>",
+			"ownerPaths": ["globalThis.Request.prototype.signal<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.Request.prototype.signal<get>"],
+			"task": "N-02",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Request.prototype.signal<get>\",\"<construct>\"]",
+			"owner": "globalThis.Request.prototype.signal<get>",
+			"ownerPaths": ["globalThis.Request.prototype.signal<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.Request.prototype.signal<get>"],
+			"task": "N-02",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Request.prototype.signal<set>\",\"<call>\"]",
+			"owner": "globalThis.Request.prototype.signal<set>",
+			"ownerPaths": ["globalThis.Request.prototype.signal<set>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.Request.prototype.body<set>"],
+			"task": "N-02",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Request.prototype.signal<set>\",\"<construct>\"]",
+			"owner": "globalThis.Request.prototype.signal<set>",
+			"ownerPaths": ["globalThis.Request.prototype.signal<set>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.Request.prototype.body<set>"],
+			"task": "N-02",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.Request.prototype.text\",\"<call>\"]",
 			"owner": "globalThis.Request.prototype.text",
 			"ownerPaths": ["globalThis.Request.prototype.text"],
@@ -308742,6 +308835,7 @@
 				"globalThis.Request.prototype.redirect<set>",
 				"globalThis.Request.prototype.referrer<set>",
 				"globalThis.Request.prototype.referrerPolicy<set>",
+				"globalThis.Request.prototype.signal<set>",
 				"globalThis.Request.prototype.url<set>"
 			]
 		},
@@ -308815,6 +308909,10 @@
 		{
 			"id": "globalThis.Request.prototype.referrerPolicy<get>",
 			"identities": ["globalThis.Request.prototype.referrerPolicy<get>"]
+		},
+		{
+			"id": "globalThis.Request.prototype.signal<get>",
+			"identities": ["globalThis.Request.prototype.signal<get>"]
 		},
 		{
 			"id": "globalThis.Request.prototype.text",
@@ -317427,8 +317525,8 @@
 			"owner": "Request.prototype",
 			"key": "signal",
 			"task": "N-02",
-			"exposures": [],
-			"state": "not-installed-in-full-inventory"
+			"exposures": ["[\"globalThis.Request.prototype\",\"signal\"]"],
+			"state": "reconciled"
 		},
 		{
 			"owner": "Request.prototype",
