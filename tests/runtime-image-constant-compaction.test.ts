@@ -280,8 +280,20 @@ describe("RuntimeImage constant compaction", () => {
 			portable.instructions.length = 0;
 			portable.gcSafepoints![0]!.rootRegisters.push(portable.registerCount);
 			expect(native.body.instructions).toEqual(instructions);
-			expect(native.body.gcSafepoints).toEqual(
-				target === "same" ? portable.gcSafepoints : roots,
+			expect(native.body.gcSafepoints?.map((row) => row.instructionIp)).toEqual(
+				roots?.map((row) => row.instructionIp),
+			);
+			const expectedRoots = target === "same" ? portable.gcSafepoints : roots;
+			expect(
+				native.body.gcSafepoints?.map(({ rootRegisters, clearRegisters }) => ({
+					rootRegisters,
+					clearRegisters,
+				})),
+			).toEqual(
+				expectedRoots?.map(({ rootRegisters, clearRegisters }) => ({
+					rootRegisters,
+					clearRegisters,
+				})),
 			);
 		},
 	);
