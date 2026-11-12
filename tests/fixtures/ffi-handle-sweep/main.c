@@ -29,6 +29,10 @@ static const MalFfiHandleType struct_type = {
     .name = "Registration", .size = sizeof(int), .alignment = alignof(int),
     .destroy = destroy_resource, .collect = true,
 };
+static const MalFfiHandleType child_type = {
+    .name = "ChildResource", .borrows_owner = true,
+};
+static int child_resource;
 static const MalFfiSite site = {"sweep", "resource", nullptr};
 static usize no_workers(void) { return 0; }
 
@@ -108,6 +112,30 @@ static int check_callback(MalVm *vm, const MalFfiHandleType *type) {
     return 0;
 }
 
+static int check_child_owner(MalVm *vm, const MalFfiHandleType *type) {
+    int before = destroyed;
+    MalValue roots[] = {
+        mal_ffi_new_handle(vm, &library, type, &resource, true, false),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    CHECK(!mal_ffi_threw(vm));
+    roots[1] = mal_ffi_new_owner_handle(vm, &library, &child_type, &child_resource, roots[0]);
+    CHECK(!mal_ffi_threw(vm));
+    roots[0] = mal_value_new_undefined();
+    mal_gc_collect(vm);
+    CHECK(destroyed == before);
+    void *pointer;
+    CHECK(mal_ffi_to_handle(vm, roots[1], &child_type, false, &site, &pointer, nullptr));
+    CHECK(pointer == &child_resource);
+    roots[1] = mal_value_new_undefined();
+    mal_gc_collect(vm);
+    CHECK(destroyed == before + 1);
+    mal_gc_unroot(&span);
+    return 0;
+}
+
 static MalHeapHeader *holder;
 static bool holder_traced;
 static void observe_holder(MalHeapHeader *cell) {
@@ -162,6 +190,8 @@ int main(void) {
     CHECK(check_owned(&vm) == 0);
     CHECK(check_callback(&vm, &owned_type) == 0);
     CHECK(check_callback(&vm, &struct_type) == 0);
+    CHECK(check_child_owner(&vm, &owned_type) == 0);
+    CHECK(check_child_owner(&vm, &struct_type) == 0);
     CHECK(check_mark_recovery(&vm) == 0);
     mal_vm_free(&vm);
     mal_gc_test_worker_limit_hook = nullptr;
