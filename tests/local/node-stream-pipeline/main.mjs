@@ -105,6 +105,57 @@ const unended = new PassThrough({ objectMode: true });
 await pipelinePromise(["keep"], unended, { end: false });
 console.log("end false", unended.writableEnded, String(unended.read()));
 
+const nodeUnended = new PassThrough({ objectMode: true });
+await pipelinePromise(Readable.from(["keep-node"]), nodeUnended, { end: false });
+console.log("node end false", nodeUnended.writableEnded, String(nodeUnended.read()));
+nodeUnended.end();
+
+const shared = new PassThrough({ objectMode: true });
+const sharedChunks = [];
+shared.on("data", (chunk) => sharedChunks.push(String(chunk)));
+await Promise.all([
+	pipelinePromise(Readable.from(["foo"]), shared, { end: false }),
+	pipelinePromise(Readable.from(["bar", "baz"]), shared, { end: false }),
+]);
+console.log("shared destination", shared.writableEnded, sharedChunks.join(","));
+shared.end();
+
+const fanout = Readable.from(["both"]);
+const automaticChunks = [];
+const retainedChunks = [];
+const automatic = collector(automaticChunks);
+const retained = collector(retainedChunks);
+fanout.pipe(automatic);
+fanout.pipe(retained, { end: false });
+await new Promise((resolve) => fanout.on("end", resolve));
+console.log(
+	"mixed end policy",
+	automatic.writableEnded,
+	retained.writableEnded,
+	automaticChunks.join(","),
+	retainedChunks.join(","),
+);
+retained.end();
+
+const detachable = new PassThrough({ objectMode: true });
+const removedChunks = [];
+const remainingChunks = [];
+const removed = collector(removedChunks);
+const remaining = collector(remainingChunks);
+detachable.pipe(removed, { end: false });
+detachable.pipe(remaining, { end: false });
+detachable.unpipe(removed);
+detachable.end("remaining");
+await new Promise((resolve) => detachable.on("end", resolve));
+console.log(
+	"unpipe retains end policy",
+	remaining.writableEnded,
+	removedChunks.join(","),
+	remainingChunks.join(","),
+);
+removed.end();
+remaining.end();
+
 const webOut = [];
 await pipelinePromise(
 	new ReadableStream({

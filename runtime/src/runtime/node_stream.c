@@ -592,7 +592,8 @@ static bool stream_pipe_contains(MalVm *vm, MalValue source, MalValue destinatio
         MalArrayObject *array = mal_value_to_array_object(pipes);
         u32 length = mal_array_object_length(array);
         for (u32 i = 0; i < length; i++) {
-            if (mal_ops_same_value(stream_array_at(array, i), destination)) {
+            MalValue record = stream_array_at(array, i);
+            if (mal_ops_same_value(stream_own(vm, record, "destination"), destination)) {
                 return true;
             }
         }
@@ -689,7 +690,7 @@ static bool stream_pipe_chunk(MalVm *vm, MalValue source, MalValue chunk) {
     u32 length = mal_array_object_length(array);
     bool flowing = true;
     for (u32 i = 0; i < length && vm->completion.kind != MAL_COMPLETION_THROW; i++) {
-        roots[3] = stream_array_at(array, i);
+        roots[3] = stream_own(vm, stream_array_at(array, i), "destination");
         if (!mal_value_is_object(roots[3])) {
             continue;
         }
@@ -743,7 +744,8 @@ static void stream_deliver_chunk(MalVm *vm, MalValue receiver, MalValue chunk) {
 
 static void stream_end_pipes(MalVm *vm, MalValue receiver) {
     MalValue roots[] = {
-        receiver, stream_own(vm, receiver, "_malPipes"), mal_value_new_undefined(),
+        receiver, stream_own(vm, receiver, "_malPipes"),
+        mal_value_new_undefined(), mal_value_new_undefined(),
     };
     if (!mal_value_is_array_object(roots[1])) {
         return;
@@ -754,8 +756,9 @@ static void stream_end_pipes(MalVm *vm, MalValue receiver) {
     u32 length = mal_array_object_length(pipes);
     for (u32 i = 0; i < length && vm->completion.kind != MAL_COMPLETION_THROW; i++) {
         roots[2] = stream_array_at(pipes, i);
-        if (mal_value_is_object(roots[2])) {
-            stream_call_method(vm, roots[2], "end", nullptr, 0);
+        roots[3] = stream_own(vm, roots[2], "destination");
+        if (stream_truthy_own(vm, roots[2], "end") && mal_value_is_object(roots[3])) {
+            stream_call_method(vm, roots[3], "end", nullptr, 0);
         }
     }
     roots[1] = stream_new_array(vm);
@@ -1029,15 +1032,29 @@ static MalValue stream_pipe(
         }
         return mal_value_new_undefined();
     }
-    MalValue roots[] = {receiver, destination, stream_own(vm, receiver, "_malPipes")};
+    MalValue roots[] = {
+        receiver, destination, mal_value_new_undefined(),
+        mal_value_new_undefined(), argc > 1 ? args[1] : mal_value_new_undefined(),
+    };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
+    MalValue end_option = stream_option(vm, roots[4], "end");
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    roots[4] = mal_value_new_boolean(
+        !(mal_value_is_boolean(end_option) && !mal_value_to_boolean(end_option)));
+    roots[2] = stream_own(vm, roots[0], "_malPipes");
     if (!mal_value_is_array_object(roots[2])) {
         roots[2] = stream_new_array(vm);
         stream_set(vm, roots[0], "_malPipes", roots[2]);
     }
+    roots[3] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    stream_set(vm, roots[3], "destination", roots[1]);
+    stream_set(vm, roots[3], "end", roots[4]);
     MalArrayObject *pipes = mal_value_to_array_object(roots[2]);
-    mal_array_object_store(pipes, mal_key_index(mal_array_object_length(pipes)), roots[1]);
+    mal_array_object_store(pipes, mal_key_index(mal_array_object_length(pipes)), roots[3]);
     roots[2] = stream_own(vm, roots[1], "_malPipeSources");
     if (!mal_value_is_array_object(roots[2])) {
         roots[2] = stream_new_array(vm);
@@ -1065,7 +1082,7 @@ static MalValue stream_unpipe(
     MalValue destination = argc > 0 ? args[0] : mal_value_new_undefined();
     MalValue roots[] = {
         receiver, destination, stream_own(vm, receiver, "_malPipes"),
-        stream_new_array(vm), mal_value_new_undefined(),
+        stream_new_array(vm), mal_value_new_undefined(), mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -1075,11 +1092,12 @@ static MalValue stream_unpipe(
         u32 length = mal_array_object_length(old);
         for (u32 i = 0; i < length; i++) {
             roots[4] = stream_array_at(old, i);
+            roots[5] = stream_own(vm, roots[4], "destination");
             bool remove = mal_value_is_undefined(roots[1])
-                || mal_ops_same_value(roots[1], roots[4]);
+                || mal_ops_same_value(roots[1], roots[5]);
             if (remove) {
-                stream_remove_blocked_pipe(vm, roots[0], roots[4], true);
-                stream_emit(vm, roots[4], "unpipe", roots, 1);
+                stream_remove_blocked_pipe(vm, roots[0], roots[5], true);
+                stream_emit(vm, roots[5], "unpipe", roots, 1);
             } else {
                 mal_array_object_store(
                     next, mal_key_index(mal_array_object_length(next)), roots[4]);
