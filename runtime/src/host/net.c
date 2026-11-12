@@ -54,41 +54,15 @@ bool mal_net_parse_ip(
 }
 
 int mal_net_listen(const char *host, u16 port, int backlog) {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        return -1;
-    }
-    if (mal_net_set_cloexec(fd) < 0) {
-        int error = errno;
-        close(fd);
-        errno = error;
-        return -1;
-    }
-    int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-
     struct sockaddr_storage address;
     socklen_t length;
     const char *numeric_host = (host == nullptr || host[0] == '\0') ? "0.0.0.0" : host;
-    if (!mal_net_parse_ip(numeric_host, port, &address, &length) ||
-        address.ss_family != AF_INET) {
-        close(fd);
+    if (!mal_net_parse_ip(numeric_host, port, &address, &length)) {
         errno = EINVAL;
         return -1;
     }
-    if (bind(fd, (struct sockaddr *) &address, length) < 0) {
-        close(fd);
-        return -1;
-    }
-    if (listen(fd, backlog > 0 ? backlog : 128) < 0) {
-        close(fd);
-        return -1;
-    }
-    if (mal_net_set_nonblock(fd) < 0) {
-        close(fd);
-        return -1;
-    }
-    return fd;
+    return mal_net_listen_address((const struct sockaddr *) &address, length,
+        backlog > 0 ? backlog : 128, false);
 }
 
 int mal_net_listen_address(

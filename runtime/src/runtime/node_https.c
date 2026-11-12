@@ -95,6 +95,9 @@ static MalValue node_https_server_listen(
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     MalValue result = mal_value_new_undefined();
+    MalTlsServerConfig *config = nullptr;
+    bool without_cert = false;
+    if (!mal_node_net_tls_config(vm, roots[0], &config, &without_cert)) goto done;
     if (!mal_vm_get_property(vm, vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_PROTOTYPE],
             mal_intrinsic_string_key(vm, (const byte *) "listen"), &roots[1])) {
         goto done;
@@ -103,14 +106,12 @@ static MalValue node_https_server_listen(
     if (listened.kind == MAL_COMPLETION_THROW) goto done;
     roots[1] = listened.value;
     // The HTTP listener cannot accept before this call yields, so no plaintext connection slips in.
-    MalTlsServerConfig *config = nullptr;
-    bool without_cert = false;
-    if (!mal_node_net_tls_config(vm, roots[0], &config, &without_cert)) goto done;
     if (config != nullptr && !mal_node_http_server_set_tls(roots[0], config)) {
         mal_tls_server_config_free(&config);
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "https.Server: failed to start TLS");
         goto done;
     }
+    config = nullptr;
     {
         MalValue callback = mal_value_new_undefined(), contexts = mal_value_new_undefined();
         if (mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) "_malSNICallback"), &callback)
@@ -123,6 +124,7 @@ static MalValue node_https_server_listen(
     }
     result = roots[1];
 done:
+    mal_tls_server_config_free(&config);
     mal_gc_unroot(&root);
     return result;
 }

@@ -34,3 +34,4 @@ typedef struct MalTlsServerConfig MalTlsServerConfig;
  * null for a plain server. False with a pending exception. */
 bool mal_node_net_tls_config(
     MalVm *vm, MalValue server, MalTlsServerConfig **config, bool *without_cert);
+MalValue mal_node_net_listen_error(MalVm *vm, int error, const char *host, i32 port);

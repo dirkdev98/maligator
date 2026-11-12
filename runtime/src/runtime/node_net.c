@@ -2032,7 +2032,7 @@ static const char *net_listen_code(int error) {
 }
 
 /* A pipe listener passes port -1, which Node reports as `port: -1` without the `:port` suffix. */
-static MalValue net_listen_error(MalVm *vm, int error, const char *host, i32 port) {
+MalValue mal_node_net_listen_error(MalVm *vm, int error, const char *host, i32 port) {
     const char *code = net_listen_code(error);
     const char *description = net_listen_description(error);
     usize capacity = strlen(code) + strlen(description) + strlen(host) + 32;
@@ -2171,7 +2171,7 @@ static bool net_server_bind(MalVm *vm, MalValue receiver, struct sockaddr_storag
             &operation);
     }
     if (error != 0) {
-        MalValue failure = net_listen_error(vm, error, host, port);
+        MalValue failure = mal_node_net_listen_error(vm, error, host, port);
         if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
         MalRootSpan root;
         mal_gc_root(&root, &failure, 1);

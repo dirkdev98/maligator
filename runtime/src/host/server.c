@@ -1485,6 +1485,11 @@ u16 mal_http_server_port(const MalHttpServer *server) {
         ? 0 : mal_net_local_port(server->listen_fd);
 }
 
+bool mal_http_server_local_endpoint(const MalHttpServer *server, MalNetEndpoint *out) {
+    return server != nullptr && server->listen_fd >= 0
+        && mal_net_local_endpoint(server->listen_fd, out);
+}
+
 void mal_http_server_close(
     MalHttpServer *server, MalHttpServerCloseCallback callback, void *data) {
     if (server == nullptr || server->closing) {

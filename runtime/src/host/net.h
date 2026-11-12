@@ -28,8 +28,8 @@ typedef struct MalNetEndpoint {
  */
 
 /*
- * Create a non-blocking IPv4 listening socket bound to host:port. `host` is a
- * numeric dotted-quad ("127.0.0.1", "0.0.0.0"); null/empty => 0.0.0.0. `port` 0 =>
+ * Create a non-blocking listening socket bound to a numeric IPv4/IPv6 host.
+ * Null/empty host selects 0.0.0.0. `port` 0 selects
  * an ephemeral port (read it back with mal_net_local_port). SO_REUSEADDR is set.
  * Returns the fd, or -1 on error (errno set).
  */

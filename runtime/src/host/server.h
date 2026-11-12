@@ -95,6 +95,7 @@ void mal_http_conn_tls_failure(const MalHttpConn *conn, char *out, usize capacit
 /* Takes ownership and frees the previous config; sessions already accepted keep theirs. */
 bool mal_http_server_replace_tls(MalHttpServer *server, MalTlsServerConfig *config);
 u16 mal_http_server_port(const MalHttpServer *server);
+bool mal_http_server_local_endpoint(const MalHttpServer *server, MalNetEndpoint *out);
 
 /* Stop accepting and complete once all accepted connections have drained. Close
  * is idempotent; the callback is invoked from the native reactor path and must not

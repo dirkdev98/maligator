@@ -21,6 +21,7 @@
 #include "host.h"
 #include "http_client.h"
 #include "intrinsics.h"
+#include "microtask.h"
 #include "node_dns.h"
 #include "node_events.h"
 #include "node_inspect.h"
@@ -132,8 +133,12 @@ typedef struct MalNodeHttpServerState {
     MalValue receiver;
     MalAsyncContext *async_context;
     MalHttpServer *native;
+    MalValue pending_lookup;
+    MalTlsServerConfig *pending_tls;
     u16 port;
-    char host[16];
+    char host[MAL_NET_ADDRESS_MAX];
+    bool sni_enabled;
+    bool startup_failed;
     u32 headers_timeout_ms;
     u32 request_timeout_ms;
     u32 keep_alive_timeout_ms;
@@ -2573,6 +2578,7 @@ static void http_cleanup(MalVm *vm) {
             }
         }
         *server_link = state->next;
+        mal_tls_server_config_free(&state->pending_tls);
         free(state);
     }
     if (host != nullptr) {
@@ -4094,6 +4100,7 @@ static void http_scan_roots(MalVm *vm, void *data) {
          state = state->next) {
         if (state->vm == vm) {
             mal_gc_mark_value(state->receiver);
+            mal_gc_mark_value(state->pending_lookup);
             mal_gc_mark_value(mal_async_internal_value(
                 (MalHeapHeader *) state->async_context));
         }
@@ -5046,6 +5053,7 @@ bool mal_node_http_drain(MalVm *vm) {
             mal_gc_root(&root, &receiver, 1);
             *link = state->next;
             http_server_free_tls_errors(state);
+            mal_tls_server_config_free(&state->pending_tls);
             free(state);
             MalAsyncContextScope scope;
             mal_async_context_scope_enter(vm, &scope, async_context);
@@ -5330,14 +5338,14 @@ static bool http_server_collect_limits(
     return true;
 }
 
-static bool http_ipv4_host(MalValue value, char out[16]) {
+static bool http_listen_host(MalValue value, char *out, usize capacity) {
     if (!mal_value_is_string(value)) return false;
     MalString *string = mal_value_to_string(value);
     usize length = mal_string_length(string);
-    if (length == 0 || length >= 16) return false;
+    if (length == 0 || length >= capacity) return false;
     const c16 *units = mal_string_code_units(string);
     for (usize i = 0; i < length; i++) {
-        if (units[i] > 0x7f) return false;
+        if (units[i] == 0 || units[i] > 0x7f) return false;
         out[i] = (char) units[i];
     }
     out[length] = '\0';
@@ -5407,7 +5415,9 @@ static void http_server_tls_hello(void *data, MalHttpConn *conn, const byte *nam
 
 void mal_node_http_server_enable_sni(MalValue server) {
     MalNodeHttpServerState *state = http_server_state(server);
-    if (state != nullptr && state->native != nullptr) mal_http_server_set_tls_hello(state->native, http_server_tls_hello);
+    if (state == nullptr || state->closing) return;
+    state->sni_enabled = true;
+    if (state->native != nullptr) mal_http_server_set_tls_hello(state->native, http_server_tls_hello);
 }
 
 static MalNodeHttpSocketState *http_socket_for_receiver(MalValue receiver) {
@@ -5573,14 +5583,128 @@ static bool http_server_drain_tls(MalVm *vm, MalNodeHttpServerState *state) {
 
 bool mal_node_http_server_replace_tls(MalValue server, MalTlsServerConfig *config) {
     MalNodeHttpServerState *state = http_server_state(server);
-    return state != nullptr && state->native != nullptr
-        && mal_http_server_replace_tls(state->native, config);
+    if (state == nullptr || state->closing) return false;
+    if (state->native != nullptr) return mal_http_server_replace_tls(state->native, config);
+    mal_tls_server_config_free(&state->pending_tls);
+    state->pending_tls = config;
+    return true;
 }
 
 bool mal_node_http_server_set_tls(MalValue server, MalTlsServerConfig *config) {
     MalNodeHttpServerState *state = http_server_state(server);
-    return state != nullptr && state->native != nullptr
-        && mal_http_server_set_tls(state->native, config, http_server_tls_event, state);
+    if (state == nullptr || state->closing) return false;
+    if (state->native != nullptr) return mal_http_server_set_tls(state->native, config, http_server_tls_event, state);
+    mal_tls_server_config_free(&state->pending_tls);
+    state->pending_tls = config;
+    return true;
+}
+
+static void http_server_remove_start(MalNodeHttpServerState *state) {
+    MalNodeHttpServerState **link = &http_servers;
+    while (*link != nullptr && *link != state) link = &(*link)->next;
+    if (*link == state) *link = state->next;
+    mal_gc_write_barrier(state->pending_lookup);
+    mal_tls_server_config_free(&state->pending_tls);
+    http_server_free_tls_errors(state);
+    free(state);
+}
+
+static MalValue http_server_emit_task(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target;
+    MalNativeFunctionObject *task = mal_value_to_native_function_object(callee);
+    MalValue server = mal_native_function_object_get_slot(task, 0);
+    MalValue error = mal_native_function_object_get_slot(task, 1);
+    MalNodeHttpServerState *state = http_server_state(server);
+    if (state != nullptr && state->startup_failed && !state->closing && state->pending_lookup == callee)
+        http_server_remove_start(state);
+    if (mal_value_is_undefined(error)) http_emit(vm, server, "close");
+    else http_emit_error(vm, server, error);
+    return mal_value_new_undefined();
+}
+
+static MalValue http_server_queue_event(MalVm *vm, MalValue server, MalValue error) {
+    MalValue roots[] = {server, error, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, "serverEvent"), http_server_emit_task, roots, 2));
+    mal_vm_enqueue_reaction_job(vm, roots[2], false, mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined());
+    MalValue task = roots[2];
+    mal_gc_unroot(&root);
+    return task;
+}
+
+static void http_server_fail_start(MalVm *vm, MalNodeHttpServerState *state, MalValue error) {
+    state->listening_pending = false;
+    state->startup_failed = true;
+    mal_gc_write_barrier(state->pending_lookup);
+    state->pending_lookup = http_server_queue_event(vm, state->receiver, error);
+}
+
+static bool http_server_bind(MalVm *vm, MalNodeHttpServerState *state, const char *host) {
+    MalHttpServer *native = mal_http_server_start_stream_handler(
+        vm, host, state->port, http_queue_request, state);
+    if (native == nullptr) {
+        MalValue error = mal_node_net_listen_error(vm, errno, host, state->port);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) http_server_fail_start(vm, state, error);
+        return false;
+    }
+    state->native = native;
+    MalNetEndpoint endpoint;
+    if (mal_http_server_local_endpoint(native, &endpoint)) {
+        state->port = endpoint.port;
+        memcpy(state->host, endpoint.address, sizeof(state->host));
+    } else {
+        state->port = mal_http_server_port(native);
+        memcpy(state->host, host, strlen(host) + 1);
+    }
+    if (!http_server_push_limits(state)
+        || (state->pending_tls != nullptr && !mal_http_server_set_tls(
+            native, state->pending_tls, http_server_tls_event, state))) {
+        // No accept can run before this native call yields, so close completes synchronously.
+        mal_http_server_close(native, http_native_close_complete, state);
+        state->close_ready = false;
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Failed to configure the HTTP listener");
+        MalValue error = vm->completion.value;
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL,
+            .value = mal_value_new_undefined()};
+        http_server_fail_start(vm, state, error);
+        return false;
+    }
+    state->pending_tls = nullptr;
+    if (state->sni_enabled) mal_http_server_set_tls_hello(native, http_server_tls_hello);
+    state->listening_pending = true;
+    return true;
+}
+
+static MalValue http_server_lookup_done(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target;
+    MalValue server = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    MalNodeHttpServerState *state = http_server_state(server);
+    if (state == nullptr || state->closing || state->pending_lookup != callee)
+        return mal_value_new_undefined();
+    mal_gc_write_barrier(state->pending_lookup);
+    state->pending_lookup = mal_value_new_undefined();
+    if (argc > 0 && !mal_value_is_nil(args[0])) {
+        http_server_fail_start(vm, state, args[0]);
+        return mal_value_new_undefined();
+    }
+    char host[MAL_NET_ADDRESS_MAX];
+    struct sockaddr_storage address;
+    socklen_t length;
+    if (argc < 2 || !http_listen_host(args[1], host, sizeof(host))
+        || !mal_net_parse_ip(host, state->port, &address, &length)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid IP address from lookup");
+        return mal_value_new_undefined();
+    }
+    (void) http_server_bind(vm, state, host);
+    return mal_value_new_undefined();
 }
 
 static MalValue http_server_listen(
@@ -5599,18 +5723,23 @@ static MalValue http_server_listen(
                            "The port argument must be between 0 and 65535");
         return mal_value_new_undefined();
     }
-    if (http_server_state(receiver) != nullptr) {
+    MalNodeHttpServerState *previous = http_server_state(receiver);
+    if (previous != nullptr && previous->startup_failed && !previous->closing) {
+        http_server_remove_start(previous);
+        previous = nullptr;
+    }
+    if (previous != nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
                            "Listen method has been called more than once");
         return mal_value_new_undefined();
     }
 
-    char host[16] = "0.0.0.0";
+    char host[256] = "0.0.0.0";
     MalValue callback = mal_value_new_undefined();
     if (argc > 1 && mal_value_is_string(args[1])) {
-        if (!http_ipv4_host(args[1], host)) {
+        if (!http_listen_host(args[1], host, sizeof(host))) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                               "The host argument must be a numeric IPv4 address");
+                               "The host argument must be a host name or IP address");
             return mal_value_new_undefined();
         }
         if (argc > 2) callback = args[2];
@@ -5631,6 +5760,8 @@ static MalValue http_server_listen(
     }
     state->vm = vm;
     state->receiver = receiver;
+    state->pending_lookup = mal_value_new_undefined();
+    state->port = (u16) number;
     state->async_context = mal_async_context_capture(vm);
 #if MAL_REALMS
     state->realm = vm->current_realm;
@@ -5639,34 +5770,29 @@ static MalValue http_server_listen(
         free(state);
         return mal_value_new_undefined();
     }
-    MalHttpServer *native = mal_http_server_start_stream_handler(
-        vm, host, (u16) number, http_queue_request, state);
-    if (native == nullptr) {
-        free(state);
-        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-                           "Failed to listen on the requested address");
-        return mal_value_new_undefined();
-    }
-    state->native = native;
-    state->port = mal_http_server_port(native);
-    memcpy(state->host, host, sizeof(state->host));
-    state->listening_pending = true;
     state->next = http_servers;
     http_servers = state;
-    // In force before the reactor can accept: this call precedes the first yield.
-    if (!http_server_push_limits(state)) {
-        mal_http_server_close(native, http_native_close_complete, state);
-        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-                           "Failed to configure the HTTP server limits");
-        return mal_value_new_undefined();
-    }
     http_server_install_limit_accessors(vm, receiver);
 
     if (!mal_value_is_undefined(callback)
         && !http_once(vm, receiver, "listening", callback)) {
-        mal_http_server_close(native, http_native_close_complete, state);
+        http_server_remove_start(state);
         return mal_value_new_undefined();
     }
+    if (state->closing) return receiver;
+    struct sockaddr_storage address;
+    socklen_t length;
+    if (mal_net_parse_ip(host, state->port, &address, &length)) {
+        (void) http_server_bind(vm, state, host);
+    } else {
+        state->pending_lookup = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, "lookupAndListen"), http_server_lookup_done, &receiver, 1));
+        MalValue lookup_args[] = {args[1], state->pending_lookup};
+        (void) mal_node_dns_lookup(vm, lookup_args, 2);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) http_server_remove_start(state);
+    }
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
     return receiver;
 }
 
@@ -5691,7 +5817,7 @@ static MalValue http_server_address(
     roots[1] = mal_value_from_string(mal_intrinsic_ascii(
         vm, (const byte *) state->host));
     roots[2] = mal_value_from_string(mal_intrinsic_ascii(
-        vm, (const byte *) "IPv4"));
+        vm, (const byte *) (strchr(state->host, ':') == nullptr ? "IPv4" : "IPv6")));
     mal_intrinsic_define_data(vm, object, (const byte *) "address", roots[1], HTTP_VISIBLE);
     mal_intrinsic_define_data(vm, object, (const byte *) "family", roots[2], HTTP_VISIBLE);
     mal_intrinsic_define_data(vm, object, (const byte *) "port",
@@ -5701,13 +5827,33 @@ static MalValue http_server_address(
     return result;
 }
 
+static MalValue http_server_pending_close_callback(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target;
+    MalValue roots[] = {
+        mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Server is not running.",
+        "ERR_SERVER_NOT_RUNNING");
+    roots[1] = vm->completion.value;
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL,
+        .value = mal_value_new_undefined()};
+    MalCompletion result = mal_vm_call_value(vm, roots[0], receiver, &roots[1], 1);
+    mal_gc_unroot(&root);
+    return result.value;
+}
+
 static MalValue http_server_close(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
     MalNodeHttpServerState *state = http_server_state(receiver);
-    if (state == nullptr || state->native == nullptr || state->closing) {
+    if (state == nullptr || state->closing) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
                            "Server is not running");
         return mal_value_new_undefined();
@@ -5718,15 +5864,25 @@ static MalValue http_server_close(
                                "The callback argument must be a function");
             return mal_value_new_undefined();
         }
+        MalValue callback = args[0];
+        if (state->native == nullptr) {
+            callback = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+                &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, "closeCallback"), http_server_pending_close_callback, &callback, 1));
+        }
         MalValue bound = mal_async_context_bind_callback(
-            vm, args[0], mal_async_context_capture(vm));
+            vm, callback, mal_async_context_capture(vm));
         if (vm->completion.kind == MAL_COMPLETION_THROW
             || !http_once(vm, receiver, "close", bound)) {
             return mal_value_new_undefined();
         }
     }
     state->closing = true;
-    mal_http_server_close(state->native, http_native_close_complete, state);
+    state->listening_pending = false;
+    mal_gc_write_barrier(state->pending_lookup);
+    state->pending_lookup = mal_value_new_undefined();
+    if (state->native == nullptr) state->close_ready = true;
+    else mal_http_server_close(state->native, http_native_close_complete, state);
     return receiver;
 }
 
