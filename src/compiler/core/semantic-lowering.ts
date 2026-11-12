@@ -15506,6 +15506,7 @@ function emitSourceCall(
 	instruction: CompilerInstruction,
 ): void {
 	const sourceCall = program.sourceOrigins?.call(fn.semanticFile, node);
+	emitSourcePos(program, cursor.block, node);
 	cursor.block.emitter.emit(
 		sourceCall === undefined ? instruction : { ...instruction, sourceCall },
 	);

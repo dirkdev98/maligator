@@ -138,6 +138,31 @@ check(
 	first.getScriptNameOrSourceURL() === first.getFileName(),
 );
 
+function capturePosition() {
+	const value = {};
+	Error.captureStackTrace(value, capturePosition);
+	return value.stack[0];
+}
+const firstArrow = () => capturePosition();
+const secondArrow = () => capturePosition();
+check(
+	"expression-bodied arrows preserve distinct call locations",
+	firstArrow().getLineNumber() < secondArrow().getLineNumber(),
+);
+function captureArgument(inner) {
+	const value = {};
+	Error.captureStackTrace(value, captureArgument);
+	return [value.stack[0], inner];
+}
+const nestedPosition = () => captureArgument(capturePosition());
+const nestedSites = nestedPosition();
+check(
+	"outer calls restore their position after evaluating arguments",
+	nestedSites[0].getLineNumber() < nestedSites[1].getLineNumber() ||
+		(nestedSites[0].getLineNumber() === nestedSites[1].getLineNumber() &&
+			nestedSites[0].getColumnNumber() < nestedSites[1].getColumnNumber()),
+);
+
 Error.stackTraceLimit = 2;
 Error.prepareStackTrace = function limitPrepare(_target, callsites) {
 	return callsites.length;
