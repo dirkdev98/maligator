@@ -89,6 +89,13 @@ describeResult(
 	}),
 );
 describeResult("cwd", spawnSync("pwd", { cwd: "/", encoding: "utf8" }));
+describeResult(
+	"file URL cwd",
+	spawnSync("pwd", {
+		cwd: new URL("file://localhost/?ignored#fragment"),
+		encoding: "utf8",
+	}),
+);
 describeResult("signal", spawnSync("/bin/sh", ["-c", "kill -USR1 $$"]));
 describeResult("missing", spawnSync("maligator-missing-executable", ["arg"]));
 describeResult("timeout", spawnSync("sleep", ["5"], { timeout: 50, encoding: "utf8" }));

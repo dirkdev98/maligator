@@ -80,6 +80,27 @@ const cwdOut = execFileSync("node", ["-e", "process.stdout.write(process.cwd())"
 	cwd: "/",
 });
 check("uses cwd", cwdOut === "/");
+check(
+	"uses file URL cwd and ignores its query and fragment",
+	execFileSync("node", ["-e", "process.stdout.write(process.cwd())"], {
+		...encoding,
+		cwd: new URL("file://localhost/?ignored#fragment"),
+	}) === "/",
+);
+check(
+	"rejects a non-file URL cwd",
+	errorFrom(() => execFileSync("node", [], { cwd: new URL("https://example.test/") }))
+		.code === "ERR_INVALID_URL_SCHEME",
+);
+check(
+	"rejects encoded separators in file URL cwd",
+	errorFrom(() => execFileSync("node", [], { cwd: new URL("file:///%2F") })).code ===
+		"ERR_INVALID_FILE_URL_PATH",
+);
+check(
+	"rejects decoded NUL in file URL cwd",
+	throws(() => execFileSync("node", [], { cwd: new URL("file:///%00") })),
+);
 
 const nonzero = errorFrom(() =>
 	execFileSync(

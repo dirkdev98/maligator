@@ -23,6 +23,7 @@
 #include "microtask.h"
 #include "node_events.h"
 #include "node_stream.h"
+#include "node_url.h"
 #include "host.h"
 #include "promise_object.h"
 #include "reactor.h"
@@ -422,9 +423,22 @@ static MalValue mal_node_process_command(MalVm *vm, const MalValue *args, i32 ar
         goto cleanup;
     }
     if (!mal_value_is_nil(tmp)) {
-        cwd_c = mal_ncp_to_cstr(vm, tmp, "cwd");
-        if (cwd_c == NULL) {
-            goto cleanup;
+        if (mal_value_is_url_object(tmp)) {
+            char *path;
+            usize length;
+            if (!mal_node_file_url_to_path_bytes(vm, tmp, false, &path, &length)) {
+                goto cleanup;
+            }
+            cwd_c = (byte *) path;
+            if (memchr(cwd_c, 0, length) != NULL) {
+                mal_ncp_throw_nul(vm, "cwd");
+                goto cleanup;
+            }
+        } else {
+            cwd_c = mal_ncp_to_cstr(vm, tmp, "cwd");
+            if (cwd_c == NULL) {
+                goto cleanup;
+            }
         }
     }
 

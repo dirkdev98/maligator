@@ -73,6 +73,14 @@ env.stdout.on("data", (chunk) => (envOut += chunk));
 await run("env", env);
 console.log("env", JSON.stringify(envOut));
 
+const urlCwd = spawn("pwd", {
+	cwd: new URL("file://localhost/?ignored#fragment"),
+});
+let urlCwdOut = "";
+urlCwd.stdout.on("data", (chunk) => (urlCwdOut += chunk));
+await run("file URL cwd", urlCwd);
+console.log("file URL cwd stdout", JSON.stringify(urlCwdOut));
+
 const sleeper = spawn("sleep", ["10"], { stdio: "ignore" });
 await new Promise((resolve) => sleeper.on("spawn", resolve));
 console.log("kill", sleeper.kill("SIGTERM"), sleeper.killed);
