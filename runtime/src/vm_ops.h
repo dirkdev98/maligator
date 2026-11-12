@@ -3440,6 +3440,24 @@ static inline bool mal_vm_array_try_define_index(MalArrayObject *arr, f64 index,
     return true;
 }
 
+/**
+ * `new Array(length)` of %Array% with the running realm's %Array% as new.target, for an
+ * int32 length: ArrayCreate under that realm's %Array.prototype%, which %Array%'s
+ * non-writable, non-configurable `prototype` guarantees. False keeps the construct call.
+ */
+static inline __attribute__((always_inline)) bool mal_vm_array_construct_length_try(
+    MalVm *vm, MalValue new_target, MalValue length, MalValue *out
+) {
+    u32 count;
+    if (new_target != vm->intrinsics[MAL_INTRINSIC_ARRAY_CONSTRUCTOR] ||
+        !mal_vm_int32_index(length, &count)) {
+        return false;
+    }
+    *out = mal_value_from_array_object(mal_array_object_new_with_length(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), count));
+    return true;
+}
+
 /** Reserve the final capacity of a compiler-proven pristine indexed-fill Array. */
 bool mal_vm_try_fresh_dense_indexed_fill_reserve(MalVm *vm, MalValue array_value, u32 needed);
 

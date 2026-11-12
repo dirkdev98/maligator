@@ -370,6 +370,51 @@ MalArrayObject *mal_array_object_new_reserved(
     MalHeap *heap, MalObject *prototype, u32 capacity
 );
 MalArrayObject *mal_array_object_try_new(MalHeap *heap, MalObject *prototype);
+MalArrayObject *mal_array_object_new_with_length_slow(
+    MalHeap *heap, MalObject *prototype, u32 length
+);
+
+/**
+ * ArrayCreate(length) before any element exists. A bounded length is nearly always
+ * filled next, so its elements are reserved at birth; a length that fits the cell
+ * takes them there without a call, as an array literal does.
+ */
+static inline __attribute__((always_inline)) MalArrayObject *mal_array_object_new_with_length(
+    MalHeap *heap, MalObject *prototype, u32 length
+) {
+#if MAL_PERF_STATS
+    return mal_array_object_new_with_length_slow(heap, prototype, length);
+#else
+    u32 inline_capacity = length <= 4 ? 4 : (length + 1) & ~1u;
+    MalHeapHeader *cell = length > MAL_ARRAY_INLINE_CAPACITY_MAX ? nullptr
+        : mal_heap_cell_take(
+            heap, sizeof(MalArrayObject) + sizeof(MalValue) * inline_capacity,
+            MAL_HEAP_ARRAY_OBJECT);
+    if (__builtin_expect(cell == nullptr, 0)) {
+        return mal_array_object_new_with_length_slow(heap, prototype, length);
+    }
+    MalArrayObject *array = (MalArrayObject *) cell;
+    MalHeapHeader header = array->object.header;
+    array->object = (MalObject) {
+        .header = header,
+        .extensible = true,
+        .storage_kind = MAL_OBJECT_EMBEDDED,
+        .shape = mal_shape_root(heap),
+    };
+    array->object_storage = (MalObjectStorage) {.prototype = prototype};
+    mal_object_mark_as_prototype(prototype);
+    array->length = length;
+    array->length_writable = true;
+    array->dense_elements_writable = true;
+    array->dense_elements_configurable = true;
+    array->inline_capacity = inline_capacity;
+    if (length != 0) {
+        array->elements = mal_array_object_inline_elements(array);
+        array->capacity = inline_capacity;
+    }
+    return array;
+#endif
+}
 
 static inline u32 mal_array_object_length(const MalArrayObject *array) {
     return array->length;

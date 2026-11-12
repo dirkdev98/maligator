@@ -646,6 +646,20 @@ MalArrayObject *mal_array_object_new_reserved(
     return array;
 }
 
+/** 512 KiB of elements: what a sparse `new Array(n)` may hold before its first store. */
+#define MAL_ARRAY_CREATE_RESERVE_MAX 65536u
+
+MalArrayObject *mal_array_object_new_with_length_slow(
+    MalHeap *heap, MalObject *prototype, u32 length
+) {
+    // Longer arrays are often sparse and grow on demand.
+    MalArrayObject *array = length <= MAL_ARRAY_CREATE_RESERVE_MAX
+        ? mal_array_object_new_reserved(heap, prototype, length)
+        : mal_array_object_new(heap, prototype);
+    mal_array_object_set_length(array, length);
+    return array;
+}
+
 MalArrayObject *mal_array_object_try_new(MalHeap *heap, MalObject *prototype) {
     u32 inline_capacity = mal_array_object_inline_capacity_for(0);
     MalArrayObject *array = mal_heap_try_alloc(

@@ -12469,6 +12469,22 @@ class NativeInstructionEmission {
 					];
 				}
 			}
+			if (
+				instruction.operation === "Array" &&
+				instruction.construct &&
+				instruction.argumentMode === undefined &&
+				args.length === 1
+			) {
+				const result = `array_create_${this.ip}`;
+				return [
+					`MalValue ${result};`,
+					`if (mal_vm_array_construct_length_try(vm, ${this.boxedOperand(instruction.thisValue)}, ${args[0]}, &${result})) {`,
+					`  r${instruction.dst} = ${this.callValue(instruction.dst, result)};`,
+					`} else {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			const uri = URI_KERNELS[instruction.operation];
 			if (
 				uri !== undefined &&

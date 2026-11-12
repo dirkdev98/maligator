@@ -810,9 +810,6 @@ static bool mal_builtin_array_create_data_property_wide(MalVm *vm, MalValue targ
 static bool mal_builtin_array_create_data_property(MalVm *vm, MalValue target, u32 index, MalValue value);
 static bool mal_builtin_array_from_set_length(MalVm *vm, MalValue a, u32 length);
 
-/** 512 KiB of elements: what a sparse `new Array(n)` may hold before its first store. */
-#define MAL_ARRAY_CREATE_RESERVE_MAX 65536u
-
 static MalValue mal_builtin_array_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     // A single Number argument is the new array's length: ToUint32(len) must
@@ -824,14 +821,9 @@ static MalValue mal_builtin_array_constructor(MalVm *vm, MalValue this_value, co
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid array length");
             return mal_value_new_undefined();
         }
-        // ArrayCreate(len) is nearly always filled next, so a bounded length gets
-        // its elements at birth. Longer arrays are often sparse and grow on demand.
-        MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]);
-        MalArrayObject *array = length <= MAL_ARRAY_CREATE_RESERVE_MAX
-            ? mal_array_object_new_reserved(&vm->heap, prototype, length)
-            : mal_array_object_new(&vm->heap, prototype);
-        mal_array_object_set_length(array, length);
-        return mal_value_from_array_object(array);
+        return mal_value_from_array_object(mal_array_object_new_with_length(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]),
+            length));
     }
 
     MalArrayObject *array = mal_intrinsic_new_dense_array(vm, (u32) arg_count);
