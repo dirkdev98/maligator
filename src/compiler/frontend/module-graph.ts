@@ -1598,11 +1598,7 @@ function resolveSpecifier(
 
 	const importerDir = path.dirname(importerPath);
 	try {
-		if (
-			specifier.startsWith("./") ||
-			specifier.startsWith("../") ||
-			path.isAbsolute(specifier)
-		) {
+		if (isRelativeSpecifier(specifier) || path.isAbsolute(specifier)) {
 			const base = path.isAbsolute(specifier)
 				? specifier
 				: path.resolve(importerDir, specifier);
@@ -1640,16 +1636,14 @@ function probePath(target: string, ctx: ResolveContext): string | null {
 	return null;
 }
 
-/**
- * Resolve a directory to its entry file: `exports["."]`, then `main`, then an
- * index file.
- */
+/** ESM directory imports use exports; relative CommonJS directories follow main and index. */
 function loadAsDirectory(dir: string, ctx: ResolveContext): string | null {
 	const pkg = readPackageJson(path.join(dir, "package.json"), ctx);
-
-	if (pkg?.exports !== undefined && pkg.exports !== null) {
-		// The presence of `exports` encapsulates the package. A missing or invalid
-		// root target must not fall through to legacy `main`/index resolution.
+	if (
+		pkg?.exports !== undefined &&
+		pkg.exports !== null &&
+		!ctx.conditions.has("require")
+	) {
 		const resolved = resolveExports(pkg.exports, ".", dir, ctx);
 		return resolved !== null && isFile(resolved, ctx) ? resolved : null;
 	}

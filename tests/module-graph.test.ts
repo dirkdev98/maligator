@@ -15,6 +15,26 @@ import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/s
 /** A resolved config with the node host surface enabled. */
 const nodeOn = resolveBuildConfig({ surface: { node: true } });
 
+test.each([".", ".."])(
+	"resolves require(%s) as a relative directory without package export restrictions",
+	(specifier) => {
+		write(
+			"relative-directory/package.json",
+			'{"main":"./index.cjs","exports":{"./public":"./public.cjs"}}',
+		);
+		write("relative-directory/index.cjs", "module.exports = 42;");
+		const file =
+			specifier === "."
+				? "relative-directory/current.cjs"
+				: "relative-directory/nested/parent.cjs";
+		write(file, `module.exports = require(${JSON.stringify(specifier)});`);
+		const graph = buildModuleGraph(path.join(root, file), { buildConfig: nodeOn });
+		expect(graph.modules.get(graph.entry)?.dependencies[0]?.resolvedPath).toBe(
+			path.join(root, "relative-directory/index.cjs"),
+		);
+	},
+);
+
 let root: string;
 
 function write(relativePath: string, contents: string) {
