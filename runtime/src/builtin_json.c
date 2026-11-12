@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -2167,6 +2168,53 @@ static void mal_json_parse_error(MalJsonParser *parser) {
     mal_vm_throw_error(parser->vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Unexpected token in JSON");
 }
 
+typedef enum MalJsonDiagnostic {
+    MAL_JSON_DIAGNOSTIC_END,
+    MAL_JSON_DIAGNOSTIC_FIRST_KEY,
+    MAL_JSON_DIAGNOSTIC_KEY,
+    MAL_JSON_DIAGNOSTIC_STRING,
+    MAL_JSON_DIAGNOSTIC_TRAILING,
+} MalJsonDiagnostic;
+
+static void mal_json_parse_diagnostic(MalJsonParser *parser, MalJsonDiagnostic kind) {
+    const byte *message;
+    switch (kind) {
+        case MAL_JSON_DIAGNOSTIC_END:
+            mal_vm_throw_error(parser->vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
+                "Unexpected end of JSON input");
+            return;
+        case MAL_JSON_DIAGNOSTIC_FIRST_KEY:
+            message = "Expected property name or '}' in JSON";
+            break;
+        case MAL_JSON_DIAGNOSTIC_KEY:
+            message = "Expected double-quoted property name in JSON";
+            break;
+        case MAL_JSON_DIAGNOSTIC_STRING:
+            message = "Unterminated string in JSON";
+            break;
+        case MAL_JSON_DIAGNOSTIC_TRAILING:
+            message = "Unexpected non-whitespace character after JSON";
+            break;
+    }
+    usize line = 1;
+    usize column = 1;
+    bool carriage_return = false;
+    for (usize i = 0; i < parser->position; i++) {
+        c16 unit = mal_json_parser_unit(parser, i);
+        if (unit == '\r' || (unit == '\n' && !carriage_return)) {
+            line++;
+            column = 1;
+        } else if (unit != '\n') {
+            column++;
+        }
+        carriage_return = unit == '\r';
+    }
+    byte formatted[192];
+    snprintf(formatted, sizeof(formatted), "%s at position %zu (line %zu column %zu)",
+        message, parser->position, line, column);
+    mal_vm_throw_error(parser->vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, formatted);
+}
+
 static void mal_json_skip_whitespace(MalJsonParser *parser) {
     while (parser->position < parser->length) {
         c16 code_unit = mal_json_parser_unit(parser, parser->position);
@@ -2255,7 +2303,9 @@ static MalValue mal_json_parse_string(MalJsonParser *parser) {
         }
 
         if (parser->position >= parser->length) {
-            break;
+            mal_text_buffer_dispose(&builder.buffer);
+            mal_json_parse_diagnostic(parser, MAL_JSON_DIAGNOSTIC_END);
+            return mal_value_new_undefined();
         }
 
         c16 escape = mal_json_parser_unit(parser, parser->position++);
@@ -2314,7 +2364,7 @@ static MalValue mal_json_parse_string(MalJsonParser *parser) {
     }
 
     mal_text_buffer_dispose(&builder.buffer);
-    mal_json_parse_error(parser);
+    mal_json_parse_diagnostic(parser, MAL_JSON_DIAGNOSTIC_STRING);
     return mal_value_new_undefined();
 
 length_error:
@@ -2810,7 +2860,8 @@ static MalValue mal_json_parse_object_staged(
     while (true) {
         mal_json_skip_whitespace(parser);
         if (!mal_json_consume(parser, '"')) {
-            mal_json_parse_error(parser);
+            mal_json_parse_diagnostic(parser, members.count == 0
+                ? MAL_JSON_DIAGNOSTIC_FIRST_KEY : MAL_JSON_DIAGNOSTIC_KEY);
             goto fail;
         }
 
@@ -2878,7 +2929,8 @@ static MalValue mal_json_parse_object(
     while (true) {
         mal_json_skip_whitespace(parser);
         if (!mal_json_consume(parser, '"')) {
-            mal_json_parse_error(parser);
+            mal_json_parse_diagnostic(parser, node->child_count == 0
+                ? MAL_JSON_DIAGNOSTIC_FIRST_KEY : MAL_JSON_DIAGNOSTIC_KEY);
             mal_gc_unroot(&object_span);
             return mal_value_new_undefined();
         }
@@ -2963,7 +3015,10 @@ static MalValue mal_json_parse_heap(
 
 read_value:
     mal_json_skip_whitespace(parser);
-    if (parser->position >= parser->length) goto syntax_error;
+    if (parser->position >= parser->length) {
+        mal_json_parse_diagnostic(parser, MAL_JSON_DIAGNOSTIC_END);
+        goto fail;
+    }
     c16 unit = mal_json_parser_unit(parser, parser->position);
     if (unit != '[' && unit != '{') {
         value = mal_json_parse_value(parser, &node);
@@ -2990,7 +3045,11 @@ read_value:
 
 read_key:
     mal_json_skip_whitespace(parser);
-    if (!mal_json_consume(parser, '"')) goto syntax_error;
+    if (!mal_json_consume(parser, '"')) {
+        mal_json_parse_diagnostic(parser, frame->index == 0
+            ? MAL_JSON_DIAGNOSTIC_FIRST_KEY : MAL_JSON_DIAGNOSTIC_KEY);
+        goto fail;
+    }
     frame->roots[1] = mal_json_parse_string(parser);
     if (parser->vm->completion.kind == MAL_COMPLETION_THROW) goto fail;
     mal_json_skip_whitespace(parser);
@@ -3015,6 +3074,7 @@ complete_value:
         MalPropertyDesc desc = mal_intrinsic_data_desc(value,
             MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
         mal_object_define_own(mal_value_to_object(frame->roots[0]), key, &desc);
+        frame->index++;
     }
     mal_json_parse_node_append(parser, frame->node, key, node);
     node = nullptr;
@@ -3056,7 +3116,7 @@ static MalValue mal_json_parse_value(
     mal_json_skip_whitespace(parser);
     usize source_start = parser->position;
     if (parser->position >= parser->length) {
-        mal_json_parse_error(parser);
+        mal_json_parse_diagnostic(parser, MAL_JSON_DIAGNOSTIC_END);
         return mal_value_new_undefined();
     }
 
@@ -3527,7 +3587,7 @@ static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const Mal
 
     mal_json_skip_whitespace(&parser);
     if (parser.position != parser.length) {
-        mal_json_parse_error(&parser);
+        mal_json_parse_diagnostic(&parser, MAL_JSON_DIAGNOSTIC_TRAILING);
         mal_json_parse_node_dispose(root_node);
         if (track_source) {
             mal_rooted_value_list_dispose(&parse_state.roots);

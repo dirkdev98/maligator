@@ -114,6 +114,55 @@ for (const invalid of [
 }
 check(malformedCalls === 0, "malformed deep input never enters the reviver");
 
+const diagnosticCases = [
+	["{     ", "Expected property name or '}' in JSON at position 6 (line 1 column 7)"],
+	["[     ", "Unexpected end of JSON input"],
+	['"     ', "Unterminated string in JSON at position 6 (line 1 column 7)"],
+	[
+		"[1,2,3]?",
+		"Unexpected non-whitespace character after JSON at position 7 (line 1 column 8)",
+	],
+	[' "Invalid', "Unterminated string in JSON at position 9 (line 1 column 10)"],
+	['"😀', "Unterminated string in JSON at position 3 (line 1 column 4)"],
+	['"\\', "Unexpected end of JSON input"],
+	[
+		'{"a":1,}',
+		"Expected double-quoted property name in JSON at position 7 (line 1 column 8)",
+	],
+	["{\nbad", "Expected property name or '}' in JSON at position 2 (line 2 column 1)"],
+	["{\rbad", "Expected property name or '}' in JSON at position 2 (line 2 column 1)"],
+	["{\r\nbad", "Expected property name or '}' in JSON at position 3 (line 2 column 1)"],
+	[
+		"[".repeat(32) + "{",
+		"Expected property name or '}' in JSON at position 33 (line 1 column 34)",
+	],
+	[
+		"[".repeat(32) + '{"a":0,',
+		"Expected double-quoted property name in JSON at position 39 (line 1 column 40)",
+	],
+	["[".repeat(32), "Unexpected end of JSON input"],
+	[
+		" ".repeat(256) + '"😀',
+		"Unterminated string in JSON at position 259 (line 1 column 260)",
+	],
+];
+for (const [text, expected] of diagnosticCases) {
+	for (const source of [text, makeRope(text, 31, "right")]) {
+		for (const reviver of [undefined, (key, value) => value]) {
+			let caught;
+			try {
+				JSON.parse(source, reviver);
+			} catch (error) {
+				caught = error;
+			}
+			check(
+				caught instanceof SyntaxError && caught.message === expected,
+				"JSON parse diagnostic: " + expected,
+			);
+		}
+	}
+}
+
 function wrapDeep(value) {
 	for (let i = 0; i < 64; i++) value = [value];
 	return value;
