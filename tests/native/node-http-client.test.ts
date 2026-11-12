@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import type { Server, Socket } from "node:net";
 import { createServer } from "node:net";
 import * as os from "node:os";
@@ -105,6 +106,7 @@ describe("node:http outbound client", () => {
 	let earlyCloseBinaries: Array<string>;
 	let reusedCloseBinary: string;
 	let failuresBinary: string;
+	let addressBinaries: Array<string>;
 
 	beforeAll(() => {
 		binaries = [true, false].map((compiled) =>
@@ -133,6 +135,51 @@ describe("node:http outbound client", () => {
 			"node-http-client-failures",
 			true,
 		);
+		addressBinaries = [true, false].map((compiled) =>
+			buildClient(
+				"tests/local/node-http-client-addresses.cjs",
+				`node-http-client-addresses-${compiled ? "compiled" : "interpreted"}`,
+				compiled,
+			),
+		);
+	});
+
+	it("connects through localhost to IPv4-only and IPv6-only peers without losing upload bytes", async () => {
+		for (const host of ["127.0.0.1", "::1"]) {
+			const received: Array<string> = [];
+			const server = createHttpServer((request, response) => {
+				let body = "";
+				request.setEncoding("utf8");
+				request.on("data", (chunk: string) => {
+					body += chunk;
+				});
+				request.on("end", () => {
+					received.push(`${request.method} ${request.url} ${body}`);
+					response.end(body);
+				});
+			});
+			await new Promise<void>((resolve, reject) => {
+				server.once("error", reject);
+				server.listen({ port: 0, host, ipv6Only: true }, resolve);
+			});
+			const address = server.address();
+			if (address === null || typeof address === "string")
+				throw new Error("missing address");
+			try {
+				for (const binary of addressBinaries) {
+					expect(
+						await runClient(binary, { MAL_HTTP_ADDRESS_PORT: String(address.port) }),
+					).toContain("HTTP ADDRESS FALLBACK PASS");
+				}
+				expect(received).toEqual(
+					addressBinaries.map(() => "POST /hostname through-hostname"),
+				);
+			} finally {
+				await new Promise<void>((resolve) => {
+					server.close(() => resolve());
+				});
+			}
+		}
 	});
 
 	it("streams requests and responses in compiled and interpreted modes", () => {

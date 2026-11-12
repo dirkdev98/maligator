@@ -46,6 +46,8 @@ typedef struct MalHttpClient {
     MalHostHandle operation;
     int fd;
     MalHttpClientDns *resolution;
+    MalDnsResult *connect_addresses;
+    usize next_address;
     bool tls_read_retry;
     const char *tls_error;
     MalTlsClient *tls;
@@ -266,6 +268,7 @@ static void client_destroy(MalHttpClient *client) {
         mal_dns_cancel(client->host, client->resolution->operation);
     }
     if (client->fd >= 0) mal_net_close(client->fd);
+    mal_dns_result_release(client->connect_addresses);
 #if MAL_NODE
     mal_tls_client_free(&client->tls);
 #endif
@@ -368,6 +371,21 @@ static bool client_connect(
     client->fd = mal_net_connect_address(address, length);
     client->connect_error = client->fd < 0 ? errno : 0;
     return client->fd >= 0;
+}
+
+static bool client_connect_next(MalHttpClient *client) {
+    (void) mal_reactor_cancel_op(&client->host->reactor, &client->read_op);
+    (void) mal_reactor_cancel_op(&client->host->reactor, &client->write_op);
+    if (client->fd >= 0) mal_net_close(client->fd);
+    client->fd = -1;
+    while (client->connect_addresses != nullptr
+        && client->next_address < mal_dns_result_address_count(client->connect_addresses)) {
+        socklen_t length;
+        const struct sockaddr *address = mal_dns_result_address(
+            client->connect_addresses, client->next_address++, &length);
+        if (client_connect(client, address, length)) return true;
+    }
+    return false;
 }
 
 /*
@@ -788,9 +806,14 @@ static void client_write_ready(void *data) {
     if (client->connecting) {
         int error = mal_net_socket_error(client->fd);
         if (error != 0) {
-            client_fail_connect(client, error);
+            client->connect_error = error;
+            if (client_connect_next(client)) {
+                if (!client_arm_write(client)) client_fail(client, "Failed to wait for HTTP connection");
+            } else client_fail_connect(client, client->connect_error);
             return;
         }
+        mal_dns_result_release(client->connect_addresses);
+        client->connect_addresses = nullptr;
         client->connecting = false;
         client_arm_timeout(client);
         if (!client_arm_read(client)) {
@@ -1033,20 +1056,8 @@ bool mal_http_client_drain_dns(MalHost *host) {
             || result == nullptr) {
             client_fail_resolution(client, mal_dns_result_error(result));
         } else {
-            // IPv4 first: one attempt per request cannot fall back from a refused ::1
-            // to a 127.0.0.1 listener the way Node's interleaved attempts do.
-            static const int families[] = {AF_INET, AF_INET6};
-            for (usize f = 0; f < countof(families) && client->fd < 0; f++) {
-                for (usize i = 0; i < mal_dns_result_address_count(result); i++) {
-                    socklen_t length;
-                    const struct sockaddr *address = mal_dns_result_address(result, i, &length);
-                    if (address->sa_family == families[f]
-                        && client_connect(client, address, length)) {
-                        break;
-                    }
-                }
-            }
-            if (client->fd < 0) client_fail_connect(client, client->connect_error);
+            client->connect_addresses = mal_host_task_take_data(&host->tasks, &task);
+            if (!client_connect_next(client)) client_fail_connect(client, client->connect_error);
             else if (!client_arm_write(client)) client_fail(client, "Failed to wait for HTTP connection");
         }
     }
