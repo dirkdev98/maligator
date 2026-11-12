@@ -259,9 +259,70 @@ static MalValue mal_ops_string_to_number(MalValue value) {
     return mal_ops_string_range_to_number(string, 0, string->length);
 }
 
+/** Write an int32's decimal digits ending at `end`, two per division, and return the start. */
+static inline byte *mal_ops_int32_digits(i32 integer, byte *end) {
+    static const char pairs[] =
+        "00010203040506070809101112131415161718192021222324252627282930313233343536373839"
+        "40414243444546474849505152535455565758596061626364656667686970717273747576777879"
+        "8081828384858687888990919293949596979899";
+    byte *cursor = end;
+    u32 magnitude = integer < 0 ? (u32) -(i64) integer : (u32) integer;
+    while (magnitude >= 100) {
+        u32 pair = magnitude % 100;
+        magnitude /= 100;
+        cursor -= 2;
+        cursor[0] = (byte) pairs[pair * 2];
+        cursor[1] = (byte) pairs[pair * 2 + 1];
+    }
+    if (magnitude >= 10) {
+        cursor -= 2;
+        cursor[0] = (byte) pairs[magnitude * 2];
+        cursor[1] = (byte) pairs[magnitude * 2 + 1];
+    } else {
+        *--cursor = (byte) ('0' + magnitude);
+    }
+    if (integer < 0) *--cursor = '-';
+    return cursor;
+}
+
 MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
     if (mal_value_is_string(value)) {
         return mal_value_to_string(value);
+    }
+
+    if (mal_value_is_int32(value)) {
+        i32 integer = mal_value_to_i32(value);
+        MalVm *owner = nullptr;
+        if ((u32) integer < MAL_SMALL_UINT_STRING_CACHE_CAPACITY) {
+            owner = mal_vm_from_heap(heap);
+            if (owner->small_uint_string_cache == nullptr) {
+                owner->small_uint_string_cache = calloc(
+                    MAL_SMALL_UINT_STRING_CACHE_CAPACITY,
+                    sizeof(*owner->small_uint_string_cache));
+                if (owner->small_uint_string_cache == nullptr) abort();
+            }
+            MalString *cached = owner->small_uint_string_cache[integer];
+            if (cached != nullptr) {
+                MAL_PERF_COUNT(string_small_uint_cache_hits);
+                return cached;
+            }
+            MAL_PERF_COUNT(string_small_uint_cache_misses);
+        }
+        byte buffer[11];
+        byte *end = buffer + sizeof(buffer);
+        byte *cursor = mal_ops_int32_digits(integer, end);
+        // Digits fit an inline string; hashing them into the tiny-string cache costs
+        // more than the cell it might share.
+        MalString *string =
+            mal_string_new_inline_latin1(heap, cursor, (usize) (end - cursor));
+        if (owner != nullptr) {
+            owner->small_uint_string_cache[integer] = string;
+            u16 scan_limit = (u16) integer + 1;
+            if (scan_limit > owner->small_uint_string_cache_scan_limit) {
+                owner->small_uint_string_cache_scan_limit = scan_limit;
+            }
+        }
+        return string;
     }
 
     if (mal_value_is_undefined(value)) {
@@ -293,48 +354,6 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
         return mal_ops_string_from_ascii(heap, "0");
     }
 
-    if (mal_value_is_int32(value)) {
-        i32 integer = mal_value_to_i32(value);
-        MalVm *owner = nullptr;
-        if ((u32) integer < MAL_SMALL_UINT_STRING_CACHE_CAPACITY) {
-            owner = mal_vm_from_heap(heap);
-            if (owner->small_uint_string_cache == nullptr) {
-                owner->small_uint_string_cache = calloc(
-                    MAL_SMALL_UINT_STRING_CACHE_CAPACITY,
-                    sizeof(*owner->small_uint_string_cache));
-                if (owner->small_uint_string_cache == nullptr) abort();
-            }
-            MalString *cached = owner->small_uint_string_cache[integer];
-            if (cached != nullptr) {
-                MAL_PERF_COUNT(string_small_uint_cache_hits);
-                return cached;
-            }
-            MAL_PERF_COUNT(string_small_uint_cache_misses);
-        }
-        byte buffer[11];
-        byte *end = buffer + sizeof(buffer);
-        byte *cursor = end;
-        u32 magnitude = integer < 0 ? (u32) -(i64) integer : (u32) integer;
-        do {
-            *--cursor = (byte) ('0' + magnitude % 10);
-            magnitude /= 10;
-        } while (magnitude != 0);
-        if (integer < 0) {
-            *--cursor = '-';
-        }
-        // Digits fit an inline string; hashing them into the tiny-string cache costs
-        // more than the cell it might share.
-        MalString *string =
-            mal_string_new_inline_latin1(heap, cursor, (usize) (end - cursor));
-        if (owner != nullptr) {
-            owner->small_uint_string_cache[integer] = string;
-            u16 scan_limit = (u16) integer + 1;
-            if (scan_limit > owner->small_uint_string_cache_scan_limit) {
-                owner->small_uint_string_cache_scan_limit = scan_limit;
-            }
-        }
-        return string;
-    }
 
     if (mal_value_is_bigint(value)) {
         return mal_bigint_to_string(heap, mal_value_to_bigint(value), 10);
@@ -417,13 +436,7 @@ bool mal_ops_add_string_int32(
     i32 integer = mal_value_to_i32(number_first ? left : right);
     byte digits[11];
     byte *end = digits + sizeof(digits);
-    byte *cursor = end;
-    u32 magnitude = integer < 0 ? (u32) -(i64) integer : (u32) integer;
-    do {
-        *--cursor = (byte) ('0' + magnitude % 10);
-        magnitude /= 10;
-    } while (magnitude != 0);
-    if (integer < 0) *--cursor = '-';
+    byte *cursor = mal_ops_int32_digits(integer, end);
     usize digit_count = (usize) (end - cursor);
     usize length = string->length + digit_count;
     MalStringSegment segment;
