@@ -11,6 +11,7 @@
 #include "vm.h"
 #include "vm_ops.h"
 #include "web_fetch.h"
+#include "web_events_object.h"
 #include "web_request_object.h"
 #include "web_response_object.h"
 #include "web_readable_stream_object.h"
@@ -121,6 +122,7 @@ int main(void) {
     usize before = mal_gc_process_bytes();
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
+    mal_events_install(&vm, mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]));
     mal_readable_stream_install(&vm, mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]));
     mal_fetch_install(&vm, mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]));
     bool ok = bodies_charge_and_release(&vm);
