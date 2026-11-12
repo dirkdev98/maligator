@@ -10232,10 +10232,13 @@ MalValue *mal_coroutine_alloc_registers(MalVm *vm, i32 slot_count) {
 }
 
 void mal_coroutine_clear_snapshot(MalValue *registers, i32 slot_count) {
-    for (i32 slot = 0; slot < slot_count; slot++) {
-        mal_gc_write_barrier(registers[slot]);
-        registers[slot] = MAL_VALUE_UNDEFINED;
+    // Every suspension and resume clears the whole snapshot; reading the isolate's
+    // marking flag once leaves a plain fill outside marking. Nothing between the two
+    // loops can reach a safepoint.
+    if (mal_gc_marking_active) {
+        for (i32 slot = 0; slot < slot_count; slot++) mal_gc_satb_record(registers[slot]);
     }
+    for (i32 slot = 0; slot < slot_count; slot++) registers[slot] = MAL_VALUE_UNDEFINED;
 }
 
 static MalValue *mal_compiled_coroutine_arguments(
