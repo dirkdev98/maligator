@@ -425,25 +425,30 @@ bool mal_ops_add_string_int32(
     } while (magnitude != 0);
     if (integer < 0) *--cursor = '-';
     usize digit_count = (usize) (end - cursor);
+    usize length = string->length + digit_count;
     MalStringSegment segment;
-    if (string->length + digit_count > MAL_STRING_INLINE_LATIN1_CODE_UNITS ||
+    if (length > MAL_STRING_CELL_LATIN1_CODE_UNITS ||
             !mal_string_try_get_segment(string, 0, string->length, &segment) ||
             !segment.latin1) {
         return false;
     }
-    u8 units[MAL_STRING_INLINE_LATIN1_CODE_UNITS];
-    u8 *write = units;
+    // Allocation runs no collection, so the segment stays valid while the cell is filled.
+    MalString *result = mal_string_new_latin1_cell(heap, length);
+    u8 *write = mal_string_inline_latin1(result);
     if (number_first) {
-        memcpy(write, cursor, digit_count);
+        for (usize i = 0; i < digit_count; i++) write[i] = cursor[i];
         write += digit_count;
     }
-    if (segment.length != 0) memcpy(write, segment.latin1_units, segment.length);
+    if (segment.length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
+        mal_string_copy_inline_latin1(write, segment.latin1_units, segment.length);
+    } else {
+        memcpy(write, segment.latin1_units, segment.length);
+    }
     write += segment.length;
     if (!number_first) {
-        memcpy(write, cursor, digit_count);
-        write += digit_count;
+        for (usize i = 0; i < digit_count; i++) write[i] = cursor[i];
     }
-    *out = mal_value_from_string(mal_string_new_inline_latin1(heap, units, (usize) (write - units)));
+    *out = mal_value_from_string(result);
     return true;
 }
 

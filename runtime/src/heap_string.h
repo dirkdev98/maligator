@@ -190,6 +190,12 @@ MalString *mal_string_new_latin1_copy(MalHeap *heap, const u8 *units, usize leng
  * It skips the tiny-string cache, whose hash costs more than a short-lived result saves.
  */
 MalString *mal_string_new_inline_latin1(MalHeap *heap, const u8 *units, usize length);
+/**
+ * A fresh flat Latin-1 string of at most `MAL_STRING_CELL_LATIN1_CODE_UNITS` units in
+ * its own cell, for a caller that writes every unit through mal_string_inline_latin1
+ * before it is read or hashed.
+ */
+MalString *mal_string_new_latin1_cell(MalHeap *heap, usize length);
 /** Takes ownership of a mal_heap_alloc_raw buffer. */
 MalString *mal_string_new_latin1_owned(MalHeap *heap, const u8 *units, usize length);
 /** Takes ownership of UTF-16 storage known to contain a unit above Latin-1. */

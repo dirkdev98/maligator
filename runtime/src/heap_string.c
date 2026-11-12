@@ -75,9 +75,13 @@ static MalString *mal_string_new_cell(MalHeap *heap, usize length, bool latin1) 
     if (length > (latin1 ? MAL_STRING_CELL_LATIN1_CODE_UNITS : MAL_STRING_CELL_CODE_UNITS)) {
         return nullptr;
     }
-    MalString *string = mal_heap_alloc(heap,
-        latin1 ? mal_string_inline_latin1_bytes(length) : mal_string_inline_utf16_bytes(length),
-        MAL_HEAP_STRING);
+    // A constant size lets the allocator fold the size class for the common short string.
+    MalString *string =
+        length <= (latin1 ? MAL_STRING_INLINE_LATIN1_CODE_UNITS : MAL_STRING_INLINE_CODE_UNITS)
+        ? mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING)
+        : mal_heap_alloc(heap,
+            latin1 ? mal_string_inline_latin1_bytes(length) : mal_string_inline_utf16_bytes(length),
+            MAL_HEAP_STRING);
     mal_string_init_flat(string, MAL_STRING_STORAGE_INLINE, latin1, length);
     MAL_PERF_COUNT(string_inline_allocations);
     MAL_PERF_ADD(string_inline_code_units, length);
@@ -1386,6 +1390,13 @@ MalString *mal_string_new_inline_latin1(MalHeap *heap, const u8 *units, usize le
     mal_perf_string_allocation(length);
     MAL_PERF_COUNT(string_inline_allocations);
     MAL_PERF_ADD(string_inline_code_units, length);
+    return string;
+}
+
+MalString *mal_string_new_latin1_cell(MalHeap *heap, usize length) {
+    MalString *string = mal_string_new_cell(heap, length, true);
+    if (string == nullptr) abort();
+    mal_perf_string_allocation(length);
     return string;
 }
 
