@@ -1360,7 +1360,12 @@ const SQLITE: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:sqlite"),
 };
 
-/** Supported `node:*` built-ins, keyed by canonical specifier. */
+/** Source built-ins keep ordinary ESM evaluation and remain gated by the Node surface. */
+export const SOURCE_HOST_MODULES: ReadonlyMap<string, string> = new Map([
+	["node:test", "testing/node-test.ts"],
+]);
+
+/** Native `node:*` built-ins, keyed by canonical specifier. */
 export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 	[
 		PATH,
@@ -1514,7 +1519,7 @@ export function canonicalNodeHostModuleId(specifier: string): string | undefined
 	if (!isNodeSpecifier(specifier) && NODE_PREFIX_ONLY_BUILTIN_IDS.has(id)) {
 		return undefined;
 	}
-	return HOST_MODULES.has(id) ? id : undefined;
+	return HOST_MODULES.has(id) || SOURCE_HOST_MODULES.has(id) ? id : undefined;
 }
 
 /** Canonical Node core identity, including built-ins not implemented by Maligator yet. */
@@ -1528,11 +1533,11 @@ export function canonicalNodeBuiltinId(specifier: string): string | undefined {
 
 /** Sorted list of supported specifiers, for clear "unknown module" diagnostics. */
 export function supportedHostModuleIds(): Array<string> {
-	return [...HOST_MODULES.keys()];
+	return [...HOST_MODULES.keys(), ...SOURCE_HOST_MODULES.keys()];
 }
 
 export function supportedNodeBuiltinNames(): Array<string> {
-	const names = [...HOST_MODULES.keys()]
+	const names = [...HOST_MODULES.keys(), ...SOURCE_HOST_MODULES.keys()]
 		.map((id) => (NODE_PREFIX_ONLY_BUILTIN_IDS.has(id) ? id : id.slice(5)))
 		.sort();
 	return [

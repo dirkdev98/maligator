@@ -91,7 +91,7 @@ export function productCliConfig(
 			platformSources: {
 				type: "directory",
 				path: path.resolve(repositoryRoot, "src"),
-				include: ["workers/**"],
+				include: ["workers/**", "testing/node-test.ts"],
 			},
 			license: { type: "file", path: path.resolve(repositoryRoot, "LICENSE") },
 			thirdPartyNotices: {

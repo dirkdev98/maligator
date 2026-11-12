@@ -15,6 +15,49 @@ import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/s
 /** A resolved config with the node host surface enabled. */
 const nodeOn = resolveBuildConfig({ surface: { node: true } });
 
+test.each([
+	["static-node-test.mjs", 'import { test } from "node:test"; globalThis.test = test;'],
+	["dynamic-node-test.mjs", 'globalThis.test = import("node:test");'],
+	["require-node-test.cjs", 'module.exports = require("node:test");'],
+	[
+		"create-require-node-test.mjs",
+		'import { createRequire } from "node:module"; const require = createRequire(import.meta.url); globalThis.test = require("node:test");',
+	],
+])("loads the effectful Node source builtin through %s", (file, source) => {
+	write(file, source);
+	const graph = buildModuleGraph(path.join(root, file), { buildConfig: nodeOn });
+	const builtin = graph.modules.get("node:test");
+	expect(builtin?.goal).toBe("module");
+	expect(builtin?.host).toBeUndefined();
+	expect(builtin?.platform).toBeUndefined();
+	expect(builtin?.sourcePath).toMatch(/testing\/node-test\.ts$/);
+	expect(() => buildModuleGraph(path.join(root, file))).toThrow(
+		"node built-in modules are disabled",
+	);
+});
+
+test("keeps the bare test package separate from the prefix-only builtin", () => {
+	write(
+		"bare-test-package/node_modules/test/package.json",
+		'{"name":"test","type":"module","exports":"./index.js"}',
+	);
+	write(
+		"bare-test-package/node_modules/test/index.js",
+		'export const value = "package";',
+	);
+	write(
+		"bare-test-package/main.mjs",
+		'import { value } from "test"; globalThis.value = value;',
+	);
+	const graph = buildModuleGraph(path.join(root, "bare-test-package/main.mjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(
+		graph.modules.has(path.join(root, "bare-test-package/node_modules/test/index.js")),
+	).toBe(true);
+	expect(graph.modules.has("node:test")).toBe(false);
+});
+
 test.each([".", ".."])(
 	"resolves require(%s) as a relative directory without package export restrictions",
 	(specifier) => {

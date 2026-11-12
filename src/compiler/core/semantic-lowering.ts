@@ -2180,13 +2180,7 @@ function emitRequiredEsmNamespaceInits(
 	block: CoreFrontendBlock,
 ) {
 	for (const [modulePath, slot] of program.cjsEsmNamespaceSlot) {
-		const namespace = emitNamespaceObjectRegister(
-			program,
-			fn,
-			block,
-			program.moduleNamespaces.get(modulePath) ?? [],
-			modulePath,
-		);
+		const namespace = emitRequiredEsmValue(program, fn, block, modulePath);
 		block.emitter.emit({ type: "storeGlobal", registers: [namespace], index: slot });
 	}
 }
@@ -15692,13 +15686,7 @@ function requiredEsmThunk(
 	fn.blocks.push(block);
 	const cursor = { block };
 	emitModuleEvaluationCall(program, fn, cursor, file, -2);
-	const namespace = emitNamespaceObjectRegister(
-		program,
-		fn,
-		cursor.block,
-		program.moduleNamespaces.get(modulePath) ?? [],
-		modulePath,
-	);
+	const namespace = emitRequiredEsmValue(program, fn, cursor.block, modulePath);
 	cursor.block.emitter.emit({ type: "return", registers: [namespace] });
 	endFunction(program, fn);
 	return fn.functionIndex;
@@ -16826,6 +16814,23 @@ function emitNamespaceObject(
 	const namespace = emitNamespaceObjectRegister(program, fn, block, exports, modulePath);
 	const location = getOrCreateBindingLocation(program, fn, binding);
 	storeRegisterAtLocation(block, location, namespace);
+}
+
+function emitRequiredEsmValue(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	block: CoreFrontendBlock,
+	modulePath: string,
+): number {
+	const exports = program.moduleNamespaces.get(modulePath) ?? [];
+	const override = exports.find((entry) => entry.name === "module.exports");
+	return override === undefined
+		? emitNamespaceObjectRegister(program, fn, block, exports, modulePath)
+		: loadRegisterFromLocation(
+				fn,
+				block,
+				getOrCreateBindingLocation(program, fn, override.exporter),
+			);
 }
 
 function emitNamespaceObjectRegister(

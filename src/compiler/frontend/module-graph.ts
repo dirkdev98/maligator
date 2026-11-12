@@ -8,6 +8,7 @@ import type { PlatformModule } from "../../platform/catalog.ts";
 import { PLATFORM_MODULES, lookupPlatformModule } from "../../platform/catalog.ts";
 import type { Execution } from "../../platform/execution.ts";
 import { executionData } from "../../platform/execution.ts";
+import { stripCompactTypes } from "./compact-type-strip.ts";
 import { moduleCreateRequireDeclarators } from "./create-require.ts";
 import { traverseEstree } from "./estree-traversal.ts";
 import type { HostModuleSpec } from "./host-modules.ts";
@@ -16,6 +17,7 @@ import {
 	canonicalNodeHostModuleId,
 	isNodeSpecifier,
 	lookupHostModule,
+	SOURCE_HOST_MODULES,
 	supportedHostModuleIds,
 } from "./host-modules.ts";
 import { isImportMetaResolveCall } from "./import-meta.ts";
@@ -508,6 +510,9 @@ function platformCatalogFiles(sourceRoot: string): {
 				if (workerSource !== undefined) owned.add(path.resolve(sourceRoot, workerSource));
 			}
 		}
+		for (const [id, sourceFile] of SOURCE_HOST_MODULES) {
+			sources.set(path.resolve(sourceRoot, sourceFile), id);
+		}
 		files = { owned, sources };
 		platformCatalogs.set(sourceRoot, files);
 	}
@@ -578,7 +583,7 @@ export function buildModuleGraph(
 				);
 	const catalogSources = new Map<
 		string,
-		{ source: string; goal: "module"; platform: true; sourcePath: string }
+		{ source: string; goal: "module"; platform: boolean; sourcePath: string }
 	>();
 	const virtualModule = (specifier: string) => {
 		const supplied = options.virtualModules?.get(specifier);
@@ -590,14 +595,23 @@ export function buildModuleGraph(
 				platform: false,
 			};
 		const module = lookupPlatformModule(specifier);
-		if (module?.kind !== "source" || specifier === "maligator:test") return undefined;
+		const hostSource = SOURCE_HOST_MODULES.get(specifier);
+		if (hostSource !== undefined && !nodeEnabled) return undefined;
+		if (
+			hostSource === undefined &&
+			(module?.kind !== "source" || specifier === "maligator:test")
+		)
+			return undefined;
 		let source = catalogSources.get(specifier);
 		if (source === undefined) {
-			const sourcePath = path.resolve(sourceRoot, module.sourceFile);
+			const sourceFile =
+				hostSource ?? (module?.kind === "source" ? module.sourceFile : undefined);
+			if (sourceFile === undefined) return undefined;
+			const sourcePath = path.resolve(sourceRoot, sourceFile);
 			source = {
 				source: readFileSync(sourcePath, "utf-8"),
 				goal: "module",
-				platform: true,
+				platform: hostSource === undefined,
 				sourcePath,
 			};
 			catalogSources.set(specifier, source);
@@ -634,12 +648,15 @@ export function buildModuleGraph(
 					: `export default JSON.parse(${JSON.stringify(source)});`;
 		}
 		if (TS_EXTENSIONS.has(path.extname(sourcePath ?? filePath))) {
-			if (!options.stripTypes) {
+			const stripTypes =
+				options.stripTypes ??
+				(SOURCE_HOST_MODULES.has(filePath) ? stripCompactTypes : undefined);
+			if (!stripTypes) {
 				throw new Error(
 					`TypeScript module '${filePath}' requires BuildModuleGraphOptions.stripTypes`,
 				);
 			}
-			parseSource = options.stripTypes(parseSource, sourcePath ?? filePath);
+			parseSource = stripTypes(parseSource, sourcePath ?? filePath);
 		}
 		return parseSource;
 	};
@@ -833,13 +850,17 @@ export function buildModuleGraph(
 										const entryPreludeRequire =
 											dependency.kind === "require" &&
 											dependency.specifier === options.entryPrelude?.specifier;
+										const sourceBuiltin = SOURCE_HOST_MODULES.has(aliasedSpecifier);
 										if (
 											(dependency.kind === "dynamic" &&
+												!sourceBuiltin &&
 												!(
 													toolchainModule.platform &&
 													lookupPlatformModule(aliasedSpecifier)?.kind === "source"
 												)) ||
-											(dependency.kind === "require" && !entryPreludeRequire)
+											(dependency.kind === "require" &&
+												!entryPreludeRequire &&
+												!sourceBuiltin)
 										) {
 											throw new SyntaxDiagnostic(
 												"resolution",

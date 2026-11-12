@@ -73,6 +73,19 @@ paths and loopback binding, then reports current CPU and active Maligator comman
 heavy work may be deferred when busy, without an execution lock. `-h`/`--help` is
 also side-effect-free on the Test262 and WPT runners.
 
+## Node test suites
+
+With `surface.node` enabled, `maligator run path/to/suite.mjs` can run suites
+that import `node:test`. CommonJS suites can require its callable test function.
+Suite callbacks collect synchronously, and tests run sequentially with promise
+completion, context assertions, assertion plans, cleanup hooks and explicit
+timeouts. Failures set the process exit code; an unresolved test is cancelled
+when the host event loop becomes idle.
+
+Callback completion, nested tests, concurrent execution and asynchronous suite
+collection report `ERR_NOT_IMPLEMENTED`. Node's test discovery, mocking,
+snapshots and reporter APIs are outside this runner's supported surface.
+
 ## Test Placement
 
 | Behavior under test                                                                | Add coverage here                                                                                                                           |
