@@ -5666,6 +5666,18 @@ MalCompletion mal_builtin_array_numeric_reduce_direct(
  * avoids a second property lookup. map/filter/flatMap additionally require a default
  * @@species because their fast paths build a plain Array. Side-effect-free.
  */
+MalNativeFunctionCallback const
+    mal_builtin_array_iteration_callbacks[MAL_BUILTIN_ARRAY_ITERATION_METHOD_COUNT] = {
+        mal_builtin_array_for_each, mal_builtin_array_some, mal_builtin_array_every,
+        mal_builtin_array_find, mal_builtin_array_find_index, mal_builtin_array_map,
+        mal_builtin_array_filter, mal_builtin_array_reduce, mal_builtin_array_reduce_right,
+        mal_builtin_array_find_last, mal_builtin_array_find_last_index, mal_builtin_array_flat_map,
+};
+
+bool mal_builtin_array_default_species(MalVm *vm, MalValue receiver) {
+    return mal_array_default_species(vm, receiver);
+}
+
 bool mal_builtin_array_iteration_eligible_values(MalVm *vm, const MalValue *args) {
     if (!mal_value_is_array_object(args[1]) ||
 		!mal_value_is_native_function_object(args[0]) ||
@@ -5682,22 +5694,8 @@ bool mal_builtin_array_iteration_eligible_values(MalVm *vm, const MalValue *args
         return false;
     }
 
-    MalNativeFunctionCallback expected = nullptr;
-    switch (method_id) {
-        case 0: expected = mal_builtin_array_for_each; break;
-        case 1: expected = mal_builtin_array_some; break;
-        case 2: expected = mal_builtin_array_every; break;
-        case 3: expected = mal_builtin_array_find; break;
-        case 4: expected = mal_builtin_array_find_index; break;
-        case 5: expected = mal_builtin_array_map; break;
-        case 6: expected = mal_builtin_array_filter; break;
-        case 7: expected = mal_builtin_array_reduce; break;
-        case 8: expected = mal_builtin_array_reduce_right; break;
-        case 9: expected = mal_builtin_array_find_last; break;
-        case 10: expected = mal_builtin_array_find_last_index; break;
-        case 11: expected = mal_builtin_array_flat_map; break;
-        default: return false;
-    }
+    if (method_id < 0 || method_id >= MAL_BUILTIN_ARRAY_ITERATION_METHOD_COUNT) return false;
+    MalNativeFunctionCallback expected = mal_builtin_array_iteration_callbacks[method_id];
     bool eligible =
         mal_native_function_object_callback(
             mal_value_to_native_function_object(loaded_method)) == expected;

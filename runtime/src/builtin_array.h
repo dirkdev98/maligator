@@ -81,6 +81,49 @@ MalCompletion mal_builtin_array_deque_direct(
  */
 bool mal_builtin_array_iteration_eligible_values(MalVm *vm, const MalValue *args);
 
+#define MAL_BUILTIN_ARRAY_ITERATION_METHOD_COUNT 12
+/** The builtin each `__arrayIterationEligible` method id stands for. */
+extern MalNativeFunctionCallback const
+    mal_builtin_array_iteration_callbacks[MAL_BUILTIN_ARRAY_ITERATION_METHOD_COUNT];
+/** Whether ArraySpeciesCreate on an exact Array receiver builds a plain Array. */
+bool mal_builtin_array_default_species(MalVm *vm, MalValue receiver);
+
+/**
+ * mal_builtin_array_iteration_eligible_values over separate operands, for generated
+ * code: a constant method id folds to one callback comparison.
+ */
+static inline __attribute__((always_inline)) bool mal_builtin_array_iteration_eligible_known(
+    MalVm *vm, MalValue method, MalValue receiver, MalValue method_id, MalValue callback
+) {
+    f64 id = mal_ops_number_as_f64(method_id);
+    if (!mal_value_is_array_object(receiver) || !mal_value_is_native_function_object(method) ||
+        !mal_value_is_callable(callback) ||
+        !(id >= 0 && id < MAL_BUILTIN_ARRAY_ITERATION_METHOD_COUNT)) {
+        return false;
+    }
+    u32 index = (u32) id;
+    MalValue prototype = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
+    const MalObject *array = &mal_value_to_array_object(receiver)->object;
+    if (!mal_value_is_object(prototype) || mal_object_prototype(array) != mal_value_to_object(prototype) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(method)) !=
+            mal_builtin_array_iteration_callbacks[index]) {
+        return false;
+    }
+#if MAL_REALMS
+    if (mal_vm_callee_realm(vm, method) != vm->current_realm) return false;
+#endif
+    // map, filter and flatMap build their result with ArraySpeciesCreate.
+    if (index != 5 && index != 6 && index != 11) return true;
+#if MAL_PRIMORDIALS_LOCKED
+    // The locked graph keeps %Array.prototype%.constructor; only an own one could redirect.
+    if (array->shape != nullptr && array->shape->inline_count == 0 &&
+        !mal_object_has_public_overflow(array)) {
+        return true;
+    }
+#endif
+    return mal_builtin_array_default_species(vm, receiver);
+}
+
 bool mal_builtin_array_at_try_direct(
     MalVm *vm,
     MalValue callee,
