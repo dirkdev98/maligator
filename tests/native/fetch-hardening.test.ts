@@ -431,26 +431,27 @@ describe("Mal.serve hardening", () => {
 	// llhttp 9.4.3 keeps reporting every header byte, so a codec limit must fail the
 	// message rather than silently drop the tail: a hidden Content-Length or
 	// Transfer-Encoding past the cutoff is exactly how a request smuggles framing.
-	it("fails rather than truncating a head past the codec limits", async () => {
+	it("fails rather than truncating a head past the header budgets", async () => {
 		await withServer(bin, {}, async (base) => {
+			// Past the default 1000-field count, within the byte budget.
 			const manyFields = [
 				"GET /ok HTTP/1.1\r\nHost: x\r\n",
-				...Array.from({ length: 300 }, (_, i) => `X-Pad-${i}: v\r\n`),
+				...Array.from({ length: 1100 }, (_, i) => `X${i}: v\r\n`),
 				"Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
 			].join("");
-			expect(statusLine(await rawExchange(base, manyFields))).toContain("400");
+			expect(statusLine(await rawExchange(base, manyFields))).toContain("431");
 
 			const hugeValue =
 				`GET /ok HTTP/1.1\r\nHost: x\r\nX-Pad: ${"v".repeat(32 * 1024)}\r\n` +
 				"Content-Length: 0\r\n\r\n";
-			expect(statusLine(await rawExchange(base, hugeValue))).toContain("400");
+			expect(statusLine(await rawExchange(base, hugeValue))).toContain("431");
 
 			const hugeHead = [
 				"GET /ok HTTP/1.1\r\nHost: x\r\n",
 				...Array.from({ length: 200 }, (_, i) => `X-Pad-${i}: ${"v".repeat(512)}\r\n`),
 				"Content-Length: 0\r\n\r\n",
 			].join("");
-			expect(statusLine(await rawExchange(base, hugeHead))).toContain("400");
+			expect(statusLine(await rawExchange(base, hugeHead))).toContain("431");
 
 			expect(await (await fetch(`${base}/ok`)).text()).toBe("ok");
 		});
