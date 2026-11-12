@@ -30,6 +30,7 @@ typedef struct MalRequestObject {
     MalValue cache;
     MalValue redirect;
     MalValue integrity;
+    MalValue signal;
     struct MalFetchHead *source; // raw heap buffer, freed by the finalizer
 } MalRequestObject;
 

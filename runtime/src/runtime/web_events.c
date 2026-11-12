@@ -897,6 +897,27 @@ static void mal_abort_signal_run(MalVm *vm, MalValue signal_val, MalValue reason
     mal_gc_unroot(&rs);
 }
 
+MalValue mal_abort_signal_create_dependent(MalVm *vm, MalValue source) {
+    if (!mal_value_is_nil(source) && abort_signal_this(source) == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Request signal must be an AbortSignal or null");
+        return mal_value_new_undefined();
+    }
+    MalValue roots[] = {source, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = mal_abort_signal_new(vm);
+    if (!mal_value_is_nil(roots[0])) {
+        MalEventTargetObject *parent = abort_signal_this(roots[0]);
+        if (!mal_value_is_undefined(parent->abort_reason))
+            mal_abort_signal_run(vm, roots[1], parent->abort_reason);
+        else abort_signal_add_dependent(parent, roots[1]);
+    }
+    MalValue result = roots[1];
+    mal_gc_unroot(&root);
+    return result;
+}
+
 static MalValue abort_signal_get_aborted(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) args;

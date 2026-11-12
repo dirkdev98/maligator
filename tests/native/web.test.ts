@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	assertResultPass,
 	buildNativeBinary,
@@ -12,6 +12,7 @@ import {
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-web-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 // Host-entry fixtures that self-report a "RESULT N/N" line (no "FAIL:" lines) —
 // the WinterTC Min-Common-API surface + structured clone / Headers / Response /
@@ -36,7 +37,7 @@ const FIXTURES = [
 	{
 		name: "Request constructor",
 		fixture: "tests/local/request_ctor.js",
-		interpreted: false,
+		interpreted: true,
 	},
 	{ name: "Event / EventTarget", fixture: "tests/local/events.js", interpreted: false },
 ];

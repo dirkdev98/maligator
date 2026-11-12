@@ -30,6 +30,7 @@
 #include "property_store.h"
 #include "web_readable_stream_object.h"
 #include "web_request_object.h"
+#include "web_events_object.h"
 #include "web_response_object.h"
 #include "web_url_object.h"
 #include "server.h" // host: mal_http_server_start_stream_handler, mal_http_conn_respond
@@ -2331,6 +2332,7 @@ MalRequestObject *mal_request_object_new(MalHeap *heap, MalObject *prototype) {
     r->cache = mal_value_new_undefined();
     r->redirect = mal_value_new_undefined();
     r->integrity = mal_value_new_undefined();
+    r->signal = mal_value_new_undefined();
     r->source = nullptr;
     return r;
 }
@@ -2370,6 +2372,19 @@ static void mal_request_trace(MalHeapHeader *cell) {
     mal_gc_mark_value(request->cache);
     mal_gc_mark_value(request->redirect);
     mal_gc_mark_value(request->integrity);
+    mal_gc_mark_value(request->signal);
+}
+
+static MalValue mal_request_signal(MalVm *vm, MalRequestObject *request) {
+    if (mal_value_is_undefined(request->signal)) {
+        MalValue value = mal_value_from_request_object(request);
+        MalRootSpan root;
+        mal_gc_root(&root, &value, 1);
+        request->signal = mal_abort_signal_create_dependent(vm, mal_value_new_undefined());
+        mal_gc_card(&request->object.header, request->signal);
+        mal_gc_unroot(&root);
+    }
+    return request->signal;
 }
 
 static bool mal_fetch_method_token_unit(c16 unit) {
@@ -2604,7 +2619,7 @@ static MalValue mal_request_constructor(
     MalRequestObject *r = mal_request_object_new(&vm->heap, proto);
     // Root the instance and every transient Request slot across conversion and
     // Headers/body allocation.
-    MalValue slots[13];
+    MalValue slots[14];
     for (usize i = 0; i < sizeof(slots) / sizeof(slots[0]); i++) {
         slots[i] = mal_value_new_undefined();
     }
@@ -2642,6 +2657,7 @@ static MalValue mal_request_constructor(
         slots[10] = src->cache;
         slots[11] = src->redirect;
         slots[12] = src->integrity;
+        slots[13] = mal_request_signal(vm, src);
         MalString *source_mode = mal_value_to_string(src->mode);
         request_mode = mal_string_equals_ascii(source_mode, "same-origin") ? 0
             : mal_string_equals_ascii(source_mode, "no-cors") ? 1 : 2;
@@ -2693,7 +2709,14 @@ static MalValue mal_request_constructor(
             slots[4] = v;
             body_override = true;
         }
+        if (!mal_vm_get_property(vm, args[1],
+                mal_intrinsic_string_key(vm, (const byte *) "signal"), &v)) goto request_error;
+        if (!mal_value_is_undefined(v)) slots[13] = v;
     }
+
+    r->signal = mal_abort_signal_create_dependent(vm, slots[13]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto request_error;
+    mal_gc_card(&r->object.header, r->signal);
 
     // A body from init replaces any copied body. A Request used as the init
     // dictionary exposes its byte-backed body through the Body stream getter;
@@ -2909,6 +2932,7 @@ MAL_REQUEST_FIELD_GETTER(mal_request_get_integrity, integrity)
 MAL_REQUEST_LAZY_GETTER(mal_request_get_method, mal_request_method)
 MAL_REQUEST_LAZY_GETTER(mal_request_get_url, mal_request_url)
 MAL_REQUEST_LAZY_GETTER(mal_request_get_headers, mal_request_headers)
+MAL_REQUEST_LAZY_GETTER(mal_request_get_signal, mal_request_signal)
 
 #undef MAL_REQUEST_LAZY_GETTER
 
@@ -2998,6 +3022,13 @@ static MalValue mal_request_clone(
     clone->cache = source->cache;
     clone->redirect = source->redirect;
     clone->integrity = source->integrity;
+    roots[1] = mal_request_signal(vm, source);
+    clone->signal = mal_abort_signal_create_dependent(vm, roots[1]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_gc_unroot(&rs);
+        return mal_value_new_undefined();
+    }
+    mal_gc_card(&clone->object.header, clone->signal);
     if (source->body == nullptr
         && !mal_value_is_undefined(source->body_stream)) {
         if (!mal_readable_stream_tee(
@@ -4199,6 +4230,8 @@ void mal_fetch_install(MalVm *vm, MalObject *global_this) {
     mal_fetch_define_readonly_getter(vm, req_proto, (const byte *) "url", mal_request_get_url);
     mal_fetch_define_readonly_getter(
         vm, req_proto, (const byte *) "headers", mal_request_get_headers);
+    mal_fetch_define_readonly_getter(
+        vm, req_proto, (const byte *) "signal", mal_request_get_signal);
     mal_fetch_define_readonly_getter(
         vm, req_proto, (const byte *) "destination", mal_request_get_destination);
     mal_fetch_define_readonly_getter(

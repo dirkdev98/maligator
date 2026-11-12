@@ -59,6 +59,7 @@ MalEventTargetObject *mal_event_target_object_new(MalHeap *heap, MalObject *prot
 /* Internal AbortSignal hooks for abortable web-standard algorithms. */
 bool mal_abort_signal_is_aborted(MalValue signal);
 MalValue mal_abort_signal_reason(MalValue signal);
+MalValue mal_abort_signal_create_dependent(MalVm *vm, MalValue source);
 void mal_abort_signal_add_algorithm(MalValue signal, MalValue algorithm);
 void mal_abort_signal_remove_algorithm(MalValue signal, MalValue algorithm);
 
