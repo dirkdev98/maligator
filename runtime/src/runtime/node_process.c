@@ -1654,6 +1654,12 @@ void mal_host_install_process(
     MalRootSpan root;
     mal_gc_root(&root, &process_val, 1);
     MalObject *process = mal_value_to_object(process_val);
+    MalPropertyDesc tag = {
+        .value = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "process")),
+        .flags = MAL_PROPERTY_WRITABLE,
+    };
+    mal_object_define_own(process, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG),
+        &tag);
     MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
     // Node timers live on the host reactor; host-less harness entries install `process` without one.
     if (mal_host(vm) != nullptr) mal_host_timers_install_node(vm, global_this);

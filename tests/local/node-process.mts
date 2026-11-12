@@ -52,6 +52,18 @@ function check(name: string, ok: boolean): void {
 }
 
 check("process is object", typeof process === "object" && process !== null);
+check(
+	"process is recognized by Node environment detection",
+	Object.prototype.toString.call(process) === "[object process]",
+);
+const processTag = Object.getOwnPropertyDescriptor(process, Symbol.toStringTag);
+check(
+	"process tag is writable, hidden and permanent",
+	processTag?.value === "process" &&
+		processTag.writable &&
+		!processTag.enumerable &&
+		!processTag.configurable,
+);
 check("import.meta has stable identity", import.meta === import.meta);
 check(
 	"import.meta exposes Node path metadata",
