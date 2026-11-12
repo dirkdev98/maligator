@@ -150,6 +150,20 @@ check(
 		new RegExp("a/b\nc\u2028d").source === "a\\/b\\nc\\u2028d",
 );
 
+const classSources = [
+	["[^/]*", "", "[^/]*"],
+	["[/]/", "", "[/]\\/"],
+	["[[]/", "", "[[]\\/"],
+	["[\\]/]/", "", "[\\]/]\\/"],
+	["[[a-z]--[aeiou]]/", "v", "[[a-z]--[aeiou]]\\/"],
+];
+for (const [pattern, flags, expected] of classSources) {
+	check(
+		"RegExp source preserves character-class spelling: " + pattern,
+		new RegExp(pattern, flags).source === expected,
+	);
+}
+
 const canonicalMatchAll = /a/g;
 canonicalMatchAll.lastIndex = 1;
 const canonicalMatches = [..."baab".matchAll(canonicalMatchAll)];

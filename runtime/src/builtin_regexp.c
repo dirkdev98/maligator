@@ -378,9 +378,8 @@ static u32 regexp_regress_flags(u32 js) {
 }
 
 // EscapeRegExpPattern: the `.source` form. Empty -> "(?:)"; otherwise escape an
-// unescaped "/" (so the result sits between literal slashes) and the four line
-// terminators to their \X forms.
-static MalValue regexp_escape_pattern(MalVm *vm, MalString *src) {
+// unescaped "/" outside a character class and the four line terminators.
+static MalValue regexp_escape_pattern(MalVm *vm, MalString *src, bool unicode_sets) {
     usize n = mal_string_length(src);
     if (n == 0) {
         return mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "(?:)"));
@@ -388,10 +387,15 @@ static MalValue regexp_escape_pattern(MalVm *vm, MalString *src) {
     usize capacity = 0;
     usize bytes;
     bool prev_backslash = false;
+    usize class_depth = 0;
     for (usize i = 0; i < n; i++) {
         c16 c = mal_string_code_unit_at(src, i);
+        if (!prev_backslash) {
+            if (c == '[' && (class_depth == 0 || unicode_sets)) class_depth++;
+            else if (c == ']' && class_depth > 0) class_depth--;
+        }
         usize extra = (c == 0x2028 || c == 0x2029) ? 6 :
-            (c == '\n' || c == '\r' || (c == '/' && !prev_backslash)) ? 2 : 1;
+            (c == '\n' || c == '\r' || (c == '/' && !prev_backslash && class_depth == 0)) ? 2 : 1;
         if (!mal_checked_size_add(capacity, extra, MAL_STRING_MAX_CODE_UNITS, &capacity)) {
             regexp_throw_string_length(vm);
             return mal_value_new_undefined();
@@ -412,8 +416,13 @@ static MalValue regexp_escape_pattern(MalVm *vm, MalString *src) {
         &vm->heap, bytes, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
     usize out = 0;
     prev_backslash = false;
+    class_depth = 0;
     for (usize i = 0; i < n; i++) {
         c16 c = mal_string_code_unit_at(src, i);
+        if (!prev_backslash) {
+            if (c == '[' && (class_depth == 0 || unicode_sets)) class_depth++;
+            else if (c == ']' && class_depth > 0) class_depth--;
+        }
         if (c == '\n') {
             buf[out++] = '\\';
             buf[out++] = 'n';
@@ -428,7 +437,7 @@ static MalValue regexp_escape_pattern(MalVm *vm, MalString *src) {
             buf[out++] = '0';
             buf[out++] = (c16) hex[(c >> 4) & 0xF];
             buf[out++] = (c16) hex[c & 0xF];
-        } else if (c == '/' && !prev_backslash) {
+        } else if (c == '/' && !prev_backslash && class_depth == 0) {
             buf[out++] = '\\';
             buf[out++] = '/';
         } else {
@@ -1475,7 +1484,7 @@ static MalValue regexp_proto_get_source(MalVm *vm, MalValue this_value, const Ma
     if (is_prototype) {
         return mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "(?:)"));
     }
-    return regexp_escape_pattern(vm, re->source);
+    return regexp_escape_pattern(vm, re->source, (re->flag_bits & MAL_REGEXP_JS_UNICODE_SETS) != 0);
 }
 
 // The generic `get flags` per spec: read the eight boolean flag getters off
@@ -1532,7 +1541,8 @@ static MalValue regexp_proto_to_string(MalVm *vm, MalValue this_value, const Mal
     MalRootSpan root_span;
     MalRegExpObject *canonical;
     if (regexp_canonical_instance(vm, this_value, &canonical)) {
-        string_roots[0] = regexp_escape_pattern(vm, canonical->source);
+        string_roots[0] = regexp_escape_pattern(vm, canonical->source,
+            (canonical->flag_bits & MAL_REGEXP_JS_UNICODE_SETS) != 0);
         if (regexp_threw(vm)) {
             return mal_value_new_undefined();
         }
