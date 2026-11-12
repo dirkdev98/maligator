@@ -4561,7 +4561,9 @@ MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
     while (async_state != nullptr &&
            async_state->async_data->awaited_by != nullptr && guard++ < 100000) {
         MalGeneratorObject *parent = async_state->async_data->awaited_by;
-        const MalFunction *function = parent->frame.function;
+        // Runtime eval can move the function table while the awaiter is suspended.
+        const MalFunction *function =
+            &vm->live_runtime_image.functions[parent->frame.function_index];
         MalStackTrace *segment = mal_vm_stack_trace_new(vm, 1);
         if (segment == nullptr) {
             mal_vm_free_stack_trace(trace);
