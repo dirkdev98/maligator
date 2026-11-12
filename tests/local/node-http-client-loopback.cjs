@@ -1,4 +1,6 @@
 const http = require("node:http");
+let requestFinishCallbacks = 0;
+let responseFinishCallbacks = 0;
 
 function fail(message) {
 	throw new Error(message);
@@ -73,7 +75,8 @@ const server = http.createServer((request, response) => {
 			response.setHeader("X-Response-Dup", ["first", "second"]);
 			response.setHeader("Cookie", ["response=one", "second=two"]);
 			response.setHeader("Set-Cookie", ["loopback=yes; HttpOnly", "second=yes"]);
-			response.end("received:" + body);
+			response.write("received:" + body);
+			response.end(null, null, () => responseFinishCallbacks++);
 			return;
 		}
 		if (request.url === "/precedence?source=options") {
@@ -83,7 +86,8 @@ const server = http.createServer((request, response) => {
 		}
 		if (request.url === "/options-only") {
 			if (request.headers["x-overload"] !== "options") fail("options headers");
-			response.end("options-only");
+			response.write("options-only");
+			response.end(undefined, undefined, () => responseFinishCallbacks++);
 			return;
 		}
 		if (request.url === "/host-precedence") {
@@ -171,7 +175,8 @@ server.listen(0, "127.0.0.1", () => {
 	);
 	request.on("error", (error) => fail("unexpected error: " + error.message));
 	request.write("abc");
-	request.end("def");
+	request.write("def");
+	request.end(null, null, () => requestFinishCallbacks++);
 
 	function runUrlObject() {
 		const target = new URL(`https://example.com:${port}/ignored?source=url#hash`);
@@ -186,7 +191,7 @@ server.listen(0, "127.0.0.1", () => {
 			(response) => read(response, 200, "url-object", runOptionsOnly),
 		);
 		if (!(outgoing instanceof http.ClientRequest)) fail("URL request return");
-		outgoing.end();
+		outgoing.end(undefined, undefined, () => requestFinishCallbacks++);
 	}
 
 	function runOptionsOnly() {
@@ -343,6 +348,9 @@ server.listen(0, "127.0.0.1", () => {
 
 	function closeServer() {
 		server.close(() => {
+			if (requestFinishCallbacks !== 2 || responseFinishCallbacks !== 2) {
+				fail("nullish end callbacks");
+			}
 			const refused = http.request(`http://127.0.0.1:${port}/closed`);
 			refused.on("error", (error) => {
 				if (!(error instanceof Error)) fail("error object");

@@ -30,6 +30,24 @@ async function settle() {
 }
 
 async function main() {
+	for (const chunk of [null, undefined]) {
+		const writes = [];
+		const writable = new Writable({
+			write(value, encoding, done) {
+				writes.push(value.toString());
+				done();
+			},
+		});
+		writable.write("body");
+		await new Promise((resolve, reject) => {
+			writable.on("error", reject);
+			writable.end(chunk, undefined, resolve);
+		});
+		check(
+			writes.join() === "body" && writable.writableFinished,
+			"nullish end finishes without an extra chunk",
+		);
+	}
 	check(Stream === NamedStream && typeof Stream === "function", "default legacy Stream");
 	check(
 		Stream.Stream === Stream &&

@@ -3219,7 +3219,8 @@ static MalValue http_client_end(
     bool sole_callback = argc == 1 && mal_value_is_callable(args[0]);
     byte *bytes;
     usize length;
-    if (argc > 0 && !sole_callback && !mal_value_is_undefined(args[0])) {
+    if (argc > 0 && !sole_callback && !mal_value_is_null(args[0])
+        && !mal_value_is_undefined(args[0])) {
         if (!http_response_chunk_owned(vm, args[0], &bytes, &length)) {
             state->ending = false;
             return mal_value_new_undefined();
@@ -4015,7 +4016,8 @@ static MalValue http_response_end(
     bool sole_callback = argc == 1 && mal_value_is_callable(args[0]);
     byte *bytes;
     usize length;
-    if (argc > 0 && !sole_callback && !mal_value_is_undefined(args[0])) {
+    if (argc > 0 && !sole_callback && !mal_value_is_null(args[0])
+        && !mal_value_is_undefined(args[0])) {
         if (!http_response_chunk_owned(vm, args[0], &bytes, &length)) {
             state->ending = false;
             return mal_value_new_undefined();

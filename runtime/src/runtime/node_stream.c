@@ -1824,7 +1824,8 @@ static MalValue stream_end(
             break;
         }
     }
-    bool has_chunk = argc > 0 && !mal_value_is_callable(args[0]);
+    bool has_chunk = argc > 0 && !mal_value_is_callable(args[0])
+        && !mal_value_is_null(args[0]) && !mal_value_is_undefined(args[0]);
     if (has_chunk && vm->completion.kind != MAL_COMPLETION_THROW) {
         i32 write_argc = argc;
         while (write_argc > 1 && mal_value_is_callable(args[write_argc - 1])) {
