@@ -140287,6 +140287,21 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.process\",\"symbol:%Symbol.toStringTag%\"]",
+			"owner": "globalThis.process",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:process\"]",
+				"MAL_INTRINSIC_NODE_PROCESS_MODULE",
+				"globalThis.process",
+				"mal_host_install_process:default"
+			],
+			"key": "symbol:%Symbol.toStringTag%",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.process.[[Prototype]]\",\"constructor\"]",
 			"owner": "globalThis.process.[[Prototype]]",
 			"ownerPaths": [
