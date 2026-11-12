@@ -110,6 +110,9 @@ Remote names and field ordering must not populate permanent atom or shared shape
 - Runtime personalities derive their own case-insensitive lookup and iteration
   views. WinterTC combination rules and Node's `rawHeaders` can therefore coexist
   without loss. `Set-Cookie` remains separate in the raw list.
+- Server-side `Response` objects expose every validated response header, including
+  separate `Set-Cookie` values. `Mal.serve` serializes the same mutable list so
+  middleware edits reach the wire.
 - Request and response trailers use a distinct ordered raw-header task. If trailers
   are not exposed by a personality, it must explicitly discard that task; the host
   still parses framing correctly.

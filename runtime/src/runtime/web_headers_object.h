@@ -23,7 +23,6 @@ typedef enum MalHeadersGuard {
     MAL_HEADERS_GUARD_IMMUTABLE,
     MAL_HEADERS_GUARD_REQUEST,
     MAL_HEADERS_GUARD_REQUEST_NO_CORS,
-    MAL_HEADERS_GUARD_RESPONSE,
 } MalHeadersGuard;
 
 typedef struct MalHeadersObject {

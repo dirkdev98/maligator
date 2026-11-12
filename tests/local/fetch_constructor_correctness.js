@@ -299,6 +299,38 @@ async function run() {
 		mutatesHeaders(new Response().headers) &&
 			mutatesHeaders(new Request("https://example.com/").headers),
 	);
+	const cookies = [
+		["Set-Cookie", "a=1; Path=/"],
+		["set-cookie", "b=2; Path=/"],
+	];
+	const cookieResponse = new Response(null, { headers: cookies });
+	check(
+		"Response exposes separate cookie headers",
+		cookieResponse.headers.getSetCookie().join("|") === "a=1; Path=/|b=2; Path=/",
+	);
+	const cookieCopy = new Response(null, { headers: cookieResponse.headers });
+	cookieResponse.headers.append("set-cookie", "c=3; Path=/");
+	check(
+		"Response cookies can be appended",
+		cookieResponse.headers.getSetCookie().join("|") ===
+			"a=1; Path=/|b=2; Path=/|c=3; Path=/",
+	);
+	cookieResponse.headers.set("set-cookie", "d=4; Path=/");
+	check(
+		"Response cookies can be replaced",
+		cookieResponse.headers.getSetCookie().join("|") === "d=4; Path=/",
+	);
+	cookieResponse.headers.delete("set-cookie");
+	check("Response cookies can be deleted", !cookieResponse.headers.has("set-cookie"));
+	check(
+		"Response header copies preserve independent cookie lists",
+		cookieCopy.headers.getSetCookie().join("|") === "a=1; Path=/|b=2; Path=/",
+	);
+	check(
+		"Response.json preserves cookie headers",
+		Response.json({}, { headers: cookies }).headers.getSetCookie().join("|") ===
+			"a=1; Path=/|b=2; Path=/",
+	);
 
 	check(
 		"Response string Content-Type",

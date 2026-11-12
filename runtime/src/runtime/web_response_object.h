@@ -16,9 +16,6 @@ typedef struct MalResponseObject {
     i32 status;
     MalValue status_text;
     MalValue headers; // a MalHeadersObject, or undefined
-    /* Server-extension-only forbidden response headers retained for Mal.serve;
-     * never exposed through Response.headers. */
-    MalValue server_headers;
     byte *body;       // owned bytes; nullptr => null body
     usize body_len;
     usize body_charge;

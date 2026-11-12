@@ -373,11 +373,6 @@ static bool mal_headers_guard_allows(
         && !mal_headers_no_cors_safelisted(name, value)) {
         return false;
     }
-    if (h->guard == MAL_HEADERS_GUARD_RESPONSE
-        && (mal_headers_name_is_ascii(name, "set-cookie")
-            || mal_headers_name_is_ascii(name, "set-cookie2"))) {
-        return false;
-    }
     return true;
 }
 

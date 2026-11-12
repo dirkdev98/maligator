@@ -23,10 +23,12 @@ const server = Mal.serve({
 			return new Response(request.headers.get("x-test") || "none");
 		}
 		if (request.url.endsWith("/cookies")) {
-			const headers = new Headers();
-			headers.append("Set-Cookie", "a=1; Path=/");
-			headers.append("set-cookie", "b=2; Path=/");
-			return new Response("cookies", { headers });
+			const response = new Response("cookies", {
+				headers: { "set-cookie": "old=0; Path=/" },
+			});
+			response.headers.set("set-cookie", "a=1; Path=/");
+			response.headers.append("set-cookie", "b=2; Path=/");
+			return response;
 		}
 		if (request.url.endsWith("/body")) {
 			return new Response("body=" + (await request.text()));
