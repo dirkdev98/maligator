@@ -82,6 +82,10 @@ function checkSavedChild() {
 	);
 }
 Reflect.apply(checkSavedChild, undefined, []);
+// Conservative native stack roots are cleared between event-loop tasks.
+await new Promise<void>((resolve) => {
+	setTimeout(resolve, 0);
+});
 collect();
 check(
 	c.owner_result_destroyed() > before,
