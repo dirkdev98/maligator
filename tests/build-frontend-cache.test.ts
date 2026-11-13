@@ -106,13 +106,17 @@ describe("normal build frontend cache", () => {
 		},
 	);
 
-	it.each([false, true])(
-		"retains source closure with eval %s on cache hits",
-		(evalEnabled) => {
+	it.each([
+		{ evalEnabled: false, source: "console.log(42);\n", kind: "known" },
+		{ evalEnabled: true, source: "console.log(42);\n", kind: "known" },
+		{ evalEnabled: true, source: 'console.log(eval("42"));\n', kind: "unknown" },
+	])(
+		"retains a $kind source closure with eval $evalEnabled on cache hits",
+		({ evalEnabled, source, kind }) => {
 			const root = temporaryDirectory();
 			try {
 				const entrypoint = path.join(root, "entry.mjs");
-				write(entrypoint, "console.log(42);\n");
+				write(entrypoint, source);
 				const options = {
 					entrypoint,
 					cacheDirectory: path.join(root, "cache"),
@@ -124,7 +128,7 @@ describe("normal build frontend cache", () => {
 				const warm = compileBuildFrontend(options);
 				expect(cold.cache).toBe("miss");
 				expect(warm.cache).toBe("hit");
-				expect(cold.closure.sourceClosure.kind).toBe(evalEnabled ? "unknown" : "known");
+				expect(cold.closure.sourceClosure.kind).toBe(kind);
 				expect(warm.closure).toEqual(cold.closure);
 				expect(warm.wire).toEqual(cold.wire);
 			} finally {
