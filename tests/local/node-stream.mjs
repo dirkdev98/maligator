@@ -144,7 +144,7 @@ async function main() {
 	const reentrantChunks = [];
 	reentrant.on("data", (chunk) => {
 		reentrantChunks.push(chunk);
-		if (chunk === "first") {
+		if (String(chunk) === "first") {
 			reentrant.pause();
 			reentrant.push("second");
 		}

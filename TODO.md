@@ -665,6 +665,11 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 # Node and ecosystem compatibility
 
+- [ ] node:stream: a piped Readable whose `read()` never pushes stops after the first
+      buffered chunk when the destination drains; Node delivers the rest. `_malReading`
+      stays set after `_read`, so the resume path skips `stream_schedule_pull` and
+      never flushes the buffer.
+
 - [ ] Match Node's invalid-argument diagnostic inspection, including custom inspect
       hooks and thrown-hook precedence. Buffer validators and copyBytesFrom currently
       use a generic formatter.

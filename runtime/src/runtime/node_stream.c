@@ -598,6 +598,17 @@ static void stream_resume_core(MalVm *vm, MalValue receiver) {
     }
 }
 
+// Node's pause() state: flowing stops, isPaused() reports it, and a later 'data' listener
+// leaves the stream paused until resume(). Internal pauses such as pipe backpressure must
+// set the readable-state flags too, since isPaused() and 'data' listeners read those.
+static void stream_mark_paused(MalVm *vm, MalValue receiver) {
+    MalValue readable_state = stream_own(vm, receiver, "_readableState");
+    stream_set(vm, readable_state, "flowingFalse", mal_value_new_boolean(true));
+    stream_set(vm, readable_state, "paused", mal_value_new_boolean(true));
+    stream_set(vm, receiver, "_malPaused", mal_value_new_boolean(true));
+    stream_set(vm, receiver, "_malFlowing", mal_value_new_boolean(false));
+}
+
 static bool stream_pipe_contains(MalVm *vm, MalValue source, MalValue destination) {
     MalValue pipes = stream_own(vm, source, "_malPipes");
     if (mal_value_is_array_object(pipes)) {
@@ -712,8 +723,7 @@ static bool stream_pipe_chunk(MalVm *vm, MalValue source, MalValue chunk) {
         }
         if (mal_value_is_boolean(write.value) && !mal_value_to_boolean(write.value)) {
             flowing = false;
-            stream_set(vm, roots[0], "_malPaused", mal_value_new_boolean(true));
-            stream_set(vm, roots[0], "_malFlowing", mal_value_new_boolean(false));
+            stream_mark_paused(vm, roots[0]);
             if (stream_pipe_is_blocked(vm, roots[0], roots[3])) {
                 continue;
             }
@@ -899,10 +909,7 @@ static MalValue stream_pause(
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
     }
-    stream_set(vm, receiver, "_malPaused", mal_value_new_boolean(true));
-    stream_set(vm, receiver, "_malFlowing", mal_value_new_boolean(false));
-    stream_set(vm, stream_own(vm, receiver, "_readableState"), "flowingFalse", mal_value_new_boolean(true));
-    stream_set(vm, stream_own(vm, receiver, "_readableState"), "paused", mal_value_new_boolean(true));
+    stream_mark_paused(vm, receiver);
     stream_emit(vm, receiver, "pause", nullptr, 0);
     return receiver;
 }
@@ -1128,8 +1135,7 @@ static MalValue stream_unpipe(
             ? mal_array_object_length(mal_value_to_array_object(blocked))
             : 0;
         if (pipe_count == 0) {
-            stream_set(vm, roots[0], "_malPaused", mal_value_new_boolean(true));
-            stream_set(vm, roots[0], "_malFlowing", mal_value_new_boolean(false));
+            stream_mark_paused(vm, roots[0]);
         } else if (blocked_count == 0
                    && vm->completion.kind != MAL_COMPLETION_THROW) {
             stream_resume_core(vm, roots[0]);
