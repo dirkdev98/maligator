@@ -17,6 +17,7 @@
 #include "microtask.h"
 #include "node_buffer.h"
 #include "node_events.h"
+#include "node_http.h"
 #include "node_module.h"
 #include "node_string_decoder.h"
 #include "ascii.h"
@@ -4143,7 +4144,12 @@ static MalValue stream_destroy_fn(MalVm *vm, MalValue self, const MalValue *args
         && !stream_flag(vm, roots[0], "writableFinished")) {
         roots[1] = stream_abort_error(vm, mal_value_new_undefined());
     }
+    if (mal_node_http_is_server_request(roots[0])) {
+        if (!mal_vm_set_property(vm, roots[0], mal_intrinsic_static_string_key(vm, (const byte *) "socket"),
+                mal_value_new_null(), roots[0])) goto done;
+    }
     stream_call_method(vm, roots[0], "destroy", &roots[1], 1);
+done:
     mal_gc_unroot(&root);
     return mal_value_new_undefined();
 }
@@ -4391,9 +4397,9 @@ static MalValue stream_to_web_pull(MalVm *vm, MalValue self, const MalValue *arg
 static MalValue stream_to_web_cancel(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
     MalValue nt, MalValue callee) {
     (void) self; (void) nt;
-    MalValue reason = argc > 0 ? args[0] : mal_value_new_undefined();
-    stream_call_method(vm, stream_slot(callee, 0), "destroy", &reason, 1);
-    return mal_value_new_undefined();
+    MalValue destroy_args[] = {stream_slot(callee, 0), argc > 0 ? args[0] : mal_value_new_undefined()};
+    return stream_destroy_fn(vm, mal_value_new_undefined(), destroy_args, countof(destroy_args),
+        mal_value_new_undefined(), mal_value_new_undefined());
 }
 
 static MalValue stream_readable_to_web(MalVm *vm, MalValue self, const MalValue *args, i32 argc,

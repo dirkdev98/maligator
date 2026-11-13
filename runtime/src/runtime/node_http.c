@@ -270,6 +270,7 @@ typedef struct MalNodeHttpRequestState {
     bool request_end_counted;
     bool request_read_started;
     bool request_auto_discard;
+    bool request_detached_destroyed;
     bool response_transport_complete;
     bool response_terminal_delivered;
     bool response_end_counted;
@@ -381,6 +382,7 @@ static void http_queue_request_end(void *data, bool success);
 static MalValue http_client_error(MalVm *vm, const char *message);
 static void http_define(MalVm *vm, MalValue receiver, const char *name, MalValue value);
 static bool http_emit(MalVm *vm, MalValue receiver, const char *event);
+static bool http_emit_error(MalVm *vm, MalValue receiver, MalValue error);
 static MalNodeHttpSocketState *http_socket_for_receiver(MalValue receiver);
 static void http_server_inactivity_event(void *data, MalHttpConn *conn, u64 generation);
 static MalNodeHttpClientState *http_client_response_state(MalValue receiver);
@@ -718,6 +720,55 @@ static MalValue http_incoming_read(
     return mal_value_new_undefined();
 }
 
+bool mal_node_http_is_server_request(MalValue value) {
+    return http_request_state(value) != nullptr;
+}
+
+static MalValue http_incoming_detached_close(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) nt;
+    MalValue roots[] = {mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0),
+        mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 1)};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (!mal_value_is_nil(roots[1])) http_emit_error(vm, roots[0], roots[1]);
+    if (vm->completion.kind != MAL_COMPLETION_THROW) http_emit(vm, roots[0], "close");
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue http_incoming_detach_destroy(MalVm *vm, MalNodeHttpRequestState *state,
+    MalValue receiver, const MalValue *args, i32 argc) {
+    if (state->request_detached_destroyed) return receiver;
+    MalValue roots[] = {receiver, argc > 0 ? args[0] : mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    state->request_detached_destroyed = true;
+    state->request_read_started = true;
+    state->request_destroy_error = roots[1];
+    http_define(vm, roots[0], "destroyed", mal_value_new_boolean(true));
+    http_define(vm, roots[0], "readable", mal_value_new_boolean(false));
+    http_define(vm, roots[0], "aborted", mal_value_new_boolean(true));
+    http_define(vm, roots[0], "_malStreamError", roots[1]);
+    MalPropertyLookup readable = mal_object_get_own(mal_value_to_object(roots[0]),
+        mal_intrinsic_static_string_key(vm, (const byte *) "_readableState"));
+    if (readable.present && mal_value_is_object(readable.desc.value)) {
+        roots[2] = readable.desc.value;
+        http_define(vm, roots[2], "destroyed", mal_value_new_boolean(true));
+        http_define(vm, roots[2], "errored", roots[1]);
+    }
+    http_emit(vm, roots[0], "aborted");
+    roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_static_ascii(vm, (const byte *) "incomingClose"), http_incoming_detached_close, roots, 2));
+    mal_vm_enqueue_reaction_job(vm, roots[3], false, mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined());
+    if (state->conn != nullptr) mal_http_conn_request_discard(state->conn);
+    mal_gc_unroot(&root);
+    return receiver;
+}
+
 static MalValue http_incoming_destroy(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -726,6 +777,12 @@ static MalValue http_incoming_destroy(
     (void) new_target;
     (void) callee;
     MalNodeHttpRequestState *state = http_request_state(receiver);
+    if (state != nullptr) {
+        MalValue socket = mal_value_new_undefined();
+        if (!mal_vm_get_property(vm, receiver,
+                mal_intrinsic_static_string_key(vm, (const byte *) "socket"), &socket)) return mal_value_new_undefined();
+        if (mal_value_is_nil(socket)) return http_incoming_detach_destroy(vm, state, receiver, args, argc);
+    }
     if (state != nullptr && state->conn != nullptr
         && !state->request_transport_complete) {
         mal_object_set(
@@ -3863,7 +3920,7 @@ static void http_response_dispatch_write(
 
 static void http_request_deliver_read(
     MalVm *vm, MalNodeHttpRequestState *state) {
-    bool has_request = !mal_value_is_undefined(state->request);
+    bool has_request = !mal_value_is_undefined(state->request) && !state->request_detached_destroyed;
     MalNodeHttpRequestBody *body = state->body_head;
     if (body != nullptr) {
         state->body_head = body->next;
@@ -3890,8 +3947,9 @@ static void http_request_deliver_read(
             mal_host(vm)->pending_http_completions--;
             state->request_end_counted = false;
         }
-        if (has_request && state->request_end_success) {
+        if (!mal_value_is_undefined(state->request) && state->request_end_success)
             http_define(vm, state->request, "complete", mal_value_new_boolean(true));
+        if (has_request && state->request_end_success) {
             MalValue end = mal_value_new_null();
             (void) http_call_method(vm, state->request, "push", &end, 1);
         } else if (has_request) {
@@ -4003,7 +4061,7 @@ static void http_response_dispatch_terminal(
         }
         mal_gc_unroot(&root);
     }
-    if (request->request_auto_discard
+    if (request->request_auto_discard && !request->request_detached_destroyed
         && !request->request_terminal_delivered
         && !mal_value_is_undefined(request->request)
         && vm->completion.kind != MAL_COMPLETION_THROW) {

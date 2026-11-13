@@ -337,3 +337,5 @@ tests/native/http-header-ownership.test.ts
 tests/native/http-header-budgets.test.ts
 tests/native/http-pipelining.test.ts
 tests/native/http-stalled-pipeline.test.ts
+
+tests/native/node-http-request-cancel.test.ts

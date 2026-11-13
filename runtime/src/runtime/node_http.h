@@ -21,3 +21,6 @@ bool mal_node_http_server_set_tls(MalValue server, MalTlsServerConfig *config);
 bool mal_node_http_server_replace_tls(MalValue server, MalTlsServerConfig *config);
 /* Routes later handshakes of a listening https.Server through SNICallback/addContext. */
 void mal_node_http_server_enable_sni(MalValue server);
+
+/** Identify a live server request from its private transport ownership. */
+bool mal_node_http_is_server_request(MalValue value);

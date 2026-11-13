@@ -18,6 +18,7 @@ tests/native/node-http-listen.test.ts
 tests/native/node-http-outgoing-headers.test.ts
 tests/native/node-http-pipeline.test.ts
 tests/native/node-http-ready-queues.test.ts
+tests/native/node-http-request-cancel.test.ts
 tests/native/node-http-request.test.ts
 tests/native/node-http-response-destroy.test.ts
 tests/native/node-http-socket-identity.test.ts
