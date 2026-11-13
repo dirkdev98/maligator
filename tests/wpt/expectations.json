@@ -2809,6 +2809,78 @@
 			"milestone": "W2",
 			"reason": "Server Request headers retain caller-supplied fields, as Node does. Browser forbidden-header and no-cors filtering would discard proxy and session inputs.",
 			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		},
+		{
+			"path": "fetch/api/response/response-consume-empty.any.js",
+			"variant": "",
+			"backend": "compiled",
+			"mode": "normal",
+			"subtest": "Consume empty FormData response body as text",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W2",
+			"reason": "Empty FormData serializes a closing multipart boundary, as Node does. The upstream test assumes an empty string and marks that assumption with a FIXME linked to WPT pull request 3950.",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		},
+		{
+			"path": "fetch/api/response/response-consume-empty.any.js",
+			"variant": "",
+			"backend": "compiled",
+			"mode": "gc-stress",
+			"subtest": "Consume empty FormData response body as text",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W2",
+			"reason": "Empty FormData serializes a closing multipart boundary, as Node does. The upstream test assumes an empty string and marks that assumption with a FIXME linked to WPT pull request 3950.",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		},
+		{
+			"path": "fetch/api/response/response-consume-empty.any.js",
+			"variant": "",
+			"backend": "interpreted",
+			"mode": "normal",
+			"subtest": "Consume empty FormData response body as text",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W2",
+			"reason": "Empty FormData serializes a closing multipart boundary, as Node does. The upstream test assumes an empty string and marks that assumption with a FIXME linked to WPT pull request 3950.",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		},
+		{
+			"path": "fetch/api/response/response-consume-empty.any.js",
+			"variant": "",
+			"backend": "interpreted",
+			"mode": "gc-stress",
+			"subtest": "Consume empty FormData response body as text",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W2",
+			"reason": "Empty FormData serializes a closing multipart boundary, as Node does. The upstream test assumes an empty string and marks that assumption with a FIXME linked to WPT pull request 3950.",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		},
+		{
+			"path": "fetch/api/response/response-consume-empty.any.js",
+			"variant": "",
+			"backend": "wire",
+			"mode": "normal",
+			"subtest": "Consume empty FormData response body as text",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W2",
+			"reason": "Empty FormData serializes a closing multipart boundary, as Node does. The upstream test assumes an empty string and marks that assumption with a FIXME linked to WPT pull request 3950.",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		},
+		{
+			"path": "fetch/api/response/response-consume-empty.any.js",
+			"variant": "",
+			"backend": "wire",
+			"mode": "gc-stress",
+			"subtest": "Consume empty FormData response body as text",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W2",
+			"reason": "Empty FormData serializes a closing multipart boundary, as Node does. The upstream test assumes an empty string and marks that assumption with a FIXME linked to WPT pull request 3950.",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
 		}
 	]
 }
