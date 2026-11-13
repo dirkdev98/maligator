@@ -46905,6 +46905,19 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype\",\"setTimeout\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype",
+				"MAL_INTRINSIC_NODE_HTTP_SERVER_PROTOTYPE"
+			],
+			"key": "setTimeout",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype\",\"address\"]",
 			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype",
 			"ownerPaths": [
@@ -47082,6 +47095,26 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%",
 			"ownerPaths": [
@@ -47127,96 +47160,6 @@
 			"kind": "data",
 			"operations": [],
 			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype\",\"setHeader\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype",
-				"MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_PROTOTYPE"
-			],
-			"key": "setHeader",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype\",\"getHeader\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype",
-				"MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_PROTOTYPE"
-			],
-			"key": "getHeader",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype\",\"hasHeader\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype",
-				"MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_PROTOTYPE"
-			],
-			"key": "hasHeader",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype\",\"removeHeader\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype",
-				"MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_PROTOTYPE"
-			],
-			"key": "removeHeader",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype\",\"getHeaders\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype",
-				"MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_PROTOTYPE"
-			],
-			"key": "getHeaders",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype\",\"getHeaderNames\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype",
-				"MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_PROTOTYPE"
-			],
-			"key": "getHeaderNames",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames"
-			],
-			"task": "N-06",
 			"decisions": []
 		},
 		{
@@ -47308,6 +47251,111 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]\",\"setHeader\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor.prototype"
+			],
+			"key": "setHeader",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]\",\"getHeader\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor.prototype"
+			],
+			"key": "getHeader",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]\",\"hasHeader\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor.prototype"
+			],
+			"key": "hasHeader",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]\",\"removeHeader\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor.prototype"
+			],
+			"key": "removeHeader",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]\",\"getHeaders\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor.prototype"
+			],
+			"key": "getHeaders",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]\",\"getHeaderNames\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor.prototype"
+			],
+			"key": "getHeaderNames",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]\",\"headersSent\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor.prototype"
+			],
+			"key": "headersSent",
+			"kind": "accessor",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor",
 			"ownerPaths": [
@@ -47344,6 +47392,174 @@
 				"mal_host_install_node_http:OutgoingMessage"
 			],
 			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader"
+			],
+			"key": "name",
 			"kind": "data",
 			"operations": [],
 			"task": "H-10",
@@ -47390,150 +47606,6 @@
 			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.end",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.end"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader"
 			],
 			"key": "name",
 			"kind": "data",
@@ -165378,6 +165450,26 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%",
 			"ownerPaths": [
@@ -165442,6 +165534,202 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype._implicitHeader\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype._implicitHeader",
 			"ownerPaths": [
@@ -165493,174 +165781,6 @@
 			"kind": "construct",
 			"operations": [
 				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.end"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -305218,6 +305338,10 @@
 			"identities": ["%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.listen"]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout",
+			"identities": ["%MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR%.prototype.setTimeout"]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%",
 			"identities": ["%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%"]
 		},
@@ -305225,6 +305349,48 @@
 			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeader"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaderNames"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].getHeaders"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].hasHeader"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].headersSent<get>"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].removeHeader"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].setHeader"
 			]
 		},
 		{
@@ -305237,42 +305403,6 @@
 			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.end",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.end"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeader"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaderNames"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.getHeaders"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.hasHeader"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.removeHeader"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.setHeader"
 			]
 		},
 		{
