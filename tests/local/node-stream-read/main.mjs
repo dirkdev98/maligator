@@ -245,3 +245,42 @@ explicitlyPaused.resume();
 explicitlyPaused.push(null);
 await pauseEnd;
 console.log("explicit resume", pauseChunks.join());
+
+const fresh = new Readable({ read() {} });
+console.log(
+	"disturbed initial",
+	fresh.readableDidRead,
+	fresh.readableAborted,
+	Readable.isDisturbed(fresh),
+);
+fresh.push("value");
+fresh.read(0);
+console.log("disturbed buffered", fresh.readableDidRead, Readable.isDisturbed(fresh));
+fresh.read(1);
+console.log(
+	"disturbed read",
+	fresh.readableDidRead,
+	fresh.readableAborted,
+	Readable.isDisturbed(fresh),
+);
+fresh.destroy();
+console.log(
+	"disturbed aborted",
+	fresh.readableDidRead,
+	fresh.readableAborted,
+	Readable.isDisturbed(fresh),
+);
+const emptyFinished = new Readable({
+	read() {
+		this.push(null);
+	},
+});
+const emptyEnd = new Promise((resolve) => emptyFinished.once("end", resolve));
+emptyFinished.resume();
+await emptyEnd;
+console.log(
+	"disturbed ended",
+	emptyFinished.readableDidRead,
+	emptyFinished.readableAborted,
+	Readable.isDisturbed(emptyFinished),
+);

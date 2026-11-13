@@ -35,3 +35,6 @@ void mal_node_stream_end_readable(MalVm *vm, MalValue receiver);
 // Host producers stop at readable capacity and resume through their _read hook.
 i32 mal_node_stream_readable_capacity(MalVm *vm, MalValue receiver);
 bool mal_node_stream_push_chunk(MalVm *vm, MalValue receiver, MalValue chunk);
+
+/** Whether a stream has delivered data or was destroyed before its readable end. */
+bool mal_node_stream_is_disturbed(MalVm *vm, MalValue value);

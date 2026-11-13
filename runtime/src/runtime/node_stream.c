@@ -2133,6 +2133,7 @@ static MalValue stream_read_core(MalVm *vm, MalValue receiver, MalValue n_value)
     }
     if (!mal_value_is_null(result)) {
         roots[3] = result;
+        stream_set(vm, roots[1], "dataEmitted", mal_value_new_boolean(true));
         stream_pipe_chunk(vm, roots[0], roots[3]);
         if (vm->completion.kind != MAL_COMPLETION_THROW) stream_emit(vm, roots[0], "data", &roots[3], 1);
     }
@@ -2140,6 +2141,21 @@ done:
     mal_gc_unroot(&root);
     return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result;
 }
+
+static MalValue stream_readable_did_read(MalVm *vm, MalValue receiver, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    return mal_value_new_boolean(stream_truthy_own(vm, stream_own(vm, receiver, "_readableState"), "dataEmitted"));
+}
+
+static MalValue stream_readable_aborted(MalVm *vm, MalValue receiver, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalValue state = stream_own(vm, receiver, "_readableState");
+    return mal_value_new_boolean(stream_truthy_own(vm, state, "destroyed")
+        && !stream_truthy_own(vm, state, "endEmitted"));
+}
+
 
 static MalValue stream_read_method(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
@@ -4040,6 +4056,10 @@ static bool stream_flag(MalVm *vm, MalValue object, const char *name) {
     return stream_probe(vm, object, name, &value) && mal_value_is_truthy(value);
 }
 
+bool mal_node_stream_is_disturbed(MalVm *vm, MalValue value) {
+    return stream_flag(vm, value, "readableDidRead") || stream_flag(vm, value, "readableAborted");
+}
+
 static i32 stream_destroyed_state(MalVm *vm, MalValue stream) {
     if (!stream_is_node_stream(vm, stream)) return -1;
     MalValue state;
@@ -4085,8 +4105,7 @@ static MalValue stream_predicate(MalVm *vm, MalValue stream, StreamPredicate pre
             return destroyed < 0 ? mal_value_new_null() : mal_value_new_boolean(destroyed == 1);
         }
         case STREAM_IS_DISTURBED:
-            return mal_value_new_boolean(stream_flag(vm, stream, "readableDidRead")
-                || stream_flag(vm, stream, "readableAborted"));
+            return mal_value_new_boolean(mal_node_stream_is_disturbed(vm, stream));
     }
     return mal_value_new_null();
 }
@@ -5918,6 +5937,14 @@ void mal_host_install_node_stream(
     };
     stream_define_methods(vm, mal_value_to_object(roots[2]), stream_methods,
                           countof(stream_methods), &roots[12]);
+    mal_intrinsic_define_accessor_n(vm, mal_value_to_object(roots[3]),
+        mal_intrinsic_static_string_key(vm, (const byte *) "readableDidRead"),
+        (const byte *) "get readableDidRead", 0, stream_readable_did_read, nullptr, 0, nullptr,
+        MAL_PROPERTY_CONFIGURABLE | MAL_PROPERTY_ENUMERABLE);
+    mal_intrinsic_define_accessor_n(vm, mal_value_to_object(roots[3]),
+        mal_intrinsic_static_string_key(vm, (const byte *) "readableAborted"),
+        (const byte *) "get readableAborted", 0, stream_readable_aborted, nullptr, 0, nullptr,
+        MAL_PROPERTY_CONFIGURABLE | MAL_PROPERTY_ENUMERABLE);
     stream_define_methods(vm, mal_value_to_object(roots[3]), readable_methods,
                           countof(readable_methods), &roots[12]);
     stream_define_methods(vm, mal_value_to_object(roots[4]), writable_methods,
