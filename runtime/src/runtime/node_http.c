@@ -1485,7 +1485,7 @@ static void http_incoming_message_dispatch_shapes(MalVm *vm) {
     static const char *dispatch_names[] = {
         "method", "url", "headers", "rawHeaders", "httpVersion",
         "httpVersionMajor", "httpVersionMinor", "complete", "aborted", "upgrade",
-        "trailers", "rawTrailers", "socket", "connection",
+        "trailers", "rawTrailers", "socket",
     };
     static_assert(countof(source_names) + countof(dispatch_names)
                       <= MAL_SHAPE_MAX_INLINE_SLOTS,
@@ -4458,7 +4458,7 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(),
     };
     MalRootSpan request_values_root;
     mal_gc_root(&request_values_root, request_values, countof(request_values));
@@ -4507,7 +4507,6 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
     request_values[10] = roots[5];
     request_values[11] = roots[6];
     request_values[12] = roots[4];
-    request_values[13] = roots[4];
 
     if (mal_object_try_append_shaped_values(
             mal_value_to_object(roots[0]),
@@ -4533,7 +4532,6 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
         http_define_own(vm, roots[0], "trailers", request_values[10]);
         http_define_own(vm, roots[0], "rawTrailers", request_values[11]);
         http_define_own(vm, roots[0], "socket", request_values[12]);
-        http_define_own(vm, roots[0], "connection", request_values[13]);
     }
 
     // Preserve construction and any unusual constructor layout. Only the exact
@@ -4801,7 +4799,6 @@ static void http_client_dispatch_head(
     http_define_own(vm, roots[0], "trailers", roots[4]);
     http_define_own(vm, roots[0], "rawTrailers", roots[5]);
     http_define_own(vm, roots[0], "socket", roots[3]);
-    http_define_own(vm, roots[0], "connection", roots[3]);
     http_define_own(vm, roots[0], "req", state->request);
     state->response = roots[0];
     state->response_head_seen = true;
@@ -6295,10 +6292,38 @@ static MalValue http_construct(
 static MalValue http_incoming_message_constructor(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
-    (void) args;
-    (void) argc;
-    return http_construct(vm, receiver, new_target, callee,
-                          MAL_INTRINSIC_NODE_READABLE_CONSTRUCTOR);
+    MalValue roots[] = {argc > 0 ? args[0] : mal_value_new_undefined(),
+        mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = http_construct(vm, receiver, new_target, callee,
+                             MAL_INTRINSIC_NODE_READABLE_CONSTRUCTOR);
+    if (mal_value_is_object(roots[1])) {
+        http_define_own(vm, roots[1], "socket", roots[0]);
+    }
+    MalValue result = roots[1];
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue http_incoming_get_connection(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    MalValue result = mal_value_new_undefined();
+    (void) mal_vm_get_property(vm, receiver,
+        mal_intrinsic_static_string_key(vm, (const byte *) "socket"), &result);
+    return result;
+}
+
+static MalValue http_incoming_set_connection(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    (void) mal_vm_set_property(vm, receiver,
+        mal_intrinsic_static_string_key(vm, (const byte *) "socket"),
+        argc > 0 ? args[0] : mal_value_new_undefined(), receiver);
+    return mal_value_new_undefined();
 }
 
 static MalValue http_client_request_constructor(
@@ -7067,6 +7092,10 @@ void mal_host_install_node_http(
     mal_intrinsic_define_method_n(
         vm, mal_value_to_object(roots[1]), (const byte *) "destroy", 1,
         http_incoming_destroy);
+    mal_intrinsic_define_accessor_n(vm, mal_value_to_object(roots[1]),
+        mal_intrinsic_static_string_key(vm, (const byte *) "connection"),
+        (const byte *) "get connection", 0, http_incoming_get_connection,
+        (const byte *) "set connection", 1, http_incoming_set_connection, 0);
     mal_intrinsic_define_method_n(
         vm, mal_value_to_object(roots[7]), (const byte *) "setHeader", 2,
         http_outgoing_set_header);

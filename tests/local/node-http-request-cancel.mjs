@@ -37,6 +37,7 @@ const server = createServer((request, response) => {
 		assert.equal(request.destroyed, true);
 		if (selection !== "direct") {
 			assert.equal(request.socket, null);
+			assert.equal(request.connection, null);
 			assert.equal(socket.destroyed, false);
 			response.statusCode = 413;
 			response.end("limited");
