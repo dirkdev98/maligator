@@ -9,6 +9,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "web_events_object.h"
 #include "web_fetch.h"
@@ -23,6 +24,72 @@
 #include "personality.h"
 #include "workers.h"
 #include "worker_manifest.h"
+#include "builtin_eval.h"
+#include "utf8.h"
+#if MAL_NODE
+#include "node_process.h"
+#endif
+
+int mal_dev_run_eval(
+    const char *source,
+    const char *option,
+    int argc,
+    char **argv,
+    bool web_platform,
+    bool node,
+    const char *worker_manifest_path) {
+    if (!MAL_EVAL) {
+        fprintf(stderr, "command-line evaluation requires an eval-enabled runtime\n");
+        return 2;
+    }
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+    const char *exec_argv[] = {option, source};
+    MalHostLaunchContext launch = {
+        .argc = argc, .argv = argv, .omit_script = true,
+        .exec_argc = 2, .exec_argv = exec_argv,
+    };
+    const MalRuntimeImage program = {.entry_path = "[eval]"};
+    MalVm vm;
+    mal_vm_init(&vm, &program);
+    vm.launch = launch;
+    if (mal_host_attach(&vm) == nullptr) {
+        mal_vm_free(&vm);
+        return 2;
+    }
+    if (worker_manifest_path != nullptr && !mal_worker_manifest_register(&vm, worker_manifest_path)) {
+        mal_host_detach(&vm);
+        mal_vm_free(&vm);
+        return 2;
+    }
+    mal_runtime_personality_install(&vm, web_platform, node);
+#if MAL_NODE
+    if (node) mal_host_install_process(&vm, nullptr, 0, &launch);
+#endif
+    mal_perf_stats_reset();
+    MalCallable *callable = nullptr;
+    MalString *text = mal_string_from_utf8(&vm.heap, (const byte *) source, strlen(source));
+    i32 entry = -1;
+    if (text == nullptr) mal_vm_throw_allocation_error(&vm);
+    else entry = mal_vm_compile_script(&vm, mal_value_from_string(text));
+    if (entry >= 0) {
+        callable = mal_vm_create_callable(&vm, entry);
+        mal_vm_run(&vm, callable);
+    }
+    mal_host_run_event_loop(&vm);
+    int code = mal_host_finish_process(&vm, vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0);
+    mal_workers_shutdown(&vm);
+    if (getenv("MAL_GC_AT_EXIT") != nullptr) mal_gc_collect(&vm);
+    if (callable != nullptr) mal_vm_free_callable(callable);
+#if MAL_NODE
+    if (node) mal_node_immediates_free(&vm);
+#endif
+#if MAL_WEB_PLATFORM || MAL_NODE
+    if (web_platform || node) mal_host_timers_free(&vm);
+#endif
+    mal_host_detach(&vm);
+    mal_vm_free(&vm);
+    return code;
+}
 
 static u8 *read_file(const char *path, usize *length_out) {
     FILE *file = fopen(path, "rb");

@@ -61,6 +61,12 @@ the `$262` test host, exact embedded-interpreter/link behavior, and other native
 boundary tests keep explicit binaries. Script-goal, profiled, and custom-type-stripper
 fixtures retain their explicit frontend behavior.
 
+An eval-enabled development executable also accepts `-e <source>` or
+`--eval <source>` to compile and execute a classic script in a fresh host VM.
+Node mode supplies `process` and timers, with execution options in `execArgv`
+and subsequent arguments in `argv`. Module imports and CommonJS package loading
+still require a compiled image.
+
 Native tests in `tests/test-suite-native-loopback.txt` require permission to bind
 an ephemeral loopback port. The Vitest wrapper probes `127.0.0.1:0` before those
 selections and reports a sandbox error early when `listen(0)` is denied.

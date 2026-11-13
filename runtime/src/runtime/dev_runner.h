@@ -16,6 +16,16 @@ typedef struct MalDevelopmentImage {
 
 typedef struct MalAsset MalAsset;
 
+/** Compile and execute a classic command-line script with the host event loop. */
+int mal_dev_run_eval(
+    const char *source,
+    const char *option,
+    int argc,
+    char **argv,
+    bool web_platform,
+    bool node,
+    const char *worker_manifest_path);
+
 /** Load and execute ordered development images in a fresh host VM with these assets. */
 int mal_dev_run_images(
     const MalDevelopmentImage *images,

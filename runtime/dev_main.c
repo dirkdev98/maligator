@@ -20,6 +20,33 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    if (strcmp(argv[1], "-e") == 0 || strcmp(argv[1], "--eval") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "%s requires a script argument\n", argv[1]);
+            return 2;
+        }
+        int argument_offset = argc > 3 && strcmp(argv[3], "--") == 0 ? 4 : 3;
+        if (argument_offset == 3 && argc > 3 && argv[3][0] == '-' && argv[3][1] != '\0') {
+            fprintf(stderr, "unsupported development runtime option: %s\n", argv[3]);
+            return 2;
+        }
+        int program_argc = argc - argument_offset + 1;
+        char **program_argv = malloc((size_t) program_argc * sizeof(char *));
+        if (program_argv == nullptr) return 2;
+        program_argv[0] = argv[0];
+        for (int i = 1; i < program_argc; i++)
+            program_argv[i] = argv[argument_offset + i - 1];
+        int code = mal_dev_run_eval(argv[2], argv[1], program_argc, program_argv,
+            MAL_WEB_PLATFORM != 0, MAL_NODE != 0, worker_manifest_path);
+        free(program_argv);
+        return code;
+    }
+    if (argv[1][0] == '-' && strcmp(argv[1], development_wires_command) != 0 &&
+        strcmp(argv[1], development_wires_assets_command) != 0) {
+        fprintf(stderr, "unsupported development runtime option: %s\n", argv[1]);
+        return 2;
+    }
+
     int wire_count = 1;
     int wire_offset = 1;
     int entry_offset = 0;

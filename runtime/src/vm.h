@@ -1097,13 +1097,16 @@ typedef struct MalHostInstallSlot {
 
 /**
  * Engine-neutral launch context threaded to every host installer. Alongside the
- * process command line, a host driver may expose the compiled program's source
- * entry so Node's script argv slot preserves ordinary entrypoint detection.
+ * process command line, a host driver supplies execution options and the source
+ * entry. Evaluation omits the script argv slot because its source is an option.
  */
 typedef struct MalHostLaunchContext {
     int argc;
     char **argv;
     const char *script_path;
+    bool omit_script;
+    int exec_argc;
+    const char *const *exec_argv;
 } MalHostLaunchContext;
 
 /**

@@ -99,26 +99,27 @@ static void mal_process_set_element(MalVm *vm, MalObject *array, u32 index, cons
     mal_gc_unroot(&rs);
 }
 
-// process.argv = [OS argv0, compiled entry, OS argv1..].
 static MalValue mal_process_build_argv(MalVm *vm, const MalHostLaunchContext *launch) {
     i32 os_argc = launch != nullptr ? launch->argc : 0;
     char **os_argv = launch != nullptr ? launch->argv : nullptr;
 
-    // At least argv0 + the placeholder; a missing OS argv0 becomes an empty string.
-    u32 length = (u32) (os_argc >= 1 ? os_argc : 1) + 1u;
+    u32 script_slots = launch != nullptr && launch->omit_script ? 0 : 1;
+    u32 length = (u32) (os_argc >= 1 ? os_argc : 1) + script_slots;
     MalValue argv_val = mal_value_from_array_object(mal_intrinsic_new_array(vm, length));
     MalRootSpan rs;
     mal_gc_root(&rs, &argv_val, 1);
     MalObject *argv = (MalObject *) mal_value_to_array_object(argv_val);
 
     mal_process_set_element(vm, argv, 0, os_argc >= 1 ? os_argv[0] : "");
-    mal_process_set_element(
-        vm, argv, 1,
-        launch != nullptr && launch->script_path != nullptr
-            ? launch->script_path
-            : mal_process_script_placeholder);
+    if (script_slots != 0) {
+        mal_process_set_element(
+            vm, argv, 1,
+            launch != nullptr && launch->script_path != nullptr
+                ? launch->script_path
+                : mal_process_script_placeholder);
+    }
     for (i32 i = 1; i < os_argc; i++) {
-        mal_process_set_element(vm, argv, (u32) i + 1u, os_argv[i]);
+        mal_process_set_element(vm, argv, (u32) i + script_slots, os_argv[i]);
     }
 
     mal_gc_unroot(&rs);
@@ -1754,13 +1755,18 @@ void mal_host_install_process(
         mal_value_from_object(mal_intrinsic_new_object(vm)),
         mal_value_from_object(mal_intrinsic_new_object(vm)),
         mal_value_from_object(mal_intrinsic_new_object(vm)),
-        mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0)),
+        mal_value_from_array_object(mal_intrinsic_new_dense_array(vm,
+            launch != nullptr && launch->exec_argc > 0 ? (u32) launch->exec_argc : 0)),
         mal_process_utf8_string(vm, "v" MAL_NODE_COMPAT_VERSION),
         mal_process_utf8_string(vm, MAL_NODE_COMPAT_VERSION),
         mal_process_utf8_string(vm, "node"),
     };
     MalRootSpan compat_root;
     mal_gc_root(&compat_root, compat, countof(compat));
+    if (launch != nullptr) {
+        for (int i = 0; i < launch->exec_argc; i++)
+            mal_process_set_element(vm, mal_value_to_object(compat[3]), (u32) i, launch->exec_argv[i]);
+    }
     mal_intrinsic_define_data(vm, process, (const byte *) "version", compat[4], data_flags);
     mal_intrinsic_define_data(vm, mal_value_to_object(compat[0]), (const byte *) "node",
         compat[5], data_flags);
