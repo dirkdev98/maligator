@@ -91,6 +91,7 @@ static void zlib_trace(MalHeapHeader *cell) {
     mal_gc_mark_value(state->input);
     mal_gc_mark_value(state->callback);
     mal_gc_mark_value(state->marker);
+    mal_gc_mark_value(mal_async_internal_value((MalHeapHeader *) state->async_context));
 }
 
 static void zlib_store(MalNodeZlibObject *state, MalValue *slot, MalValue value) {
@@ -119,6 +120,11 @@ static MalValue zlib_get(MalVm *vm, MalValue value, const char *name) {
 
 static void zlib_set(MalVm *vm, MalValue value, const char *name, MalValue item) {
     mal_object_set(mal_value_to_object(value), zlib_key(vm, name), item);
+}
+
+static void zlib_close_binding(MalVm *vm, MalValue receiver, MalNodeZlibObject *state) {
+    mal_zlib_free(&state->handle);
+    zlib_set(vm, receiver, "_handle", mal_value_new_null());
 }
 
 static void zlib_format_number(char *out, usize limit, f64 number) {
@@ -316,7 +322,8 @@ static bool zlib_strict_finish(const ZlibKind *kind, i32 finish_flush) {
 /* Runs a whole buffer through `codec` into one exactly sized allocation; shared by
  * the sync calls and the blocking-pool jobs. */
 static i32 zlib_run(MalZlibStream *codec, const byte *input, usize length, i32 flush,
-    bool strict, usize maximum, bool encode, byte **out, usize *out_length) {
+    bool strict, usize maximum, bool encode, byte **out, usize *out_length,
+    usize *consumed_out) {
     usize guess = encode ? length / 2 + 64 : length * 4 + 64;
     if (guess > ZLIB_OUTPUT_CHUNK * 64) guess = ZLIB_OUTPUT_CHUNK * 64;
     usize capacity = guess < maximum ? guess : maximum, used = 0, offset = 0;
@@ -351,6 +358,7 @@ static i32 zlib_run(MalZlibStream *codec, const byte *input, usize length, i32 f
             break;
         }
     }
+    if (consumed_out != nullptr) *consumed_out = offset;
     if (status < 0) { free(output); return status; }
     if (used < capacity) {
         byte *shrunk = realloc(output, used == 0 ? 1 : used);
@@ -407,7 +415,7 @@ static MalValue zlib_sync(MalVm *vm, MalValue receiver, const MalValue *args,
     usize produced = 0;
     i32 status = zlib_run(codec, bytes, length, options.finish_flush,
         zlib_strict_finish(kind, options.finish_flush), options.max_output, kind->encode,
-        &output, &produced);
+        &output, &produced, nullptr);
     mal_zlib_free(&codec);
     free(owned);
     if (status < 0) { zlib_throw_status(vm, status, options.max_output); return mal_value_new_undefined(); }
@@ -468,7 +476,7 @@ static void zlib_job_run(void *data) {
     }
     job->status = zlib_run(codec, job->input, job->length, job->options.finish_flush,
         zlib_strict_finish(job->kind, job->options.finish_flush), job->options.max_output,
-        job->kind->encode, &job->output, &job->produced);
+        job->kind->encode, &job->output, &job->produced, nullptr);
     mal_zlib_free(&codec);
 }
 
@@ -597,6 +605,7 @@ static void zlib_complete(MalVm *vm, MalValue state_value, MalValue error) {
     mal_gc_root(&root, roots, countof(roots));
     zlib_store(state, &state->input, mal_value_new_undefined());
     zlib_store(state, &state->callback, mal_value_new_undefined());
+    state->process_chunk = false;
     if (mal_value_is_callable(roots[1])) mal_vm_call_value(vm, roots[1],
         mal_value_new_undefined(), mal_value_is_nil(error) ? nullptr : roots + 2,
         mal_value_is_nil(error) ? 0 : 1);
@@ -608,6 +617,8 @@ static void zlib_stream_pump(MalVm *vm, MalValue state_value, MalValue receiver)
     MalValue roots[] = {state_value, receiver, state->input, mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
+    MalAsyncContextScope scope;
+    mal_async_context_scope_enter(vm, &scope, state->async_context);
     if (state->pumping || state->handle == nullptr || !mal_value_is_callable(state->callback)) goto finished;
     state->pumping = true;
     const ZlibKind kind = {.format = state->format, .encode = state->encode};
@@ -649,14 +660,22 @@ static void zlib_stream_pump(MalVm *vm, MalValue state_value, MalValue receiver)
         bool drained = status == MAL_ZLIB_STATUS_STREAM_END
             || (status == MAL_ZLIB_STATUS_NEED_INPUT && state->input_offset == span.length);
         if (drained) {
+            if (!state->finishing && zlib_strict_finish(&kind, flush)) {
+                status = mal_zlib_finish(state->handle);
+                if (status != MAL_ZLIB_STATUS_STREAM_END) { zlib_throw_status(vm, status, 0); break; }
+            }
             if (state->finishing) {
                 status = zlib_strict_finish(&kind, state->finish_flush)
                     ? mal_zlib_finish(state->handle) : MAL_ZLIB_STATUS_STREAM_END;
-                mal_zlib_free(&state->handle);
+                zlib_close_binding(vm, receiver, state);
                 if (status != MAL_ZLIB_STATUS_STREAM_END) { zlib_throw_status(vm, status, 0); break; }
             } else if (state->has_pending_level) {
                 state->has_pending_level = false;
                 mal_zlib_set_level(state->handle, state->pending_level);
+            }
+            if (!state->finishing && state->input_offset < span.length) {
+                mal_node_stream_push_chunk(vm, receiver, mal_value_new_null());
+                if (vm->completion.kind == MAL_COMPLETION_THROW) break;
             }
             state->pumping = false;
             zlib_set(vm, receiver, "bytesWritten", mal_value_from_f64(state->bytes_written));
@@ -673,10 +692,11 @@ static void zlib_stream_pump(MalVm *vm, MalValue state_value, MalValue receiver)
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         roots[3] = vm->completion.value;
         vm->completion = (MalCompletion){.kind=MAL_COMPLETION_NORMAL,.value=mal_value_new_undefined()};
-        mal_zlib_free(&state->handle);
+        zlib_close_binding(vm, receiver, state);
         zlib_complete(vm, state_value, roots[3]);
     }
 finished:
+    mal_async_context_scope_exit(vm, &scope);
     mal_gc_unroot(&root);
 }
 
@@ -732,10 +752,12 @@ static MalValue zlib_destroy(MalVm *vm, MalValue receiver, const MalValue *args,
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     MalNodeZlibObject *state = zlib_state_from_callee(callee);
-    mal_zlib_free(&state->handle);
+    zlib_close_binding(vm, receiver, state);
+    if (state->process_chunk && mal_value_is_callable(state->callback))
+        (void) mal_host_set_timeout(vm, state->callback, 0, nullptr, 0);
+    state->process_chunk = false;
     zlib_store(state, &state->input, mal_value_new_undefined());
     zlib_store(state, &state->callback, mal_value_new_undefined());
-    zlib_set(vm, receiver, "_closed", mal_value_new_boolean(true));
     if (mal_value_is_array_object(roots[2])) {
         MalArrayObject *array = mal_value_to_array_object(roots[2]);
         for (u32 i=0;i<mal_array_object_length(array);i++) {
@@ -748,6 +770,19 @@ static MalValue zlib_destroy(MalVm *vm, MalValue receiver, const MalValue *args,
     if (vm->completion.kind != MAL_COMPLETION_THROW && mal_value_is_callable(roots[5]))
         mal_vm_call_value(vm, roots[5], mal_value_new_undefined(), roots+6, 1);
     mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue zlib_handle_close(MalVm *vm, MalValue receiver, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    if (!mal_value_is_heap_type(receiver, MAL_HEAP_NODE_ZLIB_OBJECT)) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Illegal invocation", "ERR_INVALID_THIS");
+        return mal_value_new_undefined();
+    }
+    MalNodeZlibObject *state = (MalNodeZlibObject *) mal_value_to_heap(receiver);
+    mal_zlib_free(&state->handle);
     return mal_value_new_undefined();
 }
 
@@ -800,7 +835,11 @@ static MalValue zlib_create_transform(MalVm *vm, const ZlibKind *kind, MalValue 
     state->has_pending_level = false;
     state->finishing = false;
     state->pumping = false;
+    state->process_chunk = false;
+    state->async_context = mal_async_context_capture(vm);
     roots[0] = mal_value_from_heap((MalHeapHeader *) state);
+    roots[2] = zlib_native(vm, "close", zlib_handle_close, nullptr, 0);
+    zlib_set(vm, roots[0], "close", roots[2]);
     roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
     roots[2] = zlib_native(vm, "zlibTransform", zlib_transform, roots, 1);
     zlib_set(vm, roots[1], "transform", roots[2]);
@@ -819,7 +858,6 @@ static MalValue zlib_create_transform(MalVm *vm, const ZlibKind *kind, MalValue 
             mal_object_set_prototype_pointer(mal_value_to_object(roots[3]), mal_value_to_object(roots[4]));
         zlib_set(vm, roots[3], "_handle", roots[0]);
         zlib_set(vm, roots[3], "bytesWritten", mal_value_from_i32(0));
-        zlib_set(vm, roots[3], "_closed", mal_value_new_boolean(false));
         zlib_set(vm, roots[3], "_level", mal_value_from_i32(options.level));
         zlib_set(vm, roots[3], "_strategy", mal_value_from_i32(0));
         zlib_set(vm, roots[3], "_chunkSize", mal_value_from_f64((f64) options.chunk_size));
@@ -832,6 +870,157 @@ static MalValue zlib_create_transform(MalVm *vm, const ZlibKind *kind, MalValue 
     MalValue result = roots[3];
     mal_gc_unroot(&root);
     return result;
+}
+
+static MalValue zlib_process_done(MalVm *vm, MalValue receiver, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) receiver; (void) nt;
+    if (argc > 0 && !mal_value_is_nil(args[0])) {
+        MalValue stream = zlib_slot(callee, 2);
+        MalValue destroy = zlib_get(vm, stream, "destroy");
+        if (vm->completion.kind != MAL_COMPLETION_THROW)
+            mal_vm_call_value(vm, destroy, stream, args, 1);
+        return mal_value_new_undefined();
+    }
+    return mal_vm_call_value(vm, zlib_slot(callee, 0), zlib_slot(callee, 1), args, argc).value;
+}
+
+static MalValue zlib_process_start(MalVm *vm, MalValue receiver, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) nt;
+    MalValue state_value = zlib_slot(callee, 0);
+    MalNodeZlibObject *state = (MalNodeZlibObject *) mal_value_to_heap(state_value);
+    state->pumping = false;
+    if (state->handle == nullptr) zlib_complete(vm, state_value, mal_value_new_undefined());
+    else zlib_stream_pump(vm, state_value, zlib_slot(callee, 1));
+    return mal_value_new_undefined();
+}
+
+static MalValue zlib_process_chunk(MalVm *vm, MalValue receiver, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) nt; (void) callee;
+    MalValue roots[] = {receiver, mal_value_new_undefined(),
+        argc > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined(),
+        argc > 2 ? args[2] : mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool asynchronous = mal_value_is_callable(roots[4]);
+    if (!mal_value_is_object(roots[0])) {
+        zlib_throw_arg_type(vm, "this", "a zlib stream", roots[0]);
+        goto done;
+    }
+    roots[1] = zlib_get(vm, roots[0], "_handle");
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    if (asynchronous && mal_value_is_nil(roots[1])) {
+        if (mal_host(vm) == nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                "Asynchronous zlib requires a host event loop");
+        } else (void) mal_host_set_timeout(vm, roots[4], 0, nullptr, 0);
+        goto done;
+    }
+    if (!mal_value_is_heap_type(roots[1], MAL_HEAP_NODE_ZLIB_OBJECT)) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Illegal invocation", "ERR_INVALID_THIS");
+        goto done;
+    }
+    MalNodeZlibObject *state = (MalNodeZlibObject *) mal_value_to_heap(roots[1]);
+    if (state->handle == nullptr) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            "zlib binding closed", "ERR_ZLIB_BINDING_CLOSED");
+        goto done;
+    }
+    if (state->pumping || mal_value_is_callable(state->callback)) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            "A zlib chunk is already being processed", "ERR_INVALID_STATE");
+        goto done;
+    }
+    MalValue flush_value = argc > 1 ? args[1] : mal_value_new_undefined();
+    if (!mal_ops_is_number(flush_value)) {
+        zlib_throw_arg_type(vm, "flushFlag", "of type number", flush_value);
+        goto done;
+    }
+    f64 flush_number = mal_ops_number_as_f64(flush_value);
+    i32 maximum_flush = state->format == MAL_ZLIB_FORMAT_BROTLI ? 3 : 5;
+    if (!isfinite(flush_number) || floor(flush_number) != flush_number
+        || flush_number < 0 || flush_number > maximum_flush) {
+        zlib_throw_range(vm, "flushFlag", "a valid flush operation", flush_number);
+        goto done;
+    }
+    i32 flush = (i32) flush_number;
+    f64 maximum = ZLIB_MAX_LENGTH;
+    if (!asynchronous && !zlib_option_range(vm, roots[0], "_maxOutputLength", "maxOutputLength", 1,
+            ZLIB_MAX_LENGTH, ZLIB_MAX_LENGTH, &maximum)) goto done;
+    if (state->handle == nullptr) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            "zlib binding closed", "ERR_ZLIB_BINDING_CLOSED");
+        goto done;
+    }
+    const byte *input = nullptr;
+    usize length = 0;
+    byte *owned = nullptr;
+    if (!zlib_input(vm, roots[2], &input, &length, &owned)) goto done;
+    if (asynchronous) {
+        if (mal_host(vm) == nullptr) {
+            free(owned);
+            mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                "Asynchronous zlib requires a host event loop");
+            goto done;
+        }
+        if (owned != nullptr) roots[2] = mal_node_buffer_from_owned_bytes(vm, owned, length);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+        roots[4] = mal_async_context_bind_callback(vm, roots[4], state->async_context);
+        MalValue callback_slots[] = {roots[4], roots[1], roots[0]};
+        roots[4] = zlib_native(vm, "processChunkDone", zlib_process_done, callback_slots, 3);
+        zlib_store(state, &state->input, roots[2]);
+        zlib_store(state, &state->callback, roots[4]);
+        state->input_offset = 0;
+        state->chunk_flush = flush;
+        state->finishing = false;
+        state->process_chunk = true;
+        state->pumping = true;
+        MalValue task_slots[] = {roots[1], roots[0]};
+        roots[4] = zlib_native(vm, "processChunk", zlib_process_start, task_slots, 2);
+        if (mal_host_set_timeout(vm, roots[4], 0, nullptr, 0) == 0) {
+            zlib_store(state, &state->input, mal_value_new_undefined());
+            zlib_store(state, &state->callback, mal_value_new_undefined());
+            state->process_chunk = false;
+            state->pumping = false;
+        }
+        goto done;
+    }
+    const ZlibKind kind = {.format = state->format, .encode = state->encode};
+    usize output_limit = maximum >= (f64) SIZE_MAX ? SIZE_MAX : (usize) maximum;
+    byte *output = nullptr;
+    usize produced = 0, consumed = 0;
+    i32 status = zlib_run(state->handle, input, length, flush,
+        zlib_strict_finish(&kind, flush), output_limit, state->encode,
+        &output, &produced, &consumed);
+    free(owned);
+    state->bytes_written = (double) consumed;
+    zlib_set(vm, roots[0], "bytesWritten", mal_value_from_f64((f64) consumed));
+    if (status >= 0) roots[3] = mal_node_buffer_from_owned_bytes(vm, output, produced);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    roots[4] = zlib_get(vm, roots[0], "_handle");
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    if (!mal_value_is_nil(roots[4])) {
+        roots[5] = zlib_get(vm, roots[4], "close");
+        if (vm->completion.kind != MAL_COMPLETION_THROW)
+            mal_vm_call_value(vm, roots[5], roots[4], nullptr, 0);
+    }
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        zlib_set(vm, roots[0], "_handle", mal_value_new_null());
+        if (status < 0) zlib_throw_status(vm, status, output_limit);
+    }
+done:
+    if (asynchronous || vm->completion.kind == MAL_COMPLETION_THROW) roots[3] = mal_value_new_undefined();
+    mal_gc_unroot(&root);
+    return roots[3];
+}
+
+static MalValue zlib_get_closed(MalVm *vm, MalValue receiver, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    return mal_value_new_boolean(!mal_value_is_truthy(zlib_get(vm, receiver, "_handle")));
 }
 
 static MalValue zlib_create(MalVm *vm, MalValue receiver, const MalValue *args,
@@ -1055,6 +1244,7 @@ void mal_host_install_node_zlib(
         {"params", zlib_method_params, 3},
         {"reset", zlib_method_reset, 0},
         {"close", zlib_method_close, 1},
+        {"_processChunk", zlib_process_chunk, 3},
     };
     for (usize i = 0; i < countof(methods); i++) {
         roots[TEMP] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
@@ -1064,6 +1254,10 @@ void mal_host_install_node_zlib(
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[BASE]), (const byte *) methods[i].name,
             roots[TEMP], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     }
+    roots[TEMP] = zlib_native(vm, "get _closed", zlib_get_closed, nullptr, 0);
+    MalPropertyDesc closed = mal_intrinsic_accessor_desc(roots[TEMP], mal_value_new_undefined(),
+        MAL_PROPERTY_CONFIGURABLE);
+    (void) mal_object_define_own(mal_value_to_object(roots[BASE]), zlib_key(vm, "_closed"), &closed);
     for (usize i = 0; i < countof(zlib_kinds); i++) {
         roots[SLOT_KIND] = mal_value_from_i32((i32) i);
         roots[SLOT_PROTO] = mal_value_from_object(mal_intrinsic_new_object(vm));

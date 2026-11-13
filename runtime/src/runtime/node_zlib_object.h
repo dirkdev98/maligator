@@ -7,6 +7,7 @@ typedef struct MalNodeZlibObject {
     MalObject object;
     MalObjectStorage object_storage;
     MalZlibStream *handle;
+    struct MalAsyncContext *async_context;
     MalValue input;
     MalValue callback;
     /* The empty Buffer that flush() and params() write; its identity selects marker_flush. */
@@ -24,4 +25,5 @@ typedef struct MalNodeZlibObject {
     bool has_pending_level;
     bool finishing;
     bool pumping;
+    bool process_chunk;
 } MalNodeZlibObject;
