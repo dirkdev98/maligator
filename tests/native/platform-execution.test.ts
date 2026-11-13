@@ -18,6 +18,7 @@ import {
 	HOST_MAIN,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
+import { matchingNativeSymbols } from "../helpers/native-symbols.ts";
 
 const root = mkdtempSync(path.join(os.tmpdir(), "mal-platform-execution-"));
 const config = resolveBuildConfig({ engine: { primordials: "mutable", regexp: false } });
@@ -80,25 +81,17 @@ beforeAll(() => {
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 describe("prepared platform execution data", () => {
-	it("excludes the native installer when its export is eliminated", () => {
+	it("excludes the native installer when its export is eliminated", async () => {
 		const result = spawnSync(deadBinary, [], { encoding: "utf8", timeout: 30_000 });
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 		expect(result.stdout).toContain("DEAD_IMPORT_OK");
-		const symbols = spawnSync(
-			"nm",
-			[
-				"--no-sort",
-				"--extern-only",
-				"--defined-only",
-				"--format=just-symbols",
-				deadBinary,
-			],
-			{ encoding: "utf8", timeout: 30_000 },
+		const defined = await matchingNativeSymbols(
+			deadBinary,
+			(symbol, type) =>
+				type !== "U" &&
+				(symbol === "main" || symbol === "mal_host_install_maligator_process"),
 		);
-		expect(symbols.error, symbols.stderr).toBeUndefined();
-		expect(symbols.status, symbols.stderr).toBe(0);
-		expect(symbols.stdout).toMatch(/^_?main$/m);
-		expect(symbols.stdout).not.toContain("mal_host_install_maligator_process");
+		expect(defined).toEqual(["main"]);
 	});
 	it.each([false, true])(
 		"preserves identity, shape and deep immutability with GC stress=%s",
