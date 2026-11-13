@@ -3492,6 +3492,9 @@ static bool pl_needs_general(MalVm *vm, MalValue stages) {
     for (u32 i = 0; i < count; i++) {
         MalValue stage = stream_array_at(mal_value_to_array_object(stages), i);
         if (!stream_is_node_stream(vm, stage) || pl_is_runtime_web_stream(vm, stage)) return true;
+        if (!stream_prototype_chain_has(stage, vm->intrinsics[MAL_INTRINSIC_NODE_READABLE_PROTOTYPE])
+            && !stream_prototype_chain_has(stage, vm->intrinsics[MAL_INTRINSIC_NODE_WRITABLE_PROTOTYPE])
+            && !stream_prototype_chain_has(stage, vm->intrinsics[MAL_INTRINSIC_NODE_DUPLEX_PROTOTYPE])) return true;
     }
     return false;
 }
