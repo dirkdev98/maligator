@@ -1068,7 +1068,7 @@ static void mal_perf_stats_print(void) {
         "property_stub_cache_allocations=%llu "
         "inherited_property_stub_cache_allocations=%llu "
         "inherited_property_stub_cache_bytes=%llu interp_call_cache_allocations=%llu "
-        "global_property_cache_allocations=%llu capture_environments=%llu "
+        "global_property_cache_allocations=%llu capture_environments=%llu scope_environments=%llu "
         "deferred_capture_environments=%llu\n",
         (unsigned long long) mal_perf_stats.object_empty_creations,
         (unsigned long long) mal_perf_stats.object_shaped_creations,
@@ -1092,6 +1092,7 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.interp_call_cache_allocations,
         (unsigned long long) mal_perf_stats.global_property_cache_allocations,
         (unsigned long long) mal_perf_stats.capture_environments,
+        (unsigned long long) mal_perf_stats.scope_environments,
         (unsigned long long) mal_perf_stats.deferred_capture_environments
     );
     fprintf(

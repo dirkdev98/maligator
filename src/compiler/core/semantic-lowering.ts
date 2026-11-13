@@ -8627,7 +8627,7 @@ function setupPerIterationScope(
 		| ESTree.ForOfStatement
 		| ESTree.WhileStatement
 		| ESTree.DoWhileStatement,
-): { scopeId: number; slotCount: number } | null {
+): { scopeId: number; slotCount: number; capturesHead: boolean } | null {
 	const loopScope = fn.semanticFile.nodeToScope.get(loopNode);
 	const ownedScopes = new Set<Scope>();
 	if (loopScope?.node === loopNode) {
@@ -8653,7 +8653,13 @@ function setupPerIterationScope(
 			index,
 		});
 	});
-	return { scopeId, slotCount: captured.length };
+	return {
+		scopeId,
+		slotCount: captured.length,
+		capturesHead:
+			loopScope?.node === loopNode &&
+			loopScope.bindings.some((binding) => binding.scopedTo === "captured"),
+	};
 }
 
 /**
@@ -8819,7 +8825,13 @@ function compileForOfStatement(
 	const perIter = setupPerIterationScope(program, fn, statement);
 	const lexicalHead =
 		statement.left.type === "VariableDeclaration" && statement.left.kind !== "var";
-	if (perIter && lexicalHead) {
+	const deferInitialEnv =
+		perIter !== null &&
+		!perIter.capturesHead &&
+		!statement.await &&
+		statement.left.type === "VariableDeclaration" &&
+		(statement.left.kind === "let" || statement.left.kind === "const");
+	if (perIter && lexicalHead && !deferInitialEnv) {
 		entryCursor.block.emitter.emit({
 			type: "envPush",
 			scopeId: perIter.scopeId,
@@ -8860,7 +8872,7 @@ function compileForOfStatement(
 			statement.left,
 			statement.body,
 			perIter,
-			lexicalHead && perIter !== null,
+			deferInitialEnv ? "deferred" : lexicalHead && perIter !== null,
 		);
 	}
 }
@@ -9019,7 +9031,7 @@ function compileForInOfLoop(
 	left: ESTree.ForOfStatement["left"],
 	body: ESTree.Statement,
 	perIter: { scopeId: number; slotCount: number } | null,
-	perIterEnvEntered: boolean,
+	perIterEnvEntered: boolean | "deferred",
 	forInSource?: number,
 ) {
 	const labels = takePendingLabels(fn);
@@ -9029,7 +9041,16 @@ function compileForInOfLoop(
 		type: "getIterator",
 		registers: [iteratorRegister, nextRegister, iterable],
 	});
-	if (perIter && !perIterEnvEntered) {
+	let enteredRegister: number | undefined;
+	if (perIterEnvEntered === "deferred") {
+		enteredRegister = nextCoreVariable(fn);
+		entryCursor.block.emitter.emit({
+			type: "createBoolean",
+			registers: [enteredRegister],
+			value: false,
+		});
+	}
+	if (perIter && perIterEnvEntered === false) {
 		entryCursor.block.emitter.emit({
 			type: "envPush",
 			scopeId: perIter.scopeId,
@@ -9088,21 +9109,49 @@ function compileForInOfLoop(
 		});
 		const present = nextCoreVariable(fn);
 		fn.blocks[filterIdx]!.emitter.emit(
-			{ type: "forInHas", registers: [present, forInSource, valueRegister, iterable] },
+			{
+				type: "forInHas",
+				registers: [present, forInSource, valueRegister, iterable],
+			},
 			{ type: "jumpIf", registers: [present], blocks: [bindIdx] },
 			{ type: "jump", blocks: [headerIdx] },
 		);
 	}
 
-	// A fresh per-iteration env; continue re-enters via the header, so this re-runs
-	// each iteration. The head pattern and body TDZ initialization overwrite copied
-	// values before user code can observe them.
+	let protectedBindBlock = bindBlock;
 	if (perIter) {
-		bindBlock.emitter.emit({
+		let copyBlock = bindBlock;
+		let protectedBindIdx: number | undefined;
+		if (enteredRegister !== undefined) {
+			copyBlock = { emitter: unboundCoreEmitter };
+			const copyIdx = fn.blocks.push(copyBlock) - 1;
+			protectedBindBlock = { emitter: unboundCoreEmitter };
+			protectedBindIdx = fn.blocks.push(protectedBindBlock) - 1;
+			// Only body bindings are captured, so an empty loop needs no environment.
+			// Keep it until loop exit so iterator calls and abrupt cleanup retain the
+			// same environment chain as subsequent iterations.
+			bindBlock.emitter.emit(
+				{ type: "jumpIf", registers: [enteredRegister], blocks: [copyIdx] },
+				{
+					type: "envPush",
+					scopeId: perIter.scopeId,
+					slotCount: perIter.slotCount,
+				},
+				{ type: "createBoolean", registers: [enteredRegister], value: true },
+				{ type: "jump", blocks: [protectedBindIdx] },
+			);
+		}
+		copyBlock.emitter.emit({
 			type: "envCopy",
 			scopeId: perIter.scopeId,
 			slotCount: perIter.slotCount,
 		});
+		if (protectedBindIdx !== undefined) {
+			copyBlock.emitter.emit({
+				type: "jump",
+				blocks: [protectedBindIdx],
+			});
+		}
 	}
 
 	const tryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> = {
@@ -9110,13 +9159,13 @@ function compileForInOfLoop(
 		// Patched below: [handler, end].
 		blocks: [-1, -1],
 	};
-	bindBlock.emitter.emit(tryBegin);
+	protectedBindBlock.emitter.emit(tryBegin);
 
 	// The protected range ends before the back edge.
 	const bodyLastBlock = compileForInOfIteration(
 		program,
 		fn,
-		bindBlock,
+		protectedBindBlock,
 		left,
 		valueRegister,
 		body,
@@ -9157,7 +9206,20 @@ function compileForInOfLoop(
 	// unwinds the frame (or is caught in an outer scope, where the per-iteration
 	// env's parent chain still resolves correctly).
 	if (perIter) {
-		fn.blocks[exitIdx]!.emitter.emit({ type: "envPop" });
+		if (enteredRegister === undefined) {
+			fn.blocks[exitIdx]!.emitter.emit({ type: "envPop" });
+		} else {
+			const popIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+			const afterIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+			fn.blocks[exitIdx]!.emitter.emit(
+				{ type: "jumpIf", registers: [enteredRegister], blocks: [popIdx] },
+				{ type: "jump", blocks: [afterIdx] },
+			);
+			fn.blocks[popIdx]!.emitter.emit(
+				{ type: "envPop" },
+				{ type: "jump", blocks: [afterIdx] },
+			);
+		}
 	}
 	exitJump.blocks[0] = exitIdx;
 	for (const jump of loop.breakJumps) {

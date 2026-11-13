@@ -482,6 +482,7 @@ static MalEnv *mal_env_new_storage(
 #endif
     }
     if (function_index >= 0) MAL_PERF_COUNT(capture_environments);
+    else MAL_PERF_COUNT(scope_environments);
     if (values != nullptr) {
         MAL_PERF_COUNT(deferred_capture_environments);
         // A cell allocated black during marking is old and may now hold young values.

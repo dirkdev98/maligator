@@ -401,6 +401,7 @@ typedef struct MalPerfStats {
     u64 interp_call_cache_allocations;
     u64 global_property_cache_allocations;
     u64 capture_environments;
+    u64 scope_environments;
     u64 deferred_capture_environments;
 
     u64 binary_number_arithmetic_hits;
