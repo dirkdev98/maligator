@@ -564,15 +564,26 @@ static void stream_schedule_pull(MalVm *vm, MalValue receiver) {
         mal_value_new_undefined(), mal_value_new_undefined(), 0, 0);
 }
 
+static bool stream_update_readable_listening(MalVm *vm, MalValue receiver) {
+    MalValue state = stream_own(vm, receiver, "_readableState");
+    bool listening = mal_node_events_listener_count(vm, receiver, "readable") > 0;
+    if (stream_truthy_own(vm, state, "readableListening") && !listening) {
+        stream_set(vm, state, "readableListening", mal_value_new_boolean(false));
+        if (!stream_truthy_own(vm, state, "paused"))
+            stream_set(vm, state, "flowingFalse", mal_value_new_boolean(false));
+    }
+    return listening;
+}
+
 static void stream_resume_core(MalVm *vm, MalValue receiver) {
     if (!stream_is_readable(vm, receiver) || stream_truthy_own(vm, receiver, "destroyed")) {
         return;
     }
     bool was_paused = stream_truthy_own(vm, receiver, "_malPaused");
     MalValue readable_state = stream_own(vm, receiver, "_readableState");
+    stream_set(vm, readable_state, "paused", mal_value_new_boolean(false));
     stream_set(vm, receiver, "_malPaused", mal_value_new_boolean(false));
-    // resume(): state.flowing = !state.readableListening.
-    if (stream_truthy_own(vm, readable_state, "readableListening")) {
+    if (stream_update_readable_listening(vm, receiver)) {
         if (was_paused) stream_emit(vm, receiver, "resume", nullptr, 0);
         return;
     }
@@ -888,6 +899,7 @@ static MalValue stream_pause(
     stream_set(vm, receiver, "_malPaused", mal_value_new_boolean(true));
     stream_set(vm, receiver, "_malFlowing", mal_value_new_boolean(false));
     stream_set(vm, stream_own(vm, receiver, "_readableState"), "flowingFalse", mal_value_new_boolean(true));
+    stream_set(vm, stream_own(vm, receiver, "_readableState"), "paused", mal_value_new_boolean(true));
     stream_emit(vm, receiver, "pause", nullptr, 0);
     return receiver;
 }
@@ -917,7 +929,7 @@ static MalValue stream_is_paused(
     stream_require_readable(vm, receiver);
     return mal_value_new_boolean(
         vm->completion.kind != MAL_COMPLETION_THROW
-        && stream_truthy_own(vm, receiver, "_malPaused"));
+        && stream_truthy_own(vm, stream_own(vm, receiver, "_readableState"), "flowingFalse"));
 }
 
 static MalValue stream_set_encoding(
@@ -997,7 +1009,7 @@ static MalValue stream_on(
         MalString *readable = mal_intrinsic_static_ascii(vm, (const byte *) "readable");
         MalValue state = stream_own(vm, receiver, "_readableState");
         if (mal_string_equals(event, data) && stream_is_readable(vm, receiver)) {
-            // Node resumes on 'data' unless flowing was set false by pause() or a 'readable' listener.
+            stream_update_readable_listening(vm, receiver);
             if (!stream_truthy_own(vm, state, "flowingFalse")) stream_resume_core(vm, receiver);
         } else if (mal_string_equals(event, readable) && stream_is_readable(vm, receiver)
             && !stream_truthy_own(vm, state, "endEmitted") && !stream_truthy_own(vm, state, "readableListening")) {

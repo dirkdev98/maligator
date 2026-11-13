@@ -209,3 +209,39 @@ console.log(
 	"writableLength" in Writable.prototype,
 );
 await new Promise((resolve) => slow.end(resolve));
+
+for (const removal of ["once", "remove", "removeAll"]) {
+	const source = new Readable({ read() {} });
+	console.log("initially paused", source.isPaused());
+	let onReadable;
+	const ready = new Promise((resolve) => {
+		onReadable = resolve;
+		if (removal === "once") source.once("readable", onReadable);
+		else source.on("readable", onReadable);
+	});
+	source.push("resumed");
+	await ready;
+	if (removal === "remove") source.removeListener("readable", onReadable);
+	if (removal === "removeAll") source.removeAllListeners("readable");
+	const chunks = [];
+	const ended = new Promise((resolve) => source.on("end", resolve));
+	source.on("data", (chunk) => chunks.push(chunk.toString()));
+	source.push(null);
+	await ended;
+	console.log("flow after", removal, chunks.join());
+}
+
+const explicitlyPaused = new Readable({ read() {} });
+const pauseReady = new Promise((resolve) => explicitlyPaused.once("readable", resolve));
+explicitlyPaused.push("paused");
+await pauseReady;
+explicitlyPaused.pause();
+const pauseChunks = [];
+explicitlyPaused.on("data", (chunk) => pauseChunks.push(chunk.toString()));
+await Promise.resolve();
+console.log("explicit pause retained", explicitlyPaused.isPaused(), pauseChunks.length);
+const pauseEnd = new Promise((resolve) => explicitlyPaused.on("end", resolve));
+explicitlyPaused.resume();
+explicitlyPaused.push(null);
+await pauseEnd;
+console.log("explicit resume", pauseChunks.join());
