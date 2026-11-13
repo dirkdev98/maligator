@@ -89,7 +89,7 @@ function enumerateOpenings(
 	environment: ClosureEnvironment,
 ): Array<ClosureOpening> {
 	const openings: Array<ClosureOpening> = [];
-	if (config.engine.eval === true) openings.push(dynamicCodeOpening(graph, config));
+	if (config.engine.eval === true) openings.push(...dynamicCodeOpenings(graph, config));
 	if (environment.hostWireSplicing) {
 		openings.push({
 			kind: "host-wire-splicing",
@@ -116,49 +116,63 @@ function enumerateOpenings(
 
 /**
  * Classify what code compiled at run time can reach. Indirect eval and the
- * `Function` constructors evaluate in the global scope, so without a direct eval
- * site that code sees only the global object, its arguments and what those reach.
- * A script shares its top-level declarations with that scope, a direct eval shares
- * the caller's, mutable primordials let it rewrite the builtins the program's
- * proofs resolve, and another realm runs it against globals the program never
- * models; each keeps the program open.
+ * `Function` constructors evaluate in the global scope, so that code sees only the
+ * global object, its arguments and what those reach. A direct eval in an ES module
+ * also sees the bindings in scope at its call, which the compiler copies into a
+ * scope object the call receives and writes back from after it, so Core sees each
+ * as an escaping value and an ordinary store.
+ *
+ * A script shares its top-level declarations with the global scope, a CommonJS
+ * direct eval sees the module's `require`, `module` and `exports` and adds sloppy
+ * `var`s to its caller, mutable primordials let run-time code rewrite the builtins
+ * the program's proofs resolve, and another realm runs it against globals the
+ * program never models; each keeps the program open.
  */
-function dynamicCodeOpening(
+function dynamicCodeOpenings(
 	graph: ModuleGraph,
 	config: ResolvedBuildConfig,
-): ClosureOpening {
-	const binding = (detail: string, module?: string): ClosureOpening => ({
-		kind: "dynamic-code",
-		...(module === undefined ? {} : { module }),
-		detail,
-	});
+): Array<ClosureOpening> {
+	const unconfined = (detail: string, module?: string): Array<ClosureOpening> => [
+		{ kind: "dynamic-code", ...(module === undefined ? {} : { module }), detail },
+	];
 	if (config.engine.primordials !== "locked")
-		return binding(
+		return unconfined(
 			"engine.eval is true with mutable primordials, so run-time code can replace the builtins the program uses",
 		);
 	if (config.engine.realms)
-		return binding(
+		return unconfined(
 			"engine.eval is true with realms, so run-time code can run against globals of other realms",
 		);
+	const directEvals: Array<ClosureOpening> = [];
 	for (const modulePath of [...graph.modules.keys()].sort()) {
 		const record = graph.modules.get(modulePath)!;
 		if (record.host !== undefined || record.external !== undefined) continue;
 		if (record.goal === "script")
-			return binding(
+			return unconfined(
 				"engine.eval is true and a script's top-level declarations are global bindings that run-time code can name",
 				modulePath,
 			);
-		if (mayCallDirectEval(record))
-			return binding(
-				"engine.eval is true and a direct eval can name the bindings in scope at its call",
+		if (!mayCallDirectEval(record)) continue;
+		if (record.goal === "cjs")
+			return unconfined(
+				"engine.eval is true and a CommonJS direct eval can name the module's require, module and exports bindings",
 				modulePath,
 			);
+		directEvals.push({
+			kind: "direct-eval",
+			module: modulePath,
+			detail:
+				"a direct eval receives the bindings in scope at its call as a scope object and writes them back after it, so only those values reach run-time code",
+		});
 	}
-	return {
-		kind: "global-dynamic-code",
-		detail:
-			"engine.eval is true, so the embedded compiler can turn runtime strings into global code that reaches the program only through the global object and the values it is handed",
-	};
+	return [
+		{
+			kind: "global-dynamic-code",
+			detail:
+				"engine.eval is true, so the embedded compiler can turn runtime strings into global code that reaches the program only through the global object and the values it is handed",
+		},
+		...directEvals,
+	];
 }
 
 /**

@@ -61,6 +61,15 @@ it("lowers private rest iteration while run-time code can only run as global cod
 	).toBe(false);
 });
 
+it("lowers private rest iteration that no direct eval sees", () => {
+	expect(
+		iteratesWithProtocol(
+			`function target(base,...values){${iterate}} function other(code){return eval(code);} globalThis.target=target; globalThis.other=other;`,
+			{ eval: true },
+		),
+	).toBe(false);
+});
+
 it("keeps rest iteration observable to a direct eval", () => {
 	expect(
 		iteratesWithProtocol(

@@ -28,7 +28,7 @@ it("compiles the complete frozen module graph with the product closure certifica
 	}
 });
 
-it("does not claim closure when run-time source can name program bindings", async () => {
+it("does not claim closure when run-time source can replace builtins", async () => {
 	const directory = mkdtempSync(path.join(tmpdir(), "mal-micro-open-"));
 	try {
 		const fixture = path.join(directory, "entry.mjs");
@@ -36,7 +36,7 @@ it("does not claim closure when run-time source can name program bindings", asyn
 		const { evidence } = await compileNativeMicroProgram(
 			path.resolve(import.meta.dirname, ".."),
 			fixture,
-			resolveBuildConfig({ engine: { eval: true } }),
+			resolveBuildConfig({ engine: { eval: true, primordials: "mutable" } }),
 		);
 		expect(evidence.closure.sourceClosure.kind).not.toBe("known");
 	} finally {

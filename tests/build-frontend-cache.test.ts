@@ -107,12 +107,33 @@ describe("normal build frontend cache", () => {
 	);
 
 	it.each([
-		{ evalEnabled: false, source: "console.log(42);\n", kind: "known" },
-		{ evalEnabled: true, source: "console.log(42);\n", kind: "known" },
-		{ evalEnabled: true, source: 'console.log(eval("42"));\n', kind: "unknown" },
-	])(
-		"retains a $kind source closure with eval $evalEnabled on cache hits",
-		({ evalEnabled, source, kind }) => {
+		{
+			evalEnabled: false,
+			primordials: "locked",
+			source: "console.log(42);\n",
+			kind: "known",
+		},
+		{
+			evalEnabled: true,
+			primordials: "locked",
+			source: "console.log(42);\n",
+			kind: "known",
+		},
+		{
+			evalEnabled: true,
+			primordials: "locked",
+			source: 'console.log(eval("42"));\n',
+			kind: "known",
+		},
+		{
+			evalEnabled: true,
+			primordials: "mutable",
+			source: 'console.log(eval("42"));\n',
+			kind: "unknown",
+		},
+	] as const)(
+		"retains a $kind source closure with eval $evalEnabled and $primordials primordials on cache hits",
+		({ evalEnabled, primordials, source, kind }) => {
 			const root = temporaryDirectory();
 			try {
 				const entrypoint = path.join(root, "entry.mjs");
@@ -120,7 +141,7 @@ describe("normal build frontend cache", () => {
 				const options = {
 					entrypoint,
 					cacheDirectory: path.join(root, "cache"),
-					config: resolveBuildConfig({ engine: { eval: evalEnabled } }),
+					config: resolveBuildConfig({ engine: { eval: evalEnabled, primordials } }),
 					stripTypes: stripCompactTypes,
 					stripperIdentity: "cached-source-closure",
 				};

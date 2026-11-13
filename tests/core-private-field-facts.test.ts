@@ -2,9 +2,15 @@ import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { analyzeCorePrivateFields } from "../src/compiler/core/core-private-field-analysis.ts";
 import type { CorePrivateFieldFact } from "../src/compiler/core/core-private-field-facts.ts";
+import { runSemanticAnalysisForGraph } from "../src/compiler/frontend/analyze-module-graph.ts";
+import { certifyProgramClosure } from "../src/compiler/frontend/certify-closure.ts";
+import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { constructSemanticProgramCore } from "../src/compiler/pipeline/compile-core-common.ts";
-import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	compilerProgramFactsFromConfig,
+	withProgramClosure,
+} from "../src/compiler/shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMBER,
@@ -122,18 +128,66 @@ const elementSource = `
 	}
 	globalThis.elements = new Elements();`;
 
+const evalScopeSource = `
+	class Open {
+		#count = 0;
+		bumpOpen() { this.#count = this.#count + 1; }
+		openCount() { return this.#count; }
+		run(code) { return eval(code); }
+	}
+	class Sealed {
+		#count = 0;
+		bumpSealed() { this.#count = this.#count + 1; }
+		sealedCount() { return this.#count; }
+	}
+	globalThis.classes = eval("[Open, Sealed]");`;
+
 function fieldFacts(evalMode: "disabled" | "runtime", program = source) {
-	const core = constructSemanticProgramCore(
-		analyzeSourceAndRunSemanticAnalysis(program, "/fields.js"),
-		{
-			facts: compilerProgramFactsFromConfig(
-				resolveBuildConfig({
-					engine: { primordials: "locked", eval: evalMode === "disabled" ? false : true },
-				}),
-			),
-		},
-		(_phase, run) => run(),
+	return factsByMethod(
+		constructSemanticProgramCore(
+			analyzeSourceAndRunSemanticAnalysis(program, "/fields.js"),
+			{
+				facts: compilerProgramFactsFromConfig(
+					resolveBuildConfig({
+						engine: {
+							primordials: "locked",
+							eval: evalMode === "disabled" ? false : true,
+						},
+					}),
+				),
+			},
+			(_phase, run) => run(),
+		),
 	);
+}
+
+/** Facts for an ES module whose closure certificate admits its direct evals. */
+function moduleFieldFacts(program: string) {
+	const config = resolveBuildConfig({ engine: { primordials: "locked", eval: true } });
+	const graph = buildModuleGraph("/fields.mjs", {
+		entrySource: program,
+		entryGoal: "module",
+		entryStrict: true,
+		buildConfig: config,
+	});
+	return factsByMethod(
+		constructSemanticProgramCore(
+			runSemanticAnalysisForGraph(graph),
+			{
+				facts: withProgramClosure(
+					compilerProgramFactsFromConfig(config),
+					certifyProgramClosure(graph, config, {
+						relocatableArtifact: false,
+						hostWireSplicing: false,
+					}),
+				),
+			},
+			(_phase, run) => run(),
+		),
+	);
+}
+
+function factsByMethod(core: ReturnType<typeof constructSemanticProgramCore>) {
 	const facts = analyzeCorePrivateFields(core.program, core.context);
 	if (facts === undefined) return undefined;
 	const byMethod = new Map<string, CorePrivateFieldFact | undefined>();
@@ -258,7 +312,21 @@ describe("private field facts", () => {
 		expect(fields.get("kept")?.elements).toBeUndefined();
 	});
 
-	it("give no facts when direct eval could write private fields", () => {
+	it("give no facts while run-time code is unconfined", () => {
 		expect(fieldFacts("runtime")).toBeUndefined();
+	});
+
+	it("know nothing of a field a direct eval in its class can write", () => {
+		const fields = moduleFieldFacts(evalScopeSource)!;
+		expect(fields.get("openCount")).toEqual({
+			kinds: COMPILER_VALUE_KIND_TOP,
+			brand: undefined,
+			constructionOnly: false,
+		});
+		expect(fields.get("sealedCount")).toEqual({
+			kinds: COMPILER_VALUE_KIND_NUMBER,
+			brand: undefined,
+			constructionOnly: false,
+		});
 	});
 });

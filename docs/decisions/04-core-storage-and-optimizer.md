@@ -224,11 +224,22 @@ runtime creates itself keep opaque parameters.
 Code that `engine.eval: true` compiles at run time is one more opaque caller when it
 can only run as global code: indirect eval and the function constructors reach the
 global object, the values the program hands them and what those reach, which is
-what host code can reach. The closure certificate keeps source closure for such a
-program unless a module may call a direct eval, a script shares its top-level
-declarations with global code, primordials are mutable, or realms are enabled.
-Proofs that enumerate every reader or writer of a local, captured, module or
-private binding stay off only while run-time code is unconfined.
+what host code can reach. A direct eval in an ES module adds the bindings in scope
+at its call. Lowering copies each into a fresh scope object, passes that object to
+an opaque call, and stores what the call leaves there back into each mutable
+binding, so Core sees every read and write the eval can make as ordinary loads,
+an escaping argument and stores. Proofs that enumerate readers and writers through
+Core therefore exclude exactly the functions, cells, module bindings and private
+fields some direct eval can see. Private field facts also need the field's key to
+stay inside private element operations; a key marshaled into a scope object gives
+its field unknown values.
+
+The closure certificate keeps source closure for such a program unless a CommonJS
+module may call a direct eval (it sees `require`, `module` and `exports`, and adds
+sloppy `var`s to its caller), a script shares its top-level declarations with
+global code, primordials are mutable, or realms are enabled. Proofs that
+enumerate every reader or writer of a local, captured, module or private binding
+stay off while run-time code is unconfined.
 
 A property read keeps finite targets only as guarded candidates: the functions a
 known function object's property or a same-function object literal's initializer

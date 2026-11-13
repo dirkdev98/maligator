@@ -1,5 +1,5 @@
-// A direct eval names the bindings in scope at its call, so a program that contains
-// one keeps every module, closure and private-field binding observable.
+// A direct eval names the bindings in scope at its call, so the program keeps each
+// local, capture, module binding and private field it can see observable to it.
 
 let moduleCounter = 0;
 

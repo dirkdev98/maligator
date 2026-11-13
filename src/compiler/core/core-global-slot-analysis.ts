@@ -20,7 +20,8 @@ function definitionOpcode(fn: CoreFunctionStore, value: CoreValueId): string | u
 
 /**
  * Stable brands of initialized values in closed immutable slots. Reading an
- * uninitialized slot throws; direct eval would invalidate the store inventory.
+ * uninitialized slot throws. Unconfined run-time code could name a slot without a
+ * Core store, which would invalidate the store inventory.
  */
 export function analyzeCoreGlobalSlotBrands(
 	program: CoreProgram,

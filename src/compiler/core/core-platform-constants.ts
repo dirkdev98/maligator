@@ -410,7 +410,10 @@ export function specializeCorePlatformConstants(
 	}
 }
 
-/** Internal alias stores must not keep discarded snapshots alive; a direct eval can expose those cells. */
+/**
+ * Internal alias stores must not keep discarded snapshots alive. A direct eval reads
+ * the cells it sees through Core loads; unconfined run-time code could read one unseen.
+ */
 export function pruneUnusedPlatformAliases(
 	compilation: ConstructedCoreCompilation,
 ): void {

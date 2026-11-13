@@ -177,6 +177,7 @@ export type ClosureOpeningKind =
 	| "not-analyzed"
 	| "dynamic-code"
 	| "global-dynamic-code"
+	| "direct-eval"
 	| "host-wire-splicing"
 	| "relocatable-artifact"
 	| "computed-module-specifier"
@@ -203,6 +204,12 @@ export interface ClosureOpening {
  * use what escapes to it and call every published function with any arguments,
  * since host code has that reach too, so such code adds no caller or writer they
  * do not admit.
+ *
+ * `direct-eval` marks an ES module whose direct evals hand run-time code the
+ * bindings in scope. The compiler lowers each such call to Core loads of those
+ * bindings into a fresh scope object, an opaque call that receives it, and Core
+ * stores of what the call leaves there, so the call publishes exactly the values
+ * it can name and writes exactly the bindings it can assign.
  */
 export function closureOpeningBreaksSourceClosure(kind: ClosureOpeningKind): boolean {
 	switch (kind) {
@@ -213,6 +220,7 @@ export function closureOpeningBreaksSourceClosure(kind: ClosureOpeningKind): boo
 		case "unresolved-runtime-load":
 			return true;
 		case "global-dynamic-code":
+		case "direct-eval":
 		case "computed-module-specifier":
 		case "unresolved-module-target":
 			return false;
@@ -281,12 +289,14 @@ export function programClosureCertificate(
 }
 
 /**
- * Whether code compiled at run time may reach past the global object and the values
- * it is handed: naming locals, captures, module bindings or private names through a
- * direct eval or a script's global declarations, or rewriting builtins and realms
- * the program's proofs resolve. Passes whose proofs enumerate every reader or
- * writer of a program binding stay off while it may. Confined run-time code is one
- * more opaque caller, which every closed-world proof already admits.
+ * Whether code compiled at run time may reach past the global object, the values
+ * it is handed and the scope objects of ES module direct evals: naming a script's
+ * global declarations or a CommonJS module's bindings, or rewriting builtins and
+ * realms the program's proofs resolve. Passes whose proofs enumerate every reader
+ * or writer of a program binding stay off while it may. Confined run-time code is
+ * one more opaque caller, which every closed-world proof already admits; the
+ * bindings a direct eval sees reach it only through Core loads and stores around
+ * that call, so those proofs see each one.
  */
 export function unconfinedDynamicCode(
 	facts: Pick<CompilerProgramFacts, "world" | "closure">,

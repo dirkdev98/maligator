@@ -70,10 +70,21 @@ function operand(
 export class CorePrivateFieldKeys {
 	readonly #names: CoreModulePrivateNameIndex;
 	readonly #captured: ReadonlySet<string>;
+	/**
+	 * Keys whose value reaches code other than private element operations, such as
+	 * the scope object of a direct eval inside the class body. That code can read
+	 * and write the field without an instruction the analysis sees.
+	 */
+	readonly escaped: ReadonlySet<string>;
 
-	constructor(names: CoreModulePrivateNameIndex, captured: ReadonlySet<string>) {
+	constructor(
+		names: CoreModulePrivateNameIndex,
+		captured: ReadonlySet<string>,
+		escaped: ReadonlySet<string>,
+	) {
 		this.#names = names;
 		this.#captured = captured;
+		this.escaped = escaped;
 	}
 
 	key(fn: CoreFunctionStore, value: CoreValueId): string | undefined {
@@ -126,13 +137,53 @@ export class CorePrivateFieldKeys {
 	}
 }
 
-/** Private-name slots that nothing but their `createPrivateNames` writes. */
+const PRIVATE_KEY_OPERATIONS: ReadonlySet<string> = new Set([
+	"loadPrivate",
+	"hasPrivate",
+	"storePrivate",
+	"definePrivate",
+]);
+
+/** Whether a loaded private key reaches anything but the key operand of a private element operation. */
+function privateKeyEscapes(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	depth = 0,
+): boolean {
+	if (depth > 16 || fn.kernel.valueHandlerUseCount(value) !== 0) return true;
+	for (let use = fn.kernel.valueFirstUse(value); use >= 0; use = fn.kernel.useNext(use)) {
+		if (fn.kernel.useLive(use) === 0) continue;
+		const instruction = fn.kernel.useInstruction(use);
+		if (fn.instructionKind(instruction) !== "operation") return true;
+		const opcode = fn.instructionOpcodeName(instruction);
+		const position = fn.kernel.useOperand(use);
+		if (opcode === "move") {
+			const copy = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+			if (privateKeyEscapes(fn, copy, depth + 1)) return true;
+		} else if (
+			opcode !== "rootUse" &&
+			!(PRIVATE_KEY_OPERATIONS.has(opcode) && position === 1) &&
+			!(opcode === "initPrivateFields" && position > 0)
+		)
+			return true;
+	}
+	return false;
+}
+
+/**
+ * Private-name slots that nothing but their `createPrivateNames` writes, and those
+ * whose key some load hands to other code.
+ */
 export function corePrivateFieldKeys(
 	program: CoreProgram,
 	context: CoreCompilationContext,
 ): CorePrivateFieldKeys {
 	const captured = new Set<string>();
 	const stored = new Set<string>();
+	const moduleSlots = new Set(
+		(context.data.modulePrivateNames ?? []).map(({ slot }) => slot),
+	);
+	const loads: Array<{ fn: CoreFunctionStore; key: string; value: CoreValueId }> = [];
 	for (const id of program.functionIds()) {
 		const fn = program.function(id);
 		for (const instruction of fn.instructionIds()) {
@@ -148,11 +199,37 @@ export function corePrivateFieldKeys(
 			} else if (opcode === "storeCaptured") {
 				const key = capturedSlotKey(attributes.functionIndex, attributes.index);
 				if (key !== undefined) stored.add(key);
+			} else if (opcode === "loadCaptured" || opcode === "loadGlobal") {
+				// Slot identity, not `key()`: a load before the name exists still hands it out.
+				const key =
+					opcode === "loadCaptured"
+						? capturedSlotKey(attributes.functionIndex, attributes.index)
+						: typeof attributes.index === "number" && moduleSlots.has(attributes.index)
+							? `g:${attributes.index}`
+							: undefined;
+				if (key !== undefined)
+					loads.push({
+						fn,
+						key,
+						value: fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+					});
 			}
 		}
 	}
 	for (const key of stored) captured.delete(key);
-	return new CorePrivateFieldKeys(coreModulePrivateNames(program, context), captured);
+	const escaped = new Set<string>();
+	for (const { fn, key, value } of loads)
+		if (
+			!escaped.has(key) &&
+			(key.startsWith("g:") || captured.has(key)) &&
+			privateKeyEscapes(fn, value)
+		)
+			escaped.add(key);
+	return new CorePrivateFieldKeys(
+		coreModulePrivateNames(program, context),
+		captured,
+		escaped,
+	);
 }
 
 /** Field facts for a program, keyed by the slot each field's key is loaded from. */

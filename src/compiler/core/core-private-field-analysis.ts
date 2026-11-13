@@ -231,8 +231,8 @@ function elementPolicyIsLocked(context: CoreCompilationContext): boolean {
  * The kinds and class each class-private field can hold: the least fixed point
  * over the values its observable writes store, where a write may itself read
  * private fields. Every value a private field holds comes from such a write, so
- * a successful read returns one of them. Direct eval could name private fields
- * invisibly.
+ * a successful read returns one of them. A field whose key escapes, as to a direct
+ * eval in the class body, also holds whatever that code writes.
  */
 export function analyzeCorePrivateFields(
 	program: CoreProgram,
@@ -269,7 +269,10 @@ export function analyzeCorePrivateFields(
 				(construction.get(write.key) ?? true) &&
 					storesOwnAddition(fn, control, writes, write),
 			);
-	const brands = new Map<string, CoreExactHeapBrand | null>();
+	for (const key of keys.escaped) construction.set(key, false);
+	const brands = new Map<string, CoreExactHeapBrand | null>(
+		[...keys.escaped].map((key) => [key, null]),
+	);
 	const valueBrand = (
 		{ fn, classes }: FieldWriter,
 		value: CoreValueId,
@@ -310,7 +313,7 @@ export function analyzeCorePrivateFields(
 			if (valueBrand(writer, write.value) === "Array") arrayKeys.add(write.key);
 			else otherKeys.add(write.key);
 		}
-	for (const key of otherKeys) arrayKeys.delete(key);
+	for (const key of [...otherKeys, ...keys.escaped]) arrayKeys.delete(key);
 	const elements = new CorePrivateFieldElements(program, keys, arrayKeys);
 	const records = new Map<CoreFunctionStore, KindRecord>();
 	for (const writer of writers)
@@ -344,7 +347,9 @@ export function analyzeCorePrivateFields(
 			});
 	}
 
-	const kinds = new Map<string, number>();
+	const kinds = new Map<string, number>(
+		[...keys.escaped].map((key) => [key, COMPILER_VALUE_KIND_TOP]),
+	);
 	const joinFieldKinds = (
 		writer: FieldWriter,
 		mask: (value: CoreValueId) => number,

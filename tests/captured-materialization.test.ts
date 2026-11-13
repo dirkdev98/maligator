@@ -156,13 +156,13 @@ it.each([
 });
 
 it.each([
-	{ evalEnabled: true, strict: true, directEval: true },
-	{ evalEnabled: false, strict: false, directEval: false },
+	{ evalEnabled: true, strict: true, ownerEval: true },
+	{ evalEnabled: false, strict: false, ownerEval: false },
 ])(
-	"retains closure initialization with eval=$evalEnabled, strict=$strict and direct eval=$directEval",
-	({ evalEnabled, strict, directEval }) => {
+	"retains closure initialization with eval=$evalEnabled, strict=$strict and a direct eval in the owner=$ownerEval",
+	({ evalEnabled, strict, ownerEval }) => {
 		const compilation = construct(
-			`function owner(values) { ${helpers} if (!values) return 0; return first(values.length); } globalThis.owner = owner;${directEval ? ' eval("0");' : ""}`,
+			`function owner(values) { ${helpers} ${ownerEval ? 'eval("0");' : ""} if (!values) return 0; return first(values.length); } globalThis.owner = owner;`,
 			evalEnabled,
 			strict,
 		);
@@ -170,9 +170,12 @@ it.each([
 	},
 );
 
-it("defers closure initialization when run-time code can only be global", () => {
+it.each([
+	{ reach: "run-time code can only be global", extra: "" },
+	{ reach: "a direct eval cannot see the owner's closures", extra: ' eval("owner");' },
+])("defers closure initialization when $reach", ({ extra }) => {
 	const compilation = construct(
-		`function owner(values) { ${helpers} if (!values) return 0; return first(values.length); } globalThis.owner = owner;`,
+		`function owner(values) { ${helpers} if (!values) return 0; return first(values.length); } globalThis.owner = owner;${extra}`,
 		true,
 	);
 	expect(deferCapturedAllocations(compilation)).toBeGreaterThan(0);
