@@ -3873,7 +3873,9 @@ static MalValue crypto_web_aes(MalVm *vm, const MalValue *args, i32 argc, bool e
     }
     if (gcm && !(tag_bits == 32 || tag_bits == 64 || tag_bits == 96 || tag_bits == 104 || tag_bits == 112
             || tag_bits == 120 || tag_bits == 128)) {
-        crypto_web_reject_dom(vm, roots[0], "Invalid AES-GCM tag length", "OperationError");
+        char message[64];
+        snprintf(message, sizeof(message), "%u is not a valid AES-GCM tag length", (unsigned) tag_bits);
+        crypto_web_reject_dom(vm, roots[0], message, "OperationError");
         goto done;
     }
     usize tag_length = gcm ? tag_bits / 8 : 0;
