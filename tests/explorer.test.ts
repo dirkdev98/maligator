@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
@@ -104,7 +105,16 @@ describe("explorer compilation", () => {
 				const actual = compileExplorerCore(source, config).facts;
 				const expected = ordinary().facts!;
 				expect(actual.world).toEqual(expected.world);
-				expect(actual.closure.openings).toEqual(expected.closure.openings);
+				// The explorer names its snippet relative to the checkout; a build names it absolutely.
+				const relativeModules = (openings: typeof actual.closure.openings) =>
+					openings.map((opening) =>
+						"module" in opening && opening.module !== undefined
+							? { ...opening, module: path.relative(process.cwd(), opening.module) }
+							: opening,
+					);
+				expect(relativeModules(actual.closure.openings)).toEqual(
+					relativeModules(expected.closure.openings),
+				);
 				expect(actual.closure.sourceClosure.kind).toBe(
 					expected.closure.sourceClosure.kind,
 				);
