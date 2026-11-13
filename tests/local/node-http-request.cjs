@@ -218,7 +218,7 @@ const server = http.createServer(function (request, response) {
 			visibleDataProperty(request, "trailers", request.trailers),
 			visibleDataProperty(request, "rawTrailers", request.rawTrailers),
 			visibleDataProperty(request, "socket", request.socket),
-			visibleDataProperty(request, "connection", request.socket),
+			!Object.prototype.hasOwnProperty.call(request, "connection"),
 			request.socket === request.connection,
 			request.socket === response.socket,
 			Object.getPrototypeOf(request) === http.IncomingMessage.prototype,
@@ -269,10 +269,6 @@ const server = http.createServer(function (request, response) {
 		delete http.ServerResponse.prototype._malStreamKind;
 		const methodDescriptor = Object.getOwnPropertyDescriptor(request, "method");
 		const requestSocketDescriptor = Object.getOwnPropertyDescriptor(request, "socket");
-		const requestConnectionDescriptor = Object.getOwnPropertyDescriptor(
-			request,
-			"connection",
-		);
 		const socketDescriptor = Object.getOwnPropertyDescriptor(response, "socket");
 		const connectionDescriptor = Object.getOwnPropertyDescriptor(response, "connection");
 		const constructorDefaults = [
@@ -308,10 +304,7 @@ const server = http.createServer(function (request, response) {
 			requestSocketDescriptor.writable === true,
 			requestSocketDescriptor.enumerable === true,
 			requestSocketDescriptor.configurable === true,
-			requestConnectionDescriptor.value === request.socket,
-			requestConnectionDescriptor.writable === true,
-			requestConnectionDescriptor.enumerable === true,
-			requestConnectionDescriptor.configurable === true,
+			!Object.prototype.hasOwnProperty.call(request, "connection"),
 			Object.getPrototypeOf(request) === http.IncomingMessage.prototype,
 			request.__httpRequestRealmMarker === "request-realm",
 			!Object.prototype.hasOwnProperty.call(response, "_malStreamKind"),

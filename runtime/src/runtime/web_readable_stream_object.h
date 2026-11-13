@@ -179,6 +179,15 @@ MalValue mal_readable_stream_from_bytes(MalVm *vm, const byte *bytes, usize leng
 #if MAL_NODE
 /** Stream Node BodyInit chunks with Buffer conversion, backpressure and iterator cancellation. */
 MalValue mal_readable_stream_from_node_body(MalVm *vm, MalValue value);
+
+/**
+ * Node converts each non-Uint8Array body chunk with `Buffer.from`. node:buffer
+ * registers that conversion when it installs, so Fetch does not link it into every
+ * Node program; the compiler installs node:buffer for programs that name `Request`
+ * or `Response`. Without a registered conversion, such a chunk errors the body.
+ */
+typedef MalValue (*MalNodeBodyChunkConverter)(MalVm *vm, MalValue chunk, MalValue encoding);
+void mal_readable_stream_set_node_chunk_converter(MalNodeBodyChunkConverter converter);
 #endif
 
 /** Internal Body-state hooks shared with the Fetch runtime. */

@@ -1,7 +1,4 @@
 #include "web_fetch.h"
-#if MAL_NODE
-#include "node_stream.h"
-#endif
 
 #include <math.h>
 #include <stdio.h>
@@ -984,6 +981,20 @@ static bool mal_response_validate_init(MalVm *vm, i32 status, MalValue status_te
 }
 
 #if MAL_NODE
+// For a Node stream, stream.isDisturbed() reads only these public flags. Probing them
+// here rather than through node:stream keeps that module out of programs without it.
+static bool mal_fetch_node_body_disturbed(MalVm *vm, MalValue body) {
+    static const char *flags[] = {"readableDidRead", "readableAborted"};
+    for (usize i = 0; i < countof(flags); i++) {
+        MalValue flag;
+        if (!mal_vm_get_property(vm, body,
+                mal_intrinsic_static_string_key(vm, (const byte *) flags[i]), &flag))
+            return false;
+        if (mal_value_is_truthy(flag)) return true;
+    }
+    return false;
+}
+
 static MalValue mal_fetch_node_iterable(MalVm *vm, MalValue value) {
     MalValue roots[] = {value, mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
@@ -993,7 +1004,7 @@ static MalValue mal_fetch_node_iterable(MalVm *vm, MalValue value) {
         && mal_value_is_callable(roots[1])) {
         if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_static_string_key(vm, (const byte *) "locked"), &roots[1]))
             goto done;
-        bool disturbed = mal_node_stream_is_disturbed(vm, roots[0]);
+        bool disturbed = mal_fetch_node_body_disturbed(vm, roots[0]);
         if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
         if (mal_value_is_truthy(roots[1]) || disturbed) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "BodyInit is locked or disturbed");

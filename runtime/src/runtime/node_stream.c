@@ -4136,7 +4136,7 @@ static bool stream_flag(MalVm *vm, MalValue object, const char *name) {
     return stream_probe(vm, object, name, &value) && mal_value_is_truthy(value);
 }
 
-bool mal_node_stream_is_disturbed(MalVm *vm, MalValue value) {
+static bool stream_is_disturbed(MalVm *vm, MalValue value) {
     return stream_flag(vm, value, "readableDidRead") || stream_flag(vm, value, "readableAborted");
 }
 
@@ -4185,7 +4185,7 @@ static MalValue stream_predicate(MalVm *vm, MalValue stream, StreamPredicate pre
             return destroyed < 0 ? mal_value_new_null() : mal_value_new_boolean(destroyed == 1);
         }
         case STREAM_IS_DISTURBED:
-            return mal_value_new_boolean(mal_node_stream_is_disturbed(vm, stream));
+            return mal_value_new_boolean(stream_is_disturbed(vm, stream));
     }
     return mal_value_new_null();
 }

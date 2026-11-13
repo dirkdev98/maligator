@@ -28,6 +28,7 @@
 #include "secure_scrub.h"
 #include "utf8.h"
 #include "typed_array_object.h"
+#include "web_readable_stream_object.h"
 #include "value.h"
 #include "value_ops.h"
 #include "vm_ops.h"
@@ -2785,6 +2786,7 @@ void mal_host_install_node_buffer(
     const MalHostLaunchContext *launch
 ) {
     (void) launch;
+    mal_readable_stream_set_node_chunk_converter(mal_node_buffer_from_value);
     MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR];
     if (!mal_value_is_undefined(cached)) {
         mal_buffer_install_exports(

@@ -462,8 +462,9 @@ describe("node:http request bridge", () => {
 					socket.on("end", () => resolve(response));
 					socket.once("error", reject);
 				});
-				expect(halfClosed).toContain("HTTP/1.1 200 OK");
-				expect(halfClosed).toContain("\r\n\r\nyes");
+				// Like Node's default `httpAllowHalfOpen: false`, peer EOF aborts a
+				// dispatched request whose response has not ended yet.
+				expect(halfClosed).toBe("");
 
 				const fixed = await fetch(`${base}/fixed-stream`);
 				expect(fixed.headers.get("content-length")).toBe("6");
@@ -831,9 +832,9 @@ describe("node:http request bridge", () => {
 		expect(field(line, "property_definitions_avoided")).toBe(sockets * 13);
 		expect(field(line, "shape_transitions_avoided")).toBe(sockets * 13);
 		expect(field(line, "incoming_message_shape_append_batches")).toBe(85);
-		expect(field(line, "incoming_message_shape_append_slots")).toBe(1190);
+		expect(field(line, "incoming_message_shape_append_slots")).toBe(1020);
 		expect(field(line, "incoming_message_shape_append_fallbacks")).toBe(1);
-		expect(field(line, "incoming_message_slot_growths_avoided")).toBe(1105);
+		expect(field(line, "incoming_message_slot_growths_avoided")).toBe(935);
 		expect(field(line, "response_constructor_shape_append_batches")).toBe(86);
 		expect(field(line, "response_constructor_shape_append_slots")).toBe(602);
 		expect(field(line, "response_constructor_shape_append_fallbacks")).toBe(1);

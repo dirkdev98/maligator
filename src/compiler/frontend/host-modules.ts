@@ -113,9 +113,9 @@ export const WORKER_GLOBALS: ReadonlyArray<string> = [
 ];
 
 /**
- * Module installers that also define free Node globals, retained at startup when a
- * program names one of them. `computedMember` means a computed `globalThis[key]`
- * read retains the installer once it is linked.
+ * Module installers that define free Node globals or that those globals need,
+ * retained at startup when a program names one of them. `computedMember` means a
+ * computed `globalThis[key]` read retains the installer once it is linked.
  */
 export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 	readonly installer: string;
@@ -134,6 +134,12 @@ export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 		computedMember: false,
 	},
 	{ installer: HTTP_INSTALLER_SYMBOL, globals: WEBSOCKET_GLOBALS, computedMember: false },
+	// Node Request and Response bodies convert async-iterable chunks with Buffer.from.
+	{
+		installer: BUFFER_INSTALLER_SYMBOL,
+		globals: ["Request", "Response"],
+		computedMember: true,
+	},
 ];
 
 // path is the one module with a planned default export (`import path from
@@ -1537,8 +1543,13 @@ export function supportedHostModuleIds(): Array<string> {
 	return [...HOST_MODULES.keys(), ...SOURCE_HOST_MODULES.keys()];
 }
 
+/**
+ * Names the runtime reports through `builtinModules` and `isBuiltin`. Node promises
+ * that `process.getBuiltinModule` loads each of them, which only native installers
+ * can do on demand; source built-ins exist only in programs that import them.
+ */
 export function supportedNodeBuiltinNames(): Array<string> {
-	const names = [...HOST_MODULES.keys(), ...SOURCE_HOST_MODULES.keys()]
+	const names = [...HOST_MODULES.keys()]
 		.map((id) => (NODE_PREFIX_ONLY_BUILTIN_IDS.has(id) ? id : id.slice(5)))
 		.sort();
 	return [

@@ -24,7 +24,7 @@ checks.push(
 	cloned.imported !== original.imported,
 	cloned.imported.type === "Identifier" && cloned.imported.name === "value",
 	typeof fetch === "undefined",
-	typeof Response === "undefined",
+	typeof Response === "function",
 	typeof EventTarget === "function",
 );
 
@@ -41,6 +41,14 @@ await new Promise((resolve) => {
 	});
 });
 checks.push(order.join(",") === "promise,microtask", scope.getStore() === undefined);
+
+const iterableBody = new Response(
+	(async function* () {
+		yield "O";
+		yield new Uint8Array([75]);
+	})(),
+);
+checks.push((await iterableBody.text()) === "OK");
 
 const passed = checks.filter(Boolean).length;
 console.log(`RESULT ${passed}/${checks.length}`);

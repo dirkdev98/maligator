@@ -1476,16 +1476,17 @@ static MalValue http_server_socket_facade(MalVm *vm, MalHttpConn *conn) {
 static void http_incoming_message_dispatch_shapes(MalVm *vm) {
     if (vm->node_http_incoming_message_dispatch_append_plan.source != nullptr) return;
 
+    // The source layout is what `new IncomingMessage()` builds, its own `socket` included.
     static const char *source_names[] = {
         "_events", "_eventsCount", "_maxListeners", "destroyed", "_malStreamKind",
         "_readableState", "_malReadableQueue", "_malBlockedPipes",
         "_malReadableIndex", "_malFlowing", "_malPaused", "_malReading",
-        "_malReadScheduled", "readable", "readableEnded",
+        "_malReadScheduled", "readable", "readableEnded", "socket",
     };
     static const char *dispatch_names[] = {
         "method", "url", "headers", "rawHeaders", "httpVersion",
         "httpVersionMajor", "httpVersionMinor", "complete", "aborted", "upgrade",
-        "trailers", "rawTrailers", "socket",
+        "trailers", "rawTrailers",
     };
     static_assert(countof(source_names) + countof(dispatch_names)
                       <= MAL_SHAPE_MAX_INLINE_SLOTS,
@@ -1732,7 +1733,7 @@ static MalValue http_new_incoming_message(MalVm *vm) {
         "_events", "_eventsCount", "_maxListeners", "destroyed", "_malStreamKind",
         "_readableState", "_malReadableQueue", "_malBlockedPipes",
         "_malReadableIndex", "_malFlowing", "_malPaused", "_malReading",
-        "_malReadScheduled", "readable", "readableEnded",
+        "_malReadScheduled", "readable", "readableEnded", "socket",
     };
     MalValue request_values[] = {
         roots[1], mal_value_from_i32(0), mal_value_new_undefined(),
@@ -1741,6 +1742,7 @@ static MalValue http_new_incoming_message(MalVm *vm) {
         mal_value_new_boolean(false), mal_value_new_boolean(true),
         mal_value_new_boolean(false), mal_value_new_boolean(false),
         mal_value_new_boolean(true), mal_value_new_boolean(false),
+        mal_value_new_undefined(),
     };
     http_initialize_shaped_object(
         vm, roots[0], &vm->node_http_incoming_message_source_append_plan,
@@ -4458,7 +4460,6 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(),
     };
     MalRootSpan request_values_root;
     mal_gc_root(&request_values_root, request_values, countof(request_values));
@@ -4506,7 +4507,6 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
     request_values[9] = mal_value_new_boolean(false);
     request_values[10] = roots[5];
     request_values[11] = roots[6];
-    request_values[12] = roots[4];
 
     if (mal_object_try_append_shaped_values(
             mal_value_to_object(roots[0]),
@@ -4531,8 +4531,8 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
         http_define_own(vm, roots[0], "upgrade", request_values[9]);
         http_define_own(vm, roots[0], "trailers", request_values[10]);
         http_define_own(vm, roots[0], "rawTrailers", request_values[11]);
-        http_define_own(vm, roots[0], "socket", request_values[12]);
     }
+    http_define_own(vm, roots[0], "socket", roots[4]);
 
     // Preserve construction and any unusual constructor layout. Only the exact
     // canonical source shape can append both dispatch fields with one slot growth.

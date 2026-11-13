@@ -665,6 +665,11 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 # Node and ecosystem compatibility
 
+- [ ] node:test is importable but not reported as a builtin: `builtinModules`,
+      `isBuiltin("node:test")` and `process.getBuiltinModule("node:test")` omit it,
+      because getBuiltinModule only loads native installers and the source module
+      exists only in programs that import it. Node reports and loads it.
+
 - [ ] node:stream: a piped Readable whose `read()` never pushes stops after the first
       buffered chunk when the destination drains; Node delivers the rest. `_malReading`
       stays set after `_read`, so the resume path skips `stream_schedule_pull` and
