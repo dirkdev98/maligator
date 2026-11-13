@@ -85,7 +85,10 @@ expected.
 
 Server-side `Response` headers expose editable `Set-Cookie` values. The pinned
 browser-only assertion that forbids those values has exact expectations; native
-coverage checks construction, mutation and wire output.
+coverage checks construction, mutation and wire output. Request headers also
+retain caller-supplied fields in every mode, as Node does. Browser-only forbidden
+and no-cors header filtering assertions have exact expectations; native coverage
+checks header preservation and validation.
 
 Empty `FormData` serializes a closing multipart boundary so its body can be parsed
 again. The pinned empty-body test instead expects an empty string and marks that

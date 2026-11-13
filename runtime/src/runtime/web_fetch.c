@@ -3213,10 +3213,7 @@ static MalValue mal_request_constructor(
             "GET and HEAD requests cannot have a body");
         goto request_error;
     }
-    MalHeadersGuard headers_guard = request_mode == 1
-        ? MAL_HEADERS_GUARD_REQUEST_NO_CORS : MAL_HEADERS_GUARD_REQUEST;
-    slots[5] = mal_value_from_headers_object(
-        mal_headers_from_init_guarded(vm, slots[3], headers_guard));
+    slots[5] = mal_value_from_headers_object(mal_headers_from_init(vm, slots[3]));
     if (vm->completion.kind != MAL_COMPLETION_NORMAL) goto request_error;
     mal_fetch_default_content_type(
         vm, mal_value_to_headers_object(slots[5]), content_type);
@@ -3389,8 +3386,7 @@ static MalValue mal_request_clone(
         mal_gc_unroot(&rs);
         return mal_value_new_undefined();
     }
-    clone->headers = mal_value_from_headers_object(mal_headers_from_init_guarded(
-        vm, source_headers, mal_value_to_headers_object(source_headers)->guard));
+    clone->headers = mal_value_from_headers_object(mal_headers_from_init(vm, source_headers));
     clone->referrer = source->referrer;
     clone->referrer_policy = source->referrer_policy;
     clone->mode = source->mode;

@@ -623,7 +623,7 @@ remains a Maligator extension and does not count as global fetch conformance.
       File API, XHR and Fetch WPT. Check byte ownership, lifetime and MIME behavior
       through the public APIs.
 
-- [ ] Complete Headers guards, Web IDL record conversion, descriptors, and
+- [ ] Complete Headers Web IDL record conversion, descriptors, and
       Proxy-sensitive behavior. Expand applicable WPT with outbound fetch.
 
 - [ ] Complete URL and URLSearchParams Web IDL behavior and broader WPT, then implement

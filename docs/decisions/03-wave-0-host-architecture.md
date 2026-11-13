@@ -91,7 +91,11 @@ result and cannot address a reused operation slot.
 
 ### Header and framing contract
 
-The transport header list is not the WinterTC `Headers` object.
+The transport header list is separate from the WinterTC `Headers` object.
+Server Request headers retain caller-supplied fields, including Cookie, Host and
+Connection, in every request mode. Browser forbidden-header and CORS filtering
+would discard inputs needed by server proxies and session middleware. Names and
+values remain validated, and immutable response headers still reject mutations.
 Node incoming-header objects keep normalized names in collectable dictionary storage.
 Remote names and field ordering must not populate permanent atom or shared shape caches.
 

@@ -21,8 +21,6 @@ typedef struct MalHeaderEntry {
 typedef enum MalHeadersGuard {
     MAL_HEADERS_GUARD_NONE,
     MAL_HEADERS_GUARD_IMMUTABLE,
-    MAL_HEADERS_GUARD_REQUEST,
-    MAL_HEADERS_GUARD_REQUEST_NO_CORS,
 } MalHeadersGuard;
 
 typedef struct MalHeadersObject {
@@ -63,10 +61,7 @@ MalHeadersObject *mal_headers_create(MalVm *vm);
 /* Create an intrinsic-prototype Headers filled from a Web IDL HeadersInit. */
 MalHeadersObject *mal_headers_from_init(MalVm *vm, MalValue init);
 
-/* Create Headers whose mutations are filtered by the Fetch guard from the start,
- * including entries supplied by the constructor init. */
-MalHeadersObject *mal_headers_from_init_guarded(
-    MalVm *vm, MalValue init, MalHeadersGuard guard);
+
 
 typedef struct MalHeadersInit {
     MalValue sequence;
