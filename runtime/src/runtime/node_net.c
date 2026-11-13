@@ -26,6 +26,7 @@
 #include "node_dns.h"
 #include "node_http.h"
 #include "node_module.h"
+#include "node_net_blocklist.h"
 #include "node_stream.h"
 #include "microtask.h"
 #include "object.h"
@@ -2639,6 +2640,7 @@ void mal_host_install_node_net(
     mal_gc_root(&root, roots, countof(roots));
     roots[1] = mal_value_from_object(mal_object_new(&vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_DUPLEX_PROTOTYPE])));
+    mal_node_net_blocklist_install(vm, roots[0]);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]),
         (const byte *) "connect", 2, net_socket_connect);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]),

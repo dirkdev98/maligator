@@ -765,8 +765,8 @@ remains a Maligator extension and does not count as global fetch conformance.
       deletions do not reach the script), plus collection of realms whose sandboxes
       are gone.
 
-- [ ] node:net: `BlockList` (lib/internal/blocklist.js plus node_sockaddr.cc
-      matching, IPv4-mapped IPv6 included) and `SocketAddress`
+- [ ] node:net: extend `BlockList` with bulk, CIDR, removal and JSON operations,
+      and implement `SocketAddress`
       (lib/internal/socketaddress.js, `parse` through WHATWG URL parsing); make
       connect() honour getDefaultAutoSelectFamily() and its attempt timeout, which
       are module state only today. util.throttle as Node 26 defines it. url.parse

@@ -1251,6 +1251,7 @@ const DGRAM: HostModuleSpec = {
 const NET: HostModuleSpec = {
 	id: "node:net",
 	named: [
+		"BlockList",
 		"Server",
 		"Socket",
 		"connect",
