@@ -3480,7 +3480,72 @@ static MalValue crypto_new_promise(MalVm *vm) {
 }
 
 
-/* Byte 0 of a stored CryptoKey: an HMAC hash kind, or this marker for AES-GCM. */
+/* Public CryptoKey metadata can be shadowed, so capability checks use private bytes. */
+#define CRYPTO_WEB_KEY_HEADER 3
+
+enum {
+    CRYPTO_WEB_ENCRYPT = 1,
+    CRYPTO_WEB_DECRYPT = 2,
+    CRYPTO_WEB_SIGN = 4,
+    CRYPTO_WEB_VERIFY = 8,
+    CRYPTO_WEB_DERIVE_KEY = 16,
+    CRYPTO_WEB_DERIVE_BITS = 32,
+    CRYPTO_WEB_WRAP_KEY = 64,
+    CRYPTO_WEB_UNWRAP_KEY = 128,
+};
+
+static MalArrayBufferObject *crypto_web_stored(MalValue key);
+
+static bool crypto_web_usage_list(MalVm *vm, MalValue input, MalValue *list, u8 *mask) {
+    MalValue roots[] = {input, mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0)),
+        mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    *mask = 0;
+    MalIteratorRecord iterator;
+    if (!mal_vm_get_iterator(vm, roots[0], &iterator)) { mal_gc_unroot(&root); return false; }
+    MalRootSpan iterator_root;
+    mal_gc_root(&iterator_root, &iterator.iterator, 2);
+    bool ok = false;
+    while (true) {
+        bool done;
+        if (!mal_vm_iterator_step(vm, &iterator, &roots[2], &done)) break;
+        if (done) { ok = true; break; }
+        MalString *text;
+        if (!mal_vm_to_string(vm, roots[2], &text)) break;
+        roots[2] = mal_value_from_string(text);
+        static const char *const names[] = {"encrypt", "decrypt", "sign", "verify",
+            "deriveKey", "deriveBits", "wrapKey", "unwrapKey"};
+        u8 bit = 0;
+        for (usize i = 0; i < countof(names); i++)
+            if (mal_string_equals_ascii(text, names[i])) bit = (u8) (1u << i);
+        if (bit == 0) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid CryptoKey usage");
+            break;
+        }
+        *mask |= bit;
+        MalArrayObject *array = mal_value_to_array_object(roots[1]);
+        mal_array_object_store(array, mal_key_index(mal_array_object_length(array)), roots[2]);
+    }
+    if (!ok) mal_vm_iterator_close(vm, &iterator);
+    if (ok) *list = roots[1];
+    mal_gc_unroot(&iterator_root);
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+static bool crypto_web_key_has_usage(MalValue key, u8 usage) {
+    MalArrayBufferObject *stored = crypto_web_stored(key);
+    return stored != nullptr && ((u8) stored->data[1] & usage) != 0;
+}
+
+static bool crypto_web_key_extractable(MalValue key) {
+    MalArrayBufferObject *stored = crypto_web_stored(key);
+    return stored != nullptr && stored->data[2] != 0;
+}
+
+
+/* Low algorithm tags identify HMAC hashes. */
 #define CRYPTO_WEB_AES_GCM 0x80
 
 static bool crypto_web_is_aes_gcm(MalVm *vm, MalValue algorithm, bool *ok) {
@@ -3492,20 +3557,32 @@ static bool crypto_web_is_aes_gcm(MalVm *vm, MalValue algorithm, bool *ok) {
 static MalValue crypto_web_new_key(MalVm *vm, byte *stored, usize stored_length, MalValue algorithm,
     bool extractable, MalValue usages) {
     MalValue roots[] = {mal_value_from_object(mal_object_new(&vm->heap, mal_value_to_object(crypto_crypto_key_prototype))),
-        algorithm, usages, mal_value_new_undefined()};
+        algorithm, usages, mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     roots[3] = mal_value_from_array_buffer_object(mal_array_buffer_object_adopt(&vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]), stored, (u32) stored_length, true));
     mal_object_set(mal_value_to_object(roots[0]), (MalKey) {.kind = MAL_KEY_SYMBOL, .value = crypto_crypto_key_symbol}, roots[3]);
+    u8 mask = 0;
+    if (!crypto_web_usage_list(vm, roots[2], &roots[4], &mask)) goto failed;
+    u8 tag = (u8) stored[0];
+    u8 allowed = tag == CRYPTO_WEB_AES_GCM ? 0xc3 : tag < CRYPTO_WEB_AES_GCM ? 0x0c
+        : tag == 0x90 ? CRYPTO_WEB_SIGN : CRYPTO_WEB_VERIFY;
+    if ((mask & ~allowed) != 0 || (tag < 0x90 && mask == 0)) {
+        mal_dom_exception_throw(vm, (const byte *) "Unsupported key usages", (const byte *) "SyntaxError");
+        goto failed;
+    }
+    stored[1] = (byte) mask;
+    stored[2] = (byte) extractable;
     crypto_set(vm, roots[0], "type", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "secret")));
     crypto_set(vm, roots[0], "extractable", mal_value_new_boolean(extractable));
     crypto_set(vm, roots[0], "algorithm", roots[1]);
-    crypto_set(vm, roots[0], "usages", mal_value_is_array_object(roots[2]) ? roots[2]
-        : mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), nullptr, 0)));
+    crypto_set(vm, roots[0], "usages", roots[4]);
     mal_gc_unroot(&root);
     return roots[0];
+failed:
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
 }
 
 static void crypto_web_import_aes(MalVm *vm, MalValue promise, const MalValue *args, i32 argc) {
@@ -3527,20 +3604,21 @@ static void crypto_web_import_aes(MalVm *vm, MalValue promise, const MalValue *a
         crypto_web_reject_dom(vm, promise, "Invalid key length", "DataError");
         return;
     }
-    byte *stored = malloc(span.length + 1);
+    byte *stored = malloc(span.length + CRYPTO_WEB_KEY_HEADER);
     if (stored == nullptr) { mal_vm_throw_allocation_error(vm); crypto_settle_with_completion(vm, promise); return; }
     stored[0] = (byte) CRYPTO_WEB_AES_GCM;
-    memcpy(stored + 1, span.data, span.length);
+    memcpy(stored + CRYPTO_WEB_KEY_HEADER, span.data, span.length);
     usize key_length = span.length;
     MalValue algorithm = mal_value_from_object(mal_intrinsic_new_object(vm));
     MalRootSpan root;
     mal_gc_root(&root, &algorithm, 1);
     crypto_set(vm, algorithm, "name", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "AES-GCM")));
     crypto_set(vm, algorithm, "length", mal_ops_number_value((f64) key_length * 8));
-    MalValue key = crypto_web_new_key(vm, stored, key_length + 1, algorithm, argc > 3 && mal_value_is_truthy(args[3]),
+    MalValue key = crypto_web_new_key(vm, stored, key_length + CRYPTO_WEB_KEY_HEADER, algorithm, argc > 3 && mal_value_is_truthy(args[3]),
         argc > 4 ? args[4] : mal_value_new_undefined());
     mal_gc_unroot(&root);
-    mal_promise_fulfill(vm, mal_value_to_promise_object(promise), key);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) crypto_settle_with_completion(vm, promise);
+    else mal_promise_fulfill(vm, mal_value_to_promise_object(promise), key);
 }
 
 /* An optional BufferSource dictionary member, resolved after every getter has run. */
@@ -3585,7 +3663,8 @@ static MalValue crypto_web_aes_gcm(MalVm *vm, const MalValue *args, i32 argc, bo
         goto done;
     }
     MalArrayBufferObject *stored = mal_value_to_array_buffer_object(lookup.desc.value);
-    if ((u8) stored->data[0] != CRYPTO_WEB_AES_GCM) {
+    if ((u8) stored->data[0] != CRYPTO_WEB_AES_GCM
+        || !crypto_web_key_has_usage(key, encrypt ? CRYPTO_WEB_ENCRYPT : CRYPTO_WEB_DECRYPT)) {
         crypto_web_reject_dom(vm, roots[0], "Key algorithm mismatch", "InvalidAccessError");
         goto done;
     }
@@ -3624,7 +3703,7 @@ static MalValue crypto_web_aes_gcm(MalVm *vm, const MalValue *args, i32 argc, bo
         goto done;
     }
     // All member getters have run, so the borrowed spans stay valid through the cipher calls.
-    usize key_length = stored->byte_length - 1;
+    usize key_length = stored->byte_length - CRYPTO_WEB_KEY_HEADER;
     u32 kind = key_length == 16 ? 7 : key_length == 24 ? 8 : 9;
     usize body = encrypt ? data.length : data.length - tag_length;
     storage = crypto_cipher_storage(storage_size);
@@ -3637,7 +3716,7 @@ static MalValue crypto_web_aes_gcm(MalVm *vm, const MalValue *args, i32 argc, bo
     }
     MalCipher *cipher = (MalCipher *) storage;
     usize written = 0, tail = 0;
-    i32 status = mal_cipher_init((u8 *) storage, storage_size, kind, encrypt, (const u8 *) stored->data + 1,
+    i32 status = mal_cipher_init((u8 *) storage, storage_size, kind, encrypt, (const u8 *) stored->data + CRYPTO_WEB_KEY_HEADER,
         key_length, (const u8 *) iv.data, iv.length);
     if (status == MAL_CIPHER_OK && has_aad) status = mal_cipher_set_aad(cipher, (const u8 *) aad.data, aad.length);
     if (status == MAL_CIPHER_OK && !encrypt) {
@@ -3735,28 +3814,20 @@ static MalValue mal_node_crypto_subtle_import_key(
         crypto_web_reject_dom(vm, roots[0], "Zero-length key is not supported", "DataError");
         goto done;
     }
-    // Byte 0 records the hash so sign/verify need no second lookup.
-    byte *stored = malloc(span.length + 1);
+    byte *stored = malloc(span.length + CRYPTO_WEB_KEY_HEADER);
     if (stored == nullptr) { mal_vm_throw_allocation_error(vm); crypto_settle_with_completion(vm, roots[0]); goto done; }
     stored[0] = (byte) hash;
-    memcpy(stored + 1, span.data, span.length);
+    memcpy(stored + CRYPTO_WEB_KEY_HEADER, span.data, span.length);
     usize key_length = span.length;
-    roots[3] = mal_value_from_object(mal_object_new(&vm->heap, mal_value_to_object(crypto_crypto_key_prototype)));
-    roots[4] = mal_value_from_array_buffer_object(mal_array_buffer_object_adopt(&vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]), stored, (u32) (key_length + 1), true));
-    mal_object_set(mal_value_to_object(roots[3]), (MalKey) {.kind = MAL_KEY_SYMBOL, .value = crypto_crypto_key_symbol}, roots[4]);
-    crypto_set(vm, roots[3], "type", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "secret")));
-    crypto_set(vm, roots[3], "extractable", mal_value_new_boolean(argc > 3 && mal_value_is_truthy(args[3])));
     roots[4] = mal_value_from_object(mal_intrinsic_new_object(vm));
     crypto_set(vm, roots[4], "name", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "HMAC")));
     crypto_set(vm, roots[4], "length", mal_ops_number_value((f64) key_length * 8));
     roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
     crypto_set(vm, roots[2], "name", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) crypto_web_hash_name(hash))));
     crypto_set(vm, roots[4], "hash", roots[2]);
-    crypto_set(vm, roots[3], "algorithm", roots[4]);
-    crypto_set(vm, roots[3], "usages", argc > 4 && mal_value_is_array_object(args[4]) ? args[4]
-        : mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), nullptr, 0)));
+    roots[3] = crypto_web_new_key(vm, stored, key_length + CRYPTO_WEB_KEY_HEADER, roots[4],
+        argc > 3 && mal_value_is_truthy(args[3]), argc > 4 ? args[4] : mal_value_new_undefined());
+    if (vm->completion.kind == MAL_COMPLETION_THROW) { crypto_settle_with_completion(vm, roots[0]); goto done; }
     mal_promise_fulfill(vm, mal_value_to_promise_object(roots[0]), roots[3]);
 done:
     mal_gc_unroot(&root);
@@ -3794,13 +3865,14 @@ static bool crypto_web_hmac(MalVm *vm, MalValue promise, const MalValue *args, i
         return false;
     }
     MalArrayBufferObject *stored = mal_value_to_array_buffer_object(lookup.desc.value);
-    if ((u8) stored->data[0] == CRYPTO_WEB_AES_GCM) {
+    if ((u8) stored->data[0] >= CRYPTO_WEB_AES_GCM
+        || !crypto_web_key_has_usage(key, data_index == 3 ? CRYPTO_WEB_VERIFY : CRYPTO_WEB_SIGN)) {
         crypto_web_reject_dom(vm, promise, "Key algorithm mismatch", "InvalidAccessError");
         return false;
     }
     MalNodeCryptoStateKind kind = (MalNodeCryptoStateKind) (u8) stored->data[0];
     CryptoHmac hmac;
-    crypto_hmac_init(&hmac, kind, (const u8 *) stored->data + 1, stored->byte_length - 1);
+    crypto_hmac_init(&hmac, kind, (const u8 *) stored->data + CRYPTO_WEB_KEY_HEADER, stored->byte_length - CRYPTO_WEB_KEY_HEADER);
     crypto_hmac(&hmac, (const u8 *) span.data, span.length, nullptr, 0, nullptr, 0, tag);
     *tag_length = crypto_digest_size(hmac.kind);
     mal_secure_scrub((byte *) &hmac, sizeof(hmac));
@@ -5362,7 +5434,7 @@ static MalValue mal_node_crypto_generate_key_pair(
     return mal_value_new_undefined();
 }
 
-/* Asymmetric CryptoKeys store this marker byte, then the key's canonical PKCS#8 or SPKI DER. */
+/* Asymmetric key payloads use canonical PKCS#8 or SPKI DER. */
 #define CRYPTO_WEB_PRIVATE 0x90
 #define CRYPTO_WEB_PUBLIC 0x91
 
@@ -5417,10 +5489,10 @@ static MalValue crypto_web_asym_key(MalVm *vm, MalPkey *key, CryptoWebAsym algor
         private_key ? MAL_PKEY_TYPE_PKCS8 : MAL_PKEY_TYPE_SPKI, private_key, &der, &length);
     mal_pkey_free(key);
     if (!exported) return mal_value_new_undefined();
-    byte *stored = malloc(length + 1);
+    byte *stored = malloc(length + CRYPTO_WEB_KEY_HEADER);
     if (stored == nullptr) { crypto_scrub_free(der, length); mal_vm_throw_allocation_error(vm); return mal_value_new_undefined(); }
     stored[0] = (byte) (private_key ? CRYPTO_WEB_PRIVATE : CRYPTO_WEB_PUBLIC);
-    memcpy(stored + 1, der, length);
+    memcpy(stored + CRYPTO_WEB_KEY_HEADER, der, length);
     crypto_scrub_free(der, length);
     MalValue roots[] = {mal_value_from_object(mal_intrinsic_new_object(vm)), usages, mal_value_new_undefined(),
         mal_value_new_undefined()};
@@ -5444,7 +5516,8 @@ static MalValue crypto_web_asym_key(MalVm *vm, MalPkey *key, CryptoWebAsym algor
         crypto_set(vm, roots[0], "namedCurve", mal_value_from_string(mal_intrinsic_ascii(vm,
             (const byte *) (kind == MAL_PKEY_EC_P256 ? "P-256" : "P-384"))));
     }
-    roots[3] = crypto_web_new_key(vm, stored, length + 1, roots[0], extractable, roots[1]);
+    roots[3] = crypto_web_new_key(vm, stored, length + CRYPTO_WEB_KEY_HEADER, roots[0], extractable, roots[1]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) { mal_gc_unroot(&root); return mal_value_new_undefined(); }
     crypto_set(vm, roots[3], "type", mal_value_from_string(mal_intrinsic_ascii(vm,
         (const byte *) (private_key ? "private" : "public"))));
     mal_gc_unroot(&root);
@@ -5457,7 +5530,7 @@ static MalArrayBufferObject *crypto_web_stored(MalValue key) {
         (MalKey) {.kind = MAL_KEY_SYMBOL, .value = crypto_crypto_key_symbol});
     if (!lookup.present || !mal_value_is_array_buffer_object(lookup.desc.value)) return nullptr;
     MalArrayBufferObject *stored = mal_value_to_array_buffer_object(lookup.desc.value);
-    return stored->byte_length > 0 ? stored : nullptr;
+    return stored->byte_length >= CRYPTO_WEB_KEY_HEADER ? stored : nullptr;
 }
 
 static bool crypto_web_is_asym_key(MalValue key) {
@@ -5470,7 +5543,7 @@ static MalPkey *crypto_web_pkey(MalValue key) {
     if (stored == nullptr) return nullptr;
     bool private_key = (u8) stored->data[0] == CRYPTO_WEB_PRIVATE;
     MalPkey *handle = nullptr;
-    if (mal_pkey_import((const u8 *) stored->data + 1, stored->byte_length - 1, MAL_PKEY_FORMAT_DER,
+    if (mal_pkey_import((const u8 *) stored->data + CRYPTO_WEB_KEY_HEADER, stored->byte_length - CRYPTO_WEB_KEY_HEADER, MAL_PKEY_FORMAT_DER,
             private_key ? MAL_PKEY_TYPE_PKCS8 : MAL_PKEY_TYPE_SPKI, private_key, &handle) != MAL_PKEY_OK) return nullptr;
     return handle;
 }
@@ -5578,6 +5651,11 @@ static void crypto_web_sign_asym(MalVm *vm, MalValue promise, CryptoWebAsym algo
     MalValue key_value, MalValue data, MalValue signature) {
     MalPkey *key = crypto_web_pkey(key_value);
     if (key == nullptr) { crypto_web_reject_dom(vm, promise, "Invalid key", "InvalidAccessError"); return; }
+    if (!crypto_web_key_has_usage(key_value, mal_value_is_undefined(signature) ? CRYPTO_WEB_SIGN : CRYPTO_WEB_VERIFY)) {
+        mal_pkey_free(key);
+        crypto_web_reject_dom(vm, promise, "Key usage mismatch", "InvalidAccessError");
+        return;
+    }
     bool ok = true;
     MalValue key_algorithm = crypto_get(vm, key_value, "algorithm", &ok);
     if (!ok || crypto_web_asym(vm, key_algorithm, &ok) != algorithm) {
@@ -5669,23 +5747,23 @@ static MalValue mal_node_crypto_subtle_export_key(
     MalValue key_value = argc > 1 ? args[1] : mal_value_new_undefined();
     MalPkey *key = crypto_web_is_asym_key(key_value) ? crypto_web_pkey(key_value) : nullptr;
     bool ok = true;
-    MalValue extractable = key == nullptr ? mal_value_new_undefined() : crypto_get(vm, key_value, "extractable", &ok);
+    MalValue extractable = key == nullptr ? mal_value_new_undefined() : mal_value_new_boolean(crypto_web_key_extractable(key_value));
     MalArrayBufferObject *secret = key == nullptr ? crypto_web_stored(key_value) : nullptr;
     if (secret != nullptr && crypto_string_is(format, "raw")) {
-        extractable = crypto_get(vm, key_value, "extractable", &ok);
+        extractable = mal_value_new_boolean(crypto_web_key_extractable(key_value));
         if (!ok) {
             crypto_settle_with_completion(vm, roots[0]);
         } else if (!mal_value_is_truthy(extractable)) {
             crypto_web_reject_dom(vm, roots[0], "key is not extractable", "InvalidAccessError");
         } else {
             secret = crypto_web_stored(key_value);
-            usize length = secret == nullptr ? 0 : secret->byte_length - 1;
+            usize length = secret == nullptr ? 0 : secret->byte_length - CRYPTO_WEB_KEY_HEADER;
             byte *copy = malloc(length > 0 ? length : 1);
             if (copy == nullptr) {
                 mal_vm_throw_allocation_error(vm);
                 crypto_settle_with_completion(vm, roots[0]);
             } else {
-                if (length > 0) memcpy(copy, secret->data + 1, length);
+                if (length > 0) memcpy(copy, secret->data + CRYPTO_WEB_KEY_HEADER, length);
                 roots[1] = mal_value_from_array_buffer_object(mal_array_buffer_object_adopt(&vm->heap,
                     mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]), copy, (u32) length,
                     true));
@@ -5783,10 +5861,14 @@ static void crypto_web_split_usages(MalVm *vm, MalValue public_key, MalValue pri
     roots[3] = mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap, array_prototype, &roots[2],
         crypto_web_usage_has(usages, "verify") ? 1 : 0));
     crypto_set(vm, roots[0], "usages", roots[3]);
+    MalArrayBufferObject *public_stored = crypto_web_stored(roots[0]);
+    public_stored->data[1] = (byte) (crypto_web_usage_has(usages, "verify") ? CRYPTO_WEB_VERIFY : 0);
     roots[2] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "sign"));
     roots[3] = mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap, array_prototype, &roots[2],
         crypto_web_usage_has(usages, "sign") ? 1 : 0));
     crypto_set(vm, roots[1], "usages", roots[3]);
+    MalArrayBufferObject *private_stored = crypto_web_stored(roots[1]);
+    private_stored->data[1] = (byte) (crypto_web_usage_has(usages, "sign") ? CRYPTO_WEB_SIGN : 0);
     mal_gc_unroot(&root);
 }
 
@@ -5925,7 +6007,7 @@ static void crypto_install_web_globals(MalVm *vm, MalObject *module) {
 
 static bool crypto_crypto_key_brand(MalValue value);
 
-/* KeyObject.from: secret CryptoKeys store a kind byte then the key; asymmetric ones a marker then DER. */
+
 static MalValue mal_node_crypto_key_object_from(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
     (void) receiver; (void) new_target; (void) callee;
@@ -5936,7 +6018,7 @@ static MalValue mal_node_crypto_key_object_from(
             (MalKey) {.kind = MAL_KEY_SYMBOL, .value = crypto_crypto_key_symbol});
     }
     if (!lookup.present || !mal_value_is_array_buffer_object(lookup.desc.value)
-        || mal_value_to_array_buffer_object(lookup.desc.value)->byte_length < 1) {
+        || mal_value_to_array_buffer_object(lookup.desc.value)->byte_length < CRYPTO_WEB_KEY_HEADER) {
         crypto_throw_arg_type(vm, "key", "an instance of CryptoKey", key);
         return mal_value_new_undefined();
     }
@@ -5946,10 +6028,10 @@ static MalValue mal_node_crypto_key_object_from(
         return crypto_new_pkey_object(vm, handle);
     }
     MalArrayBufferObject *stored = mal_value_to_array_buffer_object(lookup.desc.value);
-    usize length = stored->byte_length - 1;
+    usize length = stored->byte_length - CRYPTO_WEB_KEY_HEADER;
     byte *copy = malloc(length > 0 ? length : 1);
     if (copy == nullptr) { mal_vm_throw_allocation_error(vm); return mal_value_new_undefined(); }
-    if (length > 0) memcpy(copy, stored->data + 1, length);
+    if (length > 0) memcpy(copy, stored->data + CRYPTO_WEB_KEY_HEADER, length);
     return crypto_new_secret_key(vm, copy, length);
 }
 
