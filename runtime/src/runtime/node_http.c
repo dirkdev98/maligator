@@ -12,6 +12,8 @@
 
 #include "ascii.h"
 #include "ecma_whitespace.h"
+#include "checked_size.h"
+#include "mal_url.h"
 #include "async_context.h"
 #include "array_object.h"
 #include "array_buffer_object.h"
@@ -2803,135 +2805,97 @@ static bool http_client_ascii_string(
     return true;
 }
 
+static char *http_url_component(
+    MalVm *vm, void *url, i32 (*get)(void *, uint8_t *, i32), usize *length_out) {
+    i32 length = get(url, nullptr, 0);
+    if (length < 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "HTTP URL component is too large");
+        return nullptr;
+    }
+    char *copy = malloc((usize) length + 1);
+    if (copy == nullptr) { mal_vm_throw_allocation_error(vm); return nullptr; }
+    if (get(url, (uint8_t *) copy, length) != length) {
+        free(copy);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid URL");
+        return nullptr;
+    }
+    copy[length] = '\0';
+    if (length_out != nullptr) *length_out = (usize) length;
+    return copy;
+}
+
 static bool http_client_parse_url(
     MalVm *vm, MalValue value, char **protocol_out, char **host_out,
     u16 *port_out, char **path_out, usize *path_len_out) {
-    char *url;
-    usize url_len;
-    if (!http_client_ascii_string(vm, value, &url, &url_len)) return false;
-    char *separator = strstr(url, "://");
-    if (separator == nullptr || separator == url) goto invalid_url;
-    usize protocol_len = (usize) (separator - url) + 1;
-    char *protocol = http_copy_bytes(url, protocol_len);
-    if (protocol == nullptr) goto allocation;
-    for (usize i = 0; i < protocol_len; i++) {
-        if (protocol[i] >= 'A' && protocol[i] <= 'Z') {
-            protocol[i] = (char) (protocol[i] + 0x20);
-        }
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    MalString *source;
+    void *url = nullptr;
+    char *protocol = nullptr, *host = nullptr, *pathname = nullptr, *search = nullptr, *path = nullptr;
+    bool success = false;
+    if (!mal_vm_to_string(vm, value, &source)) goto done;
+    value = mal_value_from_string(source);
+    url = mal_url_parse(mal_string_code_units(source), mal_string_length(source), nullptr, 0, false);
+    if (url == nullptr) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid URL", "ERR_INVALID_URL");
+        goto done;
     }
-    char *authority = separator + 3;
-    char *authority_end = authority;
-    while (authority_end < url + url_len && *authority_end != '/'
-           && *authority_end != '?' && *authority_end != '#') {
-        authority_end++;
+    if (mal_url_username(url, nullptr, 0) != 0 || mal_url_password(url, nullptr, 0) != 0) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "HTTP URL credentials are not supported", "ERR_NOT_SUPPORTED");
+        goto done;
     }
-    // The authority reaches both the resolver and the serialized `Host:` line, so a
-    // control byte here would inject a header (or a whole request) into the wire.
-    for (const char *cursor = authority; cursor < authority_end; cursor++) {
-        unsigned char ch = (unsigned char) *cursor;
-        if (ch <= 0x20 || ch == 0x7f) {
-            free(protocol);
-            goto invalid_authority;
-        }
+    usize host_length, pathname_length, search_length;
+    protocol = http_url_component(vm, url, mal_url_protocol, nullptr);
+    if (protocol == nullptr) goto done;
+    host = http_url_component(vm, url, mal_url_hostname, &host_length);
+    if (host == nullptr) goto done;
+    if (host_length >= 2 && host[0] == '[' && host[host_length - 1] == ']') {
+        memmove(host, host + 1, host_length - 2);
+        host[host_length - 2] = '\0';
     }
-    char *colon = memchr(authority, ':', (usize) (authority_end - authority));
-    char *host_end = colon == nullptr ? authority_end : colon;
-    if (host_end == authority) {
-        free(protocol);
-        goto invalid_url;
+    pathname = http_url_component(vm, url, mal_url_pathname, &pathname_length);
+    if (pathname == nullptr) goto done;
+    search = http_url_component(vm, url, mal_url_search, &search_length);
+    if (search == nullptr) goto done;
+    usize path_length;
+    if (!mal_checked_size_add(pathname_length, search_length, SIZE_MAX - 1, &path_length)) {
+        mal_vm_throw_allocation_error(vm);
+        goto done;
     }
-    usize host_len = (usize) (host_end - authority);
-    char *host = http_copy_bytes(authority, host_len);
-    if (host == nullptr) {
-        free(protocol);
-        goto allocation;
-    }
-    for (usize i = 0; i < host_len; i++) {
-        if (host[i] >= 'A' && host[i] <= 'Z') host[i] = (char) (host[i] + 0x20);
+    path = malloc(path_length + 1);
+    if (path == nullptr) { mal_vm_throw_allocation_error(vm); goto done; }
+    memcpy(path, pathname, pathname_length);
+    memcpy(path + pathname_length, search, search_length);
+    path[path_length] = '\0';
+    char port_bytes[6];
+    i32 port_length = mal_url_port(url, (uint8_t *) port_bytes, sizeof(port_bytes));
+    if (port_length < 0 || port_length >= (i32) sizeof(port_bytes)) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid URL", "ERR_INVALID_URL");
+        goto done;
     }
     u16 port = strcmp(protocol, "https:") == 0 ? 443 : 80;
-    if (colon != nullptr) {
-        usize parsed = 0;
-        if (colon + 1 == authority_end) {
-            free(protocol);
-            free(host);
-            goto invalid_url;
-        }
-        for (char *cursor = colon + 1; cursor < authority_end; cursor++) {
-            if (*cursor < '0' || *cursor > '9') {
-                free(protocol);
-                free(host);
-                goto invalid_url;
-            }
-            parsed = parsed * 10 + (usize) (*cursor - '0');
-            if (parsed > 65535) {
-                free(protocol);
-                free(host);
-                goto invalid_port;
-            }
-        }
-        port = (u16) parsed;
+    if (port_length > 0) {
+        u32 number = 0;
+        for (i32 i = 0; i < port_length; i++) number = number * 10 + (u32) (port_bytes[i] - '0');
+        port = (u16) number;
     }
-    char *fragment = memchr(
-        authority_end, '#', (usize) (url + url_len - authority_end));
-    char *path_start = authority_end;
-    if (path_start == url + url_len || *path_start == '#') path_start = nullptr;
-    const char *path_end = fragment != nullptr ? fragment : url + url_len;
-    bool query_only = path_start != nullptr && path_start[0] == '?';
-    const char *path_bytes = path_start == nullptr ? "/" : path_start;
-    usize path_len = path_start == nullptr ? 1 : (usize) (path_end - path_start);
-    char *path = malloc(path_len + (query_only ? 2 : 1));
-    if (path == nullptr) {
-        free(protocol);
-        free(host);
-        goto allocation;
-    }
-    usize path_offset = 0;
-    if (query_only) path[path_offset++] = '/';
-    memcpy(path + path_offset, path_bytes, path_len);
-    path_len += path_offset;
-    path[path_len] = '\0';
-    for (usize i = 0; i < path_len; i++) {
-        unsigned char ch = (unsigned char) path[i];
-        if (ch <= 0x20 || ch == 0x7f) {
-            free(protocol);
-            free(host);
-            free(path);
-            goto invalid_path;
-        }
-    }
-    free(url);
     *protocol_out = protocol;
     *host_out = host;
     *port_out = port;
     *path_out = path;
-    *path_len_out = path_len;
-    return true;
-
-allocation:
-    free(url);
-    mal_vm_throw_allocation_error(vm);
-    return false;
-invalid_port:
-    free(url);
-    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                       "HTTP port must be an integer from 0 through 65535");
-    return false;
-invalid_path:
-    free(url);
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                       "HTTP path contains invalid characters");
-    return false;
-invalid_authority:
-    free(url);
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                       "HTTP authority contains invalid characters");
-    return false;
-invalid_url:
-    free(url);
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                       "HTTP request URL must be an absolute URL");
-    return false;
+    *path_len_out = path_length;
+    protocol = host = path = nullptr;
+    success = true;
+done:
+    free(protocol);
+    free(host);
+    free(pathname);
+    free(search);
+    free(path);
+    mal_url_free(url);
+    mal_gc_unroot(&root);
+    return success;
 }
 
 static bool http_client_enqueue(

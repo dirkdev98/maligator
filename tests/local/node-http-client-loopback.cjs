@@ -6,11 +6,15 @@ function fail(message) {
 	throw new Error(message);
 }
 
-function expectThrow(label, callback, pattern) {
+function expectThrow(label, callback, pattern, code) {
 	try {
 		callback();
 	} catch (error) {
-		if (!(error instanceof Error) || !pattern.test(error.message)) {
+		if (
+			!(error instanceof Error) ||
+			!pattern.test(error.message) ||
+			(code !== undefined && error.code !== code)
+		) {
 			fail(label + " wrong error: " + error);
 		}
 		return;
@@ -118,17 +122,18 @@ server.listen(0, "127.0.0.1", () => {
 		/path/,
 	);
 	expectThrow("hostname", () => http.request({ hostname: "bad host", port }), /hostname/);
-	// The authority reaches the resolver and the serialized Host line, so control
-	// bytes have to be refused while parsing the URL, before either sees them.
+	// Malformed authorities must fail before resolution or header serialization.
 	expectThrow(
 		"url authority control bytes",
 		() => http.request("http://127.0.0.1\r\nX-Injected: 1/"),
-		/authority/i,
+		/Invalid URL/i,
+		"ERR_INVALID_URL",
 	);
 	expectThrow(
 		"url authority space",
 		() => http.request("http://127.0.0.1 evil/"),
-		/authority/i,
+		/Invalid URL/i,
+		"ERR_INVALID_URL",
 	);
 	expectThrow(
 		"header name",
