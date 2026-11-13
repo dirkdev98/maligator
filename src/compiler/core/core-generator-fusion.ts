@@ -947,7 +947,7 @@ export function applyCoreGeneratorFusion(
 
 /*
  * Mutable primordials guard the fusion as a guarded iteration (see
- * core-guarded-iteration.ts): the watched-methods protector covers
+ * core-guarded-iteration.ts): the generator-protocol protector covers
  * %GeneratorPrototype% and %IteratorPrototype%, so while it holds at the call, the
  * fused body replaces the call, GetIterator and every step; otherwise the original
  * ones run as the twin, chosen once per loop and re-dispatched at the back edge.
@@ -1009,10 +1009,13 @@ function applyGuardedGeneratorFusion(
 		sourcePosition,
 		effectRefinement: caller.instructionEffectRefinement(plan.call),
 	});
-	const { join, fused } = splitGuardedIterationEntry(caller, editor, edits, [
-		plan.call,
-		plan.get,
-	]);
+	const { join, fused } = splitGuardedIterationEntry(
+		caller,
+		editor,
+		edits,
+		[plan.call, plan.get],
+		"generator-protocol",
+	);
 
 	// Everything the fused path needs before its first block is defined once in the
 	// join, which dominates both paths.
@@ -1342,17 +1345,25 @@ function applyGuardedGeneratorFusion(
 		consequent: { block: exit, arguments: [] },
 	});
 
-	guardIterationCloses(caller, editor, edits, plan.closes, fused, (block) => {
-		edits.instructions++;
-		const rebuilt = editor.appendInstruction(block, "call", callInputs, {
-			attributes: twinAttributes,
-			sourcePosition,
-		}).outputs[0]!;
-		return {
-			iterator: rebuilt,
-			next: emit(block, "loadIntrinsic", [], { intrinsic: "__generatorPrototypeNext" }),
-			consumed: emit(block, "binary", [consumed!, one], { operator: "+" }, "f64"),
-		};
-	});
+	guardIterationCloses(
+		caller,
+		editor,
+		edits,
+		plan.closes,
+		fused,
+		"generator-protocol",
+		(block) => {
+			edits.instructions++;
+			const rebuilt = editor.appendInstruction(block, "call", callInputs, {
+				attributes: twinAttributes,
+				sourcePosition,
+			}).outputs[0]!;
+			return {
+				iterator: rebuilt,
+				next: emit(block, "loadIntrinsic", [], { intrinsic: "__generatorPrototypeNext" }),
+				consumed: emit(block, "binary", [consumed!, one], { operator: "+" }, "f64"),
+			};
+		},
+	);
 	return { instructionsIntroduced: edits.instructions, blocksIntroduced: edits.blocks };
 }

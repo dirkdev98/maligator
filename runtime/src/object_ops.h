@@ -156,11 +156,22 @@ void mal_object_note_added_property(const MalObject *object, const MalShape *sha
 void mal_object_array_deoptimize(struct MalArrayObject *array);
 
 /**
- * Permanently clear one legacy protector and advance the current VM's matching
- * semantic-family epoch. These remain cold mutation-path calls; generated proof
- * regions snapshot the epochs, while existing runtime fast paths keep reading the
- * compatibility booleans.
+ * Permanently clear the array-elements protector and advance the current VM's
+ * matching semantic-family epoch. A cold mutation-path call; generated proof
+ * regions snapshot the epoch, while runtime fast paths read the isolate boolean.
  */
 void mal_invalidate_array_elements_protector(void);
-void mal_invalidate_primitive_method_protector(void);
+
+/*
+ * Report a mutation of a watched built-in object (`watched_method_proto`) before it
+ * takes effect, advancing the current VM's protector epochs that it can affect.
+ * Cold mutation-path calls.
+ */
+
+/** A define, store, or delete of `key`: breaks the protectors whose lookups reach it. */
+void mal_invalidate_watched_key(const MalObject *object, MalKey key);
+/** Integrity changes keep every [[Get]] result, so only the generic protector breaks. */
+void mal_invalidate_watched_attributes(void);
+/** Reparenting, or any change no key classifies, breaks every watched protector. */
+void mal_invalidate_watched_protectors(void);
 

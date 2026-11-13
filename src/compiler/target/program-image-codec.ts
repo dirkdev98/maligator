@@ -107,6 +107,8 @@ function guardedMathCallFromTag(tag: number): VmGuardedMathCall | undefined {
 const GUARDED_SEMANTIC_EPOCH_FAMILIES: ReadonlyArray<GuardedSemanticEpochFamily> = [
 	"watched-methods",
 	"array-elements",
+	"array-iteration",
+	"generator-protocol",
 ];
 
 function guardedSemanticEpochFamily(mask: number): GuardedSemanticEpochFamily {

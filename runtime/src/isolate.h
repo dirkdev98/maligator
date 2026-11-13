@@ -52,9 +52,6 @@ typedef struct MalIsolateLocals {
      * strings hold no integer-index property: a fresh-index store cannot hit an
      * inherited setter, and an absent index reads undefined. */
     bool array_elements_protector;
-    /* Holds while no watched built-in prototype/lookup object has been mutated; gates
-     * primitive, intrinsic-own, and inherited-method value caches. */
-    bool primitive_method_protector;
     /* This thread's mal_object_set site table, bound on first use. */
     struct MalObjectSetSite *object_set_sites;
     /* Object slot storage statistics that every shaped allocation bumps, reported by
@@ -131,7 +128,6 @@ static inline void mal_isolate_request_poll(MalIsolateLocals *isolate) {
 #define mal_gc_termination (mal_isolate_locals()->gc_termination)
 #define mal_gc_marking_active (mal_isolate_locals()->gc_marking_active)
 #define mal_array_elements_protector (mal_isolate_locals()->array_elements_protector)
-#define mal_primitive_method_protector (mal_isolate_locals()->primitive_method_protector)
 #define mal_object_slot_coallocations (mal_isolate_locals()->object_slot_coallocations)
 #define mal_object_slot_grow_migrations (mal_isolate_locals()->object_slot_grow_migrations)
 #define mal_object_slot_dictionary_migrations \

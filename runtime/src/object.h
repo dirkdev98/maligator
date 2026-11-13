@@ -58,8 +58,9 @@ typedef struct MalObject {
     bool is_prototype : 1;
     /**
      * Set on built-in prototypes and watched namespace/constructor objects at
-     * intrinsics init. Any define/set/delete/reparent breaks the monotonic method
-     * protector, disabling cached values that assume those objects are unmodified.
+     * intrinsics init. Every define/set/delete/reparent reports to the watched
+     * protectors (see mal_invalidate_watched_key), which disable the cached values
+     * and fast paths that the mutation can affect.
      */
     bool watched_method_proto : 1;
     /** Fields point to a separately malloc-owned buffer. */

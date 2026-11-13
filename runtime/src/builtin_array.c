@@ -946,7 +946,7 @@ static bool mal_builtin_array_copy_set_members(
     MalVm *vm, MalValue method, MalValue source, MalArrayObject *fresh
 ) {
     if (method != vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_VALUES] ||
-        !mal_value_is_set_object(source) || !mal_vm_primitive_methods_intact(vm)) {
+        !mal_value_is_set_object(source) || !mal_vm_collection_iteration_intact(vm)) {
         return false;
     }
     MalSetObject *set = mal_value_to_set_object(source);
@@ -2272,6 +2272,7 @@ bool mal_builtin_array_iterator_protocol_guard(MalVm *vm) {
     (void) vm;
     return true;
 #else
+    if (mal_vm_array_iteration_intact(vm)) return true;
     MalValue array_prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
     MalValue iterator_prototype_value =
         vm->intrinsics[MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE];
@@ -2309,7 +2310,7 @@ bool mal_builtin_array_pair_destructure_try(
     MalValue *second_out, bool *second_done_out
 ) {
     // The protector covers Array.prototype @@iterator and ArrayIterator next/return.
-    if (!mal_vm_primitive_methods_intact(vm) || !mal_value_is_array_object(source)) {
+    if (!mal_vm_array_iteration_intact(vm) || !mal_value_is_array_object(source)) {
         return false;
     }
     MalArrayObject *array = mal_value_to_array_object(source);

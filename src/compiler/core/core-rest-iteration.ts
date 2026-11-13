@@ -280,7 +280,7 @@ export const lowerPrivateRestIteration: CoreFunctionPass = {
 
 /*
  * Mutable primordials keep the rest loop's protocol as the twin of a guarded
- * iteration (see core-guarded-iteration.ts): the watched-methods protector covers
+ * iteration (see core-guarded-iteration.ts): the array-iteration protector covers
  * %Array.prototype%[@@iterator] and %ArrayIteratorPrototype%.next, and the private,
  * dense rest array answers its length and every index below it from own data. The
  * header dispatches each step on the path the loop entered on; a fused close
@@ -313,9 +313,13 @@ function lowerGuardedRestIteration(
 			representation,
 		);
 	const initializeBlock = fn.instructionBlock(plan.initialize);
-	const { join, fused } = splitGuardedIterationEntry(fn, editor, edits, [
-		plan.initialize,
-	]);
+	const { join, fused } = splitGuardedIterationEntry(
+		fn,
+		editor,
+		edits,
+		[plan.initialize],
+		"array-iteration",
+	);
 	const zero = emit(join, "createNumber", [], { value: 0 });
 	const one = emit(join, "createNumber", [], { value: 1 });
 	const lengthIndex =
@@ -423,20 +427,28 @@ function lowerGuardedRestIteration(
 			arguments: [...edge.arguments, inside ? following : zero],
 		});
 	}
-	guardIterationCloses(fn, editor, edits, plan.closes, fused, (block) => {
-		const values = emit(block, "loadIntrinsic", [], {
-			intrinsic: "__arrayPrototypeValues",
-		});
-		edits.instructions++;
-		const iterator = editor.appendInstruction(block, "call", [values, plan.rest], {
-			sourcePosition,
-		}).outputs[0]!;
-		return {
-			iterator,
-			next: emit(block, "loadIntrinsic", [], {
-				intrinsic: "__arrayIteratorPrototypeNext",
-			}),
-			consumed: emit(block, "binary", [index, one], { operator: "+" }, "f64"),
-		};
-	});
+	guardIterationCloses(
+		fn,
+		editor,
+		edits,
+		plan.closes,
+		fused,
+		"array-iteration",
+		(block) => {
+			const values = emit(block, "loadIntrinsic", [], {
+				intrinsic: "__arrayPrototypeValues",
+			});
+			edits.instructions++;
+			const iterator = editor.appendInstruction(block, "call", [values, plan.rest], {
+				sourcePosition,
+			}).outputs[0]!;
+			return {
+				iterator,
+				next: emit(block, "loadIntrinsic", [], {
+					intrinsic: "__arrayIteratorPrototypeNext",
+				}),
+				consumed: emit(block, "binary", [index, one], { operator: "+" }, "f64"),
+			};
+		},
+	);
 }

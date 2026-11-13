@@ -12,13 +12,23 @@ export const MAX_STRING_CONCAT_INPUTS = 64;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 2 ** 31 - 1;
 
-/** Protector families a compiled speculation can check at runtime. */
-export type GuardedSemanticEpochFamily = "watched-methods" | "array-elements";
+/**
+ * Protector families a compiled speculation can check at runtime. A speculation
+ * names the narrowest one that covers what it skips: `array-iteration` and
+ * `generator-protocol` survive mutations of unrelated built-in methods.
+ */
+export type GuardedSemanticEpochFamily =
+	| "watched-methods"
+	| "array-elements"
+	| "array-iteration"
+	| "generator-protocol";
 
-/** Each family's `MalSemanticDependencyMask` bit in runtime/src/vm_ops.h. */
+/** Each family's `MalSemanticDependencyMask` bit in runtime/src/vm.h. */
 export const GUARDED_SEMANTIC_EPOCH_MASKS = {
 	"watched-methods": 2,
 	"array-elements": 4,
+	"array-iteration": 8,
+	"generator-protocol": 16,
 } as const satisfies Record<GuardedSemanticEpochFamily, number>;
 
 /** Numeric TypedArray brands whose element access produces a Number. */

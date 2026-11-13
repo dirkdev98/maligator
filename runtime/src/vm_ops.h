@@ -59,19 +59,44 @@ static inline MalValue mal_vm_numeric_typed_array_load_at(
     }
 }
 
-/**
- * `mal_primitive_method_protector` as seen by this VM. Each invalidation also bumps
- * the VM's watched-methods epoch, so the epoch keeps its initial value exactly
- * while the protector holds, and a caller holding the VM skips a thread-local
- * read (a `_tlv_get_addr` call on Darwin).
+/*
+ * Each protector holds while its epoch keeps the initial value, so a caller holding
+ * the VM reads it without a thread-local access (a `_tlv_get_addr` call on Darwin).
  */
+
+/** No watched built-in object has changed; the fallback for unclassified dependencies. */
 static inline bool mal_vm_primitive_methods_intact(const MalVm *vm) {
     return vm->semantic_epochs.watched_methods == MAL_SEMANTIC_EPOCH_INITIAL;
 }
 
-/** `mal_array_elements_protector` as seen by this VM; see mal_vm_primitive_methods_intact. */
+/** `mal_array_elements_protector` as seen by this VM. */
 static inline bool mal_vm_array_elements_intact(const MalVm *vm) {
     return vm->semantic_epochs.array_elements == MAL_SEMANTIC_EPOCH_INITIAL;
+}
+
+/** See MalSemanticEpochs.iterator_lookups. */
+static inline bool mal_vm_iterator_lookups_intact(const MalVm *vm) {
+    return vm->semantic_epochs.iterator_lookups == MAL_SEMANTIC_EPOCH_INITIAL;
+}
+
+/** See MalSemanticEpochs.array_iteration. */
+static inline bool mal_vm_array_iteration_intact(const MalVm *vm) {
+    return vm->semantic_epochs.array_iteration == MAL_SEMANTIC_EPOCH_INITIAL;
+}
+
+/** See MalSemanticEpochs.string_iteration. */
+static inline bool mal_vm_string_iteration_intact(const MalVm *vm) {
+    return vm->semantic_epochs.string_iteration == MAL_SEMANTIC_EPOCH_INITIAL;
+}
+
+/** See MalSemanticEpochs.collection_iteration. */
+static inline bool mal_vm_collection_iteration_intact(const MalVm *vm) {
+    return vm->semantic_epochs.collection_iteration == MAL_SEMANTIC_EPOCH_INITIAL;
+}
+
+/** See MalSemanticEpochs.generator_protocol. */
+static inline bool mal_vm_generator_protocol_intact(const MalVm *vm) {
+    return vm->semantic_epochs.generator_protocol == MAL_SEMANTIC_EPOCH_INITIAL;
 }
 
 static inline bool mal_vm_semantic_dependencies_hold(
@@ -85,6 +110,14 @@ static inline bool mal_vm_semantic_dependencies_hold(
     }
     if ((dependencies & MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS) != 0 &&
         !mal_vm_array_elements_intact(vm)) {
+        return false;
+    }
+    if ((dependencies & MAL_SEMANTIC_DEPENDENCY_ARRAY_ITERATION) != 0 &&
+        !mal_vm_array_iteration_intact(vm)) {
+        return false;
+    }
+    if ((dependencies & MAL_SEMANTIC_DEPENDENCY_GENERATOR_PROTOCOL) != 0 &&
+        !mal_vm_generator_protocol_intact(vm)) {
         return false;
     }
     return true;
@@ -1071,9 +1104,10 @@ typedef struct MalInlineCache {
     //  - watched-intrinsic own property: `mode == MAL_IC_MODE_WATCHED_VALUE` —
     //    `value` is `key`'s own value on a watched intrinsic (String, Math, …),
     //    which lives in the overflow table (no shape slot).
-    // Both value modes are valid only while `mal_primitive_method_protector`
-    // holds. Under MAL_REALMS a primitive-method entry is additionally tagged
-    // with its exact realm; `prototype` guards the current intrinsic in all builds.
+    // Both value modes hold only while no watched built-in object changed since
+    // the row was filled (see `watched_epoch`). Under MAL_REALMS a primitive-method
+    // entry is additionally tagged with its exact realm; `prototype` guards the
+    // current intrinsic in all builds.
     // A plain object-shape entry has `prim_kind` 0 and a real `slot` (uses
     // object->slots).
     union {
@@ -1110,9 +1144,15 @@ typedef struct MalInlineCache {
     // here (polymorphic across equal-layout prototype objects) or one exact
     // deep/dictionary first prototype. Exact identity matters because equal
     // receiver shapes do not imply equal prototype objects or dictionary state.
+    // The watched value rows (primitive-value, watched-value, and an
+    // inherited-value row without polymorphic entries) use none of it and keep
+    // the watched-methods epoch they were filled under instead, so a row filled
+    // after a polyfill's startup installs stays valid until the next change. The
+    // epoch is 32 bits wide to keep the 32-bit layout; see mal_vm_watched_rows_fillable.
     union {
         const struct MalShape *poly_shape[MAL_IC_POLY_EXTRA];
         const struct MalObject *proto_object[MAL_IC_POLY_EXTRA];
+        u32 watched_epoch;
     };
     u8 slot;
     byte poly_data[8];
@@ -1129,6 +1169,22 @@ typedef struct MalInlineCache {
 } MalInlineCache;
 
 static_assert(sizeof(MalInlineCache) == (sizeof(void *) == 8 ? 72 : 56), "MalInlineCache must retain its pointer-width-specific layout");
+
+/**
+ * Whether a watched value row may be filled now. Every change to a watched
+ * built-in object advances the watched-methods epoch, so a row records the epoch
+ * it was proven under. Rows hold 32 bits: once the epoch passes that range, or is
+ * exhausted and no longer advances, no row fills, so a stored epoch never repeats.
+ */
+static inline bool mal_vm_watched_rows_fillable(const MalVm *vm) {
+    u64 epoch = vm->semantic_epochs.watched_methods;
+    return epoch != 0 && epoch <= UINT32_MAX;
+}
+
+/** Whether no watched built-in object has changed since a watched value row was filled. */
+static inline bool mal_vm_watched_row_current(const MalVm *vm, u32 watched_epoch) {
+    return watched_epoch == vm->semantic_epochs.watched_methods;
+}
 
 /**
  * A number-record field's last proven shape row, held in a native frame local
@@ -1337,6 +1393,8 @@ MalInlineCache *mal_vm_inherited_property_stub_cache(MalVm *vm);
 typedef struct MalBuiltinMissingRow {
     MalValue key;
     u32 prototype_slot;
+    /** The watched-methods epoch the absence was proven under; see MalInlineCache. */
+    u32 watched_epoch;
 } MalBuiltinMissingRow;
 
 /**
@@ -1645,8 +1703,9 @@ static inline __attribute__((always_inline)) bool mal_vm_local_inherited_value_t
 
 /**
  * Static-name loop probe for one watched inherited value. The compiler admits the
- * protector once at function entry and supplies its family epoch; any intervening
- * JavaScript mutation bumps that epoch and makes this probe fail closed.
+ * protector once at function entry and supplies its family epoch; the row must have
+ * been filled under that epoch, and any intervening JavaScript mutation bumps it and
+ * makes this probe fail closed.
  */
 static inline bool mal_vm_local_watched_inherited_value_try_load_static(
     const MalVm *vm, u64 watched_methods_epoch, MalValue receiver,
@@ -1655,7 +1714,7 @@ static inline bool mal_vm_local_watched_inherited_value_try_load_static(
     if (watched_methods_epoch == 0 ||
         watched_methods_epoch != vm->semantic_epochs.watched_methods ||
         ic->mode != MAL_IC_MODE_INHERITED_VALUE || ic->poly_count != 0 ||
-        !mal_value_is_object(receiver)) {
+        ic->watched_epoch != watched_methods_epoch || !mal_value_is_object(receiver)) {
         return false;
     }
     const MalObject *object = (const MalObject *) mal_value_to_heap(receiver);
@@ -1670,9 +1729,10 @@ static inline bool mal_vm_local_watched_inherited_value_try_load_static(
 
 /**
  * Static-name proof for a watched primitive method inside compiled optimistic
- * regions. The function-entry snapshot is zero unless the legacy protector was
- * live; every later watched-method mutation bumps the family epoch. Exact Realm
- * and prototype identity keep a cache row from crossing intrinsic families.
+ * regions. The function-entry snapshot is zero unless the watched-methods protector
+ * was intact, and the row must have been filled under it; every later watched-method
+ * mutation bumps the family epoch. Exact Realm and prototype identity keep a cache
+ * row from crossing intrinsic families.
  *
  * `expected_kind` is supplied by compiler metadata for the fused builtin
  * protocol. The receiver is deliberately not inspected here: a region may
@@ -1685,7 +1745,8 @@ static inline bool mal_vm_local_watched_primitive_value_try_load_static(
 ) {
     if (watched_methods_epoch == 0 ||
         watched_methods_epoch != vm->semantic_epochs.watched_methods ||
-        ic->mode != MAL_IC_MODE_PRIMITIVE_VALUE || ic->prim_kind != expected_kind
+        ic->mode != MAL_IC_MODE_PRIMITIVE_VALUE || ic->prim_kind != expected_kind ||
+        ic->watched_epoch != watched_methods_epoch
 #if MAL_REALMS
         || ic->realm != vm->current_realm
 #endif
@@ -1726,7 +1787,7 @@ static inline MAL_PRESERVE_MOST bool mal_vm_inherited_value_try_load(const MalVm
         mal_perf_ic_load_inherited_hit();
         return true;
     }
-    if (!mal_vm_primitive_methods_intact(vm) || !mal_value_is_object(receiver)) {
+    if (!mal_vm_watched_row_current(vm, ic->watched_epoch) || !mal_value_is_object(receiver)) {
         return false;
     }
     const MalObject *object = (const MalObject *) mal_value_to_heap(receiver);
@@ -1845,7 +1906,7 @@ bool mal_vm_inherited_stub_try_load_static(
 /** Guarded own-value hit for watched built-ins whose properties live in overflow tables. */
 static inline bool mal_vm_watched_try_load(const MalVm *vm, MalValue receiver, MalValue key,
                                            const MalInlineCache *ic, MalValue *out) {
-    if (!mal_vm_primitive_methods_intact(vm) || ic->mode != MAL_IC_MODE_WATCHED_VALUE ||
+    if (ic->mode != MAL_IC_MODE_WATCHED_VALUE || !mal_vm_watched_row_current(vm, ic->watched_epoch) ||
         ic->prim_kind != 0 || key != ic->key ||
         !mal_value_is_object(receiver) || mal_value_to_object(receiver) != ic->obj) {
         return false;
@@ -1954,7 +2015,7 @@ static inline bool mal_vm_special_try_load(MalVm *vm, MalValue receiver, MalValu
         return false;
     }
     if (ic->mode == MAL_IC_MODE_PRIMITIVE_VALUE) {
-        if (!mal_vm_primitive_methods_intact(vm) ||
+        if (!mal_vm_watched_row_current(vm, ic->watched_epoch) ||
             mal_vm_primitive_method_kind(receiver) != ic->prim_kind
 #if MAL_REALMS
             || ic->realm != vm->current_realm
@@ -2080,7 +2141,7 @@ static inline __attribute__((always_inline)) bool mal_vm_watched_own_value_try_l
     if (ic->mode != MAL_IC_MODE_WATCHED_VALUE || ic->prim_kind != 0 ||
         !mal_value_is_object(receiver) ||
         (const MalObject *) mal_value_to_heap(receiver) != ic->obj ||
-        !mal_vm_primitive_methods_intact(vm)) {
+        !mal_vm_watched_row_current(vm, ic->watched_epoch)) {
         return false;
     }
     MAL_PERF_COUNT(ic_load_watched_hits);
@@ -2594,7 +2655,7 @@ static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalV
         const MalShape *child = ic->poly_shape[0];
         u32 old_count = object->shape->inline_count;
         if (object->watched_method_proto) {
-            mal_invalidate_primitive_method_protector();
+            mal_invalidate_watched_key(object, mal_key_from_value(key));
         }
         if (mal_object_note_prototype_mutation(object)) {
             MAL_PERF_COUNT(prototype_epoch_define_invalidations);

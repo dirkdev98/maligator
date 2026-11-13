@@ -2897,7 +2897,7 @@ const SPREAD_LITERAL_ELEMENT_LIMIT = 16;
  * Spreading an Array literal that nothing else observes passes exactly its defined
  * elements while %Array.prototype%[@@iterator] and %ArrayIteratorPrototype%.next are
  * the realm's own: every index below the literal's length is an own data property.
- * Locked primordials guarantee that; mutable ones check the watched-methods protector,
+ * Locked primordials guarantee that; mutable ones check the array-iteration protector,
  * which covers both prototypes, right before the call and keep the spread as its twin.
  */
 const spreadArrayLiteralArguments: CoreFunctionPass = {
@@ -3047,7 +3047,7 @@ const spreadArrayLiteralArguments: CoreFunctionPass = {
 };
 
 /*
- * Splits the call's block: the watched-methods check selects a direct call with the
+ * Splits the call's block: the array-iteration check selects a direct call with the
  * literal's elements or the original spread, whose literal moves in front of it when
  * nothing else needs it.
  */
@@ -3114,7 +3114,7 @@ function guardSpreadLiteralCall(
 		sourcePosition,
 	});
 	const intact = editor.appendInstruction(block, "guardSemanticEpoch", [], {
-		attributes: { family: "watched-methods" },
+		attributes: { family: "array-iteration" },
 		sourcePosition,
 		outputRepresentations: ["boolean"],
 	}).outputs[0]!;

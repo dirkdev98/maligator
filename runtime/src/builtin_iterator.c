@@ -548,7 +548,7 @@ bool mal_vm_deferred_array_values_begin(
     MalObject *object = mal_value_to_object(source);
     // The protector covers Array.prototype @@iterator and ArrayIterator next/return.
     if (!object->for_in_keys &&
-        (!mal_vm_primitive_methods_intact(vm) ||
+        (!mal_vm_array_iteration_intact(vm) ||
          mal_object_prototype(object) !=
              mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]) ||
          ((object->shape->inline_count != 0 || mal_object_overflow(object) != nullptr) &&
@@ -571,7 +571,7 @@ bool mal_vm_deferred_values_begin(
     if (!mal_value_is_string(source)) return mal_vm_deferred_array_values_begin(vm, source, cursor);
     cursor->active = false;
     // A rope keeps the ordinary iterator, whose leaf cursor avoids rescanning its spine.
-    if (!mal_vm_primitive_methods_intact(vm) ||
+    if (!mal_vm_string_iteration_intact(vm) ||
         mal_value_to_string(source)->storage == MAL_STRING_STORAGE_CONS) {
         return false;
     }
@@ -631,7 +631,9 @@ bool mal_vm_deferred_values_close(
     const MalDeferredValuesCursor *cursor,
     bool normal
 ) {
-    if (mal_vm_primitive_methods_intact(vm) ||
+    // Only the close looks `return` up again; an intact protector proves it absent.
+    if ((cursor->string ? mal_vm_string_iteration_intact(vm)
+                        : mal_vm_array_iteration_intact(vm)) ||
         (!cursor->string && mal_value_to_object(source)->for_in_keys)) {
         return true;
     }
@@ -890,15 +892,16 @@ static MalValue mal_builtin_iterator_prototype_dispose(
 }
 
 /**
- * [[Get]] for an iteration-protocol key that a receiver inherits only through
- * watched built-in prototypes. While the watched-method protector holds none of
- * those prototypes has changed, so the resolved data value is a per-prototype
- * constant. Returns false when the lookup needs the generic path.
+ * [[Get]] for an iteration-protocol key (@@iterator, `next`, or `return`) that a
+ * receiver inherits only through watched built-in prototypes. While the
+ * iterator-lookups protector holds, no watched object has changed that key or its
+ * prototype, so the resolved data value is a per-prototype constant. Returns false
+ * when the lookup needs the generic path.
  */
 static bool mal_vm_watched_inherited_get(
     MalVm *vm, MalValue receiver, MalKey key, MalValue *value_out
 ) {
-    if (!mal_vm_primitive_methods_intact(vm)) return false;
+    if (!mal_vm_iterator_lookups_intact(vm)) return false;
     const MalObject *prototype;
     if (mal_value_is_string(receiver)) {
         // String exotic own keys are indices and "length".
@@ -977,7 +980,7 @@ static bool mal_vm_get_for_in_iterator(MalVm *vm, MalValue keys, MalIteratorReco
 }
 
 /**
- * The builtin iterator kind `value[@@iterator]()` creates while the watched-method
+ * The builtin iterator kind `value[@@iterator]()` creates while its iteration
  * protector holds: an Array, Set, or Map on its own realm's intrinsic prototype
  * without an own @@iterator still has the default method.
  */
@@ -998,7 +1001,10 @@ static bool mal_vm_default_iterator_kind(
     } else {
         return false;
     }
-    if (!mal_vm_primitive_methods_intact(vm)) return false;
+    if (kind == MAL_ITERATOR_ARRAY_VALUES ? !mal_vm_array_iteration_intact(vm)
+                                          : !mal_vm_collection_iteration_intact(vm)) {
+        return false;
+    }
     MalObject *object = mal_value_to_object(value);
     const MalObject *prototype = mal_object_prototype(object);
     if (prototype == nullptr || !prototype->watched_method_proto ||

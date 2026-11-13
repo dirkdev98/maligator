@@ -1318,18 +1318,32 @@ columns over an `Array.from` result admit only after the function compared that
 call's callee and receiver with the realm's own.
 
 Guarded iteration extends this to loops whose bodies run JavaScript. GetIterator
-reads @@iterator and `next` once, so the watched-methods protector checked there,
-which covers the generator, iterator and Array iteration prototypes, holds for the
-whole loop: a private numeric generator's fused body, or the index loop over a
+reads @@iterator and `next` once, so the protocol's protector checked there holds for
+the whole loop: a private numeric generator's fused body, or the index loop over a
 private rest array, replaces the protocol, and the original protocol stays as the
 twin that a failed check selects. Only IteratorClose looks a method up later, so a
 fused close checks the protector again and, once it failed, rebuilds the iterator the
 loop would hold by calling the private generator or the realm's own `values` again
-and advancing it with the realm's own `next`. The protector never recovers, so an
+and advancing it with the realm's own `next`. A protector never recovers, so an
 iterator that the twin exposes to user code cannot reach a later fused loop. Spread
-Array literal arguments check the same protector at the call, and call, apply and
-bind sites compare the loaded method with the realm's own function, which stays
-exact whatever the property holds.
+Array literal arguments check the Array iteration protector at the call, and call,
+apply and bind sites compare the loaded method with the realm's own function, which
+stays exact whatever the property holds.
+
+Each protector covers one protocol, so a polyfill that adds or replaces an unrelated
+built-in method keeps it. A define, store or delete on a watched built-in object
+breaks the protectors whose lookups can reach that key on that object: the
+generator protocol covers %GeneratorPrototype% `next`, `return` and `throw` and the
+@@iterator it inherits; Array, String, and Map and Set iteration each cover their
+@@iterator, their iterator prototype's `next`, and the absent `return` and `throw`
+along that iterator's chain. A key on %IteratorPrototype% or %Object.prototype%
+breaks all of them. Reparenting a watched object breaks every protector, and
+freezing or sealing one breaks only the generic watched-methods protector, because
+it changes no lookup. Primitive, watched and inherited method rows and absent-key
+rows on built-in chains record the generic epoch they were filled under, so rows
+filled after a polyfill's startup installs keep working until the next change. Other
+consumers with no protocol of their own, including compiled builtin identities, keep
+the generic protector.
 
 Canonical function comparisons use the inventory's object identity, independently
 of native callback sharing. This folds repeated references across effects while

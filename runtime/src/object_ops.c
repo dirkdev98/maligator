@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include "array_object.h"
+#include "ascii.h"
 #include "gc.h"
 #include "heap_symbol.h"
 #include "perf_stats.h"
@@ -24,11 +25,121 @@ void mal_invalidate_array_elements_protector(void) {
     mal_semantic_epoch_bump(&epochs->array_elements);
 }
 
-void mal_invalidate_primitive_method_protector(void) {
-    mal_primitive_method_protector = false;
+void mal_invalidate_watched_attributes(void) {
     MalSemanticEpochs *epochs = &mal_vm_from_heap(mal_gc_current_heap())->semantic_epochs;
     mal_semantic_epoch_bump(&epochs->activity);
     mal_semantic_epoch_bump(&epochs->watched_methods);
+}
+
+void mal_invalidate_watched_protectors(void) {
+    MalSemanticEpochs *epochs = &mal_vm_from_heap(mal_gc_current_heap())->semantic_epochs;
+    mal_semantic_epoch_bump(&epochs->activity);
+    mal_semantic_epoch_bump(&epochs->watched_methods);
+    mal_semantic_epoch_bump(&epochs->iterator_lookups);
+    mal_semantic_epoch_bump(&epochs->array_iteration);
+    mal_semantic_epoch_bump(&epochs->string_iteration);
+    mal_semantic_epoch_bump(&epochs->collection_iteration);
+    mal_semantic_epoch_bump(&epochs->generator_protocol);
+}
+
+enum {
+    MAL_WATCHED_ARRAY_ITERATION = 1 << 0,
+    MAL_WATCHED_STRING_ITERATION = 1 << 1,
+    MAL_WATCHED_COLLECTION_ITERATION = 1 << 2,
+    MAL_WATCHED_GENERATOR_PROTOCOL = 1 << 3,
+    MAL_WATCHED_ALL_PROTOCOLS = (1 << 4) - 1,
+    /** The key is one iterator_lookups covers, wherever it is defined. */
+    MAL_WATCHED_ITERATOR_LOOKUP = 1 << 4,
+};
+
+/**
+ * The protectors `key` on `object` can affect in one realm. Only the objects
+ * named here lie on a protected lookup path: the chains from an Array, String,
+ * Map or Set end at %Object.prototype%, those from their iterators and a
+ * generator's prototype pass %IteratorPrototype% first, and reparenting a watched
+ * object breaks every protector instead. A protocol method is an own property of
+ * the first object on its path, so its key on a later object is shadowed; `return`
+ * and `throw` resolve as absent and count on every object they pass. The two
+ * shared tails count every protocol key for all protectors.
+ */
+static u8 mal_watched_key_protectors(
+    const MalValue *intrinsics, const MalObject *object, MalKey key
+) {
+    bool iterator_symbol = key.kind == MAL_KEY_SYMBOL &&
+        key.value == intrinsics[MAL_INTRINSIC_SYMBOL_ITERATOR];
+    bool next = false;
+    bool closing = false;
+    if (key.kind == MAL_KEY_STRING) {
+        const MalString *name = mal_value_to_string(key.value);
+        next = mal_string_equals_ascii(name, "next");
+        closing = !next &&
+            (mal_string_equals_ascii(name, "return") || mal_string_equals_ascii(name, "throw"));
+    }
+    if (!iterator_symbol && !next && !closing) return 0;
+
+    MalValue value = mal_value_from_object((MalObject *) object);
+    if (value == intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE] ||
+        value == intrinsics[MAL_INTRINSIC_ITERATOR_PROTOTYPE]) {
+        return MAL_WATCHED_ITERATOR_LOOKUP | MAL_WATCHED_ALL_PROTOCOLS;
+    }
+    if (value == intrinsics[MAL_INTRINSIC_GENERATOR_PROTOTYPE]) {
+        return MAL_WATCHED_ITERATOR_LOOKUP | MAL_WATCHED_GENERATOR_PROTOCOL;
+    }
+    if (iterator_symbol) {
+        if (value == intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]) {
+            return MAL_WATCHED_ITERATOR_LOOKUP | MAL_WATCHED_ARRAY_ITERATION;
+        }
+        if (value == intrinsics[MAL_INTRINSIC_STRING_PROTOTYPE]) {
+            return MAL_WATCHED_ITERATOR_LOOKUP | MAL_WATCHED_STRING_ITERATION;
+        }
+        if (value == intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE] ||
+            value == intrinsics[MAL_INTRINSIC_SET_PROTOTYPE]) {
+            return MAL_WATCHED_ITERATOR_LOOKUP | MAL_WATCHED_COLLECTION_ITERATION;
+        }
+        return MAL_WATCHED_ITERATOR_LOOKUP;
+    }
+    if (value == intrinsics[MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE]) {
+        return MAL_WATCHED_ITERATOR_LOOKUP | MAL_WATCHED_ARRAY_ITERATION;
+    }
+    if (value == intrinsics[MAL_INTRINSIC_STRING_ITERATOR_PROTOTYPE]) {
+        return MAL_WATCHED_ITERATOR_LOOKUP | MAL_WATCHED_STRING_ITERATION;
+    }
+    if (value == intrinsics[MAL_INTRINSIC_MAP_ITERATOR_PROTOTYPE] ||
+        value == intrinsics[MAL_INTRINSIC_SET_ITERATOR_PROTOTYPE]) {
+        return MAL_WATCHED_ITERATOR_LOOKUP | MAL_WATCHED_COLLECTION_ITERATION;
+    }
+    return MAL_WATCHED_ITERATOR_LOOKUP;
+}
+
+void mal_invalidate_watched_key(const MalObject *object, MalKey key) {
+    MalVm *vm = mal_vm_from_heap(mal_gc_current_heap());
+    MalSemanticEpochs *epochs = &vm->semantic_epochs;
+    mal_semantic_epoch_bump(&epochs->activity);
+    mal_semantic_epoch_bump(&epochs->watched_methods);
+    // Each realm's intrinsics are watched while another realm is current.
+    u8 protectors = 0;
+#if MAL_REALMS
+    for (const MalRealm *realm = vm->realms; realm != nullptr; realm = realm->next) {
+        protectors |= mal_watched_key_protectors(realm->intrinsics, object, key);
+    }
+#else
+    protectors = mal_watched_key_protectors(vm->intrinsics, object, key);
+#endif
+    if (protectors & MAL_WATCHED_ITERATOR_LOOKUP) {
+        mal_semantic_epoch_bump(&epochs->iterator_lookups);
+    }
+    if (protectors & MAL_WATCHED_ARRAY_ITERATION) {
+        mal_semantic_epoch_bump(&epochs->array_iteration);
+    }
+    if (protectors & MAL_WATCHED_STRING_ITERATION) {
+        mal_semantic_epoch_bump(&epochs->string_iteration);
+    }
+    if (protectors & MAL_WATCHED_COLLECTION_ITERATION) {
+        mal_semantic_epoch_bump(&epochs->collection_iteration);
+    }
+    if (protectors & MAL_WATCHED_GENERATOR_PROTOCOL) {
+        mal_semantic_epoch_bump(&epochs->generator_protocol);
+    }
 }
 
 /* A descriptor can introduce young edges through value, getter, or setter. */
@@ -310,7 +421,7 @@ void mal_object_set_integrity_level(MalObject *object, bool clear_writable) {
     bool noted_prototype_mutation = false;
     if (changed_dense_elements) {
         if (object->watched_method_proto) {
-            mal_invalidate_primitive_method_protector();
+            mal_invalidate_watched_attributes();
         }
         noted_prototype_mutation = mal_object_note_prototype_mutation(object);
         if (noted_prototype_mutation) {
@@ -320,7 +431,7 @@ void mal_object_set_integrity_level(MalObject *object, bool clear_writable) {
     if (!has_shape_properties && !has_overflow_properties) return;
 
     if (object->watched_method_proto && !changed_dense_elements) {
-        mal_invalidate_primitive_method_protector();
+        mal_invalidate_watched_attributes();
     }
     if (has_shape_properties && !mal_object_has_public_overflow(object)) {
         // Shaped storage contains data properties only. Seal/freeze changes their
@@ -433,7 +544,7 @@ bool mal_object_set_prototype(MalObject *object, MalObject *prototype) {
         mal_invalidate_array_elements_protector();
     }
     if (object->watched_method_proto) {
-        mal_invalidate_primitive_method_protector();
+        mal_invalidate_watched_protectors();
     }
     if (mal_object_note_prototype_mutation(object)) {
         MAL_PERF_COUNT(prototype_epoch_reparent_invalidations);
@@ -599,10 +710,10 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
     if (key.kind == MAL_KEY_INDEX && object->fast_elements_proto) {
         mal_invalidate_array_elements_protector();
     }
-    // Defining any property on a watched primitive prototype invalidates the
-    // primitive-method cache (a new/changed method could shadow a cached lookup).
+    // A new or changed property on a watched built-in can shadow or replace a
+    // cached lookup.
     if (object->watched_method_proto) {
-        mal_invalidate_primitive_method_protector();
+        mal_invalidate_watched_key(object, key);
     }
 
     if (key.kind == MAL_KEY_SYMBOL &&
@@ -831,7 +942,9 @@ bool mal_object_try_append_shaped_values(
     }
 
     if (object->watched_method_proto) {
-        mal_invalidate_primitive_method_protector();
+        for (u32 i = source_count; i < final_count; ++i) {
+            mal_invalidate_watched_key(object, mal_key_from_value(plan->final->props[i].key));
+        }
     }
     if (mal_object_note_prototype_mutation(object)) {
         MAL_PERF_COUNT(prototype_epoch_append_invalidations);
@@ -868,7 +981,7 @@ bool mal_object_delete_own(MalObject *object, MalKey key) {
         MAL_PERF_COUNT(prototype_epoch_delete_invalidations);
     }
     if (object->watched_method_proto) {
-        mal_invalidate_primitive_method_protector();
+        mal_invalidate_watched_key(object, key);
     }
     // Dense array element: a configurable present index becomes a hole. In dense
     // mode no index keys live in the table, so this is the whole operation.
@@ -1078,10 +1191,10 @@ static void mal_object_set_new_own(MalObject *object, MalKey key, MalValue value
 }
 
 bool mal_object_set(MalObject *object, MalKey key, MalValue value) {
-    // Reassigning/adding a property on a watched primitive prototype (e.g.
-    // `String.prototype.charCodeAt = fn`) invalidates the primitive-method cache.
+    // Reassigning or adding a property on a watched built-in, such as
+    // `String.prototype.charCodeAt = fn`, invalidates the lookups it can reach.
     if (object->watched_method_proto) {
-        mal_invalidate_primitive_method_protector();
+        mal_invalidate_watched_key(object, key);
     }
     if (mal_object_set_is_cacheable(object, key) && mal_object_try_cached_set(object, key, value)) {
         return true;

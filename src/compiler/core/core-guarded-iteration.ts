@@ -1,3 +1,4 @@
+import type { GuardedSemanticEpochFamily } from "../shared/compiler-instruction.ts";
 import type { CoreEditor } from "./core-editor.ts";
 import { coreTerminatorInput } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
@@ -13,10 +14,12 @@ import type { CoreFunctionStore } from "./core-store.ts";
 /*
  * Guarded iteration lets a loop drive a fused form of an iterator protocol whose
  * methods live on watched builtin prototypes, with mutable primordials. GetIterator
- * looks up @@iterator and `next` once, so the watched-methods protector checked there
+ * looks up @@iterator and `next` once, so the protocol's protector checked there
  * proves both for the whole loop; otherwise the original protocol runs as the twin.
  * Only IteratorClose looks a method up later, so a fused close checks the protector
  * again and, once it failed, rebuilds the iterator the loop would hold and closes it.
+ * The protector is the protocol's own, such as `array-iteration`, so a mutation of
+ * an unrelated built-in method keeps the fused loop.
  */
 
 /** Edits counted for the transform report. */
@@ -113,6 +116,7 @@ export function splitGuardedIterationEntry(
 	editor: CoreEditor,
 	edits: CoreGuardedIterationEdits,
 	twin: ReadonlyArray<CoreInstructionId>,
+	family: GuardedSemanticEpochFamily,
 ): CoreGuardedIterationEntry {
 	const get = twin[twin.length - 1]!;
 	const block = fn.instructionBlock(get);
@@ -179,13 +183,7 @@ export function splitGuardedIterationEntry(
 		},
 		sourcePosition,
 	});
-	const holds = emit(
-		block,
-		"guardSemanticEpoch",
-		[],
-		{ family: "watched-methods" },
-		"boolean",
-	);
+	const holds = emit(block, "guardSemanticEpoch", [], { family }, "boolean");
 	const absent = emit(block, "createUndefined", [], {}, "boxed");
 	const absentAs = (representation: CoreRepresentation) =>
 		representation === "boxed"
@@ -229,6 +227,7 @@ export function guardIterationCloses(
 	edits: CoreGuardedIterationEdits,
 	closes: ReadonlyArray<CoreInstructionId>,
 	fused: CoreValueId,
+	family: GuardedSemanticEpochFamily,
 	rebuild: (block: CoreBlockId) => CoreRebuiltIterator,
 ): void {
 	for (const close of closes) {
@@ -302,13 +301,7 @@ export function guardIterationCloses(
 			});
 		jump(twinClose!, after!);
 		branch(block, fused, fusedClose!, twinClose!);
-		const intact = emit(
-			fusedClose!,
-			"guardSemanticEpoch",
-			[],
-			{ family: "watched-methods" },
-			"boolean",
-		);
+		const intact = emit(fusedClose!, "guardSemanticEpoch", [], { family }, "boolean");
 		branch(fusedClose!, intact, after!, rebuilt!);
 		const record = rebuild(rebuilt!);
 		const one = emit(rebuilt!, "createNumber", [], { value: 1 }, "f64");

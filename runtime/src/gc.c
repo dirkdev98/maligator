@@ -71,7 +71,6 @@
 MAL_ISOLATE_LOCAL MalIsolateLocals mal_isolate = {
     .prototype_chain_epoch = 1,
     .array_elements_protector = true,
-    .primitive_method_protector = true,
 };
 
 #if defined(__APPLE__) && !defined(__wasi__)

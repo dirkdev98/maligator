@@ -821,11 +821,11 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_intrinsics_init_global_this(vm);
 
     // All builtin prototypes/constructors are now fully populated. Watch the objects
-    // the primitive-method + intrinsic-own-property inline cache reads from, so any
-    // later user mutation invalidates the cache; the protector holds until then. Do
-    // this after the init-time method installs above so they do not trip it. The
-    // process-global protector is monotonic: initialization of a later realm must not
-    // re-enable it after an earlier realm invalidated it.
+    // the primitive-method + intrinsic-own-property inline cache and the iteration
+    // protocols read from, so a later user mutation invalidates the protectors it
+    // can affect; each holds until then. Do this after the init-time method installs
+    // above so they do not trip them. The protectors are monotonic: initialization of
+    // a later realm must not re-enable one after an earlier realm invalidated it.
     //   - the primitive prototypes + %Object.prototype% (the chain a primitive
     //     receiver walks) — for `str.method()` / `num.method()`;
     //   - the namespaces Math/JSON/Reflect/Atomics and every builtin constructor —

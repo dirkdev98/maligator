@@ -1643,20 +1643,30 @@ typedef struct MalHasCacheRow {
 /**
  * Runtime admission for compiler facts backed by semantic epochs. Generated code
  * names the dependencies it consumes; the admission helpers in vm_ops.h are the one
- * compatibility bridge from those names to the legacy protectors and per-VM epoch
- * storage. Locked-world dependencies disappear before emission and never reach them.
+ * compatibility bridge from those names to the per-VM epoch storage. Locked-world
+ * dependencies disappear before emission and never reach them.
  *
  * `primitive-methods` and `watched-methods` currently share one invalidation path,
  * but keep distinct bits so the compiler contract does not inherit that runtime
- * implementation detail. The activity snapshot lets a region validate all of its
+ * implementation detail. The protocol bits name the narrower protectors in
+ * MalSemanticEpochs. The activity snapshot lets a region validate all of its
  * dependencies with one comparison after a potentially reentrant operation.
  */
 typedef enum MalSemanticDependencyMask {
     MAL_SEMANTIC_DEPENDENCY_PRIMITIVE_METHODS = 1 << 0,
     MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS = 1 << 1,
     MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS = 1 << 2,
+    MAL_SEMANTIC_DEPENDENCY_ARRAY_ITERATION = 1 << 3,
+    MAL_SEMANTIC_DEPENDENCY_GENERATOR_PROTOCOL = 1 << 4,
 } MalSemanticDependencyMask;
 
+/**
+ * Protectors over the watched built-in objects. `watched_methods` breaks on every
+ * mutation of one, for consumers whose dependencies are not classified. The
+ * iteration protectors break only when a mutation can change a lookup their
+ * protocol performs (see mal_invalidate_watched_key), so a polyfill that adds an
+ * unrelated method leaves them intact.
+ */
 typedef struct MalSemanticEpochs {
     /** Advanced by every semantic-family invalidation; future re-entry dirty test. */
     u64 activity;
@@ -1664,6 +1674,25 @@ typedef struct MalSemanticEpochs {
     u64 array_elements;
     /** Resolved values on watched builtin prototypes/constructors/namespaces. */
     u64 watched_methods;
+    /**
+     * @@iterator, `next`, `return` and `throw` as resolved through any chain of
+     * watched built-in objects.
+     */
+    u64 iterator_lookups;
+    /**
+     * %Array.prototype%[@@iterator] and %ArrayIteratorPrototype%.next are the
+     * realm's own, and an Array iterator inherits no `return` or `throw`.
+     */
+    u64 array_iteration;
+    /** The String counterpart of `array_iteration`, for primitive strings. */
+    u64 string_iteration;
+    /** The Map and Set counterpart of `array_iteration`. */
+    u64 collection_iteration;
+    /**
+     * %GeneratorPrototype% `next`, `return` and `throw` and the @@iterator a
+     * generator inherits are the realm's own.
+     */
+    u64 generator_protocol;
 } MalSemanticEpochs;
 
 // Callback facts borrow the rooted builtin arguments. Function indices survive
@@ -1849,8 +1878,8 @@ typedef struct MalVm {
 
     /**
      * Static names that no property on a builtin prototype chain answers, by the
-     * chain's intrinsic prototype slot. Valid while the primitive-method protector
-     * holds, since that protector fails on any change to a watched prototype.
+     * chain's intrinsic prototype slot. A row holds while the watched-methods epoch
+     * it records is current, since every change to a watched prototype advances it.
      */
     struct MalBuiltinMissingRow *builtin_missing_rows;
 
@@ -2111,7 +2140,7 @@ typedef struct MalVm {
     /**
      * Data properties that iteration protocols inherit through watched built-in
      * prototypes, keyed by the receiver's prototype. Entries are consulted only
-     * while mal_primitive_method_protector holds; the prototype keeps each value
+     * while the iterator-lookups protector holds; the prototype keeps each value
      * reachable.
      */
     MalWatchedLookupEntry watched_lookup_cache[MAL_WATCHED_LOOKUP_CACHE_CAPACITY];

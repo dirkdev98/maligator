@@ -57,6 +57,7 @@ tests/native/promise-direct-capability.test.ts
 tests/native/promise-pool.test.ts
 tests/native/property-megamorphic-store.test.ts
 tests/native/property-transition-cache.test.ts
+tests/native/protocol-protectors.test.ts
 tests/native/regexp-case-span.test.ts
 tests/native/shape-case-load.test.ts
 tests/native/string-char-code-at-direct.test.ts
@@ -67,4 +68,5 @@ tests/native/string-split-fresh-array.test.ts
 tests/native/symbol-key-property-cache.test.ts
 tests/native/text-buffer.test.ts
 tests/native/tiny-string-cache.test.ts
+tests/native/watched-method-rows.test.ts
 tests/native/wide-class-layout.test.ts

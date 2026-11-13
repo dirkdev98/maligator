@@ -2770,19 +2770,18 @@ static inline u32 mal_vm_builtin_missing_hash(i32 slot, MalValue key) {
 
 /** Whether `key` is known to be absent from the receiver's builtin chain. */
 static bool mal_vm_builtin_chain_missing(const MalVm *vm, MalValue receiver, MalValue key) {
-    if (vm->builtin_missing_rows == nullptr || !mal_vm_primitive_methods_intact(vm)) {
-        return false;
-    }
+    if (vm->builtin_missing_rows == nullptr) return false;
     i32 slot = mal_vm_builtin_chain_slot(vm, receiver);
     if (slot < 0) return false;
     const MalBuiltinMissingRow *row =
         &vm->builtin_missing_rows[mal_vm_builtin_missing_hash(slot, key)];
-    return row->key == key && row->prototype_slot == (u32) slot;
+    return row->key == key && row->prototype_slot == (u32) slot &&
+        mal_vm_watched_row_current(vm, row->watched_epoch);
 }
 
 /** Record that a load of `key` from the receiver found nothing on its builtin chain. */
 static void mal_vm_builtin_chain_note_missing(MalVm *vm, MalValue receiver, MalValue key) {
-    if (!mal_vm_primitive_methods_intact(vm) || !mal_ic_key_is_stable_string(key)) return;
+    if (!mal_vm_watched_rows_fillable(vm) || !mal_ic_key_is_stable_string(key)) return;
     i32 slot = mal_vm_builtin_chain_slot(vm, receiver);
     if (slot < 0) return;
     MalKey query = {.kind = MAL_KEY_STRING, .value = key};
@@ -2790,8 +2789,8 @@ static void mal_vm_builtin_chain_note_missing(MalVm *vm, MalValue receiver, MalV
     if (mal_array_key_is_length(query) || mal_vm_string_is_canonical_numeric_index(vm, name)) {
         return;
     }
-    // A reparented or extended watched prototype fails the protector, so a chain of
-    // watched prototypes stays the one checked here.
+    // Every object on the chain is watched, so any later change to it, including a
+    // reparent, advances the epoch the row records.
     for (const MalObject *prototype = mal_value_to_object(vm->intrinsics[slot]);
          prototype != nullptr; prototype = mal_object_prototype(prototype)) {
         if (!prototype->watched_method_proto || mal_object_get_own(prototype, query).present) {
@@ -2807,6 +2806,7 @@ static void mal_vm_builtin_chain_note_missing(MalVm *vm, MalValue receiver, MalV
         &vm->builtin_missing_rows[mal_vm_builtin_missing_hash(slot, key)];
     row->key = key;
     row->prototype_slot = (u32) slot;
+    row->watched_epoch = (u32) vm->semantic_epochs.watched_methods;
 }
 
 /**
@@ -2982,7 +2982,7 @@ mal_vm_property_try_load_static_remaining(
     }
     // Primitive methods, such as a scanner's `text.charCodeAt`, and alternate shapes are
     // the next most common rows, and neither needs a register the front cannot spare.
-    if (ic->mode == MAL_IC_MODE_PRIMITIVE_VALUE && mal_vm_primitive_methods_intact(vm) &&
+    if (ic->mode == MAL_IC_MODE_PRIMITIVE_VALUE && mal_vm_watched_row_current(vm, ic->watched_epoch) &&
         mal_vm_primitive_method_kind(receiver) == ic->prim_kind &&
 #if MAL_REALMS
         ic->realm == vm->current_realm &&
@@ -3029,7 +3029,8 @@ mal_vm_property_try_load_static_rows(
     // Watched built-ins such as `Math.round` are the hottest rows the inline probe
     // leaves out; they hit by identity once the inline checks miss.
     if (object != nullptr && ic->mode == MAL_IC_MODE_WATCHED_VALUE &&
-        object == ic->obj && ic->prim_kind == 0 && mal_vm_primitive_methods_intact(vm)) {
+        object == ic->obj && ic->prim_kind == 0 &&
+        mal_vm_watched_row_current(vm, ic->watched_epoch)) {
         MAL_PERF_COUNT(ic_load_watched_hits);
         return (MalStaticPropertyProbeResult) { .hit = true, .value = ic->value };
     }
@@ -3554,12 +3555,12 @@ static bool mal_vm_try_marshal_dense_array(
 
 /*
  * An Array with the intrinsic prototype and no own @@iterator spreads through the
- * intact ArrayIterator protocol, which the primitive-methods protector covers; its
+ * intact ArrayIterator protocol, which the array-iteration protector covers; its
  * dense walk observes nothing, so the generic @@iterator lookup can be skipped.
  */
 static bool mal_vm_try_marshal_intrinsic_array(
     MalVm *vm, MalValue iterable, i32 *count_out) {
-    if (!mal_vm_primitive_methods_intact(vm) || !mal_value_is_array_object(iterable)) {
+    if (!mal_vm_array_iteration_intact(vm) || !mal_value_is_array_object(iterable)) {
         return false;
     }
     MalArrayObject *array = mal_value_to_array_object(iterable);
@@ -6268,6 +6269,7 @@ static void mal_ic_record_special(
     ic->prototype = prototype;
     ic->key = key;
     ic->value = value;
+    ic->watched_epoch = (u32) vm->semantic_epochs.watched_methods;
     ic->slot = MAL_IC_VALUE_SLOT;
     ic->prim_kind = prim_kind;
     ic->poly_count = 0;
@@ -6286,9 +6288,9 @@ static void mal_ic_record_special(
 #endif
 }
 
-/** Record a protector-gated own value on one exact watched intrinsic object. */
+/** Record an own value on one exact watched intrinsic object, valid until it changes. */
 static void mal_ic_record_watched(
-    MalInlineCache *ic, const MalObject *object, MalValue key, MalValue value
+    const MalVm *vm, MalInlineCache *ic, const MalObject *object, MalValue key, MalValue value
 ) {
     mal_perf_ic_note_replacement(ic, MAL_IC_MODE_WATCHED_VALUE);
     mal_ic_detach_prototype_cache(ic);
@@ -6296,6 +6298,7 @@ static void mal_ic_record_watched(
     ic->key = key;
     ic->value = value;
     ic->obj = object;
+    ic->watched_epoch = (u32) vm->semantic_epochs.watched_methods;
     ic->slot = MAL_IC_VALUE_SLOT;
     ic->prim_kind = 0;
     // A cache row may previously have held a shaped missing-chain entry. Clear
@@ -7124,7 +7127,7 @@ static void mal_ic_try_record_inherited(
         return;
     }
 
-    if (!mal_vm_primitive_methods_intact(vm)) {
+    if (!mal_vm_watched_rows_fillable(vm)) {
         MAL_PERF_COUNT(ic_inherited_reject_basic);
         return;
     }
@@ -7150,6 +7153,7 @@ static void mal_ic_try_record_inherited(
     ic->key = key_value;
     ic->value = result;
     ic->obj = mal_object_prototype(object);
+    ic->watched_epoch = (u32) vm->semantic_epochs.watched_methods;
     ic->slot = MAL_IC_VALUE_SLOT;
     ic->prim_kind = 0;
     ic->poly_count = 0;
@@ -7375,7 +7379,8 @@ static MalValue mal_vm_op_load_property_ic_keyed(
         // requires exact object identity. Otherwise re-resolve, which may refill.
         if (!ordinary_static_probe_missed &&
             ic->mode == MAL_IC_MODE_WATCHED_VALUE && object->shape == ic->shape &&
-            key_value == ic->key && mal_vm_primitive_methods_intact(vm) && object == ic->obj) {
+            key_value == ic->key && mal_vm_watched_row_current(vm, ic->watched_epoch) &&
+            object == ic->obj) {
             MAL_PERF_COUNT(ic_load_watched_hits);
             return ic->value;
         }
@@ -7425,14 +7430,13 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             // Own overflow-table data property on a watched intrinsic (String, Math,
             // JSON, Object, Array, …): its many static/namespace methods live in the
             // overflow table (no shape slot), so `String.fromCharCode` / `Math.floor`
-            // would re-hash every call. Cache the value while the protector holds; any
-            // mutation of a watched intrinsic clears it. Accessors are excluded
-            // (their getter must run per access).
-            if (object->watched_method_proto && mal_vm_primitive_methods_intact(vm)
+            // would re-hash every call. Cache the value until a watched intrinsic
+            // changes. Accessors are excluded (their getter must run per access).
+            if (object->watched_method_proto && mal_vm_watched_rows_fillable(vm)
                 && mal_ic_key_is_stable_string(key_value)) {
                 MalPropertyLookup own = mal_object_get_own(object, key);
                 if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
-                    mal_ic_record_watched(ic, object, key_value, own.desc.value);
+                    mal_ic_record_watched(vm, ic, object, key_value, own.desc.value);
                     MAL_PERF_COUNT(ic_load_watched_fills);
                     return own.desc.value;
                 }
@@ -7484,7 +7488,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
     // Primitive-method inline cache: a method-name load on a string/number/boolean/
     // symbol/bigint resolves on that kind's prototype every time otherwise (the
     // dominant cost of string/number-method-heavy loops). Cache the resolved method
-    // while `mal_primitive_method_protector` holds (no watched prototype mutated).
+    // until a watched prototype changes.
     u8 prim_kind = mal_vm_primitive_method_kind(object_value);
     if (prim_kind != 0) {
         if (prim_kind == MAL_PRIM_KIND_STRING && mal_value_is_string(key_value) &&
@@ -7497,11 +7501,11 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             return mal_value_from_i32((i32) mal_value_to_string(object_value)->length);
         }
         MalValue result = mal_vm_op_load_property_keyed(vm, object_value, key);
-        // Cache only a plain DATA method resolved on the (watched) prototype chain:
+        // Cache only a plain DATA method resolved on the watched prototype chain:
         // an immortal string key that is not a string-receiver exotic own (length /
         // canonical index, resolved on the value not the prototype) and not an
         // accessor (whose getter must run each time).
-        if (mal_vm_primitive_methods_intact(vm)
+        if (mal_vm_watched_rows_fillable(vm)
             && vm->completion.kind != MAL_COMPLETION_THROW
             && mal_ic_key_is_stable_string(key_value)) {
             MalKey key = {.kind = MAL_KEY_STRING, .value = key_value};
@@ -7512,7 +7516,15 @@ static MalValue mal_vm_op_load_property_ic_keyed(
                 MalObject *proto =
                     mal_value_to_object(vm->intrinsics[mal_vm_primitive_method_proto_slot(prim_kind)]);
                 MalPropertyResolution res = mal_object_resolve_property(proto, key);
-                if (res.found && !(res.desc.flags & MAL_PROPERTY_ACCESSOR) &&
+                // Only a change to a watched object advances the row's epoch, so the
+                // resolution must not pass any other, such as a reparenting target.
+                bool watched_chain = res.found;
+                for (const MalObject *cursor = proto; watched_chain && cursor != res.holder;
+                     cursor = mal_object_prototype(cursor)) {
+                    watched_chain = cursor != nullptr && cursor->watched_method_proto;
+                }
+                if (watched_chain && res.holder->watched_method_proto &&
+                    !(res.desc.flags & MAL_PROPERTY_ACCESSOR) &&
                     res.desc.value == result) {
                     mal_ic_record_special(
                         vm, ic, MAL_IC_MODE_PRIMITIVE_VALUE, prim_kind,
@@ -7534,7 +7546,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
     // straight through (one predictable flag load).
     if (mal_value_is_object(object_value)) {
         MalObject *object = mal_value_to_object(object_value);
-        if (object->watched_method_proto && mal_vm_primitive_methods_intact(vm)) {
+        if (object->watched_method_proto && mal_vm_watched_rows_fillable(vm)) {
             // Object identity — not just shape — because the typed-array
             // constructors share one shape yet differ in overflow values
             // (BYTES_PER_ELEMENT, name, …); shape+key alone would false-hit at a
@@ -7543,7 +7555,8 @@ static MalValue mal_vm_op_load_property_ic_keyed(
 #if MAL_REALMS
                 && ic->prim_kind == 0
 #endif
-                && object == ic->obj && key_value == ic->key) {
+                && object == ic->obj && key_value == ic->key &&
+                mal_vm_watched_row_current(vm, ic->watched_epoch)) {
                 MAL_PERF_COUNT(ic_load_watched_hits);
                 return ic->value;
             }
@@ -7551,7 +7564,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
                 MalKey key = {.kind = MAL_KEY_STRING, .value = key_value};
                 MalPropertyLookup own = mal_object_get_own(object, key);
                 if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
-                    mal_ic_record_watched(ic, object, key_value, own.desc.value);
+                    mal_ic_record_watched(vm, ic, object, key_value, own.desc.value);
                     MAL_PERF_COUNT(ic_load_watched_fills);
                     return own.desc.value;
                 }
@@ -7934,7 +7947,7 @@ static void mal_vm_op_store_object_property_ic(
                 (u8) (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
                       MAL_PROPERTY_CONFIGURABLE));
             if (object->watched_method_proto) {
-                mal_invalidate_primitive_method_protector();
+                mal_invalidate_watched_key(object, key);
             }
             if (mal_object_note_prototype_mutation(object)) {
                 MAL_PERF_COUNT(prototype_epoch_define_invalidations);
