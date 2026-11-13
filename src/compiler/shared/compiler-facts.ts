@@ -205,11 +205,13 @@ export interface ClosureOpening {
  * since host code has that reach too, so such code adds no caller or writer they
  * do not admit.
  *
- * `direct-eval` marks an ES module whose direct evals hand run-time code the
+ * `direct-eval` marks a module whose strict direct evals hand run-time code the
  * bindings in scope. The compiler lowers each such call to Core loads of those
  * bindings into a fresh scope object, an opaque call that receives it, and Core
  * stores of what the call leaves there, so the call publishes exactly the values
- * it can name and writes exactly the bindings it can assign.
+ * it can name and writes exactly the bindings it can assign. A CommonJS wrapper's
+ * `module`, `exports` and `require` are such bindings, holding loader objects whose
+ * reach host code already has.
  */
 export function closureOpeningBreaksSourceClosure(kind: ClosureOpeningKind): boolean {
 	switch (kind) {
@@ -290,8 +292,8 @@ export function programClosureCertificate(
 
 /**
  * Whether code compiled at run time may reach past the global object, the values
- * it is handed and the scope objects of ES module direct evals: naming a script's
- * global declarations or a CommonJS module's bindings, or rewriting builtins and
+ * it is handed and the scope objects of strict direct evals: naming a script's
+ * global declarations, adding sloppy `var`s to a caller, or rewriting builtins and
  * realms the program's proofs resolve. Passes whose proofs enumerate every reader
  * or writer of a program binding stay off while it may. Confined run-time code is
  * one more opaque caller, which every closed-world proof already admits; the

@@ -117,16 +117,25 @@ function enumerateOpenings(
 /**
  * Classify what code compiled at run time can reach. Indirect eval and the
  * `Function` constructors evaluate in the global scope, so that code sees only the
- * global object, its arguments and what those reach. A direct eval in an ES module
- * also sees the bindings in scope at its call, which the compiler copies into a
- * scope object the call receives and writes back from after it, so Core sees each
- * as an escaping value and an ordinary store.
+ * global object, its arguments and what those reach. A strict direct eval also sees
+ * the bindings in scope at its call, which the compiler copies into a scope object
+ * the call receives and writes back from after it, so Core sees each as an escaping
+ * value and an ordinary store. Its own `var`s stay in its own variable environment.
  *
- * A script shares its top-level declarations with the global scope, a CommonJS
- * direct eval sees the module's `require`, `module` and `exports` and adds sloppy
- * `var`s to its caller, mutable primordials let run-time code rewrite the builtins
- * the program's proofs resolve, and another realm runs it against globals the
- * program never models; each keeps the program open.
+ * In a CommonJS module those bindings include the wrapper's `module`, `exports`,
+ * `require`, `__filename` and `__dirname`. `module` and `exports` are objects the
+ * loader created and keeps in its registry, so what a module stores on them is
+ * already published to host code. `require` is the loader's intrinsic, which a
+ * computed `require(expression)` already reaches: it rejects a specifier and
+ * otherwise returns some module's published `module.exports`, running its wrapper
+ * once through the registry like any first require.
+ *
+ * A script shares its top-level declarations with the global scope, and a sloppy
+ * direct eval adds `var`s to its caller's variable environment and hands over a
+ * mapped `arguments` with its `callee`; neither is modelled. Mutable primordials
+ * let run-time code rewrite the builtins the program's proofs resolve, and another
+ * realm runs it against globals the program never models. Each keeps the program
+ * open.
  */
 function dynamicCodeOpenings(
 	graph: ModuleGraph,
@@ -153,9 +162,10 @@ function dynamicCodeOpenings(
 				modulePath,
 			);
 		if (!mayCallDirectEval(record)) continue;
-		if (record.goal === "cjs")
+		// Every module parses strict unless its entry was explicitly parsed sloppy.
+		if (!record.parsed.strict)
 			return unconfined(
-				"engine.eval is true and a CommonJS direct eval can name the module's require, module and exports bindings",
+				"engine.eval is true and a sloppy direct eval can add var bindings to its caller and read its mapped arguments",
 				modulePath,
 			);
 		directEvals.push({

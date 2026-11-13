@@ -3281,6 +3281,7 @@ function compileCjsModuleWrapper(
 	if (programScope) {
 		emitTdzHoleInits(program, fn, paramsBlock, programScope.bindings);
 	}
+	emitLexicalProviderCaptures(program, fn, { block: paramsBlock }, file.ast, true);
 	const bodyEntry = compileStatementsToBlock(program, fn, file.ast.body, true);
 	paramsBlock.emitter.emit({ type: "jump", blocks: [bodyEntry] });
 
@@ -15008,8 +15009,9 @@ function compileDirectEvalCall(
 	// Direct eval inherits the caller's this/new.target (GetThisEnvironment /
 	// GetNewTarget resolve against the calling context). Pass them explicitly so
 	// a compiled caller — which has no interpreter frame to read — threads them.
-	// Match ThisExpression: top-level `this` in a script is globalThis; inside any
-	// function it is the frame's `this`.
+	// Match ThisExpression: top-level `this` in a script is globalThis and in an ES
+	// module undefined; inside any function, a CommonJS wrapper included, it is the
+	// frame's `this`.
 	let callerThis: number;
 	const lexicalThisBinding = fn.semanticFile.directEvalThisBindings.get(callExpression);
 	if (fn.classContext?.superThisStateBinding) {
@@ -15040,7 +15042,11 @@ function compileDirectEvalCall(
 				registers: [callerThis],
 				intrinsic: "globalThis",
 			});
-		} else if (owner?.node.type === "Program" && !program.evalDirect) {
+		} else if (
+			owner?.node.type === "Program" &&
+			!fn.semanticFile.commonjs &&
+			!program.evalDirect
+		) {
 			cursor.block.emitter.emit({
 				type: "createUndefined",
 				registers: [callerThis],

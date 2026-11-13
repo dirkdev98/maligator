@@ -565,10 +565,10 @@ contracts or investigates costs still visible after the string follow-ups.
       linker aliases the import's usages to the exporter's binding, but the scope
       still lists the import's own binding, whose slot nothing writes.
 
-- [ ] Keep source closure for a CommonJS direct eval. Its scope also hands run-time
-      code `require`, `module` and `exports` and takes sloppy `var`s; show that
-      CommonJS export analysis and the require table stay sound when those escape,
-      then certify it as a `direct-eval` opening like an ES module's.
+- [ ] A direct eval inside eval code cannot see the compiled caller's bindings:
+      `eval("eval('x + y')")` throws a ReferenceError in ES modules and CommonJS.
+- [ ] A static `require("x")` ignores a reassigned `require` binding and loads the real
+      module, where Node calls the replacement.
 
 ## Realm correctness and runtime capabilities
 

@@ -73,4 +73,18 @@ describe("run-time code in a program that keeps source closure", () => {
 		},
 		scaledNativeRunTimeoutMs(600_000, STRESS_ENV),
 	);
+
+	it(
+		"optimizes what no CommonJS direct eval sees while each eval reaches its module's wrapper bindings",
+		() => {
+			const image = expectNodeOutput(
+				"tests/local/direct-eval-cjs/main.cjs",
+				"direct-eval-cjs",
+			);
+			for (const name of ["sumRanges", "restTotal", "restUnseen"])
+				expect(opcodes(image, name).has("GET_ITERATOR"), name).toBe(false);
+			expect(opcodes(image, "restSeen").has("GET_ITERATOR")).toBe(true);
+		},
+		scaledNativeRunTimeoutMs(600_000, STRESS_ENV),
+	);
 });

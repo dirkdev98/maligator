@@ -405,7 +405,7 @@ function detectDirectEval(node: ESTree.CallExpression, file: SemanticFile): bool
 	}
 	const lexicalOwner = resolveDirectEvalLexicalOwner(
 		file.nodeToScope.get(node),
-		file.evalDirect ?? false,
+		programProvidesThis(file),
 	);
 	if (lexicalOwner) {
 		const thisBinding = ensureImplicitBinding(lexicalOwner, "this", node);
@@ -512,6 +512,15 @@ function ensureImplicitBinding(
 	}
 	binding.usageNodes.push(usage);
 	return binding;
+}
+
+/**
+ * Whether the program scope owns a `this` that nested arrows capture: a direct eval
+ * inherits its caller's, and a CommonJS module's top level is its wrapper function,
+ * called with `exports` as `this`. Elsewhere top-level `this` is a constant.
+ */
+function programProvidesThis(file: SemanticFile): boolean {
+	return file.evalDirect === true || file.commonjs === true;
 }
 
 function resolveDirectEvalLexicalOwner(
@@ -1875,10 +1884,10 @@ function registerBindingUsage(
 		// implicit `this` binding on the nearest enclosing non-arrow `this`-provider
 		// (a function/method, class field initializer, or static block) so it is
 		// captured through the closure env like any other captured local. A `this`
-		// directly in a non-arrow function — or whose owner is the program scope
-		// (top-level `this` is globalThis/undefined, handled in IR) — keeps its
-		// own-frame `loadThis` path and is left unbound here.
-		const owner = resolveLexicalThisOwner(scope, file.evalDirect ?? false);
+		// directly in a non-arrow function, or whose owner is a program scope that
+		// provides no `this` (a script's globalThis or a module's undefined, handled
+		// in IR), keeps its own-frame path and is left unbound here.
+		const owner = resolveLexicalThisOwner(scope, programProvidesThis(file));
 		if (owner) {
 			const binding = ensureImplicitBinding(owner, "this", node);
 			file.nodeToBinding.set(node, binding);
@@ -1894,7 +1903,7 @@ function registerBindingUsage(
 		node.meta?.name === "new" &&
 		node.property?.name === "target"
 	) {
-		const owner = resolveLexicalThisOwner(scope, file.evalDirect ?? false);
+		const owner = resolveLexicalThisOwner(scope, programProvidesThis(file));
 		if (owner) {
 			const binding = ensureImplicitBinding(owner, "new.target", node);
 			file.nodeToBinding.set(node, binding);
@@ -1909,8 +1918,8 @@ function registerBindingUsage(
  * enclosing non-arrow `this`-provider IF the `this` is inside an arrow (so it
  * must capture that provider's `this`); otherwise null. Walks up to the innermost
  * `this`-context: if that is an arrow, `this` is lexical and the owner is the next
- * non-arrow provider; a program-scope owner returns null (top-level `this` is not
- * captured — IR resolves it directly).
+ * non-arrow provider. A program-scope owner returns null unless `allowProgram`:
+ * IR resolves a constant top-level `this` directly.
  */
 function resolveLexicalThisOwner(scope: Scope, allowProgram = false): Scope | null {
 	const providesThis = (type: string) =>
