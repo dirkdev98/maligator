@@ -49350,6 +49350,21 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%\",\"BlockList\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:net\"]",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%",
+				"MAL_INTRINSIC_NODE_NET_MODULE",
+				"mal_host_install_node_net:default"
+			],
+			"key": "BlockList",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%\",\"Server\"]",
 			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%",
 			"ownerPaths": [
@@ -49531,6 +49546,242 @@
 				"%MAL_INTRINSIC_NODE_NET_MODULE%.setDefaultAutoSelectFamilyAttemptTimeout"
 			],
 			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.constructor",
+				"mal_host_install_node_net:BlockList"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.constructor",
+				"mal_host_install_node_net:BlockList"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.constructor",
+				"mal_host_install_node_net:BlockList"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList\",\"isBlockList\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.constructor",
+				"mal_host_install_node_net:BlockList"
+			],
+			"key": "isBlockList",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype\",\"addAddress\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype"],
+			"key": "addAddress",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype\",\"addRange\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype"],
+			"key": "addRange",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype\",\"addSubnet\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype"],
+			"key": "addSubnet",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype\",\"check\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype"],
+			"key": "check",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype\",\"rules\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype"],
+			"key": "rules",
+			"kind": "accessor",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addRange\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addRange",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addRange"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addRange\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addRange",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addRange"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addSubnet\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addSubnet",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addSubnet"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addSubnet\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addSubnet",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addSubnet"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
 			"decisions": []
 		},
 		{
@@ -166691,6 +166942,154 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_NODE_MODULE_API_MODULE%.findSourceMap"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.constructor",
+				"mal_host_install_node_net:BlockList"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.constructor",
+				"mal_host_install_node_net:BlockList"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addRange\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addRange",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addRange"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addRange\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addRange",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addRange"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addSubnet\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addSubnet",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addSubnet"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addSubnet\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addSubnet",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addSubnet"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -297732,6 +298131,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_net:BlockList\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_net:BlockList",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_net:Server\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -306092,6 +306501,30 @@
 		{
 			"id": "%MAL_INTRINSIC_NODE_MODULE_API_MODULE%.setSourceMapsSupport",
 			"identities": ["%MAL_INTRINSIC_NODE_MODULE_API_MODULE%.setSourceMapsSupport"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList",
+			"identities": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList",
+			"identities": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.isBlockList"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addAddress",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addRange",
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.addSubnet"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check",
+			"identities": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.check"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>",
+			"identities": ["%MAL_INTRINSIC_NODE_NET_MODULE%.BlockList.prototype.rules<get>"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.connect",

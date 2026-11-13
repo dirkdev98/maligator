@@ -13541,6 +13541,7 @@
 		["mal_host_install_node_module:registerHooks", ["runtime", "primitive"]],
 		["mal_host_install_node_module:setSourceMapsSupport", ["runtime", "primitive"]],
 		["mal_host_install_node_module:syncBuiltinESMExports", ["runtime", "primitive"]],
+		["mal_host_install_node_net:BlockList", ["runtime", "primitive"]],
 		["mal_host_install_node_net:Server", ["runtime", "primitive"]],
 		["mal_host_install_node_net:Socket", ["runtime", "primitive"]],
 		["mal_host_install_node_net:connect", ["runtime", "primitive"]],
