@@ -124,7 +124,10 @@
 		{
 			"id": "[\"%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next",
-			"ownerPaths": ["%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next",
+				"MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE_NEXT"
+			],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -134,7 +137,10 @@
 		{
 			"id": "[\"%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next\",\"name\"]",
 			"owner": "%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next",
-			"ownerPaths": ["%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next",
+				"MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE_NEXT"
+			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -1185,7 +1191,10 @@
 		{
 			"id": "[\"%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next",
-			"ownerPaths": ["%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next",
+				"MAL_INTRINSIC_GENERATOR_PROTOTYPE_NEXT"
+			],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -1195,7 +1204,10 @@
 		{
 			"id": "[\"%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next\",\"name\"]",
 			"owner": "%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next",
-			"ownerPaths": ["%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next",
+				"MAL_INTRINSIC_GENERATOR_PROTOTYPE_NEXT"
+			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -74642,7 +74654,10 @@
 		{
 			"id": "[\"Function.prototype.apply\",\"length\"]",
 			"owner": "Function.prototype.apply",
-			"ownerPaths": ["Function.prototype.apply"],
+			"ownerPaths": [
+				"Function.prototype.apply",
+				"MAL_INTRINSIC_FUNCTION_PROTOTYPE_APPLY"
+			],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -74652,7 +74667,10 @@
 		{
 			"id": "[\"Function.prototype.apply\",\"name\"]",
 			"owner": "Function.prototype.apply",
-			"ownerPaths": ["Function.prototype.apply"],
+			"ownerPaths": [
+				"Function.prototype.apply",
+				"MAL_INTRINSIC_FUNCTION_PROTOTYPE_APPLY"
+			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -74694,7 +74712,7 @@
 		{
 			"id": "[\"Function.prototype.bind\",\"length\"]",
 			"owner": "Function.prototype.bind",
-			"ownerPaths": ["Function.prototype.bind"],
+			"ownerPaths": ["Function.prototype.bind", "MAL_INTRINSIC_FUNCTION_PROTOTYPE_BIND"],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -74704,7 +74722,7 @@
 		{
 			"id": "[\"Function.prototype.bind\",\"name\"]",
 			"owner": "Function.prototype.bind",
-			"ownerPaths": ["Function.prototype.bind"],
+			"ownerPaths": ["Function.prototype.bind", "MAL_INTRINSIC_FUNCTION_PROTOTYPE_BIND"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -144547,7 +144565,10 @@
 		{
 			"id": "[\"%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next",
-			"ownerPaths": ["%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next",
+				"MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE_NEXT"
+			],
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next"],
@@ -144557,7 +144578,10 @@
 		{
 			"id": "[\"%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next\",\"<construct>\"]",
 			"owner": "%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next",
-			"ownerPaths": ["%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next",
+				"MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE_NEXT"
+			],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next"],
@@ -145175,7 +145199,10 @@
 		{
 			"id": "[\"%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next",
-			"ownerPaths": ["%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next",
+				"MAL_INTRINSIC_GENERATOR_PROTOTYPE_NEXT"
+			],
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next"],
@@ -145185,7 +145212,10 @@
 		{
 			"id": "[\"%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next\",\"<construct>\"]",
 			"owner": "%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next",
-			"ownerPaths": ["%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next",
+				"MAL_INTRINSIC_GENERATOR_PROTOTYPE_NEXT"
+			],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next"],
@@ -184858,7 +184888,10 @@
 		{
 			"id": "[\"Function.prototype.apply\",\"<call>\"]",
 			"owner": "Function.prototype.apply",
-			"ownerPaths": ["Function.prototype.apply"],
+			"ownerPaths": [
+				"Function.prototype.apply",
+				"MAL_INTRINSIC_FUNCTION_PROTOTYPE_APPLY"
+			],
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Function.prototype.apply"],
@@ -184868,7 +184901,10 @@
 		{
 			"id": "[\"Function.prototype.apply\",\"<construct>\"]",
 			"owner": "Function.prototype.apply",
-			"ownerPaths": ["Function.prototype.apply"],
+			"ownerPaths": [
+				"Function.prototype.apply",
+				"MAL_INTRINSIC_FUNCTION_PROTOTYPE_APPLY"
+			],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Function.prototype.apply"],
@@ -184910,7 +184946,7 @@
 		{
 			"id": "[\"Function.prototype.bind\",\"<call>\"]",
 			"owner": "Function.prototype.bind",
-			"ownerPaths": ["Function.prototype.bind"],
+			"ownerPaths": ["Function.prototype.bind", "MAL_INTRINSIC_FUNCTION_PROTOTYPE_BIND"],
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Function.prototype.bind"],
@@ -184920,7 +184956,7 @@
 		{
 			"id": "[\"Function.prototype.bind\",\"<construct>\"]",
 			"owner": "Function.prototype.bind",
-			"ownerPaths": ["Function.prototype.bind"],
+			"ownerPaths": ["Function.prototype.bind", "MAL_INTRINSIC_FUNCTION_PROTOTYPE_BIND"],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Function.prototype.bind"],
@@ -290008,6 +290044,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE_NEXT\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE_NEXT",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_ARRAY_PROTOTYPE\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -290758,6 +290804,26 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_FUNCTION_PROTOTYPE_APPLY\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_FUNCTION_PROTOTYPE_APPLY",
+			"kind": "binding",
+			"operations": ["Function.prototype.apply"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_FUNCTION_PROTOTYPE_BIND\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_FUNCTION_PROTOTYPE_BIND",
+			"kind": "binding",
+			"operations": ["Function.prototype.bind"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -290794,6 +290860,16 @@
 			"key": "MAL_INTRINSIC_GENERATOR_PROTOTYPE",
 			"kind": "binding",
 			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_GENERATOR_PROTOTYPE_NEXT\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_GENERATOR_PROTOTYPE_NEXT",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next"],
 			"task": "N-06",
 			"decisions": []
 		},

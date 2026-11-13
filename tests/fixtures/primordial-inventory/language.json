@@ -53,7 +53,10 @@
 				["length", 0, ["bits", "fff8000000000000"], -1, -1],
 				["name", 0, ["string", "next"], -1, -1]
 			],
-			["%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next"]
+			[
+				"%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next",
+				"MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE_NEXT"
+			]
 		],
 		[
 			"%MAL_INTRINSIC_ASYNC_FUNCTION_CONSTRUCTOR%",
@@ -405,7 +408,10 @@
 				["length", 0, ["bits", "fff8000000000001"], -1, -1],
 				["name", 0, ["string", "next"], -1, -1]
 			],
-			["%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next"]
+			[
+				"%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.next",
+				"MAL_INTRINSIC_GENERATOR_PROTOTYPE_NEXT"
+			]
 		],
 		[
 			"%MAL_INTRINSIC_GENERATOR_PROTOTYPE%.return",
@@ -3430,7 +3436,7 @@
 				["length", 0, ["bits", "fff8000000000002"], -1, -1],
 				["name", 0, ["string", "apply"], -1, -1]
 			],
-			["Function.prototype.apply"]
+			["Function.prototype.apply", "MAL_INTRINSIC_FUNCTION_PROTOTYPE_APPLY"]
 		],
 		[
 			"Function.prototype.arguments<get>",
@@ -3458,7 +3464,7 @@
 				["length", 0, ["bits", "fff8000000000001"], -1, -1],
 				["name", 0, ["string", "bind"], -1, -1]
 			],
-			["Function.prototype.bind"]
+			["Function.prototype.bind", "MAL_INTRINSIC_FUNCTION_PROTOTYPE_BIND"]
 		],
 		[
 			"Function.prototype.call",
@@ -12665,6 +12671,7 @@
 		["MAL_INTRINSIC_ARRAY_FLAT_MAP_APPEND", 1],
 		["MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE", 2],
 		["MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE", 3],
+		["MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE_NEXT", 4],
 		["MAL_INTRINSIC_ARRAY_PROTOTYPE", 75],
 		["MAL_INTRINSIC_ARRAY_PROTOTYPE_MAP", 95],
 		["MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH", 97],
@@ -12746,10 +12753,13 @@
 		["MAL_INTRINSIC_FORM_DATA_PROTOTYPE", ["bits", "fff9000000000003"]],
 		["MAL_INTRINSIC_FUNCTION_CONSTRUCTOR", 281],
 		["MAL_INTRINSIC_FUNCTION_PROTOTYPE", 282],
+		["MAL_INTRINSIC_FUNCTION_PROTOTYPE_APPLY", 283],
+		["MAL_INTRINSIC_FUNCTION_PROTOTYPE_BIND", 285],
 		["MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL", 286],
 		["MAL_INTRINSIC_GENERATOR_FUNCTION_CONSTRUCTOR", 31],
 		["MAL_INTRINSIC_GENERATOR_FUNCTION_PROTOTYPE", 30],
 		["MAL_INTRINSIC_GENERATOR_PROTOTYPE", 29],
+		["MAL_INTRINSIC_GENERATOR_PROTOTYPE_NEXT", 32],
 		["MAL_INTRINSIC_GLOBAL_THIS", 1001],
 		["MAL_INTRINSIC_HEADERS_CONSTRUCTOR", ["bits", "fff9000000000003"]],
 		["MAL_INTRINSIC_HEADERS_ITERATOR_PROTOTYPE", ["bits", "fff9000000000003"]],
