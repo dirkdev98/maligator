@@ -350,6 +350,7 @@ function defaultMetadata(parameterCount: number): CoreFunctionMetadata {
 		sourcePath: "<core>",
 		sourceStrict: false,
 		nameStringIndex: 0,
+		sourceStringIndex: -1,
 		length: parameterCount,
 		mappedArguments: false,
 		mappedArgumentSlots: [],

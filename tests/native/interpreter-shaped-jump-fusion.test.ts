@@ -52,6 +52,7 @@ const profileSites: Array<ProfileSite> = instructions.map((instruction, index) =
 }));
 const fn: BytecodeFunction = {
 	nameStringIndex: -1,
+	sourceStringIndex: -1,
 	isGenerator: false,
 	isAsync: false,
 	parameterCount: 0,

@@ -12,6 +12,7 @@ import { privateRootRegisters } from "./helpers/native-c-source.ts";
 function argumentCacheReceiver(): BytecodeFunction {
 	return {
 		nameStringIndex: -1,
+		sourceStringIndex: -1,
 		isGenerator: false,
 		isAsync: false,
 		parameterCount: 1,

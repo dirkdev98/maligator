@@ -1818,6 +1818,7 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
         if (fn.name_string_index >= 0) {
             fn.name_string_index += string_base;
         }
+        if (fn.source_string_index >= 0) fn.source_string_index += string_base;
         for (i32 k = 0; k < fn.instruction_count; k++) {
             mal_vm_rebase_instruction(
                 (MalInstruction *) &fn.instructions[k], (i32 *) fn.instruction_data,

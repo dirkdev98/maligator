@@ -37,7 +37,9 @@ and insertion marks the canonical symbol registered. Symbol.keyFor and the ban o
 registered weak keys continue to use that flag. All realms within one VM share
 the same registry.
 
-Function.prototype.toString caches source strings in a separate name/source store.
+Function.prototype.toString returns retained parsed source for script functions.
+The program's string table owns this source independently of debug information.
+Native source representations use a separate name/source store.
 The key is the sanitized internal callable name, including the shared empty-name
 fallback, rather than the callable identity or its mutable public name property.
 Names are atomized by the caller, while lookup remains content-correct for an

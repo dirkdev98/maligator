@@ -24,6 +24,7 @@ import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 function vmFunction(instructions: Array<BytecodeInstruction>): BytecodeFunction {
 	return {
 		nameStringIndex: 0,
+		sourceStringIndex: -1,
 		isGenerator: false,
 		isAsync: false,
 		parameterCount: 0,

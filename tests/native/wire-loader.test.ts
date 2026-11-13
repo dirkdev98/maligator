@@ -33,6 +33,7 @@ import { buildLoadDriver } from "../../src/local-build.ts";
 
 const fn: BytecodeFunction = {
 	nameStringIndex: -1,
+	sourceStringIndex: -1,
 	isGenerator: false,
 	isAsync: false,
 	parameterCount: 0,
@@ -1011,9 +1012,21 @@ describe("wire loader side-data validation", () => {
 
 	it("rejects snapshot metadata that disagrees with the opcode prefix", () => {
 		// The first function starts at byte 15 after the source-entry field; its
-		// snapshot count is eight bytes later.
-		rejectsMutation("snapshot-prefix", afterSourceEntry(23), 1);
+		// snapshot count is nine bytes later.
+		rejectsMutation("snapshot-prefix", afterSourceEntry(24), 1);
 	});
+
+	it.each([0, -2])(
+		"rejects invalid function source index %s in both loaders",
+		(index) => {
+			const wire = serializeRuntimeImage(definition, { debugInfo: false });
+			wire[afterSourceEntry(16)] = index < 0 ? -2 * index - 1 : 2 * index;
+			expect(() => deserializeRuntimeImage(wire)).toThrow(
+				/invalid function source string index/,
+			);
+			rejectsWire(`function-source-${index}`, wire);
+		},
+	);
 
 	it("rejects a snapshot plan that clobbers an aliased source", () => {
 		const cycleDefinition: RuntimeImage = {
@@ -1038,7 +1051,7 @@ describe("wire loader side-data validation", () => {
 		};
 		const wire = serializeRuntimeImage(cycleDefinition, { debugInfo: false });
 		// Move the scratch restore before r1's read of raw argument slot 0.
-		wire.set([0, 3, 2, 0], afterSourceEntry(26));
+		wire.set([0, 3, 2, 0], afterSourceEntry(27));
 		rejectsWire("snapshot-clobber", wire);
 	});
 

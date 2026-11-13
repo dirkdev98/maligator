@@ -17,6 +17,7 @@ import { privateRootRegisters } from "./helpers/native-c-source.ts";
 
 const fn: BytecodeFunction = {
 	nameStringIndex: -1,
+	sourceStringIndex: -1,
 	isGenerator: false,
 	isAsync: false,
 	parameterCount: 2,

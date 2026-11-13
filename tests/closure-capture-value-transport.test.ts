@@ -34,6 +34,7 @@ import { testProgramImage } from "./helpers/program-image.ts";
 function captureImage(copied = true, createsClosure = false) {
 	const child: BytecodeFunction = {
 		nameStringIndex: -1,
+		sourceStringIndex: -1,
 		isGenerator: false,
 		isAsync: false,
 		parameterCount: 0,

@@ -227,6 +227,11 @@ function verifyProgramCardinality(program: ExecutionProgram): void {
 		const mirrored: ReadonlyArray<readonly [string, unknown, unknown]> = [
 			["sourcePath", fn.sourcePath, coreFunction.metadata.sourcePath],
 			["nameStringIndex", fn.nameStringIndex, coreFunction.metadata.nameStringIndex],
+			[
+				"sourceStringIndex",
+				fn.sourceStringIndex,
+				coreFunction.metadata.sourceStringIndex,
+			],
 			["isGenerator", fn.isGenerator, coreFunction.isGenerator],
 			["isAsync", fn.isAsync, coreFunction.isAsync],
 			["parameterCount", fn.parameterCount, coreFunction.parameterCount],
@@ -259,6 +264,15 @@ function verifyProgramCardinality(program: ExecutionProgram): void {
 				);
 			}
 		}
+		if (
+			!Number.isSafeInteger(fn.sourceStringIndex) ||
+			fn.sourceStringIndex < -1 ||
+			fn.sourceStringIndex >= core.stringConstants.length
+		)
+			fail(
+				`target function source names unknown string constant ${fn.sourceStringIndex}`,
+				context,
+			);
 		if (fn.nameStringIndex >= core.stringConstants.length) {
 			fail(
 				`target function names unknown string constant ${fn.nameStringIndex}`,

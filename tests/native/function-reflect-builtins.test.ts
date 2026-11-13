@@ -1,7 +1,7 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, it } from "vitest";
 import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
@@ -11,6 +11,7 @@ import {
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-function-reflect-builtins-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 const expected = ["function-reflect-builtins PASS"];
 const stressEnv = { ...process.env, ...STRESS_ENV };
 

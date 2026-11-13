@@ -40,6 +40,7 @@ function fixture(
 ) {
 	const fn: BytecodeFunction = {
 		nameStringIndex: -1,
+		sourceStringIndex: -1,
 		isGenerator: false,
 		isAsync: false,
 		parameterCount: options.parameterCount ?? 2,

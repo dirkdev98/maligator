@@ -253,6 +253,12 @@ function verifyMetadata(fn: CoreFunctionStore, program: CoreProgram): void {
 	) {
 		fail(`function name string index ${metadata.nameStringIndex} is out of range`);
 	}
+	if (
+		!Number.isSafeInteger(metadata.sourceStringIndex) ||
+		metadata.sourceStringIndex < -1 ||
+		metadata.sourceStringIndex >= program.stringConstants.length
+	)
+		fail(`invalid function source string index ${metadata.sourceStringIndex}`);
 	if (!metadata.mappedArguments && metadata.mappedArgumentSlots.length !== 0) {
 		fail("unmapped function carries mapped argument slots");
 	}

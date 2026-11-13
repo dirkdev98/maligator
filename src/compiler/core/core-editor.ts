@@ -294,6 +294,7 @@ function sameFunctionMetadata(
 		left.sourceOrigin === right.sourceOrigin &&
 		left.sourceStrict === right.sourceStrict &&
 		left.nameStringIndex === right.nameStringIndex &&
+		left.sourceStringIndex === right.sourceStringIndex &&
 		left.length === right.length &&
 		left.mappedArguments === right.mappedArguments &&
 		left.mappedArgumentSlots.length === right.mappedArgumentSlots.length &&

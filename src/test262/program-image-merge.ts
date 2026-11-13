@@ -765,6 +765,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 					ownerFunctionIndex: capture.ownerFunctionIndex + base.function,
 				})),
 				nameStringIndex: shifted(fn.nameStringIndex, base.string),
+				sourceStringIndex: shifted(fn.sourceStringIndex, base.string),
 				instructions: fn.instructions.map((instruction) =>
 					cloneInstruction(instruction, base),
 				),
@@ -788,6 +789,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 						ownerFunctionIndex: capture.ownerFunctionIndex + base.function,
 					})),
 					nameStringIndex: shifted(native.body.nameStringIndex, base.string),
+					sourceStringIndex: shifted(native.body.sourceStringIndex, base.string),
 					instructions: native.body.instructions.map((instruction) =>
 						cloneInstruction(instruction, base),
 					),

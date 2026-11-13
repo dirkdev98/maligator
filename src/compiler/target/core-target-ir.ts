@@ -306,6 +306,7 @@ export interface CoreTargetFunction {
 	readonly sourcePath: string;
 	readonly functionIndex: number;
 	readonly nameStringIndex: number;
+	readonly sourceStringIndex: number;
 	readonly blocks: ReadonlyArray<{
 		readonly instructions: ReadonlyArray<CompilerInstruction>;
 		/** Resets carried source attribution when native layout moves a block. */

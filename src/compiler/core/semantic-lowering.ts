@@ -32,6 +32,7 @@ import {
 	traverseEstree,
 } from "../frontend/estree-traversal.ts";
 import { importsForeignCallbacks } from "../frontend/foreign-callbacks.ts";
+import { functionSource } from "../frontend/function-source.ts";
 import { HOST_GLOBAL_INSTALLERS, hostInstallerSymbol } from "../frontend/host-modules.ts";
 import { isImportMeta, isImportMetaResolveCall } from "../frontend/import-meta.ts";
 import { linkModules } from "../frontend/linker.ts";
@@ -477,6 +478,7 @@ interface SemanticClassContext {
 }
 
 interface CoreFrontendFunction {
+	sourceStringIndex?: number;
 	sourceOrigin?: SourceFunctionOrigin;
 	semanticFile: SemanticFile;
 	functionIndex: number;
@@ -4087,6 +4089,15 @@ function inheritedPrivateEnvironment(
 	};
 }
 
+function functionSourceStringIndex(
+	program: CoreFrontendContext,
+	file: SemanticFile,
+	node: ESTree.Node,
+): number {
+	const source = functionSource(file, node);
+	return source === undefined ? -1 : getOrCreateStringConstant(program, source);
+}
+
 function compileNewFunction(
 	program: CoreFrontendContext,
 	binding: Binding,
@@ -4122,6 +4133,7 @@ function compileNewFunction(
 	const fn: CoreFrontendFunction = {
 		semanticFile: fnFile,
 		sourceOrigin: program.sourceOrigins?.get(fnFile, functionNode),
+		sourceStringIndex: functionSourceStringIndex(program, fnFile, functionNode),
 		functionIndex: program.nextFunctionIndex,
 		nameStringIndex: getOrCreateStringConstant(
 			program,
@@ -4193,6 +4205,7 @@ function compileNewFunctionExpression(
 	const compiledFn: CoreFrontendFunction = {
 		semanticFile: fn.semanticFile,
 		sourceOrigin: program.sourceOrigins?.get(fn.semanticFile, functionNode),
+		sourceStringIndex: functionSourceStringIndex(program, fn.semanticFile, functionNode),
 		functionIndex: program.nextFunctionIndex,
 		nameStringIndex: getOrCreateStringConstant(
 			program,
@@ -4988,6 +5001,7 @@ function compileClassBody(
 					superBinding,
 					className,
 					constructorContext,
+					classNode,
 				);
 	if (instanceInitializerBinding) {
 		const initializerIndex = buildInstanceInitializer(program, fn, constructorContext);
@@ -5559,9 +5573,11 @@ function compileDefaultConstructor(
 	superBinding: Binding | undefined,
 	name: string,
 	classContext: SemanticClassContext,
+	classNode: ESTree.ClassDeclaration | ESTree.ClassExpression,
 ): number {
 	const ctorFn: CoreFrontendFunction = {
 		semanticFile: fn.semanticFile,
+		sourceStringIndex: functionSourceStringIndex(program, fn.semanticFile, classNode),
 		functionIndex: program.nextFunctionIndex,
 		nameStringIndex: getOrCreateStringConstant(program, name),
 		blocks: [],

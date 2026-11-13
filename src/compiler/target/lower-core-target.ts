@@ -2860,6 +2860,7 @@ function lowerFunctionToTarget(
 		sourcePath: coreFunction.metadata.sourcePath,
 		functionIndex: executionFunction,
 		nameStringIndex: coreFunction.metadata.nameStringIndex,
+		sourceStringIndex: coreFunction.metadata.sourceStringIndex,
 		blocks,
 		coreBlocks: Object.freeze([...blockOrder]),
 		propertyCacheOrigins: [...loweredInstructions].flatMap(

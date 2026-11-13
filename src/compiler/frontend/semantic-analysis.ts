@@ -22,6 +22,7 @@ export interface SemanticFile {
 	type: "script" | "module";
 	path: string;
 	contents: string;
+	parsedSource?: string;
 	strict: boolean;
 	ast: ESTree.Program;
 
@@ -283,6 +284,7 @@ export function analyzeSourceAndRunSemanticAnalysis(
 	const file: SemanticFile = {
 		path: virtualPath,
 		contents,
+		parsedSource: contents,
 		...parseResult,
 
 		scopes: [],

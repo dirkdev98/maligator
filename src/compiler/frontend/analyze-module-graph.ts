@@ -48,6 +48,7 @@ function analyzeModuleRecord(record: ModuleRecord): SemanticFile {
 	const file: SemanticFile = {
 		path: record.path,
 		contents: record.source,
+		parsedSource: record.parsedSource ?? record.source,
 		type: record.parsed.type,
 		strict: record.parsed.strict,
 		ast: record.parsed.ast,

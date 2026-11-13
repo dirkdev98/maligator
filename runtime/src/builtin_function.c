@@ -275,6 +275,13 @@ static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue thi
         return mal_value_new_undefined();
     }
 
+    if (mal_value_is_function_object(this_value)) {
+        i32 index = mal_function_object_function_index(mal_value_to_function_object(this_value));
+        i32 source = vm->runtime_image->functions[index].source_string_index;
+        if (source >= 0 && source < vm->runtime_image->string_constant_count)
+            return mal_value_from_string(mal_vm_string_constant(vm, source));
+    }
+
     static const byte prefix[] = "function ";
     static const byte suffix[] = "() { [native code] }";
     MalString *name = mal_vm_callable_name(vm, this_value);
