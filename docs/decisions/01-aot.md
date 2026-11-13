@@ -10,6 +10,9 @@ The compiler emits C and links it with Maligator's native runtime. Semantic
 analysis, Core SSA optimization, and target lowering preserve JavaScript behavior;
 the runtime owns dynamic values, closures, garbage collection, and host integration.
 
+The development executable loads prepared program images. Node-style command-line
+script evaluation is outside its invocation contract.
+
 The [VM and program-image contract](02-vm.md) defines shared runtime ownership.
 [Native SSA lowering](native-ssa-lowering.md) defines the independent native target
 and its storage, call, and root-publication contracts.
