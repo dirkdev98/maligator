@@ -156,19 +156,28 @@ it.each([
 });
 
 it.each([
-	{ evalEnabled: true, strict: true },
-	{ evalEnabled: false, strict: false },
+	{ evalEnabled: true, strict: true, directEval: true },
+	{ evalEnabled: false, strict: false, directEval: false },
 ])(
-	"retains closure initialization with eval=$evalEnabled and strict=$strict",
-	({ evalEnabled, strict }) => {
+	"retains closure initialization with eval=$evalEnabled, strict=$strict and direct eval=$directEval",
+	({ evalEnabled, strict, directEval }) => {
 		const compilation = construct(
-			`function owner(values) { ${helpers} if (!values) return 0; return first(values.length); } globalThis.owner = owner;`,
+			`function owner(values) { ${helpers} if (!values) return 0; return first(values.length); } globalThis.owner = owner;${directEval ? ' eval("0");' : ""}`,
 			evalEnabled,
 			strict,
 		);
 		expect(deferCapturedAllocations(compilation)).toBe(0);
 	},
 );
+
+it("defers closure initialization when run-time code can only be global", () => {
+	const compilation = construct(
+		`function owner(values) { ${helpers} if (!values) return 0; return first(values.length); } globalThis.owner = owner;`,
+		true,
+	);
+	expect(deferCapturedAllocations(compilation)).toBeGreaterThan(0);
+	verifyCoreProgram(compilation.program);
+});
 
 it("defers a captured suffix rest behind the same early return", () => {
 	const compilation = construct(
