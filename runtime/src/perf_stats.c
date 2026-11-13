@@ -1036,7 +1036,7 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_span_trim_end_admissions);
     fprintf(stderr, "[perf-string-span-substring-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_substring_admissions);
-    fprintf(stderr, "[perf-typed-array-region-stats] admissions=%llu i32_views=%llu u32_views=%llu f32_views=%llu f64_views=%llu f64_regions=%llu i8_views=%llu u8_views=%llu u8c_views=%llu i16_views=%llu u16_views=%llu affine_regions=%llu\n",
+    fprintf(stderr, "[perf-typed-array-region-stats] admissions=%llu i32_views=%llu u32_views=%llu f32_views=%llu f64_views=%llu f64_regions=%llu i8_views=%llu u8_views=%llu u8c_views=%llu i16_views=%llu u16_views=%llu affine_regions=%llu expected_regions=%llu\n",
         (unsigned long long) mal_perf_stats.fixed_typed_array_region_admissions,
         (unsigned long long) mal_perf_stats.fixed_typed_array_region_views[5],
         (unsigned long long) mal_perf_stats.fixed_typed_array_region_views[6],
@@ -1048,16 +1048,18 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.fixed_typed_array_region_views[2],
         (unsigned long long) mal_perf_stats.fixed_typed_array_region_views[3],
         (unsigned long long) mal_perf_stats.fixed_typed_array_region_views[4],
-        (unsigned long long) mal_perf_stats.fixed_typed_array_affine_regions);
+        (unsigned long long) mal_perf_stats.fixed_typed_array_affine_regions,
+        (unsigned long long) mal_perf_stats.fixed_typed_array_region_expected_admissions);
     fprintf(stderr, "[perf-dense-array-region-stats] admissions=%llu element-stores=%llu integer-back-edges=%llu\n",
         (unsigned long long) mal_perf_stats.dense_array_number_region_admissions,
         (unsigned long long) mal_perf_stats.dense_array_number_region_stores,
         (unsigned long long) mal_perf_stats.dense_array_integer_region_back_edges);
     fprintf(stderr, "[perf-typed-array-stride-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.fixed_typed_array_stride_regions);
-    fprintf(stderr, "[perf-loop-invariant-stats] admissions=%llu load-misses=%llu\n",
+    fprintf(stderr, "[perf-loop-invariant-stats] admissions=%llu load-misses=%llu builtin-call-admissions=%llu\n",
         (unsigned long long) mal_perf_stats.loop_invariant_region_admissions,
-        (unsigned long long) mal_perf_stats.loop_invariant_load_misses);
+        (unsigned long long) mal_perf_stats.loop_invariant_load_misses,
+        (unsigned long long) mal_perf_stats.loop_builtin_call_region_admissions);
     fprintf(stderr, "[perf-data-view-region-stats] views=%llu\n",
         (unsigned long long) mal_perf_stats.fixed_data_view_region_views);
     fprintf(

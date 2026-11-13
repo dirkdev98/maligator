@@ -4165,6 +4165,14 @@ static inline bool mal_vm_global_data_property_cached(
 MalValue mal_vm_op_load_global_property_slow(MalVm *vm, i32 name_string_index);
 
 /**
+ * A numeric loop region's entry load of a global name. Only an initialized lexical
+ * binding or an own data property of the global object answers, since reading either
+ * runs no code; nothing in a region stores a global name, so every iteration would read
+ * this value. Anything else answers empty, and the region declines.
+ */
+MalValue mal_vm_loop_invariant_global(MalVm *vm, i32 name_string_index);
+
+/**
  * Sloppy-mode read of an unresolved name: return the global object's property
  * `name_string_index`, or throw ReferenceError if it is absent.
  */

@@ -89,6 +89,8 @@ import {
 	DATA_VIEW_ELEMENT_SIZES,
 	ffiIntegerArgumentFits,
 	nativeDataViewAccessor,
+	numericLoopBuiltinCallCandidates,
+	numericLoopBuiltinCallView,
 	numericLoopCallMethods,
 	numericLoopHasTerminalStore,
 	numericLoopSupportsCheckedIntegers,
@@ -1622,16 +1624,39 @@ function emitRecordIterationRegion(
 	reps: ReadonlyArray<VmRegisterRepresentation>,
 	propertyCache: string,
 	poll: (ip: number, spill: string, isolate: string) => string,
+	// The C statement that performs the entry load at an instruction.
+	entryLoad: (ip: number) => string,
+	// Checks that the entry's loaded callees are the builtins the region performs.
+	builtinGuards: ReadonlyArray<string>,
 	columns?: boolean,
 ): ReadonlyArray<string> {
 	if (plan.privateColumns === true && columns === undefined)
 		return [
-			...emitRecordIterationRegion(fn, plan, reps, propertyCache, poll, true),
-			...emitRecordIterationRegion(fn, plan, reps, propertyCache, poll, false),
+			...emitRecordIterationRegion(
+				fn,
+				plan,
+				reps,
+				propertyCache,
+				poll,
+				entryLoad,
+				builtinGuards,
+				true,
+			),
+			...emitRecordIterationRegion(
+				fn,
+				plan,
+				reps,
+				propertyCache,
+				poll,
+				entryLoad,
+				builtinGuards,
+				false,
+			),
 		];
 	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
 	const order = numericLoopOrder(fn, plan.id, members, true);
 	const step = fn.instructions[plan.id];
+	const entryLoads = new Set(plan.invariantLoads ?? []);
 	const flow =
 		order === undefined || step?.opcode !== "ITERATOR_STEP"
 			? undefined
@@ -1641,6 +1666,7 @@ function emitRecordIterationRegion(
 					step.valueDst,
 					reps,
 					nativeNumericBuiltinInstruction,
+					entryLoads,
 				);
 	if (flow === undefined || order === undefined || step?.opcode !== "ITERATOR_STEP")
 		throw new Error("Invalid record iteration region");
@@ -1698,11 +1724,22 @@ function emitRecordIterationRegion(
 		if (!members.has(target)) throw new Error("Invalid record iteration target");
 		return `goto ${id}_L${target};`;
 	};
+	// Loads precede checks, in iteration order so that a loaded receiver precedes its own loads.
+	const loads = order.filter((ip) => entryLoads.has(ip));
 	const guards: Array<string> = [
 		`${cursor}.active`,
+		...loads.map(
+			(ip) =>
+				`!mal_value_is_empty(r${vmInstructionWriteRegisters(fn.instructions[ip]!)[0]})`,
+		),
+		...builtinGuards,
 		`mal_vm_dense_number_storage(r${plan.iterator}, false, &${id}_array)`,
 	];
-	const lines: Array<string> = ["{", `  MalDenseNumberSpan ${id}_array = {0};`];
+	const lines: Array<string> = [
+		"{",
+		...loads.map((ip) => `  ${entryLoad(ip)}`),
+		`  MalDenseNumberSpan ${id}_array = {0};`,
+	];
 	const declined = `${id}_declined`;
 	for (const [register, mask] of flow.kinds) {
 		const numeric = mask === COMPILER_VALUE_KIND_NUMBER,
@@ -1730,7 +1767,7 @@ function emitRecordIterationRegion(
 		const columnCount =
 			1 + graph.fields.length + graph.fields.filter((field) => field.stored).length;
 		lines.push(
-			`  if (MAL_PRIMORDIALS_LOCKED && ${guards.join(" && ")}) {`,
+			`  if (${plan.columnsProducer === undefined ? "MAL_PRIMORDIALS_LOCKED" : `${cache}_private`} && ${guards.join(" && ")}) {`,
 			`    if (${cache}_state == 1 && ${cursor}.index == 0 && !${cursor}.done && ${id}_array.count == ${id}_array.length && ${id}_array.count > 0 && ${id}_array.count <= 8388608 / (${columnCount} * sizeof(u64))) {`,
 			`      ${cache}_count = ${id}_array.count;`,
 			`      ${cache}_data = calloc((size_t) ${cache}_count * ${columnCount}, sizeof(u64));`,
@@ -1804,6 +1841,9 @@ function emitRecordIterationRegion(
 		`    bool ${id}_done = ${cursor}.done;`,
 		`    MalIsolateLocals *${id}_isolate = vm->isolate;`,
 		`    MAL_PERF_COUNT(dense_array_number_region_admissions);`,
+		...(builtinGuards.length > 0
+			? ["    MAL_PERF_COUNT(loop_builtin_call_region_admissions);"]
+			: []),
 		`    ${id}_next:;`,
 	);
 	if (!columns)
@@ -1875,7 +1915,8 @@ function emitRecordIterationRegion(
 		lines.push(`    ${id}_L${ip}:;`);
 		let statement: string;
 		const numeric = nativeNumericBuiltinInstruction(op);
-		if (numeric !== undefined) {
+		if (entryLoads.has(ip)) statement = "";
+		else if (numeric !== undefined) {
 			const expression = nativeNumericBuiltinExpr(
 				numeric.operation,
 				numeric.arguments.map((argument) =>
@@ -2021,9 +2062,41 @@ function foreignScalarRange(scalar: FfiScalarEntry): IntegerRange | undefined {
 		: { low: 0, high: 2 ** result.bits - 1 };
 }
 
+/**
+ * A region's guarded Math calls as the view its plan was made on, with the entry's
+ * check that each invariant callee is the builtin.
+ */
+function numericLoopRegionBuiltinCalls(
+	source: BytecodeFunction,
+	plan: NativeNumericLoopRegionPlan,
+	nativeInstructions: NativeFunctionPlan["instructions"],
+): { readonly fn: BytecodeFunction; readonly guards: ReadonlyArray<string> } {
+	if ((plan.builtinCalls ?? []).length === 0) return { fn: source, guards: [] };
+	const candidates = numericLoopBuiltinCallCandidates(
+		source,
+		(ip) => nativeInstructions[ip],
+	);
+	const calls = new Map(
+		(plan.builtinCalls ?? []).map((ip) => {
+			const call = candidates.get(ip);
+			if (call === undefined) throw new Error("Invalid numeric loop builtin call");
+			return [ip, call];
+		}),
+	);
+	return {
+		fn: numericLoopBuiltinCallView(source, calls),
+		guards: [...calls.values()].map(({ operation, arity, callee }) => {
+			const kind = arity === 1 ? "UNARY" : "BINARY";
+			return `mal_builtin_math_${kind.toLowerCase()}_callee_matches(MAL_MATH_${kind}_${operation.slice("Math.".length).toUpperCase()}, r${callee})`;
+		}),
+	};
+}
+
+type NumericLoopBodyMode = "f64" | "typed" | "integer" | "expected" | "array" | "text";
+
 // Forward block flags preserve whole-label splitting while both loop modes retain their original fallback.
 function emitNumericLoopRegion(
-	fn: BytecodeFunction,
+	source: BytecodeFunction,
 	plan: NativeNumericLoopRegionPlan,
 	reps: ReadonlyArray<VmRegisterRepresentation>,
 	propertyCache: string,
@@ -2038,8 +2111,18 @@ function emitNumericLoopRegion(
 	// Whether restarts continue in the double-arithmetic copy that follows this one.
 	numberRestart = arrayArithmetic === "checked-integer",
 ): ReadonlyArray<string> {
+	const builtin = numericLoopRegionBuiltinCalls(source, plan, nativeInstructions);
+	const fn = builtin.fn;
 	if (plan.kind === "array-iteration" && plan.recordGraph !== undefined)
-		return emitRecordIterationRegion(fn, plan, reps, propertyCache, poll);
+		return emitRecordIterationRegion(
+			fn,
+			plan,
+			reps,
+			propertyCache,
+			poll,
+			entryLoad,
+			builtin.guards,
+		);
 	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
 	const entry = {
 		loads: new Set(plan.invariantLoads ?? []),
@@ -2301,7 +2384,7 @@ function emitNumericLoopRegion(
 		restartInNumbers: boolean,
 	) =>
 		emitNumericLoopRegion(
-			fn,
+			source,
 			plan,
 			reps,
 			propertyCache,
@@ -2350,6 +2433,22 @@ function emitNumericLoopRegion(
 		plan.kind === "fixed-numeric" &&
 		(records.size > 0 || arrayArithmetic === "checked-integer");
 	const views = plan.kind === "fixed-numeric" ? plan.views : [];
+	const expectedKinds = new Map(
+		views.flatMap((view) =>
+			view.expectedKind === undefined ? [] : [[view.object, view.expectedKind] as const],
+		),
+	);
+	// An exact access names its view's kind; the body specialized for the predicted kinds
+	// reads the other views by theirs, which its entry checked.
+	const viewElementKind = (ip: number, object: number, mode: NumericLoopBodyMode) => {
+		const access = nativeInstructions[ip];
+		return access?.kind === "exact-typed-array-element" ||
+			access?.kind === "contained-fixed-typed-array-element"
+			? access.elementKind
+			: mode === "expected"
+				? expectedKinds.get(object)
+				: undefined;
+	};
 	const textViews = views.filter((view) => view.text === true);
 	const elementViews = views.filter(
 		(view) =>
@@ -2401,13 +2500,17 @@ function emitNumericLoopRegion(
 			op.opcode !== "LOAD_GLOBAL" &&
 			op.opcode !== "LOAD_CAPTURED" &&
 			op.opcode !== "LOAD_THIS" &&
-			!(op.opcode === "LOAD_PROPERTY_STATIC" && entry.loads.has(ip))
+			!(
+				(op.opcode === "LOAD_PROPERTY_STATIC" || op.opcode === "LOAD_GLOBAL_PROPERTY") &&
+				entry.loads.has(ip)
+			)
 		)
 			return [];
 		if (op.opcode === "LOAD_GLOBAL" && slotted.has(op.index)) return [];
 		guards.unshift(`!mal_value_is_empty(r${op.dst})`);
 		return [`  ${entryLoad(ip)}`];
 	});
+	guards.push(...builtin.guards);
 	// A slot enters as a Number, which also declines its dead zone.
 	const slotLoads = globals.flatMap((index) => {
 		const value = `${id}_gv${index}`;
@@ -2612,10 +2715,7 @@ function emitNumericLoopRegion(
 	const int32 = (register: number) => `mal_safe_integer_to_i32(${local(register)})`;
 	const checked = (call: string, dst: number) =>
 		`if (__builtin_expect(!${call.replace("%DST%", `&${local(dst)}`)}, 0)) ${restart}`;
-	const statement = (
-		ip: number,
-		mode: "f64" | "typed" | "integer" | "array" | "text",
-	): string => {
+	const statement = (ip: number, mode: NumericLoopBodyMode): string => {
 		const op = fn.instructions[ip]!;
 		switch (op.opcode) {
 			case "CALL_KNOWN":
@@ -2763,19 +2863,16 @@ function emitNumericLoopRegion(
 					return `{ ${bound}MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${key}]; if (__builtin_expect(!mal_ops_is_number(${id}_e), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_e); }`;
 				if (mode === "f64")
 					return `{ ${bound}${local(op.dst)} = mal_scalar_f64_from_bits(mal_scalar_load_native_u64(${id}_v${op.object}.data + (usize)(u32) ${key} * 8)); }`;
-				const access = nativeInstructions[ip];
-				if (
-					access?.kind === "exact-typed-array-element" ||
-					access?.kind === "contained-fixed-typed-array-element"
-				) {
-					const width = nativeTypedArrayElementSize(access.elementKind);
+				const elementKind = viewElementKind(ip, op.object, mode);
+				if (elementKind !== undefined) {
+					const width = nativeTypedArrayElementSize(elementKind);
 					const bits = `mal_scalar_load_native_u${width * 8}(${id}_v${op.object}.data + (usize)(u32) ${key} * ${width})`;
 					const value =
-						access.elementKind === "Float64Array"
+						elementKind === "Float64Array"
 							? `mal_scalar_f64_from_bits(${bits})`
-							: access.elementKind === "Float32Array"
+							: elementKind === "Float32Array"
 								? `mal_scalar_f32_from_bits(${bits})`
-								: access.elementKind.startsWith("Int")
+								: elementKind.startsWith("Int")
 									? `mal_scalar_i${width * 8}_from_bits(${bits})`
 									: bits;
 					return `{ ${bound}${local(op.dst)} = (${integral.has(op.dst) ? "i64" : "f64"}) (${value}); }`;
@@ -2795,19 +2892,16 @@ function emitNumericLoopRegion(
 						: `if (__builtin_expect(!(${key} >= 0.0 && ${key} < (f64) ${length}) || ${key} != trunc(${key}), 0)) ${restart} `;
 				if (mode === "array")
 					return `{ ${bound}if (__builtin_expect(!mal_vm_dense_number_store(&${id}_a${op.object}, (u32) ${key}, ${num(op.value)}), 0)) ${restart} }`;
-				const access = nativeInstructions[ip];
-				if (
-					mode !== "f64" &&
-					(access?.kind === "exact-typed-array-element" ||
-						access?.kind === "contained-fixed-typed-array-element")
-				) {
-					const width = nativeTypedArrayElementSize(access.elementKind);
+				const elementKind =
+					mode === "f64" ? undefined : viewElementKind(ip, op.object, mode);
+				if (elementKind !== undefined) {
+					const width = nativeTypedArrayElementSize(elementKind);
 					const bits =
-						access.elementKind === "Float64Array"
+						elementKind === "Float64Array"
 							? `mal_scalar_f64_to_bits(${num(op.value)})`
-							: access.elementKind === "Float32Array"
+							: elementKind === "Float32Array"
 								? `mal_scalar_f32_to_bits((f32) ${num(op.value)})`
-								: access.elementKind === "Uint8ClampedArray"
+								: elementKind === "Uint8ClampedArray"
 									? `mal_typed_array_to_uint8_clamp(${num(op.value)})`
 									: `(u${width * 8}) mal_ops_number_to_uint32(${num(op.value)})`;
 					return `{ ${bound}mal_scalar_store_native_u${width * 8}(${id}_v${op.object}.data + (usize)(u32) ${key} * ${width}, ${bits}); }`;
@@ -2834,6 +2928,9 @@ function emitNumericLoopRegion(
 			case "LOAD_CAPTURED":
 			case "LOAD_THIS":
 			case "THROW_IF_TDZ":
+				return "";
+			case "LOAD_GLOBAL_PROPERTY":
+				if (!entry.loads.has(ip)) throw new Error("Invalid numeric loop global load");
 				return "";
 			case "GUARD_FUNCTION_INDEX":
 				if (!entry.guards.has(ip)) throw new Error("Invalid numeric loop callee guard");
@@ -2985,9 +3082,7 @@ function emitNumericLoopRegion(
 			}),
 		),
 	];
-	const loopBody = (
-		mode: "f64" | "typed" | "integer" | "array" | "text",
-	): ReadonlyArray<string> => {
+	const loopBody = (mode: NumericLoopBodyMode): ReadonlyArray<string> => {
 		integral = mode === "integer" ? integerIntegral : baseIntegral;
 		const lines = [
 			// Inner declarations shadow the shared locals that hold doubles elsewhere.
@@ -3018,6 +3113,9 @@ function emitNumericLoopRegion(
 			`    u8 ${id}_exit = 0;`,
 			...(entry.loads.size > 0 || entry.guards.size > 0
 				? ["    MAL_PERF_COUNT(loop_invariant_region_admissions);"]
+				: []),
+			...(builtin.guards.length > 0
+				? ["    MAL_PERF_COUNT(loop_builtin_call_region_admissions);"]
 				: []),
 			// Region instructions make no calls, so the thread's isolate cannot change inside.
 			`    MalIsolateLocals *${id}_isolate = vm->isolate;`,
@@ -3095,6 +3193,26 @@ function emitNumericLoopRegion(
 									`    if (${elementViews.map((view) => `${id}_v${view.object}.kind == MAL_TA_FLOAT64`).join(" && ")}) {`,
 									"      MAL_PERF_COUNT(fixed_typed_array_region_f64_admissions);",
 									...loopBody("f64").map((line) => `  ${line}`),
+									// Views built through mutable global constructors predict their kinds.
+									...(elementViews.every(
+										(view) =>
+											view.expectedKind === undefined ||
+											view.expectedKind === "Float64Array",
+									)
+										? []
+										: [
+												`    } else if (${elementViews
+													.flatMap((view) =>
+														view.expectedKind === undefined
+															? []
+															: [
+																	`${id}_v${view.object}.kind == ${nativeTypedArrayKind(view.expectedKind)}`,
+																],
+													)
+													.join(" && ")}) {`,
+												"      MAL_PERF_COUNT(fixed_typed_array_region_expected_admissions);",
+												...loopBody("expected").map((line) => `  ${line}`),
+											]),
 									...(!integerBody
 										? []
 										: [
@@ -4135,6 +4253,7 @@ function emitCompiledVariant(
 	const columnPlans = storage.numericLoopRegions.filter(
 		(plan) => plan.kind === "array-iteration" && plan.privateColumns === true,
 	);
+
 	const columnsUnlink = [...columnPlans]
 		.reverse()
 		.map((plan) => {
@@ -4481,6 +4600,9 @@ function emitCompiledVariant(
 			`    MalValue ${cache}_owner = MAL_VALUE_UNDEFINED;`,
 			`    MalRootSpan ${cache}_roots;`,
 			`    mal_gc_root(&${cache}_roots, &${cache}_owner, 1);`,
+			...(plan.kind === "array-iteration" && plan.columnsProducer !== undefined
+				? [`    bool ${cache}_private = false;`]
+				: []),
 		);
 	}
 	if (retainsArguments) {
@@ -7773,6 +7895,15 @@ function emitBody(
 	const mathCalls = new Map(
 		fastPathPlans.mathCalls.map((plan) => [plan.instructionIp, plan]),
 	);
+	const columnsProducers = new Map(
+		fastPathPlans.numericLoopRegions.flatMap((plan) =>
+			plan.kind === "array-iteration" &&
+			plan.privateColumns === true &&
+			plan.columnsProducer !== undefined
+				? [[plan.columnsProducer, recordColumnsName(plan)] as const]
+				: [],
+		),
+	);
 	const mathCalleeRegisters = new Set(
 		fastPathPlans.mathCalls.flatMap((plan) => {
 			const call = fn.instructions[plan.instructionIp];
@@ -8568,6 +8699,8 @@ function emitBody(
 							).join(" ");
 						// Only an ordinary function's `this` is an entry load.
 						if (binding.opcode === "LOAD_THIS") return `r${binding.dst} = this_value;`;
+						if (binding.opcode === "LOAD_GLOBAL_PROPERTY")
+							return `r${binding.dst} = mal_vm_loop_invariant_global(vm, ${relocation.stringIndex(binding.nameStringIndex)});`;
 						if (binding.opcode === "LOAD_PROPERTY_STATIC") {
 							const load = `r${binding.dst} = mal_vm_loop_invariant_load(vm, r${binding.object}, ${relocation.stringIndex(binding.stringIndex)}, &${nativeBodyReference(resources, "propertyCache")}[${binding.icIndex}]);`;
 							// A class layout serves the original load without filling its cache row.
@@ -8967,6 +9100,7 @@ function emitBody(
 			instructionContext.callTransport = callTransportByIp.get(ip);
 			instructionContext.callbackTransport = callbackTransportByIp.get(ip);
 			instructionContext.mathCall = mathCalls.get(ip);
+			instructionContext.recordColumnsProducer = columnsProducers.get(ip);
 			const contextInstruction = fn.instructions[ip]!;
 			instructionContext.watchedMathCallee =
 				contextInstruction.opcode === "LOAD_PROPERTY_STATIC" &&
@@ -9537,6 +9671,11 @@ interface NativeInstructionContext {
 	readonly callTransport?: NativeCallTransportPlan;
 	readonly callbackTransport?: NativeCallbackTransportPlan;
 	readonly mathCall: NativeMathCallPlan | undefined;
+	/**
+	 * The record columns whose privacy this `Array.from` call establishes once its callee
+	 * and receiver are the realm's own.
+	 */
+	readonly recordColumnsProducer?: string;
 	/** The load reads a callee that a guarded Math call checks, so its row is a watched intrinsic. */
 	readonly watchedMathCallee?: boolean;
 	/** The loaded value is a callee guarded against several function identities. */
@@ -16002,8 +16141,16 @@ class NativeInstructionEmission {
 			}
 			case "CALL_KNOWN":
 				return this.emitKnownCall(instruction);
-			case "CALL":
-				return this.emitCall(instruction);
+			case "CALL": {
+				const call = this.emitCall(instruction);
+				const columns = this.context.recordColumnsProducer;
+				return call === null || columns === undefined
+					? call
+					: [
+							`${columns}_private = mal_builtin_array_from_is_realm_own(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)});`,
+							...call,
+						];
+			}
 			case "CONSTRUCT": {
 				const constructPlan =
 					this.context.nativePlan?.kind === "construct"

@@ -124,7 +124,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 387;
+export const COMPILER_ARTIFACT_VERSION = 388;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -1010,6 +1010,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 			w.i32(plan.initializeIp);
 			w.i32(plan.iterator);
 			w.u8(plan.privateColumns === true ? 1 : 0);
+			w.i32(plan.columnsProducer ?? -1);
 			w.i32Array([...(plan.records ?? [])]);
 			w.u8(plan.recordGraph === undefined ? 0 : 1);
 			if (plan.recordGraph !== undefined) {
@@ -1052,6 +1053,12 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 				// Zero is no lend; a lent view's tag is its array's index plus one.
 				w.u8(view.lend === undefined ? 0 : FFI_VIEW_ARRAY_TAGS.indexOf(view.lend) + 1);
 				w.u8(view.lentOnly === true ? 1 : 0);
+				// Zero is no prediction; a predicted view's tag is its kind's plus one.
+				w.u8(
+					view.expectedKind === undefined
+						? 0
+						: taggedNumericTypedArrayKind(view.expectedKind) + 1,
+				);
 			}
 			w.u32(plan.dataViewCalls?.length ?? 0);
 			for (const call of plan.dataViewCalls ?? []) {
@@ -1075,6 +1082,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32Array([...(plan.globals ?? [])]);
 		w.i32Array([...(plan.invariantLoads ?? [])]);
 		w.i32Array([...(plan.calleeGuards ?? [])]);
+		w.i32Array([...(plan.builtinCalls ?? [])]);
 		w.u8(0);
 	}
 	w.u32(storage.pairedArrayLoops.length);
@@ -1626,9 +1634,14 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 							const initializeIp = r.i32(),
 								iterator = r.i32(),
 								privateColumns = r.u8(),
+								columnsProducer = r.i32(),
 								records = r.i32Array();
 							const graphTag = r.u8();
-							if (graphTag > 1 || privateColumns > 1)
+							if (
+								graphTag > 1 ||
+								privateColumns > 1 ||
+								(columnsProducer !== -1 && (privateColumns === 0 || columnsProducer < 0))
+							)
 								throw new RangeError("Invalid record iteration graph");
 							const recordGraph =
 								graphTag === 0
@@ -1667,6 +1680,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 								initializeIp,
 								iterator,
 								...(privateColumns === 1 ? { privateColumns: true as const } : {}),
+								...(columnsProducer === -1 ? {} : { columnsProducer }),
 								...(records.length === 0 ? {} : { records }),
 								...(recordGraph === undefined ? {} : { recordGraph }),
 							};
@@ -1705,7 +1719,8 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 										text = r.u8(),
 										byteScale = r.i32(),
 										lendTag = r.u8(),
-										lentOnly = r.u8();
+										lentOnly = r.u8(),
+										expectedTag = r.u8();
 									const lend =
 										lendTag === 0 ? undefined : FFI_VIEW_ARRAY_TAGS[lendTag - 1];
 									if (
@@ -1726,6 +1741,9 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 										...(byteScale === 0 ? {} : { byteScale }),
 										...(lend === undefined ? {} : { lend }),
 										...(lentOnly === 1 ? { lentOnly: true as const } : {}),
+										...(expectedTag === 0
+											? {}
+											: { expectedKind: numericTypedArrayKindFromTag(expectedTag - 1) }),
 									};
 								}),
 							};
@@ -1756,7 +1774,8 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			borrowedRegisters = r.i32Array(),
 			globals = r.i32Array(),
 			invariantLoads = r.i32Array(),
-			calleeGuards = r.i32Array();
+			calleeGuards = r.i32Array(),
+			builtinCalls = r.i32Array();
 		if (r.u8() !== 0) throw new RangeError("Invalid native integer loop fallback");
 		numericLoopRegions.push({
 			...storage,
@@ -1771,6 +1790,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			...(globals.length === 0 ? {} : { globals }),
 			...(invariantLoads.length === 0 ? {} : { invariantLoads }),
 			...(calleeGuards.length === 0 ? {} : { calleeGuards }),
+			...(builtinCalls.length === 0 ? {} : { builtinCalls }),
 		});
 	}
 	const pairedArrayLoops: Array<NativePairedArrayLoopPlan> = Array.from(

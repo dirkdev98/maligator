@@ -111,15 +111,33 @@ describe("fixed TypedArray loop storage", () => {
 			expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
 		},
 	);
-	it.each(["Math.abs(left[i])", "Math.min(left[i],right[i])", "hook(left[i])"])(
-		"retains mutable callee lookup and effects outside storage: %s",
+	it.each(["Math.abs(left[i])", "Math.min(left[i],right[i])"])(
+		"checks a mutable Math callee once at the storage entry: %s",
 		(expression) => {
+			const image = compile(`for(let i=0;i<count;i++)output[i]=${expression};`);
+			const native = image.native.functions[1]!;
+			const plan = native.storage!.numericLoopRegions[0];
+			expect(plan?.kind).toBe("fixed-numeric");
+			const call = plan!.builtinCalls?.map((ip) => native.body.instructions[ip]);
+			expect(call?.map((op) => op?.opcode)).toEqual(["CALL"]);
+			// The entry loads the global and its method, and the region never reloads either.
 			expect(
-				compile(`for(let i=0;i<count;i++)output[i]=${expression};`).native.functions[1]!
-					.storage!.numericLoopRegions,
-			).toEqual([]);
+				plan!.invariantLoads?.map((ip) => native.body.instructions[ip]!.opcode).sort(),
+			).toEqual(["LOAD_GLOBAL_PROPERTY", "LOAD_PROPERTY_STATIC"]);
+			expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
+			expect(
+				serializeCompilerArtifact(
+					deserializeCompilerArtifact(serializeCompilerArtifact(image)),
+				),
+			).toEqual(serializeCompilerArtifact(image));
 		},
 	);
+	it("retains an unknown callee's effects outside storage", () => {
+		expect(
+			compile("for(let i=0;i<count;i++)output[i]=hook(left[i]);").native.functions[1]!
+				.storage!.numericLoopRegions,
+		).toEqual([]);
+	});
 	it.each([
 		"Math.abs(left[i],hook())",
 		"new Math.abs(left[i])",

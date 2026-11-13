@@ -5,6 +5,7 @@ import type {
 } from "../../build-config-values.ts";
 import { ARRAY_INITIALIZATION_LIMITS } from "../shared/array-initialization.ts";
 import { DATA_VIEW_ACCESSOR_TYPES } from "../shared/builtin-registry.ts";
+import type { CompilerNumericTypedArrayKind } from "../shared/compiler-instruction.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_BOOLEAN,
@@ -220,6 +221,12 @@ interface NativeNumericLoopRegionBase {
 	 * The branches a failed check takes are not members.
 	 */
 	readonly calleeGuards?: ReadonlyArray<number>;
+	/**
+	 * Guarded Math calls of an invariant callee. The entry checks once that the callee
+	 * is the builtin, which nothing inside can replace, and the region performs each as
+	 * the known call `numericLoopBuiltinCallView` presents.
+	 */
+	readonly builtinCalls?: ReadonlyArray<number>;
 }
 
 /** A counted loop's index, which the header compares with a bound and each iteration steps once. */
@@ -246,6 +253,12 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 				readonly records?: ReadonlyArray<number>;
 				readonly recordGraph?: NativeRecordIterationGraph;
 				readonly privateColumns?: true;
+				/**
+				 * The `Array.from` call whose callee and receiver the function compares
+				 * with the realm's own before calling it, which mutable primordials leave
+				 * to the columns' admission; absent when the locked world proves them.
+				 */
+				readonly columnsProducer?: number;
 		  }
 		| {
 				readonly kind: "fixed-numeric";
@@ -272,6 +285,12 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 					readonly lend?: FfiViewArray;
 					/** Only C library calls use the view, so no index bounds its length. */
 					readonly lentOnly?: true;
+					/**
+					 * The typed array kind every construction of the view names through a
+					 * global constructor. Mutable primordials leave it a prediction, which a
+					 * body specialized for it checks at entry.
+					 */
+					readonly expectedKind?: CompilerNumericTypedArrayKind;
 				}>;
 				/** The DataView accessor calls the region performs on its byte views. */
 				readonly dataViewCalls?: ReadonlyArray<NativeDataViewCall>;
@@ -1319,7 +1338,9 @@ export function numberRecordDataflow(
 			intrinsics.add(instruction.dst);
 		} else if (
 			bindingLoads &&
-			((instruction.opcode === "LOAD_PROPERTY_STATIC" && entry.loads.has(ip)) ||
+			(((instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+				instruction.opcode === "LOAD_GLOBAL_PROPERTY") &&
+				entry.loads.has(ip)) ||
 				instruction.opcode === "LOAD_THIS")
 		) {
 			// Like a binding's, the entry loads the value, which reads inside see as an input.
@@ -1446,7 +1467,8 @@ export function numberRecordDataflow(
 			((instruction.opcode === "LOAD_GLOBAL" ||
 				instruction.opcode === "LOAD_CAPTURED" ||
 				instruction.opcode === "LOAD_THIS" ||
-				instruction.opcode === "LOAD_PROPERTY_STATIC") &&
+				instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+				instruction.opcode === "LOAD_GLOBAL_PROPERTY") &&
 				bindings.has(instruction.dst) &&
 				!(instruction.opcode === "LOAD_GLOBAL" && slotGlobals.has(instruction.index))) ||
 			(instruction.opcode === "GUARD_FUNCTION_INDEX" && passed.has(instruction.dst));
@@ -2335,6 +2357,137 @@ export function nativeNumericBuiltinInstruction(instruction: BytecodeInstruction
 }
 
 /**
+ * The guarded Math calls a region may perform as builtins, by instruction: each one's
+ * operation and callee register. Mutable primordials leave the callee a loaded value,
+ * so only an entry that checks it can stand in for the locked world's known call.
+ */
+export function numericLoopBuiltinCallCandidates(
+	fn: BytecodeFunction,
+	plans: (ip: number) => NativeInstructionPlan | undefined,
+): ReadonlyMap<
+	number,
+	{ readonly operation: string; readonly arity: 1 | 2; readonly callee: number }
+> {
+	const candidates = new Map<
+		number,
+		{ operation: string; arity: 1 | 2; callee: number }
+	>();
+	for (const [ip, op] of fn.instructions.entries()) {
+		const plan = plans(ip);
+		const operation =
+			plan?.kind === "call" ? plan.guardedBuiltinCall?.operation : undefined;
+		if (op.opcode !== "CALL" || operation === undefined) continue;
+		const arity = nativeGuardedMathArity(operation, op.arguments.length);
+		const callee = decodeVmValueOperand(op.callee);
+		if (arity !== undefined && callee.kind === "register")
+			candidates.set(ip, { operation, arity, callee: callee.register });
+	}
+	return candidates;
+}
+
+/**
+ * The function as a region whose entry admitted `calls` sees it: each guarded call
+ * becomes the known call of its operation, which reads neither its callee nor its
+ * receiver.
+ */
+export function numericLoopBuiltinCallView(
+	fn: BytecodeFunction,
+	calls: ReadonlyMap<number, { readonly operation: string }>,
+): BytecodeFunction {
+	if (calls.size === 0) return fn;
+	return {
+		...fn,
+		instructions: fn.instructions.map((op, ip) => {
+			const call = calls.get(ip);
+			if (call === undefined) return op;
+			if (op.opcode !== "CALL") throw new Error("Invalid numeric loop builtin call");
+			return {
+				opcode: "CALL_KNOWN",
+				dst: op.dst,
+				thisValue: op.thisValue,
+				argumentCount: op.argumentCount,
+				arguments: op.arguments,
+				operation: call.operation,
+			};
+		}),
+	};
+}
+
+const TYPED_ARRAY_CONSTRUCTOR_KINDS: ReadonlySet<string> =
+	new Set<CompilerNumericTypedArrayKind>([
+		"Int8Array",
+		"Uint8Array",
+		"Uint8ClampedArray",
+		"Int16Array",
+		"Uint16Array",
+		"Int32Array",
+		"Uint32Array",
+		"Float32Array",
+		"Float64Array",
+	]);
+
+/**
+ * The typed array kind of each register whose every write constructs through one
+ * global typed array constructor name. Under mutable primordials the name may hold
+ * anything, so the kind only predicts what a region's entry then checks.
+ */
+export function constructedTypedArrayKinds(
+	fn: BytecodeFunction,
+	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
+): ReadonlyMap<number, CompilerNumericTypedArrayKind> {
+	const writers = new Map<number, Array<BytecodeInstruction>>();
+	for (const op of fn.instructions)
+		for (const register of vmInstructionWriteRegisters(op))
+			writers.set(register, [...(writers.get(register) ?? []), op]);
+	const only = <T>(values: ReadonlyArray<T | undefined>): T | undefined =>
+		values.length > 0 && values.every((value) => value === values[0])
+			? values[0]
+			: undefined;
+	const named = (register: number) =>
+		only(
+			(writers.get(register) ?? []).map((op) => {
+				if (op.opcode !== "LOAD_GLOBAL_PROPERTY") return undefined;
+				const name = String.fromCharCode(...(stringConstants[op.nameStringIndex] ?? []));
+				return TYPED_ARRAY_CONSTRUCTOR_KINDS.has(name)
+					? (name as CompilerNumericTypedArrayKind)
+					: undefined;
+			}),
+		);
+	const kinds = new Map<number, CompilerNumericTypedArrayKind>();
+	for (const [register, ops] of writers) {
+		const kind = only(
+			ops.map((op) => {
+				if (op.opcode !== "CONSTRUCT") return undefined;
+				const callee = decodeVmValueOperand(op.callee);
+				return callee.kind === "register" ? named(callee.register) : undefined;
+			}),
+		);
+		if (kind !== undefined) kinds.set(register, kind);
+	}
+	return kinds;
+}
+
+/** The plan with each element view's predicted kind, when its construction names one. */
+function withExpectedViewKinds(
+	plan: NativeNumericLoopRegionPlan,
+	kinds: ReadonlyMap<number, CompilerNumericTypedArrayKind>,
+): NativeNumericLoopRegionPlan {
+	if (plan.kind !== "fixed-numeric" || (plan.records?.length ?? 0) > 0) return plan;
+	return {
+		...plan,
+		views: plan.views.map((view) => {
+			const expectedKind = kinds.get(view.object);
+			return expectedKind === undefined ||
+				view.text === true ||
+				view.byteScale !== undefined ||
+				view.lentOnly === true
+				? view
+				: { ...view, expectedKind };
+		}),
+	};
+}
+
+/**
  * Element registers whose every use reads one of the element's own fields or moves
  * it to another such register; anything else keeps the element a Number.
  */
@@ -2799,10 +2952,10 @@ export function numericLoopCallMethods(
 /**
  * What a numeric loop region reads from outside its registers. Nothing in a region runs
  * JavaScript or stores a named property, so the entry performs each invariant load once
- * into its register: a binding the loop does not store, `this`, a static property of an
- * object the loop never replaces, and an inlined call's callee check. A global slot the
- * loop stores, or whose register the loop reuses, lives in a local instead, which nothing
- * inside can observe.
+ * into its register: a binding the loop does not store, `this`, a global name or static
+ * property of an object the loop never replaces, and an inlined call's callee check. A
+ * global slot the loop stores, or whose register the loop reuses, lives in a local
+ * instead, which nothing inside can observe.
  */
 interface NumericLoopBindings {
 	/** Registers the entry loads an unchanging value into. */
@@ -2811,7 +2964,7 @@ interface NumericLoopBindings {
 	readonly slots: ReadonlySet<number>;
 	/** Registers the loop loads a slot kept in a local into. */
 	readonly slotLoads: ReadonlySet<number>;
-	/** Static property loads the entry performs. */
+	/** Static property and global name loads the entry performs. */
 	readonly loads: ReadonlySet<number>;
 	/** Callee checks the entry performs, whose results only select branches. */
 	readonly guards: ReadonlySet<number>;
@@ -2841,6 +2994,7 @@ function numericLoopBindings(
 	}
 	const invariant = new Set<number>();
 	const slotLoads = new Set<number>();
+	const loads = new Set<number>();
 	for (const ip of shape.order) {
 		const op = fn.instructions[ip]!;
 		if (op.opcode === "LOAD_GLOBAL" && slots.has(op.index)) {
@@ -2850,6 +3004,15 @@ function numericLoopBindings(
 		// A derived constructor's `this` stays uninitialized until `super()` returns.
 		if (op.opcode === "LOAD_THIS") {
 			if (!fn.isDerivedConstructor && !writesElsewhere(ip, op.dst)) invariant.add(op.dst);
+			continue;
+		}
+		// Like a static load, a global name the entry resolves to a data property without
+		// running code keeps that value while nothing inside stores it.
+		if (op.opcode === "LOAD_GLOBAL_PROPERTY") {
+			if (invariantLoadCandidates.has(ip) && !writesElsewhere(ip, op.dst)) {
+				loads.add(ip);
+				invariant.add(op.dst);
+			}
 			continue;
 		}
 		if (op.opcode !== "LOAD_GLOBAL" && op.opcode !== "LOAD_CAPTURED") continue;
@@ -2866,7 +3029,6 @@ function numericLoopBindings(
 		representations[register] === "boxed" &&
 		(!writers.has(register) || invariant.has(register));
 	// A loaded object can itself be the receiver of another invariant load.
-	const loads = new Set<number>();
 	for (let changed = true; changed;) {
 		changed = false;
 		for (const ip of shape.order) {
@@ -3006,6 +3168,7 @@ function numericLoopBindingInstruction(
 		case "LOAD_THIS":
 			return bindings.invariant.has(op.dst);
 		case "LOAD_PROPERTY_STATIC":
+		case "LOAD_GLOBAL_PROPERTY":
 			return bindings.loads.has(ip);
 		case "GUARD_FUNCTION_INDEX":
 			return bindings.guards.has(ip);
@@ -3041,18 +3204,52 @@ function numericLoopInvariantLoadCandidates(
 	return new Set(shape.order.filter((ip) => candidates.has(ip) && !methods.has(ip)));
 }
 
+/**
+ * The guarded calls among a region's members, when its entry can check each one's
+ * callee: a boxed register that nothing inside writes except an entry load.
+ */
+function numericLoopBuiltinCalls(
+	fn: BytecodeFunction,
+	order: ReadonlyArray<number>,
+	bindings: Pick<NumericLoopBindings, "invariant"> | undefined,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+	candidates: ReadonlyMap<number, { readonly callee: number }>,
+): ReadonlyArray<number> | undefined {
+	const calls = order.filter((ip) => candidates.has(ip));
+	if (calls.length === 0) return calls;
+	const written = new Set(
+		order.flatMap((ip) => vmInstructionWriteRegisters(fn.instructions[ip]!)),
+	);
+	return calls.every((ip) => {
+		const callee = candidates.get(ip)!.callee;
+		return (
+			representations[callee] === "boxed" &&
+			(!written.has(callee) || bindings?.invariant.has(callee) === true)
+		);
+	})
+		? calls
+		: undefined;
+}
+
 /** The plan fields that name a region's entry loads and checks. */
-function numericLoopEntryFields(bindings: NumericLoopBindings): {
+function numericLoopEntryFields(
+	bindings: NumericLoopBindings | undefined,
+	builtinCalls: ReadonlyArray<number> = [],
+): {
 	readonly invariantLoads?: ReadonlyArray<number>;
 	readonly calleeGuards?: ReadonlyArray<number>;
+	readonly builtinCalls?: ReadonlyArray<number>;
 } {
 	return {
-		...(bindings.loads.size === 0
+		...(bindings === undefined || bindings.loads.size === 0
 			? {}
 			: { invariantLoads: Object.freeze([...bindings.loads].sort((a, b) => a - b)) }),
-		...(bindings.guards.size === 0
+		...(bindings === undefined || bindings.guards.size === 0
 			? {}
 			: { calleeGuards: Object.freeze([...bindings.guards].sort((a, b) => a - b)) }),
+		...(builtinCalls.length === 0
+			? {}
+			: { builtinCalls: Object.freeze([...builtinCalls].sort((a, b) => a - b)) }),
 	};
 }
 
@@ -3410,6 +3607,7 @@ function lowerArrayIterationRegion(
 	cursor: { readonly initializeIp: number; readonly iterator: number },
 	functions: ReadonlyArray<BytecodeFunction>,
 	invariantLoadCandidates: ReadonlySet<number>,
+	builtinCallCandidates: ReadonlyMap<number, { readonly callee: number }>,
 ): NativeNumericLoopRegionPlan | undefined {
 	const step = fn.instructions[header]!;
 	if (step.opcode !== "ITERATOR_STEP" || conflicts(header, false)) return undefined;
@@ -3448,15 +3646,32 @@ function lowerArrayIterationRegion(
 	)
 		return undefined;
 	const records = numericLoopRecords(fn, shape, [step.valueDst]);
+	const recordEntryLoads = recordIterationEntryLoads(fn, shape.order, entry?.bindings);
 	const recordFlow = analyzeRecordIteration(
 		fn,
 		shape.order,
 		step.valueDst,
 		representations,
 		nativeNumericBuiltinInstruction,
+		recordEntryLoads,
+	);
+	// The record region's entry performs only its own loads, so they alone fix a callee.
+	const recordBuiltinCalls = numericLoopBuiltinCalls(
+		fn,
+		shape.order,
+		{
+			invariant: new Set(
+				[...recordEntryLoads].flatMap((ip) =>
+					vmInstructionWriteRegisters(fn.instructions[ip]!),
+				),
+			),
+		},
+		representations,
+		builtinCallCandidates,
 	);
 	if (
 		recordFlow !== undefined &&
+		recordBuiltinCalls !== undefined &&
 		(recordFlow.graph.references.length > 1 ||
 			recordFlow.graph.fields.some((field) => field.stored || field.kind !== "number"))
 	) {
@@ -3485,20 +3700,22 @@ function lowerArrayIterationRegion(
 			}
 			exits.push({ targetIp, outputs });
 		}
+		const privacy = nativeRecordGraphIsPrivate(
+			fn,
+			functions,
+			cursor.initializeIp,
+			[...shape.members, shape.entryIp],
+			recordFlow,
+		);
 		return Object.freeze({
 			kind: "array-iteration" as const,
 			initializeIp: cursor.initializeIp,
 			iterator: cursor.iterator,
 			recordGraph: recordFlow.graph,
-			...(nativeRecordGraphIsPrivate(
-				fn,
-				functions,
-				cursor.initializeIp,
-				[...shape.members, shape.entryIp],
-				recordFlow,
-			)
-				? { privateColumns: true as const }
-				: {}),
+			...(privacy === undefined ? {} : { privateColumns: true as const }),
+			...(privacy?.checkedProducer === undefined
+				? {}
+				: { columnsProducer: privacy.checkedProducer }),
 			id: header,
 			entryIp: shape.entryIp,
 			inputs: [...inputs].sort((a, b) => a - b),
@@ -3509,10 +3726,23 @@ function lowerArrayIterationRegion(
 			claimedIps: [...shape.members, shape.entryIp].sort((a, b) => a - b),
 			borrowedRegisters: borrowedRegisters(fn, [...shape.members, shape.entryIp], body),
 			fallback: "original-instructions" as const,
+			...(recordEntryLoads.size === 0
+				? {}
+				: {
+						invariantLoads: Object.freeze([...recordEntryLoads].sort((a, b) => a - b)),
+					}),
+			...numericLoopEntryFields(undefined, recordBuiltinCalls),
 		});
 	}
-	if (records === undefined) return undefined;
 	const bindings = entry?.bindings;
+	const builtinCalls = numericLoopBuiltinCalls(
+		fn,
+		shape.order,
+		bindings,
+		representations,
+		builtinCallCandidates,
+	);
+	if (records === undefined || builtinCalls === undefined) return undefined;
 	for (const ip of shape.order) {
 		if (ip === header) continue;
 		const op = fn.instructions[ip]!;
@@ -3592,8 +3822,40 @@ function lowerArrayIterationRegion(
 		claimedIps: Object.freeze(claimedIps),
 		borrowedRegisters: borrowedRegisters(fn, claimedIps, body),
 		fallback: "original-instructions",
-		...(bindings === undefined ? {} : numericLoopEntryFields(bindings)),
+		...numericLoopEntryFields(bindings, builtinCalls),
 	});
+}
+
+/**
+ * The entry loads a record iteration region performs: every static or global name load
+ * the bindings admit, unless the region stores a field of the same name, which could
+ * then be the very property an entry load read.
+ */
+function recordIterationEntryLoads(
+	fn: BytecodeFunction,
+	order: ReadonlyArray<number>,
+	bindings: Pick<NumericLoopBindings, "loads"> | undefined,
+): ReadonlySet<number> {
+	if (bindings === undefined || bindings.loads.size === 0) return new Set();
+	const stored = new Set(
+		order.flatMap((ip) => {
+			const op = fn.instructions[ip]!;
+			return op.opcode === "STORE_PROPERTY_STATIC" ? [op.stringIndex] : [];
+		}),
+	);
+	const loads = [...bindings.loads].filter((ip) => order.includes(ip));
+	return loads.some((ip) => {
+		const op = fn.instructions[ip]!;
+		return stored.has(
+			op.opcode === "LOAD_GLOBAL_PROPERTY"
+				? op.nameStringIndex
+				: op.opcode === "LOAD_PROPERTY_STATIC"
+					? op.stringIndex
+					: -1,
+		);
+	})
+		? new Set()
+		: new Set(loads);
 }
 
 function lowerNumericLoopRegion(
@@ -3609,6 +3871,8 @@ function lowerNumericLoopRegion(
 	foreignCalls: ReadonlyMap<number, FfiScalarEntry>,
 	functions: ReadonlyArray<BytecodeFunction>,
 	invariantLoadCandidates: ReadonlySet<number>,
+	// Guarded calls `fn` presents as known calls, by their callee registers.
+	builtinCallCandidates: ReadonlyMap<number, { readonly callee: number }>,
 ): NativeNumericLoopRegionPlan | undefined {
 	const first = fn.instructions[header];
 	const cursor = first?.opcode === "ITERATOR_STEP" ? cursorSteps.get(header) : undefined;
@@ -3622,6 +3886,7 @@ function lowerNumericLoopRegion(
 			cursor,
 			functions,
 			invariantLoadCandidates,
+			builtinCallCandidates,
 		);
 	// Fixed-storage headers are comparisons, a view's length load, a checked element read,
 	// or an entry load.
@@ -3632,6 +3897,7 @@ function lowerNumericLoopRegion(
 			first.opcode !== "LOAD_PROPERTY" &&
 			first.opcode !== "LOAD_PROPERTY_STATIC" &&
 			first.opcode !== "LOAD_GLOBAL" &&
+			first.opcode !== "LOAD_GLOBAL_PROPERTY" &&
 			first.opcode !== "LOAD_CAPTURED" &&
 			first.opcode !== "LOAD_THIS") ||
 		conflicts(header, false)
@@ -3660,6 +3926,14 @@ function lowerNumericLoopRegion(
 		shape.order.some((ip) => conflicts(ip, bindings.loads.has(ip)))
 	)
 		return undefined;
+	const builtinCalls = numericLoopBuiltinCalls(
+		fn,
+		shape.order,
+		bindings,
+		representations,
+		builtinCallCandidates,
+	);
+	if (builtinCalls === undefined) return undefined;
 	const storage = fixedNumericLoopStorage(
 		fn,
 		shape,
@@ -3788,7 +4062,7 @@ function lowerNumericLoopRegion(
 		...(bindings.slots.size === 0
 			? {}
 			: { globals: Object.freeze([...bindings.slots].sort((a, b) => a - b)) }),
-		...numericLoopEntryFields(bindings),
+		...numericLoopEntryFields(bindings, builtinCalls),
 	});
 }
 
@@ -4769,10 +5043,12 @@ export function analyzeNativeFastPaths(
 	const cursorSteps = new Map<number, { initializeIp: number; iterator: number }>();
 	// An Array view's length is an own data property, so any `.length` load can bound its loop.
 	const lengthLoads = new Set<number>();
-	// Element and length stores, the only ones a region makes, never change other keys.
+	// Element and length stores, the only ones a region makes, never change other keys,
+	// and a region stores no global name.
 	const invariantLoadCandidates = new Set<number>();
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (op.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") lengthLoads.add(ip);
+		else if (op.opcode === "LOAD_GLOBAL_PROPERTY") invariantLoadCandidates.add(ip);
 		else if (op.opcode === "LOAD_PROPERTY_STATIC") {
 			const units = stringConstants[op.stringIndex];
 			if (units !== undefined && String.fromCharCode(...units) === "length")
@@ -4989,10 +5265,16 @@ export function analyzeNativeFastPaths(
 			(ip) => native.facts?.[ip],
 			native.registerRepresentations,
 		);
+		const builtinCalls = numericLoopBuiltinCallCandidates(
+			fn,
+			(ip) => native.instructions[ip],
+		);
+		const builtinCallView = numericLoopBuiltinCallView(fn, builtinCalls);
+		const constructedKinds = constructedTypedArrayKinds(fn, stringConstants);
 		for (const header of [...body.jumpTargets].sort((a, b) => a - b)) {
 			if (numericLoopBlocked.has(header)) continue;
 			const plan = lowerNumericLoopRegion(
-				fn,
+				builtinCallView,
 				header,
 				native.registerRepresentations,
 				body,
@@ -5011,7 +5293,8 @@ export function analyzeNativeFastPaths(
 								kind === "call" &&
 								(codeUnitReads.has(candidate) ||
 									dataViewCalls.has(candidate) ||
-									foreignCalls.has(candidate))
+									foreignCalls.has(candidate) ||
+									builtinCalls.has(candidate))
 							) &&
 							kind !== "primitive-string-length" &&
 							// Layout proofs choose a field read's lowering; the entry guards its own.
@@ -5030,6 +5313,7 @@ export function analyzeNativeFastPaths(
 				foreignCalls,
 				functions,
 				invariantLoadCandidates,
+				builtinCalls,
 			);
 			if (plan === undefined) continue;
 			// Without a counter the trip count is unknown, and proven element accesses are
@@ -5052,7 +5336,7 @@ export function analyzeNativeFastPaths(
 				})
 			)
 				continue;
-			numericLoopRegions.push(plan);
+			numericLoopRegions.push(withExpectedViewKinds(plan, constructedKinds));
 			for (const claimedIp of plan.claimedIps) claim(claimedIp);
 		}
 	}

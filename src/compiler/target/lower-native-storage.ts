@@ -1947,6 +1947,7 @@ export function validateNativeStorage(
 						plan.initializeIp === expected.initializeIp &&
 						plan.iterator === expected.iterator &&
 						plan.privateColumns === expected.privateColumns &&
+						plan.columnsProducer === expected.columnsProducer &&
 						sameRecordGraph(plan.recordGraph, expected.recordGraph) &&
 						(plan.records ?? []).join() === (expected.records ?? []).join())) &&
 				(plan.kind !== "fixed-numeric" ||
@@ -1969,7 +1970,8 @@ export function validateNativeStorage(
 								view.text === expected.views[i]!.text &&
 								view.byteScale === expected.views[i]!.byteScale &&
 								view.lend === expected.views[i]!.lend &&
-								view.lentOnly === expected.views[i]!.lentOnly,
+								view.lentOnly === expected.views[i]!.lentOnly &&
+								view.expectedKind === expected.views[i]!.expectedKind,
 						) &&
 						(plan.foreignCalls ?? []).join() === (expected.foreignCalls ?? []).join() &&
 						(plan.dataViewCalls?.length ?? 0) === (expected.dataViewCalls?.length ?? 0) &&
@@ -1994,7 +1996,8 @@ export function validateNativeStorage(
 				sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters) &&
 				sameNumbers(plan.globals ?? [], expected.globals ?? []) &&
 				sameNumbers(plan.invariantLoads ?? [], expected.invariantLoads ?? []) &&
-				sameNumbers(plan.calleeGuards ?? [], expected.calleeGuards ?? [])
+				sameNumbers(plan.calleeGuards ?? [], expected.calleeGuards ?? []) &&
+				sameNumbers(plan.builtinCalls ?? [], expected.builtinCalls ?? [])
 			);
 		});
 

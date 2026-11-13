@@ -1273,6 +1273,12 @@ static bool mal_builtin_array_create_data_property(MalVm *vm, MalValue target, u
     return mal_builtin_array_create_data_property_wide(vm, target, (f64) index, value);
 }
 
+bool mal_builtin_array_from_is_realm_own(const MalVm *vm, MalValue callee, MalValue receiver) {
+    return mal_value_is_native_function_object(callee) &&
+        mal_value_to_native_function_object(callee)->callback == mal_builtin_array_from &&
+        receiver == vm->intrinsics[MAL_INTRINSIC_ARRAY_CONSTRUCTOR];
+}
+
 MalValue mal_builtin_array_from_iterable(MalVm *vm, MalValue source) {
     MalValue roots[4] = {
         source,

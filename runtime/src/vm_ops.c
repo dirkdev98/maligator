@@ -6378,9 +6378,15 @@ __attribute__((noinline)) MalValue mal_vm_loop_invariant_load_miss(
     MalKey key = mal_key_from_value(key_value);
     for (const MalObject *holder = object; holder != nullptr;
          holder = mal_object_prototype(holder)) {
-        // An overflow table could hold the key ahead of the shape's later holders.
-        if (holder->header.type != MAL_HEAP_OBJECT || mal_object_has_public_overflow(holder)) {
-            return MAL_VALUE_EMPTY;
+        if (holder->header.type != MAL_HEAP_OBJECT) return MAL_VALUE_EMPTY;
+        // A namespace such as Math keeps its methods in an overflow table, whose ordinary
+        // own lookup runs no code either; no cache row can prove the entry, so none fills.
+        if (mal_object_has_public_overflow(holder)) {
+            MalPropertyLookup own = mal_object_get_own(holder, key);
+            if (!own.present) continue;
+            if (own.desc.flags & MAL_PROPERTY_ACCESSOR) return MAL_VALUE_EMPTY;
+            MAL_PERF_COUNT(loop_invariant_load_misses);
+            return own.desc.value;
         }
         i32 found = mal_shape_find(holder->shape, key, MAL_SHAPE_FIND_GET_OWN);
         if (found < 0) continue;
@@ -8991,6 +8997,21 @@ void mal_op_declare_global_lexical(MalCallable *callable, const MalInstruction *
     mal_vm_op_declare_global_lexical(callable->vm, instruction->as.declare_global_lexical.name_string_index,
         instruction->as.declare_global_lexical.index, instruction->as.declare_global_lexical.immutable,
         instruction->as.declare_global_lexical.check_only);
+}
+
+MalValue mal_vm_loop_invariant_global(MalVm *vm, i32 name_string_index) {
+    MalValue value;
+    if (mal_vm_global_data_property_cached(vm, name_string_index, &value)) return value;
+    MalGlobalBinding *binding = mal_vm_global_binding(vm, name_string_index);
+    // A lexical binding in its dead zone holds the empty value.
+    if (binding != nullptr && binding->global_index >= 0) return vm->globals[binding->global_index];
+    MalObject *global_object;
+    MalKey key;
+    MalPropertyLookup own = mal_vm_global_dictionary_lookup(
+        vm, name_string_index, &global_object, &key);
+    return own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)
+        ? own.desc.value
+        : MAL_VALUE_EMPTY;
 }
 
 MalValue mal_vm_op_load_global_property_slow(MalVm *vm, i32 name_string_index) {

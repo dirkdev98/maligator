@@ -41,6 +41,7 @@ tests/native/lazy-capture-environment.test.ts
 tests/native/loop-invariant-fields.test.ts
 tests/native/map-get-set-cache.test.ts
 tests/native/map-string-representative.test.ts
+tests/native/mutable-primordial-regions.test.ts
 tests/native/native-constructor-prototypes.test.ts
 tests/native/native-for-in-own-keys.test.ts
 tests/native/native-inherited-setters.test.ts

@@ -92,6 +92,8 @@ export function analyzeRecordIteration(
 	element: number,
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	builtin: NativeRecordIterationBuiltinQuery,
+	// Named loads the region's entry performs, whose values only builtin calls ignore.
+	entryLoads: ReadonlySet<number> = new Set(),
 ): NativeRecordIterationFlow | undefined {
 	if (order.length > 128) return undefined;
 	const writers = new Map<number, Array<number>>();
@@ -112,7 +114,10 @@ export function analyzeRecordIteration(
 	const needed = new Set<number>([element]);
 	for (const ip of order) {
 		const op = fn.instructions[ip]!;
-		if (op.opcode === "LOAD_PROPERTY_STATIC" || op.opcode === "STORE_PROPERTY_STATIC")
+		if (
+			(op.opcode === "LOAD_PROPERTY_STATIC" || op.opcode === "STORE_PROPERTY_STATIC") &&
+			!entryLoads.has(ip)
+		)
 			needed.add(op.object);
 	}
 	const references = new Map<number, number>();
@@ -231,7 +236,10 @@ export function analyzeRecordIteration(
 	};
 	for (const ip of order) {
 		const op = fn.instructions[ip]!;
-		if (op.opcode !== "LOAD_PROPERTY_STATIC" && op.opcode !== "STORE_PROPERTY_STATIC")
+		if (
+			(op.opcode !== "LOAD_PROPERTY_STATIC" && op.opcode !== "STORE_PROPERTY_STATIC") ||
+			entryLoads.has(ip)
+		)
 			continue;
 		const object = references.get(op.object);
 		if (object === undefined) return undefined;
@@ -323,7 +331,13 @@ export function analyzeRecordIteration(
 		};
 		let ok = true;
 		const numeric = builtin(op);
-		if (numeric !== undefined) {
+		if (entryLoads.has(ip)) {
+			// Like an intrinsic, the value is only ever a builtin call's ignored callee or
+			// receiver, or the receiver of another entry load.
+			const loaded = (op as { dst: number }).dst;
+			if (kinds.has(loaded)) return undefined;
+			intrinsic.add(loaded);
+		} else if (numeric !== undefined) {
 			ok = numeric.arguments.every(
 				(argument) =>
 					argument.kind === "number" || read(argument.register, NUMBER) !== undefined,

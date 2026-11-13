@@ -1308,6 +1308,15 @@ globalThis therefore affects dynamic user code without redirecting compiler inte
 Entry-pair regions admit any iterator source through their exact runtime cursor
 guard; they do not require an immutable public constructor binding.
 
+Mutable primordials keep numeric loop regions as speculations checked at entry.
+Nothing inside a region runs JavaScript or stores a named property, so the entry
+loads each global name and method the loop reads once, through lookups that run no
+code, and compares every guarded Math callee with the builtin; any failed check runs
+the original loop. A global typed array constructor name only predicts a view's
+kind, which the specialized body's entry compares with the actual one. Record
+columns over an `Array.from` result admit only after the function compared that
+call's callee and receiver with the realm's own.
+
 Canonical function comparisons use the inventory's object identity, independently
 of native callback sharing. This folds repeated references across effects while
 keeping String valueOf/toString and Symbol valueOf/toPrimitive distinct. True aliases

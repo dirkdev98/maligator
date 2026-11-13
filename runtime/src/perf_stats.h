@@ -237,6 +237,7 @@ typedef struct MalPerfStats {
     u64 exact_typed_array_loads;
     u64 fixed_typed_array_region_admissions;
     u64 fixed_typed_array_region_f64_admissions;
+    u64 fixed_typed_array_region_expected_admissions;
     u64 fixed_typed_array_region_views[9];
     u64 fixed_typed_array_affine_regions;
     u64 fixed_typed_array_stride_regions;
@@ -246,6 +247,7 @@ typedef struct MalPerfStats {
     u64 dense_array_number_region_stores;
     u64 loop_invariant_region_admissions;
     u64 loop_invariant_load_misses;
+    u64 loop_builtin_call_region_admissions;
     u64 record_iteration_region_admissions;
     u64 record_columns_admissions;
     u64 record_columns_flushes;

@@ -31,6 +31,13 @@ bool mal_builtin_array_this_length(MalVm *vm, MalValue this_value, u32 *length_o
 /** Array literal spread semantics with a packed ordinary-Array fast path. */
 MalValue mal_builtin_array_from_iterable(MalVm *vm, MalValue source);
 
+/**
+ * Whether `callee.call(receiver, ...)` is the realm's own `Array.from` on its own
+ * Array constructor, so that the result is a fresh Array holding only what the
+ * mapper returned.
+ */
+bool mal_builtin_array_from_is_realm_own(const MalVm *vm, MalValue callee, MalValue receiver);
+
 /** Side-effect-free exact Array.prototype.map + default species guard. */
 bool mal_builtin_array_exact_map_guard(
     MalVm *vm, MalValue callee, MalValue receiver);

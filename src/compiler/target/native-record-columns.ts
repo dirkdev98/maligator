@@ -126,6 +126,16 @@ export function nativeMapperReturnsFreshGraph(fn: BytecodeFunction): boolean {
 	return returned;
 }
 
+/**
+ * How a record loop's columns know the traversed graph private: the locked world proves
+ * `Array.from` exact, while mutable primordials leave the `Array.from` call at
+ * `checkedProducer`, whose callee and receiver the function compares with the
+ * realm's own before calling it.
+ */
+export interface NativeRecordColumnsPrivacy {
+	readonly checkedProducer?: number;
+}
+
 /** Column writes stay private until an explicit fallback writes them back to the heap. */
 export function nativeRecordGraphIsPrivate(
 	fn: BytecodeFunction,
@@ -133,46 +143,46 @@ export function nativeRecordGraphIsPrivate(
 	initializeIp: number,
 	claimedIps: ReadonlyArray<number>,
 	flow: NativeRecordIterationFlow,
-): boolean {
+): NativeRecordColumnsPrivacy | undefined {
 	const init = fn.instructions[initializeIp];
-	if (init?.opcode !== "GET_ITERATOR" || fn.instructions.length > 512) return false;
-	const writers = new Map<number, Array<number>>();
-	for (const [ip, op] of fn.instructions.entries())
-		for (const r of vmInstructionWriteRegisters(op)) {
-			const list = writers.get(r) ?? [];
-			list.push(ip);
-			writers.set(r, list);
-		}
-	const definition = (r: number) =>
-		writers.get(r)?.length === 1 ? writers.get(r)![0] : undefined;
-	const producerIp = definition(init.source);
-	if (producerIp === undefined) return false;
-	const producer = fn.instructions[producerIp]!;
-	if (
-		producer.opcode !== "CALL_KNOWN" ||
-		producer.operation !== "Array.from" ||
-		producer.construct ||
-		producer.argumentMode !== undefined ||
-		producer.argumentCount !== 2
-	)
-		return false;
-	const receiverIp = definition(producer.thisValue);
-	const callbackIp = definition(producer.arguments[1]!);
-	const receiver = receiverIp === undefined ? undefined : fn.instructions[receiverIp];
-	const callback = callbackIp === undefined ? undefined : fn.instructions[callbackIp];
-	if (
-		receiver?.opcode !== "LOAD_INTRINSIC" ||
-		receiver.intrinsic !== "Array" ||
-		callback?.opcode !== "CREATE_FUNCTION"
-	)
-		return false;
-	const mapper = functions[callback.functionIndex];
-	if (mapper === undefined || !nativeMapperReturnsFreshGraph(mapper)) return false;
+	if (init?.opcode !== "GET_ITERATOR" || fn.instructions.length > 512) return undefined;
 	const handlers = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
 	const next = (ip: number) => [
 		...successors(fn.instructions[ip]!, ip),
 		...(handlers[ip] === undefined ? [] : [handlers[ip]]),
 	];
+	// An exceptional edge leaves its instruction before that instruction's write.
+	const predecessors = new Map<number, Array<{ ip: number; thrown: boolean }>>();
+	for (const ip of fn.instructions.keys())
+		for (const [index, successor] of next(ip).entries()) {
+			const list = predecessors.get(successor) ?? [];
+			list.push({ ip, thrown: index >= successors(fn.instructions[ip]!, ip).length });
+			predecessors.set(successor, list);
+		}
+	// The one write of `r` that every path into `ip` last performs.
+	const definition = (r: number, ip: number): number | undefined => {
+		const found = new Set<number>();
+		const visited = new Set<string>();
+		const pending = [...(predecessors.get(ip) ?? [])];
+		if (ip === 0 || pending.length === 0) return undefined;
+		while (pending.length > 0) {
+			const at = pending.pop()!;
+			const key = `${at.ip}:${at.thrown}`;
+			if (visited.has(key)) continue;
+			visited.add(key);
+			if (
+				!at.thrown &&
+				vmInstructionWriteRegisters(fn.instructions[at.ip]!).includes(r)
+			) {
+				found.add(at.ip);
+				continue;
+			}
+			const incoming = predecessors.get(at.ip) ?? [];
+			if (at.ip === 0 || incoming.length === 0) return undefined;
+			pending.push(...incoming);
+		}
+		return found.size === 1 ? [...found][0] : undefined;
+	};
 	const reaches = (starts: ReadonlyArray<number>, target: number, blocked = -1) => {
 		const visited = new Set<number>();
 		const pending = [...starts];
@@ -186,6 +196,43 @@ export function nativeRecordGraphIsPrivate(
 		}
 		return false;
 	};
+	const producerIp = definition(init.source, initializeIp);
+	if (producerIp === undefined) return undefined;
+	const producer = fn.instructions[producerIp]!;
+	let receiverIp: number | undefined;
+	let checkedProducer: number | undefined;
+	if (
+		producer.opcode === "CALL_KNOWN" &&
+		producer.operation === "Array.from" &&
+		!producer.construct &&
+		producer.argumentMode === undefined &&
+		producer.argumentCount === 2
+	) {
+		receiverIp = definition(producer.thisValue, producerIp);
+		const receiver = receiverIp === undefined ? undefined : fn.instructions[receiverIp];
+		if (receiver?.opcode !== "LOAD_INTRINSIC" || receiver.intrinsic !== "Array")
+			return undefined;
+	} else if (producer.opcode === "CALL" && producer.argumentCount === 2) {
+		// Only the runtime comparison proves this call the realm's `Array.from`; the
+		// loads just keep both values fixed between the comparison and the call.
+		const calleeIp = definition(producer.callee, producerIp);
+		const callee = calleeIp === undefined ? undefined : fn.instructions[calleeIp];
+		receiverIp = definition(producer.thisValue, producerIp);
+		const receiver = receiverIp === undefined ? undefined : fn.instructions[receiverIp];
+		if (
+			callee?.opcode !== "LOAD_PROPERTY_STATIC" ||
+			callee.object !== producer.thisValue ||
+			definition(callee.object, calleeIp!) !== receiverIp ||
+			receiver?.opcode !== "LOAD_GLOBAL_PROPERTY"
+		)
+			return undefined;
+		checkedProducer = producerIp;
+	} else return undefined;
+	const callbackIp = definition(producer.arguments[1]!, producerIp);
+	const callback = callbackIp === undefined ? undefined : fn.instructions[callbackIp];
+	if (callback?.opcode !== "CREATE_FUNCTION") return undefined;
+	const mapper = functions[callback.functionIndex];
+	if (mapper === undefined || !nativeMapperReturnsFreshGraph(mapper)) return undefined;
 	// The allocation dominates every traversal and cannot repeat, including through catches.
 	if (
 		reaches([0], initializeIp, producerIp) ||
@@ -193,13 +240,25 @@ export function nativeRecordGraphIsPrivate(
 		reaches([0], producerIp, receiverIp) ||
 		reaches([0], producerIp, callbackIp)
 	)
-		return false;
-	const members = new Set(claimedIps);
-	for (const [ip, op] of fn.instructions.entries()) {
-		const reads = vmInstructionReadRegisters(op);
-		if (reads.includes(init.source) && ip !== initializeIp) return false;
-		for (const r of [...reads, ...vmInstructionWriteRegisters(op)])
-			if (flow.references.has(r) && !members.has(ip)) return false;
+		return undefined;
+	// Nothing but the traversal reads the allocation through the register it defines.
+	const visited = new Set<number>();
+	const pending = [...next(producerIp)];
+	while (pending.length > 0) {
+		const ip = pending.pop()!;
+		const op = fn.instructions[ip];
+		if (visited.has(ip) || op === undefined) continue;
+		visited.add(ip);
+		if (ip !== initializeIp && vmInstructionReadRegisters(op).includes(init.source))
+			return undefined;
+		if (!vmInstructionWriteRegisters(op).includes(init.source)) pending.push(...next(ip));
 	}
-	return true;
+	const members = new Set(claimedIps);
+	for (const [ip, op] of fn.instructions.entries())
+		for (const r of [
+			...vmInstructionReadRegisters(op),
+			...vmInstructionWriteRegisters(op),
+		])
+			if (flow.references.has(r) && !members.has(ip)) return undefined;
+	return checkedProducer === undefined ? {} : { checkedProducer };
 }

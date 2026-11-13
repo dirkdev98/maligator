@@ -38,19 +38,19 @@ describe("fixed storage across certified numeric builtin bodies", () => {
 					),
 				)
 				.sort();
+			// Mutable primordials check each loaded Math callee at the region entry, which
+			// a call passing more arguments than the builtin reads cannot be.
 			expect(selected).toEqual(
-				primordials === "locked"
-					? [
-							"absolute",
-							"clamp",
-							"descending",
-							"maxPair",
-							"minPair",
-							"roots",
-							"rounding",
-							"transcendental",
-						]
-					: [],
+				[
+					"absolute",
+					"clamp",
+					"descending",
+					"maxPair",
+					"minPair",
+					"roots",
+					"rounding",
+					"transcendental",
+				].filter((name) => primordials === "locked" || name !== "absolute"),
 			);
 			for (const mode of [
 				"rounding",
@@ -93,9 +93,10 @@ describe("fixed storage across certified numeric builtin bodies", () => {
 								/\[perf-typed-array-region-stats\] admissions=(\d+)/,
 							)?.[1] ?? 0,
 						);
-						if (primordials === "locked" && mode !== "fallback" && mode !== "effects")
+						const guardedAbsolute = primordials === "mutable" && mode === "absolute";
+						if (mode !== "fallback" && mode !== "effects" && !guardedAbsolute)
 							expect(admissions, context).toBeGreaterThan(0);
-						else if (primordials === "mutable" || mode === "effects")
+						else if (mode === "effects" || guardedAbsolute)
 							expect(admissions, context).toBe(0);
 					}
 				}
