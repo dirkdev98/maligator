@@ -569,6 +569,88 @@ check(
 	"wide keys keep the general path",
 );
 
+for (const gap of [undefined, 2, "\t", "Ā", "123456789😀", undefined]) {
+	for (const value of [
+		flatRows,
+		{ rows: flatRows, empty: [{}, []] },
+		quotedKeys,
+		unicodeKeys,
+	]) {
+		check(
+			JSON.stringify(value, null, gap) ===
+				JSON.stringify(value, (key, item) => item, gap),
+			"cached records preserve indentation across gaps and depths",
+		);
+	}
+}
+
+let prettyCallbackCalls = 0;
+const prettyLate = {
+	before: 1,
+	nested: {
+		kept: 2,
+		drop: {
+			toJSON() {
+				prettyCallbackCalls++;
+				prettyLate.nested.last = 5;
+				delete prettyLate.after;
+				Object.setPrototypeOf(prettyLate, { after: 7 });
+				collect();
+				return undefined;
+			},
+		},
+		last: 3,
+	},
+	after: 4,
+};
+check(
+	JSON.stringify(prettyLate, null, 2) ===
+		'{\n  "before": 1,\n  "nested": {\n    "kept": 2,\n    "last": 5\n  },\n  "after": 7\n}' &&
+		prettyCallbackCalls === 1,
+	"pretty late fallback omits transformed members and resumes ancestor indentation",
+);
+
+let prettyArrayCalls = 0;
+let prettyInheritedGets = 0;
+const prettyArray = [
+	1,
+	{
+		toJSON() {
+			prettyArrayCalls++;
+			prettyArray.length = 2;
+			const prototype = Object.create(Array.prototype);
+			Object.defineProperty(prototype, "3", {
+				get() {
+					prettyInheritedGets++;
+					collect();
+					return 8;
+				},
+			});
+			Object.setPrototypeOf(prettyArray, prototype);
+			return undefined;
+		},
+	},
+	3,
+	4,
+];
+check(
+	JSON.stringify(prettyArray, null, 2) === "[\n  1,\n  null,\n  null,\n  8\n]" &&
+		prettyArrayCalls === 1 &&
+		prettyInheritedGets === 1,
+	"pretty array fallback retains its length and reads inherited elements after mutation",
+);
+
+const spaceMutation = { value: 1 };
+const boxedSpace = new Number(0);
+boxedSpace.valueOf = () => {
+	spaceMutation.value = 2;
+	return 2;
+};
+check(
+	JSON.stringify(spaceMutation, null, boxedSpace) === '{\n  "value": 2\n}',
+	"space coercion mutates the input before a plain layout is selected",
+);
+
 // Shape plans outlive a call; a stringify nested in toJSON keeps its own.
 let acrossCalls = true;
 for (let i = 0; i < 6; i++) {

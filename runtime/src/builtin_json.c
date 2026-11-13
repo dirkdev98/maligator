@@ -1403,6 +1403,61 @@ static u32 mal_json_i32_width(i32 value) {
     return width;
 }
 
+static u8 *mal_json_write_latin1_indent(
+    u8 *out, const u8 *gap, usize gap_length, usize depth
+) {
+    *out++ = '\n';
+    for (usize i = 0; i < depth; i++) {
+        memcpy(out, gap, gap_length);
+        out += gap_length;
+    }
+    return out;
+}
+
+// The caller reserves all bytes; inlining specializes compact and indented writes.
+static inline __attribute__((always_inline)) void mal_json_write_flat_record(
+    u8 *out, const MalJsonShapePlan *plan, const MalTextBuffer *keys,
+    const MalJsonFlatMember *members, const u8 *gap, usize gap_length, usize depth
+) {
+    *out++ = '{';
+    for (usize i = 0; i < plan->count; i++) {
+        if (i != 0) *out++ = ',';
+        if (gap_length != 0) {
+            out = mal_json_write_latin1_indent(out, gap, gap_length, depth + 1);
+        }
+        const MalJsonKeyPlan *key = &plan->keys[i];
+        mal_text_buffer_copy_bytes(out, (const u8 *) keys->data + key->offset, key->length);
+        out += key->length;
+        if (gap_length != 0) *out++ = ' ';
+        const MalJsonFlatMember *member = &members[i];
+        if (mal_value_is_int32(member->value)) {
+            i32 number = mal_value_to_i32(member->value);
+            u32 magnitude = number < 0 ? (u32) -(i64) number : (u32) number;
+            u8 *digit = out + member->width;
+            do {
+                *--digit = (u8) ('0' + magnitude % 10);
+                magnitude /= 10;
+            } while (magnitude != 0);
+            if (number < 0) *--digit = '-';
+        } else if (member->units != nullptr) {
+            out[0] = '"';
+            mal_text_buffer_copy_bytes(out + 1, member->units, member->width - 2);
+            out[member->width - 1] = '"';
+        } else if (mal_value_is_null(member->value)) {
+            memcpy(out, "null", 4);
+        } else if (mal_value_to_boolean(member->value)) {
+            memcpy(out, "true", 4);
+        } else {
+            memcpy(out, "false", 5);
+        }
+        out += member->width;
+    }
+    if (gap_length != 0) {
+        out = mal_json_write_latin1_indent(out, gap, gap_length, depth);
+    }
+    *out = '}';
+}
+
 /**
  * Writes a cached-plan record whose members are int32s, booleans, null, or
  * Latin-1 strings without escapes in one reservation, as the member loop would.
@@ -1410,12 +1465,18 @@ static u32 mal_json_i32_width(i32 value) {
  * object values, so the record cannot be its own ancestor.
  */
 static bool mal_json_plain_flat_record(
-    MalJsonBuilder *builder, const MalObject *object, const MalJsonShapePlan *plan
+    MalJsonState *state, MalJsonBuilder *builder, const MalObject *object,
+    const MalJsonShapePlan *plan, usize depth
 ) {
     MalTextBuffer *buffer = &builder->buffer;
     const MalTextBuffer *keys = &plan->escaped_keys.buffer;
     if (buffer->utf16 || keys->utf16 || plan->count == 0 ||
         plan->count > MAL_JSON_FLAT_RECORD_MEMBERS) return false;
+    u8 gap[10];
+    for (usize i = 0; i < state->gap_length; i++) {
+        if (state->gap[i] > UINT8_MAX) return false;
+        gap[i] = (u8) state->gap[i];
+    }
     MalJsonFlatMember members[MAL_JSON_FLAT_RECORD_MEMBERS];
     usize needed = 1 + plan->count;
     for (usize i = 0; i < plan->count; i++) {
@@ -1448,39 +1509,26 @@ static bool mal_json_plain_flat_record(
         }
         needed += key->length + member->width;
     }
+    if (state->gap_length != 0) {
+        usize member_depth, member_indent, closing_indent, extra;
+        if (!mal_checked_size_add(depth, 1, SIZE_MAX, &member_depth) ||
+            !mal_checked_size_multiply(member_depth, state->gap_length,
+                MAL_STRING_MAX_CODE_UNITS, &member_indent) ||
+            !mal_checked_size_multiply(depth, state->gap_length,
+                MAL_STRING_MAX_CODE_UNITS, &closing_indent) ||
+            !mal_checked_size_add(member_indent, 2, MAL_STRING_MAX_CODE_UNITS, &extra) ||
+            !mal_checked_size_multiply(plan->count, extra, MAL_STRING_MAX_CODE_UNITS, &extra) ||
+            !mal_checked_size_add(extra, closing_indent + 1, MAL_STRING_MAX_CODE_UNITS, &extra) ||
+            !mal_checked_size_add(needed, extra, MAL_STRING_MAX_CODE_UNITS, &needed)) return false;
+    }
     if (!mal_text_buffer_fits(buffer, needed) &&
         mal_text_buffer_reserve(buffer, needed) != MAL_TEXT_BUFFER_OK) return false;
     u8 *out = (u8 *) buffer->data + buffer->length;
-    *out++ = '{';
-    for (usize i = 0; i < plan->count; i++) {
-        if (i != 0) *out++ = ',';
-        const MalJsonKeyPlan *key = &plan->keys[i];
-        mal_text_buffer_copy_bytes(out, (const u8 *) keys->data + key->offset, key->length);
-        out += key->length;
-        const MalJsonFlatMember *member = &members[i];
-        if (mal_value_is_int32(member->value)) {
-            i32 number = mal_value_to_i32(member->value);
-            u32 magnitude = number < 0 ? (u32) -(i64) number : (u32) number;
-            u8 *digit = out + member->width;
-            do {
-                *--digit = (u8) ('0' + magnitude % 10);
-                magnitude /= 10;
-            } while (magnitude != 0);
-            if (number < 0) *--digit = '-';
-        } else if (member->units != nullptr) {
-            out[0] = '"';
-            mal_text_buffer_copy_bytes(out + 1, member->units, member->width - 2);
-            out[member->width - 1] = '"';
-        } else if (mal_value_is_null(member->value)) {
-            memcpy(out, "null", 4);
-        } else if (mal_value_to_boolean(member->value)) {
-            memcpy(out, "true", 4);
-        } else {
-            memcpy(out, "false", 5);
-        }
-        out += member->width;
+    if (state->gap_length == 0) {
+        mal_json_write_flat_record(out, plan, keys, members, nullptr, 0, 0);
+    } else {
+        mal_json_write_flat_record(out, plan, keys, members, gap, state->gap_length, depth);
     }
-    *out = '}';
     buffer->length += needed;
     MAL_PERF_COUNT(json_flat_records);
     return true;
@@ -1655,6 +1703,7 @@ static MalJsonResult mal_json_resume_generic(
             MalJsonResult member;
             if (frame->array) {
                 if (frame->any && !mal_json_builder_push(builder, ',')) goto done;
+                if (!mal_json_push_indent(generic, builder, plain->count)) goto done;
                 member = mal_json_serialize_property(generic, builder,
                     mal_key_index((u32) position), mal_value_new_undefined(),
                     frame->value, plain->count);
@@ -1673,7 +1722,8 @@ static MalJsonResult mal_json_resume_generic(
             if (member == MAL_JSON_THROW) goto done;
             frame->any = true;
         }
-        if (!mal_json_builder_push(builder, frame->array ? ']' : '}')) goto done;
+        if ((frame->any && !mal_json_push_indent(generic, builder, plain->count - 1)) ||
+            !mal_json_builder_push(builder, frame->array ? ']' : '}')) goto done;
         mal_json_pointer_remove(&generic->active, mal_value_to_object(frame->value));
         plain->count--;
     }
@@ -1713,7 +1763,7 @@ static bool mal_json_try_serialize_plain(
     MalJsonResult *result
 ) {
     if (!mal_value_is_object(root) || mal_value_is_callable(generic->replacer_fn) ||
-        generic->has_property_list || generic->gap_length != 0) return false;
+        generic->has_property_list) return false;
     // Field by field: a designated initializer would zero every inline table.
     MalJsonPlainState state;
     state.vm = generic->vm;
@@ -1765,7 +1815,7 @@ static bool mal_json_try_serialize_plain(
             }
             // A flat record is written whole, so the parent continues with its next member.
             if (frame.array || !frame.cached_plan ||
-                !mal_json_plain_flat_record(builder, object, frame.plan)) {
+                !mal_json_plain_flat_record(generic, builder, object, frame.plan, state.count)) {
                 mal_json_plain_push_frame(&state, object, &frame);
                 if (!mal_json_builder_push(builder, frame.array ? '[' : '{')) goto failed;
             }
@@ -1791,7 +1841,8 @@ static bool mal_json_try_serialize_plain(
         while (state.count != 0) {
             MalJsonFrame *frame = &state.frames[state.count - 1];
             if (frame->position == frame->count) {
-                if (!mal_json_builder_push(builder, frame->array ? ']' : '}')) goto failed;
+                if ((frame->any && !mal_json_push_indent(generic, builder, state.count - 1)) ||
+                    !mal_json_builder_push(builder, frame->array ? ']' : '}')) goto failed;
                 if (state.count > MAL_JSON_SCANNED_ANCESTORS) {
                     mal_json_pointer_remove(&state.active, mal_value_to_object(frame->value));
                 }
@@ -1830,8 +1881,11 @@ static bool mal_json_try_serialize_plain(
                 goto unsupported_child;
             }
             if ((frame->any && !mal_json_builder_push(builder, ',')) ||
+                !mal_json_push_indent(generic, builder, state.count) ||
                 (key != nullptr && !mal_json_plain_key(
-                    &state, builder, frame->cached_plan ? frame->plan : nullptr, key))) goto failed;
+                    &state, builder, frame->cached_plan ? frame->plan : nullptr, key)) ||
+                (key != nullptr && generic->gap_length != 0 &&
+                    !mal_json_builder_push(builder, ' '))) goto failed;
             frame->any = true;
             next = true;
             break;

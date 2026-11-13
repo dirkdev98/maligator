@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "array_object.h"
@@ -91,13 +92,51 @@ static bool retains_prefix_and_allocation(MalVm *vm) {
     return true;
 }
 
+static bool pretty_records_use_cached_layout(MalVm *vm) {
+    MalValue roots[4] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED,
+        MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    roots[0] = mal_value_from_array_object(mal_array_object_new(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])));
+    for (u32 i = 0; i < 2; i++) {
+        roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]), "value",
+            mal_value_from_i32((i32) i + 7),
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+        CHECK(mal_array_object_store(mal_value_to_array_object(roots[0]), mal_key_index(i), roots[1]));
+    }
+    CHECK(mal_vm_get_property(vm, vm->intrinsics[MAL_INTRINSIC_JSON],
+        mal_intrinsic_string_key(vm, "stringify"), &roots[2]));
+    MalValue args[] = {roots[0], MAL_VALUE_UNDEFINED, mal_value_from_i32(2)};
+    const char expected[] = "[\n  {\n    \"value\": 7\n  },\n  {\n    \"value\": 8\n  }\n]";
+    for (usize round = 0; round < 3; round++) {
+        mal_perf_stats_reset();
+        MalCompletion result = mal_vm_call_value(
+            vm, roots[2], vm->intrinsics[MAL_INTRINSIC_JSON], args, countof(args));
+        CHECK(result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value));
+        roots[3] = result.value;
+        MalString *output = mal_value_to_string(roots[3]);
+        CHECK(output->length == sizeof(expected) - 1);
+        for (usize i = 0; i < sizeof(expected) - 1; i++) {
+            CHECK(mal_string_code_unit_at(output, i) == (c16) expected[i]);
+        }
+#if MAL_PERF_STATS
+        if (round == 2) CHECK(mal_perf_stats.json_flat_records > 0);
+#endif
+    }
+    mal_gc_unroot(&span);
+    return true;
+}
+
 int main(void) {
     mal_perf_stats_init();
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
-    bool passed = retains_prefix_and_allocation(&vm);
+    bool pretty = getenv("MAL_TEST_JSON_PRETTY") != nullptr;
+    bool passed = pretty ? pretty_records_use_cached_layout(&vm) : retains_prefix_and_allocation(&vm);
     mal_vm_free(&vm);
     if (!passed) return 1;
-    puts("json-late-fallback PASS");
+    puts(pretty ? "json-pretty-records PASS" : "json-late-fallback PASS");
     return 0;
 }
