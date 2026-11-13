@@ -42,8 +42,26 @@ function combinedReport(): Record<string, unknown> {
 	};
 }
 
-function importReport(report: unknown) {
-	return test262BaselineFromReport(report, corpus, previous, "head-baseline-digest");
+function importReport(report: unknown, accepted: ReadonlyArray<string> = []) {
+	return test262BaselineFromReport(
+		report,
+		corpus,
+		previous,
+		"head-baseline-digest",
+		new Set(accepted),
+	);
+}
+
+function regressedReport(): Record<string, unknown> {
+	const results = { ...previous.results, "test/pass.js": "FAILED" };
+	const summary = Object.values(results).reduce<Record<string, number>>(
+		(counts, value) => {
+			counts[value] = (counts[value] ?? 0) + 1;
+			return counts;
+		},
+		{},
+	);
+	return { ...combinedReport(), results, summary };
 }
 
 describe("Test262 baseline report import", () => {
@@ -142,6 +160,18 @@ describe("Test262 baseline report import", () => {
 			);
 		},
 	);
+
+	it("imports an explicitly accepted regression as a failure", () => {
+		expect(
+			importReport(regressedReport(), ["test/pass.js"]).results["test/pass.js"],
+		).toBe("FAILED");
+	});
+
+	it("rejects an accepted regression the report does not contain", () => {
+		expect(() => importReport(combinedReport(), ["test/pass.js"])).toThrow(
+			"accepted regression(s) not regressed in this report: test/pass.js",
+		);
+	});
 
 	it.each([
 		{ summary: { PASSED: 3 } },

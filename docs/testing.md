@@ -521,7 +521,10 @@ npm run test262:update-baseline -- --from-report .cache/results/report-compiled-
 
 This prepares the pinned corpus index without compiling or executing tests. Import
 requires complete compiled/normal results for every pinned test, a matching HEAD
-baseline digest, consistent totals and skip reasons, and no regressions. The combined
+baseline digest, consistent totals and skip reasons, and no regressions. An
+intentional change that drops a passing test names each one with a repeated
+`--accept-regression <test>`; an unnamed regression, or a named test that did not
+regress in the report, still rejects the import. The combined
 report does not record the compiler revision, so take the source identity from the
 run that produced it.
 

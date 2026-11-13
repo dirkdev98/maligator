@@ -50,6 +50,7 @@ interface Test262Arguments {
 	check: boolean;
 	updateBaseline: boolean;
 	fromReport?: string;
+	acceptRegressions: Array<string>;
 	baseline?: string;
 	excludeManifests: Array<string>;
 	filter?: string;
@@ -76,6 +77,7 @@ Options:
   --baseline <file>            compare against an explicit baseline instead of HEAD
   --update-baseline            replace scripts/test262.json after a full canonical run
   --from-report <file>         import a complete report with --update-baseline
+  --accept-regression <test>   accept one intentional regression in that import
   --policy bail|complete       stop on a regression or complete the selection
   --random                     run a non-baseline random sample
   --shard INDEX/COUNT          run every COUNT-th selected test starting at INDEX
@@ -86,6 +88,7 @@ function parseArguments(): Test262Arguments {
 		canonical: false,
 		check: false,
 		updateBaseline: false,
+		acceptRegressions: [],
 		excludeManifests: [],
 		manifests: [],
 		random: false,
@@ -97,7 +100,10 @@ function parseArguments(): Test262Arguments {
 			console.log(usage);
 			process.exit(0);
 		}
-		const repeatable = option === "--manifest" || option === "--exclude-manifest";
+		const repeatable =
+			option === "--manifest" ||
+			option === "--exclude-manifest" ||
+			option === "--accept-regression";
 		if (!repeatable && seen.has(option)) {
 			throw new Error(`${option} may only be specified once`);
 		}
@@ -122,6 +128,7 @@ function parseArguments(): Test262Arguments {
 			else if (option === "--policy") result.policy = value;
 			else if (option === "--baseline") result.baseline = nodePath.resolve(value);
 			else if (option === "--from-report") result.fromReport = nodePath.resolve(value);
+			else if (option === "--accept-regression") result.acceptRegressions.push(value);
 			else throw new Error(`unknown option: ${option}\n${usage}`);
 		}
 	}
@@ -137,6 +144,9 @@ if (arguments_.check && arguments_.updateBaseline) {
 }
 if (arguments_.fromReport !== undefined && !arguments_.updateBaseline) {
 	throw new Error("--from-report requires --update-baseline");
+}
+if (arguments_.acceptRegressions.length > 0 && arguments_.fromReport === undefined) {
+	throw new Error("--accept-regression requires --from-report");
 }
 if (
 	arguments_.updateBaseline &&
@@ -289,6 +299,7 @@ if (arguments_.fromReport !== undefined) {
 		},
 		previousOutput,
 		baselineIdentity.digest,
+		new Set(arguments_.acceptRegressions),
 	);
 	writeFileSync(TEST262_METADATA.outputFile, JSON.stringify(output, null, 2));
 	test262Log(`Imported complete report into ${TEST262_METADATA.outputFile}.`);

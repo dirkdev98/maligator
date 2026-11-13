@@ -7,11 +7,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Build the next baseline from a complete CI report. `acceptedRegressions` names the
+ * PASSED -> FAILED transitions an intentional change accepts; every other regression,
+ * and every accepted path that is not a regression in this report, rejects the import.
+ */
 export function test262BaselineFromReport(
 	report: unknown,
 	corpus: { revision: string; tree: string; paths: ReadonlySet<string> },
 	previous: Test262Output,
 	baselineDigest: string,
+	acceptedRegressions: ReadonlySet<string> = new Set(),
 ): Test262Output {
 	assert(
 		isRecord(report) &&
@@ -56,9 +62,15 @@ export function test262BaselineFromReport(
 		new Map(Object.entries(results)),
 		previous.results,
 	);
+	const unaccepted = regressions.filter((path) => !acceptedRegressions.has(path));
 	assert(
-		regressions.length === 0,
-		`baseline import has ${regressions.length} unresolved regression(s): ${regressions.slice(0, 10).join(", ")}`,
+		unaccepted.length === 0,
+		`baseline import has ${unaccepted.length} unresolved regression(s): ${unaccepted.slice(0, 10).join(", ")}`,
+	);
+	const stale = [...acceptedRegressions].filter((path) => !regressions.includes(path));
+	assert(
+		stale.length === 0,
+		`accepted regression(s) not regressed in this report: ${stale.slice(0, 10).join(", ")}`,
 	);
 	assert(isRecord(report.skips), "baseline report must contain skip reasons");
 	const skips: Record<string, string> = {};
