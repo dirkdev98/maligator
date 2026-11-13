@@ -1465,7 +1465,7 @@ static void http_server_response_shapes(MalVm *vm) {
     };
     static const char *dispatch_names[] = {"socket", "connection"};
     static_assert(countof(parent_names) + countof(constructor_names)
-                      + 1 + countof(dispatch_names) <= MAL_SHAPE_MAX_INLINE_SLOTS,
+                      + 2 + countof(dispatch_names) <= MAL_SHAPE_MAX_INLINE_SLOTS,
                    "ServerResponse dispatch shape exceeds inline slots");
     MalShape *root = mal_shape_root(&vm->heap);
     MalShape *shape = root;
@@ -1483,6 +1483,8 @@ static void http_server_response_shapes(MalVm *vm) {
     MalShape *constructor = shape;
     shape = mal_shape_add_property(shape, mal_key_from_value(vm->node_http_headers_marker),
         MAL_PROPERTY_WRITABLE);
+    shape = mal_shape_add_property(shape,
+        mal_intrinsic_string_key(vm, (const byte *) "writable"), HTTP_VISIBLE);
     MalShape *outgoing = shape;
     for (usize i = 0; i < countof(dispatch_names); ++i) {
         shape = mal_shape_add_property(
@@ -1733,6 +1735,7 @@ static void http_outgoing_initialize(MalVm *vm, MalValue receiver) {
     MalPropertyDesc property = {.flags = MAL_PROPERTY_WRITABLE, .value = roots[1]};
     (void) mal_object_define_own(mal_value_to_object(roots[0]),
         mal_key_from_value(vm->node_http_headers_marker), &property);
+    http_define_own(vm, roots[0], "writable", mal_value_new_boolean(true));
     mal_gc_unroot(&root);
 }
 
@@ -2027,7 +2030,6 @@ static MalValue http_outgoing_message_constructor(
         vm, vm->intrinsics[MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR], roots[0], nullptr, 0);
     if (initialized.kind != MAL_COMPLETION_THROW) {
         http_outgoing_initialize(vm, roots[0]);
-        http_define_own(vm, roots[0], "writable", mal_value_new_boolean(true));
         http_define_own(vm, roots[0], "destroyed", mal_value_new_boolean(false));
         http_define_own(vm, roots[0], "finished", mal_value_new_boolean(false));
     }
@@ -6184,7 +6186,6 @@ static MalValue http_client_request_constructor(
     if (mal_value_is_object(result)) {
         http_define_own(vm, result, "finished", mal_value_new_boolean(false));
         http_outgoing_initialize(vm, result);
-        http_define_own(vm, result, "writable", mal_value_new_boolean(true));
         http_define_own(vm, result, "writableEnded", mal_value_new_boolean(false));
         http_define_own(vm, result, "writableFinished", mal_value_new_boolean(false));
         http_define_own(vm, result, "destroyed", mal_value_new_boolean(false));

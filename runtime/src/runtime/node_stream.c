@@ -2278,7 +2278,7 @@ static MalValue stream_completion_task(
                 vm, callback, mal_value_new_undefined(), callback_args, 2);
         } else {
             mal_vm_call_value(
-                vm, callback, mal_value_new_undefined(),
+                vm, callback, stream_own(vm, state, "stream"),
                 has_error ? callback_args : nullptr, has_error ? 1 : 0);
         }
     }
@@ -2392,6 +2392,47 @@ static bool stream_option_enabled(
         && (!mal_value_is_boolean(value) || mal_value_to_boolean(value));
 }
 
+static bool stream_finished_sides(
+    MalVm *vm, MalValue stream, bool *readable, bool *writable,
+    bool *legacy_readable, bool *legacy_writable) {
+    MalValue roots[] = {stream, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    *readable = stream_is_readable(vm, roots[0]);
+    *writable = stream_is_writable(vm, roots[0]);
+    *legacy_readable = false;
+    *legacy_writable = false;
+    if (!stream_get(vm, roots[0], "on", &roots[1])) goto failed;
+    if (mal_value_is_callable(roots[1])) {
+        if (!*writable) {
+            if (!stream_get(vm, roots[0], "write", &roots[1])) goto failed;
+            *legacy_writable = mal_value_is_callable(roots[1]);
+            *writable = *legacy_writable;
+        }
+        if (!*readable) {
+            if (!stream_get(vm, roots[0], "pipe", &roots[1])) goto failed;
+            bool pipe = mal_value_is_callable(roots[1]);
+            if (!stream_get(vm, roots[0], "readable", &roots[1])) goto failed;
+            *legacy_readable = pipe && (!*writable || mal_value_is_truthy(roots[1]));
+            *readable = *legacy_readable;
+        }
+    }
+    mal_gc_unroot(&root);
+    return true;
+failed:
+    mal_gc_unroot(&root);
+    return false;
+}
+
+static bool stream_finished_side_done(
+    MalVm *vm, MalValue stream, const char *ended, const char *enabled, bool legacy) {
+    MalValue value = mal_value_new_undefined();
+    if (!stream_get(vm, stream, ended, &value)) return false;
+    if (mal_value_is_boolean(value)) return mal_value_to_boolean(value);
+    if (!legacy || !stream_get(vm, stream, enabled, &value)) return false;
+    return mal_value_is_boolean(value) && !mal_value_to_boolean(value);
+}
+
 static bool stream_finished_common(
     MalVm *vm, MalValue stream, MalValue options, MalValue callback,
     MalValue *cleanup_out) {
@@ -2407,8 +2448,15 @@ static bool stream_finished_common(
             "The options argument must be an object");
         return false;
     }
-    bool has_readable = stream_is_readable(vm, stream);
-    bool has_writable = stream_is_writable(vm, stream);
+    bool has_readable, has_writable, legacy_readable, legacy_writable;
+    if (!mal_value_is_object(stream)
+        || !stream_finished_sides(vm, stream, &has_readable, &has_writable,
+                                  &legacy_readable, &legacy_writable)) {
+        if (vm->completion.kind != MAL_COMPLETION_THROW)
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "The stream argument must be a Node.js stream");
+        return false;
+    }
     if (!has_readable && !has_writable) {
         mal_vm_throw_error(
             vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -2431,6 +2479,8 @@ static bool stream_finished_common(
     roots[3] = mal_value_from_object(mal_intrinsic_new_object(vm));
     roots[4] = stream_new_array(vm);
     stream_set(vm, roots[3], "callback", roots[2]);
+    stream_set(vm, roots[3], "stream", roots[0]);
+    stream_set(vm, roots[3], "legacyWritable", mal_value_new_boolean(legacy_writable));
     stream_set(vm, roots[3], "registrations", roots[4]);
     stream_set(vm, roots[3], "mode",
                mal_value_from_i32(STREAM_COMPLETION_FINISHED));
@@ -2441,16 +2491,19 @@ static bool stream_finished_common(
     stream_set(
         vm, roots[3], "readableDone",
         mal_value_new_boolean(!readable
-            || stream_truthy_own(vm, roots[0], "readableEnded")));
+            || stream_finished_side_done(vm, roots[0], "readableEnded", "readable", legacy_readable)));
     stream_set(
         vm, roots[3], "writableDone",
         mal_value_new_boolean(!writable
-            || stream_truthy_own(vm, roots[0], "writableFinished")));
+            || stream_finished_side_done(vm, roots[0], "writableFinished", "writable", legacy_writable)));
 
-    bool ok = (!readable || stream_register_lifecycle_listener(
+    bool ok = vm->completion.kind != MAL_COMPLETION_THROW
+        && (!readable || stream_register_lifecycle_listener(
                    vm, roots[3], roots[0], "end", STREAM_LIFECYCLE_END, 0))
         && (!writable || stream_register_lifecycle_listener(
                    vm, roots[3], roots[0], "finish", STREAM_LIFECYCLE_FINISH, 0))
+        && (!legacy_writable || readable || stream_register_lifecycle_listener(
+                   vm, roots[3], roots[0], "end", STREAM_LIFECYCLE_END, 0))
         && (!monitor_error || stream_register_lifecycle_listener(
                    vm, roots[3], roots[0], "error", STREAM_LIFECYCLE_ERROR, 0))
         && stream_register_lifecycle_listener(
@@ -2562,14 +2615,22 @@ static MalValue stream_lifecycle_listener(
         mal_native_function_object_get_slot(listener, 1));
     if (kind == STREAM_LIFECYCLE_END) {
         stream_set(vm, roots[0], "readableDone", mal_value_new_boolean(true));
+        if (stream_truthy_own(vm, roots[0], "legacyWritable")
+            && stream_finished_side_done(vm, receiver, "writableFinished", "writable", true))
+            stream_set(vm, roots[0], "writableDone", mal_value_new_boolean(true));
     } else if (kind == STREAM_LIFECYCLE_FINISH) {
         stream_set(vm, roots[0], "writableDone", mal_value_new_boolean(true));
     } else if (kind == STREAM_LIFECYCLE_ERROR) {
         stream_schedule_completion(vm, roots[0], roots[1], true);
     } else if (kind == STREAM_LIFECYCLE_CLOSE) {
+        if (stream_truthy_own(vm, roots[0], "legacyWritable")
+            && stream_finished_side_done(vm, receiver, "writableFinished", "writable", true))
+            stream_set(vm, roots[0], "writableDone", mal_value_new_boolean(true));
         bool done = stream_truthy_own(vm, roots[0], "readableDone")
             && stream_truthy_own(vm, roots[0], "writableDone");
-        if (!done) {
+        if (done) {
+            stream_schedule_completion(vm, roots[0], mal_value_new_undefined(), false);
+        } else {
             roots[2] = stream_new_error(
                 vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
                 "Premature close", "ERR_STREAM_PREMATURE_CLOSE");

@@ -21,6 +21,7 @@ tests/native/node-http-socket-identity.test.ts
 tests/native/node-http-split-response.test.ts
 tests/native/node-http.test.ts
 tests/native/node-net.test.ts
+tests/native/node-stream-finished-legacy.test.ts
 tests/native/node-process-events.test.ts
 tests/native/node-tls.test.ts
 tests/native/postgres-auth.test.ts
