@@ -581,6 +581,10 @@ bool mal_ops_strict_equal_heap_contents(MalValue left, MalValue right) {
 }
 
 bool mal_ops_strict_equal_distinct(MalValue left, MalValue right) {
+    if (mal_value_is_string(left)) {
+        return mal_value_is_string(right) &&
+            mal_string_equals(mal_value_to_string(left), mal_value_to_string(right));
+    }
     if (mal_ops_is_number(left) && mal_ops_is_number(right)) {
         return mal_ops_number_as_f64(left) == mal_ops_number_as_f64(right);
     }

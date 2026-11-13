@@ -1936,6 +1936,43 @@ static MalStringRopeEquality mal_string_rope_equals_segment(
     }
 }
 
+/**
+ * Equal-length Latin-1 runs of 1 to 16 units, compared as a head and a tail word that
+ * overlap for lengths between the word sizes. Every read stays inside the run.
+ */
+static inline bool mal_string_short_latin1_equal(const u8 *left, const u8 *right, usize length) {
+    if (length >= 8) {
+        u64 left_head, right_head, left_tail, right_tail;
+        memcpy(&left_head, left, sizeof(left_head));
+        memcpy(&right_head, right, sizeof(right_head));
+        memcpy(&left_tail, left + length - sizeof(left_tail), sizeof(left_tail));
+        memcpy(&right_tail, right + length - sizeof(right_tail), sizeof(right_tail));
+        return ((left_head ^ right_head) | (left_tail ^ right_tail)) == 0;
+    }
+    if (length >= 4) {
+        u32 left_head, right_head, left_tail, right_tail;
+        memcpy(&left_head, left, sizeof(left_head));
+        memcpy(&right_head, right, sizeof(right_head));
+        memcpy(&left_tail, left + length - sizeof(left_tail), sizeof(left_tail));
+        memcpy(&right_tail, right + length - sizeof(right_tail), sizeof(right_tail));
+        return ((left_head ^ right_head) | (left_tail ^ right_tail)) == 0;
+    }
+    if (length >= 2) {
+        u16 left_head, right_head, left_tail, right_tail;
+        memcpy(&left_head, left, sizeof(left_head));
+        memcpy(&right_head, right, sizeof(right_head));
+        memcpy(&left_tail, left + length - sizeof(left_tail), sizeof(left_tail));
+        memcpy(&right_tail, right + length - sizeof(right_tail), sizeof(right_tail));
+        return ((left_head ^ right_head) | (left_tail ^ right_tail)) == 0;
+    }
+    return left[0] == right[0];
+}
+
+static inline const u8 *mal_string_flat_latin1_units(const MalString *string) {
+    return string->storage == MAL_STRING_STORAGE_INLINE
+        ? mal_string_inline_latin1(string) : string->latin1_units;
+}
+
 bool mal_string_equals_same_length(const MalString *left, const MalString *right) {
     // Computing a missing hash adds an unnecessary full pass before comparison.
     if (left->hash_valid && right->hash_valid && left->hash != right->hash) {
@@ -1946,6 +1983,12 @@ bool mal_string_equals_same_length(const MalString *left, const MalString *right
     if (left->length == 0) return true;
     if (left->storage < MAL_STRING_STORAGE_DEPENDENT &&
         right->storage < MAL_STRING_STORAGE_DEPENDENT) {
+        // Identifiers and keys are short; a library memcmp call costs more than the compare.
+        if (left->latin1 && right->latin1 && left->length <= 16) {
+            return mal_string_short_latin1_equal(
+                mal_string_flat_latin1_units(left), mal_string_flat_latin1_units(right),
+                left->length);
+        }
         MAL_PERF_COUNT(string_memcmp_calls);
         MAL_PERF_ADD(string_memcmp_code_units, left->length);
         MalStringSegment a = mal_string_leaf_segment(left, 0, left->length);
