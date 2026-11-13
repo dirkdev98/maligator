@@ -124,7 +124,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 386;
+export const COMPILER_ARTIFACT_VERSION = 387;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -1073,6 +1073,8 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32Array([...plan.claimedIps]);
 		w.i32Array([...plan.borrowedRegisters]);
 		w.i32Array([...(plan.globals ?? [])]);
+		w.i32Array([...(plan.invariantLoads ?? [])]);
+		w.i32Array([...(plan.calleeGuards ?? [])]);
 		w.u8(0);
 	}
 	w.u32(storage.pairedArrayLoops.length);
@@ -1752,7 +1754,9 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		});
 		const claimedIps = r.i32Array(),
 			borrowedRegisters = r.i32Array(),
-			globals = r.i32Array();
+			globals = r.i32Array(),
+			invariantLoads = r.i32Array(),
+			calleeGuards = r.i32Array();
 		if (r.u8() !== 0) throw new RangeError("Invalid native integer loop fallback");
 		numericLoopRegions.push({
 			...storage,
@@ -1765,6 +1769,8 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			borrowedRegisters,
 			fallback: "original-instructions",
 			...(globals.length === 0 ? {} : { globals }),
+			...(invariantLoads.length === 0 ? {} : { invariantLoads }),
+			...(calleeGuards.length === 0 ? {} : { calleeGuards }),
 		});
 	}
 	const pairedArrayLoops: Array<NativePairedArrayLoopPlan> = Array.from(

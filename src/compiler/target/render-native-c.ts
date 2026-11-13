@@ -2027,18 +2027,33 @@ function emitNumericLoopRegion(
 	plan: NativeNumericLoopRegionPlan,
 	reps: ReadonlyArray<VmRegisterRepresentation>,
 	propertyCache: string,
-	// The C statement that performs the binding load at an instruction.
-	bindingLoad: (ip: number) => string,
+	// The C statement that performs the entry load or callee check at an instruction.
+	entryLoad: (ip: number) => string,
 	// The C lvalue of a global slot.
 	globalSlot: (index: number) => string,
 	facts: NativeFunctionPlan["facts"],
 	nativeInstructions: NativeFunctionPlan["instructions"],
 	poll: (ip: number, spill: string, isolate: string) => string,
 	arrayArithmetic?: "number" | "checked-integer",
+	// Whether restarts continue in the double-arithmetic copy that follows this one.
+	numberRestart = arrayArithmetic === "checked-integer",
 ): ReadonlyArray<string> {
 	if (plan.kind === "array-iteration" && plan.recordGraph !== undefined)
 		return emitRecordIterationRegion(fn, plan, reps, propertyCache, poll);
 	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
+	const entry = {
+		loads: new Set(plan.invariantLoads ?? []),
+		guards: new Set(plan.calleeGuards ?? []),
+	};
+	// Each admitted check holds throughout, so its branch always takes the target.
+	const passed = new Set(
+		[...entry.guards].map((ip) => {
+			const guard = fn.instructions[ip]!;
+			if (guard.opcode !== "GUARD_FUNCTION_INDEX")
+				throw new Error("Invalid numeric loop callee guard");
+			return guard.dst;
+		}),
+	);
 	const order = numericLoopOrder(fn, plan.id, members, true);
 	const dataViewCalls = new Map(
 		plan.kind === "fixed-numeric"
@@ -2078,6 +2093,7 @@ function emitNumericLoopRegion(
 					dataViewCalls,
 					foreignCalls,
 					new Set(plan.globals ?? []),
+					entry,
 				);
 	const callMethods =
 		order === undefined
@@ -2100,8 +2116,11 @@ function emitNumericLoopRegion(
 	]);
 	if (order === undefined || flow === undefined)
 		throw new Error("Invalid native integer loop region");
-	const floating = plan.kind !== "integer" && arrayArithmetic !== "checked-integer";
-	const arrayNumberFallback = `__array_number_fallback_${plan.id}`;
+	const floating =
+		plan.kind === "integer"
+			? arrayArithmetic === "number"
+			: arrayArithmetic !== "checked-integer";
+	const numberFallback = `__number_fallback_${plan.id}`;
 	// The deferred cursor's index is the iteration state a restart must rewind.
 	const cursor =
 		plan.kind === "array-iteration" ? `__iter_deferred_${plan.initializeIp}` : undefined;
@@ -2277,6 +2296,23 @@ function emitNumericLoopRegion(
 		(plan.views.every((view) => !view.writable) ||
 			numericLoopHasTerminalStore(fn, plan.id, order));
 	const records = new Set(plan.kind !== "integer" ? (plan.records ?? []) : []);
+	const emitCopy = (
+		arithmetic: "number" | "checked-integer" | undefined,
+		restartInNumbers: boolean,
+	) =>
+		emitNumericLoopRegion(
+			fn,
+			plan,
+			reps,
+			propertyCache,
+			entryLoad,
+			globalSlot,
+			facts,
+			nativeInstructions,
+			poll,
+			arithmetic,
+			restartInNumbers,
+		);
 	if (
 		arrayArithmetic === undefined &&
 		plan.kind === "fixed-numeric" &&
@@ -2285,22 +2321,25 @@ function emitNumericLoopRegion(
 		globals.length === 0 &&
 		plan.views.every((view) => view.text !== true && view.lentOnly !== true) &&
 		numericLoopSupportsCheckedIntegers(fn, plan.id, order)
-	) {
-		const emit = (arithmetic: "number" | "checked-integer") =>
-			emitNumericLoopRegion(
-				fn,
-				plan,
-				reps,
-				propertyCache,
-				bindingLoad,
-				globalSlot,
-				facts,
-				nativeInstructions,
-				poll,
-				arithmetic,
-			);
-		return [...emit("checked-integer"), `${arrayNumberFallback}:;`, ...emit("number")];
-	}
+	)
+		return [
+			...emitCopy("checked-integer", true),
+			`${numberFallback}:;`,
+			...emitCopy("number", false),
+		];
+	// An invariant field may hold any Number, so an integer region whose entry declines
+	// one, or whose arithmetic leaves the safe integers, continues in doubles.
+	if (
+		plan.kind === "integer" &&
+		arrayArithmetic === undefined &&
+		!numberRestart &&
+		(plan.invariantLoads?.length ?? 0) > 0
+	)
+		return [
+			...emitCopy(undefined, true),
+			`${numberFallback}:;`,
+			...emitCopy("number", false),
+		];
 	const checkedViews = new Set(
 		plan.kind === "fixed-numeric"
 			? plan.views.flatMap((view) => (view.checked === true ? [view.object] : []))
@@ -2350,13 +2389,24 @@ function emitNumericLoopRegion(
 			: undefined;
 	if (boundObject !== undefined && lengthLoad === undefined)
 		throw new Error("Invalid typed loop length load");
-	// Inputs and views read these registers, so the loads precede every local.
-	const bindingLoads = order.flatMap((ip) => {
+	// Inputs and views read these registers, so the loads precede every local, in iteration
+	// order so that a loaded receiver precedes its own loads.
+	const entryStatements = order.flatMap((ip) => {
 		const op = fn.instructions[ip]!;
-		if (op.opcode !== "LOAD_GLOBAL" && op.opcode !== "LOAD_CAPTURED") return [];
+		if (op.opcode === "GUARD_FUNCTION_INDEX" && entry.guards.has(ip)) {
+			guards.unshift(`r${op.dst}`);
+			return [`  ${entryLoad(ip)}`];
+		}
+		if (
+			op.opcode !== "LOAD_GLOBAL" &&
+			op.opcode !== "LOAD_CAPTURED" &&
+			op.opcode !== "LOAD_THIS" &&
+			!(op.opcode === "LOAD_PROPERTY_STATIC" && entry.loads.has(ip))
+		)
+			return [];
 		if (op.opcode === "LOAD_GLOBAL" && slotted.has(op.index)) return [];
 		guards.unshift(`!mal_value_is_empty(r${op.dst})`);
-		return [`  ${bindingLoad(ip)}`];
+		return [`  ${entryLoad(ip)}`];
 	});
 	// A slot enters as a Number, which also declines its dead zone.
 	const slotLoads = globals.flatMap((index) => {
@@ -2609,7 +2659,7 @@ function emitNumericLoopRegion(
 			case "LOAD_PROPERTY_STATIC":
 			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
 				// Admission already proved the method its code unit read ignores.
-				if (callMethods.has(ip)) return "";
+				if (callMethods.has(ip) || entry.loads.has(ip)) return "";
 				if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object))
 					// The site's own-slot row proves the field; any other row ends the iteration.
 					return `{ const MalObject *${id}_o = (const MalObject *) mal_value_to_heap(${local(op.object)}); if (__builtin_expect(${id}_o->shape != ${id}_shape${op.icIndex} && !mal_shape_slot_holds_data_key(${id}_o->shape, ${id}_slot${op.icIndex}, ${id}_key${op.icIndex}), 0)) ${restart} MalValue ${id}_f = ((const MalValue *) mal_object_fields_nonempty(${id}_o))[${id}_slot${op.icIndex}]; if (__builtin_expect(!mal_ops_is_number(${id}_f), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_f); }`;
@@ -2782,7 +2832,11 @@ function emitNumericLoopRegion(
 				return `${slot(op.index)} = ${floating ? num(op.src) : local(op.src)};`;
 			// The entry loaded each other binding and declined its dead zone.
 			case "LOAD_CAPTURED":
+			case "LOAD_THIS":
 			case "THROW_IF_TDZ":
+				return "";
+			case "GUARD_FUNCTION_INDEX":
+				if (!entry.guards.has(ip)) throw new Error("Invalid numeric loop callee guard");
 				return "";
 			case "CREATE_NUMBER":
 			case "CREATE_F64":
@@ -2908,6 +2962,7 @@ function emitNumericLoopRegion(
 			case "JUMP":
 				return reach(op.targetIp, ip, mode);
 			case "JUMP_IF": {
+				if (passed.has(op.cond)) return reach(op.targetIp, ip, mode);
 				const ranged = compilerIntegerRangeTruthiness(
 					instructionInputIntegerRange(facts?.[ip], op.cond),
 				);
@@ -2961,6 +3016,9 @@ function emitNumericLoopRegion(
 						`    u64 ${id}_si = ${id}_ci;`,
 					]),
 			`    u8 ${id}_exit = 0;`,
+			...(entry.loads.size > 0 || entry.guards.size > 0
+				? ["    MAL_PERF_COUNT(loop_invariant_region_admissions);"]
+				: []),
 			// Region instructions make no calls, so the thread's isolate cannot change inside.
 			`    MalIsolateLocals *${id}_isolate = vm->isolate;`,
 			"    for (;;) {",
@@ -3007,9 +3065,7 @@ function emitNumericLoopRegion(
 		for (const index of stored)
 			lines.push(`    ${globalSlot(index)} = ${boxSlot(slotStart(index))};`);
 		if (cursor !== undefined) lines.push(`    ${cursor}.index = ${id}_si;`);
-		lines.push(
-			`    goto ${arrayArithmetic === "checked-integer" ? arrayNumberFallback : `L${plan.id}`};`,
-		);
+		lines.push(`    goto ${numberRestart ? numberFallback : `L${plan.id}`};`);
 		integral = baseIntegral;
 		return lines;
 	};
@@ -3059,6 +3115,7 @@ function emitNumericLoopRegion(
 	if (plan.kind === "array-iteration")
 		return [
 			"{",
+			...entryStatements,
 			`  MalDenseNumberSpan ${id}_a = {0};`,
 			...[...flow.kinds].map(([register, kind]) =>
 				records.has(register)
@@ -3072,7 +3129,7 @@ function emitNumericLoopRegion(
 		];
 	return [
 		"{",
-		...bindingLoads,
+		...entryStatements,
 		...slotLoads,
 		...textViews.map((view) => `  MalStringUnitSpan ${id}_s${view.object} = {0};`),
 		...elementViews.flatMap((view) => [
@@ -8509,6 +8566,34 @@ function emitBody(
 								instructionContext,
 								relocation,
 							).join(" ");
+						// Only an ordinary function's `this` is an entry load.
+						if (binding.opcode === "LOAD_THIS") return `r${binding.dst} = this_value;`;
+						if (binding.opcode === "LOAD_PROPERTY_STATIC") {
+							const load = `r${binding.dst} = mal_vm_loop_invariant_load(vm, r${binding.object}, ${relocation.stringIndex(binding.stringIndex)}, &${nativeBodyReference(resources, "propertyCache")}[${binding.icIndex}]);`;
+							// A class layout serves the original load without filling its cache row.
+							const layout = nativeInstructions[bindingIp];
+							if (layout?.kind !== "class-layout" || relocation.relative) return load;
+							const object = `__loop_co_${bindingIp}`;
+							return [
+								`{ MalObject *${object} = mal_vm_as_object(r${binding.object});`,
+								...classLayoutAccess(
+									layout.site.kind,
+									layout.site.candidates,
+									object,
+									`r${binding.object}`,
+									(candidate) =>
+										`r${binding.dst} = ${
+											layout.site.kind === "method"
+												? `vm->class_cells[${candidate.layout}].methods[${candidate.index}]`
+												: `mal_object_field_load_shaped(${object}, ${candidate.index})`
+										};`,
+									[load],
+								),
+								"}",
+							].join(" ");
+						}
+						if (binding.opcode === "GUARD_FUNCTION_INDEX")
+							return `r${binding.dst} = mal_vm_callee_has_index(vm, r${binding.callee}, ${relocation.functionIndex(binding.functionIndex)});`;
 						throw new Error("Invalid numeric loop binding load");
 					},
 					(index) => `vm->globals[${relocation.globalIndex(index)}]`,

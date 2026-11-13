@@ -291,6 +291,64 @@ describe("native safe-integer loop regions", () => {
 			).toThrow(/invalid or stale storage plan/);
 	});
 
+	it("enters an inlined method's loop through its loads and callee check, which serialization keeps", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+					class Account {
+						constructor() { this.offset = 11; }
+						calculate(prefix, value) { return prefix + value + this.offset; }
+					}
+					const account = new Account();
+					globalThis.step = function step(limit) {
+						let total = 0;
+						for (let i = 0; i < limit; i++) total += account.calculate(7, i & 15);
+						return total;
+					};
+				`,
+				"/invariant-loop-plan.js",
+			),
+			{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+		);
+		const index = image.native.functions.findIndex((fn) =>
+			fn.storage?.numericLoopRegions.some((plan) => plan.calleeGuards !== undefined),
+		);
+		const native = image.native.functions[index]!;
+		const plan = native.storage!.numericLoopRegions.find(
+			(candidate) => candidate.calleeGuards !== undefined,
+		)!;
+		const loaded = (plan.invariantLoads ?? []).map((ip) => {
+			const op = native.body.instructions[ip]!;
+			return op.opcode === "LOAD_PROPERTY_STATIC"
+				? String.fromCharCode(...image.runtime.stringConstants[op.stringIndex]!)
+				: op.opcode;
+		});
+		expect(loaded).toEqual(["calculate", "offset"]);
+		expect(plan.calleeGuards!.map((ip) => native.body.instructions[ip]!.opcode)).toEqual([
+			"GUARD_FUNCTION_INDEX",
+		]);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(restored.native.functions[index]!.storage!.numericLoopRegions).toEqual(
+			native.storage!.numericLoopRegions,
+		);
+		for (const forged of [
+			{ ...plan, invariantLoads: plan.invariantLoads!.slice(1) },
+			{ ...plan, calleeGuards: [] },
+		])
+			expect(() =>
+				serializeCompilerArtifact({
+					...image,
+					native: {
+						...image.native,
+						functions: image.native.functions.with(index, {
+							...native,
+							storage: { ...native.storage!, numericLoopRegions: [forged] },
+						}),
+					},
+				}),
+			).toThrow(/invalid or stale storage plan/);
+	});
+
 	it("keeps the global slots it holds in locals valid when merged behind another program", () => {
 		const script = (source: string, file: string) =>
 			compileSemanticProgramToProgramImage(

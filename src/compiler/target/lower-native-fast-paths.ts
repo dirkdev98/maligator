@@ -208,6 +208,18 @@ interface NativeNumericLoopRegionBase {
 	 * stores back at every exit, the iteration's starting value when a guard restarts it.
 	 */
 	readonly globals?: ReadonlyArray<number>;
+	/**
+	 * Static property loads of objects the loop never replaces. The entry performs each
+	 * once into its register through a cache row that runs no code, and declines on a
+	 * miss: nothing inside runs JavaScript or stores a named property, so every
+	 * iteration would read the same value.
+	 */
+	readonly invariantLoads?: ReadonlyArray<number>;
+	/**
+	 * Inlined calls' callee checks of an invariant callee, which the entry performs once.
+	 * The branches a failed check takes are not members.
+	 */
+	readonly calleeGuards?: ReadonlyArray<number>;
 }
 
 /** A counted loop's index, which the header compares with a bound and each iteration steps once. */
@@ -1201,6 +1213,11 @@ export function numberRecordDataflow(
 	foreignCalls: ReadonlyMap<number, FfiScalarEntry> = new Map(),
 	// Global slots a loop region keeps in locals, so their loads and stores are Numbers.
 	slotGlobals: ReadonlySet<number> = new Set(),
+	// Static loads and callee checks a loop region's entry performs.
+	entry: {
+		readonly loads: ReadonlySet<number>;
+		readonly guards: ReadonlySet<number>;
+	} = { loads: new Set(), guards: new Set() },
 ): NativeNumberRecordDataflow | undefined {
 	const kinds = new Map<number, NativeNumberRecordKind>();
 	const inputs = new Set<number>();
@@ -1215,6 +1232,8 @@ export function numberRecordDataflow(
 	const intrinsics = new Set<number>();
 	const bindings = new Set<number>();
 	const slotLoadRegisters = new Set<number>();
+	// Results of the entry's callee checks, which hold throughout.
+	const passed = new Set<number>();
 	const unify = (register: number, kind: NativeNumberRecordKind): boolean => {
 		const known = kinds.get(register);
 		if (known === undefined) kinds.set(register, kind);
@@ -1298,6 +1317,19 @@ export function numberRecordDataflow(
 			// Like an intrinsic, the method may only be the callee the next call ignores.
 			admitted = !kinds.has(instruction.dst) && !inputs.has(instruction.dst);
 			intrinsics.add(instruction.dst);
+		} else if (
+			bindingLoads &&
+			((instruction.opcode === "LOAD_PROPERTY_STATIC" && entry.loads.has(ip)) ||
+				instruction.opcode === "LOAD_THIS")
+		) {
+			// Like a binding's, the entry loads the value, which reads inside see as an input.
+			admitted = representations[instruction.dst] === "boxed";
+			bindings.add(instruction.dst);
+		} else if (instruction.opcode === "GUARD_FUNCTION_INDEX" && entry.guards.has(ip)) {
+			admitted = bindingLoads;
+			passed.add(instruction.dst);
+		} else if (instruction.opcode === "JUMP_IF" && passed.has(instruction.cond)) {
+			admitted = true;
 		} else
 			switch (instruction.opcode) {
 				case "CALL_KNOWN":
@@ -1411,13 +1443,17 @@ export function numberRecordDataflow(
 		if (!admitted) return undefined;
 		const after = new Set(before);
 		const entryLoad =
-			(instruction.opcode === "LOAD_GLOBAL" || instruction.opcode === "LOAD_CAPTURED") &&
-			bindings.has(instruction.dst) &&
-			!(instruction.opcode === "LOAD_GLOBAL" && slotGlobals.has(instruction.index));
+			((instruction.opcode === "LOAD_GLOBAL" ||
+				instruction.opcode === "LOAD_CAPTURED" ||
+				instruction.opcode === "LOAD_THIS" ||
+				instruction.opcode === "LOAD_PROPERTY_STATIC") &&
+				bindings.has(instruction.dst) &&
+				!(instruction.opcode === "LOAD_GLOBAL" && slotGlobals.has(instruction.index))) ||
+			(instruction.opcode === "GUARD_FUNCTION_INDEX" && passed.has(instruction.dst));
 		if (!entryLoad)
 			for (const register of vmInstructionWriteRegisters(instruction))
 				after.add(register);
-		for (const successor of numberRecordSuccessors(instruction, ip))
+		for (const successor of numericLoopRegionSuccessors(instruction, ip, passed))
 			join(successor, after);
 	}
 	// A move into a register read as a Number reads its source as one too.
@@ -2369,6 +2405,7 @@ function fixedNumericLoopCounter(
 	body: NativeBodyFacts,
 	lengthLoads: ReadonlySet<number>,
 	memory: ReadonlyArray<NumericLoopAccess>,
+	bindings: NumericLoopBindings,
 ):
 	| {
 			readonly counter: NativeNumericLoopCounter;
@@ -2385,14 +2422,23 @@ function fixedNumericLoopCounter(
 	  }
 	| undefined {
 	// Before comparing, the header may reload a view's length, which no region instruction
-	// can change, and step either operand by a constant, as `i + 1 < a.length` does.
+	// can change, and step either operand by a constant, as `i + 1 < a.length` does. Its
+	// entry loads, such as `this.data` in `i < this.data.length`, happen before the loop.
 	const constants = numericLoopEntryConstants(fn, body, shape);
 	let lengthLoad: { ip: number; object: number; dst: number } | undefined;
 	let step: { ip: number; dst: number; src: number; offset: number } | undefined;
 	let comparisonIp: number | undefined;
-	for (const [position, ip] of shape.order.slice(0, 4).entries()) {
+	let scanned = 0;
+	for (const [position, ip] of shape.order.entries()) {
 		const op = fn.instructions[ip]!;
 		if (ip !== shape.order[0]! + position) return undefined;
+		if (
+			numericLoopBindingInstruction(fn, ip, bindings) &&
+			op.opcode !== "STORE_GLOBAL" &&
+			!(op.opcode === "LOAD_GLOBAL" && bindings.slots.has(op.index))
+		)
+			continue;
+		if (++scanned > 4) return undefined;
 		if (op.opcode === "BINARY" && ["<", "<=", ">", ">="].includes(op.operator)) {
 			comparisonIp = ip;
 			break;
@@ -2751,35 +2797,41 @@ export function numericLoopCallMethods(
 }
 
 /**
- * Registers a loop loads from globals or enclosing functions' bindings, which its region
- * loads once at entry: nothing in a region calls out or stores a binding.
- */
-/**
- * The bindings a numeric loop region reads. The entry loads each invariant binding once
- * into its register. A global slot the loop stores, or whose register the loop reuses,
- * lives in a local instead, which nothing inside can observe, since a region runs no
- * JavaScript.
+ * What a numeric loop region reads from outside its registers. Nothing in a region runs
+ * JavaScript or stores a named property, so the entry performs each invariant load once
+ * into its register: a binding the loop does not store, `this`, a static property of an
+ * object the loop never replaces, and an inlined call's callee check. A global slot the
+ * loop stores, or whose register the loop reuses, lives in a local instead, which nothing
+ * inside can observe.
  */
 interface NumericLoopBindings {
-	/** Registers the entry loads an unchanging binding into. */
+	/** Registers the entry loads an unchanging value into. */
 	readonly invariant: ReadonlySet<number>;
 	/** Global slots kept in locals. */
 	readonly slots: ReadonlySet<number>;
 	/** Registers the loop loads a slot kept in a local into. */
 	readonly slotLoads: ReadonlySet<number>;
+	/** Static property loads the entry performs. */
+	readonly loads: ReadonlySet<number>;
+	/** Callee checks the entry performs, whose results only select branches. */
+	readonly guards: ReadonlySet<number>;
 }
 
 function numericLoopBindings(
 	fn: BytecodeFunction,
 	shape: NativeNumericLoopShape,
 	body: NativeBodyFacts,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+	// Static loads whose key names an ordinary property the region never stores.
+	invariantLoadCandidates: ReadonlySet<number>,
 ): NumericLoopBindings | undefined {
+	const writers = new Map<number, number>();
+	for (const ip of shape.order)
+		for (const register of vmInstructionWriteRegisters(fn.instructions[ip]!))
+			writers.set(register, (writers.get(register) ?? 0) + 1);
 	const writesElsewhere = (ip: number, register: number) =>
-		shape.order.some(
-			(other) =>
-				other !== ip &&
-				vmInstructionWriteRegisters(fn.instructions[other]!).includes(register),
-		);
+		(writers.get(register) ?? 0) >
+		(vmInstructionWriteRegisters(fn.instructions[ip]!).includes(register) ? 1 : 0);
 	const slots = new Set<number>();
 	for (const ip of shape.order) {
 		const op = fn.instructions[ip]!;
@@ -2795,6 +2847,11 @@ function numericLoopBindings(
 			slotLoads.add(op.dst);
 			continue;
 		}
+		// A derived constructor's `this` stays uninitialized until `super()` returns.
+		if (op.opcode === "LOAD_THIS") {
+			if (!fn.isDerivedConstructor && !writesElsewhere(ip, op.dst)) invariant.add(op.dst);
+			continue;
+		}
 		if (op.opcode !== "LOAD_GLOBAL" && op.opcode !== "LOAD_CAPTURED") continue;
 		// A function's own capture environment may not exist yet where the loop starts.
 		if (
@@ -2805,22 +2862,153 @@ function numericLoopBindings(
 		if (writesElsewhere(ip, op.dst)) return undefined;
 		invariant.add(op.dst);
 	}
-	// The entry loads each binding into its register, which only a header that read the
+	const unchanged = (register: number) =>
+		representations[register] === "boxed" &&
+		(!writers.has(register) || invariant.has(register));
+	// A loaded object can itself be the receiver of another invariant load.
+	const loads = new Set<number>();
+	for (let changed = true; changed;) {
+		changed = false;
+		for (const ip of shape.order) {
+			const op = fn.instructions[ip]!;
+			if (
+				op.opcode !== "LOAD_PROPERTY_STATIC" ||
+				loads.has(ip) ||
+				!invariantLoadCandidates.has(ip) ||
+				op.dst === op.object ||
+				!unchanged(op.object) ||
+				writesElsewhere(ip, op.dst)
+			)
+				continue;
+			loads.add(ip);
+			invariant.add(op.dst);
+			changed = true;
+		}
+	}
+	const guards = new Set<number>();
+	for (const ip of shape.order) {
+		const op = fn.instructions[ip]!;
+		if (
+			op.opcode !== "GUARD_FUNCTION_INDEX" ||
+			representations[op.dst] !== "boolean" ||
+			!unchanged(op.callee) ||
+			writesElsewhere(ip, op.dst) ||
+			shape.order.some((other) => {
+				const use = fn.instructions[other]!;
+				return (
+					vmInstructionReadRegisters(use).includes(op.dst) &&
+					!(use.opcode === "JUMP_IF" && use.cond === op.dst)
+				);
+			})
+		)
+			continue;
+		guards.add(ip);
+		invariant.add(op.dst);
+	}
+	// The entry loads each value into its register, which only a header that read the
 	// register before reloading it could observe.
 	return registersLiveAt(fn, body, shape.order[0]!, invariant).length > 0
 		? undefined
-		: { invariant, slots, slotLoads };
+		: { invariant, slots, slotLoads, loads, guards };
 }
 
-/** Whether a region admits `op` as a binding load, a slot store or its TDZ check. */
+/** The branch conditions that a region's admitted callee checks hold true throughout. */
+function numericLoopPassedGuards(
+	fn: BytecodeFunction,
+	guards: Iterable<number>,
+): ReadonlySet<number> {
+	return new Set(
+		[...guards].map((ip) => {
+			const op = fn.instructions[ip]!;
+			if (op.opcode !== "GUARD_FUNCTION_INDEX")
+				throw new Error("Invalid numeric loop callee guard");
+			return op.dst;
+		}),
+	);
+}
+
+/** An instruction's successors inside a region, whose passed callee checks always branch. */
+export function numericLoopRegionSuccessors(
+	instruction: BytecodeInstruction,
+	ip: number,
+	passed: ReadonlySet<number>,
+): Array<number> {
+	return instruction.opcode === "JUMP_IF" && passed.has(instruction.cond)
+		? [instruction.targetIp]
+		: numberRecordSuccessors(instruction, ip);
+}
+
+/**
+ * The loop without the branches its admitted callee checks take on failure, which an
+ * entry that performed each check never reaches, with the bindings of what remains.
+ */
+function numericLoopGuardedShape(
+	fn: BytecodeFunction,
+	body: NativeBodyFacts,
+	shape: NativeNumericLoopShape,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+	invariantLoadCandidates: ReadonlySet<number>,
+):
+	| { readonly shape: NativeNumericLoopShape; readonly bindings: NumericLoopBindings }
+	| undefined {
+	const bindings = numericLoopBindings(
+		fn,
+		shape,
+		body,
+		representations,
+		invariantLoadCandidates,
+	);
+	if (bindings === undefined) return undefined;
+	if (bindings.guards.size === 0) return { shape, bindings };
+	const header = shape.order[0]!;
+	const passed = numericLoopPassedGuards(fn, bindings.guards);
+	const members = new Set<number>();
+	const pending = [header];
+	while (pending.length > 0) {
+		const ip = pending.pop()!;
+		if (members.has(ip) || !shape.members.has(ip)) continue;
+		members.add(ip);
+		pending.push(...numericLoopRegionSuccessors(fn.instructions[ip]!, ip, passed));
+	}
+	const order = shape.order.filter((ip) => members.has(ip));
+	if (
+		!order.some((ip) =>
+			numericLoopRegionSuccessors(fn.instructions[ip]!, ip, passed).includes(header),
+		)
+	)
+		return undefined;
+	const inner = numericLoopInnerBodies(fn, header, members, order);
+	if (inner === undefined) return undefined;
+	const guarded = { members, order, entryIp: shape.entryIp, inner };
+	const kept = numericLoopBindings(
+		fn,
+		guarded,
+		body,
+		representations,
+		invariantLoadCandidates,
+	);
+	return kept === undefined || [...bindings.guards].some((ip) => !kept.guards.has(ip))
+		? undefined
+		: { shape: guarded, bindings: kept };
+}
+
+/** Whether a region admits the instruction at `ip` as an entry load, a slot store or a TDZ check. */
 function numericLoopBindingInstruction(
-	op: BytecodeInstruction,
+	fn: BytecodeFunction,
+	ip: number,
 	bindings: NumericLoopBindings,
 ): boolean {
+	const op = fn.instructions[ip]!;
 	switch (op.opcode) {
 		case "LOAD_GLOBAL":
 		case "LOAD_CAPTURED":
 			return true;
+		case "LOAD_THIS":
+			return bindings.invariant.has(op.dst);
+		case "LOAD_PROPERTY_STATIC":
+			return bindings.loads.has(ip);
+		case "GUARD_FUNCTION_INDEX":
+			return bindings.guards.has(ip);
 		case "STORE_GLOBAL":
 			return bindings.slots.has(op.index);
 		// The entry declines a binding still in its temporal dead zone, and a slot kept in
@@ -2830,6 +3018,42 @@ function numericLoopBindingInstruction(
 		default:
 			return false;
 	}
+}
+
+/**
+ * The loop's static loads an entry may perform. A loop that stores a binding, which the
+ * global object or a module namespace may expose as a property, or that calls C, which
+ * can write memory a cached row reads, keeps every load in the original code.
+ */
+function numericLoopInvariantLoadCandidates(
+	fn: BytecodeFunction,
+	shape: NativeNumericLoopShape,
+	candidates: ReadonlySet<number>,
+	methods: ReadonlySet<number>,
+	foreignCalls: ReadonlyMap<number, FfiScalarEntry> = new Map(),
+): ReadonlySet<number> {
+	if (
+		shape.order.some(
+			(ip) => fn.instructions[ip]!.opcode === "STORE_GLOBAL" || foreignCalls.has(ip),
+		)
+	)
+		return new Set();
+	return new Set(shape.order.filter((ip) => candidates.has(ip) && !methods.has(ip)));
+}
+
+/** The plan fields that name a region's entry loads and checks. */
+function numericLoopEntryFields(bindings: NumericLoopBindings): {
+	readonly invariantLoads?: ReadonlyArray<number>;
+	readonly calleeGuards?: ReadonlyArray<number>;
+} {
+	return {
+		...(bindings.loads.size === 0
+			? {}
+			: { invariantLoads: Object.freeze([...bindings.loads].sort((a, b) => a - b)) }),
+		...(bindings.guards.size === 0
+			? {}
+			: { calleeGuards: Object.freeze([...bindings.guards].sort((a, b) => a - b)) }),
+	};
 }
 
 function fixedNumericLoopStorage(
@@ -2898,7 +3122,14 @@ function fixedNumericLoopStorage(
 		memory.length > FIXED_NUMERIC_LOOP_ACCESS_LIMIT
 	)
 		return undefined;
-	const provenCounter = fixedNumericLoopCounter(fn, shape, body, lengthLoads, memory);
+	const provenCounter = fixedNumericLoopCounter(
+		fn,
+		shape,
+		body,
+		lengthLoads,
+		memory,
+		bindings,
+	);
 	const checkedStore = memory.some(
 		({ ip, op, data }) =>
 			op.opcode === "STORE_PROPERTY" &&
@@ -3122,7 +3353,7 @@ function fixedNumericLoopStorage(
 		}
 		if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object)) continue;
 		if (op.opcode === "REQUIRE_COERCIBLE" && records.has(op.src)) continue;
-		if (numericLoopBindingInstruction(op, bindings)) continue;
+		if (numericLoopBindingInstruction(fn, ip, bindings)) continue;
 		if (
 			vmInstructionWriteRegisters(op).some(
 				(register) => register === bound || views.has(register),
@@ -3174,14 +3405,31 @@ function lowerArrayIterationRegion(
 	header: number,
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	body: NativeBodyFacts,
-	conflicts: (ip: number) => boolean,
+	// Whether another plan owns `ip`; an entry load may replace a layout proof.
+	conflicts: (ip: number, entryLoad: boolean) => boolean,
 	cursor: { readonly initializeIp: number; readonly iterator: number },
 	functions: ReadonlyArray<BytecodeFunction>,
+	invariantLoadCandidates: ReadonlySet<number>,
 ): NativeNumericLoopRegionPlan | undefined {
 	const step = fn.instructions[header]!;
-	if (step.opcode !== "ITERATOR_STEP" || conflicts(header)) return undefined;
-	const shape = numericLoopShape(fn, body, header);
-	if (shape === undefined || conflicts(shape.entryIp) || shape.order.some(conflicts))
+	if (step.opcode !== "ITERATOR_STEP" || conflicts(header, false)) return undefined;
+	const loop = numericLoopShape(fn, body, header);
+	if (loop === undefined) return undefined;
+	const guarded = numericLoopGuardedShape(
+		fn,
+		body,
+		loop,
+		representations,
+		numericLoopInvariantLoadCandidates(fn, loop, invariantLoadCandidates, new Set()),
+	);
+	// This region keeps no global slot in a local.
+	const entry =
+		guarded !== undefined && guarded.bindings.slots.size === 0 ? guarded : undefined;
+	const shape = entry?.shape ?? loop;
+	if (
+		conflicts(shape.entryIp, false) ||
+		shape.order.some((ip) => conflicts(ip, entry?.bindings.loads.has(ip) === true))
+	)
 		return undefined;
 	const branch = fn.instructions[header + 1];
 	if (
@@ -3264,6 +3512,7 @@ function lowerArrayIterationRegion(
 		});
 	}
 	if (records === undefined) return undefined;
+	const bindings = entry?.bindings;
 	for (const ip of shape.order) {
 		if (ip === header) continue;
 		const op = fn.instructions[ip]!;
@@ -3273,19 +3522,33 @@ function lowerArrayIterationRegion(
 			(op.opcode !== "CREATE_NUMBER" &&
 				op.opcode !== "CREATE_F64" &&
 				!integerLoopInstruction(op) &&
-				nativeNumericBuiltinInstruction(op) === undefined) ||
+				nativeNumericBuiltinInstruction(op) === undefined &&
+				(bindings === undefined || !numericLoopBindingInstruction(fn, ip, bindings))) ||
 			vmInstructionReadRegisters(op).some(
 				(register) => register === step.iterator || register === step.next,
 			)
 		)
 			return undefined;
 	}
-	const flow = numberRecordDataflow(fn, shape.order, -1, representations, true);
+	const flow = numberRecordDataflow(
+		fn,
+		shape.order,
+		-1,
+		representations,
+		true,
+		undefined,
+		true,
+		undefined,
+		undefined,
+		undefined,
+		bindings,
+	);
 	if (flow === undefined) return undefined;
 	const inputs = new Set(flow.inputs);
 	const targets = new Set<number>();
+	const passed = numericLoopPassedGuards(fn, bindings?.guards ?? []);
 	for (const ip of shape.order)
-		for (const successor of numberRecordSuccessors(fn.instructions[ip]!, ip))
+		for (const successor of numericLoopRegionSuccessors(fn.instructions[ip]!, ip, passed))
 			if (!shape.members.has(successor)) targets.add(successor);
 	const exits: Array<NativeNumericLoopRegionPlan["exits"][number]> = [];
 	for (const targetIp of [...targets].sort((a, b) => a - b)) {
@@ -3329,6 +3592,7 @@ function lowerArrayIterationRegion(
 		claimedIps: Object.freeze(claimedIps),
 		borrowedRegisters: borrowedRegisters(fn, claimedIps, body),
 		fallback: "original-instructions",
+		...(bindings === undefined ? {} : numericLoopEntryFields(bindings)),
 	});
 }
 
@@ -3337,13 +3601,14 @@ function lowerNumericLoopRegion(
 	header: number,
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	body: NativeBodyFacts,
-	conflicts: (ip: number) => boolean,
+	conflicts: (ip: number, entryLoad: boolean) => boolean,
 	lengthLoads: ReadonlySet<number>,
 	cursorSteps: ReadonlyMap<number, { initializeIp: number; iterator: number }>,
 	codeUnitReads: ReadonlySet<number>,
 	dataViewCalls: ReadonlyMap<number, NativeDataViewCall>,
 	foreignCalls: ReadonlyMap<number, FfiScalarEntry>,
 	functions: ReadonlyArray<BytecodeFunction>,
+	invariantLoadCandidates: ReadonlySet<number>,
 ): NativeNumericLoopRegionPlan | undefined {
 	const first = fn.instructions[header];
 	const cursor = first?.opcode === "ITERATOR_STEP" ? cursorSteps.get(header) : undefined;
@@ -3356,22 +3621,45 @@ function lowerNumericLoopRegion(
 			conflicts,
 			cursor,
 			functions,
+			invariantLoadCandidates,
 		);
-	// Fixed-storage headers are comparisons, a view's length load, or a checked element read.
+	// Fixed-storage headers are comparisons, a view's length load, a checked element read,
+	// or an entry load.
 	if (
 		first === undefined ||
 		(!integerLoopInstruction(first) &&
 			!lengthLoads.has(header) &&
 			first.opcode !== "LOAD_PROPERTY" &&
-			first.opcode !== "LOAD_GLOBAL") ||
-		conflicts(header)
+			first.opcode !== "LOAD_PROPERTY_STATIC" &&
+			first.opcode !== "LOAD_GLOBAL" &&
+			first.opcode !== "LOAD_CAPTURED" &&
+			first.opcode !== "LOAD_THIS") ||
+		conflicts(header, false)
 	)
 		return undefined;
-	const shape = numericLoopShape(fn, body, header, true);
-	if (shape === undefined || conflicts(shape.entryIp) || shape.order.some(conflicts))
+	const loop = numericLoopShape(fn, body, header, true);
+	if (loop === undefined) return undefined;
+	const methods = numericLoopCallMethods(fn, loop.order, codeUnitReads, dataViewCalls);
+	const guarded = numericLoopGuardedShape(
+		fn,
+		body,
+		loop,
+		representations,
+		numericLoopInvariantLoadCandidates(
+			fn,
+			loop,
+			invariantLoadCandidates,
+			methods,
+			foreignCalls,
+		),
+	);
+	if (guarded === undefined) return undefined;
+	const { shape, bindings } = guarded;
+	if (
+		conflicts(shape.entryIp, false) ||
+		shape.order.some((ip) => conflicts(ip, bindings.loads.has(ip)))
+	)
 		return undefined;
-	const bindings = numericLoopBindings(fn, shape, body);
-	if (bindings === undefined) return undefined;
 	const storage = fixedNumericLoopStorage(
 		fn,
 		shape,
@@ -3385,18 +3673,19 @@ function lowerNumericLoopRegion(
 	if (
 		storage === undefined &&
 		!integerLoopInstruction(first) &&
-		first.opcode !== "LOAD_GLOBAL"
+		!numericLoopBindingInstruction(fn, header, bindings)
 	)
 		return undefined;
+	// An invariant load's value is boxed, so outside a region everything computed from it is.
 	if (
 		(storage === undefined &&
-			shape.order.some((ip) => {
-				const op = fn.instructions[ip]!;
-				return (
-					!integerLoopInstruction(op) && !numericLoopBindingInstruction(op, bindings)
-				);
-			})) ||
+			shape.order.some(
+				(ip) =>
+					!integerLoopInstruction(fn.instructions[ip]!) &&
+					!numericLoopBindingInstruction(fn, ip, bindings),
+			)) ||
 		(storage === undefined &&
+			bindings.loads.size === 0 &&
 			!shape.order.some((ip) => {
 				const instruction = fn.instructions[ip]!;
 				return (
@@ -3425,12 +3714,14 @@ function lowerNumericLoopRegion(
 			]),
 		),
 		bindings.slots,
+		bindings,
 	);
 	if (flow === undefined) return undefined;
 	const inputs = new Set(flow.inputs);
 	const targets = new Set<number>();
+	const passed = numericLoopPassedGuards(fn, bindings.guards);
 	for (const ip of shape.order)
-		for (const successor of numberRecordSuccessors(fn.instructions[ip]!, ip))
+		for (const successor of numericLoopRegionSuccessors(fn.instructions[ip]!, ip, passed))
 			if (!shape.members.has(successor)) targets.add(successor);
 	if (targets.size === 0) return undefined;
 	const exits: Array<NativeNumericLoopRegionPlan["exits"][number]> = [];
@@ -3497,6 +3788,7 @@ function lowerNumericLoopRegion(
 		...(bindings.slots.size === 0
 			? {}
 			: { globals: Object.freeze([...bindings.slots].sort((a, b) => a - b)) }),
+		...numericLoopEntryFields(bindings),
 	});
 }
 
@@ -4477,12 +4769,16 @@ export function analyzeNativeFastPaths(
 	const cursorSteps = new Map<number, { initializeIp: number; iterator: number }>();
 	// An Array view's length is an own data property, so any `.length` load can bound its loop.
 	const lengthLoads = new Set<number>();
+	// Element and length stores, the only ones a region makes, never change other keys.
+	const invariantLoadCandidates = new Set<number>();
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (op.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") lengthLoads.add(ip);
 		else if (op.opcode === "LOAD_PROPERTY_STATIC") {
 			const units = stringConstants[op.stringIndex];
 			if (units !== undefined && String.fromCharCode(...units) === "length")
 				lengthLoads.add(ip);
+			else if (units !== undefined && !stringConstantIsArrayIndex(units))
+				invariantLoadCandidates.add(ip);
 		}
 	}
 	const indexedLoops: Array<NativeIndexedLoopElement> = [];
@@ -4701,7 +4997,7 @@ export function analyzeNativeFastPaths(
 				native.registerRepresentations,
 				body,
 				// Its back edge polls by returning the iteration to the original loop.
-				(candidate) => {
+				(candidate, entryLoad) => {
 					const kind = native.instructions[candidate]?.kind;
 					return (
 						numericLoopBlocked.has(candidate) ||
@@ -4717,7 +5013,14 @@ export function analyzeNativeFastPaths(
 									dataViewCalls.has(candidate) ||
 									foreignCalls.has(candidate))
 							) &&
-							kind !== "primitive-string-length")
+							kind !== "primitive-string-length" &&
+							// Layout proofs choose a field read's lowering; the entry guards its own.
+							!(
+								entryLoad &&
+								(kind === "class-layout" ||
+									kind === "exact-own-slot" ||
+									kind === "known-own-data")
+							))
 					);
 				},
 				lengthLoads,
@@ -4726,6 +5029,7 @@ export function analyzeNativeFastPaths(
 				dataViewCalls,
 				foreignCalls,
 				functions,
+				invariantLoadCandidates,
 			);
 			if (plan === undefined) continue;
 			// Without a counter the trip count is unknown, and proven element accesses are

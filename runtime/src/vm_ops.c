@@ -6365,6 +6365,34 @@ void mal_vm_record_own_slot(MalInlineCache *ic, const MalShape *shape, MalValue 
     }
 }
 
+// A loop entered once never warms its site through the original load, nor does a load
+// that a class layout serves, so a cold or other-shape row still admits a data property
+// of ordinary objects along the chain, which the search finds without running code.
+// Only an own slot fills the row: an inherited row needs the chain's invalidation.
+__attribute__((noinline)) MalValue mal_vm_loop_invariant_load_miss(
+    MalVm *vm, MalValue receiver, i32 atom, MalInlineCache *ic
+) {
+    MalObject *object = mal_vm_as_object(receiver);
+    if (object == nullptr) return MAL_VALUE_EMPTY;
+    MalValue key_value = mal_value_from_string(vm->string_constant_atoms[atom]);
+    MalKey key = mal_key_from_value(key_value);
+    for (const MalObject *holder = object; holder != nullptr;
+         holder = mal_object_prototype(holder)) {
+        // An overflow table could hold the key ahead of the shape's later holders.
+        if (holder->header.type != MAL_HEAP_OBJECT || mal_object_has_public_overflow(holder)) {
+            return MAL_VALUE_EMPTY;
+        }
+        i32 found = mal_shape_find(holder->shape, key, MAL_SHAPE_FIND_GET_OWN);
+        if (found < 0) continue;
+        const MalShapeProp *prop = &holder->shape->props[found];
+        if (prop->attrs & MAL_PROPERTY_ACCESSOR) return MAL_VALUE_EMPTY;
+        MAL_PERF_COUNT(loop_invariant_load_misses);
+        if (holder == object) mal_vm_record_own_slot(ic, object->shape, key_value, prop->slot);
+        return mal_object_field_load(holder, prop->slot);
+    }
+    return MAL_VALUE_EMPTY;
+}
+
 MalValue mal_vm_load_known_own_data_miss(MalObject *object, MalValue key_value, MalInlineCache *ic) {
     assert(object->header.type == MAL_HEAP_OBJECT);
     assert(mal_value_is_string(key_value));

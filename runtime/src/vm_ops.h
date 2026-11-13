@@ -2120,6 +2120,26 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     return true;
 }
 
+MalValue mal_vm_loop_invariant_load_miss(
+    MalVm *vm, MalValue receiver, i32 atom, MalInlineCache *ic
+);
+
+/**
+ * A numeric loop region's entry load of a named property from an object its loop never
+ * replaces. Only reads that run no code answer, and nothing in a region runs JavaScript
+ * or stores a named property, so every iteration would read this value. Anything else,
+ * including a receiver still in its temporal dead zone, answers empty, and the region
+ * declines.
+ */
+static inline MalValue mal_vm_loop_invariant_load(
+    MalVm *vm, MalValue receiver, i32 atom, MalInlineCache *ic
+) {
+    MalValue value;
+    if (mal_value_is_empty(receiver)) return MAL_VALUE_EMPTY;
+    if (mal_vm_property_try_load_static(vm, receiver, ic, &value)) return value;
+    return mal_vm_loop_invariant_load_miss(vm, receiver, atom, ic);
+}
+
 /**
  * The static probe for a method whose call dispatches over several classes: each
  * class's row lives in the shared stub, so both banks are probed inline before

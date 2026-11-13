@@ -1992,7 +1992,9 @@ export function validateNativeStorage(
 				) &&
 				sameNumbers(plan.claimedIps, expected.claimedIps) &&
 				sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters) &&
-				sameNumbers(plan.globals ?? [], expected.globals ?? [])
+				sameNumbers(plan.globals ?? [], expected.globals ?? []) &&
+				sameNumbers(plan.invariantLoads ?? [], expected.invariantLoads ?? []) &&
+				sameNumbers(plan.calleeGuards ?? [], expected.calleeGuards ?? [])
 			);
 		});
 

@@ -1055,6 +1055,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.dense_array_integer_region_back_edges);
     fprintf(stderr, "[perf-typed-array-stride-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.fixed_typed_array_stride_regions);
+    fprintf(stderr, "[perf-loop-invariant-stats] admissions=%llu load-misses=%llu\n",
+        (unsigned long long) mal_perf_stats.loop_invariant_region_admissions,
+        (unsigned long long) mal_perf_stats.loop_invariant_load_misses);
     fprintf(stderr, "[perf-data-view-region-stats] views=%llu\n",
         (unsigned long long) mal_perf_stats.fixed_data_view_region_views);
     fprintf(
