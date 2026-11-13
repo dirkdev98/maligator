@@ -253,7 +253,9 @@ provide, and the recipient may choose among the alternatives their license expre
 | Crate                    | Version                       | License                                             |
 | ------------------------ | ----------------------------- | --------------------------------------------------- |
 | ada-url                  | 4.0.0                         | MIT OR Apache-2.0                                   |
+| aead                     | 0.6.1                         | MIT OR Apache-2.0                                   |
 | aes                      | 0.9.4                         | MIT OR Apache-2.0                                   |
+| aes-gcm                  | 0.11.1                        | Apache-2.0 OR MIT                                   |
 | aho-corasick             | 1.1.5                         | Unlicense OR MIT                                    |
 | alloc-no-stdlib          | 3.0.0                         | BSD-3-Clause                                        |
 | alloc-stdlib             | 0.3.0                         | BSD-3-Clause                                        |
@@ -263,10 +265,12 @@ provide, and the recipient may choose among the alternatives their license expre
 | base64ct                 | 1.8.3                         | Apache-2.0 OR MIT                                   |
 | blake2b_simd             | 1.0.5                         | MIT                                                 |
 | block-buffer             | 0.12.1                        | MIT OR Apache-2.0                                   |
+| block-padding            | 0.4.2                         | MIT OR Apache-2.0                                   |
 | brotli                   | 9.1.1                         | BSD-3-Clause AND MIT                                |
 | brotli-decompressor      | 6.3.1                         | BSD-3-Clause/MIT                                    |
 | bytes                    | 1.12.1                        | MIT                                                 |
 | calendrical_calculations | 0.2.4                         | Apache-2.0                                          |
+| cbc                      | 0.2.1                         | MIT OR Apache-2.0                                   |
 | cfg-if                   | 1.0.5                         | MIT OR Apache-2.0                                   |
 | chacha20                 | 0.10.2                        | MIT OR Apache-2.0                                   |
 | cipher                   | 0.5.2                         | MIT OR Apache-2.0                                   |
@@ -344,8 +348,10 @@ provide, and the recipient may choose among the alternatives their license expre
 | num-rational             | 0.4.2                         | MIT OR Apache-2.0                                   |
 | num-traits               | 0.2.19                        | MIT OR Apache-2.0                                   |
 | once_cell                | 1.21.4                        | MIT OR Apache-2.0                                   |
+| pbkdf2                   | 0.13.0                        | MIT OR Apache-2.0                                   |
 | pem-rfc7468              | 1.0.0                         | Apache-2.0 OR MIT                                   |
 | pkcs1                    | 0.8.0                         | Apache-2.0 OR MIT                                   |
+| pkcs5                    | 0.8.1                         | Apache-2.0 OR MIT                                   |
 | pkcs8                    | 0.11.0                        | Apache-2.0 OR MIT                                   |
 | poly1305                 | 0.9.1                         | Apache-2.0 OR MIT                                   |
 | polyval                  | 0.7.3                         | Apache-2.0 OR MIT                                   |
@@ -364,10 +370,13 @@ provide, and the recipient may choose among the alternatives their license expre
 | rustls                   | 0.23.46                       | Apache-2.0 OR ISC OR MIT                            |
 | rustls-pki-types         | 1.15.1                        | MIT OR Apache-2.0                                   |
 | rustls-webpki            | 0.103.16                      | ISC                                                 |
+| salsa20                  | 0.11.0                        | MIT OR Apache-2.0                                   |
+| scrypt                   | 0.12.0                        | MIT OR Apache-2.0                                   |
 | serde                    | 1.0.229                       | MIT OR Apache-2.0                                   |
 | serde_core               | 1.0.229                       | MIT OR Apache-2.0                                   |
 | serde_derive             | 1.0.229                       | MIT OR Apache-2.0                                   |
 | serdect                  | 0.4.3                         | Apache-2.0 OR MIT                                   |
+| sha1                     | 0.11.0                        | MIT OR Apache-2.0                                   |
 | sha2                     | 0.11.1                        | MIT OR Apache-2.0                                   |
 | signature                | 3.0.0                         | Apache-2.0 OR MIT                                   |
 | smallvec                 | 1.16.5                        | MIT OR Apache-2.0                                   |
@@ -643,13 +652,17 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### aes 0.9.4 (MIT OR Apache-2.0): LICENSE-APACHE
+### aead 0.6.1 (MIT OR Apache-2.0): LICENSE-APACHE
 
 Also shipped by:
 
+- aes 0.9.4 (MIT OR Apache-2.0): LICENSE-APACHE
+- aes-gcm 0.11.1 (Apache-2.0 OR MIT): LICENSE-APACHE
 - base16ct 1.0.0 (Apache-2.0 OR MIT): LICENSE-APACHE
 - base64ct 1.8.3 (Apache-2.0 OR MIT): LICENSE-APACHE
 - block-buffer 0.12.1 (MIT OR Apache-2.0): LICENSE-APACHE
+- block-padding 0.4.2 (MIT OR Apache-2.0): LICENSE-APACHE
+- cbc 0.2.1 (MIT OR Apache-2.0): LICENSE-APACHE
 - chacha20 0.10.2 (MIT OR Apache-2.0): LICENSE-APACHE
 - cipher 0.5.2 (MIT OR Apache-2.0): LICENSE-APACHE
 - const-oid 0.10.3 (Apache-2.0 OR MIT): LICENSE-APACHE
@@ -664,11 +677,16 @@ Also shipped by:
 - hmac 0.13.0 (MIT OR Apache-2.0): LICENSE-APACHE
 - hybrid-array 0.4.15 (MIT OR Apache-2.0): LICENSE-APACHE
 - inout 0.2.6 (MIT OR Apache-2.0): LICENSE-APACHE
+- pbkdf2 0.13.0 (MIT OR Apache-2.0): LICENSE-APACHE
 - pem-rfc7468 1.0.0 (Apache-2.0 OR MIT): LICENSE-APACHE
 - pkcs1 0.8.0 (Apache-2.0 OR MIT): LICENSE-APACHE
+- pkcs5 0.8.1 (Apache-2.0 OR MIT): LICENSE-APACHE
 - pkcs8 0.11.0 (Apache-2.0 OR MIT): LICENSE-APACHE
 - poly1305 0.9.1 (Apache-2.0 OR MIT): LICENSE-APACHE
 - polyval 0.7.3 (Apache-2.0 OR MIT): LICENSE-APACHE
+- salsa20 0.11.0 (MIT OR Apache-2.0): LICENSE-APACHE
+- scrypt 0.12.0 (MIT OR Apache-2.0): LICENSE-APACHE
+- sha1 0.11.0 (MIT OR Apache-2.0): LICENSE-APACHE
 - sha2 0.11.1 (MIT OR Apache-2.0): LICENSE-APACHE
 - signature 3.0.0 (Apache-2.0 OR MIT): LICENSE-APACHE
 - spki 0.8.1 (Apache-2.0 OR MIT): LICENSE-APACHE
@@ -878,11 +896,78 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
+### aead 0.6.1 (MIT OR Apache-2.0): LICENSE-MIT
+
+```text
+Copyright (c) 2019-2026 The RustCrypto Project Developers
+Copyright (c) 2019 MobileCoin, LLC
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
+
 ### aes 0.9.4 (MIT OR Apache-2.0): LICENSE-MIT
 
 ```text
 Copyright (c) 2018-2024 The RustCrypto Project Developers
 Copyright (c) 2018 Artyom Pavlov
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
+
+### aes-gcm 0.11.1 (Apache-2.0 OR MIT): LICENSE-MIT
+
+Also shipped by:
+
+- chacha20 0.10.2 (MIT OR Apache-2.0): LICENSE-MIT
+- ghash 0.6.0 (Apache-2.0 OR MIT): LICENSE-MIT
+- polyval 0.7.3 (Apache-2.0 OR MIT): LICENSE-MIT
+
+```text
+Copyright (c) 2019-2026 The RustCrypto Project Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -1396,6 +1481,10 @@ SOFTWARE.
 
 ### block-buffer 0.12.1 (MIT OR Apache-2.0): LICENSE-MIT
 
+Also shipped by:
+
+- block-padding 0.4.2 (MIT OR Apache-2.0): LICENSE-MIT
+
 ```text
 Copyright (c) 2018-2025 The RustCrypto Project Developers
 
@@ -1684,10 +1773,15 @@ DEALINGS IN THE SOFTWARE.
    limitations under the License.
 ```
 
-### cfg-if 1.0.5 (MIT OR Apache-2.0): LICENSE-MIT
+### cbc 0.2.1 (MIT OR Apache-2.0): LICENSE-MIT
+
+Also shipped by:
+
+- ctr 0.10.1 (MIT OR Apache-2.0): LICENSE-MIT
 
 ```text
-Copyright (c) 2014 Alex Crichton
+Copyright (c) 2018-2022 RustCrypto Developers
+Copyright (c) 2018 Artyom Pavlov
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -1714,15 +1808,10 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### chacha20 0.10.2 (MIT OR Apache-2.0): LICENSE-MIT
-
-Also shipped by:
-
-- ghash 0.6.0 (Apache-2.0 OR MIT): LICENSE-MIT
-- polyval 0.7.3 (Apache-2.0 OR MIT): LICENSE-MIT
+### cfg-if 1.0.5 (MIT OR Apache-2.0): LICENSE-MIT
 
 ```text
-Copyright (c) 2019-2026 The RustCrypto Project Developers
+Copyright (c) 2014 Alex Crichton
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -2491,6 +2580,8 @@ DEALINGS IN THE SOFTWARE.
 Also shipped by:
 
 - pkcs1 0.8.0 (Apache-2.0 OR MIT): LICENSE-MIT
+- pkcs5 0.8.1 (Apache-2.0 OR MIT): LICENSE-MIT
+- scrypt 0.12.0 (MIT OR Apache-2.0): LICENSE-MIT
 - spki 0.8.1 (Apache-2.0 OR MIT): LICENSE-MIT
 
 ```text
@@ -2767,37 +2858,6 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-```
-
-### ctr 0.10.1 (MIT OR Apache-2.0): LICENSE-MIT
-
-```text
-Copyright (c) 2018-2022 RustCrypto Developers
-Copyright (c) 2018 Artyom Pavlov
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
 ```
 
 ### ctutils 0.4.8 (Apache-2.0 OR MIT): LICENSE-MIT
@@ -3916,6 +3976,37 @@ Also shipped by:
 
 ```text
 Copyright (c) 2014 The Rust Project Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
+
+### pbkdf2 0.13.0 (MIT OR Apache-2.0): LICENSE-MIT
+
+```text
+Copyright (c) 2017 Artyom Pavlov
+Copyright (c) 2018-2023 The RustCrypto Project Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -5302,6 +5393,37 @@ The files under third-party/chromium are licensed as described in
 third-party/chromium/LICENSE.
 ```
 
+### salsa20 0.11.0 (MIT OR Apache-2.0): LICENSE-MIT
+
+```text
+Copyright (c) 2019-2026 The RustCrypto Project Developers
+Copyright (c) 2019 Eric McCorkle
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
+
 ### serdect 0.4.3 (Apache-2.0 OR MIT): LICENSE-MIT
 
 ```text
@@ -5328,7 +5450,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### sha2 0.11.1 (MIT OR Apache-2.0): LICENSE-MIT
+### sha1 0.11.0 (MIT OR Apache-2.0): LICENSE-MIT
+
+Also shipped by:
+
+- sha2 0.11.1 (MIT OR Apache-2.0): LICENSE-MIT
 
 ```text
 Copyright (c) 2016-2026 The RustCrypto Project Developers
