@@ -1,3 +1,4 @@
+import { unconfinedDynamicCode } from "../shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_UNDEFINED,
@@ -509,7 +510,7 @@ export function coreGeneratorFusion(
 	if (
 		!summaries.targets.sourceClosed ||
 		context.facts.world.primordialPolicy !== "locked" ||
-		context.facts.world.eval !== "disabled" ||
+		unconfinedDynamicCode(context.facts) ||
 		context.facts.world.realms ||
 		caller.isAsync ||
 		caller.isGenerator ||

@@ -28,11 +28,11 @@ it("compiles the complete frozen module graph with the product closure certifica
 	}
 });
 
-it("does not claim closure when the configured program admits dynamic source", async () => {
+it("does not claim closure when run-time source can name program bindings", async () => {
 	const directory = mkdtempSync(path.join(tmpdir(), "mal-micro-open-"));
 	try {
 		const fixture = path.join(directory, "entry.mjs");
-		writeFileSync(fixture, "globalThis.answer = 42;");
+		writeFileSync(fixture, "let answer = 42; globalThis.answer = eval('answer');");
 		const { evidence } = await compileNativeMicroProgram(
 			path.resolve(import.meta.dirname, ".."),
 			fixture,

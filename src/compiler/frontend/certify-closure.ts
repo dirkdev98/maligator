@@ -6,6 +6,7 @@ import type {
 	ProgramClosureCertificate,
 } from "../shared/compiler-facts.ts";
 import { programClosureCertificate } from "../shared/compiler-facts.ts";
+import { ESTREE_CONTINUE, ESTREE_STOP, traverseEstree } from "./estree-traversal.ts";
 import type { ModuleDependency, ModuleGraph, ModuleRecord } from "./module-graph.ts";
 
 /**
@@ -88,13 +89,7 @@ function enumerateOpenings(
 	environment: ClosureEnvironment,
 ): Array<ClosureOpening> {
 	const openings: Array<ClosureOpening> = [];
-	if (config.engine.eval === true) {
-		openings.push({
-			kind: "dynamic-code",
-			detail:
-				"engine.eval is true, so the embedded compiler can turn runtime strings into new functions",
-		});
-	}
+	if (config.engine.eval === true) openings.push(dynamicCodeOpening(graph, config));
 	if (environment.hostWireSplicing) {
 		openings.push({
 			kind: "host-wire-splicing",
@@ -117,6 +112,71 @@ function enumerateOpenings(
 		}
 	}
 	return openings;
+}
+
+/**
+ * Classify what code compiled at run time can reach. Indirect eval and the
+ * `Function` constructors evaluate in the global scope, so without a direct eval
+ * site that code sees only the global object, its arguments and what those reach.
+ * A script shares its top-level declarations with that scope, a direct eval shares
+ * the caller's, mutable primordials let it rewrite the builtins the program's
+ * proofs resolve, and another realm runs it against globals the program never
+ * models; each keeps the program open.
+ */
+function dynamicCodeOpening(
+	graph: ModuleGraph,
+	config: ResolvedBuildConfig,
+): ClosureOpening {
+	const binding = (detail: string, module?: string): ClosureOpening => ({
+		kind: "dynamic-code",
+		...(module === undefined ? {} : { module }),
+		detail,
+	});
+	if (config.engine.primordials !== "locked")
+		return binding(
+			"engine.eval is true with mutable primordials, so run-time code can replace the builtins the program uses",
+		);
+	if (config.engine.realms)
+		return binding(
+			"engine.eval is true with realms, so run-time code can run against globals of other realms",
+		);
+	for (const modulePath of [...graph.modules.keys()].sort()) {
+		const record = graph.modules.get(modulePath)!;
+		if (record.host !== undefined || record.external !== undefined) continue;
+		if (record.goal === "script")
+			return binding(
+				"engine.eval is true and a script's top-level declarations are global bindings that run-time code can name",
+				modulePath,
+			);
+		if (mayCallDirectEval(record))
+			return binding(
+				"engine.eval is true and a direct eval can name the bindings in scope at its call",
+				modulePath,
+			);
+	}
+	return {
+		kind: "global-dynamic-code",
+		detail:
+			"engine.eval is true, so the embedded compiler can turn runtime strings into global code that reaches the program only through the global object and the values it is handed",
+	};
+}
+
+/**
+ * Whether a module may contain a direct eval: a call whose callee is the identifier
+ * `eval`, ignoring shadowing so the check needs no scope analysis. The source scan
+ * only skips the parse; a unicode-escaped identifier keeps it.
+ */
+function mayCallDirectEval(record: ModuleRecord): boolean {
+	if (!record.source.includes("eval") && !record.source.includes("\\u")) return false;
+	return (
+		traverseEstree(record.parsed.ast, (node) =>
+			node.type === "CallExpression" &&
+			node.callee.type === "Identifier" &&
+			node.callee.name === "eval"
+				? ESTREE_STOP
+				: ESTREE_CONTINUE,
+		) === ESTREE_STOP
+	);
 }
 
 /**

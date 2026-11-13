@@ -58,6 +58,7 @@ import { SyntaxDiagnostic } from "../frontend/syntax-diagnostic.ts";
 import {
 	compilerFactIsWorldInvariant,
 	conservativeCompilerProgramFacts,
+	unconfinedDynamicCode,
 } from "../shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import { MAX_STRING_CONCAT_INPUTS } from "../shared/compiler-instruction.ts";
@@ -1807,7 +1808,7 @@ function coreInitializedLexicalReads(program: CoreFrontendContext): {
 function coreModuleBindingSlots(program: CoreFrontendContext): Array<number> {
 	if (
 		program.evalDirect ||
-		program.facts.world.eval !== "disabled" ||
+		unconfinedDynamicCode(program.facts) ||
 		program.facts.closure.sourceClosure.kind !== "known"
 	)
 		return [];
@@ -1835,7 +1836,7 @@ function coreModuleLexicalSlots(
 ): Array<{ slot: number; evaluator: number }> {
 	if (
 		program.evalDirect ||
-		program.facts.world.eval !== "disabled" ||
+		unconfinedDynamicCode(program.facts) ||
 		program.facts.closure.sourceClosure.kind !== "known"
 	)
 		return [];

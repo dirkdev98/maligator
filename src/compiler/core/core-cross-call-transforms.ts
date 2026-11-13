@@ -1,4 +1,5 @@
 import { builtinNormalResultKinds } from "../shared/builtin-registry.ts";
+import { unconfinedDynamicCode } from "../shared/compiler-facts.ts";
 import type { WorldFacts } from "../shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_TOP,
@@ -3081,7 +3082,7 @@ export function discoverCoreCrossCallCandidates(
 		const context = analyses.compilationContext;
 		if (
 			context.facts.closure.sourceClosure.kind !== "known" ||
-			context.facts.world.eval !== "disabled"
+			unconfinedDynamicCode(context.facts)
 		)
 			return undefined;
 		let discovered = discoveredGlobalSlotUses.get(program);

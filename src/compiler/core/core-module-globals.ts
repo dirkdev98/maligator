@@ -1,3 +1,4 @@
+import { unconfinedDynamicCode } from "../shared/compiler-facts.ts";
 import type {
 	CoreCompilationContext,
 	ConstructedCoreCompilation,
@@ -192,7 +193,7 @@ function coreEvaluatorPrivateSlots(
 ): ReadonlyArray<number> {
 	const entries = context.data.moduleLexicalSlots;
 	if (
-		context.facts.world.eval !== "disabled" ||
+		unconfinedDynamicCode(context.facts) ||
 		context.facts.closure.sourceClosure.kind !== "known" ||
 		context.data.moduleLinks !== undefined ||
 		entries === undefined

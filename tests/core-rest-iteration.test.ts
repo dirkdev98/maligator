@@ -19,17 +19,14 @@ function inspect(
 }
 const iterate = "let total=base;for(const value of values)total+=value;return total;";
 
-it("lowers private rest iteration in configured portable runtime images", () => {
+function iteratesWithProtocol(source: string, engine: { eval: boolean }): boolean {
 	const directory = mkdtempSync(join(tmpdir(), "mal-rest-wire-"));
 	try {
 		const entrypoint = join(directory, "entry.mjs");
-		writeFileSync(
-			entrypoint,
-			`function target(base,...values){${iterate}} globalThis.target=target;`,
-		);
+		writeFileSync(entrypoint, source);
 		const image = deserializeRuntimeImage(
 			compileEntrypointToBuffer(entrypoint, {
-				buildConfig: resolveBuildConfig({ engine: { eval: false, realms: false } }),
+				buildConfig: resolveBuildConfig({ engine: { ...engine, realms: false } }),
 			}),
 		);
 		const target = image.functions.find(
@@ -38,12 +35,39 @@ it("lowers private rest iteration in configured portable runtime images", () => 
 				"target",
 		);
 		expect(target).toBeDefined();
-		expect(
-			target!.instructions.some((instruction) => instruction.opcode === "GET_ITERATOR"),
-		).toBe(false);
+		return target!.instructions.some(
+			(instruction) => instruction.opcode === "GET_ITERATOR",
+		);
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
+}
+
+it("lowers private rest iteration in configured portable runtime images", () => {
+	expect(
+		iteratesWithProtocol(
+			`function target(base,...values){${iterate}} globalThis.target=target;`,
+			{ eval: false },
+		),
+	).toBe(false);
+});
+
+it("lowers private rest iteration while run-time code can only run as global code", () => {
+	expect(
+		iteratesWithProtocol(
+			`function target(base,...values){${iterate}} globalThis.target=Function("t","return t")(target);`,
+			{ eval: true },
+		),
+	).toBe(false);
+});
+
+it("keeps rest iteration observable to a direct eval", () => {
+	expect(
+		iteratesWithProtocol(
+			`function target(base,...values){eval("values");${iterate}} globalThis.target=target;`,
+			{ eval: true },
+		),
+	).toBe(true);
 });
 
 it("lowers a private rest loop to virtual packed reads", () => {

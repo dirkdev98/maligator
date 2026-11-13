@@ -9,6 +9,7 @@ import { coreFunctionId, coreInstructionId } from "../core/core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "../core/core-ir.ts";
 import { coreExactArrayFromCallResult } from "../core/core-static-values.ts";
 import type { CoreFunctionStore } from "../core/core-store.ts";
+import { unconfinedDynamicCode } from "../shared/compiler-facts.ts";
 
 function definition(
 	fn: CoreFunctionStore,
@@ -32,8 +33,12 @@ export function mappedFunctionArrayCallHints(
 	available: ReadonlyArray<number>,
 ): ReadonlyMap<CoreInstructionId, ReadonlyArray<CoreFunctionId>> {
 	const result = new Map<CoreInstructionId, ReadonlyArray<CoreFunctionId>>();
-	const world = compilation.context.facts.world;
-	if (world.primordialPolicy !== "locked" || world.eval !== "disabled" || world.realms)
+	const facts = compilation.context.facts;
+	if (
+		facts.world.primordialPolicy !== "locked" ||
+		unconfinedDynamicCode(facts) ||
+		facts.world.realms
+	)
 		return result;
 	const producers = [...fn.instructionIds()].filter(
 		(instruction) =>

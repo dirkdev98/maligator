@@ -1,4 +1,7 @@
-import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
+import {
+	compilerFactIsWorldInvariant,
+	unconfinedDynamicCode,
+} from "../shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_TOP,
@@ -235,7 +238,7 @@ export function analyzeCorePrivateFields(
 	program: CoreProgram,
 	context: CoreCompilationContext,
 ): CorePrivateFieldFacts | undefined {
-	if (context.facts.world.eval === "runtime") return undefined;
+	if (unconfinedDynamicCode(context.facts)) return undefined;
 	const keys = corePrivateFieldKeys(program, context);
 	const writers: Array<FieldWriter> = [];
 	for (const id of program.functionIds()) {

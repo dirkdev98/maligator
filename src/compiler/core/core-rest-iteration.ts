@@ -1,4 +1,7 @@
-import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
+import {
+	compilerFactIsWorldInvariant,
+	unconfinedDynamicCode,
+} from "../shared/compiler-facts.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { removeUnsharedProof } from "./core-effect-proof-edits.ts";
 import { buildCoreControlFlow, coreTerminatorInput } from "./core-ir-control-flow.ts";
@@ -168,7 +171,7 @@ export const lowerPrivateRestIteration: CoreFunctionPass = {
 		const { world, protectors } = context.compilationContext.facts;
 		if (
 			world.primordialPolicy !== "locked" ||
-			world.eval !== "disabled" ||
+			unconfinedDynamicCode(context.compilationContext.facts) ||
 			world.realms ||
 			fn.isAsync ||
 			fn.isGenerator ||

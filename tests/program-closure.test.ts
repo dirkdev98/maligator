@@ -17,7 +17,9 @@ import {
 	closureOpeningBreaksSourceClosure,
 	compilerProgramFactsFromConfig,
 	conservativeCompilerProgramFacts,
+	unconfinedDynamicCode,
 	unanalyzedProgramClosure,
+	withProgramClosure,
 } from "../src/compiler/shared/compiler-facts.ts";
 
 const directories: Array<string> = [];
@@ -51,12 +53,14 @@ function certify(
 		config?: ResolvedBuildConfig;
 		environment?: ClosureEnvironment;
 		entryPrelude?: { specifier: string; source: string };
+		entryGoal?: "script";
 	} = {},
 ): ProgramClosureCertificate {
 	const config = options.config ?? resolveBuildConfig({ engine: { eval: false } });
 	const graph = buildModuleGraph(entry, {
 		buildConfig: config,
 		...(options.entryPrelude === undefined ? {} : { entryPrelude: options.entryPrelude }),
+		...(options.entryGoal === undefined ? {} : { entryGoal: options.entryGoal }),
 	});
 	return certifyProgramClosure(graph, config, options.environment ?? wholeProgram);
 }
@@ -95,16 +99,65 @@ describe("program closure certificate", () => {
 		expect(certificate.sourceClosure.kind).toBe("known");
 	});
 
-	test("opens closure when the runtime can compile new source", () => {
-		const certificate = certify(project({ "entry.mjs": "export const answer = 42;\n" }), {
+	test("keeps closure when run-time code can only run as global code", () => {
+		const certificate = certify(
+			project({
+				"entry.mjs":
+					'import { helper } from "./helper.mjs";\nhelper((0, eval)("1"), globalThis.eval("2"), Function("return 3"));\n',
+				"helper.mjs": "export function helper() {}\n",
+			}),
+			{ config: resolveBuildConfig({ engine: { eval: true } }) },
+		);
+
+		expect(openingKinds(certificate)).toEqual(["global-dynamic-code"]);
+		expect(certificate.sourceClosure.kind).toBe("known");
+	});
+
+	test("opens closure for a direct eval anywhere in the graph", () => {
+		const entry = project({
+			"entry.mjs": 'import { helper } from "./helper.mjs";\nhelper();\n',
+			"helper.mjs":
+				"let local = 1;\nexport function helper() {\n\treturn (eval)('local');\n}\n",
+		});
+		const certificate = certify(entry, {
 			config: resolveBuildConfig({ engine: { eval: true } }),
 		});
 
-		expect(openingKinds(certificate)).toEqual(["dynamic-code"]);
+		expect(certificate.openings).toEqual([
+			expect.objectContaining({
+				kind: "dynamic-code",
+				module: path.join(path.dirname(entry), "helper.mjs"),
+			}),
+		]);
 		expect(certificate.sourceClosure).toEqual({
 			kind: "unknown",
 			reason: "eval-visible",
 		});
+	});
+
+	test("opens closure when run-time code shares a script's global declarations", () => {
+		const certificate = certify(
+			project({ "entry.js": "let counter = 0;\n" }, "entry.js"),
+			{
+				config: resolveBuildConfig({ engine: { eval: true } }),
+				entryGoal: "script",
+			},
+		);
+
+		expect(openingKinds(certificate)).toEqual(["dynamic-code"]);
+		expect(certificate.sourceClosure.kind).toBe("unknown");
+	});
+
+	test.each([
+		["mutable primordials", { primordials: "mutable" }],
+		["realms", { realms: true }],
+	] as const)("opens closure for run-time code with %s", (_, engine) => {
+		const certificate = certify(project({ "entry.mjs": "export const answer = 42;\n" }), {
+			config: resolveBuildConfig({ engine: { eval: true, ...engine } }),
+		});
+
+		expect(openingKinds(certificate)).toEqual(["dynamic-code"]);
+		expect(certificate.sourceClosure.kind).toBe("unknown");
 	});
 
 	test("opens closure when the executing host can splice further wire images", () => {
@@ -248,6 +301,7 @@ describe("modelled module-loading openings", () => {
 		const kinds: Record<ClosureOpeningKind, boolean> = {
 			"not-analyzed": true,
 			"dynamic-code": true,
+			"global-dynamic-code": false,
 			"host-wire-splicing": true,
 			"relocatable-artifact": true,
 			"unresolved-runtime-load": true,
@@ -332,12 +386,61 @@ describe("compileEntrypoint closure wiring", () => {
 		expect(facts.closure.sourceClosure.kind).toBe("known");
 	});
 
-	test("carries an open certificate when the build enables runtime eval", () => {
+	test("carries a closed certificate when run-time eval can only run global code", () => {
 		const entry = project({ "entry.mjs": "export const answer = 42;\n" });
+
+		const facts = factsFor(entry, resolveBuildConfig({ engine: { eval: true } }));
+
+		expect(openingKinds(facts.closure)).toEqual(["global-dynamic-code"]);
+		expect(facts.closure.sourceClosure.kind).toBe("known");
+	});
+
+	test("carries an open certificate when run-time eval can name program bindings", () => {
+		const entry = project({ "entry.mjs": "let answer = 42;\neval('answer');\n" });
 
 		const facts = factsFor(entry, resolveBuildConfig({ engine: { eval: true } }));
 
 		expect(openingKinds(facts.closure)).toEqual(["dynamic-code"]);
 		expect(facts.closure.sourceClosure.kind).toBe("unknown");
+	});
+});
+
+describe("dynamic code reach", () => {
+	function factsWith(
+		engine: Parameters<typeof resolveBuildConfig>[0]["engine"],
+		source: string,
+	): CompilerProgramFacts {
+		const config = resolveBuildConfig({ engine });
+		return withProgramClosure(
+			compilerProgramFactsFromConfig(config),
+			certify(project({ "entry.mjs": source }), { config }),
+		);
+	}
+
+	test("has no unconfined run-time code without a run-time compiler", () => {
+		for (const evalPolicy of [false, "compile-check"] as const)
+			expect(unconfinedDynamicCode(factsWith({ eval: evalPolicy }, "eval('x');\n"))).toBe(
+				false,
+			);
+	});
+
+	test("confines run-time code that can only run as global code", () => {
+		expect(unconfinedDynamicCode(factsWith({ eval: true }, "Function('x');\n"))).toBe(
+			false,
+		);
+	});
+
+	test("leaves a direct eval unconfined", () => {
+		expect(unconfinedDynamicCode(factsWith({ eval: true }, "let x;\neval('x');\n"))).toBe(
+			true,
+		);
+	});
+
+	test("leaves run-time code of an uncertified program unconfined", () => {
+		expect(
+			unconfinedDynamicCode(
+				compilerProgramFactsFromConfig(resolveBuildConfig({ engine: { eval: true } })),
+			),
+		).toBe(true);
 	});
 });

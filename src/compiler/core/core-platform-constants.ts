@@ -1,4 +1,5 @@
 import type { PlatformData } from "../../platform/catalog.ts";
+import { unconfinedDynamicCode } from "../shared/compiler-facts.ts";
 import type { ConstructedCoreCompilation } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
@@ -409,11 +410,11 @@ export function specializeCorePlatformConstants(
 	}
 }
 
-/** Internal alias stores must not keep discarded snapshots alive; eval can expose those cells. */
+/** Internal alias stores must not keep discarded snapshots alive; a direct eval can expose those cells. */
 export function pruneUnusedPlatformAliases(
 	compilation: ConstructedCoreCompilation,
 ): void {
-	if (compilation.context.facts.world.eval !== "disabled") return;
+	if (unconfinedDynamicCode(compilation.context.facts)) return;
 	const values = new PlatformValues(compilation);
 	if (values.roots.size === 0) return;
 	const { program } = compilation;

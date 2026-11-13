@@ -176,6 +176,7 @@ export interface ClosureRoot {
 export type ClosureOpeningKind =
 	| "not-analyzed"
 	| "dynamic-code"
+	| "global-dynamic-code"
 	| "host-wire-splicing"
 	| "relocatable-artifact"
 	| "computed-module-specifier"
@@ -190,10 +191,18 @@ export interface ClosureOpening {
 }
 
 /**
- * Whether an opening lets source the compiler never saw enter the running program.
- * `computed-module-specifier` and `unresolved-module-target` do not: both lower to
- * a bounded candidate set over graph modules plus a deterministic rejection, so
- * they cost reachability precision rather than source closure.
+ * Whether an opening lets source the compiler never saw enter the running program
+ * in a way closed-world analysis cannot model. `computed-module-specifier` and
+ * `unresolved-module-target` lower to a bounded candidate set over graph modules
+ * plus a deterministic rejection, so they cost reachability precision rather than
+ * source closure.
+ *
+ * `global-dynamic-code` admits new source, but only as global code: it cannot name
+ * a program binding and reaches the program only through the global object and the
+ * values the program hands it. Closed-world proofs already let every opaque callee
+ * use what escapes to it and call every published function with any arguments,
+ * since host code has that reach too, so such code adds no caller or writer they
+ * do not admit.
  */
 export function closureOpeningBreaksSourceClosure(kind: ClosureOpeningKind): boolean {
 	switch (kind) {
@@ -203,6 +212,7 @@ export function closureOpeningBreaksSourceClosure(kind: ClosureOpeningKind): boo
 		case "relocatable-artifact":
 		case "unresolved-runtime-load":
 			return true;
+		case "global-dynamic-code":
 		case "computed-module-specifier":
 		case "unresolved-module-target":
 			return false;
@@ -268,6 +278,23 @@ export function programClosureCertificate(
 				: "open-world-reachability",
 		),
 	};
+}
+
+/**
+ * Whether code compiled at run time may reach past the global object and the values
+ * it is handed: naming locals, captures, module bindings or private names through a
+ * direct eval or a script's global declarations, or rewriting builtins and realms
+ * the program's proofs resolve. Passes whose proofs enumerate every reader or
+ * writer of a program binding stay off while it may. Confined run-time code is one
+ * more opaque caller, which every closed-world proof already admits.
+ */
+export function unconfinedDynamicCode(
+	facts: Pick<CompilerProgramFacts, "world" | "closure">,
+): boolean {
+	return (
+		facts.world.eval === "runtime" &&
+		!facts.closure.openings.some((opening) => opening.kind === "global-dynamic-code")
+	);
 }
 
 export interface WorldFacts {

@@ -74,11 +74,18 @@ describe("private generator fusion", () => {
 	it("keeps the protocol across realms", () => {
 		expect(fusionCount(sequence, traversal, "", { realms: true })).toBe(0);
 	});
-	it.each([
-		{ behavior: "mutable primordials", engine: { primordials: "mutable" as const } },
-		{ behavior: "dynamic evaluation", engine: { eval: true } },
-	])("keeps the protocol with $behavior", ({ engine }) => {
-		expect(fusionCount(sequence, traversal, "", engine)).toBe(0);
+	it("keeps the protocol with mutable primordials", () => {
+		expect(fusionCount(sequence, traversal, "", { primordials: "mutable" })).toBe(0);
+	});
+	it("fuses while run-time code can only run as global code", () => {
+		expect(
+			fusionCount(sequence, traversal, 'globalThis.later = Function("return 1");', {
+				eval: true,
+			}),
+		).toBeGreaterThan(0);
+	});
+	it("keeps the protocol when a direct eval can name the generator", () => {
+		expect(fusionCount(sequence, traversal, 'eval("sequence");', { eval: true })).toBe(0);
 	});
 	it("keeps generator cleanup on early exit", () => {
 		expect(

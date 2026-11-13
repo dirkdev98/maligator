@@ -27,6 +27,8 @@ Enable only the APIs your application uses. `surface.node` includes supported No
 
 Engine choices apply to the whole image, including workers. RegExp is enabled by default. Eval, Realm support, Temporal, and Intl are opt-in. `engine.eval: true` embeds the runtime compiler; `"compile-check"` rejects visible dynamic compilation and keeps it disabled at runtime.
 
+Code from `new Function`, indirect eval such as `(0, eval)(source)`, and the other function constructors runs as global code, so with locked primordials and without realms the rest of the program keeps its whole-program optimizations. A direct `eval(source)` call can read and assign every binding in scope, and a script entry shares its top-level declarations with global code; either one makes the build optimize the whole program as open to unseen code.
+
 The [configuration reference](/api/build#MaligatorBuildConfig) lists each default and interaction. Type declarations remain visible even for disabled surfaces. Check [Compatibility](/compatibility) for support within an enabled surface.
 
 ## Replace a module specifier

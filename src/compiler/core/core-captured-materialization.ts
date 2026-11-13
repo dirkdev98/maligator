@@ -1,3 +1,4 @@
+import { unconfinedDynamicCode } from "../shared/compiler-facts.ts";
 import type { ConstructedCoreCompilation } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { buildCoreControlFlow, coreTerminatorInput } from "./core-ir-control-flow.ts";
@@ -216,7 +217,7 @@ export function deferCapturedAllocations(
 ): number {
 	const { program, context } = compilation;
 	if (
-		context.facts.world.eval !== "disabled" ||
+		unconfinedDynamicCode(context.facts) ||
 		context.facts.closure.sourceClosure.kind !== "known"
 	)
 		return 0;

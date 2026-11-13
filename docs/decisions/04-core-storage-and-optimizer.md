@@ -221,6 +221,15 @@ constructor result, gets opaque parameters. A closure created and called only by
 known sites therefore sees exactly the closures its callers pass. Entry bodies the
 runtime creates itself keep opaque parameters.
 
+Code that `engine.eval: true` compiles at run time is one more opaque caller when it
+can only run as global code: indirect eval and the function constructors reach the
+global object, the values the program hands them and what those reach, which is
+what host code can reach. The closure certificate keeps source closure for such a
+program unless a module may call a direct eval, a script shares its top-level
+declarations with global code, primordials are mutable, or realms are enabled.
+Proofs that enumerate every reader or writer of a local, captured, module or
+private binding stay off only while run-time code is unconfined.
+
 A property read keeps finite targets only as guarded candidates: the functions a
 known function object's property or a same-function object literal's initializer
 put in that slot, joined with opaque. Dispatch guards the loaded callee's function

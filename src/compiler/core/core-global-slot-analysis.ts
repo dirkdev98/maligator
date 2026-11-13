@@ -1,3 +1,4 @@
+import { unconfinedDynamicCode } from "../shared/compiler-facts.ts";
 import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreExactHeapBrand } from "./core-heap-brands.ts";
@@ -26,7 +27,7 @@ export function analyzeCoreGlobalSlotBrands(
 	context: CoreCompilationContext,
 ): ReadonlyMap<number, CoreExactHeapBrand> {
 	const slots = coreClosedGlobalSlotMembership(context);
-	if (slots.size === 0 || context.facts.world.eval === "runtime") return new Map();
+	if (slots.size === 0 || unconfinedDynamicCode(context.facts)) return new Map();
 	const brands = new Map<number, CoreExactHeapBrand | null>();
 	for (const id of program.functionIds()) {
 		const fn = program.function(id);
