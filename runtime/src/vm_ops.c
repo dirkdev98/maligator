@@ -5562,8 +5562,10 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
                     *out = mal_value_from_string(mal_intrinsic_code_unit(
                         vm, mal_string_code_unit_at(string, (usize) index)
                     ));
+                    return true;
                 }
-                return true;
+                // Indices past the length are not own, so they are inherited.
+                if (mal_vm_array_elements_intact(vm)) return true;
             }
 
             return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_STRING_PROTOTYPE, receiver, key, out);

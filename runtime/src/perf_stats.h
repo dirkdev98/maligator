@@ -655,6 +655,8 @@ typedef struct MalPerfStats {
     u64 ic_load_primitive_fills;
     u64 ic_load_primitive_uncacheable;
     u64 ic_load_string_length_hits;
+    /** Loop-head String admissions of an indexed-length loop (`i < s.length; s[i]`). */
+    u64 ic_load_string_loop_length_hits;
     u64 ic_load_array_length_hits;
     u64 ic_load_typed_array_length_hits;
     u64 ic_load_collection_size_hits;

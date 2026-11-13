@@ -1557,6 +1557,7 @@ static void mal_perf_stats_print(void) {
         "load_shape_hits=%llu load_shape_fills=%llu load_shape_uncacheable=%llu "
         "load_plain_generic=%llu load_primitive_hits=%llu load_primitive_fills=%llu "
         "load_primitive_uncacheable=%llu load_string_length_hits=%llu "
+        "load_string_loop_length_hits=%llu "
         "load_array_length_hits=%llu load_typed_array_length_hits=%llu "
         "load_collection_size_hits=%llu load_dictionary_direct_hits=%llu "
         "load_index_string_hits=%llu "
@@ -1600,6 +1601,7 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.ic_load_primitive_fills,
         (unsigned long long) mal_perf_stats.ic_load_primitive_uncacheable,
         (unsigned long long) mal_perf_stats.ic_load_string_length_hits,
+        (unsigned long long) mal_perf_stats.ic_load_string_loop_length_hits,
         (unsigned long long) mal_perf_stats.ic_load_array_length_hits,
         (unsigned long long) mal_perf_stats.ic_load_typed_array_length_hits,
         (unsigned long long) mal_perf_stats.ic_load_collection_size_hits,

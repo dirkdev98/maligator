@@ -3128,21 +3128,42 @@ __attribute__((noinline)) MalValue mal_vm_indexed_load_keyed(
     MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
 );
 
+/**
+ * `string[index]` for an integral in-bounds index into a flat string or a slice of
+ * one, when the unit's one-unit string is cached. A primitive string's index below
+ * its length is an own property, so no prototype can shadow it. Ropes and uncached
+ * units defer to the keyed load, which reads through a rope without flattening it.
+ * Storage is read afresh: widening a Latin-1 string rewrites its payload in place.
+ */
+static inline __attribute__((always_inline)) bool mal_vm_string_try_get_index(
+    MalVm *vm, const MalString *string, f64 index, MalValue *out
+) {
+    if (!(index >= 0 && index < (f64) string->length)) return false;
+    usize position = (usize) index;
+    if ((f64) position != index) return false;
+    if (string->storage >= MAL_STRING_STORAGE_DEPENDENT) {
+        if (string->storage != MAL_STRING_STORAGE_DEPENDENT) return false;
+        position += string->slice_offset;
+        string = string->parent;
+    }
+    c16 unit = mal_string_flat_code_unit_at(string, position);
+    MalString *character = unit <= UINT8_MAX ? vm->code_unit_strings[unit] : nullptr;
+    if (character == nullptr) return false;
+    *out = mal_value_from_string(character);
+    return true;
+}
+
 /** Latin-1 character reads from flat strings and numeric typed array reads drive
  * text and kernel loops; test them before the complete keyed load. */
 static inline __attribute__((always_inline)) MalValue mal_vm_indexed_fast_load(
     MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
 ) {
     if (mal_ops_is_number(key_value) && mal_value_is_string(object_value)) {
-        const MalString *string = mal_value_to_string(object_value);
-        f64 index = mal_ops_number_as_f64(key_value);
-        if (string->storage < MAL_STRING_STORAGE_DEPENDENT && index >= 0 &&
-            index < (f64) string->length) {
-            usize position = (usize) index;
-            c16 unit = (f64) position == index
-                ? mal_string_flat_code_unit_at(string, position) : UINT16_MAX;
-            MalString *character = unit <= UINT8_MAX ? vm->code_unit_strings[unit] : nullptr;
-            if (character != nullptr) return mal_value_from_string(character);
+        MalValue character;
+        if (mal_vm_string_try_get_index(
+                vm, mal_value_to_string(object_value), mal_ops_number_as_f64(key_value),
+                &character)) {
+            return character;
         }
     } else if (mal_ops_is_number(key_value)) {
         MalValue element;

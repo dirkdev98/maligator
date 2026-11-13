@@ -48,8 +48,9 @@ typedef struct MalIsolateLocals {
 #endif
     /* Set during an incremental major mark cycle (init-mark → remark). */
     bool gc_marking_active;
-    /* True while a default-prototype array's inherited chain has no integer-index
-     * property, so a fresh-index store cannot hit an inherited setter. */
+    /* True while the inherited chains of default-prototype arrays and primitive
+     * strings hold no integer-index property: a fresh-index store cannot hit an
+     * inherited setter, and an absent index reads undefined. */
     bool array_elements_protector;
     /* Holds while no watched built-in prototype/lookup object has been mutated; gates
      * primitive, intrinsic-own, and inherited-method value caches. */

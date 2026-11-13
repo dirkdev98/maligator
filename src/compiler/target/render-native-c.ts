@@ -8004,6 +8004,7 @@ function emitBody(
 			`u8 __indexed_length_${action.loadIp}_kind = 0;`,
 			`MalArrayObject *__indexed_length_${action.loadIp}_array = nullptr;`,
 			`MalTypedArrayObject *__indexed_length_${action.loadIp}_typed_array = nullptr;`,
+			`const MalString *__indexed_length_${action.loadIp}_string = nullptr;`,
 			`u32 __indexed_length_${action.loadIp}_value = 0;`,
 			`f64 __indexed_length_${action.loadIp}_induction = 0;`,
 		);
@@ -10760,6 +10761,12 @@ class NativeInstructionEmission {
 					`  r${instruction.dst} = __indexed_element_${this.ip};`,
 					`} else if (__indexed_length_${id}_kind == 2) {`,
 					`  r${instruction.dst} = mal_typed_array_object_get(vm, __indexed_length_${id}_typed_array, mal_vm_typed_array_numeric_index(${numericKey}));`,
+					...(this.context.indexedLengthLoopAction.site.reverseInduction === undefined
+						? [
+								`} else if (__indexed_length_${id}_kind == 3 && mal_vm_string_try_get_index(vm, __indexed_length_${id}_string, ${numericKey}, &__indexed_element_${this.ip})) {`,
+								`  r${instruction.dst} = __indexed_element_${this.ip};`,
+							]
+						: []),
 					`} else {`,
 					...ordinary().map((line) => `  ${line}`),
 					`}`,
@@ -17348,13 +17355,26 @@ function emitInstruction(
 		const ordinary = emission.emitGenericInstruction();
 		if (ordinary === null) return null;
 		const id = indexedLengthLoopAction.loadIp;
-		if (
-			((emission.operandKind(instruction.object) ?? COMPILER_VALUE_KIND_TOP) &
-				COMPILER_VALUE_KIND_OBJECT) ===
-			0
-		)
-			return [`__indexed_length_${id}_kind = 0;`, ...ordinary];
+		const receiverKind =
+			emission.operandKind(instruction.object) ?? COMPILER_VALUE_KIND_TOP;
 		const reverse = indexedLengthLoopAction.site.reverseInduction !== undefined;
+		// A reverse loop keeps its native induction only for Arrays, so it admits no String.
+		const admitsString = !reverse && (receiverKind & COMPILER_VALUE_KIND_STRING) !== 0;
+		const stringBranch = [
+			`if (mal_value_is_string(${emission.boxed(instruction.object)})) {`,
+			`  __indexed_length_${id}_kind = 3;`,
+			`  __indexed_length_${id}_string = mal_value_to_string(${emission.boxed(instruction.object)});`,
+			`  __indexed_length_${id}_value = __indexed_length_${id}_string->length;`,
+			`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `(f64) __indexed_length_${id}_value` : `mal_value_from_u32(__indexed_length_${id}_value)`};`,
+			`  MAL_PERF_COUNT(ic_load_string_loop_length_hits);`,
+		];
+		if ((receiverKind & COMPILER_VALUE_KIND_OBJECT) === 0)
+			return [
+				`__indexed_length_${id}_kind = 0;`,
+				...(admitsString
+					? [...stringBranch, `} else {`, ...ordinary.map((line) => `  ${line}`), `}`]
+					: ordinary),
+			];
 		const pairedAdmission =
 			pairedArrayLoopAction?.role === "admit"
 				? [
@@ -17375,6 +17395,7 @@ function emitInstruction(
 			`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `__indexed_length_${id}_induction` : `mal_value_from_u32(__indexed_length_${id}_value)`};`,
 			`  mal_perf_ic_load_array_length_hit();`,
 			...pairedAdmission,
+			...(admitsString ? [`} else ${stringBranch[0]}`, ...stringBranch.slice(1)] : []),
 			`} else if (${reverse ? "false" : `mal_vm_admit_numeric_typed_array_length(vm, ${emission.boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__indexed_length_${id}_typed_array, &__indexed_length_${id}_value)`}) {`,
 			`  __indexed_length_${id}_kind = 2;`,
 			`  __indexed_length_${id}_induction = (f64) __indexed_length_${id}_value;`,

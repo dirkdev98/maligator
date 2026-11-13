@@ -35,8 +35,8 @@ typedef struct MalObject {
     /** [[Extensible]]. */
     bool extensible : 1;
     /**
-     * Set only on %Array.prototype% and %Object.prototype% (at intrinsics init).
-     * Lets the low-level MOP invalidate the array fast-elements protector
+     * Set on the intrinsic prototypes that Arrays and primitive Strings inherit
+     * through. Lets the low-level MOP invalidate the fast-elements protector
      * (mal_array_elements_protector) when an integer-index property is defined on,
      * or the prototype changed of, one of those objects — without a vm handle.
      */

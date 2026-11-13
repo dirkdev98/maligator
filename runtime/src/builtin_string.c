@@ -4665,6 +4665,8 @@ void mal_builtin_string_install(MalVm *vm) {
         MAL_PRIMITIVE_WRAPPER_STRING,
         mal_value_from_string(mal_intrinsic_ascii(vm, ""))
     );
+    // A primitive string's index past its length resolves through this prototype.
+    prototype->fast_elements_proto = true;
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
