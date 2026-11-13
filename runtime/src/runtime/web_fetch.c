@@ -1,4 +1,7 @@
 #include "web_fetch.h"
+#if MAL_NODE
+#include "node_stream.h"
+#endif
 
 #include <math.h>
 #include <stdio.h>
@@ -980,6 +983,30 @@ static bool mal_response_validate_init(MalVm *vm, i32 status, MalValue status_te
     return valid;
 }
 
+#if MAL_NODE
+static MalValue mal_fetch_node_iterable(MalVm *vm, MalValue value) {
+    MalValue roots[] = {value, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (mal_value_is_object(roots[0]) && mal_vm_get_property(vm, roots[0],
+            mal_key_from_value(vm->intrinsics[MAL_INTRINSIC_SYMBOL_ASYNC_ITERATOR]), &roots[1])
+        && mal_value_is_callable(roots[1])) {
+        if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_static_string_key(vm, (const byte *) "locked"), &roots[1]))
+            goto done;
+        bool disturbed = mal_node_stream_is_disturbed(vm, roots[0]);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+        if (mal_value_is_truthy(roots[1]) || disturbed) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "BodyInit is locked or disturbed");
+            goto done;
+        }
+        roots[2] = mal_readable_stream_from_node_body(vm, roots[0]);
+    }
+done:
+    mal_gc_unroot(&root);
+    return roots[2];
+}
+#endif
+
 static MalValue mal_response_constructor(
     MalVm *vm,
     MalValue this_value,
@@ -1060,6 +1087,13 @@ static MalValue mal_response_constructor(
             }
             body_len = src_len;
         } else if (!mal_value_is_nil(args[0])) {
+#if MAL_NODE
+            if (!mal_value_is_url_search_params_object(args[0])) {
+                roots[3] = mal_fetch_node_iterable(vm, args[0]);
+                if (vm->completion.kind == MAL_COMPLETION_THROW) goto response_error;
+            }
+            if (!mal_value_is_undefined(roots[3])) goto response_body_ready;
+#endif
             bool is_search_params = mal_value_is_url_search_params_object(args[0]);
             MalString *str;
             if (!mal_vm_to_string(vm, args[0], &str)) {
@@ -1072,6 +1106,9 @@ static MalValue mal_response_constructor(
                 : "text/plain;charset=UTF-8";
         }
     }
+#if MAL_NODE
+response_body_ready:
+#endif
     if (!mal_response_validate_init(vm, status, roots[2])) goto response_error;
     if (has_body && (status == 204 || status == 205 || status == 304)) {
         free(body);
@@ -3098,6 +3135,16 @@ static MalValue mal_request_constructor(
     // dictionary exposes its byte-backed body through the Body stream getter;
     // preserve those source bytes rather than treating that lazy stream as a
     // streaming upload.
+#if MAL_NODE
+    if (!mal_value_is_readable_stream_object(slots[4]) && !mal_fetch_is_form_data(slots[4])
+        && !mal_fetch_is_blob(slots[4]) && !mal_value_is_url_search_params_object(slots[4])
+        && !mal_value_is_array_buffer_object(slots[4]) && !mal_value_is_typed_array_object(slots[4])
+        && !mal_value_is_data_view_object(slots[4])) {
+        MalValue normalized = mal_fetch_node_iterable(vm, slots[4]);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto request_error;
+        if (!mal_value_is_undefined(normalized)) slots[4] = normalized;
+    }
+#endif
     if (mal_value_is_readable_stream_object(slots[4])) {
         MalRequestObject *body_source = argc >= 2 && mal_value_is_request_object(args[1])
             ? mal_value_to_request_object(args[1]) : nullptr;

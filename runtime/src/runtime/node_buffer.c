@@ -1365,6 +1365,17 @@ static MalValue mal_buffer_from_impl(
     return mal_value_new_undefined();
 }
 
+MalValue mal_node_buffer_from_value(MalVm *vm, MalValue value) {
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    if (mal_value_is_undefined(vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR]))
+        mal_host_install_node_buffer(vm, nullptr, 0, nullptr);
+    MalValue result = vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined()
+        : mal_buffer_from_impl(vm, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_PROTOTYPE]), &value, 1);
+    mal_gc_unroot(&root);
+    return result;
+}
+
 static MalValue mal_buffer_constructor(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue new_target,
     MalValue callee

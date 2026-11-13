@@ -18,6 +18,9 @@
 #include "vm.h"
 #include "vm_ops.h"
 #include "web_events_object.h"
+#if MAL_NODE
+#include "node_buffer.h"
+#endif
 
 static void rs_call_pull_if_needed(MalVm *vm, MalReadableStreamObject *controller);
 static void rs_invalidate_byob_request(MalReadableStreamObject *controller);
@@ -4489,34 +4492,65 @@ static MalValue rs_values(MalVm *vm, MalValue self,
     return result;
 }
 
+static MalValue rs_from_pull(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee);
+static MalValue rs_from_cancel(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee);
+
 static MalValue rs_from_pull_fulfilled(MalVm *vm, MalValue self,
     const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) self;
-    (void) nt;
-    MalValue controller = mal_native_function_object_get_slot(
-        mal_value_to_native_function_object(callee), 0);
-    MalValue result = argc >= 1 ? args[0] : mal_value_new_undefined();
-    if (!mal_value_is_object(result)) {
+    (void) self; (void) nt;
+    MalNativeFunctionObject *callback = mal_value_to_native_function_object(callee);
+    MalValue roots[] = {mal_native_function_object_get_slot(callback, 0),
+        argc >= 1 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_native_function_object_get_slot(callback, 2),
+        mal_native_function_object_get_slot(callback, 3), mal_value_new_undefined()};
+    bool bytes = mal_value_is_truthy(mal_native_function_object_get_slot(callback, 1));
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    if (!mal_value_is_object(roots[1])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "ReadableStream.from iterator result is not an object");
-        return mal_value_new_undefined();
+        goto done;
     }
-    MalValue done;
-    if (!mal_vm_get_property(vm, result,
-            mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_DONE), &done)) {
-        return mal_value_new_undefined();
+    if (!mal_vm_get_property(vm, roots[1], mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_DONE), &roots[2])) goto done;
+    if (mal_value_is_truthy(roots[2])) {
+        result = rs_controller_close(vm, roots[0], nullptr, 0, mal_value_new_undefined(), mal_value_new_undefined());
+        goto done;
     }
-    if (mal_value_is_truthy(done)) {
-        return rs_controller_close(vm, controller, nullptr, 0,
-            mal_value_new_undefined(), mal_value_new_undefined());
+    if (!mal_vm_get_property(vm, roots[1], mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_VALUE), &roots[2])) goto done;
+#if MAL_NODE
+    if (bytes) {
+        if (!mal_value_is_typed_array_object(roots[2])
+            || mal_value_to_typed_array_object(roots[2])->kind != MAL_TA_UINT8)
+            roots[2] = mal_node_buffer_from_value(vm, roots[2]);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            roots[5] = vm->completion.value;
+            vm->completion = rs_normal();
+            roots[1] = rs_callback(vm, rs_from_cancel, roots[3]);
+            MalValue cancelled = rs_from_cancel(vm, mal_value_new_undefined(), &roots[5], 1,
+                mal_value_new_undefined(), roots[1]);
+            if (mal_value_is_promise_object(cancelled)) mal_value_to_promise_object(cancelled)->is_handled = true;
+            vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = roots[5]};
+            goto done;
+        }
+        if (mal_typed_array_object_length(mal_value_to_typed_array_object(roots[2])) == 0) {
+            MalReadableStreamObject *controller = mal_value_to_readable_stream_object(roots[0]);
+            MalReadableStreamObject *stream = mal_value_to_readable_stream_object(controller->as.controller.stream);
+            if (controller->as.controller.close_requested || stream->as.stream.state != MAL_READABLE_STREAM_READABLE)
+                goto done;
+            result = rs_from_pull(vm, mal_value_new_undefined(), roots, 1, mal_value_new_undefined(), roots[4]);
+            goto done;
+        }
     }
-    MalValue value;
-    if (!mal_vm_get_property(vm, result,
-            mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_VALUE), &value)) {
-        return mal_value_new_undefined();
-    }
-    return rs_controller_enqueue(vm, controller, &value, 1,
-        mal_value_new_undefined(), mal_value_new_undefined());
+#else
+    (void) bytes;
+#endif
+    result = rs_controller_enqueue(vm, roots[0], &roots[2], 1, mal_value_new_undefined(), mal_value_new_undefined());
+done:
+    mal_gc_unroot(&root);
+    return result;
 }
 
 static MalValue rs_from_pull(MalVm *vm, MalValue self,
@@ -4543,7 +4577,10 @@ static MalValue rs_from_pull(MalVm *vm, MalValue self,
         vm->completion = rs_normal();
         roots[3] = rs_rejected_promise(vm, error);
     }
-    roots[4] = rs_callback(vm, rs_from_pull_fulfilled, roots[2]);
+    MalValue slots[] = {roots[2], mal_native_function_object_get_slot(pull, 2), roots[0], callee};
+    roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) ""), rs_from_pull_fulfilled, slots, countof(slots)));
     MalValue result = rs_iterator_then(
         vm, roots[3], roots[4], mal_value_new_undefined());
     mal_gc_unroot(&span);
@@ -4615,13 +4652,9 @@ static MalValue rs_from_cancel(MalVm *vm, MalValue self,
     return result;
 }
 
-static MalValue rs_from(MalVm *vm, MalValue self,
-    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) self;
-    (void) nt;
-    (void) callee;
+static MalValue rs_from_iterable(MalVm *vm, MalValue value, bool bytes) {
     MalValue roots[8] = {
-        argc >= 1 ? args[0] : mal_value_new_undefined(),
+        value,
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
@@ -4643,12 +4676,12 @@ static MalValue rs_from(MalVm *vm, MalValue self,
     roots[1] = iterator.iterator;
     roots[2] = iterator.next_method;
     roots[3] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
-    MalValue pull_slots[2] = {roots[1], roots[2]};
+    MalValue pull_slots[] = {roots[1], roots[2], mal_value_new_boolean(bytes)};
     roots[4] = mal_value_from_native_function_object(
         mal_native_function_object_new_with_slots(&vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
             mal_intrinsic_ascii(vm, (const byte *) ""),
-            rs_from_pull, pull_slots, 2));
+            rs_from_pull, pull_slots, countof(pull_slots)));
     roots[5] = rs_callback(vm, rs_from_cancel, roots[1]);
     MalPropertyFlags flags = MAL_PROPERTY_WRITABLE |
         MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
@@ -4668,6 +4701,18 @@ static MalValue rs_from(MalVm *vm, MalValue self,
     mal_gc_unroot(&span);
     return result;
 }
+
+static MalValue rs_from(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    return rs_from_iterable(vm, argc >= 1 ? args[0] : mal_value_new_undefined(), false);
+}
+
+#if MAL_NODE
+MalValue mal_readable_stream_from_node_body(MalVm *vm, MalValue value) {
+    return rs_from_iterable(vm, value, true);
+}
+#endif
 
 static void rs_trace(MalHeapHeader *cell) {
     MalReadableStreamObject *object = (MalReadableStreamObject *) cell;
