@@ -18,7 +18,6 @@ describe("native root-mask state after pure operators", () => {
 		} satisfies BytecodeInstruction;
 		const fn: BytecodeFunction = {
 			nameStringIndex: -1,
-			sourceStringIndex: -1,
 			isGenerator: false,
 			isAsync: false,
 			parameterCount: 2,

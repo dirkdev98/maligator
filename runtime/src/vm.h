@@ -998,7 +998,6 @@ typedef struct MalFunction {
 #endif
 
     i32 name_string_index;
-    i32 source_string_index;
     MalFunctionKind kind;
     i32 parameter_count;
 

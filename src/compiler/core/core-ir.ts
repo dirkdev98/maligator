@@ -759,7 +759,6 @@ export interface CoreExceptionHandler {
 }
 
 export interface CoreFunctionMetadata {
-	readonly sourceStringIndex: number;
 	readonly sourceOrigin?: SourceFunctionOrigin;
 	readonly sourcePath: string;
 	/** Compiled from a toolchain-owned module rather than the application. */

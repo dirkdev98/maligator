@@ -33,7 +33,6 @@ function lower(
 		options.representations ?? Array.from({ length: 32 }, () => "boxed");
 	const fn: BytecodeFunction = {
 		nameStringIndex: -1,
-		sourceStringIndex: -1,
 		isGenerator: false,
 		isAsync: false,
 		parameterCount: 1,

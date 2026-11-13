@@ -279,20 +279,16 @@ const nested = bind.call(bind.call(sum, null, 1, 2, 3, 4), null, 5, 6, 7, 8);
 assert(nested(9, 10) === 55, "nested bind merged arguments");
 
 const targetText = Function.prototype.toString.call(target);
-assert(
-	targetText === "function target(a, b, c, d) {\n\treturn a + b + c + d;\n}",
-	"Function.toString result",
-);
+assert(targetText === "function target() { [native code] }", "Function.toString result");
 const renderFunction = Function.prototype.toString;
 assert(
-	renderFunction.call(bound) === "function target() { [native code] }",
+	renderFunction.call(bound) === targetText,
 	"bound rendering retains its target name",
 );
 assert(
-	renderFunction.call(metadataTarget) ===
-		"function metadataTarget(a, b, c, d, e) {\n\treturn a + b + c + d + e;\n}" &&
+	renderFunction.call(metadataTarget) === "function metadataTarget() { [native code] }" &&
 		metadataEvents.join() === "length,name",
-	"source rendering never reads a public name getter",
+	"native rendering never reads a public name getter",
 );
 const sameNameOne = function repeatedName() {};
 const sameNameTwo = function repeatedName() {};

@@ -63,7 +63,6 @@ function fn(
 ): BytecodeFunction {
 	return {
 		nameStringIndex: -1,
-		sourceStringIndex: -1,
 		isGenerator: false,
 		isAsync: false,
 		parameterCount: 1,

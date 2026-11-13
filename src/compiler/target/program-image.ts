@@ -1500,7 +1500,6 @@ export function validateNativeBodyAbis(
 		}
 		for (const key of [
 			"nameStringIndex",
-			"sourceStringIndex",
 			"isGenerator",
 			"isAsync",
 			"parameterCount",

@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 94u
+#define WIRE_VERSION 95u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1838,8 +1838,6 @@ static i32 argument_retention_limit(const MalFunction *fn) {
 
 static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool debug) {
     fn->name_string_index = rd_i32(r);
-    fn->source_string_index = rd_i32(r);
-    if (fn->source_string_index < -1 || fn->source_string_index >= L->runtime_image.string_constant_count) r->ok = false;
     u8 kind = rd_u8(r);
     switch (kind) {
         case 1:

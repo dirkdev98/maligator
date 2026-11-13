@@ -37,7 +37,6 @@ function units(value: string): Array<number> {
 function vmFunction(instructions: Array<BytecodeInstruction>): BytecodeFunction {
 	return {
 		nameStringIndex: 2,
-		sourceStringIndex: -1,
 		isGenerator: false,
 		isAsync: false,
 		parameterCount: 0,

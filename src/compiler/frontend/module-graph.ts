@@ -90,7 +90,6 @@ export type ImportMetaResolution =
 	| { specifier: string; url: string };
 
 export interface ModuleRecord {
-	parsedSource?: string;
 	sourcePath?: string;
 	/**
 	 * Absolute, resolved path — or, for a host virtual module, its canonical
@@ -204,7 +203,6 @@ export interface PersistedModuleLoad {
 
 /** A module's analysed load and every filesystem observation its resolution made. */
 interface MemoizedModuleLoad {
-	parsedSource: string;
 	source: string;
 	/** Undefined for a supplied source, which is compared by value instead. */
 	sourceIdentity: string | undefined;
@@ -733,7 +731,6 @@ export function buildModuleGraph(
 				? persisted
 				: undefined;
 		let analyzed: {
-			parsedSource: string;
 			sourcePath: string | undefined;
 			parsed: ModuleRecord["parsed"];
 			dependencies: Array<ModuleDependency>;
@@ -745,7 +742,6 @@ export function buildModuleGraph(
 			analyzed = reusable
 				? {
 						sourcePath: memo.sourcePath,
-						parsedSource: memo.parsedSource,
 						parsed: memo.parsed,
 						dependencies: memo.dependencies.map((dependency) => ({ ...dependency })),
 						importMetaResolutions: memo.importMetaResolutions,
@@ -753,20 +749,17 @@ export function buildModuleGraph(
 				: restored !== undefined
 					? (() => {
 							let ast: ESTree.Program | undefined;
-							const parsedSource = baseParseSource(
-								filePath,
-								source,
-								goal,
-								restored.sourcePath,
-							);
 							return {
-								parsedSource,
 								sourcePath: restored.sourcePath,
 								parsed: {
 									type: restored.type,
 									strict: restored.strict,
 									get ast() {
-										return (ast ??= parseWithGoal(parsedSource, goal, true).ast);
+										return (ast ??= parseWithGoal(
+											baseParseSource(filePath, source, goal, restored.sourcePath),
+											goal,
+											true,
+										).ast);
 									},
 								},
 								dependencies: restored.dependencies.map((dependency) => ({
@@ -936,13 +929,7 @@ export function buildModuleGraph(
 									];
 								},
 							);
-							return {
-								sourcePath,
-								parsedSource: parseSource,
-								parsed,
-								dependencies,
-								importMetaResolutions,
-							};
+							return { sourcePath, parsed, dependencies, importMetaResolutions };
 						});
 		} catch (error) {
 			// A module the entry reaches only through `import()` fails when that import
@@ -958,8 +945,7 @@ export function buildModuleGraph(
 			});
 			return;
 		}
-		const { sourcePath, parsedSource, parsed, dependencies, importMetaResolutions } =
-			analyzed;
+		const { sourcePath, parsed, dependencies, importMetaResolutions } = analyzed;
 		if (
 			memoKey !== undefined &&
 			!reusable &&
@@ -968,7 +954,6 @@ export function buildModuleGraph(
 		) {
 			const observations = restored?.observations ?? lastObservations;
 			options.parseCache!.memoizeLoad(memoKey, {
-				parsedSource,
 				source,
 				sourceIdentity,
 				sourcePath,
@@ -1003,7 +988,6 @@ export function buildModuleGraph(
 			...(sourcePath === undefined ? {} : { sourcePath }),
 			goal,
 			source,
-			parsedSource,
 			parsed,
 			dependencies,
 			...(importMetaResolutions.length === 0 ? {} : { importMetaResolutions }),

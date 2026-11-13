@@ -194,7 +194,6 @@ static void splice_worker(void *arg) {
     }
     for (i32 i = 0; i < SPLICE_FUNCTION_COUNT; i++) {
         added[i].name_string_index = -1;
-        added[i].source_string_index = -1;
         added[i].argument_retention_limit = -1;
     }
     MalRuntimeImage loaded = {

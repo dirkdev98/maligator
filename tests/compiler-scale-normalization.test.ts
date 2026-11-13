@@ -29,7 +29,6 @@ function partitionedImage(sourceRoot: string, changed = false): ProgramImage {
 	];
 	const seed: BytecodeFunction = {
 		nameStringIndex: -1,
-		sourceStringIndex: -1,
 		isGenerator: false,
 		isAsync: false,
 		parameterCount: 0,

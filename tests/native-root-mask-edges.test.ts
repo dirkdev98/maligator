@@ -7,7 +7,6 @@ describe("native binary root-mask edges", () => {
 	it("publishes the original union mask inside the generic coercing edge, not the numeric hit", () => {
 		const fn: BytecodeFunction = {
 			nameStringIndex: -1,
-			sourceStringIndex: -1,
 			isGenerator: false,
 			isAsync: false,
 			parameterCount: 1,

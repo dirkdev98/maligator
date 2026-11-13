@@ -15,7 +15,6 @@ import { testPropertyCacheCount } from "./helpers/program-image.ts";
 function fn(instructions: Array<BytecodeInstruction>): BytecodeFunction {
 	return {
 		nameStringIndex: -1,
-		sourceStringIndex: -1,
 		isGenerator: false,
 		isAsync: false,
 		parameterCount: 1,

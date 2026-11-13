@@ -18,7 +18,6 @@ import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-imag
 function callGraphImage() {
 	const caller: BytecodeFunction = {
 		nameStringIndex: -1,
-		sourceStringIndex: -1,
 		isGenerator: false,
 		isAsync: false,
 		parameterCount: 1,

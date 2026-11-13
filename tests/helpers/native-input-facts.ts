@@ -363,7 +363,6 @@ export function inputFactsFixture(): { image: ProgramImage; expected: Array<stri
 	instructions.push({ opcode: "RETURN", value: src });
 	const fn: BytecodeFunction = {
 		nameStringIndex: -1,
-		sourceStringIndex: -1,
 		isGenerator: false,
 		isAsync: false,
 		parameterCount: 0,

@@ -288,7 +288,6 @@ const instructions: Array<BytecodeInstruction> = [
 
 const mainFn: BytecodeFunction = {
 	nameStringIndex: 0,
-	sourceStringIndex: -1,
 	isGenerator: false,
 	isAsync: false,
 	parameterCount: 1,
@@ -316,7 +315,6 @@ const mainFn: BytecodeFunction = {
 
 const genFn: BytecodeFunction = {
 	nameStringIndex: 2,
-	sourceStringIndex: -1,
 	isGenerator: true,
 	isAsync: true,
 	parameterCount: 0,

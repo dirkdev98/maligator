@@ -504,7 +504,6 @@ export function vmInstructionUsesPropertyCache(
 }
 
 export interface BytecodeFunction {
-	sourceStringIndex: number;
 	nameStringIndex: number;
 	isGenerator: boolean;
 	isAsync: boolean;
@@ -2190,12 +2189,6 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 	validateVmSourcePositions(definition);
 	for (const fn of definition.functions) {
 		if (
-			!Number.isSafeInteger(fn.sourceStringIndex) ||
-			fn.sourceStringIndex < -1 ||
-			fn.sourceStringIndex >= definition.stringConstants.length
-		)
-			throw new RangeError("invalid function source string index");
-		if (
 			!isNonnegativeSafeInteger(fn.constructorSlotReserve) ||
 			fn.constructorSlotReserve > CORE_MAX_SHAPED_OBJECT_SLOTS ||
 			(fn.constructorSlotReserve !== 0 &&
@@ -2628,14 +2621,6 @@ export function remapRuntimeFunctionConstants(
 						fn.nameStringIndex,
 						"function nameStringIndex",
 					),
-		sourceStringIndex:
-			fn.sourceStringIndex < 0
-				? -1
-				: remapRuntimeConstantRequired(
-						compacted.stringOldToNew,
-						fn.sourceStringIndex,
-						"function sourceStringIndex",
-					),
 		instructions: fn.instructions.map((instruction) =>
 			remapRuntimeInstructionConstants(
 				instruction,
@@ -2694,8 +2679,6 @@ function runtimeConstantRetentionReasons(
 		if (fn.nameStringIndex >= 0) {
 			noteString(fn.nameStringIndex, `function ${functionIndex} nameStringIndex`);
 		}
-		if (fn.sourceStringIndex >= 0)
-			noteString(fn.sourceStringIndex, `function ${functionIndex} sourceStringIndex`);
 		for (const [instructionIndex, instruction] of fn.instructions.entries()) {
 			const instructionPath = `function ${functionIndex} instruction ${instructionIndex} ${instruction.opcode}`;
 			visitRuntimeConstantReferences(
@@ -2989,7 +2972,6 @@ export function compactRuntimeImageConstants(
 	};
 	for (const fn of definition.functions) {
 		if (fn.nameStringIndex >= 0) note("string", fn.nameStringIndex);
-		if (fn.sourceStringIndex >= 0) note("string", fn.sourceStringIndex);
 		for (const instruction of fn.instructions) {
 			visitRuntimeInstructionConstantIndices(instruction, note);
 			if (!isVmCallInstruction(instruction)) continue;
@@ -3076,14 +3058,6 @@ export function compactRuntimeImageConstants(
 							stringOldToNew,
 							fn.nameStringIndex,
 							"function nameStringIndex",
-						),
-			sourceStringIndex:
-				fn.sourceStringIndex < 0
-					? -1
-					: remapRuntimeConstantRequired(
-							stringOldToNew,
-							fn.sourceStringIndex,
-							"function sourceStringIndex",
 						),
 			instructions: fn.instructions.map((instruction) =>
 				remapRuntimeInstructionConstants(
@@ -3931,7 +3905,6 @@ function lowerExecutionFunctionToBytecode(
 	const bytecode: BytecodeFunction = {
 		nameStringIndex:
 			stringConstants[fn.nameStringIndex]!.length === 0 ? -1 : fn.nameStringIndex,
-		sourceStringIndex: fn.sourceStringIndex,
 		isGenerator: fn.isGenerator,
 		isAsync: fn.isAsync,
 		parameterCount: fn.parameterCount,

@@ -45,7 +45,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 94;
+export const WIRE_VERSION = 95;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -659,7 +659,6 @@ export function writeRuntimeFunction(
 	validateMappedArguments(fn);
 	validatePropertyIcIndices(fn);
 	w.i32(fn.nameStringIndex);
-	w.i32(fn.sourceStringIndex);
 	w.u8(fn.isAsync && fn.isGenerator ? 3 : fn.isAsync ? 2 : fn.isGenerator ? 1 : 0);
 	w.u8(fn.strict ? 1 : 0);
 	w.u8(fn.needsArguments ? 1 : 0);
@@ -1601,7 +1600,6 @@ export function readRuntimeImage(
 
 export function readRuntimeFunction(r: Reader): BytecodeFunction {
 	const nameStringIndex = r.i32();
-	const sourceStringIndex = r.i32();
 	const kind = r.u8();
 	const strict = r.u8() !== 0;
 	const needsArguments = r.u8() !== 0;
@@ -1662,7 +1660,6 @@ export function readRuntimeFunction(r: Reader): BytecodeFunction {
 
 	const fn: BytecodeFunction = {
 		nameStringIndex,
-		sourceStringIndex,
 		isGenerator: kind === 1 || kind === 3,
 		isAsync: kind === 2 || kind === 3,
 		parameterCount,
