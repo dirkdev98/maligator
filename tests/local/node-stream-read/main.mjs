@@ -284,3 +284,59 @@ console.log(
 	emptyFinished.readableAborted,
 	Readable.isDisturbed(emptyFinished),
 );
+
+const immediate = Readable.from([1, 2, 3]);
+console.log(
+	"from immediate",
+	immediate.readableHighWaterMark,
+	immediate.read(),
+	immediate.read(),
+	immediate.read(),
+);
+const singleBuffer = Buffer.from("buffer");
+Object.setPrototypeOf(singleBuffer, Object.create(Buffer.prototype));
+console.log("from buffer identity", Readable.from(singleBuffer).read() === singleBuffer);
+console.log("from string", Readable.from("string").read());
+function* mixedValues() {
+	yield "first";
+	yield Promise.resolve("second");
+	yield "third";
+}
+const mixed = Readable.from(mixedValues());
+console.log("from sync generator", mixed.read());
+const remaining = [];
+for await (const value of mixed) remaining.push(value);
+console.log("from promised values", remaining.join());
+async function* asynchronousValues() {
+	yield "async";
+}
+const asynchronous = Readable.from(asynchronousValues());
+console.log("from async pending", asynchronous.read());
+const asynchronousChunks = [];
+for await (const value of asynchronous) asynchronousChunks.push(value);
+console.log("from async values", asynchronousChunks.join());
+
+console.log(
+	"from single HWM",
+	Readable.from("value").readableHighWaterMark,
+	Readable.from(Buffer.from("value")).readableHighWaterMark,
+);
+console.log(
+	"from byte read",
+	Readable.from(["a", "b"], { objectMode: false }).read(2).toString(),
+);
+const promisedChunk = Promise.resolve("preserved");
+let asyncStep = 0;
+const asyncPromiseSource = Readable.from({
+	[Symbol.asyncIterator]() {
+		return this;
+	},
+	async next() {
+		return asyncStep++ === 0 ? { done: false, value: promisedChunk } : { done: true };
+	},
+});
+const asyncPromiseEnd = new Promise((resolve) => asyncPromiseSource.once("end", resolve));
+asyncPromiseSource.once("data", (chunk) =>
+	console.log("from async promise identity", chunk === promisedChunk),
+);
+await asyncPromiseEnd;

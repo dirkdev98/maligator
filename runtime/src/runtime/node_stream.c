@@ -3872,6 +3872,58 @@ static MalValue stream_async_iterator(MalVm *vm, MalValue self, const MalValue *
 
 static void stream_from_await(MalVm *vm, MalValue stream, MalValue value, i32 mode);
 
+typedef enum StreamFromStep { STREAM_FROM_STOP, STREAM_FROM_MORE, STREAM_FROM_WAIT } StreamFromStep;
+static void stream_from_pull(MalVm *vm, MalValue stream);
+
+static StreamFromStep stream_from_push(MalVm *vm, MalValue stream, MalValue value) {
+    if (mal_value_is_null(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "May not yield null values to a Readable");
+        return STREAM_FROM_STOP;
+    }
+    MalValue pushed = stream_push(vm, stream, &value, 1, mal_value_new_undefined(), mal_value_new_undefined());
+    return vm->completion.kind != MAL_COMPLETION_THROW && mal_value_is_truthy(pushed)
+        ? STREAM_FROM_MORE : STREAM_FROM_STOP;
+}
+
+static StreamFromStep stream_from_value(MalVm *vm, MalValue stream, MalValue value) {
+    MalValue roots[] = {stream, value, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    StreamFromStep step = STREAM_FROM_STOP;
+    bool await_value = mal_value_is_promise_object(roots[1]);
+    if (!await_value && mal_value_is_object(roots[1])) {
+        if (!stream_get(vm, roots[1], "then", &roots[2])) goto done;
+        await_value = mal_value_is_callable(roots[2]);
+    }
+    if (await_value) {
+        stream_from_await(vm, roots[0], roots[1], 1);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) step = STREAM_FROM_WAIT;
+    } else step = stream_from_push(vm, roots[0], roots[1]);
+done:
+    mal_gc_unroot(&root);
+    return step;
+}
+
+static StreamFromStep stream_from_result(MalVm *vm, MalValue stream, MalValue result) {
+    MalValue roots[] = {stream, result, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    StreamFromStep step = STREAM_FROM_STOP;
+    if (!mal_value_is_object(roots[1])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator result must be an object");
+    } else if (stream_get(vm, roots[1], "done", &roots[2])) {
+        if (mal_value_is_truthy(roots[2])) {
+            roots[2] = mal_value_new_null();
+            stream_push(vm, roots[0], roots + 2, 1, mal_value_new_undefined(), mal_value_new_undefined());
+        } else if (stream_get(vm, roots[1], "value", &roots[2])) {
+            step = stream_truthy_own(vm, roots[0], "_malSourceAsync")
+                ? stream_from_push(vm, roots[0], roots[2]) : stream_from_value(vm, roots[0], roots[2]);
+        }
+    }
+    mal_gc_unroot(&root);
+    return step;
+}
+
 static MalValue stream_from_rejected(MalVm *vm, MalValue self, const MalValue *args,
     i32 argc, MalValue nt, MalValue callee) {
     (void) self; (void) nt;
@@ -3898,20 +3950,11 @@ static MalValue stream_from_fulfilled(MalVm *vm, MalValue self, const MalValue *
         roots[2] = stream_own(vm, roots[0], "_malSourceDestroyDone");
         mal_vm_call_value(vm, roots[2], mal_value_new_undefined(), nullptr, 0);
     } else if (!stream_truthy_own(vm, roots[0], "destroyed")) {
-        if (mode == 0) {
-            if (!mal_value_is_object(roots[1])) mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator result must be an object");
-            else {
-                MalValue done;
-                if (stream_get(vm, roots[1], "done", &done) && !mal_value_is_truthy(done)) {
-                    if (stream_get(vm, roots[1], "value", &roots[2])) stream_from_await(vm, roots[0], roots[2], 1);
-                } else if (vm->completion.kind != MAL_COMPLETION_THROW) {
-                    roots[2] = mal_value_new_null();
-                    stream_push(vm, roots[0], roots + 2, 1, mal_value_new_undefined(), mal_value_new_undefined());
-                }
-            }
-        } else if (mal_value_is_null(roots[1])) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "May not yield null values to a Readable");
-        } else stream_push(vm, roots[0], roots + 1, 1, mal_value_new_undefined(), mal_value_new_undefined());
+        StreamFromStep step = mode == 0 ? stream_from_result(vm, roots[0], roots[1])
+            : stream_from_push(vm, roots[0], roots[1]);
+        if (step == STREAM_FROM_MORE) stream_from_pull(vm, roots[0]);
+        else if (step == STREAM_FROM_STOP)
+            stream_set(vm, roots[0], "_malSourcePulling", mal_value_new_boolean(false));
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             roots[2] = vm->completion.value;
             stream_clear_completion(vm);
@@ -3939,12 +3982,35 @@ static void stream_from_await(MalVm *vm, MalValue stream, MalValue value, i32 mo
     mal_gc_unroot(&root);
 }
 
+static void stream_from_pull(MalVm *vm, MalValue stream) {
+    MalValue roots[] = {stream, stream_own(vm, stream, "_malSourceIterator"), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    while (!stream_truthy_own(vm, roots[0], "destroyed")) {
+        MalCompletion completion = stream_call_method(vm, roots[1], "next", nullptr, 0);
+        if (completion.kind == MAL_COMPLETION_THROW) break;
+        roots[2] = completion.value;
+        if (stream_truthy_own(vm, roots[0], "_malSourceAsync")) {
+            stream_from_await(vm, roots[0], roots[2], 0);
+            if (vm->completion.kind != MAL_COMPLETION_THROW) goto done;
+            break;
+        }
+        StreamFromStep step = stream_from_result(vm, roots[0], roots[2]);
+        if (step == STREAM_FROM_WAIT) goto done;
+        if (step != STREAM_FROM_MORE) break;
+    }
+    stream_set(vm, roots[0], "_malSourcePulling", mal_value_new_boolean(false));
+done:
+    mal_gc_unroot(&root);
+}
+
 static MalValue stream_from_read(MalVm *vm, MalValue self, const MalValue *args,
     i32 argc, MalValue nt, MalValue callee) {
     (void) args; (void) argc; (void) nt; (void) callee;
-    MalValue iterator = stream_own(vm, self, "_malSourceIterator");
-    MalCompletion completion = stream_call_method(vm, iterator, "next", nullptr, 0);
-    if (completion.kind != MAL_COMPLETION_THROW) stream_from_await(vm, self, completion.value, 0);
+    if (!stream_truthy_own(vm, self, "_malSourcePulling")) {
+        stream_set(vm, self, "_malSourcePulling", mal_value_new_boolean(true));
+        stream_from_pull(vm, self);
+    }
     return mal_value_new_undefined();
 }
 
@@ -3972,16 +4038,16 @@ static MalValue stream_from(MalVm *vm, MalValue self, const MalValue *args,
         mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    if (mal_value_is_string(roots[0]) || (mal_value_is_typed_array_object(roots[0])
-        && !mal_value_is_undefined(vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_PROTOTYPE])
-        && mal_object_get_prototype(mal_value_to_object(roots[0])) ==
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_PROTOTYPE]))) {
+    bool single = mal_value_is_string(roots[0]) || (mal_value_is_typed_array_object(roots[0])
+        && mal_value_to_typed_array_object(roots[0])->is_buffer);
+    if (single) {
         roots[2] = stream_new_array(vm);
         mal_array_object_store(mal_value_to_array_object(roots[2]), mal_key_index(0), roots[0]);
         roots[0] = roots[2];
     }
     if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ASYNC_ITERATOR), &roots[2])) goto finished;
-    if (!mal_value_is_callable(roots[2])) {
+    bool async = mal_value_is_callable(roots[2]);
+    if (!async) {
         if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &roots[2])) goto finished;
     }
     if (!mal_value_is_callable(roots[2])) {
@@ -3993,6 +4059,7 @@ static MalValue stream_from(MalVm *vm, MalValue self, const MalValue *args,
     roots[2] = iterator.value;
     roots[3] = mal_value_from_object(mal_intrinsic_new_object(vm));
     stream_set(vm, roots[3], "objectMode", mal_value_new_boolean(true));
+    if (!single) stream_set(vm, roots[3], "highWaterMark", mal_value_from_i32(1));
     if (mal_value_is_object(roots[1])) {
         static const char *names[] = {"objectMode", "highWaterMark", "encoding"};
         for (usize i = 0; i < countof(names); i++) {
@@ -4006,6 +4073,7 @@ static MalValue stream_from(MalVm *vm, MalValue self, const MalValue *args,
     if (stream.kind != MAL_COMPLETION_THROW) {
         roots[4] = stream.value;
         stream_set(vm, roots[4], "_malSourceIterator", roots[2]);
+        stream_set(vm, roots[4], "_malSourceAsync", mal_value_new_boolean(async));
     }
 finished:
     MalValue result = roots[4];
@@ -5265,6 +5333,7 @@ static MalValue df_from_iterable(MalVm *vm, MalValue iterable, MalValue extra) {
     roots[4] = df_construct(vm, roots[3]);
     if (mal_value_is_object(roots[4])) {
         stream_set(vm, roots[4], "_malSourceIterator", roots[2]);
+        stream_set(vm, roots[4], "_malSourceAsync", mal_value_new_boolean(async));
         result = roots[4];
     }
 done:
