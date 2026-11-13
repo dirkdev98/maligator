@@ -26,7 +26,10 @@ import type { BuildCommandResult } from "../src/cli-commands.ts";
 import { BUILD_CONFIG_NAME, detectInitialEntry, initProject } from "../src/cli-init.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "../src/cli.ts";
 import type { CompilationOptions } from "../src/compiler-service.ts";
-import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import {
+	stripCompactTypes,
+	TYPE_STRIPPER_IDENTITY,
+} from "../src/compiler/frontend/compact-type-strip.ts";
 import { FrontendCompilationSession } from "../src/frontend-cache.ts";
 import {
 	PRODUCT_RUNTIME_ASSET_INCLUDE,
@@ -392,7 +395,7 @@ describe("command shell", () => {
 			testHostModulePath: path.join(repoRoot, "src/testing/host-driver.mts"),
 			nodeGlobalsPath: path.join(repoRoot, "src/node-globals.mjs"),
 			platformSourceRoot: path.join(repoRoot, "src"),
-			frontendIdentity: "compact-type-strip-v7",
+			frontendIdentity: TYPE_STRIPPER_IDENTITY,
 			evalCompiler: {
 				kind: "source",
 				sourceDirectory: path.join(repoRoot, "src"),
@@ -419,7 +422,7 @@ describe("command shell", () => {
 		expect(installation.frontendIdentity).toBe(
 			developmentCompilerInstallation(path.join(repoRoot, "src")).frontendIdentity,
 		);
-		expect(installation.frontendIdentity).toBe("compact-type-strip-v7");
+		expect(installation.frontendIdentity).toBe(TYPE_STRIPPER_IDENTITY);
 		expect(installation.evalCompiler).toEqual({
 			kind: "prebuilt",
 			wirePath: path.resolve("compiler.malw"),
