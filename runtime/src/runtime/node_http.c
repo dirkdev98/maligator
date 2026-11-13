@@ -872,6 +872,7 @@ static void http_queue_request(
     mal_http_conn_on_request_stream(
         conn, http_queue_request_body, http_queue_request_end, state);
     mal_http_conn_on_response_complete(conn, http_response_complete, state);
+    mal_http_conn_abort_on_peer_end(conn, true);
     (void) http_request_enqueue_ready(state, HTTP_REQUEST_READY_DISPATCH);
     return;
 
@@ -4090,6 +4091,7 @@ static MalValue http_response_end(
         return mal_value_new_undefined();
     }
     state->ended = true;
+    mal_http_conn_abort_on_peer_end(state->conn, false);
     http_define(vm, receiver, "finished", mal_value_new_boolean(true));
     http_define(vm, receiver, "writableEnded", mal_value_new_boolean(true));
     return receiver;

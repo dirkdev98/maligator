@@ -9,14 +9,17 @@ tests/native/node-fetch-upload.test.ts
 tests/native/node-http-client-lifecycle.test.ts
 tests/native/node-http-client-url.test.ts
 tests/native/node-http-client.test.ts
+tests/native/node-http-half-close.test.ts
 tests/native/node-http-hostname.test.ts
 tests/native/node-http-inactivity-timeout.test.ts
 tests/native/node-http-limits.test.ts
 tests/native/node-http-listen-options.test.ts
 tests/native/node-http-listen.test.ts
 tests/native/node-http-outgoing-headers.test.ts
+tests/native/node-http-pipeline.test.ts
 tests/native/node-http-ready-queues.test.ts
 tests/native/node-http-request.test.ts
+tests/native/node-http-response-destroy.test.ts
 tests/native/node-http-socket-identity.test.ts
 tests/native/node-http-split-response.test.ts
 tests/native/node-http.test.ts

@@ -179,6 +179,11 @@ bool mal_http_conn_response_write_owned(
 void mal_http_conn_on_response_write(
     MalHttpConn *conn, MalHttpResponseWriteCallback callback, void *data);
 void mal_http_conn_abort(MalHttpConn *conn);
+
+/* A streaming Node response closes on peer EOF after request dispatch. Clear once
+ * its final application write is queued, so already-ended responses can flush. */
+void mal_http_conn_abort_on_peer_end(MalHttpConn *conn, bool enabled);
+
 void mal_http_conn_on_request_stream(
     MalHttpConn *conn,
     MalHttpRequestDataCallback data_callback,

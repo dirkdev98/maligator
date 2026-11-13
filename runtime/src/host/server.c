@@ -135,6 +135,7 @@ typedef struct MalHttpConn {
     bool response_chunked;
     bool response_ended;
     bool read_ended;
+    bool abort_on_peer_end;
     bool in_handler;
     bool close_pending;
     MalHttpResponseCompleteCallback response_callback;
@@ -202,6 +203,7 @@ static MalReactor *conn_reactor(MalHttpConn *c) {
 }
 
 static bool conn_arm_read(MalHttpConn *c);
+
 static bool conn_arm_write(MalHttpConn *c);
 static void conn_process_stream(MalHttpConn *c);
 static void conn_stream_reset_request(MalHttpConn *c);
@@ -389,6 +391,16 @@ static bool conn_arm_read(MalHttpConn *c) {
     }
     return mal_reactor_add_op(conn_reactor(c), &c->read_op);
 }
+
+static void conn_wait_response(MalHttpConn *c) {
+    if (c->read_ended) {
+        if (c->request_released && c->abort_on_peer_end && !c->response_ended) conn_close(c);
+        return;
+    }
+    // Keep disconnects observable without buffering an unbounded pipelined request.
+    if (c->rlen < MAL_HTTP_READ_TURN && !c->read_op.active && !conn_arm_read(c)) conn_close(c);
+}
+
 
 static bool conn_arm_write(MalHttpConn *c) {
     c->write_op.fd = c->fd;
@@ -701,6 +713,10 @@ void mal_http_conn_abort(MalHttpConn *c) {
     if (c != nullptr) conn_close(c);
 }
 
+void mal_http_conn_abort_on_peer_end(MalHttpConn *conn, bool enabled) {
+    if (conn != nullptr) conn->abort_on_peer_end = enabled;
+}
+
 void mal_http_conn_on_request_stream(
     MalHttpConn *c,
     MalHttpRequestDataCallback data_callback,
@@ -739,7 +755,10 @@ void mal_http_conn_request_discard(MalHttpConn *c) {
 void mal_http_conn_request_release(MalHttpConn *c) {
     if (c == nullptr || !c->request_message_complete) return;
     c->request_released = true;
-    if (!c->response_finished) return;
+    if (!c->response_finished) {
+        conn_wait_response(c);
+        return;
+    }
     if (!c->keep_alive || c->server->closing) {
         conn_close(c);
         return;
@@ -907,7 +926,10 @@ static bool conn_stream_handle_event(MalHttpConn *c) {
             conn_close(c);
             return false;
         }
-        if (!c->response_finished || !c->request_released) return false;
+        if (!c->response_finished || !c->request_released) {
+            conn_wait_response(c);
+            return false;
+        }
         if (!c->keep_alive || c->server->closing) {
             conn_close(c);
             return false;
@@ -928,7 +950,10 @@ static void conn_process_stream(MalHttpConn *c) {
             if (!conn_stream_handle_event(c)) return;
             continue;
         }
-        if (c->request_message_complete) return;
+        if (c->request_message_complete) {
+            conn_wait_response(c);
+            return;
+        }
         if (c->request_autoread && c->request_stream_open && !c->request_discard
             && c->request_read_credit < MAL_HTTP_READ_CREDIT_MAX) {
             c->request_read_credit = MAL_HTTP_READ_CREDIT_MAX;

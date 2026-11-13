@@ -23,7 +23,7 @@ afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 describe.each(["compiled", "interpreted"] as const)(
 	"HTTP response pipelines in %s code",
 	(backend) => {
-		it.each(["success", "error"])("handles %s", (selection) => {
+		it.each(["success", "error", "abort"])("handles %s", (selection) => {
 			for (const stress of [{}, STRESS_ENV])
 				expect(
 					runToStdout(binaries[backend], {
