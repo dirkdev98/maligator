@@ -87,6 +87,11 @@ Server-side `Response` headers expose editable `Set-Cookie` values. The pinned
 browser-only assertion that forbids those values has exact expectations; native
 coverage checks construction, mutation and wire output.
 
+Empty `FormData` serializes a closing multipart boundary so its body can be parsed
+again. The pinned empty-body test instead expects an empty string and marks that
+assumption with a FIXME; exact expectations retain the test while native coverage
+checks the multipart round trip.
+
 `harness.ts` intentionally implements only the testharness primitives required
 by this curated server-main slice. It uses pinned testharness default-name
 suffixes for unnamed tests, preserves duplicate explicit names with occurrence
