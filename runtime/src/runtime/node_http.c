@@ -3492,7 +3492,7 @@ static bool http_response_start_commit(
         vm, state->response, &explicit_content_length);
     if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
     if (has_content_length) declared_content_length = explicit_content_length;
-    if (entity_forbidden || (head && !has_content_length)) {
+    if ((entity_forbidden || head) && !has_content_length) {
         declared_content_length = -1;
     }
     bool chunked = streaming && !state->suppress_response_body
