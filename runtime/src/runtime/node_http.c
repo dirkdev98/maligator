@@ -159,6 +159,8 @@ typedef struct MalNodeHttpServerState {
     /* ClientHellos awaiting SNICallback or addContext selection, in arrival order. */
     struct MalNodeHttpSocketState *hello_head;
     struct MalNodeHttpSocketState *hello_tail;
+    struct MalNodeHttpSocketState *timeout_head;
+    struct MalNodeHttpSocketState *timeout_tail;
     struct MalNodeHttpServerState *next;
 } MalNodeHttpServerState;
 
@@ -181,6 +183,9 @@ typedef struct MalNodeHttpSocketState {
     char *hello_name;
     usize hello_name_length;
     bool hello_pending;
+    MalNodeHttpServerState *timeout_server;
+    struct MalNodeHttpSocketState *timeout_next;
+    u64 timeout_generation;
     struct MalNodeHttpSocketState *previous;
     struct MalNodeHttpSocketState *next;
 } MalNodeHttpSocketState;
@@ -371,6 +376,8 @@ static void http_queue_request_end(void *data, bool success);
 static MalValue http_client_error(MalVm *vm, const char *message);
 static void http_define(MalVm *vm, MalValue receiver, const char *name, MalValue value);
 static bool http_emit(MalVm *vm, MalValue receiver, const char *event);
+static MalNodeHttpSocketState *http_socket_for_receiver(MalValue receiver);
+static void http_server_inactivity_event(void *data, MalHttpConn *conn, u64 generation);
 static MalNodeHttpClientState *http_client_response_state(MalValue receiver);
 static void http_client_cancel(
     MalVm *vm, MalNodeHttpClientState *state, bool aborted, MalValue error);
@@ -1120,6 +1127,109 @@ static MalValue http_endpoint_family(MalVm *vm, MalNetAddressFamily family) {
         : mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) name));
 }
 
+static bool http_timeout_duration(MalVm *vm, MalValue value, f64 *out) {
+    if (!mal_ops_is_number(value)) {
+        mal_node_throw_invalid_arg_type(vm, "msecs", "of type number", value);
+        return false;
+    }
+    *out = mal_ops_number_as_f64(value);
+    if (!isfinite(*out) || *out < 0) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "The msecs argument must be a non-negative finite number", "ERR_OUT_OF_RANGE");
+        return false;
+    }
+    return true;
+}
+
+static MalValue http_socket_destroy_task(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target;
+    MalNativeFunctionObject *task = mal_value_to_native_function_object(callee);
+    MalValue values[] = {mal_native_function_object_get_slot(task, 0),
+        mal_native_function_object_get_slot(task, 1), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, values, countof(values));
+    bool had_error = !mal_value_is_nil(values[1]);
+    if (had_error) http_emit_error(vm, values[0], values[1]);
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        values[1] = mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "close"));
+        values[2] = mal_value_new_boolean(had_error);
+        http_call_method(vm, values[0], "emit", values + 1, 2);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue http_socket_destroy(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    MalNodeHttpSocketState *state = http_socket_for_receiver(receiver);
+    if (state == nullptr || state->conn == nullptr) return receiver;
+    MalValue roots[] = {receiver, argc > 0 ? args[0] : mal_value_new_undefined(),
+        mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    mal_http_conn_abort(state->conn);
+    roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_static_ascii(vm, (const byte *) "socketClose"), http_socket_destroy_task, roots, 2));
+    mal_vm_enqueue_reaction_job(vm, roots[2], false, mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined());
+    mal_gc_unroot(&root);
+    return receiver;
+}
+
+static MalValue http_socket_get_destroyed(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) vm; (void) args; (void) argc; (void) new_target; (void) callee;
+    return mal_value_new_boolean(http_socket_for_receiver(receiver) == nullptr);
+}
+
+static MalValue http_socket_set_timeout(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    MalNodeHttpSocketState *state = http_socket_for_receiver(receiver);
+    if (state == nullptr || state->conn == nullptr) return receiver;
+    f64 milliseconds;
+    if (!http_timeout_duration(vm, argc > 0 ? args[0] : mal_value_new_undefined(), &milliseconds))
+        return mal_value_new_undefined();
+    if (!mal_vm_set_property(vm, receiver,
+            mal_intrinsic_static_string_key(vm, (const byte *) "timeout"), args[0], receiver))
+        return mal_value_new_undefined();
+    state = http_socket_for_receiver(receiver);
+    if (state == nullptr || state->conn == nullptr) return receiver;
+    mal_http_conn_set_inactivity_timeout(state->conn, milliseconds);
+    if (argc > 1 && !mal_value_is_undefined(args[1])) {
+        if (milliseconds > 0) http_once(vm, receiver, "timeout", args[1]);
+        else {
+            MalValue remove[] = {mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "timeout")), args[1]};
+            http_call_method(vm, receiver, "removeListener", remove, 2);
+        }
+    }
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : receiver;
+}
+
+static void http_socket_unqueue_timeout(MalNodeHttpSocketState *state) {
+    MalNodeHttpServerState *server = state->timeout_server;
+    if (server == nullptr) return;
+    MalNodeHttpSocketState *previous = nullptr;
+    for (MalNodeHttpSocketState *at = server->timeout_head; at != nullptr; at = at->timeout_next) {
+        if (at == state) {
+            if (previous == nullptr) server->timeout_head = at->timeout_next;
+            else previous->timeout_next = at->timeout_next;
+            if (server->timeout_tail == at) server->timeout_tail = previous;
+            break;
+        }
+        previous = at;
+    }
+    state->timeout_server = nullptr;
+    state->timeout_next = nullptr;
+}
+
 static void http_socket_unqueue_secure(MalNodeHttpSocketState *state) {
     MalNodeHttpServerState *server = state->secure_server;
     if (server == nullptr) return;
@@ -1159,6 +1269,7 @@ static void http_socket_release(void *data) {
     MalNodeHttpSocketState *state = data;
     http_socket_unqueue_secure(state);
     http_socket_unqueue_hello(state);
+    http_socket_unqueue_timeout(state);
     free(state->hello_name);
     if (state->previous == nullptr) http_sockets = state->next;
     else state->previous->next = state->next;
@@ -1260,6 +1371,15 @@ static MalValue http_server_socket_facade(MalVm *vm, MalHttpConn *conn) {
         http_define_own(vm, roots[0], "localFamily", values[11]);
         http_define_own(vm, roots[0], "address", values[12]);
     }
+    http_define_own(vm, roots[0], "timeout", mal_value_from_f64(mal_http_conn_inactivity_timeout(conn)));
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "setTimeout", 2,
+        http_socket_set_timeout);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "destroy", 1,
+        http_socket_destroy);
+    mal_intrinsic_define_accessor_n(vm, mal_value_to_object(roots[0]),
+        mal_intrinsic_static_string_key(vm, (const byte *) "destroyed"),
+        (const byte *) "destroyed", 0, http_socket_get_destroyed,
+        nullptr, 0, nullptr, MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
     if (state != nullptr) {
         state->receiver = roots[0];
     } else if (conn != nullptr) {
@@ -4885,6 +5005,7 @@ static bool http_client_drain(MalVm *vm) {
 }
 
 static bool http_server_drain_tls(MalVm *vm, MalNodeHttpServerState *state);
+static bool http_server_drain_timeout(MalVm *vm, MalNodeHttpServerState *state);
 static void http_server_free_tls_errors(MalNodeHttpServerState *server);
 
 bool mal_node_http_drain(MalVm *vm) {
@@ -4907,6 +5028,7 @@ bool mal_node_http_drain(MalVm *vm) {
             return true;
         }
         if (http_server_drain_tls(vm, state)) return true;
+        if (http_server_drain_timeout(vm, state)) return true;
         if (state->close_ready) {
             MAL_PERF_COUNT(http_close_scans);
             if (mal_host(vm)->pending_http_completions > 0) {
@@ -5182,6 +5304,89 @@ static void http_server_install_limit_accessors(MalVm *vm, MalValue receiver) {
     }
 }
 
+static MalArrayObject *http_server_timeout_record(MalVm *vm, MalValue receiver, MalValue callee) {
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    if (receiver != mal_native_function_object_get_slot(function, 0)) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Invalid HTTP server receiver", "ERR_INVALID_THIS");
+        return nullptr;
+    }
+    return mal_value_to_array_object(mal_native_function_object_get_slot(function, 1));
+}
+
+static MalValue http_server_timeout_get(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target;
+    MalArrayObject *record = http_server_timeout_record(vm, receiver, callee);
+    MalValue result = mal_value_new_undefined();
+    if (record != nullptr) mal_array_object_dense_get(record, 0, &result);
+    return result;
+}
+
+static MalValue http_server_timeout_set(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target;
+    MalArrayObject *record = http_server_timeout_record(vm, receiver, callee);
+    f64 milliseconds;
+    if (record == nullptr || !http_timeout_duration(vm,
+            argc > 0 ? args[0] : mal_value_new_undefined(), &milliseconds))
+        return mal_value_new_undefined();
+    mal_array_object_store(record, mal_key_index(0), args[0]);
+    MalNodeHttpServerState *state = http_server_state(receiver);
+    if (state != nullptr && state->native != nullptr)
+        mal_http_server_set_inactivity_timeout(state->native, milliseconds,
+            http_server_inactivity_event, state);
+    return mal_value_new_undefined();
+}
+
+static void http_server_install_timeout(MalVm *vm, MalValue receiver) {
+    MalValue roots[] = {receiver,
+        mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 1)),
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    mal_array_object_store(mal_value_to_array_object(roots[1]), mal_key_index(0), mal_value_from_i32(0));
+    roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_static_ascii(vm, (const byte *) "get timeout"), 0,
+        http_server_timeout_get, roots, 2));
+    roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_static_ascii(vm, (const byte *) "set timeout"), 1,
+        http_server_timeout_set, roots, 2));
+    MalPropertyDesc descriptor = {.value = mal_value_new_undefined(), .getter = roots[2], .setter = roots[3],
+        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE};
+    mal_object_define_own(mal_value_to_object(receiver),
+        mal_intrinsic_static_string_key(vm, (const byte *) "timeout"), &descriptor);
+    mal_gc_unroot(&root);
+}
+
+static MalValue http_server_set_timeout(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    MalValue value = argc > 0 ? args[0] : mal_value_from_i32(0);
+    if (!mal_vm_set_property(vm, receiver,
+            mal_intrinsic_static_string_key(vm, (const byte *) "timeout"), value, receiver))
+        return mal_value_new_undefined();
+    if (argc > 1 && mal_value_is_truthy(args[1])) {
+        MalValue on[] = {mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "timeout")), args[1]};
+        if (!http_call_method(vm, receiver, "on", on, 2)) return mal_value_new_undefined();
+    }
+    return receiver;
+}
+
+static bool http_server_push_inactivity_timeout(MalVm *vm, MalNodeHttpServerState *state) {
+    MalValue timeout;
+    f64 milliseconds;
+    if (!mal_vm_get_static(vm, state->receiver, (const byte *) "timeout", &timeout) ||
+        !http_timeout_duration(vm, timeout, &milliseconds)) return false;
+    mal_http_server_set_inactivity_timeout(state->native, milliseconds, http_server_inactivity_event, state);
+    return true;
+}
+
 /* Read the limits the application configured (constructor options or plain
  * assignment) into the state that backs the accessors installed afterwards. */
 static bool http_server_collect_limits(
@@ -5234,6 +5439,87 @@ static MalNodeHttpSocketState *http_socket_state_for(MalNodeHttpServerState *ser
     if (http_sockets != nullptr) http_sockets->previous = state;
     http_sockets = state;
     return state;
+}
+
+static void http_server_inactivity_event(void *data, MalHttpConn *conn, u64 generation) {
+    MalNodeHttpServerState *server = data;
+    MalNodeHttpSocketState *state = http_socket_state_for(server, conn);
+    if (state == nullptr) { mal_http_conn_abort(conn); return; }
+    state->timeout_generation = generation;
+    if (state->timeout_server != nullptr) return;
+    state->timeout_server = server;
+    if (server->timeout_tail == nullptr) server->timeout_head = state;
+    else server->timeout_tail->timeout_next = state;
+    server->timeout_tail = state;
+}
+
+static bool http_emit_timeout_result(MalVm *vm, MalValue receiver, MalValue socket, bool *handled) {
+    MalValue roots[] = {receiver, socket, mal_value_new_undefined(),
+        mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "timeout"))};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool ok = mal_vm_get_static(vm, roots[0], (const byte *) "emit", &roots[2]);
+    if (ok) {
+        MalValue arguments[] = {roots[3], roots[1]};
+        MalCompletion result = mal_vm_call_value(vm, roots[2], roots[0], arguments, 2);
+        ok = result.kind != MAL_COMPLETION_THROW;
+        if (ok) *handled = mal_value_is_truthy(result.value);
+    }
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+static bool http_server_drain_timeout(MalVm *vm, MalNodeHttpServerState *server) {
+    MalNodeHttpSocketState *socket = server->timeout_head;
+    if (socket == nullptr) return false;
+    MalNodeHttpRequestState *request = nullptr;
+    for (MalNodeHttpRequestState *at = http_requests; at != nullptr; at = at->next) {
+        if (at->conn == socket->conn && !at->response_transport_complete) {
+            request = at;
+            break;
+        }
+    }
+    // A parsed request's earlier dispatch must run before its socket timeout.
+    if (request != nullptr && request->ready_kind == HTTP_REQUEST_READY_DISPATCH) return false;
+    u64 generation = socket->timeout_generation;
+    http_socket_unqueue_timeout(socket);
+    if (!mal_http_conn_consume_inactivity_timeout(socket->conn, generation)) return true;
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_realm_switch(vm, server->realm);
+#endif
+    MalValue roots[] = {server->receiver, mal_value_new_undefined(),
+        request != nullptr && !request->request_transport_complete ? request->request : mal_value_new_undefined(),
+        request != nullptr ? request->response : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalAsyncContextScope scope;
+    mal_async_context_scope_enter(vm, &scope, server->async_context);
+    roots[1] = http_server_socket_facade(vm, socket->conn);
+    bool handled = false, emitted = false;
+    if (vm->completion.kind != MAL_COMPLETION_THROW && mal_value_is_object(roots[2])) {
+        http_emit_timeout_result(vm, roots[2], roots[1], &emitted);
+        handled |= emitted;
+    }
+    if (vm->completion.kind != MAL_COMPLETION_THROW && mal_value_is_object(roots[3])) {
+        emitted = false;
+        http_emit_timeout_result(vm, roots[3], roots[1], &emitted);
+        handled |= emitted;
+    }
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        emitted = false;
+        http_emit_timeout_result(vm, roots[0], roots[1], &emitted);
+        handled |= emitted;
+    }
+    if (vm->completion.kind != MAL_COMPLETION_THROW && !handled)
+        http_socket_destroy(vm, roots[1], nullptr, 0, mal_value_new_undefined(), mal_value_new_undefined());
+    if (vm->completion.kind != MAL_COMPLETION_THROW) http_emit(vm, roots[1], "timeout");
+    mal_async_context_scope_exit(vm, &scope);
+    mal_gc_unroot(&root);
+#if MAL_REALMS
+    mal_realm_switch(vm, saved_realm);
+#endif
+    return true;
 }
 
 static void http_server_tls_event(void *data, MalHttpConn *conn, int error) {
@@ -5529,12 +5815,14 @@ static bool http_server_bind(MalVm *vm, MalNodeHttpServerState *state, const cha
         memcpy(state->host, host, strlen(host) + 1);
     }
     if (!http_server_push_limits(state)
+        || !http_server_push_inactivity_timeout(vm, state)
         || (state->pending_tls != nullptr && !mal_http_server_set_tls(
             native, state->pending_tls, http_server_tls_event, state))) {
         // No accept can run before this native call yields, so close completes synchronously.
         mal_http_server_close(native, http_native_close_complete, state);
         state->close_ready = false;
-        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Failed to configure the HTTP listener");
+        if (vm->completion.kind != MAL_COMPLETION_THROW)
+            mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Failed to configure the HTTP listener");
         MalValue error = vm->completion.value;
         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL,
             .value = mal_value_new_undefined()};
@@ -5938,6 +6226,7 @@ static MalValue http_server_constructor(
         vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR],
         roots[4], nullptr, 0);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        http_server_install_timeout(vm, roots[4]);
         for (usize i = 0; i < countof(http_limit_names); i++) {
             http_define_own(vm, roots[4], http_limit_names[i],
                             http_limit_value((MalNodeHttpLimit) i, limits[i]));
@@ -6636,6 +6925,9 @@ void mal_host_install_node_http(
     mal_intrinsic_define_method_n(
         vm, mal_value_to_object(roots[5]), (const byte *) "listen", 3,
         http_server_listen);
+    mal_intrinsic_define_method_n(
+        vm, mal_value_to_object(roots[5]), (const byte *) "setTimeout", 2,
+        http_server_set_timeout);
     mal_intrinsic_define_method_n(
         vm, mal_value_to_object(roots[5]), (const byte *) "address", 0,
         http_server_address);

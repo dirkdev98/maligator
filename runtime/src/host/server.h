@@ -67,6 +67,16 @@ MalHttpServer *mal_http_server_start_stream_handler(
 bool mal_http_server_configure_limits(
     MalHttpServer *server, const MalHttpServerLimits *limits);
 
+/* Optional socket inactivity is independent of the absolute transport limits.
+ * The default is latched by future accepts; expiry callbacks only queue host work.
+ * Activity and timeout changes invalidate a queued generation before JS dispatch. */
+typedef void (*MalHttpConnectionTimeoutCallback)(void *data, MalHttpConn *conn, u64 generation);
+void mal_http_server_set_inactivity_timeout(
+    MalHttpServer *server, f64 milliseconds, MalHttpConnectionTimeoutCallback callback, void *data);
+void mal_http_conn_set_inactivity_timeout(MalHttpConn *conn, f64 milliseconds);
+f64 mal_http_conn_inactivity_timeout(const MalHttpConn *conn);
+bool mal_http_conn_consume_inactivity_timeout(MalHttpConn *conn, u64 generation);
+
 /* The bound port (host byte order). */
 typedef struct MalTlsClient MalTlsClient;
 typedef struct MalTlsServerConfig MalTlsServerConfig;
