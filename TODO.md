@@ -167,17 +167,11 @@ Runtime eval may remove source closure without invalidating authority closure.
       closed. An epoch advanced when a global object property holding a primordial
       binding is written, defined or deleted, or a global lexical binding shadows one,
       would let one guard select the known operation and keep the loads as the twin.
-
-- [ ] Keep compiled builtin identities through polyfills. A polyfill that adds an
-      unrelated built-in method still breaks the generic watched-methods protector, which
-      admits runtime-guarded String method chains, guarded builtin calls, string split and
-      RegExp regions, Map and Set entry-pair regions, and the species, Promise, RegExp,
-      typed array and Set fast paths in the runtime. A mutable-primordial loop over
-      `text.charCodeAt` takes 177 ms after a polyfill against 52 without one. A protector
-      that breaks only when a watched key's existing resolution changes, by replacement,
-      deletion or shadowing, would keep identities through added names; consumers that
-      rely on an absent key, such as entry-pair destructuring, need a protocol protector
-      first.
+      Outside regions Math calls take 14 ms against 5 closed and the Number calls 29
+      against 22 in a 240,000-iteration loop. Global stores write the global object's
+      table entries directly and MalObject has no free flag bit, so an internal property
+      flag on the primordial binding entries would let each writer that already reads an
+      entry's flags advance the epoch.
 
 ## Performance diagnosis and admission
 

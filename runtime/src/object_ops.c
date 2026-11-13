@@ -28,12 +28,13 @@ void mal_invalidate_array_elements_protector(void) {
 void mal_invalidate_watched_attributes(void) {
     MalSemanticEpochs *epochs = &mal_vm_from_heap(mal_gc_current_heap())->semantic_epochs;
     mal_semantic_epoch_bump(&epochs->activity);
-    mal_semantic_epoch_bump(&epochs->watched_methods);
+    mal_semantic_epoch_bump(&epochs->watched_objects);
 }
 
 void mal_invalidate_watched_protectors(void) {
     MalSemanticEpochs *epochs = &mal_vm_from_heap(mal_gc_current_heap())->semantic_epochs;
     mal_semantic_epoch_bump(&epochs->activity);
+    mal_semantic_epoch_bump(&epochs->watched_objects);
     mal_semantic_epoch_bump(&epochs->watched_methods);
     mal_semantic_epoch_bump(&epochs->iterator_lookups);
     mal_semantic_epoch_bump(&epochs->array_iteration);
@@ -111,11 +112,42 @@ static u8 mal_watched_key_protectors(
     return MAL_WATCHED_ITERATOR_LOOKUP;
 }
 
+/**
+ * Whether defining, storing or deleting `key` on `object` can change what a lookup
+ * through watched built-in objects resolves, which the builtin-identity protector
+ * covers. The mutation has not happened yet, so an own `key` is replaced or
+ * deleted, and a `key` the prototype chain resolves is shadowed. A new name changes
+ * only lookups that found nothing, which no identity relies on, except for the
+ * protocol hooks that algorithms look up on built-in receivers expecting absence:
+ * the well-known symbols (@@isConcatSpreadable, @@toPrimitive, @@split on a
+ * primitive separator, ...), `then` on a resolution value, `toJSON` in JSON and
+ * `return` and `throw` on an iterator.
+ */
+static bool mal_watched_key_changes_identity(const MalObject *object, MalKey key) {
+    if (key.kind == MAL_KEY_SYMBOL) {
+        const MalSymbol *symbol = mal_value_to_symbol(key.value);
+        if (symbol->is_private) return false;
+        if (symbol->well_known) return true;
+    } else if (key.kind == MAL_KEY_STRING) {
+        const MalString *name = mal_value_to_string(key.value);
+        if (mal_string_equals_ascii(name, "then") || mal_string_equals_ascii(name, "toJSON") ||
+            mal_string_equals_ascii(name, "return") || mal_string_equals_ascii(name, "throw")) {
+            return true;
+        }
+    }
+    if (mal_object_get_own(object, key).present) return true;
+    const MalObject *prototype = mal_object_prototype(object);
+    return prototype != nullptr && mal_object_resolve_property(prototype, key).found;
+}
+
 void mal_invalidate_watched_key(const MalObject *object, MalKey key) {
     MalVm *vm = mal_vm_from_heap(mal_gc_current_heap());
     MalSemanticEpochs *epochs = &vm->semantic_epochs;
     mal_semantic_epoch_bump(&epochs->activity);
-    mal_semantic_epoch_bump(&epochs->watched_methods);
+    mal_semantic_epoch_bump(&epochs->watched_objects);
+    if (mal_watched_key_changes_identity(object, key)) {
+        mal_semantic_epoch_bump(&epochs->watched_methods);
+    }
     // Each realm's intrinsics are watched while another realm is current.
     u8 protectors = 0;
 #if MAL_REALMS

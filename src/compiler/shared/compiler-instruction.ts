@@ -14,8 +14,10 @@ export const MAX_STRING_CODE_UNITS = 2 ** 31 - 1;
 
 /**
  * Protector families a compiled speculation can check at runtime. A speculation
- * names the narrowest one that covers what it skips: `array-iteration` and
- * `generator-protocol` survive mutations of unrelated built-in methods.
+ * names the narrowest one that covers what it skips. `watched-methods` covers the
+ * identities of built-in methods and survives a polyfill that only adds names;
+ * `array-iteration` and `generator-protocol` also survive replacing unrelated
+ * built-in methods.
  */
 export type GuardedSemanticEpochFamily =
 	| "watched-methods"

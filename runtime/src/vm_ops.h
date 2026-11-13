@@ -64,8 +64,13 @@ static inline MalValue mal_vm_numeric_typed_array_load_at(
  * the VM reads it without a thread-local access (a `_tlv_get_addr` call on Darwin).
  */
 
-/** No watched built-in object has changed; the fallback for unclassified dependencies. */
-static inline bool mal_vm_primitive_methods_intact(const MalVm *vm) {
+/** No watched built-in object has changed, for a consumer that relies on an absent name. */
+static inline bool mal_vm_watched_objects_intact(const MalVm *vm) {
+    return vm->semantic_epochs.watched_objects == MAL_SEMANTIC_EPOCH_INITIAL;
+}
+
+/** See MalSemanticEpochs.watched_methods: every builtin identity still holds. */
+static inline bool mal_vm_watched_methods_intact(const MalVm *vm) {
     return vm->semantic_epochs.watched_methods == MAL_SEMANTIC_EPOCH_INITIAL;
 }
 
@@ -105,7 +110,7 @@ static inline bool mal_vm_semantic_dependencies_hold(
     const u8 watched =
         MAL_SEMANTIC_DEPENDENCY_PRIMITIVE_METHODS |
         MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS;
-    if ((dependencies & watched) != 0 && !mal_vm_primitive_methods_intact(vm)) {
+    if ((dependencies & watched) != 0 && !mal_vm_watched_methods_intact(vm)) {
         return false;
     }
     if ((dependencies & MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS) != 0 &&
@@ -160,7 +165,7 @@ static inline bool mal_vm_try_capture_collection_method(
     MalValue receiver,
     MalValue *method_out
 ) {
-    if (!mal_vm_primitive_methods_intact(vm)) return false;
+    if (!mal_vm_watched_methods_intact(vm)) return false;
 
     MalObject *collection;
     MalIntrinsic prototype_intrinsic;
@@ -1146,9 +1151,10 @@ typedef struct MalInlineCache {
     // receiver shapes do not imply equal prototype objects or dictionary state.
     // The watched value rows (primitive-value, watched-value, and an
     // inherited-value row without polymorphic entries) use none of it and keep
-    // the watched-methods epoch they were filled under instead, so a row filled
-    // after a polyfill's startup installs stays valid until the next change. The
-    // epoch is 32 bits wide to keep the 32-bit layout; see mal_vm_watched_rows_fillable.
+    // the builtin-identity epoch they were filled under instead: each caches a
+    // value a lookup found through watched objects, so a polyfill's later installs
+    // of new names keep it. The epoch is 32 bits wide to keep the 32-bit layout;
+    // see mal_vm_watched_rows_fillable.
     union {
         const struct MalShape *poly_shape[MAL_IC_POLY_EXTRA];
         const struct MalObject *proto_object[MAL_IC_POLY_EXTRA];
@@ -1171,17 +1177,24 @@ typedef struct MalInlineCache {
 static_assert(sizeof(MalInlineCache) == (sizeof(void *) == 8 ? 72 : 56), "MalInlineCache must retain its pointer-width-specific layout");
 
 /**
- * Whether a watched value row may be filled now. Every change to a watched
- * built-in object advances the watched-methods epoch, so a row records the epoch
- * it was proven under. Rows hold 32 bits: once the epoch passes that range, or is
- * exhausted and no longer advances, no row fills, so a stored epoch never repeats.
+ * Whether a row proven under `epoch` may be filled now, so that it records the
+ * epoch. Rows hold 32 bits: once the epoch passes that range, or is exhausted and
+ * no longer advances, no row fills, so a stored epoch never repeats.
  */
-static inline bool mal_vm_watched_rows_fillable(const MalVm *vm) {
-    u64 epoch = vm->semantic_epochs.watched_methods;
+static inline bool mal_vm_epoch_row_fillable(u64 epoch) {
     return epoch != 0 && epoch <= UINT32_MAX;
 }
 
-/** Whether no watched built-in object has changed since a watched value row was filled. */
+/**
+ * Whether a watched value row may be filled now. Every change that can alter a
+ * value found through watched built-in objects advances the builtin-identity
+ * epoch, so a row records the epoch it was proven under.
+ */
+static inline bool mal_vm_watched_rows_fillable(const MalVm *vm) {
+    return mal_vm_epoch_row_fillable(vm->semantic_epochs.watched_methods);
+}
+
+/** Whether every builtin identity held since a watched value row was filled. */
 static inline bool mal_vm_watched_row_current(const MalVm *vm, u32 watched_epoch) {
     return watched_epoch == vm->semantic_epochs.watched_methods;
 }
@@ -1393,7 +1406,10 @@ MalInlineCache *mal_vm_inherited_property_stub_cache(MalVm *vm);
 typedef struct MalBuiltinMissingRow {
     MalValue key;
     u32 prototype_slot;
-    /** The watched-methods epoch the absence was proven under; see MalInlineCache. */
+    /**
+     * The watched-objects epoch the absence was proven under: a new name on any
+     * watched object can answer it. See mal_vm_epoch_row_fillable.
+     */
     u32 watched_epoch;
 } MalBuiltinMissingRow;
 
@@ -1934,7 +1950,7 @@ static inline bool mal_vm_try_typed_array_length(
 static inline bool mal_vm_admit_data_view_byte_length(
     const MalVm *vm, MalValue receiver, u32 *length
 ) {
-    if (!mal_vm_primitive_methods_intact(vm) ||
+    if (!mal_vm_watched_methods_intact(vm) ||
         !mal_value_is_heap_type(receiver, MAL_HEAP_DATA_VIEW_OBJECT)) {
         return false;
     }
@@ -1982,7 +1998,7 @@ static inline bool mal_vm_fixed_data_view_storage(
  * empty own-property layout cannot shadow the accessor.
  */
 static inline bool mal_vm_admit_collection_size(MalVm *vm, MalValue receiver, usize *size) {
-    if (!mal_vm_primitive_methods_intact(vm)) return false;
+    if (!mal_vm_watched_methods_intact(vm)) return false;
     const MalObject *collection;
     MalIntrinsic prototype;
     if (mal_value_is_map_object(receiver)) {

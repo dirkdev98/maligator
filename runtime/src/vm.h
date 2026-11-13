@@ -1646,11 +1646,12 @@ typedef struct MalHasCacheRow {
  * compatibility bridge from those names to the per-VM epoch storage. Locked-world
  * dependencies disappear before emission and never reach them.
  *
- * `primitive-methods` and `watched-methods` currently share one invalidation path,
- * but keep distinct bits so the compiler contract does not inherit that runtime
- * implementation detail. The protocol bits name the narrower protectors in
- * MalSemanticEpochs. The activity snapshot lets a region validate all of its
- * dependencies with one comparison after a potentially reentrant operation.
+ * `primitive-methods` and `watched-methods` both name the builtin-identity protector
+ * (MalSemanticEpochs.watched_methods), but keep distinct bits so the compiler
+ * contract does not inherit that runtime implementation detail. The protocol bits
+ * name the narrower protectors in MalSemanticEpochs. The activity snapshot lets a
+ * region validate all of its dependencies with one comparison after a potentially
+ * reentrant operation.
  */
 typedef enum MalSemanticDependencyMask {
     MAL_SEMANTIC_DEPENDENCY_PRIMITIVE_METHODS = 1 << 0,
@@ -1661,18 +1662,28 @@ typedef enum MalSemanticDependencyMask {
 } MalSemanticDependencyMask;
 
 /**
- * Protectors over the watched built-in objects. `watched_methods` breaks on every
- * mutation of one, for consumers whose dependencies are not classified. The
- * iteration protectors break only when a mutation can change a lookup their
- * protocol performs (see mal_invalidate_watched_key), so a polyfill that adds an
- * unrelated method leaves them intact.
+ * Protectors over the watched built-in objects. `watched_objects` breaks on every
+ * mutation of one, for consumers that rely on a name being absent. The others
+ * break only when a mutation can change a lookup they rely on (see
+ * mal_invalidate_watched_key), so a polyfill that adds an unrelated method leaves
+ * them intact.
  */
 typedef struct MalSemanticEpochs {
     /** Advanced by every semantic-family invalidation; future re-entry dirty test. */
     u64 activity;
     /** Inherited integer-index behaviour of watched Array/Object prototypes. */
     u64 array_elements;
-    /** Resolved values on watched builtin prototypes/constructors/namespaces. */
+    /** Every property and the prototype of every watched built-in object. */
+    u64 watched_objects;
+    /**
+     * Builtin identities: every key that resolves through watched built-in objects
+     * still resolves to the same property, and no watched object gained one of the
+     * protocol hooks that algorithms look up expecting absence. Breaks when a
+     * mutation replaces, redefines or deletes an existing own property, adds one that
+     * shadows a key its prototype chain resolves, adds a well-known symbol or
+     * `then`, `toJSON`, `return` or `throw`, or reparents the object. Adding any
+     * other new name keeps it.
+     */
     u64 watched_methods;
     /**
      * @@iterator, `next`, `return` and `throw` as resolved through any chain of
@@ -1878,7 +1889,7 @@ typedef struct MalVm {
 
     /**
      * Static names that no property on a builtin prototype chain answers, by the
-     * chain's intrinsic prototype slot. A row holds while the watched-methods epoch
+     * chain's intrinsic prototype slot. A row holds while the watched-objects epoch
      * it records is current, since every change to a watched prototype advances it.
      */
     struct MalBuiltinMissingRow *builtin_missing_rows;

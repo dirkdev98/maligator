@@ -100,7 +100,7 @@ static bool mal_promise_is_canonical_intrinsic(
     MalValue value,
     MalValue captured_then
 ) {
-    if (!mal_vm_primitive_methods_intact(vm) || !mal_value_is_promise_object(value)) {
+    if (!mal_vm_watched_methods_intact(vm) || !mal_value_is_promise_object(value)) {
         return false;
     }
 
@@ -1183,7 +1183,7 @@ static bool mal_promise_all_try_dense(
     MalValue *result
 ) {
     if (constructor != vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR] ||
-        !mal_vm_primitive_methods_intact(vm) || arg_count < 1 ||
+        !mal_vm_watched_methods_intact(vm) || arg_count < 1 ||
         !mal_value_is_array_object(args[0])) return false;
     MalArrayObject *source = mal_value_to_array_object(args[0]);
     u32 count = source->length;

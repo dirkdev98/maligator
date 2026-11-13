@@ -170,7 +170,7 @@ void mal_invalidate_array_elements_protector(void);
 
 /** A define, store, or delete of `key`: breaks the protectors whose lookups reach it. */
 void mal_invalidate_watched_key(const MalObject *object, MalKey key);
-/** Integrity changes keep every [[Get]] result, so only the generic protector breaks. */
+/** Integrity changes keep every [[Get]] result, so only the watched-objects protector breaks. */
 void mal_invalidate_watched_attributes(void);
 /** Reparenting, or any change no key classifies, breaks every watched protector. */
 void mal_invalidate_watched_protectors(void);

@@ -2776,12 +2776,15 @@ static bool mal_vm_builtin_chain_missing(const MalVm *vm, MalValue receiver, Mal
     const MalBuiltinMissingRow *row =
         &vm->builtin_missing_rows[mal_vm_builtin_missing_hash(slot, key)];
     return row->key == key && row->prototype_slot == (u32) slot &&
-        mal_vm_watched_row_current(vm, row->watched_epoch);
+        row->watched_epoch == vm->semantic_epochs.watched_objects;
 }
 
 /** Record that a load of `key` from the receiver found nothing on its builtin chain. */
 static void mal_vm_builtin_chain_note_missing(MalVm *vm, MalValue receiver, MalValue key) {
-    if (!mal_vm_watched_rows_fillable(vm) || !mal_ic_key_is_stable_string(key)) return;
+    if (!mal_vm_epoch_row_fillable(vm->semantic_epochs.watched_objects) ||
+        !mal_ic_key_is_stable_string(key)) {
+        return;
+    }
     i32 slot = mal_vm_builtin_chain_slot(vm, receiver);
     if (slot < 0) return;
     MalKey query = {.kind = MAL_KEY_STRING, .value = key};
@@ -2806,7 +2809,7 @@ static void mal_vm_builtin_chain_note_missing(MalVm *vm, MalValue receiver, MalV
         &vm->builtin_missing_rows[mal_vm_builtin_missing_hash(slot, key)];
     row->key = key;
     row->prototype_slot = (u32) slot;
-    row->watched_epoch = (u32) vm->semantic_epochs.watched_methods;
+    row->watched_epoch = (u32) vm->semantic_epochs.watched_objects;
 }
 
 /**
@@ -2885,7 +2888,7 @@ bool mal_vm_object_try_store_static_remaining(
 MAL_PRESERVE_MOST bool mal_vm_property_try_load_length_static_remaining(
     MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
 ) {
-    if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH && mal_vm_primitive_methods_intact(vm) &&
+    if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH && mal_vm_watched_methods_intact(vm) &&
         mal_value_is_typed_array_object(receiver)) {
         const MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
         const MalObject *prototype = mal_object_prototype(&array->object);

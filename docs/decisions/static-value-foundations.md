@@ -1338,12 +1338,27 @@ generator protocol covers %GeneratorPrototype% `next`, `return` and `throw` and 
 @@iterator, their iterator prototype's `next`, and the absent `return` and `throw`
 along that iterator's chain. A key on %IteratorPrototype% or %Object.prototype%
 breaks all of them. Reparenting a watched object breaks every protector, and
-freezing or sealing one breaks only the generic watched-methods protector, because
-it changes no lookup. Primitive, watched and inherited method rows and absent-key
-rows on built-in chains record the generic epoch they were filled under, so rows
-filled after a polyfill's startup installs keep working until the next change. Other
-consumers with no protocol of their own, including compiled builtin identities, keep
-the generic protector.
+freezing or sealing one breaks only the watched-objects protector, because it
+changes no lookup.
+
+Compiled builtin identities and the runtime fast paths that skip a built-in method
+lookup check the builtin-identity protector, which the `watched-methods` and
+`primitive-methods` dependencies name. It breaks when a define, store or delete on a
+watched object replaces or removes an existing own property, adds one that shadows a
+key its prototype chain resolves, or adds a well-known symbol, `then`, `toJSON`,
+`return` or `throw`, and on every reparent. Adding any other name keeps it, so a
+polyfill that installs missing methods keeps String method chains, guarded builtin
+calls, split, RegExp and string span regions, Map and Set entry-pair and call-chain
+regions, and the species, concat, push, collection, typed array, DataView, Promise,
+RegExp and Error fast paths. The hook keys are the names algorithms read on built-in
+receivers expecting absence: @@isConcatSpreadable, @@toPrimitive and the RegExp
+symbols, a resolution value's `then`, and the `return` an entry-pair destructuring
+closes its pair iterator with. Primitive, watched and inherited method rows cache a
+value a lookup found, so they record the builtin-identity epoch they were filled
+under. Absent-key rows on built-in chains and the Fetch dictionary members, which
+rely on %Object.prototype% lacking a name, keep the watched-objects protector that
+every mutation breaks. The Error prototypes are watched objects, because
+Error.prototype.toString answers their `name` and `message` without a lookup.
 
 Canonical function comparisons use the inventory's object identity, independently
 of native callback sharing. This folds repeated references across effects while

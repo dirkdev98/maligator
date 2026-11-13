@@ -2229,7 +2229,7 @@ bool mal_builtin_array_push_virtual_guard(MalVm *vm) {
     return true;
 #else
     // Array.prototype is watched: any redefinition of its push clears the protector.
-    if (mal_vm_primitive_methods_intact(vm)) return true;
+    if (mal_vm_watched_methods_intact(vm)) return true;
     MalPropertyLookup live = mal_object_get_own(
         mal_value_to_object(prototype_value), mal_intrinsic_string_key(vm, "push"));
     return live.present && !(live.desc.flags & MAL_PROPERTY_ACCESSOR) &&
@@ -2717,7 +2717,7 @@ static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const M
         if (mal_value_is_object(source)) {
             MalKey spreadable_key = mal_intrinsic_symbol_key(
                 vm, MAL_INTRINSIC_SYMBOL_IS_CONCAT_SPREADABLE);
-            bool default_array_spread = mal_vm_primitive_methods_intact(vm) &&
+            bool default_array_spread = mal_vm_watched_methods_intact(vm) &&
                 mal_builtin_array_clean_dense(vm, source) != nullptr &&
                 !mal_object_get_own(
                     mal_value_to_object(source), spreadable_key).present;
@@ -4784,7 +4784,7 @@ static MalValue mal_builtin_array_to_string(MalVm *vm, MalValue this_value, cons
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
     }
-    if (mal_vm_primitive_methods_intact(vm) &&
+    if (mal_vm_watched_methods_intact(vm) &&
         mal_array_method_is_default_builtin(
             vm, this_value, (const byte *) "join",
             mal_builtin_array_join)) {
@@ -5456,7 +5456,7 @@ static bool mal_array_default_species(MalVm *vm, MalValue recv) {
 bool mal_builtin_array_exact_map_guard(
     MalVm *vm, MalValue callee, MalValue receiver
 ) {
-    if (!mal_vm_primitive_methods_intact(vm) || !mal_vm_array_elements_intact(vm) ||
+    if (!mal_vm_watched_methods_intact(vm) || !mal_vm_array_elements_intact(vm) ||
         !mal_value_is_native_function_object(callee) ||
         mal_native_function_object_callback(
             mal_value_to_native_function_object(callee)) != mal_builtin_array_map ||
@@ -5473,7 +5473,7 @@ bool mal_builtin_array_exact_map_guard(
 }
 
 bool mal_builtin_array_default_map_guard(MalVm *vm, MalValue receiver) {
-    return mal_vm_primitive_methods_intact(vm) && mal_vm_array_elements_intact(vm) &&
+    return mal_vm_watched_methods_intact(vm) && mal_vm_array_elements_intact(vm) &&
         mal_array_method_is_default_builtin(
             vm, receiver, (const byte *) "map", mal_builtin_array_map) &&
         mal_array_default_species(vm, receiver);

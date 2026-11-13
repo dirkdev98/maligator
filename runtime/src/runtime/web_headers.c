@@ -630,7 +630,7 @@ bool mal_headers_init_convert(MalVm *vm, MalValue input, MalHeadersInit *init) {
         return false;
     }
     const MalObject *plain = mal_headers_plain_string_record(input);
-    if (plain != nullptr && mal_vm_primitive_methods_intact(vm) &&
+    if (plain != nullptr && mal_vm_watched_methods_intact(vm) &&
         mal_object_prototype(plain) ==
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])) {
         return mal_headers_convert_record(vm, input, init);

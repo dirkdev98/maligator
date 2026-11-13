@@ -606,6 +606,7 @@ static void mal_vm_init_engine_state(MalVm *vm) {
     vm->semantic_epochs = (MalSemanticEpochs) {
         .activity = MAL_SEMANTIC_EPOCH_INITIAL,
         .array_elements = MAL_SEMANTIC_EPOCH_INITIAL,
+        .watched_objects = MAL_SEMANTIC_EPOCH_INITIAL,
         .watched_methods = MAL_SEMANTIC_EPOCH_INITIAL,
         .iterator_lookups = MAL_SEMANTIC_EPOCH_INITIAL,
         .array_iteration = MAL_SEMANTIC_EPOCH_INITIAL,

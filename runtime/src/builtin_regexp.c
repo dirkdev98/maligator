@@ -318,7 +318,7 @@ static inline MalShape *regexp_instance_shape(MalVm *vm) {
 static bool regexp_canonical_instance(
     MalVm *vm, MalValue value, MalRegExpObject **out
 ) {
-    if (!mal_vm_primitive_methods_intact(vm) || !mal_value_is_regexp_object(value)) {
+    if (!mal_vm_watched_methods_intact(vm) || !mal_value_is_regexp_object(value)) {
         return false;
     }
     MalRegExpObject *re = mal_value_to_regexp_object(value);
@@ -3106,7 +3106,7 @@ bool mal_regexp_try_exact_string_dispatch(
         }
 #endif
         method = lookup.desc.value;
-        if (!MAL_REALMS && mal_vm_primitive_methods_intact(vm)) {
+        if (!MAL_REALMS && mal_vm_watched_methods_intact(vm)) {
             vm->regexp_protocol_methods[protocol].prototype = prototype;
             vm->regexp_protocol_methods[protocol].method = method;
         }

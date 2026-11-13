@@ -831,7 +831,9 @@ void mal_intrinsics_init(MalVm *vm) {
     //   - the namespaces Math/JSON/Reflect/Atomics and every builtin constructor —
     //     their static/namespace methods (`Math.floor`, `String.fromCharCode`,
     //     `Object.keys`, …) live in the overflow table and are otherwise re-hashed
-    //     every call.
+    //     every call;
+    //   - the Error prototypes, whose `name` and `message` Error.prototype.toString
+    //     answers without a lookup.
     static const MalIntrinsic watched_lookup_objects[] = {
         MAL_INTRINSIC_OBJECT_PROTOTYPE,
         MAL_INTRINSIC_STRING_PROTOTYPE,
@@ -860,6 +862,15 @@ void mal_intrinsics_init(MalVm *vm) {
         MAL_INTRINSIC_PROMISE_PROTOTYPE,
         MAL_INTRINSIC_DATE_PROTOTYPE,
         MAL_INTRINSIC_REGEXP_PROTOTYPE,
+        MAL_INTRINSIC_ERROR_PROTOTYPE,
+        MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+        MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+        MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
+        MAL_INTRINSIC_URI_ERROR_PROTOTYPE,
+        MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE,
+        MAL_INTRINSIC_AGGREGATE_ERROR_PROTOTYPE,
+        MAL_INTRINSIC_SUPPRESSED_ERROR_PROTOTYPE,
         MAL_INTRINSIC_INTL_LOCALE_PROTOTYPE,
         MAL_INTRINSIC_INTL_COLLATOR_PROTOTYPE,
         MAL_INTRINSIC_INTL_NUMBER_FORMAT_PROTOTYPE,

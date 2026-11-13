@@ -909,7 +909,7 @@ static void mal_response_trace(MalHeapHeader *cell) {
  * answers from its own shaped slots; anything else takes the full [[Get]]. */
 static bool mal_fetch_dictionary_member(
     MalVm *vm, MalValue dict, const char *name, MalValue *out) {
-    if (mal_value_is_heap_type(dict, MAL_HEAP_OBJECT) && mal_vm_primitive_methods_intact(vm)) {
+    if (mal_value_is_heap_type(dict, MAL_HEAP_OBJECT) && mal_vm_watched_objects_intact(vm)) {
         const MalObject *object = mal_value_to_object(dict);
         if (!object->is_arguments && mal_object_overflow(object) == nullptr &&
             mal_object_prototype(object) ==
