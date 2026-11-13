@@ -7261,7 +7261,25 @@ static void node_fs_watch_rescan(MalVm *vm, NodeFsWatcher *state, NodeFsWatchDir
         int order = left == dir->entry_count ? 1 : right == count ? -1
             : strcmp(dir->entries[left], entries[right]);
         if (order == 0) {
-            fds[right++] = dir->entry_fds[left++];
+            int fd = dir->entry_fds[left++];
+            bool replaced = false;
+            if (fd >= 0) {
+                struct stat previous, current;
+                if (fstat(fd, &previous) != 0) state->error = errno;
+                else if (fstatat(dir->fd, entries[right], &current, AT_SYMLINK_NOFOLLOW) == 0)
+                    replaced = previous.st_dev != current.st_dev || previous.st_ino != current.st_ino;
+                else if (errno == ENOENT || errno == ENOTDIR) replaced = true;
+                else state->error = errno;
+            }
+            if (replaced) {
+                close(fd);
+                const char *name = node_fs_watch_join(state, dir->relative, entries[right]);
+                if (name != nullptr && announce && !state->closed && state->error == 0 &&
+                    vm->completion.kind != MAL_COMPLETION_THROW)
+                    node_fs_watch_emit(vm, state, "rename", name);
+                fd = node_fs_watch_child(vm, state, dir, entries[right], announce);
+            }
+            fds[right++] = fd;
             continue;
         }
         bool active = announce && !state->closed && state->error == 0 && vm->completion.kind != MAL_COMPLETION_THROW;

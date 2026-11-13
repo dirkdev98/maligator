@@ -129,6 +129,55 @@ async function watchLargeDirectory() {
 	}
 }
 
+async function watchAtomicReplacement() {
+	const dir = path.join(root, "atomic");
+	fs.mkdirSync(dir);
+	const target = path.join(dir, "config.json");
+	fs.writeFileSync(target, "original");
+	const watcher = fs.watch(dir);
+	const notification = (content, action) =>
+		new Promise((resolve, reject) => {
+			const cleanup = () => {
+				clearTimeout(deadline);
+				watcher.off("change", changed);
+				watcher.off("error", failed);
+			};
+			const failed = (error) => {
+				cleanup();
+				reject(error);
+			};
+			const changed = (_type, name) => {
+				if (name !== "config.json" || fs.readFileSync(target, "utf8") !== content) return;
+				cleanup();
+				resolve();
+			};
+			const deadline = setTimeout(
+				() => failed(new Error("Missing atomic replacement notification")),
+				10_000,
+			);
+			watcher.on("change", changed);
+			watcher.on("error", failed);
+			try {
+				action();
+			} catch (error) {
+				failed(error);
+			}
+		});
+	try {
+		await notification("replacement", () => {
+			const next = path.join(dir, "next.json");
+			fs.writeFileSync(next, "replacement");
+			fs.renameSync(next, target);
+		});
+		await notification("modified replacement", () =>
+			fs.writeFileSync(target, "modified replacement"),
+		);
+		console.log("atomic replacement and subsequent modification");
+	} finally {
+		watcher.close();
+	}
+}
+
 async function watchErrors() {
 	try {
 		fs.watch(path.join(root, "missing"));
@@ -243,6 +292,7 @@ await watchDirectory();
 await watchTree();
 await watchFile();
 await watchLargeDirectory();
+await watchAtomicReplacement();
 await watchErrors();
 await statPolling();
 await promisesWatch();
