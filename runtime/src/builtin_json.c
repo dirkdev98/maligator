@@ -1478,7 +1478,8 @@ static bool mal_json_plain_flat_record(
         gap[i] = (u8) state->gap[i];
     }
     MalJsonFlatMember members[MAL_JSON_FLAT_RECORD_MEMBERS];
-    usize needed = 1 + plan->count;
+    // Bounded scalar/key widths fit in u64; narrowing must not wrap a 32-bit reservation.
+    u64 record_bytes = 1 + plan->count;
     for (usize i = 0; i < plan->count; i++) {
         const MalJsonKeyPlan *key = &plan->keys[i];
         if (key->length == 0) return false;
@@ -1507,8 +1508,10 @@ static bool mal_json_plain_flat_record(
         } else {
             return false;
         }
-        needed += key->length + member->width;
+        record_bytes += (u64) key->length + member->width;
     }
+    if (record_bytes > SIZE_MAX) return false;
+    usize needed = (usize) record_bytes;
     if (state->gap_length != 0) {
         usize member_depth, member_indent, closing_indent, extra;
         if (!mal_checked_size_add(depth, 1, SIZE_MAX, &member_depth) ||
