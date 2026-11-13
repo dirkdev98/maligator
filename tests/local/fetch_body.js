@@ -207,8 +207,8 @@ async function run() {
 			(await multipartRequest.text()).includes('name="name"\r\n\r\nvalue'),
 	);
 	check(
-		"empty FormData retains an empty byte body",
-		(await new Response(new FormData()).text()) === "",
+		"empty FormData round trips without entries",
+		Array.from(await new Response(new FormData()).formData()).length === 0,
 	);
 	const parsedRequest = await new Request("https://example.com/", {
 		method: "POST",

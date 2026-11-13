@@ -619,9 +619,9 @@ remains a Maligator extension and does not count as global fetch conformance.
       the buffered 16 MiB total-size ceiling, and expose configurable budgets for
       callers that choose buffering.
 
-- [ ] Implement Blob storage and streaming, File metadata, ordered FormData, multipart
-      parsing and serialization, URL-encoded extraction, and Body.formData. Give native
-      backing objects correct tracing and finalization.
+- [ ] Complete Blob, File and FormData Web IDL behavior and curate the applicable
+      File API, XHR and Fetch WPT. Check byte ownership, lifetime and MIME behavior
+      through the public APIs.
 
 - [ ] Complete Headers guards, Web IDL record conversion, descriptors, and
       Proxy-sensitive behavior. Expand applicable WPT with outbound fetch.

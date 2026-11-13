@@ -149,6 +149,7 @@ tests/native/writable-stream.test.ts
 tests/native/bigint128-safety.test.ts
 tests/native/bigint-arbitrary.test.ts
 tests/native/fetch-body.test.ts
+tests/native/fetch-multipart.test.ts
 tests/native/web-body-pressure.test.ts
 tests/native/fetch-hardening.test.ts
 tests/native/float16.test.ts
@@ -196,6 +197,7 @@ tests/native/proxy-revocation.test.ts
 tests/native/node-tls.test.ts
 tests/native/node-zlib.test.ts
 tests/native/node-zlib-compress.test.ts
+tests/native/node-zlib-process-chunk.test.ts
 tests/native/postgres-auth.test.ts
 tests/native/postgres-load.test.ts
 tests/native/postgres-types-large-live.test.ts

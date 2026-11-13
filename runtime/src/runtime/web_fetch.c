@@ -8,6 +8,8 @@
 #include "ascii.h"
 #include "array_buffer_object.h"
 #include "builtin_data_view.h"
+#include "base64.h"
+#include "entropy.h"
 #include "builtin_date.h"
 #include "builtin_iterator.h"
 #include "builtin_json.h"
@@ -287,6 +289,19 @@ static void mal_file_initialize(
     mal_gc_unroot(&root);
 }
 
+static MalValue mal_file_from_owned(MalVm *vm, byte *bytes, usize length,
+    char *type, usize type_length, MalString *name, f64 modified) {
+    MalValue roots[] = {mal_value_from_string(name), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = mal_fetch_from_blob(mal_blob_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FILE_PROTOTYPE]), bytes, length, type, type_length));
+    mal_file_initialize(vm, roots[1], roots[0], modified,
+        vm->intrinsics[MAL_INTRINSIC_FILE_CONSTRUCTOR]);
+    mal_gc_unroot(&root);
+    return roots[1];
+}
+
 static MalValue mal_file_from_blob(MalVm *vm, MalValue source, MalString *name, f64 modified) {
     MalValue roots[] = {source, mal_value_from_string(name), mal_value_new_undefined()};
     MalRootSpan root;
@@ -302,11 +317,8 @@ static MalValue mal_file_from_blob(MalVm *vm, MalValue source, MalString *name, 
         if (blob->length > 0) memcpy(bytes, blob->bytes, blob->length);
         if (blob->type_length > 0) memcpy(type, blob->type, blob->type_length);
         type[blob->type_length] = 0;
-        roots[2] = mal_fetch_from_blob(mal_blob_object_new(&vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FILE_PROTOTYPE]),
-            bytes, blob->length, type, blob->type_length));
-        mal_file_initialize(vm, roots[2], roots[1], modified,
-            vm->intrinsics[MAL_INTRINSIC_FILE_CONSTRUCTOR]);
+        roots[2] = mal_file_from_owned(vm, bytes, blob->length, type, blob->type_length,
+            mal_value_to_string(roots[1]), modified);
     }
     mal_gc_unroot(&root);
     return roots[2];
@@ -467,9 +479,7 @@ static bool mal_form_data_append_entry(MalVm *vm, MalFormDataObject *form_data,
     return true;
 }
 
-static const char *MAL_FORM_DATA_BOUNDARY = "----maligator-formdata-boundary";
-static const char *MAL_FORM_DATA_CONTENT_TYPE =
-    "multipart/form-data; boundary=----maligator-formdata-boundary";
+#define MAL_FORM_DATA_CONTENT_TYPE_CAPACITY 128
 
 static bool mal_form_data_append_string(MalVm *vm, byte **buffer, usize *length,
     usize *capacity, MalString *string) {
@@ -510,22 +520,30 @@ static bool mal_form_data_append_quoted(MalVm *vm, byte **buffer, usize *length,
 }
 
 static byte *mal_form_data_serialize(
-    MalVm *vm, MalFormDataObject *form_data, usize *length_out) {
+    MalVm *vm, MalFormDataObject *form_data, usize *length_out, char *content_type) {
+    byte random[16];
+    if (mal_host_entropy(random, sizeof(random)) != 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Unable to generate a multipart boundary");
+        return nullptr;
+    }
+    char boundary[64] = "----formdata-";
+    usize prefix = strlen(boundary);
+    static const char hex[] = "0123456789abcdef";
+    for (usize i = 0; i < sizeof(random); i++) {
+        boundary[prefix + i * 2] = hex[(u8) random[i] >> 4];
+        boundary[prefix + i * 2 + 1] = hex[(u8) random[i] & 15];
+    }
+    boundary[prefix + sizeof(random) * 2] = 0;
+    snprintf(content_type, MAL_FORM_DATA_CONTENT_TYPE_CAPACITY, "multipart/form-data; boundary=%s", boundary);
     byte *buffer = nullptr;
     usize length = 0;
     usize capacity = 0;
-    if (form_data->count == 0) {
-        buffer = malloc(1);
-        if (buffer == nullptr) mal_vm_throw_allocation_error(vm);
-        *length_out = 0;
-        return buffer;
-    }
     for (i32 i = 0; i < form_data->count; i++) {
         MalFormDataEntry *entry = &form_data->entries[i];
         if (!mal_blob_append_bytes(vm, &buffer, &length, &capacity,
                 (const byte *) "--", 2)
             || !mal_blob_append_bytes(vm, &buffer, &length, &capacity,
-                (const byte *) MAL_FORM_DATA_BOUNDARY, strlen(MAL_FORM_DATA_BOUNDARY))
+                (const byte *) boundary, strlen(boundary))
             || !mal_blob_append_bytes(vm, &buffer, &length, &capacity,
                 (const byte *) "\r\nContent-Disposition: form-data; name=\"",
                 strlen("\r\nContent-Disposition: form-data; name=\""))
@@ -566,7 +584,7 @@ static byte *mal_form_data_serialize(
     if (!mal_blob_append_bytes(vm, &buffer, &length, &capacity,
             (const byte *) "--", 2)
         || !mal_blob_append_bytes(vm, &buffer, &length, &capacity,
-            (const byte *) MAL_FORM_DATA_BOUNDARY, strlen(MAL_FORM_DATA_BOUNDARY))
+            (const byte *) boundary, strlen(boundary))
         || !mal_blob_append_bytes(vm, &buffer, &length, &capacity,
             (const byte *) "--\r\n", 4)) {
         goto serialize_error;
@@ -984,6 +1002,7 @@ static MalValue mal_response_constructor(
     byte *body = nullptr;
     MalResponseObject *response = nullptr;
     const char *content_type = nullptr;
+    char form_content_type[MAL_FORM_DATA_CONTENT_TYPE_CAPACITY];
     MalHeadersInit headers;
     mal_headers_init_begin(&headers);
     if (!mal_response_read_init(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined(),
@@ -1005,9 +1024,9 @@ static MalValue mal_response_constructor(
         roots[3] = args[0];
     } else if (arg_count >= 1 && mal_fetch_is_form_data(args[0])) {
         body = mal_form_data_serialize(
-            vm, mal_fetch_to_form_data(args[0]), &body_len);
+            vm, mal_fetch_to_form_data(args[0]), &body_len, form_content_type);
         if (body == nullptr) goto response_error;
-        content_type = MAL_FORM_DATA_CONTENT_TYPE;
+        content_type = form_content_type;
     } else if (arg_count >= 1 && mal_fetch_is_blob(args[0])) {
         MalBlobObject *blob = mal_fetch_to_blob(args[0]);
         body = malloc(blob->length == 0 ? 1 : blob->length);
@@ -1545,25 +1564,6 @@ static MalString *mal_fetch_body_content_type(MalVm *vm, MalValue self) {
     return mal_string_new_ascii(&vm->heap, "", 0);
 }
 
-static bool mal_fetch_content_type_starts_with(
-    MalString *content_type, const char *prefix) {
-    usize prefix_length = strlen(prefix);
-    if (mal_string_length(content_type) < prefix_length) return false;
-    const c16 *units = mal_string_code_units(content_type);
-    for (usize i = 0; i < prefix_length; i++) {
-        c16 unit = units[i];
-        if (unit >= 'A' && unit <= 'Z') unit += 'a' - 'A';
-        if (unit != (c16) prefix[i]) return false;
-    }
-    return true;
-}
-
-static MalValue mal_fetch_form_data_type_error(MalVm *vm) {
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-        "Body MIME type is not supported by formData()");
-    return mal_fetch_reject_completion(vm);
-}
-
 static MalValue mal_fetch_form_data_value(MalVm *vm, MalFetchBody *body) {
     MalValue roots[3] = {
         mal_fetch_body_string_impl(vm, body, false),
@@ -1598,6 +1598,327 @@ static MalValue mal_fetch_form_data_value(MalVm *vm, MalFetchBody *body) {
     return result;
 }
 
+typedef struct {
+    const byte *bytes;
+    usize length;
+} MalMimeSlice;
+
+typedef struct {
+    byte *bytes;
+    usize length;
+    bool quoted;
+} MalMimeParameter;
+
+static MalMimeSlice mal_mime_trim(MalMimeSlice value) {
+    while (value.length > 0 && (value.bytes[0] == ' ' || value.bytes[0] == '\t')) {
+        value.bytes++;
+        value.length--;
+    }
+    while (value.length > 0 && (value.bytes[value.length - 1] == ' '
+            || value.bytes[value.length - 1] == '\t')) value.length--;
+    return value;
+}
+
+static bool mal_mime_equal(MalMimeSlice value, const char *ascii) {
+    if (value.length != strlen(ascii)) return false;
+    for (usize i = 0; i < value.length; i++) {
+        u8 unit = (u8) value.bytes[i];
+        if (unit >= 'A' && unit <= 'Z') unit += 'a' - 'A';
+        if (unit != (u8) ascii[i]) return false;
+    }
+    return true;
+}
+
+static bool mal_mime_token(u8 unit) {
+    return (unit >= 'a' && unit <= 'z') || (unit >= 'A' && unit <= 'Z')
+        || (unit >= '0' && unit <= '9')
+        || (unit != 0 && strchr("!#$%&'*+-.^_`|~", unit) != nullptr);
+}
+
+static MalMimeSlice mal_mime_essence(MalMimeSlice value) {
+    usize end = 0;
+    while (end < value.length && value.bytes[end] != ';') end++;
+    return mal_mime_trim((MalMimeSlice) {value.bytes, end});
+}
+
+static bool mal_mime_parameter(MalVm *vm, MalMimeSlice header, const char *name,
+    bool disposition, MalMimeParameter *out) {
+    usize position = 0;
+    while (position < header.length && header.bytes[position] != ';') position++;
+    while (position < header.length) {
+        position++;
+        while (position < header.length && (header.bytes[position] == ' '
+            || header.bytes[position] == '\t')) position++;
+        if (position == header.length) break;
+        if (header.bytes[position] == ';') continue;
+        usize start = position;
+        while (position < header.length && mal_mime_token((u8) header.bytes[position])) position++;
+        MalMimeSlice attribute = {header.bytes + start, position - start};
+        while (position < header.length && (header.bytes[position] == ' '
+            || header.bytes[position] == '\t')) position++;
+        if (attribute.length == 0 || position == header.length || header.bytes[position++] != '=') return false;
+        while (position < header.length && (header.bytes[position] == ' '
+            || header.bytes[position] == '\t')) position++;
+        bool quoted = position < header.length && header.bytes[position] == '"';
+        if (quoted) position++;
+        start = position;
+        bool escaped = false;
+        while (position < header.length) {
+            u8 unit = (u8) header.bytes[position];
+            if (unit == '\r' || unit == '\n' || unit == 0) return false;
+            if (quoted && !escaped && unit == '"') break;
+            if (!quoted && unit == ';') break;
+            if (quoted && !disposition && !escaped && unit == '\\') escaped = true;
+            else escaped = false;
+            position++;
+        }
+        MalMimeSlice value = {header.bytes + start, position - start};
+        if (quoted) {
+            if (position == header.length || escaped) return false;
+            position++;
+            while (position < header.length && (header.bytes[position] == ' '
+                || header.bytes[position] == '\t')) position++;
+            if (position < header.length && header.bytes[position] != ';') return false;
+        } else {
+            value = mal_mime_trim(value);
+            for (usize i = 0; i < value.length; i++)
+                if (!mal_mime_token((u8) value.bytes[i])) return false;
+        }
+        if (mal_mime_equal(attribute, name) && (out->bytes == nullptr || disposition)) {
+            byte *copy = malloc(value.length + 1);
+            if (copy == nullptr) { mal_vm_throw_allocation_error(vm); return false; }
+            usize length = 0;
+            for (usize i = 0; i < value.length; i++) {
+                if (quoted && !disposition && value.bytes[i] == '\\' && i + 1 < value.length) i++;
+                copy[length++] = value.bytes[i];
+            }
+            copy[length] = 0;
+            free(out->bytes);
+            *out = (MalMimeParameter) {copy, length, quoted};
+        }
+    }
+    return true;
+}
+
+static i32 mal_mime_hex(u8 unit) {
+    if (unit >= '0' && unit <= '9') return unit - '0';
+    if (unit >= 'a' && unit <= 'f') return unit - 'a' + 10;
+    if (unit >= 'A' && unit <= 'F') return unit - 'A' + 10;
+    return -1;
+}
+
+static bool mal_mime_decode_parameter(MalMimeParameter *value, bool extended) {
+    usize start = 0;
+    if (extended) {
+        if (value->length < 7 || !mal_mime_equal((MalMimeSlice) {value->bytes, 5}, "utf-8")
+            || value->bytes[5] != '\'') return false;
+        start = 6;
+        while (start < value->length && value->bytes[start] != '\'') start++;
+        if (start == value->length) return false;
+        start++;
+    }
+    usize output = 0;
+    for (usize i = start; i < value->length; i++) {
+        if (value->bytes[i] == '%' && i + 2 < value->length) {
+            i32 high = mal_mime_hex((u8) value->bytes[i + 1]);
+            i32 low = mal_mime_hex((u8) value->bytes[i + 2]);
+            i32 decoded = high < 0 || low < 0 ? -1 : high * 16 + low;
+            if (decoded >= 0 && (extended || (value->quoted
+                && (decoded == 10 || decoded == 13 || decoded == 34)))) {
+                value->bytes[output++] = (byte) decoded;
+                i += 2;
+                continue;
+            }
+            if (extended) return false;
+        } else if (extended && value->bytes[i] == '%') return false;
+        value->bytes[output++] = value->bytes[i];
+    }
+    value->length = output;
+    return true;
+}
+
+static bool mal_multipart_delimiter(const byte *input, usize length, usize position,
+    const MalMimeParameter *boundary, usize *after, bool *closing) {
+    if (position > length || length - position < boundary->length + 2
+        || input[position] != '-' || input[position + 1] != '-'
+        || memcmp(input + position + 2, boundary->bytes, boundary->length) != 0) return false;
+    position += boundary->length + 2;
+    *closing = length - position >= 2 && input[position] == '-' && input[position + 1] == '-';
+    if (*closing) position += 2;
+    while (position < length && (input[position] == ' ' || input[position] == '\t')) position++;
+    if (*closing && position == length) { *after = position; return true; }
+    if (length - position < 2 || input[position] != '\r' || input[position + 1] != '\n') return false;
+    *after = position + 2;
+    return true;
+}
+
+static MalValue mal_multipart_text(MalVm *vm, const byte *bytes, usize length) {
+    MalFetchBody body = {.bytes = (byte *) bytes, .length = length};
+    return mal_fetch_body_string_impl(vm, &body, false);
+}
+
+static byte *mal_multipart_base64(MalVm *vm, const byte *input, usize length, usize *written) {
+    byte *output = malloc(length / 4 * 3 + 3);
+    if (output == nullptr) { mal_vm_throw_allocation_error(vm); return nullptr; }
+    u32 accumulator = 0, bits = 0;
+    *written = 0;
+    for (usize i = 0; i < length && input[i] != '='; i++) {
+        i32 digit = mal_base64_decode_digit((u8) input[i], MAL_BASE64_ALPHABET_EITHER);
+        if (digit < 0) continue;
+        accumulator = (accumulator << 6) | (u32) digit;
+        bits += 6;
+        if (bits >= 8) { bits -= 8; output[(*written)++] = (byte) (accumulator >> bits); }
+    }
+    return output;
+}
+
+static MalValue mal_fetch_multipart_value(
+    MalVm *vm, MalValue owner, MalFetchBody *body, const MalMimeParameter *boundary) {
+    MalValue roots[] = {owner, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = mal_fetch_from_form_data(mal_form_data_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FORM_DATA_PROTOTYPE])));
+    const byte *input = body->bytes;
+    usize length = body->length, position = 0, after = 0;
+    bool closing = false, found = false, ok = false;
+    MalMimeParameter name = {0}, filename = {0}, extended_filename = {0};
+    byte *decoded = nullptr;
+    for (; position < length; position++) {
+        if ((position == 0 || (position >= 2 && input[position - 2] == '\r' && input[position - 1] == '\n'))
+            && mal_multipart_delimiter(input, length, position, boundary, &after, &closing)) {
+            found = true;
+            break;
+        }
+    }
+    if (!found) goto done;
+    while (!closing) {
+        position = after;
+        MalMimeSlice disposition = {0}, content_type = {(const byte *) "text/plain", 10}, encoding = {0};
+        while (true) {
+            usize end = position;
+            while (end < length && input[end] != '\r' && input[end] != '\n') end++;
+            if (end >= length || length - end < 2 || input[end] != '\r' || input[end + 1] != '\n') goto done;
+            if (end == position) { position = end + 2; break; }
+            usize colon = position;
+            while (colon < end && input[colon] != ':') colon++;
+            if (colon == end) goto done;
+            MalMimeSlice header_name = mal_mime_trim((MalMimeSlice) {input + position, colon - position});
+            if (header_name.length == 0) goto done;
+            for (usize i = 0; i < header_name.length; i++)
+                if (!mal_mime_token((u8) header_name.bytes[i])) goto done;
+            MalMimeSlice value = mal_mime_trim((MalMimeSlice) {input + colon + 1, end - colon - 1});
+            for (usize i = 0; i < value.length; i++)
+                if ((u8) value.bytes[i] < 0x20 && value.bytes[i] != '\t') goto done;
+            if (mal_mime_equal(header_name, "content-disposition")) disposition = value;
+            else if (mal_mime_equal(header_name, "content-type")) content_type = value;
+            else if (mal_mime_equal(header_name, "content-transfer-encoding")) encoding = value;
+            position = end + 2;
+        }
+        if (!mal_mime_equal(mal_mime_essence(disposition), "form-data")
+            || !mal_mime_parameter(vm, disposition, "name", true, &name)
+            || !mal_mime_parameter(vm, disposition, "filename", true, &filename)
+            || !mal_mime_parameter(vm, disposition, "filename*", true, &extended_filename)
+            || name.bytes == nullptr || !mal_mime_decode_parameter(&name, false)) goto done;
+        if (extended_filename.bytes != nullptr) {
+            free(filename.bytes);
+            filename = extended_filename;
+            extended_filename = (MalMimeParameter) {0};
+            if (!mal_mime_decode_parameter(&filename, true)) goto done;
+        } else if (filename.bytes != nullptr && !mal_mime_decode_parameter(&filename, false)) goto done;
+        usize end = position;
+        found = false;
+        for (; end < length; end++) {
+            if (length - end >= 2 && input[end] == '\r' && input[end + 1] == '\n'
+                && mal_multipart_delimiter(input, length, end + 2, boundary, &after, &closing)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) goto done;
+        const byte *part = input + position;
+        usize part_length = end - position;
+        if (mal_mime_equal(encoding, "base64")) {
+            decoded = mal_multipart_base64(vm, part, part_length, &part_length);
+            if (decoded == nullptr) goto done;
+            part = decoded;
+        }
+        roots[2] = mal_multipart_text(vm, name.bytes, name.length);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+        roots[3] = mal_value_new_undefined();
+        if (filename.bytes != nullptr) {
+            roots[3] = mal_multipart_text(vm, filename.bytes, filename.length);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+            usize type_length = content_type.length;
+            for (usize i = 0; i < type_length; i++) {
+                if ((u8) content_type.bytes[i] < 0x20 || (u8) content_type.bytes[i] > 0x7e) { type_length = 0; break; }
+            }
+            byte *bytes = malloc(part_length == 0 ? 1 : part_length);
+            char *type = malloc(type_length + 1);
+            if (bytes == nullptr || type == nullptr) {
+                free(bytes); free(type);
+                mal_vm_throw_allocation_error(vm);
+                goto done;
+            }
+            if (part_length > 0) memcpy(bytes, part, part_length);
+            for (usize i = 0; i < type_length; i++) {
+                u8 unit = (u8) content_type.bytes[i];
+                type[i] = (char) (unit >= 'A' && unit <= 'Z' ? unit + ('a' - 'A') : unit);
+            }
+            type[type_length] = 0;
+            roots[4] = mal_file_from_owned(vm, bytes, part_length, type, type_length,
+                mal_value_to_string(roots[3]), trunc(mal_date_now_ms()));
+        } else roots[4] = mal_multipart_text(vm, part, part_length);
+        if (vm->completion.kind == MAL_COMPLETION_THROW
+            || !mal_form_data_append_entry(vm, mal_fetch_to_form_data(roots[1]),
+                mal_value_to_string(roots[2]), roots[4],
+                filename.bytes == nullptr ? nullptr : mal_value_to_string(roots[3]))) goto done;
+        free(decoded); decoded = nullptr;
+        free(name.bytes); name = (MalMimeParameter) {0};
+        free(filename.bytes); filename = (MalMimeParameter) {0};
+    }
+    ok = true;
+done:
+    free(decoded);
+    free(name.bytes);
+    free(filename.bytes);
+    free(extended_filename.bytes);
+    if (!ok && vm->completion.kind != MAL_COMPLETION_THROW)
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Malformed multipart form data");
+    MalValue result = ok ? roots[1] : mal_value_new_undefined();
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue mal_fetch_body_form_data_value(MalVm *vm, MalValue owner, MalFetchBody *body) {
+    MalString *content_type = mal_fetch_body_content_type(vm, owner);
+    usize length = 0;
+    byte *bytes = mal_fetch_utf8_encode(vm, content_type, &length);
+    if (bytes == nullptr) return mal_value_new_undefined();
+    MalMimeSlice header = {bytes, length};
+    MalMimeSlice essence = mal_mime_essence(header);
+    MalValue result = mal_value_new_undefined();
+    MalMimeParameter boundary = {0};
+    if (mal_mime_equal(essence, "application/x-www-form-urlencoded")) {
+        result = mal_fetch_form_data_value(vm, body);
+    } else if (mal_mime_equal(essence, "multipart/form-data")
+        && mal_mime_parameter(vm, header, "boundary", false, &boundary)
+        && boundary.bytes != nullptr && boundary.length > 0 && boundary.length <= 70) {
+        /* RFC 2046 bounds boundary length, keeping delimiter scans linear in body size. */
+        bool valid = boundary.bytes[boundary.length - 1] != ' ';
+        for (usize i = 0; i < boundary.length; i++)
+            if ((u8) boundary.bytes[i] < 0x20 || (u8) boundary.bytes[i] > 0x7e) valid = false;
+        if (valid) result = mal_fetch_multipart_value(vm, owner, body, &boundary);
+    }
+    free(boundary.bytes);
+    free(bytes);
+    if (mal_value_is_undefined(result) && vm->completion.kind != MAL_COMPLETION_THROW)
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Body MIME type is not supported by formData()");
+    return result;
+}
+
 static MalValue mal_fetch_body_method_form_data(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) args; (void) argc; (void) nt; (void) callee;
@@ -1609,16 +1930,11 @@ static MalValue mal_fetch_body_method_form_data(
         return mal_fetch_body_collect_stream(
             vm, self, &body, MAL_FETCH_BODY_CONSUME_FORM_DATA);
     }
-    MalString *content_type = mal_fetch_body_content_type(vm, self);
-    if (!mal_fetch_content_type_starts_with(
-            content_type, "application/x-www-form-urlencoded")) {
-        return mal_fetch_form_data_type_error(vm);
-    }
     if (!mal_fetch_body_begin(vm, self, &body)) {
         return vm->completion.kind == MAL_COMPLETION_THROW
             ? mal_fetch_reject_completion(vm) : mal_fetch_reject_type_error(vm);
     }
-    MalValue value = mal_fetch_form_data_value(vm, &body);
+    MalValue value = mal_fetch_body_form_data_value(vm, self, &body);
     return vm->completion.kind == MAL_COMPLETION_THROW
         ? mal_fetch_reject_completion(vm) : mal_fetch_resolve(vm, value);
 }
@@ -1741,16 +2057,8 @@ static MalValue mal_fetch_collect_conversion(
             return mal_fetch_new_uint8array(vm, body->bytes, body->length);
         case MAL_FETCH_BODY_CONSUME_BLOB:
             return mal_fetch_blob_value(vm, self, body);
-        case MAL_FETCH_BODY_CONSUME_FORM_DATA: {
-            MalString *content_type = mal_fetch_body_content_type(vm, self);
-            if (!mal_fetch_content_type_starts_with(
-                    content_type, "application/x-www-form-urlencoded")) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                    "Body MIME type is not supported by formData()");
-                return mal_value_new_undefined();
-            }
-            return mal_fetch_form_data_value(vm, body);
-        }
+        case MAL_FETCH_BODY_CONSUME_FORM_DATA:
+            return mal_fetch_body_form_data_value(vm, self, body);
     }
     return mal_value_new_undefined();
 }
@@ -2706,6 +3014,7 @@ static MalValue mal_request_constructor(
     MalRequestObject *source_request = nullptr;
     bool body_override = false;
     const char *content_type = nullptr;
+    char form_content_type[MAL_FORM_DATA_CONTENT_TYPE_CAPACITY];
     i32 request_mode = 2;
     i32 request_cache = 0;
     bool duplex_present = false;
@@ -2829,10 +3138,10 @@ static MalValue mal_request_constructor(
     } else if (mal_fetch_is_form_data(slots[4])) {
         mal_request_body_release(r);
         r->body = mal_form_data_serialize(
-            vm, mal_fetch_to_form_data(slots[4]), &r->body_len);
+            vm, mal_fetch_to_form_data(slots[4]), &r->body_len, form_content_type);
         if (r->body == nullptr) goto request_error;
         mal_request_body_adopted(&vm->heap, r, r->body_len);
-        content_type = MAL_FORM_DATA_CONTENT_TYPE;
+        content_type = form_content_type;
     } else if (mal_fetch_is_blob(slots[4])) {
         MalBlobObject *blob = mal_fetch_to_blob(slots[4]);
         mal_request_body_release(r);
