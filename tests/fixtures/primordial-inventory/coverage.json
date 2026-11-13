@@ -139401,6 +139401,20 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.crypto.subtle\",\"deriveBits\"]",
+			"owner": "globalThis.crypto.subtle",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
+				"globalThis.crypto.subtle",
+				"mal_host_install_node_crypto:subtle"
+			],
+			"key": "deriveBits",
+			"kind": "data",
+			"operations": ["globalThis.crypto.subtle.deriveBits"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.crypto.subtle\",\"sign\"]",
 			"owner": "globalThis.crypto.subtle",
 			"ownerPaths": [
@@ -139498,6 +139512,26 @@
 			"id": "[\"globalThis.crypto.subtle.decrypt\",\"name\"]",
 			"owner": "globalThis.crypto.subtle.decrypt",
 			"ownerPaths": ["globalThis.crypto.subtle.decrypt"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.deriveBits\",\"length\"]",
+			"owner": "globalThis.crypto.subtle.deriveBits",
+			"ownerPaths": ["globalThis.crypto.subtle.deriveBits"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.deriveBits\",\"name\"]",
+			"owner": "globalThis.crypto.subtle.deriveBits",
+			"ownerPaths": ["globalThis.crypto.subtle.deriveBits"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -283291,6 +283325,26 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.crypto.subtle.deriveBits\",\"<call>\"]",
+			"owner": "globalThis.crypto.subtle.deriveBits",
+			"ownerPaths": ["globalThis.crypto.subtle.deriveBits"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.crypto.subtle.deriveBits"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.deriveBits\",\"<construct>\"]",
+			"owner": "globalThis.crypto.subtle.deriveBits",
+			"ownerPaths": ["globalThis.crypto.subtle.deriveBits"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.crypto.subtle.deriveBits"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.crypto.subtle.digest\",\"<call>\"]",
 			"owner": "globalThis.crypto.subtle.digest",
 			"ownerPaths": ["globalThis.crypto.subtle.digest"],
@@ -310289,6 +310343,10 @@
 		{
 			"id": "globalThis.crypto.subtle.decrypt",
 			"identities": ["globalThis.crypto.subtle.decrypt"]
+		},
+		{
+			"id": "globalThis.crypto.subtle.deriveBits",
+			"identities": ["globalThis.crypto.subtle.deriveBits"]
 		},
 		{
 			"id": "globalThis.crypto.subtle.digest",
