@@ -395,6 +395,7 @@ typedef struct MalInstruction {
 
         struct { i32 dst; } read_service_epoch;
         struct { i32 dst, epoch; } guard_service_epoch;
+        struct { i32 dst; u8 dependencies; } guard_semantic_epoch;
 
         struct {
             i32 dst, callee, function_index, data_offset;
@@ -1638,6 +1639,23 @@ typedef struct MalHasCacheRow {
 
 /** Every semantic epoch starts here; zero is the exhausted state. */
 #define MAL_SEMANTIC_EPOCH_INITIAL UINT64_C(1)
+
+/**
+ * Runtime admission for compiler facts backed by semantic epochs. Generated code
+ * names the dependencies it consumes; the admission helpers in vm_ops.h are the one
+ * compatibility bridge from those names to the legacy protectors and per-VM epoch
+ * storage. Locked-world dependencies disappear before emission and never reach them.
+ *
+ * `primitive-methods` and `watched-methods` currently share one invalidation path,
+ * but keep distinct bits so the compiler contract does not inherit that runtime
+ * implementation detail. The activity snapshot lets a region validate all of its
+ * dependencies with one comparison after a potentially reentrant operation.
+ */
+typedef enum MalSemanticDependencyMask {
+    MAL_SEMANTIC_DEPENDENCY_PRIMITIVE_METHODS = 1 << 0,
+    MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS = 1 << 1,
+    MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS = 1 << 2,
+} MalSemanticDependencyMask;
 
 typedef struct MalSemanticEpochs {
     /** Advanced by every semantic-family invalidation; future re-entry dirty test. */

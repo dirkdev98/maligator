@@ -8,17 +8,29 @@ import {
 import { coreCalleeTargetsSingleFunction } from "./core-callee-targets.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreEditor } from "./core-editor.ts";
-import { coreUnscopedInstructionAttributes } from "./core-internal-attributes.ts";
+import {
+	emitGuardedIterationInstruction,
+	guardedIterationEntrySplittable,
+	guardIterationCloses,
+	splitGuardedIterationEntry,
+} from "./core-guarded-iteration.ts";
+import type { CoreGuardedIterationEdits } from "./core-guarded-iteration.ts";
+import {
+	CORE_GENERATOR_FUSION_TWIN_ATTRIBUTE,
+	coreUnscopedInstructionAttributes,
+} from "./core-internal-attributes.ts";
 import { buildCoreControlFlow, coreTerminatorInput } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { analyzeCoreValueKinds } from "./core-ir-value-kinds.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type {
+	CoreAttributeValue,
 	CoreBlockId,
 	CoreEdge,
 	CoreFunctionId,
 	CoreInstructionId,
+	CoreRepresentation,
 	CoreTerminatorInput,
 	CoreValueId,
 } from "./core-ir.ts";
@@ -44,10 +56,19 @@ interface GeneratorShape {
 	readonly instructions: ReadonlyArray<CoreInstructionId>;
 	readonly yield: CoreInstructionId;
 	readonly yieldBlock: CoreBlockId;
+	/** Values defined before the yield that some path after resumption reads. */
+	readonly live: ReadonlyArray<CoreValueId>;
 }
 
 export interface CoreGeneratorFusion extends Protocol, GeneratorShape {
 	readonly target: CoreFunctionId;
+	/**
+	 * Mutable primordials keep the original protocol as a twin that a guard selects
+	 * at loop entry; `state` is then the generator state the fused path threads
+	 * through the twin's iterations.
+	 */
+	readonly guarded: boolean;
+	readonly state: ReadonlyArray<CoreValueId>;
 	readonly versions: ReadonlyArray<{
 		readonly function: CoreFunctionId;
 		readonly versions: CoreFunctionVersions;
@@ -343,6 +364,7 @@ function generatorShape(
 	}
 	// Completion also reaches the consumer dispatch. Any state used after resumption
 	// must therefore be defined on the completion paths, even when done is constant.
+	const live: Array<CoreValueId> = [];
 	for (const value of fn.valueIds()) {
 		const definitionKind = fn.kernel.valueDefinitionKind(value);
 		const owner = fn.kernel.valueDefinitionOwner(value);
@@ -351,8 +373,7 @@ function generatorShape(
 			definitionKind === 0 ? (owner as CoreBlockId) : fn.instructionBlock(definition!);
 		if (
 			!control.dominates(block, yieldBlock) ||
-			(block === yieldBlock && definition !== undefined && !before.has(definition)) ||
-			returns.every((returned) => control.dominates(block, returned))
+			(block === yieldBlock && definition !== undefined && !before.has(definition))
 		)
 			continue;
 		const observed = (at: CoreBlockId, afterYield: boolean): boolean => {
@@ -371,13 +392,17 @@ function generatorShape(
 		};
 		const pending: Array<CoreBlockId> = [],
 			visited = new Set<CoreBlockId>();
-		if (observed(yieldBlock, true)) return undefined;
-		while (pending.length > 0) {
+		let resumed = observed(yieldBlock, true);
+		while (!resumed && pending.length > 0) {
 			const next = pending.pop()!;
 			if (visited.has(next)) continue;
 			visited.add(next);
-			if (observed(next, false)) return undefined;
+			resumed = observed(next, false);
 		}
+		if (!resumed) continue;
+		if (!returns.every((returned) => control.dominates(block, returned)))
+			return undefined;
+		live.push(value);
 	}
 
 	return {
@@ -385,6 +410,7 @@ function generatorShape(
 		instructions,
 		yield: yieldInstruction,
 		yieldBlock,
+		live,
 	};
 }
 
@@ -475,6 +501,10 @@ function privateInvocations(
 				return false;
 			const attrs = fn.instructionAttributes(instruction),
 				inputs = operands(fn, instruction);
+			// A guarded fusion's twin and rebuild calls hand their generator only to
+			// the protocol; user code can see it only once the protector has failed,
+			// which permanently selects the twin of every later fused loop.
+			const twin = attrs[CORE_GENERATOR_FUSION_TWIN_ATTRIBUTE] === true;
 			if (
 				attrs.argumentMode !== undefined ||
 				attrs.construct ||
@@ -486,6 +516,7 @@ function privateInvocations(
 			)
 				return false;
 			if (
+				!twin &&
 				protocol(
 					fn,
 					instruction,
@@ -509,25 +540,23 @@ export function coreGeneratorFusion(
 ): CoreGeneratorFusion | undefined {
 	if (
 		!summaries.targets.sourceClosed ||
-		context.facts.world.primordialPolicy !== "locked" ||
 		unconfinedDynamicCode(context.facts) ||
 		context.facts.world.realms ||
 		caller.isAsync ||
 		caller.isGenerator ||
-		caller.instructionOpcodeName(call) !== "call"
+		caller.instructionOpcodeName(call) !== "call" ||
+		caller.instructionAttributes(call)[CORE_GENERATOR_FUSION_TWIN_ATTRIBUTE] === true
 	)
 		return undefined;
+	const guarded = context.facts.world.primordialPolicy !== "locked";
 	const target = coreCalleeTargetsSingleFunction(
 		summaries.targets.targets(caller.id, operands(caller, call)[0]!),
 	);
 	if (target === undefined || target === caller.id) return undefined;
 	const shape = generatorShape(program, target);
 	if (shape === undefined) return undefined;
-	const consumer = protocol(
-		caller,
-		call,
-		buildCoreControlFlow(program, caller.id, { exceptions: true }),
-	);
+	const control = buildCoreControlFlow(program, caller.id, { exceptions: true });
+	const consumer = protocol(caller, call, control);
 	if (
 		consumer === undefined ||
 		!privateInvocations(program, context, summaries, target, kind)
@@ -571,10 +600,24 @@ export function coreGeneratorFusion(
 		)
 	)
 		return undefined;
+	const state = guarded ? threadedState(generator, shape) : [];
+	if (
+		guarded &&
+		(state.some(
+			(value) => dummyOpcode(generator.valueRepresentation(value)) === undefined,
+		) ||
+			consumer.closes.some(
+				(close) => !control.dominates(consumer.header, caller.instructionBlock(close)),
+			) ||
+			!guardedIterationEntrySplittable(caller, call))
+	)
+		return undefined;
 	return {
 		...consumer,
 		...shape,
 		target,
+		guarded,
+		state,
 		versions: [...program.functionIds()].map((id) => ({
 			function: id,
 			versions: program.function(id).versions,
@@ -583,8 +626,63 @@ export function coreGeneratorFusion(
 		dataVersion: program.programVersion("data"),
 		cost:
 			shape.instructions.length +
-			parameters(caller, consumer.header).length * shape.blocks.length,
+			parameters(caller, consumer.header).length * shape.blocks.length +
+			(guarded
+				? (state.length + 1) * shape.blocks.length + 16 + 12 * consumer.closes.length
+				: 0),
 	};
+}
+
+/** Instructions a guarded fusion evaluates once at loop entry instead of in place. */
+function hoistedAtEntry(fn: CoreFunctionStore, instruction: CoreInstructionId): boolean {
+	return (
+		fn.instructionKind(instruction) === "operation" &&
+		[
+			"createNumber",
+			"createI32",
+			"createF64",
+			"createBoolean",
+			"createUndefined",
+			"createNull",
+			"loadArgument",
+		].includes(fn.instructionOpcodeName(instruction))
+	);
+}
+
+/*
+ * The twin also reaches the consumer header, so fused generator blocks no longer
+ * dominate the loop body. Live state that entry does not define once is carried
+ * through every fused block and the header instead.
+ */
+function threadedState(
+	fn: CoreFunctionStore,
+	shape: GeneratorShape,
+): ReadonlyArray<CoreValueId> {
+	const parametersOfFunction = new Set(
+		Array.from({ length: fn.parameterCount }, (_, index) =>
+			fn.kernel.functionParameter(index),
+		),
+	);
+	return shape.live.filter(
+		(value) =>
+			!parametersOfFunction.has(value) &&
+			(fn.kernel.valueDefinitionKind(value) !== 1 ||
+				!hoistedAtEntry(fn, coreInstructionId(fn.kernel.valueDefinitionOwner(value)))),
+	);
+}
+
+function dummyOpcode(representation: CoreRepresentation): string | undefined {
+	switch (representation) {
+		case "boxed":
+			return "createUndefined";
+		case "i32":
+		case "f64":
+			return "createNumber";
+		case "boolean":
+			return "createBoolean";
+		default:
+			return undefined;
+	}
 }
 
 export function applyCoreGeneratorFusion(
@@ -603,6 +701,7 @@ export function applyCoreGeneratorFusion(
 		)
 	)
 		return undefined;
+	if (plan.guarded) return applyGuardedGeneratorFusion(program, editor, plan, positions);
 	const caller = editor.function,
 		generator = program.function(plan.target);
 	const callInputs = operands(caller, plan.call),
@@ -844,4 +943,416 @@ export function applyCoreGeneratorFusion(
 	editor.removeInstruction(plan.get);
 	editor.removeInstruction(plan.call);
 	return { instructionsIntroduced: introduced, blocksIntroduced: blocks.size + 2 };
+}
+
+/*
+ * Mutable primordials guard the fusion as a guarded iteration (see
+ * core-guarded-iteration.ts): the watched-methods protector covers
+ * %GeneratorPrototype% and %IteratorPrototype%, so while it holds at the call, the
+ * fused body replaces the call, GetIterator and every step; otherwise the original
+ * ones run as the twin, chosen once per loop and re-dispatched at the back edge.
+ * Fused and twin steps meet at the consumer header, which therefore carries the
+ * threaded generator state and the number of values consumed so far.
+ *
+ * A fused close rebuilds the suspended generator by calling the private generator
+ * function again and resuming it as many times as the loop consumed values. The
+ * generator body is pure and was never exposed, so the rebuilt generator is the one
+ * the loop would have held.
+ */
+function applyGuardedGeneratorFusion(
+	program: CoreProgram,
+	editor: CoreEditor,
+	plan: CoreGeneratorFusion,
+	positions: ReadonlyMap<CoreInstructionId, number | undefined>,
+): { instructionsIntroduced: number; blocksIntroduced: number } {
+	const caller = editor.function,
+		generator = program.function(plan.target);
+	const callInputs = operands(caller, plan.call),
+		carry = parameters(caller, plan.header);
+	const [oldValue, oldDone] = results(caller, plan.step);
+	const sourcePosition = caller.instructionSourcePosition(plan.call);
+	const edits: CoreGuardedIterationEdits = { instructions: 0, blocks: 0 };
+	const createBlock = (
+		specs: ReadonlyArray<{ representation: CoreRepresentation }> = [],
+	) => {
+		edits.blocks++;
+		return editor.createBlock(specs);
+	};
+	const emit = (
+		block: CoreBlockId,
+		opcode: string,
+		inputs: ReadonlyArray<CoreValueId> = [],
+		attributes: Readonly<Record<string, CoreAttributeValue>> = {},
+		representation?: CoreRepresentation,
+	): CoreValueId =>
+		emitGuardedIterationInstruction(
+			editor,
+			edits,
+			block,
+			opcode,
+			inputs,
+			sourcePosition,
+			attributes,
+			representation,
+		);
+
+	const initialTerminator = caller.blockTerminator(plan.initial);
+	const entryEdge = coreTerminatorInput(caller, initialTerminator);
+	if (entryEdge.kind !== "jump") throw new Error("Generator fusion entry changed");
+	const entryPosition = caller.instructionSourcePosition(initialTerminator);
+	const twinAttributes = {
+		...caller.instructionAttributes(plan.call),
+		[CORE_GENERATOR_FUSION_TWIN_ATTRIBUTE]: true,
+	};
+	editor.replaceInstruction(plan.call, "call", callInputs, {
+		attributes: twinAttributes,
+		sourcePosition,
+		effectRefinement: caller.instructionEffectRefinement(plan.call),
+	});
+	const { join, fused } = splitGuardedIterationEntry(caller, editor, edits, [
+		plan.call,
+		plan.get,
+	]);
+
+	// Everything the fused path needs before its first block is defined once in the
+	// join, which dominates both paths.
+	const values = new Map<CoreValueId, CoreValueId>();
+	const absent = emit(join, "createUndefined");
+	const zero = emit(join, "createNumber", [], { value: 0 });
+	const dummy = emit(
+		join,
+		"createNumber",
+		[],
+		{ value: 0 },
+		caller.valueRepresentation(oldValue!),
+	);
+	const yes = emit(
+		join,
+		"createBoolean",
+		[],
+		{ value: true },
+		caller.valueRepresentation(oldDone!),
+	);
+	const no = emit(
+		join,
+		"createBoolean",
+		[],
+		{ value: false },
+		caller.valueRepresentation(oldDone!),
+	);
+	const noValues = emit(join, "createNumber", [], { value: 0 }, "f64");
+	const one = emit(join, "createNumber", [], { value: 1 }, "f64");
+	const argumentValue = (index: number, representation: CoreRepresentation) => {
+		const argument = callInputs[index + 2]!;
+		return caller.valueRepresentation(argument) === representation
+			? argument
+			: emit(join, "move", [argument], {}, representation);
+	};
+	for (let index = 0; index < generator.parameterCount; index++) {
+		const source = generator.kernel.functionParameter(index);
+		values.set(source, argumentValue(index, generator.valueRepresentation(source)));
+	}
+	const hoisted = new Set<CoreInstructionId>();
+	for (const instruction of plan.instructions) {
+		if (!hoistedAtEntry(generator, instruction)) continue;
+		hoisted.add(instruction);
+		const output = results(generator, instruction)[0]!;
+		const representation = generator.valueRepresentation(output);
+		values.set(
+			output,
+			generator.instructionOpcodeName(instruction) === "loadArgument"
+				? argumentValue(
+						generator.instructionAttributes(instruction).index as number,
+						representation,
+					)
+				: emit(
+						join,
+						generator.instructionOpcodeName(instruction),
+						[],
+						coreUnscopedInstructionAttributes(
+							generator.instructionAttributes(instruction),
+						),
+						representation,
+					),
+		);
+	}
+	const yieldedResults = results(generator, plan.yield);
+	values.set(yieldedResults[0]!, absent);
+	values.set(yieldedResults[1]!, zero);
+	const stateRepresentations = plan.state.map((value) => ({
+		representation: generator.valueRepresentation(value),
+	}));
+	const dummies = new Map<CoreRepresentation, CoreValueId>();
+	const stateDummies = stateRepresentations.map(({ representation }) => {
+		let value = dummies.get(representation);
+		if (value === undefined) {
+			const opcode = dummyOpcode(representation)!;
+			value = emit(
+				join,
+				opcode,
+				[],
+				opcode === "createUndefined"
+					? {}
+					: { value: opcode === "createBoolean" ? false : 0 },
+				representation,
+			);
+			dummies.set(representation, value);
+		}
+		return value;
+	});
+
+	// The header receives the consumed count, the step result and the threaded state.
+	const carryRepresentations = carry.map((value) => ({
+		representation: caller.valueRepresentation(value),
+	}));
+	const headerAdded = editor.appendBlockParameters(plan.header, [
+		{ representation: "f64" },
+		{ representation: caller.valueRepresentation(oldValue!) },
+		{ representation: caller.valueRepresentation(oldDone!) },
+		...stateRepresentations,
+	]);
+	const [consumed, yielded, done] = headerAdded;
+	const headerState = headerAdded.slice(3);
+	editor.replaceValueUses(oldValue!, yielded!);
+	editor.replaceValueUses(oldDone!, done!);
+	const headerHandler = caller.kernel.blockHandlerBlock(plan.header);
+	const headerHandlerStart = caller.kernel.blockHandlerArgumentStart(plan.header);
+	const headerHandlerArguments = Array.from(
+		{ length: caller.kernel.blockHandlerArgumentCount(plan.header) },
+		(_, index) => caller.kernel.handlerArgumentAt(headerHandlerStart + index),
+	);
+	const attachHandler = (block: CoreBlockId, current: ReadonlyArray<CoreValueId>) => {
+		if (headerHandler === undefined) return;
+		editor.setHandler(
+			block,
+			headerHandler,
+			headerHandlerArguments.map((value) => {
+				const at = carry.indexOf(value);
+				return at < 0 ? value : current[at]!;
+			}),
+		);
+	};
+
+	// The twin's step keeps the original iterator record.
+	const twinStep = createBlock(carryRepresentations);
+	const twinCarry = parameters(caller, twinStep);
+	attachHandler(twinStep, twinCarry);
+	editor.moveInstruction(plan.step, twinStep);
+	editor.setTerminator(twinStep, {
+		kind: "jump",
+		edge: {
+			block: plan.header,
+			arguments: [...twinCarry, noValues, oldValue!, oldDone!, ...stateDummies],
+		},
+		sourcePosition: caller.instructionSourcePosition(plan.step),
+	});
+
+	// Fused blocks carry the consumer's loop state, the count and the generator state.
+	const fusedCarry = [...carryRepresentations, { representation: "f64" as const }];
+	const blocks = new Map<CoreBlockId, CoreBlockId>();
+	for (const block of plan.blocks) {
+		const original = block === generator.entry ? [] : parameters(generator, block);
+		blocks.set(
+			block,
+			createBlock([
+				...original.map((value) => ({
+					representation: generator.valueRepresentation(value),
+				})),
+				...fusedCarry,
+				...stateRepresentations,
+			]),
+		);
+	}
+	const entry = blocks.get(generator.entry)!;
+	const resume = createBlock([...fusedCarry, ...stateRepresentations]);
+	const stateIndex = new Map(plan.state.map((value, index) => [value, index]));
+	interface Frame {
+		readonly carry: ReadonlyArray<CoreValueId>;
+		readonly state: Array<CoreValueId>;
+	}
+	const frame = (block: CoreBlockId, originalCount: number): Frame => {
+		const params = parameters(caller, block);
+		return {
+			carry: params.slice(originalCount, originalCount + fusedCarry.length),
+			state: params.slice(originalCount + fusedCarry.length),
+		};
+	};
+	const lookup = (current: Frame, value: CoreValueId): CoreValueId => {
+		const at = stateIndex.get(value);
+		const mapped = at === undefined ? values.get(value) : current.state[at];
+		if (mapped === undefined) throw new Error("Generator fusion input is not dominated");
+		return mapped;
+	};
+	const define = (current: Frame, value: CoreValueId, mapped: CoreValueId) => {
+		values.set(value, mapped);
+		const at = stateIndex.get(value);
+		if (at !== undefined) current.state[at] = mapped;
+	};
+	const mapEdge = (edge: CoreEdge, current: Frame): CoreEdge => ({
+		block: blocks.get(edge.block)!,
+		arguments: [
+			...edge.arguments.map((value) => lookup(current, value)),
+			...current.carry,
+			...current.state,
+		],
+	});
+	const headerEdge = (
+		current: Frame,
+		value: CoreValueId,
+		complete: CoreValueId,
+	): CoreEdge => ({
+		block: plan.header,
+		arguments: [
+			...current.carry.slice(0, carry.length),
+			current.carry[carry.length]!,
+			value,
+			complete,
+			...current.state,
+		],
+	});
+	for (const sourceBlock of plan.blocks) {
+		let destination = blocks.get(sourceBlock)!;
+		const original =
+			sourceBlock === generator.entry ? [] : parameters(generator, sourceBlock);
+		let current = frame(destination, original.length);
+		const destinationParameters = parameters(caller, destination);
+		original.forEach((value, index) =>
+			define(current, value, destinationParameters[index]!),
+		);
+		attachHandler(destination, current.carry);
+		for (const instruction of generator.bodyInstructionIds(sourceBlock)) {
+			const opcode = generator.instructionOpcodeName(instruction);
+			if (opcode === "generatorStart" || hoisted.has(instruction)) continue;
+			if (instruction === plan.yield) {
+				let value = lookup(current, operands(generator, instruction)[0]!);
+				if (caller.valueRepresentation(value) !== caller.valueRepresentation(oldValue!))
+					value = emit(
+						destination,
+						"move",
+						[value],
+						{},
+						caller.valueRepresentation(oldValue!),
+					);
+				editor.setTerminator(destination, {
+					kind: "jump",
+					edge: headerEdge(current, value, no),
+					sourcePosition: positions.get(instruction),
+				});
+				destination = resume;
+				current = frame(resume, 0);
+				attachHandler(destination, current.carry);
+				continue;
+			}
+			const inputs = operands(generator, instruction).map((value) =>
+				lookup(current, value),
+			);
+			const outputs = results(generator, instruction);
+			const created = editor.appendInstruction(destination, opcode, inputs, {
+				outputCount: outputs.length,
+				outputRepresentations: outputs.map((value) =>
+					generator.valueRepresentation(value),
+				),
+				attributes: coreUnscopedInstructionAttributes(
+					generator.instructionAttributes(instruction),
+				),
+				sourcePosition: positions.get(instruction),
+			});
+			edits.instructions++;
+			outputs.forEach((value, index) => define(current, value, created.outputs[index]!));
+		}
+		const terminalId = generator.blockTerminator(sourceBlock),
+			terminal = coreTerminatorInput(generator, terminalId);
+		const position = positions.get(terminalId);
+		if (terminal.kind === "return")
+			editor.setTerminator(destination, {
+				kind: "jump",
+				edge: headerEdge(current, dummy, yes),
+				sourcePosition: position,
+			});
+		else if (terminal.kind === "throw")
+			editor.setTerminator(destination, {
+				kind: "throw",
+				value: lookup(current, terminal.value),
+				sourcePosition: position,
+			});
+		else if (terminal.kind === "jump")
+			editor.setTerminator(destination, {
+				kind: "jump",
+				edge: mapEdge(terminal.edge, current),
+				sourcePosition: position,
+			});
+		else if (terminal.kind === "branch")
+			editor.setTerminator(destination, {
+				kind: "branch",
+				condition: lookup(current, terminal.condition),
+				consequent: mapEdge(terminal.consequent, current),
+				alternate: mapEdge(terminal.alternate, current),
+				sourcePosition: position,
+			});
+		else throw new Error("Unsupported generator fusion terminator");
+	}
+
+	editor.replaceTerminator(join, {
+		kind: "branch",
+		condition: fused,
+		consequent: {
+			block: entry,
+			arguments: [...entryEdge.edge.arguments, noValues, ...stateDummies],
+		},
+		alternate: { block: twinStep, arguments: entryEdge.edge.arguments },
+		sourcePosition: entryPosition,
+	});
+
+	// Back edges resume whichever path the loop entered on.
+	const dispatch = createBlock(carryRepresentations);
+	const dispatchCarry = parameters(caller, dispatch);
+	attachHandler(dispatch, dispatchCarry);
+	const counted = emit(dispatch, "binary", [consumed!, one], { operator: "+" }, "f64");
+	editor.setTerminator(dispatch, {
+		kind: "branch",
+		condition: fused,
+		consequent: { block: resume, arguments: [...dispatchCarry, counted, ...headerState] },
+		alternate: { block: twinStep, arguments: dispatchCarry },
+		sourcePosition,
+	});
+	const redirect = (edge: CoreEdge): CoreEdge =>
+		edge.block !== plan.header ? edge : { block: dispatch, arguments: edge.arguments };
+	for (const block of plan.predecessors) {
+		if (block === plan.initial) continue;
+		const terminal = coreTerminatorInput(caller, caller.blockTerminator(block));
+		if (terminal.kind === "jump")
+			editor.replaceTerminator(block, { ...terminal, edge: redirect(terminal.edge) });
+		else if (terminal.kind === "branch")
+			editor.replaceTerminator(block, {
+				...terminal,
+				consequent: redirect(terminal.consequent),
+				alternate: redirect(terminal.alternate),
+			});
+		else throw new Error("Unsupported generator fusion predecessor");
+	}
+
+	const exit = createBlock();
+	emit(exit, "rootUse", [callInputs[0]!]);
+	const headerDispatch = coreTerminatorInput(caller, caller.blockTerminator(plan.header));
+	if (headerDispatch.kind !== "branch")
+		throw new Error("Generator fusion dispatch changed");
+	editor.setTerminator(exit, { kind: "jump", edge: headerDispatch.consequent });
+	editor.replaceTerminator(plan.header, {
+		...headerDispatch,
+		consequent: { block: exit, arguments: [] },
+	});
+
+	guardIterationCloses(caller, editor, edits, plan.closes, fused, (block) => {
+		edits.instructions++;
+		const rebuilt = editor.appendInstruction(block, "call", callInputs, {
+			attributes: twinAttributes,
+			sourcePosition,
+		}).outputs[0]!;
+		return {
+			iterator: rebuilt,
+			next: emit(block, "loadIntrinsic", [], { intrinsic: "__generatorPrototypeNext" }),
+			consumed: emit(block, "binary", [consumed!, one], { operator: "+" }, "f64"),
+		};
+	});
+	return { instructionsIntroduced: edits.instructions, blocksIntroduced: edits.blocks };
 }

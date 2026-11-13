@@ -2,12 +2,14 @@ import type { PlatformData } from "../../platform/catalog.ts";
 import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "../core/core-constructor-layout.ts";
 import { BIGINT_MAX_BITS, bigintDigits } from "../shared/bigint-digits.ts";
 import {
+	GUARDED_SEMANTIC_EPOCH_MASKS,
 	MAX_PRECISE_NUMBER_SUM_INPUTS,
 	MAX_STRING_CODE_UNITS,
 	MAX_STRING_CONCAT_INPUTS,
 	PROBE_READ_KINDS,
 	probeReadKindIsNamed,
 } from "../shared/compiler-instruction.ts";
+import type { GuardedSemanticEpochFamily } from "../shared/compiler-instruction.ts";
 import {
 	knownBuiltinErrorNames,
 	isKnownBuiltinError,
@@ -100,6 +102,20 @@ function guardedMathCallFromTag(tag: number): VmGuardedMathCall | undefined {
 		throw new RangeError("program-image-codec: invalid guarded Math call");
 	}
 	return { kind: "binary", operation: binaryOperation };
+}
+
+const GUARDED_SEMANTIC_EPOCH_FAMILIES: ReadonlyArray<GuardedSemanticEpochFamily> = [
+	"watched-methods",
+	"array-elements",
+];
+
+function guardedSemanticEpochFamily(mask: number): GuardedSemanticEpochFamily {
+	const family = GUARDED_SEMANTIC_EPOCH_FAMILIES.find(
+		(candidate) => GUARDED_SEMANTIC_EPOCH_MASKS[candidate] === mask,
+	);
+	if (family === undefined)
+		throw new RangeError("program-image-codec: invalid semantic epoch family");
+	return family;
 }
 
 function guardedCallTag(
@@ -288,6 +304,11 @@ export const WIRE_INTRINSICS = [
 	"__attachRequireTable",
 	"__createImportMetaResolve",
 	"__functionPrototypeCall",
+	"__functionPrototypeApply",
+	"__functionPrototypeBind",
+	"__generatorPrototypeNext",
+	"__arrayPrototypeValues",
+	"__arrayIteratorPrototypeNext",
 ] as const;
 const INTRINSIC_TAG = new Map<string, number>(
 	WIRE_INTRINSICS.map((name, i) => [name, i]),
@@ -1109,6 +1130,10 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			return;
 		case "READ_SERVICE_EPOCH":
 			w.i32(i.dst);
+			return;
+		case "GUARD_SEMANTIC_EPOCH":
+			w.i32(i.dst);
+			w.u8(GUARDED_SEMANTIC_EPOCH_MASKS[i.family]);
 			return;
 		case "PROBE_READ":
 			w.i32(i.dst);
@@ -2179,6 +2204,8 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 			return { opcode, dst: r.i32(), epoch: r.i32() };
 		case "READ_SERVICE_EPOCH":
 			return { opcode, dst: r.i32() };
+		case "GUARD_SEMANTIC_EPOCH":
+			return { opcode, dst: r.i32(), family: guardedSemanticEpochFamily(r.u8()) };
 		case "PROBE_READ": {
 			const dst = r.i32(),
 				success = r.i32(),

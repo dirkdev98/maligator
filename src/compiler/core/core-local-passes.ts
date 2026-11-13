@@ -41,9 +41,11 @@ import { foldFiniteStringConstruction } from "./core-finite-string-construction.
 import { CORE_FUNCTION_HAS_EDGE_ARGUMENTS } from "./core-function-features.ts";
 import { continueGuardedCallArithmetic } from "./core-guarded-continuations.ts";
 import { removeCoreInstructions } from "./core-instruction-removal.ts";
+import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
+	coreTerminatorInput,
 	coreValueControlFlowUseMask,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlEdge } from "./core-ir-control-flow.ts";
@@ -2892,9 +2894,11 @@ const forwardRestArguments: CoreFunctionPass = {
 const SPREAD_LITERAL_ELEMENT_LIMIT = 16;
 
 /**
- * Under locked primordials, spreading an Array literal that nothing else observes passes
- * exactly its defined elements: the intrinsic iterator and its `next` cannot change, and
- * every index below the literal's length is an own data property.
+ * Spreading an Array literal that nothing else observes passes exactly its defined
+ * elements while %Array.prototype%[@@iterator] and %ArrayIteratorPrototype%.next are
+ * the realm's own: every index below the literal's length is an own data property.
+ * Locked primordials guarantee that; mutable ones check the watched-methods protector,
+ * which covers both prototypes, right before the call and keep the spread as its twin.
  */
 const spreadArrayLiteralArguments: CoreFunctionPass = {
 	name: "spread-array-literal-arguments",
@@ -2906,7 +2910,9 @@ const spreadArrayLiteralArguments: CoreFunctionPass = {
 	budget: LOCAL_BUDGET,
 	run(context) {
 		const { program, compilationContext, item } = context;
-		if (compilationContext.facts.world.primordialPolicy !== "locked") return undefined;
+		const { world } = compilationContext.facts;
+		const guarded = world.primordialPolicy !== "locked";
+		if (guarded && world.realms) return undefined;
 		const fn = program.function(item.function);
 		let editor: CoreEditor | undefined;
 		// Rewrites remove instructions, so candidates come from a snapshot.
@@ -2954,6 +2960,12 @@ const spreadArrayLiteralArguments: CoreFunctionPass = {
 					operands[2] === array &&
 					operands.filter((operand) => operand === array).length === 1
 				) {
+					// A guarded rewrite's twin keeps spreading the literal.
+					if (
+						fn.instructionAttributes(consumer)[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] ===
+						true
+					)
+						valid = false;
 					calls.push({ instruction: consumer, operands });
 					continue;
 				}
@@ -2996,6 +3008,20 @@ const spreadArrayLiteralArguments: CoreFunctionPass = {
 			}
 			if (!valid) continue;
 			editor ??= CoreEditor.open(program, item.function);
+			if (guarded) {
+				for (const call of calls)
+					guardSpreadLiteralCall(
+						fn,
+						editor,
+						call,
+						elements as Array<CoreValueId>,
+						calls.length === 1 &&
+							fn.instructionBlock(call.instruction) === fn.instructionBlock(producer)
+							? [producer, ...[...definitions]]
+							: [],
+					);
+				continue;
+			}
 			for (const { instruction, operands } of calls) {
 				const sourceCall = fn.instructionAttributes(instruction).sourceCall;
 				editor.replaceInstruction(
@@ -3019,6 +3045,102 @@ const spreadArrayLiteralArguments: CoreFunctionPass = {
 		return editor?.commit();
 	},
 };
+
+/*
+ * Splits the call's block: the watched-methods check selects a direct call with the
+ * literal's elements or the original spread, whose literal moves in front of it when
+ * nothing else needs it.
+ */
+function guardSpreadLiteralCall(
+	fn: CoreFunctionStore,
+	editor: CoreEditor,
+	call: {
+		readonly instruction: CoreInstructionId;
+		readonly operands: ReadonlyArray<CoreValueId>;
+	},
+	elements: ReadonlyArray<CoreValueId>,
+	literal: ReadonlyArray<CoreInstructionId>,
+): void {
+	const site = call.instruction;
+	const block = fn.instructionBlock(site);
+	const terminator = fn.blockTerminator(block);
+	const sourcePosition = fn.instructionSourcePosition(site);
+	const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(site));
+	const representation = fn.valueRepresentation(result);
+	const tail: Array<CoreInstructionId> = [];
+	for (
+		let next = fn.instructionNext(site);
+		next !== undefined && next !== terminator;
+		next = fn.instructionNext(next)
+	)
+		tail.push(next);
+	const direct = editor.createBlock();
+	const fallback = editor.createBlock();
+	const join = editor.createBlock([{ representation }]);
+	const handler = fn.kernel.blockHandlerBlock(block);
+	if (handler !== undefined) {
+		const start = fn.kernel.blockHandlerArgumentStart(block);
+		const handlerArguments = Array.from(
+			{ length: fn.kernel.blockHandlerArgumentCount(block) },
+			(_, index) => fn.kernel.handlerArgumentAt(start + index),
+		);
+		for (const created of [direct, fallback, join])
+			editor.setHandler(created, handler, handlerArguments);
+	}
+	for (const instruction of tail) editor.moveInstruction(instruction, join);
+	editor.setTerminator(join, {
+		...coreTerminatorInput(fn, terminator),
+		sourcePosition: fn.instructionSourcePosition(terminator),
+	});
+	editor.removeInstruction(terminator);
+	editor.replaceValueUses(
+		result,
+		fn.kernel.blockParameterValue(fn.kernel.blockParameterStart(join)),
+	);
+	const sourceCall = fn.instructionAttributes(site).sourceCall;
+	editor.moveInstruction(site, fallback);
+	editor.replaceInstruction(site, "callSpreadIterable", call.operands, {
+		attributes: {
+			...fn.instructionAttributes(site),
+			[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE]: true,
+		},
+		sourcePosition,
+		effectRefinement: fn.instructionEffectRefinement(site),
+	});
+	for (const instruction of literal) editor.moveInstruction(instruction, fallback, site);
+	editor.setTerminator(fallback, {
+		kind: "jump",
+		edge: { block: join, arguments: [result] },
+		sourcePosition,
+	});
+	const intact = editor.appendInstruction(block, "guardSemanticEpoch", [], {
+		attributes: { family: "watched-methods" },
+		sourcePosition,
+		outputRepresentations: ["boolean"],
+	}).outputs[0]!;
+	editor.setTerminator(block, {
+		kind: "branch",
+		condition: intact,
+		consequent: { block: direct, arguments: [] },
+		alternate: { block: fallback, arguments: [] },
+		sourcePosition,
+	});
+	const directResult = editor.appendInstruction(
+		direct,
+		"call",
+		[call.operands[0]!, call.operands[1]!, ...call.operands.slice(3), ...elements],
+		{
+			attributes: typeof sourceCall === "number" ? { sourceCall } : {},
+			sourcePosition,
+			outputRepresentations: [representation],
+		},
+	).outputs[0]!;
+	editor.setTerminator(direct, {
+		kind: "jump",
+		edge: { block: join, arguments: [directResult] },
+		sourcePosition,
+	});
+}
 
 function canonicalRestElementIndex(key: string | number): number | undefined {
 	const index = typeof key === "number" ? key : Number(key);

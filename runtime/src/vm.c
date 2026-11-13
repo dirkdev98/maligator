@@ -3447,6 +3447,10 @@ static void mal_vm_run_until_frame_count(
                 registers[instruction->as.read_service_epoch.dst] = mal_ops_number_value(mal_vm_read_service_epoch(vm));
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
+            MAL_VM_CASE(GUARD_SEMANTIC_EPOCH)
+                registers[instruction->as.guard_semantic_epoch.dst] = mal_value_new_boolean(mal_vm_guard_semantic_epoch(vm, instruction->as.guard_semantic_epoch.dependencies));
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             MAL_VM_CASE(PROBE_READ) {
                 const i32 *data = frame->function->instruction_data + instruction->as.probe_read.data_offset;
                 MalValue value;

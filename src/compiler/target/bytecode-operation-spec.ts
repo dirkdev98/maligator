@@ -140,6 +140,7 @@ export const BYTECODE_OPERATIONS = [
 	"LOAD_DYNAMIC_ARGUMENT",
 	"CONSTRUCT_SUPER",
 	"CONSTRUCT_SUPER_FORWARD",
+	"GUARD_SEMANTIC_EPOCH",
 ] as const;
 
 export type BytecodeOperation = (typeof BYTECODE_OPERATIONS)[number];

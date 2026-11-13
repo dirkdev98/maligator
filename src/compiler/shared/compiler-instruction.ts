@@ -12,6 +12,15 @@ export const MAX_STRING_CONCAT_INPUTS = 64;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 2 ** 31 - 1;
 
+/** Protector families a compiled speculation can check at runtime. */
+export type GuardedSemanticEpochFamily = "watched-methods" | "array-elements";
+
+/** Each family's `MalSemanticDependencyMask` bit in runtime/src/vm_ops.h. */
+export const GUARDED_SEMANTIC_EPOCH_MASKS = {
+	"watched-methods": 2,
+	"array-elements": 4,
+} as const satisfies Record<GuardedSemanticEpochFamily, number>;
+
 /** Numeric TypedArray brands whose element access produces a Number. */
 export type CompilerNumericTypedArrayKind =
 	| "Int8Array"
@@ -1000,6 +1009,13 @@ type CompilerOperation =
 			registers: [number, number];
 	  }
 	| {
+			// [destination (boolean)]: whether a runtime-invalidated protector still
+			// holds, so a speculation checked here may run instead of its generic twin.
+			type: "guardSemanticEpoch";
+			registers: [number];
+			family: GuardedSemanticEpochFamily;
+	  }
+	| {
 			type: "readServiceEpoch";
 			registers: [number];
 	  }
@@ -1397,6 +1413,13 @@ export type CompilerIntrinsic =
 	| "__attachRequireTable"
 	// Builds a module's import.meta.resolve from its URL, filename and resolutions.
 	| "__createImportMetaResolve"
-	// The realm's %Function.prototype.call%, which guarded `f.call(...)` rewrites compare
-	// a loaded `call` against. Not a user-visible global.
-	| "__functionPrototypeCall";
+	// The realm's %Function.prototype.call%, apply and bind, which guarded rewrites of
+	// their sites compare a loaded method against. Not user-visible globals.
+	| "__functionPrototypeCall"
+	| "__functionPrototypeApply"
+	| "__functionPrototypeBind"
+	// The realm's own iterator methods, which a guarded iteration uses to rebuild the
+	// iterator a fused loop would hold for a replaced `return`. Not user-visible globals.
+	| "__generatorPrototypeNext"
+	| "__arrayPrototypeValues"
+	| "__arrayIteratorPrototypeNext";

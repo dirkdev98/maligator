@@ -60,23 +60,6 @@ static inline MalValue mal_vm_numeric_typed_array_load_at(
 }
 
 /**
- * Runtime admission for compiler facts backed by semantic epochs. Generated code
- * names the dependencies it consumes; this is the one compatibility bridge from
- * those names to the legacy protectors and per-VM epoch storage. Locked-world
- * dependencies disappear before emission and therefore never call this helper.
- *
- * `primitive-methods` and `watched-methods` currently share one invalidation path,
- * but keep distinct bits so the compiler contract does not inherit that runtime
- * implementation detail. The activity snapshot lets a region validate all of its
- * dependencies with one comparison after a potentially reentrant operation.
- */
-typedef enum MalSemanticDependencyMask {
-    MAL_SEMANTIC_DEPENDENCY_PRIMITIVE_METHODS = 1 << 0,
-    MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS = 1 << 1,
-    MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS = 1 << 2,
-} MalSemanticDependencyMask;
-
-/**
  * `mal_primitive_method_protector` as seen by this VM. Each invalidation also bumps
  * the VM's watched-methods epoch, so the epoch keeps its initial value exactly
  * while the protector holds, and a caller holding the VM skips a thread-local
@@ -105,6 +88,20 @@ static inline bool mal_vm_semantic_dependencies_hold(
         return false;
     }
     return true;
+}
+
+/**
+ * A compiled speculation's entry check: true while every protector in
+ * `dependencies` holds, so the speculation may run instead of its generic twin.
+ */
+static inline bool mal_vm_guard_semantic_epoch(const MalVm *vm, u8 dependencies) {
+    bool holds = mal_vm_semantic_dependencies_hold(vm, dependencies);
+    if (holds) {
+        MAL_PERF_COUNT(semantic_guard_admissions);
+    } else {
+        MAL_PERF_COUNT(semantic_guard_rejections);
+    }
+    return holds;
 }
 
 static inline bool mal_vm_semantic_dependencies_admit(

@@ -1317,6 +1317,20 @@ kind, which the specialized body's entry compares with the actual one. Record
 columns over an `Array.from` result admit only after the function compared that
 call's callee and receiver with the realm's own.
 
+Guarded iteration extends this to loops whose bodies run JavaScript. GetIterator
+reads @@iterator and `next` once, so the watched-methods protector checked there,
+which covers the generator, iterator and Array iteration prototypes, holds for the
+whole loop: a private numeric generator's fused body, or the index loop over a
+private rest array, replaces the protocol, and the original protocol stays as the
+twin that a failed check selects. Only IteratorClose looks a method up later, so a
+fused close checks the protector again and, once it failed, rebuilds the iterator the
+loop would hold by calling the private generator or the realm's own `values` again
+and advancing it with the realm's own `next`. The protector never recovers, so an
+iterator that the twin exposes to user code cannot reach a later fused loop. Spread
+Array literal arguments check the same protector at the call, and call, apply and
+bind sites compare the loaded method with the realm's own function, which stays
+exact whatever the property holds.
+
 Canonical function comparisons use the inventory's object identity, independently
 of native callback sharing. This folds repeated references across effects while
 keeping String valueOf/toString and Symbol valueOf/toPrimitive distinct. True aliases

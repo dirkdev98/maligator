@@ -126,11 +126,14 @@ it.each([
 	expect(inspect(body).core.some((op) => op.opcode === "getIterator")).toBe(true);
 });
 
-it.each([{ locked: false }, { realms: true }])(
-	"retains replaceable iterator protocols with %j",
-	(options) => {
-		expect(inspect(iterate, options).core.some((op) => op.opcode === "getIterator")).toBe(
-			true,
-		);
-	},
-);
+it("retains replaceable iterator protocols across realms", () => {
+	expect(
+		inspect(iterate, { realms: true }).core.some((op) => op.opcode === "getIterator"),
+	).toBe(true);
+});
+
+it("keeps the iterator protocol as the twin of a protocol guard with mutable primordials", () => {
+	const { core } = inspect(iterate, { locked: false });
+	expect(core.some((op) => op.opcode === "guardSemanticEpoch")).toBe(true);
+	expect(core.some((op) => op.opcode === "getIterator")).toBe(true);
+});

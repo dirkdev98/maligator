@@ -85,6 +85,7 @@ export const CORE_OPCODES = [
 	"getIterator",
 	"guardBaseConstructorLayout",
 	"guardFunctionIndex",
+	"guardSemanticEpoch",
 	"hasPrivate",
 	"declareGlobalLexical",
 	"globalBindingQuery",
@@ -199,6 +200,7 @@ const TWO_OUTPUTS = new Set<CoreOpcode>([
 const GC_FREE = new Set<CoreOpcode>([
 	"loadDynamicArgument",
 	"createRestArgumentsState",
+	"guardSemanticEpoch",
 	"guardServiceEpoch",
 	"readServiceEpoch",
 	"probeRead",
@@ -313,6 +315,7 @@ const CALLS_USER_CODE = new Set<CoreOpcode>([
 ]);
 
 const DISCARDABLE = new Set<CoreOpcode>([
+	"guardSemanticEpoch",
 	"guardServiceEpoch",
 	"readServiceEpoch",
 	"probeRead",
@@ -640,6 +643,7 @@ const RESULT_CANNOT_BE_HELD_WEAKLY = new Set<CoreOpcode>([
 	"createUndefined",
 	"guardBaseConstructorLayout",
 	"guardFunctionIndex",
+	"guardSemanticEpoch",
 	"isEmpty",
 	"loadArgumentCount",
 	"mathBinaryNumber",
@@ -724,6 +728,7 @@ const INPUT_ARITIES = {
 	getIterator: [1, 1],
 	guardBaseConstructorLayout: [1, 1],
 	guardFunctionIndex: [1, 1],
+	guardSemanticEpoch: [0, 0],
 	selectShapeCase: [1, 1],
 	hasPrivate: [2, 2],
 	initGlobalVars: [0, 0],
@@ -805,7 +810,9 @@ function domainsFor(
 	}
 	if (
 		CALLS_USER_CODE.has(opcode) ||
-		((opcode === "readServiceEpoch" || opcode === "guardServiceEpoch") &&
+		((opcode === "readServiceEpoch" ||
+			opcode === "guardServiceEpoch" ||
+			opcode === "guardSemanticEpoch") &&
 			kind === "reads")
 	)
 		domains.add("host");

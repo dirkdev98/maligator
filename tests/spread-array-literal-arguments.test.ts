@@ -32,7 +32,12 @@ describe("spread of Array literal arguments", () => {
 		).toBeDefined();
 	});
 
-	it("keeps the iterator protocol while primordials are mutable", () => {
+	it("passes a literal's elements behind a protocol guard while primordials are mutable", () => {
+		const instructions = kernelOpcodes("return f(1,...[a,b,3]);", "mutable");
+		expect(instructions.map((op) => op.opcode)).toContain("GUARD_SEMANTIC_EPOCH");
+		expect(
+			instructions.find((op) => op.opcode === "CALL" && op.argumentCount === 4),
+		).toBeDefined();
 		expect(spreadsIterable("return f(1,...[a,b,3]);", "mutable")).toBe(true);
 	});
 

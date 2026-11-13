@@ -1,6 +1,5 @@
 import { builtinNormalResultKinds } from "../shared/builtin-registry.ts";
 import { unconfinedDynamicCode } from "../shared/compiler-facts.ts";
-import type { WorldFacts } from "../shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_OBJECT,
@@ -52,9 +51,7 @@ import type {
 } from "./core-function-optimization-session.ts";
 import {
 	coreAppliedFunctionCall,
-	coreAppliedFunctionCallsAvailable,
 	coreBoundFunctionCall,
-	coreBoundFunctionCallsAvailable,
 	coreFunctionPrototypeCall,
 	coreGuardableCall,
 	expandCoreAppliedFunctionCall,
@@ -2999,11 +2996,8 @@ function devirtualizeCoreFunctionPrototypeCalls(
 	program: CoreProgram,
 	summaries: CoreProgramSummaries,
 	liveFunctions: ReadonlySet<CoreFunctionId>,
-	world: WorldFacts,
 ): { readonly changed: ReadonlyArray<CoreFunctionId>; readonly instructions: number } {
 	const changed: Array<CoreFunctionId> = [];
-	const boundCalls = coreBoundFunctionCallsAvailable(world);
-	const appliedCalls = coreAppliedFunctionCallsAvailable(world);
 	let instructions = 0;
 	for (const caller of liveFunctions) {
 		const fn = program.function(caller);
@@ -3013,11 +3007,9 @@ function devirtualizeCoreFunctionPrototypeCalls(
 			if (!fn.isInstructionLive(site)) continue;
 			const call = coreFunctionPrototypeCall(program, fn, site);
 			const bound =
-				call === undefined && boundCalls
-					? coreBoundFunctionCall(program, fn, site)
-					: undefined;
+				call === undefined ? coreBoundFunctionCall(program, fn, site) : undefined;
 			const applied =
-				call === undefined && bound === undefined && appliedCalls
+				call === undefined && bound === undefined
 					? coreAppliedFunctionCall(program, fn, site)
 					: undefined;
 			const rewrite = call ?? bound ?? applied;
@@ -3029,9 +3021,9 @@ function devirtualizeCoreFunctionPrototypeCalls(
 			editor ??= CoreEditor.open(program, caller);
 			instructions += (
 				bound !== undefined
-					? expandCoreBoundFunctionCall(program, fn, editor, site, bound)
+					? expandCoreBoundFunctionCall(fn, editor, site, bound)
 					: applied !== undefined
-						? expandCoreAppliedFunctionCall(program, fn, editor, site, applied)
+						? expandCoreAppliedFunctionCall(fn, editor, site, applied)
 						: expandCoreFunctionPrototypeCall(fn, editor, site, rewrite)
 			).instructionsIntroduced;
 		}
@@ -5523,7 +5515,6 @@ export function runCoreCrossCallTransforms(
 			program,
 			summaries,
 			new Set(flow.reachability.liveFunctions),
-			analyses.compilationContext.facts.world,
 		);
 		if (devirtualized.changed.length !== 0) {
 			for (const functionId of devirtualized.changed) cloned.add(functionId);

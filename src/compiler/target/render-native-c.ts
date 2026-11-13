@@ -14,6 +14,7 @@ import type {
 	CoreStringSpanRangeOperation,
 } from "../core/core-ir-regions.ts";
 import { builtinResultIsInt32 } from "../shared/builtin-registry.ts";
+import { GUARDED_SEMANTIC_EPOCH_MASKS } from "../shared/compiler-instruction.ts";
 import {
 	compilerComparisonInputKindsAvoidObjectCoercion,
 	compilerValueKindTruthiness,
@@ -16434,6 +16435,13 @@ class NativeInstructionEmission {
 					this.storeBoolean(
 						instruction.dst,
 						`mal_vm_guard_service_epoch(vm, ${this.typedNumber(instruction.epoch)})`,
+					),
+				];
+			case "GUARD_SEMANTIC_EPOCH":
+				return [
+					this.storeBoolean(
+						instruction.dst,
+						`mal_vm_guard_semantic_epoch(vm, ${GUARDED_SEMANTIC_EPOCH_MASKS[instruction.family]})`,
 					),
 				];
 			case "READ_SERVICE_EPOCH": {

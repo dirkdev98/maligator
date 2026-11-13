@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include "gc.h"
+#include "perf_stats.h"
 #include "value.h"
 
 static_assert(sizeof(MalBoundFunctionObject) % alignof(MalValue) == 0,
@@ -91,6 +92,7 @@ MalBoundResolution mal_bound_function_object_resolve(
     if (!mal_value_is_bound_function_object(callee)) {
         return resolution;
     }
+    MAL_PERF_COUNT(bound_function_resolutions);
 
     i32 prefix_count = 0;
     MalValue current = callee;

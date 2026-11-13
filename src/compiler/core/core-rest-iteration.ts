@@ -4,8 +4,21 @@ import {
 } from "../shared/compiler-facts.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { removeUnsharedProof } from "./core-effect-proof-edits.ts";
+import {
+	emitGuardedIterationInstruction,
+	guardedIterationEntrySplittable,
+	guardIterationCloses,
+	splitGuardedIterationEntry,
+} from "./core-guarded-iteration.ts";
+import type { CoreGuardedIterationEdits } from "./core-guarded-iteration.ts";
 import { buildCoreControlFlow, coreTerminatorInput } from "./core-ir-control-flow.ts";
-import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import type {
+	CoreAttributeValue,
+	CoreBlockId,
+	CoreInstructionId,
+	CoreRepresentation,
+	CoreValueId,
+} from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -169,8 +182,8 @@ export const lowerPrivateRestIteration: CoreFunctionPass = {
 	run(context) {
 		const fn = context.program.function(context.item.function);
 		const { world, protectors } = context.compilationContext.facts;
+		const guarded = world.primordialPolicy !== "locked";
 		if (
-			world.primordialPolicy !== "locked" ||
 			unconfinedDynamicCode(context.compilationContext.facts) ||
 			world.realms ||
 			fn.isAsync ||
@@ -178,8 +191,9 @@ export const lowerPrivateRestIteration: CoreFunctionPass = {
 			fn.metadata.isClassConstructor ||
 			fn.metadata.isDerivedConstructor ||
 			fn.metadata.mappedArguments ||
-			!compilerFactIsWorldInvariant(protectors.get("primitive-methods")) ||
-			!compilerFactIsWorldInvariant(protectors.get("array-elements"))
+			(!guarded &&
+				(!compilerFactIsWorldInvariant(protectors.get("primitive-methods")) ||
+					!compilerFactIsWorldInvariant(protectors.get("array-elements"))))
 		)
 			return undefined;
 		const plan = restIteration(context.program, fn);
@@ -188,6 +202,19 @@ export const lowerPrivateRestIteration: CoreFunctionPass = {
 			context.remainingEdits < 16 + plan.incoming.length + plan.closes.length
 		)
 			return undefined;
+		if (guarded) {
+			if (!guardedIterationEntrySplittable(fn, plan.initialize)) return undefined;
+			const control = buildCoreControlFlow(context.program, fn.id, { exceptions: true });
+			if (
+				plan.closes.some(
+					(close) => !control.dominates(plan.header, fn.instructionBlock(close)),
+				)
+			)
+				return undefined;
+			const editor = CoreEditor.open(context.program, fn.id);
+			lowerGuardedRestIteration(context.program, fn, editor, plan);
+			return editor.commit();
+		}
 		const editor = CoreEditor.open(context.program, fn.id);
 		const sourcePosition = fn.instructionSourcePosition(plan.step);
 		const insert = (
@@ -250,3 +277,166 @@ export const lowerPrivateRestIteration: CoreFunctionPass = {
 		return editor.commit();
 	},
 };
+
+/*
+ * Mutable primordials keep the rest loop's protocol as the twin of a guarded
+ * iteration (see core-guarded-iteration.ts): the watched-methods protector covers
+ * %Array.prototype%[@@iterator] and %ArrayIteratorPrototype%.next, and the private,
+ * dense rest array answers its length and every index below it from own data. The
+ * header dispatches each step on the path the loop entered on; a fused close
+ * rebuilds the Array iterator from the realm's own `values` and advances it past the
+ * consumed elements.
+ */
+function lowerGuardedRestIteration(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	editor: CoreEditor,
+	plan: NonNullable<ReturnType<typeof restIteration>>,
+): void {
+	const sourcePosition = fn.instructionSourcePosition(plan.step);
+	const edits: CoreGuardedIterationEdits = { instructions: 0, blocks: 0 };
+	const emit = (
+		block: CoreBlockId,
+		opcode: string,
+		inputs: ReadonlyArray<CoreValueId>,
+		attributes: Readonly<Record<string, CoreAttributeValue>> = {},
+		representation?: CoreRepresentation,
+	) =>
+		emitGuardedIterationInstruction(
+			editor,
+			edits,
+			block,
+			opcode,
+			inputs,
+			sourcePosition,
+			attributes,
+			representation,
+		);
+	const initializeBlock = fn.instructionBlock(plan.initialize);
+	const { join, fused } = splitGuardedIterationEntry(fn, editor, edits, [
+		plan.initialize,
+	]);
+	const zero = emit(join, "createNumber", [], { value: 0 });
+	const one = emit(join, "createNumber", [], { value: 1 });
+	const lengthIndex =
+		program.stringConstantSlot("length", "first") ??
+		editor.appendStringConstants([Array.from("length", (unit) => unit.charCodeAt(0))]);
+	const length = emit(join, "loadPropertyStatic", [plan.rest], {
+		stringIndex: lengthIndex,
+	});
+
+	// The header picks the step; both meet where the original header continued.
+	const header = plan.header;
+	const valueRepresentation = fn.valueRepresentation(plan.value);
+	const doneRepresentation = fn.valueRepresentation(plan.done);
+	const index = editor.appendBlockParameter(header);
+	const handler = fn.kernel.blockHandlerBlock(header);
+	const handlerStart = fn.kernel.blockHandlerArgumentStart(header);
+	const handlerArguments = Array.from(
+		{ length: fn.kernel.blockHandlerArgumentCount(header) },
+		(_, position) => fn.kernel.handlerArgumentAt(handlerStart + position),
+	);
+	const create = (specs: ReadonlyArray<{ representation: CoreRepresentation }> = []) => {
+		edits.blocks++;
+		const created = editor.createBlock(specs);
+		if (handler !== undefined) editor.setHandler(created, handler, handlerArguments);
+		return created;
+	};
+	const fusedStep = create(),
+		fusedElement = create(),
+		twinStep = create(),
+		stepped = create([
+			{ representation: valueRepresentation },
+			{ representation: doneRepresentation },
+		]);
+	const terminator = fn.blockTerminator(header);
+	for (
+		let next = fn.instructionNext(plan.step);
+		next !== undefined && next !== terminator;
+		next = fn.instructionNext(next)
+	)
+		editor.moveInstruction(next, stepped);
+	editor.setTerminator(stepped, {
+		...coreTerminatorInput(fn, terminator),
+		sourcePosition: fn.instructionSourcePosition(terminator),
+	});
+	editor.removeInstruction(terminator);
+	const steppedStart = fn.kernel.blockParameterStart(stepped);
+	editor.replaceValueUses(plan.value, fn.kernel.blockParameterValue(steppedStart));
+	editor.replaceValueUses(plan.done, fn.kernel.blockParameterValue(steppedStart + 1));
+	editor.moveInstruction(plan.step, twinStep);
+	const jump = (from: CoreBlockId, to: CoreBlockId, arguments_: Array<CoreValueId>) =>
+		editor.setTerminator(from, {
+			kind: "jump",
+			edge: { block: to, arguments: arguments_ },
+			sourcePosition,
+		});
+	jump(twinStep, stepped, [plan.value, plan.done]);
+	editor.setTerminator(header, {
+		kind: "branch",
+		condition: fused,
+		consequent: { block: fusedStep, arguments: [] },
+		alternate: { block: twinStep, arguments: [] },
+		sourcePosition,
+	});
+	const finished = emit(
+		fusedStep,
+		"binary",
+		[index, length],
+		{ operator: ">=" },
+		doneRepresentation,
+	);
+	const absent = emit(fusedStep, "createUndefined", [], {}, "boxed");
+	editor.setTerminator(fusedStep, {
+		kind: "branch",
+		condition: finished,
+		consequent: {
+			block: stepped,
+			arguments: [
+				valueRepresentation === "boxed"
+					? absent
+					: emit(fusedStep, "move", [absent], {}, valueRepresentation),
+				finished,
+			],
+		},
+		alternate: { block: fusedElement, arguments: [] },
+		sourcePosition,
+	});
+	jump(fusedElement, stepped, [
+		emit(fusedElement, "loadProperty", [plan.rest, index], {}, valueRepresentation),
+		finished,
+	]);
+
+	const firstBodyInstruction =
+		[...fn.bodyInstructionIds(plan.body)][0] ?? fn.blockTerminator(plan.body);
+	const following = editor.insertInstruction(
+		plan.body,
+		firstBodyInstruction,
+		"binary",
+		[index, one],
+		{ attributes: { operator: "+" }, sourcePosition },
+	).outputs[0]!;
+	for (const edge of plan.incoming) {
+		const inside = plan.loop.blocks.has(edge.from);
+		editor.redirectEdge(edge.from === initializeBlock ? join : edge.from, header, {
+			block: header,
+			arguments: [...edge.arguments, inside ? following : zero],
+		});
+	}
+	guardIterationCloses(fn, editor, edits, plan.closes, fused, (block) => {
+		const values = emit(block, "loadIntrinsic", [], {
+			intrinsic: "__arrayPrototypeValues",
+		});
+		edits.instructions++;
+		const iterator = editor.appendInstruction(block, "call", [values, plan.rest], {
+			sourcePosition,
+		}).outputs[0]!;
+		return {
+			iterator,
+			next: emit(block, "loadIntrinsic", [], {
+				intrinsic: "__arrayIteratorPrototypeNext",
+			}),
+			consumed: emit(block, "binary", [index, one], { operator: "+" }, "f64"),
+		};
+	});
+}

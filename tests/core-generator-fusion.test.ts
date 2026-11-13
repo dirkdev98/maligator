@@ -74,8 +74,15 @@ describe("private generator fusion", () => {
 	it("keeps the protocol across realms", () => {
 		expect(fusionCount(sequence, traversal, "", { realms: true })).toBe(0);
 	});
-	it("keeps the protocol with mutable primordials", () => {
-		expect(fusionCount(sequence, traversal, "", { primordials: "mutable" })).toBe(0);
+	it("fuses traversals behind a protocol guard with mutable primordials", () => {
+		expect(
+			fusionCount(
+				sequence,
+				`${traversal} for (const value of sequence(round)) { if (value & 1) continue; checksum += value; if (value > 9) break; }`,
+				"",
+				{ primordials: "mutable" },
+			),
+		).toBe(2);
 	});
 	it("fuses while run-time code can only run as global code", () => {
 		expect(

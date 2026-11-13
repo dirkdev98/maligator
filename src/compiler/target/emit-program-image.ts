@@ -1,6 +1,10 @@
 import type { IncludedAsset } from "../../assets.ts";
 import { bigintLimbs } from "../shared/bigint-digits.ts";
-import { PROBE_READ_KINDS, probeReadIsNamed } from "../shared/compiler-instruction.ts";
+import {
+	GUARDED_SEMANTIC_EPOCH_MASKS,
+	PROBE_READ_KINDS,
+	probeReadIsNamed,
+} from "../shared/compiler-instruction.ts";
 import { knownOperationFlags } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
 import { staticDataQueryTag } from "../shared/static-data-query.ts";
@@ -3441,6 +3445,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_GUARD_SERVICE_EPOCH, .as.guard_service_epoch = { .dst = ${instruction.dst}, .epoch = ${instruction.epoch} } }`;
 		case "READ_SERVICE_EPOCH":
 			return `{ .opcode = MAL_OP_READ_SERVICE_EPOCH, .as.read_service_epoch = { .dst = ${instruction.dst} } }`;
+		case "GUARD_SEMANTIC_EPOCH":
+			return `{ .opcode = MAL_OP_GUARD_SEMANTIC_EPOCH, .as.guard_semantic_epoch = { .dst = ${instruction.dst}, .dependencies = ${GUARDED_SEMANTIC_EPOCH_MASKS[instruction.family]} } }`;
 		case "PROBE_READ":
 			return `{ .opcode = MAL_OP_PROBE_READ, .as.probe_read = { .dst = ${instruction.dst}, .success = ${instruction.success}, .object = ${instruction.object}, .data_offset = ${sideDataOffset()} } }`;
 		case "STORE_PRIVATE":
@@ -3636,6 +3642,16 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE";
 		case "__functionPrototypeCall":
 			return "MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL";
+		case "__functionPrototypeApply":
+			return "MAL_INTRINSIC_FUNCTION_PROTOTYPE_APPLY";
+		case "__functionPrototypeBind":
+			return "MAL_INTRINSIC_FUNCTION_PROTOTYPE_BIND";
+		case "__generatorPrototypeNext":
+			return "MAL_INTRINSIC_GENERATOR_PROTOTYPE_NEXT";
+		case "__arrayPrototypeValues":
+			return "MAL_INTRINSIC_ARRAY_PROTOTYPE_VALUES";
+		case "__arrayIteratorPrototypeNext":
+			return "MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE_NEXT";
 		case "__newDisposeCapability":
 			return "MAL_INTRINSIC_NEW_DISPOSE_CAPABILITY";
 		case "__addDisposableResource":

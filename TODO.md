@@ -160,6 +160,14 @@ compilation both contribute to developer-loop latency.
 These levels are cumulative facts consumed by one optimizer, not separate pipelines.
 Runtime eval may remove source closure without invalidating authority closure.
 
+- [ ] Guard primordial global bindings with an epoch. With mutable primordials every
+      `Math.*` and `Number.*` call outside a numeric region still loads the global name
+      and the method and compares the callee, and `Number.parseInt`, `parseFloat` and
+      `Number()` stay generic calls; javascript-v2 `numbers` takes 42 ms against 25
+      closed. An epoch advanced when a global object property holding a primordial
+      binding is written, defined or deleted, or a global lexical binding shadows one,
+      would let one guard select the known operation and keep the loads as the twin.
+
 ## Performance diagnosis and admission
 
 - [ ] Use existing profiles and admission reports to trace leading sites in one selected

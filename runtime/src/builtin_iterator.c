@@ -1376,7 +1376,8 @@ void mal_builtin_iterator_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, set_iterator, "next", 0, mal_builtin_set_iterator_next);
 
     MalObject *array_iterator = mal_builtin_iterator_prototype_new(vm, MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE, iterator_prototype, "Array Iterator");
-    mal_intrinsic_define_method_n(vm, array_iterator, "next", 0, mal_builtin_array_iterator_next);
+    vm->intrinsics[MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE_NEXT] =
+        mal_intrinsic_define_method_n(vm, array_iterator, "next", 0, mal_builtin_array_iterator_next);
     // Cache the array-iterator next for the inline iterator-step fast path's
     // protocol-intact check (mal_vm_iterator_step_fast).
     mal_array_iterator_next_callback = mal_builtin_array_iterator_next;

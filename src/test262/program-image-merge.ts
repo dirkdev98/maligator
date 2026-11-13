@@ -358,6 +358,7 @@ function cloneInstruction(
 			return { ...instruction, functionIndex: instruction.functionIndex + base.function };
 		case "READ_SERVICE_EPOCH":
 		case "GUARD_SERVICE_EPOCH":
+		case "GUARD_SEMANTIC_EPOCH":
 			return instruction;
 		case "PROBE_READ":
 			return probeReadIsNamed(instruction)

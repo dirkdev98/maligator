@@ -1060,6 +1060,11 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.loop_invariant_region_admissions,
         (unsigned long long) mal_perf_stats.loop_invariant_load_misses,
         (unsigned long long) mal_perf_stats.loop_builtin_call_region_admissions);
+    fprintf(stderr, "[perf-semantic-guards] admissions=%llu rejections=%llu\n",
+        (unsigned long long) mal_perf_stats.semantic_guard_admissions,
+        (unsigned long long) mal_perf_stats.semantic_guard_rejections);
+    fprintf(stderr, "[perf-bound-calls] resolutions=%llu\n",
+        (unsigned long long) mal_perf_stats.bound_function_resolutions);
     fprintf(stderr, "[perf-data-view-region-stats] views=%llu\n",
         (unsigned long long) mal_perf_stats.fixed_data_view_region_views);
     fprintf(

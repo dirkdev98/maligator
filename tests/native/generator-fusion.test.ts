@@ -14,7 +14,13 @@ const fixture = "tests/local/generator-fusion.mjs";
 const outDir = mkdtempSync(join(tmpdir(), "mal-generator-fusion-native-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
-describe("private generator traversal", () => {
+describe.each([
+	{ primordials: "locked" as const, title: "private generator traversal" },
+	{
+		primordials: "mutable" as const,
+		title: "private generator traversal behind a protocol guard",
+	},
+])("$title", ({ primordials }) => {
 	let pair: ReturnType<typeof buildBackendPairFromOneProgramImage>;
 	let expected: Record<string, unknown>;
 	beforeAll(() => {
@@ -23,9 +29,9 @@ describe("private generator traversal", () => {
 		) as Record<string, unknown>;
 		pair = buildBackendPairFromOneProgramImage({
 			fixture,
-			name: "generator-fusion",
+			name: `generator-fusion-${primordials}`,
 			outDir,
-			config: resolveBuildConfig({}),
+			config: resolveBuildConfig({ engine: { primordials } }),
 		});
 	});
 	it.each([

@@ -15,6 +15,7 @@ import {
 import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
+	GuardedSemanticEpochFamily,
 	NamedProbeReadKind,
 } from "../shared/compiler-instruction.ts";
 import type { KnownBuiltinError } from "../shared/known-builtin-errors.ts";
@@ -1355,6 +1356,7 @@ export type BytecodeInstruction =
 	  }
 	| { opcode: "READ_SERVICE_EPOCH"; dst: number }
 	| { opcode: "GUARD_SERVICE_EPOCH"; dst: number; epoch: number }
+	| { opcode: "GUARD_SEMANTIC_EPOCH"; dst: number; family: GuardedSemanticEpochFamily }
 	| ({
 			opcode: "PROBE_READ";
 			dst: number;
@@ -4718,6 +4720,12 @@ function lowerInstructionToBytecodeInstruction(
 			};
 		case "readServiceEpoch":
 			return { opcode: "READ_SERVICE_EPOCH", dst: instruction.registers[0] };
+		case "guardSemanticEpoch":
+			return {
+				opcode: "GUARD_SEMANTIC_EPOCH",
+				dst: instruction.registers[0],
+				family: instruction.family,
+			};
 		case "probeRead":
 			return {
 				opcode: "PROBE_READ",

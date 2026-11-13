@@ -1,11 +1,6 @@
-import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";
-import type { WorldFacts } from "../shared/compiler-facts.ts";
-import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
-import { primordialNodeAvailable } from "../shared/primordial-catalog.ts";
 import type { CoreEditor } from "./core-editor.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
-import { buildCoreControlFlow, coreTerminatorInput } from "./core-ir-control-flow.ts";
-import type { CoreNaturalLoop } from "./core-ir-control-flow.ts";
+import { coreTerminatorInput } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
@@ -393,68 +388,25 @@ export function expandCoreFunctionPrototypeCall(
 	};
 }
 
-const FUNCTION_PROTOTYPE_APPLY = "Function.prototype.apply";
-const FUNCTION_PROTOTYPE_BIND = "Function.prototype.bind";
-
-/** Whether bound-function calls can compare a loaded `bind` with the realm's own. */
-export function coreBoundFunctionCallsAvailable(world: WorldFacts): boolean {
-	return (
-		world.primordialPolicy === "locked" &&
-		primordialNodeAvailable(world, FUNCTION_PROTOTYPE_BIND)
-	);
-}
-
-/** Whether `f.apply(...)` sites can compare a loaded `apply` with the realm's own. */
-export function coreAppliedFunctionCallsAvailable(world: WorldFacts): boolean {
-	return (
-		world.primordialPolicy === "locked" &&
-		primordialNodeAvailable(world, FUNCTION_PROTOTYPE_APPLY)
-	);
-}
-
 /*
- * Compares `method` with the realm's primordial right after `after`. A primordial
- * load is an out-of-line call that loop-invariant code motion leaves in place, so it
- * goes to the preheader of the outermost canonical loop around the comparison, if
- * any; it cannot throw for an available primordial under the locked policy.
+ * Compares `method` with the realm's own builtin right after `after`. The intrinsic
+ * is the function the realm installed, whatever the property holds now, so the
+ * comparison stays exact when primordials are mutable.
  */
-function insertPrimordialCheck(
-	program: CoreProgram,
+function insertRealmMethodCheck(
 	fn: CoreFunctionStore,
 	editor: CoreEditor,
 	after: CoreInstructionId,
 	method: CoreValueId,
-	primordial: string,
+	intrinsic: "__functionPrototypeApply" | "__functionPrototypeBind",
 ): CoreValueId {
 	const block = fn.instructionBlock(after);
 	const before = fn.instructionNext(after);
 	const sourcePosition = fn.instructionSourcePosition(after);
-	let outermost: CoreNaturalLoop | undefined;
-	for (const loop of buildCoreControlFlow(program, fn.id).loops)
-		if (
-			loop.canonical &&
-			loop.blocks.has(block) &&
-			(outermost === undefined || loop.depth < outermost.depth)
-		)
-			outermost = loop;
-	const preheader = outermost?.preheader;
-	const realm = editor.insertInstruction(
-		preheader ?? block,
-		preheader === undefined ? before : fn.blockTerminator(preheader),
-		"loadPrimordial",
-		[],
-		{
-			attributes: {
-				nodeIndex: getPrimordialCatalog().nodes.findIndex(
-					(node) => node[0] === primordial,
-				),
-				worldAssumptions: {
-					...builtinWorldAssumptions(primordial, "exact-builtin-proof"),
-				},
-			},
-			sourcePosition,
-		},
-	).outputs[0]!;
+	const realm = editor.insertInstruction(block, before, "loadIntrinsic", [], {
+		attributes: { intrinsic },
+		sourcePosition,
+	}).outputs[0]!;
 	return editor.insertInstruction(block, before, "binary", [method, realm], {
 		attributes: { operator: "===" },
 		sourcePosition,
@@ -472,19 +424,17 @@ function insertPrimordialCheck(
  * function created outside a loop and called inside it tests one boolean per call.
  */
 export function expandCoreBoundFunctionCall(
-	program: CoreProgram,
 	fn: CoreFunctionStore,
 	editor: CoreEditor,
 	site: CoreInstructionId,
 	call: CoreBoundFunctionCall,
 ): { readonly instructionsIntroduced: number; readonly blocksIntroduced: number } {
-	const realmBind = insertPrimordialCheck(
-		program,
+	const realmBind = insertRealmMethodCheck(
 		fn,
 		editor,
 		call.creation,
 		call.method,
-		FUNCTION_PROTOTYPE_BIND,
+		"__functionPrototypeBind",
 	);
 	const split = splitGuardedCall(fn, editor, site);
 	const direct = split.test(realmBind);
@@ -507,19 +457,17 @@ export function expandCoreBoundFunctionCall(
  * the original call, which still runs, with its own TypeError, for anything else.
  */
 export function expandCoreAppliedFunctionCall(
-	program: CoreProgram,
 	fn: CoreFunctionStore,
 	editor: CoreEditor,
 	site: CoreInstructionId,
 	call: CoreAppliedFunctionCall,
 ): { readonly instructionsIntroduced: number; readonly blocksIntroduced: number } {
-	const realmApply = insertPrimordialCheck(
-		program,
+	const realmApply = insertRealmMethodCheck(
 		fn,
 		editor,
 		call.lookup,
 		call.method,
-		FUNCTION_PROTOTYPE_APPLY,
+		"__functionPrototypeApply",
 	);
 	const split = splitGuardedCall(fn, editor, site);
 	const callable = split.test(realmApply);

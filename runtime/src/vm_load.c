@@ -219,6 +219,11 @@ static const i32 wire_intrinsics[] = {
     MAL_INTRINSIC_ATTACH_REQUIRE_TABLE,
     MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE,
     MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL,
+    MAL_INTRINSIC_FUNCTION_PROTOTYPE_APPLY,
+    MAL_INTRINSIC_FUNCTION_PROTOTYPE_BIND,
+    MAL_INTRINSIC_GENERATOR_PROTOTYPE_NEXT,
+    MAL_INTRINSIC_ARRAY_PROTOTYPE_VALUES,
+    MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE_NEXT,
 };
 
 // ---- owned arena (chained calloc'd blocks; pointers stay stable, one free) ----
@@ -1110,6 +1115,11 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             o->opcode = MAL_OP_READ_SERVICE_EPOCH;
             o->as.read_service_epoch.dst = rd_i32(r);
             return;
+        case WIRE_GUARD_SEMANTIC_EPOCH:
+            o->opcode = MAL_OP_GUARD_SEMANTIC_EPOCH;
+            o->as.guard_semantic_epoch.dst = rd_i32(r);
+            o->as.guard_semantic_epoch.dependencies = rd_u8(r);
+            return;
         case WIRE_PROBE_READ: {
             o->opcode = MAL_OP_PROBE_READ;
             o->as.probe_read.dst = rd_i32(r);
@@ -1665,6 +1675,7 @@ static bool mal_loaded_instruction_writes_register(
             return instruction->as.probe_read.dst == target_register || instruction->as.probe_read.success == target_register;
         MAL_WRITES_DST(MAL_OP_GUARD_SERVICE_EPOCH, guard_service_epoch);
         MAL_WRITES_DST(MAL_OP_READ_SERVICE_EPOCH, read_service_epoch);
+        MAL_WRITES_DST(MAL_OP_GUARD_SEMANTIC_EPOCH, guard_semantic_epoch);
         MAL_WRITES_DST(MAL_OP_LOAD_THIS, load_this);
         MAL_WRITES_DST(MAL_OP_LOAD_NEW_TARGET, load_new_target);
         MAL_WRITES_DST(MAL_OP_LOAD_CALLEE, load_callee);
@@ -2990,6 +3001,9 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                 if (instruction->as.guard_service_epoch.dst < 0 || instruction->as.guard_service_epoch.dst >= fn->register_count || instruction->as.guard_service_epoch.epoch < 0 || instruction->as.guard_service_epoch.epoch >= fn->register_count) r.ok = false;
             } else if (instruction->opcode == MAL_OP_READ_SERVICE_EPOCH) {
                 if (instruction->as.read_service_epoch.dst < 0 || instruction->as.read_service_epoch.dst >= fn->register_count) r.ok = false;
+            } else if (instruction->opcode == MAL_OP_GUARD_SEMANTIC_EPOCH) {
+                const u8 known = MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS | MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS;
+                if (instruction->as.guard_semantic_epoch.dst < 0 || instruction->as.guard_semantic_epoch.dst >= fn->register_count || instruction->as.guard_semantic_epoch.dependencies == 0 || (instruction->as.guard_semantic_epoch.dependencies & ~known) != 0) r.ok = false;
             } else if (instruction->opcode == MAL_OP_PROBE_READ) {
                 i32 offset = instruction->as.probe_read.data_offset;
                 if (offset < 0 || offset > fn->instruction_data_count - 4) { r.ok = false; continue; }

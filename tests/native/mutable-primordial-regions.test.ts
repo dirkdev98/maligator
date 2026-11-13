@@ -92,3 +92,62 @@ describeMutableRegions(
 		expect(admissions).toBeGreaterThanOrEqual(2);
 	},
 );
+
+describeMutableRegions(
+	"mutable-generator-fusion",
+	"for-of loops over a private generator with a mutable generator protocol",
+	(stderr, loops) => {
+		const admissions = Number(
+			stderr.match(/\[perf-semantic-guards\] admissions=(\d+)/)?.[1],
+		);
+		// Each warm-up round enters the loop twice for each of eight seeds.
+		expect(admissions).toBeGreaterThanOrEqual(2 * 8 * loops);
+	},
+);
+
+describeMutableRegions(
+	"mutable-generator-fusion-throw",
+	"a for-of loop over a private generator left by a throw after its body replaced return",
+	(stderr, loops) => {
+		const admissions = Number(
+			stderr.match(/\[perf-semantic-guards\] admissions=(\d+)/)?.[1],
+		);
+		// Each warm-up round enters the loop once for each of eight seeds.
+		expect(admissions).toBeGreaterThanOrEqual(8 * loops);
+	},
+);
+
+describeMutableRegions(
+	"mutable-call-forms",
+	"call, apply, bound and spread call sites with mutable Function and Array prototypes",
+	(stderr, loops) => {
+		const warmCalls = loops * 64;
+		const nativeCalls = (name: string) =>
+			Number(
+				stderr.match(
+					new RegExp(`\\[perf-native-call\\] name=${name} calls=(\\d+)`),
+				)?.[1] ?? 0,
+			);
+		// The warm-up rounds alone would make one native call of each per iteration.
+		expect(nativeCalls("call")).toBeLessThan(warmCalls);
+		expect(nativeCalls("apply")).toBeLessThan(warmCalls);
+		expect(
+			Number(stderr.match(/\[perf-bound-calls\] resolutions=(\d+)/)?.[1]),
+		).toBeLessThan(warmCalls);
+		expect(
+			Number(stderr.match(/\[perf-semantic-guards\] admissions=(\d+)/)?.[1]),
+		).toBeGreaterThanOrEqual(warmCalls);
+	},
+);
+
+describeMutableRegions(
+	"mutable-rest-iteration",
+	"for-of loops over a rest parameter with mutable Array iteration prototypes",
+	(stderr, loops) => {
+		const admissions = Number(
+			stderr.match(/\[perf-semantic-guards\] admissions=(\d+)/)?.[1],
+		);
+		// Each warm-up round enters the loop twice for each of eight seeds.
+		expect(admissions).toBeGreaterThanOrEqual(2 * 8 * loops);
+	},
+);
