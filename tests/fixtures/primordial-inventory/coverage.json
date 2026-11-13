@@ -44396,6 +44396,22 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype\",\"connection\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype",
+				"MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_PROTOTYPE"
+			],
+			"key": "connection",
+			"kind": "accessor",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>",
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype\",\"constructor\"]",
 			"owner": "%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype",
 			"ownerPaths": [
@@ -44425,6 +44441,54 @@
 			"owner": "%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype._read",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype._read"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>"
 			],
 			"key": "name",
 			"kind": "data",
@@ -47356,6 +47420,36 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]\",\"destroy\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor.prototype"
+			],
+			"key": "destroy",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]\",\"errored\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]]",
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor.prototype"
+			],
+			"key": "errored",
+			"kind": "accessor",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor",
 			"ownerPaths": [
@@ -47392,6 +47486,54 @@
 				"mal_host_install_node_http:OutgoingMessage"
 			],
 			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>"
+			],
+			"key": "name",
 			"kind": "data",
 			"operations": [],
 			"task": "H-10",
@@ -54060,6 +54202,36 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype\",\"readableDidRead\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype",
+				"MAL_INTRINSIC_NODE_READABLE_PROTOTYPE"
+			],
+			"key": "readableDidRead",
+			"kind": "accessor",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype\",\"readableAborted\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype",
+				"MAL_INTRINSIC_NODE_READABLE_PROTOTYPE"
+			],
+			"key": "readableAborted",
+			"kind": "accessor",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype\",\"isPaused\"]",
 			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype",
 			"ownerPaths": [
@@ -54522,6 +54694,54 @@
 			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.read\",\"name\"]",
 			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.read",
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.read"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>"
+			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -164995,6 +165215,62 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.destroy\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.destroy",
 			"ownerPaths": [
@@ -165642,6 +165918,62 @@
 			"kind": "construct",
 			"operations": [
 				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -168287,6 +168619,62 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.read"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>"
+			],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305449,6 +305837,18 @@
 			]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<get>"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.connection<set>"
+			]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.destroy",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR%.prototype.destroy"
@@ -305560,6 +305960,18 @@
 			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].constructor"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].destroy"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%.prototype.[[Prototype]].errored<get>"
 			]
 		},
 		{
@@ -306000,6 +306412,18 @@
 		{
 			"id": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.read",
 			"identities": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.read"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableAborted<get>"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.readableDidRead<get>"
+			]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.resume",
