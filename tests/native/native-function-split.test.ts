@@ -65,7 +65,7 @@ describe("outlined native function parts", () => {
 				Infinity,
 				policy,
 			);
-			expect(emitted?.source).toContain(`${emitted!.symbol}_part_1(MalVm *vm`);
+			expect(emitted?.source, name).toContain(`${emitted!.symbol}_part_1(MalVm *vm`);
 		}
 	});
 

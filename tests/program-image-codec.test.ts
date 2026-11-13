@@ -1041,6 +1041,7 @@ describe("program-image-codec", () => {
 			"LOAD_DYNAMIC_ARGUMENT",
 			"CONSTRUCT_SUPER",
 			"CONSTRUCT_SUPER_FORWARD",
+			"GUARD_SEMANTIC_EPOCH",
 		];
 		expect(WIRE_OPCODES.slice(-appended.length)).toEqual(appended);
 	});
