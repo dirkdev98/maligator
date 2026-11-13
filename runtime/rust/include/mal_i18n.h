@@ -15,7 +15,7 @@ extern "C" {
 #endif
 
 /* Identifies the flat transport contract shared with lib.rs. */
-#define MAL_I18N_ABI_VERSION 14u
+#define MAL_I18N_ABI_VERSION 15u
 
 /* Status codes for fallible entry points; mapped to JS exceptions by the C side. */
 typedef enum MalI18nStatus {

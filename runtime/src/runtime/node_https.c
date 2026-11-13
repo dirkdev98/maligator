@@ -25,16 +25,16 @@
 
 bool mal_node_https_validate_options(MalVm *vm, MalValue options, bool agent, MalValue default_agent) {
     if (!mal_value_is_object(options)) return true;
-    // Requests honour `ca`, `cert` and `key`; agents are refused outright, so theirs would be ignored.
+    // Requests apply credential options; custom agents cannot retain that policy.
     static const char *unsupported[] = {
-        "ca", "cert", "key", "servername", "rejectUnauthorized", "checkServerIdentity",
-        "pfx", "passphrase", "secureContext", "secureProtocol", "secureOptions",
+        "ca", "cert", "key", "passphrase", "servername", "rejectUnauthorized", "checkServerIdentity",
+        "pfx", "secureContext", "secureProtocol", "secureOptions",
         "minVersion", "maxVersion", "ciphers", "sigalgs", "ecdhCurve", "dhparam",
         "ALPNProtocols", "session", "clientCertEngine", "privateKeyIdentifier",
         "privateKeyEngine", "honorCipherOrder", "crl", "requestOCSP", "createConnection",
         "psk", "pskCallback", "sessionIdContext", "lookup", "localAddress", "localPort", "family", "hints", "defaultPort",
     };
-    for (usize i = agent ? 0 : 3; i < countof(unsupported); i++) {
+    for (usize i = agent ? 0 : 4; i < countof(unsupported); i++) {
         MalValue value;
         if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, unsupported[i]), &value)) return false;
         if (!mal_value_is_undefined(value)) {

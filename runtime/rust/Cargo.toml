@@ -97,6 +97,14 @@ rsa = { version = "0.10.0", default-features = false, features = [
 	"encoding",
 ], optional = true }
 
+pkcs8 = { version = "0.11.0", features = [
+	"encryption",
+	"sha1-insecure",
+	"std",
+], optional = true }
+
+zeroize = { version = "1.8", optional = true }
+
 [features]
 # On by default so dev/test262 builds carry the full Intl + URL + RegExp surface.
 # The build maps the resolved config to an explicit feature set (src/rust-build.ts):
@@ -130,6 +138,8 @@ node-crypto = [
 	"dep:poly1305",
 	"dep:ring",
 	"dep:rsa",
+	"dep:pkcs8",
+	"dep:zeroize",
 ]
 
 # The always-on Intl floor: locale parsing/negotiation (Intl.Locale,

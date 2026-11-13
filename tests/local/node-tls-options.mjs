@@ -21,15 +21,7 @@ function refusal(options) {
 	}
 }
 
-// A credential, a trust decision, and a negotiation constraint: none are wired
-// through, so all three have to be refused.
-for (const option of [
-	"pfx",
-	"passphrase",
-	"minVersion",
-	"checkServerIdentity",
-	"ciphers",
-]) {
+for (const option of ["pfx", "minVersion", "checkServerIdentity", "ciphers"]) {
 	const message = refusal({ [option]: "x" });
 	check(`${option} is refused`, message !== null && message.includes(option));
 }

@@ -339,3 +339,5 @@ tests/native/http-pipelining.test.ts
 tests/native/http-stalled-pipeline.test.ts
 
 tests/native/node-http-request-cancel.test.ts
+
+tests/native/node-crypto-encrypted-pkcs8.test.ts

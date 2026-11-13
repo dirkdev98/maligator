@@ -30,6 +30,7 @@
 #include "node_inspect.h"
 #include "node_module.h"
 #include "node_net.h"
+#include "node_tls.h"
 #include "posix_fs.h"
 #include "mal_tls.h"
 #include "node_stream.h"
@@ -6632,7 +6633,8 @@ static MalValue http_request_common(
             && !http_client_replace_string(vm, roots[4], &state->cert, &state->cert_len)) {
             goto fail_endpoint;
         }
-        if (!http_client_option(vm, roots[0], "key", &roots[4])) goto fail_endpoint;
+        if (!http_client_option(vm, roots[0], "key", &roots[4])
+            || !mal_node_tls_private_key(vm, roots[0], &roots[4])) goto fail_endpoint;
         if (!mal_value_is_undefined(roots[4])
             && !http_client_replace_string(vm, roots[4], &state->key, &state->key_len)) {
             goto fail_endpoint;

@@ -1,5 +1,6 @@
 // Portions derived from Node.js lib/tls.js, lib/_tls_wrap.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_tls.h"
+#include "node_crypto.h"
 
 #if MAL_NODE
 
@@ -60,13 +61,33 @@ static bool node_tls_utf8(
  * the only answer that cannot be mistaken for success.
  */
 static const char *const NODE_TLS_UNSUPPORTED_OPTIONS[] = {
-    "pfx", "passphrase", "clientCertEngine", "privateKeyEngine",
+    "pfx", "clientCertEngine", "privateKeyEngine",
     "crl", "ciphers", "sigalgs", "ecdhCurve", "dhparam", "minVersion",
     "maxVersion", "secureProtocol", "checkServerIdentity",
     "session", "sessionIdContext", "requestOCSP", "psk", "pskCallback",
 };
 
 static bool node_tls_pem(MalVm *vm, MalValue value, const char *name, MalValue *out);
+
+bool mal_node_tls_private_key(MalVm *vm, MalValue options, MalValue *key) {
+    MalValue roots[] = {options, *key, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool ok = node_tls_get(vm, roots[0], "passphrase", &roots[2]);
+    if (ok && !mal_value_is_nil(roots[1]) && !mal_value_is_nil(roots[2])) {
+        if (!mal_value_is_string(roots[2])) {
+            mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "The options.passphrase property must be of type string", "ERR_INVALID_ARG_TYPE");
+            ok = false;
+        } else {
+            roots[1] = mal_node_crypto_private_key_pem(vm, roots[1], roots[2]);
+            ok = vm->completion.kind != MAL_COMPLETION_THROW;
+        }
+    }
+    if (ok) *key = roots[1];
+    mal_gc_unroot(&root);
+    return ok;
+}
 
 static bool node_tls_reject_unsupported(MalVm *vm, MalValue options) {
     for (usize i = 0; i < countof(NODE_TLS_UNSUPPORTED_OPTIONS); i++) {
@@ -191,7 +212,7 @@ static MalValue node_tls_connect(
     }
     if (direct && mal_value_is_undefined(roots[2]))
         roots[2] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "localhost"));
-    if (!node_tls_reject_unsupported(vm, roots[0])
+    if (!mal_node_tls_private_key(vm, roots[0], &roots[9]) || !node_tls_reject_unsupported(vm, roots[0])
         || !node_tls_alpn_protocol(vm, roots[5], &roots[7])) {
         mal_gc_unroot(&root);
         return mal_value_new_undefined();
@@ -798,7 +819,7 @@ static bool node_tls_credential_values(MalVm *vm, MalValue options, MalValue *va
             return false;
         }
     }
-    return true;
+    return mal_node_tls_private_key(vm, options, &values[1]);
 }
 
 static bool node_tls_validate_credentials(MalVm *vm, const MalValue *values) {

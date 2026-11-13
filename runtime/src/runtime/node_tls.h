@@ -11,3 +11,6 @@ MalValue mal_node_tls_server_add_context(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee);
 MalValue mal_node_tls_server_set_secure_context(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee);
+
+/** Normalize scalar TLS key credentials with Node's optional string passphrase. */
+bool mal_node_tls_private_key(MalVm *vm, MalValue options, MalValue *key);

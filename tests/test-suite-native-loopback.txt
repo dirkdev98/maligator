@@ -5,6 +5,7 @@ tests/native/fetch-hardening.test.ts
 tests/native/fetch.test.ts
 tests/native/node-async-hooks.test.ts
 tests/native/node-crypto-async.test.ts
+tests/native/node-crypto-encrypted-pkcs8.test.ts
 tests/native/node-fetch-upload.test.ts
 tests/native/node-http-client-lifecycle.test.ts
 tests/native/node-http-client-url.test.ts

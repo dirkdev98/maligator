@@ -697,7 +697,8 @@ remains a Maligator extension and does not count as global fetch conformance.
       are never closed.
 
 - [ ] crypto: RSA-PSS key generation, RSA generation outside 1024..8192 bits,
-      signing with RSA keys ring cannot represent, encrypted PEM, RSA-PSS salt
+      signing with RSA keys ring cannot represent, legacy encrypted PEM, encrypted
+      private-key export, RSA-PSS salt
       lengths other than the digest length, ECDSA signing with a hash other than the
       curve's own, publicEncrypt, DiffieHellman and Cipheriv as Transform streams.
       The rest of WebCrypto: RSA generateKey, RSA-OAEP, ECDH/X25519,
@@ -728,7 +729,7 @@ remains a Maligator extension and does not count as global fetch conformance.
       getPeerCertificate(true) issuer chains, repeated name attributes as arrays,
       public-key fields, `ext_key_usage`, `infoAccess` and IPv6 subjectaltname
       entries. https agents with TLS options, Buffer `cert`/`key` and
-      `pfx`/`passphrase` for https requests, Node's `ERR_OSSL_*` codes for malformed
+      `pfx` for https requests, Node's `ERR_OSSL_*` codes for malformed
       credentials, and 'connection' on https.Server with TLSSocket-like sockets for
       its 'tlsClientError'. http: move the shared header and body methods onto
       OutgoingMessage.prototype so overriding them there reaches ServerResponse and

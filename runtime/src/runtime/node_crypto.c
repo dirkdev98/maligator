@@ -4717,9 +4717,17 @@ static bool crypto_string_is(MalValue value, const char *ascii) {
 
 static void crypto_throw_pkey_status(MalVm *vm, i32 status) {
     switch (status) {
+    case MAL_PKEY_BAD_DECRYPT:
+        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            "error:1C800064:Provider routines::bad decrypt", "ERR_OSSL_BAD_DECRYPT");
+        return;
+    case MAL_PKEY_PASSPHRASE_REQUIRED:
+        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            "error:07880109:common libcrypto routines::interrupted or cancelled", "ERR_OSSL_CRYPTO_INTERRUPTED_OR_CANCELLED");
+        return;
     case MAL_PKEY_ENCRYPTED:
         mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-            "Encrypted private keys are not supported by this host", "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM");
+            "Legacy encrypted PEM keys are not supported by this host", "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM");
         return;
     case MAL_PKEY_UNSUPPORTED:
         mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Unsupported crypto operation",
@@ -4782,7 +4790,7 @@ static MalPkey *crypto_pkey_from_object(MalValue value) {
     bool private_key = crypto_is_private_pkey(value);
     MalPkey *key = nullptr;
     if (mal_pkey_import((const u8 *) der, length, MAL_PKEY_FORMAT_DER,
-            private_key ? MAL_PKEY_TYPE_PKCS8 : MAL_PKEY_TYPE_SPKI, private_key, &key) != MAL_PKEY_OK) return nullptr;
+            private_key ? MAL_PKEY_TYPE_PKCS8 : MAL_PKEY_TYPE_SPKI, private_key, nullptr, 0, &key) != MAL_PKEY_OK) return nullptr;
     return key;
 }
 
@@ -4883,60 +4891,88 @@ static MalPkey *crypto_pkey_from_jwk(MalVm *vm, MalValue jwk, bool private_key) 
 
 /* Node's prepareAsymmetricKey: KeyObjects, PEM text/bytes and `{ key, format, type }`. */
 static MalPkey *crypto_pkey_from_input(MalVm *vm, MalValue input, bool private_key) {
-    MalValue key = input, format = mal_value_new_undefined(), type = mal_value_new_undefined();
-    if (mal_value_is_object(input) && !crypto_is_byte_source(input) && !crypto_pkey_der(input, &(const byte *) {0},
-            &(usize) {0})) {
-        if (!crypto_option(vm, input, "key", &key) || !crypto_option(vm, input, "format", &format)
-            || !crypto_option(vm, input, "type", &type)) return nullptr;
+    MalValue roots[] = {input, input, mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalPkey *handle = nullptr;
+    byte *bytes = nullptr, *password = nullptr;
+    usize length = 0, password_length = 0;
+    if (mal_value_is_object(roots[0]) && !crypto_is_byte_source(roots[0])
+        && !crypto_pkey_der(roots[0], &(const byte *) {0}, &(usize) {0})) {
+        if (!crypto_option(vm, roots[0], "key", &roots[1]) || !crypto_option(vm, roots[0], "format", &roots[2])
+            || !crypto_option(vm, roots[0], "type", &roots[3]) || !crypto_option(vm, roots[0], "passphrase", &roots[4])) goto done;
     }
     const byte *der;
     usize der_length;
-    if (crypto_pkey_der(key, &der, &der_length)) {
-        bool stored_private = crypto_is_private_pkey(key);
-        if (private_key && !stored_private) {
-            crypto_throw_pkey_status(vm, MAL_PKEY_NOT_PRIVATE);
-            return nullptr;
+    if (crypto_pkey_der(roots[1], &der, &der_length)) {
+        bool stored_private = crypto_is_private_pkey(roots[1]);
+        if (private_key && !stored_private) { crypto_throw_pkey_status(vm, MAL_PKEY_NOT_PRIVATE); goto done; }
+        handle = crypto_pkey_from_object(roots[1]);
+        if (handle == nullptr) { crypto_throw_pkey_status(vm, MAL_PKEY_INVALID_KEY); goto done; }
+        if (!private_key && stored_private) {
+            MalPkey *public_key = nullptr;
+            i32 status = mal_pkey_public(handle, &public_key);
+            mal_pkey_free(handle);
+            handle = public_key;
+            if (status != MAL_PKEY_OK) crypto_throw_pkey_status(vm, status);
         }
-        MalPkey *handle = crypto_pkey_from_object(key);
-        if (handle == nullptr) { crypto_throw_pkey_status(vm, MAL_PKEY_INVALID_KEY); return nullptr; }
-        if (private_key || !stored_private) return handle;
-        MalPkey *public_key = nullptr;
-        i32 status = mal_pkey_public(handle, &public_key);
-        mal_pkey_free(handle);
-        if (status != MAL_PKEY_OK) { crypto_throw_pkey_status(vm, status); return nullptr; }
-        return public_key;
+        goto done;
     }
-    if (crypto_string_is(format, "jwk")) {
-        if (!mal_value_is_object(key)) {
-            crypto_throw_property_type(vm, "key.key", "of type object", key);
-            return nullptr;
-        }
-        return crypto_pkey_from_jwk(vm, key, private_key);
+    if (crypto_string_is(roots[2], "jwk")) {
+        if (!mal_value_is_object(roots[1])) crypto_throw_property_type(vm, "key.key", "of type object", roots[1]);
+        else handle = crypto_pkey_from_jwk(vm, roots[1], private_key);
+        goto done;
     }
-    u32 format_code = MAL_PKEY_FORMAT_PEM;
-    u32 type_code = 0;
-    if (crypto_string_is(format, "der")) {
+    u32 format_code = MAL_PKEY_FORMAT_PEM, type_code = 0;
+    if (crypto_string_is(roots[2], "der")) {
         format_code = MAL_PKEY_FORMAT_DER;
-        if (crypto_string_is(type, "pkcs1")) type_code = MAL_PKEY_TYPE_PKCS1;
-        else if (crypto_string_is(type, "pkcs8")) type_code = MAL_PKEY_TYPE_PKCS8;
-        else if (crypto_string_is(type, "spki")) type_code = MAL_PKEY_TYPE_SPKI;
-        else if (crypto_string_is(type, "sec1")) type_code = MAL_PKEY_TYPE_SEC1;
-        else {
-            crypto_throw_property_type(vm, "key.type", "one of: 'pkcs1', 'pkcs8', 'spki', 'sec1'", type);
-            return nullptr;
-        }
-    } else if (!mal_value_is_undefined(format) && !crypto_string_is(format, "pem")) {
-        crypto_throw_property_type(vm, "key.format", "one of: 'pem', 'der', 'jwk'", format);
-        return nullptr;
+        if (crypto_string_is(roots[3], "pkcs1")) type_code = MAL_PKEY_TYPE_PKCS1;
+        else if (crypto_string_is(roots[3], "pkcs8")) type_code = MAL_PKEY_TYPE_PKCS8;
+        else if (crypto_string_is(roots[3], "spki")) type_code = MAL_PKEY_TYPE_SPKI;
+        else if (crypto_string_is(roots[3], "sec1")) type_code = MAL_PKEY_TYPE_SEC1;
+        else { crypto_throw_property_type(vm, "key.type", "one of: 'pkcs1', 'pkcs8', 'spki', 'sec1'", roots[3]); goto done; }
+    } else if (!mal_value_is_undefined(roots[2]) && !crypto_string_is(roots[2], "pem")) {
+        crypto_throw_property_type(vm, "key.format", "one of: 'pem', 'der', 'jwk'", roots[2]);
+        goto done;
     }
-    byte *bytes;
-    usize length;
-    if (!crypto_input_bytes(vm, key, mal_value_new_undefined(), "key", &bytes, &length)) return nullptr;
-    MalPkey *handle = nullptr;
-    i32 status = mal_pkey_import((const u8 *) bytes, length, format_code, type_code, private_key, &handle);
-    crypto_scrub_free(bytes, length);
-    if (status != MAL_PKEY_OK) { crypto_throw_pkey_status(vm, status); return nullptr; }
+    if (!crypto_input_bytes(vm, roots[1], mal_value_new_undefined(), "key", &bytes, &length)) goto done;
+    if (!mal_value_is_undefined(roots[4])) {
+        if (!mal_value_is_string(roots[4]) && !crypto_is_byte_source(roots[4])) {
+            mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "The property 'key.passphrase' is invalid", "ERR_INVALID_ARG_VALUE");
+            goto done;
+        }
+        if (!crypto_input_bytes(vm, roots[4], mal_value_new_undefined(), "passphrase", &password, &password_length)) goto done;
+    }
+    i32 status = mal_pkey_import((const u8 *) bytes, length, format_code, type_code, private_key,
+        (const u8 *) password, password_length, &handle);
+    if (status != MAL_PKEY_OK) crypto_throw_pkey_status(vm, status);
+done:
+    if (bytes != nullptr) crypto_scrub_free(bytes, length);
+    if (password != nullptr) crypto_scrub_free(password, password_length);
+    mal_gc_unroot(&root);
     return handle;
+}
+
+MalValue mal_node_crypto_private_key_pem(MalVm *vm, MalValue key, MalValue passphrase) {
+    MalValue roots[] = {key, passphrase, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    crypto_set(vm, roots[2], "key", roots[0]);
+    crypto_set(vm, roots[2], "passphrase", roots[1]);
+    MalPkey *handle = crypto_pkey_from_input(vm, roots[2], true);
+    if (handle != nullptr) {
+        byte *pem = nullptr;
+        usize length = 0;
+        if (crypto_pkey_export_bytes(vm, handle, MAL_PKEY_FORMAT_PEM, MAL_PKEY_TYPE_PKCS8, true, &pem, &length)) {
+            roots[3] = mal_value_from_string(mal_string_new_ascii(&vm->heap, pem, length));
+            crypto_scrub_free(pem, length);
+        }
+        mal_pkey_free(handle);
+    }
+    mal_gc_unroot(&root);
+    return roots[3];
 }
 
 static MalValue mal_node_crypto_create_private_key(
@@ -5749,7 +5785,7 @@ static MalPkey *crypto_web_pkey(MalValue key) {
     bool private_key = (u8) stored->data[0] == CRYPTO_WEB_PRIVATE;
     MalPkey *handle = nullptr;
     if (mal_pkey_import((const u8 *) stored->data + CRYPTO_WEB_KEY_HEADER, stored->byte_length - CRYPTO_WEB_KEY_HEADER, MAL_PKEY_FORMAT_DER,
-            private_key ? MAL_PKEY_TYPE_PKCS8 : MAL_PKEY_TYPE_SPKI, private_key, &handle) != MAL_PKEY_OK) return nullptr;
+            private_key ? MAL_PKEY_TYPE_PKCS8 : MAL_PKEY_TYPE_SPKI, private_key, nullptr, 0, &handle) != MAL_PKEY_OK) return nullptr;
     return handle;
 }
 
@@ -5770,9 +5806,9 @@ static MalPkey *crypto_web_import_material(MalVm *vm, MalValue format, MalValue 
     MalPkey *key = nullptr;
     i32 status = MAL_PKEY_INVALID_ARGUMENT;
     if (crypto_string_is(format, "spki")) {
-        status = mal_pkey_import((const u8 *) span.data, span.length, MAL_PKEY_FORMAT_DER, MAL_PKEY_TYPE_SPKI, false, &key);
+        status = mal_pkey_import((const u8 *) span.data, span.length, MAL_PKEY_FORMAT_DER, MAL_PKEY_TYPE_SPKI, false, nullptr, 0, &key);
     } else if (crypto_string_is(format, "pkcs8")) {
-        status = mal_pkey_import((const u8 *) span.data, span.length, MAL_PKEY_FORMAT_DER, MAL_PKEY_TYPE_PKCS8, true, &key);
+        status = mal_pkey_import((const u8 *) span.data, span.length, MAL_PKEY_FORMAT_DER, MAL_PKEY_TYPE_PKCS8, true, nullptr, 0, &key);
     } else if (crypto_string_is(format, "raw") && (algorithm == CRYPTO_WEB_ECDSA || algorithm == CRYPTO_WEB_ED25519)) {
         const u8 *parts[8] = {0};
         usize lengths[8] = {0};
@@ -6540,7 +6576,7 @@ static MalValue mal_node_crypto_x509_public_key(
     usize offset = 0, spki_length = 0;
     MalPkey *key = nullptr;
     if (!mal_x509_part(der, length, MAL_X509_PART_SPKI, &offset, &spki_length)
-        || mal_pkey_import(der + offset, spki_length, MAL_PKEY_FORMAT_DER, MAL_PKEY_TYPE_SPKI, false, &key)
+        || mal_pkey_import(der + offset, spki_length, MAL_PKEY_FORMAT_DER, MAL_PKEY_TYPE_SPKI, false, nullptr, 0, &key)
             != MAL_PKEY_OK) {
         mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
             "error:03000072:digital envelope routines::decode error", "ERR_OSSL_EVP_DECODE_ERROR");
@@ -6680,7 +6716,7 @@ static MalValue mal_node_crypto_x509_check_private_key(
     usize offset = 0, spki_length = 0;
     bool matches = private_key != nullptr && mal_pkey_public(private_key, &public_key) == MAL_PKEY_OK
         && mal_x509_part(der, length, MAL_X509_PART_SPKI, &offset, &spki_length)
-        && mal_pkey_import(der + offset, spki_length, MAL_PKEY_FORMAT_DER, MAL_PKEY_TYPE_SPKI, false, &certified)
+        && mal_pkey_import(der + offset, spki_length, MAL_PKEY_FORMAT_DER, MAL_PKEY_TYPE_SPKI, false, nullptr, 0, &certified)
             == MAL_PKEY_OK
         && mal_pkey_equals(public_key, certified);
     mal_pkey_free(private_key);

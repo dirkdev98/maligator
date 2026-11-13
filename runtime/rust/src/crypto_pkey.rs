@@ -10,6 +10,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{self, EcdsaKeyPair, Ed25519KeyPair, KeyPair, RsaKeyPair, UnparsedPublicKey};
 use rsa::pkcs1::{DecodeRsaPrivateKey, EncodeRsaPrivateKey, EncodeRsaPublicKey};
 use rsa::rand_core::{TryCryptoRng, TryRng};
+use zeroize::Zeroize;
 
 pub const MAL_PKEY_OK: i32 = 0;
 pub const MAL_PKEY_INVALID_KEY: i32 = 1;
@@ -19,6 +20,8 @@ pub const MAL_PKEY_BAD_SIGNATURE: i32 = 4;
 pub const MAL_PKEY_BUFFER_TOO_SMALL: i32 = 5;
 pub const MAL_PKEY_NOT_PRIVATE: i32 = 6;
 pub const MAL_PKEY_INVALID_ARGUMENT: i32 = 7;
+pub const MAL_PKEY_BAD_DECRYPT: i32 = 8;
+pub const MAL_PKEY_PASSPHRASE_REQUIRED: i32 = 9;
 
 const KIND_RSA: u32 = 1;
 const KIND_EC_P256: u32 = 2;
@@ -64,19 +67,25 @@ pub struct MalPkey {
     material: Material,
 }
 
-impl Drop for MalPkey {
-    fn drop(&mut self) {
-        match &mut self.material {
+impl Material {
+    fn clear_private(&mut self) {
+        match self {
             Material::Rsa {
                 private: Some((der, _)),
                 ..
-            } => der.iter_mut().for_each(|b| *b = 0),
+            } => der.zeroize(),
             Material::Ec {
                 scalar: Some(d), ..
-            } => d.iter_mut().for_each(|b| *b = 0),
-            Material::Ed25519 { seed: Some(s), .. } => s.iter_mut().for_each(|b| *b = 0),
+            } => d.zeroize(),
+            Material::Ed25519 { seed: Some(s), .. } => s.zeroize(),
             _ => {}
         }
+    }
+}
+
+impl Drop for MalPkey {
+    fn drop(&mut self) {
+        self.material.clear_private();
     }
 }
 
@@ -477,7 +486,21 @@ fn next_pem(text: &[u8]) -> Option<(PemBlock<'_>, &[u8])> {
     ))
 }
 
-fn parse_pem(text: &[u8], private: bool) -> Result<Material, i32> {
+fn decrypt_pkcs8(input: &[u8], password: Option<&[u8]>) -> Result<Material, i32> {
+    let encrypted =
+        pkcs8::EncryptedPrivateKeyInfoRef::try_from(input).map_err(|_| MAL_PKEY_INVALID_KEY)?;
+    let password = password.ok_or(MAL_PKEY_PASSPHRASE_REQUIRED)?;
+    let secret = encrypted.decrypt(password).map_err(|error| match error {
+        pkcs8::Error::EncryptedPrivateKey(
+            pkcs8::pkcs5::Error::NoPbes1CryptSupport
+            | pkcs8::pkcs5::Error::UnsupportedAlgorithm { .. },
+        ) => MAL_PKEY_UNSUPPORTED,
+        _ => MAL_PKEY_BAD_DECRYPT,
+    })?;
+    parse_der(secret.as_bytes(), TYPE_PKCS8, true)
+}
+
+fn parse_pem(text: &[u8], private: bool, password: Option<&[u8]>) -> Result<Material, i32> {
     let mut rest = text;
     while let Some((block, after)) = next_pem(rest) {
         rest = after;
@@ -485,7 +508,12 @@ fn parse_pem(text: &[u8], private: bool) -> Result<Material, i32> {
             b"PRIVATE KEY" => TYPE_PKCS8,
             b"RSA PRIVATE KEY" => TYPE_PKCS1,
             b"EC PRIVATE KEY" => TYPE_SEC1,
-            b"ENCRYPTED PRIVATE KEY" => return Err(MAL_PKEY_ENCRYPTED),
+            b"ENCRYPTED PRIVATE KEY" => {
+                let mut der = base64_decode(block.body).ok_or(MAL_PKEY_INVALID_KEY)?;
+                let result = decrypt_pkcs8(&der, password);
+                der.zeroize();
+                return result;
+            }
             b"PUBLIC KEY" if !private => TYPE_SPKI,
             b"RSA PUBLIC KEY" if !private => TYPE_PKCS1,
             _ => continue,
@@ -496,7 +524,7 @@ fn parse_pem(text: &[u8], private: bool) -> Result<Material, i32> {
         let mut der = base64_decode(block.body).ok_or(MAL_PKEY_INVALID_KEY)?;
         let private_block = !matches!(block.label, b"PUBLIC KEY" | b"RSA PUBLIC KEY");
         let result = parse_der(&der, key_type, private_block);
-        der.iter_mut().for_each(|b| *b = 0);
+        der.zeroize();
         return result;
     }
     Err(MAL_PKEY_INVALID_KEY)
@@ -529,14 +557,27 @@ pub unsafe extern "C" fn mal_pkey_import(
     format: u32,
     key_type: u32,
     private: bool,
+    password: *const u8,
+    password_len: usize,
     out: *mut *mut MalPkey,
 ) -> i32 {
-    if out.is_null() {
+    if out.is_null() || (password.is_null() && password_len != 0) {
         return MAL_PKEY_INVALID_ARGUMENT;
     }
     let input = unsafe { slice(data, len) };
+    let password = if password.is_null() {
+        None
+    } else {
+        Some(unsafe { slice(password, password_len) })
+    };
     let material = match format {
-        FORMAT_PEM => parse_pem(input, private),
+        FORMAT_PEM => parse_pem(input, private, password),
+        FORMAT_DER
+            if key_type == TYPE_PKCS8
+                && pkcs8::EncryptedPrivateKeyInfoRef::try_from(input).is_ok() =>
+        {
+            decrypt_pkcs8(input, password)
+        }
         FORMAT_DER => parse_der(input, key_type, private),
         _ => Err(MAL_PKEY_INVALID_ARGUMENT),
     };
@@ -548,7 +589,8 @@ pub unsafe extern "C" fn mal_pkey_import(
     into_handle(material, out)
 }
 
-fn public_half(material: Material) -> Material {
+fn public_half(mut material: Material) -> Material {
+    material.clear_private();
     match material {
         Material::Rsa { public, .. } => Material::Rsa {
             public,
@@ -992,7 +1034,7 @@ pub unsafe extern "C" fn mal_pkey_export(
         }
         _ => MAL_PKEY_INVALID_ARGUMENT,
     };
-    der.iter_mut().for_each(|b| *b = 0);
+    der.zeroize();
     status
 }
 

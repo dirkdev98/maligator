@@ -30,6 +30,8 @@ enum {
     MAL_PKEY_BUFFER_TOO_SMALL = 5,
     MAL_PKEY_NOT_PRIVATE = 6,
     MAL_PKEY_INVALID_ARGUMENT = 7,
+    MAL_PKEY_BAD_DECRYPT = 8,
+    MAL_PKEY_PASSPHRASE_REQUIRED = 9,
 };
 
 enum { MAL_PKEY_RSA = 1, MAL_PKEY_EC_P256 = 2, MAL_PKEY_EC_P384 = 3, MAL_PKEY_ED25519 = 4 };
@@ -41,9 +43,10 @@ enum { MAL_PKEY_PADDING_PKCS1 = 1, MAL_PKEY_PADDING_PSS = 6 };
 
 typedef struct MalPkey MalPkey;
 
-/* PEM finds the first key block; a public import also accepts private input. */
+/* PEM finds the first key block; a public import also accepts private input.
+ * A null password is absent; a non-null pointer with zero length is an empty password. */
 int32_t mal_pkey_import(const uint8_t *data, size_t len, uint32_t format, uint32_t type, bool private_key,
-    MalPkey **out);
+    const uint8_t *password, size_t password_len, MalPkey **out);
 /* Raw JWK components, eight slots: RSA n,e,d,p,q,dp,dq,qi; EC x,y,d; Ed25519 x,-,d. */
 int32_t mal_pkey_import_jwk(uint32_t kind, const uint8_t *const *parts, const size_t *lens, size_t count,
     bool private_key, MalPkey **out);

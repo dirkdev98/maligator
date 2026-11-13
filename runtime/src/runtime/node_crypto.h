@@ -1,6 +1,7 @@
 #pragma once
 
 #include "./defaults.h"
+#include "value.h"
 
 /*
  * node:crypto host built-in (runtime layer, behind surface.node / MAL_NODE).
@@ -11,7 +12,7 @@
  * (`randomBytes`/`randomFill`/`randomInt`/`randomUUID`/`randomUUIDv7`/
  * `getRandomValues`), `createSecretKey`, `createCipheriv`/`createDecipheriv` for
  * AES-128/192/256-CBC/CTR/GCM and ChaCha20-Poly1305, a WebCrypto `subtle` with
- * digest, raw HMAC sign/verify and AES-GCM encrypt/decrypt, and Argon2d/i/id via
+ * key derivation, signing and AES encryption, and Argon2d/i/id via
  * `argon2Sync` and the off-event-loop `argon2`. Digests are self-contained C
  * (FIPS 180-4); ciphers and Argon2 are pure-Rust primitives behind flat ABIs.
  *
@@ -30,8 +31,8 @@
  * Asynchrony: Argon2, pbkdf2, scrypt and hkdf run on host worker pools.
  * `randomBytes`, `randomFill` and `randomInt` draw entropy on the calling thread
  * and post the finished value, so the callback lands as a macrotask with Node's
- * ordering while the draw itself stays on the loop. `subtle` operations compute
- * on the calling thread and settle their promise before returning.
+ * ordering while the draw itself stays on the loop. `subtle` key derivation shares the worker pool; small digest and cipher operations
+ * settle their promises on the calling thread.
  */
 
 typedef struct MalVm MalVm;
@@ -55,3 +56,6 @@ void mal_host_install_node_crypto(
  * net/http from being starved.
  */
 bool mal_node_crypto_drain(MalVm *vm);
+
+/** Normalize a private key and optional passphrase into canonical unencrypted PEM for TLS. */
+MalValue mal_node_crypto_private_key_pem(MalVm *vm, MalValue key, MalValue passphrase);
