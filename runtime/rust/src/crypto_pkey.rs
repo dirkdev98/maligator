@@ -1,13 +1,15 @@
 //! Asymmetric keys for node:crypto: RSA, EC (P-256, P-384) and Ed25519 key
 //! import/export in PEM, DER and raw JWK components, signing and verification.
 //!
-//! ring performs the cryptography; the PKCS#1/PKCS#8/SPKI/SEC1 framing is read
-//! and written here because ring neither exports keys nor exposes RSA's CRT
-//! components. Handles are boxed on the Rust side and released with
+//! ring performs signing and verification; RustCrypto generates RSA keys.
+//! The PKCS#1/PKCS#8/SPKI/SEC1 framing is read and written here because ring
+//! neither exports keys nor exposes RSA's CRT components. Handles are released with
 //! `mal_pkey_free`; no Rust panic or message string crosses the ABI.
 
-use ring::rand::SystemRandom;
+use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{self, EcdsaKeyPair, Ed25519KeyPair, KeyPair, RsaKeyPair, UnparsedPublicKey};
+use rsa::pkcs1::{DecodeRsaPrivateKey, EncodeRsaPrivateKey, EncodeRsaPublicKey};
+use rsa::rand_core::{TryCryptoRng, TryRng};
 
 pub const MAL_PKEY_OK: i32 = 0;
 pub const MAL_PKEY_INVALID_KEY: i32 = 1;
@@ -45,7 +47,7 @@ const OID_ED25519: &[u8] = &[0x2b, 0x65, 0x70];
 enum Material {
     Rsa {
         public: Vec<u8>,
-        private: Option<(Vec<u8>, RsaKeyPair)>,
+        private: Option<(Vec<u8>, Option<RsaKeyPair>)>,
     },
     Ec {
         kind: u32,
@@ -188,8 +190,29 @@ fn read_algorithm(input: &[u8]) -> Option<(&[u8], &[u8])> {
 }
 
 fn rsa_from_pkcs1_private(der: &[u8]) -> Result<Material, i32> {
-    let pair = RsaKeyPair::from_der(der).map_err(|_| MAL_PKEY_INVALID_KEY)?;
-    let public = pair.public().as_ref().to_vec();
+    let pair = RsaKeyPair::from_der(der).ok();
+    let public = if let Some(pair) = &pair {
+        pair.public().as_ref().to_vec()
+    } else {
+        let (body, _) = expect(der, 0x30).ok_or(MAL_PKEY_INVALID_KEY)?;
+        let (_, body) = expect(body, 0x02).ok_or(MAL_PKEY_INVALID_KEY)?;
+        let (modulus, _) = expect(body, 0x02).ok_or(MAL_PKEY_INVALID_KEY)?;
+        if strip_zeros(modulus).len() > 1024 {
+            return Err(MAL_PKEY_INVALID_KEY);
+        }
+        let key = rsa::PrivateKey::from_pkcs1_der(der).map_err(|_| MAL_PKEY_INVALID_KEY)?;
+        key.validate().map_err(|_| MAL_PKEY_INVALID_KEY)?;
+        // The decoder recomputes CRT fields; validate the serialized fields too.
+        let canonical = key.to_pkcs1_der().map_err(|_| MAL_PKEY_INVALID_KEY)?;
+        if canonical.as_bytes() != der {
+            return Err(MAL_PKEY_INVALID_KEY);
+        }
+        key.to_public_key()
+            .to_pkcs1_der()
+            .map_err(|_| MAL_PKEY_INVALID_KEY)?
+            .as_bytes()
+            .to_vec()
+    };
     Ok(Material::Rsa {
         public,
         private: Some((der.to_vec(), pair)),
@@ -616,11 +639,60 @@ pub unsafe extern "C" fn mal_pkey_import_jwk(
     into_handle(material, out)
 }
 
-/// Generates an EC or Ed25519 key; ring has no RSA key generation.
+struct RsaRandom(SystemRandom);
+
+impl TryRng for RsaRandom {
+    type Error = std::io::Error;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        let mut bytes = [0; 4];
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u32::from_ne_bytes(bytes))
+    }
+
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        let mut bytes = [0; 8];
+        self.try_fill_bytes(&mut bytes)?;
+        Ok(u64::from_ne_bytes(bytes))
+    }
+
+    fn try_fill_bytes(&mut self, bytes: &mut [u8]) -> Result<(), Self::Error> {
+        self.0
+            .fill(bytes)
+            .map_err(|_| std::io::Error::other("System entropy unavailable"))
+    }
+}
+
+impl TryCryptoRng for RsaRandom {}
+
 #[no_mangle]
-pub unsafe extern "C" fn mal_pkey_generate(kind: u32, out: *mut *mut MalPkey) -> i32 {
+pub unsafe extern "C" fn mal_pkey_generate(
+    kind: u32,
+    modulus_bits: u32,
+    public_exponent: u32,
+    out: *mut *mut MalPkey,
+) -> i32 {
     if out.is_null() {
         return MAL_PKEY_INVALID_ARGUMENT;
+    }
+    if kind == KIND_RSA {
+        if public_exponent < 3 || public_exponent % 2 == 0 {
+            return MAL_PKEY_INVALID_ARGUMENT;
+        }
+        if !(1024..=8192).contains(&modulus_bits) {
+            return MAL_PKEY_UNSUPPORTED;
+        }
+        let material = rsa::PrivateKey::new_with_exp(
+            &mut RsaRandom(SystemRandom::new()),
+            modulus_bits as usize,
+            public_exponent.into(),
+        )
+        .map_err(|_| MAL_PKEY_INVALID_KEY)
+        .and_then(|key| {
+            let der = key.to_pkcs1_der().map_err(|_| MAL_PKEY_INVALID_KEY)?;
+            rsa_from_pkcs1_private(der.as_bytes())
+        });
+        return into_handle(material, out);
     }
     let rng = SystemRandom::new();
     let pkcs8 = match kind {
@@ -1002,7 +1074,7 @@ pub unsafe extern "C" fn mal_pkey_sign(
     let rng = SystemRandom::new();
     let signature: Vec<u8> = match &key.material {
         Material::Rsa {
-            private: Some((_, pair)),
+            private: Some((_, Some(pair))),
             ..
         } => {
             let encoding: &'static dyn signature::RsaEncoding = match (padding, hash) {
@@ -1023,6 +1095,10 @@ pub unsafe extern "C" fn mal_pkey_sign(
             }
             buffer
         }
+        Material::Rsa {
+            private: Some((_, None)),
+            ..
+        } => return MAL_PKEY_UNSUPPORTED,
         Material::Ec {
             kind,
             point,
@@ -1151,5 +1227,23 @@ pub unsafe extern "C" fn mal_pkey_verify(
         MAL_PKEY_OK
     } else {
         MAL_PKEY_BAD_SIGNATURE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rsa_import_rejects_inconsistent_serialized_crt_components() {
+        let key = rsa::PrivateKey::new(&mut RsaRandom(SystemRandom::new()), 1024).unwrap();
+        let encoded = key.to_pkcs1_der().unwrap();
+        assert!(rsa_from_pkcs1_private(encoded.as_bytes()).is_ok());
+        let mut corrupted = encoded.as_bytes().to_vec();
+        *corrupted.last_mut().unwrap() ^= 1;
+        assert!(matches!(
+            rsa_from_pkcs1_private(&corrupted),
+            Err(MAL_PKEY_INVALID_KEY)
+        ));
     }
 }

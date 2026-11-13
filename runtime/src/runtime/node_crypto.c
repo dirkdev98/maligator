@@ -1437,21 +1437,50 @@ static void crypto_kdf_run(void *data) {
     }
 }
 
-/* ---------------------------------------------------------------------------
- * Asynchronous completion.
- *
- * One state list, one GC root source, and one macrotask drain serve all three
- * asynchronous entry points. The callback is unreachable from JavaScript
- * between the call returning and the drain, so without crypto_scan_roots a
- * collection in that window would free it.
- * --------------------------------------------------------------------------- */
+typedef struct {
+    bool encoded;
+    bool jwk;
+    u32 format;
+    u32 type;
+} CryptoKeyEncoding;
+
+typedef struct {
+    u32 kind;
+    u32 modulus_bits;
+    u32 public_exponent;
+    CryptoKeyEncoding public_encoding;
+    CryptoKeyEncoding private_encoding;
+    i32 status;
+    MalPkey *public_key;
+    MalPkey *private_key;
+} CryptoKeyPairJob;
+
+static void crypto_key_pair_free(void *data) {
+    CryptoKeyPairJob *job = data;
+    if (job == nullptr) return;
+    mal_pkey_free(job->public_key);
+    mal_pkey_free(job->private_key);
+    free(job);
+}
+
+static void crypto_key_pair_run(void *data) {
+    CryptoKeyPairJob *job = data;
+    job->status = mal_pkey_generate(job->kind, job->modulus_bits,
+        job->public_exponent, &job->private_key);
+    if (job->status == MAL_PKEY_OK)
+        job->status = mal_pkey_public(job->private_key, &job->public_key);
+}
+
+static bool crypto_key_pair_result(
+    MalVm *vm, CryptoKeyPairJob *job, MalValue *public_key, MalValue *private_key);
+
+/* Pending callbacks stay rooted until their host macrotask is drained. */
 
 typedef enum {
     CRYPTO_ASYNC_ARGON2,
     CRYPTO_ASYNC_RANDOM_BYTES,
     CRYPTO_ASYNC_RANDOM_INT,
     CRYPTO_ASYNC_RANDOM_FILL,
-    /* generateKeyPair: `value` holds the generated pair, delivered as two callback arguments. */
     CRYPTO_ASYNC_KEY_PAIR,
     /* pbkdf2/scrypt/hkdf on the blocking-work pool; the payload stays host-owned. */
     CRYPTO_ASYNC_KDF,
@@ -1687,6 +1716,14 @@ static bool crypto_async_arguments(
         }
         return vm->completion.kind != MAL_COMPLETION_THROW;
     }
+    if (state->kind == CRYPTO_ASYNC_KEY_PAIR) {
+        CryptoKeyPairJob *job = mal_blocking_work_result_data(data);
+        if (task->result != MAL_HOST_TERMINAL_OK || job == nullptr) {
+            crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Key generation failed");
+            return false;
+        }
+        return crypto_key_pair_result(vm, job, &args[1], &args[2]);
+    }
     CryptoImmediateResult *result = data;
     if (result == nullptr || result->failed) {
         const char *message = "Crypto operation failed";
@@ -1702,17 +1739,6 @@ static bool crypto_async_arguments(
     }
     if (state->kind == CRYPTO_ASYNC_RANDOM_FILL) {
         args[1] = state->value;
-        return true;
-    }
-    if (state->kind == CRYPTO_ASYNC_KEY_PAIR) {
-        MalObject *pair = mal_value_to_object(state->value);
-        MalPropertyLookup public_key = mal_object_get_own(pair,
-            mal_intrinsic_string_key(vm, (const byte *) "publicKey"));
-        MalPropertyLookup private_key = mal_object_get_own(pair,
-            mal_intrinsic_string_key(vm, (const byte *) "privateKey"));
-        args[0] = mal_value_new_null();
-        args[1] = public_key.present ? public_key.desc.value : mal_value_new_undefined();
-        args[2] = private_key.present ? private_key.desc.value : mal_value_new_undefined();
         return true;
     }
     // from_owned_bytes consumes the allocation on both paths, so clear the
@@ -1742,7 +1768,8 @@ bool mal_node_crypto_drain(MalVm *vm) {
     MalHostTask task;
     if (!mal_host_next_task(&host->tasks, &task)) return false;
     // A blocking-work wrapper is borrowed until release; taking it strands its reservation.
-    void *data = state->kind == CRYPTO_ASYNC_KDF ? task.data : mal_host_task_take_data(&host->tasks, &task);
+    bool blocking = state->kind == CRYPTO_ASYNC_KDF || state->kind == CRYPTO_ASYNC_KEY_PAIR;
+    void *data = blocking ? task.data : mal_host_task_take_data(&host->tasks, &task);
 
 #if MAL_REALMS
     MalRealm *saved_realm = vm->current_realm;
@@ -1750,7 +1777,9 @@ bool mal_node_crypto_drain(MalVm *vm) {
 #endif
     // The result is built while `state` is still linked, so a collection during
     // the Buffer allocation still reaches the callback through crypto_scan_roots.
-    MalValue args[3];
+    MalValue args[3] = {mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan argument_root;
+    mal_gc_root(&argument_root, args, countof(args));
     CryptoAsyncKind kind = state->kind;
     bool ready = crypto_async_arguments(vm, state, &task, data, args);
     if (!ready) {
@@ -1764,7 +1793,7 @@ bool mal_node_crypto_drain(MalVm *vm) {
     // take_data moved ownership out of the task, so the payload is released here.
     if (kind == CRYPTO_ASYNC_ARGON2) {
         mal_argon2_result_release(data);
-    } else if (kind != CRYPTO_ASYNC_KDF) {
+    } else if (!blocking) {
         crypto_immediate_destroy(data);
     }
     MalValue callback = state->callback;
@@ -1778,9 +1807,11 @@ bool mal_node_crypto_drain(MalVm *vm) {
     mal_gc_root(&root, roots, countof(roots));
     MalAsyncContextScope scope;
     mal_async_context_scope_enter(vm, &scope, async_context);
-    mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), &roots[1], kind == CRYPTO_ASYNC_KEY_PAIR ? 3 : 2);
+    i32 callback_argc = kind == CRYPTO_ASYNC_KEY_PAIR ? (ready ? 3 : 1) : 2;
+    mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), &roots[1], callback_argc);
     mal_async_context_scope_exit(vm, &scope);
     mal_gc_unroot(&root);
+    mal_gc_unroot(&argument_root);
 #if MAL_REALMS
     mal_realm_switch(vm, saved_realm);
 #endif
@@ -2285,9 +2316,8 @@ static bool crypto_argon2_bytes(
     return crypto_private_span(vm, span, owned);
 }
 
-/* The numeric ladder Node applies to each Argon2 parameter: primitive number,
- * then integer, then range — each with its own message shape. */
-static bool crypto_argon2_number(
+/* Preserve Node's distinct primitive-number, integer and range errors. */
+static bool crypto_parameter_number(
     MalVm *vm, MalValue value, const char *name, f64 minimum, f64 maximum, u32 *out) {
     if (!mal_ops_is_number(value)) {
         crypto_throw_property_type(vm, name, "of type number", value);
@@ -2357,18 +2387,18 @@ static bool crypto_argon2_parse(
                 ">= 8 && <= 4294967295", mal_ops_number_value((f64) parsed->nonce.length));
             break;
         }
-        if (!crypto_argon2_number(vm, values[0], "parameters.parallelism",
+        if (!crypto_parameter_number(vm, values[0], "parameters.parallelism",
                 1, 16777215, &parsed->parallelism)
-            || !crypto_argon2_number(vm, values[1], "parameters.tagLength",
+            || !crypto_parameter_number(vm, values[1], "parameters.tagLength",
                 4, 4294967295.0, &parsed->tag_length)) {
             break;
         }
         // The lower memory bound is max(8, 8 * parallelism), and Node embeds the
         // computed value in the message.
         f64 memory_floor = parsed->parallelism > 1 ? 8.0 * parsed->parallelism : 8.0;
-        if (!crypto_argon2_number(vm, values[2], "parameters.memory",
+        if (!crypto_parameter_number(vm, values[2], "parameters.memory",
                 memory_floor, 4294967295.0, &parsed->memory_kib)
-            || !crypto_argon2_number(vm, values[3], "parameters.passes",
+            || !crypto_parameter_number(vm, values[3], "parameters.passes",
                 1, 4294967295.0, &parsed->passes)) {
             break;
         }
@@ -5111,125 +5141,222 @@ static MalValue mal_node_crypto_verify_one_shot(
     return result;
 }
 
-static MalValue crypto_encode_generated(MalVm *vm, MalValue key, MalValue encoding, const char *name) {
-    if (mal_value_is_undefined(encoding)) return key;
+static bool crypto_key_encoding(
+    MalVm *vm, MalValue encoding, bool private_key, u32 kind,
+    CryptoKeyEncoding *out) {
+    if (mal_value_is_nil(encoding)) return true;
     if (!mal_value_is_object(encoding)) {
-        char property[48];
-        snprintf(property, sizeof(property), "options.%s", name);
-        crypto_throw_property_type(vm, property, "of type object", encoding);
-        return mal_value_new_undefined();
+        crypto_throw_property_type(vm, private_key ? "options.privateKeyEncoding"
+            : "options.publicKeyEncoding", "of type object", encoding);
+        return false;
     }
+    MalValue roots[] = {encoding, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined()};
     MalRootSpan root;
-    mal_gc_root(&root, &key, 1);
-    MalValue result = mal_node_crypto_pkey_export(vm, key, &encoding, 1, mal_value_new_undefined(),
-        mal_value_new_undefined());
+    mal_gc_root(&root, roots, countof(roots));
+    bool ok = false;
+    if (!crypto_option(vm, roots[0], "format", &roots[1])
+        || !crypto_option(vm, roots[0], "type", &roots[2])
+        || !crypto_option(vm, roots[0], "cipher", &roots[3])) goto done;
+    out->encoded = true;
+    if (crypto_string_is(roots[1], "jwk")) {
+        out->jwk = true;
+        ok = true;
+        goto done;
+    }
+    if (!mal_value_is_undefined(roots[3])) {
+        crypto_throw_pkey_status(vm, MAL_PKEY_ENCRYPTED);
+        goto done;
+    }
+    if (crypto_string_is(roots[1], "pem")) out->format = MAL_PKEY_FORMAT_PEM;
+    else if (crypto_string_is(roots[1], "der")) out->format = MAL_PKEY_FORMAT_DER;
+    else {
+        crypto_throw_property_type(vm, "options.format", "one of: 'pem', 'der', 'jwk'", roots[1]);
+        goto done;
+    }
+    if (crypto_string_is(roots[2], "pkcs1") && kind == MAL_PKEY_RSA)
+        out->type = MAL_PKEY_TYPE_PKCS1;
+    else if (crypto_string_is(roots[2], "pkcs8") && private_key)
+        out->type = MAL_PKEY_TYPE_PKCS8;
+    else if (crypto_string_is(roots[2], "spki") && !private_key)
+        out->type = MAL_PKEY_TYPE_SPKI;
+    else if (crypto_string_is(roots[2], "sec1") && private_key
+        && (kind == MAL_PKEY_EC_P256 || kind == MAL_PKEY_EC_P384))
+        out->type = MAL_PKEY_TYPE_SEC1;
+    else {
+        crypto_throw_property_type(vm, "options.type", "a key encoding for this algorithm", roots[2]);
+        goto done;
+    }
+    ok = true;
+done:
     mal_gc_unroot(&root);
-    return result;
+    return ok;
+}
+
+static bool crypto_key_pair_plan(
+    MalVm *vm, MalValue type, MalValue options, CryptoKeyPairJob *job) {
+    if (!mal_value_is_string(type)) {
+        crypto_throw_arg_type(vm, "type", "of type string", type);
+        return false;
+    }
+    MalValue roots[] = {type, options, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool ok = false;
+    if (crypto_string_is(roots[0], "ed25519")) {
+        job->kind = MAL_PKEY_ED25519;
+    } else if (crypto_string_is(roots[0], "ec")) {
+        if (!crypto_option(vm, roots[1], "namedCurve", &roots[2])) goto done;
+        if (!mal_value_is_string(roots[2])) {
+            crypto_throw_property_type(vm, "options.namedCurve", "of type string", roots[2]);
+            goto done;
+        }
+        if (crypto_string_is(roots[2], "P-256") || crypto_string_is(roots[2], "prime256v1"))
+            job->kind = MAL_PKEY_EC_P256;
+        else if (crypto_string_is(roots[2], "P-384") || crypto_string_is(roots[2], "secp384r1"))
+            job->kind = MAL_PKEY_EC_P384;
+        else {
+            mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Invalid EC curve name", "ERR_CRYPTO_INVALID_CURVE");
+            goto done;
+        }
+    } else if (crypto_string_is(roots[0], "rsa")) {
+        if (!mal_value_is_object(roots[1])) {
+            crypto_throw_arg_type(vm, "options", "of type object", roots[1]);
+            goto done;
+        }
+        job->kind = MAL_PKEY_RSA;
+        if (!crypto_option(vm, roots[1], "modulusLength", &roots[2])
+            || !crypto_parameter_number(vm, roots[2], "options.modulusLength", 0, UINT32_MAX,
+                &job->modulus_bits)) goto done;
+        if (!crypto_option(vm, roots[1], "publicExponent", &roots[2])) goto done;
+        job->public_exponent = 65537;
+        if (!mal_value_is_nil(roots[2])
+            && !crypto_parameter_number(vm, roots[2], "options.publicExponent", 0, UINT32_MAX,
+                &job->public_exponent)) goto done;
+    } else if (crypto_string_is(roots[0], "rsa-pss")) {
+        crypto_throw_pkey_status(vm, MAL_PKEY_UNSUPPORTED);
+        goto done;
+    } else {
+        char name[64];
+        crypto_copy_string(mal_value_to_string(roots[0]), name, sizeof(name));
+        char message[CRYPTO_MESSAGE_CAPACITY];
+        snprintf(message, sizeof(message),
+            "The argument 'type' must be a supported key type. Received '%s'", name);
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_VALUE");
+        goto done;
+    }
+    if (!crypto_option(vm, roots[1], "publicKeyEncoding", &roots[2])
+        || !crypto_key_encoding(vm, roots[2], false, job->kind, &job->public_encoding)
+        || !crypto_option(vm, roots[1], "privateKeyEncoding", &roots[2])
+        || !crypto_key_encoding(vm, roots[2], true, job->kind, &job->private_encoding)) goto done;
+    ok = true;
+done:
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+/* Consumes the handle, including failures while encoding its output. */
+static MalValue crypto_generated_key(MalVm *vm, MalPkey *key, CryptoKeyEncoding encoding) {
+    if (!encoding.encoded) return crypto_new_pkey_object(vm, key);
+    if (encoding.jwk) {
+        MalValue value = crypto_pkey_jwk(vm, key);
+        mal_pkey_free(key);
+        return value;
+    }
+    bool private_key = mal_pkey_is_private(key);
+    byte *bytes;
+    usize length;
+    bool exported = crypto_pkey_export_bytes(vm, key, encoding.format, encoding.type,
+        private_key, &bytes, &length);
+    mal_pkey_free(key);
+    if (!exported) return mal_value_new_undefined();
+    if (encoding.format == MAL_PKEY_FORMAT_DER)
+        return private_key ? mal_node_buffer_from_owned_secret_bytes(vm, bytes, length)
+                           : mal_node_buffer_from_owned_bytes(vm, bytes, length);
+    MalValue value = mal_value_from_string(mal_string_new_ascii(&vm->heap, bytes, length));
+    crypto_scrub_free(bytes, length);
+    return value;
+}
+
+static bool crypto_key_pair_result(
+    MalVm *vm, CryptoKeyPairJob *job, MalValue *public_key, MalValue *private_key) {
+    if (job->status != MAL_PKEY_OK) {
+        crypto_throw_pkey_status(vm, job->status);
+        return false;
+    }
+    MalPkey *key = job->public_key;
+    job->public_key = nullptr;
+    *public_key = crypto_generated_key(vm, key, job->public_encoding);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
+    key = job->private_key;
+    job->private_key = nullptr;
+    *private_key = crypto_generated_key(vm, key, job->private_encoding);
+    return vm->completion.kind != MAL_COMPLETION_THROW;
 }
 
 static MalValue mal_node_crypto_generate_key_pair_sync(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
     (void) receiver; (void) new_target; (void) callee;
-    MalValue type = argc > 0 ? args[0] : mal_value_new_undefined();
-    MalValue options = argc > 1 ? args[1] : mal_value_new_undefined();
-    if (!mal_value_is_string(type)) {
-        crypto_throw_arg_type(vm, "type", "of type string", type);
-        return mal_value_new_undefined();
-    }
-    u32 kind;
-    if (crypto_string_is(type, "ed25519")) {
-        kind = MAL_PKEY_ED25519;
-    } else if (crypto_string_is(type, "ec")) {
-        MalValue curve;
-        if (!crypto_option(vm, options, "namedCurve", &curve)) return mal_value_new_undefined();
-        if (!mal_value_is_string(curve)) {
-            crypto_throw_property_type(vm, "options.namedCurve", "of type string", curve);
-            return mal_value_new_undefined();
-        }
-        if (crypto_string_is(curve, "P-256") || crypto_string_is(curve, "prime256v1")) kind = MAL_PKEY_EC_P256;
-        else if (crypto_string_is(curve, "P-384") || crypto_string_is(curve, "secp384r1")) kind = MAL_PKEY_EC_P384;
-        else {
-            mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid EC curve name",
-                "ERR_CRYPTO_INVALID_CURVE");
-            return mal_value_new_undefined();
-        }
-    } else if (crypto_string_is(type, "rsa") || crypto_string_is(type, "rsa-pss")) {
-        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "RSA key generation is not supported by this host",
-            "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM");
-        return mal_value_new_undefined();
-    } else {
-        char name[64];
-        crypto_copy_string(mal_value_to_string(type), name, sizeof(name));
-        char message[CRYPTO_MESSAGE_CAPACITY];
-        snprintf(message, sizeof(message), "The argument 'type' must be a supported key type. Received '%s'", name);
-        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_VALUE");
-        return mal_value_new_undefined();
-    }
-    MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(), mal_value_new_undefined()};
+    CryptoKeyPairJob job = {0};
+    if (!crypto_key_pair_plan(vm, argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 ? args[1] : mal_value_new_undefined(), &job)) return mal_value_new_undefined();
+    crypto_key_pair_run(&job);
+    MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    MalValue result = mal_value_new_undefined();
-    if (!crypto_option(vm, options, "publicKeyEncoding", &roots[3])
-        || !crypto_option(vm, options, "privateKeyEncoding", &roots[4])) goto done;
-    MalPkey *private_key = nullptr;
-    i32 status = mal_pkey_generate(kind, &private_key);
-    if (status != MAL_PKEY_OK) { crypto_throw_pkey_status(vm, status); goto done; }
-    MalPkey *public_key = nullptr;
-    status = mal_pkey_public(private_key, &public_key);
-    if (status != MAL_PKEY_OK) { mal_pkey_free(private_key); crypto_throw_pkey_status(vm, status); goto done; }
-    roots[1] = crypto_new_pkey_object(vm, private_key);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) { mal_pkey_free(public_key); goto done; }
-    roots[0] = crypto_new_pkey_object(vm, public_key);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
-    roots[0] = crypto_encode_generated(vm, roots[0], roots[3], "publicKeyEncoding");
-    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
-    roots[1] = crypto_encode_generated(vm, roots[1], roots[4], "privateKeyEncoding");
-    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
-    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
-    MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
-    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), (const byte *) "publicKey", roots[0], flags);
-    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), (const byte *) "privateKey", roots[1], flags);
-    result = roots[2];
-done:
+    if (crypto_key_pair_result(vm, &job, &roots[0], &roots[1])) {
+        roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
+        crypto_set(vm, roots[2], "publicKey", roots[0]);
+        crypto_set(vm, roots[2], "privateKey", roots[1]);
+    }
+    mal_pkey_free(job.public_key);
+    mal_pkey_free(job.private_key);
     mal_gc_unroot(&root);
-    return result;
+    return roots[2];
 }
 
 static MalValue mal_node_crypto_generate_key_pair(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
-    MalValue call_args[2] = {argc > 0 ? args[0] : mal_value_new_undefined(),
-        argc > 1 ? args[1] : mal_value_new_undefined()};
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue options = argc > 1 ? args[1] : mal_value_new_undefined();
     MalValue callback = argc > 2 ? args[2] : mal_value_new_undefined();
-    if (mal_value_is_callable(call_args[1]) && argc < 3) {
-        callback = call_args[1];
-        call_args[1] = mal_value_new_undefined();
+    if (mal_value_is_callable(options) && argc < 3) {
+        callback = options;
+        options = mal_value_new_undefined();
     }
     if (!mal_value_is_callable(callback)) {
         crypto_throw_arg_type(vm, "callback", "of type function", callback);
         return mal_value_new_undefined();
     }
     if (!crypto_require_host(vm)) return mal_value_new_undefined();
-    MalValue roots[] = {callback, mal_value_new_undefined()};
     MalRootSpan root;
-    mal_gc_root(&root, roots, countof(roots));
-    // Validation errors throw synchronously, as Node's do; generation itself is cheap enough for the caller's thread.
-    roots[1] = mal_node_crypto_generate_key_pair_sync(vm, receiver, call_args, 2, new_target, callee);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) { mal_gc_unroot(&root); return mal_value_new_undefined(); }
-    CryptoImmediateResult *result = calloc(1, sizeof(CryptoImmediateResult));
-    MalNodeCryptoAsync *state = crypto_async_new(vm, CRYPTO_ASYNC_KEY_PAIR, roots[0]);
-    if (result == nullptr || state == nullptr) {
-        free(result);
-        free(state);
+    mal_gc_root(&root, &callback, 1);
+    CryptoKeyPairJob *job = calloc(1, sizeof(*job));
+    if (job == nullptr) {
         mal_gc_unroot(&root);
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
     }
-    state->value = roots[1];
-    if (!crypto_complete_immediately(vm, state, result)) {
-        crypto_immediate_destroy(result);
+    if (!crypto_key_pair_plan(vm, argc > 0 ? args[0] : mal_value_new_undefined(), options, job)) {
+        crypto_key_pair_free(job);
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    MalNodeCryptoAsync *state = crypto_async_new(vm, CRYPTO_ASYNC_KEY_PAIR, callback);
+    MalBlockingWorkReservation reservation = {0};
+    MalHostHandle operation = 0;
+    if (state == nullptr
+        || !mal_blocking_work_reserve(mal_host(vm), sizeof(*job), &reservation)
+        || !mal_blocking_work_start(mal_host(vm), crypto_key_pair_run, job, crypto_key_pair_free,
+            &reservation, &operation, false)) {
+        mal_blocking_work_reservation_release(&reservation);
+        crypto_key_pair_free(job);
         free(state);
-        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Crypto operation failed");
+        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            "crypto work could not be scheduled", "EAGAIN");
+    } else {
+        crypto_async_link(state, operation);
     }
     mal_gc_unroot(&root);
     return mal_value_new_undefined();
@@ -5685,7 +5812,7 @@ static MalValue mal_node_crypto_subtle_generate_key(
         crypto_settle_with_completion(vm, roots[0]);
     } else if ((algorithm != CRYPTO_WEB_ECDSA && algorithm != CRYPTO_WEB_ED25519) || kind == 0) {
         crypto_web_reject_dom(vm, roots[0], "Unrecognized algorithm name", "NotSupportedError");
-    } else if (mal_pkey_generate(kind, &private_key) != MAL_PKEY_OK
+    } else if (mal_pkey_generate(kind, 0, 0, &private_key) != MAL_PKEY_OK
         || mal_pkey_public(private_key, &public_key) != MAL_PKEY_OK) {
         mal_pkey_free(private_key);
         crypto_web_reject_dom(vm, roots[0], "Key generation failed", "OperationError");

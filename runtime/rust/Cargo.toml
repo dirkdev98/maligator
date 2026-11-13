@@ -92,6 +92,10 @@ chacha20 = { version = "0.10.2", default-features = false, features = [
 poly1305 = { version = "0.9.1", default-features = false, optional = true }
 # Asymmetric signing for node:crypto; already in the tree through rustls.
 ring = { version = "0.17", optional = true }
+rsa = { version = "0.10.0", default-features = false, features = [
+	"std",
+	"encoding",
+], optional = true }
 
 [features]
 # On by default so dev/test262 builds carry the full Intl + URL + RegExp surface.
@@ -125,6 +129,7 @@ node-crypto = [
 	"dep:chacha20",
 	"dep:poly1305",
 	"dep:ring",
+	"dep:rsa",
 ]
 
 # The always-on Intl floor: locale parsing/negotiation (Intl.Locale,

@@ -696,7 +696,8 @@ remains a Maligator extension and does not count as global fetch conformance.
       Error. Also dgram source-specific membership and collection of sockets that
       are never closed.
 
-- [ ] crypto: RSA key generation (ring has none), encrypted PEM, RSA-PSS salt
+- [ ] crypto: RSA-PSS key generation, RSA generation outside 1024..8192 bits,
+      signing with RSA keys ring cannot represent, encrypted PEM, RSA-PSS salt
       lengths other than the digest length, ECDSA signing with a hash other than the
       curve's own, publicEncrypt, DiffieHellman and Cipheriv as Transform streams.
       The rest of WebCrypto: RSA generateKey, RSA-OAEP, ECDH/X25519,

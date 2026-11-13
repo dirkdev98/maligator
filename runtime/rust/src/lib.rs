@@ -59,7 +59,7 @@ pub mod crypto_cipher;
 pub mod crypto_pkey;
 
 /// Identifies the flat transport contract shared with `mal_i18n.h`.
-pub const MAL_I18N_ABI_VERSION: u32 = 13;
+pub const MAL_I18N_ABI_VERSION: u32 = 14;
 
 /// Returns the ABI version baked into this archive.
 #[no_mangle]

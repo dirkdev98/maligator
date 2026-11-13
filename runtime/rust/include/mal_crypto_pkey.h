@@ -47,7 +47,7 @@ int32_t mal_pkey_import(const uint8_t *data, size_t len, uint32_t format, uint32
 /* Raw JWK components, eight slots: RSA n,e,d,p,q,dp,dq,qi; EC x,y,d; Ed25519 x,-,d. */
 int32_t mal_pkey_import_jwk(uint32_t kind, const uint8_t *const *parts, const size_t *lens, size_t count,
     bool private_key, MalPkey **out);
-int32_t mal_pkey_generate(uint32_t kind, MalPkey **out);
+int32_t mal_pkey_generate(uint32_t kind, uint32_t modulus_bits, uint32_t public_exponent, MalPkey **out);
 int32_t mal_pkey_public(const MalPkey *key, MalPkey **out);
 void mal_pkey_free(MalPkey *key);
 
