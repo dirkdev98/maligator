@@ -1983,14 +1983,14 @@ bool mal_string_equals_same_length(const MalString *left, const MalString *right
     if (left->length == 0) return true;
     if (left->storage < MAL_STRING_STORAGE_DEPENDENT &&
         right->storage < MAL_STRING_STORAGE_DEPENDENT) {
+        MAL_PERF_COUNT(string_memcmp_calls);
+        MAL_PERF_ADD(string_memcmp_code_units, left->length);
         // Identifiers and keys are short; a library memcmp call costs more than the compare.
         if (left->latin1 && right->latin1 && left->length <= 16) {
             return mal_string_short_latin1_equal(
                 mal_string_flat_latin1_units(left), mal_string_flat_latin1_units(right),
                 left->length);
         }
-        MAL_PERF_COUNT(string_memcmp_calls);
-        MAL_PERF_ADD(string_memcmp_code_units, left->length);
         MalStringSegment a = mal_string_leaf_segment(left, 0, left->length);
         MalStringSegment b = mal_string_leaf_segment(right, 0, right->length);
         return mal_string_segments_equal(&a, &b, 0, left->length);
