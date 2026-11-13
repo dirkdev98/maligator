@@ -60370,6 +60370,82 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]\",\"_processChunk\"]",
+			"owner": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]"
+			],
+			"key": "_processChunk",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]\",\"_closed\"]",
+			"owner": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]"
+			],
+			"key": "_closed",
+			"kind": "accessor",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]].close\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]].close",
 			"ownerPaths": [
@@ -127355,6 +127431,7 @@
 			"owner": "globalThis.File",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.File",
+				"MAL_INTRINSIC_FILE_CONSTRUCTOR",
 				"globalThis.File",
 				"globalThis.File.prototype.constructor",
 				"mal_host_install_node_buffer:File"
@@ -127370,6 +127447,7 @@
 			"owner": "globalThis.File",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.File",
+				"MAL_INTRINSIC_FILE_CONSTRUCTOR",
 				"globalThis.File",
 				"globalThis.File.prototype.constructor",
 				"mal_host_install_node_buffer:File"
@@ -127385,6 +127463,7 @@
 			"owner": "globalThis.File",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.File",
+				"MAL_INTRINSIC_FILE_CONSTRUCTOR",
 				"globalThis.File",
 				"globalThis.File.prototype.constructor",
 				"mal_host_install_node_buffer:File"
@@ -127398,7 +127477,7 @@
 		{
 			"id": "[\"globalThis.File.prototype\",\"constructor\"]",
 			"owner": "globalThis.File.prototype",
-			"ownerPaths": ["globalThis.File.prototype"],
+			"ownerPaths": ["MAL_INTRINSIC_FILE_PROTOTYPE", "globalThis.File.prototype"],
 			"key": "constructor",
 			"kind": "data",
 			"operations": ["globalThis.File"],
@@ -127408,7 +127487,7 @@
 		{
 			"id": "[\"globalThis.File.prototype\",\"name\"]",
 			"owner": "globalThis.File.prototype",
-			"ownerPaths": ["globalThis.File.prototype"],
+			"ownerPaths": ["MAL_INTRINSIC_FILE_PROTOTYPE", "globalThis.File.prototype"],
 			"key": "name",
 			"kind": "accessor",
 			"operations": ["globalThis.File.prototype.lastModified<get>"],
@@ -127418,7 +127497,7 @@
 		{
 			"id": "[\"globalThis.File.prototype\",\"lastModified\"]",
 			"owner": "globalThis.File.prototype",
-			"ownerPaths": ["globalThis.File.prototype"],
+			"ownerPaths": ["MAL_INTRINSIC_FILE_PROTOTYPE", "globalThis.File.prototype"],
 			"key": "lastModified",
 			"kind": "accessor",
 			"operations": ["globalThis.File.prototype.lastModified<get>"],
@@ -127428,7 +127507,7 @@
 		{
 			"id": "[\"globalThis.File.prototype\",\"symbol:%Symbol.toStringTag%\"]",
 			"owner": "globalThis.File.prototype",
-			"ownerPaths": ["globalThis.File.prototype"],
+			"ownerPaths": ["MAL_INTRINSIC_FILE_PROTOTYPE", "globalThis.File.prototype"],
 			"key": "symbol:%Symbol.toStringTag%",
 			"kind": "data",
 			"operations": [],
@@ -171434,6 +171513,62 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk"
+			],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -275752,6 +275887,7 @@
 			"owner": "globalThis.File",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.File",
+				"MAL_INTRINSIC_FILE_CONSTRUCTOR",
 				"globalThis.File",
 				"globalThis.File.prototype.constructor",
 				"mal_host_install_node_buffer:File"
@@ -275767,6 +275903,7 @@
 			"owner": "globalThis.File",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.File",
+				"MAL_INTRINSIC_FILE_CONSTRUCTOR",
 				"globalThis.File",
 				"globalThis.File.prototype.constructor",
 				"mal_host_install_node_buffer:File"
@@ -289697,6 +289834,26 @@
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
 			"key": "MAL_INTRINSIC_FETCH_HANDLER",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_FILE_CONSTRUCTOR\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_FILE_CONSTRUCTOR",
+			"kind": "binding",
+			"operations": ["globalThis.File"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_FILE_PROTOTYPE\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_FILE_PROTOTYPE",
 			"kind": "binding",
 			"operations": [],
 			"task": "N-06",
@@ -306362,6 +306519,18 @@
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createInflate",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createInflateRaw",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createUnzip"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._closed<get>"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress.prototype.[[Prototype]]._processChunk"
 			]
 		},
 		{
