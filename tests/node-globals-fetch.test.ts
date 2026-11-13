@@ -12,6 +12,12 @@ beforeAll(async () => {
 		if (request.url === "/redirect") {
 			response.writeHead(302, { location: "/stream" });
 			response.end();
+		} else if (request.url === "/cookies") {
+			response.setHeader("Set-Cookie", [
+				"session=alpha; Expires=Wed, 21 Oct 2037 07:28:00 GMT; HttpOnly",
+				"theme=blue; Path=/",
+			]);
+			response.end("cookies");
 		} else if (request.url === "/empty") {
 			response.writeHead(204);
 			response.end();
@@ -107,4 +113,18 @@ test.each([
 	const response = await fetch(url);
 	expect(response.headers.get("content-type")).toBe(contentType);
 	expect(await response.text()).toBe(body);
+});
+
+test("preserves separate response cookies and native Headers behavior", async () => {
+	const response = await fetch(`${base}/cookies`);
+	expect(response.headers).toBeInstanceOf(Headers);
+	expect(response.headers.getSetCookie()).toEqual([
+		"session=alpha; Expires=Wed, 21 Oct 2037 07:28:00 GMT; HttpOnly",
+		"theme=blue; Path=/",
+	]);
+	const copied = new Headers(response.headers);
+	copied.delete("set-cookie");
+	expect(response.headers.getSetCookie()).toHaveLength(2);
+	expect(copied.getSetCookie()).toEqual([]);
+	expect(await response.text()).toBe("cookies");
 });

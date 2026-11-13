@@ -5,125 +5,13 @@
 import { request as nodeRequest } from "node:http";
 import { request as nodeSecureRequest } from "node:https";
 
-class MaligatorHeaders {
-	constructor(init = undefined) {
-		/** @type {Map<string, string>} */
-		this._entries = new Map();
-		if (init === undefined || init === null) return;
-		if (init instanceof MaligatorHeaders) {
-			for (const [name, value] of init) this.append(name, value);
-			return;
-		}
-		if (Array.isArray(init)) {
-			for (const pair of init) {
-				if (!Array.isArray(pair) || pair.length !== 2) {
-					throw new TypeError("Headers entry must contain exactly two items");
-				}
-				this.append(pair[0], pair[1]);
-			}
-			return;
-		}
-		if (typeof init[Symbol.iterator] === "function") {
-			for (const pair of init) {
-				if (!Array.isArray(pair) || pair.length !== 2) {
-					throw new TypeError("Headers entry must contain exactly two items");
-				}
-				this.append(pair[0], pair[1]);
-			}
-			return;
-		}
-		for (const name of Object.keys(init)) this.append(name, init[name]);
-	}
-
-	_name(value) {
-		const name = String(value).toLowerCase();
-		const punctuation = "!#$%&'*+-.^_`|~";
-		if (name.length === 0) throw new TypeError("Invalid header name");
-		for (const char of name) {
-			const code = char.charCodeAt(0);
-			if (
-				!(code >= 48 && code <= 57) &&
-				!(code >= 97 && code <= 122) &&
-				!punctuation.includes(char)
-			) {
-				throw new TypeError("Invalid header name");
-			}
-		}
-		return name;
-	}
-
-	_value(value) {
-		const normalized = String(value).trim();
-		if (
-			normalized.includes("\r") ||
-			normalized.includes("\n") ||
-			normalized.includes("\0")
-		) {
-			throw new TypeError("Invalid header value");
-		}
-		return normalized;
-	}
-
-	append(name, value) {
-		const normalizedName = this._name(name);
-		const normalizedValue = this._value(value);
-		const current = this._entries.get(normalizedName);
-		this._entries.set(
-			normalizedName,
-			current === undefined ? normalizedValue : `${current}, ${normalizedValue}`,
-		);
-	}
-
-	delete(name) {
-		this._entries.delete(this._name(name));
-	}
-
-	get(name) {
-		return this._entries.get(this._name(name)) ?? null;
-	}
-
-	has(name) {
-		return this._entries.has(this._name(name));
-	}
-
-	set(name, value) {
-		this._entries.set(this._name(name), this._value(value));
-	}
-
-	*entries() {
-		yield* [...this._entries.entries()].sort(([left], [right]) =>
-			left < right ? -1 : left > right ? 1 : 0,
-		);
-	}
-
-	/**
-	 * @param {(value: string, name: string, headers: MaligatorHeaders) => void} callback
-	 * @param {unknown} thisArg
-	 */
-	forEach(callback, thisArg = undefined) {
-		for (const [name, value] of this) callback.call(thisArg, value, name, this);
-	}
-
-	*keys() {
-		for (const [name] of this.entries()) yield name;
-	}
-
-	*values() {
-		for (const [, value] of this.entries()) yield value;
-	}
-
-	[Symbol.iterator]() {
-		return this.entries();
-	}
-}
-
-if (typeof globalThis.Headers !== "function") globalThis.Headers = MaligatorHeaders;
+const FetchHeaders = globalThis.Headers;
 
 class MaligatorResponse {
 	constructor(body, init = {}) {
 		this.status = init.status ?? 200;
 		this.statusText = init.statusText ?? "";
-		this.headers = new MaligatorHeaders(init.headers);
+		this.headers = new FetchHeaders(init.headers);
 		this.url = init.url ?? "";
 		this.redirected = init.redirected ?? false;
 		this.type = "basic";
@@ -200,7 +88,7 @@ async function maligatorFetch(input, init = {}) {
 	const url = new URL(typeof input === "object" && input.url ? input.url : String(input));
 	if (url.username || url.password)
 		return Promise.reject(new TypeError("Fetch URL contains credentials"));
-	const headers = new MaligatorHeaders(init.headers ?? inherited?.headers);
+	const headers = new FetchHeaders(init.headers ?? inherited?.headers);
 	const method = String(init.method ?? inherited?.method ?? "GET").toUpperCase();
 	let body = init.body ?? inherited?.body;
 	if ((method === "GET" || method === "HEAD") && body !== undefined && body !== null) {
@@ -372,7 +260,7 @@ function fetchRequest(
 						const next = new URL(location, url);
 						if (next.username || next.password)
 							throw new TypeError("Redirect URL contains credentials");
-						const nextHeaders = new MaligatorHeaders(headers);
+						const nextHeaders = new FetchHeaders(headers);
 						if (next.origin !== url.origin) {
 							for (const name of ["authorization", "proxy-authorization", "cookie"])
 								nextHeaders.delete(name);
@@ -450,11 +338,17 @@ function fetchRequest(
 					if (!finished) fail(new TypeError("Response body closed prematurely"));
 				});
 				if (empty) response.resume();
+				const responseHeaders = new FetchHeaders();
+				for (let index = 0; index < response.rawHeaders.length; index += 2)
+					responseHeaders.append(
+						response.rawHeaders[index],
+						response.rawHeaders[index + 1],
+					);
 				resolve(
 					new MaligatorResponse(stream, {
 						status,
 						statusText: response.statusMessage ?? "",
-						headers: response.headers,
+						headers: responseHeaders,
 						url: url.href,
 						redirected: redirects > 0,
 					}),
@@ -501,4 +395,4 @@ function fetchRequest(
 if (typeof globalThis.Response !== "function") globalThis.Response = MaligatorResponse;
 if (typeof globalThis.fetch !== "function") globalThis.fetch = maligatorFetch;
 
-export { MaligatorHeaders, MaligatorResponse, maligatorFetch };
+export { MaligatorResponse, maligatorFetch };

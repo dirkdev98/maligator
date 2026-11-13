@@ -27,6 +27,7 @@ describe.each(["compiled", "interpreted"] as const)(
 	"Node fetch uploads in %s code",
 	(backend) => {
 		it.each([
+			["response-headers", "preserves native header lists and separate cookies"],
 			["body-init", "encodes body bytes and inferred media types"],
 			["stream-upload", "streams chunks before EOF and honors backpressure"],
 			["upload-failure", "settles failed uploads and cancels aborted sources"],

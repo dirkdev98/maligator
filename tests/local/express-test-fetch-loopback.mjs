@@ -1,5 +1,5 @@
 import express from "express";
-import { MaligatorHeaders } from "../../src/node-globals.mjs";
+import "../../src/node-globals.mjs";
 
 const app = express();
 app.use(express.json());
@@ -14,15 +14,12 @@ const server = app.listen(0, "127.0.0.1", async () => {
 	}
 
 	try {
-		const copiedHeaders = new MaligatorHeaders(
+		const copiedHeaders = new Headers(
 			new Headers({ "content-type": "application/json" }),
 		);
-		if (copiedHeaders.get("content-type") !== "application/json") {
-			throw new Error("Native Headers values were not copied into the test fetch shim");
-		}
 		const response = await fetch(`http://127.0.0.1:${address.port}/echo`, {
 			body: JSON.stringify({ value: "first" }),
-			headers: new Headers({ "content-type": "application/json" }),
+			headers: copiedHeaders,
 			method: "POST",
 		});
 		if (response.status !== 200) throw new Error(`Unexpected status ${response.status}`);

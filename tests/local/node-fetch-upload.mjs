@@ -12,6 +12,14 @@ const server = createServer((request, response) => {
 		if (request.url === "/incremental") firstChunk?.();
 	});
 	request.on("end", () => {
+		if (request.url === "/cookies") {
+			response.setHeader("Set-Cookie", [
+				"session=alpha; Expires=Wed, 21 Oct 2037 07:28:00 GMT; HttpOnly",
+				"theme=blue; Path=/",
+			]);
+			response.end("cookies");
+			return;
+		}
 		if (request.url === "/redirect307" || request.url === "/redirect303") {
 			response.writeHead(request.url === "/redirect307" ? 307 : 303, {
 				location: "/echo",
@@ -37,6 +45,20 @@ const post = async (body, options = {}, route = "/echo") =>
 	(await fetch(base + route, { method: "POST", body, ...options })).json();
 
 const cases = {
+	async "response-headers"() {
+		const response = await fetch(base + "/cookies");
+		assert.ok(response.headers instanceof Headers);
+		const cookies = [
+			"session=alpha; Expires=Wed, 21 Oct 2037 07:28:00 GMT; HttpOnly",
+			"theme=blue; Path=/",
+		];
+		assert.deepEqual(response.headers.getSetCookie(), cookies);
+		const copied = new Headers(response.headers);
+		copied.delete("set-cookie");
+		assert.deepEqual(response.headers.getSetCookie(), cookies);
+		assert.deepEqual(copied.getSetCookie(), []);
+		assert.equal(await response.text(), "cookies");
+	},
 	async "body-init"() {
 		const parameters = await post(new URLSearchParams({ greeting: "hello world" }));
 		assert.equal(parameters.body, "greeting=hello+world");
