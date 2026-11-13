@@ -3727,8 +3727,8 @@ describe("native update-expression representation", () => {
 			definition,
 		);
 		const output = emitProgramImage(definition, { compiled: true });
-		expect(output).toContain("mal_vm_array_values_deferred_begin(");
-		expect(output).toContain("mal_vm_array_values_deferred_try_step(");
+		expect(output).toContain("mal_vm_deferred_values_begin(");
+		expect(output).toContain("mal_vm_deferred_values_try_step(");
 		expect(output).toContain("MalIteratorObject *__iter_cursor_");
 		expect(output).toContain("mal_vm_iterator_protocol_cursor(");
 		expect(output).toContain("mal_vm_iterator_try_dense_array_cursor_step(");

@@ -1193,8 +1193,8 @@ static bool mal_promise_all_try_dense(
         if (!mal_promise_is_canonical_intrinsic(
                 vm, source->elements[index], constructor)) return false;
     }
-    MalArrayValuesDeferredCursor cursor;
-    if (!mal_vm_array_values_deferred_begin(vm, args[0], &cursor)) return false;
+    MalDeferredValuesCursor cursor;
+    if (!mal_vm_deferred_array_values_begin(vm, args[0], &cursor)) return false;
 
     // Preflight and registration invoke no language code. The source's own
     // elements therefore stay fixed until every continuation has been attached.

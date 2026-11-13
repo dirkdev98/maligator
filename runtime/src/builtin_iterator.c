@@ -540,8 +540,8 @@ MalIteratorObject *mal_vm_iterator_protocol_cursor(
     return nullptr;
 }
 
-bool mal_vm_array_values_deferred_begin(
-    MalVm *vm, MalValue source, MalArrayValuesDeferredCursor *cursor
+bool mal_vm_deferred_array_values_begin(
+    MalVm *vm, MalValue source, MalDeferredValuesCursor *cursor
 ) {
     cursor->active = false;
     if (!mal_value_is_array_object(source)) return false;
@@ -558,13 +558,64 @@ bool mal_vm_array_values_deferred_begin(
     }
     cursor->index = 0;
     cursor->done = false;
+    cursor->string = false;
     cursor->active = true;
     MAL_PERF_COUNT(iterator_deferred_array_begins);
     mal_perf_collection_iteration_start(mal_value_to_array_object(source));
     return true;
 }
 
-bool mal_vm_array_values_deferred_get(
+bool mal_vm_deferred_values_begin(
+    MalVm *vm, MalValue source, MalDeferredValuesCursor *cursor
+) {
+    if (!mal_value_is_string(source)) return mal_vm_deferred_array_values_begin(vm, source, cursor);
+    cursor->active = false;
+    // A rope keeps the ordinary iterator, whose leaf cursor avoids rescanning its spine.
+    if (!mal_vm_primitive_methods_intact(vm) ||
+        mal_value_to_string(source)->storage == MAL_STRING_STORAGE_CONS) {
+        return false;
+    }
+    cursor->index = 0;
+    cursor->done = false;
+    cursor->string = true;
+    cursor->active = true;
+    MAL_PERF_COUNT(iterator_deferred_string_begins);
+    return true;
+}
+
+bool mal_vm_deferred_string_values_step(
+    MalVm *vm, MalValue string_value, MalDeferredValuesCursor *cursor,
+    MalValue *value_out, bool *done_out
+) {
+    const MalString *string = mal_value_to_string(string_value);
+    usize length = mal_string_length(string);
+    if (cursor->done || cursor->index >= length) {
+        cursor->done = true;
+        *value_out = mal_value_new_undefined();
+        *done_out = true;
+        return true;
+    }
+    usize index = (usize) cursor->index;
+    usize offset = 0;
+    if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
+        offset = string->slice_offset;
+        string = string->parent;
+    }
+    c16 units[2] = {mal_string_flat_code_unit_at(string, offset + index), 0};
+    usize count = 1;
+    if (mal_utf16_is_lead_surrogate(units[0]) && index + 1 < length) {
+        units[1] = mal_string_flat_code_unit_at(string, offset + index + 1);
+        if (mal_utf16_is_trail_surrogate(units[1])) count = 2;
+    }
+    *value_out = mal_value_from_string(
+        count == 1 ? mal_intrinsic_code_unit(vm, units[0])
+                   : mal_string_new_copy(&vm->heap, units, count));
+    cursor->index = index + count;
+    *done_out = false;
+    return true;
+}
+
+bool mal_vm_deferred_array_values_get(
     MalVm *vm, MalValue array, u64 index, MalValue *value_out
 ) {
     if (!mal_vm_get_property(vm, array, mal_key_index(index), value_out)) {
@@ -574,15 +625,19 @@ bool mal_vm_array_values_deferred_get(
     return true;
 }
 
-bool mal_vm_array_values_deferred_close(
+bool mal_vm_deferred_values_close(
     MalVm *vm,
-    MalValue array,
-    const MalArrayValuesDeferredCursor *cursor,
+    MalValue source,
+    const MalDeferredValuesCursor *cursor,
     bool normal
 ) {
-    if (mal_vm_primitive_methods_intact(vm) || mal_value_to_object(array)->for_in_keys) return true;
+    if (mal_vm_primitive_methods_intact(vm) ||
+        (!cursor->string && mal_value_to_object(source)->for_in_keys)) {
+        return true;
+    }
     MAL_PERF_COUNT(iterator_deferred_array_materializations);
-    MalValue roots[1] = {mal_vm_new_builtin_iterator(vm, MAL_ITERATOR_ARRAY_VALUES, array)};
+    MalValue roots[1] = {mal_vm_new_builtin_iterator(
+        vm, cursor->string ? MAL_ITERATOR_STRING_VALUES : MAL_ITERATOR_ARRAY_VALUES, source)};
     MalRootSpan roots_span;
     mal_gc_root(&roots_span, roots, 1);
     MalIteratorObject *iterator = mal_value_to_iterator_object(roots[0]);
@@ -773,17 +828,17 @@ bool mal_vm_iterator_step_entry_pair_protocol_cursor(
             first_out, second_out, done_out);
 }
 
-bool mal_vm_array_values_deferred_entry_pair_step(
+bool mal_vm_deferred_values_entry_pair_step(
     MalVm *vm,
-    MalValue array,
-    MalArrayValuesDeferredCursor *cursor,
+    MalValue source,
+    MalDeferredValuesCursor *cursor,
     MalValue *first_out,
     MalValue *second_out,
     bool *done_out
 ) {
-    return !cursor->done &&
+    return !cursor->done && !cursor->string &&
         mal_vm_array_take_element_pair(
-            vm, mal_value_to_array_object(array), &cursor->index,
+            vm, mal_value_to_array_object(source), &cursor->index,
             first_out, second_out, done_out);
 }
 

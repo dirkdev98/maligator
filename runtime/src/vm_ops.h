@@ -3745,15 +3745,38 @@ static inline bool mal_vm_iterator_step_map_cursor(
 }
 
 /**
- * Non-calling %ArrayIteratorPrototype%.next over a deferred cursor; length is
- * read afresh each step. Misses leave the cursor unchanged for the full step.
+ * Non-calling %ArrayIteratorPrototype%.next or %StringIteratorPrototype%.next over a
+ * deferred cursor; an Array's length is read afresh each step. Misses, such as an
+ * Array hole or a String unit without a cached character, leave the cursor unchanged
+ * for the full step.
  */
-static inline bool mal_vm_array_values_deferred_try_step(
-    MalValue array_value, MalArrayValuesDeferredCursor *cursor,
+static inline bool mal_vm_deferred_values_try_step(
+    MalVm *vm, MalValue source, MalDeferredValuesCursor *cursor,
     MalValue *value_out, bool *done_out
 ) {
-    MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(array_value);
     u64 index = cursor->index;
+    if (cursor->string) {
+        const MalString *string = mal_value_to_string(source);
+        if (cursor->done || index >= string->length) {
+            cursor->done = true;
+            *value_out = mal_value_new_undefined();
+            *done_out = true;
+            return true;
+        }
+        usize offset = (usize) index;
+        if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
+            offset += string->slice_offset;
+            string = string->parent;
+        }
+        c16 unit = mal_string_flat_code_unit_at(string, offset);
+        MalString *character = unit <= UINT8_MAX ? vm->code_unit_strings[unit] : nullptr;
+        if (character == nullptr) return false;
+        cursor->index = index + 1;
+        *value_out = mal_value_from_string(character);
+        *done_out = false;
+        return true;
+    }
+    MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(source);
     if (cursor->done || index >= array->length) {
         cursor->done = true;
         *value_out = mal_value_new_undefined();
@@ -3767,16 +3790,19 @@ static inline bool mal_vm_array_values_deferred_try_step(
     return true;
 }
 
-static inline bool mal_vm_array_values_deferred_step(
-    MalVm *vm, MalValue array_value, MalArrayValuesDeferredCursor *cursor,
+static inline bool mal_vm_deferred_values_step(
+    MalVm *vm, MalValue source, MalDeferredValuesCursor *cursor,
     MalValue *value_out, bool *done_out
 ) {
-    if (mal_vm_array_values_deferred_try_step(array_value, cursor, value_out, done_out)) {
+    if (mal_vm_deferred_values_try_step(vm, source, cursor, value_out, done_out)) {
         return true;
+    }
+    if (cursor->string) {
+        return mal_vm_deferred_string_values_step(vm, source, cursor, value_out, done_out);
     }
     u64 index = cursor->index++;
     *done_out = false;
-    return mal_vm_array_values_deferred_get(vm, array_value, index, value_out);
+    return mal_vm_deferred_array_values_get(vm, source, index, value_out);
 }
 
 /** Inline iterator step for native code, with the complete protocol as fallback. */

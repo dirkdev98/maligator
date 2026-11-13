@@ -56,7 +56,10 @@ describe("Array-only receiver admission", () => {
 			expect(out.c.source).not.toContain("__paired_array_");
 			expect(out.c.source).not.toContain("mal_vm_array_try_get_present_proven_index(");
 			expect(out.c.source).not.toContain("mal_builtin_array_pair_destructure_try(");
-			expect(out.c.source).not.toContain("mal_vm_array_values_deferred_begin(");
+			// A String receiver defers its iterator; only the Array-specific paths are pruned.
+			expect(out.c.source.includes("mal_vm_deferred_values_begin(")).toBe(
+				kind === "destructure",
+			);
 			for (const [ip, op] of out.native.body.instructions.entries()) {
 				if (
 					(op.opcode === "LOAD_PROPERTY_STATIC" || op.opcode === "LOAD_PROPERTY") &&

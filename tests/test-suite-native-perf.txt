@@ -19,6 +19,7 @@ tests/native/compiled-call-cache-family.test.ts
 tests/native/constant-key-property-cache.test.ts
 tests/native/for-of-body-environment.test.ts
 tests/native/in-operator-cache.test.ts
+tests/native/string-for-of-deferred.test.ts
 tests/native/coroutine-pool.test.ts
 tests/native/dictionary-direct.test.ts
 tests/native/direct-known-call.test.ts

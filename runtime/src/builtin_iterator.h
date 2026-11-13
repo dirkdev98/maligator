@@ -35,48 +35,65 @@ MalIteratorObject *mal_vm_iterator_protocol_cursor(
     const MalIteratorRecord *record, MalIteratorCursorProtocol protocol);
 
 /**
- * A for-of over an exact Array whose %ArrayIterator% has not been allocated. The
- * compiled iterator register holds the array, which keeps it reachable.
+ * A for-of over an exact Array or a primitive String whose %ArrayIterator% or
+ * %StringIterator% has not been allocated. The compiled iterator register holds the
+ * source, which keeps it reachable.
  */
-typedef struct MalArrayValuesDeferredCursor {
+typedef struct MalDeferredValuesCursor {
+    /** The next element index, or the next UTF-16 unit index of a String source. */
     u64 index;
     bool active;
     bool done;
-} MalArrayValuesDeferredCursor;
+    bool string;
+} MalDeferredValuesCursor;
 
 /**
  * Activates `cursor` when GetIterator(source) would produce an %ArrayIterator%
  * with the intrinsic next whose identity nothing can observe before a close.
  */
-bool mal_vm_array_values_deferred_begin(
-    MalVm *vm, MalValue source, MalArrayValuesDeferredCursor *cursor);
+bool mal_vm_deferred_array_values_begin(
+    MalVm *vm, MalValue source, MalDeferredValuesCursor *cursor);
+
+/**
+ * mal_vm_deferred_array_values_begin, extended to a primitive String that is not a
+ * rope while the primitive-method protector holds: String.prototype[@@iterator] and
+ * %StringIteratorPrototype%.next are then the intrinsics, and no inherited `return`
+ * exists, so nothing can observe the %StringIterator% before a close.
+ */
+bool mal_vm_deferred_values_begin(
+    MalVm *vm, MalValue source, MalDeferredValuesCursor *cursor);
 
 /**
  * The `[first, second]` destructuring of a deferred step whose element is a dense
  * Array pair. False leaves the cursor for the caller's ordinary deferred step.
  */
-bool mal_vm_array_values_deferred_entry_pair_step(
+bool mal_vm_deferred_values_entry_pair_step(
     MalVm *vm,
-    MalValue array,
-    MalArrayValuesDeferredCursor *cursor,
+    MalValue source,
+    MalDeferredValuesCursor *cursor,
     MalValue *first_out,
     MalValue *second_out,
     bool *done_out);
 
 /** The Get %ArrayIteratorPrototype%.next performs for an index without dense storage. */
-bool mal_vm_array_values_deferred_get(
+bool mal_vm_deferred_array_values_get(
     MalVm *vm, MalValue array, u64 index, MalValue *value_out);
+
+/** %StringIteratorPrototype%.next's step for any code point, including surrogate pairs. */
+bool mal_vm_deferred_string_values_step(
+    MalVm *vm, MalValue string, MalDeferredValuesCursor *cursor,
+    MalValue *value_out, bool *done_out);
 
 /**
  * IteratorClose for a deferred cursor, with the contract of
  * mal_vm_iterator_close_normal when `normal` and of mal_vm_iterator_close
- * otherwise. The %ArrayIterator% is materialized only when an inherited
- * `return` could observe it.
+ * otherwise. The iterator is materialized only when an inherited `return` could
+ * observe it.
  */
-bool mal_vm_array_values_deferred_close(
+bool mal_vm_deferred_values_close(
     MalVm *vm,
-    MalValue array,
-    const MalArrayValuesDeferredCursor *cursor,
+    MalValue source,
+    const MalDeferredValuesCursor *cursor,
     bool normal);
 
 bool mal_vm_iterator_step_protocol_cursor(

@@ -7582,7 +7582,7 @@ function emitBody(
 			initialize?.opcode !== "GET_ITERATOR" ||
 			((instructionInputKind(nativeFacts?.[cursor.initializeIp], initialize.source) ??
 				COMPILER_VALUE_KIND_TOP) &
-				COMPILER_VALUE_KIND_OBJECT) ===
+				(COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_STRING)) ===
 				0 ||
 			cursor.kind !== "array-values-iterator-cursor" ||
 			cursor.stateSynchronization !== "materialize-before-observation" ||
@@ -7913,7 +7913,7 @@ function emitBody(
 		}
 		if (deferredIteratorCursors.has(action.cursor.initializeIp)) {
 			lines.push(
-				`MalArrayValuesDeferredCursor __iter_deferred_${action.cursor.initializeIp} = { .active = false };`,
+				`MalDeferredValuesCursor __iter_deferred_${action.cursor.initializeIp} = { .active = false };`,
 			);
 		}
 	}
@@ -14895,14 +14895,14 @@ class NativeInstructionEmission {
 				`__iter_entry_pair_${this.ip}_fast = ${regionAdmissionGuard(region.license)} && ${
 					deferred === undefined
 						? pairStep
-						: `(${deferred}.active ? mal_vm_array_values_deferred_entry_pair_step(vm, ${this.boxed(instruction.iterator)}, &${deferred}, &__iter_entry_pair_${this.ip}_first, &__iter_entry_pair_${this.ip}_second, &${done}) : ${pairStep})`
+						: `(${deferred}.active ? mal_vm_deferred_values_entry_pair_step(vm, ${this.boxed(instruction.iterator)}, &${deferred}, &__iter_entry_pair_${this.ip}_first, &__iter_entry_pair_${this.ip}_second, &${done}) : ${pairStep})`
 				};`,
 				`if (!__iter_entry_pair_${this.ip}_fast && MAL_THREW()) ${this.onThrow()}`,
 				`if (__iter_entry_pair_${this.ip}_fast) { MAL_PERF_COUNT(iterator_entry_pair_hits); } else { MAL_PERF_COUNT(iterator_entry_pair_fallbacks); }`,
 				`if (!__iter_entry_pair_${this.ip}_fast && !${
 					deferred === undefined
 						? ordinaryStep
-						: `(${deferred}.active ? mal_vm_array_values_deferred_step(vm, ${this.boxed(instruction.iterator)}, &${deferred}, &${val}, &${done}) : ${ordinaryStep})`
+						: `(${deferred}.active ? mal_vm_deferred_values_step(vm, ${this.boxed(instruction.iterator)}, &${deferred}, &${val}, &${done}) : ${ordinaryStep})`
 				}) ${this.onThrow()}`,
 				`r${instruction.valueDst} = __iter_entry_pair_${this.ip}_fast ? MAL_VALUE_UNDEFINED : ${val};`,
 				this.reps[instruction.doneDst] === "boolean"
@@ -14964,7 +14964,7 @@ class NativeInstructionEmission {
 			deferred === undefined
 				? otherwise
 				: `(${deferred}.active ? ${call} : ${otherwise})`;
-		const deferredStep = `mal_vm_array_values_deferred_step(vm, ${this.boxed(instruction.iterator)}, &${deferred}, &${val}, &${done})`;
+		const deferredStep = `mal_vm_deferred_values_step(vm, ${this.boxed(instruction.iterator)}, &${deferred}, &${val}, &${done})`;
 		const step = deferredOr(
 			deferredStep,
 			cursorStep !== undefined
@@ -15005,7 +15005,7 @@ class NativeInstructionEmission {
 				? denseArrayProbe
 				: `(__iter_cursor_${cursorInitializeIp} != nullptr ? ${cursorProbe} : ${denseArrayProbe})`;
 		const iteratorProbe = deferredOr(
-			`mal_vm_array_values_deferred_try_step(${this.boxed(instruction.iterator)}, &${deferred}, &${val}, &${done})`,
+			`mal_vm_deferred_values_try_step(vm, ${this.boxed(instruction.iterator)}, &${deferred}, &${val}, &${done})`,
 			this.context.nativeIteratorCursorAction?.cursor.protocol === "string"
 				? `(__iter_cursor_${cursorInitializeIp} != nullptr && mal_vm_iterator_try_string_cursor_step(vm, __iter_cursor_${cursorInitializeIp}, &${val}, &${done}))`
 				: this.context.nativeIteratorCursorAction?.cursor.protocol === "array-values" &&
@@ -17040,7 +17040,7 @@ class NativeInstructionEmission {
 		) {
 			const id = this.context.nativeIteratorCursorAction.cursor.initializeIp;
 			return [
-				`if (mal_vm_array_values_deferred_begin(vm, ${this.boxed(instruction.source)}, &__iter_deferred_${id})) {`,
+				`if (mal_vm_deferred_values_begin(vm, ${this.boxed(instruction.source)}, &__iter_deferred_${id})) {`,
 				`  r${instruction.iteratorDst} = ${this.boxed(instruction.source)};`,
 				`  r${instruction.nextDst} = MAL_VALUE_UNDEFINED;`,
 				`  __iter_cursor_${id} = nullptr;`,
@@ -17103,7 +17103,7 @@ class NativeInstructionEmission {
 			this.context.nativeIteratorCursorAction?.role === "close"
 		) {
 			const deferred = `__iter_deferred_${this.context.nativeIteratorCursorAction.cursor.initializeIp}`;
-			const close = `mal_vm_array_values_deferred_close(vm, ${this.boxed(instruction.iterator)}, &${deferred}, ${instruction.normal})`;
+			const close = `mal_vm_deferred_values_close(vm, ${this.boxed(instruction.iterator)}, &${deferred}, ${instruction.normal})`;
 			const record = `MalIteratorRecord ${rec} = { .iterator = ${this.boxed(instruction.iterator)}, .next_method = MAL_VALUE_UNDEFINED };`;
 			return instruction.normal
 				? [
