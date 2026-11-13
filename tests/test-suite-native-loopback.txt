@@ -9,6 +9,7 @@ tests/native/node-fetch-upload.test.ts
 tests/native/node-http-client-lifecycle.test.ts
 tests/native/node-http-client-url.test.ts
 tests/native/node-http-client.test.ts
+tests/native/node-http-credit-boundary.test.ts
 tests/native/node-http-half-close.test.ts
 tests/native/node-http-hostname.test.ts
 tests/native/node-http-inactivity-timeout.test.ts

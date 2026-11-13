@@ -960,7 +960,8 @@ static void conn_process_stream(MalHttpConn *c) {
         }
         bool body_blocked = c->request_stream_open && c->request_has_body
             && !c->request_discard && c->request_read_credit == 0;
-        if (body_blocked) return;
+        // Completion carries no body bytes and cannot require another read credit.
+        if (body_blocked && !c->codec.complete_pending) return;
 
         usize supplied = c->rlen;
         if (supplied > MAL_HTTP_CODEC_BODY_MAX) supplied = MAL_HTTP_CODEC_BODY_MAX;
