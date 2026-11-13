@@ -101,7 +101,19 @@ function compile(
 			)
 		);
 	};
-	return { core, named, guessed };
+	// The functions a call guesses show as the indices its callee checks compare against.
+	const checked = (functionName: string) => {
+		const fn = core.program.function(named(functionName));
+		return new Set(
+			[...fn.instructionIds()].flatMap((instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "guardFunctionIndex"
+					? [fn.instructionAttributes(instruction).functionIndex]
+					: [],
+			),
+		);
+	};
+	return { core, named, guessed, checked };
 }
 
 describe("instance method hints", () => {
@@ -167,6 +179,43 @@ ${close}
 console.log(run(64));`,
 		);
 		expect(guessed("run")).toBe(true);
+	});
+
+	it("guesses a function declaration an object literal holds by name", () => {
+		const { guessed } = compile(
+			"named",
+			`
+function add(a, b) { return a + b; }
+function scale(a, b) { return a * b; }
+const api = { add, mul: scale };
+function run(n) {
+	let acc = 0;
+	for (let i = 0; i < n; i++) acc = api.add(acc, api.mul(i & 15, 3)) | 0;
+	return acc;
+}
+console.log(run(64));`,
+		);
+		expect(guessed("run")).toBe(true);
+	});
+
+	it("checks every class method and literal function a dispatching name shares", () => {
+		const { named, checked } = compile(
+			"shared-name",
+			`
+class Counter {
+	constructor() { this.step = 1; }
+	next(value) { return value + this.step; }
+}
+function twice(value) { return value * 2; }
+const doubler = { next: twice };
+function run(n, source) {
+	let acc = 0;
+	for (let i = 0; i < n; i++) acc = source.next(acc) | 0;
+	return acc;
+}
+console.log(run(64, new Counter()), run(8, doubler));`,
+		);
+		expect(checked("run")).toEqual(new Set([named("next"), named("twice")]));
 	});
 
 	it.each([

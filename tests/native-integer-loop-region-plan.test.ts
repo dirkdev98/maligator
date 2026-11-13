@@ -349,6 +349,95 @@ describe("native safe-integer loop regions", () => {
 			).toThrow(/invalid or stale storage plan/);
 	});
 
+	it("enters a dispatching loop through every candidate's callee check, which serialization keeps", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+					class Account {
+						constructor() { this.offset = 11; }
+						calculate(prefix, value) { return prefix + value + this.offset; }
+					}
+					class Ledger {
+						constructor() { this.offset = 5; }
+						calculate(prefix, value) { return prefix - value + this.offset; }
+					}
+					globalThis.step = function step(limit, account) {
+						let total = 0;
+						for (let i = 0; i < limit; i++) total += account.calculate(7, i & 15);
+						return total;
+					};
+					step(10, new Account());
+					step(10, new Ledger());
+				`,
+				"/dispatch-loop-plan.js",
+			),
+			{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+		);
+		const index = image.native.functions.findIndex((fn) =>
+			fn.storage?.numericLoopRegions.some((plan) => plan.calleeGuards !== undefined),
+		);
+		const native = image.native.functions[index]!;
+		const plan = native.storage!.numericLoopRegions.find(
+			(candidate) => candidate.calleeGuards !== undefined,
+		)!;
+		const checks = plan.calleeGuards!.map((ip) => native.body.instructions[ip]!);
+		expect(checks.map((op) => op.opcode)).toEqual([
+			"GUARD_FUNCTION_INDEX",
+			"GUARD_FUNCTION_INDEX",
+		]);
+		// The fallback call the last failed check reaches stays outside the region.
+		const claimed = new Set(plan.claimedIps);
+		expect(
+			native.body.instructions.some(
+				(op, ip) =>
+					op.opcode === "CALL" &&
+					checks.some((check) => "callee" in check && check.callee === op.callee) &&
+					claimed.has(ip),
+			),
+		).toBe(false);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(restored.native.functions[index]!.storage!.numericLoopRegions).toEqual(
+			native.storage!.numericLoopRegions,
+		);
+	});
+
+	it("reads an element's class layout field inside an iteration region", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+					class Item {
+						constructor(i) {
+							this.price = i & 63;
+							for (let k = 0; k < (i & 1); k++) this.price += 0;
+						}
+					}
+					const items = [];
+					for (let i = 0; i < 100; i++) items.push(new Item(i));
+					globalThis.total = function total(list) {
+						let sum = 0;
+						for (const item of list) sum += item.price;
+						return sum;
+					};
+					total(items);
+				`,
+				"/class-field-loop-plan.js",
+			),
+			{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+		);
+		const layoutReads = image.native.functions.flatMap((native) =>
+			native.instructions.flatMap((plan, ip) =>
+				plan?.kind === "class-layout" &&
+				plan.site.kind === "slot" &&
+				native.storage?.numericLoopRegions.some(
+					(region) => region.kind === "array-iteration" && region.claimedIps.includes(ip),
+				)
+					? [ip]
+					: [],
+			),
+		);
+		expect(layoutReads).toHaveLength(1);
+	});
+
 	it("keeps the global slots it holds in locals valid when merged behind another program", () => {
 		const script = (source: string, file: string) =>
 			compileSemanticProgramToProgramImage(

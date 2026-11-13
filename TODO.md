@@ -332,6 +332,15 @@ contracts or investigates costs still visible after the string follow-ups.
       array-iterator protocol and a snapshot check per key) and `Object.entries` 2x (one
       pair array per entry).
 
+- [ ] Inline calls of a bound function held in a binding. `const bound = f.bind(o, 5)`
+      called as `bound(v)` in a loop costs about 9 ns against Node's 1 ns: the call
+      takes the generic bound-function path, and the existing devirtualization only
+      sees a `bind` in the calling function. A guard that the callee is a bound function
+      whose target, `this` and leading arguments are the values the binding's single
+      `bind` received makes the call `f.call(o, 5, v)` whatever produced the binding,
+      after which the guarded inline and loop regions apply as for methods. It needs a
+      runtime predicate and a guard opcode through the bytecode, interpreter and codec.
+
 - [ ] Bring node:stream and EventEmitter construction closer to Node. A constructed
       Readable still costs about 5x Node and a Writable 3.5x, mostly option reads
       through `mal_vm_get_static` and per-object state allocation; `once` builds a

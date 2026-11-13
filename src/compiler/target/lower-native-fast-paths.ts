@@ -1251,8 +1251,11 @@ export function numberRecordDataflow(
 	const intrinsics = new Set<number>();
 	const bindings = new Set<number>();
 	const slotLoadRegisters = new Set<number>();
-	// Results of the entry's callee checks, which hold throughout.
-	const passed = new Set<number>();
+	// Results of the entry's callee checks, and of those that hold throughout.
+	const checked = new Set(
+		[...entry.guards].flatMap((ip) => vmInstructionWriteRegisters(fn.instructions[ip]!)),
+	);
+	const passed = numericLoopPassedGuards(fn, entry.guards);
 	const unify = (register: number, kind: NativeNumberRecordKind): boolean => {
 		const known = kinds.get(register);
 		if (known === undefined) kinds.set(register, kind);
@@ -1348,7 +1351,6 @@ export function numberRecordDataflow(
 			bindings.add(instruction.dst);
 		} else if (instruction.opcode === "GUARD_FUNCTION_INDEX" && entry.guards.has(ip)) {
 			admitted = bindingLoads;
-			passed.add(instruction.dst);
 		} else if (instruction.opcode === "JUMP_IF" && passed.has(instruction.cond)) {
 			admitted = true;
 		} else
@@ -1471,7 +1473,7 @@ export function numberRecordDataflow(
 				instruction.opcode === "LOAD_GLOBAL_PROPERTY") &&
 				bindings.has(instruction.dst) &&
 				!(instruction.opcode === "LOAD_GLOBAL" && slotGlobals.has(instruction.index))) ||
-			(instruction.opcode === "GUARD_FUNCTION_INDEX" && passed.has(instruction.dst));
+			(instruction.opcode === "GUARD_FUNCTION_INDEX" && checked.has(instruction.dst));
 		if (!entryLoad)
 			for (const register of vmInstructionWriteRegisters(instruction))
 				after.add(register);
@@ -3074,14 +3076,72 @@ function numericLoopBindings(
 		: { invariant, slots, slotLoads, loads, guards };
 }
 
-/** The branch conditions that a region's admitted callee checks hold true throughout. */
-function numericLoopPassedGuards(
+/**
+ * A region's admitted callee checks grouped into dispatch chains, in check order. A
+ * finite dispatch tests one candidate after another on the same callee, branching to
+ * the next test when one fails; the entry performs every test, and requires one of each
+ * chain to pass, so inside the region the last test of a chain always passes when it is
+ * reached and its failure branch, the generic call, is not a member.
+ */
+export function numericLoopCalleeGuardChains(
+	fn: BytecodeFunction,
+	guards: Iterable<number>,
+): ReadonlyArray<ReadonlyArray<number>> {
+	const admitted = new Set(guards);
+	if (admitted.size === 0) return [];
+	const predecessors = new Map<number, number>();
+	for (const [ip, op] of fn.instructions.entries())
+		for (const successor of numberRecordSuccessors(op, ip))
+			predecessors.set(successor, (predecessors.get(successor) ?? 0) + 1);
+	const next = new Map<number, number>();
+	for (const ip of admitted) {
+		const op = fn.instructions[ip]!;
+		const branch = fn.instructions[ip + 1];
+		if (op.opcode !== "GUARD_FUNCTION_INDEX")
+			throw new Error("Invalid numeric loop callee guard");
+		if (branch?.opcode !== "JUMP_IF" || branch.cond !== op.dst) continue;
+		// The failure branch falls through, possibly across jumps, to the next test, which
+		// nothing else reaches: arriving there means every earlier test failed.
+		let target = ip + 2;
+		let only = predecessors.get(target) === 1;
+		for (let hops = 0; hops < 4 && fn.instructions[target]?.opcode === "JUMP"; hops++) {
+			const jump = fn.instructions[target]!;
+			if (jump.opcode === "JUMP") target = jump.targetIp;
+			only &&= predecessors.get(target) === 1;
+		}
+		const candidate = fn.instructions[target];
+		if (
+			only &&
+			admitted.has(target) &&
+			candidate?.opcode === "GUARD_FUNCTION_INDEX" &&
+			candidate.callee === op.callee
+		)
+			next.set(ip, target);
+	}
+	const reached = new Set(next.values());
+	return [...admitted]
+		.filter((ip) => !reached.has(ip))
+		.sort((a, b) => a - b)
+		.map((head) => {
+			const chain = [head];
+			for (
+				let ip = next.get(head);
+				ip !== undefined && !chain.includes(ip);
+				ip = next.get(ip)
+			)
+				chain.push(ip);
+			return chain;
+		});
+}
+
+/** The branch conditions that hold true throughout a region: each chain's last check. */
+export function numericLoopPassedGuards(
 	fn: BytecodeFunction,
 	guards: Iterable<number>,
 ): ReadonlySet<number> {
 	return new Set(
-		[...guards].map((ip) => {
-			const op = fn.instructions[ip]!;
+		numericLoopCalleeGuardChains(fn, guards).map((chain) => {
+			const op = fn.instructions[chain.at(-1)!]!;
 			if (op.opcode !== "GUARD_FUNCTION_INDEX")
 				throw new Error("Invalid numeric loop callee guard");
 			return op.dst;
@@ -3597,20 +3657,39 @@ function fixedNumericLoopStorage(
 	};
 }
 
+/**
+ * How a region performs a static load: once at its entry, or as a field read of an
+ * element it admitted as an object. Either may replace a layout proof's lowering.
+ */
+type NumericLoopLoadUse = "entry-load" | "record-field" | undefined;
+
+function numericLoopLoadUse(
+	fn: BytecodeFunction,
+	ip: number,
+	entryLoads: ReadonlySet<number>,
+	records: ReadonlySet<number>,
+): NumericLoopLoadUse {
+	if (entryLoads.has(ip)) return "entry-load";
+	const op = fn.instructions[ip]!;
+	return op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object)
+		? "record-field"
+		: undefined;
+}
+
 function lowerArrayIterationRegion(
 	fn: BytecodeFunction,
 	header: number,
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	body: NativeBodyFacts,
-	// Whether another plan owns `ip`; an entry load may replace a layout proof.
-	conflicts: (ip: number, entryLoad: boolean) => boolean,
+	// Whether another plan owns `ip`, which the region would perform as `use`.
+	conflicts: (ip: number, use: NumericLoopLoadUse) => boolean,
 	cursor: { readonly initializeIp: number; readonly iterator: number },
 	functions: ReadonlyArray<BytecodeFunction>,
 	invariantLoadCandidates: ReadonlySet<number>,
 	builtinCallCandidates: ReadonlyMap<number, { readonly callee: number }>,
 ): NativeNumericLoopRegionPlan | undefined {
 	const step = fn.instructions[header]!;
-	if (step.opcode !== "ITERATOR_STEP" || conflicts(header, false)) return undefined;
+	if (step.opcode !== "ITERATOR_STEP" || conflicts(header, undefined)) return undefined;
 	const loop = numericLoopShape(fn, body, header);
 	if (loop === undefined) return undefined;
 	const guarded = numericLoopGuardedShape(
@@ -3624,9 +3703,13 @@ function lowerArrayIterationRegion(
 	const entry =
 		guarded !== undefined && guarded.bindings.slots.size === 0 ? guarded : undefined;
 	const shape = entry?.shape ?? loop;
+	const records = numericLoopRecords(fn, shape, [step.valueDst]);
+	const entryLoads = entry?.bindings.loads ?? new Set<number>();
+	const use = (ip: number) =>
+		numericLoopLoadUse(fn, ip, entryLoads, records ?? new Set());
 	if (
-		conflicts(shape.entryIp, false) ||
-		shape.order.some((ip) => conflicts(ip, entry?.bindings.loads.has(ip) === true))
+		conflicts(shape.entryIp, undefined) ||
+		shape.order.some((ip) => conflicts(ip, use(ip)))
 	)
 		return undefined;
 	const branch = fn.instructions[header + 1];
@@ -3645,7 +3728,6 @@ function lowerArrayIterationRegion(
 		)
 	)
 		return undefined;
-	const records = numericLoopRecords(fn, shape, [step.valueDst]);
 	const recordEntryLoads = recordIterationEntryLoads(fn, shape.order, entry?.bindings);
 	const recordFlow = analyzeRecordIteration(
 		fn,
@@ -3672,6 +3754,13 @@ function lowerArrayIterationRegion(
 	if (
 		recordFlow !== undefined &&
 		recordBuiltinCalls !== undefined &&
+		// The record graph reads its fields through column handles, not layout cells.
+		!shape.order.some(
+			(ip) =>
+				use(ip) === "record-field" &&
+				!recordEntryLoads.has(ip) &&
+				conflicts(ip, undefined),
+		) &&
 		(recordFlow.graph.references.length > 1 ||
 			recordFlow.graph.fields.some((field) => field.stored || field.kind !== "number"))
 	) {
@@ -3863,7 +3952,7 @@ function lowerNumericLoopRegion(
 	header: number,
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	body: NativeBodyFacts,
-	conflicts: (ip: number, entryLoad: boolean) => boolean,
+	conflicts: (ip: number, use: NumericLoopLoadUse) => boolean,
 	lengthLoads: ReadonlySet<number>,
 	cursorSteps: ReadonlyMap<number, { initializeIp: number; iterator: number }>,
 	codeUnitReads: ReadonlySet<number>,
@@ -3900,7 +3989,7 @@ function lowerNumericLoopRegion(
 			first.opcode !== "LOAD_GLOBAL_PROPERTY" &&
 			first.opcode !== "LOAD_CAPTURED" &&
 			first.opcode !== "LOAD_THIS") ||
-		conflicts(header, false)
+		conflicts(header, undefined)
 	)
 		return undefined;
 	const loop = numericLoopShape(fn, body, header, true);
@@ -3921,11 +4010,7 @@ function lowerNumericLoopRegion(
 	);
 	if (guarded === undefined) return undefined;
 	const { shape, bindings } = guarded;
-	if (
-		conflicts(shape.entryIp, false) ||
-		shape.order.some((ip) => conflicts(ip, bindings.loads.has(ip)))
-	)
-		return undefined;
+	if (conflicts(shape.entryIp, undefined)) return undefined;
 	const builtinCalls = numericLoopBuiltinCalls(
 		fn,
 		shape.order,
@@ -3944,10 +4029,14 @@ function lowerNumericLoopRegion(
 		foreignCalls,
 		bindings,
 	);
+	const records = new Set(storage?.records ?? []);
 	if (
-		storage === undefined &&
-		!integerLoopInstruction(first) &&
-		!numericLoopBindingInstruction(fn, header, bindings)
+		shape.order.some((ip) =>
+			conflicts(ip, numericLoopLoadUse(fn, ip, bindings.loads, records)),
+		) ||
+		(storage === undefined &&
+			!integerLoopInstruction(first) &&
+			!numericLoopBindingInstruction(fn, header, bindings))
 	)
 		return undefined;
 	// An invariant load's value is boxed, so outside a region everything computed from it is.
@@ -4024,8 +4113,6 @@ function lowerNumericLoopRegion(
 		}
 		exits.push(Object.freeze({ targetIp, outputs: Object.freeze(outputs) }));
 	}
-	// A record is an iteration's borrowed element, never a Number to pass in or out.
-	const records = new Set(storage?.records ?? []);
 	const preparedKeys = shape.order.flatMap((ip) => {
 		const op = fn.instructions[ip]!;
 		return op.opcode === "TO_PROPERTY_KEY" ? [op.dst] : [];
@@ -4036,6 +4123,7 @@ function lowerNumericLoopRegion(
 		)
 	)
 		return undefined;
+	// A record is an iteration's borrowed element, never a Number to pass in or out.
 	if (
 		[...inputs].some((register) => records.has(register)) ||
 		exits.some((exit) => exit.outputs.some((register) => records.has(register)))
@@ -5279,8 +5367,9 @@ export function analyzeNativeFastPaths(
 				native.registerRepresentations,
 				body,
 				// Its back edge polls by returning the iteration to the original loop.
-				(candidate, entryLoad) => {
-					const kind = native.instructions[candidate]?.kind;
+				(candidate, use) => {
+					const plan = native.instructions[candidate];
+					const kind = plan?.kind;
 					return (
 						numericLoopBlocked.has(candidate) ||
 						!numberInputsPossible(candidate) ||
@@ -5297,12 +5386,18 @@ export function analyzeNativeFastPaths(
 									builtinCalls.has(candidate))
 							) &&
 							kind !== "primitive-string-length" &&
-							// Layout proofs choose a field read's lowering; the entry guards its own.
+							// Layout proofs choose a field read's lowering; the entry guards its own,
+							// and an element's field read checks the same class cells first.
 							!(
-								entryLoad &&
+								use === "entry-load" &&
 								(kind === "class-layout" ||
 									kind === "exact-own-slot" ||
 									kind === "known-own-data")
+							) &&
+							!(
+								use === "record-field" &&
+								plan?.kind === "class-layout" &&
+								plan.site.kind === "slot"
 							))
 					);
 				},

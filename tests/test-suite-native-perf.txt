@@ -38,6 +38,7 @@ tests/native/json-late-fallback.test.ts
 tests/native/json-stringify-scratch.test.ts
 tests/native/known-own-slot-load.test.ts
 tests/native/lazy-capture-environment.test.ts
+tests/native/loop-dispatch-fields.test.ts
 tests/native/loop-invariant-fields.test.ts
 tests/native/map-get-set-cache.test.ts
 tests/native/map-string-representative.test.ts

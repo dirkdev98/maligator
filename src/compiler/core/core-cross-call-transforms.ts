@@ -1890,7 +1890,13 @@ function offerFunctionCandidates(
 			inLoop &&
 			site.targets.functions.length === 0 &&
 			coreCalleeTargetsAreOpen(site.targets)
-				? coreInstanceMethodTargets(fn, site.callee, site.receiver, instanceMethodHints)
+				? coreInstanceMethodTargets(
+						fn,
+						site.callee,
+						site.receiver,
+						instanceMethodHints,
+						true,
+					)
 				: undefined;
 		const openHintTargets =
 			hintedTargets !== undefined &&

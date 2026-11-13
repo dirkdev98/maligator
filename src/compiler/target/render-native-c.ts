@@ -92,8 +92,11 @@ import {
 	nativeDataViewAccessor,
 	numericLoopBuiltinCallCandidates,
 	numericLoopBuiltinCallView,
+	numericLoopCalleeGuardChains,
 	numericLoopCallMethods,
 	numericLoopHasTerminalStore,
+	numericLoopPassedGuards,
+	numericLoopRegionSuccessors,
 	numericLoopSupportsCheckedIntegers,
 	numericLoopOrder,
 	nativeNumericBuiltinInstruction,
@@ -2107,6 +2110,8 @@ function emitNumericLoopRegion(
 	globalSlot: (index: number) => string,
 	facts: NativeFunctionPlan["facts"],
 	nativeInstructions: NativeFunctionPlan["instructions"],
+	// Whether the image's class cells exist, which an overlay's ordinals do not name.
+	classLayouts: boolean,
 	poll: (ip: number, spill: string, isolate: string) => string,
 	arrayArithmetic?: "number" | "checked-integer",
 	// Whether restarts continue in the double-arithmetic copy that follows this one.
@@ -2129,15 +2134,25 @@ function emitNumericLoopRegion(
 		loads: new Set(plan.invariantLoads ?? []),
 		guards: new Set(plan.calleeGuards ?? []),
 	};
-	// Each admitted check holds throughout, so its branch always takes the target.
-	const passed = new Set(
-		[...entry.guards].map((ip) => {
-			const guard = fn.instructions[ip]!;
-			if (guard.opcode !== "GUARD_FUNCTION_INDEX")
-				throw new Error("Invalid numeric loop callee guard");
-			return guard.dst;
-		}),
+	// The last check of each dispatch chain holds throughout once the entry required one
+	// of the chain's checks, so its branch always takes the target.
+	const passed = numericLoopPassedGuards(fn, entry.guards);
+	const checkResult = (ip: number) => {
+		const guard = fn.instructions[ip]!;
+		if (guard.opcode !== "GUARD_FUNCTION_INDEX")
+			throw new Error("Invalid numeric loop callee guard");
+		return guard.dst;
+	};
+	const chains = new Map(
+		numericLoopCalleeGuardChains(fn, entry.guards).map((chain) => [
+			chain[0]!,
+			chain.map(checkResult),
+		]),
 	);
+	// A lone dispatch chain's checks are invariant, so each of its candidates gets its own
+	// copy of the loop, in which the chain's earlier checks fail and its own passes.
+	const dispatchChains = [...chains.values()].filter((chain) => chain.length > 1);
+	const dispatchChecks = dispatchChains.length === 1 ? dispatchChains[0]! : [];
 	const order = numericLoopOrder(fn, plan.id, members, true);
 	const dataViewCalls = new Map(
 		plan.kind === "fixed-numeric"
@@ -2204,7 +2219,6 @@ function emitNumericLoopRegion(
 		plan.kind === "integer"
 			? arrayArithmetic === "number"
 			: arrayArithmetic !== "checked-integer";
-	const numberFallback = `__number_fallback_${plan.id}`;
 	// The deferred cursor's index is the iteration state a restart must rewind.
 	const cursor =
 		plan.kind === "array-iteration" ? `__iter_deferred_${plan.initializeIp}` : undefined;
@@ -2288,6 +2302,13 @@ function emitNumericLoopRegion(
 	});
 	// Each loop body renders its statements against its own mode's representations.
 	let integral = baseIntegral;
+	let dispatch:
+		| {
+				readonly passed: number;
+				readonly failed: ReadonlySet<number>;
+				readonly copy: number;
+		  }
+		| undefined;
 	const cType = (register: number) =>
 		kindOf(register) === "boolean"
 			? "bool"
@@ -2308,6 +2329,44 @@ function emitNumericLoopRegion(
 	const arrayViewGuards: Array<string> = [];
 	const rangePrelude: Array<string> = [];
 	const initial = new Map<number, string>();
+	// A value only one dispatch candidate's inlined body reads, such as a field only its
+	// class has, need only be admissible when the entry selects that candidate.
+	const candidateEntryLoads = dispatchChecks.map((check, copy) => {
+		const failed = new Set(dispatchChecks.slice(0, copy));
+		const reached = new Set<number>();
+		const pending = [plan.id];
+		while (pending.length > 0) {
+			const ip = pending.pop()!;
+			if (reached.has(ip) || !members.has(ip)) continue;
+			reached.add(ip);
+			const op = fn.instructions[ip]!;
+			pending.push(
+				...(op.opcode === "JUMP_IF" && op.cond === check
+					? [op.targetIp]
+					: op.opcode === "JUMP_IF" && failed.has(op.cond)
+						? [ip + 1]
+						: numericLoopRegionSuccessors(op, ip, passed)),
+			);
+		}
+		return new Set(
+			[...entry.loads]
+				.filter((ip) => reached.has(ip))
+				.flatMap((ip) => vmInstructionWriteRegisters(fn.instructions[ip]!)),
+		);
+	});
+	const candidateGuards = dispatchChecks.map((): Array<string> => []);
+	const admit = (register: number, condition: string, first = false): void => {
+		const selecting = candidateEntryLoads.flatMap((loads, copy) =>
+			loads.has(register) ? [copy] : [],
+		);
+		const targets =
+			selecting.length === 0 || selecting.length === dispatchChecks.length
+				? [guards]
+				: selecting.map((copy) => candidateGuards[copy]!);
+		for (const target of targets)
+			if (first) target.unshift(condition);
+			else target.push(condition);
+	};
 	for (const register of plan.inputs) {
 		const representation = reps[register];
 		if (kindOf(register) === "boolean") {
@@ -2321,17 +2380,17 @@ function emitNumericLoopRegion(
 			continue;
 		}
 		if (representation === "boxed" && arrayArithmetic === "checked-integer") {
-			guards.push(`mal_safe_integer_value_admit(r${register}, &${local(register)})`);
+			admit(register, `mal_safe_integer_value_admit(r${register}, &${local(register)})`);
 			continue;
 		}
 		const value =
 			representation === "boxed"
 				? `mal_ops_number_as_f64(r${register})`
 				: `(f64) r${register}`;
-		if (representation === "boxed") guards.push(`mal_ops_is_number(r${register})`);
+		if (representation === "boxed") admit(register, `mal_ops_is_number(r${register})`);
 		if (integral.has(register)) {
 			const admitted = `${representation === "boxed" ? `mal_ops_is_number(r${register}) && ` : ""}${value} == trunc(${value}) && ${value} >= -2147483648.0 && ${value} <= 4294967295.0 && (${value} != 0.0 || !signbit(${value}))`;
-			guards.push(`(${admitted})`);
+			admit(register, `(${admitted})`);
 			initial.set(register, `(${admitted}) ? (i64) ${value} : 0`);
 			continue;
 		}
@@ -2342,7 +2401,7 @@ function emitNumericLoopRegion(
 					? `mal_ops_is_number(r${register}) ? ${value} : NAN`
 					: value,
 			);
-		else guards.push(`mal_safe_integer_admit(${value}, &${local(register)})`);
+		else admit(register, `mal_safe_integer_admit(${value}, &${local(register)})`);
 	}
 	if (arrayArithmetic === "checked-integer") {
 		const written = new Set(
@@ -2368,7 +2427,8 @@ function emitNumericLoopRegion(
 					? Infinity
 					: Math.max(...ranges.map((range) => range.maximum)),
 			);
-			guards.push(
+			admit(
+				register,
 				`(${local(register)} >= INT64_C(${low}) && ${local(register)} <= INT64_C(${high}))`,
 			);
 		}
@@ -2380,6 +2440,18 @@ function emitNumericLoopRegion(
 		(plan.views.every((view) => !view.writable) ||
 			numericLoopHasTerminalStore(fn, plan.id, order));
 	const records = new Set(plan.kind !== "integer" ? (plan.records ?? []) : []);
+	// The class cells a record field read's layout plan guards on.
+	const classSlots = (ip: number): ReadonlyArray<ClassLayoutCandidate> => {
+		const op = fn.instructions[ip]!;
+		const layout = nativeInstructions[ip];
+		return classLayouts &&
+			op.opcode === "LOAD_PROPERTY_STATIC" &&
+			records.has(op.object) &&
+			layout?.kind === "class-layout" &&
+			layout.site.kind === "slot"
+			? layout.site.candidates
+			: [];
+	};
 	const emitCopy = (
 		arithmetic: "number" | "checked-integer" | undefined,
 		restartInNumbers: boolean,
@@ -2393,6 +2465,7 @@ function emitNumericLoopRegion(
 			globalSlot,
 			facts,
 			nativeInstructions,
+			classLayouts,
 			poll,
 			arithmetic,
 			restartInNumbers,
@@ -2406,11 +2479,7 @@ function emitNumericLoopRegion(
 		plan.views.every((view) => view.text !== true && view.lentOnly !== true) &&
 		numericLoopSupportsCheckedIntegers(fn, plan.id, order)
 	)
-		return [
-			...emitCopy("checked-integer", true),
-			`${numberFallback}:;`,
-			...emitCopy("number", false),
-		];
+		return [...emitCopy("checked-integer", true), ...emitCopy("number", false)];
 	// An invariant field may hold any Number, so an integer region whose entry declines
 	// one, or whose arithmetic leaves the safe integers, continues in doubles.
 	if (
@@ -2419,11 +2488,7 @@ function emitNumericLoopRegion(
 		!numberRestart &&
 		(plan.invariantLoads?.length ?? 0) > 0
 	)
-		return [
-			...emitCopy(undefined, true),
-			`${numberFallback}:;`,
-			...emitCopy("number", false),
-		];
+		return [...emitCopy(undefined, true), ...emitCopy("number", false)];
 	const checkedViews = new Set(
 		plan.kind === "fixed-numeric"
 			? plan.views.flatMap((view) => (view.checked === true ? [view.object] : []))
@@ -2494,7 +2559,9 @@ function emitNumericLoopRegion(
 	const entryStatements = order.flatMap((ip) => {
 		const op = fn.instructions[ip]!;
 		if (op.opcode === "GUARD_FUNCTION_INDEX" && entry.guards.has(ip)) {
-			guards.unshift(`r${op.dst}`);
+			const chain = chains.get(ip);
+			if (chain !== undefined)
+				guards.unshift(`(${chain.map((check) => `r${check}`).join(" || ")})`);
 			return [`  ${entryLoad(ip)}`];
 		}
 		if (
@@ -2508,9 +2575,20 @@ function emitNumericLoopRegion(
 		)
 			return [];
 		if (op.opcode === "LOAD_GLOBAL" && slotted.has(op.index)) return [];
-		guards.unshift(`!mal_value_is_empty(r${op.dst})`);
+		admit(op.dst, `!mal_value_is_empty(r${op.dst})`, true);
 		return [`  ${entryLoad(ip)}`];
 	});
+	if (dispatchChecks.length > 0)
+		guards.push(
+			`(${dispatchChecks
+				.map((check, copy) => {
+					const admitted = candidateGuards[copy]!.join(" && ") || "true";
+					return copy < dispatchChecks.length - 1
+						? `r${check} ? (${admitted}) : `
+						: `(${admitted})`;
+				})
+				.join("")})`,
+		);
 	guards.push(...builtin.guards);
 	// A slot enters as a Number, which also declines its dead zone.
 	const slotLoads = globals.flatMap((index) => {
@@ -2687,7 +2765,8 @@ function emitNumericLoopRegion(
 	);
 	const position = new Map(order.map((ip, index) => [ip, index]));
 	// Inner loops jump backward, which forward block flags cannot express.
-	const label = (mode: string, ip: number) => `${id}_${mode}_L${ip}`;
+	const label = (mode: string, ip: number) =>
+		`${id}_${mode}${dispatch === undefined ? "" : `_d${dispatch.copy}`}_L${ip}`;
 	// Iterations restart from their saved start, so a guard never resumes mid-iteration.
 	const restart = `{ ${id}_exit = 0; break; }`;
 	const reach = (ip: number, from: number, mode: string): string => {
@@ -2761,9 +2840,18 @@ function emitNumericLoopRegion(
 			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
 				// Admission already proved the method its code unit read ignores.
 				if (callMethods.has(ip) || entry.loads.has(ip)) return "";
-				if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object))
+				if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object)) {
 					// The site's own-slot row proves the field; any other row ends the iteration.
-					return `{ const MalObject *${id}_o = (const MalObject *) mal_value_to_heap(${local(op.object)}); if (__builtin_expect(${id}_o->shape != ${id}_shape${op.icIndex} && !mal_shape_slot_holds_data_key(${id}_o->shape, ${id}_slot${op.icIndex}, ${id}_key${op.icIndex}), 0)) ${restart} MalValue ${id}_f = ((const MalValue *) mal_object_fields_nonempty(${id}_o))[${id}_slot${op.icIndex}]; if (__builtin_expect(!mal_ops_is_number(${id}_f), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_f); }`;
+					const cached = `if (__builtin_expect(${id}_o->shape != ${id}_shape${op.icIndex} && !mal_shape_slot_holds_data_key(${id}_o->shape, ${id}_slot${op.icIndex}, ${id}_key${op.icIndex}), 0)) ${restart} ${id}_f = ((const MalValue *) mal_object_fields_nonempty(${id}_o))[${id}_slot${op.icIndex}];`;
+					// A class layout serves the original read without filling that row, so the
+					// cells it guards on come first: their shapes hold the keys as data slots.
+					const read = classSlots(ip).reduceRight(
+						(rest, { layout, index }) =>
+							`if (${id}_o->shape == ${id}_class${layout}) ${id}_f = mal_object_field_load_shaped(${id}_o, ${index}); else { ${rest} }`,
+						cached,
+					);
+					return `{ const MalObject *${id}_o = (const MalObject *) mal_value_to_heap(${local(op.object)}); MalValue ${id}_f; ${read} if (__builtin_expect(!mal_ops_is_number(${id}_f), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_f); }`;
+				}
 				if (boundObject === undefined || op.object !== boundObject)
 					throw new Error("Invalid numeric loop length load");
 				return `${local(op.dst)} = (f64) ${id}_${textObjects.has(op.object) ? "s" : mode === "array" ? "a" : "v"}${op.object}.length;`;
@@ -3060,7 +3148,9 @@ function emitNumericLoopRegion(
 			case "JUMP":
 				return reach(op.targetIp, ip, mode);
 			case "JUMP_IF": {
-				if (passed.has(op.cond)) return reach(op.targetIp, ip, mode);
+				if (passed.has(op.cond) || dispatch?.passed === op.cond)
+					return reach(op.targetIp, ip, mode);
+				if (dispatch?.failed.has(op.cond)) return reach(ip + 1, ip, mode);
 				const ranged = compilerIntegerRangeTruthiness(
 					instructionInputIntegerRange(facts?.[ip], op.cond),
 				);
@@ -3083,13 +3173,40 @@ function emitNumericLoopRegion(
 			}),
 		),
 	];
+	// Nothing in a region admits or invalidates a class cell either.
+	const classCells = [
+		...new Set(order.flatMap((ip) => classSlots(ip).map(({ layout }) => layout))),
+	];
 	const loopBody = (mode: NumericLoopBodyMode): ReadonlyArray<string> => {
+		if (dispatchChecks.length === 0) return loopCopy(mode);
+		const checks = dispatchChecks;
+		// The entry required one of the checks, so the last copy needs no test of its own.
+		const lines = checks.flatMap((check, copy) => {
+			dispatch = { passed: check, failed: new Set(checks.slice(0, copy)), copy };
+			const body = loopCopy(mode).map((line) => `  ${line}`);
+			dispatch = undefined;
+			return [
+				copy === 0
+					? `    if (r${check}) {`
+					: copy < checks.length - 1
+						? `    } else if (r${check}) {`
+						: "    } else {",
+				...body,
+			];
+		});
+		return [...lines, "    }"];
+	};
+	const loopCopy = (mode: NumericLoopBodyMode): ReadonlyArray<string> => {
 		integral = mode === "integer" ? integerIntegral : baseIntegral;
 		const lines = [
 			// Inner declarations shadow the shared locals that hold doubles elsewhere.
 			...(mode === "integer"
 				? integerOnly.map((register) => `    i64 ${local(register)} = 0;`)
 				: []),
+			...classCells.map(
+				(layout) =>
+					`    const struct MalShape *${id}_class${layout} = vm->class_cells[${layout}].ic.shape;`,
+			),
 			...fieldCaches.flatMap((cache) => [
 				`    const struct MalShape *${id}_shape${cache} = ${propertyCache}[${cache}].mode == MAL_IC_MODE_SHAPE ? ${propertyCache}[${cache}].shape : nullptr;`,
 				`    u8 ${id}_slot${cache} = ${propertyCache}[${cache}].slot;`,
@@ -3164,7 +3281,10 @@ function emitNumericLoopRegion(
 		for (const index of stored)
 			lines.push(`    ${globalSlot(index)} = ${boxSlot(slotStart(index))};`);
 		if (cursor !== undefined) lines.push(`    ${cursor}.index = ${id}_si;`);
-		lines.push(`    goto ${numberRestart ? numberFallback : `L${plan.id}`};`);
+		// A copy that restarts in doubles ends here, so control leaves it, like a declined
+		// entry, for the doubles copy that follows: a label inside one instruction's code
+		// would keep the function from being split.
+		if (!numberRestart) lines.push(`    goto L${plan.id};`);
 		integral = baseIntegral;
 		return lines;
 	};
@@ -8733,6 +8853,7 @@ function emitBody(
 					(index) => `vm->globals[${relocation.globalIndex(index)}]`,
 					nativeFacts,
 					nativeInstructions,
+					!relocation.relative,
 					(branchIp, spill, isolate) => {
 						if (gcSafepointKinds.get(branchIp) !== "loop-backedge") return "";
 						const handler = handlerTargets[branchIp];
