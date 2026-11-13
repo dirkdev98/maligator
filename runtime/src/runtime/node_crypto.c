@@ -3548,11 +3548,15 @@ static bool crypto_web_key_extractable(MalValue key) {
 /* Low algorithm tags identify HMAC hashes. */
 #define CRYPTO_WEB_AES_GCM 0x80
 #define CRYPTO_WEB_PBKDF2 0x81
+#define CRYPTO_WEB_AES_CBC 0x82
 
-static bool crypto_web_is_aes_gcm(MalVm *vm, MalValue algorithm, bool *ok) {
+static u8 crypto_web_aes_tag(MalVm *vm, MalValue algorithm, bool *ok) {
     MalValue name = mal_value_is_object(algorithm) ? crypto_get(vm, algorithm, "name", ok) : algorithm;
     if (!mal_value_is_object(algorithm)) *ok = true;
-    return *ok && mal_value_is_string(name) && mal_string_equals_ascii_ci(mal_value_to_string(name), "AES-GCM");
+    if (!*ok || !mal_value_is_string(name)) return 0;
+    if (mal_string_equals_ascii_ci(mal_value_to_string(name), "AES-GCM")) return CRYPTO_WEB_AES_GCM;
+    if (mal_string_equals_ascii_ci(mal_value_to_string(name), "AES-CBC")) return CRYPTO_WEB_AES_CBC;
+    return 0;
 }
 
 static MalValue crypto_web_new_key(MalVm *vm, byte *stored, usize stored_length, MalValue algorithm,
@@ -3567,7 +3571,7 @@ static MalValue crypto_web_new_key(MalVm *vm, byte *stored, usize stored_length,
     u8 mask = 0;
     if (!crypto_web_usage_list(vm, roots[2], &roots[4], &mask)) goto failed;
     u8 tag = (u8) stored[0];
-    u8 allowed = tag == CRYPTO_WEB_PBKDF2 ? 0x30 : tag == CRYPTO_WEB_AES_GCM ? 0xc3 : tag < CRYPTO_WEB_AES_GCM ? 0x0c
+    u8 allowed = tag == CRYPTO_WEB_PBKDF2 ? 0x30 : (tag == CRYPTO_WEB_AES_GCM || tag == CRYPTO_WEB_AES_CBC) ? 0xc3 : tag < CRYPTO_WEB_AES_GCM ? 0x0c
         : tag == 0x90 ? CRYPTO_WEB_SIGN : CRYPTO_WEB_VERIFY;
     if ((mask & ~allowed) != 0 || (tag < 0x90 && mask == 0)) {
         mal_dom_exception_throw(vm, (const byte *) "Unsupported key usages", (const byte *) "SyntaxError");
@@ -3771,18 +3775,15 @@ done:
     return roots[0];
 }
 
-static void crypto_web_import_aes(MalVm *vm, MalValue promise, const MalValue *args, i32 argc) {
+static void crypto_web_import_aes(MalVm *vm, MalValue promise, const MalValue *args, i32 argc, u8 tag) {
     MalValue format = argc > 0 ? args[0] : mal_value_new_undefined();
     if (!mal_value_is_string(format) || !mal_string_equals_ascii(mal_value_to_string(format), "raw")) {
-        crypto_web_reject_dom(vm, promise, "Unable to import AES-GCM key with format", "NotSupportedError");
+        crypto_web_reject_dom(vm, promise, "Unable to import AES key with format", "NotSupportedError");
         return;
     }
     MalValue data = argc > 1 ? args[1] : mal_value_new_undefined();
     MalBufferSourceSpan span;
-    if (!crypto_is_byte_source(data) || mal_buffer_source_span(data, &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
-        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Failed to execute 'importKey' on 'SubtleCrypto': 2nd argument is not instance of ArrayBuffer, Buffer, TypedArray, or DataView.",
-            "ERR_INVALID_ARG_TYPE");
+    if (!crypto_web_buffer_span(vm, data, &span)) {
         crypto_settle_with_completion(vm, promise);
         return;
     }
@@ -3792,13 +3793,13 @@ static void crypto_web_import_aes(MalVm *vm, MalValue promise, const MalValue *a
     }
     byte *stored = malloc(span.length + CRYPTO_WEB_KEY_HEADER);
     if (stored == nullptr) { mal_vm_throw_allocation_error(vm); crypto_settle_with_completion(vm, promise); return; }
-    stored[0] = (byte) CRYPTO_WEB_AES_GCM;
+    stored[0] = (byte) tag;
     memcpy(stored + CRYPTO_WEB_KEY_HEADER, span.data, span.length);
     usize key_length = span.length;
     MalValue algorithm = mal_value_from_object(mal_intrinsic_new_object(vm));
     MalRootSpan root;
     mal_gc_root(&root, &algorithm, 1);
-    crypto_set(vm, algorithm, "name", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "AES-GCM")));
+    crypto_set(vm, algorithm, "name", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) (tag == CRYPTO_WEB_AES_CBC ? "AES-CBC" : "AES-GCM"))));
     crypto_set(vm, algorithm, "length", mal_ops_number_value((f64) key_length * 8));
     MalValue key = crypto_web_new_key(vm, stored, key_length + CRYPTO_WEB_KEY_HEADER, algorithm, argc > 3 && mal_value_is_truthy(args[3]),
         argc > 4 ? args[4] : mal_value_new_undefined());
@@ -3812,7 +3813,7 @@ static bool crypto_web_bytes_member(MalVm *vm, MalValue value, const char *name,
     bool *present) {
     *present = false;
     if (mal_value_is_undefined(value)) return true;
-    if (!crypto_is_byte_source(value) || mal_buffer_source_span(value, span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+    if (!crypto_web_buffer_span(vm, value, span)) {
         char message[128];
         snprintf(message, sizeof(message), "The \"algorithm.%s\" property must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.", name);
         mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_TYPE");
@@ -3822,16 +3823,18 @@ static bool crypto_web_bytes_member(MalVm *vm, MalValue value, const char *name,
     return true;
 }
 
-static MalValue crypto_web_aes_gcm(MalVm *vm, const MalValue *args, i32 argc, bool encrypt) {
+static MalValue crypto_web_aes(MalVm *vm, const MalValue *args, i32 argc, bool encrypt) {
     MalValue roots[] = {crypto_new_promise(vm), argc > 0 ? args[0] : mal_value_new_undefined(),
-        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     byte *storage = nullptr;
     usize storage_size = mal_cipher_state_size();
     u8 *out = nullptr;
     bool ok = true;
-    if (!crypto_web_is_aes_gcm(vm, roots[1], &ok)) {
+    u8 tag = crypto_web_aes_tag(vm, roots[1], &ok);
+    bool gcm = tag == CRYPTO_WEB_AES_GCM;
+    if (tag == 0) {
         if (!ok) crypto_settle_with_completion(vm, roots[0]);
         else crypto_web_reject_dom(vm, roots[0], "Unrecognized algorithm name", "NotSupportedError");
         goto done;
@@ -3849,48 +3852,55 @@ static MalValue crypto_web_aes_gcm(MalVm *vm, const MalValue *args, i32 argc, bo
         goto done;
     }
     MalArrayBufferObject *stored = mal_value_to_array_buffer_object(lookup.desc.value);
-    if ((u8) stored->data[0] != CRYPTO_WEB_AES_GCM
+    if ((u8) stored->data[0] != tag
         || !crypto_web_key_has_usage(key, encrypt ? CRYPTO_WEB_ENCRYPT : CRYPTO_WEB_DECRYPT)) {
         crypto_web_reject_dom(vm, roots[0], "Key algorithm mismatch", "InvalidAccessError");
         goto done;
     }
-    MalValue tag_value = crypto_get(vm, roots[1], "tagLength", &ok);
+    if (gcm) roots[4] = crypto_get(vm, roots[1], "additionalData", &ok);
+    if (ok) roots[3] = crypto_get(vm, roots[1], "iv", &ok);
+    if (ok && gcm) roots[5] = crypto_get(vm, roots[1], "tagLength", &ok);
     if (!ok) { crypto_settle_with_completion(vm, roots[0]); goto done; }
-    f64 tag_bits = mal_ops_is_number(tag_value) ? mal_ops_number_as_f64(tag_value) : 128;
-    if (!(tag_bits == 32 || tag_bits == 64 || tag_bits == 96 || tag_bits == 104 || tag_bits == 112
-            || tag_bits == 120 || tag_bits == 128)) {
-        char text[64];
-        crypto_number_text(vm, tag_value, text, sizeof(text));
-        char message[96];
-        snprintf(message, sizeof(message), "%s is not a valid AES-GCM tag length", text);
-        crypto_web_reject_dom(vm, roots[0], message, "OperationError");
+    u32 tag_bits = 128;
+    if (gcm && !mal_value_is_undefined(roots[5]) && !crypto_web_uint32(vm, roots[5], &tag_bits)) {
+        crypto_settle_with_completion(vm, roots[0]);
         goto done;
     }
-    usize tag_length = (usize) tag_bits / 8;
+    if (gcm && tag_bits > 255) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Tag length is outside the octet range");
+        crypto_settle_with_completion(vm, roots[0]);
+        goto done;
+    }
+    if (gcm && !(tag_bits == 32 || tag_bits == 64 || tag_bits == 96 || tag_bits == 104 || tag_bits == 112
+            || tag_bits == 120 || tag_bits == 128)) {
+        crypto_web_reject_dom(vm, roots[0], "Invalid AES-GCM tag length", "OperationError");
+        goto done;
+    }
+    usize tag_length = gcm ? tag_bits / 8 : 0;
     MalBufferSourceSpan iv, aad, data;
     bool has_iv, has_aad;
-    roots[3] = crypto_get(vm, roots[1], "iv", &ok);
-    if (ok) roots[4] = crypto_get(vm, roots[1], "additionalData", &ok);
-    if (!ok || !crypto_web_bytes_member(vm, roots[3], "iv", &iv, &has_iv)
+    if (!crypto_web_bytes_member(vm, roots[3], "iv", &iv, &has_iv)
         || !crypto_web_bytes_member(vm, roots[4], "additionalData", &aad, &has_aad)) {
         crypto_settle_with_completion(vm, roots[0]);
         goto done;
     }
-    roots[2] = argc > 2 ? args[2] : mal_value_new_undefined();
-    if (!crypto_is_byte_source(roots[2]) || mal_buffer_source_span(roots[2], &data) != MAL_BUFFER_SOURCE_SPAN_OK) {
-        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "The \"data\" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.",
-            "ERR_INVALID_ARG_TYPE");
+    if (!has_iv) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "AES requires an IV");
         crypto_settle_with_completion(vm, roots[0]);
         goto done;
     }
-    if (!has_iv || (!encrypt && data.length < tag_length)) {
+    roots[2] = argc > 2 ? args[2] : mal_value_new_undefined();
+    if (!crypto_web_buffer_span(vm, roots[2], &data)) {
+        crypto_settle_with_completion(vm, roots[0]);
+        goto done;
+    }
+    if ((!gcm && iv.length != 16) || (!encrypt && data.length < tag_length)) {
         crypto_web_reject_dom(vm, roots[0], "The operation failed for an operation-specific reason", "OperationError");
         goto done;
     }
     // All member getters have run, so the borrowed spans stay valid through the cipher calls.
     usize key_length = stored->byte_length - CRYPTO_WEB_KEY_HEADER;
-    u32 kind = key_length == 16 ? 7 : key_length == 24 ? 8 : 9;
+    u32 kind = (gcm ? 7 : 1) + (key_length == 16 ? 0 : key_length == 24 ? 1 : 2);
     usize body = encrypt ? data.length : data.length - tag_length;
     storage = crypto_cipher_storage(storage_size);
     // The result ArrayBuffer has a u32 length; a longer output would silently lose its tag.
@@ -3905,12 +3915,12 @@ static MalValue crypto_web_aes_gcm(MalVm *vm, const MalValue *args, i32 argc, bo
     i32 status = mal_cipher_init((u8 *) storage, storage_size, kind, encrypt, (const u8 *) stored->data + CRYPTO_WEB_KEY_HEADER,
         key_length, (const u8 *) iv.data, iv.length);
     if (status == MAL_CIPHER_OK && has_aad) status = mal_cipher_set_aad(cipher, (const u8 *) aad.data, aad.length);
-    if (status == MAL_CIPHER_OK && !encrypt) {
+    if (status == MAL_CIPHER_OK && gcm && !encrypt) {
         status = mal_cipher_set_tag(cipher, (const u8 *) data.data + body, tag_length);
     }
     if (status == MAL_CIPHER_OK) status = mal_cipher_update(cipher, (const u8 *) data.data, body, out, body + 32, &written);
     if (status == MAL_CIPHER_OK) status = mal_cipher_final(cipher, out + written, 16, &tail);
-    if (status == MAL_CIPHER_OK && encrypt) {
+    if (status == MAL_CIPHER_OK && gcm && encrypt) {
         status = mal_cipher_get_tag(cipher, out + written + tail, tag_length);
         tail += tag_length;
     }
@@ -3933,13 +3943,13 @@ done:
 static MalValue mal_node_crypto_subtle_encrypt(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
     (void) receiver; (void) new_target; (void) callee;
-    return crypto_web_aes_gcm(vm, args, argc, true);
+    return crypto_web_aes(vm, args, argc, true);
 }
 
 static MalValue mal_node_crypto_subtle_decrypt(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
     (void) receiver; (void) new_target; (void) callee;
-    return crypto_web_aes_gcm(vm, args, argc, false);
+    return crypto_web_aes(vm, args, argc, false);
 }
 
 typedef enum { CRYPTO_WEB_NONE, CRYPTO_WEB_RSASSA, CRYPTO_WEB_RSA_PSS, CRYPTO_WEB_ECDSA, CRYPTO_WEB_ED25519 } CryptoWebAsym;
@@ -3972,8 +3982,9 @@ static MalValue mal_node_crypto_subtle_import_key(
         crypto_web_import_asym(vm, roots[0], asymmetric, args, argc);
         goto done;
     }
-    if (crypto_web_is_aes_gcm(vm, roots[5], &ok)) {
-        crypto_web_import_aes(vm, roots[0], args, argc);
+    u8 aes_tag = crypto_web_aes_tag(vm, roots[5], &ok);
+    if (aes_tag != 0) {
+        crypto_web_import_aes(vm, roots[0], args, argc, aes_tag);
         goto done;
     }
     if (!ok) { crypto_settle_with_completion(vm, roots[0]); goto done; }
@@ -4139,7 +4150,7 @@ static MalValue mal_node_crypto_subtle_verify(
     return roots[0];
 }
 
-/* crypto.webcrypto and crypto.subtle: digest, raw HMAC sign/verify and AES-GCM encrypt/decrypt. */
+/* Both Node crypto entry points share one SubtleCrypto object. */
 static void crypto_install_webcrypto(MalVm *vm, MalObject *module) {
     MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
     MalValue roots[] = {mal_value_from_object(mal_intrinsic_new_object(vm)),
