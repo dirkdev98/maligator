@@ -4791,24 +4791,8 @@ static MalValue mal_vm_binary_dispatch(MalVm *vm, MalBinaryOp op, MalValue left,
             return mal_ops_strict_equal(left, right);
         case MAL_BIN_STRICT_NEQ:
             return mal_ops_strict_not_equal(left, right);
-        case MAL_BIN_IN: {
-            if (!mal_value_is_object(right)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot use 'in' operator on a non-object");
-                return mal_value_new_undefined();
-            }
-
-            MalValue roots[] = {right, left};
-            MalRootSpan span;
-            mal_gc_root(&span, roots, countof(roots));
-            MalKey key;
-            bool present = false;
-            if (mal_vm_to_property_query(vm, left, &key)) {
-                roots[1] = key.value;
-                present = mal_vm_has_property(vm, right, key);
-            }
-            mal_gc_unroot(&span);
-            return mal_value_new_boolean(present);
-        }
+        case MAL_BIN_IN:
+            return mal_vm_in_operator(vm, left, right);
         case MAL_BIN_INSTANCEOF: {
             if (!mal_value_is_object(right)) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Right-hand side of 'instanceof' is not an object");
@@ -4865,6 +4849,61 @@ static MalValue mal_vm_binary_dispatch(MalVm *vm, MalBinaryOp op, MalValue left,
     }
 
     return mal_value_new_undefined();
+}
+
+/**
+ * Whether a later `key in object_value` may reuse this answer: an atom string key over a
+ * plain object whose whole chain is plain, so the lookup runs no user code and depends
+ * only on the receiver's shape, its prototype, and the prototype-chain epoch.
+ */
+static bool mal_vm_has_cacheable(MalValue object_value, MalValue key_value, MalKey key) {
+    if (key.kind != MAL_KEY_STRING || key.value != key_value ||
+        !mal_value_to_string(key_value)->property_atom ||
+        !mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT) ||
+        mal_prototype_chain_epoch == 0) {
+        return false;
+    }
+    const MalObject *object = mal_value_to_object(object_value);
+    if (object->is_arguments || mal_object_has_public_overflow(object)) return false;
+    for (const MalObject *cursor = mal_object_prototype(object); cursor != nullptr;
+         cursor = mal_object_prototype(cursor)) {
+        if (cursor->header.type != MAL_HEAP_OBJECT || cursor->is_arguments) return false;
+    }
+    return true;
+}
+
+MalValue mal_vm_in_operator(MalVm *vm, MalValue left, MalValue right) {
+    if (!mal_value_is_object(right)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot use 'in' operator on a non-object");
+        return mal_value_new_undefined();
+    }
+    i32 cached = mal_vm_has_cached(vm, right, left);
+    if (cached >= 0) return mal_value_new_boolean(cached != 0);
+
+    MalValue roots[] = {right, left};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalKey key;
+    bool present = false;
+    // Key conversion can run user code, so admission follows it and precedes the lookup.
+    if (mal_vm_to_property_query(vm, left, &key)) {
+        roots[1] = key.value;
+        bool cacheable = mal_vm_has_cacheable(right, left, key);
+        present = mal_vm_has_property(vm, right, key);
+        if (cacheable) {
+            const MalObject *object = mal_value_to_object(right);
+            *mal_vm_has_cache_row(vm, object->shape, left) = (MalHasCacheRow) {
+                .shape = object->shape,
+                .key = left,
+                .prototype = mal_object_prototype(object),
+                .epoch = mal_prototype_chain_epoch,
+                .present = present,
+            };
+            MAL_PERF_COUNT(has_cache_fills);
+        }
+    }
+    mal_gc_unroot(&span);
+    return mal_value_new_boolean(present);
 }
 
 MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue right) {

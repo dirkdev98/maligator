@@ -4537,6 +4537,29 @@ static inline bool mal_vm_shape_has_own_key(const MalVm *vm, MalValue object, Ma
     return entry->shape == shape && entry->key == key;
 }
 
+static inline MalHasCacheRow *mal_vm_has_cache_row(MalVm *vm, const MalShape *shape, MalValue key) {
+    uptr hash = ((uptr) shape >> 4) ^ ((uptr) key >> 3) * 0x9e3779b1u;
+    return &vm->has_cache[(hash ^ hash >> 9) % MAL_HAS_CACHE_ROWS];
+}
+
+/** A cached `key in object` answer for a plain object: 1 or 0, or -1 when unknown. */
+static inline i32 mal_vm_has_cached(MalVm *vm, MalValue object_value, MalValue key) {
+    if (!mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) return -1;
+    const MalObject *object = (const MalObject *) mal_value_to_heap(object_value);
+    const MalHasCacheRow *row = mal_vm_has_cache_row(vm, object->shape, key);
+    if (row->shape != object->shape || row->key != key ||
+        row->prototype != mal_object_prototype(object) ||
+        row->epoch != vm->isolate->prototype_chain_epoch ||
+        mal_object_has_public_overflow(object)) {
+        return -1;
+    }
+    MAL_PERF_COUNT(has_cache_hits);
+    return row->present;
+}
+
+/** The `in` operator: a TypeError for a non-object right operand, else HasProperty. */
+MalValue mal_vm_in_operator(MalVm *vm, MalValue key, MalValue object);
+
 static inline MalForInSnapshot *mal_for_in_snapshot_entry(MalVm *vm, MalValue keys) {
     return &vm->for_in_snapshots[((uptr) mal_value_to_heap(keys) >> 4) % countof(vm->for_in_snapshots)];
 }

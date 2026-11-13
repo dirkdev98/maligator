@@ -1577,7 +1577,7 @@ static void mal_perf_stats_print(void) {
         "store_transition_hits=%llu store_transition_fills=%llu "
         "define_transition_hits=%llu define_transition_fills=%llu store_plain_generic=%llu "
         "store_other_generic=%llu snapshot_hits=%llu store_inherited_setter_hits=%llu "
-        "inherited_setter_fills=%llu\n",
+        "inherited_setter_fills=%llu has_cache_hits=%llu has_cache_fills=%llu\n",
         (unsigned long long) mal_perf_stats.ic_load_mono_hits,
         (unsigned long long) mal_perf_stats.ic_load_inherited_hits,
         (unsigned long long) mal_perf_stats.ic_load_own_table_hits,
@@ -1647,7 +1647,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.ic_store_other_generic,
         (unsigned long long) mal_perf_stats.ic_snapshot_hits,
         (unsigned long long) mal_perf_stats.ic_store_inherited_setter_hits,
-        (unsigned long long) mal_perf_stats.ic_inherited_setter_fills
+        (unsigned long long) mal_perf_stats.ic_inherited_setter_fills,
+        (unsigned long long) mal_perf_stats.has_cache_hits,
+        (unsigned long long) mal_perf_stats.has_cache_fills
     );
     fprintf(
         stderr,

@@ -11326,7 +11326,8 @@ class NativeInstructionEmission {
 		) {
 			const membership = `__array_has_${this.ip}`;
 			const fastMembership = `mal_vm_array_try_has(mal_vm_as_array(${this.boxed(right)}), ${leftIsNum ? this.typedNumber(left) : `mal_ops_number_as_f64(${this.boxed(left)})`})`;
-			const ownKey = `mal_vm_shape_has_own_key(vm, ${this.boxed(right)}, ${this.boxed(left)}) ? 1 : -1`;
+			const ownKey = `mal_vm_shape_has_own_key(vm, ${this.boxed(right)}, ${this.boxed(left)}) ? 1 : mal_vm_has_cached(vm, ${this.boxed(right)}, ${this.boxed(left)})`;
+			const inOperator = `mal_vm_in_operator(vm, ${this.boxed(left)}, ${this.boxed(right)})`;
 			return [
 				`i32 ${membership} = ${leftIsNum ? fastMembership : ((this.operandKind(left) ?? COMPILER_VALUE_KIND_TOP) & COMPILER_VALUE_KIND_NUMBER) !== 0 ? `mal_ops_is_number(${this.boxed(left)}) ? ${fastMembership} : ${ownKey}` : ownKey};`,
 				`if (${membership} >= 0) {`,
@@ -11335,8 +11336,8 @@ class NativeInstructionEmission {
 					: `  r${dst} = mal_value_new_boolean(${membership} != 0);`,
 				`} else {`,
 				dstIsBool
-					? `  r${dst} = mal_value_to_boolean(${this.profileCall("binary", this.reentrantValue(binaryValue()))});`
-					: `  r${dst} = ${this.profileCall("binary", this.reentrantValue(binaryValue()))};`,
+					? `  r${dst} = mal_value_to_boolean(${this.profileCall("binary", this.reentrantValue(inOperator))});`
+					: `  r${dst} = ${this.profileCall("binary", this.reentrantValue(inOperator))};`,
 				...(canThrow ? [`  ${this.throwCheck()}`] : []),
 				`}`,
 			];

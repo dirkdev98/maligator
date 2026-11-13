@@ -600,6 +600,7 @@ static void mal_vm_init_engine_state(MalVm *vm) {
     memset(vm->for_in_snapshots, 0, sizeof(vm->for_in_snapshots));
     vm->for_in_iterator_next = mal_value_new_undefined();
     memset(vm->private_append_cache, 0, sizeof(vm->private_append_cache));
+    memset(vm->has_cache, 0, sizeof(vm->has_cache));
     vm->key_atom_cache.string = nullptr;
     mal_module_link_registry_init(&vm->module_links);
     vm->semantic_epochs = (MalSemanticEpochs) {

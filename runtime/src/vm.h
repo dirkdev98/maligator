@@ -1625,6 +1625,17 @@ typedef struct MalForInSnapshot {
     const struct MalShape *shape;
 } MalForInSnapshot;
 
+/** One `key in object` answer for a plain object; see MalVm.has_cache. */
+typedef struct MalHasCacheRow {
+    const struct MalShape *shape;
+    MalValue key;
+    const struct MalObject *prototype;
+    u64 epoch;
+    bool present;
+} MalHasCacheRow;
+
+#define MAL_HAS_CACHE_ROWS 256u
+
 /** Every semantic epoch starts here; zero is the exhausted state. */
 #define MAL_SEMANTIC_EPOCH_INITIAL UINT64_C(1)
 
@@ -2236,6 +2247,14 @@ typedef struct MalVm {
         const struct MalShape *source;
         struct MalShape *final;
     } private_append_cache[128];
+    /**
+     * `key in object` answers for plain objects whose prototypes are all plain objects,
+     * keyed by receiver shape and atom key. A row also names the receiver's prototype
+     * and the prototype-chain epoch, which every structural mutation or collection of
+     * a prototype advances. Shapes and atoms live as long as the VM, so a stale row
+     * can only miss.
+     */
+    MalHasCacheRow has_cache[MAL_HAS_CACHE_ROWS];
 } MalVm;
 
 static inline __attribute__((always_inline)) bool mal_vm_gc_poll_requested(const MalVm *vm) {

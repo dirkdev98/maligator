@@ -200,7 +200,7 @@ describe("local native input admission", () => {
 								STORE_PROPERTY: "mal_vm_indexed_fast_store",
 								STORE_PROPERTY_STATIC: "mal_vm_op_store_property_ic(",
 								DEFINE_PROPERTY: "mal_vm_op_define_property(",
-								in: "mal_vm_binary_op(",
+								in: probe ? "mal_vm_in_operator(" : "mal_vm_binary_op(",
 							}[opcode],
 						);
 					}
