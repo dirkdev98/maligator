@@ -1830,6 +1830,8 @@ export function numericLoopSupportsCheckedIntegers(
 			return (
 				integerLoopInstruction(op) ||
 				[
+					"ITERATOR_STEP",
+					"REQUIRE_COERCIBLE",
 					"LOAD_PROPERTY",
 					"STORE_PROPERTY",
 					"TO_PROPERTY_KEY",

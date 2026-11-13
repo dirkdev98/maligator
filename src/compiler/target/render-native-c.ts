@@ -2470,13 +2470,16 @@ function emitNumericLoopRegion(
 			arithmetic,
 			restartInNumbers,
 		);
+	// Integer-heavy Array bodies first try safe-integer locals; an iteration that leaves
+	// them restarts in the doubles copy that follows.
 	if (
 		arrayArithmetic === undefined &&
-		plan.kind === "fixed-numeric" &&
-		arrayAlternative &&
-		records.size === 0 &&
 		globals.length === 0 &&
-		plan.views.every((view) => view.text !== true && view.lentOnly !== true) &&
+		(plan.kind === "array-iteration" ||
+			(plan.kind === "fixed-numeric" &&
+				arrayAlternative &&
+				records.size === 0 &&
+				plan.views.every((view) => view.text !== true && view.lentOnly !== true))) &&
 		numericLoopSupportsCheckedIntegers(fn, plan.id, order)
 	)
 		return [...emitCopy("checked-integer", true), ...emitCopy("number", false)];
@@ -2795,6 +2798,12 @@ function emitNumericLoopRegion(
 	const int32 = (register: number) => `mal_safe_integer_to_i32(${local(register)})`;
 	const checked = (call: string, dst: number) =>
 		`if (__builtin_expect(!${call.replace("%DST%", `&${local(dst)}`)}, 0)) ${restart}`;
+	// A loaded value that is not a Number, or in safe-integer locals not a 32-bit
+	// integer, restarts the iteration.
+	const numberValue = (value: string, dst: number) =>
+		floating
+			? `if (__builtin_expect(!mal_ops_is_number(${value}), 0)) ${restart} ${local(dst)} = mal_ops_number_as_f64(${value});`
+			: checked(`mal_integer_element_admit(${value}, %DST%)`, dst);
 	const statement = (ip: number, mode: NumericLoopBodyMode): string => {
 		const op = fn.instructions[ip]!;
 		switch (op.opcode) {
@@ -2833,8 +2842,10 @@ function emitNumericLoopRegion(
 				if (cursor === undefined) throw new Error("Invalid numeric loop iterator step");
 				const element = records.has(op.valueDst)
 					? `if (__builtin_expect(!mal_value_is_heap_type(${id}_e, MAL_HEAP_OBJECT), 0)) ${restart} ${local(op.valueDst)} = ${id}_e;`
-					: `if (__builtin_expect(!mal_ops_is_number(${id}_e), 0)) ${restart} ${local(op.valueDst)} = mal_ops_number_as_f64(${id}_e);`;
-				return `if (${id}_cd || ${id}_ci >= ${id}_a.length) { ${id}_cd = true; ${local(op.doneDst)} = true; } else { if (__builtin_expect(${id}_ci >= ${id}_a.count, 0)) ${restart} MalValue ${id}_e = ${id}_a.elements[${id}_ci]; ${element} ${id}_ci++; ${local(op.doneDst)} = false; }`;
+					: numberValue(`${id}_e`, op.valueDst);
+				// The present elements end no later than the length, so one comparison
+				// bounds every step that reads one.
+				return `if (__builtin_expect(${id}_cd || ${id}_ci >= ${id}_a.count, 0)) { if (!${id}_cd && ${id}_ci < ${id}_a.length) ${restart} ${id}_cd = true; ${local(op.doneDst)} = true; } else { MalValue ${id}_e = ${id}_a.elements[${id}_ci]; ${element} ${id}_ci++; ${local(op.doneDst)} = false; }`;
 			}
 			case "LOAD_PROPERTY_STATIC":
 			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
@@ -2850,7 +2861,7 @@ function emitNumericLoopRegion(
 							`if (${id}_o->shape == ${id}_class${layout}) ${id}_f = mal_object_field_load_shaped(${id}_o, ${index}); else { ${rest} }`,
 						cached,
 					);
-					return `{ const MalObject *${id}_o = (const MalObject *) mal_value_to_heap(${local(op.object)}); MalValue ${id}_f; ${read} if (__builtin_expect(!mal_ops_is_number(${id}_f), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_f); }`;
+					return `{ const MalObject *${id}_o = (const MalObject *) mal_value_to_heap(${local(op.object)}); MalValue ${id}_f; ${read} ${numberValue(`${id}_f`, op.dst)} }`;
 				}
 				if (boundObject === undefined || op.object !== boundObject)
 					throw new Error("Invalid numeric loop length load");
@@ -2946,10 +2957,8 @@ function emitNumericLoopRegion(
 						: `if (__builtin_expect(!(${key} >= 0.0 && ${key} < (f64) ${length}) || ${key} != trunc(${key}), 0)) ${restart} `;
 				if (mode === "array" && records.has(op.dst))
 					return `{ ${bound}MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${key}]; if (__builtin_expect(!mal_value_is_heap_type(${id}_e, MAL_HEAP_OBJECT), 0)) ${restart} ${local(op.dst)} = ${id}_e; }`;
-				if (mode === "array" && arrayArithmetic === "checked-integer")
-					return `{ ${bound}MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${key}]; if (__builtin_expect(!mal_safe_integer_value_admit(${id}_e, &${local(op.dst)}), 0)) ${restart} }`;
 				if (mode === "array")
-					return `{ ${bound}MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${key}]; if (__builtin_expect(!mal_ops_is_number(${id}_e), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_e); }`;
+					return `{ ${bound}MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${key}]; ${numberValue(`${id}_e`, op.dst)} }`;
 				if (mode === "f64")
 					return `{ ${bound}${local(op.dst)} = mal_scalar_f64_from_bits(mal_scalar_load_native_u64(${id}_v${op.object}.data + (usize)(u32) ${key} * 8)); }`;
 				const elementKind = viewElementKind(ip, op.object, mode);

@@ -164,6 +164,29 @@ static inline bool mal_safe_integer_value_admit(MalValue value, i64 *out) {
     return mal_safe_integer_admit(mal_value_to_f64(value), out);
 }
 
+/**
+ * Admit a loaded element holding a signed or unsigned 32-bit integer, the values
+ * ToInt32 and ToUint32 produce. Unlike a wider safe integer, its bounded range lets the
+ * C compiler drop the overflow checks of the sums and differences it feeds.
+ */
+static inline __attribute__((always_inline)) bool mal_integer_element_admit(
+    MalValue value, i64 *out
+) {
+    if (__builtin_expect(mal_value_is_int32(value), 1)) {
+        *out = mal_value_to_i32(value);
+        return true;
+    }
+    // Boxing gives int32-range integers int32 tags, which leaves the unsigned range above
+    // them to doubles; any other double restarts the iteration.
+    f64 number = mal_value_to_f64(value);
+    if (!(value < MAL_VALUE_TAG_BASE && number >= 2147483648.0 && number <= 4294967295.0 &&
+            number == trunc(number))) {
+        return false;
+    }
+    *out = (i64) (u32) number;
+    return true;
+}
+
 static inline bool mal_safe_integer_fits(i64 value, i64 *out) {
     if (value > MAL_SAFE_INTEGER_MAX || value < -MAL_SAFE_INTEGER_MAX) return false;
     *out = value;
