@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "ascii.h"
+#include "ecma_whitespace.h"
 #include "async_context.h"
 #include "array_object.h"
 #include "array_buffer_object.h"
@@ -136,6 +137,8 @@ typedef struct MalNodeHttpServerState {
     MalValue pending_lookup;
     MalTlsServerConfig *pending_tls;
     u16 port;
+    int backlog;
+    bool ipv6_only;
     char host[MAL_NET_ADDRESS_MAX];
     bool sni_enabled;
     bool startup_failed;
@@ -5799,7 +5802,7 @@ static void http_server_fail_start(MalVm *vm, MalNodeHttpServerState *state, Mal
 
 static bool http_server_bind(MalVm *vm, MalNodeHttpServerState *state, const char *host) {
     MalHttpServer *native = mal_http_server_start_stream_handler(
-        vm, host, state->port, http_queue_request, state);
+        vm, host, state->port, state->backlog, state->ipv6_only, http_queue_request, state);
     if (native == nullptr) {
         MalValue error = mal_node_net_listen_error(vm, errno, host, state->port);
         if (vm->completion.kind != MAL_COMPLETION_THROW) http_server_fail_start(vm, state, error);
@@ -5861,20 +5864,122 @@ static MalValue http_server_lookup_done(
     return mal_value_new_undefined();
 }
 
+typedef struct MalNodeHttpListenOptions {
+    u16 port;
+    int backlog;
+    bool ipv6_only;
+    char host[256];
+    MalValue callback;
+} MalNodeHttpListenOptions;
+
+static bool http_listen_port(MalVm *vm, MalValue value, u16 *out) {
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    bool valid = mal_ops_is_number(value) || mal_value_is_string(value);
+    if (!valid) {
+        mal_gc_unroot(&root);
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The listen options contain an invalid port", "ERR_INVALID_ARG_VALUE");
+        return false;
+    }
+    if (mal_value_is_string(value)) {
+        MalString *string = mal_value_to_string(value);
+        const c16 *units = mal_string_code_units(string);
+        usize index = 0;
+        while (index < mal_string_length(string) && mal_ecma_is_string_whitespace(units[index])) index++;
+        valid = index != mal_string_length(string);
+    }
+    f64 number = NAN;
+    if (valid) valid = mal_vm_to_number(vm, value, &number);
+    mal_gc_unroot(&root);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
+    if (!valid || !isfinite(number) || number < 0 || number > 65535 || floor(number) != number) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "The port argument must be an integer from 0 through 65535", "ERR_SOCKET_BAD_PORT");
+        return false;
+    }
+    *out = (u16) number;
+    return true;
+}
+
+static bool http_listen_backlog(MalVm *vm, MalValue value, int *out) {
+    f64 number = mal_ops_is_number(value) ? mal_ops_number_as_f64(value) : NAN;
+    if (!isfinite(number) || number < 0 || number > INT32_MAX || floor(number) != number) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "The backlog argument must be a non-negative integer", "ERR_OUT_OF_RANGE");
+        return false;
+    }
+    *out = number == 0 ? 511 : (int) number;
+    return true;
+}
+
+static bool http_parse_listen_options(MalVm *vm, const MalValue *args, i32 argc, MalNodeHttpListenOptions *out) {
+    *out = (MalNodeHttpListenOptions) {.backlog = 511, .host = "0.0.0.0", .callback = mal_value_new_undefined()};
+    MalValue first = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (mal_value_is_object(first) && !mal_value_is_callable(first)) {
+        MalValue value;
+        MalKey port_key = mal_intrinsic_static_string_key(vm, (const byte *) "port");
+        if (!mal_vm_get_property(vm, first, port_key, &value)) return false;
+        if (mal_value_is_nil(value)) {
+            bool present = mal_value_is_null(value) || mal_vm_has_property(vm, first, port_key);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
+            if (!present) {
+                mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "Listen options must specify a port", "ERR_INVALID_ARG_VALUE");
+                return false;
+            }
+            value = mal_value_from_i32(0);
+            if (!mal_vm_set_property(vm, first, port_key, value, first)) return false;
+        }
+        if (!http_listen_port(vm, value, &out->port)) return false;
+        if (!mal_vm_get_static(vm, first, (const byte *) "host", &value)) return false;
+        if (mal_value_is_truthy(value) && !http_listen_host(value, out->host, sizeof(out->host))) {
+            mal_node_throw_invalid_arg_type(vm, "options.host", "of type string", value);
+            return false;
+        }
+        if (!mal_vm_get_static(vm, first, (const byte *) "backlog", &value)) return false;
+        if (!mal_value_is_undefined(value) && !http_listen_backlog(vm, value, &out->backlog)) return false;
+        if (!mal_vm_get_static(vm, first, (const byte *) "ipv6Only", &value)) return false;
+        out->ipv6_only = mal_value_is_boolean(value) && mal_value_is_truthy(value);
+        static const char *unsupported[] = {"path", "fd", "signal", "reusePort"};
+        for (usize i = 0; i < countof(unsupported); i++) {
+            if (!mal_vm_get_static(vm, first, (const byte *) unsupported[i], &value)) return false;
+            if (mal_value_is_nil(value) || (i == 3 && !mal_value_is_truthy(value))) continue;
+            mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                "This HTTP listen option is not supported", "ERR_NOT_SUPPORTED");
+            return false;
+        }
+        if (argc > 1) out->callback = args[1];
+    } else {
+        if (mal_value_is_callable(first)) out->callback = first;
+        else if (!mal_value_is_nil(first) && !http_listen_port(vm, first, &out->port)) return false;
+        for (i32 i = 1; i < argc; i++) {
+            if (mal_value_is_string(args[i])) {
+                if (!http_listen_host(args[i], out->host, sizeof(out->host))) {
+                    mal_node_throw_invalid_arg_type(vm, "host", "of type string", args[i]);
+                    return false;
+                }
+            } else if (mal_ops_is_number(args[i])) {
+                if (!http_listen_backlog(vm, args[i], &out->backlog)) return false;
+            } else if (!mal_value_is_nil(args[i])) out->callback = args[i];
+        }
+    }
+    if (!mal_value_is_nil(out->callback) && !mal_value_is_callable(out->callback)) {
+        mal_node_throw_invalid_arg_type(vm, "callback", "of type function", out->callback);
+        return false;
+    }
+    if (mal_value_is_null(out->callback)) out->callback = mal_value_new_undefined();
+    return true;
+}
+
 static MalValue http_server_listen(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
-    if (!mal_value_is_object(receiver) || argc < 1 || !mal_ops_is_number(args[0])) {
+    if (!mal_value_is_object(receiver)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                           "The port argument must be a number");
-        return mal_value_new_undefined();
-    }
-    f64 number = mal_ops_number_as_f64(args[0]);
-    if (!isfinite(number) || number < 0 || number > 65535 || floor(number) != number) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                           "The port argument must be between 0 and 65535");
+                           "Invalid HTTP server receiver");
         return mal_value_new_undefined();
     }
     MalNodeHttpServerState *previous = http_server_state(receiver);
@@ -5888,21 +5993,10 @@ static MalValue http_server_listen(
         return mal_value_new_undefined();
     }
 
-    char host[256] = "0.0.0.0";
-    MalValue callback = mal_value_new_undefined();
-    if (argc > 1 && mal_value_is_string(args[1])) {
-        if (!http_listen_host(args[1], host, sizeof(host))) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                               "The host argument must be a host name or IP address");
-            return mal_value_new_undefined();
-        }
-        if (argc > 2) callback = args[2];
-    } else if (argc > 1) {
-        callback = args[1];
-    }
-    if (!mal_value_is_undefined(callback) && !mal_value_is_callable(callback)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                           "The callback argument must be a function");
+    MalNodeHttpListenOptions options;
+    if (!http_parse_listen_options(vm, args, argc, &options)) return mal_value_new_undefined();
+    if (http_server_state(receiver) != nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Listen method has been called more than once");
         return mal_value_new_undefined();
     }
 
@@ -5915,7 +6009,9 @@ static MalValue http_server_listen(
     state->vm = vm;
     state->receiver = receiver;
     state->pending_lookup = mal_value_new_undefined();
-    state->port = (u16) number;
+    state->port = options.port;
+    state->backlog = options.backlog;
+    state->ipv6_only = options.ipv6_only;
     state->async_context = mal_async_context_capture(vm);
 #if MAL_REALMS
     state->realm = vm->current_realm;
@@ -5928,22 +6024,25 @@ static MalValue http_server_listen(
     http_servers = state;
     http_server_install_limit_accessors(vm, receiver);
 
-    if (!mal_value_is_undefined(callback)
-        && !http_once(vm, receiver, "listening", callback)) {
+    if (!mal_value_is_undefined(options.callback)
+        && !http_once(vm, receiver, "listening", options.callback)) {
         http_server_remove_start(state);
         return mal_value_new_undefined();
     }
     if (state->closing) return receiver;
     struct sockaddr_storage address;
     socklen_t length;
-    if (mal_net_parse_ip(host, state->port, &address, &length)) {
-        (void) http_server_bind(vm, state, host);
+    if (mal_net_parse_ip(options.host, state->port, &address, &length)) {
+        (void) http_server_bind(vm, state, options.host);
     } else {
         state->pending_lookup = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
             &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
             mal_intrinsic_ascii(vm, "lookupAndListen"), http_server_lookup_done, &receiver, 1));
-        MalValue lookup_args[] = {args[1], state->pending_lookup};
+        MalValue lookup_args[] = {http_ascii_value(vm, options.host, strlen(options.host)), state->pending_lookup};
+        MalRootSpan lookup_root;
+        mal_gc_root(&lookup_root, lookup_args, countof(lookup_args));
         (void) mal_node_dns_lookup(vm, lookup_args, 2);
+        mal_gc_unroot(&lookup_root);
         if (vm->completion.kind == MAL_COMPLETION_THROW) http_server_remove_start(state);
     }
     if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();

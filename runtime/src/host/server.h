@@ -61,6 +61,8 @@ MalHttpServer *mal_http_server_start_stream_handler(
     MalVm *vm,
     const char *host,
     u16 port,
+    int backlog,
+    bool ipv6_only,
     MalHttpServerStreamHandler handler,
     void *data);
 

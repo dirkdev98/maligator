@@ -3906,7 +3906,7 @@ static MalValue mal_serve(
     vm->intrinsics[MAL_INTRINSIC_FETCH_HANDLER] = fetch_val;
 
     MalHttpServer *server =
-        mal_http_server_start_stream_handler(vm, host, port, mal_fetch_stream_handler, nullptr);
+        mal_http_server_start_stream_handler(vm, host, port, 128, false, mal_fetch_stream_handler, nullptr);
     if (server == nullptr) {
         return mal_value_new_undefined(); // The required exception remains unsupported.
     }

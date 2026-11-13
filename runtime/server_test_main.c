@@ -52,7 +52,7 @@ int main(void) {
     bool limited = getenv("MAL_HTTP_TEST_LIMITS") != nullptr;
     MalHttpServer *server = limited
         ? mal_http_server_start_stream_handler(
-              &vm, "127.0.0.1", 0, limits_handler, nullptr)
+              &vm, "127.0.0.1", 0, 128, false, limits_handler, nullptr)
         : mal_http_server_start(&vm, "127.0.0.1", 0);
     if (server == nullptr) {
         fprintf(stderr, "listen failed\n");

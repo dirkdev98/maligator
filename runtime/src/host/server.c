@@ -1397,10 +1397,14 @@ static void server_accept_cb(void *data) {
 }
 
 static MalHttpServer *server_start(
-    MalVm *vm, const char *host, u16 port,
+    MalVm *vm, const char *host, u16 port, int backlog, bool ipv6_only,
     MalHttpServerStreamHandler stream_handler,
     void *handler_data) {
-    int fd = mal_net_listen(host, port, 128);
+    struct sockaddr_storage address;
+    socklen_t length;
+    const char *numeric_host = host == nullptr || host[0] == '\0' ? "0.0.0.0" : host;
+    if (!mal_net_parse_ip(numeric_host, port, &address, &length)) { errno = EINVAL; return nullptr; }
+    int fd = mal_net_listen_address((const struct sockaddr *) &address, length, backlog, ipv6_only);
     if (fd < 0) {
         return nullptr;
     }
@@ -1445,17 +1449,19 @@ static void server_fixed_handler(
 }
 
 MalHttpServer *mal_http_server_start(MalVm *vm, const char *host, u16 port) {
-    return server_start(vm, host, port, server_fixed_handler, nullptr);
+    return server_start(vm, host, port, 128, false, server_fixed_handler, nullptr);
 }
 
 MalHttpServer *mal_http_server_start_stream_handler(
     MalVm *vm,
     const char *host,
     u16 port,
+    int backlog,
+    bool ipv6_only,
     MalHttpServerStreamHandler handler,
     void *data) {
     if (handler == nullptr) return nullptr;
-    return server_start(vm, host, port, handler, data);
+    return server_start(vm, host, port, backlog, ipv6_only, handler, data);
 }
 
 bool mal_http_server_configure_limits(

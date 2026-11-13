@@ -11,6 +11,7 @@ tests/native/node-http-client.test.ts
 tests/native/node-http-hostname.test.ts
 tests/native/node-http-inactivity-timeout.test.ts
 tests/native/node-http-limits.test.ts
+tests/native/node-http-listen-options.test.ts
 tests/native/node-http-listen.test.ts
 tests/native/node-http-outgoing-headers.test.ts
 tests/native/node-http-ready-queues.test.ts
