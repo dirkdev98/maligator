@@ -701,7 +701,7 @@ remains a Maligator extension and does not count as global fetch conformance.
       lengths other than the digest length, ECDSA signing with a hash other than the
       curve's own, publicEncrypt, DiffieHellman and Cipheriv as Transform streams.
       The rest of WebCrypto: RSA generateKey, RSA-OAEP, ECDH/X25519,
-      deriveKey/deriveBits, wrapKey, jwk export of secret keys, and
+      deriveKey, non-PBKDF2 deriveBits, wrapKey, jwk export of secret keys, and
       Crypto/SubtleCrypto methods on their prototypes rather than the instances.
 
 - [ ] crypto: createHash, createHmac and createCipheriv drop their options instead of

@@ -186,6 +186,8 @@ tests/native/interpreter-dense-array.test.ts
 tests/native/interpreter-dispatch-state.test.ts
 tests/native/interpreter-property-ic.test.ts
 tests/native/node-crypto-async.test.ts
+tests/native/webcrypto-capabilities.test.ts
+tests/native/webcrypto-pbkdf2.test.ts
 tests/native/node-crypto-differential.test.ts
 tests/native/node-crypto-start-failure.test.ts
 tests/native/node-crypto.test.ts

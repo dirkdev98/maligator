@@ -3547,6 +3547,7 @@ static bool crypto_web_key_extractable(MalValue key) {
 
 /* Low algorithm tags identify HMAC hashes. */
 #define CRYPTO_WEB_AES_GCM 0x80
+#define CRYPTO_WEB_PBKDF2 0x81
 
 static bool crypto_web_is_aes_gcm(MalVm *vm, MalValue algorithm, bool *ok) {
     MalValue name = mal_value_is_object(algorithm) ? crypto_get(vm, algorithm, "name", ok) : algorithm;
@@ -3566,7 +3567,7 @@ static MalValue crypto_web_new_key(MalVm *vm, byte *stored, usize stored_length,
     u8 mask = 0;
     if (!crypto_web_usage_list(vm, roots[2], &roots[4], &mask)) goto failed;
     u8 tag = (u8) stored[0];
-    u8 allowed = tag == CRYPTO_WEB_AES_GCM ? 0xc3 : tag < CRYPTO_WEB_AES_GCM ? 0x0c
+    u8 allowed = tag == CRYPTO_WEB_PBKDF2 ? 0x30 : tag == CRYPTO_WEB_AES_GCM ? 0xc3 : tag < CRYPTO_WEB_AES_GCM ? 0x0c
         : tag == 0x90 ? CRYPTO_WEB_SIGN : CRYPTO_WEB_VERIFY;
     if ((mask & ~allowed) != 0 || (tag < 0x90 && mask == 0)) {
         mal_dom_exception_throw(vm, (const byte *) "Unsupported key usages", (const byte *) "SyntaxError");
@@ -3583,6 +3584,191 @@ static MalValue crypto_web_new_key(MalVm *vm, byte *stored, usize stored_length,
 failed:
     mal_gc_unroot(&root);
     return mal_value_new_undefined();
+}
+
+static bool crypto_web_buffer_span(MalVm *vm, MalValue value, MalBufferSourceSpan *span) {
+    if (!crypto_is_byte_source(value) || mal_buffer_source_span(value, span) != MAL_BUFFER_SOURCE_SPAN_OK
+        || span->shared) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "WebCrypto requires a non-shared BufferSource");
+        return false;
+    }
+    return true;
+}
+
+static void crypto_web_import_pbkdf2(MalVm *vm, MalValue promise, const MalValue *args, i32 argc) {
+    if (argc < 5) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "PBKDF2 import requires key usages");
+        crypto_settle_with_completion(vm, promise);
+        return;
+    }
+    if (!mal_value_is_string(args[0]) || !mal_string_equals_ascii(mal_value_to_string(args[0]), "raw")) {
+        crypto_web_reject_dom(vm, promise, "PBKDF2 keys require raw format", "NotSupportedError");
+        return;
+    }
+    if (mal_value_is_truthy(args[3])) {
+        crypto_web_reject_dom(vm, promise, "PBKDF2 keys are not extractable", "SyntaxError");
+        return;
+    }
+    MalBufferSourceSpan span;
+    if (!crypto_web_buffer_span(vm, args[1], &span)) {
+        crypto_settle_with_completion(vm, promise);
+        return;
+    }
+    if (span.length > UINT32_MAX - CRYPTO_WEB_KEY_HEADER) {
+        crypto_web_reject_dom(vm, promise, "Key data is too large", "DataError");
+        return;
+    }
+    byte *stored = malloc(span.length + CRYPTO_WEB_KEY_HEADER);
+    if (stored == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        crypto_settle_with_completion(vm, promise);
+        return;
+    }
+    stored[0] = (byte) CRYPTO_WEB_PBKDF2;
+    if (span.length > 0) memcpy(stored + CRYPTO_WEB_KEY_HEADER, span.data, span.length);
+    MalValue roots[] = {promise, mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    crypto_set(vm, roots[1], "name", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "PBKDF2")));
+    roots[2] = crypto_web_new_key(vm, stored, span.length + CRYPTO_WEB_KEY_HEADER, roots[1], false, args[4]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) crypto_settle_with_completion(vm, roots[0]);
+    else mal_promise_fulfill(vm, mal_value_to_promise_object(roots[0]), roots[2]);
+    mal_gc_unroot(&root);
+}
+
+static bool crypto_web_uint32(MalVm *vm, MalValue value, u32 *out) {
+    f64 number;
+    if (!mal_vm_to_number(vm, value, &number)) return false;
+    if (!isfinite(number) || trunc(number) < 0 || trunc(number) > UINT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is outside the unsigned long range");
+        return false;
+    }
+    *out = (u32) trunc(number);
+    return true;
+}
+
+static MalValue crypto_web_derive_done(MalVm *vm, MalValue receiver, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) receiver; (void) nt;
+    MalValue roots[] = {mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0),
+        argc > 1 ? args[1] : mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (argc > 0 && !mal_value_is_nil(args[0])) {
+        crypto_web_reject_dom(vm, roots[0], "Key derivation failed", "OperationError");
+    } else {
+        MalBufferSourceSpan span;
+        if (mal_buffer_source_span(roots[1], &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+            crypto_web_reject_dom(vm, roots[0], "Key derivation failed", "OperationError");
+        } else {
+            byte *copy = malloc(span.length == 0 ? 1 : span.length);
+            if (copy == nullptr) {
+                mal_vm_throw_allocation_error(vm);
+                crypto_settle_with_completion(vm, roots[0]);
+            } else {
+                if (span.length > 0) memcpy(copy, span.data, span.length);
+                roots[2] = mal_value_from_array_buffer_object(mal_array_buffer_object_adopt(&vm->heap,
+                    mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]), copy, (u32) span.length, true));
+                mal_promise_fulfill(vm, mal_value_to_promise_object(roots[0]), roots[2]);
+            }
+        }
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_node_crypto_subtle_derive_bits(MalVm *vm, MalValue receiver, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) receiver; (void) nt; (void) callee;
+    MalValue roots[] = {crypto_new_promise(vm), argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 ? args[1] : mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
+        argc > 2 ? args[2] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    u32 iterations, bits = 0;
+    if (crypto_web_stored(roots[2]) == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "The key must be a CryptoKey");
+        crypto_settle_with_completion(vm, roots[0]);
+        goto done;
+    }
+    if (!mal_value_is_nil(roots[7]) && !crypto_web_uint32(vm, roots[7], &bits)) {
+        crypto_settle_with_completion(vm, roots[0]);
+        goto done;
+    }
+    bool ok = true;
+    roots[4] = mal_value_is_object(roots[1]) ? crypto_get(vm, roots[1], "name", &ok) : roots[1];
+    if (!ok) { crypto_settle_with_completion(vm, roots[0]); goto done; }
+    if (!mal_value_is_string(roots[4]) || !mal_string_equals_ascii_ci(mal_value_to_string(roots[4]), "PBKDF2")) {
+        crypto_web_reject_dom(vm, roots[0], "Unrecognized algorithm name", "NotSupportedError");
+        goto done;
+    }
+    roots[4] = crypto_get(vm, roots[1], "hash", &ok);
+    if (ok && mal_value_is_undefined(roots[4])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "PBKDF2 requires a hash");
+        ok = false;
+    }
+    if (ok) roots[6] = crypto_get(vm, roots[1], "iterations", &ok);
+    if (ok) ok = crypto_web_uint32(vm, roots[6], &iterations);
+    if (ok) roots[3] = crypto_get(vm, roots[1], "salt", &ok);
+    MalBufferSourceSpan salt;
+    if (ok) ok = crypto_web_buffer_span(vm, roots[3], &salt);
+    if (ok && mal_value_is_object(roots[4])) roots[4] = crypto_get(vm, roots[4], "name", &ok);
+    if (!ok) { crypto_settle_with_completion(vm, roots[0]); goto done; }
+    MalNodeCryptoStateKind hash;
+    if (!crypto_web_hash(roots[4], &hash)) {
+        crypto_web_reject_dom(vm, roots[0], "Unrecognized hash", "NotSupportedError");
+        goto done;
+    }
+    // Hash normalization may invoke user getters that detach an earlier salt view.
+    if (!crypto_web_buffer_span(vm, roots[3], &salt)) {
+        crypto_settle_with_completion(vm, roots[0]);
+        goto done;
+    }
+    MalArrayBufferObject *stored = crypto_web_stored(roots[2]);
+    if ((u8) stored->data[0] != CRYPTO_WEB_PBKDF2 || !crypto_web_key_has_usage(roots[2], CRYPTO_WEB_DERIVE_BITS)) {
+        crypto_web_reject_dom(vm, roots[0], "Key algorithm or usage mismatch", "InvalidAccessError");
+        goto done;
+    }
+    if (mal_value_is_nil(roots[7])) {
+        crypto_web_reject_dom(vm, roots[0], "PBKDF2 requires a bit length", "OperationError");
+        goto done;
+    }
+    if (iterations == 0 || bits % 8 != 0 || (bits > 0 && iterations > INT32_MAX)) {
+        crypto_web_reject_dom(vm, roots[0], "Invalid PBKDF2 parameters", "OperationError");
+        goto done;
+    }
+    if (bits == 0) {
+        roots[5] = mal_value_from_array_buffer_object(mal_array_buffer_object_new(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]), 0, 0, false, false));
+        mal_promise_fulfill(vm, mal_value_to_promise_object(roots[0]), roots[5]);
+        goto done;
+    }
+    CryptoKdfJob *job = calloc(1, sizeof(*job));
+    if (job == nullptr) { mal_vm_throw_allocation_error(vm); crypto_settle_with_completion(vm, roots[0]); goto done; }
+    job->kind = CRYPTO_KDF_PBKDF2;
+    job->digest = hash;
+    job->iterations = iterations;
+    job->length = bits / 8;
+    stored = crypto_web_stored(roots[2]);
+    job->password_length = stored->byte_length - CRYPTO_WEB_KEY_HEADER;
+    job->password = malloc(job->password_length == 0 ? 1 : job->password_length);
+    if (job->password == nullptr || !crypto_kdf_copy(vm, roots[3], "salt", &job->salt, &job->salt_length)) {
+        crypto_kdf_job_free(job);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) mal_vm_throw_allocation_error(vm);
+        crypto_settle_with_completion(vm, roots[0]);
+        goto done;
+    }
+    if (job->password_length > 0) memcpy(job->password, stored->data + CRYPTO_WEB_KEY_HEADER, job->password_length);
+    roots[5] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) "deriveBits"), 2, crypto_web_derive_done, roots, 1));
+    (void) crypto_kdf_finish(vm, job, roots[5]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) crypto_settle_with_completion(vm, roots[0]);
+done:
+    mal_gc_unroot(&root);
+    return roots[0];
 }
 
 static void crypto_web_import_aes(MalVm *vm, MalValue promise, const MalValue *args, i32 argc) {
@@ -3769,23 +3955,29 @@ static MalValue mal_node_crypto_subtle_import_key(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
     (void) receiver; (void) new_target; (void) callee;
     MalValue undefined = mal_value_new_undefined();
-    MalValue roots[] = {crypto_new_promise(vm), argc > 2 ? args[2] : undefined, undefined, undefined, undefined};
+    MalValue roots[] = {crypto_new_promise(vm), argc > 2 ? args[2] : undefined, undefined, undefined, undefined, undefined};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     bool ok = true;
     MalValue format = argc > 0 ? args[0] : undefined;
     MalNodeCryptoStateKind hash = MAL_NODE_CRYPTO_SHA256;
-    CryptoWebAsym asymmetric = crypto_web_asym(vm, roots[1], &ok);
+    roots[5] = mal_value_is_object(roots[1]) ? crypto_get(vm, roots[1], "name", &ok) : roots[1];
+    if (!ok) { crypto_settle_with_completion(vm, roots[0]); goto done; }
+    if (mal_value_is_string(roots[5]) && mal_string_equals_ascii_ci(mal_value_to_string(roots[5]), "PBKDF2")) {
+        crypto_web_import_pbkdf2(vm, roots[0], args, argc);
+        goto done;
+    }
+    CryptoWebAsym asymmetric = crypto_web_asym(vm, roots[5], &ok);
     if (asymmetric != CRYPTO_WEB_NONE) {
         crypto_web_import_asym(vm, roots[0], asymmetric, args, argc);
         goto done;
     }
-    if (crypto_web_is_aes_gcm(vm, roots[1], &ok)) {
+    if (crypto_web_is_aes_gcm(vm, roots[5], &ok)) {
         crypto_web_import_aes(vm, roots[0], args, argc);
         goto done;
     }
     if (!ok) { crypto_settle_with_completion(vm, roots[0]); goto done; }
-    if (!crypto_web_is_hmac(vm, roots[1], &ok)) {
+    if (!crypto_web_is_hmac(vm, roots[5], &ok)) {
         if (!ok) crypto_settle_with_completion(vm, roots[0]);
         else crypto_web_reject_dom(vm, roots[0], "Unrecognized algorithm name", "NotSupportedError");
         goto done;
@@ -3958,6 +4150,8 @@ static void crypto_install_webcrypto(MalVm *vm, MalObject *module) {
         mal_node_crypto_subtle_digest);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "importKey", 5,
         mal_node_crypto_subtle_import_key);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "deriveBits", 3,
+        mal_node_crypto_subtle_derive_bits);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "sign", 3,
         mal_node_crypto_subtle_sign);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "verify", 4,
@@ -5749,7 +5943,9 @@ static MalValue mal_node_crypto_subtle_export_key(
     bool ok = true;
     MalValue extractable = key == nullptr ? mal_value_new_undefined() : mal_value_new_boolean(crypto_web_key_extractable(key_value));
     MalArrayBufferObject *secret = key == nullptr ? crypto_web_stored(key_value) : nullptr;
-    if (secret != nullptr && crypto_string_is(format, "raw")) {
+    if (secret != nullptr && (u8) secret->data[0] == CRYPTO_WEB_PBKDF2) {
+        crypto_web_reject_dom(vm, roots[0], "PBKDF2 key export is not supported", "NotSupportedError");
+    } else if (secret != nullptr && crypto_string_is(format, "raw")) {
         extractable = mal_value_new_boolean(crypto_web_key_extractable(key_value));
         if (!ok) {
             crypto_settle_with_completion(vm, roots[0]);
