@@ -4524,7 +4524,7 @@ static MalValue rs_from_pull_fulfilled(MalVm *vm, MalValue self,
     if (bytes) {
         if (!mal_value_is_typed_array_object(roots[2])
             || mal_value_to_typed_array_object(roots[2])->kind != MAL_TA_UINT8)
-            roots[2] = mal_node_buffer_from_value(vm, roots[2]);
+            roots[2] = mal_node_buffer_from_value(vm, roots[2], mal_value_new_undefined());
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             roots[5] = vm->completion.value;
             vm->completion = rs_normal();

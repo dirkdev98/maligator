@@ -881,7 +881,9 @@ static MalValue stream_push(
     }
     MalRootSpan chunk_root;
     mal_gc_root(&chunk_root, &chunk, 1);
-    stream_push_chunk(vm, receiver, state, chunk);
+    if (mal_value_is_string(chunk) && !mal_value_is_object(decoder) && !stream_truthy_own(vm, state, "objectMode"))
+        chunk = mal_node_buffer_from_value(vm, chunk, argc > 1 ? args[1] : mal_value_new_undefined());
+    if (vm->completion.kind != MAL_COMPLETION_THROW) stream_push_chunk(vm, receiver, state, chunk);
     mal_gc_unroot(&chunk_root);
     return mal_value_new_boolean(mal_node_stream_readable_capacity(vm, receiver) > 0);
 }

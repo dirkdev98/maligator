@@ -15,8 +15,8 @@ void mal_host_install_node_buffer(
  */
 MalValue mal_node_buffer_from_owned_bytes(MalVm *vm, byte *bytes, usize length);
 
-/** Convert a value using the current realm's intrinsic Buffer.from semantics. */
-MalValue mal_node_buffer_from_value(MalVm *vm, MalValue value);
+/** Convert a value and optional encoding using the realm's intrinsic Buffer.from semantics. */
+MalValue mal_node_buffer_from_value(MalVm *vm, MalValue value, MalValue encoding);
 
 /** Share a view's current byte range with a Buffer whose length stays fixed. */
 MalValue mal_node_buffer_fixed_view(MalVm *vm, MalValue view);

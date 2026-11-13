@@ -1,0 +1,15 @@
+import assert from "node:assert/strict";
+import { Readable } from "node:stream";
+const source = new Readable({ read() {} });
+source.push("λ");
+source.push("a");
+source.push("ff", "hex");
+assert.equal(source.readableLength, Buffer.byteLength("λa") + 1);
+const first = source.read(3);
+assert.ok(Buffer.isBuffer(first));
+assert.equal(first.toString(), "λa");
+assert.equal(source.read(1)[0], 255);
+const objects = new Readable({ objectMode: true, read() {} });
+objects.push("preserved");
+assert.equal(objects.read(), "preserved");
+console.log("READABLE PUSH BYTES PASS");
