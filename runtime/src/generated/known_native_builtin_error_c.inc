@@ -1,4 +1,7 @@
 #include "vm.h"
+MalValue mal_known_native_mal_error_callsite_method(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
+    return mal_error_callsite_method(vm, receiver, args, count, target, callee);
+}
 MalValue mal_known_native_mal_builtin_aggregate_error_constructor(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
     return mal_builtin_aggregate_error_constructor(vm, receiver, args, count, target, callee);
 }

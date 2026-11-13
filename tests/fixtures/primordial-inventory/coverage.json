@@ -637,6 +637,303 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%\",\"getFileName\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+				"MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE"
+			],
+			"key": "getFileName",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%\",\"getScriptNameOrSourceURL\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+				"MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE"
+			],
+			"key": "getScriptNameOrSourceURL",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%\",\"getLineNumber\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+				"MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE"
+			],
+			"key": "getLineNumber",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%\",\"getColumnNumber\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+				"MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE"
+			],
+			"key": "getColumnNumber",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%\",\"isEval\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+				"MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE"
+			],
+			"key": "isEval",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%\",\"isNative\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+				"MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE"
+			],
+			"key": "isNative",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%\",\"getFunctionName\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+				"MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE"
+			],
+			"key": "getFunctionName",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%\",\"getThis\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+				"MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE"
+			],
+			"key": "getThis",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%\",\"toString\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%",
+				"MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE"
+			],
+			"key": "toString",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFileName\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFileName",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFileName"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFileName\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFileName",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFileName"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFunctionName\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFunctionName",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFunctionName"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFunctionName\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFunctionName",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFunctionName"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getLineNumber\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getLineNumber",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getLineNumber"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getLineNumber\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getLineNumber",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getLineNumber"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getScriptNameOrSourceURL\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getScriptNameOrSourceURL",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getScriptNameOrSourceURL"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getScriptNameOrSourceURL\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getScriptNameOrSourceURL",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getScriptNameOrSourceURL"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getThis\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getThis",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getThis"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getThis\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getThis",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getThis"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isEval\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isEval",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isEval"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isEval\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isEval",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isEval"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isNative\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isNative",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isNative"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isNative\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isNative",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isNative"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.toString\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.toString",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.toString"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.toString\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.toString",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.toString"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_EVALUATE_MODULE_SYNC%\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_EVALUATE_MODULE_SYNC%",
 			"ownerPaths": [
@@ -48368,6 +48665,19 @@
 				"mal_host_install_node_module:builtinModules"
 			],
 			"key": "50",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_MODULE_API_MODULE%.builtinModules\",\"51\"]",
+			"owner": "%MAL_INTRINSIC_NODE_MODULE_API_MODULE%.builtinModules",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_MODULE_API_MODULE%.builtinModules",
+				"mal_host_install_node_module:builtinModules"
+			],
+			"key": "51",
 			"kind": "data",
 			"operations": [],
 			"task": "N-06",
@@ -143938,6 +144248,186 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_DYNAMIC_IMPORT%"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFileName\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFileName",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFileName"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFileName\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFileName",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFileName"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFunctionName\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFunctionName",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFunctionName"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFunctionName\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFunctionName",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFunctionName"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getLineNumber\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getLineNumber",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getLineNumber"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getLineNumber\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getLineNumber",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getLineNumber"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getScriptNameOrSourceURL\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getScriptNameOrSourceURL",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getScriptNameOrSourceURL"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getScriptNameOrSourceURL\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getScriptNameOrSourceURL",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getScriptNameOrSourceURL"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getThis\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getThis",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getThis"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getThis\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getThis",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getThis"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isEval\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isEval",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isEval"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isEval\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isEval",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isEval"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isNative\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isNative",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isNative"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isNative\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isNative",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isNative"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.toString\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.toString",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.toString"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.toString\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.toString",
+			"ownerPaths": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.toString"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -288933,6 +289423,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_ERROR_CONSTRUCTOR\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -301969,6 +302469,20 @@
 		{
 			"id": "%MAL_INTRINSIC_DYNAMIC_IMPORT%",
 			"identities": ["%MAL_INTRINSIC_DYNAMIC_IMPORT%"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber",
+			"identities": [
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getColumnNumber",
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFileName",
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getFunctionName",
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getLineNumber",
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getScriptNameOrSourceURL",
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.getThis",
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isEval",
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.isNative",
+				"%MAL_INTRINSIC_ERROR_CALLSITE_PROTOTYPE%.toString"
+			]
 		},
 		{
 			"id": "%MAL_INTRINSIC_EVALUATE_MODULE_SYNC%",

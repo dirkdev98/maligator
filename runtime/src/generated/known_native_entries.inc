@@ -12,6 +12,7 @@ MalValue mal_known_native_mal_builtin_configure_deferred_namespace(MalVm *vm, Ma
 MalValue mal_known_native_mal_builtin_direct_eval(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_mal_builtin_dispose_resources(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_mal_builtin_dynamic_import(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
+MalValue mal_known_native_mal_error_callsite_method(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_mal_builtin_evaluate_module_sync(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_mal_builtin_generator_function_constructor(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_mal_builtin_generator_next(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
