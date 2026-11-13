@@ -3151,12 +3151,20 @@ static inline __attribute__((always_inline)) MalValue mal_vm_indexed_fast_load(
             return element;
         }
     } else if (mal_value_is_string(key_value)) {
-        // A computed name that stays the same at a site, such as `record[key]` with a
-        // constant key, otherwise pays the out-of-line call for a monomorphic hit.
+        // Reconstructed short names can match the cached atom without another
+        // property-key conversion. Bound content work when names vary at the site.
         const MalObject *object = mal_vm_as_object(object_value);
-        MalValue value;
-        if (object != nullptr && mal_vm_object_try_load_monomorphic(object, key_value, ic, &value)) {
-            return value;
+        if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape) {
+            bool same_key = key_value == ic->key;
+            if (!same_key && mal_value_is_string(ic->key) &&
+                mal_string_length(mal_value_to_string(key_value)) <= MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
+                same_key = mal_string_equals(
+                    mal_value_to_string(key_value), mal_value_to_string(ic->key));
+            }
+            if (same_key) {
+                mal_perf_ic_load_mono_hit();
+                return mal_object_field_load_shaped(object, ic->slot);
+            }
         }
     }
     return mal_vm_indexed_load_keyed(vm, object_value, key_value, ic);

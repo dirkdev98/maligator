@@ -18,7 +18,7 @@ function field(line: string, name: string): number {
 	return Number(line.match(new RegExp(`(?:^|\\s)${name}=([0-9]+)`))?.[1] ?? 0);
 }
 
-describe("computed accesses with literal keys", () => {
+describe("computed accesses with stable names", () => {
 	let compiled: string;
 	let interpreted: string;
 	beforeAll(() => {
@@ -39,7 +39,7 @@ describe("computed accesses with literal keys", () => {
 		});
 	}
 
-	it("keeps serving a round's literal key from the site cache", () => {
+	it("serves literal and reconstructed names from the site cache", () => {
 		const result = spawnSync(compiled, [], {
 			env: { ...process.env, MAL_PERF_STATS: "1" },
 			encoding: "utf-8",
@@ -50,8 +50,6 @@ describe("computed accesses with literal keys", () => {
 			.split("\n")
 			.find((candidate) => candidate.startsWith("[perf-ic-stats]"));
 		expect(line).toBeDefined();
-		// 32,768 computed loads and as many stores change key once per round;
-		// each miss refills the cache.
 		expect(field(line ?? "", "load_fallbacks")).toBeLessThan(4096);
 		expect(field(line ?? "", "store_fallbacks")).toBeLessThan(4096);
 	});

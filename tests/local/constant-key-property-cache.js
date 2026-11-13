@@ -15,6 +15,15 @@ for (let round = 0; round < 64; round++) {
 	const key = keys[round & 3];
 	for (const row of rows) checksum += row[key];
 }
+let freshChecksum = 0;
+let freshExpected = 0;
+for (let round = 0; round < 16; round++) {
+	for (const row of rows) {
+		const key = "field" + String(round & 3);
+		freshChecksum += row[key];
+		freshExpected += row.field0 + (round & 3);
+	}
+}
 for (let round = 0; round < 64; round++) {
 	const key = keys[round & 3];
 	for (const row of rows) row[key] = round;
@@ -22,6 +31,10 @@ for (let round = 0; round < 64; round++) {
 
 const results = [];
 results.push(["constant key checksum", checksum === 16 * (4 * 130816 + 512 * 6)]);
+results.push([
+	"reconstructed names read the selected field",
+	freshChecksum === freshExpected,
+]);
 results.push([
 	"constant key stores",
 	rows.every(
@@ -53,6 +66,51 @@ const inherited = Object.create({ field1: "inherited" });
 results.push(["inherited constant key", inherited[keys[1]] === "inherited"]);
 inherited.field1 = "own";
 results.push(["shadowing after inherited hit", inherited[keys[1]] === "own"]);
+
+function readCreatedKey(record, suffix) {
+	return record["field" + suffix];
+}
+const changed = { field0: 7 };
+readCreatedKey(changed, "0");
+readCreatedKey(changed, "0");
+let getterCalls = 0;
+Object.defineProperty(changed, "field0", {
+	get() {
+		getterCalls++;
+		return 9;
+	},
+});
+results.push([
+	"a reconstructed name observes an accessor replacing a cached data field",
+	readCreatedKey(changed, "0") === 9 &&
+		readCreatedKey(changed, "0") === 9 &&
+		getterCalls === 2,
+]);
+let proxyCalls = 0;
+const proxied = new Proxy(
+	{ field0: 3 },
+	{
+		get(target, key) {
+			proxyCalls++;
+			return target[key] + 1;
+		},
+	},
+);
+results.push([
+	"a reconstructed name still invokes proxy traps",
+	readCreatedKey(proxied, "0") === 4 && proxyCalls === 1,
+]);
+
+const longNames = { sharedPropertyPrefixFirst: 1, sharedPropertyPrefixOther: 2 };
+const longSuffixes = ["First", "Other"];
+let longChecksum = 0;
+for (let i = 0; i < longSuffixes.length * 8; i++) {
+	longChecksum += longNames["sharedPropertyPrefix" + longSuffixes[i & 1]];
+}
+results.push([
+	"long names keep distinct suffixes",
+	longChecksum === longSuffixes.length * 12,
+]);
 
 let passed = 0;
 for (const [name, ok] of results) {
