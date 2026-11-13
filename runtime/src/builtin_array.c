@@ -541,7 +541,7 @@ static u32 mal_builtin_array_clamp_relative(MalVm *vm, MalValue value, f64 fallb
 }
 
 static bool mal_builtin_array_same_value_zero(MalValue left, MalValue right) {
-    if (mal_value_to_boolean(mal_ops_strict_equal(left, right))) {
+    if (mal_ops_strict_equal_bool(left, right)) {
         return true;
     }
 
@@ -1955,7 +1955,7 @@ static MalValue mal_builtin_array_index_of(MalVm *vm, MalValue this_value, const
             continue;
         }
 
-        if (mal_value_to_boolean(mal_ops_strict_equal(element, search))) {
+        if (mal_ops_strict_equal_bool(element, search)) {
             return mal_ops_number_value(index);
         }
     }
@@ -2039,7 +2039,7 @@ static MalValue mal_builtin_array_last_index_of(MalVm *vm, MalValue this_value, 
     for (f64 index = start;; index--) {
         MalValue element;
         if (mal_builtin_array_try_get_wide(vm, this_value, index, &element) &&
-            mal_value_to_boolean(mal_ops_strict_equal(element, search))) {
+            mal_ops_strict_equal_bool(element, search)) {
             return mal_ops_number_value(index);
         }
         if (vm->completion.kind == MAL_COMPLETION_THROW) {

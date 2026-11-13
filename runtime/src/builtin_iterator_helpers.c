@@ -1029,7 +1029,7 @@ static MalValue mal_ih_method_windows(MalVm *vm, MalValue this_value, const MalV
 // --- Eager helper methods ----------------------------------------------------
 
 static bool mal_ih_same_value_zero(MalValue left, MalValue right) {
-    return mal_value_to_boolean(mal_ops_strict_equal(left, right)) ||
+    return mal_ops_strict_equal_bool(left, right) ||
         (mal_value_is_nan(left) && mal_value_is_nan(right));
 }
 
