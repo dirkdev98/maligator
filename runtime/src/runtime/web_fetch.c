@@ -4048,7 +4048,7 @@ static void mal_file_install(MalVm *vm, MalObject *global_this, MalObject *blob_
     mal_gc_unroot(&root);
 }
 
-void mal_fetch_install(MalVm *vm, MalObject *global_this) {
+void mal_fetch_types_install(MalVm *vm, MalObject *global_this) {
     MalObject *function_prototype =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *object_prototype =
@@ -4257,12 +4257,6 @@ void mal_fetch_install(MalVm *vm, MalObject *global_this) {
     // Headers (constructor + prototype; registers its own GC tracer/finalizer).
     mal_headers_install(vm, global_this);
 
-    // Mal namespace + Mal.serve.
-    MalObject *mal_ns = mal_intrinsic_new_object(vm);
-    mal_intrinsic_define_method_n(vm, mal_ns, (const byte *) "serve", 1, mal_serve);
-    mal_intrinsic_define_data(vm, global_this, (const byte *) "Mal",
-        mal_value_from_object(mal_ns), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-
     // GC hooks for Fetch-owned buffers and the traced Headers/body-stream fields.
     mal_gc_register_tracer(MAL_HEAP_RESPONSE_OBJECT, mal_response_trace);
     mal_gc_register_finalizer(MAL_HEAP_RESPONSE_OBJECT, mal_response_finalize);
@@ -4273,4 +4267,12 @@ void mal_fetch_install(MalVm *vm, MalObject *global_this) {
     mal_gc_register_finalizer(MAL_HEAP_FORM_DATA_OBJECT, mal_form_data_finalize);
     mal_gc_register_tracer(
         MAL_HEAP_FORM_DATA_ITERATOR_OBJECT, mal_form_data_iterator_trace);
+}
+
+void mal_fetch_install(MalVm *vm, MalObject *global_this) {
+    mal_fetch_types_install(vm, global_this);
+    MalObject *mal_ns = mal_intrinsic_new_object(vm);
+    mal_intrinsic_define_method_n(vm, mal_ns, (const byte *) "serve", 1, mal_serve);
+    mal_intrinsic_define_data(vm, global_this, (const byte *) "Mal",
+        mal_value_from_object(mal_ns), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }

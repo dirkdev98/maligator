@@ -196,39 +196,109 @@ class MaligatorResponse {
 }
 
 async function maligatorFetch(input, init = {}) {
+	const inherited = input instanceof Request ? input : undefined;
 	const url = new URL(typeof input === "object" && input.url ? input.url : String(input));
 	if (url.username || url.password)
 		return Promise.reject(new TypeError("Fetch URL contains credentials"));
-	const headers = new MaligatorHeaders(init.headers);
-	const method = String(init.method ?? "GET").toUpperCase();
-	if (
-		(method === "GET" || method === "HEAD") &&
-		init.body !== undefined &&
-		init.body !== null
-	) {
+	const headers = new MaligatorHeaders(init.headers ?? inherited?.headers);
+	const method = String(init.method ?? inherited?.method ?? "GET").toUpperCase();
+	let body = init.body ?? inherited?.body;
+	if ((method === "GET" || method === "HEAD") && body !== undefined && body !== null) {
 		return Promise.reject(new TypeError("GET and HEAD requests cannot have a body"));
 	}
-	const signal = init.signal;
+	const signal = init.signal ?? inherited?.signal;
 	// oxlint-disable-next-line typescript/prefer-promise-reject-errors -- AbortSignal.reason may be any JavaScript value.
 	if (signal?.aborted) return Promise.reject(signal.reason);
-	const redirect = init.redirect ?? "follow";
+	const redirect = init.redirect ?? inherited?.redirect ?? "follow";
 	if (!["follow", "error", "manual"].includes(redirect)) {
 		return Promise.reject(new TypeError("Invalid redirect mode"));
 	}
-	return fetchRequest(url, method, headers, init.body, signal, redirect, 0);
+	if (inherited?.bodyUsed && (init.body === undefined || init.body === null))
+		throw new TypeError("Request body has already been consumed");
+	const streaming =
+		body !== undefined &&
+		body !== null &&
+		(typeof body.getReader === "function" ||
+			typeof body[Symbol.asyncIterator] === "function");
+	const duplex = init.duplex ?? inherited?.duplex;
+	if ((duplex !== undefined && duplex !== "half") || (streaming && duplex !== "half"))
+		throw new TypeError("Streaming request bodies require duplex: half");
+	if (body !== undefined && body !== null && !streaming) {
+		const normalized = new Response(body);
+		if (!headers.has("content-type") && normalized.headers.has("content-type"))
+			headers.set("content-type", normalized.headers.get("content-type"));
+		body = await normalized.bytes();
+	}
+	return fetchRequest(url, method, headers, body, signal, redirect, 0, streaming);
 }
 
-function fetchRequest(url, method, headers, body, signal, redirect, redirects) {
+function waitForDrain(request, signal) {
+	return new Promise((resolve, reject) => {
+		const cleanup = () => {
+			request.off("drain", drain);
+			request.off("error", error);
+			request.off("close", close);
+			signal?.removeEventListener("abort", abort);
+		};
+		const drain = () => {
+			cleanup();
+			resolve();
+		};
+		const error = (reason) => {
+			cleanup();
+			// oxlint-disable-next-line typescript/prefer-promise-reject-errors -- AbortSignal.reason may be any JavaScript value.
+			reject(reason);
+		};
+		const close = () => error(new TypeError("Request closed during upload"));
+		const abort = () => error(signal.reason);
+		request.once("drain", drain);
+		request.once("error", error);
+		request.once("close", close);
+		signal?.addEventListener("abort", abort, { once: true });
+		if (signal?.aborted) abort();
+		else if (request.destroyed) close();
+	});
+}
+
+function fetchRequest(
+	url,
+	method,
+	headers,
+	body,
+	signal,
+	redirect,
+	redirects,
+	streaming,
+) {
 	return new Promise((resolve, reject) => {
 		let request;
 		let response;
 		let controller;
 		let finished = false;
+		let uploadDone = !streaming;
+		let uploadReader;
+		let uploadIterator;
 		const cleanup = () => signal?.removeEventListener("abort", abort);
+		const stopUpload = (reason) => {
+			if (uploadDone) return;
+			uploadDone = true;
+			try {
+				const cancelled = uploadReader
+					? uploadReader.cancel(reason)
+					: uploadIterator?.return?.();
+				Promise.resolve(cancelled).catch(() => {});
+			} catch {
+				// Cancellation failure must not replace the transport or abort reason.
+			}
+			request?.destroy();
+		};
 		const fail = (error) => {
 			if (finished) return;
 			finished = true;
 			cleanup();
+			stopUpload(error);
+			response?.destroy();
+			request?.destroy();
 			if (controller) controller.error(error);
 			// oxlint-disable-next-line typescript/prefer-promise-reject-errors -- AbortSignal.reason may be any JavaScript value.
 			reject(error);
@@ -236,8 +306,6 @@ function fetchRequest(url, method, headers, body, signal, redirect, redirects) {
 		const abort = () => {
 			const reason = signal.reason;
 			fail(reason);
-			response?.destroy();
-			request?.destroy();
 		};
 		signal?.addEventListener("abort", abort, { once: true });
 		if (signal?.aborted) {
@@ -296,6 +364,11 @@ function fetchRequest(url, method, headers, body, signal, redirect, redirects) {
 						return;
 					}
 					try {
+						// Fetch cannot replay a source-less stream after a redirect except 303.
+						if (streaming && status !== 303)
+							throw new TypeError(
+								"Cannot replay a streaming request body after a redirect",
+							);
 						const next = new URL(location, url);
 						if (next.username || next.password)
 							throw new TypeError("Redirect URL contains credentials");
@@ -318,6 +391,7 @@ function fetchRequest(url, method, headers, body, signal, redirect, redirects) {
 								nextHeaders.delete(name);
 						finished = true;
 						cleanup();
+						stopUpload();
 						response.destroy();
 						resolve(
 							fetchRequest(
@@ -328,6 +402,7 @@ function fetchRequest(url, method, headers, body, signal, redirect, redirects) {
 								signal,
 								redirect,
 								redirects + 1,
+								streaming && !rewrite,
 							),
 						);
 					} catch (error) {
@@ -348,9 +423,10 @@ function fetchRequest(url, method, headers, body, signal, redirect, redirects) {
 							pull() {
 								response.resume();
 							},
-							cancel() {
+							cancel(reason) {
 								finished = true;
 								cleanup();
+								stopUpload(reason);
 								response.destroy();
 								request.destroy();
 							},
@@ -367,6 +443,7 @@ function fetchRequest(url, method, headers, body, signal, redirect, redirects) {
 					if (finished) return;
 					finished = true;
 					cleanup();
+					stopUpload();
 					controller?.close();
 				});
 				response.on("close", () => {
@@ -384,8 +461,36 @@ function fetchRequest(url, method, headers, body, signal, redirect, redirects) {
 				);
 			});
 			request.on("error", fail);
-			if (body !== undefined && body !== null) request.write(body);
-			request.end();
+			if (!streaming) request.end(body);
+			else {
+				const upload = async () => {
+					try {
+						if (typeof body.getReader === "function") uploadReader = body.getReader();
+						else uploadIterator = body[Symbol.asyncIterator]();
+						while (!uploadDone && !finished) {
+							const { done, value } = await (uploadReader
+								? uploadReader.read()
+								: uploadIterator.next());
+							if (uploadDone || finished) return;
+							if (done) break;
+							if (!(value instanceof Uint8Array) && typeof value !== "string")
+								throw new TypeError(
+									"Request body chunks must be strings or Uint8Array values",
+								);
+							if (!request.write(value)) await waitForDrain(request, signal);
+						}
+						if (!uploadDone && !finished) {
+							uploadDone = true;
+							request.end();
+						}
+					} catch (error) {
+						fail(error);
+					} finally {
+						uploadReader?.releaseLock();
+					}
+				};
+				upload().catch(fail);
+			}
 		} catch (error) {
 			fail(error);
 			request?.destroy();
