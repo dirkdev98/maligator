@@ -164,7 +164,7 @@ Runtime eval may remove source closure without invalidating authority closure.
       Object-producing namespace calls such as `Object.entries`, `Object.assign` and
       `Array.from`, and constructions, keep their loaded and guarded form because entry
       snapshots, record columns and typed array regions recognize it; javascript-v2
-      `dynamicObjects` stays near 41 ms mutable against 26 closed. Those consumers would
+      `dynamicObjects` takes 32 ms mutable against 26 closed. Those consumers would
       have to accept the known call behind the guard. A known call after code that may
       run JavaScript also stays generic, because `CALL_KNOWN` resolves its builtin through
       the mutable graph when it runs, so `Number.isFinite(Number(text))` guards only the
