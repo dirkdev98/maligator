@@ -526,6 +526,8 @@ typedef struct MalPerfStats {
     u64 array_indexed_fill_guard_fallbacks;
 	u64 array_push_direct_hits;
     u64 array_push_direct_fallbacks;
+    u64 array_includes_direct_hits;
+    u64 array_includes_direct_fallbacks;
     u64 array_deque_direct_hits;
     u64 array_deque_direct_fallbacks;
 	u64 array_contained_pushes;

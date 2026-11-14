@@ -12894,6 +12894,22 @@ class NativeInstructionEmission {
 			];
 		}
 		if (!instruction.construct && instruction.argumentMode === undefined) {
+			if (instruction.operation === "Array.prototype.includes") {
+				const args = instruction.arguments.map(this.boxedOperand.bind(this));
+				const value = `includes_result_${this.ip}`;
+				const result = `known_result_${this.ip}`;
+				return [
+					`bool ${value};`,
+					`if (mal_builtin_array_includes_try(vm, vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_INCLUDES], ${this.boxedOperand(instruction.thisValue)}, ${args[0] ?? "MAL_VALUE_UNDEFINED"}, ${args[1] ?? "MAL_VALUE_UNDEFINED"}, &${value})) {`,
+					this.storeBoolean(instruction.dst, value),
+					`} else {`,
+					`MalValue ${result} = mal_vm_call_known_native(vm, ${knownNativeEntries()[knownOperationIndex(instruction.operation)!]}, ${knownOperationIndex(instruction.operation)}, ${this.boxedOperand(instruction.thisValue)}, ${args.length === 0 ? "nullptr" : `((MalValue[]){ ${args.join(", ")} })`}, ${args.length}, 0);`,
+					this.throwCheck(),
+					`r${instruction.dst} = ${this.callValue(instruction.dst, result)};`,
+					`}`,
+					this.callPoll(),
+				];
+			}
 			const character = STRING_CHARACTER_KERNELS[instruction.operation];
 			if (character !== undefined && this.operandIsString(instruction.thisValue)) {
 				const operand = instruction.arguments[0];
@@ -15033,6 +15049,21 @@ class NativeInstructionEmission {
 				`MalCompletion ${tmp} = mal_builtin_array_deque_direct(vm, MAL_GUARDED_BUILTIN_ARRAY_${dequeMethod.toUpperCase()}, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
 				`r${instruction.dst} = ${tmp}.value;`,
+				this.callPoll(),
+			];
+		}
+		if (vmCallProvesBuiltin(callPlan, "Array.prototype.includes")) {
+			const value = `__includes_${this.ip}`;
+			return [
+				`bool ${value};`,
+				`if (mal_builtin_array_includes_try(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${args[0] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[0])}, ${args[1] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[1])}, &${value})) {`,
+				this.storeBoolean(instruction.dst, value),
+				`} else {`,
+				...this.guardedCallFallbackRootPublication(),
+				`MalCompletion ${tmp} = mal_vm_call_cached(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
+				`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+				`}`,
 				this.callPoll(),
 			];
 		}

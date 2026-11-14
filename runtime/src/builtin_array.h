@@ -2,7 +2,11 @@
 
 #include "./defaults.h"
 #include "intrinsics.h"
+#include "perf_stats.h"
+#include "value_ops.h"
 #include "vm.h"
+
+#include <math.h>
 
 /** Builtin Array.prototype.values callback used by guarded iterator fast paths. */
 
@@ -11,6 +15,71 @@
  * constructor and %Array.prototype%.
  */
 void mal_builtin_array_install(MalVm *vm);
+
+/** Numeric SameValueZero search using the runtime's vectorized word scan. */
+bool mal_builtin_array_dense_numeric_includes(
+    const MalArrayObject *array, MalValue search, u32 start);
+
+/**
+ * An exact loaded includes method can search an ordinary dense Array without a
+ * native call frame. Numeric fromIndex cannot reenter; all coercing inputs and
+ * indexed prototype changes retain the generic algorithm.
+ */
+static inline bool mal_builtin_array_includes_try(
+    MalVm *vm, MalValue callee, MalValue receiver, MalValue search,
+    MalValue from_index, bool *out
+) {
+    if (callee != vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_INCLUDES] ||
+        !mal_value_is_array_object(receiver) ||
+        vm->semantic_epochs.array_elements != MAL_SEMANTIC_EPOCH_INITIAL) {
+        MAL_PERF_COUNT(array_includes_direct_fallbacks);
+        return false;
+    }
+    const MalArrayObject *array = mal_value_to_array_object(receiver);
+    if (array->dense_deopted || mal_object_prototype(&array->object) !=
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])) {
+        MAL_PERF_COUNT(array_includes_direct_fallbacks);
+        return false;
+    }
+    u32 length = array->length;
+    // Includes returns before coercing fromIndex when the snapped length is zero.
+    if (length == 0) {
+        *out = false;
+        MAL_PERF_COUNT(array_includes_direct_hits);
+        return true;
+    }
+    f64 relative = 0;
+    if (!mal_value_is_undefined(from_index)) {
+        if (!mal_ops_is_number(from_index)) {
+            MAL_PERF_COUNT(array_includes_direct_fallbacks);
+            return false;
+        }
+        relative = trunc(mal_ops_number_as_f64(from_index));
+    }
+    MAL_PERF_COUNT(array_includes_direct_hits);
+    if (relative >= (f64) length) {
+        *out = false;
+        return true;
+    }
+    if (relative < 0) relative += (f64) length;
+    u32 start = relative > 0 ? (u32) relative : 0;
+    if (mal_ops_is_number(search) && array->dense_count >= 8) {
+        *out = mal_builtin_array_dense_numeric_includes(array, search, start);
+        return true;
+    }
+    u32 end = array->dense_count < length ? array->dense_count : length;
+    for (u32 index = start; index < end; index++) {
+        MalValue element = array->elements[index];
+        if (mal_value_is_array_hole(element)) element = MAL_VALUE_UNDEFINED;
+        if (mal_ops_strict_equal_bool(element, search) ||
+            (mal_value_is_nan(element) && mal_value_is_nan(search))) {
+            *out = true;
+            return true;
+        }
+    }
+    *out = end < length && mal_value_is_undefined(search);
+    return true;
+}
 
 /**
  * Spec-flavored HasProperty + Get for an element, walking the prototype chain

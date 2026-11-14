@@ -216,6 +216,7 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"DataView.prototype.setFloat64",
 	"Object.is",
 	"RegExp.prototype.test",
+	"Array.prototype.includes",
 ] as const;
 
 export type VmGuardedBuiltinOperation = (typeof VM_GUARDED_BUILTIN_OPERATIONS)[number];
