@@ -67607,7 +67607,10 @@
 		{
 			"id": "[\"Array.prototype.includes\",\"length\"]",
 			"owner": "Array.prototype.includes",
-			"ownerPaths": ["Array.prototype.includes"],
+			"ownerPaths": [
+				"Array.prototype.includes",
+				"MAL_INTRINSIC_ARRAY_PROTOTYPE_INCLUDES"
+			],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -67617,7 +67620,10 @@
 		{
 			"id": "[\"Array.prototype.includes\",\"name\"]",
 			"owner": "Array.prototype.includes",
-			"ownerPaths": ["Array.prototype.includes"],
+			"ownerPaths": [
+				"Array.prototype.includes",
+				"MAL_INTRINSIC_ARRAY_PROTOTYPE_INCLUDES"
+			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -174845,7 +174851,10 @@
 		{
 			"id": "[\"Array.prototype.includes\",\"<call>\"]",
 			"owner": "Array.prototype.includes",
-			"ownerPaths": ["Array.prototype.includes"],
+			"ownerPaths": [
+				"Array.prototype.includes",
+				"MAL_INTRINSIC_ARRAY_PROTOTYPE_INCLUDES"
+			],
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.includes"],
@@ -174855,7 +174864,10 @@
 		{
 			"id": "[\"Array.prototype.includes\",\"<construct>\"]",
 			"owner": "Array.prototype.includes",
-			"ownerPaths": ["Array.prototype.includes"],
+			"ownerPaths": [
+				"Array.prototype.includes",
+				"MAL_INTRINSIC_ARRAY_PROTOTYPE_INCLUDES"
+			],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.includes"],
@@ -290060,6 +290072,16 @@
 			"key": "MAL_INTRINSIC_ARRAY_PROTOTYPE",
 			"kind": "binding",
 			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_ARRAY_PROTOTYPE_INCLUDES\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_ARRAY_PROTOTYPE_INCLUDES",
+			"kind": "binding",
+			"operations": ["Array.prototype.includes"],
 			"task": "N-06",
 			"decisions": []
 		},
