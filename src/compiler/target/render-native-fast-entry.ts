@@ -1,3 +1,4 @@
+import { GUARDED_SEMANTIC_EPOCH_MASKS } from "../shared/compiler-instruction.ts";
 import type { CompilerClassLayoutSite } from "../shared/compiler-instruction.ts";
 import {
 	compilerValueKindTruthiness,
@@ -1212,6 +1213,8 @@ function fastInstruction(
 			return `__fast_r${op.dst} = mal_value_new_boolean(mal_vm_callee_has_index(vm, __fast_r${op.callee}, ${input.functionTargetIndex(op.functionIndex)}));`;
 		case "GUARD_BOUND_FUNCTION":
 			return `__fast_r${op.dst} = mal_value_new_boolean(mal_vm_guard_bound_function(__fast_r${op.callee}, ${op.boundArgumentCount}));`;
+		case "GUARD_SEMANTIC_EPOCH":
+			return `__fast_r${op.dst} = mal_value_new_boolean(mal_vm_guard_semantic_epoch(vm, ${GUARDED_SEMANTIC_EPOCH_MASKS[op.family]}));`;
 		case "LOAD_BOUND_FUNCTION_SLOT":
 			return `__fast_r${op.dst} = mal_vm_load_bound_function_slot(__fast_r${op.callee}, ${op.slot});`;
 		case "LOAD_PRIVATE": {
