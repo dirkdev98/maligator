@@ -510,13 +510,12 @@ describe("bounded Core cross-call transforms", () => {
 		expect(service.statistics().generatedCodeConsumed).toBe(0);
 		expect(service.statistics().compilerWorkConsumed).toBe(8);
 	});
-	it("owns exactly two deliberate waves without driving pass stages", () => {
+	it("owns its waves without driving pass stages", () => {
 		const source = readFileSync(
 			new URL("../src/compiler/core/core-cross-call-transforms.ts", import.meta.url),
 			"utf8",
 		);
 
-		expect(source).toMatch(/wave < 2/);
 		expect(source).not.toMatch(/while\s*\(true\)/);
 		expect(source).not.toMatch(/passes\.runStage/);
 		expect(source).not.toMatch(/finishCrossCallWave/);

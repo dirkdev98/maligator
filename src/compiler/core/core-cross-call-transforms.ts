@@ -5533,7 +5533,16 @@ export function runCoreCrossCallTransforms(
 			wildcardReverseCallerVisits += summaries.statistics.wildcardReverseCallerVisits;
 		}
 	};
-	for (let wave = 0; wave < 2; wave++) {
+	/*
+	 * Two waves cover the whole program. Each later wave revisits only the callers
+	 * whose transforms consumed budget in the wave before, where those transforms
+	 * expose new candidates, such as the next generator loop of a caller that fused
+	 * one. Every such wave therefore follows applied work: at most one per budgeted
+	 * transform, so the shared budgets bound their number, and their discovery covers
+	 * callers the previous wave just optimized locally.
+	 */
+	let focus: ReadonlySet<CoreFunctionId> | undefined;
+	for (let wave = 0; wave < 2 || focus !== undefined; wave++) {
 		// Inlines into clones may expose the callees of inlined forwarders to the next wave.
 		const exhausted = service.programBudgetExhaustionReason(phaseLimits);
 		if (
@@ -5543,11 +5552,14 @@ export function runCoreCrossCallTransforms(
 		)
 			break;
 		const cloned = new Set<CoreFunctionId>();
-		const devirtualized = devirtualizeCoreFunctionPrototypeCalls(
-			program,
-			summaries,
-			new Set(flow.reachability.liveFunctions),
-		);
+		const devirtualized =
+			focus === undefined
+				? devirtualizeCoreFunctionPrototypeCalls(
+						program,
+						summaries,
+						new Set(flow.reachability.liveFunctions),
+					)
+				: { changed: [], instructions: 0 };
 		if (devirtualized.changed.length !== 0) {
 			for (const functionId of devirtualized.changed) cloned.add(functionId);
 			instructionsIntroduced += devirtualized.instructions;
@@ -5557,7 +5569,11 @@ export function runCoreCrossCallTransforms(
 		}
 		// Clones of forwarding helpers expose their callees' sites to the next round. Each
 		// round reconsiders every candidate, since one declined earlier may now fit.
-		for (let round = 0; round < CALLBACK_SPECIALIZATION_ROUNDS; round++) {
+		for (
+			let round = 0;
+			focus === undefined && round < CALLBACK_SPECIALIZATION_ROUNDS;
+			round++
+		) {
 			const share = (round + 1) / CALLBACK_SPECIALIZATION_ROUNDS;
 			const roundLimits: CoreTransformBudgetLimits = Object.freeze({
 				...cloneLimits,
@@ -5607,17 +5623,15 @@ export function runCoreCrossCallTransforms(
 			summaries,
 			service,
 			new Set(flow.reachability.liveFunctions),
-			undefined,
+			focus,
 			readAccessors,
 			accessorWork,
 			clones,
 		);
-		const foldsByCaller = discoverProgramValueKindObservations(
-			program,
-			analyses,
-			flow,
-			readValueKinds,
-		);
+		const foldsByCaller =
+			focus === undefined
+				? discoverProgramValueKindObservations(program, analyses, flow, readValueKinds)
+				: new Map<CoreFunctionId, ReadonlyArray<CoreValueKindFold>>();
 		const editors = new Map<CoreFunctionId, CoreEditor>();
 		const appliedCallers = new Set<CoreFunctionId>([
 			...(wave === 0 ? specialized : []),
@@ -5627,6 +5641,7 @@ export function runCoreCrossCallTransforms(
 			editors.set(functionId, CoreEditor.open(program, functionId));
 		let published = appliedCallers.size !== 0;
 		const fusionOnlyCallers = new Set<CoreFunctionId>();
+		const budgetedCallers = new Set<CoreFunctionId>();
 		for (
 			let candidate = service.next();
 			candidate !== undefined;
@@ -5676,6 +5691,8 @@ export function runCoreCrossCallTransforms(
 				continue;
 			}
 			service.recordApplied(candidate);
+			if (candidate.generatedCodeCost > 0 || candidate.compilerWorkCost > 0)
+				budgetedCallers.add(candidate.caller);
 			if (candidate.kind === "generator-fusion" && !appliedCallers.has(candidate.caller))
 				fusionOnlyCallers.add(candidate.caller);
 			else fusionOnlyCallers.delete(candidate.caller);
@@ -5814,12 +5831,10 @@ export function runCoreCrossCallTransforms(
 		waves++;
 		refreshFlow();
 		const spent = service.programBudgetExhaustionReason(phaseLimits);
-		if (
-			wave + 1 === 2 ||
-			(spent !== undefined && (spent !== "generated-code-cost" || clones.size === 0))
-		)
+		if (spent !== undefined && (spent !== "generated-code-cost" || clones.size === 0))
 			break;
 		// Committed edits can introduce consumers without changing published summaries.
+		if (wave >= 1) focus = budgetedCallers.size === 0 ? undefined : budgetedCallers;
 	}
 	if (analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }) !== flow)
 		refreshFlow();

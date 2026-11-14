@@ -415,39 +415,197 @@ function generatorShape(
 	};
 }
 
-/**
- * The cell a load or store names when every reader of that cell is a Core load: a
- * private module slot, or a captured cell outside any mapped arguments object.
- * CommonJS top-level bindings are captured cells of the module wrapper, so they
- * are as private as an ES module's slots.
- */
-function privateCell(
+/** The cell a `loadGlobal`, `storeGlobal`, `loadCaptured` or `storeCaptured` names. */
+function cellKey(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
-	slots: ReadonlySet<number>,
-	captured: ReadonlySet<string>,
 ): string | undefined {
 	const attrs = fn.instructionAttributes(instruction);
 	switch (fn.instructionOpcodeName(instruction)) {
 		case "loadGlobal":
 		case "storeGlobal":
-			return typeof attrs.index === "number" && slots.has(attrs.index)
-				? `global:${attrs.index}`
-				: undefined;
+			return typeof attrs.index === "number" ? `global:${attrs.index}` : undefined;
 		case "loadCaptured":
-		case "storeCaptured": {
-			if (typeof attrs.functionIndex !== "number" || typeof attrs.index !== "number")
-				return undefined;
-			const key = `${attrs.functionIndex}:${attrs.index}`;
-			return captured.has(key) ? `captured:${key}` : undefined;
-		}
+		case "storeCaptured":
+			return typeof attrs.functionIndex === "number" && typeof attrs.index === "number"
+				? `captured:${attrs.functionIndex}:${attrs.index}`
+				: undefined;
 		default:
 			return undefined;
 	}
 }
 
-// A private callable is insufficient if another invocation exposes its shared prototype.
-// Follow every alias and require every result to remain inside its own traversal.
+interface Alias {
+	readonly function: CoreFunctionId;
+	readonly value: CoreValueId;
+}
+
+interface FunctionReferences {
+	readonly bodyVersion: number;
+	readonly creations: ReadonlyArray<{
+		readonly target: unknown;
+		readonly value: CoreValueId;
+	}>;
+	readonly loads: ReadonlyArray<{ readonly cell: string; readonly value: CoreValueId }>;
+}
+
+const functionReferences = new WeakMap<CoreFunctionStore, FunctionReferences>();
+
+function referencesOf(fn: CoreFunctionStore): FunctionReferences {
+	// An open editor's edits move no version until it commits.
+	const bodyVersion = fn.hasActiveEditor ? undefined : fn.version("body");
+	const cached = functionReferences.get(fn);
+	if (bodyVersion !== undefined && cached?.bodyVersion === bodyVersion) return cached;
+	const creations: Array<{ target: unknown; value: CoreValueId }> = [],
+		loads: Array<{ cell: string; value: CoreValueId }> = [];
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode === "createFunction")
+			creations.push({
+				target: fn.instructionAttributes(instruction).functionIndex,
+				value: results(fn, instruction)[0]!,
+			});
+		else if (opcode === "loadGlobal" || opcode === "loadCaptured") {
+			const cell = cellKey(fn, instruction);
+			if (cell !== undefined) loads.push({ cell, value: results(fn, instruction)[0]! });
+		}
+	}
+	const references = { bodyVersion: bodyVersion ?? -1, creations, loads };
+	if (bodyVersion !== undefined) functionReferences.set(fn, references);
+	return references;
+}
+
+/**
+ * Where a program creates each function and reads each private cell, so a privacy
+ * proof visits only its generator's own aliases. A private cell is one every reader
+ * of which is a Core load: a private module slot, or a captured cell outside any
+ * mapped arguments object. CommonJS top-level bindings are captured cells of the
+ * module wrapper, so they are as private as an ES module's slots.
+ */
+interface PrivacyIndex {
+	readonly versions: string;
+	readonly context: CoreCompilationContext;
+	readonly privateCells: ReadonlySet<string>;
+	readonly creations: ReadonlyMap<unknown, ReadonlyArray<Alias>>;
+	readonly loads: ReadonlyMap<string, ReadonlyArray<Alias>>;
+	/** Proof results per generator under `targets`, which they also depend on. */
+	readonly proofs: WeakMap<object, Map<CoreFunctionId, boolean>>;
+}
+
+const privacyIndexes = new WeakMap<CoreProgram, PrivacyIndex>();
+
+/**
+ * What the index and the cached proofs read: function bodies, and through the
+ * local value kinds of argument checks, the domains those kinds depend on.
+ */
+const PRIVACY_FUNCTION_DOMAINS = [
+	"body",
+	"cfg",
+	"exceptionFlow",
+	"memoryEffects",
+	"normalResults",
+	"representations",
+] as const;
+
+function privacyIndex(
+	program: CoreProgram,
+	context: CoreCompilationContext,
+): PrivacyIndex {
+	const versions = [
+		program.programVersion("functions"),
+		...PRIVACY_FUNCTION_DOMAINS.map((domain) => program.functionVersion(domain)),
+	].join(":");
+	const cached = privacyIndexes.get(program);
+	if (
+		program.editingFunctions.size === 0 &&
+		cached?.versions === versions &&
+		cached.context === context
+	)
+		return cached;
+	const privateCells = new Set<string>();
+	const links = new Set(
+		[
+			...(context.data.moduleLinks?.imports ?? []),
+			...(context.data.moduleLinks?.exports ?? []),
+		].map((link) => link.slot),
+	);
+	// Lexical slots a function can read in their dead zone are as private as
+	// initialized ones; their dead-zone checks reveal only initialization.
+	for (const slot of [
+		...(context.data.initializedModuleGlobalSlots ?? []),
+		...(context.data.moduleVarGlobalSlots ?? []),
+		...(context.data.moduleLexicalSlots ?? []).map(({ slot }) => slot),
+	])
+		if (!links.has(slot)) privateCells.add(`global:${slot}`);
+	for (const { owner, index } of coreClosedCapturedValueSlots(program, context))
+		privateCells.add(`captured:${owner}:${index}`);
+	const creations = new Map<unknown, Array<Alias>>(),
+		loads = new Map<string, Array<Alias>>();
+	for (const id of program.functionIds()) {
+		const references = referencesOf(program.function(id));
+		for (const { target, value } of references.creations) {
+			const group = creations.get(target);
+			if (group === undefined) creations.set(target, [{ function: id, value }]);
+			else group.push({ function: id, value });
+		}
+		for (const { cell, value } of references.loads) {
+			if (!privateCells.has(cell)) continue;
+			const group = loads.get(cell);
+			if (group === undefined) loads.set(cell, [{ function: id, value }]);
+			else group.push({ function: id, value });
+		}
+	}
+	const index: PrivacyIndex = {
+		versions,
+		context,
+		privateCells,
+		creations,
+		loads,
+		proofs: new WeakMap<object, Map<CoreFunctionId, boolean>>(),
+	};
+	if (program.editingFunctions.size === 0) privacyIndexes.set(program, index);
+	return index;
+}
+
+const publishedFunctionSets = new WeakMap<
+	CoreProgram,
+	{
+		readonly targets: object;
+		readonly functionsVersion: number;
+		readonly published: ReadonlySet<CoreFunctionId>;
+	}
+>();
+
+/** Every function some function's summary publishes beyond the program's view. */
+function publishedFunctions(
+	program: CoreProgram,
+	summaries: CoreProgramSummaries,
+): ReadonlySet<CoreFunctionId> {
+	const functionsVersion = program.programVersion("functions");
+	const cached = publishedFunctionSets.get(program);
+	if (
+		cached?.targets === summaries.targets &&
+		cached.functionsVersion === functionsVersion
+	)
+		return cached.published;
+	const published = new Set<CoreFunctionId>();
+	for (const id of program.functionIds())
+		for (const target of summaries.targets.publishedFunctions(id)) published.add(target);
+	publishedFunctionSets.set(program, {
+		targets: summaries.targets,
+		functionsVersion,
+		published,
+	});
+	return published;
+}
+
+/**
+ * Whether every invocation of `target` is a for-of protocol call a fusion can
+ * replace. A private callable is insufficient if another invocation exposes its
+ * shared prototype, so the proof follows every alias of every closure of `target`
+ * and requires every use to remain inside its own traversal.
+ */
 function privateInvocations(
 	program: CoreProgram,
 	context: CoreCompilationContext,
@@ -455,56 +613,45 @@ function privateInvocations(
 	target: CoreFunctionId,
 	kind: KindQuery,
 ): boolean {
-	const slots = new Set([
-		...(context.data.initializedModuleGlobalSlots ?? []),
-		...(context.data.moduleVarGlobalSlots ?? []),
-	]);
-	for (const link of [
-		...(context.data.moduleLinks?.imports ?? []),
-		...(context.data.moduleLinks?.exports ?? []),
-	])
-		slots.delete(link.slot);
-	const captured = new Set(
-		coreClosedCapturedValueSlots(program, context).map(
-			({ owner, index }) => `${owner}:${index}`,
-		),
-	);
-	const reads = new Map<string, Array<{ fn: CoreFunctionStore; value: CoreValueId }>>();
-	const pending: Array<{ fn: CoreFunctionStore; value: CoreValueId }> = [];
-	let work = 0;
-	for (const id of program.functionIds()) {
-		const fn = program.function(id);
-		if (summaries.targets.publishedFunctions(id).includes(target)) return false;
-		for (const instruction of fn.instructionIds()) {
-			if (++work > 8_192) return false;
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
-			if (
-				opcode === "createFunction" &&
-				fn.instructionAttributes(instruction).functionIndex === target
-			)
-				pending.push({ fn, value: results(fn, instruction)[0]! });
-			if (opcode !== "loadGlobal" && opcode !== "loadCaptured") continue;
-			const cell = privateCell(fn, instruction, slots, captured);
-			if (cell === undefined) continue;
-			const group = reads.get(cell) ?? [];
-			group.push({ fn, value: results(fn, instruction)[0]! });
-			reads.set(cell, group);
-		}
+	if (publishedFunctions(program, summaries).has(target)) return false;
+	const index = privacyIndex(program, context);
+	let proofs = index.proofs.get(summaries.targets);
+	if (proofs === undefined) {
+		proofs = new Map();
+		index.proofs.set(summaries.targets, proofs);
 	}
+	let proof = proofs.get(target);
+	if (proof === undefined) {
+		proof = provePrivateInvocations(program, summaries, index, target, kind);
+		proofs.set(target, proof);
+	}
+	return proof;
+}
+
+function provePrivateInvocations(
+	program: CoreProgram,
+	summaries: CoreProgramSummaries,
+	index: PrivacyIndex,
+	target: CoreFunctionId,
+	kind: KindQuery,
+): boolean {
+	const pending: Array<Alias> = [...(index.creations.get(target) ?? [])];
 	if (pending.length === 0) return false;
 	const seen = new Set<string>(),
-		cells = new Set<string>();
-	let calls = 0;
+		cells = new Set<string>(),
+		controls = new Map<CoreFunctionId, CoreControlFlow>();
+	let calls = 0,
+		work = 0;
 	for (let cursor = 0; cursor < pending.length; cursor++) {
-		const { fn, value } = pending[cursor]!;
-		const key = `${fn.id}:${value}`;
+		const { function: id, value } = pending[cursor]!;
+		const fn = program.function(id);
+		const key = `${id}:${value}`;
 		if (seen.has(key)) continue;
 		seen.add(key);
 		if (
 			seen.size > 512 ||
 			fn.kernel.valueHandlerUseCount(value) !== 0 ||
-			coreCalleeTargetsSingleFunction(summaries.targets.targets(fn.id, value)) !== target
+			coreCalleeTargetsSingleFunction(summaries.targets.targets(id, value)) !== target
 		)
 			return false;
 		for (const { instruction, position } of uses(fn, value)) {
@@ -517,23 +664,25 @@ function privateInvocations(
 				)
 					return false;
 				for (const edge of edges(terminal))
-					for (const [index, argument] of edge.arguments.entries())
+					for (const [at, argument] of edge.arguments.entries())
 						if (argument === value)
-							pending.push({ fn, value: parameters(fn, edge.block)[index]! });
+							pending.push({ function: id, value: parameters(fn, edge.block)[at]! });
 				continue;
 			}
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (opcode === "move") {
-				pending.push({ fn, value: results(fn, instruction)[0]! });
+				pending.push({ function: id, value: results(fn, instruction)[0]! });
 				continue;
 			}
-			if (opcode === "rootUse") continue;
+			// A dead-zone check only tests whether the binding is initialized yet.
+			if (opcode === "rootUse" || (opcode === "throwIfTdz" && position === 0)) continue;
 			if (opcode === "storeGlobal" || opcode === "storeCaptured") {
-				const cell = privateCell(fn, instruction, slots, captured);
-				if (position !== 0 || cell === undefined) return false;
+				const cell = cellKey(fn, instruction);
+				if (position !== 0 || cell === undefined || !index.privateCells.has(cell))
+					return false;
 				if (!cells.has(cell)) {
 					cells.add(cell);
-					pending.push(...(reads.get(cell) ?? []));
+					pending.push(...(index.loads.get(cell) ?? []));
 				}
 				continue;
 			}
@@ -549,21 +698,20 @@ function privateInvocations(
 				attrs.argumentMode !== undefined ||
 				attrs.construct ||
 				inputs.length !== program.function(target).parameterCount + 2 ||
-				kind(fn.id, inputs[1]!) !== COMPILER_VALUE_KIND_UNDEFINED ||
+				kind(id, inputs[1]!) !== COMPILER_VALUE_KIND_UNDEFINED ||
 				inputs
 					.slice(2)
-					.some((argument) => kind(fn.id, argument) !== COMPILER_VALUE_KIND_NUMBER)
+					.some((argument) => kind(id, argument) !== COMPILER_VALUE_KIND_NUMBER)
 			)
 				return false;
-			if (
-				!twin &&
-				protocol(
-					fn,
-					instruction,
-					buildCoreControlFlow(program, fn.id, { exceptions: true }),
-				) === undefined
-			)
-				return false;
+			if (!twin) {
+				let control = controls.get(id);
+				if (control === undefined) {
+					control = buildCoreControlFlow(program, id, { exceptions: true });
+					controls.set(id, control);
+				}
+				if (protocol(fn, instruction, control) === undefined) return false;
+			}
 			calls++;
 		}
 	}

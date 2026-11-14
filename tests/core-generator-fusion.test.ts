@@ -3,20 +3,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 
 const sequence =
 	"function* sequence(seed) { for (let index = 0; index < 12; index++) yield seed + index * 2; }";
+const sequenceExpression =
+	"const sequence = function* (seed) { for (let index = 0; index < 12; index++) yield seed + index * 2; };";
 const traversal = "for (const value of sequence(round)) checksum += value;";
 
-function fusionCount(
-	generator = sequence,
-	body = traversal,
-	extra = "",
-	engine: { realms?: boolean; primordials?: "locked" | "mutable"; eval?: boolean } = {},
-	entry = "main.mjs",
-): number {
+type Engine = { realms?: boolean; primordials?: "locked" | "mutable"; eval?: boolean };
+
+function compileFusions(
+	generator: string,
+	body: string,
+	extra: string,
+	engine: Engine,
+	entry: string,
+): { fusions: number; instructions: number } {
 	const source = `${generator}
 		function hot(count) {
 			let checksum = 0;
@@ -25,7 +28,7 @@ function fusionCount(
 		}
 		${extra}
 		console.log(hot(32));`;
-	let report: CoreOptimizationReport | undefined;
+	let result: { fusions: number; instructions: number } | undefined;
 	const directory = mkdtempSync(join(tmpdir(), "mal-generator-fusion-"));
 	try {
 		const sourcePath = join(directory, entry);
@@ -33,14 +36,59 @@ function fusionCount(
 		compileEntrypoint(sourcePath, {
 			buildConfig: resolveBuildConfig({ engine }),
 			coreInstrumentation: "full",
-			afterCoreOptimization(_program, _context, optimizationReport) {
-				report = optimizationReport;
+			afterCoreOptimization(program, _context, report) {
+				let instructions = 0;
+				for (const id of program.functionIds())
+					instructions += [...program.function(id).instructionIds()].length;
+				result = {
+					fusions: report.transforms.appliedByKind["generator-fusion"]!,
+					instructions,
+				};
 			},
 		});
-		return report!.transforms.appliedByKind["generator-fusion"]!;
+		return result!;
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
+}
+
+function fusionCount(
+	generator = sequence,
+	body = traversal,
+	extra = "",
+	engine: Engine = {},
+	entry = "main.mjs",
+): number {
+	return compileFusions(generator, body, extra, engine, entry).fusions;
+}
+
+/**
+ * Many unrelated functions that survive until cross-call transforms, optionally
+ * with one of them in the middle publishing an alias of `sequence`.
+ */
+function largeProgram(functions: number, escapeAt?: number): string {
+	const fillers = Array.from(
+		{ length: functions },
+		(_, index) => `function filler${index}(value) {
+			let state = value ^ ${index};
+			for (let step = 0; step < 3; step++) state = (state * 31 + ${index} + step) | 0;
+			${index === escapeAt ? "const alias = sequence; globalThis.escaped = alias;" : ""}
+			return state > ${index} ? state - ${index} : state + ${index} * 2;
+		}`,
+	);
+	return `${fillers.join("\n")}
+		const fillers = [${fillers.map((_, index) => `filler${index}`).join(", ")}];
+		let mixed = 0;
+		for (let index = 0; index < fillers.length; index++) mixed = fillers[index](mixed);
+		console.log(mixed);`;
+}
+
+function loops(count: number): string {
+	return Array.from(
+		{ length: count },
+		(_, index) =>
+			`for (const value of sequence(round + ${index})) checksum += value * ${index + 1};`,
+	).join(" ");
 }
 
 describe("private generator fusion", () => {
@@ -154,4 +202,62 @@ describe("private generator fusion in CommonJS modules", () => {
 			),
 		).toBe(0);
 	});
+});
+
+describe("private generator fusion at program scale", () => {
+	it("fuses a private generator in a program larger than a whole-program scan allows", () => {
+		const { fusions, instructions } = compileFusions(
+			sequence,
+			traversal,
+			largeProgram(600),
+			{},
+			"main.mjs",
+		);
+		expect(instructions).toBeGreaterThan(8_192);
+		expect(fusions).toBeGreaterThan(0);
+	});
+	it.each(["main.mjs", "main.cjs"])(
+		"keeps the protocol for a generator escaping far from its loops in %s",
+		(entry) => {
+			expect(fusionCount(sequence, traversal, largeProgram(600, 300), {}, entry)).toBe(0);
+		},
+	);
+	it.each([3, 4])("fuses all %i generator loops of one function", (count) => {
+		expect(fusionCount(sequence, loops(count))).toBe(count);
+		expect(fusionCount(sequence, loops(count), "", {}, "main.cjs")).toBe(count);
+	});
+	it.each(["main.mjs", "main.cjs"])(
+		"keeps the protocol for a generator published after its loops run in %s",
+		(entry) => {
+			expect(
+				fusionCount(
+					sequence,
+					traversal,
+					"Promise.resolve().then(() => { globalThis.later = sequence; });",
+					{},
+					entry,
+				),
+			).toBe(0);
+		},
+	);
+});
+
+describe("private generator expressions in const bindings", () => {
+	it.each(["main.mjs", "main.cjs"])("fuses an initialized binding in %s", (entry) => {
+		expect(fusionCount(sequenceExpression, traversal, "", {}, entry)).toBe(1);
+	});
+	it.each(["main.mjs", "main.cjs"])(
+		"fuses a binding a call can read in its dead zone in %s",
+		(entry) => {
+			expect(
+				fusionCount(
+					"",
+					traversal,
+					`try { if (globalThis.early) hot(1); } catch {} ${sequenceExpression}`,
+					{},
+					entry,
+				),
+			).toBe(1);
+		},
+	);
 });
