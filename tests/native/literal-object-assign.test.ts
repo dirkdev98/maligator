@@ -51,6 +51,7 @@ describe("literal Object.assign", () => {
 		});
 	});
 	const scenarios = [
+		["freshCopies", "copies dynamic sources into fresh objects in property order"],
 		["ordinary", "copies fields and returns the original target"],
 		["setters", "evaluates field values before invoking ordered inherited setters"],
 		["throw", "retains earlier writes and skips later setters after a throw"],
@@ -78,6 +79,7 @@ describe("literal Object.assign", () => {
 	it.each([
 		...scenarios,
 		["objectPrototypeSetter", "invokes a setter added to Object.prototype"],
+		["freshSetterAfterWarmup", "observes a new inherited setter on a fresh target"],
 		[
 			"objectPrototypeSetterAfterWarmup",
 			"invokes an Object.prototype setter added after the same shapes merged",
@@ -95,7 +97,7 @@ describe("literal Object.assign", () => {
 			).toBe(oracle);
 		}
 	});
-	it.each(["setters", "throw", "proxy", "objects", "specialValues"])(
+	it.each(["setters", "throw", "proxy", "objects", "specialValues", "freshCopies"])(
 		"roots %s values across collecting stores",
 		(scenario) => {
 			const oracle = expected(scenario);

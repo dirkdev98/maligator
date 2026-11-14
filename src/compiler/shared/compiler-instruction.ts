@@ -1255,10 +1255,11 @@ type CompilerOperation =
 			startIndex: number;
 	  }
 	| {
-			// CopyDataProperties: copy the source's own enumerable properties
-			// into a fresh object, skipping the excluded keys. Used for object
-			// pattern rest elements.
+			// Fresh copies retain one safepoint for allocation and observable source reads.
+			// Rest requires a coercible source; spread skips nil, and assign retains Set.
 			type: "copyDataProperties";
+			copyMode?: "spread" | "assign";
+			slotReserve?: number;
 
 			// [destination, source, ...excludedKeys]
 			registers: [number, number, ...Array<number>];

@@ -9536,15 +9536,12 @@ void mal_op_create_array_from_iterable(
             callable->registers[instruction->as.create_array_from_iterable.src]);
 }
 
-// Shared by the interpreter op and the native backend: object rest/spread
-// destructuring (`const {a, ...rest} = source`) — copy source's own enumerable
-// properties (minus the excluded keys) onto a fresh object. A source getter or an
-// excluded-key ToPropertyKey can throw: sets vm->completion and returns undefined,
-// so callers must check the completion. `excluded_keys` are already-evaluated
-// property-key values (the compiled caller boxes them from its registers).
 MalValue mal_vm_op_copy_data_properties(
-    MalVm *vm, MalValue source, const MalValue *excluded_keys, i32 excluded_count
+    MalVm *vm, MalValue source, const MalValue *excluded_keys, i32 excluded_count,
+    u8 copy_mode, u8 trailing_capacity
 ) {
+    if (copy_mode == 1) return mal_vm_op_clone_object(vm, source, trailing_capacity);
+    if (copy_mode == 2) return mal_builtin_object_assign_fresh(vm, source);
     if (mal_value_is_nil(source)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot destructure null or undefined");
         return mal_value_new_undefined();
@@ -9737,134 +9734,125 @@ void mal_op_copy_data_properties(MalCallable *callable, const MalInstruction *in
 
     MalValue result = mal_vm_op_copy_data_properties(
         callable->vm, callable->registers[instruction->as.copy_data_properties.src],
-        excluded_keys, excluded_count
+        excluded_keys, excluded_count, instruction->as.copy_data_properties.copy_mode,
+        instruction->as.copy_data_properties.slot_reserve
     );
     if (callable->vm->completion.kind != MAL_COMPLETION_THROW) {
         callable->registers[instruction->as.copy_data_properties.dst] = result;
     }
 }
 
-static bool mal_vm_try_merge_shaped_data_properties(
-    MalVm *vm, MalValue target_value, MalValue source
-) {
-    if (!mal_value_is_heap_type(target_value, MAL_HEAP_OBJECT)
-        || !mal_value_is_heap_type(source, MAL_HEAP_OBJECT)) {
-        return false;
-    }
-    MalObject *target = mal_value_to_object(target_value);
-    MalObject *source_object = mal_value_to_object(source);
-    if (target->shape != mal_shape_root(&vm->heap)
-        || mal_object_has_public_overflow(target)
-        || !target->extensible
-        || source_object->shape == nullptr
-        || mal_object_fields(source_object) == nullptr
-        || mal_object_has_public_overflow(source_object)) {
-        return false;
-    }
-    u32 source_count = source_object->shape->inline_count;
-    if (source_count == 0 || source_count > MAL_SHAPE_MAX_INLINE_SLOTS) {
-        return false;
-    }
-    MalShape *target_shape = target->shape;
-    MalShape *source_shape = source_object->shape;
-    uptr cache_hash = ((uptr) target_shape >> 4) ^ ((uptr) source_shape >> 4);
+static MalShapeCopyCacheEntry *mal_vm_shape_copy_plan(MalVm *vm, const MalObject *source) {
+    if (source->shape == nullptr || mal_object_fields(source) == nullptr ||
+        mal_object_has_public_overflow(source)) return nullptr;
+    MalShape *source_shape = source->shape;
+    u32 source_count = source_shape->inline_count;
+    if (source_count == 0 || source_count > MAL_SHAPE_MAX_INLINE_SLOTS) return nullptr;
+    MalShape *root = mal_shape_root(&vm->heap);
+    uptr cache_hash = ((uptr) root >> 4) ^ ((uptr) source_shape >> 4);
     MalShapeCopyCacheEntry *cached =
         &vm->shape_copy_cache[cache_hash & (MAL_SHAPE_COPY_CACHE_CAPACITY - 1)];
     MAL_PERF_COUNT(merge_shape_cache_probes);
-    if (cached->source_shape == source_shape
-        && cached->append_plan.source == target_shape
-        && cached->append_plan.final != nullptr) {
+    if (cached->source_shape == source_shape && cached->append_plan.source == root &&
+        cached->append_plan.final != nullptr) {
         MAL_PERF_COUNT(merge_shape_cache_hits);
-        MalValue projected[MAL_SHAPE_MAX_INLINE_SLOTS];
-        for (u32 i = 0; i < cached->count; ++i) {
-            u32 ordinal = cached->identity_projection ? i : cached->source_slots[i];
-            projected[i] = mal_object_field_load(source_object, ordinal);
-        }
-        if (!mal_object_try_append_shaped_values(
-                target, &cached->append_plan, projected, cached->count)) {
-            return false;
-        }
-        MAL_PERF_COUNT(merge_data_shaped_hits);
-        MAL_PERF_ADD(merge_data_shaped_slots, cached->count);
-        return true;
+        return cached;
     }
     MAL_PERF_COUNT(merge_shape_cache_misses);
     const u8 default_attrs = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
         MAL_PROPERTY_CONFIGURABLE;
-    bool needs_normalization = false;
+    bool identity = true;
     for (u32 i = 0; i < source_count; ++i) {
-        const MalShapeProp *prop = &source_object->shape->props[i];
-        if (!mal_value_is_string(prop->key)) return false;
-        needs_normalization |= prop->attrs != default_attrs;
+        const MalShapeProp *prop = &source_shape->props[i];
+        if (!mal_value_is_string(prop->key) || (prop->attrs & MAL_PROPERTY_ACCESSOR))
+            return nullptr;
+        identity &= prop->attrs == default_attrs && prop->slot == i;
     }
-    if (!needs_normalization) {
-        MalShapeAppendPlan plan;
-        MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
-        for (u32 i = 0; i < source_count; i++) {
-            values[i] = mal_object_field_load(source_object, i);
-        }
-        if (!mal_object_append_plan_init(
-                &plan, target_shape, source_shape, source_count)
-            || !mal_object_try_append_shaped_values(
-                target, &plan, values, source_count)) {
-            return false;
-        }
-        *cached = (MalShapeCopyCacheEntry) {
-            .source_shape = source_shape,
-            .append_plan = plan,
-            .count = source_count,
-            .identity_projection = true,
-        };
-        MAL_PERF_COUNT(merge_shape_cache_builds);
-        MAL_PERF_COUNT(merge_data_shaped_hits);
-        MAL_PERF_ADD(merge_data_shaped_slots, source_count);
-        return true;
-    }
-    MalShape *result_shape = target_shape;
-    MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
+    MalShape *result_shape = source_shape;
     u8 source_slots[MAL_SHAPE_MAX_INLINE_SLOTS];
-    u32 count = 0;
-    for (u32 i = 0; i < source_count; ++i) {
-        const MalShapeProp *prop = &source_object->shape->props[i];
-        MalKey key = mal_key_from_value(prop->key);
-        if (key.kind != MAL_KEY_STRING) {
-            return false;
+    u32 count = source_count;
+    if (!identity) {
+        result_shape = root;
+        count = 0;
+        for (u32 i = 0; i < source_count; ++i) {
+            const MalShapeProp *prop = &source_shape->props[i];
+            if (!(prop->attrs & MAL_PROPERTY_ENUMERABLE)) continue;
+            result_shape = mal_shape_add_property(
+                result_shape, mal_key_from_value(prop->key), default_attrs);
+            source_slots[count++] = (u8) prop->slot;
         }
-        if ((prop->attrs & MAL_PROPERTY_ENUMERABLE) == 0) continue;
-        result_shape = mal_shape_add_property(result_shape, key, default_attrs);
-        values[count] = mal_object_field_load(source_object, prop->slot);
-        source_slots[count++] = (u8) prop->slot;
     }
-    if (count == 0) return true;
     MalShapeAppendPlan plan;
-    if (!mal_object_append_plan_init(
-            &plan, target_shape, result_shape, count)
-        || !mal_object_try_append_shaped_values(
-            target, &plan, values, count)) {
-        return false;
-    }
+    if (!mal_object_append_plan_init(&plan, root, result_shape, count)) return nullptr;
     *cached = (MalShapeCopyCacheEntry) {
         .source_shape = source_shape,
         .append_plan = plan,
-        .count = count,
-        .identity_projection = false,
+        .count = (u8) count,
+        .identity_projection = identity,
     };
-    memcpy(cached->source_slots, source_slots, count);
+    if (!identity) memcpy(cached->source_slots, source_slots, count);
     MAL_PERF_COUNT(merge_shape_cache_builds);
+    return cached;
+}
+
+static bool mal_vm_try_merge_shaped_data_properties(
+    MalVm *vm, MalValue target_value, MalValue source
+) {
+    if (!mal_value_is_heap_type(target_value, MAL_HEAP_OBJECT) ||
+        !mal_value_is_heap_type(source, MAL_HEAP_OBJECT)) return false;
+    MalObject *target = mal_value_to_object(target_value);
+    if (target->shape != mal_shape_root(&vm->heap) ||
+        mal_object_has_public_overflow(target) || !target->extensible) return false;
+    const MalObject *source_object = mal_value_to_object(source);
+    const MalShapeCopyCacheEntry *plan = mal_vm_shape_copy_plan(vm, source_object);
+    if (plan == nullptr) return false;
+    MalValue projected[MAL_SHAPE_MAX_INLINE_SLOTS];
+    const MalValue *values = mal_object_fields_nonempty(source_object);
+    if (!plan->identity_projection) {
+        for (u32 i = 0; i < plan->count; ++i)
+            projected[i] = mal_object_field_load(source_object, plan->source_slots[i]);
+        values = projected;
+    }
+    if (!mal_object_try_append_shaped_values(target, &plan->append_plan, values, plan->count))
+        return false;
     MAL_PERF_COUNT(merge_data_shaped_hits);
-    MAL_PERF_ADD(merge_data_shaped_slots, count);
+    MAL_PERF_ADD(merge_data_shaped_slots, plan->count);
     return true;
 }
 
-// Shared by the interpreter op and the native backend: object spread
-// (`{...source}`) — copy source's own enumerable properties onto target with
-// CreateDataProperty semantics. A throwing getter sets vm->completion.
-/**
- * CopyDataProperties from an ordinary object whose public properties are all
- * string-keyed data properties in its shape. Shape order is then the
- * [[OwnPropertyKeys]] order, and neither the reads nor the target's defines can
- * run code, so no key snapshot is needed.
- */
+MalValue mal_vm_op_clone_object(MalVm *vm, MalValue source, u8 trailing_capacity) {
+    if (mal_value_is_heap_type(source, MAL_HEAP_OBJECT)) {
+        const MalObject *source_object = mal_value_to_object(source);
+        const MalShapeCopyCacheEntry *plan = mal_vm_shape_copy_plan(vm, source_object);
+        if (plan != nullptr) {
+            MalValue projected[MAL_SHAPE_MAX_INLINE_SLOTS];
+            const MalValue *values = mal_object_fields_nonempty(source_object);
+            if (!plan->identity_projection) {
+                for (u32 i = 0; i < plan->count; ++i)
+                    projected[i] = mal_object_field_load(source_object, plan->source_slots[i]);
+                values = projected;
+            }
+            u32 capacity = plan->count + trailing_capacity;
+            if (capacity > MAL_SHAPE_MAX_INLINE_SLOTS) capacity = MAL_SHAPE_MAX_INLINE_SLOTS;
+            MalObject *copy = mal_object_try_new_shaped_reserved(
+                &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
+                plan->append_plan.final, values, plan->count, (u8) capacity);
+            if (copy == nullptr) {
+                mal_vm_throw_allocation_error(vm);
+                return MAL_VALUE_UNDEFINED;
+            }
+            MAL_PERF_COUNT(merge_data_shaped_hits);
+            MAL_PERF_ADD(merge_data_shaped_slots, plan->count);
+            return mal_value_from_object(copy);
+        }
+    }
+    MalValue target = mal_vm_op_create_object_for_spread(vm, source, trailing_capacity);
+    if (vm->completion.kind != MAL_COMPLETION_THROW)
+        mal_vm_op_merge_data_properties(vm, target, source);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? MAL_VALUE_UNDEFINED : target;
+}
+
+// Inline string data cannot run code, so shape order needs no observable key snapshot.
 static bool mal_vm_try_merge_plain_data_properties(MalObject *target, MalValue source) {
     if (!mal_value_is_heap_type(source, MAL_HEAP_OBJECT)) return false;
     const MalObject *source_object = mal_value_to_object(source);

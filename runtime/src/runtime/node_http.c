@@ -6892,7 +6892,7 @@ static MalValue http_agent_constructor(
     if (ok) {
         roots[1] = mal_value_is_nil(options)
             ? mal_value_from_object(mal_intrinsic_new_object(vm))
-            : mal_vm_op_copy_data_properties(vm, options, nullptr, 0);
+            : mal_vm_op_copy_data_properties(vm, options, nullptr, 0, 0, 0);
         ok = vm->completion.kind != MAL_COMPLETION_THROW;
     }
     if (ok) {

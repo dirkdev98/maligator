@@ -238,4 +238,65 @@ check(
 	barrierCopy.left.value === 59 && barrierCopy.right.value === 61,
 );
 
+function copyDynamic(source, extra) {
+	return { ...source, extra };
+}
+const layouts = [
+	{ alpha: shared, beta: 3 },
+	{ beta: 5, alpha: shared, gamma: 7 },
+	Object.freeze({ alpha: shared, beta: 11 }),
+];
+for (let index = 0; index < 96; index++) {
+	const source = layouts[index % layouts.length];
+	const copy = copyDynamic(source, index);
+	check(
+		"mixed shapes retain independent values",
+		copy !== source &&
+			copy.alpha === shared &&
+			copy.beta === source.beta &&
+			copy.extra === index &&
+			Object.keys(copy).join(",") === Object.keys(source).concat("extra").join(","),
+	);
+}
+
+const getterOrder = [];
+const orderedSymbol = Symbol("ordered");
+const orderedSource = {
+	get later() {
+		getterOrder.push("later");
+		gc();
+		return shared;
+	},
+	get 9() {
+		getterOrder.push("9");
+		return 9;
+	},
+	get 2() {
+		getterOrder.push("2");
+		return 2;
+	},
+	get [orderedSymbol]() {
+		getterOrder.push("symbol");
+		return 13;
+	},
+};
+Object.defineProperty(orderedSource, "hidden", { value: 17 });
+function copyAcrossGetter(source, value) {
+	const survivor = { nested: { value } };
+	const result = { ...source, extra: survivor };
+	gc();
+	return result;
+}
+const orderedCopy = copyAcrossGetter(orderedSource, 19);
+check(
+	"dynamic getters run once in own-key order across collection",
+	getterOrder.join(",") === "2,9,later,symbol" &&
+		orderedCopy.later === shared &&
+		orderedCopy[orderedSymbol] === 13 &&
+		orderedCopy.extra.nested.value === 19 &&
+		!("hidden" in orderedCopy) &&
+		Reflect.ownKeys(orderedCopy).map(String).join(",") ===
+			"2,9,later,extra,Symbol(ordered)",
+);
+
 console.log("object-spread-shaped PASS " + passed + "/" + passed);

@@ -656,6 +656,21 @@ exposure. Child escapes propagate to containing recipes. Unknown calls, captured
 aliases, reflection, callbacks and suspension retain fresh identities. Description
 interning shares immutable recipe words; it never merges fresh runtime identities.
 
+Dynamic initial object spreads use one allocating `copyDataProperties` instruction.
+[Core fusion](../../src/compiler/core/core-object-copy.ts) runs after inlining and
+virtual-state folding, before specialization planning. This preserves source-field
+facts that become available only when a module call is inlined. Keeping allocation and source
+reads in one instruction makes native root publication cover collecting getters. The
+runtime caches an enumerable-field projection by source shape, allocates the copy in its
+normalized final shape, and copies identity projections directly from source slots.
+Trailing literal members reserve capacity without becoming properties early.
+
+A proved `Object.assign` call whose empty target is private until the call can use the
+same allocation path. Its runtime guard excludes inherited setters, nonwritable properties
+and `__proto__` interception; a declined guard retains ordinary throwing Set semantics.
+Sources with observable reads or exotic property behavior retain key snapshots and
+ordered descriptor checks. Object rest keeps its exclusions and coercibility check.
+
 Bounded private ordinary arrays and objects can keep local writes, deletes, length
 changes and certified push/pop/shift/unshift/fill/copyWithin/reverse operations in
 virtual cells. Shift preserves hole positions relative to the remaining elements

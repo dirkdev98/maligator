@@ -29,7 +29,17 @@ describe("literal Object.assign lowering", () => {
 	});
 	it.each([
 		["an unknown target", "return Object.assign(value, {revision:3});"],
+		[
+			"a target exposed before assignment",
+			"const out={}; globalThis.saved=out; return Object.assign(out,value);",
+		],
 		["a primitive target", "return Object.assign(3, {revision:value&31});"],
+		["multiple sources", "return Object.assign({}, {first:value&31}, {second:3});"],
+		["an adapted receiver", "return Object.assign.call(value, {}, {revision:3});"],
+	])("retains %s", (_name, body) => {
+		expect(assigns(inspect(body)).length).toBeGreaterThan(0);
+	});
+	it.each([
 		["an object field", "return Object.assign({}, {item:value});"],
 		["a weakly held Symbol field", 'return Object.assign({}, {item:Symbol("item")});'],
 		[
@@ -42,10 +52,21 @@ describe("literal Object.assign lowering", () => {
 		],
 		["an accessor source", "return Object.assign({}, {get revision(){return value;}});"],
 		["a computed source", "return Object.assign({}, {[value]:3});"],
-		["multiple sources", "return Object.assign({}, {first:value&31}, {second:3});"],
-		["an adapted receiver", "return Object.assign.call(value, {}, {revision:3});"],
-	])("retains %s", (_name, body) => {
-		expect(assigns(inspect(body)).length).toBeGreaterThan(0);
+		["a dynamic source", "return Object.assign({}, value);"],
+		[
+			"a normal control-flow result",
+			"const out=flag?Object.assign({},value):null; globalThis.seen=out; return out;",
+		],
+	])("copies %s into a fresh target with one allocating operation", (_name, body) => {
+		const output = inspect(body);
+		expect(assigns(output)).toEqual([]);
+		expect(
+			output.core.some(
+				(operation) =>
+					operation.opcode === "copyDataProperties" &&
+					operation.attributes.copyMode === "assign",
+			),
+		).toBe(true);
 	});
 	it("retains a source carried only into an exception handler", () => {
 		const output = inspect(

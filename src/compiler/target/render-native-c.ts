@@ -17337,15 +17337,13 @@ class NativeInstructionEmission {
 				];
 			}
 			case "COPY_DATA_PROPERTIES": {
-				// Object rest `{...rest}`: excluded keys are the sibling destructured
-				// registers, boxed into a temp array (rooted originals + no synchronous
-				// collection keep the copies live). A source getter can throw.
+				// Exclusion operands alias published roots until the operation consumes them.
 				const excluded =
 					instruction.excluded.length > 0
 						? `((MalValue[]){ ${instruction.excluded.map((r) => this.boxed(r)).join(", ")} })`
 						: "nullptr";
 				return [
-					`r${instruction.dst} = mal_vm_op_copy_data_properties(vm, ${this.boxed(instruction.src)}, ${excluded}, ${instruction.excludedCount});`,
+					`r${instruction.dst} = mal_vm_op_copy_data_properties(vm, ${this.boxed(instruction.src)}, ${excluded}, ${instruction.excludedCount}, ${instruction.copyMode}, ${instruction.slotReserve});`,
 					this.throwCheck(),
 				];
 			}

@@ -194,6 +194,8 @@ const instructions: Array<BytecodeInstruction> = [
 	},
 	{
 		opcode: "COPY_DATA_PROPERTIES",
+		copyMode: 0,
+		slotReserve: 0,
 		dst: 14,
 		src: 10,
 		excludedCount: 1,
@@ -1551,6 +1553,56 @@ describe("program-image-codec", () => {
 				]);
 		},
 	);
+
+	it.each([0, 1, 2])("round-trips data-property copy mode %s", (copyMode) => {
+		const operation: BytecodeInstruction = {
+			opcode: "COPY_DATA_PROPERTIES",
+			copyMode,
+			slotReserve: CORE_MAX_SHAPED_OBJECT_SLOTS,
+			dst: 0,
+			src: 1,
+			excludedCount: 0,
+			excluded: [],
+		};
+		const runtime = {
+			...definition.runtime,
+			functions: definition.runtime.functions.map((fn, index) =>
+				index === 0 ? { ...fn, instructions: [operation], positions: [0] } : fn,
+			),
+		};
+		expect(
+			deserializeRuntimeImage(serializeRuntimeImage(runtime)).functions[0]!.instructions,
+		).toEqual([operation]);
+	});
+
+	it.each([
+		{ copyMode: -1, slotReserve: 0, excludedCount: 0, excluded: [] },
+		{ copyMode: 3, slotReserve: 0, excludedCount: 0, excluded: [] },
+		{ copyMode: 1, slotReserve: -1, excludedCount: 0, excluded: [] },
+		{
+			copyMode: 1,
+			slotReserve: CORE_MAX_SHAPED_OBJECT_SLOTS + 1,
+			excludedCount: 0,
+			excluded: [],
+		},
+		{ copyMode: 2, slotReserve: 0, excludedCount: 1, excluded: [2] },
+	])("rejects invalid fresh-copy operands %j", (fields) => {
+		const operation: BytecodeInstruction = {
+			opcode: "COPY_DATA_PROPERTIES",
+			dst: 0,
+			src: 1,
+			...fields,
+		};
+		const runtime = {
+			...definition.runtime,
+			functions: definition.runtime.functions.map((fn, index) =>
+				index === 0 ? { ...fn, instructions: [operation], positions: [0] } : fn,
+			),
+		};
+		expect(() => serializeRuntimeImage(runtime)).toThrow(
+			/invalid data-property copy mode/,
+		);
+	});
 
 	it("round-trips and validates constructor slot reserves", () => {
 		const withReserve = (

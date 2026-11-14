@@ -1,4 +1,74 @@
+function assignFresh(source) {
+	return Object.assign({}, source);
+}
 const scenarios = {
+	freshCopies() {
+		const events = [],
+			token = Symbol("token"),
+			retained = { value: 23 };
+		const ordered = {
+			get last() {
+				events.push("last");
+				globalThis.__mal_collect_garbage?.();
+				return retained;
+			},
+			get 7() {
+				events.push("7");
+				return 7;
+			},
+			get 1() {
+				events.push("1");
+				return 1;
+			},
+			get [token]() {
+				events.push("symbol");
+				return 29;
+			},
+		};
+		Object.defineProperty(ordered, "hidden", { value: 31 });
+		const sources = [
+			{ id: 1, value: retained },
+			{ value: retained, id: 2, extra: 3 },
+			Object.freeze({ id: 3, value: retained }),
+			ordered,
+			null,
+			undefined,
+			"ab",
+		];
+		const output = [];
+		for (let index = 0; index < sources.length * 3; index++) {
+			const source = sources[index % sources.length];
+			const copy = (index & 1) === 0 ? Object.assign({}, source) : { ...source };
+			globalThis.__mal_collect_garbage?.();
+			output.push([
+				copy !== source,
+				Reflect.ownKeys(copy).map(String),
+				copy.value === retained,
+				copy.last === retained,
+				copy[token],
+				Object.hasOwn(copy, "hidden"),
+				Object.getOwnPropertyDescriptor(copy, "id"),
+			]);
+		}
+		return [events, output];
+	},
+	freshSetterAfterWarmup() {
+		const source = { revision: 7 },
+			before = assignFresh(source),
+			events = [];
+		Object.defineProperty(Object.prototype, "revision", {
+			configurable: true,
+			set(value) {
+				events.push([value, Object.keys(this)]);
+				globalThis.__mal_collect_garbage?.();
+			},
+		});
+		try {
+			return [before, Object.keys(assignFresh(source)), events];
+		} finally {
+			delete Object.prototype.revision;
+		}
+	},
 	ordinary() {
 		const target = { first: 1 };
 		const returned = Object.assign(target, { revision: 17, active: true, label: "item" });

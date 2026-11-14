@@ -4500,13 +4500,17 @@ MalValue mal_vm_op_create_module_namespace(
 );
 
 /**
- * Object rest/spread destructuring: copy source's own enumerable properties (minus
- * `excluded_keys`) onto a fresh object. A source getter / excluded-key ToPropertyKey
- * can throw (sets vm->completion); callers check the completion.
+ * Allocate a fresh copy. Mode 0 is object rest with exclusions and a coercible
+ * source, 1 is initial spread with trailing capacity, and 2 is fresh Object.assign.
+ * Getters and coercion can throw; callers publish live roots and check completion.
  */
 MalValue mal_vm_op_copy_data_properties(
-    MalVm *vm, MalValue source, const MalValue *excluded_keys, i32 excluded_count
+    MalVm *vm, MalValue source, const MalValue *excluded_keys, i32 excluded_count,
+    u8 copy_mode, u8 trailing_capacity
 );
+
+/** Copy own enumerable properties to a fresh object, skipping nil spread sources. */
+MalValue mal_vm_op_clone_object(MalVm *vm, MalValue source, u8 trailing_capacity);
 
 /** A fresh unique private name (hidden private symbol); never throws. */
 MalValue mal_vm_op_create_private_name(MalVm *vm);

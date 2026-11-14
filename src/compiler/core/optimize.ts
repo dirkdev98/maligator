@@ -29,12 +29,14 @@ import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.
 import { verifyCoreOptimizationPlan } from "./core-ir-region-validity.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
+import type { CoreFunctionId } from "./core-ir.ts";
 import { liftLocalCaptureArguments } from "./core-local-capture-arguments.ts";
 import {
 	CORE_CONSTRUCTION_ANNOTATION_PASSES,
 	CORE_CONSTRUCTION_NORMALIZATION_PASSES,
 } from "./core-local-passes.ts";
 import { pruneUnreadModuleBindings } from "./core-module-globals.ts";
+import { lowerFreshObjectCopies } from "./core-object-copy.ts";
 import type { CoreOptimizationBenchmarkAblation } from "./core-optimization-families.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreOptimizationOwnerId } from "./core-optimization-owners.ts";
@@ -499,6 +501,24 @@ export function optimizeCore(
 			);
 		}
 	}
+	const copiedFunctions = new Set<CoreFunctionId>();
+	if (ablatedFamily !== "provenance-escape-scalar-replacement") {
+		for (const functionId of compilation.program.functionIds()) {
+			const scheduler = new CoreFunctionPassScheduler(
+				compilation.program,
+				compilation.context,
+				analyses,
+				reportBuilder,
+				functionId,
+				{
+					verification: options.verification,
+					featureIndex: functionResources.featureIndex,
+				},
+			);
+			if (scheduler.runComponent("finalize", [lowerFreshObjectCopies]).length > 0)
+				copiedFunctions.add(functionId);
+		}
+	}
 	const finalFlow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
 		scope: "program",
 	});
@@ -519,6 +539,7 @@ export function optimizeCore(
 	for (const input of callbackInputs) finalLocalPlanInputs.set(input.function, input);
 	for (const input of versionedInputs) finalLocalPlanInputs.set(input.function, input);
 	for (const functionId of new Set([
+		...copiedFunctions,
 		...memoryCallers,
 		...finalCallbackChanges.map((change) => change.function),
 	])) {

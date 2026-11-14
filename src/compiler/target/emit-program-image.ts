@@ -3507,7 +3507,7 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 		case "ARRAY_REST":
 			return `{ .opcode = MAL_OP_ARRAY_REST, .as.array_rest = { .dst = ${instruction.dst}, .src = ${instruction.src}, .start_index = ${instruction.startIndex} } }`;
 		case "COPY_DATA_PROPERTIES":
-			return `{ .opcode = MAL_OP_COPY_DATA_PROPERTIES, .as.copy_data_properties = { .dst = ${instruction.dst}, .src = ${instruction.src}, .data_offset = ${sideDataOffset()} } }`;
+			return `{ .opcode = MAL_OP_COPY_DATA_PROPERTIES, .as.copy_data_properties = { .dst = ${instruction.dst}, .src = ${instruction.src}, .copy_mode = ${instruction.copyMode}, .slot_reserve = ${instruction.slotReserve}, .data_offset = ${sideDataOffset()} } }`;
 		case "BINARY":
 			return `{ .opcode = MAL_OP_BINARY, .as.binary = { .dst = ${instruction.dst}, .left = ${instruction.left}, .right = ${instruction.right}, .op = ${emitBinaryOperator(instruction.operator)} } }`;
 		case "UNARY":

@@ -16,7 +16,11 @@ import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
-function literalAssign(fn: CoreFunctionStore, instruction: CoreInstructionId) {
+/** Exact namespace call operands after identity and semantic obligations are discharged. */
+export function knownObjectAssignOperands(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+) {
 	if (
 		fn.instructionKind(instruction) !== "operation" ||
 		fn.instructionOpcodeName(instruction) !== "callKnown" ||
@@ -53,6 +57,13 @@ function literalAssign(fn: CoreFunctionStore, instruction: CoreInstructionId) {
 		return undefined;
 	const target = fn.kernel.operandAt(start + 1);
 	const source = fn.kernel.operandAt(start + 2);
+	return { target, source };
+}
+
+function literalAssign(fn: CoreFunctionStore, instruction: CoreInstructionId) {
+	const operands = knownObjectAssignOperands(fn, instruction);
+	if (operands === undefined) return undefined;
+	const { target, source } = operands;
 	const allocation = literalDefinition(fn, source);
 	if (
 		allocation === undefined ||

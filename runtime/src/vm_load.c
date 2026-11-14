@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 95u
+#define WIRE_VERSION 96u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1486,9 +1486,14 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             return;
         case WIRE_COPY_DATA_PROPERTIES: {
             o->opcode = MAL_OP_COPY_DATA_PROPERTIES;
+            o->as.copy_data_properties.copy_mode = rd_u8(r);
+            o->as.copy_data_properties.slot_reserve = rd_u8(r);
+            if (o->as.copy_data_properties.copy_mode > 2 ||
+                o->as.copy_data_properties.slot_reserve > MAL_SHAPE_MAX_INLINE_SLOTS) r->ok = false;
             o->as.copy_data_properties.dst = rd_i32(r);
             o->as.copy_data_properties.src = rd_i32(r);
             i32 count = rd_i32(r);
+            if (o->as.copy_data_properties.copy_mode != 0 && count != 0) r->ok = false;
             o->as.copy_data_properties.data_offset =
                 rd_side_single(r, side_data, count);
             return;

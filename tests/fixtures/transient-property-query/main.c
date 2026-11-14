@@ -80,7 +80,7 @@ static bool missing_queries_release_storage(MalVm *vm) {
         CHECK(mal_value_is_string(roots[1]));
         CHECK(!mal_value_to_string(roots[1])->property_atom);
         CHECK(mal_vm_op_load_property(vm, roots[0], roots[1]) == MAL_VALUE_UNDEFINED);
-        CHECK(mal_value_is_object(mal_vm_op_copy_data_properties(vm, roots[0], &roots[1], 1)));
+        CHECK(mal_value_is_object(mal_vm_op_copy_data_properties(vm, roots[0], &roots[1], 1, 0, 0)));
         CHECK(!mal_value_to_string(roots[1])->property_atom);
     }
     roots[1] = MAL_VALUE_UNDEFINED;

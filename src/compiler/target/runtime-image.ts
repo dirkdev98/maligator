@@ -1477,6 +1477,8 @@ export type BytecodeInstruction =
 	  }
 	| {
 			opcode: "COPY_DATA_PROPERTIES";
+			copyMode: number;
+			slotReserve: number;
 			dst: number;
 			src: number;
 			excludedCount: number;
@@ -4892,6 +4894,13 @@ function lowerInstructionToBytecodeInstruction(
 		case "copyDataProperties":
 			return {
 				opcode: "COPY_DATA_PROPERTIES",
+				copyMode:
+					instruction.copyMode === "spread"
+						? 1
+						: instruction.copyMode === "assign"
+							? 2
+							: 0,
+				slotReserve: instruction.slotReserve ?? 0,
 				dst: instruction.registers[0],
 				src: instruction.registers[1],
 				excludedCount: instruction.registers.length - 2,

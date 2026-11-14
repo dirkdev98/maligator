@@ -158,6 +158,8 @@ const instructions: Array<BytecodeInstruction> = [
 	{ opcode: "CONSTRUCT", dst: 5, callee: 6, argumentCount: 1, arguments: [9] },
 	{
 		opcode: "COPY_DATA_PROPERTIES",
+		copyMode: 0,
+		slotReserve: 0,
 		dst: 6,
 		src: 7,
 		excludedCount: 2,

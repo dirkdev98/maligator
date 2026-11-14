@@ -47,7 +47,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 95;
+export const WIRE_VERSION = 96;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -1407,6 +1407,18 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.startIndex);
 			return;
 		case "COPY_DATA_PROPERTIES":
+			if (
+				!Number.isInteger(i.copyMode) ||
+				i.copyMode < 0 ||
+				i.copyMode > 2 ||
+				!Number.isInteger(i.slotReserve) ||
+				i.slotReserve < 0 ||
+				i.slotReserve > CORE_MAX_SHAPED_OBJECT_SLOTS ||
+				(i.copyMode !== 0 && i.excludedCount !== 0)
+			)
+				throw new Error("program-image-codec: invalid data-property copy mode");
+			w.u8(i.copyMode);
+			w.u8(i.slotReserve);
 			w.i32(i.dst);
 			w.i32(i.src);
 			w.i32(i.excludedCount);
@@ -2483,14 +2495,24 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 			return { opcode, dst: r.i32(), startIndex: r.i32() };
 		case "ARRAY_REST":
 			return { opcode, dst: r.i32(), src: r.i32(), startIndex: r.i32() };
-		case "COPY_DATA_PROPERTIES":
-			return {
+		case "COPY_DATA_PROPERTIES": {
+			const instruction = {
 				opcode,
+				copyMode: r.u8(),
+				slotReserve: r.u8(),
 				dst: r.i32(),
 				src: r.i32(),
 				excludedCount: r.i32(),
 				excluded: r.i32Array(),
 			};
+			if (
+				instruction.copyMode > 2 ||
+				instruction.slotReserve > CORE_MAX_SHAPED_OBJECT_SLOTS ||
+				(instruction.copyMode !== 0 && instruction.excludedCount !== 0)
+			)
+				throw new Error("program-image-codec: invalid data-property copy mode");
+			return instruction;
+		}
 		case "BINARY":
 			return {
 				opcode,

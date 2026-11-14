@@ -351,6 +351,7 @@ function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
 		case "createArrayFromIterable":
 		case "baseConstructResult":
 		case "createBaseConstructReceiver":
+		case "copyDataProperties":
 		case "createObject":
 		case "createObjectShaped":
 		case "createModuleNamespace":

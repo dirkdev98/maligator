@@ -337,6 +337,11 @@ MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *
 MalObject *mal_object_try_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *shape,
                                      const MalValue *values, u32 count);
 
+/** Allocate a shaped copy with hidden capacity for subsequent literal fields. */
+MalObject *mal_object_try_new_shaped_reserved(
+    MalHeap *heap, MalObject *prototype, MalShape *shape,
+    const MalValue *values, u32 count, u8 capacity);
+
 /** Install a known final shape and bulk-copy its values into one exact slot buffer. */
 void mal_object_set_shaped_values(
     MalObject *object, MalShape *shape, const MalValue *values, u32 count

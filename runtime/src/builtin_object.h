@@ -10,6 +10,9 @@
  */
 void mal_builtin_object_install(MalVm *vm);
 
+/** Object.assign with an unobservable fresh ordinary target and one source. */
+MalValue mal_builtin_object_assign_fresh(MalVm *vm, MalValue source);
+
 /** Exact Object.hasOwn invocation after the locked namespace/property seam was
  * erased. The builtin still performs ordinary object/key coercion and Proxy
  * internal methods. */

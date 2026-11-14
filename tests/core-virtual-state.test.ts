@@ -184,7 +184,9 @@ describe("virtual local state", () => {
 		);
 		expect(inspected.structure.allocations).toBe(0);
 		expect(
-			inspected.core.some((operation) => operation.opcode === "mergeDataProperties"),
+			inspected.core.some((operation) =>
+				["mergeDataProperties", "copyDataProperties"].includes(operation.opcode),
+			),
 		).toBe(false);
 		expect(
 			inspected.core.some((operation) =>
@@ -205,7 +207,9 @@ describe("virtual local state", () => {
 				"probe",
 			);
 			expect(
-				inspected.core.some((operation) => operation.opcode === "mergeDataProperties"),
+				inspected.core.some((operation) =>
+					["mergeDataProperties", "copyDataProperties"].includes(operation.opcode),
+				),
 			).toBe(false);
 		},
 	);
@@ -215,7 +219,9 @@ describe("virtual local state", () => {
 			"probe",
 		);
 		expect(
-			inspected.core.some((operation) => operation.opcode === "mergeDataProperties"),
+			inspected.core.some((operation) =>
+				["mergeDataProperties", "copyDataProperties"].includes(operation.opcode),
+			),
 		).toBe(true);
 	});
 	it.each([
@@ -241,7 +247,9 @@ describe("virtual local state", () => {
 			"probe",
 		);
 		expect(
-			inspected.core.some((operation) => operation.opcode === "mergeDataProperties"),
+			inspected.core.some((operation) =>
+				["mergeDataProperties", "copyDataProperties"].includes(operation.opcode),
+			),
 		).toBe(true);
 	});
 	it.each([

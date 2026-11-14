@@ -1632,6 +1632,13 @@ static MalValue mal_builtin_object_assign(MalVm *vm, MalValue this_value, const 
         target_value = mal_builtin_object_box_primitive(vm, target_value);
     }
 
+    // A plain data copy cannot reenter or collect; rooting is needed only after it declines.
+    if (arg_count == 2 && mal_builtin_object_assign_plain_target(vm, target_value) &&
+        mal_value_is_heap_type(args[1], MAL_HEAP_OBJECT) &&
+        !mal_object_has_public_overflow(mal_value_to_object(args[1])) &&
+        mal_builtin_object_assign_source_defines(vm, mal_value_to_object(args[1])) &&
+        mal_vm_try_merge_data_properties(vm, target_value, args[1])) return target_value;
+
     // The target is held across every source's copy (getters/setters re-enter and
     // can collect); a boxed primitive source is a fresh object not on the value
     // stack. Root both and lift GC suppression for the loop.
@@ -1670,6 +1677,26 @@ static MalValue mal_builtin_object_assign(MalVm *vm, MalValue this_value, const 
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&span);
     return ret;
+}
+
+MalValue mal_builtin_object_assign_fresh(MalVm *vm, MalValue source) {
+    if (mal_value_is_heap_type(source, MAL_HEAP_OBJECT) &&
+        !mal_object_has_public_overflow(mal_value_to_object(source)) &&
+        mal_builtin_object_assign_source_defines(vm, mal_value_to_object(source)))
+        return mal_vm_op_clone_object(vm, source, 0);
+    MalValue roots[] = {mal_vm_op_create_object(vm), source};
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    // Opcode entries have no native-call suppression frame to release.
+    bool ok = true;
+    if (!mal_value_is_nil(source)) {
+        if (!mal_value_is_object(source)) roots[1] = mal_builtin_object_box_primitive(vm, source);
+        ok = vm->completion.kind != MAL_COMPLETION_THROW &&
+            mal_builtin_object_assign_from(vm, roots[0], roots[1]);
+    }
+    mal_gc_unroot(&span);
+    return ok ? roots[0] : MAL_VALUE_UNDEFINED;
 }
 
 static MalValue mal_builtin_object_create(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

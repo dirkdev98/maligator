@@ -469,6 +469,21 @@ MalObject *mal_object_try_new_shaped(
     return object;
 }
 
+MalObject *mal_object_try_new_shaped_reserved(
+    MalHeap *heap, MalObject *prototype, MalShape *shape,
+    const MalValue *values, u32 count, u8 capacity
+) {
+    assert(count >= 1 && count <= capacity && capacity <= MAL_SHAPE_MAX_INLINE_SLOTS);
+    MalObject *object = mal_heap_try_alloc(
+        heap, sizeof(MalObject) + sizeof(void *) + sizeof(MalValue) * capacity,
+        MAL_HEAP_OBJECT);
+    if (object == nullptr) return nullptr;
+    mal_object_init_shaped_cell(object, prototype, shape, values, count);
+    object->slot_capacity = capacity;
+    mal_object_slot_coallocations++;
+    return object;
+}
+
 // Owned slot arrays are raw heap cells like dictionary entries: growing a record one
 // property at a time otherwise paid a libc malloc, realloc and free per step.
 static MalValue *mal_object_slots_alloc(u32 capacity) {

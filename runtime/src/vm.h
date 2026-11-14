@@ -721,6 +721,8 @@ typedef struct MalInstruction {
         struct {
             // Side data: [count, excluded key registers...].
             i32 dst, src, data_offset;
+            u8 copy_mode;
+            u8 slot_reserve;
         } copy_data_properties;
 
         /**
