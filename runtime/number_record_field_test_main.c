@@ -3,32 +3,41 @@
 #include <stdio.h>
 #include <string.h>
 
+extern const MalRuntimeImage mal_runtime_image;
+
 #define CHECK(condition) do { if (!(condition)) { fprintf(stderr, "record field contract failed at line %d\n", __LINE__); return 1; } } while (0)
 #define FRESH (&(MalShapeSnapshot) {0})
 
 int main(void) {
+    MalVm vm;
+    mal_vm_init(&vm, &mal_runtime_image);
+    MalValue callable = mal_vm_op_create_function(&vm, 0, nullptr);
+    MalRootSpan callable_root;
+    mal_gc_root(&callable_root, &callable, 1);
+    MalObject *callable_object = &mal_value_to_function_object(callable)->object;
+    void *callable_fields = mal_object_fields(callable_object);
     MalShapeProp primary_props[1] = {{.slot = 0}};
     MalShapeProp alternate_props[3] = {{.slot = 0}, {.slot = 1}, {.slot = 2}};
     MalShape primary = {.inline_count = 1, .props = primary_props};
     MalShape alternate = {.inline_count = 3, .props = alternate_props};
     MalValue values[3] = {
         mal_ops_number_value(11.0), mal_ops_number_value(22.0), mal_ops_number_value(33.5)};
-    MalFunctionObject callable = {
-        .object = {.header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_FUNCTION_OBJECT),
-                   .storage_kind = MAL_OBJECT_EMBEDDED, .shape = &alternate},
-        .object_storage = {.fields = values},
-    };
     MalNumberRecord admitted;
-    CHECK(mal_vm_number_record_begin(mal_value_from_function_object(&callable), false, &admitted));
+    CHECK(mal_vm_number_record_begin(callable, false, &admitted));
+    CHECK(admitted.fields == callable_fields && admitted.shape == callable_object->shape);
+    CHECK(!mal_vm_number_record_begin(callable, true, &admitted));
+    mal_object_set_fields_pointer(callable_object, nullptr);
+    CHECK(!mal_vm_number_record_begin(callable, false, &admitted));
+    CHECK(!mal_vm_property_read_region_begin(callable).active);
+    mal_object_set_fields_pointer(callable_object, callable_fields);
+    CHECK(mal_vm_number_record_begin(callable, false, &admitted));
+    CHECK(admitted.fields == callable_fields && admitted.shape == callable_object->shape);
+    CHECK(!mal_vm_number_record_begin(callable, true, &admitted));
+    MalEmbeddedObject embedded;
+    mal_object_init_embedded_stack(&vm.heap, &embedded, nullptr, &alternate, values);
+    CHECK(mal_vm_number_record_begin(mal_value_from_object(&embedded.object), false, &admitted));
     CHECK(admitted.fields == values && admitted.shape == &alternate);
-    callable.object_storage.fields = nullptr;
-    CHECK(!mal_vm_number_record_begin(mal_value_from_function_object(&callable), false, &admitted));
-    CHECK(!mal_vm_property_read_region_begin(mal_value_from_function_object(&callable)).active);
-    callable.object_storage.fields = values;
-    CHECK(!mal_vm_number_record_begin(mal_value_from_function_object(&callable), true, &admitted));
-    callable.object.header.type = MAL_HEAP_OBJECT;
-    CHECK(mal_vm_number_record_begin(mal_value_from_object(&callable.object), false, &admitted));
-    CHECK(!mal_vm_number_record_begin(mal_value_from_object(&callable.object), true, &admitted));
+    CHECK(!mal_vm_number_record_begin(mal_value_from_object(&embedded.object), true, &admitted));
     MalObjectStorage external_fields = {.fields = values};
     struct { MalObject object; MalObjectStorage *storage; } external = {
         .object = {.header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT),
@@ -90,6 +99,8 @@ int main(void) {
     CHECK(tagged_fields[0] == mal_ops_number_value(7.0));
     tagged_fields[0] = MAL_VALUE_UNDEFINED;
     CHECK(!mal_vm_number_record_field(&record, &cache, FRESH, &field, &value));
+    mal_gc_unroot(&callable_root);
+    mal_vm_free(&vm);
     puts("number-record-field PASS");
     return 0;
 }
