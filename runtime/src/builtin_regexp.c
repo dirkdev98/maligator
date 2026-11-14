@@ -867,96 +867,116 @@ static inline __attribute__((always_inline)) bool regexp_set_last_index(
 // RegExpBuiltinExec result shaping
 // ---------------------------------------------------------------------------
 
-// Build the `.groups` object (null prototype), or undefined when the pattern has
-// no named groups. Names + ranges come from the matcher's retained last match.
-static MalValue regexp_build_groups(MalVm *vm, MalRegExpObject *re, MalString *s) {
-    int32_t count = mal_regexp_named_group_count(re->matcher);
-    if (count <= 0) {
+static MalRegExpGroupLayout regexp_unnamed_layout;
+
+static MalRegExpGroupLayout *regexp_group_layout(MalVm *vm, MalRegExpObject *re) {
+    if (re->group_layout != nullptr) return re->group_layout;
+    i32 count = mal_regexp_capture_name_count(re->matcher);
+    if (count == 0) {
+        re->group_layout = &regexp_unnamed_layout;
+        return re->group_layout;
+    }
+    usize bytes;
+    if (!mal_checked_size_multiply(sizeof(MalRegExpNamedCapture), (usize) count,
+                                   SIZE_MAX - sizeof(MalRegExpGroupLayout), &bytes)) {
+        regexp_throw_string_length(vm);
+        return nullptr;
+    }
+    MalRegExpGroupLayout *layout = malloc(sizeof(*layout) + bytes);
+    if (layout == nullptr) {
+        regexp_throw_string_length(vm);
+        return nullptr;
+    }
+    *layout = (MalRegExpGroupLayout) {
+        .refs = 1,
+        .count = (u32) count,
+        .shape = mal_shape_root(&vm->heap),
+    };
+    for (i32 i = 0; i < count; i++) {
+        const uint8_t *name_bytes;
+        i32 capture;
+        i32 name_length = mal_regexp_capture_name(re->matcher, i, &name_bytes, &capture);
+        assert(name_length > 0 && capture > 0);
+        MalString *name = mal_property_atomize_string(
+            vm, regexp_string_from_utf8(vm, name_bytes, (usize) name_length));
+        u32 slot = layout->distinct_count;
+        for (i32 previous = 0; previous < i; previous++) {
+            if (layout->captures[previous].name == name) {
+                slot = layout->captures[previous].slot;
+                break;
+            }
+        }
+        if (slot == layout->distinct_count) {
+            layout->distinct_count++;
+            if (layout->distinct_count <= MAL_SHAPE_MAX_INLINE_SLOTS) {
+                MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)};
+                layout->shape = mal_shape_add_property(layout->shape, key, REGEXP_WEC);
+            } else {
+                layout->shape = nullptr;
+            }
+        }
+        layout->captures[i] = (MalRegExpNamedCapture) {
+            .name = name, .capture = (u32) capture, .slot = slot,
+        };
+        mal_gc_card(&re->object.header, mal_value_from_string(name));
+        if (mal_gc_marking_active) mal_gc_satb_record(mal_value_from_string(name));
+    }
+    mal_profile_native_allocation(&vm->heap, sizeof(*layout) + bytes, MAL_PROFILE_ALLOCATION_FAMILY_REGEXP);
+    re->group_layout = layout;
+    mal_heap_cell_needs_finalizer(&re->object.header);
+    return layout;
+}
+
+// Both named views select values from their already built numeric captures. In
+// particular, an indices name must reuse that capture's pair, even when another
+// capture has the same range. Duplicate names select the participating alternative.
+static MalValue regexp_build_groups(
+    MalVm *vm, const MalRegExpGroupLayout *layout, const MalArrayObject *captures
+) {
+    if (layout->count == 0) return mal_value_new_undefined();
+    MalValue inline_values[MAL_SHAPE_MAX_INLINE_SLOTS];
+    MalValue *values = layout->shape != nullptr
+        ? inline_values : malloc(sizeof(MalValue) * layout->distinct_count);
+    if (values == nullptr) {
+        regexp_throw_string_length(vm);
         return mal_value_new_undefined();
     }
-    MalObject *groups = mal_object_new(&vm->heap, nullptr);
-    for (int32_t i = 0; i < count; i++) {
-        uint8_t name_buf[128];
-        int32_t range[2];
-        int32_t name_len = mal_regexp_named_group(re->matcher, i, name_buf, (int32_t) sizeof(name_buf), range);
-        if (name_len < 0) {
-            continue;
+    for (u32 i = 0; i < layout->distinct_count; i++) values[i] = mal_value_new_undefined();
+    for (u32 i = 0; i < layout->count; i++) {
+        const MalRegExpNamedCapture *capture = &layout->captures[i];
+        assert(capture->capture < captures->length);
+        MalValue value = captures->elements[capture->capture];
+        if (!mal_value_is_undefined(value)) values[capture->slot] = value;
+    }
+    MalObject *groups;
+    if (layout->shape != nullptr) {
+        groups = mal_object_new_shaped(&vm->heap, nullptr, layout->shape, values, layout->distinct_count);
+    } else {
+        groups = mal_object_new(&vm->heap, nullptr);
+        u32 defined = 0;
+        for (u32 i = 0; i < layout->count; i++) {
+            const MalRegExpNamedCapture *capture = &layout->captures[i];
+            if (capture->slot != defined) continue;
+            MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(capture->name)};
+            MalPropertyDesc desc = mal_intrinsic_data_desc(values[defined++], REGEXP_WEC);
+            mal_object_define_own(groups, key, &desc);
         }
-        uint8_t *nb = name_buf;
-        if (name_len > (int32_t) sizeof(name_buf)) {
-            nb = malloc((usize) name_len);
-            if (nb == nullptr) {
-                regexp_throw_string_length(vm);
-                return mal_value_new_undefined();
-            }
-            mal_regexp_named_group(re->matcher, i, nb, name_len, range);
-        }
-        MalString *name = mal_property_atomize_string(
-            vm, regexp_string_from_utf8(vm, nb, (usize) name_len));
-        if (nb != name_buf) {
-            free(nb);
-        }
-        MalValue value = range[0] < 0 ? mal_value_new_undefined() : regexp_substring(vm, s, range[0], range[1]);
-        MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)};
-        MalPropertyDesc desc = mal_intrinsic_data_desc(value, REGEXP_WEC);
-        mal_object_define_own(groups, key, &desc);
+        free(values);
     }
     return mal_value_from_object(groups);
 }
 
-// Build the `.indices` array for the `d` flag: a [start,end] pair (or undefined)
-// per group, plus an `.indices.groups` object for named groups.
-static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *s, const int32_t *caps, int32_t ngroups) {
-    int32_t named = mal_regexp_named_group_count(re->matcher);
-    MalValue groups_value;
-    if (named <= 0) {
-        groups_value = mal_value_new_undefined();
-    } else {
-        MalObject *groups = mal_object_new(&vm->heap, nullptr);
-        for (int32_t i = 0; i < named; i++) {
-            uint8_t name_buf[128];
-            int32_t range[2];
-            int32_t name_len = mal_regexp_named_group(re->matcher, i, name_buf, (int32_t) sizeof(name_buf), range);
-            if (name_len < 0) {
-                continue;
-            }
-            uint8_t *nb = name_buf;
-            if (name_len > (int32_t) sizeof(name_buf)) {
-                nb = malloc((usize) name_len);
-                if (nb == nullptr) {
-                    regexp_throw_string_length(vm);
-                    return mal_value_new_undefined();
-                }
-                mal_regexp_named_group(re->matcher, i, nb, name_len, range);
-            }
-            MalString *name = mal_property_atomize_string(
-                vm, regexp_string_from_utf8(vm, nb, (usize) name_len));
-            if (nb != name_buf) {
-                free(nb);
-            }
-            MalValue entry;
-            if (range[0] < 0) {
-                entry = mal_value_new_undefined();
-            } else {
-                MalArrayObject *pair = mal_intrinsic_new_array(vm, 0);
-                (void) mal_array_object_fresh_dense_reserve_exact(pair, 2);
-                regexp_dense_append(pair, 0, mal_value_from_f64((f64) range[0]));
-                regexp_dense_append(pair, 1, mal_value_from_f64((f64) range[1]));
-                entry = mal_value_from_object((MalObject *) pair);
-            }
-            MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)};
-            MalPropertyDesc desc = mal_intrinsic_data_desc(entry, REGEXP_WEC);
-            mal_object_define_own(groups, key, &desc);
-        }
-        groups_value = mal_value_from_object(groups);
-    }
+static MalValue regexp_build_indices(
+    MalVm *vm, const MalRegExpGroupLayout *layout, const int32_t *caps, int32_t ngroups
+) {
     if (vm->regexp_indices_shape == nullptr) {
         MalString *keys[1] = {mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_GROUPS)};
         vm->regexp_indices_shape = mal_shape_from_string_keys(&vm->heap, keys, 1);
     }
+    MalValue groups = mal_value_new_undefined();
     MalArrayObject *indices = mal_array_object_new_shaped_reserved(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]),
-        (u32) ngroups, vm->regexp_indices_shape, &groups_value, 1
+        (u32) ngroups, vm->regexp_indices_shape, &groups, 1
     );
     for (int32_t i = 0; i < ngroups; i++) {
         int32_t cs = caps[2 * i];
@@ -975,7 +995,10 @@ static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *
         }
         mal_array_object_fresh_dense_append_reserved(indices, entry);
     }
-
+    if (layout->count != 0) {
+        groups = regexp_build_groups(vm, layout, indices);
+        mal_object_field_store_shaped((MalObject *) indices, 0, groups);
+    }
     return mal_value_from_object((MalObject *) indices);
 }
 
@@ -1269,16 +1292,17 @@ static MalValue regexp_builtin_exec(
         // repeating RegExpBuiltinExec and its lastIndex effects.
     }
 
-    MalValue groups = regexp_build_groups(vm, re, s);
+    MalRegExpGroupLayout *layout = regexp_group_layout(vm, re);
+    if (layout == nullptr) {
+        if (heap_caps) free(caps);
+        return mal_value_new_undefined();
+    }
     MalValue named_values[4] = {
         mal_value_from_f64((f64) match_start),
         mal_value_from_string(s),
-        groups,
+        mal_value_new_undefined(),
         mal_value_new_undefined(),
     };
-    if (has_indices) {
-        named_values[3] = regexp_build_indices(vm, re, s, caps, ngroups);
-    }
     MalShape **shape_slot = has_indices
         ? &vm->regexp_result_indices_shape
         : &vm->regexp_result_shape;
@@ -1300,6 +1324,15 @@ static MalValue regexp_builtin_exec(
         int32_t ce = caps[2 * i + 1];
         MalValue element = cs < 0 ? mal_value_new_undefined() : regexp_substring(vm, s, cs, ce);
         mal_array_object_fresh_dense_append_reserved(array, element);
+    }
+
+    if (layout->count != 0) {
+        MalValue groups = regexp_build_groups(vm, layout, array);
+        mal_object_field_store_shaped((MalObject *) array, 2, groups);
+    }
+    if (has_indices) {
+        MalValue indices = regexp_build_indices(vm, layout, caps, ngroups);
+        mal_object_field_store_shaped((MalObject *) array, 3, indices);
     }
 
     if (heap_caps) {
@@ -1538,6 +1571,7 @@ static MalValue regexp_proto_compile(MalVm *vm, MalValue this_value, const MalVa
         return mal_value_new_undefined();
     }
     // No exec keeps the old matcher across user code, so it can go right away.
+    mal_regexp_object_clear_group_layout(re);
     if (!re->matcher_borrowed) mal_gc_process_release(mal_regexp_release(re->matcher));
     re->matcher = matcher;
     re->matcher_borrowed = false;
@@ -3206,6 +3240,11 @@ static MalValue regexp_proto_match_all(MalVm *vm, MalValue this_value, const Mal
             vm, clone,
             canonical->matcher_borrowed ? canonical->matcher : mal_regexp_retain(canonical->matcher),
             canonical->matcher_borrowed, canonical->source, flags, canonical->flag_bits);
+        clone->group_layout = canonical->group_layout;
+        if (clone->group_layout != nullptr && clone->group_layout->count != 0) {
+            clone->group_layout->refs++;
+            mal_heap_cell_needs_finalizer(&clone->object.header);
+        }
         matcher = mal_value_from_regexp_object(clone);
         if (regexp_threw(vm)) {
             return mal_value_new_undefined();

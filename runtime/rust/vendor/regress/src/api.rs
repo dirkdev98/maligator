@@ -417,6 +417,18 @@ impl From<CompiledRegex> for Regex {
 }
 
 impl Regex {
+    /// Capture names in source order, including duplicate names in alternatives.
+    /// The index uses the same numbering as `Match::group`.
+    pub fn capture_names(&self) -> impl Iterator<Item = (usize, &str)> {
+        self.cr
+            .group_names
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .enumerate()
+            .filter_map(|(index, name)| (!name.is_empty()).then_some((index + 1, name.as_ref())))
+    }
+
     /// Construct a regex by parsing `pattern` using the default flags.
     /// An Error may be returned if the syntax is invalid.
     /// Note that this is rather expensive; prefer to cache a Regex which is

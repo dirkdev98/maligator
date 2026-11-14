@@ -9,6 +9,13 @@ void mal_regexp_object_init(MalHeap *heap, MalRegExpObject *regexp, MalObject *p
     regexp->legacy_features = true;
     regexp->matcher_borrowed = false;
     regexp->last_index_field = mal_value_new_undefined();
+    regexp->group_layout = nullptr;
+}
+
+void mal_regexp_object_clear_group_layout(MalRegExpObject *regexp) {
+    MalRegExpGroupLayout *layout = regexp->group_layout;
+    if (layout != nullptr && layout->count != 0 && --layout->refs == 0) free(layout);
+    regexp->group_layout = nullptr;
 }
 
 MalRegExpObject *mal_regexp_object_new(MalHeap *heap, MalObject *prototype) {

@@ -22,7 +22,7 @@ extern "C" {
 #endif
 
 /* Bump with regexp.rs when the ownership or execution contract changes. */
-#define MAL_REGEXP_ABI_VERSION 10u
+#define MAL_REGEXP_ABI_VERSION 11u
 
 /* Returns the ABI version compiled into the linked archive. */
 uint32_t mal_regexp_abi_version(void);
@@ -68,9 +68,9 @@ int64_t mal_regexp_scratch_delta(void *handle);
  * Returns the capture-group count (>= 1, including group 0) on a match,
  * 0 on no match, -1 on error. On a match, writes (start,end) code-unit index
  * pairs for groups 0..N into caps_out (2 int32 per group; -1,-1 for a group that
- * did not participate), up to caps_cap slots, and retains the match for the
- * named-group queries below. If the return exceeds caps_cap/2 the buffer was too
- * small — grow it and call mal_regexp_copy_captures (no re-match). */
+ * did not participate), up to caps_cap slots. If the return exceeds caps_cap/2
+ * the buffer was too small: grow it and call mal_regexp_copy_captures without
+ * re-matching. */
 int32_t mal_regexp_exec(void *handle, const uint16_t *subject, size_t subject_len,
                         size_t start, const void *subject_identity,
                         uint64_t heap_identity, uint32_t heap_epoch,
@@ -90,16 +90,15 @@ int32_t mal_regexp_exec_latin1(void *handle, const uint8_t *subject, size_t subj
  * re-matching; returns the group count, or 0 if no match is retained. */
 int32_t mal_regexp_copy_captures(void *handle, int32_t *caps_out, int32_t caps_cap);
 
-/* Number of distinct named capture groups in the most recent match. */
-int32_t mal_regexp_named_group_count(void *handle);
+/* Named captures in source order, including duplicate names in alternatives.
+ * Metadata belongs to the compiled pattern and does not require a match. */
+int32_t mal_regexp_capture_name_count(void *handle);
 
-/* The `index`-th named group of the most recent match: writes the name (UTF-8)
- * into name_out (<= name_cap bytes) and returns the full byte length (probe with
- * name_cap 0); writes the (start,end) code-unit range into range_out[2] (-1,-1
- * if the group did not participate). Returns -1 if no match or index is out of
- * range. */
-int32_t mal_regexp_named_group(void *handle, int32_t index, uint8_t *name_out,
-                               int32_t name_cap, int32_t *range_out);
+/* The indexed named capture's UTF-8 name and numeric capture index (group 0 is
+ * the complete match). Returns the byte length, or -1 for an invalid index.
+ * The borrowed name remains valid until the handle's final release. */
+int32_t mal_regexp_capture_name(void *handle, int32_t index,
+                               const uint8_t **name_out, int32_t *capture_out);
 
 #ifdef __cplusplus
 }

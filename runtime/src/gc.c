@@ -1726,6 +1726,11 @@ static void mal_gc_trace_cell_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
             MalRegExpObject *re = (MalRegExpObject *) cell;
             mal_gc_mark_string_in(ctx, re->source);
             mal_gc_mark_string_in(ctx, re->flags);
+            if (re->group_layout != nullptr) {
+                for (u32 i = 0; i < re->group_layout->count; i++) {
+                    mal_gc_mark_string_in(ctx, re->group_layout->captures[i].name);
+                }
+            }
             break;
         }
         case MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT: {
@@ -2401,6 +2406,7 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
                 mal_gc_process_release(mal_regexp_release(re->matcher));
             }
             re->matcher = nullptr;
+            mal_regexp_object_clear_group_layout(re);
 #endif
             break;
         }
@@ -2589,6 +2595,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         case MAL_HEAP_REGEXP_OBJECT: {
             const MalRegExpObject *re = (const MalRegExpObject *) cell;
             if ((re->matcher == nullptr || re->matcher_borrowed) &&
+                (re->group_layout == nullptr || re->group_layout->count == 0) &&
                 mal_gc_object_owns_nothing(&re->object)) {
                 return;
             }

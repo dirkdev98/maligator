@@ -24,6 +24,21 @@ typedef enum MalRegExpFlag {
     MAL_REGEXP_JS_STICKY = 1 << 7,      // y
 } MalRegExpFlag;
 
+typedef struct MalRegExpNamedCapture {
+    MalString *name;
+    u32 capture;
+    u32 slot;
+} MalRegExpNamedCapture;
+
+/** Immutable pattern metadata, shared by matchAll clones on the owning VM thread. */
+typedef struct MalRegExpGroupLayout {
+    u32 refs;
+    u32 count;
+    u32 distinct_count;
+    MalShape *shape;
+    MalRegExpNamedCapture captures[];
+} MalRegExpGroupLayout;
+
 /**
  * A RegExp object: an ordinary object plus the [[RegExpMatcher]] (the compiled
  * regress handle, host-owned), [[OriginalSource]], and
@@ -44,7 +59,10 @@ typedef struct MalRegExpObject {
     bool matcher_borrowed;
     // The lastIndex slot's storage until another property grows the fields.
     MalValue last_index_field;
+    MalRegExpGroupLayout *group_layout;
 } MalRegExpObject;
+
+void mal_regexp_object_clear_group_layout(MalRegExpObject *regexp);
 
 /**
  * Initialize RegExp object state in caller-provided storage. The matcher/source/

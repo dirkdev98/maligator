@@ -77,6 +77,15 @@ code can observe intermediate construction. The shape retains the specified
 property order and attributes, and later writes use the ordinary Array and object
 operations.
 
+RegExp results build numeric captures before their named views. A named indices
+property reuses its numeric capture's pair, preserving identity even when different
+captures cover the same range. Capture names and their ordered property slots are
+immutable pattern metadata, cached by the RegExp and shared with its matchAll clones.
+Each result still creates fresh null-prototype groups objects; shaped groups coallocate
+their values in one managed cell. Patterns too wide for shaped storage use ordinary
+property definitions. Recompilation releases the old layout, and tracing retains its
+name atoms for as long as any owner remains.
+
 Tagged ordinary objects derive their inline bound from their original slot
 capacity on first growth, avoiding allocator-size queries for objects that never
 grow. Embedded objects, deferred Array property storage, and separately owned fields

@@ -23,10 +23,10 @@ use std::sync::Arc;
 
 use regress::{AsciiMatches, AsciiScratch, Flags, Match, Regex, WideScratch};
 
-use crate::ffi::{nullable_slice, nullable_u16_slice, write_utf8};
+use crate::ffi::{nullable_slice, nullable_u16_slice};
 
 /// Ownership and execution contract mirrored by `mal_regexp.h`.
-pub const MAL_REGEXP_ABI_VERSION: u32 = 10;
+pub const MAL_REGEXP_ABI_VERSION: u32 = 11;
 
 const EXEC_ASCII: u32 = 1 << 0;
 const EXEC_CACHE_HIT: u32 = 1 << 1;
@@ -855,14 +855,27 @@ impl FastParser<'_> {
             }
             0x28 => {
                 // (
-                // Named groups report their names from the engine's match, which this
-                // plan never builds.
                 let capture = if self.peek() == Some(u16::from(b'?')) {
-                    if self.units.get(self.position + 1) != Some(&u16::from(b':')) {
-                        return None;
+                    match self.units.get(self.position + 1).copied()? {
+                        0x3a => {
+                            self.position += 2;
+                            None
+                        }
+                        0x3c => {
+                            self.position += 2;
+                            if matches!(self.peek()?, 0x3d | 0x21) {
+                                return None;
+                            }
+                            // Regress has validated the name; execution only needs its
+                            // numeric capture. Names are read from compiled metadata.
+                            while self.peek()? != u16::from(b'>') {
+                                self.position += 1;
+                            }
+                            self.position += 1;
+                            Some(self.next_capture()?)
+                        }
+                        _ => return None,
                     }
-                    self.position += 2;
-                    None
                 } else {
                     Some(self.next_capture()?)
                 };
@@ -1048,9 +1061,9 @@ thread_local! {
 }
 
 /// A compiled pattern plus its most recent match. The C runtime drives one exec
-/// at a time on a single thread and fully consumes each result (captures + named
-/// groups) before issuing the next exec, so caching `last` here is sound and
-/// lets named groups be queried after a match without re-running it. A `Match`
+/// at a time on a single thread and fully consumes each result before issuing the
+/// next exec, so caching `last` here lets wide capture buffers be copied without
+/// re-running the matcher. A `Match`
 /// owns all of its data (it does not borrow the subject), so it is safe to
 /// retain past the exec call. That same discipline lets RegExp objects of one
 /// source and flags share a handle: every cache below is a pure function of the
@@ -1440,6 +1453,45 @@ fn fast_exec<U: SubjectUnit>(
     unsafe { copy_cached_captures(&cp.fast_last_captures, groups, caps_out, caps_cap) }
 }
 
+#[inline(never)]
+fn remember_fast_miss(cp: &mut CompiledPattern, subject: &[u8], start: usize) {
+    if subject.len() > RESULT_MEMO_SUBJECT_BYTES {
+        return;
+    }
+    cp.result_memo
+        .get_or_insert_with(|| ResultMemo {
+            subject: Vec::new(),
+            subject_class: 0,
+            results: Vec::new(),
+        })
+        .record(subject, 0, start, &None);
+}
+
+fn fast_exec_latin1(
+    cp: &mut CompiledPattern,
+    subject: &[u8],
+    start: usize,
+    caps_out: *mut i32,
+    caps_cap: i32,
+) -> i32 {
+    // A failed search can visit every position even for an admitted plan. Share
+    // the general executor's bounded content memo without allocating on matches.
+    if cp
+        .result_memo
+        .as_ref()
+        .is_some_and(|memo| matches!(memo.lookup(subject, start), Some(None)))
+    {
+        cp.last = None;
+        cp.fast_last_groups = 0;
+        return 0;
+    }
+    let groups = fast_exec(cp, subject, start, caps_out, caps_cap);
+    if groups == 0 && start < subject.len() {
+        remember_fast_miss(cp, subject, start);
+    }
+    groups
+}
+
 fn reclaim_ascii(cache: &mut SubjectCache, scratch: &mut AsciiScratch) {
     if let Some(continuation) = cache.continuation.take() {
         *scratch = continuation
@@ -1740,7 +1792,7 @@ pub unsafe extern "C" fn mal_regexp_exec_latin1(
     caps_cap: i32,
     execution_flags_out: *mut u32,
 ) -> i32 {
-    // Allocation-free plans answer before the general path's frame and caches.
+    // Successful fast matches avoid the general executor's frame.
     if !handle.is_null() {
         let cp = unsafe { &mut *(handle as *mut CompiledPattern) };
         if cp.fast.is_some() && start <= subject_len {
@@ -1748,7 +1800,7 @@ pub unsafe extern "C" fn mal_regexp_exec_latin1(
                 unsafe { *execution_flags_out = EXEC_FAST | EXEC_LATIN1 };
             }
             let subj = unsafe { nullable_slice(subject, subject_len) };
-            return fast_exec(cp, subj, start, caps_out, caps_cap);
+            return fast_exec_latin1(cp, subj, start, caps_out, caps_cap);
         }
     }
     unsafe {
@@ -1799,7 +1851,7 @@ unsafe fn exec_latin1_general(
         if !execution_flags_out.is_null() {
             unsafe { *execution_flags_out = EXEC_FAST | EXEC_LATIN1 };
         }
-        return fast_exec(cp, subj, start, caps_out, caps_cap);
+        return fast_exec_latin1(cp, subj, start, caps_out, caps_cap);
     }
 
     let memoized = subject_len <= RESULT_MEMO_SUBJECT_BYTES;
@@ -1939,59 +1991,109 @@ pub unsafe extern "C" fn mal_regexp_copy_captures(
     }
 }
 
-/// Number of distinct named capture groups in the most recent match.
+/// Named captures in the compiled pattern, including duplicate names.
 #[no_mangle]
-pub unsafe extern "C" fn mal_regexp_named_group_count(handle: *mut core::ffi::c_void) -> i32 {
+pub unsafe extern "C" fn mal_regexp_capture_name_count(handle: *mut core::ffi::c_void) -> i32 {
     if handle.is_null() {
         return 0;
     }
     let cp = unsafe { &*(handle as *const CompiledPattern) };
-    cp.last
-        .as_ref()
-        .map(|m| m.named_groups().count() as i32)
-        .unwrap_or(0)
+    cp.re.capture_names().count() as i32
 }
 
-/// The `index`-th named group of the most recent match: writes the name (UTF-8)
-/// into name_out and returns the full byte length; writes the (start,end)
-/// code-unit range into range_out[2] (-1,-1 if it did not participate). Returns
-/// -1 if there is no retained match or the index is out of range.
+/// Borrow a compiled capture name and its numeric group index. No match state is read.
 #[no_mangle]
-pub unsafe extern "C" fn mal_regexp_named_group(
+pub unsafe extern "C" fn mal_regexp_capture_name(
     handle: *mut core::ffi::c_void,
     index: i32,
-    name_out: *mut u8,
-    name_cap: i32,
-    range_out: *mut i32,
+    name_out: *mut *const u8,
+    capture_out: *mut i32,
 ) -> i32 {
     if handle.is_null() || index < 0 {
         return -1;
     }
     let cp = unsafe { &*(handle as *const CompiledPattern) };
-    let Some(m) = cp.last.as_ref() else {
+    let Some((capture, name)) = cp.re.capture_names().nth(index as usize) else {
         return -1;
     };
-    let Some((name, range)) = m.named_groups().nth(index as usize) else {
-        return -1;
-    };
-
-    if !range_out.is_null() {
-        let (s, e) = match &range {
-            Some(r) => (r.start as i32, r.end as i32),
-            None => (-1, -1),
-        };
-        unsafe {
-            *range_out = s;
-            *range_out.add(1) = e;
-        }
+    if !name_out.is_null() {
+        unsafe { *name_out = name.as_ptr() };
     }
-
-    unsafe { write_utf8(name, name_out, name_cap) }
+    if !capture_out.is_null() {
+        unsafe { *capture_out = capture as i32 };
+    }
+    name.len() as i32
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compiled_capture_names_preserve_numeric_indices_without_a_match() {
+        let pattern = utf16(r"(x)(?<leaf>a)|(?<leaf>b)(?<stem>c)?");
+        let compiled = unsafe { handle(&pattern, 0) };
+        assert!(!compiled.is_null());
+        let expected = [("leaf", 2), ("leaf", 3), ("stem", 4)];
+        assert_eq!(
+            unsafe { mal_regexp_capture_name_count(compiled) },
+            expected.len() as i32
+        );
+        for (index, (expected_name, expected_capture)) in expected.iter().enumerate() {
+            let mut name = core::ptr::null();
+            let mut capture = -1;
+            let length =
+                unsafe { mal_regexp_capture_name(compiled, index as i32, &mut name, &mut capture) };
+            assert_eq!(capture, *expected_capture);
+            assert_eq!(
+                unsafe { core::slice::from_raw_parts(name, length as usize) },
+                expected_name.as_bytes()
+            );
+        }
+        unsafe { mal_regexp_release(compiled) };
+    }
+
+    #[test]
+    fn cached_fast_misses_clear_prior_capture_ranges() {
+        let pattern = utf16(r"(?<key>[a-z]+)=(?<value>\d+)");
+        let compiled = unsafe { handle(&pattern, 0) };
+        assert!(!compiled.is_null());
+        let mut captures = [-1; 6];
+        for subject in ["no match", "route=123", "no match", "field=234", "no match"] {
+            let bytes = subject.as_bytes().to_vec();
+            let groups = unsafe {
+                mal_regexp_exec_latin1(
+                    compiled,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    0,
+                    bytes.as_ptr().cast(),
+                    1,
+                    0,
+                    captures.as_mut_ptr(),
+                    captures.len() as i32,
+                    core::ptr::null_mut(),
+                )
+            };
+            if subject == "no match" {
+                assert_eq!(groups, 0);
+                assert_eq!(
+                    unsafe {
+                        mal_regexp_copy_captures(
+                            compiled,
+                            captures.as_mut_ptr(),
+                            captures.len() as i32,
+                        )
+                    },
+                    0
+                );
+            } else {
+                assert_eq!(groups, 3);
+                assert_eq!(captures, [0, 9, 0, 5, 6, 9]);
+            }
+        }
+        unsafe { mal_regexp_release(compiled) };
+    }
 
     fn utf16(value: &str) -> Vec<u16> {
         value.encode_utf16().collect()
@@ -2373,7 +2475,10 @@ mod tests {
         assert!(compile_fast_pattern(&utf16(r"\bword"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("x{2,1}"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("a{"), 0).is_none());
-        assert!(compile_fast_pattern(&utf16("(?<name>a)"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("(?<name>a)"), 0).is_some());
+        assert!(compile_fast_pattern(&utf16("(?<=a)b"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("(?<!a)b"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16(r"(?<name>a)\k<name>"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("value=([0-9]+)"), FLAG_IGNORE_CASE).is_some());
         assert!(compile_fast_pattern(&utf16("caf\u{e9}"), FLAG_IGNORE_CASE).is_none());
         assert!(compile_fast_pattern(&utf16(r"[\u00e0-\u00ff]"), FLAG_IGNORE_CASE).is_none());
@@ -2417,6 +2522,12 @@ mod tests {
     #[test]
     fn fast_plans_agree_with_the_backtracking_engine() {
         let cases = [
+            (r"(?<key>[a-z]+)=(?<value>\d+)", "route=123", 0),
+            (r"(?<outer>(?<inner>birch))", "birch", 0),
+            (r"(?:(?<tree>birch)|(?<tree>cedar))(?<tail>x)?", "cedar", 0),
+            (r"(?:(?<tree>birch)|(?<tree>cedar))(?<tail>x)?", "birchx", 0),
+            (r"(?<\u0061>é)(?<β>x)?", "é", 0),
+            (r"(?<tree>[a-z]+)=(?<count>\d+)", "no match", 0),
             (r#"^(?:\/users\/([^\/]+))(?:\/$)?$"#, "/users/a b/", 0),
             (r#"^(?:\/middleware)(?:\/$)?$"#, "/middleware/", 0),
             (

@@ -409,14 +409,11 @@ contracts or investigates costs still visible after the string follow-ups.
       filter's geometric growth, write barriers and generic fallback. Compare the measured
       output-store ceiling with compiler work, native build cost and generated size.
 
-- [ ] Trace the fixed per-exec cost in `regexp-owned-repeat`, where every exec matches
-      at `lastIndex`, so executor setup, start dispatch and result construction set the
-      time rather than scanning. The `lastIndex` store now hits the store cache; the
-      matcher call (about a fifth of samples) and the named `groups` object (about a
-      sixth: per-exec name atomization and defines) lead. A per-regexp groups shape
-      measured 5% slower, so look at the matcher FFI's name and range calls first. Keep
-      named, unnamed, UTF-16 and miss controls. Preserve captures, lastIndex, reentry and
-      bounded scratch retention.
+- [ ] Reduce fixed per-exec setup and result materialization in `regexp-owned-repeat`,
+      where every exec matches at `lastIndex` rather than scanning. Profile current
+      consumers with capture-name layouts and allocation-free named matching. Keep
+      named, unnamed, UTF-16 and miss controls, and account for cold RegExp creation.
+      Preserve captures, lastIndex, reentry and bounded scratch retention.
 
 - [ ] Use the existing complete mixed-text workload to select one leading construction,
       replacement, JSON or checksum-traversal cost, including rope rebuilding where

@@ -15,7 +15,7 @@ afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("RegExp result storage", () => {
 	it.each(["mutable", "locked"] as const)(
-		"preserves result descriptors and roots through storage transitions under %s primordials",
+		"preserves result descriptors, named-index identity and roots under %s primordials",
 		(primordials) => {
 			const pair = buildBackendPairFromOneProgramImage({
 				fixture: "tests/local/regexp-result-storage.js",

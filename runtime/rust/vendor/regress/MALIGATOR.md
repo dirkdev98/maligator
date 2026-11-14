@@ -35,6 +35,9 @@ immutable subject; discarded iterators return only empty capacity.
 
 Compiled named-group strings are shared with successful matches. Match ranges
 remain independently owned so a later execution cannot mutate an earlier result.
+The compiled regex also exposes capture names with their numeric indices in source
+order, including duplicates. Result construction can select the numeric capture
+directly, preserving named-index identity without requiring an owned engine match.
 
 The runtime returns the preceding result's capture-range vector to the next
 execution only after its C consumer has finished. The matcher transfers that
