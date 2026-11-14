@@ -34,6 +34,35 @@ static MalValue mal_builtin_weak_map_prototype_set(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalValue new_target, MalValue callee);
 
+/**
+ * Populates a fresh Map from an Array of two-element entry Arrays whose iteration
+ * nothing can observe, as the constructor's loop would with the intrinsic adder. Every
+ * entry must hold its key and value as own elements; any other entry declines before
+ * the first insertion, leaving the Map empty for the ordinary path.
+ */
+static bool mal_builtin_map_add_dense_pairs(MalVm *vm, MalMapObject *map, MalValue source) {
+    if (!mal_value_is_array_object(source)) return false;
+    const MalArrayObject *entries = mal_value_to_array_object(source);
+    if (entries->dense_deopted || entries->length > entries->dense_count) return false;
+    MalDeferredValuesCursor cursor;
+    if (!mal_vm_deferred_array_values_begin(vm, source, &cursor)) return false;
+    MalValue key, value;
+    for (u32 index = 0; index < entries->length; index++) {
+        MalValue entry = entries->elements[index];
+        if (!mal_value_is_array_object(entry) ||
+            !mal_array_object_dense_pair(mal_value_to_array_object(entry), &key, &value)) {
+            return false;
+        }
+    }
+    (void) mal_map_object_reserve(map, entries->length);
+    for (u32 index = 0; index < entries->length; index++) {
+        mal_array_object_dense_pair(
+            mal_value_to_array_object(entries->elements[index]), &key, &value);
+        mal_map_object_set_canonical(map, mal_collection_canonical_value(key), value);
+    }
+    return true;
+}
+
 static MalValue mal_builtin_map_construct(
     MalVm *vm,
     MalValue new_target,
@@ -88,7 +117,7 @@ static MalValue mal_builtin_map_construct(
     bool nominated = false;
 
     // Adder and iterator getters can explicitly collect before population starts.
-    if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, "set"), &roots[1])) {
+    if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROXY_SET), &roots[1])) {
         goto done;
     }
     if (!mal_value_is_callable(roots[1])) {
@@ -108,6 +137,10 @@ static MalValue mal_builtin_map_construct(
         mal_vm_callee_realm(vm, roots[1]) == vm->current_realm;
 #endif
     bool direct_adder = direct_map_adder || direct_weak_adder;
+    if (direct_map_adder && mal_builtin_map_add_dense_pairs(vm, map, args[0])) {
+        ret = roots[0];
+        goto done;
+    }
     if (!mal_vm_get_iterator(vm, args[0], &record)) {
         goto done;
     }

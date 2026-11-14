@@ -365,6 +365,68 @@ try {
 }
 ok("proxy receiver fallback", proxyThrew);
 
+const canonicalPairs = new Map([
+	[NaN, 1],
+	[-0, 2],
+	[NaN, 3],
+	[0, 4],
+	["late", 5],
+]);
+const canonicalKeys = [...canonicalPairs.keys()];
+ok(
+	"entry pairs canonicalize and overwrite keys in order",
+	canonicalPairs.size === 3 &&
+		canonicalPairs.get(NaN) === 3 &&
+		canonicalPairs.get(0) === 4 &&
+		Object.is(canonicalKeys[1], 0) &&
+		canonicalKeys[2] === "late",
+);
+const unevenPairs = new Map([
+	["short"],
+	["long", 1, 2],
+	[, "hole key"],
+	{ 0: "plain", 1: "object" },
+]);
+ok(
+	"uneven, holey and plain-object entries",
+	unevenPairs.has("short") &&
+		unevenPairs.get("short") === undefined &&
+		unevenPairs.get("long") === 1 &&
+		unevenPairs.get(undefined) === "hole key" &&
+		unevenPairs.get("plain") === "object",
+);
+let holeEntryThrew = false;
+try {
+	new Map([["before", 1], , ["after", 2]]);
+} catch (error) {
+	holeEntryThrew = error instanceof TypeError;
+}
+ok("hole entry throws TypeError", holeEntryThrew);
+const ownIteratorSource = [["listed", 1]];
+ownIteratorSource[Symbol.iterator] = function* () {
+	yield ["yielded", 2];
+};
+const ownIteratorMap = new Map(ownIteratorSource);
+ok(
+	"own iterator replaces listed entries",
+	ownIteratorMap.size === 1 && ownIteratorMap.get("yielded") === 2,
+);
+const adderKeys = [];
+class LoggingMap extends Map {
+	set(key, value) {
+		adderKeys.push(key);
+		return super.set(key, value);
+	}
+}
+const loggingMap = new LoggingMap([
+	["first", 1],
+	["second", 2],
+]);
+ok(
+	"subclass adder sees every entry",
+	adderKeys.join() === "first,second" && loggingMap.get("second") === 2,
+);
+
 const gc = globalThis.__mal_collect_garbage;
 if (typeof gc === "function") {
 	const retainedMap = new Map();
