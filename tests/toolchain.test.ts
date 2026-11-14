@@ -194,11 +194,23 @@ if [ "$subcommand" = "cc" ] || [ "$subcommand" = "c++" ]; then
 	if [ "$1" = "-target" ]; then zig_target="$2"; shift 2; fi
 	if [ "$1" = "-dumpmachine" ]; then printf '%s\\n' "$zig_target"; exit 0; fi
 	out=''
+	preprocess=''
+	source=''
 	while [ "$#" -gt 0 ]; do
+		if [ "$1" = "-x" ] && [ "$2" = "cpp-output" ]; then
+			printf '%s\\n' 'error: language not recognized: cpp-output' >&2; exit 1
+		fi
+		if [ "$1" = "-E" ]; then preprocess=1; fi
+		case "$1" in *.c|*.i) source="$1";; esac
 		if [ "$1" = "-o" ]; then shift; out="$1"; fi
 		shift
 	done
-	if [ -n "$out" ]; then printf 'x' > "$out"; /bin/chmod +x "$out"; fi
+	if [ -n "$out" ]; then
+		if [ -n "$source" ] && { [ -n "$preprocess" ] || [ "$MAL_TEST_CAPTURE_COMPILE_SOURCE" = "1" ]; }; then
+			/bin/cat "$source" > "$out"
+		else printf 'x' > "$out"; /bin/chmod +x "$out"
+		fi
+	fi
 	exit 0
 fi
 if [ "$subcommand" = "ar" ]; then
@@ -1696,46 +1708,50 @@ printf '!<arch>\\n' > "$2"
 		expect(events.slice(-3)).toEqual([false, true, false]);
 	});
 
-	it("compiles the captured runtime input when source changes after projection", () => {
-		const fake = createFakeToolchain();
-		const runtimeDirectory = createMinimalRuntime(fake);
-		try {
-			const environment = { ...fake.env, MAL_TEST_CAPTURE_COMPILE_SOURCE: "1" };
-			const toolchain = inspectToolchain({
-				rootDir: fake.root,
-				rustDir: path.join(runtimeDirectory, "rust"),
-				env: environment,
-				needsCxx: false,
-				platform: "linux",
-			}).toolchain!;
-			const source = path.join(runtimeDirectory, "src/engine.c");
-			const captured = readFileSync(source, "utf8");
-			const compiled: Array<string> = [];
-			const context = resolveNativeBuildContext({
-				toolchain,
-				runtimeDirectory,
-				cacheDirectory: path.join(fake.root, "snapshot-cache"),
-				environment,
-				features: { evalEnabled: false, webPlatformEnabled: false },
-				onCommand: ({ args }) => {
-					if (args.includes("-c")) {
-						compiled.push(args[args.indexOf("-o") + 1]!);
-						writeFileSync(source, "int engine_value = 2;\n");
-					}
-				},
-				onBuildPhase: ({ phase }) => {
-					if (phase === "runtime C object compile")
-						expect(compiled.map((file) => readFileSync(file, "utf8"))).toContain(
-							captured,
-						);
-				},
-			});
-			ensureNativeArtifacts(context);
-			expect(compiled.length).toBeGreaterThan(0);
-		} finally {
-			rmSync(fake.root, { recursive: true, force: true });
-		}
-	});
+	it.each(["native", "zig"])(
+		"compiles captured runtime input through %s after source edits",
+		(driver) => {
+			const fake = createFakeToolchain();
+			const runtimeDirectory = createMinimalRuntime(fake);
+			try {
+				const environment = { ...fake.env, MAL_TEST_CAPTURE_COMPILE_SOURCE: "1" };
+				const toolchain = inspectToolchain({
+					rootDir: fake.root,
+					rustDir: path.join(runtimeDirectory, "rust"),
+					env: environment,
+					needsCxx: false,
+					platform: "linux",
+					target: driver === "zig" ? "x86_64-unknown-linux-gnu" : undefined,
+				}).toolchain!;
+				const source = path.join(runtimeDirectory, "src/engine.c");
+				const captured = readFileSync(source, "utf8");
+				const compiled: Array<string> = [];
+				const context = resolveNativeBuildContext({
+					toolchain,
+					runtimeDirectory,
+					cacheDirectory: path.join(fake.root, "snapshot-cache"),
+					environment,
+					features: { evalEnabled: false, webPlatformEnabled: false },
+					onCommand: ({ args }) => {
+						if (args.includes("-c")) {
+							compiled.push(args[args.indexOf("-o") + 1]!);
+							writeFileSync(source, "int engine_value = 2;\n");
+						}
+					},
+					onBuildPhase: ({ phase }) => {
+						if (phase === "runtime C object compile")
+							expect(compiled.map((file) => readFileSync(file, "utf8"))).toContain(
+								captured,
+							);
+					},
+				});
+				ensureNativeArtifacts(context);
+				expect(compiled.length).toBeGreaterThan(0);
+			} finally {
+				rmSync(fake.root, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it.each(["changed", "restored"] as const)(
 		"rejects %s runtime sources after preprocessing",

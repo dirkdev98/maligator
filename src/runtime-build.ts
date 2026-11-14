@@ -568,10 +568,8 @@ function ensureRuntimeObjects(
 					...(clangMajorVersion(context.toolchain.tools.cc.version) === undefined
 						? []
 						: ["-Wno-parentheses-equality"]),
-					// Compile the bytes that were keyed, even if a shared checkout changes.
-					"-x",
-					"cpp-output",
 					"-c",
+					// The .i suffix selects preprocessed C across drivers; compile the keyed snapshot.
 					projectedPath,
 					"-o",
 					output,
