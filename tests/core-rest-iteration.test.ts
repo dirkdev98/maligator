@@ -126,14 +126,19 @@ it.each([
 	expect(inspect(body).core.some((op) => op.opcode === "getIterator")).toBe(true);
 });
 
-it("retains replaceable iterator protocols across realms", () => {
-	expect(
-		inspect(iterate, { realms: true }).core.some((op) => op.opcode === "getIterator"),
-	).toBe(true);
-});
-
-it("keeps the iterator protocol as the twin of a protocol guard with mutable primordials", () => {
-	const { core } = inspect(iterate, { locked: false });
-	expect(core.some((op) => op.opcode === "guardSemanticEpoch")).toBe(true);
+it.each([
+	{ locked: false, realms: false },
+	{ locked: false, realms: true },
+	{ locked: true, realms: true },
+])("materializes rest only for the guarded protocol twin in world %j", (world) => {
+	const { core } = inspect(iterate, world);
+	const guard = core.find((op) => op.opcode === "guardSemanticEpoch");
+	expect(guard?.attributes.family).toBe("array-iteration");
 	expect(core.some((op) => op.opcode === "getIterator")).toBe(true);
+	const initialize = core.find((op) => op.opcode === "getIterator")!;
+	const rest = core.find((op) => op.outputs.includes(initialize.inputs[0]!));
+	expect(rest?.opcode).toBe("createRestArguments");
+	expect(rest?.block).toBe(initialize.block);
+	expect(rest?.block).not.toBe(guard!.block);
+	expect(core.some((op) => op.opcode === "loadDynamicArgument")).toBe(true);
 });

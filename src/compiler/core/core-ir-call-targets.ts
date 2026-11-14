@@ -304,6 +304,58 @@ export function coreDirectBuiltinCallbackTarget(
 	return callback === undefined ? undefined : coreDirectCreatedFunction(fn, callback);
 }
 
+/**
+ * Mapper return identities nominate element callees without asserting a factory's
+ * identity, its result's brand or its contents. Consumers must guard the loaded
+ * callee and retain the original call, including for replaced methods and Proxies.
+ */
+export function coreMappedElementFunctionHints(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	callee: CoreValueId,
+): ReadonlyArray<CoreFunctionId> {
+	const definition = (value: CoreValueId): CoreInstructionId | undefined => {
+		for (let depth = 0; depth < 8; depth++) {
+			if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+			const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+			if (fn.instructionOpcodeName(instruction) !== "move") return instruction;
+			value = instructionOperand(fn, instruction, 0)!;
+		}
+		return undefined;
+	};
+	const load = definition(callee);
+	if (load === undefined || fn.instructionOpcodeName(load) !== "loadProperty") return [];
+	const factory = definition(instructionOperand(fn, load, 0)!);
+	if (factory === undefined || fn.instructionOpcodeName(factory) !== "call") return [];
+	const method = definition(instructionOperand(fn, factory, 0)!);
+	if (method === undefined || fn.instructionOpcodeName(method) !== "loadPropertyStatic")
+		return [];
+	const units =
+		program.stringConstants[fn.instructionAttributes(method).stringIndex as number];
+	if (units === undefined || units.length > 4) return [];
+	const name = String.fromCharCode(...units);
+	const mapperPosition = name === "from" ? 3 : name === "map" ? 2 : undefined;
+	if (mapperPosition === undefined) return [];
+	const mapperValue = instructionOperand(fn, factory, mapperPosition);
+	const mapper =
+		mapperValue === undefined ? undefined : coreDirectCreatedFunction(fn, mapperValue);
+	if (mapper === undefined || !program.hasFunction(mapper)) return [];
+	const callback = program.function(mapper);
+	const targets = new Set<CoreFunctionId>();
+	let remaining = 256;
+	for (const instruction of callback.instructionIds()) {
+		if (--remaining < 0) return [];
+		if (callback.instructionKind(instruction) !== "return") continue;
+		const target = coreDirectCreatedFunction(
+			callback,
+			instructionOperand(callback, instruction, 0)!,
+		);
+		if (target !== undefined) targets.add(target);
+		if (targets.size > CORE_CALLEE_TARGET_CAP) return [];
+	}
+	return [...targets].sort((left, right) => left - right);
+}
+
 function builtinResultTargets(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,

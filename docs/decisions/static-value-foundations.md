@@ -1371,6 +1371,27 @@ afterwards, and calls the target with the `this` and arguments read from it. A
 numeric loop region that never replaces the binding performs the check and those
 reads once at its entry.
 
+Private rest iteration reads the retained incoming argument slice after its protocol
+guard. The rest Array is created only for the generic iterator path or to rebuild an
+iterator when a later close observes a replaced return method. Incoming values remain
+rooted until the function exits, including across coercion, callbacks and collection.
+The same proof applies with realms enabled because the private Array belongs to the
+executing realm and the protocol protector covers mutations in every realm.
+
+Small acyclic functions that only read static rest indices can instead guard their
+incoming arity. Supplied elements are immutable own data in the private rest Array,
+so their argument snapshots remain valid across user code and prototype mutations.
+The fast copy avoids the Array; shorter calls retain the original body and its
+inherited getters in evaluation order. Native entries with a fixed arity can fold
+this check without strengthening the generic function's contract.
+
+Mapper return identities can nominate element callees from a factory result without
+proving that factory's identity or the result's contents. A native call site checks
+the actual loaded function and enters its realm before calling the nominated body;
+the original property read and generic invocation remain. Capture kinds stay boxed
+unless proved separately, so a replacement factory can pass arbitrary
+mapper arguments, return foreign functions or expose Proxies.
+
 Each protector covers one protocol, so a polyfill that adds or replaces an unrelated
 built-in method keeps it. A define, store or delete on a watched built-in object
 breaks the protectors whose lookups can reach that key on that object: the

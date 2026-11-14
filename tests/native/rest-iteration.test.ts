@@ -24,7 +24,7 @@ function expected(scenario: string) {
 describe("private rest iteration", () => {
 	let pair: ReturnType<typeof buildBackendPairFromOneProgramImage>;
 	let precise: string;
-	let mutable: string;
+	let mutable: ReturnType<typeof buildBackendPairFromOneProgramImage>;
 	beforeAll(() => {
 		const shared = { fixture, outDir };
 		const config = resolveBuildConfig({
@@ -42,11 +42,11 @@ describe("private rest iteration", () => {
 			config,
 			nativeStackRoots: "precise",
 		});
-		mutable = buildNativeBinary({
+		mutable = buildBackendPairFromOneProgramImage({
 			...shared,
 			name: "rest-iteration-mutable",
 			config: resolveBuildConfig({
-				engine: { primordials: "mutable", eval: false, realms: false },
+				engine: { primordials: "mutable", eval: false, realms: true },
 				surface: { node: true },
 			}),
 		});
@@ -64,7 +64,13 @@ describe("private rest iteration", () => {
 		["joins", "preserves different values carried by branch and continue edges"],
 	])("%s: %s", (scenario) => {
 		const oracle = expected(scenario);
-		for (const binary of [pair.compiled, pair.interpreted, precise])
+		for (const binary of [
+			pair.compiled,
+			pair.interpreted,
+			precise,
+			mutable.compiled,
+			mutable.interpreted,
+		])
 			expect(
 				runToStdout(binary, {
 					env: { ...STRESS_ENV, REST_ITERATION_CASE: scenario, MAL_HOST_GC: "1" },
@@ -72,10 +78,11 @@ describe("private rest iteration", () => {
 			).toBe(oracle);
 	});
 	it("observes a mutable iterator and its return method", () => {
-		expect(
-			runToStdout(mutable, {
-				env: { ...STRESS_ENV, REST_ITERATION_CASE: "mutable", MAL_HOST_GC: "1" },
-			}),
-		).toBe(expected("mutable"));
+		for (const binary of [mutable.compiled, mutable.interpreted])
+			expect(
+				runToStdout(binary, {
+					env: { ...STRESS_ENV, REST_ITERATION_CASE: "mutable", MAL_HOST_GC: "1" },
+				}),
+			).toBe(expected("mutable"));
 	});
 });

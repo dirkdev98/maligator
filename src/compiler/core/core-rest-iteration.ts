@@ -156,6 +156,7 @@ function restIteration(program: CoreProgram, fn: CoreFunctionStore) {
 			return undefined;
 	}
 	return {
+		allocation,
 		rest,
 		initialize,
 		step,
@@ -182,10 +183,9 @@ export const lowerPrivateRestIteration: CoreFunctionPass = {
 	run(context) {
 		const fn = context.program.function(context.item.function);
 		const { world, protectors } = context.compilationContext.facts;
-		const guarded = world.primordialPolicy !== "locked";
+		const guarded = world.primordialPolicy !== "locked" || world.realms;
 		if (
 			unconfinedDynamicCode(context.compilationContext.facts) ||
-			world.realms ||
 			fn.isAsync ||
 			fn.isGenerator ||
 			fn.metadata.isClassConstructor ||
@@ -212,7 +212,7 @@ export const lowerPrivateRestIteration: CoreFunctionPass = {
 			)
 				return undefined;
 			const editor = CoreEditor.open(context.program, fn.id);
-			lowerGuardedRestIteration(context.program, fn, editor, plan);
+			lowerGuardedRestIteration(fn, editor, plan);
 			return editor.commit();
 		}
 		const editor = CoreEditor.open(context.program, fn.id);
@@ -282,13 +282,14 @@ export const lowerPrivateRestIteration: CoreFunctionPass = {
  * Mutable primordials keep the rest loop's protocol as the twin of a guarded
  * iteration (see core-guarded-iteration.ts): the array-iteration protector covers
  * %Array.prototype%[@@iterator] and %ArrayIteratorPrototype%.next, and the private,
- * dense rest array answers its length and every index below it from own data. The
+ * dense rest array answers its length and every index below it from own data. Those
+ * reads can use the retained incoming slice, allocating the Array only in the twin
+ * or when a later IteratorClose needs to reconstruct the otherwise private iterator. The
  * header dispatches each step on the path the loop entered on; a fused close
  * rebuilds the Array iterator from the realm's own `values` and advances it past the
  * consumed elements.
  */
 function lowerGuardedRestIteration(
-	program: CoreProgram,
 	fn: CoreFunctionStore,
 	editor: CoreEditor,
 	plan: NonNullable<ReturnType<typeof restIteration>>,
@@ -313,6 +314,7 @@ function lowerGuardedRestIteration(
 			representation,
 		);
 	const initializeBlock = fn.instructionBlock(plan.initialize);
+	const startIndex = fn.instructionAttributes(plan.allocation).startIndex as number;
 	const { join, fused } = splitGuardedIterationEntry(
 		fn,
 		editor,
@@ -320,14 +322,15 @@ function lowerGuardedRestIteration(
 		[plan.initialize],
 		"array-iteration",
 	);
+	editor.moveInstruction(
+		plan.allocation,
+		fn.instructionBlock(plan.initialize),
+		plan.initialize,
+	);
 	const zero = emit(join, "createNumber", [], { value: 0 });
 	const one = emit(join, "createNumber", [], { value: 1 });
-	const lengthIndex =
-		program.stringConstantSlot("length", "first") ??
-		editor.appendStringConstants([Array.from("length", (unit) => unit.charCodeAt(0))]);
-	const length = emit(join, "loadPropertyStatic", [plan.rest], {
-		stringIndex: lengthIndex,
-	});
+	const offset = emit(join, "createNumber", [], { value: startIndex });
+	const count = emit(join, "loadArgumentCount", []);
 
 	// The header picks the step; both meet where the original header continued.
 	const header = plan.header;
@@ -383,10 +386,11 @@ function lowerGuardedRestIteration(
 		alternate: { block: twinStep, arguments: [] },
 		sourcePosition,
 	});
+	const argumentIndex = emit(fusedStep, "binary", [index, offset], { operator: "+" });
 	const finished = emit(
 		fusedStep,
 		"binary",
-		[index, length],
+		[argumentIndex, count],
 		{ operator: ">=" },
 		doneRepresentation,
 	);
@@ -407,7 +411,7 @@ function lowerGuardedRestIteration(
 		sourcePosition,
 	});
 	jump(fusedElement, stepped, [
-		emit(fusedElement, "loadProperty", [plan.rest, index], {}, valueRepresentation),
+		emit(fusedElement, "loadDynamicArgument", [argumentIndex], {}, valueRepresentation),
 		finished,
 	]);
 
@@ -435,11 +439,12 @@ function lowerGuardedRestIteration(
 		fused,
 		"array-iteration",
 		(block) => {
+			const rest = emit(block, "createRestArguments", [], { startIndex });
 			const values = emit(block, "loadIntrinsic", [], {
 				intrinsic: "__arrayPrototypeValues",
 			});
 			edits.instructions++;
-			const iterator = editor.appendInstruction(block, "call", [values, plan.rest], {
+			const iterator = editor.appendInstruction(block, "call", [values, rest], {
 				sourcePosition,
 			}).outputs[0]!;
 			return {

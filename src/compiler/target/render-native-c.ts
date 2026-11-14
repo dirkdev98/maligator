@@ -4612,9 +4612,11 @@ function emitCompiledVariant(
 			instruction.opcode === "CONSTRUCT_SUPER_FORWARD" ||
 			instruction.opcode === "LOAD_DYNAMIC_ARGUMENT",
 	);
-	const deferredRestRootIp = retainsIncomingArguments
-		? undefined
-		: deferredRestArgumentRootIp(nativeContract);
+	// Typed entries copy their fixed arguments into traced registers before effects.
+	const deferredRestRootIp =
+		retainsIncomingArguments || directEntry !== undefined
+			? undefined
+			: deferredRestArgumentRootIp(nativeContract);
 	const retainsArguments = retainsIncomingArguments || deferredRestRootIp !== undefined;
 	const restArgumentRootReleaseIp = fn.instructions.some(
 		(instruction) =>

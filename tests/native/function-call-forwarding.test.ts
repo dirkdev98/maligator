@@ -52,4 +52,9 @@ describe("calls through Function.prototype.call and apply", () => {
 	it("matches Node under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
 		expect(runToStdout(compiled, { env: STRESS_ENV, timeoutMs: 60000 })).toBe(expected);
 	});
+	it("matches Node under interpreted GC stress", () => {
+		expect(runToStdout(interpreted, { env: STRESS_ENV, timeoutMs: 60000 })).toBe(
+			expected,
+		);
+	});
 });

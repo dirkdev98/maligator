@@ -4,7 +4,11 @@ import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/se
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 
-function kernelOpcodes(body: string, primordials: "locked" | "mutable" = "locked") {
+function kernelOpcodes(
+	body: string,
+	primordials: "locked" | "mutable" = "locked",
+	realms = false,
+) {
 	const image = compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			`globalThis.kernel=function(a,b,f,g){${body}};`,
@@ -12,7 +16,7 @@ function kernelOpcodes(body: string, primordials: "locked" | "mutable" = "locked
 		),
 		{
 			facts: compilerProgramFactsFromConfig(
-				resolveBuildConfig({ engine: { primordials } }),
+				resolveBuildConfig({ engine: { primordials, realms } }),
 			),
 		},
 	);
@@ -39,6 +43,15 @@ describe("spread of Array literal arguments", () => {
 			instructions.find((op) => op.opcode === "CALL" && op.argumentCount === 4),
 		).toBeDefined();
 		expect(spreadsIterable("return f(1,...[a,b,3]);", "mutable")).toBe(true);
+	});
+
+	it("guards realm-enabled mutable literals before positional forwarding", () => {
+		const instructions = kernelOpcodes("return f(1,...[a,b,3]);", "mutable", true);
+		expect(instructions.some((op) => op.opcode === "GUARD_SEMANTIC_EPOCH")).toBe(true);
+		expect(
+			instructions.some((op) => op.opcode === "CALL" && op.argumentCount === 4),
+		).toBe(true);
+		expect(instructions.some((op) => op.opcode === "CALL_SPREAD_ITERABLE")).toBe(true);
 	});
 
 	it.each([

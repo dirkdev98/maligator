@@ -38,15 +38,20 @@ import { CORE_CONDITIONAL_VALUE_KIND_ANALYSIS } from "./core-conditional-value-k
 import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { foldFiniteStringConstruction } from "./core-finite-string-construction.ts";
+import { coreFunctionIsCloneable } from "./core-function-clone.ts";
 import { CORE_FUNCTION_HAS_EDGE_ARGUMENTS } from "./core-function-features.ts";
 import { continueGuardedCallArithmetic } from "./core-guarded-continuations.ts";
 import { removeCoreInstructions } from "./core-instruction-removal.ts";
-import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
+import {
+	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
+	coreUnscopedInstructionAttributes,
+} from "./core-internal-attributes.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	coreTerminatorInput,
 	coreValueControlFlowUseMask,
+	buildCoreControlFlow,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlEdge } from "./core-ir-control-flow.ts";
 import { CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS } from "./core-ir-exception-flow.ts";
@@ -2913,7 +2918,6 @@ const spreadArrayLiteralArguments: CoreFunctionPass = {
 		const { program, compilationContext, item } = context;
 		const { world } = compilationContext.facts;
 		const guarded = world.primordialPolicy !== "locked";
-		if (guarded && world.realms) return undefined;
 		const fn = program.function(item.function);
 		let editor: CoreEditor | undefined;
 		// Rewrites remove instructions, so candidates come from a snapshot.
@@ -3156,6 +3160,199 @@ function canonicalRestElementIndex(key: string | number): number | undefined {
 	return index;
 }
 
+interface StaticRestRead {
+	readonly instruction: CoreInstructionId;
+	readonly argumentIndex?: number;
+}
+
+/*
+ * A supplied rest element is immutable own data even when its prototype changes.
+ * Version a small acyclic body once on arity, before allocating the private Array;
+ * the original body keeps every absent-index lookup in its original effect order.
+ */
+function guardStaticRestReads(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	producer: CoreInstructionId,
+	startIndex: number,
+	reads: ReadonlyArray<StaticRestRead>,
+): ReturnType<CoreEditor["commit"]> | undefined {
+	const minimum = Math.max(
+		startIndex,
+		...reads.map((read) => (read.argumentIndex ?? -1) + 1),
+	);
+	if (
+		minimum > 16 ||
+		reads.length > 16 ||
+		fn.instructionBlock(producer) !== fn.entry ||
+		fn.instructionCapacity > 64 ||
+		!coreFunctionIsCloneable(fn)
+	)
+		return undefined;
+	const control = buildCoreControlFlow(program, fn.id);
+	const sources = control.reversePostorder;
+	if (
+		sources.length > 8 ||
+		control.loops.length > 0 ||
+		(control.predecessors[fn.entry]?.length ?? 0) > 0
+	)
+		return undefined;
+	const bodies = new Map(
+		sources.map((block) => [block, [...fn.bodyInstructionIds(block)]]),
+	);
+	const ends = new Map(
+		sources.map((block) => [block, coreTerminatorInput(fn, fn.blockTerminator(block))]),
+	);
+	const entryBody = bodies.get(fn.entry)!;
+	const tail = entryBody.slice(entryBody.indexOf(producer));
+	bodies.set(fn.entry, tail);
+	const editor = CoreEditor.open(program, fn.id);
+	const sourcePosition = fn.instructionSourcePosition(producer);
+	const first = entryBody[0] ?? fn.blockTerminator(fn.entry);
+	const count = editor.insertInstruction(fn.entry, first, "loadArgumentCount", [], {
+		sourcePosition,
+	}).outputs[0]!;
+	const snapshots = new Map<number, CoreValueId>();
+	for (const read of reads) {
+		const index = read.argumentIndex;
+		if (index === undefined || snapshots.has(index)) continue;
+		snapshots.set(
+			index,
+			editor.insertInstruction(fn.entry, first, "loadArgument", [], {
+				attributes: { index },
+				sourcePosition,
+			}).outputs[0]!,
+		);
+	}
+	const fallback = editor.createBlock();
+	const blocks = new Map<CoreBlockId, CoreBlockId>();
+	const values = new Map<CoreValueId, CoreValueId>();
+	for (const source of sources) {
+		const start = fn.kernel.blockParameterStart(source);
+		const count = source === fn.entry ? 0 : fn.kernel.blockParameterCount(source);
+		const block = editor.createBlock(
+			Array.from({ length: count }, (_, index) => ({
+				representation: fn.valueRepresentation(
+					fn.kernel.blockParameterValue(start + index),
+				),
+			})),
+		);
+		blocks.set(source, block);
+		const createdStart = fn.kernel.blockParameterStart(block);
+		for (let index = 0; index < count; index++)
+			values.set(
+				fn.kernel.blockParameterValue(start + index),
+				fn.kernel.blockParameterValue(createdStart + index),
+			);
+	}
+	const map = (value: CoreValueId): CoreValueId => values.get(value) ?? value;
+	const fast = blocks.get(fn.entry)!;
+	const offset = editor.appendInstruction(fast, "createNumber", [], {
+		attributes: { value: startIndex },
+		sourcePosition,
+	}).outputs[0]!;
+	const length = editor.appendInstruction(fast, "binary", [count, offset], {
+		attributes: { operator: "-" },
+		sourcePosition,
+	}).outputs[0]!;
+	const substitutions = new Map(
+		reads.map((read) => [
+			read.instruction,
+			read.argumentIndex === undefined ? length : snapshots.get(read.argumentIndex)!,
+		]),
+	);
+	for (const source of sources) {
+		const destination = blocks.get(source)!;
+		for (const instruction of bodies.get(source)!) {
+			if (instruction === producer) continue;
+			const substitution = substitutions.get(instruction);
+			if (substitution !== undefined) {
+				values.set(instructionResult(fn, instruction, 0)!, substitution);
+				continue;
+			}
+			const outputs = Array.from(
+				{ length: fn.kernel.instructionResultCount(instruction) },
+				(_, index) => instructionResult(fn, instruction, index)!,
+			);
+			const copied = editor.appendInstruction(
+				destination,
+				fn.instructionOpcodeName(instruction),
+				copyInstructionOperands(fn, instruction).map(map),
+				{
+					attributes: coreUnscopedInstructionAttributes(
+						fn.instructionAttributes(instruction),
+					),
+					sourcePosition: fn.instructionSourcePosition(instruction),
+					outputCount: outputs.length,
+					outputRepresentations: outputs.map((value) => fn.valueRepresentation(value)),
+				},
+			);
+			copied.outputs.forEach((value, index) => values.set(outputs[index]!, value));
+		}
+	}
+	const edge = (input: CoreEdge): CoreEdge => ({
+		block: blocks.get(input.block)!,
+		arguments: input.arguments.map(map),
+	});
+	for (const source of sources) {
+		const end = ends.get(source)!;
+		let input: CoreTerminatorInput;
+		switch (end.kind) {
+			case "jump":
+				input = { ...end, edge: edge(end.edge) };
+				break;
+			case "branch":
+				input = {
+					...end,
+					condition: map(end.condition),
+					consequent: edge(end.consequent),
+					alternate: edge(end.alternate),
+				};
+				break;
+			case "switch":
+				input = {
+					...end,
+					discriminant: map(end.discriminant),
+					cases: end.cases.map((item) => ({ ...item, edge: edge(item.edge) })),
+					default: edge(end.default),
+				};
+				break;
+			case "return":
+			case "throw":
+				input = { ...end, value: map(end.value) };
+				break;
+			case "unreachable":
+				input = end;
+				break;
+			case "guard":
+				throw new Error("A guarded rest body cannot copy scoped facts");
+		}
+		editor.setTerminator(blocks.get(source)!, {
+			...input,
+			sourcePosition: fn.instructionSourcePosition(fn.blockTerminator(source)),
+		});
+	}
+	for (const instruction of tail) editor.moveInstruction(instruction, fallback);
+	editor.setTerminator(fallback, ends.get(fn.entry)!);
+	editor.removeInstruction(fn.blockTerminator(fn.entry));
+	const required = editor.appendInstruction(fn.entry, "createNumber", [], {
+		attributes: { value: minimum },
+		sourcePosition,
+	}).outputs[0]!;
+	const supplied = editor.appendInstruction(fn.entry, "binary", [count, required], {
+		attributes: { operator: ">=" },
+		sourcePosition,
+	}).outputs[0]!;
+	editor.setTerminator(fn.entry, {
+		kind: "branch",
+		condition: supplied,
+		consequent: { block: fast, arguments: [] },
+		alternate: { block: fallback, arguments: [] },
+		sourcePosition,
+	});
+	return editor.commit();
+}
+
 const scalarizeRestArgumentReads: CoreFunctionPass = {
 	name: "scalarize-rest-argument-reads",
 	stage: "canonicalize",
@@ -3171,10 +3368,7 @@ const scalarizeRestArgumentReads: CoreFunctionPass = {
 			fn.isAsync ||
 			fn.metadata.isClassConstructor ||
 			fn.metadata.isDerivedConstructor ||
-			fn.metadata.mappedArguments ||
-			!compilerFactIsWorldInvariant(
-				compilationContext.facts.protectors.get("array-elements"),
-			)
+			fn.metadata.mappedArguments
 		) {
 			return undefined;
 		}
@@ -3261,6 +3455,15 @@ const scalarizeRestArgumentReads: CoreFunctionPass = {
 				reads.push({ instruction, result, argumentIndex });
 			}
 			if (!valid || (reads.length === 0 && lengthReads.length === 0)) continue;
+			if (
+				!compilerFactIsWorldInvariant(
+					compilationContext.facts.protectors.get("array-elements"),
+				)
+			)
+				return guardStaticRestReads(program, fn, producer, startIndex, [
+					...reads,
+					...lengthReads,
+				]);
 
 			let before = fn.blockTerminator(fn.entry);
 			let argumentCount: CoreValueId | undefined;

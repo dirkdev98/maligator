@@ -24,6 +24,7 @@ import {
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
 import {
 	coreDirectBuiltinCallbackTarget,
+	coreMappedElementFunctionHints,
 	coreValueIsLoadedGlobalProperty,
 } from "./core-ir-call-targets.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
@@ -1254,9 +1255,20 @@ function guardedCallOpportunities(
 			globalTargetUses.set(target, (globalTargetUses.get(target) ?? 0) + 1);
 		}
 		for (const site of outgoing) {
+			const mappedHints =
+				site.targets.functions.length === 0
+					? coreMappedElementFunctionHints(program, fn, site.callee)
+					: [];
 			const candidateHints =
 				site.targets.functions.length === 0 && site.open
-					? coreInstanceMethodTargets(fn, site.callee, site.receiver, instanceMethodHints)
+					? mappedHints.length > 0
+						? mappedHints
+						: coreInstanceMethodTargets(
+								fn,
+								site.callee,
+								site.receiver,
+								instanceMethodHints,
+							)
 					: undefined;
 			// Small methods can inherit repetition from callers without containing a loop themselves.
 			const hintedTargets =
