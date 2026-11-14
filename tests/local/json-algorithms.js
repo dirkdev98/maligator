@@ -611,4 +611,37 @@ for (const [label, value] of [
 	}
 	check(caught instanceof TypeError, "nested record cycle through " + label);
 }
+// One unit above Latin-1 makes the whole document UTF-16; its keys, small integers and
+// escaped strings keep their meaning on the narrow fast paths.
+const wideDocument =
+	'{"name":"item \\"0\\"\\n café 😀","zero":-0,"big":123456789012345678,"neg":-42,' +
+	'"esc":"\\u00e9\\ud83d\\ude00\\/\\b\\f\\r\\t","emoji":"😀"}';
+for (let round = 0; round < 2; round++) {
+	const wide = JSON.parse(wideDocument);
+	check(
+		wide.name === 'item "0"\n café 😀' &&
+			Object.is(wide.zero, -0) &&
+			wide.big === 123456789012345678 &&
+			wide.neg === -42 &&
+			wide.esc === "é😀/\b\f\r\t" &&
+			Object.keys(wide).join() === "name,zero,big,neg,esc,emoji",
+		"UTF-16 document values on round " + round,
+	);
+}
+for (const malformed of [
+	'{"e":"😀","a":"\\x"}',
+	'{"e":"😀","a":"\\u12G4"}',
+	'{"e":"😀","a":"a\nb"}',
+]) {
+	let caught;
+	try {
+		JSON.parse(malformed);
+	} catch (error) {
+		caught = error;
+	}
+	check(
+		caught instanceof SyntaxError,
+		"malformed UTF-16 document " + JSON.stringify(malformed),
+	);
+}
 console.log(failed ? "json-algorithms FAIL" : "json-algorithms PASS");

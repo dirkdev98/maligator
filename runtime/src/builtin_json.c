@@ -2449,6 +2449,112 @@ static bool mal_json_consume_keyword(MalJsonParser *parser, const byte *keyword)
     return true;
 }
 
+// Escaped tokens up to this many decoded units decode through a stack buffer.
+#define MAL_JSON_STACK_STRING_UNITS 1024
+
+static inline i32 mal_json_hex_digit(c16 unit) {
+    if (unit >= '0' && unit <= '9') return unit - '0';
+    if (unit >= 'a' && unit <= 'f') return unit - 'a' + 10;
+    if (unit >= 'A' && unit <= 'F') return unit - 'A' + 10;
+    return -1;
+}
+
+static inline c16 mal_json_segment_unit(const MalStringSegment *segment, usize index) {
+    return segment->latin1 ? (c16) segment->latin1_units[index] : segment->utf16_units[index];
+}
+
+/**
+ * Decodes the escape at `index` (its backslash), returning its unit and storing the
+ * escape's width, or false for a malformed escape.
+ */
+static inline bool mal_json_segment_escape(
+    const MalStringSegment *segment, usize index, c16 *unit, usize *width
+) {
+    switch (mal_json_segment_unit(segment, index + 1)) {
+        case '"': *unit = '"'; break;
+        case '\\': *unit = '\\'; break;
+        case '/': *unit = '/'; break;
+        case 'b': *unit = '\b'; break;
+        case 'f': *unit = '\f'; break;
+        case 'n': *unit = '\n'; break;
+        case 'r': *unit = '\r'; break;
+        case 't': *unit = '\t'; break;
+        case 'u': {
+            if (index + 5 >= segment->length) return false;
+            c16 value = 0;
+            for (usize digit = 0; digit < 4; digit++) {
+                i32 nibble = mal_json_hex_digit(mal_json_segment_unit(segment, index + 2 + digit));
+                if (nibble < 0) return false;
+                value = (c16) ((value << 4) | (c16) nibble);
+            }
+            *unit = value;
+            *width = 6;
+            return true;
+        }
+        default: return false;
+    }
+    *width = 2;
+    return true;
+}
+
+/**
+ * Decodes an escaped string token that lies wholly in the current segment without
+ * a growing buffer: one pass validates it and measures the decoded length and width,
+ * the next writes the units into a stack buffer the string copies once. A malformed,
+ * long or segment-crossing token returns false with the parser unmoved for the
+ * builder path, which reports errors.
+ */
+static bool mal_json_parse_escaped_in_segment(MalJsonParser *parser, usize start, MalValue *out) {
+    const MalStringSegment *segment = &parser->segment;
+    if (start < parser->segment_start) return false;
+    usize first = start - parser->segment_start;
+    usize decoded = 0;
+    bool wide = false;
+    usize index = first;
+    for (;;) {
+        if (index >= segment->length) return false;
+        c16 unit = mal_json_segment_unit(segment, index);
+        if (unit == '"') break;
+        if (unit < 0x20) return false;
+        usize width = 1;
+        if (unit == '\\' &&
+            (index + 1 >= segment->length || !mal_json_segment_escape(segment, index, &unit, &width)))
+            return false;
+        wide |= unit > 0xFF;
+        if (++decoded > MAL_JSON_STACK_STRING_UNITS) return false;
+        index += width;
+    }
+    usize end = index;
+    MalHeap *heap = &parser->vm->heap;
+    MalString *string;
+    if (wide) {
+        c16 units[MAL_JSON_STACK_STRING_UNITS];
+        usize count = 0;
+        for (index = first; index < end;) {
+            c16 unit = mal_json_segment_unit(segment, index);
+            usize width = 1;
+            if (unit == '\\') mal_json_segment_escape(segment, index, &unit, &width);
+            units[count++] = unit;
+            index += width;
+        }
+        string = mal_string_new_copy(heap, units, count);
+    } else {
+        u8 units[MAL_JSON_STACK_STRING_UNITS];
+        usize count = 0;
+        for (index = first; index < end;) {
+            c16 unit = mal_json_segment_unit(segment, index);
+            usize width = 1;
+            if (unit == '\\') mal_json_segment_escape(segment, index, &unit, &width);
+            units[count++] = (u8) unit;
+            index += width;
+        }
+        string = mal_string_new_latin1_copy(heap, units, count);
+    }
+    parser->position = parser->segment_start + end + 1;
+    *out = mal_value_from_string(string);
+    return true;
+}
+
 static MalValue mal_json_parse_string(MalJsonParser *parser) {
     // Borrow a token confined to this leaf; copy crossed segments as we visit
     // them, before advancing the cursor. Neither path descends from the root.
@@ -2465,6 +2571,11 @@ static MalValue mal_json_parse_string(MalJsonParser *parser) {
             ? mal_json_latin1_safe_run(parser->segment.latin1_units + offset, available)
             : mal_json_utf16_unescaped_run(parser->segment.utf16_units + offset, available);
         parser->position += run;
+        if (run < available && builder.buffer.length == 0 &&
+            mal_string_segment_code_unit_at(&parser->segment, offset + run) == '\\') {
+            MalValue escaped;
+            if (mal_json_parse_escaped_in_segment(parser, start, &escaped)) return escaped;
+        }
         if (run < available && builder.buffer.length == 0 &&
             mal_string_segment_code_unit_at(&parser->segment, offset + run) == '"') {
             parser->position++;
@@ -2601,26 +2712,27 @@ static bool mal_json_number_consume(
 // neither the decimal token nor the per-character consume checks.
 static bool mal_json_try_parse_small_integer(MalJsonParser *parser, MalValue *out) {
     usize offset = parser->position - parser->segment_start;
-    if (!parser->segment.latin1 || offset >= parser->segment.length) return false;
-    const u8 *units = parser->segment.latin1_units + offset;
-    usize available = parser->segment.length - offset;
-    bool negative = units[0] == '-';
+    if (offset >= parser->segment.length) return false;
+    const MalStringSegment *segment = &parser->segment;
+    usize available = segment->length - offset;
+    bool negative = mal_json_segment_unit(segment, offset) == '-';
     usize start = negative ? 1 : 0;
     usize position = start;
     u64 magnitude = 0;
-    if (position < available && units[position] == '0') {
+    if (position < available && mal_json_segment_unit(segment, offset + position) == '0') {
         position++;
     } else {
-        while (position < available && (u32) (units[position] - '0') < 10 &&
-               position - start < 15) {
-            magnitude = magnitude * 10 + (u32) (units[position] - '0');
+        while (position < available && position - start < 15) {
+            u32 digit = (u32) mal_json_segment_unit(segment, offset + position) - '0';
+            if (digit >= 10) break;
+            magnitude = magnitude * 10 + digit;
             position++;
         }
     }
     // The general path handles a missing digit, a number reaching the segment's
     // end, more digits, a fraction, and an exponent.
     if (position == start || position >= available) return false;
-    u8 next = units[position];
+    c16 next = mal_json_segment_unit(segment, offset + position);
     if ((u32) (next - '0') < 10 || next == '.' || next == 'e' || next == 'E') return false;
     parser->position += position;
     *out = negative && magnitude == 0 ? MAL_VALUE_NEGATIVE_ZERO
@@ -3006,13 +3118,30 @@ static bool mal_json_parse_key(MalJsonParser *parser, MalKey *out) {
     u8 bytes[MAL_JSON_KEY_CACHE_BYTES];
     usize length = 0;
     usize offset = parser->position - parser->segment_start;
-    if (cache != nullptr && parser->segment.latin1 && offset < parser->segment.length) {
-        const u8 *units = parser->segment.latin1_units + offset;
+    if (cache != nullptr && offset < parser->segment.length) {
         usize available = parser->segment.length - offset;
         usize window = available < MAL_JSON_KEY_CACHE_BYTES + 1
             ? available : MAL_JSON_KEY_CACHE_BYTES + 1;
-        length = mal_json_latin1_safe_run(units, window);
-        if (length < window && units[length] == '"') {
+        const u8 *units;
+        bool closed;
+        if (parser->segment.latin1) {
+            units = parser->segment.latin1_units + offset;
+            length = mal_json_latin1_safe_run(units, window);
+            closed = length < window && units[length] == '"';
+        } else {
+            // A key of Latin-1 units in a UTF-16 document shares the narrow cache.
+            const c16 *wide = parser->segment.utf16_units + offset;
+            while (length < window && wide[length] >= 0x20 && wide[length] <= UINT8_MAX &&
+                   wide[length] != '"' && wide[length] != '\\') {
+                length++;
+            }
+            closed = length < window && wide[length] == '"';
+            if (closed) {
+                for (usize i = 0; i < length; i++) bytes[i] = (u8) wide[i];
+            }
+            units = bytes;
+        }
+        if (closed) {
             entry = &cache->entries[
                 mal_json_key_hash(units, length) & (MAL_JSON_KEY_CACHE_ENTRIES - 1)];
             if (entry->filled && entry->length == length &&
@@ -3021,7 +3150,7 @@ static bool mal_json_parse_key(MalJsonParser *parser, MalKey *out) {
                 *out = entry->key;
                 return true;
             }
-            memcpy(bytes, units, length);
+            if (units != bytes) memcpy(bytes, units, length);
         }
     }
 
