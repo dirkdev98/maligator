@@ -103,5 +103,94 @@ ok(
 		evalCodes[10] === "ten",
 );
 
+function flatRow() {
+	return [
+		"alpha",
+		"beta",
+		"gamma",
+		"delta",
+		"epsilon",
+		"zeta",
+		"eta",
+		"theta",
+		"iota",
+		"kappa",
+		"lambda",
+		"mu",
+		"nu",
+		"xi",
+		"omicron",
+		"pi",
+		-0,
+		12n,
+		3.5,
+		true,
+		null,
+	];
+}
+function flatHoles() {
+	return [
+		"h0",
+		,
+		"h2",
+		"h3",
+		"h4",
+		"h5",
+		"h6",
+		"h7",
+		"h8",
+		"h9",
+		"h10",
+		"h11",
+		"h12",
+		"h13",
+		"h14",
+		"h15",
+		"h16",
+		,
+		"h18",
+	];
+}
+const rows = [flatRow(), flatRow(), flatRow()];
+ok("flat array templates are fresh", rows[0] !== rows[1] && rows[1] !== rows[2]);
+rows[0][0] = "changed";
+rows[0].push("tail");
+ok(
+	"flat array template isolation",
+	rows[1][0] === "alpha" && rows[1].length === 21 && rows[2].length === 21,
+);
+ok(
+	"flat array template constants",
+	Object.is(rows[2][16], -0) &&
+		rows[2][17] === 12n &&
+		rows[2][18] === 3.5 &&
+		rows[2][20] === null,
+);
+const flatDescriptor = Object.getOwnPropertyDescriptor(rows[2], "3");
+ok(
+	"flat array template elements are ordinary",
+	Array.isArray(rows[2]) &&
+		Object.getPrototypeOf(rows[2]) === Array.prototype &&
+		flatDescriptor.writable &&
+		flatDescriptor.enumerable &&
+		flatDescriptor.configurable,
+);
+const holes = [flatHoles(), flatHoles(), flatHoles()];
+ok(
+	"flat array template holes",
+	holes[2].length === 19 &&
+		!(1 in holes[2]) &&
+		!(17 in holes[2]) &&
+		holes[2][18] === "h18",
+);
+const pieces = [];
+for (let i = 0; i < 3; i++) pieces.push("north,east,south".split(","));
+ok(
+	"folded split stays fresh",
+	pieces[0] !== pieces[1] &&
+		pieces[1] !== pieces[2] &&
+		pieces[2].join("|") === "north|east|south",
+);
+
 /* GENERATED_LARGE_TEMPLATE */
 console.log("literal-template PASS " + passed + "/" + passed);
