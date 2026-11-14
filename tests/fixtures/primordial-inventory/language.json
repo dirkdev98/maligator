@@ -1082,7 +1082,7 @@
 				["length", 0, ["bits", "fff8000000000001"], -1, -1],
 				["name", 0, ["string", "indexOf"], -1, -1]
 			],
-			["Array.prototype.indexOf"]
+			["Array.prototype.indexOf", "MAL_INTRINSIC_ARRAY_PROTOTYPE_INDEX_OF"]
 		],
 		[
 			"Array.prototype.join",
@@ -12674,6 +12674,7 @@
 		["MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE_NEXT", 4],
 		["MAL_INTRINSIC_ARRAY_PROTOTYPE", 75],
 		["MAL_INTRINSIC_ARRAY_PROTOTYPE_INCLUDES", 90],
+		["MAL_INTRINSIC_ARRAY_PROTOTYPE_INDEX_OF", 91],
 		["MAL_INTRINSIC_ARRAY_PROTOTYPE_MAP", 95],
 		["MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH", 97],
 		["MAL_INTRINSIC_ARRAY_PROTOTYPE_VALUES", 112],

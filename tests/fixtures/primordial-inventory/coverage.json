@@ -67633,7 +67633,7 @@
 		{
 			"id": "[\"Array.prototype.indexOf\",\"length\"]",
 			"owner": "Array.prototype.indexOf",
-			"ownerPaths": ["Array.prototype.indexOf"],
+			"ownerPaths": ["Array.prototype.indexOf", "MAL_INTRINSIC_ARRAY_PROTOTYPE_INDEX_OF"],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -67643,7 +67643,7 @@
 		{
 			"id": "[\"Array.prototype.indexOf\",\"name\"]",
 			"owner": "Array.prototype.indexOf",
-			"ownerPaths": ["Array.prototype.indexOf"],
+			"ownerPaths": ["Array.prototype.indexOf", "MAL_INTRINSIC_ARRAY_PROTOTYPE_INDEX_OF"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -174877,7 +174877,7 @@
 		{
 			"id": "[\"Array.prototype.indexOf\",\"<call>\"]",
 			"owner": "Array.prototype.indexOf",
-			"ownerPaths": ["Array.prototype.indexOf"],
+			"ownerPaths": ["Array.prototype.indexOf", "MAL_INTRINSIC_ARRAY_PROTOTYPE_INDEX_OF"],
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.indexOf"],
@@ -174887,7 +174887,7 @@
 		{
 			"id": "[\"Array.prototype.indexOf\",\"<construct>\"]",
 			"owner": "Array.prototype.indexOf",
-			"ownerPaths": ["Array.prototype.indexOf"],
+			"ownerPaths": ["Array.prototype.indexOf", "MAL_INTRINSIC_ARRAY_PROTOTYPE_INDEX_OF"],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.indexOf"],
@@ -290082,6 +290082,16 @@
 			"key": "MAL_INTRINSIC_ARRAY_PROTOTYPE_INCLUDES",
 			"kind": "binding",
 			"operations": ["Array.prototype.includes"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_ARRAY_PROTOTYPE_INDEX_OF\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_ARRAY_PROTOTYPE_INDEX_OF",
+			"kind": "binding",
+			"operations": ["Array.prototype.indexOf"],
 			"task": "N-06",
 			"decisions": []
 		},
