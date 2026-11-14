@@ -200,4 +200,29 @@ try {
 }
 log("in try", caught);
 
+// A pattern anchored on a required first atom rejects subjects by their first unit;
+// alternatives, optional atoms, groups, case folding and multiline anchors still match.
+const rope = "1" + "2".repeat(40) + String(lines.length % 1);
+const anchored = [
+	["digits", (x) => /^[1-9]\d*$/.test(x), ["1", "0", "x", "", "12a", rope]],
+	["digit escape", (x) => /^\d+/.test(x), ["5a", "a5", ""]],
+	["alternative", (x) => /^a|b/.test(x), ["xb", "ax", "c"]],
+	["negated", (x) => /^[^0-9]/.test(x), ["a", "1"]],
+	["optional", (x) => /^x?y/.test(x), ["y", "xy", "z"]],
+	["escaped dot", (x) => /^\./.test(x), [".a", "a"]],
+	["class range", (x) => /^[a-c\-]z/.test(x), ["-z", "bz", "dz"]],
+	["word", (x) => /^\w/.test(x), ["_", "-"]],
+	["unicode", (x) => /^é/u.test(x), ["é", "e", "😀"]],
+	["empty class", (x) => /^[]/.test(x), ["", "a"]],
+	["multiline", (x) => /^a/m.test(x), ["b\na", "b"]],
+	["ignore case", (x) => /^A/i.test(x), ["a", "b"]],
+	["counted", (x) => /^[0-9a-f]{2}/.test(x), ["0f", "g0", "f"]],
+];
+for (const [label, test, subjects] of anchored)
+	log("anchored " + label, ...subjects.map(test));
+log(
+	"anchored exec",
+	...["12", "x", "", rope.slice(0, 3)].map((x) => (/^[1-9]\d*/.exec(x) ?? [null])[0]),
+);
+
 console.log(lines.join("\n"));

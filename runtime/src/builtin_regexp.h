@@ -85,6 +85,8 @@ MalValue mal_regexp_test_call(MalVm *vm, MalValue callee, MalValue receiver, Mal
 typedef struct MalRegExpLiteralSite {
     void *matcher;
     void *template_matcher;
+    /** The code units the pattern's anchored first atom accepts, or null for any unit. */
+    const struct MalRegExpFirstUnits *first_units;
     MalString *pattern;
     MalString *flags;
     u32 flag_bits;

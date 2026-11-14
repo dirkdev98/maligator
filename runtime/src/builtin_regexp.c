@@ -469,10 +469,20 @@ static void regexp_initialize_state(
 
 #define REGEXP_TEMPLATE_LIMIT 4096
 
+/**
+ * The Latin-1 code units that can begin a match of a pattern anchored by `^` without
+ * the m flag, as one bit per unit. Such a match starts only at index 0, so a subject
+ * whose first unit is absent here cannot match.
+ */
+typedef struct MalRegExpFirstUnits {
+    u64 bits[4];
+} MalRegExpFirstUnits;
+
 typedef struct RegexpTemplate {
     const MalString *pattern;
     const MalString *flags;
     void *matcher;
+    MalRegExpFirstUnits *first_units;
     u32 bits;
 } RegexpTemplate;
 
@@ -488,6 +498,7 @@ static void regexp_templates_free(MalVm *vm) {
     if (templates == nullptr) return;
     for (usize i = 0; i < templates->capacity; i++) {
         mal_gc_process_release(mal_regexp_release(templates->entries[i].matcher));
+        free(templates->entries[i].first_units);
     }
     free(templates->entries);
     free(templates);
@@ -573,6 +584,127 @@ static void *regexp_compile_pattern(MalString *pattern, u32 bits) {
     return matcher;
 }
 
+static bool regexp_ascii_alnum(c16 unit) {
+    return (unit >= '0' && unit <= '9') || (unit >= 'a' && unit <= 'z') ||
+        (unit >= 'A' && unit <= 'Z');
+}
+
+static void regexp_first_units_add(u64 bits[4], c16 low, c16 high) {
+    for (u32 unit = low; unit <= high; unit++) bits[unit >> 6] |= UINT64_C(1) << (unit & 63);
+}
+
+// The units \d and \w accept, and an identity escape of punctuation; false otherwise.
+static bool regexp_first_units_escape(u64 bits[4], c16 escape) {
+    if (escape == 'd') {
+        regexp_first_units_add(bits, '0', '9');
+    } else if (escape == 'w') {
+        regexp_first_units_add(bits, 'a', 'z');
+        regexp_first_units_add(bits, 'A', 'Z');
+        regexp_first_units_add(bits, '0', '9');
+        regexp_first_units_add(bits, '_', '_');
+    } else if (escape < 0x80 && !regexp_ascii_alnum(escape)) {
+        regexp_first_units_add(bits, escape, escape);
+    } else {
+        return false;
+    }
+    return true;
+}
+
+/**
+ * The first units of a pattern `^` followed by a required literal, escape or
+ * non-negated class of Latin-1 members, which the engine has already accepted.
+ * Null for anything else: case folding, multiline anchors, a top-level alternative,
+ * an optional first atom, or a group, which may match away from index 0 or start
+ * with any unit.
+ */
+static MalRegExpFirstUnits *regexp_first_units(MalString *pattern, u32 bits) {
+    if ((bits & (MAL_REGEXP_JS_IGNORE_CASE | MAL_REGEXP_JS_MULTILINE |
+                 MAL_REGEXP_JS_UNICODE_SETS)) != 0) {
+        return nullptr;
+    }
+    usize length = mal_string_length(pattern);
+    c16 units[256];
+    if (length < 2 || length > countof(units)) return nullptr;
+    mal_string_copy_range_to(pattern, 0, length, units);
+    if (units[0] != '^') return nullptr;
+    i32 depth = 0;
+    bool in_class = false;
+    for (usize i = 0; i < length; i++) {
+        c16 unit = units[i];
+        if (unit == '\\') {
+            i++;
+        } else if (in_class) {
+            in_class = unit != ']';
+        } else if (unit == '[') {
+            in_class = true;
+        } else if (unit == '(') {
+            depth++;
+        } else if (unit == ')') {
+            depth--;
+        } else if (unit == '|' && depth == 0) {
+            return nullptr;
+        }
+    }
+    u64 set[4] = {0};
+    usize i = 1;
+    c16 first = units[i];
+    if (first == '[') {
+        i++;
+        if (i < length && units[i] == '^') return nullptr;
+        while (i < length && units[i] != ']') {
+            c16 low;
+            if (units[i] == '\\') {
+                if (i + 1 >= length) return nullptr;
+                c16 escape = units[i + 1];
+                i += 2;
+                if (escape == 'd' || escape == 'w') {
+                    regexp_first_units_escape(set, escape);
+                    continue;
+                }
+                if (escape >= 0x80 || regexp_ascii_alnum(escape)) return nullptr;
+                low = escape;
+            } else {
+                low = units[i++];
+            }
+            c16 high = low;
+            if (i + 1 < length && units[i] == '-' && units[i + 1] != ']') {
+                if (units[i + 1] == '\\') {
+                    if (i + 2 >= length || units[i + 2] >= 0x80 || regexp_ascii_alnum(units[i + 2])) {
+                        return nullptr;
+                    }
+                    high = units[i + 2];
+                    i += 3;
+                } else {
+                    high = units[i + 1];
+                    i += 2;
+                }
+            }
+            if (high < low || high > UINT8_MAX) return nullptr;
+            regexp_first_units_add(set, low, high);
+        }
+        if (i >= length) return nullptr;
+        i++;
+    } else if (first == '\\') {
+        if (i + 1 >= length || !regexp_first_units_escape(set, units[i + 1])) return nullptr;
+        i += 2;
+    } else {
+        if (first > UINT8_MAX || strchr("$^.()[]{}*+?|", (int) first) != nullptr) return nullptr;
+        regexp_first_units_add(set, first, first);
+        i++;
+    }
+    if (i < length && (units[i] == '*' || units[i] == '?' || units[i] == '{')) return nullptr;
+    MalRegExpFirstUnits *first_units = malloc(sizeof(*first_units));
+    if (first_units == nullptr) return nullptr;
+    memcpy(first_units->bits, set, sizeof(set));
+    return first_units;
+}
+
+static inline bool regexp_first_units_admit(const MalRegExpFirstUnits *first_units, MalString *s) {
+    if (mal_string_length(s) == 0) return false;
+    c16 unit = mal_string_code_unit_at(s, 0);
+    return unit <= UINT8_MAX && ((first_units->bits[unit >> 6] >> (unit & 63)) & 1) != 0;
+}
+
 static void regexp_template_fill(
     MalVm *vm, RegexpTemplate *template, MalString *pattern, MalString *flags, void *matcher,
     u32 bits
@@ -581,6 +713,7 @@ static void regexp_template_fill(
         .pattern = pattern,
         .flags = flags,
         .matcher = matcher,
+        .first_units = regexp_first_units(pattern, bits),
         .bits = bits,
     };
     vm->regexp_templates->count++;
@@ -1534,6 +1667,7 @@ bool mal_regexp_literal_bind(
         const RegexpTemplate *template = regexp_template_bind(vm, pattern_string, flags_string);
         if (template == nullptr) return false;
         site->template_matcher = template->matcher;
+        site->first_units = template->first_units;
         site->pattern = pattern_string;
         site->flags = flags_string;
         site->flag_bits = template->bits;
@@ -1576,6 +1710,9 @@ MalValue mal_regexp_literal_test(MalVm *vm, const MalRegExpLiteralSite *site, Ma
     if (!mal_vm_watched_methods_intact(vm)) return regexp_literal_test_generic(vm, site, s);
     MAL_PERF_COUNT(regexp_literal_direct_calls);
     // A fresh object's lastIndex is 0, and its g or y update is never read.
+    if (site->first_units != nullptr && !regexp_first_units_admit(site->first_units, s)) {
+        return mal_value_new_boolean(false);
+    }
     int matched = regexp_match_only(vm, site->matcher, site->flag_bits, s, 0);
     return matched < 0 ? mal_value_new_undefined() : mal_value_new_boolean(matched > 0);
 }
@@ -1584,6 +1721,9 @@ MalValue mal_regexp_literal_exec(MalVm *vm, const MalRegExpLiteralSite *site, Ma
     MalString *s;
     if (!regexp_literal_subject(vm, subject, &s)) return mal_value_new_undefined();
     MAL_PERF_COUNT(regexp_literal_direct_calls);
+    if (site->first_units != nullptr && !regexp_first_units_admit(site->first_units, s)) {
+        return mal_value_new_null();
+    }
     int matched = regexp_match_only(vm, site->matcher, site->flag_bits, s, 0);
     return matched < 0 ? mal_value_new_undefined()
         : matched > 0 ? mal_value_new_boolean(true) : mal_value_new_null();
