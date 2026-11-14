@@ -330,7 +330,8 @@ contracts or investigates costs still visible after the string follow-ups.
       `includes` 1.8x, which take the primitive-method probe out of line and the generic
       native call; `startsWith`, `endsWith` and `replace` have unique names and could
       join the guarded builtin calls like `trim`, while `indexOf` and `includes` need a
-      receiver-kind guard. Also measured: `RegExp#test` 2.4-3x, `slice().trim()` 3.4x,
+      receiver-kind guard. Also measured: `RegExp#test` on a reused RegExp 1.7x (the
+      canonical receiver check and the matcher's FFI call), `slice().trim()` 3.4x,
       template literals with numbers 1.1x (each number still allocates a string, and
       joining the parts is about half of the template's cost), escaping closures
       capturing a loop variable 2x, `for...in` over small objects 3.5x (the generic

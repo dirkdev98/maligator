@@ -1,9 +1,16 @@
-import type { NativeBodyFacts } from "./native-body-facts.ts";
+import type { NativeBodyFacts, NativeBodyProjection } from "./native-body-facts.ts";
 import {
 	vmInstructionReadRegisters,
 	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
 import type { BytecodeInstruction } from "./runtime-image.ts";
+
+/** The native control flow and register effects a value flow follows. */
+export interface NativeVirtualValueBody {
+	readonly projection?: Pick<NativeBodyProjection, "branches" | "unreachable">;
+	readonly reads: NativeBodyFacts["reads"];
+	readonly writes: NativeBodyFacts["writes"];
+}
 
 /** A negative `producerIp` means `result` already holds the value on entry. */
 export function nativeVirtualValueFlow(
@@ -12,7 +19,7 @@ export function nativeVirtualValueFlow(
 	result: number,
 	resetIps: ReadonlySet<number> = new Set(),
 	exceptionTargets: ReadonlyArray<number | undefined> = [],
-	body?: NativeBodyFacts,
+	body?: NativeVirtualValueBody,
 	materializedValues: ReadonlyMap<number, ReadonlyArray<number>> = new Map(),
 ) {
 	// Union and intersection track which registers can still hold this producer's value.
@@ -135,7 +142,7 @@ export function validateNativeVirtualValue(
 	allowMixed = false,
 	resetIps: ReadonlySet<number> = new Set(),
 	exceptionTargets: ReadonlyArray<number | undefined> = [],
-	body?: NativeBodyFacts,
+	body?: NativeVirtualValueBody,
 	materializedValues: ReadonlyMap<number, ReadonlyArray<number>> = new Map(),
 ): ReturnType<typeof nativeVirtualValueFlow> {
 	const incoming = nativeVirtualValueFlow(

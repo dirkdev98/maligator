@@ -414,7 +414,10 @@ impl FastPattern {
                 true
             }
             None => {
-                captures.fill(-1);
+                // A fill of this variable length calls memset even when it is empty.
+                if !captures.is_empty() {
+                    captures.fill(-1);
+                }
                 false
             }
         }

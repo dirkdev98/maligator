@@ -68,6 +68,51 @@ MalValue mal_regexp_exec_result_projection(
 );
 
 /**
+ * Call `callee` as `receiver.test(argument)`. The realm's own RegExp.prototype.test on
+ * a canonical receiver and a string argument runs straight against the matcher, with
+ * the ordinary lastIndex effects for g and y; anything else takes the ordinary call.
+ * Returns the result, or undefined with a pending throw.
+ */
+MalValue mal_regexp_test_call(MalVm *vm, MalValue callee, MalValue receiver, MalValue argument);
+
+/**
+ * A regex literal evaluation whose object only reaches its own `test` call or an `exec`
+ * call compared with null. The compiled site holds the VM-lifetime template matcher in
+ * place of that object, which cannot be observed. A null `matcher` means the latest
+ * evaluation built an ordinary object instead. The other fields keep the pair's
+ * template for the activation's later evaluations.
+ */
+typedef struct MalRegExpLiteralSite {
+    void *matcher;
+    void *template_matcher;
+    MalString *pattern;
+    MalString *flags;
+    u32 flag_bits;
+} MalRegExpLiteralSite;
+
+/**
+ * Evaluate `new constructor(pattern, flags)` for a literal site. When the constructor
+ * is the realm's %RegExp% and the string pair has a template, bind its matcher and
+ * return true. Otherwise clear the site and return false: the caller constructs the
+ * object as usual, which also reports an invalid pattern.
+ */
+bool mal_regexp_literal_bind(
+    MalVm *vm, MalRegExpLiteralSite *site, MalValue constructor, MalValue pattern, MalValue flags
+);
+
+/**
+ * The realm's RegExp.prototype.test on a bound site's object: a boolean, or undefined
+ * with a pending throw.
+ */
+MalValue mal_regexp_literal_test(MalVm *vm, const MalRegExpLiteralSite *site, MalValue subject);
+
+/**
+ * The realm's RegExp.prototype.exec on a bound site's object, for a result compared
+ * only with null: true for a match, else null, or undefined with a pending throw.
+ */
+MalValue mal_regexp_literal_exec(MalVm *vm, const MalRegExpLiteralSite *site, MalValue subject);
+
+/**
  * Locked-world form for a fresh unaliased RegExp literal. Its property lookup,
  * callback identity, and Realm are compiler-proven; arbitrary input coercion is
  * still performed here in the same order as the builtin call.

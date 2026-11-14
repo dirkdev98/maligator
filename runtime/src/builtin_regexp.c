@@ -556,18 +556,8 @@ static RegexpTemplate *regexp_template_slot(
     return templates->count < REGEXP_TEMPLATE_LIMIT ? &templates->entries[index] : nullptr;
 }
 
-static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern, MalString *flags_str) {
-    RegexpTemplate *template = regexp_template_slot(vm, pattern, flags_str);
-    if (template != nullptr && template->pattern == pattern && template->flags == flags_str) {
-        regexp_initialize_state(
-            vm, re, template->matcher, true, pattern, flags_str, template->bits);
-        return true;
-    }
-    u32 bits;
-    if (!regexp_parse_flags(flags_str, &bits)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "invalid regular expression flags");
-        return false;
-    }
+// Compiles a pattern under parsed flags; null for a pattern the engine rejects.
+static void *regexp_compile_pattern(MalString *pattern, u32 bits) {
     // Copy instead of bridging: widening would permanently double the storage
     // of a compact pattern string that the engine only reads during compilation.
     usize pattern_length = mal_string_length(pattern);
@@ -580,23 +570,62 @@ static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern
         (const uint16_t *) pattern_units, pattern_length, regexp_regress_flags(bits)
     );
     if (pattern_units != stack_units) free(pattern_units);
+    return matcher;
+}
+
+static void regexp_template_fill(
+    MalVm *vm, RegexpTemplate *template, MalString *pattern, MalString *flags, void *matcher,
+    u32 bits
+) {
+    *template = (RegexpTemplate) {
+        .pattern = pattern,
+        .flags = flags,
+        .matcher = matcher,
+        .bits = bits,
+    };
+    vm->regexp_templates->count++;
+}
+
+static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern, MalString *flags_str) {
+    RegexpTemplate *template = regexp_template_slot(vm, pattern, flags_str);
+    if (template != nullptr && template->pattern == pattern && template->flags == flags_str) {
+        regexp_initialize_state(
+            vm, re, template->matcher, true, pattern, flags_str, template->bits);
+        return true;
+    }
+    u32 bits;
+    if (!regexp_parse_flags(flags_str, &bits)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "invalid regular expression flags");
+        return false;
+    }
+    void *matcher = regexp_compile_pattern(pattern, bits);
     if (matcher == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "invalid regular expression");
         return false;
     }
     if (template != nullptr) {
-        *template = (RegexpTemplate) {
-            .pattern = pattern,
-            .flags = flags_str,
-            .matcher = matcher,
-            .bits = bits,
-        };
-        vm->regexp_templates->count++;
+        regexp_template_fill(vm, template, pattern, flags_str, matcher, bits);
         regexp_initialize_state(vm, re, matcher, true, pattern, flags_str, bits);
         return true;
     }
     regexp_initialize_state(vm, re, matcher, false, pattern, flags_str, bits);
     return true;
+}
+
+// The pair's VM-lifetime template, compiling it into a free entry. Null when the pair
+// cannot have one or does not compile; RegExpCreate then reports the error.
+static const RegexpTemplate *regexp_template_bind(
+    MalVm *vm, MalString *pattern, MalString *flags
+) {
+    RegexpTemplate *template = regexp_template_slot(vm, pattern, flags);
+    if (template == nullptr) return nullptr;
+    if (template->pattern == pattern && template->flags == flags) return template;
+    u32 bits;
+    if (!regexp_parse_flags(flags, &bits)) return nullptr;
+    void *matcher = regexp_compile_pattern(pattern, bits);
+    if (matcher == nullptr) return nullptr;
+    regexp_template_fill(vm, template, pattern, flags, matcher, bits);
+    return template;
 }
 
 MalValue mal_regexp_create(MalVm *vm, MalString *pattern, MalString *flags) {
@@ -877,22 +906,23 @@ static void regexp_match_offsets_dispose(RegexpMatchOffsets *offsets) {
 }
 
 // Runs the matcher from `start`: the group count with the captures in `caps`, 0
-// without a match, or -1 with a pending throw.
-static int32_t regexp_matcher_exec(
-    MalVm *vm, MalRegExpObject *re, MalString *s, usize start, int32_t *caps, int32_t caps_cap
+// without a match, or -1 with a pending throw. Inlined because a fast plan's whole
+// match can cost less than another call frame.
+static inline __attribute__((always_inline)) int32_t regexp_matcher_exec(
+    MalVm *vm, void *matcher, MalString *s, usize start, int32_t *caps, int32_t caps_cap
 ) {
     u32 execution_flags = 0;
     usize length = mal_string_length(s);
     MalStringSegment subject = mal_string_flat_segment(s);
     int32_t ngroups = subject.latin1
         ? mal_regexp_exec_latin1(
-            re->matcher, subject.latin1_units, length, start, s,
+            matcher, subject.latin1_units, length, start, s,
             vm->heap.identity, vm->heap.epoch, caps, caps_cap, &execution_flags)
         : mal_regexp_exec(
-            re->matcher, (const uint16_t *) subject.utf16_units, length, start, s,
+            matcher, (const uint16_t *) subject.utf16_units, length, start, s,
             vm->heap.identity, vm->heap.epoch, caps, caps_cap, &execution_flags);
     if ((execution_flags & MAL_REGEXP_EXEC_FAST) == 0) {
-        i64 scratch_delta = mal_regexp_scratch_delta(re->matcher);
+        i64 scratch_delta = mal_regexp_scratch_delta(matcher);
         if (scratch_delta > 0) mal_heap_charge_external(&vm->heap, (usize) scratch_delta);
         else if (scratch_delta < 0) mal_gc_process_release((usize) -scratch_delta);
     }
@@ -919,6 +949,33 @@ static int32_t regexp_matcher_exec(
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "regular expression execution failed");
     }
     return ngroups;
+}
+
+// RegExpBuiltinExec's match decision from a lastIndex its caller has already applied,
+// for a result nobody reads: 1 on a match, which records the legacy statics, 0
+// without one, -1 with a pending throw.
+static int regexp_match_only(
+    MalVm *vm, void *matcher, u32 flag_bits, MalString *s, usize start
+) {
+    int32_t stack_caps[64];
+    int32_t ngroups = regexp_matcher_exec(vm, matcher, s, start, stack_caps, 64);
+    if (ngroups <= 0) return ngroups < 0 ? -1 : 0;
+    if ((flag_bits & MAL_REGEXP_JS_STICKY) != 0 && (usize) stack_caps[0] != start) return 0;
+    if (ngroups <= 32) {
+        regexp_legacy_update(vm, s, stack_caps, ngroups);
+        return 1;
+    }
+    // The statics read the last group, which only the matcher's retained copy holds.
+    usize capture_count = 2 * (usize) ngroups;
+    int32_t *caps = malloc(sizeof(int32_t) * capture_count);
+    if (caps == nullptr) {
+        regexp_throw_string_length(vm);
+        return -1;
+    }
+    mal_regexp_copy_captures(matcher, caps, (int32_t) capture_count);
+    regexp_legacy_update(vm, s, caps, ngroups);
+    free(caps);
+    return 1;
 }
 
 // RegExpBuiltinExec(R, S): the matcher-backed exec. Returns the result array, or
@@ -958,7 +1015,7 @@ static MalValue regexp_builtin_exec(
 
     int32_t stack_caps[64];
     int32_t *caps = stack_caps;
-    int32_t ngroups = regexp_matcher_exec(vm, re, s, (usize) last_index, caps, 64);
+    int32_t ngroups = regexp_matcher_exec(vm, re->matcher, s, (usize) last_index, caps, 64);
     if (ngroups < 0) return mal_value_new_undefined();
     if (ngroups == 0) {
         if (global || sticky) {
@@ -1346,15 +1403,7 @@ static MalValue regexp_proto_compile(MalVm *vm, MalValue this_value, const MalVa
         mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "invalid regular expression flags");
         return mal_value_new_undefined();
     }
-    usize pattern_length = mal_string_length(p_str);
-    c16 stack_units[256];
-    c16 *pattern_units = pattern_length <= countof(stack_units)
-        ? stack_units : malloc(sizeof(c16) * pattern_length);
-    if (pattern_units == nullptr) abort();
-    mal_string_copy_range_to(p_str, 0, pattern_length, pattern_units);
-    void *matcher = mal_regexp_compile(
-        (const uint16_t *) pattern_units, pattern_length, regexp_regress_flags(bits));
-    if (pattern_units != stack_units) free(pattern_units);
+    void *matcher = regexp_compile_pattern(p_str, bits);
     if (matcher == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "invalid regular expression");
         return mal_value_new_undefined();
@@ -1389,6 +1438,41 @@ static MalValue regexp_proto_exec(MalVm *vm, MalValue this_value, const MalValue
         vm, re, this_value, s, REGEXP_BUILTIN_EXEC_RESULT, false, nullptr);
 }
 
+// test() on a canonical receiver once its subject is a string, when RegExpBuiltinExec's
+// lastIndex read cannot run code because it holds a Number. False leaves the call to
+// RegExpExec.
+static bool regexp_canonical_test(
+    MalVm *vm, MalRegExpObject *re, MalValue receiver, MalString *s, MalValue *out
+) {
+    if (!mal_ops_is_number(mal_object_field_load(&re->object, re->object.shape->props[0].slot))) {
+        return false;
+    }
+    // Without g or y the builtin exec only reads lastIndex and matches from the start.
+    if ((re->flag_bits & (MAL_REGEXP_JS_GLOBAL | MAL_REGEXP_JS_STICKY)) == 0) {
+        int matched = regexp_match_only(vm, re->matcher, re->flag_bits, s, 0);
+        *out = matched < 0 ? mal_value_new_undefined() : mal_value_new_boolean(matched > 0);
+        return true;
+    }
+    MalValue match = regexp_builtin_exec(
+        vm, re, receiver, s, REGEXP_BUILTIN_EXEC_MATCH_ONLY, false, nullptr);
+    *out = regexp_threw(vm) ? mal_value_new_undefined()
+        : mal_value_new_boolean(!mal_value_is_null(match));
+    return true;
+}
+
+// The current realm's own built-in `callback`, which the canonical checks presume.
+static bool regexp_is_own_builtin(
+    MalVm *vm, MalValue callee, MalNativeFunctionCallback callback
+) {
+    (void) vm;
+    return mal_value_is_native_function_object(callee) &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) == callback
+#if MAL_REALMS
+        && mal_vm_callee_realm(vm, callee) == vm->current_realm
+#endif
+        ;
+}
+
 static MalValue regexp_proto_test(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -1400,20 +1484,11 @@ static MalValue regexp_proto_test(MalVm *vm, MalValue this_value, const MalValue
     if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &s)) {
         return mal_value_new_undefined();
     }
-    // Without g or y the builtin exec only reads lastIndex, which a Number keeps pure,
-    // and matches from the start.
     MalRegExpObject *canonical;
+    MalValue result;
     if (regexp_canonical_instance(vm, this_value, &canonical) &&
-        (canonical->flag_bits & (MAL_REGEXP_JS_GLOBAL | MAL_REGEXP_JS_STICKY)) == 0 &&
-        mal_ops_is_number(mal_object_field_load(
-            &canonical->object, canonical->object.shape->props[0].slot))) {
-        int32_t caps[64];
-        int32_t ngroups = regexp_matcher_exec(vm, canonical, s, 0, caps, 64);
-        if (ngroups <= 32) {
-            if (ngroups < 0) return mal_value_new_undefined();
-            if (ngroups > 0) regexp_legacy_update(vm, s, caps, ngroups);
-            return mal_value_new_boolean(ngroups > 0);
-        }
+        regexp_canonical_test(vm, canonical, this_value, s, &result)) {
+        return result;
     }
     bool ok;
     MalValue match = regexp_exec_abstract(vm, this_value, s, true, &ok);
@@ -1421,6 +1496,97 @@ static MalValue regexp_proto_test(MalVm *vm, MalValue this_value, const MalValue
         return mal_value_new_undefined();
     }
     return mal_value_new_boolean(!mal_value_is_null(match));
+}
+
+MalValue mal_regexp_test_call(MalVm *vm, MalValue callee, MalValue receiver, MalValue argument) {
+    if (!regexp_is_own_builtin(vm, callee, regexp_proto_test)) {
+        return mal_vm_call_cached_value(vm, callee, receiver, &argument, 1);
+    }
+    // A string subject needs no ToString, so the exec lookup that the canonical check
+    // stands for happens exactly where test() performs it.
+    MalRegExpObject *canonical;
+    MalValue result;
+    if (mal_value_is_string(argument) && regexp_canonical_instance(vm, receiver, &canonical) &&
+        regexp_canonical_test(vm, canonical, receiver, mal_value_to_string(argument), &result)) {
+        MAL_PERF_COUNT(regexp_direct_test_calls);
+        return result;
+    }
+    MalCompletion completion =
+        mal_vm_call_exact_native(vm, regexp_proto_test, callee, receiver, &argument, 1);
+    if (completion.kind == MAL_COMPLETION_THROW) vm->completion = completion;
+    return completion.value;
+}
+
+bool mal_regexp_literal_bind(
+    MalVm *vm, MalRegExpLiteralSite *site, MalValue constructor, MalValue pattern, MalValue flags
+) {
+    site->matcher = nullptr;
+    // With string operands and %RegExp% as its own new.target, construction is
+    // RegExpCreate: no IsRegExp or prototype lookup, nor any conversion, can run code.
+    if (constructor != vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR] ||
+        !mal_value_is_string(pattern) || !mal_value_is_string(flags)) {
+        return false;
+    }
+    MalString *pattern_string = mal_value_to_string(pattern);
+    MalString *flags_string = mal_value_to_string(flags);
+    if (site->template_matcher == nullptr || site->pattern != pattern_string ||
+        site->flags != flags_string) {
+        const RegexpTemplate *template = regexp_template_bind(vm, pattern_string, flags_string);
+        if (template == nullptr) return false;
+        site->template_matcher = template->matcher;
+        site->pattern = pattern_string;
+        site->flags = flags_string;
+        site->flag_bits = template->bits;
+    }
+    site->matcher = site->template_matcher;
+    MAL_PERF_COUNT(regexp_literal_bindings);
+    return true;
+}
+
+static bool regexp_literal_subject(MalVm *vm, MalValue subject, MalString **out) {
+    if (mal_value_is_string(subject)) {
+        *out = mal_value_to_string(subject);
+        return true;
+    }
+    return mal_vm_to_string(vm, subject, out);
+}
+
+// The literal's object stays unobservable until a replaced exec receives it, so it is
+// created only then, holding the lastIndex of 0 that a fresh object starts with.
+static MalValue regexp_literal_test_generic(
+    MalVm *vm, const MalRegExpLiteralSite *site, MalString *s
+) {
+    MalValue values[2] = {
+        mal_regexp_create(vm, site->pattern, site->flags),
+        mal_value_from_string(s),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, values, 2);
+    bool ok;
+    MalValue match = regexp_exec_abstract(vm, values[0], s, true, &ok);
+    mal_gc_unroot(&root);
+    return ok ? mal_value_new_boolean(!mal_value_is_null(match)) : mal_value_new_undefined();
+}
+
+MalValue mal_regexp_literal_test(MalVm *vm, const MalRegExpLiteralSite *site, MalValue subject) {
+    MalString *s;
+    if (!regexp_literal_subject(vm, subject, &s)) return mal_value_new_undefined();
+    // ToString can run code, and test() looks up `exec` only after it. A fresh object
+    // owns no `exec`, so the lookup finds the realm's own while the protector holds.
+    if (!mal_vm_watched_methods_intact(vm)) return regexp_literal_test_generic(vm, site, s);
+    MAL_PERF_COUNT(regexp_literal_direct_calls);
+    // A fresh object's lastIndex is 0, and its g or y update is never read.
+    int matched = regexp_match_only(vm, site->matcher, site->flag_bits, s, 0);
+    return matched < 0 ? mal_value_new_undefined() : mal_value_new_boolean(matched > 0);
+}
+
+MalValue mal_regexp_literal_exec(MalVm *vm, const MalRegExpLiteralSite *site, MalValue subject) {
+    MalString *s;
+    if (!regexp_literal_subject(vm, subject, &s)) return mal_value_new_undefined();
+    MAL_PERF_COUNT(regexp_literal_direct_calls);
+    int matched = regexp_match_only(vm, site->matcher, site->flag_bits, s, 0);
+    return matched < 0 ? mal_value_new_undefined()
+        : matched > 0 ? mal_value_new_boolean(true) : mal_value_new_null();
 }
 
 // ---------------------------------------------------------------------------
@@ -1853,7 +2019,7 @@ static bool regexp_canonical_collect_global(
     bool ok = true;
     usize position = 0;
     while (position <= length) {
-        int32_t ngroups = regexp_matcher_exec(vm, re, s, position, stack_caps, 64);
+        int32_t ngroups = regexp_matcher_exec(vm, re->matcher, s, position, stack_caps, 64);
         if (ngroups <= 0) {
             ok = ngroups == 0;
             break;
@@ -2678,7 +2844,7 @@ static bool regexp_canonical_split(
     usize p = 0;
     usize q = 0;
     do {
-        int32_t ngroups = regexp_matcher_exec(vm, re, s, q, caps, 64);
+        int32_t ngroups = regexp_matcher_exec(vm, re->matcher, s, q, caps, 64);
         if (ngroups < 0) {
             *out = mal_value_new_undefined();
             return true;
@@ -3844,6 +4010,36 @@ int mal_regexp_try_exact_iterator_step(
     (void) value_out;
     (void) done_out;
     return 0;
+}
+
+MalValue mal_regexp_test_call(MalVm *vm, MalValue callee, MalValue receiver, MalValue argument) {
+    return mal_vm_call_cached_value(vm, callee, receiver, &argument, 1);
+}
+
+// Without RegExp no site binds, so the bound-site entries below are unreachable.
+bool mal_regexp_literal_bind(
+    MalVm *vm, MalRegExpLiteralSite *site, MalValue constructor, MalValue pattern, MalValue flags
+) {
+    (void) vm;
+    (void) constructor;
+    (void) pattern;
+    (void) flags;
+    site->matcher = nullptr;
+    return false;
+}
+
+MalValue mal_regexp_literal_test(MalVm *vm, const MalRegExpLiteralSite *site, MalValue subject) {
+    (void) vm;
+    (void) site;
+    (void) subject;
+    abort();
+}
+
+MalValue mal_regexp_literal_exec(MalVm *vm, const MalRegExpLiteralSite *site, MalValue subject) {
+    (void) vm;
+    (void) site;
+    (void) subject;
+    abort();
 }
 
 #endif // MAL_REGEXP

@@ -283,6 +283,7 @@ tests/native/native-fast-entry.test.ts
 tests/native/regexp-owned-scratch.test.ts
 tests/native/regexp-span-continuation.test.ts
 tests/native/regexp-discarded-result.test.ts
+tests/native/regexp-direct-test.test.ts
 tests/native/map-region-entries.test.ts
 tests/native/array-initialization-region.test.ts
 tests/native/array-initialization-incremental.test.ts

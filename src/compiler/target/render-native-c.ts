@@ -138,6 +138,8 @@ import {
 	analyzeRecordIteration,
 	recordIterationNullishTest,
 } from "./native-record-iteration.ts";
+import { nativeRegExpLiteralActions } from "./native-regexp-literal.ts";
+import type { NativeRegExpLiteralAction } from "./native-regexp-literal.ts";
 import { nativeInactiveRootMasks, nativeRootMaskWordHex } from "./native-root-masks.ts";
 import type { NativeInactiveRootMask } from "./native-root-masks.ts";
 import {
@@ -8779,6 +8781,92 @@ function emitBody(
 			lines,
 		),
 	};
+	function planRegExpLiterals(): ReadonlyMap<number, NativeRegExpLiteralAction> {
+		const nullTested = (
+			region: VmRegion | undefined,
+		): region is NativeRegExpExecProjection =>
+			region?.kind === "regexp-exec-projection" && region.loads.length === 0;
+		// A literal site takes over a null-tested exec projection; every other plan
+		// keeps the instructions it renders.
+		const claimed = new Set<number>([
+			...elided,
+			...expressionIps,
+			...rematerializedConstantIps,
+			...polymorphicMethodLoads,
+			...fastPathPlans.numericLoopRegions.flatMap((plan) => plan.claimedIps),
+			...fastPathPlans.numberRecordRegions.flatMap((plan) => plan.claimedIps),
+			...[
+				stackObjectSites,
+				stackObjectAccesses,
+				stackObjectMaterializations,
+				stackObjectLends,
+				stackObjectInheritedAccesses,
+				records.allocations,
+				records.forwards,
+				records.calls,
+				records.objects,
+				records.accesses,
+				records.observers,
+				records.passes,
+				fieldAllocations,
+				fieldCallSites,
+				fieldLoads,
+				callTransportByIp,
+				callbackTransportByIp,
+				mathCalls,
+				numberPredicates,
+				stringTransforms,
+				columnsProducers,
+				staticPropertyNumericActionByIp,
+				propertyNumericUpdateActionByIp,
+				propertyReadRegionActionByIp,
+				nativeFastPaths.propertyReadPairActions,
+				constructorInitializationActionByIp,
+			].flatMap((byIp: ReadonlyMap<number, unknown>) => [...byIp.keys()]),
+		]);
+		for (const action of regionActions)
+			if (!nullTested(specializations[action.regionIndex])) claimed.add(action.ip);
+		for (const region of specializations)
+			if (!nullTested(region)) for (const ip of region.claimedIps) claimed.add(ip);
+		for (const [ip, plan] of nativeInstructions.entries()) {
+			const operation =
+				plan?.kind === "call" ? plan.guardedBuiltinCall?.operation : undefined;
+			if (
+				plan !== undefined &&
+				operation !== "RegExp.prototype.test" &&
+				operation !== "RegExp.prototype.exec"
+			)
+				claimed.add(ip);
+		}
+		const actions = nativeRegExpLiteralActions(
+			fn,
+			stringConstants,
+			{ projection: { branches: branchTargets, unreachable }, reads: [], writes: [] },
+			claimed,
+			new Set(
+				specializations.flatMap((region) => (nullTested(region) ? [region.callIp] : [])),
+			),
+		);
+		// The site stands in for boxed object and method values.
+		const boxed = (register: number | undefined): boolean =>
+			register === undefined || reps[register] === "boxed";
+		return new Map(
+			[...actions].filter(([, { site }]) => {
+				const producer = fn.instructions[site.producerIp]!;
+				const property =
+					site.propertyIp === undefined ? undefined : fn.instructions[site.propertyIp];
+				return (
+					"dst" in producer &&
+					boxed(producer.dst) &&
+					boxed(property?.opcode === "LOAD_PROPERTY_STATIC" ? property.dst : undefined)
+				);
+			}),
+		);
+	}
+	const regexpLiteralActions = planRegExpLiterals();
+	for (const { site, role } of regexpLiteralActions.values())
+		if (role === "producer")
+			lines.push(`MalRegExpLiteralSite __regexp_literal_${site.producerIp} = { 0 };`);
 	for (const plan of fastPathPlans.mapEntries)
 		lines.push(`u32 __map_entry_${plan.getIp} = 0;`);
 	for (const plan of fastPathPlans.objectEnumerationSnapshots)
@@ -9415,6 +9503,7 @@ function emitBody(
 				nativeRegExpExecProjectionActionByIp.get(ip);
 			instructionContext.nativeRegExpIteratorProjectionAction =
 				nativeRegExpIteratorProjectionActionByIp.get(ip);
+			instructionContext.regexpLiteralAction = regexpLiteralActions.get(ip);
 			instructionContext.nativeStringSpanAction = nativeStringSpanActionByIp.get(ip);
 			instructionContext.nativeStringCharCodeAtChainAction =
 				nativeStringCharCodeAtChainActionByIp.get(ip);
@@ -10000,6 +10089,7 @@ interface NativeInstructionContext {
 	readonly stringSplitTrimLengthSite?: NativeStringSplitCursorSite;
 	readonly nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction;
 	readonly nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction;
+	readonly regexpLiteralAction?: NativeRegExpLiteralAction;
 	readonly nativeStringSpanAction?: NativeStringSpanAction;
 	readonly nativeStringCharCodeAtChainAction?: NativeStringCharCodeAtChainAction;
 	readonly nativeBuiltinCollectionCallChainAction?: NativeBuiltinCollectionCallChainAction;
@@ -10847,6 +10937,8 @@ class NativeInstructionEmission {
 			{ opcode: "LOAD_PROPERTY" | "LOAD_PROPERTY_STATIC" }
 		>,
 	): Array<string> | null {
+		if (this.context.regexpLiteralAction !== undefined)
+			return this.emitRegExpLiteral(this.context.regexpLiteralAction);
 		if (
 			instruction.opcode === "LOAD_PROPERTY_STATIC" &&
 			this.context.staticPropertyNumericAction?.role === "load"
@@ -12479,9 +12571,65 @@ class NativeInstructionEmission {
 		}
 		return lowered;
 	}
+	/** One instruction of a literal site; see NativeRegExpLiteralSite. */
+	emitRegExpLiteral({ site, role }: NativeRegExpLiteralAction): Array<string> | null {
+		const generic = this.emitGenericInstruction();
+		if (generic === null) return null;
+		const instruction = this.instruction;
+		const local = `__regexp_literal_${site.producerIp}`;
+		const ordinary = [`} else {`, ...generic.map((line) => `  ${line}`), `}`];
+		if (role === "producer") {
+			if (instruction.opcode !== "CALL_KNOWN" && instruction.opcode !== "CONSTRUCT")
+				throw new Error(`RegExp literal producer ${this.ip} is not a construction`);
+			const constructor = this.boxedOperand(
+				instruction.opcode === "CALL_KNOWN" ? instruction.thisValue : instruction.callee,
+			);
+			const [pattern, flags] = instruction.arguments.map(this.boxedOperand.bind(this));
+			const bind = `mal_regexp_literal_bind(vm, &${local}, ${constructor}, ${pattern}, ${flags})`;
+			return [
+				...(site.propertyIp === undefined
+					? [`if (${bind}) {`]
+					: [
+							// The method load follows with no code between, so the protector
+							// answers it here: a bound site's method is the realm's own.
+							`${local}.matcher = nullptr;`,
+							`if (mal_vm_watched_methods_intact(vm) && ${bind}) {`,
+						]),
+				`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+				...ordinary,
+			];
+		}
+		if (role === "property") {
+			if (instruction.opcode !== "LOAD_PROPERTY_STATIC")
+				throw new Error(`RegExp literal method ${this.ip} is not a static load`);
+			return [
+				`if (${local}.matcher != nullptr) {`,
+				`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+				...ordinary,
+			];
+		}
+		if (instruction.opcode !== "CALL" && instruction.opcode !== "CALL_KNOWN")
+			throw new Error(`RegExp literal call ${this.ip} is not a call`);
+		const subject = instruction.arguments[0];
+		const entry =
+			site.method === "test" ? "mal_regexp_literal_test" : "mal_regexp_literal_exec";
+		const value = `regexp_literal_${this.ip}`;
+		return [
+			`if (${local}.matcher != nullptr) {`,
+			...(instruction.opcode === "CALL" ? this.guardedCallFallbackRootPublication() : []),
+			`  MalValue ${value} = ${this.profileCall("regexp", `${entry}(vm, &${local}, ${subject === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(subject)})`)};`,
+			`  ${this.throwCheck()}`,
+			`  r${instruction.dst} = ${this.callValue(instruction.dst, value)};`,
+			`  ${this.callPoll()}`,
+			...ordinary,
+		];
+	}
+
 	emitKnownCall(
 		instruction: Extract<BytecodeInstruction, { opcode: "CALL_KNOWN" }>,
 	): Array<string> | null {
+		if (this.context.regexpLiteralAction !== undefined)
+			return this.emitRegExpLiteral(this.context.regexpLiteralAction);
 		const wrap = this.context.numericFusionAction;
 		if (wrap?.wrapping && wrap.role === "finish") {
 			// Core admits only a constant width of at most 64 or a mask below 2^53.
@@ -13746,6 +13894,8 @@ class NativeInstructionEmission {
 	emitCall(
 		instruction: Extract<BytecodeInstruction, { opcode: "CALL" }>,
 	): Array<string> | null {
+		if (this.context.regexpLiteralAction !== undefined)
+			return this.emitRegExpLiteral(this.context.regexpLiteralAction);
 		const callPlan =
 			this.context.nativePlan?.kind === "call" ? this.context.nativePlan : undefined;
 		const args = instruction.arguments;
@@ -14221,6 +14371,16 @@ class NativeInstructionEmission {
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
 				`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 				`}`,
+				this.callPoll(),
+			];
+		}
+		if (guardedBuiltinOperation === "RegExp.prototype.test" && args.length === 1) {
+			const value = `regexp_test_${this.ip}`;
+			return [
+				...this.guardedCallFallbackRootPublication(),
+				`MalValue ${value} = ${this.profileCall("regexp", `mal_regexp_test_call(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${this.boxedOperand(args[0]!)})`)};`,
+				this.throwCheck(),
+				`r${instruction.dst} = ${callResult(value)};`,
 				this.callPoll(),
 			];
 		}
@@ -16469,6 +16629,8 @@ class NativeInstructionEmission {
 						];
 			}
 			case "CONSTRUCT": {
+				if (this.context.regexpLiteralAction !== undefined)
+					return this.emitRegExpLiteral(this.context.regexpLiteralAction);
 				const constructPlan =
 					this.context.nativePlan?.kind === "construct"
 						? this.context.nativePlan

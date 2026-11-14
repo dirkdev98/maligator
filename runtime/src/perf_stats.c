@@ -609,7 +609,8 @@ static void mal_perf_stats_print(void) {
         stderr,
         "[perf-regexp-stats] exec_calls=%llu fast_exec_calls=%llu ascii_exec_calls=%llu "
         "ascii_cache_hits=%llu ascii_cache_fills=%llu utf16_exec_calls=%llu "
-        "utf16_cache_hits=%llu utf16_cache_fills=%llu latin1_exec_calls=%llu result_elisions=%llu\n",
+        "utf16_cache_hits=%llu utf16_cache_fills=%llu latin1_exec_calls=%llu result_elisions=%llu "
+        "direct_test_calls=%llu literal_bindings=%llu literal_direct_calls=%llu\n",
         (unsigned long long) mal_perf_stats.regexp_exec_calls,
         (unsigned long long) mal_perf_stats.regexp_fast_exec_calls,
         (unsigned long long) mal_perf_stats.regexp_ascii_exec_calls,
@@ -619,7 +620,10 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.regexp_utf16_cache_hits,
         (unsigned long long) mal_perf_stats.regexp_utf16_cache_fills,
         (unsigned long long) mal_perf_stats.regexp_latin1_exec_calls,
-        (unsigned long long) mal_perf_stats.regexp_exec_result_elisions
+        (unsigned long long) mal_perf_stats.regexp_exec_result_elisions,
+        (unsigned long long) mal_perf_stats.regexp_direct_test_calls,
+        (unsigned long long) mal_perf_stats.regexp_literal_bindings,
+        (unsigned long long) mal_perf_stats.regexp_literal_direct_calls
     );
     fprintf(
         stderr,

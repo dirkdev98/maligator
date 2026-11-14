@@ -23,6 +23,17 @@ and legacy match state. When no capture is observed, the call is the sole region
 anchor and matching can omit the result Array. A null comparison still observes
 the same success or failure; escaping match objects retain the original call.
 
+A RegExp construction whose object reaches only its own `test` call, or an `exec`
+call compared with null, borrows the VM's template matcher instead of allocating
+that object. The runtime binds only %RegExp% over a string pair with a template;
+anything else constructs as usual, which also reports an invalid pattern. A site
+that loads the method binds only while the builtin-identity protector holds and the
+load follows the construction directly. `test` still converts its input first and
+creates the object only when a replaced `exec` must receive it; the fresh object's
+lastIndex is 0, and its g or y update is never read. A reused RegExp calls the
+realm's own `test` straight on the matcher when the receiver is canonical and its
+lastIndex holds a Number.
+
 Constructor capacity hints reserve storage while property presence follows the
 original stores. Ordinary constructors retain inherited setters, callbacks and
 returned-object behavior; publishing a complete initial shape requires a separate
