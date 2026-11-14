@@ -337,6 +337,25 @@ contracts or investigates costs still visible after the string follow-ups.
       array-iterator protocol and a snapshot check per key) and `Object.entries` 2x (one
       pair array per entry).
 
+- [ ] Sort records with String fields through the record kernel. A comparator that
+      reads a Number field and then a String field, such as
+      `b.views - a.views || (a.title < b.title ? -1 : 1)`, costs 47 µs per 500 records
+      against Node's 10: the kernel speculates Number for every field, declines on the
+      String at run time, and the whole sort falls back to generic comparator calls.
+      A comparator passed through a variable never gets a kernel and pays about 9 ns
+      per comparison against Node's 2. Keys of a per-field kind, f64 or flat String,
+      with a leaf per kind combination would cover the first case.
+
+- [ ] Allocate a small async function's state in fewer cells. Each call allocates a
+      pooled register buffer, the coroutine state and the result promise, and
+      `Promise.resolve` goes through the known-native call path. The javascript-v2
+      async phase costs 33 ms against Node's 26 with a flat profile: the microtask
+      drain, await, start, resume and promise allocation each take 4-13%.
+
+- [ ] Create closures and wide object literals closer to Node. A `() => i` closure
+      per iteration costs 24 ns against 11, 40% of it in `mal_vm_op_create_function`,
+      and an eight-field object literal costs 13.5 ns against 6.1.
+
 - [ ] Bring node:stream and EventEmitter construction closer to Node. A constructed
       Readable still costs about 5x Node and a Writable 3.5x, mostly option reads
       through `mal_vm_get_static` and per-object state allocation; `once` builds a
