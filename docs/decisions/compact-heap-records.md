@@ -2,10 +2,13 @@
 
 Ordinary objects keep a stable identity cell while a shared shape describes the
 property contract. On a 64-bit host the cell starts with a 16-byte header, then
-an eight-byte prototype word and a variable payload. Exotic objects embed their
-prototype, fields pointer, and overflow pointer after the same header. An
-ordinary object acquires that sidecar only when its fields or dictionary state
-can no longer live in the cell. The prototype remains per object because
+an eight-byte prototype word and a variable payload. Exotic objects generally embed their
+prototype, fields pointer, and overflow pointer after the same header. Arrays
+keep only the prototype word before their dense-element state, acquiring the
+existing external sidecar when named properties need fields or a table. A first
+named field reserves its slots in the RAW sidecar's tail, so the transition needs
+one allocation. An ordinary object acquires that sidecar only when its fields or
+dictionary state can no longer live in the cell. The prototype remains per object because
 `Object.setPrototypeOf` can change it without changing property order or moving
 the object.
 
@@ -53,11 +56,32 @@ A write changes only the payload. Adding a property, changing attributes,
 defining an accessor, or deleting a property uses the existing shape or
 dictionary operation. Those changes may allocate a sidecar or field buffer but
 never replace the identity cell. Prototype changes update its prototype word or
-sidecar and invalidate dependent caches.
+sidecar and invalidate dependent caches. External sidecars use the RAW
+allocator, so their storage contributes to collection pressure and releases through
+the same ownership path as separately allocated fields. Fields borrowed from a
+sidecar's tail stay with that sidecar when growth moves them to a separate buffer.
+
+Private Array builders with a known named shape, such as RegExp results, reserve
+the elements, sidecar, and named fields in the same managed cell. The sidecar
+follows the original inline element reserve, whose capacity remains fixed when
+elements grow or deoptimize. Its address therefore identifies borrowed storage
+without another header flag. Finalization releases separate element and field
+buffers while leaving the borrowed sidecar with its cell. Larger dense reserves
+use a separate element vector and keep the same named-storage contract.
+Array cells align the dense tail as `MalValue`; a typed sidecar tail preserves
+named-value alignment when pointers are narrower than tagged values.
+
+These builders install the final shape and initialized named values together;
+reserved elements become visible to tracing as the builder appends them. No user
+code can observe intermediate construction. The shape retains the specified
+property order and attributes, and later writes use the ordinary Array and object
+operations.
 
 Tagged ordinary objects derive their inline bound from their original slot
 capacity on first growth, avoiding allocator-size queries for objects that never
-grow. Embedded objects and separately owned fields cannot infer an inline bound.
+grow. Embedded objects, deferred Array property storage, and separately owned fields
+cannot infer an inline field bound from the cell. Array element slots remain
+separate from named-property fields, including after property externalization.
 Spare capacity remains invisible to reflection and tracing until each new field
 is initialized and its shape is published.
 

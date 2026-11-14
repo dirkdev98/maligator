@@ -907,25 +907,6 @@ static MalValue regexp_build_groups(MalVm *vm, MalRegExpObject *re, MalString *s
 // Build the `.indices` array for the `d` flag: a [start,end] pair (or undefined)
 // per group, plus an `.indices.groups` object for named groups.
 static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *s, const int32_t *caps, int32_t ngroups) {
-    MalArrayObject *indices = mal_intrinsic_new_array(vm, 0);
-    (void) mal_array_object_fresh_dense_reserve_exact(indices, (u32) ngroups);
-    for (int32_t i = 0; i < ngroups; i++) {
-        int32_t cs = caps[2 * i];
-        int32_t ce = caps[2 * i + 1];
-        MalValue entry;
-        if (cs < 0) {
-            entry = mal_value_new_undefined();
-        } else {
-            MalArrayObject *pair = mal_intrinsic_new_array(vm, 0);
-            (void) mal_array_object_fresh_dense_reserve_exact(pair, 2);
-            regexp_dense_append(pair, 0, mal_value_from_f64((f64) cs));
-            regexp_dense_append(pair, 1, mal_value_from_f64((f64) ce));
-            entry = mal_value_from_object((MalObject *) pair);
-        }
-        regexp_dense_append(indices, (u32) i, entry);
-    }
-
-    // indices.groups
     int32_t named = mal_regexp_named_group_count(re->matcher);
     MalValue groups_value;
     if (named <= 0) {
@@ -973,9 +954,27 @@ static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *
         MalString *keys[1] = {mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_GROUPS)};
         vm->regexp_indices_shape = mal_shape_from_string_keys(&vm->heap, keys, 1);
     }
-    mal_object_set_shaped_values(
-        (MalObject *) indices, vm->regexp_indices_shape, &groups_value, 1
+    MalArrayObject *indices = mal_array_object_new_shaped_reserved(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]),
+        (u32) ngroups, vm->regexp_indices_shape, &groups_value, 1
     );
+    for (int32_t i = 0; i < ngroups; i++) {
+        int32_t cs = caps[2 * i];
+        int32_t ce = caps[2 * i + 1];
+        MalValue entry;
+        if (cs < 0) {
+            entry = mal_value_new_undefined();
+        } else {
+            MalValue values[2] = {
+                mal_value_from_f64((f64) cs), mal_value_from_f64((f64) ce),
+            };
+            MalArrayObject *pair = mal_array_object_new_from_values(
+                &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]),
+                values, 2);
+            entry = mal_value_from_object((MalObject *) pair);
+        }
+        mal_array_object_fresh_dense_append_reserved(indices, entry);
+    }
 
     return mal_value_from_object((MalObject *) indices);
 }
@@ -1270,17 +1269,6 @@ static MalValue regexp_builtin_exec(
         // repeating RegExpBuiltinExec and its lastIndex effects.
     }
 
-    MalArrayObject *array = mal_intrinsic_new_array(vm, 0);
-    (void) mal_array_object_fresh_dense_reserve_exact(array, (u32) ngroups);
-    MalObject *array_object = (MalObject *) array;
-
-    for (int32_t i = 0; i < ngroups; i++) {
-        int32_t cs = caps[2 * i];
-        int32_t ce = caps[2 * i + 1];
-        MalValue element = cs < 0 ? mal_value_new_undefined() : regexp_substring(vm, s, cs, ce);
-        regexp_dense_append(array, (u32) i, element);
-    }
-
     MalValue groups = regexp_build_groups(vm, re, s);
     MalValue named_values[4] = {
         mal_value_from_f64((f64) match_start),
@@ -1304,12 +1292,20 @@ static MalValue regexp_builtin_exec(
         };
         *shape_slot = mal_shape_from_string_keys(&vm->heap, keys, named_count);
     }
-    mal_object_set_shaped_values(array_object, *shape_slot, named_values, named_count);
+    MalArrayObject *array = mal_array_object_new_shaped_reserved(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]),
+        (u32) ngroups, *shape_slot, named_values, named_count);
+    for (int32_t i = 0; i < ngroups; i++) {
+        int32_t cs = caps[2 * i];
+        int32_t ce = caps[2 * i + 1];
+        MalValue element = cs < 0 ? mal_value_new_undefined() : regexp_substring(vm, s, cs, ce);
+        mal_array_object_fresh_dense_append_reserved(array, element);
+    }
 
     if (heap_caps) {
         free(caps);
     }
-    return mal_value_from_object(array_object);
+    return mal_value_from_object((MalObject *) array);
 }
 
 // RegExpExec(R, S): use a user-defined `exec` if callable; else RegExpBuiltinExec.

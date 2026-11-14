@@ -2555,8 +2555,10 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
     }
     // Clearing a dead cell's borrowed field pointer would only dirty its line.
     if (object->slots_owned) mal_object_release_slots(object);
-    if (object->storage_kind == MAL_OBJECT_EXTERNAL) {
-        free(mal_object_storage(object));
+    if (object->storage_kind == MAL_OBJECT_EXTERNAL &&
+        (object->header.type != MAL_HEAP_ARRAY_OBJECT ||
+         !mal_array_object_storage_inline((MalArrayObject *) object))) {
+        gc_free_raw(mal_gc_current_heap(), mal_object_storage(object));
     }
 }
 

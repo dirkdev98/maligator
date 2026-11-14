@@ -17,15 +17,25 @@ typedef struct MalObjectStorage {
     MalTable *overflow;
 } MalObjectStorage;
 
+/** The typed tail preserves value alignment when pointers are narrower than values. */
+typedef struct MalObjectFieldStorage {
+    MalObjectStorage storage;
+    MalValue fields[];
+} MalObjectFieldStorage;
+
 typedef enum MalObjectStorageKind {
     MAL_OBJECT_COMPACT,
     MAL_OBJECT_EMBEDDED,
     MAL_OBJECT_EXTERNAL,
+    /** Prototype word only; exotic payload follows instead of inline fields. */
+    MAL_OBJECT_DEFERRED,
 } MalObjectStorageKind;
 
 /** Ordinary cells keep their prototype and fields after this prefix. Exotic
  * cells embed MalObjectStorage immediately after it; generalized ordinary cells
- * replace the prototype word with a pointer to separately owned storage. */
+ * replace the prototype word with a pointer to separately owned storage. Deferred
+ * exotic cells keep only that word until named properties need external storage.
+ * Known-shape Arrays can borrow that storage from their own cell's tail. */
 typedef struct MalObject {
     MalHeapHeader header;
     /*
@@ -63,7 +73,7 @@ typedef struct MalObject {
      * and fast paths that the mutation can affect.
      */
     bool watched_method_proto : 1;
-    /** Fields point to a separately malloc-owned buffer. */
+    /** Fields own a separate RAW buffer rather than borrowing cell or sidecar storage. */
     bool slots_owned : 1;
     /** A private Error.captureStackTrace id must be released at finalization. */
     bool has_captured_stack : 1;
@@ -94,6 +104,7 @@ static inline const MalObjectStorage *mal_object_storage_const(const MalObject *
     if (object->storage_kind == MAL_OBJECT_EMBEDDED) {
         return (const MalObjectStorage *) (object + 1);
     }
+    assert(object->storage_kind == MAL_OBJECT_EXTERNAL);
     MalObjectStorage *storage;
     memcpy(&storage, object + 1, sizeof(storage));
     return storage;
@@ -127,6 +138,7 @@ static inline void *mal_object_fields(const MalObject *object) {
         return object->slot_capacity == 0 ? nullptr
             : (void *) ((u8 *) (object + 1) + sizeof(void *));
     }
+    if (object->storage_kind == MAL_OBJECT_DEFERRED) return nullptr;
     return mal_object_storage_const(object)->fields;
 }
 
@@ -137,6 +149,7 @@ static inline __attribute__((always_inline)) void *mal_object_fields_nonempty(
     if (__builtin_expect(object->storage_kind == MAL_OBJECT_COMPACT, 1)) {
         return (u8 *) (object + 1) + sizeof(void *);
     }
+    if (object->storage_kind == MAL_OBJECT_DEFERRED) return nullptr;
     return mal_object_storage_const(object)->fields;
 }
 
@@ -162,7 +175,7 @@ static inline __attribute__((always_inline)) MalValue mal_object_field_load(
 }
 
 static inline MalTable *mal_object_overflow(const MalObject *object) {
-    return object->storage_kind == MAL_OBJECT_COMPACT
+    return object->storage_kind == MAL_OBJECT_COMPACT || object->storage_kind == MAL_OBJECT_DEFERRED
         ? nullptr : mal_object_storage_const(object)->overflow;
 }
 
@@ -186,6 +199,9 @@ static_assert(offsetof(MalEmbeddedObject, storage) == sizeof(MalObject),
               "embedded storage must follow the object prefix");
 static_assert((sizeof(MalObject) + sizeof(void *)) % alignof(MalValue) == 0,
               "compact payload must be aligned for tagged fields");
+
+/** Initialize an exotic cell whose payload follows its single prototype/storage word. */
+void mal_object_init_deferred(MalHeap *heap, MalObject *object, MalObject *prototype);
 
 void mal_object_set_prototype_pointer(MalObject *object, MalObject *prototype);
 void mal_object_set_fields_pointer(MalObject *object, void *fields);

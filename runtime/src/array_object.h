@@ -4,8 +4,14 @@
 #include "object.h"
 
 typedef struct MalArrayObject {
-    MalObject object;
-    MalObjectStorage object_storage;
+    // The cell's dense tail also needs tagged-value alignment on 32-bit targets.
+    alignas(MalValue) MalObject object;
+    // Named properties externalize this prototype word; dense elements stay in this cell.
+    // Fields can borrow a sidecar's tail until growth gives them an owned buffer.
+    union {
+        MalObject *prototype;
+        MalObjectStorage *external;
+    } object_storage;
 
     /**
      * Dense element fast path. In dense mode (`elements != nullptr`), integer-index
@@ -81,7 +87,7 @@ static inline void mal_array_object_card(MalArrayObject *array, u32 index, MalVa
 }
 #define MAL_ARRAY_INLINE_CAPACITY_MAX 14u
 
-static_assert(sizeof(MalArrayObject) <= 64, "MalArrayObject outgrew its 64-byte size class");
+static_assert(sizeof(MalArrayObject) <= 48, "MalArrayObject outgrew its 48-byte header");
 
 static inline MalValue *mal_array_object_inline_elements(const MalArrayObject *array) {
     return (MalValue *) (array + 1);
@@ -91,6 +97,15 @@ static inline MalValue *mal_array_object_inline_elements(const MalArrayObject *a
 static inline bool mal_array_object_elements_inline(const MalArrayObject *array) {
     return array->inline_capacity != 0 &&
         array->elements == mal_array_object_inline_elements(array);
+}
+
+/** A known-shape constructor places its sidecar after the original element reserve.
+ * inline_capacity remains fixed when elements grow or deoptimize, so ownership does
+ * not depend on the current dense vector or named fields. */
+static inline bool mal_array_object_storage_inline(const MalArrayObject *array) {
+    return array->object.storage_kind == MAL_OBJECT_EXTERNAL &&
+        mal_object_storage_const(&array->object) == (const MalObjectStorage *)
+            (mal_array_object_inline_elements(array) + array->inline_capacity);
 }
 
 /** Whether the array uses the dense element fast path (vs. legacy table storage). */
@@ -317,9 +332,9 @@ MalArrayObject *mal_array_object_new_from_values_slow(
     MalHeap *heap, MalObject *prototype, const MalValue *values, u32 count
 );
 
-/** Inputs must remain rooted across allocation. Capacity is reserved while the
- * scanned length is zero; initialization retains card barriers and publishes
- * the completed dense length once. No safepoint occurs inside initialization.
+/** Inputs must remain rooted across allocation. No safepoint occurs between
+ * reserving capacity and initializing every published dense element. Young cells
+ * need no remembered-set updates; black/old allocations retain their card barriers.
  * Inlined so a literal whose elements fit the cell settles its size class and
  * copy at compile time. */
 static inline __attribute__((always_inline)) MalArrayObject *mal_array_object_new_from_values(
@@ -335,30 +350,37 @@ static inline __attribute__((always_inline)) MalArrayObject *mal_array_object_ne
             heap, sizeof(MalArrayObject) + sizeof(MalValue) * inline_capacity,
             MAL_HEAP_ARRAY_OBJECT);
     if (__builtin_expect(cell == nullptr, 0)) {
-        return mal_array_object_new_from_values_slow(heap, prototype, values, count);
+        if (count > MAL_ARRAY_INLINE_CAPACITY_MAX) {
+            return mal_array_object_new_from_values_slow(heap, prototype, values, count);
+        }
+        cell = mal_heap_alloc_slow(heap,
+            sizeof(MalArrayObject) + sizeof(MalValue) * inline_capacity, MAL_HEAP_ARRAY_OBJECT);
     }
     MalArrayObject *array = (MalArrayObject *) cell;
     MalHeapHeader header = array->object.header;
-    array->object = (MalObject) {
-        .header = header,
-        .extensible = true,
-        .storage_kind = MAL_OBJECT_EMBEDDED,
-        .shape = mal_shape_root(heap),
+    MalValue *elements = count == 0 ? nullptr : mal_array_object_inline_elements(array);
+    *array = (MalArrayObject) {
+        .object = {
+            .header = header,
+            .extensible = true,
+            .storage_kind = MAL_OBJECT_DEFERRED,
+            .shape = mal_shape_root(heap),
+        },
+        .object_storage = {.prototype = prototype},
+        .elements = elements,
+        .length = count,
+        .capacity = count == 0 ? 0 : inline_capacity,
+        .dense_count = count,
+        .length_writable = true,
+        .dense_elements_writable = true,
+        .dense_elements_configurable = true,
+        .inline_capacity = inline_capacity,
     };
-    array->object_storage = (MalObjectStorage) {.prototype = prototype};
     mal_object_mark_as_prototype(prototype);
-    array->length = count;
-    array->length_writable = true;
-    array->dense_elements_writable = true;
-    array->dense_elements_configurable = true;
-    array->inline_capacity = inline_capacity;
-    if (count != 0) {
-        MalValue *elements = mal_array_object_inline_elements(array);
-        array->elements = elements;
-        array->capacity = inline_capacity;
-        array->dense_count = count;
+    for (u32 index = 0; index < count; index++) elements[index] = values[index];
+    // Incremental major marking allocates black/old cells; those still need cards.
+    if (mal_heap_mark_is_old(header.mark)) {
         for (u32 index = 0; index < count; index++) {
-            elements[index] = values[index];
             mal_gc_card(&array->object.header, values[index]);
         }
     }
@@ -368,6 +390,14 @@ static inline __attribute__((always_inline)) MalArrayObject *mal_array_object_ne
 
 MalArrayObject *mal_array_object_new_reserved(
     MalHeap *heap, MalObject *prototype, u32 capacity
+);
+
+/** Create a private Array with its final named shape and reserved dense capacity.
+ * Named values must remain rooted across allocation. Elements are unpublished until
+ * the caller appends them; named fields never borrow the dense element storage. */
+MalArrayObject *mal_array_object_new_shaped_reserved(
+    MalHeap *heap, MalObject *prototype, u32 capacity,
+    MalShape *shape, const MalValue *values, u32 count
 );
 MalArrayObject *mal_array_object_try_new(MalHeap *heap, MalObject *prototype);
 MalArrayObject *mal_array_object_new_with_length_slow(
@@ -395,23 +425,23 @@ static inline __attribute__((always_inline)) MalArrayObject *mal_array_object_ne
     }
     MalArrayObject *array = (MalArrayObject *) cell;
     MalHeapHeader header = array->object.header;
-    array->object = (MalObject) {
-        .header = header,
-        .extensible = true,
-        .storage_kind = MAL_OBJECT_EMBEDDED,
-        .shape = mal_shape_root(heap),
+    *array = (MalArrayObject) {
+        .object = {
+            .header = header,
+            .extensible = true,
+            .storage_kind = MAL_OBJECT_DEFERRED,
+            .shape = mal_shape_root(heap),
+        },
+        .object_storage = {.prototype = prototype},
+        .elements = length == 0 ? nullptr : mal_array_object_inline_elements(array),
+        .length = length,
+        .capacity = length == 0 ? 0 : inline_capacity,
+        .length_writable = true,
+        .dense_elements_writable = true,
+        .dense_elements_configurable = true,
+        .inline_capacity = inline_capacity,
     };
-    array->object_storage = (MalObjectStorage) {.prototype = prototype};
     mal_object_mark_as_prototype(prototype);
-    array->length = length;
-    array->length_writable = true;
-    array->dense_elements_writable = true;
-    array->dense_elements_configurable = true;
-    array->inline_capacity = inline_capacity;
-    if (length != 0) {
-        array->elements = mal_array_object_inline_elements(array);
-        array->capacity = inline_capacity;
-    }
     return array;
 #endif
 }

@@ -46,7 +46,8 @@ u8 mal_array_object_perf_element_mask(const MalArrayObject *array) {
 #endif
 
 void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prototype) {
-    mal_object_init(heap, &array->object, MAL_HEAP_ARRAY_OBJECT, prototype);
+    mal_heap_header_retype(&array->object.header, MAL_HEAP_ARRAY_OBJECT);
+    mal_object_init_deferred(heap, &array->object, prototype);
     array->length = 0;
     array->length_writable = true;
     array->length_shadow_writable = false;
@@ -642,6 +643,35 @@ MalArrayObject *mal_array_object_new_reserved(
 ) {
     MalArrayObject *array = mal_array_object_new_inline(
         heap, prototype, mal_array_object_inline_capacity_for(capacity));
+    if (capacity > 0 && !mal_array_object_fresh_dense_reserve_exact(array, capacity)) abort();
+    return array;
+}
+
+MalArrayObject *mal_array_object_new_shaped_reserved(
+    MalHeap *heap, MalObject *prototype, u32 capacity,
+    MalShape *shape, const MalValue *values, u32 count
+) {
+    assert(shape->inline_count == count && count <= MAL_SHAPE_MAX_INLINE_SLOTS);
+    u32 inline_capacity = capacity <= MAL_ARRAY_INLINE_CAPACITY_MAX ? capacity : 0;
+    MalArrayObject *array = mal_heap_alloc(
+        heap, sizeof(*array) + sizeof(MalValue) * inline_capacity +
+            sizeof(MalObjectFieldStorage) + sizeof(MalValue) * count,
+        MAL_HEAP_ARRAY_OBJECT);
+    mal_array_object_init(heap, array, prototype);
+    array->inline_capacity = inline_capacity;
+    MalObjectFieldStorage *storage = (MalObjectFieldStorage *)
+        (mal_array_object_inline_elements(array) + inline_capacity);
+    storage->storage = (MalObjectStorage) {
+        .prototype = prototype,
+        .fields = storage->fields,
+    };
+    array->object_storage.external = &storage->storage;
+    array->object.storage_kind = MAL_OBJECT_EXTERNAL;
+    array->object.slot_capacity = (u8) count;
+    memcpy(storage->fields, values, sizeof(MalValue) * count);
+    array->object.shape = shape;
+    mal_heap_cell_needs_finalizer(&array->object.header);
+    for (u32 i = 0; i < count; ++i) mal_gc_card(&array->object.header, values[i]);
     if (capacity > 0 && !mal_array_object_fresh_dense_reserve_exact(array, capacity)) abort();
     return array;
 }

@@ -272,11 +272,12 @@ u64 mal_object_slot_dictionary_migration_count(void) {
 }
 
 static MalObjectStorage *mal_object_externalize(MalObject *object) {
-    if (object->storage_kind != MAL_OBJECT_COMPACT) {
+    if (object->storage_kind == MAL_OBJECT_EMBEDDED ||
+        object->storage_kind == MAL_OBJECT_EXTERNAL) {
         return mal_object_storage(object);
     }
-    MalObjectStorage *storage = malloc(sizeof(*storage));
-    if (storage == nullptr) abort();
+    MalObjectStorage *storage = mal_heap_alloc_raw_profiled(
+        mal_gc_current_heap(), sizeof(*storage), MAL_PROFILE_ALLOCATION_FAMILY_OBJECT);
     *storage = (MalObjectStorage) {
         .prototype = mal_object_prototype(object),
         .fields = mal_object_fields(object),
@@ -287,8 +288,28 @@ static MalObjectStorage *mal_object_externalize(MalObject *object) {
     return storage;
 }
 
+static void mal_object_reserve_deferred_fields(MalObject *object, u32 capacity) {
+    assert(object->storage_kind == MAL_OBJECT_DEFERRED);
+    assert(object->shape->inline_count == 0);
+    MalObjectFieldStorage *storage = mal_heap_alloc_raw_profiled(
+        mal_gc_current_heap(), sizeof(*storage) + sizeof(MalValue) * capacity,
+        MAL_PROFILE_ALLOCATION_FAMILY_OBJECT);
+    storage->storage = (MalObjectStorage) {
+        .prototype = mal_object_prototype(object),
+        .fields = storage->fields,
+    };
+    MalObjectStorage *base = &storage->storage;
+    memcpy(object + 1, &base, sizeof(base));
+    object->storage_kind = MAL_OBJECT_EXTERNAL;
+    object->slot_capacity = (u8) capacity;
+    // The sidecar owns its tail; growth can replace fields with an owned RAW buffer.
+    object->slots_owned = false;
+    mal_heap_cell_needs_finalizer(&object->header);
+}
+
 void mal_object_set_prototype_pointer(MalObject *object, MalObject *prototype) {
-    if (object->storage_kind == MAL_OBJECT_COMPACT) {
+    if (object->storage_kind != MAL_OBJECT_EMBEDDED &&
+        object->storage_kind != MAL_OBJECT_EXTERNAL) {
         memcpy(object + 1, &prototype, sizeof(prototype));
     } else {
         mal_object_storage(object)->prototype = prototype;
@@ -304,7 +325,8 @@ void mal_object_set_fields_pointer(MalObject *object, void *fields) {
 }
 
 void mal_object_set_overflow_pointer(MalObject *object, MalTable *overflow) {
-    if (overflow == nullptr && object->storage_kind == MAL_OBJECT_COMPACT) return;
+    if (overflow == nullptr && (object->storage_kind == MAL_OBJECT_COMPACT ||
+                                object->storage_kind == MAL_OBJECT_DEFERRED)) return;
     mal_object_externalize(object)->overflow = overflow;
     if (overflow != nullptr) mal_heap_cell_needs_finalizer(&object->header);
 }
@@ -318,6 +340,7 @@ static u8 mal_object_inline_payload_eights(usize allocation_size) {
 
 static u32 mal_object_inline_slot_capacity(MalObject *object) {
     if (object->slots_owned || object->storage_kind == MAL_OBJECT_EMBEDDED ||
+        object->storage_kind == MAL_OBJECT_DEFERRED ||
         (object->storage_kind != MAL_OBJECT_COMPACT &&
          mal_object_fields(object) != (u8 *) (object + 1) + sizeof(void *))) {
         return 0;
@@ -352,12 +375,16 @@ static void mal_object_init_payload(
         .storage_kind = storage_kind,
         .shape = shape == nullptr ? mal_shape_root(heap) : shape,
     };
-    if (storage_kind == MAL_OBJECT_COMPACT) {
+    if (storage_kind == MAL_OBJECT_COMPACT || storage_kind == MAL_OBJECT_DEFERRED) {
         memcpy(object + 1, &prototype, sizeof(prototype));
     } else {
         *mal_object_storage(object) = (MalObjectStorage) {.prototype = prototype};
     }
     mal_object_mark_as_prototype(prototype);
+}
+
+void mal_object_init_deferred(MalHeap *heap, MalObject *object, MalObject *prototype) {
+    mal_object_init_payload(heap, object, prototype, MAL_OBJECT_DEFERRED, nullptr);
 }
 
 void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObject *prototype) {
@@ -487,6 +514,10 @@ void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
             ? capacity * 2
             : MAL_SHAPE_MAX_INLINE_SLOTS;
     }
+    if (object->storage_kind == MAL_OBJECT_DEFERRED) {
+        mal_object_reserve_deferred_fields(object, capacity);
+        return;
+    }
     // Spare slots stay invisible until callers initialize them and publish the shape.
     if (object->slots_owned) {
         MalValue *slots = gc_realloc_raw_profiled(
@@ -522,7 +553,8 @@ void mal_object_release_slots(MalObject *object) {
     if (object->slots_owned) {
         gc_free_raw(mal_gc_current_heap(), mal_object_fields(object));
     }
-    if (object->storage_kind != MAL_OBJECT_COMPACT) {
+    if (object->storage_kind == MAL_OBJECT_EMBEDDED ||
+        object->storage_kind == MAL_OBJECT_EXTERNAL) {
         mal_object_storage(object)->fields = nullptr;
     }
     object->slots_owned = false;

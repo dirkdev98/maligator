@@ -282,12 +282,14 @@ tests/native/static-property-membership.test.ts
 tests/native/indexed-operand-facts.test.ts
 tests/native/native-fast-entry.test.ts
 tests/native/regexp-owned-scratch.test.ts
+tests/native/regexp-result-storage.test.ts
 tests/native/regexp-span-continuation.test.ts
 tests/native/regexp-discarded-result.test.ts
 tests/native/regexp-direct-test.test.ts
 tests/native/map-region-entries.test.ts
 tests/native/array-initialization-region.test.ts
 tests/native/array-initialization-incremental.test.ts
+tests/native/array-property-storage.test.ts
 tests/native/numeric-sort-invocation.test.ts
 tests/native/sort-callback-continuation.test.ts
 
