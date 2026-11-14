@@ -1259,6 +1259,13 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_span_admissions,
         (unsigned long long) mal_perf_stats.string_span_projections,
         (unsigned long long) mal_perf_stats.string_span_materializations);
+    fprintf(stderr,
+        "[perf-string-builder-stats] appends=%llu materializations=%llu projections=%llu "
+        "fallbacks=%llu\n",
+        (unsigned long long) mal_perf_stats.string_builder_appends,
+        (unsigned long long) mal_perf_stats.string_builder_materializations,
+        (unsigned long long) mal_perf_stats.string_builder_projections,
+        (unsigned long long) mal_perf_stats.string_builder_fallbacks);
     fprintf(
         stderr,
         "[perf-node-events-stats] singleton_inserts=%llu listener_array_allocations=%llu "

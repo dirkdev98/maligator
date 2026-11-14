@@ -507,6 +507,91 @@ MalValue mal_vm_string_concat_length_slow(
 );
 MalValue mal_vm_concat_strings(MalVm *vm, const MalValue *parts, i32 count);
 
+/** UTF-16 units a compiled function's string accumulator keeps outside the heap. */
+#define MAL_LOCAL_STRING_BUILDER_CAPACITY ((u32) 128)
+
+/**
+ * A compiled function's string accumulator. While `active`, the units are the value of
+ * the one live register that holds the accumulator, and `synced` says whether that
+ * register already holds an equal heap string; an inactive builder leaves the value in
+ * the register. Units take one byte each until a unit above Latin-1 arrives. The
+ * compiler proves that a reset precedes every other use, so the state starts
+ * uninitialized.
+ */
+typedef struct MalLocalStringBuilder {
+    u32 length;
+    bool active;
+    bool synced;
+    bool wide;
+    union {
+        u8 latin1[MAL_LOCAL_STRING_BUILDER_CAPACITY];
+        c16 utf16[MAL_LOCAL_STRING_BUILDER_CAPACITY];
+    } units;
+} MalLocalStringBuilder;
+
+/** Start from the empty string, which the register holds. */
+static inline void mal_local_string_builder_clear(MalLocalStringBuilder *builder) {
+    builder->length = 0;
+    builder->wide = false;
+    builder->active = true;
+    builder->synced = true;
+}
+
+bool mal_local_string_builder_adopt_string(MalLocalStringBuilder *builder, MalString *string);
+
+/**
+ * Activate an inactive builder from the String VALUE its register holds, unless it is
+ * too long to keep outside the heap.
+ */
+static inline bool mal_local_string_builder_adopt(MalLocalStringBuilder *builder, MalValue value) {
+    MalString *string = mal_value_to_string(value);
+    return string->length <= MAL_LOCAL_STRING_BUILDER_CAPACITY &&
+        mal_local_string_builder_adopt_string(builder, string);
+}
+
+bool mal_local_string_builder_append_string(MalLocalStringBuilder *builder, MalString *string);
+
+/**
+ * Append VALUE to an active builder. A value that is not a String, or that would not fit,
+ * returns false without changing the builder: the caller then takes the ordinary `+`.
+ */
+static inline bool mal_local_string_builder_append(MalLocalStringBuilder *builder, MalValue value) {
+    if (!mal_value_is_string(value)) return false;
+    MalString *string = mal_value_to_string(value);
+    if (string->length == 1 && string->storage < MAL_STRING_STORAGE_DEPENDENT &&
+        builder->length < MAL_LOCAL_STRING_BUILDER_CAPACITY) {
+        c16 unit = mal_string_flat_code_unit_at(string, 0);
+        if (builder->wide) {
+            builder->units.utf16[builder->length++] = unit;
+        } else if (unit <= UINT8_MAX) {
+            builder->units.latin1[builder->length++] = (u8) unit;
+        } else {
+            return mal_local_string_builder_append_string(builder, string);
+        }
+        builder->synced = false;
+        MAL_PERF_COUNT(string_builder_appends);
+        return true;
+    }
+    return mal_local_string_builder_append_string(builder, string);
+}
+
+/** The builder's value as a heap string, which the caller stores in the live register. */
+MalValue mal_local_string_builder_materialize(MalVm *vm, MalLocalStringBuilder *builder);
+
+bool mal_local_string_builder_equals_string(
+    const MalLocalStringBuilder *builder, MalString *string);
+
+/** Strict equality of the builder's value with VALUE, without materializing it. */
+static inline bool mal_local_string_builder_equals(
+    const MalLocalStringBuilder *builder, MalValue value
+) {
+    MAL_PERF_COUNT(string_builder_projections);
+    if (!mal_value_is_string(value)) return false;
+    MalString *string = mal_value_to_string(value);
+    return string->length == builder->length &&
+        mal_local_string_builder_equals_string(builder, string);
+}
+
 /**
  * Spec OrdinaryHasInstance: non-callable targets answer false, bound
  * functions unwrap to their target, then the value's prototype chain is

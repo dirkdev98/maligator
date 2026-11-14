@@ -534,6 +534,10 @@ typedef struct MalPerfStats {
     u64 string_span_projections;
     u64 string_span_materializations;
     u64 string_span_equal_calls;
+    u64 string_builder_appends;
+    u64 string_builder_materializations;
+    u64 string_builder_projections;
+    u64 string_builder_fallbacks;
     u64 array_iteration_typed_callback_hits;
     u64 array_iteration_typed_callback_fallbacks;
     u64 canonical_typed_dispatch_hits;

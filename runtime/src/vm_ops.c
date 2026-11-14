@@ -208,6 +208,61 @@ MalValue mal_vm_concat_strings(MalVm *vm, const MalValue *parts, i32 count) {
     return ok ? mal_value_from_string(string) : MAL_VALUE_UNDEFINED;
 }
 
+static bool mal_local_string_builder_copy(MalLocalStringBuilder *builder, MalString *string) {
+    usize length = string->length;
+    if (length > MAL_LOCAL_STRING_BUILDER_CAPACITY - builder->length) return false;
+    if (builder->wide) {
+        mal_string_copy_range_to(string, 0, length, builder->units.utf16 + builder->length);
+    } else if (string->latin1) {
+        mal_string_copy_latin1_to(string, builder->units.latin1 + builder->length);
+    } else {
+        // Descending order reads each narrow unit before its widened slot overwrites it.
+        for (u32 index = builder->length; index-- > 0;)
+            builder->units.utf16[index] = builder->units.latin1[index];
+        builder->wide = true;
+        mal_string_copy_range_to(string, 0, length, builder->units.utf16 + builder->length);
+    }
+    builder->length += (u32) length;
+    return true;
+}
+
+bool mal_local_string_builder_adopt_string(MalLocalStringBuilder *builder, MalString *string) {
+    mal_local_string_builder_clear(builder);
+    builder->active = mal_local_string_builder_copy(builder, string);
+    return builder->active;
+}
+
+bool mal_local_string_builder_append_string(MalLocalStringBuilder *builder, MalString *string) {
+    if (!mal_local_string_builder_copy(builder, string)) return false;
+    builder->synced = false;
+    MAL_PERF_COUNT(string_builder_appends);
+    return true;
+}
+
+MalValue mal_local_string_builder_materialize(MalVm *vm, MalLocalStringBuilder *builder) {
+    MAL_PERF_COUNT(string_builder_materializations);
+    builder->synced = true;
+    if (builder->wide)
+        return mal_value_from_string(
+            mal_string_new_copy(&vm->heap, builder->units.utf16, builder->length));
+    if (builder->length == 1) {
+        MalString *character = vm->code_unit_strings[builder->units.latin1[0]];
+        if (character != nullptr) return mal_value_from_string(character);
+    }
+    return mal_value_from_string(
+        mal_string_new_latin1_copy(&vm->heap, builder->units.latin1, builder->length));
+}
+
+bool mal_local_string_builder_equals_string(
+    const MalLocalStringBuilder *builder, MalString *string
+) {
+    for (u32 index = 0; index < builder->length; index++) {
+        c16 unit = builder->wide ? builder->units.utf16[index] : builder->units.latin1[index];
+        if (mal_string_code_unit_at(string, index) != unit) return false;
+    }
+    return true;
+}
+
 static bool mal_vm_string_to_array_index(MalString *string, u32 *index_out) {
     if (string->array_index_impossible) return false;
     usize length = mal_string_length(string);

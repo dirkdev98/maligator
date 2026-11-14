@@ -39,6 +39,17 @@ and copies each piece without flattening its input. Large results share their
 pieces through balanced ropes, preserving the memory cost of repeated content.
 Templates exceeding the operand budget retain pairwise lowering.
 
+A compiled function keeps a local String that grows by `+` in a native unit buffer
+when the value never has two live copies: every definition is a String literal or
+proven String, an append to the previous value, or a copy of it, and no definition
+leaves an older value live. Appends of Strings write units in place; any other
+read of the value first materializes an equal heap String, and a length or
+equality test reads the buffer. Identity is unobservable for Strings, so this is
+exact. Appends of other values, and values past the buffer's capacity, take the
+ordinary `+`; the next append copies a result that fits back into the buffer. The
+register holding a materialized value is its only root, so the buffer is limited to
+conservatively scanned native frames.
+
 Cons joins preserve a weight bound: a nonterminal cons child occupies at most
 three quarters of its parent's code units. Flat/dependent leaves and cons subtrees
 of at most 32 units are terminal for balancing. A terminal subtree adds at most

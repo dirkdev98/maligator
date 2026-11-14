@@ -171,6 +171,11 @@ import {
 } from "./native-source-map.ts";
 import type { NativeSourceRange } from "./native-source-map.ts";
 import type { NativeSpanConsumer } from "./native-span-continuation.ts";
+import {
+	nativeStringBuilderDeclarations,
+	planNativeStringBuilders,
+	renderNativeStringBuilderOperation,
+} from "./native-string-builders.ts";
 import { nativeStringComparisonExpression } from "./native-string-comparisons.ts";
 import type { NativeStringComparisonPlan } from "./native-string-comparisons.ts";
 import { nativeValueConversion } from "./native-value-transport.ts";
@@ -4585,6 +4590,7 @@ function emitCompiledVariant(
 		fastTryTargets,
 		onFastTryLookup,
 		virtualRestRootCounts,
+		conservativeRoots,
 	);
 	if (body === null) {
 		return null;
@@ -7840,6 +7846,8 @@ function emitBody(
 	fastTryTargets: ReadonlyMap<number, NativeFastTryAbi> = new Map(),
 	onFastTryLookup?: (target: number, resultKind?: "undefined") => void,
 	virtualRestRootCounts: NativeVirtualRestRootCounts = new Map(),
+	// Stack scanning keeps a materialized accumulator rooted in whichever register holds it.
+	stringBuilders = false,
 ): EmittedBody | null {
 	const elided = new Set(elidedPureIps);
 	const copiedClosures = new Set(analysis.captures.copiedClosureIps);
@@ -8584,6 +8592,57 @@ function emitBody(
 	const stringComparisonsByIp = new Map(
 		stringComparisons.map((plan) => [plan.instructionIp, plan]),
 	);
+	const stringBuilderPlan =
+		stringBuilders && coro === null
+			? planNativeStringBuilders(fn, reps, nativeFacts, stringConstants, {
+					handlerTargets: analysis.handlerTargets,
+					loopInstructions,
+					unreachable,
+					elided,
+					expressionIps,
+					rematerializedConstantIps,
+					switches: switches.values(),
+					regions: [
+						...fastPathPlans.numericLoopRegions.map((plan) => ({
+							entryIp: plan.entryIp,
+							claimedIps: plan.claimedIps,
+						})),
+						...fastPathPlans.numberRecordRegions.map((plan) => ({
+							entryIp: plan.id,
+							claimedIps: plan.claimedIps,
+						})),
+					],
+					plans: [
+						...(Object.values(fastPathPlans) as ReadonlyArray<unknown>),
+						...specializations,
+						...objectEnumerationSnapshotSites.values(),
+					],
+					actions: [
+						nativeStringSpanActionByIp,
+						nativeStringSplitProjectionActionByIp,
+						nativeStringSplitCursorActionByIp,
+						stringSplitTrimLengthSiteByIp,
+						nativeRegExpExecProjectionActionByIp,
+						nativeRegExpIteratorProjectionActionByIp,
+						nativeStringCharCodeAtChainActionByIp,
+						nativeIteratorResultVirtualizationActionByIp,
+						nativeIteratorEntryPairVirtualizationActionByIp,
+						nativeArrayPairDestructureActionByIp,
+						numericFusionActionByIp,
+						indexedLengthLoopActionByIp,
+						nativeArrayPresenceProjectionActionByIp,
+						pairedArrayLoopActionByIp,
+						staticPropertyNumericActionByIp,
+						propertyNumericUpdateActionByIp,
+						propertyReadRegionActionByIp,
+						nativeFastPaths.propertyReadPairActions,
+						fieldLoads,
+						stackObjectAccesses,
+						records.accesses,
+						records.observers,
+					],
+				})
+			: undefined;
 	// Finite dispatch compares one loaded callee against each candidate class's method,
 	// through separate guards or a call plan's guarded targets.
 	const polymorphicMethodLoads = new Set<number>();
@@ -8791,6 +8850,11 @@ function emitBody(
 			);
 			if (virtualRestRootPublication.length > 0)
 				lines.push(`    ${virtualRestRootPublication}`);
+			const stringBuilderAction = stringBuilderPlan?.actions.get(ip);
+			for (const { builder, register } of stringBuilderAction?.observations ?? [])
+				lines.push(
+					`    if (__sb_${builder}.active && !__sb_${builder}.synced) r${register} = mal_local_string_builder_materialize(vm, &__sb_${builder});`,
+				);
 			const literalSwitch = switches.get(ip);
 			if (literalSwitch !== undefined) {
 				knownPublishedPrivateRoots.clear();
@@ -9431,7 +9495,7 @@ function emitBody(
 					? undefined
 					: { store: framePositionStore, consumed: false, elided: false };
 			instructionContext.slowPathFramePosition = slowPathFramePosition;
-			const emitted = emitInstruction(
+			const ordinaryEmission = emitInstruction(
 				fn.instructions[ip]!,
 				ip,
 				suffix,
@@ -9443,9 +9507,16 @@ function emitBody(
 				coro,
 				instructionContext,
 			);
-			if (emitted === null) {
+			if (ordinaryEmission === null) {
 				return false;
 			}
+			const emitted = renderNativeStringBuilderOperation(
+				stringBuilderAction,
+				instruction,
+				ordinaryEmission,
+				reps,
+				(index) => relocation.stringValue(index),
+			);
 			if (
 				eagerOperatorRootPublication &&
 				operatorMaskEmitted &&
@@ -9547,6 +9618,7 @@ function emitBody(
 		...[...stringLeafCaches].map(
 			(ip) => `MalStringLeafReadCache __string_leaf_cache_${ip} = {0};`,
 		),
+		...nativeStringBuilderDeclarations(stringBuilderPlan),
 		...[...shapeSnapshots].map(
 			(icIndex) => `MalShapeSnapshot ${shapeSnapshotName(icIndex)} = {0};`,
 		),
