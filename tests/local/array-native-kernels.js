@@ -375,6 +375,40 @@ async function main() {
 		"slice preserves holes",
 		slicedHole.length === 2 && !(0 in slicedHole) && slicedHole[1] === 1,
 	);
+	const short = ["a", "b", "c", "d"];
+	check(
+		"short slices clamp their bounds",
+		[
+			short.slice(),
+			short.slice(1),
+			short.slice(-2),
+			short.slice(1, -1),
+			short.slice(3, 1),
+			short.slice(-9, 9),
+			short.slice(4),
+			short.slice(1.5, 3),
+			short.slice(0, undefined),
+		]
+			.map((part) => part.join(""))
+			.join() === "abcd,bcd,cd,bc,,abcd,,bc,abcd",
+	);
+	const shortCopy = short.slice();
+	shortCopy.push("e");
+	check(
+		"short slices copy",
+		shortCopy !== short && short.length === 4 && shortCopy.length === 5,
+	);
+	class Sub extends Array {}
+	check("short slices keep species", Sub.from(short).slice(1) instanceof Sub);
+	Array.prototype[1] = "proto";
+	const inheritedSlice = [, , 3].slice(0, 2);
+	delete Array.prototype[1];
+	check(
+		"short slices read inherited elements",
+		inheritedSlice.length === 2 &&
+			!(0 in inheritedSlice) &&
+			inheritedSlice[1] === "proto",
+	);
 	check("concat", [1, 2].concat([3, 4], 5).join() === "1,2,3,4,5");
 	const concatenatedHole = [0].concat([, 2]);
 	check(

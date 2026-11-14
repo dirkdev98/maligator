@@ -2637,7 +2637,49 @@ MalCompletion mal_builtin_array_deque_direct(
     return mal_vm_call_cached(vm, callee, this_value, args, arg_count);
 }
 
+static i64 mal_builtin_array_slice_bound(i32 relative, i64 length) {
+    if (relative < 0) return length + relative > 0 ? length + relative : 0;
+    return relative < length ? relative : length;
+}
+
+/**
+ * A short slice of a clean dense Array with default species and Int32 or omitted
+ * bounds, published as one literal-sized Array. Every step it skips is then
+ * effect-free: the length read, the integer conversions, the species lookups and the
+ * element reads. A hole in the range declines, since the result must keep it absent.
+ */
+static bool mal_builtin_array_slice_small(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue *out
+) {
+    MalArrayObject *source = mal_builtin_array_clean_dense(vm, this_value);
+    if (source == nullptr || !mal_array_default_species(vm, this_value)) return false;
+    i64 length = source->length;
+    i64 start = 0;
+    i64 end = length;
+    if (arg_count >= 1) {
+        if (!mal_value_is_int32(args[0])) return false;
+        start = mal_builtin_array_slice_bound(mal_value_to_i32(args[0]), length);
+    }
+    if (arg_count >= 2 && !mal_value_is_undefined(args[1])) {
+        if (!mal_value_is_int32(args[1])) return false;
+        end = mal_builtin_array_slice_bound(mal_value_to_i32(args[1]), length);
+    }
+    i64 count = end > start ? end - start : 0;
+    if (count > MAL_ARRAY_INLINE_CAPACITY_MAX || start + count > source->dense_count) return false;
+    if (source->dense_maybe_holey) {
+        for (i64 index = start; index < start + count; index++) {
+            if (mal_value_is_array_hole(source->elements[index])) return false;
+        }
+    }
+    MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]);
+    *out = mal_value_from_array_object(mal_array_object_new_from_values(
+        &vm->heap, prototype, count == 0 ? &this_value : source->elements + start, (u32) count));
+    return true;
+}
+
 static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalValue small;
+    if (mal_builtin_array_slice_small(vm, this_value, args, arg_count, &small)) return small;
     // Intentionally generic: O = ToObject(this), len = LengthOfArrayLike(O).
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
