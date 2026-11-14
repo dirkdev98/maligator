@@ -5907,7 +5907,7 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
                 MAL_PROPERTY_CONFIGURABLE);
     }
 
-    if (own_present && (own_desc.flags & MAL_PROPERTY_PRIMORDIAL)) {
+    if (own_present && mal_property_flags_locked_primordial(own_desc.flags)) {
         mal_primordials_throw_property_mutation(
             vm, "Cannot assign locked primordial binding '", key);
         return false;
@@ -5970,7 +5970,7 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
         return false;
     }
     if (receiver_present) {
-        if (receiver_desc.flags & MAL_PROPERTY_PRIMORDIAL) {
+        if (mal_property_flags_locked_primordial(receiver_desc.flags)) {
             mal_primordials_throw_property_mutation(
                 vm, "Cannot assign locked primordial binding '", key);
             return false;
@@ -6061,7 +6061,7 @@ bool mal_vm_delete_property(MalVm *vm, MalValue object_value, MalKey key) {
 
     MalPropertyLookup ordinary_own = mal_object_get_own(object, key);
     if (ordinary_own.present &&
-        (ordinary_own.desc.flags & MAL_PROPERTY_PRIMORDIAL)) {
+        mal_property_flags_locked_primordial(ordinary_own.desc.flags)) {
         mal_primordials_throw_property_mutation(
             vm, "Cannot delete locked primordial binding '", key);
         return false;
@@ -9034,6 +9034,17 @@ static MalGlobalBinding *mal_vm_global_binding(MalVm *vm, i32 name_string_index)
 }
 
 static void mal_vm_add_global_binding(MalVm *vm, i32 name_string_index, i32 index, bool immutable) {
+    // A lexical declaration answers before the global object, so it shadows a
+    // primordial binding of the same name for every later global load.
+    if (index >= 0) {
+        MalObject *global_object;
+        MalKey key;
+        MalPropertyLookup own = mal_vm_global_dictionary_lookup(
+            vm, name_string_index, &global_object, &key);
+        if (own.present && (own.desc.flags & MAL_PROPERTY_PRIMORDIAL)) {
+            mal_invalidate_primordial_binding();
+        }
+    }
     MalGlobalEnvironment *environment = mal_vm_global_environment(vm);
     if (environment->count == environment->capacity) {
         environment->capacity = environment->capacity ? environment->capacity * 2 : 16;
@@ -9162,7 +9173,7 @@ void mal_vm_op_store_global_property(
         bool function_check = mal_value_is_empty(value);
         bool var_check = mal_value_is_null(value);
         bool function_initialization = !function_check && !var_check && !mal_value_is_undefined(value);
-        if (own.present && (own.desc.flags & MAL_PROPERTY_PRIMORDIAL) &&
+        if (own.present && mal_property_flags_locked_primordial(own.desc.flags) &&
             (function_check || function_initialization)) {
             mal_primordials_throw_property_mutation(
                 vm, "Cannot declare locked primordial binding '", key);

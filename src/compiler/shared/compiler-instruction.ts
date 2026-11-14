@@ -17,13 +17,15 @@ export const MAX_STRING_CODE_UNITS = 2 ** 31 - 1;
  * names the narrowest one that covers what it skips. `watched-methods` covers the
  * identities of built-in methods and survives a polyfill that only adds names;
  * `array-iteration` and `generator-protocol` also survive replacing unrelated
- * built-in methods.
+ * built-in methods. `primordial-bindings` adds the global bindings such as `Math`
+ * to `watched-methods`, so a global namespace call needs no load.
  */
 export type GuardedSemanticEpochFamily =
 	| "watched-methods"
 	| "array-elements"
 	| "array-iteration"
-	| "generator-protocol";
+	| "generator-protocol"
+	| "primordial-bindings";
 
 /** Each family's `MalSemanticDependencyMask` bit in runtime/src/vm.h. */
 export const GUARDED_SEMANTIC_EPOCH_MASKS = {
@@ -31,6 +33,7 @@ export const GUARDED_SEMANTIC_EPOCH_MASKS = {
 	"array-elements": 4,
 	"array-iteration": 8,
 	"generator-protocol": 16,
+	"primordial-bindings": 32,
 } as const satisfies Record<GuardedSemanticEpochFamily, number>;
 
 /** Numeric TypedArray brands whose element access produces a Number. */

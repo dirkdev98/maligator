@@ -1073,6 +1073,9 @@ static void mal_perf_stats_print(void) {
     fprintf(stderr, "[perf-semantic-guards] admissions=%llu rejections=%llu\n",
         (unsigned long long) mal_perf_stats.semantic_guard_admissions,
         (unsigned long long) mal_perf_stats.semantic_guard_rejections);
+    fprintf(stderr, "[perf-primordial-binding-guards] admissions=%llu rejections=%llu\n",
+        (unsigned long long) mal_perf_stats.primordial_binding_guard_admissions,
+        (unsigned long long) mal_perf_stats.primordial_binding_guard_rejections);
     fprintf(stderr,
         "[perf-bound-calls] resolutions=%llu calls=%llu guard_hits=%llu guard_misses=%llu\n",
         (unsigned long long) mal_perf_stats.bound_function_resolutions,

@@ -1446,18 +1446,22 @@ describe("known builtin scalar result storage", () => {
 		expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
 	});
 
-	it("retains dynamic identity when mutable primordials lack a known call proof", () => {
+	it("keeps the loaded call beside a guarded known call with mutable primordials", () => {
 		const out = inspectStaticValueFunction(
 			"function probe(left){return Number(left)+1.5;}globalThis.probe=probe;",
 			"probe",
 			{ locked: false },
 		);
-		expect(
-			out.native.body.instructions.some(
-				(op) => op.opcode === "CALL_KNOWN" && op.operation === "Number",
-			),
-		).toBe(false);
-		expect(out.native.body.instructions.some((op) => op.opcode === "CALL")).toBe(true);
+		const instructions = out.native.body.instructions;
+		const guard = instructions.findIndex(
+			(op) => op.opcode === "GUARD_SEMANTIC_EPOCH" && op.family === "primordial-bindings",
+		);
+		const known = instructions.findIndex(
+			(op) => op.opcode === "CALL_KNOWN" && op.operation === "Number",
+		);
+		expect(guard).toBeGreaterThanOrEqual(0);
+		expect(known).toBeGreaterThan(guard);
+		expect(instructions.some((op) => op.opcode === "CALL")).toBe(true);
 	});
 });
 

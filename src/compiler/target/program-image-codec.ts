@@ -109,6 +109,7 @@ const GUARDED_SEMANTIC_EPOCH_FAMILIES: ReadonlyArray<GuardedSemanticEpochFamily>
 	"array-elements",
 	"array-iteration",
 	"generator-protocol",
+	"primordial-bindings",
 ];
 
 function guardedSemanticEpochFamily(mask: number): GuardedSemanticEpochFamily {

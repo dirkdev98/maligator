@@ -160,18 +160,16 @@ compilation both contribute to developer-loop latency.
 These levels are cumulative facts consumed by one optimizer, not separate pipelines.
 Runtime eval may remove source closure without invalidating authority closure.
 
-- [ ] Guard primordial global bindings with an epoch. With mutable primordials every
-      `Math.*` and `Number.*` call outside a numeric region still loads the global name
-      and the method and compares the callee, and `Number.parseInt`, `parseFloat` and
-      `Number()` stay generic calls; javascript-v2 `numbers` takes 42 ms against 25
-      closed. An epoch advanced when a global object property holding a primordial
-      binding is written, defined or deleted, or a global lexical binding shadows one,
-      would let one guard select the known operation and keep the loads as the twin.
-      Outside regions Math calls take 14 ms against 5 closed and the Number calls 29
-      against 22 in a 240,000-iteration loop. Global stores write the global object's
-      table entries directly and MalObject has no free flag bit, so an internal property
-      flag on the primordial binding entries would let each writer that already reads an
-      entry's flags advance the epoch.
+- [ ] Extend the primordial-bindings guard past primitive Math and Number calls.
+      Object-producing namespace calls such as `Object.entries`, `Object.assign` and
+      `Array.from`, and constructions, keep their loaded and guarded form because entry
+      snapshots, record columns and typed array regions recognize it; javascript-v2
+      `dynamicObjects` stays near 41 ms mutable against 26 closed. Those consumers would
+      have to accept the known call behind the guard. A known call after code that may
+      run JavaScript also stays generic, because `CALL_KNOWN` resolves its builtin through
+      the mutable graph when it runs, so `Number.isFinite(Number(text))` guards only the
+      inner call. A loop a numeric region can take keeps its own entry speculation;
+      admitting `GUARD_SEMANTIC_EPOCH` as a region entry guard would let it use both.
 
 ## Performance diagnosis and admission
 

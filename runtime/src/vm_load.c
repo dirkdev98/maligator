@@ -3020,7 +3020,7 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
             } else if (instruction->opcode == MAL_OP_READ_SERVICE_EPOCH) {
                 if (instruction->as.read_service_epoch.dst < 0 || instruction->as.read_service_epoch.dst >= fn->register_count) r.ok = false;
             } else if (instruction->opcode == MAL_OP_GUARD_SEMANTIC_EPOCH) {
-                const u8 known = MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS | MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS | MAL_SEMANTIC_DEPENDENCY_ARRAY_ITERATION | MAL_SEMANTIC_DEPENDENCY_GENERATOR_PROTOCOL;
+                const u8 known = MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS | MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS | MAL_SEMANTIC_DEPENDENCY_ARRAY_ITERATION | MAL_SEMANTIC_DEPENDENCY_GENERATOR_PROTOCOL | MAL_SEMANTIC_DEPENDENCY_PRIMORDIAL_BINDINGS;
                 if (instruction->as.guard_semantic_epoch.dst < 0 || instruction->as.guard_semantic_epoch.dst >= fn->register_count || instruction->as.guard_semantic_epoch.dependencies == 0 || (instruction->as.guard_semantic_epoch.dependencies & ~known) != 0) r.ok = false;
             } else if (instruction->opcode == MAL_OP_PROBE_READ) {
                 i32 offset = instruction->as.probe_read.data_offset;

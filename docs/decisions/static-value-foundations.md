@@ -1368,6 +1368,23 @@ that Array's chain after admission is resolved as the spec's resolve function wo
 The Error prototypes are watched objects, because Error.prototype.toString answers
 their `name` and `message` without a lookup.
 
+Global namespace calls such as `Math.max(a, b)` and `parseInt(text)` check the
+primordial-bindings protector instead of loading the global name and the method. It
+breaks with the builtin-identity protector, and whenever a global primordial binding
+changes value or kind, is deleted, or is shadowed by a later script's lexical
+declaration; an attribute change that keeps the data value keeps it. Mutable builds
+mark those global object entries with the internal primordial flag that locked builds
+use to reject mutation, so every descriptor write and delete of one sees it. Core
+twins a run of such calls in a block: the guard selects a copy with the realm's
+intrinsics and the known operations of the locked lowering, and the loaded calls stay
+as the generic twin. A copied load follows nothing that can run JavaScript or store a
+property. A known call resolves its builtin when it runs, so only a Math kernel on
+Numbers, which resolves nothing, may follow such code in the copy. Runs cover Math
+and the Number parsers, predicates and conversions, whose results are primitives.
+Object-producing calls and constructions keep the guarded forms that snapshot, column
+and typed array regions consume, and a loop a numeric region can take keeps that
+region's entry speculation.
+
 Canonical function comparisons use the inventory's object identity, independently
 of native callback sharing. This folds repeated references across effects while
 keeping String valueOf/toString and Symbol valueOf/toPrimitive distinct. True aliases

@@ -348,7 +348,7 @@ MalDefineOwnStatus mal_builtin_object_try_define_parsed(
         mal_builtin_object_try_define_parsed_impl(vm, target, key, parsed);
     if (status == MAL_DEFINE_OWN_REJECTED &&
         (mal_object_is_locked_primordial(target) ||
-         (before.present && (before.desc.flags & MAL_PROPERTY_PRIMORDIAL))) &&
+         (before.present && mal_property_flags_locked_primordial(before.desc.flags))) &&
         vm->completion.kind != MAL_COMPLETION_THROW) {
         mal_primordials_throw_property_mutation(
             vm, "Cannot define locked primordial property '", key);

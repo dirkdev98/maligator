@@ -258,6 +258,8 @@ typedef struct MalPerfStats {
     u64 loop_builtin_call_region_admissions;
     u64 semantic_guard_admissions;
     u64 semantic_guard_rejections;
+    u64 primordial_binding_guard_admissions;
+    u64 primordial_binding_guard_rejections;
     u64 bound_function_resolutions;
     u64 bound_function_calls;
     u64 bound_function_guard_hits;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { GUARDED_SEMANTIC_EPOCH_MASKS } from "../src/compiler/shared/compiler-instruction.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -120,9 +121,14 @@ describe("partially static numeric call profiles", () => {
 		expect(output.c.source).toContain("mal_ops_is_number(");
 		expect(output.c.source).toContain(`${kernel}(`);
 		expect(output.c.source).toContain("mal_vm_call_known_native(");
+		// Mutable primordials select the guarded operation only behind the binding
+		// guard, and keep the loaded call as its twin.
 		const mutable = inspectStaticValueFunction(source, "probe", { locked: false });
 		expect(mutable.structure.genericCalls).toBeGreaterThan(0);
-		expect(mutable.c.source).not.toContain(`${kernel}(`);
+		expect(mutable.c.source).toContain(
+			`mal_vm_guard_semantic_epoch(vm, ${GUARDED_SEMANTIC_EPOCH_MASKS["primordial-bindings"]})`,
+		);
+		expect(mutable.c.source).toContain("mal_ops_is_number(");
 	});
 
 	for (const profile of dynamicCallProfiles) {

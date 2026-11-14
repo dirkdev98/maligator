@@ -205,6 +205,7 @@
 				"src/compiler/core/core-platform-constants.ts",
 				"src/compiler/core/core-platform-modules.ts",
 				"src/compiler/core/core-primitive-operations.ts",
+				"src/compiler/core/core-primordial-binding-guards.ts",
 				"src/compiler/core/core-private-field-analysis.ts",
 				"src/compiler/core/core-private-field-elements.ts",
 				"src/compiler/core/core-private-field-facts.ts",

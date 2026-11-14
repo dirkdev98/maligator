@@ -12,7 +12,11 @@ typedef enum MalPropertyFlags {
     MAL_PROPERTY_ENUMERABLE = 1 << 1,
     MAL_PROPERTY_CONFIGURABLE = 1 << 2,
     MAL_PROPERTY_ACCESSOR = 1 << 3,
-    /** Internal marker for a protected global primordial binding. */
+    /**
+     * Internal marker for a global primordial binding such as `Math`. Locked builds
+     * reject every mutation of it; mutable builds let it change but advance the
+     * primordial-bindings protector first.
+     */
     MAL_PROPERTY_PRIMORDIAL = 1 << 4,
     /**
      * Internal marker recording that a data property was writable before its
@@ -26,6 +30,11 @@ typedef enum MalPropertyFlags {
         MAL_PROPERTY_PRIMORDIAL | MAL_PROPERTY_SHADOW_WRITABLE |
         MAL_PROPERTY_LOCKED_SETTER,
 } MalPropertyFlags;
+
+/** Whether `flags` mark a global binding that the locked primordial graph protects. */
+static inline bool mal_property_flags_locked_primordial(MalPropertyFlags flags) {
+    return MAL_PRIMORDIALS_LOCKED && (flags & MAL_PROPERTY_PRIMORDIAL) != 0;
+}
 
 /**
  * JS-flavored property descriptor payload stored over a table entry.

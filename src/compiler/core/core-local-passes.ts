@@ -82,6 +82,7 @@ import type {
 	CoreFunctionPassContext,
 	CorePassBudget,
 } from "./core-pass.ts";
+import { guardPrimordialBindingCalls } from "./core-primordial-binding-guards.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import {
 	coreWeakCollectionKey,
@@ -3646,6 +3647,7 @@ export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass>
 	scalarizeBoundedRestReads,
 	foldFiniteStringConstruction,
 	rewriteExactBuiltinCalls,
+	guardPrimordialBindingCalls,
 	foldPrimitiveCoercions,
 	rewriteNumericIdentities,
 	canonicalizeBlockParameters,
@@ -3707,6 +3709,7 @@ export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> 
 	forwardRestArguments,
 	spreadArrayLiteralArguments,
 	rewriteExactBuiltinCalls,
+	guardPrimordialBindingCalls,
 	foldPrimitiveCoercions,
 	continueGuardedCallArithmetic,
 	afterLateCfgEdits(canonicalizeBlockParameters),

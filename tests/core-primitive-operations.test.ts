@@ -3121,13 +3121,22 @@ describe("primitive operation results", () => {
 					operation.attributes.operation === `Math.${method}`,
 			),
 		).toBe(true);
-		for (const output of [
-			inspect(`Math.${method}(x)`),
-			inspect(`Math.${method}(+x)`, false),
-		])
-			expect(
-				output.core.some((operation) => operation.opcode === "mathUnaryNumber"),
-			).toBe(false);
+		expect(
+			inspect(`Math.${method}(x)`).core.some(
+				(operation) => operation.opcode === "mathUnaryNumber",
+			),
+		).toBe(false);
+		// Mutable primordials reach the kernel only in the copy the binding guard
+		// selects, and keep the loaded call as its twin.
+		const mutable = inspect(`Math.${method}(+x)`, false).core;
+		expect(
+			mutable.some(
+				(operation) =>
+					operation.opcode === "guardSemanticEpoch" &&
+					operation.attributes.family === "primordial-bindings",
+			),
+		).toBe(true);
+		expect(mutable.some((operation) => operation.opcode === "call")).toBe(true);
 	});
 
 	it("limits output and search work before producing a constant", () => {

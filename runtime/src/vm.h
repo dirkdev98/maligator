@@ -1662,6 +1662,7 @@ typedef enum MalSemanticDependencyMask {
     MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS = 1 << 2,
     MAL_SEMANTIC_DEPENDENCY_ARRAY_ITERATION = 1 << 3,
     MAL_SEMANTIC_DEPENDENCY_GENERATOR_PROTOCOL = 1 << 4,
+    MAL_SEMANTIC_DEPENDENCY_PRIMORDIAL_BINDINGS = 1 << 5,
 } MalSemanticDependencyMask;
 
 /**
@@ -1707,6 +1708,15 @@ typedef struct MalSemanticEpochs {
      * generator inherits are the realm's own.
      */
     u64 generator_protocol;
+    /**
+     * Every global primordial binding (`Math`, `Number`, `parseInt`, ...) is still
+     * the global object's data property holding the realm's own value, and no
+     * global lexical declaration shadows one. It also advances with
+     * `watched_methods`, so one comparison admits a call such as `Math.max(...)`
+     * as the known operation: the global load and the method load would both
+     * answer the realm's own values without running code.
+     */
+    u64 primordial_bindings;
 } MalSemanticEpochs;
 
 // Callback facts borrow the rooted builtin arguments. Function indices survive

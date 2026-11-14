@@ -3,6 +3,8 @@ import type { CoreInstructionAttributes } from "./core-ir.ts";
 export const CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE = "guardedInlineFallback";
 /** A generator call that a guarded fusion keeps for its generic twin or a rebuild. */
 export const CORE_GENERATOR_FUSION_TWIN_ATTRIBUTE = "generatorFusionTwin";
+/** A global name load that a primordial-bindings guard already twinned. */
+export const CORE_PRIMORDIAL_BINDING_TWIN_ATTRIBUTE = "primordialBindingTwin";
 export const CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE =
 	"containedDenseArrayElementRead";
 export const CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE = "freshArrayLengthNumber";

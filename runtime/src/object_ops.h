@@ -174,4 +174,10 @@ void mal_invalidate_watched_key(const MalObject *object, MalKey key);
 void mal_invalidate_watched_attributes(void);
 /** Reparenting, or any change no key classifies, breaks every watched protector. */
 void mal_invalidate_watched_protectors(void);
+/**
+ * A global primordial binding (an entry carrying MAL_PROPERTY_PRIMORDIAL in a
+ * mutable build) is about to change value or kind, be deleted, or be shadowed by a
+ * global lexical declaration. Cold mutation-path call.
+ */
+void mal_invalidate_primordial_binding(void);
 

@@ -105,6 +105,11 @@ static inline bool mal_vm_generator_protocol_intact(const MalVm *vm) {
     return vm->semantic_epochs.generator_protocol == MAL_SEMANTIC_EPOCH_INITIAL;
 }
 
+/** See MalSemanticEpochs.primordial_bindings. */
+static inline bool mal_vm_primordial_bindings_intact(const MalVm *vm) {
+    return vm->semantic_epochs.primordial_bindings == MAL_SEMANTIC_EPOCH_INITIAL;
+}
+
 static inline bool mal_vm_semantic_dependencies_hold(
     const MalVm *vm, u8 dependencies
 ) {
@@ -126,6 +131,10 @@ static inline bool mal_vm_semantic_dependencies_hold(
         !mal_vm_generator_protocol_intact(vm)) {
         return false;
     }
+    if ((dependencies & MAL_SEMANTIC_DEPENDENCY_PRIMORDIAL_BINDINGS) != 0 &&
+        !mal_vm_primordial_bindings_intact(vm)) {
+        return false;
+    }
     return true;
 }
 
@@ -137,8 +146,14 @@ static inline bool mal_vm_guard_semantic_epoch(const MalVm *vm, u8 dependencies)
     bool holds = mal_vm_semantic_dependencies_hold(vm, dependencies);
     if (holds) {
         MAL_PERF_COUNT(semantic_guard_admissions);
+        if (dependencies == MAL_SEMANTIC_DEPENDENCY_PRIMORDIAL_BINDINGS) {
+            MAL_PERF_COUNT(primordial_binding_guard_admissions);
+        }
     } else {
         MAL_PERF_COUNT(semantic_guard_rejections);
+        if (dependencies == MAL_SEMANTIC_DEPENDENCY_PRIMORDIAL_BINDINGS) {
+            MAL_PERF_COUNT(primordial_binding_guard_rejections);
+        }
     }
     return holds;
 }

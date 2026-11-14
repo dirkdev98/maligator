@@ -58,6 +58,7 @@ tests/native/object-slot-coallocation.test.ts
 tests/native/own-getter-cache.test.ts
 tests/native/own-table-property-cache.test.ts
 tests/native/perf-stats.test.ts
+tests/native/primordial-binding-guards.test.ts
 tests/native/promise-direct-capability.test.ts
 tests/native/promise-pool.test.ts
 tests/native/property-megamorphic-store.test.ts

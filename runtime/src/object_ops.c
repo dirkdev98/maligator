@@ -41,6 +41,13 @@ void mal_invalidate_watched_protectors(void) {
     mal_semantic_epoch_bump(&epochs->string_iteration);
     mal_semantic_epoch_bump(&epochs->collection_iteration);
     mal_semantic_epoch_bump(&epochs->generator_protocol);
+    mal_semantic_epoch_bump(&epochs->primordial_bindings);
+}
+
+void mal_invalidate_primordial_binding(void) {
+    MalSemanticEpochs *epochs = &mal_vm_from_heap(mal_gc_current_heap())->semantic_epochs;
+    mal_semantic_epoch_bump(&epochs->activity);
+    mal_semantic_epoch_bump(&epochs->primordial_bindings);
 }
 
 enum {
@@ -147,6 +154,7 @@ void mal_invalidate_watched_key(const MalObject *object, MalKey key) {
     mal_semantic_epoch_bump(&epochs->watched_objects);
     if (mal_watched_key_changes_identity(object, key)) {
         mal_semantic_epoch_bump(&epochs->watched_methods);
+        mal_semantic_epoch_bump(&epochs->primordial_bindings);
     }
     // Each realm's intrinsics are watched while another realm is current.
     u8 protectors = 0;
@@ -1038,6 +1046,9 @@ bool mal_object_delete_own(MalObject *object, MalKey key) {
 
     if (!mal_object_desc_is_configurable(lookup.desc)) {
         return false;
+    }
+    if (lookup.desc.flags & MAL_PROPERTY_PRIMORDIAL) {
+        mal_invalidate_primordial_binding();
     }
 
     // SATB: shade the deleted property's descriptor refs. mal_table_delete shades

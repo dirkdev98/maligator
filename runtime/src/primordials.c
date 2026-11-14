@@ -210,9 +210,26 @@ static bool mal_primordials_intrinsic_excluded(i32 slot) {
 }
 #endif
 
+#if !MAL_PRIMORDIALS_LOCKED
+/*
+ * Marks a registered global binding without changing its attributes, so each writer
+ * that replaces, redefines or deletes it breaks the primordial-bindings protector
+ * (see mal_property_entry_write and mal_object_delete_own).
+ */
+static void mal_primordials_watch_global(
+    MalVm *vm, MalObject *global, const byte *name
+) {
+    MalKey key = mal_intrinsic_string_key(vm, name);
+    MalPropertyLookup own = mal_object_get_own(global, key);
+    if (!own.present || (own.desc.flags & MAL_PROPERTY_ACCESSOR)) return;
+    own.desc.flags |= MAL_PROPERTY_PRIMORDIAL;
+    if (mal_object_define_own(global, key, &own.desc) != MAL_DEFINE_OWN_APPLIED) abort();
+}
+#endif
+
 void mal_primordials_lock(MalVm *vm) {
-#if MAL_PRIMORDIALS_LOCKED
     MalObject *global = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
+#if MAL_PRIMORDIALS_LOCKED
 #define MAL_PRIMORDIAL_GLOBAL(name, intrinsic) \
     mal_primordials_protect_global(vm, global, (const byte *) name);
 #include "generated/primordial_registry.inc"
@@ -225,6 +242,12 @@ void mal_primordials_lock(MalVm *vm) {
         mal_primordials_lock_value(vm, vm->intrinsics[slot]);
     }
 #else
-    (void) vm;
+    static const byte *const names[] = {
+#define MAL_PRIMORDIAL_GLOBAL(name, intrinsic) (const byte *) name,
+#include "generated/primordial_registry.inc"
+    };
+    for (usize i = 0; i < countof(names); i++) {
+        mal_primordials_watch_global(vm, global, names[i]);
+    }
 #endif
 }

@@ -4,6 +4,7 @@
 
 #include "./gc.h"
 #include "./heap.h"
+#include "./object_ops.h"
 #include "./perf_stats.h"
 #include "./profile.h"
 
@@ -40,10 +41,21 @@ static MalPropertyDesc mal_property_entry_read(
 
 static void mal_property_entry_write(
     MalTable *table, void *entry, const MalPropertyDesc *desc) {
-    bool was_accessor =
-        (mal_table_entry_property_flags(table, entry)
-         & MAL_PROPERTY_ACCESSOR) != 0;
+    u8 previous_flags = mal_table_entry_property_flags(table, entry);
+    bool was_accessor = (previous_flags & MAL_PROPERTY_ACCESSOR) != 0;
     bool is_accessor = (desc->flags & MAL_PROPERTY_ACCESSOR) != 0;
+    u8 flags = (u8) desc->flags;
+    // Every writer of a global primordial binding ends here, even one that builds a
+    // fresh descriptor. Attributes alone change no load, so an unchanged data value
+    // keeps the marker; anything else breaks the binding protector first.
+    if (previous_flags & MAL_PROPERTY_PRIMORDIAL) {
+        if (!was_accessor && !is_accessor &&
+            mal_table_entry_value(table, entry) == desc->value) {
+            flags |= MAL_PROPERTY_PRIMORDIAL;
+        } else {
+            mal_invalidate_primordial_binding();
+        }
+    }
     void *data = mal_table_entry_data(table, entry);
     if (is_accessor) {
         MalPropertyAccessors *accessors = data;
@@ -64,7 +76,7 @@ static void mal_property_entry_write(
         }
         mal_table_entry_set_value(table, entry, desc->value);
     }
-    mal_table_entry_set_property_flags(table, entry, (u8) desc->flags);
+    mal_table_entry_set_property_flags(table, entry, flags);
 }
 
 MalPropertyLookup mal_property_lookup(const MalTable *table, MalKey key) {

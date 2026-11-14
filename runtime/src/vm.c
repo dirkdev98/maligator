@@ -613,6 +613,7 @@ static void mal_vm_init_engine_state(MalVm *vm) {
         .string_iteration = MAL_SEMANTIC_EPOCH_INITIAL,
         .collection_iteration = MAL_SEMANTIC_EPOCH_INITIAL,
         .generator_protocol = MAL_SEMANTIC_EPOCH_INITIAL,
+        .primordial_bindings = MAL_SEMANTIC_EPOCH_INITIAL,
     };
 	mal_gc_init(vm);
 }

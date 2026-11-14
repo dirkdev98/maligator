@@ -84,9 +84,7 @@ export function knownOperationCallProves(
 }
 
 export function knownOperationCall(id: string, functionId: number): KnownBuiltinCall {
-	const operation = knownOperations()[knownOperationIndex(id) ?? -1];
-	if (operation === undefined) throw new Error(`Unknown semantic operation ${id}`);
-	const proof: FactProof = {
+	return knownOperationCallWithProof(id, {
 		scope: { kind: "function", id: functionId },
 		dependencies: [
 			{ kind: "world", fact: "primordials.locked" },
@@ -94,7 +92,32 @@ export function knownOperationCall(id: string, functionId: number): KnownBuiltin
 		],
 		obligations: [],
 		origin: "captured-primordial-identity",
-	};
+	});
+}
+
+/**
+ * The known call a mutable single-realm program selects after its primordial-bindings
+ * guard held: the global binding and the method it loaded were the realm's own. The
+ * builtin-identity epoch is the part of that guard a later consumer can recheck.
+ */
+export function guardedKnownOperationCall(
+	id: string,
+	functionId: number,
+): KnownBuiltinCall {
+	return knownOperationCallWithProof(id, {
+		scope: { kind: "function", id: functionId },
+		dependencies: [
+			{ kind: "epoch", family: "watched-methods" },
+			{ kind: "world", fact: "realms.disabled" },
+		],
+		obligations: [],
+		origin: "guarded-primordial-binding",
+	});
+}
+
+function knownOperationCallWithProof(id: string, proof: FactProof): KnownBuiltinCall {
+	const operation = knownOperations()[knownOperationIndex(id) ?? -1];
+	if (operation === undefined) throw new Error(`Unknown semantic operation ${id}`);
 	return {
 		operation: id,
 		identity: knownFact(id, proof),
