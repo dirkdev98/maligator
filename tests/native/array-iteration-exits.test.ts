@@ -75,6 +75,12 @@ function describeExits(
 		it("matches Node when interpreted", () => {
 			expect(runToStdout(interpreted, { timeoutMs: 60_000 })).toBe(expected);
 		});
+
+		it("matches Node under interpreted GC stress", () => {
+			expect(runToStdout(interpreted, { env: STRESS_ENV, timeoutMs: 120_000 })).toBe(
+				expected,
+			);
+		});
 	});
 }
 

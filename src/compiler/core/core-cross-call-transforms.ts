@@ -17,6 +17,8 @@ import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import {
 	coreArrayFlatSingleton,
+	coreGuardedArrayFlatSingleton,
+	expandGuardedCoreArrayFlatSingleton,
 	expandCoreArrayFlatSingleton,
 } from "./core-array-flat-singleton.ts";
 import {
@@ -1874,24 +1876,41 @@ function offerFunctionCandidates(
 						iteration,
 						analyses.compilationContext,
 					) && coreArrayFlatSingleton(fn, iteration, inline.function) !== undefined;
+				const guardedSingleton =
+					coreGuardedArrayFlatSingleton(
+						program,
+						fn,
+						site.instruction,
+						iteration,
+						inline.function,
+					) !== undefined;
+				const flatSingleton = singleton || guardedSingleton;
 				const generatedCodeCost =
 					32 +
 					inline.instructions.length +
 					(inline.linear ? 0 : inline.blocks.length) +
-					(singleton ? 8 : 0);
+					(singleton ? 8 : guardedSingleton ? 16 : 0);
 				service.offer({
 					kind: "array-iteration-inline",
 					caller: functionId,
 					site: site.instruction,
 					revision: summaries.version(callback),
-					priorityClass: 2,
+					// Eliminating a wrapper and builtin dispatch precedes callback-only expansion.
+					priorityClass: flatSingleton ? 1 : 2,
 					// The eligibility helper replaces builtin dispatch; credit one callback only.
 					// The method is itself a loop over the callback, wherever it is called from.
-					priorityScore: inlinePriorityScore(
-						exposure * ARRAY_ITERATION_CALLBACK_EXPOSURE,
-						generatedCodeCost,
-						CORE_GENERATED_CODE_COST_WEIGHTS.runtime.admissionCheck,
-					),
+					priorityScore:
+						inlinePriorityScore(
+							exposure * ARRAY_ITERATION_CALLBACK_EXPOSURE,
+							generatedCodeCost,
+							CORE_GENERATED_CODE_COST_WEIGHTS.runtime.admissionCheck,
+						) -
+						(flatSingleton
+							? (exposure *
+									(CORE_GENERATED_CODE_COST_WEIGHTS.runtime.materializationPath +
+										CORE_GENERATED_CODE_COST_WEIGHTS.runtime.helperCall)) /
+								generatedCodeCost
+							: 0),
 					targets: [callback],
 					generatedCodeCost,
 					compilerWorkCost: generatedCodeCost + inline.function.valueCapacity,
@@ -4257,28 +4276,45 @@ function applyCandidate(
 				"array-iteration",
 			);
 			if (inline === undefined || inline.loops) return undefined;
-			const guarded = coreArrayIterationNeedsGuard(
+			const guardedPlan = coreGuardedArrayFlatSingleton(
+				program,
 				fn,
 				candidate.site,
 				iteration,
-				context,
+				inline.function,
 			);
+			const versioned =
+				guardedPlan === undefined
+					? undefined
+					: expandGuardedCoreArrayFlatSingleton(
+							fn,
+							editor,
+							candidate.site,
+							iteration,
+							guardedPlan,
+						);
+			const fastIteration = versioned?.call ?? iteration;
+			const fastSite = versioned?.site ?? candidate.site;
+			const guarded =
+				versioned === undefined &&
+				coreArrayIterationNeedsGuard(fn, candidate.site, iteration, context);
 			const singletonPlan = guarded
 				? undefined
-				: coreArrayFlatSingleton(fn, iteration, inline.function);
+				: (versioned?.plan ?? coreArrayFlatSingleton(fn, iteration, inline.function));
 			const singleton =
 				singletonPlan === undefined
 					? undefined
-					: expandCoreArrayFlatSingleton(fn, editor, iteration, singletonPlan);
+					: expandCoreArrayFlatSingleton(fn, editor, fastIteration, singletonPlan);
 			const expanded = expandCoreArrayIterationCall(
 				fn,
 				editor,
-				candidate.site,
-				singleton?.call ?? iteration,
+				fastSite,
+				singleton?.call ?? fastIteration,
 				guarded,
 				singleton,
 			);
-			if (singleton !== undefined) editor.removeInstruction(singleton.lookup);
+			if (singleton !== undefined && versioned === undefined)
+				editor.removeInstruction(singleton.lookup);
 			const applied = applyLinearInline(
 				program,
 				{ ...candidate, kind: "inline", site: expanded.callback },
@@ -4290,7 +4326,7 @@ function applyCandidate(
 			// The capture proof keeps the scope chain stable until the method call.
 			// Once the fast invocation disappears, only the fallback needs the closure.
 			if (
-				guarded &&
+				(guarded || versioned !== undefined) &&
 				captureContext !== undefined &&
 				fn.valueUseCount(iteration.callback) === 1 &&
 				fn.kernel.valueHandlerUseCount(iteration.callback) === 0
@@ -4308,11 +4344,11 @@ function applyCandidate(
 				instructionsIntroduced:
 					expanded.instructionsIntroduced +
 					applied.instructionsIntroduced +
-					(singleton === undefined ? 0 : 2),
+					(singleton === undefined ? 0 : versioned === undefined ? 2 : 15),
 				blocksIntroduced:
 					expanded.blocksIntroduced +
 					applied.blocksIntroduced +
-					(singleton === undefined ? 0 : 2),
+					(singleton === undefined ? 0 : versioned === undefined ? 2 : 5),
 			};
 		}
 		case "finite-dispatch":

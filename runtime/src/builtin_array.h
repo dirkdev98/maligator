@@ -264,6 +264,20 @@ static inline __attribute__((always_inline)) bool mal_builtin_array_iteration_el
     return mal_builtin_array_default_species(vm, receiver);
 }
 
+/** 0 falls back; 1 admits a scalar; 2 admits a non-reentrant Array snapshot. */
+u32 mal_builtin_array_flat_iteration_guard(MalVm *vm, MalValue element, u32 method);
+
+/** Shares the internal guard intrinsic without adding observable primordial objects. */
+static inline __attribute__((always_inline)) MalValue mal_builtin_array_iteration_guard_known(
+    MalVm *vm, MalValue method, MalValue receiver, MalValue method_id, MalValue callback
+) {
+    f64 id = mal_ops_number_as_f64(method_id);
+    if (id >= 16 && id <= 18) {
+        return mal_ops_number_value((f64) mal_builtin_array_flat_iteration_guard(vm, receiver, (u32) id - 16));
+    }
+    return mal_value_new_boolean(mal_builtin_array_iteration_eligible_known(vm, method, receiver, method_id, callback));
+}
+
 bool mal_builtin_array_at_try_direct(
     MalVm *vm,
     MalValue callee,

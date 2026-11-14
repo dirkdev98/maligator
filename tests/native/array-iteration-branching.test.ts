@@ -15,6 +15,7 @@ const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" })
 
 describe.each([
 	{ primordials: "mutable", realms: false },
+	{ primordials: "mutable", realms: true },
 	{ primordials: "locked", realms: false },
 	{ primordials: "locked", realms: true },
 ] as const)(

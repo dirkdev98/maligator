@@ -87,10 +87,38 @@ describe("private singleton flat iteration", () => {
 		{ primordials: "mutable" as const, realms: false },
 		{ primordials: "locked" as const, realms: true },
 		{ primordials: "mutable" as const, realms: true },
-	])("retains allocations with world %j", (engine) => {
+	])("versions the full generic sequence with world %j", (engine) => {
 		const result = operations("[input].flat().some(value => value === 0)", engine);
 		expect(result.some(isArray)).toBe(false);
-		expect(result.some(({ opcode }) => opcode === "createArray")).toBe(true);
+		expect(
+			result.filter(
+				({ opcode, attributes }) =>
+					opcode === "loadIntrinsic" &&
+					attributes.intrinsic === "__arrayIterationEligible",
+			),
+		).toHaveLength(1);
+		expect(
+			result.some(
+				({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 17,
+			),
+		).toBe(true);
+		const fallback = result.find(
+			({ opcode, attributes }) =>
+				opcode === "call" && attributes.guardedInlineFallback === true,
+		)!;
+		expect(fallback).toBeDefined();
+		expect(
+			result
+				.filter(({ opcode }) => opcode === "createFunction")
+				.map(({ block }) => block),
+		).toEqual([fallback.block]);
+		expect(result.filter(({ opcode }) => opcode === "createArray")).toHaveLength(2);
+		expect(
+			result.some(
+				({ opcode, attributes }) =>
+					opcode === "loadIntrinsic" && attributes.intrinsic === "__arrayFlatMapAppend",
+			),
+		).toBe(true);
 	});
 
 	it.each([
@@ -105,5 +133,21 @@ describe("private singleton flat iteration", () => {
 		const result = operations(expression);
 		expect(result.some(isArray)).toBe(false);
 		expect(result.some(({ opcode }) => opcode === "createArray")).toBe(true);
+	});
+	it.each([
+		"[input].flat().some((value, index, array) => array.length === 1)",
+		"[input].flat().some(function () { return arguments[2].length === 1; })",
+		"[input].flat().some((...args) => args[2].length === 1)",
+		"[input].flat(0).some(value => value === 0)",
+		"[input, input].flat().some(value => value === 0)",
+		"[input].flat().some(value => value === 0, globalThis.effect())",
+		"((source) => { source.constructor = class extends Array {}; return source.flat().some(value => value === 0); })([input])",
+	])("retains observable generic sequencing: %s", (expression) => {
+		const result = operations(expression, { primordials: "mutable", realms: true });
+		expect(
+			result.some(
+				({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 17,
+			),
+		).toBe(false);
 	});
 });

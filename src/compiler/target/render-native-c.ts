@@ -14478,7 +14478,7 @@ class NativeInstructionEmission {
 			const operands = args.map((arg) => this.boxedOperand(arg)).join(", ");
 			return [
 				`if (${callee} == vm->intrinsics[MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE]) {`,
-				`  r${instruction.dst} = ${callResult(`mal_value_new_boolean(mal_builtin_array_iteration_eligible_known(vm, ${operands}))`)};`,
+				`  r${instruction.dst} = ${callResult(`mal_builtin_array_iteration_guard_known(vm, ${operands})`)};`,
 				`} else {`,
 				`  MalCompletion ${tmp} = mal_vm_call_cached(vm, ${callee}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 				`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,

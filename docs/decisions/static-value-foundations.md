@@ -1097,15 +1097,24 @@ and [Set forEach](https://tc39.es/ecma262/multipage/keyed-collections.html#sec-s
 whose external calls occur only at the callback invocation.
 
 Private singleton arrays consumed by default-depth `flat` and inlined Array
-iteration can remain scalar when the element is not an Array. Locked primordials and
-disabled realms prove that the wrapper's method and species lookups cannot call user
-code. The callback must leave its array argument unobserved. A Proxy-aware `IsArray`
-check runs at the original `flat` call, preserving revoked-Proxy exceptions before
-later argument evaluation. The Array branch retains both allocations and completes
-flattening before the first callback, preserving holes, getter order and the snapshot
-seen when callbacks mutate the input. Scalar elements flow through ordinary SSA values
-and the existing callback inliner, so root-map liveness covers collecting callbacks.
-Mutable primordials and enabled realms retain the allocated path. This follows
+iteration can remain scalar when the element is not an Array. The callback must
+leave its array argument unobserved. Locked primordials with disabled realms prove
+that the wrapper's method and species lookups cannot call user code. That path uses
+a Proxy-aware `IsArray` check at the original `flat` call, preserving revoked-Proxy
+exceptions before later argument evaluation.
+
+Mutable primordials and enabled realms use the existing iteration guard intrinsic to
+version the complete flattening and iteration sequence. Its VM-wide watched-method and
+Array-elements epochs protect the prototype chain, method identities and species lookups
+across realms. The wrapper is created in the executing realm, so the protected lookups
+select that realm's original builtin functions and default species. Scalars need neither
+Array allocation. Plain current-realm Arrays use the flatMap append intrinsic to build
+one complete, hole-compacted snapshot before the callback. Proxies, Arrays with foreign
+prototypes, subclasses and indexed accessors take the original lookup and call sequence.
+The compiler admits only an effect-free seam between flattening and callback argument
+evaluation, so the guard remains valid until iteration starts. Scalar elements flow
+through ordinary SSA values and the existing callback inliner, so root-map liveness
+covers collecting callbacks. This follows
 [FlattenIntoArray](https://tc39.es/ecma262/multipage/indexed-collections.html#sec-flattenintoarray).
 
 Native return completion plans independently consume the returned value's kind.

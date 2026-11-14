@@ -1,10 +1,10 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { emitProgramImage } from "../../src/compiler/target/emit-program-image.ts";
 import {
-	assertResultPass,
 	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
@@ -17,6 +17,7 @@ describe("inline Array iteration expansion", () => {
 	let compiled: string;
 	let interpreted: string;
 	let source: string;
+	let expected: string;
 	beforeAll(() => {
 		const pair = buildBackendPairFromOneProgramImage({
 			fixture: "tests/local/array-iteration-inline.js",
@@ -25,18 +26,24 @@ describe("inline Array iteration expansion", () => {
 		});
 		({ compiled, interpreted } = pair);
 		source = emitProgramImage(pair.programImage, { compiled: true });
+		expected = execFileSync(process.execPath, ["tests/local/array-iteration-inline.js"], {
+			encoding: "utf8",
+		});
 	}, 600_000);
 
 	it("defines map and filter results through the dense vector", () => {
 		expect(source).toContain("mal_vm_array_try_define_index(");
-		assertResultPass(runToStdout(compiled));
+		expect(runToStdout(compiled)).toBe(expected);
 	});
 
 	it("preserves semantics under compiled GC stress", () => {
-		assertResultPass(runToStdout(compiled, { env: STRESS_ENV }));
+		expect(runToStdout(compiled, { env: STRESS_ENV })).toBe(expected);
 	});
 
 	it("preserves interpreted semantics", () => {
-		assertResultPass(runToStdout(interpreted));
+		expect(runToStdout(interpreted)).toBe(expected);
+	});
+	it("matches Node under interpreted GC stress", () => {
+		expect(runToStdout(interpreted, { env: STRESS_ENV })).toBe(expected);
 	});
 });

@@ -5681,6 +5681,22 @@ static bool mal_array_default_species(MalVm *vm, MalValue recv) {
 #endif
 }
 
+u32 mal_builtin_array_flat_iteration_guard(MalVm *vm, MalValue element, u32 method) {
+    // A private wrapper is created in the executing realm. The VM-wide watched
+    // epoch covers every realm's Array.prototype methods, constructor and species;
+    // while intact, their original callees therefore also belong to this realm.
+    // The elements epoch additionally rules out inherited indices and reparenting.
+    if (method > 2 || !mal_vm_watched_methods_intact(vm) ||
+        !mal_vm_array_elements_intact(vm)) return 0;
+    // Proxy IsArray can throw, and flattening a Proxy can run arbitrary traps.
+    // Defer both to the original sequence, before callback argument evaluation.
+    if (mal_value_is_proxy_object(element)) return 0;
+    if (!mal_value_is_array_object(element)) return 1;
+    // Complete the snapshot before iteration. Accessors, foreign prototypes and
+    // subclasses stay generic because their reads can invalidate the site guard.
+    return mal_builtin_array_clean_dense(vm, element) != nullptr ? 2 : 0;
+}
+
 bool mal_builtin_array_exact_map_guard(
     MalVm *vm, MalValue callee, MalValue receiver
 ) {
@@ -5947,8 +5963,8 @@ static MalValue mal_builtin_array_iteration_eligible(MalVm *vm, MalValue this_va
     (void) this_value;
     (void) new_target;
     (void) callee;
-    return mal_value_new_boolean(
-        arg_count >= 4 && mal_builtin_array_iteration_eligible_values(vm, args));
+    if (arg_count < 4) return mal_value_new_boolean(false);
+    return mal_builtin_array_iteration_guard_known(vm, args[0], args[1], args[2], args[3]);
 }
 
 /**
