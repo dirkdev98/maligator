@@ -155,7 +155,11 @@ const c = [
 	'#include "defaults.h"',
 	'#define MAL_UNICODE_VERSION "18.0.0"',
 ];
-function cArray(name: string, type: "u8" | "u32", values: ReadonlyArray<number>): string {
+function cArray(
+	name: string,
+	type: "u8" | "u16" | "u32",
+	values: ReadonlyArray<number>,
+): string {
 	return `static const ${type} mal_unicode_${name}[] = {\n${Array.from({ length: Math.ceil(values.length / 16) }, (_, i) => `    ${values.slice(i * 16, i * 16 + 16).join(", ")},`).join("\n")}\n};`;
 }
 for (const [name, values] of Object.entries(data)) {
@@ -172,6 +176,40 @@ for (const [name, values] of Object.entries(data)) {
 				values,
 			),
 		);
+}
+// Case mapping reads a two-stage index instead of binary-searching its table: each block
+// of code points names a deduplicated row of entries, each zero or its mapping row plus one.
+const caseBlockBits = 7;
+c.push(`#define MAL_UNICODE_CASE_BLOCK_BITS ${caseBlockBits}`);
+for (const name of ["lower", "upper"] as const) {
+	const table = data[name]!;
+	const blockSize = 1 << caseBlockBits;
+	const entries = new Uint16Array(
+		(Math.floor(table.at(-3)! / blockSize) + 1) * blockSize,
+	);
+	for (let row = 0; row < table.length / 3; row++) {
+		if (row + 1 > 0xffff) throw new Error("Case mapping row exceeds u16");
+		entries[table[row * 3]!] = row + 1;
+	}
+	const blocks: Array<number> = [];
+	const blockEntries: Array<number> = [];
+	const blockIds = new Map<string, number>();
+	for (let offset = 0; offset < entries.length; offset += blockSize) {
+		const block = [...entries.subarray(offset, offset + blockSize)];
+		const key = block.join(",");
+		let id = blockIds.get(key);
+		if (id === undefined) {
+			id = blockIds.size;
+			if (id > 255) throw new Error("Case mapping block index exceeds u8");
+			blockIds.set(key, id);
+			blockEntries.push(...block);
+		}
+		blocks.push(id);
+	}
+	c.push(
+		cArray(`${name}_blocks`, "u8", blocks),
+		cArray(`${name}_entries`, "u16", blockEntries),
+	);
 }
 ts.push(...unicodeTablesModule(data));
 mkdirSync(output, { recursive: true });

@@ -68,6 +68,7 @@ tests/native/regexp-direct-test.test.ts
 tests/native/shape-case-load.test.ts
 tests/native/string-char-code-at-direct.test.ts
 tests/native/string-cursor-frontier.test.ts
+tests/native/string-flat-transforms.test.ts
 tests/native/string-rope-followups.test.ts
 tests/native/string-search-followups.test.ts
 tests/native/string-split-fresh-array.test.ts

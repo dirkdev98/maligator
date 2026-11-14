@@ -138,6 +138,9 @@ typedef struct MalPerfStats {
     u64 intl_collation_cache_misses;
     u64 string_case_changed_allocations;
     u64 string_case_changed_code_units;
+    u64 string_case_fixed_results;
+    u64 string_replace_flat_results;
+    u64 string_split_flat_results;
     u64 string_allocations;
     u64 string_code_units;
     u64 string_length_0_allocations;

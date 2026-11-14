@@ -268,8 +268,8 @@ static inline bool mal_builtin_string_word_may_contain_unit(u64 word, c16 unit) 
 }
 
 /**
- * Find one UTF-16 code unit in [from, end). Fixed-size memcpy permits
- * unaligned input while still compiling to a single word load.
+ * Find one UTF-16 code unit in [from, end). Eight-unit blocks build a match mask the
+ * compiler vectorizes, so a short scan resolves its position without per-lane branches.
  */
 static usize mal_builtin_string_find_unit_words(
     const c16 *units,
@@ -277,19 +277,14 @@ static usize mal_builtin_string_find_unit_words(
     usize end,
     c16 unit
 ) {
-    while (end - from >= MAL_STRING_UNIT_SCAN_LANES) {
+    for (; end - from >= 8; from += 8) {
         MAL_PERF_COUNT(string_unit_scan_word_blocks);
-        u64 word;
-        memcpy(&word, units + from, sizeof(word));
-        if (mal_builtin_string_word_may_contain_unit(word, unit)) {
+        u32 mask = 0;
+        for (u32 lane = 0; lane < 8; lane++) mask |= (u32) (units[from + lane] == unit) << lane;
+        if (mask != 0) {
             MAL_PERF_COUNT(string_unit_scan_candidate_blocks);
-            for (usize lane = 0; lane < MAL_STRING_UNIT_SCAN_LANES; lane++) {
-                if (units[from + lane] == unit) {
-                    return from + lane;
-                }
-            }
+            return from + (usize) __builtin_ctz(mask);
         }
-        from += MAL_STRING_UNIT_SCAN_LANES;
     }
     while (from < end) {
         MAL_PERF_COUNT(string_unit_scan_scalar_code_units);
@@ -416,6 +411,25 @@ static usize mal_builtin_string_segment_reverse_find_unit(
         }
     }
     return MAL_STRING_UNIT_NOT_FOUND;
+}
+
+// Finds a nonempty needle at or after `from`; returns the haystack length when absent.
+static usize mal_builtin_string_segment_find(
+    const MalStringSegment *haystack, usize from, const MalStringSegment *needle
+) {
+    if (needle->length > haystack->length) return haystack->length;
+    c16 first = mal_string_segment_code_unit_at(needle, 0);
+    MalStringSegment starts = *haystack;
+    starts.length = haystack->length - needle->length + 1;
+    while (from < starts.length) {
+        usize candidate = mal_builtin_string_segment_find_unit(&starts, from, first);
+        if (candidate == starts.length) break;
+        if (mal_builtin_string_segments_equal(haystack, candidate + 1, needle, 1, needle->length - 1)) {
+            return candidate;
+        }
+        from = candidate + 1;
+    }
+    return haystack->length;
 }
 
 #define MAL_STRING_SEARCH_INLINE_UNITS 32u
@@ -2767,13 +2781,70 @@ static MalValue mal_builtin_string_unicode_case(
     return mal_builtin_string_finish_text(vm, &output);
 }
 
+static MalValue mal_builtin_string_allocation_failure(MalVm *vm) {
+    mal_vm_throw_allocation_error(vm);
+    return mal_value_new_undefined();
+}
+
+// Allocates the result once, Latin-1 whenever every mapped unit fits; only expanding
+// mappings take the growing text buffer. A string longer than a cell converts into the
+// RAW buffer it adopts, even if the text turns out unchanged.
+static MalValue mal_builtin_string_root_case_utf16(
+    MalVm *vm, MalString *string, usize start, const c16 *source, usize length, bool upper
+) {
+    c16 stack[MAL_STRING_CELL_CODE_UNITS];
+    c16 *units = length <= countof(stack) ? stack
+        : mal_heap_try_alloc_raw_profiled(&vm->heap, length * sizeof(c16), MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    if (units == nullptr) return mal_builtin_string_allocation_failure(vm);
+    bool changed = false;
+    c16 aggregate;
+    bool fixed = mal_unicode_case_fixed(source, length, upper, units, &changed, &aggregate);
+    if (!fixed || !changed) {
+        if (units != stack) gc_free_raw(&vm->heap, units);
+        if (!fixed) {
+            return mal_builtin_string_unicode_case(
+                vm, string, start, source, length, upper, MAL_UNICODE_LOCALE_ROOT);
+        }
+        MAL_PERF_COUNT(string_case_reuses);
+        return mal_builtin_string_slice(vm, string, start, length);
+    }
+    MAL_PERF_COUNT(string_case_fixed_results);
+    MAL_PERF_COUNT(string_case_changed_allocations);
+    MAL_PERF_ADD(string_case_changed_code_units, length);
+    if (aggregate > 0xff) {
+        return mal_value_from_string(units == stack
+            ? mal_string_new_copy(&vm->heap, units, length)
+            : mal_string_new_utf16_owned(&vm->heap, units, length));
+    }
+    MalString *result;
+    u8 *narrow;
+    if (length <= MAL_STRING_CELL_LATIN1_CODE_UNITS) {
+        result = mal_string_new_latin1_cell(&vm->heap, length);
+        narrow = mal_string_inline_latin1(result);
+    } else {
+        narrow = mal_heap_try_alloc_raw_profiled(&vm->heap, length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+        result = nullptr;
+        if (narrow == nullptr) {
+            gc_free_raw(&vm->heap, units);
+            return mal_builtin_string_allocation_failure(vm);
+        }
+    }
+    for (usize i = 0; i < length; i++) narrow[i] = (u8) units[i];
+    if (units != stack) gc_free_raw(&vm->heap, units);
+    return mal_value_from_string(result != nullptr ? result
+        : mal_string_new_latin1_owned(&vm->heap, narrow, length));
+}
+
 // The general path's Unicode scratch would make every short ASCII conversion save and
 // restore every callee-saved register and guard the stack.
 static __attribute__((noinline)) MalValue mal_builtin_string_case_range_general(MalVm *vm, MalString *string, usize start, usize length, bool to_upper, MalUnicodeLocale locale) {
     MalStringSegment flat;
+    bool contiguous = mal_string_try_get_segment(string, start, length, &flat);
+    if (locale == MAL_UNICODE_LOCALE_ROOT && contiguous && !flat.latin1) {
+        return mal_builtin_string_root_case_utf16(vm, string, start, flat.utf16_units, length, to_upper);
+    }
     u8 ascii_units[256];
-    if (locale == MAL_UNICODE_LOCALE_ROOT && length <= sizeof(ascii_units) &&
-        mal_string_try_get_segment(string, start, length, &flat) && flat.latin1) {
+    if (locale == MAL_UNICODE_LOCALE_ROOT && length <= sizeof(ascii_units) && contiguous && flat.latin1) {
         bool ascii = true;
         bool changed = false;
         usize i = 0;
@@ -2839,8 +2910,9 @@ static __attribute__((noinline)) MalValue mal_builtin_string_case_range_general(
         c16 *range_scratch, *wide_scratch;
         MalStringSegment segment = mal_string_range_segment(string, start, length, stack, &range_scratch);
         const c16 *source = mal_string_segment_utf16(&segment, stack, &wide_scratch);
-        MalValue result = mal_builtin_string_unicode_case(
-            vm, string, start, source, length, to_upper, locale);
+        MalValue result = locale == MAL_UNICODE_LOCALE_ROOT
+            ? mal_builtin_string_root_case_utf16(vm, string, start, source, length, to_upper)
+            : mal_builtin_string_unicode_case(vm, string, start, source, length, to_upper, locale);
         free(wide_scratch);
         free(range_scratch);
         return result;
@@ -3539,6 +3611,146 @@ static bool mal_builtin_string_split_plan_matches(
     return complete;
 }
 
+// Pieces up to the inline length copy from the leaf, narrowed when they fit Latin-1;
+// longer pieces keep the slice rules.
+static inline MalValue mal_builtin_string_split_flat_piece(
+    MalVm *vm, MalString *string, const MalStringSegment *subject, usize start, usize length
+) {
+    if (length == 0) return mal_builtin_string_empty(vm);
+    if (length > MAL_STRING_INLINE_LATIN1_CODE_UNITS || length == subject->length) {
+        return mal_builtin_string_slice(vm, string, start, length);
+    }
+    if (subject->latin1) {
+        return mal_value_from_string(
+            mal_string_new_inline_latin1(&vm->heap, subject->latin1_units + start, length));
+    }
+    const c16 *units = subject->utf16_units + start;
+    u8 narrow[MAL_STRING_INLINE_LATIN1_CODE_UNITS];
+    c16 aggregate = 0;
+    for (usize i = 0; i < length; i++) {
+        aggregate |= units[i];
+        narrow[i] = (u8) units[i];
+    }
+    return mal_value_from_string(aggregate <= 0xff
+        ? mal_string_new_inline_latin1(&vm->heap, narrow, length)
+        : mal_string_new_copy(&vm->heap, units, length));
+}
+
+/**
+ * Record positions of `unit` from `*cursor` until `room` are found or the segment ends,
+ * leaving `*cursor` after the last recorded position or at the end. Fixed-width blocks
+ * build a match mask the compiler vectorizes; separators are usually a few units apart.
+ */
+static usize mal_builtin_string_segment_unit_positions(
+    const MalStringSegment *segment, usize *cursor, c16 unit, u32 *positions, usize room
+) {
+    usize length = segment->length, index = *cursor, count = 0;
+    if (segment->latin1 && unit > 0xff) index = length;
+    else if (segment->latin1) {
+        const u8 *units = segment->latin1_units;
+        for (; length - index >= 16; index += 16) {
+            u32 mask = 0;
+            for (u32 lane = 0; lane < 16; lane++) mask |= (u32) (units[index + lane] == unit) << lane;
+            for (; mask != 0; mask &= mask - 1) {
+                positions[count] = (u32) (index + (usize) __builtin_ctz(mask));
+                if (++count == room) goto full;
+            }
+        }
+        for (; index < length; index++) {
+            if (units[index] != unit) continue;
+            positions[count] = (u32) index;
+            if (++count == room) goto full;
+        }
+    } else {
+        const c16 *units = segment->utf16_units;
+        for (; length - index >= 8; index += 8) {
+            u32 mask = 0;
+            for (u32 lane = 0; lane < 8; lane++) mask |= (u32) (units[index + lane] == unit) << lane;
+            for (; mask != 0; mask &= mask - 1) {
+                positions[count] = (u32) (index + (usize) __builtin_ctz(mask));
+                if (++count == room) goto full;
+            }
+        }
+        for (; index < length; index++) {
+            if (units[index] != unit) continue;
+            positions[count] = (u32) index;
+            if (++count == room) goto full;
+        }
+    }
+    *cursor = length;
+    return count;
+full:
+    *cursor = positions[count - 1] + 1u;
+    return count;
+}
+
+#define MAL_STRING_SPLIT_FLAT_INLINE_PIECES 64u
+
+// Splits one leaf by a nonempty separator: one search pass records the piece ends, then
+// the pieces are created and the result array is allocated once at its exact length.
+static MalValue mal_builtin_string_split_flat(
+    MalVm *vm, MalString *string, const MalStringSegment *subject,
+    const MalStringSegment *separator, u32 limit
+) {
+    usize length = subject->length;
+    usize separator_length = separator->length;
+    u32 inline_ends[MAL_STRING_SPLIT_FLAT_INLINE_PIECES];
+    MalValue inline_pieces[MAL_STRING_SPLIT_FLAT_INLINE_PIECES];
+    u32 *ends = inline_ends;
+    MalValue *pieces = inline_pieces;
+    usize capacity = MAL_STRING_SPLIT_FLAT_INLINE_PIECES;
+    usize match_count = 0;
+    MalValue result = MAL_VALUE_UNDEFINED;
+    c16 unit = mal_string_segment_code_unit_at(separator, 0);
+    for (usize from = 0; match_count < limit;) {
+        if (match_count == capacity) {
+            capacity *= 2;
+            u32 *grown = ends == inline_ends ? malloc(capacity * sizeof(u32))
+                : realloc(ends, capacity * sizeof(u32));
+            if (grown == nullptr) {
+                mal_vm_throw_allocation_error(vm);
+                goto done;
+            }
+            if (ends == inline_ends) memcpy(grown, inline_ends, sizeof(inline_ends));
+            ends = grown;
+        }
+        if (separator_length == 1) {
+            usize room = capacity - match_count;
+            if (room > limit - match_count) room = limit - match_count;
+            match_count += mal_builtin_string_segment_unit_positions(
+                subject, &from, unit, ends + match_count, room);
+            if (from == length) break;
+            continue;
+        }
+        usize match = mal_builtin_string_segment_find(subject, from, separator);
+        if (match == length) break;
+        ends[match_count++] = (u32) match;
+        from = match + separator_length;
+    }
+    MAL_PERF_COUNT(string_split_flat_results);
+    MAL_PERF_ADD(string_split_planned_matches, match_count);
+    usize piece_count = match_count == limit ? limit : match_count + 1;
+    if (piece_count > MAL_STRING_SPLIT_FLAT_INLINE_PIECES) {
+        pieces = malloc(piece_count * sizeof(MalValue));
+        if (pieces == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            goto done;
+        }
+    }
+    // Allocation only requests a collection; none runs before the array holds the pieces.
+    for (usize i = 0, start = 0; i < piece_count; i++) {
+        usize end = i < match_count ? ends[i] : length;
+        pieces[i] = mal_builtin_string_split_flat_piece(vm, string, subject, start, end - start);
+        start = end + separator_length;
+    }
+    result = mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), pieces, (u32) piece_count));
+done:
+    if (ends != inline_ends) free(ends);
+    if (pieces != inline_pieces) free(pieces);
+    return result;
+}
+
 static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     // @@split dispatch — only when the separator is an Object (the spec accesses
     // @@split solely "if separator is an Object", never on a string primitive).
@@ -3555,6 +3767,20 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
         if (dispatched != 0) {
             return out;
         }
+    }
+    // String operands and a primitive limit have no observable coercions to order.
+    f64 limit_number = (f64) UINT32_MAX;
+    MalStringSegment subject_units, separator_units;
+    if (mal_value_is_string(this_value) && mal_value_is_string(separator_value) &&
+        mal_string_length(mal_value_to_string(separator_value)) != 0 &&
+        (arg_count < 2 || mal_value_is_undefined(args[1]) ||
+            mal_ops_try_primitive_to_number(args[1], &limit_number)) &&
+        mal_string_try_get_segment(mal_value_to_string(this_value), 0,
+            mal_string_length(mal_value_to_string(this_value)), &subject_units) &&
+        mal_string_try_get_segment(mal_value_to_string(separator_value), 0,
+            mal_string_length(mal_value_to_string(separator_value)), &separator_units)) {
+        return mal_builtin_string_split_flat(vm, mal_value_to_string(this_value), &subject_units,
+            &separator_units, mal_ops_number_to_uint32(limit_number));
     }
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
@@ -4013,6 +4239,165 @@ static MalValue mal_builtin_string_replace_literal(
     return mal_builtin_string_finish_text(vm, &output);
 }
 
+// Copies `count` units of a segment to output position `at` in either encoding; a narrowing
+// copy requires the units to fit Latin-1.
+static inline void mal_builtin_string_segment_copy_out(
+    const MalStringSegment *source, usize offset, usize count, void *output, usize at, bool latin1
+) {
+    if (latin1 && source->latin1) {
+        mal_text_buffer_copy_bytes((u8 *) output + at, source->latin1_units + offset, count);
+    } else if (!latin1 && !source->latin1) {
+        mal_text_buffer_copy_bytes((c16 *) output + at, source->utf16_units + offset, count * sizeof(c16));
+    } else if (latin1) {
+        for (usize i = 0; i < count; i++) ((u8 *) output)[at + i] = (u8) source->utf16_units[offset + i];
+    } else {
+        for (usize i = 0; i < count; i++) ((c16 *) output)[at + i] = source->latin1_units[offset + i];
+    }
+}
+
+static c16 mal_builtin_string_segment_aggregate(const MalStringSegment *segment, usize offset, usize count) {
+    if (segment->latin1) return 0;
+    c16 aggregate = 0;
+    for (usize i = 0; i < count; i++) aggregate |= segment->utf16_units[offset + i];
+    return aggregate;
+}
+
+#define MAL_STRING_REPLACE_INLINE_MATCHES 64u
+
+// A literal replacement of a search string within one leaf: a single search pass records
+// the matches, then the result is allocated once at its exact length in the narrowest
+// encoding, so a removed match can leave a Latin-1 result.
+static MalValue mal_builtin_string_replace_flat(
+    MalVm *vm, MalString *string, usize source_start, const MalStringSegment *subject,
+    const MalStringSegment *search, const MalStringSegment *replacement, bool all
+) {
+    usize length = subject->length;
+    usize search_length = search->length;
+    usize replacement_length = replacement->length;
+    if (search_length == replacement_length &&
+        mal_builtin_string_segments_equal(search, 0, replacement, 0, search_length)) {
+        return mal_builtin_string_slice(vm, string, source_start, length);
+    }
+    u32 inline_matches[MAL_STRING_REPLACE_INLINE_MATCHES];
+    u32 *matches = inline_matches;
+    usize match_count = 0;
+    MalValue result;
+    if (search_length == 0) {
+        // Every code unit boundary matches; positions are implicit.
+        match_count = all ? length + 1 : 1;
+    } else {
+        usize capacity = countof(inline_matches);
+        for (usize from = 0;;) {
+            usize match = mal_builtin_string_segment_find(subject, from, search);
+            if (match == length) break;
+            if (match_count == capacity) {
+                capacity *= 2;
+                u32 *grown = matches == inline_matches ? malloc(capacity * sizeof(u32))
+                    : realloc(matches, capacity * sizeof(u32));
+                if (grown == nullptr) {
+                    mal_vm_throw_allocation_error(vm);
+                    result = mal_value_new_undefined();
+                    goto done;
+                }
+                if (matches == inline_matches) memcpy(grown, inline_matches, sizeof(inline_matches));
+                matches = grown;
+            }
+            matches[match_count++] = (u32) match;
+            if (!all) break;
+            from = match + search_length;
+        }
+        if (match_count == 0) return mal_builtin_string_slice(vm, string, source_start, length);
+    }
+    usize added, result_length;
+    if (!mal_checked_size_multiply(match_count, replacement_length, MAL_STRING_MAX_CODE_UNITS, &added) ||
+        !mal_checked_size_add(length - match_count * search_length, added, MAL_STRING_MAX_CODE_UNITS, &result_length)) {
+        mal_builtin_string_throw_length(vm);
+        result = mal_value_new_undefined();
+        goto done;
+    }
+    if (result_length == 0) {
+        result = mal_builtin_string_empty(vm);
+        goto done;
+    }
+    c16 aggregate = mal_builtin_string_segment_aggregate(replacement, 0, replacement_length);
+    if (!subject->latin1 && aggregate <= 0xff && search_length == 0) {
+        aggregate |= mal_builtin_string_segment_aggregate(subject, 0, length);
+    } else if (!subject->latin1 && aggregate <= 0xff) {
+        for (usize i = 0, kept = 0; i <= match_count && aggregate <= 0xff; i++) {
+            usize end = i < match_count ? matches[i] : length;
+            aggregate |= mal_builtin_string_segment_aggregate(subject, kept, end - kept);
+            kept = end + search_length;
+        }
+    }
+    bool latin1 = aggregate <= 0xff;
+    c16 stack[MAL_STRING_CELL_CODE_UNITS];
+    MalString *cell = nullptr;
+    void *output;
+    if (latin1 && result_length <= MAL_STRING_CELL_LATIN1_CODE_UNITS) {
+        cell = mal_string_new_latin1_cell(&vm->heap, result_length);
+        output = mal_string_inline_latin1(cell);
+    } else if (!latin1 && result_length <= countof(stack)) {
+        output = stack;
+    } else {
+        output = mal_heap_try_alloc_raw_profiled(&vm->heap,
+            result_length * (latin1 ? sizeof(u8) : sizeof(c16)), MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+        if (output == nullptr) {
+            result = mal_builtin_string_allocation_failure(vm);
+            goto done;
+        }
+    }
+    usize position = 0;
+    if (search_length == 0 && !all) {
+        mal_builtin_string_segment_copy_out(replacement, 0, replacement_length, output, 0, latin1);
+        mal_builtin_string_segment_copy_out(subject, 0, length, output, replacement_length, latin1);
+        position = replacement_length + length;
+    } else if (search_length == 0) {
+        for (usize i = 0; i < match_count; i++) {
+            mal_builtin_string_segment_copy_out(replacement, 0, replacement_length, output, position, latin1);
+            position += replacement_length;
+            if (i < length) mal_builtin_string_segment_copy_out(subject, i, 1, output, position++, latin1);
+        }
+    } else {
+        usize kept = 0;
+        for (usize i = 0; i < match_count; i++) {
+            mal_builtin_string_segment_copy_out(subject, kept, matches[i] - kept, output, position, latin1);
+            position += matches[i] - kept;
+            mal_builtin_string_segment_copy_out(replacement, 0, replacement_length, output, position, latin1);
+            position += replacement_length;
+            kept = matches[i] + search_length;
+        }
+        mal_builtin_string_segment_copy_out(subject, kept, length - kept, output, position, latin1);
+        position += length - kept;
+    }
+    if (position != result_length) abort();
+    MAL_PERF_COUNT(string_replace_flat_results);
+    if (cell != nullptr) result = mal_value_from_string(cell);
+    else if (latin1) result = mal_value_from_string(mal_string_new_latin1_owned(&vm->heap, output, result_length));
+    else if (output == stack) result = mal_value_from_string(mal_string_new_copy(&vm->heap, stack, result_length));
+    else result = mal_value_from_string(mal_string_new_utf16_owned(&vm->heap, output, result_length));
+done:
+    if (matches != inline_matches) free(matches);
+    return result;
+}
+
+// Takes the flat literal path when every operand lies in one leaf and the replacement
+// has no `$` pattern. Allocation cannot collect, so the operands need no extra roots.
+static bool mal_builtin_string_try_replace_flat(
+    MalVm *vm, MalString *string, usize source_start, usize length,
+    MalString *search, MalString *replacement, bool all, MalValue *out
+) {
+    MalStringSegment subject_units, search_units, replacement_units;
+    if (!mal_string_try_get_segment(string, source_start, length, &subject_units) ||
+        !mal_string_try_get_segment(search, 0, mal_string_length(search), &search_units) ||
+        !mal_string_try_get_segment(replacement, 0, mal_string_length(replacement), &replacement_units) ||
+        mal_builtin_string_segment_find_unit(&replacement_units, 0, '$') != replacement_units.length) {
+        return false;
+    }
+    *out = mal_builtin_string_replace_flat(
+        vm, string, source_start, &subject_units, &search_units, &replacement_units, all);
+    return true;
+}
+
 static MalValue mal_builtin_string_replace_range_known(
     MalVm *vm, MalString *string, usize source_start, usize length,
     MalString *search, MalValue replace_value, bool all
@@ -4050,6 +4435,10 @@ static MalValue mal_builtin_string_replace_range_known(
     string = mal_value_to_string(roots[0]);
     search = mal_value_to_string(roots[1]);
     usize search_length = mal_string_length(search);
+    if (!functional && mal_builtin_string_try_replace_flat(
+            vm, string, source_start, length, search, replacement, all, &result)) {
+        goto done;
+    }
 
     i64 first_match = -1;
     if (search_length != 0) {
@@ -4201,6 +4590,13 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
 }
 
 static MalValue mal_builtin_string_replace_impl(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool all) {
+    MalValue flat;
+    if (mal_value_is_string(this_value) && arg_count >= 2 && mal_value_is_string(args[0]) &&
+        mal_value_is_string(args[1]) && mal_builtin_string_try_replace_flat(
+            vm, mal_value_to_string(this_value), 0, mal_string_length(mal_value_to_string(this_value)),
+            mal_value_to_string(args[0]), mal_value_to_string(args[1]), all, &flat)) {
+        return flat;
+    }
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
     MalValue roots[2] = {mal_value_from_string(string), arg_count > 1 ? args[1] : mal_value_new_undefined()};

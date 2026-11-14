@@ -93,6 +93,8 @@ describe("String.prototype.split fresh dense results", () => {
 		expect(perfField(stderr, "unit_scan_candidate_blocks")).toBeGreaterThan(0);
 		expect(perfField(stderr, "unit_scan_scalar_code_units")).toBeGreaterThan(0);
 		expect(perfField(stderr, "split_planned_matches")).toBeGreaterThan(0);
-		expect(perfField(stderr, "split_plan_overflows")).toBe(22);
+		// One-leaf subjects record every match before creating pieces; the fixed plan
+		// and its overflow remain for subjects that span rope leaves.
+		expect(perfField(stderr, "split_plan_overflows")).toBeGreaterThan(0);
 	});
 });

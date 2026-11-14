@@ -125,11 +125,32 @@ static bool unicode_case_context(const c16 *source, usize length, usize index, b
     return false;
 }
 
+typedef struct UnicodeCaseTable {
+    /** Sorted rows of a code point, the pool offset of its mapping, and its scalar count. */
+    const u32 *rows;
+    const u8 *blocks;
+    usize block_count;
+    const u16 *entries;
+} UnicodeCaseTable;
+
+static const UnicodeCaseTable unicode_case_tables[2] = {
+    {mal_unicode_lower, mal_unicode_lower_blocks, UNICODE_COUNT(mal_unicode_lower_blocks), mal_unicode_lower_entries},
+    {mal_unicode_upper, mal_unicode_upper_blocks, UNICODE_COUNT(mal_unicode_upper_blocks), mal_unicode_upper_entries},
+};
+
+// The mapping row of `cp`, or nullptr when it maps to itself.
+static inline const u32 *unicode_case_row(const UnicodeCaseTable *table, u32 cp) {
+    usize block = cp >> MAL_UNICODE_CASE_BLOCK_BITS;
+    if (block >= table->block_count) return nullptr;
+    u16 entry = table->entries[((usize) table->blocks[block] << MAL_UNICODE_CASE_BLOCK_BITS) |
+        (cp & ((1u << MAL_UNICODE_CASE_BLOCK_BITS) - 1))];
+    return entry == 0 ? nullptr : table->rows + (usize) (entry - 1) * 3;
+}
+
 typedef struct UnicodeCaseInput {
     const c16 *source;
     usize length;
-    const u32 *table;
-    usize table_length;
+    const UnicodeCaseTable *table;
     bool upper;
     MalUnicodeLocale locale;
 } UnicodeCaseInput;
@@ -138,9 +159,7 @@ static UnicodeCaseInput unicode_case_input(
     const c16 *source, usize length, bool upper, MalUnicodeLocale locale
 ) {
     return (UnicodeCaseInput) {
-        .source = source, .length = length,
-        .table = upper ? mal_unicode_upper : mal_unicode_lower,
-        .table_length = upper ? UNICODE_COUNT(mal_unicode_upper) : UNICODE_COUNT(mal_unicode_lower),
+        .source = source, .length = length, .table = &unicode_case_tables[upper],
         .upper = upper, .locale = locale,
     };
 }
@@ -175,9 +194,9 @@ static inline __attribute__((always_inline)) const u32 *unicode_case_mapping(
         count = 1;
     }
     if (mapping == nullptr) {
-        size row = unicode_row(input->table, input->table_length, 3, cp);
-        if (row < 0) { special[0] = cp; mapping = special; count = 1; }
-        else { mapping = mal_unicode_pool + input->table[row + 1]; count = input->table[row + 2]; }
+        const u32 *row = unicode_case_row(input->table, cp);
+        if (row == nullptr) { special[0] = cp; mapping = special; count = 1; }
+        else { mapping = mal_unicode_pool + row[1]; count = row[2]; }
     }
     *output_count = count;
     return mapping;
@@ -235,6 +254,88 @@ MalTextBufferStatus mal_unicode_case(
         index += width;
     }
     return output->status;
+}
+
+static inline c16 unicode_ascii_case(c16 unit, bool upper) {
+    return (c16) (unit ^ ((c16) (unit - (upper ? 'a' : 'A')) < 26 ? 0x20 : 0));
+}
+
+// Root-locale U+0080..U+00FF; U+00DF uppercases to "SS" and reports the expansion sentinel.
+static inline u32 unicode_latin1_case(c16 unit, bool upper) {
+    if (upper) {
+        if (unit == 0xdf) return UINT32_MAX;
+        if (unit == 0xb5) return 0x39c;
+        if (unit == 0xff) return 0x178;
+        return unit >= 0xe0 && unit != 0xf7 ? unit - 0x20u : unit;
+    }
+    return unit >= 0xc0 && unit <= 0xde && unit != 0xd7 ? unit + 0x20u : unit;
+}
+
+// A single-scalar mapping never changes the UTF-16 width; longer ones report UINT32_MAX.
+static inline u32 unicode_simple_case(const UnicodeCaseTable *table, u32 cp) {
+    const u32 *row = unicode_case_row(table, cp);
+    if (row == nullptr) return cp;
+    return row[2] == 1 ? mal_unicode_pool[row[1]] : UINT32_MAX;
+}
+
+bool mal_unicode_case_fixed(
+    const c16 *source, usize length, bool upper, c16 *output, bool *changed, c16 *aggregate
+) {
+    const UnicodeCaseTable *table = &unicode_case_tables[upper];
+    c16 written = 0, difference = 0;
+    usize index = 0;
+    while (index < length) {
+        usize block_end = length - index >= 8 ? index + 8 : length;
+        if (block_end - index == 8) {
+            c16 block = 0;
+            for (usize lane = 0; lane < 8; lane++) block |= source[index + lane];
+            if (block < 0x80) {
+                for (usize lane = 0; lane < 8; lane++) {
+                    c16 unit = source[index + lane];
+                    c16 mapped = unicode_ascii_case(unit, upper);
+                    output[index + lane] = mapped;
+                    difference |= unit ^ mapped;
+                }
+                written |= block;
+                index += 8;
+                continue;
+            }
+        }
+        // A pair may straddle the block end; the next block then starts after it.
+        while (index < block_end) {
+            c16 unit = source[index];
+            u32 mapped;
+            if (unit < 0x80) mapped = unicode_ascii_case(unit, upper);
+            else if (unit < 0x100) mapped = unicode_latin1_case(unit, upper);
+            else if (mal_utf16_is_lead_surrogate(unit) && index + 1 < length &&
+                mal_utf16_is_trail_surrogate(source[index + 1])) {
+                u32 cp = mal_utf16_compose_pair(unit, source[index + 1]);
+                mapped = unicode_simple_case(table, cp);
+                if (mapped == UINT32_MAX) return false;
+                if (mapped == cp) {
+                    output[index] = unit;
+                    output[index + 1] = source[index + 1];
+                } else mal_utf16_emit_pair(mapped, output + index);
+                written |= output[index] | output[index + 1];
+                difference |= (c16) (mapped != cp);
+                index += 2;
+                continue;
+            } else if (mal_utf16_is_surrogate(unit)) mapped = unit;
+            else if (!upper && unit == 0x3a3) {
+                mapped = unicode_case_context(source, length, index, true, UNICODE_CONTEXT_CASED) &&
+                    !unicode_case_context(source, length, index, false, UNICODE_CONTEXT_CASED)
+                    ? 0x3c2 : 0x3c3;
+            } else mapped = unicode_simple_case(table, unit);
+            if (mapped == UINT32_MAX) return false;
+            output[index] = (c16) mapped;
+            written |= (c16) mapped;
+            difference |= unit ^ (c16) mapped;
+            index++;
+        }
+    }
+    *changed = difference != 0;
+    *aggregate = written;
+    return true;
 }
 
 static bool unicode_decompose(MalUnicodePoints *points, u32 cp, bool compatibility) {

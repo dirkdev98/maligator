@@ -515,6 +515,10 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_case_changed_code_units,
         (unsigned long long) mal_perf_stats.string_case_atom_hits
     );
+    fprintf(stderr, "[perf-string-flat-stats] case_fixed=%llu replace_flat=%llu split_flat=%llu\n",
+        (unsigned long long) mal_perf_stats.string_case_fixed_results,
+        (unsigned long long) mal_perf_stats.string_replace_flat_results,
+        (unsigned long long) mal_perf_stats.string_split_flat_results);
     fprintf(stderr,
         "[perf-json-stats] shape_plans=%llu shape_plan_bytes=%llu shape_plan_hits=%llu "
         "escaped_key_code_units=%llu escaped_key_reuses=%llu escaped_key_capacity_bytes=%llu "

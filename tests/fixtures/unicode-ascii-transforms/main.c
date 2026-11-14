@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "unicode.h"
+#include "utf16.h"
 #include "builtin_string.h"
 #include "gc.h"
 #include "vm.h"
@@ -38,6 +39,70 @@ static bool normalization_matches(const c16 *source, usize length,
     return matches;
 }
 
+// The fixed-length root mapping must agree with the general one wherever it accepts the
+// text, and decline every text whose mapping changes length.
+static bool case_fixed_agrees(const c16 *source, usize length, bool upper) {
+    c16 fixed[16];
+    bool fixed_changed = false;
+    c16 aggregate = 0;
+    if (length > countof(fixed)) abort();
+    bool accepted = mal_unicode_case_fixed(source, length, upper, fixed, &fixed_changed, &aggregate);
+    MalTextBuffer output = {.heap = case_heap};
+    bool changed;
+    bool matches = mal_unicode_case(source, length, upper, MAL_UNICODE_LOCALE_ROOT, &output, &changed) ==
+        MAL_TEXT_BUFFER_OK;
+    usize mapped_length = changed ? output.length : length;
+    matches &= !accepted || mapped_length == length;
+    if (matches && accepted) {
+        matches &= fixed_changed == changed;
+        c16 written = 0;
+        for (usize i = 0; i < length; i++) {
+            c16 expected = changed ? mal_text_buffer_code_unit_at(&output, i) : source[i];
+            matches &= fixed[i] == expected;
+            written |= expected;
+        }
+        matches &= (aggregate > 0xff) == (written > 0xff);
+    }
+    mal_text_buffer_dispose(&output);
+    return matches;
+}
+
+static bool case_fixed_agrees_everywhere(void) {
+    // Each scalar alone, after a cased letter and between ASCII runs, so final-sigma
+    // context and the eight-unit ASCII blocks see it at every position class.
+    for (u32 cp = 0; cp < 0x110000; cp++) {
+        c16 scalar[2];
+        usize width = 1;
+        if (cp > 0xffff) {
+            mal_utf16_emit_pair(cp, scalar);
+            width = 2;
+        } else scalar[0] = (c16) cp;
+        c16 text[16] = {'A', 'b', 'C', 'd', 'E', 'f', 'G', 'h'};
+        memcpy(text + 8, scalar, width * sizeof(c16));
+        text[8 + width] = '!';
+        for (u32 upper = 0; upper < 2; upper++) {
+            if (!case_fixed_agrees(scalar, width, upper) ||
+                !case_fixed_agrees(text + 7, width + 2, upper) ||
+                !case_fixed_agrees(text, width + 9, upper)) {
+                fprintf(stderr, "fixed case mapping disagrees at U+%04X upper=%u\n", cp, upper);
+                return false;
+            }
+        }
+    }
+    static const c16 sigma_contexts[][8] = {
+        u"A\u03a3", u"\u03a3A", u"A\u03a3'A", u"A\u03a3'", u"A'\u03a3", u"\u03a3", u"1\u03a3",
+    };
+    for (usize i = 0; i < countof(sigma_contexts); i++) {
+        usize length = 0;
+        while (sigma_contexts[i][length] != 0) length++;
+        if (!case_fixed_agrees(sigma_contexts[i], length, false)) {
+            fprintf(stderr, "fixed case mapping disagrees in sigma context %zu\n", i);
+            return false;
+        }
+    }
+    return true;
+}
+
 #define CASE(source, expected, upper, locale) do { \
     if (!case_matches(source, countof(source) - 1, expected, countof(expected) - 1, upper, locale)) { \
         fprintf(stderr, "case transform failed at line %d\n", __LINE__); return 1; \
@@ -57,7 +122,8 @@ static bool case_storage(MalVm *vm) {
 #define CHECK_STORAGE(condition) do { \
     if (!(condition)) { fprintf(stderr, "case storage failed at line %d\n", __LINE__); goto done; } \
 } while (0)
-    c16 wide[MAL_STRING_INLINE_CODE_UNITS + 9];
+    // Results longer than a string cell adopt the RAW buffer they were converted into.
+    c16 wide[MAL_STRING_CELL_CODE_UNITS + 9];
     c16 expected[countof(wide)];
     for (usize i = 0; i < countof(wide); i++) {
         wide[i] = (i & 1) == 0 ? 0xe9 : 0x3c3;
@@ -75,7 +141,7 @@ static bool case_storage(MalVm *vm) {
     for (usize i = 0; i < countof(expected); i++)
         CHECK_STORAGE(mal_string_code_unit_at(converted, i) == expected[i]);
 
-    c16 compact[MAL_STRING_INLINE_LATIN1_CODE_UNITS + 1];
+    c16 compact[MAL_STRING_CELL_LATIN1_CODE_UNITS + 1];
     for (usize i = 0; i < countof(compact); i++) compact[i] = 0x212a;
     roots[2] = mal_value_from_string(mal_string_new_copy(&vm->heap, compact, countof(compact)));
     roots[3] = mal_builtin_string_case_known(vm, mal_value_to_string(roots[2]), false, MAL_UNICODE_LOCALE_ROOT);
@@ -125,6 +191,7 @@ int main(void) {
         puts("unicode-case-storage PASS");
         return 0;
     }
+    if (!case_fixed_agrees_everywhere()) return 1;
     CASE(u"\u0277\u027c", u"\ua7dd\ua7e2", true, MAL_UNICODE_LOCALE_ROOT);
     CASE(u"\ua7dd\ua7e2", u"\u0277\u027c", false, MAL_UNICODE_LOCALE_ROOT);
     NORMALIZE(u"\u209d\u209e\u209f", u"wyz", true, true);
