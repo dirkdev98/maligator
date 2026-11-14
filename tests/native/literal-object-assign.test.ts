@@ -6,7 +6,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	buildBackendPairFromOneProgramImage,
-	buildNativeBinary,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -22,7 +21,7 @@ function expected(scenario: string) {
 describe("literal Object.assign", () => {
 	let pair: ReturnType<typeof buildBackendPairFromOneProgramImage>;
 	let sloppy: ReturnType<typeof buildBackendPairFromOneProgramImage>;
-	let mutable: string;
+	let mutable: ReturnType<typeof buildBackendPairFromOneProgramImage>;
 	beforeAll(() => {
 		const config = resolveBuildConfig({
 			engine: { eval: false, realms: false },
@@ -41,7 +40,7 @@ describe("literal Object.assign", () => {
 			outDir,
 			config,
 		});
-		mutable = buildNativeBinary({
+		mutable = buildBackendPairFromOneProgramImage({
 			fixture,
 			name: "literal-assign-mutable",
 			outDir,
@@ -51,7 +50,7 @@ describe("literal Object.assign", () => {
 			}),
 		});
 	});
-	it.each([
+	const scenarios = [
 		["ordinary", "copies fields and returns the original target"],
 		["setters", "evaluates field values before invoking ordered inherited setters"],
 		["throw", "retains earlier writes and skips later setters after a throw"],
@@ -68,12 +67,33 @@ describe("literal Object.assign", () => {
 		["plainSources", "copies plain data sources in order without aliasing them"],
 		["hiddenTarget", "keeps a nonenumerable target field nonenumerable"],
 		["sharedPrototype", "reaches objects that inherit from the target"],
-	])("%s: %s", (scenario) => {
+	] as const;
+	it.each(scenarios)("%s: %s", (scenario) => {
 		const oracle = expected(scenario);
 		for (const binary of [pair.compiled, pair.interpreted])
 			expect(runToStdout(binary, { env: { LITERAL_ASSIGN_CASE: scenario } })).toBe(
 				oracle,
 			);
+	});
+	it.each([
+		...scenarios,
+		["objectPrototypeSetter", "invokes a setter added to Object.prototype"],
+		[
+			"objectPrototypeSetterAfterWarmup",
+			"invokes an Object.prototype setter added after the same shapes merged",
+		],
+		["objectPrototypeReadonly", "throws for a key Object.prototype made nonwritable"],
+		["objectPrototypeField", "shadows a writable field added to Object.prototype"],
+	] as const)("%s with mutable primordials: %s", (scenario) => {
+		const oracle = expected(scenario);
+		for (const binary of [mutable.compiled, mutable.interpreted]) {
+			expect(runToStdout(binary, { env: { LITERAL_ASSIGN_CASE: scenario } })).toBe(
+				oracle,
+			);
+			expect(
+				runToStdout(binary, { env: { ...STRESS_ENV, LITERAL_ASSIGN_CASE: scenario } }),
+			).toBe(oracle);
+		}
 	});
 	it.each(["setters", "throw", "proxy", "objects", "specialValues"])(
 		"roots %s values across collecting stores",
@@ -95,8 +115,9 @@ describe("literal Object.assign", () => {
 			expect(runToStdout(binary)).toBe(oracle);
 	});
 	it("calls a mutable assign override", () => {
-		expect(runToStdout(mutable, { env: { LITERAL_ASSIGN_CASE: "mutable" } })).toBe(
-			expected("mutable"),
-		);
+		for (const binary of [mutable.compiled, mutable.interpreted])
+			expect(runToStdout(binary, { env: { LITERAL_ASSIGN_CASE: "mutable" } })).toBe(
+				expected("mutable"),
+			);
 	});
 });

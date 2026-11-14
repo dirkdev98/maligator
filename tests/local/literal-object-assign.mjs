@@ -193,5 +193,48 @@ const scenarios = {
 		Object.assign = (target, source) => [target.original, source.revision, "custom"];
 		return Object.assign({ original: 3 }, { revision: 11 });
 	},
+	objectPrototypeSetter() {
+		const events = [];
+		Object.defineProperty(Object.prototype, "revision", {
+			configurable: true,
+			set(value) {
+				events.push(value);
+			},
+		});
+		const target = Object.assign({ id: 1 }, { revision: 7, label: "row" });
+		return [events, Object.keys(target)];
+	},
+	objectPrototypeSetterAfterWarmup() {
+		const events = [];
+		const assignRow = (index) =>
+			Object.assign({ id: index }, { revision: index, label: "row" });
+		const before = [];
+		for (let index = 0; index < 4; index++) before.push(Object.keys(assignRow(index)));
+		Object.defineProperty(Object.prototype, "revision", {
+			configurable: true,
+			set(value) {
+				events.push(value);
+			},
+		});
+		return [before, Object.keys(assignRow(9)), events];
+	},
+	objectPrototypeReadonly() {
+		const target = { id: 1 };
+		Object.assign(target, { toString: 4 });
+		Object.defineProperty(Object.prototype, "toString", { writable: false });
+		const fresh = { id: 2 };
+		let error;
+		try {
+			Object.assign(fresh, { toString: 5 });
+		} catch (value) {
+			error = value.name;
+		}
+		return [target.toString, error, Object.hasOwn(fresh, "toString")];
+	},
+	objectPrototypeField() {
+		Object.prototype.polyfilled = 1;
+		const target = Object.assign({ id: 1 }, { polyfilled: 2, label: "row" });
+		return [Object.keys(target), target.polyfilled, Object.prototype.polyfilled];
+	},
 };
 console.log(JSON.stringify(scenarios[process.env.LITERAL_ASSIGN_CASE || "ordinary"]()));

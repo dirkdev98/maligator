@@ -57,7 +57,7 @@ describe("typed intrinsic Promise.all aggregation", () => {
 			}),
 		});
 	});
-	it.each([
+	const scenarios = [
 		["settled", "returns own result elements in source order"],
 		["pending", "preserves source order after out-of-order fulfillment"],
 		["duplicates", "settles each occurrence of a repeated input"],
@@ -76,37 +76,56 @@ describe("typed intrinsic Promise.all aggregation", () => {
 		["iteratorClose", "closes a custom iterator after a then lookup throws"],
 		["subclass", "observes an input subclass species"],
 		["customResult", "preserves a subclass result capability"],
-	])("%s: %s", (scenario) => {
+		["thenables", "resolves thenable and plain inputs through promiseResolve"],
+	] as const;
+	it.each(scenarios)("%s: %s", (scenario) => {
 		const oracle = expected(scenario);
 		for (const binary of [pair.compiled, pair.interpreted])
+			expect(runToStdout(binary, { env: { PROMISE_ALL_CASE: scenario } })).toBe(oracle);
+	});
+	it.each(scenarios)("%s with mutable primordials: %s", (scenario) => {
+		const oracle = expected(scenario);
+		for (const binary of [mutable.compiled, mutable.interpreted])
 			expect(runToStdout(binary, { env: { PROMISE_ALL_CASE: scenario } })).toBe(oracle);
 	});
 	it.each(["pending", "retained", "rejection", "changedInput", "context"])(
 		"keeps %s state reachable through collection",
 		(scenario) => {
 			const oracle = expected(scenario);
-			for (const binary of [pair.compiled, pair.interpreted])
+			for (const binary of [
+				pair.compiled,
+				pair.interpreted,
+				mutable.compiled,
+				mutable.interpreted,
+			])
 				expect(
 					runToStdout(binary, { env: { ...STRESS_ENV, PROMISE_ALL_CASE: scenario } }),
 				).toBe(oracle);
 		},
 	);
-	it("queues one typed job per admitted input occurrence", () => {
-		const run = spawnSync(pair.compiled, [], {
-			encoding: "utf8",
-			env: { ...process.env, MAL_PERF_STATS: "1", PROMISE_ALL_CASE: "duplicates" },
-		});
-		expect(run.status, run.stderr).toBe(0);
-		const result = JSON.parse(run.stdout) as { inputCount: number };
-		expect(
-			Number(run.stderr.match(/all_typed_admissions=(\d+)/)?.[1] ?? 0),
-		).toBeGreaterThan(0);
-		expect(Number(run.stderr.match(/all_typed_jobs=(\d+)/)?.[1] ?? 0)).toBe(
-			result.inputCount,
-		);
+	it("queues one typed job per admitted input occurrence in both primordial modes", () => {
+		for (const binary of [pair.compiled, mutable.compiled]) {
+			const run = spawnSync(binary, [], {
+				encoding: "utf8",
+				env: { ...process.env, MAL_PERF_STATS: "1", PROMISE_ALL_CASE: "duplicates" },
+			});
+			expect(run.status, run.stderr).toBe(0);
+			const result = JSON.parse(run.stdout) as { inputCount: number };
+			expect(
+				Number(run.stderr.match(/all_typed_admissions=(\d+)/)?.[1] ?? 0),
+			).toBeGreaterThan(0);
+			expect(Number(run.stderr.match(/all_typed_jobs=(\d+)/)?.[1] ?? 0)).toBe(
+				result.inputCount,
+			);
+		}
 	});
 	it("handles rejected inputs without reporting them as unhandled", () => {
-		for (const binary of [pair.compiled, pair.interpreted]) {
+		for (const binary of [
+			pair.compiled,
+			pair.interpreted,
+			mutable.compiled,
+			mutable.interpreted,
+		]) {
 			const invocation = resolveHarnessExecutionInvocation(binary);
 			const run = spawnSync(invocation.executable, invocation.args, {
 				encoding: "utf8",
@@ -123,12 +142,35 @@ describe("typed intrinsic Promise.all aggregation", () => {
 			"promise-all-dense-realm PASS",
 		);
 	});
-	it.each(["lateThen", "resolveOverride"])(
-		"preserves mutable %s observations",
+	it.each([
+		"lateThen",
+		"resolveOverride",
+		"replacedThen",
+		"midFlightThen",
+		"replacedConstructor",
+		"replacedIterator",
+		"replacedResolve",
+	])("preserves mutable %s observations", (scenario) => {
+		const oracle = expected(scenario);
+		for (const binary of [mutable.compiled, mutable.interpreted]) {
+			expect(runToStdout(binary, { env: { PROMISE_ALL_CASE: scenario } })).toBe(oracle);
+			expect(
+				runToStdout(binary, { env: { ...STRESS_ENV, PROMISE_ALL_CASE: scenario } }),
+			).toBe(oracle);
+		}
+	});
+	it.each(["lateThen", "midFlightThen"])(
+		"settles %s through the typed path admitted before the mutation",
 		(scenario) => {
-			const oracle = expected(scenario);
-			for (const binary of [mutable.compiled, mutable.interpreted])
-				expect(runToStdout(binary, { env: { PROMISE_ALL_CASE: scenario } })).toBe(oracle);
+			const run = spawnSync(mutable.compiled, [], {
+				encoding: "utf8",
+				env: { ...process.env, MAL_PERF_STATS: "1", PROMISE_ALL_CASE: scenario },
+			});
+			expect(run.status, run.stderr).toBe(0);
+			expect(run.stdout).toBe(expected(scenario));
+			expect(
+				Number(run.stderr.match(/all_typed_admissions=(\d+)/)?.[1] ?? 0),
+			).toBeGreaterThan(0);
 		},
 	);
 });

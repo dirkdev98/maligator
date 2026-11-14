@@ -503,10 +503,8 @@ typedef enum MalHeapType : u8 {
     MAL_HEAP_STRING_CURSOR,
     MAL_HEAP_WEAK_MAP_OBJECT,
     MAL_HEAP_WEAK_SET_OBJECT,
-#if MAL_PRIMORDIALS_LOCKED
     /** Private aggregation state retained by typed Promise.all reactions. */
     MAL_HEAP_PROMISE_ALL_STATE,
-#endif
 
     /**
      * Sentinel: number of distinct heap types. Must stay last. Sizes the baked
@@ -789,9 +787,7 @@ static inline bool mal_heap_type_finalizes_at_birth(MalHeapType type) {
         case MAL_HEAP_SYMBOL:
         case MAL_HEAP_BIGINT:
         case MAL_HEAP_ENV:
-#if MAL_PRIMORDIALS_LOCKED
         case MAL_HEAP_PROMISE_ALL_STATE:
-#endif
         case MAL_HEAP_ASYNC_CONTEXT:
         case MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE:
         case MAL_HEAP_ASYNC_RESOURCE_STATE:

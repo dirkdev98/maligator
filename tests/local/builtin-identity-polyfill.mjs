@@ -91,6 +91,23 @@ function lookups(map, set, keys) {
 	return total;
 }
 
+function assignRow(index) {
+	const row = Object.assign({}, { id: index, revision: index & 31, label: "row" });
+	return row.revision + row.label.length;
+}
+
+async function settleAll(rounds) {
+	let total = 0;
+	for (let round = 0; round < rounds; round++) {
+		const [first, second] = await Promise.all([
+			Promise.resolve(round),
+			Promise.resolve(1),
+		]);
+		total += first + second;
+	}
+	return total;
+}
+
 const text = "polyfilled scanner input with ASCII text, ".repeat(4);
 const line = " alpha, beta ,gamma,  delta,epsilon ,zeta";
 const lines = ["a1=bb", "c22=d", "no match", "eee333=ffff"];
@@ -110,6 +127,7 @@ let iterated = 0;
 let mapped = 0;
 let setted = 0;
 let found = 0;
+let assigned = 0;
 for (let round = 0; round < loops; round++) {
 	codes += charCodes(text);
 	fields += splitFields(line);
@@ -118,6 +136,7 @@ for (let round = 0; round < loops; round++) {
 	mapped += mapEntries(map);
 	setted += setEntries(set);
 	found += lookups(map, keySet, keys);
+	assigned += assignRow(round);
 }
 record("codes", codes);
 record("fields", fields);
@@ -126,6 +145,8 @@ record("iterated", iterated);
 record("mapped", mapped);
 record("setted", setted);
 record("found", found);
+record("assigned", assigned);
+record("settled", await settleAll(loops));
 record("concat", [1, 2].concat([3, 4], 5).join());
 record("species", [1, 2, 3].map((value) => value * 2).constructor === Array);
 record("error", String(new TypeError("message")));

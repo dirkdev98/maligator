@@ -159,9 +159,7 @@ static void mal_job_release(MalVm *vm, MalJob *job) {
 
 static void mal_job_recycle(MalVm *vm, MalJob *job) {
     if (job->kind == MAL_JOB_PROMISE_REACTION ||
-#if MAL_PRIMORDIALS_LOCKED
         job->kind == MAL_JOB_PROMISE_ALL ||
-#endif
         job->kind == MAL_JOB_ASYNC_AWAIT ||
         job->kind == MAL_JOB_ASYNC_GENERATOR_RETURN ||
         job->kind == MAL_JOB_ASYNC_FROM_SYNC ||
@@ -412,7 +410,6 @@ void mal_vm_enqueue_reaction_job_in_context(
 }
 #endif
 
-#if MAL_PRIMORDIALS_LOCKED
 static void mal_vm_enqueue_promise_all_job_with_context(
     MalVm *vm, MalValue state, u32 index, bool is_reject, MalValue argument
 #if MAL_NODE
@@ -453,7 +450,6 @@ void mal_vm_enqueue_promise_all_job_in_context(
 }
 #endif
 
-#endif
 static void mal_vm_enqueue_await_job_with_context(
     MalVm *vm,
     MalValue state,
@@ -848,14 +844,12 @@ void mal_vm_drain_microtasks(MalVm *vm) {
             case MAL_JOB_PROMISE_REACTION:
                 mal_vm_run_reaction_job(vm, job);
                 break;
-#if MAL_PRIMORDIALS_LOCKED
             case MAL_JOB_PROMISE_ALL:
                 mal_promise_all_continue(
                     vm, job->as.reaction.handler,
                     (u32) mal_ops_number_as_f64(job->as.reaction.cap_resolve),
                     job->is_reject, job->as.reaction.argument);
                 break;
-#endif
             case MAL_JOB_PROMISE_RESOLVE_THENABLE:
                 mal_vm_run_thenable_job(vm, job);
                 break;

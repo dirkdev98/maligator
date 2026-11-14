@@ -75,8 +75,13 @@ for (const mode of ["locked", "mutable"] as const) {
 		(stderr, loops) => {
 			// Each round destructures the five Map entries and the five Set entries.
 			expect(counter(stderr, "entry_pair_hits")).toBeGreaterThanOrEqual(10 * loops);
-			// Locked builds call charCodeAt as a known operation instead.
+			// Each settle round aggregates two intrinsic promises.
+			expect(counter(stderr, "all_typed_admissions")).toBeGreaterThanOrEqual(loops);
+			// Locked builds call charCodeAt as a known operation and store literal
+			// Object.assign sources field by field instead.
 			if (mode === "locked") return;
+			// Each round merges one literal source despite the Object.prototype polyfill.
+			expect(counter(stderr, "merge_shaped_hits")).toBeGreaterThanOrEqual(loops);
 			// Each round reads every character of a 168-character string.
 			expect(counter(stderr, "char_code_at_direct_hits")).toBeGreaterThanOrEqual(
 				168 * loops,

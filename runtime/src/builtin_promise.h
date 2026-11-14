@@ -67,12 +67,10 @@ void mal_promise_settle_direct(
     MalValue argument
 );
 
-#if MAL_PRIMORDIALS_LOCKED
 /** Run one guarded Promise.all element with its original microtask ordering. */
 void mal_promise_all_continue(
     MalVm *vm, MalValue state, u32 index, bool is_reject, MalValue argument);
 
-#endif
 /** Process-wide counters exposed through MAL_PROMISE_STATS. */
 u64 mal_promise_direct_capability_count(void);
 u64 mal_promise_direct_fallback_pair_count(void);

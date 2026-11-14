@@ -228,6 +228,16 @@ const cases = {
 		const result = ResultPromise.all([Promise.resolve(3), 4]);
 		return { values: await result, subclass: result instanceof ResultPromise };
 	},
+	async thenables() {
+		const events = [];
+		const thenable = {
+			then(resolve) {
+				events.push("then");
+				resolve(5);
+			},
+		};
+		return { values: await Promise.all([thenable, 6, Promise.resolve(7)]), events };
+	},
 	async lateThen() {
 		let finish;
 		const pending = new Promise((resolve) => {
@@ -246,6 +256,67 @@ const cases = {
 		} finally {
 			delete Array.prototype.then;
 		}
+	},
+	async replacedThen() {
+		const events = [],
+			then = Promise.prototype.then;
+		Promise.prototype.then = function (onFulfilled, onRejected) {
+			events.push("then");
+			return then.call(this, onFulfilled, onRejected);
+		};
+		const result = Promise.all([Promise.resolve(1), Promise.resolve(2)]);
+		Promise.prototype.then = then;
+		return { values: await result, events };
+	},
+	async midFlightThen() {
+		const events = [],
+			then = Promise.prototype.then;
+		let finish;
+		const pending = new Promise((resolve) => {
+			finish = resolve;
+		});
+		const result = Promise.all([Promise.resolve(1), pending]);
+		Promise.prototype.then = function (onFulfilled, onRejected) {
+			events.push("then");
+			return then.call(this, onFulfilled, onRejected);
+		};
+		finish(2);
+		const values = await result;
+		return { values, events: [...events] };
+	},
+	async replacedConstructor() {
+		const events = [];
+		Object.defineProperty(Promise.prototype, "constructor", {
+			configurable: true,
+			get() {
+				events.push("constructor");
+				return Promise;
+			},
+		});
+		const values = await Promise.all([Promise.resolve(1), Promise.resolve(2)]);
+		return { values, events: [...events] };
+	},
+	async replacedIterator() {
+		const events = [],
+			values = Array.prototype[Symbol.iterator];
+		Array.prototype[Symbol.iterator] = function () {
+			events.push("iterator");
+			return values.call(this);
+		};
+		const result = Promise.all([Promise.resolve(1), Promise.resolve(2)]);
+		Array.prototype[Symbol.iterator] = values;
+		return { values: await result, events };
+	},
+	async replacedResolve() {
+		const events = [],
+			resolve = Promise.resolve;
+		Promise.resolve = function (value) {
+			events.push("resolve");
+			return resolve.call(this, value);
+		};
+		const result = Promise.all([Promise.resolve(1), Promise.resolve(2)]);
+		Promise.resolve = resolve;
+		return { values: await result, events };
 	},
 	async resolveOverride() {
 		const events = [],

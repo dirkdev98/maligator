@@ -14,9 +14,7 @@ typedef void (*MalHostJobFn)(MalVm *vm, void *data, MalValue argument, bool is_r
  */
 typedef enum MalJobKind {
     MAL_JOB_PROMISE_REACTION,
-#if MAL_PRIMORDIALS_LOCKED
     MAL_JOB_PROMISE_ALL,
-#endif
     MAL_JOB_PROMISE_RESOLVE_THENABLE,
     MAL_JOB_ASYNC_AWAIT,
     MAL_JOB_ASYNC_GENERATOR_RETURN,
@@ -116,7 +114,6 @@ void mal_vm_enqueue_await_job(
     MalValue argument
 );
 
-#if MAL_PRIMORDIALS_LOCKED
 /** Queue an intrinsic Promise.all element without materializing a callable. */
 void mal_vm_enqueue_promise_all_job(
     MalVm *vm, MalValue state, u32 index, bool is_reject, MalValue argument);
@@ -124,7 +121,6 @@ void mal_vm_enqueue_promise_all_job(
 void mal_vm_enqueue_promise_all_job_in_context(
     MalVm *vm, MalValue state, u32 index, bool is_reject, MalValue argument,
     MalAsyncContext *context);
-#endif
 #endif
 #if MAL_NODE
 void mal_vm_enqueue_await_job_in_context(

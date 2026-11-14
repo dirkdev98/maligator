@@ -75,7 +75,6 @@ typedef struct MalPromiseObject {
     MalGeneratorObject *async_owner;
 } MalPromiseObject;
 
-#if MAL_PRIMORDIALS_LOCKED
 /** Reference fields stay immutable after publication; jobs update only scalar state. */
 typedef struct MalPromiseAllState {
     MalHeapHeader header;
@@ -95,7 +94,6 @@ MalPromiseAllState *mal_promise_all_state_new(
 void mal_promise_append_all_reaction(
     MalVm *vm, MalPromiseObject *promise, MalValue state, u32 index);
 
-#endif
 /** Allocate a pending promise with the given [[Prototype]]. */
 MalPromiseObject *mal_promise_object_new(MalHeap *heap, MalObject *prototype);
 

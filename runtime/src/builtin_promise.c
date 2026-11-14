@@ -1151,7 +1151,6 @@ static MalValue mal_promise_all_element(MalVm *vm, MalValue this_value, const Ma
     return mal_value_new_undefined();
 }
 
-#if MAL_PRIMORDIALS_LOCKED
 void mal_promise_all_continue(
     MalVm *vm, MalValue raw_state, u32 index, bool is_reject, MalValue argument
 ) {
@@ -1172,12 +1171,29 @@ void mal_promise_all_continue(
     state->remaining--;
     if (state->remaining == 0 && !state->settled) {
         state->settled = true;
-        // The result Array is private and its primordial chain stays locked
-        // through settlement, so resolution cannot observe a then property.
-        mal_promise_fulfill(vm, promise, state->values);
+        // The private result Array inherits only from %Array.prototype% and
+        // %Object.prototype%, so while the identity protector holds the resolve
+        // function's `then` lookup finds nothing. A `then` added since admission
+        // is observed by the ordinary resolution steps, as the spec's resolve
+        // function would at this point.
+        if (mal_vm_watched_methods_intact(vm)) {
+            mal_promise_fulfill(vm, promise, state->values);
+        } else {
+            MAL_PERF_COUNT(promise_guarded_fallbacks);
+            mal_promise_settle_internal(vm, state->promise, false, state->values);
+        }
     }
 }
 
+/**
+ * PerformPromiseAll over an Array of intrinsic promises with typed reactions, when
+ * every lookup it skips is unobservable: C is %Promise%, whose `resolve` the identity
+ * protector keeps; each input is a canonical intrinsic promise, so PromiseResolve
+ * returns it and Invoke reaches %Promise.prototype.then% and %Promise%[@@species]; and
+ * the array-iteration protector keeps the Array iterator. Registered reactions never
+ * look those methods up again, so a later mutation can only change the final
+ * resolution, which mal_promise_all_continue rechecks.
+ */
 static bool mal_promise_all_try_dense(
     MalVm *vm, MalValue constructor, const MalValue *args, i32 arg_count,
     MalValue *result
@@ -1228,16 +1244,13 @@ static bool mal_promise_all_try_dense(
     mal_gc_unroot(&span);
     return true;
 }
-#endif
 
 static MalValue mal_promise_all(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
 
-#if MAL_PRIMORDIALS_LOCKED
     MalValue direct;
     if (mal_promise_all_try_dense(vm, this_value, args, arg_count, &direct)) return direct;
-#endif
 
     MalPromiseCombinator ctx = mal_promise_combinator_begin(vm, this_value, args, arg_count);
     if (!ctx.ok) {

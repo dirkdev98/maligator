@@ -1560,13 +1560,12 @@ static bool mal_builtin_object_assign_from(MalVm *vm, MalValue target, MalValue 
     return ok;
 }
 
-#if MAL_PRIMORDIALS_LOCKED
 /**
  * Whether [[Set]] of data properties on `target` defines them exactly as object spread
- * does: an extensible ordinary target whose prototype is the locked %Object.prototype%,
- * whose own properties are all default-attribute data properties. A write then either
- * replaces such a value or creates a property, except through the inherited
- * `__proto__` setter, which the caller excludes per source.
+ * does: an extensible ordinary target whose prototype is %Object.prototype%, whose own
+ * properties are all default-attribute data properties. A write then either replaces
+ * such a value or creates a property, unless %Object.prototype% holds the key as an
+ * accessor or a nonwritable value, which the caller excludes per source.
  */
 static bool mal_builtin_object_assign_plain_target(MalVm *vm, MalValue target_value) {
     if (!mal_value_is_heap_type(target_value, MAL_HEAP_OBJECT)) return false;
@@ -1584,17 +1583,39 @@ static bool mal_builtin_object_assign_plain_target(MalVm *vm, MalValue target_va
     return true;
 }
 
-static bool mal_builtin_object_assign_names_proto(MalVm *vm, const MalObject *source) {
+/**
+ * Whether no own key of `source` reaches an intercepting property of %Object.prototype%
+ * when stored on a plain target. Its `__proto__` setter is the only one in an unchanged
+ * realm, which the watched-objects protector proves; once any watched object has
+ * changed, each key's own property there is checked instead.
+ */
+static bool mal_builtin_object_assign_source_defines(MalVm *vm, const MalObject *source) {
+    const MalObject *object_prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+#if MAL_PRIMORDIALS_LOCKED
+    const bool object_prototype_intact = true;
+#else
+    const bool object_prototype_intact = mal_vm_watched_objects_intact(vm);
+    if (!object_prototype_intact && mal_object_prototype(object_prototype) != nullptr) {
+        return false;
+    }
+#endif
     MalValue proto = 0;
     for (u32 i = 0; i < source->shape->inline_count; i++) {
         MalValue key = source->shape->props[i].key;
-        if (!mal_value_is_string(key) || mal_string_length(mal_value_to_string(key)) != 9) continue;
-        if (proto == 0) proto = mal_intrinsic_string_key(vm, (const byte *) "__proto__").value;
-        if (mal_string_equals(mal_value_to_string(key), mal_value_to_string(proto))) return true;
+        if (mal_value_is_string(key) && mal_string_length(mal_value_to_string(key)) == 9) {
+            if (proto == 0) proto = mal_intrinsic_string_key(vm, (const byte *) "__proto__").value;
+            if (mal_string_equals(mal_value_to_string(key), mal_value_to_string(proto))) return false;
+        }
+        if (object_prototype_intact) continue;
+        MalPropertyLookup inherited = mal_object_get_own(object_prototype, mal_key_from_value(key));
+        if (inherited.present && ((inherited.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+                                  !(inherited.desc.flags & MAL_PROPERTY_WRITABLE))) {
+            return false;
+        }
     }
-    return false;
+    return true;
 }
-#endif
 
 static MalValue mal_builtin_object_assign(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
@@ -1631,14 +1652,12 @@ static MalValue mal_builtin_object_assign(MalVm *vm, MalValue this_value, const 
             source_value = mal_builtin_object_box_primitive(vm, source_value);
         }
         roots[1] = source_value;
-#if MAL_PRIMORDIALS_LOCKED
         if (mal_builtin_object_assign_plain_target(vm, target_value) &&
             mal_value_is_heap_type(source_value, MAL_HEAP_OBJECT) &&
-            !mal_builtin_object_assign_names_proto(vm, mal_value_to_object(source_value)) &&
+            mal_builtin_object_assign_source_defines(vm, mal_value_to_object(source_value)) &&
             mal_vm_try_merge_data_properties(vm, target_value, source_value)) {
             continue;
         }
-#endif
         if (!mal_builtin_object_assign_from(vm, target_value, source_value)) {
             ok = false;
             break;
