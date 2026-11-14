@@ -1368,6 +1368,18 @@ static const MalFfiHandleType *ffi_handle_family(const MalFfiHandleType *type) {
 static pthread_mutex_t ffi_retired_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic(MalFfiNativeHandle *) ffi_retired_handles;
 
+/*
+ * Input leases contained by a registration's destruction root live no longer than
+ * that root, so they never claim the address on their own. The root can be destroyed,
+ * and C can recycle a child's address, while a queued call still holds the registration.
+ */
+static bool ffi_retired_claims(MalFfiNativeHandle *native) {
+    // Releases drop `contained` before `references`, so this read order never takes
+    // another lease for a contained one. Without leases, destruction is running.
+    u32 references = atomic_load_explicit(&native->references, memory_order_acquire);
+    return references == 0 || references > atomic_load_explicit(&native->contained, memory_order_acquire);
+}
+
 static bool ffi_retired_blocks(const MalFfiHandleType *type, const void *value, bool fresh) {
     if (value == nullptr || atomic_load_explicit(&ffi_retired_handles, memory_order_acquire) == nullptr)
         return false;
@@ -1378,7 +1390,7 @@ static bool ffi_retired_blocks(const MalFfiHandleType *type, const void *value, 
          native != nullptr; native = native->retired_next) {
         if (!native->superseded && native->value == value
             && ffi_handle_family(native->owner_type) == family
-            && (!fresh || !native->destroying)) {
+            && (!fresh || !native->destroying) && ffi_retired_claims(native)) {
             found = true;
             break;
         }

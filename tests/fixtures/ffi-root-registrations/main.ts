@@ -102,6 +102,32 @@ check(collect !== undefined, "collection hook is available");
 	throws(() => c.life_fire_result(root.child!));
 	root[Symbol.dispose]();
 }
+function subscribeQueued(): void {
+	const root = c.life_new(19)!;
+	c.life_subscribe_notice(root.child!, () => {});
+	c.life_post(root.child!);
+	c.life_recycle_next();
+}
+{
+	const destroyed = c.life_destroyed();
+	// The queued notice keeps the registration, and its lease on the child, past the
+	// root's destruction, while C hands the child's storage to the next root. A
+	// microtask unwinds the dispatched frame for collection; the notice waits for a
+	// later task.
+	Reflect.apply(subscribeQueued, undefined, []);
+	await Promise.resolve();
+	for (let index = 0; index < 8 && c.life_destroyed() === destroyed; index++) collect();
+	check(
+		c.life_destroyed() === destroyed + 1,
+		"collection destroys a root whose registration still has a queued call",
+	);
+	const root = c.life_new(20)!;
+	check(
+		c.life_value(root.child!) === 20,
+		"a destroyed root's recycled child address opens before its queued registration retires",
+	);
+	root[Symbol.dispose]();
+}
 function cycle(): void {
 	const root = c.life_new(16)!;
 	const child = root.child!;

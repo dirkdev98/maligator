@@ -1,6 +1,7 @@
 #include "lifetime.h"
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <unistd.h>
 struct LifeChild {
@@ -14,20 +15,26 @@ struct LifeChild {
     LifeRoot *(*resource)(void *);
 };
 static _Atomic int destroyed;
+static _Atomic bool recycle;
+static _Atomic(LifeChild *) recycled;
 static LifeRoot *held;
 static void *held_data;
 static void (*held_release)(void *);
 static LifeChild *child_new(int value) {
-    LifeChild *child = calloc(1, sizeof(*child));
+    LifeChild *child = atomic_exchange(&recycled, NULL);
+    if (child == NULL) child = malloc(sizeof(*child));
     if (child == NULL) abort();
-    child->value = value;
+    *child = (LifeChild) {.value = value};
     return child;
 }
 static void child_free(LifeChild *child) {
     if (child->release != NULL) child->release(child->data);
+    if (atomic_exchange(&recycle, false)) child = atomic_exchange(&recycled, child);
     free(child);
     atomic_fetch_add(&destroyed, 1);
 }
+/* The next freed child's storage becomes the next child's, as allocators often recycle it. */
+void life_recycle_next(void) { atomic_store(&recycle, true); }
 LifeRoot *life_new(int value) {
     LifeRoot *root = malloc(sizeof(*root));
     if (root == NULL) abort();

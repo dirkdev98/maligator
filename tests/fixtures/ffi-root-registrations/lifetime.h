@@ -19,6 +19,7 @@ int life_fire(LifeChild *child);
 int life_fire_thread(LifeChild *child);
 int life_value(LifeChild *child);
 int life_destroyed(void);
+void life_recycle_next(void);
 void life_keep_root(LifeRoot *(*callback)(void *), void *data, void (*release)(void *));
 int life_held_value(void);
 int life_held_fire(void);
