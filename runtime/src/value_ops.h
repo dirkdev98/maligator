@@ -365,6 +365,10 @@ static inline bool mal_ops_strict_equal_boxed(MalValue left, MalValue right) {
         (right & MAL_VALUE_CLASS_MASK) == MAL_VALUE_INT32) {
         return false;
     }
+    // Two Strings, as an id lookup compares, settle lengths and atoms inline.
+    if (mal_value_is_string(left) && mal_value_is_string(right)) {
+        return mal_string_equals(mal_value_to_string(left), mal_value_to_string(right));
+    }
     return mal_ops_strict_equal_distinct(left, right);
 }
 
