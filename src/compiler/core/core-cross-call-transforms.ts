@@ -17,6 +17,7 @@ import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import {
 	coreArrayIterationCall,
+	coreArrayIterationNeedsGuard,
 	expandCoreArrayIterationCall,
 } from "./core-array-iteration.ts";
 import {
@@ -794,6 +795,7 @@ function inlineTarget(
 	synchronousCallback?: CoreSynchronousCallbackConsumer,
 	// A site's positional argument count; reads of `arguments` resolve against it.
 	argumentCount?: number,
+	expansion: "call" | "array-iteration" = "call",
 ): InlineTarget | undefined {
 	const fn = program.function(target);
 	const callbackConsumer =
@@ -803,6 +805,9 @@ function inlineTarget(
 	const moved = captureContext?.moved === true;
 	const loopsAllowed =
 		callbackConsumer || moved || captureContext?.sameScopeChain === true;
+	// Iteration amortizes callback expansion over its elements; program budgets still
+	// charge the loop and callback together before either graph is changed.
+	const largerBody = callbackConsumer || moved || expansion === "array-iteration";
 	if (
 		fn.isGenerator ||
 		fn.isAsync ||
@@ -845,7 +850,7 @@ function inlineTarget(
 		}
 		if (visited.has(block)) return true;
 		if (
-			visited.size >= (callbackConsumer || moved ? 64 : 16) ||
+			visited.size >= (largerBody ? 64 : 16) ||
 			(!callbackConsumer && fn.kernel.blockHandlerBlock(block) !== undefined)
 		)
 			return false;
@@ -864,7 +869,7 @@ function inlineTarget(
 					return false;
 			}
 			if (
-				++instructionCount > (callbackConsumer || moved ? 128 : 48) ||
+				++instructionCount > (largerBody ? 128 : 48) ||
 				INLINE_UNSUPPORTED_OPCODES.has(opcode) ||
 				(invocation !== "construct" && opcode === "loadNewTarget") ||
 				(invocation === "construct" &&
@@ -1852,10 +1857,14 @@ function offerFunctionCandidates(
 				callback,
 				"call",
 				directCaptureContext(fn, iteration.callback, site.instruction, callback),
+				undefined,
+				iteration.name === "reduce" ? 4 : 3,
+				"array-iteration",
 			);
 			// A callback with its own loop would nest it in every expanded call site.
 			if (inline !== undefined && !inline.loops) {
-				const generatedCodeCost = 32 + inline.instructions.length;
+				const generatedCodeCost =
+					32 + inline.instructions.length + (inline.linear ? 0 : inline.blocks.length);
 				service.offer({
 					kind: "array-iteration-inline",
 					caller: functionId,
@@ -1871,8 +1880,7 @@ function offerFunctionCandidates(
 					),
 					targets: [callback],
 					generatedCodeCost,
-					compilerWorkCost:
-						32 + inline.instructions.length + inline.function.valueCapacity,
+					compilerWorkCost: generatedCodeCost + inline.function.valueCapacity,
 					expansive: true,
 				});
 				continue;
@@ -3178,7 +3186,15 @@ function applyLinearInline(
 		);
 	if (inline === undefined) return undefined;
 	if (inline.construction) return applyGuardedInline(program, candidate, editor, false);
-	if (!inline.linear) return applyGuardedInline(program, candidate, editor, false);
+	if (!inline.linear)
+		return applyGuardedInline(
+			program,
+			candidate,
+			editor,
+			false,
+			undefined,
+			selectedInline,
+		);
 	const callResults = materializeInstructionResults(caller, candidate.site);
 	if (callResults.length !== 1) return undefined;
 	const callResult = callResults[0]!;
@@ -3446,6 +3462,7 @@ function applyGuardedInline(
 	editor: CoreEditor,
 	guarded = true,
 	synchronousCallback?: CoreSynchronousCallbackConsumer,
+	selectedInline?: InlineTarget,
 ): AppliedTransform | undefined {
 	const target = candidate.targets[0];
 	if (target === undefined) return undefined;
@@ -3464,15 +3481,17 @@ function applyGuardedInline(
 	const operands = materializeInstructionOperands(caller, candidate.site);
 	const callee = operands[descriptor.callTransfer.calleeOperand];
 	if (callee === undefined) return undefined;
-	const inline = inlineTarget(
-		program,
-		caller,
-		target,
-		descriptor.callTransfer.invocation,
-		applicationCaptureContext(program, caller, callee, candidate.site, target),
-		synchronousCallback,
-		positionalArgumentCount(caller, candidate.site),
-	);
+	const inline =
+		selectedInline ??
+		inlineTarget(
+			program,
+			caller,
+			target,
+			descriptor.callTransfer.invocation,
+			applicationCaptureContext(program, caller, callee, candidate.site, target),
+			synchronousCallback,
+			positionalArgumentCount(caller, candidate.site),
+		);
 	if (inline === undefined) return undefined;
 	if (
 		inline.construction &&
@@ -4167,6 +4186,7 @@ function applyFiniteDispatch(
 function applyCandidate(
 	program: CoreProgram,
 	summaries: CoreProgramSummaries,
+	context: CoreCompilationContext,
 	candidate: CoreTransformCandidate,
 	editor: CoreEditor,
 ): AppliedTransform | undefined {
@@ -4206,27 +4226,61 @@ function applyCandidate(
 				coreDirectCreatedFunction(fn, iteration.callback) !== target
 			)
 				return undefined;
+			const captureContext = directCaptureContext(
+				fn,
+				iteration.callback,
+				candidate.site,
+				target,
+			);
 			const inline = inlineTarget(
 				program,
 				fn,
 				target,
 				"call",
-				directCaptureContext(fn, iteration.callback, candidate.site, target),
+				captureContext,
+				undefined,
+				iteration.name === "reduce" ? 4 : 3,
+				"array-iteration",
 			);
 			if (inline === undefined || inline.loops) return undefined;
+			const guarded = coreArrayIterationNeedsGuard(
+				fn,
+				candidate.site,
+				iteration,
+				context,
+			);
 			const expanded = expandCoreArrayIterationCall(
 				fn,
 				editor,
 				candidate.site,
 				iteration,
+				guarded,
 			);
 			const applied = applyLinearInline(
 				program,
 				{ ...candidate, kind: "inline", site: expanded.callback },
 				editor,
+				inline,
 			);
 			if (applied === undefined)
 				throw new Error("Admitted array iteration callback lost its inline proof");
+			// The capture proof keeps the scope chain stable until the method call.
+			// Once the fast invocation disappears, only the fallback needs the closure.
+			if (
+				guarded &&
+				captureContext !== undefined &&
+				fn.valueUseCount(iteration.callback) === 1 &&
+				fn.kernel.valueHandlerUseCount(iteration.callback) === 0
+			) {
+				const creation = coreInstructionId(
+					fn.kernel.valueDefinitionOwner(iteration.callback),
+				);
+				editor.moveInstruction(
+					creation,
+					fn.instructionBlock(candidate.site),
+					candidate.site,
+				);
+			}
 			return {
 				instructionsIntroduced:
 					expanded.instructionsIntroduced + applied.instructionsIntroduced,
@@ -5685,7 +5739,13 @@ export function runCoreCrossCallTransforms(
 			const editor =
 				editors.get(candidate.caller) ?? CoreEditor.open(program, candidate.caller);
 			editors.set(candidate.caller, editor);
-			const applied = applyCandidate(program, summaries, candidate, editor);
+			const applied = applyCandidate(
+				program,
+				summaries,
+				analyses.compilationContext,
+				candidate,
+				editor,
+			);
 			if (applied === undefined) {
 				service.recordDeclined("unsupported-graph");
 				continue;

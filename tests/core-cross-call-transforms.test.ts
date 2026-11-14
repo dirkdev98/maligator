@@ -1422,6 +1422,79 @@ describe("bounded Core cross-call transforms", () => {
 		).toBe(true);
 	});
 
+	it("expands a branching iteration callback beyond ordinary call size limits", () => {
+		let optimized: CoreProgram | undefined;
+		compileEntrypoint(resolve("tests/local/array-iteration-branching.mjs"), {
+			buildConfig: resolveBuildConfig({ engine: { primordials: "mutable" } }),
+			coreVerification: "per-pass",
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+		const caller = coreFunctionNamed(optimized!, "inspect")!;
+		const operations = coreOperations(caller);
+		const fallback = operations.find(
+			({ opcode, attributes }) =>
+				opcode === "call" && attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true,
+		);
+		expect(fallback).toBeDefined();
+		expect(
+			operations
+				.filter(({ opcode }) => opcode === "createFunction")
+				.map(({ block }) => block),
+		).toEqual([fallback!.block]);
+		expect(
+			operations.some(
+				({ opcode, block }) =>
+					opcode === "storeCaptured" &&
+					block !== caller.entry &&
+					block !== fallback!.block,
+			),
+		).toBe(true);
+	});
+
+	it("removes the callback and guard for a private default-species flat result", () => {
+		let optimized: CoreProgram | undefined;
+		compileEntrypoint(resolve("tests/local/array-iteration-branching.mjs"), {
+			buildConfig: resolveBuildConfig({}),
+			coreVerification: "per-pass",
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+		const operations = coreOperations(coreFunctionNamed(optimized!, "copied")!);
+		expect(operations.some(({ opcode }) => opcode === "createFunction")).toBe(false);
+		expect(
+			operations.some(
+				({ opcode, attributes }) =>
+					opcode === "call" &&
+					attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true,
+			),
+		).toBe(false);
+		expect(operations.some(({ opcode }) => opcode === "storeCaptured")).toBe(false);
+	});
+
+	it.each(["copiedWithSpecies", "exposed"])(
+		"retains a method fallback when %s can change the copied receiver",
+		(name) => {
+			let optimized: CoreProgram | undefined;
+			compileEntrypoint(resolve("tests/local/array-iteration-branching.mjs"), {
+				buildConfig: resolveBuildConfig({}),
+				coreVerification: "per-pass",
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			});
+			expect(
+				coreOperations(coreFunctionNamed(optimized!, name)!).some(
+					({ opcode, attributes }) =>
+						opcode === "call" &&
+						attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true,
+				),
+			).toBe(true);
+		},
+	);
+
 	it("sinks one-shot captured callbacks into guarded fallbacks", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(

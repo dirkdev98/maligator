@@ -1,3 +1,4 @@
+import type { CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreEditor } from "./core-editor.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
 import { coreTerminatorInput } from "./core-ir-control-flow.ts";
@@ -35,6 +36,87 @@ export interface CoreArrayIterationCall {
 
 function isArrayIterationName(name: string): name is CoreArrayIterationName {
 	return Object.hasOwn(ARRAY_ITERATION_METHOD_IDS, name);
+}
+
+/**
+ * Returning false proves the method, receiver and species checks cannot fail:
+ * a private plain Array and the locked builtin graph prevent method replacement
+ * or user-defined result construction before iteration.
+ */
+export function coreArrayIterationNeedsGuard(
+	fn: CoreFunctionStore,
+	site: CoreInstructionId,
+	call: CoreArrayIterationCall,
+	context: CoreCompilationContext,
+): boolean {
+	if (
+		context.facts.world.primordialPolicy !== "locked" ||
+		context.facts.world.realms ||
+		fn.kernel.valueDefinitionKind(call.receiver) !== 1
+	)
+		return true;
+	const producer = coreInstructionId(fn.kernel.valueDefinitionOwner(call.receiver));
+	const attributes = fn.instructionAttributes(producer);
+	// flat chooses its species before reading elements and exposes only its completed
+	// result. Numeric definitions on the private source cannot redirect that species.
+	if (
+		fn.instructionOpcodeName(producer) !== "callKnown" ||
+		attributes.operation !== "Array.prototype.flat" ||
+		attributes.construct ||
+		attributes.argumentMode !== undefined ||
+		fn.kernel.instructionOperandCount(producer) !== 1
+	)
+		return true;
+	const source = fn.kernel.operandAt(fn.kernel.instructionOperandStart(producer));
+	if (fn.kernel.valueDefinitionKind(source) !== 1) return true;
+	const allocation = coreInstructionId(fn.kernel.valueDefinitionOwner(source));
+	if (fn.instructionOpcodeName(allocation) !== "createArray") return true;
+	const lookup = coreInstructionId(fn.kernel.valueDefinitionOwner(call.callee));
+	if (fn.kernel.operandAt(fn.kernel.instructionOperandStart(lookup)) !== call.receiver)
+		return true;
+	let remainingUses = 256;
+	for (const value of [source, call.receiver]) {
+		if (fn.kernel.valueHandlerUseCount(value) !== 0) return true;
+		for (
+			let use = fn.kernel.valueFirstUse(value);
+			use >= 0;
+			use = fn.kernel.useNext(use)
+		) {
+			if (--remainingUses < 0) return true;
+			if (fn.kernel.useLive(use) === 0) continue;
+			const instruction = coreInstructionId(fn.kernel.useInstruction(use));
+			const operand = fn.kernel.useOperand(use);
+			if (value === call.receiver) {
+				if (
+					(instruction === site && operand === 1) ||
+					(instruction === lookup && operand === 0)
+				)
+					continue;
+				return true;
+			}
+			if (instruction === producer && operand === 0) continue;
+			if (
+				fn.instructionKind(instruction) !== "operation" ||
+				fn.instructionOpcodeName(instruction) !== "defineProperty" ||
+				operand !== 0
+			)
+				return true;
+			const key = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1);
+			if (fn.kernel.valueDefinitionKind(key) !== 1) return true;
+			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(key));
+			const opcode = fn.instructionOpcodeName(definition);
+			const index = fn.instructionAttributes(definition).value;
+			if (
+				!["createNumber", "createI32", "createF64"].includes(opcode) ||
+				typeof index !== "number" ||
+				!Number.isInteger(index) ||
+				index < 0 ||
+				index >= 4294967295
+			)
+				return true;
+		}
+	}
+	return false;
 }
 
 export function coreArrayIterationCall(
@@ -84,6 +166,7 @@ export function expandCoreArrayIterationCall(
 	editor: CoreEditor,
 	site: CoreInstructionId,
 	call: CoreArrayIterationCall,
+	guarded = true,
 ): {
 	readonly callback: CoreInstructionId;
 	readonly instructionsIntroduced: number;
@@ -106,7 +189,7 @@ export function expandCoreArrayIterationCall(
 		next = fn.instructionNext(next)
 	)
 		tail.push(next);
-	const fallback = editor.createBlock();
+	const fallback = guarded ? editor.createBlock() : undefined;
 	const fast = editor.createBlock();
 	const header = editor.createBlock(carries ? [{}, {}] : [{}]);
 	const present = finds ? undefined : editor.createBlock();
@@ -137,21 +220,23 @@ export function expandCoreArrayIterationCall(
 		sourcePosition: fn.instructionSourcePosition(originalTerminator),
 	});
 	editor.removeInstruction(originalTerminator);
-	editor.moveInstruction(site, fallback);
-	const operands = [
-		call.callee,
-		call.receiver,
-		call.callback,
-		...(call.secondArgument === undefined ? [] : [call.secondArgument]),
-	];
-	editor.replaceInstruction(site, "call", operands, {
-		attributes: {
-			...fn.instructionAttributes(site),
-			[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE]: true,
-		},
-		sourcePosition,
-		effectRefinement: fn.instructionEffectRefinement(site),
-	});
+	if (fallback !== undefined) {
+		editor.moveInstruction(site, fallback);
+		const operands = [
+			call.callee,
+			call.receiver,
+			call.callback,
+			...(call.secondArgument === undefined ? [] : [call.secondArgument]),
+		];
+		editor.replaceInstruction(site, "call", operands, {
+			attributes: {
+				...fn.instructionAttributes(site),
+				[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE]: true,
+			},
+			sourcePosition,
+			effectRefinement: fn.instructionEffectRefinement(site),
+		});
+	} else editor.removeInstruction(site);
 	const handler = fn.kernel.blockHandlerBlock(block);
 	if (handler !== undefined) {
 		const start = fn.kernel.blockHandlerArgumentStart(block);
@@ -194,24 +279,26 @@ export function expandCoreArrayIterationCall(
 			alternate: { block: no, arguments: noArguments },
 			sourcePosition,
 		});
-	jump(fallback, join, [result]);
 	const undefinedValue = append(block, "createUndefined").outputs[0]!;
-	const guard = append(block, "loadIntrinsic", [], {
-		intrinsic: "__arrayIterationEligible",
-	}).outputs[0]!;
-	const method = append(block, "createNumber", [], {
-		value: ARRAY_ITERATION_METHOD_IDS[name],
-	}).outputs[0]!;
-	// Exact created callbacks are callable; avoiding a guard use permits capture virtualization.
-	const eligible = append(block, "call", [
-		guard,
-		undefinedValue,
-		call.callee,
-		call.receiver,
-		method,
-		call.callee,
-	]).outputs[0]!;
-	branch(block, eligible, fast, fallback);
+	if (fallback !== undefined) {
+		jump(fallback, join, [result]);
+		const guard = append(block, "loadIntrinsic", [], {
+			intrinsic: "__arrayIterationEligible",
+		}).outputs[0]!;
+		const method = append(block, "createNumber", [], {
+			value: ARRAY_ITERATION_METHOD_IDS[name],
+		}).outputs[0]!;
+		// Exact created callbacks are callable; avoiding a guard use permits capture virtualization.
+		const eligible = append(block, "call", [
+			guard,
+			undefinedValue,
+			call.callee,
+			call.receiver,
+			method,
+			call.callee,
+		]).outputs[0]!;
+		branch(block, eligible, fast, fallback);
+	} else jump(block, fast);
 	const lengthKey = editor.appendStringConstants([
 		[..."length"].map((unit) => unit.charCodeAt(0)),
 	]);
