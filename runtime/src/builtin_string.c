@@ -3630,6 +3630,11 @@ static inline MalValue mal_builtin_string_split_flat_piece(
     if (length > MAL_STRING_INLINE_LATIN1_CODE_UNITS || length == subject->length) {
         return mal_builtin_string_slice(vm, string, start, length);
     }
+    // One-unit pieces share the realm's interned character strings.
+    if (length == 1) {
+        c16 unit = subject->latin1 ? subject->latin1_units[start] : subject->utf16_units[start];
+        if (unit <= UINT8_MAX) return mal_value_from_string(mal_intrinsic_code_unit(vm, unit));
+    }
     if (subject->latin1) {
         return mal_value_from_string(
             mal_string_new_inline_latin1(&vm->heap, subject->latin1_units + start, length));
