@@ -165,6 +165,25 @@ static inline __attribute__((always_inline)) f64 mal_data_view_read(
     }
 }
 
+/** Store the low bits of an integer setter or the encoded bits of a Float32 setter. */
+static inline __attribute__((always_inline)) void mal_data_view_write_bits(
+    byte *at, MalDataViewAccessor accessor, u32 bits, bool little_endian
+) {
+    switch (accessor) {
+        case MAL_DATA_VIEW_SET_INT8:
+        case MAL_DATA_VIEW_SET_UINT8:
+            mal_scalar_store_native_u8(at, (u8) bits);
+            return;
+        case MAL_DATA_VIEW_SET_INT16:
+        case MAL_DATA_VIEW_SET_UINT16:
+            mal_store_u16_le(at, little_endian ? (u16) bits : __builtin_bswap16((u16) bits));
+            return;
+        default:
+            mal_store_u32_le(at, little_endian ? bits : __builtin_bswap32(bits));
+            return;
+    }
+}
+
 static inline __attribute__((always_inline)) void mal_data_view_write(
     byte *at, MalDataViewAccessor accessor, f64 number, bool little_endian
 ) {
@@ -183,19 +202,5 @@ static inline __attribute__((always_inline)) void mal_data_view_write(
     } else {
         bits = (u32) mal_ops_number_to_uint_width(number, 32);
     }
-    switch (accessor) {
-        case MAL_DATA_VIEW_SET_INT8:
-        case MAL_DATA_VIEW_SET_UINT8:
-            mal_scalar_store_native_u8(at, (u8) bits);
-            return;
-        case MAL_DATA_VIEW_SET_INT16:
-        case MAL_DATA_VIEW_SET_UINT16:
-            if (little_endian) mal_store_u16_le(at, (u16) bits);
-            else mal_store_u16_be(at, (u16) bits);
-            return;
-        default:
-            if (little_endian) mal_store_u32_le(at, bits);
-            else mal_store_u32_be(at, bits);
-            return;
-    }
+    mal_data_view_write_bits(at, accessor, bits, little_endian);
 }

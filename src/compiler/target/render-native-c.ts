@@ -1462,7 +1462,7 @@ const DATA_VIEW_INTEGER_RANGES: Readonly<
 
 /**
  * Registers whose every write in the region yields a safe integer, never -0. Doubles
- * and int64 agree exactly on sums and differences of such values.
+ * and int64 agree exactly on sums, differences and products of such values.
  */
 function integralLoopRegisters(
 	fn: BytecodeFunction,
@@ -1477,6 +1477,7 @@ function integralLoopRegisters(
 	doubles: ReadonlySet<number> = new Set(),
 	// Results of DataView getters; any other call reads a code unit.
 	callRanges: ReadonlyMap<BytecodeInstruction, IntegerRange | undefined> = new Map(),
+	loadRanges: ReadonlyMap<BytecodeInstruction, IntegerRange> = new Map(),
 ): Set<number> {
 	const writers = new Map<number, Array<BytecodeInstruction>>();
 	for (const ip of order) {
@@ -1492,28 +1493,26 @@ function integralLoopRegisters(
 		for (const register of vmInstructionWriteRegisters(op))
 			if (inputs.includes(register) && !writers.has(register))
 				functionWrites.set(register, [...(functionWrites.get(register) ?? []), op]);
-	// The entry guard bounds any integral input; only loop invariants that can hold nothing
-	// but an admissible constant join, so a fractional invariant never declines the region.
-	const constants = [...functionWrites].flatMap(([register, [op, ...others]]) =>
-		register >= fn.parameterCount &&
-		others.length === 0 &&
-		(op?.opcode === "CREATE_NUMBER" || op?.opcode === "CREATE_F64") &&
-		flow.kinds.get(register) === "number" &&
-		Number.isInteger(op.value) &&
-		!Object.is(op.value, -0) &&
-		op.value >= ADMITTED_INPUT_RANGE.low &&
-		op.value <= ADMITTED_INPUT_RANGE.high
-			? [register]
-			: [],
+	// An invariant constant holds its value or its local's zero initializer. Fractional
+	// constants stay doubles so they never make the shared entry decline the region.
+	const constants = [...functionWrites].flatMap(
+		([register, [op, ...others]]): Array<[number, IntegerRange]> =>
+			register >= fn.parameterCount &&
+			others.length === 0 &&
+			(op?.opcode === "CREATE_NUMBER" || op?.opcode === "CREATE_F64") &&
+			flow.kinds.get(register) === "number" &&
+			Number.isInteger(op.value) &&
+			!Object.is(op.value, -0) &&
+			op.value >= ADMITTED_INPUT_RANGE.low &&
+			op.value <= ADMITTED_INPUT_RANGE.high
+				? [[register, { low: Math.min(0, op.value), high: Math.max(0, op.value) }]]
+				: [],
 	);
-	const fixed = new Set([...constants, ...pinned.keys()]);
+	const fixed = new Set([...constants.map(([register]) => register), ...pinned.keys()]);
 	// Registers that are not inputs start from their local's zero initializer.
 	const ranges = new Map<number, IntegerRange | "unbounded">([
-		...constants.map((register): [number, IntegerRange] => [
-			register,
-			ADMITTED_INPUT_RANGE,
-		]),
 		...[...pinned].filter(([register]) => !writers.has(register)),
+		...constants,
 		...[...writers.keys()]
 			.filter((register) => flow.kinds.get(register) === "number")
 			.map((register): [number, IntegerRange | "unbounded"] => [
@@ -1544,6 +1543,20 @@ function integralLoopRegisters(
 					return safe(left.low + right.low, left.high + right.high);
 				if (op.operator === "-")
 					return safe(left.low - right.high, left.high - right.low);
+				if (op.operator === "*") {
+					// A product is -0 exactly when one factor is 0 and the other negative.
+					const zeroByNegative = (zero: IntegerRange, negative: IntegerRange) =>
+						zero.low <= 0 && zero.high >= 0 && negative.low < 0;
+					if (zeroByNegative(left, right) || zeroByNegative(right, left))
+						return undefined;
+					const corners = [
+						left.low * right.low,
+						left.low * right.high,
+						left.high * right.low,
+						left.high * right.high,
+					];
+					return safe(Math.min(...corners), Math.max(...corners));
+				}
 				return undefined;
 			}
 			case "UNARY": {
@@ -1562,6 +1575,10 @@ function integralLoopRegisters(
 			case "TO_PROPERTY_KEY":
 				return rangeOf(op.key);
 			case "LOAD_PROPERTY":
+				return loadRanges.get(op) ?? elementLoads;
+			case "LOAD_PROPERTY_STATIC":
+			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
+				return pinned.get(op.dst);
 			case "ITERATOR_STEP":
 				return elementLoads;
 			case "CALL":
@@ -2297,13 +2314,65 @@ function emitNumericLoopRegion(
 		`mal_ops_number_value(${floating ? value : `(f64) ${value}`})`;
 	// The header keeps the index within its guarded range, and the final step leaves it by one stride.
 	const counter = plan.kind === "fixed-numeric" ? plan.counter : undefined;
-	const pinned = new Map<number, IntegerRange>();
+	const loopWrites = new Set(
+		order.flatMap((ip) => vmInstructionWriteRegisters(fn.instructions[ip]!)),
+	);
+	const pinned = new Map<number, IntegerRange>(
+		plan.inputs.flatMap((register): Array<[number, IntegerRange]> => {
+			if (kindOf(register) !== "number" || loopWrites.has(register)) return [];
+			const ranges = order.flatMap((ip) => {
+				const range = instructionInputIntegerRange(facts?.[ip], register);
+				return range === undefined ||
+					range.minimum < ADMITTED_INPUT_RANGE.low ||
+					range.maximum > ADMITTED_INPUT_RANGE.high
+					? []
+					: [range];
+			});
+			if (ranges.length === 0)
+				return reps[register] === "int32" ? [[register, INT32_RANGE]] : [];
+			// A path-specific fact can narrow admission, but never bypass its entry guard.
+			return [
+				[
+					register,
+					{
+						low: Math.min(0, ...ranges.map((range) => range.minimum)),
+						high: Math.max(0, ...ranges.map((range) => range.maximum)),
+					},
+				],
+			];
+		}),
+	);
 	if (counter !== undefined) {
 		const low = Math.min(0, counter.stride);
 		const high = UINT32_RANGE.high + Math.max(0, counter.stride);
 		if (Number.isSafeInteger(low) && Number.isSafeInteger(high))
 			pinned.set(counter.index, { low, high });
+		if (counter.boundObject !== undefined) pinned.set(counter.bound, UINT32_RANGE);
 	}
+	const loadRanges = (expected: boolean) =>
+		new Map(
+			order.flatMap((ip): Array<[BytecodeInstruction, IntegerRange]> => {
+				const op = fn.instructions[ip]!;
+				if (op.opcode !== "LOAD_PROPERTY") return [];
+				const access = nativeInstructions[ip];
+				const elementKind =
+					access?.kind === "exact-typed-array-element" ||
+					access?.kind === "contained-fixed-typed-array-element"
+						? access.elementKind
+						: expected && plan.kind === "fixed-numeric"
+							? plan.views.find((view) => view.object === op.object)?.expectedKind
+							: undefined;
+				const range =
+					elementKind === undefined
+						? undefined
+						: DATA_VIEW_INTEGER_RANGES[
+								elementKind === "Uint8ClampedArray"
+									? "Uint8"
+									: (elementKind.slice(0, -"Array".length) as NativeDataViewCall["type"])
+							];
+				return range === undefined ? [] : [[op, range]];
+			}),
+		);
 	// Integer locals spare the double round trip that each ToInt32 would otherwise take.
 	const baseIntegral = floating
 		? integralLoopRegisters(
@@ -2317,6 +2386,34 @@ function emitNumericLoopRegion(
 				callRanges,
 			)
 		: new Set<number>();
+	const typedIntegral =
+		floating && plan.kind === "fixed-numeric"
+			? integralLoopRegisters(
+					fn,
+					order,
+					flow,
+					plan.inputs,
+					pinned,
+					undefined,
+					new Set(plan.inputs.filter((register) => !baseIntegral.has(register))),
+					callRanges,
+					loadRanges(false),
+				)
+			: baseIntegral;
+	const expectedIntegral =
+		plan.kind === "fixed-numeric"
+			? integralLoopRegisters(
+					fn,
+					order,
+					flow,
+					plan.inputs,
+					pinned,
+					undefined,
+					new Set(plan.inputs.filter((register) => !baseIntegral.has(register))),
+					callRanges,
+					loadRanges(true),
+				)
+			: baseIntegral;
 	// Over views of integer kinds, element loads are integers too. Inputs keep the
 	// representation their shared entry admits.
 	const integerIntegral =
@@ -2336,9 +2433,6 @@ function emitNumericLoopRegion(
 	// integers, so the checked-integer copy performs them without overflow checks
 	// instead of relying on the C compiler to prove the same bounds. The entry admits
 	// every input in this range, which holds throughout for one the loop never writes.
-	const loopWrites = new Set(
-		order.flatMap((ip) => vmInstructionWriteRegisters(fn.instructions[ip]!)),
-	);
 	const uncheckedSums =
 		arrayArithmetic === "checked-integer"
 			? integralLoopRegisters(
@@ -2376,6 +2470,12 @@ function emitNumericLoopRegion(
 					  )
 					? vmInstructionReadRegisters(op)
 					: [];
+		const data = dataViewCalls.get(ip);
+		if (op.opcode === "CALL" && data?.set && DATA_VIEW_INTEGER_RANGES[data.type]) {
+			const value = decodeVmValueOperand(op.arguments[1]!);
+			if (value.kind === "register" && integerOnly.includes(value.register)) return true;
+		}
+		if (op.opcode === "STORE_PROPERTY" && integerOnly.includes(op.value)) return true;
 		return operands.some((register) => integerOnly.includes(register));
 	});
 	// Each loop body renders its statements against its own mode's representations.
@@ -2467,7 +2567,10 @@ function emitNumericLoopRegion(
 				: `(f64) r${register}`;
 		if (representation === "boxed") admit(register, `mal_ops_is_number(r${register})`);
 		if (integral.has(register)) {
-			const admitted = `${representation === "boxed" ? `mal_ops_is_number(r${register}) && ` : ""}${value} == trunc(${value}) && ${value} >= -2147483648.0 && ${value} <= 4294967295.0 && (${value} != 0.0 || !signbit(${value}))`;
+			const range = pinned.get(register) ?? ADMITTED_INPUT_RANGE;
+			const low = cF64Literal(Math.max(ADMITTED_INPUT_RANGE.low, range.low));
+			const high = cF64Literal(Math.min(ADMITTED_INPUT_RANGE.high, range.high));
+			const admitted = `${representation === "boxed" ? `mal_ops_is_number(r${register}) && ` : ""}${value} == trunc(${value}) && ${value} >= ${low} && ${value} <= ${high} && (${value} != 0.0 || !signbit(${value}))`;
 			admit(register, `(${admitted})`);
 			initial.set(register, `(${admitted}) ? (i64) ${value} : 0`);
 			continue;
@@ -2726,7 +2829,7 @@ function emitNumericLoopRegion(
 	const textBound = boundObject !== undefined && textObjects.has(boundObject);
 	if (counter !== undefined && textBound)
 		rangePrelude.push(
-			`  ${local(counter.bound)} = ${id}_text ? (f64) ${id}_s${boundObject}.length : 0.0;`,
+			`  ${local(counter.bound)} = ${id}_text ? (${integral.has(counter.bound) ? "i64" : "f64"}) ${id}_s${boundObject}.length : 0;`,
 		);
 	if (textual) {
 		rangePrelude.push(`  bool ${id}_typed = ${id}_text;`, `  bool ${id}_array = false;`);
@@ -2772,7 +2875,7 @@ function emitNumericLoopRegion(
 		);
 		if (counter !== undefined && boundObject !== undefined && !textBound)
 			rangePrelude.push(
-				`  ${local(counter.bound)} = ${typedPossible ? `${id}_typed ? (f64) ${id}_v${boundObject}.length : ` : ""}${arrayAlternative ? `${id}_array ? (f64) ${id}_a${boundObject}.length : ` : ""}0.0;`,
+				`  ${local(counter.bound)} = ${typedPossible ? `${id}_typed ? (${integral.has(counter.bound) ? "i64" : "f64"}) ${id}_v${boundObject}.length : ` : ""}${arrayAlternative ? `${id}_array ? (${integral.has(counter.bound) ? "i64" : "f64"}) ${id}_a${boundObject}.length : ` : ""}0;`,
 			);
 		guards.unshift(`(${id}_typed || ${id}_array)`);
 		if (textViews.length > 0) guards.unshift(`${id}_text`);
@@ -2977,7 +3080,7 @@ function emitNumericLoopRegion(
 				}
 				if (boundObject === undefined || op.object !== boundObject)
 					throw new Error("Invalid numeric loop length load");
-				return `${local(op.dst)} = (f64) ${id}_${textObjects.has(op.object) ? "s" : mode === "array" ? "a" : "v"}${op.object}.length;`;
+				return `${local(op.dst)} = (${integral.has(op.dst) ? "i64" : "f64"}) ${id}_${textObjects.has(op.object) ? "s" : mode === "array" ? "a" : "v"}${op.object}.length;`;
 			case "CALL": {
 				const foreign = foreignCalls.get(ip);
 				if (foreign !== undefined) {
@@ -3040,8 +3143,15 @@ function emitNumericLoopRegion(
 								: order?.kind === "number"
 									? String(order.value !== 0)
 									: "false";
+					const integer =
+						data.set &&
+						DATA_VIEW_INTEGER_RANGES[data.type] !== undefined &&
+						stored?.kind === "register" &&
+						integral.has(stored.register);
 					return data.set
-						? `mal_data_view_write(${at}, ${dataViewAccessorName(data)}, ${number}, ${littleEndian});`
+						? integer
+							? `mal_data_view_write_bits(${at}, ${dataViewAccessorName(data)}, (u32) (u64) ${local(stored.register)}, ${littleEndian});`
+							: `mal_data_view_write(${at}, ${dataViewAccessorName(data)}, ${number}, ${littleEndian});`
 						: `${local(op.dst)} = ${integral.has(op.dst) ? "(i64) " : ""}mal_data_view_read(${at}, ${dataViewAccessorName(data)}, ${littleEndian});`;
 				}
 				const argument = op.arguments[0];
@@ -3112,13 +3222,19 @@ function emitNumericLoopRegion(
 							: elementKind === "Float32Array"
 								? `mal_scalar_f32_to_bits((f32) ${num(op.value)})`
 								: elementKind === "Uint8ClampedArray"
-									? `mal_typed_array_to_uint8_clamp(${num(op.value)})`
-									: `(u${width * 8}) mal_ops_number_to_uint32(${num(op.value)})`;
+									? integral.has(op.value)
+										? `(u8) (${local(op.value)} <= 0 ? 0 : ${local(op.value)} >= 255 ? 255 : ${local(op.value)})`
+										: `mal_typed_array_to_uint8_clamp(${num(op.value)})`
+									: integral.has(op.value)
+										? `(u${width * 8}) (u64) ${local(op.value)}`
+										: `(u${width * 8}) mal_ops_number_to_uint32(${num(op.value)})`;
 					return `{ ${bound}mal_scalar_store_native_u${width * 8}(${id}_v${op.object}.data + (usize)(u32) ${key} * ${width}, ${bits}); }`;
 				}
 				return mode === "f64"
 					? `{ ${bound}mal_scalar_store_native_u64(${id}_v${op.object}.data + (usize)(u32) ${key} * 8, mal_scalar_f64_to_bits(${num(op.value)})); }`
-					: `{ ${bound}mal_vm_fixed_numeric_store(&${id}_v${op.object}, (u32) ${key}, ${num(op.value)}); }`;
+					: integral.has(op.value)
+						? `{ ${bound}mal_vm_fixed_integer_store(&${id}_v${op.object}, (u32) ${key}, ${local(op.value)}); }`
+						: `{ ${bound}mal_vm_fixed_numeric_store(&${id}_v${op.object}, (u32) ${key}, ${num(op.value)}); }`;
 			}
 			case "REQUIRE_COERCIBLE":
 				// The element load already restarted the iteration for anything but an object.
@@ -3176,6 +3292,7 @@ function emitNumericLoopRegion(
 					switch (op.operator) {
 						case "+":
 						case "-":
+						case "*":
 							return `${local(op.dst)} = ${left} ${op.operator} ${right};`;
 						case "&":
 						case "|":
@@ -3328,12 +3445,19 @@ function emitNumericLoopRegion(
 		return [...lines, "    }"];
 	};
 	const loopCopy = (mode: NumericLoopBodyMode): ReadonlyArray<string> => {
-		integral = mode === "integer" ? integerIntegral : baseIntegral;
+		integral =
+			mode === "integer"
+				? integerIntegral
+				: mode === "expected"
+					? expectedIntegral
+					: mode === "typed"
+						? typedIntegral
+						: baseIntegral;
 		const lines = [
 			// Inner declarations shadow the shared locals that hold doubles elsewhere.
-			...(mode === "integer"
-				? integerOnly.map((register) => `    i64 ${local(register)} = 0;`)
-				: []),
+			...[...integral]
+				.filter((register) => !baseIntegral.has(register))
+				.map((register) => `    i64 ${local(register)} = 0;`),
 			...classCells.map(
 				(layout) =>
 					`    const struct MalShape *${id}_class${layout} = vm->class_cells[${layout}].ic.shape;`,

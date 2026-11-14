@@ -3113,6 +3113,27 @@ static inline void mal_vm_fixed_numeric_store(
     }
 }
 
+/** A safe integer stores modulo the integer element width; floating views convert once. */
+static inline void mal_vm_fixed_integer_store(
+    const MalTypedArraySpan *span, u32 index, i64 number
+) {
+    if (span->kind == MAL_TA_FLOAT64) {
+        mal_scalar_store_native_u64(
+            span->data + (usize) index * 8, mal_scalar_f64_to_bits((f64) number));
+    } else if (span->kind == MAL_TA_UINT8_CLAMPED) {
+        mal_scalar_store_native_u8(span->data + index,
+            (u8) (number <= 0 ? 0 : number >= 255 ? 255 : number));
+    } else {
+        u32 bits = span->kind == MAL_TA_FLOAT32
+            ? mal_scalar_f32_to_bits((f32) number)
+            : (u32) (u64) number;
+        if (span->element_size == 1) mal_scalar_store_native_u8(span->data + index, (u8) bits);
+        else if (span->element_size == 2)
+            mal_scalar_store_native_u16(span->data + (usize) index * 2, (u16) bits);
+        else mal_scalar_store_native_u32(span->data + (usize) index * 4, bits);
+    }
+}
+
 bool mal_vm_resolve_typed_array_length(
     MalVm *vm, MalValue receiver, MalInlineCache *ic,
     MalTypedArrayObject **out, u32 *length
