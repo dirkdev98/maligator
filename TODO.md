@@ -352,9 +352,11 @@ contracts or investigates costs still visible after the string follow-ups.
       async phase costs 33 ms against Node's 26 with a flat profile: the microtask
       drain, await, start, resume and promise allocation each take 4-13%.
 
-- [ ] Create closures and wide object literals closer to Node. A `() => i` closure
-      per iteration costs 24 ns against 11, 40% of it in `mal_vm_op_create_function`,
-      and an eight-field object literal costs 13.5 ns against 6.1.
+- [ ] Create closures and wide object literals closer to Node. A closure without
+      captures costs 10.6 ns against 5.0, and one capturing the loop variable 21.9 ns
+      against 5.75: each iteration also builds a fresh environment, and 40% of the
+      closure's own cost sits in `mal_vm_op_create_function`. An eight-field object
+      literal costs 13.5 ns against 6.1.
 
 - [ ] Bring node:stream and EventEmitter construction closer to Node. A constructed
       Readable still costs about 5x Node and a Writable 3.5x, mostly option reads
