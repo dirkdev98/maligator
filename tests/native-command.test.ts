@@ -1,8 +1,9 @@
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { expect, test } from "vitest";
-import { runIndependentCommands } from "../src/native-command.ts";
+import { expect, test, vi } from "vitest";
+import type { NativeBuildContext } from "../src/native-build-context.ts";
+import { runIndependentCommands, runNativeCommands } from "../src/native-command.ts";
 
 function shell(script: string) {
 	return { tool: "/bin/sh", args: ["-c", script] };
@@ -69,6 +70,92 @@ test("a failing command fails the batch with its exit status", () => {
 		).toThrow(expect.objectContaining({ status: 3 }));
 	});
 });
+
+test.each([1, 2])(
+	"large output on descriptor %i does not interrupt queued commands",
+	(fd) => {
+		inDirectory((directory) => {
+			runIndependentCommands(
+				[
+					{
+						tool: process.execPath,
+						args: [
+							"-e",
+							`require("node:fs").writeSync(${fd}, Buffer.alloc(2 * 1024 * 1024, "x"))`,
+						],
+					},
+					shell(":"),
+					shell("printf complete > completed"),
+				],
+				{ cwd: directory, env: emptyPath, jobs: 2, verbose: false },
+			);
+
+			expect(readFileSync(path.join(directory, "completed"), "utf8")).toBe("complete");
+		});
+	},
+);
+
+test("large failure diagnostics preserve the command status and output", () => {
+	const diagnostic = "diagnostic\n".repeat(128 * 1024);
+	let failure: unknown;
+	try {
+		runIndependentCommands(
+			[
+				{
+					tool: process.execPath,
+					args: [
+						"-e",
+						'require("node:fs").writeSync(2, "diagnostic\\n".repeat(128 * 1024)); process.exit(7)',
+					],
+				},
+				shell(":"),
+			],
+			{ env: emptyPath, jobs: 2, verbose: false },
+		);
+	} catch (error) {
+		failure = error;
+	}
+	expect(failure).toMatchObject({ status: 7 });
+	expect(failure).toHaveProperty("stderr", Buffer.from(diagnostic));
+});
+
+test.each([false, true])(
+	"verbose native batches preserve large stdout with resource measurement %s",
+	(measureCommandResources) => {
+		inDirectory((directory) => {
+			const context = {
+				cacheDirectory: directory,
+				environment: { ...emptyPath, MAL_BUILD_JOBS: "2" },
+				measureCommandResources,
+			} as unknown as NativeBuildContext;
+			const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+			try {
+				const measurements = runNativeCommands(
+					context,
+					[
+						{
+							tool: process.execPath,
+							args: [
+								"-e",
+								'require("node:fs").writeSync(1, Buffer.alloc(2 * 1024 * 1024, "x"))',
+							],
+						},
+						shell(":"),
+					],
+					{ verbose: true },
+				);
+				expect(stderr).toHaveBeenCalledWith(Buffer.alloc(2 * 1024 * 1024, "x"));
+				for (const measurement of measurements) {
+					if (measureCommandResources)
+						expect(measurement?.durationMs).toBeGreaterThanOrEqual(0);
+					else expect(measurement).toBeUndefined();
+				}
+			} finally {
+				stderr.mockRestore();
+			}
+		});
+	},
+);
 
 test("runs every command once with nothing but the commands on PATH", () => {
 	inDirectory((directory) => {
