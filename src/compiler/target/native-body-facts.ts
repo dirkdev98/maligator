@@ -170,3 +170,61 @@ export function analyzeNativeBodyFacts(fn: BytecodeFunction): NativeBodyFacts {
 				: vmExceptionHandlerTargets(fn.instructions.length, fn.handlers),
 	};
 }
+
+export function bytecodePredecessors(
+	fn: BytecodeFunction,
+	body: NativeBodyFacts,
+	ip: number,
+): Array<number> {
+	const previous = fn.instructions[ip - 1];
+	return [
+		...(body.branchSources.get(ip) ?? []),
+		...(previous !== undefined &&
+		previous.opcode !== "JUMP" &&
+		previous.opcode !== "RETURN" &&
+		previous.opcode !== "THROW"
+			? [ip - 1]
+			: []),
+	];
+}
+
+/**
+ * Whether every path from an entry to `target` runs `dominator` first. Handler targets
+ * count as entries, since their throwing edges are not branch sources.
+ */
+export function bytecodeDominates(
+	fn: BytecodeFunction,
+	body: NativeBodyFacts,
+	dominator: number,
+	target: number,
+): boolean {
+	const visited = new Set<number>([dominator]);
+	const pending = [target];
+	while (pending.length > 0) {
+		const ip = pending.pop()!;
+		if (visited.has(ip)) continue;
+		visited.add(ip);
+		if (ip === 0 || body.externalEntries.has(ip) || body.handlerTargets[ip] !== undefined)
+			return false;
+		pending.push(...bytecodePredecessors(fn, body, ip));
+	}
+	return true;
+}
+
+const singleWriterCache = new WeakMap<NativeBodyFacts, ReadonlyMap<number, number>>();
+
+/** Each register written by exactly one instruction, with that instruction. */
+export function singleWriters(body: NativeBodyFacts): ReadonlyMap<number, number> {
+	const cached = singleWriterCache.get(body);
+	if (cached !== undefined) return cached;
+	const writers = new Map<number, number>();
+	const repeated = new Set<number>();
+	for (const [ip, written] of body.writes.entries())
+		for (const register of written) {
+			if (writers.has(register)) repeated.add(register);
+			writers.set(register, ip);
+		}
+	for (const register of repeated) writers.delete(register);
+	singleWriterCache.set(body, writers);
+	return writers;
+}

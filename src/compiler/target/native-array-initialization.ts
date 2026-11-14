@@ -1,5 +1,9 @@
 import { ARRAY_INITIALIZATION_LIMITS } from "../shared/array-initialization.ts";
-import { nativeBodyLinearFlow } from "./native-body-facts.ts";
+import {
+	bytecodeDominates,
+	nativeBodyLinearFlow,
+	singleWriters,
+} from "./native-body-facts.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 import { decodeVmValueOperand } from "./runtime-image.ts";
@@ -58,63 +62,6 @@ export function selectNativeArrayInitializations(
 	const transparentControl = (ip: number) =>
 		projected &&
 		(fn.instructions[ip]!.opcode === "JUMP" || body.projection.branches.has(ip));
-	let entryChain: Map<number, number> | undefined;
-	let entryKeys: Map<number, { readonly step: number; readonly key: string }> | undefined;
-	// LICM hoists constant keys out of loops. The entry chain runs before every instruction
-	// off it, so a key it writes once holds at any later store.
-	const entryKey = (register: number, allocationIp: number): string | undefined => {
-		if (entryChain === undefined || entryKeys === undefined) {
-			entryChain = new Map();
-			entryKeys = new Map();
-			const predecessors = (ip: number) =>
-				(body.branchSources.get(ip)?.length ?? 0) +
-				(ip > 0 &&
-				!["JUMP", "RETURN", "THROW", "TERMINAL_YIELD"].includes(
-					fn.instructions[ip - 1]!.opcode,
-				)
-					? 1
-					: 0);
-			for (
-				let ip: number | undefined = 0, step = 0;
-				ip !== undefined &&
-				ip < fn.instructions.length &&
-				!entryChain.has(ip) &&
-				!body.externalEntries.has(ip) &&
-				body.handlerTargets[ip] === undefined &&
-				(projected || predecessors(ip) === (step === 0 ? 0 : 1));
-				step++
-			) {
-				const op = fn.instructions[ip]!;
-				entryChain.set(ip, step);
-				if (op.opcode === "CREATE_STRING") {
-					const key = initializationStringKey(strings, op.stringIndex);
-					if (key !== undefined) entryKeys.set(op.dst, { step, key });
-				} else if (op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64")
-					entryKeys.set(op.dst, { step, key: String(op.value) });
-				if (projected) ip = next(ip);
-				else if (op.opcode === "JUMP") ip = op.targetIp;
-				else if (
-					["JUMP_IF", "RETURN", "THROW", "TERMINAL_YIELD", "YIELD", "AWAIT"].includes(
-						op.opcode,
-					)
-				)
-					break;
-				else ip++;
-			}
-			const writeCounts = new Map<number, number>();
-			for (const writtenRegisters of body.writes)
-				for (const written of writtenRegisters)
-					writeCounts.set(written, (writeCounts.get(written) ?? 0) + 1);
-			for (const written of entryKeys.keys())
-				if (writeCounts.get(written) !== 1) entryKeys.delete(written);
-		}
-		const entry = entryKeys.get(register);
-		const allocationStep = entryChain.get(allocationIp);
-		return entry !== undefined &&
-			(allocationStep === undefined || entry.step < allocationStep)
-			? entry.key
-			: undefined;
-	};
 	let attempted = 0;
 	for (const [allocationIp, allocation] of fn.instructions.entries()) {
 		if (
@@ -174,6 +121,36 @@ export function selectNativeArrayInitializations(
 			}
 			return preparedKeys.get(register);
 		};
+		// Loop-invariant code motion hoists constant keys out of loops. A register whose only
+		// write is a constant that runs before this allocation on every path holds that key
+		// at each store the walks below reach from it.
+		const dominatingKeys = new Map<number, string | undefined>();
+		const dominatingKey = (register: number): string | undefined => {
+			if (dominatingKeys.has(register)) return dominatingKeys.get(register);
+			const writerIp =
+				register >= fn.parameterCount ? singleWriters(body).get(register) : undefined;
+			const writer = writerIp === undefined ? undefined : fn.instructions[writerIp];
+			const key =
+				writer === undefined || !bytecodeDominates(fn, body, writerIp!, allocationIp)
+					? undefined
+					: writer.opcode === "CREATE_STRING"
+						? initializationStringKey(strings, writer.stringIndex)
+						: writer.opcode === "CREATE_NUMBER" || writer.opcode === "CREATE_F64"
+							? String(writer.value)
+							: undefined;
+			dominatingKeys.set(register, key);
+			return key;
+		};
+		const storeKey = (operand: number): string | undefined => {
+			const key = decodeVmValueOperand(operand);
+			if (key.kind === "string") return initializationStringKey(strings, key.index);
+			if (key.kind === "number") return String(key.value);
+			return key.kind === "register"
+				? (keys.get(key.register) ??
+						preparedKey(key.register) ??
+						dominatingKey(key.register))
+				: undefined;
+		};
 		const values: Array<number> = [],
 			stores: Array<number> = [];
 		const visited = new Set<number>([allocationIp]);
@@ -217,19 +194,7 @@ export function selectNativeArrayInitializations(
 				writes.has(op.value)
 			)
 				break;
-			const key = decodeVmValueOperand(op.key);
-			const property =
-				key.kind === "string"
-					? initializationStringKey(strings, key.index)
-					: key.kind === "number"
-						? String(key.value)
-						: key.kind === "register"
-							? (keys.get(key.register) ??
-								preparedKey(key.register) ??
-								entryKey(key.register, allocationIp))
-							: undefined;
-			if (property !== String(values.length)) break;
-
+			if (storeKey(op.key) !== String(values.length)) break;
 			stores.push(ip);
 			values.push(op.value);
 			if (values.length === allocation.length) {
@@ -285,18 +250,7 @@ export function selectNativeArrayInitializations(
 					unavailable(ip)
 				)
 					break;
-				const key = decodeVmValueOperand(op.key);
-				const property =
-					key.kind === "string"
-						? initializationStringKey(strings, key.index)
-						: key.kind === "number"
-							? String(key.value)
-							: key.kind === "register"
-								? (keys.get(key.register) ??
-									preparedKey(key.register) ??
-									entryKey(key.register, allocationIp))
-								: undefined;
-				if (property !== String(values.length)) break;
+				if (storeKey(op.key) !== String(values.length)) break;
 				stores.push(ip);
 				values.push(op.value);
 				if (values.length === allocation.length) {

@@ -449,7 +449,7 @@ describe("fresh Array initialization regions", () => {
 			),
 		).toEqual([]);
 	});
-	it("trusts keys hoisted above a loop only while the entry chain writes them once", () => {
+	it("trusts keys hoisted above a loop only while a dominating instruction writes them once", () => {
 		const image = compile(
 			"source=+source;for(let index=0;index<source;index++)escape([index,index+1,index*2]);",
 		);
@@ -472,6 +472,23 @@ describe("fresh Array initialization regions", () => {
 		};
 		expect(select(withoutFunctionWideKeys(native.body, plan!))).toEqual([]);
 		expect(select(protectedEntry)).toEqual([]);
+	});
+	it("trusts keys hoisted into a loop preheader after an early branch", () => {
+		const image = compile(
+			'if(observe)observe();source=+source;for(let index=0;index<source;index++)escape(["k",index,true]);',
+		);
+		const native = classify(image);
+		const [plan] = native.storage!.arrayInitializations;
+		expect(plan?.mode).toBe("prepared");
+		const body = withoutFunctionWideKeys(native.body, plan!);
+		expect(
+			selectNativeArrayInitializations(
+				{ ...native, body },
+				analyzeNativeBodyFacts(body),
+				image.runtime.stringConstants,
+				() => false,
+			),
+		).toEqual([]);
 	});
 	it("invalidates a prepared key overwritten by the array allocation", () => {
 		const image = compile("return [source,escape];");

@@ -25,7 +25,12 @@ import { selectNativeStringTransform } from "./lower-native-string-transforms.ts
 import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
 import { selectNativeArrayInitializations } from "./native-array-initialization.ts";
 import type { NativeArrayInitialization } from "./native-array-initialization.ts";
-import { analyzeNativeBodyFacts } from "./native-body-facts.ts";
+import {
+	analyzeNativeBodyFacts,
+	bytecodeDominates,
+	bytecodePredecessors,
+	singleWriters,
+} from "./native-body-facts.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import { selectNativeMapEntries } from "./native-map-entry-plan.ts";
 import type { NativeMapEntryPlan } from "./native-map-entry-plan.ts";
@@ -1878,23 +1883,6 @@ export function numericLoopSupportsCheckedIntegers(
 	);
 }
 
-function bytecodePredecessors(
-	fn: BytecodeFunction,
-	body: NativeBodyFacts,
-	ip: number,
-): Array<number> {
-	const previous = fn.instructions[ip - 1];
-	return [
-		...(body.branchSources.get(ip) ?? []),
-		...(previous !== undefined &&
-		previous.opcode !== "JUMP" &&
-		previous.opcode !== "RETURN" &&
-		previous.opcode !== "THROW"
-			? [ip - 1]
-			: []),
-	];
-}
-
 export interface NativeNumericLoopShape {
 	readonly members: ReadonlySet<number>;
 	/** Members in an order that visits each after its forward predecessors within one iteration. */
@@ -2111,47 +2099,6 @@ function numericLoopEntryConstants(
 				constants.set(register, writer.value);
 		}
 	return constants;
-}
-
-/**
- * Whether every path from an entry to `target` runs `dominator` first. Handler targets
- * count as entries, since their throwing edges are not branch sources.
- */
-function bytecodeDominates(
-	fn: BytecodeFunction,
-	body: NativeBodyFacts,
-	dominator: number,
-	target: number,
-): boolean {
-	const visited = new Set<number>([dominator]);
-	const pending = [target];
-	while (pending.length > 0) {
-		const ip = pending.pop()!;
-		if (visited.has(ip)) continue;
-		visited.add(ip);
-		if (ip === 0 || body.externalEntries.has(ip) || body.handlerTargets[ip] !== undefined)
-			return false;
-		pending.push(...bytecodePredecessors(fn, body, ip));
-	}
-	return true;
-}
-
-const singleWriterCache = new WeakMap<NativeBodyFacts, ReadonlyMap<number, number>>();
-
-/** Each register written by exactly one instruction, with that instruction. */
-function singleWriters(body: NativeBodyFacts): ReadonlyMap<number, number> {
-	const cached = singleWriterCache.get(body);
-	if (cached !== undefined) return cached;
-	const writers = new Map<number, number>();
-	const repeated = new Set<number>();
-	for (const [ip, written] of body.writes.entries())
-		for (const register of written) {
-			if (writers.has(register)) repeated.add(register);
-			writers.set(register, ip);
-		}
-	for (const register of repeated) writers.delete(register);
-	singleWriterCache.set(body, writers);
-	return writers;
 }
 
 const entryChainCache = new WeakMap<NativeBodyFacts, ReadonlySet<number>>();
