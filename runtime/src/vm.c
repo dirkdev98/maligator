@@ -452,7 +452,7 @@ static void mal_vm_free_constant_pages(MalConstantPages *pool) {
 static MalEnv *mal_env_new_storage(
     MalVm *vm, MalEnv *parent, i32 function_index, i32 count, bool compact_parent, const MalValue *values
 ) {
-    MalEnv *env = mal_heap_alloc(
+    MalEnv *env = mal_heap_alloc_uninitialized(
         &vm->heap, sizeof(MalEnv) + sizeof(MalValue) * (usize) count, MAL_HEAP_ENV
     );
     env->parent = parent;

@@ -114,7 +114,7 @@ static int check_retention(const MalRuntimeImage *image) {
     MalEnv *multiple = multiple_function->creation_env;
     if (mal_env_is_single_owner(multiple) ||
         multiple->function_index != MAL_ENV_CAPTURE_VECTOR || multiple->slot_count != 2 ||
-        multiple != (MalEnv *) ((MalValue *) (multiple_function + 1) + 2) ||
+        multiple != (MalEnv *) (multiple_function + 1) ||
         multiple->parent != (MalEnv *) multiple_function) return 14;
     if (mal_vm_capture_owner(left, 1) != shared ||
         mal_vm_capture_owner(right, 1) != shared ||

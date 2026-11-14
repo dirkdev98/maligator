@@ -596,4 +596,75 @@ for (const count of [0, 1, 8, 9, 16, 65]) {
 	}
 }
 
+function closureWithProperties(payload) {
+	"use strict";
+	return function read(first, second = 3) {
+		return payload.value + first + second;
+	};
+}
+
+const propertyClosures = [];
+for (let index = 0; index < 24; index++) {
+	const closure = closureWithProperties({ value: index });
+	assert(
+		Object.getOwnPropertyNames(closure).join() === "length,name,prototype",
+		"closure metadata and constructor property order",
+	);
+	for (const key of ["length", "name"]) {
+		const descriptor = Object.getOwnPropertyDescriptor(closure, key);
+		assert(
+			!descriptor.writable && !descriptor.enumerable && descriptor.configurable,
+			"closure metadata attributes",
+		);
+	}
+	assert(closure.length === 1 && closure.name === "read", "closure metadata values");
+	const prototype = closure.prototype;
+	const descriptor = Object.getOwnPropertyDescriptor(closure, "prototype");
+	assert(
+		descriptor.value === prototype &&
+			descriptor.writable &&
+			!descriptor.enumerable &&
+			!descriptor.configurable &&
+			prototype.constructor === closure,
+		"closure constructor prototype identity and attributes",
+	);
+	for (let key = 0; key < 12; key++) closure[`field${key}`] = { value: index + key };
+	const token = Symbol("closure payload");
+	closure[token] = { value: index + 17 };
+	delete closure.name;
+	delete closure.length;
+	Object.defineProperty(closure, "name", { value: "changed", configurable: true });
+	Object.defineProperty(closure, "length", {
+		get() {
+			return index + 2;
+		},
+		configurable: true,
+	});
+	const parent = Object.create(Function.prototype);
+	parent.marker = index + 19;
+	Object.setPrototypeOf(closure, parent);
+	propertyClosures.push({ closure, prototype, token });
+}
+if (typeof __mal_collect_garbage === "function") __mal_collect_garbage();
+for (let index = 0; index < propertyClosures.length; index++) {
+	const { closure, prototype, token } = propertyClosures[index];
+	assert(closure(4) === index + 7, "property growth preserves closure captures");
+	assert(closure.field11.value === index + 11, "closure shaped property growth");
+	assert(closure[token].value === index + 17, "closure symbol property storage");
+	assert(closure.marker === index + 19, "closure prototype changes");
+	assert(
+		closure.name === "changed" && closure.length === index + 2,
+		"closure metadata replacement",
+	);
+	assert(closure.prototype === prototype, "closure prototype survives property growth");
+	assert(
+		Object.getPrototypeOf(new closure(4)) === prototype,
+		"closure construction after property growth",
+	);
+	assert(
+		renderFunction.call(closure) === "function read() { [native code] }",
+		"closure internal name survives replacement",
+	);
+}
+
 console.log("function-reflect-builtins PASS");

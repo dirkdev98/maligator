@@ -749,6 +749,28 @@ static bool recycled_payloads_preserve_survivors_across_storage_kinds(MalHeap *h
     return true;
 }
 
+static bool initialized_payloads_get_fresh_headers_after_reuse(MalHeap *heap) {
+    for (usize i = 0; i < 4; i++) {
+        TestCell *cell = new_cell(heap, 512);
+        cell->header.dirty = MAL_REMEMBERED_FULL;
+    }
+    mal_heap_sweep_minor(heap, finalize_cell);
+    for (usize i = 0; i < 4; i++) {
+        TestCell *cell = mal_heap_alloc_uninitialized(heap, 512, MAL_HEAP_BIGINT);
+        cell->id = ++g_next_id;
+        cell->signature = signature(cell->id);
+        cell->owned = nullptr;
+        CHECK(cell->header.type == MAL_HEAP_BIGINT);
+        CHECK(cell->header.storage == MAL_HEAP_STORAGE_DYNAMIC);
+        CHECK(cell->header.dirty == MAL_REMEMBERED_CLEAN);
+        CHECK(!mal_heap_mark_is_old(cell->header.mark));
+        CHECK(!mal_heap_cell_reclaimed(&cell->header));
+    }
+    mal_heap_sweep_minor(heap, finalize_cell);
+    for (u32 id = 1; id <= g_next_id; id++) CHECK(g_finalized[id] == 1);
+    return true;
+}
+
 static bool run_check(bool (*check)(MalHeap *)) {
     MalHeap heap;
     mal_heap_init(&heap, 0);
@@ -769,6 +791,7 @@ int main(void) {
         cell_index_rejects_unallocated_storage,
         major_reclaims_once_and_recycles_blocks,
         recycled_payloads_preserve_survivors_across_storage_kinds,
+        initialized_payloads_get_fresh_headers_after_reuse,
         minor_preserves_old_cells_and_free_list_members,
         minor_reenrolls_reused_cells_in_untouched_blocks,
         minor_reenrolls_a_reclaimed_cell_away_from_the_current_block,

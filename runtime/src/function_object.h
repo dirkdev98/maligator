@@ -12,7 +12,8 @@ typedef struct MalRealm MalRealm;
 
 typedef struct MalFunctionObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObject *property_storage;
+    MalValue metadata[2];
     i32 function_index;
 
     // Closed images select a tagged owner, inline vector, or exact complete chain.
@@ -117,20 +118,6 @@ typedef struct MalNativeFunctionObject {
 } MalNativeFunctionObject;
 
 /**
- * Initialize script function object state and metadata in caller-provided storage.
- */
-void mal_function_object_init(
-    MalHeap *heap,
-    MalFunctionObject *function,
-    MalObject *prototype,
-    i32 function_index,
-    i32 length,
-    MalString *name,
-    MalKey length_key,
-    MalKey name_key
-);
-
-/**
  * The shared shape whose own properties are `length` and, when named, `name`, in
  * that order. Shapes live as long as their heap, so callers may cache the result
  * for fixed keys.
@@ -140,7 +127,8 @@ MalShape *mal_function_object_metadata_shape(
 
 /**
  * Allocate a script function in one cell: the object, its `length` and `name`
- * fields in `metadata_shape` (named), then capture_bytes of tail storage.
+ * fields in `metadata_shape` (named), then capture_bytes of tail storage. The caller
+ * initializes the capture tail before any allocation, publication, or safepoint.
  */
 static inline MalFunctionObject *mal_function_object_new(
     MalHeap *heap,
@@ -152,21 +140,23 @@ static inline MalFunctionObject *mal_function_object_new(
     usize capture_bytes
 ) {
     assert(name != nullptr && metadata_shape->inline_count == 2);
-    MalFunctionObject *function = mal_heap_alloc(
-        heap, sizeof(MalFunctionObject) + 2 * sizeof(MalValue) + capture_bytes,
+    MalFunctionObject *function = mal_heap_alloc_uninitialized(
+        heap, sizeof(MalFunctionObject) + capture_bytes,
         MAL_HEAP_FUNCTION_OBJECT);
     // Closures are created per call, so the fresh cell is initialized in place rather
     // than through the generic object and shaped-value constructors.
-    MalValue *fields = (MalValue *) (function + 1);
+    MalValue *fields = function->metadata;
     MalHeapHeader header = function->object.header;
     function->object = (MalObject) {
         .header = header,
         .extensible = true,
-        .storage_kind = MAL_OBJECT_EMBEDDED,
+        .storage_kind = MAL_OBJECT_COMPACT,
         .slot_capacity = 2,
+        // Function state follows these fields; property growth must move elsewhere.
+        .inline_payload_eights = 2,
         .shape = metadata_shape,
     };
-    function->object_storage = (MalObjectStorage) {.prototype = prototype, .fields = fields};
+    function->property_storage = prototype;
     mal_object_mark_as_prototype(prototype);
     function->function_index = function_index;
     function->creation_env = nullptr;

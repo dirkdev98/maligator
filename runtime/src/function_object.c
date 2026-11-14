@@ -8,7 +8,9 @@
 #include "value.h"
 
 static_assert(sizeof(MalFunctionObject) % alignof(MalValue) == 0,
-              "script function trailing metadata slots are misaligned");
+              "script function capture displays are misaligned");
+static_assert(offsetof(MalFunctionObject, metadata) == sizeof(MalObject) + sizeof(void *),
+              "compact function fields must follow the prototype word");
 static_assert(sizeof(MalNativeFunctionObject) % alignof(MalValue) == 0,
               "native function trailing metadata slots are misaligned");
 
@@ -128,20 +130,6 @@ static void mal_native_function_attach_slots(
     }
 }
 
-static void mal_function_init_state(
-    MalHeap *heap,
-    MalFunctionObject *function,
-    MalObject *prototype,
-    i32 function_index
-) {
-    mal_object_init(heap, &function->object, MAL_HEAP_FUNCTION_OBJECT, prototype);
-    function->function_index = function_index;
-    function->creation_env = nullptr;
-#if MAL_REALMS
-    function->realm = heap->current_realm;
-#endif
-}
-
 static void mal_native_function_metadata_keys(
     MalHeap *heap,
     bool has_name,
@@ -159,21 +147,6 @@ static void mal_native_function_metadata_keys(
             .value = mal_value_from_string(heap->native_function_name_key),
         };
     }
-}
-
-void mal_function_object_init(
-    MalHeap *heap,
-    MalFunctionObject *function,
-    MalObject *prototype,
-    i32 function_index,
-    i32 length,
-    MalString *name,
-    MalKey length_key,
-    MalKey name_key
-) {
-    mal_function_init_state(heap, function, prototype, function_index);
-    mal_function_init_metadata(
-        heap, &function->object, length_key, mal_value_from_i32(length), name_key, name, nullptr);
 }
 
 MalShape *mal_function_object_metadata_shape(

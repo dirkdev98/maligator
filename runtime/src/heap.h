@@ -884,14 +884,15 @@ static inline __attribute__((always_inline)) void mal_heap_clear_cell(u8 *cell, 
     }
 }
 
-/* A conservative stack word can reach a cell abandoned before its constructor ran; a
- * cleared payload never holds the previous occupant's edges. */
+/* Constructors that can collect before finishing need a cleared payload: a
+ * conservative root can otherwise expose the previous occupant's dead edges. */
 static inline __attribute__((always_inline)) void mal_heap_cell_init(
-    const MalHeap *heap, MalHeapHeader *cell, MalHeapType type, u32 cell_size
+    const MalHeap *heap, MalHeapHeader *cell, MalHeapType type, u32 cell_size, bool clear_payload
 ) {
-    mal_heap_clear_cell((u8 *) cell, cell_size);
+    if (clear_payload) mal_heap_clear_cell((u8 *) cell, cell_size);
     cell->type = type;
     cell->storage = MAL_HEAP_STORAGE_DYNAMIC;
+    cell->dirty = MAL_REMEMBERED_CLEAN;
 #if defined(__wasi__)
     cell->mark = heap->alloc_mark | MAL_MARK_BLOCK;
 #else
@@ -906,8 +907,8 @@ static inline __attribute__((always_inline)) void mal_heap_cell_init(
 
 /* The inline fast path hands out the lowest claimed cell; claims, large cells, profiling
  * and injected failures go out of line. */
-static inline __attribute__((always_inline)) MalHeapHeader *mal_heap_cell_take(
-    MalHeap *heap, usize alloc_size, MalHeapType type
+static inline __attribute__((always_inline)) MalHeapHeader *mal_heap_cell_take_storage(
+    MalHeap *heap, usize alloc_size, MalHeapType type, bool clear_payload
 ) {
     if (alloc_size - 1 >= MAL_GC_LARGE_THRESHOLD) return nullptr;
 #if MAL_PROFILE
@@ -920,7 +921,24 @@ static inline __attribute__((always_inline)) MalHeapHeader *mal_heap_cell_take(
     cursor->bits = bits & (bits - 1);
     MalHeapHeader *cell = mal_heap_block_cell_at(
         cursor->block, cursor->word_offset + (usize) __builtin_ctzll(bits) * MAL_GC_CELL_ALIGN);
-    mal_heap_cell_init(heap, cell, type, mal_heap_class_cell_size(size_class));
+    mal_heap_cell_init(heap, cell, type, mal_heap_class_cell_size(size_class), clear_payload);
+    return cell;
+}
+
+static inline __attribute__((always_inline)) MalHeapHeader *mal_heap_cell_take(
+    MalHeap *heap, usize alloc_size, MalHeapType type
+) {
+    return mal_heap_cell_take_storage(heap, alloc_size, type, true);
+}
+
+/** The caller must initialize every traced field before publishing the cell or
+ * reaching any allocation or safepoint. Reused payload bytes can contain dead
+ * pointers; the header, including its remembered-set state, is always fresh. */
+static inline __attribute__((always_inline)) void *mal_heap_alloc_uninitialized(
+    MalHeap *heap, usize alloc_size, MalHeapType type
+) {
+    MalHeapHeader *cell = mal_heap_cell_take_storage(heap, alloc_size, type, false);
+    if (__builtin_expect(cell == nullptr, 0)) return mal_heap_alloc_slow(heap, alloc_size, type);
     return cell;
 }
 

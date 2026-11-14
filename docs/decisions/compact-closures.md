@@ -61,10 +61,18 @@ all escaping closures can snapshot their bindings.
 Creating a closure is one allocation and its stores. The prototype follows the
 function kind, and the name and length come from the definition. Every script
 closure starts in the same `length`, `name` shape, which the VM resolves once from
-its hot atoms and the heap's root shape. A frame copy has its own entry: the
-compiler emits one only when every capture is an initialized immutable frame value,
-so the cell holds exactly the value display and never reserves the owner-vector
-fallback that ordinary creation keeps for an incomplete copy.
+its hot atoms and the heap's root shape. Script functions keep these metadata slots
+beside their prototype word, using compact object storage. Property growth moves
+fields out of the cell before it could overwrite function state or captures; symbol
+and dictionary properties use the ordinary object storage transitions.
+Function and environment constructors initialize their complete traced payload before
+publication or another allocation. Their allocator can leave reused payload bytes
+uncleared while always resetting the GC header and remembered-set state. Other
+constructors retain zeroed allocation, and the shared slow allocation path stays zeroed.
+A frame copy has its own entry: the compiler emits one only when every capture is
+an initialized immutable frame value, so the cell holds exactly the value display
+and never reserves the owner-vector fallback that ordinary creation keeps for an
+incomplete copy.
 
 Script constructor and generator prototypes remain lazy until observation or
 non-extensibility. The shared VM preventExtensions operation materializes the

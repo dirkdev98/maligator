@@ -2268,7 +2268,7 @@ static MalValue mal_vm_create_function(MalVm *vm, i32 function_index, MalEnv *cr
     MalFunctionObject *function = mal_vm_new_closure(vm, function_index, definition, capture_bytes);
     function->creation_env = creation_env;
     if (value_count > 0) {
-        MalEnv *captures = (MalEnv *) ((MalValue *) (function + 1) + 2);
+        MalEnv *captures = (MalEnv *) (function + 1);
         captures->parent = (MalEnv *) function;
         captures->function_index = MAL_ENV_CAPTURE_VALUES;
         captures->slot_count = value_count;
@@ -2303,7 +2303,7 @@ static MalValue mal_vm_create_function(MalVm *vm, i32 function_index, MalEnv *cr
         MalEnv *owner = mal_vm_capture_owner_at(creation_env, layout->owners[0], 0);
         if (owner != nullptr) function->creation_env = mal_env_tag_single_owner(owner);
     } else if (capture_count > 1 && !complete_capture_chain) {
-        MalEnv *captures = (MalEnv *) ((MalValue *) (function + 1) + 2);
+        MalEnv *captures = (MalEnv *) (function + 1);
         captures->parent = (MalEnv *) function;
         captures->function_index = MAL_ENV_CAPTURE_VECTOR;
         captures->slot_count = capture_count;
@@ -2335,7 +2335,7 @@ MalValue mal_vm_create_function_from_frame(MalVm *vm, i32 function_index, const 
     MalFunctionObject *function = mal_vm_new_closure(
         vm, function_index, definition,
         sizeof(MalEnv) + ((usize) value_count + 1) * sizeof(MalValue));
-    MalEnv *captures = (MalEnv *) ((MalValue *) (function + 1) + 2);
+    MalEnv *captures = (MalEnv *) (function + 1);
     captures->parent = (MalEnv *) function;
     captures->function_index = MAL_ENV_CAPTURE_VALUES;
     captures->slot_count = value_count;

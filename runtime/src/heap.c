@@ -643,7 +643,7 @@ static MalHeapHeader *mal_gc_alloc_cell(MalHeap *heap, usize size, MalHeapType t
     cursor->bits = bits & (bits - 1);
     MalHeapHeader *cell = mal_heap_block_cell_at(
         cursor->block, cursor->word_offset + (usize) __builtin_ctzll(bits) * MAL_GC_CELL_ALIGN);
-    mal_heap_cell_init(heap, cell, type, g_class_cell_size[size_class]);
+    mal_heap_cell_init(heap, cell, type, g_class_cell_size[size_class], true);
     return cell;
 }
 
