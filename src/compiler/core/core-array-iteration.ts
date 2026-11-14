@@ -167,6 +167,7 @@ export function expandCoreArrayIterationCall(
 	site: CoreInstructionId,
 	call: CoreArrayIterationCall,
 	guarded = true,
+	singleton?: { readonly element: CoreValueId; readonly isArray: CoreValueId },
 ): {
 	readonly callback: CoreInstructionId;
 	readonly instructionsIntroduced: number;
@@ -190,10 +191,13 @@ export function expandCoreArrayIterationCall(
 	)
 		tail.push(next);
 	const fallback = guarded ? editor.createBlock() : undefined;
+	const scalar = singleton === undefined ? undefined : editor.createBlock();
 	const fast = editor.createBlock();
-	const header = editor.createBlock(carries ? [{}, {}] : [{}]);
+	const header = editor.createBlock(carries || singleton !== undefined ? [{}, {}] : [{}]);
+	const dispatch = singleton === undefined ? undefined : editor.createBlock();
 	const present = finds ? undefined : editor.createBlock();
-	const invoke = editor.createBlock();
+	const arrayElement = singleton === undefined ? undefined : editor.createBlock();
+	const invoke = editor.createBlock(singleton === undefined ? [] : [{}]);
 	const select = filter ? editor.createBlock() : undefined;
 	const increment = editor.createBlock(carries ? [{}] : []);
 	const normalExit = editor.createBlock();
@@ -202,9 +206,12 @@ export function expandCoreArrayIterationCall(
 	const join = editor.createBlock([{ representation: fn.valueRepresentation(result) }]);
 	const blocks = [
 		fallback,
+		scalar,
 		fast,
 		header,
+		dispatch,
 		present,
+		arrayElement,
 		invoke,
 		select,
 		increment,
@@ -298,22 +305,30 @@ export function expandCoreArrayIterationCall(
 			call.callee,
 		]).outputs[0]!;
 		branch(block, eligible, fast, fallback);
-	} else jump(block, fast);
+	} else if (singleton !== undefined) branch(block, singleton.isArray, fast, scalar!);
+	else jump(block, fast);
+	if (scalar !== undefined) {
+		const index = append(scalar, "createNumber", [], { value: 0 }).outputs[0]!;
+		const length = append(scalar, "createNumber", [], { value: 1 }).outputs[0]!;
+		jump(scalar, header, [index, length]);
+	}
 	const lengthKey = editor.appendStringConstants([
 		[..."length"].map((unit) => unit.charCodeAt(0)),
 	]);
-	const length = append(fast, "loadPropertyStatic", [call.receiver], {
+	const arrayLength = append(fast, "loadPropertyStatic", [call.receiver], {
 		stringIndex: lengthKey,
 	}).outputs[0]!;
 	const zero = append(fast, "createNumber", [], { value: 0 }).outputs[0]!;
-	const one = append(fast, "createNumber", [], { value: 1 }).outputs[0]!;
+	const one = append(singleton === undefined ? fast : block, "createNumber", [], {
+		value: 1,
+	}).outputs[0]!;
 	// With the default species, map's ArraySpeciesCreate(O, len) is ArrayCreate(len): the
 	// result has its final length before the first define, and the runtime reserves it.
 	const created =
 		name === "map"
 			? append(fast, "construct", [
 					append(fast, "loadIntrinsic", [], { intrinsic: "Array" }).outputs[0]!,
-					length,
+					arrayLength,
 				]).outputs[0]!
 			: filter
 				? append(fast, "createArray", [], { length: 0 }).outputs[0]!
@@ -326,19 +341,44 @@ export function expandCoreArrayIterationCall(
 				outputRepresentations: ["boxed"],
 			}).outputs[0]!
 		: undefined;
-	jump(fast, header, filter ? [zero, zero] : seed !== undefined ? [zero, seed] : [zero]);
+	jump(
+		fast,
+		header,
+		singleton !== undefined
+			? [zero, arrayLength]
+			: filter
+				? [zero, zero]
+				: seed !== undefined
+					? [zero, seed]
+					: [zero],
+	);
 	const headerStart = fn.kernel.blockParameterStart(header);
 	const index = fn.kernel.blockParameterValue(headerStart);
+	const length =
+		singleton === undefined
+			? arrayLength
+			: fn.kernel.blockParameterValue(headerStart + 1);
 	const carried = carries ? [fn.kernel.blockParameterValue(headerStart + 1)] : [];
 	const withinLength = append(header, "binary", [index, length], { operator: "<" })
 		.outputs[0]!;
-	branch(header, withinLength, present ?? invoke, normalExit);
+	branch(header, withinLength, dispatch ?? present ?? invoke, normalExit);
+	if (dispatch !== undefined) {
+		branch(dispatch, singleton!.isArray, present!, invoke, [singleton!.element]);
+	}
 	if (present !== undefined) {
 		const exists = append(present, "binary", [index, call.receiver], { operator: "in" })
 			.outputs[0]!;
-		branch(present, exists, invoke, increment, carried);
+		branch(present, exists, arrayElement ?? invoke, increment, carried);
 	}
-	const element = append(invoke, "loadProperty", [call.receiver, index]).outputs[0]!;
+	if (arrayElement !== undefined) {
+		const loaded = append(arrayElement, "loadProperty", [call.receiver, index])
+			.outputs[0]!;
+		jump(arrayElement, invoke, [loaded]);
+	}
+	const element =
+		singleton === undefined
+			? append(invoke, "loadProperty", [call.receiver, index]).outputs[0]!
+			: fn.kernel.blockParameterValue(fn.kernel.blockParameterStart(invoke));
 	const callback = append(
 		invoke,
 		"call",
@@ -387,9 +427,11 @@ export function expandCoreArrayIterationCall(
 	jump(
 		increment,
 		header,
-		carries
-			? [next, fn.kernel.blockParameterValue(fn.kernel.blockParameterStart(increment))]
-			: [next],
+		singleton !== undefined
+			? [next, length]
+			: carries
+				? [next, fn.kernel.blockParameterValue(fn.kernel.blockParameterStart(increment))]
+				: [next],
 	);
 	switch (name) {
 		case "some":

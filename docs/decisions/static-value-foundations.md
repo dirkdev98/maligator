@@ -1096,6 +1096,18 @@ The residual contract follows [Map forEach](https://tc39.es/ecma262/multipage/ke
 and [Set forEach](https://tc39.es/ecma262/multipage/keyed-collections.html#sec-set.prototype.foreach),
 whose external calls occur only at the callback invocation.
 
+Private singleton arrays consumed by default-depth `flat` and inlined Array
+iteration can remain scalar when the element is not an Array. Locked primordials and
+disabled realms prove that the wrapper's method and species lookups cannot call user
+code. The callback must leave its array argument unobserved. A Proxy-aware `IsArray`
+check runs at the original `flat` call, preserving revoked-Proxy exceptions before
+later argument evaluation. The Array branch retains both allocations and completes
+flattening before the first callback, preserving holes, getter order and the snapshot
+seen when callbacks mutate the input. Scalar elements flow through ordinary SSA values
+and the existing callback inliner, so root-map liveness covers collecting callbacks.
+Mutable primordials and enabled realms retain the allocated path. This follows
+[FlattenIntoArray](https://tc39.es/ecma262/multipage/indexed-collections.html#sec-flattenintoarray).
+
 Native return completion plans independently consume the returned value's kind.
 Object completions override a base or derived receiver, including before `super()`;
 base primitive completions need only the construction check. Unknown or mixed

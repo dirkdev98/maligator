@@ -16,6 +16,10 @@ import {
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import {
+	coreArrayFlatSingleton,
+	expandCoreArrayFlatSingleton,
+} from "./core-array-flat-singleton.ts";
+import {
 	coreArrayIterationCall,
 	coreArrayIterationNeedsGuard,
 	expandCoreArrayIterationCall,
@@ -1863,8 +1867,18 @@ function offerFunctionCandidates(
 			);
 			// A callback with its own loop would nest it in every expanded call site.
 			if (inline !== undefined && !inline.loops) {
+				const singleton =
+					!coreArrayIterationNeedsGuard(
+						fn,
+						site.instruction,
+						iteration,
+						analyses.compilationContext,
+					) && coreArrayFlatSingleton(fn, iteration, inline.function) !== undefined;
 				const generatedCodeCost =
-					32 + inline.instructions.length + (inline.linear ? 0 : inline.blocks.length);
+					32 +
+					inline.instructions.length +
+					(inline.linear ? 0 : inline.blocks.length) +
+					(singleton ? 8 : 0);
 				service.offer({
 					kind: "array-iteration-inline",
 					caller: functionId,
@@ -4249,13 +4263,22 @@ function applyCandidate(
 				iteration,
 				context,
 			);
+			const singletonPlan = guarded
+				? undefined
+				: coreArrayFlatSingleton(fn, iteration, inline.function);
+			const singleton =
+				singletonPlan === undefined
+					? undefined
+					: expandCoreArrayFlatSingleton(fn, editor, iteration, singletonPlan);
 			const expanded = expandCoreArrayIterationCall(
 				fn,
 				editor,
 				candidate.site,
-				iteration,
+				singleton?.call ?? iteration,
 				guarded,
+				singleton,
 			);
+			if (singleton !== undefined) editor.removeInstruction(singleton.lookup);
 			const applied = applyLinearInline(
 				program,
 				{ ...candidate, kind: "inline", site: expanded.callback },
@@ -4283,8 +4306,13 @@ function applyCandidate(
 			}
 			return {
 				instructionsIntroduced:
-					expanded.instructionsIntroduced + applied.instructionsIntroduced,
-				blocksIntroduced: expanded.blocksIntroduced + applied.blocksIntroduced,
+					expanded.instructionsIntroduced +
+					applied.instructionsIntroduced +
+					(singleton === undefined ? 0 : 2),
+				blocksIntroduced:
+					expanded.blocksIntroduced +
+					applied.blocksIntroduced +
+					(singleton === undefined ? 0 : 2),
 			};
 		}
 		case "finite-dispatch":

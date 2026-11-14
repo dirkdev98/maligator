@@ -111,6 +111,7 @@
 				"src/compiler/core/core-accessor-calls.ts",
 				"src/compiler/core/core-analysis-manager.ts",
 				"src/compiler/core/core-analysis-scratch.ts",
+				"src/compiler/core/core-array-flat-singleton.ts",
 				"src/compiler/core/core-array-initialization.ts",
 				"src/compiler/core/core-array-iteration.ts",
 				"src/compiler/core/core-bigint-wrap.ts",

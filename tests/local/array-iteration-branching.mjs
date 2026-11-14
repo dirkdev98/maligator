@@ -87,6 +87,110 @@ console.log("throw", JSON.stringify(inspect(["-2", "3", "9"], "throw")));
 console.log("mutation", JSON.stringify(inspect(["2", "3", "4"], "mutate")));
 console.log("holes", JSON.stringify(inspect([, "-2", , "3", ,], "all")));
 
+function normalized(value, stop) {
+	const visits = [];
+	const matched = [value].flat().some((element, index) => {
+		const retained = { element, index, padding: new Array(5).fill("root") };
+		visits.push(retained.element, retained.index);
+		return element === stop;
+	});
+	return [matched, visits];
+}
+
+class FlatInput extends Array {
+	static get [Symbol.species]() {
+		throw new Error("the inner array's species must stay unread");
+	}
+}
+const proxyTrace = [];
+const proxyArray = new Proxy(["first", , "stop", "last"], {
+	has(target, key) {
+		proxyTrace.push(`has:${String(key)}`);
+		return Reflect.has(target, key);
+	},
+	get(target, key, receiver) {
+		proxyTrace.push(`get:${String(key)}`);
+		return Reflect.get(target, key, receiver);
+	},
+});
+console.log("flat-string", JSON.stringify(normalized("stop", "stop")));
+console.log("flat-array", JSON.stringify(normalized(["first", "stop", "last"], "stop")));
+console.log("flat-nested", JSON.stringify(normalized([["nested"], "stop"], "stop")));
+console.log("flat-holey", JSON.stringify(normalized([, "first", , "stop", ,], "stop")));
+console.log("flat-proxy", JSON.stringify([normalized(proxyArray, "stop"), proxyTrace]));
+console.log(
+	"flat-subclass",
+	JSON.stringify(normalized(new FlatInput("first", "stop"), "stop")),
+);
+const objectProxy = new Proxy(
+	{ key: "value" },
+	{
+		get() {
+			throw new Error("IsArray must not invoke a get trap");
+		},
+	},
+);
+console.log("flat-object-proxy", normalized(objectProxy, objectProxy)[0]);
+
+function flatSnapshot(input) {
+	const visits = [];
+	[input].flat().forEach((value) => {
+		visits.push(value);
+		input[1] = "replaced";
+		input.push("appended");
+	});
+	return visits;
+}
+console.log("flat-snapshot", JSON.stringify(flatSnapshot(["first", "second"])));
+function flatThrow(input) {
+	const writes = [];
+	try {
+		[input].flat().some((value) => {
+			writes.push({ value });
+			throw new RangeError("stopped");
+		});
+	} catch (error) {
+		writes.push(error.name);
+	}
+	return writes;
+}
+console.log(
+	"flat-throw",
+	JSON.stringify([flatThrow("scalar"), flatThrow(["array", "later"])]),
+);
+function flatEvery(input) {
+	return [input].flat().every((value, index) => value !== index);
+}
+console.log(
+	"flat-every",
+	JSON.stringify([flatEvery(0), flatEvery(2), flatEvery([1, 1, 3])]),
+);
+function flatReceiver(input) {
+	return [input]
+		.flat()
+		.some((value, index, array) => array[index] === value && array.length === 1);
+}
+console.log(
+	"flat-receiver",
+	JSON.stringify([flatReceiver("value"), flatReceiver([1, 2])]),
+);
+const revoked = Proxy.revocable([], {});
+revoked.revoke();
+const revokedOrder = [];
+function observeThis() {
+	revokedOrder.push("argument");
+	return {};
+}
+try {
+	[revoked.proxy].flat().some((value) => {
+		revokedOrder.push(value);
+		return true;
+	}, observeThis());
+} catch (error) {
+	revokedOrder.push(error.name);
+}
+console.log("flat-revoked", JSON.stringify(revokedOrder));
+
 const original = Array.prototype.some;
 try {
 	Array.prototype.some = function (callback) {

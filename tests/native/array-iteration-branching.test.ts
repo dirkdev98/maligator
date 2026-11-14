@@ -13,18 +13,22 @@ import {
 const fixture = "tests/local/array-iteration-branching.mjs";
 const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" }).trim();
 
-describe.each(["mutable", "locked"] as const)(
-	"branching Array iteration callbacks with %s primordials",
-	(primordials) => {
+describe.each([
+	{ primordials: "mutable", realms: false },
+	{ primordials: "locked", realms: false },
+	{ primordials: "locked", realms: true },
+] as const)(
+	"branching Array iteration callbacks with $primordials primordials and realms $realms",
+	({ primordials, realms }) => {
 		let outputs: Array<string>;
 		beforeAll(() => {
 			const outDir = mkdtempSync(join(tmpdir(), "mal-array-iteration-branching-"));
 			try {
 				const pair = buildBackendPairFromOneProgramImage({
 					fixture,
-					name: `array-iteration-branching-${primordials}`,
+					name: `array-iteration-branching-${primordials}-${realms}`,
 					outDir,
-					config: resolveBuildConfig({ engine: { primordials, eval: false } }),
+					config: resolveBuildConfig({ engine: { primordials, realms, eval: false } }),
 				});
 				outputs = [pair.compiled, pair.interpreted].flatMap((binary) => [
 					runToStdout(binary).trim(),
@@ -45,6 +49,18 @@ describe.each(["mutable", "locked"] as const)(
 			["throw", "preserves captured writes when the callback throws"],
 			["mutation", "observes deletions and replacements within the original length"],
 			["holes", "skips absent indices"],
+			["flat-string", "normalizes a string as one element"],
+			["flat-array", "retains early exit after flattening an array"],
+			["flat-nested", "flattens only one level"],
+			["flat-holey", "compacts holes before assigning callback indices"],
+			["flat-proxy", "preserves Proxy array has and get order"],
+			["flat-subclass", "ignores the inner array species"],
+			["flat-object-proxy", "classifies object Proxies without traps"],
+			["flat-snapshot", "copies all elements before callback mutations"],
+			["flat-throw", "retains captured writes across callback exceptions"],
+			["flat-every", "preserves single-element every results"],
+			["flat-receiver", "materializes the callback receiver when observed"],
+			["flat-revoked", "throws for revoked Proxies before later arguments"],
 			["patched", "honors the primordial method policy"],
 		])("%s: %s", (label) => {
 			const line = (output: string) =>
