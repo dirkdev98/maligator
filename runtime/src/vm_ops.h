@@ -2,6 +2,7 @@
 
 #include "./defaults.h"
 #include "array_object.h"
+#include "bound_function_object.h"
 #include "builtin_data_view.h"
 #include "builtin_iterator.h"
 #include "function_object.h" // mal_function_object_function_index, for the call guard
@@ -328,6 +329,36 @@ static inline bool mal_vm_callee_has_index(MalVm *vm, MalValue callee, i32 funct
     (void) vm;
     return true;
 #endif
+}
+
+/**
+ * Whether `callee` is a bound function exotic object with exactly `bound_count` bound
+ * arguments. Only %Function.prototype.bind% creates one and its internal slots never
+ * change, so calling it is calling its target with its bound this and arguments,
+ * whoever produced it.
+ */
+static inline bool mal_vm_guard_bound_function(MalValue callee, i32 bound_count) {
+    bool matches = mal_value_is_bound_function_object(callee) &&
+        mal_value_to_bound_function_object(callee)->bound_count == bound_count;
+    if (matches) {
+        MAL_PERF_COUNT(bound_function_guard_hits);
+    } else {
+        MAL_PERF_COUNT(bound_function_guard_misses);
+    }
+    return matches;
+}
+
+/**
+ * A bound function's internal slot: 0 is [[BoundTargetFunction]], 1 [[BoundThis]] and
+ * 2 + i [[BoundArguments]][i]. Any other value, or a missing argument, reads as
+ * undefined, so the read is safe even where an optimizer moved it above its guard.
+ */
+static inline MalValue mal_vm_load_bound_function_slot(MalValue callee, i32 slot) {
+    if (!mal_value_is_bound_function_object(callee)) return MAL_VALUE_UNDEFINED;
+    const MalBoundFunctionObject *bound = mal_value_to_bound_function_object(callee);
+    if (slot == 0) return bound->target;
+    if (slot == 1) return bound->bound_this;
+    return slot - 2 < bound->bound_count ? bound->bound_args[slot - 2] : MAL_VALUE_UNDEFINED;
 }
 
 /**

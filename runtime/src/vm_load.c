@@ -997,6 +997,18 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             o->as.guard_function_index.callee = rd_i32(r);
             o->as.guard_function_index.function_index = rd_i32(r);
             return;
+        case WIRE_GUARD_BOUND_FUNCTION:
+            o->opcode = MAL_OP_GUARD_BOUND_FUNCTION;
+            o->as.guard_bound_function.dst = rd_i32(r);
+            o->as.guard_bound_function.callee = rd_i32(r);
+            o->as.guard_bound_function.bound_argument_count = rd_i32(r);
+            return;
+        case WIRE_LOAD_BOUND_FUNCTION_SLOT:
+            o->opcode = MAL_OP_LOAD_BOUND_FUNCTION_SLOT;
+            o->as.load_bound_function_slot.dst = rd_i32(r);
+            o->as.load_bound_function_slot.callee = rd_i32(r);
+            o->as.load_bound_function_slot.slot = rd_i32(r);
+            return;
         case WIRE_GUARD_BASE_CONSTRUCTOR_LAYOUT:
             o->opcode = MAL_OP_GUARD_BASE_CONSTRUCTOR_LAYOUT;
             o->as.guard_base_constructor_layout.dst = rd_i32(r);
@@ -1692,6 +1704,8 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_LOAD_PRIMORDIAL, load_intrinsic);
         MAL_WRITES_DST(MAL_OP_LOAD_CAPTURED, load_captured);
         MAL_WRITES_DST(MAL_OP_GUARD_FUNCTION_INDEX, guard_function_index);
+        MAL_WRITES_DST(MAL_OP_GUARD_BOUND_FUNCTION, guard_bound_function);
+        MAL_WRITES_DST(MAL_OP_LOAD_BOUND_FUNCTION_SLOT, load_bound_function_slot);
         MAL_WRITES_DST(
             MAL_OP_GUARD_BASE_CONSTRUCTOR_LAYOUT,
             guard_base_constructor_layout);
@@ -2999,6 +3013,10 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                     r.ok = false;
             } else if (instruction->opcode == MAL_OP_GUARD_SERVICE_EPOCH) {
                 if (instruction->as.guard_service_epoch.dst < 0 || instruction->as.guard_service_epoch.dst >= fn->register_count || instruction->as.guard_service_epoch.epoch < 0 || instruction->as.guard_service_epoch.epoch >= fn->register_count) r.ok = false;
+            } else if (instruction->opcode == MAL_OP_GUARD_BOUND_FUNCTION) {
+                if (instruction->as.guard_bound_function.dst < 0 || instruction->as.guard_bound_function.dst >= fn->register_count || instruction->as.guard_bound_function.callee < 0 || instruction->as.guard_bound_function.callee >= fn->register_count || instruction->as.guard_bound_function.bound_argument_count < 0) r.ok = false;
+            } else if (instruction->opcode == MAL_OP_LOAD_BOUND_FUNCTION_SLOT) {
+                if (instruction->as.load_bound_function_slot.dst < 0 || instruction->as.load_bound_function_slot.dst >= fn->register_count || instruction->as.load_bound_function_slot.callee < 0 || instruction->as.load_bound_function_slot.callee >= fn->register_count || instruction->as.load_bound_function_slot.slot < 0) r.ok = false;
             } else if (instruction->opcode == MAL_OP_READ_SERVICE_EPOCH) {
                 if (instruction->as.read_service_epoch.dst < 0 || instruction->as.read_service_epoch.dst >= fn->register_count) r.ok = false;
             } else if (instruction->opcode == MAL_OP_GUARD_SEMANTIC_EPOCH) {

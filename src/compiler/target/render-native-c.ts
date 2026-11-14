@@ -15744,6 +15744,24 @@ class NativeInstructionEmission {
 				return [
 					`r${instruction.dst} = mal_vm_callee_has_index(vm, ${this.boxed(instruction.callee)}, ${this.context.relocation.functionIndex(instruction.functionIndex)});`,
 				];
+			case "GUARD_BOUND_FUNCTION":
+				return [
+					this.storeBoolean(
+						instruction.dst,
+						this.reps[instruction.callee] === "boxed"
+							? `mal_vm_guard_bound_function(${this.boxed(instruction.callee)}, ${instruction.boundArgumentCount})`
+							: "false",
+					),
+				];
+			case "LOAD_BOUND_FUNCTION_SLOT": {
+				const value =
+					this.reps[instruction.callee] === "boxed"
+						? `mal_vm_load_bound_function_slot(${this.boxed(instruction.callee)}, ${instruction.slot})`
+						: "MAL_VALUE_UNDEFINED";
+				return [
+					`r${instruction.dst} = ${this.reps[instruction.dst] === "boxed" ? value : this.callValue(instruction.dst, value)};`,
+				];
+			}
 			case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
 				if (this.reps[instruction.callee] !== "boxed")
 					return [this.storeBoolean(instruction.dst, "false")];

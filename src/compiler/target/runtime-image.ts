@@ -1059,6 +1059,13 @@ export type BytecodeInstruction =
 			functionIndex: number;
 	  }
 	| {
+			opcode: "GUARD_BOUND_FUNCTION";
+			dst: number;
+			callee: number;
+			boundArgumentCount: number;
+	  }
+	| { opcode: "LOAD_BOUND_FUNCTION_SLOT"; dst: number; callee: number; slot: number }
+	| {
 			opcode: "LOAD_GLOBAL_INDEX";
 			dst: number;
 			index: number;
@@ -4159,6 +4166,20 @@ function lowerInstructionToBytecodeInstruction(
 				dst: instruction.registers[0],
 				callee: instruction.registers[1],
 				functionIndex: instruction.functionIndex,
+			};
+		case "guardBoundFunction":
+			return {
+				opcode: "GUARD_BOUND_FUNCTION",
+				dst: instruction.registers[0],
+				callee: instruction.registers[1],
+				boundArgumentCount: instruction.boundArgumentCount,
+			};
+		case "loadBoundFunctionSlot":
+			return {
+				opcode: "LOAD_BOUND_FUNCTION_SLOT",
+				dst: instruction.registers[0],
+				callee: instruction.registers[1],
+				slot: instruction.slot,
 			};
 		case "guardBaseConstructorLayout":
 			return {

@@ -415,6 +415,26 @@ type CompilerOperation =
 			functionIndex: number;
 	  }
 	| {
+			// dst := callee is a bound function exotic object with exactly
+			// `boundArgumentCount` bound arguments. Its internal slots never change, so
+			// a call through it may call its target directly with them.
+			type: "guardBoundFunction";
+			// [destination (boolean), callee]
+			registers: [number, number];
+			boundArgumentCount: number;
+	  }
+	| {
+			// dst := a bound function's internal slot: 0 is [[BoundTargetFunction]], 1
+			// [[BoundThis]] and 2 + i [[BoundArguments]][i]. Undefined for any other value
+			// or a missing argument, so the read is safe wherever it moves.
+			type: "loadBoundFunctionSlot";
+			// [destination, callee]
+			registers: [number, number];
+			slot: number;
+			// Core's hint of the target's script function; not part of the operation.
+			functionIndex?: number;
+	  }
+	| {
 			// Pure exact-shape selector shared by a bounded cluster of static loads.
 			// Returns the matching candidate index or -1 for the generic path.
 			type: "selectShapeCase";

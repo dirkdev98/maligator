@@ -1328,7 +1328,10 @@ and advancing it with the realm's own `next`. A protector never recovers, so an
 iterator that the twin exposes to user code cannot reach a later fused loop. Spread
 Array literal arguments check the Array iteration protector at the call, and call,
 apply and bind sites compare the loaded method with the realm's own function, which
-stays exact whatever the property holds.
+stays exact whatever the property holds. A call of a module or captured binding that
+holds a bound function needs neither: it checks that the callee is a bound function
+exotic object, which only %Function.prototype.bind% creates and nothing changes
+afterwards, and calls the target with the `this` and arguments read from it.
 
 Each protector covers one protocol, so a polyfill that adds or replaces an unrelated
 built-in method keeps it. A define, store or delete on a watched built-in object

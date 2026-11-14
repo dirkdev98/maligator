@@ -1042,6 +1042,8 @@ describe("program-image-codec", () => {
 			"CONSTRUCT_SUPER",
 			"CONSTRUCT_SUPER_FORWARD",
 			"GUARD_SEMANTIC_EPOCH",
+			"GUARD_BOUND_FUNCTION",
+			"LOAD_BOUND_FUNCTION_SLOT",
 		];
 		expect(WIRE_OPCODES.slice(-appended.length)).toEqual(appended);
 	});
@@ -1112,6 +1114,44 @@ describe("program-image-codec", () => {
 			expect(() =>
 				serializeCompilerArtifact(withSum({ opcode: "PRECISE_NUMBER_SUM", ...invalid })),
 			).toThrow(/invalid precise sum operands/);
+	});
+
+	it("round-trips bound function guards and slot reads and rejects negative indices", () => {
+		const withOperation = (replacement: BytecodeInstruction): ProgramImage =>
+			withBytecodeFunctions(definition, [
+				{ ...mainFn, registerCount: 2, positions: [], instructions: [replacement] },
+			]);
+		for (const operation of [
+			{ opcode: "GUARD_BOUND_FUNCTION", dst: 0, callee: 1, boundArgumentCount: 0 },
+			{ opcode: "GUARD_BOUND_FUNCTION", dst: 0, callee: 1, boundArgumentCount: 3 },
+			{ opcode: "LOAD_BOUND_FUNCTION_SLOT", dst: 0, callee: 1, slot: 0 },
+			{ opcode: "LOAD_BOUND_FUNCTION_SLOT", dst: 0, callee: 1, slot: 4 },
+		] satisfies Array<BytecodeInstruction>) {
+			const restored = deserializeCompilerArtifact(
+				serializeCompilerArtifact(withOperation(operation), { debugInfo: false }),
+			);
+			expect(restored.runtime.functions[0]!.instructions).toEqual([operation]);
+		}
+		expect(() =>
+			serializeCompilerArtifact(
+				withOperation({
+					opcode: "GUARD_BOUND_FUNCTION",
+					dst: 0,
+					callee: 1,
+					boundArgumentCount: -1,
+				}),
+			),
+		).toThrow(/invalid bound argument count/);
+		expect(() =>
+			serializeCompilerArtifact(
+				withOperation({
+					opcode: "LOAD_BOUND_FUNCTION_SLOT",
+					dst: 0,
+					callee: 1,
+					slot: -1,
+				}),
+			),
+		).toThrow(/invalid bound function slot/);
 	});
 	it("round-trips and rejects tampered known-own-slot access metadata", () => {
 		const valid = knownOwnSlotDefinition();

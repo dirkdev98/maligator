@@ -12,6 +12,7 @@ tests/native/array-push-direct.test.ts
 tests/native/array-values-deferred-iterator.test.ts
 tests/native/async-generator-direct-promise.test.ts
 tests/native/bigint-allocation.test.ts
+tests/native/bound-binding-calls.test.ts
 tests/native/builtin-identity-protector.test.ts
 tests/native/canonical-typed-dispatch.test.ts
 tests/native/class-layout-guards.test.ts

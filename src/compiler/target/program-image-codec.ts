@@ -1063,6 +1063,20 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.callee);
 			w.i32(i.functionIndex);
 			return;
+		case "GUARD_BOUND_FUNCTION":
+			if (!Number.isInteger(i.boundArgumentCount) || i.boundArgumentCount < 0)
+				throw new RangeError("program-image-codec: invalid bound argument count");
+			w.i32(i.dst);
+			w.i32(i.callee);
+			w.i32(i.boundArgumentCount);
+			return;
+		case "LOAD_BOUND_FUNCTION_SLOT":
+			if (!Number.isInteger(i.slot) || i.slot < 0)
+				throw new RangeError("program-image-codec: invalid bound function slot");
+			w.i32(i.dst);
+			w.i32(i.callee);
+			w.i32(i.slot);
+			return;
 		case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
 			if (
 				i.keyStringIndices.length < 1 ||
@@ -2082,6 +2096,23 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 			return { opcode, dst: r.i32(), ownerFunctionIndex: r.i32(), index: r.i32() };
 		case "GUARD_FUNCTION_INDEX":
 			return { opcode, dst: r.i32(), callee: r.i32(), functionIndex: r.i32() };
+		case "GUARD_BOUND_FUNCTION": {
+			const instruction = {
+				opcode,
+				dst: r.i32(),
+				callee: r.i32(),
+				boundArgumentCount: r.i32(),
+			};
+			if (instruction.boundArgumentCount < 0)
+				throw new RangeError("program-image-codec: invalid bound argument count");
+			return instruction;
+		}
+		case "LOAD_BOUND_FUNCTION_SLOT": {
+			const instruction = { opcode, dst: r.i32(), callee: r.i32(), slot: r.i32() };
+			if (instruction.slot < 0)
+				throw new RangeError("program-image-codec: invalid bound function slot");
+			return instruction;
+		}
 		case "GUARD_BASE_CONSTRUCTOR_LAYOUT": {
 			const instruction = {
 				opcode,

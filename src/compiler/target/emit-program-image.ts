@@ -3343,6 +3343,10 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_LOAD_CAPTURED, .as.load_captured = { .dst = ${instruction.dst}, .owner_function_index = ${instruction.ownerFunctionIndex}, .index = ${instruction.index} } }`;
 		case "GUARD_FUNCTION_INDEX":
 			return `{ .opcode = MAL_OP_GUARD_FUNCTION_INDEX, .as.guard_function_index = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .function_index = ${instruction.functionIndex} } }`;
+		case "GUARD_BOUND_FUNCTION":
+			return `{ .opcode = MAL_OP_GUARD_BOUND_FUNCTION, .as.guard_bound_function = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .bound_argument_count = ${instruction.boundArgumentCount} } }`;
+		case "LOAD_BOUND_FUNCTION_SLOT":
+			return `{ .opcode = MAL_OP_LOAD_BOUND_FUNCTION_SLOT, .as.load_bound_function_slot = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .slot = ${instruction.slot} } }`;
 		case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
 			return `{ .opcode = MAL_OP_GUARD_BASE_CONSTRUCTOR_LAYOUT, .as.guard_base_constructor_layout = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .function_index = ${instruction.functionIndex}, .data_offset = ${sideDataOffset()} } }`;
 		case "SELECT_SHAPE_CASE":

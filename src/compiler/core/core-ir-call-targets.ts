@@ -164,6 +164,7 @@ function localTargetsAreCurrent(
 }
 
 const DEFINITELY_NON_CALLABLE_RESULTS = new Set([
+	"guardBoundFunction",
 	"guardFunctionIndex",
 	"guardBaseConstructorLayout",
 	"createArgumentsObject",
@@ -1051,6 +1052,22 @@ function analyzeFunctionTargets(
 							(value) => values[value],
 						) ?? resultTargets;
 				}
+			} else if (opcode === "loadBoundFunctionSlot") {
+				// A bound target is whatever its `bind` received, which that call published;
+				// the function the binding's `bind` saw is a hint that dispatch guards by
+				// function index, with the generic call as fallback.
+				const attributes = fn.instructionAttributes(instruction);
+				const target = attributes.functionIndex;
+				if (
+					attributes.slot === 0 &&
+					typeof target === "number" &&
+					Number.isSafeInteger(target) &&
+					program.hasFunction(target as CoreFunctionId)
+				)
+					resultTargets = joinCoreCalleeTargets(
+						coreCalleeTargetsFunction(target),
+						CORE_CALLEE_TARGETS_OPAQUE,
+					);
 			} else if (
 				fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ===
 				"call-completion"

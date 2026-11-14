@@ -159,6 +159,7 @@ export function profileOperationForInstruction(instruction: BytecodeInstruction)
 	if (
 		opcode.startsWith("CALL") ||
 		opcode === "GUARD_FUNCTION_INDEX" ||
+		opcode === "GUARD_BOUND_FUNCTION" ||
 		opcode === "GUARD_BASE_CONSTRUCTOR_LAYOUT"
 	)
 		return "call";
@@ -213,6 +214,7 @@ function remarkForInstruction(
 				outcome: "retained",
 			};
 		case "GUARD_FUNCTION_INDEX":
+		case "GUARD_BOUND_FUNCTION":
 		case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
 			return {
 				phase: "lowering",

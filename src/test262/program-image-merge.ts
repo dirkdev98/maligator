@@ -359,6 +359,8 @@ function cloneInstruction(
 		case "READ_SERVICE_EPOCH":
 		case "GUARD_SERVICE_EPOCH":
 		case "GUARD_SEMANTIC_EPOCH":
+		case "GUARD_BOUND_FUNCTION":
+		case "LOAD_BOUND_FUNCTION_SLOT":
 			return instruction;
 		case "PROBE_READ":
 			return probeReadIsNamed(instruction)

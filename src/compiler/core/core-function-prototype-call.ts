@@ -73,6 +73,130 @@ export function coreBoundFunctionCall(
 	};
 }
 
+/** The values a program stores into a binding, keyed by `coreBindingKey`. */
+export type CoreBindingWrites = ReadonlyMap<
+	string,
+	ReadonlyArray<{ readonly function: CoreFunctionId; readonly value: CoreValueId }>
+>;
+
+function coreBindingKey(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	opcode: string,
+): string | undefined {
+	const attributes = fn.instructionAttributes(instruction);
+	if (opcode === "loadGlobal" || opcode === "storeGlobal")
+		return `global:${attributes.index as number}`;
+	if (opcode === "loadCaptured" || opcode === "storeCaptured")
+		return `captured:${attributes.functionIndex as number}:${attributes.index as number}`;
+	return undefined;
+}
+
+function definitionThroughMoves(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+): CoreInstructionId | undefined {
+	for (let depth = 0; depth < 16; depth++) {
+		if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+		if (fn.instructionKind(definition) !== "operation") return undefined;
+		if (fn.instructionOpcodeName(definition) !== "move") return definition;
+		value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition));
+	}
+	return undefined;
+}
+
+/** Every module and captured binding store in `functions`, except dead-zone markers. */
+export function coreBindingWrites(
+	program: CoreProgram,
+	functions: Iterable<CoreFunctionId>,
+): CoreBindingWrites {
+	const writes = new Map<
+		string,
+		Array<{ function: CoreFunctionId; value: CoreValueId }>
+	>();
+	for (const functionId of functions) {
+		const fn = program.function(functionId);
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode !== "storeGlobal" && opcode !== "storeCaptured") continue;
+			const key = coreBindingKey(fn, instruction, opcode);
+			if (key === undefined) continue;
+			const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+			const definition = definitionThroughMoves(fn, value);
+			if (
+				definition !== undefined &&
+				fn.instructionOpcodeName(definition) === "createEmpty"
+			)
+				continue;
+			const stores = writes.get(key) ?? [];
+			stores.push({ function: functionId, value });
+			writes.set(key, stores);
+		}
+	}
+	return writes;
+}
+
+export interface CoreBoundBindingCall {
+	readonly boundArgumentCount: number;
+	/** The script function every `bind` of the binding received; dispatch guards it. */
+	readonly target: CoreFunctionId;
+}
+
+/** Bound arguments a guarded binding call copies out of its bound function. */
+const BOUND_BINDING_ARGUMENT_LIMIT = 8;
+
+/**
+ * A call of a module or captured binding that only ever holds what `f.bind(...)`
+ * calls returned, each with the same bound argument count and a single script
+ * function in `f`. Those are only the expected shape: the guard the expansion emits
+ * checks the callee itself.
+ */
+export function coreBoundBindingCall(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	site: CoreInstructionId,
+	writes: CoreBindingWrites,
+	singleTarget: (
+		functionId: CoreFunctionId,
+		value: CoreValueId,
+	) => CoreFunctionId | undefined,
+): CoreBoundBindingCall | undefined {
+	if (!coreGuardableCall(fn, site)) return undefined;
+	const load = definitionThroughMoves(
+		fn,
+		fn.kernel.operandAt(fn.kernel.instructionOperandStart(site)),
+	);
+	if (load === undefined) return undefined;
+	const key = coreBindingKey(fn, load, fn.instructionOpcodeName(load));
+	const stores = key === undefined ? undefined : writes.get(key);
+	if (stores === undefined || stores.length === 0) return undefined;
+	let shape: CoreBoundBindingCall | undefined;
+	for (const store of stores) {
+		const writer = program.function(store.function);
+		const creation = definitionThroughMoves(writer, store.value);
+		if (
+			creation === undefined ||
+			writer.instructionOpcodeName(creation) !== "call" ||
+			writer.kernel.instructionResultCount(creation) !== 1
+		)
+			return undefined;
+		const bind = ownMethodCall(program, writer, creation, "bind");
+		if (bind === undefined || bind.arguments.length > BOUND_BINDING_ARGUMENT_LIMIT)
+			return undefined;
+		const target = singleTarget(store.function, bind.target);
+		if (
+			target === undefined ||
+			(shape !== undefined &&
+				(shape.target !== target || shape.boundArgumentCount !== bind.arguments.length))
+		)
+			return undefined;
+		shape = { boundArgumentCount: bind.arguments.length, target };
+	}
+	return shape;
+}
+
 export interface CoreAppliedFunctionCall extends CoreFunctionPrototypeCall {
 	readonly thisArgument: CoreValueId;
 	/** The `apply` lookup, which the check of the loaded method follows. */
@@ -445,6 +569,54 @@ export function expandCoreBoundFunctionCall(
 	);
 	return {
 		instructionsIntroduced: split.instructionsIntroduced() + 2,
+		blocksIntroduced: split.blocksIntroduced(),
+	};
+}
+
+/*
+ * A bound function exotic object's [[Call]] calls its target with its bound `this`
+ * and arguments ahead of its own arguments, and %Function.prototype.bind% is the only
+ * thing that creates one, with internal slots that never change. So when the callee
+ * is a bound function with the expected argument count, whatever produced it or
+ * replaced `bind`, the site calls the target it holds with what it holds. The target
+ * carries the binding's function as a hint, so a later dispatch can guard it by index
+ * and inline it; any other callee keeps the original call.
+ */
+export function expandCoreBoundBindingCall(
+	fn: CoreFunctionStore,
+	editor: CoreEditor,
+	site: CoreInstructionId,
+	call: CoreBoundBindingCall,
+): { readonly instructionsIntroduced: number; readonly blocksIntroduced: number } {
+	const block = fn.instructionBlock(site);
+	const split = splitGuardedCall(fn, editor, site);
+	const callee = split.operands[0]!;
+	const direct = split.test(
+		split.append(block, "guardBoundFunction", [callee], {
+			boundArgumentCount: call.boundArgumentCount,
+		}),
+	);
+	const slot = (index: number, attributes: Readonly<Record<string, number>> = {}) =>
+		split.append(direct, "loadBoundFunctionSlot", [callee], {
+			slot: index,
+			...attributes,
+		});
+	const target = slot(0, { functionIndex: call.target });
+	const thisArgument = slot(1);
+	const bound = Array.from({ length: call.boundArgumentCount }, (_, index) =>
+		slot(2 + index),
+	);
+	split.finish(
+		direct,
+		split.append(direct, "call", [
+			target,
+			thisArgument,
+			...bound,
+			...split.operands.slice(2),
+		]),
+	);
+	return {
+		instructionsIntroduced: split.instructionsIntroduced(),
 		blocksIntroduced: split.blocksIntroduced(),
 	};
 }

@@ -3453,6 +3453,20 @@ static void mal_vm_run_until_frame_count(
                 registers[instruction->as.read_service_epoch.dst] = mal_ops_number_value(mal_vm_read_service_epoch(vm));
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
+            MAL_VM_CASE(GUARD_BOUND_FUNCTION)
+                registers[instruction->as.guard_bound_function.dst] = mal_value_new_boolean(
+                    mal_vm_guard_bound_function(
+                        registers[instruction->as.guard_bound_function.callee],
+                        instruction->as.guard_bound_function.bound_argument_count));
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
+            MAL_VM_CASE(LOAD_BOUND_FUNCTION_SLOT)
+                registers[instruction->as.load_bound_function_slot.dst] =
+                    mal_vm_load_bound_function_slot(
+                        registers[instruction->as.load_bound_function_slot.callee],
+                        instruction->as.load_bound_function_slot.slot);
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             MAL_VM_CASE(GUARD_SEMANTIC_EPOCH)
                 registers[instruction->as.guard_semantic_epoch.dst] = mal_value_new_boolean(mal_vm_guard_semantic_epoch(vm, instruction->as.guard_semantic_epoch.dependencies));
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
@@ -5265,6 +5279,7 @@ __attribute__((noinline)) MAL_SCALAR_COPIES static MalValue mal_vm_call_bound_va
     i32 arg_count
 ) {
     MalValue inline_args[MAL_BOUND_INLINE_ARGS];
+    MAL_PERF_COUNT(bound_function_calls);
     MalBoundFunctionObject *bound = mal_value_to_bound_function_object(callee);
     i32 bound_count = bound->bound_count;
     if (!mal_value_is_bound_function_object(bound->target) &&

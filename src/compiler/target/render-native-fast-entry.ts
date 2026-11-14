@@ -1210,6 +1210,10 @@ function fastInstruction(
 			return input.fn.strict ? `__fast_r${op.dst} = this_value;` : undefined;
 		case "GUARD_FUNCTION_INDEX":
 			return `__fast_r${op.dst} = mal_value_new_boolean(mal_vm_callee_has_index(vm, __fast_r${op.callee}, ${input.functionTargetIndex(op.functionIndex)}));`;
+		case "GUARD_BOUND_FUNCTION":
+			return `__fast_r${op.dst} = mal_value_new_boolean(mal_vm_guard_bound_function(__fast_r${op.callee}, ${op.boundArgumentCount}));`;
+		case "LOAD_BOUND_FUNCTION_SLOT":
+			return `__fast_r${op.dst} = mal_vm_load_bound_function_slot(__fast_r${op.callee}, ${op.slot});`;
 		case "LOAD_PRIVATE": {
 			const site = fastClassSite(input, ip);
 			if (site?.kind !== "slot") return undefined;

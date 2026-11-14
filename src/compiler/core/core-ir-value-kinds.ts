@@ -360,6 +360,7 @@ function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
 		case "deleteProperty":
 		case "forInHas":
 		case "guardBaseConstructorLayout":
+		case "guardBoundFunction":
 		case "guardFunctionIndex":
 		case "isEmpty":
 		case "typeofCompare":

@@ -51,10 +51,13 @@ import type {
 } from "./core-function-optimization-session.ts";
 import {
 	coreAppliedFunctionCall,
+	coreBindingWrites,
+	coreBoundBindingCall,
 	coreBoundFunctionCall,
 	coreFunctionPrototypeCall,
 	coreGuardableCall,
 	expandCoreAppliedFunctionCall,
+	expandCoreBoundBindingCall,
 	expandCoreBoundFunctionCall,
 	expandCoreFunctionIndexCall,
 	expandCoreFunctionPrototypeCall,
@@ -2998,7 +3001,8 @@ function specializeCoreClosureFactories(
 /**
  * Calls `f` directly from `f.call(...)` sites, from `f.apply(...)` sites with an array
  * literal and from calls of what `f.bind(...)` returned, when `f` holds known script
- * functions.
+ * functions. A binding that holds what `f.bind(...)` returned calls the bound
+ * function's target behind a guard on the callee.
  */
 function devirtualizeCoreFunctionPrototypeCalls(
 	program: CoreProgram,
@@ -3007,6 +3011,11 @@ function devirtualizeCoreFunctionPrototypeCalls(
 ): { readonly changed: ReadonlyArray<CoreFunctionId>; readonly instructions: number } {
 	const changed: Array<CoreFunctionId> = [];
 	let instructions = 0;
+	const bindingWrites = coreBindingWrites(program, liveFunctions);
+	const singleTarget = (functionId: CoreFunctionId, value: CoreValueId) => {
+		const { functions } = summaries.targets.targets(functionId, value);
+		return functions.length === 1 ? functions[0] : undefined;
+	};
 	for (const caller of liveFunctions) {
 		const fn = program.function(caller);
 		if (fn.isAsync || fn.isGenerator) continue;
@@ -3021,10 +3030,25 @@ function devirtualizeCoreFunctionPrototypeCalls(
 					? coreAppliedFunctionCall(program, fn, site)
 					: undefined;
 			const rewrite = call ?? bound ?? applied;
-			if (
-				rewrite === undefined ||
-				summaries.targets.targets(caller, rewrite.target).functions.length === 0
-			)
+			if (rewrite === undefined) {
+				const binding = coreBoundBindingCall(
+					program,
+					fn,
+					site,
+					bindingWrites,
+					singleTarget,
+				);
+				if (binding === undefined) continue;
+				editor ??= CoreEditor.open(program, caller);
+				instructions += expandCoreBoundBindingCall(
+					fn,
+					editor,
+					site,
+					binding,
+				).instructionsIntroduced;
+				continue;
+			}
+			if (summaries.targets.targets(caller, rewrite.target).functions.length === 0)
 				continue;
 			editor ??= CoreEditor.open(program, caller);
 			instructions += (
