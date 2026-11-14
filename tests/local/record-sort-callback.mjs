@@ -31,7 +31,45 @@ function labels(values) {
 	return values.map((value) => (value === undefined ? "undefined" : value.name));
 }
 
+// Relational comparisons of two Strings order by code units; any other pair converts.
+function compareNames(left, right) {
+	return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+}
+
+function compareScoreThenName(left, right) {
+	return right.score - left.score || (left.name <= right.name ? -1 : 1);
+}
+
 const scenarios = {
+	strings() {
+		const names = [
+			"row10",
+			"row1",
+			"Row2",
+			"row",
+			"é",
+			"€",
+			"😀",
+			"\uffff",
+			"",
+			"row1",
+			"10",
+			"9",
+		];
+		const rows = names.map((name, index) => ({ name, score: index & 1 }));
+		const mixed = [
+			{ name: 10 },
+			{ name: "9" },
+			{ name: "10" },
+			{ name: 9 },
+			{ name: "a" },
+		];
+		return {
+			names: labels(rows.toSorted(compareNames)),
+			scored: labels(rows.toSorted(compareScoreThenName)),
+			mixed: mixed.toSorted(compareNames).map((row) => typeof row.name + ":" + row.name),
+		};
+	},
 	inPlace() {
 		return labels(sortRecords(records()));
 	},

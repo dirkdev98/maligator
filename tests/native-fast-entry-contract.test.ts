@@ -52,6 +52,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_value_to_bigint",
 	"mal_bigint_compare",
 	"mal_string_equals",
+	"mal_string_compare",
 	"mal_string_length",
 	"mal_vm_property_try_load_static",
 	"mal_vm_load_known_own_data",
@@ -1438,11 +1439,15 @@ describe("native fast entries", () => {
 	);
 
 	it.each(["<", "<=", ">", ">="] as const)(
-		"retains lexical String semantics for %s and converts mixed primitive pairs",
+		"compares Strings lexically for %s and converts mixed primitive pairs",
 		(operator) => {
-			expect(
-				binaryEntry(operator, [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_STRING]),
-			).toBeUndefined();
+			const strings = binaryEntry(operator, [
+				COMPILER_VALUE_KIND_STRING,
+				COMPILER_VALUE_KIND_STRING,
+			])!;
+			expect(strings).toBeDefined();
+			expect(unexpectedHelpers(strings)).toEqual([]);
+			expect(strings.join("\n")).toContain("mal_string_compare(");
 			const mixed = binaryEntry(operator, [
 				COMPILER_VALUE_KIND_STRING,
 				COMPILER_VALUE_KIND_BOOLEAN,

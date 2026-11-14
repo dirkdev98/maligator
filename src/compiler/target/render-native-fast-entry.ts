@@ -890,6 +890,30 @@ function storeNumber(values: FastNumbers, dst: number, expression: string): stri
 }
 
 const NUMBER_COMPARISONS: ReadonlySet<string> = new Set(["<", "<=", ">", ">="]);
+
+/**
+ * The relational comparison of two Strings, which compares code units. It reads both
+ * strings without collecting or running JavaScript, so a fast body can finish it.
+ */
+function lexicalComparison(
+	values: FastNumbers,
+	operator: string,
+	dst: number,
+	left: number,
+	right: number,
+): { readonly strings: string; readonly statement: string } | undefined {
+	if (
+		!NUMBER_COMPARISONS.has(operator) ||
+		values.constants.has(left) ||
+		values.constants.has(right) ||
+		(values.kind(left) & values.kind(right) & COMPILER_VALUE_KIND_STRING) === 0
+	)
+		return undefined;
+	return {
+		strings: `mal_value_is_string(__fast_r${left}) && mal_value_is_string(__fast_r${right})`,
+		statement: `__fast_r${dst} = mal_value_new_boolean(mal_string_compare(mal_value_to_string(__fast_r${left}), mal_value_to_string(__fast_r${right})) ${operator} 0);`,
+	};
+}
 const INT32_OPERATORS: ReadonlySet<string> = new Set(["&", "|", "^"]);
 const NUMBER_OPERATORS: ReadonlySet<string> = new Set(["+", "-", "*", "/"]);
 
@@ -961,7 +985,11 @@ function fastBinary(
 		`__fast_r${left}`,
 		`__fast_r${right}`,
 	);
-	if (inputs === undefined) return undefined;
+	const lexical = lexicalComparison(values, operator, dst, left, right);
+	if (inputs === undefined)
+		return lexical === undefined
+			? undefined
+			: `if (!(${lexical.strings})) goto __full; ${lexical.statement}`;
 	const mask = (register: number) => inputs.masks[register === left ? 0 : 1];
 	const guard = inputs.guard === "" ? "" : `if (!(${inputs.guard})) goto __full;`;
 	const numeric = (register: number) =>
@@ -993,8 +1021,12 @@ function fastBinary(
 		if (expression !== undefined)
 			return `${guard} ${storeNumber(values, dst, expression)}`;
 	}
-	if (NUMBER_COMPARISONS.has(operator))
-		return `${guard} __fast_r${dst} = mal_value_new_boolean(${numeric(left)} ${operator} ${numeric(right)});`;
+	if (NUMBER_COMPARISONS.has(operator)) {
+		const compared = `${guard} __fast_r${dst} = mal_value_new_boolean(${numeric(left)} ${operator} ${numeric(right)});`;
+		return lexical === undefined
+			? compared
+			: `if (${lexical.strings}) { ${lexical.statement} } else { ${compared} }`;
+	}
 	if (INT32_OPERATORS.has(operator))
 		return `${guard} __fast_r${dst} = mal_value_from_i32(${integer(left)} ${operator} ${integer(right)});`;
 	if (operator === "<<")

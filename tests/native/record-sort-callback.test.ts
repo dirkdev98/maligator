@@ -57,6 +57,7 @@ describe("record sort callback kernels", () => {
 		{ scenario: "detached", behavior: "supports detached sort and toSorted calls" },
 		{ scenario: "override", behavior: "honors replaced sort methods" },
 		{ scenario: "sparse", behavior: "preserves undefined elements and holes" },
+		{ scenario: "strings", behavior: "orders String fields by code units" },
 	])("$behavior", ({ scenario }) => {
 		const env = { RECORD_SORT_CASE: scenario };
 		const expected = execFileSync(process.execPath, [fixture], {

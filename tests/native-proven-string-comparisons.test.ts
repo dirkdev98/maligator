@@ -173,12 +173,8 @@ describe("proven String operations in boxed storage", () => {
 		},
 	);
 
-	it("keeps the coercive path for unknown and mixed operands", () => {
-		for (const expression of [
-			"left < right",
-			"String(left) < +right",
-			"String(left) == right",
-		]) {
+	it("keeps the coercive path for mixed operands", () => {
+		for (const expression of ["String(left) < +right", "String(left) == right"]) {
 			const out = inspectStaticValueFunction(
 				`function compute(left,right){return ${expression};}globalThis.compute=compute;`,
 				"compute",
@@ -186,5 +182,20 @@ describe("proven String operations in boxed storage", () => {
 			expect(out.c.source).not.toContain("mal_string_compare(");
 			expect(out.c.source).not.toContain("mal_string_equals(");
 		}
+	});
+
+	it("compares unknown operands lexically only after checking both are Strings", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(left,right){return left < right;}globalThis.compute=compute;",
+			"compute",
+		);
+		const comparisons = out.c.source
+			.split("\n")
+			.filter((line) => line.includes("mal_string_compare("));
+		expect(comparisons.length).toBeGreaterThan(0);
+		for (const line of comparisons)
+			expect(line).toMatch(
+				/mal_value_is_string\(__fast_r\d+\) && mal_value_is_string\(__fast_r\d+\)/,
+			);
 	});
 });
