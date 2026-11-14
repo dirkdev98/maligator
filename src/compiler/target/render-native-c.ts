@@ -982,9 +982,17 @@ function frameDescriptorName(symbol: string): string {
 	return `mal_frame_desc_${symbol}`;
 }
 
-function compiledFrameEntry(symbol: string, functionIndex: string): Array<string> {
+// A walk treats every activation of a frame-owning function as holding a live
+// record, so code that calls out before entering the frame declares the record first.
+const FRAME_RECORD_DECLARATION = "    MalNativeFrame __frame_record;";
+
+function compiledFrameEntry(
+	symbol: string,
+	functionIndex: string,
+	recordDeclared = false,
+): Array<string> {
 	return [
-		"    MalNativeFrame __frame_record;",
+		...(recordDeclared ? [] : [FRAME_RECORD_DECLARATION]),
 		`    MalNativeFrame *const __frame_row = MAL_FRAME_ENTER(&__frame_record, ${frameDescriptorName(symbol)}, ${functionIndex});`,
 	];
 }
@@ -4677,7 +4685,7 @@ function emitCompiledVariant(
 		);
 	if (directEntry === undefined) lines.push(`    (void) entry_state;`);
 	lines.push(
-		...compiledFrameEntry(symbol, relocation.functionIndex(index)),
+		...compiledFrameEntry(symbol, relocation.functionIndex(index), dispatch.length > 0),
 		`    if (__frame_row == nullptr) return ${directEntry === undefined ? "MAL_VALUE_UNDEFINED" : zeroOf(directEntry.resultRepresentation)};`,
 		...COMPILED_ENTRY_SCOPE,
 	);
@@ -6142,6 +6150,9 @@ function renderCallbackAdapter(
 /**
  * Statements opening a canonical entry that run its dispatched variant, before any
  * frame or fast body, when the call is no construction and the arguments match.
+ * They declare the entry's frame record and mark it absent while the variant runs,
+ * since a walk of the variant's callees would otherwise read whatever an earlier
+ * activation left in that stack slot.
  */
 function renderCanonicalDispatch(
 	entry: NativeDirectEntryPlan,
@@ -6150,7 +6161,9 @@ function renderCanonicalDispatch(
 ): ReadonlyArray<string> {
 	const { guards, call } = typedEntryInvocation(entry, name, suffix);
 	return [
+		FRAME_RECORD_DECLARATION,
 		`    if (${["mal_value_is_undefined(new_target)", ...guards].map((guard) => `(${guard})`).join(" && ")}) {`,
+		"        MAL_FRAME_ABSENT(&__frame_record);",
 		"        MAL_PERF_COUNT(canonical_typed_dispatch_hits);",
 		...call.map((line) => `        ${line}`),
 		"    }",
