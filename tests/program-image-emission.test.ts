@@ -4846,15 +4846,22 @@ describe("native update-expression representation", () => {
 					(region) => region.kind === "regexp-exec-projection",
 				),
 			).toEqual(projections);
-			for (const [index, fn] of cached.native.functions.entries()) {
-				if (
-					fn.specializations.some((region) => region.kind === "regexp-exec-projection")
-				) {
-					expect(emitCompiledFunction(fn, index, "", false)?.source).toContain(
-						"mal_regexp_exec_result_projection(vm,",
-					);
-				}
-			}
+			// Under locked primordials the literal's own exec borrows the template matcher
+			// instead of the projection; mutable builds keep the projection for it.
+			const literalSites = primordials === "locked" ? 1 : 0;
+			const projected = [...cached.native.functions.entries()]
+				.filter(([, fn]) =>
+					fn.specializations.some((region) => region.kind === "regexp-exec-projection"),
+				)
+				.map(([index, fn]) => emitCompiledFunction(fn, index, "", false)?.source ?? "");
+			expect(
+				projected.filter((source) =>
+					source.includes("mal_regexp_exec_result_projection(vm,"),
+				),
+			).toHaveLength(3 - literalSites);
+			expect(
+				projected.filter((source) => source.includes("mal_regexp_literal_exec(vm,")),
+			).toHaveLength(literalSites);
 			const emitted = emitProgramImage(cached, { compiled: true });
 			expect(emitted).toContain("mal_regexp_exec_result_projection(vm,");
 			expect(emitted).not.toMatch(/__regexp_exec_\d+_(?:starts|ends)\[0\]/);

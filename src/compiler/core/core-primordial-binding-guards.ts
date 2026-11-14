@@ -879,7 +879,8 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 	},
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg"],
-	changes: { cfg: true, calls: true, facts: false, representations: false },
+	// The twin copies instructions, whose new values need fresh fact analyses.
+	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: BUDGET,
 	run(context) {
 		const { program, compilationContext, item } = context;
