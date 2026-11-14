@@ -560,4 +560,55 @@ for (let length = 1; length <= 25; length++) {
 	}
 }
 check(distinctKeys, "cached keys compare every byte");
+// Records whose members include scalar records serialize like the member loop.
+const nestedRecords = Array.from({ length: 3 }, (_, index) => ({
+	id: "p" + index,
+	views: index * 7,
+	author: { name: "a" + index, rank: index, active: index !== 1, note: null },
+}));
+check(
+	JSON.stringify(nestedRecords) ===
+		'[{"id":"p0","views":0,"author":{"name":"a0","rank":0,"active":true,"note":null}},' +
+			'{"id":"p1","views":7,"author":{"name":"a1","rank":1,"active":false,"note":null}},' +
+			'{"id":"p2","views":14,"author":{"name":"a2","rank":2,"active":true,"note":null}}]',
+	"nested scalar records",
+);
+check(
+	JSON.stringify({ id: 1, inner: { text: 'a"b', wide: "é€" } }) ===
+		'{"id":1,"inner":{"text":"a\\"b","wide":"é€"}}',
+	"nested records with escapes and wide strings",
+);
+check(
+	JSON.stringify({ id: 1, inner: { b: 2 } }, null, 2) ===
+		'{\n  "id": 1,\n  "inner": {\n    "b": 2\n  }\n}',
+	"indented nested records",
+);
+class TaggedRecord {
+	constructor() {
+		this.value = 1;
+	}
+	toJSON() {
+		return "tagged";
+	}
+}
+check(
+	JSON.stringify({ id: 1, tag: new TaggedRecord() }) === '{"id":1,"tag":"tagged"}',
+	"inherited toJSON on a nested record",
+);
+const selfRecord = { id: 1, inner: null };
+selfRecord.inner = selfRecord;
+const ancestor = { item: null };
+ancestor.item = { id: 1, up: ancestor };
+for (const [label, value] of [
+	["self", selfRecord],
+	["ancestor", ancestor],
+]) {
+	let caught;
+	try {
+		JSON.stringify(value);
+	} catch (error) {
+		caught = error;
+	}
+	check(caught instanceof TypeError, "nested record cycle through " + label);
+}
 console.log(failed ? "json-algorithms FAIL" : "json-algorithms PASS");

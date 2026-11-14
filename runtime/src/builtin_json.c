@@ -1092,10 +1092,11 @@ typedef struct MalJsonPlainState {
     usize call_shapes;
     struct MalJsonPlanCache *plan_cache;
     usize prototype_eviction_slot;
-    // The traversal runs no JavaScript, so the last proven layout and prototype
-    // stay valid for the rest of the call; record arrays repeat both.
-    const MalShape *last_shape;
-    MalJsonShapePlan *last_plan;
+    // The traversal runs no JavaScript, so the last proven layouts and prototype
+    // stay valid for the rest of the call. Record arrays repeat them; a record with
+    // a nested object alternates two layouts, so the newest two are kept.
+    const MalShape *last_shapes[2];
+    MalJsonShapePlan *last_plans[2];
     const MalObject *last_prototype;
     MalJsonFrame inline_frames[MAL_JSON_INLINE_FRAMES];
 } MalJsonPlainState;
@@ -1387,11 +1388,28 @@ static bool mal_json_plain_key(
 
 #define MAL_JSON_FLAT_RECORD_MEMBERS 16
 
+// Members of the nested records one flat record may write, across all of them.
+#define MAL_JSON_FLAT_NESTED_MEMBERS 32
+
 typedef struct MalJsonFlatMember {
     MalValue value;
     const u8 *units;
     u32 width;
 } MalJsonFlatMember;
+
+/** A member written as a nested record, whose members start at `first`. */
+typedef struct MalJsonFlatNested {
+    const MalJsonShapePlan *plan;
+    u32 first;
+} MalJsonFlatNested;
+
+/** Nested members of one flat record: a bit per record member, then their layouts. */
+typedef struct MalJsonFlatNesting {
+    u32 mask;
+    u32 count;
+    MalJsonFlatNested records[MAL_JSON_FLAT_RECORD_MEMBERS];
+    MalJsonFlatMember members[MAL_JSON_FLAT_NESTED_MEMBERS];
+} MalJsonFlatNesting;
 
 static u32 mal_json_i32_width(i32 value) {
     u32 magnitude = value < 0 ? (u32) -(i64) value : (u32) value;
@@ -1414,13 +1432,59 @@ static u8 *mal_json_write_latin1_indent(
     return out;
 }
 
+static inline __attribute__((always_inline)) void mal_json_write_flat_scalar(
+    u8 *out, const MalJsonFlatMember *member
+) {
+    if (mal_value_is_int32(member->value)) {
+        i32 number = mal_value_to_i32(member->value);
+        u32 magnitude = number < 0 ? (u32) -(i64) number : (u32) number;
+        u8 *digit = out + member->width;
+        do {
+            *--digit = (u8) ('0' + magnitude % 10);
+            magnitude /= 10;
+        } while (magnitude != 0);
+        if (number < 0) *--digit = '-';
+    } else if (member->units != nullptr) {
+        out[0] = '"';
+        mal_text_buffer_copy_bytes(out + 1, member->units, member->width - 2);
+        out[member->width - 1] = '"';
+    } else if (mal_value_is_null(member->value)) {
+        memcpy(out, "null", 4);
+    } else if (mal_value_to_boolean(member->value)) {
+        memcpy(out, "true", 4);
+    } else {
+        memcpy(out, "false", 5);
+    }
+}
+
+/** A compact nested record of scalar members, `width` bytes from `{` to `}`. */
+static void mal_json_write_flat_nested(
+    u8 *out, const MalJsonShapePlan *plan, const MalJsonFlatMember *members
+) {
+    const MalTextBuffer *keys = &plan->escaped_keys.buffer;
+    *out++ = '{';
+    for (usize i = 0; i < plan->count; i++) {
+        if (i != 0) *out++ = ',';
+        const MalJsonKeyPlan *key = &plan->keys[i];
+        mal_text_buffer_copy_bytes(out, (const u8 *) keys->data + key->offset, key->length);
+        out += key->length;
+        mal_json_write_flat_scalar(out, &members[i]);
+        out += members[i].width;
+    }
+    *out = '}';
+}
+
 // The caller reserves all bytes; inlining specializes compact and indented writes.
 static inline __attribute__((always_inline)) void mal_json_write_flat_record(
     u8 *out, const MalJsonShapePlan *plan, const MalTextBuffer *keys,
-    const MalJsonFlatMember *members, const u8 *gap, usize gap_length, usize depth
+    const MalJsonFlatMember *members, const MalJsonFlatNesting *nesting,
+    const u8 *gap, usize gap_length, usize depth
 ) {
+    // Byte stores may alias the plan and nesting, so loop bounds stay in locals.
+    const usize count = plan->count;
+    const u32 nested_mask = nesting == nullptr ? 0 : nesting->mask;
     *out++ = '{';
-    for (usize i = 0; i < plan->count; i++) {
+    for (usize i = 0; i < count; i++) {
         if (i != 0) *out++ = ',';
         if (gap_length != 0) {
             out = mal_json_write_latin1_indent(out, gap, gap_length, depth + 1);
@@ -1430,25 +1494,11 @@ static inline __attribute__((always_inline)) void mal_json_write_flat_record(
         out += key->length;
         if (gap_length != 0) *out++ = ' ';
         const MalJsonFlatMember *member = &members[i];
-        if (mal_value_is_int32(member->value)) {
-            i32 number = mal_value_to_i32(member->value);
-            u32 magnitude = number < 0 ? (u32) -(i64) number : (u32) number;
-            u8 *digit = out + member->width;
-            do {
-                *--digit = (u8) ('0' + magnitude % 10);
-                magnitude /= 10;
-            } while (magnitude != 0);
-            if (number < 0) *--digit = '-';
-        } else if (member->units != nullptr) {
-            out[0] = '"';
-            mal_text_buffer_copy_bytes(out + 1, member->units, member->width - 2);
-            out[member->width - 1] = '"';
-        } else if (mal_value_is_null(member->value)) {
-            memcpy(out, "null", 4);
-        } else if (mal_value_to_boolean(member->value)) {
-            memcpy(out, "true", 4);
+        if ((nested_mask >> i) & 1u) {
+            const MalJsonFlatNested *record = &nesting->records[i];
+            mal_json_write_flat_nested(out, record->plan, nesting->members + record->first);
         } else {
-            memcpy(out, "false", 5);
+            mal_json_write_flat_scalar(out, member);
         }
         out += member->width;
     }
@@ -1458,15 +1508,118 @@ static inline __attribute__((always_inline)) void mal_json_write_flat_record(
     *out = '}';
 }
 
+/** Classifies an int32, boolean, null or escape-free Latin-1 String member. */
+static inline __attribute__((always_inline)) bool mal_json_flat_scalar(
+    MalValue value, MalJsonFlatMember *member
+) {
+    member->value = value;
+    member->units = nullptr;
+    if (mal_value_is_int32(value)) {
+        member->width = mal_json_i32_width(mal_value_to_i32(value));
+    } else if (mal_value_is_boolean(value)) {
+        member->width = mal_value_to_boolean(value) ? 4 : 5;
+    } else if (mal_value_is_null(value)) {
+        member->width = 4;
+    } else if (mal_value_is_string(value)) {
+        const MalString *string = mal_value_to_string(value);
+        usize length = mal_string_length(string);
+        MalStringSegment segment;
+        if (length > UINT32_MAX - 2 ||
+            !mal_string_try_get_segment(string, 0, length, &segment) || !segment.latin1 ||
+            mal_json_latin1_safe_run(segment.latin1_units, length) != length) return false;
+        member->units = segment.latin1_units;
+        member->width = (u32) length + 2;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+static bool mal_json_plain_frame(
+    MalJsonPlainState *state, MalValue value, MalJsonFrame *frame);
+static bool mal_json_plain_is_active(MalJsonPlainState *state, const MalObject *object);
+
+/**
+ * Classifies a compact member that is itself a record of scalar members, which the
+ * member loop would write the same way: the plain frame proves its layout and the
+ * absence of toJSON, and an object that is the record or one of its ancestors
+ * declines so the member loop can report the cycle.
+ */
+static bool mal_json_flat_nested(
+    MalJsonPlainState *plain, const MalObject *record, MalValue value, usize index,
+    MalJsonFlatMember *member, MalJsonFlatNesting *nesting
+) {
+    const MalObject *object = mal_value_to_object(value);
+    MalJsonFrame frame;
+    if (object == record || object->header.type != MAL_HEAP_OBJECT ||
+        !mal_json_plain_frame(plain, value, &frame) || !frame.cached_plan ||
+        mal_json_plain_is_active(plain, object)) return false;
+    const MalJsonShapePlan *plan = frame.plan;
+    if (plan->escaped_keys.buffer.utf16 || plan->count == 0 ||
+        plan->count > MAL_JSON_FLAT_NESTED_MEMBERS - nesting->count) return false;
+    u64 width = 1 + plan->count;
+    for (usize i = 0; i < plan->count; i++) {
+        const MalJsonKeyPlan *key = &plan->keys[i];
+        MalJsonFlatMember *item = &nesting->members[nesting->count + i];
+        if (key->length == 0 ||
+            !mal_json_flat_scalar(mal_object_field_load(object, key->slot), item)) return false;
+        width += (u64) key->length + item->width;
+    }
+    if (width > UINT32_MAX) return false;
+    member->value = value;
+    member->units = nullptr;
+    member->width = (u32) width;
+    nesting->records[index] = (MalJsonFlatNested) {.plan = plan, .first = nesting->count};
+    nesting->mask |= 1u << index;
+    nesting->count += (u32) plan->count;
+    return true;
+}
+
+/**
+ * mal_json_plain_flat_record for a compact record with at least one nested record
+ * member. Kept out of line so records without one keep their own loop.
+ */
+static __attribute__((noinline)) bool mal_json_plain_flat_nested_record(
+    MalJsonPlainState *plain, MalJsonBuilder *builder, const MalObject *object,
+    const MalJsonShapePlan *plan, MalJsonFlatMember *members, usize first,
+    u64 record_bytes
+) {
+    MalTextBuffer *buffer = &builder->buffer;
+    MalJsonFlatNesting nesting;
+    nesting.mask = 0;
+    nesting.count = 0;
+    // Members before `first` are classified scalars already counted in record_bytes.
+    for (usize i = first; i < plan->count; i++) {
+        const MalJsonKeyPlan *key = &plan->keys[i];
+        if (key->length == 0) return false;
+        MalValue value = mal_object_field_load(object, key->slot);
+        MalJsonFlatMember *member = &members[i];
+        if (!mal_json_flat_scalar(value, member) &&
+            (!mal_value_is_object(value) ||
+                !mal_json_flat_nested(plain, object, value, i, member, &nesting))) return false;
+        record_bytes += (u64) key->length + member->width;
+    }
+    if (record_bytes > SIZE_MAX) return false;
+    usize needed = (usize) record_bytes;
+    if (!mal_text_buffer_fits(buffer, needed) &&
+        mal_text_buffer_reserve(buffer, needed) != MAL_TEXT_BUFFER_OK) return false;
+    mal_json_write_flat_record(
+        (u8 *) buffer->data + buffer->length, plan, &plan->escaped_keys.buffer, members,
+        &nesting, nullptr, 0, 0);
+    buffer->length += needed;
+    MAL_PERF_COUNT(json_flat_records);
+    return true;
+}
+
 /**
  * Writes a cached-plan record whose members are int32s, booleans, null, or
  * Latin-1 strings without escapes in one reservation, as the member loop would.
- * Any other record returns false before writing; such members can have no
- * object values, so the record cannot be its own ancestor.
+ * Without indentation a member can also be such a record itself. Any other record
+ * returns false before writing.
  */
 static bool mal_json_plain_flat_record(
-    MalJsonState *state, MalJsonBuilder *builder, const MalObject *object,
-    const MalJsonShapePlan *plan, usize depth
+    MalJsonPlainState *plain, MalJsonState *state, MalJsonBuilder *builder,
+    const MalObject *object, const MalJsonShapePlan *plan, usize depth
 ) {
     MalTextBuffer *buffer = &builder->buffer;
     const MalTextBuffer *keys = &plan->escaped_keys.buffer;
@@ -1485,28 +1638,10 @@ static bool mal_json_plain_flat_record(
         if (key->length == 0) return false;
         MalValue value = mal_object_field_load(object, key->slot);
         MalJsonFlatMember *member = &members[i];
-        member->units = nullptr;
-        if (mal_value_is_int32(value)) {
-            member->value = value;
-            member->width = mal_json_i32_width(mal_value_to_i32(value));
-        } else if (mal_value_is_boolean(value)) {
-            member->value = value;
-            member->width = mal_value_to_boolean(value) ? 4 : 5;
-        } else if (mal_value_is_null(value)) {
-            member->value = value;
-            member->width = 4;
-        } else if (mal_value_is_string(value)) {
-            const MalString *string = mal_value_to_string(value);
-            usize length = mal_string_length(string);
-            MalStringSegment segment;
-            if (length > UINT32_MAX - 2 ||
-                !mal_string_try_get_segment(string, 0, length, &segment) || !segment.latin1 ||
-                mal_json_latin1_safe_run(segment.latin1_units, length) != length) return false;
-            member->value = value;
-            member->units = segment.latin1_units;
-            member->width = (u32) length + 2;
-        } else {
-            return false;
+        if (!mal_json_flat_scalar(value, member)) {
+            return state->gap_length == 0 && mal_value_is_object(value) &&
+                mal_json_plain_flat_nested_record(
+                    plain, builder, object, plan, members, i, record_bytes);
         }
         record_bytes += (u64) key->length + member->width;
     }
@@ -1528,9 +1663,9 @@ static bool mal_json_plain_flat_record(
         mal_text_buffer_reserve(buffer, needed) != MAL_TEXT_BUFFER_OK) return false;
     u8 *out = (u8 *) buffer->data + buffer->length;
     if (state->gap_length == 0) {
-        mal_json_write_flat_record(out, plan, keys, members, nullptr, 0, 0);
+        mal_json_write_flat_record(out, plan, keys, members, nullptr, nullptr, 0, 0);
     } else {
-        mal_json_write_flat_record(out, plan, keys, members, gap, state->gap_length, depth);
+        mal_json_write_flat_record(out, plan, keys, members, nullptr, gap, state->gap_length, depth);
     }
     buffer->length += needed;
     MAL_PERF_COUNT(json_flat_records);
@@ -1550,16 +1685,20 @@ static bool mal_json_plain_frame(
         frame->array = true;
         frame->count = array->length;
     } else if (object->header.type == MAL_HEAP_OBJECT) {
-        if (object->shape == state->last_shape && !mal_object_has_public_overflow(object) &&
+        usize recent = object->shape == state->last_shapes[0] ? 0
+            : object->shape == state->last_shapes[1] ? 1 : 2;
+        if (recent < 2 && !mal_object_has_public_overflow(object) &&
             !object->is_arguments && !object->is_raw_json) {
-            frame->plan = state->last_plan;
-            frame->count = state->last_plan->count;
+            frame->plan = state->last_plans[recent];
+            frame->count = frame->plan->count;
             frame->cached_plan = true;
         } else if (!mal_json_plain_shape(state, object, frame)) {
             return false;
         } else if (frame->cached_plan) {
-            state->last_shape = object->shape;
-            state->last_plan = frame->plan;
+            state->last_shapes[1] = state->last_shapes[0];
+            state->last_plans[1] = state->last_plans[0];
+            state->last_shapes[0] = object->shape;
+            state->last_plans[0] = frame->plan;
         }
     } else {
         return false;
@@ -1789,8 +1928,8 @@ static bool mal_json_try_serialize_plain(
     state.capacity = MAL_JSON_INLINE_FRAMES;
     state.cache_data_bytes = state.plan_bytes;
     state.prototype_eviction_slot = 0;
-    state.last_shape = nullptr;
-    state.last_plan = nullptr;
+    state.last_shapes[0] = state.last_shapes[1] = nullptr;
+    state.last_plans[0] = state.last_plans[1] = nullptr;
     state.last_prototype = nullptr;
     // Before fallback, descendants and prototypes remain reachable from root:
     // the plain traversal never invokes JS or changes a property.
@@ -1818,7 +1957,7 @@ static bool mal_json_try_serialize_plain(
             }
             // A flat record is written whole, so the parent continues with its next member.
             if (frame.array || !frame.cached_plan ||
-                !mal_json_plain_flat_record(generic, builder, object, frame.plan, state.count)) {
+                !mal_json_plain_flat_record(&state, generic, builder, object, frame.plan, state.count)) {
                 mal_json_plain_push_frame(&state, object, &frame);
                 if (!mal_json_builder_push(builder, frame.array ? '[' : '{')) goto failed;
             }
