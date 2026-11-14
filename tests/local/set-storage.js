@@ -105,6 +105,27 @@ for (let i = 0; i < 48; i++)
 	);
 strings.add("member-0" + "x".repeat(80));
 check(strings.size === 48, "string content duplicate");
+const smallStrings = new Set(["birch", "maple", "caf\u00e9"]);
+check(
+	smallStrings.has(["ma", "ple"].join("")) &&
+		smallStrings.has("caf" + String.fromCharCode(233)) &&
+		!smallStrings.has("pine") &&
+		!smallStrings.has("beech") &&
+		!smallStrings.has(7),
+	"small string probes preserve content equality and key types",
+);
+const stringCursor = smallStrings.values();
+check(stringCursor.next().value === "birch", "small string cursor starts");
+smallStrings.delete("maple");
+check(
+	!smallStrings.has(["ma", "ple"].join("")) && smallStrings.has("caf\u00e9"),
+	"small string probes skip pinned tombstones",
+);
+smallStrings.add(7);
+check(
+	smallStrings.has(7) && smallStrings.has("birch") && !smallStrings.has("maple"),
+	"small string probes survive generic widening",
+);
 const identities = new Set([object, symbol]);
 identities.add(object).add(symbol);
 check(

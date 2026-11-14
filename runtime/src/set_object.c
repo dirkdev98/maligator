@@ -382,6 +382,18 @@ MalSetObject *mal_set_object_new(MalHeap *heap, MalObject *prototype) {
 }
 
 static bool mal_set_small_has(const MalSetStorage *storage, MalValue key) {
+    if (storage->domain == MAL_SET_KEYS_STRING) {
+        const MalString *query = mal_value_to_string(key);
+        u32 length = query->length;
+        for (u32 i = 0; i < storage->count; i++) {
+            MalValue candidate = storage->small[i];
+            if (candidate == key || (candidate != MAL_VALUE_EMPTY &&
+                mal_string_equals_constant_length(mal_value_to_string(candidate), query, length))) {
+                return true;
+            }
+        }
+        return false;
+    }
     for (u32 i = 0; i < storage->count; i++) {
         if (mal_set_is_live(storage, i) && mal_set_small_key_equals(storage, i, key)) return true;
     }
