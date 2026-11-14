@@ -871,6 +871,16 @@ static MalValue mal_promise_reject_static(MalVm *vm, MalValue this_value, const 
     return cap_promise;
 }
 
+bool mal_promise_can_elide_await_resolve(
+    MalVm *vm, MalNativeFunctionCallback entry, MalValue receiver, MalValue value
+) {
+    return (entry == mal_promise_resolve_static ||
+            entry == mal_known_native_mal_promise_resolve_static) &&
+        !mal_value_is_object(value) &&
+        receiver == vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR] &&
+        mal_vm_watched_methods_intact(vm);
+}
+
 bool mal_promise_resolve_value(MalVm *vm, MalValue value, MalValue *out_promise) {
     if (mal_promise_is_canonical_intrinsic(
             vm, value, vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR])) {

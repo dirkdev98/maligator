@@ -7059,9 +7059,10 @@ function emitResumableFunction(
 	for (let i = 0; i < fn.parameterCount; i++) {
 		lines.push(`        r${i} = arg_count > ${i} ? args[${i}] : MAL_VALUE_UNDEFINED;`);
 	}
-	lines.push(
-		`        __suspend_slots = mal_coroutine_alloc_registers(vm, ${suspension.slotCount});`,
-	);
+	if (!isAsyncFunction)
+		lines.push(
+			`        __suspend_slots = mal_coroutine_alloc_registers(vm, ${suspension.slotCount});`,
+		);
 	if (fn.argumentSnapshotCount > 0) {
 		lines.push(
 			`        MAL_PERF_ADD(argument_snapshot_logical_values, ${fn.argumentSnapshotCount});`,
@@ -7086,17 +7087,15 @@ function emitResumableFunction(
 	// Falling off the end is an implicit `return undefined` — complete the coroutine.
 	const fallReturn = isAsyncFunction ? "__async_result_promise" : "MAL_VALUE_UNDEFINED";
 	lines.push(
-		`    ${gcUnlink}mal_vm_op_coroutine_return_compiled(vm, __coro, MAL_VALUE_UNDEFINED);`,
+		`    ${gcUnlink}${isAsyncFunction ? "mal_vm_op_async_complete_compiled(vm, __coro, __async_result_promise, false, MAL_VALUE_UNDEFINED)" : "mal_vm_op_coroutine_return_compiled(vm, __coro, MAL_VALUE_UNDEFINED)"};`,
 		`    return ${fallReturn};`,
 	);
-	// Shared throw-exit for a coroutine: complete the activation (free it, route the
-	// throw by kind) before leaving the frame. __coro is null if the parameter
-	// prologue threw before GENERATOR_START — then the raw buffer is released and the
-	// throw propagates synchronously. Reached only by `goto`; omitted when unused.
+	// Generator parameter failures precede state creation; async failures settle the
+	// result promise even when the activation never needed persistent state.
 	if (body.resources.has("throwExit")) {
 		lines.push(
 			`__throw_exit:;`,
-			`    ${gcUnlink}mal_vm_op_coroutine_throw_compiled(vm, __coro, __suspend_slots); return ${fallReturn};`,
+			`    ${gcUnlink}${isAsyncFunction ? "mal_vm_op_async_complete_compiled(vm, __coro, __async_result_promise, true, vm->completion.value)" : "mal_vm_op_coroutine_throw_compiled(vm, __coro, __suspend_slots)"}; return ${fallReturn};`,
 		);
 	}
 	lines.push("}");
@@ -14155,6 +14154,36 @@ class NativeInstructionEmission {
 			this.callPoll(),
 		];
 	}
+
+	emitImmediateAwaitCall(
+		instruction: Extract<BytecodeInstruction, { opcode: "CALL" | "CALL_KNOWN" }>,
+		ordinary: Array<string> | null,
+	): Array<string> | null {
+		if (
+			ordinary === null ||
+			this.coro?.suspension.immediateAwaitCalls.includes(this.ip) !== true
+		)
+			return ordinary;
+		const argument = instruction.arguments[0];
+		const value =
+			argument === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(argument);
+		const callee =
+			instruction.opcode === "CALL" ? this.boxedOperand(instruction.callee) : undefined;
+		const entry =
+			instruction.opcode === "CALL_KNOWN"
+				? knownNativeEntries()[knownOperationIndex(instruction.operation)!]
+				: `mal_value_to_native_function_object(${callee})->callback`;
+		const nativeGuard =
+			callee === undefined ? "" : `mal_value_is_native_function_object(${callee}) && `;
+		// Polling here could let another fiber invalidate the prototype proof before Await.
+		return [
+			`if (${nativeGuard}mal_promise_can_elide_await_resolve(vm, ${entry}, ${this.boxedOperand(instruction.thisValue)}, ${value})) {`,
+			`  r${instruction.dst} = ${this.callValue(instruction.dst, value)};`,
+			`} else {`,
+			...ordinary.map((line) => `  ${line}`),
+			`}`,
+		];
+	}
 	foreignScalarArgument(operand: number, type: FfiScalarValue): string | undefined {
 		if (type.kind === "boolean") return this.nativeBooleanOperand(operand) ?? undefined;
 		const number = this.nativeNumberOperand(operand);
@@ -16296,7 +16325,7 @@ class NativeInstructionEmission {
 		if (this.coro !== null) {
 			return [
 				...materialize,
-				`${this.gcUnlink}mal_vm_op_coroutine_return_compiled(vm, __coro, ${value});`,
+				`${this.gcUnlink}${this.coro.isAsyncFunction ? `mal_vm_op_async_complete_compiled(vm, __coro, __async_result_promise, false, ${value})` : `mal_vm_op_coroutine_return_compiled(vm, __coro, ${value})`};`,
 				`return ${this.coroReturnValue};`,
 			];
 		}
@@ -17102,9 +17131,9 @@ class NativeInstructionEmission {
 				];
 			}
 			case "CALL_KNOWN":
-				return this.emitKnownCall(instruction);
+				return this.emitImmediateAwaitCall(instruction, this.emitKnownCall(instruction));
 			case "CALL": {
-				const call = this.emitCall(instruction);
+				const call = this.emitImmediateAwaitCall(instruction, this.emitCall(instruction));
 				const columns = this.context.recordColumnsProducer;
 				return call === null || columns === undefined
 					? call
@@ -17674,15 +17703,22 @@ class NativeInstructionEmission {
 				];
 			}
 			case "ASYNC_START": {
-				// Create the result promise + hidden async state adopting this
-				// activation's buffer; unlike GENERATOR_START the body keeps running (no
-				// suspend). Every later exit returns the promise (__async_result_promise).
 				if (this.coro === null) {
 					return null;
 				}
 				return [
-					`__coro = mal_vm_op_async_start_compiled(vm, callee, ${this.coro.functionIndex}, this_value, env, __suspend_slots, ${this.coro.suspension.slotCount}, args, arg_count, ${this.coro.retainArguments}, &__async_result_promise);`,
-					`__gc_slots[${this.coro.selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
+					`__async_result_promise = mal_vm_op_async_result_compiled(vm);`,
+					`__gc_slots[${this.coro.selfSlot}] = __async_result_promise;`,
+					...(this.coro.retainArguments !== "false"
+						? [
+								// Argument snapshots must precede calls that can move the VM stack.
+								`if (${this.coro.retainArguments}) {`,
+								`  __coro = mal_vm_op_async_suspend_compiled(vm, callee, ${this.coro.functionIndex}, this_value, env, ${this.coro.suspension.slotCount}, args, arg_count, true, __async_result_promise);`,
+								`  __gc_slots[${this.coro.selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
+								`  __suspend_slots = __coro->frame.registers;`,
+								`}`,
+							]
+						: []),
 				];
 			}
 			case "AWAIT": {
@@ -17691,6 +17727,15 @@ class NativeInstructionEmission {
 				}
 				return [
 					`MalValue awaited_${this.ip} = ${this.boxed(instruction.awaitedSrc)};`,
+					...(this.coro.isAsyncFunction
+						? [
+								`if (__coro == nullptr) {`,
+								`  __coro = mal_vm_op_async_suspend_compiled(vm, callee, ${this.coro.functionIndex}, this_value, env, ${this.coro.suspension.slotCount}, args, arg_count, ${this.coro.retainArguments}, __async_result_promise);`,
+								`  __gc_slots[${this.coro.selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
+								`  __suspend_slots = __coro->frame.registers;`,
+								`}`,
+							]
+						: []),
 					...this.suspendSnapshot(),
 					`${this.gcUnlink}mal_vm_op_await_compiled(vm, __coro, awaited_${this.ip}, ${this.coro.suspension.valueSlot}, ${this.coro.suspension.modeSlot}, ${this.ip + 1}, ${this.coro.positionEntry(this.ip)}, env);`,
 					`return ${this.coroReturnValue};`,

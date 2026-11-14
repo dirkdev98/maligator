@@ -608,7 +608,7 @@ property keys or operation contracts disagree. Static cache hits omit key checks
 so physical instruction ordinals cannot identify these shared rows.
 
 Resumable functions keep per-value representations in C locals. Precise-root
-invocations publish an active root array for traced locals and the coroutine itself;
+invocations publish an active root array for traced locals and the activation owner;
 conservative-root invocations retain that live state on the native stack. A separate
 boxed activation buffer holds the largest individual suspension snapshot, plus
 two resume mailboxes. Each site's ordered map assigns its live locals to shared slots.
@@ -617,6 +617,19 @@ string spills come exclusively from trusted outgoing root obligations: conservat
 handler edges can name stale heap bits, and Core also retains scalar-replaced boxed
 occupants beyond their last executable read. Arguments and captured environments
 keep their existing ownership contracts.
+
+Compiled async calls create their result promise before running the body. Persistent
+coroutine state is materialized at the first await, unless arguments need an entry-time
+snapshot. Calls that complete before suspension settle their promise directly. Small
+snapshots occupy the async-generator queue space unused by ordinary async functions;
+larger snapshots retain the bounded buffer pool. Tracing and finalization distinguish
+inline slots from owned buffers and queued async-generator requests.
+
+Native suspension plans also certify call results consumed only by an immediate await.
+The intrinsic `Promise.resolve` can leave a primitive's intermediate promise virtual
+when the receiver and watched prototype methods remain intact. The normal await still
+queues its continuation. Object inputs, replacement functions, and invalidated
+prototype assumptions retain ordinary Promise resolution and thenable scheduling.
 Scalar liveness solves dense word sets at basic-block boundaries, with sparse
 read-before-write and kill summaries. Blocks split at handler changes and suspension
 continuations; snapshots read the continuation and handler sets. Handler-only

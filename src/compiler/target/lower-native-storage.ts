@@ -2080,6 +2080,10 @@ export function validateNativeStorage(
 				: stored.suspension.valueSlot === suspension.valueSlot &&
 					stored.suspension.modeSlot === suspension.modeSlot &&
 					stored.suspension.slotCount === suspension.slotCount &&
+					sameNumbers(
+						stored.suspension.immediateAwaitCalls,
+						suspension.immediateAwaitCalls,
+					) &&
 					stored.suspension.points.length === suspension.points.length &&
 					stored.suspension.points.every(
 						(point, index) =>

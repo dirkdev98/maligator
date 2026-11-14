@@ -187,6 +187,7 @@ export const NATIVE_C_HEADER_LINES = [
 	'#include "builtin_iterator.h"',
 	// for-await lowering uses mal_vm_get_async_iterator.
 	'#include "builtin_async_iterator.h"',
+	'#include "builtin_promise.h"',
 	// Compiled coroutines cast their backend entry state to MalGeneratorObject.
 	'#include "generator_object.h"',
 	'#include "class_layout.h"',

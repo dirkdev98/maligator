@@ -210,9 +210,46 @@ describe("block suspension liveness", () => {
 	it("keeps empty resumables empty", () => {
 		expect(lowerNativeSuspension(fixture([]))).toEqual({
 			points: [],
+			immediateAwaitCalls: [],
 			valueSlot: 0,
 			modeSlot: 1,
 			slotCount: 2,
 		});
+	});
+
+	it("confines virtual call results to a single immediate await", () => {
+		const call = {
+			opcode: "CALL",
+			dst: 3,
+			callee: 1,
+			thisValue: 2,
+			arguments: [0],
+			argumentCount: 1,
+		} as const;
+		const awaitValue = {
+			opcode: "AWAIT",
+			valueDst: 4,
+			modeDst: 5,
+			awaitedSrc: 3,
+		} as const;
+		const finish = { opcode: "RETURN", value: 4 } as const;
+		const cases: Array<[Array<BytecodeInstruction>, Array<number>]> = [
+			[[{ ...call, arguments: [0] }, awaitValue, finish], [0]],
+			[[{ ...call, arguments: [0, 6], argumentCount: 2 }, awaitValue, finish], []],
+			[
+				[
+					{ ...call, arguments: [0] },
+					{ opcode: "CREATE_NUMBER", dst: 7, value: 1 },
+					awaitValue,
+					finish,
+				],
+				[],
+			],
+			[[{ ...call, arguments: [0] }, awaitValue, { opcode: "RETURN", value: 3 }], []],
+		];
+		for (const [instructions, expected] of cases)
+			expect(lowerNativeSuspension(fixture(instructions))!.immediateAwaitCalls).toEqual(
+				expected,
+			);
 	});
 });

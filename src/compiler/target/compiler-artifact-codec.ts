@@ -124,7 +124,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 403;
+export const COMPILER_ARTIFACT_VERSION = 405;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -1123,6 +1123,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32(plan.valueSlot);
 		w.i32(plan.modeSlot);
 		w.i32(plan.slotCount);
+		w.i32Array([...plan.immediateAwaitCalls]);
 		w.u32(plan.points.length);
 		for (const point of plan.points) {
 			w.i32(point.instructionIp);
@@ -1838,11 +1839,12 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		const valueSlot = r.i32(),
 			modeSlot = r.i32(),
 			slotCount = r.i32();
+		const immediateAwaitCalls = r.i32Array();
 		const points = Array.from({ length: r.count(2) }, () => ({
 			instructionIp: r.i32(),
 			registers: r.i32Array(),
 		}));
-		suspension = { points, valueSlot, modeSlot, slotCount };
+		suspension = { points, immediateAwaitCalls, valueSlot, modeSlot, slotCount };
 	}
 	const directHeapObjectIps = r.i32Array();
 	const stackObjects: Array<NativeStackObjectStoragePlan> = Array.from(

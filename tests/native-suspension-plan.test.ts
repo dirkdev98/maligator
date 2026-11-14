@@ -191,6 +191,7 @@ describe("native suspension storage", () => {
 			native = image.native.functions[1]!;
 		const plan = native.storage!.suspension!;
 		for (const forged of [
+			{ ...plan, immediateAwaitCalls: [...plan.immediateAwaitCalls, 0] },
 			{ ...plan, points: plan.points.map((point) => ({ ...point, registers: [] })) },
 			{ ...plan, valueSlot: 0 },
 			{ ...plan, modeSlot: plan.valueSlot },

@@ -1820,7 +1820,8 @@ static void mal_gc_trace_cell_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
                 }
                 // Pending async-generator requests (malloc'd nodes, traced via
                 // the owner) remain reachable through the coallocated tail.
-                for (MalAsyncGeneratorRequest *req = gen->async_data->queue_head;
+                for (MalAsyncGeneratorRequest *req = gen->is_async_generator
+                         ? gen->async_data->queue_head : nullptr;
                      req != nullptr; req = req->next) {
                     mal_gc_mark_value_in(ctx, req->promise);
                     mal_gc_mark_value_in(ctx, req->promise_constructor);
@@ -2520,7 +2521,7 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
                 gen->state == MAL_GENERATOR_SUSPENDED_YIELD) {
                 mal_generator_release_frame(g_gc_vm, gen);
             }
-            if (gen->async_data != nullptr) {
+            if (gen->is_async_generator) {
                 mal_async_generator_free_requests(
                     g_gc_vm, gen->async_data->queue_head);
                 gen->async_data->queue_head = nullptr;

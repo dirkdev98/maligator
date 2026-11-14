@@ -10666,15 +10666,39 @@ void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator
     mal_gc_unroot(&root_span);
 }
 
-MalGeneratorObject *mal_vm_op_async_start_compiled(
+MalValue mal_vm_op_async_result_compiled(MalVm *vm) {
+    MalPromiseObject *promise = mal_promise_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
+    mal_promise_note_direct_async_result();
+    return mal_value_from_promise_object(promise);
+}
+
+void mal_vm_op_async_complete_compiled(
+    MalVm *vm, MalGeneratorObject *state, MalValue promise, bool is_reject, MalValue value
+) {
+    if (state != nullptr) {
+        if (is_reject) {
+            vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = value};
+            mal_vm_op_coroutine_throw_compiled(vm, state, state->frame.registers);
+        } else {
+            mal_vm_op_coroutine_return_compiled(vm, state, value);
+        }
+        return;
+    }
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    mal_promise_settle_direct(
+        vm, promise, vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], is_reject, value);
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+}
+
+MalGeneratorObject *mal_vm_op_async_suspend_compiled(
     MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
-    MalValue *registers, i32 register_count, const MalValue *arguments, i32 argument_count,
-    bool retain_arguments, MalValue *out_promise) {
+    i32 register_count, const MalValue *arguments, i32 argument_count,
+    bool retain_arguments, MalValue promise_value) {
     MalValue *owned_arguments = mal_compiled_coroutine_arguments(
         vm, arguments, argument_count, retain_arguments
     );
-    MalPromiseObject *promise = mal_promise_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
-    MalValue promise_value = mal_value_from_promise_object(promise);
     MalRootSpan promise_root;
     mal_gc_root(&promise_root, &promise_value, 1);
 
@@ -10686,19 +10710,27 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
     state->async_data->promise = promise_value;
     state->state = MAL_GENERATOR_EXECUTING;
     // Link the result promise back to this async state for async stack stitching.
-    promise = mal_value_to_promise_object(promise_value);
+    MalPromiseObject *promise = mal_value_to_promise_object(promise_value);
     promise->async_owner = state;
-    mal_promise_note_direct_async_result();
+    mal_gc_remember_if_old(&promise->object.header);
+
+    MalValue *registers;
+    if (register_count <= 2) {
+        registers = state->async_data->registers;
+        for (i32 i = 0; i < register_count; i++) registers[i] = mal_value_new_undefined();
+    } else {
+        registers = mal_coroutine_alloc_registers(vm, register_count);
+    }
 
     state->frame.vm = vm;
     state->frame.function_index = function_index;
     state->frame.function = &vm->live_runtime_image.functions[function_index];
     state->frame.registers = registers;
-    mal_generator_note_owned_storage(state);
     state->frame.compiled_register_count = register_count;
     state->frame.compiled_suspend_position_entry = 0;
     state->frame.is_compiled = true;
     state->frame.arguments = owned_arguments;
+    mal_generator_note_owned_storage(state);
     state->frame.argument_count = state->frame.function->needs_arguments
         ? argument_count
         : 0;
@@ -10718,7 +10750,6 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
 
     mal_gc_remember_if_old(&state->object.header);
 
-    *out_promise = promise_value;
     mal_gc_unroot(&promise_root);
     return state;
 }

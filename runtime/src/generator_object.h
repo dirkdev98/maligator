@@ -39,9 +39,15 @@ typedef struct MalGeneratorAsyncData {
     MalValue promise;
     /** Async stack stitching to the function awaiting this result. */
     MalGeneratorObject *awaited_by;
-    /** FIFO next/throw/return requests owned by an async generator. */
-    MalAsyncGeneratorRequest *queue_head;
-    MalAsyncGeneratorRequest *queue_tail;
+    union {
+        /** FIFO next/throw/return requests owned by an async generator. */
+        struct {
+            MalAsyncGeneratorRequest *queue_head;
+            MalAsyncGeneratorRequest *queue_tail;
+        };
+        /** Ordinary async functions can suspend without a separate small buffer. */
+        MalValue registers[2];
+    };
 } MalGeneratorAsyncData;
 
 /**
@@ -114,9 +120,17 @@ MalGeneratorObject *mal_generator_object_new(MalHeap *heap, MalObject *prototype
 MalGeneratorObject *mal_generator_object_new_async(
     MalHeap *heap, MalObject *prototype, bool is_async_generator);
 
+static inline bool mal_generator_registers_inline(const MalGeneratorObject *generator) {
+    return generator->async_data != nullptr && !generator->is_async_generator &&
+        generator->frame.registers == generator->async_data->registers;
+}
+
 /** A suspended frame or a queued request now holds storage the finalizer releases. */
 static inline void mal_generator_note_owned_storage(MalGeneratorObject *generator) {
-    mal_heap_cell_needs_finalizer(&generator->object.header);
+    if ((generator->frame.registers != nullptr && !mal_generator_registers_inline(generator)) ||
+        generator->frame.arguments != nullptr || generator->is_async_generator) {
+        mal_heap_cell_needs_finalizer(&generator->object.header);
+    }
 }
 
 /**
@@ -124,7 +138,7 @@ static inline void mal_generator_note_owned_storage(MalGeneratorObject *generato
  * an async generator still queues requests or ordinary object state owns storage.
  */
 static inline void mal_generator_note_released_storage(MalGeneratorObject *generator) {
-    if ((generator->async_data == nullptr || generator->async_data->queue_head == nullptr) &&
+    if ((!generator->is_async_generator || generator->async_data->queue_head == nullptr) &&
         !mal_object_finalizes(&generator->object)) {
         mal_heap_cell_owns_nothing(&generator->object.header);
     }

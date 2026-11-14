@@ -5047,14 +5047,18 @@ void mal_vm_op_terminal_yield_compiled(
 // leaves it in a NORMAL completion for the .next() driver.
 void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generator, MalValue value);
 
-// ASYNC_START (compiled): create the result promise + hidden async state, adopt
-// `registers` as the state's suspended frame, and return the state (its result
-// promise in *out_promise). Unlike GENERATOR_START the body does not suspend
-// here — it keeps running until the first await / return / throw.
-MalGeneratorObject *mal_vm_op_async_start_compiled(
+/** Create an async activation's result before executing its body. */
+MalValue mal_vm_op_async_result_compiled(MalVm *vm);
+
+/** Settle a compiled async activation, releasing its state if it suspended. */
+void mal_vm_op_async_complete_compiled(
+    MalVm *vm, MalGeneratorObject *state, MalValue promise, bool is_reject, MalValue value);
+
+/** Materialize the activation only when its first await needs persistent storage. */
+MalGeneratorObject *mal_vm_op_async_suspend_compiled(
     MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
-    MalValue *registers, i32 register_count, const MalValue *arguments, i32 argument_count,
-    bool retain_arguments, MalValue *out_promise);
+    i32 register_count, const MalValue *arguments, i32 argument_count,
+    bool retain_arguments, MalValue promise);
 
 // AWAIT (compiled): record the resume registers, resume point, and env on the
 // async state, mark it suspended, then hook the settlement continuation on the

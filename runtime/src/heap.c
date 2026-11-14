@@ -442,8 +442,9 @@ static bool mal_heap_dead_cell_finalizes(const MalHeap *heap, const MalHeapHeade
             bool suspended = generator->state == MAL_GENERATOR_SUSPENDED_START ||
                 generator->state == MAL_GENERATOR_SUSPENDED_YIELD;
             return (suspended &&
-                    (generator->frame.registers != nullptr || generator->frame.arguments != nullptr)) ||
-                (generator->async_data != nullptr && generator->async_data->queue_head != nullptr) ||
+                    ((generator->frame.registers != nullptr && !mal_generator_registers_inline(generator)) ||
+                     generator->frame.arguments != nullptr)) ||
+                (generator->is_async_generator && generator->async_data->queue_head != nullptr) ||
                 mal_object_finalizes(&generator->object);
         }
         default:

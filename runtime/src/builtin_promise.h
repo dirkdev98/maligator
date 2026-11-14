@@ -1,6 +1,7 @@
 #pragma once
 
 #include "./defaults.h"
+#include "function_object.h"
 #include "value.h"
 
 typedef struct MalVm MalVm;
@@ -87,6 +88,14 @@ void mal_promise_note_direct_async_result(void);
  * value before attaching resumption reactions.
  */
 bool mal_promise_resolve_value(MalVm *vm, MalValue value, MalValue *out_promise);
+
+/**
+ * A primitive's intrinsic resolved Promise can stay virtual when only an
+ * immediate Await consumes it. The protector also rules out constructor getters
+ * that Await would otherwise observe on the intermediate Promise.
+ */
+bool mal_promise_can_elide_await_resolve(
+    MalVm *vm, MalNativeFunctionCallback entry, MalValue receiver, MalValue value);
 
 /**
  * Register a typed async-function continuation against an intrinsic Promise.

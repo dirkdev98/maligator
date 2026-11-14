@@ -77,7 +77,9 @@ void mal_generator_release_frame(MalVm *vm, MalGeneratorObject *generator) {
         frame->function = &vm->live_runtime_image.functions[frame->function_index];
         mal_gc_satb_shade_frame(frame);
     }
-    mal_vm_release_shaded_coroutine_buffer(vm, frame->registers);
+    if (!mal_generator_registers_inline(generator)) {
+        mal_vm_release_shaded_coroutine_buffer(vm, frame->registers);
+    }
     mal_vm_release_shaded_coroutine_buffer(vm, frame->arguments);
     frame->registers = nullptr;
     frame->arguments = nullptr;

@@ -14,6 +14,8 @@ export interface NativeSuspensionPoint {
 
 export interface NativeSuspensionPlan {
 	readonly points: ReadonlyArray<NativeSuspensionPoint>;
+	/** Calls whose result identity is confined to the immediately following await. */
+	readonly immediateAwaitCalls: ReadonlyArray<number>;
 	readonly valueSlot: number;
 	readonly modeSlot: number;
 	readonly slotCount: number;
@@ -31,6 +33,24 @@ export function lowerNativeSuspension(
 		vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
 	const reads = body?.reads ?? fn.instructions.map(vmInstructionReadRegisters);
 	const writes = body?.writes ?? fn.instructions.map(vmInstructionWriteRegisters);
+	const readCounts = new Uint32Array(fn.registerCount);
+	for (const operands of reads)
+		for (const register of operands) if (register >= 0) readCounts[register]!++;
+	const immediateAwaitCalls = fn.instructions.flatMap((op, ip) => {
+		const next = fn.instructions[ip + 1];
+		return (op.opcode === "CALL" ||
+			(op.opcode === "CALL_KNOWN" &&
+				op.operation === "Promise.resolve" &&
+				!op.construct &&
+				op.argumentMode === undefined)) &&
+			op.arguments.length <= 1 &&
+			native.registerRepresentations[op.dst] === "boxed" &&
+			readCounts[op.dst] === 1 &&
+			next?.opcode === "AWAIT" &&
+			next.awaitedSrc === op.dst
+			? [ip]
+			: [];
+	});
 	const starts = new Uint8Array(fn.instructions.length);
 	starts[0] = 1;
 	const mark = (ip: number) => {
@@ -162,7 +182,7 @@ export function lowerNativeSuspension(
 		const ordered = [...registers].sort((a, b) => a - b);
 		points.push({ instructionIp: ip, registers: ordered });
 	}
-	return suspensionLayout(points);
+	return suspensionLayout(points, immediateAwaitCalls);
 }
 
 export function compactNativeSuspension(
@@ -176,11 +196,12 @@ export function compactNativeSuspension(
 			(register) => !rematerializedRegisters.has(register),
 		),
 	}));
-	return suspensionLayout(points);
+	return suspensionLayout(points, plan.immediateAwaitCalls);
 }
 
 function suspensionLayout(
 	points: ReadonlyArray<NativeSuspensionPoint>,
+	immediateAwaitCalls: ReadonlyArray<number> = [],
 ): NativeSuspensionPlan {
 	const valueSlot = points.reduce(
 		(count, point) => Math.max(count, point.registers.length),
@@ -188,6 +209,7 @@ function suspensionLayout(
 	);
 	return {
 		points,
+		immediateAwaitCalls,
 		valueSlot,
 		modeSlot: valueSlot + 1,
 		slotCount: valueSlot + 2,
