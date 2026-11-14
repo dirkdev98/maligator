@@ -94,6 +94,7 @@ describe("native literal string switch certificate", () => {
 
 	it.each([
 		{ labels: ["yes", "no"], strategy: "direct" },
+		{ labels: [".", "[", "]", "€", "\ud800"], strategy: "code-unit" },
 		{ labels: ["", "a", "bb", "ccc", "dddd"], strategy: "length" },
 		{ labels: largeLabels, strategy: "hash" },
 	])("selects $strategy dispatch for the case distribution", ({ labels, strategy }) => {
@@ -122,7 +123,7 @@ describe("native literal string switch certificate", () => {
 			}),
 		);
 		expect(emitted.source).not.toContain("mal_ops_strict_equal_boxed");
-		expect(emitted.source).toContain("mal_string_equals");
+		if (strategy !== "code-unit") expect(emitted.source).toContain("mal_string_equals");
 	});
 
 	it("retains generic dispatch in instrumented functions and rebases relocatable literals", () => {

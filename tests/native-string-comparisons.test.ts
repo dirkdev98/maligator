@@ -22,6 +22,7 @@ let template: BytecodeFunction | undefined;
 function fixture(
 	instructions: Array<BytecodeInstruction>,
 	overrides: Partial<BytecodeFunction> = {},
+	stringConstants: ReadonlyArray<ReadonlyArray<number>> = strings,
 ) {
 	template ??= inspectStaticValueFunction(
 		"function seed(a,b){return a;}globalThis.seed=seed;",
@@ -34,11 +35,11 @@ function fixture(
 		positions: instructions.map(() => 0),
 		...overrides,
 	};
-	const native = createConservativeNativePlan([body], strings).functions[0]!;
+	const native = createConservativeNativePlan([body], stringConstants).functions[0]!;
 	return lowerNativeFunctionStorage(
 		{ ...native, storageValues: Array.from({ length: 8 }, (_, i) => i) },
 		new Map(),
-		strings,
+		stringConstants,
 	);
 }
 
@@ -56,6 +57,55 @@ function joined(alternative: number) {
 }
 
 describe("planned String comparison lengths", () => {
+	it("compares joined literal-only values by identity", () => {
+		const native = fixture([
+			{ opcode: "CREATE_STRING", dst: 2, stringIndex: 1 },
+			{ opcode: "JUMP_IF", cond: 0, targetIp: 4 },
+			{ opcode: "CREATE_STRING", dst: 2, stringIndex: 2 },
+			{ opcode: "JUMP", targetIp: 4 },
+			{ opcode: "CREATE_STRING", dst: 3, stringIndex: 1 },
+			{ opcode: "BINARY", dst: 4, left: 2, right: 3, operator: "===" },
+			{ opcode: "RETURN", value: 4 },
+		]);
+		expect(native.storage!.stringComparisons).toContainEqual({
+			instructionIp: 5,
+			operand: 3,
+			length: 5,
+			kind: "identity",
+		});
+		expect(() => validateNativeStorage(native, new Map(), strings)).not.toThrow();
+	});
+
+	it("retains content comparison when composed rows have equal text", () => {
+		const duplicated = [...strings, strings[1]!];
+		const native = fixture(
+			[
+				{ opcode: "CREATE_STRING", dst: 2, stringIndex: 1 },
+				{ opcode: "CREATE_STRING", dst: 3, stringIndex: 4 },
+				{ opcode: "BINARY", dst: 4, left: 2, right: 3, operator: "===" },
+				{ opcode: "RETURN", value: 4 },
+			],
+			{},
+			duplicated,
+		);
+		expect(native.storage!.stringComparisons).toContainEqual(
+			expect.objectContaining({ instructionIp: 2, kind: "boxed" }),
+		);
+	});
+
+	it("preserves literal identity comparisons through the compiler artifact", () => {
+		const out = inspectStaticValueFunction(
+			"function target(first, second){const left=first?'ready':'other';const right=second?'ready':'other';return left===right;}globalThis.target=target;",
+			"target",
+		);
+		expect(out.native.storage!.stringComparisons).toContainEqual(
+			expect.objectContaining({ kind: "identity" }),
+		);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(out.image));
+		expect(
+			restored.native.functions[out.native.functionIndex]!.storage!.stringComparisons,
+		).toEqual(out.native.storage!.stringComparisons);
+	});
 	it.each([
 		'function target(value){return Object.is(value,"ready");}',
 		'function target(value){return Object.is("ready",value);}',

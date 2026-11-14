@@ -1679,6 +1679,7 @@ function lowerStorage(
 			...controlEntries,
 			elided: new Set(elidedPureIps),
 			stringLength: (index) => stringConstants[index]?.length,
+			stringConstants,
 		}),
 		...(controlFlow === undefined ? {} : { controlFlow }),
 	};

@@ -253,6 +253,15 @@ MalValue mal_local_string_builder_materialize(MalVm *vm, MalLocalStringBuilder *
         mal_string_new_latin1_copy(&vm->heap, builder->units.latin1, builder->length));
 }
 
+MalValue mal_vm_string_from_code_point(MalVm *vm, u32 point) {
+    MAL_PERF_COUNT(string_code_point_materializations);
+    if (point <= UINT16_MAX)
+        return mal_value_from_string(mal_intrinsic_code_unit(vm, (c16) point));
+    c16 units[2];
+    mal_utf16_emit_pair(point, units);
+    return mal_value_from_string(mal_string_new_copy(&vm->heap, units, 2));
+}
+
 bool mal_local_string_builder_equals_string(
     const MalLocalStringBuilder *builder, MalString *string
 ) {

@@ -178,8 +178,21 @@ import {
 	planNativeStringBuilders,
 	renderNativeStringBuilderOperation,
 } from "./native-string-builders.ts";
+import {
+	materializeNativeStringCodePoint,
+	nativeStringCodePointName,
+	renderNativeStringCodePointOperation,
+} from "./native-string-code-points.ts";
+import type { NativeStringCodePointSite } from "./native-string-code-points.ts";
 import { nativeStringComparisonExpression } from "./native-string-comparisons.ts";
 import type { NativeStringComparisonPlan } from "./native-string-comparisons.ts";
+import {
+	materializeNativeStringEnum,
+	nativeStringEnumDeclarations,
+	nativeStringEnumValue,
+	renderNativeStringEnumOperation,
+} from "./native-string-enums.ts";
+import type { NativeStringEnumPlan } from "./native-string-enums.ts";
 import { nativeValueConversion } from "./native-value-transport.ts";
 import type { NativeValueConversion } from "./native-value-transport.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
@@ -7350,13 +7363,29 @@ function emitStringSwitch(
 	selectorKind: CompilerValueKindMask,
 	relocation: NativeRelocationExpressions,
 	branch: (target: number, branchIp: number) => string,
+	codePoint?: NativeStringCodePointSite,
+	enums?: NativeStringEnumPlan,
 ):
 	| {
 			lines: Array<string>;
-			strategy: "direct" | "length" | "hash" | "non-string";
+			strategy: "direct" | "length" | "hash" | "code-unit" | "enum" | "non-string";
 	  }
 	| undefined {
 	const fallback = branch(site.defaultIp, site.endIp);
+	if (enums?.switches.has(site.instructionIp)) {
+		const lines = [`switch (${nativeStringEnumValue(site.selector)}) {`];
+		const tags = new Set<number>();
+		for (const [index, label] of site.cases.entries()) {
+			const tag = enums.literals.get(label.stringIndex)!;
+			if (tags.has(tag)) continue;
+			tags.add(tag);
+			lines.push(
+				`case ${tag}U: ${branch(label.targetIp, site.instructionIp + index * 3 + 2)}`,
+			);
+		}
+		lines.push("}", fallback);
+		return { lines, strategy: "enum" };
+	}
 	if ((selectorKind & COMPILER_VALUE_KIND_STRING) === 0)
 		return { lines: [fallback], strategy: "non-string" };
 	const labels: Array<{
@@ -7394,21 +7423,46 @@ function emitStringSwitch(
 		largestLengthGroup = Math.max(largestLengthGroup, group.length);
 	}
 	const strategy =
-		labels.length <= 3
-			? "direct"
-			: lengths.size > 1 && largestLengthGroup <= 3
-				? "length"
-				: labels.length >= 8
-					? "hash"
-					: "direct";
+		minLength === 1 && maxLength === 1
+			? "code-unit"
+			: labels.length <= 3
+				? "direct"
+				: lengths.size > 1 && largestLengthGroup <= 3
+					? "length"
+					: labels.length >= 8
+						? "hash"
+						: "direct";
 	const value = `__switch_${site.instructionIp}`;
 	const lines: Array<string> = [];
+	if (codePoint !== undefined && minLength === 1 && maxLength === 1) {
+		const point = nativeStringCodePointName(codePoint);
+		lines.push(`if (${point}_active) {`, `switch (${point}) {`);
+		const seen = new Set<number>();
+		for (const label of labels) {
+			const unit = label.codeUnits[0]!;
+			if (seen.has(unit)) continue;
+			seen.add(unit);
+			lines.push(`case ${unit}U: ${branch(label.targetIp, label.branchIp)}`);
+		}
+		lines.push("}", fallback, "}");
+	}
 	if (selectorKind !== COMPILER_VALUE_KIND_STRING)
 		lines.push(`if (!mal_value_is_string(r${site.selector})) { ${fallback} }`);
 	lines.push(`MalString *${value} = mal_value_to_string(r${site.selector});`);
 	const compare = (label: (typeof labels)[number]) =>
 		`if (mal_string_equals(${value}, mal_value_to_string(${relocation.stringValue(label.stringIndex)}))) { ${branch(label.targetIp, label.branchIp)} }`;
-	if (strategy === "direct") {
+	if (strategy === "code-unit") {
+		lines.push(`if (${value}->length != 1) { ${fallback} }`);
+		lines.push(`switch (mal_string_code_unit_at(${value}, 0)) {`);
+		const units = new Set<number>();
+		for (const label of labels) {
+			const unit = label.codeUnits[0]!;
+			if (units.has(unit)) continue;
+			units.add(unit);
+			lines.push(`case ${unit}U: ${branch(label.targetIp, label.branchIp)}`);
+		}
+		lines.push("}");
+	} else if (strategy === "direct") {
 		for (const label of labels) lines.push(compare(label));
 	} else {
 		const groups =
@@ -8675,7 +8729,33 @@ function emitBody(
 					elided,
 					expressionIps,
 					rematerializedConstantIps,
-					switches: switches.values(),
+					switches: [...switches.values()],
+					codePointSteps: [...nativeIteratorCursorActionByIp].flatMap(([ip, action]) => {
+						if (
+							action.role !== "step" ||
+							!deferredIteratorCursors.has(action.cursor.initializeIp)
+						)
+							return [];
+						const initialize = fn.instructions[action.cursor.initializeIp];
+						const step = fn.instructions[ip];
+						if (
+							initialize?.opcode !== "GET_ITERATOR" ||
+							step?.opcode !== "ITERATOR_STEP" ||
+							(reps[initialize.source] !== "string" &&
+								instructionInputKind(
+									nativeFacts?.[action.cursor.initializeIp],
+									initialize.source,
+								) !== COMPILER_VALUE_KIND_STRING)
+						)
+							return [];
+						return [
+							{
+								initializeIp: action.cursor.initializeIp,
+								stepIp: ip,
+								register: step.valueDst,
+							},
+						];
+					}),
 					regions: [
 						...fastPathPlans.numericLoopRegions.map((plan) => ({
 							entryIp: plan.entryIp,
@@ -8717,6 +8797,14 @@ function emitBody(
 					],
 				})
 			: undefined;
+	if (stringBuilderPlan?.enums !== undefined)
+		profileDecisions.push({
+			instructionIndex: 0,
+			operation: "string",
+			code: "native-string-enum",
+			outcome: "applied",
+			details: { registers: stringBuilderPlan.enums.registers.size },
+		});
 	// Finite dispatch compares one loaded callee against each candidate class's method,
 	// through separate guards or a call plan's guarded targets.
 	const polymorphicMethodLoads = new Set<number>();
@@ -9012,6 +9100,16 @@ function emitBody(
 			if (virtualRestRootPublication.length > 0)
 				lines.push(`    ${virtualRestRootPublication}`);
 			const stringBuilderAction = stringBuilderPlan?.actions.get(ip);
+			const codePointAction = stringBuilderPlan?.codePoints?.actions.get(ip);
+			for (const register of stringBuilderPlan?.enums?.observations.get(ip) ?? [])
+				for (const line of materializeNativeStringEnum(
+					stringBuilderPlan!.enums!,
+					register,
+					(index) => relocation.stringValue(index),
+				))
+					lines.push(`    ${line}`);
+			for (const site of codePointAction?.observations ?? [])
+				lines.push(`    ${materializeNativeStringCodePoint(site)}`);
 			for (const { builder, register } of stringBuilderAction?.observations ?? [])
 				lines.push(
 					`    if (__sb_${builder}.active && !__sb_${builder}.synced) r${register} = mal_local_string_builder_materialize(vm, &__sb_${builder});`,
@@ -9057,6 +9155,10 @@ function emitBody(
 						selectorKind,
 						relocation,
 						branch,
+						codePointAction?.operation?.kind === "switch"
+							? codePointAction.operation.site
+							: undefined,
+						stringBuilderPlan?.enums,
 					);
 					if (emitted !== undefined) {
 						lines.push(...emitted.lines);
@@ -9687,12 +9789,26 @@ function emitBody(
 			if (ordinaryEmission === null) {
 				return false;
 			}
-			const emitted = renderNativeStringBuilderOperation(
-				stringBuilderAction,
+			const scalarEmission = renderNativeStringCodePointOperation(
+				codePointAction,
 				instruction,
-				ordinaryEmission,
+				renderNativeStringBuilderOperation(
+					stringBuilderAction,
+					instruction,
+					ordinaryEmission,
+					reps,
+					(index) => relocation.stringValue(index),
+					codePointAction?.operation?.kind === "append"
+						? codePointAction.operation.site
+						: undefined,
+				),
 				reps,
-				(index) => relocation.stringValue(index),
+			);
+			const emitted = renderNativeStringEnumOperation(
+				stringBuilderPlan?.enums?.operations.get(ip),
+				instruction,
+				scalarEmission,
+				reps,
 			);
 			if (
 				eagerOperatorRootPublication &&
@@ -9796,6 +9912,11 @@ function emitBody(
 			(ip) => `MalStringLeafReadCache __string_leaf_cache_${ip} = {0};`,
 		),
 		...nativeStringBuilderDeclarations(stringBuilderPlan),
+		...nativeStringEnumDeclarations(stringBuilderPlan?.enums),
+		...(stringBuilderPlan?.codePoints?.sites.flatMap((site) => [
+			`u32 ${nativeStringCodePointName(site)} = 0;`,
+			`bool ${nativeStringCodePointName(site)}_active = false, ${nativeStringCodePointName(site)}_synced = false;`,
+		]) ?? []),
 		...[...shapeSnapshots].map(
 			(icIndex) => `MalShapeSnapshot ${shapeSnapshotName(icIndex)} = {0};`,
 		),
@@ -12466,7 +12587,7 @@ class NativeInstructionEmission {
 			return [this.storeBoolean(dst, result)];
 		}
 		const stringComparison = this.context.stringComparisons?.get(this.ip);
-		if (stringComparison?.kind === "strings") {
+		if (stringComparison?.kind === "strings" || stringComparison?.kind === "identity") {
 			const equal = this.profileCall(
 				"string",
 				nativeStringComparisonExpression(

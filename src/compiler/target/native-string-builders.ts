@@ -1,5 +1,16 @@
 import { COMPILER_VALUE_KIND_STRING } from "../shared/compiler-value-kinds.ts";
 import { instructionInputKind } from "../shared/instruction-facts.ts";
+import {
+	materializeNativeStringCodePoint,
+	nativeStringCodePointName,
+	selectNativeStringCodePoints,
+} from "./native-string-code-points.ts";
+import type {
+	NativeStringCodePointPlan,
+	NativeStringCodePointSite,
+} from "./native-string-code-points.ts";
+import { selectNativeStringEnums } from "./native-string-enums.ts";
+import type { NativeStringEnumPlan } from "./native-string-enums.ts";
 import type { NativeFunctionPlan, VmRegisterRepresentation } from "./program-image.ts";
 import {
 	decodeVmValueOperand,
@@ -26,6 +37,8 @@ import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 export interface NativeStringBuilderPlan {
 	readonly builderCount: number;
 	readonly actions: ReadonlyMap<number, NativeStringBuilderAction>;
+	readonly codePoints?: NativeStringCodePointPlan;
+	readonly enums?: NativeStringEnumPlan;
 }
 
 export interface NativeStringBuilderAction {
@@ -342,11 +355,10 @@ export interface NativeStringBuilderRendering {
 	readonly expressionIps: ReadonlySet<number>;
 	readonly rematerializedConstantIps: ReadonlySet<number>;
 	/** Comparison chains rendered as one switch over their selector at their first instruction. */
-	readonly switches: Iterable<{
-		readonly instructionIp: number;
-		readonly endIp: number;
-		readonly selector: number;
-	}>;
+	readonly switches: ReadonlyArray<
+		NonNullable<NativeFunctionPlan["literalSwitches"]>[number]
+	>;
+	readonly codePointSteps?: ReadonlyArray<NativeStringCodePointSite>;
 	/** Regions that render a copy of their instructions at their entry. */
 	readonly regions: ReadonlyArray<{
 		readonly entryIp: number;
@@ -410,7 +422,7 @@ export function planNativeStringBuilders(
 			const claimedIps = planClaimedIps(plan);
 			if (claimedIps.length > 0) foldedPlans.push({ claimedIps, syncIps: claimedIps });
 		}
-	return selectNativeStringBuilders(fn, {
+	const inputs: NativeStringBuilderInputs = {
 		representations,
 		handlerTargets: rendering.handlerTargets,
 		loopInstructions: rendering.loopInstructions,
@@ -423,7 +435,27 @@ export function planNativeStringBuilders(
 		foldedPlans,
 		forcedReads,
 		actionIps: new Set([...rendering.actions].flatMap((actions) => [...actions.keys()])),
-	});
+	};
+	const builders = selectNativeStringBuilders(fn, inputs);
+	if (fn.profileSiteIds !== undefined) return builders;
+	const enums = selectNativeStringEnums(fn, inputs, rendering.switches);
+	if (builders === undefined && enums === undefined) return undefined;
+	const plan = builders ?? {
+		builderCount: 0,
+		actions: new Map<number, NativeStringBuilderAction>(),
+	};
+	const codePoints = selectNativeStringCodePoints(
+		fn,
+		inputs,
+		plan,
+		rendering.codePointSteps ?? [],
+		rendering.switches,
+	);
+	return {
+		...plan,
+		...(codePoints === undefined ? {} : { codePoints }),
+		...(enums === undefined ? {} : { enums }),
+	};
 }
 
 function projection(
@@ -564,6 +596,7 @@ export function renderNativeStringBuilderOperation(
 	ordinary: ReadonlyArray<string>,
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	stringValue: (index: number) => string,
+	codePoint?: NativeStringCodePointSite,
 ): ReadonlyArray<string> {
 	const operation = action?.operation;
 	if (operation === undefined || !("dst" in op)) return ordinary;
@@ -574,6 +607,7 @@ export function renderNativeStringBuilderOperation(
 		case "append": {
 			// An inactive builder's register holds a String, which a later append adopts.
 			const fallback = [
+				...(codePoint === undefined ? [] : [materializeNativeStringCodePoint(codePoint)]),
 				`MAL_PERF_COUNT(string_builder_fallbacks);`,
 				`if (${builder}.active && !${builder}.synced) r${operation.left} = mal_local_string_builder_materialize(vm, &${builder});`,
 				`${builder}.active = false;`,
@@ -581,8 +615,12 @@ export function renderNativeStringBuilderOperation(
 			];
 			if (operation.ordinary) return fallback;
 			const right = boxedOperand(operation.right, representations, stringValue);
+			const append =
+				codePoint === undefined
+					? `mal_local_string_builder_append(&${builder}, ${right})`
+					: `(${nativeStringCodePointName(codePoint)}_active ? mal_local_string_builder_append_code_point(&${builder}, ${nativeStringCodePointName(codePoint)}) : mal_local_string_builder_append(&${builder}, ${right}))`;
 			return [
-				`if ((${builder}.active || mal_local_string_builder_adopt(&${builder}, r${operation.left})) && mal_local_string_builder_append(&${builder}, ${right})) {`,
+				`if ((${builder}.active || mal_local_string_builder_adopt(&${builder}, r${operation.left})) && ${append}) {`,
 				`  r${dst} = MAL_VALUE_UNDEFINED;`,
 				`} else {`,
 				...fallback.map((line) => `  ${line}`),

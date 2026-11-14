@@ -15,6 +15,7 @@
 #include "scalar_bits.h"
 #include "table.h"
 #include "typed_array_object.h"
+#include "utf16.h"
 #include "value_ops.h" // mal_ops_number_value, for the numeric-index fast paths
 #include "vm.h"
 
@@ -592,6 +593,32 @@ static inline bool mal_local_string_builder_append(MalLocalStringBuilder *builde
 
 /** The builder's value as a heap string, which the caller stores in the live register. */
 MalValue mal_local_string_builder_materialize(MalVm *vm, MalLocalStringBuilder *builder);
+
+/** Append an iterator's scalar while preserving lone surrogates and paired units. */
+static inline bool mal_local_string_builder_append_code_point(
+    MalLocalStringBuilder *builder, u32 point
+) {
+    u32 width = point > UINT16_MAX ? 2 : 1;
+    if (builder->length > MAL_LOCAL_STRING_BUILDER_CAPACITY - width) return false;
+    if (!builder->wide && point > UINT8_MAX) {
+        for (u32 index = builder->length; index > 0; index--)
+            builder->units.utf16[index - 1] = builder->units.latin1[index - 1];
+        builder->wide = true;
+    }
+    if (!builder->wide) {
+        builder->units.latin1[builder->length] = (u8) point;
+    } else if (width == 1) {
+        builder->units.utf16[builder->length] = (c16) point;
+    } else {
+        mal_utf16_emit_pair(point, builder->units.utf16 + builder->length);
+    }
+    builder->length += width;
+    builder->synced = false;
+    MAL_PERF_COUNT(string_builder_appends);
+    return true;
+}
+
+MalValue mal_vm_string_from_code_point(MalVm *vm, u32 point);
 
 bool mal_local_string_builder_equals_string(
     const MalLocalStringBuilder *builder, MalString *string);
@@ -3988,6 +4015,39 @@ static inline bool mal_vm_iterator_step_map_cursor(
 ) {
     if (mal_vm_iterator_try_step_in_place(cursor, value_out, done_out)) return true;
     return mal_vm_iterator_step(vm, record, value_out, done_out);
+}
+
+// Admission has checked the String iterator protector and excluded ropes. The
+// cursor retains the original next method even if its prototype changes later.
+static inline void mal_vm_deferred_string_code_point_step(
+    MalValue source, MalDeferredValuesCursor *cursor, u32 *point, bool *done
+) {
+    const MalString *string = mal_value_to_string(source);
+    usize index = (usize) cursor->index;
+    usize length = string->length;
+    if (cursor->done || index >= length) {
+        cursor->done = true;
+        *done = true;
+        return;
+    }
+    usize offset = index;
+    if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
+        offset += string->slice_offset;
+        string = string->parent;
+    }
+    c16 first = mal_string_flat_code_unit_at(string, offset);
+    *point = first;
+    usize width = 1;
+    if (mal_utf16_is_lead_surrogate(first) && index + 1 < length) {
+        c16 second = mal_string_flat_code_unit_at(string, offset + 1);
+        if (mal_utf16_is_trail_surrogate(second)) {
+            *point = mal_utf16_compose_pair(first, second);
+            width = 2;
+        }
+    }
+    cursor->index = index + width;
+    *done = false;
+    MAL_PERF_COUNT(string_code_point_steps);
 }
 
 /**

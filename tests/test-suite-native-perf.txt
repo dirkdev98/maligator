@@ -24,6 +24,7 @@ tests/native/constant-key-property-cache.test.ts
 tests/native/for-of-body-environment.test.ts
 tests/native/in-operator-cache.test.ts
 tests/native/string-builder-accumulator.test.ts
+tests/native/string-code-points.test.ts
 tests/native/string-for-of-deferred.test.ts
 tests/native/string-indexed-loop.test.ts
 tests/native/coroutine-pool.test.ts

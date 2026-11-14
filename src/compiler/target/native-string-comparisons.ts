@@ -13,7 +13,7 @@ export interface NativeStringComparisonPlan {
 	readonly instructionIp: number;
 	readonly operand: number;
 	readonly length: number;
-	readonly kind: "boxed" | "strings";
+	readonly kind: "boxed" | "strings" | "identity";
 }
 
 export function selectNativeStringComparisons(
@@ -23,6 +23,7 @@ export function selectNativeStringComparisons(
 		readonly controlFlow?: NativeControlFlowPlan;
 		readonly elided: ReadonlySet<number>;
 		readonly stringLength: (index: number) => number | undefined;
+		readonly stringConstants?: ReadonlyArray<ReadonlyArray<number>>;
 		readonly workLimit?: number;
 	},
 ): ReadonlyArray<NativeStringComparisonPlan> {
@@ -56,6 +57,35 @@ export function selectNativeStringComparisons(
 		body.projection?.unreachable ?? new Set(options.controlFlow?.unreachableIps);
 	const hasLiterals = fn.instructions.some((op) => op.opcode === "CREATE_STRING");
 	let literalAt: ReturnType<typeof createNativeStringLiteralQuery> | undefined;
+	let literalIdentityAt: ReturnType<typeof createNativeStringLiteralQuery> | undefined;
+	const literalIdentity = (ip: number, register: number): boolean => {
+		if (options.stringConstants === undefined) return false;
+		if (literalIdentityAt === undefined) {
+			const identities = new Map<string, number>();
+			const ambiguous = new Set<number>();
+			for (const op of fn.instructions) {
+				if (op.opcode !== "CREATE_STRING") continue;
+				const units = options.stringConstants[op.stringIndex];
+				if (units === undefined) continue;
+				const text = units.join(",");
+				const prior = identities.get(text);
+				if (prior !== undefined && prior !== op.stringIndex) {
+					ambiguous.add(prior);
+					ambiguous.add(op.stringIndex);
+				} else identities.set(text, op.stringIndex);
+			}
+			// Literal-only webs can compare by identity unless equal contents came
+			// from different constant rows, as can happen in a composed image.
+			literalIdentityAt = createNativeStringLiteralQuery(native, body, {
+				...options,
+				literalFact: (index) =>
+					options.stringConstants?.[index] !== undefined && !ambiguous.has(index)
+						? 1
+						: undefined,
+			});
+		}
+		return literalIdentityAt(ip, register) === 1;
+	};
 	const lengthAt = (ip: number, operand: number): number | undefined => {
 		if (operand < 0) {
 			const decoded = decodeVmValueOperand(operand);
@@ -93,7 +123,12 @@ export function selectNativeStringComparisons(
 						instructionIp: ip,
 						operand,
 						length,
-						kind: knownString ? ("strings" as const) : ("boxed" as const),
+						kind:
+							literalIdentity(ip, left) && literalIdentity(ip, right)
+								? ("identity" as const)
+								: knownString
+									? ("strings" as const)
+									: ("boxed" as const),
 					},
 				];
 			}
@@ -109,6 +144,7 @@ export function nativeStringComparisonExpression(
 	right: string,
 ): string | undefined {
 	if (plan === undefined) return undefined;
+	if (plan.kind === "identity") return `(${left} == ${right})`;
 	const constant = plan.operand === leftOperand ? left : right;
 	const other = plan.operand === leftOperand ? right : left;
 	return plan.kind === "strings"

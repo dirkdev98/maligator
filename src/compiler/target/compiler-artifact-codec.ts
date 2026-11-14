@@ -124,7 +124,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 396;
+export const COMPILER_ARTIFACT_VERSION = 397;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -1362,7 +1362,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.i32(comparison.instructionIp);
 		w.i32(comparison.operand);
 		w.i32(comparison.length);
-		w.u8(comparison.kind === "boxed" ? 0 : 1);
+		w.u8(comparison.kind === "boxed" ? 0 : comparison.kind === "strings" ? 1 : 2);
 	}
 }
 
@@ -2167,8 +2167,13 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 				operand = r.i32(),
 				length = r.i32(),
 				kind = r.u8();
-			if (kind > 1) throw new RangeError("Invalid native String comparison kind");
-			return { instructionIp, operand, length, kind: kind === 0 ? "boxed" : "strings" };
+			if (kind > 2) throw new RangeError("Invalid native String comparison kind");
+			return {
+				instructionIp,
+				operand,
+				length,
+				kind: kind === 0 ? "boxed" : kind === 1 ? "strings" : "identity",
+			};
 		}),
 		...(controlFlow === undefined ? {} : { controlFlow }),
 		literalPropertyDefinitions,

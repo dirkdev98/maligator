@@ -1279,6 +1279,12 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_builder_materializations,
         (unsigned long long) mal_perf_stats.string_builder_projections,
         (unsigned long long) mal_perf_stats.string_builder_fallbacks);
+    fprintf(stderr, "[perf-string-code-point-stats] steps=%llu materializations=%llu\n",
+        (unsigned long long) mal_perf_stats.string_code_point_steps,
+        (unsigned long long) mal_perf_stats.string_code_point_materializations);
+    fprintf(stderr, "[perf-string-enum-stats] comparisons=%llu materializations=%llu\n",
+        (unsigned long long) mal_perf_stats.string_enum_comparisons,
+        (unsigned long long) mal_perf_stats.string_enum_materializations);
     fprintf(
         stderr,
         "[perf-node-events-stats] singleton_inserts=%llu listener_array_allocations=%llu "
