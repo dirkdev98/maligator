@@ -983,7 +983,7 @@ function frameDescriptorName(symbol: string): string {
 }
 
 // A walk treats every activation of a frame-owning function as holding a live
-// record, so code that calls out before entering the frame declares the record first.
+// record, so a body that calls out before entering its frame declares the record first.
 const FRAME_RECORD_DECLARATION = "    MalNativeFrame __frame_record;";
 
 function compiledFrameEntry(
@@ -4038,10 +4038,15 @@ function emitCompiledVariant(
 							(native.storage?.numericLoopRegions.length ?? 0),
 				)
 			: undefined;
+	// A fast entry's wrapper owns no frame; a frame-owning body marks its record absent.
 	const dispatch =
 		dispatchEntry === undefined
 			? []
-			: renderCanonicalDispatch(dispatchEntry, name, suffix);
+			: renderCanonicalDispatch(dispatchEntry, name, suffix, false);
+	const ownDispatch =
+		dispatchEntry === undefined
+			? []
+			: renderCanonicalDispatch(dispatchEntry, name, suffix, true);
 	const relocation = nativeRelocationExpressions(
 		relocatable === false ? undefined : `${symbol}_link`,
 		relocatable === false ? undefined : relocatable.symbolStems,
@@ -4685,7 +4690,7 @@ function emitCompiledVariant(
 		);
 	if (directEntry === undefined) lines.push(`    (void) entry_state;`);
 	lines.push(
-		...compiledFrameEntry(symbol, relocation.functionIndex(index), dispatch.length > 0),
+		...compiledFrameEntry(symbol, relocation.functionIndex(index), true),
 		`    if (__frame_row == nullptr) return ${directEntry === undefined ? "MAL_VALUE_UNDEFINED" : zeroOf(directEntry.resultRepresentation)};`,
 		...COMPILED_ENTRY_SCOPE,
 	);
@@ -4924,7 +4929,7 @@ function emitCompiledVariant(
 			signature: frameSignature,
 			resultType,
 			inactiveRows: rootMaskStatements.declarations,
-			prologue: [...dispatch, ...lines],
+			prologue: [FRAME_RECORD_DECLARATION, ...ownDispatch, ...lines],
 			body: body.lines,
 			unitStarts: body.unitStarts,
 			fallOff,
@@ -5062,8 +5067,12 @@ function emitCompiledVariant(
 					f64Literal: cF64Literal,
 				})
 			: undefined;
-	// A fast entry's wrapper dispatches before its fast body; a plain body does so itself.
-	const bodyDispatch = fastEntry === undefined ? dispatch : [];
+	// The body declares its frame record first. A fast entry's wrapper dispatches before
+	// its fast body; a plain body does so itself.
+	const bodyDispatch = [
+		FRAME_RECORD_DECLARATION,
+		...(fastEntry === undefined ? ownDispatch : []),
+	];
 	const bodyOffset =
 		joinedCodeUnits([
 			fastEntry === undefined
@@ -6150,20 +6159,20 @@ function renderCallbackAdapter(
 /**
  * Statements opening a canonical entry that run its dispatched variant, before any
  * frame or fast body, when the call is no construction and the arguments match.
- * They declare the entry's frame record and mark it absent while the variant runs,
- * since a walk of the variant's callees would otherwise read whatever an earlier
- * activation left in that stack slot.
+ * In a frame-owning body they mark its declared record absent while the variant
+ * runs, since a walk of the variant's callees would otherwise read whatever an
+ * earlier activation left in that stack slot.
  */
 function renderCanonicalDispatch(
 	entry: NativeDirectEntryPlan,
 	name: number | string,
 	suffix: string,
+	frameOwner: boolean,
 ): ReadonlyArray<string> {
 	const { guards, call } = typedEntryInvocation(entry, name, suffix);
 	return [
-		FRAME_RECORD_DECLARATION,
 		`    if (${["mal_value_is_undefined(new_target)", ...guards].map((guard) => `(${guard})`).join(" && ")}) {`,
-		"        MAL_FRAME_ABSENT(&__frame_record);",
+		...(frameOwner ? ["        MAL_FRAME_ABSENT(&__frame_record);"] : []),
 		"        MAL_PERF_COUNT(canonical_typed_dispatch_hits);",
 		...call.map((line) => `        ${line}`),
 		"    }",
