@@ -137,6 +137,23 @@ function descending(view, count) {
 }
 results.push(["descending", descending(new DataView(new ArrayBuffer(40)), 20)]);
 
+// The window's scale and offset are constants shared with the outer loop and written
+// after the fill loop, so only their dominance over the inner loop's entry proves them.
+function writeAfterFill(source, view, rounds) {
+	for (let i = 0; i < source.length; i++) source[i] = i * 977;
+	let sum = 0;
+	for (let round = 0; round < rounds; round++) {
+		for (let i = 0; i < source.length; i++)
+			view.setUint32(i * 4 + 1, source[i], (i & 1) === 0);
+		sum += view.getUint32((round & 7) * 4 + 1, (round & 1) === 0);
+	}
+	return sum;
+}
+results.push([
+	"writeAfterFill",
+	writeAfterFill(new Uint32Array(16), new DataView(new ArrayBuffer(68)), 4),
+]);
+
 // The last iteration's offset leaves the view, so the stores before it still happen.
 const short = new DataView(new ArrayBuffer(30));
 attempt("past-end", () => writeUint32(short, new Float64Array([1, 2, 3, 4, 5, 6, 7, 8])));

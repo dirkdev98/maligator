@@ -2093,7 +2093,8 @@ function numericLoopEntryConstants(
 		cursor = ip;
 	}
 	// A constant hoisted past an enclosing loop's header is still the register's only
-	// write, and the function's entry chain runs it before anything else.
+	// write, and every entry path runs it before the loop: either the function's entry
+	// chain holds it, or it dominates the loop's entry.
 	for (const ip of shape.order)
 		for (const register of vmInstructionReadRegisters(fn.instructions[ip]!)) {
 			if (seen.has(register)) continue;
@@ -2104,11 +2105,35 @@ function numericLoopEntryConstants(
 				register >= fn.parameterCount &&
 				(writer?.opcode === "CREATE_NUMBER" || writer?.opcode === "CREATE_F64") &&
 				numericLoopOffset(writer.value) &&
-				functionEntryChain(fn, body).has(writerIp!)
+				(functionEntryChain(fn, body).has(writerIp!) ||
+					bytecodeDominates(fn, body, writerIp!, shape.entryIp))
 			)
 				constants.set(register, writer.value);
 		}
 	return constants;
+}
+
+/**
+ * Whether every path from an entry to `target` runs `dominator` first. Handler targets
+ * count as entries, since their throwing edges are not branch sources.
+ */
+function bytecodeDominates(
+	fn: BytecodeFunction,
+	body: NativeBodyFacts,
+	dominator: number,
+	target: number,
+): boolean {
+	const visited = new Set<number>([dominator]);
+	const pending = [target];
+	while (pending.length > 0) {
+		const ip = pending.pop()!;
+		if (visited.has(ip)) continue;
+		visited.add(ip);
+		if (ip === 0 || body.externalEntries.has(ip) || body.handlerTargets[ip] !== undefined)
+			return false;
+		pending.push(...bytecodePredecessors(fn, body, ip));
+	}
+	return true;
 }
 
 const singleWriterCache = new WeakMap<NativeBodyFacts, ReadonlyMap<number, number>>();
