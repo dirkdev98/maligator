@@ -256,6 +256,7 @@ typedef struct MalPerfStats {
     u64 loop_invariant_region_admissions;
     u64 loop_invariant_load_misses;
     u64 loop_builtin_call_region_admissions;
+    u64 numeric_loop_region_reentries;
     u64 semantic_guard_admissions;
     u64 semantic_guard_rejections;
     u64 primordial_binding_guard_admissions;

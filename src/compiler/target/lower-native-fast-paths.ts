@@ -210,15 +210,16 @@ interface NativeNumericLoopRegionBase {
 	 */
 	readonly globals?: ReadonlyArray<number>;
 	/**
-	 * Static property loads of objects the loop never replaces. The entry performs each
-	 * once into its register through a cache row that runs no code, and declines on a
-	 * miss: nothing inside runs JavaScript or stores a named property, so every
-	 * iteration would read the same value.
+	 * Static property loads of objects the loop never replaces, and slot reads of a bound
+	 * function it never replaces. The entry performs each once into its register, a
+	 * property load through a cache row that runs no code, declining on a miss: nothing
+	 * inside runs JavaScript or stores a named property, and nothing changes a bound
+	 * function's slots, so every iteration would read the same value.
 	 */
 	readonly invariantLoads?: ReadonlyArray<number>;
 	/**
-	 * Inlined calls' callee checks of an invariant callee, which the entry performs once.
-	 * The branches a failed check takes are not members.
+	 * Inlined calls' callee checks and bound function checks of an invariant callee,
+	 * which the entry performs once. The branches a failed check takes are not members.
 	 */
 	readonly calleeGuards?: ReadonlyArray<number>;
 	/**
@@ -1344,14 +1345,19 @@ export function numberRecordDataflow(
 		} else if (
 			bindingLoads &&
 			(((instruction.opcode === "LOAD_PROPERTY_STATIC" ||
-				instruction.opcode === "LOAD_GLOBAL_PROPERTY") &&
+				instruction.opcode === "LOAD_GLOBAL_PROPERTY" ||
+				instruction.opcode === "LOAD_BOUND_FUNCTION_SLOT") &&
 				entry.loads.has(ip)) ||
 				instruction.opcode === "LOAD_THIS")
 		) {
 			// Like a binding's, the entry loads the value, which reads inside see as an input.
 			admitted = representations[instruction.dst] === "boxed";
 			bindings.add(instruction.dst);
-		} else if (instruction.opcode === "GUARD_FUNCTION_INDEX" && entry.guards.has(ip)) {
+		} else if (
+			(instruction.opcode === "GUARD_FUNCTION_INDEX" ||
+				instruction.opcode === "GUARD_BOUND_FUNCTION") &&
+			entry.guards.has(ip)
+		) {
 			admitted = bindingLoads;
 		} else if (frameCopies.has(ip) && instruction.opcode === "MOVE") {
 			// Like an intrinsic, the copy holds no region value, so nothing inside may read it.
@@ -1476,10 +1482,13 @@ export function numberRecordDataflow(
 				instruction.opcode === "LOAD_CAPTURED" ||
 				instruction.opcode === "LOAD_THIS" ||
 				instruction.opcode === "LOAD_PROPERTY_STATIC" ||
-				instruction.opcode === "LOAD_GLOBAL_PROPERTY") &&
+				instruction.opcode === "LOAD_GLOBAL_PROPERTY" ||
+				instruction.opcode === "LOAD_BOUND_FUNCTION_SLOT") &&
 				bindings.has(instruction.dst) &&
 				!(instruction.opcode === "LOAD_GLOBAL" && slotGlobals.has(instruction.index))) ||
-			(instruction.opcode === "GUARD_FUNCTION_INDEX" && checked.has(instruction.dst));
+			((instruction.opcode === "GUARD_FUNCTION_INDEX" ||
+				instruction.opcode === "GUARD_BOUND_FUNCTION") &&
+				checked.has(instruction.dst));
 		if (!entryLoad)
 			for (const register of vmInstructionWriteRegisters(instruction))
 				after.add(register);
@@ -2975,8 +2984,8 @@ export function numericLoopCallMethods(
  * What a numeric loop region reads from outside its registers. Nothing in a region runs
  * JavaScript or stores a named property, so the entry performs each invariant load once
  * into its register: a binding the loop does not store, `this`, a global name or static
- * property of an object the loop never replaces, and an inlined call's callee check. A
- * global slot the loop stores, or whose register the loop reuses, lives in a local
+ * property of an object the loop never replaces, a slot of a bound function it never
+ * replaces, and an inlined call's callee or bound function check. A global slot the loop stores, or whose register the loop reuses, lives in a local
  * instead, which nothing inside can observe.
  */
 interface NumericLoopBindings {
@@ -2986,9 +2995,9 @@ interface NumericLoopBindings {
 	readonly slots: ReadonlySet<number>;
 	/** Registers the loop loads a slot kept in a local into. */
 	readonly slotLoads: ReadonlySet<number>;
-	/** Static property and global name loads the entry performs. */
+	/** Static property, global name and bound function slot loads the entry performs. */
 	readonly loads: ReadonlySet<number>;
-	/** Callee checks the entry performs, whose results only select branches. */
+	/** Callee and bound function checks the entry performs, whose results only select branches. */
 	readonly guards: ReadonlySet<number>;
 }
 
@@ -3050,17 +3059,28 @@ function numericLoopBindings(
 	const unchanged = (register: number) =>
 		representations[register] === "boxed" &&
 		(!writers.has(register) || invariant.has(register));
-	// A loaded object can itself be the receiver of another invariant load.
+	// A loaded object can itself be the receiver of another invariant load. A bound
+	// function's slots never change, so its target, `this` and bound arguments are
+	// invariant whenever the bound function is; read from anything else they are
+	// undefined, which the entry's bound function check then declines.
 	for (let changed = true; changed;) {
 		changed = false;
 		for (const ip of shape.order) {
 			const op = fn.instructions[ip]!;
+			const source =
+				op.opcode === "LOAD_PROPERTY_STATIC" && invariantLoadCandidates.has(ip)
+					? op.object
+					: op.opcode === "LOAD_BOUND_FUNCTION_SLOT" &&
+						  representations[op.dst] === "boxed"
+						? op.callee
+						: undefined;
 			if (
-				op.opcode !== "LOAD_PROPERTY_STATIC" ||
+				source === undefined ||
+				(op.opcode !== "LOAD_PROPERTY_STATIC" &&
+					op.opcode !== "LOAD_BOUND_FUNCTION_SLOT") ||
 				loads.has(ip) ||
-				!invariantLoadCandidates.has(ip) ||
-				op.dst === op.object ||
-				!unchanged(op.object) ||
+				op.dst === source ||
+				!unchanged(source) ||
 				writesElsewhere(ip, op.dst)
 			)
 				continue;
@@ -3073,7 +3093,7 @@ function numericLoopBindings(
 	for (const ip of shape.order) {
 		const op = fn.instructions[ip]!;
 		if (
-			op.opcode !== "GUARD_FUNCTION_INDEX" ||
+			(op.opcode !== "GUARD_FUNCTION_INDEX" && op.opcode !== "GUARD_BOUND_FUNCTION") ||
 			representations[op.dst] !== "boolean" ||
 			!unchanged(op.callee) ||
 			writesElsewhere(ip, op.dst) ||
@@ -3101,7 +3121,8 @@ function numericLoopBindings(
  * finite dispatch tests one candidate after another on the same callee, branching to
  * the next test when one fails; the entry performs every test, and requires one of each
  * chain to pass, so inside the region the last test of a chain always passes when it is
- * reached and its failure branch, the generic call, is not a member.
+ * reached and its failure branch, the generic call, is not a member. A bound function
+ * check forms a chain of its own.
  */
 export function numericLoopCalleeGuardChains(
 	fn: BytecodeFunction,
@@ -3117,7 +3138,7 @@ export function numericLoopCalleeGuardChains(
 	for (const ip of admitted) {
 		const op = fn.instructions[ip]!;
 		const branch = fn.instructions[ip + 1];
-		if (op.opcode !== "GUARD_FUNCTION_INDEX")
+		if (op.opcode !== "GUARD_FUNCTION_INDEX" && op.opcode !== "GUARD_BOUND_FUNCTION")
 			throw new Error("Invalid numeric loop callee guard");
 		if (branch?.opcode !== "JUMP_IF" || branch.cond !== op.dst) continue;
 		// The failure branch falls through, possibly across jumps, to the next test, which
@@ -3133,6 +3154,7 @@ export function numericLoopCalleeGuardChains(
 		if (
 			only &&
 			admitted.has(target) &&
+			op.opcode === "GUARD_FUNCTION_INDEX" &&
 			candidate?.opcode === "GUARD_FUNCTION_INDEX" &&
 			candidate.callee === op.callee
 		)
@@ -3162,7 +3184,7 @@ export function numericLoopPassedGuards(
 	return new Set(
 		numericLoopCalleeGuardChains(fn, guards).map((chain) => {
 			const op = fn.instructions[chain.at(-1)!]!;
-			if (op.opcode !== "GUARD_FUNCTION_INDEX")
+			if (op.opcode !== "GUARD_FUNCTION_INDEX" && op.opcode !== "GUARD_BOUND_FUNCTION")
 				throw new Error("Invalid numeric loop callee guard");
 			return op.dst;
 		}),
@@ -3249,8 +3271,10 @@ function numericLoopBindingInstruction(
 			return bindings.invariant.has(op.dst);
 		case "LOAD_PROPERTY_STATIC":
 		case "LOAD_GLOBAL_PROPERTY":
+		case "LOAD_BOUND_FUNCTION_SLOT":
 			return bindings.loads.has(ip);
 		case "GUARD_FUNCTION_INDEX":
+		case "GUARD_BOUND_FUNCTION":
 			return bindings.guards.has(ip);
 		case "STORE_GLOBAL":
 			return bindings.slots.has(op.index);

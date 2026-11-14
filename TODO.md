@@ -336,15 +336,6 @@ contracts or investigates costs still visible after the string follow-ups.
       array-iterator protocol and a snapshot check per key) and `Object.entries` 2x (one
       pair array per entry).
 
-- [ ] Admit calls of a bound function held in a binding into numeric loop regions.
-      `bound(v)` for a module or captured binding holding `f.bind(o, 5)` now calls and
-      inlines `f` behind `GUARD_BOUND_FUNCTION`, its `LOAD_BOUND_FUNCTION_SLOT` reads and a
-      function-index check on the target, at about 5 ns against Node's 1 ns. The same
-      body called as `receiver.calculate(7, v)` runs in a region at 0.6 ns. The region
-      planner admits none of the three, so the loop keeps its boxed arithmetic and
-      per-iteration checks. Admit the guard on an unchanged callee as an entry check, its
-      slot reads as invariant values and the target's index check as a callee guard.
-
 - [ ] Bring node:stream and EventEmitter construction closer to Node. A constructed
       Readable still costs about 5x Node and a Writable 3.5x, mostly option reads
       through `mal_vm_get_static` and per-object state allocation; `once` builds a

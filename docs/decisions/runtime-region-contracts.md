@@ -191,6 +191,16 @@ exactly. The region performs moves of loop-invariant values into the close
 handler's registers on the frame registers; the original code repeats them before
 anything that can reach the handler.
 
+An Array or fixed storage region's restarted iteration, whether a hole, another
+element type or a poll restarted it, finishes in the original loop. That loop's back
+edge then returns to the region's entry, which repeats every entry check and load
+against the current state, so the region resumes with the next iteration. Returns
+are bounded per loop entry, and an entry that declines ends them, so a loop whose
+every iteration restarts does not pay an admission per iteration. Counted integer
+regions restart in the original loop only at a poll or once their values leave the
+safe integers, which a new entry declines, and record iteration regions keep packed
+columns across their own restarts; neither returns.
+
 DataView accessor calls join fixed storage regions as byte views. Admission uses the
 conditions that make `byteLength` the intrinsic getter: the watched-prototype
 protector, the intrinsic prototype, an empty own layout, and a fixed view over an

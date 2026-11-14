@@ -349,6 +349,71 @@ describe("native safe-integer loop regions", () => {
 			).toThrow(/invalid or stale storage plan/);
 	});
 
+	it("enters a bound function's loop through its check, slot reads and target check, which serialization keeps", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+					(function () {
+						function receiverCall(prefix, value) { return prefix + value + this.offset; }
+						const bound = receiverCall.bind({ offset: 11 }, 5);
+						globalThis.step = function step(limit) {
+							let total = 0;
+							for (let i = 0; i < limit; i++) total += bound(i & 15);
+							return total;
+						};
+					})();
+				`,
+				"/bound-loop-plan.js",
+			),
+			{ facts: compilerProgramFactsFromConfig(resolveBuildConfig({})) },
+		);
+		const index = image.native.functions.findIndex((fn) =>
+			fn.storage?.numericLoopRegions.some((plan) => plan.calleeGuards !== undefined),
+		);
+		const native = image.native.functions[index]!;
+		const plan = native.storage!.numericLoopRegions.find(
+			(candidate) => candidate.calleeGuards !== undefined,
+		)!;
+		const opcodes = (ips: ReadonlyArray<number> | undefined) =>
+			(ips ?? []).map((ip) => native.body.instructions[ip]!.opcode);
+		expect(opcodes(plan.calleeGuards)).toEqual([
+			"GUARD_BOUND_FUNCTION",
+			"GUARD_FUNCTION_INDEX",
+		]);
+		expect(opcodes(plan.invariantLoads)).toEqual([
+			"LOAD_BOUND_FUNCTION_SLOT",
+			"LOAD_BOUND_FUNCTION_SLOT",
+			"LOAD_BOUND_FUNCTION_SLOT",
+			"LOAD_PROPERTY_STATIC",
+		]);
+		// Neither the generic call of the bound function nor that of its target is a member.
+		const claimed = new Set(plan.claimedIps);
+		expect(
+			native.body.instructions.some((op, ip) => op.opcode === "CALL" && claimed.has(ip)),
+		).toBe(false);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(restored.native.functions[index]!.storage!.numericLoopRegions).toEqual(
+			native.storage!.numericLoopRegions,
+		);
+		expect(() =>
+			serializeCompilerArtifact({
+				...image,
+				native: {
+					...image.native,
+					functions: image.native.functions.with(index, {
+						...native,
+						storage: {
+							...native.storage!,
+							numericLoopRegions: [
+								{ ...plan, calleeGuards: plan.calleeGuards!.slice(1) },
+							],
+						},
+					}),
+				},
+			}),
+		).toThrow(/invalid or stale storage plan/);
+	});
+
 	it("enters a dispatching loop through every candidate's callee check, which serialization keeps", () => {
 		const image = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(

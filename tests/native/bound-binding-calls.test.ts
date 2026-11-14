@@ -45,6 +45,22 @@ function genericBoundCalls(binary: string, expected: string): number {
 	return Number(counters![1]) + Number(counters![2]);
 }
 
+/** Numeric loop regions whose entry loaded an invariant field or checked a callee. */
+function invariantRegionAdmissions(binary: string, expected: string): number {
+	const invocation = resolveHarnessExecutionInvocation(binary);
+	const result = spawnSync(invocation.executable, invocation.args, {
+		env: { ...process.env, MAL_PERF_STATS: "1" },
+		encoding: "utf8",
+	});
+	expect(result.status, result.stderr || result.stdout).toBe(0);
+	expect(result.stdout).toBe(expected);
+	const admissions = result.stderr.match(
+		/\[perf-loop-invariant-stats\] admissions=(\d+)/,
+	);
+	expect(admissions, result.stderr).not.toBeNull();
+	return Number(admissions![1]);
+}
+
 /** Builds a fixture for both backends and checks each against Node, also under GC stress. */
 function describeBoundBindings(
 	fixture: string,
@@ -53,6 +69,7 @@ function describeBoundBindings(
 	options: {
 		readonly script?: true;
 		readonly warmCalls?: (stdout: string) => number;
+		readonly warmRegions?: (stdout: string) => number;
 	} = {},
 ): void {
 	describe(`${title} under ${primordials} primordials`, () => {
@@ -84,6 +101,14 @@ function describeBoundBindings(
 			it("calls the bound target directly in the warm loops", () => {
 				expect(genericBoundCalls(compiled, expected)).toBeLessThan(warmCalls(expected));
 			});
+
+		const warmRegions = options.warmRegions;
+		if (warmRegions !== undefined)
+			it("runs the warm loops as numeric regions around the inlined target", () => {
+				expect(invariantRegionAdmissions(compiled, expected)).toBeGreaterThanOrEqual(
+					warmRegions(expected),
+				);
+			});
 	});
 }
 
@@ -92,13 +117,24 @@ const warmLoopCalls = (stdout: string): number =>
 	Number(stdout.match(/\bloops=(\d+)/)?.[1]) *
 	Number(stdout.match(/\brounds=(\d+)/)?.[1]);
 
-for (const primordials of ["locked", "mutable"] as const)
+for (const primordials of ["locked", "mutable"] as const) {
 	describeBoundBindings(
 		"tests/local/bound-binding-calls.mjs",
 		primordials,
 		"calls of module and captured bindings holding bound functions",
 		{ warmCalls: warmLoopCalls },
 	);
+	describeBoundBindings(
+		"tests/local/bound-binding-loop-regions.mjs",
+		primordials,
+		"numeric loops calling bindings that hold bound functions",
+		{
+			warmCalls: warmLoopCalls,
+			// Each warm-up round runs three loops calling a bound function.
+			warmRegions: (stdout) => 3 * Number(stdout.match(/\bloops=(\d+)/)?.[1]),
+		},
+	);
+}
 
 describeBoundBindings(
 	"tests/local/bound-binding-sloppy.js",
@@ -111,5 +147,8 @@ describeBoundBindings(
 	"tests/local/mutable-bound-binding.mjs",
 	"mutable",
 	"bound function bindings while Function.prototype.bind is replaced",
-	{ warmCalls: warmLoopCalls },
+	{
+		warmCalls: warmLoopCalls,
+		warmRegions: (stdout) => Number(stdout.match(/\bloops=(\d+)/)?.[1]),
+	},
 );

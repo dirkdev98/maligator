@@ -1424,6 +1424,8 @@ const ADMITTED_INPUT_RANGE: IntegerRange = { low: -(2 ** 31), high: 2 ** 32 - 1 
 const INTEGER_RANGE_ROUNDS = 8;
 // Returns from an Array for-of's doubles copy to its integer copy per loop entry.
 const ARRAY_ITERATION_INTEGER_BOUNCES = 4;
+// Returns from a loop's original code to its numeric region per loop entry.
+const NUMERIC_LOOP_REGION_REENTRIES = 4;
 const DATA_VIEW_INTEGER_RANGES: Readonly<
 	Record<NativeDataViewCall["type"], IntegerRange | undefined>
 > = {
@@ -2155,7 +2157,10 @@ function emitNumericLoopRegion(
 	const passed = numericLoopPassedGuards(fn, entry.guards);
 	const checkResult = (ip: number) => {
 		const guard = fn.instructions[ip]!;
-		if (guard.opcode !== "GUARD_FUNCTION_INDEX")
+		if (
+			guard.opcode !== "GUARD_FUNCTION_INDEX" &&
+			guard.opcode !== "GUARD_BOUND_FUNCTION"
+		)
 			throw new Error("Invalid numeric loop callee guard");
 		return guard.dst;
 	};
@@ -2636,7 +2641,10 @@ function emitNumericLoopRegion(
 	// order so that a loaded receiver precedes its own loads.
 	const entryStatements = order.flatMap((ip) => {
 		const op = fn.instructions[ip]!;
-		if (op.opcode === "GUARD_FUNCTION_INDEX" && entry.guards.has(ip)) {
+		if (
+			(op.opcode === "GUARD_FUNCTION_INDEX" || op.opcode === "GUARD_BOUND_FUNCTION") &&
+			entry.guards.has(ip)
+		) {
 			const chain = chains.get(ip);
 			if (chain !== undefined)
 				guards.unshift(`(${chain.map((check) => `r${check}`).join(" || ")})`);
@@ -2647,7 +2655,9 @@ function emitNumericLoopRegion(
 			op.opcode !== "LOAD_CAPTURED" &&
 			op.opcode !== "LOAD_THIS" &&
 			!(
-				(op.opcode === "LOAD_PROPERTY_STATIC" || op.opcode === "LOAD_GLOBAL_PROPERTY") &&
+				(op.opcode === "LOAD_PROPERTY_STATIC" ||
+					op.opcode === "LOAD_GLOBAL_PROPERTY" ||
+					op.opcode === "LOAD_BOUND_FUNCTION_SLOT") &&
 				entry.loads.has(ip)
 			)
 		)
@@ -3109,9 +3119,11 @@ function emitNumericLoopRegion(
 			case "THROW_IF_TDZ":
 				return "";
 			case "LOAD_GLOBAL_PROPERTY":
-				if (!entry.loads.has(ip)) throw new Error("Invalid numeric loop global load");
+			case "LOAD_BOUND_FUNCTION_SLOT":
+				if (!entry.loads.has(ip)) throw new Error("Invalid numeric loop entry load");
 				return "";
 			case "GUARD_FUNCTION_INDEX":
+			case "GUARD_BOUND_FUNCTION":
 				if (!entry.guards.has(ip)) throw new Error("Invalid numeric loop callee guard");
 				return "";
 			case "CREATE_NUMBER":
@@ -8067,6 +8079,42 @@ function emitBody(
 	const integerLoopRegionByEntry = new Map(
 		fastPathPlans.numericLoopRegions.map((plan) => [plan.entryIp, plan]),
 	);
+	// A hole or an element of another type restarts an Array or fixed storage region's
+	// iteration in the loop's original code, as a poll does. Once that code has finished
+	// the iteration, its back edge stands where the loop's entry jump does, so it
+	// returns to the region entry, which admits the loop afresh. A per-entry budget
+	// keeps a loop whose every iteration restarts from paying an admission each time;
+	// `_resumed` tells a return from an entry from outside, which renews the budget, and
+	// a declined admission spends it. A counted integer region restarts there only at a
+	// poll or once its values leave the safe integers, which a new admission declines,
+	// so a return would only wrap its hot loop in the original loop's cycle, where Clang
+	// compiles it worse. Record regions keep their columns' state across their restarts.
+	const regionReentryStates = new Map<number, string>();
+	const regionReentryBackEdges = new Map<number, string>();
+	for (const plan of fastPathPlans.numericLoopRegions) {
+		if (
+			plan.kind === "integer" ||
+			(plan.kind === "array-iteration" &&
+				(plan.recordGraph !== undefined ||
+					!deferredIteratorCursors.has(plan.initializeIp))) ||
+			unreachable.has(plan.entryIp) ||
+			elided.has(plan.entryIp)
+		)
+			continue;
+		const state = `__loop_${plan.id}_reentry`;
+		for (const [ip, op] of fn.instructions.entries())
+			if (
+				op.opcode === "JUMP" &&
+				op.targetIp === plan.id &&
+				ip !== plan.entryIp &&
+				!unreachable.has(ip)
+			)
+				regionReentryBackEdges.set(
+					ip,
+					`if (${state}_budget != 0) { ${state}_budget--; ${state}_resumed = true; MAL_PERF_COUNT(numeric_loop_region_reentries); goto L${plan.entryIp}; }`,
+				);
+		regionReentryStates.set(plan.entryIp, state);
+	}
 	const ownsCaptureEnvironment = coro === null && analysis.ownsCaptureEnvironment;
 	const staticDefineStringIndexByIp = new Map(
 		fastPathPlans.literalPropertyDefinitions.map((plan) => [
@@ -8341,6 +8389,8 @@ function emitBody(
 			);
 		}
 	}
+	for (const state of regionReentryStates.values())
+		lines.push(`u8 ${state}_budget = 0;`, `bool ${state}_resumed = false;`);
 	for (const action of nativeArrayPairDestructureActionByIp.values()) {
 		if (action.role !== "initialize") continue;
 		const id = action.cursor.initializeIp;
@@ -8684,6 +8734,7 @@ function emitBody(
 		profile: undefined,
 		gcSafepoint: false,
 		loopPoll: false,
+		regionReentry: undefined,
 		callReturnPolls,
 		incomingRootPublication: undefined,
 		eagerIncomingRootPublication: undefined,
@@ -8914,7 +8965,7 @@ function emitBody(
 			for (const slot of fieldAllocations.get(ip - 1)?.boxedSlots ?? [])
 				if (slot !== undefined) activeFieldSlots.add(slot);
 			if (unreachable.has(ip)) continue;
-			if (jumpTargets.has(ip)) {
+			if (jumpTargets.has(ip) || regionReentryStates.has(ip)) {
 				lines.push(`L${ip}:;`);
 				// Control can arrive with different published frame metadata.
 				lastPublishedPos = -1;
@@ -9053,6 +9104,12 @@ function emitBody(
 				continue;
 			}
 			const integerLoop = integerLoopRegionByEntry.get(ip);
+			const reentry = regionReentryStates.get(ip);
+			if (reentry !== undefined)
+				lines.push(
+					`    if (!${reentry}_resumed) ${reentry}_budget = ${NUMERIC_LOOP_REGION_REENTRIES};`,
+					`    ${reentry}_resumed = false;`,
+				);
 			// An iteration region steps the deferred cursor, so it needs that cursor.
 			if (
 				integerLoop !== undefined &&
@@ -9105,6 +9162,12 @@ function emitBody(
 						}
 						if (binding.opcode === "GUARD_FUNCTION_INDEX")
 							return `r${binding.dst} = mal_vm_callee_has_index(vm, r${binding.callee}, ${relocation.functionIndex(binding.functionIndex)});`;
+						if (binding.opcode === "GUARD_BOUND_FUNCTION")
+							return `r${binding.dst} = mal_vm_guard_bound_function(r${binding.callee}, ${binding.boundArgumentCount});`;
+						// Read from anything but a bound function, a slot is undefined, which
+						// the entry's bound function check declines.
+						if (binding.opcode === "LOAD_BOUND_FUNCTION_SLOT")
+							return `r${binding.dst} = mal_vm_load_bound_function_slot(r${binding.callee}, ${binding.slot});`;
 						throw new Error("Invalid numeric loop binding load");
 					},
 					(index) => `vm->globals[${relocation.globalIndex(index)}]`,
@@ -9123,6 +9186,8 @@ function emitBody(
 					},
 				))
 					lines.push(`    ${line}`);
+			// Every admitted copy leaves through a jump, so only a declined entry gets here.
+			if (reentry !== undefined) lines.push(`    ${reentry}_budget = 0;`);
 			const numberRecord = numberRecordRegionById.get(ip);
 			if (numberRecord !== undefined)
 				for (const line of emitNumberRecordRegion(
@@ -9415,6 +9480,7 @@ function emitBody(
 			instructionContext.profile = instructionProfile;
 			instructionContext.gcSafepoint = safepointKind !== undefined;
 			instructionContext.loopPoll = safepointKind === "loop-backedge";
+			instructionContext.regionReentry = regionReentryBackEdges.get(ip);
 			instructionContext.branchTarget = branchTargets.get(ip);
 			instructionContext.incomingRootPublication =
 				deferredPropertyRoots ||
@@ -9996,6 +10062,8 @@ interface NativeInstructionContext {
 	readonly facts?: InstructionFacts;
 	readonly gcSafepoint: boolean;
 	readonly loopPoll: boolean;
+	/** A back edge's return to its loop's numeric region, which precedes its jump. */
+	readonly regionReentry?: string;
 	readonly branchTarget?: number;
 	readonly callReturnPolls: boolean;
 	readonly incomingRootPublication?: ReadonlyArray<string>;
@@ -10287,6 +10355,7 @@ class NativeInstructionEmission {
 			resources: this.context.resources,
 			gcSafepoint: this.context.gcSafepoint,
 			loopPoll: this.context.loopPoll,
+			regionReentry: this.context.regionReentry,
 			branchTarget: this.context.branchTarget,
 			callReturnPolls: this.context.callReturnPolls,
 			incomingRootPublication: this.context.incomingRootPublication,
@@ -16732,6 +16801,9 @@ class NativeInstructionEmission {
 			case "JUMP":
 				return [
 					...(this.context.loopPoll ? [this.poll()] : []),
+					...(this.context.regionReentry === undefined
+						? []
+						: [this.context.regionReentry]),
 					...(instruction.targetIp === this.ip + 1
 						? []
 						: [`goto L${instruction.targetIp};`]),

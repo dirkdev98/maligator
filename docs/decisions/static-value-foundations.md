@@ -1331,7 +1331,9 @@ apply and bind sites compare the loaded method with the realm's own function, wh
 stays exact whatever the property holds. A call of a module or captured binding that
 holds a bound function needs neither: it checks that the callee is a bound function
 exotic object, which only %Function.prototype.bind% creates and nothing changes
-afterwards, and calls the target with the `this` and arguments read from it.
+afterwards, and calls the target with the `this` and arguments read from it. A
+numeric loop region that never replaces the binding performs the check and those
+reads once at its entry.
 
 Each protector covers one protocol, so a polyfill that adds or replaces an unrelated
 built-in method keeps it. A define, store or delete on a watched built-in object

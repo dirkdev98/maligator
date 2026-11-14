@@ -45,6 +45,7 @@ tests/native/known-own-slot-load.test.ts
 tests/native/lazy-capture-environment.test.ts
 tests/native/loop-dispatch-fields.test.ts
 tests/native/loop-invariant-fields.test.ts
+tests/native/loop-region-reentry.test.ts
 tests/native/map-get-set-cache.test.ts
 tests/native/map-string-representative.test.ts
 tests/native/mutable-primordial-regions.test.ts
