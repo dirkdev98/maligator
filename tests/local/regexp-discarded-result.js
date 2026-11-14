@@ -1,5 +1,47 @@
 const observations = [];
 
+const execPlain = /(a)/;
+const execGlobal = /(a)/g;
+const execSticky = /(a)/y;
+execPlain.lastIndex = 2;
+const testPlain = /(a)/;
+const testGlobal = /(a)/g;
+const testSticky = /(a)/y;
+testPlain.lastIndex = 2;
+const matchPlain = /(a)/;
+const matchGlobal = /(a)/g;
+const matchSticky = /(a)/y;
+matchPlain.lastIndex = 2;
+for (const source of ["aba", "aba", "aba", "missing"]) {
+	execPlain.exec(source);
+	execGlobal.exec(source);
+	execSticky.exec(source);
+	observations.push([
+		"exec",
+		execPlain.lastIndex,
+		execGlobal.lastIndex,
+		execSticky.lastIndex,
+	]);
+	testPlain.test(source);
+	testGlobal.test(source);
+	testSticky.test(source);
+	observations.push([
+		"test",
+		testPlain.lastIndex,
+		testGlobal.lastIndex,
+		testSticky.lastIndex,
+	]);
+	source.match(matchPlain);
+	source.match(matchGlobal);
+	source.match(matchSticky);
+	observations.push([
+		"match",
+		matchPlain.lastIndex,
+		matchGlobal.lastIndex,
+		matchSticky.lastIndex,
+	]);
+}
+
 function discard(regexp, source) {
 	regexp.exec(source);
 }

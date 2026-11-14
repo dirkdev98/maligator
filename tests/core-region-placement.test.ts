@@ -160,6 +160,41 @@ function withVmRegion(
 }
 
 describe("Core plan property placement", () => {
+	it.each(["", "g", "y"])(
+		"lowers discarded known RegExp.exec results with %j flags and retained effects",
+		(flags) => {
+			const compilation = optimize(
+				`const regexp = /(a)/${flags};
+				regexp.exec("aba");
+				globalThis.lastIndex = regexp.lastIndex;`,
+				"discarded-known-regexp-exec.js",
+			);
+			const selection = projectCoreSpecializationRecipes(compilation.plan.recipes).find(
+				(candidate) => candidate.kind === "regexp-exec-projection",
+			);
+			if (selection?.kind !== "regexp-exec-projection") {
+				throw new Error("missing discarded exec projection");
+			}
+			expect(selection.regexpExecProjection.loads).toEqual([]);
+			expect(selection.claimedInstructions).toEqual([
+				selection.regexpExecProjection.call,
+			]);
+			expect(selection.cost.runtimeBenefit).toBeGreaterThan(0);
+			const image = lower(compilation);
+			const projection = vmRegions(image).find(
+				(region) => region.kind === "regexp-exec-projection",
+			);
+			expect(projection).toMatchObject({
+				cost: { score: selection.cost.runtimeBenefit },
+				lastIndexEffect: "retained-call-twin",
+				loads: [],
+			});
+			expect(
+				vmRegions(deserializeCompilerArtifact(serializeCompilerArtifact(image))),
+			).toEqual(vmRegions(image));
+		},
+	);
+
 	it("records generated-code cost on every selected specialization", () => {
 		const plan = optimize(SPLIT_AND_SLICE, "region-cost.mjs").plan;
 		const specializations = projectCoreSpecializationRecipes(plan.recipes);

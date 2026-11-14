@@ -50,6 +50,7 @@ import {
 	coreSpecializationRecipeOrdinaryBlocksAt,
 	coreSpecializationRecipePayloadAt,
 	coreSpecializationRecipeRepresentationAt,
+	coreSpecializationRecipeRuntimeBenefitAt,
 	coreSpecializationRecipeTargetFunctionsAt,
 } from "../core/core-specialization-recipes.ts";
 import type { CoreSpecializationRecipeTable } from "../core/core-specialization-recipes.ts";
@@ -1348,6 +1349,11 @@ function lowerCoreSpecializations(
 				...envelope(row),
 				anchors: loads.length === 0 ? [call] : [call, loads[0]!.instruction],
 				kind: "regexp-exec-projection",
+				// A single exec can elide its result allocation without removing an instruction.
+				cost: {
+					score: coreSpecializationRecipeRuntimeBenefitAt(recipeTable, row),
+					metadataOperations: claims.length,
+				},
 				license: {
 					guard: regexp.guard,
 					genericTwin: "retained",

@@ -499,6 +499,15 @@ export function coreSpecializationRecipeClaimsAt(
 	return range(storage.claimOffsets, storage.claims, index) as Array<CoreInstructionId>;
 }
 
+export function coreSpecializationRecipeRuntimeBenefitAt(
+	table: CoreSpecializationRecipeTable,
+	index: number,
+): number {
+	if (index < 0 || index >= table.count)
+		throw new Error(`Core specialization recipe ${index} is out of range`);
+	return recipeStorage(table).runtimeBenefits[index]!;
+}
+
 export function coreSpecializationRecipeOrdinaryBlocksAt(
 	table: CoreSpecializationRecipeTable,
 	index: number,
