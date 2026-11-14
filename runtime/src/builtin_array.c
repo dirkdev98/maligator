@@ -4129,8 +4129,8 @@ static bool mal_array_sort_record_keys(
 }
 
 /**
- * Stable merge sort over a value buffer: insertion within blocks, then bottom-up
- * merges that skip already ordered halves. Returns false when the comparator threw;
+ * Stable merge sort over a value buffer: binary insertion within blocks, then
+ * bottom-up merges that skip already ordered halves. Returns false when the comparator threw;
  * the buffer contents are unspecified in that case.
  */
 static bool mal_builtin_array_sort_values(
@@ -4231,10 +4231,16 @@ static bool mal_builtin_array_sort_values(
         // The decisions mirror mal_numeric_leaf_merge_sort, so a leaf comparator orders
         // the same way on either path. An element awaiting its place stays in its rooted
         // scratch slot while comparators run.
+        bool binary_insertion = count >= MAL_SORT_BINARY_INSERTION_MIN;
+        u32 insertion_block = binary_insertion ? MAL_SORT_INSERTION_BLOCK : MAL_SORT_LINEAR_INSERTION_BLOCK;
+        bool descending_blocks = count > insertion_block;
         for (u32 low = 0, high; ok && low < count; low = high) {
-            high = count - low < MAL_SORT_INSERTION_BLOCK ? count : low + MAL_SORT_INSERTION_BLOCK;
+            high = count - low < insertion_block ? count : low + insertion_block;
             u32 sorted = low + 1;
-            if (sorted == high) continue;
+            if (sorted == high) {
+                descending_blocks = false;
+                continue;
+            }
             f64 order;
             ok = mal_builtin_array_sort_pair_order(
                 vm, comparator, keyed, values[low],
@@ -4250,6 +4256,16 @@ static bool mal_builtin_array_sort_values(
                 if (!ok || (order > 0) != descending) break;
             }
             if (!ok) break;
+            descending_blocks = descending_blocks && descending && sorted == high;
+            if (descending_blocks && low > 0) {
+                // Reversal left the prior run's original last element at its first slot.
+                ok = mal_builtin_array_sort_pair_order(
+                    vm, comparator, keyed, values[low - insertion_block],
+                    keyed ? default_keys[low - insertion_block] : mal_value_new_undefined(), values[low],
+                    keyed ? default_keys[low] : mal_value_new_undefined(), &order);
+                if (!ok) break;
+                descending_blocks = order > 0;
+            }
             // A descending run must be strict so reversing it cannot reorder equal elements.
             if (descending) {
                 for (u32 left = low, right = sorted - 1; left < right; left++, right--) {
@@ -4266,23 +4282,66 @@ static bool mal_builtin_array_sort_values(
             for (u32 index = sorted; ok && index < high; index++) {
                 scratch[index] = values[index];
                 if (keyed) key_scratch[index] = default_keys[index];
-                u32 hole = index;
-                while (hole > low) {
-                    f64 order;
+                if (!binary_insertion) {
+                    u32 hole = index;
+                    while (hole > low) {
+                        f64 order;
+                        ok = mal_builtin_array_sort_pair_order(
+                            vm, comparator, keyed, values[hole - 1],
+                            keyed ? default_keys[hole - 1] : mal_value_new_undefined(), scratch[index],
+                            keyed ? key_scratch[index] : mal_value_new_undefined(), &order);
+                        if (!ok || order <= 0) break;
+                        values[hole] = values[hole - 1];
+                        if (keyed) default_keys[hole] = default_keys[hole - 1];
+                        hole--;
+                    }
+                    if (!ok) break;
+                    values[hole] = scratch[index];
+                    if (keyed) default_keys[hole] = key_scratch[index];
+                    continue;
+                }
+                f64 order;
+                ok = mal_builtin_array_sort_pair_order(
+                    vm, comparator, keyed, values[index - 1],
+                    keyed ? default_keys[index - 1] : mal_value_new_undefined(), scratch[index],
+                    keyed ? key_scratch[index] : mal_value_new_undefined(), &order);
+                if (!ok) break;
+                if (order <= 0) continue;
+                u32 lower = low, upper = index - 1;
+                while (ok && lower < upper) {
+                    u32 middle = lower + (upper - lower) / 2;
                     ok = mal_builtin_array_sort_pair_order(
-                        vm, comparator, keyed, values[hole - 1],
-                        keyed ? default_keys[hole - 1] : mal_value_new_undefined(), scratch[index],
+                        vm, comparator, keyed, values[middle],
+                        keyed ? default_keys[middle] : mal_value_new_undefined(), scratch[index],
                         keyed ? key_scratch[index] : mal_value_new_undefined(), &order);
-                    if (!ok || order <= 0) break;
+                    if (!ok) break;
+                    if (order > 0) upper = middle;
+                    else lower = middle + 1;
+                }
+                if (!ok) break;
+                for (u32 hole = index; hole > lower; hole--) {
                     values[hole] = values[hole - 1];
                     if (keyed) default_keys[hole] = default_keys[hole - 1];
-                    hole--;
                 }
-                values[hole] = scratch[index];
-                if (keyed) default_keys[hole] = key_scratch[index];
+                values[lower] = scratch[index];
+                if (keyed) default_keys[lower] = key_scratch[index];
             }
         }
-        for (u32 width = MAL_SORT_INSERTION_BLOCK; ok && width < count; width *= 2) {
+        if (ok && descending_blocks) {
+            // Each block is ascending now; preserve that order while reversing the blocks.
+            u32 output = 0;
+            for (u32 end = count; end > 0;) {
+                u32 start = (end - 1) / insertion_block * insertion_block;
+                u32 length = end - start;
+                memcpy(scratch + output, values + start, sizeof(MalValue) * length);
+                if (keyed) memcpy(key_scratch + output, default_keys + start, sizeof(MalValue) * length);
+                output += length;
+                end = start;
+            }
+            memcpy(values, scratch, sizeof(MalValue) * count);
+            if (keyed) memcpy(default_keys, key_scratch, sizeof(MalValue) * count);
+        }
+        for (u32 width = insertion_block; ok && !descending_blocks && width < count; width *= 2) {
             for (u32 low = 0, high; ok && count - low > width; low = high) {
                 u32 middle = low + width;
                 high = count - middle > width ? middle + width : count;
@@ -5664,6 +5723,9 @@ static bool mal_array_default_species(MalVm *vm, MalValue recv) {
     (void) array_constructor;
     return true;
 #else
+    // The receiver cannot shadow constructor, and the epoch protects the realm's
+    // Array.prototype.constructor and Array[@@species] descriptors together.
+    if (mal_vm_watched_methods_intact(vm)) return true;
     MalPropertyLookup ctor_lookup = mal_object_get_own(array_prototype, ctor_key);
     if (!ctor_lookup.present || (ctor_lookup.desc.flags & MAL_PROPERTY_ACCESSOR) ||
         !mal_value_is_object(ctor_lookup.desc.value) ||

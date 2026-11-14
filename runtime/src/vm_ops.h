@@ -5120,7 +5120,9 @@ MalCompletion mal_builtin_sort_numeric(
     MalValue receiver, const MalValue *args, i32 arg_count);
 
 /** Elements each sort block orders by insertion before the merges start. */
-#define MAL_SORT_INSERTION_BLOCK 16u
+#define MAL_SORT_INSERTION_BLOCK 8u
+#define MAL_SORT_LINEAR_INSERTION_BLOCK 16u
+#define MAL_SORT_BINARY_INSERTION_MIN 128u
 
 /**
  * Stable merge sort of predecoded keys under a comparator leaf, which cannot run
@@ -5132,15 +5134,24 @@ MalCompletion mal_builtin_sort_numeric(
  * merge's serial chain.
  */
 #define MAL_LEAF_MERGE_SORT_BODY(KEY_TYPE, COMPARE, KEYS) do { \
+    bool binary_insertion = count >= MAL_SORT_BINARY_INSERTION_MIN; \
+    u32 insertion_block = binary_insertion ? MAL_SORT_INSERTION_BLOCK : MAL_SORT_LINEAR_INSERTION_BLOCK; \
+    bool descending_blocks = count > insertion_block; \
     for (u32 low = 0, high; low < count; low = high) { \
-        high = count - low < MAL_SORT_INSERTION_BLOCK ? count : low + MAL_SORT_INSERTION_BLOCK; \
+        high = count - low < insertion_block ? count : low + insertion_block; \
         u32 sorted = low + 1; \
-        if (sorted == high) continue; \
+        if (sorted == high) { descending_blocks = false; continue; } \
         MAL_PERF_COUNT(numeric_sort_callback_calls); \
         bool descending = COMPARE(KEYS[low], KEYS[sorted]) > 0; \
         for (sorted++; sorted < high; sorted++) { \
             MAL_PERF_COUNT(numeric_sort_callback_calls); \
             if ((COMPARE(KEYS[sorted - 1], KEYS[sorted]) > 0) != descending) break; \
+        } \
+        descending_blocks = descending_blocks && descending && sorted == high; \
+        if (descending_blocks && low > 0) { \
+            /* Reversal left the prior run's original last key at its first slot. */ \
+            MAL_PERF_COUNT(numeric_sort_callback_calls); \
+            descending_blocks = COMPARE(KEYS[low - insertion_block], KEYS[low]) > 0; \
         } \
         if (descending) { \
             for (u32 left = low, right = sorted - 1; left < right; left++, right--) { \
@@ -5155,21 +5166,52 @@ MalCompletion mal_builtin_sort_numeric(
         for (u32 index = sorted; index < high; index++) { \
             MalValue value = values[index]; \
             KEY_TYPE key = KEYS[index]; \
-            u32 hole = index; \
-            while (hole > low) { \
+            if (!binary_insertion) { \
+                u32 hole = index; \
+                while (hole > low) { \
+                    MAL_PERF_COUNT(numeric_sort_callback_calls); \
+                    if (!(COMPARE(KEYS[hole - 1], key) > 0)) break; \
+                    values[hole] = values[hole - 1]; \
+                    KEYS[hole] = KEYS[hole - 1]; \
+                    hole--; \
+                } \
+                values[hole] = value; \
+                KEYS[hole] = key; \
+                continue; \
+            } \
+            MAL_PERF_COUNT(numeric_sort_callback_calls); \
+            /* A NaN order is a tie, including at the insertion boundary. */ \
+            if (!(COMPARE(KEYS[index - 1], key) > 0)) continue; \
+            u32 lower = low, upper = index - 1; \
+            while (lower < upper) { \
+                u32 middle = lower + (upper - lower) / 2; \
                 MAL_PERF_COUNT(numeric_sort_callback_calls); \
-                /* A NaN order keeps elements in place, as the generic sort's zero does. */ \
-                if (!(COMPARE(KEYS[hole - 1], key) > 0)) break; \
+                if (COMPARE(KEYS[middle], key) > 0) upper = middle; \
+                else lower = middle + 1; \
+            } \
+            for (u32 hole = index; hole > lower; hole--) { \
                 values[hole] = values[hole - 1]; \
                 KEYS[hole] = KEYS[hole - 1]; \
-                hole--; \
             } \
-            values[hole] = value; \
-            KEYS[hole] = key; \
+            values[lower] = value; \
+            KEYS[lower] = key; \
         } \
     } \
     KEY_TYPE *left_keys = KEYS + count; \
-    for (u32 width = MAL_SORT_INSERTION_BLOCK; width < count; width *= 2) { \
+    if (descending_blocks) { \
+        u32 output = 0; \
+        for (u32 end = count; end > 0;) { \
+            u32 start = (end - 1) / insertion_block * insertion_block; \
+            u32 length = end - start; \
+            memcpy(scratch + output, values + start, sizeof(MalValue) * length); \
+            memcpy(left_keys + output, KEYS + start, sizeof(KEY_TYPE) * length); \
+            output += length; \
+            end = start; \
+        } \
+        memcpy(values, scratch, sizeof(MalValue) * count); \
+        memcpy(KEYS, left_keys, sizeof(KEY_TYPE) * count); \
+    } \
+    for (u32 width = insertion_block; !descending_blocks && width < count; width *= 2) { \
         for (u32 low = 0, high; count - low > width; low = high) { \
             u32 middle = low + width; \
             high = count - middle > width ? middle + width : count; \

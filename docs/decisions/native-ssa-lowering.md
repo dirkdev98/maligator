@@ -319,6 +319,16 @@ Worker plans record nonpolling jumps to the immediately following instruction as
 fallthroughs. Rendering retains only labels targeted by remaining branches; a
 selected expression producer can still be such a target.
 
+Generic Array sorting and comparator-leaf kernels share a stable block merge strategy.
+Binary insertion bounds comparator calls within each block while key and value shifts
+remain plain memory operations. Small arrays retain linear insertion to avoid merge
+and search overhead. Strictly reversed blocks can be
+reordered together without merges when their boundaries preserve that order. An
+ordered append still needs only its boundary comparison. Insertion follows existing
+ties, including NaN comparison results. Both
+paths choose the same comparison pairs so declining a kernel also preserves the
+runtime's behavior for inconsistent comparators.
+
 Short loop-free bodies of side-effect-free reads also get a frameless fast entry
 ahead of their full entry. It reads parameters, captures and globals, probes named
 loads through their cache rows and indexed loads through dense Array elements,

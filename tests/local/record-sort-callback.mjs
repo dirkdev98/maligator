@@ -19,8 +19,8 @@ function detachedCopy(values) {
 	return values.toSorted.call(values, compareRecords);
 }
 
-function records() {
-	return Array.from({ length: 96 }, (_, index) => ({
+function records(length = 96) {
+	return Array.from({ length }, (_, index) => ({
 		score: (index * 37) & 31,
 		id: index % 3,
 		name: `row${index}`,
@@ -59,8 +59,8 @@ function compareArithmeticNames(left, right) {
 	return left.name - right.name || (left.name < right.name ? -1 : 1);
 }
 
-function stringRecords() {
-	return Array.from({ length: 96 }, (_, id) => ({
+function stringRecords(length = 96) {
+	return Array.from({ length }, (_, id) => ({
 		id,
 		name: "word" + ((id * 37) & 31),
 		score: id & 3,
@@ -84,6 +84,41 @@ function sortFieldKinds(mask) {
 }
 
 const scenarios = {
+	large() {
+		return {
+			numeric: labels(sortRecords(records(500))),
+			strings: identifiers(stringRecords(500).toSorted(compareNames)),
+		};
+	},
+	monotonicRuns() {
+		return [12, 16, 17, 96].map((length) => {
+			const ascending = Array.from({ length }, (_, id) => ({
+				score: id,
+				id,
+				name: `run${String(id).padStart(3, "0")}`,
+			}));
+			const partial = ascending.map((row, index) => ({
+				...row,
+				score: index < length * 0.75 ? index : (index * 37) % length,
+			}));
+			let comparisons = 0;
+			const generic = ascending.slice().sort((left, right) => {
+				comparisons++;
+				return compareRecords(left, right);
+			});
+			return {
+				ascending: labels(sortRecords(ascending.slice())),
+				descending: labels(sortRecords(ascending.slice().reverse())),
+				partial: labels(sortRecords(partial)),
+				generic: labels(generic),
+				compared: comparisons > 0,
+				strings: ascending
+					.map((row) => row.name)
+					.reverse()
+					.sort(),
+			};
+		});
+	},
 	stringKinds00: () => sortFieldKinds(0),
 	stringKinds01: () => sortFieldKinds(1),
 	stringKinds10: () => sortFieldKinds(2),
@@ -369,6 +404,29 @@ const scenarios = {
 			error = caught.message;
 		}
 		return { error, unchanged: before === labels(rows).join() };
+	},
+	lateException() {
+		const rows = records(192);
+		const before = labels(rows).join();
+		const limit = rows.length / 2;
+		let comparisons = 0;
+		let stopped = false;
+		let continued = false;
+		let error;
+		try {
+			rows.sort((left, right) => {
+				if (stopped) continued = true;
+				globalThis.recordSortGarbage = { left, right };
+				if (++comparisons >= limit) {
+					stopped = true;
+					throw new Error("late comparison");
+				}
+				return compareRecords(left, right);
+			});
+		} catch (caught) {
+			error = caught.message;
+		}
+		return { error, stopped, continued, unchanged: before === labels(rows).join() };
 	},
 	detached() {
 		const rows = records();

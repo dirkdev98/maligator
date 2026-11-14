@@ -31,6 +31,11 @@ describe("record sort callback kernels", () => {
 
 	it.each([
 		{ scenario: "stable", behavior: "preserves ties and the copy boundary" },
+		{ scenario: "large", behavior: "sorts large numeric and String records" },
+		{
+			scenario: "monotonicRuns",
+			behavior: "orders complete and partial monotonic runs",
+		},
 		{
 			scenario: "mixedShapes",
 			behavior: "sorts numeric fields from different own layouts",
@@ -53,6 +58,10 @@ describe("record sort callback kernels", () => {
 		{
 			scenario: "exception",
 			behavior: "propagates comparison exceptions before writeback",
+		},
+		{
+			scenario: "lateException",
+			behavior: "stops comparisons after a later exception without writeback",
 		},
 		{ scenario: "detached", behavior: "supports detached sort and toSorted calls" },
 		{ scenario: "override", behavior: "honors replaced sort methods" },
@@ -123,8 +132,11 @@ describe("record sort callback kernels", () => {
 
 	it.each([
 		"stable",
+		"large",
+		"monotonicRuns",
 		"getters",
 		"collection",
+		"lateException",
 		"stringRopes",
 		"stringStable",
 		"stringGetters",
