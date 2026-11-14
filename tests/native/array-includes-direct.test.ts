@@ -50,10 +50,9 @@ describe("guarded dense Array includes", () => {
 		expect(result.status, result.stderr).toBe(0);
 		expect(result.stdout).toBe(expected);
 		const stats = result.stderr.match(
-			/\[perf-array-search-stats\] includes_direct_hits=(\d+) includes_direct_fallbacks=(\d+)/,
+			/\[perf-array-search-stats\] includes_direct_hits=(\d+) includes_direct_fallbacks=(\d+) index_of_direct_hits=(\d+) index_of_direct_fallbacks=(\d+)/,
 		);
 		expect(stats, result.stderr).not.toBeNull();
-		expect(Number(stats![1])).toBeGreaterThan(0);
-		expect(Number(stats![2])).toBeGreaterThan(0);
+		for (const count of stats!.slice(1)) expect(Number(count)).toBeGreaterThan(0);
 	});
 });

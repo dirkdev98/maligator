@@ -81,6 +81,70 @@ static inline bool mal_builtin_array_includes_try(
     return true;
 }
 
+/** Strict numeric search using the runtime's vectorized word scan; -1 when absent. */
+MalValue mal_builtin_array_dense_numeric_index_of(
+    const MalArrayObject *array, MalValue search, u32 start);
+
+/**
+ * An exact loaded indexOf method can search an ordinary dense Array without a native
+ * call frame, as includes does. Holes are absent while the prototype chain holds no
+ * elements, so they are skipped; a coercing fromIndex keeps the generic algorithm.
+ */
+static inline bool mal_builtin_array_index_of_try(
+    MalVm *vm, MalValue callee, MalValue receiver, MalValue search,
+    MalValue from_index, MalValue *out
+) {
+    if (callee != vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_INDEX_OF] ||
+        !mal_value_is_array_object(receiver) ||
+        vm->semantic_epochs.array_elements != MAL_SEMANTIC_EPOCH_INITIAL) {
+        MAL_PERF_COUNT(array_index_of_direct_fallbacks);
+        return false;
+    }
+    const MalArrayObject *array = mal_value_to_array_object(receiver);
+    if (array->dense_deopted || mal_object_prototype(&array->object) !=
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])) {
+        MAL_PERF_COUNT(array_index_of_direct_fallbacks);
+        return false;
+    }
+    u32 length = array->length;
+    // indexOf returns before coercing fromIndex when the snapped length is zero.
+    if (length == 0) {
+        *out = mal_value_from_i32(-1);
+        MAL_PERF_COUNT(array_index_of_direct_hits);
+        return true;
+    }
+    f64 relative = 0;
+    if (!mal_value_is_undefined(from_index)) {
+        if (!mal_ops_is_number(from_index)) {
+            MAL_PERF_COUNT(array_index_of_direct_fallbacks);
+            return false;
+        }
+        f64 number = mal_ops_number_as_f64(from_index);
+        relative = number != number ? 0 : trunc(number);
+    }
+    MAL_PERF_COUNT(array_index_of_direct_hits);
+    if (relative >= (f64) length) {
+        *out = mal_value_from_i32(-1);
+        return true;
+    }
+    if (relative < 0) relative += (f64) length;
+    u32 start = relative > 0 ? (u32) relative : 0;
+    if (mal_ops_is_number(search) && array->dense_count >= 8) {
+        *out = mal_builtin_array_dense_numeric_index_of(array, search, start);
+        return true;
+    }
+    u32 end = array->dense_count < length ? array->dense_count : length;
+    for (u32 index = start; index < end; index++) {
+        MalValue element = array->elements[index];
+        if (!mal_value_is_array_hole(element) && mal_ops_strict_equal_bool(element, search)) {
+            *out = mal_value_from_u32(index);
+            return true;
+        }
+    }
+    *out = mal_value_from_i32(-1);
+    return true;
+}
+
 /**
  * Spec-flavored HasProperty + Get for an element, walking the prototype chain
  * and invoking accessor getters. Strings expose their code units; other

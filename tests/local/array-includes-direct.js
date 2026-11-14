@@ -10,6 +10,46 @@ for (let index = 0; index < 2000; index++) {
 	check(includes(["gte"], "gte"), true, "singleton hit");
 	check(includes(["gte"], "lt"), false, "singleton miss");
 }
+function indexOf(array, value, fromIndex) {
+	return array.indexOf(value, fromIndex);
+}
+
+for (let index = 0; index < 2000; index++) {
+	check(indexOf(["gte", "lt"], "lt"), 1, "indexOf hit");
+	check(indexOf(["gte"], "eq"), -1, "indexOf miss");
+}
+check(indexOf([NaN], NaN), -1, "indexOf never finds NaN");
+check(indexOf([-0], 0), 0, "indexOf matches signed zero");
+check(indexOf([, undefined], undefined), 1, "indexOf skips holes");
+check(indexOf(["fictional"], "fic" + "tional"), 0, "indexOf compares contents");
+const indexed = Array.from({ length: 128 }, (_, index) => index);
+check(indexOf(indexed, 64), 64, "indexOf vector hit");
+check(indexOf(indexed, 64, 65), -1, "indexOf after fromIndex");
+check(indexOf(indexed, 127, -1.9), 127, "indexOf negative fractional index");
+check(indexOf(indexed, 0, NaN), 0, "indexOf NaN index");
+check(indexOf(indexed, 0, 200), -1, "indexOf index past end");
+check(
+	indexOf([], 0, {
+		valueOf() {
+			throw new Error("coerced");
+		},
+	}),
+	-1,
+	"indexOf skips coercion for an empty array",
+);
+let indexCoercions = 0;
+check(
+	indexOf([1, 2, 3], 3, {
+		valueOf() {
+			indexCoercions++;
+			return 1;
+		},
+	}),
+	2,
+	"indexOf coerces fromIndex",
+);
+check(indexCoercions, 1, "indexOf coerces once");
+check(indexOf("fictional", "tion"), 3, "indexOf String fallback");
 const object = {};
 const symbol = Symbol("fictional");
 const dense = [NaN, -0, undefined, "fictional", 3n, object, symbol];
@@ -155,5 +195,16 @@ try {
 	check(includes([,], undefined), false, "hole reads inherited value");
 } finally {
 	delete Array.prototype[0];
+}
+Object.defineProperty(Array.prototype, "1", {
+	configurable: true,
+	get() {
+		return "inherited";
+	},
+});
+try {
+	check(indexOf([0, , 2], "inherited"), 1, "indexOf reads inherited elements");
+} finally {
+	delete Array.prototype[1];
 }
 console.log("array-includes-direct PASS");

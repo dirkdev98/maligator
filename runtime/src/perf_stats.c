@@ -1263,9 +1263,11 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.array_iteration_numeric_reduce_calls,
         (unsigned long long) mal_perf_stats.array_iteration_runtime_callback_nominations
     );
-    fprintf(stderr, "[perf-array-search-stats] includes_direct_hits=%llu includes_direct_fallbacks=%llu\n",
+    fprintf(stderr, "[perf-array-search-stats] includes_direct_hits=%llu includes_direct_fallbacks=%llu index_of_direct_hits=%llu index_of_direct_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.array_includes_direct_hits,
-        (unsigned long long) mal_perf_stats.array_includes_direct_fallbacks);
+        (unsigned long long) mal_perf_stats.array_includes_direct_fallbacks,
+        (unsigned long long) mal_perf_stats.array_index_of_direct_hits,
+        (unsigned long long) mal_perf_stats.array_index_of_direct_fallbacks);
     fprintf(stderr, "[perf-typed-dispatch-stats] hits=%llu fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.canonical_typed_dispatch_hits,
         (unsigned long long) mal_perf_stats.canonical_typed_dispatch_fallbacks);

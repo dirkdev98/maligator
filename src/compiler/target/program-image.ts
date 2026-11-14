@@ -217,6 +217,7 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"Object.is",
 	"RegExp.prototype.test",
 	"Array.prototype.includes",
+	"Array.prototype.indexOf",
 ] as const;
 
 export type VmGuardedBuiltinOperation = (typeof VM_GUARDED_BUILTIN_OPERATIONS)[number];
