@@ -321,6 +321,7 @@ const ARRAY_ITERATION_CALLBACK_EXPOSURE = 8;
 
 const INLINE_ENVIRONMENT_OPCODES: ReadonlySet<string> = new Set([
 	"loadCaptured",
+	"storeCaptured",
 	"createFunction",
 	"withEnter",
 	"withExit",
@@ -337,15 +338,17 @@ const INLINE_UNSUPPORTED_OPCODES = new Set([
 	"callRestArguments",
 	"constructSuperForward",
 	"loadCallee",
-	"storeCaptured",
 ]);
 
+/**
+ * The callee's captured cells resolve to the same environments from the caller, so
+ * an inlined copy reads and writes the cells the call would.
+ */
 interface InlineCaptureContext {
 	readonly caller: CoreFunctionStore;
 	readonly callee: CoreValueId;
 	readonly site: CoreInstructionId;
-	// The callee was created in the caller's current scope chain, so its captured
-	// stores reach the same environments from an inlined copy.
+	// The caller created the callee in its current scope chain.
 	readonly sameScopeChain?: true;
 	// Nothing else reads the callee, so inlining moves its body, loops included,
 	// rather than copying it.
@@ -859,8 +862,7 @@ function inlineTarget(
 			}
 			if (
 				++instructionCount > (callbackConsumer || moved ? 128 : 48) ||
-				(INLINE_UNSUPPORTED_OPCODES.has(opcode) &&
-					!(opcode === "storeCaptured" && captureContext?.sameScopeChain === true)) ||
+				INLINE_UNSUPPORTED_OPCODES.has(opcode) ||
 				(invocation !== "construct" && opcode === "loadNewTarget") ||
 				(invocation === "construct" &&
 					["createFunction", "envCopy", "envPop", "envPush"].includes(opcode)) ||
@@ -5600,6 +5602,7 @@ export function runCoreCrossCallTransforms(
 		for (const functionId of appliedCallers)
 			editors.set(functionId, CoreEditor.open(program, functionId));
 		let published = appliedCallers.size !== 0;
+		const fusionOnlyCallers = new Set<CoreFunctionId>();
 		for (
 			let candidate = service.next();
 			candidate !== undefined;
@@ -5625,10 +5628,17 @@ export function runCoreCrossCallTransforms(
 				service.recordDeclined(decline);
 				continue;
 			}
-			// Privacy covers every invocation, so unpublished edits anywhere invalidate it.
+			// Privacy covers every invocation, so unpublished edits anywhere invalidate it,
+			// except another caller's fusions: a fused generator body is numeric, so it
+			// adds no invocation of any function beyond twins of its own target, and
+			// leaves every generator body as it was.
 			if (
 				candidate.kind === "generator-fusion" &&
-				[...editors.values()].some((editor) => editor.pendingEdits !== 0)
+				[...editors].some(
+					([functionId, editor]) =>
+						editor.pendingEdits !== 0 &&
+						(functionId === candidate.caller || !fusionOnlyCallers.has(functionId)),
+				)
 			) {
 				service.recordDeclined("stale-anchor");
 				continue;
@@ -5642,6 +5652,9 @@ export function runCoreCrossCallTransforms(
 				continue;
 			}
 			service.recordApplied(candidate);
+			if (candidate.kind === "generator-fusion" && !appliedCallers.has(candidate.caller))
+				fusionOnlyCallers.add(candidate.caller);
+			else fusionOnlyCallers.delete(candidate.caller);
 			appliedCallers.add(candidate.caller);
 			instructionsIntroduced += applied.instructionsIntroduced;
 			blocksIntroduced += applied.blocksIntroduced;

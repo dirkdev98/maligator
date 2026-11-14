@@ -15,6 +15,7 @@ function fusionCount(
 	body = traversal,
 	extra = "",
 	engine: { realms?: boolean; primordials?: "locked" | "mutable"; eval?: boolean } = {},
+	entry = "main.mjs",
 ): number {
 	const source = `${generator}
 		function hot(count) {
@@ -27,7 +28,7 @@ function fusionCount(
 	let report: CoreOptimizationReport | undefined;
 	const directory = mkdtempSync(join(tmpdir(), "mal-generator-fusion-"));
 	try {
-		const sourcePath = join(directory, "main.mjs");
+		const sourcePath = join(directory, entry);
 		writeFileSync(sourcePath, source);
 		compileEntrypoint(sourcePath, {
 			buildConfig: resolveBuildConfig({ engine }),
@@ -114,6 +115,42 @@ describe("private generator fusion", () => {
 		expect(
 			fusionCount(
 				"function* sequence(seed) { if (seed < 0) return; const step = seed + 2; for (let index = 0; index < 12; index++) yield step + index; }",
+			),
+		).toBe(0);
+	});
+	it("fuses private generators consumed by different callers", () => {
+		expect(
+			fusionCount(
+				sequence,
+				traversal,
+				"function warm(count) { let checksum = 0; for (let round = 0; round < count; round++) for (const value of sequence(round)) checksum += value; return checksum; } console.log(warm(8));",
+			),
+		).toBe(2);
+	});
+});
+
+describe("private generator fusion in CommonJS modules", () => {
+	it("fuses a generator that only its module calls", () => {
+		expect(fusionCount(sequence, traversal, "", {}, "main.cjs")).toBeGreaterThan(0);
+	});
+	it.each([
+		{ publication: "module.exports.sequence = sequence;" },
+		{ publication: "exports.sequence = sequence;" },
+		{ publication: "module.exports = { sequence };" },
+	])(
+		"keeps the protocol for a generator published by $publication",
+		({ publication }) => {
+			expect(fusionCount(sequence, traversal, publication, {}, "main.cjs")).toBe(0);
+		},
+	);
+	it("keeps the protocol for a generator that escapes through another binding", () => {
+		expect(
+			fusionCount(
+				sequence,
+				traversal,
+				"const alias = sequence; globalThis.leak = () => alias;",
+				{},
+				"main.cjs",
 			),
 		).toBe(0);
 	});

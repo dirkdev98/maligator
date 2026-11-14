@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
@@ -1950,6 +1951,51 @@ describe("bounded Core cross-call transforms", () => {
 		);
 		const run = coreFunctionNamed(optimized, "run")!;
 		expect(coreOperations(run).some(({ opcode }) => opcode === "call")).toBe(true);
+	});
+
+	it("inlines a helper that writes a binding of the scope whose cell holds it", () => {
+		const optimized = optimizedProgram(
+			`function makeTally(start) {
+				let count = start;
+				function bump(step) { count += step; }
+				return { add(step) { bump(step); return count; } };
+			}
+			globalThis.makeTally = makeTally;`,
+			"core-ancestor-capture-store.js",
+		);
+		// Open-world builds keep a guarded fallback call, so the inlined write is the evidence.
+		const add = coreFunctionNamed(optimized, "add")!;
+		expect(coreOperations(add).some(({ opcode }) => opcode === "storeCaptured")).toBe(
+			true,
+		);
+	});
+
+	it("inlines a CommonJS helper that writes a module binding", () => {
+		const directory = mkdtempSync(join(tmpdir(), "mal-cjs-module-state-"));
+		try {
+			const entry = join(directory, "main.cjs");
+			writeFileSync(
+				entry,
+				`let total = 0;
+				function addTotal(value) { total += value; }
+				function sumInto(rounds) {
+					for (let round = 0; round < rounds; round++) addTotal(round & 15);
+					return total;
+				}
+				console.log(sumInto(100));`,
+			);
+			let optimized: CoreProgram | undefined;
+			compileEntrypoint(entry, {
+				buildConfig: resolveBuildConfig({}),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			});
+			const sumInto = coreFunctionNamed(optimized!, "sumInto")!;
+			expect(coreOperations(sumInto).some(({ opcode }) => opcode === "call")).toBe(false);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 
 	it("keeps returned private-name closures in the callee's lexical environment", () => {

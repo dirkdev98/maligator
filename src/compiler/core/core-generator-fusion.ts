@@ -6,6 +6,7 @@ import {
 	COMPILER_NUMERIC_UNARY_OPERATORS,
 } from "../shared/compiler-value-kinds.ts";
 import { coreCalleeTargetsSingleFunction } from "./core-callee-targets.ts";
+import { coreClosedCapturedValueSlots } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreEditor } from "./core-editor.ts";
 import {
@@ -414,6 +415,37 @@ function generatorShape(
 	};
 }
 
+/**
+ * The cell a load or store names when every reader of that cell is a Core load: a
+ * private module slot, or a captured cell outside any mapped arguments object.
+ * CommonJS top-level bindings are captured cells of the module wrapper, so they
+ * are as private as an ES module's slots.
+ */
+function privateCell(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	slots: ReadonlySet<number>,
+	captured: ReadonlySet<string>,
+): string | undefined {
+	const attrs = fn.instructionAttributes(instruction);
+	switch (fn.instructionOpcodeName(instruction)) {
+		case "loadGlobal":
+		case "storeGlobal":
+			return typeof attrs.index === "number" && slots.has(attrs.index)
+				? `global:${attrs.index}`
+				: undefined;
+		case "loadCaptured":
+		case "storeCaptured": {
+			if (typeof attrs.functionIndex !== "number" || typeof attrs.index !== "number")
+				return undefined;
+			const key = `${attrs.functionIndex}:${attrs.index}`;
+			return captured.has(key) ? `captured:${key}` : undefined;
+		}
+		default:
+			return undefined;
+	}
+}
+
 // A private callable is insufficient if another invocation exposes its shared prototype.
 // Follow every alias and require every result to remain inside its own traversal.
 function privateInvocations(
@@ -432,7 +464,12 @@ function privateInvocations(
 		...(context.data.moduleLinks?.exports ?? []),
 	])
 		slots.delete(link.slot);
-	const reads = new Map<number, Array<{ fn: CoreFunctionStore; value: CoreValueId }>>();
+	const captured = new Set(
+		coreClosedCapturedValueSlots(program, context).map(
+			({ owner, index }) => `${owner}:${index}`,
+		),
+	);
+	const reads = new Map<string, Array<{ fn: CoreFunctionStore; value: CoreValueId }>>();
 	const pending: Array<{ fn: CoreFunctionStore; value: CoreValueId }> = [];
 	let work = 0;
 	for (const id of program.functionIds()) {
@@ -441,20 +478,23 @@ function privateInvocations(
 		for (const instruction of fn.instructionIds()) {
 			if (++work > 8_192) return false;
 			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction),
-				attrs = fn.instructionAttributes(instruction);
-			if (opcode === "createFunction" && attrs.functionIndex === target)
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (
+				opcode === "createFunction" &&
+				fn.instructionAttributes(instruction).functionIndex === target
+			)
 				pending.push({ fn, value: results(fn, instruction)[0]! });
-			if (opcode === "loadGlobal" && typeof attrs.index === "number") {
-				const group = reads.get(attrs.index) ?? [];
-				group.push({ fn, value: results(fn, instruction)[0]! });
-				reads.set(attrs.index, group);
-			}
+			if (opcode !== "loadGlobal" && opcode !== "loadCaptured") continue;
+			const cell = privateCell(fn, instruction, slots, captured);
+			if (cell === undefined) continue;
+			const group = reads.get(cell) ?? [];
+			group.push({ fn, value: results(fn, instruction)[0]! });
+			reads.set(cell, group);
 		}
 	}
 	if (pending.length === 0) return false;
 	const seen = new Set<string>(),
-		cells = new Set<number>();
+		cells = new Set<string>();
 	let calls = 0;
 	for (let cursor = 0; cursor < pending.length; cursor++) {
 		const { fn, value } = pending[cursor]!;
@@ -488,12 +528,12 @@ function privateInvocations(
 				continue;
 			}
 			if (opcode === "rootUse") continue;
-			if (opcode === "storeGlobal") {
-				const slot = fn.instructionAttributes(instruction).index;
-				if (position !== 0 || typeof slot !== "number" || !slots.has(slot)) return false;
-				if (!cells.has(slot)) {
-					cells.add(slot);
-					pending.push(...(reads.get(slot) ?? []));
+			if (opcode === "storeGlobal" || opcode === "storeCaptured") {
+				const cell = privateCell(fn, instruction, slots, captured);
+				if (position !== 0 || cell === undefined) return false;
+				if (!cells.has(cell)) {
+					cells.add(cell);
+					pending.push(...(reads.get(cell) ?? []));
 				}
 				continue;
 			}

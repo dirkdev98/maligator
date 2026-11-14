@@ -345,4 +345,29 @@ function siblingDuringRead() {
 	});
 }
 check("reentrant sibling keeps live cell", siblingDuringRead(), 22);
+
+// `add` reaches `bump` through a cell only its factory fills, so an inlined copy of
+// `bump` must write the count of the activation that created `add`.
+function makeTally(start) {
+	let count = start;
+	function bump(step) {
+		count += step;
+	}
+	return {
+		add(step) {
+			bump(step);
+			bump(1);
+			return count;
+		},
+		read: () => count,
+	};
+}
+const firstTally = makeTally(0);
+const secondTally = makeTally(100);
+let tallies = 0;
+for (let round = 0; round < 50; round++)
+	tallies += firstTally.add(round & 3) + secondTally.add(2);
+check("inlined helper writes its own activation", firstTally.read(), 123);
+check("inlined helper leaves another activation", secondTally.read(), 250);
+check("inlined helper results", tallies, 11_949);
 console.log("closure-state-sharing PASS");

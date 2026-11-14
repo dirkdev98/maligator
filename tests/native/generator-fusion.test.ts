@@ -74,3 +74,42 @@ describe.each([
 			expect(JSON.parse(runToStdout(binary, { env: STRESS_ENV }))).toEqual(expected);
 	});
 });
+
+describe("private iteration in CommonJS modules", () => {
+	const entry = "tests/local/generator-fusion-cjs/main.cjs";
+	let pair: ReturnType<typeof buildBackendPairFromOneProgramImage>;
+	let expected: string;
+	beforeAll(() => {
+		expected = execFileSync(process.execPath, [entry], { encoding: "utf8" });
+		pair = buildBackendPairFromOneProgramImage({
+			fixture: entry,
+			name: "generator-fusion-cjs",
+			outDir,
+			config: resolveBuildConfig({}),
+		});
+	});
+	function iterates(name: string): boolean {
+		const image = pair.programImage.runtime;
+		const fn = image.functions.find(
+			(candidate) =>
+				String.fromCharCode(
+					...(image.stringConstants[candidate.nameStringIndex] ?? []),
+				) === name,
+		);
+		expect(fn, name).toBeDefined();
+		return fn!.instructions.some((instruction) => instruction.opcode === "GET_ITERATOR");
+	}
+	it("fuses generators and lowers rest loops that only their own module calls", () => {
+		for (const name of ["sumSequences", "sumPrivateSteps", "privateTotal"])
+			expect(iterates(name), name).toBe(false);
+	});
+	it("keeps the protocol for an exported generator that another module drives and patches", () => {
+		expect(iterates("sumCounts")).toBe(true);
+	});
+	it("matches Node", () => {
+		for (const binary of [pair.compiled, pair.interpreted]) {
+			expect(runToStdout(binary)).toBe(expected);
+			expect(runToStdout(binary, { env: STRESS_ENV })).toBe(expected);
+		}
+	});
+});

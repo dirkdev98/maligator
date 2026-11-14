@@ -414,7 +414,7 @@ describe("connected native entry contracts", () => {
 
 	it("reuses canonical boxed-input scalar proofs across cells and callbacks", () => {
 		let canonicalScalarEntries = 0;
-		for (const fixture of ["exact-cell-value-kinds", "captured-callback-inlining"]) {
+		for (const fixture of ["own-capture-forwarding", "captured-callback-inlining"]) {
 			compileEntrypoint(resolve(`tests/local/${fixture}.js`), {
 				buildConfig: resolveBuildConfig({
 					engine: { eval: false, realms: false, primordials: "locked" },
