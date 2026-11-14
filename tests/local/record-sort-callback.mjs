@@ -40,7 +40,157 @@ function compareScoreThenName(left, right) {
 	return right.score - left.score || (left.name <= right.name ? -1 : 1);
 }
 
+function compareEqualNames(left, right) {
+	return left.name === right.name ? 0 : left.name < right.name ? -1 : 1;
+}
+
+function compareUnequalNames(left, right) {
+	return left.name !== right.name ? (left.name >= right.name ? 1 : -1) : 0;
+}
+
+function compareNameAndGroup(left, right) {
+	return (
+		(left.name < right.name ? -1 : left.name > right.name ? 1 : 0) ||
+		(left.group < right.group ? -1 : 1)
+	);
+}
+
+function compareArithmeticNames(left, right) {
+	return left.name - right.name || (left.name < right.name ? -1 : 1);
+}
+
+function stringRecords() {
+	return Array.from({ length: 96 }, (_, id) => ({
+		id,
+		name: "word" + ((id * 37) & 31),
+		score: id & 3,
+	}));
+}
+
+function identifiers(values) {
+	return values.map((value) => value.id);
+}
+
+function sortFieldKinds(mask) {
+	const rows = Array.from({ length: 80 }, (_, id) => {
+		const value = (id * 37) % 80;
+		return {
+			id,
+			name: mask & 1 ? String(value % 8) : value % 8,
+			group: mask & 2 ? String(Math.floor(value / 8)) : Math.floor(value / 8),
+		};
+	});
+	return identifiers(rows.toSorted(compareNameAndGroup));
+}
+
 const scenarios = {
+	stringKinds00: () => sortFieldKinds(0),
+	stringKinds01: () => sortFieldKinds(1),
+	stringKinds10: () => sortFieldKinds(2),
+	stringKinds11: () => sortFieldKinds(3),
+	stringKernel() {
+		const rows = stringRecords().map((record) => ({
+			...record,
+			name: record.name + ":" + record.id,
+		}));
+		return {
+			copy: identifiers(rows.toSorted(compareNames)),
+			inPlace: identifiers(rows.sort(compareScoreThenName)),
+		};
+	},
+	stringRopes() {
+		const rows = stringRecords().map((record) => ({
+			...record,
+			name: "prefix".repeat(30) + record.name + "suffix".repeat(30),
+		}));
+		return identifiers(rows.toSorted(compareNames));
+	},
+	stringCodeUnits() {
+		const names = [
+			"\uffff",
+			"😀",
+			"\ud800",
+			"\udc00",
+			"é",
+			"e\u0301",
+			"€",
+			"𐀀",
+			"",
+			"a\0b",
+			"a\0a",
+			"\ufffd",
+		];
+		return identifiers(names.map((name, id) => ({ name, id })).toSorted(compareNames));
+	},
+	stringStable() {
+		const rows = stringRecords().map((record) => ({
+			...record,
+			name: ("prefix".repeat(30) + record.name).slice(180),
+		}));
+		return identifiers(rows.toSorted(compareNames));
+	},
+	stringEquality() {
+		const rows = stringRecords();
+		return {
+			equal: identifiers(rows.toSorted(compareEqualNames)),
+			unequal: identifiers(rows.toSorted(compareUnequalNames)),
+		};
+	},
+	stringMixed() {
+		const rows = stringRecords().map((record) => ({
+			...record,
+			name: record.id & 1 ? String(record.id % 10) : record.id % 10,
+		}));
+		return identifiers(rows.toSorted(compareNames));
+	},
+	stringUncertified() {
+		const rows = stringRecords().map((record) => ({
+			...record,
+			name: String(record.id),
+		}));
+		return identifiers(rows.toSorted(compareArithmeticNames));
+	},
+	stringGetters() {
+		let reads = 0;
+		const makeRows = () =>
+			stringRecords().map((record) => ({
+				id: record.id,
+				get name() {
+					reads++;
+					globalThis.recordSortGarbage = [record, reads];
+					return record.name;
+				},
+			}));
+		const sorted = makeRows().toSorted(compareNames);
+		const fastReads = reads;
+		reads = 0;
+		makeRows().toSorted((left, right) => {
+			globalThis.recordSortCompared = true;
+			return compareNames(left, right);
+		});
+		return { ids: identifiers(sorted), read: reads > 0, sameReads: reads === fastReads };
+	},
+	stringProxies() {
+		let reads = 0;
+		const makeRows = () =>
+			stringRecords().map(
+				(record) =>
+					new Proxy(record, {
+						get(target, key) {
+							if (key === "name") reads++;
+							return target[key];
+						},
+					}),
+			);
+		const sorted = makeRows().toSorted(compareNames);
+		const fastReads = reads;
+		reads = 0;
+		makeRows().toSorted((left, right) => {
+			globalThis.recordSortCompared = true;
+			return compareNames(left, right);
+		});
+		return { ids: identifiers(sorted), read: reads > 0, sameReads: reads === fastReads };
+	},
 	strings() {
 		const names = [
 			"row10",

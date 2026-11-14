@@ -1,3 +1,14 @@
+$262.createRealm();
+$262.gc();
+const localError = new RangeError("fictional realm error");
+if (
+	localError.message !== "fictional realm error" ||
+	!(localError instanceof RangeError) ||
+	!localError.stack.includes("RangeError: fictional realm error")
+) {
+	throw new Error("local error construction lost its message, realm or stack");
+}
+
 // Install the baked compiler outside realmA before any of its dynamic code runs.
 eval("0");
 

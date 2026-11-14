@@ -932,7 +932,11 @@ function nativeCompilationAvailability(
 			if (entry !== undefined) {
 				directCompiledEntries.set(
 					directCompiledEntryKey(functionIndex, emittedEntry.id),
-					{ ...entry, ...(emittedEntry.leaf ? { leaf: true as const } : {}) },
+					{
+						...entry,
+						...(emittedEntry.leaf ? { leaf: true as const } : {}),
+						...(emittedEntry.sortMayDecline ? { sortMayDecline: true as const } : {}),
+					},
 				);
 			}
 		}
@@ -1569,7 +1573,9 @@ function emitProgramImageParts(
 					if (entry.reductionSymbol !== undefined)
 						lines.push(`static ${numericReductionDeclaration(entry.reductionSymbol)};`);
 					if (entry.sortSymbol !== undefined)
-						lines.push(`static ${numericSortKernelDeclaration(entry.sortSymbol)};`);
+						lines.push(
+							`static ${numericSortKernelDeclaration(entry.sortSymbol, entry.sortMayDecline)};`,
+						);
 				}
 			}
 		}
@@ -1603,7 +1609,9 @@ function emitProgramImageParts(
 				if (entry.reductionSymbol !== undefined)
 					lines.push(`${numericReductionDeclaration(entry.reductionSymbol)};`);
 				if (entry.sortSymbol !== undefined)
-					lines.push(`${numericSortKernelDeclaration(entry.sortSymbol)};`);
+					lines.push(
+						`${numericSortKernelDeclaration(entry.sortSymbol, entry.sortMayDecline)};`,
+					);
 			}
 		}
 		if (compiled.some((fn) => fn !== null)) {
@@ -1919,7 +1927,7 @@ function compiledFunctionDeclarations(
 					: [
 							{
 								symbol: entry.sortSymbol,
-								source: `${numericSortKernelDeclaration(entry.sortSymbol)};`,
+								source: `${numericSortKernelDeclaration(entry.sortSymbol, entry.sortMayDecline)};`,
 							},
 						]),
 			]),
@@ -3015,7 +3023,9 @@ function emitBatchUnits(
 					: [`${storage}${numericReductionDeclaration(entry.reductionSymbol)};`]),
 				...(entry.sortSymbol === undefined
 					? []
-					: [`${storage}${numericSortKernelDeclaration(entry.sortSymbol)};`]),
+					: [
+							`${storage}${numericSortKernelDeclaration(entry.sortSymbol, entry.sortMayDecline)};`,
+						]),
 			]),
 		];
 		const directTargets = nativeEmission.availability.directCompiledTargets;

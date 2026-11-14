@@ -937,8 +937,18 @@ typedef f64 (*MalNumericReduceCallback)(
     MalVm *vm, MalValue this_value, f64 accumulator, f64 value, f64 index,
     MalValue receiver, MalEnv *env, MalValue callee);
 
-/** Sorts Number values with one comparator compiled in; `keys` holds 2 * count doubles. */
+typedef union {
+    f64 number;
+    const MalString *string;
+} MalRecordSortKey;
+static_assert(sizeof(MalRecordSortKey) == sizeof(f64), "Sort key slots must hold Numbers or Strings");
+
+/** Sorts admitted Number keys; `keys` includes merge scratch. */
 typedef void (*MalNumericSortKernel)(MalValue *values, MalValue *scratch, f64 *keys, u32 count);
+
+/** Declines unsupported field kinds before touching values. */
+typedef bool (*MalRecordSortKernel)(
+    MalValue *values, MalValue *scratch, void *keys, u32 count, u32 string_fields);
 
 /** Program-local table bases used by a native overlay attached after a splice. */
 typedef struct MalNativeProgramRelocation {
@@ -1728,6 +1738,7 @@ typedef struct MalExactScriptCall {
     MalCompiledFunction compiled_callback;
     MalNumericSortComparator numeric_sort_comparator;
     MalNumericSortKernel numeric_sort_kernel;
+    MalRecordSortKernel record_sort_kernel;
     MalString *const *numeric_sort_keys;
     u32 numeric_sort_key_count;
     MalEnv *env;

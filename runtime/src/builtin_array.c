@@ -2770,14 +2770,13 @@ static inline __attribute__((always_inline)) MalArrayObject *mal_builtin_array_c
 ) {
     if (!mal_value_is_array_object(value)) return nullptr;
     MalArrayObject *array = mal_value_to_array_object(value);
-    // Exact Arrays embed their object storage, including after named-property transitions.
-    if (array->dense_deopted || array->object_storage.prototype != prototype ||
+    if (array->dense_deopted || mal_object_prototype(&array->object) != prototype ||
         array->length > array->dense_count) {
         return nullptr;
     }
     // An empty shape and no public overflow prove that no own symbol can run a getter.
     if ((array->object.shape->inline_count != 0 ||
-         (array->object_storage.overflow != nullptr && !array->object.overflow_private_only)) &&
+         mal_object_has_public_overflow(&array->object)) &&
         mal_object_get_own(&array->object, mal_intrinsic_symbol_key(
             vm, MAL_INTRINSIC_SYMBOL_IS_CONCAT_SPREADABLE)).present) {
         return nullptr;
@@ -2807,7 +2806,7 @@ static bool mal_builtin_array_concat_dense(
     // The protector preserves the intrinsic constructor and species getter. Only
     // an own constructor can override them on this exact current-realm Array.
     if ((receiver->object.shape->inline_count != 0 ||
-         (receiver->object_storage.overflow != nullptr && !receiver->object.overflow_private_only)) &&
+         mal_object_has_public_overflow(&receiver->object)) &&
         mal_object_get_own(&receiver->object,
             mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_CONSTRUCTOR)).present) {
         return false;
@@ -4064,7 +4063,8 @@ bool mal_numeric_radix_sort(
     return true;
 }
 
-static bool mal_array_sort_record_keys(
+// Arithmetic-only leaves avoid String-kind probes in their key snapshot loop.
+static bool mal_array_sort_number_record_keys(
     const MalValue *values, u32 count, MalString *const *keys, u32 key_count, f64 *out
 ) {
     const MalShape *cached = nullptr;
@@ -4084,6 +4084,45 @@ static bool mal_array_sort_record_keys(
         for (u32 key = 0; key < key_count; key++) {
             if (!mal_ops_try_number_as_f64(mal_object_field_load_shaped(object, slots[key]), &out[(usize) index * key_count + key]))
                 return false;
+        }
+    }
+    return true;
+}
+
+static bool mal_array_sort_record_keys(
+    const MalValue *values, u32 count, MalString *const *keys, u32 key_count,
+    MalRecordSortKey *out, u32 *string_fields
+) {
+    const MalShape *cached = nullptr;
+    u32 slots[4];
+    for (u32 index = 0; index < count; index++) {
+        const MalObject *object = mal_vm_as_own_slot_object(values[index]);
+        if (object == nullptr || object->shape->inline_count == 0) return false;
+        const MalShape *shape = object->shape;
+        if (shape != cached) {
+            for (u32 key = 0; key < key_count; key++) {
+                i32 found = mal_shape_find(shape, mal_key_from_value(mal_value_from_string(keys[key])), MAL_SHAPE_FIND_GET_OWN);
+                if (found < 0 || (shape->props[found].attrs & MAL_PROPERTY_ACCESSOR)) return false;
+                slots[key] = shape->props[found].slot;
+            }
+            cached = shape;
+        }
+        for (u32 key = 0; key < key_count; key++) {
+            MalValue value = mal_object_field_load_shaped(object, slots[key]);
+            MalRecordSortKey *slot = &out[(usize) index * key_count + key];
+            u32 bit = 1u << key;
+            if (mal_ops_try_number_as_f64(value, &slot->number)) {
+                if ((*string_fields & bit) != 0) return false;
+                continue;
+            }
+            if (!mal_value_is_string(value) || (index != 0 && (*string_fields & bit) == 0))
+                return false;
+            *string_fields |= bit;
+            MalString *text = mal_value_to_string(value);
+            // Flatten while every record is rooted. The leaf cannot collect, run JS
+            // or mutate fields, so these pointers need no additional roots.
+            (void) mal_string_flat_segment(text);
+            slot->string = text;
         }
     }
     return true;
@@ -4145,7 +4184,7 @@ static bool mal_builtin_array_sort_values(
     }
     MalExactScriptCall *numeric_leaf = vm->exact_script_call;
     if (numeric_leaf == nullptr || numeric_leaf->callee != comparator ||
-        numeric_leaf->numeric_sort_kernel == nullptr) {
+        (numeric_leaf->numeric_sort_kernel == nullptr && numeric_leaf->record_sort_kernel == nullptr)) {
         numeric_leaf = nullptr;
     }
 #if MAL_PROFILE
@@ -4157,26 +4196,37 @@ static bool mal_builtin_array_sort_values(
     }
     // Without key storage the generic merge still reaches the compiled comparator per pair.
     usize key_bytes;
-    f64 *keys = numeric_leaf == nullptr ||
+    void *keys = numeric_leaf == nullptr ||
         !mal_checked_size_multiply(count, sizeof(f64) * 2 * key_count, SIZE_MAX, &key_bytes)
         ? nullptr : malloc(key_bytes);
     if (keys == nullptr) numeric_leaf = nullptr;
-    // Collection has finished. These own-data probes cannot call JS; the leaf cannot
-    // reenter or mutate records, so the snapshots remain valid throughout the merge.
-    if (numeric_leaf != nullptr && numeric_leaf->numeric_sort_key_count > 0 &&
-        !mal_array_sort_record_keys(values, count, numeric_leaf->numeric_sort_keys, key_count, keys))
-        numeric_leaf = nullptr;
+    // Collection has finished; these own-data probes cannot call JS.
+    u32 string_fields = 0;
+    if (numeric_leaf != nullptr && numeric_leaf->numeric_sort_key_count > 0) {
+        bool captured = numeric_leaf->record_sort_kernel == nullptr
+            ? mal_array_sort_number_record_keys(values, count, numeric_leaf->numeric_sort_keys, key_count, keys)
+            : mal_array_sort_record_keys(values, count, numeric_leaf->numeric_sort_keys, key_count, keys, &string_fields);
+        if (!captured) numeric_leaf = nullptr;
+    }
     // A bounded scalar leaf cannot re-enter JS; one depth guard covers the entire merge.
     if (numeric_leaf != nullptr && !mal_vm_enter_compiled(vm, numeric_leaf->function_index)) {
         ok = false;
         numeric_leaf = nullptr;
     }
 
+    bool sorted = false;
     if (numeric_leaf != nullptr) {
+        if (numeric_leaf->record_sort_kernel != nullptr) {
+            sorted = numeric_leaf->record_sort_kernel(values, scratch, keys, count, string_fields);
+        } else if (string_fields == 0) {
+            numeric_leaf->numeric_sort_kernel(values, scratch, keys, count);
+            sorted = true;
+        }
+        mal_vm_leave_compiled(vm);
+    }
+    if (sorted) {
         MAL_PERF_COUNT(numeric_sort_kernel_runs);
         if (numeric_leaf->numeric_sort_key_count > 0) MAL_PERF_COUNT(record_sort_kernel_runs);
-        numeric_leaf->numeric_sort_kernel(values, scratch, keys, count);
-        mal_vm_leave_compiled(vm);
     } else {
         // The decisions mirror mal_numeric_leaf_merge_sort, so a leaf comparator orders
         // the same way on either path. An element awaiting its place stays in its rooted

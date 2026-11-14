@@ -132,12 +132,13 @@ preprocess=''
 source=''
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-E" ]; then preprocess=1; fi
-	case "$1" in *.c) source="$1";; esac
+	case "$1" in *.c|*.i) source="$1";; esac
 	if [ "$1" = "-o" ]; then shift; out="$1"; fi
 	shift
 done
 if [ -n "$out" ]; then
 	if [ -n "$preprocess" ] && [ -n "$source" ]; then /bin/cat "$source" > "$out"
+	elif [ "$MAL_TEST_CAPTURE_COMPILE_SOURCE" = "1" ] && [ -n "$source" ]; then /bin/cat "$source" > "$out"
 	else printf '%s' "$invocation" > "$out"; /bin/chmod +x "$out"
 	fi
 fi
@@ -1694,6 +1695,90 @@ printf '!<arch>\\n' > "$2"
 		ensureNativeArtifacts(context);
 		expect(events.slice(-3)).toEqual([false, true, false]);
 	});
+
+	it("compiles the captured runtime input when source changes after projection", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		try {
+			const environment = { ...fake.env, MAL_TEST_CAPTURE_COMPILE_SOURCE: "1" };
+			const toolchain = inspectToolchain({
+				rootDir: fake.root,
+				rustDir: path.join(runtimeDirectory, "rust"),
+				env: environment,
+				needsCxx: false,
+				platform: "linux",
+			}).toolchain!;
+			const source = path.join(runtimeDirectory, "src/engine.c");
+			const captured = readFileSync(source, "utf8");
+			const compiled: Array<string> = [];
+			const context = resolveNativeBuildContext({
+				toolchain,
+				runtimeDirectory,
+				cacheDirectory: path.join(fake.root, "snapshot-cache"),
+				environment,
+				features: { evalEnabled: false, webPlatformEnabled: false },
+				onCommand: ({ args }) => {
+					if (args.includes("-c")) {
+						compiled.push(args[args.indexOf("-o") + 1]!);
+						writeFileSync(source, "int engine_value = 2;\n");
+					}
+				},
+				onBuildPhase: ({ phase }) => {
+					if (phase === "runtime C object compile")
+						expect(compiled.map((file) => readFileSync(file, "utf8"))).toContain(
+							captured,
+						);
+				},
+			});
+			ensureNativeArtifacts(context);
+			expect(compiled.length).toBeGreaterThan(0);
+		} finally {
+			rmSync(fake.root, { recursive: true, force: true });
+		}
+	});
+
+	it.each(["changed", "restored"] as const)(
+		"rejects %s runtime sources after preprocessing",
+		(mode) => {
+			const fake = createFakeToolchain();
+			const runtimeDirectory = createMinimalRuntime(fake);
+			try {
+				const toolchain = inspectToolchain({
+					rootDir: fake.root,
+					rustDir: path.join(runtimeDirectory, "rust"),
+					env: fake.env,
+					needsCxx: false,
+					platform: "linux",
+				}).toolchain!;
+				const context = resolveNativeBuildContext({
+					toolchain,
+					runtimeDirectory,
+					cacheDirectory: path.join(fake.root, "changing-runtime-cache"),
+					features: { evalEnabled: false, webPlatformEnabled: false },
+					onBuildPhase: ({ phase }) => {
+						if (phase === "runtime C projection") {
+							writeFileSync(
+								path.join(runtimeDirectory, "src/engine.c"),
+								"int engine_value = 2;\n",
+							);
+							if (mode === "restored")
+								writeFileSync(
+									path.join(runtimeDirectory, "src/engine.c"),
+									"int engine_value = 1;\n",
+								);
+						}
+					},
+				});
+				const compiledBefore = compileInvocationCount(fake.logPath);
+				expect(() => ensureNativeArtifacts(context)).toThrow(
+					"Runtime sources changed during preprocessing; no objects were published",
+				);
+				expect(compileInvocationCount(fake.logPath)).toBe(compiledBefore);
+			} finally {
+				rmSync(fake.root, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it("reuses runtime objects whose preprocessed inputs survive a feature flip", () => {
 		const fake = createFakeToolchain();

@@ -36,20 +36,25 @@ import { normalizeRuntimeBuildArgument } from "./native-cache-identity.ts";
 import { runNativeCommand, runNativeCommands } from "./native-command.ts";
 import { ensureRustArtifacts } from "./rust-build.ts";
 import type { RustArtifacts } from "./rust-build.ts";
-import { toolArguments } from "./toolchain.ts";
+import { clangMajorVersion, toolArguments } from "./toolchain.ts";
 
-const RUNTIME_OBJECT_PRODUCER = artifactProducer("runtime-object", 2, "cc");
-const RUNTIME_ARCHIVE_PRODUCER = artifactProducer("runtime-archive", 4, "ar");
+const RUNTIME_OBJECT_PRODUCER = artifactProducer("runtime-object", 3, "cc");
+const RUNTIME_ARCHIVE_PRODUCER = artifactProducer("runtime-archive", 5, "ar");
 
-function runtimeSourceHash(
+function runtimeSourceSnapshot(
 	runtimeDirectory: string,
 	nodeEnabled: boolean,
 	cacheDirectory: string,
-): string {
+): { digest: string; version: string } {
 	const root = path.resolve(runtimeDirectory);
 	const llhttp = path.join(root, "vendor/llhttp");
 	const sqlite = path.join(root, "vendor/sqlite");
-	return hashDirectoryTreesCached(
+	const manifestPath = path.join(
+		cacheDirectory,
+		"source-digests",
+		`runtime-${nodeEnabled ? "node" : "base"}-${artifactDigest(root).slice(0, 16)}.json`,
+	);
+	const { digest } = hashDirectoryTreesCached(
 		{
 			root,
 			directories: [
@@ -63,13 +68,11 @@ function runtimeSourceHash(
 			include: (entry) => /\.(?:c|h|inc)$/.test(entry.name),
 			compareNames: legacyLocaleNameComparator,
 		},
-		path.join(
-			cacheDirectory,
-			"source-digests",
-			`runtime-${nodeEnabled ? "node" : "base"}-${artifactDigest(root).slice(0, 16)}.json`,
-		),
+		manifestPath,
 		"runtime-source-v2",
-	).digest;
+	);
+	// File identities detect edits restored to their old text while projection was running.
+	return { digest, version: artifactDigest(readFileSync(manifestPath)) };
 }
 
 /** Headers that generated application translation units compile against. */
@@ -190,6 +193,7 @@ interface RuntimeLayout {
 	includeArguments: Array<string>;
 	sqliteIncludeArguments: Array<string>;
 	cacheKey: string;
+	sourceVersion: string;
 	compilerWireDigest?: string;
 	compilerNativeDigest?: string;
 	compilerNativeSources: Array<string>;
@@ -280,6 +284,11 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 			? "-DMAL_COMPILER_WIRE=<content>"
 			: normalizeRuntimeBuildArgument(context.runtimeDirectory, flag),
 	);
+	const source = runtimeSourceSnapshot(
+		context.runtimeDirectory,
+		context.features.nodeEnabled,
+		context.cacheDirectory,
+	);
 	const cacheKey = runtimeArtifactKey({
 		compilerWireDigest,
 		compilerNativeDigest,
@@ -296,11 +305,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 			"<object>",
 		],
 		environmentFingerprint: context.environmentFingerprint,
-		sourceHash: runtimeSourceHash(
-			context.runtimeDirectory,
-			context.features.nodeEnabled,
-			context.cacheDirectory,
-		),
+		sourceHash: source.digest,
 		toolchainFingerprint: context.toolchain.fingerprint,
 		target: context.toolchain.target,
 	});
@@ -309,6 +314,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		includeArguments,
 		sqliteIncludeArguments,
 		cacheKey,
+		sourceVersion: source.version,
 		compilerWireDigest,
 		compilerNativeDigest,
 		compilerNativeSources,
@@ -406,6 +412,7 @@ interface RuntimeObject {
 interface ProjectedRuntimeSource {
 	source: RuntimeSource;
 	digest: string;
+	path: string;
 }
 
 function sourceIncludeArguments(
@@ -469,10 +476,10 @@ function projectRuntimeSources(
 			tool: context.toolchain.tools.cc.path,
 			args: toolArguments(context.toolchain.tools.cc, [
 				"-std=c2x",
-				...layout.flags,
+				...runtimeSourceCompileFlags(context, layout, source),
 				...sourceIncludeArguments(layout, source),
 				"-E",
-				"-P",
+				...(compileArgumentsEmitDebugInfo(layout.flags) ? [] : ["-P"]),
 				source.path,
 				"-o",
 				output,
@@ -486,6 +493,7 @@ function projectRuntimeSources(
 	const preludes = new Map<string, PreludeDeclarations>();
 	const projected = outputs.map(({ source, path: output }) => ({
 		source,
+		path: output,
 		digest:
 			source.objectStage === "compiler-overlay-object" && sliced
 				? expandedGeneratedUnitDigest(readFileSync(output, "utf8"), preludes)
@@ -508,8 +516,18 @@ function ensureRuntimeObjects(
 	mkdirSync(directory, { recursive: true });
 	const sources = runtimeSources(context, layout);
 	const projected = projectRuntimeSources(context, layout, sources, directory, verbose);
+	if (
+		runtimeSourceSnapshot(
+			context.runtimeDirectory,
+			context.features.nodeEnabled,
+			context.cacheDirectory,
+		).version !== layout.sourceVersion
+	)
+		throw new Error(
+			"Runtime sources changed during preprocessing; no objects were published",
+		);
 	const results = new Map<string, RuntimeObject>();
-	const pending = projected.flatMap(({ source, digest }) => {
+	const pending = projected.flatMap(({ source, digest, path: projectedPath }) => {
 		const action = objectActionKey(context, layout, source, digest);
 		const cached = readArtifactAction(
 			context.cacheDirectory,
@@ -523,7 +541,7 @@ function ensureRuntimeObjects(
 			return [];
 		}
 		const output = path.join(directory, `${artifactDigest(source.path).slice(0, 12)}.o`);
-		return [{ source, action, output }];
+		return [{ source, action, output, projectedPath }];
 	});
 	const hits = sources.length - pending.length;
 	if (hits > 0) {
@@ -541,14 +559,20 @@ function ensureRuntimeObjects(
 				(left, right) =>
 					statSync(right.source.path).size - statSync(left.source.path).size,
 			)
-			.map(({ source, output }) => ({
+			.map(({ source, output, projectedPath }) => ({
 				tool: context.toolchain.tools.cc.path,
 				args: toolArguments(context.toolchain.tools.cc, [
 					"-std=c2x",
 					...runtimeSourceCompileFlags(context, layout, source),
-					...sourceIncludeArguments(layout, source),
+					// Expansion loses macro provenance, so Clang warns on intentional macro parentheses.
+					...(clangMajorVersion(context.toolchain.tools.cc.version) === undefined
+						? []
+						: ["-Wno-parentheses-equality"]),
+					// Compile the bytes that were keyed, even if a shared checkout changes.
+					"-x",
+					"cpp-output",
 					"-c",
-					source.path,
+					projectedPath,
 					"-o",
 					output,
 				]),

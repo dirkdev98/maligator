@@ -138,6 +138,7 @@ import {
 	analyzeRecordIteration,
 	recordIterationNullishTest,
 } from "./native-record-iteration.ts";
+import { nativeRecordSortOrderFields } from "./native-record-sort.ts";
 import { nativeRegExpLiteralActions } from "./native-regexp-literal.ts";
 import type { NativeRegExpLiteralAction } from "./native-regexp-literal.ts";
 import { nativeInactiveRootMasks, nativeRootMaskWordHex } from "./native-root-masks.ts";
@@ -1072,12 +1073,13 @@ export interface CompiledFunction extends NativeCallCoverage {
 		callbackSymbol?: string;
 		reductionSymbol?: string;
 		sortSymbol?: string;
+		sortMayDecline?: true;
 	}>;
 }
 
 export type DirectCompiledEntries = ReadonlyMap<
 	string,
-	NativeDirectEntryPlan & { readonly leaf?: true }
+	NativeDirectEntryPlan & { readonly leaf?: true; readonly sortMayDecline?: true }
 >;
 
 type NativeRelocationBase =
@@ -5646,6 +5648,7 @@ function renderNumericLeaf(
 	native: NativeFunctionPlan,
 	entry: NativeDirectEntryPlan,
 	onSourceMap?: (ranges: ReadonlyArray<NativeSourceRange>) => void,
+	stringRegisters: ReadonlySet<number> = new Set(),
 ): Array<string> | null {
 	const fn = native.body;
 	const storage = entry.storage;
@@ -5662,11 +5665,31 @@ function renderNumericLeaf(
 		]),
 	);
 	const reps = entry.registerRepresentations;
-	const scalar = (r: number) => ["number", "int32", "boolean"].includes(reps[r]!);
+	const scalar = (r: number) =>
+		stringRegisters.has(r) || ["number", "int32", "boolean"].includes(reps[r]!);
 	const number = (r: number) => `(f64) r${r}`;
 	const expressionStringComparisons = new Map(
 		storage.stringComparisons.map((plan) => [plan.instructionIp, plan]),
 	);
+	const expression = (op: BytecodeInstruction, ip: number): string => {
+		if (op.opcode === "MOVE" && stringRegisters.has(op.dst)) return `r${op.src}`;
+		if (op.opcode === "BINARY" && stringRegisters.has(op.left)) {
+			if (!stringRegisters.has(op.right))
+				throw new Error("String sort comparison lacks matching field operands");
+			return op.operator === "===" || op.operator === "!=="
+				? `${op.operator === "!==" ? "!" : ""}mal_string_equals(r${op.left}, r${op.right})`
+				: `mal_string_compare(r${op.left}, r${op.right}) ${op.operator} 0`;
+		}
+		return renderScalarExpression(
+			op,
+			reps,
+			native.instructions[ip],
+			undefined,
+			"",
+			native.facts?.[ip],
+			expressionStringComparisons.get(ip),
+		);
+	};
 	const expressionIps = new Set(
 		[...leaf.expressionIps, ...leaf.rematerializedConstantIps].filter(
 			(ip) => !unreachable.has(ip) && !elided.has(ip),
@@ -5685,18 +5708,7 @@ function renderNumericLeaf(
 		[...expressionIps].map((ip) => {
 			const op = fn.instructions[ip]!;
 			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
-			return [
-				op.dst,
-				renderScalarExpression(
-					op,
-					reps,
-					native.instructions[ip],
-					undefined,
-					"",
-					native.facts?.[ip],
-					expressionStringComparisons.get(ip),
-				),
-			];
+			return [op.dst, expression(op, ip)];
 		}),
 	);
 	const fallthroughJumps = new Set(leaf.fallthroughJumpIps);
@@ -5753,7 +5765,7 @@ function renderNumericLeaf(
 			case "UNARY":
 			case "MATH_UNARY_NUMBER":
 			case "MATH_BINARY_NUMBER":
-				line = `r${op.dst} = ${renderScalarExpression(op, reps, native.instructions[ip], undefined, "", native.facts?.[ip], expressionStringComparisons.get(ip))};`;
+				line = `r${op.dst} = ${expression(op, ip)};`;
 				break;
 			case "RETURN":
 				line = `return ${number(op.value)};`;
@@ -5774,7 +5786,9 @@ function renderNumericLeaf(
 			declarations.push(`#define r${r} (${expression})`);
 		} else {
 			const initial = definitionInitialized.has(r) ? "" : " = 0";
-			declarations.push(`${cTypeOf(rep)} r${r}${initial};`);
+			declarations.push(
+				`${stringRegisters.has(r) ? "const MalString *" : cTypeOf(rep)} r${r}${initial};`,
+			);
 		}
 	}
 	onSourceMap?.(
@@ -6051,6 +6065,10 @@ function renderCompiledFunction(
 		directEntries: variants.map(({ entry, emitted, leaf, sortSymbol }) => ({
 			...(leaf === undefined ? {} : { leaf }),
 			...(sortSymbol === undefined ? {} : { sortSymbol }),
+			...(sortSymbol !== undefined &&
+			nativeRecordSortOrderFields(native, entry).keys.length > 0
+				? { sortMayDecline: true as const }
+				: {}),
 			...(emitted.sourceMap === undefined ? {} : { sourceMap: emitted.sourceMap }),
 			declarationSymbols: new Set([
 				...emitted.declarationSymbols,
@@ -6151,8 +6169,10 @@ function numericSortKernelEntry(entry: NativeDirectEntryPlan): boolean {
 	);
 }
 
-export function numericSortKernelDeclaration(symbol: string): string {
-	return `void ${symbol}(MalValue *values, MalValue *scratch, f64 *keys, u32 count)`;
+export function numericSortKernelDeclaration(symbol: string, mayDecline = false): string {
+	return mayDecline
+		? `bool ${symbol}(MalValue *values, MalValue *scratch, void *keys, u32 count, u32 string_fields)`
+		: `void ${symbol}(MalValue *values, MalValue *scratch, f64 *keys, u32 count)`;
 }
 
 function numericSortRecordKeys(entry: NativeDirectEntryPlan): ReadonlyArray<number> {
@@ -6206,25 +6226,92 @@ function renderNumericSortKernel(
 		return `\n${numericSortKernelDeclaration(symbol)} {\n    ${body};\n}\n`;
 	}
 	const keys = numericSortRecordKeys(entry);
-	const type = `${symbol}_key`;
-	const compare = `${symbol}_compare`;
-	const arguments_ = [
-		...entry.parameterRepresentations.map(() => "MAL_VALUE_UNDEFINED"),
-		...fields.sources.map(
-			({ parameter, key }) =>
-				`${parameter === 0 ? "left" : "right"}.fields[${keys.indexOf(key)}]`,
-		),
-	];
-	return `\ntypedef struct { f64 fields[${keys.length}]; } ${type};
+	const orderFields = nativeRecordSortOrderFields(native, entry);
+	if (orderFields.keys.length === 0) {
+		const type = `${symbol}_key`;
+		const compare = `${symbol}_compare`;
+		const arguments_ = [
+			...entry.parameterRepresentations.map(() => "MAL_VALUE_UNDEFINED"),
+			...fields.sources.map(
+				({ parameter, key }) =>
+					`${parameter === 0 ? "left" : "right"}.fields[${keys.indexOf(key)}]`,
+			),
+		];
+		return `\ntypedef struct { f64 fields[${keys.length}]; } ${type};
 static_assert(sizeof(${type}) == sizeof(f64) * ${keys.length}, "Record sort keys must stay packed");
 static f64 ${compare}(${type} left, ${type} right) {
     return ${leaf}(${arguments_.join(", ")});
 }
 ${numericSortKernelDeclaration(symbol)} {
-    ${type} *tuples = (${type} *) (void *) keys;
+    ${type} *tuples = (${type} *) keys;
     MAL_LEAF_MERGE_SORT_BODY(${type}, ${compare}, tuples);
 }
 `;
+	}
+	const variants = Array.from({ length: 1 << orderFields.keys.length }, (_, variant) => {
+		const mask = orderFields.keys.reduce(
+			(mask, key, index) => mask | (((variant >> index) & 1) << keys.indexOf(key)),
+			0,
+		);
+		const stringKeys = new Set(keys.filter((_, index) => (mask & (1 << index)) !== 0));
+		const variantLeaf = mask === 0 ? leaf : `${leaf}_strings_${mask}`;
+		const type = `${symbol}_key_${mask}`;
+		const compare = `${symbol}_compare_${mask}`;
+		const kernel = `${symbol}_k${mask}`;
+		const arguments_ = [
+			...entry.parameterRepresentations.map(() => "MAL_VALUE_UNDEFINED"),
+			...fields.sources.map(
+				({ parameter, key }) =>
+					`${parameter === 0 ? "left" : "right"}.fields[${keys.indexOf(key)}].${stringKeys.has(key) ? "string" : "number"}`,
+			),
+		];
+		let worker = "";
+		if (mask !== 0) {
+			const stringRegisters = new Set(
+				[...orderFields.registers].flatMap(([register, field]) =>
+					stringKeys.has(fields.sources[field]!.key) ? [register] : [],
+				),
+			);
+			const body = renderNumericLeaf(
+				nativeVariantContract(native, entry),
+				entry,
+				undefined,
+				stringRegisters,
+			);
+			if (body === null)
+				throw new Error("String record sort requires a bounded numeric leaf");
+			const parameters = [
+				...entry.parameterRepresentations.map(
+					(rep, index) => `${cTypeOf(rep)} r${index}`,
+				),
+				...fields.sources.map(
+					({ key }, index) =>
+						`${stringKeys.has(key) ? "const MalString *" : "f64"} fp${index}`,
+				),
+			];
+			worker = `static f64 ${variantLeaf}(${parameters.join(", ")}) {\n#pragma STDC FP_CONTRACT OFF\n${body.join("\n")}\n}\n`;
+		}
+		return {
+			mask,
+			kernel,
+			source: `\n${worker}typedef struct { MalRecordSortKey fields[${keys.length}]; } ${type};
+static_assert(sizeof(${type}) == sizeof(f64) * ${keys.length}, "Record sort keys must stay packed");
+static f64 ${compare}(${type} left, ${type} right) {
+    return ${variantLeaf}(${arguments_.join(", ")});
+}
+static void ${kernel}(MalValue *values, MalValue *scratch, void *keys, u32 count) {
+    ${type} *tuples = (${type} *) (void *) keys;
+    MAL_LEAF_MERGE_SORT_BODY(${type}, ${compare}, tuples);
+}
+`,
+		};
+	});
+	return `${variants.map(({ source }) => source).join("")}\n${numericSortKernelDeclaration(symbol, true)} {
+    switch (string_fields) {
+${variants.map(({ mask, kernel }) => `        case ${mask}: ${kernel}(values, scratch, keys, count); return true;`).join("\n")}
+        default: return false;
+    }
+}\n`;
 }
 
 /**
@@ -14684,7 +14771,7 @@ class NativeInstructionEmission {
 						? "nullptr"
 						: `(MalString *[]){ ${keys.map((key) => `vm->string_constant_atoms[${this.context.relocation.stringIndex(key)}]`).join(", ")} }`;
 				return [
-					`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${this.context.relocation.functionIndex(numericCallback.functionIndex)}, ${entry.fieldParameters === undefined ? comparator : "nullptr"}, ${entry.leaf ? this.context.relocation.reference(`${comparator}_sort`) : "nullptr"}, ${fieldKeys}, ${keys.length}, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${this.context.relocation.functionIndex(numericCallback.functionIndex)}, ${entry.fieldParameters === undefined ? comparator : "nullptr"}, ${entry.leaf && !entry.sortMayDecline ? this.context.relocation.reference(`${comparator}_sort`) : "nullptr"}, ${entry.sortMayDecline ? this.context.relocation.reference(`${comparator}_sort`) : "nullptr"}, ${fieldKeys}, ${keys.length}, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					this.callPoll(),

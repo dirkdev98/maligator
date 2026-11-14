@@ -169,10 +169,12 @@ an atomic action manifest makes the result visible. Runtime GC stress/verificati
 flags are execution inputs and reuse the same binary. Build-affecting sanitizer, GC,
 feature, backend, optimization, target, and toolchain dimensions get distinct action
 keys. Within those dimensions, each runtime C object is keyed by its actual
-preprocessed input, so a feature change recompiles only translation units whose code
-changed. Feature-specific Rust archives share a serialized Cargo target tree and
-therefore reuse unaffected dependency work. Final products stay statically linked and
-self-contained. Test/program verdicts and benchmark measurements are always executed
+preprocessed input, and compilation consumes that captured input. A runtime source
+change during preprocessing aborts the build before publishing objects, so concurrent
+edits cannot pair a cache key with different compiler input. Feature changes recompile
+only translation units whose code changed. Feature-specific Rust archives share a
+serialized Cargo target tree and therefore reuse unaffected dependency work. Final products
+stay statically linked and self-contained. Test/program verdicts and benchmark measurements are always executed
 and are never cache entries.
 
 Removing `.cache/mal-build` forces project output materialization without discarding

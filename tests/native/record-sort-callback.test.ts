@@ -58,6 +58,22 @@ describe("record sort callback kernels", () => {
 		{ scenario: "override", behavior: "honors replaced sort methods" },
 		{ scenario: "sparse", behavior: "preserves undefined elements and holes" },
 		{ scenario: "strings", behavior: "orders String fields by code units" },
+		{ scenario: "stringKernel", behavior: "sorts String and numeric fields together" },
+		{ scenario: "stringRopes", behavior: "sorts rope String fields" },
+		{ scenario: "stringCodeUnits", behavior: "orders astral and unpaired UTF-16 units" },
+		{ scenario: "stringStable", behavior: "preserves the order of equal String keys" },
+		{ scenario: "stringEquality", behavior: "compares String fields by strict equality" },
+		{ scenario: "stringKinds00", behavior: "sorts two Number order-only fields" },
+		{ scenario: "stringKinds01", behavior: "sorts String then Number order-only fields" },
+		{ scenario: "stringKinds10", behavior: "sorts Number then String order-only fields" },
+		{ scenario: "stringKinds11", behavior: "sorts two String order-only fields" },
+		{ scenario: "stringMixed", behavior: "falls back for mixed field kinds" },
+		{
+			scenario: "stringUncertified",
+			behavior: "retains arithmetic uses of String fields",
+		},
+		{ scenario: "stringGetters", behavior: "retains String getter access" },
+		{ scenario: "stringProxies", behavior: "retains String proxy access" },
 	])("$behavior", ({ scenario }) => {
 		const env = { RECORD_SORT_CASE: scenario };
 		const expected = execFileSync(process.execPath, [fixture], {
@@ -68,7 +84,19 @@ describe("record sort callback kernels", () => {
 			expect(runToStdout(binary, { env })).toBe(expected);
 	});
 
-	it.each(["inPlace", "copy"])("executes the guarded %s record kernel", (scenario) => {
+	it.each([
+		"inPlace",
+		"copy",
+		"stringKernel",
+		"stringRopes",
+		"stringCodeUnits",
+		"stringStable",
+		"stringEquality",
+		"stringKinds00",
+		"stringKinds01",
+		"stringKinds10",
+		"stringKinds11",
+	])("executes the guarded %s record kernel", (scenario) => {
 		const run = spawnSync(pair.compiled, [], {
 			encoding: "utf8",
 			env: { ...process.env, MAL_PERF_STATS: "1", RECORD_SORT_CASE: scenario },
@@ -79,16 +107,34 @@ describe("record sort callback kernels", () => {
 		expect(Number(counter![1])).toBeGreaterThan(0);
 	});
 
-	it.each(["stable", "getters", "collection"])(
-		"keeps records rooted through %s collection and sorting",
+	it.each(["stringMixed", "stringUncertified", "stringGetters", "stringProxies"])(
+		"declines the record kernel for %s",
 		(scenario) => {
-			const env = { ...STRESS_ENV, RECORD_SORT_CASE: scenario };
-			const expected = execFileSync(process.execPath, [fixture], {
+			const run = spawnSync(pair.compiled, [], {
 				encoding: "utf8",
-				env: { ...process.env, RECORD_SORT_CASE: scenario },
+				env: { ...process.env, MAL_PERF_STATS: "1", RECORD_SORT_CASE: scenario },
 			});
-			for (const binary of [pair.compiled, pair.interpreted])
-				expect(runToStdout(binary, { env })).toBe(expected);
+			expect(run.status, run.stderr).toBe(0);
+			const counter = run.stderr.match(/record_sort_kernel_runs=(\d+)/);
+			expect(counter, run.stderr).not.toBeNull();
+			expect(Number(counter![1])).toBe(0);
 		},
 	);
+
+	it.each([
+		"stable",
+		"getters",
+		"collection",
+		"stringRopes",
+		"stringStable",
+		"stringGetters",
+	])("keeps records rooted through %s collection and sorting", (scenario) => {
+		const env = { ...STRESS_ENV, RECORD_SORT_CASE: scenario };
+		const expected = execFileSync(process.execPath, [fixture], {
+			encoding: "utf8",
+			env: { ...process.env, RECORD_SORT_CASE: scenario },
+		});
+		for (const binary of [pair.compiled, pair.interpreted])
+			expect(runToStdout(binary, { env })).toBe(expected);
+	});
 });

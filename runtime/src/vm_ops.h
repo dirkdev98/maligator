@@ -5107,6 +5107,7 @@ static inline MalNumericSortComparison mal_vm_try_numeric_sort_comparison(
 MalCompletion mal_builtin_sort_numeric(
     MalVm *vm, bool copy, bool via_call, i32 function_index,
     MalNumericSortComparator comparator, MalNumericSortKernel kernel,
+    MalRecordSortKernel record_kernel,
     MalString *const *field_keys, u32 field_count, MalValue callee,
     MalValue receiver, const MalValue *args, i32 arg_count);
 
