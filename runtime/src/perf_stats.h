@@ -244,6 +244,8 @@ typedef struct MalPerfStats {
     u64 fixed_data_view_region_views;
     u64 dense_array_number_region_admissions;
     u64 dense_array_integer_region_back_edges;
+    u64 dense_array_region_close_exits;
+    u64 dense_array_integer_region_returns;
     u64 dense_array_number_region_stores;
     u64 loop_invariant_region_admissions;
     u64 loop_invariant_load_misses;

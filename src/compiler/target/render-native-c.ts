@@ -94,6 +94,7 @@ import {
 	numericLoopBuiltinCallView,
 	numericLoopCalleeGuardChains,
 	numericLoopCallMethods,
+	numericLoopFrameCopies,
 	numericLoopHasTerminalStore,
 	numericLoopPassedGuards,
 	numericLoopRegionSuccessors,
@@ -1414,6 +1415,8 @@ const UINT32_RANGE: IntegerRange = { low: 0, high: 2 ** 32 - 1 };
 const ADMITTED_INPUT_RANGE: IntegerRange = { low: -(2 ** 31), high: 2 ** 32 - 1 };
 // A range still growing after this many rounds is an accumulator with no bound.
 const INTEGER_RANGE_ROUNDS = 8;
+// Returns from an Array for-of's doubles copy to its integer copy per loop entry.
+const ARRAY_ITERATION_INTEGER_BOUNCES = 4;
 const DATA_VIEW_INTEGER_RANGES: Readonly<
 	Record<NativeDataViewCall["type"], IntegerRange | undefined>
 > = {
@@ -1480,6 +1483,7 @@ function integralLoopRegisters(
 			register,
 			ADMITTED_INPUT_RANGE,
 		]),
+		...[...pinned].filter(([register]) => !writers.has(register)),
 		...[...writers.keys()]
 			.filter((register) => flow.kinds.get(register) === "number")
 			.map((register): [number, IntegerRange | "unbounded"] => [
@@ -1528,6 +1532,7 @@ function integralLoopRegisters(
 			case "TO_PROPERTY_KEY":
 				return rangeOf(op.key);
 			case "LOAD_PROPERTY":
+			case "ITERATOR_STEP":
 				return elementLoads;
 			case "CALL":
 				return callRanges.has(op) ? callRanges.get(op) : { low: 0, high: 0xffff };
@@ -2116,6 +2121,10 @@ function emitNumericLoopRegion(
 	arrayArithmetic?: "number" | "checked-integer",
 	// Whether restarts continue in the double-arithmetic copy that follows this one.
 	numberRestart = arrayArithmetic === "checked-integer",
+	// The counter of returns from an Array for-of's doubles copy to its integer copy,
+	// whose loop encloses both copies; `<counter>_armed` holds whether the integer copy
+	// restarted into doubles since the last return.
+	bounces?: string,
 ): ReadonlyArray<string> {
 	const builtin = numericLoopRegionBuiltinCalls(source, plan, nativeInstructions);
 	const fn = builtin.fn;
@@ -2178,6 +2187,10 @@ function emitNumericLoopRegion(
 				!foreignCalls.has(ip),
 		),
 	);
+	const frameCopies =
+		order === undefined || plan.kind !== "array-iteration"
+			? new Set<number>()
+			: numericLoopFrameCopies(fn, order, reps);
 	const flow =
 		order === undefined
 			? undefined
@@ -2193,6 +2206,7 @@ function emitNumericLoopRegion(
 					foreignCalls,
 					new Set(plan.globals ?? []),
 					entry,
+					frameCopies,
 				);
 	const callMethods =
 		order === undefined
@@ -2222,6 +2236,10 @@ function emitNumericLoopRegion(
 	// The deferred cursor's index is the iteration state a restart must rewind.
 	const cursor =
 		plan.kind === "array-iteration" ? `__iter_deferred_${plan.initializeIp}` : undefined;
+	// Every other exit of an Array for-of leaves its body for the iterator's close.
+	const stepIp = order.find((ip) => fn.instructions[ip]!.opcode === "ITERATOR_STEP");
+	const doneBranch = stepIp === undefined ? undefined : fn.instructions[stepIp + 1];
+	const doneTarget = doneBranch?.opcode === "JUMP_IF" ? doneBranch.targetIp : undefined;
 	const id = floating ? `__typed_loop_${plan.id}` : `__integer_loop_${plan.id}`;
 	const kindOf = (register: number) => {
 		const kind = flow.kinds.get(register);
@@ -2281,6 +2299,33 @@ function emitNumericLoopRegion(
 					callRanges,
 				)
 			: baseIntegral;
+	// Sums and differences of values the entry and element admission bound stay safe
+	// integers, so the checked-integer copy performs them without overflow checks
+	// instead of relying on the C compiler to prove the same bounds. The entry admits
+	// every input in this range, which holds throughout for one the loop never writes.
+	const loopWrites = new Set(
+		order.flatMap((ip) => vmInstructionWriteRegisters(fn.instructions[ip]!)),
+	);
+	const uncheckedSums =
+		arrayArithmetic === "checked-integer"
+			? integralLoopRegisters(
+					fn,
+					order,
+					flow,
+					plan.inputs,
+					new Map([
+						...pinned,
+						...plan.inputs.flatMap((register): Array<[number, IntegerRange]> =>
+							kindOf(register) === "number" && !loopWrites.has(register)
+								? [[register, ADMITTED_INPUT_RANGE]]
+								: [],
+						),
+					]),
+					ADMITTED_INPUT_RANGE,
+					undefined,
+					callRanges,
+				)
+			: new Set<number>();
 	const integerOnly = [...integerIntegral].filter(
 		(register) => !baseIntegral.has(register),
 	);
@@ -2455,6 +2500,7 @@ function emitNumericLoopRegion(
 	const emitCopy = (
 		arithmetic: "number" | "checked-integer" | undefined,
 		restartInNumbers: boolean,
+		bounceCounter?: string,
 	) =>
 		emitNumericLoopRegion(
 			source,
@@ -2469,6 +2515,7 @@ function emitNumericLoopRegion(
 			poll,
 			arithmetic,
 			restartInNumbers,
+			bounceCounter,
 		);
 	// Integer-heavy Array bodies first try safe-integer locals; an iteration that leaves
 	// them restarts in the doubles copy that follows.
@@ -2481,8 +2528,29 @@ function emitNumericLoopRegion(
 				records.size === 0 &&
 				plan.views.every((view) => view.text !== true && view.lentOnly !== true))) &&
 		numericLoopSupportsCheckedIntegers(fn, plan.id, order)
-	)
-		return [...emitCopy("checked-integer", true), ...emitCopy("number", false)];
+	) {
+		if (plan.kind !== "array-iteration")
+			return [...emitCopy("checked-integer", true), ...emitCopy("number", false)];
+		// One element outside the integer range, such as a leading fraction, would leave
+		// the rest of the loop to doubles, whose conversions back to int32 cost several
+		// times the integer step. After finishing its iteration, the doubles copy returns
+		// to the integer copy when the next element is an int32, a bounded number of times
+		// so that alternating elements cannot make every iteration pay an admission.
+		const counter = `__integer_loop_${plan.id}_bounces`;
+		return [
+			"{",
+			`  u8 ${counter} = ${ARRAY_ITERATION_INTEGER_BOUNCES};`,
+			`  bool ${counter}_armed = false;`,
+			"  for (;;) {",
+			...[
+				...emitCopy("checked-integer", true, counter),
+				...emitCopy("number", false, counter),
+				"break;",
+			].map((line) => `    ${line}`),
+			"  }",
+			"}",
+		];
+	}
 	// An invariant field may hold any Number, so an integer region whose entry declines
 	// one, or whose arithmetic leaves the safe integers, continues in doubles.
 	if (
@@ -2772,6 +2840,12 @@ function emitNumericLoopRegion(
 		`${id}_${mode}${dispatch === undefined ? "" : `_d${dispatch.copy}`}_L${ip}`;
 	// Iterations restart from their saved start, so a guard never resumes mid-iteration.
 	const restart = `{ ${id}_exit = 0; break; }`;
+	// The completed iteration is the new start, so a return leaves like a restart.
+	const bounceExit = plan.exits.length + 1;
+	const bounce =
+		bounces === undefined || !floating
+			? ""
+			: ` if (${id}_peek) { ${id}_peek = false; if (${id}_ci < ${id}_a.count && mal_value_is_int32(${id}_a.elements[${id}_ci])) { ${id}_exit = ${bounceExit}; break; } }`;
 	const reach = (ip: number, from: number, mode: string): string => {
 		if (ip === plan.id)
 			return `${[
@@ -2779,7 +2853,7 @@ function emitNumericLoopRegion(
 				...stored.map((index) => `${slotStart(index)} = ${slot(index)};`),
 			].join(
 				" ",
-			)}${cursor === undefined ? "" : ` ${id}_si = ${id}_ci;`}${arrayArithmetic === "checked-integer" ? " MAL_PERF_COUNT(dense_array_integer_region_back_edges);" : ""} if (mal_gc_poll_requested_in(${id}_isolate)) ${restart} continue;`;
+			)}${cursor === undefined ? "" : ` ${id}_si = ${id}_ci;`}${arrayArithmetic === "checked-integer" ? " MAL_PERF_COUNT(dense_array_integer_region_back_edges);" : ""}${bounce} if (mal_gc_poll_requested_in(${id}_isolate)) ${restart} continue;`;
 		if (innerHeaders.has(ip))
 			return `${position.get(ip)! <= position.get(from)! ? `if (mal_gc_poll_requested_in(${id}_isolate)) { ${id}_exit = ${exitIndex.get(ip)}; break; } ` : ""}goto ${label(mode, ip)};`;
 		const exit = exitIndex.get(ip);
@@ -3039,6 +3113,7 @@ function emitNumericLoopRegion(
 			case "CREATE_BOOLEAN":
 				return `${local(op.dst)} = ${op.value};`;
 			case "MOVE":
+				if (frameCopies.has(ip)) return `r${op.dst} = r${op.src};`;
 				return `${local(op.dst)} = ${integral.has(op.dst) ? local(op.src) : num(op.src)};`;
 			case "TO_PROPERTY_KEY":
 				return `${local(op.dst)} = ${integral.has(op.dst) ? local(op.key) : num(op.key)};`;
@@ -3088,6 +3163,8 @@ function emitNumericLoopRegion(
 					if (expression === null) throw new Error("Invalid numeric loop operator");
 					return `${local(op.dst)} = ${expression};`;
 				}
+				if ((op.operator === "+" || op.operator === "-") && uncheckedSums.has(op.dst))
+					return `${local(op.dst)} = ${left} ${op.operator} ${right};`;
 				switch (op.operator) {
 					case "+":
 						return checked(`mal_safe_integer_add(${left}, ${right}, %DST%)`, op.dst);
@@ -3139,6 +3216,11 @@ function emitNumericLoopRegion(
 											: source;
 					return `${local(op.dst)} = ${expression};`;
 				}
+				if (
+					(op.operator === "increment" || op.operator === "decrement") &&
+					uncheckedSums.has(op.dst)
+				)
+					return `${local(op.dst)} = ${source} ${op.operator === "increment" ? "+" : "-"} 1;`;
 				switch (op.operator) {
 					case "-":
 						return `if (__builtin_expect(${source} == 0, 0)) ${restart} ${local(op.dst)} = -${source};`;
@@ -3238,6 +3320,13 @@ function emitNumericLoopRegion(
 						`    u64 ${id}_si = ${id}_ci;`,
 					]),
 			`    u8 ${id}_exit = 0;`,
+			// Only the first iteration after an integer restart looks for a return.
+			...(bounce === ""
+				? []
+				: [
+						`    bool ${id}_peek = ${bounces}_armed && ${bounces} != 0;`,
+						`    ${bounces}_armed = false;`,
+					]),
 			...(entry.loads.size > 0 || entry.guards.size > 0
 				? ["    MAL_PERF_COUNT(loop_invariant_region_admissions);"]
 				: []),
@@ -3274,6 +3363,8 @@ function emitNumericLoopRegion(
 		lines.push("    }");
 		for (const [index, exit] of plan.exits.entries()) {
 			lines.push(`    if (${id}_exit == ${index + 1}) {`);
+			if (cursor !== undefined && exit.targetIp !== doneTarget)
+				lines.push("      MAL_PERF_COUNT(dense_array_region_close_exits);");
 			for (const register of exit.outputs)
 				lines.push(`      ${materialize(register, local(register))}`);
 			if (cursor !== undefined)
@@ -3290,6 +3381,11 @@ function emitNumericLoopRegion(
 		for (const index of stored)
 			lines.push(`    ${globalSlot(index)} = ${boxSlot(slotStart(index))};`);
 		if (cursor !== undefined) lines.push(`    ${cursor}.index = ${id}_si;`);
+		if (bounce !== "")
+			lines.push(
+				`    if (${id}_exit == ${bounceExit}) { MAL_PERF_COUNT(dense_array_integer_region_returns); ${bounces}--; continue; }`,
+			);
+		else if (bounces !== undefined) lines.push(`    ${bounces}_armed = true;`);
 		// A copy that restarts in doubles ends here, so control leaves it, like a declined
 		// entry, for the doubles copy that follows: a label inside one instruction's code
 		// would keep the function from being split.

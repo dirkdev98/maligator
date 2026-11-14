@@ -166,8 +166,8 @@ static inline bool mal_safe_integer_value_admit(MalValue value, i64 *out) {
 
 /**
  * Admit a loaded element holding a signed or unsigned 32-bit integer, the values
- * ToInt32 and ToUint32 produce. Unlike a wider safe integer, its bounded range lets the
- * C compiler drop the overflow checks of the sums and differences it feeds.
+ * ToInt32 and ToUint32 produce. Unlike a wider safe integer, its bounded range spares
+ * the sums and differences it feeds their overflow checks.
  */
 static inline __attribute__((always_inline)) bool mal_integer_element_admit(
     MalValue value, i64 *out

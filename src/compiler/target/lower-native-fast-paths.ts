@@ -1237,6 +1237,8 @@ export function numberRecordDataflow(
 		readonly loads: ReadonlySet<number>;
 		readonly guards: ReadonlySet<number>;
 	} = { loads: new Set(), guards: new Set() },
+	// Moves a loop region performs on the frame registers themselves.
+	frameCopies: ReadonlySet<number> = new Set(),
 ): NativeNumberRecordDataflow | undefined {
 	const kinds = new Map<number, NativeNumberRecordKind>();
 	const inputs = new Set<number>();
@@ -1351,6 +1353,10 @@ export function numberRecordDataflow(
 			bindings.add(instruction.dst);
 		} else if (instruction.opcode === "GUARD_FUNCTION_INDEX" && entry.guards.has(ip)) {
 			admitted = bindingLoads;
+		} else if (frameCopies.has(ip) && instruction.opcode === "MOVE") {
+			// Like an intrinsic, the copy holds no region value, so nothing inside may read it.
+			admitted = !kinds.has(instruction.dst) && !inputs.has(instruction.dst);
+			intrinsics.add(instruction.dst);
 		} else if (instruction.opcode === "JUMP_IF" && passed.has(instruction.cond)) {
 			admitted = true;
 		} else
@@ -1508,6 +1514,15 @@ export function numberRecordDataflow(
 	};
 }
 
+// Handler state copies open each protected block, so treating them as throwing would
+// keep the state of every enclosing handler live across a loop region's exits.
+const NON_THROWING_OPCODES: ReadonlySet<BytecodeInstruction["opcode"]> = new Set([
+	"MOVE",
+	"CREATE_NUMBER",
+	"CREATE_F64",
+	"CREATE_BOOLEAN",
+]);
+
 function registersLiveAt(
 	fn: BytecodeFunction,
 	body: NativeBodyFacts,
@@ -1527,10 +1542,11 @@ function registersLiveAt(
 				break;
 			}
 			// A throwing instruction may not have written its outputs before the handler runs.
-			const handler = body.handlerTargets[ip];
-			if (handler !== undefined) pending.push(handler);
-			if (body.writes[ip]!.includes(register)) continue;
 			const instruction = fn.instructions[ip]!;
+			const handler = body.handlerTargets[ip];
+			if (handler !== undefined && !NON_THROWING_OPCODES.has(instruction.opcode))
+				pending.push(handler);
+			if (body.writes[ip]!.includes(register)) continue;
 			if (instruction.opcode === "JUMP") pending.push(instruction.targetIp);
 			else {
 				if (instruction.opcode === "JUMP_IF") pending.push(instruction.targetIp);
@@ -1726,6 +1742,8 @@ function typedArrayElementPlan(kind: NativeInstructionPlan["kind"] | undefined):
 }
 
 // Their double lowering converts to int32 or divides, which a safe-integer iteration avoids.
+// Sums, products and counters alone stay in doubles: their overflow checks cost about
+// what the double arithmetic does, and a double element makes the entry pay a restart.
 const INTEGER_LOOP_PROFITABLE_OPERATORS = new Set([
 	"/",
 	"%",
@@ -3678,9 +3696,44 @@ function numericLoopLoadUse(
 		: undefined;
 }
 
+/**
+ * Moves between boxed registers of a value the loop never changes into a register it
+ * never reads, such as the iterator and done flag a for-of's close handler reads. The
+ * region performs them on the frame registers themselves, which then hold what the
+ * original code leaves at every exit. A restart repeats the copies on the same path
+ * before anything can read them.
+ */
+export function numericLoopFrameCopies(
+	fn: BytecodeFunction,
+	order: ReadonlyArray<number>,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+): ReadonlySet<number> {
+	const written = new Set<number>();
+	const read = new Set<number>();
+	for (const ip of order) {
+		const op = fn.instructions[ip]!;
+		for (const register of vmInstructionWriteRegisters(op)) written.add(register);
+		for (const register of vmInstructionReadRegisters(op)) read.add(register);
+	}
+	return new Set(
+		order.filter((ip) => {
+			const op = fn.instructions[ip]!;
+			return (
+				op.opcode === "MOVE" &&
+				!written.has(op.src) &&
+				!read.has(op.dst) &&
+				representations[op.src] === "boxed" &&
+				representations[op.dst] === "boxed"
+			);
+		}),
+	);
+}
+
 function lowerArrayIterationRegion(
 	fn: BytecodeFunction,
 	header: number,
+	// The cursor's step, which only moves precede in the header's block.
+	stepIp: number,
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	body: NativeBodyFacts,
 	// Whether another plan owns `ip`, which the region would perform as `use`.
@@ -3690,7 +3743,7 @@ function lowerArrayIterationRegion(
 	invariantLoadCandidates: ReadonlySet<number>,
 	builtinCallCandidates: ReadonlyMap<number, { readonly callee: number }>,
 ): NativeNumericLoopRegionPlan | undefined {
-	const step = fn.instructions[header]!;
+	const step = fn.instructions[stepIp]!;
 	if (step.opcode !== "ITERATOR_STEP" || conflicts(header, undefined)) return undefined;
 	const loop = numericLoopShape(fn, body, header);
 	if (loop === undefined) return undefined;
@@ -3714,12 +3767,12 @@ function lowerArrayIterationRegion(
 		shape.order.some((ip) => conflicts(ip, use(ip)))
 	)
 		return undefined;
-	const branch = fn.instructions[header + 1];
+	const branch = fn.instructions[stepIp + 1];
 	if (
 		branch?.opcode !== "JUMP_IF" ||
 		branch.cond !== step.doneDst ||
 		shape.members.has(branch.targetIp) ||
-		!shape.members.has(header + 2)
+		!shape.members.has(stepIp + 2)
 	)
 		return undefined;
 	if (
@@ -3754,6 +3807,7 @@ function lowerArrayIterationRegion(
 		builtinCallCandidates,
 	);
 	if (
+		stepIp === header &&
 		recordFlow !== undefined &&
 		recordBuiltinCalls !== undefined &&
 		// The record graph reads its fields through column handles, not layout cells.
@@ -3834,8 +3888,9 @@ function lowerArrayIterationRegion(
 		builtinCallCandidates,
 	);
 	if (records === undefined || builtinCalls === undefined) return undefined;
+	const copies = numericLoopFrameCopies(fn, shape.order, representations);
 	for (const ip of shape.order) {
-		if (ip === header) continue;
+		if (ip === stepIp || copies.has(ip)) continue;
 		const op = fn.instructions[ip]!;
 		if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object)) continue;
 		if (op.opcode === "REQUIRE_COERCIBLE" && records.has(op.src)) continue;
@@ -3863,6 +3918,7 @@ function lowerArrayIterationRegion(
 		undefined,
 		undefined,
 		bindings,
+		copies,
 	);
 	if (flow === undefined) return undefined;
 	const inputs = new Set(flow.inputs);
@@ -3878,7 +3934,12 @@ function lowerArrayIterationRegion(
 		const assigned = flow.assigned.get(targetIp) ?? new Set<number>();
 		for (const register of outputs) {
 			// The step leaves its value undefined once done, which a Number local cannot hold.
-			if (register === step.valueDst || records.has(register)) return undefined;
+			// Every other exit leaves an iteration that stepped to an element.
+			if (
+				records.has(register) ||
+				(register === step.valueDst && targetIp === branch.targetIp)
+			)
+				return undefined;
 			const representation = representations[register];
 			const kind = flow.kinds.get(register);
 			if (
@@ -3966,11 +4027,18 @@ function lowerNumericLoopRegion(
 	builtinCallCandidates: ReadonlyMap<number, { readonly callee: number }>,
 ): NativeNumericLoopRegionPlan | undefined {
 	const first = fn.instructions[header];
-	const cursor = first?.opcode === "ITERATOR_STEP" ? cursorSteps.get(header) : undefined;
+	// A for-of nested in another's body first copies the outer close handler's state.
+	let stepIp = header;
+	while (fn.instructions[stepIp]?.opcode === "MOVE") stepIp++;
+	const cursor =
+		fn.instructions[stepIp]?.opcode === "ITERATOR_STEP"
+			? cursorSteps.get(stepIp)
+			: undefined;
 	if (cursor !== undefined)
 		return lowerArrayIterationRegion(
 			fn,
 			header,
+			stepIp,
 			representations,
 			body,
 			conflicts,

@@ -1050,10 +1050,12 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.fixed_typed_array_region_views[4],
         (unsigned long long) mal_perf_stats.fixed_typed_array_affine_regions,
         (unsigned long long) mal_perf_stats.fixed_typed_array_region_expected_admissions);
-    fprintf(stderr, "[perf-dense-array-region-stats] admissions=%llu element-stores=%llu integer-back-edges=%llu\n",
+    fprintf(stderr, "[perf-dense-array-region-stats] admissions=%llu element-stores=%llu integer-back-edges=%llu close-exits=%llu integer-returns=%llu\n",
         (unsigned long long) mal_perf_stats.dense_array_number_region_admissions,
         (unsigned long long) mal_perf_stats.dense_array_number_region_stores,
-        (unsigned long long) mal_perf_stats.dense_array_integer_region_back_edges);
+        (unsigned long long) mal_perf_stats.dense_array_integer_region_back_edges,
+        (unsigned long long) mal_perf_stats.dense_array_region_close_exits,
+        (unsigned long long) mal_perf_stats.dense_array_integer_region_returns);
     fprintf(stderr, "[perf-typed-array-stride-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.fixed_typed_array_stride_regions);
     fprintf(stderr, "[perf-loop-invariant-stats] admissions=%llu load-misses=%llu builtin-call-admissions=%llu\n",

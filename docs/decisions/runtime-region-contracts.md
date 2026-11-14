@@ -165,11 +165,20 @@ resume the original iteration. Replacing a heap value preserves the deletion
 barrier. Borrowed storage ends at a poll, after publishing the completed iteration.
 Integer-heavy Array bodies, indexed or iterated by for-of, first try safe-integer
 locals. Entry inputs and loaded elements fit the signed or unsigned 32-bit range;
-intermediate arithmetic remains exact safe integers other than negative zero. Input
-guards and the element range also expose known bounds to the C compiler, which drops
-overflow checks they make redundant. A failed guard restores the current iteration's
+intermediate arithmetic remains exact safe integers other than negative zero. Sums
+and differences that the input guards and the element range bound stay safe, so the
+region omits their overflow checks. A failed guard restores the current iteration's
 start and enters the Number body. Arithmetic that could restart after a store
-excludes this specialization.
+excludes this specialization. After its first iteration following such a restart,
+an Array for-of's Number body returns to safe-integer locals when the next element
+is an int32, a bounded number of times per loop entry.
+
+An Array for-of region also leaves through break, return and labeled jumps. Such an
+exit publishes the deferred cursor and resumes the original close, which looks
+`return` up again, so a protocol replaced before or during the loop is observed
+exactly. The region performs moves of loop-invariant values into the close
+handler's registers on the frame registers; the original code repeats them before
+anything that can reach the handler.
 
 DataView accessor calls join fixed storage regions as byte views. Admission uses the
 conditions that make `byteLength` the intrinsic getter: the watched-prototype
