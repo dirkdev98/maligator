@@ -864,7 +864,9 @@ function int32(values: FastNumbers, register: number): string {
 	return constant === undefined
 		? values.isInt32(register)
 			? `((i32) ${number(values, register)})`
-			: `mal_ops_number_value_to_i32(__fast_r${register})`
+			: values.cachedNumbers.has(register)
+				? `mal_ops_number_to_i32(${number(values, register)})`
+				: `mal_ops_number_value_to_i32(__fast_r${register})`
 		: `((i32) ${constant | 0})`;
 }
 

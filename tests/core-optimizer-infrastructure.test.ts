@@ -4,7 +4,10 @@ import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.
 import { CoreAnalysisScratchPool } from "../src/compiler/core/core-analysis-scratch.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
-import { CORE_CONTROL_FLOW_PASSES } from "../src/compiler/core/core-control-flow-passes.ts";
+import {
+	CORE_CONTROL_FLOW_PASSES,
+	CORE_LOOP_VERSIONING_PASSES,
+} from "../src/compiler/core/core-control-flow-passes.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { CORE_FUNCTION_HAS_BACKEDGES } from "../src/compiler/core/core-function-features.ts";
 import {
@@ -923,6 +926,7 @@ describe("Core optimizer infrastructure", () => {
 	it("gates every analysis-backed O2 pass before requesting analyses", () => {
 		for (const pass of [
 			...CORE_CONTROL_FLOW_PASSES,
+			...CORE_LOOP_VERSIONING_PASSES,
 			...CORE_PROOF_PASSES,
 			...CORE_MEMORY_PASSES,
 		]) {
@@ -944,7 +948,7 @@ describe("Core optimizer infrastructure", () => {
 				true,
 			);
 		}
-		for (const pass of CORE_CONTROL_FLOW_PASSES) {
+		for (const pass of [...CORE_CONTROL_FLOW_PASSES, ...CORE_LOOP_VERSIONING_PASSES]) {
 			expect(pass.budget).toBe(CORE_O2_PASS_BUDGETS["cfg-loop-licm-pre"]);
 		}
 		for (const pass of CORE_PROOF_PASSES) {

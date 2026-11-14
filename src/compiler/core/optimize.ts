@@ -7,6 +7,7 @@ import {
 } from "./core-capture-liveness.ts";
 import { deferCapturedAllocations } from "./core-captured-materialization.ts";
 import type { ConstructedCoreCompilation, CoreCompilation } from "./core-compilation.ts";
+import { CORE_LOOP_VERSIONING_PASSES } from "./core-control-flow-passes.ts";
 import {
 	emptyCoreCrossCallTransformResult,
 	runCoreCrossCallTransforms,
@@ -457,6 +458,47 @@ export function optimizeCore(
 		},
 		CORE_OPTIMIZATION_OWNER.memoryVersions,
 	);
+	// Finish closure and receiver rewrites before copying their generic paths.
+	const versionedInputs: Array<CoreLocalOptimizationPlanInput> = [];
+	if (ablatedFamily !== "cfg-loop-licm-pre") {
+		const callers = new Set([
+			...crossCall.localPlanInputs.map((input) => input.function),
+			...captureInputs.map((input) => input.function),
+			...callbackInputs.map((input) => input.function),
+			...memoryCallers,
+			...finalCallbackChanges.map((change) => change.function),
+		]);
+		for (const functionId of callers) {
+			const scheduler = new CoreFunctionPassScheduler(
+				compilation.program,
+				compilation.context,
+				analyses,
+				reportBuilder,
+				functionId,
+				{
+					verification: options.verification,
+					featureIndex: functionResources.featureIndex,
+				},
+			);
+			const changes = scheduler.runComponent("control-flow", CORE_LOOP_VERSIONING_PASSES);
+			if (changes.length === 0) continue;
+			versionedInputs.push(
+				new CoreFunctionOptimizationSession(
+					compilation.program,
+					compilation.context,
+					reportBuilder,
+					functionResources,
+					functionId,
+					{
+						verification: options.verification,
+						benchmarkAblation: ablatedPassFamily,
+						crossCallSession: "guarded-loop-versioning",
+					},
+				).prepareCrossCall(CoreEditor.open(compilation.program, functionId), changes)()
+					.localPlanInput,
+			);
+		}
+	}
 	const finalFlow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
 		scope: "program",
 	});
@@ -475,6 +517,7 @@ export function optimizeCore(
 	}
 	for (const input of captureInputs) finalLocalPlanInputs.set(input.function, input);
 	for (const input of callbackInputs) finalLocalPlanInputs.set(input.function, input);
+	for (const input of versionedInputs) finalLocalPlanInputs.set(input.function, input);
 	for (const functionId of new Set([
 		...memoryCallers,
 		...finalCallbackChanges.map((change) => change.function),

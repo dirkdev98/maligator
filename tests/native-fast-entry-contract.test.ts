@@ -2282,3 +2282,20 @@ it("initializes the cached Number on both producing arms", () => {
 	);
 	expect(text).toContain("mal_number_is_truthy(__fast_n2)");
 });
+
+it("uses the cached Number directly when a scalar chain feeds a bitwise operation", () => {
+	const fn = body([
+		{ opcode: "BINARY", dst: 2, left: 0, right: 1, operator: "+" },
+		{ opcode: "CREATE_NUMBER", dst: 3, value: 65535 },
+		{ opcode: "BINARY", dst: 4, left: 2, right: 3, operator: "&" },
+		{ opcode: "RETURN", value: 4 },
+	]);
+	const text = fastEntry(fn, undefined, true, undefined, [
+		{
+			inputKindMasks: [COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_NUMBER],
+			resultKindMasks: [COMPILER_VALUE_KIND_NUMBER],
+		},
+	])!.join("\n");
+	expect(text).toMatch(/mal_ops_number_to_i32\(__fast_n\d+\)/);
+	expect(text).not.toContain("mal_ops_number_value_to_i32(");
+});

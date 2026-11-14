@@ -18,6 +18,7 @@ import {
 	CORE_KNOWN_OWN_DATA_ATTRIBUTE,
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
 } from "../src/compiler/core/core-internal-attributes.ts";
+import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { buildCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-selection.ts";
 import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
@@ -1122,7 +1123,12 @@ describe("bounded Core cross-call transforms", () => {
 				},
 			},
 		);
-		const operations = coreOperations(coreFunctionNamed(optimized!, "hot")!);
+		const fn = coreFunctionNamed(optimized!, "hot")!;
+		const operations = coreOperations(fn);
+		const loopBlocks = new Set(
+			buildCoreControlFlow(optimized!, fn.id).loops.flatMap((loop) => [...loop.blocks]),
+		);
+		const loopOperations = operations.filter(({ block }) => loopBlocks.has(block));
 		const layoutGuard = operations.find(
 			({ opcode }) => opcode === "guardBaseConstructorLayout",
 		);
@@ -1130,10 +1136,10 @@ describe("bounded Core cross-call transforms", () => {
 		expect(layoutGuard?.attributes.methodStringIndex).toEqual(expect.any(Number));
 		expect(layoutGuard?.attributes.methodFunctionIndex).toEqual(expect.any(Number));
 		expect(
-			operations.filter(({ opcode }) => opcode === "guardFunctionIndex"),
+			loopOperations.filter(({ opcode }) => opcode === "guardFunctionIndex"),
 		).toHaveLength(1);
 		expect(
-			operations.filter(
+			loopOperations.filter(
 				({ opcode, attributes }) =>
 					opcode === "loadPropertyStatic" &&
 					attributes.stringIndex === layoutGuard?.attributes.methodStringIndex,
@@ -2432,10 +2438,18 @@ describe("bounded Core cross-call transforms", () => {
 				},
 			);
 
-			const operations = coreOperations(coreFunctionNamed(optimized!, "run")!);
-			expect(
-				operations.filter(({ opcode }) => opcode === "guardFunctionIndex"),
-			).toHaveLength(3);
+			const fn = coreFunctionNamed(optimized!, "run")!;
+			const operations = coreOperations(fn);
+			const guardCounts = buildCoreControlFlow(optimized!, fn.id)
+				.loops.map(
+					(loop) =>
+						operations.filter(
+							({ block, opcode }) =>
+								loop.blocks.has(block) && opcode === "guardFunctionIndex",
+						).length,
+				)
+				.filter((count) => count > 0);
+			expect(Math.max(...guardCounts)).toBe(3);
 			expect(
 				operations.some(
 					({ opcode, attributes }) =>

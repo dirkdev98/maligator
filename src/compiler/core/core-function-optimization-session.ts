@@ -46,6 +46,7 @@ export type CoreCrossCallSession =
 	| number
 	| "normal-result-facts"
 	| "capture-liveness"
+	| "guarded-loop-versioning"
 	| "builtin-callback-effects";
 
 export interface CoreFunctionOptimizationSessionOptions {

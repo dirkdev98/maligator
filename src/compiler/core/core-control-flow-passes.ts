@@ -2,6 +2,7 @@ import { compilerIntegerRangeIsInt32 } from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { CORE_FUNCTION_HAS_BACKEDGES } from "./core-function-features.ts";
+import { versionGuardedNumericLoops } from "./core-guarded-loop-versioning.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
@@ -1597,6 +1598,10 @@ export const CORE_CONTROL_FLOW_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	selectLoopScalarRepresentations,
 	foldPathComparisons,
 	reduceBoundedRemainders,
+];
+
+export const CORE_LOOP_VERSIONING_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	versionGuardedNumericLoops,
 ];
 
 export const CORE_LATE_REPRESENTATION_PASSES: ReadonlyArray<CoreFunctionPass> = [

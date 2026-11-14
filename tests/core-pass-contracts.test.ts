@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { CORE_CONTROL_FLOW_PASSES } from "../src/compiler/core/core-control-flow-passes.ts";
+import {
+	CORE_CONTROL_FLOW_PASSES,
+	CORE_LOOP_VERSIONING_PASSES,
+} from "../src/compiler/core/core-control-flow-passes.ts";
 import { CORE_LOCAL_CANONICALIZATION_PASSES } from "../src/compiler/core/core-local-passes.ts";
 import {
 	CORE_MEMORY_PASSES,
@@ -15,6 +18,7 @@ describe("Core pass contracts", () => {
 			...CORE_LOCAL_CANONICALIZATION_PASSES,
 			...CORE_PROOF_PASSES,
 			...CORE_CONTROL_FLOW_PASSES,
+			...CORE_LOOP_VERSIONING_PASSES,
 			...CORE_MEMORY_PASSES,
 		].map((pass) => pass.name);
 

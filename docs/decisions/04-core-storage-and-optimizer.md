@@ -316,6 +316,18 @@ The generic semantic path remains in canonical Core and stays valid if the plan 
 ignored. Target lowering receives the sealed program and plan, not the analysis
 manager, and may not rerun Core analysis or rediscover optimization policy.
 
+Guarded numeric loop versioning runs on changed callers after cross-call rewriting.
+A generic call's completion can widen an otherwise numeric recurrence to boxed
+arithmetic, even when the call sits behind an inlined fast path. Versioning keeps
+that completion in a generic loop copy. A failed guard enters the copy at the
+corresponding operation, carrying live SSA values through block parameters. Reads
+and calls already completed in the iteration are not repeated. Number checks after
+unknown reads and calls keep coercion and string concatenation in the generic copy;
+boxing happens on bailout edges. Loop-invariant guards select the version before
+the loop. Invariant binding loops retain the native backend's entry guards instead.
+The pass bounds copied bodies, numeric checks, and live parameters, and creates at
+most one generic loop copy per function.
+
 ### Permanent measurements
 
 Compiler phase measurement uses these non-overlapping fields:
