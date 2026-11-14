@@ -1,7 +1,153 @@
 function assignFresh(source) {
 	return Object.assign({}, source);
 }
+function assignLiteral(value) {
+	const target = {};
+	const returned = Object.assign(target, { first: value & 31, second: (value + 1) & 31 });
+	return [returned === target, target, returned];
+}
+function hasOwn(source, key) {
+	return Object.hasOwn(source, key);
+}
 const scenarios = {
+	literalSetterMutation() {
+		const original = Object.assign;
+		const events = [];
+		Object.defineProperty(Object.prototype, "first", {
+			configurable: true,
+			set(value) {
+				events.push(value);
+				Object.assign = (_target, source) => ({ replaced: source.second });
+				globalThis.__mal_collect_garbage?.();
+			},
+		});
+		try {
+			return [assignLiteral(7), assignLiteral(11), events];
+		} finally {
+			Object.assign = original;
+			delete Object.prototype.first;
+		}
+	},
+	assignReplacedBeforeFirst() {
+		const original = Object.assign;
+		Object.assign = (target, source) => ({ replaced: source, target });
+		try {
+			return [assignFresh({ first: 5 }), assignLiteral(7)];
+		} finally {
+			Object.assign = original;
+		}
+	},
+	assignReplacedAfterWarmup() {
+		const warm = [assignFresh({ first: 3 }), assignLiteral(5)];
+		const original = Object.assign;
+		Object.assign = (target, source) => ({ replaced: source, target });
+		try {
+			return [warm, assignFresh({ first: 7 }), assignLiteral(11)];
+		} finally {
+			Object.assign = original;
+		}
+	},
+	assignArgumentMutation() {
+		const original = Object.assign;
+		let calls = 0;
+		function argument() {
+			Object.assign = () => {
+				calls++;
+				return { replaced: true };
+			};
+			return 13;
+		}
+		function copy() {
+			return Object.assign({}, { first: argument() });
+		}
+		try {
+			return [copy(), copy(), calls];
+		} finally {
+			Object.assign = original;
+		}
+	},
+	assignGetterMutation() {
+		const warm = [assignFresh({ first: 3 }), assignLiteral(5)];
+		const descriptor = Object.getOwnPropertyDescriptor(Object, "assign");
+		let reads = 0;
+		Object.defineProperty(Object, "assign", {
+			configurable: true,
+			get() {
+				reads++;
+				return (target, source) => ({ replaced: source, target });
+			},
+		});
+		try {
+			return [warm, assignFresh({ first: 7 }), assignLiteral(11), reads];
+		} finally {
+			Object.defineProperty(Object, "assign", descriptor);
+		}
+	},
+	assignSourceGetterMutation() {
+		const original = Object.assign;
+		const source = {
+			get first() {
+				globalThis.__mal_collect_garbage?.();
+				Object.assign = () => ({ replaced: true });
+				return 17;
+			},
+		};
+		try {
+			return [assignFresh(source), assignFresh(source)];
+		} finally {
+			Object.assign = original;
+		}
+	},
+	namespaceReplacedAfterWarmup() {
+		const warm = [
+			assignFresh({ first: 3 }),
+			assignLiteral(5),
+			hasOwn({ first: 3 }, "first"),
+		];
+		const original = Object;
+		globalThis.Object = {
+			assign: (target, source) => ({ replaced: source, target }),
+			hasOwn: () => "replaced",
+		};
+		try {
+			return [warm, assignFresh({ first: 7 }), assignLiteral(11), hasOwn({}, "first")];
+		} finally {
+			globalThis.Object = original;
+		}
+	},
+	hasOwnReplacedBeforeFirst() {
+		const original = Object.hasOwn;
+		Object.hasOwn = () => "replaced";
+		try {
+			return hasOwn({ first: 3 }, "first");
+		} finally {
+			Object.hasOwn = original;
+		}
+	},
+	hasOwnReplacedAfterWarmup() {
+		const warm = hasOwn({ first: 3 }, "first");
+		const original = Object.hasOwn;
+		Object.hasOwn = () => "replaced";
+		try {
+			return [warm, hasOwn({}, "first")];
+		} finally {
+			Object.hasOwn = original;
+		}
+	},
+	hasOwnKeyMutation() {
+		const original = Object.hasOwn;
+		const key = {
+			[Symbol.toPrimitive]() {
+				Object.hasOwn = () => "replaced";
+				return "first";
+			},
+		};
+		try {
+			return [hasOwn({ first: 3 }, key), hasOwn({}, key)];
+		} finally {
+			Object.hasOwn = original;
+		}
+	},
 	freshCopies() {
 		const events = [],
 			token = Symbol("token"),

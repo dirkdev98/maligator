@@ -3139,6 +3139,25 @@ describe("primitive operation results", () => {
 		expect(mutable.some((operation) => operation.opcode === "call")).toBe(true);
 	});
 
+	it("guards a mutable Object.hasOwn namespace call and retains its loaded twin", () => {
+		const output = inspect("Object.hasOwn(x, 'field')", false).core;
+		expect(
+			output.filter(
+				(operation) =>
+					operation.opcode === "guardSemanticEpoch" &&
+					operation.attributes.family === "primordial-bindings",
+			),
+		).toHaveLength(1);
+		expect(
+			output.some(
+				(operation) =>
+					operation.opcode === "callKnown" &&
+					operation.attributes.operation === "Object.hasOwn",
+			),
+		).toBe(true);
+		expect(output.some((operation) => operation.opcode === "call")).toBe(true);
+	});
+
 	it("limits output and search work before producing a constant", () => {
 		const receiver = { kind: "string", value: "abc" } as const;
 		expect(

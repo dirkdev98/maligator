@@ -1418,10 +1418,22 @@ intrinsics and the known operations of the locked lowering, and the loaded calls
 as the generic twin. A copied load follows nothing that can run JavaScript or store a
 property. A known call resolves its builtin when it runs, so only a Math kernel on
 Numbers, which resolves nothing, may follow such code in the copy. Runs cover Math
-and the Number parsers, predicates and conversions, whose results are primitives.
-Object-producing calls and constructions keep the guarded forms that snapshot, column
-and typed array regions consume, and a loop a numeric region can take keeps that
-region's entry speculation.
+and the Number parsers, predicates and conversions, `Object.hasOwn`, and
+`Object.assign`. Fresh object allocations can stay inside a copied run, letting
+`Object.assign` reach the same private-source and fresh-target lowering as locked
+calls. Other object-producing calls and constructions keep the guarded forms that
+snapshot, column and typed array regions consume. A loop that admits a numeric region
+keeps that region's entry speculation.
+
+Strict single-realm `Object.assign` sites outside those runs check the same monotonic
+epoch after evaluating their arguments. An intact epoch proves that their earlier
+direct global and method lookups captured the intrinsic. A private literal source with primitive
+fields becomes throwing stores, or an unobserved fresh target becomes one allocating
+assign copy. The original loaded call remains the fallback, so argument evaluation
+that patches a binding still calls the method captured before those effects. Literal
+field evaluations stay before the branch; only the unobserved allocation moves into
+the fallback. Copy and store specialization requires strict functions and disabled
+realms.
 
 Canonical function comparisons use the inventory's object identity, independently
 of native callback sharing. This folds repeated references across effects while

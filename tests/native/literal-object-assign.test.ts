@@ -78,6 +78,22 @@ describe("literal Object.assign", () => {
 	});
 	it.each([
 		...scenarios,
+		[
+			"literalSetterMutation",
+			"finishes the captured assign when an earlier setter patches it",
+		],
+		["assignReplacedBeforeFirst", "observes assign replaced before the first call"],
+		["assignReplacedAfterWarmup", "observes assign replaced after the first call"],
+		["assignArgumentMutation", "calls the method captured before argument evaluation"],
+		["assignGetterMutation", "observes assign replaced by a getter"],
+		[
+			"assignSourceGetterMutation",
+			"finishes the captured copy after a source getter patches assign",
+		],
+		["namespaceReplacedAfterWarmup", "observes the replaced global Object binding"],
+		["hasOwnReplacedBeforeFirst", "observes hasOwn replaced before the first call"],
+		["hasOwnReplacedAfterWarmup", "observes hasOwn replaced after the first call"],
+		["hasOwnKeyMutation", "finishes hasOwn after key conversion patches its binding"],
 		["objectPrototypeSetter", "invokes a setter added to Object.prototype"],
 		["freshSetterAfterWarmup", "observes a new inherited setter on a fresh target"],
 		[
@@ -121,5 +137,22 @@ describe("literal Object.assign", () => {
 			expect(runToStdout(binary, { env: { LITERAL_ASSIGN_CASE: "mutable" } })).toBe(
 				expected("mutable"),
 			);
+	});
+	it("observes foreign values and replaced foreign builtins with realms enabled", () => {
+		const realmFixture = "tests/local/mutable-object-guards-realms.mjs";
+		const realms = buildBackendPairFromOneProgramImage({
+			fixture: realmFixture,
+			name: "mutable-object-guards-realms",
+			outDir,
+			config: resolveBuildConfig({
+				engine: { primordials: "mutable", realms: true, eval: true },
+				surface: { node: true },
+			}),
+		});
+		const oracle = execFileSync(process.execPath, [realmFixture], { encoding: "utf8" });
+		for (const binary of [realms.compiled, realms.interpreted]) {
+			expect(runToStdout(binary)).toBe(oracle);
+			expect(runToStdout(binary, { env: STRESS_ENV })).toBe(oracle);
+		}
 	});
 });

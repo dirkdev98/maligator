@@ -74,6 +74,7 @@ import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 const NAMESPACES: ReadonlySet<CompilerIntrinsic> = new Set<CompilerIntrinsic>([
 	"Math",
 	"Number",
+	"Object",
 ]);
 
 /** Global functions a run calls directly. */
@@ -88,10 +89,9 @@ const FUNCTIONS: ReadonlySet<CompilerIntrinsic> = new Set<CompilerIntrinsic>([
 ]);
 
 /*
- * Operations with primitive results that no later region recognizes by its loaded
- * callee. Object-producing calls such as `Object.entries` or `Array.from` and
- * constructions keep their guarded form, which entry snapshots, record columns and
- * typed array regions consume.
+ * Operations whose known-call form has a Core consumer. Object.assign can shed
+ * private allocations; Object.entries, Array.from and constructions keep the loaded
+ * callees that entry snapshots, record columns and typed array regions consume.
  */
 const OPERATIONS: ReadonlySet<string> = new Set([
 	"parseInt",
@@ -105,6 +105,8 @@ const OPERATIONS: ReadonlySet<string> = new Set([
 	"Number.isFinite",
 	"Number.isInteger",
 	"Number.isSafeInteger",
+	"Object.hasOwn",
+	"Object.assign",
 ]);
 
 /** Global functions a string span region consumes as numeric parsers of a span. */
@@ -136,6 +138,8 @@ const MATH_NUMBER_KERNELS: ReadonlySet<string> = new Set([
 
 /** Instructions a twin copies, besides the loads and calls it replaces. */
 const COPYABLE_OPCODES: ReadonlySet<string> = new Set([
+	"createObject",
+	"createObjectShaped",
 	"createNumber",
 	"createF64",
 	"createString",

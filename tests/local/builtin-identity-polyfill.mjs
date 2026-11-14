@@ -91,8 +91,10 @@ function lookups(map, set, keys) {
 	return total;
 }
 
+// Capturing the method keeps this runtime merge test independent of namespace-call lowering.
+const assign = Object.assign;
 function assignRow(index) {
-	const row = Object.assign({}, { id: index, revision: index & 31, label: "row" });
+	const row = assign({}, { id: index, revision: index & 31, label: "row" });
 	return row.revision + row.label.length;
 }
 

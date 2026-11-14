@@ -90,4 +90,71 @@ describe("literal Object.assign lowering", () => {
 		);
 		expect(output.structure.genericCalls).toBeGreaterThan(0);
 	});
+	it("guards mutable literal stores and retains their loaded call", () => {
+		const output = inspect(
+			"const out={}; return Object.assign(out, {revision:value&31});",
+			{ locked: false },
+		);
+		expect(
+			output.core.filter(
+				(operation) =>
+					operation.opcode === "guardSemanticEpoch" &&
+					operation.attributes.family === "primordial-bindings",
+			),
+		).toHaveLength(1);
+		expect(
+			output.core.some((operation) => operation.opcode === "storePropertyStatic"),
+		).toBe(true);
+		expect(output.structure.genericCalls).toBeGreaterThan(0);
+	});
+	it("guards a mutable fresh copy and retains its loaded call", () => {
+		const output = inspect("return Object.assign({}, value);", { locked: false });
+		expect(
+			output.core.filter(
+				(operation) =>
+					operation.opcode === "guardSemanticEpoch" &&
+					operation.attributes.family === "primordial-bindings",
+			),
+		).toHaveLength(1);
+		expect(
+			output.core.some(
+				(operation) =>
+					operation.opcode === "copyDataProperties" &&
+					operation.attributes.copyMode === "assign",
+			),
+		).toBe(true);
+		expect(output.structure.genericCalls).toBeGreaterThan(0);
+	});
+	it("shares one namespace guard with a mutable literal copy on primitive inputs", () => {
+		const output = inspect("const out={}; return Object.assign(out, {revision:3});", {
+			locked: false,
+		});
+		expect(
+			output.core.filter(
+				(operation) =>
+					operation.opcode === "guardSemanticEpoch" &&
+					operation.attributes.family === "primordial-bindings",
+			),
+		).toHaveLength(1);
+		expect(
+			output.core.some((operation) => operation.opcode === "storePropertyStatic"),
+		).toBe(true);
+		expect(
+			output.core.some(
+				(operation) =>
+					operation.opcode === "callKnown" &&
+					operation.attributes.operation === "Object.assign",
+			),
+		).toBe(false);
+	});
+	it("keeps realm-enabled mutable copies on their original call", () => {
+		const output = inspect("return Object.assign({}, value);", {
+			locked: false,
+			realms: true,
+		});
+		expect(
+			output.core.some((operation) => operation.opcode === "copyDataProperties"),
+		).toBe(false);
+		expect(output.structure.genericCalls).toBeGreaterThan(0);
+	});
 });

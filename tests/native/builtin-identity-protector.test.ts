@@ -77,8 +77,7 @@ for (const mode of ["locked", "mutable"] as const) {
 			expect(counter(stderr, "entry_pair_hits")).toBeGreaterThanOrEqual(10 * loops);
 			// Each settle round aggregates two intrinsic promises.
 			expect(counter(stderr, "all_typed_admissions")).toBeGreaterThanOrEqual(loops);
-			// Locked builds call charCodeAt as a known operation and store literal
-			// Object.assign sources field by field instead.
+			// Locked charCodeAt calls use a known operation instead of guarded dispatch.
 			if (mode === "locked") return;
 			// Each round merges one literal source despite the Object.prototype polyfill.
 			expect(counter(stderr, "merge_shaped_hits")).toBeGreaterThanOrEqual(loops);

@@ -1,14 +1,21 @@
 import { CoreEditor } from "./core-editor.ts";
 import { removeUnsharedProof } from "./core-effect-proof-edits.ts";
+import { splitGuardedCall } from "./core-function-prototype-call.ts";
 import type { CoreInstructionId } from "./core-ir.ts";
 import { literalDefinition } from "./core-literal-graph.ts";
-import { knownObjectAssignOperands } from "./core-literal-object-assign.ts";
+import {
+	guardableObjectAssignOperands,
+	knownObjectAssignOperands,
+} from "./core-literal-object-assign.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
-function freshAssign(fn: CoreFunctionStore, instruction: CoreInstructionId) {
-	const operands = knownObjectAssignOperands(fn, instruction);
+function freshAssign(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	operands: ReturnType<typeof knownObjectAssignOperands>,
+) {
 	if (operands === undefined) return undefined;
 	const allocation = literalDefinition(fn, operands.target);
 	if (
@@ -36,7 +43,12 @@ function freshAssign(fn: CoreFunctionStore, instruction: CoreInstructionId) {
 		use = fn.kernel.useNext(use)
 	) {
 		const user = fn.kernel.useInstruction(use);
-		if (user === instruction ? fn.kernel.useOperand(use) !== 1 : !after.has(user))
+		if (
+			user === instruction
+				? fn.kernel.useOperand(use) !==
+					(fn.instructionOpcodeName(instruction) === "call" ? 2 : 1)
+				: !after.has(user)
+		)
 			return undefined;
 	}
 	return { ...operands, allocation };
@@ -46,29 +58,61 @@ function freshAssign(fn: CoreFunctionStore, instruction: CoreInstructionId) {
 export const lowerFreshObjectCopies: CoreFunctionPass = {
 	name: "lower-fresh-object-copies",
 	stage: "finalize",
-	requiredFunctionOpcodesAny: ["mergeDataProperties", "callKnown"],
+	requiredFunctionOpcodesAny: ["mergeDataProperties", "callKnown", "call"],
 	candidates: {
 		dependencies: ["body"],
-		opcodes: ["createObject", "callKnown"],
+		opcodes: ["createObject", "callKnown", "call"],
 	},
 	requiredAnalyses: [],
 	wakesOn: ["body", "cfg"],
-	changes: { cfg: false, calls: true, facts: true, representations: false },
+	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
 		if (context.remainingEdits < 2) return undefined;
 		const fn = context.program.function(context.item.function);
 		const world = context.compilationContext.facts.world;
 		for (const allocation of context.instructions()) {
-			if (fn.instructionOpcodeName(allocation) === "callKnown") {
+			if (fn.instructionOpcodeName(allocation) === "call") {
 				if (
 					!fn.metadata.strict ||
-					world.primordialPolicy !== "locked" ||
+					world.primordialPolicy !== "mutable" ||
 					world.realms ||
-					context.remainingEdits < 3
+					context.remainingEdits < 20
 				)
 					continue;
-				const fresh = freshAssign(fn, allocation);
+				const fresh = freshAssign(
+					fn,
+					allocation,
+					guardableObjectAssignOperands(context.program, fn, allocation),
+				);
+				if (fresh === undefined || fn.kernel.valueUseCount(fresh.target) !== 1) continue;
+				const editor = CoreEditor.open(context.program, fn.id);
+				const block = fn.instructionBlock(allocation);
+				const split = splitGuardedCall(fn, editor, allocation);
+				const holds = split.append(block, "guardSemanticEpoch", [], {
+					family: "primordial-bindings",
+				});
+				const direct = split.test(holds);
+				editor.moveInstruction(fresh.allocation, split.fallback, allocation);
+				const copy = editor.appendInstruction(
+					direct,
+					"copyDataProperties",
+					[fresh.source],
+					{
+						attributes: { copyMode: "assign" },
+						sourcePosition: fn.instructionSourcePosition(allocation),
+					},
+				).outputs[0]!;
+				split.finish(direct, copy);
+				return editor.commit();
+			}
+			if (fn.instructionOpcodeName(allocation) === "callKnown") {
+				if (!fn.metadata.strict || world.realms || context.remainingEdits < 3) continue;
+				const fresh = freshAssign(
+					fn,
+					allocation,
+					knownObjectAssignOperands(fn, allocation, world),
+				);
 				if (
 					fresh === undefined ||
 					context.remainingEdits < fn.kernel.valueUseCount(fresh.target) + 3

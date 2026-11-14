@@ -365,6 +365,7 @@ export function coreGuardableCall(
 }
 
 interface GuardedCallSplit {
+	readonly fallback: CoreBlockId;
 	readonly append: (
 		destination: CoreBlockId,
 		opcode: string,
@@ -379,12 +380,12 @@ interface GuardedCallSplit {
 	readonly instructionsIntroduced: () => number;
 }
 
-/*
+/**
  * Moves the call into a fallback block and the rest of its block into a join; each
  * `test` passes control onward only while its condition holds, so the original call
  * still runs, with its own errors, whenever one fails.
  */
-function splitGuardedCall(
+export function splitGuardedCall(
 	fn: CoreFunctionStore,
 	editor: CoreEditor,
 	site: CoreInstructionId,
@@ -449,6 +450,7 @@ function splitGuardedCall(
 	let instructions = 0;
 	let current = block;
 	return {
+		fallback,
 		append: (destination, opcode, inputs, attributes = {}) => {
 			instructions++;
 			return editor.appendInstruction(destination, opcode, inputs, {
