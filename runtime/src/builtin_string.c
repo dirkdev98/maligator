@@ -192,6 +192,16 @@ static bool mal_builtin_string_segments_equal(
     const MalStringSegment *left, usize left_offset,
     const MalStringSegment *right, usize right_offset, usize length
 ) {
+    // Search needles are mostly a few units long, where a libc memcmp call costs more
+    // than the comparison itself.
+    if (left->latin1 && right->latin1 && length <= 16) {
+        const u8 *a = left->latin1_units + left_offset;
+        const u8 *b = right->latin1_units + right_offset;
+        for (usize i = 0; i < length; i++) {
+            if (a[i] != b[i]) return false;
+        }
+        return true;
+    }
     if (left->latin1 == right->latin1) {
         const void *a = left->latin1
             ? (const void *) (left->latin1_units + left_offset)

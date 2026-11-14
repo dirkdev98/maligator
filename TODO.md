@@ -323,12 +323,13 @@ contracts or investigates costs still visible after the string follow-ups.
       fallbacks and 44 dictionary-table lookups, three quarters of them misses.
       `run --profile=compiler` on the benchmark lists the leading sites.
 
-- [ ] Give common builtins on unproven receivers a direct path. Against Node 26 on
-      short header strings: `indexOf` 2.6x, `startsWith` 2.2x, `replace` 2.3x and
-      `includes` 1.8x, which take the primitive-method probe out of line and the generic
-      native call; `startsWith`, `endsWith` and `replace` have unique names and could
-      join the guarded builtin calls like `trim`, while `indexOf` and `includes` need a
-      receiver-kind guard. Also measured: `RegExp#test` on a reused RegExp 1.7x (the
+- [ ] Cut the per-call cost of common string builtins on unproven receivers. Against
+      Node 26 on short header strings: `indexOf` 2.6x, `startsWith` 2.2x, `replace` 2.3x
+      and `includes` 1.8x. Guarded builtin calls for the four search methods (like
+      `trim`) did not help and slowed UTF-16 loops by 7-9%: a profile puts 35-47% in
+      the search kernel and 10% in the primitive-method lookup
+      (`mal_vm_property_try_load_static_remaining`), while the generic call itself is
+      cheap. Also measured: `RegExp#test` on a reused RegExp 1.7x (the
       canonical receiver check and the matcher's FFI call), `slice().trim()` 3.4x,
       template literals with numbers 1.1x (each number still allocates a string, and
       joining the parts is about half of the template's cost), escaping closures
