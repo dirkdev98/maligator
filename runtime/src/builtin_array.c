@@ -1279,7 +1279,32 @@ bool mal_builtin_array_from_is_realm_own(const MalVm *vm, MalValue callee, MalVa
         receiver == vm->intrinsics[MAL_INTRINSIC_ARRAY_CONSTRUCTOR];
 }
 
+/**
+ * A short Array whose iteration nothing can observe, copied into one literal-sized
+ * Array: the Array iterator yields each index in order, and a hole reads as undefined
+ * while the prototype chain holds no elements.
+ */
+static bool mal_builtin_array_spread_small(MalVm *vm, MalValue source, MalValue *out) {
+    if (!mal_value_is_array_object(source) || !mal_vm_array_elements_intact(vm)) return false;
+    const MalArrayObject *array = mal_value_to_array_object(source);
+    if (array->dense_deopted || array->length > MAL_ARRAY_INLINE_CAPACITY_MAX) return false;
+    MalDeferredValuesCursor cursor;
+    if (!mal_vm_deferred_array_values_begin(vm, source, &cursor)) return false;
+    MalValue items[MAL_ARRAY_INLINE_CAPACITY_MAX];
+    for (u32 index = 0; index < array->length; index++) {
+        MalValue value = index < array->dense_count
+            ? array->elements[index] : mal_value_new_array_hole();
+        items[index] = mal_value_is_array_hole(value) ? mal_value_new_undefined() : value;
+    }
+    MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]);
+    *out = mal_value_from_array_object(
+        mal_array_object_new_from_values(&vm->heap, prototype, items, array->length));
+    return true;
+}
+
 MalValue mal_builtin_array_from_iterable(MalVm *vm, MalValue source) {
+    MalValue small;
+    if (mal_builtin_array_spread_small(vm, source, &small)) return small;
     MalValue roots[4] = {
         source,
         mal_value_new_undefined(),

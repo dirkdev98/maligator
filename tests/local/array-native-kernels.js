@@ -409,6 +409,32 @@ async function main() {
 			!(0 in inheritedSlice) &&
 			inheritedSlice[1] === "proto",
 	);
+	const spreadHoles = [...[, 1, , 2]];
+	check(
+		"short spreads read holes as undefined",
+		spreadHoles.length === 4 && 0 in spreadHoles && spreadHoles[0] === undefined,
+	);
+	const fourteen = Array.from({ length: 14 }, (_, index) => index);
+	const fifteen = Array.from({ length: 15 }, (_, index) => index);
+	check(
+		"short spreads copy every element",
+		[...fourteen].join() === fourteen.join() &&
+			[...fifteen].join() === fifteen.join() &&
+			[...[]].length === 0,
+	);
+	const ownIterator = [1, 2];
+	ownIterator[Symbol.iterator] = function* () {
+		yield "own";
+	};
+	check("short spreads honor an own iterator", [...ownIterator].join() === "own");
+	Array.prototype[0] = "inherited";
+	const spreadInherited = [...[, 2]];
+	delete Array.prototype[0];
+	check("short spreads read inherited elements", spreadInherited[0] === "inherited");
+	check(
+		"short spreads create plain Arrays",
+		Object.getPrototypeOf([...Sub.from(short)]) === Array.prototype,
+	);
 	check("concat", [1, 2].concat([3, 4], 5).join() === "1,2,3,4,5");
 	const concatenatedHole = [0].concat([, 2]);
 	check(
