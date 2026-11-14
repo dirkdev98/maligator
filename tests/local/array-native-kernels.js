@@ -13,7 +13,255 @@ function throws(error, fn) {
 	}
 }
 
+function concatenate(receiver, ...items) {
+	return Reflect.apply(Array.prototype.concat, receiver, items);
+}
+
+function checkConcat() {
+	const shared = { label: "birch" };
+	const receiverHoles = [, shared, ,];
+	const argumentHoles = [, shared];
+	const holes = concatenate(receiverHoles, argumentHoles);
+	check(
+		"concat preserves receiver and argument holes",
+		holes.length === receiverHoles.length + argumentHoles.length &&
+			!(0 in holes) &&
+			!(2 in holes) &&
+			!(3 in holes) &&
+			holes[1] === shared &&
+			holes[4] === shared,
+	);
+	const refilled = [1, 2];
+	delete refilled[0];
+	refilled[0] = shared;
+	const refilledCopy = concatenate(refilled, [3]);
+	check(
+		"concat copies refilled dense holes as present values",
+		Object.hasOwn(refilledCopy, 0) && refilledCopy[0] === shared,
+	);
+	const nonspread = [1, 2];
+	nonspread[Symbol.isConcatSpreadable] = false;
+	const nonspreadArgument = concatenate([0], nonspread);
+	check(
+		"concat appends an explicitly nonspreadable Array argument",
+		nonspreadArgument.length === 2 && nonspreadArgument[1] === nonspread,
+	);
+	const nonspreadReceiver = concatenate(nonspread, [3]);
+	check(
+		"concat appends an explicitly nonspreadable Array receiver",
+		nonspreadReceiver.length === 2 &&
+			nonspreadReceiver[0] === nonspread &&
+			nonspreadReceiver[1] === 3,
+	);
+	const spreadable = { 1: shared, length: 3, [Symbol.isConcatSpreadable]: true };
+	const spreadableCopy = concatenate([0], spreadable);
+	check(
+		"concat spreads an opted-in array-like while preserving its holes",
+		spreadableCopy.length === 4 &&
+			!(1 in spreadableCopy) &&
+			spreadableCopy[2] === shared &&
+			!(3 in spreadableCopy),
+	);
+	const boxed = Array.prototype.concat.call("ab", [1]);
+	check(
+		"concat boxes a primitive receiver without spreading its characters",
+		boxed.length === 2 &&
+			typeof boxed[0] === "object" &&
+			Object.getPrototypeOf(boxed[0]) === String.prototype &&
+			boxed[0].valueOf() === "ab" &&
+			boxed[1] === 1,
+	);
+	const symbol = Symbol("concat-element");
+	const mixed = concatenate([shared], undefined, null, true, 9, "ab", symbol, 1n, shared);
+	check(
+		"concat appends primitives and ordinary objects without coercion",
+		mixed.length === 9 &&
+			mixed[0] === shared &&
+			mixed[1] === undefined &&
+			mixed[2] === null &&
+			mixed[3] === true &&
+			mixed[4] === 9 &&
+			mixed[5] === "ab" &&
+			mixed[6] === symbol &&
+			mixed[7] === 1n &&
+			mixed[8] === shared,
+	);
+	const dense = [shared, 2, 3, 4];
+	const primitiveArguments = concatenate(
+		dense,
+		undefined,
+		null,
+		true,
+		9,
+		"ab",
+		symbol,
+		1n,
+	);
+	check(
+		"concat appends primitive arguments to clean dense Arrays",
+		primitiveArguments.length === dense.length + 7 &&
+			primitiveArguments[0] === shared &&
+			primitiveArguments[4] === undefined &&
+			primitiveArguments[5] === null &&
+			primitiveArguments[6] === true &&
+			primitiveArguments[7] === 9 &&
+			primitiveArguments[8] === "ab" &&
+			primitiveArguments[9] === symbol &&
+			primitiveArguments[10] === 1n,
+	);
+	const noArguments = concatenate(dense);
+	check(
+		"concat without arguments returns a fresh shallow copy",
+		noArguments !== dense &&
+			noArguments.length === dense.length &&
+			noArguments[0] === shared,
+	);
+	const copied = concatenate([], dense);
+	copied[1] = 8;
+	check(
+		"concat clones a sole dense source into a fresh Array",
+		copied !== dense &&
+			copied[0] === shared &&
+			copied.length === dense.length &&
+			dense[1] === 2 &&
+			Object.getPrototypeOf(copied) === Array.prototype,
+	);
+	for (const segments of [4, 20]) {
+		const sources = [];
+		for (let index = 1; index < segments; index++) sources.push(dense);
+		const result = concatenate(dense, ...sources);
+		check(
+			`concat copies ${segments * dense.length} dense elements`,
+			result.length === dense.length * segments &&
+				result.every(
+					(value, index) =>
+						Object.hasOwn(result, index) && value === dense[index % dense.length],
+				),
+		);
+	}
+	const named = [shared];
+	named.label = "cedar";
+	named[Symbol("unrelated")] = true;
+	check(
+		"concat preserves default spreading for Arrays with unrelated own keys",
+		concatenate(named, [2])[0] === shared && concatenate([0], named)[1] === shared,
+	);
+	const unreadConstructor = [shared];
+	Object.defineProperty(unreadConstructor, "constructor", {
+		get() {
+			throw new Error("argument constructor must not be read");
+		},
+	});
+	check(
+		"concat selects species only from the receiver",
+		concatenate([0], unreadConstructor)[1] === shared,
+	);
+	let speciesCalls = 0;
+	class ConcatResult extends Array {}
+	class ConcatSource extends Array {
+		static get [Symbol.species]() {
+			speciesCalls++;
+			return ConcatResult;
+		}
+	}
+	const speciesResult = concatenate(new ConcatSource(shared, 2), [3]);
+	check(
+		"concat constructs an Array subclass species once",
+		speciesCalls === 1 &&
+			speciesResult instanceof ConcatResult &&
+			speciesResult.length === 3 &&
+			speciesResult[0] === shared &&
+			speciesResult[2] === 3,
+	);
+	const events = [];
+	const speciesReceiver = [1];
+	speciesReceiver.constructor = {
+		get [Symbol.species]() {
+			events.push("species");
+			speciesReceiver[0] = 7;
+			return Array;
+		},
+	};
+	const effectfulArgument = [2];
+	Object.defineProperty(effectfulArgument, Symbol.isConcatSpreadable, {
+		get() {
+			events.push("spread");
+			speciesReceiver[0] = 9;
+			return true;
+		},
+	});
+	const ordered = concatenate(speciesReceiver, effectfulArgument);
+	check(
+		"concat selects species before copying and reads later spreadability afterward",
+		ordered[0] === 7 &&
+			ordered[1] === 2 &&
+			speciesReceiver[0] === 9 &&
+			events.join() === "species,spread",
+	);
+	Object.defineProperty(Array.prototype, Symbol.isConcatSpreadable, {
+		configurable: true,
+		writable: true,
+		value: false,
+	});
+	let protectedReceiver;
+	let protectedArgument;
+	try {
+		protectedReceiver = concatenate(dense, [5]);
+		const optedIn = [0];
+		optedIn[Symbol.isConcatSpreadable] = true;
+		protectedArgument = concatenate(optedIn, dense);
+	} finally {
+		delete Array.prototype[Symbol.isConcatSpreadable];
+	}
+	check(
+		"concat observes inherited nonspreadability on receiver and arguments",
+		protectedReceiver.length === 2 &&
+			protectedReceiver[0] === dense &&
+			protectedReceiver[1][0] === 5 &&
+			protectedArgument.length === 2 &&
+			protectedArgument[0] === 0 &&
+			protectedArgument[1] === dense,
+	);
+	const originalSpecies = Object.getOwnPropertyDescriptor(Array, Symbol.species);
+	let patchedSpeciesResult;
+	Object.defineProperty(Array, Symbol.species, {
+		configurable: true,
+		get() {
+			return ConcatResult;
+		},
+	});
+	try {
+		patchedSpeciesResult = concatenate(dense, [5]);
+	} finally {
+		Object.defineProperty(Array, Symbol.species, originalSpecies);
+	}
+	check(
+		"concat observes a replaced intrinsic species getter",
+		patchedSpeciesResult instanceof ConcatResult && patchedSpeciesResult[0] === shared,
+	);
+	const originalConstructor = Object.getOwnPropertyDescriptor(
+		Array.prototype,
+		"constructor",
+	);
+	let patchedConstructorResult;
+	Object.defineProperty(Array.prototype, "constructor", {
+		configurable: true,
+		value: { [Symbol.species]: ConcatResult },
+	});
+	try {
+		patchedConstructorResult = concatenate(dense, [5]);
+	} finally {
+		Object.defineProperty(Array.prototype, "constructor", originalConstructor);
+	}
+	check(
+		"concat observes a replaced prototype constructor",
+		patchedConstructorResult instanceof ConcatResult &&
+			patchedConstructorResult[0] === shared,
+	);
+}
+
 async function main() {
+	checkConcat();
 	const holes = new Array(3);
 	const constructed = Array(1, 2, 3);
 	check(

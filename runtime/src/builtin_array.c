@@ -2764,7 +2764,112 @@ static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const Ma
     return result;
 }
 
-static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+/** The caller holds the prototype protectors, so only own spreadability can differ. */
+static inline __attribute__((always_inline)) MalArrayObject *mal_builtin_array_concat_source(
+    MalVm *vm, MalValue value, MalObject *prototype
+) {
+    if (!mal_value_is_array_object(value)) return nullptr;
+    MalArrayObject *array = mal_value_to_array_object(value);
+    // Exact Arrays embed their object storage, including after named-property transitions.
+    if (array->dense_deopted || array->object_storage.prototype != prototype ||
+        array->length > array->dense_count) {
+        return nullptr;
+    }
+    // An empty shape and no public overflow prove that no own symbol can run a getter.
+    if ((array->object.shape->inline_count != 0 ||
+         (array->object_storage.overflow != nullptr && !array->object.overflow_private_only)) &&
+        mal_object_get_own(&array->object, mal_intrinsic_symbol_key(
+            vm, MAL_INTRINSIC_SYMBOL_IS_CONCAT_SPREADABLE)).present) {
+        return nullptr;
+    }
+    if (array->dense_maybe_holey) {
+        for (u32 index = 0; index < array->length; index++) {
+            if (mal_value_is_array_hole(array->elements[index])) return nullptr;
+        }
+    }
+    return array;
+}
+
+/**
+ * These sources cannot call user code: species is default, Arrays spread their
+ * dense own values, and primitives append unchanged. Validate every source before
+ * allocating so no observable read is reordered across a getter or species call.
+ */
+static bool mal_builtin_array_concat_dense(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue *out
+) {
+    if (!mal_vm_watched_methods_intact(vm) || !mal_vm_array_elements_intact(vm)) {
+        return false;
+    }
+    MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]);
+    MalArrayObject *receiver = mal_builtin_array_concat_source(vm, this_value, prototype);
+    if (receiver == nullptr) return false;
+    // The protector preserves the intrinsic constructor and species getter. Only
+    // an own constructor can override them on this exact current-realm Array.
+    if ((receiver->object.shape->inline_count != 0 ||
+         (receiver->object_storage.overflow != nullptr && !receiver->object.overflow_private_only)) &&
+        mal_object_get_own(&receiver->object,
+            mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_CONSTRUCTOR)).present) {
+        return false;
+    }
+    u32 count = receiver->length;
+    for (i32 i = 0; i < arg_count; i++) {
+        u32 length = 1;
+        if (mal_value_is_object(args[i])) {
+            MalArrayObject *array = mal_builtin_array_concat_source(vm, args[i], prototype);
+            if (array == nullptr) return false;
+            length = array->length;
+        }
+        if (length > UINT32_MAX - count) return false;
+        count += length;
+    }
+
+    // Cloning one segment avoids a second traversal and the temporary value vector.
+    if (arg_count == 0 ||
+        (arg_count == 1 && mal_value_is_array_object(args[0]) &&
+         (receiver->length == 0 || mal_value_to_array_object(args[0])->length == 0))) {
+        MalArrayObject *source = receiver->length == 0 && arg_count == 1
+            ? mal_value_to_array_object(args[0]) : receiver;
+        *out = mal_value_from_array_object(mal_array_object_new_from_values(
+            &vm->heap, prototype, source->elements, count));
+        return true;
+    }
+
+    MalArrayObject *result = count <= MAL_ARRAY_INLINE_CAPACITY_MAX
+        ? mal_array_object_new_with_length(&vm->heap, prototype, count)
+        : mal_array_object_new_reserved(&vm->heap, prototype, count);
+    u32 offset = 0;
+    for (i32 i = -1; i < arg_count; i++) {
+        MalValue source = i < 0 ? this_value : args[i];
+        const MalValue *values = &source;
+        u32 length = 1;
+        if (mal_value_is_array_object(source)) {
+            MalArrayObject *array = mal_value_to_array_object(source);
+            values = array->elements;
+            length = array->length;
+        }
+#if MAL_PERF_STATS
+        bool built = mal_array_object_dense_build_values(result, offset, values, length);
+        assert(built);
+#else
+        for (u32 index = 0; index < length; index++) {
+            result->elements[offset + index] = values[index];
+            mal_gc_card(&result->object.header, values[index]);
+        }
+#endif
+        offset += length;
+    }
+    // No safepoint occurs while copying; publish only the initialized dense region.
+    result->dense_count = count;
+    result->length = count;
+    *out = mal_value_from_array_object(result);
+    return true;
+}
+
+// Keep generic property calls and floating-point loop state out of the dense entry frame.
+static __attribute__((noinline)) MalValue mal_builtin_array_concat_generic(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count
+) {
     // Intentionally generic: O = ToObject(this), which is just the first concat
     // source (i == -1); a primitive receiver becomes a non-spreadable wrapper.
     if (!mal_builtin_array_to_object(vm, &this_value)) {
@@ -2866,6 +2971,12 @@ static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const M
         return mal_value_new_undefined();
     }
     return result;
+}
+
+static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalValue dense;
+    if (mal_builtin_array_concat_dense(vm, this_value, args, arg_count, &dense)) return dense;
+    return mal_builtin_array_concat_generic(vm, this_value, args, arg_count);
 }
 
 static bool mal_builtin_array_join_remaining_primitives(
