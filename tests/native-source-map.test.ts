@@ -73,7 +73,7 @@ describe("emitted C source mapping", () => {
 			result.mapping.ranges
 				.filter((range) => range.origins.some((origin) => origin.line === line))
 				.map((range) => lines.slice(range.startLine - 1, range.endLine).join("\n"));
-		expect(bodies(2).some((body) => body.includes("goto __full;"))).toBe(true);
+		expect(bodies(2).some((body) => /^\s*goto __full;$/m.test(body))).toBe(true);
 		expect(
 			result.mapping.ranges.some(
 				(range) =>
