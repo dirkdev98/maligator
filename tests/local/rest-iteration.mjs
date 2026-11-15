@@ -8,6 +8,72 @@ function sum(base, ...values) {
 	return total;
 }
 
+function subtract(base, ...values) {
+	let total = base;
+	for (const value of values) total -= value;
+	return total;
+}
+
+function multiply(base, ...values) {
+	let total = base;
+	for (const value of values) total *= value;
+	return total;
+}
+
+function divide(base, ...values) {
+	let total = base;
+	for (const value of values) total /= value;
+	return total;
+}
+
+function remainder(base, ...values) {
+	let total = base;
+	for (const value of values) total %= value;
+	return total;
+}
+
+function exponentiate(base, ...values) {
+	let total = base;
+	for (const value of values) total **= value;
+	return total;
+}
+
+function bitAnd(base, ...values) {
+	let total = base;
+	for (const value of values) total &= value;
+	return total;
+}
+
+function bitOr(base, ...values) {
+	let total = base;
+	for (const value of values) total |= value;
+	return total;
+}
+
+function bitXor(base, ...values) {
+	let total = base;
+	for (const value of values) total ^= value;
+	return total;
+}
+
+function shiftLeft(base, ...values) {
+	let total = base;
+	for (const value of values) total <<= value;
+	return total;
+}
+
+function shiftRight(base, ...values) {
+	let total = base;
+	for (const value of values) total >>= value;
+	return total;
+}
+
+function shiftUnsigned(base, ...values) {
+	let total = base;
+	for (const value of values) total >>>= value;
+	return total;
+}
+
 function churn() {
 	for (let index = 0; index < 80; index++) {
 		const item = { values: [index, index + 1] };
@@ -112,6 +178,87 @@ switch (scenario) {
 		check(Object.is(sum(-0, -0), -0));
 		check(sum(0, Infinity) === Infinity);
 		break;
+	case "arithmetic":
+		check(subtract(30, 2, 3, 4, 5) === 16);
+		check(subtract(30, 2, 3, 4, 5, 6) === 10);
+		check(subtract(1e16, 1e16, 1) === -1);
+		check(subtract(9) === 9 && subtract() === undefined);
+		check(Object.is(subtract(-0, 0), -0));
+		check(Number.isNaN(subtract(Infinity, Infinity)));
+		check(multiply(2, 3, 4, 5, 6) === 720);
+		check(multiply(2, 3, 4, 5, 6, 7) === 5040);
+		check(multiply(9) === 9 && multiply() === undefined);
+		check(Object.is(multiply(0, -1), -0));
+		check(Number.isNaN(multiply(1e308, 1e308, 0)));
+		check(multiply(2, Infinity) === Infinity);
+		break;
+	case "numeric operators": {
+		const seed = {};
+		for (const reducer of [
+			divide,
+			remainder,
+			exponentiate,
+			bitAnd,
+			bitOr,
+			bitXor,
+			shiftLeft,
+			shiftRight,
+			shiftUnsigned,
+		]) {
+			check(reducer(3.5) === 3.5 && reducer(seed) === seed && reducer() === undefined);
+		}
+		check(divide(100, 2, 5) === 10);
+		check(divide(1, 0) === Infinity && Number.isNaN(divide(0, 0)));
+		check(Object.is(divide(-0, 1), -0));
+		check(remainder(-13, 5, 2) === -1);
+		check(Object.is(remainder(-4, 2), -0));
+		check(exponentiate(2, 3, 2) === 64);
+		check(exponentiate(NaN, 0) === 1 && Number.isNaN(exponentiate(1, Infinity)));
+		check(exponentiate(-0, -3) === -Infinity);
+		check(bitAnd(-1, 4294967303, 3) === 3);
+		check(bitOr(4294967301, 8, 2) === 15);
+		check(bitXor(4294967301, 3, 2) === 4);
+		check(shiftLeft(2147483648, 1) === 0 && shiftLeft(-1, 33) === -2);
+		check(shiftRight(-2147483648, 33) === -1073741824);
+		check(shiftUnsigned(-1, 1, 1) === 1073741823);
+		check(shiftUnsigned(4294967296, 0) === 0 && shiftUnsigned(1, -1) === 0);
+		check(divide(100n, 2n, 5n) === 10n);
+		check(remainder(13n, 5n, 2n) === 1n);
+		check(exponentiate(2n, 3n, 2n) === 64n);
+		check(bitAnd(15n, 7n, 3n) === 3n && shiftLeft(3n, 2n) === 12n);
+		break;
+	}
+	case "arithmetic coercion": {
+		const emptySeed = {};
+		check(subtract(emptySeed) === emptySeed && multiply(emptySeed) === emptySeed);
+		check(subtract(20n, 3n, 2n) === 15n);
+		check(multiply(2n, 3n, 5n) === 30n);
+		check(subtract("20", "3", "2") === 15);
+		check(multiply("2", "3", "5") === 30);
+		for (const reducer of [subtract, multiply]) {
+			const hints = [];
+			const value = {
+				[Symbol.toPrimitive](hint) {
+					hints.push(hint);
+					churn();
+					return 5;
+				},
+			};
+			const result = reducer(100, 2, value, 3);
+			check(result === (reducer === subtract ? 90 : 3000));
+			check(hints.join(",") === "number");
+			for (const invalid of [Symbol("invalid"), 3n]) {
+				let threw = false;
+				try {
+					reducer(1, 2, invalid);
+				} catch (error) {
+					threw = error instanceof TypeError;
+				}
+				check(threw);
+			}
+		}
+		break;
+	}
 	case "coercion": {
 		let calls = 0;
 		const value = {

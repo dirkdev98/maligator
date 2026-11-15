@@ -53,6 +53,12 @@ describe("private rest iteration", () => {
 	});
 	it.each([
 		["numbers", "preserves empty rest and IEEE Number arithmetic"],
+		["arithmetic", "preserves subtraction and multiplication order and boundaries"],
+		[
+			"numeric operators",
+			"preserves arithmetic and bitwise Number conversion boundaries",
+		],
+		["arithmetic coercion", "coerces subtraction and multiplication operands once"],
 		["coercion", "coerces each value once in iteration order"],
 		["throw", "propagates coercion and mixed BigInt exceptions"],
 		["gc", "retains future rest objects through collection"],

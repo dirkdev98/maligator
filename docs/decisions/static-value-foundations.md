@@ -1381,9 +1381,10 @@ rooted until the function exits, including across coercion, callbacks and collec
 The same proof applies with realms enabled because the private Array belongs to the
 executing realm and the protocol protector covers mutations in every realm.
 
-Small private rest sums check the protocol and arity, then admit each unrolled
-step only for Number inputs. These steps cannot call user code or throw, so they
-need neither a materialized iterator nor an iterator close. Longer lists and other
+Small private rest numeric reductions preserve accumulator order, check the
+protocol and arity, then admit each unrolled step only for Number inputs. These
+steps cannot call user code or throw, so they need neither a materialized iterator
+nor an iterator close. Longer lists and other
 types retain the original loop, including coercion, BigInt and abrupt close
 behavior. Native frameless entries admit a bounded pure prefix independently of
 the retained body. A loop or a path that cannot return from the prefix restarts in

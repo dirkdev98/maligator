@@ -143,16 +143,22 @@ it.each([
 	expect(core.some((op) => op.opcode === "loadDynamicArgument")).toBe(true);
 });
 
-it("keeps a small numeric rest sum behind input and protocol checks", () => {
-	const { core, c } = inspect(iterate, { locked: false, realms: true });
-	expect(
-		core.some(
-			(op) => op.opcode === "typeofCompare" && op.attributes.expected === "number",
-		),
-	).toBe(true);
-	expect(core.some((op) => op.opcode === "iteratorClose")).toBe(true);
-	expect(c.source).toContain("_try(");
-});
+it.each(["+", "-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>", ">>>"])(
+	"keeps a small numeric rest %s reduction behind input and protocol checks",
+	(operator) => {
+		const { core, c } = inspect(
+			`let total=base;for(const value of values)total ${operator}=value;return total;`,
+			{ locked: false, realms: true },
+		);
+		expect(
+			core.some(
+				(op) => op.opcode === "typeofCompare" && op.attributes.expected === "number",
+			),
+		).toBe(true);
+		expect(core.some((op) => op.opcode === "iteratorClose")).toBe(true);
+		expect(c.source).toContain("_try(");
+	},
+);
 
 it.each([
 	"globalThis.tick();let total=base;for(const value of values)total+=value;return total;",

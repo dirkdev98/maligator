@@ -284,6 +284,19 @@ export const lowerPrivateRestIteration: CoreFunctionPass = {
 };
 
 interface NumericRestReduction {
+	readonly operator:
+		| "+"
+		| "-"
+		| "*"
+		| "/"
+		| "%"
+		| "**"
+		| "&"
+		| "|"
+		| "^"
+		| "<<"
+		| ">>"
+		| ">>>";
 	readonly initial: CoreValueId;
 	readonly start: number;
 	readonly sourcePosition: number | undefined;
@@ -294,7 +307,26 @@ function numericRestReduction(
 	plan: NonNullable<ReturnType<typeof restIteration>>,
 ): NumericRestReduction | undefined {
 	const header = fn.kernel.blockParameterStart(plan.header);
-	const sum = [...fn.bodyInstructionIds(plan.body)];
+	const body = [...fn.bodyInstructionIds(plan.body)];
+	const operator =
+		body.length === 1 ? fn.instructionAttributes(body[0]!).operator : undefined;
+	switch (operator) {
+		case "+":
+		case "-":
+		case "*":
+		case "/":
+		case "%":
+		case "**":
+		case "&":
+		case "|":
+		case "^":
+		case "<<":
+		case ">>":
+		case ">>>":
+			break;
+		default:
+			return undefined;
+	}
 	const start = fn.instructionAttributes(plan.allocation).startIndex;
 	const incoming = plan.incoming.find((edge) => !plan.loop.blocks.has(edge.from));
 	const bodyExit = coreTerminatorInput(fn, fn.blockTerminator(plan.body));
@@ -305,15 +337,14 @@ function numericRestReduction(
 		start > 8 ||
 		fn.kernel.blockParameterCount(plan.header) !== 1 ||
 		plan.loop.blocks.size !== 2 ||
-		sum.length !== 1 ||
-		fn.instructionOpcodeName(sum[0]!) !== "binary" ||
-		fn.instructionAttributes(sum[0]!).operator !== "+" ||
-		operand(fn, sum[0]!, 0) !== fn.kernel.blockParameterValue(header) ||
-		operand(fn, sum[0]!, 1) !== plan.value ||
+		body.length !== 1 ||
+		fn.instructionOpcodeName(body[0]!) !== "binary" ||
+		operand(fn, body[0]!, 0) !== fn.kernel.blockParameterValue(header) ||
+		operand(fn, body[0]!, 1) !== plan.value ||
 		bodyExit.kind !== "jump" ||
 		bodyExit.edge.block !== plan.header ||
 		bodyExit.edge.arguments.length !== 1 ||
-		bodyExit.edge.arguments[0] !== result(fn, sum[0]!) ||
+		bodyExit.edge.arguments[0] !== result(fn, body[0]!) ||
 		headerExit.kind !== "branch" ||
 		incoming?.arguments.length !== 1 ||
 		[...fn.bodyInstructionIds(fn.entry)].some(
@@ -353,7 +384,12 @@ function numericRestReduction(
 		)
 	)
 		return undefined;
-	return { initial, start, sourcePosition: fn.instructionSourcePosition(sum[0]!) };
+	return {
+		operator,
+		initial,
+		start,
+		sourcePosition: fn.instructionSourcePosition(body[0]!),
+	};
 }
 
 /** A numeric reduction cannot call user code, so its guarded copy needs no iterator close. */
@@ -443,7 +479,7 @@ function guardNumericRestReduction(
 			),
 		);
 		const number = emit(block, "unary", [value], { operator: "+" }, "f64");
-		total = emit(block, "binary", [total, number], { operator: "+" }, "f64");
+		total = emit(block, "binary", [total, number], { operator: plan.operator }, "f64");
 	}
 	editor.setTerminator(block, {
 		kind: "jump",

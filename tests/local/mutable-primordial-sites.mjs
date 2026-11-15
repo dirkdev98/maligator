@@ -51,6 +51,51 @@ function reduceRest(base, ...values) {
 	return total;
 }
 
+function subtractRest(base, ...values) {
+	let total = base;
+	for (const value of values) total -= value;
+	return total;
+}
+function multiplyRest(base, ...values) {
+	let total = base;
+	for (const value of values) total *= value;
+	return total;
+}
+
+function restCoercionThrow(reducer) {
+	const warm = reducer(3, 5, 7);
+	const prototype = Object.getPrototypeOf([][Symbol.iterator]());
+	const descriptor = Object.getOwnPropertyDescriptor(prototype, "return");
+	const marker = {};
+	let calls = 0;
+	let closes = 0;
+	try {
+		try {
+			reducer(
+				1,
+				2,
+				{
+					valueOf() {
+						calls++;
+						prototype.return = function () {
+							closes++;
+							return { done: true };
+						};
+						throw marker;
+					},
+				},
+				4,
+			);
+		} catch (error) {
+			return [warm, error === marker, calls, closes];
+		}
+		throw new Error("missing reduction throw");
+	} finally {
+		if (descriptor === undefined) delete prototype.return;
+		else Object.defineProperty(prototype, "return", descriptor);
+	}
+}
+
 const cases = {
 	"numeric rest sum observes an iterator changed after first use"() {
 		const warm = reduceRest(3, 5, 7);
@@ -72,37 +117,13 @@ const cases = {
 		}
 	},
 	"numeric rest fallback coerces once and closes on throw"() {
-		const warm = reduceRest(3, 5, 7);
-		const prototype = Object.getPrototypeOf([][Symbol.iterator]());
-		const descriptor = Object.getOwnPropertyDescriptor(prototype, "return");
-		const marker = {};
-		let calls = 0;
-		let closes = 0;
-		try {
-			try {
-				reduceRest(
-					1,
-					2,
-					{
-						valueOf() {
-							calls++;
-							prototype.return = function () {
-								closes++;
-								return { done: true };
-							};
-							throw marker;
-						},
-					},
-					4,
-				);
-			} catch (error) {
-				return [warm, error === marker, calls, closes];
-			}
-			throw new Error("missing reduction throw");
-		} finally {
-			if (descriptor === undefined) delete prototype.return;
-			else Object.defineProperty(prototype, "return", descriptor);
-		}
+		return restCoercionThrow(reduceRest);
+	},
+	"numeric rest subtraction coerces once and closes on throw"() {
+		return restCoercionThrow(subtractRest);
+	},
+	"numeric rest multiplication coerces once and closes on throw"() {
+		return restCoercionThrow(multiplyRest);
 	},
 	"shared literal iterator changes after its first spread"() {
 		const warm = spreadSharedLiteral(sum, sum);
