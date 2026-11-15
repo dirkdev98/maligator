@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ESTree } from "meriyah";
 import { lookupPlatformModule } from "../../platform/catalog.ts";
-import { traverseEstree } from "./estree-traversal.ts";
+import { ESTREE_STOP, traverseEstree } from "./estree-traversal.ts";
 import type { ModuleRecord } from "./module-graph.ts";
 import { SyntaxDiagnostic } from "./syntax-diagnostic.ts";
 
@@ -270,11 +270,11 @@ function aggregateIsStable(
 	const parents = parentsFor(record);
 	let stable = true;
 	traverseEstree(record.parsed.ast, (node) => {
+		if (!stable) return ESTREE_STOP;
 		if (
-			!stable ||
-			(node.type !== "Identifier" &&
-				node.type !== "MemberExpression" &&
-				node.type !== "ObjectExpression")
+			node.type !== "Identifier" &&
+			node.type !== "MemberExpression" &&
+			node.type !== "ObjectExpression"
 		)
 			return;
 		const parent = parents.get(node);
@@ -494,28 +494,38 @@ export function discoverWorkerEntries(
 			);
 		}) ??
 			false);
-	// Alias and reexport resolution can only recognize entries from these API origins.
-	let hasWorkerOrigin = false;
+	const workerOriginModules = new Set<string>();
+	const importers = new Map<string, Array<string>>();
 	// A program can also reach the Worker constructor without importing it.
 	let mentionsWorkerThreads = false;
 	for (const record of modules.values()) {
 		if (record.host === undefined && record.source.includes("worker_threads"))
 			mentionsWorkerThreads = true;
-		if (
-			suppliesWorkerEntries(record.path) ||
-			record.dependencies.some(
-				({ resolvedPath }) =>
-					resolvedPath !== null && suppliesWorkerEntries(resolvedPath),
-			)
-		) {
-			hasWorkerOrigin = true;
+		if (suppliesWorkerEntries(record.path)) workerOriginModules.add(record.path);
+		for (const { resolvedPath } of record.dependencies) {
+			if (resolvedPath === null) continue;
+			if (suppliesWorkerEntries(resolvedPath)) workerOriginModules.add(record.path);
+			const incoming = importers.get(resolvedPath);
+			if (incoming === undefined) importers.set(resolvedPath, [record.path]);
+			else incoming.push(record.path);
 		}
 	}
-	if (!hasWorkerOrigin && !mentionsWorkerThreads) return [];
+	// Alias and reexport resolution can only reach a worker API through its import cone.
+	const pending = [...workerOriginModules];
+	for (let index = 0; index < pending.length; index++) {
+		for (const importer of importers.get(pending[index]!) ?? []) {
+			if (workerOriginModules.has(importer)) continue;
+			workerOriginModules.add(importer);
+			pending.push(importer);
+		}
+	}
+	if (workerOriginModules.size === 0 && !mentionsWorkerThreads) return [];
 	const entries = new Map<string, WorkerEntryDeclaration>();
 	for (const record of modules.values()) {
 		if (record.host !== undefined) continue;
+		const resolvesWorkerOrigin = workerOriginModules.has(record.path);
 		for (const statement of record.parsed.ast.body) {
+			if (!resolvesWorkerOrigin) break;
 			if (statement.type !== "ImportDeclaration") continue;
 			for (const specifier of statement.specifiers) {
 				const identity = importedIdentity(modules, record, specifier.local.name);
@@ -551,6 +561,7 @@ export function discoverWorkerEntries(
 					return;
 				}
 			}
+			if (!resolvesWorkerOrigin) return;
 			const identity = calleeIdentity(modules, record, node.callee);
 			const declaration = node.type === "CallExpression" && isDeclaration(identity);
 			const worker =

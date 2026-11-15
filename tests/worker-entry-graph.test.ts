@@ -83,6 +83,26 @@ test("namespace reexport cycles retain a worker API origin", () => {
 	);
 });
 
+test("a module URL helper declares a worker entry without importing a worker API", () => {
+	fixture(
+		{
+			"main.mjs":
+				'import { Worker } from "node:worker_threads"; import { location } from "./location.mjs"; new Worker(location);',
+			"location.mjs": 'export const location = new URL("./worker.mjs", import.meta.url);',
+			"worker.mjs": "globalThis.started = true;",
+		},
+		(root) => {
+			const graph = buildModuleGraph(path.join(root, "main.mjs"), {
+				buildConfig: config,
+			});
+			const worker = path.join(root, "worker.mjs");
+			expect(graph.workerEntries?.map((entry) => entry.path)).toEqual([worker]);
+			expect(graph.modules.has(worker)).toBe(true);
+			expect(graph.evaluationOrder).not.toContain(worker);
+		},
+	);
+});
+
 test("ordinary URL constructor aliases do not declare worker entries", () => {
 	fixture(
 		{

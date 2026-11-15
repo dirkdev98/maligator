@@ -13,7 +13,8 @@ existing diagnostics only as needed to select a candidate; a broad admission aud
 is not a prerequisite to independent work.
 
 - Reduce repeated compiler work and product-emission peak memory on Node and the
-  rebuilt native compiler.
+  rebuilt native compiler. Bring fresh-process Node self-compilation below 55 seconds
+  on the laptop with default heap and GC settings, matched workloads and output parity.
 - Remove a leading runtime-owned stream, allocation, string or collector cost in a
   representative application.
 - Extend native specialization only where a current method, field, cursor or
