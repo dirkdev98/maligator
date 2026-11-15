@@ -37,22 +37,31 @@ const stalled = await new Promise((resolve, reject) => {
 		);
 		setTimeout(() => {
 			log("handled while stalled", handled.includes("/big"));
-			let bytes = 0;
-			let text = "";
-			socket.on("data", (chunk) => {
-				bytes += chunk.length;
-				text = (text + chunk.toString("latin1")).slice(-64);
-			});
-			socket.on("end", () =>
-				resolve({ bytes, tail: text.slice(text.lastIndexOf("\r\n\r\n") + 4) }),
-			);
-			socket.resume();
+			http
+				.get({ host: "127.0.0.1", port, path: "/other", agent: false }, (response) => {
+					let body = "";
+					response.on("data", (chunk) => (body += chunk));
+					response.on("end", () => {
+						log("other connection while stalled", response.statusCode, body);
+						let bytes = 0;
+						let text = "";
+						socket.on("data", (chunk) => {
+							bytes += chunk.length;
+							text = (text + chunk.toString("latin1")).slice(-64);
+						});
+						socket.on("end", () =>
+							resolve({ bytes, tail: text.slice(text.lastIndexOf("\r\n\r\n") + 4) }),
+						);
+						socket.resume();
+					});
+				})
+				.on("error", reject);
 		}, 200);
 	});
 	socket.on("error", reject);
 });
 log("stalled pipeline", stalled.bytes > big.length, stalled.tail);
-log("handled after drain", handled.join(","));
+log("handled after drain", handled.filter((url) => url !== "/other").join(","));
 
 // A peer that resets mid-body.
 await new Promise((resolve) => {

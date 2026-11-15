@@ -604,7 +604,61 @@ check(
 	"wide keys keep the general path",
 );
 
-for (const gap of [undefined, 2, "\t", "Ā", "123456789😀", undefined]) {
+for (const gap of [
+	"x",
+	"é",
+	"ab",
+	"abc",
+	"abcd",
+	"abcde",
+	"abcdefg",
+	"abcdefgh",
+	"0123456789",
+	"Ā",
+	"\ud800",
+]) {
+	const line = (depth, text) => "\n" + gap.repeat(depth) + text;
+	const row = (id) =>
+		"{" + line(3, '"id": ' + id + ",") + line(3, '"ok": true') + line(2, "}");
+	const expected =
+		"{" +
+		line(1, '"rows": [') +
+		line(2, row(1) + ",") +
+		line(2, row(2) + ",") +
+		line(2, row(3)) +
+		line(1, "]") +
+		line(0, "}");
+	check(
+		JSON.stringify(
+			{
+				rows: [
+					{ id: 1, ok: true },
+					{ id: 2, ok: true },
+					{ id: 3, ok: true },
+				],
+			},
+			null,
+			gap,
+		) === expected,
+		"indentation preserves narrow, wide and lone-surrogate gaps at every nesting level",
+	);
+}
+
+for (const gap of [
+	undefined,
+	2,
+	"\t",
+	"é",
+	"abc",
+	"abcd",
+	"abcde",
+	"abcdefg",
+	"abcdefgh",
+	"1234567890",
+	"Ā",
+	"123456789😀",
+	undefined,
+]) {
 	for (const value of [
 		flatRows,
 		{ rows: flatRows, empty: [{}, []] },
@@ -617,6 +671,33 @@ for (const gap of [undefined, 2, "\t", "Ā", "123456789😀", undefined]) {
 			"cached records preserve indentation across gaps and depths",
 		);
 	}
+}
+
+const largeFormatCases = [444, 445, 480].map((length) => {
+	const key = "k".repeat(length);
+	return [
+		{ [key]: 1, flag: true },
+		{ [key]: 2, flag: false },
+		{ [key]: 3, flag: true },
+	];
+});
+const manyFormatFields = Array.from({ length: 3 }, (_, row) =>
+	Object.fromEntries(
+		Array.from({ length: 16 }, (_, field) => ["f" + field, row + field]),
+	),
+);
+let deepFormatRows = [
+	{ id: 1, flag: true },
+	{ id: 2, flag: false },
+	{ id: 3, flag: true },
+];
+for (let i = 0; i < 30; i++) deepFormatRows = { nested: deepFormatRows };
+for (const value of [...largeFormatCases, manyFormatFields, deepFormatRows]) {
+	check(
+		JSON.stringify(value, null, "0123456789") ===
+			JSON.stringify(value, (key, item) => item, "0123456789"),
+		"large repeated formatting preserves keys and deep indentation",
+	);
 }
 
 let prettyCallbackCalls = 0;

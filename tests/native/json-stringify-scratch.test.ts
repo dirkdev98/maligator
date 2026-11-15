@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
@@ -11,6 +11,7 @@ import {
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-json-stringify-scratch-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 const expected = ["json-stringify-scratch PASS"];
 const hostGc = { MAL_HOST_GC: "1" };
 
@@ -32,7 +33,7 @@ describe("JSON.stringify traversal scratch buffers", () => {
 		assertExactLines(runToStdout(interpreted, { env: hostGc }), expected);
 	});
 
-	it("writes repeated scalar records of one shape whole", () => {
+	it("writes repeated scalar records with their compact and indented layouts", () => {
 		const result = spawnSync(compiled, [], {
 			env: { ...process.env, ...hostGc, MAL_PERF_STATS: "1" },
 			encoding: "utf-8",
@@ -41,6 +42,8 @@ describe("JSON.stringify traversal scratch buffers", () => {
 		assertExactLines(result.stdout, expected);
 		const flatRecords = /\bflat_records=(\d+)/.exec(result.stderr)?.[1];
 		expect(Number(flatRecords ?? 0)).toBeGreaterThan(0);
+		const formattedRecords = /\bformatted_records=(\d+)/.exec(result.stderr)?.[1];
+		expect(Number(formattedRecords ?? 0)).toBeGreaterThan(0);
 	});
 
 	it("passes compiled and interpreted under GC stress", () => {

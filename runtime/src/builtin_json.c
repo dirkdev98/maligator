@@ -402,6 +402,7 @@ typedef struct MalJsonState {
     bool has_property_list;
     MalRootedValueList property_list;
     const c16 *gap;
+    const u8 *latin1_gap;
     usize gap_length;
     MalJsonPointerMap active;
 } MalJsonState;
@@ -426,7 +427,7 @@ static MalJsonResult mal_json_serialize_member(
     MalValue key_string, MalValue holder, bool has_value, MalValue value,
     usize depth, bool any);
 
-/** Push "\n" followed by `depth` copies of the gap, when the gap is non-empty. */
+/** Reserve indentation once; narrow gaps need no UTF-16 scan on each append. */
 static bool mal_json_push_indent(MalJsonState *state, MalJsonBuilder *builder, usize depth) {
     if (state->gap_length == 0) {
         return true;
@@ -438,15 +439,27 @@ static bool mal_json_push_indent(MalJsonState *state, MalJsonBuilder *builder, u
         !mal_checked_size_add(gap_units, 1, MAL_STRING_MAX_CODE_UNITS, &extra)) {
         return mal_json_throw_string_length(state->vm);
     }
-    if (!mal_json_builder_reserve(builder, extra)) {
-        return false;
-    }
-    if (!mal_json_builder_push(builder, '\n')) return false;
-    for (usize i = 0; i < depth; i++) {
-        if (!mal_json_builder_push_units(builder, state->gap, state->gap_length)) {
-            return false;
+    MalTextBuffer *buffer = &builder->buffer;
+    MalTextBufferStatus status = state->latin1_gap != nullptr
+        ? mal_text_buffer_reserve(buffer, extra)
+        : mal_text_buffer_reserve_utf16(buffer, extra);
+    if (status != MAL_TEXT_BUFFER_OK) return mal_json_throw_string_length(state->vm);
+    if (buffer->utf16) {
+        c16 *out = (c16 *) buffer->data + buffer->length;
+        *out++ = '\n';
+        for (usize i = 0; i < depth; i++) {
+            mal_text_buffer_copy_bytes(out, state->gap, state->gap_length * sizeof(c16));
+            out += state->gap_length;
+        }
+    } else {
+        u8 *out = (u8 *) buffer->data + buffer->length;
+        *out++ = '\n';
+        for (usize i = 0; i < depth; i++) {
+            mal_text_buffer_copy_bytes(out, state->latin1_gap, state->gap_length);
+            out += state->gap_length;
         }
     }
+    buffer->length += extra;
     return true;
 }
 
@@ -1054,6 +1067,18 @@ typedef struct MalJsonShapePlan {
     MalJsonKeyPlan keys[];
 } MalJsonShapePlan;
 
+#define MAL_JSON_FLAT_RECORD_MEMBERS 16
+#define MAL_JSON_FLAT_FORMAT_BYTES 512
+
+typedef struct MalJsonFlatFormat {
+    const MalJsonShapePlan *plan;
+    usize depth;
+    usize length;
+    usize extra;
+    u16 offsets[MAL_JSON_FLAT_RECORD_MEMBERS + 2];
+    u8 bytes[MAL_JSON_FLAT_FORMAT_BYTES];
+} MalJsonFlatFormat;
+
 typedef struct MalJsonFrame {
     MalValue value;
     union {
@@ -1099,6 +1124,7 @@ typedef struct MalJsonPlainState {
     const MalShape *last_shapes[2];
     MalJsonShapePlan *last_plans[2];
     const MalObject *last_prototype;
+    MalJsonFlatFormat flat_format;
     MalJsonFrame inline_frames[MAL_JSON_INLINE_FRAMES];
 } MalJsonPlainState;
 
@@ -1387,8 +1413,6 @@ static bool mal_json_plain_key(
     return true;
 }
 
-#define MAL_JSON_FLAT_RECORD_MEMBERS 16
-
 // Members of the nested records one flat record may write, across all of them.
 #define MAL_JSON_FLAT_NESTED_MEMBERS 32
 
@@ -1427,10 +1451,57 @@ static u8 *mal_json_write_latin1_indent(
 ) {
     *out++ = '\n';
     for (usize i = 0; i < depth; i++) {
-        memcpy(out, gap, gap_length);
+        mal_text_buffer_copy_bytes(out, gap, gap_length);
         out += gap_length;
     }
     return out;
+}
+
+// A call fixes its gap; a repeated layout can copy punctuation, indentation and
+// escaped keys together. An oversized layout declines once for that plan/depth.
+static const MalJsonFlatFormat *mal_json_flat_format(
+    MalJsonPlainState *plain, const MalJsonShapePlan *plan,
+    const u8 *gap, usize gap_length, usize depth
+) {
+    MalJsonFlatFormat *format = &plain->flat_format;
+    if (format->plan != plan || format->depth != depth) {
+        format->plan = plan;
+        format->depth = depth;
+        format->length = 0;
+        return nullptr;
+    }
+    if (format->length != 0)
+        return format->length == SIZE_MAX ? nullptr : format;
+    format->length = SIZE_MAX;
+    if (depth >= MAL_JSON_FLAT_FORMAT_BYTES / gap_length) return nullptr;
+    usize member_indent = 1 + (depth + 1) * gap_length;
+    usize fixed = 1 + plan->count;
+    usize required = 2 + plan->count * (member_indent + 1) + plan->count - 1
+        + 1 + depth * gap_length;
+    if (required > MAL_JSON_FLAT_FORMAT_BYTES) return nullptr;
+    for (usize i = 0; i < plan->count; i++) {
+        usize length = plan->keys[i].length;
+        if (length > MAL_JSON_FLAT_FORMAT_BYTES - required) return nullptr;
+        required += length;
+        fixed += length;
+    }
+    u8 *out = format->bytes;
+    for (usize i = 0; i < plan->count; i++) {
+        format->offsets[i] = (u16) (out - format->bytes);
+        *out++ = i == 0 ? '{' : ',';
+        out = mal_json_write_latin1_indent(out, gap, gap_length, depth + 1);
+        const MalJsonKeyPlan *key = &plan->keys[i];
+        memcpy(out, (const u8 *) plan->escaped_keys.buffer.data + key->offset, key->length);
+        out += key->length;
+        *out++ = ' ';
+    }
+    format->offsets[plan->count] = (u16) (out - format->bytes);
+    out = mal_json_write_latin1_indent(out, gap, gap_length, depth);
+    *out++ = '}';
+    format->length = (usize) (out - format->bytes);
+    format->extra = format->length - fixed;
+    format->offsets[plan->count + 1] = (u16) format->length;
+    return format;
 }
 
 static inline __attribute__((always_inline)) void mal_json_write_flat_scalar(
@@ -1626,11 +1697,7 @@ static bool mal_json_plain_flat_record(
     const MalTextBuffer *keys = &plan->escaped_keys.buffer;
     if (buffer->utf16 || keys->utf16 || plan->count == 0 ||
         plan->count > MAL_JSON_FLAT_RECORD_MEMBERS) return false;
-    u8 gap[10];
-    for (usize i = 0; i < state->gap_length; i++) {
-        if (state->gap[i] > UINT8_MAX) return false;
-        gap[i] = (u8) state->gap[i];
-    }
+    if (state->gap_length != 0 && state->latin1_gap == nullptr) return false;
     MalJsonFlatMember members[MAL_JSON_FLAT_RECORD_MEMBERS];
     // Bounded scalar/key widths fit in u64; narrowing must not wrap a 32-bit reservation.
     u64 record_bytes = 1 + plan->count;
@@ -1648,7 +1715,12 @@ static bool mal_json_plain_flat_record(
     }
     if (record_bytes > SIZE_MAX) return false;
     usize needed = (usize) record_bytes;
-    if (state->gap_length != 0) {
+    const MalJsonFlatFormat *format = state->gap_length == 0 ? nullptr
+        : mal_json_flat_format(plain, plan, state->latin1_gap, state->gap_length, depth);
+    if (format != nullptr) {
+        if (!mal_checked_size_add(needed, format->extra, MAL_STRING_MAX_CODE_UNITS, &needed))
+            return false;
+    } else if (state->gap_length != 0) {
         usize member_depth, member_indent, closing_indent, extra;
         if (!mal_checked_size_add(depth, 1, SIZE_MAX, &member_depth) ||
             !mal_checked_size_multiply(member_depth, state->gap_length,
@@ -1663,10 +1735,23 @@ static bool mal_json_plain_flat_record(
     if (!mal_text_buffer_fits(buffer, needed) &&
         mal_text_buffer_reserve(buffer, needed) != MAL_TEXT_BUFFER_OK) return false;
     u8 *out = (u8 *) buffer->data + buffer->length;
-    if (state->gap_length == 0) {
+    if (format != nullptr) {
+        const usize count = plan->count;
+        for (usize i = 0; i < count; i++) {
+            usize length = format->offsets[i + 1] - format->offsets[i];
+            mal_text_buffer_copy_bytes(out, format->bytes + format->offsets[i], length);
+            out += length;
+            mal_json_write_flat_scalar(out, &members[i]);
+            out += members[i].width;
+        }
+        mal_text_buffer_copy_bytes(out, format->bytes + format->offsets[count],
+            format->offsets[count + 1] - format->offsets[count]);
+        MAL_PERF_COUNT(json_formatted_records);
+    } else if (state->gap_length == 0) {
         mal_json_write_flat_record(out, plan, keys, members, nullptr, nullptr, 0, 0);
     } else {
-        mal_json_write_flat_record(out, plan, keys, members, nullptr, gap, state->gap_length, depth);
+        mal_json_write_flat_record(out, plan, keys, members, nullptr,
+            state->latin1_gap, state->gap_length, depth);
     }
     buffer->length += needed;
     MAL_PERF_COUNT(json_flat_records);
@@ -2117,6 +2202,7 @@ static bool mal_json_try_serialize_plain(
     state.last_shapes[0] = state.last_shapes[1] = nullptr;
     state.last_plans[0] = state.last_plans[1] = nullptr;
     state.last_prototype = nullptr;
+    state.flat_format.plan = nullptr;
     // Before fallback, descendants and prototypes remain reachable from root:
     // the plain traversal never invokes JS or changes a property.
     MalRootSpan span;
@@ -2267,6 +2353,7 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
     state.replacer_fn = mal_value_new_undefined();
     state.has_property_list = false;
     state.gap = nullptr;
+    state.latin1_gap = nullptr;
     state.gap_length = 0;
     mal_json_pointer_init(&state.active);
     mal_rooted_value_list_init(&state.property_list);
@@ -2293,6 +2380,7 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
     // then a number yields min(10, ToInteger) spaces and a string its first 10
     // code units.
     c16 gap_buffer[10];
+    u8 latin1_gap[10];
     if (mal_value_is_primitive_wrapper(space)) {
         MalPrimitiveWrapperKind kind = mal_value_to_primitive_wrapper(space)->kind;
         if (kind == MAL_PRIMITIVE_WRAPPER_NUMBER) {
@@ -2328,6 +2416,17 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
         mal_string_copy_range_to(string, 0, length, gap_buffer);
         state.gap = gap_buffer;
         state.gap_length = length;
+    }
+    if (state.gap_length != 0) {
+        bool narrow = true;
+        for (usize i = 0; i < state.gap_length; i++) {
+            if (state.gap[i] > UINT8_MAX) {
+                narrow = false;
+                break;
+            }
+            latin1_gap[i] = (u8) state.gap[i];
+        }
+        if (narrow) state.latin1_gap = latin1_gap;
     }
 
     MalExactScriptCall runtime_callback;

@@ -267,6 +267,13 @@ Shape plans reuse property order/slots and escaped keys; the rooted input
 graph remains immutable throughout this callback-free traversal. It uses heap
 frames and is not subject to the generic recursive container cap.
 
+Indentation normalizes its gap after observable space coercion, then reserves and
+writes each complete indent in the output encoding. Repeated scalar record layouts
+at the same depth combine punctuation, indentation and escaped keys into bounded
+call-local prefixes. The first record uses the ordinary writer; oversized prefixes
+decline without changing output. Prefixes retain no values and add no heap storage.
+Wide gaps and unsupported records keep their existing traversal paths.
+
 Small compact record graphs can stage escaped strings, ordinary numbers and
 packed nested containers in bounded UTF-16 scratch, then append the whole record
 with one reservation. The active path includes both the outer traversal and the

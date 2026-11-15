@@ -1222,7 +1222,7 @@ static void conn_write_cb(void *data) {
 #if MAL_NODE
     if (c->tls != nullptr && !conn_tls_drain(c)) return;
 #endif
-    while (c->write_head != nullptr && turn < MAL_HTTP_WRITE_TURN) {
+    while (c->write_head != nullptr) {
         MalHttpWireWrite *write = c->write_head;
         if (write->prefix_offset == write->prefix_length
             && write->offset == write->length
@@ -1280,9 +1280,13 @@ static void conn_write_cb(void *data) {
             return;
         }
 
+        if (turn >= MAL_HTTP_WRITE_TURN) break;
         struct iovec iov[MAL_HTTP_WRITE_IOV];
         int iov_count = 0;
-        usize available = MAL_HTTP_WRITE_TURN - turn;
+        // One accepted plaintext write can exceed the scheduling quantum. Gather
+        // it once, then yield before another send; completed writes still retire.
+        usize available = turn == 0 && c->tls == nullptr
+            ? MAL_HTTP_WRITE_MAX : MAL_HTTP_WRITE_TURN - turn;
         for (MalHttpWireWrite *cursor = write;
              cursor != nullptr && available > 0 && iov_count < MAL_HTTP_WRITE_IOV;
              cursor = cursor->next) {

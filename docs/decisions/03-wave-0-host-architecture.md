@@ -158,9 +158,12 @@ Read and write flow control are explicit and bounded:
 - Rustls ciphertext and llhttp input staging have separate bounded buffers included
   in the connection's memory budget. TLS must not turn a blocked plaintext writer
   into unbounded ciphertext buffering.
-- Each I/O task performs bounded work: at most 64 KiB of socket read/write and at
-  most 32 accepts. Remaining readiness is requeued. One busy connection cannot
-  monopolize a runtime turn.
+- Each I/O task performs bounded work: at most 64 KiB of socket reads and at most
+  32 accepts. Writes use a 64 KiB scheduling quantum. The first plaintext gather
+  can include up to the transport's 256 KiB accepted-write limit, then yields before
+  another send if that exhausts the quantum. Completed records retire before
+  yielding; TLS retains its separate staging limit. Remaining readiness is requeued,
+  so one busy connection cannot monopolize a runtime turn.
 - For HTTP/1.1 pipelining, response order is connection order. Parsed follow-up heads
   and bodies are flow-controlled; the host must not buffer unbounded pipelined
   requests behind an unfinished response. Client pooling permits one in-flight request
