@@ -375,7 +375,22 @@ MalValue mal_builtin_new_suppressed_error(
 }
 
 MalValue mal_builtin_new_aggregate_error(MalVm *vm, MalValue errors) {
-    return mal_builtin_aggregate_error_make(vm, errors, mal_value_new_undefined(), mal_value_new_undefined());
+    MalValue roots[2] = {errors, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalObject *error = mal_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_AGGREGATE_ERROR_PROTOTYPE]));
+    roots[1] = mal_value_from_object(error);
+    mal_error_mark_error_data(error);
+    MalValue result = MAL_VALUE_UNDEFINED;
+    if (mal_error_capture_stack(vm, error)) {
+        mal_intrinsic_define_data(
+            vm, error, "errors", roots[0], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+        result = roots[1];
+    }
+    mal_gc_unroot(&span);
+    return result;
 }
 
 /**

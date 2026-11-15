@@ -10,8 +10,8 @@
 void mal_builtin_error_install(MalVm *vm);
 
 /**
- * Construct an AggregateError whose `errors` own property is the given array,
- * with no message. For Promise.any's rejection. Returns the error value.
+ * Publish Promise.any's private ordered errors Array on an intrinsic AggregateError.
+ * The list is already collected, so this path must not consult an iterator.
  */
 MalValue mal_builtin_new_aggregate_error(MalVm *vm, MalValue errors);
 
