@@ -343,4 +343,28 @@ async function asyncForward(...args) {
 	return sum(...args);
 }
 check((await asyncForward(2, 3)) === 5, "async suspension");
+async function inlineAsync() {
+	await 0;
+	return ((...values) => sum(...values))(2, 3);
+}
+function* inlineGenerator() {
+	yield 1;
+	return ((...values) => sum.apply(null, values))(2, 3);
+}
+async function* inlineAsyncGenerator() {
+	await 0;
+	yield 1;
+	return ((...values) => sum(...values))(2, 3);
+}
+check((await inlineAsync()) === 5, "rest helper in async caller");
+const inlineG = inlineGenerator();
+check(
+	inlineG.next().value === 1 && inlineG.next().value === 5,
+	"rest helper in generator caller",
+);
+const inlineAG = inlineAsyncGenerator();
+check(
+	(await inlineAG.next()).value === 1 && (await inlineAG.next()).value === 5,
+	"rest helper in async generator caller",
+);
 console.log("rest-forwarding PASS");

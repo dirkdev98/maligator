@@ -878,6 +878,9 @@ function inlineTarget(
 		if (opcode === "loadArgument") hasArgumentSnapshots = true;
 		if (opcode === "createRestArgumentsState") restProducers.push(instruction);
 	}
+	// Lazy forwarding state has no suspension contract, even with positional snapshots.
+	if (restProducers.length > 0 && (caller.isAsync || caller.isGenerator))
+		return undefined;
 	const restArguments = inlineRestArguments(fn, argumentCount, restProducers);
 	if (hasArgumentSnapshots && coreArgumentObservation(fn).kind === "general")
 		return undefined;

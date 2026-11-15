@@ -1742,6 +1742,58 @@ describe("bounded Core cross-call transforms", () => {
 		},
 	);
 
+	it.each([
+		{ declaration: "async function", site: "exact", apply: false },
+		{ declaration: "function*", site: "exact", apply: false },
+		{ declaration: "async function*", site: "exact", apply: false },
+		{ declaration: "async function", site: "guarded", apply: false },
+		{ declaration: "function*", site: "guarded", apply: false },
+		{ declaration: "async function*", site: "guarded", apply: false },
+		{ declaration: "async function", site: "exact", apply: true },
+		{ declaration: "function*", site: "exact", apply: true },
+		{ declaration: "async function*", site: "exact", apply: true },
+		{ declaration: "async function", site: "guarded", apply: true },
+		{ declaration: "function*", site: "guarded", apply: true },
+		{ declaration: "async function*", site: "guarded", apply: true },
+	])(
+		"keeps lazy rest forwarding outside $declaration callers at $site sites with apply=$apply",
+		({ declaration, site, apply }) => {
+			const helper = `function forward(...values) {
+				return ${apply ? "target.apply(null, values)" : "target(...values)"};
+			}`;
+			const source = `${site === "guarded" ? helper : ""}
+				${declaration} suspended() {
+					${site === "exact" ? helper : ""}
+					for (let index = 0; index < 10; index++) forward(1, 2);
+				}
+				suspended();`;
+			let optimized: CoreProgram | undefined;
+			compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(source, "core-inline-suspended-rest.js"),
+				{
+					facts: compilerProgramFactsFromConfig(
+						resolveBuildConfig({ engine: { primordials: "mutable", realms: true } }),
+					),
+					coreVerification: "per-pass",
+					afterCoreOptimization(program) {
+						optimized = program;
+					},
+				},
+			);
+			const caller = coreFunctionNamed(optimized!, "suspended")!;
+			expect(coreOperations(caller).some(({ opcode }) => opcode === "call")).toBe(true);
+			expect(
+				coreOperations(caller).some(({ opcode }) => opcode === "callRestArguments"),
+			).toBe(false);
+			expect(
+				coreOperations(coreFunctionNamed(optimized!, "forward")!).some(
+					({ opcode }) => opcode === "callRestArguments",
+				),
+			).toBe(true);
+			verifyCoreProgram(optimized!, { stage: "pre-target" });
+		},
+	);
+
 	it("guards and inlines hot global rest argument snapshots", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(
