@@ -2788,7 +2788,6 @@ const forwardRestArguments: CoreFunctionPass = {
 		if (
 			fn.isGenerator ||
 			fn.isAsync ||
-			fn.metadata.isClassConstructor ||
 			fn.metadata.isDerivedConstructor ||
 			fn.metadata.mappedArguments
 		)

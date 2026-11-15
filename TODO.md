@@ -206,6 +206,11 @@ Shared lifetime and fallback rules are recorded in
 An existing iterator cursor is not, by itself, permission to delete its language
 object. Retained loop experiments preserve effects, authoritative state and fallback.
 
+- [ ] Extend lazy argument forwarding to construction or mapped arguments only after
+      carrying `new.target`, derived initialization, or current parameter-map values
+      through the owning protocol. Suspended activations need a rooted list lifetime
+      independent of the incoming call span.
+
 - [ ] Bound one typed-store side-exit experiment to core-to-execution or optimizer-queue
       and the corresponding compiler loop. First establish removable executed cost; then
       preserve already-committed stores and continuation state without generic OSR.

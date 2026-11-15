@@ -354,6 +354,10 @@ describe("rest forwarding allocation contract", () => {
 
 	for (const source of [
 		"function forward(...args) { return target(...args); }",
+		"class Forward { constructor(...args) { this.value = target(...args); } }",
+		"class Forward { constructor(first, ...args) { this.value = target(first, ...args); } }",
+		"class Forward { constructor(fn, ...args) { fn(...args); this.value = fn(...args); } }",
+		"class Forward { constructor() { this.value = target.apply(this, arguments); } }",
 		"function forward(first, ...rest) { return target(first, ...rest); }",
 		"function forward(...args) { let result; for (let i = 0; i < 2; i++) result = target(...args); return result; }",
 		"function forward(fn, receiver, ...args) { fn.apply(receiver, args); return fn.apply(receiver, args); }",
@@ -380,6 +384,11 @@ describe("rest forwarding allocation contract", () => {
 	}
 	for (const source of [
 		"function forward(...args) { args[0] = 7; return target(...args); }",
+		"class Forward extends Base { constructor(...args) { super(); target(...args); } }",
+		"class Forward { constructor(...args) { this.value = new target(...args); } }",
+		"class Forward { constructor(...args) { args[0] = 7; target(...args); } }",
+		"class Forward { constructor(...args) { this.saved = args; target(...args); } }",
+		"class Forward { constructor(...args) { this.read = () => target(...args); } }",
 		"function forward(...args) { globalThis.saved = args; return target(...args); }",
 		"function forward(...args) { return args; }",
 		"function forward(...args) { return sink(null, args); }",

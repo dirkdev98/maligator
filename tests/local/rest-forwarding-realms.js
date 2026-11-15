@@ -7,6 +7,16 @@ function target(a, b) {
 function forward(...args) {
 	return target(...args);
 }
+class RealmForward {
+	constructor(...args) {
+		this.value = target(...args);
+	}
+}
+class RealmApplyForward {
+	constructor(fn, ...args) {
+		this.value = fn.apply(null, args);
+	}
+}
 function applyForward(fn, receiver, ...args) {
 	return fn.apply(receiver, args);
 }
@@ -27,6 +37,11 @@ foreignPrototype.next = function () {
 try {
 	Array.prototype[Symbol.iterator] = foreignIterator;
 	check(forward(1, 2) === 42 && steps === 3, "foreign iterator protocol");
+	steps = 0;
+	check(
+		new RealmForward(1, 2).value === 42 && steps === 3,
+		"base constructor foreign iterator protocol",
+	);
 } finally {
 	Array.prototype[Symbol.iterator] = iterator;
 }
@@ -42,4 +57,14 @@ try {
 }
 target.apply = other.Function.prototype.apply;
 check(applyForward(target, null, 2, 3) === 5, "foreign apply callable");
+check(new RealmApplyForward(target, 2, 3).value === 5, "base foreign apply callable");
+try {
+	new RealmApplyForward(invalid, 1, 2);
+	throw new Error("missing constructor apply exception");
+} catch (error) {
+	check(
+		error instanceof other.TypeError && !(error instanceof TypeError),
+		"base foreign apply error realm",
+	);
+}
 console.log("rest-forwarding-realms PASS");

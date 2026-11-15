@@ -28,4 +28,20 @@ for (let i = 0; i < 10; i++) {
 	checksum += repeated(target, 1, 2, 3);
 }
 if (checksum !== 360) throw new Error("checksum");
+class ConstructorFirst {
+	constructor(...args) {
+		this.value = target(...args);
+	}
+}
+class ConstructorSecond {
+	constructor(first, ...args) {
+		this.value = target(first, ...args);
+	}
+}
+let constructorChecksum = 0;
+for (let i = 0; i < 10; i++) {
+	const Constructor = i & 1 ? ConstructorFirst : ConstructorSecond;
+	constructorChecksum += new Constructor(1, 2, 3).value;
+}
+if (constructorChecksum !== 60) throw new Error("constructor checksum");
 console.log("rest-forwarding-mechanism PASS");

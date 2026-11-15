@@ -1426,6 +1426,11 @@ roots through fallback materialization. Mapped sloppy arguments retain their ord
 indexed observations. Failed guards preserve the original helper and its persistent
 materialized list.
 
+Base-class constructor bodies use the same retained incoming span for ordinary
+forwarding calls. Field and parameter initialization keep their existing order, and
+constructor result selection and `new.target` stay at the construct boundary. Derived
+constructors and forwarding into construction retain materialized lists.
+
 Mapper return identities can nominate element callees from a factory result without
 proving that factory's identity or the result's contents. A native call site checks
 the actual loaded function and enters its realm before calling the nominated body;

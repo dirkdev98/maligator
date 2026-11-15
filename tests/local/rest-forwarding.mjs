@@ -367,4 +367,135 @@ check(
 	(await inlineAG.next()).value === 1 && (await inlineAG.next()).value === 5,
 	"rest helper in async generator caller",
 );
+let constructorOrder = "";
+class OrderedForward {
+	field = ((constructorOrder += "field;"), 17);
+	constructor(first = ((constructorOrder += "default;"), 8), ...values) {
+		constructorOrder += "body;";
+		this.value = sum(first, ...values);
+	}
+}
+check(
+	new OrderedForward(undefined, 2, 3).value === 13 &&
+		constructorOrder === "field;default;body;",
+	"base fields, defaults and forwarding order",
+);
+class ConstructorForward {
+	constructor(fn, first, ...values) {
+		fn = take;
+		first = null;
+		this.value = fn(...values);
+		this.target = new.target;
+	}
+}
+const constructed = new ConstructorForward(sum, 0, object);
+check(
+	constructed.value === object && constructed.target === ConstructorForward,
+	"base incoming span survives reassignment and collection",
+);
+function Alternate() {}
+const alternate = Reflect.construct(ConstructorForward, [sum, 0, object], Alternate);
+check(
+	alternate.value === object &&
+		alternate.target === Alternate &&
+		Object.getPrototypeOf(alternate) === Alternate.prototype,
+	"forwarding preserves alternate new.target",
+);
+class DerivedForward extends ConstructorForward {}
+const derived = new DerivedForward(sum, 0, object);
+check(
+	derived.value === object &&
+		derived.target === DerivedForward &&
+		derived instanceof DerivedForward,
+	"derived construction through forwarding base",
+);
+class ReturningForward {
+	constructor(fn, ...values) {
+		return fn(...values);
+	}
+}
+check(new ReturningForward(take, object) === object, "constructor object return");
+check(
+	new ReturningForward(sum, 2, 3) instanceof ReturningForward,
+	"constructor primitive return retains the instance",
+);
+class UnmappedForward {
+	constructor(first) {
+		first = 99;
+		this.value = sum.apply(null, arguments);
+	}
+}
+check(new UnmappedForward(2, 3).value === 5, "strict constructor arguments snapshot");
+let constructorList;
+function overriddenConstructorTarget() {}
+overriddenConstructorTarget.apply = function (receiver, values) {
+	check(this === overriddenConstructorTarget, "constructor apply callee");
+	check(
+		constructorList === undefined || constructorList === values,
+		"constructor repeated rest identity",
+	);
+	constructorList = values;
+	return ++values[0];
+};
+class RepeatedForward {
+	constructor(fn, ...values) {
+		this.first = fn.apply(this, values);
+		this.second = fn.apply(this, values);
+	}
+}
+const repeatedConstructor = new RepeatedForward(overriddenConstructorTarget, 4);
+check(
+	repeatedConstructor.first === 5 &&
+		repeatedConstructor.second === 6 &&
+		Array.isArray(constructorList),
+	"constructor materialized rest remains live",
+);
+let constructorArguments;
+function overriddenArgumentsTarget() {}
+overriddenArgumentsTarget.apply = function (receiver, values) {
+	check(
+		constructorArguments === undefined || constructorArguments === values,
+		"constructor repeated arguments identity",
+	);
+	constructorArguments = values;
+	let poisoned = false;
+	try {
+		values.callee;
+	} catch (error) {
+		poisoned = error instanceof TypeError;
+	}
+	check(poisoned, "strict constructor arguments callee poison");
+	return ++values[1];
+};
+class ArgumentsFallback {
+	constructor(fn, value) {
+		this.first = fn.apply(this, arguments);
+		this.second = fn.apply(this, arguments);
+		this.parameter = value;
+	}
+}
+const argumentsConstructor = new ArgumentsFallback(overriddenArgumentsTarget, 7);
+check(
+	argumentsConstructor.first === 8 &&
+		argumentsConstructor.second === 9 &&
+		argumentsConstructor.parameter === 7,
+	"unmapped constructor arguments fallback",
+);
+const constructorIterator = Array.prototype[Symbol.iterator];
+class FieldIteratorForward {
+	field = (Array.prototype[Symbol.iterator] = function* () {
+		yield 41;
+	});
+	constructor(...values) {
+		this.value = sum(...values);
+	}
+}
+try {
+	check(
+		new FieldIteratorForward(2, 3).value === 41,
+		"field mutation precedes forwarding protocol guard",
+	);
+} finally {
+	Array.prototype[Symbol.iterator] = constructorIterator;
+}
 console.log("rest-forwarding PASS");
