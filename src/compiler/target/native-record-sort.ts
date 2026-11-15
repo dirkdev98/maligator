@@ -4,6 +4,112 @@ import {
 	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
 
+interface NumericOrderKey {
+	readonly key: number;
+	readonly descending: boolean;
+}
+
+/**
+ * A lexicographic chain of opposite-record field differences defines a total
+ * preorder when its captured keys are not NaN. Other leaves retain the generic
+ * sort's comparison schedule, including its treatment of inconsistent orders.
+ */
+export function nativeRecordSortNumericOrder(
+	native: NativeFunctionPlan,
+	entry: NativeDirectEntryPlan,
+): ReadonlyArray<NumericOrderKey> | undefined {
+	const fields = entry.fieldParameters;
+	if (fields === undefined || native.body.instructions.length > 128) return undefined;
+	type Value =
+		| { readonly kind: "field"; readonly parameter: number; readonly key: number }
+		| ({ readonly kind: "difference" } & NumericOrderKey);
+	const loads = new Map(fields.loads.map((load) => [load.instructionIp, load.field]));
+	let remaining = 256;
+	const same = (left: NumericOrderKey, right: NumericOrderKey) =>
+		left.key === right.key && left.descending === right.descending;
+	const walk = (
+		start: number,
+		registers: Map<number, Value>,
+		conditions: ReadonlyMap<number, boolean>,
+	): Array<NumericOrderKey> | undefined => {
+		for (let ip = start; --remaining >= 0; ip++) {
+			const op = native.body.instructions[ip];
+			if (op === undefined) return undefined;
+			switch (op.opcode) {
+				case "JUMP":
+					ip = op.targetIp - 1;
+					break;
+				case "LOAD_PROPERTY_STATIC": {
+					const field = loads.get(ip);
+					if (field === undefined) return undefined;
+					registers.set(op.dst, { kind: "field", ...fields.sources[field]! });
+					break;
+				}
+				case "MOVE": {
+					const value = registers.get(op.src);
+					if (value === undefined) return undefined;
+					registers.set(op.dst, value);
+					break;
+				}
+				case "BINARY": {
+					const left = registers.get(op.left);
+					const right = registers.get(op.right);
+					if (
+						op.operator !== "-" ||
+						left?.kind !== "field" ||
+						right?.kind !== "field" ||
+						left.key !== right.key ||
+						(left.parameter !== 0 && left.parameter !== 1) ||
+						right.parameter !== 1 - left.parameter
+					)
+						return undefined;
+					registers.set(op.dst, {
+						kind: "difference",
+						key: left.key,
+						descending: left.parameter === 1,
+					});
+					break;
+				}
+				case "JUMP_IF": {
+					const condition = registers.get(op.cond);
+					if (condition?.kind !== "difference") return undefined;
+					const known = conditions.get(condition.key);
+					if (known !== undefined) {
+						if (known) ip = op.targetIp - 1;
+						break;
+					}
+					const selected = walk(
+						op.targetIp,
+						new Map(registers),
+						new Map(conditions).set(condition.key, true),
+					);
+					if (selected?.length !== 1 || !same(selected[0]!, condition)) return undefined;
+					const tail = walk(
+						ip + 1,
+						registers,
+						new Map(conditions).set(condition.key, false),
+					);
+					return tail === undefined ? undefined : [condition, ...tail];
+				}
+				case "RETURN": {
+					const value = registers.get(op.value);
+					return value?.kind === "difference" ? [value] : undefined;
+				}
+				default:
+					return undefined;
+			}
+		}
+		return undefined;
+	};
+	const order = walk(0, new Map(), new Map());
+	const seen = new Set<number>();
+	return order?.filter(({ key }) => {
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+}
+
 /**
  * Fields whose complete use graph only compares the same key on opposite records.
  * A multiply assigned local has no single field provenance and fails closed.

@@ -138,7 +138,10 @@ import {
 	analyzeRecordIteration,
 	recordIterationNullishTest,
 } from "./native-record-iteration.ts";
-import { nativeRecordSortOrderFields } from "./native-record-sort.ts";
+import {
+	nativeRecordSortNumericOrder,
+	nativeRecordSortOrderFields,
+} from "./native-record-sort.ts";
 import { nativeRegExpLiteralActions } from "./native-regexp-literal.ts";
 import type { NativeRegExpLiteralAction } from "./native-regexp-literal.ts";
 import { nativeInactiveRootMasks, nativeRootMaskWordHex } from "./native-root-masks.ts";
@@ -6230,6 +6233,7 @@ function renderNumericSortKernel(
 	const keys = numericSortRecordKeys(entry);
 	const orderFields = nativeRecordSortOrderFields(native, entry);
 	if (orderFields.keys.length === 0) {
+		const numericOrder = nativeRecordSortNumericOrder(native, entry);
 		const type = `${symbol}_key`;
 		const compare = `${symbol}_compare`;
 		const arguments_ = [
@@ -6246,6 +6250,16 @@ static f64 ${compare}(${type} left, ${type} right) {
 }
 ${numericSortKernelDeclaration(symbol)} {
     ${type} *tuples = (${type} *) keys;
+${
+	numericOrder === undefined
+		? ""
+		: `    static const MalNumericSortKeyOrder order[] = { ${numericOrder.map(({ key, descending }) => `{ ${keys.indexOf(key)}, ${descending} }`).join(", ")} };
+    if (count >= MAL_NUMERIC_RADIX_SORT_MIN && mal_numeric_radix_sort(
+            values, scratch, keys, count, ${keys.length}, order, countof(order))) {
+        return;
+    }
+`
+}
     MAL_LEAF_MERGE_SORT_BODY(${type}, ${compare}, tuples);
 }
 `;

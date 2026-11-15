@@ -5268,13 +5268,19 @@ static inline __attribute__((always_inline)) void mal_numeric_leaf_merge_sort(
 /** Below this many elements the merge beats the radix passes' fixed cost. */
 #define MAL_NUMERIC_RADIX_SORT_MIN 128u
 
+typedef struct {
+    u32 field;
+    bool descending;
+} MalNumericSortKeyOrder;
+
 /**
- * Stably order `values` by their Number `keys`, ascending or descending, staging the
- * result in `scratch`. False, with nothing moved, when a key is NaN or the pass
- * storage cannot be allocated.
+ * Stable lexicographic order over interleaved Number keys. Key priority follows
+ * `key_order`; equal Numbers, including signed zeros, retain their input order.
+ * Returns false without moving values for a NaN key or unavailable pass storage.
  */
 bool mal_numeric_radix_sort(
-    MalValue *values, MalValue *scratch, const f64 *keys, u32 count, bool descending);
+    MalValue *values, MalValue *scratch, const f64 *keys, u32 count,
+    u32 stride, const MalNumericSortKeyOrder *key_order, u32 key_count);
 
 /**
  * Sort kernel for a leaf that returns `a - b` (or `b - a`) of its two Numbers. Without
@@ -5286,8 +5292,9 @@ static inline __attribute__((always_inline)) void mal_numeric_difference_sort(
     f64 (*compare)(f64 left, f64 right)
 ) {
     for (u32 index = 0; index < count; index++) keys[index] = mal_ops_number_as_f64(values[index]);
+    MalNumericSortKeyOrder key_order = {.field = 0, .descending = descending};
     if (count >= MAL_NUMERIC_RADIX_SORT_MIN &&
-        mal_numeric_radix_sort(values, scratch, keys, count, descending)) {
+        mal_numeric_radix_sort(values, scratch, keys, count, 1, &key_order, 1)) {
         return;
     }
     MAL_LEAF_MERGE_SORT_BODY(f64, compare, keys);

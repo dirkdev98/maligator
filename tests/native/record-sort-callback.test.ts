@@ -30,6 +30,15 @@ describe("record sort callback kernels", () => {
 	});
 
 	it.each([
+		{
+			scenario: "numericOrders",
+			behavior:
+				"preserves mixed-direction numeric priorities, ties and the copy boundary",
+		},
+		{
+			scenario: "radixSpecialNumbers",
+			behavior: "resumes the generic order after a NaN in a higher-priority field",
+		},
 		{ scenario: "stable", behavior: "preserves ties and the copy boundary" },
 		{ scenario: "large", behavior: "sorts large numeric and String records" },
 		{
@@ -116,6 +125,18 @@ describe("record sort callback kernels", () => {
 		expect(Number(counter![1])).toBeGreaterThan(0);
 	});
 
+	it("uses stable radix passes for a certified numeric record order", () => {
+		const run = spawnSync(pair.compiled, [], {
+			encoding: "utf8",
+			env: { ...process.env, MAL_PERF_STATS: "1", RECORD_SORT_CASE: "numericOrders" },
+		});
+		expect(run.status, run.stderr).toBe(0);
+		const counter = run.stderr.match(/\[perf-radix-sort-stats\] runs=(\d+) passes=(\d+)/);
+		expect(counter, run.stderr).not.toBeNull();
+		expect(Number(counter![1])).toBeGreaterThan(0);
+		expect(Number(counter![2])).toBeGreaterThan(0);
+	});
+
 	it.each(["stringMixed", "stringUncertified", "stringGetters", "stringProxies"])(
 		"declines the record kernel for %s",
 		(scenario) => {
@@ -131,6 +152,8 @@ describe("record sort callback kernels", () => {
 	);
 
 	it.each([
+		"numericOrders",
+		"radixSpecialNumbers",
 		"stable",
 		"large",
 		"monotonicRuns",

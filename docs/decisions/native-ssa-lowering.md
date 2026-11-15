@@ -319,7 +319,7 @@ Worker plans record nonpolling jumps to the immediately following instruction as
 fallthroughs. Rendering retains only labels targeted by remaining branches; a
 selected expression producer can still be such a target.
 
-Generic Array sorting and comparator-leaf kernels share a stable block merge strategy.
+Generic Array sorting and arbitrary comparator-leaf kernels share a stable block merge strategy.
 Binary insertion bounds comparator calls within each block while key and value shifts
 remain plain memory operations. Small arrays retain linear insertion to avoid merge
 and search overhead. Strictly reversed blocks can be
@@ -328,6 +328,14 @@ ordered append still needs only its boundary comparison. Insertion follows exist
 ties, including NaN comparison results. Both
 paths choose the same comparison pairs so declining a kernel also preserves the
 runtime's behavior for inconsistent comparators.
+
+Numeric field comparators whose complete control flow returns a lexicographic chain of
+opposite-record differences can use stable radix passes over captured keys. Least-significant
+fields run first, with direction selected per field and signed zeros normalized to one key.
+Only the final index permutation moves records. A NaN key or unavailable pass storage leaves
+the values untouched and resumes the block merge, so a partially ordered key buffer cannot
+change the fallback's comparison schedule. Getters, proxies, inherited fields and effects
+retain the ordinary comparator path. Small inputs keep the block merge to avoid radix setup.
 
 Short loop-free bodies of side-effect-free reads also get a frameless fast entry
 ahead of their full entry. It reads parameters, captures and globals, probes named

@@ -2,6 +2,10 @@ function compareRecords(left, right) {
 	return right.score - left.score || left.id - right.id;
 }
 
+function compareNumericFields(left, right) {
+	return left.score - right.score || right.group - left.group || left.id - right.id;
+}
+
 function sortRecords(values) {
 	return values.sort(compareRecords);
 }
@@ -84,6 +88,44 @@ function sortFieldKinds(mask) {
 }
 
 const scenarios = {
+	numericOrders() {
+		const scores = [
+			-Infinity,
+			-Number.MAX_VALUE,
+			-1,
+			-0,
+			0,
+			1,
+			Number.MAX_VALUE,
+			Infinity,
+		];
+		const rows = Array.from({ length: 257 }, (_, index) => ({
+			score: scores[(index * 37) % scores.length],
+			group: (index * 7) % 11,
+			id: index % 3,
+			name: `numeric${index}`,
+		}));
+		return {
+			forward: labels(rows.toSorted(compareNumericFields)),
+			reverse: labels(rows.slice().reverse().sort(compareNumericFields)),
+			source: labels(rows),
+		};
+	},
+	radixSpecialNumbers() {
+		const rows = records(257).map((record, index) => ({
+			...record,
+			score: index % 17 === 0 ? NaN : record.score,
+		}));
+		let comparisons = 0;
+		const generic = rows.slice().sort((left, right) => {
+			comparisons++;
+			return compareRecords(left, right);
+		});
+		return {
+			same: labels(sortRecords(rows)).join() === labels(generic).join(),
+			compared: comparisons > 0,
+		};
+	},
 	large() {
 		return {
 			numeric: labels(sortRecords(records(500))),

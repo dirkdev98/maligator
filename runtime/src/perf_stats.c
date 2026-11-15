@@ -1527,6 +1527,10 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.record_columns_polls
     );
     fprintf(stderr,
+        "[perf-radix-sort-stats] runs=%llu passes=%llu\n",
+        (unsigned long long) mal_perf_stats.numeric_sort_radix_runs,
+        (unsigned long long) mal_perf_stats.numeric_sort_radix_passes);
+    fprintf(stderr,
         "[perf-sort-callback-stats] array_nominations=%llu typed_nominations=%llu\n",
         (unsigned long long) mal_perf_stats.array_sort_runtime_callback_nominations,
         (unsigned long long) mal_perf_stats.typed_array_sort_runtime_callback_nominations);
