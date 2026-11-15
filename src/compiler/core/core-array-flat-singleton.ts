@@ -44,7 +44,7 @@ export function coreArrayFlatSingleton(
 	callback: CoreFunctionStore,
 ): FlatSingletonPlan | undefined {
 	if (
-		!["some", "every", "forEach"].includes(call.name) ||
+		!["some", "every", "forEach", "find", "findIndex"].includes(call.name) ||
 		callbackObservesArray(callback)
 	)
 		return undefined;
@@ -237,6 +237,10 @@ function guardedFlatMethod(name: CoreArrayIterationCall["name"]): number | undef
 			return 17;
 		case "every":
 			return 18;
+		case "find":
+			return 19;
+		case "findIndex":
+			return 20;
 		default:
 			return undefined;
 	}

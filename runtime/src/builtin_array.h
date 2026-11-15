@@ -340,7 +340,7 @@ static inline __attribute__((always_inline)) MalValue mal_builtin_array_iteratio
     MalVm *vm, MalValue method, MalValue receiver, MalValue method_id, MalValue callback
 ) {
     f64 id = mal_ops_number_as_f64(method_id);
-    if (id >= 16 && id <= 18) {
+    if (id >= 16 && id <= 20) {
         return mal_ops_number_value((f64) mal_builtin_array_flat_iteration_guard(vm, receiver, (u32) id - 16));
     }
     return mal_value_new_boolean(mal_builtin_array_iteration_eligible_known(vm, method, receiver, method_id, callback));

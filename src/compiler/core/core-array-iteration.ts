@@ -21,6 +21,10 @@ const ARRAY_ITERATION_METHOD_IDS = {
 	map: 5,
 	filter: 6,
 	reduce: 7,
+	reduceRight: 8,
+	findLast: 9,
+	findLastIndex: 10,
+	flatMap: 11,
 } as const;
 
 export type CoreArrayIterationName = keyof typeof ARRAY_ITERATION_METHOD_IDS;
@@ -30,7 +34,7 @@ export interface CoreArrayIterationCall {
 	readonly callee: CoreValueId;
 	readonly receiver: CoreValueId;
 	readonly callback: CoreValueId;
-	// The callback's this, or reduce's initial value.
+	// The callback receiver or reduction initial value.
 	readonly secondArgument?: CoreValueId;
 }
 
@@ -138,11 +142,9 @@ export function coreArrayIterationCall(
 	if (fn.instructionOpcodeName(lookup) !== "loadPropertyStatic") return undefined;
 	const units =
 		program.stringConstants[fn.instructionAttributes(lookup).stringIndex as number];
-	if (units === undefined || units.length > 9) return undefined;
+	if (units === undefined || units.length > 13) return undefined;
 	const name = String.fromCharCode(...units);
 	if (!isArrayIterationName(name)) return undefined;
-	// Without an initial value, reduce seeds from the first present element or throws.
-	if (name === "reduce" && count !== 4) return undefined;
 	if (fn.instructionKind(fn.blockTerminator(fn.instructionBlock(site))) === "guard")
 		return undefined;
 	return {
@@ -156,8 +158,8 @@ export function coreArrayIterationCall(
 
 /*
  * Expands an eligible call into the method's specified loop: `length` is read once,
- * holes are skipped through HasProperty (find and findIndex read every index), and
- * map/filter create their default-species result before the loop. The result Array
+ * holes are skipped through HasProperty (the find family reads every index), and
+ * mapping and filtering create their default-species result before the loop. The result Array
  * stays unreachable from the callback, so CreateDataProperty is a plain define.
  * The caller admits the loop and callback inline together before expanding either graph.
  */
@@ -175,10 +177,18 @@ export function expandCoreArrayIterationCall(
 } {
 	const name = call.name;
 	const filter = name === "filter";
-	const reduce = name === "reduce";
+	const reduce = name === "reduce" || name === "reduceRight";
+	const reverse =
+		name === "reduceRight" || name === "findLast" || name === "findLastIndex";
+	const seedless = reduce && call.secondArgument === undefined;
+	const flatMap = name === "flatMap";
 	// filter carries its output index and reduce its accumulator beside the source index.
 	const carries = filter || reduce;
-	const finds = name === "find" || name === "findIndex";
+	const finds =
+		name === "find" ||
+		name === "findIndex" ||
+		name === "findLast" ||
+		name === "findLastIndex";
 	const block = fn.instructionBlock(site);
 	const originalTerminator = fn.blockTerminator(block);
 	const sourcePosition = fn.instructionSourcePosition(site);
@@ -193,6 +203,11 @@ export function expandCoreArrayIterationCall(
 	const fallback = guarded ? editor.createBlock() : undefined;
 	const scalar = singleton === undefined ? undefined : editor.createBlock();
 	const fast = editor.createBlock();
+	const seedHeader = seedless ? editor.createBlock([{}]) : undefined;
+	const seedPresent = seedless ? editor.createBlock() : undefined;
+	const seedLoad = seedless ? editor.createBlock() : undefined;
+	const seedAdvance = seedless ? editor.createBlock() : undefined;
+	const seedEmpty = seedless ? editor.createBlock() : undefined;
 	const header = editor.createBlock(carries || singleton !== undefined ? [{}, {}] : [{}]);
 	const dispatch = singleton === undefined ? undefined : editor.createBlock();
 	const present = finds ? undefined : editor.createBlock();
@@ -208,6 +223,11 @@ export function expandCoreArrayIterationCall(
 		fallback,
 		scalar,
 		fast,
+		seedHeader,
+		seedPresent,
+		seedLoad,
+		seedAdvance,
+		seedEmpty,
 		header,
 		dispatch,
 		present,
@@ -330,28 +350,73 @@ export function expandCoreArrayIterationCall(
 					append(fast, "loadIntrinsic", [], { intrinsic: "Array" }).outputs[0]!,
 					arrayLength,
 				]).outputs[0]!
-			: filter
+			: filter || flatMap
 				? append(fast, "createArray", [], { length: 0 }).outputs[0]!
 				: undefined;
-	if (reduce) instructionsIntroduced++;
-	// The accumulator also carries boxed callback results, so an unboxed seed boxes first.
-	const seed = reduce
-		? editor.appendInstruction(fast, "move", [call.secondArgument!], {
-				sourcePosition,
-				outputRepresentations: ["boxed"],
-			}).outputs[0]!
-		: undefined;
-	jump(
-		fast,
-		header,
-		singleton !== undefined
-			? [zero, arrayLength]
-			: filter
-				? [zero, zero]
-				: seed !== undefined
-					? [zero, seed]
-					: [zero],
-	);
+	const initialIndex = reverse
+		? append(fast, "binary", [arrayLength, one], { operator: "-" }).outputs[0]!
+		: zero;
+	if (seedHeader !== undefined) {
+		jump(fast, seedHeader, [initialIndex]);
+		const index = fn.kernel.blockParameterValue(
+			fn.kernel.blockParameterStart(seedHeader),
+		);
+		const withinLength = append(
+			seedHeader,
+			"binary",
+			reverse ? [index, zero] : [index, arrayLength],
+			{
+				operator: reverse ? ">=" : "<",
+			},
+		).outputs[0]!;
+		branch(seedHeader, withinLength, seedPresent!, seedEmpty!);
+		const exists = append(seedPresent!, "binary", [index, call.receiver], {
+			operator: "in",
+		}).outputs[0]!;
+		branch(seedPresent!, exists, seedLoad!, seedAdvance!);
+		const seed = append(seedLoad!, "loadProperty", [call.receiver, index]).outputs[0]!;
+		const following = append(seedLoad!, "binary", [index, one], {
+			operator: reverse ? "-" : "+",
+		}).outputs[0]!;
+		jump(seedLoad!, header, [following, seed]);
+		const next = append(seedAdvance!, "binary", [index, one], {
+			operator: reverse ? "-" : "+",
+		}).outputs[0]!;
+		jump(seedAdvance!, seedHeader, [next]);
+		const errorConstructor = append(seedEmpty!, "loadIntrinsic", [], {
+			intrinsic: "TypeError",
+		}).outputs[0]!;
+		const messageIndex = editor.appendStringConstants([
+			[..."Reduce of empty array with no initial value"].map((unit) =>
+				unit.charCodeAt(0),
+			),
+		]);
+		const message = append(seedEmpty!, "createString", [], { stringIndex: messageIndex })
+			.outputs[0]!;
+		const error = append(seedEmpty!, "construct", [errorConstructor, message])
+			.outputs[0]!;
+		editor.setTerminator(seedEmpty!, { kind: "throw", value: error, sourcePosition });
+	} else {
+		if (reduce) instructionsIntroduced++;
+		// Callback results are boxed, so an unboxed initial accumulator boxes here.
+		const seed = reduce
+			? editor.appendInstruction(fast, "move", [call.secondArgument!], {
+					sourcePosition,
+					outputRepresentations: ["boxed"],
+				}).outputs[0]!
+			: undefined;
+		jump(
+			fast,
+			header,
+			singleton !== undefined
+				? [zero, arrayLength]
+				: filter
+					? [zero, zero]
+					: seed !== undefined
+						? [initialIndex, seed]
+						: [initialIndex],
+		);
+	}
 	const headerStart = fn.kernel.blockParameterStart(header);
 	const index = fn.kernel.blockParameterValue(headerStart);
 	const length =
@@ -359,11 +424,17 @@ export function expandCoreArrayIterationCall(
 			? arrayLength
 			: fn.kernel.blockParameterValue(headerStart + 1);
 	const carried = carries ? [fn.kernel.blockParameterValue(headerStart + 1)] : [];
-	const withinLength = append(header, "binary", [index, length], { operator: "<" })
-		.outputs[0]!;
+	const withinLength = append(
+		header,
+		"binary",
+		reverse ? [index, zero] : [index, length],
+		{ operator: reverse ? ">=" : "<" },
+	).outputs[0]!;
 	branch(header, withinLength, dispatch ?? present ?? invoke, normalExit);
 	if (dispatch !== undefined) {
-		branch(dispatch, singleton!.isArray, present!, invoke, [singleton!.element]);
+		branch(dispatch, singleton!.isArray, present ?? arrayElement!, invoke, [
+			singleton!.element,
+		]);
 	}
 	if (present !== undefined) {
 		const exists = append(present, "binary", [index, call.receiver], { operator: "in" })
@@ -397,6 +468,8 @@ export function expandCoreArrayIterationCall(
 		case "some":
 		case "find":
 		case "findIndex":
+		case "findLast":
+		case "findLastIndex":
 			branch(invoke, returned, earlyExit!, increment);
 			break;
 		case "every":
@@ -419,11 +492,22 @@ export function expandCoreArrayIterationCall(
 			jump(select!, increment, [following]);
 			break;
 		}
+		case "flatMap": {
+			const appendMapped = append(invoke, "loadIntrinsic", [], {
+				intrinsic: "__arrayFlatMapAppend",
+			}).outputs[0]!;
+			append(invoke, "call", [appendMapped, undefinedValue, created!, returned]);
+			jump(invoke, increment);
+			break;
+		}
 		case "reduce":
+		case "reduceRight":
 			jump(invoke, increment, [returned]);
 			break;
 	}
-	const next = append(increment, "binary", [index, one], { operator: "+" }).outputs[0]!;
+	const next = append(increment, "binary", [index, one], {
+		operator: reverse ? "-" : "+",
+	}).outputs[0]!;
 	jump(
 		increment,
 		header,
@@ -444,16 +528,19 @@ export function expandCoreArrayIterationCall(
 			]);
 			break;
 		case "find":
+		case "findLast":
 			jump(normalExit, join, [undefinedValue]);
 			jump(earlyExit!, join, [element]);
 			break;
 		case "findIndex":
+		case "findLastIndex":
 			jump(normalExit, join, [
 				append(normalExit, "createNumber", [], { value: -1 }).outputs[0]!,
 			]);
 			jump(earlyExit!, join, [index]);
 			break;
 		case "reduce":
+		case "reduceRight":
 			jump(normalExit, join, [carried[0]!]);
 			break;
 		case "forEach":
@@ -461,6 +548,7 @@ export function expandCoreArrayIterationCall(
 			break;
 		case "map":
 		case "filter":
+		case "flatMap":
 			jump(normalExit, join, [created!]);
 			break;
 	}

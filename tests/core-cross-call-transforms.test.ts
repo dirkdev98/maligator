@@ -1382,6 +1382,41 @@ describe("bounded Core cross-call transforms", () => {
 		expect(calls("beyond")).toHaveLength(1);
 	});
 
+	it.each([
+		"reduceRight((sum, value, index) => sum + value + index, 0)",
+		"reduce((sum, value) => sum + value)",
+		"reduceRight((sum, value) => sum + value)",
+		"findLast((value, index) => value === index)",
+		"findLastIndex((value, index) => value === index)",
+		"flatMap(value => [value, value + 1])",
+	])("expands the callback behind the method guard for %s", (expression) => {
+		const core = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+			function inspect(values) {
+				let result;
+				for (let round = 0; round < 4; round++) result = values.${expression};
+				return result;
+			}
+			globalThis.inspect = inspect;
+		`,
+				"extended-array-callback.js",
+			),
+		);
+		const { compilation } = optimizeCore(core, { verification: "per-pass" });
+		const operations = coreOperations(coreFunctionNamed(compilation.program, "inspect")!);
+		const fallback = operations.find(
+			({ opcode, attributes }) =>
+				opcode === "call" && attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true,
+		);
+		expect(fallback).toBeDefined();
+		expect(
+			operations
+				.filter(({ opcode }) => opcode === "createFunction")
+				.map(({ block }) => block),
+		).toEqual([fallback!.block]);
+	});
+
 	it("expands forEach outside a loop around a branching callback that writes its caller's bindings", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(

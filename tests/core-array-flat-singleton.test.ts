@@ -44,7 +44,7 @@ const isArray = (operation: ReturnType<typeof operations>[number]) =>
 	operation.opcode === "callKnown" && operation.attributes.operation === "Array.isArray";
 
 describe("private singleton flat iteration", () => {
-	it.each(["some", "every", "forEach"])(
+	it.each(["some", "every", "forEach", "find", "findIndex"])(
 		"guards the allocation branch of %s with Proxy-aware IsArray",
 		(name) => {
 			const fn = compile(`[input].flat().${name}((value, index) => value === index)`);
@@ -82,6 +82,19 @@ describe("private singleton flat iteration", () => {
 			expect(result.some(({ opcode }) => opcode === "createFunction")).toBe(false);
 		},
 	);
+
+	it.each(["find", "findIndex"])("guards mutable singleton-flat %s", (name) => {
+		const result = operations(`[input].flat().${name}(value => value === 0)`, {
+			primordials: "mutable",
+			realms: true,
+		});
+		expect(
+			result.some(
+				({ opcode, attributes }) =>
+					opcode === "createNumber" && attributes.value === (name === "find" ? 19 : 20),
+			),
+		).toBe(true);
+	});
 
 	it.each([
 		{ primordials: "mutable" as const, realms: false },

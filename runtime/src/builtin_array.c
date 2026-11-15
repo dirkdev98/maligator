@@ -5768,7 +5768,7 @@ u32 mal_builtin_array_flat_iteration_guard(MalVm *vm, MalValue element, u32 meth
     // epoch covers every realm's Array.prototype methods, constructor and species;
     // while intact, their original callees therefore also belong to this realm.
     // The elements epoch additionally rules out inherited indices and reparenting.
-    if (method > 2 || !mal_vm_watched_methods_intact(vm) ||
+    if (method > 4 || !mal_vm_watched_methods_intact(vm) ||
         !mal_vm_array_elements_intact(vm)) return 0;
     // Proxy IsArray can throw, and flattening a Proxy can run arbitrary traps.
     // Defer both to the original sequence, before callback argument evaluation.

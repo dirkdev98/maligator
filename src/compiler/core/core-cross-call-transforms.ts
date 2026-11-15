@@ -1949,7 +1949,7 @@ function offerFunctionCandidates(
 				"call",
 				directCaptureContext(fn, iteration.callback, site.instruction, callback),
 				undefined,
-				iteration.name === "reduce" ? 4 : 3,
+				iteration.name === "reduce" || iteration.name === "reduceRight" ? 4 : 3,
 				"array-iteration",
 			);
 			// A callback with its own loop would nest it in every expanded call site.
@@ -4379,7 +4379,7 @@ function applyCandidate(
 				"call",
 				captureContext,
 				undefined,
-				iteration.name === "reduce" ? 4 : 3,
+				iteration.name === "reduce" || iteration.name === "reduceRight" ? 4 : 3,
 				"array-iteration",
 			);
 			if (inline === undefined || inline.loops) return undefined;

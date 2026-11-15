@@ -63,6 +63,38 @@ function reduceSite(values) {
 	}, 0);
 	return { result, visits };
 }
+function reduceRightSite(values) {
+	const visits = [];
+	const result = values.reduceRight((accumulator, value, index, array) => {
+		visits.push([value, index, array === values]);
+		return accumulator + value;
+	}, 0);
+	return { result, visits };
+}
+function findLastSite(values) {
+	const visits = [];
+	const result = values.findLast((value, index, array) => {
+		visits.push([value, index, array === values]);
+		return value > 2;
+	});
+	return { result, visits };
+}
+function findLastIndexSite(values) {
+	const visits = [];
+	const result = values.findLastIndex((value, index, array) => {
+		visits.push([value, index, array === values]);
+		return value > 2;
+	});
+	return { result, visits };
+}
+function flatMapSite(values) {
+	const visits = [];
+	const result = values.flatMap((value, index, array) => {
+		visits.push([value, index, array === values]);
+		return [value, index];
+	});
+	return { result, visits };
+}
 const sites = {
 	forEach: forEachSite,
 	map: mapSite,
@@ -72,6 +104,10 @@ const sites = {
 	find: findSite,
 	findIndex: findIndexSite,
 	reduce: reduceSite,
+	reduceRight: reduceRightSite,
+	findLast: findLastSite,
+	findLastIndex: findLastIndexSite,
+	flatMap: flatMapSite,
 };
 const scenarios = {};
 for (const name of Object.keys(sites)) {
@@ -80,7 +116,7 @@ for (const name of Object.keys(sites)) {
 			const output = [];
 			if (timing === "after") output.push(sites[name]([1, 2, 3]));
 			Array.prototype[name] = function (callback) {
-				if (name === "reduce") callback(7, 9, 0, this);
+				if (name === "reduce" || name === "reduceRight") callback(7, 9, 0, this);
 				else callback(9, 0, this);
 				return "replaced";
 			};
@@ -92,7 +128,7 @@ for (const name of Object.keys(sites)) {
 scenarios.intact = () => Object.keys(sites).map((name) => sites[name]([1, , 3]));
 scenarios.species = () => {
 	const effects = [];
-	for (const name of ["map", "filter"]) {
+	for (const name of ["map", "filter", "flatMap"]) {
 		const values = [1, 2, 3];
 		values.constructor = {
 			get [Symbol.species]() {
