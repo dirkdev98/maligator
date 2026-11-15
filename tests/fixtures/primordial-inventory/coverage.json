@@ -67693,7 +67693,10 @@
 		{
 			"id": "[\"Array.prototype.lastIndexOf\",\"length\"]",
 			"owner": "Array.prototype.lastIndexOf",
-			"ownerPaths": ["Array.prototype.lastIndexOf"],
+			"ownerPaths": [
+				"Array.prototype.lastIndexOf",
+				"MAL_INTRINSIC_ARRAY_PROTOTYPE_LAST_INDEX_OF"
+			],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -67703,7 +67706,10 @@
 		{
 			"id": "[\"Array.prototype.lastIndexOf\",\"name\"]",
 			"owner": "Array.prototype.lastIndexOf",
-			"ownerPaths": ["Array.prototype.lastIndexOf"],
+			"ownerPaths": [
+				"Array.prototype.lastIndexOf",
+				"MAL_INTRINSIC_ARRAY_PROTOTYPE_LAST_INDEX_OF"
+			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -174937,7 +174943,10 @@
 		{
 			"id": "[\"Array.prototype.lastIndexOf\",\"<call>\"]",
 			"owner": "Array.prototype.lastIndexOf",
-			"ownerPaths": ["Array.prototype.lastIndexOf"],
+			"ownerPaths": [
+				"Array.prototype.lastIndexOf",
+				"MAL_INTRINSIC_ARRAY_PROTOTYPE_LAST_INDEX_OF"
+			],
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["Array.prototype.lastIndexOf"],
@@ -174947,7 +174956,10 @@
 		{
 			"id": "[\"Array.prototype.lastIndexOf\",\"<construct>\"]",
 			"owner": "Array.prototype.lastIndexOf",
-			"ownerPaths": ["Array.prototype.lastIndexOf"],
+			"ownerPaths": [
+				"Array.prototype.lastIndexOf",
+				"MAL_INTRINSIC_ARRAY_PROTOTYPE_LAST_INDEX_OF"
+			],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Array.prototype.lastIndexOf"],
@@ -290092,6 +290104,16 @@
 			"key": "MAL_INTRINSIC_ARRAY_PROTOTYPE_INDEX_OF",
 			"kind": "binding",
 			"operations": ["Array.prototype.indexOf"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_ARRAY_PROTOTYPE_LAST_INDEX_OF\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_ARRAY_PROTOTYPE_LAST_INDEX_OF",
+			"kind": "binding",
+			"operations": ["Array.prototype.lastIndexOf"],
 			"task": "N-06",
 			"decisions": []
 		},
