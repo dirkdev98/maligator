@@ -26,7 +26,7 @@ use regress::{AsciiMatches, AsciiScratch, Flags, Match, Regex, WideScratch};
 use crate::ffi::{nullable_slice, nullable_u16_slice};
 
 /// Ownership and execution contract mirrored by `mal_regexp.h`.
-pub const MAL_REGEXP_ABI_VERSION: u32 = 11;
+pub const MAL_REGEXP_ABI_VERSION: u32 = 12;
 
 const EXEC_ASCII: u32 = 1 << 0;
 const EXEC_CACHE_HIT: u32 = 1 << 1;
@@ -193,6 +193,8 @@ enum FastNode {
         max: u32,
     },
     End,
+    /// Terminal `(?=$|class)`: observes the next unit without consuming it.
+    EndOrClass(FastClass),
 }
 
 #[derive(Debug)]
@@ -394,6 +396,11 @@ impl FastPattern {
                         return None;
                     }
                 }
+                FastNode::EndOrClass(class) => {
+                    if position != subject.len() && !class.contains(subject[position].code_unit()) {
+                        return None;
+                    }
+                }
             }
         }
         Some(position)
@@ -432,11 +439,28 @@ impl FastPattern {
         slots: &mut [i32; FAST_CAPTURE_SLOTS],
         at_start_only: bool,
     ) -> bool {
+        if let [FastNode::EndOrClass(class)] = self.nodes.as_ref() {
+            let mut position = start;
+            while position < subject.len() && !class.contains(subject[position].code_unit()) {
+                if self.anchored_start || at_start_only {
+                    return false;
+                }
+                position += 1;
+            }
+            if self.anchored_start && start != 0 {
+                return false;
+            }
+            slots[0] = position as i32;
+            slots[1] = position as i32;
+            return true;
+        }
         // A fill of fixed length is a few vector stores; a variable one calls memset.
-        if self.capture_count <= 8 {
-            slots[2..18].fill(-1);
-        } else {
-            slots[2..2 + self.capture_count * 2].fill(-1);
+        if self.capture_count > 0 {
+            if self.capture_count <= 8 {
+                slots[2..18].fill(-1);
+            } else {
+                slots[2..2 + self.capture_count * 2].fill(-1);
+            }
         }
         if self.anchored_start {
             return start == 0 && self.match_at(subject, 0, slots);
@@ -473,7 +497,7 @@ impl FastPattern {
 }
 
 /// How a sequence's first-unit set ends: at a node that always consumes, at a `$`
-/// after which nothing can consume, or by matching empty.
+/// or terminal lookahead after which nothing can consume, or by matching empty.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FastFirstEnd {
     Consumes,
@@ -532,6 +556,7 @@ fn fast_first(nodes: &[FastNode]) -> (FastClass, FastFirstEnd) {
                 },
             ),
             FastNode::End => (FastClass::empty(), FastFirstEnd::Blocked),
+            FastNode::EndOrClass(class) => (class.clone(), FastFirstEnd::Blocked),
         };
         first = first.union(&node_first);
         if end != FastFirstEnd::Nullable {
@@ -541,7 +566,7 @@ fn fast_first(nodes: &[FastNode]) -> (FastClass, FastFirstEnd) {
     (first, FastFirstEnd::Nullable)
 }
 
-/// The units that can be consumed first after `nodes`, given those after the enclosing sequence.
+/// Units the continuation can consume or test with a terminal lookahead.
 fn fast_follow(nodes: &[FastNode], outer: &FastClass) -> FastClass {
     match fast_first(nodes) {
         (first, FastFirstEnd::Nullable) => first.union(outer),
@@ -561,7 +586,9 @@ fn fast_follow(nodes: &[FastNode], outer: &FastClass) -> FastClass {
 /// A lazy repeat stops at the first count after which the continuation matches. Under the
 /// same disjointness the continuation cannot match inside the run when it has to consume a
 /// unit or reach `$` first (`outer_end` describes what follows the enclosing sequence), so
-/// the lazy repeat stops where the greedy one does.
+/// the lazy repeat stops where the greedy one does. A terminal end-or-class
+/// lookahead contributes its tested class to the continuation: overlap declines
+/// the plan because the assertion could succeed before the run ends.
 fn fast_nodes_are_greedy_safe(
     nodes: &[FastNode],
     outer: &FastClass,
@@ -633,8 +660,8 @@ fn fast_nodes_are_greedy_safe(
 const FAST_REPEAT_LIMIT: u32 = 0xffff;
 
 /// Recursive-descent reader for the allocation-free subset: literals, escapes, classes,
-/// quantifiers, plain and optional groups, a leading `^` and `$`. Anything with
-/// Annex B or alternation semantics declines the plan.
+/// quantifiers, groups, disjoint alternatives, a leading `^`, `$`, and a terminal
+/// end-or-unit lookahead. Constructs requiring backtracking decline the plan.
 struct FastParser<'a> {
     units: &'a [u16],
     position: usize,
@@ -664,6 +691,7 @@ enum FastAtom {
     Class(FastClass),
     Group(FastNode),
     End,
+    EndOrClass(FastClass),
 }
 
 fn fast_shorthand_ranges(unit: u16) -> Option<(Vec<(u16, u16)>, bool)> {
@@ -854,7 +882,34 @@ impl FastParser<'_> {
                 }
             }
             0x28 => {
-                // (
+                // With no captures and only one-unit alternatives, this assertion
+                // succeeds exactly at end of input or before a unit of its class.
+                if self.units.get(self.position..self.position + 4)
+                    == Some(&[0x3f, 0x3d, 0x24, 0x7c])
+                {
+                    self.position += 4;
+                    let unit = self.peek()?;
+                    self.position += 1;
+                    let class = match self.atom(unit)? {
+                        FastAtom::Unit(unit) => {
+                            if self.fold_ascii_case && unit >= 0x80 {
+                                return None;
+                            }
+                            let mut ranges = vec![(unit, unit)];
+                            if self.fold_ascii_case {
+                                fast_fold_ascii_ranges(&mut ranges);
+                            }
+                            FastClass::from_ranges(ranges, false)
+                        }
+                        FastAtom::Class(class) => class,
+                        _ => return None,
+                    };
+                    if self.peek() != Some(0x29) || self.position + 1 != self.units.len() {
+                        return None;
+                    }
+                    self.position += 1;
+                    return Some(FastAtom::EndOrClass(class));
+                }
                 let capture = if self.peek() == Some(u16::from(b'?')) {
                     match self.units.get(self.position + 1).copied()? {
                         0x3a => {
@@ -994,6 +1049,7 @@ impl FastParser<'_> {
                     Some((min, max, false)),
                 ) if inner.is_empty() => FastNode::Loop { body, min, max },
                 (FastAtom::End, None) => FastNode::End,
+                (FastAtom::EndOrClass(class), None) => FastNode::EndOrClass(class),
                 _ => return None,
             };
             if !literal.is_empty() {
@@ -1428,7 +1484,13 @@ unsafe fn copy_cached_captures(
     if !out.is_null() && slots > 0 {
         // Slots past the groups are scratch the caller never reads; copying a fixed
         // count avoids a memcpy call.
-        let count = if slots <= 16 && cap >= 16 { 16 } else { slots };
+        let count = if slots == 2 {
+            2
+        } else if slots <= 16 && cap >= 16 {
+            16
+        } else {
+            slots
+        };
         unsafe { core::ptr::copy_nonoverlapping(cached.as_ptr(), out, count) };
     }
     groups
@@ -2483,6 +2545,15 @@ mod tests {
         assert!(compile_fast_pattern(&utf16("caf\u{e9}"), FLAG_IGNORE_CASE).is_none());
         assert!(compile_fast_pattern(&utf16(r"[\u00e0-\u00ff]"), FLAG_IGNORE_CASE).is_none());
         assert!(compile_fast_pattern(&utf16("value"), FLAG_MULTILINE).is_none());
+        assert!(compile_fast_pattern(&utf16(r"a+?(?=$|a)"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16(r"a*(?=$|a)"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16(r"a(?=$|b)c"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16(r"a(?=$|bc)"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16(r"a(?=$|b*)"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16(r"a(?=$|(b))"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16(r"a(?=$|b)"), FLAG_MULTILINE).is_none());
+        assert!(compile_fast_pattern(&utf16(r"a(?=$|b)"), FLAG_UNICODE).is_none());
+        assert!(compile_fast_pattern(&utf16(r"a(?=$|b)"), FLAG_UNICODE_SETS).is_none());
     }
 
     fn fast_match_ranges<U: SubjectUnit>(
@@ -2522,6 +2593,17 @@ mod tests {
     #[test]
     fn fast_plans_agree_with_the_backtracking_engine() {
         let cases = [
+            (r"^(?=$|/)", "/posts/p499", FLAG_IGNORE_CASE),
+            (r"^/([^/]+?)(?=$|/)", "/posts/p499", FLAG_IGNORE_CASE),
+            (r"^/([^/]+?)(?=$|/)", "/POSTS", FLAG_IGNORE_CASE),
+            (r"^/([^/]+?)(?=$|/)", "/posts\n", FLAG_IGNORE_CASE),
+            (r"(a+?)(?=$|b)", "xaaab", 0),
+            (r"(a+?)(?=$|[bc])", "xaaac", 0),
+            (r"(a+?)(?=$|B)", "xaaab", FLAG_IGNORE_CASE),
+            (r"(?=$|\s)", "a b", 0),
+            (r"(?=$|[^a-z])", "abcé", FLAG_IGNORE_CASE),
+            (r"(?=$|.)", "a\n", 0),
+            (r"(?=$|é)", "aé", 0),
             (r"(?<key>[a-z]+)=(?<value>\d+)", "route=123", 0),
             (r"(?<outer>(?<inner>birch))", "birch", 0),
             (r"(?:(?<tree>birch)|(?<tree>cedar))(?<tail>x)?", "cedar", 0),

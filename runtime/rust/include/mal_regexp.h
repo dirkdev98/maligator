@@ -22,7 +22,7 @@ extern "C" {
 #endif
 
 /* Bump with regexp.rs when the ownership or execution contract changes. */
-#define MAL_REGEXP_ABI_VERSION 11u
+#define MAL_REGEXP_ABI_VERSION 12u
 
 /* Returns the ABI version compiled into the linked archive. */
 uint32_t mal_regexp_abi_version(void);

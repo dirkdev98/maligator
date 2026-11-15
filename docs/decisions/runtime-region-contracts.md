@@ -23,6 +23,13 @@ and legacy match state. When no capture is observed, the call is the sole region
 anchor and matching can omit the result Array. A null comparison still observes
 the same success or failure; escaping match objects retain the original call.
 
+The matcher specializes a terminal `(?=$|class)` assertion only when its alternative
+consumes one code unit and captures nothing. The tested class participates in the
+continuation's disjointness proof, so a variable repeat cannot stop earlier by
+backtracking into that assertion. A standalone assertion scans without capture
+initialization. Multiline and Unicode matching retain the general engine; ordinary
+runtime dispatch, lastIndex, results and legacy match state retain their contracts.
+
 A RegExp construction whose object reaches only its own `test` call, or an `exec`
 call compared with null, borrows the VM's template matcher instead of allocating
 that object. The runtime binds only %RegExp% over a string pair with a template;
