@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 97u
+#define WIRE_VERSION 98u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -900,8 +900,14 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             };
             static_assert(countof(specialization_operations) == countof(wire_direct_builtin_ops),
                 "known specialization routes must match the direct builtin registry");
+            static_assert(MAL_KNOWN_OPERATION_COUNT <= (1u << 20),
+                "known operations must fit the decoded call word");
+            static_assert(countof(wire_direct_builtin_ops) <= UINT8_MAX,
+                "known specializations must fit the decoded call word");
             if (specialization != 0 && (specialization > countof(specialization_operations) || specialization_operations[specialization - 1] != (i32) operation)) r->ok = false;
-            o->as.call_known.operation = ((i32) operation << 4) | flags;
+            u32 direct = r->ok && specialization != 0
+                ? (u8) (wire_direct_builtin_ops[specialization - 1] + 1) : 0;
+            o->as.call_known.operation = (operation << 4) | flags | (direct << 24);
             return;
         }
         case WIRE_BUILTIN_ERROR:

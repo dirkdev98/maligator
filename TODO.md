@@ -156,14 +156,14 @@ These levels are cumulative facts consumed by one optimizer, not separate pipeli
 Runtime eval may remove source closure without invalidating authority closure.
 
 - [ ] Extend guarded primordial consumers beyond the current Object, Date, Math and
-      primitive-conversion admissions. `Object.entries` observations beyond a single direct
+      primitive-conversion admissions. `Object.entries` observations beyond a single
+      direct
       iterator or immediate sole `.length` consumer retain their loaded producer.
       `Array.from` and constructions keep their loaded form because entry snapshots,
-      record columns and typed array regions consume it. Extend a
-      selected consumer to the known call behind the guard. A known call after code
-      that may run JavaScript also stays generic, because `CALL_KNOWN` resolves its
-      builtin through the mutable graph when it runs, so `Number.isFinite(Number(text))` guards only the
-      inner call. A loop a numeric region can take keeps its own entry speculation;
+      record columns and typed array regions consume it. Extend a selected consumer to the known call behind the guard. Reentrant known calls beyond
+      fixed Math Number kernels and noncoercing Number predicates need their selected
+      callee semantics carried through execution; generic `CALL_KNOWN` still resolves
+      the mutable graph. A loop a numeric region can take keeps its own entry speculation;
       admitting `GUARD_SEMANTIC_EPOCH` as a region entry guard would let it use both.
       Realm-enabled consumers beyond noncoercing Number predicates need their own
       identity, allocation and error-realm proof. Keep existing captured-callee Math
@@ -181,11 +181,11 @@ Runtime eval may remove source closure without invalidating authority closure.
 Shared lifetime and fallback rules are recorded in
 [runtime region contracts](docs/decisions/runtime-region-contracts.md).
 
-- [ ] Try one fixed numeric TypedArray reduction with a known synchronous reducer in the
-      existing loop machinery. Preserve callback arguments, floating-point order and
-      buffer invalidation. First bound the removable callback-transport cost against a
-      same-order indexed control; retain only if repeated execution repays bounded
-      cloning, analysis and generated-code growth.
+- [ ] Test whether bounded loop cloning removes enough remaining exact-callback invocation
+      cost from a fixed numeric TypedArray reduction. Numeric argument and accumulator
+      transport already exist. Preserve callback arguments, floating-point order and
+      buffer invalidation. First bound the saving against a same-order indexed control;
+      retain only if repeated execution repays analysis and generated-code growth.
 
 ## Selective field facts
 
@@ -401,9 +401,10 @@ contracts or investigates costs still visible after the string follow-ups.
       no worse than materialization on first-pass, repeated-input and flat controls.
 
 - [ ] Reduce fixed per-exec setup and result materialization in `regexp-owned-repeat`,
-      where every exec matches at `lastIndex` rather than scanning. Profile current
-      consumers with capture-name layouts and allocation-free named matching. Keep
-      named, unnamed, UTF-16 and miss controls, and account for cold RegExp creation.
+      where every exec matches at `lastIndex` rather than scanning. Bound complete-result
+      construction for the nonescaping named-result consumer after existing capture-name
+      layout and scratch reuse, or show that fixed matcher/FFI setup dominates. Keep named,
+      unnamed, UTF-16 and miss controls, and account for cold RegExp creation.
       Preserve captures, lastIndex, reentry and bounded scratch retention.
 
 - [ ] Use the existing complete mixed-text workload to select one leading construction,

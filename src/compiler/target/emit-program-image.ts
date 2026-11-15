@@ -1,5 +1,6 @@
 import type { IncludedAsset } from "../../assets.ts";
 import { bigintLimbs } from "../shared/bigint-digits.ts";
+import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import {
 	GUARDED_SEMANTIC_EPOCH_MASKS,
 	PROBE_READ_KINDS,
@@ -3308,8 +3309,13 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_CONCAT_STRINGS, .as.concat_strings = { .dst = ${instruction.dst}, .data_offset = ${sideDataOffset()} } }`;
 		case "PREPARED_STRING_COMPARE":
 			return `{ .opcode = MAL_OP_PREPARED_STRING_COMPARE, .as.prepared_string_compare = { .dst = ${instruction.dst}, .left = ${instruction.left}, .right = ${instruction.right}, .locale_options = ${instruction.stringIndex}u * 64u + ${instruction.options}u } }`;
-		case "CALL_KNOWN":
-			return `{ .opcode = MAL_OP_CALL_KNOWN, .as.call_known = { .dst = ${instruction.dst}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()}, .operation = ${(knownOperationIndex(instruction.operation)! << 4) | knownOperationFlags(instruction)} } }`;
+		case "CALL_KNOWN": {
+			const specialization =
+				instruction.specialized === undefined
+					? "0"
+					: `${exactBuiltinCallDescriptor(instruction.specialized)!.cOperation} + 1`;
+			return `{ .opcode = MAL_OP_CALL_KNOWN, .as.call_known = { .dst = ${instruction.dst}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()}, .operation = ${(knownOperationIndex(instruction.operation)! << 4) | knownOperationFlags(instruction)}u | ((u32) (${specialization}) << 24) } }`;
+		}
 		case "MATH_UNARY_NUMBER": {
 			if (
 				!(VM_MATH_UNARY_NUMBER_OPERATIONS as ReadonlyArray<string>).includes(

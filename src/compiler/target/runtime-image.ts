@@ -185,6 +185,17 @@ export function validateVmValueOperands(definition: RuntimeImage): void {
 			if (instruction.argumentCount !== instruction.arguments.length) {
 				throw new RangeError("invalid VM value operand count");
 			}
+			if (
+				instruction.opcode === "CALL_KNOWN" &&
+				instruction.specialized !== undefined &&
+				(instruction.specialized !== instruction.operation ||
+					!(VM_DIRECT_BUILTIN_OPERATIONS as ReadonlyArray<string>).includes(
+						instruction.specialized,
+					) ||
+					instruction.construct ||
+					instruction.argumentMode !== undefined)
+			)
+				throw new RangeError("invalid known builtin specialization");
 			if (instruction.opcode === "CALL" && instruction.guardedMathCall !== undefined) {
 				const guardedMathCall = instruction.guardedMathCall;
 				const valid =

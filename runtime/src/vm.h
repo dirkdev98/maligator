@@ -752,7 +752,9 @@ typedef struct MalInstruction {
         } math_binary_number;
 
         struct {
-            i32 dst, this_value, data_offset, operation;
+            i32 dst, this_value, data_offset;
+            // Flags occupy bits 0..3, operation 4..23, and MalDirectBuiltinOp + 1 the top byte.
+            u32 operation;
         } call_known;
 
         struct {

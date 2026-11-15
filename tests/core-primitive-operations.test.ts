@@ -3746,3 +3746,55 @@ describe("guarded entries count boundaries", () => {
 		).toBe(false);
 	});
 });
+
+describe("captured predicate calls after coercion", () => {
+	it.each(["isFinite", "isInteger", "isSafeInteger"])(
+		"retains Number.%s as a fixed kernel after Number conversion",
+		(method) => {
+			const output = inspectStaticValueFunction(
+				`function probe(value){return Number.${method}(Number(value))}globalThis.probe=probe;`,
+				"probe",
+				{ locked: false, realms: false },
+			);
+			expect(
+				output.fn.instructions.some(
+					(op) =>
+						op.opcode === "CALL_KNOWN" &&
+						op.operation === `Number.${method}` &&
+						op.specialized === `Number.${method}`,
+				),
+			).toBe(true);
+			expect(output.core.some((op) => op.opcode === "call")).toBe(true);
+		},
+	);
+	it.each([false, true])(
+		"retains the selected predicate across unary coercion with realms=%s",
+		(realms) => {
+			const output = inspectStaticValueFunction(
+				"function probe(value){return Number.isFinite(+value)}globalThis.probe=probe;",
+				"probe",
+				{ locked: false, realms },
+			);
+			expect(
+				output.fn.instructions.some(
+					(op) =>
+						op.opcode === "CALL_KNOWN" &&
+						op.operation === "Number.isFinite" &&
+						op.specialized === "Number.isFinite",
+				),
+			).toBe(true);
+		},
+	);
+	it("retains a captured allocating call after argument coercion", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(value){return Object.create(Number(value))}globalThis.probe=probe;",
+			"probe",
+			{ locked: false, realms: false },
+		);
+		expect(
+			output.core.some(
+				(op) => op.opcode === "callKnown" && op.attributes.operation === "Object.create",
+			),
+		).toBe(false);
+	});
+});

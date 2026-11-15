@@ -1497,11 +1497,13 @@ errors. The loaded value remains available to existing call and region guards.
 Core twins a run of such calls in a block: the guard selects a copy with the realm's
 intrinsics and the known operations of the locked lowering, and the loaded calls stay
 as the generic twin. A copied load follows nothing that can run JavaScript or store a
-property. A known call resolves its builtin when it runs, so only a Math kernel on
-Numbers, which resolves nothing, may follow such code in the copy. Primitive numeric
-formatting and parsing can share a run because their conversions cannot reenter
-JavaScript. A potentially effectful argument ends the run, preserving the captured
-callee and rechecking bindings before later lookups. Fresh object allocations can
+property. Math Number kernels and noncoercing Number predicates retain their selected
+semantics after reentry without resolving the mutable graph again. The interpreter
+retains the predicate specialization tag carried by the wire and static C image.
+Other known calls resolve their builtin when they run and keep the reentry barrier.
+Primitive numeric formatting and parsing can share a run because their conversions cannot reenter
+JavaScript. Unrecognized argument calls end the run, preserving the captured callee
+and rechecking bindings before later lookups. Fresh object allocations can
 stay inside a copied run, letting
 `Object.assign` reach the same private-source and fresh-target lowering as locked
 calls. Other object-producing calls and constructions keep the guarded forms that

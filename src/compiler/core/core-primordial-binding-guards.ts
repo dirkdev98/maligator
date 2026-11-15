@@ -667,7 +667,8 @@ class RunPlanner {
 					seen.has(site.name) && (site.method === undefined || seen.has(site.method));
 				const kernel = this.#mathKernel(site);
 				if (this.#realms && !NUMBER_PREDICATES.has(site.operation)) break;
-				if (!loaded || (reentered && !kernel)) break;
+				if (!loaded || (reentered && !kernel && !NUMBER_PREDICATES.has(site.operation)))
+					break;
 				seen.add(instruction);
 				included.push(site);
 				if (kernel) kernels.add(site);

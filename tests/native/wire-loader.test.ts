@@ -21,6 +21,7 @@ import {
 import {
 	encodeVmValueOperand,
 	VM_GUARDED_BUILTIN_CALL_OPERATIONS,
+	VM_DIRECT_BUILTIN_OPERATIONS,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
 	VM_MATH_UNARY_NUMBER_OPERATIONS,
 } from "../../src/compiler/target/runtime-image.ts";
@@ -1115,6 +1116,18 @@ describe("wire loader side-data validation", () => {
 		const invalidSpecialization = wire.slice();
 		invalidSpecialization[flagsOffset + 1] = 255;
 		rejectsWire("known-operation-invalid-specialization", invalidSpecialization);
+
+		const mismatchedSpecialization = wire.slice();
+		mismatchedSpecialization[flagsOffset + 1] =
+			VM_DIRECT_BUILTIN_OPERATIONS.indexOf("Number.isFinite") + 1;
+		rejectsWire("known-operation-mismatched-specialization", mismatchedSpecialization);
+		for (const flags of [1, 2]) {
+			const invalidSpecializedMode = wire.slice();
+			invalidSpecializedMode[flagsOffset] = flags;
+			invalidSpecializedMode[flagsOffset + 1] =
+				VM_DIRECT_BUILTIN_OPERATIONS.indexOf("Object.is") + 1;
+			rejectsWire(`known-operation-specialized-mode-${flags}`, invalidSpecializedMode);
+		}
 
 		const splitPrefix = [builtinTag, 0, 9, 2, 1, 11];
 		const splitOffset = wire.findIndex((_, index) =>

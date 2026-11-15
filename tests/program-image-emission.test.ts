@@ -4,7 +4,10 @@ import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
-import { directBuiltinOperationIds } from "../src/compiler/shared/builtin-registry.ts";
+import {
+	directBuiltinOperationIds,
+	exactBuiltinCallDescriptor,
+} from "../src/compiler/shared/builtin-registry.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import { knownOperationIndex } from "../src/compiler/shared/known-operations.ts";
 import {
@@ -738,35 +741,76 @@ describe("emit-program-image instruction packing", () => {
 		);
 	});
 
-	it("emits every registered direct builtin operation into interpreted C", () => {
-		for (const operation of directBuiltinOperationIds) {
-			const emitted = emitProgramImage(
-				{
-					...definition,
-					runtime: {
-						...definition.runtime,
-						functions: [
-							{
-								...fn,
-								instructions: [
-									{
-										opcode: "CALL_KNOWN",
-										dst: 0,
-										thisValue: 1,
-										argumentCount: 1,
-										arguments: [2],
-										operation,
-									},
-								],
-							},
-						],
+	it.each([false, true])(
+		"emits registered builtin tags into interpreted C with specialization=%s",
+		(specialized) => {
+			for (const operation of directBuiltinOperationIds) {
+				const emitted = emitProgramImage(
+					{
+						...definition,
+						runtime: {
+							...definition.runtime,
+							functions: [
+								{
+									...fn,
+									instructions: [
+										{
+											opcode: "CALL_KNOWN",
+											dst: 0,
+											thisValue: 1,
+											argumentCount: 1,
+											arguments: [2],
+											operation,
+											...(specialized ? { specialized: operation } : {}),
+										},
+									],
+								},
+							],
+						},
 					},
+					{ compiled: false },
+				);
+				const tag = specialized
+					? `${exactBuiltinCallDescriptor(operation)!.cOperation} + 1`
+					: "0";
+				expect(emitted).toContain(
+					`.operation = ${knownOperationIndex(operation)! << 4}u | ((u32) (${tag}) << 24) }`,
+				);
+			}
+		},
+	);
+
+	it.each([
+		{ operation: "Number.isInteger", specialized: "Number.isFinite" },
+		{ operation: "Number.isFinite", specialized: "Number.isFinite", construct: true },
+		{
+			operation: "Number.isFinite",
+			specialized: "Number.isFinite",
+			argumentMode: "iterable",
+		},
+	])(
+		"rejects incompatible fixed builtin tags before static C emission: %j",
+		(metadata) => {
+			const instruction = {
+				opcode: "CALL_KNOWN",
+				dst: 0,
+				thisValue: 1,
+				argumentCount: 1,
+				arguments: [2],
+				...metadata,
+			} as BytecodeInstruction;
+			const image = {
+				...definition,
+				runtime: {
+					...definition.runtime,
+					functions: [{ ...fn, instructions: [instruction] }],
 				},
-				{ compiled: false },
+			};
+			expect(() => emitProgramImage(image, { compiled: false })).toThrow(
+				"invalid known builtin specialization",
 			);
-			expect(emitted).toContain(`.operation = ${knownOperationIndex(operation)! << 4} }`);
-		}
-	});
+		},
+	);
 
 	it("emits one flattened side table and raw f64 words", () => {
 		const output = emitProgramImage(definition, { compiled: false });

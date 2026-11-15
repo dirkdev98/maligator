@@ -4220,6 +4220,32 @@ void mal_op_call_known(MalCallable *callable, const MalInstruction *instruction)
     MalVm *vm = callable->vm;
     const i32 *data = mal_op_instruction_data(callable, instruction->as.call_known.data_offset);
     i32 count = data[0];
+    if ((instruction->as.call_known.operation & 15) == 0) {
+        // The selected predicate survives argument coercion that changes its namespace.
+        switch (instruction->as.call_known.operation >> 24) {
+            case MAL_DIRECT_BUILTIN_NUMBER_IS_NAN + 1: {
+                MalValue first = count == 0 ? MAL_VALUE_UNDEFINED : mal_op_value_operand(callable, data[1]);
+                callable->registers[instruction->as.call_known.dst] = mal_builtin_number_is_nan_known(&first, count == 0 ? 0 : 1);
+                return;
+            }
+            case MAL_DIRECT_BUILTIN_NUMBER_IS_FINITE + 1: {
+                MalValue first = count == 0 ? MAL_VALUE_UNDEFINED : mal_op_value_operand(callable, data[1]);
+                callable->registers[instruction->as.call_known.dst] = mal_builtin_number_is_finite_known(&first, count == 0 ? 0 : 1);
+                return;
+            }
+            case MAL_DIRECT_BUILTIN_NUMBER_IS_INTEGER + 1: {
+                MalValue first = count == 0 ? MAL_VALUE_UNDEFINED : mal_op_value_operand(callable, data[1]);
+                callable->registers[instruction->as.call_known.dst] = mal_builtin_number_is_integer_known(&first, count == 0 ? 0 : 1);
+                return;
+            }
+            case MAL_DIRECT_BUILTIN_NUMBER_IS_SAFE_INTEGER + 1: {
+                MalValue first = count == 0 ? MAL_VALUE_UNDEFINED : mal_op_value_operand(callable, data[1]);
+                callable->registers[instruction->as.call_known.dst] = mal_builtin_number_is_safe_integer_known(&first, count == 0 ? 0 : 1);
+                return;
+            }
+            default: break;
+        }
+    }
     if (vm->value_stack_size + count > vm->value_stack_capacity) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
         return;
@@ -4228,7 +4254,7 @@ void mal_op_call_known(MalCallable *callable, const MalInstruction *instruction)
     for (i32 i = 0; i < count; i++) vm->value_stack[base + i] = mal_op_value_operand(callable, data[i + 1]);
     vm->value_stack_size = base + count;
     MalValue receiver = mal_op_value_operand(callable, instruction->as.call_known.this_value);
-    MalValue result = mal_vm_call_known(vm, instruction->as.call_known.operation >> 4, receiver, &vm->value_stack[base], count, instruction->as.call_known.operation & 15);
+    MalValue result = mal_vm_call_known(vm, (instruction->as.call_known.operation >> 4) & 0xfffffu, receiver, &vm->value_stack[base], count, instruction->as.call_known.operation & 15);
     vm->value_stack_size = base;
     callable->registers[instruction->as.call_known.dst] = result;
 }
