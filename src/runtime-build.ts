@@ -514,6 +514,7 @@ function ensureRuntimeObjects(
 	verbose: boolean,
 ): Array<RuntimeObject> {
 	mkdirSync(directory, { recursive: true });
+	const clangVersion = clangMajorVersion(context.toolchain.tools.cc.version);
 	const sources = runtimeSources(context, layout);
 	const projected = projectRuntimeSources(context, layout, sources, directory, verbose);
 	if (
@@ -565,9 +566,15 @@ function ensureRuntimeObjects(
 					"-std=c2x",
 					...runtimeSourceCompileFlags(context, layout, source),
 					// Expansion loses macro provenance, so Clang warns on intentional macro parentheses.
-					...(clangMajorVersion(context.toolchain.tools.cc.version) === undefined
-						? []
-						: ["-Wno-parentheses-equality"]),
+					...(clangVersion === undefined ? [] : ["-Wno-parentheses-equality"]),
+					// Older Clang expands high #embed bytes as large unsigned integers;
+					// conversion to u8 restores the bytes but warns once per high byte.
+					// https://github.com/llvm/llvm-project/issues/102798
+					...(source.name === "compiler_wire.c" &&
+					clangVersion !== undefined &&
+					Number(clangVersion) < 20
+						? ["-Wno-constant-conversion"]
+						: []),
 					"-c",
 					// The .i suffix selects preprocessed C across drivers; compile the keyed snapshot.
 					projectedPath,

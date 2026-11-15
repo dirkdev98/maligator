@@ -3,7 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test, vi } from "vitest";
 import type { NativeBuildContext } from "../src/native-build-context.ts";
-import { runIndependentCommands, runNativeCommands } from "../src/native-command.ts";
+import {
+	runIndependentCommands,
+	runNativeCommand,
+	runNativeCommands,
+} from "../src/native-command.ts";
 
 function shell(script: string) {
 	return { tool: "/bin/sh", args: ["-c", script] };
@@ -71,9 +75,14 @@ test("a failing command fails the batch with its exit status", () => {
 	});
 });
 
-test.each([1, 2])(
-	"large output on descriptor %i does not interrupt queued commands",
-	(fd) => {
+test.each([
+	[1, 1],
+	[1, 2],
+	[2, 1],
+	[2, 2],
+])(
+	"large output on descriptor %i does not interrupt queued commands with %i jobs",
+	(fd, jobs) => {
 		inDirectory((directory) => {
 			runIndependentCommands(
 				[
@@ -87,7 +96,7 @@ test.each([1, 2])(
 					shell(":"),
 					shell("printf complete > completed"),
 				],
-				{ cwd: directory, env: emptyPath, jobs: 2, verbose: false },
+				{ cwd: directory, env: emptyPath, jobs, verbose: false },
 			);
 
 			expect(readFileSync(path.join(directory, "completed"), "utf8")).toBe("complete");
@@ -95,7 +104,7 @@ test.each([1, 2])(
 	},
 );
 
-test("large failure diagnostics preserve the command status and output", () => {
+test.each([1, 2])("large failure diagnostics preserve status with %i jobs", (jobs) => {
 	const diagnostic = "diagnostic\n".repeat(128 * 1024);
 	let failure: unknown;
 	try {
@@ -110,7 +119,7 @@ test("large failure diagnostics preserve the command status and output", () => {
 				},
 				shell(":"),
 			],
-			{ env: emptyPath, jobs: 2, verbose: false },
+			{ env: emptyPath, jobs, verbose: false },
 		);
 	} catch (error) {
 		failure = error;
@@ -119,13 +128,18 @@ test("large failure diagnostics preserve the command status and output", () => {
 	expect(failure).toHaveProperty("stderr", Buffer.from(diagnostic));
 });
 
-test.each([false, true])(
-	"verbose native batches preserve large stdout with resource measurement %s",
-	(measureCommandResources) => {
+test.each([
+	[1, false],
+	[1, true],
+	[2, false],
+	[2, true],
+] as const)(
+	"verbose native batches with %i jobs preserve large stdout with resource measurement %s",
+	(jobs, measureCommandResources) => {
 		inDirectory((directory) => {
 			const context = {
 				cacheDirectory: directory,
-				environment: { ...emptyPath, MAL_BUILD_JOBS: "2" },
+				environment: { ...emptyPath, MAL_BUILD_JOBS: String(jobs) },
 				measureCommandResources,
 			} as unknown as NativeBuildContext;
 			const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
@@ -156,6 +170,39 @@ test.each([false, true])(
 		});
 	},
 );
+
+test.each([1, 2])("one native command captures large output on descriptor %i", (fd) => {
+	const context = { environment: emptyPath } as unknown as NativeBuildContext;
+	expect(
+		runNativeCommand(
+			context,
+			process.execPath,
+			["-e", `require("node:fs").writeSync(${fd}, Buffer.alloc(2 * 1024 * 1024, "x"))`],
+			{ verbose: false },
+		),
+	).toBeUndefined();
+});
+
+test("one native command retains large failure diagnostics and status", () => {
+	const diagnostic = "diagnostic\n".repeat(128 * 1024);
+	const context = { environment: emptyPath } as unknown as NativeBuildContext;
+	let failure: unknown;
+	try {
+		runNativeCommand(
+			context,
+			process.execPath,
+			[
+				"-e",
+				'require("node:fs").writeSync(2, "diagnostic\\n".repeat(128 * 1024)); process.exit(7)',
+			],
+			{ verbose: false },
+		);
+	} catch (error) {
+		failure = error;
+	}
+	expect((failure as { status: number }).status).toBe(7);
+	expect(failure).toHaveProperty("stderr", Buffer.from(diagnostic));
+});
 
 test("runs every command once with nothing but the commands on PATH", () => {
 	inDirectory((directory) => {

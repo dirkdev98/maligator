@@ -37,6 +37,7 @@ import {
 import { ensureRustArtifacts, resolveRustArtifacts } from "../src/rust-build.ts";
 import { runToStdout } from "../src/test-harness.ts";
 import {
+	clangMajorVersion,
 	formatToolchainReport,
 	inspectToolchain,
 	requireToolchain,
@@ -1707,6 +1708,55 @@ printf '!<arch>\\n' > "$2"
 		ensureNativeArtifacts(context);
 		expect(events.slice(-3)).toEqual([false, true, false]);
 	});
+
+	it.for([17, 19, 20])(
+		"builds Clang %i captured embed bytes while rejecting unrelated conversion errors",
+		(major, { skip }) => {
+			const actualCompiler = requireToolchain({ needsCxx: false }).tools.cc;
+			if (clangMajorVersion(actualCompiler.version) === undefined)
+				skip("Clang conversion diagnostics require a Clang host compiler");
+			const fake = createFakeToolchain();
+			try {
+				const runtimeDirectory = createMinimalRuntime(fake);
+				const highBytes = major < 20 ? "4294967168, 4294967295" : "128, 255";
+				writeFileSync(
+					path.join(runtimeDirectory, "src/compiler_wire.c"),
+					`const unsigned char bytes[] = {0, 127, ${highBytes}};\n`,
+				);
+				executable(
+					path.join(fake.bin, "fake-cc"),
+					// Reproduce the older preprocessor's captured literals, then let the
+					// real C compiler enforce conversion diagnostics on every object.
+					`for argument in "$@"; do
+	case "$argument" in *.i) exec '${actualCompiler.path.replaceAll("'", "'\\''")}' -Werror=constant-conversion "$@";; esac
+done
+${compilerScript(`clang version ${major}.0.0`, fake.logPath)}`,
+				);
+				const toolchain = inspectToolchain({
+					rootDir: fake.root,
+					rustDir: path.join(runtimeDirectory, "rust"),
+					env: fake.env,
+					needsCxx: false,
+					platform: "linux",
+				}).toolchain!;
+				const context = resolveNativeBuildContext({
+					toolchain,
+					runtimeDirectory,
+					cacheDirectory: path.join(fake.root, "native-cache"),
+					environment: fake.env,
+					features: { evalEnabled: false, webPlatformEnabled: false },
+				});
+				expect(existsSync(ensureNativeArtifacts(context).c.runtime)).toBe(true);
+				writeFileSync(
+					path.join(runtimeDirectory, "src/engine.c"),
+					"const unsigned char truncated = 4294967295;\n",
+				);
+				expect(() => ensureNativeArtifacts(context)).toThrow(/constant-conversion/);
+			} finally {
+				rmSync(fake.root, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it.each(["native", "zig"])(
 		"compiles captured runtime input through %s after source edits",

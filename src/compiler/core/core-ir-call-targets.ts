@@ -341,10 +341,10 @@ export function coreMappedElementFunctionHints(
 		mapperValue === undefined ? undefined : coreDirectCreatedFunction(fn, mapperValue);
 	if (mapper === undefined || !program.hasFunction(mapper)) return [];
 	const callback = program.function(mapper);
+	if (callback.liveStorageCounts().instructions > 256) return [];
 	const targets = new Set<CoreFunctionId>();
-	let remaining = 256;
-	for (const instruction of callback.instructionIds()) {
-		if (--remaining < 0) return [];
+	for (const block of callback.blockIds()) {
+		const instruction = callback.blockTerminator(block);
 		if (callback.instructionKind(instruction) !== "return") continue;
 		const target = coreDirectCreatedFunction(
 			callback,

@@ -3294,10 +3294,24 @@ function guardStaticRestReads(
 	const editor = CoreEditor.open(program, fn.id);
 	const sourcePosition = fn.instructionSourcePosition(producer);
 	const first = entryBody[0] ?? fn.blockTerminator(fn.entry);
-	const count = editor.insertInstruction(fn.entry, first, "loadArgumentCount", [], {
-		sourcePosition,
-	}).outputs[0]!;
+	let argumentCount: CoreValueId | undefined;
 	const snapshots = new Map<number, CoreValueId>();
+	for (const instruction of entryBody) {
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode === "loadArgumentCount") {
+			argumentCount = instructionResult(fn, instruction, 0);
+		} else if (opcode === "loadArgument") {
+			snapshots.set(
+				fn.instructionAttributes(instruction).index as number,
+				instructionResult(fn, instruction, 0)!,
+			);
+		} else break;
+	}
+	const count =
+		argumentCount ??
+		editor.insertInstruction(fn.entry, first, "loadArgumentCount", [], {
+			sourcePosition,
+		}).outputs[0]!;
 	for (const read of reads) {
 		const index = read.argumentIndex;
 		if (index === undefined || snapshots.has(index)) continue;

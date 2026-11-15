@@ -39,6 +39,53 @@ function shellCommand(command: NativeCommand): string {
 	return [command.tool, ...command.args].map(shellQuote).join(" ");
 }
 
+function runCommandWithFileOutput(
+	tool: string,
+	args: ReadonlyArray<string>,
+	options: Pick<NativeCommandOptions, "cwd" | "env"> & {
+		input?: string;
+		stdout: "capture" | "inherit";
+		stderr: "capture" | "inherit";
+	},
+): Buffer {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "maligator-command-output-"));
+	const stdoutPath = path.join(directory, "stdout");
+	const stderrPath = path.join(directory, "stderr");
+	const descriptors: Array<number> = [];
+	const capture = (file: string): number => {
+		const descriptor = openSync(file, "w");
+		descriptors.push(descriptor);
+		return descriptor;
+	};
+	try {
+		// Node's pipe limit can kill the compiler or a coordinator with active lanes.
+		// Files preserve diagnostics and let every child finish before cleanup.
+		const stdout = options.stdout === "capture" ? capture(stdoutPath) : "inherit";
+		const stderr = options.stderr === "capture" ? capture(stderrPath) : "inherit";
+		try {
+			execFileSync(tool, [...args], {
+				cwd: options.cwd,
+				env: options.env,
+				stdio: ["pipe", stdout, stderr],
+				input: options.input,
+			});
+		} catch (error) {
+			if (error instanceof Error) {
+				const stdout = options.stdout === "capture" ? readFileSync(stdoutPath) : null;
+				const stderr = options.stderr === "capture" ? readFileSync(stderrPath) : null;
+				Object.assign(error, { stdout, stderr, output: [null, stdout, stderr] });
+				if (stderr !== null && stderr.length > 0)
+					error.message += `\n${stderr.toString()}`;
+			}
+			throw error;
+		}
+		return options.stdout === "capture" ? readFileSync(stdoutPath) : Buffer.alloc(0);
+	} finally {
+		for (const descriptor of descriptors) closeSync(descriptor);
+		rmSync(directory, { recursive: true, force: true });
+	}
+}
+
 /**
  * Run the commands in order on `jobs` lanes of one POSIX shell, so each command
  * starts as soon as any lane is free. Lanes claim a command by creating its file
@@ -55,14 +102,6 @@ function runParallelShellScript(
 	},
 ): Buffer {
 	const state = mkdtempSync(path.join(os.tmpdir(), "maligator-commands-"));
-	const stdoutPath = path.join(state, "stdout");
-	const stderrPath = path.join(state, "stderr");
-	const descriptors: Array<number> = [];
-	const capture = (file: string): number => {
-		const descriptor = openSync(file, "w");
-		descriptors.push(descriptor);
-		return descriptor;
-	};
 	const failed = shellQuote(path.join(state, "failed"));
 	const claims = shellQuote(path.join(state, "claim-"));
 	const functions = commands.map(
@@ -92,30 +131,8 @@ if [ -e ${failed} ]; then
 fi
 `;
 	try {
-		// Exceeding Node's output limit kills only the coordinator, leaving lanes
-		// writing during cleanup. Files let the shell wait for every lane first.
-		const stdout = options.stdout === "capture" ? capture(stdoutPath) : "inherit";
-		const stderr = options.stderr === "capture" ? capture(stderrPath) : "inherit";
-		try {
-			execFileSync("/bin/sh", [], {
-				cwd: options.cwd,
-				env: options.env,
-				stdio: ["pipe", stdout, stderr],
-				input: script,
-			});
-		} catch (error) {
-			if (error instanceof Error) {
-				const stdout = options.stdout === "capture" ? readFileSync(stdoutPath) : null;
-				const stderr = options.stderr === "capture" ? readFileSync(stderrPath) : null;
-				Object.assign(error, { stdout, stderr, output: [null, stdout, stderr] });
-				if (stderr !== null && stderr.length > 0)
-					error.message += `\n${stderr.toString()}`;
-			}
-			throw error;
-		}
-		return options.stdout === "capture" ? readFileSync(stdoutPath) : Buffer.alloc(0);
+		return runCommandWithFileOutput("/bin/sh", [], { ...options, input: script });
 	} finally {
-		for (const descriptor of descriptors) closeSync(descriptor);
 		rmSync(state, { recursive: true, force: true });
 	}
 }
@@ -209,12 +226,16 @@ function measuredCommand(
 		| (Error & { status?: number | null; stdout?: Buffer; stderr?: Buffer })
 		| undefined;
 	try {
-		stdout = execFileSync("/usr/bin/time", timeArguments(reportPath, command), {
-			cwd: options.cwd,
-			env: options.env ?? context.environment,
-			maxBuffer: 64 * 1024 * 1024,
-			stdio: options.verbose ? ["pipe", "pipe", "inherit"] : "pipe",
-		});
+		stdout = runCommandWithFileOutput(
+			"/usr/bin/time",
+			timeArguments(reportPath, command),
+			{
+				cwd: options.cwd,
+				env: options.env ?? context.environment,
+				stdout: "capture",
+				stderr: options.verbose ? "inherit" : "capture",
+			},
+		);
 	} catch (error) {
 		failure = error as typeof failure;
 		stdout = failure?.stdout ?? stdout;
@@ -247,10 +268,11 @@ export function runIndependentCommands(
 	const jobs = Math.min(commands.length, options.jobs);
 	if (jobs <= 1) {
 		for (const command of commands) {
-			execFileSync(command.tool, [...command.args], {
+			runCommandWithFileOutput(command.tool, command.args, {
 				cwd: options.cwd,
 				env: options.env,
-				stdio: options.verbose ? "inherit" : "pipe",
+				stdout: options.verbose ? "inherit" : "capture",
+				stderr: options.verbose ? "inherit" : "capture",
 			});
 		}
 		return;
@@ -275,10 +297,11 @@ export function runNativeCommand(
 	if (context.measureCommandResources || options.measureResources === true) {
 		return measuredCommand(context, command, options);
 	}
-	const stdout = execFileSync(tool, [...args], {
+	const stdout = runCommandWithFileOutput(tool, args, {
 		cwd: options.cwd,
 		env: options.env ?? context.environment,
-		stdio: options.verbose ? ["ignore", "pipe", "inherit"] : "pipe",
+		stdout: "capture",
+		stderr: options.verbose ? "inherit" : "capture",
 	});
 	if (options.verbose && stdout.length > 0) process.stderr.write(stdout);
 	return undefined;

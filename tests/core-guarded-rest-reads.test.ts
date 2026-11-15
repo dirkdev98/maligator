@@ -11,6 +11,18 @@ function inspect(body: string) {
 
 describe("private static rest read arity guards", () => {
 	it.each([
+		["...rest", "return arguments.length*10+rest.length;", 1],
+		["first,...rest", "return arguments[1]+rest[0];", 2],
+	] as const)("reuses incoming snapshots for %s: %s", (parameters, body, snapshots) => {
+		const { fn } = inspectStaticValueFunction(
+			`function target(${parameters}){${body}}globalThis.target=target;`,
+			"target",
+			{ locked: false, realms: true },
+		);
+		expect(fn.argumentSnapshotCount).toBe(snapshots);
+	});
+
+	it.each([
 		"return rest[0]+rest[1]+rest[2];",
 		"return rest.length;",
 		"return first ? rest[0] : rest[3];",
