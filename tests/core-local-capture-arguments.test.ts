@@ -64,12 +64,16 @@ function privateHelpers(image: ReturnType<typeof compile>) {
 
 // Model one physical store directly, so these tests exercise dominance rather
 // than being rejected for a frontend-generated TDZ/undefined initializer.
-function singleStoreAlias(mode: "after" | "before" | "branch" | "handler" | "mapped") {
+function singleStoreAlias(
+	mode: "after" | "before" | "branch" | "handler" | "mapped",
+	strict = true,
+	callback = false,
+) {
 	const program = analysisProgram();
 	const creator = new CoreFunctionBuilder(program, {
 		parameterCount: 1,
 		metadata: {
-			strict: true,
+			strict: mode === "mapped" ? false : strict,
 			capturedCount: 2,
 			...(mode === "mapped" ? { mappedArguments: true, mappedArgumentSlots: [1] } : {}),
 		},
@@ -78,13 +82,17 @@ function singleStoreAlias(mode: "after" | "before" | "branch" | "handler" | "map
 	const input = creator.blockParameterValue(entry, 0);
 	const helper = new CoreFunctionBuilder(program, {
 		parameterCount: 1,
-		metadata: { strict: true, length: 1 },
+		metadata: { strict, length: 1 },
 	});
 	const body = helper.createBlock([{}]);
 	const slot = { functionIndex: creator.functionId, index: 0 };
 	const [captured] = helper.appendInstruction(body, "loadCaptured", [], {
 		attributes: slot,
 	});
+	if (callback) {
+		const [receiver] = helper.appendInstruction(body, "createUndefined", []);
+		helper.appendInstruction(body, "call", [captured!, receiver!]);
+	}
 	helper.setTerminator(body, { kind: "return", value: captured! });
 	helper.finish(body);
 	const [callee] = creator.appendInstruction(entry, "createFunction", [], {
@@ -141,6 +149,12 @@ function singleStoreAlias(mode: "after" | "before" | "branch" | "handler" | "map
 }
 
 describe("private local capture arguments", () => {
+	it("lifts a sloppy capture reader that cannot expose its activation", () => {
+		expect(singleStoreAlias("after", false)).toBe(1);
+	});
+	it("keeps a sloppy helper whose callback can inspect the active callee", () => {
+		expect(singleStoreAlias("after", false, true)).toBe(0);
+	});
 	it("follows a sole captured writer only after its store", () => {
 		expect(singleStoreAlias("after")).toBe(1);
 	});

@@ -47,9 +47,10 @@ The proof runs on sealed Core before slot compaction and checks the complete liv
 write set, mapped aliases, and exception-aware dominance of every closure creation.
 Each binding has one non-TDZ initializer outside cycles; any initial TDZ stores
 precede it at entry. The same writer proof applies to parameters and local bindings.
-The bounded selection covers strict ordinary leaf closures whose only lexical
+The bounded selection covers ordinary leaf closures whose only lexical
 operations read initialized bindings from one creator. Object values preserve their
-identity; immutability applies to the binding, not the object's properties.
+identity; immutability applies to the binding, not the object's properties. Sloppy
+closures use the same proof when their parameters have no mapped arguments aliases.
 
 Native activations can keep captured bindings in rooted frame slots and copy them
 directly into eligible closures. A closure requiring shared lexical storage instead

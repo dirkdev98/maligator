@@ -182,6 +182,11 @@ const FRESH_MAPPER =
 	"(_, id) => ({ point: { x: id * .5 }, delta: id & 3, active: (id & 7) !== 0, profile: (id & 3) === 0 ? undefined : { x: id & 15 } })";
 
 describe("private record columns", () => {
+	it("certifies fresh mapper graphs independently of sloppy receiver semantics", () => {
+		const image = privateGraphProgram(FRESH_MAPPER);
+		const mapper = image.runtime.functions.find((fn) => fn.parameterCount === 2)!;
+		expect(nativeMapperReturnsFreshGraph({ ...mapper, strict: false })).toBe(true);
+	});
 	it("rejects producer reexecution through an exception handler", () => {
 		const image = privateGraphProgram(FRESH_MAPPER, "", "{ length: 32 }", true);
 		expect(

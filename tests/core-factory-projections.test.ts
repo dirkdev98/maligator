@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
 import type { CoreProgram } from "../src/compiler/core/core-store.ts";
+import { runSemanticAnalysisForGraph } from "../src/compiler/frontend/analyze-module-graph.ts";
+import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
@@ -12,8 +14,8 @@ import {
 } from "../src/compiler/shared/compiler-facts.ts";
 import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
 
-function compileFactory(factory: string, body: string, realms = false) {
-	const sourcePath = "factory-projection.js";
+function compileFactory(factory: string, body: string, realms = false, commonjs = false) {
+	const sourcePath = commonjs ? "factory-projection.cjs" : "factory-projection.mjs";
 	let optimized: CoreProgram | undefined;
 	let report: CoreOptimizationReport | undefined;
 	const source = `
@@ -26,7 +28,9 @@ function compileFactory(factory: string, body: string, realms = false) {
 			}
 			console.log(hot(32));`;
 	compileSemanticProgramToProgramImage(
-		analyzeSourceAndRunSemanticAnalysis(source, sourcePath, parseModule(source)),
+		commonjs
+			? runSemanticAnalysisForGraph(buildModuleGraph(sourcePath, { entrySource: source }))
+			: analyzeSourceAndRunSemanticAnalysis(source, sourcePath, parseModule(source)),
 		{
 			facts: withProgramClosure(
 				compilerProgramFactsFromConfig(resolveBuildConfig({ engine: { realms } })),
@@ -51,6 +55,15 @@ const factory = `function makeRecord(id, value) {
 }`;
 
 describe("pure factory projections", () => {
+	it("projects a private CommonJS factory without making it strict", () => {
+		const { report } = compileFactory(
+			factory,
+			"const record = makeRecord(index, index + 1); checksum += record.read();",
+			false,
+			true,
+		);
+		expect(report.transforms.appliedByKind["factory-projection"]).toBeGreaterThan(0);
+	});
 	it("retains the original factory when multiple realms are enabled", () => {
 		const { report } = compileFactory(
 			factory,

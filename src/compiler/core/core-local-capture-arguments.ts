@@ -3,6 +3,7 @@ import type { ConstructedCoreCompilation } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { buildCoreControlFlow, coreTerminatorInput } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
@@ -53,7 +54,6 @@ function helperBody(
 	if (
 		fn.isAsync ||
 		fn.isGenerator ||
-		!fn.metadata.strict ||
 		fn.metadata.capturedCount !== 0 ||
 		fn.kernel.blockParameterCount(fn.entry) !== fn.parameterCount ||
 		fn.metadata.mappedArguments ||
@@ -67,6 +67,8 @@ function helperBody(
 			const opcode = fn.instructionOpcodeName(instruction);
 			hasCaptures ||= opcode === "loadCaptured";
 			if (
+				// User code can reflect on a sloppy activation's callee and appended arguments.
+				(!fn.metadata.strict && coreInstructionEffects(fn, instruction).callsUserCode) ||
 				fn.instructionEffectRefinement(instruction) !== undefined ||
 				opcode === "loadCallee" ||
 				opcode === "loadArgumentCount" ||

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { CoreOptimizationReport } from "../src/compiler/core/core-optimization-report.ts";
+import { runSemanticAnalysisForGraph } from "../src/compiler/frontend/analyze-module-graph.ts";
+import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
@@ -10,16 +12,24 @@ import {
 	withProgramClosure,
 } from "../src/compiler/shared/compiler-facts.ts";
 
-function compile(consumer: string, closed = true, beforeConsume = "") {
-	const entry = "/synchronous-callback.mjs";
+function compile(
+	consumer: string,
+	closed = true,
+	beforeConsume = "",
+	commonjs = false,
+	callback = "value => value + seed",
+) {
+	const entry = commonjs ? "/synchronous-callback.cjs" : "/synchronous-callback.mjs";
 	const facts = compilerProgramFactsFromConfig(
 		resolveBuildConfig({ engine: { eval: false, realms: false, primordials: "locked" } }),
 	);
 	let report: CoreOptimizationReport | undefined;
 	const source = `${consumer}
-		globalThis.run = function run(values, seed) { const callback = value => value + seed; ${beforeConsume} return consume(values, callback); };`;
+		globalThis.run = function run(values, seed) { const callback = ${callback}; ${beforeConsume} return consume(values, callback); };`;
 	const image = compileSemanticProgramToProgramImage(
-		analyzeSourceAndRunSemanticAnalysis(source, entry, parseModule(source)),
+		commonjs
+			? runSemanticAnalysisForGraph(buildModuleGraph(entry, { entrySource: source }))
+			: analyzeSourceAndRunSemanticAnalysis(source, entry, parseModule(source)),
 		{
 			facts: closed
 				? withProgramClosure(
@@ -44,6 +54,39 @@ function compile(consumer: string, closed = true, beforeConsume = "") {
 const synchronous = `function consume(values, callback) { let sum = 0; for (let i = 0; i < values.length; i++) sum += callback(values[i]); return sum; }`;
 
 describe("synchronous callback capture proof", () => {
+	it("admits CommonJS consumers and callbacks that cannot expose their activations", () => {
+		expect(
+			compile(
+				"function consume(values, callback) { return callback(); }",
+				true,
+				"",
+				true,
+				"() => seed",
+			).applied,
+		).toBeGreaterThan(0);
+	});
+	it("keeps a sloppy callback that reads its caller", () => {
+		expect(
+			compile(
+				"function consume(values, callback) { return callback(); }",
+				true,
+				"",
+				true,
+				"function callback() { return callback.caller; }",
+			).applied,
+		).toBe(0);
+	});
+	it("keeps a strict callback that can reflect on its sloppy consumer", () => {
+		expect(
+			compile(
+				"function consume(values, callback) { return callback(); }",
+				true,
+				"",
+				true,
+				'function callback() { "use strict"; return consume.arguments; }',
+			).applied,
+		).toBe(0);
+	});
 	it("keeps existing direct callback uses outside the cloned consumer's admission", () => {
 		expect(compile(synchronous, true, "callback(seed);").applied).toBeGreaterThan(0);
 	});

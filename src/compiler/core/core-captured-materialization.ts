@@ -78,8 +78,7 @@ function candidate(fn: CoreFunctionStore): Candidate | undefined {
 }
 
 function closureCandidates(fn: CoreFunctionStore): Array<Candidate> {
-	if (!eligibleOwner(fn) || !fn.metadata.strict || fn.metadata.capturedCount === 0)
-		return [];
+	if (!eligibleOwner(fn) || fn.metadata.capturedCount === 0) return [];
 	const candidates: Array<Candidate> = [];
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;

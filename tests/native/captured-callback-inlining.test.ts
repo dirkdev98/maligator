@@ -31,3 +31,23 @@ it("inlines nonescaping captured callbacks without changing guarded fallbacks", 
 		rmSync(outDir, { recursive: true, force: true });
 	}
 }, 600_000);
+
+it("preserves activation-sensitive CommonJS helpers across strict callers", () => {
+	const fixture = "tests/local/captured-callback-inlining.cjs";
+	const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+	const outDir = mkdtempSync(join(tmpdir(), "mal-cjs-callback-inlining-"));
+	try {
+		const pair = buildBackendPairFromOneProgramImage({
+			fixture,
+			name: "cjs-callback-inlining",
+			config: resolveBuildConfig({ engine: { eval: false, realms: false } }),
+			outDir,
+		});
+		for (const binary of [pair.compiled, pair.interpreted]) {
+			expect(runToStdout(binary)).toBe(expected);
+			expect(runToStdout(binary, { env: STRESS_ENV })).toBe(expected);
+		}
+	} finally {
+		rmSync(outDir, { recursive: true, force: true });
+	}
+});

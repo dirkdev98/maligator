@@ -46,7 +46,6 @@ function acyclicOrder(fn: BytecodeFunction): ReadonlyArray<number> | undefined {
 /** Each successful invocation returns a graph containing only its own allocations. */
 export function nativeMapperReturnsFreshGraph(fn: BytecodeFunction): boolean {
 	if (
-		!fn.strict ||
 		fn.isAsync ||
 		fn.isGenerator ||
 		fn.needsArguments ||

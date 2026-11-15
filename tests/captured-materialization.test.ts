@@ -28,7 +28,7 @@ function construct(source: string, evalEnabled = false, strict = true) {
 	const config = resolveBuildConfig({ engine: { eval: evalEnabled, realms: false } });
 	const graph = buildModuleGraph(strict ? "/capture-cohort.mjs" : "/capture-cohort.cjs", {
 		entrySource: source,
-		entryGoal: strict ? "module" : "script",
+		entryGoal: strict ? "module" : "cjs",
 		entryStrict: strict,
 		buildConfig: config,
 	});
@@ -157,7 +157,7 @@ it.each([
 
 it.each([
 	{ evalEnabled: true, strict: true, ownerEval: true },
-	{ evalEnabled: false, strict: false, ownerEval: false },
+	{ evalEnabled: true, strict: false, ownerEval: true },
 ])(
 	"retains closure initialization with eval=$evalEnabled, strict=$strict and a direct eval in the owner=$ownerEval",
 	({ evalEnabled, strict, ownerEval }) => {
@@ -169,6 +169,16 @@ it.each([
 		expect(deferCapturedAllocations(compilation)).toBe(0);
 	},
 );
+
+it("defers private CommonJS closures past an early return without changing sloppy mode", () => {
+	const compilation = construct(
+		`function owner(values) { ${helpers} if (!values) return 0; return first(values.length); } globalThis.owner = owner;`,
+		false,
+		false,
+	);
+	expect(deferCapturedAllocations(compilation)).toBe(2);
+	verifyCoreProgram(compilation.program);
+});
 
 it.each([
 	{ reach: "run-time code can only be global", extra: "" },

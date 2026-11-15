@@ -1,3 +1,4 @@
+import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "../../build-config.ts";
 import type {
 	ClosureOpening,
@@ -161,9 +162,9 @@ function dynamicCodeOpenings(
 				"engine.eval is true and a script's top-level declarations are global bindings that run-time code can name",
 				modulePath,
 			);
-		if (!mayCallDirectEval(record)) continue;
-		// A sloppy wrapper can extend its variable environment through direct eval.
-		if (!record.parsed.strict)
+		const evalMode = directEvalMode(record);
+		if (evalMode === "none") continue;
+		if (evalMode === "sloppy")
 			return unconfined(
 				"engine.eval is true and a sloppy direct eval can add var bindings to its caller and read its mapped arguments",
 				modulePath,
@@ -186,21 +187,46 @@ function dynamicCodeOpenings(
 }
 
 /**
- * Whether a module may contain a direct eval: a call whose callee is the identifier
- * `eval`, ignoring shadowing so the check needs no scope analysis. The source scan
- * only skips the parse; a unicode-escaped identifier keeps it.
+ * Classify direct eval by the strictness at its call. Shadowing stays conservative
+ * without a scope-analysis dependency; escaped identifiers still reach the AST scan.
  */
-function mayCallDirectEval(record: ModuleRecord): boolean {
-	if (!record.source.includes("eval") && !record.source.includes("\\u")) return false;
-	return (
-		traverseEstree(record.parsed.ast, (node) =>
+function directEvalMode(record: ModuleRecord): "none" | "strict" | "sloppy" {
+	if (!record.source.includes("eval") && !record.source.includes("\\u")) return "none";
+	const strictNodes = new WeakSet<ESTree.Node>();
+	let found = false;
+	const stopped = traverseEstree(record.parsed.ast, (node, { parent }) => {
+		const strict =
+			record.parsed.strict ||
+			(parent !== null && strictNodes.has(parent)) ||
+			node.type === "ClassDeclaration" ||
+			node.type === "ClassExpression" ||
+			((node.type === "FunctionDeclaration" ||
+				node.type === "FunctionExpression" ||
+				node.type === "ArrowFunctionExpression") &&
+				node.body?.type === "BlockStatement" &&
+				node.body.body.some(
+					(statement) =>
+						statement.type === "ExpressionStatement" &&
+						statement.directive === "use strict",
+				));
+		if (strict && !record.parsed.strict) strictNodes.add(node);
+		if (
 			node.type === "CallExpression" &&
 			node.callee.type === "Identifier" &&
 			node.callee.name === "eval"
-				? ESTREE_STOP
-				: ESTREE_CONTINUE,
-		) === ESTREE_STOP
-	);
+		) {
+			found = true;
+			if (record.parsed.strict || !strict) return ESTREE_STOP;
+		}
+		return ESTREE_CONTINUE;
+	});
+	return stopped === ESTREE_STOP
+		? record.parsed.strict
+			? "strict"
+			: "sloppy"
+		: found
+			? "strict"
+			: "none";
 }
 
 /**

@@ -289,7 +289,6 @@ describe("immutable closure capture artifact transport", () => {
 	});
 
 	it.each<Partial<BytecodeFunction>>([
-		{ strict: false },
 		{ isAsync: true },
 		{ isGenerator: true },
 		{ isClassConstructor: true },
@@ -299,6 +298,16 @@ describe("immutable closure capture artifact transport", () => {
 		Object.assign(image.runtime.functions[0]!, metadata);
 		expect(() => serializeCompilerArtifact(image)).toThrow(
 			"invalid closure capture values",
+		);
+	});
+
+	it("round-trips immutable capture values in a sloppy leaf", () => {
+		const image = captureImage();
+		image.runtime.functions[0]!.strict = false;
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(restored.runtime.functions[0]!.strict).toBe(false);
+		expect(restored.runtime.functions[0]!.closureCaptureValues).toEqual(
+			image.runtime.functions[0]!.closureCaptureValues,
 		);
 	});
 

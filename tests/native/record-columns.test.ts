@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -14,15 +14,22 @@ import {
 const fixture = "tests/local/record-columns.mjs";
 const outDir = mkdtempSync(join(tmpdir(), "mal-record-columns-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
+const commonjsFixture = join(outDir, "record-columns.cjs");
+writeFileSync(commonjsFixture, readFileSync(fixture, "utf8"));
 
-function expected(scenario: string): string {
+function expected(scenario: string, fixture: string): string {
 	return execFileSync(process.execPath, [fixture], {
 		encoding: "utf8",
 		env: { ...process.env, RECORD_COLUMNS_CASE: scenario },
 	});
 }
 
-function measured(binary: string, scenario: string, environment: NodeJS.ProcessEnv = {}) {
+function measured(
+	binary: string,
+	scenario: string,
+	fixture: string,
+	environment: NodeJS.ProcessEnv = {},
+) {
 	const run = spawnSync(binary, [], {
 		encoding: "utf8",
 		env: {
@@ -33,7 +40,7 @@ function measured(binary: string, scenario: string, environment: NodeJS.ProcessE
 		},
 	});
 	expect(run.status, run.stderr).toBe(0);
-	expect(run.stdout).toBe(expected(scenario));
+	expect(run.stdout).toBe(expected(scenario, fixture));
 	const counter = (name: string) =>
 		Number(run.stderr.match(new RegExp(`${name}=(\\d+)`))?.[1] ?? 0);
 	return {
@@ -43,7 +50,7 @@ function measured(binary: string, scenario: string, environment: NodeJS.ProcessE
 	};
 }
 
-describe("private record columns", () => {
+describe.each([fixture, commonjsFixture])("private record columns in %s", (fixture) => {
 	let pair: ReturnType<typeof buildBackendPairFromOneProgramImage>;
 	let precise: string;
 	let mutable: string;
@@ -88,7 +95,7 @@ describe("private record columns", () => {
 		["escaped", "publishes the final fields of escaped records"],
 		["specialNumbers", "preserves signed zero across column stores"],
 	])("%s: %s", (scenario) => {
-		const oracle = expected(scenario);
+		const oracle = expected(scenario, fixture);
 		for (const binary of [pair.compiled, pair.interpreted, precise])
 			expect(runToStdout(binary, { env: { RECORD_COLUMNS_CASE: scenario } })).toBe(
 				oracle,
@@ -96,11 +103,11 @@ describe("private record columns", () => {
 	});
 	it("retains packed columns across repeated traversals", () => {
 		for (const binary of [pair.compiled, precise])
-			expect(measured(binary, "ordinary").admissions).toBeGreaterThan(0);
+			expect(measured(binary, "ordinary", fixture).admissions).toBeGreaterThan(0);
 	});
 	it("flushes packed Number writes before falling back", () => {
 		for (const binary of [pair.compiled, precise]) {
-			const counters = measured(binary, "changedKind");
+			const counters = measured(binary, "changedKind", fixture);
 			expect(counters.admissions).toBeGreaterThan(0);
 			expect(counters.flushes).toBeGreaterThan(0);
 		}
@@ -109,13 +116,13 @@ describe("private record columns", () => {
 		"keeps %s graphs on their ordinary heap representation",
 		(scenario) => {
 			for (const binary of [pair.compiled, precise])
-				expect(measured(binary, scenario).admissions).toBe(0);
+				expect(measured(binary, scenario, fixture).admissions).toBe(0);
 		},
 	);
 	it.each(["ordinary", "changedKind", "earlyReturn", "throw"])(
 		"roots %s columns through GC polls",
 		(scenario) => {
-			const oracle = expected(scenario);
+			const oracle = expected(scenario, fixture);
 			for (const binary of [pair.compiled, pair.interpreted, precise])
 				expect(
 					runToStdout(binary, { env: { ...STRESS_ENV, RECORD_COLUMNS_CASE: scenario } }),
@@ -123,11 +130,11 @@ describe("private record columns", () => {
 		},
 	);
 	it("preserves mutable Array iteration", () => {
-		expect(measured(mutable, "mutableIterator").admissions).toBe(0);
+		expect(measured(mutable, "mutableIterator", fixture).admissions).toBe(0);
 	});
 	it("services GC polls after packing while another heap graph remains live", () => {
 		for (const binary of [pair.compiled, precise]) {
-			const counters = measured(binary, "ordinary", STRESS_ENV);
+			const counters = measured(binary, "ordinary", fixture, STRESS_ENV);
 			expect(counters.admissions).toBeGreaterThan(0);
 			expect(counters.polls).toBeGreaterThan(0);
 		}

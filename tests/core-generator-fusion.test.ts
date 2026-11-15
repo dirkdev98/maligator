@@ -105,6 +105,17 @@ describe("private generator fusion in CommonJS modules", () => {
 		expect(fusionCount(sequence, traversal, "", {}, "main.cjs")).toBeGreaterThan(0);
 	});
 	it.each([
+		["receiver binding", "yield this.seed;"],
+		["mapped arguments", "seed = 7; yield arguments[0];"],
+		["callee reflection", "yield arguments.callee.length;"],
+		["function reflection", "yield sequence.caller;"],
+		["dynamic scope", "with ({ seed: 7 }) { yield seed; }"],
+	])("keeps the protocol for sloppy %s", (_behavior, body) => {
+		expect(
+			fusionCount(`function* sequence(seed) { ${body} }`, traversal, "", {}, "main.cjs"),
+		).toBe(0);
+	});
+	it.each([
 		{ publication: "module.exports.sequence = sequence;" },
 		{ publication: "exports.sequence = sequence;" },
 		{ publication: "module.exports = { sequence };" },

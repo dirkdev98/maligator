@@ -39,6 +39,9 @@ describe.each(["mutable", "locked"] as const)(
 				true,
 			],
 			["function read(key) { key=0; return arguments[key]; }", false],
+			["function read(key=0,value) { value=9; return arguments[key]; }", true],
+			["function read(key,value,...rest) { value=9; return arguments[key]; }", true],
+			["function read(key,{value}) { value=9; return arguments[key]; }", true],
 			["function* read(key) { yield arguments[key]; }", false],
 			["async function read(key) { return arguments[key]; }", false],
 		] as const)("keeps the frame eligibility boundary for %s", (source, eligible) => {

@@ -266,7 +266,6 @@ function generatorShape(
 	if (
 		!fn.isGenerator ||
 		fn.isAsync ||
-		!fn.metadata.strict ||
 		fn.metadata.mappedArguments ||
 		fn.metadata.capturedCount !== 0 ||
 		fn.parameterCount > 4 ||

@@ -216,7 +216,6 @@ export function analyzeClosureCaptureValues(
 		const sites = creations.get(id);
 		if (
 			sites === undefined ||
-			!fn.metadata.strict ||
 			fn.isAsync ||
 			fn.isGenerator ||
 			fn.metadata.isClassConstructor ||
@@ -290,7 +289,6 @@ export function analyzeClosureCaptureValues(
 		if (
 			values.size === 0 ||
 			runtime.capturedCount !== 0 ||
-			!runtime.strict ||
 			runtime.isAsync ||
 			runtime.isGenerator ||
 			runtime.isClassConstructor ||

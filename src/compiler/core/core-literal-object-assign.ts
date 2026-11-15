@@ -87,7 +87,6 @@ export function guardableObjectAssignOperands(
 	instruction: CoreInstructionId,
 ) {
 	if (
-		!fn.metadata.strict ||
 		!coreGuardableCall(fn, instruction) ||
 		fn.kernel.instructionOperandCount(instruction) !== 4
 	)

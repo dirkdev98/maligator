@@ -103,7 +103,6 @@ function factoryValue(
 	budget = { remaining: LIMIT * 2 },
 ): FactoryValue | undefined {
 	if (
-		!fn.metadata.strict ||
 		fn.metadata.mappedArguments ||
 		fn.isAsync ||
 		fn.isGenerator ||

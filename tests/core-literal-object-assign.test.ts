@@ -77,9 +77,12 @@ describe("literal Object.assign lowering", () => {
 	it("retains throwing assign semantics in a sloppy caller", () => {
 		expect(
 			assigns(
-				inspect("const out={}; return Object.assign(out, {revision:value&31});", {
-					script: true,
-				}),
+				inspect(
+					"const out=Object.create(null); return Object.assign(out, {revision:value&31});",
+					{
+						script: true,
+					},
+				),
 			).length,
 		).toBeGreaterThan(0);
 	});
@@ -90,6 +93,22 @@ describe("literal Object.assign lowering", () => {
 		);
 		expect(output.structure.genericCalls).toBeGreaterThan(0);
 	});
+	it.each([true, false])(
+		"copies fresh targets in sloppy code with locked=%s",
+		(locked) => {
+			const output = inspect("return Object.assign({}, value);", {
+				script: true,
+				locked,
+			});
+			expect(
+				output.core.some(
+					(operation) =>
+						operation.opcode === "copyDataProperties" &&
+						operation.attributes.copyMode === "assign",
+				),
+			).toBe(true);
+		},
+	);
 	it("guards mutable literal stores and retains their loaded call", () => {
 		const output = inspect(
 			"const out={}; return Object.assign(out, {revision:value&31});",

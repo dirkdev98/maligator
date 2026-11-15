@@ -35,7 +35,12 @@ const base = compileSemanticProgramToProgramImage(
 
 function proof(
 	shape: Shape,
-	options: { closed?: boolean; fact?: boolean; relocated?: boolean } = {},
+	options: {
+		closed?: boolean;
+		fact?: boolean;
+		relocated?: boolean;
+		strict?: boolean;
+	} = {},
 ) {
 	const program = analysisProgram();
 	const owner = new CoreFunctionBuilder(program, {
@@ -46,7 +51,9 @@ function proof(
 			...(shape === "mapped" ? { mappedArguments: true, mappedArgumentSlots: [2] } : {}),
 		},
 	});
-	const leaf = new CoreFunctionBuilder(program, { metadata: { strict: true } });
+	const leaf = new CoreFunctionBuilder(program, {
+		metadata: { strict: options.strict ?? true },
+	});
 	const slot = { functionIndex: owner.functionId, index: 2 };
 	const leafBody = leaf.createBlock();
 	const [loaded] = leaf.appendInstruction(leafBody, "loadCaptured", [], {
@@ -145,7 +152,7 @@ function proof(
 	const leafIndex = coreToExecution[leaf.functionId]!;
 	const functions = ids.map((id) => ({
 		...base.runtime.functions[0]!,
-		strict: true,
+		strict: options.strict ?? true,
 		capturedCount: id === owner.functionId ? 3 : 0,
 		registerCount: 1,
 		instructions:
@@ -186,6 +193,14 @@ function proof(
 }
 
 describe("persistent immutable closure capture proof", () => {
+	it("copies initialized values into sloppy leaves without changing their mode", () => {
+		const { image, execution, leafIndex } = proof("valid", { strict: false });
+		const leaf = analyzeClosureCaptureValues(image, execution).runtime.functions[
+			leafIndex
+		]!;
+		expect(leaf.strict).toBe(false);
+		expect(leaf.closureCaptureValues).toBeDefined();
+	});
 	it("snapshots an initialized owner slot and preserves the owner fallback", () => {
 		const { image, execution, leafIndex, ownerIndex } = proof("valid");
 		const result = analyzeClosureCaptures(

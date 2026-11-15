@@ -107,6 +107,7 @@ import {
 } from "./core-ir-generated-cost.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import type { CoreIntegerRangeQuery, CoreIntegerRangeState } from "./core-ir-loops.ts";
+import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "./core-ir-provenance.ts";
 import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
@@ -863,8 +864,6 @@ function inlineTarget(
 	if (
 		fn.isGenerator ||
 		fn.isAsync ||
-		// Strictness belongs to the running function, as an assignment through `with` shows.
-		fn.metadata.strict !== caller.metadata.strict ||
 		(invocation === "call" && fn.metadata.isClassConstructor) ||
 		(invocation === "construct" &&
 			(!fn.metadata.hasPrototype || fn.metadata.isDerivedConstructor)) ||
@@ -914,6 +913,20 @@ function inlineTarget(
 		active.add(block);
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const opcode = fn.instructionOpcodeName(instruction);
+			// Stores inherit the destination frame's mode; user code can observe
+			// a strict frame boundary through legacy caller/arguments reflection.
+			if (
+				fn.metadata.strict !== caller.metadata.strict &&
+				([
+					"storeProperty",
+					"storePropertyStatic",
+					"storeSuperProperty",
+					"storeGlobalProperty",
+					"deleteProperty",
+				].includes(opcode) ||
+					coreInstructionEffects(fn, instruction).callsUserCode)
+			)
+				return false;
 			if (opcode === "loadArgumentCount" || opcode === "loadStaticArgument") {
 				const index = fn.instructionAttributes(instruction).index;
 				// Past the passed arguments a static read needs a real arguments object.

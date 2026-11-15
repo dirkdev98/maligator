@@ -41,6 +41,17 @@ function opcodes(image: ProgramImage, name: string): ReadonlySet<string> {
 
 describe("run-time code in a program that keeps source closure", () => {
 	it(
+		"keeps private CommonJS lowering around a strict function's direct eval",
+		() => {
+			const image = expectNodeOutput(
+				"tests/local/direct-eval-strict-function.cjs",
+				"direct-eval-strict-function",
+			);
+			expect(opcodes(image, "sumRanges").has("GET_ITERATOR")).toBe(false);
+		},
+		scaledNativeRunTimeoutMs(600_000, STRESS_ENV),
+	);
+	it(
 		"sees only the global object and the values the program hands it",
 		() => {
 			const image = expectNodeOutput(

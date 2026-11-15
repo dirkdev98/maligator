@@ -684,8 +684,8 @@ function nodeIsWithin(
 }
 
 /**
- * Whether every unmaterialized `arguments[i]` equals incoming argument `i`. A sloppy
- * function's object aliases its formals, so none may be written after entry.
+ * Whether every unmaterialized `arguments[i]` equals incoming argument `i`. Only a
+ * sloppy function with simple parameters maps its formals, so those must stay unwritten.
  */
 function argumentsMatchIncomingValues(
 	file: SemanticFile,
@@ -699,6 +699,7 @@ function argumentsMatchIncomingValues(
 		return false;
 	if (owner.strict) return true;
 	if (file.hasDirectEval.has(owner.node)) return false;
+	if (owner.node.params.some((parameter) => parameter.type !== "Identifier")) return true;
 	return owner.node.params.every((parameter) => {
 		if (parameter.type !== "Identifier") return true;
 		const binding = file.nodeToBinding.get(parameter);

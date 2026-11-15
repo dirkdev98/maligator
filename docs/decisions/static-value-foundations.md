@@ -1469,15 +1469,16 @@ calls. Other object-producing calls and constructions keep the guarded forms tha
 snapshot, column and typed array regions consume. A loop that admits a numeric region
 keeps that region's entry speculation.
 
-Strict single-realm `Object.assign` sites outside those runs check the same monotonic
+Single-realm `Object.assign` sites outside those runs check the same monotonic
 epoch after evaluating their arguments. An intact epoch proves that their earlier
 direct global and method lookups captured the intrinsic. A private literal source with primitive
 fields becomes throwing stores, or an unobserved fresh target becomes one allocating
 assign copy. The original loaded call remains the fallback, so argument evaluation
 that patches a binding still calls the method captured before those effects. Literal
 field evaluations stay before the branch; only the unobserved allocation moves into
-the fallback. Copy and store specialization requires strict functions and disabled
-realms.
+the fallback. Store specialization requires strict functions because ordinary stores
+inherit the caller's mode. Fresh-target copies preserve throwing Set independently of
+the caller's mode. Both forms require disabled realms.
 
 Canonical function comparisons use the inventory's object identity, independently
 of native callback sharing. This folds repeated references across effects while

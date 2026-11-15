@@ -58,6 +58,21 @@ function passed(value) {
 	return [before, value.name, same];
 }
 
+function defaultRead(key = 0, value) {
+	value = 9;
+	return arguments[key];
+}
+
+function restRead(key, value, ...rest) {
+	value = 9;
+	return [arguments[key], rest];
+}
+
+function destructuredRead(key, { value }) {
+	value = 9;
+	return arguments[key];
+}
+
 const cases = {
 	parameterWrite: () => parameterWrite(1),
 	argumentWrite: () => argumentWrite(1),
@@ -67,6 +82,11 @@ const cases = {
 	destructuring: () => destructuredParameter({ value: 1 }),
 	strict: () => strictParameter(1),
 	passed: () => passed({ name: "ash" }),
+	nonSimpleReads: () => [
+		defaultRead(1, 3),
+		restRead(1, 3, 5),
+		destructuredRead(1, { value: 3 }),
+	],
 };
 
 for (const [name, run] of Object.entries(cases)) {

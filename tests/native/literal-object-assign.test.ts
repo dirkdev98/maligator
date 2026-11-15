@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -12,13 +12,15 @@ import {
 const fixture = "tests/local/literal-object-assign.mjs";
 const outDir = mkdtempSync(join(tmpdir(), "mal-literal-assign-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
-function expected(scenario: string) {
+const commonjsFixture = join(outDir, "literal-object-assign.cjs");
+writeFileSync(commonjsFixture, readFileSync(fixture, "utf8"));
+function expected(scenario: string, fixture: string) {
 	return execFileSync(process.execPath, [fixture], {
 		encoding: "utf8",
 		env: { ...process.env, LITERAL_ASSIGN_CASE: scenario },
 	});
 }
-describe("literal Object.assign", () => {
+describe.each([fixture, commonjsFixture])("literal Object.assign in %s", (fixture) => {
 	let pair: ReturnType<typeof buildBackendPairFromOneProgramImage>;
 	let sloppy: ReturnType<typeof buildBackendPairFromOneProgramImage>;
 	let mutable: ReturnType<typeof buildBackendPairFromOneProgramImage>;
@@ -70,7 +72,7 @@ describe("literal Object.assign", () => {
 		["sharedPrototype", "reaches objects that inherit from the target"],
 	] as const;
 	it.each(scenarios)("%s: %s", (scenario) => {
-		const oracle = expected(scenario);
+		const oracle = expected(scenario, fixture);
 		for (const binary of [pair.compiled, pair.interpreted])
 			expect(runToStdout(binary, { env: { LITERAL_ASSIGN_CASE: scenario } })).toBe(
 				oracle,
@@ -103,7 +105,7 @@ describe("literal Object.assign", () => {
 		["objectPrototypeReadonly", "throws for a key Object.prototype made nonwritable"],
 		["objectPrototypeField", "shadows a writable field added to Object.prototype"],
 	] as const)("%s with mutable primordials: %s", (scenario) => {
-		const oracle = expected(scenario);
+		const oracle = expected(scenario, fixture);
 		for (const binary of [mutable.compiled, mutable.interpreted]) {
 			expect(runToStdout(binary, { env: { LITERAL_ASSIGN_CASE: scenario } })).toBe(
 				oracle,
@@ -116,7 +118,7 @@ describe("literal Object.assign", () => {
 	it.each(["setters", "throw", "proxy", "objects", "specialValues", "freshCopies"])(
 		"roots %s values across collecting stores",
 		(scenario) => {
-			const oracle = expected(scenario);
+			const oracle = expected(scenario, fixture);
 			for (const binary of [pair.compiled, pair.interpreted])
 				expect(
 					runToStdout(binary, { env: { ...STRESS_ENV, LITERAL_ASSIGN_CASE: scenario } }),
@@ -135,7 +137,7 @@ describe("literal Object.assign", () => {
 	it("calls a mutable assign override", () => {
 		for (const binary of [mutable.compiled, mutable.interpreted])
 			expect(runToStdout(binary, { env: { LITERAL_ASSIGN_CASE: "mutable" } })).toBe(
-				expected("mutable"),
+				expected("mutable", fixture),
 			);
 	});
 	it("observes foreign values and replaced foreign builtins with realms enabled", () => {

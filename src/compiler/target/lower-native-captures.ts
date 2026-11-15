@@ -21,7 +21,7 @@ export function selectNativeCaptureAccess(
 ): NativeCaptureAccessPlan {
 	const { body: fn, functionIndex } = native;
 	const copiedValues =
-		fn.strict && !fn.isGenerator && !fn.isAsync && fn.capturedCount === 0
+		!fn.isGenerator && !fn.isAsync && fn.capturedCount === 0
 			? (fn.closureCaptureValues ?? [])
 			: [];
 	const copies = new Set(

@@ -177,6 +177,33 @@ describe("program closure certificate", () => {
 		});
 	});
 
+	test.each([
+		'function run() { "use strict"; return eval("1"); } module.exports = run;',
+		'const run = () => { "use strict"; return (() => eval("1"))(); }; module.exports = run;',
+		'class Run { value() { return eval("1"); } } module.exports = Run;',
+	])("confines strict function eval inside a sloppy CommonJS module: %s", (source) => {
+		const entry = project({ "entry.cjs": source }, "entry.cjs");
+		const certificate = certify(entry, {
+			config: resolveBuildConfig({ engine: { eval: true } }),
+		});
+		expect(certificate.sourceClosure.kind).toBe("known");
+		expect(openingKinds(certificate)).toEqual(["global-dynamic-code", "direct-eval"]);
+	});
+
+	test("keeps sloppy sibling eval open after a strict function", () => {
+		const entry = project(
+			{
+				"entry.cjs":
+					'function strict() { "use strict"; return eval("1"); } function sloppy() { return eval("1"); } module.exports = [strict, sloppy];',
+			},
+			"entry.cjs",
+		);
+		const certificate = certify(entry, {
+			config: resolveBuildConfig({ engine: { eval: true } }),
+		});
+		expect(certificate.sourceClosure.kind).toBe("unknown");
+	});
+
 	test("opens closure when run-time code shares a script's global declarations", () => {
 		const certificate = certify(
 			project({ "entry.js": "let counter = 0;\n" }, "entry.js"),

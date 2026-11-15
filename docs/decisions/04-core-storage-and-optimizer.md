@@ -244,8 +244,15 @@ the registry. A CommonJS wrapper starts sloppy unless its source has a `"use str
 directive prologue. Nested functions inherit that strictness or introduce their own
 directive. The Node globals prelude preserves the source's directive prologue.
 
-The closure certificate keeps source closure for such a program unless a module
-parsed sloppy may call a direct eval (it adds `var`s to its caller's variable
+Optimization admission follows the operations that can observe sloppy semantics.
+Mapped parameter aliases, dynamic scope, receiver coercion and legacy activation
+reflection need their own proofs. A numeric generator or pure factory whose admitted
+body excludes those observations does not require strict mode. Inlining across modes
+also excludes stores whose throwing behavior depends on the destination frame and
+operations that can expose the removed activation to user code.
+
+The closure certificate keeps source closure for such a program unless a direct eval
+may run in sloppy code (it adds `var`s to its caller's variable
 environment and hands over a mapped `arguments` with its `callee`), a script
 shares its top-level declarations with global code, primordials are mutable, or
 realms are enabled. Proofs that enumerate every reader or writer of a local,

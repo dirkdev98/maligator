@@ -74,7 +74,6 @@ export const lowerFreshObjectCopies: CoreFunctionPass = {
 		for (const allocation of context.instructions()) {
 			if (fn.instructionOpcodeName(allocation) === "call") {
 				if (
-					!fn.metadata.strict ||
 					world.primordialPolicy !== "mutable" ||
 					world.realms ||
 					context.remainingEdits < 20
@@ -107,7 +106,7 @@ export const lowerFreshObjectCopies: CoreFunctionPass = {
 				return editor.commit();
 			}
 			if (fn.instructionOpcodeName(allocation) === "callKnown") {
-				if (!fn.metadata.strict || world.realms || context.remainingEdits < 3) continue;
+				if (world.realms || context.remainingEdits < 3) continue;
 				const fresh = freshAssign(
 					fn,
 					allocation,

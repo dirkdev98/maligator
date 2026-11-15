@@ -2128,6 +2128,37 @@ describe("bounded Core cross-call transforms", () => {
 		}
 	});
 
+	it.each([false, true])(
+		"inlines mode-independent branches across strict caller=%s",
+		(strictCaller) => {
+			const directory = mkdtempSync(join(tmpdir(), "mal-cjs-inline-mode-"));
+			try {
+				const entry = join(directory, "main.cjs");
+				writeFileSync(
+					entry,
+					`function choose(value) { ${strictCaller ? "" : '"use strict";'} return value ? 11 : 7; }
+			function hot(count) { ${strictCaller ? '"use strict";' : ""} let sum=0; for(let i=0;i<count;i++) sum+=choose(i); return sum; }
+			console.log(hot(10));`,
+				);
+				let optimized: CoreProgram | undefined;
+				compileEntrypoint(entry, {
+					buildConfig: resolveBuildConfig({}),
+					coreVerification: "per-pass",
+					afterCoreOptimization(program) {
+						optimized = program;
+					},
+				});
+				expect(
+					coreOperations(coreFunctionNamed(optimized!, "hot")!).some(
+						({ opcode }) => opcode === "call",
+					),
+				).toBe(false);
+			} finally {
+				rmSync(directory, { recursive: true, force: true });
+			}
+		},
+	);
+
 	it("keeps returned private-name closures in the callee's lexical environment", () => {
 		let optimized: CoreProgram | undefined;
 		compileEntrypoint(resolve("tests/local/closure-state-sharing.js"), {
