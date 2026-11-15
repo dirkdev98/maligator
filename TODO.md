@@ -336,8 +336,9 @@ contracts or investigates costs still visible after the string follow-ups.
       retain only repeated workload savings that repay analysis and generated size.
 
 - [ ] Reduce cold suspended async activation size or coallocate its result promise.
-      Native activations already materialize lazily and recycle at completion; pending
-      calls still need result promises, await jobs and boxed suspension snapshots.
+      Completed activations recycle on both backends; native activation storage
+      materializes lazily. Pending calls still need result promises, await jobs and
+      boxed suspension snapshots.
       Profile the current pending-await and mutable javascript-v2 paths before changing
       their representation, preserving async stacks and exact microtask ordering.
 

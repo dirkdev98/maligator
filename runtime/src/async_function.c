@@ -43,13 +43,13 @@ static void mal_async_function_release_completed(MalVm *vm, MalGeneratorObject *
             (MalObject *) state->async_data->awaited_by));
         state->async_data->awaited_by = nullptr;
     }
-    if (state->frame.is_compiled &&
-        vm->async_function_state_pool_count < MAL_ASYNC_FUNCTION_STATE_POOL_LIMIT) {
-        // Native completion released its buffers before settlement. Clear the
-        // metadata too: a reused activation must not expose an earlier callee/env.
-        state->frame = (MalVmFrame) {0};
-        state->async_data->registers[0] = MAL_VALUE_UNDEFINED;
-        state->async_data->registers[1] = MAL_VALUE_UNDEFINED;
+    // Both backends released their live frame before settlement. The interpreter's
+    // saved snapshot can still name those buffers, so clear it without freeing again.
+    state->frame = (MalVmFrame) {0};
+    state->async_data->registers[0] = MAL_VALUE_UNDEFINED;
+    state->async_data->registers[1] = MAL_VALUE_UNDEFINED;
+    mal_generator_note_released_storage(state);
+    if (vm->async_function_state_pool_count < MAL_ASYNC_FUNCTION_STATE_POOL_LIMIT) {
         vm->async_function_state_pool[vm->async_function_state_pool_count++] = state;
     }
 }
@@ -60,12 +60,9 @@ void mal_async_function_start(MalVm *vm, MalVmFrame *frame) {
     MalRootSpan promise_root;
     mal_gc_root(&promise_root, &promise_value, 1);
 
-    // The hidden async state reuses the generator suspendable-frame object.
-    MalGeneratorObject *state = mal_generator_object_new_async(
-        &vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
-        false);
+    MalGeneratorObject *state = mal_async_function_state_new(vm);
     state->async_data->promise = promise_value;
+    mal_gc_remember_if_old(&state->object.header);
     state->state = MAL_GENERATOR_EXECUTING;
     frame->generator = state;
 
@@ -73,6 +70,7 @@ void mal_async_function_start(MalVm *vm, MalVmFrame *frame) {
     // can record itself as our `awaited_by` (async stack stitching).
     promise = mal_value_to_promise_object(promise_value);
     promise->async_owner = state;
+    mal_gc_remember_if_old(&promise->object.header);
     mal_promise_note_direct_async_result();
 
     // Hand the result promise to the caller now (the body keeps running in this

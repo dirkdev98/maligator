@@ -54,12 +54,16 @@ it("preserves completion and microtask ordering before and after the first suspe
 
 it("retains lazy activations and inline or pooled snapshots through collections", () => {
 	for (const binary of binaries)
-		expect(runToStdout(binary, { env: STRESS_ENV })).toBe(expected);
+		expect(runToStdout(binary, { env: { ...STRESS_ENV, MAL_HOST_GC: "1" } })).toBe(
+			expected,
+		);
 });
 
 it("observes constructor getters and replacement resolve methods during await", () => {
 	for (const binary of mutableBinaries) {
 		expect(runToStdout(binary)).toBe(mutableExpected);
-		expect(runToStdout(binary, { env: STRESS_ENV })).toBe(mutableExpected);
+		expect(runToStdout(binary, { env: { ...STRESS_ENV, MAL_HOST_GC: "1" } })).toBe(
+			mutableExpected,
+		);
 	}
 });

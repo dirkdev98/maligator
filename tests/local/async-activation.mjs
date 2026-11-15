@@ -190,3 +190,22 @@ async function returningThenable() {
 }
 console.log("reentry result", await returningThenable(), await nestedResult);
 console.log("reentry order", reentryEvents.join("|"));
+
+const collect = Reflect.get(globalThis, "__mal_collect_garbage");
+await retainedAcrossSuspension(5);
+if (typeof collect === "function") collect();
+const detachedValues = [];
+async function detached(value) {
+	const record = { value };
+	await 0;
+	await 0;
+	detachedValues.push(record.value);
+}
+function launchDetached(value) {
+	detached(value);
+}
+for (let index = 0; index < 24; index++) launchDetached(index);
+await 0;
+await 0;
+await 0;
+console.log("detached results", detachedValues.join(","));

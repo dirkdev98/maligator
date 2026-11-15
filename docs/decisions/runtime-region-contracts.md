@@ -78,6 +78,12 @@ runtime image. An owned foreign realm is admissible because each exact invocatio
 switches to the callback's realm and restores its caller's realm on completion.
 Being callable, or having an in-range function index, does not prove VM ownership.
 
+Completed async functions recycle their hidden state after detaching the result
+promise and async stack links. The live frame releases its own buffers before
+settlement; a saved interpreter snapshot is cleared without releasing them again.
+Reused state retains no callee or environment, refreshes its realm prototype, and
+remembers new promise links across generational collections.
+
 Suspended Iterator helpers retain the rooted callback and its stable function
 index, then reconstruct a stack-local context on each resume. Stack addresses,
 function-table rows, and numeric adapters cannot survive the suspension. A matching
