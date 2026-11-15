@@ -66,6 +66,7 @@ import {
 import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 
 const MAXIMUM_FAST_ENTRY_INSTRUCTIONS = 64;
+const MAXIMUM_FAST_ENTRY_SCAN_INSTRUCTIONS = 256;
 
 export type NativeFastTryParameters = ReadonlyArray<"i32" | "boxed" | "unused">;
 
@@ -198,10 +199,7 @@ export function renderNativeFastEntry(
 		fn.isDerivedConstructor ||
 		fn.capturedCount !== 0 ||
 		fn.mappedArguments ||
-		fn.needsArguments ||
-		fn.argumentSnapshotCount !== 0 ||
-		fn.handlers.length !== 0 ||
-		fn.instructions.length - unreachable.size > MAXIMUM_FAST_ENTRY_INSTRUCTIONS
+		fn.instructions.length - unreachable.size > MAXIMUM_FAST_ENTRY_SCAN_INSTRUCTIONS
 	)
 		return undefined;
 	const fieldLoads = new Map(
@@ -212,6 +210,10 @@ export function renderNativeFastEntry(
 	);
 	const exported = input.trySymbol !== undefined;
 	const rejected = new Set<number>();
+	const candidateConstants = numberConstantRegisters(
+		fn.instructions,
+		new Set(fn.instructions.flatMap(vmInstructionWriteRegisters)),
+	);
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (unreachable.has(ip) || elided.has(ip)) continue;
 		const target = branches.get(ip);
@@ -223,7 +225,7 @@ export function renderNativeFastEntry(
 				fieldLoads,
 				new Set(),
 				exported,
-				new Map(),
+				candidateConstants,
 				stringComparisons.get(ip),
 				new Set(),
 				new Set(),
@@ -232,8 +234,16 @@ export function renderNativeFastEntry(
 		)
 			rejected.add(ip);
 	}
-	const graph = fastEntryGraph(fn.instructions, branches, unreachable, rejected);
-	if (hasCycle(graph)) return undefined;
+	let graph = fastEntryGraph(fn.instructions, branches, unreachable, rejected);
+	const cyclicHeaders = cyclicFastEntryHeaders(graph);
+	for (const header of cyclicHeaders) rejected.add(header);
+	if (cyclicHeaders.size > 0)
+		graph = fastEntryGraph(fn.instructions, branches, unreachable, rejected);
+	const returning = returningFastEntryInstructions(fn.instructions, graph, rejected);
+	if (fn.instructions.length !== 0 && !returning.has(0)) return undefined;
+	for (const ip of graph.keys()) if (!returning.has(ip)) rejected.add(ip);
+	graph = fastEntryGraph(fn.instructions, branches, unreachable, rejected);
+	if (graph.size > MAXIMUM_FAST_ENTRY_INSTRUCTIONS) return undefined;
 	const fallsThrough =
 		fn.instructions.length === 0 ||
 		[...graph.values()].some((next) => next.includes(fn.instructions.length));
@@ -278,15 +288,22 @@ export function renderNativeFastEntry(
 		registers,
 	);
 	const initialized = initializedFastRegisters(graph, accesses, registers);
-	const tryParameters = exported
-		? scalarTryParameters(
-				fn,
-				graph,
-				accesses,
-				rejected,
-				input.prologue.length === 0 ? registers : undefined,
-			)
-		: undefined;
+	const tryParameters =
+		exported &&
+		!instructions.some(
+			(op) =>
+				op.opcode === "LOAD_ARGUMENT_COUNT" ||
+				op.opcode === "LOAD_DYNAMIC_ARGUMENT" ||
+				op.opcode === "LOAD_ARGUMENT",
+		)
+			? scalarTryParameters(
+					fn,
+					graph,
+					accesses,
+					rejected,
+					input.prologue.length === 0 ? registers : undefined,
+				)
+			: undefined;
 	const returnedParameter = instructions.find((op) => op.opcode === "RETURN")?.value;
 	const returnsParameter =
 		exported &&
@@ -554,19 +571,55 @@ function fastEntryGraph(
 	return graph;
 }
 
-// A loop needs a poll, and a poll needs a frame.
-function hasCycle(graph: ReadonlyMap<number, ReadonlyArray<number>>): boolean {
+// Loops need a poll and frame; a pure prefix may return before one or restart there.
+function cyclicFastEntryHeaders(
+	graph: ReadonlyMap<number, ReadonlyArray<number>>,
+): ReadonlySet<number> {
 	const state = new Map<number, number>();
-	const visit = (ip: number): boolean => {
+	const headers = new Set<number>();
+	const visit = (ip: number): void => {
 		const next = graph.get(ip);
-		if (next === undefined || state.get(ip) === 2) return false;
-		if (state.get(ip) === 1) return true;
+		if (next === undefined || state.get(ip) === 2) return;
+		if (state.get(ip) === 1) {
+			headers.add(ip);
+			return;
+		}
 		state.set(ip, 1);
-		if (next.some(visit)) return true;
+		for (const target of next) visit(target);
 		state.set(ip, 2);
-		return false;
 	};
-	return visit(0);
+	visit(0);
+	return headers;
+}
+
+// A path that can only restart belongs to the full entry, not the generated prefix.
+function returningFastEntryInstructions(
+	instructions: ReadonlyArray<BytecodeInstruction>,
+	graph: ReadonlyMap<number, ReadonlyArray<number>>,
+	rejected: ReadonlySet<number>,
+): ReadonlySet<number> {
+	const predecessors = new Map<number, Array<number>>();
+	const pending: Array<number> = [];
+	for (const [ip, next] of graph) {
+		if (
+			!rejected.has(ip) &&
+			(instructions[ip]?.opcode === "RETURN" || next.includes(instructions.length))
+		)
+			pending.push(ip);
+		for (const target of next) {
+			const incoming = predecessors.get(target) ?? [];
+			incoming.push(ip);
+			predecessors.set(target, incoming);
+		}
+	}
+	const returning = new Set<number>();
+	while (pending.length > 0) {
+		const ip = pending.pop()!;
+		if (returning.has(ip)) continue;
+		returning.add(ip);
+		pending.push(...(predecessors.get(ip) ?? []));
+	}
+	return returning;
 }
 
 function initializedFastRegisters(
@@ -1217,6 +1270,30 @@ function fastInstruction(
 			return `__fast_r${op.dst} = vm->intrinsics[${emitIntrinsic(op.intrinsic)}];`;
 		case "LOAD_CAPTURED":
 			return `__fast_r${op.dst} = ${input.capturedLoad(op.ownerFunctionIndex, op.index)};`;
+		case "LOAD_ARGUMENT":
+			return input.directEntry === undefined
+				? `__fast_r${op.dst} = arg_count > ${op.index} ? args[${op.index}] : MAL_VALUE_UNDEFINED;`
+				: undefined;
+		case "LOAD_ARGUMENT_COUNT":
+			return input.directEntry === undefined
+				? storeNumber(values, op.dst, "arg_count")
+				: undefined;
+		case "LOAD_DYNAMIC_ARGUMENT": {
+			if (input.directEntry !== undefined) return undefined;
+			const key =
+				op.key < 0
+					? decodeVmValueOperand(op.key)
+					: { kind: "number", value: constants.get(op.key) };
+			if (
+				key.kind !== "number" ||
+				key.value === undefined ||
+				!Number.isInteger(key.value) ||
+				key.value < 0 ||
+				key.value >= 16
+			)
+				return undefined;
+			return `__fast_r${op.dst} = arg_count > ${key.value} ? args[${key.value}] : MAL_VALUE_UNDEFINED;`;
+		}
 		case "THROW_IF_TDZ":
 			return `if (mal_value_is_empty(__fast_r${op.src})) goto __full;`;
 		case "DELETE_PROPERTY": {

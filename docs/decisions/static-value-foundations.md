@@ -1381,6 +1381,20 @@ rooted until the function exits, including across coercion, callbacks and collec
 The same proof applies with realms enabled because the private Array belongs to the
 executing realm and the protocol protector covers mutations in every realm.
 
+Small private rest sums check the protocol and arity, then admit each unrolled
+step only for Number inputs. These steps cannot call user code or throw, so they
+need neither a materialized iterator nor an iterator close. Longer lists and other
+types retain the original loop, including coercion, BigInt and abrupt close
+behavior. Native frameless entries admit a bounded pure prefix independently of
+the retained body. A loop or a path that cannot return from the prefix restarts in
+the full entry before effects; incoming argument reads use the original slice.
+
+Private literals shared by successive spread calls carry an optional materialized
+Array through the call joins. Every spread checks the protocol again. A failed
+check creates the Array only if an earlier fallback has not already exposed it;
+later fallbacks reuse its identity, element writes and own iterator. The protector
+never recovers, so an exposed Array cannot return to positional forwarding.
+
 Small acyclic functions that only read static rest indices can instead guard their
 incoming arity. Supplied elements are immutable own data in the private rest Array,
 so their argument snapshots remain valid across user code and prototype mutations.

@@ -23,6 +23,8 @@ import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
+const MAX_NUMERIC_REST_ELEMENTS = 4;
+
 function operand(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
@@ -178,7 +180,7 @@ export const lowerPrivateRestIteration: CoreFunctionPass = {
 	requiredFunctionOpcodesAny: ["createRestArguments"],
 	requiredAnalyses: [],
 	wakesOn: ["body", "cfg", "facts"],
-	changes: { cfg: true, calls: true, facts: true, representations: false },
+	changes: { cfg: true, calls: true, facts: true, representations: true },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
 		const fn = context.program.function(context.item.function);
@@ -211,8 +213,11 @@ export const lowerPrivateRestIteration: CoreFunctionPass = {
 				)
 			)
 				return undefined;
+			const reduction = numericRestReduction(fn, plan);
 			const editor = CoreEditor.open(context.program, fn.id);
 			lowerGuardedRestIteration(fn, editor, plan);
+			if (reduction !== undefined && context.remainingEdits >= 96)
+				guardNumericRestReduction(fn, editor, reduction);
 			return editor.commit();
 		}
 		const editor = CoreEditor.open(context.program, fn.id);
@@ -277,6 +282,175 @@ export const lowerPrivateRestIteration: CoreFunctionPass = {
 		return editor.commit();
 	},
 };
+
+interface NumericRestReduction {
+	readonly initial: CoreValueId;
+	readonly start: number;
+	readonly sourcePosition: number | undefined;
+}
+
+function numericRestReduction(
+	fn: CoreFunctionStore,
+	plan: NonNullable<ReturnType<typeof restIteration>>,
+): NumericRestReduction | undefined {
+	const header = fn.kernel.blockParameterStart(plan.header);
+	const sum = [...fn.bodyInstructionIds(plan.body)];
+	const start = fn.instructionAttributes(plan.allocation).startIndex;
+	const incoming = plan.incoming.find((edge) => !plan.loop.blocks.has(edge.from));
+	const bodyExit = coreTerminatorInput(fn, fn.blockTerminator(plan.body));
+	const headerExit = coreTerminatorInput(fn, fn.blockTerminator(plan.header));
+	if (
+		typeof start !== "number" ||
+		start < 0 ||
+		start > 8 ||
+		fn.kernel.blockParameterCount(plan.header) !== 1 ||
+		plan.loop.blocks.size !== 2 ||
+		sum.length !== 1 ||
+		fn.instructionOpcodeName(sum[0]!) !== "binary" ||
+		fn.instructionAttributes(sum[0]!).operator !== "+" ||
+		operand(fn, sum[0]!, 0) !== fn.kernel.blockParameterValue(header) ||
+		operand(fn, sum[0]!, 1) !== plan.value ||
+		bodyExit.kind !== "jump" ||
+		bodyExit.edge.block !== plan.header ||
+		bodyExit.edge.arguments.length !== 1 ||
+		bodyExit.edge.arguments[0] !== result(fn, sum[0]!) ||
+		headerExit.kind !== "branch" ||
+		incoming?.arguments.length !== 1 ||
+		[...fn.bodyInstructionIds(fn.entry)].some(
+			(instruction) => instruction !== plan.allocation,
+		) ||
+		[...fn.bodyInstructionIds(fn.instructionBlock(plan.initialize))].some(
+			(instruction) => instruction !== plan.initialize,
+		)
+	)
+		return undefined;
+	const exit = coreTerminatorInput(fn, fn.blockTerminator(headerExit.consequent.block));
+	if (
+		exit.kind !== "return" ||
+		exit.value !== fn.kernel.blockParameterValue(header) ||
+		[...fn.bodyInstructionIds(headerExit.consequent.block)].length !== 0
+	)
+		return undefined;
+	const initial = incoming.arguments[0]!;
+	if (
+		!Array.from({ length: Math.min(start, fn.parameterCount) }, (_, index) =>
+			fn.kernel.functionParameter(index),
+		).includes(initial)
+	)
+		return undefined;
+	const entryExit = coreTerminatorInput(fn, fn.blockTerminator(fn.entry));
+	const initializeExit = coreTerminatorInput(
+		fn,
+		fn.blockTerminator(fn.instructionBlock(plan.initialize)),
+	);
+	if (
+		entryExit.kind !== "jump" ||
+		entryExit.edge.block !== fn.instructionBlock(plan.initialize) ||
+		initializeExit.kind !== "jump" ||
+		initializeExit.edge.block !== plan.header ||
+		[...fn.bodyInstructionIds(plan.header)].some(
+			(instruction) => instruction !== plan.step,
+		)
+	)
+		return undefined;
+	return { initial, start, sourcePosition: fn.instructionSourcePosition(sum[0]!) };
+}
+
+/** A numeric reduction cannot call user code, so its guarded copy needs no iterator close. */
+function guardNumericRestReduction(
+	fn: CoreFunctionStore,
+	editor: CoreEditor,
+	plan: NumericRestReduction,
+): void {
+	const sourcePosition = plan.sourcePosition;
+	const fallback = editor.createBlock();
+	for (const instruction of [...fn.bodyInstructionIds(fn.entry)])
+		editor.moveInstruction(instruction, fallback);
+	const terminator = fn.blockTerminator(fn.entry);
+	editor.setTerminator(fallback, {
+		...coreTerminatorInput(fn, terminator),
+		sourcePosition,
+	});
+	editor.removeInstruction(terminator);
+	const emit = (
+		block: CoreBlockId,
+		opcode: string,
+		inputs: ReadonlyArray<CoreValueId>,
+		attributes: Readonly<Record<string, CoreAttributeValue>> = {},
+		representation?: CoreRepresentation,
+	) =>
+		editor.appendInstruction(block, opcode, inputs, {
+			attributes,
+			sourcePosition,
+			...(representation === undefined
+				? {}
+				: { outputRepresentations: [representation] }),
+		}).outputs[0]!;
+	let block = fn.entry;
+	const test = (condition: CoreValueId) => {
+		const next = editor.createBlock();
+		editor.setTerminator(block, {
+			kind: "branch",
+			condition,
+			consequent: { block: next, arguments: [] },
+			alternate: { block: fallback, arguments: [] },
+			sourcePosition,
+		});
+		block = next;
+	};
+	const count = emit(block, "loadArgumentCount", []);
+	const limit = emit(block, "createNumber", [], {
+		value: plan.start + MAX_NUMERIC_REST_ELEMENTS,
+	});
+	test(emit(block, "binary", [count, limit], { operator: "<=" }, "boolean"));
+	test(emit(block, "guardSemanticEpoch", [], { family: "array-iteration" }, "boolean"));
+	test(
+		emit(
+			block,
+			"typeofCompare",
+			[plan.initial],
+			{ expected: "number", negated: false },
+			"boolean",
+		),
+	);
+	let total = emit(block, "unary", [plan.initial], { operator: "+" }, "f64");
+	const returned = editor.createBlock([{ representation: "f64" }]);
+	editor.setTerminator(returned, {
+		kind: "return",
+		value: fn.kernel.blockParameterValue(fn.kernel.blockParameterStart(returned)),
+		sourcePosition,
+	});
+	for (let index = plan.start; index < plan.start + MAX_NUMERIC_REST_ELEMENTS; index++) {
+		const key = emit(block, "createNumber", [], { value: index });
+		const done = emit(block, "binary", [count, key], { operator: "<=" }, "boolean");
+		const more = editor.createBlock();
+		editor.setTerminator(block, {
+			kind: "branch",
+			condition: done,
+			consequent: { block: returned, arguments: [total] },
+			alternate: { block: more, arguments: [] },
+			sourcePosition,
+		});
+		block = more;
+		const value = emit(block, "loadDynamicArgument", [key]);
+		test(
+			emit(
+				block,
+				"typeofCompare",
+				[value],
+				{ expected: "number", negated: false },
+				"boolean",
+			),
+		);
+		const number = emit(block, "unary", [value], { operator: "+" }, "f64");
+		total = emit(block, "binary", [total, number], { operator: "+" }, "f64");
+	}
+	editor.setTerminator(block, {
+		kind: "jump",
+		edge: { block: returned, arguments: [total] },
+		sourcePosition,
+	});
+}
 
 /*
  * Mutable primordials keep the rest loop's protocol as the twin of a guarded

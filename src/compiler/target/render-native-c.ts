@@ -5156,17 +5156,21 @@ function emitCompiledVariant(
 								}
 							: undefined;
 					},
-					// Numeric overlays preserve the bytecode a frameless entry proves independently.
+					// These overlays retain the bytecode a frameless entry proves independently.
 					specialized:
 						worker !== undefined ||
 						(nativeContract.literalSwitches?.length ?? 0) > 0 ||
 						nativeContract.specializations.some(
-							(region) => region.kind !== "numeric-fusion",
+							(region) =>
+								region.kind !== "numeric-fusion" &&
+								region.kind !== "iterator-result-virtualization",
 						) ||
 						nativeContract.regionActions.some(
 							(action) =>
 								nativeContract.specializations[action.regionIndex]?.kind !==
-								"numeric-fusion",
+									"numeric-fusion" &&
+								nativeContract.specializations[action.regionIndex]?.kind !==
+									"iterator-result-virtualization",
 						) ||
 						storage.numberRecordRegions.length > 0 ||
 						storage.propertyReadRegions.length > 0 ||

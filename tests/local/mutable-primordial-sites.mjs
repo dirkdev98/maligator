@@ -35,7 +35,186 @@ function fakeDate() {
 	};
 }
 
+function spreadSharedLiteral(first, second, left = 2, right = 3) {
+	const values = [left, right];
+	const initial = +first(...values);
+	return [initial, second(...values)];
+}
+
+function sum(left = 0, right = 0) {
+	return left + right;
+}
+
+function reduceRest(base, ...values) {
+	let total = base;
+	for (const value of values) total += value;
+	return total;
+}
+
 const cases = {
+	"numeric rest sum observes an iterator changed after first use"() {
+		const warm = reduceRest(3, 5, 7);
+		const original = Array.prototype[Symbol.iterator];
+		try {
+			Array.prototype[Symbol.iterator] = function () {
+				let done = false;
+				return {
+					next() {
+						const previous = done;
+						done = true;
+						return { value: 43, done: previous };
+					},
+				};
+			};
+			return [warm, reduceRest(3, 5, 7)];
+		} finally {
+			Array.prototype[Symbol.iterator] = original;
+		}
+	},
+	"numeric rest fallback coerces once and closes on throw"() {
+		const warm = reduceRest(3, 5, 7);
+		const prototype = Object.getPrototypeOf([][Symbol.iterator]());
+		const descriptor = Object.getOwnPropertyDescriptor(prototype, "return");
+		const marker = {};
+		let calls = 0;
+		let closes = 0;
+		try {
+			try {
+				reduceRest(
+					1,
+					2,
+					{
+						valueOf() {
+							calls++;
+							prototype.return = function () {
+								closes++;
+								return { done: true };
+							};
+							throw marker;
+						},
+					},
+					4,
+				);
+			} catch (error) {
+				return [warm, error === marker, calls, closes];
+			}
+			throw new Error("missing reduction throw");
+		} finally {
+			if (descriptor === undefined) delete prototype.return;
+			else Object.defineProperty(prototype, "return", descriptor);
+		}
+	},
+	"shared literal iterator changes after its first spread"() {
+		const warm = spreadSharedLiteral(sum, sum);
+		const original = Array.prototype[Symbol.iterator];
+		try {
+			const result = spreadSharedLiteral((left, right) => {
+				Array.prototype[Symbol.iterator] = function () {
+					let done = false;
+					return {
+						next() {
+							const previous = done;
+							done = true;
+							return { value: 41, done: previous };
+						},
+					};
+				};
+				return left + right;
+			}, sum);
+			return [warm, result];
+		} finally {
+			Array.prototype[Symbol.iterator] = original;
+		}
+	},
+	"shared literal fallback retains identity and element writes"() {
+		const warm = spreadSharedLiteral(sum, sum);
+		const original = Array.prototype[Symbol.iterator];
+		let saved;
+		let reads = 0;
+		try {
+			Array.prototype[Symbol.iterator] = function () {
+				if (saved !== undefined && saved !== this) throw new Error("literal identity");
+				saved = this;
+				this[reads++] = reads * 17;
+				return original.call(this);
+			};
+			const result = spreadSharedLiteral(sum, sum);
+			return [warm, result, reads, saved[0], saved[1]];
+		} finally {
+			Array.prototype[Symbol.iterator] = original;
+		}
+	},
+	"shared literal coercion changes the following iterator getter"() {
+		const warm = spreadSharedLiteral(sum, sum);
+		const descriptor = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);
+		let reads = 0;
+		try {
+			const result = spreadSharedLiteral(
+				() => ({
+					valueOf() {
+						Object.defineProperty(Array.prototype, Symbol.iterator, {
+							configurable: true,
+							get() {
+								reads++;
+								this[0] = 29;
+								return descriptor.value;
+							},
+						});
+						return 7;
+					},
+				}),
+				sum,
+			);
+			return [warm, result, reads];
+		} finally {
+			Object.defineProperty(Array.prototype, Symbol.iterator, descriptor);
+		}
+	},
+	"shared literal next changes after its first spread"() {
+		const warm = spreadSharedLiteral(sum, sum);
+		const prototype = Object.getPrototypeOf([][Symbol.iterator]());
+		const descriptor = Object.getOwnPropertyDescriptor(prototype, "next");
+		let steps = 0;
+		try {
+			const result = spreadSharedLiteral((left, right) => {
+				prototype.next = function () {
+					return { value: 37, done: steps++ > 0 };
+				};
+				return left + right;
+			}, sum);
+			return [warm, result, steps];
+		} finally {
+			Object.defineProperty(prototype, "next", descriptor);
+		}
+	},
+	"shared literal iterator throw preserves the preceding call"() {
+		const descriptor = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);
+		let saved;
+		let reads = 0;
+		let calls = 0;
+		try {
+			Object.defineProperty(Array.prototype, Symbol.iterator, {
+				configurable: true,
+				get() {
+					reads++;
+					if (reads === 2) throw this === saved ? "same literal" : "different literal";
+					saved = this;
+					return descriptor.value;
+				},
+			});
+			try {
+				spreadSharedLiteral((left, right) => {
+					calls++;
+					return left + right;
+				}, sum);
+			} catch (error) {
+				return [error, reads, calls];
+			}
+			throw new Error("missing iterator throw");
+		} finally {
+			Object.defineProperty(Array.prototype, Symbol.iterator, descriptor);
+		}
+	},
 	"format method before first call"() {
 		Number.prototype.toFixed = () => "53.5";
 		return sample();

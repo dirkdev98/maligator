@@ -41,6 +41,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_vm_leaf_unobserved",
 	"mal_vm_as_object",
 	"mal_vm_callee_has_index",
+	"mal_vm_guard_semantic_epoch",
 	"mal_object_field_load_shaped",
 	"mal_vm_leaf_stack_available",
 	"mal_value_is_undefined",
@@ -131,6 +132,75 @@ function body(
 
 const OWN_TRY = "mal_compiled_0_try";
 const LENGTH_STRING_INDEX = 7;
+
+describe("pure prefixes with a retained framed body", () => {
+	it("returns undefined from an empty body", () => {
+		const lines = fastEntry(body([]));
+		expect(lines).toBeDefined();
+		expect(lines!.join("\n")).toContain(") return MAL_VALUE_UNDEFINED;");
+		expect(unexpectedHelpers(lines!)).toEqual([]);
+	});
+
+	it("returns before a loop and restarts before entering it", () => {
+		const lines = fastEntry(
+			body([
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 2 },
+				{ opcode: "RETURN", value: 1 },
+				{ opcode: "JUMP", targetIp: 2 },
+			]),
+		);
+		expect(lines).toBeDefined();
+		expect(lines!.join("\n")).toContain("goto __full;");
+		expect(lines!.join("\n")).toMatch(/F2:;\s+goto __full;/);
+		expect(unexpectedHelpers(lines!)).toEqual([]);
+	});
+
+	it("declines a loop with no successful pure return", () => {
+		expect(fastEntry(body([{ opcode: "JUMP", targetIp: 0 }]))).toBeUndefined();
+	});
+
+	it("uses the vector ABI for incoming count and constant argument reads", () => {
+		const lines = fastEntry(
+			body(
+				[
+					{ opcode: "LOAD_ARGUMENT_COUNT", dst: 2 },
+					{ opcode: "CREATE_NUMBER", dst: 3, value: 2 },
+					{ opcode: "LOAD_DYNAMIC_ARGUMENT", dst: 4, key: 3 },
+					{ opcode: "RETURN", value: 4 },
+				],
+				{ needsArguments: true, argumentSnapshotCount: 1 },
+			),
+		);
+		expect(lines).toBeDefined();
+		expect(lines![0]).toContain("const MalValue *args, i32 arg_count");
+		expect(lines!.join("\n")).toContain("arg_count > 2 ? args[2]");
+		expect(unexpectedHelpers(lines!)).toEqual([]);
+	});
+
+	it("does not substitute an argument index whose definition a branch can bypass", () => {
+		expect(
+			fastEntry(
+				body([
+					{ opcode: "JUMP_IF", cond: 0, targetIp: 2 },
+					{ opcode: "CREATE_NUMBER", dst: 2, value: 1 },
+					{ opcode: "LOAD_DYNAMIC_ARGUMENT", dst: 3, key: 2 },
+					{ opcode: "RETURN", value: 3 },
+				]),
+			),
+		).toBeUndefined();
+	});
+
+	it("declines a general dynamic argument read", () => {
+		expect(
+			fastEntry(
+				body([
+					{ opcode: "LOAD_DYNAMIC_ARGUMENT", dst: 2, key: 0 },
+					{ opcode: "RETURN", value: 2 },
+				]),
+			),
+		).toBeUndefined();
+	});
+});
 
 describe("frameless own-data reads", () => {
 	it.each(["LOAD_PROPERTY_STATIC", "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"] as const)(

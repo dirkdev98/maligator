@@ -3,6 +3,7 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 function kernelOpcodes(
 	body: string,
@@ -53,6 +54,24 @@ describe("spread of Array literal arguments", () => {
 		).toBe(true);
 		expect(instructions.some((op) => op.opcode === "CALL_SPREAD_ITERABLE")).toBe(true);
 	});
+
+	it.each([2, 3, 4])(
+		"materializes a shared literal only in its %i spread fallbacks",
+		(uses) => {
+			const { core } = inspectStaticValueFunction(
+				`function target(a,b,f){const values=[a,b];${Array.from({ length: uses }, () => "f(...values);").join("")}return 0;}globalThis.target=target;`,
+				"target",
+				{ locked: false, realms: true },
+			);
+			const guards = core.filter((op) => op.opcode === "guardSemanticEpoch");
+			const arrays = core.filter((op) => op.opcode === "createArray");
+			expect(guards).toHaveLength(uses);
+			expect(arrays.length).toBeGreaterThan(0);
+			for (const array of arrays)
+				expect(guards.some((guard) => guard.block === array.block)).toBe(false);
+			expect(core.some((op) => op.opcode === "callSpreadIterable")).toBe(true);
+		},
+	);
 
 	it.each([
 		["a hole", "return f(...[a,,b]);"],

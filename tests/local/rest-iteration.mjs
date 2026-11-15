@@ -105,6 +105,8 @@ switch (scenario) {
 	case "numbers":
 		check(sum(3, 5, 7, 11) === 26);
 		check(sum(3) === 3);
+		check(sum(3, 5, 7, 11, 13) === 39);
+		check(sum(3, 5, 7, 11, 13, 17) === 56);
 		check(sum() === undefined);
 		check(Number.isNaN(sum(0, NaN)));
 		check(Object.is(sum(-0, -0), -0));
@@ -188,6 +190,7 @@ switch (scenario) {
 		break;
 	case "mutable": {
 		let closes = 0;
+		check(sum(0, 1, 3) === 4);
 		const original = Array.prototype[Symbol.iterator];
 		Array.prototype[Symbol.iterator] = function () {
 			let index = 0;

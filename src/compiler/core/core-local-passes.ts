@@ -3099,6 +3099,52 @@ const spreadArrayLiteralArguments: CoreFunctionPass = {
 			if (!valid) continue;
 			editor ??= CoreEditor.open(program, item.function);
 			if (guarded) {
+				if (
+					calls.length > 1 &&
+					calls.length <= 4 &&
+					context.remainingEdits >= calls.length * (length + 24) &&
+					calls.every(
+						(call) =>
+							fn.instructionBlock(call.instruction) === fn.instructionBlock(producer),
+					)
+				) {
+					const order = [...fn.bodyInstructionIds(fn.instructionBlock(producer))];
+					calls.sort(
+						(left, right) =>
+							order.indexOf(left.instruction) - order.indexOf(right.instruction),
+					);
+					let state = editor.insertInstruction(
+						fn.instructionBlock(producer),
+						producer,
+						"createUndefined",
+						[],
+					).outputs[0]!;
+					const materialization: SpreadLiteralMaterialization = {
+						state,
+						attributes: fn.instructionAttributes(producer),
+						sourcePosition: fn.instructionSourcePosition(producer),
+						definitions: [...definitions].map((instruction) => ({
+							inputs: copyInstructionOperands(fn, instruction).slice(1),
+							attributes: fn.instructionAttributes(instruction),
+							sourcePosition: fn.instructionSourcePosition(instruction),
+						})),
+					};
+					for (const call of calls)
+						state = guardSpreadLiteralCall(
+							fn,
+							editor,
+							call,
+							elements as Array<CoreValueId>,
+							[],
+							{
+								...materialization,
+								state,
+							},
+						)!;
+					for (const definition of definitions) editor.removeInstruction(definition);
+					editor.removeInstruction(producer);
+					continue;
+				}
 				for (const call of calls)
 					guardSpreadLiteralCall(
 						fn,
@@ -3136,6 +3182,17 @@ const spreadArrayLiteralArguments: CoreFunctionPass = {
 	},
 };
 
+interface SpreadLiteralMaterialization {
+	readonly state: CoreValueId;
+	readonly attributes: Readonly<Record<string, CoreAttributeValue>>;
+	readonly sourcePosition: number | undefined;
+	readonly definitions: ReadonlyArray<{
+		readonly inputs: ReadonlyArray<CoreValueId>;
+		readonly attributes: Readonly<Record<string, CoreAttributeValue>>;
+		readonly sourcePosition: number | undefined;
+	}>;
+}
+
 /*
  * Splits the call's block: the array-iteration check selects a direct call with the
  * literal's elements or the original spread, whose literal moves in front of it when
@@ -3150,7 +3207,8 @@ function guardSpreadLiteralCall(
 	},
 	elements: ReadonlyArray<CoreValueId>,
 	literal: ReadonlyArray<CoreInstructionId>,
-): void {
+	materialization?: SpreadLiteralMaterialization,
+): CoreValueId | undefined {
 	const site = call.instruction;
 	const block = fn.instructionBlock(site);
 	const terminator = fn.blockTerminator(block);
@@ -3165,8 +3223,15 @@ function guardSpreadLiteralCall(
 	)
 		tail.push(next);
 	const direct = editor.createBlock();
-	const fallback = editor.createBlock();
-	const join = editor.createBlock([{ representation }]);
+	const fallback = editor.createBlock(
+		materialization === undefined ? [] : [{ representation: "boxed" }],
+	);
+	const miss = materialization === undefined ? fallback : editor.createBlock();
+	const allocate = materialization === undefined ? undefined : editor.createBlock();
+	const join = editor.createBlock([
+		{ representation },
+		...(materialization === undefined ? [] : [{ representation: "boxed" as const }]),
+	]);
 	const handler = fn.kernel.blockHandlerBlock(block);
 	if (handler !== undefined) {
 		const start = fn.kernel.blockHandlerArgumentStart(block);
@@ -3174,7 +3239,13 @@ function guardSpreadLiteralCall(
 			{ length: fn.kernel.blockHandlerArgumentCount(block) },
 			(_, index) => fn.kernel.handlerArgumentAt(start + index),
 		);
-		for (const created of [direct, fallback, join])
+		for (const created of new Set([
+			direct,
+			fallback,
+			join,
+			miss,
+			...(allocate === undefined ? [] : [allocate]),
+		]))
 			editor.setHandler(created, handler, handlerArguments);
 	}
 	for (const instruction of tail) editor.moveInstruction(instruction, join);
@@ -3189,18 +3260,73 @@ function guardSpreadLiteralCall(
 	);
 	const sourceCall = fn.instructionAttributes(site).sourceCall;
 	editor.moveInstruction(site, fallback);
-	editor.replaceInstruction(site, "callSpreadIterable", call.operands, {
-		attributes: {
-			...fn.instructionAttributes(site),
-			[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE]: true,
+	const fallbackArray =
+		materialization === undefined
+			? undefined
+			: fn.kernel.blockParameterValue(fn.kernel.blockParameterStart(fallback));
+	editor.replaceInstruction(
+		site,
+		"callSpreadIterable",
+		fallbackArray === undefined
+			? call.operands
+			: [call.operands[0]!, call.operands[1]!, fallbackArray, ...call.operands.slice(3)],
+		{
+			attributes: {
+				...fn.instructionAttributes(site),
+				[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE]: true,
+			},
+			sourcePosition,
+			effectRefinement: fn.instructionEffectRefinement(site),
 		},
-		sourcePosition,
-		effectRefinement: fn.instructionEffectRefinement(site),
-	});
+	);
 	for (const instruction of literal) editor.moveInstruction(instruction, fallback, site);
+	if (materialization !== undefined && allocate !== undefined) {
+		// Once an iterator exposes this Array, all later spreads must reuse its identity
+		// and mutations. The protocol protector never recovers after that exposure.
+		const absent = editor.appendInstruction(miss, "createUndefined", []).outputs[0]!;
+		const needsArray = editor.appendInstruction(
+			miss,
+			"binary",
+			[materialization.state, absent],
+			{
+				attributes: { operator: "===" },
+				outputRepresentations: ["boolean"],
+				sourcePosition,
+			},
+		).outputs[0]!;
+		editor.setTerminator(miss, {
+			kind: "branch",
+			condition: needsArray,
+			consequent: { block: allocate, arguments: [] },
+			alternate: { block: fallback, arguments: [materialization.state] },
+			sourcePosition,
+		});
+		const array = editor.appendInstruction(allocate, "createArray", [], {
+			attributes: materialization.attributes,
+			sourcePosition: materialization.sourcePosition,
+		}).outputs[0]!;
+		for (const definition of materialization.definitions)
+			editor.appendInstruction(
+				allocate,
+				"defineProperty",
+				[array, ...definition.inputs],
+				{
+					attributes: definition.attributes,
+					sourcePosition: definition.sourcePosition,
+				},
+			);
+		editor.setTerminator(allocate, {
+			kind: "jump",
+			edge: { block: fallback, arguments: [array] },
+			sourcePosition,
+		});
+	}
 	editor.setTerminator(fallback, {
 		kind: "jump",
-		edge: { block: join, arguments: [result] },
+		edge: {
+			block: join,
+			arguments: [result, ...(fallbackArray === undefined ? [] : [fallbackArray])],
+		},
 		sourcePosition,
 	});
 	const intact = editor.appendInstruction(block, "guardSemanticEpoch", [], {
@@ -3212,7 +3338,7 @@ function guardSpreadLiteralCall(
 		kind: "branch",
 		condition: intact,
 		consequent: { block: direct, arguments: [] },
-		alternate: { block: fallback, arguments: [] },
+		alternate: { block: miss, arguments: [] },
 		sourcePosition,
 	});
 	const directResult = editor.appendInstruction(
@@ -3227,9 +3353,18 @@ function guardSpreadLiteralCall(
 	).outputs[0]!;
 	editor.setTerminator(direct, {
 		kind: "jump",
-		edge: { block: join, arguments: [directResult] },
+		edge: {
+			block: join,
+			arguments: [
+				directResult,
+				...(materialization === undefined ? [] : [materialization.state]),
+			],
+		},
 		sourcePosition,
 	});
+	return materialization === undefined
+		? undefined
+		: fn.kernel.blockParameterValue(fn.kernel.blockParameterStart(join) + 1);
 }
 
 function canonicalRestElementIndex(key: string | number): number | undefined {
