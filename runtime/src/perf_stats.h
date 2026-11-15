@@ -205,6 +205,8 @@ typedef struct MalPerfStats {
 
     u64 regexp_exec_calls;
     u64 regexp_fast_exec_calls;
+    u64 regexp_collect_batches;
+    u64 regexp_collect_matches;
     u64 regexp_ascii_exec_calls;
     u64 regexp_ascii_cache_hits;
     u64 regexp_ascii_cache_fills;

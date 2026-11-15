@@ -23,6 +23,19 @@ and legacy match state. When no capture is observed, the call is the sole region
 anchor and matching can omit the result Array. A null comparison still observes
 the same success or failure; escaping match objects retain the original call.
 
+Capture-containing sequences with contiguous character classes lower to a linear
+matcher after the existing greedy-safety proof. Captured runs combine range checks
+with capture writes; nested captures retain their boundaries. Sequences with
+branches, optional groups or classes with disjoint ranges keep the tree executor,
+and Unicode matching keeps the general engine.
+
+Canonical global match collection borrows one flat subject across batches of
+complete capture rows. The allocation-free matcher writes directly into the
+caller's offset storage and resumes after a full batch. Empty matches advance by
+one code unit only for these non-Unicode plans. C retains protocol dispatch,
+lastIndex effects and the final legacy match state; replacement callbacks run
+after collection has released the borrowed subject.
+
 The matcher specializes a terminal `(?=$|class)` assertion only when its alternative
 consumes one code unit and captures nothing. The tested class participates in the
 continuation's disjointness proof, so a variable repeat cannot stop earlier by

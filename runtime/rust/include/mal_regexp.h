@@ -3,7 +3,7 @@
  *
  * Hand-maintained to mirror the `#[no_mangle] extern "C"` surface in
  * runtime/rust/src/regexp.rs. The C runtime owns all JS-spec glue (the RegExp
- * object, lastIndex/global/sticky iteration, result-array shaping, the
+ * object, lastIndex and global execution, result-array shaping, the
  * Symbol.* protocol, $-substitution, the d-flag indices array); this header
  * exposes only flat match primitives.
  *
@@ -22,7 +22,7 @@ extern "C" {
 #endif
 
 /* Bump with regexp.rs when the ownership or execution contract changes. */
-#define MAL_REGEXP_ABI_VERSION 12u
+#define MAL_REGEXP_ABI_VERSION 13u
 
 /* Returns the ABI version compiled into the linked archive. */
 uint32_t mal_regexp_abi_version(void);
@@ -85,6 +85,19 @@ int32_t mal_regexp_exec_latin1(void *handle, const uint8_t *subject, size_t subj
                                uint64_t heap_identity, uint32_t heap_epoch,
                                int32_t *caps_out, int32_t caps_cap,
                                uint32_t *execution_flags_out);
+
+/* Collect nonoverlapping matches of an allocation-free, code-unit plan. Returns
+ * its group count, or 0 without changing matcher state when no such plan exists.
+ * Writes complete capture rows into caps_out, reporting their slot count and
+ * the number of matcher attempts. next_start resumes after the last row, or is
+ * subject_len + 1 when exhausted. Empty matches advance one code unit; these
+ * plans exclude Unicode mode. A buffer smaller than one row reports no progress.
+ * No subject pointer or output storage is retained. */
+int32_t mal_regexp_collect_fast(void *handle, const void *subject, size_t subject_len,
+                                uint32_t latin1, size_t start,
+                                int32_t *caps_out, size_t caps_cap,
+                                size_t *slots_out, size_t *next_start_out,
+                                size_t *attempts_out);
 
 /* Copy the most recent successful match's capture pairs into caps_out without
  * re-matching; returns the group count, or 0 if no match is retained. */

@@ -1031,8 +1031,7 @@ typedef struct RegexpCaptureProjection {
     RegexpMatchOffsets *offsets;
 } RegexpCaptureProjection;
 
-static bool regexp_match_offsets_append(RegexpMatchOffsets *offsets, const int32_t *caps, int32_t ngroups) {
-    usize entries = 2 * (usize) ngroups;
+static bool regexp_match_offsets_reserve(RegexpMatchOffsets *offsets, usize entries) {
     if (offsets->capacity == 0) {
         offsets->pairs = offsets->inline_pairs;
         offsets->capacity = countof(offsets->inline_pairs);
@@ -1050,6 +1049,12 @@ static bool regexp_match_offsets_append(RegexpMatchOffsets *offsets, const int32
         offsets->pairs = pairs;
         offsets->capacity = capacity;
     }
+    return true;
+}
+
+static bool regexp_match_offsets_append(RegexpMatchOffsets *offsets, const int32_t *caps, int32_t ngroups) {
+    usize entries = 2 * (usize) ngroups;
+    if (!regexp_match_offsets_reserve(offsets, entries)) return false;
     memcpy(offsets->pairs + offsets->count, caps, entries * sizeof(int32_t));
     offsets->count += entries;
     offsets->groups = ngroups;
@@ -2173,14 +2178,53 @@ static MalValue regexp_proto_search(MalVm *vm, MalValue this_value, const MalVal
 // RegExp.prototype[@@match]
 // ---------------------------------------------------------------------------
 
-// The global exec loop of a canonical instance, run to its failing exec. No JS runs
-// before it returns, so only the loop's final state is observable: lastIndex is the 0
-// stored up front, as the failing exec leaves it, and the legacy statics describe the
-// last match.
+// No user code observes intermediate matches in canonical collection. Keep the
+// subject borrowed across a batch and copy captures straight into their final rows.
+static int regexp_collect_fast(
+    MalVm *vm, MalRegExpObject *re, MalString *s, RegexpMatchOffsets *offsets
+) {
+    if (!regexp_match_offsets_reserve(offsets, 0)) return -1;
+    MalStringSegment subject = mal_string_flat_segment(s);
+    usize position = 0;
+    for (;;) {
+        usize slots, next, attempts;
+        int32_t groups = mal_regexp_collect_fast(
+            re->matcher, subject.latin1 ? (const void *) subject.latin1_units
+                : (const void *) subject.utf16_units,
+            subject.length, subject.latin1, position,
+            offsets->pairs + offsets->count, offsets->capacity - offsets->count,
+            &slots, &next, &attempts);
+        if (groups == 0) return 0;
+        MAL_PERF_COUNT(regexp_collect_batches);
+        MAL_PERF_ADD(regexp_collect_matches, slots / (2 * (usize) groups));
+        MAL_PERF_ADD(regexp_exec_calls, attempts);
+        MAL_PERF_ADD(regexp_fast_exec_calls, attempts);
+        if (subject.latin1) MAL_PERF_ADD(regexp_latin1_exec_calls, attempts);
+        offsets->count += slots;
+        offsets->groups = groups;
+        position = next;
+        if (position > subject.length) {
+            if (offsets->count > 0) {
+                regexp_legacy_update(vm, s,
+                    offsets->pairs + offsets->count - 2 * (usize) groups, groups);
+            }
+            return 1;
+        }
+        if (!regexp_match_offsets_reserve(offsets, 2 * (usize) groups)) {
+            regexp_throw_string_length(vm);
+            return -1;
+        }
+    }
+}
+
+// The canonical loop never returns to JavaScript, so only its final state is
+// observable: lastIndex is zero and the legacy statics describe the last match.
 static bool regexp_canonical_collect_global(
     MalVm *vm, MalRegExpObject *re, MalValue rx, MalString *s, RegexpMatchOffsets *offsets
 ) {
     if (!regexp_set_last_index(vm, rx, 0)) return false;
+    int collected = regexp_collect_fast(vm, re, s, offsets);
+    if (collected != 0) return collected > 0;
     bool sticky = (re->flag_bits & MAL_REGEXP_JS_STICKY) != 0;
     bool full_unicode = (re->flag_bits & (MAL_REGEXP_JS_UNICODE | MAL_REGEXP_JS_UNICODE_SETS)) != 0;
     usize length = mal_string_length(s);

@@ -1,21 +1,22 @@
 //! RegExp match primitives over the `regress` ECMAScript engine.
 //!
-//! This module lives in the `mal_i18n` crate rather than a crate of its own
+//! This module lives in the `mal_rust` crate rather than a crate of its own
 //! because two Rust `staticlib`s cannot be linked into one binary — each bundles
 //! its own copy of the std panic runtime, producing duplicate symbols
 //! (`rust_eh_personality`, `EMPTY_PANIC`). So the runtime's Rust FFI lives in a
 //! single staticlib; this module is the regexp half. C ABI is `mal_regexp.h`.
 //!
-//! Design contract (same as the i18n half): the C runtime owns ALL JS-spec glue
-//! (flag parsing, lastIndex, global/sticky iteration, result-array shaping, the
+//! Design contract (same as the i18n half): the C runtime owns the JS protocol
+//! (flag parsing, lastIndex, result-array shaping, the
 //! Symbol.* protocol, `$`-substitution, the `d`-flag indices array). This module
 //! exposes only flat match primitives. Patterns and subjects cross as UTF-16
 //! (`*const u16` + len), matching MalString; offsets are u16 code-unit indices.
 //!
 //! Encoding: a `u`/`v` pattern matches over code points (`find_from_utf16`,
 //! combining surrogate pairs); everything else over code units
-//! (`find_from_ucs2`). Positions are code-unit indices in both. The C side
-//! drives iteration; sticky patterns attempt only the supplied position.
+//! (`find_from_ucs2`). Positions are code-unit indices in both. C selects single
+//! or global execution and owns lastIndex; allocation-free code-unit plans can
+//! fill a batch of nonoverlapping matches. Sticky matches start at the supplied position.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -26,7 +27,7 @@ use regress::{AsciiMatches, AsciiScratch, Flags, Match, Regex, WideScratch};
 use crate::ffi::{nullable_slice, nullable_u16_slice};
 
 /// Ownership and execution contract mirrored by `mal_regexp.h`.
-pub const MAL_REGEXP_ABI_VERSION: u32 = 12;
+pub const MAL_REGEXP_ABI_VERSION: u32 = 13;
 
 const EXEC_ASCII: u32 = 1 << 0;
 const EXEC_CACHE_HIT: u32 = 1 << 1;
@@ -160,6 +161,27 @@ impl FastClass {
             high: merged.high,
         }
     }
+
+    fn single_range(&self) -> Option<(u16, u16)> {
+        let mut first = None;
+        let mut last = 0;
+        let mut count = 0;
+        for (index, word) in self.low.iter().copied().enumerate() {
+            if word == 0 {
+                continue;
+            }
+            first.get_or_insert((index * 64 + word.trailing_zeros() as usize) as u16);
+            last = (index * 64 + 63 - word.leading_zeros() as usize) as u16;
+            count += word.count_ones();
+        }
+        for &(begin, end) in &self.high {
+            first.get_or_insert(begin);
+            last = end;
+            count += u32::from(end) - u32::from(begin) + 1;
+        }
+        let first = first?;
+        (count == u32::from(last) - u32::from(first) + 1).then_some((first, last))
+    }
 }
 
 /// One element of an allocation-free plan. Every quantifier runs greedily and never
@@ -198,9 +220,30 @@ enum FastNode {
 }
 
 #[derive(Debug)]
+enum FastLinearOp {
+    Literal(Box<[u16]>),
+    Repeat {
+        first: u16,
+        last: u16,
+        min: u32,
+        max: u32,
+        capture: Option<u8>,
+    },
+    CaptureStart(u8),
+    CaptureEnd(u8),
+    End,
+}
+
+#[derive(Debug)]
+enum FastProgram {
+    Linear(Box<[FastLinearOp]>),
+    Tree(Box<[FastNode]>),
+}
+
+#[derive(Debug)]
 struct FastPattern {
     anchored_start: bool,
-    nodes: Box<[FastNode]>,
+    program: FastProgram,
     capture_count: usize,
     /// Units a match can begin with, when every match consumes one.
     first: Option<FastClass>,
@@ -311,6 +354,61 @@ impl FastPattern {
         (end - position >= min as usize).then_some(end)
     }
 
+    // A leaf executor keeps the recursive tree interpreter's frame and dispatch
+    // out of straight-line plans. Admission still uses the same greedy proof.
+    #[inline(always)]
+    fn match_linear<U: SubjectUnit>(
+        ops: &[FastLinearOp],
+        subject: &[U],
+        mut position: usize,
+        captures: &mut [i32],
+    ) -> Option<usize> {
+        for op in ops {
+            match op {
+                FastLinearOp::Literal(literal) => {
+                    if !Self::literal_matches_at(literal, subject, position) {
+                        return None;
+                    }
+                    position += literal.len();
+                }
+                FastLinearOp::Repeat {
+                    first,
+                    last,
+                    min,
+                    max,
+                    capture,
+                } => {
+                    let limit = subject.len().min(position.saturating_add(*max as usize));
+                    let mut end = position;
+                    while end < limit {
+                        let unit = subject[end].code_unit();
+                        if unit < *first || unit > *last {
+                            break;
+                        }
+                        end += 1;
+                    }
+                    if end - position < *min as usize {
+                        return None;
+                    }
+                    if let Some(capture) = capture {
+                        captures[usize::from(*capture) * 2] = position as i32;
+                        captures[usize::from(*capture) * 2 + 1] = end as i32;
+                    }
+                    position = end;
+                }
+                FastLinearOp::CaptureStart(capture) => {
+                    captures[usize::from(*capture) * 2] = position as i32
+                }
+                FastLinearOp::CaptureEnd(capture) => {
+                    captures[usize::from(*capture) * 2 + 1] = position as i32
+                }
+                FastLinearOp::End if position != subject.len() => return None,
+                FastLinearOp::End => {}
+            }
+        }
+        Some(position)
+    }
+
     /// `captures` holds a start and end per group, -1 when the group did not participate.
     fn match_nodes<U: SubjectUnit>(
         nodes: &[FastNode],
@@ -414,7 +512,11 @@ impl FastPattern {
     ) -> bool {
         let (range, captures) = slots.split_at_mut(2);
         let captures = &mut captures[..self.capture_count * 2];
-        match Self::match_nodes(&self.nodes, subject, start, captures) {
+        let matched = match &self.program {
+            FastProgram::Linear(ops) => Self::match_linear(ops, subject, start, captures),
+            FastProgram::Tree(nodes) => Self::match_nodes(nodes, subject, start, captures),
+        };
+        match matched {
             Some(end) => {
                 range[0] = start as i32;
                 range[1] = end as i32;
@@ -439,20 +541,22 @@ impl FastPattern {
         slots: &mut [i32; FAST_CAPTURE_SLOTS],
         at_start_only: bool,
     ) -> bool {
-        if let [FastNode::EndOrClass(class)] = self.nodes.as_ref() {
-            let mut position = start;
-            while position < subject.len() && !class.contains(subject[position].code_unit()) {
-                if self.anchored_start || at_start_only {
+        if let FastProgram::Tree(nodes) = &self.program {
+            if let [FastNode::EndOrClass(class)] = nodes.as_ref() {
+                let mut position = start;
+                while position < subject.len() && !class.contains(subject[position].code_unit()) {
+                    if self.anchored_start || at_start_only {
+                        return false;
+                    }
+                    position += 1;
+                }
+                if self.anchored_start && start != 0 {
                     return false;
                 }
-                position += 1;
+                slots[0] = position as i32;
+                slots[1] = position as i32;
+                return true;
             }
-            if self.anchored_start && start != 0 {
-                return false;
-            }
-            slots[0] = position as i32;
-            slots[1] = position as i32;
-            return true;
         }
         // A fill of fixed length is a few vector stores; a variable one calls memset.
         if self.capture_count > 0 {
@@ -468,9 +572,15 @@ impl FastPattern {
         if at_start_only {
             return self.match_at(subject, start, slots);
         }
-        let leading_unit = match self.nodes.first() {
-            Some(FastNode::Literal(literal)) => Some(literal[0]),
-            _ => None,
+        let leading_unit = match &self.program {
+            FastProgram::Linear(ops) => match ops.first() {
+                Some(FastLinearOp::Literal(literal)) => Some(literal[0]),
+                _ => None,
+            },
+            FastProgram::Tree(nodes) => match nodes.first() {
+                Some(FastNode::Literal(literal)) => Some(literal[0]),
+                _ => None,
+            },
         };
         let mut candidate = start;
         while candidate <= subject.len() {
@@ -1064,6 +1174,50 @@ impl FastParser<'_> {
     }
 }
 
+fn linear_program(nodes: &[FastNode], ops: &mut Vec<FastLinearOp>) -> Option<()> {
+    for node in nodes {
+        match node {
+            FastNode::Literal(literal) => ops.push(FastLinearOp::Literal(literal.clone())),
+            FastNode::Repeat {
+                class, min, max, ..
+            } => {
+                let (first, last) = class.single_range()?;
+                ops.push(FastLinearOp::Repeat {
+                    first,
+                    last,
+                    min: *min,
+                    max: *max,
+                    capture: None,
+                });
+            }
+            FastNode::Group {
+                body,
+                capture,
+                optional: false,
+                ..
+            } => {
+                let start = ops.len();
+                linear_program(body, ops)?;
+                if let Some(capture) = capture {
+                    if let [FastLinearOp::Repeat {
+                        capture: slot @ None,
+                        ..
+                    }] = &mut ops[start..]
+                    {
+                        *slot = Some(*capture as u8);
+                    } else {
+                        ops.insert(start, FastLinearOp::CaptureStart(*capture as u8));
+                        ops.push(FastLinearOp::CaptureEnd(*capture as u8));
+                    }
+                }
+            }
+            FastNode::End => ops.push(FastLinearOp::End),
+            _ => return None,
+        }
+    }
+    Some(())
+}
+
 fn compile_fast_pattern(units: &[u16], flags: u32) -> Option<FastPattern> {
     if units.is_empty() || flags & COMPILE_FLAGS & !FLAG_IGNORE_CASE != 0 {
         return None;
@@ -1089,9 +1243,17 @@ fn compile_fast_pattern(units: &[u16], flags: u32) -> Option<FastPattern> {
         (first, FastFirstEnd::Consumes) => Some(first),
         _ => None,
     };
+    // Capture fusion pays for the program dispatch. Capture-free plans keep the
+    // tree executor, avoiding lowering and dispatch costs when no writes fuse.
+    let mut ops = Vec::new();
+    let program = if parser.capture_count > 0 && linear_program(&nodes, &mut ops).is_some() {
+        FastProgram::Linear(ops.into())
+    } else {
+        FastProgram::Tree(nodes.into())
+    };
     Some(FastPattern {
         anchored_start,
-        nodes: nodes.into(),
+        program,
         capture_count: parser.capture_count,
         first,
     })
@@ -1513,6 +1675,77 @@ fn fast_exec<U: SubjectUnit>(
     let groups = (fast.capture_count + 1) as i32;
     cp.fast_last_groups = groups;
     unsafe { copy_cached_captures(&cp.fast_last_captures, groups, caps_out, caps_cap) }
+}
+
+fn collect_fast<U: SubjectUnit>(
+    cp: &mut CompiledPattern,
+    subject: &[U],
+    mut start: usize,
+    output: &mut [i32],
+) -> (usize, usize, usize) {
+    let fast = cp.fast.as_ref().expect("fast plan exists");
+    let groups = fast.capture_count + 1;
+    let stride = 2 * groups;
+    let mut slots = 0;
+    let mut attempts = 0;
+    while start <= subject.len() && output.len() - slots >= stride {
+        cp.last = None;
+        attempts += 1;
+        if !fast.find(subject, start, &mut cp.fast_last_captures, cp.sticky) {
+            cp.fast_last_groups = 0;
+            return (slots, subject.len() + 1, attempts);
+        }
+        cp.fast_last_groups = groups as i32;
+        output[slots..slots + stride].copy_from_slice(&cp.fast_last_captures[..stride]);
+        slots += stride;
+        let begin = cp.fast_last_captures[0] as usize;
+        let end = cp.fast_last_captures[1] as usize;
+        start = if end == begin { end + 1 } else { end };
+    }
+    (slots, start, attempts)
+}
+
+/// Collects only plans whose matching and empty-match advancement use code units.
+/// The caller owns protocol effects and consumes each batch before any reentry.
+#[no_mangle]
+pub unsafe extern "C" fn mal_regexp_collect_fast(
+    handle: *mut core::ffi::c_void,
+    subject: *const core::ffi::c_void,
+    subject_len: usize,
+    latin1: u32,
+    start: usize,
+    caps_out: *mut i32,
+    caps_cap: usize,
+    slots_out: *mut usize,
+    next_start_out: *mut usize,
+    attempts_out: *mut usize,
+) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+    let cp = unsafe { &mut *(handle as *mut CompiledPattern) };
+    let Some(fast) = &cp.fast else {
+        return 0;
+    };
+    let groups = (fast.capture_count + 1) as i32;
+    let output = if caps_cap == 0 {
+        &mut []
+    } else {
+        unsafe { core::slice::from_raw_parts_mut(caps_out, caps_cap) }
+    };
+    let (slots, next, attempts) = if latin1 != 0 {
+        let units = unsafe { nullable_slice(subject.cast::<u8>(), subject_len) };
+        collect_fast(cp, units, start, output)
+    } else {
+        let units = unsafe { nullable_u16_slice(subject.cast::<u16>(), subject_len) };
+        collect_fast(cp, units, start, output)
+    };
+    unsafe {
+        *slots_out = slots;
+        *next_start_out = next;
+        *attempts_out = attempts;
+    }
+    groups
 }
 
 #[inline(never)]
@@ -2090,6 +2323,158 @@ pub unsafe extern "C" fn mal_regexp_capture_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collected_capture_rows_match_repeated_exec_across_buffer_boundaries() {
+        for (pattern, subject, flags) in [
+            (r"([a-z]+)=(\d+)", "oak=7;elm=12;é;ash=0;Σ", 0),
+            (r"(a)?(b)", "ab b ab", 0),
+            (r"\d*", "x1😀22", 0),
+            (r"a(?=$|;)", "a;a;ab;a", 0),
+            (r"[a-cx-z]+", "a xyz d é bc", 0),
+            (r"[^\w]+", "a é 中 b", 0),
+            (r"[a-z]+", "oak;elm", FLAG_STICKY),
+            (r"^a", "aa", 0),
+            (r"a{0}", "\u{100}😀", 0),
+        ] {
+            let pattern = utf16(pattern);
+            let subject = utf16(subject);
+            for latin1 in [false, true] {
+                if latin1 && subject.iter().any(|unit| *unit > 255) {
+                    continue;
+                }
+                let expected_handle = unsafe { handle(&pattern, flags) };
+                let mut expected = Vec::new();
+                let mut start = 0;
+                let mut groups = 0;
+                while start <= subject.len() {
+                    let mut caps = [-1; FAST_CAPTURE_SLOTS];
+                    groups = unsafe {
+                        mal_regexp_exec(
+                            expected_handle,
+                            subject.as_ptr(),
+                            subject.len(),
+                            start,
+                            core::ptr::null(),
+                            0,
+                            0,
+                            caps.as_mut_ptr(),
+                            caps.len() as i32,
+                            core::ptr::null_mut(),
+                        )
+                    };
+                    if groups == 0 {
+                        break;
+                    }
+                    expected.extend_from_slice(&caps[..2 * groups as usize]);
+                    start = caps[1] as usize + usize::from(caps[0] == caps[1]);
+                }
+                let expected_retained = groups;
+                unsafe { mal_regexp_release(expected_handle) };
+                for capacity in [2, 6, 16, 64] {
+                    let compiled = unsafe { handle(&pattern, flags) };
+                    let bytes: Vec<u8> = subject.iter().map(|unit| *unit as u8).collect();
+                    let pointer = if latin1 {
+                        bytes.as_ptr().cast()
+                    } else {
+                        subject.as_ptr().cast()
+                    };
+                    let mut output = vec![-1; capacity];
+                    let mut actual = Vec::new();
+                    let mut start = 0;
+                    loop {
+                        let (mut slots, mut next, mut attempts) = (0, 0, 0);
+                        let groups = unsafe {
+                            mal_regexp_collect_fast(
+                                compiled,
+                                pointer,
+                                subject.len(),
+                                u32::from(latin1),
+                                start,
+                                output.as_mut_ptr(),
+                                output.len(),
+                                &mut slots,
+                                &mut next,
+                                &mut attempts,
+                            )
+                        };
+                        assert!(groups > 0);
+                        actual.extend_from_slice(&output[..slots]);
+                        if next > subject.len() {
+                            break;
+                        }
+                        if next == start {
+                            assert_eq!((slots, attempts), (0, 0));
+                            output.resize(2 * groups as usize, -1);
+                        }
+                        start = next;
+                    }
+                    assert_eq!(
+                        actual, expected,
+                        "{pattern:?} capacity {capacity} Latin-1 {latin1}"
+                    );
+                    assert_eq!(
+                        unsafe { mal_regexp_copy_captures(compiled, core::ptr::null_mut(), 0) },
+                        expected_retained
+                    );
+                    unsafe { mal_regexp_release(compiled) };
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn batch_declines_general_and_unicode_plans_without_replacing_the_last_match() {
+        for (pattern, flags) in [(r"a+?a", 0), (r"a", FLAG_UNICODE)] {
+            let pattern = utf16(pattern);
+            let compiled = unsafe { handle(&pattern, flags) };
+            let subject = utf16("aaa");
+            let mut captures = [-1; 4];
+            let groups = unsafe {
+                mal_regexp_exec(
+                    compiled,
+                    subject.as_ptr(),
+                    subject.len(),
+                    0,
+                    core::ptr::null(),
+                    0,
+                    0,
+                    captures.as_mut_ptr(),
+                    captures.len() as i32,
+                    core::ptr::null_mut(),
+                )
+            };
+            assert!(groups > 0);
+            let (mut slots, mut next, mut attempts) = (99, 99, 99);
+            assert_eq!(
+                unsafe {
+                    mal_regexp_collect_fast(
+                        compiled,
+                        subject.as_ptr().cast(),
+                        subject.len(),
+                        0,
+                        0,
+                        core::ptr::null_mut(),
+                        0,
+                        &mut slots,
+                        &mut next,
+                        &mut attempts,
+                    )
+                },
+                0
+            );
+            assert_eq!((slots, next, attempts), (99, 99, 99));
+            let mut retained = [-1; 4];
+            assert_eq!(
+                unsafe {
+                    mal_regexp_copy_captures(compiled, retained.as_mut_ptr(), retained.len() as i32)
+                },
+                groups
+            );
+            assert_eq!(retained, captures);
+            unsafe { mal_regexp_release(compiled) };
+        }
+    }
 
     #[test]
     fn compiled_capture_names_preserve_numeric_indices_without_a_match() {
@@ -2706,6 +3091,11 @@ mod tests {
             (r#"x(a|ab)?"#, "xab", 0),
             (r#"a|"#, "ba", 0),
             (r#"a(?:b|bc)"#, "ABC", FLAG_IGNORE_CASE),
+            (r#"(([a-c]{1,3})z)"#, "aabczabz", 0),
+            (r#"([a-z]+)=([0-9]{1,3})"#, "oak=1234;elm=9", 0),
+            (r#"((ab)(c+))$"#, "xabccc", 0),
+            (r#"((a{0})b)"#, "bab", 0),
+            (r#"([\u0000-\uffff]+)"#, "aΣé", 0),
         ];
         let extras = [
             'a', 'b', 'c', 'x', 'y', 'Z', '0', '9', ' ', '/', ';', '=', ',', '-', '.', '\t',

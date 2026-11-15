@@ -177,6 +177,17 @@ static MalValue mal_ops_ascii_to_number(const byte *bytes, usize token_length) {
 }
 
 MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length) {
+    // Nine unsigned decimal digits fit int32 without rounding or an ASCII copy.
+    if (length != 0 && length <= 9) {
+        u32 magnitude = 0;
+        usize digits = 0;
+        for (; digits < length; digits++) {
+            u32 digit = (u32) code_units[digits] - '0';
+            if (digit > 9) break;
+            magnitude = magnitude * 10 + digit;
+        }
+        if (digits == length) return mal_value_from_i32((i32) magnitude);
+    }
     usize start = 0;
     usize end = length;
     while (start < end && mal_ecma_is_string_whitespace(code_units[start])) start++;
