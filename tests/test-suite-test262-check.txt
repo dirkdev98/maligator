@@ -302,3 +302,4 @@ test/staging/sm/Function/arguments-parameter-shadowing.js
 test/staging/sm/eval/exhaustive-global-normalcaller-direct-normalcode.js
 test/staging/sm/eval/exhaustive-global-normalcaller-indirect-normalcode.js
 test/staging/sm/eval/exhaustive-global-strictcaller-indirect-normalcode.js
+test/language/eval-code/direct/global-env-rec-eval.js

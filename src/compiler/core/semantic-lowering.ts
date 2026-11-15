@@ -14534,9 +14534,9 @@ function compileSpreadArgumentsArray(
 }
 
 /**
- * Share the nearest caller bindings with eval. Script-global properties resolve
- * through the global environment so eval-created declarations keep their deletion
- * attributes instead of becoming non-deletable caller bindings.
+ * Share the nearest caller bindings with eval. Global properties retain their
+ * environment's deletion attributes. Sloppy local eval variables use caller
+ * environment transport even when their storage is classified as global.
  */
 function visibleBindingsForDirectEval(
 	program: CoreFrontendContext,
@@ -14551,7 +14551,8 @@ function visibleBindingsForDirectEval(
 				!result.has(binding.name) &&
 				!binding.undeclared &&
 				!binding.implicit &&
-				!isScriptGlobalProperty(program, fn.semanticFile, binding)
+				(!isScriptGlobalProperty(program, fn.semanticFile, binding) ||
+					isDirectEvalVarBindingValue(program, fn, binding))
 			) {
 				result.set(binding.name, binding);
 			}
