@@ -12,6 +12,14 @@ dictionary state can no longer live in the cell. The prototype remains per objec
 `Object.setPrototypeOf` can change it without changing property order or moving
 the object.
 
+Appending an accessor to an ordinary object keeps its existing data fields shaped.
+The accessor and subsequent string properties occupy an object-owned overflow tail.
+Reflection visits the shaped prefix before that tail. Replacing a shaped field's
+descriptor or adding an integer or public symbol key merges both stores in their
+original order and invalidates table handles. A full tail also merges, bounding
+the temporary storage needed to reorder its entries. Accessors never enter shared shapes,
+and inherited or missing-property cache probes reject a public overflow tail.
+
 ## Field layout
 
 Every shaped property occupies one tagged `MalValue` field, and its slot is its

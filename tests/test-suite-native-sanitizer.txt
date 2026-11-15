@@ -50,6 +50,7 @@ tests/native/ffi-callback-results.test.ts
 tests/native/ffi-callables.test.ts
 tests/native/ffi-test-watch.test.ts
 tests/native/accessor-calls.test.ts
+tests/native/object-accessor-tail.test.ts
 tests/native/allocation-failure.test.ts
 tests/native/array-destructuring-close.test.ts
 tests/native/array-spread-iterable.test.ts

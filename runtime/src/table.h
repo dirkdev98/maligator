@@ -25,8 +25,9 @@ typedef struct MalTableEntry {
     } payload;
 } MalTableEntry;
 
-// Ordered entry indices survive buffer growth; only unpinned compaction renumbers handles.
-// The layout is public only so private-element reads can probe their hint inline.
+// Ordered entry indices survive growth. Compaction and property-storage merges
+// invalidate renumbered handles through handle_epoch.
+// The layout is shared with property-storage merges and validated inline probes.
 struct MalTable {
     u64 handle_epoch;
     u32 size;

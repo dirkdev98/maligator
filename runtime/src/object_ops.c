@@ -278,6 +278,8 @@ static bool mal_object_shapes_private(const MalObject *object) {
         object->shape != mal_shape_dictionary_empty();
 }
 
+static void mal_object_dictionarize(MalObject *object);
+
 MalValue *mal_object_private_value_slot(MalObject *object, MalSymbol *symbol) {
     MalValue key = mal_value_from_symbol(symbol);
     i32 index = mal_shape_find(
@@ -299,6 +301,10 @@ bool mal_object_get_private(MalObject *object, MalSymbol *symbol, MalValue *valu
 bool mal_object_add_private(MalObject *object, MalKey key, MalValue value) {
     assert(key.kind == MAL_KEY_SYMBOL &&
            mal_symbol_is_private(mal_value_to_symbol(key.value)));
+    if (object->shape->inline_count != 0 && mal_object_has_public_overflow(object)
+        && mal_table_size(mal_object_overflow(object)) >= MAL_SHAPE_ORDINARY_SLOTS) {
+        mal_object_dictionarize(object);
+    }
     // Only this function adds private names to shapes, after proving them absent, so
     // an existing transition proves the name is not already in the source shape.
     MalShape *child =
@@ -346,12 +352,7 @@ bool mal_object_reserve_private(MalObject *object, usize additional) {
     return mal_table_reserve(table, mal_table_size(table) + additional);
 }
 
-/**
- * Drop a shaped object to dictionary mode: migrate each inline slot into the
- * overflow table (preserving insertion order via the shape's slot order), then
- * clear the shape and slots. A no-op for an already-empty-shape object. After
- * this the object behaves exactly as the pre-shapes table-only representation.
- */
+/** Move shaped fields before the overflow tail, preserving property order. */
 static void mal_object_dictionarize(MalObject *object) {
     if (object->shape->inline_count == 0) {
         object->overflow_private_only = false;
@@ -362,10 +363,33 @@ static void mal_object_dictionarize(MalObject *object) {
     }
     MalShape *shape = object->shape;
     MalTable *table = mal_object_ensure_overflow(object);
+    MalTable *destination = mal_object_has_public_overflow(object)
+        && mal_table_size(table) != 0 ? mal_table_new() : table;
+    if (destination != table) {
+        if (!mal_table_reserve(destination, shape->inline_count + mal_table_size(table))) abort();
+    }
     for (u32 i = 0; i < shape->inline_count; ++i) {
         const MalShapeProp *prop = &shape->props[i];
         MalPropertyDesc desc = mal_object_data_desc(mal_object_field_load(object, prop->slot), prop->attrs);
-        mal_property_define(table, mal_key_from_value(prop->key), &desc);
+        mal_property_define(destination, mal_key_from_value(prop->key), &desc);
+    }
+    if (destination != table) {
+        MalTableIter iter;
+        mal_table_iter_init(&iter, table, MAL_TABLE_ITER_STORAGE);
+        MalKey key;
+        void *entry;
+        while (mal_table_iter_next(&iter, &key, &entry)) {
+            MalPropertyDesc desc = mal_property_entry_desc(table, entry);
+            mal_property_define(destination, key, &desc);
+        }
+        // RAW allocation cannot collect. Publish the complete rows at the same
+        // table address and invalidate handles before releasing their old storage.
+        u64 epoch = table->handle_epoch + 1;
+        MalTable previous = *table;
+        *table = *destination;
+        *destination = previous;
+        table->handle_epoch = epoch == 0 ? 1 : epoch;
+        mal_table_free(destination);
     }
     object->shape = mal_shape_dictionary_empty();
     object->overflow_private_only = false;
@@ -484,9 +508,7 @@ void mal_object_set_integrity_level(MalObject *object, bool clear_writable) {
         object->shape = mal_shape_set_integrity(object->shape, clear_writable);
         return;
     } else if (has_shape_properties) {
-        // Defensive mixed-representation fallback. Ordinary operations currently
-        // dictionarize before adding overflow properties, but exotic evolution
-        // must not make integrity handling incomplete.
+        // The overflow tail follows the shaped fields in insertion order.
         mal_object_dictionarize(object);
     } else if (!noted_prototype_mutation &&
                mal_object_note_prototype_mutation(object)) {
@@ -758,6 +780,10 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
 
     if (key.kind == MAL_KEY_SYMBOL &&
         mal_symbol_is_private(mal_value_to_symbol(key.value))) {
+        if (object->shape->inline_count != 0 && mal_object_has_public_overflow(object)
+            && mal_table_size(mal_object_overflow(object)) >= MAL_SHAPE_ORDINARY_SLOTS) {
+            mal_object_dictionarize(object);
+        }
         i32 index = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DEFINE_OWN);
         bool shaped_data = !mal_object_desc_is_accessor(*desc);
         if (index >= 0) {
@@ -880,9 +906,17 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
         // Object already carries dictionary props: fall through to the table path.
     }
 
-    // Dictionary path (non-default attrs, accessor, index/symbol key, or an object
-    // already in dictionary mode): operate on the overflow table as before.
-    mal_object_dictionarize(object);
+    // An appended accessor need not migrate existing data fields. Once the tail
+    // contains public keys, all later string additions stay there so reflection
+    // still sees the shape's prefix followed by the table's insertion order.
+    bool tail_property = object->header.type == MAL_HEAP_OBJECT && !object->is_arguments
+        && object->shape->inline_count != 0 && key.kind == MAL_KEY_STRING
+        && (mal_object_desc_is_accessor(*desc) || mal_object_has_public_overflow(object))
+        && (mal_object_overflow(object) == nullptr
+            || mal_table_size(mal_object_overflow(object)) < MAL_SHAPE_ORDINARY_SLOTS)
+        && mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DEFINE_OWN) < 0;
+    if (!tail_property) mal_object_dictionarize(object);
+    else object->overflow_private_only = false;
     MalTable *table = mal_object_ensure_overflow(object);
     MalPropertyLookup lookup;
     if (object->extensible) {
@@ -1012,7 +1046,10 @@ static bool mal_object_remove_shaped(MalObject *object, u32 index) {
     for (u32 i = index; i < count; i++) mal_gc_write_barrier(fields[i]);
     memmove(fields + index, fields + index + 1, sizeof(MalValue) * (count - 1 - index));
     fields[count - 1] = mal_value_new_undefined();
-    object->shape = next;
+    // An empty transition-root shape licenses empty-object initialization. A
+    // remaining public tail is a dictionary, even after its last field is deleted.
+    object->shape = next->inline_count == 0 && mal_object_has_public_overflow(object)
+        ? mal_shape_dictionary_empty() : next;
     return true;
 }
 

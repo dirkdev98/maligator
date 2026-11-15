@@ -7,10 +7,8 @@ function check(name, condition) {
 }
 
 function dictionary(object) {
-	Object.defineProperty(object, "dictionary", {
-		get() {
-			return 0;
-		},
+	Object.defineProperty(object, Symbol("dictionary"), {
+		value: 0,
 		configurable: true,
 	});
 	return object;
