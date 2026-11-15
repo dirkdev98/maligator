@@ -2528,6 +2528,7 @@ typedef struct MalJsonParser {
     usize position;
     usize depth;
     MalJsonParseState *state;
+    u8 key_cache_misses;
 } MalJsonParser;
 
 static void mal_json_parser_init(MalJsonParser *parser) {
@@ -3199,6 +3200,7 @@ static void mal_json_object_members_dispose(MalJsonObjectMembers *members) {
 
 #define MAL_JSON_KEY_CACHE_ENTRIES 256
 #define MAL_JSON_KEY_CACHE_BYTES 24
+#define MAL_JSON_KEY_CACHE_MISS_LIMIT 16
 #define MAL_JSON_SHAPE_MEMO_KEYS 16
 #define MAL_JSON_SHAPE_MEMOS 2
 
@@ -3412,7 +3414,11 @@ static inline bool mal_json_key_bytes_equal(const u8 *left, const u8 *right, usi
 
 // The opening quote is consumed; the key's closing quote is consumed on success.
 static bool mal_json_parse_key(MalJsonParser *parser, MalKey *out) {
-    struct MalJsonKeyCache *cache = mal_json_key_cache(parser->vm);
+    // Source tracking also parses wide unique objects. Bound unsuccessful cache
+    // probes within a parse; repeated record keys reset the budget on each hit.
+    struct MalJsonKeyCache *cache =
+        parser->state != nullptr && parser->key_cache_misses >= MAL_JSON_KEY_CACHE_MISS_LIMIT
+            ? nullptr : mal_json_key_cache(parser->vm);
     MalJsonKeyCacheEntry *entry = nullptr;
     u8 bytes[MAL_JSON_KEY_CACHE_BYTES];
     usize length = 0;
@@ -3446,6 +3452,7 @@ static bool mal_json_parse_key(MalJsonParser *parser, MalKey *out) {
             if (entry->filled && entry->length == length &&
                 mal_json_key_bytes_equal(entry->bytes, units, length)) {
                 parser->position += length + 1;
+                if (parser->state != nullptr) parser->key_cache_misses = 0;
                 *out = entry->key;
                 return true;
             }
@@ -3460,6 +3467,7 @@ static bool mal_json_parse_key(MalJsonParser *parser, MalKey *out) {
     bool converted = mal_vm_value_to_property_key(parser->vm, key, out);
     mal_gc_unroot(&key_span);
     if (!converted) return false;
+    if (cache != nullptr && parser->state != nullptr) parser->key_cache_misses++;
     if (entry != nullptr && mal_json_key_is_retained(*out)) {
         *entry = (MalJsonKeyCacheEntry) {.filled = true, .length = (u8) length, .key = *out};
         memcpy(entry->bytes, bytes, length);
@@ -3613,11 +3621,12 @@ static MalValue mal_json_parse_object(
             return mal_value_new_undefined();
         }
 
-        MalValue key = mal_json_parse_string(parser);
-        if (parser->vm->completion.kind == MAL_COMPLETION_THROW) {
+        MalKey property_key;
+        if (!mal_json_parse_key(parser, &property_key)) {
             mal_gc_unroot(&object_span);
             return mal_value_new_undefined();
         }
+        MalValue key = property_key.value;
         MalRootSpan key_span;
         mal_gc_root(&key_span, &key, 1);
 
@@ -3641,8 +3650,7 @@ static MalValue mal_json_parse_object(
         mal_gc_root(&value_span, &value, 1);
 
         object = mal_value_to_object(object_value);
-        MalKey property_key;
-        mal_vm_value_to_property_key(parser->vm, key, &property_key);
+        property_key.value = key;
         // CreateDataProperty: JSON members become own properties, never
         // routed through inherited setters (notably __proto__).
         MalPropertyDesc desc = mal_intrinsic_data_desc(
@@ -3728,8 +3736,9 @@ read_key:
             ? MAL_JSON_DIAGNOSTIC_FIRST_KEY : MAL_JSON_DIAGNOSTIC_KEY);
         goto fail;
     }
-    frame->roots[1] = mal_json_parse_string(parser);
-    if (parser->vm->completion.kind == MAL_COMPLETION_THROW) goto fail;
+    MalKey parsed_key;
+    if (!mal_json_parse_key(parser, &parsed_key)) goto fail;
+    frame->roots[1] = parsed_key.value;
     mal_json_skip_whitespace(parser);
     if (!mal_json_consume(parser, ':')) goto syntax_error;
     goto read_value;
@@ -3748,7 +3757,7 @@ complete_value:
             mal_array_object_store(array, key, value);
         }
     } else {
-        if (!mal_vm_value_to_property_key(parser->vm, frame->roots[1], &key)) goto fail;
+        key = mal_key_from_value(frame->roots[1]);
         MalPropertyDesc desc = mal_intrinsic_data_desc(value,
             MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
         mal_object_define_own(mal_value_to_object(frame->roots[0]), key, &desc);

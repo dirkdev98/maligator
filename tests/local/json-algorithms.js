@@ -306,6 +306,32 @@ check(
 	"cycle failure does not poison later calls",
 );
 
+const boundaryRecord =
+	'{"0":1,"2147483648":{"value":2},"4294967294":{"value":3},"4294967295":4,"__proto__":{"safe":true},"escaped\\u004bey":6,"text":"€"}';
+for (const text of [boundaryRecord, boundaryRecord.replace("€", "plain")]) {
+	let sourcesAgree = true;
+	const records = JSON.parse("[" + text + "," + text + "]", (key, value, context) => {
+		if (typeof value === "number" && context.source !== String(value))
+			sourcesAgree = false;
+		return value;
+	});
+	collect();
+	check(
+		sourcesAgree &&
+			records.every(
+				(record) =>
+					Object.getPrototypeOf(record) === Object.prototype &&
+					record[0] === 1 &&
+					record[2147483648].value === 2 &&
+					record[4294967294].value === 3 &&
+					record[4294967295] === 4 &&
+					record.__proto__.safe &&
+					record.escapedKey === 6,
+			),
+		"repeated reviver keys preserve canonical numeric boundaries and source nodes across text widths",
+	);
+}
+
 let wideSource = '{"0":-0,"01":1,"é":2';
 const width = 512;
 for (let i = 0; i < width; i++) wideSource += ',"field' + i + '":' + i;
