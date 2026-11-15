@@ -2735,6 +2735,7 @@ function stringSplitCursorCandidates(
 		)
 			continue;
 		const splitResult = root(instructionOperand(fn, length, 0)!);
+		if (index.controlUses.has(splitResult)) continue;
 		const call = specializationDefinition(fn, roots, splitResult);
 		if (
 			call === undefined ||
@@ -2778,6 +2779,8 @@ function stringSplitCursorCandidates(
 			trim.exceptionalBlocks.length !== 0 ||
 			trim.property !== trimProperty ||
 			elementResult === undefined ||
+			index.controlUses.has(root(elementResult)) ||
+			index.controlUses.has(root(instructionResult(fn, trimProperty, 0)!)) ||
 			root(instructionOperand(fn, trimCall, 1)!) !== root(elementResult)
 		)
 			continue;
@@ -2802,7 +2805,7 @@ function stringSplitCursorCandidates(
 		if (advanceInput === undefined || root(advanceInput) !== root(induction.value))
 			continue;
 		const trimResult = instructionResult(fn, trimCall, 0);
-		if (trimResult === undefined) continue;
+		if (trimResult === undefined || index.controlUses.has(root(trimResult))) continue;
 		const primitiveStringLengths: Array<CoreInstructionId> = [];
 		let trimResultSafe = true;
 		for (const use of index.uses.get(root(trimResult)) ?? []) {

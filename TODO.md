@@ -395,11 +395,9 @@ contracts or investigates costs still visible after the string follow-ups.
       Require ES-module finite-call-target parity and real repeated-call benefit, with
       bounded solve work and conservative dynamic/escaping-store fallback.
 
-- [ ] Complete ordinary, terminator and phi/edge escape proof before suppressing
-      split/trim materialization, carrying it through verification and cache identities.
-      For the checked rope split/trim checksum, require full-output parity, safe
-      fallback/reentry and throughput no worse than materialization on first-pass,
-      repeated-input and flat controls.
+- [ ] Measure split/trim cursor savings after the complete ordinary and control-flow
+      escape proof. Require full-output parity, safe fallback/reentry and throughput
+      no worse than materialization on first-pass, repeated-input and flat controls.
 
 - [ ] Reduce fixed per-exec setup and result materialization in `regexp-owned-repeat`,
       where every exec matches at `lastIndex` rather than scanning. Profile current
