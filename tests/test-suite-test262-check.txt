@@ -298,3 +298,7 @@ test/built-ins/isNaN/tonumber-operations.js
 test/built-ins/parseInt/S15.1.2.2_A4.1_T1.js
 
 test/staging/sm/Function/arguments-parameter-shadowing.js
+
+test/staging/sm/eval/exhaustive-global-normalcaller-direct-normalcode.js
+test/staging/sm/eval/exhaustive-global-normalcaller-indirect-normalcode.js
+test/staging/sm/eval/exhaustive-global-strictcaller-indirect-normalcode.js

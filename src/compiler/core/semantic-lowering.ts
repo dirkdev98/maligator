@@ -14534,12 +14534,9 @@ function compileSpreadArgumentsArray(
 }
 
 /**
- * The bindings a direct eval can see in the caller — the current function's
- * params/locals and the block bindings in scope at the call site (nearest
- * shadows outer). Undeclared names are excluded: the eval'd code reaches those
- * through the global fallback. Semantic analysis conservatively treats the eval
- * as a use of every visible binding, so enclosing-function values are captured
- * and globals backed by internal slots can be marshaled too.
+ * Share the nearest caller bindings with eval. Script-global properties resolve
+ * through the global environment so eval-created declarations keep their deletion
+ * attributes instead of becoming non-deletable caller bindings.
  */
 function visibleBindingsForDirectEval(
 	program: CoreFrontendContext,
@@ -14548,18 +14545,13 @@ function visibleBindingsForDirectEval(
 ): Map<string, Binding> {
 	const result = new Map<string, Binding>();
 	let scope: Scope | null | undefined = fn.semanticFile.nodeToScope.get(callNode);
-	let unit: Scope | null | undefined = scope;
-	while (unit && !FUNCTION_UNIT_NODE_TYPES.has(unit.node.type)) unit = unit.parent;
-	const topLevelEval = unit?.node.type === "Program";
 	while (scope) {
 		for (const binding of scope.bindings) {
 			if (
 				!result.has(binding.name) &&
 				!binding.undeclared &&
 				!binding.implicit &&
-				(!topLevelEval ||
-					fn.semanticFile.evalDirect ||
-					!isScriptGlobalProperty(program, fn.semanticFile, binding))
+				!isScriptGlobalProperty(program, fn.semanticFile, binding)
 			) {
 				result.set(binding.name, binding);
 			}
