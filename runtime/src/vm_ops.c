@@ -2364,22 +2364,17 @@ void mal_op_create_function(MalCallable *callable, const MalInstruction *instruc
     );
 }
 
-// SetFunctionName(func, key): give an anonymous function/class value a `name` own
-// data property derived from a computed property key (spec NamedEvaluation): a
-// String key names it directly, a Symbol key names it "[description]" (or "" when
-// the symbol has no description). Redefines the "" name set at CREATE_FUNCTION
-// (configurable), matching { writable:false, enumerable:false, configurable:true }.
-// Shared by the interpreter op and the native backend: SetFunctionName(func, key,
-// prefix) — install the "name" own data property. `key` is an already-evaluated
-// property key (string/number/symbol), so no @@toPrimitive re-entry; only an
-// over-limit assembled name can throw.
+// Property-key coercion precedes naming, so only string construction can throw here.
 void mal_vm_op_set_function_name(MalVm *vm, MalValue func, MalValue key, u8 prefix) {
     if (!mal_value_is_object(func)) {
         return;
     }
 
     MalValue name_value;
-    if (mal_value_is_symbol(key)) {
+    if (key == vm->intrinsics[MAL_INTRINSIC_SYMBOL_ITERATOR]) {
+        // This agent-shared Symbol's immutable description already names builtin methods.
+        name_value = mal_value_from_string(mal_intrinsic_ascii(vm, "[Symbol.iterator]"));
+    } else if (mal_value_is_symbol(key)) {
         MalString *description = mal_symbol_description(mal_value_to_symbol(key));
         if (description == nullptr) {
             name_value = mal_value_from_string(mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY));

@@ -45,12 +45,9 @@ export const materializeVirtualState: CoreFunctionPass = {
 		"callKnown",
 	],
 	admission: {
-		predicate: "bounded fresh aggregate with local state observations in a locked world",
+		predicate: "bounded fresh aggregate with local state observations",
 		hasOpportunity({ compilationContext }) {
-			return (
-				compilationContext.facts.world.primordialPolicy === "locked" &&
-				!compilationContext.facts.world.realms
-			);
+			return !compilationContext.facts.world.realms;
 		},
 	},
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
@@ -60,6 +57,7 @@ export const materializeVirtualState: CoreFunctionPass = {
 	run(context) {
 		const { program, item } = context,
 			fn = program.function(item.function);
+		const locked = context.compilationContext.facts.world.primordialPolicy === "locked";
 		const analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
 		let visits = 0;
 		const argsOf = (instruction: CoreInstructionId) =>
@@ -184,6 +182,7 @@ export const materializeVirtualState: CoreFunctionPass = {
 					"Array.prototype.flat",
 					"String.prototype.split",
 				].includes(attributes.operation as string);
+			if (!locked && opcode !== "createObjectShaped") continue;
 			if (
 				(!wrapper &&
 					!arrayResult &&
@@ -342,11 +341,21 @@ export const materializeVirtualState: CoreFunctionPass = {
 				initializationOnly &&
 				initializers.size +
 					keyConversions.size * 2 +
+					Number(!locked) +
 					1 +
 					Number(conversion !== undefined) <=
 					context.remainingEdits
 			) {
+				if (!locked && initializers.size > 0) continue;
 				const editor = CoreEditor.open(program, fn.id);
+				if (!locked) {
+					const roots = argsOf(root).filter((input) => !primitiveValue(input));
+					if (roots.length > 0)
+						editor.insertInstruction(block, root, "rootUse", roots, {
+							outputCount: 0,
+							sourcePosition: fn.instructionSourcePosition(root),
+						});
+				}
 				if (conversion !== undefined)
 					editor.insertInstruction(block, root, conversion.opcode, conversion.inputs, {
 						attributes: conversion.attributes,
@@ -374,6 +383,8 @@ export const materializeVirtualState: CoreFunctionPass = {
 				editor.removeInstruction(root);
 				return editor.commit();
 			}
+			// Initializer-only literals use own definitions; state transitions can consult prototypes.
+			if (!locked) continue;
 			const cells = new Map(producedCells);
 			let retained: Map<CoreInstructionId, ReadonlyArray<CoreValueId>> | undefined;
 			const retainAt = (

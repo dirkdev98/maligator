@@ -62,8 +62,9 @@ import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
  * each load would still have answered the intrinsic. Both backends resolve a known
  * call's builtin through the mutable graph when it runs, so a known call follows
  * nothing that could have replaced it either; only a Math call on Numbers, which the
- * copy runs as a numeric kernel that resolves nothing, may. Mid-run mutations
- * therefore take effect at the next evaluation, which the next run's guard sees.
+ * copy runs as a numeric kernel that resolves nothing, may. Primitive conversions
+ * and numeric formatting also cannot reenter JavaScript when all inputs are primitive.
+ * Mid-run mutations take effect at the next evaluation, which the next guard sees.
  */
 
 /**
@@ -75,6 +76,7 @@ const NAMESPACES: ReadonlySet<CompilerIntrinsic> = new Set<CompilerIntrinsic>([
 	"Math",
 	"Number",
 	"Object",
+	"Date",
 ]);
 
 /** Global functions a run calls directly. */
@@ -90,7 +92,7 @@ const FUNCTIONS: ReadonlySet<CompilerIntrinsic> = new Set<CompilerIntrinsic>([
 
 /*
  * Operations whose known-call form has a Core consumer. Object.assign can shed
- * private allocations; Object.entries, Array.from and constructions keep the loaded
+ * private allocations; Array.from and constructions keep the loaded
  * callees that entry snapshots, record columns and typed array regions consume.
  */
 const OPERATIONS: ReadonlySet<string> = new Set([
@@ -107,6 +109,11 @@ const OPERATIONS: ReadonlySet<string> = new Set([
 	"Number.isSafeInteger",
 	"Object.hasOwn",
 	"Object.assign",
+	"Object.create",
+	"Object.entries",
+	"Date.parse",
+	"Date.now",
+	"Date.UTC",
 ]);
 
 /** Global functions a string span region consumes as numeric parsers of a span. */
@@ -150,6 +157,7 @@ const COPYABLE_OPCODES: ReadonlySet<string> = new Set([
 	"unary",
 	"move",
 	"typeofCompare",
+	"throwIfTdz",
 	"mathUnaryNumber",
 	"mathBinaryNumber",
 	"loadGlobal",
@@ -197,14 +205,14 @@ const BUDGET: CorePassBudget = Object.freeze({
 });
 
 interface Site {
-	/** The global name load: the namespace, or the callee of a direct call. */
+	/** The first lookup: a global binding, or a primitive method. */
 	readonly name: CoreInstructionId;
-	/** The method load of a namespace call. */
+	/** The method lookup, which is also the first lookup for a primitive receiver. */
 	readonly method?: CoreInstructionId;
 	readonly call: CoreInstructionId;
-	readonly intrinsic: CompilerIntrinsic;
+	readonly intrinsic?: CompilerIntrinsic;
 	readonly operation: string;
-	readonly kind: "method" | "function";
+	readonly kind: "method" | "function" | "primitive";
 }
 
 function operands(
@@ -333,12 +341,15 @@ function siteFor(
 	fn: CoreFunctionStore,
 	world: WorldFacts,
 	call: CoreInstructionId,
+	kinds: CoreValueKindAnalysis,
 ): Site | undefined {
 	if (opcodeOf(fn, call) !== "call" || results(fn, call).length !== 1) return undefined;
 	const inputs = operands(fn, call);
 	const block = fn.instructionBlock(call);
 	const callee = definition(fn, inputs[0]!);
 	if (callee === undefined || fn.instructionBlock(callee) !== block) return undefined;
+	if (fn.instructionAttributes(callee)[CORE_PRIMORDIAL_BINDING_TWIN_ATTRIBUTE] === true)
+		return undefined;
 	// Math.sumPrecise spends its time iterating its argument rather than in the call.
 	const allowed = (operation: string | undefined) =>
 		operation !== undefined &&
@@ -365,24 +376,50 @@ function siteFor(
 	}
 	if (opcodeOf(fn, callee) !== "loadPropertyStatic") return undefined;
 	const namespaceValue = operands(fn, callee)[0]!;
-	const namespace = definition(fn, namespaceValue);
 	if (
-		namespace === undefined ||
-		fn.instructionBlock(namespace) !== block ||
 		inputs[1] !== namespaceValue ||
 		fn.valueUseCount(inputs[0]!) !== 1 ||
 		fn.kernel.valueHandlerUseCount(inputs[0]!) !== 0
 	)
 		return undefined;
+	const key = fn.instructionAttributes(callee).stringIndex;
+	if (
+		typeof key === "number" &&
+		program.stringConstantText(key) === "toFixed" &&
+		kinds.scalarKind(namespaceValue) === "number" &&
+		ownDataPrimordial("Number.prototype", "toFixed", world) === "Number.prototype.toFixed"
+	)
+		return {
+			name: callee,
+			method: callee,
+			call,
+			operation: "Number.prototype.toFixed",
+			kind: "primitive",
+		};
+	const namespace = definition(fn, namespaceValue);
+	if (namespace === undefined || fn.instructionBlock(namespace) !== block)
+		return undefined;
 	const intrinsic = primordialGlobal(program, fn, namespace);
 	if (intrinsic === undefined || !NAMESPACES.has(intrinsic)) return undefined;
 	const namespaceNode = ownDataPrimordial("globalThis", intrinsic, world);
-	const key = fn.instructionAttributes(callee).stringIndex;
 	if (namespaceNode === undefined || typeof key !== "number") return undefined;
 	const operation = allowed(
 		ownDataPrimordial(namespaceNode, program.stringConstantText(key), world),
 	);
 	if (operation === undefined) return undefined;
+	if (operation === "Object.entries") {
+		const result = results(fn, call)[0]!;
+		const use = fn.kernel.valueFirstUse(result);
+		// Count/index snapshots keep their producer in one block for target transport.
+		if (
+			fn.kernel.valueHandlerUseCount(result) !== 0 ||
+			use < 0 ||
+			fn.kernel.useNext(use) >= 0 ||
+			fn.kernel.useOperand(use) !== 0 ||
+			opcodeOf(fn, fn.kernel.useInstruction(use)) !== "getIterator"
+		)
+			return undefined;
+	}
 	return { name: namespace, method: callee, call, intrinsic, operation, kind: "method" };
 }
 
@@ -517,7 +554,16 @@ class RunPlanner {
 
 	/** Whether the known call can run JavaScript, which ends the run after it. */
 	#callReenters(site: Site): boolean {
-		return !NUMBER_PREDICATES.has(site.operation) && !this.#mathKernel(site);
+		if (NUMBER_PREDICATES.has(site.operation) || this.#mathKernel(site)) return false;
+		if (
+			site.kind === "primitive" ||
+			FUNCTIONS.has(site.operation as CompilerIntrinsic) ||
+			site.operation.startsWith("Date.")
+		)
+			return !operands(this.#fn, site.call)
+				.slice(2)
+				.every((argument) => this.#primitive(argument));
+		return true;
 	}
 
 	#copyReenters(instruction: CoreInstructionId): boolean {
@@ -573,7 +619,7 @@ class RunPlanner {
 			this.#copyKinds.set(result, COMPILER_VALUE_KIND_NUMBER);
 	}
 
-	/** The run that starts with the global name load `first`, if any of its sites fits. */
+	/** The bounded run starting with this lookup, if any of its sites fits. */
 	plan(first: CoreInstructionId, terminator: CoreInstructionId): Run | undefined {
 		const fn = this.#fn;
 		this.#copyKinds.clear();
@@ -743,15 +789,24 @@ function twinRun(
 		if (current.some((value, index) => value !== inputs[index]))
 			editor.replaceOperands(instruction, inputs);
 		// The twin keeps its loads, which a later run of this pass must not twin again.
-		if (fn.instructionOpcodeName(instruction) === "loadGlobalProperty")
-			editor.replaceInstruction(instruction, "loadGlobalProperty", inputs, {
-				attributes: {
-					...fn.instructionAttributes(instruction),
-					[CORE_PRIMORDIAL_BINDING_TWIN_ATTRIBUTE]: true,
+		if (
+			fn.instructionOpcodeName(instruction) === "loadGlobalProperty" ||
+			(sites.get(instruction)?.kind === "primitive" &&
+				fn.instructionOpcodeName(instruction) === "loadPropertyStatic")
+		)
+			editor.replaceInstruction(
+				instruction,
+				fn.instructionOpcodeName(instruction),
+				inputs,
+				{
+					attributes: {
+						...fn.instructionAttributes(instruction),
+						[CORE_PRIMORDIAL_BINDING_TWIN_ATTRIBUTE]: true,
+					},
+					sourcePosition: fn.instructionSourcePosition(instruction),
+					effectRefinement: fn.instructionEffectRefinement(instruction),
 				},
-				sourcePosition: fn.instructionSourcePosition(instruction),
-				effectRefinement: fn.instructionEffectRefinement(instruction),
-			});
+			);
 	}
 
 	const copied = new Map<CoreValueId, CoreValueId>();
@@ -769,7 +824,7 @@ function twinRun(
 			copied.set(
 				result!,
 				editor.appendInstruction(copy, "loadIntrinsic", [], {
-					attributes: { intrinsic: site.intrinsic },
+					attributes: { intrinsic: site.intrinsic! },
 					sourcePosition: position,
 					outputRepresentations: representations,
 				}).outputs[0]!,
@@ -867,8 +922,8 @@ function twinRun(
 }
 
 /**
- * Twins runs of global primordial namespace and function calls behind one
- * primordial-bindings guard each.
+ * Twins runs of primordial calls behind one binding guard, retaining their
+ * observable lookups as the fallback.
  */
 export const guardPrimordialBindingCalls: CoreFunctionPass = {
 	name: "guard-primordial-binding-calls",
@@ -891,12 +946,13 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 		const { world } = compilationContext.facts;
 		if (world.primordialPolicy !== "mutable" || world.realms) return undefined;
 		const fn = program.function(item.function);
+		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const sitesByInstruction = new Map<CoreInstructionId, Site>();
 		const blocks = new Set<CoreBlockId>();
 		for (const instruction of fn.instructionIds()) {
 			const opcode = opcodeOf(fn, instruction);
 			if (opcode !== "call") continue;
-			const site = siteFor(program, fn, world, instruction);
+			const site = siteFor(program, fn, world, instruction, kinds);
 			if (site === undefined) continue;
 			sitesByInstruction.set(site.name, site);
 			if (site.method !== undefined) sitesByInstruction.set(site.method, site);
@@ -905,11 +961,7 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 		}
 		if (blocks.size === 0) return undefined;
 		const skipped = regionCandidateBlocks(program, fn, sitesByInstruction);
-		const planner = new RunPlanner(
-			fn,
-			context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS),
-			sitesByInstruction,
-		);
+		const planner = new RunPlanner(fn, kinds, sitesByInstruction);
 		let editor: CoreEditor | undefined;
 		const pending = [...blocks].filter((block) => !skipped.has(block));
 		while (pending.length > 0) {

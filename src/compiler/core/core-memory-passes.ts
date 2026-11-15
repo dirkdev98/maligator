@@ -529,11 +529,16 @@ function hasAggregateScalarReplacementConsumer(fn: CoreFunctionStore): boolean {
 		if (descriptor.allocation !== undefined) {
 			allocation = true;
 			const result = instructionResultAt(fn, instruction, 0);
-			if (
-				result !== undefined &&
-				fn.valueUseCount(result) + fn.kernel.valueHandlerUseCount(result) === 0
-			)
-				return true;
+			if (result !== undefined && fn.kernel.valueHandlerUseCount(result) === 0) {
+				let use = fn.kernel.valueFirstUse(result);
+				while (
+					use >= 0 &&
+					fn.instructionKind(fn.kernel.useInstruction(use)) === "operation" &&
+					fn.instructionOpcodeName(fn.kernel.useInstruction(use)) === "rootUse"
+				)
+					use = fn.kernel.useNext(use);
+				if (use < 0) return true;
+			}
 		}
 		const opcode = fn.instructionOpcodeName(instruction);
 		if (CONTAINED_PROPERTY_ACCESS_OPCODES.has(opcode)) propertyConsumer = true;
@@ -2686,10 +2691,9 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 			for (const use of uses.values()) {
 				if (
 					fn.instructionKind(use.instruction) === "operation" &&
-					use.operand === 0 &&
-					["move", "throwIfTdz", "rootUse"].includes(
-						fn.instructionOpcodeName(use.instruction),
-					)
+					(fn.instructionOpcodeName(use.instruction) === "rootUse" ||
+						(use.operand === 0 &&
+							["move", "throwIfTdz"].includes(fn.instructionOpcodeName(use.instruction))))
 				)
 					continue;
 				if (!propertyBaseUse(fn, use.instruction, use.operand)) {

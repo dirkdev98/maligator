@@ -260,9 +260,12 @@ prepared collation directly, with incompatible schemas rejected on load.
 The materialization pass discards bounded private initializer writes after proving
 that the aggregate has no content or identity observer. It retains computed-key
 coercions at the original write and rejects array length writes, nonconfigurable
-definitions, handler storage and escaping aliases. A proved non-Number element in a
-private sum array uses the same error operation only after the default iterator and
-absent iterator-return proofs discharge iteration and closing.
+definitions, handler storage and escaping aliases. With mutable primordials,
+discarded shaped literals keep reference operands rooted at construction while
+their storage disappears. Separate initializer writes and prototype-dependent state
+transitions retain their locked-world requirement. A proved non-Number element in
+a private sum array uses the same error operation only after the default iterator
+and absent iterator-return proofs discharge iteration and closing.
 
 Primitive brand proofs also select failed numeric/string conversions and wrong
 receivers. They stop at an earlier unknown coercion, range validation or symbol
@@ -1456,18 +1459,31 @@ breaks with the builtin-identity protector, and whenever a global primordial bin
 changes value or kind, is deleted, or is shadowed by a later script's lexical
 declaration; an attribute change that keeps the data value keeps it. Mutable builds
 mark those global object entries with the internal primordial flag that locked builds
-use to reject mutation, so every descriptor write and delete of one sees it. Core
-twins a run of such calls in a block: the guard selects a copy with the realm's
+use to reject mutation, so every descriptor write and delete of one sees it.
+Native reads of always-installed registered global bindings check that epoch at each
+read and use the current realm's intrinsic slot while it holds. A failed check keeps
+the original lexical/global-property resolution, including accessors and missing-name
+errors. The loaded value remains available to existing call and region guards.
+Core twins a run of such calls in a block: the guard selects a copy with the realm's
 intrinsics and the known operations of the locked lowering, and the loaded calls stay
 as the generic twin. A copied load follows nothing that can run JavaScript or store a
 property. A known call resolves its builtin when it runs, so only a Math kernel on
-Numbers, which resolves nothing, may follow such code in the copy. Runs cover Math
-and the Number parsers, predicates and conversions, `Object.hasOwn`, and
-`Object.assign`. Fresh object allocations can stay inside a copied run, letting
+Numbers, which resolves nothing, may follow such code in the copy. Primitive numeric
+formatting and parsing can share a run because their conversions cannot reenter
+JavaScript. A potentially effectful argument ends the run, preserving the captured
+callee and rechecking bindings before later lookups. Fresh object allocations can
+stay inside a copied run, letting
 `Object.assign` reach the same private-source and fresh-target lowering as locked
 calls. Other object-producing calls and constructions keep the guarded forms that
 snapshot, column and typed array regions consume. A loop that admits a numeric region
 keeps that region's entry speculation.
+An `Object.entries` result consumed directly by iteration can join a guarded run.
+Count and indexed observations retain one producer for native snapshot transport.
+
+Computed method naming compares its actual key with the shared `Symbol.iterator`
+intrinsic. A match reuses the interned default method name because that Symbol's
+description is immutable. Other keys retain ordinary naming, including keys returned
+by a replacement global `Symbol` namespace.
 
 Single-realm `Object.assign` sites outside those runs check the same monotonic
 epoch after evaluating their arguments. An intact epoch proves that their earlier

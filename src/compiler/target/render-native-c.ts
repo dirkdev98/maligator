@@ -13,7 +13,10 @@ import type {
 	CorePropertyPlacement,
 	CoreStringSpanRangeOperation,
 } from "../core/core-ir-regions.ts";
-import { builtinResultIsInt32 } from "../shared/builtin-registry.ts";
+import {
+	builtinResultIsInt32,
+	primordialGlobalBindings,
+} from "../shared/builtin-registry.ts";
 import { GUARDED_SEMANTIC_EPOCH_MASKS } from "../shared/compiler-instruction.ts";
 import {
 	compilerComparisonInputKindsAvoidObjectCoercion,
@@ -249,6 +252,15 @@ import {
 	splitNativeFunction,
 } from "./split-native-function.ts";
 import type { NativeSplitPolicy } from "./split-native-function.ts";
+
+const PRIMORDIAL_GLOBAL_INTRINSICS = new Map(
+	primordialGlobalBindings
+		.filter(
+			({ feature, intrinsic }) =>
+				feature === "always" && intrinsic !== "MAL_INTRINSIC_COUNT",
+		)
+		.map(({ name, intrinsic }) => [name, intrinsic]),
+);
 
 /**
  * The native-C backend: lower an eligible function straight to a C function
@@ -17293,11 +17305,17 @@ class NativeInstructionEmission {
 
 			case "RETURN":
 				return this.emitReturn(instruction);
-			case "LOAD_GLOBAL_PROPERTY":
+			case "LOAD_GLOBAL_PROPERTY": {
+				const name = String.fromCharCode(
+					...(this.context.stringConstants[instruction.nameStringIndex] ?? []),
+				);
+				const intrinsic = PRIMORDIAL_GLOBAL_INTRINSICS.get(name);
+				const load = `mal_vm_op_load_global_property(vm, ${this.context.relocation.stringIndex(instruction.nameStringIndex)})`;
 				return [
-					`r${instruction.dst} = mal_vm_op_load_global_property(vm, ${this.context.relocation.stringIndex(instruction.nameStringIndex)});`,
+					`r${instruction.dst} = ${intrinsic === undefined ? load : `mal_vm_primordial_bindings_intact(vm) ? vm->intrinsics[${intrinsic}] : ${load}`};`,
 					this.throwCheck(),
 				];
+			}
 			case "LOAD_PROTOTYPE":
 				// Reads the internal [[Prototype]] slot directly (no proxy trap) — never throws.
 				return [

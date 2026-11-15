@@ -2,6 +2,31 @@ import { describe, expect, it } from "vitest";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("virtual local state", () => {
+	it("discards dead nested own-data literals with mutable primordials", () => {
+		const result = inspectStaticValueFunction(
+			`function probe(value) {
+				const temporary = { left: { value: value & 255 }, right: { value: value & 31 } };
+				return temporary.left.value + temporary.right.value;
+			} globalThis.probe = probe;`,
+			"probe",
+			{ locked: false },
+		);
+		expect(result.structure.allocations).toBe(0);
+	});
+
+	it("retains operand roots at a discarded literal's construction", () => {
+		const result = inspectStaticValueFunction(
+			`function probe(value, effect) {
+				({ value, later: effect() });
+				return 0;
+			} globalThis.probe = probe;`,
+			"probe",
+			{ locked: false },
+		);
+		expect(result.structure.allocations).toBe(0);
+		expect(result.core.some((op) => op.opcode === "rootUse")).toBe(true);
+	});
+
 	it.each([
 		"new Boolean(x)",
 		"new Number(x)",

@@ -3158,6 +3158,86 @@ describe("primitive operation results", () => {
 		expect(output.some((operation) => operation.opcode === "call")).toBe(true);
 	});
 
+	it.each([
+		["Object.create(x)", "Object.create"],
+		["Date.parse(x)", "Date.parse"],
+		["Date.now()", "Date.now"],
+		["Date.UTC(x, 0)", "Date.UTC"],
+	])("guards %s and retains the loaded fallback", (expression, operation) => {
+		const output = inspect(expression, false).core;
+		expect(
+			output.filter(
+				(op) =>
+					op.opcode === "guardSemanticEpoch" &&
+					op.attributes.family === "primordial-bindings",
+			),
+		).toHaveLength(1);
+		expect(
+			output.some(
+				(op) => op.opcode === "callKnown" && op.attributes.operation === operation,
+			),
+		).toBe(true);
+		expect(output.some((op) => op.opcode === "call")).toBe(true);
+	});
+
+	it("guards an entries producer consumed directly by iteration", () => {
+		const result = inspectStaticValueFunction(
+			`function probe(value) {
+				let sum = 0;
+				for (const entry of Object.entries(value)) sum += entry.length;
+				return sum;
+			} globalThis.probe = probe;`,
+			"probe",
+			{ locked: false },
+		);
+		expect(
+			result.core.some(
+				(op) => op.opcode === "callKnown" && op.attributes.operation === "Object.entries",
+			),
+		).toBe(true);
+		expect(result.core.some((op) => op.opcode === "call")).toBe(true);
+	});
+
+	it("shares one binding guard across primitive formatting and parsing", () => {
+		const result = inspectStaticValueFunction(
+			`function probe(value) {
+				const text = (+value).toFixed(2);
+				return Number.parseFloat(text) + Math.trunc(Number(text));
+			} globalThis.probe = probe;`,
+			"probe",
+			{ locked: false },
+		);
+		expect(result.core.filter((op) => op.opcode === "guardSemanticEpoch")).toHaveLength(
+			1,
+		);
+		expect(
+			result.core.some(
+				(op) =>
+					op.opcode === "callKnown" &&
+					op.attributes.operation === "Number.prototype.toFixed",
+			),
+		).toBe(true);
+		expect(result.core.some((op) => op.opcode === "call")).toBe(true);
+	});
+
+	it("retains a loaded formatting call across argument effects", () => {
+		const result = inspectStaticValueFunction(
+			`function probe(value, digits) {
+				const text = (+value).toFixed(digits());
+				return Number.parseFloat(text);
+			} globalThis.probe = probe;`,
+			"probe",
+			{ locked: false },
+		);
+		expect(
+			result.core.some(
+				(op) =>
+					op.opcode === "callKnown" &&
+					op.attributes.operation === "Number.prototype.toFixed",
+			),
+		).toBe(false);
+	});
+
 	it("limits output and search work before producing a constant", () => {
 		const receiver = { kind: "string", value: "abc" } as const;
 		expect(

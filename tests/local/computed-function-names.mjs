@@ -40,6 +40,15 @@ function knownNames() {
 }
 console.log(JSON.stringify(knownNames()));
 
+function iteratorName(Symbol) {
+	const object = { [Symbol.iterator]() {} };
+	return observe(object[Symbol.iterator]);
+}
+
+const replacementKey = Symbol("replacement iterator");
+for (const namespace of [Symbol, { iterator: replacementKey }, Symbol])
+	console.log(JSON.stringify(iteratorName(namespace)));
+
 for (const key of [
 	Symbol.iterator,
 	Symbol(),
