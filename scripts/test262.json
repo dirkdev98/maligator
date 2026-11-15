@@ -1,14 +1,14 @@
 {
   "sha": "225d9c898829cd4e88a38c3605c05eba2d3730b6",
   "summary": {
-    "FAILED": 619,
-    "PASSED": 53157
+    "FAILED": 613,
+    "PASSED": 53163
   },
   "skips": {},
   "code": {
     "compiledFiles": 94561,
-    "functionCount": 2996859,
-    "instructionCount": 108674316
+    "functionCount": 3004814,
+    "instructionCount": 109405571
   },
   "results": {
     "test/annexB/built-ins/Array/from/iterator-method-emulates-undefined.js": "FAILED",
@@ -13343,7 +13343,7 @@
     "test/staging/sm/expressions/destructuring-array-default-function-nested.js": "PASSED",
     "test/staging/sm/expressions/destructuring-array-done.js": "FAILED",
     "test/staging/sm/expressions/destructuring-pattern-parenthesized.js": "PASSED",
-    "test/staging/sm/expressions/nested-delete-name-in-evalcode.js": "FAILED",
+    "test/staging/sm/expressions/nested-delete-name-in-evalcode.js": "PASSED",
     "test/staging/sm/expressions/object-literal-accessor-property-name.js": "PASSED",
     "test/staging/sm/expressions/optional-chain-first-expression-module.js": "PASSED",
     "test/staging/sm/expressions/optional-chain.js": "FAILED",
@@ -34249,7 +34249,7 @@
     "test/language/eval-code/direct/switch-case-decl-eval-source-is-strict-onlystrict.js": "PASSED",
     "test/language/eval-code/direct/switch-dflt-decl-onlystrict.js": "PASSED",
     "test/language/eval-code/direct/this-value-global.js": "PASSED",
-    "test/language/eval-code/direct/var-env-func-init-local-new-delete.js": "FAILED",
+    "test/language/eval-code/direct/var-env-func-init-local-new-delete.js": "PASSED",
     "test/language/eval-code/direct/var-env-func-non-strict.js": "PASSED",
     "test/language/eval-code/direct/var-env-gloabl-lex-strict-caller.js": "PASSED",
     "test/language/eval-code/direct/var-env-lower-lex-strict-caller.js": "PASSED",
@@ -40028,7 +40028,7 @@
     "test/staging/sm/Error/AggregateError.js": "PASSED",
     "test/staging/sm/Exceptions/error-property-enumerability.js": "PASSED",
     "test/staging/sm/Function/Function-with-eval.js": "PASSED",
-    "test/staging/sm/Function/arguments-parameter-shadowing.js": "FAILED",
+    "test/staging/sm/Function/arguments-parameter-shadowing.js": "PASSED",
     "test/staging/sm/Function/bound-non-constructable.js": "PASSED",
     "test/staging/sm/Function/configurable-length.js": "PASSED",
     "test/staging/sm/Function/function-call.js": "PASSED",
@@ -40245,7 +40245,7 @@
     "test/staging/sm/extensions/element-setting-ToNumber-detaches.js": "PASSED",
     "test/staging/sm/extensions/expression-closure-syntax.js": "PASSED",
     "test/staging/sm/extensions/function-properties.js": "FAILED",
-    "test/staging/sm/extensions/nested-delete-name-in-evalcode.js": "FAILED",
+    "test/staging/sm/extensions/nested-delete-name-in-evalcode.js": "PASSED",
     "test/staging/sm/extensions/proxy-array-target-length-definition.js": "PASSED",
     "test/staging/sm/extensions/recursion.js": "PASSED",
     "test/staging/sm/extensions/regress-481516.js": "PASSED",
@@ -47697,7 +47697,7 @@
     "test/language/eval-code/direct/var-env-func-strict-caller-2.js": "PASSED",
     "test/language/eval-code/direct/var-env-global-lex-non-strict.js": "PASSED",
     "test/language/eval-code/direct/var-env-lower-lex-strict-source.js": "PASSED",
-    "test/language/eval-code/direct/var-env-var-init-local-new-delete.js": "FAILED",
+    "test/language/eval-code/direct/var-env-var-init-local-new-delete.js": "PASSED",
     "test/language/eval-code/direct/var-env-var-strict-caller-3.js": "PASSED",
     "test/language/eval-code/indirect/block-decl-strict.js": "PASSED",
     "test/language/eval-code/indirect/cptn-nrml-empty-for.js": "PASSED",
@@ -53664,7 +53664,7 @@
     "test/staging/sm/class/superPropSkips.js": "PASSED",
     "test/staging/sm/class/uninitializedThisError.js": "PASSED",
     "test/staging/sm/destructuring/constant-folding.js": "PASSED",
-    "test/staging/sm/eval/exhaustive-fun-normalcaller-direct-normalcode.js": "FAILED",
+    "test/staging/sm/eval/exhaustive-fun-normalcaller-direct-normalcode.js": "PASSED",
     "test/staging/sm/eval/exhaustive-fun-strictcaller-direct-normalcode.js": "PASSED",
     "test/staging/sm/eval/exhaustive-global-normalcaller-direct-normalcode.js": "PASSED",
     "test/staging/sm/eval/exhaustive-global-strictcaller-direct-normalcode.js": "PASSED",
