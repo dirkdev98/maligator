@@ -847,6 +847,9 @@ function cachedNumberResultRegisters(
 		const number =
 			op.opcode === "CREATE_NUMBER" ||
 			op.opcode === "CREATE_F64" ||
+			op.opcode === "LOAD_ARGUMENT_COUNT" ||
+			op.opcode === "MATH_UNARY_NUMBER" ||
+			op.opcode === "MATH_BINARY_NUMBER" ||
 			(op.opcode === "BINARY" &&
 				(NUMBER_OPERATORS.has(op.operator) ||
 					op.operator === ">>>" ||
