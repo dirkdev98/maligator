@@ -173,6 +173,7 @@ function domainsEqual(
 	left: ReadonlyArray<EffectDomain>,
 	right: ReadonlyArray<EffectDomain>,
 ): boolean {
+	if (left === right) return true;
 	return (
 		left.length === right.length && left.every((domain, index) => domain === right[index])
 	);
@@ -180,6 +181,7 @@ function domainsEqual(
 
 /** Structural equality of two canonical summaries. */
 export function effectSummariesEqual(left: EffectSummary, right: EffectSummary): boolean {
+	if (left === right) return true;
 	return (
 		left.mayThrow === right.mayThrow &&
 		left.maySuspend === right.maySuspend &&

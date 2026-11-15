@@ -2039,6 +2039,8 @@ function lowerFunctionToTarget(
 		NonNullable<CoreTargetFunction["literalSwitches"]>[number]
 	> = [];
 	const loweredInstructions = new Map<CoreInstructionId, CompilerInstruction>();
+	const propertyCacheOrigins: Array<CoreTargetFunction["propertyCacheOrigins"][number]> =
+		[];
 	const loweredSwitchComparisons = new Map<
 		CoreInstructionId,
 		Array<CompilerInstruction>
@@ -2274,16 +2276,16 @@ function lowerFunctionToTarget(
 				...sourcePositionMarker(coreFunction.instructionSourcePosition(instruction)),
 			);
 			const operation = operations.get(instruction)!;
-			let rebuilt = {
-				...operation,
-				...("registers" in operation
+			let rebuilt = (
+				"registers" in operation
 					? {
+							...operation,
 							registers: operation.registers.map((value) =>
 								value < 0 ? value : registerForValue(value as CoreValueId),
 							),
 						}
-					: {}),
-			} as CompilerInstruction;
+					: { ...operation }
+			) as CompilerInstruction;
 			if (rebuilt.type === "callForeign") {
 				if (rebuilt.foreignCall === undefined)
 					throw new Error("Static foreign call lost its configured binding");
@@ -2492,6 +2494,8 @@ function lowerFunctionToTarget(
 				),
 			});
 			loweredInstructions.set(instruction, lowered);
+			if (targetInstructionUsesPropertyCache(lowered))
+				propertyCacheOrigins.push({ instruction: lowered, coreInstruction: instruction });
 			if (siteFacts.size > 0) {
 				const site = siteFacts.get(
 					coreCompilerSiteId(
@@ -2529,32 +2533,38 @@ function lowerFunctionToTarget(
 					kind: "closure-materialization",
 					instruction: lowered,
 				});
-			const realizedCoreInstructions = new Set<CoreInstructionId>();
-			if (coreInstructionNeedsOperationSafepoint(coreFunction, instruction)) {
-				realizedCoreInstructions.add(instruction);
-			}
+			let realizedCoreInstructions: Array<CoreInstructionId> | undefined =
+				coreInstructionNeedsOperationSafepoint(coreFunction, instruction)
+					? [instruction]
+					: undefined;
+			let realizedImmediateInstructions: Set<CoreInstructionId> | undefined;
 			const immediateValues = (
 				lowered as { readonly immediateValues?: ReadonlyArray<unknown> }
 			).immediateValues;
-			const operandStart = kernel.instructionOperandStart(instruction);
-			const operandCount = kernel.instructionOperandCount(instruction);
-			for (let index = 0; index < operandCount; index++) {
-				if (immediateValues?.[inputOffset + index] === undefined) continue;
-				const input = kernel.operandAt(operandStart + index);
-				if (kernel.valueDefinitionKind(input) !== 1) continue;
-				const origin = kernel.valueDefinitionOwner(input) as CoreInstructionId;
-				if (
-					omittedInstructions.has(origin) &&
-					coreInstructionNeedsOperationSafepoint(coreFunction, origin)
-				) {
-					realizedCoreInstructions.add(origin);
+			if (immediateValues !== undefined) {
+				const operandStart = kernel.instructionOperandStart(instruction);
+				for (let index = 0; index < inputCount; index++) {
+					if (immediateValues[inputOffset + index] === undefined) continue;
+					const input = kernel.operandAt(operandStart + index);
+					if (kernel.valueDefinitionKind(input) !== 1) continue;
+					const origin = kernel.valueDefinitionOwner(input) as CoreInstructionId;
+					if (
+						omittedInstructions.has(origin) &&
+						coreInstructionNeedsOperationSafepoint(coreFunction, origin)
+					) {
+						(realizedImmediateInstructions ??= new Set(realizedCoreInstructions)).add(
+							origin,
+						);
+					}
 				}
 			}
-			if (realizedCoreInstructions.size > 0) {
+			if (realizedImmediateInstructions !== undefined)
+				realizedCoreInstructions = [...realizedImmediateInstructions];
+			if (realizedCoreInstructions !== undefined) {
 				pendingOperationSafepoints.push({
 					kind: "operation",
 					coreInstruction: instruction,
-					realizedCoreInstructions: [...realizedCoreInstructions],
+					realizedCoreInstructions,
 					instruction: lowered,
 				});
 			}
@@ -2872,12 +2882,7 @@ function lowerFunctionToTarget(
 		nameStringIndex: coreFunction.metadata.nameStringIndex,
 		blocks,
 		coreBlocks: Object.freeze([...blockOrder]),
-		propertyCacheOrigins: [...loweredInstructions].flatMap(
-			([coreInstruction, instruction]) =>
-				targetInstructionUsesPropertyCache(instruction)
-					? [{ instruction, coreInstruction }]
-					: [],
-		),
+		propertyCacheOrigins,
 		specializations,
 		isGenerator: coreFunction.isGenerator,
 		isAsync: coreFunction.isAsync,
