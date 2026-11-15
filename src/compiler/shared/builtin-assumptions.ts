@@ -3,7 +3,7 @@ import type { WorldFacts } from "./compiler-facts.ts";
 export interface BuiltinWorldAssumptions {
 	readonly operation: string;
 	/**
-	 * `guarded`: in a mutable single-realm world, the primordial-bindings protector
+	 * `guarded`: in a mutable world, the primordial-bindings protector
 	 * held where the program selected this operation over its loaded twin.
 	 */
 	readonly primordials: "locked" | "guarded";
@@ -15,6 +15,13 @@ export interface BuiltinWorldAssumptions {
 	readonly eval: "independent";
 	readonly hostBindings: "not-authorized";
 }
+
+export const GUARDED_NUMBER_PREDICATES: ReadonlySet<string> = new Set([
+	"Number.isNaN",
+	"Number.isFinite",
+	"Number.isInteger",
+	"Number.isSafeInteger",
+]);
 
 export function builtinWorldAssumptions(
 	operation: string,
@@ -59,8 +66,12 @@ export function verifyBuiltinWorldAssumptions(
 	for (const [key, value] of Object.entries(expected))
 		if (record[key] !== value)
 			throw new Error(`Invalid ${key} assumption for ${operation}`);
-	if (guarded && expected.realm !== "single-realm")
-		throw new Error(`Guarded world assumptions need one realm for ${operation}`);
+	if (
+		guarded &&
+		expected.realm === "current-execution-realm" &&
+		!GUARDED_NUMBER_PREDICATES.has(operation)
+	)
+		throw new Error(`Unsupported current-realm guarded operation ${operation}`);
 	if (
 		world !== undefined &&
 		(world.primordialPolicy !== (guarded ? "mutable" : "locked") ||

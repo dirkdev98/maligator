@@ -1,4 +1,7 @@
-import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";
+import {
+	builtinWorldAssumptions,
+	GUARDED_NUMBER_PREDICATES as NUMBER_PREDICATES,
+} from "../shared/builtin-assumptions.ts";
 import {
 	builtinNormalResultKinds,
 	builtinOperationDescriptor,
@@ -129,13 +132,6 @@ const SPAN_PARSERS: ReadonlySet<string> = new Set([
 const REGISTERED_BINDINGS: ReadonlySet<string> = new Set(
 	primordialGlobalBindings.map((binding) => binding.name),
 );
-
-const NUMBER_PREDICATES: ReadonlySet<string> = new Set([
-	"Number.isNaN",
-	"Number.isFinite",
-	"Number.isInteger",
-	"Number.isSafeInteger",
-]);
 
 const MATH_NUMBER_KERNELS: ReadonlySet<string> = new Set([
 	...mathUnaryOperationKeys.map(([operation]) => operation),
@@ -496,6 +492,7 @@ interface Run {
 class RunPlanner {
 	readonly #fn: CoreFunctionStore;
 	readonly #kinds: CoreValueKindAnalysis;
+	readonly #realms: boolean;
 	readonly #sitesByInstruction: ReadonlyMap<CoreInstructionId, Site>;
 	/** Kinds of the values the copy computes, where its known calls narrow them. */
 	readonly #copyKinds = new Map<CoreValueId, CompilerValueKindMask>();
@@ -509,9 +506,11 @@ class RunPlanner {
 		fn: CoreFunctionStore,
 		kinds: CoreValueKindAnalysis,
 		sitesByInstruction: ReadonlyMap<CoreInstructionId, Site>,
+		realms: boolean,
 	) {
 		this.#fn = fn;
 		this.#kinds = kinds;
+		this.#realms = realms;
 		this.#sitesByInstruction = sitesByInstruction;
 	}
 
@@ -644,6 +643,7 @@ class RunPlanner {
 				const loaded =
 					seen.has(site.name) && (site.method === undefined || seen.has(site.method));
 				const kernel = this.#mathKernel(site);
+				if (this.#realms && !NUMBER_PREDICATES.has(site.operation)) break;
 				if (!loaded || (reentered && !kernel)) break;
 				seen.add(instruction);
 				included.push(site);
@@ -692,6 +692,7 @@ function guardedCallAttributes(
 	fn: CoreFunctionStore,
 	site: Site,
 	forwarded: boolean,
+	singleRealm: boolean,
 ): Record<string, CoreAttributeValue> {
 	const sourceCall = fn.instructionAttributes(site.call).sourceCall;
 	return {
@@ -699,11 +700,17 @@ function guardedCallAttributes(
 		operation: site.operation,
 		...(forwarded ? { specialized: site.operation } : {}),
 		worldAssumptions: {
-			...builtinWorldAssumptions(site.operation, "exact-builtin-proof", true, "guarded"),
+			...builtinWorldAssumptions(
+				site.operation,
+				"exact-builtin-proof",
+				singleRealm,
+				"guarded",
+			),
 		},
 		knownBuiltinCall: guardedKnownOperationCall(
 			site.operation,
 			fn.id,
+			singleRealm,
 		) as unknown as CoreAttributeValue,
 	};
 }
@@ -717,6 +724,7 @@ function twinRun(
 	fn: CoreFunctionStore,
 	editor: CoreEditor,
 	run: Run,
+	singleRealm: boolean,
 ): {
 	readonly join: CoreBlockId;
 	readonly joined: ReadonlyMap<CoreValueId, CoreValueId>;
@@ -846,7 +854,7 @@ function twinRun(
 								...builtinWorldAssumptions(
 									site.operation,
 									"exact-builtin-proof",
-									true,
+									singleRealm,
 									"guarded",
 								),
 							},
@@ -869,7 +877,7 @@ function twinRun(
 			copied.set(
 				result!,
 				editor.appendInstruction(copy, "callKnown", [receiver, ...arguments_].map(map), {
-					attributes: guardedCallAttributes(fn, site, forwarded),
+					attributes: guardedCallAttributes(fn, site, forwarded, singleRealm),
 					sourcePosition: position,
 					outputRepresentations: representations,
 				}).outputs[0]!,
@@ -930,10 +938,10 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 	stage: "canonicalize",
 	requiredFunctionOpcodesAny: ["loadGlobalProperty"],
 	admission: {
-		predicate: "global primordial call in a mutable single realm",
+		predicate: "global primordial call in a mutable world",
 		hasOpportunity({ compilationContext }) {
 			const { world } = compilationContext.facts;
-			return world.primordialPolicy === "mutable" && !world.realms;
+			return world.primordialPolicy === "mutable";
 		},
 	},
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
@@ -944,7 +952,7 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 	run(context) {
 		const { program, compilationContext, item } = context;
 		const { world } = compilationContext.facts;
-		if (world.primordialPolicy !== "mutable" || world.realms) return undefined;
+		if (world.primordialPolicy !== "mutable") return undefined;
 		const fn = program.function(item.function);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const sitesByInstruction = new Map<CoreInstructionId, Site>();
@@ -961,7 +969,7 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 		}
 		if (blocks.size === 0) return undefined;
 		const skipped = regionCandidateBlocks(program, fn, sitesByInstruction);
-		const planner = new RunPlanner(fn, kinds, sitesByInstruction);
+		const planner = new RunPlanner(fn, kinds, sitesByInstruction, world.realms);
 		let editor: CoreEditor | undefined;
 		const pending = [...blocks].filter((block) => !skipped.has(block));
 		while (pending.length > 0) {
@@ -981,7 +989,7 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 				}
 				editor ??= CoreEditor.open(program, item.function);
 				// The rest of the block moved to the join, which may hold further runs.
-				const { join, joined } = twinRun(fn, editor, run);
+				const { join, joined } = twinRun(fn, editor, run, !world.realms);
 				planner.adoptJoin(joined);
 				pending.push(join);
 				break;

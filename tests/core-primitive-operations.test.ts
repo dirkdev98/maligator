@@ -3646,3 +3646,70 @@ describe("wide BigInt builtin constants", () => {
 		).toMatchObject({ kind: "unsupported", reason: "work-limit" });
 	});
 });
+
+describe("mutable namespace guards in the executing realm", () => {
+	it("guards isNaN's primitive result and retains the loaded fallback", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(value){return Number.isNaN(value)}globalThis.probe=probe;",
+			"probe",
+			{ locked: false, realms: true },
+		);
+		expect(
+			output.core.some(
+				(op) =>
+					op.opcode === "guardSemanticEpoch" &&
+					op.attributes.family === "primordial-bindings",
+			),
+		).toBe(true);
+		expect(output.core.some((op) => op.opcode === "call")).toBe(true);
+	});
+	it.each(["isFinite", "isInteger", "isSafeInteger"])(
+		"retains current-realm provenance for Number.%s",
+		(method) => {
+			const output = inspectStaticValueFunction(
+				`function probe(value){return Number.${method}(value)}globalThis.probe=probe;`,
+				"probe",
+				{ locked: false, realms: true },
+			);
+			const call = output.core.find(
+				(op) =>
+					op.opcode === "callKnown" && op.attributes.operation === `Number.${method}`,
+			);
+			expect(call?.attributes.worldAssumptions).toMatchObject({
+				primordials: "guarded",
+				realm: "current-execution-realm",
+			});
+			expect(output.core.some((op) => op.opcode === "call")).toBe(true);
+		},
+	);
+	it.each([
+		"Math.abs(value)",
+		"Math.abs(+value)",
+		"Math.min(+value,2)",
+		"Object.create(value)",
+		"Number.isFinite(Number(value))",
+	])("retains the loaded call for %s", (expression) => {
+		const output = inspectStaticValueFunction(
+			`function probe(value){return ${expression}}globalThis.probe=probe;`,
+			"probe",
+			{ locked: false, realms: true },
+		);
+		expect(
+			output.core.some(
+				(op) =>
+					op.opcode === "callKnown" ||
+					op.opcode === "mathUnaryNumber" ||
+					op.opcode === "mathBinaryNumber",
+			),
+		).toBe(false);
+		expect(output.core.some((op) => op.opcode === "call")).toBe(true);
+	});
+	it("keeps shadowed namespaces outside the global binding proof", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(Math,Number,value){return Math.abs(+value)+Number.isFinite(value)}globalThis.probe=probe;",
+			"probe",
+			{ locked: false, realms: true },
+		);
+		expect(output.core.some((op) => op.opcode === "guardSemanticEpoch")).toBe(false);
+	});
+});

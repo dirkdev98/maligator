@@ -115,14 +115,14 @@ describe("global primordial calls behind the primordial-bindings guard", () => {
 		});
 	});
 
-	describe("rebound by compiled code", () => {
+	describe.each([false, true])("rebound by compiled code with realms=%s", (realms) => {
 		let pair: BackendPairResult;
 		beforeAll(() => {
 			pair = build(
 				"guards-writers",
 				fixture,
 				resolveBuildConfig({
-					engine: { primordials: "mutable" },
+					engine: { primordials: "mutable", realms },
 					surface: { node: true },
 				}),
 			);
@@ -132,14 +132,14 @@ describe("global primordial calls behind the primordial-bindings guard", () => {
 				expectNodeParity(pair, fixture, mode));
 	});
 
-	describe("rebound by code compiled at run time", () => {
+	describe.each([false, true])("rebound by run-time code with realms=%s", (realms) => {
 		let pair: BackendPairResult;
 		beforeAll(() => {
 			pair = build(
 				"guards-runtime-code",
 				evalFixture,
 				resolveBuildConfig({
-					engine: { primordials: "mutable", eval: true },
+					engine: { primordials: "mutable", eval: true, realms },
 					surface: { node: true },
 				}),
 			);
@@ -147,5 +147,75 @@ describe("global primordial calls behind the primordial-bindings guard", () => {
 		for (const mode of runtimeCodeCases)
 			it(`observes the ${mode} case like Node`, () =>
 				expectNodeParity(pair, evalFixture, mode));
+	});
+});
+
+describe("pure namespace calls in the executing realm", () => {
+	let pair: BackendPairResult;
+	let boundaries: BackendPairResult;
+	const pilot = "tests/local/realm-namespace-pilot.mjs";
+	beforeAll(() => {
+		pair = build(
+			"realm-namespace-pilot",
+			pilot,
+			resolveBuildConfig({
+				engine: { primordials: "mutable", realms: true },
+				surface: { node: true },
+			}),
+			true,
+		);
+		boundaries = buildBackendPairFromOneProgramImage({
+			fixture: "tests/local/realm-namespace-boundaries.js",
+			entryGoal: "script",
+			entryStrict: false,
+			mainFile: "tests/fixtures/realm-namespace-boundaries/main.c",
+			name: "realm-namespace-boundaries",
+			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
+			config: resolveBuildConfig({
+				engine: { primordials: "mutable", realms: true, eval: false },
+			}),
+		});
+	});
+	it.each([
+		"intact",
+		"object",
+		"mathReentry",
+		"numberReentry",
+		"extraArgument",
+		"globalMath",
+		"globalNumber",
+		"method",
+		"lexical",
+		"shadow",
+		"throw",
+	])("preserves %s observations", (scenario) => {
+		const env = { REALM_NAMESPACE_CASE: scenario };
+		const expected = execFileSync(process.execPath, [pilot], {
+			encoding: "utf8",
+			env: { ...process.env, ...env },
+		});
+		for (const binary of [pair.compiled, pair.interpreted]) {
+			expect(runToStdout(binary, { env })).toBe(expected);
+			expect(runToStdout(binary, { env: { ...STRESS_ENV, ...env } })).toBe(expected);
+		}
+	});
+	it("admits pure calls while the current realm's namespaces are intact", () => {
+		const invocation = resolveHarnessExecutionInvocation(pair.compiled);
+		const result = spawnSync(invocation.executable, invocation.args, {
+			encoding: "utf8",
+			env: { ...process.env, MAL_PERF_STATS: "1", REALM_NAMESPACE_CASE: "intact" },
+		});
+		if (result.error) throw result.error;
+		expect(result.status, result.stderr).toBe(0);
+		const measured = JSON.parse(result.stdout) as { rounds: number };
+		expect(counter(result.stderr, "admissions")).toBeGreaterThanOrEqual(measured.rounds);
+		expect(counter(result.stderr, "rejections")).toBe(0);
+	});
+	it("uses owned foreign namespaces and their error prototypes after mutation", () => {
+		for (const binary of [boundaries.compiled, boundaries.interpreted])
+			expect(runToStdout(binary, { env: { ...STRESS_ENV, MAL_PERF_STATS: "1" } })).toBe(
+				"realm-namespace-boundaries PASS\n",
+			);
 	});
 });

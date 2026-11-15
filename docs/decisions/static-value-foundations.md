@@ -1497,6 +1497,12 @@ snapshot, column and typed array regions consume. A loop that admits a numeric r
 keeps that region's entry speculation.
 An `Object.entries` result consumed directly by iteration can join a guarded run.
 Count and indexed observations retain one producer for native snapshot transport.
+Noncoercing Number predicates also use this guard with multiple realms enabled. Their
+proof belongs to the executing function's realm, whose globals and intrinsics the call
+boundary installs. The
+ordinary loaded calls remain as the fallback, and reentry still blocks later
+lookups or calls whose captured identity would be lost. The primordial graph cache
+stays disabled when realms are enabled because its entries have no realm key.
 
 Computed method naming compares its actual key with the shared `Symbol.iterator`
 intrinsic. A match reuses the interned default method name because that Symbol's

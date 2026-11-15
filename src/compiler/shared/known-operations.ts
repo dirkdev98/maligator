@@ -96,19 +96,20 @@ export function knownOperationCall(id: string, functionId: number): KnownBuiltin
 }
 
 /**
- * The known call a mutable single-realm program selects after its primordial-bindings
- * guard held: the global binding and the method it loaded were the realm's own. The
- * builtin-identity epoch is the part of that guard a later consumer can recheck.
+ * The binding guard establishes the executing realm's captured builtin. Later
+ * consumers can recheck its identity epoch; a single-realm proof also retains its
+ * world restriction.
  */
 export function guardedKnownOperationCall(
 	id: string,
 	functionId: number,
+	singleRealm = true,
 ): KnownBuiltinCall {
 	return knownOperationCallWithProof(id, {
 		scope: { kind: "function", id: functionId },
 		dependencies: [
 			{ kind: "epoch", family: "watched-methods" },
-			{ kind: "world", fact: "realms.disabled" },
+			...(singleRealm ? ([{ kind: "world", fact: "realms.disabled" }] as const) : []),
 		],
 		obligations: [],
 		origin: "guarded-primordial-binding",

@@ -1,5 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import {
+	builtinWorldAssumptions,
+	verifyBuiltinWorldAssumptions,
+} from "../src/compiler/shared/builtin-assumptions.ts";
 import { directBuiltinOperationIds } from "../src/compiler/shared/builtin-registry.ts";
 import {
 	INSTRUCTION_MAY_GC,
@@ -362,4 +366,34 @@ describe("known-operation dispatch", () => {
 			expect(restored.native.functions).toEqual(image.native.functions);
 		},
 	);
+});
+
+it("restricts current-realm mutable assumptions to the admitted primitive operations", () => {
+	for (const operation of [
+		"Number.isNaN",
+		"Number.isFinite",
+		"Number.isInteger",
+		"Number.isSafeInteger",
+	]) {
+		expect(() =>
+			verifyBuiltinWorldAssumptions(
+				builtinWorldAssumptions(operation, "exact-builtin-proof", false, "guarded"),
+				operation,
+			),
+		).not.toThrow();
+	}
+	for (const operation of [
+		"Object.create",
+		"Date.now",
+		"Math.abs",
+		"Math.min",
+		"Math.sumPrecise",
+	]) {
+		expect(() =>
+			verifyBuiltinWorldAssumptions(
+				builtinWorldAssumptions(operation, "exact-builtin-proof", false, "guarded"),
+				operation,
+			),
+		).toThrow("Unsupported current-realm guarded operation");
+	}
 });
