@@ -2198,6 +2198,46 @@ describe("program-image-codec", () => {
 				0,
 				(plan) => ({ ...plan, instructions: [nativeInstruction] }),
 			);
+		const privateStore: Extract<BytecodeInstruction, { opcode: "DEFINE_PROPERTY" }> = {
+			opcode: "DEFINE_PROPERTY",
+			object: 0,
+			key: 1,
+			value: 2,
+			enumerable: true,
+			writable: true,
+			configurable: true,
+		};
+		for (const mode of ["indexed", "append"] as const) {
+			const image = withInstruction(privateStore, { kind: "private-array-store", mode });
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+			for (const flag of ["enumerable", "writable", "configurable"] as const)
+				expect(() =>
+					serializeCompilerArtifact(
+						withInstruction(
+							{ ...privateStore, [flag]: false },
+							{ kind: "private-array-store", mode },
+						),
+					),
+				).toThrow(/invalid private Array store/);
+		}
+		expect(() =>
+			serializeCompilerArtifact(
+				withInstruction(privateStore, {
+					kind: "private-array-store",
+					mode: "invalid",
+				} as unknown as NativeInstructionPlan),
+			),
+		).toThrow(/invalid private Array store/);
+		expect(() =>
+			serializeCompilerArtifact(
+				withInstruction(
+					{ opcode: "CREATE_NUMBER", dst: 0, value: 1 },
+					{ kind: "private-array-store", mode: "indexed" },
+				),
+			),
+		).toThrow(/opcode mismatch/);
 		const exactTypedArrayStore = withInstruction(
 			{
 				opcode: "STORE_PROPERTY",

@@ -2702,6 +2702,7 @@ export function validateNativeNumericSortCallback(
 }
 
 export type NativeInstructionPlan =
+	| { readonly kind: "private-array-store"; readonly mode: "indexed" | "append" }
 	| { readonly kind: "return-completion"; readonly result: "object" | "primitive" }
 	| {
 			readonly kind: "call";
@@ -2762,6 +2763,7 @@ export function nativePlanKeepsOrdinaryLowering(
 	return (
 		plan === undefined ||
 		plan.kind === "exact-array-element" ||
+		plan.kind === "private-array-store" ||
 		plan.kind === "return-completion"
 	);
 }
@@ -3437,6 +3439,10 @@ function nativeInstructionPlanFromExecution(
 						kind: "construct",
 						directFunctionIndex: instruction.directFunctionIndex,
 					};
+		case "defineProperty":
+			return instruction.privateArrayStore === undefined
+				? undefined
+				: { kind: "private-array-store", mode: instruction.privateArrayStore };
 		case "createArray":
 			return instruction.freshDenseReserveLength === undefined
 				? undefined

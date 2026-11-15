@@ -203,15 +203,6 @@ Shared lifetime and fallback rules are recorded in
 An existing iterator cursor is not, by itself, permission to delete its language
 object. Retained loop experiments preserve effects, authoritative state and fallback.
 
-- [ ] Define inlined `map` and `filter` results through their private fresh Array proof
-      with a bounded integer index. `a.map((x) => x * 2)` over eight elements still
-      costs 3.6x Node: the result comes from an in-place `new Array(n)`, but every element passes the generic
-      define checks on an f64 index although the expansion proves the result fresh and
-      unreachable from the callback. Carry the owning Core proof and bounded index
-      range through lowering; preserve map holes and final length, sparse fallback,
-      filter growth and write barriers. Compare the removed output-store cost with
-      compiler work, native build cost and generated size.
-
 - [ ] Bound one typed-store side-exit experiment to core-to-execution or optimizer-queue
       and the corresponding compiler loop. First establish removable executed cost; then
       preserve already-committed stores and continuation state without generic OSR.

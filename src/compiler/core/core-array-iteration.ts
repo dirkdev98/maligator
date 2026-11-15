@@ -479,13 +479,17 @@ export function expandCoreArrayIterationCall(
 			jump(invoke, increment);
 			break;
 		case "map":
-			append(invoke, "defineProperty", [created!, index, returned], { enumerable: true });
+			append(invoke, "defineProperty", [created!, index, returned], {
+				enumerable: true,
+				privateArrayStore: "indexed",
+			});
 			jump(invoke, increment);
 			break;
 		case "filter": {
 			branch(invoke, returned, select!, increment, carried);
 			append(select!, "defineProperty", [created!, carried[0]!, element], {
 				enumerable: true,
+				privateArrayStore: "append",
 			});
 			const following = append(select!, "binary", [carried[0]!, one], { operator: "+" })
 				.outputs[0]!;

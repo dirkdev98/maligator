@@ -184,6 +184,15 @@ store. Collecting initializers retain the owner as an ordinary rooted value and
 use per-store barriers; no backing pointer survives their calls. A handler that
 could observe partially changed Array length prevents that admission.
 
+Expanded map and filter callbacks keep their result Array private until completion.
+Core licenses default element definitions on that result; native lowering persists
+and validates the license while interpreted execution retains ordinary defines.
+Map keeps its snapshotted final length and may fall back to sparse storage. Filter
+appends contiguously and preserves the ordinary fallback when growth declines.
+The integral index retains the full Array length domain rather than narrowing to a
+signed 32-bit counter. Each store reads the rooted result again after the callback;
+backing pointers never cross calls, and element publication keeps its GC barriers.
+
 Safe-integer regions also retain certified `Math.imul` and `Math.clz32` calls in
 integer locals. Entry guards reject non-integer inputs and negative zero before
 the original loop performs any coercion. Integer arithmetic failure restores the

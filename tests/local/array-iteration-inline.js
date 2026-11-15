@@ -452,6 +452,67 @@ check(
 	})(),
 );
 
+check(
+	"map preserves sparse gaps and trailing holes after dense fallback",
+	(() => {
+		let matches = 0;
+		for (let round = 0; round < 2; round++) {
+			const sparse = new Array(4096);
+			sparse[2048] = { value: round };
+			const mapped = sparse.map((value) => ({ value: value.value + 1 }));
+			if (
+				mapped.length === sparse.length &&
+				!(0 in mapped) &&
+				mapped[2048].value === round + 1 &&
+				!(4095 in mapped)
+			)
+				matches++;
+		}
+		return matches === 2;
+	})(),
+);
+check(
+	"map and filter grow object results beyond the initial reserve limit",
+	(() => {
+		const source = Array.from({ length: 65540 }, (_, index) => index);
+		let matches = 0;
+		for (let round = 0; round < 2; round++) {
+			const shared = { value: round };
+			const mapped = source.map((value) =>
+				(value & 4095) === 0 ? { value: value + round } : shared,
+			);
+			const filtered = mapped.filter((value) => value.value >= round);
+			if (
+				mapped.length === source.length &&
+				filtered.length === source.length &&
+				filtered[65539] === mapped[65539] &&
+				filtered[32768].value === 32768 + round
+			)
+				matches++;
+		}
+		return matches === 2;
+	})(),
+);
+check(
+	"map retains the full unsigned Array length domain before an early throw",
+	(() => {
+		let caught = 0;
+		const marker = {};
+		for (let round = 0; round < 2; round++) {
+			const source = new Array(2147483649);
+			source[0] = 1;
+			try {
+				source.map(() => {
+					throw marker;
+				});
+			} catch (error) {
+				if (error === marker) caught++;
+			}
+		}
+		return caught === 2;
+	})(),
+);
+
 let passed = 0;
 for (const [name, ok] of results) {
 	if (ok) passed++;

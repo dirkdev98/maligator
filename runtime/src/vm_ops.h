@@ -3760,6 +3760,23 @@ static inline __attribute__((always_inline)) bool mal_vm_array_contained_push_on
     return true;
 }
 
+/** The owning Core proof supplies the fresh Array and its unchanged final length. */
+static inline __attribute__((always_inline)) bool mal_vm_array_private_define_index(
+    MalValue receiver, u32 index, MalValue value
+) {
+    MalArrayObject *array = mal_value_to_array_object(receiver);
+    return !array->dense_deopted &&
+        mal_array_object_dense_store(array, index, value) == MAL_ARRAY_DENSE_APPLIED;
+}
+
+/** Growth may decline without changing the result, preserving the ordinary define fallback. */
+static inline __attribute__((always_inline)) bool mal_vm_array_private_append(
+    MalValue receiver, MalValue value
+) {
+    return mal_vm_array_contained_push_one(receiver, value) ||
+        mal_array_object_fresh_dense_append(mal_value_to_array_object(receiver), value);
+}
+
 /**
  * CreateDataProperty of a default element through the dense vector, mirroring
  * mal_array_object_store's fast arm; false defers to the generic define.

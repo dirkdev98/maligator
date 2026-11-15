@@ -124,7 +124,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 436;
+export const COMPILER_ARTIFACT_VERSION = 437;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -2799,6 +2799,21 @@ function writeCompilerArtifact(
 				}
 				w.u8(2);
 				w.i32(plan.directFunctionIndex);
+			} else if (
+				plan.kind === "private-array-store" &&
+				instruction.opcode === "DEFINE_PROPERTY"
+			) {
+				if (
+					(plan.mode !== "indexed" && plan.mode !== "append") ||
+					!instruction.enumerable ||
+					!instruction.writable ||
+					!instruction.configurable
+				)
+					throw new RangeError(
+						"program-image-codec: invalid private Array store metadata",
+					);
+				w.u8(28);
+				w.u8(plan.mode === "indexed" ? 0 : 1);
 			} else if (
 				plan.kind === "fresh-dense-reserve" &&
 				instruction.opcode === "CREATE_ARRAY"
@@ -5564,6 +5579,21 @@ function readCompilerArtifact(
 				nativeInstructions[instructionIndex] = {
 					kind: "construct",
 					directFunctionIndex,
+				};
+			} else if (tag === 28 && instruction.opcode === "DEFINE_PROPERTY") {
+				const mode = r.u8();
+				if (
+					mode > 1 ||
+					!instruction.enumerable ||
+					!instruction.writable ||
+					!instruction.configurable
+				)
+					throw new RangeError(
+						"program-image-codec: invalid private Array store metadata",
+					);
+				nativeInstructions[instructionIndex] = {
+					kind: "private-array-store",
+					mode: mode === 0 ? "indexed" : "append",
 				};
 			} else if (tag === 12 && instruction.opcode === "CREATE_ARRAY") {
 				const reserveLength = r.i32();

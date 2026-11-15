@@ -18299,6 +18299,30 @@ class NativeInstructionEmission {
 	emitDefineProperty(
 		instruction: Extract<BytecodeInstruction, { opcode: "DEFINE_PROPERTY" }>,
 	): Array<string> | null {
+		if (this.context.nativePlan?.kind === "private-array-store") {
+			const mode = this.context.nativePlan.mode;
+			const receiver = this.boxed(instruction.object);
+			const value = this.boxed(instruction.value);
+			const index =
+				mode === "append"
+					? `mal_value_to_array_object(${receiver})->length`
+					: `(u32) ${this.num(instruction.key)}`;
+			const attempt =
+				mode === "append"
+					? `mal_vm_array_private_append(${receiver}, ${value})`
+					: `mal_vm_array_private_define_index(${receiver}, ${index}, ${value})`;
+			const key =
+				mode === "append"
+					? `mal_ops_number_value((f64) ${index})`
+					: this.boxed(instruction.key);
+			return [
+				...(this.context.incomingRootPublication ?? []),
+				`if (!${attempt}) {`,
+				`  mal_vm_op_define_property(vm, ${receiver}, ${key}, ${value}, true, true, true);`,
+				`  ${this.throwCheck()}`,
+				`}`,
+			];
+		}
 		// The receiver's creation defined this declared field.
 		if (this.context.fusedFieldDefines.has(this.ip)) return [];
 		const stringIndex = this.context.staticDefineStringIndexByIp.get(this.ip);

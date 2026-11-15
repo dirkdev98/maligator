@@ -31,8 +31,9 @@ describe("inline Array iteration expansion", () => {
 		});
 	}, 600_000);
 
-	it("defines map and filter results through the dense vector", () => {
-		expect(source).toContain("mal_vm_array_try_define_index(");
+	it("defines map and filter results through the private Array store contract", () => {
+		expect(source).toContain("mal_vm_array_private_define_index(");
+		expect(source).toContain("mal_vm_array_private_append(");
 		expect(runToStdout(compiled)).toBe(expected);
 	});
 

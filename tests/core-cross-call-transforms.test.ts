@@ -1699,7 +1699,7 @@ describe("bounded Core cross-call transforms", () => {
 		).toBe(true);
 	});
 
-	it("defines expanded map results at a scalar index beside a captured loop counter", () => {
+	it("licenses fresh map stores at full-range scalar indices beside a captured loop counter", () => {
 		const core = lowerSemanticProgramToCore(
 			analyzeSourceAndRunSemanticAnalysis(
 				`
@@ -1723,6 +1723,7 @@ describe("bounded Core cross-call transforms", () => {
 		);
 		expect(defines).toHaveLength(1);
 		expect(fn.valueRepresentation(defines[0]!.inputs[1]!)).toBe("f64");
+		expect(defines[0]!.attributes.privateArrayStore).toBe("indexed");
 	});
 
 	it.each([

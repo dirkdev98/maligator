@@ -627,6 +627,15 @@ function verifyInstructionRows(
 				}
 				verifyEffectRefinement(instruction, refinement.effects, descriptor.effects);
 			}
+			if (
+				attributes.privateArrayStore !== undefined &&
+				(descriptor.opcode !== "defineProperty" ||
+					!["indexed", "append"].includes(attributes.privateArrayStore as string) ||
+					attributes.enumerable !== true ||
+					attributes.writable === false ||
+					attributes.configurable === false)
+			)
+				fail("Invalid private Array store proof");
 			if (attributes[CORE_KNOWN_OWN_DATA_ATTRIBUTE] !== undefined) {
 				const effects = refinement?.effects;
 				if (

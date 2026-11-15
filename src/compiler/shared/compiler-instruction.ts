@@ -977,6 +977,8 @@ type CompilerOperation =
 	  }
 	| {
 			type: "defineProperty";
+			/** Fresh default-species result and valid Array index; append also proves key equals length. */
+			privateArrayStore?: "indexed" | "append";
 
 			// [object, key, value]; defines an own data property. Ordinary
 			// object/class members use the writable/configurable defaults; class
