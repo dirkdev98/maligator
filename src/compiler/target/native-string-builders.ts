@@ -11,6 +11,8 @@ import type {
 } from "./native-string-code-points.ts";
 import { selectNativeStringEnums } from "./native-string-enums.ts";
 import type { NativeStringEnumPlan } from "./native-string-enums.ts";
+import { selectNativeStringScans } from "./native-string-scan.ts";
+import type { NativeStringScanPlan } from "./native-string-scan.ts";
 import type { NativeFunctionPlan, VmRegisterRepresentation } from "./program-image.ts";
 import {
 	decodeVmValueOperand,
@@ -39,6 +41,7 @@ export interface NativeStringBuilderPlan {
 	readonly actions: ReadonlyMap<number, NativeStringBuilderAction>;
 	readonly codePoints?: NativeStringCodePointPlan;
 	readonly enums?: NativeStringEnumPlan;
+	readonly scans?: ReadonlyMap<number, NativeStringScanPlan>;
 }
 
 export interface NativeStringBuilderAction {
@@ -451,10 +454,24 @@ export function planNativeStringBuilders(
 		rendering.codePointSteps ?? [],
 		rendering.switches,
 	);
+	let scanLiveness: RegisterLiveness | undefined;
+	const scans = selectNativeStringScans(
+		fn,
+		inputs,
+		plan,
+		codePoints?.sites ?? [],
+		(ip, register) =>
+			(scanLiveness ??= registerLiveness(
+				fn,
+				inputs.handlerTargets,
+				new Set(Array.from({ length: fn.registerCount }, (_, index) => index)),
+			)).in(ip, register),
+	);
 	return {
 		...plan,
 		...(codePoints === undefined ? {} : { codePoints }),
 		...(enums === undefined ? {} : { enums }),
+		...(scans.size === 0 ? {} : { scans }),
 	};
 }
 

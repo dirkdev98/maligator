@@ -314,6 +314,10 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
+- [ ] Resolve the record-route and complex-path regressions before accepting pure
+      String scan lowering. Use a same-source scan ablation to separate executed work
+      from code layout, then preserve the query gain with repeated record/list controls.
+
 - [ ] Close the in-process Express gap. `bench/http/express-in-process.cjs` in raw mode
       serves about 83k requests/s against Node's 188k, although sockets and parsing put
       Maligator ahead in the HTTP benchmark. JavaScript frames hold about 80% of the

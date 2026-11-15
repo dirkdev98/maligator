@@ -200,6 +200,7 @@ import {
 	renderNativeStringEnumOperation,
 } from "./native-string-enums.ts";
 import type { NativeStringEnumPlan } from "./native-string-enums.ts";
+import { renderNativeStringScan } from "./native-string-scan.ts";
 import { nativeValueConversion } from "./native-value-transport.ts";
 import type { NativeValueConversion } from "./native-value-transport.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
@@ -9317,6 +9318,15 @@ function emitBody(
 			for (const slot of fieldAllocations.get(ip - 1)?.boxedSlots ?? [])
 				if (slot !== undefined) activeFieldSlots.add(slot);
 			if (unreachable.has(ip)) continue;
+			// Backedges enter at the label; only fallthrough entry attempts a whole-copy scan.
+			if (!elided.has(ip))
+				for (const line of renderNativeStringScan(
+					stringBuilderPlan?.scans?.get(ip),
+					{ representations: reps },
+					stringBuilderPlan?.enums,
+					(index) => relocation.stringValue(index),
+				))
+					lines.push(`    ${line}`);
 			if (jumpTargets.has(ip) || regionReentryStates.has(ip)) {
 				lines.push(`L${ip}:;`);
 				// Control can arrive with different published frame metadata.

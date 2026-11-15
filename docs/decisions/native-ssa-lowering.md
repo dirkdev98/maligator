@@ -78,6 +78,16 @@ masking, and frame-linking contracts below apply to precise-root entries; conser
 entries preserve their live C storage and explicit helper ownership instead. Suspended
 coroutines retain traced snapshots independently of the active stack's root mode.
 
+Conservative entries can collapse a pure String copy loop into a bounded character
+scan. The first iteration must reach an inductive state: each copied character appends
+once, and live results at exhaustion are unchanged inputs, constants or the complete
+copy. Character-dependent branches become exclusions checked before consuming the
+cursor. Runtime guards check entry state and the deferred String iterator's authority;
+accepted scans reuse the source String and retire the local accumulator. Calls,
+observable changing counters and other effects retain ordinary iteration. Narrow,
+short, flat inputs keep scanning bounded without adding an allocating helper or
+extending the interval between safepoints on large inputs.
+
 Safepoint root transfer uses a scalar bitmap when physical registers fit one word.
 Block-indexed typed arrays hold generated, killed and live-in words; larger register
 sets retain the multiword solver. Both paths preserve ordered incoming, outgoing
