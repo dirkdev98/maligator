@@ -39,7 +39,16 @@ function opcodes(image: ProgramImage, name: string): ReadonlySet<string> {
 	return new Set(fn!.instructions.map((instruction) => instruction.opcode));
 }
 
-describe("run-time code in a program that keeps source closure", () => {
+describe("run-time code and compiled source scopes", () => {
+	it(
+		"keeps mapped arguments attached to parameters across sloppy eval scopes",
+		() =>
+			expectNodeOutput(
+				"tests/local/direct-eval-mapped-arguments.cjs",
+				"direct-eval-mapped-arguments",
+			),
+		scaledNativeRunTimeoutMs(600_000, STRESS_ENV),
+	);
 	it(
 		"keeps private CommonJS lowering around a strict function's direct eval",
 		() => {
@@ -86,15 +95,15 @@ describe("run-time code in a program that keeps source closure", () => {
 	);
 
 	it(
-		"optimizes what no CommonJS direct eval sees while each eval reaches its module's wrapper bindings",
+		"keeps iteration protocols while sloppy CommonJS eval reaches its wrapper bindings",
 		() => {
 			const image = expectNodeOutput(
 				"tests/local/direct-eval-cjs/main.cjs",
 				"direct-eval-cjs",
 			);
-			for (const name of ["sumRanges", "restTotal", "restUnseen"])
-				expect(opcodes(image, name).has("GET_ITERATOR"), name).toBe(false);
-			expect(opcodes(image, "restSeen").has("GET_ITERATOR")).toBe(true);
+			// Sloppy eval opens source closure through new vars and mapped arguments.
+			for (const name of ["sumRanges", "restTotal", "restUnseen", "restSeen"])
+				expect(opcodes(image, name).has("GET_ITERATOR"), name).toBe(true);
 		},
 		scaledNativeRunTimeoutMs(600_000, STRESS_ENV),
 	);

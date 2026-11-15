@@ -710,10 +710,12 @@ static inline MalValue mal_vm_load_dynamic_argument(
 }
 
 // Build an arguments object over `args`; a non-empty map aliases indexed
-// properties to captured formal bindings. Shared by both execution backends.
+// properties to the owning function's captured formals, across object and block
+// environments on the active chain. Shared by both execution backends.
 MalValue mal_create_arguments_object(
     MalVm *vm, const MalValue *args, i32 arg_count, MalValue callee, MalEnv *env,
-    bool mapped, i32 mapped_argument_count, const i32 *mapped_argument_slots
+    i32 owner_function_index, bool mapped, i32 mapped_argument_count,
+    const i32 *mapped_argument_slots
 );
 
 void mal_op_load_this(MalCallable *callable, const MalInstruction *instruction);

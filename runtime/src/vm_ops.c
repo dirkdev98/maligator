@@ -2519,14 +2519,18 @@ void mal_op_env_pop(MalCallable *callable) {
 
 MalValue mal_create_arguments_object(
     MalVm *vm, const MalValue *args, i32 arg_count, MalValue callee, MalEnv *env,
-    bool mapped, i32 mapped_argument_count, const i32 *mapped_argument_slots
+    i32 owner_function_index, bool mapped, i32 mapped_argument_count,
+    const i32 *mapped_argument_slots
 ) {
     MAL_PERF_COUNT(arguments_objects);
     // Arguments length is an ordinary data property, independent of indexed writes.
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    // Sloppy eval can prepend its persistent object scope before arguments are
+    // materialized; the parameter map must retain the activation's own cells.
+    MalEnv *parameter_env = mapped ? mal_vm_capture_owner(env, owner_function_index) : nullptr;
     MalObject *arguments = mapped
         ? (MalObject *) mal_arguments_object_new(
-            &vm->heap, prototype, env, mapped_argument_slots,
+            &vm->heap, prototype, parameter_env, mapped_argument_slots,
             mapped_argument_count, arg_count)
         : mal_object_new(&vm->heap, prototype);
     arguments->is_arguments = true;
@@ -2592,7 +2596,8 @@ void mal_op_create_arguments_object(MalCallable *callable, const MalInstruction 
 
     callable->arguments_object = mal_create_arguments_object(
         callable->vm, callable->arguments, callable->argument_count,
-        callable->callee, callable->env, callable->function->mapped_arguments,
+        callable->callee, callable->env, callable->function_index,
+        callable->function->mapped_arguments,
         callable->function->mapped_argument_count,
         callable->function->mapped_argument_slots
     );
@@ -2626,7 +2631,8 @@ void mal_op_load_static_argument(MalCallable *callable, const MalInstruction *in
         if (mal_value_is_undefined(callable->arguments_object)) {
             callable->arguments_object = mal_create_arguments_object(
                 callable->vm, callable->arguments, callable->argument_count,
-                callable->callee, callable->env, callable->function->mapped_arguments,
+                callable->callee, callable->env, callable->function_index,
+                callable->function->mapped_arguments,
                 callable->function->mapped_argument_count,
                 callable->function->mapped_argument_slots
             );
@@ -4323,7 +4329,7 @@ static MalValue mal_vm_rest_forward_state(
     MalVm *vm, const MalValue *args, i32 arg_count, i32 start, i32 flags) {
     return (flags & MAL_REST_FORWARD_ARGUMENTS_OBJECT) != 0
         ? mal_create_arguments_object(
-            vm, args, arg_count, mal_value_new_undefined(), nullptr, false, 0, nullptr)
+            vm, args, arg_count, mal_value_new_undefined(), nullptr, -1, false, 0, nullptr)
         : mal_create_rest_arguments(vm, args, arg_count, start);
 }
 

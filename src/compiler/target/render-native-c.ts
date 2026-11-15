@@ -10439,7 +10439,7 @@ interface NativeInstructionContext {
 	readonly inactiveRootMaskStatements?: ReadonlyMap<NativeInactiveRootMask, string>;
 	readonly ownedCaptureFunctionIndex?: number;
 	/** The rendered function, which owns the scope its direct closures are created in. */
-	readonly functionIndex?: number;
+	readonly functionIndex: number;
 	readonly directClosures?: ReadonlyMap<string, NativeDirectClosureEnvironment>;
 	/** The activation's memo of each chain test, by creation ip; equal layouts share one. */
 	readonly closureChainTests?: ReadonlyMap<number, string>;
@@ -16951,7 +16951,7 @@ class NativeInstructionEmission {
 				];
 			case "CREATE_ARGUMENTS_OBJECT":
 				return [
-					`r${instruction.dst} = mal_create_arguments_object(vm, args, arg_count, callee, env, ${this.context.mappedArguments}, ${this.context.mappedArgumentSlots.length}, ${this.context.mappedArgumentSlots.length > 0 ? `(const i32[]){ ${this.context.mappedArgumentSlots.join(", ")} }` : "nullptr"});`,
+					`r${instruction.dst} = mal_create_arguments_object(vm, args, arg_count, callee, env, ${this.context.relocation.functionIndex(this.context.functionIndex)}, ${this.context.mappedArguments}, ${this.context.mappedArgumentSlots.length}, ${this.context.mappedArgumentSlots.length > 0 ? `(const i32[]){ ${this.context.mappedArgumentSlots.join(", ")} }` : "nullptr"});`,
 				];
 			case "LOAD_ARGUMENT_COUNT":
 				if (this.context.directArgumentRepresentations !== undefined)
@@ -17020,7 +17020,7 @@ class NativeInstructionEmission {
 					`  r${instruction.dst} = ${direct};`,
 					`} else {`,
 					`  if (mal_value_is_undefined(r${instruction.fallback})) {`,
-					`    r${instruction.fallback} = mal_create_arguments_object(vm, args, arg_count, callee, env, ${this.context.mappedArguments}, ${this.context.mappedArgumentSlots.length}, ${this.context.mappedArgumentSlots.length > 0 ? `(const i32[]){ ${this.context.mappedArgumentSlots.join(", ")} }` : "nullptr"});`,
+					`    r${instruction.fallback} = mal_create_arguments_object(vm, args, arg_count, callee, env, ${this.context.relocation.functionIndex(this.context.functionIndex)}, ${this.context.mappedArguments}, ${this.context.mappedArgumentSlots.length}, ${this.context.mappedArgumentSlots.length > 0 ? `(const i32[]){ ${this.context.mappedArgumentSlots.join(", ")} }` : "nullptr"});`,
 					`  }`,
 					`  r${instruction.dst} = mal_vm_op_load_property(vm, r${instruction.fallback}, mal_value_from_i32(${instruction.index}));`,
 					`  ${this.throwCheck()}`,
