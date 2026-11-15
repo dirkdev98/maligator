@@ -235,7 +235,6 @@ function validateClosureCaptureValues(
 	if (
 		values.length === 0 ||
 		values.length > 16 ||
-		!fn.strict ||
 		fn.isAsync ||
 		fn.isGenerator ||
 		fn.isClassConstructor ||
