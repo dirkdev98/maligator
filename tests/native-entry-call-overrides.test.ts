@@ -158,7 +158,7 @@ function emitFullCallProbe(
 	const native = createConservativeNativePlan([
 		{
 			...fn,
-			needsArguments: true,
+			capturedCount: 1,
 			instructions: fn.instructions.map((op) =>
 				op.opcode === "CALL"
 					? { ...op, arguments: [...arguments_], argumentCount: arguments_.length }
