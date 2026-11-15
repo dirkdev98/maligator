@@ -74,6 +74,26 @@ test("aliases imported names to the exporting module's binding (shared storage)"
 	}
 });
 
+test("retains eval import targets without replacing implicit arguments annotations", () => {
+	const root = tree({
+		"a.mjs": "export let value = 1;",
+		"main.mjs":
+			'import { value } from "./a.mjs"; function read() { return eval("arguments[0] + value"); } read(2);',
+	});
+	const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"));
+	const mainFile = fileFor(program, path.join(root, "main.mjs"));
+	const imported = topBinding(mainFile, "value");
+	const exporter = topBinding(fileFor(program, path.join(root, "a.mjs")), "value");
+	const evalCall = imported.usageNodes.find((node) => node.type === "CallExpression")!;
+	const argumentsBinding = mainFile.nodeToBinding.get(evalCall);
+	expect(argumentsBinding?.implicit).toBe("arguments");
+	expect(argumentsBinding?.name).toBe("arguments");
+	const linkage = linkModules(program);
+	expect(linkage.importBindingTargets.get(imported)).toBe(exporter);
+	expect(mainFile.nodeToBinding.get(evalCall)).toBe(argumentsBinding);
+	expect(exporter.usageNodes).toContain(evalCall);
+});
+
 test("follows a named re-export to the original binding", () => {
 	const root = tree({
 		"a.mjs": `export function f() {\n\treturn 7;\n}\n`,

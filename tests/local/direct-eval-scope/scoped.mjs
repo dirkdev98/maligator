@@ -3,8 +3,6 @@ import { triple } from "./hot.mjs";
 
 let moduleCounter = 0;
 export let shared = "start";
-// Imported bindings are not marshaled to a direct eval, so a local alias hands it over.
-const tripled = triple;
 
 function numeric(value) {
 	return value * 2 + 1;
@@ -27,13 +25,13 @@ export function rebindShared(value) {
 
 export function oddArguments() {
 	let total = 0;
-	for (let index = 0; index < 200; index++) total += numeric(index) + tripled(index);
+	for (let index = 0; index < 200; index++) total += numeric(index) + triple(index);
 	return [
 		total,
 		eval("numeric('x')"),
 		eval("numeric(1, 2, 3)"),
-		eval("tripled('ab')"),
-		eval("tripled([7])"),
+		eval("triple('ab')"),
+		eval("triple([7])"),
 	];
 }
 

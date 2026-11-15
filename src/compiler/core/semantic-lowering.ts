@@ -231,6 +231,8 @@ interface CoreFrontendContext {
 	 * src/compiler/frontend/linker.ts).
 	 */
 	moduleDefaultBinding: Map<string, Binding>;
+	importBindingTargets: ReadonlyMap<Binding, Binding>;
+	directEvalImportGetters: Map<Binding, number>;
 
 	/**
 	 * `import * as ns` namespace objects to build per importing module path (see
@@ -921,6 +923,8 @@ export function constructSemanticProgramCore(
 		nextGlobalIndex: 0,
 
 		moduleDefaultBinding: new Map(),
+		importBindingTargets: new Map(),
+		directEvalImportGetters: new Map(),
 		namespaceImports: new Map(),
 		namespaceMembers: new Map(),
 		moduleNamespaces: new Map(),
@@ -969,6 +973,7 @@ export function constructSemanticProgramCore(
 	// no-op for a single-module program). Must run before frontend lowering so
 	// identifier resolution sees the aliased bindings.
 	const linkage = linkModules(semantic);
+	program.importBindingTargets = linkage.importBindingTargets;
 	if (options.sourceOrigins !== undefined) {
 		program.sourceOrigins = collectSourceFunctionOrigins(semantic, options.sourceOrigins);
 	}
@@ -14919,6 +14924,48 @@ function compileDirectEval(
 	return result;
 }
 
+function directEvalImportGetter(
+	program: CoreFrontendContext,
+	caller: CoreFrontendFunction,
+	binding: Binding,
+	exporter: Binding,
+): number {
+	const cached = program.directEvalImportGetters.get(binding);
+	if (cached !== undefined) return cached;
+	const getter: CoreFrontendFunction = {
+		semanticFile: caller.semanticFile,
+		functionIndex: program.nextFunctionIndex,
+		nameStringIndex: getOrCreateStringConstant(program, `get ${binding.name}`),
+		blocks: [],
+		hasPrototype: false,
+		strict: true,
+		parameterCount: 0,
+		length: 0,
+		nextCoreVariable: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
+	};
+	registerCoreFunction(program, getter);
+	const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	getter.blocks.push(block);
+	const value = loadRegisterFromLocation(
+		getter,
+		block,
+		getOrCreateBindingLocation(program, getter, exporter),
+	);
+	// Instantiating eval must not read an uninitialized cyclic import. The TDZ
+	// check belongs to each access, including one through an escaped eval closure.
+	block.emitter.emit({
+		type: "throwIfTdz",
+		registers: [value],
+		nameStringIndex: getOrCreateStringConstant(program, binding.name),
+	});
+	emitReturn(program, getter, block, value);
+	endFunction(program, getter);
+	program.directEvalImportGetters.set(binding, getter.functionIndex);
+	return getter.functionIndex;
+}
+
 /** PerformEval in the caller's scope: marshal its bindings, eval, write them back. */
 function compileDirectEvalCall(
 	program: CoreFrontendContext,
@@ -14970,8 +15017,25 @@ function compileDirectEvalCall(
 		directEvalDirtyTrackerKey(),
 		dirtyTracker,
 	);
-	// Marshal each visible binding's current value onto the scope object by name.
+	// Imports remain live during reentrant calls and after an eval closure escapes.
 	for (const [name, binding] of bindings) {
+		const exporter = program.importBindingTargets.get(binding);
+		if (exporter !== undefined) {
+			const getter = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
+				type: "createFunction",
+				registers: [getter],
+				functionIndex: directEvalImportGetter(program, fn, binding, exporter),
+			});
+			const key = compileStaticString(program, fn, cursor, name);
+			cursor.block.emitter.emit({
+				type: "defineAccessor",
+				registers: [scopeObject, key, getter],
+				kind: "get",
+				enumerable: true,
+			});
+			continue;
+		}
 		let value: number;
 		if (
 			program.evalDirect &&

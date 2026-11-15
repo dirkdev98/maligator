@@ -36,6 +36,9 @@ import { SyntaxDiagnostic } from "./syntax-diagnostic.ts";
  */
 
 export interface ModuleLinkage {
+	/** Original import bindings retained by eval scopes, resolved to live exporter storage. */
+	importBindingTargets: Map<Binding, Binding>;
+
 	/**
 	 * Synthetic bindings created to hold a module's anonymous `export default`
 	 * value, keyed by module path. ir.ts stores the compiled default value into
@@ -150,6 +153,7 @@ interface ModuleExports {
  */
 export function linkModules(program: SemanticProgram): ModuleLinkage {
 	const linkage: ModuleLinkage = {
+		importBindingTargets: new Map(),
 		moduleDefaultBinding: new Map(),
 		namespaceImports: new Map(),
 		moduleNamespaces: new Map(),
@@ -685,6 +689,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 			);
 			continue;
 		}
+		linkage.importBindingTargets.set(binding, exporter);
 		const writeTargets = writeTargetsFor(file);
 		for (const usage of binding.usageNodes) {
 			// An assignment/update target stays on the (immutable) import binding so
@@ -692,7 +697,8 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 			if (writeTargets.has(usage)) {
 				continue;
 			}
-			file.nodeToBinding.set(usage, exporter);
+			// Eval use markers retain declarations but carry other call-site bindings.
+			if (usage.type === "Identifier") file.nodeToBinding.set(usage, exporter);
 			// The exporter is used cross-module: record the usage on it so the
 			// exporting module's own dead-code elimination does not drop an
 			// exported-but-locally-unused declaration. A truly unimported export

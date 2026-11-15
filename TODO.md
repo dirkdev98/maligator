@@ -553,11 +553,6 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Preserve direct-eval completion-value identity and lexical write-back semantics.
       Cover abrupt completion and object identity as well as primitives.
 
-- [ ] Marshal ES import bindings into a direct eval's scope. With
-      `import { f } from "./m.mjs"`, `eval("typeof f")` gives `"undefined"`: the
-      linker aliases the import's usages to the exporter's binding, but the scope
-      still lists the import's own binding, whose slot nothing writes.
-
 - [ ] A direct eval inside eval code cannot see the compiled caller's bindings:
       `eval("eval('x + y')")` throws a ReferenceError in ES modules and CommonJS.
 - [ ] A static `require("x")` ignores a reassigned `require` binding and loads the real
