@@ -405,6 +405,8 @@ const server = http.createServer(function (request, response) {
 		return;
 	}
 
+	if (request.url === "/pending-half-close") return;
+
 	if (request.url === "/async") {
 		setTimeout(() => {
 			response.setHeader("X-Async", "yes");

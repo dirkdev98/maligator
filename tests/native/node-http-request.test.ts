@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createConnection } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	buildNativeBinary,
 	captureChildExit,
@@ -16,6 +16,7 @@ import {
 
 const responseHeaderCount = 400;
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-http-request-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("node:http request bridge", () => {
 	let binaries: Array<string>;
@@ -400,6 +401,34 @@ describe("node:http request bridge", () => {
 		await withServer(binaries[0]!, STRESS_ENV, checkWriteHeadAndClose);
 	});
 
+	it("aborts a pending response when the peer ends its write side", async () => {
+		for (const [binary, env] of [
+			[binaries[0]!, {}],
+			[binaries[1]!, {}],
+			[binaries[0]!, STRESS_ENV],
+		] as const) {
+			await withServer(binary, env, async (base) => {
+				const port = Number(new URL(base).port);
+				const response = await new Promise<string>((resolve, reject) => {
+					const socket = createConnection({ host: "127.0.0.1", port }, () => {
+						socket.end("GET /pending-half-close HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+					});
+					let response = "";
+					socket.setEncoding("utf8");
+					socket.setTimeout(10000, () =>
+						socket.destroy(new Error("peer EOF did not close response")),
+					);
+					socket.on("data", (chunk: string) => (response += chunk));
+					socket.once("end", () => resolve(response));
+					socket.once("error", reject);
+				});
+				expect(response).toBe("");
+				const next = await fetch(`${base}/async`);
+				expect(await next.text()).toBe("yes");
+			});
+		}
+	});
+
 	it("streams responses with bounded backpressure and wire-correct framing", async () => {
 		const runs = [
 			{ binary: binaries[0]!, env: {} },
@@ -451,20 +480,6 @@ describe("node:http request bridge", () => {
 				expect(wire.slice(wire.indexOf("\r\n\r\n") + 4)).toBe(
 					"2\r\nab\r\n3\r\ncde\r\n1\r\nf\r\n0\r\n\r\n",
 				);
-
-				const halfClosed = await new Promise<string>((resolve, reject) => {
-					const socket = createConnection({ host: "127.0.0.1", port }, () => {
-						socket.end("GET /async HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
-					});
-					let response = "";
-					socket.setEncoding("utf8");
-					socket.on("data", (chunk: string) => (response += chunk));
-					socket.on("end", () => resolve(response));
-					socket.once("error", reject);
-				});
-				// Like Node's default `httpAllowHalfOpen: false`, peer EOF aborts a
-				// dispatched request whose response has not ended yet.
-				expect(halfClosed).toBe("");
 
 				const fixed = await fetch(`${base}/fixed-stream`);
 				expect(fixed.headers.get("content-length")).toBe("6");
