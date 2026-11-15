@@ -161,13 +161,12 @@ compilation both contribute to developer-loop latency.
 These levels are cumulative facts consumed by one optimizer, not separate pipelines.
 Runtime eval may remove source closure without invalidating authority closure.
 
-- [ ] Extend the primordial-bindings guard past primitive Math and Number calls.
-      Object-producing namespace calls such as `Object.entries`, `Object.assign` and
-      `Array.from`, and constructions, keep their loaded and guarded form because entry
-      snapshots, record columns and typed array regions recognize it; javascript-v2
-      `dynamicObjects` takes 32 ms mutable against 26 closed. Those consumers would
-      have to accept the known call behind the guard. A known call after code that may
-      run JavaScript also stays generic, because `CALL_KNOWN` resolves its builtin through
+- [ ] Extend guarded primordial consumers beyond the current Object, Date, Math and
+      primitive-conversion admissions. `Object.entries` requires a single direct
+      iterator consumer; `Array.from` and constructions keep their loaded form because
+      entry snapshots, record columns and typed array regions consume it. Extend a
+      selected consumer to the known call behind the guard. A known call after code
+      that may run JavaScript also stays generic, because `CALL_KNOWN` resolves its builtin through
       the mutable graph when it runs, so `Number.isFinite(Number(text))` guards only the
       inner call. A loop a numeric region can take keeps its own entry speculation;
       admitting `GUARD_SEMANTIC_EPOCH` as a region entry guard would let it use both.
@@ -210,11 +209,14 @@ Shared lifetime and fallback rules are recorded in
 An existing iterator cursor is not, by itself, permission to delete its language
 object. Retained loop experiments preserve effects, authoritative state and fallback.
 
-- [ ] Store inlined `map` and `filter` results as appends to their fresh Array with an
-      int32 index. `a.map((x) => x * 2)` over eight elements still costs 3.6x Node: the
-      result comes from an in-place `new Array(n)`, but every element passes the generic
+- [ ] Define inlined `map` and `filter` results through their private fresh Array proof
+      with a bounded integer index. `a.map((x) => x * 2)` over eight elements still
+      costs 3.6x Node: the result comes from an in-place `new Array(n)`, but every element passes the generic
       define checks on an f64 index although the expansion proves the result fresh and
-      unreachable from the callback.
+      unreachable from the callback. Carry the owning Core proof and bounded index
+      range through lowering; preserve map holes and final length, sparse fallback,
+      filter growth and write barriers. Compare the removed output-store cost with
+      compiler work, native build cost and generated size.
 
 - [ ] Bound one typed-store side-exit experiment to core-to-execution or optimizer-queue
       and the corresponding compiler loop. First establish removable executed cost; then
@@ -342,14 +344,11 @@ contracts or investigates costs still visible after the string follow-ups.
       array-iterator protocol and a snapshot check per key) and `Object.entries` 2x (one
       pair array per entry).
 
-- [ ] Sort records with String fields through the record kernel. A comparator that
-      reads a Number field and then a String field, such as
-      `b.views - a.views || (a.title < b.title ? -1 : 1)`, costs 47 µs per 500 records
-      against Node's 10: the kernel speculates Number for every field, declines on the
-      String at run time, and the whole sort falls back to generic comparator calls.
-      A comparator passed through a variable never gets a kernel and pays about 9 ns
-      per comparison against Node's 2. Keys of a per-field kind, f64 or flat String,
-      with a leaf per kind combination would cover the first case.
+- [ ] Expose certified record-sort kernels through one repeated indirect comparator
+      consumer. Number and homogeneous String fields already have typed kernels;
+      trace a comparator passed through a binding to its first lost target proof.
+      Preserve generic comparison order for uncertified or heterogeneous keys, and
+      retain only repeated workload savings that repay analysis and generated size.
 
 - [ ] Reduce cold suspended async activation size or coallocate its result promise.
       Native activations already materialize lazily and recycle at completion; pending
@@ -407,12 +406,6 @@ contracts or investigates costs still visible after the string follow-ups.
       For the checked rope split/trim checksum, require full-output parity, safe
       fallback/reentry and throughput no worse than materialization on first-pass,
       repeated-input and flat controls.
-
-- [ ] Carry an owning Core proof for private default-species map/filter output stores,
-      or establish their index range through the eligibility guard. Remove repeated
-      index/descriptor checks only with that proof; preserve map holes and final length,
-      filter's geometric growth, write barriers and generic fallback. Compare the measured
-      output-store ceiling with compiler work, native build cost and generated size.
 
 - [ ] Reduce fixed per-exec setup and result materialization in `regexp-owned-repeat`,
       where every exec matches at `lastIndex` rather than scanning. Profile current
@@ -715,11 +708,6 @@ remains a Maligator extension and does not count as global fetch conformance.
       `isBuiltin("node:test")` and `process.getBuiltinModule("node:test")` omit it,
       because getBuiltinModule only loads native installers and the source module
       exists only in programs that import it. Node reports and loads it.
-
-- [ ] node:stream: a piped Readable whose `read()` never pushes stops after the first
-      buffered chunk when the destination drains; Node delivers the rest. `_malReading`
-      stays set after `_read`, so the resume path skips `stream_schedule_pull` and
-      never flushes the buffer.
 
 - [ ] Match Node's invalid-argument diagnostic inspection, including custom inspect
       hooks and thrown-hook precedence. Buffer validators and copyBytesFrom currently

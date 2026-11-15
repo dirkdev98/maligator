@@ -551,9 +551,11 @@ static void stream_schedule_readable_end(MalVm *vm, MalValue receiver) {
 
 static void stream_schedule_pull(MalVm *vm, MalValue receiver) {
     MalValue state = stream_own(vm, receiver, "_readableState");
+    // An outstanding producer read must not block delivery of already-buffered data.
     if (!stream_is_readable(vm, receiver)
         || (!stream_truthy_own(vm, receiver, "_malFlowing") && !stream_iterator_demand(vm, receiver))
-        || stream_truthy_own(vm, receiver, "_malReading")
+        || (stream_truthy_own(vm, receiver, "_malReading")
+            && stream_i32_own(vm, state, "length", 0) == 0)
         || stream_truthy_own(vm, receiver, "_malReadScheduled")
         || stream_truthy_own(vm, receiver, "destroyed")
         || stream_truthy_own(vm, state, "endEmitted")) {
