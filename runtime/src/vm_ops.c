@@ -4324,20 +4324,6 @@ MalCompletion mal_vm_op_call_spread_iterable(
     return completion;
 }
 
-static bool mal_vm_rest_arguments_can_forward(
-    MalVm *vm, MalValue callee, MalValue this_value, bool apply) {
-    if (!apply) return mal_builtin_array_iterator_protocol_guard(vm);
-    if (!mal_value_is_native_function_object(callee)) return false;
-    MalNativeFunctionObject *native = mal_value_to_native_function_object(callee);
-    if (mal_native_function_object_callback(native) != mal_builtin_function_prototype_apply) {
-        return false;
-    }
-#if MAL_REALMS
-    if (native->realm != vm->current_realm) return false;
-#endif
-    return mal_value_is_callable(this_value);
-}
-
 static MalValue mal_vm_rest_forward_state(
     MalVm *vm, const MalValue *args, i32 arg_count, i32 start, i32 flags) {
     return (flags & MAL_REST_FORWARD_ARGUMENTS_OBJECT) != 0
@@ -4404,7 +4390,20 @@ void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *ins
     bool apply = (flags & MAL_REST_FORWARD_APPLY) != 0;
     MalValue *state = &callable->registers[data[3]];
     i32 prefix_count = data[4];
-    i32 count = callable->argument_count > start ? callable->argument_count - start : 0;
+    MalValue positional[16];
+    const MalValue *arguments = callable->arguments;
+    i32 argument_count = callable->argument_count;
+    if ((flags & MAL_REST_FORWARD_POSITIONAL) != 0) {
+        argument_count = data[5 + prefix_count];
+        if (argument_count < 0 || argument_count > (i32) countof(positional)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid forwarded argument span");
+            return;
+        }
+        for (i32 index = 0; index < argument_count; index++)
+            positional[index] = callable->registers[data[6 + prefix_count + index]];
+        arguments = positional;
+    }
+    i32 count = argument_count > start ? argument_count - start : 0;
     i32 base = vm->value_stack_size;
     if (mal_value_is_undefined(*state)
         && prefix_count <= vm->value_stack_capacity - base
@@ -4415,7 +4414,7 @@ void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *ins
         MAL_PERF_ADD(rest_forward_copies, count);
         for (i32 i = 0; i < prefix_count; i++)
             vm->value_stack[base + i] = callable->registers[data[5 + i]];
-        if (count > 0) memcpy(&vm->value_stack[base + prefix_count], callable->arguments + start,
+        if (count > 0) memcpy(&vm->value_stack[base + prefix_count], arguments + start,
             (usize) count * sizeof(MalValue));
         count += prefix_count;
         vm->value_stack_size = base + count;
@@ -4424,9 +4423,12 @@ void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *ins
             this_value = receiver;
         }
     } else {
-        if (mal_value_is_undefined(*state))
-            *state = mal_vm_rest_forward_state(
-                vm, callable->arguments, callable->argument_count, start, flags);
+        if (mal_value_is_undefined(*state)) {
+            MalRootSpan source_roots;
+            mal_gc_root(&source_roots, (MalValue *) arguments, argument_count);
+            *state = mal_vm_rest_forward_state(vm, arguments, argument_count, start, flags);
+            mal_gc_unroot(&source_roots);
+        }
         if (apply) {
             if (vm->value_stack_capacity - base < 2) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");

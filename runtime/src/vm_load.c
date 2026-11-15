@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 96u
+#define WIRE_VERSION 97u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1259,7 +1259,7 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             i32 state = rd_i32(r);
             u32 prefix_count = rd_count(r, 1);
             if (!r->ok || start < 0 || state < 0 || (apply && prefix_count != 0) ||
-                (flags & ~(MAL_REST_FORWARD_APPLY | MAL_REST_FORWARD_ARGUMENTS_OBJECT)) != 0 ||
+                (flags & ~(MAL_REST_FORWARD_APPLY | MAL_REST_FORWARD_ARGUMENTS_OBJECT | MAL_REST_FORWARD_POSITIONAL)) != 0 ||
                 (arguments_object && start != 0) ||
                 !i32_builder_reserve(side_data, r, 5 + (usize) prefix_count)) {
                 r->ok = false;
@@ -1273,6 +1273,16 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             side_data->data[side_data->count++] = prefix_count;
             for (i32 i = 0; i < prefix_count; i++)
                 side_data->data[side_data->count++] = rd_i32(r);
+            if ((flags & MAL_REST_FORWARD_POSITIONAL) != 0) {
+                u32 source_count = rd_count(r, 1);
+                if (!r->ok || source_count > 16 || !i32_builder_reserve(side_data, r, 1 + source_count)) {
+                    r->ok = false;
+                    return;
+                }
+                side_data->data[side_data->count++] = source_count;
+                for (u32 i = 0; i < source_count; i++)
+                    side_data->data[side_data->count++] = rd_i32(r);
+            }
             return;
         }
         case WIRE_CALL_SPREAD_ITERABLE: {
@@ -2959,7 +2969,7 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                 i32 flags = data[2];
                 if (prefix_count < 0 || prefix_count > fn->instruction_data_count - offset - 5 ||
                     data[1] < 0 ||
-                    (flags & ~(MAL_REST_FORWARD_APPLY | MAL_REST_FORWARD_ARGUMENTS_OBJECT)) != 0 ||
+                    (flags & ~(MAL_REST_FORWARD_APPLY | MAL_REST_FORWARD_ARGUMENTS_OBJECT | MAL_REST_FORWARD_POSITIONAL)) != 0 ||
                     ((flags & MAL_REST_FORWARD_APPLY) != 0 && prefix_count != 0) ||
                     ((flags & MAL_REST_FORWARD_ARGUMENTS_OBJECT) != 0 && data[1] != 0)) {
                     r.ok = false; continue;
@@ -2968,6 +2978,13 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                     if (registers[index] < 0 || registers[index] >= fn->register_count) r.ok = false;
                 for (i32 index = 0; index < prefix_count; index++)
                     if (data[5 + index] < 0 || data[5 + index] >= fn->register_count) r.ok = false;
+                if ((flags & MAL_REST_FORWARD_POSITIONAL) != 0) {
+                    if (offset + 5 + prefix_count >= fn->instruction_data_count) { r.ok = false; continue; }
+                    i32 source_count = data[5 + prefix_count];
+                    if (source_count < 0 || source_count > 16 || source_count > fn->instruction_data_count - offset - 6 - prefix_count) { r.ok = false; continue; }
+                    for (i32 index = 0; index < source_count; index++)
+                        if (data[6 + prefix_count + index] < 0 || data[6 + prefix_count + index] >= fn->register_count) r.ok = false;
+                }
             } else if (instruction->opcode == MAL_OP_CALL) {
                 const i32 *data =
                     &fn->instruction_data[instruction->as.call.data_offset];

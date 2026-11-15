@@ -1320,6 +1320,7 @@ function verifyFunction(
 			}
 		}
 		if (fn.instructionOpcodeName(instruction) !== "callRestArguments") continue;
+		const sourceArgumentCount = fn.instructionAttributes(instruction).sourceArgumentCount;
 		const state = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 3);
 		const definition = fn.kernel.valueDefinitionOwner(state);
 		if (
@@ -1328,7 +1329,7 @@ function verifyFunction(
 				"createRestArgumentsState" ||
 			fn.isAsync ||
 			fn.isGenerator ||
-			fn.metadata.mappedArguments
+			(fn.metadata.mappedArguments && sourceArgumentCount === undefined)
 		)
 			fail("Invalid rest forwarding state");
 		const { startIndex, apply, argumentsObject } = fn.instructionAttributes(instruction);
@@ -1338,7 +1339,15 @@ function verifyFunction(
 			startIndex < 0 ||
 			typeof apply !== "boolean" ||
 			(argumentsObject !== undefined && (argumentsObject !== true || startIndex !== 0)) ||
-			(apply && fn.kernel.instructionOperandCount(instruction) !== 4)
+			(sourceArgumentCount !== undefined &&
+				(typeof sourceArgumentCount !== "number" ||
+					!Number.isSafeInteger(sourceArgumentCount) ||
+					sourceArgumentCount < 0 ||
+					sourceArgumentCount > 16 ||
+					sourceArgumentCount > fn.kernel.instructionOperandCount(instruction) - 4)) ||
+			(apply &&
+				fn.kernel.instructionOperandCount(instruction) !==
+					4 + (typeof sourceArgumentCount === "number" ? sourceArgumentCount : 0))
 		)
 			fail("Invalid rest forwarding arguments");
 	}

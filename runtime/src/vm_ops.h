@@ -3,7 +3,9 @@
 #include "./defaults.h"
 #include "array_object.h"
 #include "bound_function_object.h"
+#include "builtin_array.h"
 #include "builtin_data_view.h"
+#include "builtin_function.h"
 #include "builtin_iterator.h"
 #include "function_object.h" // mal_function_object_function_index, for the call guard
 #include "heap_symbol.h"
@@ -733,6 +735,21 @@ void mal_op_call_known(MalCallable *callable, const MalInstruction *instruction)
 
 void mal_op_call_spread(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *instruction);
+/** A private, unmaterialized argument list has no observable reads under this protocol. */
+static inline bool mal_vm_rest_arguments_can_forward(
+    MalVm *vm, MalValue callee, MalValue this_value, bool apply
+) {
+    if (!apply) return mal_builtin_array_iterator_protocol_guard(vm);
+    if (!mal_value_is_native_function_object(callee)) return false;
+    MalNativeFunctionObject *native = mal_value_to_native_function_object(callee);
+    if (mal_native_function_object_callback(native) != mal_builtin_function_prototype_apply)
+        return false;
+#if MAL_REALMS
+    if (native->realm != vm->current_realm) return false;
+#endif
+    return mal_value_is_callable(this_value);
+}
+
 MalCompletion mal_vm_op_call_rest_arguments(MalVm *vm, MalValue callee, MalValue this_value, MalValue receiver, const MalValue *args, i32 arg_count, i32 start, i32 flags, MalValue *state, const MalValue *prefix, i32 prefix_count);
 
 void mal_op_call_spread_iterable(

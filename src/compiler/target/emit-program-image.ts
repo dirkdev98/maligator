@@ -518,6 +518,8 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 					instruction.prefixArguments.length,
 					...instruction.prefixArguments,
 				);
+				if (instruction.sourceArguments !== undefined)
+					data.push(instruction.sourceArguments.length, ...instruction.sourceArguments);
 				break;
 			case "CALL_SPREAD_ITERABLE":
 				offsets[index] = data.length;

@@ -899,12 +899,14 @@ type CompilerOperation =
 	  }
 	| {
 			type: "callRestArguments";
-			// [result, callee, this, receiver, memoized rest state, ...prefix]
+			// [result, callee, this, receiver, memoized state, ...prefix, ...source]
 			registers: [number, number, number, number, number, ...Array<number>];
 			startIndex: number;
 			apply: boolean;
 			/** Forwards an unmapped `arguments`, which the fallback materializes as such. */
 			argumentsObject?: boolean;
+			/** Trailing operands snapshot an inlined activation instead of this frame. */
+			sourceArgumentCount?: number;
 	  }
 	| {
 			type: "callSpreadIterable";

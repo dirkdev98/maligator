@@ -1385,6 +1385,29 @@ The fast copy avoids the Array; shorter calls retain the original body and its
 inherited getters in evaluation order. Native entries with a fixed arity can fold
 this check without strengthening the generic function's contract.
 
+Positional calls can inline a bounded linear forwarding wrapper whose private list
+has one use. Core carries the inlined activation's immutable argument snapshots and
+the list's kind explicitly. The protocol guard exposes a normal positional call to
+call specialization and inlining. Its original forwarding operation remains as the
+fallback, using those same snapshots to materialize a real rest Array or unmapped
+arguments object. An unmapped arguments object owns its intrinsic values iterator;
+replacing Array.prototype's iterator therefore does not replace that method.
+
+Spread checks the Array iteration protocol. Apply compares the loaded method with
+the current realm's builtin and checks the target's callability, including when its
+identity is unknown. Inlining itself requires the callee's realm to match. Branching,
+repeated and escaping lists retain their activation-span path. Expansion budgets
+charge the bounded source span and protocol guard; the portable image
+carries the same source values for interpreted execution.
+
+Native forwarding without a prefix checks that its lazy list remains unmaterialized,
+the protocol still holds and the argument count fits the available call window.
+It then sends the rooted source span through cached dispatch from the instruction,
+avoiding the general forwarding helper's frame. Explicit source spans keep their own
+roots through fallback materialization. Mapped sloppy arguments retain their ordinary
+indexed observations. Failed guards preserve the original helper and its persistent
+materialized list.
+
 Mapper return identities can nominate element callees from a factory result without
 proving that factory's identity or the result's contents. A native call site checks
 the actual loaded function and enters its realm before calling the nominated body;

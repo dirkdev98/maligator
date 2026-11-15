@@ -1690,6 +1690,58 @@ describe("bounded Core cross-call transforms", () => {
 		expect(fn.valueRepresentation(defines[0]!.inputs[1]!)).toBe("f64");
 	});
 
+	it.each([
+		{ list: "rest", mode: "spread" },
+		{ list: "rest", mode: "apply" },
+		{ list: "arguments", mode: "spread" },
+		{ list: "arguments", mode: "apply" },
+	])(
+		"exposes $list $mode forwarding as positional calls behind its protocol guard",
+		({ list, mode }) => {
+			let optimized: CoreProgram | undefined;
+			compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					`function target(a, b, c) { return a + b + c; }
+					function forward(${list === "rest" ? "...values" : ""}) {
+						return ${mode === "spread" ? `target(...${list === "rest" ? "values" : "arguments"})` : `target.apply(null, ${list === "rest" ? "values" : "arguments"})`};
+					}
+					function hot(value) {
+						let checksum = 0;
+						for (let index = 0; index < 10; index++) checksum += forward(value, 3, 5);
+						return checksum;
+					}
+					globalThis.result = hot(1);`,
+					"core-inline-rest-forwarding.js",
+				),
+				{
+					facts: compilerProgramFactsFromConfig(
+						resolveBuildConfig({
+							engine: { primordials: "mutable", realms: true },
+						}),
+					),
+					coreVerification: "per-pass",
+					afterCoreOptimization(program) {
+						optimized = program;
+					},
+				},
+			);
+			const hot = coreFunctionNamed(optimized!, "hot")!;
+			const operations = coreOperations(hot);
+			expect(
+				operations.some(({ opcode, attributes }) =>
+					mode === "spread"
+						? opcode === "guardSemanticEpoch" && attributes.family === "array-iteration"
+						: opcode === "loadIntrinsic" &&
+							attributes.intrinsic === "__functionPrototypeApply",
+				),
+			).toBe(true);
+			const fallback = operations.find(({ opcode }) => opcode === "callRestArguments");
+			expect(fallback?.attributes.sourceArgumentCount).toBe(3);
+			expect(fallback?.attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE]).toBe(true);
+			verifyCoreProgram(optimized!, { stage: "pre-target" });
+		},
+	);
+
 	it("guards and inlines hot global rest argument snapshots", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(

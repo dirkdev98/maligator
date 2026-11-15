@@ -40,6 +40,7 @@ import { CoreEditor } from "./core-editor.ts";
 import { foldFiniteStringConstruction } from "./core-finite-string-construction.ts";
 import { coreFunctionIsCloneable } from "./core-function-clone.ts";
 import { CORE_FUNCTION_HAS_EDGE_ARGUMENTS } from "./core-function-features.ts";
+import { splitGuardedCall } from "./core-function-prototype-call.ts";
 import { continueGuardedCallArithmetic } from "./core-guarded-continuations.ts";
 import { removeCoreInstructions } from "./core-instruction-removal.ts";
 import {
@@ -2896,6 +2897,90 @@ const forwardRestArguments: CoreFunctionPass = {
 	},
 };
 
+const forwardPositionalArguments: CoreFunctionPass = {
+	name: "forward-positional-arguments",
+	stage: "canonicalize",
+	requiredFunctionOpcodesAny: ["callRestArguments"],
+	requiredAnalyses: [],
+	wakesOn: ["body", "cfg"],
+	changes: LOCAL_CHANGES,
+	budget: LOCAL_BUDGET,
+	run({ program, item, compilationContext }) {
+		const fn = program.function(item.function);
+		for (const site of fn.instructionIds()) {
+			if (
+				fn.instructionKind(site) !== "operation" ||
+				fn.instructionOpcodeName(site) !== "callRestArguments"
+			)
+				continue;
+			const attributes = fn.instructionAttributes(site);
+			const count = attributes.sourceArgumentCount;
+			if (
+				typeof count !== "number" ||
+				attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true
+			)
+				continue;
+			const inputs = copyInstructionOperands(fn, site);
+			const state = inputs[3]!;
+			const producer = definingInstruction(fn, state);
+			if (
+				producer === undefined ||
+				fn.instructionOpcodeName(producer) !== "createRestArgumentsState" ||
+				fn.instructionBlock(producer) !== fn.instructionBlock(site) ||
+				fn.kernel.valueHandlerUseCount(state) !== 0 ||
+				fn.instructionKind(fn.blockTerminator(fn.instructionBlock(site))) === "guard"
+			)
+				continue;
+			let uses = 0;
+			for (
+				let use = fn.kernel.valueFirstUse(state);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			)
+				if (fn.kernel.useLive(use) !== 0) uses++;
+			if (uses !== 1) continue;
+			const editor = CoreEditor.open(program, item.function);
+			const block = fn.instructionBlock(site);
+			const split = splitGuardedCall(fn, editor, site);
+			let direct = block;
+			if (attributes.apply === true) {
+				const builtin = split.append(block, "loadIntrinsic", [], {
+					intrinsic: "__functionPrototypeApply",
+				});
+				const callable = split.test(
+					split.append(block, "binary", [inputs[0]!, builtin], { operator: "===" }),
+				);
+				direct = split.test(
+					split.append(callable, "typeofCompare", [inputs[1]!], {
+						expected: "function",
+						negated: false,
+					}),
+				);
+			} else if (compilationContext.facts.world.primordialPolicy !== "locked") {
+				direct = split.test(
+					split.append(block, "guardSemanticEpoch", [], { family: "array-iteration" }),
+				);
+			}
+			editor.moveInstruction(producer, split.fallback, site);
+			const source = count === 0 ? [] : inputs.slice(-count);
+			const prefix = inputs.slice(4, inputs.length - count);
+			const forwarded = source.slice(attributes.startIndex as number);
+			split.finish(
+				direct,
+				split.append(
+					direct,
+					"call",
+					attributes.apply === true
+						? [inputs[1]!, inputs[2]!, ...forwarded]
+						: [inputs[0]!, inputs[1]!, ...prefix, ...forwarded],
+				),
+			);
+			return editor.commit();
+		}
+		return undefined;
+	},
+};
+
 // Larger literals keep one allocation rather than widening the call.
 const SPREAD_LITERAL_ELEMENT_LIMIT = 16;
 
@@ -3845,6 +3930,7 @@ const scalarizeBoundedRestReads: CoreFunctionPass = {
 export const CORE_LOCAL_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	annotateTerminalYieldSites,
 	forwardRestArguments,
+	forwardPositionalArguments,
 	spreadArrayLiteralArguments,
 	scalarizeRestArgumentReads,
 	scalarizeBoundedRestReads,
@@ -3910,6 +3996,7 @@ export const eliminateUnusedBlockParameters: CoreFunctionPass = {
 
 export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	forwardRestArguments,
+	forwardPositionalArguments,
 	spreadArrayLiteralArguments,
 	rewriteExactBuiltinCalls,
 	guardPrimordialBindingCalls,

@@ -609,8 +609,13 @@ export function withClosureCaptureValues(
 export function restForwardFlags(instruction: {
 	readonly apply: boolean;
 	readonly argumentsObject: boolean;
+	readonly sourceArguments?: ReadonlyArray<number>;
 }): number {
-	return (instruction.apply ? 1 : 0) | (instruction.argumentsObject ? 2 : 0);
+	return (
+		(instruction.apply ? 1 : 0) |
+		(instruction.argumentsObject ? 2 : 0) |
+		(instruction.sourceArguments === undefined ? 0 : 4)
+	);
 }
 
 export function computeArgumentRetentionLimit(
@@ -1249,6 +1254,8 @@ export type BytecodeInstruction =
 			argumentsObject: boolean;
 			state: number;
 			prefixArguments: Array<number>;
+			/** An inlined activation's snapshots; absent means the current activation. */
+			sourceArguments?: Array<number>;
 	  }
 	| {
 			opcode: "CALL_SPREAD_ITERABLE";
@@ -1575,6 +1582,7 @@ const VM_REGISTER_USE_FIELDS = [
 
 const VM_REGISTER_USE_ARRAY_FIELDS = [
 	"prefixArguments",
+	"sourceArguments",
 	"arguments",
 	"valueRegisters",
 	"keyRegisters",
@@ -2903,7 +2911,7 @@ const RUNTIME_INSTRUCTION_COPY_SCHEMA = {
 	STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT: { candidates: "nested" },
 	SELECT_SHAPE_CASE: { candidates: "nested" },
 	LOAD_PROPERTY_STATIC_SHAPE_CASE: { slots: "copy-list" },
-	CALL_REST_ARGUMENTS: { prefixArguments: "copy-list" },
+	CALL_REST_ARGUMENTS: { prefixArguments: "copy-list", sourceArguments: "copy-list" },
 	CALL_SPREAD_ITERABLE: { prefixArguments: "copy-list" },
 	CONSTRUCT_SUPER: { arguments: "copy-list" },
 	CREATE_PRIVATE_NAMES: { capturedIndices: "copy-list" },
@@ -4613,7 +4621,18 @@ function lowerInstructionToBytecodeInstruction(
 				apply: instruction.apply,
 				argumentsObject: instruction.argumentsObject === true,
 				state: instruction.registers[4],
-				prefixArguments: instruction.registers.slice(5),
+				prefixArguments: instruction.registers.slice(
+					5,
+					instruction.registers.length - (instruction.sourceArgumentCount ?? 0),
+				),
+				...(instruction.sourceArgumentCount === undefined
+					? {}
+					: {
+							sourceArguments:
+								instruction.sourceArgumentCount === 0
+									? []
+									: instruction.registers.slice(-instruction.sourceArgumentCount),
+						}),
 			};
 		case "callSpreadIterable":
 			return {

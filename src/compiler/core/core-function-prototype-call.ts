@@ -432,7 +432,7 @@ export function splitGuardedCall(
 	});
 	editor.removeInstruction(originalTerminator);
 	editor.moveInstruction(site, fallback);
-	editor.replaceInstruction(site, "call", operands, {
+	editor.replaceInstruction(site, fn.instructionOpcodeName(site), operands, {
 		attributes: {
 			...fn.instructionAttributes(site),
 			[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE]: true,

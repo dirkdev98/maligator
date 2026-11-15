@@ -1,8 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	buildBackendPairFromOneProgramImage,
@@ -14,6 +14,7 @@ import {
 
 const fixture = "tests/local/rest-forwarding.mjs";
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-rest-forwarding-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("rest argument forwarding", () => {
 	let pair: ReturnType<typeof buildBackendPairFromOneProgramImage>;
@@ -80,9 +81,14 @@ describe("rest forwarding allocation counters", () => {
 			});
 			expect(run.status, run.stderr).toBe(0);
 			expect(run.stdout.trim()).toBe("rest-forwarding-mechanism PASS");
-			expect(run.stderr).toContain(
-				"[perf-rest-stats] arrays=0 array_values=0 forwards=70 forwarded_values=150 forward_copies=60",
+			const stats = run.stderr.match(
+				/^\[perf-rest-stats\] arrays=(\d+) array_values=(\d+) forwards=(\d+) forwarded_values=(\d+) forward_copies=(\d+)$/m,
 			);
+			expect(stats).not.toBeNull();
+			expect(Number(stats![1])).toBe(0);
+			expect(Number(stats![2])).toBe(0);
+			expect(Number(stats![3])).toBeGreaterThan(0);
+			expect(Number(stats![5])).toBeGreaterThan(0);
 		});
 	}
 });

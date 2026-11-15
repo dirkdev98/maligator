@@ -204,6 +204,7 @@ typedef struct MalCompletion {
 // and builds that object, not an Array, when the call cannot forward the frame.
 #define MAL_REST_FORWARD_APPLY 1
 #define MAL_REST_FORWARD_ARGUMENTS_OBJECT 2
+#define MAL_REST_FORWARD_POSITIONAL 4
 
 typedef struct MalInstruction {
     MalOpcode opcode;

@@ -88,6 +88,19 @@ function intrinsicCheckCallers(
 }
 
 describe("Function.prototype.call, apply and bind sites", () => {
+	it("forwards a private literal through builtin apply when the target is unknown", () => {
+		const callers = intrinsicCheckCallers(
+			`function invoke(target, value) {
+				return target.apply(null, [value, 3]);
+			}
+			globalThis.invoke = invoke;`,
+			"__functionPrototypeApply",
+			"mutable",
+		);
+		expect(callers).toHaveLength(1);
+		expect(callers[0]!.opcodes).toContain("TYPEOF_COMPARE");
+	});
+
 	it("inline each factory call's own callback behind a check of the loaded call", () => {
 		const image = compile(shimSource);
 		const shims = image.native.functions.filter((fn) =>

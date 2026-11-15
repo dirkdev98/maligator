@@ -47,7 +47,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 96;
+export const WIRE_VERSION = 97;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -1271,6 +1271,11 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			w.u8(restForwardFlags(i));
 			w.i32(i.state);
 			w.i32Array(i.prefixArguments);
+			if (i.sourceArguments !== undefined) {
+				if (i.sourceArguments.length > 16)
+					throw new RangeError("program-image-codec: invalid forwarded argument span");
+				w.i32Array(i.sourceArguments);
+			}
 			return;
 		case "CALL_SPREAD_ITERABLE":
 			w.i32(i.dst);
@@ -2345,8 +2350,13 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 			const receiver = r.i32();
 			const startIndex = r.i32();
 			const flags = r.u8();
-			if ((flags & ~3) !== 0)
+			if ((flags & ~7) !== 0)
 				throw new RangeError("program-image-codec: invalid rest forwarding flags");
+			const state = r.i32();
+			const prefixArguments = r.i32Array();
+			const sourceArguments = (flags & 4) === 0 ? undefined : r.i32Array();
+			if (sourceArguments !== undefined && sourceArguments.length > 16)
+				throw new RangeError("program-image-codec: invalid forwarded argument span");
 			return {
 				opcode,
 				dst,
@@ -2356,8 +2366,9 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 				startIndex,
 				apply: (flags & 1) !== 0,
 				argumentsObject: (flags & 2) !== 0,
-				state: r.i32(),
-				prefixArguments: r.i32Array(),
+				state,
+				prefixArguments,
+				...(sourceArguments === undefined ? {} : { sourceArguments }),
 			};
 		}
 		case "CALL_SPREAD_ITERABLE":

@@ -225,6 +225,8 @@ const readAccessorInputs = new WeakMap<
 
 interface InlineTarget {
 	readonly captureValues: ReadonlyMap<CoreInstructionId, CoreValueId>;
+	readonly restArguments: ReadonlyMap<CoreInstructionId, number>;
+	readonly restExpansionCost: number;
 	readonly argumentSnapshots: boolean;
 	readonly construction: boolean;
 	readonly linear: boolean;
@@ -252,7 +254,7 @@ const INLINE_CODELESS_OPCODES: ReadonlySet<string> = new Set([
 ]);
 
 function inlineCodeSize(inline: InlineTarget): number {
-	let size = 0;
+	let size = inline.restExpansionCost;
 	for (const instruction of inline.instructions)
 		if (!INLINE_CODELESS_OPCODES.has(inline.function.instructionOpcodeName(instruction)))
 			size++;
@@ -349,6 +351,50 @@ const INLINE_UNSUPPORTED_OPCODES = new Set([
 	"constructSuperForward",
 	"loadCallee",
 ]);
+
+// Positional callers supply immutable snapshots of the inlined activation. Its
+// lazy list keeps its own source span, including when the caller has different
+// arguments or a failed protocol guard materializes the list.
+function inlineRestArguments(
+	fn: CoreFunctionStore,
+	argumentCount: number | undefined,
+	producers: ReadonlyArray<CoreInstructionId>,
+): ReadonlyMap<CoreInstructionId, number> {
+	const states = new Map<CoreInstructionId, number>();
+	if (argumentCount === undefined || argumentCount > 16) return states;
+	for (const instruction of producers) {
+		const state = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+		let start: number | undefined;
+		let uses = 0;
+		let valid = fn.kernel.valueHandlerUseCount(state) === 0;
+		for (
+			let use = fn.kernel.valueFirstUse(state);
+			use >= 0;
+			use = fn.kernel.useNext(use)
+		) {
+			if (fn.kernel.useLive(use) === 0) continue;
+			if (++uses > 1) {
+				valid = false;
+				break;
+			}
+			const consumer = coreInstructionId(fn.kernel.useInstruction(use));
+			const attributes = fn.instructionAttributes(consumer);
+			if (
+				fn.instructionOpcodeName(consumer) !== "callRestArguments" ||
+				fn.kernel.useOperand(use) !== 3 ||
+				fn.kernel.instructionOperandCount(consumer) > 4 + 16 ||
+				attributes.sourceArgumentCount !== undefined ||
+				typeof attributes.startIndex !== "number"
+			) {
+				valid = false;
+				break;
+			}
+			start = attributes.startIndex;
+		}
+		if (valid && start !== undefined) states.set(instruction, start);
+	}
+	return states;
+}
 
 /**
  * The callee's captured cells resolve to the same environments from the caller, so
@@ -825,11 +871,15 @@ function inlineTarget(
 		fn.metadata.capturedCount !== 0
 	)
 		return undefined;
-	const hasArgumentSnapshots = [...fn.instructionIds()].some(
-		(instruction) =>
-			fn.instructionKind(instruction) === "operation" &&
-			fn.instructionOpcodeName(instruction) === "loadArgument",
-	);
+	let hasArgumentSnapshots = false;
+	const restProducers: Array<CoreInstructionId> = [];
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode === "loadArgument") hasArgumentSnapshots = true;
+		if (opcode === "createRestArgumentsState") restProducers.push(instruction);
+	}
+	const restArguments = inlineRestArguments(fn, argumentCount, restProducers);
 	if (hasArgumentSnapshots && coreArgumentObservation(fn).kind === "general")
 		return undefined;
 	const functionParameters = new Set<CoreValueId>();
@@ -876,7 +926,18 @@ function inlineTarget(
 			}
 			if (
 				++instructionCount > (largerBody ? 128 : 48) ||
-				INLINE_UNSUPPORTED_OPCODES.has(opcode) ||
+				(INLINE_UNSUPPORTED_OPCODES.has(opcode) &&
+					!restArguments.has(instruction) &&
+					!(
+						opcode === "callRestArguments" &&
+						restArguments.has(
+							coreInstructionId(
+								fn.kernel.valueDefinitionOwner(
+									fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 3),
+								),
+							),
+						)
+					)) ||
 				(invocation !== "construct" && opcode === "loadNewTarget") ||
 				(invocation === "construct" &&
 					["createFunction", "envCopy", "envPop", "envPush"].includes(opcode)) ||
@@ -938,6 +999,9 @@ function inlineTarget(
 		return true;
 	};
 	if (!visit(fn.entry) || returns.length === 0) return undefined;
+	// The positional forwarding guard consumes one fresh state in the same block.
+	// Other control flow retains the activation-based forwarding operation.
+	if (restArguments.size > 0 && !linear) return undefined;
 	if (
 		invocation === "construct" &&
 		returns.some((value) => constructorReturnMode(fn, value) === undefined)
@@ -980,7 +1044,12 @@ function inlineTarget(
 	}
 	return {
 		captureValues,
-		argumentSnapshots: hasArgumentSnapshots,
+		restArguments,
+		restExpansionCost: [...restArguments.values()].reduce(
+			(cost, start) => cost + 8 + 2 * Math.max(0, argumentCount! - start),
+			0,
+		),
+		argumentSnapshots: hasArgumentSnapshots || restArguments.size > 0,
 		construction: invocation === "construct",
 		function: fn,
 		linear,
@@ -1976,7 +2045,9 @@ function offerFunctionCandidates(
 			const generatedCodeCost = inlines.reduce(
 				(cost, inline) =>
 					cost +
-					(inline?.instructions.length ?? 0) +
+					(inline === undefined
+						? 0
+						: inline.instructions.length + inline.restExpansionCost) +
 					(inline?.linear === false ? inline.blocks.length : 0) +
 					1,
 				0,
@@ -2015,7 +2086,9 @@ function offerFunctionCandidates(
 					compilerWorkCost: inlines.reduce(
 						(cost, inline) =>
 							cost +
-							(inline?.instructions.length ?? 0) +
+							(inline === undefined
+								? 0
+								: inline.instructions.length + inline.restExpansionCost) +
 							(inline?.function.valueCapacity ?? 0) +
 							4,
 						0,
@@ -2179,7 +2252,7 @@ function offerFunctionCandidates(
 			(inline === undefined
 				? 0
 				: open
-					? inline.instructions.length
+					? inline.instructions.length + inline.restExpansionCost
 					: inlineCodeSize(inline)) +
 				(inline?.linear === false ? inline.blocks.length : 0) +
 				(synchronousCallback?.created !== true
@@ -2257,7 +2330,9 @@ function offerFunctionCandidates(
 				generatedCodeCost: regionCost?.generatedCode ?? generatedCodeCost,
 				compilerWorkCost:
 					regionCost?.compilerWork ??
-					(inline?.instructions.length ?? 0) +
+					(inline === undefined
+						? 0
+						: inline.instructions.length + inline.restExpansionCost) +
 						(inline?.function.valueCapacity ?? 0) +
 						(synchronousCallback?.created !== true
 							? 0
@@ -3041,8 +3116,9 @@ function specializeCoreClosureFactories(
 
 /**
  * Calls `f` directly from `f.call(...)` sites, from `f.apply(...)` sites with an array
- * literal and from calls of what `f.bind(...)` returned, when `f` holds known script
- * functions. A binding that holds what `f.bind(...)` returned calls the bound
+ * literal and from calls of what `f.bind(...)` returned. A private literal can
+ * forward to any callable after checking the loaded apply. Other rewrites need
+ * nominated script targets. A binding that holds what `f.bind(...)` returned calls the bound
  * function's target behind a guard on the callee.
  */
 function devirtualizeCoreFunctionPrototypeCalls(
@@ -3089,7 +3165,10 @@ function devirtualizeCoreFunctionPrototypeCalls(
 				).instructionsIntroduced;
 				continue;
 			}
-			if (summaries.targets.targets(caller, rewrite.target).functions.length === 0)
+			if (
+				applied === undefined &&
+				summaries.targets.targets(caller, rewrite.target).functions.length === 0
+			)
 				continue;
 			editor ??= CoreEditor.open(program, caller);
 			instructions += (
@@ -3436,20 +3515,26 @@ function applyLinearInline(
 			if (inputs.some((value) => value === undefined)) {
 				throw new Error("Validated inline input has no caller value");
 			}
+			const forwarding = opcode === "callRestArguments";
 			const outputs = materializeInstructionResults(inline.function, instruction);
 			const inserted = editor.insertInstruction(
 				block,
 				candidate.site,
 				opcode,
-				inputs as ReadonlyArray<CoreValueId>,
+				forwarding
+					? [...(inputs as ReadonlyArray<CoreValueId>), ...arguments_]
+					: (inputs as ReadonlyArray<CoreValueId>),
 				{
 					outputCount: outputs.length,
 					outputRepresentations: outputs.map((value) =>
 						inline.function.valueRepresentation(value),
 					),
-					attributes: coreUnscopedInstructionAttributes(
-						inline.function.instructionAttributes(instruction),
-					),
+					attributes: {
+						...coreUnscopedInstructionAttributes(
+							inline.function.instructionAttributes(instruction),
+						),
+						...(forwarding ? { sourceArgumentCount: arguments_.length } : {}),
+					},
 					sourcePosition: sourcePositions.get(instruction),
 				},
 			);
@@ -4002,19 +4087,25 @@ function applyGuardedInline(
 				inputs.push(values.get(inline.function.kernel.operandAt(inputStart + index)));
 			if (inputs.some((value) => value === undefined))
 				throw new Error("Validated guarded inline input has no caller value");
+			const forwarding = opcode === "callRestArguments";
 			const outputs = materializeInstructionResults(inline.function, instruction);
 			const inserted = editor.appendInstruction(
 				destination,
 				opcode,
-				inputs as ReadonlyArray<CoreValueId>,
+				forwarding
+					? [...(inputs as ReadonlyArray<CoreValueId>), ...arguments_]
+					: (inputs as ReadonlyArray<CoreValueId>),
 				{
 					outputCount: outputs.length,
 					outputRepresentations: outputs.map((value) =>
 						inline.function.valueRepresentation(value),
 					),
-					attributes: coreUnscopedInstructionAttributes(
-						inline.function.instructionAttributes(instruction),
-					),
+					attributes: {
+						...coreUnscopedInstructionAttributes(
+							inline.function.instructionAttributes(instruction),
+						),
+						...(forwarding ? { sourceArgumentCount: arguments_.length } : {}),
+					},
 					sourcePosition: sourcePositions.get(instruction),
 				},
 			);
