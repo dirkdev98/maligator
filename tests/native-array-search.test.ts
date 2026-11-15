@@ -11,6 +11,8 @@ describe("guarded dense Array search lowering", () => {
 		["includes", true],
 		["indexOf", false],
 		["indexOf", true],
+		["lastIndexOf", false],
+		["lastIndexOf", true],
 	] as const)(
 		"retains loaded-callee fallback authority for %s with locked=%s",
 		(method, locked) => {
@@ -30,7 +32,9 @@ describe("guarded dense Array search lowering", () => {
 			expect(out.c.source).toContain(
 				method === "includes"
 					? "mal_builtin_array_includes_try"
-					: "mal_builtin_array_index_of_try",
+					: method === "indexOf"
+						? "mal_builtin_array_index_of_try"
+						: "mal_builtin_array_last_index_of_try",
 			);
 			expect(out.c.source).toContain("mal_vm_call_cached");
 			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(

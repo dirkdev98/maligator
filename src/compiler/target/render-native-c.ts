@@ -13146,13 +13146,19 @@ class NativeInstructionEmission {
 			];
 		}
 		if (!instruction.construct && instruction.argumentMode === undefined) {
-			if (instruction.operation === "Array.prototype.indexOf") {
+			if (
+				instruction.operation === "Array.prototype.indexOf" ||
+				instruction.operation === "Array.prototype.lastIndexOf"
+			) {
+				const reverse = instruction.operation === "Array.prototype.lastIndexOf";
+				const method = reverse ? "last_index_of" : "index_of";
+				const intrinsic = reverse ? "LAST_INDEX_OF" : "INDEX_OF";
 				const args = instruction.arguments.map(this.boxedOperand.bind(this));
-				const value = `index_of_result_${this.ip}`;
+				const value = `${method}_result_${this.ip}`;
 				const result = `known_result_${this.ip}`;
 				return [
 					`MalValue ${value};`,
-					`if (mal_builtin_array_index_of_try(vm, vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_INDEX_OF], ${this.boxedOperand(instruction.thisValue)}, ${args[0] ?? "MAL_VALUE_UNDEFINED"}, ${args[1] ?? "MAL_VALUE_UNDEFINED"}, &${value})) {`,
+					`if (mal_builtin_array_${method}_try(vm, vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_${intrinsic}], ${this.boxedOperand(instruction.thisValue)}, ${args[0] ?? "MAL_VALUE_UNDEFINED"}, ${args[1] ?? "MAL_VALUE_UNDEFINED"}${reverse ? `, ${args.length >= 2}` : ""}, &${value})) {`,
 					`r${instruction.dst} = ${this.callValue(instruction.dst, value)};`,
 					`} else {`,
 					`MalValue ${result} = mal_vm_call_known_native(vm, ${knownNativeEntries()[knownOperationIndex(instruction.operation)!]}, ${knownOperationIndex(instruction.operation)}, ${this.boxedOperand(instruction.thisValue)}, ${args.length === 0 ? "nullptr" : `((MalValue[]){ ${args.join(", ")} })`}, ${args.length}, 0);`,
@@ -15350,11 +15356,13 @@ class NativeInstructionEmission {
 				this.callPoll(),
 			];
 		}
-		if (vmCallProvesBuiltin(callPlan, "Array.prototype.indexOf")) {
-			const value = `__index_of_${this.ip}`;
+		const reverseIndex = vmCallProvesBuiltin(callPlan, "Array.prototype.lastIndexOf");
+		if (reverseIndex || vmCallProvesBuiltin(callPlan, "Array.prototype.indexOf")) {
+			const method = reverseIndex ? "last_index_of" : "index_of";
+			const value = `__${method}_${this.ip}`;
 			return [
 				`MalValue ${value};`,
-				`if (mal_builtin_array_index_of_try(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${args[0] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[0])}, ${args[1] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[1])}, &${value})) {`,
+				`if (mal_builtin_array_${method}_try(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${args[0] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[0])}, ${args[1] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[1])}${reverseIndex ? `, ${args.length >= 2}` : ""}, &${value})) {`,
 				`r${instruction.dst} = ${callResult(value)};`,
 				`} else {`,
 				...this.guardedCallFallbackRootPublication(),

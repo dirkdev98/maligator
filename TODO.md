@@ -36,12 +36,6 @@ themselves commit the project to optimizing every API.
       comes from the small-BigInt cache. It needs a 64-bit BigInt representation for
       phis whose inputs are wrapping results. Wider `BigInt(int32)` leaves still box.
 
-- [ ] Find why `ffi-owner-fields` "collecting the last child releases the owning result"
-      fails only in the Linux ASan Native remainder lane: the owning result survives a
-      collection after the saved child leaves scope, while macOS normal and UBSan runs
-      pass. Conservative native-stack retention under ASan frames is the suspect; a
-      retry would hide a real retention bug.
-
 - [ ] Diagnose the macOS node-fs-watch timeout with bounded phase evidence separating
       compilation, event delivery and teardown. Preserve watcher behavior and report an
       unreproduced or runner-only failure explicitly.

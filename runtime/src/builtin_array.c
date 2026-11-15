@@ -689,7 +689,7 @@ MalValue mal_builtin_array_dense_numeric_index_of(
     return mal_value_from_i32(-1);
 }
 
-static MalValue mal_builtin_array_dense_numeric_last_index_of(
+MalValue mal_builtin_array_dense_numeric_last_index_of(
     const MalArrayObject *array, MalValue search, u32 start
 ) {
     u32 end = array->dense_count < array->length
@@ -6125,7 +6125,8 @@ void mal_builtin_array_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "every", 1, mal_builtin_array_every);
     vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_INDEX_OF] =
         mal_intrinsic_define_method_n(vm, prototype, "indexOf", 1, mal_builtin_array_index_of);
-    mal_intrinsic_define_method_n(vm, prototype, "lastIndexOf", 1, mal_builtin_array_last_index_of);
+    vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_LAST_INDEX_OF] =
+        mal_intrinsic_define_method_n(vm, prototype, "lastIndexOf", 1, mal_builtin_array_last_index_of);
     vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_INCLUDES] =
         mal_intrinsic_define_method_n(vm, prototype, "includes", 1, mal_builtin_array_includes);
     vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_PUSH] =

@@ -560,6 +560,38 @@ async function main() {
 
 	check("indexOf", source.indexOf(3) === 2);
 	check("lastIndexOf", [1, 2, 1].lastIndexOf(1) === 2);
+	function reverseSearch(array, needle) {
+		return array.lastIndexOf(needle);
+	}
+	function reverseSearchFrom(array, needle, offset) {
+		return array.lastIndexOf(needle, offset);
+	}
+	const reverseValues = [1, , undefined, -0, "same", NaN, 1, "same"];
+	check(
+		"dynamic reverse searches distinguish omitted and undefined offsets",
+		reverseSearch(reverseValues, 1) === 6 &&
+			reverseSearchFrom(reverseValues, 1, undefined) === 0 &&
+			reverseSearchFrom(reverseValues, 1, NaN) === 0 &&
+			reverseSearchFrom(reverseValues, 1, 5.9) === 0 &&
+			reverseSearchFrom(reverseValues, 1, -2) === 6 &&
+			reverseSearchFrom(reverseValues, 1, -Infinity) === -1 &&
+			reverseSearchFrom(reverseValues, 1, Infinity) === 6 &&
+			reverseSearchFrom(reverseValues, 1, -100) === -1,
+	);
+	check(
+		"dynamic reverse searches preserve strict equality and skip holes",
+		reverseSearch(reverseValues, undefined) === 2 &&
+			reverseSearchFrom(reverseValues, undefined, 1) === -1 &&
+			reverseSearch(reverseValues, 0) === 3 &&
+			reverseSearch(reverseValues, NaN) === -1 &&
+			reverseSearch(reverseValues, "same") === 7,
+	);
+	const reverseOverride = [1, 2, 1];
+	reverseOverride.lastIndexOf = () => 42;
+	check(
+		"reverse search observes an own method override",
+		reverseSearch(reverseOverride, 1) === 42,
+	);
 	check("includes", [, 2].includes(undefined) && source.includes(4));
 	const denseSearch = [NaN, 1, , 2, 1, NaN];
 	check(
