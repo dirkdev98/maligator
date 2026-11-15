@@ -119,6 +119,41 @@ check(
 	"replacer reloads later values from the current slots",
 );
 
+const compact = {
+	label: 'line\n"\\ café 😀 \ud800 \udfff \b\f\r\t\0\u001f/',
+	price: 1.25,
+	tags: ["local", undefined, Symbol("fictional")],
+	details: { count: -2, active: true },
+};
+const compactExpected =
+	'{"label":"line\\n\\"\\\\ café 😀 \\ud800 \\udfff \\b\\f\\r\\t\\u0000\\u001f/","price":1.25,"tags":["local",null,null],"details":{"count":-2,"active":true}}';
+for (let repeat = 0; repeat < 4; repeat++) {
+	check(
+		JSON.stringify([compact, compact]) ===
+			"[" + compactExpected + "," + compactExpected + "]",
+		"compact record graphs preserve escapes, numbers and repeated siblings",
+	);
+}
+
+let functionCalls = 0;
+const callable = function () {};
+callable.toJSON = () => {
+	functionCalls++;
+	collect();
+	return "called";
+};
+const withCallable = { label: "日本", value: callable, last: 1 };
+for (let repeat = 0; repeat < 4; repeat++) {
+	check(
+		JSON.stringify(withCallable) === '{"label":"日本","value":"called","last":1}',
+		"compact staging preserves callable toJSON before omission",
+	);
+}
+check(
+	functionCalls === 4,
+	"declined compact staging invokes toJSON once per serialization",
+);
+
 const descriptorMutation = { first: 1, later: 2 };
 check(
 	JSON.stringify(descriptorMutation, function (key, value) {

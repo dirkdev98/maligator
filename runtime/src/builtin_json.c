@@ -1090,6 +1090,7 @@ typedef struct MalJsonPlainState {
     usize plan_bytes;
     // Shapes this call has laid out; the cache's own count spans earlier calls.
     usize call_shapes;
+    u32 compact_failed_values;
     struct MalJsonPlanCache *plan_cache;
     usize prototype_eviction_slot;
     // The traversal runs no JavaScript, so the last proven layouts and prototype
@@ -1672,6 +1673,190 @@ static bool mal_json_plain_flat_record(
     return true;
 }
 
+#define MAL_JSON_COMPACT_UNITS 512
+#define MAL_JSON_COMPACT_VALUES 64
+#define MAL_JSON_COMPACT_DEPTH 2
+#define MAL_JSON_COMPACT_FAILED_VALUES 8
+
+typedef struct MalJsonCompactRecord {
+    c16 units[MAL_JSON_COMPACT_UNITS];
+    const MalObject *parents[MAL_JSON_COMPACT_DEPTH];
+    usize length;
+    u32 remaining;
+    bool wide;
+} MalJsonCompactRecord;
+
+static bool mal_json_compact_ascii(
+    MalJsonCompactRecord *record, const u8 *bytes, usize length
+) {
+    if (length > MAL_JSON_COMPACT_UNITS - record->length) return false;
+    for (usize i = 0; i < length; i++) record->units[record->length++] = bytes[i];
+    return true;
+}
+
+static bool mal_json_compact_string(MalJsonCompactRecord *record, const MalString *string) {
+    usize length = mal_string_length(string);
+    usize available = MAL_JSON_COMPACT_UNITS - record->length;
+    MalStringSegment segment;
+    // The worst-case escape width bounds every store without per-unit reservations.
+    if (available < 2 || length > (available - 2) / 6 ||
+        !mal_string_try_get_segment(string, 0, length, &segment)) return false;
+    c16 *out = record->units + record->length;
+    *out++ = '"';
+    static const u8 hex[] = "0123456789abcdef";
+    for (usize i = 0; i < length; i++) {
+        c16 unit = mal_string_segment_code_unit_at(&segment, i);
+        c16 escape = 0;
+        switch (unit) {
+            case '"': escape = '"'; break;
+            case '\\': escape = '\\'; break;
+            case '\b': escape = 'b'; break;
+            case '\f': escape = 'f'; break;
+            case '\n': escape = 'n'; break;
+            case '\r': escape = 'r'; break;
+            case '\t': escape = 't'; break;
+        }
+        if (escape != 0) {
+            *out++ = '\\';
+            *out++ = escape;
+        } else if (unit >= 0xd800 && unit <= 0xdbff && i + 1 < length &&
+            mal_string_segment_code_unit_at(&segment, i + 1) >= 0xdc00 &&
+            mal_string_segment_code_unit_at(&segment, i + 1) <= 0xdfff) {
+            *out++ = unit;
+            *out++ = mal_string_segment_code_unit_at(&segment, ++i);
+            record->wide = true;
+        } else if (unit < 0x20 || mal_utf16_is_surrogate(unit)) {
+            *out++ = '\\';
+            *out++ = 'u';
+            *out++ = hex[unit >> 12];
+            *out++ = hex[(unit >> 8) & 0xf];
+            *out++ = hex[(unit >> 4) & 0xf];
+            *out++ = hex[unit & 0xf];
+        } else {
+            *out++ = unit;
+            record->wide |= unit > UINT8_MAX;
+        }
+    }
+    *out++ = '"';
+    record->length = (usize) (out - record->units);
+    return true;
+}
+
+static bool mal_json_compact_key(MalJsonCompactRecord *record, const MalJsonShapePlan *plan,
+    const MalJsonKeyPlan *key) {
+    if (key->length == 0 || key->length > MAL_JSON_COMPACT_UNITS - record->length)
+        return false;
+    const MalTextBuffer *keys = &plan->escaped_keys.buffer;
+    if (keys->utf16) {
+        memcpy(record->units + record->length,
+            (const c16 *) keys->data + key->offset, key->length * sizeof(c16));
+        record->length += key->length;
+        record->wide = true;
+        return true;
+    }
+    return mal_json_compact_ascii(record, (const u8 *) keys->data + key->offset, key->length);
+}
+
+static bool mal_json_compact_value(
+    MalJsonPlainState *plain, MalJsonCompactRecord *record, MalValue value,
+    const MalJsonShapePlan *known_plan, usize depth
+) {
+    if (record->remaining == 0) return false;
+    record->remaining--;
+    if (mal_value_is_string(value))
+        return mal_json_compact_string(record, mal_value_to_string(value));
+    if (mal_value_is_null(value)) return mal_json_compact_ascii(record, (const u8 *) "null", 4);
+    if (mal_value_is_boolean(value)) return mal_value_to_boolean(value)
+        ? mal_json_compact_ascii(record, (const u8 *) "true", 4)
+        : mal_json_compact_ascii(record, (const u8 *) "false", 5);
+    if (mal_json_is_number(value)) {
+        u8 digits[32];
+        usize length;
+        if (mal_value_is_int32(value)) {
+            i32 number = mal_value_to_i32(value);
+            u32 magnitude = number < 0 ? (u32) -(i64) number : (u32) number;
+            length = mal_json_i32_width(number);
+            u8 *out = digits + length;
+            do {
+                *--out = (u8) ('0' + magnitude % 10);
+                magnitude /= 10;
+            } while (magnitude != 0);
+            if (number < 0) *--out = '-';
+        } else {
+            f64 number = mal_ops_to_number(value);
+            if (!isfinite(number)) return mal_json_compact_ascii(record, (const u8 *) "null", 4);
+            if (number == 0) return mal_json_compact_ascii(record, (const u8 *) "0", 1);
+            length = mal_number_format_shortest_plain(number, digits);
+            if (length == 0) return false;
+        }
+        return mal_json_compact_ascii(record, digits, length);
+    }
+    if (!mal_value_is_object(value) || depth == MAL_JSON_COMPACT_DEPTH) return false;
+    const MalObject *object = mal_value_to_object(value);
+    for (usize i = 0; i < depth; i++) {
+        if (record->parents[i] == object) return false;
+    }
+    if (mal_json_plain_is_active(plain, object)) return false;
+    MalJsonFrame frame;
+    if (known_plan != nullptr) {
+        frame = (MalJsonFrame) {.plan = (MalJsonShapePlan *) known_plan,
+            .cached_plan = true, .count = known_plan->count};
+    } else if (!mal_json_plain_frame(plain, value, &frame)) {
+        return false;
+    }
+    if (frame.count > MAL_JSON_FLAT_RECORD_MEMBERS || (!frame.array && !frame.cached_plan))
+        return false;
+    record->parents[depth] = object;
+    if (!mal_json_compact_ascii(record, (const u8 *) (frame.array ? "[" : "{"), 1)) return false;
+    bool any = false;
+    for (usize i = 0; i < frame.count; i++) {
+        const MalJsonKeyPlan *key = frame.array ? nullptr : &frame.plan->keys[i];
+        MalValue member = frame.array ? mal_value_to_array_object(value)->elements[i]
+            : mal_object_field_load(object, key->slot);
+        if (!mal_value_is_object(member) && mal_json_value_is_omitted(member)) {
+            if (!frame.array) continue;
+            member = mal_value_new_null();
+        }
+        if ((any && !mal_json_compact_ascii(record, (const u8 *) ",", 1)) ||
+            (key != nullptr && !mal_json_compact_key(record, frame.plan, key)) ||
+            !mal_json_compact_value(plain, record, member, nullptr, depth + 1)) return false;
+        any = true;
+    }
+    return mal_json_compact_ascii(record, (const u8 *) (frame.array ? "]" : "}"), 1);
+}
+
+/**
+ * Stage a bounded plain record graph before reserving final output. This removes
+ * per-token buffer operations across escaped text, numbers and small containers.
+ * No JavaScript runs while staging, and a declined graph has written no output.
+ */
+static __attribute__((noinline)) bool mal_json_plain_compact_record(
+    MalJsonPlainState *plain, MalJsonBuilder *builder,
+    const MalObject *object, const MalJsonShapePlan *plan
+) {
+    MalJsonCompactRecord record;
+    record.length = 0;
+    record.remaining = MAL_JSON_COMPACT_VALUES;
+    record.wide = false;
+    if (!mal_json_compact_value(plain, &record, mal_value_from_object((MalObject *) object),
+            plan, 0)) {
+        plain->compact_failed_values += MAL_JSON_COMPACT_VALUES - record.remaining;
+        return false;
+    }
+    MalTextBuffer *buffer = &builder->buffer;
+    if ((record.wide ? mal_text_buffer_reserve_utf16(buffer, record.length)
+            : mal_text_buffer_reserve(buffer, record.length)) != MAL_TEXT_BUFFER_OK) return false;
+    if (buffer->utf16) {
+        memcpy((c16 *) buffer->data + buffer->length, record.units, record.length * sizeof(c16));
+    } else {
+        u8 *out = (u8 *) buffer->data + buffer->length;
+        for (usize i = 0; i < record.length; i++) out[i] = (u8) record.units[i];
+    }
+    buffer->length += record.length;
+    MAL_PERF_COUNT(json_flat_records);
+    return true;
+}
+
 static bool mal_json_plain_frame(
     MalJsonPlainState *state, MalValue value, MalJsonFrame *frame
 ) {
@@ -1919,6 +2104,7 @@ static bool mal_json_try_serialize_plain(
         state.plan_bytes = state.plan_cache->plan_bytes;
     }
     state.call_shapes = 0;
+    state.compact_failed_values = 0;
     mal_json_pointer_init(&state.keys);
     mal_json_pointer_init(&state.prototypes);
     mal_json_pointer_init(&state.active);
@@ -1956,8 +2142,18 @@ static bool mal_json_try_serialize_plain(
                 goto failed;
             }
             // A flat record is written whole, so the parent continues with its next member.
-            if (frame.array || !frame.cached_plan ||
-                !mal_json_plain_flat_record(&state, generic, builder, object, frame.plan, state.count)) {
+            bool flat_record = false;
+            if (!frame.array && frame.cached_plan) {
+                flat_record = mal_json_plain_flat_record(
+                    &state, generic, builder, object, frame.plan, state.count);
+                if (!flat_record && frame.count > 2 &&
+                    frame.count <= MAL_JSON_FLAT_RECORD_MEMBERS &&
+                    generic->gap_length == 0 &&
+                    state.compact_failed_values < MAL_JSON_COMPACT_FAILED_VALUES) {
+                    flat_record = mal_json_plain_compact_record(&state, builder, object, frame.plan);
+                }
+            }
+            if (!flat_record) {
                 mal_json_plain_push_frame(&state, object, &frame);
                 if (!mal_json_builder_push(builder, frame.array ? '[' : '{')) goto failed;
             }
@@ -2498,59 +2694,41 @@ static inline bool mal_json_segment_escape(
 }
 
 /**
- * Decodes an escaped string token that lies wholly in the current segment without
- * a growing buffer: one pass validates it and measures the decoded length and width,
- * the next writes the units into a stack buffer the string copies once. A malformed,
- * long or segment-crossing token returns false with the parser unmoved for the
- * builder path, which reports errors.
+ * Validate and decode a token confined to one segment into bounded UTF-16 scratch.
+ * Narrowing a Latin-1 result needs no second escape walk. A malformed, long or
+ * segment-crossing token leaves the parser unmoved for the diagnostic builder.
  */
 static bool mal_json_parse_escaped_in_segment(MalJsonParser *parser, usize start, MalValue *out) {
     const MalStringSegment *segment = &parser->segment;
     if (start < parser->segment_start) return false;
-    usize first = start - parser->segment_start;
+    usize index = start - parser->segment_start;
     usize decoded = 0;
     bool wide = false;
-    usize index = first;
+    c16 units[MAL_JSON_STACK_STRING_UNITS];
     for (;;) {
         if (index >= segment->length) return false;
         c16 unit = mal_json_segment_unit(segment, index);
         if (unit == '"') break;
-        if (unit < 0x20) return false;
+        if (unit < 0x20 || decoded == countof(units)) return false;
         usize width = 1;
         if (unit == '\\' &&
             (index + 1 >= segment->length || !mal_json_segment_escape(segment, index, &unit, &width)))
             return false;
-        wide |= unit > 0xFF;
-        if (++decoded > MAL_JSON_STACK_STRING_UNITS) return false;
+        wide |= unit > UINT8_MAX;
+        units[decoded++] = unit;
         index += width;
     }
-    usize end = index;
     MalHeap *heap = &parser->vm->heap;
     MalString *string;
     if (wide) {
-        c16 units[MAL_JSON_STACK_STRING_UNITS];
-        usize count = 0;
-        for (index = first; index < end;) {
-            c16 unit = mal_json_segment_unit(segment, index);
-            usize width = 1;
-            if (unit == '\\') mal_json_segment_escape(segment, index, &unit, &width);
-            units[count++] = unit;
-            index += width;
-        }
-        string = mal_string_new_copy(heap, units, count);
+        string = mal_string_new_copy(heap, units, decoded);
     } else {
-        u8 units[MAL_JSON_STACK_STRING_UNITS];
-        usize count = 0;
-        for (index = first; index < end;) {
-            c16 unit = mal_json_segment_unit(segment, index);
-            usize width = 1;
-            if (unit == '\\') mal_json_segment_escape(segment, index, &unit, &width);
-            units[count++] = (u8) unit;
-            index += width;
-        }
-        string = mal_string_new_latin1_copy(heap, units, count);
+        // Forward compaction cannot overwrite a UTF-16 unit that is still unread.
+        u8 *bytes = (u8 *) units;
+        for (usize i = 0; i < decoded; i++) bytes[i] = (u8) units[i];
+        string = mal_string_new_latin1_copy(heap, bytes, decoded);
     }
-    parser->position = parser->segment_start + end + 1;
+    parser->position = parser->segment_start + index + 1;
     *out = mal_value_from_string(string);
     return true;
 }
@@ -2887,23 +3065,25 @@ static void mal_json_object_members_init(MalJsonObjectMembers *members) {
     mal_gc_root(&members->root_span, members->roots, 0);
 }
 
-static void mal_json_object_members_append_key(MalJsonObjectMembers *members, MalKey key) {
-    if (members->count == members->capacity) {
-        usize capacity;
-        usize roots_bytes;
-        if (!mal_checked_size_growth(members->capacity, members->count + 1,
-                8, INT32_MAX / 2, &capacity) ||
-            !mal_checked_size_multiply(capacity, sizeof(MalValue) * 2, SIZE_MAX, &roots_bytes)) abort();
-        MalValue *roots = malloc(roots_bytes);
-        if (roots == nullptr) abort();
-        memcpy(roots, members->roots, sizeof(*roots) * members->count * 2);
-        if (members->roots != members->inline_roots) {
-            free(members->roots);
-        }
-        members->roots = roots;
-        members->capacity = capacity;
-        members->root_span.slots = roots;
+static __attribute__((noinline)) void mal_json_object_members_grow(MalJsonObjectMembers *members) {
+    usize capacity;
+    usize roots_bytes;
+    if (!mal_checked_size_growth(members->capacity, members->count + 1,
+            8, INT32_MAX / 2, &capacity) ||
+        !mal_checked_size_multiply(capacity, sizeof(MalValue) * 2, SIZE_MAX, &roots_bytes)) abort();
+    MalValue *roots = malloc(roots_bytes);
+    if (roots == nullptr) abort();
+    memcpy(roots, members->roots, sizeof(*roots) * members->count * 2);
+    if (members->roots != members->inline_roots) {
+        free(members->roots);
     }
+    members->roots = roots;
+    members->capacity = capacity;
+    members->root_span.slots = roots;
+}
+
+static inline void mal_json_object_members_append_key(MalJsonObjectMembers *members, MalKey key) {
+    if (members->count == members->capacity) mal_json_object_members_grow(members);
     members->roots[members->count * 2] = key.value;
     // The key must stay rooted while its value is parsed recursively.
     members->roots[members->count * 2 + 1] = MAL_VALUE_UNDEFINED;
@@ -2933,6 +3113,7 @@ typedef struct MalJsonKeyCacheEntry {
 typedef struct MalJsonShapeMemo {
     MalShape *shape;
     u32 count;
+    bool raw_keys;
     MalValue keys[MAL_JSON_SHAPE_MEMO_KEYS];
 } MalJsonShapeMemo;
 
@@ -2973,10 +3154,20 @@ static bool mal_json_key_is_retained(MalKey key) {
 }
 
 static MalValue mal_json_object_members_finalize(
-    MalJsonParser *parser, MalJsonObjectMembers *members
+    MalJsonParser *parser, MalJsonObjectMembers *members, MalShape *matched_shape
 ) {
     if (members->count == 0) {
         return mal_value_from_object(mal_intrinsic_new_object(parser->vm));
+    }
+
+    if (matched_shape != nullptr && matched_shape->inline_count == members->count) {
+        MalValue values[MAL_JSON_SHAPE_MEMO_KEYS];
+        for (usize i = 0; i < members->count; i++) values[i] = members->roots[i * 2 + 1];
+        MAL_PERF_COUNT(json_parse_shape_memo_hits);
+        MalObject *prototype = mal_value_to_object(
+            parser->vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+        return mal_value_from_object(mal_object_new_shaped(
+            &parser->vm->heap, prototype, matched_shape, values, (u32) members->count));
     }
 
     struct MalJsonKeyCache *cache = parser->vm->json_key_cache;
@@ -3045,8 +3236,17 @@ static MalValue mal_json_object_members_finalize(
             MalJsonShapeMemo *memo = &cache->shapes[cache->next_shape];
             memo->shape = shape;
             memo->count = shape_count;
+            memo->raw_keys = true;
             for (u32 i = 0; i < shape_count; i++) {
                 memo->keys[i] = mal_value_from_string(shape_keys[i]);
+                usize length = mal_string_length(shape_keys[i]);
+                MalStringSegment segment;
+                if (length > MAL_JSON_KEY_CACHE_BYTES ||
+                    !mal_string_try_get_segment(shape_keys[i], 0, length, &segment) ||
+                    (segment.latin1
+                        ? mal_json_latin1_safe_run(segment.latin1_units, length)
+                        : mal_json_utf16_unescaped_run(segment.utf16_units, length)) != length)
+                    memo->raw_keys = false;
             }
             cache->next_shape = (cache->next_shape + 1) % MAL_JSON_SHAPE_MEMOS;
         }
@@ -3168,16 +3368,52 @@ static bool mal_json_parse_key(MalJsonParser *parser, MalKey *out) {
     return true;
 }
 
+/**
+ * A memo admitting only escape-free keys predicts the ordered shape. The source
+ * must still match every unit and the closing quote; escapes and segment
+ * boundaries keep the decoding path.
+ */
+static bool mal_json_parse_shape_key(
+    MalJsonParser *parser, const MalShape *shape, usize index, MalKey *out
+) {
+    if (index >= shape->inline_count) return false;
+    MalValue value = shape->props[index].key;
+    MalString *string = mal_value_to_string(value);
+    usize length = mal_string_length(string);
+    usize offset = parser->position - parser->segment_start;
+    MalStringSegment key;
+    if (length > MAL_JSON_KEY_CACHE_BYTES || offset >= parser->segment.length ||
+        length >= parser->segment.length - offset ||
+        !mal_string_try_get_segment(string, 0, length, &key) ||
+        mal_string_segment_code_unit_at(&parser->segment, offset + length) != '"') return false;
+    if (parser->segment.latin1 && key.latin1) {
+        if (!mal_json_key_bytes_equal(
+                parser->segment.latin1_units + offset, key.latin1_units, length)) return false;
+    } else if (!parser->segment.latin1 && !key.latin1) {
+        if (memcmp(parser->segment.utf16_units + offset, key.utf16_units,
+                length * sizeof(c16)) != 0) return false;
+    } else {
+        for (usize i = 0; i < length; i++) {
+            if (mal_string_segment_code_unit_at(&parser->segment, offset + i) !=
+                mal_string_segment_code_unit_at(&key, i)) return false;
+        }
+    }
+    parser->position += length + 1;
+    *out = (MalKey) {.kind = MAL_KEY_STRING, .value = value};
+    return true;
+}
+
 static MalValue mal_json_parse_object_staged(
     MalJsonParser *parser, MalJsonParseNode **node_out
 ) {
     *node_out = nullptr;
     MalJsonObjectMembers members;
     mal_json_object_members_init(&members);
+    MalShape *matched_shape = nullptr;
 
     mal_json_skip_whitespace(parser);
     if (mal_json_consume(parser, '}')) {
-        MalValue result = mal_json_object_members_finalize(parser, &members);
+        MalValue result = mal_json_object_members_finalize(parser, &members, nullptr);
         mal_json_object_members_dispose(&members);
         return result;
     }
@@ -3191,7 +3427,25 @@ static MalValue mal_json_parse_object_staged(
         }
 
         MalKey property_key;
-        if (!mal_json_parse_key(parser, &property_key)) goto fail;
+        if (matched_shape == nullptr ||
+            !mal_json_parse_shape_key(parser, matched_shape, members.count, &property_key)) {
+            matched_shape = nullptr;
+            if (!mal_json_parse_key(parser, &property_key)) goto fail;
+            if (members.count == 0 && property_key.kind == MAL_KEY_STRING) {
+                struct MalJsonKeyCache *cache = parser->vm->json_key_cache;
+                if (cache != nullptr) {
+                    for (usize i = 0; i < countof(cache->shapes); i++) {
+                        MalJsonShapeMemo *memo = &cache->shapes[i];
+                        if (memo->shape != nullptr && memo->count != 0 && memo->raw_keys &&
+                            memo->keys[0] == property_key.value) {
+                            // Retain the immutable shape, since nested values may replace the memo.
+                            matched_shape = memo->shape;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         mal_json_object_members_append_key(&members, property_key);
 
         mal_json_skip_whitespace(parser);
@@ -3213,7 +3467,7 @@ static MalValue mal_json_parse_object_staged(
             continue;
         }
         if (mal_json_consume(parser, '}')) {
-            MalValue result = mal_json_object_members_finalize(parser, &members);
+            MalValue result = mal_json_object_members_finalize(parser, &members, matched_shape);
             mal_json_object_members_dispose(&members);
             return result;
         }
@@ -3864,6 +4118,22 @@ done:
     return ok;
 }
 
+#define MAL_JSON_CURSOR(name) mal_json_latin1_cursor_##name
+#define MAL_JSON_UNIT u8
+#define MAL_JSON_UNITS(segment) ((segment).latin1_units)
+#include "json_parse_cursor.h"
+#undef MAL_JSON_UNITS
+#undef MAL_JSON_UNIT
+#undef MAL_JSON_CURSOR
+
+#define MAL_JSON_CURSOR(name) mal_json_utf16_cursor_##name
+#define MAL_JSON_UNIT c16
+#define MAL_JSON_UNITS(segment) ((segment).utf16_units)
+#include "json_parse_cursor.h"
+#undef MAL_JSON_UNITS
+#undef MAL_JSON_UNIT
+#undef MAL_JSON_CURSOR
+
 static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
@@ -3896,7 +4166,10 @@ static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const Mal
 
     mal_json_parser_init(&parser);
     MalJsonParseNode *root_node = nullptr;
-    MalValue result = mal_json_parse_value(&parser, &root_node);
+    MalValue result = !track_source && parser.segment.length == parser.length
+        ? parser.segment.latin1 ? mal_json_latin1_cursor_value(&parser, 0)
+            : mal_json_utf16_cursor_value(&parser, 0)
+        : mal_json_parse_value(&parser, &root_node);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         mal_json_parse_node_dispose(root_node);
         if (track_source) {

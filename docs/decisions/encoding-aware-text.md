@@ -230,8 +230,19 @@ The parser consumes a segmented cursor. It accumulates small integer magnitudes
 while validating; fractional, exponent, and larger numbers retain their original
 token in byte scratch for conversion, preserving negative zero. Unescaped strings
 within one leaf can retain safe slices using that leaf's owner/offset. Cross-leaf
-and escaped tokens append consumed segments to compact output without source-root
+tokens append consumed segments to compact output without source-root
 reseeks. Source ranges remain absolute UTF-16 offsets.
+
+Flat documents without a reviver use encoding-specific cursors, sharing the
+structural grammar across Latin-1 and UTF-16 instantiations. They retain the
+canonical string decoder, number conversion and object construction. Short number
+tokens use bounded byte scratch; long tokens return to the streaming parser after
+a bounded prefix. Ordered shape memos can match a complete raw key and colon
+directly. Admission excludes keys needing escapes, and every source unit still
+has to match. A mismatch resumes ordinary key decoding without replaying values.
+Nested values retain immutable shapes because they may replace the mutable memos.
+Escaped leaf strings validate and decode in one pass, then compact Latin-1 results
+without another escape walk.
 
 Reviver source records lazily index canonical keys and the last duplicate
 occurrence, preserving property order and `context.source`. Parse records retain
@@ -252,9 +263,20 @@ across callbacks.
 A guarded serializer handles eligible ordinary shaped objects and packed arrays
 iteratively. It proves the absence of observable hooks over relevant prototypes,
 rejects unsupported storage/exotics, and uses active-path identities for cycles.
-Per-call shape plans reuse property order/slots and escaped keys; the rooted input
+Shape plans reuse property order/slots and escaped keys; the rooted input
 graph remains immutable throughout this callback-free traversal. It uses heap
 frames and is not subject to the generic recursive container cap.
+
+Small compact record graphs can stage escaped strings, ordinary numbers and
+packed nested containers in bounded UTF-16 scratch, then append the whole record
+with one reservation. The active path includes both the outer traversal and the
+staged graph, allowing repeated siblings while declining cycles. Unsupported
+values, exhausted scratch or traversal budgets, and observable hooks decline
+before final output changes. Failed attempts spend a per-call work budget so a deep
+or heterogeneous suffix cannot repeatedly trigger the same speculative traversal.
+Small records keep the existing member paths when staging cannot amortize its cost.
+Number formatting shares the ordinary shortest
+formatter; unsupported representations keep generic serialization.
 
 Optional cache admission allows 64 KiB of requested plan bytes and encoded-key
 buffer capacities. Shape/prototype maps each hold at most 256 entries, using at
@@ -267,7 +289,7 @@ its cache growth, including width promotion, fits. Declining optional caching
 causes neither output discard nor generic fallback. Prototype proofs use bounded
 rotating eviction, so eligibility may revalidate a prototype chain.
 
-Replacers, property lists, and indentation select the generic path from the start.
+Replacers and property lists select the generic path from the start.
 When plain traversal reaches an unsupported descendant, it rolls back only the
 current member's uncommitted separator/key and resumes generic serialization on
 the active stack. Completed output is retained. Before invoking user code it roots
@@ -276,8 +298,9 @@ length, and transfers active-path cycle membership. Subsequent properties use
 observable Get and preparation; shape slots and prototype proofs are no longer
 reused. A callback can mutate later properties without changing the saved key
 order or causing earlier hooks to run again. Deep generic subtrees continue on
-heap frames. Caches stay within one invocation, avoiding cross-call
-shape/prototype invalidation state. Quoting scans safe runs in both
+heap frames. Immutable shape/key plans can survive calls within their existing
+budget. Reentrant calls use local plans while that cache is borrowed; prototype
+proofs retain their mutation-epoch guards. Quoting scans safe runs in both
 encodings in bulk. UTF-16 scanning stops before surrogates so the existing pair
 handling can span leaves; lone surrogates are escaped. A short scalar prefix
 preserves the short-run and dense-escape path. The complete-pipeline phase profiler
