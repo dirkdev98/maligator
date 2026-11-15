@@ -240,8 +240,9 @@ In a CommonJS module the bindings in scope include the wrapper's `module`,
 already published to host code. `require` is the loader's intrinsic, which a
 computed `require(expression)` reaches too: it rejects a specifier and otherwise
 returns some module's published `module.exports`, running its wrapper once through
-the registry. Every CommonJS module parses strict, so its direct evals are strict
-as well.
+the registry. A CommonJS wrapper starts sloppy unless its source has a `"use strict"`
+directive prologue. Nested functions inherit that strictness or introduce their own
+directive. The Node globals prelude preserves the source's directive prologue.
 
 The closure certificate keeps source closure for such a program unless a module
 parsed sloppy may call a direct eval (it adds `var`s to its caller's variable

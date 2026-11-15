@@ -133,12 +133,12 @@ describe("program closure certificate", () => {
 		expect(certificate.sourceClosure.kind).toBe("known");
 	});
 
-	test("keeps closure for a CommonJS direct eval and names its module", () => {
+	test("keeps closure for a strict CommonJS direct eval and names its module", () => {
 		const entry = project(
 			{
 				"entry.cjs": 'require("./helper.cjs");\n',
 				"helper.cjs":
-					"let local = 1;\nmodule.exports = eval('local + require.length');\n",
+					"\"use strict\";\nlet local = 1;\nmodule.exports = eval('local + require.length');\n",
 			},
 			"entry.cjs",
 		);
@@ -156,14 +156,14 @@ describe("program closure certificate", () => {
 		expect(certificate.sourceClosure.kind).toBe("known");
 	});
 
-	test("opens closure for a direct eval in a module parsed sloppy", () => {
+	test("opens closure for a sloppy CommonJS direct eval", () => {
 		const entry = project(
 			{ "entry.cjs": "var local = 1;\neval('var added = local');\n" },
 			"entry.cjs",
 		);
 		const config = resolveBuildConfig({ engine: { eval: true } });
 		const certificate = certifyProgramClosure(
-			buildModuleGraph(entry, { buildConfig: config, entryStrict: false }),
+			buildModuleGraph(entry, { buildConfig: config }),
 			config,
 			wholeProgram,
 		);
@@ -492,10 +492,14 @@ describe("dynamic code reach", () => {
 		);
 	});
 
-	test("confines a CommonJS direct eval to the bindings in its scope", () => {
+	test("confines a strict CommonJS direct eval to the bindings in its scope", () => {
 		expect(
 			unconfinedDynamicCode(
-				factsWith({ eval: true }, "let x;\neval('x + exports.length');\n", "entry.cjs"),
+				factsWith(
+					{ eval: true },
+					"\"use strict\";\nlet x;\neval('x + exports.length');\n",
+					"entry.cjs",
+				),
 			),
 		).toBe(false);
 	});

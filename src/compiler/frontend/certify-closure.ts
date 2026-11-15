@@ -162,7 +162,7 @@ function dynamicCodeOpenings(
 				modulePath,
 			);
 		if (!mayCallDirectEval(record)) continue;
-		// Every module parses strict unless its entry was explicitly parsed sloppy.
+		// A sloppy wrapper can extend its variable environment through direct eval.
 		if (!record.parsed.strict)
 			return unconfined(
 				"engine.eval is true and a sloppy direct eval can add var bindings to its caller and read its mapped arguments",

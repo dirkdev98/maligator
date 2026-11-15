@@ -771,21 +771,28 @@ export function buildModuleGraph(
 					: recordObservations(memoKey !== undefined, () => {
 							const sourcePath = catalogSources.get(filePath)?.sourcePath;
 							let parseSource = baseParseSource(filePath, source, goal, sourcePath);
+							let cjsPrelude: string | undefined;
 							if (filePath === entry && options.entryPrelude !== undefined) {
 								const specifier = JSON.stringify(options.entryPrelude.specifier);
-								parseSource =
-									goal === "cjs"
-										? `require(${specifier});\n${parseSource}`
-										: `import ${specifier};\n${parseSource}`;
+								if (goal === "cjs") cjsPrelude = `require(${specifier});`;
+								else parseSource = `import ${specifier};\n${parseSource}`;
 							}
 							parseSource =
 								options.transformSource?.files.has(filePath) === true
 									? options.transformSource.transform(parseSource, filePath)
 									: parseSource;
-							const strict = filePath === entry ? (options.entryStrict ?? true) : true;
+							const strict =
+								goal !== "cjs" &&
+								(filePath === entry ? (options.entryStrict ?? true) : true);
 							const parse = () => {
 								try {
 									const parsed = parseWithGoal(parseSource, goal, strict);
+									// Parse the user's directive prologue before adding executable prelude code.
+									if (cjsPrelude !== undefined) {
+										parsed.ast.body.unshift(
+											...parseScript(cjsPrelude, { strict: false }).ast.body,
+										);
+									}
 									return { parsed, dependencies: extractDependencies(parsed.ast, goal) };
 								} catch (error) {
 									if (error instanceof SyntaxError) {
@@ -798,8 +805,10 @@ export function buildModuleGraph(
 									throw error;
 								}
 							};
+							const cacheSource =
+								cjsPrelude === undefined ? parseSource : `${cjsPrelude}\n${parseSource}`;
 							const parsedModule =
-								options.parseCache?.parse(filePath, parseSource, goal, parse, strict) ??
+								options.parseCache?.parse(filePath, cacheSource, goal, parse, strict) ??
 								parse();
 							const parsed = parsedModule.parsed;
 
@@ -1154,17 +1163,19 @@ export function buildModuleGraph(
 	};
 }
 
-/**
- * Parse a module's source according to its goal.
- *
- * Scripts and (for now) CommonJS both parse as scripts; CommonJS sloppy-mode
- * parsing arrives with the CJS-consume milestone.
- */
+/** CommonJS wrappers inherit strictness only from their own directive prologue. */
 function parseWithGoal(source: string, goal: ModuleGoal, strict: boolean) {
 	if (goal === "module") {
 		return parseModule(source);
 	}
-	return parseScript(source, { strict });
+	const parsed = parseScript(source, { strict: goal !== "cjs" && strict });
+	if (goal === "cjs") {
+		parsed.strict = parsed.ast.body.some(
+			(statement) =>
+				statement.type === "ExpressionStatement" && statement.directive === "use strict",
+		);
+	}
+	return parsed;
 }
 
 /**
