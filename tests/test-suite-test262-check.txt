@@ -236,6 +236,8 @@ test/language/eval-code/direct/new.target-fn.js
 test/language/eval-code/direct/super-prop-method.js
 test/language/eval-code/direct/var-env-var-strict-caller-2.js
 test/language/eval-code/direct/var-env-func-init-multi.js
+test/language/eval-code/direct/var-env-func-init-local-new-delete.js
+test/language/eval-code/direct/var-env-var-init-local-new-delete.js
 test/language/export/escaped-default.js
 test/language/expressions/arrow-function/lexical-super-call-from-within-constructor.js
 test/language/expressions/assignment/assignment-operator-calls-putvalue-lref--rval-.js

@@ -535,7 +535,7 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Eval correctness
 
-- [ ] Finish EvalDeclarationInstantiation behavior for persistence, deletion,
+- [ ] Finish EvalDeclarationInstantiation behavior for declaration persistence,
       non-definable globals, and strict or sloppy conflicts. Cover every relevant
       environment kind.
 

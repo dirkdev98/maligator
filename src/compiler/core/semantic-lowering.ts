@@ -12786,11 +12786,12 @@ function compileUnaryExpression(
 		if (binding) {
 			retainHostGlobal(program, binding);
 		}
-		if (binding?.undeclared && !identifierLoadsIntrinsic(program, argument.name)) {
-			if (
-				fn.semanticFile.withDynamicNodes.has(argument) ||
-				directEvalFreeIdentifierUsesDynamicEnvironment(program, fn, argument)
-			) {
+		if (
+			binding !== undefined &&
+			(isDirectEvalVarBindingValue(program, fn, binding) ||
+				(binding.undeclared && !identifierLoadsIntrinsic(program, argument.name)))
+		) {
+			if (identifierUsesDynamicEnvironment(program, fn, argument)) {
 				return compileWithDynamicTypeof(program, fn, cursor, argument);
 			}
 			const destination = nextCoreVariable(fn);
@@ -12864,10 +12865,7 @@ function compileDeleteExpression(
 
 	// `delete <identifier>` is only reachable in sloppy mode (strict rejects it).
 	if (expression.argument.type === "Identifier") {
-		// A `with`-intercepted name deletes the property off the active with-object
-		// that provides it (spec DeleteBinding on the object environment record),
-		// falling back to the static delete when no with-object has it.
-		if (fn.semanticFile.withDynamicNodes.has(expression.argument)) {
+		if (identifierUsesDynamicEnvironment(program, fn, expression.argument)) {
 			return compileWithDynamicDelete(program, fn, cursor, expression.argument);
 		}
 		return compileStaticIdentifierDelete(program, fn, cursor, expression.argument);
@@ -12894,7 +12892,10 @@ function compileStaticIdentifierDelete(
 	identifier: ESTree.Identifier,
 ): number {
 	const binding = fn.semanticFile.nodeToBinding.get(identifier);
-	if (binding?.undeclared) {
+	if (
+		binding !== undefined &&
+		(binding.undeclared || isDirectEvalVarBindingValue(program, fn, binding))
+	) {
 		retainHostGlobal(program, binding);
 		const destination = nextCoreVariable(fn);
 		cursor.block.emitter.emit({
@@ -12915,10 +12916,8 @@ function compileStaticIdentifierDelete(
 }
 
 /**
- * `delete <identifier>` inside a `with`: probe the active with-object(s) for the
- * name (innermost first, honoring `Symbol.unscopables`); if one provides it, delete
- * the property off that object; otherwise fall back to the static delete. The two
- * paths join with the boolean result in one register.
+ * Resolve deletion through object and eval environments. Caller bindings are
+ * non-deletable; eval-created bindings retain their persistent scope's attributes.
  */
 function compileWithDynamicDelete(
 	program: CoreFrontendContext,
@@ -12948,9 +12947,41 @@ function compileWithDynamicDelete(
 	};
 	cursor.block.emitter.emit(missJump, foundJump);
 
-	// Found: delete the property off the captured with-object.
 	const foundIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[foundIdx]!;
+	let callerScopeJoin: Extract<CompilerInstruction, { type: "jump" }> | undefined;
+	if (program.directEvalScopeObjectBinding !== undefined) {
+		const scope = loadCapturedBinding(
+			program,
+			fn,
+			cursor,
+			program.directEvalScopeObjectBinding,
+		);
+		const matches = nextCoreVariable(fn);
+		const callerJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+			type: "jumpIf",
+			registers: [matches],
+			blocks: [-1],
+		};
+		const deleteJump: Extract<CompilerInstruction, { type: "jump" }> = {
+			type: "jump",
+			blocks: [-1],
+		};
+		cursor.block.emitter.emit(
+			{ type: "binary", registers: [matches, base, scope], operator: "===" },
+			callerJump,
+			deleteJump,
+		);
+		callerJump.blocks[0] = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+		cursor.block = fn.blocks[callerJump.blocks[0]]!;
+		callerScopeJoin = { type: "jump", blocks: [-1] };
+		cursor.block.emitter.emit(
+			{ type: "createBoolean", registers: [result], value: false },
+			callerScopeJoin,
+		);
+		deleteJump.blocks[0] = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+		cursor.block = fn.blocks[deleteJump.blocks[0]]!;
+	}
 	const key = nextCoreVariable(fn);
 	cursor.block.emitter.emit({
 		type: "createString",
@@ -12967,7 +12998,6 @@ function compileWithDynamicDelete(
 	};
 	cursor.block.emitter.emit(foundJoin);
 
-	// Miss: static delete into the same result register.
 	const missIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[missIdx]!;
 	const staticResult = compileStaticIdentifierDelete(program, fn, cursor, identifier);
@@ -12983,6 +13013,7 @@ function compileWithDynamicDelete(
 	missJump.blocks[0] = missIdx;
 	foundJoin.blocks[0] = joinIdx;
 	missJoin.blocks[0] = joinIdx;
+	if (callerScopeJoin !== undefined) callerScopeJoin.blocks[0] = joinIdx;
 	cursor.block = fn.blocks[joinIdx]!;
 	return result;
 }
@@ -17295,7 +17326,10 @@ function getOrCreateBindingLocation(
 	fn: CoreFrontendFunction,
 	binding: Binding,
 ) {
-	if (binding.undeclared && !compilerPrivateIntrinsics.has(binding.name)) {
+	if (
+		(binding.undeclared && !compilerPrivateIntrinsics.has(binding.name)) ||
+		isDirectEvalVarBindingValue(program, fn, binding)
+	) {
 		return globalPropertyLocation(program, binding.name);
 	}
 	let location = program.bindingToStorage.get(binding);
