@@ -1501,7 +1501,9 @@ calls. Other object-producing calls and constructions keep the guarded forms tha
 snapshot, column and typed array regions consume. A loop that admits a numeric region
 keeps that region's entry speculation.
 An `Object.entries` result consumed directly by iteration can join a guarded run.
-Count and indexed observations retain one producer for native snapshot transport.
+An immediate sole `.length` projection stays inside both twins, so count-only native
+transport retains its producer and only the projected value crosses the join. Delayed
+count and indexed observations retain one producer for native snapshot transport.
 Noncoercing Number predicates also use this guard with multiple realms enabled. Their
 proof belongs to the executing function's realm, whose globals and intrinsics the call
 boundary installs. The

@@ -3713,3 +3713,36 @@ describe("mutable namespace guards in the executing realm", () => {
 		expect(output.core.some((op) => op.opcode === "guardSemanticEpoch")).toBe(false);
 	});
 });
+
+describe("guarded entries count boundaries", () => {
+	it.each([
+		"return Object.entries(value);",
+		"const entries=Object.entries(value);return entries.length+entries[0];",
+		"const entries=Object.entries(value);observe();return entries.length;",
+		"return Object.entries(value)[0];",
+	])("retains one loaded producer for %s", (body) => {
+		const output = inspectStaticValueFunction(
+			`function probe(value,observe){${body}}globalThis.probe=probe;`,
+			"probe",
+			{ locked: false, realms: false },
+		);
+		expect(
+			output.core.some(
+				(op) => op.opcode === "callKnown" && op.attributes.operation === "Object.entries",
+			),
+		).toBe(false);
+		expect(output.core.some((op) => op.opcode === "call")).toBe(true);
+	});
+	it("keeps allocating entries calls generic with realms enabled", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(value){return Object.entries(value).length}globalThis.probe=probe;",
+			"probe",
+			{ locked: false, realms: true },
+		);
+		expect(
+			output.core.some(
+				(op) => op.opcode === "callKnown" && op.attributes.operation === "Object.entries",
+			),
+		).toBe(false);
+	});
+});

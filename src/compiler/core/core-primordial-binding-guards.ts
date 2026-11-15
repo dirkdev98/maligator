@@ -206,6 +206,7 @@ interface Site {
 	/** The method lookup, which is also the first lookup for a primitive receiver. */
 	readonly method?: CoreInstructionId;
 	readonly call: CoreInstructionId;
+	readonly consumer?: CoreInstructionId;
 	readonly intrinsic?: CompilerIntrinsic;
 	readonly operation: string;
 	readonly kind: "method" | "function" | "primitive";
@@ -403,20 +404,42 @@ function siteFor(
 		ownDataPrimordial(namespaceNode, program.stringConstantText(key), world),
 	);
 	if (operation === undefined) return undefined;
+	let consumer: CoreInstructionId | undefined;
 	if (operation === "Object.entries") {
 		const result = results(fn, call)[0]!;
 		const use = fn.kernel.valueFirstUse(result);
-		// Count/index snapshots keep their producer in one block for target transport.
 		if (
 			fn.kernel.valueHandlerUseCount(result) !== 0 ||
 			use < 0 ||
 			fn.kernel.useNext(use) >= 0 ||
-			fn.kernel.useOperand(use) !== 0 ||
-			opcodeOf(fn, fn.kernel.useInstruction(use)) !== "getIterator"
+			fn.kernel.useOperand(use) !== 0
 		)
 			return undefined;
+		const useInstruction = coreInstructionId(fn.kernel.useInstruction(use));
+		if (opcodeOf(fn, useInstruction) !== "getIterator") {
+			if (opcodeOf(fn, useInstruction) !== "loadPropertyStatic") return undefined;
+			const lengthKey = fn.instructionAttributes(useInstruction).stringIndex;
+			if (
+				typeof lengthKey !== "number" ||
+				program.stringConstantText(lengthKey) !== "length" ||
+				fn.instructionBlock(useInstruction) !== block ||
+				fn.instructionNext(call) !== useInstruction ||
+				fn.instructionEffectRefinement(useInstruction) !== undefined
+			)
+				return undefined;
+			// The count stays with its producer so only the projection crosses the join.
+			consumer = useInstruction;
+		}
 	}
-	return { name: namespace, method: callee, call, intrinsic, operation, kind: "method" };
+	return {
+		name: namespace,
+		method: callee,
+		call,
+		...(consumer === undefined ? {} : { consumer }),
+		intrinsic,
+		operation,
+		kind: "method",
+	};
 }
 
 /**
@@ -678,7 +701,7 @@ class RunPlanner {
 		const span: Array<CoreInstructionId> = [];
 		let open = false;
 		let last: CoreInstructionId | undefined;
-		for (const site of sites) last = site.call;
+		for (const site of sites) last = site.consumer ?? site.call;
 		for (const instruction of fn.bodyInstructionIds(fn.instructionBlock(last!))) {
 			if (!open && members.has(instruction)) open = true;
 			if (open) span.push(instruction);

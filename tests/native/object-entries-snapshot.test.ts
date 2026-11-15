@@ -65,6 +65,7 @@ describe("Object.entries snapshots", () => {
 				environment: { ...process.env, MAL_PERF_STATS: "1" },
 			});
 			for (const name of [
+				"entriesImmediateCount",
 				"entriesCount",
 				"entriesIndex",
 				"entriesMaterialize",
@@ -82,7 +83,7 @@ describe("Object.entries snapshots", () => {
 					name,
 				).toBe(true);
 			}
-			for (const mode of ["count", "index", "materialize", "semantics"]) {
+			for (const mode of ["immediate", "count", "index", "materialize", "semantics"]) {
 				const env = {
 					MAL_PRIMORDIALS: primordials,
 					ENTRIES_CASE: mode,
@@ -111,7 +112,7 @@ describe("Object.entries snapshots", () => {
 				const admissions = Number(stats[1]),
 					outer = Number(stats[2]),
 					pairs = Number(stats[3]);
-				if (mode === "count") {
+				if (mode === "count" || mode === "immediate") {
 					const count = measured.stderr.match(
 						/\[perf-object-entries-count-stats\] admissions=(\d+)/,
 					);

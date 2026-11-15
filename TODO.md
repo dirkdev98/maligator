@@ -156,12 +156,13 @@ These levels are cumulative facts consumed by one optimizer, not separate pipeli
 Runtime eval may remove source closure without invalidating authority closure.
 
 - [ ] Extend guarded primordial consumers beyond the current Object, Date, Math and
-      primitive-conversion admissions. `Object.entries` requires a single direct
-      iterator consumer; `Array.from` and constructions keep their loaded form because
-      entry snapshots, record columns and typed array regions consume it. Extend a
+      primitive-conversion admissions. `Object.entries` observations beyond a single direct
+      iterator or immediate sole `.length` consumer retain their loaded producer.
+      `Array.from` and constructions keep their loaded form because entry snapshots,
+      record columns and typed array regions consume it. Extend a
       selected consumer to the known call behind the guard. A known call after code
-      that may run JavaScript also stays generic, because `CALL_KNOWN` resolves its builtin through
-      the mutable graph when it runs, so `Number.isFinite(Number(text))` guards only the
+      that may run JavaScript also stays generic, because `CALL_KNOWN` resolves its
+      builtin through the mutable graph when it runs, so `Number.isFinite(Number(text))` guards only the
       inner call. A loop a numeric region can take keeps its own entry speculation;
       admitting `GUARD_SEMANTIC_EPOCH` as a region entry guard would let it use both.
       Realm-enabled consumers beyond noncoercing Number predicates need their own

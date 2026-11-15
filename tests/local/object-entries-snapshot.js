@@ -4,6 +4,9 @@ const rows = [];
 function collect() {
 	if (typeof gc === "function") gc();
 }
+function entriesImmediateCount(record) {
+	return Object.entries(record).length;
+}
 function entriesCount(record, index, observe) {
 	const entries = Object.entries(record);
 	observe(record);
@@ -43,6 +46,7 @@ function entriesRead(record, index, observe) {
 	return [entries[index], entries.length, entries[0]];
 }
 globalThis.entryConsumers = {
+	immediate: entriesImmediateCount,
 	count: entriesCount,
 	index: entriesIndex,
 	materialize: entriesMaterialize,
@@ -66,6 +70,118 @@ function record(i) {
 		g: 7,
 		h: 8,
 	};
+}
+if (mode === "semantics") {
+	rows.push(
+		entriesImmediateCount("ab"),
+		entriesImmediateCount(7),
+		entriesImmediateCount(true),
+	);
+	const deleting = {
+		get a() {
+			delete this.b;
+			collect();
+			return 1;
+		},
+		b: 2,
+	};
+	rows.push(entriesImmediateCount(deleting));
+	const immediateEvents = [];
+	const immediateProxy = new Proxy(
+		{ a: 1, b: 2 },
+		{
+			ownKeys(target) {
+				immediateEvents.push("keys");
+				return Reflect.ownKeys(target);
+			},
+			getOwnPropertyDescriptor(target, key) {
+				immediateEvents.push("descriptor:" + key);
+				return Reflect.getOwnPropertyDescriptor(target, key);
+			},
+			get(target, key) {
+				immediateEvents.push("get:" + key);
+				return target[key];
+			},
+		},
+	);
+	rows.push(entriesImmediateCount(immediateProxy), immediateEvents.join(","));
+	const immediateThrown = { label: "immediate-throw" };
+	for (const target of [
+		null,
+		undefined,
+		{
+			get a() {
+				collect();
+				throw immediateThrown;
+			},
+		},
+	]) {
+		try {
+			rows.push(entriesImmediateCount(target));
+		} catch (error) {
+			rows.push(error === immediateThrown ? "same throw" : error.name);
+		}
+	}
+	function shadowedEntries(Object, target) {
+		return Object.entries(target).length;
+	}
+	rows.push(
+		shadowedEntries(
+			{
+				entries() {
+					return { length: "lexical" };
+				},
+			},
+			{},
+		),
+	);
+	if (process.env.MAL_PRIMORDIALS !== "locked") {
+		const originalObject = Object;
+		const originalEntries = Object.entries;
+		const lengthValue = { label: "object-valued-length" };
+		let lengthReads = 0;
+		try {
+			const rebindDuringRead = {
+				get a() {
+					Object.entries = () => ({ length: "later" });
+					collect();
+					return 1;
+				},
+			};
+			rows.push(entriesImmediateCount(rebindDuringRead), entriesImmediateCount({}));
+			Object.entries = originalEntries;
+			Object.entries = () => ({
+				get length() {
+					lengthReads++;
+					collect();
+					return lengthValue;
+				},
+			});
+			rows.push(entriesImmediateCount({}) === lengthValue, lengthReads);
+			Object.entries = originalEntries;
+			function capturedImmediate(target, prepare) {
+				return Object.entries(prepare(target)).length;
+			}
+			rows.push(
+				capturedImmediate({ a: 1, b: 2 }, (target) => {
+					Object.entries = () => ({ length: "argument replacement" });
+					return target;
+				}),
+			);
+			Object.entries = originalEntries;
+			let namespaceReads = 0;
+			globalThis.Object = {
+				get entries() {
+					namespaceReads++;
+					return () => ({ length: lengthValue });
+				},
+			};
+			rows.push(entriesImmediateCount({}) === lengthValue, namespaceReads);
+		} finally {
+			globalThis.Object = originalObject;
+			Object.entries = originalEntries;
+		}
+	}
 }
 if (mode !== "semantics") {
 	for (let i = 0; i < 8; i++)

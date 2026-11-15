@@ -17,6 +17,39 @@ const methods = [
 	"ownKeys",
 ];
 describe("count-only enumeration transport", () => {
+	it.each(["mutable", "locked"] as const)(
+		"retains an immediate entries count behind a known call under %s primordials",
+		(primordials) => {
+			const image = compilePreciseProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					"globalThis.count=function count(record){return Object.entries(record).length;};",
+					"immediate-count.js",
+				),
+				{
+					facts: compilerProgramFactsFromConfig(
+						resolveBuildConfig({ engine: { primordials, realms: false } }),
+					),
+				},
+			);
+			const fn = image.native.functions.find((fn) =>
+				fn.storage!.objectEnumerationSnapshots.some((plan) => plan.kind === "entries"),
+			)!;
+			const plans = fn.storage!.objectEnumerationSnapshots;
+			expect(
+				plans.some((plan) => fn.body.instructions[plan.callIp]!.opcode === "CALL_KNOWN"),
+			).toBe(true);
+			expect(
+				plans.every((plan) => plan.lengthIps.length > 0 && plan.elementIps.length === 0),
+			).toBe(true);
+			if (primordials === "mutable")
+				expect(
+					plans.some((plan) => fn.body.instructions[plan.callIp]!.opcode === "CALL"),
+				).toBe(true);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		},
+	);
 	for (const method of methods)
 		it.each(["mutable", "locked"] as const)(
 			`${method} retains ignored argument evaluation under %s primordials`,
