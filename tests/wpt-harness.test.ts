@@ -330,6 +330,40 @@ describe("curated WPT harness", () => {
 		);
 	});
 
+	it.each([
+		{ mode: "strict", directive: '"use strict";', receiver: "undefined" },
+		{ mode: "sloppy", directive: "", receiver: "globalThis" },
+	])(
+		"preserves $mode test callback receivers without changing support code",
+		({ directive, receiver }) => {
+			const source = `// META: title=Callback receivers
+${directive}
+const topLevelReceiver = this;
+promise_test(() => {
+  const writer = new WritableStream({}, {
+    size() {
+      assert_equals(this, ${receiver});
+      assert_equals(topLevelReceiver, globalThis);
+      assert_equals(supportReceiver(), globalThis);
+      return 1;
+    }
+  }).getWriter();
+  return writer.write('chunk');
+}, 'size callback receiver');
+`;
+			const parsed = runProgram(source, {
+				includes: [
+					{
+						path: "support.js",
+						source: "function supportReceiver() { return this; }",
+					},
+				],
+			});
+			expect(parsed.subtests).toMatchObject([{ status: "PASS" }]);
+			expect(parsed.harness).toMatchObject({ status: "OK", total: 1 });
+		},
+	);
+
 	it("expands declared variants with deterministic location and self globals", () => {
 		const source = [
 			"// META: variant=?query=yes#fragment",

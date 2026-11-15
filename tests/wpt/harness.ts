@@ -978,7 +978,10 @@ export function createWptProgram(
 		.replace("__WPT_LOCATION__", JSON.stringify(location))
 		.replace("__WPT_TIMEOUT__", String(timeoutMs));
 	const includes = pinned.includes.map((include) => include.source).join("\n");
-	return `${adapter}\n${includes}\n${pinned.source}\nPromise.all([__wpt_queue, Promise.all(__wpt_async)]).then(function() {\n  __wpt_cleanup_timers();\n  __wpt_check_duplicate_names();\n  console.log("WPT_HARNESS " + JSON.stringify({path: __wpt_path, status: __wpt_harness_error === null ? "OK" : "ERROR", total: __wpt_count, message: __wpt_harness_error}));\n});\n`;
+	// Adapter statements must not displace the test's directive prologue. Its
+	// receiver remains the script global without making support code strict.
+	const testSource = `(function() {\n${pinned.source}\n}).call(globalThis);`;
+	return `${adapter}\n${includes}\n${testSource}\nPromise.all([__wpt_queue, Promise.all(__wpt_async)]).then(function() {\n  __wpt_cleanup_timers();\n  __wpt_check_duplicate_names();\n  console.log("WPT_HARNESS " + JSON.stringify({path: __wpt_path, status: __wpt_harness_error === null ? "OK" : "ERROR", total: __wpt_count, message: __wpt_harness_error}));\n});\n`;
 }
 
 interface WptTransportTest {
