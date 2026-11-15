@@ -73,6 +73,7 @@ tests/native/finite-string-construction.test.ts
 tests/native/unicode-ascii-transforms.test.ts
 tests/native/generator-fusion.test.ts
 tests/native/promise-all-dense.test.ts
+tests/native/promise-dense-combinators.test.ts
 tests/native/promise-any-errors.test.ts
 tests/native/forwarded-callback.test.ts
 tests/native/forwarded-sort-callback.test.ts

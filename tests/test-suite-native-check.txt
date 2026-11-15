@@ -13,6 +13,7 @@ tests/native/finite-string-construction.test.ts
 tests/native/unicode-ascii-transforms.test.ts
 tests/native/generator-fusion.test.ts
 tests/native/promise-all-dense.test.ts
+tests/native/promise-dense-combinators.test.ts
 tests/native/promise-any-errors.test.ts
 tests/native/eval-gc-runtime-compilation-p0.test.ts
 tests/native/express-smoke.test.ts

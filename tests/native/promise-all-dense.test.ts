@@ -112,9 +112,9 @@ describe("typed intrinsic Promise.all aggregation", () => {
 			expect(run.status, run.stderr).toBe(0);
 			const result = JSON.parse(run.stdout) as { inputCount: number };
 			expect(
-				Number(run.stderr.match(/all_typed_admissions=(\d+)/)?.[1] ?? 0),
+				Number(run.stderr.match(/combinator_typed_admissions=(\d+)/)?.[1] ?? 0),
 			).toBeGreaterThan(0);
-			expect(Number(run.stderr.match(/all_typed_jobs=(\d+)/)?.[1] ?? 0)).toBe(
+			expect(Number(run.stderr.match(/combinator_typed_jobs=(\d+)/)?.[1] ?? 0)).toBe(
 				result.inputCount,
 			);
 		}
@@ -137,7 +137,7 @@ describe("typed intrinsic Promise.all aggregation", () => {
 			expect(run.stderr).not.toContain("Uncaught (in promise)");
 		}
 	});
-	it("uses the builtin's realm for result Arrays across direct and generic paths", () => {
+	it("keeps result Arrays, records and errors in the builtin's realm", () => {
 		expect(runToStdout(realm, { env: { ...STRESS_ENV, MAL_TEST262: "1" } }).trim()).toBe(
 			"promise-all-dense-realm PASS",
 		);
@@ -169,7 +169,7 @@ describe("typed intrinsic Promise.all aggregation", () => {
 			expect(run.status, run.stderr).toBe(0);
 			expect(run.stdout).toBe(expected(scenario));
 			expect(
-				Number(run.stderr.match(/all_typed_admissions=(\d+)/)?.[1] ?? 0),
+				Number(run.stderr.match(/combinator_typed_admissions=(\d+)/)?.[1] ?? 0),
 			).toBeGreaterThan(0);
 		},
 	);

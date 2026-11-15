@@ -68,8 +68,8 @@ void mal_promise_settle_direct(
     MalValue argument
 );
 
-/** Run one guarded Promise.all element with its original microtask ordering. */
-void mal_promise_all_continue(
+/** Run one guarded Promise combinator element in its original microtask position. */
+void mal_promise_combinator_continue(
     MalVm *vm, MalValue state, u32 index, bool is_reject, MalValue argument);
 
 /** Process-wide counters exposed through MAL_PROMISE_STATS. */

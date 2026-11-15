@@ -1461,9 +1461,12 @@ under. Absent-key rows on built-in chains and the Fetch dictionary members, whic
 rely on %Object.prototype% lacking a name, keep the watched-objects protector that
 every mutation breaks. Object.assign merges a plain source into a plain target while
 it holds, since only the `__proto__` setter of %Object.prototype% can then intercept
-a store, and afterwards checks each copied key there. A dense Promise.all rechecks the
-builtin-identity protector when it fulfills its result Array, so a `then` added to
-that Array's chain after admission is resolved as the spec's resolve function would.
+a store, and afterwards checks each copied key there. Dense Promise combinators
+register one typed reaction per canonical input occurrence and retain the admitting
+constructor's realm. Array results recheck the builtin-identity protector before
+fulfillment, so a `then` added after admission still participates in resolution.
+First-settlement results latch their winner before ordinary value resolution, since
+thenable assimilation can leave the result pending after the winning reaction.
 The Error prototypes are watched objects, because Error.prototype.toString answers
 their `name` and `message` without a lookup.
 

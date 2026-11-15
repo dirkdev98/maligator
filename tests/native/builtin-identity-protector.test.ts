@@ -75,8 +75,9 @@ for (const mode of ["locked", "mutable"] as const) {
 		(stderr, loops) => {
 			// Each round destructures the five Map entries and the five Set entries.
 			expect(counter(stderr, "entry_pair_hits")).toBeGreaterThanOrEqual(10 * loops);
-			// Each settle round aggregates two intrinsic promises.
-			expect(counter(stderr, "all_typed_admissions")).toBeGreaterThanOrEqual(loops);
+			expect(counter(stderr, "combinator_typed_admissions")).toBeGreaterThanOrEqual(
+				loops,
+			);
 			// Locked charCodeAt calls use a known operation instead of guarded dispatch.
 			if (mode === "locked") return;
 			// Each round merges one literal source despite the Object.prototype polyfill.

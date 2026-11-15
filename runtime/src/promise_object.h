@@ -46,24 +46,32 @@ typedef struct MalPromiseObject {
     MalGeneratorObject *async_owner;
 } MalPromiseObject;
 
+typedef enum MalPromiseCombinatorKind {
+    MAL_PROMISE_COMBINATOR_ALL,
+    MAL_PROMISE_COMBINATOR_RACE,
+    MAL_PROMISE_COMBINATOR_ALL_SETTLED,
+    MAL_PROMISE_COMBINATOR_ANY,
+} MalPromiseCombinatorKind;
+
 /** Reference fields stay immutable after publication; jobs update only scalar state. */
-typedef struct MalPromiseAllState {
+typedef struct MalPromiseCombinatorState {
     MalHeapHeader header;
     MalValue promise;
     MalValue values;
     u32 remaining;
     bool settled;
-} MalPromiseAllState;
+    u8 kind;
+} MalPromiseCombinatorState;
 
-static_assert(sizeof(MalPromiseAllState) == 32,
-              "Promise.all aggregation must remain one 32-byte cell");
+static_assert(sizeof(MalPromiseCombinatorState) == 32,
+              "Promise aggregation must remain one 32-byte cell");
 
-MalPromiseAllState *mal_promise_all_state_new(
-    MalVm *vm, MalValue promise, MalValue values, u32 count);
+MalPromiseCombinatorState *mal_promise_combinator_state_new(
+    MalVm *vm, MalValue promise, MalValue values, u32 count, MalPromiseCombinatorKind kind);
 
-/** Register one index of a guarded intrinsic Promise.all traversal. */
-void mal_promise_append_all_reaction(
-    MalVm *vm, MalPromiseObject *promise, MalValue state, u32 index);
+/** Register one occurrence in a guarded intrinsic Promise combinator. */
+void mal_promise_append_combinator_reaction(
+    MalVm *vm, MalPromiseObject *promise, MalValue state, u32 index, MalValue realm_anchor);
 
 /** Allocate a pending promise with the given [[Prototype]]. */
 MalPromiseObject *mal_promise_object_new(MalHeap *heap, MalObject *prototype);

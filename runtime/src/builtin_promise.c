@@ -1161,52 +1161,71 @@ static MalValue mal_promise_all_element(MalVm *vm, MalValue this_value, const Ma
     return mal_value_new_undefined();
 }
 
-void mal_promise_all_continue(
+static MalValue mal_promise_settled_record(
+    MalVm *vm, const byte *status, const byte *field, MalValue value);
+
+void mal_promise_combinator_continue(
     MalVm *vm, MalValue raw_state, u32 index, bool is_reject, MalValue argument
 ) {
-    MalPromiseAllState *state = (MalPromiseAllState *) mal_value_to_heap(raw_state);
+    MalPromiseCombinatorState *state = (MalPromiseCombinatorState *) mal_value_to_heap(raw_state);
     MalPromiseObject *promise = mal_value_to_promise_object(state->promise);
-    if (is_reject) {
-        if (!state->settled) {
-            state->settled = true;
-            mal_promise_reject(vm, promise, argument);
-        }
-        return;
+    switch (state->kind) {
+        case MAL_PROMISE_COMBINATOR_ALL:
+            if (is_reject) {
+                if (!state->settled) {
+                    state->settled = true;
+                    mal_promise_reject(vm, promise, argument);
+                }
+                return;
+            }
+            break;
+        case MAL_PROMISE_COMBINATOR_ALL_SETTLED:
+            argument = mal_promise_settled_record(
+                vm, is_reject ? "rejected" : "fulfilled",
+                is_reject ? "reason" : "value", argument);
+            break;
+        case MAL_PROMISE_COMBINATOR_ANY:
+            if (state->settled) return;
+            if (is_reject) break;
+            [[fallthrough]];
+        case MAL_PROMISE_COMBINATOR_RACE:
+            if (!state->settled) {
+                // Assimilation can leave the Promise pending after its winner runs.
+                state->settled = true;
+                mal_promise_settle_internal(vm, state->promise, is_reject, argument);
+            }
+            return;
     }
-
     MalArrayObject *values = mal_value_to_array_object(state->values);
-    if (mal_array_object_dense_store(values, index, argument) != MAL_ARRAY_DENSE_APPLIED) {
-        abort();
-    }
+    if (mal_array_object_dense_store(values, index, argument) != MAL_ARRAY_DENSE_APPLIED) abort();
     state->remaining--;
-    if (state->remaining == 0 && !state->settled) {
-        state->settled = true;
-        // The private result Array inherits only from %Array.prototype% and
-        // %Object.prototype%, so while the identity protector holds the resolve
-        // function's `then` lookup finds nothing. A `then` added since admission
-        // is observed by the ordinary resolution steps, as the spec's resolve
-        // function would at this point.
-        if (mal_vm_watched_methods_intact(vm)) {
-            mal_promise_fulfill(vm, promise, state->values);
-        } else {
-            MAL_PERF_COUNT(promise_guarded_fallbacks);
-            mal_promise_settle_internal(vm, state->promise, false, state->values);
+    if (state->remaining != 0 || state->settled) return;
+    state->settled = true;
+    if (state->kind == MAL_PROMISE_COMBINATOR_ANY) {
+        MalValue aggregate = mal_builtin_new_aggregate_error(vm, state->values);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            aggregate = vm->completion.value;
+            vm->completion = (MalCompletion) {
+                .kind = MAL_COMPLETION_NORMAL, .value = MAL_VALUE_UNDEFINED};
         }
+        mal_promise_reject(vm, promise, aggregate);
+    } else if (mal_vm_watched_methods_intact(vm)) {
+        mal_promise_fulfill(vm, promise, state->values);
+    } else {
+        // A then added after admission still participates in resolving the result Array.
+        MAL_PERF_COUNT(promise_guarded_fallbacks);
+        mal_promise_settle_internal(vm, state->promise, false, state->values);
     }
 }
 
 /**
- * PerformPromiseAll over an Array of intrinsic promises with typed reactions, when
- * every lookup it skips is unobservable: C is %Promise%, whose `resolve` the identity
- * protector keeps; each input is a canonical intrinsic promise, so PromiseResolve
- * returns it and Invoke reaches %Promise.prototype.then% and %Promise%[@@species]; and
- * the array-iteration protector keeps the Array iterator. Registered reactions never
- * look those methods up again, so a later mutation can only change the final
- * resolution, which mal_promise_all_continue rechecks.
+ * Dense canonical inputs can register every occurrence without invoking JavaScript.
+ * Protectors retain Array iteration, PromiseResolve, then and species observations;
+ * later reactions retain their FIFO positions and recheck final resolution effects.
  */
-static bool mal_promise_all_try_dense(
+static bool mal_promise_combinator_try_dense(
     MalVm *vm, MalValue constructor, const MalValue *args, i32 arg_count,
-    MalValue *result
+    MalPromiseCombinatorKind kind, MalValue *result
 ) {
     if (constructor != vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR] ||
         !mal_vm_watched_methods_intact(vm) || arg_count < 1 ||
@@ -1222,34 +1241,45 @@ static bool mal_promise_all_try_dense(
     MalDeferredValuesCursor cursor;
     if (!mal_vm_deferred_array_values_begin(vm, args[0], &cursor)) return false;
 
-    // Preflight and registration invoke no language code. The source's own
-    // elements therefore stay fixed until every continuation has been attached.
     MalValue roots[4] = {args[0], MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
     MalRootSpan span;
     mal_gc_root(&span, roots, countof(roots));
     roots[1] = mal_value_from_promise_object(mal_promise_object_new(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE])));
-    MalArrayObject *values = mal_intrinsic_new_dense_array(vm, count);
-    roots[2] = mal_value_from_array_object(values);
-    if (count > 0 && !mal_array_object_dense_build_fill(values, 0, count, MAL_VALUE_UNDEFINED)) abort();
+    if (kind != MAL_PROMISE_COMBINATOR_RACE) {
+        MalArrayObject *values = mal_intrinsic_new_dense_array(vm, count);
+        roots[2] = mal_value_from_array_object(values);
+        if (count > 0 && !mal_array_object_dense_build_fill(
+                values, 0, count, MAL_VALUE_UNDEFINED)) abort();
+    }
     if (count == 0) {
-        mal_promise_fulfill(vm, mal_value_to_promise_object(roots[1]), roots[2]);
+        if (kind == MAL_PROMISE_COMBINATOR_ANY) {
+            roots[3] = mal_builtin_new_aggregate_error(vm, roots[2]);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                roots[3] = vm->completion.value;
+                vm->completion = (MalCompletion) {
+                    .kind = MAL_COMPLETION_NORMAL, .value = MAL_VALUE_UNDEFINED};
+            }
+            mal_promise_reject(vm, mal_value_to_promise_object(roots[1]), roots[3]);
+        } else if (kind != MAL_PROMISE_COMBINATOR_RACE) {
+            mal_promise_fulfill(vm, mal_value_to_promise_object(roots[1]), roots[2]);
+        }
     } else {
-        roots[3] = mal_value_from_heap((MalHeapHeader *) mal_promise_all_state_new(
-            vm, roots[1], roots[2], count));
+        roots[3] = mal_value_from_heap((MalHeapHeader *) mal_promise_combinator_state_new(
+            vm, roots[1], roots[2], count, kind));
         for (u32 index = 0; index < count; index++) {
             MalPromiseObject *promise = mal_value_to_promise_object(source->elements[index]);
             promise->is_handled = true;
             if (promise->state == MAL_PROMISE_PENDING) {
-                mal_promise_append_all_reaction(vm, promise, roots[3], index);
+                mal_promise_append_combinator_reaction(vm, promise, roots[3], index, constructor);
             } else {
-                mal_vm_enqueue_promise_all_job(
-                    vm, roots[3], index, promise->state == MAL_PROMISE_REJECTED,
+                mal_vm_enqueue_promise_combinator_job(
+                    vm, roots[3], index, constructor, promise->state == MAL_PROMISE_REJECTED,
                     promise->result);
             }
         }
     }
-    MAL_PERF_COUNT(promise_all_typed_admissions);
+    MAL_PERF_COUNT(promise_combinator_typed_admissions);
     *result = roots[1];
     mal_gc_unroot(&span);
     return true;
@@ -1260,7 +1290,8 @@ static MalValue mal_promise_all(MalVm *vm, MalValue this_value, const MalValue *
     (void) callee;
 
     MalValue direct;
-    if (mal_promise_all_try_dense(vm, this_value, args, arg_count, &direct)) return direct;
+    if (mal_promise_combinator_try_dense(
+            vm, this_value, args, arg_count, MAL_PROMISE_COMBINATOR_ALL, &direct)) return direct;
 
     MalPromiseCombinator ctx = mal_promise_combinator_begin(vm, this_value, args, arg_count);
     if (!ctx.ok) {
@@ -1335,6 +1366,10 @@ done:
 static MalValue mal_promise_race(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
+
+    MalValue direct;
+    if (mal_promise_combinator_try_dense(
+            vm, this_value, args, arg_count, MAL_PROMISE_COMBINATOR_RACE, &direct)) return direct;
 
     MalPromiseCombinator ctx = mal_promise_combinator_begin(vm, this_value, args, arg_count);
     if (!ctx.ok) {
@@ -1445,6 +1480,10 @@ static MalValue mal_promise_all_settled(MalVm *vm, MalValue this_value, const Ma
     (void) new_target;
     (void) callee;
 
+    MalValue direct;
+    if (mal_promise_combinator_try_dense(
+            vm, this_value, args, arg_count, MAL_PROMISE_COMBINATOR_ALL_SETTLED, &direct)) return direct;
+
     MalPromiseCombinator ctx = mal_promise_combinator_begin(vm, this_value, args, arg_count);
     if (!ctx.ok) {
         return ctx.result_promise;
@@ -1548,6 +1587,10 @@ static MalValue mal_promise_any_reject_element(MalVm *vm, MalValue this_value, c
 static MalValue mal_promise_any(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
+
+    MalValue direct;
+    if (mal_promise_combinator_try_dense(
+            vm, this_value, args, arg_count, MAL_PROMISE_COMBINATOR_ANY, &direct)) return direct;
 
     MalPromiseCombinator ctx = mal_promise_combinator_begin(vm, this_value, args, arg_count);
     if (!ctx.ok) {

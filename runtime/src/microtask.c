@@ -153,7 +153,7 @@ static void mal_job_release(MalVm *vm, MalJob *job) {
 
 static void mal_job_clear(MalJob *job) {
     if (job->kind == MAL_JOB_PROMISE_REACTION ||
-        job->kind == MAL_JOB_PROMISE_ALL ||
+        job->kind == MAL_JOB_PROMISE_COMBINATOR ||
         job->kind == MAL_JOB_ASYNC_AWAIT ||
         job->kind == MAL_JOB_ASYNC_GENERATOR_RETURN ||
         job->kind == MAL_JOB_ASYNC_FROM_SYNC ||
@@ -239,7 +239,7 @@ void mal_vm_enqueue_pending_job(MalVm *vm, MalJob *job, bool is_reject, MalValue
     job->is_reject = is_reject;
     job->next = nullptr;
     if (job->kind == MAL_JOB_ASYNC_AWAIT) MAL_PERF_COUNT(promise_await_typed_jobs);
-    else if (job->kind == MAL_JOB_PROMISE_ALL) MAL_PERF_COUNT(promise_all_typed_jobs);
+    else if (job->kind == MAL_JOB_PROMISE_COMBINATOR) MAL_PERF_COUNT(promise_combinator_typed_jobs);
     mal_vm_enqueue(vm, job);
 }
 
@@ -284,14 +284,14 @@ void mal_vm_enqueue_reaction_job(
     mal_vm_enqueue(vm, job);
 }
 
-void mal_vm_enqueue_promise_all_job(MalVm *vm, MalValue state, u32 index, bool is_reject, MalValue argument) {
-    MalJob *job = mal_job_new(vm, MAL_JOB_PROMISE_ALL, false);
+void mal_vm_enqueue_promise_combinator_job(MalVm *vm, MalValue state, u32 index, MalValue realm_anchor, bool is_reject, MalValue argument) {
+    MalJob *job = mal_job_new(vm, MAL_JOB_PROMISE_COMBINATOR, false);
     job->as.reaction.handler = state;
     job->as.reaction.cap_resolve = mal_value_from_u32(index);
-    job->as.reaction.cap_reject = MAL_VALUE_UNDEFINED;
+    job->as.reaction.cap_reject = realm_anchor;
     job->as.reaction.argument = argument;
     job->is_reject = is_reject;
-    MAL_PERF_COUNT(promise_all_typed_jobs);
+    MAL_PERF_COUNT(promise_combinator_typed_jobs);
     mal_vm_enqueue(vm, job);
 }
 
@@ -617,12 +617,22 @@ void mal_vm_drain_microtasks(MalVm *vm) {
             case MAL_JOB_PROMISE_REACTION:
                 mal_vm_run_reaction_job(vm, job);
                 break;
-            case MAL_JOB_PROMISE_ALL:
-                mal_promise_all_continue(
+            case MAL_JOB_PROMISE_COMBINATOR: {
+#if MAL_REALMS
+                MalRealm *saved_realm = vm->current_realm;
+                mal_vm_realm_switch_to(
+                    vm, mal_vm_callee_realm(vm, job->as.reaction.cap_reject));
+#endif
+                vm->completion = mal_completion_normal();
+                mal_promise_combinator_continue(
                     vm, job->as.reaction.handler,
                     (u32) mal_ops_number_as_f64(job->as.reaction.cap_resolve),
                     job->is_reject, job->as.reaction.argument);
+#if MAL_REALMS
+                mal_vm_realm_switch_to(vm, saved_realm);
+#endif
                 break;
+            }
             case MAL_JOB_PROMISE_RESOLVE_THENABLE:
                 mal_vm_run_thenable_job(vm, job);
                 break;

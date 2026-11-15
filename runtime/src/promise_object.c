@@ -5,15 +5,16 @@
 #include "microtask.h"
 #include "vm.h"
 
-MalPromiseAllState *mal_promise_all_state_new(
-    MalVm *vm, MalValue promise, MalValue values, u32 count
+MalPromiseCombinatorState *mal_promise_combinator_state_new(
+    MalVm *vm, MalValue promise, MalValue values, u32 count, MalPromiseCombinatorKind kind
 ) {
-    MalPromiseAllState *state = mal_heap_alloc(
-        &vm->heap, sizeof(MalPromiseAllState), MAL_HEAP_PROMISE_ALL_STATE);
+    MalPromiseCombinatorState *state = mal_heap_alloc(
+        &vm->heap, sizeof(MalPromiseCombinatorState), MAL_HEAP_PROMISE_COMBINATOR_STATE);
     state->promise = promise;
     state->values = values;
     state->remaining = count;
     state->settled = false;
+    state->kind = (u8) kind;
     return state;
 }
 
@@ -74,12 +75,12 @@ void mal_promise_append_await_reaction(MalVm *vm, MalPromiseObject *promise, Mal
         MAL_VALUE_UNDEFINED));
 }
 
-void mal_promise_append_all_reaction(
-    MalVm *vm, MalPromiseObject *promise, MalValue state, u32 index
+void mal_promise_append_combinator_reaction(
+    MalVm *vm, MalPromiseObject *promise, MalValue state, u32 index, MalValue realm_anchor
 ) {
     mal_promise_append_job(promise, mal_promise_new_reaction(
-        vm, MAL_JOB_PROMISE_ALL, state, mal_value_from_u32(index),
-        MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED));
+        vm, MAL_JOB_PROMISE_COMBINATOR, state, mal_value_from_u32(index),
+        realm_anchor, MAL_VALUE_UNDEFINED));
 }
 
 void mal_promise_append_async_generator_return_reaction(
