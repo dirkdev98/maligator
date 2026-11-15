@@ -4,8 +4,10 @@ Closed source images carry a sorted, shared list of external lexical owners for
 each function. The list includes requirements forwarded to descendant closures;
 own activation and locally created iteration scopes are supplied at execution.
 The analysis runs after function reachability and physical capture-slot compaction.
-Runtime eval, host splicing, relocatable images, and dynamic scope keep the chain
-representation. The portable wire loader does not trust native capture metadata.
+Runtime eval, host splicing, relocatable images, and dynamic scope keep the general
+chain representation. A proved immutable leaf can retain an exact single-owner
+fallback layout even in an open source image. The portable wire loader does not
+trust native capture metadata.
 
 Mutable and unproved captured bindings remain atomic slots in their activation or
 iteration owner.
@@ -43,10 +45,14 @@ Stores retain atomic access, the SATB old-value barrier, and the generational ca
 barrier on the real owning cell.
 
 An eligible immutable leaf instead coallocates captured values with its function.
-The proof runs on sealed Core before slot compaction and checks the complete live
-write set, mapped aliases, and exception-aware dominance of every closure creation.
+The proof runs on sealed Core before slot compaction and checks the live write set,
+mapped aliases, and exception-aware dominance of every closure creation.
 Each binding has one non-TDZ initializer outside cycles; any initial TDZ stores
-precede it at entry. The same writer proof applies to parameters and local bindings.
+precede it at entry. Inferring lifetime immutability from observed writers requires
+closed source without dynamic scope. Source const and named self bindings retain
+their immutability under unknown runtime code, so they can use the same initialization
+proof in open images. Dynamic operations in the leaf or its creator still decline;
+unrelated dynamic functions do not invalidate a source-immutable binding.
 The bounded selection covers ordinary leaf closures whose only lexical
 operations read initialized bindings from one creator. Object values preserve their
 identity; immutability applies to the binding, not the object's properties. Sloppy
@@ -95,8 +101,9 @@ The original owner layout remains available for ordinary incoming environments
 and conservative construction fallback. Native entries cache copied values once
 through an ordinal-and-tuple check; generic and relocated entries can still read
 the original lexical storage. The portable wire loader omits the value metadata.
-Wire overlays reject frame-copy creation plans because their runtime images omit
-the required descriptors.
+Wire overlay preparation removes native capture metadata and lowers storage again
+before emission, because the loaded runtime image omits those descriptors. The emitter
+rejects any frame-copy creation plan that reaches it without that preparation.
 
 Native canonical and specialized entries resolve nonnegative external owner IDs
 once per entry, using a known vector ordinal for one owner or one traversal for

@@ -14,6 +14,7 @@ import {
 import type { NativeCaptureAccessPlan } from "../src/compiler/target/lower-native-captures.ts";
 import {
 	lowerNativeStorage,
+	lowerNativeOverlayStorage,
 	validateNativeProgramStorage,
 	validateNativeStorage,
 } from "../src/compiler/target/lower-native-storage.ts";
@@ -24,6 +25,7 @@ import {
 	serializeRuntimeImage,
 	Writer,
 } from "../src/compiler/target/program-image-codec.ts";
+import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import type {
 	BytecodeFunction,
 	BytecodeInstruction,
@@ -335,6 +337,44 @@ describe("persisted native capture access contract", () => {
 		expect(() =>
 			emitRelocatableNativeOverlayTranslationUnits(image, "a".repeat(64)),
 		).toThrow(/Native overlays require portable capture storage/);
+	});
+
+	it("lowers capture plans for overlays without changing their portable runtime contract", () => {
+		const image = lowerNativeStorage(captureImage(true, true));
+		const overlay = lowerNativeOverlayStorage(image);
+		expect(serializeRuntimeImage(overlay.runtime)).toEqual(
+			serializeRuntimeImage(image.runtime),
+		);
+		const units = emitRelocatableNativeOverlayTranslationUnits(overlay, "a".repeat(64));
+		expect(
+			units.some((unit) =>
+				unit.sourceChunks.join("").includes("mal_vm_create_function_from_frame("),
+			),
+		).toBe(false);
+		validateNativeProgramStorage(overlay.native, overlay.runtime.stringConstants);
+	});
+
+	it("preserves independent native instruction streams when preparing overlay captures", () => {
+		const image = captureImage(true, true);
+		const owner = image.runtime.functions[1]!;
+		const body: BytecodeFunction = {
+			...owner,
+			instructions: [
+				owner.instructions[0]!,
+				{ opcode: "CREATE_UNDEFINED", dst: 1 },
+				owner.instructions[1]!,
+			],
+			positions: [0, 0, 0],
+		};
+		const overlay = lowerNativeOverlayStorage(
+			lowerNativeStorage({
+				...image,
+				native: createConservativeNativePlan([image.runtime.functions[0]!, body]),
+			}),
+		);
+		expect(overlay.runtime.functions[1]!.instructions).toBe(owner.instructions);
+		expect(overlay.native.functions[1]!.body.instructions).toBe(body.instructions);
+		validateNativeProgramStorage(overlay.native, overlay.runtime.stringConstants);
 	});
 
 	it("round-trips closure creation from frame-held captures", () => {

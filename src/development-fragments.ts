@@ -18,6 +18,7 @@ import {
 	emitRelocatableNativeOverlayTranslationUnits,
 } from "./compiler/target/emit-program-image.ts";
 import type { GeneratedTranslationUnit } from "./compiler/target/emit-program-image.ts";
+import { lowerNativeOverlayStorage } from "./compiler/target/lower-native-storage.ts";
 import { deserializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import { createConservativeNativePlan } from "./compiler/target/program-image.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
@@ -54,7 +55,7 @@ function overlayImage(
 	);
 	if (image.runtime.functionCount !== runtime.functionCount)
 		throw new Error(`compiler artifact does not describe image ${artifact.digest}`);
-	return image;
+	return lowerNativeOverlayStorage(image);
 }
 
 /**

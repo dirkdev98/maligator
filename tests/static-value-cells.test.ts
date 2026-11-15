@@ -34,7 +34,7 @@ function fixture(scenario: Scenario, closed = true) {
 			cjsModuleFunctionIndices: [],
 			hostInstallCandidates: [],
 			singleAssignmentGlobalSlots: closed ? [0] : [],
-			singleAssignmentCapturedSlots: [],
+			sourceImmutableCapturedSlots: [],
 			retainedHostInstallers: [],
 		},
 	};
@@ -195,7 +195,7 @@ describe("demanded private-cell contents", () => {
 				data: {
 					...base.data,
 					singleAssignmentGlobalSlots: binding === "global" ? [0] : [],
-					singleAssignmentCapturedSlots:
+					sourceImmutableCapturedSlots:
 						binding === "global" ? [] : [{ owner: -1, index: 0 }],
 				},
 			};

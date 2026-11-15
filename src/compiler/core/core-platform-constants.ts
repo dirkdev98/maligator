@@ -86,7 +86,7 @@ class PlatformValues {
 		if (this.roots.size === 0) return;
 		const closed = new Set([
 			...data.singleAssignmentGlobalSlots.map((slot) => `global:${slot}`),
-			...data.singleAssignmentCapturedSlots.map(
+			...data.sourceImmutableCapturedSlots.map(
 				(slot) => `captured:${slot.owner}:${slot.index}`,
 			),
 		]);

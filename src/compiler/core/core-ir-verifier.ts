@@ -1535,7 +1535,7 @@ function verifyCompilationContext(
 			fail(`compilation context references invalid global slot ${slot}`);
 		}
 	}
-	for (const { owner, index } of context.data.singleAssignmentCapturedSlots) {
+	for (const { owner, index } of context.data.sourceImmutableCapturedSlots) {
 		if (!Number.isSafeInteger(owner)) {
 			fail(`compilation context has non-integral captured owner ${owner}`);
 		}

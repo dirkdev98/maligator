@@ -11,7 +11,7 @@ import type { CoreFunctionStore } from "../core/core-store.ts";
 import type { ExecutionProgram } from "./execution-ir.ts";
 import type { ProgramImage } from "./program-image.ts";
 import type { ClosureCaptureValue } from "./runtime-image.ts";
-import { withClosureCaptureValues } from "./runtime-image.ts";
+import { withClosureCaptureOwners, withClosureCaptureValues } from "./runtime-image.ts";
 
 interface Capture {
 	readonly owner: number;
@@ -47,11 +47,14 @@ export function analyzeClosureCaptureValues(
 	program: Pick<ExecutionProgram, "core" | "context" | "functionMap">,
 ): ProgramImage {
 	const { core, context, functionMap } = program;
-	if (context.facts.closure.sourceClosure.kind !== "known") return image;
+	const sourceClosed = context.facts.closure.sourceClosure.kind === "known";
+	const immutable = new Set(context.data.sourceImmutableCapturedSlots.map(captureKey));
+	if (!sourceClosed && immutable.size === 0) return image;
 	const live = functionMap.executionToCore;
 	const creations = new Map<number, Array<Site>>();
 	const stores = new Map<string, Array<Site>>();
 	const aliases = new Set<string>();
+	const dynamic = new Set<CoreFunctionId>();
 	for (const functionId of live) {
 		const fn = core.function(functionId);
 		for (const index of fn.metadata.mappedArgumentSlots)
@@ -59,7 +62,7 @@ export function analyzeClosureCaptureValues(
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(instruction);
-			if (opcode.startsWith("with")) return image;
+			if (opcode.startsWith("with")) dynamic.add(functionId);
 			const attributes = fn.instructionAttributes(instruction);
 			if (opcode === "createFunction") {
 				const target = attributes.functionIndex as number;
@@ -77,12 +80,12 @@ export function analyzeClosureCaptureValues(
 			}
 		}
 	}
-	if (
-		image.runtime.functions.some((fn) =>
-			fn.instructions.some((instruction) => instruction.opcode.startsWith("WITH_")),
-		)
-	)
-		return image;
+	for (const [index, fn] of image.runtime.functions.entries())
+		if (fn.instructions.some((instruction) => instruction.opcode.startsWith("WITH_")))
+			dynamic.add(live[index]!);
+	// Dynamic scope can hide writes from the ordinary store scan. Source const and
+	// self bindings remain immutable even when unrelated runtime code is unknown.
+	const completeWriters = sourceClosed && dynamic.size === 0;
 	const flows = new Map<CoreFunctionId, CoreControlFlow>();
 	const flow = (functionId: CoreFunctionId) => {
 		let cfg = flows.get(functionId);
@@ -179,7 +182,12 @@ export function analyzeClosureCaptureValues(
 		const known = initializers.get(key);
 		if (known !== undefined) return known ?? undefined;
 		initializers.set(key, null);
-		if (aliases.has(key)) return undefined;
+		if (
+			aliases.has(key) ||
+			dynamic.has(slot.owner as CoreFunctionId) ||
+			(!completeWriters && !immutable.has(key))
+		)
+			return undefined;
 		const owner = core.function(slot.owner as CoreFunctionId);
 		if (owner.isAsync || owner.isGenerator) return undefined;
 		let initialized: CoreInstructionId | undefined;
@@ -216,6 +224,7 @@ export function analyzeClosureCaptureValues(
 		const sites = creations.get(id);
 		if (
 			sites === undefined ||
+			dynamic.has(id) ||
 			fn.isAsync ||
 			fn.isGenerator ||
 			fn.metadata.isClassConstructor ||
@@ -299,7 +308,7 @@ export function analyzeClosureCaptureValues(
 			return runtime;
 		changed = true;
 		return withClosureCaptureValues(
-			runtime,
+			withClosureCaptureOwners(runtime, [ownerFunctionIndex]),
 			[...values.values()].sort(
 				(left, right) => left.capturedIndex - right.capturedIndex,
 			),
@@ -317,7 +326,10 @@ export function analyzeClosureCaptureValues(
 							functions[index]!.closureCaptureValues === undefined
 								? fn.body
 								: withClosureCaptureValues(
-										fn.body,
+										withClosureCaptureOwners(
+											fn.body,
+											functions[index]!.closureCaptureOwners,
+										),
 										functions[index]!.closureCaptureValues,
 									),
 					})),

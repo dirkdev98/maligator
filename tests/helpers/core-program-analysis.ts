@@ -31,7 +31,7 @@ export function programAnalysisContext(sourceClosed = true): CoreCompilationCont
 			cjsModuleFunctionIndices: [],
 			hostInstallCandidates: [],
 			singleAssignmentGlobalSlots: [],
-			singleAssignmentCapturedSlots: [],
+			sourceImmutableCapturedSlots: [],
 			retainedHostInstallers: [],
 		},
 	};

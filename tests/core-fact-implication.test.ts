@@ -43,7 +43,7 @@ const context: CoreCompilationContext = {
 		cjsModuleFunctionIndices: [],
 		hostInstallCandidates: [],
 		singleAssignmentGlobalSlots: [],
-		singleAssignmentCapturedSlots: [],
+		sourceImmutableCapturedSlots: [],
 		retainedHostInstallers: [],
 	},
 };

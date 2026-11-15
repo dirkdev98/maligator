@@ -104,7 +104,7 @@ export class CoreStaticCellIndex {
 		this.#context = context;
 		this.#closed = new Set([
 			...context.data.singleAssignmentGlobalSlots.map((slot) => `global:${slot}`),
-			...context.data.singleAssignmentCapturedSlots.map(
+			...context.data.sourceImmutableCapturedSlots.map(
 				(slot) => `captured:${slot.owner}:${slot.index}`,
 			),
 		]);

@@ -1137,7 +1137,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 					},
 				),
 				singleAssignmentGlobalSlots: candidates.singleAssignmentGlobalSlots,
-				singleAssignmentCapturedSlots: candidates.singleAssignmentCapturedSlots,
+				sourceImmutableCapturedSlots: candidates.sourceImmutableCapturedSlots,
 				initializedModuleGlobalSlots,
 				importedModuleBindings: coreImportedModuleBindings(program),
 				moduleVarGlobalSlots: coreModuleVarGlobalSlots(
@@ -1879,7 +1879,7 @@ function coreModuleLexicalSlots(
  */
 function coreSingleAssignmentCellCandidates(program: CoreFrontendContext): {
 	singleAssignmentGlobalSlots: Array<number>;
-	singleAssignmentCapturedSlots: Array<CoreCapturedSlotRef>;
+	sourceImmutableCapturedSlots: Array<CoreCapturedSlotRef>;
 } {
 	const globals = new Set<number>();
 	const captured = new Map<string, CoreCapturedSlotRef>();
@@ -1896,7 +1896,7 @@ function coreSingleAssignmentCellCandidates(program: CoreFrontendContext): {
 	}
 	return {
 		singleAssignmentGlobalSlots: [...globals].sort((left, right) => left - right),
-		singleAssignmentCapturedSlots: [...captured.values()].sort(
+		sourceImmutableCapturedSlots: [...captured.values()].sort(
 			(left, right) => left.owner - right.owner || left.index - right.index,
 		),
 	};

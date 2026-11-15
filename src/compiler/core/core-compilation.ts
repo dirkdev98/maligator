@@ -96,8 +96,8 @@ export interface CoreProgramData {
 	readonly hostInstallCandidates: ReadonlyArray<CoreHostInstallCandidate>;
 	/** Source-immutable cells, plus graph-proven activation-private cells. */
 	readonly singleAssignmentGlobalSlots: ReadonlyArray<number>;
-	/** Source-immutable cells, plus captured lets with one named non-TDZ writer. */
-	readonly singleAssignmentCapturedSlots: ReadonlyArray<CoreCapturedSlotRef>;
+	/** Captured const and named self bindings whose immutability survives runtime code. */
+	readonly sourceImmutableCapturedSlots: ReadonlyArray<CoreCapturedSlotRef>;
 	/** Module bindings that no function except their writers can read uninitialized. */
 	readonly initializedModuleGlobalSlots?: ReadonlyArray<number>;
 	/**
@@ -327,7 +327,7 @@ export function coreClosedCapturedValueSlots(
 	program: CoreProgram,
 	context: CoreCompilationContext | undefined,
 ): ReadonlyArray<CoreCapturedSlotRef> {
-	const slots = (context?.data.singleAssignmentCapturedSlots ?? []).map((slot) => ({
+	const slots = (context?.data.sourceImmutableCapturedSlots ?? []).map((slot) => ({
 		...slot,
 	}));
 	if (context?.facts.closure.sourceClosure.kind !== "known") return slots;

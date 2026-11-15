@@ -524,7 +524,7 @@ describe("Core verification", () => {
 			data: {
 				...base.data,
 				cjsModuleFunctionIndices: [0],
-				singleAssignmentCapturedSlots: [{ owner: -1, index: 3 }],
+				sourceImmutableCapturedSlots: [{ owner: -1, index: 3 }],
 			},
 		};
 		expect(() => verifyCoreProgram(program, undefined, valid)).not.toThrow();
@@ -539,7 +539,7 @@ describe("Core verification", () => {
 				...base,
 				data: {
 					...base.data,
-					singleAssignmentCapturedSlots: [{ owner: 1, index: 0 }],
+					sourceImmutableCapturedSlots: [{ owner: 1, index: 0 }],
 				},
 			}),
 		).toThrow(/captured slot references function 1/);

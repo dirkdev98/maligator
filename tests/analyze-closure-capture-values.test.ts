@@ -40,6 +40,7 @@ function proof(
 		fact?: boolean;
 		relocated?: boolean;
 		strict?: boolean;
+		unrelatedDynamic?: boolean;
 	} = {},
 ) {
 	const program = analysisProgram();
@@ -130,6 +131,15 @@ function proof(
 		}
 	}
 	owner.finish(entry);
+	if (options.unrelatedDynamic) {
+		const unrelated = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const body = unrelated.createBlock([{}]);
+		const value = unrelated.blockParameterValue(body, 0);
+		unrelated.appendInstruction(body, "withEnter", [value]);
+		unrelated.appendInstruction(body, "withExit", []);
+		unrelated.setTerminator(body, { kind: "return", value });
+		unrelated.finish(body);
+	}
 	if (shape === "sibling-write" || shape === "other-creator") {
 		const sibling = new CoreFunctionBuilder(program);
 		const body = sibling.createBlock();
@@ -183,7 +193,7 @@ function proof(
 			...context,
 			data: {
 				...context.data,
-				singleAssignmentCapturedSlots:
+				sourceImmutableCapturedSlots:
 					options.fact === false ? [] : [{ owner: owner.functionId, index: 2 }],
 			},
 		},
@@ -261,8 +271,47 @@ describe("persistent immutable closure capture proof", () => {
 		).toBeDefined();
 	});
 
-	it("requires source closure before excluding unknown writers", () => {
-		const { image, execution } = proof("valid", { closed: false });
+	it("requires source closure before inferring immutability from observed writers", () => {
+		const { image, execution } = proof("valid", { closed: false, fact: false });
 		expect(analyzeClosureCaptureValues(image, execution)).toBe(image);
 	});
+
+	it.each([false, true])(
+		"copies source-immutable bindings in open images with unrelated dynamic scope=%s",
+		(unrelatedDynamic) => {
+			const { image, execution, leafIndex, ownerIndex } = proof("valid", {
+				closed: false,
+				relocated: true,
+				unrelatedDynamic,
+			});
+			const result = analyzeClosureCaptureValues(image, execution);
+			for (const leaf of [
+				result.runtime.functions[leafIndex],
+				result.native.functions[leafIndex]!.body,
+			])
+				expect(leaf).toMatchObject({
+					closureCaptureValues: [{ ownerFunctionIndex: ownerIndex, capturedIndex: 2 }],
+					closureCaptureOwners: [ownerIndex],
+				});
+		},
+	);
+
+	it("keeps mutable bindings when dynamic scope can hide a writer", () => {
+		const { image, execution } = proof("valid", {
+			fact: false,
+			unrelatedDynamic: true,
+		});
+		expect(analyzeClosureCaptureValues(image, execution)).toBe(image);
+	});
+
+	it.each<Shape>(["before", "branch", "loop", "reset", "twice", "mapped", "dynamic"])(
+		"keeps source-immutable cells when open-image initialization is unproved: %s",
+		(shape) => {
+			const { image, execution, leafIndex } = proof(shape, { closed: false });
+			expect(
+				analyzeClosureCaptureValues(image, execution).runtime.functions[leafIndex]!
+					.closureCaptureValues,
+			).toBeUndefined();
+		},
+	);
 });

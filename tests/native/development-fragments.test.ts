@@ -98,6 +98,22 @@ describe("development builds from relocatable fragments", () => {
 		expect(runBinary()).toBe("14 2 42 1 1\n");
 	});
 
+	it("retains const capture values through a wire-loaded native overlay", () => {
+		writeApplication(
+			[
+				"function make(payload) { const value = payload; return () => value; }",
+				"const retained = new Array(3); globalThis.overlayReaders = retained;",
+				"const payload = { value: 7 };",
+				"for (let index = 0; index < retained.length; index++) retained[index] = make(payload);",
+				"payload.value = 42;",
+				"const read = retained[Number(process.argv[2] ?? 0)];",
+				"console.log(read() === payload, read().value);",
+			].join("\n"),
+		);
+		build();
+		expect(runBinary()).toBe("14 2 42 1 1\ntrue 42\n");
+	});
+
 	it("recompiles only the edited application's image after a function is added", () => {
 		writeApplication("const extra = (value) => value * 4;\nconsole.log(extra(5));");
 		const output = build();

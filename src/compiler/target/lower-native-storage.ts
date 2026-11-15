@@ -92,6 +92,8 @@ import {
 	decodeVmValueOperand,
 	vmInstructionReadRegisters,
 	vmInstructionWriteRegisters,
+	withClosureCaptureOwners,
+	withClosureCaptureValues,
 } from "./runtime-image.ts";
 import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 
@@ -1762,6 +1764,37 @@ export function lowerNativeStorage(
 	};
 	certifyNativeStorage(native, image.runtime.stringConstants);
 	return { ...image, native };
+}
+
+/** Wire-loaded overlays keep lexical chains because wire omits native capture metadata. */
+export function lowerNativeOverlayStorage(image: ProgramImage): ProgramImage {
+	if (
+		image.runtime.functions.every(
+			(fn) =>
+				fn.closureCaptureOwners === undefined && fn.closureCaptureValues === undefined,
+		)
+	)
+		return image;
+	const functions = image.runtime.functions.map((fn) =>
+		withClosureCaptureValues(withClosureCaptureOwners(fn, undefined), undefined),
+	);
+	return lowerNativeStorage(
+		{
+			...image,
+			runtime: { ...image.runtime, functions },
+			native: {
+				...image.native,
+				functions: image.native.functions.map((fn) => ({
+					...fn,
+					body: withClosureCaptureValues(
+						withClosureCaptureOwners(fn.body, undefined),
+						undefined,
+					),
+				})),
+			},
+		},
+		"conservative",
+	);
 }
 
 /** Validate every storage plan of a program unless this exact program already passed. */

@@ -16,6 +16,7 @@ import * as path from "node:path";
 import { fileIdentity, settledFileIdentity } from "./artifact-store.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 import { emitRelocatableNativeOverlayTranslationUnits } from "./compiler/target/emit-program-image.ts";
+import { lowerNativeOverlayStorage } from "./compiler/target/lower-native-storage.ts";
 import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { hashDirectoryTrees } from "./file-tree.ts";
@@ -366,7 +367,7 @@ function ensureSourceArtifacts(
 		if (nativeKey === undefined) {
 			throw new Error("native compiler bake requires a native cache identity");
 		}
-		const image = bakeProgram();
+		const image = lowerNativeOverlayStorage(bakeProgram());
 		bytes = serializeRuntimeImage(image.runtime);
 		requireNonemptyWire(bytes);
 		const outputDigest = hash("sha256", bytes, "hex");

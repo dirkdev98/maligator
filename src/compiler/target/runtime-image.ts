@@ -597,7 +597,7 @@ export interface BytecodeFunction {
 /** Closure metadata does not change instruction liveness or safepoint roots. */
 export function withClosureCaptureOwners(
 	fn: BytecodeFunction,
-	closureCaptureOwners: Array<number>,
+	closureCaptureOwners: Array<number> | undefined,
 ): BytecodeFunction {
 	const result = { ...fn, closureCaptureOwners };
 	inheritVmSafepointRootMapTrust(fn, result);
@@ -607,7 +607,7 @@ export function withClosureCaptureOwners(
 /** Capture descriptors preserve the instruction and safepoint contracts. */
 export function withClosureCaptureValues(
 	fn: BytecodeFunction,
-	closureCaptureValues: Array<ClosureCaptureValue>,
+	closureCaptureValues: Array<ClosureCaptureValue> | undefined,
 ): BytecodeFunction {
 	const result = { ...fn, closureCaptureValues };
 	inheritVmSafepointRootMapTrust(fn, result);

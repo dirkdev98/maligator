@@ -338,9 +338,9 @@ contracts or investigates costs still visible after the string follow-ups.
       array-iterator protocol and a snapshot check per key) and `Object.entries` 2x (one
       pair array per entry).
 
-- [ ] Expose certified record-sort kernels through one repeated indirect comparator
-      consumer. Number and homogeneous String fields already have typed kernels;
-      trace a comparator passed through a binding to its first lost target proof.
+- [ ] Expose certified whole-sort kernels through one bounded finite-target comparator
+      consumer. Binding-held singleton and forwarded callbacks already have compiled
+      nomination; runtime nomination still invokes the comparator per comparison.
       Preserve generic comparison order for uncertified or heterogeneous keys, and
       retain only repeated workload savings that repay analysis and generated size.
 
@@ -351,11 +351,12 @@ contracts or investigates costs still visible after the string follow-ups.
       Profile the current pending-await and mutable javascript-v2 paths before changing
       their representation, preserving async stacks and exact microtask ordering.
 
-- [ ] Create closures and wide object literals closer to Node. A closure without
-      captures costs 10.6 ns against 5.0, and one capturing the loop variable 21.9 ns
-      against 5.75: each iteration also builds a fresh environment, and 40% of the
-      closure's own cost sits in `mal_vm_op_create_function`. An eight-field object
-      literal costs 13.5 ns against 6.1.
+- [ ] Reduce remaining no-capture closure, per-iteration capture and wide-literal creation
+      costs. Source-immutable leaf captures can copy values in open images; synthetic
+      iteration owners and cyclic initializers still need per-creation snapshots before
+      owner elision. Literals already use cached final shapes and coallocated fields.
+      Select a repeated consumer and bound remaining allocation, initialization and
+      metadata costs before changing either representation.
 
 - [ ] Bring node:stream and EventEmitter construction closer to Node. A constructed
       Readable still costs about 5x Node and a Writable 3.5x, mostly option reads
