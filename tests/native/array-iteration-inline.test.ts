@@ -11,9 +11,9 @@ import {
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-array-iteration-inline-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("inline Array iteration expansion", () => {
-	afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 	let compiled: string;
 	let interpreted: string;
 	let source: string;
@@ -47,4 +47,32 @@ describe("inline Array iteration expansion", () => {
 	it("matches Node under interpreted GC stress", () => {
 		expect(runToStdout(interpreted, { env: STRESS_ENV })).toBe(expected);
 	});
+});
+
+describe("private Array result growth", () => {
+	let binaries: { compiled: string; interpreted: string };
+	let expected: string;
+	beforeAll(() => {
+		binaries = buildBackendPairFromOneProgramImage({
+			fixture: "tests/local/array-iteration-growth.js",
+			name: "array-iteration-growth",
+			outDir,
+		});
+		expected = execFileSync(
+			process.execPath,
+			["--expose-gc", "tests/local/array-iteration-growth.js"],
+			{ encoding: "utf8" },
+		);
+	});
+
+	for (const backend of ["compiled", "interpreted"] as const)
+		it(`preserves wide stores and object identity across ${backend} collections`, () => {
+			// Full safepoint stress repeatedly scans the entire wide result. The fixture
+			// instead collects at each capacity boundary while callback values are live.
+			expect(
+				runToStdout(binaries[backend], {
+					env: { MAL_HOST_GC: "1", MAL_GC_VERIFY: "1" },
+				}),
+			).toBe(expected);
+		});
 });

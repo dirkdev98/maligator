@@ -1,17 +1,19 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	assertExactLines,
 	buildNativeBinary,
+	buildNativeBinaryResult,
 	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-arguments-static-"));
+afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 const expected = ["arguments-static PASS"];
 
 describe("static arguments access", () => {
@@ -67,7 +69,22 @@ describe("static arguments access", () => {
 			);
 		});
 		it(`${name} reports snapshot move costs`, () => {
-			const result = spawnSync(binary(), [], {
+			const built = buildNativeBinaryResult({
+				fixture: "tests/local/arguments-snapshot-costs.js",
+				name: `arguments-snapshot-costs-${name}`,
+				compiled: name === "compiled",
+				mainFile: HOST_MAIN,
+				outDir,
+				environment: { ...process.env, MAL_PERF_STATS: "1" },
+			});
+			const snapshotFunctions = built.programImage.runtime.functions.filter(
+				(fn) => fn.argumentSnapshotCount > 0,
+			);
+			const logicalValues = snapshotFunctions.reduce(
+				(total, fn) => total + fn.argumentSnapshotCount,
+				0,
+			);
+			const result = spawnSync(built.binaryPath, [], {
 				encoding: "utf8",
 				env: {
 					...process.env,
@@ -76,14 +93,17 @@ describe("static arguments access", () => {
 				},
 			});
 			expect(result.status, result.stderr || result.stdout).toBe(0);
+			expect(result.stdout).toBe("arguments-snapshot-costs PASS\n");
 			const line = result.stderr
 				.split("\n")
 				.find((candidate) => candidate.startsWith("[perf-arguments-stats]"));
 			expect(line).toBeDefined();
 			const field = (key: string): number =>
 				Number(line?.match(new RegExp(`${key}=([0-9]+)`))?.[1] ?? -1);
-			expect(field("logical_values")).toBe(43);
-			expect(field("destination_writes")).toBe(name === "interpreted" ? 42 : 43);
+			expect(logicalValues).toBeGreaterThan(0);
+			expect(field("logical_values")).toBe(logicalValues);
+			// Indirect calls keep incoming arguments separate from destination registers.
+			expect(field("destination_writes")).toBe(logicalValues);
 			expect(field("temporary_copies")).toBe(name === "interpreted" ? 2 : 0);
 		});
 	}

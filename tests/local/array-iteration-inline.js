@@ -472,28 +472,6 @@ check(
 	})(),
 );
 check(
-	"map and filter grow object results beyond the initial reserve limit",
-	(() => {
-		const source = Array.from({ length: 65540 }, (_, index) => index);
-		let matches = 0;
-		for (let round = 0; round < 2; round++) {
-			const shared = { value: round };
-			const mapped = source.map((value) =>
-				(value & 4095) === 0 ? { value: value + round } : shared,
-			);
-			const filtered = mapped.filter((value) => value.value >= round);
-			if (
-				mapped.length === source.length &&
-				filtered.length === source.length &&
-				filtered[65539] === mapped[65539] &&
-				filtered[32768].value === 32768 + round
-			)
-				matches++;
-		}
-		return matches === 2;
-	})(),
-);
-check(
 	"map retains the full unsigned Array length domain before an early throw",
 	(() => {
 		let caught = 0;
