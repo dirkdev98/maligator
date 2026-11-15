@@ -125,7 +125,9 @@ test.each([1, 2])("large failure diagnostics preserve status with %i jobs", (job
 		failure = error;
 	}
 	expect(failure).toMatchObject({ status: 7 });
-	expect(failure).toHaveProperty("stderr", Buffer.from(diagnostic));
+	const stderr = (failure as { stderr: Buffer }).stderr;
+	expect(Buffer.isBuffer(stderr)).toBe(true);
+	expect(stderr.equals(Buffer.from(diagnostic))).toBe(true);
 });
 
 test.each([
@@ -201,7 +203,9 @@ test("one native command retains large failure diagnostics and status", () => {
 		failure = error;
 	}
 	expect((failure as { status: number }).status).toBe(7);
-	expect(failure).toHaveProperty("stderr", Buffer.from(diagnostic));
+	const stderr = (failure as { stderr: Buffer }).stderr;
+	expect(Buffer.isBuffer(stderr)).toBe(true);
+	expect(stderr.equals(Buffer.from(diagnostic))).toBe(true);
 });
 
 test("runs every command once with nothing but the commands on PATH", () => {
