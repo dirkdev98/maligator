@@ -462,8 +462,10 @@ contracts or investigates costs still visible after the string follow-ups.
       the same program, production or not, keep a different stack layout and never
       reproduce it, so a harness fixture cannot guard the fix as it stands.
 
-- [ ] Fix remaining RegExp @@replace protocol and coercion cases. Prefer shared
-      replacement semantics over case-specific branches.
+- [ ] Implement the shared HTMLDDA host value and its `typeof`, truthiness and
+      equality semantics. The remaining Annex B String replacement cases need
+      `$262.IsHTMLDDA`; creating an ordinary callable object would leave the
+      language and optimizer contracts inconsistent.
 
 - [ ] Validate RegExp literal Unicode properties independently of the compiler host's
       Unicode data. Meriyah uses the host RegExp constructor, which rejects Unicode 18
