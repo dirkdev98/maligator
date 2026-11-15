@@ -2003,6 +2003,35 @@ describe("native fast entries", () => {
 		);
 	});
 
+	it("counts snapshots when a forwarded fast call succeeds", () => {
+		const source = fastEntry(
+			body(
+				[
+					{ opcode: "LOAD_ARGUMENT_COUNT", dst: 2 },
+					{
+						opcode: "CALL",
+						dst: 3,
+						callee: 1,
+						thisValue: -1,
+						argumentCount: 1,
+						arguments: [2],
+					},
+					{ opcode: "RETURN", value: 3 },
+				],
+				{ needsArguments: true, argumentSnapshotCount: 1 },
+			),
+			() => ({
+				symbol: "mal_compiled_7_try",
+				abi: { parameters: ["boxed"], result: { kind: "boxed" } },
+			}),
+		)!.join("\n");
+		expect(source).toContain(
+			"if (!mal_compiled_7_try(vm, MAL_VALUE_UNDEFINED, __fast_r2, mal_value_to_function_object(__fast_r1)->creation_env, out)) goto __full; MAL_PERF_ADD(argument_snapshot_logical_values, 1); return true;",
+		);
+		expect(source).toContain("MAL_PERF_COUNT(argument_snapshot_destination_writes);");
+		expect(source).not.toContain("&__fast_r3");
+	});
+
 	it("forwards a fast tail call's output while preserving another return predecessor", () => {
 		const source = fastEntry(
 			body([

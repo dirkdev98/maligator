@@ -275,6 +275,11 @@ export function renderNativeFastEntry(
 	const result = exported ? undefined : directEntry;
 	const targets = new Set<number>();
 	const body: Array<readonly [number, string]> = [];
+	// Restarts count logical snapshots in the full entry, but speculative stores still cost writes.
+	const snapshotCompletion =
+		fn.argumentSnapshotCount === 0
+			? ""
+			: `MAL_PERF_ADD(argument_snapshot_logical_values, ${fn.argumentSnapshotCount}); `;
 	let loadsProperties = false;
 	let loadsCaptures = false;
 	const instructions = [...graph.keys()]
@@ -396,7 +401,14 @@ export function renderNativeFastEntry(
 		)
 			loadsProperties = true;
 		if (op.opcode === "LOAD_CAPTURED") loadsCaptures = true;
-		body.push([ip, line]);
+		const snapshotWrite =
+			ip < fn.argumentSnapshotCount && line.length > 0
+				? "MAL_PERF_COUNT(argument_snapshot_destination_writes); "
+				: "";
+		body.push([
+			ip,
+			`${op.opcode === "RETURN" ? snapshotCompletion : ""}${snapshotWrite}${line}`,
+		]);
 	}
 	const lines: Array<string> = [];
 	const starts: Array<number> = [];
@@ -409,7 +421,9 @@ export function renderNativeFastEntry(
 	}
 	const mappedLineCount = lines.length;
 	if (targets.has(fn.instructions.length)) lines.push(`F${fn.instructions.length}:;`);
-	lines.push(`    ${fastReturn("MAL_VALUE_UNDEFINED", result, exported, tryAbi.result)}`);
+	lines.push(
+		`    ${snapshotCompletion}${fastReturn("MAL_VALUE_UNDEFINED", result, exported, tryAbi.result)}`,
+	);
 
 	// Register identifiers share C's namespace with runtime typedefs such as f32 and f64.
 	const locals = [...registers].sort((left, right) => left - right);
@@ -1510,8 +1524,13 @@ function fastInstruction(
 					? [forwardsResult ? "out" : `&__fast_r${op.dst}`]
 					: []),
 			].join(", ")})`;
-			if (forwardsResult)
-				return `${guards.length === 0 ? "" : `if (${guards.join(" || ")}) goto __full; `}return ${call};`;
+			if (forwardsResult) {
+				const completion =
+					input.fn.argumentSnapshotCount === 0
+						? `return ${call};`
+						: `if (!${call}) goto __full; MAL_PERF_ADD(argument_snapshot_logical_values, ${input.fn.argumentSnapshotCount}); return true;`;
+				return `${guards.length === 0 ? "" : `if (${guards.join(" || ")}) goto __full; `}${completion}`;
+			}
 			const resultValue =
 				callee.abi.result.kind === "undefined"
 					? "MAL_VALUE_UNDEFINED"

@@ -58,7 +58,7 @@ describe("emitted C source mapping", () => {
 		}
 	});
 
-	it("maps a frameless restart to the unsupported call without mapping the pruned tail", () => {
+	it("maps an early frameless restart to its branch without mapping the pruned path", () => {
 		const source = [
 			"function select(flag, value, callback) {",
 			"  if (flag) return value.id;",
@@ -73,7 +73,7 @@ describe("emitted C source mapping", () => {
 			result.mapping.ranges
 				.filter((range) => range.origins.some((origin) => origin.line === line))
 				.map((range) => lines.slice(range.startLine - 1, range.endLine).join("\n"));
-		expect(bodies(3).some((body) => body.includes("goto __full;"))).toBe(true);
+		expect(bodies(2).some((body) => body.includes("goto __full;"))).toBe(true);
 		expect(
 			result.mapping.ranges.some(
 				(range) =>
@@ -81,7 +81,7 @@ describe("emitted C source mapping", () => {
 						.slice(range.startLine - 1, range.endLine)
 						.join("\n")
 						.includes("goto __full;") &&
-					range.origins.some((origin) => origin.line === 4),
+					range.origins.some((origin) => origin.line === 3 || origin.line === 4),
 			),
 		).toBe(false);
 		expect(bodies(3).some((body) => body.includes("mal_vm_call_cached"))).toBe(true);
