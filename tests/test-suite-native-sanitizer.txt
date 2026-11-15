@@ -349,3 +349,4 @@ tests/native/node-http-request-cancel.test.ts
 
 tests/native/node-crypto-encrypted-pkcs8.test.ts
 tests/native/primordial-binding-guards.test.ts
+tests/native/rest-forwarding.test.ts

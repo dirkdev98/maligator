@@ -354,6 +354,11 @@ describe("rest forwarding allocation contract", () => {
 
 	for (const source of [
 		"function forward(...args) { return target(...args); }",
+		"function* forward(...args) { yield 1; return target(...args); }",
+		"async function forward(...args) { await 1; return target(...args); }",
+		"async function* forward(...args) { await 1; yield 2; return target(...args); }",
+		'async function forward() { "use strict"; await 1; return target.apply(null, arguments); }',
+		'function* forward() { "use strict"; yield 1; return target.apply(null, arguments); }',
 		"class Forward { constructor(...args) { this.value = target(...args); } }",
 		"class Forward { constructor(first, ...args) { this.value = target(first, ...args); } }",
 		"class Forward { constructor(fn, ...args) { fn(...args); this.value = fn(...args); } }",
@@ -393,8 +398,6 @@ describe("rest forwarding allocation contract", () => {
 		"function forward(...args) { return args; }",
 		"function forward(...args) { return sink(null, args); }",
 		"function forward(...args) { return () => target(...args); }",
-		"function* forward(...args) { yield 1; return target(...args); }",
-		"async function forward(...args) { await 1; return target(...args); }",
 
 		'function forward(...args) { eval("args[0] = 7"); return target(...args); }',
 	]) {

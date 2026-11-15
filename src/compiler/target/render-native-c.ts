@@ -6816,8 +6816,6 @@ function emitResumableFunction(
 	const totalSlots = nextSlot;
 
 	const capturesEnv = fn.capturedCount > 0;
-	// Every exit after publishing the invocation's root frame must unlink it.
-	const gcUnlink = "vm->root_frame_head = __gc_frame.prev; ";
 	const argumentRetentionLimit = computeArgumentRetentionLimit(fn);
 	const retainArguments =
 		argumentRetentionLimit === 0x7fffffff
@@ -6825,6 +6823,9 @@ function emitResumableFunction(
 			: argumentRetentionLimit >= 0
 				? `arg_count > 0 && arg_count <= ${argumentRetentionLimit}`
 				: "false";
+	const argumentUnlink =
+		retainArguments === "false" ? "" : "mal_gc_unroot(&__argument_roots); ";
+	const gcUnlink = `${argumentUnlink}vm->root_frame_head = __gc_frame.prev; `;
 
 	// thisSlot is -1: a coroutine is never a derived constructor, and `this` is read
 	// from the this_value parameter (which the resume path is invoked with from the
@@ -6970,6 +6971,12 @@ function emitResumableFunction(
 		`    }`,
 		...COMPILED_ENTRY_SCOPE,
 	);
+	// A rooted coroutine owns resumed inputs; a fresh entry borrows until adoption.
+	if (retainArguments !== "false")
+		lines.push(
+			"    MalRootSpan __argument_roots;",
+			`    mal_gc_root(&__argument_roots, (MalValue *) args, entry_state == nullptr && (${retainArguments}) ? arg_count : 0);`,
+		);
 	if (body.resources.has("propertyCache") || body.resources.has("literalShapes")) {
 		const cacheMisses = [
 			body.resources.has("propertyCache")
@@ -7045,6 +7052,7 @@ function emitResumableFunction(
 		`        __gc_frame = (MalRootFrame){ .prev = vm->root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = env };`,
 	);
 	lines.push(`        vm->root_frame_head = &__gc_frame;`);
+	if (retainArguments !== "false") lines.push(`        __argument_roots.count = 0;`);
 	for (const line of initializeFixedCaptureOwners(
 		analysis.captures,
 		relocation,
@@ -17799,11 +17807,14 @@ class NativeInstructionEmission {
 					`__gc_slots[${this.coro.selfSlot}] = __async_result_promise;`,
 					...(this.coro.retainArguments !== "false"
 						? [
-								// Argument snapshots must precede calls that can move the VM stack.
+								// Own incoming arguments before calls can reenter the VM.
 								`if (${this.coro.retainArguments}) {`,
 								`  __coro = mal_vm_op_async_suspend_compiled(vm, callee, ${this.coro.functionIndex}, this_value, env, ${this.coro.suspension.slotCount}, args, arg_count, true, __async_result_promise);`,
 								`  __gc_slots[${this.coro.selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
 								`  __suspend_slots = __coro->frame.registers;`,
+								`  args = __coro->frame.arguments;`,
+								`  arg_count = __coro->frame.argument_count;`,
+								`  __argument_roots.count = 0;`,
 								`}`,
 							]
 						: []),

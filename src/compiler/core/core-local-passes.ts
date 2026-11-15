@@ -2785,13 +2785,7 @@ const forwardRestArguments: CoreFunctionPass = {
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
-		if (
-			fn.isGenerator ||
-			fn.isAsync ||
-			fn.metadata.isDerivedConstructor ||
-			fn.metadata.mappedArguments
-		)
-			return undefined;
+		if (fn.metadata.isDerivedConstructor || fn.metadata.mappedArguments) return undefined;
 		// An unmapped arguments object forwards like a rest array from index 0. With a
 		// second producer the object's identity could be observed across both.
 		let argumentsObjects = 0;

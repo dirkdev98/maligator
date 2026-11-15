@@ -246,3 +246,29 @@ describe("native suspension storage", () => {
 		expect(native.storage!.suspension!.points[0]!.registers).toContain(dead.dst);
 	});
 });
+
+it.each([
+	["async function", "await gate"],
+	["function*", "yield 1"],
+	["async function*", "yield 1"],
+])("retains a materialized lazy list across %s suspension", (prefix, transfer) => {
+	const image = compileSemanticProgramToProgramImage(
+		analyzeSourceAndRunSemanticAnalysis(
+			`globalThis.forward=${prefix} forward(fn,...values){fn.apply(null,values);${transfer};return fn.apply(null,values);};`,
+			"/suspended-rest-state.js",
+		),
+	);
+	const owner = image.native.functions.find((fn) =>
+		fn.body.instructions.some((op) => op.opcode === "CALL_REST_ARGUMENTS"),
+	)!;
+	const first = owner.body.instructions.findIndex(
+		(op) => op.opcode === "CALL_REST_ARGUMENTS",
+	);
+	const call = owner.body.instructions[first]!;
+	if (call.opcode !== "CALL_REST_ARGUMENTS") throw Error("Missing rest forwarding");
+	const point = owner.storage!.suspension!.points.find(
+		(point) => point.instructionIp > first,
+	);
+	expect(point?.registers).toContain(call.state);
+	expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+});

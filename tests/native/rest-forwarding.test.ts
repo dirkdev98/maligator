@@ -112,3 +112,57 @@ describe("rest forwarding realm fallbacks", () => {
 		});
 	}
 });
+
+describe.each(["mutable", "locked"] as const)(
+	"suspended rest forwarding under %s primordials",
+	(primordials) => {
+		let pair: ReturnType<typeof buildBackendPairFromOneProgramImage>;
+		beforeAll(() => {
+			pair = buildBackendPairFromOneProgramImage({
+				fixture: "tests/local/rest-forwarding-suspended.mjs",
+				name: `suspended-rest-${primordials}`,
+				outDir,
+				nativeStackRoots: "precise",
+				mainFile: HOST_MAIN,
+				config: resolveBuildConfig({
+					engine: { primordials, eval: false, realms: false },
+					surface: { node: true },
+				}),
+			});
+		});
+		for (const backend of ["compiled", "interpreted"] as const)
+			it(`${backend} retains lazy and materialized lists across suspension`, () => {
+				for (const stress of [{}, STRESS_ENV])
+					expect(
+						runToStdout(pair[backend], { env: { ...stress, MAL_HOST_GC: "1" } }),
+					).toBe("rest-forwarding-suspended PASS\n");
+			});
+		it("avoids rest Arrays in intact async and generator bodies", () => {
+			const binary = buildNativeBinary({
+				fixture: "tests/local/rest-forwarding-suspended-mechanism.mjs",
+				name: `suspended-rest-mechanism-${primordials}`,
+				outDir,
+				nativeStackRoots: "precise",
+				mainFile: HOST_MAIN,
+				config: resolveBuildConfig({
+					engine: { primordials, eval: false, realms: false },
+					surface: { node: true },
+				}),
+				environment: { ...process.env, MAL_PERF_STATS: "1" },
+			});
+			const result = spawnSync(binary, [], {
+				encoding: "utf8",
+				env: { ...process.env, MAL_PERF_STATS: "1" },
+			});
+			expect(result.status, result.stderr).toBe(0);
+			expect(result.stdout.trim()).toBe("rest-forwarding-suspended-mechanism PASS");
+			const counters = result.stderr.match(
+				/^\[perf-rest-stats\] arrays=(\d+) array_values=(\d+) forwards=(\d+) forwarded_values=(\d+) forward_copies=(\d+)$/m,
+			);
+			expect(counters, result.stderr).not.toBeNull();
+			expect(Number(counters![1])).toBe(0);
+			expect(Number(counters![2])).toBe(0);
+			expect(Number(counters![3])).toBeGreaterThan(0);
+		});
+	},
+);

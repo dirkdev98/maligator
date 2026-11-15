@@ -1431,6 +1431,13 @@ forwarding calls. Field and parameter initialization keep their existing order, 
 constructor result selection and `new.target` stay at the construct boundary. Derived
 constructors and forwarding into construction retain materialized lists.
 
+Suspended bodies retain the same boxed lazy-list state across each await or yield.
+Incoming values stay rooted until the coroutine frame owns them; fresh async code
+then reads that owned argument span. Materialized fallback lists remain authoritative
+across suspension, including protocol recovery and abrupt completion through finally.
+Inlining a forwarding wrapper into a suspended caller keeps its separate eligibility
+restriction.
+
 Mapper return identities can nominate element callees from a factory result without
 proving that factory's identity or the result's contents. A native call site checks
 the actual loaded function and enters its realm before calling the nominated body;

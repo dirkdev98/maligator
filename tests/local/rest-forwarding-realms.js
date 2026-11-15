@@ -7,6 +7,10 @@ function target(a, b) {
 function forward(...args) {
 	return target(...args);
 }
+function* suspendedRealmForward(...args) {
+	yield 1;
+	return target(...args);
+}
 class RealmForward {
 	constructor(...args) {
 		this.value = target(...args);
@@ -41,6 +45,12 @@ try {
 	check(
 		new RealmForward(1, 2).value === 42 && steps === 3,
 		"base constructor foreign iterator protocol",
+	);
+	steps = 0;
+	const suspended = suspendedRealmForward(1, 2);
+	check(
+		suspended.next().value === 1 && suspended.next().value === 42 && steps === 3,
+		"suspended foreign iterator protocol",
 	);
 } finally {
 	Array.prototype[Symbol.iterator] = iterator;

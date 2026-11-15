@@ -1336,8 +1336,6 @@ function verifyFunction(
 			fn.kernel.valueDefinitionKind(state) !== 1 ||
 			fn.instructionOpcodeName(coreInstructionId(definition)) !==
 				"createRestArgumentsState" ||
-			fn.isAsync ||
-			fn.isGenerator ||
 			(fn.metadata.mappedArguments && sourceArgumentCount === undefined)
 		)
 			fail("Invalid rest forwarding state");

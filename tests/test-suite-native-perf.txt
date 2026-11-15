@@ -84,3 +84,4 @@ tests/native/text-buffer.test.ts
 tests/native/tiny-string-cache.test.ts
 tests/native/watched-method-rows.test.ts
 tests/native/wide-class-layout.test.ts
+tests/native/rest-forwarding.test.ts

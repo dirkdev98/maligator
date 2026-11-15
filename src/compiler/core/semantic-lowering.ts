@@ -581,9 +581,8 @@ interface CoreFrontendFunction {
 	isGenerator?: boolean;
 
 	/**
-	 * Async functions get an ASYNC_START prologue instruction (after the
-	 * parameter prologue) and may contain await expressions, which suspend the
-	 * activation on a promise and resume via the same machinery as yield.
+	 * Async calls create their result promise before parameter initialization so
+	 * parameter failures reject it. Await resumes through the coroutine machinery.
 	 */
 	isAsync?: boolean;
 	moduleInstantiated?: boolean;
