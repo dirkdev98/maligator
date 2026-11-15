@@ -344,6 +344,12 @@ contracts or investigates costs still visible after the string follow-ups.
       Preserve generic comparison order for uncertified or heterogeneous keys, and
       retain only repeated workload savings that repay analysis and generated size.
 
+- [ ] Select a repeated descriptor-attribute transition consumer before extending shape
+      preservation beyond data appends. Bound canonical transition creation and preserve
+      SameValue compatibility, key order, private storage, cache invalidation and GC.
+      Initial attributed definitions and existing public overflow remain separate
+      admission decisions; compare their costs before broadening either path.
+
 - [ ] Reduce cold suspended async activation size or coallocate its result promise.
       Completed activations recycle on both backends; native activation storage
       materializes lazily. Pending calls still need result promises, await jobs and

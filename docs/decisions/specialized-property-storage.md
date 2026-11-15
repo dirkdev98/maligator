@@ -6,6 +6,23 @@ property row is two words: an encoded key with metadata, and a full tagged value
 or full native pointer to an owned accessor sidecar. The descriptor and shared
 grouped hash index retain their existing roles.
 
+## Shaped data prefixes
+
+An ordinary object can append a String data property with restricted attributes to
+an existing shaped prefix. The canonical shape records those attributes, so later
+reads, writes, deletion and enumeration use the same descriptor contract as dictionary
+properties. Exact-attribute updates still check compatibility before storing a value.
+
+An initial attributed property stays in a dictionary. This preserves intrinsic
+installation, where namespace and global descriptors begin in tables. Arguments,
+accessors and objects with public overflow retain their existing paths. Public
+overflow is rejected before testing shape admission, so extending this fast path
+does not add attribute checks to an object already using its ordered table tail.
+
+Changing an existing property's attributes still uses dictionary compatibility.
+Shape growth and private-field eviction preserve public attributes and insertion
+order; publication retains the ordinary slot initialization and GC card barriers.
+
 ## Key and metadata word
 
 | Bits  | Meaning                                                       |

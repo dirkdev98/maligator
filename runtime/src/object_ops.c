@@ -750,14 +750,14 @@ MalPropertyResolution mal_object_resolve_property(const MalObject *object, MalKe
     return mal_object_resolve_property_with_entry(object, key, nullptr);
 }
 
-// Script functions already keep non-default `length` and `name` slots, so their
-// lazily created `prototype` and static members stay shaped as well. Native
-// builtins keep such properties in their tables, where watched-intrinsic caches
-// expect them.
+// Requiring an ordinary data prefix preserves intrinsic installation in tables.
+// Script functions already keep their attributed metadata in shapes.
 static bool mal_object_shapes_attributed_data(
     const MalObject *object, const MalPropertyDesc *desc
 ) {
-    return object->header.type == MAL_HEAP_FUNCTION_OBJECT &&
+    return (object->header.type == MAL_HEAP_FUNCTION_OBJECT ||
+        (object->header.type == MAL_HEAP_OBJECT && !object->is_arguments &&
+            object->shape->inline_count != 0)) &&
         !mal_object_desc_is_accessor(*desc) &&
         (desc->flags & ~(MalPropertyFlags) MAL_DEFAULT_DATA_FLAGS) == 0;
 }
@@ -881,9 +881,9 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
             }
             // An attribute transition needs the dictionary's full descriptor
             // compatibility machinery.
-        } else if ((mal_object_desc_is_default_data(desc) ||
-                    mal_object_shapes_attributed_data(object, desc)) &&
-            !mal_object_has_public_overflow(object) &&
+        } else if (!mal_object_has_public_overflow(object) &&
+            (mal_object_desc_is_default_data(desc) ||
+                mal_object_shapes_attributed_data(object, desc)) &&
             (mal_object_can_add_shaped_property(object) ||
              (object->extensible && mal_object_evict_shaped_private(object)))) {
             if (!object->extensible) {
