@@ -547,12 +547,6 @@ contracts or investigates costs still visible after the string follow-ups.
       marshaled caller scope carries the caller's bindings but not its with-object
       environments, so neither reads nor WithBaseObject calls reach `o`.
 
-- [ ] Complete eval-created and nested new.target behavior. Keep direct eval connected
-      to the correct active function or constructor without exposing it indirectly.
-
-- [ ] Preserve direct-eval completion-value identity and lexical write-back semantics.
-      Cover abrupt completion and object identity as well as primitives.
-
 - [ ] A direct eval inside eval code cannot see the compiled caller's bindings:
       `eval("eval('x + y')")` throws a ReferenceError in ES modules and CommonJS.
 - [ ] A static `require("x")` ignores a reassigned `require` binding and loads the real

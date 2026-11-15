@@ -232,7 +232,7 @@ interface CoreFrontendContext {
 	 */
 	moduleDefaultBinding: Map<string, Binding>;
 	importBindingTargets: ReadonlyMap<Binding, Binding>;
-	directEvalImportGetters: Map<Binding, number>;
+	directEvalBindingAccessors: Map<Binding, Partial<Record<"get" | "set", number>>>;
 
 	/**
 	 * `import * as ns` namespace objects to build per importing module path (see
@@ -924,7 +924,7 @@ export function constructSemanticProgramCore(
 
 		moduleDefaultBinding: new Map(),
 		importBindingTargets: new Map(),
-		directEvalImportGetters: new Map(),
+		directEvalBindingAccessors: new Map(),
 		namespaceImports: new Map(),
 		namespaceMembers: new Map(),
 		moduleNamespaces: new Map(),
@@ -14925,49 +14925,67 @@ function compileDirectEval(
 	return result;
 }
 
-function directEvalImportGetter(
+function directEvalBindingAccessor(
 	program: CoreFrontendContext,
 	caller: CoreFrontendFunction,
 	binding: Binding,
-	exporter: Binding,
+	location: BindingLocation,
+	kind: "get" | "set",
 ): number {
-	const cached = program.directEvalImportGetters.get(binding);
+	let accessors = program.directEvalBindingAccessors.get(binding);
+	const cached = accessors?.[kind];
 	if (cached !== undefined) return cached;
-	const getter: CoreFrontendFunction = {
+	if (location.type === "local")
+		throw new Error("Eval accessor requires shared binding storage");
+	const parameterCount = kind === "set" ? 1 : 0;
+	const accessor: CoreFrontendFunction = {
 		semanticFile: caller.semanticFile,
 		functionIndex: program.nextFunctionIndex,
-		nameStringIndex: getOrCreateStringConstant(program, `get ${binding.name}`),
+		nameStringIndex: getOrCreateStringConstant(program, `${kind} ${binding.name}`),
 		blocks: [],
 		hasPrototype: false,
 		strict: true,
-		parameterCount: 0,
-		length: 0,
-		nextCoreVariable: 0,
+		parameterCount,
+		length: parameterCount,
+		nextCoreVariable: parameterCount,
 		nextLocalIndex: 0,
 		nextCapturedIndex: 0,
 	};
-	registerCoreFunction(program, getter);
+	registerCoreFunction(program, accessor);
 	const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
-	getter.blocks.push(block);
-	const value = loadRegisterFromLocation(
-		getter,
-		block,
-		getOrCreateBindingLocation(program, getter, exporter),
-	);
-	// Instantiating eval must not read an uninitialized cyclic import. The TDZ
-	// check belongs to each access, including one through an escaped eval closure.
+	accessor.blocks.push(block);
+	const value = loadRegisterFromLocation(accessor, block, location);
+	// Creating the eval environment must not read an uninitialized binding.
+	// Each later access checks TDZ before returning a value or rejecting a write.
 	block.emitter.emit({
 		type: "throwIfTdz",
 		registers: [value],
 		nameStringIndex: getOrCreateStringConstant(program, binding.name),
 	});
-	emitReturn(program, getter, block, value);
-	endFunction(program, getter);
-	program.directEvalImportGetters.set(binding, getter.functionIndex);
-	return getter.functionIndex;
+	if (kind === "get") {
+		emitReturn(program, accessor, block, value);
+	} else if (binding.kind === "const") {
+		emitThrowError(
+			program,
+			accessor,
+			{ block },
+			"TypeError",
+			"Assignment to constant variable.",
+		);
+	} else {
+		storeRegisterAtLocation(block, location, 0);
+		emitReturn(program, accessor, block, compileUndefined(accessor, { block }));
+	}
+	endFunction(program, accessor);
+	if (accessors === undefined) {
+		accessors = {};
+		program.directEvalBindingAccessors.set(binding, accessors);
+	}
+	accessors[kind] = accessor.functionIndex;
+	return accessor.functionIndex;
 }
 
-/** PerformEval in the caller's scope: marshal its bindings, eval, write them back. */
+/** PerformEval shares caller storage so writes and escaped closures stay live. */
 function compileDirectEvalCall(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -15018,63 +15036,38 @@ function compileDirectEvalCall(
 		directEvalDirtyTrackerKey(),
 		dirtyTracker,
 	);
-	// Imports remain live during reentrant calls and after an eval closure escapes.
 	for (const [name, binding] of bindings) {
+		const key = compileStaticString(program, fn, cursor, name);
+		if (isDirectEvalVarBindingValue(program, fn, binding)) {
+			const value = nextCoreVariable(fn);
+			cursor.block.emitter.emit(
+				{
+					type: "withGet",
+					registers: [value],
+					nameStringIndex: getOrCreateStringConstant(program, name),
+				},
+				{ type: "storeProperty", registers: [scopeObject, key, value] },
+			);
+			continue;
+		}
 		const exporter = program.importBindingTargets.get(binding);
-		if (exporter !== undefined) {
-			const getter = nextCoreVariable(fn);
+		const location = getOrCreateBindingLocation(program, fn, exporter ?? binding);
+		const kinds: Array<"get" | "set"> =
+			exporter !== undefined || binding.immutableSelfReference ? ["get"] : ["get", "set"];
+		for (const kind of kinds) {
+			const accessor = nextCoreVariable(fn);
 			cursor.block.emitter.emit({
 				type: "createFunction",
-				registers: [getter],
-				functionIndex: directEvalImportGetter(program, fn, binding, exporter),
+				registers: [accessor],
+				functionIndex: directEvalBindingAccessor(program, fn, binding, location, kind),
 			});
-			const key = compileStaticString(program, fn, cursor, name);
 			cursor.block.emitter.emit({
 				type: "defineAccessor",
-				registers: [scopeObject, key, getter],
-				kind: "get",
+				registers: [scopeObject, key, accessor],
+				kind,
 				enumerable: true,
 			});
-			continue;
 		}
-		let value: number;
-		if (
-			program.evalDirect &&
-			!fn.semanticFile.strict &&
-			!program.directEvalContext.varEnvironmentIsGlobal &&
-			binding.kind === "var" &&
-			!binding.undeclared &&
-			!binding.implicit &&
-			fn.semanticFile.scopes[0]?.bindings.includes(binding)
-		) {
-			value = nextCoreVariable(fn);
-			cursor.block.emitter.emit({
-				type: "withGet",
-				registers: [value],
-				nameStringIndex: getOrCreateStringConstant(program, name),
-			});
-		} else {
-			const location = getOrCreateBindingLocation(program, fn, binding);
-			value = loadRegisterFromLocation(fn, cursor.block, location);
-		}
-		const key = compileStaticString(program, fn, cursor, name);
-		if (binding.kind === "const" || binding.immutableSelfReference) {
-			// Immutable bindings reject eval's writes: a const one always throws, a
-			// function's own name only in strict code, which its configurability
-			// tells the runtime's with-store.
-			cursor.block.emitter.emit({
-				type: "defineProperty",
-				registers: [scopeObject, key, value],
-				enumerable: true,
-				writable: false,
-				configurable: binding.kind !== "const",
-			});
-			continue;
-		}
-		cursor.block.emitter.emit({
-			type: "storeProperty",
-			registers: [scopeObject, key, value],
-		});
 	}
 	marshalDirectEvalInheritedContext(program, fn, cursor, scopeObject, inheritedContext);
 
@@ -15218,12 +15211,9 @@ function compileDirectEvalCall(
 		],
 	});
 
-	// Write mutated bindings back. Eval's writes to immutable bindings throw or are
-	// ignored, so those have nothing to write back.
+	// Eval-created variable records retain their runtime declaration transport.
 	for (const [name, binding] of bindings) {
-		if (binding.kind === "const" || binding.immutableSelfReference) {
-			continue;
-		}
+		if (!isDirectEvalVarBindingValue(program, fn, binding)) continue;
 		const location = getOrCreateBindingLocation(program, fn, binding);
 		const key = compileStaticString(program, fn, cursor, name);
 		const value = nextCoreVariable(fn);

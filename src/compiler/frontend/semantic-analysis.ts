@@ -103,6 +103,8 @@ export interface SemanticFile {
 	 * locals and is deliberately NOT flagged. Query via `functionHasDirectEval`.
 	 */
 	hasDirectEval: Set<ESTree.Node>;
+	/** Declared bindings exposed through live accessors to direct eval. */
+	directEvalVisibleBindings: Set<Binding>;
 	/** Function units whose own variable environment can receive sloppy eval vars. */
 	directEvalVariableEnvironments: Set<ESTree.Node>;
 	/** This/new.target bindings conservatively captured for direct eval in arrows. */
@@ -297,6 +299,7 @@ export function analyzeSourceAndRunSemanticAnalysis(
 		guardedArgumentsAccesses: new Set(),
 		lazyArgumentsBindings: new Set(),
 		hasDirectEval: new Set(),
+		directEvalVisibleBindings: new Set(),
 		directEvalVariableEnvironments: new Set(),
 		directEvalThisBindings: new Map(),
 		directEvalNewTargetBindings: new Map(),
@@ -398,6 +401,7 @@ export const FUNCTION_UNIT_NODE_TYPES = new Set<ESTree.Node["type"]>([
 function detectDirectEval(node: ESTree.CallExpression, file: SemanticFile): boolean {
 	const argumentsBinding = resolveArgumentsBinding(file.nodeToScope.get(node));
 	if (argumentsBinding) {
+		file.directEvalVisibleBindings.add(argumentsBinding);
 		// Eval source can dynamically name `arguments`; record a non-static
 		// use and retain the binding for direct-eval scope marshaling.
 		argumentsBinding.usageNodes.push(node);
@@ -425,12 +429,9 @@ function detectDirectEval(node: ESTree.CallExpression, file: SemanticFile): bool
 		for (const binding of scope.bindings) {
 			if (visibleNames.has(binding.name)) continue;
 			visibleNames.add(binding.name);
-			if (
-				!binding.undeclared &&
-				!binding.implicit &&
-				!binding.usageNodes.includes(node)
-			) {
-				binding.usageNodes.push(node);
+			if (!binding.undeclared && !binding.implicit) {
+				file.directEvalVisibleBindings.add(binding);
+				if (!binding.usageNodes.includes(node)) binding.usageNodes.push(node);
 			}
 		}
 		if (FUNCTION_UNIT_NODE_TYPES.has(scope.node.type)) {
@@ -2003,6 +2004,8 @@ function calculateBindingScopedTo(file: SemanticFile) {
 		) {
 			return "global";
 		}
+
+		if (file.directEvalVisibleBindings.has(binding)) return "captured";
 
 		for (const usage of usageScopes) {
 			if (usageToDeclarationScopeCrossesFunction(usage, declarationScope)) {
