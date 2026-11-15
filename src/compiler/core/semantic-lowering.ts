@@ -3564,8 +3564,9 @@ function emitVarDeclarationInits(
 					candidate !== binding &&
 					candidate.kind === "var" &&
 					candidate.name === binding.name &&
-					candidate.declarationNode !== undefined &&
-					parameterNodes.has(candidate.declarationNode),
+					(candidate.implicit === "arguments" ||
+						(candidate.declarationNode !== undefined &&
+							parameterNodes.has(candidate.declarationNode))),
 			);
 			if (parameterBinding) {
 				const parameterLocation = getOrCreateBindingLocation(
