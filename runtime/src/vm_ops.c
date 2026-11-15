@@ -10693,10 +10693,7 @@ MalGeneratorObject *mal_vm_op_async_suspend_compiled(
     mal_gc_root(&promise_root, &promise_value, 1);
 
     // The hidden async state reuses the generator suspendable-frame object.
-    MalGeneratorObject *state = mal_generator_object_new_async(
-        &vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
-        false);
+    MalGeneratorObject *state = mal_async_function_state_new(vm);
     state->async_data->promise = promise_value;
     state->state = MAL_GENERATOR_EXECUTING;
     // Link the result promise back to this async state for async stack stitching.

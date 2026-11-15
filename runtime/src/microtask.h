@@ -10,7 +10,7 @@ typedef struct MalAsyncContext MalAsyncContext;
 typedef void (*MalHostJobFn)(MalVm *vm, void *data, MalValue argument, bool is_reject);
 
 /**
- * Promise jobs and typed async continuations enqueued on the microtask queue.
+ * Promise reactions and typed async continuations, pending or queued.
  */
 typedef enum MalJobKind {
     MAL_JOB_PROMISE_REACTION,
@@ -24,7 +24,8 @@ typedef enum MalJobKind {
 } MalJobKind;
 
 /**
- * A queued microtask. Jobs are drained FIFO at a baseline frame count by
+ * A pending reaction owns its future microtask record until settlement.
+ * Queued jobs are drained FIFO at a baseline frame count by
  * mal_vm_drain_microtasks; running one may enqueue further jobs (the queue
  * grows during the drain and the loop continues until it empties).
  */
@@ -42,9 +43,10 @@ typedef struct MalJob {
         /** Promise reaction or typed continuation payload. */
         struct {
             MalValue handler;
-            /* Preserves MalPromiseReaction's capability encoding verbatim. */
+            /* Callable pair, empty capability, or direct Promise/constructor pair. */
             MalValue cap_resolve;
             MalValue cap_reject;
+            /** A pending ordinary reaction keeps its rejection handler here. */
             MalValue argument;
         } reaction;
         /** NewPromiseResolveThenableJob payload. */
@@ -74,8 +76,15 @@ u64 mal_promise_job_allocation_count(void);
 u64 mal_promise_reaction_allocation_count(void);
 u64 mal_promise_job_reuse_count(void);
 u64 mal_promise_reaction_reuse_count(void);
-void mal_promise_note_reaction_allocation(void);
-void mal_promise_note_reaction_reuse(void);
+
+/** Allocate a reaction in its future job representation; the promise roots it. */
+MalJob *mal_vm_new_pending_job(MalVm *vm, MalJobKind kind);
+
+/** Transfer a detached, barriered reaction into its FIFO job position. */
+void mal_vm_enqueue_pending_job(MalVm *vm, MalJob *job, bool is_reject, MalValue argument);
+
+/** Clear and release abandoned pending reactions without disturbing the active job. */
+void mal_vm_free_pending_jobs(MalVm *vm, MalJob *list);
 
 /** Free every VM-owned job block at teardown. */
 void mal_vm_free_job_pool(MalVm *vm);
@@ -94,17 +103,6 @@ void mal_vm_enqueue_reaction_job(
     MalValue cap_reject,
     MalValue argument
 );
-#if MAL_NODE
-void mal_vm_enqueue_reaction_job_in_context(
-    MalVm *vm,
-    MalValue handler,
-    bool is_reject,
-    MalValue cap_resolve,
-    MalValue cap_reject,
-    MalValue argument,
-    MalAsyncContext *context
-);
-#endif
 
 /** Append a typed async-await resumption job to the microtask queue. */
 void mal_vm_enqueue_await_job(
@@ -117,20 +115,6 @@ void mal_vm_enqueue_await_job(
 /** Queue an intrinsic Promise.all element without materializing a callable. */
 void mal_vm_enqueue_promise_all_job(
     MalVm *vm, MalValue state, u32 index, bool is_reject, MalValue argument);
-#if MAL_NODE
-void mal_vm_enqueue_promise_all_job_in_context(
-    MalVm *vm, MalValue state, u32 index, bool is_reject, MalValue argument,
-    MalAsyncContext *context);
-#endif
-#if MAL_NODE
-void mal_vm_enqueue_await_job_in_context(
-    MalVm *vm,
-    MalValue state,
-    bool is_reject,
-    MalValue argument,
-    MalAsyncContext *context
-);
-#endif
 
 /** Append an AsyncGeneratorAwaitReturn fulfillment/rejection continuation. */
 void mal_vm_enqueue_async_generator_return_job(
@@ -140,16 +124,6 @@ void mal_vm_enqueue_async_generator_return_job(
     bool is_reject,
     MalValue argument
 );
-#if MAL_NODE
-void mal_vm_enqueue_async_generator_return_job_in_context(
-    MalVm *vm,
-    MalValue generator,
-    MalValue realm_anchor,
-    bool is_reject,
-    MalValue argument,
-    MalAsyncContext *context
-);
-#endif
 
 /** Append a typed AsyncFromSyncIterator continuation. */
 void mal_vm_enqueue_async_from_sync_job(
@@ -162,19 +136,6 @@ void mal_vm_enqueue_async_from_sync_job(
     bool is_reject,
     MalValue argument
 );
-#if MAL_NODE
-void mal_vm_enqueue_async_from_sync_job_in_context(
-    MalVm *vm,
-    MalValue sync_iterator,
-    MalValue result_promise,
-    MalValue realm_anchor,
-    bool done,
-    bool close_on_rejection,
-    bool is_reject,
-    MalValue argument,
-    MalAsyncContext *context
-);
-#endif
 
 /** Append a typed DisposeResources continuation. */
 void mal_vm_enqueue_dispose_resources_job(
@@ -185,17 +146,6 @@ void mal_vm_enqueue_dispose_resources_job(
     bool is_reject,
     MalValue argument
 );
-#if MAL_NODE
-void mal_vm_enqueue_dispose_resources_job_in_context(
-    MalVm *vm,
-    MalValue stack,
-    MalValue result_promise,
-    MalValue realm_anchor,
-    bool is_reject,
-    MalValue argument,
-    MalAsyncContext *context
-);
-#endif
 
 /** Append a resolve-thenable job to the microtask queue. */
 void mal_vm_enqueue_thenable_job(

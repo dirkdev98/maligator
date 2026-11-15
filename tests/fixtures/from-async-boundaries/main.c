@@ -29,9 +29,10 @@ static bool boundary(MalVm *vm, bool array_like, bool limit, f64 start) {
     MalValue args[2] = {mal_value_new_boolean(array_like), mal_value_new_boolean(limit)};
     if (!call_global(vm, "startBoundary", args, 2, &roots[0]) ||
         !get(vm, "pendingNext", &roots[0]) || !mal_value_is_promise_object(roots[0])) goto done;
-    MalPromiseReaction *reaction = mal_value_to_promise_object(roots[0])->reactions_head;
-    if (reaction == nullptr || !mal_value_is_native_function_object(reaction->on_fulfilled)) goto done;
-    roots[1] = reaction->on_fulfilled;
+    MalJob *reaction = mal_value_to_promise_object(roots[0])->reactions_head;
+    if (reaction == nullptr || reaction->kind != MAL_JOB_PROMISE_REACTION ||
+        !mal_value_is_native_function_object(reaction->as.reaction.handler)) goto done;
+    roots[1] = reaction->as.reaction.handler;
     MalNativeFunctionObject *step = mal_value_to_native_function_object(roots[1]);
     // Seed the retained index ABI, then exercise real next/map/define/close reactions without billions of iterations.
     f64 index;

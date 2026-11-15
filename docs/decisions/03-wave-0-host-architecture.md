@@ -223,6 +223,13 @@ The WinterTC checkpoint drains VM promise/microtask jobs. The Node checkpoint dr
 other runnable. This ordering belongs above the host task queue; the reactor does not
 distinguish personalities.
 
+A pending Promise reaction owns its future microtask record. Registration captures
+its async context; settlement transfers the same record to the FIFO queue after shading
+the pending list's outgoing edges. The active job remains rooted until execution and
+capability settlement finish. Collecting an unreachable pending promise releases its
+records without disturbing that active root. Pending, queued and active records share
+one slab allocator, whose bounded idle pool retains only cleared records.
+
 After top-level execution, the entry performs its existing microtask checkpoint,
 then repeats turns. If no task is queued, the embedder may poll/block the reactor
 until one is queued. A pumped embedder uses a non-blocking one-turn entry and the

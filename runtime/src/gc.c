@@ -1838,11 +1838,11 @@ static void mal_gc_trace_cell_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
         case MAL_HEAP_PROMISE_OBJECT: {
             MalPromiseObject *promise = (MalPromiseObject *) cell;
             mal_gc_mark_value_in(ctx, promise->result);
-            for (MalPromiseReaction *r = promise->reactions_head; r != nullptr; r = r->next) {
-                mal_gc_mark_value_in(ctx, r->cap_resolve);
-                mal_gc_mark_value_in(ctx, r->cap_reject);
-                mal_gc_mark_value_in(ctx, r->on_fulfilled);
-                mal_gc_mark_value_in(ctx, r->on_rejected);
+            for (MalJob *r = promise->reactions_head; r != nullptr; r = r->next) {
+                mal_gc_mark_value_in(ctx, r->as.reaction.cap_resolve);
+                mal_gc_mark_value_in(ctx, r->as.reaction.cap_reject);
+                mal_gc_mark_value_in(ctx, r->as.reaction.handler);
+                mal_gc_mark_value_in(ctx, r->as.reaction.argument);
 #if MAL_NODE
                 if (r->async_context != nullptr) {
                     mal_gc_shade_in(ctx, &r->async_context->header);
@@ -2196,6 +2196,9 @@ static void mal_gc_scan_roots(MalVm *vm) {
 #endif
     mal_gc_mark_values(vm->unhandled_rejections, vm->unhandled_count);
     mal_gc_mark_value(vm->entry_async_promise);
+    for (u32 i = 0; i < vm->async_function_state_pool_count; i++) {
+        mal_gc_shade_in(&g_gc_thread, &vm->async_function_state_pool[i]->object.header);
+    }
     // Atoms are permanent roots, and a minor reclaims only young cells, so it visits just
     // the atoms inserted since the previous minor; every older atom survived that minor
     // as a root and is old. Majors and verification walk the store and leave the recent
@@ -2510,7 +2513,7 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
         case MAL_HEAP_PROMISE_OBJECT: {
             // A promise collected while still pending owns its reaction nodes.
             MalPromiseObject *promise = (MalPromiseObject *) cell;
-            mal_promise_free_reactions(g_gc_vm, promise->reactions_head);
+            mal_vm_free_pending_jobs(g_gc_vm, promise->reactions_head);
             promise->reactions_head = nullptr;
             promise->reactions_tail = nullptr;
             break;

@@ -23,6 +23,9 @@ typedef struct MalGeneratorObject MalGeneratorObject;
  */
 void mal_async_function_start(MalVm *vm, MalVmFrame *frame);
 
+/** Borrow a completed native activation or allocate its hidden suspendable state. */
+MalGeneratorObject *mal_async_function_state_new(MalVm *vm);
+
 /**
  * MAL_OP_AWAIT tail: resolve `awaited` to a promise and schedule resumption of
  * the suspended async `state` when it settles. The frame must already have been

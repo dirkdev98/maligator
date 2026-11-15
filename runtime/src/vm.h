@@ -15,6 +15,7 @@
 #include "generated/known_primordials.inc"
 
 #define MAL_COROUTINE_POOL_CLASS_COUNT 14
+#define MAL_ASYNC_FUNCTION_STATE_POOL_LIMIT 64
 #define MAL_TINY_STRING_CACHE_CAPACITY 256
 #define MAL_SMALL_UINT_STRING_CACHE_CAPACITY 1024
 #define MAL_SMALL_BIGINT_CACHE_MIN (-128)
@@ -2041,7 +2042,7 @@ typedef struct MalVm {
      */
     struct MalJob *job_head;
     struct MalJob *job_tail;
-    /** Reclaimable isolate-owned blocks backing queued, active, and free jobs. */
+    /** Reclaimable isolate-owned blocks backing pending, queued, active, and free jobs. */
     struct MalJobBlock *job_blocks;
     struct MalJobBlock *job_active_block;
     /** Completely idle blocks retained for reuse; bounded by the microtask layer. */
@@ -2055,13 +2056,6 @@ typedef struct MalVm {
      */
     struct MalJob *active_job;
 
-    /** Cleared, untraced pending-reaction nodes retained for reuse. */
-    struct MalPromiseReaction *reaction_pool;
-    u32 reaction_pool_count;
-    /** Reclaimable blocks backing active and pooled Promise reaction nodes. */
-    struct MalPromiseReactionBlock *reaction_blocks;
-    struct MalPromiseReactionBlock *reaction_active_block;
-
     /**
      * Byte-bounded, untraced size-class pools of cleared suspendable-frame value
      * buffers and their retained-byte totals. Classes are indexed directly; the
@@ -2071,6 +2065,10 @@ typedef struct MalVm {
     usize coroutine_buffer_pool_class_bytes[MAL_COROUTINE_POOL_CLASS_COUNT];
     usize coroutine_buffer_pool_bytes;
     u32 coroutine_buffer_pool_count;
+
+    /** Completed hidden activations, rooted with no remaining user-value edges. */
+    struct MalGeneratorObject *async_function_state_pool[MAL_ASYNC_FUNCTION_STATE_POOL_LIMIT];
+    u32 async_function_state_pool_count;
 
     /** Cleared async-generator request nodes retained for reuse. */
     struct MalAsyncGeneratorRequest *async_generator_request_pool;

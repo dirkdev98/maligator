@@ -596,6 +596,8 @@ static void mal_vm_init_engine_state(MalVm *vm) {
     vm->small_uint_string_cache = nullptr;
     vm->small_uint_string_cache_scan_limit = 0;
     vm->small_bigint_cache = nullptr;
+    vm->async_function_state_pool_count = 0;
+    memset(vm->async_function_state_pool, 0, sizeof(vm->async_function_state_pool));
     vm->array_join_frames = nullptr;
     memset(vm->for_in_snapshots, 0, sizeof(vm->for_in_snapshots));
     vm->for_in_iterator_next = mal_value_new_undefined();
@@ -826,10 +828,6 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->job_blocks = nullptr;
     vm->job_active_block = nullptr;
     vm->job_idle_block_count = 0;
-    vm->reaction_pool = nullptr;
-    vm->reaction_pool_count = 0;
-    vm->reaction_blocks = nullptr;
-    vm->reaction_active_block = nullptr;
     for (u32 i = 0; i < MAL_COROUTINE_POOL_CLASS_COUNT; i++) {
         vm->coroutine_buffer_pools[i] = nullptr;
         vm->coroutine_buffer_pool_class_bytes[i] = 0;
@@ -1202,7 +1200,6 @@ void mal_vm_free(MalVm *vm) {
     // Other VMs on this thread may still own dependency rows; release only after all of ours are detached.
     mal_object_release_idle_prototype_dependencies();
     mal_vm_free_job_pool(vm);
-    mal_promise_free_reaction_pool(vm);
     mal_vm_free_coroutine_buffer_pool(vm);
     mal_async_generator_free_request_pool(vm);
     mal_finalization_registry_free_cell_pool(vm);

@@ -643,6 +643,13 @@ snapshots occupy the async-generator queue space unused by ordinary async functi
 larger snapshots retain the bounded buffer pool. Tracing and finalization distinguish
 inline slots from owned buffers and queued async-generator requests.
 
+Completed native async activations enter an isolate-owned bounded root pool. Completion
+releases their snapshot storage, detaches the result promise's owner and async waiter
+links, and clears frame metadata before reuse. Completed interpreted bodies also detach
+those links so a later await cannot attach an ancestor to a recycled activation. Reused
+activations retain the old-to-young barriers when they acquire a new promise and
+suspended frame.
+
 Native suspension plans also certify call results consumed only by an immediate await.
 The intrinsic `Promise.resolve` can leave a primitive's intermediate promise virtual
 when the receiver and watched prototype methods remain intact. The normal await still

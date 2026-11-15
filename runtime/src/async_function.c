@@ -12,6 +12,48 @@ static MalCompletion mal_async_normal(void) {
     return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 }
 
+MalGeneratorObject *mal_async_function_state_new(MalVm *vm) {
+    if (vm->async_function_state_pool_count == 0) {
+        return mal_generator_object_new_async(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
+            false);
+    }
+    u32 index = --vm->async_function_state_pool_count;
+    MalGeneratorObject *state = vm->async_function_state_pool[index];
+    vm->async_function_state_pool[index] = nullptr;
+#if MAL_REALMS
+    mal_object_set_prototype(
+        &state->object,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+#endif
+    return state;
+}
+
+static void mal_async_function_release_completed(MalVm *vm, MalGeneratorObject *state) {
+    MalPromiseObject *promise = mal_value_to_promise_object(state->async_data->promise);
+    // A completed body contributes no future async stack. Detach every backend's
+    // owner before recycling so an await on its result cannot link to a reused state.
+    mal_gc_write_barrier(mal_value_from_object((MalObject *) state));
+    promise->async_owner = nullptr;
+    mal_gc_write_barrier(state->async_data->promise);
+    state->async_data->promise = MAL_VALUE_UNDEFINED;
+    if (state->async_data->awaited_by != nullptr) {
+        mal_gc_write_barrier(mal_value_from_object(
+            (MalObject *) state->async_data->awaited_by));
+        state->async_data->awaited_by = nullptr;
+    }
+    if (state->frame.is_compiled &&
+        vm->async_function_state_pool_count < MAL_ASYNC_FUNCTION_STATE_POOL_LIMIT) {
+        // Native completion released its buffers before settlement. Clear the
+        // metadata too: a reused activation must not expose an earlier callee/env.
+        state->frame = (MalVmFrame) {0};
+        state->async_data->registers[0] = MAL_VALUE_UNDEFINED;
+        state->async_data->registers[1] = MAL_VALUE_UNDEFINED;
+        vm->async_function_state_pool[vm->async_function_state_pool_count++] = state;
+    }
+}
+
 void mal_async_function_start(MalVm *vm, MalVmFrame *frame) {
     MalPromiseObject *promise = mal_promise_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
     MalValue promise_value = mal_value_from_promise_object(promise);
@@ -103,6 +145,7 @@ void mal_async_function_settle_return(MalVm *vm, MalGeneratorObject *state, MalV
         vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR],
         false,
         value);
+    mal_async_function_release_completed(vm, state);
     vm->completion = mal_async_normal();
 }
 
@@ -113,5 +156,6 @@ void mal_async_function_settle_throw(MalVm *vm, MalGeneratorObject *state, MalVa
         vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR],
         true,
         reason);
+    mal_async_function_release_completed(vm, state);
     vm->completion = mal_async_normal();
 }

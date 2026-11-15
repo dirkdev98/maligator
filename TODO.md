@@ -346,11 +346,11 @@ contracts or investigates costs still visible after the string follow-ups.
       per comparison against Node's 2. Keys of a per-field kind, f64 or flat String,
       with a leaf per kind combination would cover the first case.
 
-- [ ] Allocate a small async function's state in fewer cells. Each call allocates a
-      pooled register buffer, the coroutine state and the result promise, and
-      `Promise.resolve` goes through the known-native call path. The javascript-v2
-      async phase costs 33 ms against Node's 26 with a flat profile: the microtask
-      drain, await, start, resume and promise allocation each take 4-13%.
+- [ ] Reduce cold suspended async activation size or coallocate its result promise.
+      Native activations already materialize lazily and recycle at completion; pending
+      calls still need result promises, await jobs and boxed suspension snapshots.
+      Profile the current pending-await and mutable javascript-v2 paths before changing
+      their representation, preserving async stacks and exact microtask ordering.
 
 - [ ] Create closures and wide object literals closer to Node. A closure without
       captures costs 10.6 ns against 5.0, and one capturing the loop variable 21.9 ns
