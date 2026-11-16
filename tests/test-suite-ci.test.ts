@@ -106,6 +106,7 @@ describe("CI check coverage aggregation", () => {
 			mkdirSync(tools);
 			for (const [name, version] of [
 				["cc", "Clang fixture"],
+				["collector-cc", "Newer Clang fixture"],
 				["rustc", "rustc fixture"],
 			] as const) {
 				writeFileSync(
@@ -129,6 +130,7 @@ describe("CI check coverage aggregation", () => {
 				mkdirSync(lane, { recursive: true });
 				writeFileSync(path.join(lane, "report.json"), JSON.stringify(report));
 			}
+			vi.stubEnv("CC", path.join(tools, "collector-cc"));
 			const run = () =>
 				spawnSync(
 					process.execPath,
@@ -145,7 +147,12 @@ describe("CI check coverage aggregation", () => {
 			expect(success.status, success.stderr).toBe(0);
 			const reportRoot = path.join(directory, ".cache/mal-build/test-suite");
 			const latest = readFileSync(path.join(reportRoot, "report-check.json"), "utf8");
-			const combined = JSON.parse(latest) as { runId: string; reportPath: string };
+			const combined = JSON.parse(latest) as {
+				runId: string;
+				reportPath: string;
+				environment: typeof toolchain;
+			};
+			expect(combined.environment).toEqual(toolchain);
 			expect(success.stdout).toContain(path.join(directory, combined.reportPath));
 			expect(
 				readFileSync(

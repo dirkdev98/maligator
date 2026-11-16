@@ -4,11 +4,11 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import {
+import { captureVerificationSource } from "./verification-source.ts";
+import type {
 	captureVerificationEnvironment,
-	captureVerificationSource,
+	VerificationSource,
 } from "./verification-source.ts";
-import type { VerificationSource } from "./verification-source.ts";
 
 interface Selection {
 	name: string;
@@ -234,11 +234,15 @@ if (
 	const reports = reportFiles(input).map(
 		(file) => JSON.parse(readFileSync(file, "utf8")) as LaneReport,
 	);
+	// The collector does not execute the gate; its freshly installed toolchain
+	// can differ from the one shared by every execution lane.
+	const environment = reports[0]?.environment;
+	if (environment === undefined) throw new Error("missing execution-lane environment");
 	const report = combineCheckReports(
 		reports,
 		planFor(),
 		captureVerificationSource(root),
-		captureVerificationEnvironment(root),
+		environment,
 		(lane, shard) =>
 			planFor("--lane", lane, "--shard", `${shard.index}/${shard.count}`).stages,
 	);
