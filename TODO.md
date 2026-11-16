@@ -311,9 +311,11 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
-- [ ] Resolve the record-route and complex-path regressions before accepting pure
-      String scan lowering. Use a same-source scan ablation to separate executed work
-      from code layout, then preserve the query gain with repeated record/list controls.
+- [ ] Resolve the record-route regressions before accepting pure String scan lowering.
+      The current same-source ordering experiment rejects moving subject admission ahead
+      of builder guards: admitted short copies slowed in every pair. Emission-off parser
+      controls retain the fresh-path gain but show mixed complex-path costs. Measure
+      repeated record/list/query routes with matched layout before changing admission.
 
 - [ ] Close the in-process Express gap. `bench/http/express-in-process.cjs` in raw mode
       serves about 83k requests/s against Node's 188k, although sockets and parsing put
