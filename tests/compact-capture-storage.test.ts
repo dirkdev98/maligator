@@ -176,7 +176,9 @@ describe("physical captured storage after function reachability", () => {
 	});
 
 	it("leaves dynamic-scope images unchanged", () => {
-		const image = layoutImage([{ opcode: "WITH_ENTER", object: 0 }]);
+		const image = layoutImage([
+			{ opcode: "WITH_ENTER", object: 0, functionIndex: 0, scopeIndex: 0, recordKind: 0 },
+		]);
 		expect(compactCaptureStorage(image, programAnalysisContext())).toBe(image);
 	});
 });

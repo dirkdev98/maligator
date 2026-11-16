@@ -517,9 +517,13 @@ MalEnv *mal_env_new_from_frame(
         compact || mal_env_inherits_compact_parent(vm, parent, function_index), values);
 }
 
-MalEnv *mal_env_new_with_object(MalVm *vm, MalEnv *parent, MalValue object) {
-    MalEnv *env = mal_env_new(vm, parent, MAL_ENV_WITH_OBJECT, 1);
-    env->slots[0] = object;
+MalEnv *mal_env_new_with_object(MalVm *vm, MalEnv *parent, MalValue object,
+    i32 function_index, i32 scope_index, i32 record_kind) {
+    MalEnv *env = mal_env_new(vm, parent, MAL_ENV_WITH_OBJECT, MAL_ENV_RECORD_SLOTS);
+    env->slots[MAL_ENV_RECORD_OBJECT] = object;
+    env->slots[MAL_ENV_RECORD_KIND] = mal_value_from_i32(record_kind);
+    env->slots[MAL_ENV_RECORD_OWNER] = mal_value_from_i32(function_index);
+    env->slots[MAL_ENV_RECORD_SCOPE] = mal_value_from_i32(scope_index);
     return env;
 }
 
@@ -1307,6 +1311,12 @@ static void mal_vm_rebase_instruction(
     i32 string_base, i32 bigint_base, i32 template_base
 ) {
     switch (in->opcode) {
+        case MAL_OP_WITH_ENTER:
+            in->as.with_enter.function_index += fn_base;
+            break;
+        case MAL_OP_WITH_CAPTURE_OBJECT:
+            in->as.with_capture_object.function_index += fn_base;
+            break;
         case MAL_OP_CREATE_FUNCTION:
             in->as.create_function.function_index += fn_base;
             break;
@@ -2699,6 +2709,13 @@ static void mal_vm_run_until_frame_count(
             MAL_VM_CASE(WITH_ENTER)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_with_enter(frame, instruction));
                 break;
+            MAL_VM_CASE(WITH_CAPTURE_OBJECT)
+                registers[instruction->as.with_capture_object.dst] = mal_vm_op_with_capture_object(
+                    frame->env, instruction->as.with_capture_object.function_index,
+                    instruction->as.with_capture_object.scope_index,
+                    instruction->as.with_capture_object.record_kind);
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             MAL_VM_CASE(WITH_EXIT)
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_with_exit(frame, instruction));
                 break;
@@ -4901,46 +4918,53 @@ MalValue mal_vm_interpret_function(
     return vm->completion.value;
 }
 
-MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue scope_object,
-                                     MalValue this_value, MalValue new_target,
-                                     MalValue dirty_tracker, MalValue persistent_scope) {
-    // Push the (spliced) eval entry, then inject the caller scope object into the
-    // fresh frame's with-stack BEFORE running its body, so direct-eval free
-    // identifiers (compiled as with-dynamic reads) resolve against it. Mirrors
-    // mal_vm_interpret_function's push + run, but with the injection in between —
-    // hence not routed through mal_vm_call_value.
+MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue context,
+    MalValue records, MalValue this_value, MalValue new_target) {
     i32 baseline = vm->frame_count;
-    if (!mal_vm_push_function_frame(vm, function_index, nullptr, this_value, 0, -1, -1)) {
-        return mal_value_new_undefined(); // pending RangeError (call stack)
+    i32 argument_base = vm->value_stack_size;
+    if (argument_base >= vm->value_stack_capacity) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+        return mal_value_new_undefined();
+    }
+    vm->value_stack[vm->value_stack_size++] = context;
+    if (!mal_vm_push_function_frame(vm, function_index, nullptr, this_value, 1, -1, -1)) {
+        vm->value_stack_size = argument_base;
+        return mal_value_new_undefined();
     }
     MalVmFrame *frame = &vm->frames[vm->frame_count - 1];
-    // Direct eval runs in the caller's `this`/new.target (GetThisEnvironment /
-    // GetNewTarget resolve against the calling context).
     frame->this_value = this_value;
     frame->new_target = new_target;
-    // The caller's scope object resolves free names in the eval'd code: expose it as
-    // a with object environment record on the frame's env chain (WITH_GET walks it).
-    // The second slot carries the caller's dirty tracker (mal_vm_op_with_set marks
-    // it on a real Set) — a plain with-enter (mal_env_new_with_object) never has one.
-    MalEnv *scope_env = mal_env_new(vm, frame->env, MAL_ENV_WITH_OBJECT, 2);
-    scope_env->slots[0] = scope_object;
-    scope_env->slots[1] = dirty_tracker;
-    frame->env = scope_env;
-    if (mal_value_is_object(persistent_scope)) {
-        MalEnv *persistent_env = mal_env_new(vm, frame->env, MAL_ENV_WITH_OBJECT, 1);
-        persistent_env->slots[0] = persistent_scope;
-        frame->env = persistent_env;
+    MalEnv *outer = frame->env;
+    MalEnv *tail = nullptr;
+    // Keep the old outer chain reachable while appending records in lookup order.
+    while (!mal_value_is_undefined(records)) {
+        MalValue kind, object, next;
+        if (!mal_value_is_array_object(records)) goto invalid;
+        MalArrayObject *record = mal_value_to_array_object(records);
+        if (!mal_array_object_dense_get(record, 0, &kind) ||
+            !mal_array_object_dense_get(record, 1, &object) ||
+            !mal_array_object_dense_get(record, 2, &next) || !mal_value_is_int32(kind)) goto invalid;
+        i32 record_kind = mal_value_to_i32(kind);
+        if (record_kind < MAL_RECORD_WITH || record_kind > MAL_RECORD_VAR) goto invalid;
+        if (mal_value_is_object(object)) {
+            MalEnv *entry = mal_env_new_with_object(vm, outer, object, -1, -1, record_kind);
+            if (tail == nullptr) frame->env = entry;
+            else tail->parent = entry;
+            tail = entry;
+        } else if (record_kind != MAL_RECORD_VAR || !mal_value_is_undefined(object)) goto invalid;
+        records = next;
     }
-
-    mal_vm_run_until_frame_count(
-        vm,
-        baseline
+    mal_vm_run_until_frame_count(vm, baseline
 #if MAL_REALMS
         , vm->current_realm
 #endif
     );
-    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined()
-                                                       : vm->completion.value;
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : vm->completion.value;
+invalid:
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid eval environment transport");
+    mal_vm_pop_frame_storage(vm, frame);
+    vm->frame_count--;
+    return mal_value_new_undefined();
 }
 
 /**

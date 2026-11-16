@@ -300,8 +300,14 @@ typedef struct MalInstruction {
 
         struct {
             // `with (obj)`: ToObject([object]) and push onto the frame with-stack.
-            i32 object;
+            i32 object, function_index, scope_index;
+            u8 record_kind;
         } with_enter;
+
+        struct {
+            i32 dst, function_index, scope_index;
+            u8 record_kind;
+        } with_capture_object;
 
         struct {
             // Pop the innermost with-object.
@@ -319,7 +325,7 @@ typedef struct MalInstruction {
             // [dst] = the with-object that provides the name (the reference base),
             // or the EMPTY sentinel on a miss. Captures the base without reading the
             // value so an assignment resolves the reference before evaluating the RHS.
-            i32 dst, name_string_index;
+            i32 dst, kind_dst, name_string_index;
         } with_resolve_base;
 
         struct {
@@ -1371,6 +1377,15 @@ static_assert(alignof(_Atomic(MalValue)) == alignof(MalValue),
 // with scope on the env chain (rather than a frame-local stack) is what lets a
 // closure created inside `with` capture the with-object via its creation_env.
 #define MAL_ENV_WITH_OBJECT (-2147483647 - 1)
+// Dynamic records retain entry identity without enlarging every declarative environment.
+#define MAL_ENV_RECORD_OBJECT 0
+#define MAL_ENV_RECORD_KIND 1
+#define MAL_ENV_RECORD_OWNER 2
+#define MAL_ENV_RECORD_SCOPE 3
+#define MAL_ENV_RECORD_SLOTS 4
+#define MAL_RECORD_WITH 0
+#define MAL_RECORD_FIXED 1
+#define MAL_RECORD_VAR 2
 
 // An inline closure display is owned by the function stored in parent; it is not
 // a separately allocated GC cell. The payload holds a layout pointer then scopes.
@@ -2950,7 +2965,8 @@ MalEnv *mal_env_new_from_frame(
 // Allocate a `with` object environment record (function_index MAL_ENV_WITH_OBJECT,
 // slots[0] = object) and link it onto `parent`. Pushed onto the env chain by
 // WITH_ENTER so closures created in the body capture it.
-MalEnv *mal_env_new_with_object(MalVm *vm, MalEnv *parent, MalValue object);
+MalEnv *mal_env_new_with_object(MalVm *vm, MalEnv *parent, MalValue object,
+    i32 function_index, i32 scope_index, i32 record_kind);
 
 /** AddToKeptObjects: pin a WeakRef target for the rest of the current turn. */
 void mal_vm_add_kept_object(MalVm *vm, MalValue value);
@@ -3182,19 +3198,9 @@ MalValue mal_vm_interpret_function(
     MalEnv *env
 );
 
-/**
- * Run a spliced direct-eval entry function (no args, global creation env) with
- * `scope_object` injected into the fresh frame's with-stack, so the eval'd code's
- * free identifiers resolve against the caller's marshaled scope. Returns the
- * script completion value; a throw is left in vm->completion. Pass undefined for
- * scope_object to run with no injected scope.
- *
- * `dirty_tracker` rides along as the with-object's second env slot (see
- * mal_vm_op_with_set): pass undefined to disable dirty tracking for this run.
- */
-MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue scope_object,
-                                     MalValue this_value, MalValue new_target,
-                                     MalValue dirty_tracker, MalValue persistent_scope);
+/** Run eval with private entry context and innermost-first dynamic records. */
+MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue context,
+    MalValue records, MalValue this_value, MalValue new_target);
 
 /**
  * `new callee(args)` as a value: allocate the instance, run the constructor

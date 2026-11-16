@@ -372,7 +372,7 @@ describe("local native input admission", () => {
 			{ opcode: "ENV_PUSH", scopeId: -2, slotCount: 1 },
 			{ opcode: "ENV_COPY", scopeId: -2, slotCount: 1 },
 			{ opcode: "ENV_POP" },
-			{ opcode: "WITH_ENTER", object: 0 },
+			{ opcode: "WITH_ENTER", object: 0, functionIndex: 0, scopeIndex: 0, recordKind: 0 },
 			{ opcode: "WITH_EXIT" },
 		] satisfies Array<BytecodeInstruction>) {
 			const fallback = emitInputContract(

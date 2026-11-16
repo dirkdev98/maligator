@@ -47,7 +47,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 98;
+export const WIRE_VERSION = 99;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -1343,8 +1343,12 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			return;
 		case "LOAD_UNDECLARED":
 		case "LOAD_GLOBAL_PROPERTY":
+			w.i32(i.dst);
+			w.i32(i.nameStringIndex);
+			return;
 		case "WITH_RESOLVE_BASE":
 			w.i32(i.dst);
+			w.i32(i.kindDst);
 			w.i32(i.nameStringIndex);
 			return;
 		case "WITH_GET":
@@ -1385,6 +1389,15 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			return;
 		case "WITH_ENTER":
 			w.i32(i.object);
+			w.i32(i.functionIndex);
+			w.i32(i.scopeIndex);
+			w.u8(i.recordKind);
+			return;
+		case "WITH_CAPTURE_OBJECT":
+			w.i32(i.dst);
+			w.i32(i.functionIndex);
+			w.i32(i.scopeIndex);
+			w.u8(i.recordKind);
 			return;
 		case "WITH_SET":
 			w.i32(i.found);
@@ -2430,7 +2443,7 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 		case "WITH_GET":
 			return { opcode, dst: r.i32(), nameStringIndex: r.i32(), strict: r.u8() !== 0 };
 		case "WITH_RESOLVE_BASE":
-			return { opcode, dst: r.i32(), nameStringIndex: r.i32() };
+			return { opcode, dst: r.i32(), kindDst: r.i32(), nameStringIndex: r.i32() };
 		case "STORE_GLOBAL_PROPERTY":
 			return {
 				opcode,
@@ -2471,7 +2484,17 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 		case "THROW_IF_TDZ":
 			return { opcode, src: r.i32(), nameStringIndex: r.i32() };
 		case "WITH_ENTER":
-			return { opcode, object: r.i32() };
+		case "WITH_CAPTURE_OBJECT": {
+			const register = r.i32(),
+				functionIndex = r.i32(),
+				scopeIndex = r.i32(),
+				recordKind = r.u8();
+			if (recordKind !== 0 && recordKind !== 2)
+				throw new RangeError("Invalid dynamic environment kind");
+			return opcode === "WITH_ENTER"
+				? { opcode, object: register, functionIndex, scopeIndex, recordKind }
+				: { opcode, dst: register, functionIndex, scopeIndex, recordKind };
+		}
 		case "WITH_SET":
 			return {
 				opcode,

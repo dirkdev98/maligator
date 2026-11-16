@@ -148,6 +148,7 @@ export const CORE_OPCODES = [
 	"withEnter",
 	"withExit",
 	"withGet",
+	"withCaptureObject",
 	"withResolveBase",
 	"withSet",
 	"yield",
@@ -190,6 +191,7 @@ const NO_OUTPUT = new Set<CoreOpcode>([
 ]);
 
 const TWO_OUTPUTS = new Set<CoreOpcode>([
+	"withResolveBase",
 	"probeRead",
 	"await",
 	"getAsyncIterator",
@@ -237,6 +239,7 @@ const GC_FREE = new Set<CoreOpcode>([
 	"storeLocal",
 	"typeofCompare",
 	"withExit",
+	"withCaptureObject",
 ]);
 
 const NO_THROW = new Set<CoreOpcode>([
@@ -256,6 +259,7 @@ const NO_THROW = new Set<CoreOpcode>([
 	"loadCallee",
 	"mathBinaryNumber",
 	"mathUnaryNumber",
+	"withCaptureObject",
 ]);
 
 const CALLS_USER_CODE = new Set<CoreOpcode>([
@@ -495,6 +499,7 @@ const OPCODE_ACCESSES = {
 	storeSuperProperty: [write("object-slot")],
 	withGet: [read("object-slot")],
 	withResolveBase: [read("object-slot")],
+	withCaptureObject: [read("captured-slot")],
 	withSet: [write("object-slot")],
 } as const satisfies Partial<Record<CoreOpcode, ReadonlyArray<CoreOpcodeAccess>>>;
 
@@ -795,6 +800,7 @@ const INPUT_ARITIES = {
 	typeofCompare: [1, 1],
 	unary: [1, 1],
 	withEnter: [1, 1],
+	withCaptureObject: [0, 0],
 	withExit: [0, 0],
 	withGet: [0, 0],
 	withResolveBase: [0, 0],

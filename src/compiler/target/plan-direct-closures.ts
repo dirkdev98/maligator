@@ -35,6 +35,7 @@ const SCOPE_CHANGING_OPCODES: ReadonlySet<string> = new Set([
 	"envCopy",
 	"envPop",
 	"withEnter",
+	"withCaptureObject",
 	"withExit",
 ]);
 

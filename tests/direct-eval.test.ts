@@ -388,7 +388,8 @@ test("parameter eval does not inherit body-only variable names", () => {
 	const context = generatedDirectEvalContext(
 		`function f(parameter = eval("ignored")) { var bodyOnly; }`,
 	);
-	expect(context.varEnvironmentNames).toContain("parameter");
+	expect(context.varConflictNames).toContain("parameter");
+	expect(context.varEnvironmentNames).not.toContain("parameter");
 	expect(context.varEnvironmentNames).not.toContain("bodyOnly");
 });
 
@@ -421,7 +422,7 @@ test("parameter eval distinguishes arrow arguments from caller conflicts", () =>
 		`const f = (p = eval("ignored")) => {};`,
 	);
 	expect(noArguments.varConflictNames).toEqual(["p"]);
-	expect(noArguments.varEnvironmentNames).toEqual(["p"]);
+	expect(noArguments.varEnvironmentNames).toEqual([]);
 	expect(() =>
 		compileSourceToBuffer("var arguments", {
 			direct: true,
@@ -433,7 +434,7 @@ test("parameter eval distinguishes arrow arguments from caller conflicts", () =>
 		`const f = (arguments, p = eval("ignored")) => {};`,
 	);
 	expect(explicitArguments.varConflictNames).toContain("arguments");
-	expect(explicitArguments.varEnvironmentNames).toContain("arguments");
+	expect(explicitArguments.varEnvironmentNames).not.toContain("arguments");
 	expect(() =>
 		compileSourceToBuffer("var arguments", {
 			direct: true,
@@ -445,6 +446,20 @@ test("parameter eval distinguishes arrow arguments from caller conflicts", () =>
 		`function f(p = eval("ignored")) { var bodyOnly; }`,
 	);
 	expect(bodyOnly.varConflictNames).not.toContain("bodyOnly");
+});
+
+test("body eval after parameter expressions uses the body variable environment", () => {
+	const context = generatedDirectEvalContext(
+		`function f(parameter = 1) { eval("ignored"); }`,
+	);
+	expect(context.varEnvironmentNames).not.toContain("parameter");
+	expect(context.varConflictNames).not.toContain("parameter");
+	expect(() =>
+		compileSourceToBuffer("var parameter", {
+			direct: true,
+			directEvalContext: encodeDirectEvalContext(context),
+		}),
+	).not.toThrow();
 });
 
 test("generated direct eval contexts preserve the simple catch exception", () => {

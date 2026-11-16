@@ -176,7 +176,18 @@ describe("external closure scope requirements", () => {
 		expect(analyzeClosureCaptures(ordinary, programAnalysisContext(false))).toBe(
 			ordinary,
 		);
-		const dynamic = layoutImage([[{ opcode: "WITH_ENTER", object: 0 }], []]);
+		const dynamic = layoutImage([
+			[
+				{
+					opcode: "WITH_ENTER",
+					object: 0,
+					functionIndex: 0,
+					scopeIndex: 0,
+					recordKind: 0,
+				},
+			],
+			[],
+		]);
 		expect(analyzeClosureCaptures(dynamic, programAnalysisContext())).toBe(dynamic);
 	});
 

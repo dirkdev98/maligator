@@ -311,6 +311,23 @@ const instructions: Array<BytecodeInstruction> = [
 		icIndex: 2,
 	},
 	{ opcode: "SET_THIS", value: 11 },
+	{ opcode: "WITH_ENTER", object: 10, functionIndex: 0, scopeIndex: 91, recordKind: 0 },
+	{
+		opcode: "WITH_CAPTURE_OBJECT",
+		dst: 7,
+		functionIndex: 0,
+		scopeIndex: 91,
+		recordKind: 0,
+	},
+	{
+		opcode: "WITH_CAPTURE_OBJECT",
+		dst: 8,
+		functionIndex: 1,
+		scopeIndex: 17,
+		recordKind: 2,
+	},
+	{ opcode: "WITH_RESOLVE_BASE", dst: 7, kindDst: 14, nameStringIndex: 1 },
+	{ opcode: "WITH_EXIT" },
 	{ opcode: "RETURN", value: 11 },
 ];
 
@@ -1072,6 +1089,7 @@ describe("program-image-codec", () => {
 			"GUARD_SEMANTIC_EPOCH",
 			"GUARD_BOUND_FUNCTION",
 			"LOAD_BOUND_FUNCTION_SLOT",
+			"WITH_CAPTURE_OBJECT",
 		];
 		expect(WIRE_OPCODES.slice(-appended.length)).toEqual(appended);
 	});

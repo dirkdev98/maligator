@@ -337,6 +337,7 @@ const INLINE_ENVIRONMENT_OPCODES: ReadonlySet<string> = new Set([
 	"storeCaptured",
 	"createFunction",
 	"withEnter",
+	"withCaptureObject",
 	"withExit",
 	"withGet",
 	"withResolveBase",

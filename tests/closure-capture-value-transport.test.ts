@@ -320,7 +320,14 @@ describe("immutable closure capture artifact transport", () => {
 		{ opcode: "ENV_PUSH", scopeId: -2, slotCount: 1 },
 		{ opcode: "ENV_COPY", scopeId: -2, slotCount: 1 },
 		{ opcode: "ENV_POP" },
-		{ opcode: "WITH_ENTER", object: 0 },
+		{ opcode: "WITH_ENTER", object: 0, functionIndex: 0, scopeIndex: 0, recordKind: 0 },
+		{
+			opcode: "WITH_CAPTURE_OBJECT",
+			dst: 0,
+			functionIndex: 0,
+			scopeIndex: 0,
+			recordKind: 0,
+		},
 		{ opcode: "WITH_EXIT" },
 	])("rejects a non-leaf or mutable capture operation %j", (instruction) => {
 		const image = captureImage();

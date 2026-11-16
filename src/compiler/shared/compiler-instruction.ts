@@ -1154,6 +1154,16 @@ type CompilerOperation =
 
 			// [object]
 			registers: [number];
+			functionIndex: number;
+			scopeIndex: number;
+			recordKind: 0 | 2;
+	  }
+	| {
+			type: "withCaptureObject";
+			registers: [number];
+			functionIndex: number;
+			scopeIndex: number;
+			recordKind: 0 | 2;
 	  }
 	| {
 			// Pop the innermost with-object off the frame's stack. Emitted on every
@@ -1185,8 +1195,8 @@ type CompilerOperation =
 			// property on that captured base, or falls back to the static binding on EMPTY.
 			type: "withResolveBase";
 
-			// [destination]
-			registers: [number];
+			// [base, recordKind]; actual with = 0, fixed binding = 1, deletable var = 2.
+			registers: [number, number];
 
 			nameStringIndex: number;
 	  }

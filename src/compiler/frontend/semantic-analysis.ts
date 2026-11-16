@@ -398,6 +398,26 @@ export const FUNCTION_UNIT_NODE_TYPES = new Set<ESTree.Node["type"]>([
  * the rationale; relies on `registerBindingUsage` having resolved the callee
  * binding first (a global `eval` resolves to an `undeclared` binding).
  */
+export function directEvalVariableScope(
+	scope: Scope | null | undefined,
+): Scope | undefined {
+	for (let current = scope; current; current = current.parent) {
+		if (FUNCTION_UNIT_NODE_TYPES.has(current.node.type)) return current;
+		const owner = current.parent?.node;
+		if (
+			current.node.type === "BlockStatement" &&
+			owner &&
+			(owner.type === "FunctionDeclaration" ||
+				owner.type === "FunctionExpression" ||
+				owner.type === "ArrowFunctionExpression") &&
+			owner.body === current.node &&
+			hasParameterExpressions(owner)
+		)
+			return current;
+	}
+	return undefined;
+}
+
 function detectDirectEval(node: ESTree.CallExpression, file: SemanticFile): boolean {
 	const argumentsBinding = resolveArgumentsBinding(file.nodeToScope.get(node));
 	if (argumentsBinding) {
@@ -424,7 +444,7 @@ function detectDirectEval(node: ESTree.CallExpression, file: SemanticFile): bool
 	const visibleNames = new Set<string>();
 	let scope: Scope | null | undefined = file.nodeToScope.get(node);
 	const directEvalIsStrict = scope?.strict ?? file.strict;
-	let variableEnvironmentRecorded = false;
+	const variableScope = directEvalVariableScope(scope);
 	while (scope) {
 		for (const binding of scope.bindings) {
 			if (visibleNames.has(binding.name)) continue;
@@ -436,12 +456,13 @@ function detectDirectEval(node: ESTree.CallExpression, file: SemanticFile): bool
 		}
 		if (FUNCTION_UNIT_NODE_TYPES.has(scope.node.type)) {
 			file.hasDirectEval.add(scope.node);
-			if (!variableEnvironmentRecorded) {
-				if (scope.node.type !== "Program" && !directEvalIsStrict) {
-					file.directEvalVariableEnvironments.add(scope.node);
-				}
-				variableEnvironmentRecorded = true;
-			}
+		}
+		if (
+			scope === variableScope &&
+			!directEvalIsStrict &&
+			(scope.node.type !== "Program" || file.commonjs)
+		) {
+			file.directEvalVariableEnvironments.add(scope.node);
 		}
 		scope = scope.parent;
 	}
@@ -1568,7 +1589,7 @@ function registerAnnexBVarBindings(file: SemanticFile): void {
 	}
 }
 
-function hasParameterExpressions(
+export function hasParameterExpressions(
 	node:
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression

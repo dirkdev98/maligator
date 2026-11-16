@@ -17663,11 +17663,15 @@ class NativeInstructionEmission {
 				const tmp = `with_env_${this.ip}`;
 				const frameUpdate = rootFrameEnvUpdate(this.gcUnlink);
 				return [
-					`MalEnv *${tmp} = mal_vm_op_with_enter(vm, env, ${this.boxed(instruction.object)});`,
+					`MalEnv *${tmp} = mal_vm_op_with_enter(vm, env, ${this.boxed(instruction.object)}, ${this.context.relocation.functionIndex(instruction.functionIndex)}, ${instruction.scopeIndex}, ${instruction.recordKind});`,
 					this.throwCheck(),
 					`env = ${tmp};${frameUpdate}`,
 				];
 			}
+			case "WITH_CAPTURE_OBJECT":
+				return [
+					`r${instruction.dst} = mal_vm_op_with_capture_object(env, ${this.context.relocation.functionIndex(instruction.functionIndex)}, ${instruction.scopeIndex}, ${instruction.recordKind});`,
+				];
 			case "WITH_EXIT": {
 				// Pop the with-env pushed by the matching WITH_ENTER.
 				const frameUpdate = rootFrameEnvUpdate(this.gcUnlink);
@@ -17684,7 +17688,7 @@ class NativeInstructionEmission {
 			case "WITH_RESOLVE_BASE":
 				// The reference base (the with-object itself) for a read/write through it.
 				return [
-					`r${instruction.dst} = mal_vm_op_with_resolve_base(vm, env, ${this.context.relocation.stringIndex(instruction.nameStringIndex)});`,
+					`r${instruction.dst} = mal_vm_op_with_resolve_base(vm, env, ${this.context.relocation.stringIndex(instruction.nameStringIndex)}, &r${instruction.kindDst});`,
 					this.throwCheck(),
 				];
 			case "WITH_SET":

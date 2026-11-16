@@ -544,29 +544,10 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Eval correctness
 
-- [ ] Finish EvalDeclarationInstantiation behavior for declaration persistence,
-      non-definable globals, and strict or sloppy conflicts. Cover every relevant
-      environment kind.
+- [ ] Recognize direct eval through a locally bound identifier named `eval` when its
+      selected callee is the intrinsic. Preserve ordinary replacement calls and their
+      receiver. Script-global declaration tracking remains in its correctness cluster.
 
-- [ ] Complete direct-eval arguments and parameter-environment behavior. Preserve
-      mapped parameters, parameter expressions, shadowing, and strict-mode differences.
-      Parameter eval excludes body-only declarations from its fixed name set;
-      parameter and body eval still need distinct persistent-record placement.
-
-- [ ] Transport the caller's actual `with` records into direct eval in scope order.
-      Inside `with (o) { eval("m()") }`, the declarative bridge omits `o`, so neither
-      reads nor WithBaseObject calls reach it. Preserve the entry's single boxed
-      object, abrupt lookup, unscopables and receiver identity; interleave nearer
-      lexical groups rather than putting all with objects ahead of one flat bridge.
-
-- [ ] Preserve ordered variable records across nested direct eval. Ordinary caller and
-      imported bindings retain live accessors through inherited declarative bridges;
-      eval-created vars retain their live deletable record, and eval-created functions
-      own their activation's variable record.
-      Place persistent vars at their caller variable-environment boundary so a nearer
-      lexical binding wins, including lexical scopes inside and outside actual `with`
-      records. Route new `var` initializers through reference resolution while keeping
-      declaration instantiation and function declarations at the variable environment.
 - [ ] A static `require("x")` ignores a reassigned `require` binding and loads the real
       module, where Node calls the replacement.
 

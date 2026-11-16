@@ -346,6 +346,9 @@ function cloneInstruction(
 	base: RebaseBases,
 ): BytecodeInstruction {
 	switch (instruction.opcode) {
+		case "WITH_ENTER":
+		case "WITH_CAPTURE_OBJECT":
+			return { ...instruction, functionIndex: instruction.functionIndex + base.function };
 		case "CREATE_FUNCTION":
 			return { ...instruction, functionIndex: instruction.functionIndex + base.function };
 		case "LOAD_CAPTURED":
@@ -591,7 +594,6 @@ function cloneInstruction(
 		case "STORE_PRIVATE":
 		case "HAS_PRIVATE":
 		case "SET_PROTOTYPE":
-		case "WITH_ENTER":
 		case "WITH_EXIT":
 		case "IS_EMPTY":
 		case "REQUIRE_COERCIBLE":

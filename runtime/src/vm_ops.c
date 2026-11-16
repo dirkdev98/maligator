@@ -1828,12 +1828,13 @@ void mal_op_create_template_object(MalCallable *callable, const MalInstruction *
 
 // HasBinding filters HasProperty through @@unscopables. A failed probe must
 // finish before another environment or a binding's data can be consulted.
-static bool mal_vm_with_has_binding(MalVm *vm, MalValue object, MalKey key) {
+static bool mal_vm_with_has_binding(MalVm *vm, const MalEnv *env, MalValue object, MalKey key) {
     if (!mal_value_is_object(object)) {
         return false;
     }
     bool present = mal_vm_has_property(vm, object, key);
     if (vm->completion.kind == MAL_COMPLETION_THROW || !present) return false;
+    if (mal_value_to_i32(env->slots[MAL_ENV_RECORD_KIND]) != MAL_RECORD_WITH) return true;
 
     MalKey unscopables_key = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_UNSCOPABLES);
     MalValue unscopables = mal_value_new_undefined();
@@ -1853,26 +1854,42 @@ static bool mal_vm_with_has_binding(MalVm *vm, MalValue object, MalKey key) {
 // to its `env`), or null with a pending TypeError if the with-expression is null or
 // undefined. Placing the with-object on the env chain (rather than a frame-local
 // stack) means a closure created in the body captures it via its creation_env.
-MalEnv *mal_vm_op_with_enter(MalVm *vm, MalEnv *parent, MalValue object) {
+MalEnv *mal_vm_op_with_enter(MalVm *vm, MalEnv *parent, MalValue object,
+    i32 function_index, i32 scope_index, i32 record_kind) {
     if (mal_value_is_nil(object)) {
         mal_vm_throw_error(
             vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object"
         );
         return nullptr;
     }
-    if (mal_value_is_object(object)) return mal_env_new_with_object(vm, parent, object);
+    if (mal_value_is_object(object)) return mal_env_new_with_object(vm, parent, object, function_index, scope_index, record_kind);
     // One wrapper owns per-entry writes and is shared by captured with references.
     MalValue boxed = mal_builtin_object_box_primitive(vm, object);
     MalRootSpan span;
     mal_gc_root(&span, &boxed, 1);
-    MalEnv *env = mal_env_new_with_object(vm, parent, boxed);
+    MalEnv *env = mal_env_new_with_object(vm, parent, boxed, function_index, scope_index, record_kind);
     mal_gc_unroot(&span);
     return env;
 }
 
+MalValue mal_vm_op_with_capture_object(MalEnv *env, i32 function_index, i32 scope_index, i32 record_kind) {
+    for (MalEnv *entry = env; entry != nullptr && !mal_env_is_single_owner(entry) &&
+            !mal_env_is_capture_display(entry); entry = entry->parent) {
+        if (entry->function_index == MAL_ENV_WITH_OBJECT &&
+            mal_value_to_i32(entry->slots[MAL_ENV_RECORD_KIND]) == record_kind &&
+            mal_value_to_i32(entry->slots[MAL_ENV_RECORD_OWNER]) == function_index &&
+            mal_value_to_i32(entry->slots[MAL_ENV_RECORD_SCOPE]) == scope_index) {
+            return entry->slots[MAL_ENV_RECORD_OBJECT];
+        }
+    }
+    return mal_value_new_undefined();
+}
+
 void mal_op_with_enter(MalCallable *callable, const MalInstruction *instruction) {
     MalValue object = callable->registers[instruction->as.with_enter.object];
-    MalEnv *env = mal_vm_op_with_enter(callable->vm, callable->env, object);
+    MalEnv *env = mal_vm_op_with_enter(callable->vm, callable->env, object,
+        instruction->as.with_enter.function_index, instruction->as.with_enter.scope_index,
+        instruction->as.with_enter.record_kind);
     if (env != nullptr) {
         callable->env = env;
     }
@@ -1899,7 +1916,7 @@ MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index, bool 
                 continue;
             }
             MalValue object = e->slots[0];
-            bool found = mal_vm_with_has_binding(vm, object, key);
+            bool found = mal_vm_with_has_binding(vm, e, object, key);
             if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_empty();
             if (found) {
                 // GetBindingValue probes HasProperty again; a binding that has
@@ -1930,7 +1947,8 @@ void mal_op_with_get(MalCallable *callable, const MalInstruction *instruction) {
 
 // Shared: resolve the reference BASE (the with-object itself, not its value) so the
 // caller reads/writes the property through it. EMPTY sentinel on a miss.
-MalValue mal_vm_op_with_resolve_base(MalVm *vm, MalEnv *env, i32 name_string_index) {
+MalValue mal_vm_op_with_resolve_base(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue *record_kind) {
+    *record_kind = mal_value_from_i32(MAL_RECORD_WITH);
     MalValue name = mal_value_from_string(mal_vm_string_constant(vm, name_string_index));
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
@@ -1940,9 +1958,10 @@ MalValue mal_vm_op_with_resolve_base(MalVm *vm, MalEnv *env, i32 name_string_ind
                 continue;
             }
             MalValue object = e->slots[0];
-            bool found = mal_vm_with_has_binding(vm, object, key);
+            bool found = mal_vm_with_has_binding(vm, e, object, key);
             if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_empty();
             if (found) {
+                *record_kind = e->slots[MAL_ENV_RECORD_KIND];
                 return object;
             }
         }
@@ -1953,27 +1972,11 @@ MalValue mal_vm_op_with_resolve_base(MalVm *vm, MalEnv *env, i32 name_string_ind
 
 void mal_op_with_resolve_base(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.with_resolve_base.dst] = mal_vm_op_with_resolve_base(
-        callable->vm, callable->env, instruction->as.with_resolve_base.name_string_index
+        callable->vm, callable->env, instruction->as.with_resolve_base.name_string_index,
+        &callable->registers[instruction->as.with_resolve_base.kind_dst]
     );
 }
 
-// Rejected object-environment writes throw in strict code. Synthetic eval records
-// also preserve immutable caller bindings when a sloppy write is rejected.
-static void mal_vm_with_set_rejected(
-    MalVm *vm, const MalEnv *e, MalValue object, MalKey key, bool strict
-) {
-    bool constant = false;
-    if (e->slot_count > 1 && mal_value_is_object(e->slots[1]) && mal_value_is_object(object)) {
-        MalPropertyLookup own = mal_object_get_own(mal_value_to_object(object), key);
-        constant = own.present && (own.desc.flags & MAL_PROPERTY_CONFIGURABLE) == 0;
-    }
-    if (strict || constant) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Assignment to constant variable.");
-    }
-}
-
-// Eval records track actual Sets for writeback; equal values, NaN and accessors
-// cannot reliably show whether a write occurred.
 bool mal_vm_op_with_set(
     MalVm *vm, MalEnv *env, i32 name_string_index, MalValue value, bool strict
 ) {
@@ -1986,19 +1989,17 @@ bool mal_vm_op_with_set(
                 continue;
             }
             MalValue object = e->slots[0];
-            bool found = mal_vm_with_has_binding(vm, object, key);
+            bool found = mal_vm_with_has_binding(vm, e, object, key);
             if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
             if (found) {
                 if (!mal_vm_set_property(vm, object, key, value, object)) {
                     if (vm->completion.kind != MAL_COMPLETION_THROW) {
-                        mal_vm_with_set_rejected(vm, e, object, key, strict);
+                        if (strict) mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                            "Assignment to constant variable.");
                     }
                     return true;
                 }
-                if (e->slot_count > 1 && mal_value_is_object(e->slots[1])) {
-                    mal_vm_set_property(
-                        vm, e->slots[1], key, mal_value_new_boolean(true), e->slots[1]);
-                }
+
                 return true;
             }
         }

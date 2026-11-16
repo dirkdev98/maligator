@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 98u
+#define WIRE_VERSION 99u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1423,6 +1423,7 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
         case WIRE_WITH_RESOLVE_BASE:
             o->opcode = MAL_OP_WITH_RESOLVE_BASE;
             o->as.with_resolve_base.dst = rd_i32(r);
+            o->as.with_resolve_base.kind_dst = rd_i32(r);
             o->as.with_resolve_base.name_string_index = rd_i32(r);
             return;
         case WIRE_STORE_GLOBAL_PROPERTY:
@@ -1465,6 +1466,20 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
         case WIRE_WITH_ENTER:
             o->opcode = MAL_OP_WITH_ENTER;
             o->as.with_enter.object = rd_i32(r);
+            o->as.with_enter.function_index = rd_i32(r);
+            o->as.with_enter.scope_index = rd_i32(r);
+            o->as.with_enter.record_kind = rd_u8(r);
+            if (o->as.with_enter.record_kind != MAL_RECORD_WITH &&
+                    o->as.with_enter.record_kind != MAL_RECORD_VAR) r->ok = false;
+            return;
+        case WIRE_WITH_CAPTURE_OBJECT:
+            o->opcode = MAL_OP_WITH_CAPTURE_OBJECT;
+            o->as.with_capture_object.dst = rd_i32(r);
+            o->as.with_capture_object.function_index = rd_i32(r);
+            o->as.with_capture_object.scope_index = rd_i32(r);
+            o->as.with_capture_object.record_kind = rd_u8(r);
+            if (o->as.with_capture_object.record_kind != MAL_RECORD_WITH &&
+                    o->as.with_capture_object.record_kind != MAL_RECORD_VAR) r->ok = false;
             return;
         case WIRE_WITH_EXIT:
             o->opcode = MAL_OP_WITH_EXIT;
@@ -1763,7 +1778,10 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_LOAD_GLOBAL_PROPERTY, load_global_property);
         MAL_WRITES_DST(MAL_OP_GLOBAL_BINDING_QUERY, global_binding_query);
         MAL_WRITES_DST(MAL_OP_WITH_GET, with_get);
-        MAL_WRITES_DST(MAL_OP_WITH_RESOLVE_BASE, with_resolve_base);
+        MAL_WRITES_DST(MAL_OP_WITH_CAPTURE_OBJECT, with_capture_object);
+        case MAL_OP_WITH_RESOLVE_BASE:
+            return instruction->as.with_resolve_base.dst == target_register ||
+                instruction->as.with_resolve_base.kind_dst == target_register;
         MAL_WRITES_DST(MAL_OP_IS_EMPTY, is_empty);
         MAL_WRITES_DST(MAL_OP_CREATE_REST_ARGUMENTS, create_rest_arguments);
         MAL_WRITES_DST(MAL_OP_ARRAY_REST, array_rest);

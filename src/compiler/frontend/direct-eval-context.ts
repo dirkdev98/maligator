@@ -18,6 +18,7 @@ export interface DirectEvalContext {
 	varConflictNames: Array<string>;
 	varEnvironmentNames: Array<string>;
 	varEnvironmentIsGlobal: boolean;
+	hasWithEnvironments?: true;
 }
 
 export type DirectEvalPrivateSlot = "brand" | "field" | "method" | "get" | "set";
@@ -30,7 +31,8 @@ export function encodeDirectEvalContext(context: DirectEvalContext): string {
 		(context.allowNewTarget ? 2 : 0) |
 		(context.allowSuperCall ? 4 : 0) |
 		(context.hasInstanceInitializer ? 8 : 0) |
-		(context.varEnvironmentIsGlobal ? 16 : 0);
+		(context.varEnvironmentIsGlobal ? 16 : 0) |
+		(context.hasWithEnvironments ? 32 : 0);
 	return [
 		String(flags),
 		...context.privateNames.map((entry) => `${entry.flags}:${entry.name}`),
@@ -81,6 +83,7 @@ export function decodeDirectEvalContext(encoded: string | undefined): DirectEval
 		varConflictNames: [...varConflictNames],
 		varEnvironmentNames: [...varEnvironmentNames],
 		varEnvironmentIsGlobal: (flags & 16) !== 0,
+		...((flags & 32) !== 0 ? { hasWithEnvironments: true as const } : {}),
 	};
 }
 
@@ -92,12 +95,16 @@ export function directEvalScopeObjectKey(): string {
 	return "\0maligator.eval.scope";
 }
 
-export function directEvalDirtyTrackerKey(): string {
-	return "\0maligator.eval.dirty";
-}
-
 export function directEvalPersistentScopeKey(): string {
 	return "\0maligator.eval.persistent";
+}
+
+export function directEvalRecordsKey(): string {
+	return "\0maligator.eval.records";
+}
+
+export function directEvalVariableScopeKey(): string {
+	return "\0maligator.eval.variables";
 }
 
 export function directEvalSuperConstructorScopeKey(): string {

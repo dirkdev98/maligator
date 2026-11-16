@@ -1447,6 +1447,16 @@ export type BytecodeInstruction =
 	| {
 			opcode: "WITH_ENTER";
 			object: number;
+			functionIndex: number;
+			scopeIndex: number;
+			recordKind: 0 | 2;
+	  }
+	| {
+			opcode: "WITH_CAPTURE_OBJECT";
+			dst: number;
+			functionIndex: number;
+			scopeIndex: number;
+			recordKind: 0 | 2;
 	  }
 	| {
 			opcode: "WITH_EXIT";
@@ -1460,6 +1470,7 @@ export type BytecodeInstruction =
 	| {
 			opcode: "WITH_RESOLVE_BASE";
 			dst: number;
+			kindDst: number;
 			nameStringIndex: number;
 	  }
 	| {
@@ -1544,6 +1555,8 @@ export function vmInstructionWriteRegisters(
 			return [instruction.dst, instruction.success];
 		case "WITH_SET":
 			return [instruction.found];
+		case "WITH_RESOLVE_BASE":
+			return [instruction.dst, instruction.kindDst];
 		case "CALL_REST_ARGUMENTS":
 			return [instruction.dst, instruction.state];
 		default: {
@@ -4866,6 +4879,17 @@ function lowerInstructionToBytecodeInstruction(
 			return {
 				opcode: "WITH_ENTER",
 				object: instruction.registers[0],
+				functionIndex: instruction.functionIndex,
+				scopeIndex: instruction.scopeIndex,
+				recordKind: instruction.recordKind,
+			};
+		case "withCaptureObject":
+			return {
+				opcode: "WITH_CAPTURE_OBJECT",
+				dst: instruction.registers[0],
+				functionIndex: instruction.functionIndex,
+				scopeIndex: instruction.scopeIndex,
+				recordKind: instruction.recordKind,
 			};
 		case "withExit":
 			return { opcode: "WITH_EXIT" };
@@ -4880,6 +4904,7 @@ function lowerInstructionToBytecodeInstruction(
 			return {
 				opcode: "WITH_RESOLVE_BASE",
 				dst: instruction.registers[0],
+				kindDst: instruction.registers[1],
 				nameStringIndex: instruction.nameStringIndex,
 			};
 		case "withSet":

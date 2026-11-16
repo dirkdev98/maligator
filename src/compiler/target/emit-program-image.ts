@@ -3495,13 +3495,15 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 		case "THROW_IF_TDZ":
 			return `{ .opcode = MAL_OP_THROW_IF_TDZ, .as.throw_if_tdz = { .src = ${instruction.src}, .name_string_index = ${instruction.nameStringIndex} } }`;
 		case "WITH_ENTER":
-			return `{ .opcode = MAL_OP_WITH_ENTER, .as.with_enter = { .object = ${instruction.object} } }`;
+			return `{ .opcode = MAL_OP_WITH_ENTER, .as.with_enter = { .object = ${instruction.object}, .function_index = ${instruction.functionIndex}, .scope_index = ${instruction.scopeIndex}, .record_kind = ${instruction.recordKind} } }`;
+		case "WITH_CAPTURE_OBJECT":
+			return `{ .opcode = MAL_OP_WITH_CAPTURE_OBJECT, .as.with_capture_object = { .dst = ${instruction.dst}, .function_index = ${instruction.functionIndex}, .scope_index = ${instruction.scopeIndex}, .record_kind = ${instruction.recordKind} } }`;
 		case "WITH_EXIT":
 			return `{ .opcode = MAL_OP_WITH_EXIT, .as.with_exit = {} }`;
 		case "WITH_GET":
 			return `{ .opcode = MAL_OP_WITH_GET, .as.with_get = { .dst = ${instruction.dst}, .name_string_index = ${instruction.nameStringIndex}, .strict = ${instruction.strict ? "true" : "false"} } }`;
 		case "WITH_RESOLVE_BASE":
-			return `{ .opcode = MAL_OP_WITH_RESOLVE_BASE, .as.with_resolve_base = { .dst = ${instruction.dst}, .name_string_index = ${instruction.nameStringIndex} } }`;
+			return `{ .opcode = MAL_OP_WITH_RESOLVE_BASE, .as.with_resolve_base = { .dst = ${instruction.dst}, .kind_dst = ${instruction.kindDst}, .name_string_index = ${instruction.nameStringIndex} } }`;
 		case "WITH_SET":
 			return `{ .opcode = MAL_OP_WITH_SET, .as.with_set = { .found = ${instruction.found}, .value = ${instruction.value}, .name_string_index = ${instruction.nameStringIndex}, .strict = ${instruction.strict ? "true" : "false"} } }`;
 		case "IS_EMPTY":

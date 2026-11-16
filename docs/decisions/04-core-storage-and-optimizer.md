@@ -224,21 +224,25 @@ runtime creates itself keep opaque parameters.
 Code that `engine.eval: true` compiles at run time is one more opaque caller when it
 can only run as global code: indirect eval and the function constructors reach the
 global object, the values the program hands them and what those reach, which is
-what host code can reach. Direct eval exposes declarative bindings through accessors
-that share caller storage. Creating the bridge does not read uninitialized bindings;
-each access checks TDZ and immutable writes at the binding. Imported accessors follow
-the exporter rather than a copied value. A nested eval inherits the previous bridge
-under its own lexical accessors, preserving shadowing and escaped closure identity.
-These synthetic declarative bridges give calls an undefined receiver. Their accessors
-escape through the opaque runtime call, so Core must retain the reads and writes that
-eval can make. Sloppy eval-created variables stay in their activation's deletable
-record instead of becoming copied bridge properties. A function created by eval owns
-its own variable record; inherited records remain available to its free reads.
-Strict eval keeps its own `var`s in its own variable environment.
+what host code can reach. Direct eval retains the caller's lexical bridges, actual
+`with` objects and deletable variable records in lookup order. Declarative bridges use
+accessors that share caller storage, checking TDZ and immutable writes at access time.
+Imported accessors follow exporter storage. Actual `with` records retain their entry's
+boxed object and apply unscopables; declarative records give calls an undefined receiver.
+
+Private syntax state travels as an eval-entry argument, outside name resolution, so
+proxies cannot observe bookkeeping keys. Nested eval and escaped closures retain the
+ordered records. A function created by eval owns its variable record, and parameter
+expressions and bodies use distinct variable environments. Declaration instantiation
+and function declarations target the selected variable environment; var initializers
+resolve an ordinary reference before evaluating their right-hand side.
+
+The bridge accessors escape through the opaque runtime call, so Core must retain the
+reads and writes eval can make. Strict eval keeps its `var`s in its own environment.
 Proofs that enumerate readers and writers through Core therefore exclude the
 functions, cells, module bindings and private fields some direct eval can see.
 Private field facts also need the field's key to stay inside private element
-operations; a key marshaled into a scope object gives its field unknown values.
+operations; a key passed in the private eval context gives its field unknown values.
 
 An actual `with` environment stores the object produced by ToObject once at entry.
 Primitive wrappers retain per-entry writes and remain the receiver for calls and
