@@ -5043,8 +5043,17 @@ bool mal_builtin_string_trim_identity(MalVm *vm, MalValue callee) {
 }
 
 static u32 mal_builtin_string_trim_span_length(MalString *subject, usize start, usize end) {
-    // Flatten once: independent edge descents across successive spans can be quadratic.
-    if (subject->storage == MAL_STRING_STORAGE_CONS) mal_string_flat_segment(subject);
+    usize length = end - start;
+    if (length == 0) return 0;
+    MalStringSegment segment;
+    if (mal_string_try_get_segment(subject, start, length, &segment)) {
+        usize first = 0;
+        while (first < length && mal_ecma_is_string_whitespace(
+                mal_string_segment_code_unit_at(&segment, first))) first++;
+        while (length > first && mal_ecma_is_string_whitespace(
+                mal_string_segment_code_unit_at(&segment, length - 1))) length--;
+        return (u32) (length - first);
+    }
     mal_builtin_string_trim_bounds(subject, start, end, true, true, &start, &end);
     return (u32) (end - start);
 }

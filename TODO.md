@@ -405,10 +405,6 @@ contracts or investigates costs still visible after the string follow-ups.
       Require ES-module finite-call-target parity and real repeated-call benefit, with
       bounded solve work and conservative dynamic/escaping-store fallback.
 
-- [ ] Measure split/trim cursor savings after the complete ordinary and control-flow
-      escape proof. Require full-output parity, safe fallback/reentry and throughput
-      no worse than materialization on first-pass, repeated-input and flat controls.
-
 - [ ] Reduce fixed per-exec setup and result materialization in `regexp-owned-repeat`,
       where every exec matches at `lastIndex` rather than scanning. Bound complete-result
       construction for the nonescaping named-result consumer after existing capture-name
