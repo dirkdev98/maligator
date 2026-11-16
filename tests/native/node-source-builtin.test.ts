@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../../src/build-config.ts";
 import { runSemanticAnalysisForGraph } from "../../src/compiler/frontend/analyze-module-graph.ts";
-import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
 import { buildModuleGraph } from "../../src/compiler/frontend/module-graph.ts";
 import type { ExternalModuleInterface } from "../../src/compiler/frontend/module-graph.ts";
 import { compileSemanticProgramToProgramImage } from "../../src/compiler/pipeline/compile-core.ts";
@@ -90,7 +89,7 @@ describe("source builtin image ownership", () => {
 		const graph = buildModuleGraph(entry, {
 			entrySource: source,
 			entryGoal: "module",
-			stripTypes: stripCompactTypes,
+			stripTypes: (source) => source,
 			buildConfig: config,
 			externalModules,
 		});

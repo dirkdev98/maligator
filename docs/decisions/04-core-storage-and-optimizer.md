@@ -285,6 +285,8 @@ Its provider manifest retains the synchronous graph evaluator and initializes na
 on demand. Discovery uses the same builtin catalog, including prefix-only names.
 Provider and worker discovery converge before sealing the owner's inputs, including
 lookups introduced by required roots and dynamic import candidates.
+Runtime-owned TypeScript providers use the compiler's canonical type erasure even
+when application inputs have already been stripped by their caller.
 The loader creates the evaluator in its callee realm and caches the exports in that
 realm; dynamic imports reuse the graph's real module namespace.
 

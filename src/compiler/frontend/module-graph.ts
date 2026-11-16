@@ -650,9 +650,9 @@ export function buildModuleGraph(
 					: `export default JSON.parse(${JSON.stringify(source)});`;
 		}
 		if (TS_EXTENSIONS.has(path.extname(sourcePath ?? filePath))) {
-			const stripTypes =
-				options.stripTypes ??
-				(SOURCE_HOST_MODULES.has(filePath) ? stripCompactTypes : undefined);
+			const stripTypes = SOURCE_HOST_MODULES.has(filePath)
+				? stripCompactTypes
+				: options.stripTypes;
 			if (!stripTypes) {
 				throw new Error(
 					`TypeScript module '${filePath}' requires BuildModuleGraphOptions.stripTypes`,

@@ -74,6 +74,25 @@ test("retains runtime source providers without adding eager evaluation edges", (
 	).toBe(false);
 });
 
+test.each([
+	["identity-static.mjs", 'import { test } from "node:test"; globalThis.test = test;'],
+	["identity-dynamic.mjs", 'globalThis.test = import("node:test");'],
+	["identity-required.cjs", 'module.exports = require("node:test");'],
+	["identity-computed.mjs", "globalThis.load = id => process.getBuiltinModule(id);"],
+])(
+	"parses bundled TypeScript with an identity application stripper through %s",
+	(file, source) => {
+		write(file, source);
+		const graph = buildModuleGraph(path.join(root, file), {
+			buildConfig: nodeOn,
+			stripTypes: (source) => source,
+		});
+		const builtin = graph.modules.get("node:test");
+		expect(builtin?.loadError).toBeUndefined();
+		expect(builtin?.sourcePath).toMatch(/testing\/node-test\.ts$/);
+	},
+);
+
 test.each(["worker", "dynamic", "required"] as const)(
 	"discovers runtime source providers from a %s root before sealing its owner",
 	(kind) => {
