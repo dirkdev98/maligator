@@ -1527,6 +1527,48 @@ function verifyCompilationContext(
 		}
 		requireExistingFunction(program, functionId, "compilation context CJS module");
 	}
+	const sourceBuiltinIds = new Set<string>();
+	for (const provider of context.data.sourceBuiltinProviders ?? []) {
+		if (
+			!provider.id.startsWith("node:") ||
+			provider.id.length <= 5 ||
+			provider.id.includes("\0") ||
+			sourceBuiltinIds.has(provider.id)
+		)
+			fail(`Invalid source builtin provider ${provider.id}`);
+		const slots = new Set<number>();
+		const names = new Set<string>();
+		for (const entry of provider.state) {
+			if (
+				entry.name.length === 0 ||
+				entry.name.includes("\0") ||
+				names.has(entry.name) ||
+				!Number.isSafeInteger(entry.slot) ||
+				entry.slot < 0 ||
+				entry.slot >= program.globalCount ||
+				slots.has(entry.slot)
+			)
+				fail(`Invalid source builtin state ${entry.name}`);
+			names.add(entry.name);
+			slots.add(entry.slot);
+		}
+		slots.clear();
+		for (const entry of provider.imports) {
+			if (
+				!/^node:[a-zA-Z0-9_./-]+$/.test(entry.module) ||
+				entry.name.length === 0 ||
+				entry.name.includes("\0") ||
+				!Number.isSafeInteger(entry.slot) ||
+				entry.slot < 0 ||
+				entry.slot >= program.globalCount ||
+				slots.has(entry.slot)
+			)
+				fail(`Invalid source builtin import ${entry.module}:${entry.name}`);
+			slots.add(entry.slot);
+		}
+		sourceBuiltinIds.add(provider.id);
+		requireExistingFunction(program, provider.functionIndex, "source builtin provider");
+	}
 	for (const slot of [
 		...context.data.singleAssignmentGlobalSlots,
 		...(context.data.moduleBindingSlots ?? []),

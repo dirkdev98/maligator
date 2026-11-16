@@ -509,3 +509,29 @@ describe("Core function reachability", () => {
 		});
 	});
 });
+
+describe("source builtin factory reachability", () => {
+	it("retains a factory entered only through its runtime provider descriptor", () => {
+		const base = directReachability();
+		const provider = [...base.program.functionIds()].at(-1)!;
+		const context = {
+			...base.context,
+			data: {
+				...base.context.data,
+				sourceBuiltinProviders: [
+					{ id: "node:fixture", functionIndex: provider, state: [], imports: [] },
+				],
+			},
+		};
+		const manager = new CoreAnalysisManager(
+			base.program,
+			context,
+			new CoreOptimizationReportBuilder(base.program),
+		);
+		const reachability = manager.get(CORE_FUNCTION_REACHABILITY_ANALYSIS, {
+			scope: "program",
+		});
+		expect(reachability.executable.has(provider)).toBe(true);
+		expect(reachability.reasons.get(provider)).toContain("source-builtin");
+	});
+});

@@ -104,6 +104,9 @@ export function pruneUnusedPlatformModuleInitializers(
 	const pending = [
 		coreFunctionId(0),
 		...compilation.context.data.cjsModuleFunctionIndices.map(coreFunctionId),
+		...(compilation.context.data.sourceBuiltinProviders ?? []).map((provider) =>
+			coreFunctionId(provider.functionIndex),
+		),
 	];
 	const demandInitializer = (owner: number) => {
 		if (needed.has(owner)) return;

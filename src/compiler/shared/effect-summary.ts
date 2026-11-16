@@ -443,6 +443,7 @@ export type SummaryRootReason =
 	| "program-entry"
 	/** A CommonJS wrapper the require intrinsic can enter. */
 	| "commonjs-module"
+	| "source-builtin"
 	/** Its identity is installed into a global slot the host writes and reads. */
 	| "host-install"
 	/** Its identity reaches a sink this analysis cannot follow. */
@@ -454,6 +455,7 @@ const ROOT_REASON_ORDER: ReadonlyArray<SummaryRootReason> = [
 	"open-world",
 	"program-entry",
 	"commonjs-module",
+	"source-builtin",
 	"host-install",
 	"published-identity",
 ];

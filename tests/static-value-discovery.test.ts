@@ -27,6 +27,7 @@ const context: CoreCompilationContext = {
 		moduleEvaluationOrder: [],
 		sourceFiles: [],
 		cjsModuleFunctionIndices: [],
+		sourceBuiltinProviders: [],
 		hostInstallCandidates: [],
 		singleAssignmentGlobalSlots: [],
 		sourceImmutableCapturedSlots: [],

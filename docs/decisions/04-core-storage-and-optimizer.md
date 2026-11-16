@@ -280,6 +280,20 @@ the registry. A CommonJS wrapper starts sloppy unless its source has a `"use str
 directive prologue. Nested functions inherit that strictness or introduce their own
 directive. The Node globals prelude preserves the source's directive prologue.
 
+Retaining a source builtin for runtime loading does not add an eager evaluation edge.
+Its provider manifest retains the synchronous graph evaluator and initializes native imports
+on demand. Discovery uses the same builtin catalog, including prefix-only names.
+The loader creates the evaluator in its callee realm and caches the exports in that
+realm; dynamic imports reuse the graph's real module namespace.
+
+Independent images share a source builtin's bindings, namespace and instantiation
+and evaluation records before relocating instructions. Private bindings share
+ownership too: one image can instantiate hoisted functions while another evaluates
+the body. These cells are excluded from proofs that require one image to own all
+writes. Source builtins therefore retain source despite an external interface and
+use the provider table for ownership instead of publishing unevaluated bindings
+through ordinary module links.
+
 Optimization admission follows the operations that can observe sloppy semantics.
 Mapped parameter aliases, dynamic scope, receiver coercion and legacy activation
 reflection need their own proofs. A numeric generator or pure factory whose admitted

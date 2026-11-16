@@ -408,6 +408,7 @@ export function inputFactsFixture(): { image: ProgramImage; expected: Array<stri
 		files: [],
 		sourcePositions: [],
 		cjsModuleFunctionIndices: [],
+		sourceBuiltinProviders: [],
 		hostInstalls: [],
 	});
 	image = withNativeFunctionPlan(image, 0, (plan) => {

@@ -68,6 +68,7 @@ function image(
 		files: ["input.js"],
 		sourcePositions: [{ line: 1, column: 0 }],
 		cjsModuleFunctionIndices: [],
+		sourceBuiltinProviders: [],
 		hostInstalls: [],
 		...overrides,
 	});
@@ -665,5 +666,75 @@ describe("Test262 VM image merger", () => {
 		expect(() => mergeProgramImages([image({ literalTemplateData: [5] })])).toThrow(
 			/Truncated/,
 		);
+	});
+});
+
+describe("source builtin provider merging", () => {
+	it("relocates provider factories and native import slots", () => {
+		const first = image({ globalCount: 2 });
+		const second = image({
+			globalCount: 3,
+			sourceBuiltinProviders: [
+				{
+					id: "node:fixture",
+					functionIndex: 0,
+					state: [{ name: "private", slot: 1 }],
+					imports: [{ module: "node:assert", name: "default", slot: 2 }],
+				},
+			],
+		});
+		const merged = mergeProgramImages([first, second]);
+		expect(merged.image.runtime.sourceBuiltinProviders).toEqual([
+			{
+				id: "node:fixture",
+				functionIndex: merged.functionBases[1],
+				state: [{ name: "private", slot: first.runtime.globalCount + 1 }],
+				imports: [
+					{ module: "node:assert", name: "default", slot: first.runtime.globalCount + 2 },
+				],
+			},
+		]);
+		expect(
+			deserializeCompilerArtifact(serializeCompilerArtifact(merged.image)).runtime
+				.sourceBuiltinProviders,
+		).toEqual(merged.image.runtime.sourceBuiltinProviders);
+	});
+	it("preserves the first owner of a canonical provider", () => {
+		const provider = { id: "node:fixture", functionIndex: 0, state: [], imports: [] };
+		const first = image({ sourceBuiltinProviders: [provider] });
+		const merged = mergeProgramImages([
+			first,
+			image({ sourceBuiltinProviders: [provider] }),
+		]);
+		expect(merged.image.runtime.sourceBuiltinProviders).toEqual(
+			first.runtime.sourceBuiltinProviders,
+		);
+	});
+	it("aliases private module cells in later image instructions", () => {
+		const provider = {
+			id: "node:fixture",
+			functionIndex: 0,
+			state: [{ name: "private", slot: 0 }],
+			imports: [],
+		};
+		const first = image({ sourceBuiltinProviders: [provider] });
+		const second = image({
+			globalCount: 2,
+			sourceBuiltinProviders: [{ ...provider, state: [{ name: "private", slot: 1 }] }],
+			functions: [
+				vmFunction([
+					{ opcode: "LOAD_GLOBAL", dst: 0, index: 1 },
+					{ opcode: "STORE_GLOBAL", src: 0, index: 1 },
+					{ opcode: "RETURN", value: 0 },
+				]),
+			],
+		});
+		const merged = mergeProgramImages([first, second]);
+		const instructions =
+			merged.image.runtime.functions[merged.functionBases[1]!]!.instructions;
+		expect(instructions.slice(0, 2)).toEqual([
+			{ opcode: "LOAD_GLOBAL", dst: 0, index: 0 },
+			{ opcode: "STORE_GLOBAL", src: 0, index: 0 },
+		]);
 	});
 });

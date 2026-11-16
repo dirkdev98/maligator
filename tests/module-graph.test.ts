@@ -58,6 +58,22 @@ test("keeps the bare test package separate from the prefix-only builtin", () => 
 	expect(graph.modules.has("node:test")).toBe(false);
 });
 
+test("retains runtime source providers without adding eager evaluation edges", () => {
+	const entry = path.join(root, "lazy-source-provider.mjs");
+	write(
+		"lazy-source-provider.mjs",
+		"globalThis.load = id => process.getBuiltinModule(id);",
+	);
+	const graph = buildModuleGraph(entry, { buildConfig: nodeOn });
+	expect(graph.sourceBuiltinProviders).toContain("node:test");
+	expect(graph.evaluationOrder).not.toContain("node:test");
+	expect(
+		graph.modules
+			.get(entry)
+			?.dependencies.some((entry) => entry.resolvedPath === "node:test"),
+	).toBe(false);
+});
+
 test.each([".", ".."])(
 	"resolves require(%s) as a relative directory without package export restrictions",
 	(specifier) => {

@@ -18,6 +18,7 @@ import {
 	Writer,
 	WIRE_OPCODES,
 	WIRE_VERSION,
+	writeRuntimeFunction,
 } from "../../src/compiler/target/program-image-codec.ts";
 import {
 	encodeVmValueOperand,
@@ -81,12 +82,9 @@ const definition: RuntimeImage = {
 	files: [],
 	sourcePositions: [],
 	cjsModuleFunctionIndices: [],
+	sourceBuiltinProviders: [],
 	hostInstalls: [],
 };
-
-const sourceEntryFieldSize =
-	1 + new TextEncoder().encode(definition.entrypointPath).length;
-const afterSourceEntry = (offset: number): number => offset + sourceEntryFieldSize;
 
 describe("wire loader side-data validation", () => {
 	let driver: string;
@@ -117,12 +115,6 @@ describe("wire loader side-data validation", () => {
 		if (directory !== undefined) rmSync(directory, { recursive: true, force: true });
 	});
 
-	function rejectsMutation(name: string, offset: number, encodedValue: number): void {
-		const wire = serializeRuntimeImage(definition, { debugInfo: false });
-		wire[offset] = encodedValue;
-		rejectsWire(name, wire);
-	}
-
 	function rejectsWire(
 		name: string,
 		wire: Uint8Array,
@@ -152,6 +144,90 @@ describe("wire loader side-data validation", () => {
 		expect(bytes.indexOf(payload, offset + payload.length)).toBe(-1);
 		return offset;
 	}
+	function functionWireOffset(
+		wire: Uint8Array,
+		functionDefinition: BytecodeFunction,
+	): number {
+		const writer = new Writer();
+		writeRuntimeFunction(writer, functionDefinition, false);
+		return uniquePayloadOffset(wire, writer.finish());
+	}
+	const providerDefinition: RuntimeImage = {
+		...definition,
+		globalCount: 1,
+		functions: [
+			{
+				...fn,
+				literalShapeCount: 0,
+				instructions: [
+					{ opcode: "CREATE_UNDEFINED", dst: 0 },
+					{ opcode: "RETURN", value: 0 },
+				],
+			},
+		],
+		sourceBuiltinProviders: [
+			{
+				id: "node:wire_fixture",
+				functionIndex: 0,
+				state: [{ name: "fixture-state", slot: 0 }],
+				imports: [{ module: "node:assert", name: "default", slot: 0 }],
+			},
+		],
+	};
+	it("loads source provider metadata before its function table", () => {
+		acceptsWire(
+			"source-provider",
+			serializeRuntimeImage(providerDefinition, { debugInfo: false }),
+		);
+	});
+	it.each([
+		"factory",
+		"state-slot",
+		"state-name",
+		"import-slot",
+		"import-module",
+		"import-name",
+	] as const)("rejects corrupt source provider %s", (kind) => {
+		const wire = serializeRuntimeImage(providerDefinition, { debugInfo: false });
+		const text = new TextEncoder();
+		if (kind === "factory")
+			wire[
+				uniquePayloadOffset(wire, text.encode("node:wire_fixture")) +
+					text.encode("node:wire_fixture").length
+			] = 2;
+		else if (kind === "state-slot")
+			wire[
+				uniquePayloadOffset(wire, text.encode("fixture-state")) +
+					text.encode("fixture-state").length
+			] = 2;
+		else if (kind === "state-name")
+			wire[uniquePayloadOffset(wire, text.encode("fixture-state"))] = 0;
+		else if (kind === "import-slot")
+			wire[
+				uniquePayloadOffset(wire, text.encode("default")) + text.encode("default").length
+			] = 2;
+		else if (kind === "import-module")
+			wire[uniquePayloadOffset(wire, text.encode("node:assert"))] = 120;
+		else wire[uniquePayloadOffset(wire, text.encode("default"))] = 0;
+		rejectsWire(`source-provider-${kind}`, wire);
+	});
+	it("rejects duplicate source provider identities", () => {
+		const first = "node:fixture_one",
+			second = "node:fixture_two";
+		const wire = serializeRuntimeImage(
+			{
+				...providerDefinition,
+				sourceBuiltinProviders: [
+					{ id: first, functionIndex: 0, state: [], imports: [] },
+					{ id: second, functionIndex: 0, state: [], imports: [] },
+				],
+			},
+			{ debugInfo: false },
+		);
+		const text = new TextEncoder();
+		wire.set(text.encode(first), uniquePayloadOffset(wire, text.encode(second)));
+		rejectsWire("duplicate-source-provider", wire);
+	});
 	it("rejects runtime wires from the previous wire ABI", () => {
 		const wire = serializeRuntimeImage(definition, { debugInfo: false });
 		new DataView(wire.buffer, wire.byteOffset, wire.byteLength).setUint32(
@@ -1012,9 +1088,10 @@ describe("wire loader side-data validation", () => {
 	});
 
 	it("rejects snapshot metadata that disagrees with the opcode prefix", () => {
-		// The first function starts at byte 15 after the source-entry field; its
-		// snapshot count is eight bytes later.
-		rejectsMutation("snapshot-prefix", afterSourceEntry(23), 1);
+		const wire = serializeRuntimeImage(definition, { debugInfo: false });
+		// The name is one varint byte here, followed by eight flag bytes.
+		wire[functionWireOffset(wire, fn) + 9] = 1;
+		rejectsWire("snapshot-prefix", wire);
 	});
 
 	it("rejects a snapshot plan that clobbers an aliased source", () => {
@@ -1040,7 +1117,7 @@ describe("wire loader side-data validation", () => {
 		};
 		const wire = serializeRuntimeImage(cycleDefinition, { debugInfo: false });
 		// Move the scratch restore before r1's read of raw argument slot 0.
-		wire.set([0, 3, 2, 0], afterSourceEntry(26));
+		wire.set([0, 3, 2, 0], functionWireOffset(wire, cycleDefinition.functions[0]!) + 11);
 		rejectsWire("snapshot-clobber", wire);
 	});
 

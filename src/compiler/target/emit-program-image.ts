@@ -2794,6 +2794,38 @@ function malRuntimeImageStruct(
 		);
 	}
 
+	const hasSourceProviders = runtime.sourceBuiltinProviders.length > 0;
+	if (hasSourceProviders) {
+		for (const [index, provider] of runtime.sourceBuiltinProviders.entries()) {
+			if (provider.state.length > 0) {
+				lines.push(
+					`static const MalHostInstallSlot mal_source_builtin_state${suffix}_${index}[] = {`,
+				);
+				for (const entry of provider.state)
+					lines.push(
+						`    { .name = "${cEscapeString(entry.name)}", .slot = ${entry.slot} },`,
+					);
+				lines.push("};", "");
+			}
+			if (provider.imports.length === 0) continue;
+			lines.push(
+				`static const MalSourceBuiltinImport mal_source_builtin_imports${suffix}_${index}[] = {`,
+			);
+			for (const entry of provider.imports)
+				lines.push(
+					`    { .module_id = "${cEscapeString(entry.module)}", .name = "${cEscapeString(entry.name)}", .slot = ${entry.slot} },`,
+				);
+			lines.push("};", "");
+		}
+		lines.push(
+			`static const MalSourceBuiltinProvider mal_source_builtin_providers${suffix}[] = {`,
+		);
+		for (const [index, provider] of runtime.sourceBuiltinProviders.entries())
+			lines.push(
+				`    { .id = "${cEscapeString(provider.id)}", .function_index = ${provider.functionIndex}, .state_count = ${provider.state.length}, .state = ${provider.state.length === 0 ? "nullptr" : `mal_source_builtin_state${suffix}_${index}`}, .import_count = ${provider.imports.length}, .imports = ${provider.imports.length === 0 ? "nullptr" : `mal_source_builtin_imports${suffix}_${index}`} },`,
+			);
+		lines.push("};", "");
+	}
 	const hasCjs = runtime.cjsModuleFunctionIndices.length > 0;
 	if (hasCjs) {
 		lines.push(
@@ -2887,6 +2919,8 @@ function malRuntimeImageStruct(
 		`    .class_layouts = ${classLayouts.length > 0 ? `mal_class_layouts${suffix}` : "nullptr"},`,
 		`    .global_count = ${runtime.globalCount},`,
 		`    .entry_path = "${cEscapeString(runtime.entrypointPath)}",`,
+		`    .source_builtin_provider_count = ${runtime.sourceBuiltinProviders.length},`,
+		`    .source_builtin_providers = ${hasSourceProviders ? `mal_source_builtin_providers${suffix}` : "nullptr"},`,
 		`    .cjs_module_count = ${runtime.cjsModuleFunctionIndices.length},`,
 		`    .cjs_module_function_indices = ${hasCjs ? `mal_cjs_modules${suffix}` : "nullptr"},`,
 		`    .file_count = ${hasFiles ? runtime.files.length : 0},`,

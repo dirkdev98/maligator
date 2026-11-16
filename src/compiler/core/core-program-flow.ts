@@ -57,6 +57,7 @@ export const CORE_PROGRAM_FLOW_INLINE_SOURCE = 1 << 1;
 export type CoreProgramFlowReachabilityReason =
 	| "program-entry"
 	| "commonjs-module"
+	| "source-builtin"
 	| "host-install"
 	| "open-world"
 	| "finite-call"
@@ -497,12 +498,14 @@ const REACHABILITY_FINITE_CALL = 1 << 4;
 const REACHABILITY_ANY_SCRIPT = 1 << 5;
 const REACHABILITY_RUNTIME_IDENTITY = 1 << 6;
 const REACHABILITY_INLINE_SOURCE = 1 << 7;
+const REACHABILITY_SOURCE_BUILTIN = 1 << 8;
 
 const REACHABILITY_REASON_BITS: ReadonlyArray<
 	readonly [number, CoreProgramFlowReachabilityReason]
 > = [
 	[REACHABILITY_PROGRAM_ENTRY, "program-entry"],
 	[REACHABILITY_COMMONJS_MODULE, "commonjs-module"],
+	[REACHABILITY_SOURCE_BUILTIN, "source-builtin"],
 	[REACHABILITY_HOST_INSTALL, "host-install"],
 	[REACHABILITY_OPEN_WORLD, "open-world"],
 	[REACHABILITY_FINITE_CALL, "finite-call"],
@@ -863,6 +866,8 @@ function coreProgramFlowReachabilityRoots(
 		for (const functionId of context.data.cjsModuleFunctionIndices) {
 			enter(functionId, REACHABILITY_COMMONJS_MODULE);
 		}
+		for (const provider of context.data.sourceBuiltinProviders ?? [])
+			enter(provider.functionIndex, REACHABILITY_SOURCE_BUILTIN);
 	}
 	const hostInstallSlots = new Set<number>();
 	for (const candidate of context.data.hostInstallCandidates) {

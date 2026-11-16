@@ -227,6 +227,7 @@ const definition: ProgramImage = testProgramImage({
 	files: [],
 	sourcePositions: [],
 	cjsModuleFunctionIndices: [],
+	sourceBuiltinProviders: [],
 	hostInstalls: [],
 });
 
@@ -717,6 +718,7 @@ describe("emit-program-image instruction packing", () => {
 				files: [],
 				sourcePositions: [],
 				cjsModuleFunctionIndices: [],
+				sourceBuiltinProviders: [],
 				hostInstalls: [],
 			});
 			return emitProgramImage(

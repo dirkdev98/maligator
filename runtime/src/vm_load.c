@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 99u
+#define WIRE_VERSION 100u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1900,6 +1900,24 @@ static i32 argument_retention_limit(const MalFunction *fn) {
     return limit;
 }
 
+static const char *rd_source_builtin_text(MalLoadedRuntimeImage *loaded, Rd *reader, bool module_id) {
+    u32 length = rd_count(reader, 1);
+    char *text = arena_array(loaded, reader, (usize) length + 1, sizeof(char), alignof(char));
+    for (u32 i = 0; reader->ok && i < length; i++) {
+        text[i] = (char) rd_u8(reader);
+        if (text[i] == '\0') reader->ok = false;
+    }
+    if (!reader->ok) return nullptr;
+    text[length] = '\0';
+    if (length == 0 || (module_id && (length <= 5 || strncmp(text, "node:", 5) != 0))) reader->ok = false;
+    if (module_id) for (u32 i = 5; reader->ok && i < length; i++) {
+        unsigned char c = (unsigned char) text[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '/' || c == '-')) reader->ok = false;
+    }
+    return text;
+}
+
 static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool debug) {
     fn->name_string_index = rd_i32(r);
     u8 kind = rd_u8(r);
@@ -2899,6 +2917,42 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
     const i32 *cjs = rd_i32_array(L, &r, &cjs_count);
     def->cjs_module_count = cjs_count;
     def->cjs_module_function_indices = cjs;
+    u32 provider_count = rd_count(&r, 3);
+    MalSourceBuiltinProvider *providers = arena_array(
+        L, &r, provider_count, sizeof(*providers), alignof(MalSourceBuiltinProvider));
+    def->source_builtin_provider_count = (i32) provider_count;
+    def->source_builtin_providers = providers;
+    for (u32 provider = 0; r.ok && provider < provider_count; provider++) {
+        const char *id = rd_source_builtin_text(L, &r, true);
+        i32 function_index = rd_i32(&r);
+        u32 state_count = rd_count(&r, 2);
+        MalHostInstallSlot *state = arena_array(L, &r, state_count, sizeof(*state), alignof(MalHostInstallSlot));
+        for (u32 i = 0; r.ok && i < state_count; i++) {
+            const char *name = rd_source_builtin_text(L, &r, false);
+            i32 slot = rd_i32(&r);
+            if (slot < 0 || slot >= def->global_count) r.ok = false;
+            for (u32 previous = 0; r.ok && previous < i; previous++)
+                if (state[previous].slot == slot || strcmp(state[previous].name, name) == 0) r.ok = false;
+            state[i] = (MalHostInstallSlot) {.name = name, .slot = slot};
+        }
+        u32 import_count = rd_count(&r, 3);
+        MalSourceBuiltinImport *imports = arena_array(L, &r, import_count, sizeof(*imports), alignof(MalSourceBuiltinImport));
+        for (u32 i = 0; r.ok && i < import_count; i++) {
+            const char *module_id = rd_source_builtin_text(L, &r, true);
+            const char *name = rd_source_builtin_text(L, &r, false);
+            i32 slot = rd_i32(&r);
+            if (slot < 0 || slot >= def->global_count) r.ok = false;
+            for (u32 previous = 0; r.ok && previous < i; previous++)
+                if (imports[previous].slot == slot) r.ok = false;
+            imports[i] = (MalSourceBuiltinImport) {.module_id = module_id, .name = name, .slot = slot};
+        }
+        for (u32 previous = 0; r.ok && previous < provider; previous++)
+            if (strcmp(providers[previous].id, id) == 0) r.ok = false;
+        providers[provider] = (MalSourceBuiltinProvider) {
+            .id = id, .function_index = function_index, .state_count = (i32) state_count, .state = state,
+            .import_count = (i32) import_count, .imports = imports,
+        };
+    }
 
     // Functions.
     u32 function_count = rd_count(&r, 1);
@@ -2910,6 +2964,10 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
         rd_function(L, &r, &functions[f], debug);
     }
 
+    for (u32 provider = 0; r.ok && provider < provider_count; provider++) {
+        i32 function_index = providers[provider].function_index;
+        if (function_index < 0 || function_index >= (i32) function_count) r.ok = false;
+    }
     u32 precompiled_literal_shape_count = rd_count(&r, 3);
     MalPrecompiledLiteralShape *precompiled_literal_shapes = arena_array(
         L, &r, precompiled_literal_shape_count,

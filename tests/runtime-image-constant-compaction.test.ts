@@ -143,6 +143,7 @@ function runtimeFixture(): RuntimeImage {
 		files: [],
 		sourcePositions: [],
 		cjsModuleFunctionIndices: [],
+		sourceBuiltinProviders: [],
 		hostInstalls: [],
 	};
 }

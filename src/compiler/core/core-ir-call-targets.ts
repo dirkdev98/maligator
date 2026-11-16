@@ -1445,20 +1445,25 @@ export const CORE_PROGRAM_FLOW_CALL_TARGET_SEMANTICS: CoreProgramFlowCallTargetS
 		identities: CoreGraphIdentityTable,
 	) {
 		const cells = new Set<CoreCellId>();
+		const shared = new Set(
+			(context?.data.sourceBuiltinProviders ?? []).flatMap((provider) =>
+				provider.state.map((entry) => entry.slot),
+			),
+		);
 		for (const index of context?.data.singleAssignmentGlobalSlots ?? []) {
-			cells.add(globalCellId(identities, index));
+			if (!shared.has(index)) cells.add(globalCellId(identities, index));
 		}
 		if (context?.facts.closure.sourceClosure.kind === "known") {
 			// Private module slots have no host aliases; later rebindings remain visible Core stores.
 			for (const index of context.data.initializedModuleGlobalSlots ?? []) {
-				cells.add(globalCellId(identities, index));
+				if (!shared.has(index)) cells.add(globalCellId(identities, index));
 			}
 		}
 		for (const { owner, index } of coreClosedCapturedValueSlots(program, context)) {
 			cells.add(capturedCellId(identities, owner, index));
 		}
 		for (const index of moduleVarGlobalSlots(context))
-			cells.add(globalCellId(identities, index));
+			if (!shared.has(index)) cells.add(globalCellId(identities, index));
 		return cells;
 	},
 	initialCells(

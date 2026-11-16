@@ -695,6 +695,24 @@ static void mal_vm_adopt_program_image(MalVm *vm, const MalRuntimeImage *program
     }
     vm->live_runtime_image.cjs_module_function_indices =
         cjs_module_function_indices;
+    MalSourceBuiltinProvider *providers = program->source_builtin_provider_count == 0 ? nullptr
+        : malloc(sizeof(*providers) * (usize) program->source_builtin_provider_count);
+    if (program->source_builtin_provider_count > 0)
+        memcpy(providers, program->source_builtin_providers,
+               sizeof(*providers) * (usize) program->source_builtin_provider_count);
+    for (i32 i = 0; i < program->source_builtin_provider_count; i++) {
+        MalHostInstallSlot *state = providers[i].state_count == 0 ? nullptr
+            : malloc(sizeof(*state) * (usize) providers[i].state_count);
+        if (providers[i].state_count > 0)
+            memcpy(state, providers[i].state, sizeof(*state) * (usize) providers[i].state_count);
+        providers[i].state = state;
+        MalSourceBuiltinImport *imports = providers[i].import_count == 0 ? nullptr
+            : malloc(sizeof(*imports) * (usize) providers[i].import_count);
+        if (providers[i].import_count > 0)
+            memcpy(imports, providers[i].imports, sizeof(*imports) * (usize) providers[i].import_count);
+        providers[i].imports = imports;
+    }
+    vm->live_runtime_image.source_builtin_providers = providers;
     i32 file_count = program->file_count;
     vm->file_capacity = file_count > 0 ? file_count : 1;
     const char **files = malloc(sizeof(char *) * (usize) vm->file_capacity);
@@ -1161,6 +1179,11 @@ void mal_vm_free(MalVm *vm) {
     mal_vm_free_constant_pages(&vm->bigint_constant_pages);
     free((u32 *) vm->live_runtime_image.literal_template_data);
     free((i32 *) vm->live_runtime_image.cjs_module_function_indices);
+    for (i32 i = 0; i < vm->live_runtime_image.source_builtin_provider_count; i++) {
+        free((MalSourceBuiltinImport *) vm->live_runtime_image.source_builtin_providers[i].imports);
+        free((MalHostInstallSlot *) vm->live_runtime_image.source_builtin_providers[i].state);
+    }
+    free((MalSourceBuiltinProvider *) vm->live_runtime_image.source_builtin_providers);
     free(vm->file_string_atoms);
     free((char **) vm->live_runtime_image.files);
     free((MalSourcePos *) vm->live_runtime_image.source_positions);
@@ -1664,6 +1687,32 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
         return -1;
     }
     for (i32 i = 0; i < loaded->global_count; i++) global_remap[i] = global_base + i;
+    // The same builtin can be retained by independent images. Its private cells
+    // must follow the public exports when one image instantiates and another evaluates.
+    for (i32 provider = 0; provider < loaded->source_builtin_provider_count; provider++) {
+        const MalSourceBuiltinProvider *candidate = &loaded->source_builtin_providers[provider];
+        for (i32 existing = 0; existing < live->source_builtin_provider_count; existing++) {
+            const MalSourceBuiltinProvider *owner = &live->source_builtin_providers[existing];
+            if (strcmp(candidate->id, owner->id) != 0) continue;
+            if (candidate->state_count != owner->state_count) {
+                free(global_remap);
+                mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "source builtin state differs between images");
+                return -1;
+            }
+            for (i32 cell = 0; cell < candidate->state_count; cell++) {
+                const MalHostInstallSlot *target = nullptr;
+                for (i32 slot = 0; slot < owner->state_count; slot++)
+                    if (strcmp(candidate->state[cell].name, owner->state[slot].name) == 0) { target = &owner->state[slot]; break; }
+                if (target == nullptr) {
+                    free(global_remap);
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "source builtin state differs between images");
+                    return -1;
+                }
+                global_remap[candidate->state[cell].slot] = target->slot;
+            }
+            break;
+        }
+    }
     i32 cjs_import_count = 0;
     for (i32 i = 0; i < loaded->module_import_count; i++) {
         const MalModuleLink *link = &loaded->module_imports[i];
@@ -1843,6 +1892,40 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
         functions[fn_base + f] = fn;
     }
     live->function_count = new_functions;
+    for (i32 provider = 0; provider < loaded->source_builtin_provider_count; provider++) {
+        const MalSourceBuiltinProvider *candidate = &loaded->source_builtin_providers[provider];
+        bool existing = false;
+        for (i32 i = 0; i < live->source_builtin_provider_count; i++) {
+            if (strcmp(live->source_builtin_providers[i].id, candidate->id) == 0) {
+                existing = true;
+                break;
+            }
+        }
+        if (existing) continue;
+        i32 count = live->source_builtin_provider_count;
+        MalSourceBuiltinProvider *providers = realloc(
+            (MalSourceBuiltinProvider *) live->source_builtin_providers,
+            sizeof(*providers) * (usize) (count + 1));
+        MalHostInstallSlot *state = candidate->state_count == 0 ? nullptr
+            : malloc(sizeof(*state) * (usize) candidate->state_count);
+        for (i32 i = 0; i < candidate->state_count; i++) {
+            state[i] = candidate->state[i];
+            state[i].slot = global_remap[state[i].slot];
+        }
+        MalSourceBuiltinImport *imports = candidate->import_count == 0 ? nullptr
+            : malloc(sizeof(*imports) * (usize) candidate->import_count);
+        for (i32 i = 0; i < candidate->import_count; i++) {
+            imports[i] = candidate->imports[i];
+            imports[i].slot = global_remap[imports[i].slot];
+        }
+        providers[count] = (MalSourceBuiltinProvider) {
+            .id = candidate->id, .function_index = candidate->function_index + fn_base,
+            .state_count = candidate->state_count, .state = state,
+            .import_count = candidate->import_count, .imports = imports,
+        };
+        live->source_builtin_providers = providers;
+        live->source_builtin_provider_count = count + 1;
+    }
 
     // CommonJS module ids are program-local numeric values. Append the
     // module-to-function rows here; the caller function's segment base is

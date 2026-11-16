@@ -1545,11 +1545,11 @@ export function supportedHostModuleIds(): Array<string> {
 
 /**
  * Names the runtime reports through `builtinModules` and `isBuiltin`. Node promises
- * that `process.getBuiltinModule` loads each of them, which only native installers
- * can do on demand; source built-ins exist only in programs that import them.
+ * that `process.getBuiltinModule` loads each of them through native installers or
+ * retained source providers.
  */
 export function supportedNodeBuiltinNames(): Array<string> {
-	const names = [...HOST_MODULES.keys()]
+	const names = [...HOST_MODULES.keys(), ...SOURCE_HOST_MODULES.keys()]
 		.map((id) => (NODE_PREFIX_ONLY_BUILTIN_IDS.has(id) ? id : id.slice(5)))
 		.sort();
 	return [

@@ -410,6 +410,7 @@ const definition: ProgramImage = testProgramImage({
 		{ line: 3, column: 8, inlinedFunctionIndex: 1, callerPosId: 0 },
 	],
 	cjsModuleFunctionIndices: [1],
+	sourceBuiltinProviders: [],
 	hostInstalls: [],
 });
 
@@ -562,6 +563,7 @@ function stackObjectDefinition(): ProgramImage {
 				files: [],
 				sourcePositions: [],
 				cjsModuleFunctionIndices: [],
+				sourceBuiltinProviders: [],
 			}),
 			native: createConservativeNativePlan([stackFn]),
 		},
@@ -2615,6 +2617,7 @@ describe("program-image-codec", () => {
 					files: [],
 					sourcePositions: [],
 					cjsModuleFunctionIndices: [],
+					sourceBuiltinProviders: [],
 				}),
 				native: createConservativeNativePlan(functions),
 			};
@@ -2773,6 +2776,7 @@ describe("program-image-codec", () => {
 			files: [],
 			sourcePositions: [],
 			cjsModuleFunctionIndices: [],
+			sourceBuiltinProviders: [],
 			hostInstalls: [],
 		});
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(probe));
@@ -2820,5 +2824,70 @@ describe("program-image-codec", () => {
 	it("round-trips an ordinary runtime image with an empty manifest", () => {
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(definition));
 		expect(restored.runtime.hostInstalls).toEqual([]);
+	});
+});
+
+describe("source builtin wire descriptors", () => {
+	const provider = {
+		id: "node:fixture",
+		functionIndex: 0,
+		state: [{ name: "fixture", slot: 0 }],
+		imports: [{ module: "node:assert", name: "default", slot: 0 }],
+	};
+	it("round trips provider factories and deferred import slots", () => {
+		const runtime = { ...definition.runtime, sourceBuiltinProviders: [provider] };
+		expect(
+			deserializeRuntimeImage(serializeRuntimeImage(runtime)).sourceBuiltinProviders,
+		).toEqual([provider]);
+	});
+	it.each([
+		["canonical id", { ...provider, id: "fixture" }],
+		[
+			"function target",
+			{ ...provider, functionIndex: definition.runtime.functions.length },
+		],
+		[
+			"native import id",
+			{ ...provider, imports: [{ ...provider.imports[0]!, module: "assert" }] },
+		],
+		[
+			"empty import name",
+			{ ...provider, imports: [{ ...provider.imports[0]!, name: "" }] },
+		],
+		[
+			"import slot",
+			{
+				...provider,
+				imports: [{ ...provider.imports[0]!, slot: definition.runtime.globalCount }],
+			},
+		],
+		[
+			"duplicate import slots",
+			{ ...provider, imports: [provider.imports[0]!, provider.imports[0]!] },
+		],
+		["empty state name", { ...provider, state: [{ name: "", slot: 0 }] }],
+		[
+			"state slot",
+			{ ...provider, state: [{ name: "fixture", slot: definition.runtime.globalCount }] },
+		],
+		[
+			"duplicate state cells",
+			{ ...provider, state: [provider.state[0]!, provider.state[0]!] },
+		],
+	] satisfies Array<[string, typeof provider]>)(
+		"rejects an invalid %s",
+		(_name, value) => {
+			expect(() =>
+				serializeRuntimeImage({ ...definition.runtime, sourceBuiltinProviders: [value] }),
+			).toThrow(/source builtin/);
+		},
+	);
+	it("rejects duplicate canonical providers", () => {
+		expect(() =>
+			serializeRuntimeImage({
+				...definition.runtime,
+				sourceBuiltinProviders: [provider, provider],
+			}),
+		).toThrow(/source builtin/);
 	});
 });

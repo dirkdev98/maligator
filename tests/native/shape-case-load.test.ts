@@ -154,6 +154,7 @@ const definition: ProgramImage = withNativeFunctionPlan(
 		files: [],
 		sourcePositions: [],
 		cjsModuleFunctionIndices: [],
+		sourceBuiltinProviders: [],
 		hostInstalls: [],
 	}),
 	0,

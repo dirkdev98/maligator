@@ -478,7 +478,14 @@ export function pruneCoreCaptureLiveness(
 	)
 		return [];
 	// Guards and inline source frames reference code without instantiating its identity.
-	const roots = new Set(context.data.cjsModuleFunctionIndices.map(coreFunctionId));
+	const roots = new Set(
+		[
+			...context.data.cjsModuleFunctionIndices,
+			...(context.data.sourceBuiltinProviders ?? []).map(
+				(provider) => provider.functionIndex,
+			),
+		].map(coreFunctionId),
+	);
 	const functions = [...program.functionIds()];
 	// Decided before any editor opens; rounds only drop stores, which adds no writer.
 	const privateSlots = coreEvaluatorPrivateSlotMap(program, context);
@@ -586,7 +593,14 @@ export function coreInstantiableFunctions(
 	context: CoreCompilationContext,
 ): ReadonlySet<CoreFunctionId> | undefined {
 	if (context.facts.closure.sourceClosure.kind !== "known") return undefined;
-	const roots = new Set(context.data.cjsModuleFunctionIndices.map(coreFunctionId));
+	const roots = new Set(
+		[
+			...context.data.cjsModuleFunctionIndices,
+			...(context.data.sourceBuiltinProviders ?? []).map(
+				(provider) => provider.functionIndex,
+			),
+		].map(coreFunctionId),
+	);
 	for (const entry of program.functionIds()) {
 		roots.add(entry);
 		break;

@@ -71,6 +71,7 @@ function callGraphImage() {
 		files: ["call-graph.js"],
 		sourcePositions: [{ line: 1, column: 0 }],
 		cjsModuleFunctionIndices: [],
+		sourceBuiltinProviders: [],
 		hostInstalls: [],
 	});
 	image = withNativeFunctionPlan(image, 0, (plan) => ({

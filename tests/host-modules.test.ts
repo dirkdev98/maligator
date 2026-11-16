@@ -536,3 +536,44 @@ globalThis.sink = read({process: 1});`,
 		expect(restored.runtime.hostInstalls).toEqual(def.runtime.hostInstalls);
 	});
 });
+
+describe("lazy source builtin providers", () => {
+	it("publishes canonical state for a statically evaluated source builtin", () => {
+		const image = compile('import test from "node:test"; globalThis.test = test;', {
+			node: true,
+		});
+		expect(
+			image.runtime.sourceBuiltinProviders.some(
+				(entry) => entry.id === "node:test" && entry.state.length > 0,
+			),
+		).toBe(true);
+	});
+	it("keeps provider-only native import slots out of startup installation", () => {
+		const image = compile("globalThis.load = id => process.getBuiltinModule(id);", {
+			node: true,
+		});
+		const provider = image.runtime.sourceBuiltinProviders.find(
+			(entry) => entry.id === "node:test",
+		)!;
+		expect(provider).toBeDefined();
+		expect(image.runtime.functions[provider.functionIndex]).toBeDefined();
+		const startupSlots = new Set(
+			image.runtime.hostInstalls.flatMap((install) =>
+				install.exports.map((entry) => entry.slot),
+			),
+		);
+		expect(provider.imports.length).toBeGreaterThan(0);
+		expect(provider.imports.every((entry) => !startupSlots.has(entry.slot))).toBe(true);
+		expect(
+			deserializeCompilerArtifact(serializeCompilerArtifact(image)).runtime
+				.sourceBuiltinProviders,
+		).toEqual(image.runtime.sourceBuiltinProviders);
+	});
+	it("does not retain provider functions for a literal native import", () => {
+		const image = compile(
+			'import {join} from "node:path"; globalThis.result=join("a","b");',
+			{ node: true },
+		);
+		expect(image.runtime.sourceBuiltinProviders).toEqual([]);
+	});
+});

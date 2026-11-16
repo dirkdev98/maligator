@@ -47,7 +47,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 99;
+export const WIRE_VERSION = 100;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -602,6 +602,29 @@ export function writeRuntimeImage(
 	}
 
 	w.i32Array(def.cjsModuleFunctionIndices);
+	w.u32(def.sourceBuiltinProviders.length);
+	for (const provider of def.sourceBuiltinProviders) {
+		const id = utf8Encode(provider.id);
+		w.u32(id.length);
+		for (const byte of id) w.u8(byte);
+		w.i32(provider.functionIndex);
+		w.u32(provider.state.length);
+		for (const entry of provider.state) {
+			const name = utf8Encode(entry.name);
+			w.u32(name.length);
+			for (const byte of name) w.u8(byte);
+			w.i32(entry.slot);
+		}
+		w.u32(provider.imports.length);
+		for (const entry of provider.imports) {
+			for (const text of [entry.module, entry.name]) {
+				const bytes = utf8Encode(text);
+				w.u32(bytes.length);
+				for (const byte of bytes) w.u8(byte);
+			}
+			w.i32(entry.slot);
+		}
+	}
 
 	// Functions.
 	w.u32(def.functions.length);
@@ -1559,6 +1582,34 @@ export function readRuntimeImage(
 	}
 
 	const cjsModuleFunctionIndices = r.i32Array();
+	const sourceBuiltinProviders: RuntimeImage["sourceBuiltinProviders"] = [];
+	const providerCount = r.count(3);
+	for (let provider = 0; provider < providerCount; provider++) {
+		const length = r.count(1),
+			bytes = new Array<number>(length);
+		for (let byte = 0; byte < length; byte++) bytes[byte] = r.u8();
+		const functionIndex = r.i32();
+		const state: RuntimeImage["sourceBuiltinProviders"][number]["state"] = [];
+		const stateCount = r.count(2);
+		for (let entry = 0; entry < stateCount; entry++) {
+			const size = r.count(1),
+				value = new Array<number>(size);
+			for (let byte = 0; byte < size; byte++) value[byte] = r.u8();
+			state.push({ name: utf8Decode(value), slot: r.i32() });
+		}
+		const imports: RuntimeImage["sourceBuiltinProviders"][number]["imports"] = [];
+		const importCount = r.count(3);
+		for (let entry = 0; entry < importCount; entry++) {
+			const names = [0, 1].map(() => {
+				const size = r.count(1),
+					value = new Array<number>(size);
+				for (let byte = 0; byte < size; byte++) value[byte] = r.u8();
+				return utf8Decode(value);
+			});
+			imports.push({ module: names[0]!, name: names[1]!, slot: r.i32() });
+		}
+		sourceBuiltinProviders.push({ id: utf8Decode(bytes), functionIndex, state, imports });
+	}
 
 	const functionCount = r.count(1);
 	const functions: Array<BytecodeFunction> = [];
@@ -1662,6 +1713,7 @@ export function readRuntimeImage(
 		files,
 		sourcePositions,
 		cjsModuleFunctionIndices,
+		sourceBuiltinProviders,
 		...(moduleImports.length === 0 && moduleExports.length === 0
 			? {}
 			: { moduleLinks: { imports: moduleImports, exports: moduleExports } }),

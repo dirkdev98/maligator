@@ -1098,6 +1098,60 @@ export function constructSemanticProgramCore(
 }
 
 function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompilation {
+	// Re-exports may allocate application host slots before lazy provider dependencies do.
+	coreModuleLinks(program);
+	// Freeze loader admission before provider bodies add their own host dependencies.
+	const initialHostCandidates = coreHostInstallCandidates(program);
+	const initialHostSlots = new Set(
+		initialHostCandidates.flatMap((candidate) =>
+			candidate.exports.map((entry) => entry.slot),
+		),
+	);
+	const runtimeBuiltinLoader =
+		program.nodeModuleInstaller !== null ||
+		program.hostProcess?.retained === true ||
+		initialHostCandidates.some(
+			(candidate) =>
+				(candidate.installer === hostInstallerSymbol("node:module") &&
+					candidate.exports.length > 0) ||
+				(candidate.installer === hostInstallerSymbol("node:process") &&
+					candidate.exports.some(
+						(entry) => entry.name === "default" || entry.name === "getBuiltinModule",
+					)),
+		);
+	const sourceBuiltinProviders = (program.semantic.graph?.sourceBuiltinProviders ?? [])
+		.filter(
+			(id) =>
+				program.semantic.graph?.modules.get(id)?.external === undefined &&
+				(runtimeBuiltinLoader || program.compiledModuleInitForPaths.has(id)),
+		)
+		.map((id) => {
+			const functionIndex = requiredEsmThunk(program, id);
+			if (functionIndex === undefined)
+				throw new Error(`Source builtin ${id} requires a synchronous module provider`);
+			const modules = new Set<string>();
+			const pending = [id];
+			while (pending.length > 0) {
+				const modulePath = pending.pop()!;
+				if (modules.has(modulePath)) continue;
+				modules.add(modulePath);
+				for (const dependency of program.semantic.graph?.modules.get(modulePath)
+					?.dependencies ?? [])
+					if (dependency.resolvedPath !== null) pending.push(dependency.resolvedPath);
+			}
+			const imports = program.hostModules
+				.filter((host) => modules.has(host.specifier))
+				.flatMap((host) =>
+					host.exports.flatMap((entry) => {
+						const location = program.bindingToStorage.get(entry.binding);
+						return location?.type === "global" && !initialHostSlots.has(location.index)
+							? [{ module: host.specifier, name: entry.name, slot: location.index }]
+							: [];
+					}),
+				);
+			const state = sourceBuiltinState(program, modules);
+			return { id, functionIndex, state, imports };
+		});
 	// Exports first: publishing a re-exported import or host export allocates its slot.
 	const moduleLinks = coreModuleLinks(program);
 	const hostInstallCandidates = coreHostInstallCandidates(program);
@@ -1109,6 +1163,11 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 		globalCount: program.nextGlobalIndex,
 	});
 	const candidates = coreSingleAssignmentCellCandidates(program);
+	const providerStateSlots = new Set(
+		sourceBuiltinProviders.flatMap((provider) =>
+			provider.state.map((entry) => entry.slot),
+		),
+	);
 	const initializedModuleGlobalSlots = coreInitializedModuleGlobalSlots(program);
 	return {
 		program: program.core,
@@ -1116,11 +1175,18 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 			facts: program.facts,
 			data: coreProgramDataFromSemantic(program.semantic, {
 				moduleLexicalSlots:
-					moduleLinks === undefined ? coreModuleLexicalSlots(program) : [],
-				moduleBindingSlots: coreModuleBindingSlots(program),
+					moduleLinks === undefined
+						? coreModuleLexicalSlots(program).filter(
+								(entry) => !providerStateSlots.has(entry.slot),
+							)
+						: [],
+				moduleBindingSlots: coreModuleBindingSlots(program).filter(
+					(slot) => !providerStateSlots.has(slot),
+				),
 				modulePrivateNames: program.modulePrivateNames,
 				sourceCallSites: program.sourceOrigins?.callSites(),
 				cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
+				sourceBuiltinProviders,
 				hostInstallCandidates,
 				pureModuleInitializers: [...program.compiledModuleInitForPaths].flatMap(
 					([modulePath, functionIndex]) => {
@@ -1155,7 +1221,9 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 						];
 					},
 				),
-				singleAssignmentGlobalSlots: candidates.singleAssignmentGlobalSlots,
+				singleAssignmentGlobalSlots: candidates.singleAssignmentGlobalSlots.filter(
+					(slot) => !providerStateSlots.has(slot),
+				),
 				sourceImmutableCapturedSlots: candidates.sourceImmutableCapturedSlots,
 				initializedModuleGlobalSlots,
 				importedModuleBindings: coreImportedModuleBindings(program),
@@ -1178,6 +1246,52 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 			}),
 		},
 	};
+}
+
+/** Source-module cells can be supplied by an earlier image, including its private bindings. */
+function sourceBuiltinState(
+	program: CoreFrontendContext,
+	modules: ReadonlySet<string>,
+): Array<{ name: string; slot: number }> {
+	const state = new Map<number, string>();
+	const add = (path: string, kind: string, name: string, slot: number) => {
+		if (!state.has(slot)) state.set(slot, JSON.stringify([path, kind, name]));
+	};
+	for (const file of program.semantic.files) {
+		if (!modules.has(file.path) || file.type !== "module" || file.commonjs) continue;
+		for (const [scopeIndex, scope] of file.scopes.entries()) {
+			for (const binding of scope.bindings) {
+				const location = program.bindingToStorage.get(binding);
+				if (location?.type === "global")
+					add(file.path, "binding", `${scopeIndex}:${binding.name}`, location.index);
+			}
+		}
+		const defaultBinding = program.moduleDefaultBinding.get(file.path);
+		const defaultLocation =
+			defaultBinding === undefined
+				? undefined
+				: program.bindingToStorage.get(defaultBinding);
+		if (defaultLocation?.type === "global")
+			add(file.path, "default", "", defaultLocation.index);
+		let namespace = program.moduleNamespaceSlot.get(file.path);
+		if (namespace === undefined) {
+			namespace = program.nextGlobalIndex++;
+			program.moduleNamespaceSlot.set(file.path, namespace);
+		}
+		add(file.path, "namespace", "", namespace);
+		add(
+			file.path,
+			"instantiated",
+			"",
+			getDynamicModuleStatusSlot(program, `\0instantiated:${file.path}`),
+		);
+		add(file.path, "status", "", getDynamicModuleStatusSlot(program, file.path));
+		add(file.path, "error", "", getModuleEvaluationErrorSlot(program, file.path));
+		add(file.path, "record", "", getModuleEvaluationRecordSlot(program, file.path));
+	}
+	return [...state]
+		.map(([slot, name]) => ({ name, slot }))
+		.sort((left, right) => left.name.localeCompare(right.name));
 }
 
 // Global names whose global-object properties are non-writable and non-configurable data.
@@ -1948,7 +2062,9 @@ function coreModuleLinks(program: CoreFrontendContext): CoreModuleLinks | undefi
 		exported === undefined
 			? []
 			: program.semantic.files.filter(
-					(file) => exported === "all" || exported.has(file.path),
+					(file) =>
+						!program.semantic.graph?.sourceBuiltinProviders?.includes(file.path) &&
+						(exported === "all" || exported.has(file.path)),
 				);
 	const exports: Array<CoreModuleLink> = [];
 	const interfaces: Array<CoreModuleInterface> = [];
@@ -15483,6 +15599,10 @@ function dynamicImportCandidates(
 			};
 			candidates.set(`${candidateSpecifier}\0${dependency.resolvedPath}`, candidate);
 		}
+	}
+	for (const id of program.semantic.graph?.sourceBuiltinProviders ?? []) {
+		if (files.has(id))
+			candidates.set(`${id}\0${id}`, { specifier: id, form: "source", targetPath: id });
 	}
 	return [...candidates.values()].sort(
 		(left, right) =>

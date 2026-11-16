@@ -32,6 +32,7 @@ function fixture(scenario: Scenario, closed = true) {
 			moduleEvaluationOrder: [],
 			sourceFiles: [],
 			cjsModuleFunctionIndices: [],
+			sourceBuiltinProviders: [],
 			hostInstallCandidates: [],
 			singleAssignmentGlobalSlots: closed ? [0] : [],
 			sourceImmutableCapturedSlots: [],

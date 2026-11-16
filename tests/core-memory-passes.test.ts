@@ -73,6 +73,7 @@ const context: CoreCompilationContext = {
 		moduleEvaluationOrder: ["memory-passes.js"],
 		sourceFiles: [{ path: "memory-passes.js", contents: "" }],
 		cjsModuleFunctionIndices: [],
+		sourceBuiltinProviders: [],
 		hostInstallCandidates: [],
 		singleAssignmentGlobalSlots: [],
 		sourceImmutableCapturedSlots: [],

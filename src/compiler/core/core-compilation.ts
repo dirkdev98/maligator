@@ -89,6 +89,16 @@ export interface CoreProgramData {
 		readonly contents: string;
 	}>;
 	readonly cjsModuleFunctionIndices: ReadonlyArray<number>;
+	readonly sourceBuiltinProviders?: ReadonlyArray<{
+		readonly id: string;
+		readonly functionIndex: number;
+		readonly state: ReadonlyArray<{ readonly name: string; readonly slot: number }>;
+		readonly imports: ReadonlyArray<{
+			readonly module: string;
+			readonly name: string;
+			readonly slot: number;
+		}>;
+	}>;
 	readonly pureModuleInitializers?: ReadonlyArray<{
 		readonly functionIndex: number;
 		readonly bindingSlots: ReadonlyArray<number>;

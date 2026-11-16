@@ -94,6 +94,7 @@ function captureImage(copied = true, createsClosure = false) {
 		files: ["capture-values.js"],
 		sourcePositions: [{ line: 1, column: 0 }],
 		cjsModuleFunctionIndices: [],
+		sourceBuiltinProviders: [],
 		hostInstalls: [],
 	});
 }

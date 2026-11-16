@@ -31,7 +31,7 @@ function rebaseNativeStorage(
 				numericLoopRegions: storage.numericLoopRegions.map((plan) =>
 					plan.globals === undefined
 						? plan
-						: { ...plan, globals: plan.globals.map((slot) => slot + base.global) },
+						: { ...plan, globals: plan.globals.map((slot) => rebaseGlobal(slot, base)) },
 				),
 				stringComparisons: storage.stringComparisons.map((plan) => ({
 					...plan,
@@ -77,6 +77,7 @@ function rebaseNativeStorage(
 interface RebaseBases {
 	function: number;
 	global: number;
+	globalRemap?: ReadonlyMap<number, number>;
 	string: number;
 	bigint: number;
 	template: number;
@@ -92,7 +93,7 @@ function cloneClassLayout(
 	return {
 		constructor: layout.constructor + base.function,
 		keys: layout.keys.map((key) =>
-			key >= 0 ? key + base.string : ~(~key + base.global),
+			key >= 0 ? key + base.string : ~rebaseGlobal(~key, base),
 		),
 		methods: layout.methods.map(
 			(value, index) => value + (index % 2 === 0 ? base.string : base.function),
@@ -117,6 +118,10 @@ function assertNever(value: never): never {
 	throw new Error(
 		`Unsupported VM opcode ${(value as { opcode?: string }).opcode ?? "<missing>"}`,
 	);
+}
+
+function rebaseGlobal(index: number, base: RebaseBases): number {
+	return index < 0 ? index : (base.globalRemap?.get(index) ?? index + base.global);
 }
 
 function shifted(index: number, base: number): number {
@@ -390,7 +395,7 @@ function cloneInstruction(
 		case "LOAD_GLOBAL_INDEX":
 		case "LOAD_GLOBAL":
 		case "STORE_GLOBAL":
-			return { ...instruction, index: instruction.index + base.global };
+			return { ...instruction, index: rebaseGlobal(instruction.index, base) };
 		case "CREATE_STRING":
 			return { ...instruction, stringIndex: instruction.stringIndex + base.string };
 		case "LOAD_PROPERTY_STATIC":
@@ -426,7 +431,7 @@ function cloneInstruction(
 				templateOffset: instruction.templateOffset + base.template,
 				...(instruction.cacheSlot === undefined
 					? {}
-					: { cacheSlot: instruction.cacheSlot + base.global }),
+					: { cacheSlot: rebaseGlobal(instruction.cacheSlot, base) }),
 			};
 		case "QUERY_STATIC_DATA":
 			return {
@@ -449,7 +454,7 @@ function cloneInstruction(
 			return {
 				...instruction,
 				nameStringIndex: instruction.nameStringIndex + base.string,
-				index: instruction.index + base.global,
+				index: rebaseGlobal(instruction.index, base),
 			};
 		case "INIT_GLOBAL_VARS":
 			return {
@@ -477,7 +482,7 @@ function cloneInstruction(
 		case "CREATE_TEMPLATE_OBJECT":
 			return {
 				...instruction,
-				cacheSlot: instruction.cacheSlot + base.global,
+				cacheSlot: rebaseGlobal(instruction.cacheSlot, base),
 				cookedIndices: instruction.cookedIndices.map((index) =>
 					shifted(index, base.string),
 				),
@@ -486,9 +491,10 @@ function cloneInstruction(
 		case "CREATE_MODULE_NAMESPACE":
 			return {
 				...instruction,
-				cacheSlot: instruction.cacheSlot < 0 ? -1 : instruction.cacheSlot + base.global,
+				cacheSlot:
+					instruction.cacheSlot < 0 ? -1 : rebaseGlobal(instruction.cacheSlot, base),
 				nameIndices: instruction.nameIndices.map((index) => index + base.string),
-				slots: instruction.slots.map((index) => index + base.global),
+				slots: instruction.slots.map((index) => rebaseGlobal(index, base)),
 			};
 		case "CALL":
 			return {
@@ -676,6 +682,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 		files: [],
 		sourcePositions: [],
 		cjsModuleFunctionIndices: [],
+		sourceBuiltinProviders: [],
 		hostInstalls: [],
 	};
 	const semanticImages = images.filter(
@@ -722,6 +729,22 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 			position: mergedRuntime.sourcePositions.length,
 			classLayout: classLayouts.length,
 		};
+		const shared = new Map<number, number>();
+		for (const provider of runtime.sourceBuiltinProviders) {
+			const owner = mergedRuntime.sourceBuiltinProviders.find(
+				(entry) => entry.id === provider.id,
+			);
+			if (owner === undefined) continue;
+			if (owner.state.length !== provider.state.length)
+				throw new Error("source builtin state differs between images");
+			for (const entry of provider.state) {
+				const target = owner.state.find((cell) => cell.name === entry.name);
+				if (target === undefined)
+					throw new Error("source builtin state differs between images");
+				shared.set(entry.slot, target.slot);
+			}
+		}
+		base.globalRemap = shared;
 		functionBases.push(base.function);
 		for (const layout of programImage.native.classLayouts ?? [])
 			classLayouts.push(cloneClassLayout(layout, base));
@@ -758,12 +781,31 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 		mergedRuntime.cjsModuleFunctionIndices.push(
 			...runtime.cjsModuleFunctionIndices.map((index) => index + base.function),
 		);
+		for (const provider of runtime.sourceBuiltinProviders) {
+			if (
+				!mergedRuntime.sourceBuiltinProviders.some(
+					(existing) => existing.id === provider.id,
+				)
+			)
+				mergedRuntime.sourceBuiltinProviders.push({
+					...provider,
+					functionIndex: provider.functionIndex + base.function,
+					state: provider.state.map((entry) => ({
+						...entry,
+						slot: rebaseGlobal(entry.slot, base),
+					})),
+					imports: provider.imports.map((entry) => ({
+						...entry,
+						slot: rebaseGlobal(entry.slot, base),
+					})),
+				});
+		}
 		mergedRuntime.hostInstalls.push(
 			...runtime.hostInstalls.map((install) => ({
 				installer: install.installer,
 				exports: install.exports.map((entry) => ({
 					...entry,
-					slot: entry.slot + base.global,
+					slot: rebaseGlobal(entry.slot, base),
 				})),
 			})),
 		);

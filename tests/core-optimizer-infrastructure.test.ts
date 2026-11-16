@@ -64,6 +64,7 @@ function context(): CoreCompilationContext {
 			moduleEvaluationOrder: ["optimizer-infrastructure.js"],
 			sourceFiles: [{ path: "optimizer-infrastructure.js", contents: "" }],
 			cjsModuleFunctionIndices: [],
+			sourceBuiltinProviders: [],
 			hostInstallCandidates: [],
 			singleAssignmentGlobalSlots: [],
 			sourceImmutableCapturedSlots: [],

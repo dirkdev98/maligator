@@ -51,6 +51,7 @@ const context: CoreCompilationContext = {
 		moduleEvaluationOrder: ["control-flow-passes.js"],
 		sourceFiles: [{ path: "control-flow-passes.js", contents: "" }],
 		cjsModuleFunctionIndices: [],
+		sourceBuiltinProviders: [],
 		hostInstallCandidates: [],
 		singleAssignmentGlobalSlots: [],
 		sourceImmutableCapturedSlots: [],

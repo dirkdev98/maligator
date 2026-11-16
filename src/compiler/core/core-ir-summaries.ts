@@ -882,6 +882,8 @@ function rootReasons(
 	for (const functionId of context.data.cjsModuleFunctionIndices) {
 		add(functionId, "commonjs-module");
 	}
+	for (const provider of context.data.sourceBuiltinProviders ?? [])
+		add(provider.functionIndex, "source-builtin");
 	for (const candidate of context.data.hostInstallCandidates) {
 		for (const { slot } of candidate.exports) {
 			const installed = targets.globalStoreTargets(slot);

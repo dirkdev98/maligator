@@ -91,6 +91,7 @@ const base = testProgramImage({
 	files: ["shaped-jump-fusion.js"],
 	sourcePositions: instructions.map((_, index) => ({ line: index + 1, column: 0 })),
 	cjsModuleFunctionIndices: [],
+	sourceBuiltinProviders: [],
 	hostInstalls: [],
 });
 const definition: ProgramImage = {

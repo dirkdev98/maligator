@@ -164,6 +164,7 @@ const definition: ProgramImage = testProgramImage({
 	files: [],
 	sourcePositions: [],
 	cjsModuleFunctionIndices: [],
+	sourceBuiltinProviders: [],
 	hostInstalls: [],
 });
 

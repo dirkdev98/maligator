@@ -50,3 +50,4 @@
     "worker_threads",
     "zlib",
     "node:sqlite",
+    "node:test",

@@ -660,14 +660,6 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 # Node and ecosystem compatibility
 
-- [ ] Register retained source-provided builtins as lazy runtime providers, then expose
-      them through builtin discovery and computed loading. Literal `node:test` imports
-      work, but `builtinModules`, `isBuiltin("node:test")`, getBuiltinModule and computed
-      requests still omit its source implementation. Reuse graph evaluation and real
-      namespaces; preserve per-realm exports, cache identity and selective linking.
-      Native builtin requests already share the lazy registry through CommonJS and
-      createRequire, including require values exposed by direct eval.
-
 - [ ] Match Node's invalid-argument diagnostic inspection, including custom inspect
       hooks and thrown-hook precedence. Buffer validators and copyBytesFrom currently
       use a generic formatter.

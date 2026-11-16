@@ -43,6 +43,7 @@ const context: CoreCompilationContext = {
 		moduleEvaluationOrder: ["local-passes.js"],
 		sourceFiles: [{ path: "local-passes.js", contents: "" }],
 		cjsModuleFunctionIndices: [],
+		sourceBuiltinProviders: [],
 		hostInstallCandidates: [],
 		singleAssignmentGlobalSlots: [],
 		sourceImmutableCapturedSlots: [],

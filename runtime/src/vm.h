@@ -1230,6 +1230,21 @@ typedef struct MalClassLayoutDesc {
     const i32 *methods;
 } MalClassLayoutDesc;
 
+typedef struct MalSourceBuiltinImport {
+    const char *module_id;
+    const char *name;
+    i32 slot;
+} MalSourceBuiltinImport;
+
+typedef struct MalSourceBuiltinProvider {
+    const char *id;
+    i32 function_index;
+    i32 state_count;
+    const MalHostInstallSlot *state;
+    i32 import_count;
+    const MalSourceBuiltinImport *imports;
+} MalSourceBuiltinProvider;
+
 typedef struct MalRuntimeImage {
     i32 function_count;
     const MalFunction *functions;
@@ -1283,6 +1298,8 @@ typedef struct MalRuntimeImage {
      */
     i32 cjs_module_count;
     const i32 *cjs_module_function_indices;
+    i32 source_builtin_provider_count;
+    const MalSourceBuiltinProvider *source_builtin_providers;
 
     /**
      * Debug-info tables for stack traces. files[function->file_index] is a source

@@ -29,6 +29,7 @@ export function programAnalysisContext(sourceClosed = true): CoreCompilationCont
 			moduleEvaluationOrder: ["/entry.js"],
 			sourceFiles: [{ path: "/entry.js", contents: "" }],
 			cjsModuleFunctionIndices: [],
+			sourceBuiltinProviders: [],
 			hostInstallCandidates: [],
 			singleAssignmentGlobalSlots: [],
 			sourceImmutableCapturedSlots: [],

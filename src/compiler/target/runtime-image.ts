@@ -325,6 +325,12 @@ export interface RuntimeImage {
 		callerPosId?: number;
 	}>;
 	cjsModuleFunctionIndices: Array<number>;
+	sourceBuiltinProviders: Array<{
+		id: string;
+		functionIndex: number;
+		state: Array<{ name: string; slot: number }>;
+		imports: Array<{ module: string; name: string; slot: number }>;
+	}>;
 	hostInstalls: Array<{
 		installer: string;
 		exports: Array<{ name: string; slot: number; constant?: PlatformData }>;
@@ -2224,6 +2230,50 @@ function validateVmSourcePositions(definition: RuntimeImage): void {
 
 /** Validate every proof-bearing runtime field before an output consumes it. */
 export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
+	const providerIds = new Set<string>();
+	for (const provider of definition.sourceBuiltinProviders) {
+		if (
+			!/^node:[a-zA-Z0-9_./-]+$/.test(provider.id) ||
+			providerIds.has(provider.id) ||
+			!Number.isSafeInteger(provider.functionIndex) ||
+			provider.functionIndex < 0 ||
+			provider.functionIndex >= definition.functions.length
+		)
+			throw new RangeError(`invalid RuntimeImage source builtin provider ${provider.id}`);
+		const slots = new Set<number>();
+		const stateNames = new Set<string>();
+		for (const entry of provider.state) {
+			if (
+				entry.name.length === 0 ||
+				entry.name.includes("\0") ||
+				stateNames.has(entry.name) ||
+				!Number.isSafeInteger(entry.slot) ||
+				entry.slot < 0 ||
+				entry.slot >= definition.globalCount ||
+				slots.has(entry.slot)
+			)
+				throw new RangeError(`invalid RuntimeImage source builtin state ${entry.name}`);
+			stateNames.add(entry.name);
+			slots.add(entry.slot);
+		}
+		slots.clear();
+		for (const entry of provider.imports) {
+			if (
+				!/^node:[a-zA-Z0-9_./-]+$/.test(entry.module) ||
+				entry.name.length === 0 ||
+				entry.name.includes("\0") ||
+				!Number.isSafeInteger(entry.slot) ||
+				entry.slot < 0 ||
+				entry.slot >= definition.globalCount ||
+				slots.has(entry.slot)
+			)
+				throw new RangeError(
+					`invalid RuntimeImage source builtin import ${entry.module}:${entry.name}`,
+				);
+			slots.add(entry.slot);
+		}
+		providerIds.add(provider.id);
+	}
 	validateVmValueOperands(definition);
 	validateVmExactCallTargets(definition);
 	validateVmSafepointRootMaps(definition);
@@ -3499,6 +3549,17 @@ export function lowerVerifiedTargetsToRuntimePlans(
 		cjsModuleFunctionIndices: context.data.cjsModuleFunctionIndices.map((coreFunction) =>
 			executionFunctionIndex(program.functionMap, coreFunction),
 		),
+		sourceBuiltinProviders: (context.data.sourceBuiltinProviders ?? []).map(
+			(provider) => ({
+				id: provider.id,
+				state: provider.state.map((entry) => ({ ...entry })),
+				imports: provider.imports.map((entry) => ({ ...entry })),
+				functionIndex: executionFunctionIndex(
+					program.functionMap,
+					provider.functionIndex,
+				),
+			}),
+		),
 		hostInstalls: buildHostInstalls(context, functions),
 		files,
 		sourcePositions,
@@ -3678,6 +3739,11 @@ function buildHostInstalls(
 		}
 	}
 
+	const deferredSlots = new Set(
+		(context.data.sourceBuiltinProviders ?? []).flatMap((provider) =>
+			provider.imports.map((entry) => entry.slot),
+		),
+	);
 	const manifest: RuntimeImage["hostInstalls"] = [];
 	const installFor = (installer: string) => {
 		let install = manifest.find((entry) => entry.installer === installer);
@@ -3690,7 +3756,7 @@ function buildHostInstalls(
 	for (const hostModule of context.data.hostInstallCandidates) {
 		const usedExports: RuntimeImage["hostInstalls"][number]["exports"] = [];
 		for (const entry of hostModule.exports) {
-			if (readGlobalSlots.has(entry.slot)) {
+			if (readGlobalSlots.has(entry.slot) && !deferredSlots.has(entry.slot)) {
 				usedExports.push(entry);
 			}
 		}

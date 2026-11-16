@@ -54,6 +54,7 @@ const context: CoreCompilationContext = {
 		moduleEvaluationOrder: ["proof-passes.js"],
 		sourceFiles: [{ path: "proof-passes.js", contents: "" }],
 		cjsModuleFunctionIndices: [],
+		sourceBuiltinProviders: [],
 		hostInstallCandidates: [],
 		singleAssignmentGlobalSlots: [],
 		sourceImmutableCapturedSlots: [],

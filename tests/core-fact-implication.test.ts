@@ -41,6 +41,7 @@ const context: CoreCompilationContext = {
 		moduleEvaluationOrder: ["core-fact-implication.js"],
 		sourceFiles: [{ path: "core-fact-implication.js", contents: "" }],
 		cjsModuleFunctionIndices: [],
+		sourceBuiltinProviders: [],
 		hostInstallCandidates: [],
 		singleAssignmentGlobalSlots: [],
 		sourceImmutableCapturedSlots: [],

@@ -68,6 +68,7 @@ function partitionedImage(sourceRoot: string, changed = false): ProgramImage {
 		files: [path.join(sourceRoot, "input.mjs")],
 		sourcePositions: [],
 		cjsModuleFunctionIndices: [],
+		sourceBuiltinProviders: [],
 		hostInstalls: [],
 	};
 	return {

@@ -111,6 +111,8 @@ function findSpecializedOnlyFunctions(
 	}
 	for (const functionId of context.data.cjsModuleFunctionIndices)
 		candidates.delete(functionId as CoreFunctionId);
+	for (const provider of context.data.sourceBuiltinProviders ?? [])
+		candidates.delete(provider.functionIndex as CoreFunctionId);
 	for (const installation of context.data.hostInstallCandidates) {
 		for (const { slot } of installation.exports) {
 			const installed = targets.globalStoreTargets(slot);
