@@ -3714,12 +3714,34 @@ describe("mutable namespace guards in the executing realm", () => {
 	});
 });
 
-describe("guarded entries count boundaries", () => {
+describe("guarded entries observation boundaries", () => {
+	it.each(["[0]", "[index]", ".length"])(
+		"keeps the sole immediate %s observation inside both guarded producers",
+		(observation) => {
+			const output = inspectStaticValueFunction(
+				`function probe(value,index){return Object.entries(value)${observation};}globalThis.probe=probe;`,
+				"probe",
+				{ locked: false, realms: false },
+			);
+			expect(output.core.some((op) => op.opcode === "guardSemanticEpoch")).toBe(true);
+			expect(
+				output.core.some(
+					(op) =>
+						op.opcode === "callKnown" && op.attributes.operation === "Object.entries",
+				),
+			).toBe(true);
+			expect(output.core.some((op) => op.opcode === "call")).toBe(true);
+			const plans = output.native.storage!.objectEnumerationSnapshots;
+			expect(plans).toHaveLength(2);
+			for (const plan of plans)
+				expect(plan.lengthIps.length + plan.elementIps.length).toBe(1);
+		},
+	);
 	it.each([
 		"return Object.entries(value);",
 		"const entries=Object.entries(value);return entries.length+entries[0];",
 		"const entries=Object.entries(value);observe();return entries.length;",
-		"return Object.entries(value)[0];",
+		"const entries=Object.entries(value);observe();return entries[0];",
 	])("retains one loaded producer for %s", (body) => {
 		const output = inspectStaticValueFunction(
 			`function probe(value,observe){${body}}globalThis.probe=probe;`,
