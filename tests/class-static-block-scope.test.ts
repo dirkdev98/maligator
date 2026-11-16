@@ -1,6 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { parseModule, parseScript } from "../src/compiler/frontend/parser.ts";
 
+describe("ordinary block declaration scope", () => {
+	it.each([
+		"{ function f() {} function f() {} }",
+		"function outer() { { function f() {} function f() {} } }",
+	])("accepts duplicate sloppy block functions: %s", (source) => {
+		expect(() => parseScript(source, { strict: false })).not.toThrow();
+	});
+
+	it.each([
+		"{ function f() {} function f() {} }",
+		"{ function f() {} let f; }",
+		"{ function* f() {} function* f() {} }",
+		"{ async function f() {} async function f() {} }",
+	])("preserves strict block early errors: %s", (source) => {
+		expect(() => parseScript(source, { strict: true })).toThrow(SyntaxError);
+		expect(() => parseModule(source)).toThrow(SyntaxError);
+	});
+});
+
 describe.each([
 	{ goal: "module", parse: parseModule },
 	{

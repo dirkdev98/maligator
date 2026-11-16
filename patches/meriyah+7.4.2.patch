@@ -7,7 +7,7 @@ index 8663d67..0415f4a 100644
      return parseExpressionStatement(parser, context, expression, tokenStart);
  }
 -function parseBlock(parser, context, scope, privateScope, labels, start = parser.tokenStart, type = 'BlockStatement') {
-+function parseBlock(parser, context, scope, privateScope, labels, start = parser.tokenStart, type = 'BlockStatement', origin = 0) {
++function parseBlock(parser, context, scope, privateScope, labels, start = parser.tokenStart, type = 'BlockStatement', origin = 2) {
      const body = [];
      consume(parser, context | 32, 2162700);
      while (parser.getToken() !== 1074790415) {
@@ -45,7 +45,7 @@ index 070becb..db74580 100644
      return parseExpressionStatement(parser, context, expression, tokenStart);
  }
 -function parseBlock(parser, context, scope, privateScope, labels, start = parser.tokenStart, type = 'BlockStatement') {
-+function parseBlock(parser, context, scope, privateScope, labels, start = parser.tokenStart, type = 'BlockStatement', origin = 0) {
++function parseBlock(parser, context, scope, privateScope, labels, start = parser.tokenStart, type = 'BlockStatement', origin = 2) {
      const body = [];
      consume(parser, context | 32, 2162700);
      while (parser.getToken() !== 1074790415) {

@@ -3,6 +3,7 @@
 # this selection disjoint from Test262 smoke.
 
 # Labelled declarations, shared switch scopes, and eval hoisting.
+test/annexB/language/function-code/function-redeclaration-block.js
 test/staging/sm/lexical-environment/block-scoped-functions-annex-b-label.js
 
 # Proxy slot snapshots and nested prototype invariants.
