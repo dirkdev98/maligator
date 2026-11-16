@@ -290,8 +290,11 @@ directive. The Node globals prelude preserves the source's directive prologue.
 Each class static block owns its variable and top-level function declarations while
 retaining lexical early errors within that body. Lexical bindings enter their TDZ
 before hoisted functions can capture them. Parser dependency corrections apply before
-embedding. Cache producers and source bakes include the resolved parser's bytes and
-pinned version, so a dependency correction invalidates their artifacts.
+embedding. JavaScript-dependent cache producers and source bakes include the resolved parser's bytes and
+pinned version, so a dependency correction invalidates their artifacts. C-header
+models use Clang and the C extraction source cone without resolving the JavaScript
+parser. Binding generation retains parser identity because it evaluates JavaScript
+contracts.
 
 Retaining a source builtin for runtime loading does not add an eager evaluation edge.
 Its provider manifest retains the synchronous graph evaluator and initializes native imports

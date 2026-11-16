@@ -25,6 +25,68 @@ import { resolvePathExecutable } from "../../src/toolchain.ts";
 const LARGE_INPUT_CODE_UNITS = 32 * 1024 * 1024;
 
 describe("large C headers", () => {
+	it("reuses C model extraction from ahead-of-time images", () => {
+		const directory = mkdtempSync(join(tmpdir(), "mal-ffi-native-cache-"));
+		try {
+			const include = join(directory, "include");
+			mkdirSync(include);
+			writeFileSync(
+				join(include, "large.h"),
+				"typedef struct { int value; } LargeValue;\n/* Read a value. */\nint read_value(LargeValue value);\n",
+			);
+			const compiler = resolvePathExecutable(process.env.CC ?? "cc");
+			const log = join(directory, "compiler.log"),
+				wrapper = join(directory, "cc");
+			const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
+			writeFileSync(
+				wrapper,
+				`#!/bin/sh\nprintf '%s\\n' "$*" >> ${quote(log)}\nexec ${quote(compiler)} "$@"\n`,
+			);
+			chmodSync(wrapper, 0o755);
+			const fixture = "tests/fixtures/ffi-extract-native/main.ts";
+			const env = {
+				MAL_FFI_HEADER_DIR: include,
+				MAL_FFI_COMPILER: wrapper,
+				MAL_FFI_CACHE: "1",
+			};
+			const expected = execFileSync(process.execPath, [fixture], {
+				encoding: "utf8",
+				env: {
+					...process.env,
+					...env,
+					MALIGATOR_CACHE_DIR: join(directory, "node-cache"),
+				},
+			});
+			const pair = buildBackendPairFromOneProgramImage({
+				fixture,
+				name: "ffi-native-cache",
+				outDir: directory,
+				mainFile: HOST_MAIN,
+				config: resolveBuildConfig({
+					engine: { eval: false, realms: false },
+					surface: { node: true },
+				}),
+			});
+			for (const [index, binary] of [pair.compiled, pair.interpreted].entries()) {
+				rmSync(log);
+				const selected = {
+					...env,
+					MALIGATOR_CACHE_DIR: join(directory, `native-cache-${index}`),
+				};
+				const astDumps = () =>
+					readFileSync(log, "utf8")
+						.split("\n")
+						.filter((line) => line.includes("-ast-dump=json")).length;
+				expect(runToStdout(binary, { env: selected })).toBe(expected);
+				const extracted = astDumps();
+				expect(extracted).toBeGreaterThan(0);
+				expect(runToStdout(binary, { env: selected })).toBe(expected);
+				expect(astDumps()).toBe(extracted);
+			}
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
 	it("streams a large clang declaration and extracts the following declarations", () => {
 		const directory = mkdtempSync(join(tmpdir(), "mal-ffi-large-header-"));
 		try {

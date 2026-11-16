@@ -82,6 +82,53 @@ afterEach(() => {
 });
 
 describe("compiler cache identity", () => {
+	it("tracks C model sources without requiring a JavaScript parser installation", () => {
+		const fixture = compilerFixture();
+		const directory = path.join(fixture.sourceRoot, "ffi");
+		mkdirSync(directory);
+		const source = path.join(directory, "model-cache.ts");
+		writeFileSync(source, "export const model = 1;\n");
+		const before = compilerProducerImplementationDigestForRoot(
+			"ffi-header-model",
+			fixture.sourceRoot,
+			fixture.cacheDirectory,
+		);
+		rmSync(path.dirname(fixture.parser), { recursive: true });
+		expect(
+			compilerProducerImplementationDigestForRoot(
+				"ffi-header-model",
+				fixture.sourceRoot,
+				fixture.cacheDirectory,
+			),
+		).toBe(before);
+		writeFileSync(source, "export const model = 2;\n");
+		expect(
+			compilerProducerImplementationDigestForRoot(
+				"ffi-header-model",
+				fixture.sourceRoot,
+				fixture.cacheDirectory,
+			),
+		).not.toBe(before);
+	});
+	it("invalidates FFI bindings when the JavaScript contract parser changes", () => {
+		const fixture = compilerFixture();
+		const directory = path.join(fixture.sourceRoot, "ffi");
+		mkdirSync(directory);
+		writeFileSync(path.join(directory, "library.ts"), "export const binding = 1;\n");
+		const before = compilerProducerImplementationDigestForRoot(
+			"ffi-binding",
+			fixture.sourceRoot,
+			fixture.cacheDirectory,
+		);
+		writeFileSync(fixture.parser, "export const parser = 2;\n");
+		expect(
+			compilerProducerImplementationDigestForRoot(
+				"ffi-binding",
+				fixture.sourceRoot,
+				fixture.cacheDirectory,
+			),
+		).not.toBe(before);
+	});
 	it("invalidates compiler and producer identities when pinned parser bytes change", () => {
 		const fixture = compilerFixture();
 		const implementation = compilerImplementationDigestForRoot(

@@ -67,7 +67,11 @@ export function compilerProducerImplementationDigestForRoot(
 			stage,
 			entries,
 			dependencies: packageJson.dependencies ?? {},
-			parser: compilerParserIdentity(resolvedSourceRoot),
+			// Clang extracts C header models without invoking the JavaScript parser.
+			parser:
+				stage === "ffi-header-model"
+					? undefined
+					: compilerParserIdentity(resolvedSourceRoot),
 		}),
 		"hex",
 	);
