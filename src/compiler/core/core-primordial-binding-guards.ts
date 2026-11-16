@@ -102,9 +102,9 @@ const FUNCTIONS: ReadonlySet<CompilerIntrinsic> = new Set<CompilerIntrinsic>([
 ]);
 
 /*
- * Operations whose known-call form has a Core consumer. Object.assign can shed
- * private allocations; Array.from's iterator consumer transports both guarded
- * producers. Construction and other consumers retain the loaded callee they need.
+ * Known-call transport must preserve the generic twin's observable result. Private
+ * consumers can additionally specialize each producer when their proofs survive
+ * the join; construction retains its loaded callee for its own protocol.
  */
 const OPERATIONS: ReadonlySet<string> = new Set([
 	"parseInt",
@@ -653,19 +653,6 @@ function siteFor(
 	);
 	if (operation === undefined) return undefined;
 	let consumer: CoreInstructionId | undefined;
-	if (operation === "Array.from") {
-		const result = results(fn, call)[0]!;
-		const use = fn.kernel.valueFirstUse(result);
-		if (
-			fn.kernel.valueHandlerUseCount(result) !== 0 ||
-			controlUse(result) ||
-			use < 0 ||
-			fn.kernel.useNext(use) >= 0 ||
-			fn.kernel.useOperand(use) !== 0 ||
-			opcodeOf(fn, coreInstructionId(fn.kernel.useInstruction(use))) !== "getIterator"
-		)
-			return undefined;
-	}
 	if (operation === "Object.entries") {
 		const result = results(fn, call)[0]!;
 		const use = fn.kernel.valueFirstUse(result);

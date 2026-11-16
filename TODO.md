@@ -157,10 +157,9 @@ Runtime eval may remove source closure without invalidating authority closure.
 
 - [ ] Extend guarded primordial consumers beyond the current Object, Date, Math and
       primitive-conversion admissions.
-      `Array.from` consumers beyond a sole direct iterator and constructions keep their
-      loaded form because entry snapshots and typed array regions consume it. Private
-      record columns follow bounded alternative `Array.from` producers, including
-      guarded known calls; extend the remaining selected consumers across their guards.
+      Constructions keep their loaded form because entry snapshots and typed array
+      regions consume it. Preserve bounded producer and privacy proofs when carrying
+      those consumers through a guarded join.
       A loop a numeric region can take keeps its own entry speculation;
       admitting `GUARD_SEMANTIC_EPOCH` as a region entry guard would let it use both.
       Realm-enabled consumers beyond noncoercing Number predicates, ordinary

@@ -3160,6 +3160,7 @@ describe("primitive operation results", () => {
 
 	it.each([
 		["Object.create(x)", "Object.create"],
+		["Array.from(x)", "Array.from"],
 		["Date.parse(x)", "Date.parse"],
 		["Date.now()", "Date.now"],
 		["Date.UTC(x, 0)", "Date.UTC"],
@@ -3178,6 +3179,32 @@ describe("primitive operation results", () => {
 			),
 		).toBe(true);
 		expect(output.some((op) => op.opcode === "call")).toBe(true);
+	});
+
+	it.each([
+		["returned", "return Array.from(x);"],
+		["indexed", "return Array.from(x)[0];"],
+		["retained", "const result=Array.from(x); globalThis.held=result; return result;"],
+		["multiple reads", "const result=Array.from(x); return result.length+result[0];"],
+		["control flow", "return Array.from(x) ? 1 : 0;"],
+		[
+			"exceptional transfer",
+			"let result; try { result=Array.from(x); throw x; } catch { return result; }",
+		],
+	])("joins %s Array.from results without extending realm permission", (_name, body) => {
+		for (const realms of [false, true]) {
+			const output = inspectStaticValueFunction(
+				`function target(x) { ${body} } globalThis.target=target;`,
+				"target",
+				{ locked: false, realms },
+			).core;
+			expect(
+				output.some(
+					(op) => op.opcode === "callKnown" && op.attributes.operation === "Array.from",
+				),
+			).toBe(!realms);
+			expect(output.some((op) => op.opcode === "call")).toBe(true);
+		}
 	});
 
 	it("guards an entries producer consumed directly by iteration", () => {

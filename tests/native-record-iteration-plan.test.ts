@@ -225,13 +225,23 @@ describe("private record columns", () => {
 				.flatMap((fn) => fn.storage!.numericLoopRegions)
 				.filter((plan) => plan.kind === "array-iteration" && plan.privateColumns);
 			expect(plans.length).toBeGreaterThan(0);
-			if (primordials === "mutable")
-				expect(
-					plans.some(
-						(plan) =>
-							plan.kind === "array-iteration" && plan.columnsProducers?.length === 2,
+			if (primordials === "mutable") {
+				const sourceProducers = allocation.match(/Array\.from\(/g)!.length;
+				const producers = image.native.functions.flatMap((fn) =>
+					fn.storage!.numericLoopRegions.flatMap((plan) =>
+						plan.kind === "array-iteration" && plan.privateColumns
+							? (plan.columnsProducers ?? []).map(
+									(ip) => fn.body.instructions[ip]!.opcode,
+								)
+							: [],
 					),
-				).toBe(true);
+				);
+				for (const opcode of ["CALL", "CALL_KNOWN"]) {
+					expect(producers.filter((producer) => producer === opcode)).toHaveLength(
+						sourceProducers,
+					);
+				}
+			}
 		},
 	);
 	it("sets runtime privacy on both arms of a guarded Array.from", () => {

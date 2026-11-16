@@ -1510,9 +1510,13 @@ JavaScript. Unrecognized argument calls end the run, preserving the captured cal
 and rechecking bindings before later lookups. Fresh object allocations can
 stay inside a copied run, letting
 `Object.assign` reach the same private-source and fresh-target lowering as locked
-calls. Other object-producing calls and constructions keep the guarded forms that
-snapshot, column and typed array regions consume. A loop that admits a numeric region
-keeps that region's entry speculation.
+calls. A single-realm `Array.from` call can transport retained, indexed or returned
+results through the same guarded join. Its generic result keeps its unknown brand;
+the known call preserves iterator observation, mapping and construction inside the
+builtin. Argument reentry retains the selected callee, and invocation reentry ends
+the lookup-skipping run. Constructions keep the guarded forms that snapshot, column
+and typed array regions consume. A loop that admits a numeric region keeps that
+region's entry speculation.
 An `Object.entries` result consumed directly by iteration can join a guarded run.
 An immediate sole `.length` or indexed projection stays inside both twins, so native
 count or snapshot transport retains its producer. Closed pair consumers also keep
