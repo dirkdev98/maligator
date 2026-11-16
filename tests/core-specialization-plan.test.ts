@@ -7,11 +7,7 @@ import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { discoverCoreLocalSpecializationCandidates } from "../src/compiler/core/core-ir-provenance.ts";
-import {
-	buildCoreLocalOptimizationPlanInput,
-	buildCoreOptimizationPlan,
-	coreLocalSpecializationFeatureIndex,
-} from "../src/compiler/core/core-ir-region-selection.ts";
+import { buildCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-selection.ts";
 import {
 	corePlanAdmissionMode,
 	corePlanVersionStamp,
@@ -741,23 +737,16 @@ describe("late Core specialization plan", () => {
 		verifyCoreOptimizationPlan(program.seal(), plan);
 	});
 
-	it("reuses current local planning inputs only in their compilation context", () => {
+	it("plans current control flow in each compilation context", () => {
 		const { program, function: functionId } = numericProgram();
 		const prepared = planning(program, [functionId]);
-		const input = buildCoreLocalOptimizationPlanInput(
-			program,
-			prepared.analyses,
-			coreLocalSpecializationFeatureIndex(program),
-			functionId,
-			prepared.context,
-		);
 		const currentReport = new CoreOptimizationReportBuilder(program, "full");
 		const current = buildCoreOptimizationPlan(
 			program,
 			new CoreAnalysisManager(program, prepared.context, currentReport),
 			prepared.summaries,
 			[functionId],
-			{ context: prepared.context, localInputs: [input] },
+			{ context: prepared.context },
 		);
 
 		expect(current).toEqual(prepared.plan);
@@ -774,7 +763,7 @@ describe("late Core specialization plan", () => {
 			new CoreAnalysisManager(program, differentContext, differentContextReport),
 			prepared.summaries,
 			[functionId],
-			{ context: differentContext, localInputs: [input] },
+			{ context: differentContext },
 		);
 		expect(
 			differentContextReport.finish(program, replanned).analyses.length,
@@ -790,7 +779,7 @@ describe("late Core specialization plan", () => {
 			new CoreAnalysisManager(program, prepared.context, staleReport),
 			prepared.summaries,
 			[functionId],
-			{ context: prepared.context, localInputs: [input] },
+			{ context: prepared.context },
 		);
 
 		expect(stale.blockOrders[0]?.omittedBlocks).toContain(unreachable);

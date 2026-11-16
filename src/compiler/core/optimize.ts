@@ -21,15 +21,10 @@ import {
 import type { CoreFunctionOptimizationPhaseRunner } from "./core-function-optimization-session.ts";
 import { analyzeCoreGlobalSlotBrands } from "./core-global-slot-analysis.ts";
 import { installCoreGlobalSlotBrands } from "./core-global-slot-facts.ts";
-import {
-	buildCoreOptimizationPlan,
-	buildCoreLocalOptimizationPlanInput,
-} from "./core-ir-region-selection.ts";
-import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
+import { buildCoreOptimizationPlan } from "./core-ir-region-selection.ts";
 import { verifyCoreOptimizationPlan } from "./core-ir-region-validity.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
-import type { CoreFunctionId } from "./core-ir.ts";
 import { liftLocalCaptureArguments } from "./core-local-capture-arguments.ts";
 import {
 	CORE_CONSTRUCTION_ANNOTATION_PASSES,
@@ -287,7 +282,6 @@ export function optimizeCore(
 		options.privateRestIteration,
 	);
 	const functionPhaseTimes = new Map<CoreOptimizationPhase, number>();
-	const localPlanInputs: Array<CoreLocalOptimizationPlanInput> = [];
 	const runFunctionPhase: CoreFunctionOptimizationPhaseRunner = (phase, run) => {
 		if (!reportBuilder.collectsPhases) return run();
 		const startedAt = Date.now();
@@ -301,20 +295,18 @@ export function optimizeCore(
 		}
 	};
 	for (const functionId of compilation.program.functionIds()) {
-		localPlanInputs.push(
-			new CoreFunctionOptimizationSession(
-				compilation.program,
-				compilation.context,
-				reportBuilder,
-				functionResources,
-				functionId,
-				{
-					verification: options.verification,
-					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
-					benchmarkAblation: ablatedPassFamily,
-				},
-			).optimizePrimary(runFunctionPhase),
-		);
+		new CoreFunctionOptimizationSession(
+			compilation.program,
+			compilation.context,
+			reportBuilder,
+			functionResources,
+			functionId,
+			{
+				verification: options.verification,
+				optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+				benchmarkAblation: ablatedPassFamily,
+			},
+		).optimizePrimary(runFunctionPhase);
 	}
 	for (const phase of [
 		"post-barrier-local-optimization",
@@ -397,7 +389,7 @@ export function optimizeCore(
 					compilation.context,
 					analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }),
 				);
-	const captureInputs = captureCallers.map(
+	const captureFunctions = captureCallers.map(
 		(change) =>
 			new CoreFunctionOptimizationSession(
 				compilation.program,
@@ -413,9 +405,9 @@ export function optimizeCore(
 				},
 			).prepareCrossCall(CoreEditor.open(compilation.program, change.function), [
 				change,
-			])().localPlanInput,
+			])().function,
 	);
-	const { callbackInputs, memoryCallers, finalCallbackChanges } = measurePhase(
+	const { callbackFunctions, memoryCallers, finalCallbackChanges } = measurePhase(
 		"cross-call-memory-forwarding",
 		() => {
 			const callbackChanges =
@@ -425,7 +417,7 @@ export function optimizeCore(
 							compilation.program,
 							analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }).summaries,
 						);
-			const callbackInputs = callbackChanges.map(
+			const callbackFunctions = callbackChanges.map(
 				(change) =>
 					new CoreFunctionOptimizationSession(
 						compilation.program,
@@ -441,7 +433,7 @@ export function optimizeCore(
 						},
 					).prepareCrossCall(CoreEditor.open(compilation.program, change.function), [
 						change,
-					])().localPlanInput,
+					])().function,
 			);
 			const memoryCallers =
 				ablatedFamily === "memory-ssa-load-store" ||
@@ -456,17 +448,16 @@ export function optimizeCore(
 							compilation.program,
 							analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }).summaries,
 						);
-			return { callbackInputs, memoryCallers, finalCallbackChanges };
+			return { callbackFunctions, memoryCallers, finalCallbackChanges };
 		},
 		CORE_OPTIMIZATION_OWNER.memoryVersions,
 	);
 	// Finish closure and receiver rewrites before copying their generic paths.
-	const versionedInputs: Array<CoreLocalOptimizationPlanInput> = [];
 	if (ablatedFamily !== "cfg-loop-licm-pre") {
 		const callers = new Set([
-			...crossCall.localPlanInputs.map((input) => input.function),
-			...captureInputs.map((input) => input.function),
-			...callbackInputs.map((input) => input.function),
+			...crossCall.optimizedFunctions,
+			...captureFunctions,
+			...callbackFunctions,
 			...memoryCallers,
 			...finalCallbackChanges.map((change) => change.function),
 		]);
@@ -484,24 +475,20 @@ export function optimizeCore(
 			);
 			const changes = scheduler.runComponent("control-flow", CORE_LOOP_VERSIONING_PASSES);
 			if (changes.length === 0) continue;
-			versionedInputs.push(
-				new CoreFunctionOptimizationSession(
-					compilation.program,
-					compilation.context,
-					reportBuilder,
-					functionResources,
-					functionId,
-					{
-						verification: options.verification,
-						benchmarkAblation: ablatedPassFamily,
-						crossCallSession: "guarded-loop-versioning",
-					},
-				).prepareCrossCall(CoreEditor.open(compilation.program, functionId), changes)()
-					.localPlanInput,
-			);
+			new CoreFunctionOptimizationSession(
+				compilation.program,
+				compilation.context,
+				reportBuilder,
+				functionResources,
+				functionId,
+				{
+					verification: options.verification,
+					benchmarkAblation: ablatedPassFamily,
+					crossCallSession: "guarded-loop-versioning",
+				},
+			).prepareCrossCall(CoreEditor.open(compilation.program, functionId), changes)();
 		}
 	}
-	const copiedFunctions = new Set<CoreFunctionId>();
 	if (ablatedFamily !== "provenance-escape-scalar-replacement") {
 		for (const functionId of compilation.program.functionIds()) {
 			const scheduler = new CoreFunctionPassScheduler(
@@ -515,8 +502,7 @@ export function optimizeCore(
 					featureIndex: functionResources.featureIndex,
 				},
 			);
-			if (scheduler.runComponent("finalize", [lowerFreshObjectCopies]).length > 0)
-				copiedFunctions.add(functionId);
+			scheduler.runComponent("finalize", [lowerFreshObjectCopies]);
 		}
 	}
 	const finalFlow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, {
@@ -529,32 +515,6 @@ export function optimizeCore(
 		summaries.statistics,
 		reachability.statistics,
 	);
-	const finalLocalPlanInputs = new Map(
-		localPlanInputs.map((input) => [input.function, input] as const),
-	);
-	for (const input of crossCall.localPlanInputs) {
-		finalLocalPlanInputs.set(input.function, input);
-	}
-	for (const input of captureInputs) finalLocalPlanInputs.set(input.function, input);
-	for (const input of callbackInputs) finalLocalPlanInputs.set(input.function, input);
-	for (const input of versionedInputs) finalLocalPlanInputs.set(input.function, input);
-	for (const functionId of new Set([
-		...copiedFunctions,
-		...memoryCallers,
-		...finalCallbackChanges.map((change) => change.function),
-	])) {
-		finalLocalPlanInputs.set(
-			functionId,
-			buildCoreLocalOptimizationPlanInput(
-				compilation.program,
-				analyses,
-				functionResources.specializationFeatureIndex,
-				functionId,
-				compilation.context,
-				ablatedFamily !== "late-specialization-direct-entry",
-			),
-		);
-	}
 	const plan = buildCoreOptimizationPlan(
 		compilation.program,
 		analyses,
@@ -566,7 +526,6 @@ export function optimizeCore(
 			context: compilation.context,
 			candidateService: o3Candidates,
 			perFunctionExpansions: CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION,
-			localInputs: [...finalLocalPlanInputs.values()],
 			discoverCandidates: ablatedFamily !== "late-specialization-direct-entry",
 			...(reportBuilder.collectsPhases
 				? {

@@ -109,7 +109,6 @@ import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import type { CoreIntegerRangeQuery, CoreIntegerRangeState } from "./core-ir-loops.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "./core-ir-provenance.ts";
-import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import {
 	CORE_PRIMITIVE_EFFECT_FACT,
@@ -4604,7 +4603,7 @@ export type CoreCrossCallCallerPreparation = (
 export interface CoreCrossCallTransformResult {
 	readonly summaries: CoreProgramSummaries;
 	readonly statistics: CoreCrossCallTransformStatistics;
-	readonly localPlanInputs: ReadonlyArray<CoreLocalOptimizationPlanInput>;
+	readonly optimizedFunctions: ReadonlyArray<CoreFunctionId>;
 }
 
 export function emptyCoreCrossCallTransformResult(
@@ -4613,7 +4612,7 @@ export function emptyCoreCrossCallTransformResult(
 	const budget = new CoreTransformCandidateService().statistics();
 	return Object.freeze({
 		summaries: flow.summaries,
-		localPlanInputs: Object.freeze([]),
+		optimizedFunctions: Object.freeze([]),
 		statistics: Object.freeze({
 			...budget,
 			...EMPTY_CORE_READ_ACCESSOR_WORK,
@@ -5717,7 +5716,7 @@ export function runCoreCrossCallTransforms(
 	let valueKindFolds = 0;
 	let callResultKindFacts = 0;
 	let callResultIdentities = 0;
-	const localPlanInputs = new Map<CoreFunctionId, CoreLocalOptimizationPlanInput>();
+	const optimizedFunctions = new Set<CoreFunctionId>();
 	// Clones are new functions rather than growth of their callers, so they draw on a budget of their own.
 	// Each clone is charged to the function it copies; the variant cap bounds that per function.
 	const cloneLimits: CoreTransformBudgetLimits = Object.freeze({
@@ -6056,12 +6055,12 @@ export function runCoreCrossCallTransforms(
 		// Shared facts must not observe another caller's uncommitted rewrites.
 		for (const { function: functionId, finish } of finishCallers) {
 			const optimized = finish();
-			if (optimized.localPlanInput.function !== functionId) {
+			if (optimized.function !== functionId) {
 				throw new Error(
-					`Cross-call session for function ${functionId} returned function ${optimized.localPlanInput.function}`,
+					`Cross-call session for function ${functionId} returned function ${optimized.function}`,
 				);
 			}
-			localPlanInputs.set(functionId, optimized.localPlanInput);
+			optimizedFunctions.add(functionId);
 			if (optimized.changes !== undefined && optimized.changes.edits > 0) {
 				waveChanges.push(optimized.changes);
 			}
@@ -6206,7 +6205,7 @@ export function runCoreCrossCallTransforms(
 		}
 		for (const finish of finishCallers) {
 			const optimized = finish();
-			localPlanInputs.set(optimized.localPlanInput.function, optimized.localPlanInput);
+			optimizedFunctions.add(optimized.function);
 		}
 		waves++;
 		refreshFlow();
@@ -6214,7 +6213,7 @@ export function runCoreCrossCallTransforms(
 	const budget = service.statisticsSince(budgetBaseline);
 	return Object.freeze({
 		summaries,
-		localPlanInputs: Object.freeze([...localPlanInputs.values()]),
+		optimizedFunctions: Object.freeze([...optimizedFunctions]),
 		statistics: Object.freeze({
 			...budget,
 			...(accessorWork ?? EMPTY_CORE_READ_ACCESSOR_WORK),

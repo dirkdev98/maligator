@@ -7,11 +7,6 @@ import {
 } from "./core-control-flow-passes.ts";
 import type { CoreEditor } from "./core-editor.ts";
 import { CoreFunctionFeatureIndex } from "./core-function-features.ts";
-import {
-	buildCoreLocalOptimizationPlanInput,
-	coreLocalSpecializationFeatureIndex,
-} from "./core-ir-region-selection.ts";
-import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import type { CoreVerificationProfile } from "./core-ir-verifier.ts";
 import { verifyCoreChangeSet } from "./core-ir-verifier.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
@@ -57,8 +52,8 @@ export interface CoreFunctionOptimizationSessionOptions {
 }
 
 export interface CoreCrossCallFunctionOptimizationResult {
+	readonly function: CoreFunctionId;
 	readonly changes: CoreChangeSet | undefined;
-	readonly localPlanInput: CoreLocalOptimizationPlanInput;
 }
 
 export class CoreFunctionOptimizationResources {
@@ -68,7 +63,6 @@ export class CoreFunctionOptimizationResources {
 	readonly mandatoryLocalRules: CoreLocalRuleRegistry;
 	readonly featureIndex: CoreFunctionFeatureIndex;
 	readonly mandatoryFeatureIndex: CoreFunctionFeatureIndex;
-	readonly specializationFeatureIndex: CoreFunctionFeatureIndex;
 	readonly scratch: CoreAnalysisScratchPool;
 	readonly #primaryFunctions = new Set<CoreFunctionId>();
 	readonly #crossCallFunctions = new Map<CoreCrossCallSession, Set<CoreFunctionId>>();
@@ -87,7 +81,6 @@ export class CoreFunctionOptimizationResources {
 			program,
 			this.mandatoryLocalRules.dispatch,
 		);
-		this.specializationFeatureIndex = coreLocalSpecializationFeatureIndex(program);
 		this.scratch = new CoreAnalysisScratchPool();
 	}
 
@@ -114,10 +107,7 @@ export class CoreFunctionOptimizationResources {
 export class CoreFunctionOptimizationSession {
 	readonly functionId: CoreFunctionId;
 	readonly #program: CoreProgram;
-	readonly #context: CoreCompilationContext;
-	readonly #analyses: CoreAnalysisManager;
 	readonly #passes: CoreFunctionPassScheduler;
-	readonly #specializationFeatureIndex: CoreFunctionFeatureIndex;
 	readonly #localRules: CoreLocalRuleRegistry;
 	readonly #report: CoreOptimizationReportBuilder;
 	readonly #verification: CoreVerificationProfile;
@@ -140,9 +130,7 @@ export class CoreFunctionOptimizationSession {
 		else resources.claimCrossCall(options.crossCallSession, functionId);
 		this.functionId = functionId;
 		this.#program = program;
-		this.#context = context;
-		this.#analyses = new CoreAnalysisManager(program, context, report, resources.scratch);
-		this.#specializationFeatureIndex = resources.specializationFeatureIndex;
+		const analyses = new CoreAnalysisManager(program, context, report, resources.scratch);
 		this.#memoryPasses = resources.memoryPasses;
 		this.#privateRestIteration = resources.privateRestIteration;
 		this.#benchmarkAblation = options.benchmarkAblation;
@@ -156,7 +144,7 @@ export class CoreFunctionOptimizationSession {
 		this.#passes = new CoreFunctionPassScheduler(
 			program,
 			context,
-			this.#analyses,
+			analyses,
 			report,
 			functionId,
 			{
@@ -174,9 +162,7 @@ export class CoreFunctionOptimizationSession {
 		);
 	}
 
-	optimizePrimary(
-		runPhase: CoreFunctionOptimizationPhaseRunner,
-	): CoreLocalOptimizationPlanInput {
+	optimizePrimary(runPhase: CoreFunctionOptimizationPhaseRunner): void {
 		if (this.#crossCall) {
 			throw new Error(`Core function ${this.functionId} is a cross-call session`);
 		}
@@ -243,18 +229,6 @@ export class CoreFunctionOptimizationSession {
 				{ seedLocalFromInitialChanges: false },
 			);
 		});
-		return runPhase("specialization-discovery", () =>
-			this.#report.measureOwner(CORE_OPTIMIZATION_OWNER.specializationDiscovery, () =>
-				buildCoreLocalOptimizationPlanInput(
-					this.#program,
-					this.#analyses,
-					this.#specializationFeatureIndex,
-					this.functionId,
-					this.#context,
-					!this.#ablates("late-specialization-direct-entry"),
-				),
-			),
-		);
 	}
 
 	prepareCrossCall(
@@ -335,15 +309,8 @@ export class CoreFunctionOptimizationSession {
 				);
 			}
 			return Object.freeze({
+				function: this.functionId,
 				changes: result.changes,
-				localPlanInput: buildCoreLocalOptimizationPlanInput(
-					this.#program,
-					this.#analyses,
-					this.#specializationFeatureIndex,
-					this.functionId,
-					this.#context,
-					!this.#ablates("late-specialization-direct-entry"),
-				),
 			});
 		};
 	}

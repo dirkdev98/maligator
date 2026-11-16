@@ -90,10 +90,7 @@ import {
 } from "./core-native-field-analysis.ts";
 import type { CoreRecordPassTarget } from "./core-native-field-analysis.ts";
 import type { CoreInstructionFactPlan } from "./core-native-instruction-facts.ts";
-import {
-	coreInstructionFactPlans,
-	coreInstructionFactProofIsCurrent,
-} from "./core-native-instruction-facts.ts";
+import { coreInstructionFactPlans } from "./core-native-instruction-facts.ts";
 import {
 	corePrivateNumericArrayElementPlans,
 	corePrivatePackedRestArrayElementPlans,
@@ -107,8 +104,7 @@ import type {
 import { coreNumericParameterEntryOpportunities } from "./core-native-parameter-entries.ts";
 import { analyzeCoreRecordStorageWidths } from "./core-record-storage-widths.ts";
 import { buildCoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
-import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
-import type { CoreFunctionVersions, CoreProgram } from "./core-store.ts";
+import type { CoreProgram } from "./core-store.ts";
 import {
 	CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION,
 	CoreTransformCandidateService,
@@ -163,9 +159,8 @@ export interface CoreLocalCandidateSummary {
 	readonly fanOut: number;
 }
 
-export interface CoreLocalOptimizationPlanInput {
+interface CoreLocalOptimizationPlanInput {
 	readonly function: CoreFunctionId;
-	readonly context: CoreCompilationContext | undefined;
 	readonly discovery:
 		| { readonly priorityScore: number; readonly compilerWorkCost: number }
 		| undefined;
@@ -175,8 +170,6 @@ export interface CoreLocalOptimizationPlanInput {
 	readonly unsignedArithmetic: ReadonlyArray<CoreUnsignedArithmeticPlan>;
 	readonly blocks: ReadonlyArray<CoreBlockId>;
 	readonly omittedBlocks: ReadonlyArray<CoreBlockId>;
-	readonly versions: CoreFunctionVersions;
-	readonly dataVersion: number;
 }
 
 const LOCAL_SPECIALIZATION_OPCODES = Object.freeze([
@@ -187,7 +180,7 @@ const LOCAL_SPECIALIZATION_OPCODES = Object.freeze([
 	"iteratorStep",
 ]);
 
-export function coreLocalSpecializationFeatureIndex(
+function coreLocalSpecializationFeatureIndex(
 	program: CoreProgram,
 ): CoreFunctionFeatureIndex {
 	const candidateOpcodes: Array<number> = [];
@@ -1114,7 +1107,7 @@ function pendingLocalCandidate(
 	};
 }
 
-export function buildCoreLocalOptimizationPlanInput(
+function buildCoreLocalOptimizationPlanInput(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
 	features: CoreFunctionFeatureIndex,
@@ -1165,10 +1158,8 @@ export function buildCoreLocalOptimizationPlanInput(
 	}
 	const blocks = Object.freeze([...cfg.reversePostorder]);
 	const included = new Set(blocks);
-	const versions = fn.versions;
 	return Object.freeze({
 		function: functionId,
-		context,
 		discovery:
 			scanned && priorityScore < 0
 				? Object.freeze({ priorityScore, compilerWorkCost: operationCount })
@@ -1191,24 +1182,7 @@ export function buildCoreLocalOptimizationPlanInput(
 		omittedBlocks: Object.freeze(
 			[...fn.blockIds()].filter((block) => !included.has(block)),
 		),
-		versions: Object.freeze(versions),
-		dataVersion: program.programVersion("data"),
 	});
-}
-
-function localOptimizationPlanInputIsCurrent(
-	program: CoreProgram,
-	input: CoreLocalOptimizationPlanInput,
-	context: CoreCompilationContext | undefined,
-): boolean {
-	return (
-		input.instructionFacts.every((plan) =>
-			coreInstructionFactProofIsCurrent(program, plan),
-		) &&
-		input.context === context &&
-		program.programVersion("data") === input.dataVersion &&
-		coreFunctionVersionsAreCurrent(program.function(input.function), input.versions)
-	);
 }
 
 function guardedCallOpportunities(
@@ -2551,7 +2525,6 @@ export interface BuildCoreOptimizationPlanOptions {
 	readonly candidateService?: CoreTransformCandidateService;
 	readonly perFunctionExpansions?: number;
 	readonly context?: CoreCompilationContext;
-	readonly localInputs?: ReadonlyArray<CoreLocalOptimizationPlanInput>;
 	readonly discoverCandidates?: boolean;
 	readonly onPhase?: (phase: "discovery" | "selection", elapsedMs: number) => void;
 	readonly onMaterialize?: () => void;
@@ -2572,31 +2545,17 @@ export function buildCoreOptimizationPlan(
 	const live = new Set(liveFunctions);
 	const records = new RecordPlanning(program, summaries, analyses, options.context, live);
 	const opportunities: Array<CorePlanningOpportunity> = [];
-	const localInputs = new Map<CoreFunctionId, CoreLocalOptimizationPlanInput>();
-	for (const input of options.localInputs ?? []) {
-		if (localInputs.has(input.function)) {
-			throw new Error(
-				`Duplicate local optimization input for function ${input.function}`,
-			);
-		}
-		localInputs.set(input.function, input);
-	}
 	let features: CoreFunctionFeatureIndex | undefined;
 	const resolvedLocalInputs: Array<CoreLocalOptimizationPlanInput> = [];
 	for (const functionId of liveFunctions) {
-		const prepared = localInputs.get(functionId);
-		const input =
-			prepared !== undefined &&
-			localOptimizationPlanInputIsCurrent(program, prepared, options.context)
-				? prepared
-				: buildCoreLocalOptimizationPlanInput(
-						program,
-						analyses,
-						(features ??= coreLocalSpecializationFeatureIndex(program)),
-						functionId,
-						options.context,
-						options.discoverCandidates !== false,
-					);
+		const input = buildCoreLocalOptimizationPlanInput(
+			program,
+			analyses,
+			(features ??= coreLocalSpecializationFeatureIndex(program)),
+			functionId,
+			options.context,
+			options.discoverCandidates !== false,
+		);
 		resolvedLocalInputs.push(input);
 	}
 	const directBuiltinCallbacks = Object.freeze(

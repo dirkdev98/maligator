@@ -118,6 +118,13 @@ but retain the index; body, CFG and effect changes invalidate both, and program 
 changes invalidate provenance. Counters record actual provenance construction rather
 than using bundle refreshes as a proxy.
 
+Local plan inputs are materialized once for each live function at final selection,
+after cross-call cleanup and loop versioning. Function sessions return their changes
+and identity so later rewrites keep the same caller set. They do not retain planning
+snapshots whose facts can expire before selection. Final construction reads the
+current compilation context and analyses; individual instruction proofs retain their
+ordinary version checks.
+
 ### Sealed boundary
 
 Sealing ends Core construction and optimization and returns a read-only
