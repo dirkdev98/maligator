@@ -1981,7 +1981,8 @@ export function validateNativeStorage(
 						plan.initializeIp === expected.initializeIp &&
 						plan.iterator === expected.iterator &&
 						plan.privateColumns === expected.privateColumns &&
-						plan.columnsProducer === expected.columnsProducer &&
+						(plan.columnsProducers ?? []).join() ===
+							(expected.columnsProducers ?? []).join() &&
 						sameRecordGraph(plan.recordGraph, expected.recordGraph) &&
 						(plan.records ?? []).join() === (expected.records ?? []).join())) &&
 				(plan.kind !== "fixed-numeric" ||

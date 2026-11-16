@@ -125,7 +125,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 454;
+export const COMPILER_ARTIFACT_VERSION = 455;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -1011,7 +1011,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 			w.i32(plan.initializeIp);
 			w.i32(plan.iterator);
 			w.u8(plan.privateColumns === true ? 1 : 0);
-			w.i32(plan.columnsProducer ?? -1);
+			w.i32Array([...(plan.columnsProducers ?? [])]);
 			w.i32Array([...(plan.records ?? [])]);
 			w.u8(plan.recordGraph === undefined ? 0 : 1);
 			if (plan.recordGraph !== undefined) {
@@ -1636,13 +1636,17 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 							const initializeIp = r.i32(),
 								iterator = r.i32(),
 								privateColumns = r.u8(),
-								columnsProducer = r.i32(),
+								columnsProducers = r.i32Array(),
 								records = r.i32Array();
 							const graphTag = r.u8();
 							if (
 								graphTag > 1 ||
 								privateColumns > 1 ||
-								(columnsProducer !== -1 && (privateColumns === 0 || columnsProducer < 0))
+								(columnsProducers.length > 0 &&
+									(privateColumns === 0 ||
+										columnsProducers.length > 4 ||
+										new Set(columnsProducers).size !== columnsProducers.length ||
+										columnsProducers.some((ip) => ip < 0)))
 							)
 								throw new RangeError("Invalid record iteration graph");
 							const recordGraph =
@@ -1682,7 +1686,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 								initializeIp,
 								iterator,
 								...(privateColumns === 1 ? { privateColumns: true as const } : {}),
-								...(columnsProducer === -1 ? {} : { columnsProducer }),
+								...(columnsProducers.length === 0 ? {} : { columnsProducers }),
 								...(records.length === 0 ? {} : { records }),
 								...(recordGraph === undefined ? {} : { recordGraph }),
 							};

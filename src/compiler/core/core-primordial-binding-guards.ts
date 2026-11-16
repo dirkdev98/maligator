@@ -32,7 +32,11 @@ import {
 	CORE_PRIMORDIAL_BINDING_TWIN_ATTRIBUTE,
 	coreUnscopedInstructionAttributes,
 } from "./core-internal-attributes.ts";
-import { buildCoreControlFlow, coreTerminatorInput } from "./core-ir-control-flow.ts";
+import {
+	buildCoreControlFlow,
+	coreTerminatorInput,
+	coreValueControlFlowUseMask,
+} from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { CORE_STRING_SPAN_RANGE_METHODS } from "./core-ir-regions.ts";
 import {
@@ -80,6 +84,7 @@ const NAMESPACES: ReadonlySet<CompilerIntrinsic> = new Set<CompilerIntrinsic>([
 	"Number",
 	"Object",
 	"Date",
+	"Array",
 ]);
 
 /** Global functions a run calls directly. */
@@ -95,8 +100,8 @@ const FUNCTIONS: ReadonlySet<CompilerIntrinsic> = new Set<CompilerIntrinsic>([
 
 /*
  * Operations whose known-call form has a Core consumer. Object.assign can shed
- * private allocations; Array.from and constructions keep the loaded
- * callees that entry snapshots, record columns and typed array regions consume.
+ * private allocations; Array.from's iterator consumer transports both guarded
+ * producers. Construction and other consumers retain the loaded callee they need.
  */
 const OPERATIONS: ReadonlySet<string> = new Set([
 	"parseInt",
@@ -114,6 +119,7 @@ const OPERATIONS: ReadonlySet<string> = new Set([
 	"Object.assign",
 	"Object.create",
 	"Object.entries",
+	"Array.from",
 	"Date.parse",
 	"Date.now",
 	"Date.UTC",
@@ -143,6 +149,7 @@ const MATH_NUMBER_KERNELS: ReadonlySet<string> = new Set([
 const COPYABLE_OPCODES: ReadonlySet<string> = new Set([
 	"createObject",
 	"createObjectShaped",
+	"createFunction",
 	"createNumber",
 	"createF64",
 	"createString",
@@ -339,6 +346,7 @@ function siteFor(
 	world: WorldFacts,
 	call: CoreInstructionId,
 	kinds: CoreValueKindAnalysis,
+	controlUse: (value: CoreValueId) => boolean,
 ): Site | undefined {
 	if (opcodeOf(fn, call) !== "call" || results(fn, call).length !== 1) return undefined;
 	const inputs = operands(fn, call);
@@ -405,6 +413,19 @@ function siteFor(
 	);
 	if (operation === undefined) return undefined;
 	let consumer: CoreInstructionId | undefined;
+	if (operation === "Array.from") {
+		const result = results(fn, call)[0]!;
+		const use = fn.kernel.valueFirstUse(result);
+		if (
+			fn.kernel.valueHandlerUseCount(result) !== 0 ||
+			controlUse(result) ||
+			use < 0 ||
+			fn.kernel.useNext(use) >= 0 ||
+			fn.kernel.useOperand(use) !== 0 ||
+			opcodeOf(fn, coreInstructionId(fn.kernel.useInstruction(use))) !== "getIterator"
+		)
+			return undefined;
+	}
 	if (operation === "Object.entries") {
 		const result = results(fn, call)[0]!;
 		const use = fn.kernel.valueFirstUse(result);
@@ -979,12 +1000,15 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 		if (world.primordialPolicy !== "mutable") return undefined;
 		const fn = program.function(item.function);
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+		let controls: Uint8Array | undefined;
+		const controlUse = (value: CoreValueId) =>
+			(controls ??= coreValueControlFlowUseMask(fn))[value] !== 0;
 		const sitesByInstruction = new Map<CoreInstructionId, Site>();
 		const blocks = new Set<CoreBlockId>();
 		for (const instruction of fn.instructionIds()) {
 			const opcode = opcodeOf(fn, instruction);
 			if (opcode !== "call") continue;
-			const site = siteFor(program, fn, world, instruction, kinds);
+			const site = siteFor(program, fn, world, instruction, kinds, controlUse);
 			if (site === undefined) continue;
 			sitesByInstruction.set(site.name, site);
 			if (site.method !== undefined) sitesByInstruction.set(site.method, site);

@@ -157,10 +157,12 @@ Runtime eval may remove source closure without invalidating authority closure.
 
 - [ ] Extend guarded primordial consumers beyond the current Object, Date, Math and
       primitive-conversion admissions. `Object.entries` observations beyond a single
-      direct
-      iterator or immediate sole `.length` consumer retain their loaded producer.
-      `Array.from` and constructions keep their loaded form because entry snapshots,
-      record columns and typed array regions consume it. Extend a selected consumer to the known call behind the guard. Reentrant known calls beyond
+      direct iterator or immediate sole `.length` consumer retain their loaded producer.
+      `Array.from` consumers beyond a sole direct iterator and constructions keep their
+      loaded form because entry snapshots and typed array regions consume it. Private
+      record columns follow bounded alternative `Array.from` producers, including
+      guarded known calls; extend the remaining selected consumers across their guards.
+      Reentrant known calls beyond
       fixed Math Number kernels and noncoercing Number predicates need their selected
       callee semantics carried through execution; generic `CALL_KNOWN` still resolves
       the mutable graph. A loop a numeric region can take keeps its own entry speculation;

@@ -247,6 +247,14 @@ regions restart in the original loop only at a poll or once their values leave t
 safe integers, which a new entry declines, and record iteration regions keep packed
 columns across their own restarts; neither returns.
 
+Private record columns can follow mutually exclusive fresh `Array.from` allocations
+through local moves. Every path to the iterator must cross a proven producer, and
+no producer may repeat or follow another one. Generic calls record their actual
+callee and receiver identities before execution; certified calls carry their proof
+through the same join. Any publication, additional observer, uninitialized path or
+exhausted analysis bound retains ordinary storage. Iterator admission still checks
+the canonical protocol before deferring stores into private columns.
+
 DataView accessor calls join fixed storage regions as byte views. Admission uses the
 conditions that make `byteLength` the intrinsic getter: the watched-prototype
 protector, the intrinsic prototype, an empty own layout, and a fixed view over an

@@ -186,6 +186,7 @@ tests/native/string-split-trim.test.ts
 tests/native/with-environments.test.ts
 tests/native/node-computed-builtin.test.ts
 tests/native/node-source-builtin.test.ts
+tests/native/array-from-branch-columns.test.ts
 tests/native/eval-persistent-records.test.ts
 tests/native/eval-ordered-records.test.ts
 tests/native/eval-local-references.test.ts

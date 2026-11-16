@@ -128,11 +128,11 @@ export function nativeMapperReturnsFreshGraph(fn: BytecodeFunction): boolean {
 /**
  * How a record loop's columns know the traversed graph private: the locked world proves
  * `Array.from` exact, while mutable primordials leave the `Array.from` call at
- * `checkedProducer`, whose callee and receiver the function compares with the
+ * `checkedProducers`, whose callees and receivers the function compares with the
  * realm's own before calling it.
  */
 export interface NativeRecordColumnsPrivacy {
-	readonly checkedProducer?: number;
+	readonly checkedProducers?: ReadonlyArray<number>;
 }
 
 /** Column writes stay private until an explicit fallback writes them back to the heap. */
@@ -195,62 +195,114 @@ export function nativeRecordGraphIsPrivate(
 		}
 		return false;
 	};
-	const producerIp = definition(init.source, initializeIp);
-	if (producerIp === undefined) return undefined;
-	const producer = fn.instructions[producerIp]!;
-	let receiverIp: number | undefined;
-	let checkedProducer: number | undefined;
-	if (
-		producer.opcode === "CALL_KNOWN" &&
-		producer.operation === "Array.from" &&
-		!producer.construct &&
-		producer.argumentMode === undefined &&
-		producer.argumentCount === 2
-	) {
-		receiverIp = definition(producer.thisValue, producerIp);
-		const receiver = receiverIp === undefined ? undefined : fn.instructions[receiverIp];
-		if (receiver?.opcode !== "LOAD_INTRINSIC" || receiver.intrinsic !== "Array")
-			return undefined;
-	} else if (producer.opcode === "CALL" && producer.argumentCount === 2) {
-		// Only the runtime comparison proves this call the realm's `Array.from`; the
-		// loads just keep both values fixed between the comparison and the call.
-		const calleeIp = definition(producer.callee, producerIp);
-		const callee = calleeIp === undefined ? undefined : fn.instructions[calleeIp];
-		receiverIp = definition(producer.thisValue, producerIp);
-		const receiver = receiverIp === undefined ? undefined : fn.instructions[receiverIp];
+	const producers = new Set<number>(),
+		transports = new Set<number>();
+	const traced = new Set<string>();
+	const pending = (predecessors.get(initializeIp) ?? []).map((edge) => ({
+		...edge,
+		register: init.source,
+	}));
+	if (initializeIp === 0 || pending.length === 0) return undefined;
+	let inspected = 0;
+	while (pending.length > 0) {
+		if (++inspected > 512 || pending.length > 512) return undefined;
+		const at = pending.pop()!,
+			key = `${at.ip}:${at.register}:${at.thrown}`;
+		if (traced.has(key)) continue;
+		traced.add(key);
+		const op = fn.instructions[at.ip]!;
+		let register = at.register;
+		if (!at.thrown && vmInstructionWriteRegisters(op).includes(register)) {
+			if (op.opcode !== "MOVE") {
+				producers.add(at.ip);
+				if (producers.size > 4) return undefined;
+				continue;
+			}
+			transports.add(at.ip);
+			register = op.src;
+		}
+		const incoming = predecessors.get(at.ip) ?? [];
+		if (at.ip === 0 || incoming.length === 0) return undefined;
+		pending.push(...incoming.map((edge) => ({ ...edge, register })));
+	}
+	if (producers.size === 0) return undefined;
+	// Every entry path crosses one allocation, including the generic arm of a guard.
+	const uncovered = [0],
+		covered = new Set<number>();
+	while (uncovered.length > 0) {
+		const ip = uncovered.pop()!;
+		if (producers.has(ip) || covered.has(ip) || fn.instructions[ip] === undefined)
+			continue;
+		if (ip === initializeIp) return undefined;
+		covered.add(ip);
+		uncovered.push(...next(ip));
+	}
+	let checked = false;
+	for (const producerIp of producers) {
+		const producer = fn.instructions[producerIp]!;
+		let receiverIp: number | undefined;
 		if (
-			callee?.opcode !== "LOAD_PROPERTY_STATIC" ||
-			callee.object !== producer.thisValue ||
-			definition(callee.object, calleeIp!) !== receiverIp ||
-			receiver?.opcode !== "LOAD_GLOBAL_PROPERTY"
+			producer.opcode === "CALL_KNOWN" &&
+			producer.operation === "Array.from" &&
+			!producer.construct &&
+			producer.argumentMode === undefined &&
+			producer.argumentCount === 2
+		) {
+			receiverIp = definition(producer.thisValue, producerIp);
+			const receiver = receiverIp === undefined ? undefined : fn.instructions[receiverIp];
+			if (receiver?.opcode !== "LOAD_INTRINSIC" || receiver.intrinsic !== "Array")
+				return undefined;
+		} else if (producer.opcode === "CALL" && producer.argumentCount === 2) {
+			const calleeIp = definition(producer.callee, producerIp);
+			const callee = calleeIp === undefined ? undefined : fn.instructions[calleeIp];
+			receiverIp = definition(producer.thisValue, producerIp);
+			const receiver = receiverIp === undefined ? undefined : fn.instructions[receiverIp];
+			if (
+				callee?.opcode !== "LOAD_PROPERTY_STATIC" ||
+				callee.object !== producer.thisValue ||
+				definition(callee.object, calleeIp!) !== receiverIp ||
+				receiver?.opcode !== "LOAD_GLOBAL_PROPERTY"
+			)
+				return undefined;
+			checked = true;
+		} else return undefined;
+		const callbackIp = definition(producer.arguments[1]!, producerIp);
+		const callback = callbackIp === undefined ? undefined : fn.instructions[callbackIp];
+		if (callback?.opcode !== "CREATE_FUNCTION") return undefined;
+		const mapper = functions[callback.functionIndex];
+		if (mapper === undefined || !nativeMapperReturnsFreshGraph(mapper)) return undefined;
+		if (
+			reaches(next(producerIp), producerIp) ||
+			reaches([0], producerIp, receiverIp) ||
+			reaches([0], producerIp, callbackIp)
 		)
 			return undefined;
-		checkedProducer = producerIp;
-	} else return undefined;
-	const callbackIp = definition(producer.arguments[1]!, producerIp);
-	const callback = callbackIp === undefined ? undefined : fn.instructions[callbackIp];
-	if (callback?.opcode !== "CREATE_FUNCTION") return undefined;
-	const mapper = functions[callback.functionIndex];
-	if (mapper === undefined || !nativeMapperReturnsFreshGraph(mapper)) return undefined;
-	// The allocation dominates every traversal and cannot repeat, including through catches.
-	if (
-		reaches([0], initializeIp, producerIp) ||
-		reaches(next(producerIp), producerIp) ||
-		reaches([0], producerIp, receiverIp) ||
-		reaches([0], producerIp, callbackIp)
-	)
-		return undefined;
-	// Nothing but the traversal reads the allocation through the register it defines.
-	const visited = new Set<number>();
-	const pending = [...next(producerIp)];
-	while (pending.length > 0) {
-		const ip = pending.pop()!;
-		const op = fn.instructions[ip];
-		if (visited.has(ip) || op === undefined) continue;
-		visited.add(ip);
-		if (ip !== initializeIp && vmInstructionReadRegisters(op).includes(init.source))
-			return undefined;
-		if (!vmInstructionWriteRegisters(op).includes(init.source)) pending.push(...next(ip));
+		// A later allocation must not overwrite the selected graph's privacy flag.
+		for (const other of producers)
+			if (other !== producerIp && reaches(next(producerIp), other)) return undefined;
+		const visited = new Set<string>();
+		const uses = next(producerIp).map((ip) => ({ ip, register: producer.dst }));
+		let inspectedUses = 0;
+		while (uses.length > 0) {
+			if (++inspectedUses > 512 || uses.length > 512) return undefined;
+			const { ip, register } = uses.pop()!,
+				op = fn.instructions[ip],
+				key = `${ip}:${register}`;
+			if (visited.has(key) || op === undefined) continue;
+			visited.add(key);
+			if (vmInstructionReadRegisters(op).includes(register)) {
+				if (op.opcode === "MOVE" && op.src === register && transports.has(ip))
+					uses.push(...next(ip).map((ip) => ({ ip, register: op.dst })));
+				else if (
+					ip !== initializeIp ||
+					op.opcode !== "GET_ITERATOR" ||
+					op.source !== register
+				)
+					return undefined;
+			}
+			if (!vmInstructionWriteRegisters(op).includes(register))
+				uses.push(...next(ip).map((ip) => ({ ip, register })));
+		}
 	}
 	const members = new Set(claimedIps);
 	for (const [ip, op] of fn.instructions.entries())
@@ -259,5 +311,7 @@ export function nativeRecordGraphIsPrivate(
 			...vmInstructionWriteRegisters(op),
 		])
 			if (flow.references.has(r) && !members.has(ip)) return undefined;
-	return checkedProducer === undefined ? {} : { checkedProducer };
+	return checked
+		? { checkedProducers: [...producers].sort((left, right) => left - right) }
+		: {};
 }

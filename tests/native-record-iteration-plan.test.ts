@@ -148,13 +148,19 @@ function privateGraphProgram(
 	mapper: string,
 	after = "",
 	source = "{ length: 32 }",
-	retry = false,
+	options: {
+		retry?: boolean;
+		primordials?: "locked" | "mutable";
+		allocation?: string;
+		setup?: string;
+	} = {},
 ) {
 	return compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			`"use strict"; globalThis.kernel = function kernel(input) {
-   ${retry ? "while (true) { try {" : ""}
-   const rows = Array.from(${source}, ${mapper});
+   ${options.retry ? "while (true) { try {" : ""}
+   ${options.setup ?? ""}
+   const rows = ${options.allocation ?? `Array.from(${source}, ${mapper})`};
    let total = 0;
    for (let round = 0; round < 8; round++) {
     for (const row of rows) {
@@ -165,14 +171,18 @@ function privateGraphProgram(
    }
    ${after}
    return total;
-   ${retry ? "} catch {} }" : ""}
+   ${options.retry ? "} catch {} }" : ""}
   };`,
 			"/private-record-graph.js",
 		),
 		{
 			facts: compilerProgramFactsFromConfig(
 				resolveBuildConfig({
-					engine: { primordials: "locked", eval: false, realms: false },
+					engine: {
+						primordials: options.primordials ?? "locked",
+						eval: false,
+						realms: false,
+					},
 				}),
 			),
 		},
@@ -188,7 +198,86 @@ describe("private record columns", () => {
 		expect(nativeMapperReturnsFreshGraph({ ...mapper, strict: false })).toBe(true);
 	});
 	it("rejects producer reexecution through an exception handler", () => {
-		const image = privateGraphProgram(FRESH_MAPPER, "", "{ length: 32 }", true);
+		const image = privateGraphProgram(FRESH_MAPPER, "", "{ length: 32 }", {
+			retry: true,
+		});
+		expect(
+			image.native.functions.every((fn) =>
+				fn.storage!.numericLoopRegions.every(
+					(plan) => plan.kind !== "array-iteration" || !plan.privateColumns,
+				),
+			),
+		).toBe(true);
+	});
+	it.each(["locked", "mutable"] as const)(
+		"preserves mutually exclusive producers through %s transport",
+		(primordials) => {
+			const allocation = `input ? Array.from({length: 32}, ${FRESH_MAPPER}) : Array.from({length: 32}, ${FRESH_MAPPER})`;
+			const image = deserializeCompilerArtifact(
+				serializeCompilerArtifact(
+					privateGraphProgram(FRESH_MAPPER, "", "{length:32}", {
+						primordials,
+						allocation,
+					}),
+				),
+			);
+			const plans = image.native.functions
+				.flatMap((fn) => fn.storage!.numericLoopRegions)
+				.filter((plan) => plan.kind === "array-iteration" && plan.privateColumns);
+			expect(plans.length).toBeGreaterThan(0);
+			if (primordials === "mutable")
+				expect(
+					plans.some(
+						(plan) =>
+							plan.kind === "array-iteration" && plan.columnsProducers?.length === 2,
+					),
+				).toBe(true);
+		},
+	);
+	it("sets runtime privacy on both arms of a guarded Array.from", () => {
+		const image = privateGraphProgram(FRESH_MAPPER, "", "{length:32}", {
+			primordials: "mutable",
+		});
+		const producers = image.native.functions.flatMap((fn) =>
+			fn.storage!.numericLoopRegions.flatMap((plan) =>
+				plan.kind === "array-iteration"
+					? (plan.columnsProducers ?? []).map((ip) => fn.body.instructions[ip]!.opcode)
+					: [],
+			),
+		);
+		expect(new Set(producers)).toEqual(new Set(["CALL", "CALL_KNOWN"]));
+	});
+	it.each([
+		[
+			"external alternative",
+			`Array.isArray(input) ? input : Array.from({length:32}, ${FRESH_MAPPER})`,
+			"",
+			"",
+		],
+		[
+			"published transport",
+			`input ? Array.from({length:32}, ${FRESH_MAPPER}) : Array.from({length:32}, ${FRESH_MAPPER})`,
+			"const alias = rows; globalThis.saved = alias;",
+			"",
+		],
+		[
+			"sequential producers",
+			"input ? first : second",
+			"",
+			`const first = Array.from({length:32}, ${FRESH_MAPPER}); const second = Array.from({length:32}, ${FRESH_MAPPER});`,
+		],
+		[
+			"second traversal",
+			`input ? Array.from({length:32}, ${FRESH_MAPPER}) : Array.from({length:32}, ${FRESH_MAPPER})`,
+			"for (const row of rows) total += row.point.x;",
+			"",
+		],
+	])("rejects branch privacy with %s", (_name, allocation, after, setup) => {
+		const image = privateGraphProgram(FRESH_MAPPER, after, "{length:32}", {
+			primordials: "mutable",
+			allocation,
+			setup,
+		});
 		expect(
 			image.native.functions.every((fn) =>
 				fn.storage!.numericLoopRegions.every(

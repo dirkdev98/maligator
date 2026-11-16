@@ -260,11 +260,11 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 				readonly recordGraph?: NativeRecordIterationGraph;
 				readonly privateColumns?: true;
 				/**
-				 * The `Array.from` call whose callee and receiver the function compares
-				 * with the realm's own before calling it, which mutable primordials leave
-				 * to the columns' admission; absent when the locked world proves them.
+				 * Alternative allocations that set the columns' runtime privacy flag.
+				 * Generic calls compare their callee and receiver with the realm's own;
+				 * certified calls set it directly. Absent when every producer is exact.
 				 */
-				readonly columnsProducer?: number;
+				readonly columnsProducers?: ReadonlyArray<number>;
 		  }
 		| {
 				readonly kind: "fixed-numeric";
@@ -3854,9 +3854,9 @@ function lowerArrayIterationRegion(
 			iterator: cursor.iterator,
 			recordGraph: recordFlow.graph,
 			...(privacy === undefined ? {} : { privateColumns: true as const }),
-			...(privacy?.checkedProducer === undefined
+			...(privacy?.checkedProducers === undefined
 				? {}
-				: { columnsProducer: privacy.checkedProducer }),
+				: { columnsProducers: privacy.checkedProducers }),
 			id: header,
 			entryIp: shape.entryIp,
 			inputs: [...inputs].sort((a, b) => a - b),

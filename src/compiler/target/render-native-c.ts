@@ -1841,7 +1841,7 @@ function emitRecordIterationRegion(
 		const columnCount =
 			1 + graph.fields.length + graph.fields.filter((field) => field.stored).length;
 		lines.push(
-			`  if (${plan.columnsProducer === undefined ? "MAL_PRIMORDIALS_LOCKED" : `${cache}_private`} && ${guards.join(" && ")}) {`,
+			`  if (${plan.columnsProducers === undefined ? "MAL_PRIMORDIALS_LOCKED" : `${cache}_private`} && ${guards.join(" && ")}) {`,
 			`    if (${cache}_state == 1 && ${cursor}.index == 0 && !${cursor}.done && ${id}_array.count == ${id}_array.length && ${id}_array.count > 0 && ${id}_array.count <= 8388608 / (${columnCount} * sizeof(u64))) {`,
 			`      ${cache}_count = ${id}_array.count;`,
 			`      ${cache}_data = calloc((size_t) ${cache}_count * ${columnCount}, sizeof(u64));`,
@@ -5016,7 +5016,7 @@ function emitCompiledVariant(
 			`    MalValue ${cache}_owner = MAL_VALUE_UNDEFINED;`,
 			`    MalRootSpan ${cache}_roots;`,
 			`    mal_gc_root(&${cache}_roots, &${cache}_owner, 1);`,
-			...(plan.kind === "array-iteration" && plan.columnsProducer !== undefined
+			...(plan.kind === "array-iteration" && plan.columnsProducers !== undefined
 				? [`    bool ${cache}_private = false;`]
 				: []),
 		);
@@ -8504,8 +8504,8 @@ function emitBody(
 		fastPathPlans.numericLoopRegions.flatMap((plan) =>
 			plan.kind === "array-iteration" &&
 			plan.privateColumns === true &&
-			plan.columnsProducer !== undefined
-				? [[plan.columnsProducer, recordColumnsName(plan)] as const]
+			plan.columnsProducers !== undefined
+				? plan.columnsProducers.map((ip) => [ip, recordColumnsName(plan)] as const)
 				: [],
 		),
 	);
@@ -17217,8 +17217,16 @@ class NativeInstructionEmission {
 					this.poll(),
 				];
 			}
-			case "CALL_KNOWN":
-				return this.emitImmediateAwaitCall(instruction, this.emitKnownCall(instruction));
+			case "CALL_KNOWN": {
+				const call = this.emitImmediateAwaitCall(
+					instruction,
+					this.emitKnownCall(instruction),
+				);
+				const columns = this.context.recordColumnsProducer;
+				return call === null || columns === undefined
+					? call
+					: [`${columns}_private = true;`, ...call];
+			}
 			case "CALL": {
 				const call = this.emitImmediateAwaitCall(instruction, this.emitCall(instruction));
 				const columns = this.context.recordColumnsProducer;
