@@ -25,3 +25,18 @@ try {
 } catch (error) {
 	console.log(error === first, error.message);
 }
+
+function allocateShaped(value) {
+	const record = { first: value, last: value };
+	globalThis.escapedShaped = record;
+	return record;
+}
+allocateShaped(0);
+try {
+	__mal_fail_next_cell_allocation();
+	allocateShaped(1);
+} catch (error) {
+	console.log(error === first, error.message);
+}
+const shaped = allocateShaped(2);
+console.log(shaped.first, shaped.last, shaped === globalThis.escapedShaped);

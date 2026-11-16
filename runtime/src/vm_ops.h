@@ -4270,9 +4270,9 @@ static inline __attribute__((always_inline)) MalValue mal_vm_create_object_shape
     MalVm *vm, struct MalShape *shape, const MalValue *values, u32 count
 ) {
     MalHeapHeader *cell = vm->heap.fail_next_cell_allocation ? nullptr
-        : mal_heap_cell_take(
+        : mal_heap_cell_take_storage(
             &vm->heap, sizeof(MalObject) + sizeof(void *) + sizeof(MalValue) * count,
-            MAL_HEAP_OBJECT);
+            MAL_HEAP_OBJECT, false);
     if (__builtin_expect(cell == nullptr, 0)) {
         return mal_vm_create_object_shaped_slow(vm, shape, values, count);
     }

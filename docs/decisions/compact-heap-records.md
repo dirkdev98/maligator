@@ -36,6 +36,11 @@ decode and repacking, at the cost of larger fields for int32-heavy records.
 Representation knowledge belongs in facts about a shape's fields rather than in
 their storage, so a new fact never needs a new physical layout or a migration.
 
+Cached-shape literal construction initializes the complete object, prototype and
+live fields before publication or a safepoint. Its inline allocation resets the
+GC header and remembered state without clearing payload bytes that initialization
+immediately overwrites. The fallible slow allocation path retains cleared storage.
+
 ## Private elements
 
 A shaped object keeps private fields and brand markers in its shape, keyed by

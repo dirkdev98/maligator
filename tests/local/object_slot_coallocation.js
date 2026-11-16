@@ -437,4 +437,51 @@ const wide32 = {
 };
 check("thirty-two slots", wide32.k0 === 0 && wide32.k16 === 16 && wide32.k31 === 31);
 
+function wideHeapRecord(value) {
+	return {
+		k0: { value },
+		k1: { value: value + 1 },
+		k2: { value: value + 2 },
+		k3: { value: value + 3 },
+		k4: { value: value + 4 },
+		k5: { value: value + 5 },
+		k6: { value: value + 6 },
+		k7: { value: value + 7 },
+		k8: { value: value + 8 },
+		k9: { value: value + 9 },
+		k10: { value: value + 10 },
+		k11: { value: value + 11 },
+		k12: { value: value + 12 },
+		k13: { value: value + 13 },
+		k14: { value: value + 14 },
+		k15: { value: value + 15 },
+	};
+}
+const wideRetained = [];
+const wideKeys = Object.keys(wide16);
+for (let round = 0; round < 64; round++) {
+	wideRetained[round & 7] = wideHeapRecord(round);
+	if ((round & 7) === 7) gc();
+}
+for (let index = 0; index < wideRetained.length; index++) {
+	const record = wideRetained[index];
+	check("wide retained keys", Object.keys(record).join(",") === wideKeys.join(","));
+	for (let slot = 0; slot < wideKeys.length; slot++) {
+		check(
+			"wide heap field after reuse",
+			record[wideKeys[slot]].value === 56 + index + slot,
+		);
+	}
+}
+const grownWide = wideRetained[0];
+grownWide.extra = { value: "grown" };
+Object.defineProperty(grownWide, "k8", { get: () => ({ value: "accessor" }) });
+gc();
+check("wide growth", grownWide.extra.value === "grown");
+check("wide descriptor conversion", grownWide.k8.value === "accessor");
+check(
+	"wide fields after migration",
+	grownWide.k0.value === 56 && grownWide.k15.value === 71,
+);
+
 console.log("object-slot-coallocation PASS " + passed + "/" + passed);

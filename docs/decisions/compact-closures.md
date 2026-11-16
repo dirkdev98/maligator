@@ -75,7 +75,8 @@ and dictionary properties use the ordinary object storage transitions.
 Function and environment constructors initialize their complete traced payload before
 publication or another allocation. Their allocator can leave reused payload bytes
 uncleared while always resetting the GC header and remembered-set state. Other
-constructors retain zeroed allocation, and the shared slow allocation path stays zeroed.
+constructors that can collect before complete initialization retain zeroed allocation,
+and the shared slow allocation path stays zeroed.
 A frame copy has its own entry: the compiler emits one only when every capture is
 an initialized immutable frame value, so the cell holds exactly the value display
 and never reserves the owner-vector fallback that ordinary creation keeps for an

@@ -8,7 +8,8 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-const expected = "true Out of memory\nobject true\ntrue Out of memory\n";
+const expected =
+	"true Out of memory\nobject true\ntrue Out of memory\ntrue Out of memory\n2 2 true\n";
 
 describe("recoverable allocation failure", () => {
 	it.each([

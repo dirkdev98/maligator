@@ -166,10 +166,7 @@ Runtime eval may remove source closure without invalidating authority closure.
       loaded form because entry snapshots and typed array regions consume it. Private
       record columns follow bounded alternative `Array.from` producers, including
       guarded known calls; extend the remaining selected consumers across their guards.
-      Reentrant known calls beyond fixed Math Number kernels, noncoercing Number
-      predicates and single-realm String-input `Date.parse` need their selected
-      callee semantics carried through execution; generic `CALL_KNOWN` still resolves
-      the mutable graph. A loop a numeric region can take keeps its own entry speculation;
+      A loop a numeric region can take keeps its own entry speculation;
       admitting `GUARD_SEMANTIC_EPOCH` as a region entry guard would let it use both.
       Realm-enabled consumers beyond noncoercing Number predicates and ordinary
       `Date.now` calls need their own
@@ -358,12 +355,12 @@ contracts or investigates costs still visible after the string follow-ups.
       Profile the current pending-await and mutable javascript-v2 paths before changing
       their representation, preserving async stacks and exact microtask ordering.
 
-- [ ] Reduce remaining no-capture closure, per-iteration capture and wide-literal creation
+- [ ] Reduce remaining no-capture closure and per-iteration capture
       costs. Source-immutable leaf captures can copy values in open images; synthetic
       iteration owners and cyclic initializers still need per-creation snapshots before
-      owner elision. Literals already use cached final shapes and coallocated fields.
+      owner elision.
       Select a repeated consumer and bound remaining allocation, initialization and
-      metadata costs before changing either representation.
+      metadata costs before changing their representation.
 
 - [ ] Bring node:stream and EventEmitter construction closer to Node. A constructed
       Readable still costs about 5x Node and a Writable 3.5x, mostly option reads
