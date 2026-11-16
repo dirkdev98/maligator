@@ -1,17 +1,6 @@
-// Baked-compiler entry for runtime `eval` / `new Function` (eval Phase 3/4).
-//
-// maligator AOT-compiles this module (and the `compileSourceToBuffer` cone it
-// pulls in: the semantic analyzer, IR pipeline, lowering, serializer, and the
-// meriyah parser) into a runtime-image wire payload that is `#embed`ded into the
-// runtime (compiler_wire.c). On the first `eval`, the runtime splices that image
-// and runs this top level, which publishes the compile entry point as
-// `globalThis.__compile`. The eval intrinsic reads it into a rooted VM slot and
-// then deletes the global, so nothing leaks onto the global object.
-//
-// `__compile(source)` returns the same `Uint8Array` wire buffer the Node-hosted
-// compiler produces (validated byte-identical by scripts/eval-selfhost-check.ts);
-// the runtime loads + splices + runs it. debugInfo defaults on so eval'd frames
-// carry source positions for stack traces.
+// The embedded module entry returns this compiler export directly to the VM.
+// Private transport lets initialization work with a hardened application global.
+// Compiled sources retain debug positions for dynamically created stack frames.
 
 import {
 	compilePreparedSourceToBuffer,
@@ -19,17 +8,6 @@ import {
 	runtimeEvalOptimizationForSource,
 } from "./compile.ts";
 
-declare const globalThis: {
-	__compile: (
-		source: string,
-		direct?: boolean,
-		callerStrict?: boolean,
-		inParamExpr?: boolean,
-		inFieldInitializer?: boolean,
-		directEvalContext?: string,
-		script?: boolean,
-	) => Uint8Array;
-};
 declare const SyntaxError: new (message?: string) => Error;
 
 interface EvalCompilerCacheEntry {
@@ -124,7 +102,7 @@ function retainCompilation(
 	cache[0] = entry;
 }
 
-globalThis.__compile = function __compile(
+export function __compile(
 	source: string,
 	direct?: boolean,
 	callerStrict?: boolean,
@@ -200,4 +178,4 @@ globalThis.__compile = function __compile(
 		const err = e as { message?: string } | undefined;
 		throw new SyntaxError(err && err.message ? err.message : String(e));
 	}
-};
+}

@@ -26,6 +26,7 @@ import {
 } from "./compiler/pipeline/compile-program.ts";
 import { compileWorkerImages } from "./compiler/pipeline/compile-worker-images.ts";
 import type { CompiledWorkerImage } from "./compiler/pipeline/compile-worker-images.ts";
+import { embeddedCompilerOptions } from "./compiler/pipeline/embedded-compiler-options.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import {
 	emitProgramImage,
@@ -94,12 +95,12 @@ function defaultCompilerBake(): CompilerBakeInput {
 		entrypoint: compilerEntrypoint,
 		bake: () =>
 			compileEntrypointToBuffer(compilerEntrypoint, {
-				intrinsicGlobalReads: true,
+				...embeddedCompilerOptions(compilerSourceDirectory),
 				stripTypes: stripCompactTypes,
 			}),
 		bakeProgram: () =>
 			compileEntrypoint(compilerEntrypoint, {
-				intrinsicGlobalReads: true,
+				...embeddedCompilerOptions(compilerSourceDirectory),
 				stripTypes: stripCompactTypes,
 			}),
 	};

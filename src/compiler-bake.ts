@@ -34,6 +34,8 @@ const COMPILER_NATIVE_TRANSLATION_UNIT_TARGET_CODE_UNITS = 512 * 1024;
  * part of the bake identity even though the compiler entrypoint never imports it.
  */
 const TYPE_STRIPPER_MODULE = "compiler/frontend/compact-type-strip.ts";
+const COMPILER_HOST_OPTIONS_MODULE = "compiler/pipeline/embedded-compiler-options.ts";
+const COMPILER_PARSER_CLONE_MODULE = "compiler/frontend/parser-clone.ts";
 
 /** Third-party packages whose pinned version can change the baked wire. */
 const PINNED_COMPILER_DEPENDENCIES = ["meriyah"];
@@ -139,7 +141,12 @@ function compilerSourceHash(
 	const checkoutKey = hash("sha256", `${sourceDirectory}\0${relativeEntrypoint}`, "hex");
 	const cone = relativeImportCone(
 		sourceDirectory,
-		[relativeEntrypoint, TYPE_STRIPPER_MODULE],
+		[
+			relativeEntrypoint,
+			TYPE_STRIPPER_MODULE,
+			COMPILER_HOST_OPTIONS_MODULE,
+			COMPILER_PARSER_CLONE_MODULE,
+		],
 		// Hidden so cache pruning, which keeps only the newest wires, never counts it as one.
 		path.join(root, ".source-cones", `${checkoutKey.slice(0, 20)}.json`),
 	);

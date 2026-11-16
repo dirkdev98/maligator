@@ -86,6 +86,34 @@ describe("compileEntrypoint build policy", () => {
 		expect(portable).toEqual(serializeRuntimeImage(native.runtime));
 	});
 
+	test("keeps an embedded module's returned export identical across compiler pipelines", () => {
+		const entry = entrypoint("export function compile() { return 42; }");
+		const options = { entryResultExport: "compile", entryGoal: "module" as const };
+		expect(compileEntrypointToBuffer(entry, options)).toEqual(
+			serializeRuntimeImage(compileEntrypoint(entry, options).runtime),
+		);
+	});
+
+	test.each([
+		["export const other = 1;", /Missing entry result export/, "module"],
+		[
+			"export const compile = await Promise.resolve(1);",
+			/requires synchronous/,
+			"module",
+		],
+		["const compile = () => 1;", /requires an ECMAScript module/, "script"],
+	] as const)(
+		"rejects an unsupported embedding export contract: %s",
+		(source, error, entryGoal) => {
+			const entry = entrypoint(source);
+			for (const compile of [compileEntrypoint, compileEntrypointToBuffer]) {
+				expect(() => compile(entry, { entryResultExport: "compile", entryGoal })).toThrow(
+					error,
+				);
+			}
+		},
+	);
+
 	test("allows disabled-feature usage when no build config is supplied", () => {
 		expect(() =>
 			compileEntrypointToBuffer(entrypoint('eval("1 + 1"); /a/.test("a");')),

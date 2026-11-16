@@ -12,6 +12,7 @@ import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semant
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
 import { workerRootEntries } from "./compiler/pipeline/compile-worker-images.ts";
+import { embeddedCompilerOptions } from "./compiler/pipeline/embedded-compiler-options.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { emitWorkerRegistryTranslationUnit } from "./compiler/target/emit-worker-images.ts";
@@ -136,7 +137,10 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		compilerWirePath,
 		compileEntrypointToBuffer(
 			path.join(repositoryRoot, "src/compiler/pipeline/eval-compiler-entry.mts"),
-			{ stripTypes: stripCompactTypes, intrinsicGlobalReads: true },
+			{
+				stripTypes: stripCompactTypes,
+				...embeddedCompilerOptions(path.join(repositoryRoot, "src")),
+			},
 		),
 	);
 	const compilerProducerDigestsPath = path.join(outDir, "compiler-producers.json");

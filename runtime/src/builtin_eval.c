@@ -84,10 +84,8 @@ static bool eval_try_regexp_literal(MalVm *vm, MalValue source, MalValue *result
 #endif
 }
 
-// Install the baked compiler on first use: splice it, run its top level (which
-// assigns globalThis.__compile), capture that into the rooted vm->compiler_fn,
-// then delete the global so eval leaves nothing on globalThis. Returns false
-// with a pending throw on failure.
+// The embedded entry returns its compiler closure privately; application global
+// properties cannot intercept initialization. The VM roots the closure and its cells.
 static bool ensure_compiler(MalVm *vm) {
 #if !MAL_EVAL
     // eval-disabled build (`engine.eval: false`): the baked compiler is not
@@ -101,13 +99,12 @@ static bool ensure_compiler(MalVm *vm) {
     if (vm->compiler_installed) {
         return true;
     }
-    MalValue roots[3] = {
-        mal_value_new_undefined(),
+    MalValue roots[2] = {
         mal_value_new_undefined(),
         mal_value_new_undefined(),
     };
     MalRootSpan root_span;
-    mal_gc_root(&root_span, roots, 3);
+    mal_gc_root(&root_span, roots, 2);
     bool installed = false;
 
     usize len = 0;
@@ -144,13 +141,13 @@ static bool ensure_compiler(MalVm *vm) {
         goto done;
     }
 
-    roots[1] = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
-    MalKey key = mal_intrinsic_string_key(vm, "__compile");
-    if (!mal_vm_get_property(vm, roots[1], key, &roots[2])) {
+    roots[1] = run.value;
+    if (!mal_value_is_callable(roots[1])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE,
+            "eval: baked compiler entry did not return a callable");
         goto done;
     }
-    vm->compiler_fn = roots[2];
-    mal_vm_delete_property(vm, roots[1], key);
+    vm->compiler_fn = roots[1];
     vm->compiler_installed = true;
     installed = true;
 

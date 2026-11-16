@@ -27,6 +27,7 @@ import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
 } from "../compiler/pipeline/compile-program.ts";
+import { embeddedCompilerOptions } from "../compiler/pipeline/embedded-compiler-options.ts";
 import {
 	emitBatch,
 	emitBatchWithSharedPrefix,
@@ -433,12 +434,12 @@ export function test262PrepareBuild() {
 			entrypoint: compilerEntrypoint,
 			bake: () =>
 				compileEntrypointToBuffer(compilerEntrypoint, {
-					intrinsicGlobalReads: true,
+					...embeddedCompilerOptions(compilerSourceDirectory),
 					stripTypes: stripCompactTypes,
 				}),
 			bakeProgram: () =>
 				compileEntrypoint(compilerEntrypoint, {
-					intrinsicGlobalReads: true,
+					...embeddedCompilerOptions(compilerSourceDirectory),
 					stripTypes: stripCompactTypes,
 				}),
 		},

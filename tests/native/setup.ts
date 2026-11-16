@@ -9,6 +9,7 @@ import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
 } from "../../src/compiler/pipeline/compile-program.ts";
+import { embeddedCompilerOptions } from "../../src/compiler/pipeline/embedded-compiler-options.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 import { ensureNativeArtifacts } from "../../src/runtime-build.ts";
 import {
@@ -25,12 +26,12 @@ const compilerBake = {
 	entrypoint: compilerEntrypoint,
 	bake: () =>
 		compileEntrypointToBuffer(compilerEntrypoint, {
-			intrinsicGlobalReads: true,
+			...embeddedCompilerOptions(compilerSourceDirectory),
 			stripTypes: stripCompactTypes,
 		}),
 	bakeProgram: () =>
 		compileEntrypoint(compilerEntrypoint, {
-			intrinsicGlobalReads: true,
+			...embeddedCompilerOptions(compilerSourceDirectory),
 			stripTypes: stripCompactTypes,
 		}),
 };

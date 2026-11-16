@@ -17,6 +17,8 @@ export type CompileEntrypointToBufferPhase = CompileEntrypointPhase | "serialize
 export interface CompileEntrypointOptions extends BuildModuleGraphOptions {
 	/** Only for embedded engine code; user programs must resolve mutable realm globals. */
 	intrinsicGlobalReads?: boolean;
+	/** Return this module export to a synchronous embedding caller after evaluation. */
+	entryResultExport?: string;
 	enforcePolicies?: boolean;
 	optimization?: CompileCoreOptions["optimization"];
 	coreVerification?: CompileCoreOptions["coreVerification"];

@@ -19,6 +19,7 @@ import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { embeddedCompilerOptions } from "../src/compiler/pipeline/embedded-compiler-options.ts";
 import { relativeImportCone } from "../src/source-import-cone.ts";
 
 /**
@@ -44,6 +45,16 @@ function compilerFixture(meriyah = "7.1.0"): {
 	);
 	writeFileSync(path.join(sourceDirectory, "helper.ts"), "export const helper = 1;\n");
 	writeFileSync(stripper, "export const stripCompactTypes = (source) => source;\n");
+	const hostOptions = path.join(
+		sourceDirectory,
+		"compiler/pipeline/embedded-compiler-options.ts",
+	);
+	mkdirSync(path.dirname(hostOptions), { recursive: true });
+	writeFileSync(hostOptions, "export const embeddedCompilerOptions = {};\n");
+	writeFileSync(
+		path.join(sourceDirectory, "compiler/frontend/parser-clone.ts"),
+		"export const cloneParserData = value => value;\n",
+	);
 	writeFileSync(
 		path.join(root, "package.json"),
 		JSON.stringify({ dependencies: { meriyah } }),
@@ -52,6 +63,31 @@ function compilerFixture(meriyah = "7.1.0"): {
 }
 
 describe("compiler wire provisioning", () => {
+	it.each([
+		"compiler/pipeline/embedded-compiler-options.ts",
+		"compiler/frontend/parser-clone.ts",
+	])("invalidates cached wire when the private host dependency changes: %s", (file) => {
+		const fixture = compilerFixture();
+		try {
+			let count = 0;
+			const input = {
+				kind: "source" as const,
+				sourceDirectory: fixture.sourceDirectory,
+				entrypoint: fixture.entrypoint,
+				cacheRoot: path.join(fixture.root, "cache"),
+				bake: () => new Uint8Array([++count]),
+			};
+			const first = ensureCompilerWire(input);
+			writeFileSync(
+				path.join(fixture.sourceDirectory, file),
+				"export const changed = true;\n",
+			);
+			expect(ensureCompilerWire(input)).not.toBe(first);
+			expect(count).toBe(2);
+		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
 	it("uses the configured user cache for source bakes without an explicit cache root", () => {
 		const fixture = compilerFixture();
 		const cacheDirectory = path.join(fixture.root, "user-cache");
@@ -265,6 +301,8 @@ describe("compiler wire provisioning", () => {
 		const entrypoints = [
 			"compiler/pipeline/eval-compiler-entry.mts",
 			"compiler/frontend/compact-type-strip.ts",
+			"compiler/pipeline/embedded-compiler-options.ts",
+			"compiler/frontend/parser-clone.ts",
 		];
 		const manifest = path.join(
 			mkdtempSync(path.join(os.tmpdir(), "mal-compiler-cone-")),
@@ -274,8 +312,9 @@ describe("compiler wire provisioning", () => {
 			const keyed = new Set(
 				relativeImportCone(sourceDirectory, entrypoints, manifest).map(([file]) => file),
 			);
-			const loaded = entrypoints.flatMap((entrypoint) => [
+			const loaded = entrypoints.slice(0, 2).flatMap((entrypoint) => [
 				...buildModuleGraph(path.join(sourceDirectory, entrypoint), {
+					...embeddedCompilerOptions(sourceDirectory),
 					stripTypes: stripCompactTypes,
 					entryGoal: "module",
 				}).modules.values(),

@@ -360,3 +360,4 @@ tests/native/eval-persistent-records.test.ts
 tests/native/eval-ordered-records.test.ts
 tests/native/eval-local-references.test.ts
 tests/native/global-lexical-records.test.ts
+tests/native/eval-private-bootstrap.test.ts

@@ -30,6 +30,7 @@ export function compileEntrypoint(
 	const facts = analysis.facts;
 	const core = lowerSemanticProgramToCore(analysis.semantic, {
 		intrinsicGlobalReads: options.intrinsicGlobalReads,
+		entryResultExport: options.entryResultExport,
 		facts,
 		runPhase,
 	});

@@ -20,7 +20,10 @@ export function compileEntrypointToBuffer(
 	const runtime = compileSemanticProgramToRuntimeImage(semantic, {
 		privateRestIteration: lowerPrivateRestIteration,
 		mappedFunctionArrayCallHints,
-		semanticLowering: { intrinsicGlobalReads: options.intrinsicGlobalReads },
+		semanticLowering: {
+			intrinsicGlobalReads: options.intrinsicGlobalReads,
+			entryResultExport: options.entryResultExport,
+		},
 		facts,
 		optimization: options.optimization,
 		coreVerification: options.coreVerification,

@@ -124,6 +124,7 @@ interface CoreFrontendContext {
 	/** Shared immutable analysis seed and program summaries. */
 	facts: CompilerProgramFacts;
 	intrinsicGlobalReads: boolean;
+	entryResultExport?: string;
 
 	/**
 	 * Eval-completion mode: compile the entry (Script) so it returns its
@@ -876,6 +877,7 @@ export function constructSemanticProgramCore(
 		directEvalContext?: DirectEvalContext;
 		facts?: CompilerProgramFacts;
 		intrinsicGlobalReads?: boolean;
+		entryResultExport?: string;
 		moduleExports?: "all" | ReadonlySet<string>;
 		packageRoot?: PackageRootLowering;
 	} = {},
@@ -891,6 +893,7 @@ export function constructSemanticProgramCore(
 		core: new CoreProgram(coreOpcodeRegistry),
 		facts: options.facts ?? conservativeCompilerProgramFacts(),
 		intrinsicGlobalReads: options.intrinsicGlobalReads ?? false,
+		entryResultExport: options.entryResultExport,
 		evalCompletion: options.evalCompletion ?? false,
 		evalDirect: options.evalDirect ?? false,
 		withEntries: new Map(),
@@ -1050,6 +1053,12 @@ export function constructSemanticProgramCore(
 
 	if (!initFile) {
 		throw new Error(`Could not find entrypoint file ${program.semantic.entrypointPath}`);
+	}
+	if (
+		program.entryResultExport !== undefined &&
+		(initFile.type !== "module" || initFile.commonjs)
+	) {
+		throw new Error("An entry result export requires an ECMAScript module");
 	}
 
 	const evaluationOrder = semantic.graph?.evaluationOrder ?? [initFile.path];
@@ -2473,6 +2482,12 @@ function emitModuleInstantiation(
 }
 
 function compileModuleEntry(program: CoreFrontendContext, file: SemanticFile): void {
+	if (
+		program.entryResultExport !== undefined &&
+		program.moduleEvaluationPlan.asynchronous.has(file.path)
+	) {
+		throw new Error("An entry result export requires synchronous module evaluation");
+	}
 	const fn: CoreFrontendFunction = {
 		semanticFile: file,
 		functionIndex: program.nextFunctionIndex,
@@ -2500,6 +2515,19 @@ function compileModuleEntry(program: CoreFrontendContext, file: SemanticFile): v
 		fn.isAsync ? -1 : -2,
 	);
 	if (fn.isAsync) compileAwaitIfDefined(program, fn, cursor, evaluation);
+	if (program.entryResultExport !== undefined) {
+		const exported = program.moduleNamespaces
+			.get(file.path)
+			?.find((entry) => entry.name === program.entryResultExport);
+		if (exported === undefined)
+			throw new Error(`Missing entry result export: ${program.entryResultExport}`);
+		const result = loadRegisterFromLocation(
+			fn,
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, exported.exporter),
+		);
+		emitReturn(program, fn, cursor.block, result);
+	}
 	endFunction(program, fn);
 }
 

@@ -16,6 +16,7 @@ import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-program.ts";
+import { embeddedCompilerOptions } from "../src/compiler/pipeline/embedded-compiler-options.ts";
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
 import { buildLocalBinary } from "../src/local-build.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
@@ -41,7 +42,7 @@ const context = resolveNativeBuildContext({
 			compileEntrypointToBuffer(
 				path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
 				{
-					intrinsicGlobalReads: true,
+					...embeddedCompilerOptions(path.resolve("src")),
 					stripTypes: stripCompactTypes,
 				},
 			),

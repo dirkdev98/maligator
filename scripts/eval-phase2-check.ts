@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-program.ts";
+import { embeddedCompilerOptions } from "../src/compiler/pipeline/embedded-compiler-options.ts";
 import { buildLoadDriver } from "../src/local-build.ts";
 
 /**
@@ -123,7 +124,7 @@ const driver = buildLoadDriver(false, {
 		compileEntrypointToBuffer(
 			path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
 			{
-				intrinsicGlobalReads: true,
+				...embeddedCompilerOptions(path.resolve("src")),
 				stripTypes: stripCompactTypes,
 			},
 		),

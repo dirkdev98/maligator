@@ -220,7 +220,7 @@ export function compilePreparedSourceToBuffer(
  * input. This is the trimmed compiler entry that runtime `eval` runs: the script
  * front end (no module graph / bundler / native-C backend / disk build), then
  * lower + serialize. The same function is what gets self-hosted and exposed to
- * the running VM as `__compile` (eval Phase 3); on Node it is also the
+ * the running VM through the embedded module entry's return value; on Node it is also the
  * programmatic equivalent of `index.ts --serialize` for a source string.
  *
  * Script mode (indirect eval / Function body): no ESM import/export. Strict

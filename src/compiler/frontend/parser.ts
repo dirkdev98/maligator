@@ -16,48 +16,6 @@ const MERIYAH_OPTIONS = {
 	validateRegex: true,
 };
 
-function cloneParserData<Value>(value: Value): Value {
-	if (Array.isArray(value)) {
-		const source = value as Array<unknown>;
-		const clone = new Array<unknown>(source.length);
-		for (let i = 0; i < source.length; i++) clone[i] = cloneParserData(source[i]);
-		return clone as Value;
-	}
-	if (value === null || typeof value !== "object") return value;
-	const clone: Record<string, unknown> = {};
-	for (const key of Object.keys(value)) {
-		clone[key] = cloneParserData((value as Record<string, unknown>)[key]);
-	}
-	return clone as Value;
-}
-
-function parseWithMeriyah(
-	txt: string,
-	options: Parameters<typeof meriyahParse>[1],
-): ESTree.Program {
-	if (typeof globalThis.structuredClone === "function") {
-		return meriyahParse(txt, options);
-	}
-
-	// Meriyah 7.3.2 clones plain AST leaves through this host global, while the
-	// self-hosted compiler must also run in a bare engine with no Web/Node surface.
-	const descriptor = Object.getOwnPropertyDescriptor(globalThis, "structuredClone");
-	Object.defineProperty(globalThis, "structuredClone", {
-		configurable: true,
-		value: cloneParserData,
-		writable: true,
-	});
-	try {
-		return meriyahParse(txt, options);
-	} finally {
-		if (descriptor === undefined) {
-			Reflect.deleteProperty(globalThis, "structuredClone");
-		} else {
-			Object.defineProperty(globalThis, "structuredClone", descriptor);
-		}
-	}
-}
-
 function normalizeAnnexBFunctions(program: ESTree.Program): void {
 	traverseEstree(program, (node) => {
 		const statements =
@@ -226,7 +184,7 @@ function contextualEvalProgram(
 		};
 	}
 
-	const wrapped = parseWithMeriyah(`${prefix}${txt}${suffix}`, {
+	const wrapped = meriyahParse(`${prefix}${txt}${suffix}`, {
 		...MERIYAH_OPTIONS,
 		impliedStrict: strict,
 	});
@@ -277,7 +235,7 @@ export function parseScript(
 			directEvalContext.privateNames.length > 0);
 	const ast = contextual
 		? contextualEvalProgram(txt, strict, directEvalContext)
-		: parseWithMeriyah(txt, {
+		: meriyahParse(txt, {
 				...MERIYAH_OPTIONS,
 				impliedStrict: strict,
 				// Enforce static-semantic early errors so invalid source is rejected
@@ -306,7 +264,7 @@ export function parseModule(txt: string): Pick<SemanticFile, "type" | "strict" |
 		type: "module" as const,
 		strict: true,
 
-		ast: parseWithMeriyah(txt, {
+		ast: meriyahParse(txt, {
 			sourceType: "module",
 			next: true,
 			loc: true,

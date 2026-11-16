@@ -44,6 +44,7 @@ export interface CompileCoreOptions {
 	coreOptimizationBenchmarkAblation?: CoreOptimizationBenchmarkAblation;
 	semanticLowering?: {
 		intrinsicGlobalReads?: boolean;
+		entryResultExport?: string;
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
 		evalScript?: boolean;

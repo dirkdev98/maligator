@@ -498,11 +498,6 @@ contracts or investigates costs still visible after the string follow-ups.
       descending shared-root-cause order. Keep each repaired cluster in the curated
       regression manifest.
 
-- [ ] Keep baked compiler registration private from the application global object.
-      First eval, Function construction and script compilation currently publish and
-      retrieve `globalThis.__compile`, so global hardening or an accessor can block
-      or intercept initialization. Preserve cold and warm compilation across realms.
-
 - [ ] Preserve iterator [[Done]] semantics in positional destructuring: after a step
       reports done, later elements and a rest element still call `next()`. Keep abrupt
       completion and iterator closing correct around exhausted iterators. A frontend

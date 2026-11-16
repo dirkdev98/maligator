@@ -9,6 +9,7 @@ import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
 } from "../../src/compiler/pipeline/compile-program.ts";
+import { embeddedCompilerOptions } from "../../src/compiler/pipeline/embedded-compiler-options.ts";
 import { BIGINT_MAX_BITS } from "../../src/compiler/shared/bigint-digits.ts";
 import { knownBuiltinErrorNames } from "../../src/compiler/shared/known-builtin-errors.ts";
 import {
@@ -100,12 +101,12 @@ describe("wire loader side-data validation", () => {
 			entrypoint,
 			bake: () =>
 				compileEntrypointToBuffer(entrypoint, {
-					intrinsicGlobalReads: true,
+					...embeddedCompilerOptions(sourceDirectory),
 					stripTypes: stripCompactTypes,
 				}),
 			bakeProgram: () =>
 				compileEntrypoint(entrypoint, {
-					intrinsicGlobalReads: true,
+					...embeddedCompilerOptions(sourceDirectory),
 					stripTypes: stripCompactTypes,
 				}),
 		});

@@ -9,6 +9,7 @@ import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
 } from "../src/compiler/pipeline/compile-program.ts";
+import { embeddedCompilerOptions } from "../src/compiler/pipeline/embedded-compiler-options.ts";
 import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program-image.ts";
 import { resolvePathExecutable } from "../src/rust-build.ts";
 import {
@@ -203,7 +204,7 @@ writeFileSync(
 	compileEntrypointToBuffer(
 		path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
 		{
-			intrinsicGlobalReads: true,
+			...embeddedCompilerOptions(path.resolve("src")),
 			stripTypes: stripCompactTypes,
 		},
 	),

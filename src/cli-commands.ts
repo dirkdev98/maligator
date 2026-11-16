@@ -83,6 +83,7 @@ import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
 } from "./compiler/pipeline/compile-program.ts";
+import { embeddedCompilerOptions } from "./compiler/pipeline/embedded-compiler-options.ts";
 import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { emitWorkerImageTranslationUnits } from "./compiler/target/emit-worker-images.ts";
 import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
@@ -1029,12 +1030,12 @@ function prepareCommandState(
 						entrypoint: evalCompiler.entrypoint,
 						bake: () =>
 							compileEntrypointToBuffer(evalCompiler.entrypoint, {
-								intrinsicGlobalReads: true,
+								...embeddedCompilerOptions(evalCompiler.sourceDirectory),
 								stripTypes: context.stripTypes,
 							}),
 						bakeProgram: () =>
 							compileEntrypoint(evalCompiler.entrypoint, {
-								intrinsicGlobalReads: true,
+								...embeddedCompilerOptions(evalCompiler.sourceDirectory),
 								stripTypes: context.stripTypes,
 							}),
 					}
@@ -2130,12 +2131,12 @@ function buildIsolatedTestRunner(
 					entrypoint: evalCompiler.entrypoint,
 					bake: () =>
 						compileEntrypointToBuffer(evalCompiler.entrypoint, {
-							intrinsicGlobalReads: true,
+							...embeddedCompilerOptions(evalCompiler.sourceDirectory),
 							stripTypes: context.stripTypes,
 						}),
 					bakeProgram: () =>
 						compileEntrypoint(evalCompiler.entrypoint, {
-							intrinsicGlobalReads: true,
+							...embeddedCompilerOptions(evalCompiler.sourceDirectory),
 							stripTypes: context.stripTypes,
 						}),
 				}
@@ -2397,12 +2398,12 @@ async function executeProfiledTests(
 					entrypoint: evalCompiler.entrypoint,
 					bake: () =>
 						compileEntrypointToBuffer(evalCompiler.entrypoint, {
-							intrinsicGlobalReads: true,
+							...embeddedCompilerOptions(evalCompiler.sourceDirectory),
 							stripTypes: context.stripTypes,
 						}),
 					bakeProgram: () =>
 						compileEntrypoint(evalCompiler.entrypoint, {
-							intrinsicGlobalReads: true,
+							...embeddedCompilerOptions(evalCompiler.sourceDirectory),
 							stripTypes: context.stripTypes,
 						}),
 				}

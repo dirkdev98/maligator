@@ -243,6 +243,14 @@ shadowed by a later script's lexical declaration. Restricted global properties s
 reject that declaration. Adding a lexical binding invalidates cached object-record
 reads, and each realm keeps its own registry.
 
+The embedded compiler module returns its compiler export directly to the VM after
+synchronous evaluation. The VM roots that callable and its captured storage. The
+handoff uses no application-global property, so global extensibility and properties
+cannot intercept it.
+Meriyah's cloning dependency is bound lexically to a private helper during baking.
+The bake identity includes that helper and the binding recipe, so neither depends
+on installing a property on the application global object.
+
 Private syntax state travels as an eval-entry argument, outside name resolution, so
 proxies cannot observe bookkeeping keys. Nested eval and escaped closures retain the
 ordered records. A function created by eval owns its variable record, and parameter

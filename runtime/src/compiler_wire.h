@@ -9,7 +9,7 @@
  * AOT-compiled by maligator into the program-image-codec.ts wire format and `#embed`ded
  * here at build time (src/compiler-bake.ts generates compiler.malw before the
  * runtime archive build). The eval intrinsic splices this program on first use and runs
- * its top level to publish `__compile`. Returns the embedded bytes and writes
+ * its entry to receive the compiler closure privately. Returns the embedded bytes and writes
  * the length to *len.
  */
 const u8 *mal_compiler_wire_bytes(usize *len);
