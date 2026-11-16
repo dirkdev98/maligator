@@ -285,6 +285,7 @@ tests/native/static-property-membership.test.ts
 tests/native/indexed-operand-facts.test.ts
 tests/native/native-fast-entry.test.ts
 tests/native/regexp-owned-scratch.test.ts
+tests/native/regexp-unicode-start.test.ts
 tests/native/regexp-result-storage.test.ts
 tests/native/regexp-span-continuation.test.ts
 tests/native/regexp-discarded-result.test.ts

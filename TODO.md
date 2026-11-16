@@ -372,12 +372,6 @@ contracts or investigates costs still visible after the string follow-ups.
       native wrapper function with its own `listener` property, and a hot `emit` costs
       about 3x Node in key conversion, the listener lookup and the generic call.
 
-- [ ] Add code-unit start predicates for UTF-16 and UCS-2 subjects in the pinned RegExp
-      backend; start anchors and ASCII subjects already skip impossible positions. Use
-      the existing mixed-text/search workloads and keep a change only with ordinary
-      first-pass/repeated-input gains and exact captures/UTF-16 semantics; do not bundle
-      speculative possessive rewrites.
-
 - [ ] Bound a later-preheader array-initialization experiment to existing
       constant/dominance facts and initialization-region fixtures. Reproduce the original
       multi-loop admission loss before changing it, then require useful

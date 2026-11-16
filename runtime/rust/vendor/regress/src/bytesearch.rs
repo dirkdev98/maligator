@@ -218,6 +218,10 @@ impl ByteBitmap {
         (self.0[byte as usize] & (1 << bit)) != 0
     }
 
+    pub(crate) fn is_ascii(&self) -> bool {
+        self.0[8..].iter().all(|&word| word == 0)
+    }
+
     /// Set a bit in this bitmap.
     #[inline(always)]
     pub fn set(&mut self, val: u8) {

@@ -186,6 +186,21 @@ pub enum StartPredicate {
     StartAnchored,
 }
 
+impl StartPredicate {
+    /// Only the first byte is needed for a conservative scalar-position filter.
+    pub(crate) fn first_byte_bitmap(&self) -> Option<ByteBitmap> {
+        let bytes: &[u8] = match self {
+            Self::ByteSet1(bytes) => bytes,
+            Self::ByteSet2(bytes) => bytes,
+            Self::ByteSet3(bytes) => bytes,
+            Self::ByteSeq(bytes) => bytes.needle().get(..1)?,
+            Self::ByteBracket(bitmap) => return Some(*bitmap),
+            Self::Arbitrary | Self::StartAnchored => return None,
+        };
+        Some(ByteBitmap::new(bytes))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CompiledRegex {
     // Sequence of instructions.

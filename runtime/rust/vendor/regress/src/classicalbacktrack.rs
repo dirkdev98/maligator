@@ -1259,6 +1259,66 @@ impl<Input: InputIndexer> BacktrackExecutor<'_, Input> {
             pos = inp.next_right_pos(pos)?;
         }
     }
+
+    fn next_match_with_scalar_predicate<const ASCII_ONLY: bool>(
+        &mut self,
+        mut pos: Input::Position,
+        next_start: &mut Option<Input::Position>,
+        bitmap: bytesearch::ByteBitmap,
+    ) -> Option<Match> {
+        let inp = self.input;
+        let mut unskipped_attempts = 0u8;
+        loop {
+            let mut next = pos;
+            let candidate = inp.next_right(&mut next)?.as_u32();
+            let admitted = if ASCII_ONLY {
+                candidate < 128 && bitmap.contains(candidate as u8)
+            } else {
+                bitmap.contains(crate::util::utf8_first_byte(candidate))
+            };
+            if admitted {
+                if let Some(end) = self.matcher.try_at_pos(inp, 0, pos, Forward::new()) {
+                    *next_start = if end != pos {
+                        Some(end)
+                    } else {
+                        inp.next_right_pos(end)
+                    };
+                    return Some(self.successful_match(pos, end));
+                }
+                unskipped_attempts += 1;
+                // A coarse predicate can admit every position in a subject. Bound
+                // its overhead before returning to the ordinary ordered search.
+                if unskipped_attempts == 8 {
+                    return self.next_match_with_prefix_search(
+                        next,
+                        next_start,
+                        &bytesearch::EmptyString {},
+                    );
+                }
+            } else {
+                unskipped_attempts = 0;
+            }
+            pos = next;
+        }
+    }
+
+    // Keep bitmap setup out of the common unpredicated dispatcher.
+    #[inline(never)]
+    fn next_match_with_wide_predicate(
+        &mut self,
+        pos: Input::Position,
+        next_start: &mut Option<Input::Position>,
+    ) -> Option<Match> {
+        match self.matcher.re.start_pred.first_byte_bitmap() {
+            Some(bitmap) if bitmap.is_ascii() => {
+                self.next_match_with_scalar_predicate::<true>(pos, next_start, bitmap)
+            }
+            Some(bitmap) => self.next_match_with_scalar_predicate::<false>(pos, next_start, bitmap),
+            None => {
+                self.next_match_with_prefix_search(pos, next_start, &bytesearch::EmptyString {})
+            }
+        }
+    }
 }
 
 impl<Input: InputIndexer> exec::MatchProducer for BacktrackExecutor<'_, Input> {
@@ -1276,16 +1336,15 @@ impl<Input: InputIndexer> exec::MatchProducer for BacktrackExecutor<'_, Input> {
         if self.at_start_only {
             return self.next_match_anchored(pos, next_start);
         }
-        // A start anchor holds in every encoding. Byte predicates hold UTF-8 first
-        // bytes, so only byte inputs can search with them; Maligator's byte inputs are
-        // ASCII, whose first byte is the code unit itself.
+        // Map decoded scalars through the same first-byte mapping as the predicate
+        // builder. InputIndexer preserves Unicode pairs and raw UCS-2 positions.
         match &self.matcher.re.start_pred {
             StartPredicate::StartAnchored => self.next_match_anchored(pos, next_start),
             StartPredicate::Arbitrary => {
                 self.next_match_with_prefix_search(pos, next_start, &bytesearch::EmptyString {})
             }
             _ if !Input::CODE_UNITS_ARE_BYTES => {
-                self.next_match_with_prefix_search(pos, next_start, &bytesearch::EmptyString {})
+                self.next_match_with_wide_predicate(pos, next_start)
             }
             _ => self.next_match_with_byte_predicate(pos, next_start),
         }

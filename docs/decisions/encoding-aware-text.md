@@ -101,6 +101,14 @@ through its parent. Its returned UTF-16 pointer is stable while the string is
 retained. Existing regular-expression and Unicode integrations can use that
 interface when they require contiguous UTF-16. Sequential consumers use segments.
 
+The RegExp backtracker skips impossible starts in wide input using the same
+first-byte bitmap derived from pattern characters. Unicode input decodes pairs;
+code-unit mode visits each unit, including lone surrogates. The bitmap is a
+necessary condition only: matching and capture offsets still use the original
+input positions. Sticky and anchored patterns retain their anchored search.
+After consecutive admitted positions fail without a skip, scanning resumes the
+ordinary search so a coarse predicate cannot add work across the whole subject.
+
 Allocation requests a later GC poll; it does not itself collect or invoke
 JavaScript. New retained edges use card/SATB publication, and representation
 changes preserve publication of removed parent/child edges. Concurrent tracing
