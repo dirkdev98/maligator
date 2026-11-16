@@ -125,12 +125,12 @@ test("indirect eval does NOT poison", () => {
 	expect(functionHasDirectEval(file, file.ast)).toBe(false);
 });
 
-test("a shadowing local `eval` is not direct eval", () => {
+test("an immutable ordinary local eval needs no direct-eval environment", () => {
 	const file = analyze(
 		`
 		function f() {
 			let x = 1;
-			var eval = function (s) { return s; };
+			const eval = function (s) { return s; };
 			eval("x");
 		}
 	`,
@@ -138,6 +138,33 @@ test("a shadowing local `eval` is not direct eval", () => {
 	);
 	const fn = findNode(file.ast, "FunctionDeclaration")!;
 	expect(functionHasDirectEval(file, fn)).toBe(false);
+});
+
+test.each([
+	"function f(eval) { const value = 1; return eval('value'); }",
+	"function f() { const eval = globalThis.eval; return eval('value'); }",
+	"function f() { let eval = source => source; eval = globalThis.eval; return eval('value'); }",
+	"function f() { const eval = () => 0; with (object) { return eval('value'); } }",
+	"const eval = () => 0; function f() { return eval('value'); }",
+	"function f(eval) { return eval('value')?.marker; }",
+])(
+	"retains direct-eval environments for a potentially intrinsic reference: %s",
+	(source) => {
+		const file = analyze(source, false);
+		const fn = findNode(file.ast, "FunctionDeclaration")!;
+		expect(functionHasDirectEval(file, fn)).toBe(true);
+		expect(file.directEvalCalls.size).toBe(1);
+	},
+);
+
+test.each([
+	"function f(eval) { return eval?.('value'); }",
+	"function f(eval) { return (0, eval)('value'); }",
+	"function f(eval) { return eval.call(null, 'value'); }",
+])("keeps a local indirect eval outside the caller environment: %s", (source) => {
+	const file = analyze(source, false);
+	expect(file.directEvalCalls.size).toBe(0);
+	expect(functionHasDirectEval(file, file.ast)).toBe(false);
 });
 
 test("a sibling's eval does not poison an unrelated function", () => {

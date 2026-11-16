@@ -230,6 +230,13 @@ accessors that share caller storage, checking TDZ and immutable writes at access
 Imported accessors follow exporter storage. Actual `with` records retain their entry's
 boxed object and apply unscopables; declarative records give calls an undefined receiver.
 
+A nonoptional bare `eval(...)` uses the selected callee's identity, including local
+aliases of intrinsic eval. Semantic analysis and lowering share the admitted call set,
+so caller storage and optimizer visibility agree. Callee and receiver are captured
+before arguments; ordinary replacements keep that reference. Optional calls, member
+calls and sequence callees remain indirect. An immutable local function can avoid the
+eval environment only when dynamic lookup and intervening activations cannot intercept it.
+
 Private syntax state travels as an eval-entry argument, outside name resolution, so
 proxies cannot observe bookkeeping keys. Nested eval and escaped closures retain the
 ordered records. A function created by eval owns its variable record, and parameter

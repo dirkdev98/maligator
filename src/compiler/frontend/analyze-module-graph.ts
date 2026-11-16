@@ -66,6 +66,7 @@ function analyzeModuleRecord(record: ModuleRecord): SemanticFile {
 		guardedArgumentsAccesses: new Set(),
 		lazyArgumentsBindings: new Set(),
 		hasDirectEval: new Set(),
+		directEvalCalls: new Set(),
 		directEvalVisibleBindings: new Set(),
 		directEvalVariableEnvironments: new Set(),
 		directEvalThisBindings: new Map(),

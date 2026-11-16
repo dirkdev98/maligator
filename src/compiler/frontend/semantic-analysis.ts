@@ -92,17 +92,15 @@ export interface SemanticFile {
 	lazyArgumentsBindings: Set<Binding>;
 
 	/**
-	 * Function-defining nodes (and the top-level Program) poisoned by a *direct*
-	 * eval — `eval(...)` resolving to the global eval, not a shadowing local —
-	 * anywhere in their lexical region. Direct eval can read and mutate every
-	 * binding in scope, so it makes that function's locals dynamically
-	 * addressable. The C3 rule disables escape / scalar-replacement /
-	 * region analysis for any function in this set. A nested direct eval also
-	 * poisons every enclosing function (it can reach their locals via the scope
-	 * chain). Indirect eval — `(0, eval)(...)`, `globalThis.eval(...)` — cannot see
-	 * locals and is deliberately NOT flagged. Query via `functionHasDirectEval`.
+	 * Function units whose lexical region contains a potentially intrinsic direct
+	 * eval. Such calls can read and mutate caller bindings, so source closure and
+	 * dynamically addressable storage must remain available. Nested direct eval
+	 * includes every enclosing function because it can reach their locals too.
+	 * Indirect calls cannot see caller locals. Query via `functionHasDirectEval`.
 	 */
 	hasDirectEval: Set<ESTree.Node>;
+	/** Calls requiring the intrinsic-identity check and shared caller bindings. */
+	directEvalCalls: Set<ESTree.CallExpression>;
 	/** Declared bindings exposed through live accessors to direct eval. */
 	directEvalVisibleBindings: Set<Binding>;
 	/** Function units whose own variable environment can receive sloppy eval vars. */
@@ -175,6 +173,7 @@ export interface Binding {
 
 interface SemanticAnalysisCandidates {
 	directEvalCalls: Array<ESTree.CallExpression>;
+	ordinaryEvalBindings: Set<Binding>;
 	hasImplicitArguments: boolean;
 }
 
@@ -299,6 +298,7 @@ export function analyzeSourceAndRunSemanticAnalysis(
 		guardedArgumentsAccesses: new Set(),
 		lazyArgumentsBindings: new Set(),
 		hasDirectEval: new Set(),
+		directEvalCalls: new Set(),
 		directEvalVisibleBindings: new Set(),
 		directEvalVariableEnvironments: new Set(),
 		directEvalThisBindings: new Map(),
@@ -351,6 +351,7 @@ function injectCommonJsBindings(file: SemanticFile) {
 export function analyzeFile(file: SemanticFile) {
 	const candidates: SemanticAnalysisCandidates = {
 		directEvalCalls: [],
+		ordinaryEvalBindings: new Set(),
 		hasImplicitArguments: false,
 	};
 	createScopesFromNode(file.ast, file);
@@ -362,7 +363,9 @@ export function analyzeFile(file: SemanticFile) {
 	registerBindingUsage(file.ast, file, candidates);
 	for (const call of candidates.directEvalCalls) {
 		const callee = call.callee as unknown as ESTree.Identifier;
-		if (file.nodeToBinding.get(callee)?.undeclared) {
+		const binding = file.nodeToBinding.get(callee);
+		if (!binding || !isOrdinaryEvalReference(file, callee, binding, candidates)) {
+			file.directEvalCalls.add(call);
 			semanticAnalysisWorkCounts.directEvalCandidates++;
 			const hasImplicitArguments = detectDirectEval(call, file);
 			candidates.hasImplicitArguments ||= hasImplicitArguments;
@@ -375,6 +378,31 @@ export function analyzeFile(file: SemanticFile) {
 		classifyStaticArgumentsUsage(file);
 	}
 	calculateBindingScopedTo(file);
+}
+
+function isOrdinaryEvalReference(
+	file: SemanticFile,
+	callee: ESTree.Identifier,
+	binding: Binding,
+	candidates: SemanticAnalysisCandidates,
+): boolean {
+	if (!candidates.ordinaryEvalBindings.has(binding)) return false;
+	for (
+		let scope: Scope | null | undefined = file.nodeToScope.get(callee);
+		scope;
+		scope = scope.parent
+	) {
+		if (scope.bindings.includes(binding)) return true;
+		// An intervening activation can acquire an eval-var binding; `with` can
+		// select a different function even when the static binding is immutable.
+		if (
+			scope.dynamic ||
+			FUNCTION_UNIT_NODE_TYPES.has(scope.node.type) ||
+			directEvalVariableScope(scope) === scope
+		)
+			return false;
+	}
+	return false;
 }
 
 /**
@@ -392,12 +420,7 @@ export const FUNCTION_UNIT_NODE_TYPES = new Set<ESTree.Node["type"]>([
 	"PropertyDefinition",
 ]);
 
-/**
- * Flag every function (and the Program) whose lexical region contains a direct
- * eval, populating `file.hasDirectEval`. See the `hasDirectEval` field doc for
- * the rationale; relies on `registerBindingUsage` having resolved the callee
- * binding first (a global `eval` resolves to an `undeclared` binding).
- */
+/** Parameter expressions and function bodies can own distinct eval-var records. */
 export function directEvalVariableScope(
 	scope: Scope | null | undefined,
 ): Scope | undefined {
@@ -1778,6 +1801,20 @@ function registerBindingUsage(
 	const scope = file.nodeToScope.get(node);
 	if (!scope) {
 		return;
+	}
+
+	if (node.type === "VariableDeclaration" && node.kind === "const") {
+		for (const declaration of node.declarations) {
+			if (
+				declaration.id.type === "Identifier" &&
+				declaration.id.name === "eval" &&
+				(declaration.init?.type === "FunctionExpression" ||
+					declaration.init?.type === "ArrowFunctionExpression")
+			) {
+				const binding = file.nodeToBinding.get(declaration.id);
+				if (binding) candidates.ordinaryEvalBindings.add(binding);
+			}
+		}
 	}
 
 	if (node.type === "CallExpression" && !node.optional) {

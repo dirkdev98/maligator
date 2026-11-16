@@ -11773,6 +11773,9 @@ function compileChainElement(
 		if (calleeNode.type === "Super") {
 			return compileSuperCall(program, fn, cursor, node);
 		}
+		if (fn.semanticFile.directEvalCalls.has(node) && node.arguments.length > 0) {
+			return compileDirectEval(program, fn, cursor, node);
+		}
 		let callee: number;
 		let thisRegister: number;
 		if (calleeNode.type === "MemberExpression") {
@@ -11820,6 +11823,16 @@ function compileChainElement(
 					});
 				}
 			}
+		} else if (
+			calleeNode.type === "Identifier" &&
+			identifierUsesDynamicEnvironment(program, fn, calleeNode)
+		) {
+			({ callee, thisRegister } = compileWithDynamicCallee(
+				program,
+				fn,
+				cursor,
+				calleeNode,
+			));
 		} else if (isChainMemberCallee(calleeNode)) {
 			({ callee, thisRegister } = compileChainMemberCallee(
 				program,
@@ -16031,9 +16044,7 @@ function compileCallValue(
 	// The intrinsic preserves the caller's environment records while the runtime
 	// callee check keeps an overridden eval an ordinary call.
 	if (
-		calleeNode.type === "Identifier" &&
-		calleeNode.name === "eval" &&
-		(fn.semanticFile.nodeToBinding.get(calleeNode)?.undeclared ?? false) &&
+		fn.semanticFile.directEvalCalls.has(callExpression) &&
 		callExpression.arguments.length > 0
 	) {
 		return compileDirectEval(program, fn, cursor, callExpression);

@@ -544,10 +544,6 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Eval correctness
 
-- [ ] Recognize direct eval through a locally bound identifier named `eval` when its
-      selected callee is the intrinsic. Preserve ordinary replacement calls and their
-      receiver. Script-global declaration tracking remains in its correctness cluster.
-
 - [ ] A static `require("x")` ignores a reassigned `require` binding and loads the real
       module, where Node calls the replacement.
 
