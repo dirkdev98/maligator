@@ -1,14 +1,14 @@
 {
   "sha": "225d9c898829cd4e88a38c3605c05eba2d3730b6",
   "summary": {
-    "FAILED": 612,
-    "PASSED": 53164
+    "FAILED": 604,
+    "PASSED": 53172
   },
   "skips": {},
   "code": {
     "compiledFiles": 94561,
-    "functionCount": 3004814,
-    "instructionCount": 109405555
+    "functionCount": 3004852,
+    "instructionCount": 109475671
   },
   "results": {
     "test/annexB/built-ins/Array/from/iterator-method-emulates-undefined.js": "FAILED",
@@ -13385,7 +13385,7 @@
     "test/staging/sm/lexical-environment/unscopables-basics.js": "PASSED",
     "test/staging/sm/lexical-environment/unscopables-getters.js": "PASSED",
     "test/staging/sm/lexical-environment/unscopables-mutation-frozen.js": "PASSED",
-    "test/staging/sm/lexical-environment/var-in-catch-body-annex-b-eval.js": "FAILED",
+    "test/staging/sm/lexical-environment/var-in-catch-body-annex-b-eval.js": "PASSED",
     "test/staging/sm/misc/builtin-methods-reject-null-undefined-this.js": "PASSED",
     "test/staging/sm/misc/function-definition-eval.js": "PASSED",
     "test/staging/sm/misc/line-paragraph-separator-parse-as-lineterminator.js": "PASSED",
@@ -23690,8 +23690,8 @@
     "test/language/global-code/export.js": "PASSED",
     "test/language/global-code/invalid-private-names-member-expression-bad-reference.js": "PASSED",
     "test/language/global-code/return.js": "PASSED",
-    "test/language/global-code/script-decl-func.js": "FAILED",
-    "test/language/global-code/script-decl-lex-var-declared-via-eval.js": "FAILED",
+    "test/language/global-code/script-decl-func.js": "PASSED",
+    "test/language/global-code/script-decl-lex-var-declared-via-eval.js": "PASSED",
     "test/language/global-code/script-decl-var-err.js": "PASSED",
     "test/language/global-code/super-prop-arrow.js": "PASSED",
     "test/language/global-code/unscopables-ignored.js": "PASSED",
@@ -27037,7 +27037,7 @@
     "test/annexB/language/eval-code/direct/global-switch-dflt-eval-global-existing-var-no-init.js": "PASSED",
     "test/annexB/language/eval-code/direct/global-switch-dflt-eval-global-skip-early-err-block.js": "PASSED",
     "test/annexB/language/eval-code/direct/global-switch-dflt-eval-global-skip-early-err-switch.js": "PASSED",
-    "test/annexB/language/eval-code/direct/script-decl-lex-no-collision.js": "FAILED",
+    "test/annexB/language/eval-code/direct/script-decl-lex-no-collision.js": "PASSED",
     "test/annexB/language/eval-code/indirect/global-block-decl-eval-global-block-scoping.js": "PASSED",
     "test/annexB/language/eval-code/indirect/global-block-decl-eval-global-existing-fn-update.js": "PASSED",
     "test/annexB/language/eval-code/indirect/global-block-decl-eval-global-existing-var-no-init.js": "PASSED",
@@ -34233,7 +34233,7 @@
     "test/language/eval-code/direct/gen-meth-a-preceding-parameter-is-named-arguments-declare-arguments.js": "PASSED",
     "test/language/eval-code/direct/gen-meth-fn-body-cntns-arguments-lex-bind-declare-arguments.js": "PASSED",
     "test/language/eval-code/direct/gen-meth-no-pre-existing-arguments-bindings-are-present-declare-arguments.js": "PASSED",
-    "test/language/eval-code/direct/global-env-rec-with.js": "FAILED",
+    "test/language/eval-code/direct/global-env-rec-with.js": "PASSED",
     "test/language/eval-code/direct/lex-env-distinct-const.js": "PASSED",
     "test/language/eval-code/direct/lex-env-no-init-const.js": "PASSED",
     "test/language/eval-code/direct/meth-a-preceding-parameter-is-named-arguments-declare-arguments-and-assign.js": "PASSED",
@@ -37136,7 +37136,7 @@
     "test/language/global-code/script-decl-func-dups.js": "PASSED",
     "test/language/global-code/script-decl-lex-deletion.js": "PASSED",
     "test/language/global-code/script-decl-lex-var.js": "PASSED",
-    "test/language/global-code/script-decl-var.js": "FAILED",
+    "test/language/global-code/script-decl-var.js": "PASSED",
     "test/language/global-code/super-prop.js": "PASSED",
     "test/language/global-code/yield-non-strict.js": "PASSED",
     "test/language/identifier-resolution/S10.2.2_A1_T3.js": "PASSED",
@@ -50579,7 +50579,7 @@
     "test/language/global-code/new.target-arrow.js": "PASSED",
     "test/language/global-code/script-decl-func-err-non-configurable.js": "PASSED",
     "test/language/global-code/script-decl-lex-lex.js": "PASSED",
-    "test/language/global-code/script-decl-lex.js": "FAILED",
+    "test/language/global-code/script-decl-lex.js": "PASSED",
     "test/language/global-code/super-call-arrow.js": "PASSED",
     "test/language/global-code/switch-case-decl-strict.js": "PASSED",
     "test/language/global-code/yield-strict.js": "PASSED",
@@ -53706,7 +53706,7 @@
     "test/staging/sm/generators/yield-iterator-close.js": "PASSED",
     "test/staging/sm/generators/yield-star-throw-htmldda.js": "FAILED",
     "test/staging/sm/global/decodeURI-decodes-FFFE-FFFF.js": "PASSED",
-    "test/staging/sm/global/eval-02.js": "FAILED",
+    "test/staging/sm/global/eval-02.js": "PASSED",
     "test/staging/sm/global/globalThis-enumeration.js": "PASSED",
     "test/staging/sm/global/parseInt-default-to-decimal.js": "PASSED",
     "test/staging/sm/lexical-environment/block-scoped-functions-annex-b-if.js": "PASSED",
