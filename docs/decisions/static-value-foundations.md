@@ -1520,7 +1520,10 @@ their field reads and dependent computations with each producer. Inlining can le
 such a consumer after a join; sole incoming transfers can execute its first closed
 prefix before joining the observed field values. This preserves getter and coercion
 order without replaying producer effects or crossing a handler. Delayed count and
-indexed observations retain one producer for native snapshot transport.
+indexed observations retain one producer for native snapshot transport. Multiple
+observations also retain one producer. Length followed by iteration materializes the
+entries array; producer-only guarding does not remove that allocation or its protocol
+work. Expanding this boundary needs a consumer that benefits after those costs.
 Noncoercing Number predicates, ordinary `Date.now` calls and Number-input `Date.UTC`
 calls also use this guard with multiple realms enabled. UTC permission uses replayable
 local SSA facts for the consumed arguments; contextual field and global claims do not

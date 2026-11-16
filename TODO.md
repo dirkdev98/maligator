@@ -156,12 +156,7 @@ These levels are cumulative facts consumed by one optimizer, not separate pipeli
 Runtime eval may remove source closure without invalidating authority closure.
 
 - [ ] Extend guarded primordial consumers beyond the current Object, Date, Math and
-      primitive-conversion admissions. `Object.entries` observations beyond a single
-      direct iterator or sole immediate `.length` or indexed read retain their loaded
-      producer. Delayed and multiple observations already have native snapshots; extend
-      guarded transport without losing those consumers or their allocation savings.
-      Closed pair fields already project from rooted snapshot slots across guarded
-      producer joins and inlined wrappers.
+      primitive-conversion admissions.
       `Array.from` consumers beyond a sole direct iterator and constructions keep their
       loaded form because entry snapshots and typed array regions consume it. Private
       record columns follow bounded alternative `Array.from` producers, including
