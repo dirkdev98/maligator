@@ -2657,17 +2657,12 @@ function emitDirectEvalVarDeclarations(
 		program.directEvalPersistentScopeBinding,
 	);
 	for (const name of names) {
-		const base = nextCoreVariable(fn);
-		cursor.block.emitter.emit({
-			type: "withResolveBase",
-			registers: [base],
-			nameStringIndex: getOrCreateStringConstant(program, name),
-		});
+		const key = compileStaticString(program, fn, cursor, name);
 		const alreadyPersistent = nextCoreVariable(fn);
 		cursor.block.emitter.emit({
 			type: "binary",
-			registers: [alreadyPersistent, base, persistent],
-			operator: "===",
+			registers: [alreadyPersistent, key, persistent],
+			operator: "in",
 		});
 		const skip: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 			type: "jumpIf",
@@ -6679,7 +6674,10 @@ function compileStaticIdentifierTarget(
 		return;
 	}
 
-	if (binding.undeclared && !compilerPrivateIntrinsics.has(binding.name)) {
+	if (
+		(binding.undeclared || isDirectEvalVarBindingValue(program, fn, binding)) &&
+		!compilerPrivateIntrinsics.has(binding.name)
+	) {
 		// A statically-undeclared name can still resolve through the global object's
 		// Object Environment Record. The runtime store checks whether the property
 		// exists and throws for an actually-unresolvable strict assignment.
@@ -14595,21 +14593,30 @@ function inheritedContextForDirectEval(
 	let unit: Scope | null | undefined = callScope;
 	while (unit && !FUNCTION_UNIT_NODE_TYPES.has(unit.node.type)) unit = unit.parent;
 	const varConflictNames = new Set(
-		program.evalDirect ? program.directEvalContext.varConflictNames : [],
+		program.evalDirect && unit?.node.type === "Program"
+			? program.directEvalContext.varConflictNames
+			: [],
 	);
 	const varEnvironmentNames = new Set(
-		program.evalDirect ? program.directEvalContext.varEnvironmentNames : [],
+		program.evalDirect && unit?.node.type === "Program"
+			? program.directEvalContext.varEnvironmentNames
+			: [],
 	);
-	for (const binding of visibleBindingsForDirectEval(program, fn, callNode).values()) {
-		if (binding.kind !== "var" || binding.undeclared) continue;
-		const ownerScope = fn.semanticFile.scopes.find((scope) =>
-			scope.bindings.includes(binding),
-		);
-		let ownerUnit: Scope | null | undefined = ownerScope;
+	for (const scope of fn.semanticFile.scopes) {
+		let ownerUnit: Scope | null | undefined = scope;
 		while (ownerUnit && !FUNCTION_UNIT_NODE_TYPES.has(ownerUnit.node.type)) {
 			ownerUnit = ownerUnit.parent;
 		}
-		if (ownerUnit === unit) varEnvironmentNames.add(binding.name);
+		if (ownerUnit !== unit) continue;
+		for (const binding of scope.bindings) {
+			if (
+				binding.kind === "var" &&
+				!binding.undeclared &&
+				!isDirectEvalVarBindingValue(program, fn, binding)
+			) {
+				varEnvironmentNames.add(binding.name);
+			}
+		}
 	}
 	if (
 		fn.inParameterExpression &&
@@ -14792,8 +14799,15 @@ function ensureDirectEvalPersistentScope(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	cursor: CoreFrontendCursor,
+	callNode: ESTree.CallExpression,
 ): number {
-	if (program.evalDirect && program.directEvalPersistentScopeBinding) {
+	let unit: Scope | null | undefined = fn.semanticFile.nodeToScope.get(callNode);
+	while (unit && !FUNCTION_UNIT_NODE_TYPES.has(unit.node.type)) unit = unit.parent;
+	if (
+		program.evalDirect &&
+		unit?.node.type === "Program" &&
+		program.directEvalPersistentScopeBinding
+	) {
 		return loadCapturedBinding(
 			program,
 			fn,
@@ -14816,19 +14830,7 @@ function ensureDirectEvalPersistentScope(
 	return fn.directEvalPersistentScopeRegister;
 }
 
-/**
- * Compile a direct `eval(arg, ...)`: snapshot the caller's visible bindings into
- * a scope object, invoke the direct-eval intrinsic (which pushes the object as a
- * with-scope and compiles the source so free identifiers resolve against it),
- * then write the (possibly mutated) bindings back. Reuses the with machinery and
- * ordinary binding loads/stores — no new opcodes, no caller-env plumbing.
- *
- * A sibling `dirtyTracker` object, keyed the same as the scope, rides along so
- * the runtime's withSet can record real Set evidence per name (see
- * mal_vm_op_with_set) — global writeback below reads that instead of inferring
- * "was this assigned" from value equality, which is wrong for NaN (NaN !== NaN)
- * and would skip an actual same-value Set through an accessor's setter.
- */
+/** Share live declarative bindings and the activation's deletable eval-variable record. */
 function compileDirectEval(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -14989,7 +14991,7 @@ function compileDirectEvalCall(
 	const inheritedContext = inheritedContextForDirectEval(program, fn, callExpression);
 	const persistentScope =
 		!inheritedContext.varEnvironmentIsGlobal && isSloppyFunction(fn)
-			? ensureDirectEvalPersistentScope(program, fn, cursor)
+			? ensureDirectEvalPersistentScope(program, fn, cursor, callExpression)
 			: undefined;
 
 	const scopeObject = nextCoreVariable(fn);
@@ -15033,19 +15035,9 @@ function compileDirectEvalCall(
 		dirtyTracker,
 	);
 	for (const [name, binding] of bindings) {
+		// Deletable eval vars stay in their original record, including after deletion.
+		if (isDirectEvalVarBindingValue(program, fn, binding)) continue;
 		const key = compileStaticString(program, fn, cursor, name);
-		if (isDirectEvalVarBindingValue(program, fn, binding)) {
-			const value = nextCoreVariable(fn);
-			cursor.block.emitter.emit(
-				{
-					type: "withGet",
-					registers: [value],
-					nameStringIndex: getOrCreateStringConstant(program, name),
-				},
-				{ type: "storeProperty", registers: [scopeObject, key, value] },
-			);
-			continue;
-		}
 		const exporter = program.importBindingTargets.get(binding);
 		const location = getOrCreateBindingLocation(program, fn, exporter ?? binding);
 		const kinds: Array<"get" | "set"> =
@@ -15206,56 +15198,6 @@ function compileDirectEvalCall(
 			persistentScopeKey,
 		],
 	});
-
-	// Eval-created variable records retain their runtime declaration transport.
-	for (const [name, binding] of bindings) {
-		if (!isDirectEvalVarBindingValue(program, fn, binding)) continue;
-		const location = getOrCreateBindingLocation(program, fn, binding);
-		const key = compileStaticString(program, fn, cursor, name);
-		const value = nextCoreVariable(fn);
-		cursor.block.emitter.emit({
-			type: "loadProperty",
-			registers: [value, scopeObject, key],
-		});
-		if (location.type === "globalProperty") {
-			// Write back only when eval actually Set this binding, per the dirty
-			// tracker — not value equality (=== treats NaN as "changed" when it
-			// isn't, and treats a same-value Set through an accessor as "unchanged"
-			// when the setter must still run).
-			const dirty = nextCoreVariable(fn);
-			cursor.block.emitter.emit({
-				type: "loadProperty",
-				registers: [dirty, dirtyTracker, key],
-			});
-			const dirtyJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
-				type: "jumpIf",
-				registers: [dirty],
-				blocks: [-1],
-			};
-			const skipJump: Extract<CompilerInstruction, { type: "jump" }> = {
-				type: "jump",
-				blocks: [-1],
-			};
-			cursor.block.emitter.emit(dirtyJump, skipJump);
-
-			const writeBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
-			const writeIndex = fn.blocks.push(writeBlock) - 1;
-			storeRegisterAtLocation(writeBlock, location, value);
-			const joinJump: Extract<CompilerInstruction, { type: "jump" }> = {
-				type: "jump",
-				blocks: [-1],
-			};
-			writeBlock.emitter.emit(joinJump);
-
-			const joinIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
-			dirtyJump.blocks[0] = writeIndex;
-			skipJump.blocks[0] = joinIndex;
-			joinJump.blocks[0] = joinIndex;
-			cursor.block = fn.blocks[joinIndex]!;
-			continue;
-		}
-		storeRegisterAtLocation(cursor.block, location, value);
-	}
 
 	return result;
 }
@@ -16681,7 +16623,7 @@ function compileStaticIdentifier(
 		return loadRegisterFromLocation(fn, cursor.block, location);
 	}
 
-	if (binding.undeclared) {
+	if (binding.undeclared || isDirectEvalVarBindingValue(program, fn, binding)) {
 		// Bindings from earlier scripts are unavailable to this compilation and resolve at runtime.
 		const destination = nextCoreVariable(fn);
 		cursor.block.emitter.emit({

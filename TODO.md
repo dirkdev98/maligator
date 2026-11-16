@@ -559,7 +559,8 @@ contracts or investigates costs still visible after the string follow-ups.
 
 - [ ] Preserve ordered variable records across nested direct eval. Ordinary caller and
       imported bindings retain live accessors through inherited declarative bridges;
-      eval-created vars still need live deletion rather than copied bridge values.
+      eval-created vars retain their live deletable record, and eval-created functions
+      own their activation's variable record.
       Place persistent vars at their caller variable-environment boundary so a nearer
       lexical binding wins, including lexical scopes inside and outside actual `with`
       records. Route new `var` initializers through reference resolution while keeping

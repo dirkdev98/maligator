@@ -231,7 +231,10 @@ the exporter rather than a copied value. A nested eval inherits the previous bri
 under its own lexical accessors, preserving shadowing and escaped closure identity.
 These synthetic declarative bridges give calls an undefined receiver. Their accessors
 escape through the opaque runtime call, so Core must retain the reads and writes that
-eval can make. Strict eval keeps its own `var`s in its own variable environment.
+eval can make. Sloppy eval-created variables stay in their activation's deletable
+record instead of becoming copied bridge properties. A function created by eval owns
+its own variable record; inherited records remain available to its free reads.
+Strict eval keeps its own `var`s in its own variable environment.
 Proofs that enumerate readers and writers through Core therefore exclude the
 functions, cells, module bindings and private fields some direct eval can see.
 Private field facts also need the field's key to stay inside private element
