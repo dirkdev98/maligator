@@ -200,8 +200,8 @@ object. Retained loop experiments preserve effects, authoritative state and fall
 
 - [ ] Extend lazy argument forwarding to construction or mapped arguments only after
       carrying `new.target`, derived initialization, or current parameter-map values
-      through the owning protocol. Inlining forwarding wrappers into suspended callers
-      needs its own argument snapshot and continuation proof.
+      through the owning protocol. Inlining forwarding wrappers across await, yield
+      or generator entry needs its own argument snapshot and continuation proof.
 
 - [ ] Bound one typed-store side-exit experiment to core-to-execution or optimizer-queue
       and the corresponding compiler loop. First establish removable executed cost; then

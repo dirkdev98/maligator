@@ -41,6 +41,30 @@ describe("rest argument forwarding", () => {
 	}
 });
 
+describe("rest forwarding inside non-suspending async callers", () => {
+	let pair: ReturnType<typeof buildBackendPairFromOneProgramImage>;
+	beforeAll(() => {
+		pair = buildBackendPairFromOneProgramImage({
+			fixture: "tests/local/rest-forwarding-immediate.mjs",
+			name: "rest-forwarding-immediate",
+			outDir,
+			mainFile: HOST_MAIN,
+			nativeStackRoots: "precise",
+			config: resolveBuildConfig({
+				engine: { primordials: "mutable", eval: false, realms: false },
+				surface: { node: true },
+			}),
+		});
+	});
+	for (const backend of ["compiled", "interpreted"] as const)
+		it(`${backend} forwards snapshots, fallback lists and async completions`, () => {
+			for (const stress of [{}, STRESS_ENV])
+				expect(runToStdout(pair[backend], { env: { ...stress, MAL_HOST_GC: "1" } })).toBe(
+					"rest-forwarding-immediate PASS\n",
+				);
+		});
+});
+
 describe("packed rest element reads", () => {
 	let pair: ReturnType<typeof buildBackendPairFromOneProgramImage>;
 	let reference: string;

@@ -1779,28 +1779,55 @@ describe("bounded Core cross-call transforms", () => {
 	);
 
 	it.each([
-		{ declaration: "async function", site: "exact", apply: false },
-		{ declaration: "function*", site: "exact", apply: false },
-		{ declaration: "async function*", site: "exact", apply: false },
-		{ declaration: "async function", site: "guarded", apply: false },
-		{ declaration: "function*", site: "guarded", apply: false },
-		{ declaration: "async function*", site: "guarded", apply: false },
-		{ declaration: "async function", site: "exact", apply: true },
-		{ declaration: "function*", site: "exact", apply: true },
-		{ declaration: "async function*", site: "exact", apply: true },
-		{ declaration: "async function", site: "guarded", apply: true },
-		{ declaration: "function*", site: "guarded", apply: true },
-		{ declaration: "async function*", site: "guarded", apply: true },
+		...[false, true].flatMap((apply) =>
+			["exact", "guarded"].flatMap((site) => [
+				{
+					declaration: "async function",
+					site,
+					apply,
+					before: "",
+					after: "",
+					inline: true,
+				},
+				{
+					declaration: "async function",
+					site,
+					apply,
+					before: "await 0;",
+					after: "",
+					inline: false,
+				},
+				{
+					declaration: "async function",
+					site,
+					apply,
+					before: "",
+					after: "await 0;",
+					inline: false,
+				},
+				{ declaration: "function*", site, apply, before: "", after: "", inline: false },
+				{
+					declaration: "async function*",
+					site,
+					apply,
+					before: "",
+					after: "",
+					inline: false,
+				},
+			]),
+		),
 	])(
-		"keeps lazy rest forwarding outside $declaration callers at $site sites with apply=$apply",
-		({ declaration, site, apply }) => {
+		"inlines rest forwarding=$inline for $declaration at $site with apply=$apply, before=$before, after=$after",
+		({ declaration, site, apply, before, after, inline }) => {
 			const helper = `function forward(...values) {
 				return ${apply ? "target.apply(null, values)" : "target(...values)"};
 			}`;
 			const source = `${site === "guarded" ? helper : ""}
 				${declaration} suspended() {
 					${site === "exact" ? helper : ""}
+					${before}
 					for (let index = 0; index < 10; index++) forward(1, 2);
+					${after}
 				}
 				suspended();`;
 			let optimized: CoreProgram | undefined;
@@ -1820,7 +1847,7 @@ describe("bounded Core cross-call transforms", () => {
 			expect(coreOperations(caller).some(({ opcode }) => opcode === "call")).toBe(true);
 			expect(
 				coreOperations(caller).some(({ opcode }) => opcode === "callRestArguments"),
-			).toBe(false);
+			).toBe(inline);
 			expect(
 				coreOperations(coreFunctionNamed(optimized!, "forward")!).some(
 					({ opcode }) => opcode === "callRestArguments",

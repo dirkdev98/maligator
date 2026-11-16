@@ -371,6 +371,13 @@ one, at most 16 variants per helper, and ranks clones that complete such a chain
 first. Every clone counts equally under static scheduling, so reducing the budget
 can discard useful forwarding chains.
 
+Inlining a rest-forwarding helper snapshots its positional inputs in the caller's
+registers. Those explicit sources do not retain the caller's incoming argument span;
+the native and wire loaders derive the same retention requirement. Async callers
+can consume these snapshots before return adoption when their Core effects contain
+no suspension. Await, yield and generator entry retain the helper boundary until
+snapshot lifetime through suspension is proved.
+
 Candidate claim headers and exact costs participate in ranking and admission before
 target payloads are materialized. Rejected candidates do not receive target blocks,
 anchors, representations, or admission payloads. Plan verification rediscovers only

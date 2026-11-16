@@ -18,6 +18,7 @@ import {
 	serializeRuntimeImage,
 } from "../src/compiler/target/program-image-codec.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { computeArgumentRetentionLimit } from "../src/compiler/target/runtime-image.ts";
 import {
 	analysisProgram,
 	programAnalysisContext,
@@ -44,6 +45,31 @@ function compile(body: string, primordials: "locked" | "mutable" = "mutable") {
 }
 
 describe("rest forwarding allocation contract", () => {
+	it.each([undefined, [], [0, 1]])(
+		"retains the caller argument span only for implicit forwarding: %j",
+		(sourceArguments) => {
+			expect(
+				computeArgumentRetentionLimit({
+					argumentSnapshotCount: 0,
+					instructions: [
+						{
+							opcode: "CALL_REST_ARGUMENTS",
+							dst: 0,
+							callee: 1,
+							thisValue: 2,
+							receiver: 2,
+							startIndex: 0,
+							state: 3,
+							apply: false,
+							argumentsObject: false,
+							prefixArguments: [],
+							sourceArguments,
+						},
+					],
+				}),
+			).toBe(sourceArguments === undefined ? 0x7fffffff : -1);
+		},
+	);
 	it.each([
 		{ rest: false, primordials: "locked" as const },
 		{ rest: true, primordials: "mutable" as const },

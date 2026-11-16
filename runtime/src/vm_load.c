@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 101u
+#define WIRE_VERSION 102u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1886,10 +1886,14 @@ static i32 argument_retention_limit(const MalFunction *fn) {
         const MalInstruction *instruction = &fn->instructions[i];
         if (instruction->opcode == MAL_OP_CREATE_ARGUMENTS_OBJECT ||
             instruction->opcode == MAL_OP_CREATE_REST_ARGUMENTS ||
-            instruction->opcode == MAL_OP_CALL_REST_ARGUMENTS ||
             instruction->opcode == MAL_OP_CONSTRUCT_SUPER_FORWARD ||
             instruction->opcode == MAL_OP_LOAD_ARGUMENT ||
             instruction->opcode == MAL_OP_LOAD_DYNAMIC_ARGUMENT) {
+            return INT32_MAX;
+        }
+        if (instruction->opcode == MAL_OP_CALL_REST_ARGUMENTS &&
+            (fn->instruction_data[instruction->as.call_rest_arguments.data_offset + 2] &
+             MAL_REST_FORWARD_POSITIONAL) == 0) {
             return INT32_MAX;
         }
         if (instruction->opcode == MAL_OP_LOAD_STATIC_ARGUMENT &&
@@ -2033,12 +2037,6 @@ static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool d
     free(literal_shape_seen);
     fn->instructions = instructions;
     fn->argument_retention_limit = -1;
-    if (r->ok) {
-        fn->argument_retention_limit = argument_retention_limit(fn);
-        if ((fn->argument_retention_limit >= 0) != fn->needs_arguments) {
-            r->ok = false;
-        }
-    }
     if ((u32) fn->argument_snapshot_count > instruction_count) {
         r->ok = false;
     }
@@ -2159,6 +2157,12 @@ static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool d
     free(side_data.data);
     fn->instruction_data_count = (i32) side_data.count;
     fn->instruction_data = instruction_data;
+    if (r->ok) {
+        fn->argument_retention_limit = argument_retention_limit(fn);
+        if ((fn->argument_retention_limit >= 0) != fn->needs_arguments) {
+            r->ok = false;
+        }
+    }
 
     u32 gc_safepoint_count = rd_count(r, 2);
     I32Builder gc_safepoints = {0};

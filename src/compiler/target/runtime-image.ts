@@ -642,9 +642,11 @@ export function computeArgumentRetentionLimit(
 	for (let ip = fn.argumentSnapshotCount; ip < fn.instructions.length; ip++) {
 		const instruction = fn.instructions[ip]!;
 		switch (instruction.opcode) {
+			case "CALL_REST_ARGUMENTS":
+				if (instruction.sourceArguments === undefined) return 0x7fffffff;
+				break;
 			case "CREATE_ARGUMENTS_OBJECT":
 			case "CREATE_REST_ARGUMENTS":
-			case "CALL_REST_ARGUMENTS":
 			case "CONSTRUCT_SUPER_FORWARD":
 			case "LOAD_ARGUMENT":
 			case "LOAD_DYNAMIC_ARGUMENT":
