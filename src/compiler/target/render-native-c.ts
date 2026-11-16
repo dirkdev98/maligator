@@ -18563,6 +18563,35 @@ class NativeInstructionEmission {
 	}
 }
 
+function stackObjectMaterializationLines(
+	emission: NativeInstructionEmission,
+	ip: number,
+	materialization: StackObjectMaterialization | undefined,
+): Array<string> {
+	if (materialization?.site.materializedSlot === undefined) return [];
+	const { site, values } = materialization;
+	const materialized = `__gc_slots[${site.materializedSlot}]`;
+	const fields = site.fieldSlots;
+	return [
+		...(site.observedName === undefined ? [] : [`${site.observedName} = true;`]),
+		`if (${values.map((value) => `r${value} == mal_value_from_object(&${site.objectName}.object)`).join(" || ")}) {`,
+		` if (mal_value_is_undefined(${materialized})) {`,
+		...(fields === undefined
+			? []
+			: [
+					`  MalValue __stack_values_${ip}[${fields.length}] = { ${fields.map((field) => emission.convertedValue(field.representation, "boxed", field.name)).join(", ")} };`,
+				]),
+		`  ${materialized} = ${fields === undefined ? `mal_vm_materialize_stack_object(vm, &${site.objectName}.object)` : `mal_vm_materialize_stack_object_fields(vm, &${site.objectName}.object, __stack_values_${ip}, ${fields.length})`};`,
+		`  ${emission.throwCheck()}`,
+		`}`,
+		...values.map(
+			(value) =>
+				`if (r${value} == mal_value_from_object(&${site.objectName}.object)) r${value} = ${materialized};`,
+		),
+		`}`,
+	];
+}
+
 function emitInstruction(
 	instruction: BytecodeInstruction,
 	ip: number,
@@ -18836,6 +18865,7 @@ function emitInstruction(
 			const locked = instruction.opcode === "CALL_KNOWN";
 			const args = `${locked ? "MAL_VALUE_UNDEFINED" : emission.boxedOperand(instruction.callee)}, ${emission.boxedOperand(instruction.arguments[0]!)}, ${locked}`;
 			return [
+				...stackObjectMaterializationLines(emission, ip, stackObjectMaterialization),
 				...(snapshot
 					? [
 							`for (u32 i = 0; i < ${NATIVE_ENUMERATION_SNAPSHOT_CAPACITY}; i++) __gc_slots[${site.elementsSlot} + i] = MAL_VALUE_UNDEFINED;`,
@@ -18892,30 +18922,13 @@ function emitInstruction(
 	}
 
 	if (stackObjectMaterialization?.site.materializedSlot !== undefined) {
-		const { site, values } = stackObjectMaterialization;
-		const materialized = `__gc_slots[${site.materializedSlot}]`;
-		const fields = site.fieldSlots;
 		const ordinary = emission.emitGenericInstruction();
-		if (ordinary === null) return null;
-		return [
-			...(site.observedName === undefined ? [] : [`${site.observedName} = true;`]),
-			`if (${values.map((value) => `r${value} == mal_value_from_object(&${site.objectName}.object)`).join(" || ")}) {`,
-			` if (mal_value_is_undefined(${materialized})) {`,
-			...(fields === undefined
-				? []
-				: [
-						`  MalValue __stack_values_${ip}[${fields.length}] = { ${fields.map((field) => emission.convertedValue(field.representation, "boxed", field.name)).join(", ")} };`,
-					]),
-			`  ${materialized} = ${fields === undefined ? `mal_vm_materialize_stack_object(vm, &${site.objectName}.object)` : `mal_vm_materialize_stack_object_fields(vm, &${site.objectName}.object, __stack_values_${ip}, ${fields.length})`};`,
-			`  ${emission.throwCheck()}`,
-			`}`,
-			...values.map(
-				(value) =>
-					`if (r${value} == mal_value_from_object(&${site.objectName}.object)) r${value} = ${materialized};`,
-			),
-			`}`,
-			...ordinary,
-		];
+		return ordinary === null
+			? null
+			: [
+					...stackObjectMaterializationLines(emission, ip, stackObjectMaterialization),
+					...ordinary,
+				];
 	}
 
 	if (

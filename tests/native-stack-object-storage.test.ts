@@ -457,6 +457,38 @@ describe("native typed stack fields", () => {
 			).toEqual([]);
 	});
 
+	it.each([
+		["if(input)globalThis.first(o);else globalThis.second(o);return 0;", true],
+		["if(input)globalThis.first(o);return 0;", false],
+		["while(input){}globalThis.first(o);return 0;", false],
+	] as const)(
+		"uses the heap only when an observer covers every path: %s",
+		(tail, selected) => {
+			const native = compile(`const o={numeric:1.5,payload:input};${tail}`).native
+				.functions[1]!;
+			expect(native.storage!.directHeapObjectIps.length > 0).toBe(selected);
+		},
+	);
+
+	it("requires complete allocation roots before mandatory observer selection", () => {
+		const native = compile(
+			"const o={numeric:1.5,payload:input};if(input)globalThis.first(o);else globalThis.second(o);return 0;",
+		).native.functions[1]!;
+		const ip = native.storage!.directHeapObjectIps[0]!;
+		expect(ip).toBeDefined();
+		for (const phase of ["incomingRootRegisters", "outgoingRootRegisters"] as const)
+			expect(
+				selectNativeDirectHeapObjects({
+					...native,
+					gc: {
+						safepoints: native.gc.safepoints.map((point) =>
+							point.instructionIp === ip ? { ...point, [phase]: [] } : point,
+						),
+					},
+				}),
+			).toEqual([]);
+	});
+
 	it("rejects missing, duplicated and forged direct heap selections", () => {
 		const image = compile("return {numeric:1.5,payload:input};");
 		const native = image.native.functions[1]!;

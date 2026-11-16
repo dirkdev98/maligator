@@ -10,6 +10,7 @@ import {
 import { nativeValueConversion } from "./native-value-transport.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 import { vmExceptionHandlerTargets } from "./runtime-image.ts";
+import type { BytecodeFunction } from "./runtime-image.ts";
 
 export type NativeStackFieldRepresentation =
 	| "int32"
@@ -43,6 +44,38 @@ function fieldInputRepresentation(
 	}
 }
 
+function observedBeforeExit(
+	fn: BytecodeFunction,
+	first: number,
+	observations: ReadonlySet<number>,
+	handlers: ReadonlyArray<number | undefined>,
+): boolean {
+	if (observations.size === 0) return false;
+	const pending = [first],
+		visited = new Set<number>();
+	while (pending.length > 0) {
+		const ip = pending.pop()!;
+		if (observations.has(ip) || visited.has(ip)) continue;
+		const op = fn.instructions[ip];
+		if (
+			op === undefined ||
+			handlers[ip] !== undefined ||
+			visited.size >= 64 ||
+			op.opcode === "RETURN" ||
+			op.opcode === "THROW" ||
+			op.opcode === "LOAD_UNDECLARED"
+		)
+			return false;
+		visited.add(ip);
+		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") {
+			if (op.targetIp <= ip) return false;
+			pending.push(op.targetIp);
+		}
+		if (op.opcode !== "JUMP") pending.push(ip + 1);
+	}
+	return true;
+}
+
 export function selectNativeDirectHeapObjects(
 	native: NativeFunctionPlan,
 ): ReadonlyArray<number> {
@@ -66,12 +99,7 @@ export function selectNativeDirectHeapObjects(
 				site.mode !== "activation-local" ||
 				site.accesses.length !== 0 ||
 				site.inheritedAccessIp !== undefined ||
-				site.materializations.length !== 1 ||
-				site.materializations[0]!.ip !== returnIp ||
-				site.materializations[0]!.kind !== "return" ||
 				allocation?.opcode !== "CREATE_OBJECT_SHAPED" ||
-				returned?.opcode !== "RETURN" ||
-				returned.value !== allocation.dst ||
 				handlers[site.allocationIp] !== undefined ||
 				handlers[returnIp] !== undefined ||
 				point?.kind !== "operation" ||
@@ -85,6 +113,28 @@ export function selectNativeDirectHeapObjects(
 				})
 			)
 				continue;
+			const immediateReturn =
+				site.materializations.length === 1 &&
+				site.materializations[0]!.ip === returnIp &&
+				site.materializations[0]!.kind === "return" &&
+				returned?.opcode === "RETURN" &&
+				returned.value === allocation.dst;
+			if (!immediateReturn) {
+				const observations = new Set(
+					site.materializations.flatMap((entry) =>
+						entry.kind === "observe" &&
+						(native.body.instructions[entry.ip]?.opcode === "CALL" ||
+							native.body.instructions[entry.ip]?.opcode === "CALL_KNOWN")
+							? [entry.ip]
+							: [],
+					),
+				);
+				if (
+					observations.size !== site.materializations.length ||
+					!observedBeforeExit(native.body, returnIp, observations, handlers)
+				)
+					continue;
+			}
 			// The same certificate requires a heap result before any subsequent observation.
 			allocations.push(site.allocationIp);
 		}

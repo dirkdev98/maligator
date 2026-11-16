@@ -172,6 +172,11 @@ An ordinary call and a certified builtin call observe temporary arguments throug
 the same materialization contract. The cached heap object becomes authoritative
 before invoking either observer, including when the builtin changes descriptors
 or returns the same object. Callee and receiver positions require separate proof.
+Enumeration snapshot admission follows that materialization before either its helper
+or its generic fallback. A temporary record with no local field accesses can allocate
+directly on the heap when a bounded forward path proves a mandatory observer and the
+original allocation roots cover its fields and result. Unobserved exits and backedges
+retain temporary storage.
 
 An unmapped arguments binding can read an in-range numeric index from its incoming
 slice while the binding remains unmaterialized. The invocation retains and roots

@@ -431,6 +431,7 @@ function siteFor(
 		const use = fn.kernel.valueFirstUse(result);
 		if (
 			fn.kernel.valueHandlerUseCount(result) !== 0 ||
+			controlUse(result) ||
 			use < 0 ||
 			fn.kernel.useNext(use) >= 0 ||
 			fn.kernel.useOperand(use) !== 0
@@ -438,17 +439,31 @@ function siteFor(
 			return undefined;
 		const useInstruction = coreInstructionId(fn.kernel.useInstruction(use));
 		if (opcodeOf(fn, useInstruction) !== "getIterator") {
-			if (opcodeOf(fn, useInstruction) !== "loadPropertyStatic") return undefined;
-			const lengthKey = fn.instructionAttributes(useInstruction).stringIndex;
+			const opcode = opcodeOf(fn, useInstruction);
+			if (opcode !== "loadProperty" && opcode !== "loadPropertyStatic") return undefined;
+			const key = fn.instructionAttributes(useInstruction).stringIndex;
 			if (
-				typeof lengthKey !== "number" ||
-				program.stringConstantText(lengthKey) !== "length" ||
+				(opcode === "loadPropertyStatic" &&
+					(typeof key !== "number" || program.stringConstantText(key) !== "length")) ||
 				fn.instructionBlock(useInstruction) !== block ||
-				fn.instructionNext(call) !== useInstruction ||
 				fn.instructionEffectRefinement(useInstruction) !== undefined
 			)
 				return undefined;
-			// The count stays with its producer so only the projection crosses the join.
+			let next = fn.instructionNext(call),
+				constants = 0;
+			while (next !== useInstruction) {
+				const opcode = next === undefined ? undefined : opcodeOf(fn, next);
+				if (
+					next === undefined ||
+					++constants > MAX_RUN_INSTRUCTIONS ||
+					(opcode !== "createNumber" &&
+						opcode !== "createF64" &&
+						opcode !== "createString")
+				)
+					return undefined;
+				next = fn.instructionNext(next);
+			}
+			// Only the observed value crosses the join, preserving each snapshot's producer.
 			consumer = useInstruction;
 		}
 	}

@@ -5191,6 +5191,23 @@ export function analyzeNativeFastPaths(
 	const mapEntryBlocked = new Set(blocked);
 	const snapshotOverlayIps = new Set<number>();
 	const snapshotBlocked = new Set(blocked);
+	const snapshotStackObservations = new Map<number, Set<number>>();
+	for (const [index, region] of native.specializations.entries()) {
+		if (region.kind !== "stack-object-plan") continue;
+		const observations = new Set<number>();
+		for (const site of region.sites) {
+			for (const materialization of site.materializations) {
+				const op = fn.instructions[materialization.ip];
+				if (
+					materialization.kind === "observe" &&
+					(op?.opcode === "CALL" || op?.opcode === "CALL_KNOWN")
+				)
+					observations.add(materialization.ip);
+			}
+		}
+		snapshotStackObservations.set(index, observations);
+		for (const ip of observations) snapshotOverlayIps.add(ip);
+	}
 	// Numeric loop regions keep indexed-length loop, Array cursor and charCodeAt chain code
 	// as their fallback.
 	const numericLoopBlocked = new Set(blocked);
@@ -5215,7 +5232,9 @@ export function analyzeNativeFastPaths(
 	for (const action of native.regionActions) {
 		const region = native.specializations[action.regionIndex]!;
 		if (region.kind !== "indexed-length-loop")
-			for (const ip of region.claimedIps) snapshotBlocked.add(ip);
+			for (const ip of region.claimedIps)
+				if (!snapshotStackObservations.get(action.regionIndex)?.has(ip))
+					snapshotBlocked.add(ip);
 		if (region.kind !== "builtin-collection-call-chain")
 			for (const ip of region.claimedIps) mapEntryBlocked.add(ip);
 		if (region.kind !== "numeric-fusion") {

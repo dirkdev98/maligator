@@ -39,6 +39,48 @@ function inspect(image: ReturnType<typeof compile>) {
 }
 
 describe("Object.entries snapshot transport", () => {
+	it.each(["index", "0", "99"])(
+		"keeps the sole immediate %s projection with each guarded producer",
+		(index) => {
+			const image = compile(`return Object.entries(record)[${index}];`);
+			const fn = inspect(image);
+			const plans = fn.storage!.objectEnumerationSnapshots;
+			expect(plans).toHaveLength(2);
+			expect(
+				new Set(plans.map((plan) => fn.body.instructions[plan.callIp]!.opcode)),
+			).toEqual(new Set(["CALL", "CALL_KNOWN"]));
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		},
+	);
+
+	it("retains snapshots when guarded loop inputs materialize from stack objects", () => {
+		const image = compile(`
+   let total = 0;
+   for (let i = 0; i < 32; i++) {
+    const index = i & 1;
+    const row = {first: i, second: i & 255, third: 3, fourth: 4};
+    const pair = Object.entries(row)[index];
+    total += pair[0].length + pair[1];
+   }
+   return total;
+  `);
+		const fn = inspect(image);
+		const snapshots = fn.storage!.objectEnumerationSnapshots;
+		expect(snapshots).toHaveLength(2);
+		const observations = fn.specializations.flatMap((region) =>
+			region.kind === "stack-object-plan"
+				? region.sites.flatMap((site) =>
+						site.materializations
+							.filter((entry) => entry.kind === "observe")
+							.map((entry) => entry.ip),
+					)
+				: [],
+		);
+		for (const plan of snapshots) expect(observations).toContain(plan.callIp);
+	});
+
 	it.each(["mutable", "locked"] as const)(
 		"admits bundled count, pair and materializing observations under %s primordials",
 		(primordials) => {
