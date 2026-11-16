@@ -9114,17 +9114,15 @@ static MalGlobalBinding *mal_vm_global_binding(MalVm *vm, i32 name_string_index)
     return nullptr;
 }
 
-static void mal_vm_add_global_binding(MalVm *vm, i32 name_string_index, i32 index, bool immutable) {
+static void mal_vm_add_global_lexical_binding(MalVm *vm, i32 name_string_index, i32 index, bool immutable) {
     // A lexical declaration answers before the global object, so it shadows a
     // primordial binding of the same name for every later global load.
-    if (index >= 0) {
-        MalObject *global_object;
-        MalKey key;
-        MalPropertyLookup own = mal_vm_global_dictionary_lookup(
-            vm, name_string_index, &global_object, &key);
-        if (own.present && (own.desc.flags & MAL_PROPERTY_PRIMORDIAL)) {
-            mal_invalidate_primordial_binding();
-        }
+    MalObject *global_object;
+    MalKey key;
+    MalPropertyLookup own = mal_vm_global_dictionary_lookup(
+        vm, name_string_index, &global_object, &key);
+    if (own.present && (own.desc.flags & MAL_PROPERTY_PRIMORDIAL)) {
+        mal_invalidate_primordial_binding();
     }
     MalGlobalEnvironment *environment = mal_vm_global_environment(vm);
     if (environment->count == environment->capacity) {
@@ -9153,7 +9151,7 @@ void mal_vm_op_declare_global_lexical(
         }
         return;
     }
-    mal_vm_add_global_binding(vm, name_string_index, index, immutable);
+    mal_vm_add_global_lexical_binding(vm, name_string_index, index, immutable);
 }
 
 void mal_op_declare_global_lexical(MalCallable *callable, const MalInstruction *instruction) {
@@ -9167,7 +9165,7 @@ MalValue mal_vm_loop_invariant_global(MalVm *vm, i32 name_string_index) {
     if (mal_vm_global_data_property_cached(vm, name_string_index, &value)) return value;
     MalGlobalBinding *binding = mal_vm_global_binding(vm, name_string_index);
     // A lexical binding in its dead zone holds the empty value.
-    if (binding != nullptr && binding->global_index >= 0) return vm->globals[binding->global_index];
+    if (binding != nullptr) return vm->globals[binding->global_index];
     MalObject *global_object;
     MalKey key;
     MalPropertyLookup own = mal_vm_global_dictionary_lookup(
@@ -9179,7 +9177,7 @@ MalValue mal_vm_loop_invariant_global(MalVm *vm, i32 name_string_index) {
 
 MalValue mal_vm_op_load_global_property_slow(MalVm *vm, i32 name_string_index) {
     MalGlobalBinding *binding = mal_vm_global_binding(vm, name_string_index);
-    if (binding != nullptr && binding->global_index >= 0) {
+    if (binding != nullptr) {
         MalValue value = vm->globals[binding->global_index];
         if (mal_value_is_empty(value)) {
             mal_vm_op_load_undeclared(vm, name_string_index);
@@ -9228,7 +9226,7 @@ void mal_vm_op_store_global_property(
     bool declaration, bool declaration_configurable
 ) {
     MalGlobalBinding *binding = mal_vm_global_binding(vm, name_string_index);
-    if (binding != nullptr && binding->global_index >= 0) {
+    if (binding != nullptr) {
         if (declaration) {
             mal_vm_throw_error(
                 vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Cannot redeclare global lexical binding");
@@ -9288,9 +9286,6 @@ void mal_vm_op_store_global_property(
             }
             return;
         }
-        if (!function_check && !var_check && binding == nullptr) {
-            mal_vm_add_global_binding(vm, name_string_index, -1, false);
-        }
         if (own.present && !function_initialization) {
             return;
         }
@@ -9341,7 +9336,7 @@ void mal_vm_op_store_global_property(
 
 MalValue mal_vm_op_global_binding_query(MalVm *vm, i32 name_string_index, u8 query) {
     MalGlobalBinding *binding = mal_vm_global_binding(vm, name_string_index);
-    bool lexical = binding != nullptr && binding->global_index >= 0;
+    bool lexical = binding != nullptr;
     MalValue global = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
     MalKey key = {
         .kind = MAL_KEY_STRING,
@@ -9350,15 +9345,7 @@ MalValue mal_vm_op_global_binding_query(MalVm *vm, i32 name_string_index, u8 que
     if (query == 1) return mal_value_new_boolean(lexical || mal_vm_has_property(vm, global, key));
     if (query == 2) {
         if (lexical) return mal_value_new_boolean(false);
-        bool deleted = mal_vm_delete_property(vm, global, key);
-        binding = mal_vm_global_binding(vm, name_string_index);
-        if (deleted && binding != nullptr) {
-            MalGlobalEnvironment *environment = mal_vm_global_environment(vm);
-            i32 index = (i32) (binding - environment->bindings);
-            environment->bindings[index] = environment->bindings[--environment->count];
-            environment->generation++;
-        }
-        return mal_value_new_boolean(deleted);
+        return mal_value_new_boolean(mal_vm_delete_property(vm, global, key));
     }
     MalValue value = mal_value_new_undefined();
     if (lexical) value = mal_vm_op_load_global_property(vm, name_string_index);

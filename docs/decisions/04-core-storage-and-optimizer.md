@@ -237,6 +237,12 @@ before arguments; ordinary replacements keep that reference. Optional calls, mem
 calls and sequence callees remain indirect. An immutable local function can avoid the
 eval environment only when dynamic lookup and intervening activations cannot intercept it.
 
+The global declarative registry contains lexical bindings only. Global vars and
+functions use the object record, so a configurable property created by eval can be
+shadowed by a later script's lexical declaration. Restricted global properties still
+reject that declaration. Adding a lexical binding invalidates cached object-record
+reads, and each realm keeps its own registry.
+
 Private syntax state travels as an eval-entry argument, outside name resolution, so
 proxies cannot observe bookkeeping keys. Nested eval and escaped closures retain the
 ordered records. A function created by eval owns its variable record, and parameter

@@ -498,12 +498,10 @@ contracts or investigates costs still visible after the string follow-ups.
       descending shared-root-cause order. Keep each repaired cluster in the curated
       regression manifest.
 
-- [ ] Complete script-global environment-record behavior across separately evaluated
-      scripts. `$262.evalScript` now compiles a Script, but the runtime keeps no
-      [[VarNames]]: a `let` over a var that an earlier eval created is refused, and
-      a `var` over an existing configurable global property tries to redefine it.
-      Keep eval-created declarations distinct from script declarations, including
-      deletability and restricted-global checks.
+- [ ] Keep baked compiler registration private from the application global object.
+      First eval, Function construction and script compilation currently publish and
+      retrieve `globalThis.__compile`, so global hardening or an accessor can block
+      or intercept initialization. Preserve cold and warm compilation across realms.
 
 - [ ] Preserve iterator [[Done]] semantics in positional destructuring: after a step
       reports done, later elements and a rest element still call `next()`. Keep abrupt

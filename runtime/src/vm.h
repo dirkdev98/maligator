@@ -1538,7 +1538,7 @@ typedef struct MalLoadedRuntimeImage MalLoadedRuntimeImage;
 
 typedef struct {
     i32 name_string_index;
-    // Negative slots track object-record var declarations for redeclaration checks.
+    // Only declarative-record bindings have slots; global vars live on the object.
     i32 global_index;
     bool immutable;
 } MalGlobalBinding;
@@ -1547,7 +1547,7 @@ typedef struct {
     MalGlobalBinding *bindings;
     i32 count;
     i32 capacity;
-    /** Changes whenever a binding is added or removed; global property caches compare it. */
+    /** Changes when a lexical binding is added; global property caches compare it. */
     u32 generation;
 } MalGlobalEnvironment;
 

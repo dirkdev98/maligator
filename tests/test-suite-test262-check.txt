@@ -256,6 +256,8 @@ test/language/expressions/prefix-increment/operator-prefix-increment-x-calls-put
 test/language/function-code/10.4.3-1-54gs.js
 test/language/future-reserved-words/interface.js
 test/language/global-code/decl-func-dup.js
+test/annexB/language/eval-code/direct/script-decl-lex-no-collision.js
+test/language/global-code/script-decl-lex-var-declared-via-eval.js
 test/language/global-code/new.target.js
 test/language/identifier-resolution/S10.2.2_A1_T7.js
 test/language/identifier-resolution/assign-to-global-undefined.js
