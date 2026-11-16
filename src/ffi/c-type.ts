@@ -193,6 +193,23 @@ const INTEGER_WORDS = new Set([
 	"__int128",
 ]);
 
+// Immutable factory locals let suffix closures copy their inputs rather than
+// retaining the declarator loop's iteration environment.
+function arraySuffix(bound: number | undefined): (of: CType) => CType {
+	const length = bound;
+	return (of) =>
+		length === undefined ? { kind: "array", of } : { kind: "array", of, length };
+}
+
+function functionSuffix(
+	parameters: ReadonlyArray<CType>,
+	isVariadic: boolean,
+): (returns: CType) => CType {
+	const params = parameters;
+	const variadic = isVariadic;
+	return (returns) => ({ kind: "function", returns, params, variadic });
+}
+
 class Parser {
 	readonly #tokens: ReadonlyArray<Token>;
 	#index = 0;
@@ -414,15 +431,13 @@ class Parser {
 					this.#index++;
 				}
 				this.#expectPunct("]");
-				suffixes.push((of) =>
-					length === undefined ? { kind: "array", of } : { kind: "array", of, length },
-				);
+				suffixes.push(arraySuffix(length));
 				continue;
 			}
 			if (this.#isPunct("(")) {
 				this.#index++;
 				const { params, variadic } = this.#parameters();
-				suffixes.push((returns) => ({ kind: "function", returns, params, variadic }));
+				suffixes.push(functionSuffix(params, variadic));
 				continue;
 			}
 			break;

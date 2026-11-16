@@ -341,8 +341,9 @@ contracts or investigates costs still visible after the string follow-ups.
       costs. Source-immutable leaf captures can copy values in open images; synthetic
       iteration owners and cyclic initializers still need per-creation snapshots before
       owner elision.
-      Select a repeated consumer and bound remaining allocation, initialization and
-      metadata costs before changing their representation.
+      Compare direct per-creation snapshots with ordinary factory activations in the
+      C declarator suffix consumer. Preserve closure and captured-object identity, TDZ,
+      exceptional initialization and mutation before extending the representation.
 
 - [ ] Bring node:stream and EventEmitter construction closer to Node. A constructed
       Readable still costs about 5x Node and a Writable 3.5x, mostly option reads
