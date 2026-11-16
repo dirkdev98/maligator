@@ -3552,7 +3552,10 @@ export function lowerVerifiedTargetsToRuntimePlans(
 		sourceBuiltinProviders: (context.data.sourceBuiltinProviders ?? []).map(
 			(provider) => ({
 				id: provider.id,
-				state: provider.state.map((entry) => ({ ...entry })),
+				state: provider.state.map((entry) => ({
+					name: JSON.stringify([entry.module, entry.kind, entry.name]),
+					slot: entry.slot,
+				})),
 				imports: provider.imports.map((entry) => ({ ...entry })),
 				functionIndex: executionFunctionIndex(
 					program.functionMap,

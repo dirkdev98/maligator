@@ -1537,19 +1537,26 @@ function verifyCompilationContext(
 		)
 			fail(`Invalid source builtin provider ${provider.id}`);
 		const slots = new Set<number>();
-		const names = new Set<string>();
+		const names = new Map<string, Map<string, Set<string>>>();
 		for (const entry of provider.state) {
+			const module = names.get(entry.module) ?? new Map<string, Set<string>>();
+			const kind = module.get(entry.kind) ?? new Set<string>();
 			if (
-				entry.name.length === 0 ||
+				entry.module.length === 0 ||
+				entry.module.includes("\0") ||
+				entry.kind.length === 0 ||
+				entry.kind.includes("\0") ||
 				entry.name.includes("\0") ||
-				names.has(entry.name) ||
+				kind.has(entry.name) ||
 				!Number.isSafeInteger(entry.slot) ||
 				entry.slot < 0 ||
 				entry.slot >= program.globalCount ||
 				slots.has(entry.slot)
 			)
 				fail(`Invalid source builtin state ${entry.name}`);
-			names.add(entry.name);
+			kind.add(entry.name);
+			module.set(entry.kind, kind);
+			names.set(entry.module, module);
 			slots.add(entry.slot);
 		}
 		slots.clear();

@@ -95,6 +95,7 @@ import type {
 	CoreModuleInterface,
 	CoreModuleLink,
 	CoreModuleLinks,
+	CoreSourceBuiltinCell,
 } from "./core-compilation.ts";
 import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
@@ -1252,10 +1253,15 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 function sourceBuiltinState(
 	program: CoreFrontendContext,
 	modules: ReadonlySet<string>,
-): Array<{ name: string; slot: number }> {
-	const state = new Map<number, string>();
-	const add = (path: string, kind: string, name: string, slot: number) => {
-		if (!state.has(slot)) state.set(slot, JSON.stringify([path, kind, name]));
+): Array<CoreSourceBuiltinCell> {
+	const state = new Map<number, CoreSourceBuiltinCell>();
+	const add = (
+		module: string,
+		kind: CoreSourceBuiltinCell["kind"],
+		name: string,
+		slot: number,
+	) => {
+		if (!state.has(slot)) state.set(slot, { module, kind, name, slot });
 	};
 	for (const file of program.semantic.files) {
 		if (!modules.has(file.path) || file.type !== "module" || file.commonjs) continue;
@@ -1289,9 +1295,12 @@ function sourceBuiltinState(
 		add(file.path, "error", "", getModuleEvaluationErrorSlot(program, file.path));
 		add(file.path, "record", "", getModuleEvaluationRecordSlot(program, file.path));
 	}
-	return [...state]
-		.map(([slot, name]) => ({ name, slot }))
-		.sort((left, right) => left.name.localeCompare(right.name));
+	return [...state.values()].sort(
+		(left, right) =>
+			left.module.localeCompare(right.module) ||
+			left.kind.localeCompare(right.kind) ||
+			left.name.localeCompare(right.name),
+	);
 }
 
 // Global names whose global-object properties are non-writable and non-configurable data.

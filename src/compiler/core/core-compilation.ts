@@ -18,6 +18,20 @@ export interface CoreInitializedCapturedRead extends CoreCapturedSlotRef {
 	readonly function: number;
 }
 
+export interface CoreSourceBuiltinCell {
+	readonly module: string;
+	readonly kind:
+		| "binding"
+		| "default"
+		| "namespace"
+		| "instantiated"
+		| "status"
+		| "error"
+		| "record";
+	readonly name: string;
+	readonly slot: number;
+}
+
 export interface CoreHostInstallCandidate {
 	readonly installer: string;
 	readonly exports: ReadonlyArray<{
@@ -92,7 +106,7 @@ export interface CoreProgramData {
 	readonly sourceBuiltinProviders?: ReadonlyArray<{
 		readonly id: string;
 		readonly functionIndex: number;
-		readonly state: ReadonlyArray<{ readonly name: string; readonly slot: number }>;
+		readonly state: ReadonlyArray<CoreSourceBuiltinCell>;
 		readonly imports: ReadonlyArray<{
 			readonly module: string;
 			readonly name: string;
