@@ -9,7 +9,8 @@ static MalGeneratorObject *mal_generator_object_alloc(
     MalHeap *heap, MalObject *prototype, bool with_async_data) {
     usize alloc_size = sizeof(MalGeneratorObject) +
         (with_async_data ? sizeof(MalGeneratorAsyncData) : 0);
-    MalGeneratorObject *generator = mal_heap_alloc(
+    // Every traced field is initialized before publication or another allocation.
+    MalGeneratorObject *generator = mal_heap_alloc_uninitialized(
         heap, alloc_size, MAL_HEAP_GENERATOR_OBJECT);
     mal_object_init(heap, &generator->object, MAL_HEAP_GENERATOR_OBJECT, prototype);
 

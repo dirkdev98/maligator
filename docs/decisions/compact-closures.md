@@ -72,8 +72,8 @@ its hot atoms and the heap's root shape. Script functions keep these metadata sl
 beside their prototype word, using compact object storage. Property growth moves
 fields out of the cell before it could overwrite function state or captures; symbol
 and dictionary properties use the ordinary object storage transitions.
-Function and environment constructors initialize their complete traced payload before
-publication or another allocation. Their allocator can leave reused payload bytes
+Function, environment and coroutine constructors initialize their complete traced payload
+before publication or another allocation. Their allocator can leave reused payload bytes
 uncleared while always resetting the GC header and remembered-set state. Other
 constructors that can collect before complete initialization retain zeroed allocation,
 and the shared slow allocation path stays zeroed.
