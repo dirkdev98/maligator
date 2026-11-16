@@ -508,10 +508,10 @@ bool mal_promise_try_perform_native_adoption(
 void mal_promise_perform_await(
     MalVm *vm,
     MalValue promise_value,
-    MalGeneratorObject *state
+    MalHeapHeader *state
 ) {
     MalPromiseObject *promise = mal_value_to_promise_object(promise_value);
-    MalValue state_value = mal_value_from_object((MalObject *) state);
+    MalValue state_value = mal_value_from_heap(state);
 
     promise->is_handled = true;
     MAL_PERF_COUNT(promise_await_typed_continuations);

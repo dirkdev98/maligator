@@ -5,14 +5,13 @@
 
 typedef struct MalVm MalVm;
 typedef struct MalVmFrame MalVmFrame;
-typedef struct MalGeneratorObject MalGeneratorObject;
+typedef struct MalAsyncFunctionState MalAsyncFunctionState;
 
 /**
- * The async/await driver. An async function reuses the generator suspendable-
- * frame machinery: ASYNC_START sets up a hidden state object + result promise
- * and hands the promise back to the caller, the body runs until its first
+ * The async/await driver. ASYNC_START sets up a hidden activation and result
+ * promise and hands the promise back to the caller. The body runs until its first
  * AWAIT (or return/throw), and the runtime resumes it when each awaited promise
- * settles — fulfilled resumes with NEXT(value), rejected with THROW(reason),
+ * settles: fulfillment resumes with NEXT(value), rejection with THROW(reason),
  * reusing the same resume-mode dispatch the compiler emits for yield.
  */
 
@@ -23,18 +22,21 @@ typedef struct MalGeneratorObject MalGeneratorObject;
  */
 void mal_async_function_start(MalVm *vm, MalVmFrame *frame);
 
-/** Borrow a completed native activation or allocate its hidden suspendable state. */
-MalGeneratorObject *mal_async_function_state_new(MalVm *vm);
+/** Borrow a completed activation or allocate its hidden suspendable state. */
+MalAsyncFunctionState *mal_async_function_state_new(MalVm *vm);
+
+/** Shade and release the activation's malloc-owned frame buffers. */
+void mal_async_function_release_frame(MalVm *vm, MalAsyncFunctionState *state);
 
 /**
  * MAL_OP_AWAIT tail: resolve `awaited` to a promise and schedule resumption of
  * the suspended async `state` when it settles. The frame must already have been
  * saved into `state` and popped.
  */
-void mal_async_function_await(MalVm *vm, MalGeneratorObject *state, MalValue awaited);
+void mal_async_function_await(MalVm *vm, MalHeapHeader *state, MalValue awaited);
 
 /** Resolve the async function's result promise (its body returned `value`). */
-void mal_async_function_settle_return(MalVm *vm, MalGeneratorObject *state, MalValue value);
+void mal_async_function_settle_return(MalVm *vm, MalAsyncFunctionState *state, MalValue value);
 
 /** Reject the async function's result promise (its body threw `reason`). */
-void mal_async_function_settle_throw(MalVm *vm, MalGeneratorObject *state, MalValue reason);
+void mal_async_function_settle_throw(MalVm *vm, MalAsyncFunctionState *state, MalValue reason);

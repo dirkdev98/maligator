@@ -6796,6 +6796,7 @@ function emitResumableFunction(
 	const elidedResults = new Set(native.storage!.unusedRegisters);
 	const elidedIps = new Set(native.storage!.elidedPureIps);
 	const isAsyncFunction = fn.isAsync && !fn.isGenerator;
+	const coroutineType = isAsyncFunction ? "MalAsyncFunctionState" : "MalGeneratorObject";
 	const symbol = `mal_compiled_${relocatable === false ? index : relocatable.symbolStem}${suffix}`;
 	const relocation = nativeRelocationExpressions(
 		relocatable === false ? undefined : `${symbol}_link`,
@@ -6966,7 +6967,9 @@ function emitResumableFunction(
 	lines.push(
 		...compiledFrameEntry(symbol, self),
 		`    if (__frame_row == nullptr) {`,
-		`        if (entry_state != nullptr) mal_vm_op_coroutine_throw_compiled(vm, (MalGeneratorObject *) entry_state, ((MalGeneratorObject *) entry_state)->frame.registers);`,
+		isAsyncFunction
+			? `        if (entry_state != nullptr) mal_vm_op_async_complete_compiled(vm, (MalAsyncFunctionState *) entry_state, MAL_VALUE_UNDEFINED, true, vm->completion.value);`
+			: `        if (entry_state != nullptr) mal_vm_op_coroutine_throw_compiled(vm, (MalGeneratorObject *) entry_state, ((MalGeneratorObject *) entry_state)->activation.frame.registers);`,
 		`        return MAL_VALUE_UNDEFINED;`,
 		`    }`,
 		...COMPILED_ENTRY_SCOPE,
@@ -7004,13 +7007,11 @@ function emitResumableFunction(
 	for (let slot = selfSlot + 1; slot < totalSlots; slot++)
 		lines.push(`    __gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`);
 	lines.push(`    MalValue *__suspend_slots = nullptr;`);
-	lines.push(
-		`    MalGeneratorObject *resume_state = (MalGeneratorObject *) entry_state;`,
-	);
+	lines.push(`    ${coroutineType} *resume_state = (${coroutineType} *) entry_state;`);
 	for (const owner of analysis.captureOwners) {
 		lines.push(`    MalEnv *${captureOwnerName(relocation, owner)};`);
 	}
-	lines.push(`    MalGeneratorObject *__coro = resume_state;`);
+	lines.push(`    ${coroutineType} *__coro = resume_state;`);
 	lines.push(`    (void) __coro;`);
 	if (isAsyncFunction) {
 		// The result promise the caller receives; created by ASYNC_START on the fresh
@@ -7040,13 +7041,13 @@ function emitResumableFunction(
 	);
 
 	lines.push(`    if (resume_state != nullptr) {`);
-	lines.push(`        __suspend_slots = resume_state->frame.registers;`);
-	lines.push(`        env = resume_state->frame.env;`);
-	lines.push(`        args = resume_state->frame.arguments;`);
-	lines.push(`        arg_count = resume_state->frame.argument_count;`);
-	lines.push(`        callee = resume_state->frame.callee;`);
+	lines.push(`        __suspend_slots = resume_state->activation.frame.registers;`);
+	lines.push(`        env = resume_state->activation.frame.env;`);
+	lines.push(`        args = resume_state->activation.frame.arguments;`);
+	lines.push(`        arg_count = resume_state->activation.frame.argument_count;`);
+	lines.push(`        callee = resume_state->activation.frame.callee;`);
 	lines.push(
-		`        __gc_slots[${selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
+		`        __gc_slots[${selfSlot}] = mal_value_from_heap((MalHeapHeader *) __coro);`,
 	);
 	lines.push(
 		`        __gc_frame = (MalRootFrame){ .prev = vm->root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .inactive_slots = 0, .env = env };`,
@@ -7061,7 +7062,7 @@ function emitResumableFunction(
 	)) {
 		lines.push(`        ${line}`);
 	}
-	lines.push(`        switch (resume_state->frame.instruction_pointer) {`);
+	lines.push(`        switch (resume_state->activation.frame.instruction_pointer) {`);
 	for (const resumeIp of resumePoints) {
 		const point = suspension.points.find(
 			(point) => point.instructionIp + 1 === resumeIp,
@@ -17865,10 +17866,10 @@ class NativeInstructionEmission {
 								// Own incoming arguments before calls can reenter the VM.
 								`if (${this.coro.retainArguments}) {`,
 								`  __coro = mal_vm_op_async_suspend_compiled(vm, callee, ${this.coro.functionIndex}, this_value, env, ${this.coro.suspension.slotCount}, args, arg_count, true, __async_result_promise);`,
-								`  __gc_slots[${this.coro.selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
-								`  __suspend_slots = __coro->frame.registers;`,
-								`  args = __coro->frame.arguments;`,
-								`  arg_count = __coro->frame.argument_count;`,
+								`  __gc_slots[${this.coro.selfSlot}] = mal_value_from_heap(&__coro->header);`,
+								`  __suspend_slots = __coro->activation.frame.registers;`,
+								`  args = __coro->activation.frame.arguments;`,
+								`  arg_count = __coro->activation.frame.argument_count;`,
 								`  __argument_roots.count = 0;`,
 								`}`,
 							]
@@ -17885,13 +17886,13 @@ class NativeInstructionEmission {
 						? [
 								`if (__coro == nullptr) {`,
 								`  __coro = mal_vm_op_async_suspend_compiled(vm, callee, ${this.coro.functionIndex}, this_value, env, ${this.coro.suspension.slotCount}, args, arg_count, ${this.coro.retainArguments}, __async_result_promise);`,
-								`  __gc_slots[${this.coro.selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
-								`  __suspend_slots = __coro->frame.registers;`,
+								`  __gc_slots[${this.coro.selfSlot}] = mal_value_from_heap(&__coro->header);`,
+								`  __suspend_slots = __coro->activation.frame.registers;`,
 								`}`,
 							]
 						: []),
 					...this.suspendSnapshot(),
-					`${this.gcUnlink}mal_vm_op_await_compiled(vm, __coro, awaited_${this.ip}, ${this.coro.suspension.valueSlot}, ${this.coro.suspension.modeSlot}, ${this.ip + 1}, ${this.coro.positionEntry(this.ip)}, env);`,
+					`${this.gcUnlink}mal_vm_op_await_compiled(vm, (MalHeapHeader *) __coro, awaited_${this.ip}, ${this.coro.suspension.valueSlot}, ${this.coro.suspension.modeSlot}, ${this.ip + 1}, ${this.coro.positionEntry(this.ip)}, env);`,
 					`return ${this.coroReturnValue};`,
 				];
 			}

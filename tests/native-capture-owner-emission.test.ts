@@ -512,8 +512,10 @@ describe("native lexical owner lookup contract", () => {
 			],
 			{ isGenerator: true },
 		);
-		const restore = source.indexOf("env = resume_state->frame.env;");
-		const dispatch = source.indexOf("switch (resume_state->frame.instruction_pointer)");
+		const restore = source.indexOf("env = resume_state->activation.frame.env;");
+		const dispatch = source.indexOf(
+			"switch (resume_state->activation.frame.instruction_pointer)",
+		);
 		expect(restore).toBeGreaterThanOrEqual(0);
 		expect(dispatch).toBeGreaterThan(restore);
 		expect(source.slice(restore, dispatch)).toContain("mal_vm_capture_owner(env, 2)");
@@ -538,8 +540,10 @@ describe("native lexical owner lookup contract", () => {
 			],
 			{ isGenerator: true },
 		);
-		const restore = source.indexOf("env = resume_state->frame.env;");
-		const dispatch = source.indexOf("switch (resume_state->frame.instruction_pointer)");
+		const restore = source.indexOf("env = resume_state->activation.frame.env;");
+		const dispatch = source.indexOf(
+			"switch (resume_state->activation.frame.instruction_pointer)",
+		);
 		expect(
 			source.slice(restore, dispatch).match(/mal_vm_capture_owners\(/g),
 		).toHaveLength(1);

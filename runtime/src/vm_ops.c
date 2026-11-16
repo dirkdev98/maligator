@@ -10533,36 +10533,36 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
         vm, callee, is_async_generator);
 
     MalGeneratorObject *generator = is_async_generator
-        ? mal_generator_object_new_async(&vm->heap, generator_prototype, true)
+        ? mal_generator_object_new_async(&vm->heap, generator_prototype)
         : mal_generator_object_new(&vm->heap, generator_prototype);
 
     // Adopt the register buffer and any argument slice needed after suspension.
-    generator->frame.vm = vm;
-    generator->frame.function_index = function_index;
-    generator->frame.function = &vm->live_runtime_image.functions[function_index];
-    generator->frame.registers = registers;
+    generator->activation.frame.vm = vm;
+    generator->activation.frame.function_index = function_index;
+    generator->activation.frame.function = &vm->live_runtime_image.functions[function_index];
+    generator->activation.frame.registers = registers;
     mal_generator_note_owned_storage(generator);
-    generator->frame.compiled_register_count = register_count;
-    generator->frame.compiled_suspend_position_entry = 0;
-    generator->frame.is_compiled = true;
-    generator->frame.arguments = owned_arguments;
-    generator->frame.argument_count = generator->frame.function->needs_arguments
+    generator->activation.frame.compiled_register_count = register_count;
+    generator->activation.frame.compiled_suspend_position_entry = 0;
+    generator->activation.frame.is_compiled = true;
+    generator->activation.frame.arguments = owned_arguments;
+    generator->activation.frame.argument_count = generator->activation.frame.function->needs_arguments
         ? argument_count
         : 0;
-    generator->frame.stack_base = -1;
-    generator->frame.this_value = this_value;
-    generator->frame.arguments_object = mal_value_new_undefined();
-    generator->frame.callee = callee;
-    generator->frame.generator = generator;
-    generator->frame.env = env;
-    generator->frame.is_construct = false;
-    generator->frame.new_target = mal_value_new_undefined();
-    generator->frame.instruction_pointer = resume_ip;
-    generator->frame.gc_safepoint_ip = -1;
+    generator->activation.frame.stack_base = -1;
+    generator->activation.frame.this_value = this_value;
+    generator->activation.frame.arguments_object = mal_value_new_undefined();
+    generator->activation.frame.callee = callee;
+    generator->activation.frame.generator = generator;
+    generator->activation.frame.env = env;
+    generator->activation.frame.is_construct = false;
+    generator->activation.frame.new_target = mal_value_new_undefined();
+    generator->activation.frame.instruction_pointer = resume_ip;
+    generator->activation.frame.gc_safepoint_ip = -1;
 #if MAL_REALMS
-    generator->frame.realm = vm->current_realm;
+    generator->activation.frame.realm = vm->current_realm;
 #endif
-    generator->state = MAL_GENERATOR_SUSPENDED_START;
+    generator->activation.state = MAL_GENERATOR_SUSPENDED_START;
 
     // The generator now owns a frame of (possibly young) register values; if it is
     // old, remember it so a minor collection traces that frame.
@@ -10574,18 +10574,18 @@ void mal_vm_op_yield_compiled(
     MalVm *vm, MalGeneratorObject *generator, MalValue yielded, bool delegated_result,
     i32 value_dst, i32 mode_dst, i32 resume_ip, i32 suspend_position_entry, MalEnv *env) {
     // Snapshot replacement shades its old slots; these independently traced fields need barriers too.
-    mal_gc_write_barrier(generator->yielded_value);
-    generator->yielded_value = yielded;
-    generator->yielded_result = delegated_result;
-    generator->resume_value_register = value_dst;
-    generator->resume_mode_register = mode_dst;
-    generator->state = MAL_GENERATOR_SUSPENDED_YIELD;
-    generator->frame.instruction_pointer = resume_ip;
-    generator->frame.compiled_suspend_position_entry = suspend_position_entry + 1;
-    if (generator->frame.env != nullptr) {
-        mal_gc_write_barrier_env(generator->frame.env);
+    mal_gc_write_barrier(generator->activation.yielded_value);
+    generator->activation.yielded_value = yielded;
+    generator->activation.yielded_result = delegated_result;
+    generator->activation.resume_value_register = value_dst;
+    generator->activation.resume_mode_register = mode_dst;
+    generator->activation.state = MAL_GENERATOR_SUSPENDED_YIELD;
+    generator->activation.frame.instruction_pointer = resume_ip;
+    generator->activation.frame.compiled_suspend_position_entry = suspend_position_entry + 1;
+    if (generator->activation.frame.env != nullptr) {
+        mal_gc_write_barrier_env(generator->activation.frame.env);
     }
-    generator->frame.env = env;
+    generator->activation.frame.env = env;
     mal_gc_remember_if_old(&generator->object.header);
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
@@ -10593,7 +10593,7 @@ void mal_vm_op_yield_compiled(
     // { value, done: false } and drives the next request (the yielded value was
     // already awaited by the compiler-inserted await preceding this yield).
     // Only that settlement allocates; the caller unlinked its frame, so root the generator.
-    if (generator->is_async_generator) {
+    if (generator->activation.is_async_generator) {
         MalValue root = mal_value_from_object((MalObject *) generator);
         MalRootSpan root_span;
         mal_gc_root(&root_span, &root, 1);
@@ -10604,10 +10604,10 @@ void mal_vm_op_yield_compiled(
 
 void mal_vm_op_terminal_yield_compiled(
     MalVm *vm, MalGeneratorObject *generator, MalValue yielded) {
-    mal_gc_write_barrier(generator->yielded_value);
-    generator->yielded_value = yielded;
-    generator->state = MAL_GENERATOR_COMPLETED;
-    generator->terminal_yield_pending = true;
+    mal_gc_write_barrier(generator->activation.yielded_value);
+    generator->activation.yielded_value = yielded;
+    generator->activation.state = MAL_GENERATOR_COMPLETED;
+    generator->activation.terminal_yield_pending = true;
     mal_gc_remember_if_old(&generator->object.header);
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 }
@@ -10619,17 +10619,14 @@ void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generato
     // COMPLETED before freeing: the finalizer frees the buffers only while
     // suspended, so marking first keeps a swept-after-completion object from
     // double-freeing (matching the interpreter's RETURN + finalizer contract).
-    generator->state = MAL_GENERATOR_COMPLETED;
+    generator->activation.state = MAL_GENERATOR_COMPLETED;
     // Shade and release before settlement can collect after the activation leaves the graph.
     mal_generator_release_frame(vm, generator);
     mal_generator_note_released_storage(generator);
 
-    if (generator->is_async_generator) {
+    if (generator->activation.is_async_generator) {
         // Completing the async generator settles the front request { value, done: true }.
         mal_async_generator_return(vm, generator, value);
-    } else if (generator->is_async) {
-        // Resolving the result promise is the async function's return.
-        mal_async_function_settle_return(vm, generator, value);
     } else {
         // Plain generator: the .next() driver reads the value from the completion.
         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
@@ -10656,19 +10653,14 @@ void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator
     MalValue roots[] = {mal_value_from_object((MalObject *) generator), reason};
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, 2);
-    generator->state = MAL_GENERATOR_COMPLETED;
+    generator->activation.state = MAL_GENERATOR_COMPLETED;
     mal_generator_release_frame(vm, generator);
     mal_generator_note_released_storage(generator);
 
-    if (generator->is_async_generator) {
+    if (generator->activation.is_async_generator) {
         // Reject the front request with the pending exception and settle the agen.
         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
         mal_async_generator_throw_done(vm, generator, reason);
-    } else if (generator->is_async) {
-        // The async function's body threw: reject its result promise rather than
-        // propagate (the async body's implicit try/catch).
-        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-        mal_async_function_settle_throw(vm, generator, reason);
     }
     // Plain generator: leave vm->completion == THROW(reason) for the .next() caller
     // to re-raise.
@@ -10685,15 +10677,21 @@ MalValue mal_vm_op_async_result_compiled(MalVm *vm) {
 }
 
 void mal_vm_op_async_complete_compiled(
-    MalVm *vm, MalGeneratorObject *state, MalValue promise, bool is_reject, MalValue value
+    MalVm *vm, MalAsyncFunctionState *state, MalValue promise, bool is_reject, MalValue value
 ) {
     if (state != nullptr) {
+        MalValue roots[] = {mal_value_from_heap(&state->header), value};
+        MalRootSpan root_span;
+        mal_gc_root(&root_span, roots, 2);
+        state->activation.state = MAL_GENERATOR_COMPLETED;
+        mal_async_function_release_frame(vm, state);
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = MAL_VALUE_UNDEFINED};
         if (is_reject) {
-            vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = value};
-            mal_vm_op_coroutine_throw_compiled(vm, state, state->frame.registers);
+            mal_async_function_settle_throw(vm, state, value);
         } else {
-            mal_vm_op_coroutine_return_compiled(vm, state, value);
+            mal_async_function_settle_return(vm, state, value);
         }
+        mal_gc_unroot(&root_span);
         return;
     }
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
@@ -10702,7 +10700,7 @@ void mal_vm_op_async_complete_compiled(
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 }
 
-MalGeneratorObject *mal_vm_op_async_suspend_compiled(
+MalAsyncFunctionState *mal_vm_op_async_suspend_compiled(
     MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
     i32 register_count, const MalValue *arguments, i32 argument_count,
     bool retain_arguments, MalValue promise_value) {
@@ -10712,10 +10710,9 @@ MalGeneratorObject *mal_vm_op_async_suspend_compiled(
     MalRootSpan promise_root;
     mal_gc_root(&promise_root, &promise_value, 1);
 
-    // The hidden async state reuses the generator suspendable-frame object.
-    MalGeneratorObject *state = mal_async_function_state_new(vm);
-    state->async_data->promise = promise_value;
-    state->state = MAL_GENERATOR_EXECUTING;
+    MalAsyncFunctionState *state = mal_async_function_state_new(vm);
+    state->activation.promise = promise_value;
+    state->activation.state = MAL_GENERATOR_EXECUTING;
     // Link the result promise back to this async state for async stack stitching.
     MalPromiseObject *promise = mal_value_to_promise_object(promise_value);
     promise->async_owner = state;
@@ -10723,61 +10720,62 @@ MalGeneratorObject *mal_vm_op_async_suspend_compiled(
 
     MalValue *registers;
     if (register_count <= 2) {
-        registers = state->async_data->registers;
+        registers = state->registers;
         for (i32 i = 0; i < register_count; i++) registers[i] = mal_value_new_undefined();
     } else {
         registers = mal_coroutine_alloc_registers(vm, register_count);
     }
 
-    state->frame.vm = vm;
-    state->frame.function_index = function_index;
-    state->frame.function = &vm->live_runtime_image.functions[function_index];
-    state->frame.registers = registers;
-    state->frame.compiled_register_count = register_count;
-    state->frame.compiled_suspend_position_entry = 0;
-    state->frame.is_compiled = true;
-    state->frame.arguments = owned_arguments;
-    mal_generator_note_owned_storage(state);
-    state->frame.argument_count = state->frame.function->needs_arguments
+    state->activation.frame.vm = vm;
+    state->activation.frame.function_index = function_index;
+    state->activation.frame.function = &vm->live_runtime_image.functions[function_index];
+    state->activation.frame.registers = registers;
+    state->activation.frame.compiled_register_count = register_count;
+    state->activation.frame.compiled_suspend_position_entry = 0;
+    state->activation.frame.is_compiled = true;
+    state->activation.frame.arguments = owned_arguments;
+    mal_async_function_note_owned_storage(state);
+    state->activation.frame.argument_count = state->activation.frame.function->needs_arguments
         ? argument_count
         : 0;
-    state->frame.stack_base = -1;
-    state->frame.this_value = this_value;
-    state->frame.arguments_object = mal_value_new_undefined();
-    state->frame.callee = callee;
-    state->frame.generator = state;
-    state->frame.env = env;
-    state->frame.is_construct = false;
-    state->frame.new_target = mal_value_new_undefined();
-    state->frame.instruction_pointer = -1; // set at each await
-    state->frame.gc_safepoint_ip = -1;
+    state->activation.frame.stack_base = -1;
+    state->activation.frame.this_value = this_value;
+    state->activation.frame.arguments_object = mal_value_new_undefined();
+    state->activation.frame.callee = callee;
+    state->activation.frame.async_function = state;
+    state->activation.frame.env = env;
+    state->activation.frame.is_construct = false;
+    state->activation.frame.new_target = mal_value_new_undefined();
+    state->activation.frame.instruction_pointer = -1; // set at each await
+    state->activation.frame.gc_safepoint_ip = -1;
 #if MAL_REALMS
-    state->frame.realm = vm->current_realm;
+    state->activation.frame.realm = vm->current_realm;
 #endif
 
-    mal_gc_remember_if_old(&state->object.header);
+    mal_gc_remember_if_old(&state->header);
 
     mal_gc_unroot(&promise_root);
     return state;
 }
 
 void mal_vm_op_await_compiled(
-    MalVm *vm, MalGeneratorObject *state, MalValue awaited, i32 value_dst, i32 mode_dst,
+    MalVm *vm, MalHeapHeader *state, MalValue awaited, i32 value_dst, i32 mode_dst,
     i32 resume_ip, i32 suspend_position_entry, MalEnv *env) {
-    MalValue roots[] = {mal_value_from_object((MalObject *) state), awaited};
+    MalValue roots[] = {mal_value_from_heap(state), awaited};
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, 2);
-    state->resume_value_register = value_dst;
-    state->resume_mode_register = mode_dst;
-    state->state = MAL_GENERATOR_SUSPENDED_YIELD;
-    state->frame.instruction_pointer = resume_ip;
-    state->frame.compiled_suspend_position_entry = suspend_position_entry + 1;
+    MalCoroutineActivation *activation = mal_coroutine_activation(state);
+    activation->resume_value_register = value_dst;
+    activation->resume_mode_register = mode_dst;
+    activation->state = MAL_GENERATOR_SUSPENDED_YIELD;
+    activation->frame.instruction_pointer = resume_ip;
+    activation->frame.compiled_suspend_position_entry = suspend_position_entry + 1;
     // SATB: frame.env is a traced heap field being overwritten; shade the previous env.
-    if (state->frame.env != nullptr) {
-        mal_gc_write_barrier_env(state->frame.env);
+    if (activation->frame.env != nullptr) {
+        mal_gc_write_barrier_env(activation->frame.env);
     }
-    state->frame.env = env;
-    mal_gc_remember_if_old(&state->object.header);
+    activation->frame.env = env;
+    mal_gc_remember_if_old(state);
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
     // Hook the settlement continuation; when the awaited value settles a microtask
     // resumes this state. (If PromiseResolve throws, this resumes synchronously with

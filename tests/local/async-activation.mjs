@@ -197,7 +197,9 @@ if (typeof collect === "function") collect();
 const detachedValues = [];
 async function detached(value) {
 	const record = { value };
+	if (typeof collect === "function") collect();
 	await 0;
+	if (typeof collect === "function") collect();
 	await 0;
 	detachedValues.push(record.value);
 }
@@ -209,3 +211,27 @@ await 0;
 await 0;
 await 0;
 console.log("detached results", detachedValues.join(","));
+
+async function mixedChild(value) {
+	const record = { value };
+	await 0;
+	if (typeof collect === "function") collect();
+	return record;
+}
+async function* mixedGenerator(value) {
+	try {
+		yield await mixedChild(value);
+		return await mixedChild(value + 1);
+	} finally {
+		await 0;
+	}
+}
+let mixedChecksum = 0;
+for (let index = 0; index < 80; index++) {
+	const iterator = mixedGenerator(index);
+	const first = await iterator.next();
+	const second = await iterator.next();
+	if (first.done || !second.done) throw new Error("mixed async completion differs");
+	mixedChecksum += first.value.value + second.value.value;
+}
+console.log("mixed await", mixedChecksum);

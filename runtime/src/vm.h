@@ -2104,7 +2104,7 @@ typedef struct MalVm {
     u32 coroutine_buffer_pool_count;
 
     /** Completed hidden activations, rooted with no remaining user-value edges. */
-    struct MalGeneratorObject *async_function_state_pool[MAL_ASYNC_FUNCTION_STATE_POOL_LIMIT];
+    struct MalAsyncFunctionState *async_function_state_pool[MAL_ASYNC_FUNCTION_STATE_POOL_LIMIT];
     u32 async_function_state_pool_count;
 
     /** Cleared async-generator request nodes retained for reuse. */
@@ -2747,6 +2747,7 @@ void mal_vm_release_stack_trace(MalVm *vm, i32 id);
 MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace);
 
 typedef struct MalGeneratorObject MalGeneratorObject;
+typedef struct MalAsyncFunctionState MalAsyncFunctionState;
 
 typedef struct MalVmFrame {
     /*
@@ -2776,11 +2777,14 @@ typedef struct MalVmFrame {
     MalValue callee;
 
     /**
-     * Non-null for a generator activation: the generator object that owns this
-     * frame's storage. RETURN consults it to mark the generator completed
-     * rather than freeing into a caller register.
+     * The coroutine owning this frame's storage. Its heap type distinguishes a
+     * public generator object from an ordinary async function's hidden activation.
      */
-    MalGeneratorObject *generator;
+    union {
+        MalGeneratorObject *generator;
+        struct MalAsyncFunctionState *async_function;
+        MalHeapHeader *coroutine;
+    };
 
     /**
      * Own captured-slot node when the function has captured slots, otherwise
@@ -3045,7 +3049,7 @@ bool mal_vm_check_entry_evaluation(MalVm *vm);
  * vm->completion.value); a throw leaves vm->completion as THROW and marks the
  * generator COMPLETED.
  */
-void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue sent_value, i32 resume_mode);
+void mal_vm_resume_coroutine(MalVm *vm, MalHeapHeader *owner, MalValue sent_value, i32 resume_mode);
 
 /**
  * Reject an ordinary [[Call]] entry into an ECMAScript class constructor.

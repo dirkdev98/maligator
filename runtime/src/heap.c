@@ -439,13 +439,20 @@ static bool mal_heap_dead_cell_finalizes(const MalHeap *heap, const MalHeapHeade
         }
         case MAL_HEAP_GENERATOR_OBJECT: {
             const MalGeneratorObject *generator = (const MalGeneratorObject *) cell;
-            bool suspended = generator->state == MAL_GENERATOR_SUSPENDED_START ||
-                generator->state == MAL_GENERATOR_SUSPENDED_YIELD;
+            bool suspended = generator->activation.state == MAL_GENERATOR_SUSPENDED_START ||
+                generator->activation.state == MAL_GENERATOR_SUSPENDED_YIELD;
             return (suspended &&
-                    ((generator->frame.registers != nullptr && !mal_generator_registers_inline(generator)) ||
-                     generator->frame.arguments != nullptr)) ||
-                (generator->is_async_generator && generator->async_data->queue_head != nullptr) ||
+                    (generator->activation.frame.registers != nullptr ||
+                     generator->activation.frame.arguments != nullptr)) ||
+                (generator->activation.is_async_generator && generator->activation.async_data->queue_head != nullptr) ||
                 mal_object_finalizes(&generator->object);
+        }
+        case MAL_HEAP_ASYNC_FUNCTION_STATE: {
+            const MalAsyncFunctionState *state = (const MalAsyncFunctionState *) cell;
+            return (state->activation.state == MAL_GENERATOR_SUSPENDED_START ||
+                    state->activation.state == MAL_GENERATOR_SUSPENDED_YIELD) &&
+                ((state->activation.frame.registers != nullptr && state->activation.frame.registers != state->registers) ||
+                 state->activation.frame.arguments != nullptr);
         }
         default:
             return false;
@@ -957,6 +964,7 @@ static MalProfileAllocationFamily mal_profile_family_for_heap_type(MalHeapType t
             return MAL_PROFILE_ALLOCATION_FAMILY_BUFFER;
         case MAL_HEAP_PROMISE_OBJECT:
         case MAL_HEAP_PROMISE_COMBINATOR_STATE:
+        case MAL_HEAP_ASYNC_FUNCTION_STATE:
             return MAL_PROFILE_ALLOCATION_FAMILY_PROMISE;
         case MAL_HEAP_ITERATOR_OBJECT:
         case MAL_HEAP_STRING_CURSOR:

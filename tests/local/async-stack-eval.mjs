@@ -17,4 +17,11 @@ const stack = await awaitingParent(recompilingChild, source);
 if (typeof stack !== "string" || !stack.includes("awaitingParent")) {
 	throw new Error("async stack lost its awaiting caller: " + stack);
 }
+const awaitingGenerator = (0, eval)(`(async function* awaitingGenerator(child, source) {
+	yield await child(source);
+})`);
+const mixed = await awaitingGenerator(recompilingChild, source).next();
+if (typeof mixed.value !== "string" || !mixed.value.includes("awaitingGenerator")) {
+	throw new Error("async stack lost its generator caller: " + mixed.value);
+}
 console.log("ASYNC STACK EVAL PASS");

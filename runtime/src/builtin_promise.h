@@ -106,7 +106,7 @@ bool mal_promise_can_elide_await_resolve(
 void mal_promise_perform_await(
     MalVm *vm,
     MalValue promise,
-    MalGeneratorObject *state
+    MalHeapHeader *state
 );
 
 /** Register the typed continuation used by AsyncGeneratorAwaitReturn. */

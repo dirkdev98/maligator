@@ -5,7 +5,7 @@
 #include "value.h"
 
 typedef struct MalVm MalVm;
-typedef struct MalGeneratorObject MalGeneratorObject;
+typedef struct MalAsyncFunctionState MalAsyncFunctionState;
 typedef struct MalAsyncContext MalAsyncContext;
 
 /**
@@ -43,7 +43,7 @@ typedef struct MalPromiseObject {
      * record an ancestor for stack captures. Completion clears the link before
      * that activation can be recycled.
      */
-    MalGeneratorObject *async_owner;
+    MalAsyncFunctionState *async_owner;
 } MalPromiseObject;
 
 typedef enum MalPromiseCombinatorKind {

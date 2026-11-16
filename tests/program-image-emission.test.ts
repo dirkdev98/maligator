@@ -4268,7 +4268,9 @@ describe("native update-expression representation", () => {
 		const output = emit(
 			`"use strict"; async function read(object) { for (let i = 0; i < 2; i++) { await 0; object.value; } } globalThis.read = read;`,
 		);
-		const dispatch = output.indexOf("switch (resume_state->frame.instruction_pointer)");
+		const dispatch = output.indexOf(
+			"switch (resume_state->activation.frame.instruction_pointer)",
+		);
 		expect(dispatch).toBeGreaterThanOrEqual(0);
 		expect(output).not.toContain("u64 __watched_methods_epoch = ");
 	});

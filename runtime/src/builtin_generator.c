@@ -24,22 +24,22 @@ static bool mal_generator_resume_pair(
     MalVm *vm, MalGeneratorObject *generator, MalValue value, i32 mode,
     MalValue *value_out, bool *done_out, bool *result_out
 ) {
-    mal_vm_resume_generator(vm, generator, value, mode);
+    mal_vm_resume_coroutine(vm, &generator->object.header, value, mode);
     *result_out = false;
 
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return false;
     }
 
-    if (generator->terminal_yield_pending ||
-        generator->state == MAL_GENERATOR_SUSPENDED_YIELD) {
-        *value_out = generator->yielded_value;
+    if (generator->activation.terminal_yield_pending ||
+        generator->activation.state == MAL_GENERATOR_SUSPENDED_YIELD) {
+        *value_out = generator->activation.yielded_value;
         *done_out = false;
-        *result_out = generator->yielded_result;
-        generator->terminal_yield_pending = false;
-        generator->yielded_result = false;
+        *result_out = generator->activation.yielded_result;
+        generator->activation.terminal_yield_pending = false;
+        generator->activation.yielded_result = false;
         mal_gc_write_barrier(*value_out);
-        generator->yielded_value = mal_value_new_undefined();
+        generator->activation.yielded_value = mal_value_new_undefined();
         return true;
     }
 
@@ -62,12 +62,12 @@ static bool mal_generator_next_pair(
     MalValue *value_out, bool *done_out, bool *result_out
 ) {
     *result_out = false;
-    if (generator->state == MAL_GENERATOR_EXECUTING) {
+    if (generator->activation.state == MAL_GENERATOR_EXECUTING) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Generator is already running");
         return false;
     }
 
-    if (generator->state == MAL_GENERATOR_COMPLETED) {
+    if (generator->activation.state == MAL_GENERATOR_COMPLETED) {
         *value_out = mal_value_new_undefined();
         *done_out = true;
         return true;
@@ -107,7 +107,7 @@ int mal_generator_try_exact_iterator_step(
 
     MalGeneratorObject *generator = (MalGeneratorObject *) mal_value_to_object(iterator);
     MalNativeFunctionObject *next = mal_value_to_native_function_object(next_method);
-    if (generator->is_async || generator->is_async_generator ||
+    if (generator->activation.is_async_generator ||
         mal_native_function_object_callback(next) != mal_builtin_generator_next) {
         return 0;
     }
@@ -152,18 +152,18 @@ static MalValue mal_builtin_generator_throw(MalVm *vm, MalValue this_value, cons
 
     MalValue exception = arg_count > 0 ? args[0] : mal_value_new_undefined();
 
-    if (generator->state == MAL_GENERATOR_EXECUTING) {
+    if (generator->activation.state == MAL_GENERATOR_EXECUTING) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Generator is already running");
         return mal_value_new_undefined();
     }
 
     // Throwing into a not-yet-started or finished generator throws the value
     // back at the caller without running any body code.
-    if (generator->state == MAL_GENERATOR_SUSPENDED_START) {
+    if (generator->activation.state == MAL_GENERATOR_SUSPENDED_START) {
         mal_generator_release_frame(vm, generator);
-        generator->state = MAL_GENERATOR_COMPLETED;
+        generator->activation.state = MAL_GENERATOR_COMPLETED;
     }
-    if (generator->state == MAL_GENERATOR_COMPLETED) {
+    if (generator->activation.state == MAL_GENERATOR_COMPLETED) {
         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = exception};
         return mal_value_new_undefined();
     }
@@ -181,18 +181,18 @@ static MalValue mal_builtin_generator_return(MalVm *vm, MalValue this_value, con
 
     MalValue value = arg_count > 0 ? args[0] : mal_value_new_undefined();
 
-    if (generator->state == MAL_GENERATOR_EXECUTING) {
+    if (generator->activation.state == MAL_GENERATOR_EXECUTING) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Generator is already running");
         return mal_value_new_undefined();
     }
 
     // Returning into a not-yet-started or finished generator completes it with
     // the given value, running no body code (no finalizers to honor).
-    if (generator->state == MAL_GENERATOR_SUSPENDED_START) {
+    if (generator->activation.state == MAL_GENERATOR_SUSPENDED_START) {
         mal_generator_release_frame(vm, generator);
-        generator->state = MAL_GENERATOR_COMPLETED;
+        generator->activation.state = MAL_GENERATOR_COMPLETED;
     }
-    if (generator->state == MAL_GENERATOR_COMPLETED) {
+    if (generator->activation.state == MAL_GENERATOR_COMPLETED) {
         return mal_vm_create_iter_result(vm, value, true);
     }
 

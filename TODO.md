@@ -327,14 +327,6 @@ contracts or investigates costs still visible after the string follow-ups.
       Preserve generic comparison order for uncertified or heterogeneous keys, and
       retain only repeated workload savings that repay analysis and generated size.
 
-- [ ] Reduce cold suspended async activation size.
-      Completed activations recycle on both backends; native activation storage
-      materializes lazily. Pending calls still need result promises, await jobs and
-      boxed suspension snapshots.
-      Use the JavaScript-v1 concurrent async phase to bound a smaller hidden state;
-      the bounded fanout in JavaScript-v2 reuses the pool after warmup. Preserve async
-      stacks, independent result-promise lifetimes and exact microtask ordering.
-
 - [ ] Reduce remaining no-capture closure and per-iteration capture
       costs. Source-immutable leaf captures can copy values in open images; synthetic
       iteration owners and cyclic initializers still need per-creation snapshots before

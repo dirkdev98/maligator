@@ -21,6 +21,7 @@
 #include "./array_object.h"
 #include "./arguments_object.h"
 #include "./async_context.h"
+#include "./async_function.h"
 #include "./bound_function_object.h"
 #include "./builtin_error.h"
 #include "./builtin_async_generator.h"
@@ -1424,6 +1425,8 @@ static void mal_gc_visit_frame_registers(
 
 /** Trace an interpreter / generator activation frame. */
 static void mal_gc_trace_frame_metadata_in(MalGcThreadContext *ctx, MalVmFrame *frame) {
+    // An ignored result promise must not release an activation still executing here.
+    if (frame->coroutine != nullptr) mal_gc_shade_in(ctx, frame->coroutine);
     mal_gc_mark_values_in(ctx, frame->arguments, frame->argument_count);
     mal_gc_mark_value_in(ctx, frame->this_value);
     mal_gc_mark_value_in(ctx, frame->arguments_object);
@@ -1446,6 +1449,9 @@ static void mal_gc_trace_frame(MalVmFrame *frame) {
  * is active (call sites gate on mal_gc_marking_active). Compact lexical links are
  * frame-owned edges, so record the full chain before the frame disappears. */
 void mal_gc_satb_shade_frame(MalVmFrame *frame) {
+    if (frame->coroutine != nullptr) {
+        mal_gc_satb_record(mal_value_from_heap(frame->coroutine));
+    }
     mal_gc_visit_frame_registers(frame, mal_gc_satb_record);
     if (frame->arguments != nullptr) {
         for (i32 i = 0; i < frame->argument_count; ++i) {
@@ -1480,6 +1486,22 @@ static void mal_gc_trace_object_common_in(MalGcThreadContext *ctx, MalObject *ob
 }
 
 /** Trace a cell's outgoing edges after its mark claim. */
+static void mal_gc_trace_coroutine_frame_in(
+    MalGcThreadContext *ctx, MalVmFrame *frame, MalGeneratorState state
+) {
+    // Completion releases the buffers; an eval splice can move a suspended function.
+    if (state == MAL_GENERATOR_COMPLETED) return;
+    if (frame->function != nullptr) {
+        frame->function = &ctx->vm->live_runtime_image.functions[frame->function_index];
+    }
+    // The active interpreter owns the advancing safepoint row, not this snapshot.
+    if (state == MAL_GENERATOR_EXECUTING && !frame->is_compiled) {
+        mal_gc_trace_frame_metadata_in(ctx, frame);
+    } else {
+        mal_gc_trace_frame_in(ctx, frame);
+    }
+}
+
 static void mal_gc_trace_cell_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
     switch (cell->type) {
         case MAL_HEAP_STRING: {
@@ -1522,6 +1544,13 @@ static void mal_gc_trace_cell_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
             for (i32 i = 0; i < env->slot_count; ++i) {
                 mal_gc_mark_value_in(ctx, env->slots[i]);
             }
+            return;
+        }
+        case MAL_HEAP_ASYNC_FUNCTION_STATE: {
+            MalAsyncFunctionState *state = (MalAsyncFunctionState *) cell;
+            mal_gc_mark_value_in(ctx, state->activation.promise);
+            if (state->activation.awaited_by != nullptr) mal_gc_shade_in(ctx, state->activation.awaited_by);
+            mal_gc_trace_coroutine_frame_in(ctx, &state->activation.frame, state->activation.state);
             return;
         }
         case MAL_HEAP_PROMISE_COMBINATOR_STATE: {
@@ -1789,44 +1818,16 @@ static void mal_gc_trace_cell_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
         }
         case MAL_HEAP_GENERATOR_OBJECT: {
             MalGeneratorObject *gen = (MalGeneratorObject *) cell;
-            // A COMPLETED coroutine's frame register/argument buffers were freed at
-            // teardown (mal_vm_op_coroutine_return_compiled / the interpreter frame
-            // pop) yet frame.registers stays dangling and frame.function stays set —
-            // tracing it would follow freed memory. Skip it, mirroring the finalizer,
-            // which frees the frame buffers only while the coroutine is suspended.
-            if (gen->state != MAL_GENERATOR_COMPLETED) {
-                // Re-resolve the frame's function from its index (the source of
-                // truth) before tracing: an eval splice can realloc the function
-                // table and move it, dangling the cached gen->frame.function until
-                // the coroutine next resumes (which re-resolves the same way, see
-                // mal_vm_resume_generator). mal_vm_splice_runtime_image only fixes up
-                // the live vm->frames, not suspended coroutine frames, and this
-                // trace runs before the resume. frame.function is null for a
-                // never-populated frame (mal_generator_object_new), which stays a
-                // no-op trace.
-                if (gen->frame.function != nullptr) {
-                    gen->frame.function =
-                        &ctx->vm->live_runtime_image.functions[gen->frame.function_index];
-                }
-                // An executing interpreter shares its register buffer with the active
-                // VM frame, whose safepoint row advances independently of this snapshot.
-                // Persistent frame metadata stays owned by the generator across resumes.
-                if (gen->state == MAL_GENERATOR_EXECUTING && !gen->frame.is_compiled) {
-                    mal_gc_trace_frame_metadata_in(ctx, &gen->frame);
-                } else {
-                    mal_gc_trace_frame_in(ctx, &gen->frame);
-                }
-            }
-            mal_gc_mark_value_in(ctx, gen->yielded_value);
-            if (gen->async_data != nullptr) {
-                mal_gc_mark_value_in(ctx, gen->async_data->promise);
-                if (gen->async_data->awaited_by != nullptr) {
-                    mal_gc_shade_in(ctx, &gen->async_data->awaited_by->object.header);
+            mal_gc_trace_coroutine_frame_in(ctx, &gen->activation.frame, gen->activation.state);
+            mal_gc_mark_value_in(ctx, gen->activation.yielded_value);
+            if (gen->activation.async_data != nullptr) {
+                if (gen->activation.async_data->awaited_by != nullptr) {
+                    mal_gc_shade_in(ctx, gen->activation.async_data->awaited_by);
                 }
                 // Pending async-generator requests (malloc'd nodes, traced via
                 // the owner) remain reachable through the coallocated tail.
-                for (MalAsyncGeneratorRequest *req = gen->is_async_generator
-                         ? gen->async_data->queue_head : nullptr;
+                for (MalAsyncGeneratorRequest *req = gen->activation.is_async_generator
+                         ? gen->activation.async_data->queue_head : nullptr;
                      req != nullptr; req = req->next) {
                     mal_gc_mark_value_in(ctx, req->promise);
                     mal_gc_mark_value_in(ctx, req->promise_constructor);
@@ -1850,7 +1851,7 @@ static void mal_gc_trace_cell_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
 #endif
             }
             if (promise->async_owner != nullptr) {
-                mal_gc_shade_in(ctx, &promise->async_owner->object.header);
+                mal_gc_shade_in(ctx, &promise->async_owner->header);
             }
             break;
         }
@@ -2197,7 +2198,7 @@ static void mal_gc_scan_roots(MalVm *vm) {
     mal_gc_mark_values(vm->unhandled_rejections, vm->unhandled_count);
     mal_gc_mark_value(vm->entry_async_promise);
     for (u32 i = 0; i < vm->async_function_state_pool_count; i++) {
-        mal_gc_shade_in(&g_gc_thread, &vm->async_function_state_pool[i]->object.header);
+        mal_gc_shade_in(&g_gc_thread, &vm->async_function_state_pool[i]->header);
     }
     // Atoms are permanent roots, and a minor reclaims only young cells, so it visits just
     // the atoms inserted since the previous minor; every older atom survived that minor
@@ -2282,6 +2283,14 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
             MalStringCursor *cursor = (MalStringCursor *) cell;
             if (cursor->iterator != nullptr) cursor->iterator->owner = nullptr;
             mal_string_cursor_dispose(cursor);
+            return;
+        }
+        case MAL_HEAP_ASYNC_FUNCTION_STATE: {
+            MalAsyncFunctionState *state = (MalAsyncFunctionState *) cell;
+            if (state->activation.state == MAL_GENERATOR_SUSPENDED_START ||
+                state->activation.state == MAL_GENERATOR_SUSPENDED_YIELD) {
+                mal_async_function_release_frame(g_gc_vm, state);
+            }
             return;
         }
         case MAL_HEAP_SYMBOL:
@@ -2525,15 +2534,15 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
             // (leaving these pointers dangling), so release ONLY while suspended
             // to avoid a double free.
             MalGeneratorObject *gen = (MalGeneratorObject *) cell;
-            if (gen->state == MAL_GENERATOR_SUSPENDED_START ||
-                gen->state == MAL_GENERATOR_SUSPENDED_YIELD) {
+            if (gen->activation.state == MAL_GENERATOR_SUSPENDED_START ||
+                gen->activation.state == MAL_GENERATOR_SUSPENDED_YIELD) {
                 mal_generator_release_frame(g_gc_vm, gen);
             }
-            if (gen->is_async_generator) {
+            if (gen->activation.is_async_generator) {
                 mal_async_generator_free_requests(
-                    g_gc_vm, gen->async_data->queue_head);
-                gen->async_data->queue_head = nullptr;
-                gen->async_data->queue_tail = nullptr;
+                    g_gc_vm, gen->activation.async_data->queue_head);
+                gen->activation.async_data->queue_head = nullptr;
+                gen->activation.async_data->queue_tail = nullptr;
             }
             break;
         }

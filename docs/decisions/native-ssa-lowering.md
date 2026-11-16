@@ -648,10 +648,16 @@ keep their existing ownership contracts.
 
 Compiled async calls create their result promise before running the body. Persistent
 coroutine state is materialized at the first await, unless arguments need an entry-time
-snapshot. Calls that complete before suspension settle their promise directly. Small
-snapshots occupy the async-generator queue space unused by ordinary async functions;
-larger snapshots retain the bounded buffer pool. Tracing and finalization distinguish
-inline slots from owned buffers and queued async-generator requests.
+snapshot. Calls that complete before suspension settle their promise directly.
+Ordinary async functions use a compact internal heap cell without JavaScript object
+storage or generator-only fields. Small snapshots occupy its inline slots; larger
+snapshots retain the bounded buffer pool. Public generators keep their own object
+layout. Shared await, resume and async stack links identify each owner by heap type.
+Owners embed the same frame and resume control fields, so shared drivers use one
+activation address.
+Tracing and finalization distinguish inline slots from owned buffers and queued
+async-generator requests. An executing VM frame roots its owner even when its result
+promise is ignored.
 
 Completed native async activations enter an isolate-owned bounded root pool. Completion
 releases their snapshot storage, detaches the result promise's owner and async waiter

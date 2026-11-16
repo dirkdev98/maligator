@@ -70,16 +70,16 @@ int main(void) {
     MalWeakRefObject *weak = mal_value_to_weak_ref_object(weak_value);
     if (mal_value_is_undefined(weak->target)) return 3;
 
-    i32 stale_slot = dead_register_slot(&generator->frame);
-    if (stale_slot < 0 || stale_slot >= generator->frame.function->register_count) {
+    i32 stale_slot = dead_register_slot(&generator->activation.frame);
+    if (stale_slot < 0 || stale_slot >= generator->activation.frame.function->register_count) {
         fprintf(stderr, "missing excluded object slot: ip=%d trusted=%d safepoints=%d registers=%d slot=%d\n",
-                generator->frame.gc_safepoint_ip,
-                generator->frame.function->gc_safepoints_trusted,
-                generator->frame.function->gc_safepoint_count,
-                generator->frame.function->register_count, stale_slot);
+                generator->activation.frame.gc_safepoint_ip,
+                generator->activation.frame.function->gc_safepoints_trusted,
+                generator->activation.frame.function->gc_safepoint_count,
+                generator->activation.frame.function->register_count, stale_slot);
         return 8;
     }
-    generator->frame.registers[stale_slot] = weak->target;
+    generator->activation.frame.registers[stale_slot] = weak->target;
 
     mal_vm_clear_kept_objects(&vm);
     vm.heap.next_gc_at = 1;
@@ -87,7 +87,7 @@ int main(void) {
     mal_gc_safepoint(&vm);
     if (!mal_gc_marking_active) return 4;
 
-    mal_vm_resume_generator(&vm, generator, mal_value_new_undefined(),
+    mal_vm_resume_coroutine(&vm, &generator->object.header, mal_value_new_undefined(),
                             MAL_GENERATOR_RESUME_NEXT);
     if (vm.completion.kind != MAL_COMPLETION_NORMAL ||
         mal_value_to_i32(vm.completion.value) != 17) return 5;

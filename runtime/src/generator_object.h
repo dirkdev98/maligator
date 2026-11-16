@@ -30,57 +30,30 @@ typedef struct MalGeneratorObject MalGeneratorObject;
 typedef struct MalAsyncGeneratorRequest MalAsyncGeneratorRequest;
 
 /**
- * State used only by async functions and async generators. Async generator
- * objects coallocate this immediately after the common generator object, while
- * synchronous generators omit it entirely.
+ * Async generators coallocate their request queue and async stack link after
+ * the common generator object. Synchronous generators omit this state.
  */
 typedef struct MalGeneratorAsyncData {
-    /** Direct intrinsic result promise for async functions. */
-    MalValue promise;
     /** Async stack stitching to the function awaiting this result. */
-    MalGeneratorObject *awaited_by;
-    union {
-        /** FIFO next/throw/return requests owned by an async generator. */
-        struct {
-            MalAsyncGeneratorRequest *queue_head;
-            MalAsyncGeneratorRequest *queue_tail;
-        };
-        /** Ordinary async functions can suspend without a separate small buffer. */
-        MalValue registers[2];
-    };
+    MalHeapHeader *awaited_by;
+    MalAsyncGeneratorRequest *queue_head;
+    MalAsyncGeneratorRequest *queue_tail;
 } MalGeneratorAsyncData;
 
-/**
- * A generator instance owning its suspended activation. The frame's
- * registers/arguments buffers live with the generator while suspended
- * (transferred off the VM frame stack on suspend, pushed back on resume) and
- * are returned to the VM's bounded buffer pool when the generator completes.
- */
-struct MalGeneratorObject {
-    MalObject object;
-    MalObjectStorage object_storage;
+/** The owner heap type selects the promise/yield and awaiter/queue link fields. */
+typedef struct MalCoroutineActivation {
     MalVmFrame frame;
-
-    /**
-     * Registers in `frame` where a resume writes the sent value and the resume
-     * mode code; recorded by the most recent YIELD.
-     */
     i32 resume_value_register;
     i32 resume_mode_register;
-
-    /**
-     * The value handed out by the current suspension (gen -> caller).
-     */
-    MalValue yielded_value;
-
-    /** Coallocated trailing state for async functions/generators; null for sync. */
-    MalGeneratorAsyncData *async_data;
-
-    /* State + flags clustered so the enum/bools share one trailing word. */
+    union {
+        MalValue yielded_value;
+        MalValue promise;
+    };
+    union {
+        MalGeneratorAsyncData *async_data;
+        MalHeapHeader *awaited_by;
+    };
     MalGeneratorState state;
-    /** This object is an async function's hidden state. */
-    bool is_async : 1;
-    /** `async function*`: sets is_async too, so await works. */
     bool is_async_generator : 1;
     /** Guards against re-entrant driving while the body is mid-step (awaiting). */
     bool agen_running : 1;
@@ -88,19 +61,62 @@ struct MalGeneratorObject {
     bool terminal_yield_pending : 1;
     /** yielded_value is a sync yield*'s inner result object, handed out unchanged. */
     bool yielded_result : 1;
+} MalCoroutineActivation;
+
+/**
+ * Public generators own their activation and JavaScript object storage. Suspended
+ * buffers transfer between the activation and VM frames until completion.
+ */
+struct MalGeneratorObject {
+    MalObject object;
+    MalObjectStorage object_storage;
+    MalCoroutineActivation activation;
 };
+
+typedef struct MalAsyncFunctionState {
+    MalHeapHeader header;
+    MalCoroutineActivation activation;
+    MalValue registers[2];
+} MalAsyncFunctionState;
+
+static_assert(sizeof(MalAsyncFunctionState) <= 192,
+              "hidden async state outgrew its compact size class");
+
+static inline MalCoroutineActivation *mal_coroutine_activation(MalHeapHeader *owner) {
+    if (owner->type == MAL_HEAP_ASYNC_FUNCTION_STATE) {
+        return &((MalAsyncFunctionState *) owner)->activation;
+    }
+    return &((MalGeneratorObject *) owner)->activation;
+}
+
+static inline bool mal_coroutine_is_async(const MalHeapHeader *owner) {
+    return owner != nullptr &&
+        (owner->type == MAL_HEAP_ASYNC_FUNCTION_STATE ||
+         ((const MalGeneratorObject *) owner)->activation.is_async_generator);
+}
+
+static inline MalHeapHeader *mal_coroutine_awaited_by(MalHeapHeader *owner) {
+    return owner->type == MAL_HEAP_ASYNC_FUNCTION_STATE
+        ? ((MalAsyncFunctionState *) owner)->activation.awaited_by
+        : ((MalGeneratorObject *) owner)->activation.async_data->awaited_by;
+}
+
+static inline void mal_async_function_note_owned_storage(MalAsyncFunctionState *state) {
+    if ((state->activation.frame.registers != nullptr && state->activation.frame.registers != state->registers) ||
+        state->activation.frame.arguments != nullptr) {
+        mal_heap_cell_needs_finalizer(&state->header);
+    }
+}
 
 static_assert(sizeof(MalGeneratorObject) <= (MAL_REALMS ? 208 : 192),
               "synchronous generator state outgrew its compact size class");
-static_assert(sizeof(MalGeneratorObject) + sizeof(MalGeneratorAsyncData) <=
-                  (MAL_REALMS ? 240 : 224),
+static_assert(sizeof(MalGeneratorObject) + sizeof(MalGeneratorAsyncData) <= 224,
               "coallocated async generator state outgrew its size class");
 
 /**
  * A queued next/throw/return on an async generator: the intrinsic Promise the
  * engine settles directly, its request realm's %Promise% constructor anchor,
- * and the resume mode/value to deliver to the body. This remains the same three
- * MalValue fields as the former resolve/reject/value capability representation.
+ * and the resume mode/value to deliver to the body.
  */
 struct MalAsyncGeneratorRequest {
     struct MalAsyncGeneratorRequest *next;
@@ -118,17 +134,12 @@ MalGeneratorObject *mal_generator_object_new(MalHeap *heap, MalObject *prototype
 
 /** Allocate a generator object with coallocated async-only state. */
 MalGeneratorObject *mal_generator_object_new_async(
-    MalHeap *heap, MalObject *prototype, bool is_async_generator);
-
-static inline bool mal_generator_registers_inline(const MalGeneratorObject *generator) {
-    return generator->async_data != nullptr && !generator->is_async_generator &&
-        generator->frame.registers == generator->async_data->registers;
-}
+    MalHeap *heap, MalObject *prototype);
 
 /** A suspended frame or a queued request now holds storage the finalizer releases. */
 static inline void mal_generator_note_owned_storage(MalGeneratorObject *generator) {
-    if ((generator->frame.registers != nullptr && !mal_generator_registers_inline(generator)) ||
-        generator->frame.arguments != nullptr || generator->is_async_generator) {
+    if (generator->activation.frame.registers != nullptr ||
+        generator->activation.frame.arguments != nullptr || generator->activation.is_async_generator) {
         mal_heap_cell_needs_finalizer(&generator->object.header);
     }
 }
@@ -138,7 +149,7 @@ static inline void mal_generator_note_owned_storage(MalGeneratorObject *generato
  * an async generator still queues requests or ordinary object state owns storage.
  */
 static inline void mal_generator_note_released_storage(MalGeneratorObject *generator) {
-    if ((!generator->is_async_generator || generator->async_data->queue_head == nullptr) &&
+    if ((!generator->activation.is_async_generator || generator->activation.async_data->queue_head == nullptr) &&
         !mal_object_finalizes(&generator->object)) {
         mal_heap_cell_owns_nothing(&generator->object.header);
     }

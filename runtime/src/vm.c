@@ -2445,7 +2445,7 @@ static bool mal_vm_unwind_to_handler(MalVm *vm, i32 target_frame_count) {
         if (innermost == nullptr) {
             // An async body's uncaught throw rejects its promise; its callers'
             // handlers never see it, even before the first await.
-            if (frame->generator != nullptr && frame->generator->is_async) return false;
+            if (mal_coroutine_is_async(frame->coroutine)) return false;
             continue;
         }
 
@@ -3366,18 +3366,18 @@ static void mal_vm_run_until_frame_count(
 
                 MalGeneratorObject *generator = start_is_async_generator
                     ? mal_generator_object_new_async(
-                        &vm->heap, generator_prototype, true)
+                        &vm->heap, generator_prototype)
                     : mal_generator_object_new(&vm->heap, generator_prototype);
 
                 i32 return_register = frame->return_register;
                 i32 caller_frame_index = frame->caller_frame_index;
 
-                generator->frame = *frame;
+                generator->activation.frame = *frame;
                 mal_generator_note_owned_storage(generator);
-                generator->frame.generator = generator;
-                generator->frame.return_register = -1;
-                generator->frame.caller_frame_index = -1;
-                generator->state = MAL_GENERATOR_SUSPENDED_START;
+                generator->activation.frame.generator = generator;
+                generator->activation.frame.return_register = -1;
+                generator->activation.frame.caller_frame_index = -1;
+                generator->activation.state = MAL_GENERATOR_SUSPENDED_START;
                 // The generator now owns a frame of (possibly young) register values;
                 // if it is old, remember it so a minor collection traces that frame.
                 mal_gc_remember_if_old(&generator->object.header);
@@ -3411,19 +3411,19 @@ static void mal_vm_run_until_frame_count(
                 // here; shade the previous contents (a re-suspend replaces the env
                 // from the last suspend). The register buffer is mutated in place
                 // (root state until this suspend), so its slots need no shade.
-                mal_gc_write_barrier(generator->yielded_value);
-                generator->yielded_value = transfer_roots[1];
-                generator->yielded_result = instruction->as.yield.delegated_result;
+                mal_gc_write_barrier(generator->activation.yielded_value);
+                generator->activation.yielded_value = transfer_roots[1];
+                generator->activation.yielded_result = instruction->as.yield.delegated_result;
                 frame->registers[instruction->as.yield.value_dst] = mal_value_new_undefined();
                 frame->registers[instruction->as.yield.mode_dst] = mal_value_new_undefined();
-                generator->resume_value_register = instruction->as.yield.value_dst;
-                generator->resume_mode_register = instruction->as.yield.mode_dst;
-                generator->state = MAL_GENERATOR_SUSPENDED_YIELD;
+                generator->activation.resume_value_register = instruction->as.yield.value_dst;
+                generator->activation.resume_mode_register = instruction->as.yield.mode_dst;
+                generator->activation.state = MAL_GENERATOR_SUSPENDED_YIELD;
 
-                if (generator->frame.env != nullptr) {
-                    mal_gc_write_barrier_env(generator->frame.env);
+                if (generator->activation.frame.env != nullptr) {
+                    mal_gc_write_barrier_env(generator->activation.frame.env);
                 }
-                generator->frame = *frame;
+                generator->activation.frame = *frame;
                 mal_generator_note_owned_storage(generator);
                 // Re-suspend: an old generator re-acquires its frame + yielded value,
                 // both potentially holding young objects produced since it last ran.
@@ -3437,7 +3437,7 @@ static void mal_vm_run_until_frame_count(
                 // with { value, done: false } and drives the next request (the
                 // yielded value was already awaited by the compiler-inserted
                 // await preceding this yield).
-                if (generator->is_async_generator) {
+                if (generator->activation.is_async_generator) {
                     mal_async_generator_yield(vm, generator);
                 }
                 mal_gc_unroot(&transfer_root_span);
@@ -3453,11 +3453,11 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNC();
                 MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 MalGeneratorObject *generator = frame->generator;
-                mal_gc_write_barrier(generator->yielded_value);
-                generator->yielded_value = frame->registers[instruction->as.terminal_yield.yielded_src];
-                generator->state = MAL_GENERATOR_COMPLETED;
-                generator->terminal_yield_pending = true;
-                generator->frame = *frame;
+                mal_gc_write_barrier(generator->activation.yielded_value);
+                generator->activation.yielded_value = frame->registers[instruction->as.terminal_yield.yielded_src];
+                generator->activation.state = MAL_GENERATOR_COMPLETED;
+                generator->activation.terminal_yield_pending = true;
+                generator->activation.frame = *frame;
                 mal_generator_note_owned_storage(generator);
                 mal_gc_remember_if_old(&generator->object.header);
 
@@ -3481,10 +3481,11 @@ static void mal_vm_run_until_frame_count(
             }
 
             MAL_VM_CASE(AWAIT) {
-                MalGeneratorObject *state = frame->generator;
+                MalHeapHeader *state = frame->coroutine;
+                MalCoroutineActivation *activation = mal_coroutine_activation(state);
                 // PromiseResolve can collect after an aliased operand has left the frame.
                 MalValue transfer_roots[] = {
-                    mal_value_from_object((MalObject *) state),
+                    mal_value_from_heap(state),
                     frame->registers[instruction->as.await.awaited_src],
                 };
                 MalRootSpan transfer_root_span;
@@ -3493,18 +3494,22 @@ static void mal_vm_run_until_frame_count(
                 MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 frame->registers[instruction->as.await.value_dst] = mal_value_new_undefined();
                 frame->registers[instruction->as.await.mode_dst] = mal_value_new_undefined();
-                state->resume_value_register = instruction->as.await.value_dst;
-                state->resume_mode_register = instruction->as.await.mode_dst;
-                state->state = MAL_GENERATOR_SUSPENDED_YIELD;
+                activation->resume_value_register = instruction->as.await.value_dst;
+                activation->resume_mode_register = instruction->as.await.mode_dst;
+                activation->state = MAL_GENERATOR_SUSPENDED_YIELD;
 
                 // SATB: frame.env is a traced heap field overwritten by the re-suspend.
-                if (state->frame.env != nullptr) {
-                    mal_gc_write_barrier_env(state->frame.env);
+                if (activation->frame.env != nullptr) {
+                    mal_gc_write_barrier_env(activation->frame.env);
                 }
-                state->frame = *frame;
-                mal_generator_note_owned_storage(state);
+                activation->frame = *frame;
+                if (state->type == MAL_HEAP_ASYNC_FUNCTION_STATE) {
+                    mal_async_function_note_owned_storage((MalAsyncFunctionState *) state);
+                } else {
+                    mal_generator_note_owned_storage((MalGeneratorObject *) state);
+                }
                 // Re-suspend at await: old async state re-acquires its frame.
-                mal_gc_remember_if_old(&state->object.header);
+                mal_gc_remember_if_old(state);
 
                 vm->frame_count--;
                 vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
@@ -3866,9 +3871,9 @@ static void mal_vm_run_until_frame_count(
                 // storage is freed here; for a plain generator the value travels
                 // to the resume caller via the NORMAL completion below (the frame
                 // was reattached with no caller register).
-                MalGeneratorObject *coroutine = frame->generator;
+                MalHeapHeader *coroutine = frame->coroutine;
                 if (coroutine != nullptr) {
-                    coroutine->state = MAL_GENERATOR_COMPLETED;
+                    mal_coroutine_activation(coroutine)->state = MAL_GENERATOR_COMPLETED;
                 }
 
                 i32 return_register = frame->return_register;
@@ -3877,16 +3882,16 @@ static void mal_vm_run_until_frame_count(
                 mal_vm_pop_frame_storage(vm, frame);
                 vm->frame_count--;
 
-                if (coroutine != nullptr && coroutine->is_async_generator) {
-                    // An async generator's return completes it and settles the
-                    // front request with { value, done: true }.
-                    mal_async_generator_return(vm, coroutine, return_value);
+                if (coroutine != nullptr && coroutine->type == MAL_HEAP_ASYNC_FUNCTION_STATE) {
+                    mal_async_function_settle_return(
+                        vm, (MalAsyncFunctionState *) coroutine, return_value);
 #if MAL_REALMS
                     mal_vm_restore_surviving_realm(vm, outer_realm);
 #endif
-                } else if (coroutine != nullptr && coroutine->is_async) {
-                    // Resolving the result promise is the async function's return.
-                    mal_async_function_settle_return(vm, coroutine, return_value);
+                } else if (coroutine != nullptr && ((MalGeneratorObject *) coroutine)->activation.is_async_generator) {
+                    // An async generator's return completes it and settles the
+                    // front request with { value, done: true }.
+                    mal_async_generator_return(vm, (MalGeneratorObject *) coroutine, return_value);
 #if MAL_REALMS
                     mal_vm_restore_surviving_realm(vm, outer_realm);
 #endif
@@ -3916,7 +3921,7 @@ static void mal_vm_run_until_frame_count(
             // body's implicit try/catch.
             i32 async_index = -1;
             for (i32 i = vm->frame_count - 1; i >= target_frame_count; i--) {
-                if (vm->frames[i].generator != nullptr && vm->frames[i].generator->is_async) {
+                if (mal_coroutine_is_async(vm->frames[i].coroutine)) {
                     async_index = i;
                     break;
                 }
@@ -3924,7 +3929,7 @@ static void mal_vm_run_until_frame_count(
 
             if (async_index >= 0) {
                 MalValue reason = vm->completion.value;
-                MalGeneratorObject *state = vm->frames[async_index].generator;
+                MalHeapHeader *state = vm->frames[async_index].coroutine;
 #if MAL_REALMS
                 MalRealm *async_realm = vm->frames[async_index].realm;
 #endif
@@ -3938,13 +3943,13 @@ static void mal_vm_run_until_frame_count(
                 mal_vm_realm_switch_to(vm, async_realm);
 #endif
                 vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-                if (state->is_async_generator) {
+                if (state->type == MAL_HEAP_GENERATOR_OBJECT) {
                     // An uncaught throw completes the async generator and rejects
                     // the front request.
-                    mal_async_generator_throw_done(vm, state, reason);
+                    mal_async_generator_throw_done(vm, (MalGeneratorObject *) state, reason);
                 } else {
-                    state->state = MAL_GENERATOR_COMPLETED;
-                    mal_async_function_settle_throw(vm, state, reason);
+                    ((MalAsyncFunctionState *) state)->activation.state = MAL_GENERATOR_COMPLETED;
+                    mal_async_function_settle_throw(vm, (MalAsyncFunctionState *) state, reason);
                 }
 #if MAL_REALMS
                 mal_vm_restore_surviving_realm(vm, outer_realm);
@@ -4219,21 +4224,23 @@ bool mal_vm_check_entry_evaluation(MalVm *vm) {
     return true;
 }
 
-void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue sent_value, i32 resume_mode) {
+void mal_vm_resume_coroutine(MalVm *vm, MalHeapHeader *owner, MalValue sent_value, i32 resume_mode) {
+    MalCoroutineActivation *activation = mal_coroutine_activation(owner);
+    MalVmFrame *suspended = &activation->frame;
     // Re-resolve in case a runtime-eval splice moved the function table while
-    // this generator was suspended (function_index is the source of truth).
-    const MalFunction *function = &vm->live_runtime_image.functions[generator->frame.function_index];
+    // this coroutine was suspended (function_index is the source of truth).
+    const MalFunction *function = &vm->live_runtime_image.functions[suspended->function_index];
 
     // SATB resume seam (concurrent cycle): a suspended coroutine's frame is heap
-    // state (traced via the generator cell); resuming migrates it to root state.
+    // state; resuming migrates it to root state.
     // Shade its current register/arg values into the snapshot BEFORE the resume
     // delivers the sent value / runs the body, or a value published from a
     // coroutine register into an already-black object would be lost (the
     // root-migration window). Mirrors the tracer: null-check the frame
     // function before re-resolving (splice-safe) so register_count is read fresh.
-    if (mal_gc_marking_active && generator->frame.function != nullptr) {
-        generator->frame.function = function;
-        mal_gc_satb_shade_frame(&generator->frame);
+    if (mal_gc_marking_active && suspended->function != nullptr) {
+        suspended->function = function;
+        mal_gc_satb_shade_frame(suspended);
     }
 
 #if MAL_REALMS
@@ -4244,27 +4251,27 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
     // return/throw below restores `saved_realm`, so control returns to the driver
     // (a .next() caller, an awaiting microtask) in the realm it drove from.
     MalRealm *saved_realm = vm->current_realm;
-    mal_vm_realm_switch_to(vm, generator->frame.realm);
+    mal_vm_realm_switch_to(vm, suspended->realm);
 #endif
 
     if (function->compiled != nullptr) {
         // A refused entry throws into the coroutine from the compiled prologue, since
         // resume destinations name snapshot mailboxes independently of native locals.
-        generator->frame.function = function;
-        if (generator->resume_value_register >= 0) {
-            generator->frame.registers[generator->resume_value_register] = sent_value;
+        suspended->function = function;
+        if (activation->resume_value_register >= 0) {
+            suspended->registers[activation->resume_value_register] = sent_value;
         }
-        if (generator->resume_mode_register >= 0) {
-            generator->frame.registers[generator->resume_mode_register] = mal_value_from_i32(resume_mode);
+        if (activation->resume_mode_register >= 0) {
+            suspended->registers[activation->resume_mode_register] = mal_value_from_i32(resume_mode);
         }
-        generator->state = MAL_GENERATOR_EXECUTING;
+        activation->state = MAL_GENERATOR_EXECUTING;
         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-        // this/env/callee are re-read from generator->frame by the resume path; the
+        // this/env/callee are re-read from the saved frame by the resume path; the
         // args/new_target params are unused on resume (the prologue is skipped).
-        function->compiled(vm, generator->frame.this_value, nullptr, 0,
-            mal_value_new_undefined(), generator->frame.env, generator->frame.callee, generator);
+        function->compiled(vm, suspended->this_value, nullptr, 0,
+            mal_value_new_undefined(), suspended->env, suspended->callee, owner);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
-            generator->state = MAL_GENERATOR_COMPLETED;
+            activation->state = MAL_GENERATOR_COMPLETED;
         }
 #if MAL_REALMS
         mal_vm_realm_switch_to(vm, saved_realm);
@@ -4282,10 +4289,10 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
 
     i32 target_frame_count = vm->frame_count;
     MalVmFrame *frame = &vm->frames[vm->frame_count++];
-    *frame = generator->frame;
+    *frame = *suspended;
     frame->vm = vm;
     frame->function = function;
-    frame->generator = generator;
+    frame->coroutine = owner;
     frame->return_register = -1;
     frame->caller_frame_index = -1;
     // A resumption is a fresh entry on the logical call stack, so it sorts above
@@ -4296,14 +4303,14 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
     // Deliver the sent value and resume mode to the suspended yield expression,
     // which the compiler-emitted dispatch following the yield consults. (A
     // suspended-start resume has no recorded registers and ignores both.)
-    if (generator->resume_value_register >= 0) {
-        frame->registers[generator->resume_value_register] = sent_value;
+    if (activation->resume_value_register >= 0) {
+        frame->registers[activation->resume_value_register] = sent_value;
     }
-    if (generator->resume_mode_register >= 0) {
-        frame->registers[generator->resume_mode_register] = mal_value_from_i32(resume_mode);
+    if (activation->resume_mode_register >= 0) {
+        frame->registers[activation->resume_mode_register] = mal_value_from_i32(resume_mode);
     }
 
-    generator->state = MAL_GENERATOR_EXECUTING;
+    activation->state = MAL_GENERATOR_EXECUTING;
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
     mal_vm_run_until_frame_count(
@@ -4317,7 +4324,7 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         // The body threw past its own handlers; the run loop already popped and
         // freed the frame, so the generator is finished.
-        generator->state = MAL_GENERATOR_COMPLETED;
+        activation->state = MAL_GENERATOR_COMPLETED;
     }
 #if MAL_REALMS
     mal_vm_realm_switch_to(vm, saved_realm);
@@ -4676,21 +4683,22 @@ MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
     // suspended and so absent from vm->frames — reconstructed here from the
     // links recorded at await time. Near-zero cost: it only walks pointers that
     // already exist, and only on this slow capture path.
-    MalGeneratorObject *async_state = nullptr;
+    MalHeapHeader *async_state = nullptr;
     for (i32 i = 0; i < vm->frame_count; i++) {
-        if (vm->frames[i].generator != nullptr && vm->frames[i].generator->is_async) {
-            async_state = vm->frames[i].generator;
+        if (mal_coroutine_is_async(vm->frames[i].coroutine)) {
+            async_state = vm->frames[i].coroutine;
             break;
         }
     }
     MalStackTrace **link = &trace->async_parent;
     i32 guard = 0;
     while (async_state != nullptr &&
-           async_state->async_data->awaited_by != nullptr && guard++ < 100000) {
-        MalGeneratorObject *parent = async_state->async_data->awaited_by;
+           mal_coroutine_awaited_by(async_state) != nullptr && guard++ < 100000) {
+        MalHeapHeader *parent = mal_coroutine_awaited_by(async_state);
+        MalVmFrame *parent_frame = &mal_coroutine_activation(parent)->frame;
         // Runtime eval can move the function table while the awaiter is suspended.
         const MalFunction *function =
-            &vm->live_runtime_image.functions[parent->frame.function_index];
+            &vm->live_runtime_image.functions[parent_frame->function_index];
         MalStackTrace *segment = mal_vm_stack_trace_new(vm, 1);
         if (segment == nullptr) {
             mal_vm_free_stack_trace(trace);
@@ -4699,11 +4707,11 @@ MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
         segment->frame_count = 1;
         // The awaiter is suspended at its `await`; ip - 1 is that await's site.
         segment->frames[0] = (MalStackFrameRecord) {
-            .function_index = parent->frame.function_index,
-            .pos_id = parent->frame.is_compiled
+            .function_index = parent_frame->function_index,
+            .pos_id = parent_frame->is_compiled
                 ? mal_function_position_entry_id(
-                      function, parent->frame.compiled_suspend_position_entry - 1)
-                : mal_vm_position_for(function, parent->frame.instruction_pointer - 1),
+                      function, parent_frame->compiled_suspend_position_entry - 1)
+                : mal_vm_position_for(function, parent_frame->instruction_pointer - 1),
         };
         segment->async_parent = nullptr;
         segment->frame_skip = 0;

@@ -111,15 +111,15 @@ int main(void) {
         !mal_value_is_generator_object(created.value)) return 3;
     temporary = created.value;
     MalGeneratorObject *generator = (MalGeneratorObject *) mal_value_to_object(temporary);
-    mal_vm_resume_generator(&vm, generator, mal_value_new_undefined(),
+    mal_vm_resume_coroutine(&vm, &generator->object.header, mal_value_new_undefined(),
                             MAL_GENERATOR_RESUME_NEXT);
     if (vm.completion.kind != MAL_COMPLETION_NORMAL ||
-        generator->state != MAL_GENERATOR_SUSPENDED_YIELD ||
-        !frame_roots_token(&generator->frame)) {
+        generator->activation.state != MAL_GENERATOR_SUSPENDED_YIELD ||
+        !frame_roots_token(&generator->activation.frame)) {
         fprintf(stderr, "generator frame: state=%d completion=%d compiled=%d registers=%p token=%p\n",
-                generator->state, vm.completion.kind,
-                generator->frame.function != nullptr && generator->frame.function->compiled != nullptr,
-                (void *) generator->frame.registers,
+                generator->activation.state, vm.completion.kind,
+                generator->activation.frame.function != nullptr && generator->activation.frame.function->compiled != nullptr,
+                (void *) generator->activation.frame.registers,
                 (void *) token);
         return 4;
     }
@@ -162,14 +162,14 @@ int main(void) {
     }
     vm.heap.next_gc_at = SIZE_MAX;
     mal_gc_poll = false;
-    mal_vm_resume_generator(&vm, generator, mal_value_new_undefined(),
+    mal_vm_resume_coroutine(&vm, &generator->object.header, mal_value_new_undefined(),
                             MAL_GENERATOR_RESUME_NEXT);
     if (vm.completion.kind != MAL_COMPLETION_NORMAL ||
         !mal_value_is_int32(vm.completion.value) ||
         mal_value_to_i32(vm.completion.value) != 181 ||
-        generator->state != MAL_GENERATOR_COMPLETED ||
-        generator->frame.registers != nullptr ||
-        generator->frame.arguments != nullptr) failure = 8;
+        generator->activation.state != MAL_GENERATOR_COMPLETED ||
+        generator->activation.frame.registers != nullptr ||
+        generator->activation.frame.arguments != nullptr) failure = 8;
 
 done:
     release_carrier();

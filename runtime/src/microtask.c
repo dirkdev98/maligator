@@ -443,9 +443,9 @@ static void mal_vm_run_reaction_job(MalVm *vm, MalJob *job) {
 /** Async await fulfillment/rejection reaction without materialized callbacks. */
 static void mal_vm_run_await_job(MalVm *vm, MalJob *job) {
     vm->completion = mal_completion_normal();
-    mal_vm_resume_generator(
+    mal_vm_resume_coroutine(
         vm,
-        (MalGeneratorObject *) mal_value_to_heap(job->as.reaction.handler),
+        mal_value_to_heap(job->as.reaction.handler),
         job->as.reaction.argument,
         job->is_reject ? MAL_GENERATOR_RESUME_THROW : MAL_GENERATOR_RESUME_NEXT);
 }

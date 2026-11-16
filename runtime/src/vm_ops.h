@@ -5085,7 +5085,7 @@ void mal_vm_op_terminal_yield_compiled(
 
 // Coroutine RETURN (compiled): mark COMPLETED (before freeing, so the finalizer's
 // suspended-only free avoids a double-free), free the register buffer, and route
-// the value — async generator / async settle their promise, a plain generator
+// the value: an async generator settles its request, while a plain generator
 // leaves it in a NORMAL completion for the .next() driver.
 void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generator, MalValue value);
 
@@ -5094,10 +5094,10 @@ MalValue mal_vm_op_async_result_compiled(MalVm *vm);
 
 /** Settle a compiled async activation, releasing its state if it suspended. */
 void mal_vm_op_async_complete_compiled(
-    MalVm *vm, MalGeneratorObject *state, MalValue promise, bool is_reject, MalValue value);
+    MalVm *vm, MalAsyncFunctionState *state, MalValue promise, bool is_reject, MalValue value);
 
 /** Materialize the activation only when its first await needs persistent storage. */
-MalGeneratorObject *mal_vm_op_async_suspend_compiled(
+MalAsyncFunctionState *mal_vm_op_async_suspend_compiled(
     MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
     i32 register_count, const MalValue *arguments, i32 argument_count,
     bool retain_arguments, MalValue promise);
@@ -5107,15 +5107,14 @@ MalGeneratorObject *mal_vm_op_async_suspend_compiled(
 // awaited value (mal_async_function_await). Shared by async functions and async
 // generators; the compiled body returns immediately after.
 void mal_vm_op_await_compiled(
-    MalVm *vm, MalGeneratorObject *state, MalValue awaited, i32 value_dst, i32 mode_dst,
+    MalVm *vm, MalHeapHeader *state, MalValue awaited, i32 value_dst, i32 mode_dst,
     i32 resume_ip, i32 suspend_position_entry, MalEnv *env);
 
 // Coroutine uncaught throw (compiled): the body threw past its own handlers. Mark
 // COMPLETED and free the register buffer; a plain generator leaves the THROW
-// completion for its .next() caller, while an async function rejects its result
-// promise (the async body's implicit try/catch). vm->completion.value is the
-// pending exception. `generator` is null when a generator's parameter prologue
-// throws before GENERATOR_START has created it — the throw then propagates
+// completion for its .next() caller, while an async generator rejects its request.
+// vm->completion.value is the pending exception. `generator` is null when its
+// parameter prologue throws before GENERATOR_START; the throw then propagates
 // synchronously and `registers` (the orphaned buffer) is released here.
 void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator, MalValue *registers);
 

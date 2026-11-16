@@ -328,6 +328,8 @@ typedef enum MalHeapType : u8 {
      * Generator instances (MalGeneratorObject) holding a suspended frame.
      */
     MAL_HEAP_GENERATOR_OBJECT,
+    /** Internal ordinary async activation; it has no JavaScript object state. */
+    MAL_HEAP_ASYNC_FUNCTION_STATE,
     /**
      * ArrayBuffer / SharedArrayBuffer backing store (MalArrayBufferObject).
      */
@@ -798,6 +800,7 @@ static inline bool mal_heap_type_finalizes_at_birth(MalHeapType type) {
         case MAL_HEAP_ARRAY_BUFFER_OBJECT:
         case MAL_HEAP_PROMISE_OBJECT:
         case MAL_HEAP_GENERATOR_OBJECT:
+        case MAL_HEAP_ASYNC_FUNCTION_STATE:
 #if !MAL_PERF_STATS
         // Stats builds count every Array finalization.
         case MAL_HEAP_ARRAY_OBJECT:
