@@ -17,6 +17,29 @@ function readStatic(record) {
 	const pair = entries[0];
 	return [pair["0"], pair["1"]];
 }
+function readJoined(record, index) {
+	const pair = Object.entries(record)[index];
+	const key = pair[0];
+	const length = key.length;
+	const value = pair[1];
+	collect();
+	return [typeof key === "string" ? key : null, length, value];
+}
+function projectJoined(record, index) {
+	return Object.entries(record)[index];
+}
+function readJoinedWrapper(record, index) {
+	const pair = projectJoined(record, index);
+	const key = pair[0];
+	const length = key.length;
+	const value = pair[1];
+	collect();
+	return [typeof key === "string" ? key : null, length, value];
+}
+function readJoinedArithmetic(record, index, base) {
+	const pair = projectJoined(record, index);
+	return base + pair[0].length + pair[1];
+}
 function readLoop(record) {
 	const entries = Object.entries(record);
 	let result = "";
@@ -47,7 +70,14 @@ function readOverlapping(record) {
 	}
 	return result;
 }
-globalThis.entryPairConsumers = { readPair, readStatic, readLoop };
+globalThis.entryPairConsumers = {
+	readPair,
+	readStatic,
+	readLoop,
+	readJoined,
+	readJoinedWrapper,
+	readJoinedArithmetic,
+};
 const unchanged = () => {};
 const record = () => ({
 	first: { label: "first" },
@@ -74,6 +104,91 @@ if (mode === "captured") {
 		);
 } else if (mode === "static") {
 	rows.push(readStatic(record()));
+} else if (mode === "joined") {
+	for (const read of [readJoined, readJoinedWrapper])
+		for (const index of [-0, 1, "0", { toString: () => "1" }])
+			rows.push(read(record(), index));
+} else if (mode === "joined-replacement" || mode === "joined-wrapper-replacement") {
+	const read = mode === "joined-replacement" ? readJoined : readJoinedWrapper;
+	const events = [];
+	const marker = { label: "replacement" };
+	Object.entries = () => [
+		{
+			get 0() {
+				events.push("key");
+				return {
+					get length() {
+						events.push("length");
+						Object.entries = () => [["later", marker]];
+						collect();
+						return 7;
+					},
+				};
+			},
+			get 1() {
+				events.push("value");
+				collect();
+				return marker;
+			},
+		},
+	];
+	rows.push(read(record(), 0), read(record(), 0), events);
+} else if (mode === "joined-arithmetic" || mode === "joined-arithmetic-throw") {
+	const events = [];
+	const marker = {};
+	const pair = {
+		get 0() {
+			events.push("key");
+			return {
+				get length() {
+					events.push("length");
+					return {
+						valueOf() {
+							events.push("number");
+							collect();
+							return 3;
+						},
+					};
+				},
+			};
+		},
+		get 1() {
+			events.push("original");
+			return 5;
+		},
+	};
+	Object.entries = () => [pair];
+	const base = {
+		valueOf() {
+			events.push("base");
+			collect();
+			if (mode === "joined-arithmetic-throw") throw marker;
+			Object.defineProperty(pair, "1", {
+				get() {
+					events.push("changed");
+					collect();
+					return 11;
+				},
+			});
+			return 7;
+		},
+	};
+	try {
+		rows.push(readJoinedArithmetic(record(), 0, base));
+	} catch (error) {
+		rows.push(error === marker);
+	}
+	rows.push(events);
+} else if (mode === "joined-missing") {
+	for (const read of [readJoined, readJoinedWrapper]) {
+		for (const index of [-1, 9, 0.5, NaN, Infinity]) {
+			try {
+				rows.push(read(record(), index));
+			} catch (error) {
+				rows.push(error.name);
+			}
+		}
+	}
 } else if (mode === "loop") {
 	rows.push(readLoop(record()));
 } else if (mode === "large") {

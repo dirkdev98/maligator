@@ -202,6 +202,7 @@ const BOOLEAN_RESULT_OPERATORS: ReadonlySet<string> = new Set([
 
 /** A run copies at most this many instructions, so a guard never doubles a long block. */
 const MAX_RUN_INSTRUCTIONS = 64;
+const MAX_ENTRY_PAIR_PARAMETERS = 256;
 
 const BUDGET: CorePassBudget = Object.freeze({
 	maxWorkItems: 2_000_000,
@@ -300,6 +301,242 @@ function copyable(fn: CoreFunctionStore, instruction: CoreInstructionId): boolea
 		fact.kind === CORE_PRIMITIVE_EFFECT_FACT &&
 		fact.obligations.length === 0
 	);
+}
+
+function entryPairConsumer(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	pair: CoreValueId,
+	block: CoreBlockId,
+	first: CoreInstructionId | undefined,
+	controlUse: (value: CoreValueId) => boolean,
+): CoreInstructionId | undefined {
+	if (fn.kernel.valueHandlerUseCount(pair) !== 0 || controlUse(pair)) return undefined;
+	const fields = new Map<CoreInstructionId, 0 | 1>();
+	for (let use = fn.kernel.valueFirstUse(pair); use >= 0; use = fn.kernel.useNext(use)) {
+		const instruction = coreInstructionId(fn.kernel.useInstruction(use));
+		if (
+			fields.size === 8 ||
+			fn.kernel.useOperand(use) !== 0 ||
+			fn.instructionBlock(instruction) !== block ||
+			fn.instructionEffectRefinement(instruction) !== undefined
+		)
+			return undefined;
+		const opcode = opcodeOf(fn, instruction);
+		let field: 0 | 1 | undefined;
+		if (opcode === "loadPropertyStatic") {
+			const key = fn.instructionAttributes(instruction).stringIndex;
+			if (typeof key === "number") {
+				const text = program.stringConstantText(key);
+				if (text === "0" || text === "1") field = text === "0" ? 0 : 1;
+			}
+		} else if (opcode === "loadProperty") {
+			const key = definition(fn, operands(fn, instruction)[1]!);
+			if (
+				key !== undefined &&
+				["createNumber", "createI32", "createF64"].includes(opcodeOf(fn, key) ?? "")
+			) {
+				const value = fn.instructionAttributes(key).value;
+				if (value === 0 || value === 1) field = value;
+			}
+		}
+		if (field === undefined) return undefined;
+		fields.set(instruction, field);
+	}
+	if (fields.size === 0) return undefined;
+	const keys = new Set<CoreValueId>();
+	const derived = new Set<CoreValueId>();
+	let remaining = fields.size;
+	let next = first;
+	for (let count = 0; next !== undefined && count < MAX_RUN_INSTRUCTIONS; count++) {
+		const field = fields.get(next);
+		if (field !== undefined) {
+			const value = results(fn, next)[0]!;
+			if (field === 0) keys.add(value);
+			derived.add(value);
+			if (--remaining === 0) return next;
+		} else {
+			const opcode = opcodeOf(fn, next);
+			if (
+				opcode !== "createNumber" &&
+				opcode !== "createI32" &&
+				opcode !== "createF64" &&
+				opcode !== "createString"
+			) {
+				if (
+					(opcode === "binary" || opcode === "unary") &&
+					operands(fn, next).some((value) => derived.has(value)) &&
+					copyable(fn, next)
+				) {
+					derived.add(results(fn, next)[0]!);
+					next = fn.instructionNext(next);
+					continue;
+				}
+				if (opcode !== "loadPropertyStatic") return undefined;
+				const key = fn.instructionAttributes(next).stringIndex;
+				if (
+					!keys.has(operands(fn, next)[0]!) ||
+					typeof key !== "number" ||
+					program.stringConstantText(key) !== "length" ||
+					fn.instructionEffectRefinement(next) !== undefined
+				)
+					return undefined;
+				derived.add(results(fn, next)[0]!);
+			}
+		}
+		next = fn.instructionNext(next);
+	}
+	return undefined;
+}
+
+function projectJoinedEntryPair(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	controlUse: (value: CoreValueId) => boolean,
+	remainingEdits: number,
+): CoreEditor | undefined {
+	if (fn.isAsync || fn.isGenerator || fn.liveStorageCounts().instructions > 4000)
+		return undefined;
+	let control: ReturnType<typeof buildCoreControlFlow> | undefined;
+	let examinedParameters = 0;
+	for (const block of fn.blockIds()) {
+		if (fn.kernel.blockHandlerBlock(block) !== undefined) continue;
+		const count = fn.kernel.blockParameterCount(block);
+		if (count > MAX_ENTRY_PAIR_PARAMETERS - examinedParameters) return undefined;
+		examinedParameters += count;
+		const start = fn.kernel.blockParameterStart(block);
+		const parameters = Array.from({ length: count }, (_, index) =>
+			fn.kernel.blockParameterValue(start + index),
+		);
+		for (const [index, parameter] of parameters.entries()) {
+			const first = firstInstruction(fn, block);
+			const last = entryPairConsumer(program, fn, parameter, block, first, controlUse);
+			if (last === undefined) continue;
+			control ??= buildCoreControlFlow(program, fn.id);
+			const incoming = control.predecessors[block] ?? [];
+			if (
+				incoming.length !== 2 ||
+				incoming.some(
+					(edge) =>
+						edge.kind !== "ordinary" ||
+						edge.from === block ||
+						control!.dominates(block, edge.from) ||
+						fn.kernel.blockHandlerBlock(edge.from) !== undefined,
+				)
+			)
+				continue;
+			let entries = false;
+			const rows = incoming.map((edge) => ({
+				block: edge.from,
+				arguments: edge.arguments,
+				terminator: coreTerminatorInput(fn, fn.blockTerminator(edge.from)),
+			}));
+			if (
+				rows.some((row) => {
+					if (row.terminator.kind !== "jump" || row.terminator.edge.block !== block)
+						return true;
+					const element = definition(fn, row.arguments[index]!);
+					if (
+						element === undefined ||
+						opcodeOf(fn, element) !== "loadProperty" ||
+						fn.instructionBlock(element) !== row.block
+					)
+						return true;
+					const producer = definition(fn, operands(fn, element)[0]!);
+					if (
+						producer !== undefined &&
+						opcodeOf(fn, producer) === "callKnown" &&
+						fn.instructionAttributes(producer).operation === "Object.entries"
+					)
+						entries = true;
+					return false;
+				}) ||
+				!entries
+			)
+				continue;
+			const prefix: Array<CoreInstructionId> = [];
+			for (let next = first; next !== undefined; next = fn.instructionNext(next)) {
+				prefix.push(next);
+				if (next === last || prefix.length === 16) break;
+			}
+			if (prefix.at(-1) !== last) continue;
+			const members = new Set(prefix);
+			const live = prefix
+				.flatMap((instruction) => results(fn, instruction))
+				.filter((value) => {
+					if (controlUse(value) || fn.kernel.valueHandlerUseCount(value) !== 0)
+						return true;
+					for (
+						let use = fn.kernel.valueFirstUse(value);
+						use >= 0;
+						use = fn.kernel.useNext(use)
+					)
+						if (!members.has(coreInstructionId(fn.kernel.useInstruction(use))))
+							return true;
+					return false;
+				});
+			if (
+				live.length > 16 ||
+				3 * prefix.length +
+					16 +
+					live.reduce(
+						(n, value) =>
+							n + fn.valueUseCount(value) + fn.kernel.valueHandlerUseCount(value),
+						0,
+					) >
+					remainingEdits
+			)
+				continue;
+			// Each predecessor transfers only here, so moving this first closed prefix
+			// preserves all prior effects and executes its getters exactly once.
+			const editor = CoreEditor.open(program, fn.id);
+			const joined = editor.appendBlockParameters(
+				block,
+				live.map((value) => ({
+					representation: fn.valueRepresentation(value),
+				})),
+			);
+			for (const row of rows) {
+				const copied = new Map(
+					parameters.map((value, index) => [value, row.arguments[index]!]),
+				);
+				const map = (value: CoreValueId) => copied.get(value) ?? value;
+				for (const instruction of prefix) {
+					const outputs = results(fn, instruction);
+					const clone = editor.appendInstruction(
+						row.block,
+						fn.instructionOpcodeName(instruction),
+						operands(fn, instruction).map(map),
+						{
+							attributes: coreUnscopedInstructionAttributes(
+								fn.instructionAttributes(instruction),
+							),
+							sourcePosition: fn.instructionSourcePosition(instruction),
+							outputRepresentations: outputs.map((value) =>
+								fn.valueRepresentation(value),
+							),
+						},
+					);
+					outputs.forEach((value, index) => copied.set(value, clone.outputs[index]!));
+				}
+				editor.replaceTerminator(row.block, {
+					kind: "jump",
+					edge: {
+						block,
+						arguments: [...row.arguments, ...live.map(map)],
+					},
+					sourcePosition: fn.instructionSourcePosition(fn.blockTerminator(row.block)),
+				});
+			}
+			editor.replaceValueUsesMany(
+				new Map(live.map((value, index) => [value, joined[index]!])),
+			);
+			for (let index = prefix.length - 1; index >= 0; index--)
+				editor.removeInstruction(prefix[index]!);
+			return editor;
+		}
+	}
+	return undefined;
 }
 
 /** The canonical builtin an own data property of a primordial holds. */
@@ -465,8 +702,18 @@ function siteFor(
 					return undefined;
 				next = fn.instructionNext(next);
 			}
-			// Only the observed value crosses the join, preserving each snapshot's producer.
-			consumer = useInstruction;
+			// Project inside each twin so its pair keeps a definite snapshot producer.
+			consumer =
+				(opcode === "loadProperty"
+					? entryPairConsumer(
+							program,
+							fn,
+							results(fn, useInstruction)[0]!,
+							block,
+							fn.instructionNext(useInstruction),
+							controlUse,
+						)
+					: undefined) ?? useInstruction;
 		}
 	}
 	return {
@@ -1035,8 +1282,14 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 			(controls ??= coreValueControlFlowUseMask(fn))[value] !== 0;
 		const sitesByInstruction = new Map<CoreInstructionId, Site>();
 		const blocks = new Set<CoreBlockId>();
+		let hasKnownEntries = false;
 		for (const instruction of fn.instructionIds()) {
 			const opcode = opcodeOf(fn, instruction);
+			if (
+				opcode === "callKnown" &&
+				fn.instructionAttributes(instruction).operation === "Object.entries"
+			)
+				hasKnownEntries = true;
 			if (opcode !== "call") continue;
 			const site = siteFor(program, fn, world, instruction, kinds, controlUse);
 			if (site === undefined) continue;
@@ -1044,6 +1297,15 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 			if (site.method !== undefined) sitesByInstruction.set(site.method, site);
 			sitesByInstruction.set(site.call, site);
 			blocks.add(fn.instructionBlock(instruction));
+		}
+		if (hasKnownEntries) {
+			const projected = projectJoinedEntryPair(
+				program,
+				fn,
+				controlUse,
+				context.remainingEdits,
+			);
+			if (projected !== undefined) return projected.commit();
 		}
 		if (blocks.size === 0) return undefined;
 		const skipped = regionCandidateBlocks(program, fn, sitesByInstruction);

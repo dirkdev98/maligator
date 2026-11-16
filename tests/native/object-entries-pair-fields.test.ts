@@ -30,7 +30,14 @@ beforeAll(() => {
 		...common,
 		name: "entry-pair-fields",
 	});
-	for (const name of ["readPair", "readStatic", "readLoop"]) {
+	for (const name of [
+		"readPair",
+		"readStatic",
+		"readLoop",
+		"readJoined",
+		"readJoinedWrapper",
+		"readJoinedArithmetic",
+	]) {
 		const fn = pair.programImage.native.functions.find(
 			(fn) =>
 				String.fromCharCode(
@@ -43,6 +50,11 @@ beforeAll(() => {
 			),
 			name,
 		).toBe(true);
+		if (name.startsWith("readJoined")) {
+			expect(fn.storage!.objectEnumerationSnapshots).toHaveLength(2);
+			for (const plan of fn.storage!.objectEnumerationSnapshots)
+				expect(plan.entryProjections).toHaveLength(1);
+		}
 	}
 	binaries = [
 		pair.compiled,
@@ -59,6 +71,12 @@ describe("closed Object.entries pair fields", () => {
 	it.each([
 		["roots captured values after source mutation and index coercion", "captured"],
 		["projects static string fields", "static"],
+		["projects both fields before guarded producer joins", "joined"],
+		["preserves replacement key, length and value getter order", "joined-replacement"],
+		["preserves getter order after wrapper inlining", "joined-wrapper-replacement"],
+		["preserves coercion before the next pair field", "joined-arithmetic"],
+		["stops pair reads when preceding coercion throws", "joined-arithmetic-throw"],
+		["throws normally for a missing guarded pair", "joined-missing"],
 		["retains each pair index across loop collections", "loop"],
 		["falls back for oversized records", "large"],
 		["throws normally for missing pairs", "missing"],

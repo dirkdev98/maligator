@@ -1515,8 +1515,12 @@ snapshot, column and typed array regions consume. A loop that admits a numeric r
 keeps that region's entry speculation.
 An `Object.entries` result consumed directly by iteration can join a guarded run.
 An immediate sole `.length` or indexed projection stays inside both twins, so native
-count or snapshot transport retains its producer and only the projected value crosses the join. Delayed
-count and indexed observations retain one producer for native snapshot transport.
+count or snapshot transport retains its producer. Closed pair consumers also keep
+their field reads and dependent computations with each producer. Inlining can leave
+such a consumer after a join; sole incoming transfers can execute its first closed
+prefix before joining the observed field values. This preserves getter and coercion
+order without replaying producer effects or crossing a handler. Delayed count and
+indexed observations retain one producer for native snapshot transport.
 Noncoercing Number predicates and ordinary `Date.now` calls also use this guard with
 multiple realms enabled. These direct consumers create no realm-owned result or error;
 clock reads retain their host effect even when their result is unused. Their

@@ -147,6 +147,12 @@ describe("Object.entries snapshot transport", () => {
 		const fn = inspect(image);
 		const snapshots = fn.storage!.objectEnumerationSnapshots;
 		expect(snapshots).toHaveLength(2);
+		for (const plan of snapshots) {
+			expect(plan.entryProjections).toHaveLength(1);
+			expect(plan.entryProjections[0]!.fields.map((field) => field.field)).toEqual([
+				0, 1,
+			]);
+		}
 		const observations = fn.specializations.flatMap((region) =>
 			region.kind === "stack-object-plan"
 				? region.sites.flatMap((site) =>
@@ -157,6 +163,58 @@ describe("Object.entries snapshot transport", () => {
 				: [],
 		);
 		for (const plan of snapshots) expect(observations).toContain(plan.callIp);
+	});
+
+	it.each(["pair[0].length+pair[1]", "index+pair[0].length+pair[1]"])(
+		"projects inlined wrapper fields through %s",
+		(expression) => {
+			const image = compile(`
+   function project(record,index){return Object.entries(record)[index];}
+   const pair=project(record,index);
+   return ${expression};
+  `);
+			const plans = inspect(image).storage!.objectEnumerationSnapshots;
+			expect(plans).toHaveLength(2);
+			for (const plan of plans) expect(plan.entryProjections).toHaveLength(1);
+		},
+	);
+
+	it.each([
+		"observe(pair);return pair[0].length+pair[1];",
+		"pair[1]=7;return pair[0];",
+		"return [pair,pair[0]];",
+		"try{observe();}catch(error){return pair[0];}return pair[1];",
+		"const value=pair[1];observe(value);return pair[0];",
+	])("retains joined pair materialization for %s", (body) => {
+		const image = compile(`
+   function project(record,index){return Object.entries(record)[index];}
+   const pair=project(record,index);${body}
+  `);
+		const plans = inspect(image).storage!.objectEnumerationSnapshots;
+		for (const plan of plans) expect(plan.entryProjections).toEqual([]);
+	});
+
+	it("retains materialization when join discovery exhausts its parameter budget", () => {
+		const parameters = Array.from({ length: 257 }, (_, index) => `arg${index}`);
+		const source = `globalThis.inspect=function inspect(${parameters.join()}){
+   function project(record,index){return Object.entries(record)[index];}
+   const pair=project(arg0,arg1);
+   return pair[0].length+pair[1]+${parameters.slice(2).join("+")};
+  };`;
+		const image = lowerNativeStorage(
+			compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(source, "entries.js"),
+				{
+					facts: compilerProgramFactsFromConfig(
+						resolveBuildConfig({ engine: { primordials: "mutable" } }),
+					),
+				},
+			),
+			"precise",
+		);
+		const plans = inspect(image).storage!.objectEnumerationSnapshots;
+		expect(plans).toHaveLength(2);
+		for (const plan of plans) expect(plan.entryProjections).toEqual([]);
 	});
 
 	it.each(["mutable", "locked"] as const)(
