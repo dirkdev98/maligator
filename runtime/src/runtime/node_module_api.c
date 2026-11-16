@@ -119,7 +119,7 @@ static bool node_module_table_lookup(MalValue require, i32 slot, MalValue id, Ma
 
 // Static edges arrive through the compiler-attached table: CommonJS modules by registry
 // id, ES modules as a one-element array holding their evaluation thunk, built-ins as
-// their exports. The image holds no loader for anything outside the graph.
+// their exports. Native builtins use the shared lazy loader after that table.
 static MalValue node_module_require(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -145,16 +145,8 @@ static MalValue node_module_require(
         MalCompletion completion = mal_vm_call_value(vm, evaluate, mal_value_new_undefined(), nullptr, 0);
         return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
     }
-    for (usize i = 0; i < countof(node_module_builtin_names); i++) {
-        const char *name = node_module_builtin_names[i];
-        if (!node_module_matches_builtin(string, name)) continue;
-        char canonical[64];
-        snprintf(canonical, sizeof canonical, "%s%s", strncmp(name, "node:", 5) == 0 ? "" : "node:", name);
-        MalValue module = mal_node_module_get_cached(vm, canonical);
-        if (!mal_value_is_undefined(module)) return module;
-        node_module_throw_not_found(vm, string, ": the built-in is not linked into this ahead-of-time image");
-        return mal_value_new_undefined();
-    }
+    MalValue module = mal_node_module_get_builtin(vm, string);
+    if (vm->completion.kind == MAL_COMPLETION_THROW || !mal_value_is_undefined(module)) return module;
     node_module_throw_not_found(vm, string,
         ": only built-in modules can be required dynamically from an ahead-of-time image");
     return mal_value_new_undefined();
@@ -705,6 +697,7 @@ static void module_install_extras(MalVm *vm, MalObject *module) {
 void mal_host_install_node_module(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
+    vm->node_builtin_loader = mal_node_module_get_builtin;
     if (mal_node_module_install_cached(vm, "node:module", slots, count)) return;
     (void) launch;
     MalValue module = vm->intrinsics[MAL_INTRINSIC_NODE_MODULE_API_MODULE];

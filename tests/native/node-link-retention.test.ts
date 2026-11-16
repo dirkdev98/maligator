@@ -19,6 +19,8 @@ describe("node host installer link retention", () => {
 	let deadPathInstallers: Array<string>;
 	let bufferInstallers: Array<string>;
 	let deadBufferInstallers: Array<string>;
+	let literalCjsInstallers: Array<string>;
+	let computedCjsInstallers: Array<string>;
 
 	async function installers(fixture: string, name: string): Promise<Array<string>> {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-link-retention-"));
@@ -56,6 +58,14 @@ describe("node host installer link retention", () => {
 			"tests/local/node-link-dead-buffer.mjs",
 			"node-link-dead-buffer",
 		);
+		literalCjsInstallers = await installers(
+			"tests/local/node-link-cjs-path.cjs",
+			"node-link-cjs-path",
+		);
+		computedCjsInstallers = await installers(
+			"tests/local/node-link-cjs-computed.cjs",
+			"node-link-cjs-computed",
+		);
 	}, 1_200_000);
 
 	it("retains only the path installer object for a path-only program", () => {
@@ -77,6 +87,14 @@ describe("node host installer link retention", () => {
 				]),
 			].sort(),
 		);
+	});
+
+	it("keeps literal CommonJS builtin loading selective", () => {
+		expect(literalCjsInstallers).toEqual(pathInstallers);
+	});
+
+	it("retains the builtin registry for a materialized CommonJS require", () => {
+		expect(computedCjsInstallers).toEqual(processInstallers);
 	});
 
 	it("omits the path installer when its only read is optimized away", () => {

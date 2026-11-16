@@ -64,6 +64,14 @@ roots canonical snapshots for the isolate lifetime. Different descriptions remai
 separate when a compiler host and its application share an isolate. Fragment cache
 keys and worker requests carry the same versioned description as whole images.
 
+Literal CommonJS requests keep their resolved module IDs and selective installer
+roots. Reading the injected `require` value, including through direct eval,
+retains the Node module loader. An indirect VM callback connects that value to the
+shared native builtin registry without retaining the registry in literal-only
+images. Computed native requests and `createRequire` use the same canonical,
+realm-specific exports cache as `process.getBuiltinModule`. `createRequire` consults
+its attached graph table before that registry.
+
 Catalog-declared pure source modules have separate evaluation functions. The
 compiler removes an unused initializer after specialization and local cleanup;
 explicit runner initialization remains effectful. Alias cleanup preserves source

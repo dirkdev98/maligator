@@ -2037,6 +2037,9 @@ typedef struct MalVm {
     /** Whether node:v8 requested explicit GC exposure for future VM contexts. */
     bool node_v8_expose_gc;
 
+    /** Kept indirect so literal CommonJS graphs can omit the dynamic builtin registry. */
+    MalValue (*node_builtin_loader)(struct MalVm *vm, MalString *name);
+
     /**
      * PromiseJobs microtask queue (singly-linked FIFO). Settling a promise and
      * Promise.prototype.then append jobs here; the top-level loop drains them to

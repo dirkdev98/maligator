@@ -822,6 +822,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
     vm->async_context = nullptr;
     vm->node_v8_expose_gc = false;
+    vm->node_builtin_loader = nullptr;
 
     vm->job_head = nullptr;
     vm->job_tail = nullptr;

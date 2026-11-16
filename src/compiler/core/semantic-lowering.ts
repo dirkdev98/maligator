@@ -347,8 +347,8 @@ interface CoreFrontendContext {
 	/** Linked HOST_GLOBAL_INSTALLERS rows; a reachable read of one of their globals retains them. */
 	hostGlobals: Array<(typeof HOST_GLOBAL_INSTALLERS)[number] & { retained: boolean }>;
 
-	/** Set when a module's import.meta needs node:module's run-time resolve. */
-	importMetaResolveInstaller: string | null;
+	/** Retain Node's dynamic resolver when a public loader value escapes static lowering. */
+	nodeModuleInstaller: string | null;
 
 	/** Modules whose bindings this image publishes to later images of its program. */
 	moduleExports?: "all" | ReadonlySet<string>;
@@ -964,7 +964,7 @@ export function constructSemanticProgramCore(
 		hostProcess: null,
 		hostBuffer: null,
 		hostGlobals: [],
-		importMetaResolveInstaller: null,
+		nodeModuleInstaller: null,
 		commonJsExportNames: () => [],
 	};
 
@@ -1151,7 +1151,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 					...program.hostGlobals,
 				]
 					.flatMap((host) => (host?.retained === true ? [host.installer] : []))
-					.concat(program.importMetaResolveInstaller ?? [])
+					.concat(program.nodeModuleInstaller ?? [])
 					.filter(
 						(installer, index, installers) => installers.indexOf(installer) === index,
 					),
@@ -3374,8 +3374,7 @@ function emitCjsRequire(
 /**
  * If this call is a static `require("specifier")` against the injected CommonJS
  * `require`, lower it to `__cjs_require(id)` of the resolved module and return
- * its result register; otherwise undefined (a normal call, e.g. a dynamic or
- * shadowed require, which throws at runtime).
+ * its result register; otherwise emit an ordinary call through the binding.
  */
 function tryCompileCjsRequireCall(
 	program: CoreFrontendContext,
@@ -3829,7 +3828,7 @@ function emitImportMetaResolveFunction(
 	url: number,
 	filename: number,
 ): number {
-	program.importMetaResolveInstaller = hostInstallerSymbol("node:module");
+	program.nodeModuleInstaller = hostInstallerSymbol("node:module");
 	const graph = program.semantic.graph;
 	const record = graph?.modules.get(file.path);
 	const table = nextCoreVariable(fn);
@@ -14924,6 +14923,7 @@ function directEvalBindingAccessor(
 	location: BindingLocation,
 	kind: "get" | "set",
 ): number {
+	retainCommonJsLoader(program, caller, binding);
 	let accessors = program.directEvalBindingAccessors.get(binding);
 	const cached = accessors?.[kind];
 	if (cached !== undefined) return cached;
@@ -16659,6 +16659,7 @@ function compileStaticIdentifier(
 		return -1;
 	}
 	retainHostGlobal(program, binding);
+	retainCommonJsLoader(program, fn, binding);
 
 	if (binding.undeclared && identifierLoadsIntrinsic(program, identifier.name)) {
 		const destination = nextCoreVariable(fn);
@@ -16762,6 +16763,20 @@ function retainHostMember(
 		if (key === undefined ? host.computedMember : host.globals.includes(key))
 			host.retained = true;
 	}
+}
+
+function retainCommonJsLoader(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	binding: Binding,
+): void {
+	if (
+		program.semantic.graph?.nodeEnabled &&
+		fn.semanticFile.commonjs &&
+		binding.name === "require" &&
+		binding.declarationNode === fn.semanticFile.ast
+	)
+		program.nodeModuleInstaller = hostInstallerSymbol("node:module");
 }
 
 /** Mark a reachable free Node global and keep it on globalThis storage. */

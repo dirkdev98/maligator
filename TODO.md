@@ -700,10 +700,13 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 # Node and ecosystem compatibility
 
-- [ ] node:test is importable but not reported as a builtin: `builtinModules`,
-      `isBuiltin("node:test")` and `process.getBuiltinModule("node:test")` omit it,
-      because getBuiltinModule only loads native installers and the source module
-      exists only in programs that import it. Node reports and loads it.
+- [ ] Register retained source-provided builtins as lazy runtime providers, then expose
+      them through builtin discovery and computed loading. Literal `node:test` imports
+      work, but `builtinModules`, `isBuiltin("node:test")`, getBuiltinModule and computed
+      requests still omit its source implementation. Reuse graph evaluation and real
+      namespaces; preserve per-realm exports, cache identity and selective linking.
+      Native builtin requests already share the lazy registry through CommonJS and
+      createRequire, including require values exposed by direct eval.
 
 - [ ] Match Node's invalid-argument diagnostic inspection, including custom inspect
       hooks and thrown-hook precedence. Buffer validators and copyBytesFrom currently
