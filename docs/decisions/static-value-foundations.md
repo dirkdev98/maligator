@@ -1510,13 +1510,14 @@ calls. Other object-producing calls and constructions keep the guarded forms tha
 snapshot, column and typed array regions consume. A loop that admits a numeric region
 keeps that region's entry speculation.
 An `Object.entries` result consumed directly by iteration can join a guarded run.
-An immediate sole `.length` projection stays inside both twins, so count-only native
-transport retains its producer and only the projected value crosses the join. Delayed
+An immediate sole `.length` or indexed projection stays inside both twins, so native
+count or snapshot transport retains its producer and only the projected value crosses the join. Delayed
 count and indexed observations retain one producer for native snapshot transport.
-Noncoercing Number predicates also use this guard with multiple realms enabled. Their
+Noncoercing Number predicates and ordinary `Date.now` calls also use this guard with
+multiple realms enabled. These direct consumers create no realm-owned result or error;
+clock reads retain their host effect even when their result is unused. Their
 proof belongs to the executing function's realm, whose globals and intrinsics the call
-boundary installs. The
-ordinary loaded calls remain as the fallback, and reentry still blocks later
+boundary installs. Ordinary loaded calls remain as the fallback, and reentry blocks later
 lookups or calls whose captured identity would be lost. The primordial graph cache
 stays disabled when realms are enabled because its entries have no realm key.
 

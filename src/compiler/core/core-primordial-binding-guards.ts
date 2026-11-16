@@ -1,5 +1,6 @@
 import {
 	builtinWorldAssumptions,
+	GUARDED_CURRENT_REALM_OPERATIONS,
 	GUARDED_NUMBER_PREDICATES as NUMBER_PREDICATES,
 } from "../shared/builtin-assumptions.ts";
 import {
@@ -702,7 +703,7 @@ class RunPlanner {
 				const loaded =
 					seen.has(site.name) && (site.method === undefined || seen.has(site.method));
 				const kernel = this.#mathKernel(site);
-				if (this.#realms && !NUMBER_PREDICATES.has(site.operation)) break;
+				if (this.#realms && !GUARDED_CURRENT_REALM_OPERATIONS.has(site.operation)) break;
 				if (!loaded || (reentered && !kernel && !NUMBER_PREDICATES.has(site.operation)))
 					break;
 				seen.add(instruction);

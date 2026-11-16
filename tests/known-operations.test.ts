@@ -368,12 +368,13 @@ describe("known-operation dispatch", () => {
 	);
 });
 
-it("restricts current-realm mutable assumptions to the admitted primitive operations", () => {
+it("restricts current-realm mutable assumptions to consumers without realm-owned results", () => {
 	for (const operation of [
 		"Number.isNaN",
 		"Number.isFinite",
 		"Number.isInteger",
 		"Number.isSafeInteger",
+		"Date.now",
 	]) {
 		expect(() =>
 			verifyBuiltinWorldAssumptions(
@@ -382,13 +383,7 @@ it("restricts current-realm mutable assumptions to the admitted primitive operat
 			),
 		).not.toThrow();
 	}
-	for (const operation of [
-		"Object.create",
-		"Date.now",
-		"Math.abs",
-		"Math.min",
-		"Math.sumPrecise",
-	]) {
+	for (const operation of ["Object.create", "Math.abs", "Math.min", "Math.sumPrecise"]) {
 		expect(() =>
 			verifyBuiltinWorldAssumptions(
 				builtinWorldAssumptions(operation, "exact-builtin-proof", false, "guarded"),

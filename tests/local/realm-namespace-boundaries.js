@@ -4,3 +4,9 @@ globalThis.realmProbe = function realmProbe(value) {
 globalThis.realmReplaceNumber = function realmReplaceNumber() {
 	Number.isFinite = () => false;
 };
+globalThis.realmClock = function realmClock() {
+	return Date.now() >= 1577836800000 ? 1 : 0;
+};
+globalThis.realmReplaceClock = function realmReplaceClock() {
+	Date.now = () => 17;
+};

@@ -71,13 +71,44 @@ done:
     return ok;
 }
 
+static bool check_clock_realms(MalVm *vm) {
+    MalValue roots[3] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalRealm *initial = vm->current_realm;
+    bool ok = false;
+    if (!get(vm, "realmClock", &roots[0]) ||
+        !get(vm, "realmReplaceClock", &roots[2])) goto done;
+    i32 clock = mal_function_object_function_index(mal_value_to_function_object(roots[0]));
+    i32 replace = mal_function_object_function_index(mal_value_to_function_object(roots[2]));
+    MalRealm *owned = mal_realm_create(vm, nullptr, nullptr);
+    mal_realm_switch(vm, owned);
+    roots[1] = mal_vm_op_create_function(vm, clock, nullptr);
+    roots[2] = mal_vm_op_create_function(vm, replace, nullptr);
+    mal_realm_switch(vm, initial);
+    if (!number_result(invoke(vm, roots[0], nullptr, 0), 1) ||
+        !number_result(invoke(vm, roots[1], nullptr, 0), 1) ||
+        vm->current_realm != initial) goto done;
+    mal_gc_collect(vm);
+    if (invoke(vm, roots[2], nullptr, 0).kind != MAL_COMPLETION_NORMAL ||
+        !number_result(invoke(vm, roots[1], nullptr, 0), 0) ||
+        !number_result(invoke(vm, roots[0], nullptr, 0), 1) ||
+        vm->current_realm != initial) goto done;
+    ok = true;
+done:
+    mal_realm_switch(vm, initial);
+    mal_gc_unroot(&span);
+    return ok;
+}
+
 int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     MalCallable *entry = mal_vm_create_callable(&vm, 0);
     mal_vm_run(&vm, entry);
     mal_vm_free_callable(entry);
-    bool ok = vm.completion.kind == MAL_COMPLETION_NORMAL && check_realms(&vm);
+    bool ok = vm.completion.kind == MAL_COMPLETION_NORMAL &&
+        check_realms(&vm) && check_clock_realms(&vm);
     mal_vm_free(&vm);
     if (!ok) { fputs("realm-namespace-boundaries failure\n", stderr); return 1; }
     puts("realm-namespace-boundaries PASS");

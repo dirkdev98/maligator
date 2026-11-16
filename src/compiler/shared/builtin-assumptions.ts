@@ -23,6 +23,12 @@ export const GUARDED_NUMBER_PREDICATES: ReadonlySet<string> = new Set([
 	"Number.isSafeInteger",
 ]);
 
+// These consumers neither construct realm-owned values nor reenter JavaScript.
+export const GUARDED_CURRENT_REALM_OPERATIONS: ReadonlySet<string> = new Set([
+	...GUARDED_NUMBER_PREDICATES,
+	"Date.now",
+]);
+
 export function builtinWorldAssumptions(
 	operation: string,
 	receiver: BuiltinWorldAssumptions["receiver"],
@@ -69,7 +75,7 @@ export function verifyBuiltinWorldAssumptions(
 	if (
 		guarded &&
 		expected.realm === "current-execution-realm" &&
-		!GUARDED_NUMBER_PREDICATES.has(operation)
+		!GUARDED_CURRENT_REALM_OPERATIONS.has(operation)
 	)
 		throw new Error(`Unsupported current-realm guarded operation ${operation}`);
 	if (

@@ -3648,6 +3648,32 @@ describe("wide BigInt builtin constants", () => {
 });
 
 describe("mutable namespace guards in the executing realm", () => {
+	it("guards clock reads without merging or removing unused host observations", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(){Date.now();Date.now();return Date.now()}globalThis.probe=probe;",
+			"probe",
+			{ locked: false, realms: true },
+		);
+		const calls = output.core.filter(
+			(op) => op.opcode === "callKnown" && op.attributes.operation === "Date.now",
+		);
+		expect(calls).toHaveLength(3);
+		for (const call of calls)
+			expect(call.attributes.worldAssumptions).toMatchObject({
+				primordials: "guarded",
+				realm: "current-execution-realm",
+			});
+		expect(output.core.some((op) => op.opcode === "guardSemanticEpoch")).toBe(true);
+		expect(output.core.filter((op) => op.opcode === "call")).toHaveLength(3);
+	});
+	it("retains the clock callee captured across reentrant argument evaluation", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(prepare){return Date.now(prepare())}globalThis.probe=probe;",
+			"probe",
+			{ locked: false, realms: true },
+		);
+		expect(output.core.some((op) => op.opcode === "callKnown")).toBe(false);
+	});
 	it("guards isNaN's primitive result and retains the loaded fallback", () => {
 		const output = inspectStaticValueFunction(
 			"function probe(value){return Number.isNaN(value)}globalThis.probe=probe;",
