@@ -46,6 +46,12 @@ function ownFunctionVariables(arrow) {
 	first[1](4);
 	return [first[0](), second[0](), eval("value")];
 }
+function parameterVariables(
+	parameter = eval("var parameterBodyOnly = 7; parameterBodyOnly"),
+) {
+	var parameterBodyOnly = 3;
+	return [parameter, parameterBodyOnly, typeof globalThis.parameterBodyOnly];
+}
 console.log(
 	JSON.stringify({
 		nestedDeletion: nestedDeletion(),
@@ -54,5 +60,6 @@ console.log(
 		nestedAbrupt: nestedAbrupt(),
 		ordinaryFunction: ownFunctionVariables(false),
 		arrowFunction: ownFunctionVariables(true),
+		parameterVariables: parameterVariables(),
 	}),
 );

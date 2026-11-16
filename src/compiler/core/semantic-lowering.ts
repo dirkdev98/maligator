@@ -14602,13 +14602,9 @@ function inheritedContextForDirectEval(
 			? program.directEvalContext.varEnvironmentNames
 			: [],
 	);
-	for (const scope of fn.semanticFile.scopes) {
-		let ownerUnit: Scope | null | undefined = scope;
-		while (ownerUnit && !FUNCTION_UNIT_NODE_TYPES.has(ownerUnit.node.type)) {
-			ownerUnit = ownerUnit.parent;
-		}
-		if (ownerUnit !== unit) continue;
-		for (const binding of scope.bindings) {
+	let variableScope = callScope;
+	while (variableScope) {
+		for (const binding of variableScope.bindings) {
 			if (
 				binding.kind === "var" &&
 				!binding.undeclared &&
@@ -14617,6 +14613,8 @@ function inheritedContextForDirectEval(
 				varEnvironmentNames.add(binding.name);
 			}
 		}
+		if (variableScope === unit) break;
+		variableScope = variableScope.parent ?? undefined;
 	}
 	if (
 		fn.inParameterExpression &&

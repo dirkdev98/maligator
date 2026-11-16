@@ -384,6 +384,22 @@ test("generated direct eval contexts model parameter and lexical conflicts", () 
 	).toThrow(SyntaxError);
 });
 
+test("parameter eval does not inherit body-only variable names", () => {
+	const context = generatedDirectEvalContext(
+		`function f(parameter = eval("ignored")) { var bodyOnly; }`,
+	);
+	expect(context.varEnvironmentNames).toContain("parameter");
+	expect(context.varEnvironmentNames).not.toContain("bodyOnly");
+});
+
+test("eval retains fixed variable names hidden by a nearer lexical binding", () => {
+	const context = generatedDirectEvalContext(
+		`function f() { var value; { let value; eval("ignored"); } }`,
+	);
+	expect(context.varEnvironmentNames).toContain("value");
+	expect(context.varConflictNames).toContain("value");
+});
+
 test.each([
 	["ordinary function", `function f(p = eval("ignored")) {}`],
 	["generator", `function *f(p = eval("ignored")) {}`],

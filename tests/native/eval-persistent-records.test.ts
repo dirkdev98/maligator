@@ -43,6 +43,8 @@ describe("persistent direct eval records", () => {
 			"retains nested writes and thrown identity before deleting the variable",
 		ordinaryFunction: "gives an eval-created ordinary function its own variable record",
 		arrowFunction: "gives an eval-created arrow its own variable record",
+		parameterVariables:
+			"keeps parameter eval variables separate from body-only declarations",
 	};
 	for (const [key, name] of Object.entries(cases))
 		it(name, () => {

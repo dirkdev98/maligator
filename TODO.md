@@ -550,6 +550,8 @@ contracts or investigates costs still visible after the string follow-ups.
 
 - [ ] Complete direct-eval arguments and parameter-environment behavior. Preserve
       mapped parameters, parameter expressions, shadowing, and strict-mode differences.
+      Parameter eval excludes body-only declarations from its fixed name set;
+      parameter and body eval still need distinct persistent-record placement.
 
 - [ ] Transport the caller's actual `with` records into direct eval in scope order.
       Inside `with (o) { eval("m()") }`, the declarative bridge omits `o`, so neither
