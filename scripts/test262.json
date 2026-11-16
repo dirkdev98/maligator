@@ -1,14 +1,14 @@
 {
   "sha": "225d9c898829cd4e88a38c3605c05eba2d3730b6",
   "summary": {
-    "FAILED": 613,
-    "PASSED": 53163
+    "FAILED": 612,
+    "PASSED": 53164
   },
   "skips": {},
   "code": {
     "compiledFiles": 94561,
     "functionCount": 3004814,
-    "instructionCount": 109405571
+    "instructionCount": 109405555
   },
   "results": {
     "test/annexB/built-ins/Array/from/iterator-method-emulates-undefined.js": "FAILED",
@@ -40262,7 +40262,7 @@
     "test/staging/sm/generators/yield-error.js": "PASSED",
     "test/staging/sm/generators/yield-star-iterator-primitive.js": "PASSED",
     "test/staging/sm/global/bug660612.js": "PASSED",
-    "test/staging/sm/global/eval-01.js": "FAILED",
+    "test/staging/sm/global/eval-01.js": "PASSED",
     "test/staging/sm/global/eval-native-callback-is-indirect.js": "PASSED",
     "test/staging/sm/global/parseInt-01.js": "PASSED",
     "test/staging/sm/lexical-environment/block-scoped-functions-annex-b-generators.js": "PASSED",
