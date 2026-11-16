@@ -34,12 +34,12 @@ describe("numeric sort invocation contracts", () => {
 		const targets = image.native.functions.flatMap((fn) =>
 			fn.instructions.flatMap((plan) => {
 				if (plan?.kind !== "call" || plan.numericSortCallback === undefined) return [];
-				const target = image.native.functions[plan.numericSortCallback.functionIndex]!;
-				return [
-					String.fromCharCode(
+				return plan.numericSortCallback.entries.map(({ functionIndex }) => {
+					const target = image.native.functions[functionIndex]!;
+					return String.fromCharCode(
 						...image.runtime.stringConstants[target.body.nameStringIndex]!,
-					),
-				];
+					);
+				});
 			}),
 		);
 		for (const target of [

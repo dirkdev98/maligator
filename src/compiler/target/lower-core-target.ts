@@ -3342,11 +3342,17 @@ export function prepareCoreCompilationToTargets(
 				const calls =
 					numericSortCallbacks.get(site.caller) ??
 					new Map<CoreInstructionId, CompilerNumericSortCallback>();
+				const previous = calls.get(site.instruction);
 				calls.set(site.instruction, {
 					operation: site.numericSortCallback,
 					...(site.numericSortCallbackViaCall ? { viaCall: true as const } : {}),
-					functionIndex: functionMap.coreToExecution[entry.function]!,
-					entryId: entry.id,
+					entries: [
+						...(previous?.entries ?? []),
+						{
+							functionIndex: functionMap.coreToExecution[entry.function]!,
+							entryId: entry.id,
+						},
+					],
 				});
 				numericSortCallbacks.set(site.caller, calls);
 				continue;

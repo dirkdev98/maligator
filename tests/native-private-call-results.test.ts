@@ -177,7 +177,10 @@ describe("ordinary CALL final-output eligibility", () => {
 			"numeric sort",
 			{
 				...direct,
-				numericSortCallback: { operation: "sort", functionIndex: 0, entryId: 0 },
+				numericSortCallback: {
+					operation: "sort",
+					entries: [{ functionIndex: 0, entryId: 0 }],
+				},
 			},
 		],
 		[

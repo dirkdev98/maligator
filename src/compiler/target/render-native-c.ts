@@ -6167,8 +6167,8 @@ export function numericSortKernelDemand(
 				plan?.kind === "call"
 					? numericSortSite(native.body.instructions[ip], plan)
 					: undefined;
-			if (site !== undefined)
-				demand.add(directCompiledEntryKey(site.functionIndex, site.entryId));
+			for (const entry of site?.entries ?? [])
+				demand.add(directCompiledEntryKey(entry.functionIndex, entry.entryId));
 		}
 	return demand;
 }
@@ -14883,16 +14883,18 @@ class NativeInstructionEmission {
 		const numericCallback =
 			callPlan === undefined ? undefined : numericSortSite(instruction, callPlan);
 		if (numericCallback !== undefined) {
-			const entry = this.context.directCompiledEntries.get(
-				directCompiledEntryKey(numericCallback.functionIndex, numericCallback.entryId),
-			);
-			if (
-				entry !== undefined &&
-				numericSortKernelEntry(entry) &&
-				(entry.fieldParameters === undefined || entry.leaf === true)
-			) {
+			const selected = numericCallback.entries.flatMap((target) => {
+				const entry = this.context.directCompiledEntries.get(
+					directCompiledEntryKey(target.functionIndex, target.entryId),
+				);
+				if (
+					entry === undefined ||
+					!numericSortKernelEntry(entry) ||
+					(entry.fieldParameters !== undefined && entry.leaf !== true)
+				)
+					return [];
 				const comparator = this.context.relocation.reference(
-					`mal_direct_${this.context.relocation.stem(numericCallback.functionIndex)}_${numericCallback.entryId}${this.suffix}`,
+					`mal_direct_${this.context.relocation.stem(target.functionIndex)}_${target.entryId}${this.suffix}`,
 				);
 				const keys = numericSortRecordKeys(entry);
 				const fieldKeys =
@@ -14900,7 +14902,28 @@ class NativeInstructionEmission {
 						? "nullptr"
 						: `(MalString *[]){ ${keys.map((key) => `vm->string_constant_atoms[${this.context.relocation.stringIndex(key)}]`).join(", ")} }`;
 				return [
-					`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${this.context.relocation.functionIndex(numericCallback.functionIndex)}, ${entry.fieldParameters === undefined ? comparator : "nullptr"}, ${entry.leaf && !entry.sortMayDecline ? this.context.relocation.reference(`${comparator}_sort`) : "nullptr"}, ${entry.sortMayDecline ? this.context.relocation.reference(`${comparator}_sort`) : "nullptr"}, ${fieldKeys}, ${keys.length}, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					{
+						target,
+						invoke: `mal_builtin_sort_numeric(vm, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${this.context.relocation.functionIndex(target.functionIndex)}, ${entry.fieldParameters === undefined ? comparator : "nullptr"}, ${entry.leaf && !entry.sortMayDecline ? this.context.relocation.reference(`${comparator}_sort`) : "nullptr"}, ${entry.sortMayDecline ? this.context.relocation.reference(`${comparator}_sort`) : "nullptr"}, ${fieldKeys}, ${keys.length}, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`,
+					},
+				];
+			});
+			if (selected.length > 0) {
+				const dispatch =
+					selected.length === 1
+						? [`MalCompletion ${tmp} = ${selected[0]!.invoke};`]
+						: [
+								`MalValue ${tmp}_callback = ${this.boxedOperand(args[numericCallback.viaCall ? 1 : 0]!)};`,
+								`i32 ${tmp}_target = mal_value_is_function_object(${tmp}_callback) ? mal_function_object_function_index(mal_value_to_function_object(${tmp}_callback)) : -1;`,
+								`MalCompletion ${tmp};`,
+								...selected.map(
+									({ target, invoke }, index) =>
+										`${index === 0 ? "if" : "else if"} (${tmp}_target == ${this.context.relocation.functionIndex(target.functionIndex)}) { ${tmp} = ${invoke}; }`,
+								),
+								`else { ${tmp} = mal_vm_call_cached(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}); }`,
+							];
+				return [
+					...dispatch,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					this.callPoll(),

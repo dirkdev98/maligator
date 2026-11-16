@@ -14,6 +14,7 @@ import type {
 	ProgramImage,
 } from "../src/compiler/target/program-image.ts";
 import { validateNativeNumericSortCallback } from "../src/compiler/target/program-image.ts";
+import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
 import { resolveSplitUnits } from "./helpers/native-relocation.ts";
 
 function compile(
@@ -42,6 +43,85 @@ function callbackPlans(image: ProgramImage) {
 }
 
 describe("numeric sort callback entries", () => {
+	it.each(["sort", "toSorted"])(
+		"carries both finite %s targets through the codec and split emission",
+		(operation) => {
+			const image = deserializeCompilerArtifact(
+				serializeCompilerArtifact(
+					compileSemanticProgramToProgramImage(
+						analyzeSourceAndRunSemanticAnalysis(
+							`function run(values, reverse) {
+								const ascending = (a, b) => a - b;
+								const descending = (a, b) => b - a;
+								let compare = ascending;
+								if (reverse) compare = descending;
+								return values.${operation}(compare);
+							} globalThis.run = run;
+							globalThis.replacement = { ${operation}(compare) { return compare(4, 2); } };`,
+							"finite-sort.js",
+						),
+					),
+				),
+			);
+			const callback = callbackPlans(image)[0]!.numericSortCallback!;
+			expect(callback.entries).toHaveLength(2);
+			const output = emitProgramImage(image, { debugInfo: false });
+			const units = resolveSplitUnits(image, emitProgramTranslationUnits(image));
+			for (const entry of callback.entries) {
+				const symbol = `mal_direct_${entry.functionIndex}_${entry.entryId}_sort`;
+				expect(output).toContain(symbol);
+				expect(
+					units.some((unit) =>
+						new RegExp(`^void ${symbol}\\(.*\\{$`, "m").test(unit.sourceChunks.join("")),
+					),
+				).toBe(true);
+			}
+			const prefix = compile();
+			const merged = mergeProgramImages([prefix, image]);
+			const restored = callbackPlans(merged.image).find(
+				(plan) => plan.numericSortCallback!.entries.length === callback.entries.length,
+			)!.numericSortCallback!;
+			expect(restored.entries).toEqual(
+				callback.entries.map((entry) => ({
+					...entry,
+					functionIndex: entry.functionIndex + merged.functionBases[1]!,
+				})),
+			);
+			expect(
+				deserializeCompilerArtifact(serializeCompilerArtifact(merged.image)),
+			).toEqual(merged.image);
+			for (const entries of [[], [...callback.entries, callback.entries[0]!]]) {
+				expect(() =>
+					validateNativeNumericSortCallback(
+						{ ...callback, entries },
+						image.native.functions,
+					),
+				).toThrow(/numeric sort callback/);
+			}
+			expect(() =>
+				validateNativeNumericSortCallback(
+					{ ...callback, entries: [callback.entries[0]!, callback.entries[0]!] },
+					image.native.functions,
+				),
+			).toThrow(/numeric sort callback/);
+		},
+	);
+
+	it("keeps a comparator family beyond the entry budget generic", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function run(values, pick) {
+					let compare = (a, b) => a - b;
+					if (pick === 1) compare = (a, b) => b - a;
+					if (pick === 2) compare = (a, b) => a * a - b * b;
+					return values.sort(compare);
+				} globalThis.run = run;`,
+				"wide-sort.js",
+			),
+		);
+		expect(callbackPlans(image)).toEqual([]);
+	});
+
 	it("projects both records into numeric comparator fields through the codec", () => {
 		const image = deserializeCompilerArtifact(
 			serializeCompilerArtifact(
@@ -53,8 +133,8 @@ describe("numeric sort callback entries", () => {
 			),
 		);
 		const callback = callbackPlans(image)[0]!.numericSortCallback!;
-		const target = image.native.functions[callback.functionIndex]!;
-		const entry = target.directEntries[callback.entryId]!;
+		const target = image.native.functions[callback.entries[0]!.functionIndex]!;
+		const entry = target.directEntries[callback.entries[0]!.entryId]!;
 		expect(entry.parameterRepresentations).toEqual(["boxed", "boxed"]);
 		expect(
 			entry.fieldParameters!.sources.every(
@@ -80,8 +160,8 @@ describe("numeric sort callback entries", () => {
 			"[{ score: 3 }, { score: 2 }]",
 		);
 		const callback = callbackPlans(image)[0]!.numericSortCallback!;
-		const target = image.native.functions[callback.functionIndex]!;
-		const entry = target.directEntries[callback.entryId]!;
+		const target = image.native.functions[callback.entries[0]!.functionIndex]!;
+		const entry = target.directEntries[callback.entries[0]!.entryId]!;
 		const malformed = {
 			...image,
 			native: {
@@ -123,8 +203,9 @@ describe("numeric sort callback entries", () => {
 		for (const call of callbackPlans(image)) {
 			const callback = call.numericSortCallback!;
 			expect(
-				image.native.functions[callback.functionIndex]!.directEntries[callback.entryId]!
-					.storage!.numericWorker,
+				image.native.functions[callback.entries[0]!.functionIndex]!.directEntries[
+					callback.entries[0]!.entryId
+				]!.storage!.numericWorker,
 			).toBeUndefined();
 		}
 		expect(emitProgramImage(image, { debugInfo: false })).not.toContain(
@@ -136,7 +217,9 @@ describe("numeric sort callback entries", () => {
 		const image = compile("return (a - b) || (a * 0 / b);");
 		const callback = callbackPlans(image)[0]!.numericSortCallback!;
 		const entry =
-			image.native.functions[callback.functionIndex]!.directEntries[callback.entryId]!;
+			image.native.functions[callback.entries[0]!.functionIndex]!.directEntries[
+				callback.entries[0]!.entryId
+			]!;
 		expect(entry.storage!.numericWorker).toBeDefined();
 	});
 
@@ -189,14 +272,16 @@ describe("numeric sort callback entries", () => {
 			expect(plans).toHaveLength(1);
 			const callback = plans[0]!.numericSortCallback!;
 			const entry =
-				image.native.functions[callback.functionIndex]!.directEntries[callback.entryId]!;
+				image.native.functions[callback.entries[0]!.functionIndex]!.directEntries[
+					callback.entries[0]!.entryId
+				]!;
 			expect(entry.parameterRepresentations).toEqual(["number", "number"]);
 			expect(entry.resultRepresentation).toBe("number");
 			expect(plans[0]!.directFunctionIndex).toBeUndefined();
 			const output = emitProgramImage(image, { debugInfo: false });
 			expect(output).toContain("mal_builtin_sort_numeric(vm,");
 			expect(output).toContain(
-				`mal_direct_${callback.functionIndex}_${callback.entryId}`,
+				`mal_direct_${callback.entries[0]!.functionIndex}_${callback.entries[0]!.entryId}`,
 			);
 		},
 	);
@@ -255,12 +340,13 @@ describe("numeric sort callback entries", () => {
 				const plans = callbackPlans(image);
 				expect(plans).toHaveLength(1);
 				const callback = plans[0]!.numericSortCallback!;
-				const fn = image.native.functions[callback.functionIndex]!;
-				expect(fn.directEntries[callback.entryId]!.parameterRepresentations).toEqual([
+				const fn = image.native.functions[callback.entries[0]!.functionIndex]!;
+				expect(
+					fn.directEntries[callback.entries[0]!.entryId]!.parameterRepresentations,
+				).toEqual(["number", "number"]);
+				expect(fn.directEntries[callback.entries[0]!.entryId]!.resultRepresentation).toBe(
 					"number",
-					"number",
-				]);
-				expect(fn.directEntries[callback.entryId]!.resultRepresentation).toBe("number");
+				);
 			}
 		},
 	);
@@ -289,7 +375,9 @@ describe("numeric sort callback entries", () => {
 			);
 			const callback = callbackPlans(image)[0]!.numericSortCallback!;
 			const entry =
-				image.native.functions[callback.functionIndex]!.directEntries[callback.entryId]!;
+				image.native.functions[callback.entries[0]!.functionIndex]!.directEntries[
+					callback.entries[0]!.entryId
+				]!;
 			expect(entry.argumentRepresentations).toEqual(["number", "number"]);
 			expect(entry.resultRepresentation).toBe("number");
 		},
@@ -307,12 +395,12 @@ describe("numeric sort callback entries", () => {
 				);
 				const callback = callbackPlans(image)[0]!.numericSortCallback!;
 				const entry =
-					image.native.functions[callback.functionIndex]!.directEntries[
-						callback.entryId
+					image.native.functions[callback.entries[0]!.functionIndex]!.directEntries[
+						callback.entries[0]!.entryId
 					]!;
 				expect(entry.argumentRepresentations).toEqual(["number", "number"]);
 				expect(entry.resultRepresentation).toBe("number");
-				const symbol = `mal_direct_${callback.functionIndex}_${callback.entryId}`;
+				const symbol = `mal_direct_${callback.entries[0]!.functionIndex}_${callback.entries[0]!.entryId}`;
 				expect(emitProgramImage(image)).toContain(`double ${symbol}(`);
 				expect(
 					resolveSplitUnits(image, emitProgramTranslationUnits(image)).some((unit) =>
@@ -329,11 +417,12 @@ describe("numeric sort callback entries", () => {
 		);
 		const callback = callbackPlans(image)[0]!.numericSortCallback!;
 		expect(
-			image.native.functions[callback.functionIndex]!.body.capturedCount,
+			image.native.functions[callback.entries[0]!.functionIndex]!.body.capturedCount,
 		).toBeGreaterThan(0);
 		expect(
-			image.native.functions[callback.functionIndex]!.directEntries[callback.entryId]!
-				.resultRepresentation,
+			image.native.functions[callback.entries[0]!.functionIndex]!.directEntries[
+				callback.entries[0]!.entryId
+			]!.resultRepresentation,
 		).toBe("number");
 	});
 
@@ -346,11 +435,11 @@ describe("numeric sort callback entries", () => {
 			["number", "number", "number"],
 		] as const) {
 			const functions = image.native.functions.map((fn) =>
-				fn.functionIndex === callback.functionIndex
+				fn.functionIndex === callback.entries[0]!.functionIndex
 					? {
 							...fn,
 							directEntries: fn.directEntries.map((entry) =>
-								entry.id === callback.entryId
+								entry.id === callback.entries[0]!.entryId
 									? { ...entry, argumentRepresentations }
 									: entry,
 							),
@@ -367,8 +456,13 @@ describe("numeric sort callback entries", () => {
 		const image = compile();
 		const callback = callbackPlans(image)[0]!.numericSortCallback!;
 		for (const altered of [
-			{ ...callback, functionIndex: image.runtime.functions.length },
-			{ ...callback, entryId: 9 },
+			{
+				...callback,
+				entries: [
+					{ ...callback.entries[0]!, functionIndex: image.runtime.functions.length },
+				],
+			},
+			{ ...callback, entries: [{ ...callback.entries[0]!, entryId: 9 }] },
 			{ ...callback, viaCall: false as unknown as true },
 		]) {
 			const forged = {
@@ -406,8 +500,8 @@ describe("numeric sort callback entries", () => {
 			),
 		);
 		const [callback, ...others] = callbackPlans(image).map(({ numericSortCallback }) => ({
-			functionIndex: numericSortCallback!.functionIndex,
-			entryId: numericSortCallback!.entryId,
+			functionIndex: numericSortCallback!.entries[0]!.functionIndex,
+			entryId: numericSortCallback!.entries[0]!.entryId,
 		}));
 		expect(others).toEqual([callback]);
 		const output = emitProgramImage(image, { debugInfo: false });

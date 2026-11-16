@@ -888,9 +888,10 @@ describe("independent native SSA storage", () => {
 			.find((plan) => plan?.kind === "call" && plan.numericSortCallback !== undefined);
 		if (numericSort?.kind !== "call" || numericSort.numericSortCallback === undefined)
 			throw new Error("Scalar sort fixture lacks its numeric leaf callback selection");
-		const sort = image.native.functions[numericSort.numericSortCallback.functionIndex]!;
+		const sort =
+			image.native.functions[numericSort.numericSortCallback.entries[0]!.functionIndex]!;
 		const sortLeaf =
-			sort.directEntries[numericSort.numericSortCallback.entryId]!.storage!
+			sort.directEntries[numericSort.numericSortCallback.entries[0]!.entryId]!.storage!
 				.numericWorker!;
 		expect(sortLeaf.expressionIps.length).toBeGreaterThan(0);
 		const sortTargets = new Set(

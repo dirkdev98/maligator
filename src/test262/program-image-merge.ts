@@ -157,7 +157,10 @@ function cloneNativeInstructionPlan(
 					? undefined
 					: {
 							...plan.numericSortCallback,
-							functionIndex: plan.numericSortCallback.functionIndex + base.function,
+							entries: plan.numericSortCallback.entries.map((entry) => ({
+								...entry,
+								functionIndex: entry.functionIndex + base.function,
+							})),
 						},
 			guardedBuiltinCall:
 				plan.guardedBuiltinCall === undefined

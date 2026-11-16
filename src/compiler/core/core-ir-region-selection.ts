@@ -1444,6 +1444,7 @@ function directEntryOpportunities(
 			)
 				continue;
 
+			let numericSortNominated = false;
 			if (
 				site.targets.functions.length === 0 &&
 				(site.arguments?.length === 1 || site.arguments?.length === 2)
@@ -1458,11 +1459,10 @@ function directEntryOpportunities(
 						caller,
 						site.arguments[viaCall ? 1 : 0]!,
 					);
-					const target =
-						callbackTargets.functions.length === 1
-							? callbackTargets.functions[0]
-							: undefined;
-					if (target !== undefined && live.has(target)) {
+					const targets =
+						callbackTargets.functions.length <= 2 ? callbackTargets.functions : [];
+					for (const target of targets) {
+						if (!live.has(target)) continue;
 						const callback = program.function(target);
 						const observation = coreArgumentObservation(callback);
 						if (observation.kind !== "general") {
@@ -1476,10 +1476,12 @@ function directEntryOpportunities(
 								...(viaCall ? { numericSortCallbackViaCall: true as const } : {}),
 							});
 							callsByTarget.set(target, calls);
+							numericSortNominated = true;
 						}
 					}
 				}
 			}
+			if (numericSortNominated) continue;
 			let targets = site.targets.functions;
 			let speculative = false;
 			if (
@@ -1613,8 +1615,8 @@ function directEntryOpportunities(
 				const ordinaryCalls = callSites.filter(
 					(call) => !recordSites.has(`${call.caller}:${call.instruction}`),
 				);
-				// A single guarded target compares the callee's function index before entering;
-				// only field entries may share one site between several targets.
+				// Callback and field entries select their own target at runtime;
+				// ordinary guarded entries require one direct target.
 				let selectedCalls = ordinaryCalls.filter(
 					(call) =>
 						call.numericSortCallback !== undefined ||

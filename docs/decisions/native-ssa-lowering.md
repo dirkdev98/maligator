@@ -329,6 +329,15 @@ Worker plans record nonpolling jumps to the immediately following instruction as
 fallthroughs. Rendering retains only labels targeted by remaining branches; a
 selected expression producer can still be such a target.
 
+Sort sites may nominate a bounded pair of comparator entries. Each entry retains
+its typed ABI and kernel demand through serialization and relocation. The emitter
+selects by the captured callback's function identity; builtin identity, receiver,
+arity and realm admission remain runtime checks. Unmatched callbacks keep the
+original call. Typed arrays consume a nominated scalar kernel only for Number
+snapshots without NaN elements and callbacks in the current realm. Their rooted
+buffers, independent copy result and deferred writeback use the ordinary sort
+lifetime. Other inputs retain per-pair comparison.
+
 Generic Array sorting and arbitrary comparator-leaf kernels share a stable block merge strategy.
 Binary insertion bounds comparator calls within each block while key and value shifts
 remain plain memory operations. Small arrays retain linear insertion to avoid merge

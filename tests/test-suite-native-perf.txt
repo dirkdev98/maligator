@@ -34,6 +34,7 @@ tests/native/direct-known-call.test.ts
 tests/native/entry-pair-parameters.test.ts
 tests/native/error-capture-stack.test.ts
 tests/native/fresh-dense-indexed-reserve.test.ts
+tests/native/finite-numeric-sort.test.ts
 tests/native/function-inherited-cache.test.ts
 tests/native/function-own-slot-cache.test.ts
 tests/native/gc-raw-realloc.test.ts

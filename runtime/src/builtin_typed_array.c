@@ -1947,6 +1947,43 @@ MalValue mal_builtin_typed_array_sort(MalVm *vm, MalValue this_value, const MalV
     }
     MalValue *source = values;
     MalValue *destination = scratch;
+    // A whole-sort kernel is a non-reentrant scalar leaf; direct callbacks alone
+    // can still call JavaScript and must keep the rooted per-pair path.
+    MalExactScriptCall *leaf = vm->exact_script_call;
+    if (leaf == nullptr || leaf->callee != compare || leaf->numeric_sort_kernel == nullptr ||
+        leaf->numeric_sort_comparator == nullptr || leaf->numeric_sort_key_count != 0) {
+        leaf = nullptr;
+    }
+#if MAL_PROFILE
+    leaf = nullptr;
+#endif
+#if MAL_REALMS
+    if (leaf != nullptr && mal_vm_callee_realm(vm, compare) != vm->current_realm) {
+        leaf = nullptr;
+    }
+#endif
+    // NaN inputs retain the existing merge's choice for inconsistent ordering.
+    for (u32 i = 0; leaf != nullptr && i < length; i++) {
+        if (!mal_ops_is_number(values[i]) || isnan(mal_ops_number_as_f64(values[i]))) {
+            leaf = nullptr;
+        }
+    }
+    usize key_bytes;
+    f64 *keys = leaf == nullptr ||
+        !mal_checked_size_multiply(length, sizeof(f64) * 2, SIZE_MAX, &key_bytes)
+        ? nullptr : malloc(key_bytes);
+    if (keys != nullptr) {
+        if (!mal_vm_enter_compiled(vm, leaf->function_index)) {
+            free(keys);
+            ret = mal_value_new_undefined();
+            goto done;
+        }
+        leaf->numeric_sort_kernel(values, scratch, keys, length);
+        mal_vm_leave_compiled(vm);
+        free(keys);
+        MAL_PERF_COUNT(numeric_sort_kernel_runs);
+        goto writeback;
+    }
     u32 width = 1;
     while (width < length) {
         u32 base = 0;
@@ -1981,6 +2018,7 @@ MalValue mal_builtin_typed_array_sort(MalVm *vm, MalValue this_value, const MalV
         width = width > length / 2 ? length : width * 2;
     }
 
+writeback:
     for (u32 i = 0; i < length; i++) {
         mal_typed_array_object_set(vm, array, i, source[i]);
     }

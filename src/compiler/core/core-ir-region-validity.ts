@@ -2067,6 +2067,8 @@ export function verifyCoreOptimizationPlan(
 		{
 			readonly fieldObject: CoreInstructionId | undefined;
 			readonly targets: Set<CoreFunctionId>;
+			readonly numericSortCallback?: "sort" | "toSorted";
+			readonly numericSortCallbackViaCall?: true;
 		}
 	>();
 	// A record parameter takes storage only from record calls this plan selects.
@@ -2441,15 +2443,33 @@ export function verifyCoreOptimizationPlan(
 				(site.numericSortCallback === undefined &&
 					(entry.fieldParameters === undefined) !== (site.fieldObject === undefined)) ||
 				(previous !== undefined &&
-					(site.fieldObject === undefined ||
-						previous.fieldObject !== site.fieldObject ||
-						previous.targets.has(entry.function)))
+					(previous.targets.has(entry.function) ||
+						(site.numericSortCallback !== undefined
+							? previous.numericSortCallback !== site.numericSortCallback ||
+								previous.numericSortCallbackViaCall !== site.numericSortCallbackViaCall
+							: site.fieldObject === undefined ||
+								previous.fieldObject !== site.fieldObject ||
+								previous.numericSortCallback !== undefined)))
 			)
-				fail(`callsite ${key} selects incompatible direct entries`);
+				fail(
+					`callsite ${key} selects incompatible direct entries: ${entry.function}:${entry.id}, ${previous?.numericSortCallback ?? "ordinary"} -> ${site.numericSortCallback ?? "ordinary"}`,
+				);
 			const targets = previous?.targets ?? new Set<CoreFunctionId>();
 			targets.add(entry.function);
-			if (targets.size > 4) fail(`callsite ${key} selects too many direct entries`);
-			callSites.set(key, { fieldObject: site.fieldObject, targets });
+			if (targets.size > (site.numericSortCallback === undefined ? 4 : 2))
+				fail(`callsite ${key} selects too many direct entries`);
+			callSites.set(key, {
+				fieldObject: site.fieldObject,
+				targets,
+				...(site.numericSortCallback === undefined
+					? {}
+					: {
+							numericSortCallback: site.numericSortCallback,
+							...(site.numericSortCallbackViaCall
+								? { numericSortCallbackViaCall: true }
+								: {}),
+						}),
+			});
 			if (!live.has(site.caller)) fail(`direct entry callsite ${key} is dead`);
 			const caller = program.function(site.caller);
 			if (

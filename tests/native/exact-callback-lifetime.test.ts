@@ -55,7 +55,9 @@ describe("exact callback contexts across runtime compilation", () => {
 					fn.instructions.some(
 						(plan) =>
 							plan?.kind === "call" &&
-							plan.numericSortCallback?.functionIndex === comparator.functionIndex,
+							plan.numericSortCallback?.entries.some(
+								(entry) => entry.functionIndex === comparator.functionIndex,
+							),
 					),
 				),
 			).toBe(true);

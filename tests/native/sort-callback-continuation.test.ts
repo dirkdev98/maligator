@@ -35,13 +35,12 @@ describe("sort callback continuation after numeric admission declines", () => {
 			const selectedNames = image.native.functions.flatMap((fn) =>
 				fn.instructions.flatMap((plan) => {
 					if (plan?.kind !== "call" || !plan.numericSortCallback) return [];
-					const callback =
-						image.native.functions[plan.numericSortCallback.functionIndex]!;
-					return [
-						String.fromCharCode(
+					return plan.numericSortCallback.entries.map(({ functionIndex }) => {
+						const callback = image.native.functions[functionIndex]!;
+						return String.fromCharCode(
 							...image.runtime.stringConstants[callback.body.nameStringIndex]!,
-						),
-					];
+						);
+					});
 				}),
 			);
 			for (const name of ["orderedFallback", "nestedFallback", "operandResult"])

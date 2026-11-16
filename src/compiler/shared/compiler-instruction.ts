@@ -123,8 +123,10 @@ export interface CompilerShapeCaseCandidate {
 export interface CompilerNumericSortCallback {
 	readonly viaCall?: true;
 	readonly operation: "sort" | "toSorted";
-	readonly functionIndex: number;
-	readonly entryId: number;
+	readonly entries: ReadonlyArray<{
+		readonly functionIndex: number;
+		readonly entryId: number;
+	}>;
 }
 
 export type CompilerInstruction = CompilerOperation & {

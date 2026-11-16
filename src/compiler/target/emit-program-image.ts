@@ -901,7 +901,9 @@ function nativeCompilationAvailability(
 			for (const target of [
 				instruction.directFunctionIndex,
 				instruction.directCallbackFunctionIndex,
-				instruction.numericSortCallback?.functionIndex,
+				...(instruction.numericSortCallback?.entries.map(
+					(entry) => entry.functionIndex,
+				) ?? []),
 				instruction.directCallTargetFunctionIndex,
 				...(instruction.guardedFunctionIndices ?? []),
 			]) {
@@ -1118,19 +1120,16 @@ function emitNativeFunctions(
 			for (const target of [
 				instruction.directFunctionIndex,
 				instruction.directCallbackFunctionIndex,
-				instruction.numericSortCallback?.functionIndex,
+				...(instruction.numericSortCallback?.entries.map(
+					(entry) => entry.functionIndex,
+				) ?? []),
 				instruction.directCallTargetFunctionIndex,
 				...(instruction.guardedFunctionIndices ?? []),
 			]) {
 				if (target !== undefined) targets.add(target);
 			}
-			if (instruction.numericSortCallback !== undefined) {
-				entries.add(
-					directCompiledEntryKey(
-						instruction.numericSortCallback.functionIndex,
-						instruction.numericSortCallback.entryId,
-					),
-				);
+			for (const entry of instruction.numericSortCallback?.entries ?? []) {
+				entries.add(directCompiledEntryKey(entry.functionIndex, entry.entryId));
 			}
 			if (
 				(instruction.directFunctionIndex !== undefined ||

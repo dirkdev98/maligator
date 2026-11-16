@@ -2720,28 +2720,41 @@ export function validateNativeNumericSortCallback(
 	callback: CompilerNumericSortCallback,
 	functions: ReadonlyArray<NativeFunctionPlan>,
 ): void {
-	const entry = functions[callback.functionIndex]?.directEntries[callback.entryId];
-	const parameters = entry?.argumentRepresentations ?? entry?.parameterRepresentations;
+	const entries = callback.entries;
 	if (
 		(callback.operation !== "sort" && callback.operation !== "toSorted") ||
 		(callback.viaCall !== undefined && callback.viaCall !== true) ||
-		!Number.isInteger(callback.functionIndex) ||
-		callback.functionIndex < 0 ||
-		!Number.isInteger(callback.entryId) ||
-		callback.entryId < 0 ||
-		entry === undefined ||
-		entry.id !== callback.entryId ||
-		parameters?.length !== 2 ||
-		parameters.some(
-			(representation) =>
-				representation !== (entry.fieldParameters === undefined ? "number" : "boxed"),
-		) ||
-		entry.resultRepresentation !== "number" ||
-		entry.fieldParameters?.representations.some(
-			(representation) => representation !== "number",
-		)
+		!Array.isArray(callback.entries) ||
+		entries.length === 0 ||
+		entries.length > 2
 	) {
 		throw new RangeError("Invalid native numeric sort callback contract");
+	}
+	const targets = new Set<number>();
+	for (const selected of entries) {
+		const entry = functions[selected.functionIndex]?.directEntries[selected.entryId];
+		const parameters = entry?.argumentRepresentations ?? entry?.parameterRepresentations;
+		if (
+			!Number.isInteger(selected.functionIndex) ||
+			selected.functionIndex < 0 ||
+			!Number.isInteger(selected.entryId) ||
+			selected.entryId < 0 ||
+			targets.has(selected.functionIndex) ||
+			entry === undefined ||
+			entry.id !== selected.entryId ||
+			parameters?.length !== 2 ||
+			parameters.some(
+				(representation) =>
+					representation !== (entry.fieldParameters === undefined ? "number" : "boxed"),
+			) ||
+			entry.resultRepresentation !== "number" ||
+			entry.fieldParameters?.representations.some(
+				(representation) => representation !== "number",
+			)
+		) {
+			throw new RangeError("Invalid native numeric sort callback contract");
+		}
+		targets.add(selected.functionIndex);
 	}
 }
 

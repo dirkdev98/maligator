@@ -128,7 +128,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 464;
+export const COMPILER_ARTIFACT_VERSION = 465;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -2777,8 +2777,11 @@ function writeCompilerArtifact(
 								(numericCallback.viaCall ? 2 : 0),
 				);
 				if (numericCallback !== undefined) {
-					w.i32(numericCallback.functionIndex);
-					w.i32(numericCallback.entryId);
+					w.u8(numericCallback.entries.length);
+					for (const entry of numericCallback.entries) {
+						w.i32(entry.functionIndex);
+						w.i32(entry.entryId);
+					}
 				}
 
 				const foreign = plan.foreignCall;
@@ -5478,8 +5481,10 @@ function readCompilerArtifact(
 										? ("sort" as const)
 										: ("toSorted" as const),
 								...(numericCallbackTag > 2 ? { viaCall: true as const } : {}),
-								functionIndex: r.i32(),
-								entryId: r.i32(),
+								entries: Array.from({ length: r.u8() }, () => ({
+									functionIndex: r.i32(),
+									entryId: r.i32(),
+								})),
 							};
 
 				const flags = r.u8();

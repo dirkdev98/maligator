@@ -321,12 +321,6 @@ contracts or investigates costs still visible after the string follow-ups.
       generic `for...in` and entries-pair iteration. Use existing consumers and preserve
       protocol observation, identity and coercion order.
 
-- [ ] Expose certified whole-sort kernels through one bounded finite-target comparator
-      consumer. Binding-held singleton and forwarded callbacks already have compiled
-      nomination; runtime nomination still invokes the comparator per comparison.
-      Preserve generic comparison order for uncertified or heterogeneous keys, and
-      retain only repeated workload savings that repay analysis and generated size.
-
 - [ ] Reduce remaining no-capture closure and per-iteration capture
       costs. Source-immutable leaf captures can copy values in open images; synthetic
       iteration owners and cyclic initializers still need per-creation snapshots before
