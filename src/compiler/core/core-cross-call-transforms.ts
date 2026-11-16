@@ -880,16 +880,14 @@ function inlineTarget(
 		if (opcode === "createRestArgumentsState") restProducers.push(instruction);
 	}
 	if (restProducers.length > 0) {
-		if (caller.isGenerator) return undefined;
-		// Positional snapshots are consumed before async return adoption, but do not
-		// yet have a contract for surviving this activation's own suspension.
-		if (caller.isAsync)
-			for (const instruction of caller.instructionIds())
-				if (
-					caller.instructionKind(instruction) === "operation" &&
-					coreInstructionEffects(caller, instruction).maySuspend
-				)
-					return undefined;
+		// Linear forwarding creates and consumes a fresh state in one expansion.
+		// A caller suspension cannot divide that lifetime when the callee cannot suspend.
+		for (const instruction of fn.instructionIds())
+			if (
+				fn.instructionKind(instruction) === "operation" &&
+				coreInstructionEffects(fn, instruction).maySuspend
+			)
+				return undefined;
 	}
 	const restArguments = inlineRestArguments(fn, argumentCount, restProducers);
 	if (hasArgumentSnapshots && coreArgumentObservation(fn).kind === "general")

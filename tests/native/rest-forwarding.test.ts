@@ -41,7 +41,7 @@ describe("rest argument forwarding", () => {
 	}
 });
 
-describe("rest forwarding inside non-suspending async callers", () => {
+describe("positional forwarding inside coroutine callers", () => {
 	let pair: ReturnType<typeof buildBackendPairFromOneProgramImage>;
 	beforeAll(() => {
 		pair = buildBackendPairFromOneProgramImage({

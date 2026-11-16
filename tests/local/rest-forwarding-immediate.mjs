@@ -84,4 +84,26 @@ async function adopting(ownInput) {
 	return result;
 }
 check((await adopting(ignored)) === payload, "return adopts the forwarded thenable");
+function* resumedIterator(ignored, value) {
+	function forward(...values) {
+		return take(...values);
+	}
+	yield forward(value);
+	return forward(value);
+}
+const iteratorChanged = resumedIterator(17, payload);
+check(iteratorChanged.next().value === payload, "intact iterator before suspension");
+const originalIterator = Array.prototype[Symbol.iterator];
+try {
+	Array.prototype[Symbol.iterator] = function* () {
+		yield changed;
+	};
+	check(
+		iteratorChanged.next().value === changed,
+		"iterator replacement after suspension",
+	);
+} finally {
+	Array.prototype[Symbol.iterator] = originalIterator;
+}
+
 console.log("rest-forwarding-immediate PASS");

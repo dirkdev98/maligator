@@ -373,10 +373,11 @@ can discard useful forwarding chains.
 
 Inlining a rest-forwarding helper snapshots its positional inputs in the caller's
 registers. Those explicit sources do not retain the caller's incoming argument span;
-the native and wire loaders derive the same retention requirement. Async callers
-can consume these snapshots before return adoption when their Core effects contain
-no suspension. Await, yield and generator entry retain the helper boundary until
-snapshot lifetime through suspension is proved.
+the native and wire loaders derive the same retention requirement. Ordinary coroutine
+liveness preserves their values across earlier caller suspension. A linear forwarding
+helper creates and consumes one fresh state in a single expansion and cannot itself
+suspend, so a caller await or yield cannot divide that state's lifetime. State
+initialization writes prevent CSE or loop motion from sharing it across invocations.
 
 Candidate claim headers and exact costs participate in ranking and admission before
 target payloads are materialized. Rejected candidates do not receive target blocks,

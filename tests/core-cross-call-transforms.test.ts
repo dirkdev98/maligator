@@ -1778,50 +1778,33 @@ describe("bounded Core cross-call transforms", () => {
 		},
 	);
 
-	it.each([
-		...[false, true].flatMap((apply) =>
-			["exact", "guarded"].flatMap((site) => [
-				{
-					declaration: "async function",
-					site,
-					apply,
-					before: "",
-					after: "",
-					inline: true,
-				},
-				{
-					declaration: "async function",
-					site,
-					apply,
-					before: "await 0;",
-					after: "",
-					inline: false,
-				},
-				{
-					declaration: "async function",
-					site,
-					apply,
-					before: "",
-					after: "await 0;",
-					inline: false,
-				},
-				{ declaration: "function*", site, apply, before: "", after: "", inline: false },
-				{
-					declaration: "async function*",
-					site,
-					apply,
-					before: "",
-					after: "",
-					inline: false,
-				},
-			]),
+	it.each(
+		["spread", "apply", "arguments"].flatMap((mode) =>
+			["exact", "guarded"].flatMap((site) =>
+				[
+					{ declaration: "async function", before: "", after: "" },
+					{ declaration: "async function", before: "await 0;", after: "" },
+					{ declaration: "async function", before: "", after: "await 0;" },
+					{ declaration: "async function", before: "await 0;", after: "await 0;" },
+					{ declaration: "function*", before: "", after: "" },
+					{ declaration: "function*", before: "yield 0;", after: "yield 1;" },
+					{
+						declaration: "async function*",
+						before: "await 0; yield 0;",
+						after: "await 0;",
+					},
+				].map((context) => ({ ...context, site, mode })),
+			),
 		),
-	])(
-		"inlines rest forwarding=$inline for $declaration at $site with apply=$apply, before=$before, after=$after",
-		({ declaration, site, apply, before, after, inline }) => {
-			const helper = `function forward(...values) {
-				return ${apply ? "target.apply(null, values)" : "target(...values)"};
-			}`;
+	)(
+		"inlines $mode forwarding into $declaration at $site with before=$before, after=$after",
+		({ declaration, site, mode, before, after }) => {
+			const helper =
+				mode === "arguments"
+					? `function forward() { "use strict"; return target.apply(null, arguments); }`
+					: `function forward(...values) {
+					return ${mode === "apply" ? "target.apply(null, values)" : "target(...values)"};
+				}`;
 			const source = `${site === "guarded" ? helper : ""}
 				${declaration} suspended() {
 					${site === "exact" ? helper : ""}
@@ -1847,7 +1830,7 @@ describe("bounded Core cross-call transforms", () => {
 			expect(coreOperations(caller).some(({ opcode }) => opcode === "call")).toBe(true);
 			expect(
 				coreOperations(caller).some(({ opcode }) => opcode === "callRestArguments"),
-			).toBe(inline);
+			).toBe(true);
 			expect(
 				coreOperations(coreFunctionNamed(optimized!, "forward")!).some(
 					({ opcode }) => opcode === "callRestArguments",
@@ -1856,6 +1839,78 @@ describe("bounded Core cross-call transforms", () => {
 			verifyCoreProgram(optimized!, { stage: "pre-target" });
 		},
 	);
+
+	it.each([
+		{
+			name: "async callee",
+			declaration: "async function",
+			body: "await 0; return target(...values);",
+			arguments: "1, 2",
+		},
+		{
+			name: "generator callee",
+			declaration: "function*",
+			body: "yield 0; return target(...values);",
+			arguments: "1, 2",
+		},
+		{
+			name: "async generator callee",
+			declaration: "async function*",
+			body: "await 0; yield 0; return target(...values);",
+			arguments: "1, 2",
+		},
+		{
+			name: "repeated state",
+			declaration: "function",
+			body: "return target(...values) + target(...values);",
+			arguments: "1, 2",
+		},
+		{
+			name: "nonlinear state",
+			declaration: "function",
+			body: "if (flag) return target(...values); return 0;",
+			arguments: "1, 2",
+		},
+		{
+			name: "oversized positional span",
+			declaration: "function",
+			body: "return target(...values);",
+			arguments: Array.from({ length: 17 }, (_, index) => index).join(","),
+		},
+	])("retains the forwarding helper boundary for $name", (entry) => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`${entry.declaration} forward(...values) { ${entry.body} }
+				async function suspended() {
+					await 0;
+					for (let index = 0; index < 10; index++) forward(${entry.arguments});
+				}
+				suspended();`,
+				"core-inline-rest-boundary.js",
+			),
+			{
+				facts: compilerProgramFactsFromConfig(
+					resolveBuildConfig({ engine: { primordials: "mutable", realms: true } }),
+				),
+				coreVerification: "per-pass",
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		expect(
+			coreOperations(coreFunctionNamed(optimized!, "suspended")!).some(
+				({ opcode }) => opcode === "callRestArguments",
+			),
+		).toBe(false);
+		expect(
+			coreOperations(coreFunctionNamed(optimized!, "forward")!).some(
+				({ opcode }) => opcode === "callRestArguments",
+			),
+		).toBe(true);
+		verifyCoreProgram(optimized!, { stage: "pre-target" });
+	});
 
 	it("guards and inlines hot global rest argument snapshots", () => {
 		let optimized: CoreProgram | undefined;
