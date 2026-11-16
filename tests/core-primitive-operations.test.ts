@@ -3795,6 +3795,61 @@ describe("guarded entries observation boundaries", () => {
 	});
 });
 
+describe("captured Date.parse calls after String conversion", () => {
+	it("retains the selected parser after a recognized conversion reenters JavaScript", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(value){return Date.parse(String(value))}globalThis.probe=probe;",
+			"probe",
+			{ locked: false, realms: false },
+		);
+		expect(output.core.some((op) => op.opcode === "guardSemanticEpoch")).toBe(true);
+		for (const operation of ["String", "Date.parse"])
+			expect(
+				output.core.some(
+					(op) => op.opcode === "callKnown" && op.attributes.operation === operation,
+				),
+			).toBe(true);
+		expect(output.core.some((op) => op.opcode === "call")).toBe(true);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(output.image))).toEqual(
+			output.image,
+		);
+	});
+	it.each([
+		["Date.parse((+value,other))", false],
+		["Date.parse(String(value),other())", false],
+		["Date.parse(String(value))", true],
+	] as const)(
+		"retains unsupported parser inputs or execution realms: %s, realms=%s",
+		(expression, realms) => {
+			const output = inspectStaticValueFunction(
+				`function probe(value,other){return ${expression}}globalThis.probe=probe;`,
+				"probe",
+				{ locked: false, realms },
+			);
+			expect(
+				output.core.some(
+					(op) => op.opcode === "callKnown" && op.attributes.operation === "Date.parse",
+				),
+			).toBe(false);
+		},
+	);
+	it("rechecks the namespace before a later parser call", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(value){return Date.parse(String(value))+Date.parse(value)}globalThis.probe=probe;",
+			"probe",
+			{ locked: false, realms: false },
+		);
+		const parsers = output.core.filter(
+			(op) => op.opcode === "callKnown" && op.attributes.operation === "Date.parse",
+		);
+		expect(parsers).toHaveLength(2);
+		expect(output.core.filter((op) => op.opcode === "guardSemanticEpoch")).toHaveLength(
+			parsers.length,
+		);
+		expect(new Set(parsers.map((op) => op.block)).size).toBe(parsers.length);
+	});
+});
+
 describe("captured predicate calls after coercion", () => {
 	it.each(["isFinite", "isInteger", "isSafeInteger"])(
 		"retains Number.%s as a fixed kernel after Number conversion",

@@ -12,11 +12,11 @@
  * src/compiler/target/program-image-codec.ts: decode the flat wire buffer into the
  * runtime structs. The per-opcode operand layout, the opcode tag
  * ordering (WireOp below), and the operator/intrinsic tables mirror the compiler
- * contracts. WIRE_VERSION guards incompatible layout changes.
+ * contracts. WIRE_VERSION guards incompatible layout and execution changes.
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 100u
+#define WIRE_VERSION 101u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {

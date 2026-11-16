@@ -1500,6 +1500,10 @@ as the generic twin. A copied load follows nothing that can run JavaScript or st
 property. Math Number kernels and noncoercing Number predicates retain their selected
 semantics after reentry without resolving the mutable graph again. The interpreter
 retains the predicate specialization tag carried by the wire and static C image.
+A selected single-realm `Date.parse` also survives a recognized argument conversion
+when its forwarded input is proven String. Native and interpreted execution consume
+that String directly, so conversion finishes once and later namespace loads still
+require a fresh guard. Unknown parser inputs retain ordinary coercion and dispatch.
 Other known calls resolve their builtin when they run and keep the reentry barrier.
 Primitive numeric formatting and parsing can share a run because their conversions cannot reenter
 JavaScript. Unrecognized argument calls end the run, preserving the captured callee

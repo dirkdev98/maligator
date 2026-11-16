@@ -354,6 +354,7 @@ tests/native/node-http-request-cancel.test.ts
 tests/native/node-crypto-encrypted-pkcs8.test.ts
 tests/native/primordial-binding-guards.test.ts
 tests/native/rest-forwarding.test.ts
+tests/native/captured-date-parse.test.ts
 tests/native/known-reentry.test.ts
 tests/native/open-const-captures.test.ts
 tests/native/object-attributed-data.test.ts

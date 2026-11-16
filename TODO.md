@@ -166,8 +166,8 @@ Runtime eval may remove source closure without invalidating authority closure.
       loaded form because entry snapshots and typed array regions consume it. Private
       record columns follow bounded alternative `Array.from` producers, including
       guarded known calls; extend the remaining selected consumers across their guards.
-      Reentrant known calls beyond fixed Math Number kernels and noncoercing Number
-      predicates need their selected
+      Reentrant known calls beyond fixed Math Number kernels, noncoercing Number
+      predicates and single-realm String-input `Date.parse` need their selected
       callee semantics carried through execution; generic `CALL_KNOWN` still resolves
       the mutable graph. A loop a numeric region can take keeps its own entry speculation;
       admitting `GUARD_SEMANTIC_EPOCH` as a region entry guard would let it use both.

@@ -16,6 +16,7 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
@@ -68,9 +69,9 @@ import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
  * The copy may only skip what the protector proves when it is checked. Nothing that
  * can run JavaScript or store a property precedes a skipped load in the copy, so
  * each load would still have answered the intrinsic. Both backends resolve a known
- * call's builtin through the mutable graph when it runs, so a known call follows
- * nothing that could have replaced it either; only a Math call on Numbers, which the
- * copy runs as a numeric kernel that resolves nothing, may. Primitive conversions
+ * call's builtin through the mutable graph when it runs. A consumer with fixed
+ * execution semantics may follow argument reentry only when its admitted inputs
+ * neither run JavaScript nor resolve that graph again. Primitive conversions
  * and numeric formatting also cannot reenter JavaScript when all inputs are primitive.
  * Mid-run mutations take effect at the next evaluation, which the next guard sees.
  */
@@ -611,6 +612,13 @@ class RunPlanner {
 		);
 	}
 
+	// ToString has already completed, so parsing cannot replace the selected callee.
+	#capturedDateParser(site: Site): boolean {
+		if (this.#realms || site.operation !== "Date.parse") return false;
+		const argument = operands(this.#fn, site.call)[2];
+		return argument !== undefined && this.#kind(argument) === COMPILER_VALUE_KIND_STRING;
+	}
+
 	/** Whether the known call can run JavaScript, which ends the run after it. */
 	#callReenters(site: Site): boolean {
 		if (NUMBER_PREDICATES.has(site.operation) || this.#mathKernel(site)) return false;
@@ -704,7 +712,13 @@ class RunPlanner {
 					seen.has(site.name) && (site.method === undefined || seen.has(site.method));
 				const kernel = this.#mathKernel(site);
 				if (this.#realms && !GUARDED_CURRENT_REALM_OPERATIONS.has(site.operation)) break;
-				if (!loaded || (reentered && !kernel && !NUMBER_PREDICATES.has(site.operation)))
+				if (
+					!loaded ||
+					(reentered &&
+						!kernel &&
+						!NUMBER_PREDICATES.has(site.operation) &&
+						!this.#capturedDateParser(site))
+				)
 					break;
 				seen.add(instruction);
 				included.push(site);

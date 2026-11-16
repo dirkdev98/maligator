@@ -4222,7 +4222,7 @@ void mal_op_call_known(MalCallable *callable, const MalInstruction *instruction)
     const i32 *data = mal_op_instruction_data(callable, instruction->as.call_known.data_offset);
     i32 count = data[0];
     if ((instruction->as.call_known.operation & 15) == 0) {
-        // The selected predicate survives argument coercion that changes its namespace.
+        // Fixed consumers preserve the callee selected before argument reentry.
         switch (instruction->as.call_known.operation >> 24) {
             case MAL_DIRECT_BUILTIN_NUMBER_IS_NAN + 1: {
                 MalValue first = count == 0 ? MAL_VALUE_UNDEFINED : mal_op_value_operand(callable, data[1]);
@@ -4242,6 +4242,13 @@ void mal_op_call_known(MalCallable *callable, const MalInstruction *instruction)
             case MAL_DIRECT_BUILTIN_NUMBER_IS_SAFE_INTEGER + 1: {
                 MalValue first = count == 0 ? MAL_VALUE_UNDEFINED : mal_op_value_operand(callable, data[1]);
                 callable->registers[instruction->as.call_known.dst] = mal_builtin_number_is_safe_integer_known(&first, count == 0 ? 0 : 1);
+                return;
+            }
+            case MAL_DIRECT_BUILTIN_DATE_PARSE + 1: {
+                if (count < 1) break;
+                MalValue first = mal_op_value_operand(callable, data[1]);
+                if (!mal_value_is_string(first)) break;
+                callable->registers[instruction->as.call_known.dst] = mal_builtin_date_parse_known(vm, &first, 1);
                 return;
             }
             default: break;
