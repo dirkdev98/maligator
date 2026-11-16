@@ -452,6 +452,11 @@ contracts or investigates costs still visible after the string follow-ups.
       script names on Node 26 even though the native backend accepts them. Preserve
       syntax early errors and self-hosted parsing without per-literal subprocesses.
 
+- [ ] Correct parser variable scope for class static blocks. A nested `var name` in a
+      module-level class static block incorrectly conflicts with an outer `const name`.
+      Preserve lexical early errors and keep static-block variables inside their own
+      declaration environment.
+
 - [ ] Fix remaining arguments-object legacy caller and parameter-expression behavior.
       Cover strict, sloppy, mapped, and unmapped forms.
       A statically declared sloppy function returning its mapped arguments can

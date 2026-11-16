@@ -142,6 +142,105 @@ test.each([
 });
 
 test.each([
+	'try { throw 0; } catch (declare) { declare("ordinary call"); }',
+	'{ const { callback: declare } = source; declare("ordinary call"); }',
+	'{ function declare(value) { return value; } declare("ordinary call"); }',
+	'(function declare() { declare("ordinary call"); });',
+	'const C = class declare { static value = declare("ordinary call"); };',
+	'switch (0) { case 0: const declare = value => value; declare("ordinary call"); }',
+	'function launch() { if (false) { var declare; } declare("ordinary call"); }',
+	'function launch() { class C { static { if (false) { var declare; } declare("ordinary call"); } } }',
+])("keeps a shadowed const worker alias ordinary: %s", (statement) => {
+	fixture(
+		{
+			"main.mjs": `import { createWorkerUrl } from "maligator:workers"; const declare = createWorkerUrl; ${statement}`,
+		},
+		(root) => {
+			const graph = buildModuleGraph(path.join(root, "main.mjs"), {
+				buildConfig: config,
+				stripTypes: stripCompactTypes,
+			});
+			expect(
+				graph.workerEntries?.filter((entry) => entry.workerSource === undefined),
+			).toEqual([]);
+		},
+	);
+});
+
+test.each([
+	'try { throw 0; } catch (declare) { declare("ordinary call"); }',
+	'switch (0) { case 0: let declare; declare("ordinary call"); }',
+	'function launch() { if (false) { var declare; } declare("ordinary call"); }',
+])("keeps a shadowed imported worker alias ordinary: %s", (statement) => {
+	fixture(
+		{
+			"main.mjs": `import { createWorkerUrl as declare } from "maligator:workers"; ${statement}`,
+		},
+		(root) => {
+			const graph = buildModuleGraph(path.join(root, "main.mjs"), {
+				buildConfig: config,
+				stripTypes: stripCompactTypes,
+			});
+			expect(
+				graph.workerEntries?.filter((entry) => entry.workerSource === undefined),
+			).toEqual([]);
+		},
+	);
+});
+
+test.each([
+	'function launch() { const local = createWorkerUrl; return local("./task.mjs", import.meta.url); }',
+	'export const declare = createWorkerUrl; declare("./task.mjs", import.meta.url);',
+	'const declare = createWorkerUrl; function launch(value = declare("./task.mjs", import.meta.url)) { var declare; }',
+	'const declare = createWorkerUrl; switch (declare("./task.mjs", import.meta.url)) { case 0: let declare; }',
+	'const declare = createWorkerUrl; function launch() { class C { static { var declare; } } return declare("./task.mjs", import.meta.url); }',
+	'const declare = createWorkerUrl; function launch() { function nested() { var declare; } return declare("./task.mjs", import.meta.url); }',
+	'const declare = createWorkerUrl; try { throw 0; } catch (declare) { declare("ordinary call"); } declare("./task.mjs", import.meta.url);',
+])(
+	"retains a worker declaration outside a distinct binding environment: %s",
+	(statement) => {
+		fixture(
+			{
+				"main.mjs": `import { createWorkerUrl } from "maligator:workers"; ${statement}`,
+				"task.mjs": "export default () => 42;",
+			},
+			(root) => {
+				const graph = buildModuleGraph(path.join(root, "main.mjs"), {
+					buildConfig: config,
+					stripTypes: stripCompactTypes,
+				});
+				expect(
+					graph.workerEntries?.some(
+						(entry) => entry.path === path.join(root, "task.mjs"),
+					),
+				).toBe(true);
+			},
+		);
+	},
+);
+
+test.each([
+	['import { URL } from "node:url";', true],
+	['import { URL } from "./ordinary-url.mjs";', false],
+] as const)("distinguishes URL import origin for %s", (source, expected) => {
+	fixture(
+		{
+			"main.mjs": `import { Worker } from "node:worker_threads"; ${source} new URL("./task.mjs", import.meta.url); globalThis.Worker = Worker;`,
+			"ordinary-url.mjs": "export class URL {}",
+			"task.mjs": "export default () => 42;",
+		},
+		(root) => {
+			const graph = buildModuleGraph(path.join(root, "main.mjs"), {
+				buildConfig: config,
+			});
+			expect(
+				graph.workerEntries?.some((entry) => entry.path === path.join(root, "task.mjs")),
+			).toBe(expected);
+		},
+	);
+});
+
+test.each([
 	"api.declare = (value) => value;",
 	"const alias = api; alias.declare = (value) => value;",
 	"({ declare: api.declare } = { declare: (value) => value });",

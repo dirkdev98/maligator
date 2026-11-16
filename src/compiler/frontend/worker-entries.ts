@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ESTree } from "meriyah";
 import { lookupPlatformModule } from "../../platform/catalog.ts";
-import { ESTREE_STOP, traverseEstree } from "./estree-traversal.ts";
+import { ESTREE_SKIP, ESTREE_STOP, traverseEstree } from "./estree-traversal.ts";
 import type { ModuleRecord } from "./module-graph.ts";
 import { SyntaxDiagnostic } from "./syntax-diagnostic.ts";
 
@@ -160,33 +160,136 @@ function parentsFor(record: ModuleRecord): ReadonlyMap<ESTree.Node, ESTree.Node>
 	return result;
 }
 
-function constantInitializer(
+const hoistedVariables = new WeakMap<
+	ESTree.Node,
+	ReadonlyArray<ESTree.VariableDeclarator>
+>();
+
+function hoistedVariable(scope: ESTree.Node, local: string): ESTree.Node | undefined {
+	let declarations = hoistedVariables.get(scope);
+	if (declarations === undefined) {
+		const found: Array<ESTree.VariableDeclarator> = [];
+		traverseEstree(scope, (node) => {
+			if (
+				node !== scope &&
+				(node.type === "FunctionDeclaration" ||
+					node.type === "FunctionExpression" ||
+					node.type === "ArrowFunctionExpression" ||
+					node.type === "ClassDeclaration" ||
+					node.type === "ClassExpression" ||
+					node.type === "StaticBlock")
+			)
+				return ESTREE_SKIP;
+			if (node.type === "VariableDeclaration" && node.kind === "var")
+				found.push(...node.declarations);
+		});
+		declarations = found;
+		hoistedVariables.set(scope, declarations);
+	}
+	return declarations.some((declaration) => bindsName(declaration.id, local))
+		? scope
+		: undefined;
+}
+
+function statementBinding(
+	statement: ESTree.Node,
+	local: string,
+): ESTree.Node | undefined {
+	const declaration =
+		statement.type === "ExportNamedDeclaration" ||
+		statement.type === "ExportDefaultDeclaration"
+			? statement.declaration
+			: statement;
+	if (declaration?.type === "VariableDeclaration")
+		return declaration.declarations.find((entry) => bindsName(entry.id, local));
+	if (declaration?.type === "ImportDeclaration")
+		return declaration.specifiers.find((entry) => entry.local.name === local);
+	if (
+		(declaration?.type === "FunctionDeclaration" ||
+			declaration?.type === "ClassDeclaration") &&
+		declaration.id?.name === local
+	)
+		return declaration;
+	return undefined;
+}
+
+function bindingAt(
 	record: ModuleRecord,
 	node: ESTree.Node,
 	local: string,
 ): ESTree.Node | undefined {
 	const parents = parentsFor(record);
-	for (let scope = parents.get(node); scope !== undefined; scope = parents.get(scope)) {
+	for (
+		let child = node, scope = parents.get(child);
+		scope !== undefined;
+		child = scope, scope = parents.get(scope)
+	) {
 		if (loopBinding(scope)?.declarations.some((entry) => bindsName(entry.id, local)))
-			return undefined;
+			return scope;
 		if (
 			scope.type === "FunctionDeclaration" ||
 			scope.type === "FunctionExpression" ||
 			scope.type === "ArrowFunctionExpression"
 		) {
-			if (scope.params.some((parameter) => bindsName(parameter, local))) return undefined;
+			if (
+				scope.params.some((parameter) => bindsName(parameter, local)) ||
+				(scope.type !== "ArrowFunctionExpression" && scope.id?.name === local)
+			)
+				return scope;
 		}
-		if (scope.type !== "Program" && scope.type !== "BlockStatement") continue;
-		for (const item of scope.body) {
-			const statement = item.type === "ExportNamedDeclaration" ? item.declaration : item;
-			if (statement?.type !== "VariableDeclaration") continue;
-			for (const declaration of statement.declarations) {
-				if (declaration.id.type === "Identifier" && declaration.id.name === local)
-					return statement.kind === "const" ? (declaration.init ?? undefined) : undefined;
-			}
+		if (scope.type === "CatchClause" && bindsName(scope.param, local)) return scope;
+		if (
+			(scope.type === "ClassDeclaration" || scope.type === "ClassExpression") &&
+			scope.id?.name === local
+		)
+			return scope;
+		if (scope.type === "SwitchStatement" && child !== scope.discriminant) {
+			for (const clause of scope.cases)
+				for (const statement of clause.consequent) {
+					const binding = statementBinding(statement, local);
+					if (binding !== undefined) return binding;
+				}
+		}
+		if (
+			scope.type !== "Program" &&
+			scope.type !== "BlockStatement" &&
+			scope.type !== "StaticBlock"
+		)
+			continue;
+		for (const statement of scope.body) {
+			const binding = statementBinding(statement, local);
+			if (binding !== undefined) return binding;
+		}
+		const owner = parents.get(scope);
+		// Body vars do not participate in parameter-default name resolution.
+		if (
+			scope.type === "Program" ||
+			scope.type === "StaticBlock" ||
+			(owner !== undefined &&
+				(owner.type === "FunctionDeclaration" ||
+					owner.type === "FunctionExpression" ||
+					owner.type === "ArrowFunctionExpression") &&
+				owner.body === scope)
+		) {
+			const binding = hoistedVariable(scope, local);
+			if (binding !== undefined) return binding;
 		}
 	}
 	return undefined;
+}
+
+function constantInitializer(
+	record: ModuleRecord,
+	node: ESTree.Node,
+	local: string,
+): ESTree.Node | undefined {
+	const binding = bindingAt(record, node, local);
+	if (binding?.type !== "VariableDeclarator" || binding.id.type !== "Identifier")
+		return undefined;
+	const declaration = parentsFor(record).get(binding);
+	return declaration?.type === "VariableDeclaration" && declaration.kind === "const"
+		? (binding.init ?? undefined)
+		: undefined;
 }
 
 function aliasExpression(
@@ -334,7 +437,12 @@ function calleeIdentity(
 ): ExportIdentity | undefined {
 	const expression = aliasExpression(modules, record, node, new Set(), checkAggregate);
 	if (expression.type === "Identifier") {
-		if (shadowsImportedBinding(expression, parentsFor(record), expression.name))
+		const binding = bindingAt(record, expression, expression.name);
+		if (
+			binding?.type !== "ImportSpecifier" &&
+			binding?.type !== "ImportNamespaceSpecifier" &&
+			binding?.type !== "ImportDefaultSpecifier"
+		)
 			return undefined;
 		return importedIdentity(modules, record, expression.name, seen);
 	}
@@ -381,7 +489,7 @@ function staticUrlValue(
 			node.type === "NewExpression" &&
 			node.callee.type === "Identifier" &&
 			node.callee.name === "URL" &&
-			!shadowsImportedBinding(node.callee, parentsFor(record), "URL");
+			bindingAt(record, node.callee, "URL") === undefined;
 		const args = node.arguments.map((argument) =>
 			argument.type === "SpreadElement"
 				? undefined
@@ -408,46 +516,6 @@ function isDeclaration(identity: ExportIdentity | undefined): boolean {
 	);
 }
 
-function shadowsImportedBinding(
-	node: ESTree.Node,
-	parents: ReadonlyMap<ESTree.Node, ESTree.Node>,
-	local: string,
-): boolean {
-	for (
-		let parent = parents.get(node);
-		parent !== undefined;
-		parent = parents.get(parent)
-	) {
-		if (
-			(parent.type === "FunctionDeclaration" ||
-				parent.type === "FunctionExpression" ||
-				parent.type === "ArrowFunctionExpression") &&
-			(parent.params.some((parameter) => bindsName(parameter, local)) ||
-				(parent.type !== "ArrowFunctionExpression" && parent.id?.name === local))
-		)
-			return true;
-		if (parent.type === "CatchClause" && bindsName(parent.param, local)) return true;
-		if (loopBinding(parent)?.declarations.some((entry) => bindsName(entry.id, local)))
-			return true;
-		if (parent.type === "BlockStatement") {
-			for (const statement of parent.body) {
-				if (
-					statement.type === "VariableDeclaration" &&
-					statement.declarations.some((entry) => bindsName(entry.id, local))
-				)
-					return true;
-				if (
-					(statement.type === "FunctionDeclaration" ||
-						statement.type === "ClassDeclaration") &&
-					statement.id?.name === local
-				)
-					return true;
-			}
-		}
-	}
-	return false;
-}
-
 // Module URLs a program builds statically, which a worker may start from even when the
 // Worker constructor or the URL reaches it through a value, such as a lazily loaded
 // `process.getBuiltinModule("node:worker_threads")` or a helper returning the URL.
@@ -467,10 +535,13 @@ function moduleUrlEntry(
 		typeof specifier.value !== "string" ||
 		!MODULE_URL.test(specifier.value) ||
 		baseNode === undefined ||
-		baseNode.type === "SpreadElement" ||
-		shadowsImportedBinding(node.callee, parentsFor(record), "URL")
+		baseNode.type === "SpreadElement"
 	)
 		return undefined;
+	if (bindingAt(record, node.callee, "URL") !== undefined) {
+		const identity = calleeIdentity(modules, record, node.callee);
+		if (identity?.module !== "node:url" || identity.name !== "URL") return undefined;
+	}
 	const base = staticUrlValue(modules, record, baseNode);
 	if (base !== pathToFileURL(record.sourcePath ?? record.path).href) return undefined;
 	const href = new URL(specifier.value, base).href;
