@@ -280,6 +280,12 @@ the registry. A CommonJS wrapper starts sloppy unless its source has a `"use str
 directive prologue. Nested functions inherit that strictness or introduce their own
 directive. The Node globals prelude preserves the source's directive prologue.
 
+Each class static block owns its variable and top-level function declarations while
+retaining lexical early errors within that body. Lexical bindings enter their TDZ
+before hoisted functions can capture them. Parser dependency corrections apply before
+embedding. Cache producers and source bakes include the resolved parser's bytes and
+pinned version, so a dependency correction invalidates their artifacts.
+
 Retaining a source builtin for runtime loading does not add an eager evaluation edge.
 Its provider manifest retains the synchronous graph evaluator and initializes native imports
 on demand. Discovery uses the same builtin catalog, including prefix-only names.

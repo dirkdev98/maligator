@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { artifactProducer } from "./artifact-store.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
+import { compilerParserIdentity } from "./compiler-parser-identity.ts";
 import { hashDirectoryTreesCached } from "./file-tree.ts";
 import { relativeImportCone } from "./source-import-cone.ts";
 
@@ -62,10 +63,11 @@ export function compilerProducerImplementationDigestForRoot(
 	return hash(
 		"sha256",
 		JSON.stringify({
-			schema: 2,
+			schema: 3,
 			stage,
 			entries,
 			dependencies: packageJson.dependencies ?? {},
+			parser: compilerParserIdentity(resolvedSourceRoot),
 		}),
 		"hex",
 	);
@@ -124,22 +126,15 @@ export function compilerImplementationDigestForRoot(
 		hash("sha256", readFileSync(path.join(resolvedSourceRoot, relativePath)), "hex"),
 		"\0",
 	]);
-	const packageJson = JSON.parse(
-		readFileSync(path.join(resolvedSourceRoot, "..", "package.json"), "utf8"),
-	) as { dependencies?: { meriyah?: unknown } };
-	const meriyahVersion = packageJson.dependencies?.meriyah;
-	if (typeof meriyahVersion !== "string") {
-		throw new Error("compiler cache identity requires a pinned Meriyah dependency");
-	}
 	return hash(
 		"sha256",
 		[
-			"compiler-implementation-v2\0",
+			"compiler-implementation-v3\0",
 			compilerSources.digest,
 			"\0",
 			...rootSources,
 			"meriyah\0",
-			meriyahVersion,
+			JSON.stringify(compilerParserIdentity(resolvedSourceRoot)),
 		].join(""),
 		"hex",
 	);

@@ -4755,6 +4755,8 @@ function buildStaticInitializer(
 			continue;
 		}
 
+		const scope = initFn.semanticFile.nodeToScope.get(element.node);
+		if (scope) emitTdzHoleInits(program, initFn, cursor.block, scope.bindings);
 		emitLexicalProviderCaptures(program, initFn, cursor, element.node, true);
 		const entryBlock = compileStatementsToBlock(program, initFn, element.body, true);
 		cursor.block.emitter.emit({ type: "jump", blocks: [entryBlock] });

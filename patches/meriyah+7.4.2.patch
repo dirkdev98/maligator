@@ -1,0 +1,76 @@
+diff --git a/node_modules/meriyah/dist/meriyah.cjs b/node_modules/meriyah/dist/meriyah.cjs
+index 8663d67..0415f4a 100644
+--- a/node_modules/meriyah/dist/meriyah.cjs
++++ b/node_modules/meriyah/dist/meriyah.cjs
+@@ -3298,11 +3298,11 @@ function finishExpressionOrLabelledStatement(parser, context, scope, privateScop
+     }
+     return parseExpressionStatement(parser, context, expression, tokenStart);
+ }
+-function parseBlock(parser, context, scope, privateScope, labels, start = parser.tokenStart, type = 'BlockStatement') {
++function parseBlock(parser, context, scope, privateScope, labels, start = parser.tokenStart, type = 'BlockStatement', origin = 0) {
+     const body = [];
+     consume(parser, context | 32, 2162700);
+     while (parser.getToken() !== 1074790415) {
+-        body.push(parseStatementListItem(parser, context, scope, privateScope, { parent: labels }));
++        body.push(parseStatementListItem(parser, context, scope, privateScope, { parent: labels }, origin));
+     }
+     consume(parser, context | 32, 1074790415);
+     return parser.finishNode({
+@@ -3635,8 +3635,8 @@ function parseCatchBlock(parser, context, scope, privateScope, labels, start) {
+     }, start);
+ }
+ function parseStaticBlock(parser, context, scope, privateScope, start) {
+-    scope = scope?.createChildScope();
+-    const ctorContext = 512 |
++    scope = scope?.createChildScope(128).createChildScope(64);
++    const ctorContext = 8 | 512 |
+         4096 |
+         1024 |
+         4 |
+@@ -3648,7 +3648,7 @@ function parseStaticBlock(parser, context, scope, privateScope, start) {
+             2048 |
+             524288 |
+             65536;
+-    return parseBlock(parser, context, scope, privateScope, {}, start, 'StaticBlock');
++    return parseBlock(parser, context, scope, privateScope, {}, start, 'StaticBlock', 4);
+ }
+ function parseDoWhileStatement(parser, context, scope, privateScope, labels) {
+     const start = parser.tokenStart;
+diff --git a/node_modules/meriyah/dist/meriyah.mjs b/node_modules/meriyah/dist/meriyah.mjs
+index 070becb..db74580 100644
+--- a/node_modules/meriyah/dist/meriyah.mjs
++++ b/node_modules/meriyah/dist/meriyah.mjs
+@@ -3296,11 +3296,11 @@ function finishExpressionOrLabelledStatement(parser, context, scope, privateScop
+     }
+     return parseExpressionStatement(parser, context, expression, tokenStart);
+ }
+-function parseBlock(parser, context, scope, privateScope, labels, start = parser.tokenStart, type = 'BlockStatement') {
++function parseBlock(parser, context, scope, privateScope, labels, start = parser.tokenStart, type = 'BlockStatement', origin = 0) {
+     const body = [];
+     consume(parser, context | 32, 2162700);
+     while (parser.getToken() !== 1074790415) {
+-        body.push(parseStatementListItem(parser, context, scope, privateScope, { parent: labels }));
++        body.push(parseStatementListItem(parser, context, scope, privateScope, { parent: labels }, origin));
+     }
+     consume(parser, context | 32, 1074790415);
+     return parser.finishNode({
+@@ -3633,8 +3633,8 @@ function parseCatchBlock(parser, context, scope, privateScope, labels, start) {
+     }, start);
+ }
+ function parseStaticBlock(parser, context, scope, privateScope, start) {
+-    scope = scope?.createChildScope();
+-    const ctorContext = 512 |
++    scope = scope?.createChildScope(128).createChildScope(64);
++    const ctorContext = 8 | 512 |
+         4096 |
+         1024 |
+         4 |
+@@ -3646,7 +3646,7 @@ function parseStaticBlock(parser, context, scope, privateScope, start) {
+             2048 |
+             524288 |
+             65536;
+-    return parseBlock(parser, context, scope, privateScope, {}, start, 'StaticBlock');
++    return parseBlock(parser, context, scope, privateScope, {}, start, 'StaticBlock', 4);
+ }
+ function parseDoWhileStatement(parser, context, scope, privateScope, labels) {
+     const start = parser.tokenStart;

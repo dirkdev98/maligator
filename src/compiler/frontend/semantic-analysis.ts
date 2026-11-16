@@ -1484,13 +1484,18 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 	recurseAst(node, collectBindingsForNode, file);
 }
 
-/** Whether this declaration participates in Script/Function var declarations. */
+/** Whether this declaration participates in its execution unit's var declarations. */
 function isVarScopedFunctionDeclaration(
 	node: ESTree.FunctionDeclaration,
 	scope: Scope,
 	file: SemanticFile,
 ): boolean {
 	const declarationScope = scope.parent;
+	if (
+		declarationScope?.node.type === "StaticBlock" &&
+		declarationScope.node.body.includes(node)
+	)
+		return true;
 	if (
 		file.type === "script" &&
 		declarationScope?.node.type === "Program" &&
@@ -1733,9 +1738,9 @@ function extractBindingsAndRegister(
 						(binding) => binding.immutableSelfReference && names.includes(binding.name),
 					);
 				if (
-					parentType !== "StaticBlock" &&
-					!collidesWithImmutableFunctionName &&
-					!hasParameterExpressions(bindingScope.parent.node)
+					parentType === "StaticBlock" ||
+					(!collidesWithImmutableFunctionName &&
+						!hasParameterExpressions(bindingScope.parent.node))
 				) {
 					bindingScope = bindingScope.parent;
 				}

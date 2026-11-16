@@ -19,7 +19,11 @@ import { walkDirectoryTree } from "../src/file-tree.ts";
 
 const temporaryDirectories: Array<string> = [];
 
-function compilerFixture(): { sourceRoot: string; cacheDirectory: string } {
+function compilerFixture(): {
+	sourceRoot: string;
+	cacheDirectory: string;
+	parser: string;
+} {
 	const root = mkdtempSync(path.join(tmpdir(), "mal-compiler-identity-"));
 	temporaryDirectories.push(root);
 	const sourceRoot = path.join(root, "src");
@@ -56,7 +60,19 @@ function compilerFixture(): { sourceRoot: string; cacheDirectory: string } {
 		path.join(root, "package.json"),
 		`${JSON.stringify({ dependencies: { meriyah: "7.1.0" } })}\n`,
 	);
-	return { sourceRoot, cacheDirectory };
+	const parserDirectory = path.join(root, "node_modules/meriyah");
+	mkdirSync(parserDirectory, { recursive: true });
+	writeFileSync(
+		path.join(parserDirectory, "package.json"),
+		JSON.stringify({
+			name: "meriyah",
+			type: "module",
+			exports: "./index.mjs",
+		}),
+	);
+	const parser = path.join(parserDirectory, "index.mjs");
+	writeFileSync(parser, "export const parser = 1;\n");
+	return { sourceRoot, cacheDirectory, parser };
 }
 
 afterEach(() => {
@@ -66,6 +82,30 @@ afterEach(() => {
 });
 
 describe("compiler cache identity", () => {
+	it("invalidates compiler and producer identities when pinned parser bytes change", () => {
+		const fixture = compilerFixture();
+		const implementation = compilerImplementationDigestForRoot(
+			fixture.sourceRoot,
+			fixture.cacheDirectory,
+		);
+		const producer = compilerProducerImplementationDigestForRoot(
+			"build-frontend",
+			fixture.sourceRoot,
+			fixture.cacheDirectory,
+		);
+		writeFileSync(fixture.parser, "export const parser = 2;\n");
+		expect(
+			compilerImplementationDigestForRoot(fixture.sourceRoot, fixture.cacheDirectory),
+		).not.toBe(implementation);
+		expect(
+			compilerProducerImplementationDigestForRoot(
+				"build-frontend",
+				fixture.sourceRoot,
+				fixture.cacheDirectory,
+			),
+		).not.toBe(producer);
+	});
+
 	it("ignores runner sources while invalidating compiler inputs", () => {
 		const fixture = compilerFixture();
 		const initial = compilerImplementationDigestForRoot(

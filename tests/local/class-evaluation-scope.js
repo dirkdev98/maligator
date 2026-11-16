@@ -4,6 +4,96 @@ function check(value, name) {
 	if (!value) throw new Error(name);
 }
 
+const staticName = 17;
+let staticValue;
+class StaticVariables {
+	static {
+		this.before = staticName;
+		if (true) {
+			var staticName = 23;
+		}
+		staticValue = staticName;
+		this.read = () => staticName;
+	}
+}
+check(
+	staticName === 17 &&
+		staticValue === 23 &&
+		StaticVariables.before === undefined &&
+		StaticVariables.read() === 23,
+	"static vars stay inside their block and outlive it through closures",
+);
+
+class StaticShadow {
+	static {
+		var StaticShadow = 29;
+		staticValue = StaticShadow;
+	}
+}
+check(
+	typeof StaticShadow === "function" && staticValue === 29,
+	"static vars can shadow the class name",
+);
+
+class StaticFunctions {
+	static {
+		var read;
+		this.first = read();
+		function read() {
+			return 41;
+		}
+	}
+	static {
+		this.second = read();
+		function read() {
+			return 43;
+		}
+		function read() {
+			return 47;
+		}
+	}
+}
+check(
+	StaticFunctions.first === 41 && StaticFunctions.second === 47,
+	"static functions share var declarations within their own body",
+);
+
+let staticTdz = false;
+try {
+	class StaticFunctionTdz {
+		static {
+			read();
+			let value = 59;
+			function read() {
+				return value;
+			}
+		}
+	}
+} catch (error) {
+	staticTdz = error instanceof ReferenceError;
+}
+check(staticTdz, "hoisted static functions preserve lexical TDZ");
+
+const evaluatedStatic = eval(`
+	let inner;
+	class C { static { { var name = 31; } inner = name; } }
+	const name = 37;
+	[name, inner];
+`);
+check(evaluatedStatic.join() === "37,31", "eval preserves static variable scope");
+check(
+	eval(
+		"class C { static { var read; this.value = read(); function read() { return 53; } } } C.value;",
+	) === 53,
+	"eval hoists static functions into their variable scope",
+);
+try {
+	eval("class C { static { let name; { var name; } } }");
+	throw new Error("missing static lexical collision");
+} catch (error) {
+	check(error instanceof SyntaxError, "eval rejects static lexical collisions");
+}
+
 function privateBrands() {
 	const classes = [];
 	for (var index = 0; index < 2; index++)

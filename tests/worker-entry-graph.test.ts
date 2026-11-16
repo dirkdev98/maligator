@@ -149,6 +149,7 @@ test.each([
 	'const C = class declare { static value = declare("ordinary call"); };',
 	'switch (0) { case 0: const declare = value => value; declare("ordinary call"); }',
 	'function launch() { if (false) { var declare; } declare("ordinary call"); }',
+	'class C { static { if (false) { var declare; } declare("ordinary call"); } }',
 	'function launch() { class C { static { if (false) { var declare; } declare("ordinary call"); } } }',
 ])("keeps a shadowed const worker alias ordinary: %s", (statement) => {
 	fixture(
@@ -194,6 +195,7 @@ test.each([
 	'const declare = createWorkerUrl; function launch(value = declare("./task.mjs", import.meta.url)) { var declare; }',
 	'const declare = createWorkerUrl; switch (declare("./task.mjs", import.meta.url)) { case 0: let declare; }',
 	'const declare = createWorkerUrl; function launch() { class C { static { var declare; } } return declare("./task.mjs", import.meta.url); }',
+	'const declare = createWorkerUrl; class C { static { var declare; } } declare("./task.mjs", import.meta.url);',
 	'const declare = createWorkerUrl; function launch() { function nested() { var declare; } return declare("./task.mjs", import.meta.url); }',
 	'const declare = createWorkerUrl; try { throw 0; } catch (declare) { declare("ordinary call"); } declare("./task.mjs", import.meta.url);',
 ])(

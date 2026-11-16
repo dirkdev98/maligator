@@ -15,6 +15,7 @@ import {
 import * as path from "node:path";
 import { fileIdentity, settledFileIdentity } from "./artifact-store.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
+import { compilerParserIdentity } from "./compiler-parser-identity.ts";
 import { emitRelocatableNativeOverlayTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { lowerNativeOverlayStorage } from "./compiler/target/lower-native-storage.ts";
 import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
@@ -36,9 +37,6 @@ const COMPILER_NATIVE_TRANSLATION_UNIT_TARGET_CODE_UNITS = 512 * 1024;
 const TYPE_STRIPPER_MODULE = "compiler/frontend/compact-type-strip.ts";
 const COMPILER_HOST_OPTIONS_MODULE = "compiler/pipeline/embedded-compiler-options.ts";
 const COMPILER_PARSER_CLONE_MODULE = "compiler/frontend/parser-clone.ts";
-
-/** Third-party packages whose pinned version can change the baked wire. */
-const PINNED_COMPILER_DEPENDENCIES = ["meriyah"];
 
 interface CompilerBakeCacheInput {
 	/** Compiler-wire cache root. Defaults to the compiler project's cache. */
@@ -102,22 +100,6 @@ function requireAbsolute(description: string, value: string): string {
 	return value;
 }
 
-function compilerDependencyIdentity(sourceDirectory: string): string {
-	const packagePath = path.join(sourceDirectory, "..", "package.json");
-	const manifest = JSON.parse(readFileSync(packagePath, "utf-8")) as {
-		dependencies?: Record<string, unknown>;
-	};
-	const parts: Array<string> = [];
-	for (const name of PINNED_COMPILER_DEPENDENCIES) {
-		const version = manifest.dependencies?.[name];
-		if (typeof version !== "string" || version.length === 0) {
-			throw new Error(`compiler package does not pin ${name}: ${packagePath}`);
-		}
-		parts.push(name, "\0", version, "\0");
-	}
-	return parts.join("");
-}
-
 function isWithin(directory: string, target: string): boolean {
 	const relative = path.relative(directory, target);
 	return (
@@ -154,7 +136,7 @@ function compilerSourceHash(
 		"sha256",
 		[
 			"compiler-source-files-v1\0",
-			compilerDependencyIdentity(sourceDirectory),
+			JSON.stringify(compilerParserIdentity(sourceDirectory)),
 			"entrypoint\0",
 			relativeEntrypoint,
 			"\0",

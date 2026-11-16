@@ -33,6 +33,7 @@ function compilerFixture(meriyah = "7.1.0"): {
 	sourceDirectory: string;
 	entrypoint: string;
 	stripper: string;
+	parser: string;
 } {
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-compiler-source-"));
 	const sourceDirectory = path.join(root, "src");
@@ -59,10 +60,43 @@ function compilerFixture(meriyah = "7.1.0"): {
 		path.join(root, "package.json"),
 		JSON.stringify({ dependencies: { meriyah } }),
 	);
-	return { root, sourceDirectory, entrypoint, stripper };
+	const parserDirectory = path.join(root, "node_modules/meriyah");
+	mkdirSync(parserDirectory, { recursive: true });
+	writeFileSync(
+		path.join(parserDirectory, "package.json"),
+		JSON.stringify({
+			name: "meriyah",
+			type: "module",
+			exports: "./index.mjs",
+		}),
+	);
+	const parser = path.join(parserDirectory, "index.mjs");
+	writeFileSync(parser, "export const parser = 1;\n");
+	return { root, sourceDirectory, entrypoint, stripper, parser };
 }
 
 describe("compiler wire provisioning", () => {
+	it("rebakes source when pinned parser bytes change", () => {
+		const fixture = compilerFixture();
+		try {
+			let count = 0;
+			const input = {
+				kind: "source" as const,
+				sourceDirectory: fixture.sourceDirectory,
+				entrypoint: fixture.entrypoint,
+				cacheRoot: path.join(fixture.root, "cache"),
+				bake: () => new Uint8Array([++count]),
+			};
+			const first = ensureCompilerWire(input);
+			expect(ensureCompilerWire(input)).toBe(first);
+			writeFileSync(fixture.parser, "export const parser = 2;\n");
+			expect(ensureCompilerWire(input)).not.toBe(first);
+			expect(count).toBe(2);
+		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
+
 	it.each([
 		"compiler/pipeline/embedded-compiler-options.ts",
 		"compiler/frontend/parser-clone.ts",
