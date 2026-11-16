@@ -32,11 +32,18 @@ console.log(
 	echo.stdin !== null,
 );
 let echoed = "";
+let echoBuffers = true;
 echo.stdout.on("data", (chunk) => {
-	echoed += Buffer.isBuffer(chunk) ? `buffer:${chunk}` : chunk;
+	echoBuffers &&= Buffer.isBuffer(chunk);
+	echoed += chunk;
 });
 await run("echo", echo);
-console.log("echo stdout", JSON.stringify(echoed), echo.exitCode, echo.signalCode);
+console.log(
+	"echo stdout",
+	JSON.stringify(`${echoBuffers ? "buffer:" : ""}${echoed}`),
+	echo.exitCode,
+	echo.signalCode,
+);
 
 const cat = spawn("sh", ["-c", "cat; echo err >&2"]);
 cat.stdout.setEncoding("utf8");
