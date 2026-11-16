@@ -194,14 +194,6 @@ Shared lifetime and fallback rules are recorded in
       buffer invalidation. First bound the saving against a same-order indexed control;
       retain only if repeated execution repays analysis and generated-code growth.
 
-## Selective field facts
-
-- [ ] Carry allocation-site field kinds through one repeated record-backed compiler
-      accessor chain so numeric arithmetic preserves validated access paths. Reuse bounded
-      field indexes and writer/alias invalidation; keep shape, backing-pointer and value
-      stability independent. Stop if the consumer requires a global mutable-shape type
-      system or its saving cannot repay analysis and code growth.
-
 ## Compiler throughput and analysis scalability
 
 - [ ] Bound aggregate work and retained state for analysis extensions, including
