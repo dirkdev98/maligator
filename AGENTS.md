@@ -92,6 +92,7 @@ one-shot commands: `npm test` and `npm run test:unit` run once by default, so pa
 | Native memory/UB checks                    | `npm run test:sanitize -- <file>`       |
 | Type checking                              | `npm run type-check`                    |
 | Lint and formatting without source edits   | `npm run lint:ci`                       |
+| CI result of a pushed commit               | `npm run ci:status -- <sha>`            |
 
 Documentation-only changes need formatting, links, and command checks; website
 changes also need relevant generation, routes, and behavior. Do not rebuild the
@@ -102,7 +103,9 @@ push to `main` also runs the native remainder, Extended CI (self-hosted checks, 
 slow unit tests, the primordial inventory) and, once CI passes, the full Test262
 corpus. Continue independent work while checks run. Acceptance stays pending until
 the required coverage succeeds, and a red run gets fixed before more work lands on
-top of it. Without push authority, report what ran locally and what remains for CI
+top of it. Check acceptance of a pushed commit with `npm run ci:status -- <sha>`. Open
+logs or artifacts only for a failure; don't download, hash or re-verify artifacts of
+green runs. Without push authority, report what ran locally and what remains for CI
 instead of substituting a local gate. Check is a curated gate, not every native
 fixture or the full standards corpus; use `test:help`, tier `--list`/`--plan=json`,
 the manifests and [CI coverage](docs/testing.md#github-actions) for exact coverage.

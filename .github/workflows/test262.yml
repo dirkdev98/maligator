@@ -1,4 +1,6 @@
 name: Test262
+# Names the tested commit: a workflow_run run's head_sha is main at trigger time.
+run-name: Test262 ${{ github.event.workflow_run.head_sha || github.sha }}
 
 # Starting after CI keeps these jobs from queueing the gate behind them.
 on:
@@ -125,6 +127,7 @@ jobs:
           node scripts/test262-ci.ts "$report" "$RUNNER_TEMP/test262-issue.md" "$RUN_URL" > "$RUNNER_TEMP/test262-summary.json"
           echo "regressions=$(jq -r .regressions "$RUNNER_TEMP/test262-summary.json")" >> "$GITHUB_OUTPUT"
           echo "improvements=$(jq -r .improvements "$RUNNER_TEMP/test262-summary.json")" >> "$GITHUB_OUTPUT"
+          jq -r '"::notice title=Test262::\(.regressions) regressions, \(.improvements) improvements"' "$RUNNER_TEMP/test262-summary.json"
 
       - name: Import an improvement-only baseline
         if: github.event_name == 'workflow_run' && needs.test262.result == 'success' && steps.summary.outputs.regressions == '0' && steps.summary.outputs.improvements != '0'

@@ -34,6 +34,7 @@
 		"bench:self-compile-experiment": "node ./scripts/self-compile-experiment.ts",
 		"bench:self-compile-profile": "node ./scripts/profile-self-compile.ts",
 		"bench:translation-units": "node ./scripts/bench-translation-units.ts",
+		"ci:status": "node ./scripts/ci-status.ts",
 		"env:check": "node ./scripts/agent-environment.ts",
 		"explore:outputs": "node ./scripts/output-explorer.ts",
 		"format": "node ./scripts/quality.ts format",

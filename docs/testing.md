@@ -380,6 +380,11 @@ tests, as long as the tested revision is still `main`. Regressions are never acc
 into the baseline. Manually dispatched runs check the existing baseline without
 changing it or touching the issue.
 
+A run is named after the commit it tested, because a run started after CI records the
+`main` of that moment as its head, and the report job annotates it with the regression
+and improvement counts. `npm run ci:status -- <sha>` uses both to report a pushed
+commit's CI, Native remainder, Extended CI and Test262 runs in one view.
+
 ## Worker budgets
 
 Use `npm run test:check -- --workers 4` to set a total allocation, or set
