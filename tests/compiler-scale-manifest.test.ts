@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -51,18 +51,6 @@ describe("compiler scale manifest", () => {
 			true,
 		);
 		expect(manifest.tiers.at(-1)?.kind).toBe("command");
-	});
-
-	it("lists every Core module explicitly in the subtree fixture", () => {
-		const coreFiles = readdirSync(path.resolve("src/compiler/core"), {
-			withFileTypes: true,
-		})
-			.filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
-			.map((entry) => `src/compiler/core/${entry.name}`)
-			.sort();
-		const aggregate = manifest.tiers.find(({ id }) => id === "complete-core-subtree");
-
-		expect([...(aggregate?.entries ?? [])].sort()).toEqual(coreFiles);
 	});
 
 	it("keeps every real fixture entry resolvable", () => {

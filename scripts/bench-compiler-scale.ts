@@ -5,6 +5,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	readdirSync,
 	realpathSync,
 	renameSync,
 	rmSync,
@@ -526,10 +527,17 @@ function prepareCases(
 			}
 			continue;
 		}
+		// The aggregate imports every module in the Core directory as it is on disk, so a
+		// new module joins the tier without a manifest edit.
 		if (tier.kind === "aggregate") {
 			const relative = "bench/compiler-scale-core-subtree.mjs";
-			const source = (tier.entries ?? [])
-				.map((entry) => `import ${JSON.stringify(`../${entry}`)};`)
+			const source = readdirSync(path.join(sourceRoot, "src/compiler/core"), {
+				withFileTypes: true,
+			})
+				.filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
+				.map((entry) => entry.name)
+				.sort()
+				.map((name) => `import ${JSON.stringify(`../src/compiler/core/${name}`)};`)
 				.join("\n");
 			writeFileSync(path.join(sourceRoot, relative), `${source}\n`);
 			cases.set(tier.id, {
