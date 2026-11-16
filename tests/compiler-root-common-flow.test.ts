@@ -347,7 +347,17 @@ test("the worker entry and transitive worker imports invalidate the build produc
 	directories.push(root);
 	const sourceRoot = path.join(root, "src");
 	mkdirSync(sourceRoot);
-	writeFileSync(path.join(root, "package.json"), "{}");
+	writeFileSync(
+		path.join(root, "package.json"),
+		JSON.stringify({ dependencies: { meriyah: "7.1.0" } }),
+	);
+	const parserDirectory = path.join(root, "node_modules/meriyah");
+	mkdirSync(parserDirectory, { recursive: true });
+	writeFileSync(
+		path.join(parserDirectory, "package.json"),
+		JSON.stringify({ name: "meriyah", type: "module", exports: "./index.mjs" }),
+	);
+	writeFileSync(path.join(parserDirectory, "index.mjs"), "export const parser = 1;\n");
 	writeFileSync(
 		path.join(sourceRoot, "build-frontend-cache.ts"),
 		"export const frontend=1;",
