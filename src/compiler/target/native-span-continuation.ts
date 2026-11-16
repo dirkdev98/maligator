@@ -81,6 +81,12 @@ export function selectNativeSpanContinuations(
 		)
 			continue;
 		for (const load of region.loads) {
+			if (
+				"selector" in load &&
+				load.selector.kind !== "capture" &&
+				load.selector.kind !== "named-capture"
+			)
+				continue;
 			if ("kind" in load ? load.kind !== "element" : load.consumer !== undefined)
 				continue;
 			sources.push({

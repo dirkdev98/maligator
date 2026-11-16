@@ -57,11 +57,15 @@ describe("regexp capture span continuations", () => {
 					(region) =>
 						region.kind === "regexp-exec-projection" &&
 						region.loads.some(
-							(load) => load.captureIndex === 1 && load.consumer?.kind === "length",
+							(load) =>
+								load.selector.kind === "capture" &&
+								load.selector.index === 1 &&
+								load.consumer?.kind === "length",
 						) &&
 						region.loads.some(
 							(load) =>
-								load.captureIndex === 2 &&
+								load.selector.kind === "capture" &&
+								load.selector.index === 2 &&
 								mixed.storage!.spanContinuations.some(
 									(plan) =>
 										plan.sourceKind === "regexp" &&

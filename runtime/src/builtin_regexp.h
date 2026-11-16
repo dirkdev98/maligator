@@ -6,6 +6,19 @@
 typedef struct MalVm MalVm;
 typedef struct MalString MalString;
 
+typedef enum MalRegExpProjectionKind {
+    MAL_REGEXP_PROJECT_CAPTURE,
+    MAL_REGEXP_PROJECT_INDEX,
+    MAL_REGEXP_PROJECT_GROUPS,
+    MAL_REGEXP_PROJECT_NAMED_CAPTURE,
+} MalRegExpProjectionKind;
+
+typedef struct MalRegExpProjectionRequest {
+    MalRegExpProjectionKind kind;
+    u32 capture_index;
+    MalString *name;
+} MalRegExpProjectionRequest;
+
 /**
  * Install the RegExp constructor, RegExp.prototype (exec/test, the Symbol.*
  * protocol, the flag accessors, toString), and %RegExpStringIteratorPrototype%
@@ -42,7 +55,7 @@ bool mal_regexp_try_canonical_match_all(
 
 /**
  * Execute an exact built-in RegExp.prototype.exec call whose result is proven
- * closed over selected constant capture-index reads. A guarded hit returns null
+ * closed over selected capture, index and named-group reads. A guarded hit returns null
  * or true when projection is possible. If an index is not an own match-result
  * property, it returns the fully materialized result Array from the same matcher
  * execution so inherited indexed properties remain observable.
@@ -52,7 +65,7 @@ bool mal_regexp_exec_capture_projection(
     MalValue callee,
     MalValue regexp,
     MalValue string,
-    const u32 *capture_indices,
+    const MalRegExpProjectionRequest *requests,
     MalValue **capture_outputs,
     u32 capture_count,
     u8 capture_span_mask,
@@ -123,7 +136,7 @@ void mal_regexp_exec_capture_projection_locked(
     MalVm *vm,
     MalValue regexp,
     MalValue string,
-    const u32 *capture_indices,
+    const MalRegExpProjectionRequest *requests,
     MalValue **capture_outputs,
     u32 capture_count,
     u8 capture_span_mask,

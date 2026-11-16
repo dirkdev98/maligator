@@ -191,3 +191,4 @@ tests/native/eval-local-references.test.ts
 tests/native/global-lexical-records.test.ts
 tests/native/eval-private-bootstrap.test.ts
 tests/native/regexp-unicode-start.test.ts
+tests/native/regexp-closed-results.test.ts

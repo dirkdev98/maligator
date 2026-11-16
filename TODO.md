@@ -399,13 +399,6 @@ contracts or investigates costs still visible after the string follow-ups.
       Require ES-module finite-call-target parity and real repeated-call benefit, with
       bounded solve work and conservative dynamic/escaping-store fallback.
 
-- [ ] Reduce fixed per-exec setup and result materialization in `regexp-owned-repeat`,
-      where every exec matches at `lastIndex` rather than scanning. Bound complete-result
-      construction for the nonescaping named-result consumer after existing capture-name
-      layout and scratch reuse, or show that fixed matcher/FFI setup dominates. Keep named,
-      unnamed, UTF-16 and miss controls, and account for cold RegExp creation.
-      Preserve captures, lastIndex, reentry and bounded scratch retention.
-
 - [ ] Use the existing complete mixed-text workload to select one leading construction,
       replacement, JSON or checksum-traversal cost, including rope rebuilding where
       exposed. Confirm through ordinary paired builds with full checksum and

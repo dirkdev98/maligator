@@ -957,6 +957,7 @@ function pendingLocalCandidate(
 																				: "in-place",
 																		call: candidate.call,
 																		resultValues: candidate.resultValues,
+																		groupsValues: candidate.groupsValues,
 																		nullChecks: candidate.nullChecks,
 																		...(lockedLiteral === undefined
 																			? {}
@@ -966,7 +967,7 @@ function pendingLocalCandidate(
 																				const base = {
 																					instruction: load.instruction,
 																					key: load.key,
-																					captureIndex: load.captureIndex,
+																					selector: load.selector,
 																				};
 																				const consumer = load.consumer;
 																				if (consumer === undefined) return base;

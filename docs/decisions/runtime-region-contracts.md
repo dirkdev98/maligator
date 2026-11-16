@@ -23,6 +23,16 @@ and legacy match state. When no capture is observed, the call is the sole region
 anchor and matching can omit the result Array. A null comparison still observes
 the same success or failure; escaping match objects retain the original call.
 
+Closed result consumers can project the whole match, its UTF-16 index, constant
+numeric captures and constant named captures. Result and groups objects may serve
+as branch conditions; transporting or exposing either object retains ordinary
+construction. Named selectors resolve against the layout after matching and
+coercions, so a reentrant pattern replacement cannot leave stale capture indices.
+Missing groups still throw at the original property read. Unknown names and
+nonparticipating captures remain undefined; duplicate names select the participating
+capture. Out-of-range numeric reads construct the complete result from the same
+match, preserving inherited properties and lastIndex effects.
+
 Capture-containing sequences with contiguous character classes lower to a linear
 matcher after the existing greedy-safety proof. Captured runs combine range checks
 with capture writes; nested captures retain their boundaries. Sequences with

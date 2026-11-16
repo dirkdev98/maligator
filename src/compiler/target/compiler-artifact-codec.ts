@@ -93,6 +93,7 @@ import {
 	validateNativeNumericSortCallback,
 	vmBigIntWrapPairIsValid,
 	vmRegionActions,
+	vmRegExpProjectionLoadMatches,
 	vmRegionActionsAreCurrent,
 	vmGuardIsWorldInvariant,
 	VM_GUARDED_BUILTIN_OPERATIONS,
@@ -124,7 +125,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 452;
+export const COMPILER_ARTIFACT_VERSION = 453;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -3138,6 +3139,7 @@ function writeCompilerArtifact(
 					w.i32(region.input);
 					w.i32(region.result);
 					w.i32Array([...region.resultRegisters]);
+					w.i32Array([...region.groupsRegisters]);
 					w.u32(region.nullChecks.length);
 					for (const check of region.nullChecks) {
 						w.i32(check.comparisonIp);
@@ -3148,7 +3150,22 @@ function writeCompilerArtifact(
 					for (const load of region.loads) {
 						w.i32(load.ip);
 						w.i32(load.keyIp);
-						w.i32(load.captureIndex);
+						w.u8(
+							load.selector.kind === "capture"
+								? 0
+								: load.selector.kind === "match-index"
+									? 1
+									: load.selector.kind === "groups"
+										? 2
+										: 3,
+						);
+						w.i32(
+							load.selector.kind === "capture"
+								? load.selector.index
+								: load.selector.kind === "named-capture"
+									? load.selector.nameStringIndex
+									: -1,
+						);
 						w.i32(load.dst);
 						const consumer = load.consumer;
 						w.u8(
@@ -4283,7 +4300,13 @@ function validateRegExpExecProjectionRegion(
 			(register) =>
 				Number.isInteger(register) && register >= 0 && register < fn.registerCount,
 		) &&
-		region.loads.length <= 8;
+		region.loads.length <= 8 &&
+		region.groupsRegisters.length <= MAX_REGION_CLAIMS &&
+		new Set(region.groupsRegisters).size === region.groupsRegisters.length &&
+		region.groupsRegisters.every(
+			(register) =>
+				Number.isInteger(register) && register >= 0 && register < fn.registerCount,
+		);
 	for (const check of region.nullChecks) {
 		const comparison = fn.instructions[check.comparisonIp];
 		const nullValue = fn.instructions[check.nullIp];
@@ -4334,7 +4357,7 @@ function validateRegExpExecProjectionRegion(
 		payload.add(region.lockedLiteral.constructorIntrinsicIp);
 		payload.add(region.lockedLiteral.constructIp);
 	}
-	const indices = new Set<number>();
+	const loadIps = new Set<number>();
 	const expectedProjectedStringMethodIdentity = vmGuardIsWorldInvariant(
 		region.license.guard,
 	)
@@ -4349,25 +4372,20 @@ function validateRegExpExecProjectionRegion(
 		instruction.object === object &&
 		String.fromCharCode(...(stringConstants[instruction.stringIndex] ?? [])) === name;
 	for (const load of region.loads) {
-		const capture = fn.instructions[load.ip];
-		const key = fn.instructions[load.keyIp];
 		payload.add(load.ip);
-		payload.add(load.keyIp);
+		if (load.keyIp >= 0) payload.add(load.keyIp);
 		if (
-			capture?.opcode !== "LOAD_PROPERTY" ||
-			!aliases.has(capture.object) ||
-			capture.dst !== load.dst ||
-			key?.opcode !== "CREATE_NUMBER" ||
-			key.dst !== capture.key ||
-			key.value !== load.captureIndex ||
-			!Number.isInteger(load.captureIndex) ||
-			load.captureIndex <= 0 ||
-			load.captureIndex > 0xffff ||
-			indices.has(load.captureIndex)
-		) {
+			!vmRegExpProjectionLoadMatches(
+				fn.instructions,
+				load,
+				aliases,
+				new Set(region.groupsRegisters),
+				stringConstants,
+			) ||
+			loadIps.has(load.ip)
+		)
 			valid = false;
-		}
-		indices.add(load.captureIndex);
+		loadIps.add(load.ip);
 		const consumer = load.consumer;
 		if (consumer?.kind === "length") {
 			payload.add(consumer.propertyIp);
@@ -6076,6 +6094,7 @@ function readCompilerArtifact(
 					const input = r.i32();
 					const result = r.i32();
 					const resultRegisters = r.i32Array();
+					const groupsRegisters = r.i32Array();
 					const nullCheckCount = r.count(5);
 					const nullChecks: Array<{
 						comparisonIp: number;
@@ -6092,7 +6111,24 @@ function readCompilerArtifact(
 					for (let loadIndex = 0; loadIndex < loadCount; loadIndex++) {
 						const ip = r.i32();
 						const keyIp = r.i32();
-						const captureIndex = r.i32();
+						const selectorTag = r.u8();
+						const selectorValue = r.i32();
+						if (
+							selectorTag > 3 ||
+							((selectorTag === 1 || selectorTag === 2) && selectorValue !== -1)
+						)
+							throw new RangeError("program-image-codec: invalid RegExp.exec selector");
+						const selector: Extract<
+							VmRegion,
+							{ kind: "regexp-exec-projection" }
+						>["loads"][number]["selector"] =
+							selectorTag === 0
+								? { kind: "capture", index: selectorValue }
+								: selectorTag === 1
+									? { kind: "match-index" }
+									: selectorTag === 2
+										? { kind: "groups" }
+										: { kind: "named-capture", nameStringIndex: selectorValue };
 						const dst = r.i32();
 						const consumerTag = r.u8();
 						let consumer:
@@ -6161,7 +6197,7 @@ function readCompilerArtifact(
 						loads.push({
 							ip,
 							keyIp,
-							captureIndex,
+							selector,
 							dst,
 							...(consumer ? { consumer } : {}),
 						});
@@ -6208,6 +6244,7 @@ function readCompilerArtifact(
 						input,
 						result,
 						resultRegisters,
+						groupsRegisters,
 						nullChecks,
 						lastIndexEffect: "retained-call-twin",
 						loads,

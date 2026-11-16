@@ -313,6 +313,12 @@ export interface CorePlanStringSpanSpecialization extends CorePlanSpecialization
 	};
 }
 
+export type CoreRegExpProjectionSelector =
+	| { readonly kind: "capture"; readonly index: number }
+	| { readonly kind: "match-index" }
+	| { readonly kind: "groups" }
+	| { readonly kind: "named-capture"; readonly nameStringIndex: number };
+
 export interface CorePlanRegExpExecProjectionSpecialization extends CorePlanSpecializationBase<"regexp-exec-projection"> {
 	readonly regexpExecProjection: {
 		readonly guard: CompilerGuardPlan;
@@ -321,6 +327,7 @@ export interface CorePlanRegExpExecProjectionSpecialization extends CorePlanSpec
 		readonly propertyPlacement: CorePropertyPlacement;
 		readonly call: CoreInstructionId;
 		readonly resultValues: ReadonlyArray<CoreValueId>;
+		readonly groupsValues: ReadonlyArray<CoreValueId>;
 		readonly nullChecks: ReadonlyArray<{
 			readonly comparison: CoreInstructionId;
 			readonly nullValue: CoreInstructionId;
@@ -331,8 +338,8 @@ export interface CorePlanRegExpExecProjectionSpecialization extends CorePlanSpec
 		};
 		readonly loads: ReadonlyArray<{
 			readonly instruction: CoreInstructionId;
-			readonly key: CoreInstructionId;
-			readonly captureIndex: number;
+			readonly key?: CoreInstructionId;
+			readonly selector: CoreRegExpProjectionSelector;
 			readonly consumer?:
 				| { readonly kind: "length"; readonly property: CoreInstructionId }
 				| {
@@ -836,12 +843,13 @@ export interface CoreAllocatedRegExpExecProjectionRegion extends CoreAllocatedRe
 	| readonly [Extract<CompilerInstruction, { type: "call" | "callKnown" }>]
 	| readonly [
 			Extract<CompilerInstruction, { type: "call" | "callKnown" }>,
-			Extract<CompilerInstruction, { type: "loadProperty" }>,
+			Extract<CompilerInstruction, { type: "loadProperty" | "loadPropertyStatic" }>,
 	  ]
 > {
 	readonly property?: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly propertyPlacement: CorePropertyPlacement;
 	readonly resultRegisters: ReadonlyArray<number>;
+	readonly groupsRegisters: ReadonlyArray<number>;
 	readonly nullChecks: ReadonlyArray<{
 		readonly comparison: Extract<CompilerInstruction, { type: "binary" }>;
 		readonly nullValue: Extract<CompilerInstruction, { type: "createNull" }>;
@@ -855,9 +863,12 @@ export interface CoreAllocatedRegExpExecProjectionRegion extends CoreAllocatedRe
 	};
 	readonly lastIndexEffect: "retained-call-twin";
 	readonly loads: ReadonlyArray<{
-		readonly instruction: Extract<CompilerInstruction, { type: "loadProperty" }>;
-		readonly key: Extract<CompilerInstruction, { type: "createNumber" }>;
-		readonly captureIndex: number;
+		readonly instruction: Extract<
+			CompilerInstruction,
+			{ type: "loadProperty" | "loadPropertyStatic" }
+		>;
+		readonly key?: Extract<CompilerInstruction, { type: "createNumber" }>;
+		readonly selector: CoreRegExpProjectionSelector;
 		readonly consumer?:
 			| {
 					readonly kind: "length";

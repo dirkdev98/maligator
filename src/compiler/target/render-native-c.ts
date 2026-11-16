@@ -7804,20 +7804,14 @@ function analyzeNativeRegionTopology(
 			seenCursorCalls.add(callIp);
 			stringSplitCursors.push(projection);
 		} else if (projection.kind === "regexp-exec-projection") {
-			const loads = [...projection.loads].sort(
-				(left, right) => left.captureIndex - right.captureIndex,
-			);
+			const loads = [...projection.loads];
 			if (
 				loads.length > 8 ||
 				projection.anchors.length !== (loads.length === 0 ? 1 : 2) ||
 				projection.anchors[0] !== projection.callIp ||
 				projection.anchors[1] !== projection.loads[0]?.ip ||
 				seenExecCalls.has(projection.callIp) ||
-				loads.some(
-					(load, index) =>
-						load.captureIndex <= 0 ||
-						(index > 0 && loads[index - 1]!.captureIndex >= load.captureIndex),
-				)
+				new Set(loads.map((load) => load.ip)).size !== loads.length
 			) {
 				throw new Error(
 					`Invalid Core RegExp.exec projection at instruction ${projection.callIp}`,
@@ -11686,17 +11680,18 @@ class NativeInstructionEmission {
 			}
 		}
 		if (
-			instruction.opcode === "LOAD_PROPERTY" &&
+			(instruction.opcode === "LOAD_PROPERTY" ||
+				instruction.opcode === "LOAD_PROPERTY_STATIC") &&
 			this.context.nativeRegExpExecProjectionAction?.role === "capture"
 		) {
 			const { site, load } = this.context.nativeRegExpExecProjectionAction;
 			const slot = site.loads.findIndex((entry) => entry.ip === load?.ip);
 			if (slot >= 0) {
 				return [
-					`if (__regexp_exec_${site.projection.callIp}_projected) {`,
+					`if (__regexp_exec_${site.projection.callIp}_projected${load?.selector.kind === "named-capture" ? ` && !mal_value_is_undefined(${this.boxedOperand(instruction.object)})` : ""}) {`,
 					`  r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`,
 					`} else {`,
-					`  r${instruction.dst} = ${this.profileCall("property", `mal_vm_op_load_property_ic(vm, ${this.boxedOperand(instruction.object)}, ${this.boxedOperand(instruction.key)}, &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+					`  r${instruction.dst} = ${this.profileCall("property", `mal_vm_op_load_property_ic(vm, ${this.boxedOperand(instruction.object)}, ${instruction.opcode === "LOAD_PROPERTY" ? this.boxedOperand(instruction.key) : `mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}])`}, &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 					`  ${this.throwCheck()}`,
 					`}`,
 				];
@@ -13978,12 +13973,29 @@ class NativeInstructionEmission {
 						this.callPoll(),
 					];
 				}
-				const indices = site.loads.map((load) => load.captureIndex).join(", ");
+				const requests = site.loads
+					.map(({ selector }) => {
+						const kind =
+							selector.kind === "capture"
+								? "MAL_REGEXP_PROJECT_CAPTURE"
+								: selector.kind === "match-index"
+									? "MAL_REGEXP_PROJECT_INDEX"
+									: selector.kind === "groups"
+										? "MAL_REGEXP_PROJECT_GROUPS"
+										: "MAL_REGEXP_PROJECT_NAMED_CAPTURE";
+						const index = selector.kind === "capture" ? selector.index : 0;
+						const name =
+							selector.kind === "named-capture"
+								? `vm->string_constant_atoms[${this.context.relocation.stringIndex(selector.nameStringIndex)}]`
+								: "nullptr";
+						return `{ .kind = ${kind}, .capture_index = ${index}, .name = ${name} }`;
+					})
+					.join(", ");
 				const outputs = site.loads
 					.map((_load, index) => `&__gc_slots[${site.slotsOffset + index}]`)
 					.join(", ");
 				const spanMask = site.spanMask;
-				const parameters = `vm, ${this.boxedOperand(instruction.thisValue)}, ${this.boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, ${spanMask}, __regexp_exec_${projection.callIp}_starts, __regexp_exec_${projection.callIp}_ends, &__gc_slots[${site.subjectSlot}], &r${instruction.dst}`;
+				const parameters = `vm, ${this.boxedOperand(instruction.thisValue)}, ${this.boxedOperand(instruction.arguments[0]!)}, (const MalRegExpProjectionRequest[]){ ${requests} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, ${spanMask}, __regexp_exec_${projection.callIp}_starts, __regexp_exec_${projection.callIp}_ends, &__gc_slots[${site.subjectSlot}], &r${instruction.dst}`;
 				if (projection.lockedFreshLiteral)
 					return [
 						`__regexp_exec_${projection.callIp}_projected = false;`,
@@ -14765,7 +14777,24 @@ class NativeInstructionEmission {
 				];
 			}
 			const fast = `__regexp_exec_${projection.callIp}_fast`;
-			const indices = site.loads.map((load) => load.captureIndex).join(", ");
+			const requests = site.loads
+				.map(({ selector }) => {
+					const kind =
+						selector.kind === "capture"
+							? "MAL_REGEXP_PROJECT_CAPTURE"
+							: selector.kind === "match-index"
+								? "MAL_REGEXP_PROJECT_INDEX"
+								: selector.kind === "groups"
+									? "MAL_REGEXP_PROJECT_GROUPS"
+									: "MAL_REGEXP_PROJECT_NAMED_CAPTURE";
+					const index = selector.kind === "capture" ? selector.index : 0;
+					const name =
+						selector.kind === "named-capture"
+							? `vm->string_constant_atoms[${this.context.relocation.stringIndex(selector.nameStringIndex)}]`
+							: "nullptr";
+					return `{ .kind = ${kind}, .capture_index = ${index}, .name = ${name} }`;
+				})
+				.join(", ");
 			const outputs = site.loads
 				.map((_load, index) => `&__gc_slots[${site.slotsOffset + index}]`)
 				.join(", ");
@@ -14773,7 +14802,7 @@ class NativeInstructionEmission {
 			if (propertyLoad !== undefined) {
 				return [
 					`__regexp_exec_${projection.callIp}_projected = false;`,
-					`${this.profileCall("regexp", `mal_regexp_exec_capture_projection_locked(vm, ${this.boxedOperand(instruction.thisValue)}, ${this.boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, ${spanMask}, __regexp_exec_${projection.callIp}_starts, __regexp_exec_${projection.callIp}_ends, &__gc_slots[${site.subjectSlot}], &r${instruction.dst})`)};`,
+					`${this.profileCall("regexp", `mal_regexp_exec_capture_projection_locked(vm, ${this.boxedOperand(instruction.thisValue)}, ${this.boxedOperand(instruction.arguments[0]!)}, (const MalRegExpProjectionRequest[]){ ${requests} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, ${spanMask}, __regexp_exec_${projection.callIp}_starts, __regexp_exec_${projection.callIp}_ends, &__gc_slots[${site.subjectSlot}], &r${instruction.dst})`)};`,
 					this.throwCheck(),
 					`__regexp_exec_${projection.callIp}_projected = mal_value_is_boolean(r${instruction.dst});`,
 					this.callPoll(),
@@ -14781,7 +14810,7 @@ class NativeInstructionEmission {
 			}
 			const project = this.profileCall(
 				"regexp",
-				`mal_regexp_exec_capture_projection(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${this.boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, ${spanMask}, __regexp_exec_${projection.callIp}_starts, __regexp_exec_${projection.callIp}_ends, &__gc_slots[${site.subjectSlot}], &r${instruction.dst})`,
+				`mal_regexp_exec_capture_projection(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${this.boxedOperand(instruction.arguments[0]!)}, (const MalRegExpProjectionRequest[]){ ${requests} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, ${spanMask}, __regexp_exec_${projection.callIp}_starts, __regexp_exec_${projection.callIp}_ends, &__gc_slots[${site.subjectSlot}], &r${instruction.dst})`,
 			);
 			return [
 				`__regexp_exec_${projection.callIp}_projected = false;`,

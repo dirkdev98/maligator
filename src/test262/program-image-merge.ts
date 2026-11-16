@@ -291,9 +291,17 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 					? {}
 					: { lockedLiteral: { ...region.lockedLiteral } }),
 				resultRegisters: [...region.resultRegisters],
+				groupsRegisters: [...region.groupsRegisters],
 				nullChecks: region.nullChecks.map((check) => ({ ...check })),
 				loads: region.loads.map((load) => ({
 					...load,
+					selector:
+						load.selector.kind === "named-capture"
+							? {
+									...load.selector,
+									nameStringIndex: load.selector.nameStringIndex + base.string,
+								}
+							: { ...load.selector },
 					...(load.consumer === undefined
 						? {}
 						: {

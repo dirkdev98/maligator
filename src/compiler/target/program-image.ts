@@ -5,6 +5,7 @@ import type {
 	CoreCollectionBuiltinOperation,
 	CorePropertyPlacement,
 	CoreStringSpanRangeOperation,
+	CoreRegExpProjectionSelector,
 } from "../core/core-ir-regions.ts";
 import type {
 	SourceFunctionOrigin,
@@ -488,6 +489,7 @@ export type VmRegExpExecProjectionRegion = VmRegionEnvelope<
 	readonly input: number;
 	readonly result: number;
 	readonly resultRegisters: ReadonlyArray<number>;
+	readonly groupsRegisters: ReadonlyArray<number>;
 	readonly nullChecks: ReadonlyArray<{
 		readonly comparisonIp: number;
 		readonly nullIp: number;
@@ -496,7 +498,7 @@ export type VmRegExpExecProjectionRegion = VmRegionEnvelope<
 	readonly loads: ReadonlyArray<{
 		readonly ip: number;
 		readonly keyIp: number;
-		readonly captureIndex: number;
+		readonly selector: CoreRegExpProjectionSelector;
 		readonly dst: number;
 		readonly consumer?:
 			| { readonly kind: "length"; readonly propertyIp: number }
@@ -525,6 +527,48 @@ export type VmRegExpExecProjectionRegion = VmRegionEnvelope<
 			  };
 	}>;
 };
+
+export function vmRegExpProjectionLoadMatches(
+	instructions: ReadonlyArray<BytecodeInstruction>,
+	load: VmRegExpExecProjectionRegion["loads"][number],
+	results: ReadonlySet<number>,
+	groups: ReadonlySet<number>,
+	strings: ReadonlyArray<ReadonlyArray<number>>,
+): boolean {
+	const instruction = instructions[load.ip];
+	if (
+		instruction?.opcode !== "LOAD_PROPERTY" &&
+		instruction?.opcode !== "LOAD_PROPERTY_STATIC"
+	)
+		return false;
+	if (instruction.dst !== load.dst) return false;
+	const selector = load.selector;
+	if (selector.kind === "capture") {
+		const key = instructions[load.keyIp];
+		return (
+			instruction.opcode === "LOAD_PROPERTY" &&
+			results.has(instruction.object) &&
+			key?.opcode === "CREATE_NUMBER" &&
+			key.dst === instruction.key &&
+			key.value === selector.index &&
+			Number.isInteger(selector.index) &&
+			selector.index >= 0 &&
+			selector.index <= 0xffff
+		);
+	}
+	if (instruction.opcode !== "LOAD_PROPERTY_STATIC" || load.keyIp !== -1) return false;
+	if (selector.kind === "named-capture")
+		return (
+			groups.has(instruction.object) &&
+			instruction.stringIndex === selector.nameStringIndex
+		);
+	return (
+		load.consumer === undefined &&
+		results.has(instruction.object) &&
+		String.fromCharCode(...(strings[instruction.stringIndex] ?? [])) ===
+			(selector.kind === "groups" ? "groups" : "index")
+	);
+}
 
 export type VmRegExpIteratorProjectionRegion = VmRegionEnvelope<
 	"regexp-iterator-projection",
@@ -3251,6 +3295,21 @@ function remapNativeConstants(
 					}),
 		})),
 		specializations: fn.specializations.map((region) => {
+			if (region.kind === "regexp-exec-projection")
+				return {
+					...region,
+					loads: region.loads.map((load) => {
+						if (load.selector.kind !== "named-capture") return load;
+						const nameStringIndex = compacted.stringOldToNew.get(
+							load.selector.nameStringIndex,
+						);
+						if (nameStringIndex === undefined)
+							throw new Error(
+								`RuntimeImage removed RegExp capture name ${load.selector.nameStringIndex}`,
+							);
+						return { ...load, selector: { ...load.selector, nameStringIndex } };
+					}),
+				};
 			if (region.kind === "stack-object-plan")
 				return region.sites.every((site) => site.keys === undefined)
 					? region
@@ -4685,8 +4744,11 @@ function lowerExecutionFunctionToNativePlan(
 					const consumer = load.consumer;
 					return {
 						ip: instructionIndexByTargetInstruction.get(load.instruction),
-						keyIp: instructionIndexByTargetInstruction.get(load.key),
-						captureIndex: load.captureIndex,
+						keyIp:
+							load.key === undefined
+								? -1
+								: instructionIndexByTargetInstruction.get(load.key),
+						selector: load.selector,
 						dst: load.instruction.registers[0],
 						consumer:
 							consumer === undefined
@@ -4838,18 +4900,14 @@ function lowerExecutionFunctionToNativePlan(
 					}
 				}
 				for (const load of resolvedLoads) {
-					const capture = instructions[load.ip];
-					const key = instructions[load.keyIp];
 					if (
-						capture?.opcode !== "LOAD_PROPERTY" ||
-						!aliases.has(capture.object) ||
-						capture.dst !== load.dst ||
-						key?.opcode !== "CREATE_NUMBER" ||
-						key.dst !== capture.key ||
-						key.value !== load.captureIndex ||
-						!Number.isInteger(load.captureIndex) ||
-						load.captureIndex <= 0 ||
-						load.captureIndex > 0xffff
+						!vmRegExpProjectionLoadMatches(
+							instructions,
+							load,
+							aliases,
+							new Set(region.groupsRegisters),
+							stringConstants,
+						)
 					) {
 						operationsValid = false;
 						continue;
@@ -4970,7 +5028,7 @@ function lowerExecutionFunctionToNativePlan(
 				}
 				for (const load of resolvedLoads) {
 					payloadIps.add(load.ip);
-					payloadIps.add(load.keyIp);
+					if (load.keyIp >= 0) payloadIps.add(load.keyIp);
 					const consumer = load.consumer;
 					if (consumer?.kind === "length") payloadIps.add(consumer.propertyIp);
 					else if (consumer?.kind === "charCodeAtZero") {
@@ -5006,9 +5064,14 @@ function lowerExecutionFunctionToNativePlan(
 						(register) =>
 							!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
 					) ||
+					region.groupsRegisters.length > 96 ||
+					new Set(region.groupsRegisters).size !== region.groupsRegisters.length ||
+					region.groupsRegisters.some(
+						(register) =>
+							!Number.isInteger(register) || register < 0 || register >= fn.registerCount,
+					) ||
 					resolvedLoads.length > 8 ||
-					new Set(resolvedLoads.map((load) => load.captureIndex)).size !==
-						resolvedLoads.length ||
+					new Set(resolvedLoads.map((load) => load.ip)).size !== resolvedLoads.length ||
 					region.cost.metadataOperations !== payloadIps.size ||
 					payloadIps.size !== resolvedClaimedIps.length ||
 					resolvedClaimedIps.some((ip) => !payloadIps.has(ip))
@@ -5044,6 +5107,7 @@ function lowerExecutionFunctionToNativePlan(
 					input: loweredCall.arguments[0]!,
 					result: loweredCall.dst,
 					resultRegisters,
+					groupsRegisters: region.groupsRegisters,
 					nullChecks: resolvedNullChecks,
 					lastIndexEffect: "retained-call-twin",
 					loads: resolvedLoads,

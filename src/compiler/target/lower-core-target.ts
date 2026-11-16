@@ -1236,8 +1236,12 @@ function lowerCoreSpecializations(
 						})();
 			const loads = regexp.loads.map((load) => {
 				const instruction = requireInstruction(load.instruction);
-				const key = requireInstruction(load.key);
-				if (instruction.type !== "loadProperty" || key.type !== "createNumber") {
+				const key = load.key === undefined ? undefined : requireInstruction(load.key);
+				if (
+					(instruction.type !== "loadProperty" &&
+						instruction.type !== "loadPropertyStatic") ||
+					(key !== undefined && key.type !== "createNumber")
+				) {
 					throw new Error(`Core RegExp.exec plan ${id} lost a capture`);
 				}
 				const consumer = load.consumer;
@@ -1245,7 +1249,7 @@ function lowerCoreSpecializations(
 					return {
 						instruction,
 						key,
-						captureIndex: load.captureIndex,
+						selector: load.selector,
 					};
 				}
 				if (consumer.kind === "length") {
@@ -1256,7 +1260,7 @@ function lowerCoreSpecializations(
 					return {
 						instruction,
 						key,
-						captureIndex: load.captureIndex,
+						selector: load.selector,
 						consumer: { kind: "length" as const, property: consumerProperty },
 					};
 				}
@@ -1275,7 +1279,7 @@ function lowerCoreSpecializations(
 					return {
 						instruction,
 						key,
-						captureIndex: load.captureIndex,
+						selector: load.selector,
 						consumer: {
 							kind: "number" as const,
 							intrinsic,
@@ -1298,7 +1302,7 @@ function lowerCoreSpecializations(
 					return {
 						instruction,
 						key,
-						captureIndex: load.captureIndex,
+						selector: load.selector,
 						consumer: {
 							kind: "charCodeAtZero" as const,
 							methodIdentity: consumer.methodIdentity,
@@ -1332,7 +1336,7 @@ function lowerCoreSpecializations(
 				return {
 					instruction,
 					key,
-					captureIndex: load.captureIndex,
+					selector: load.selector,
 					consumer: {
 						kind: "asciiCaseLength" as const,
 						methodIdentity: consumer.methodIdentity,
@@ -1364,6 +1368,7 @@ function lowerCoreSpecializations(
 				property,
 				propertyPlacement: regexp.propertyPlacement,
 				resultRegisters: regexp.resultValues.map(registerForValue),
+				groupsRegisters: regexp.groupsValues.map(registerForValue),
 				nullChecks,
 				...(lockedLiteral === undefined ? {} : { lockedLiteral }),
 				lastIndexEffect: "retained-call-twin",

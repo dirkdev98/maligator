@@ -1325,7 +1325,13 @@ function verifySpecialization(
 					expected === undefined ||
 					load.instruction !== expected.instruction ||
 					load.key !== expected.key ||
-					load.captureIndex !== expected.captureIndex ||
+					load.selector.kind !== expected.selector.kind ||
+					(load.selector.kind === "capture" &&
+						(expected.selector.kind !== "capture" ||
+							load.selector.index !== expected.selector.index)) ||
+					(load.selector.kind === "named-capture" &&
+						(expected.selector.kind !== "named-capture" ||
+							load.selector.nameStringIndex !== expected.selector.nameStringIndex)) ||
 					load.consumer?.kind !== expected.consumer?.kind
 				)
 					return false;
@@ -1372,6 +1378,7 @@ function verifySpecialization(
 			regexp.property !== candidate.property ||
 			regexp.call !== candidate.call ||
 			!sameNumbers(regexp.resultValues, candidate.resultValues) ||
+			!sameNumbers(regexp.groupsValues, candidate.groupsValues) ||
 			regexp.nullChecks.length !== candidate.nullChecks.length ||
 			regexp.nullChecks.some(
 				(check, index) =>

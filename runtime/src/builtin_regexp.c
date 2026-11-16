@@ -1021,6 +1021,7 @@ typedef struct RegexpMatchOffsets {
 
 typedef struct RegexpCaptureProjection {
     const u32 *indices;
+    const MalRegExpProjectionRequest *requests;
     MalValue *values;
     u32 count;
     u8 span_mask;
@@ -1265,19 +1266,57 @@ static MalValue regexp_builtin_exec(
         if (projection->match_end != nullptr) {
             *projection->match_end = match_end;
         }
+        MalRegExpGroupLayout *layout = nullptr;
         bool indices_are_own = true;
         for (u32 i = 0; i < projection->count; i++) {
-            if (projection->indices[i] >= (u32) ngroups) {
+            const MalRegExpProjectionRequest *request = projection->requests == nullptr
+                ? nullptr : &projection->requests[i];
+            if (request != nullptr && request->kind != MAL_REGEXP_PROJECT_CAPTURE) {
+                if ((request->kind == MAL_REGEXP_PROJECT_GROUPS ||
+                     request->kind == MAL_REGEXP_PROJECT_NAMED_CAPTURE) && layout == nullptr) {
+                    // Coercions may replace the matcher and invalidate its old layout.
+                    layout = regexp_group_layout(vm, re);
+                    if (layout == nullptr) {
+                        if (heap_caps) free(caps);
+                        return mal_value_new_undefined();
+                    }
+                }
+                continue;
+            }
+            u32 index = request == nullptr ? projection->indices[i] : request->capture_index;
+            if (index >= (u32) ngroups) {
                 indices_are_own = false;
                 break;
             }
         }
         if (indices_are_own) {
             for (u32 i = 0; i < projection->count; i++) {
-                u32 capture_index = projection->indices[i];
+                const MalRegExpProjectionRequest *request = projection->requests == nullptr
+                    ? nullptr : &projection->requests[i];
+                if (request != nullptr && request->kind == MAL_REGEXP_PROJECT_INDEX) {
+                    projection->values[i] = mal_value_from_i32(match_start);
+                    continue;
+                }
+                if (request != nullptr && request->kind == MAL_REGEXP_PROJECT_GROUPS) {
+                    projection->values[i] = layout->count == 0
+                        ? mal_value_new_undefined() : mal_value_new_boolean(true);
+                    continue;
+                }
+                u32 capture_index = request == nullptr ? projection->indices[i] : request->capture_index;
+                if (request != nullptr && request->kind == MAL_REGEXP_PROJECT_NAMED_CAPTURE) {
+                    capture_index = UINT32_MAX;
+                    for (u32 named = 0; named < layout->count; named++) {
+                        const MalRegExpNamedCapture *capture = &layout->captures[named];
+                        if (mal_string_equals(capture->name, request->name) &&
+                            caps[2 * capture->capture] >= 0) {
+                            capture_index = capture->capture;
+                            break;
+                        }
+                    }
+                }
                 MalValue value = mal_value_new_undefined();
-                int32_t capture_start = caps[2 * capture_index];
-                int32_t capture_end = caps[2 * capture_index + 1];
+                int32_t capture_start = capture_index == UINT32_MAX ? -1 : caps[2 * capture_index];
+                int32_t capture_end = capture_index == UINT32_MAX ? -1 : caps[2 * capture_index + 1];
                 if ((projection->span_mask & (u8) (1u << i)) != 0) {
                     projection->starts[i] = capture_start;
                     projection->ends[i] = capture_end;
@@ -3820,7 +3859,7 @@ static bool regexp_exec_capture_projection_impl(
     MalValue callee,
     MalValue regexp,
     MalValue string,
-    const u32 *capture_indices,
+    const MalRegExpProjectionRequest *requests,
     MalValue **capture_outputs,
     u32 capture_count,
     u8 capture_span_mask,
@@ -3829,7 +3868,7 @@ static bool regexp_exec_capture_projection_impl(
     MalValue *subject_output,
     MalValue *result_out
 ) {
-    if (capture_count == 0 || capture_count > 8 || capture_indices == nullptr ||
+    if (capture_count == 0 || capture_count > 8 || requests == nullptr ||
         capture_outputs == nullptr || subject_output == nullptr || result_out == nullptr) {
         return false;
     }
@@ -3840,8 +3879,8 @@ static bool regexp_exec_capture_projection_impl(
         return false;
     }
     for (u32 i = 0; i < capture_count; i++) {
-        if (capture_outputs[i] == nullptr || capture_indices[i] == 0 ||
-            (i > 0 && capture_indices[i - 1] >= capture_indices[i])) {
+        if (capture_outputs[i] == nullptr || requests[i].kind > MAL_REGEXP_PROJECT_NAMED_CAPTURE ||
+            (requests[i].kind == MAL_REGEXP_PROJECT_NAMED_CAPTURE && requests[i].name == nullptr)) {
             return false;
         }
     }
@@ -3888,7 +3927,7 @@ static bool regexp_exec_capture_projection_impl(
     mal_gc_root(&root_span, roots, capture_count);
 
     RegexpCaptureProjection projection = {
-        .indices = capture_indices,
+        .requests = requests,
         .values = roots,
         .count = capture_count,
         .span_mask = capture_span_mask,
@@ -3940,7 +3979,7 @@ bool mal_regexp_exec_capture_projection(
     MalValue callee,
     MalValue regexp,
     MalValue string,
-    const u32 *capture_indices,
+    const MalRegExpProjectionRequest *requests,
     MalValue **capture_outputs,
     u32 capture_count,
     u8 capture_span_mask,
@@ -3950,7 +3989,7 @@ bool mal_regexp_exec_capture_projection(
     MalValue *result_out
 ) {
     return regexp_exec_capture_projection_impl(
-        vm, false, callee, regexp, string, capture_indices, capture_outputs,
+        vm, false, callee, regexp, string, requests, capture_outputs,
         capture_count, capture_span_mask, capture_starts, capture_ends,
         subject_output, result_out);
 }
@@ -3959,7 +3998,7 @@ void mal_regexp_exec_capture_projection_locked(
     MalVm *vm,
     MalValue regexp,
     MalValue string,
-    const u32 *capture_indices,
+    const MalRegExpProjectionRequest *requests,
     MalValue **capture_outputs,
     u32 capture_count,
     u8 capture_span_mask,
@@ -3969,7 +4008,7 @@ void mal_regexp_exec_capture_projection_locked(
     MalValue *result_out
 ) {
     bool handled = regexp_exec_capture_projection_impl(
-        vm, true, mal_value_new_undefined(), regexp, string, capture_indices,
+        vm, true, mal_value_new_undefined(), regexp, string, requests,
         capture_outputs, capture_count, capture_span_mask, capture_starts,
         capture_ends, subject_output, result_out);
     assert(handled);
@@ -4134,7 +4173,7 @@ bool mal_regexp_exec_capture_projection(
     MalValue callee,
     MalValue regexp,
     MalValue string,
-    const u32 *capture_indices,
+    const MalRegExpProjectionRequest *requests,
     MalValue **capture_outputs,
     u32 capture_count,
     u8 capture_span_mask,
@@ -4147,7 +4186,7 @@ bool mal_regexp_exec_capture_projection(
     (void) callee;
     (void) regexp;
     (void) string;
-    (void) capture_indices;
+    (void) requests;
     (void) capture_outputs;
     (void) capture_count;
     (void) capture_span_mask;
@@ -4162,7 +4201,7 @@ void mal_regexp_exec_capture_projection_locked(
     MalVm *vm,
     MalValue regexp,
     MalValue string,
-    const u32 *capture_indices,
+    const MalRegExpProjectionRequest *requests,
     MalValue **capture_outputs,
     u32 capture_count,
     u8 capture_span_mask,
@@ -4174,7 +4213,7 @@ void mal_regexp_exec_capture_projection_locked(
     (void) vm;
     (void) regexp;
     (void) string;
-    (void) capture_indices;
+    (void) requests;
     (void) capture_outputs;
     (void) capture_count;
     (void) capture_span_mask;

@@ -38,6 +38,7 @@ import {
 import type {
 	CoreStringSpanConsumer,
 	CoreStringSpanRangeOperation,
+	CoreRegExpProjectionSelector,
 	CoreStackObjectMaterialization,
 } from "./core-ir-regions.ts";
 import type {
@@ -1017,6 +1018,7 @@ export interface CoreRegExpExecProjectionCandidate extends CoreLocalSpecializati
 	readonly property?: CoreInstructionId;
 	readonly call: CoreInstructionId;
 	readonly resultValues: ReadonlyArray<CoreValueId>;
+	readonly groupsValues: ReadonlyArray<CoreValueId>;
 	readonly nullChecks: ReadonlyArray<{
 		readonly comparison: CoreInstructionId;
 		readonly nullValue: CoreInstructionId;
@@ -1027,8 +1029,8 @@ export interface CoreRegExpExecProjectionCandidate extends CoreLocalSpecializati
 	};
 	readonly loads: ReadonlyArray<{
 		readonly instruction: CoreInstructionId;
-		readonly key: CoreInstructionId;
-		readonly captureIndex: number;
+		readonly key?: CoreInstructionId;
+		readonly selector: CoreRegExpProjectionSelector;
 		readonly consumer?:
 			| { readonly kind: "length"; readonly property: CoreInstructionId }
 			| {
@@ -2161,6 +2163,7 @@ export interface CoreLocalFactIndex {
 		}>
 	>;
 	readonly controlUses: ReadonlySet<CoreValueId>;
+	readonly transportedControlUses: ReadonlySet<CoreValueId>;
 	readonly handlerTargets: ReadonlySet<CoreBlockId>;
 	readonly valuesByRoot: ReadonlyMap<CoreValueId, ReadonlyArray<CoreValueId>>;
 	readonly opcodes: ReadonlyArray<ReadonlyArray<CoreInstructionId>>;
@@ -2192,6 +2195,7 @@ export function buildCoreLocalFactIndex(
 		}>
 	>();
 	const controlUses = new Set<CoreValueId>();
+	const transportedControlUses = new Set<CoreValueId>();
 	const handlerTargets = new Set<CoreBlockId>();
 	const mutableValuesByRoot = new Map<CoreValueId, Array<CoreValueId>>();
 	const mutableOpcodes: Array<Array<CoreInstructionId> | undefined> = [];
@@ -2240,7 +2244,10 @@ export function buildCoreLocalFactIndex(
 		const terminatorOperandStart = fn.kernel.instructionOperandStart(terminator);
 		const terminatorOperandCount = fn.kernel.instructionOperandCount(terminator);
 		for (let index = 0; index < terminatorOperandCount; index++) {
-			controlUses.add(root(fn.kernel.operandAt(terminatorOperandStart + index)));
+			const value = root(fn.kernel.operandAt(terminatorOperandStart + index));
+			controlUses.add(value);
+			if (fn.instructionKind(terminator) !== "branch" || index !== 0)
+				transportedControlUses.add(value);
 		}
 		const handler = handlerBlock(fn, block);
 		if (handler !== undefined) {
@@ -2249,6 +2256,9 @@ export function buildCoreLocalFactIndex(
 			const argumentCount = fn.kernel.blockHandlerArgumentCount(block);
 			for (let index = 0; index < argumentCount; index++) {
 				controlUses.add(root(fn.kernel.handlerArgumentAt(argumentStart + index)));
+				transportedControlUses.add(
+					root(fn.kernel.handlerArgumentAt(argumentStart + index)),
+				);
 			}
 		}
 	}
@@ -2266,6 +2276,7 @@ export function buildCoreLocalFactIndex(
 		locationIndices,
 		uses,
 		controlUses,
+		transportedControlUses,
 		handlerTargets,
 		valuesByRoot,
 		opcodes,
@@ -4430,7 +4441,7 @@ function regexpExecProjectionCandidates(
 			continue;
 		const result = instructionResult(fn, call, 0)!;
 		const resultRoot = root(result);
-		if (index.controlUses.has(resultRoot)) continue;
+		if (index.transportedControlUses.has(resultRoot)) continue;
 		const nullChecks: Array<CoreRegExpExecProjectionCandidate["nullChecks"][number]> = [];
 		type MutableLoad = Omit<
 			CoreRegExpExecProjectionCandidate["loads"][number],
@@ -4439,7 +4450,7 @@ function regexpExecProjectionCandidates(
 			consumer?: CoreRegExpExecProjectionCandidate["loads"][number]["consumer"];
 		};
 		const loads: Array<MutableLoad> = [];
-		const captureIndices = new Set<number>();
+		const groupsValues = new Set<CoreValueId>();
 		let safe = true;
 		for (const use of index.uses.get(resultRoot) ?? []) {
 			const consumer = use.instruction;
@@ -4468,6 +4479,60 @@ function regexpExecProjectionCandidates(
 				}
 			}
 			if (
+				opcode === "loadPropertyStatic" &&
+				use.position === 0 &&
+				instructionOperandCount(fn, consumer) === 1 &&
+				instructionResultCount(fn, consumer) === 1 &&
+				specializationInstructionDominates(control, index, call, consumer)
+			) {
+				if (staticPropertyNamed(program, fn, consumer, "index")) {
+					loads.push({ instruction: consumer, selector: { kind: "match-index" } });
+					continue;
+				}
+				if (staticPropertyNamed(program, fn, consumer, "groups")) {
+					const group = instructionResult(fn, consumer, 0)!;
+					if (index.transportedControlUses.has(root(group))) {
+						safe = false;
+						break;
+					}
+					loads.push({ instruction: consumer, selector: { kind: "groups" } });
+					for (const value of specializationResultValues(index, roots, group)) {
+						groupsValues.add(value);
+						if (groupsValues.size > 96) {
+							safe = false;
+							break;
+						}
+					}
+					if (!safe) break;
+					for (const groupUse of semanticUses(group)) {
+						if (loads.length >= 8) {
+							safe = false;
+							break;
+						}
+						const named = groupUse.instruction;
+						const nameStringIndex = fn.instructionAttributes(named).stringIndex;
+						if (
+							groupUse.position !== 0 ||
+							fn.instructionOpcodeName(named) !== "loadPropertyStatic" ||
+							instructionOperandCount(fn, named) !== 1 ||
+							instructionResultCount(fn, named) !== 1 ||
+							typeof nameStringIndex !== "number" ||
+							!specializationInstructionDominates(control, index, consumer, named)
+						) {
+							safe = false;
+							break;
+						}
+						if (!loads.some((load) => load.instruction === named))
+							loads.push({
+								instruction: named,
+								selector: { kind: "named-capture", nameStringIndex },
+							});
+					}
+					if (!safe) break;
+					continue;
+				}
+			}
+			if (
 				opcode === "loadProperty" &&
 				use.position === 0 &&
 				instructionOperandCount(fn, consumer) === 2 &&
@@ -4486,13 +4551,15 @@ function regexpExecProjectionCandidates(
 					fn.instructionOpcodeName(key) === "createNumber" &&
 					typeof captureIndex === "number" &&
 					Number.isInteger(captureIndex) &&
-					captureIndex > 0 &&
+					captureIndex >= 0 &&
 					captureIndex <= 0xffff &&
-					!captureIndices.has(captureIndex) &&
 					specializationInstructionDominates(control, index, key, consumer)
 				) {
-					loads.push({ instruction: consumer, key, captureIndex });
-					captureIndices.add(captureIndex);
+					loads.push({
+						instruction: consumer,
+						key,
+						selector: { kind: "capture", index: captureIndex },
+					});
 					continue;
 				}
 			}
@@ -4502,6 +4569,8 @@ function regexpExecProjectionCandidates(
 		if (!safe || loads.length > 8) continue;
 
 		for (const load of loads) {
+			if (load.selector.kind !== "capture" && load.selector.kind !== "named-capture")
+				continue;
 			const capture = root(instructionResult(fn, load.instruction, 0)!);
 			// Control-flow arguments can retain a capture beyond the next exec result.
 			if (index.controlUses.has(capture)) continue;
@@ -4713,7 +4782,7 @@ function regexpExecProjectionCandidates(
 			claimed.add(nullValue);
 		}
 		for (const load of loads) {
-			claimed.add(load.key);
+			if (load.key !== undefined) claimed.add(load.key);
 			claimed.add(load.instruction);
 			const consumer = load.consumer;
 			if (consumer?.kind === "length") claimed.add(consumer.property);
@@ -4759,6 +4828,7 @@ function regexpExecProjectionCandidates(
 				property,
 				call,
 				resultValues: specializationResultValues(index, roots, result),
+				groupsValues: Object.freeze([...groupsValues]),
 				nullChecks: Object.freeze(nullChecks),
 				...(lockedLiteral === undefined ? {} : { lockedLiteral }),
 				loads: Object.freeze(loads),
