@@ -8,6 +8,7 @@ import {
 } from "../shared/compiler-instruction.ts";
 import type { ProbeReadKind } from "../shared/compiler-instruction.ts";
 import { compilerValueKindMaskIsValid } from "../shared/compiler-value-kinds.ts";
+import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_OBJECT,
@@ -37,6 +38,8 @@ import {
 	CORE_FACT_CLAIM_LIMIT,
 	coreFactClaimIsSatisfiable,
 } from "./core-ir-fact-implication.ts";
+import { analyzeCoreValueKinds } from "./core-ir-value-kinds.ts";
+import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import type {
 	CoreAttributeValue,
 	CoreAttributeRelocation,
@@ -573,11 +576,6 @@ function verifyInstructionRows(
 					knownOperationIndex(attributes.operation) === undefined
 				)
 					fail("Invalid known operation identity");
-				verifyBuiltinWorldAssumptions(
-					attributes.worldAssumptions,
-					attributes.operation,
-					world,
-				);
 				if (
 					attributes.argumentMode !== undefined &&
 					(!knownArgumentModes.some((mode) => mode === attributes.argumentMode) ||
@@ -1307,8 +1305,38 @@ function verifyFunction(
 	verifyFacts(fn);
 	const cfg = verifyControlFlow(fn, program);
 	verifyFactUses(fn, cfg);
+	let localKinds: CoreValueKindAnalysis | undefined;
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
+		if (fn.instructionOpcodeName(instruction) === "callKnown") {
+			const attributes = fn.instructionAttributes(instruction);
+			const operation = attributes.operation as string;
+			const assumptions = attributes.worldAssumptions as
+				| Record<string, unknown>
+				| undefined;
+			let argumentKinds: Array<CompilerValueKindMask> | undefined;
+			if (
+				operation === "Date.UTC" &&
+				assumptions?.primordials === "guarded" &&
+				assumptions.realm === "current-execution-realm"
+			) {
+				if (attributes.construct || attributes.argumentMode !== undefined)
+					fail("Invalid current-realm UTC call");
+				localKinds ??= analyzeCoreValueKinds(program, fn, cfg);
+				const limit = exactBuiltinCallDescriptor(operation)!.forwardedArgumentLimit!;
+				const start = fn.kernel.instructionOperandStart(instruction);
+				argumentKinds = Array.from(
+					{ length: Math.min(limit, fn.kernel.instructionOperandCount(instruction) - 1) },
+					(_, index) => localKinds!.kindMask(fn.kernel.operandAt(start + 1 + index)),
+				);
+			}
+			verifyBuiltinWorldAssumptions(
+				attributes.worldAssumptions,
+				operation,
+				world,
+				argumentKinds,
+			);
+		}
 		if (fn.instructionOpcodeName(instruction) === "createRestArgumentsState") {
 			const state = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
 			if (fn.kernel.valueHandlerUseCount(state) !== 0)

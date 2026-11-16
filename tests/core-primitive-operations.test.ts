@@ -3648,6 +3648,62 @@ describe("wide BigInt builtin constants", () => {
 });
 
 describe("mutable namespace guards in the executing realm", () => {
+	it("guards UTC arithmetic with locally proven Number arguments", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(value){const number=+value;return Date.UTC(2020+(number&3),number&7,1,0,0,0,0)}globalThis.probe=probe;",
+			"probe",
+			{ locked: false, realms: true },
+		);
+		const call = output.core.find(
+			(op) => op.opcode === "callKnown" && op.attributes.operation === "Date.UTC",
+		);
+		expect(call?.attributes.worldAssumptions).toMatchObject({
+			primordials: "guarded",
+			realm: "current-execution-realm",
+		});
+		expect(output.core.some((op) => op.opcode === "call")).toBe(true);
+	});
+	it("replays UTC Number facts after wrapper inlining", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(value){function selected(year){return Date.UTC(year,0,1)}return selected(+value)}globalThis.probe=probe;",
+			"probe",
+			{ locked: false, realms: true },
+		);
+		expect(
+			output.core.some(
+				(op) => op.opcode === "callKnown" && op.attributes.operation === "Date.UTC",
+			),
+		).toBe(true);
+	});
+	it("excludes ignored extras from the UTC Number proof", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(value,extra){const number=+value;return Date.UTC(number,0,1,0,0,0,0,extra)}globalThis.probe=probe;",
+			"probe",
+			{ locked: false, realms: true },
+		);
+		expect(
+			output.core.some(
+				(op) => op.opcode === "callKnown" && op.attributes.operation === "Date.UTC",
+			),
+		).toBe(true);
+	});
+	it.each([
+		"Date.UTC(value,0)",
+		"Date.UTC(+value,0)",
+		"Date.UTC(value?1:value,0)",
+		"Date.UTC(1n,0)",
+	])("retains the loaded current-realm call for %s", (expression) => {
+		const output = inspectStaticValueFunction(
+			`function probe(value){return ${expression}}globalThis.probe=probe;`,
+			"probe",
+			{ locked: false, realms: true },
+		);
+		expect(
+			output.core.some(
+				(op) => op.opcode === "callKnown" && op.attributes.operation === "Date.UTC",
+			),
+		).toBe(false);
+	});
 	it("guards clock reads without merging or removing unused host observations", () => {
 		const output = inspectStaticValueFunction(
 			"function probe(){Date.now();Date.now();return Date.now()}globalThis.probe=probe;",

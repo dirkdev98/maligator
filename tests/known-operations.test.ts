@@ -6,6 +6,11 @@ import {
 } from "../src/compiler/shared/builtin-assumptions.ts";
 import { directBuiltinOperationIds } from "../src/compiler/shared/builtin-registry.ts";
 import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_TOP,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
 	INSTRUCTION_MAY_GC,
 	INSTRUCTION_MAY_THROW,
 } from "../src/compiler/shared/instruction-facts.ts";
@@ -391,4 +396,32 @@ it("restricts current-realm mutable assumptions to consumers without realm-owned
 			),
 		).toThrow("Unsupported current-realm guarded operation");
 	}
+});
+
+it.each([undefined, [0], [COMPILER_VALUE_KIND_OBJECT], [COMPILER_VALUE_KIND_TOP]])(
+	"requires consumed Number facts for current-realm UTC: %j",
+	(kinds) => {
+		expect(() =>
+			verifyBuiltinWorldAssumptions(
+				builtinWorldAssumptions("Date.UTC", "exact-builtin-proof", false, "guarded"),
+				"Date.UTC",
+				undefined,
+				kinds,
+			),
+		).toThrow("Unsupported current-realm guarded operation");
+	},
+);
+it.each(
+	[[], [COMPILER_VALUE_KIND_NUMBER], Array(7).fill(COMPILER_VALUE_KIND_NUMBER)].map(
+		(kinds) => ({ kinds }),
+	),
+)("allows current-realm UTC with consumed Number facts: %j", ({ kinds }) => {
+	expect(() =>
+		verifyBuiltinWorldAssumptions(
+			builtinWorldAssumptions("Date.UTC", "exact-builtin-proof", false, "guarded"),
+			"Date.UTC",
+			undefined,
+			kinds,
+		),
+	).not.toThrow();
 });

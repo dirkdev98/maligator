@@ -1,6 +1,6 @@
 import {
 	builtinWorldAssumptions,
-	GUARDED_CURRENT_REALM_OPERATIONS,
+	guardedCurrentRealmOperation,
 	GUARDED_NUMBER_PREDICATES as NUMBER_PREDICATES,
 } from "../shared/builtin-assumptions.ts";
 import {
@@ -44,6 +44,7 @@ import { CORE_STRING_SPAN_RANGE_METHODS } from "./core-ir-regions.ts";
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	CORE_PRIMITIVE_EFFECT_FACT,
+	analyzeCoreValueKinds,
 } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import { coreInstructionId } from "./core-ir.ts";
@@ -809,8 +810,10 @@ class RunPlanner {
 	 * value or its copy's narrower one, and the kind analysis predates it.
 	 */
 	readonly #joined = new Map<CoreValueId, CoreValueId>();
+	readonly #utcKinds: CoreValueKindAnalysis | undefined;
 
 	constructor(
+		program: CoreProgram,
 		fn: CoreFunctionStore,
 		kinds: CoreValueKindAnalysis,
 		sitesByInstruction: ReadonlyMap<CoreInstructionId, Site>,
@@ -820,6 +823,15 @@ class RunPlanner {
 		this.#kinds = kinds;
 		this.#realms = realms;
 		this.#sitesByInstruction = sitesByInstruction;
+		if (
+			realms &&
+			[...sitesByInstruction.values()].some((site) => site.operation === "Date.UTC")
+		)
+			this.#utcKinds = analyzeCoreValueKinds(
+				program,
+				fn,
+				buildCoreControlFlow(program, fn.id),
+			);
 	}
 
 	adoptJoin(joined: ReadonlyMap<CoreValueId, CoreValueId>): void {
@@ -864,6 +876,19 @@ class RunPlanner {
 		if (this.#realms || site.operation !== "Date.parse") return false;
 		const argument = operands(this.#fn, site.call)[2];
 		return argument !== undefined && this.#kind(argument) === COMPILER_VALUE_KIND_STRING;
+	}
+
+	#currentRealmOperation(site: Site): boolean {
+		if (site.operation !== "Date.UTC")
+			return guardedCurrentRealmOperation(site.operation);
+		// Verification replays local SSA facts without contextual field/global claims.
+		const limit = exactBuiltinCallDescriptor(site.operation)!.forwardedArgumentLimit!;
+		return guardedCurrentRealmOperation(
+			site.operation,
+			operands(this.#fn, site.call)
+				.slice(2, 2 + limit)
+				.map((value) => this.#utcKinds!.kindMask(this.#joined.get(value) ?? value)),
+		);
 	}
 
 	/** Whether the known call can run JavaScript, which ends the run after it. */
@@ -958,7 +983,7 @@ class RunPlanner {
 				const loaded =
 					seen.has(site.name) && (site.method === undefined || seen.has(site.method));
 				const kernel = this.#mathKernel(site);
-				if (this.#realms && !GUARDED_CURRENT_REALM_OPERATIONS.has(site.operation)) break;
+				if (this.#realms && !this.#currentRealmOperation(site)) break;
 				if (
 					!loaded ||
 					(reentered &&
@@ -1309,7 +1334,7 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 		}
 		if (blocks.size === 0) return undefined;
 		const skipped = regionCandidateBlocks(program, fn, sitesByInstruction);
-		const planner = new RunPlanner(fn, kinds, sitesByInstruction, world.realms);
+		const planner = new RunPlanner(program, fn, kinds, sitesByInstruction, world.realms);
 		let editor: CoreEditor | undefined;
 		const pending = [...blocks].filter((block) => !skipped.has(block));
 		while (pending.length > 0) {

@@ -1521,8 +1521,12 @@ such a consumer after a join; sole incoming transfers can execute its first clos
 prefix before joining the observed field values. This preserves getter and coercion
 order without replaying producer effects or crossing a handler. Delayed count and
 indexed observations retain one producer for native snapshot transport.
-Noncoercing Number predicates and ordinary `Date.now` calls also use this guard with
-multiple realms enabled. These direct consumers create no realm-owned result or error;
+Noncoercing Number predicates, ordinary `Date.now` calls and Number-input `Date.UTC`
+calls also use this guard with multiple realms enabled. UTC permission uses replayable
+local SSA facts for the consumed arguments; contextual field and global claims do not
+grant it. Verification derives the same facts after validating control flow. Argument
+reentry retains UTC's loaded callee, and ignored extras still finish evaluation.
+These direct consumers create no realm-owned result or error;
 clock reads retain their host effect even when their result is unused. Their
 proof belongs to the executing function's realm, whose globals and intrinsics the call
 boundary installs. Ordinary loaded calls remain as the fallback, and reentry blocks later

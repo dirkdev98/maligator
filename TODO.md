@@ -168,8 +168,8 @@ Runtime eval may remove source closure without invalidating authority closure.
       guarded known calls; extend the remaining selected consumers across their guards.
       A loop a numeric region can take keeps its own entry speculation;
       admitting `GUARD_SEMANTIC_EPOCH` as a region entry guard would let it use both.
-      Realm-enabled consumers beyond noncoercing Number predicates and ordinary
-      `Date.now` calls need their own
+      Realm-enabled consumers beyond noncoercing Number predicates, ordinary
+      `Date.now` and locally Number-proven `Date.UTC` calls need their own
       identity, allocation and error-realm proof. Keep existing captured-callee Math
       kernels unless shared guarding removes enough work to repay copied code.
 

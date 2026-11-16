@@ -1,4 +1,6 @@
 import type { WorldFacts } from "./compiler-facts.ts";
+import { COMPILER_VALUE_KIND_NUMBER } from "./compiler-value-kinds.ts";
+import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
 
 export interface BuiltinWorldAssumptions {
 	readonly operation: string;
@@ -29,6 +31,18 @@ export const GUARDED_CURRENT_REALM_OPERATIONS: ReadonlySet<string> = new Set([
 	"Date.now",
 ]);
 
+export function guardedCurrentRealmOperation(
+	operation: string,
+	consumedArgumentKinds?: ReadonlyArray<CompilerValueKindMask>,
+): boolean {
+	return (
+		GUARDED_CURRENT_REALM_OPERATIONS.has(operation) ||
+		(operation === "Date.UTC" &&
+			consumedArgumentKinds !== undefined &&
+			consumedArgumentKinds.every((kind) => kind === COMPILER_VALUE_KIND_NUMBER))
+	);
+}
+
 export function builtinWorldAssumptions(
 	operation: string,
 	receiver: BuiltinWorldAssumptions["receiver"],
@@ -52,6 +66,7 @@ export function verifyBuiltinWorldAssumptions(
 	assumptions: unknown,
 	operation: string,
 	world?: WorldFacts,
+	consumedArgumentKinds?: ReadonlyArray<CompilerValueKindMask>,
 ): void {
 	if (typeof assumptions !== "object" || assumptions === null)
 		throw new Error(`Missing world assumptions for ${operation}`);
@@ -75,7 +90,7 @@ export function verifyBuiltinWorldAssumptions(
 	if (
 		guarded &&
 		expected.realm === "current-execution-realm" &&
-		!GUARDED_CURRENT_REALM_OPERATIONS.has(operation)
+		!guardedCurrentRealmOperation(operation, consumedArgumentKinds)
 	)
 		throw new Error(`Unsupported current-realm guarded operation ${operation}`);
 	if (

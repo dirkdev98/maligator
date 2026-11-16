@@ -20,11 +20,13 @@ import {
 	verifyCoreProgram,
 } from "../src/compiler/core/core-ir-verifier.ts";
 import { CORE_NO_EFFECTS, coreFactId } from "../src/compiler/core/core-ir.ts";
+import type { CoreAttributeValue } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { builtinWorldAssumptions } from "../src/compiler/shared/builtin-assumptions.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import { COMPILER_VALUE_KIND_TOP } from "../src/compiler/shared/compiler-value-kinds.ts";
+import { guardedKnownOperationCall } from "../src/compiler/shared/known-operations.ts";
 import { getPrimordialCatalog } from "../src/compiler/shared/primordial-catalog-data.ts";
 import {
 	inspectCoreBlockParameters,
@@ -194,6 +196,61 @@ function validBranchProgram() {
 }
 
 describe("Core verification", () => {
+	it.each([false, true])("replays Number inputs for current-realm UTC: %s", (number) => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const value = builder.blockParameterValue(entry, 0);
+		const fast = builder.createBlock(),
+			slow = builder.createBlock();
+		const [holds] = builder.appendInstruction(entry, "guardSemanticEpoch", [], {
+			attributes: { family: "primordial-bindings" },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: holds!,
+			consequent: { block: fast, arguments: [] },
+			alternate: { block: slow, arguments: [] },
+		});
+		const [namespace] = builder.appendInstruction(fast, "loadIntrinsic", [], {
+			attributes: { intrinsic: "Date" },
+		});
+		const [year] = builder.appendInstruction(fast, "createNumber", [], {
+			attributes: { value: 2024 },
+		});
+		const [month] = builder.appendInstruction(fast, "createNumber", [], {
+			attributes: { value: 0 },
+		});
+		const [result] = builder.appendInstruction(
+			fast,
+			"callKnown",
+			[namespace!, number ? year! : value, month!],
+			{
+				attributes: {
+					operation: "Date.UTC",
+					worldAssumptions: {
+						...builtinWorldAssumptions(
+							"Date.UTC",
+							"exact-builtin-proof",
+							false,
+							"guarded",
+						),
+					},
+					knownBuiltinCall: guardedKnownOperationCall(
+						"Date.UTC",
+						builder.functionId,
+						false,
+					) as unknown as CoreAttributeValue,
+				},
+			},
+		);
+		builder.setTerminator(fast, { kind: "return", value: result! });
+		builder.setTerminator(slow, { kind: "return", value });
+		const finished = builder.finish(entry);
+		const verify = () => verifyCoreFunction(program, finished.function);
+		if (number) expect(verify).not.toThrow();
+		else expect(verify).toThrow("Unsupported current-realm guarded operation Date.UTC");
+	});
 	it.each([
 		{ mask: 8, minimum: -0, maximum: 7 },
 		{ mask: 8, minimum: 0, maximum: Infinity },
