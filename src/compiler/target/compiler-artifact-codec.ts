@@ -67,7 +67,10 @@ import {
 } from "./lower-native-string-transforms.ts";
 import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
-import { NATIVE_ENUMERATION_SNAPSHOT_KINDS } from "./native-object-enumeration-snapshot.ts";
+import {
+	NATIVE_ENUMERATION_ENTRY_FIELD_CAPACITY,
+	NATIVE_ENUMERATION_SNAPSHOT_KINDS,
+} from "./native-object-enumeration-snapshot.ts";
 import { validateNativeStackObject } from "./native-stack-object.ts";
 import { validateNativeStringSpan } from "./native-string-span.ts";
 import { NATIVE_VALUE_CONVERSIONS } from "./native-value-transport.ts";
@@ -125,7 +128,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 458;
+export const COMPILER_ARTIFACT_VERSION = 459;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -1317,6 +1320,15 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		w.u8(NATIVE_ENUMERATION_SNAPSHOT_KINDS.indexOf(plan.kind));
 		w.i32Array([...plan.lengthIps]);
 		w.i32Array([...plan.elementIps]);
+		w.u32(plan.entryProjections.length);
+		for (const projection of plan.entryProjections) {
+			w.i32(projection.elementIp);
+			w.u32(projection.fields.length);
+			for (const field of projection.fields) {
+				w.i32(field.ip);
+				w.u8(field.field);
+			}
+		}
 		w.i32Array([...plan.claimedIps]);
 		w.i32Array([...plan.borrowedRegisters]);
 	}
@@ -2085,16 +2097,35 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		claimedIps: r.i32Array(),
 		borrowedRegisters: r.i32Array(),
 	}));
-	const objectEnumerationSnapshots = Array.from({ length: r.count(21) }, () => {
+	const objectEnumerationSnapshots = Array.from({ length: r.count(25) }, () => {
 		const callIp = r.i32();
 		const kind = NATIVE_ENUMERATION_SNAPSHOT_KINDS[r.u8()];
 		if (kind === undefined)
 			throw new RangeError("Invalid native Object enumeration snapshot kind");
+		const lengthIps = r.i32Array(),
+			elementIps = r.i32Array(),
+			projectionCount = r.count(8);
+		if (projectionCount > 1)
+			throw new RangeError("Invalid native enumeration pair projection count");
+		const entryProjections = Array.from({ length: projectionCount }, () => {
+			const elementIp = r.i32(),
+				fieldCount = r.count(5);
+			if (fieldCount === 0 || fieldCount > NATIVE_ENUMERATION_ENTRY_FIELD_CAPACITY)
+				throw new RangeError("Invalid native enumeration pair field count");
+			const fields = Array.from({ length: fieldCount }, () => {
+				const ip = r.i32(),
+					field = r.u8();
+				if (field > 1) throw new RangeError("Invalid native enumeration pair field");
+				return { ip, field: field as 0 | 1 };
+			});
+			return { elementIp, fields };
+		});
 		return {
 			callIp,
 			kind,
-			lengthIps: r.i32Array(),
-			elementIps: r.i32Array(),
+			lengthIps,
+			elementIps,
+			entryProjections,
 			claimedIps: r.i32Array(),
 			borrowedRegisters: r.i32Array(),
 			fallback: "original-instructions" as const,

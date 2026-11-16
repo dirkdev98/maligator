@@ -8537,6 +8537,13 @@ function emitBody(
 			site.claimedIps.map((ip) => [ip, site] as const),
 		),
 	);
+	const enumerationPairFieldIps = new Set(
+		fastPathPlans.objectEnumerationSnapshots.flatMap((plan) =>
+			plan.entryProjections.flatMap((projection) =>
+				projection.fields.map((field) => field.ip),
+			),
+		),
+	);
 
 	const stringTransforms = new Map(
 		fastPathPlans.stringTransforms.map((plan) => [plan.instructionIp, plan]),
@@ -8897,7 +8904,8 @@ function emitBody(
 		expressionIps.has(ip) ||
 		nativeInstructions[ip] !== undefined ||
 		fieldLoads.has(ip) ||
-		objectEnumerationSnapshots.get(ip)?.kind === "entries" ||
+		(objectEnumerationSnapshots.get(ip)?.kind === "entries" &&
+			!enumerationPairFieldIps.has(ip)) ||
 		stackObjectAccesses.has(ip) ||
 		stackObjectInheritedAccesses.has(ip) ||
 		indexedLengthLoopActionByIp.has(ip) ||
@@ -9275,11 +9283,17 @@ function emitBody(
 			lines.push(`MalRegExpLiteralSite __regexp_literal_${site.producerIp} = { 0 };`);
 	for (const plan of fastPathPlans.mapEntries)
 		lines.push(`u32 __map_entry_${plan.getIp} = 0;`);
-	for (const plan of fastPathPlans.objectEnumerationSnapshots)
+	for (const plan of fastPathPlans.objectEnumerationSnapshots) {
 		lines.push(
 			`bool __enumeration_snapshot_${plan.callIp}_active = false;`,
 			`u32 __enumeration_snapshot_${plan.callIp}_value = 0;`,
 		);
+		for (const projection of plan.entryProjections)
+			lines.push(
+				`bool __enumeration_pair_${projection.elementIp}_fast = false;`,
+				`u32 __enumeration_pair_${projection.elementIp}_index = 0;`,
+			);
+	}
 	let lastPublishedPos = -1;
 	let lastPublishedSite = -1;
 	let lastPublishedInactiveRootMask: NativeInactiveRootMask | undefined;
@@ -18892,20 +18906,49 @@ function emitInstruction(
 			instruction.opcode !== "LOAD_PROPERTY"
 		)
 			throw new Error("Invalid enumeration-snapshot consumer");
+		for (const projection of site.entryProjections) {
+			const field = projection.fields.find((field) => field.ip === ip);
+			if (field === undefined) continue;
+			const pair = `__enumeration_pair_${projection.elementIp}`;
+			return [
+				`if (${pair}_fast) {`,
+				`  r${instruction.dst} = ${emission.callValue(instruction.dst, `__gc_slots[${site.elementsSlot} + ${pair}_index * 2 + ${field.field}]`)};`,
+				`} else {`,
+				...ordinary.map((line) => `  ${line}`),
+				`}`,
+			];
+		}
 		const available = `${name}_active${snapshot ? ` && mal_value_is_undefined(${materialized})` : ""}`;
 		const element = instruction.opcode === "LOAD_PROPERTY";
+		const projection = site.entryProjections.find(
+			(projection) => projection.elementIp === ip,
+		);
+		const pair = `__enumeration_pair_${ip}`;
 		const index = `${name}_index_${ip}`;
 		const guard = element
 			? `${available} && ${index} >= 0 && ${index} < ${name}_value && (f64) (u32) ${index} == ${index}`
 			: available;
 		return [
+			...(projection === undefined ? [] : [`${pair}_fast = false;`]),
 			...(element
 				? [
 						`f64 ${index} = mal_ops_is_number(${emission.boxedOperand(instruction.key)}) ? mal_ops_number_as_f64(${emission.boxedOperand(instruction.key)}) : -1;`,
 					]
 				: []),
 			`if (${guard}) {`,
-			`  ${element ? `r${instruction.dst} = ${emission.callValue(instruction.dst, site.kind === "entries" ? `mal_builtin_object_enumeration_entry(vm, ${elements}, (u32) ${index})` : `__gc_slots[${site.elementsSlot} + (u32) ${index}]`)};` : emission.storeNumber(instruction.dst, `(f64) ${name}_value`)}`,
+			...(projection === undefined
+				? [
+						`  ${element ? `r${instruction.dst} = ${emission.callValue(instruction.dst, site.kind === "entries" ? `mal_builtin_object_enumeration_entry(vm, ${elements}, (u32) ${index})` : `__gc_slots[${site.elementsSlot} + (u32) ${index}]`)};` : emission.storeNumber(instruction.dst, `(f64) ${name}_value`)}`,
+					]
+				: [
+						`  if (mal_value_is_string(__gc_slots[${site.elementsSlot} + (u32) ${index} * 2])) {`,
+						`    ${pair}_index = (u32) ${index};`,
+						`    ${pair}_fast = true;`,
+						`    r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+						`  } else {`,
+						`    r${instruction.dst} = ${emission.callValue(instruction.dst, `mal_builtin_object_enumeration_entry(vm, ${elements}, (u32) ${index})`)};`,
+						`  }`,
+					]),
 			...(element && site.kind === "entries" ? [`  ${emission.poll()}`] : []),
 			`} else {`,
 			...(snapshot

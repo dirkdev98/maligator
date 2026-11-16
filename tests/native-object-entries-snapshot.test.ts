@@ -39,6 +39,84 @@ function inspect(image: ReturnType<typeof compile>) {
 }
 
 describe("Object.entries snapshot transport", () => {
+	it.each([
+		"const pair=entries[index];return [pair[0],pair[1],entries.length];",
+		"const pair=entries[+index];observe(record);return [pair[0],pair[1]];",
+		"const pair=entries[0];return [pair['0'],pair['1']];",
+		"let total=0;for(let i=0;i<entries.length;i++){const pair=entries[i];total+=pair[0].length+pair[1];}return total;",
+	])("projects closed key/value observations: %s", (body) => {
+		const image = compile(`const entries=Object.entries(record);observe(record);${body}`);
+		const fn = inspect(image),
+			plan = fn.storage!.objectEnumerationSnapshots[0]!;
+		expect(plan.entryProjections).toHaveLength(1);
+		expect(plan.entryProjections[0]!.fields.map((field) => field.field)).toEqual([0, 1]);
+		for (const field of plan.entryProjections[0]!.fields)
+			expect(plan.claimedIps).toContain(field.ip);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
+
+	it.each([
+		"const pair=entries[index];return pair;",
+		"const pair=entries[index];observe(pair);return pair[0];",
+		"const pair=entries[index];pair[1]=7;return pair[0];",
+		"const pair=entries[index];return [pair[0],pair===entries[0]];",
+		"const pair=entries[index];entries[17];return pair[0];",
+		"const pair=entries[index];return pair[index];",
+		"let previous;for(let i=0;i<2;i++){const pair=entries[i];if(previous)observe(previous[0]);previous=pair;}return previous[0];",
+		"let previous;for(let i=0;i<2;i++){const current=Object.entries(record);const pair=current[i];if(previous)observe(previous[0]);previous=pair;}return previous[0];",
+		"const pair=entries[index];try{observe();}catch(error){return pair[0];}return pair[1];",
+	])("materializes observed pairs and overlapping lifetimes: %s", (body) => {
+		const fn = inspect(
+			compile(`const entries=Object.entries(record);observe(record);${body}`),
+		);
+		expect(
+			fn.storage!.objectEnumerationSnapshots.flatMap((plan) => plan.entryProjections),
+		).toEqual([]);
+	});
+
+	it("rejects forged pair fields and missing projection claims", () => {
+		const image = compile(
+			"const entries=Object.entries(record);observe();const pair=entries[0];return [pair[0],pair[1]];",
+		);
+		const fn = inspect(image),
+			plan = fn.storage!.objectEnumerationSnapshots[0]!,
+			projection = plan.entryProjections[0]!;
+		for (const forged of [
+			{
+				...plan,
+				entryProjections: [{ ...projection, elementIp: plan.callIp }],
+			},
+			{
+				...plan,
+				entryProjections: [
+					{
+						...projection,
+						fields: [{ ...projection.fields[0]!, field: 1 as const }],
+					},
+				],
+			},
+			{
+				...plan,
+				claimedIps: plan.claimedIps.filter((ip) => ip !== projection.fields[0]!.ip),
+			},
+		])
+			expect(() =>
+				serializeCompilerArtifact({
+					...image,
+					native: {
+						...image.native,
+						functions: image.native.functions.with(image.native.functions.indexOf(fn), {
+							...fn,
+							storage: {
+								...fn.storage!,
+								objectEnumerationSnapshots: [forged],
+							},
+						}),
+					},
+				}),
+			).toThrow(/invalid or stale storage plan/);
+	});
+
 	it.each(["index", "0", "99"])(
 		"keeps the sole immediate %s projection with each guarded producer",
 		(index) => {

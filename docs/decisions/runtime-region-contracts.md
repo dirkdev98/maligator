@@ -157,6 +157,11 @@ Array in the same rooted slot. Repeated reads reuse that pair; outer materializa
 reuses every already-observed pair. Pair creation is a collecting boundary even
 when it replaces an indexed property read, so incoming values and the produced
 pair must be published to roots at that boundary.
+Closed key/value reads can use the captured slots directly when a bounded lifetime
+proof excludes pair escape, mutation, identity tests and a second indexed observer.
+The indexed read freezes its numeric index; each later field read reloads its rooted
+slot after intervening collections. A new snapshot or indexed producer expires old
+pair aliases. Cached pairs and every failed admission keep ordinary materialization.
 
 ## Effects and continuation
 

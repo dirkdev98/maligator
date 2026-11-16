@@ -160,6 +160,8 @@ Runtime eval may remove source closure without invalidating authority closure.
       direct iterator or sole immediate `.length` or indexed read retain their loaded
       producer. Delayed and multiple observations already have native snapshots; extend
       guarded transport without losing those consumers or their allocation savings.
+      Closed pair fields already project from rooted snapshot slots; carry that proof
+      across guarded producer joins when the joined pair remains unobserved.
       `Array.from` consumers beyond a sole direct iterator and constructions keep their
       loaded form because entry snapshots and typed array regions consume it. Private
       record columns follow bounded alternative `Array.from` producers, including
@@ -172,11 +174,6 @@ Runtime eval may remove source closure without invalidating authority closure.
       Realm-enabled consumers beyond noncoercing Number predicates need their own
       identity, allocation and error-realm proof. Keep existing captured-callee Math
       kernels unless shared guarding removes enough work to repay copied code.
-
-- [ ] Project closed `Object.entries` pair fields from their rooted snapshot slots.
-      Escaping pairs, identity tests, writes and competing outer-array observations
-      retain materialization. Preserve eager getters, pair caching, snapshot generations
-      and GC roots; require savings on the existing enumeration consumers.
 
 ## Performance diagnosis and admission
 

@@ -2200,6 +2200,19 @@ export function validateNativeStorage(
 					plan.kind === expected.kind &&
 					sameNumbers(plan.lengthIps, expected.lengthIps) &&
 					sameNumbers(plan.elementIps, expected.elementIps) &&
+					plan.entryProjections.length === expected.entryProjections.length &&
+					plan.entryProjections.every((projection, index) => {
+						const selected = expected.entryProjections[index]!;
+						return (
+							projection.elementIp === selected.elementIp &&
+							projection.fields.length === selected.fields.length &&
+							projection.fields.every(
+								(field, index) =>
+									field.ip === selected.fields[index]!.ip &&
+									field.field === selected.fields[index]!.field,
+							)
+						);
+					}) &&
 					plan.fallback === expected.fallback &&
 					sameNumbers(plan.claimedIps, expected.claimedIps) &&
 					sameNumbers(plan.borrowedRegisters, expected.borrowedRegisters)

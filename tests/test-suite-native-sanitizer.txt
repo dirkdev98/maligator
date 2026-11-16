@@ -272,6 +272,7 @@ tests/native/application-images.test.ts
 tests/native/root-compiler.test.ts
 tests/native/object-keys-count-region.test.ts
 tests/native/object-values-snapshot.test.ts
+tests/native/object-entries-pair-fields.test.ts
 tests/native/object-entries-snapshot.test.ts
 tests/native/object-entries-projection.test.ts
 tests/native/object-indexed-enumeration.test.ts
