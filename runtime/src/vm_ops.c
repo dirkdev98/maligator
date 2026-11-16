@@ -1826,25 +1826,24 @@ void mal_op_create_template_object(MalCallable *callable, const MalInstruction *
     );
 }
 
-// Spec HasBinding for a `with` object environment record: HasProperty(O, P)
-// filtered through O[@@unscopables] (a truthy entry hides the binding). A
-// primitive with-expression provides nothing (no wrapper objects yet).
+// HasBinding filters HasProperty through @@unscopables. A failed probe must
+// finish before another environment or a binding's data can be consulted.
 static bool mal_vm_with_has_binding(MalVm *vm, MalValue object, MalKey key) {
     if (!mal_value_is_object(object)) {
         return false;
     }
-    if (!mal_vm_has_property(vm, object, key)) {
-        return false;
-    }
+    bool present = mal_vm_has_property(vm, object, key);
+    if (vm->completion.kind == MAL_COMPLETION_THROW || !present) return false;
 
     MalKey unscopables_key = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_UNSCOPABLES);
-    MalValue unscopables;
-    if (mal_vm_get_property(vm, object, unscopables_key, &unscopables) &&
-        mal_value_is_object(unscopables)) {
-        MalValue blocked;
-        if (mal_vm_get_property(vm, unscopables, key, &blocked) && mal_value_is_truthy(blocked)) {
-            return false;
-        }
+    MalValue unscopables = mal_value_new_undefined();
+    bool has_unscopables = mal_vm_get_property(vm, object, unscopables_key, &unscopables);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
+    if (has_unscopables && mal_value_is_object(unscopables)) {
+        MalValue blocked = mal_value_new_undefined();
+        bool has_blocked = mal_vm_get_property(vm, unscopables, key, &blocked);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
+        if (has_blocked && mal_value_is_truthy(blocked)) return false;
     }
     return true;
 }
@@ -1861,7 +1860,14 @@ MalEnv *mal_vm_op_with_enter(MalVm *vm, MalEnv *parent, MalValue object) {
         );
         return nullptr;
     }
-    return mal_env_new_with_object(vm, parent, object);
+    if (mal_value_is_object(object)) return mal_env_new_with_object(vm, parent, object);
+    // One wrapper owns per-entry writes and is shared by captured with references.
+    MalValue boxed = mal_builtin_object_box_primitive(vm, object);
+    MalRootSpan span;
+    mal_gc_root(&span, &boxed, 1);
+    MalEnv *env = mal_env_new_with_object(vm, parent, boxed);
+    mal_gc_unroot(&span);
+    return env;
 }
 
 void mal_op_with_enter(MalCallable *callable, const MalInstruction *instruction) {
@@ -1893,7 +1899,9 @@ MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index, bool 
                 continue;
             }
             MalValue object = e->slots[0];
-            if (mal_vm_with_has_binding(vm, object, key)) {
+            bool found = mal_vm_with_has_binding(vm, object, key);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_empty();
+            if (found) {
                 // GetBindingValue probes HasProperty again; a binding that has
                 // vanished since reads as undefined in sloppy code and throws in
                 // strict code.
@@ -1932,7 +1940,9 @@ MalValue mal_vm_op_with_resolve_base(MalVm *vm, MalEnv *env, i32 name_string_ind
                 continue;
             }
             MalValue object = e->slots[0];
-            if (mal_vm_with_has_binding(vm, object, key)) {
+            bool found = mal_vm_with_has_binding(vm, object, key);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_empty();
+            if (found) {
                 return object;
             }
         }
@@ -1947,22 +1957,8 @@ void mal_op_with_resolve_base(MalCallable *callable, const MalInstruction *instr
     );
 }
 
-// Shared: assign to a name found on a with-object environment record. Returns
-// whether a binding was found (a miss lets the caller fall back to the static
-// binding). `with` is sloppy-only, so a rejected set silently no-ops.
-//
-// Direct eval's marshaled scope carries a second env slot: a dirty tracker,
-// keyed the same as the scope object, that records real Set evidence for its
-// caller's writeback (rather than the caller inferring "was this assigned"
-// from value equality, which is wrong for NaN and for a same-value Set through
-// an accessor). Ordinary `with` env records have slot_count 1, so this is a
-// no-op for them.
-/*
- * Object environment SetMutableBinding: a rejected Set throws in strict code. A
- * direct eval's scope object (the env that also carries a dirty tracker) holds the
- * caller's immutable bindings as non-writable properties; a non-configurable one is
- * a const, whose assignment throws in sloppy code too.
- */
+// Rejected object-environment writes throw in strict code. Synthetic eval records
+// also preserve immutable caller bindings when a sloppy write is rejected.
 static void mal_vm_with_set_rejected(
     MalVm *vm, const MalEnv *e, MalValue object, MalKey key, bool strict
 ) {
@@ -1976,6 +1972,8 @@ static void mal_vm_with_set_rejected(
     }
 }
 
+// Eval records track actual Sets for writeback; equal values, NaN and accessors
+// cannot reliably show whether a write occurred.
 bool mal_vm_op_with_set(
     MalVm *vm, MalEnv *env, i32 name_string_index, MalValue value, bool strict
 ) {
@@ -1988,7 +1986,9 @@ bool mal_vm_op_with_set(
                 continue;
             }
             MalValue object = e->slots[0];
-            if (mal_vm_with_has_binding(vm, object, key)) {
+            bool found = mal_vm_with_has_binding(vm, object, key);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
+            if (found) {
                 if (!mal_vm_set_property(vm, object, key, value, object)) {
                     if (vm->completion.kind != MAL_COMPLETION_THROW) {
                         mal_vm_with_set_rejected(vm, e, object, key, strict);

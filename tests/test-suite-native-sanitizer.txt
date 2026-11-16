@@ -354,3 +354,4 @@ tests/native/known-reentry.test.ts
 tests/native/open-const-captures.test.ts
 tests/native/object-attributed-data.test.ts
 tests/native/string-split-trim.test.ts
+tests/native/with-environments.test.ts

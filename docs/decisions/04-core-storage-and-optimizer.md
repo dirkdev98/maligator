@@ -237,6 +237,11 @@ functions, cells, module bindings and private fields some direct eval can see.
 Private field facts also need the field's key to stay inside private element
 operations; a key marshaled into a scope object gives its field unknown values.
 
+An actual `with` environment stores the object produced by ToObject once at entry.
+Primitive wrappers retain per-entry writes and remain the receiver for calls and
+escaped closures. Failed HasProperty or unscopables probes terminate resolution
+before another environment, a value read or an assignment can run.
+
 In a CommonJS module the bindings in scope include the wrapper's `module`,
 `exports`, `require`, `__filename` and `__dirname`. The loader creates `module` and
 `exports` and keeps them in its registry, so what a module stores on them is

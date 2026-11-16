@@ -551,10 +551,11 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Complete direct-eval arguments and parameter-environment behavior. Preserve
       mapped parameters, parameter expressions, shadowing, and strict-mode differences.
 
-- [ ] Resolve the caller's `with` objects in direct eval code. Inside
-      `with (o) { eval("m()") }` the eval code throws a ReferenceError for `m`: the
-      marshaled caller scope carries the caller's bindings but not its with-object
-      environments, so neither reads nor WithBaseObject calls reach `o`.
+- [ ] Transport the caller's actual `with` records into direct eval in scope order.
+      Inside `with (o) { eval("m()") }`, the declarative bridge omits `o`, so neither
+      reads nor WithBaseObject calls reach it. Preserve the entry's single boxed
+      object, abrupt lookup, unscopables and receiver identity; interleave nearer
+      lexical groups rather than putting all with objects ahead of one flat bridge.
 
 - [ ] Preserve ordered variable records across nested direct eval. Ordinary caller and
       imported bindings retain live accessors through inherited declarative bridges;
