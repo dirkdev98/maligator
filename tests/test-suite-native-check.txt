@@ -43,6 +43,7 @@ tests/native/gc-raw-realloc.test.ts
 tests/native/gc-remembered-scan.test.ts
 tests/native/gc-lifecycle.test.ts
 tests/native/global-property-cache.test.ts
+tests/native/primitive-load-cache.test.ts
 tests/native/literal-constants.test.ts
 tests/native/literal-materialization.test.ts
 tests/native/native-ssa-storage.test.ts

@@ -3062,6 +3062,16 @@ mal_vm_property_try_load_static_remaining(
     MalVm *vm, MalValue receiver, const MalObject *object,
     MalInlineCache *ic
 ) {
+    if (ic->mode == MAL_IC_MODE_PRIMITIVE_VALUE && mal_vm_watched_row_current(vm, ic->watched_epoch) &&
+        mal_vm_primitive_method_kind(receiver) == ic->prim_kind &&
+#if MAL_REALMS
+        ic->realm == vm->current_realm &&
+#endif
+        ic->prototype == (const MalObject *) mal_value_to_heap(
+            vm->intrinsics[mal_vm_primitive_method_proto_slot(ic->prim_kind)])) {
+        mal_perf_ic_load_primitive_hit();
+        return (MalStaticPropertyProbeResult) {.hit = true, .value = ic->value};
+    }
     // The inline probe admits only ordinary objects. Functions, classes and builtin
     // receivers keep named own fields under the same shape proof, and reads such as
     // a module's `createDebug.namespaces` cost more behind the rows below than the read.
@@ -3090,18 +3100,6 @@ mal_vm_property_try_load_static_remaining(
     // Option bags read many absent keys; each read otherwise passes every row below.
     if (ic->mode == MAL_IC_MODE_MISSING) {
         return mal_vm_property_try_load_static_missing(vm, receiver, object, ic);
-    }
-    // Primitive methods, such as a scanner's `text.charCodeAt`, and alternate shapes are
-    // the next most common rows, and neither needs a register the front cannot spare.
-    if (ic->mode == MAL_IC_MODE_PRIMITIVE_VALUE && mal_vm_watched_row_current(vm, ic->watched_epoch) &&
-        mal_vm_primitive_method_kind(receiver) == ic->prim_kind &&
-#if MAL_REALMS
-        ic->realm == vm->current_realm &&
-#endif
-        ic->prototype == (const MalObject *) mal_value_to_heap(
-            vm->intrinsics[mal_vm_primitive_method_proto_slot(ic->prim_kind)])) {
-        mal_perf_ic_load_primitive_hit();
-        return (MalStaticPropertyProbeResult) {.hit = true, .value = ic->value};
     }
     MalValue value;
     if (object != nullptr && mal_vm_object_try_load_polymorphic(object, ic->key, ic, &value)) {

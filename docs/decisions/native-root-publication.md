@@ -22,6 +22,9 @@ length, and VM-wide cache guards. That helper cannot collect or reenter
 JavaScript: its caller may still hold private values and a borrowed receiver
 pointer. Root publication belongs after all those probes
 fail, immediately before the generic property operation.
+Primitive method rows precede the object-only cases so a primitive receiver need
+not test unrelated cache modes. They still validate the watched epoch, primitive
+kind, executing realm and intrinsic prototype.
 The outlined helper returns hit status and value together. It does not receive
 the caller's result address, so successful inline probes need not spill their
 result solely to provide storage for that helper. A declined probe leaves the

@@ -317,19 +317,11 @@ contracts or investigates costs still visible after the string follow-ups.
       fallbacks and 44 dictionary-table lookups, three quarters of them misses.
       `run --profile=compiler` on the benchmark lists the leading sites.
 
-- [ ] Cut the per-call cost of common string builtins on unproven receivers. Against
-      Node 26 on short header strings: `indexOf` 2.6x, `startsWith` 2.2x, `replace` 2.3x
-      and `includes` 1.8x. Guarded builtin calls for the four search methods (like
-      `trim`) did not help and slowed UTF-16 loops by 7-9%: a profile puts 35-47% in
-      the search kernel and 10% in the primitive-method lookup
-      (`mal_vm_property_try_load_static_remaining`), while the generic call itself is
-      cheap. Also measured: `RegExp#test` on a reused RegExp 1.7x (the
-      canonical receiver check and the matcher's FFI call), `slice().trim()` 3.4x,
-      template literals with numbers 1.1x (each number still allocates a string, and
-      joining the parts is about half of the template's cost), escaping closures
-      capturing a loop variable 2x, `for...in` over small objects 3.5x (the generic
-      array-iterator protocol and a snapshot check per key) and `Object.entries` 2x (one
-      pair array per entry).
+- [ ] Bound remaining String and traversal costs before extending specialization:
+      the reused-RegExp receiver check and matcher call, trimmed slices, numeric
+      template-string conversion and joining, escaping loop-capture owners, and
+      generic `for...in` and entries-pair iteration. Use existing consumers and preserve
+      protocol observation, identity and coercion order.
 
 - [ ] Expose certified whole-sort kernels through one bounded finite-target comparator
       consumer. Binding-held singleton and forwarded callbacks already have compiled

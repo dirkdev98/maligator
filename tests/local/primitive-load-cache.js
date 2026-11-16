@@ -79,6 +79,51 @@ for (let i = 0; i < 300; i++) {
 	);
 }
 
+const collect = globalThis.__mal_collect_garbage ?? globalThis.gc ?? (() => {});
+const ownMethod = function () {
+	return "own";
+};
+const boxed = Object("cache");
+boxed.charCodeAt = ownMethod;
+let mixedGets = 0;
+const getterReceiver = {
+	get charCodeAt() {
+		mixedGets++;
+		collect();
+		return ownMethod;
+	},
+};
+let mixedProxyGets = 0;
+const proxyReceiver = new Proxy(
+	{ charCodeAt: ownMethod },
+	{
+		get(target, key, receiver) {
+			mixedProxyGets++;
+			return Reflect.get(target, key, receiver);
+		},
+	},
+);
+const mixed = [
+	["cache", originalCharCodeAt],
+	[boxed, ownMethod],
+	[7, undefined],
+	[getterReceiver, ownMethod],
+	[true, undefined],
+	[proxyReceiver, ownMethod],
+	[Symbol("receiver"), undefined],
+	[7n, undefined],
+];
+const rounds = 40;
+for (let round = 0; round < rounds; round++)
+	for (const [receiver, expected] of mixed)
+		ok("one site observes each receiver kind", loadStringMethod(receiver) === expected);
+ok("mixed accessor runs per read", mixedGets === rounds);
+ok("mixed proxy runs per read", mixedProxyGets === rounds);
+ok(
+	"primitive row recovers after mixed receivers",
+	loadStringMethod("cache") === originalCharCodeAt,
+);
+
 let numberGets = 0;
 Object.defineProperty(Number.prototype, "toFixed", {
 	configurable: true,
