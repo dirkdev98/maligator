@@ -1078,60 +1078,73 @@ export function buildModuleGraph(
 		options.entrySource,
 	);
 	let sourceBuiltinLookup = false;
-	if (nodeEnabled)
-		for (const record of modules.values()) {
-			if (record.host !== undefined || SOURCE_HOST_MODULES.has(record.path)) continue;
-			if (
-				record.dependencies.some(
-					(dependency) =>
-						dependency.resolvedPath === "node:module" ||
-						dependency.resolvedPath === "node:process" ||
-						(dependency.specifier === null &&
-							(dependency.kind === "require" || dependency.kind === "dynamic")),
+	const scannedSourceModules = new Set<string>();
+	const loadRuntimeSourceProviders = (): boolean => {
+		if (sourceBuiltinLookup) return false;
+		const count = modules.size;
+		if (nodeEnabled)
+			for (const record of modules.values()) {
+				if (
+					record.host !== undefined ||
+					SOURCE_HOST_MODULES.has(record.path) ||
+					scannedSourceModules.has(record.path)
 				)
-			) {
-				sourceBuiltinLookup = true;
-				break;
-			}
-			traverseEstree([record.parsed.ast], (node, { parent, key }) => {
-				if (sourceBuiltinLookup || node.type !== "Identifier") return;
-				if (parent?.type === "MemberExpression" && key === "property" && !parent.computed)
-					return;
-				if (node.name === "process" || node.name === "global" || node.name === "eval") {
-					sourceBuiltinLookup = true;
-				} else if (node.name === "require") {
-					const argument =
-						parent?.type === "CallExpression" && key === "callee"
-							? parent.arguments[0]
-							: undefined;
-					if (argument?.type !== "Literal" || typeof argument.value !== "string")
-						sourceBuiltinLookup = true;
-				} else if (node.name === "globalThis") {
-					if (parent?.type !== "MemberExpression" || key !== "object")
-						sourceBuiltinLookup = true;
-					else if (!parent.computed && parent.property.type === "Identifier") {
-						if (parent.property.name === "process" || parent.property.name === "global")
-							sourceBuiltinLookup = true;
-					} else if (
-						parent.property.type !== "Literal" ||
-						typeof parent.property.value !== "string" ||
-						parent.property.value === "process" ||
-						parent.property.value === "global"
+					continue;
+				scannedSourceModules.add(record.path);
+				if (
+					record.dependencies.some(
+						(dependency) =>
+							dependency.resolvedPath === "node:module" ||
+							dependency.resolvedPath === "node:process" ||
+							(dependency.specifier === null &&
+								(dependency.kind === "require" || dependency.kind === "dynamic")),
 					)
-						sourceBuiltinLookup = true;
+				) {
+					sourceBuiltinLookup = true;
+					break;
 				}
-			});
-			if (sourceBuiltinLookup) break;
-		}
-	if (sourceBuiltinLookup)
-		for (const id of SOURCE_HOST_MODULES.keys()) {
-			if (modules.has(id)) continue;
-			const source = virtualModule(id)!;
-			load(id, source.goal ?? "module", source.source, true);
-		}
-	const sourceBuiltinProviders = nodeEnabled
-		? [...SOURCE_HOST_MODULES.keys()].filter((id) => modules.has(id))
-		: [];
+				traverseEstree([record.parsed.ast], (node, { parent, key }) => {
+					if (sourceBuiltinLookup || node.type !== "Identifier") return;
+					if (
+						parent?.type === "MemberExpression" &&
+						key === "property" &&
+						!parent.computed
+					)
+						return;
+					if (node.name === "process" || node.name === "global" || node.name === "eval") {
+						sourceBuiltinLookup = true;
+					} else if (node.name === "require") {
+						const argument =
+							parent?.type === "CallExpression" && key === "callee"
+								? parent.arguments[0]
+								: undefined;
+						if (argument?.type !== "Literal" || typeof argument.value !== "string")
+							sourceBuiltinLookup = true;
+					} else if (node.name === "globalThis") {
+						if (parent?.type !== "MemberExpression" || key !== "object")
+							sourceBuiltinLookup = true;
+						else if (!parent.computed && parent.property.type === "Identifier") {
+							if (parent.property.name === "process" || parent.property.name === "global")
+								sourceBuiltinLookup = true;
+						} else if (
+							parent.property.type !== "Literal" ||
+							typeof parent.property.value !== "string" ||
+							parent.property.value === "process" ||
+							parent.property.value === "global"
+						)
+							sourceBuiltinLookup = true;
+					}
+				});
+				if (sourceBuiltinLookup) break;
+			}
+		if (sourceBuiltinLookup)
+			for (const id of SOURCE_HOST_MODULES.keys()) {
+				if (modules.has(id)) continue;
+				const source = virtualModule(id)!;
+				load(id, source.goal ?? "module", source.source, true);
+			}
+		return modules.size !== count;
+	};
 	for (const root of options.requiredRoots ?? []) {
 		const rootPath = path.resolve(root);
 		const goal = detectDependencyGoal(rootPath, ctx);
@@ -1204,9 +1217,13 @@ export function buildModuleGraph(
 			);
 			loaded = true;
 		}
+		if (loadRuntimeSourceProviders()) loaded = true;
 		if (!loaded) break;
 	}
 
+	const sourceBuiltinProviders = nodeEnabled
+		? [...SOURCE_HOST_MODULES.keys()].filter((id) => modules.has(id))
+		: [];
 	for (const modulePath of staticModuleClosure(modules, entry)) {
 		const loadError = modules.get(modulePath)?.loadError;
 		if (loadError !== undefined) throw loadError;

@@ -97,7 +97,7 @@ import {
 import type { WorkerImageArtifact } from "./worker-image-cache.ts";
 
 const BUILD_FRONTEND_CACHE_SCHEMA = 12;
-const BUILD_FRONTEND_PIPELINE_VERSION = 6;
+const BUILD_FRONTEND_PIPELINE_VERSION = 7;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
 	"build-frontend",

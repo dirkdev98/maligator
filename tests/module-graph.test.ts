@@ -74,6 +74,33 @@ test("retains runtime source providers without adding eager evaluation edges", (
 	).toBe(false);
 });
 
+test.each(["worker", "dynamic", "required"] as const)(
+	"discovers runtime source providers from a %s root before sealing its owner",
+	(kind) => {
+		const entry = path.join(root, `provider-${kind}-owner.mjs`);
+		const child = path.join(
+			root,
+			`provider-${kind}-child.${kind === "required" ? "cjs" : "mjs"}`,
+		);
+		write(path.basename(child), "globalThis.load = id => process.getBuiltinModule(id);");
+		write(
+			path.basename(entry),
+			kind === "worker"
+				? `import { Worker, createWorkerUrl } from "maligator:workers"; globalThis.worker = new Worker(createWorkerUrl(${JSON.stringify(`./${path.basename(child)}`)}, import.meta.url));`
+				: "export const value = 1;",
+		);
+		const graph = buildModuleGraph(entry, {
+			buildConfig: nodeOn,
+			stripTypes: stripCompactTypes,
+			...(kind === "dynamic" ? { dynamicImportCandidates: [child] } : {}),
+			...(kind === "required" ? { requiredRoots: [child] } : {}),
+		});
+		expect(graph.modules.has(child)).toBe(true);
+		expect(graph.sourceBuiltinProviders).toContain("node:test");
+		expect(graph.evaluationOrder).not.toContain("node:test");
+	},
+);
+
 test.each([".", ".."])(
 	"resolves require(%s) as a relative directory without package export restrictions",
 	(specifier) => {

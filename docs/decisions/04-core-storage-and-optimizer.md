@@ -283,6 +283,8 @@ directive. The Node globals prelude preserves the source's directive prologue.
 Retaining a source builtin for runtime loading does not add an eager evaluation edge.
 Its provider manifest retains the synchronous graph evaluator and initializes native imports
 on demand. Discovery uses the same builtin catalog, including prefix-only names.
+Provider and worker discovery converge before sealing the owner's inputs, including
+lookups introduced by required roots and dynamic import candidates.
 The loader creates the evaluator in its callee realm and caches the exports in that
 realm; dynamic imports reuse the graph's real module namespace.
 
