@@ -560,8 +560,13 @@ contracts or investigates costs still visible after the string follow-ups.
       marshaled caller scope carries the caller's bindings but not its with-object
       environments, so neither reads nor WithBaseObject calls reach `o`.
 
-- [ ] A direct eval inside eval code cannot see the compiled caller's bindings:
-      `eval("eval('x + y')")` throws a ReferenceError in ES modules and CommonJS.
+- [ ] Preserve ordered variable records across nested direct eval. Ordinary caller and
+      imported bindings retain live accessors through inherited declarative bridges;
+      eval-created vars still need live deletion rather than copied bridge values.
+      Place persistent vars at their caller variable-environment boundary so a nearer
+      lexical binding wins, including lexical scopes inside and outside actual `with`
+      records. Route new `var` initializers through reference resolution while keeping
+      declaration instantiation and function declarations at the variable environment.
 - [ ] A static `require("x")` ignores a reassigned `require` binding and loads the real
       module, where Node calls the replacement.
 

@@ -13,6 +13,7 @@ function observe(fn) {
 const results = [];
 results.push(observe(() => eval("0")));
 results.push(observe(() => eval("typeof unfinished")));
+results.push(observe(() => eval('eval("typeof unfinished")')));
 export let pending = 7;
 results.push(observe(() => eval("unfinished")));
 results.push(observe(() => eval("[counter, setCounter(3), counter]")));
@@ -32,4 +33,11 @@ function first(value) {
 	return eval("arguments[0]");
 }
 results.push(observe(() => first(11)));
+results.push(observe(() => eval("eval('counter')")));
+const nestedReader = observe(() => eval("eval('() => counter')"));
+setCounter(13);
+results.push(observe(() => nestedReader()));
+results.push(observe(() => eval("eval('receiver() === undefined')")));
+results.push(observe(() => eval("eval('counter = 8')")));
+results.push(observe(() => eval("eval('source.counter')")));
 console.log(JSON.stringify(results));

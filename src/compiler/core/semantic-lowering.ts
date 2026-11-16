@@ -14995,14 +14995,18 @@ function compileDirectEvalCall(
 	const scopeObject = nextCoreVariable(fn);
 	cursor.block.emitter.emit({ type: "createObject", registers: [scopeObject] });
 	const nullPrototype = nextCoreVariable(fn);
-	cursor.block.emitter.emit(
-		{ type: "createNull", registers: [nullPrototype] },
-		{
-			type: "setPrototype",
-			registers: [scopeObject, nullPrototype],
-			literal: false,
-		},
-	);
+	cursor.block.emitter.emit({ type: "createNull", registers: [nullPrototype] });
+	// Nested eval cannot enumerate the compiled caller's scopes. Its new lexical
+	// accessors shadow the inherited bridge while older bindings keep live storage.
+	const scopePrototype =
+		program.evalDirect && program.directEvalScopeObjectBinding !== undefined
+			? loadCapturedBinding(program, fn, cursor, program.directEvalScopeObjectBinding)
+			: nullPrototype;
+	cursor.block.emitter.emit({
+		type: "setPrototype",
+		registers: [scopeObject, scopePrototype],
+		literal: false,
+	});
 	const dirtyTracker = nextCoreVariable(fn);
 	cursor.block.emitter.emit(
 		{ type: "createObject", registers: [dirtyTracker] },

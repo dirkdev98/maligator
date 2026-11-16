@@ -54,6 +54,39 @@ function argumentBinding(first) {
 	} catch {}
 	return [followsCaller, followsEval, arguments.marker, original[0], first];
 }
+function nestedDeclarativeBindings() {
+	let value = 1;
+	const fixed = { marker: 7 };
+	const thrown = {};
+	const receiver = function () {
+		"use strict";
+		return this;
+	};
+	const result = [];
+	result.push(eval("eval('value + fixed.marker')"));
+	let sameThrow = false;
+	try {
+		eval("eval('value = 2; throw thrown')");
+	} catch (error) {
+		sameThrow = error === thrown;
+	}
+	result.push(sameThrow, value);
+	const read = eval("eval('() => value')");
+	value = { marker: 9 };
+	result.push(read() === value);
+	const write = eval("eval('next => value = next')");
+	write(fixed);
+	result.push(value === fixed);
+	result.push(observe(() => eval("eval('typeof later')")));
+	let later = 5;
+	result.push(eval("eval('later')"));
+	result.push(observe(() => eval("eval('fixed = 8')")));
+	result.push(eval("let value = 19; eval('value')"));
+	result.push(eval("eval('receiver() === undefined')"));
+	result.push(eval("eval('delete value')"));
+	result.push(eval(`eval('eval("later")')`));
+	return result;
+}
 const sharedState = shared();
 sharedState.write({ marker: 9 });
 const reads = [];
@@ -72,5 +105,6 @@ console.log(
 		varReads.map((read) => read()),
 		named(),
 		argumentBinding(7),
+		nestedDeclarativeBindings(),
 	]),
 );

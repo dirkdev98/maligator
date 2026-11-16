@@ -224,12 +224,15 @@ runtime creates itself keep opaque parameters.
 Code that `engine.eval: true` compiles at run time is one more opaque caller when it
 can only run as global code: indirect eval and the function constructors reach the
 global object, the values the program hands them and what those reach, which is
-what host code can reach. A strict direct eval adds the bindings in scope at its
-call. Lowering copies each into a fresh scope object, passes that object to an
-opaque call, and stores what the call leaves there back into each mutable binding,
-so Core sees every read and write the eval can make as ordinary loads, an escaping
-argument and stores. Its own `var`s stay in its own variable environment. Proofs
-that enumerate readers and writers through Core therefore exclude exactly the
+what host code can reach. Direct eval exposes declarative bindings through accessors
+that share caller storage. Creating the bridge does not read uninitialized bindings;
+each access checks TDZ and immutable writes at the binding. Imported accessors follow
+the exporter rather than a copied value. A nested eval inherits the previous bridge
+under its own lexical accessors, preserving shadowing and escaped closure identity.
+These synthetic declarative bridges give calls an undefined receiver. Their accessors
+escape through the opaque runtime call, so Core must retain the reads and writes that
+eval can make. Strict eval keeps its own `var`s in its own variable environment.
+Proofs that enumerate readers and writers through Core therefore exclude the
 functions, cells, module bindings and private fields some direct eval can see.
 Private field facts also need the field's key to stay inside private element
 operations; a key marshaled into a scope object gives its field unknown values.
