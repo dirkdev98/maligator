@@ -1545,9 +1545,11 @@ Integer parsing also checks a present radix for Number type; omitted or literal
 undefined radix uses the default. Their generic known-call transport retains the
 ordinary loaded fallback. Native String parsing can use temporary native storage,
 but cannot collect, reenter JavaScript or create a realm-owned result or error.
-Ordinary `Number` conversion uses the same String proof, including a String range
-whose global callee needs a runtime identity proof. Its native consumer
-calls StringToNumber directly. Construction keeps its wrapper and prototype protocol.
+String projection candidates retain their existing consumers and selected-callee guards.
+A type predicate introduced before span planning would materialize those values.
+Remaining ordinary `Number` calls use the late String proof and call StringToNumber
+directly, including ranges whose other uses require materialization. Construction keeps
+its wrapper and prototype protocol.
 Clock reads retain their host effect even when their result is unused. Their
 proof belongs to the executing function's realm, whose globals and intrinsics the call
 boundary installs. Ordinary loaded calls remain as the fallback, and reentry blocks later

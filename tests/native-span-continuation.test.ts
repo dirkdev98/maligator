@@ -14,7 +14,11 @@ import { selectNativeSpanContinuations } from "../src/compiler/target/native-spa
 import { nativeSpanMethodCall } from "../src/compiler/target/native-string-span.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
-function compile(body: string, primordials: "mutable" | "locked" = "mutable") {
+function compile(
+	body: string,
+	primordials: "mutable" | "locked" = "mutable",
+	realms = false,
+) {
 	return lowerNativeStorage(
 		compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
@@ -23,7 +27,7 @@ function compile(body: string, primordials: "mutable" | "locked" = "mutable") {
 			),
 			{
 				facts: compilerProgramFactsFromConfig(
-					resolveBuildConfig({ engine: { primordials } }),
+					resolveBuildConfig({ engine: { primordials, realms } }),
 				),
 			},
 		),
@@ -33,6 +37,48 @@ function compile(body: string, primordials: "mutable" | "locked" = "mutable") {
 const body = `const part=source.split('|')[1]; const size=part.length;
  if(part==='if')return size+10; if(escape)return observe(part); return size;`;
 describe("span continuations from split projections", () => {
+	it.each(
+		(
+			[
+				["range", "const part=source.slice(1,-1); const alias=part;"],
+				["split", "const part=source.split('|')[1]; const alias=part;"],
+				[
+					"regexp",
+					"const match=observe.exec(source); if(match===null)return -1; const part=match[1]; if(part===undefined)return 0; const alias=part;",
+				],
+			] as const
+		).flatMap(([family, prefix]) =>
+			(
+				[
+					["Number(alias)", "number"],
+					["Number.parseFloat(alias)", "parseFloat"],
+					["Number.parseInt(alias,10)", "parseInt"],
+					["Number.parseInt('42',alias)", "materialize"],
+					["Number(alias,observe())", "materialize"],
+					["Date.parse(alias)", "materialize"],
+				] as const
+			).map(([conversion, kind]) => ({ family, prefix, conversion, kind })),
+		),
+	)(
+		"preserves $family ownership through realm-enabled $conversion",
+		({ family, prefix, conversion, kind }) => {
+			const image = compile(
+				`${prefix}const size=alias.length;return size+${conversion};`,
+				"mutable",
+				true,
+			);
+			const plans = image.native.functions.flatMap((native) => [
+				...native.specializations.filter((plan) => plan.kind === "string-span"),
+				...(native.storage?.spanContinuations ?? []),
+			]);
+			const plan = plans.find(
+				(plan) => ("sourceKind" in plan ? plan.sourceKind : "range") === family,
+			);
+			expect(plan?.consumers.map((consumer) => consumer.kind)).toEqual(
+				expect.arrayContaining(["length", kind]),
+			);
+		},
+	);
 	it.each(["mutable", "locked"] as const)(
 		"replaces within retained split, capture and nested ranges under %s primordials",
 		(mode) => {

@@ -3941,7 +3941,8 @@ function iteratorEntryPairVirtualizationCandidates(
 	return candidates;
 }
 
-function stringSplitProjectionCandidates(
+/** Find split results whose private element reads can stay projected. */
+export function coreStringSplitProjectionCandidates(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
@@ -4120,7 +4121,8 @@ function stringSplitProjectionCandidates(
 	return candidates;
 }
 
-function stringSpanCandidates(
+/** Find ranges whose local consumers permit delayed String materialization. */
+export function coreStringSpanCandidates(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
@@ -4368,7 +4370,8 @@ function stringSpanCandidates(
 	return candidates;
 }
 
-function regexpExecProjectionCandidates(
+/** Find RegExp results whose closed local observations can stay projected. */
+export function coreRegExpExecProjectionCandidates(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
@@ -5142,13 +5145,13 @@ function discoverCandidates(
 			? builtinCollectionCallCandidates(program, fn, control, roots, index, valueClasses)
 			: []),
 		...(requested("string-split-projection")
-			? stringSplitProjectionCandidates(program, fn, control, roots, index)
+			? coreStringSplitProjectionCandidates(program, fn, control, roots, index)
 			: []),
 		...(requested("string-span")
-			? stringSpanCandidates(program, fn, control, roots, index)
+			? coreStringSpanCandidates(program, fn, control, roots, index)
 			: []),
 		...(requested("regexp-exec-projection")
-			? regexpExecProjectionCandidates(program, fn, control, roots, index)
+			? coreRegExpExecProjectionCandidates(program, fn, control, roots, index)
 			: []),
 		...(requested("regexp-iterator-projection")
 			? regexpIteratorProjectionCandidates(fn, control, roots, index)

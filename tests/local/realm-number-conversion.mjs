@@ -10,6 +10,20 @@ function span(value) {
 function extra(value, prepare) {
 	return Number(value, prepare());
 }
+function splitProjection(value) {
+	const part = value.split("|")[1];
+	return part.length + Number(part);
+}
+function captureProjection(value) {
+	const match = /\|([^|]*)\|/.exec(value);
+	if (match === null) return -1;
+	const part = match[1];
+	return part.length + Number(part);
+}
+function projectedExtra(value, prepare) {
+	const part = value.slice(1, -1);
+	return part.length + Number(part, prepare());
+}
 function describe(value) {
 	if (value !== value) return "NaN";
 	if (Object.is(value, -0)) return "-0";
@@ -24,7 +38,15 @@ function caught(run) {
 		return error.name;
 	}
 }
-Object.assign(globalThis, { convert, property, span, extra });
+Object.assign(globalThis, {
+	convert,
+	property,
+	span,
+	extra,
+	splitProjection,
+	captureProjection,
+	projectedExtra,
+});
 const output = [];
 const mode = process.env.MAL_TEST_CASE ?? "values";
 if (mode === "values") {
@@ -151,6 +173,19 @@ if (mode === "values") {
 		}),
 	);
 	output.push(Number("42.5"), events);
+} else if (mode === "projections") {
+	output.push(splitProjection("a|17|b"), captureProjection("a|42|b"));
+	output.push(
+		caught(() => splitProjection("missing")),
+		captureProjection("missing"),
+	);
+	output.push(projectedExtra("[23]", () => {}));
+	output.push(
+		projectedExtra("[23]", () => {
+			globalThis.Number = () => 71;
+		}),
+	);
+	output.push(splitProjection("a|17|b"));
 } else if (mode === "construction") {
 	const first = new Number("42.5"),
 		second = new Number("42.5");

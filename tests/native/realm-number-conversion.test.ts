@@ -28,7 +28,7 @@ beforeAll(() => {
 						primordials: "mutable",
 						realms,
 						eval: false,
-						regexp: false,
+						regexp: true,
 						temporal: false,
 						intl: { enabled: false },
 					},
@@ -44,6 +44,7 @@ it.each([
 	["retains a replacement selected before argument restoration", "restore"],
 	["preserves Number selection through slice reentry", "slice-mutation"],
 	["finishes ignored arguments before dispatch and conversion", "extras"],
+	["preserves numeric conversion from projected String sources", "projections"],
 	["preserves wrapper construction, prototypes and local bindings", "construction"],
 ])("%s", (_label, mode) => {
 	const env = { MAL_TEST_CASE: mode };

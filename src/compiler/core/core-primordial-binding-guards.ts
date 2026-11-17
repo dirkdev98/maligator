@@ -43,6 +43,12 @@ import {
 	coreValueControlFlowUseMask,
 } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
+import {
+	CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
+	coreRegExpExecProjectionCandidates,
+	coreStringSplitProjectionCandidates,
+	coreStringSpanCandidates,
+} from "./core-ir-provenance.ts";
 import { CORE_STRING_SPAN_RANGE_METHODS } from "./core-ir-regions.ts";
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
@@ -1321,7 +1327,7 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 			return world.primordialPolicy === "mutable";
 		},
 	},
-	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
+	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS, CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg"],
 	// The twin copies instructions, whose new values need fresh fact analyses.
 	changes: { cfg: true, calls: true, facts: true, representations: false },
@@ -1335,6 +1341,69 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 		let controls: Uint8Array | undefined;
 		const controlUse = (value: CoreValueId) =>
 			(controls ??= coreValueControlFlowUseMask(fn))[value] !== 0;
+		let spanProjection:
+			| {
+					readonly roots: ReadonlyMap<CoreValueId, CoreValueId>;
+					readonly consumers: Set<CoreInstructionId>;
+					readonly sources: Set<CoreValueId>;
+			  }
+			| undefined;
+		const projectedStringConsumer = (
+			call: CoreInstructionId,
+			values: ReadonlyArray<CoreValueId>,
+		): boolean => {
+			if (fn.instructionAttributes(call)[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true)
+				return false;
+			if (spanProjection === undefined) {
+				const bundle = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS);
+				const consumers = new Set<CoreInstructionId>();
+				const sources = new Set<CoreValueId>();
+				const addSource = (instruction: CoreInstructionId): void => {
+					const source = fn.kernel.resultAt(
+						fn.kernel.instructionResultStart(instruction),
+					);
+					sources.add(bundle.roots.get(source) ?? source);
+				};
+				// A late type predicate would materialize an otherwise projected range.
+				for (const candidate of coreStringSpanCandidates(
+					program,
+					fn,
+					bundle.control,
+					bundle.roots,
+					bundle.index,
+				))
+					for (const consumer of candidate.consumers) consumers.add(consumer.instruction);
+				for (const candidate of coreStringSplitProjectionCandidates(
+					program,
+					fn,
+					bundle.control,
+					bundle.roots,
+					bundle.index,
+				))
+					for (const load of candidate.loads)
+						if (load.kind === "element") addSource(load.instruction);
+				for (const candidate of coreRegExpExecProjectionCandidates(
+					program,
+					fn,
+					bundle.control,
+					bundle.roots,
+					bundle.index,
+				))
+					for (const load of candidate.loads)
+						if (
+							(load.selector.kind === "capture" ||
+								load.selector.kind === "named-capture") &&
+							load.consumer === undefined
+						)
+							addSource(load.instruction);
+				spanProjection = { roots: bundle.roots, consumers, sources };
+			}
+			const { consumers, sources, roots } = spanProjection;
+			return (
+				consumers.has(call) ||
+				values.some((value) => sources.has(roots.get(value) ?? value))
+			);
+		};
 		const sitesByInstruction = new Map<CoreInstructionId, Site>();
 		const lateStringConversions: Array<Site> = [];
 		const blocks = new Set<CoreBlockId>();
@@ -1359,6 +1428,13 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 				fn.instructionAttributes(instruction)[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] !==
 					true
 			) {
+				if (
+					projectedStringConsumer(
+						site.call,
+						operands(fn, site.call).slice(2, site.operation === "parseInt" ? 4 : 3),
+					)
+				)
+					continue;
 				lateStringConversions.push(site);
 				continue;
 			}
