@@ -1295,12 +1295,12 @@ function sourceBuiltinState(
 		add(file.path, "error", "", getModuleEvaluationErrorSlot(program, file.path));
 		add(file.path, "record", "", getModuleEvaluationRecordSlot(program, file.path));
 	}
-	return [...state.values()].sort(
-		(left, right) =>
-			left.module.localeCompare(right.module) ||
-			left.kind.localeCompare(right.kind) ||
-			left.name.localeCompare(right.name),
-	);
+	// Hosts with and without Intl must serialize provider cells in the same order.
+	return [...state.values()].sort((left, right) => {
+		if (left.module !== right.module) return left.module < right.module ? -1 : 1;
+		if (left.kind !== right.kind) return left.kind < right.kind ? -1 : 1;
+		return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+	});
 }
 
 // Global names whose global-object properties are non-writable and non-configurable data.

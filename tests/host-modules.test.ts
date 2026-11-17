@@ -542,11 +542,12 @@ describe("lazy source builtin providers", () => {
 		const image = compile('import test from "node:test"; globalThis.test = test;', {
 			node: true,
 		});
-		expect(
-			image.runtime.sourceBuiltinProviders.some(
-				(entry) => entry.id === "node:test" && entry.state.length > 0,
-			),
-		).toBe(true);
+		const provider = image.runtime.sourceBuiltinProviders.find(
+			(entry) => entry.id === "node:test",
+		);
+		const names = provider?.state.map((entry) => entry.name) ?? [];
+		expect(names.length).toBeGreaterThan(0);
+		expect(names).toEqual([...names].sort());
 	});
 	it("keeps provider-only native import slots out of startup installation", () => {
 		const image = compile("globalThis.load = id => process.getBuiltinModule(id);", {
