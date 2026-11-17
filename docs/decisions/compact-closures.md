@@ -67,6 +67,8 @@ reads stay in place. Observed mutable bindings require closed source; source con
 bindings retain their proof in open images. Reassignment and sibling writers keep
 the shared cell. Removing a self-cell read can let the remaining immutable captures
 use frame copies without retaining a closure-to-owner cycle.
+Call-only self bindings retain their private-entry admission; callee identity is
+used when another observation already requires the real function object.
 
 Native activations can keep captured bindings in rooted frame slots and copy them
 directly into eligible closures. A closure requiring shared lexical storage instead

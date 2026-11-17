@@ -345,6 +345,8 @@ contracts or investigates costs still visible after the string follow-ups.
 - [x] Replace proven once-initialized closure self cells with active callee identity,
       allowing other immutable values to copy without the self cycle. Preserve
       open-source const facts, owner and sibling writes, TDZ and sloppy owning callee.
+      Keep call-only recursion on private entries and retain the executing callee
+      across interpreted ordinary, bound, Proxy and Reflect construction.
 
 - [ ] Reduce remaining no-capture closure and per-iteration capture
       costs. Source-immutable leaf captures can copy values in open images; synthetic

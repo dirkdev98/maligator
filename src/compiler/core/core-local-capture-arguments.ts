@@ -511,6 +511,29 @@ function resolveSelfCaptures(
 				key(capture(fn, instruction)!) === address,
 		);
 		if (readers.length === 0) continue;
+		// Call-only self bindings can already use private entries without a function
+		// object. Loading their callee would withdraw that more profitable admission.
+		const observesSelf = readers.some((instruction) => {
+			const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+			if (fn.kernel.valueHandlerUseCount(result) !== 0) return true;
+			for (
+				let use = fn.kernel.valueFirstUse(result);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			) {
+				if (fn.kernel.useLive(use) === 0) continue;
+				const consumer = coreInstructionId(fn.kernel.useInstruction(use));
+				if (fn.instructionKind(consumer) !== "operation") return true;
+				const opcode = fn.instructionOpcodeName(consumer);
+				if (
+					opcode !== "throwIfTdz" &&
+					!(opcode === "call" && fn.kernel.useOperand(use) === 0)
+				)
+					return true;
+			}
+			return false;
+		});
+		if (!observesSelf) continue;
 		let order = entries.get(owner.id);
 		if (order === undefined) {
 			const flow = buildCoreControlFlow(program, owner.id);

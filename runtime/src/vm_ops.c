@@ -2664,8 +2664,7 @@ void mal_op_load_new_target(MalCallable *callable, const MalInstruction *instruc
 }
 
 void mal_op_load_callee(MalCallable *callable, const MalInstruction *instruction) {
-    // The function object that pushed this frame — used to initialize a named
-    // function expression's own-name binding to the closure.
+    // The executing function is independent of a constructor's new.target.
     callable->registers[instruction->as.load_callee.dst] = callable->callee;
 }
 
@@ -3567,6 +3566,7 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
             vm->value_stack_size = base;
         } else if (mal_vm_push_function_frame(vm, callee_index, env, this_value, resolution.arg_count, dst, vm->frame_count - 1)) {
             vm->frames[vm->frame_count - 1].is_construct = true;
+            vm->frames[vm->frame_count - 1].callee = resolution.callee;
             // new.target is the constructor being invoked through `new`.
             vm->frames[vm->frame_count - 1].new_target = resolution.callee;
             // Realm stays entered: the pushed construct frame is stamped with it and

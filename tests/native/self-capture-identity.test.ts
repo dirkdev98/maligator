@@ -45,6 +45,10 @@ describe.each(["conservative", "precise"] as const)(
 		});
 		it.each([
 			{
+				scenario: "constructors",
+				behavior: "preserves owning callee through bound, Proxy and Reflect construction",
+			},
+			{
 				scenario: "identity",
 				behavior: "preserves each self identity through direct, bound and Proxy calls",
 			},

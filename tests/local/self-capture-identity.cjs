@@ -10,6 +10,13 @@ function makeMapped(payload) {
 	};
 	return f;
 }
+function makeConstructor(payload) {
+	var Constructor = function () {
+		this.self = Constructor;
+		this.payload = payload;
+	};
+	return Constructor;
+}
 function makeMutable() {
 	let f = function mutableRead() {
 		return f;
@@ -37,7 +44,26 @@ function makeTdz() {
 }
 const results = [];
 const scenario = process.env.SELF_CAPTURE_CASE;
-if (scenario === "identity") {
+if (scenario === "constructors") {
+	const Constructor = makeConstructor({ value: 17 });
+	const Bound = Constructor.bind(null);
+	const ProxyConstructor = new Proxy(Constructor, {});
+	function Alternate() {}
+	for (const instance of [
+		new Constructor(),
+		new Bound(),
+		new ProxyConstructor(),
+		Reflect.construct(Constructor, []),
+		Reflect.construct(Bound, [], Alternate),
+		Reflect.construct(ProxyConstructor, []),
+	]) {
+		results.push(instance.self === Constructor, instance.payload.value);
+	}
+	results.push(
+		Object.getPrototypeOf(Reflect.construct(Constructor, [], Alternate)) ===
+			Alternate.prototype,
+	);
+} else if (scenario === "identity") {
 	const retained = [];
 	for (let i = 0; i < 40; i++) retained.push(makeSelf({ value: i }));
 	for (const f of retained) {

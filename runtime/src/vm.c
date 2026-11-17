@@ -6116,6 +6116,7 @@ static MalCompletion mal_vm_construct_with_native_target(MalVm *vm, MalValue cal
                 i32 target_frame_count = vm->frame_count;
                 if (mal_vm_push_function_frame(vm, function_index, env, this_value, resolution.arg_count, -1, -1)) {
                     vm->frames[vm->frame_count - 1].is_construct = true;
+                    vm->frames[vm->frame_count - 1].callee = resolution.callee;
                     vm->frames[vm->frame_count - 1].new_target = effective_new_target;
                     mal_vm_run_until_frame_count(
                         vm,
