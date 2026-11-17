@@ -11,6 +11,11 @@ import {
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_UNDEFINED,
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_BIGINT,
+	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
 	INSTRUCTION_MAY_GC,
@@ -382,6 +387,7 @@ it("restricts current-realm mutable assumptions to consumers without realm-owned
 		"Number.isInteger",
 		"Number.isSafeInteger",
 		"Date.now",
+		"Boolean",
 	]) {
 		expect(() =>
 			verifyBuiltinWorldAssumptions(
@@ -438,8 +444,8 @@ it.each([
 it.each([
 	{ operation: "String", kinds: [COMPILER_VALUE_KIND_NUMBER], allowed: true },
 	{ operation: "String", kinds: undefined, allowed: false },
-	{ operation: "String", kinds: [], allowed: false },
-	{ operation: "String", kinds: [COMPILER_VALUE_KIND_STRING], allowed: false },
+	{ operation: "String", kinds: [], allowed: true },
+	{ operation: "String", kinds: [COMPILER_VALUE_KIND_STRING], allowed: true },
 	{ operation: "String", kinds: [COMPILER_VALUE_KIND_OBJECT], allowed: false },
 	{
 		operation: "String",
@@ -448,7 +454,7 @@ it.each([
 	},
 	{ operation: "Number", kinds: [COMPILER_VALUE_KIND_STRING], allowed: true },
 	{ operation: "Number", kinds: [COMPILER_VALUE_KIND_OBJECT], allowed: false },
-	{ operation: "Number", kinds: [], allowed: false },
+	{ operation: "Number", kinds: [], allowed: true },
 	{ operation: "parseFloat", kinds: [COMPILER_VALUE_KIND_STRING], allowed: true },
 	{ operation: "parseFloat", kinds: [], allowed: false },
 	{ operation: "parseFloat", kinds: [COMPILER_VALUE_KIND_OBJECT], allowed: false },
@@ -496,6 +502,38 @@ it.each([
 		else expect(verify).toThrow("Unsupported current-realm guarded operation");
 	},
 );
+it.each(
+	["Number", "String"].flatMap((operation) => [
+		...[
+			COMPILER_VALUE_KIND_UNDEFINED,
+			COMPILER_VALUE_KIND_NULL,
+			COMPILER_VALUE_KIND_BOOLEAN,
+			COMPILER_VALUE_KIND_NUMBER,
+			COMPILER_VALUE_KIND_STRING,
+			COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+		].map((kind) => ({ operation, kind, allowed: true })),
+		...[
+			0,
+			-1,
+			1.5,
+			NaN,
+			COMPILER_VALUE_KIND_TOP,
+			COMPILER_VALUE_KIND_BIGINT,
+			COMPILER_VALUE_KIND_SYMBOL,
+			COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_OBJECT,
+		].map((kind) => ({ operation, kind, allowed: false })),
+	]),
+)("validates replayable conversion kind masks: %j", ({ operation, kind, allowed }) => {
+	const verify = () =>
+		verifyBuiltinWorldAssumptions(
+			builtinWorldAssumptions(operation, "exact-builtin-proof", false, "guarded"),
+			operation,
+			undefined,
+			[kind],
+		);
+	if (allowed) expect(verify).not.toThrow();
+	else expect(verify).toThrow("Unsupported current-realm guarded operation");
+});
 it.each(
 	[[], [COMPILER_VALUE_KIND_NUMBER], Array(7).fill(COMPILER_VALUE_KIND_NUMBER)].map(
 		(kinds) => ({ kinds }),

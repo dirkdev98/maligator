@@ -38,6 +38,11 @@ beforeAll(() => {
 		);
 });
 it.each([
+	["converts the noncoercing primitive matrix", "primitive-matrix"],
+	[
+		"preserves primitive callee selection and ignored-argument effects",
+		"primitive-selection",
+	],
 	["formats primitive Number values", "values"],
 	["finishes numeric coercion once before formatting", "coercion"],
 	["retains String selected before argument mutation", "mutation"],

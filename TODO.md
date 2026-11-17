@@ -166,6 +166,11 @@ Runtime eval may remove source closure without invalidating authority closure.
       and error-realm proof. Keep existing captured-callee Math kernels unless shared
       guarding removes enough work to repay copied code.
 
+- [x] Complete non-constructing Boolean, Number and String primitive kernels with
+      replayable input proofs, selected-callee identity through argument reentry and
+      Boolean fallback checks. Keep object coercion, Symbol and BigInt conversion,
+      wrappers and projected String ownership on their existing paths.
+
 ## Performance diagnosis and admission
 
 - [ ] Use existing profiles and admission reports to trace leading sites in one selected

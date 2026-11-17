@@ -3,6 +3,9 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_UNDEFINED,
+	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+	compilerValueKindMaskIsValid,
+	compilerValueKindMaskIsSubset,
 } from "./compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
 
@@ -33,6 +36,7 @@ export const GUARDED_NUMBER_PREDICATES: ReadonlySet<string> = new Set([
 export const GUARDED_CURRENT_REALM_OPERATIONS: ReadonlySet<string> = new Set([
 	...GUARDED_NUMBER_PREDICATES,
 	"Date.now",
+	"Boolean",
 ]);
 
 export function guardedCurrentRealmOperation(
@@ -44,12 +48,16 @@ export function guardedCurrentRealmOperation(
 		(operation === "Date.UTC" &&
 			consumedArgumentKinds !== undefined &&
 			consumedArgumentKinds.every((kind) => kind === COMPILER_VALUE_KIND_NUMBER)) ||
-		(operation === "String" &&
-			consumedArgumentKinds?.length === 1 &&
-			consumedArgumentKinds[0] === COMPILER_VALUE_KIND_NUMBER) ||
-		((operation === "Date.parse" ||
-			operation === "parseFloat" ||
-			operation === "Number") &&
+		((operation === "String" || operation === "Number") &&
+			consumedArgumentKinds !== undefined &&
+			(consumedArgumentKinds.length === 0 ||
+				(consumedArgumentKinds.length === 1 &&
+					compilerValueKindMaskIsValid(consumedArgumentKinds[0]) &&
+					compilerValueKindMaskIsSubset(
+						consumedArgumentKinds[0],
+						COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+					)))) ||
+		((operation === "Date.parse" || operation === "parseFloat") &&
 			consumedArgumentKinds?.length === 1 &&
 			consumedArgumentKinds[0] === COMPILER_VALUE_KIND_STRING) ||
 		(operation === "parseInt" &&

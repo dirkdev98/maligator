@@ -123,6 +123,62 @@ describe("record field kind metadata", () => {
 		},
 	);
 
+	it.each(
+		["Boolean", "Number", "String"].flatMap((operation) =>
+			[{ construct: true }, { argumentMode: "iterable" }].map((mode) => ({
+				operation,
+				mode,
+			})),
+		),
+	)(
+		"rejects wrapper and iterable transport under primitive realm assumptions: %j",
+		({ operation, mode }) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const fast = builder.createBlock(),
+				slow = builder.createBlock();
+			const [holds] = builder.appendInstruction(entry, "guardSemanticEpoch", [], {
+				attributes: { family: "primordial-bindings" },
+			});
+			builder.setTerminator(entry, {
+				kind: "branch",
+				condition: holds!,
+				consequent: { block: fast, arguments: [] },
+				alternate: { block: slow, arguments: [] },
+			});
+			const [receiver] = builder.appendInstruction(fast, "createUndefined", []);
+			const [value] = builder.appendInstruction(fast, "createBoolean", [], {
+				attributes: { value: true },
+			});
+			const [result] = builder.appendInstruction(fast, "callKnown", [receiver!, value!], {
+				attributes: {
+					operation,
+					...mode,
+					worldAssumptions: {
+						...builtinWorldAssumptions(
+							operation,
+							"exact-builtin-proof",
+							false,
+							"guarded",
+						),
+					},
+					knownBuiltinCall: guardedKnownOperationCall(
+						operation,
+						builder.functionId,
+						false,
+					) as unknown as CoreAttributeValue,
+				},
+			});
+			builder.setTerminator(fast, { kind: "return", value: result! });
+			const [empty] = builder.appendInstruction(slow, "createUndefined", []);
+			builder.setTerminator(slow, { kind: "return", value: empty! });
+			builder.finish(entry);
+			expect(() => verifyCoreProgram(program)).toThrow(
+				`Invalid current-realm ${operation} call`,
+			);
+		},
+	);
 	it.each([
 		{ mask: 8, minimum: -0, maximum: 7 },
 		{ mask: 8, minimum: 0, maximum: Infinity },
@@ -275,7 +331,7 @@ describe("Core verification", () => {
 		["Date.parse", "parseFloat", "Number"].flatMap((operation) =>
 			[
 				{ expected: "string", positive: true, valid: true },
-				{ expected: "number", positive: true, valid: false },
+				{ expected: "number", positive: true, valid: operation === "Number" },
 				{ expected: "string", positive: false, valid: false },
 				{ expected: "symbol", positive: false, valid: false },
 			].map((test) => ({ ...test, operation })),

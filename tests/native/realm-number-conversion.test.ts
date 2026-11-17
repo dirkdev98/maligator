@@ -38,6 +38,7 @@ beforeAll(() => {
 		);
 });
 it.each([
+	["preserves String identity and effects for projected sources", "string-projections"],
 	["converts complete String numeric syntax and ranges", "values"],
 	["preserves object conversion order and abrupt completion", "coercion"],
 	["retains the Number selected before argument mutation", "mutation"],

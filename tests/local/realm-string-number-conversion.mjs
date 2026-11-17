@@ -7,6 +7,27 @@ function formatExtra(value, extra) {
 function convert(value) {
 	return String(value);
 }
+function truth(value, prepare) {
+	return Boolean(value, prepare());
+}
+function numberTruth(value, prepare) {
+	return Number(!!value, prepare());
+}
+function stringTruth(value, prepare) {
+	return String(!!value, prepare());
+}
+function numberUnknown(value, prepare) {
+	return Number(value, prepare());
+}
+function stringUnknown(value, prepare) {
+	return String(value, prepare());
+}
+function primitiveUnion(value) {
+	return [Number(value ? null : undefined), String(value ? null : undefined)];
+}
+function stringIdentity(value) {
+	return String(typeof value === "string" ? value : "");
+}
 function caught(run) {
 	try {
 		return run();
@@ -14,10 +35,84 @@ function caught(run) {
 		return error.name;
 	}
 }
-Object.assign(globalThis, { format, formatExtra, convert });
+Object.assign(globalThis, {
+	format,
+	formatExtra,
+	convert,
+	truth,
+	numberTruth,
+	stringTruth,
+	numberUnknown,
+	stringUnknown,
+	primitiveUnion,
+	stringIdentity,
+});
 const output = [];
 const mode = process.env.MAL_TEST_CASE ?? "values";
-if (mode === "values") {
+if (mode === "primitive-matrix") {
+	const prepare = () => 0;
+	const hostile = {
+		[Symbol.toPrimitive]() {
+			throw new Error("unexpected coercion");
+		},
+	};
+	for (const value of [
+		undefined,
+		null,
+		false,
+		true,
+		0,
+		-0,
+		NaN,
+		17,
+		"",
+		"text",
+		0n,
+		17n,
+		Symbol("label"),
+		hostile,
+	])
+		output.push([
+			truth(value, prepare),
+			numberTruth(value, prepare),
+			stringTruth(value, prepare),
+			primitiveUnion(value),
+			stringIdentity(value),
+		]);
+	output.push([Boolean(), Number(), String()]);
+} else if (mode === "primitive-selection") {
+	for (const [name, call] of [
+		["Boolean", truth],
+		["Number", numberTruth],
+		["String", stringTruth],
+		["Number", numberUnknown],
+		["String", stringUnknown],
+	]) {
+		const original = globalThis[name];
+		try {
+			output.push(
+				call(true, () => {
+					globalThis[name] = () => "replacement";
+				}),
+			);
+			output.push(
+				call(false, () => {
+					globalThis[name] = original;
+				}),
+			);
+			output.push(call(false, () => 0));
+			output.push(
+				caught(() =>
+					call(true, () => {
+						throw new RangeError();
+					}),
+				),
+			);
+		} finally {
+			globalThis[name] = original;
+		}
+	}
+} else if (mode === "values") {
 	for (const value of [
 		0,
 		-0,

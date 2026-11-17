@@ -1555,6 +1555,17 @@ A type predicate introduced before span planning would materialize those values.
 Remaining ordinary `Number` calls use the late String proof and call StringToNumber
 directly, including ranges whose other uses require materialization. Construction keeps
 its wrapper and prototype protocol.
+Ordinary `Boolean` consumes any value through truthiness. `Number` and `String` also
+admit nonempty unions of undefined, null, Boolean, Number and String from replayable
+SSA and control-flow facts. Their primitive kernels retain the selected operation
+across argument reentry and evaluate ignored arguments. When arguments cross blocks
+or prevent copying a run, a comparison with the executing realm's intrinsic checks
+the already-loaded callee after evaluation. A miss invokes that loaded value.
+Unknown Number and String inputs can also use a Boolean predicate after checking
+the loaded callee. Number's existing late String branch stays ahead of that fallback.
+Calls without arguments produce the builtin's constant result. Object coercion,
+Symbol and BigInt conversion, wrapper construction and projected String consumers
+keep their existing protocols and ownership proofs.
 Clock reads retain their host effect even when their result is unused. Their
 proof belongs to the executing function's realm, whose globals and intrinsics the call
 boundary installs. Ordinary loaded calls remain as the fallback, and reentry blocks later

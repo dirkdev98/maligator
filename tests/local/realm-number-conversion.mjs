@@ -24,6 +24,21 @@ function projectedExtra(value, prepare) {
 	const part = value.slice(1, -1);
 	return part.length + Number(part, prepare());
 }
+function stringSpanProjection(value, prepare) {
+	const part = value.slice(1, -1);
+	const converted = String(part, prepare());
+	return [part.length, converted];
+}
+function stringSplitProjection(value, prepare) {
+	const part = value.split("|")[1];
+	const converted = String(part, prepare());
+	return [part.length, converted];
+}
+function stringCaptureProjection(value, prepare) {
+	const part = /\|([^|]*)\|/.exec(value)[1];
+	const converted = String(part, prepare());
+	return [part.length, converted];
+}
 function describe(value) {
 	if (value !== value) return "NaN";
 	if (Object.is(value, -0)) return "-0";
@@ -46,10 +61,45 @@ Object.assign(globalThis, {
 	splitProjection,
 	captureProjection,
 	projectedExtra,
+	stringSpanProjection,
+	stringSplitProjection,
+	stringCaptureProjection,
 });
 const output = [];
 const mode = process.env.MAL_TEST_CASE ?? "values";
-if (mode === "values") {
+if (mode === "string-projections") {
+	for (let source = 0; source < 3; source++) {
+		const project = [
+			stringSpanProjection,
+			stringSplitProjection,
+			stringCaptureProjection,
+		][source];
+		const text = source === 0 ? "[17]" : "a|17|b";
+		output.push(project(text, () => 0));
+		const original = String;
+		try {
+			output.push(
+				project(text, () => {
+					globalThis.String = () => "replacement";
+				}),
+			);
+			output.push(
+				project(text, () => {
+					globalThis.String = original;
+				}),
+			);
+			output.push(
+				caught(() =>
+					project(text, () => {
+						throw new RangeError();
+					}),
+				),
+			);
+		} finally {
+			globalThis.String = original;
+		}
+	}
+} else if (mode === "values") {
 	for (const text of [
 		"",
 		" \u3000",
@@ -71,7 +121,13 @@ if (mode === "values") {
 		"0." + "0".repeat(300) + "1",
 	])
 		output.push(describe(convert(text)), describe(span("[" + text + "]")));
-	output.push(describe(Number()), describe(convert(undefined)), describe(convert(17n)));
+	output.push(
+		describe(Number()),
+		describe(convert(undefined)),
+		describe(convert(17n)),
+		describe(convert(true)),
+		describe(convert(false)),
+	);
 } else if (mode === "coercion") {
 	const events = [];
 	output.push(

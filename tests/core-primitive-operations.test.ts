@@ -3677,6 +3677,39 @@ describe("wide BigInt builtin constants", () => {
 describe("mutable namespace guards in the executing realm", () => {
 	it.each(
 		[false, true].flatMap((realms) =>
+			[
+				["Boolean(value,prepare())", "!"],
+				["Number(!!value,prepare())", "+"],
+				["Number(value ? null : undefined)", "+"],
+				["Number(value ? '17' : 4)", "+"],
+				["String(!!value,prepare())", "tostring"],
+				["String(value ? null : undefined)", "tostring"],
+				["String(typeof value === 'string' ? value : '')", "tostring"],
+			].map(([expression, operator]) => ({ realms, expression, operator })),
+		),
+	)(
+		"lowers captured primitive conversion while retaining its loaded twin: %j",
+		({ realms, expression, operator }) => {
+			const output = inspectStaticValueFunction(
+				`function probe(value,prepare){return ${expression}}globalThis.probe=probe;`,
+				"probe",
+				{ locked: false, realms },
+			).core;
+			expect(
+				output.some(
+					(op) =>
+						op.opcode === "guardSemanticEpoch" ||
+						(op.opcode === "binary" && op.attributes.operator === "==="),
+				),
+			).toBe(true);
+			expect(
+				output.some((op) => op.opcode === "unary" && op.attributes.operator === operator),
+			).toBe(true);
+			expect(output.some((op) => op.opcode === "call")).toBe(true);
+		},
+	);
+	it.each(
+		[false, true].flatMap((realms) =>
 			["String(+value)", "String(+value*3+(offset&1))", "String(+value,+offset)"].map(
 				(expression) => ({ realms, expression }),
 			),
@@ -3698,7 +3731,34 @@ describe("mutable namespace guards in the executing realm", () => {
 			expect(output.some((op) => op.opcode === "call")).toBe(true);
 		},
 	);
-	it.each(["String(value)", "String(new Number(value))", "String(Symbol(value))"])(
+	it.each([
+		["Number", "Number(value,prepare())"],
+		["String", "String(value,prepare())"],
+		["String", "String(Symbol(value))"],
+	])(
+		"checks an unknown %s input for a Boolean fallback kernel",
+		(operation, expression) => {
+			const output = inspectStaticValueFunction(
+				`function probe(value,prepare){return ${expression}}globalThis.probe=probe;`,
+				"probe",
+				{ locked: false, realms: true },
+			).core;
+			expect(
+				output.some(
+					(op) => op.opcode === "typeofCompare" && op.attributes.expected === "boolean",
+				),
+			).toBe(true);
+			expect(
+				output.some(
+					(op) =>
+						op.opcode === "unary" &&
+						op.attributes.operator === (operation === "Number" ? "+" : "tostring"),
+				),
+			).toBe(true);
+			expect(output.some((op) => op.opcode === "call")).toBe(true);
+		},
+	);
+	it.each(["String(new Number(value))"])(
 		"retains current-realm conversion without an independent Number proof: %s",
 		(expression) => {
 			const output = inspectStaticValueFunction(

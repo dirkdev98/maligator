@@ -50,3 +50,13 @@ globalThis.realmFormatNumber = function realmFormatNumber(value) {
 globalThis.realmReplaceString = function realmReplaceString() {
 	globalThis.String = () => "replacement";
 };
+globalThis.realmPrimitives = function realmPrimitives(value) {
+	return (
+		(Boolean(value) ? 1 : 0) + Number(!!value) + (String(!!value) === "true" ? 1 : 0)
+	);
+};
+globalThis.realmReplacePrimitives = function realmReplacePrimitives() {
+	globalThis.Boolean = () => false;
+	globalThis.Number = () => 7;
+	globalThis.String = () => "replacement";
+};

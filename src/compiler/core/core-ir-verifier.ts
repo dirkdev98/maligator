@@ -1324,6 +1324,7 @@ function verifyFunction(
 					operation === "parseFloat" ||
 					operation === "parseInt" ||
 					operation === "Number" ||
+					operation === "Boolean" ||
 					operation === "String") &&
 				assumptions?.primordials === "guarded" &&
 				assumptions.realm === "current-execution-realm"
@@ -1336,6 +1337,7 @@ function verifyFunction(
 						? 2
 						: operation === "parseFloat" ||
 							  operation === "Number" ||
+							  operation === "Boolean" ||
 							  operation === "String"
 							? 1
 							: exactBuiltinCallDescriptor(operation)!.forwardedArgumentLimit!;

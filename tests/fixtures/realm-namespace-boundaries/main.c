@@ -226,6 +226,39 @@ done:
     return ok;
 }
 
+static bool check_primitive_realms(MalVm *vm) {
+    MalValue roots[3] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalRealm *initial = vm->current_realm;
+    bool ok = false;
+    if (!get(vm, "realmPrimitives", &roots[0]) ||
+        !get(vm, "realmReplacePrimitives", &roots[2])) goto done;
+    i32 probe = mal_function_object_function_index(mal_value_to_function_object(roots[0]));
+    i32 replace = mal_function_object_function_index(mal_value_to_function_object(roots[2]));
+    MalRealm *owned = mal_realm_create(vm, nullptr, nullptr);
+    mal_realm_switch(vm, owned);
+    roots[1] = mal_vm_op_create_function(vm, probe, nullptr);
+    roots[2] = mal_vm_op_create_function(vm, replace, nullptr);
+    mal_realm_switch(vm, initial);
+    MalValue value = vm->intrinsics[MAL_INTRINSIC_SYMBOL_ITERATOR];
+    u64 admissions = mal_perf_stats.primordial_binding_guard_admissions;
+    if (!number_result(invoke(vm, roots[0], &value, 1), 3) ||
+        !number_result(invoke(vm, roots[1], &value, 1), 3) ||
+        mal_perf_stats.primordial_binding_guard_admissions <= admissions ||
+        vm->current_realm != initial) goto done;
+    mal_gc_collect(vm);
+    if (invoke(vm, roots[2], nullptr, 0).kind != MAL_COMPLETION_NORMAL ||
+        !number_result(invoke(vm, roots[1], &value, 1), 7) ||
+        !number_result(invoke(vm, roots[0], &value, 1), 3) ||
+        vm->current_realm != initial) goto done;
+    ok = true;
+done:
+    mal_realm_switch(vm, initial);
+    mal_gc_unroot(&span);
+    return ok;
+}
+
 static void run_entry(MalVm *vm) {
     MalCallable *entry = mal_vm_create_callable(vm, 0);
     mal_vm_run(vm, entry);
@@ -239,6 +272,12 @@ int main(void) {
     bool ok = vm.completion.kind == MAL_COMPLETION_NORMAL &&
         check_realms(&vm) && check_clock_realms(&vm) && check_utc_realms(&vm);
     mal_vm_free(&vm);
+    if (ok) {
+        mal_vm_init(&vm, &mal_runtime_image);
+        run_entry(&vm);
+        ok = vm.completion.kind == MAL_COMPLETION_NORMAL && check_primitive_realms(&vm);
+        mal_vm_free(&vm);
+    }
     if (ok) {
         mal_vm_init(&vm, &mal_runtime_image);
         run_entry(&vm);

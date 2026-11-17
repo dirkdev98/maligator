@@ -18,6 +18,8 @@ import {
 	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+	compilerValueKindMaskIsSubset,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import {
@@ -28,6 +30,8 @@ import {
 	primordialNodeAvailable,
 	resolvePrimordialProperty,
 } from "../shared/primordial-catalog.ts";
+import { analyzeCoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
+import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { splitGuardedCall } from "./core-function-prototype-call.ts";
 import { guardedIterationEntrySplittable } from "./core-guarded-iteration.ts";
@@ -601,7 +605,7 @@ function siteFor(
 	const inputs = operands(fn, call);
 	const block = fn.instructionBlock(call);
 	const callee = definition(fn, inputs[0]!);
-	if (callee === undefined || fn.instructionBlock(callee) !== block) return undefined;
+	if (callee === undefined) return undefined;
 	if (fn.instructionAttributes(callee)[CORE_PRIMORDIAL_BINDING_TWIN_ATTRIBUTE] === true)
 		return undefined;
 	// Math.sumPrecise spends its time iterating its argument rather than in the call.
@@ -615,8 +619,14 @@ function siteFor(
 	const direct = primordialGlobal(program, fn, callee);
 	if (direct !== undefined) {
 		const operation = allowed(ownDataPrimordial("globalThis", direct, world));
+		const primitive =
+			operation === "Boolean" || operation === "Number" || operation === "String";
 		const receiver = definition(fn, inputs[1]!);
 		if (
+			(!primitive && fn.instructionBlock(callee) !== block) ||
+			(primitive &&
+				fn.instructionAttributes(call)[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] ===
+					true) ||
 			!FUNCTIONS.has(direct) ||
 			operation === undefined ||
 			receiver === undefined ||
@@ -629,6 +639,7 @@ function siteFor(
 			return undefined;
 		return { name: callee, call, intrinsic: direct, operation, kind: "function" };
 	}
+	if (fn.instructionBlock(callee) !== block) return undefined;
 	if (opcodeOf(fn, callee) !== "loadPropertyStatic") return undefined;
 	const namespaceValue = operands(fn, callee)[0]!;
 	if (
@@ -791,7 +802,7 @@ function regionCandidateBlocks(
 interface Run {
 	readonly instructions: ReadonlyArray<CoreInstructionId>;
 	readonly sites: ReadonlyArray<Site>;
-	/** Number-input calls whose selected operation needs no later builtin lookup. */
+	/** Calls whose selected operation needs no later builtin lookup or JavaScript. */
 	readonly kernels: ReadonlySet<Site>;
 }
 
@@ -808,6 +819,7 @@ class RunPlanner {
 	 */
 	readonly #joined = new Map<CoreValueId, CoreValueId>();
 	readonly #replayableKinds: CoreValueKindAnalysis | undefined;
+	readonly #conversionKinds: ReadonlyMap<CoreInstructionId, CompilerValueKindMask>;
 
 	constructor(
 		program: CoreProgram,
@@ -815,24 +827,19 @@ class RunPlanner {
 		kinds: CoreValueKindAnalysis,
 		sitesByInstruction: ReadonlyMap<CoreInstructionId, Site>,
 		realms: boolean,
+		replayableKinds: CoreValueKindAnalysis | undefined,
+		conversionKinds: ReadonlyMap<CoreInstructionId, CompilerValueKindMask>,
 	) {
 		this.#fn = fn;
 		this.#kinds = kinds;
 		this.#realms = realms;
 		this.#sitesByInstruction = sitesByInstruction;
-		if (
-			[...sitesByInstruction.values()].some((site) => {
-				if (realms && site.operation === "Date.UTC") return true;
-				if (
-					site.operation !== "String" ||
-					fn.kernel.instructionOperandCount(site.call) <= 2
-				)
-					return false;
-				const value = fn.kernel.operandAt(
-					fn.kernel.instructionOperandStart(site.call) + 2,
-				);
-				return kinds.kindMask(value) === COMPILER_VALUE_KIND_NUMBER;
-			})
+		this.#conversionKinds = conversionKinds;
+		if (replayableKinds !== undefined) this.#replayableKinds = replayableKinds;
+		else if (
+			[...sitesByInstruction.values()].some(
+				(site) => realms && site.operation === "Date.UTC",
+			)
 		)
 			this.#replayableKinds = analyzeCoreValueKinds(
 				program,
@@ -865,17 +872,17 @@ class RunPlanner {
 	}
 
 	/**
-	 * Number-input kernels neither run JavaScript nor resolve their builtin, so
+	 * Conversion kernels neither run JavaScript nor resolve their builtin, so
 	 * their selected operation survives argument reentry.
 	 */
-	#numberKernel(site: Site): boolean {
-		if (site.operation === "String") {
+	#capturedKernel(site: Site): boolean {
+		if (site.operation === "Boolean") return true;
+		if (site.operation === "String" || site.operation === "Number") {
 			const fn = this.#fn;
-			if (fn.kernel.instructionOperandCount(site.call) <= 2) return false;
-			const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(site.call) + 2);
-			return (
-				this.#replayableKinds?.kindMask(this.#joined.get(value) ?? value) ===
-				COMPILER_VALUE_KIND_NUMBER
+			if (fn.kernel.instructionOperandCount(site.call) <= 2) return true;
+			return compilerValueKindMaskIsSubset(
+				this.#conversionKinds.get(site.call) ?? COMPILER_VALUE_KIND_TOP,
+				COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 			);
 		}
 		if (site.kind !== "method" || !MATH_NUMBER_KERNELS.has(site.operation)) return false;
@@ -894,11 +901,17 @@ class RunPlanner {
 	}
 
 	#currentRealmOperation(site: Site): boolean {
-		if (site.operation === "String")
+		if (site.operation === "String" || site.operation === "Number") {
+			const input = operands(this.#fn, site.call)[2];
 			return guardedCurrentRealmOperation(
 				site.operation,
-				this.#numberKernel(site) ? [COMPILER_VALUE_KIND_NUMBER] : undefined,
+				input === undefined
+					? []
+					: this.#capturedKernel(site)
+						? [this.#conversionKinds.get(site.call)!]
+						: undefined,
 			);
+		}
 		if (site.operation !== "Date.UTC")
 			return guardedCurrentRealmOperation(site.operation);
 		// Verification replays local SSA facts without contextual field/global claims.
@@ -915,7 +928,7 @@ class RunPlanner {
 
 	/** Whether the known call can run JavaScript, which ends the run after it. */
 	#callReenters(site: Site): boolean {
-		if (NUMBER_PREDICATES.has(site.operation) || this.#numberKernel(site)) return false;
+		if (NUMBER_PREDICATES.has(site.operation) || this.#capturedKernel(site)) return false;
 		if (
 			site.kind === "primitive" ||
 			FUNCTIONS.has(site.operation as CompilerIntrinsic) ||
@@ -1004,7 +1017,7 @@ class RunPlanner {
 			if (site !== undefined) {
 				const loaded =
 					seen.has(site.name) && (site.method === undefined || seen.has(site.method));
-				const kernel = this.#numberKernel(site);
+				const kernel = this.#capturedKernel(site);
 				if (this.#realms && !this.#currentRealmOperation(site)) break;
 				if (
 					!loaded ||
@@ -1088,6 +1101,7 @@ function guardRealmStringConversion(
 	fn: CoreFunctionStore,
 	editor: CoreEditor,
 	site: Site,
+	booleanFallback: boolean,
 ): void {
 	const block = fn.instructionBlock(site.call);
 	const split = splitGuardedCall(fn, editor, site.call);
@@ -1124,6 +1138,87 @@ function guardRealmStringConversion(
 		guardedCallAttributes(fn, site, site.operation === "Date.parse", false),
 	);
 	split.finish(conversionCall, result);
+	if (booleanFallback) guardCapturedBooleanConversion(fn, editor, site);
+}
+
+function guardCapturedBooleanConversion(
+	fn: CoreFunctionStore,
+	editor: CoreEditor,
+	site: Site,
+): void {
+	const block = fn.instructionBlock(site.call);
+	const split = splitGuardedCall(fn, editor, site.call);
+	const intrinsic = split.append(block, "loadIntrinsic", [], {
+		intrinsic: site.intrinsic!,
+	});
+	const selected = split.test(
+		split.append(block, "binary", [split.operands[0]!, intrinsic], { operator: "===" }),
+	);
+	const conversion = split.test(
+		split.append(selected, "typeofCompare", [split.operands[2]!], {
+			expected: "boolean",
+			negated: false,
+			[CORE_REPLAYABLE_TYPEOF_ATTRIBUTE]: true,
+		}),
+	);
+	split.finish(
+		conversion,
+		appendPrimitiveConversion(fn, editor, site, conversion, split.operands.slice(2)),
+	);
+}
+
+function appendPrimitiveConversion(
+	fn: CoreFunctionStore,
+	editor: CoreEditor,
+	site: Site,
+	block: CoreBlockId,
+	arguments_: ReadonlyArray<CoreValueId>,
+): CoreValueId {
+	const position = fn.instructionSourcePosition(site.call);
+	const representations = results(fn, site.call).map((value) =>
+		fn.valueRepresentation(value),
+	);
+	let value: CoreValueId;
+	if (arguments_.length === 0) {
+		value = editor.appendInstruction(
+			block,
+			site.operation === "String"
+				? "createString"
+				: site.operation === "Number"
+					? "createNumber"
+					: "createBoolean",
+			[],
+			{
+				attributes:
+					site.operation === "String"
+						? { stringIndex: editor.appendStringConstants([[]]) }
+						: { value: site.operation === "Number" ? 0 : false },
+				sourcePosition: position,
+				outputRepresentations: representations,
+			},
+		).outputs[0]!;
+	} else {
+		let input = arguments_[0]!;
+		if (site.operation === "Boolean")
+			input = editor.appendInstruction(block, "unary", [input], {
+				attributes: { operator: "!" },
+				sourcePosition: position,
+				outputRepresentations: ["boolean"],
+			}).outputs[0]!;
+		value = editor.appendInstruction(block, "unary", [input], {
+			attributes: {
+				operator:
+					site.operation === "String"
+						? "tostring"
+						: site.operation === "Number"
+							? "+"
+							: "!",
+			},
+			sourcePosition: position,
+			outputRepresentations: representations,
+		}).outputs[0]!;
+	}
+	return value;
 }
 
 /*
@@ -1252,14 +1347,14 @@ function twinRun(
 		}
 		if (site !== undefined && run.kernels.has(site)) {
 			const arguments_ = inputs.slice(2).map(map);
-			if (site.operation === "String") {
+			if (
+				site.operation === "String" ||
+				site.operation === "Number" ||
+				site.operation === "Boolean"
+			) {
 				copied.set(
 					result!,
-					editor.appendInstruction(copy, "unary", [arguments_[0]!], {
-						attributes: { operator: "tostring" },
-						sourcePosition: position,
-						outputRepresentations: representations,
-					}).outputs[0]!,
+					appendPrimitiveConversion(fn, editor, site, copy, arguments_),
 				);
 				continue;
 			}
@@ -1441,6 +1536,11 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 			);
 		};
 		const sitesByInstruction = new Map<CoreInstructionId, Site>();
+		let replayableKinds: CoreValueKindAnalysis | undefined;
+		let conditionalKinds: CoreConditionalValueKinds | undefined;
+		const conversionKinds = new Map<CoreInstructionId, CompilerValueKindMask>();
+		const capturedPrimitives: Array<Site> = [];
+		const booleanConversions: Array<Site> = [];
 		const lateStringConversions: Array<Site> = [];
 		const blocks = new Set<CoreBlockId>();
 		let hasKnownEntries = false;
@@ -1454,6 +1554,50 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 			if (opcode !== "call") continue;
 			const site = siteFor(program, fn, world, instruction, kinds, controlUse);
 			if (site === undefined) continue;
+			let primitiveConversion = site.operation === "Boolean";
+			if (site.operation === "Number" || site.operation === "String") {
+				const input = operands(fn, site.call)[2];
+				primitiveConversion = input === undefined;
+				if (input !== undefined) {
+					let mask = (replayableKinds ??= analyzeCoreValueKinds(
+						program,
+						fn,
+						buildCoreControlFlow(program, fn.id),
+					)).kindMask(input);
+					if (
+						!compilerValueKindMaskIsSubset(
+							mask,
+							COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+						) &&
+						fn.instructionBlock(site.call) !== fn.entry
+					) {
+						conditionalKinds ??= analyzeCoreConditionalValueKinds(
+							program,
+							fn,
+							buildCoreControlFlow(program, fn.id),
+							(value) => replayableKinds!.kindMask(value),
+						);
+						mask = conditionalKinds.kindMask(input, fn.instructionBlock(site.call));
+					}
+					conversionKinds.set(site.call, mask);
+					primitiveConversion = compilerValueKindMaskIsSubset(
+						mask,
+						COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+					);
+					if (
+						(mask & COMPILER_VALUE_KIND_STRING) !== 0 &&
+						projectedStringConsumer(site.call, [input])
+					)
+						continue;
+				}
+			}
+			if (primitiveConversion) capturedPrimitives.push(site);
+			else if (
+				world.realms &&
+				site.operation === "String" &&
+				((conversionKinds.get(site.call) ?? 0) & COMPILER_VALUE_KIND_BOOLEAN) !== 0
+			)
+				booleanConversions.push(site);
 			if (
 				world.realms &&
 				(site.operation === "Date.parse" ||
@@ -1461,6 +1605,7 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 					site.operation === "parseInt" ||
 					site.operation === "Number") &&
 				operands(fn, instruction).length > 2 &&
+				!primitiveConversion &&
 				fn.instructionAttributes(instruction)[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] !==
 					true
 			) {
@@ -1497,13 +1642,27 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 				if (cost > remaining) break;
 				remaining -= cost;
 				editor ??= CoreEditor.open(program, item.function);
-				guardRealmStringConversion(fn, editor, site);
+				guardRealmStringConversion(
+					fn,
+					editor,
+					site,
+					site.operation === "Number" &&
+						((conversionKinds.get(site.call) ?? 0) & COMPILER_VALUE_KIND_BOOLEAN) !== 0,
+				);
 			}
 			if (editor !== undefined) return editor.commit();
 		}
 		if (blocks.size === 0) return undefined;
 		const skipped = regionCandidateBlocks(program, fn, sitesByInstruction);
-		const planner = new RunPlanner(program, fn, kinds, sitesByInstruction, world.realms);
+		const planner = new RunPlanner(
+			program,
+			fn,
+			kinds,
+			sitesByInstruction,
+			world.realms,
+			replayableKinds,
+			conversionKinds,
+		);
 		let editor: CoreEditor | undefined;
 		const pending = [...blocks].filter((block) => !skipped.has(block));
 		while (pending.length > 0) {
@@ -1529,6 +1688,44 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 				break;
 			}
 		}
-		return editor?.commit();
+		if (editor !== undefined) return editor.commit();
+		for (const site of booleanConversions) {
+			if (
+				2 * fn.liveStorageCounts().instructions + 32 > context.remainingEdits ||
+				!guardedIterationEntrySplittable(fn, site.call)
+			)
+				continue;
+			const editor = CoreEditor.open(program, item.function);
+			guardCapturedBooleanConversion(fn, editor, site);
+			return editor.commit();
+		}
+		for (const site of capturedPrimitives) {
+			if (
+				2 * fn.liveStorageCounts().instructions + 32 > context.remainingEdits ||
+				!guardedIterationEntrySplittable(fn, site.call)
+			)
+				continue;
+			const editor = CoreEditor.open(program, item.function);
+			const block = fn.instructionBlock(site.call);
+			const split = splitGuardedCall(fn, editor, site.call);
+			const intrinsic = split.append(block, "loadIntrinsic", [], {
+				intrinsic: site.intrinsic!,
+			});
+			const conversion = split.test(
+				split.append(block, "binary", [split.operands[0]!, intrinsic], {
+					operator: "===",
+				}),
+			);
+			const result = appendPrimitiveConversion(
+				fn,
+				editor,
+				site,
+				conversion,
+				split.operands.slice(2),
+			);
+			split.finish(conversion, result);
+			return editor.commit();
+		}
+		return undefined;
 	},
 };
