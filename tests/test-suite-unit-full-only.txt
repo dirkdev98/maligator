@@ -1,4 +1,5 @@
 # Slow pure-TypeScript or subprocess-heavy integration tests run only in full.
+tests/string-span-parsers-integration.test.ts
 tests/toolchain.test.ts
 tests/linux-diagnostic.test.ts
 tests/test-process.test.ts
