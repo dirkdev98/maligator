@@ -60,7 +60,7 @@ MalTypedArrayObject *mal_typed_array_object_new(
     u32 length,
     bool length_tracking
 ) {
-    MalTypedArrayObject *array = mal_heap_alloc(heap, sizeof(MalTypedArrayObject), MAL_HEAP_TYPED_ARRAY_OBJECT);
+    MalTypedArrayObject *array = mal_heap_alloc_uninitialized(heap, sizeof(MalTypedArrayObject), MAL_HEAP_TYPED_ARRAY_OBJECT);
     mal_object_init(heap, &array->object, MAL_HEAP_TYPED_ARRAY_OBJECT, prototype);
     array->buffer = buffer;
     array->kind = kind;
