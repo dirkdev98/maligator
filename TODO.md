@@ -196,9 +196,12 @@ Shared lifetime and fallback rules are recorded in
 An existing iterator cursor is not, by itself, permission to delete its language
 object. Retained loop experiments preserve effects, authoritative state and fallback.
 
-- [ ] Extend lazy argument forwarding to construction or mapped arguments only after
-      carrying `new.target`, derived initialization, or current parameter-map values
-      through the owning protocol.
+- [ ] Remove the iterator-drain Array for a repeated explicit rest construction or
+      `super` consumer. Preserve iterator effects, copied argument values, the loaded
+      callee, `new.target` and derived initialization. Mapped-arguments forwarding
+      needs current owning-activation parameter cells, incoming extras, duplicate-formal
+      mapping and a genuine mapped fallback with its owning callee. Require a repeated
+      consumer before extending either path.
 
 - [ ] Bound one typed-store side-exit experiment to core-to-execution or optimizer-queue
       and the corresponding compiler loop. First establish removable executed cost; then
