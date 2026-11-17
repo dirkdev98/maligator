@@ -296,6 +296,10 @@ models use Clang and the C extraction source cone without resolving the JavaScri
 parser. Binding generation retains parser identity because it evaluates JavaScript
 contracts.
 
+C declarator suffixes retain their eventual type nodes and link them in reverse
+order before returning the parsed type. This avoids separate builder closures or
+wrapper objects while preserving optional array bounds and parameter-array identity.
+
 Retaining a source builtin for runtime loading does not add an eager evaluation edge.
 Its provider manifest retains the synchronous graph evaluator and initializes native imports
 on demand. Discovery uses the same builtin catalog, including prefix-only names.

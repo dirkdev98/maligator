@@ -193,22 +193,9 @@ const INTEGER_WORDS = new Set([
 	"__int128",
 ]);
 
-// Immutable factory locals let suffix closures copy their inputs rather than
-// retaining the declarator loop's iteration environment.
-function arraySuffix(bound: number | undefined): (of: CType) => CType {
-	const length = bound;
-	return (of) =>
-		length === undefined ? { kind: "array", of } : { kind: "array", of, length };
-}
-
-function functionSuffix(
-	parameters: ReadonlyArray<CType>,
-	isVariadic: boolean,
-): (returns: CType) => CType {
-	const params = parameters;
-	const variadic = isVariadic;
-	return (returns) => ({ kind: "function", returns, params, variadic });
-}
+type DeclaratorSuffix =
+	| { kind: "array"; of: CType; length?: number }
+	| { kind: "function"; returns: CType; params: ReadonlyArray<CType>; variadic: boolean };
 
 class Parser {
 	readonly #tokens: ReadonlyArray<Token>;
@@ -420,7 +407,7 @@ class Parser {
 			}
 			inner = this.#tokens.slice(start, this.#index - 1);
 		}
-		const suffixes: Array<(type: CType) => CType> = [];
+		const suffixes: Array<DeclaratorSuffix> = [];
 		for (;;) {
 			if (this.#isPunct("[")) {
 				this.#index++;
@@ -431,19 +418,27 @@ class Parser {
 					this.#index++;
 				}
 				this.#expectPunct("]");
-				suffixes.push(arraySuffix(length));
+				suffixes.push(
+					length === undefined
+						? { kind: "array", of: type }
+						: { kind: "array", of: type, length },
+				);
 				continue;
 			}
 			if (this.#isPunct("(")) {
 				this.#index++;
 				const { params, variadic } = this.#parameters();
-				suffixes.push(functionSuffix(params, variadic));
+				suffixes.push({ kind: "function", returns: type, params, variadic });
 				continue;
 			}
 			break;
 		}
-		for (let index = suffixes.length - 1; index >= 0; index--)
-			type = suffixes[index]!(type);
+		for (let index = suffixes.length - 1; index >= 0; index--) {
+			const suffix = suffixes[index]!;
+			if (suffix.kind === "array") suffix.of = type;
+			else suffix.returns = type;
+			type = suffix;
+		}
 		if (inner !== undefined) {
 			const nested = new Parser(inner);
 			type = nested.declarator(type);

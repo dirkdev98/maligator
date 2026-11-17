@@ -53,6 +53,41 @@ describe("C type spellings", () => {
 			"const char *title",
 		);
 	});
+	it.each([
+		[
+			"int[2][3]",
+			{
+				kind: "array",
+				length: 2,
+				of: { kind: "array", length: 3, of: { kind: "integer", name: "int" } },
+			},
+		],
+		[
+			"int[][4]",
+			{
+				kind: "array",
+				of: { kind: "array", length: 4, of: { kind: "integer", name: "int" } },
+			},
+		],
+		[
+			"int (*[2])(char)",
+			{
+				kind: "array",
+				length: 2,
+				of: {
+					kind: "pointer",
+					to: {
+						kind: "function",
+						returns: { kind: "integer", name: "int" },
+						params: [{ kind: "integer", name: "char" }],
+						variadic: false,
+					},
+				},
+			},
+		],
+	])("applies chained suffixes in declarator order for %s", (spelling, expected) => {
+		expect(parseCType(spelling)).toEqual(expected);
+	});
 
 	it("normalizes integer specifiers in any order", () => {
 		expect(parseCType("long unsigned int")).toEqual({
