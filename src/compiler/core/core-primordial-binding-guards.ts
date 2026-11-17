@@ -34,6 +34,7 @@ import { guardedIterationEntrySplittable } from "./core-guarded-iteration.ts";
 import {
 	CORE_PRIMORDIAL_BINDING_TWIN_ATTRIBUTE,
 	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
+	CORE_REPLAYABLE_TYPEOF_ATTRIBUTE,
 	coreUnscopedInstructionAttributes,
 } from "./core-internal-attributes.ts";
 import {
@@ -1066,6 +1067,7 @@ function guardRealmDateParser(
 		split.append(protectedCall, "typeofCompare", [split.operands[2]!], {
 			expected: "string",
 			negated: false,
+			[CORE_REPLAYABLE_TYPEOF_ATTRIBUTE]: true,
 		}),
 	);
 	const result = split.append(

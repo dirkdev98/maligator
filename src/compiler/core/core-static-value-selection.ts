@@ -15,7 +15,10 @@ import type { PrimordialKey } from "../shared/primordial-catalog.ts";
 import { staticNumberDescription } from "../shared/static-values.ts";
 import type { StaticDescriptionId, StaticMember } from "../shared/static-values.ts";
 import { CoreEditor } from "./core-editor.ts";
-import { CORE_STATIC_SELECTION_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
+import {
+	CORE_STATIC_SELECTION_FALLBACK_ATTRIBUTE,
+	CORE_REPLAYABLE_TYPEOF_ATTRIBUTE,
+} from "./core-internal-attributes.ts";
 import { coreTerminatorInput, mapCoreTerminatorEdges } from "./core-ir-control-flow.ts";
 import type { CoreAttributeValue, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
@@ -571,6 +574,11 @@ export const foldStaticReflections: CoreFunctionPass = {
 					fn.instructionAttributes(instruction).operator === "typeof") ||
 				opcode === "typeofCompare"
 			) {
+				if (
+					opcode === "typeofCompare" &&
+					fn.instructionAttributes(instruction)[CORE_REPLAYABLE_TYPEOF_ATTRIBUTE] === true
+				)
+					continue;
 				const fact = analysis.query(fn.kernel.operandAt(start));
 				if (fact.kind !== "known") continue;
 				const text = ["array", "null"].includes(fact.brand) ? "object" : fact.brand;

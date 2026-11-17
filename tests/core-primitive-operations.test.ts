@@ -3675,6 +3675,38 @@ describe("wide BigInt builtin constants", () => {
 });
 
 describe("mutable namespace guards in the executing realm", () => {
+	it.each([false, true])(
+		"retains replayable String proofs for constant bindings: script=%s",
+		(script) => {
+			const output = inspectStaticValueFunction(
+				"const text='-271821-04-20T00:00:00.000Z';function probe(){return Date.parse(text)}globalThis.probe=probe;",
+				"probe",
+				{ locked: false, realms: true, script },
+			).core;
+			expect(
+				output.some(
+					(op) => op.opcode === "callKnown" && op.attributes.operation === "Date.parse",
+				),
+			).toBe(true);
+		},
+	);
+	it("eliminates a realm parser String check from a local literal proof", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(){return Date.parse('2000-01-01T00:00:00.000Z')}globalThis.probe=probe;",
+			"probe",
+			{ locked: false, realms: true },
+		).core;
+		expect(
+			output.some(
+				(op) => op.opcode === "callKnown" && op.attributes.operation === "Date.parse",
+			),
+		).toBe(true);
+		expect(
+			output.some(
+				(op) => op.opcode === "typeofCompare" && op.attributes.expected === "string",
+			),
+		).toBe(false);
+	});
 	it.each([
 		"return Date.parse(value)",
 		"return Date.parse(value.input)",

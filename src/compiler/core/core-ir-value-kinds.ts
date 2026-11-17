@@ -64,6 +64,7 @@ import {
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
 	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
+	CORE_REPLAYABLE_TYPEOF_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import {
@@ -2066,6 +2067,7 @@ export function coreValueKindObservation(
 	identity?: (value: CoreValueId) => CoreValueId,
 	heapBrand?: (value: CoreValueId) => CoreExactHeapBrand | undefined,
 	callability?: (value: CoreValueId) => boolean | undefined,
+	replayableKindMask?: (value: CoreValueId) => CompilerValueKindMask,
 ): boolean | undefined {
 	if (
 		fn.instructionKind(instruction) !== "operation" ||
@@ -2079,9 +2081,17 @@ export function coreValueKindObservation(
 		index < operandCount ? fn.kernel.operandAt(operandStart + index) : undefined;
 	if (opcode === "typeofCompare") {
 		const input = operand(0);
-		const expected = fn.instructionAttributes(instruction).expected;
+		const attributes = fn.instructionAttributes(instruction);
+		const expected = attributes.expected;
 		if (input === undefined || typeof expected !== "string") return undefined;
-		const equal = observedTypeofComparison(input, expected, kindMask, callability);
+		const replayable = attributes[CORE_REPLAYABLE_TYPEOF_ATTRIBUTE] === true;
+		if (replayable && replayableKindMask === undefined) return undefined;
+		const equal = observedTypeofComparison(
+			input,
+			expected,
+			replayable ? replayableKindMask! : kindMask,
+			replayable ? undefined : callability,
+		);
 		return equal === undefined
 			? undefined
 			: fn.instructionAttributes(instruction).negated === true

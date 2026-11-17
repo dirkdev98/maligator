@@ -34,7 +34,10 @@ import {
 	coreReadsImportedBindingInitialized,
 	coreReadsModuleBindingInitialized,
 } from "./core-compilation.ts";
-import { CORE_CONDITIONAL_VALUE_KIND_ANALYSIS } from "./core-conditional-value-kinds.ts";
+import {
+	CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
+	analyzeCoreConditionalValueKinds,
+} from "./core-conditional-value-kinds.ts";
 import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { foldFiniteStringConstruction } from "./core-finite-string-construction.ts";
@@ -45,6 +48,7 @@ import { continueGuardedCallArithmetic } from "./core-guarded-continuations.ts";
 import { removeCoreInstructions } from "./core-instruction-removal.ts";
 import {
 	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
+	CORE_REPLAYABLE_TYPEOF_ATTRIBUTE,
 	coreUnscopedInstructionAttributes,
 } from "./core-internal-attributes.ts";
 import {
@@ -60,6 +64,7 @@ import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "./core-ir-provenance.ts";
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
+	analyzeCoreValueKinds,
 	coreValueKindObservation,
 	coreValueKindObservationCandidate,
 } from "./core-ir-value-kinds.ts";
@@ -1348,6 +1353,7 @@ const foldValueKindObservations: CoreFunctionPass = {
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 		CORE_LOOP_INDUCTION_ANALYSIS,
 		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
+		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	],
 	wakesOn: [
 		"body",
@@ -1370,6 +1376,18 @@ const foldValueKindObservations: CoreFunctionPass = {
 			if ((mask & (mask - 1)) === 0) return mask;
 			return (conditional ??= context.analysis(
 				CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
+			)).kindMask(value, block);
+		};
+		let replayableKinds: CoreValueKindAnalysis | undefined;
+		let replayableConditional: CoreConditionalValueKinds | undefined;
+		const replayableKindMask = (value: CoreValueId, block: CoreBlockId) => {
+			const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
+			replayableKinds ??= analyzeCoreValueKinds(program, fn, cfg);
+			return (replayableConditional ??= analyzeCoreConditionalValueKinds(
+				program,
+				fn,
+				cfg,
+				(value) => replayableKinds!.kindMask(value),
 			)).kindMask(value, block);
 		};
 		const replacements: Array<
@@ -1412,6 +1430,10 @@ const foldValueKindObservations: CoreFunctionPass = {
 					context
 						.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS)
 						.valueClasses.exactHeapBrand(value),
+				undefined,
+				fn.instructionAttributes(instruction)[CORE_REPLAYABLE_TYPEOF_ATTRIBUTE] === true
+					? (value) => replayableKindMask(value, fn.instructionBlock(instruction))
+					: undefined,
 			);
 			if (result !== undefined) replacements.push({ instruction, result });
 		}

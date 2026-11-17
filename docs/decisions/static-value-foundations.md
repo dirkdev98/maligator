@@ -1537,6 +1537,8 @@ reentry retains UTC's loaded callee, and ignored extras still finish evaluation.
 evaluation. Its original namespace and method loads stay before those arguments, and
 the loaded call stays as fallback. The String branch cannot run user conversion or
 create a realm-owned error; verification replays the branch's kind restriction.
+Type-observation folding uses the same replayable SSA facts for this predicate;
+contextual global and field facts cannot erase the runtime proof.
 Ignored arguments still finish before either guard. Native parsing may allocate
 temporary UTF-16 storage without running JavaScript or collecting.
 These direct consumers create no realm-owned result or error;

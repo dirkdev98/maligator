@@ -10,7 +10,7 @@ test/staging/sm/lexical-environment/block-scoped-functions-annex-b-label.js
 test/staging/sm/Proxy/revoke-as-side-effect.js
 test/staging/sm/Proxy/getPrototypeOf.js
 
-# Core built-in and runtime boundaries (75)
+# Core built-in and runtime boundaries
 test/annexB/built-ins/Date/prototype/getYear/return-value.js
 test/annexB/built-ins/Date/prototype/setYear/date-value-read-before-tonumber-when-date-is-valid.js
 test/annexB/built-ins/Date/prototype/setYear/this-time-nan.js
@@ -30,6 +30,7 @@ test/built-ins/AggregateError/newtarget-proto-custom.js
 test/built-ins/SuppressedError/order-of-args-evaluation.js
 test/built-ins/SuppressedError/newtarget-proto-custom.js
 test/built-ins/SuppressedError/message-tostring-abrupt.js
+test/built-ins/Date/parse/time-value-maximum-range.js
 test/built-ins/Date/prototype/toTemporalInstant/prop-desc.js
 test/built-ins/Date/prototype/toTemporalInstant/this-value-invalid-date.js
 test/built-ins/Date/prototype/toTemporalInstant/this-value-valid-date.js
