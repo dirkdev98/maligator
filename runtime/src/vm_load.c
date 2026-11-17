@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 103u
+#define WIRE_VERSION 104u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1305,6 +1305,19 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             for (u32 i = 0; i < count; i++) side_data->data[side_data->count++] = rd_i32(r);
             return;
         }
+        case WIRE_CONSTRUCT_SPREAD_ITERABLE: {
+            o->opcode = MAL_OP_CONSTRUCT_SPREAD_ITERABLE;
+            o->as.construct_spread_iterable.dst = rd_i32(r);
+            o->as.construct_spread_iterable.callee = rd_i32(r);
+            i32 iterable = rd_i32(r);
+            u32 count = rd_count(r, 1);
+            if (!r->ok || !i32_builder_reserve(side_data, r, (usize) count + 2)) return;
+            o->as.construct_spread_iterable.data_offset = (i32) side_data->count;
+            side_data->data[side_data->count++] = iterable;
+            side_data->data[side_data->count++] = (i32) count;
+            for (u32 i = 0; i < count; i++) side_data->data[side_data->count++] = rd_i32(r);
+            return;
+        }
         case WIRE_CONSTRUCT_SPREAD:
             o->opcode = MAL_OP_CONSTRUCT_SPREAD;
             o->as.construct_spread.dst = rd_i32(r);
@@ -1771,6 +1784,7 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_CALL_SPREAD_ITERABLE, call_spread_iterable);
         MAL_WRITES_DST(MAL_OP_CALL_REST_ARGUMENTS, call_rest_arguments);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SPREAD, construct_spread);
+        MAL_WRITES_DST(MAL_OP_CONSTRUCT_SPREAD_ITERABLE, construct_spread_iterable);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SUPER, construct_super);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SUPER_FORWARD, construct_super_forward);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SUPER_SPREAD, construct_super_spread);

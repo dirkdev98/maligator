@@ -164,6 +164,7 @@ export const resolveKnownOperations: CoreFunctionPass = {
 		"callSpread",
 		"callSpreadIterable",
 		"constructSpread",
+		"constructSpreadIterable",
 		"loadProperty",
 		"loadPropertyStatic",
 		"loadGlobalProperty",
@@ -296,23 +297,31 @@ export const resolveKnownOperations: CoreFunctionPass = {
 				opcode === "construct" ||
 				opcode === "callSpread" ||
 				opcode === "callSpreadIterable" ||
-				opcode === "constructSpread"
+				opcode === "constructSpread" ||
+				opcode === "constructSpreadIterable"
 			) {
 				let target: InvocationTarget | undefined =
 					knownAdapter === undefined
 						? invocationTarget(analysis, fn, args[0]!)
 						: { operation: knownAdapter, leading: [] };
 				if (target === undefined) continue;
-				let construct = opcode === "construct" || opcode === "constructSpread";
+				let construct =
+					opcode === "construct" ||
+					opcode === "constructSpread" ||
+					opcode === "constructSpreadIterable";
 				const invocation = knownAdapter === undefined ? args.slice(1) : args;
 				let receiver: Argument = construct ? args[0]! : invocation[0]!;
-				let arguments_: ReadonlyArray<Argument> = construct
-					? invocation
-					: opcode === "callSpreadIterable"
-						? [...args.slice(3), args[2]!]
-						: invocation.slice(1);
+				let arguments_: ReadonlyArray<Argument> =
+					opcode === "constructSpreadIterable"
+						? [...args.slice(2), args[1]!]
+						: construct
+							? invocation
+							: opcode === "callSpreadIterable"
+								? [...args.slice(3), args[2]!]
+								: invocation.slice(1);
 				let argumentMode: KnownArgumentMode | undefined =
 					opcode === "callSpreadIterable" ||
+					opcode === "constructSpreadIterable" ||
 					(knownAdapter !== undefined && attributes?.argumentMode === "iterable")
 						? "iterable"
 						: opcode.endsWith("Spread")

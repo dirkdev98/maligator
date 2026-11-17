@@ -169,6 +169,19 @@
 			"sourceSeam": "src/compiler/core/core-known-operations.ts; runtime/src/vm_ops.c",
 			"fixture": "cases/call-literal-construct.mjs",
 			"controls": ["call-literal-apply"]
+		},
+		{
+			"id": "constructor-iterable-retained",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "iterable construction transport",
+			"category": "allocation-gc",
+			"mechanisms": ["constructor-call", "iterable-arguments", "argument-forwarding"],
+			"inputShape": "Opaque script constructor with a positional prefix and dense tails of varying lengths; retained instances preserve values, prototype and new.target.",
+			"unit": "constructed instance",
+			"sourceSeam": "src/compiler/core/semantic-lowering.ts; runtime/src/vm_ops.c",
+			"fixture": "cases/constructor-iterable-retained.mjs",
+			"controls": ["call-literal-construct", "constructor-derived-super-retained"]
 		}
 	]
 }

@@ -244,6 +244,13 @@ const instructions: Array<BytecodeInstruction> = [
 		prefixArguments: [3, 7],
 	},
 	{
+		opcode: "CONSTRUCT_SPREAD_ITERABLE",
+		dst: 11,
+		callee: 5,
+		iterable: 12,
+		prefixArguments: [3, 7],
+	},
+	{
 		opcode: "CALL_REST_ARGUMENTS",
 		dst: 11,
 		callee: 5,
@@ -1094,6 +1101,7 @@ describe("program-image-codec", () => {
 			"GUARD_BOUND_FUNCTION",
 			"LOAD_BOUND_FUNCTION_SLOT",
 			"WITH_CAPTURE_OBJECT",
+			"CONSTRUCT_SPREAD_ITERABLE",
 		];
 		expect(WIRE_OPCODES.slice(-appended.length)).toEqual(appended);
 	});

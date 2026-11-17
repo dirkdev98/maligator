@@ -86,6 +86,7 @@ export function nativeUnobservedCallResultRegisters(
 				case "CALL_SPREAD_ITERABLE":
 				case "CALL_REST_ARGUMENTS":
 				case "CONSTRUCT_SPREAD":
+				case "CONSTRUCT_SPREAD_ITERABLE":
 				case "CONSTRUCT_SUPER":
 				case "CONSTRUCT_SUPER_FORWARD":
 				case "CONSTRUCT_SUPER_SPREAD":

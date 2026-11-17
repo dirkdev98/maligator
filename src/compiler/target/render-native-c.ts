@@ -17742,6 +17742,22 @@ class NativeInstructionEmission {
 					this.callPoll(),
 				];
 			}
+			case "CONSTRUCT_SPREAD_ITERABLE": {
+				const tmp = `construct_spread_iterable_${this.ip}`;
+				const prefix = instruction.prefixArguments;
+				const prefixName = prefix.length === 0 ? "NULL" : `construct_prefix_${this.ip}`;
+				return [
+					...(prefix.length === 0
+						? []
+						: [
+								`MalValue ${prefixName}[${prefix.length}] = { ${prefix.map(this.boxed.bind(this)).join(", ")} };`,
+							]),
+					`MalCompletion ${tmp} = mal_vm_op_construct_spread_iterable(vm, ${this.boxed(instruction.callee)}, ${this.boxed(instruction.iterable)}, ${prefixName}, ${prefix.length});`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
+					`r${instruction.dst} = ${this.callValue(instruction.dst, `${tmp}.value`)};`,
+					this.callPoll(),
+				];
+			}
 			case "WITH_ENTER": {
 				// Push a `with` object environment record onto the env chain (nil throws).
 				// A temp holds the new env so a throw leaves `env` at the pre-with scope for

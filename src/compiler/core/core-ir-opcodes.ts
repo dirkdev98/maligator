@@ -45,6 +45,7 @@ export const CORE_OPCODES = [
 	"checkSuperClass",
 	"construct",
 	"constructSpread",
+	"constructSpreadIterable",
 	"constructSuper",
 	"constructSuperForward",
 	"constructSuperSpread",
@@ -275,6 +276,7 @@ const CALLS_USER_CODE = new Set<CoreOpcode>([
 	"checkSuperClass",
 	"construct",
 	"constructSpread",
+	"constructSpreadIterable",
 	"constructSuper",
 	"constructSuperForward",
 	"constructSuperSpread",
@@ -580,6 +582,12 @@ const OPCODE_CALL_TRANSFERS = {
 		invocation: "construct",
 		arguments: { kind: "aggregate", operand: 1 },
 	},
+	constructSpreadIterable: {
+		calleeOperand: 0,
+		result: "construct-completion",
+		invocation: "construct",
+		arguments: { kind: "aggregate", operand: 1, prefixFirstOperand: 2 },
+	},
 	// Super construction enters the parent and binds the object it produces as
 	// `this`, so its result is a [[Construct]] completion like any other. It stays
 	// unmodeled because the interesting half of the chain is elsewhere: a derived
@@ -704,6 +712,7 @@ const INPUT_ARITIES = {
 	checkSuperClass: [1, 1],
 	construct: [1, 65_535],
 	constructSpread: [2, 2],
+	constructSpreadIterable: [2, 65_535],
 	constructSuper: [1, 65_535],
 	constructSuperForward: [1, 1],
 	constructSuperSpread: [2, 2],

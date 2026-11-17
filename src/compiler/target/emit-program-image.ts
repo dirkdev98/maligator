@@ -523,6 +523,7 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 					data.push(instruction.sourceArguments.length, ...instruction.sourceArguments);
 				break;
 			case "CALL_SPREAD_ITERABLE":
+			case "CONSTRUCT_SPREAD_ITERABLE":
 				offsets[index] = data.length;
 				data.push(
 					instruction.iterable,
@@ -3473,6 +3474,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_CALL_SPREAD_ITERABLE, .as.call_spread_iterable = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()} } }`;
 		case "CONSTRUCT_SPREAD":
 			return `{ .opcode = MAL_OP_CONSTRUCT_SPREAD, .as.construct_spread = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .arguments_array = ${instruction.argumentsArray} } }`;
+		case "CONSTRUCT_SPREAD_ITERABLE":
+			return `{ .opcode = MAL_OP_CONSTRUCT_SPREAD_ITERABLE, .as.construct_spread_iterable = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .data_offset = ${sideDataOffset()} } }`;
 		case "CONSTRUCT_SUPER":
 			return `{ .opcode = MAL_OP_CONSTRUCT_SUPER, .as.construct_super = { .dst = ${instruction.dst}, .parent = ${instruction.parent}, .data_offset = ${sideDataOffset()} } }`;
 		case "CONSTRUCT_SUPER_FORWARD":

@@ -804,6 +804,10 @@ typedef struct MalInstruction {
             i32 dst, callee, this_value, data_offset;
         } call_spread_iterable;
 
+        struct {
+            i32 dst, callee, data_offset;
+        } construct_spread_iterable;
+
         // Side data: [receiver, start, MAL_REST_FORWARD_* flags, state, prefix count, prefix].
         struct {
             i32 dst, callee, this_value, data_offset;

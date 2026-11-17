@@ -28,6 +28,37 @@ const spreadsIterable = (body: string, primordials?: "locked" | "mutable") =>
 	kernelOpcodes(body, primordials).some((op) => op.opcode === "CALL_SPREAD_ITERABLE");
 
 describe("spread of Array literal arguments", () => {
+	it.each(["locked", "mutable"] as const)(
+		"constructs with positional literal elements under %s primordials",
+		(primordials) => {
+			const instructions = kernelOpcodes(
+				"return new f(1,...[a,b,3]);",
+				primordials,
+				true,
+			);
+			expect(
+				instructions.some((op) => op.opcode === "CONSTRUCT" && op.argumentCount === 4),
+			).toBe(true);
+			expect(instructions.some((op) => op.opcode === "CONSTRUCT_SPREAD_ITERABLE")).toBe(
+				primordials === "mutable",
+			);
+			expect(instructions.some((op) => op.opcode === "GUARD_SEMANTIC_EPOCH")).toBe(
+				primordials === "mutable",
+			);
+			if (primordials === "locked")
+				expect(instructions.map((op) => op.opcode)).not.toContain("CREATE_ARRAY");
+		},
+	);
+
+	it.each(["return new f(...[a,,b]);", "const l=[a,b];g(l);return new f(...l);"])(
+		"preserves observable constructor iteration: %s",
+		(body) => {
+			expect(
+				kernelOpcodes(body).some((op) => op.opcode === "CONSTRUCT_SPREAD_ITERABLE"),
+			).toBe(true);
+		},
+	);
+
 	it("passes a locked literal's elements positionally without allocating it", () => {
 		const instructions = kernelOpcodes("return f(1,...[a,b,3]);");
 		expect(instructions.map((op) => op.opcode)).not.toContain("CALL_SPREAD_ITERABLE");

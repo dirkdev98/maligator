@@ -916,6 +916,10 @@ type CompilerOperation =
 			registers: [number, number, number, number, ...Array<number>];
 	  }
 	| {
+			type: "constructSpreadIterable";
+			registers: [number, number, number, ...Array<number>];
+	  }
+	| {
 			type: "constructSpread";
 
 			// [destination, callee, arguments_array]

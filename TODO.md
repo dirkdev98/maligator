@@ -207,7 +207,11 @@ object. Retained loop experiments preserve effects, authoritative state and fall
 - [x] Check the shared derived `this` binding after parent construction, including
       arrow and eval reentry, before running instance fields.
 
-- [ ] Remove the iterator-drain Array for a repeated explicit rest construction or
+- [x] Carry a single trailing iterable directly to ordinary construction, with
+      guarded positional literal elements and dense Array marshalling. Preserve
+      iterator order and bound-Proxy construction through both backends.
+
+- [ ] Defer the remaining private rest Array for a repeated explicit construction or
       `super` consumer. Preserve iterator effects, copied argument values, the loaded
       callee, `new.target` and derived initialization. Mapped-arguments forwarding
       needs current owning-activation parameter cells, incoming extras, duplicate-formal

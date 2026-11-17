@@ -35,7 +35,12 @@ function constructionKinds(): Array<number> {
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(instruction);
-			if (opcode !== "construct" && opcode !== "constructSpread") continue;
+			if (
+				opcode !== "construct" &&
+				opcode !== "constructSpread" &&
+				opcode !== "constructSpreadIterable"
+			)
+				continue;
 			masks.push(
 				kinds.kindMask(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction))),
 			);

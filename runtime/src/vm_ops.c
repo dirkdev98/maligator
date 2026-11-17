@@ -3466,7 +3466,22 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
         callee, mal_value_new_undefined(), &vm->value_stack[base], argument_count,
         false, inline_args, countof(inline_args));
 
-    if (mal_value_is_function_object(resolution.callee)) {
+    if (mal_value_is_proxy_object(resolution.callee)) {
+        i32 caller_frame_index = vm->frame_count - 1;
+        MalCalleeRoots roots;
+        mal_gc_callee_roots_begin(&roots, MAL_VALUE_UNDEFINED, resolution.callee,
+            resolution.callee, resolution.args, resolution.arg_count);
+        MalCompletion completion = mal_proxy_construct(vm,
+            mal_value_to_proxy_object(resolution.callee), resolution.args,
+            resolution.arg_count, resolution.callee);
+        mal_gc_callee_roots_end(&roots);
+        if (completion.kind != MAL_COMPLETION_NORMAL) {
+            vm->completion = completion;
+        } else {
+            vm->frames[caller_frame_index].registers[dst] = completion.value;
+        }
+        vm->value_stack_size = base;
+    } else if (mal_value_is_function_object(resolution.callee)) {
         i32 callee_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
         const MalFunction *callee_fn = &vm->runtime_image->functions[callee_index];
         if (callee_fn->kind != MAL_FUNCTION_KIND_NORMAL || !callee_fn->has_prototype) {
@@ -4357,6 +4372,27 @@ MalCompletion mal_vm_op_call_spread_iterable(
     return completion;
 }
 
+MalCompletion mal_vm_op_construct_spread_iterable(
+    MalVm *vm, MalValue callee, MalValue iterable,
+    const MalValue *prefix, i32 prefix_count) {
+    i32 base = vm->value_stack_size;
+    if (prefix_count > vm->value_stack_capacity - base) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Maximum call stack size exceeded");
+        return vm->completion;
+    }
+    MalCalleeRoots roots;
+    mal_gc_callee_roots_begin(&roots, MAL_VALUE_UNDEFINED, callee, iterable, prefix, prefix_count);
+    for (i32 i = 0; i < prefix_count; i++) vm->value_stack[base + i] = prefix[i];
+    vm->value_stack_size = base + prefix_count;
+    i32 argument_count = mal_vm_marshal_spread_iterable(vm, iterable);
+    MalCompletion completion = argument_count < 0 ? vm->completion : mal_vm_construct_value(
+        vm, callee, &vm->value_stack[base], prefix_count + argument_count);
+    vm->value_stack_size = base;
+    mal_gc_callee_roots_end(&roots);
+    return completion;
+}
+
 static MalValue mal_vm_rest_forward_state(
     MalVm *vm, const MalValue *args, i32 arg_count, i32 start, i32 flags) {
     return (flags & MAL_REST_FORWARD_ARGUMENTS_OBJECT) != 0
@@ -4540,6 +4576,32 @@ void mal_op_construct_spread(MalCallable *callable, const MalInstruction *instru
     }
 
     mal_vm_construct_dispatch(vm, callee, base, argument_count, dst);
+}
+
+void mal_op_construct_spread_iterable(
+    MalCallable *callable, const MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue callee = callable->registers[instruction->as.construct_spread_iterable.callee];
+    const i32 *data = mal_op_instruction_data(callable,
+        instruction->as.construct_spread_iterable.data_offset);
+    MalValue iterable = callable->registers[data[0]];
+    i32 prefix_count = data[1];
+    i32 dst = instruction->as.construct_spread_iterable.dst;
+    i32 base = vm->value_stack_size;
+    if (prefix_count > vm->value_stack_capacity - base) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Maximum call stack size exceeded");
+        return;
+    }
+    for (i32 i = 0; i < prefix_count; i++)
+        vm->value_stack[base + i] = callable->registers[data[2 + i]];
+    vm->value_stack_size = base + prefix_count;
+    i32 argument_count = mal_vm_marshal_spread_iterable(vm, iterable);
+    if (argument_count < 0) {
+        vm->value_stack_size = base;
+        return;
+    }
+    mal_vm_construct_dispatch(vm, callee, base, prefix_count + argument_count, dst);
 }
 
 // Shared by the interpreter ops and the native backend: `super(a, b)`. Constructs

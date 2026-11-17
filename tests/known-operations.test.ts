@@ -40,6 +40,26 @@ import {
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("known-operation dispatch", () => {
+	it.each(["Array", "Number", "Date"])(
+		"keeps iterable constructor arguments for %s",
+		(operation) => {
+			const output = inspectStaticValueFunction(
+				`function probe(prefix,tail){return new ${operation}(prefix,...tail);}globalThis.probe=probe;`,
+				"probe",
+				{ realms: false },
+			);
+			expect(
+				output.fn.instructions.find(
+					(op) => op.opcode === "CALL_KNOWN" && op.operation === operation,
+				),
+			).toMatchObject({
+				construct: true,
+				argumentMode: "iterable",
+				argumentCount: 2,
+			});
+		},
+	);
+
 	it.each(["Math.abs", "String.prototype.includes", "WeakMap.prototype.get"])(
 		"preserves a fixed receiver and an iterable tail when unwrapping %s.call",
 		(operation) => {

@@ -3013,7 +3013,7 @@ const SPREAD_LITERAL_ELEMENT_LIMIT = 16;
 const spreadArrayLiteralArguments: CoreFunctionPass = {
 	name: "spread-array-literal-arguments",
 	stage: "canonicalize",
-	requiredFunctionOpcodesAny: ["callSpreadIterable"],
+	requiredFunctionOpcodesAny: ["callSpreadIterable", "constructSpreadIterable"],
 	requiredAnalyses: [],
 	wakesOn: ["body", "cfg"],
 	changes: LOCAL_CHANGES,
@@ -3047,6 +3047,7 @@ const spreadArrayLiteralArguments: CoreFunctionPass = {
 			const calls: Array<{
 				instruction: CoreInstructionId;
 				operands: Array<CoreValueId>;
+				construct: boolean;
 			}> = [];
 			let valid = true;
 			for (
@@ -3065,8 +3066,8 @@ const spreadArrayLiteralArguments: CoreFunctionPass = {
 						? fn.instructionOpcodeName(consumer)
 						: undefined;
 				if (
-					opcode === "callSpreadIterable" &&
-					operands[2] === array &&
+					(opcode === "callSpreadIterable" || opcode === "constructSpreadIterable") &&
+					operands[opcode === "constructSpreadIterable" ? 1 : 2] === array &&
 					operands.filter((operand) => operand === array).length === 1
 				) {
 					// A guarded rewrite's twin keeps spreading the literal.
@@ -3075,7 +3076,11 @@ const spreadArrayLiteralArguments: CoreFunctionPass = {
 						true
 					)
 						valid = false;
-					calls.push({ instruction: consumer, operands });
+					calls.push({
+						instruction: consumer,
+						operands,
+						construct: opcode === "constructSpreadIterable",
+					});
 					continue;
 				}
 				const attributes =
@@ -3177,15 +3182,15 @@ const spreadArrayLiteralArguments: CoreFunctionPass = {
 					);
 				continue;
 			}
-			for (const { instruction, operands } of calls) {
+			for (const { instruction, operands, construct } of calls) {
 				const sourceCall = fn.instructionAttributes(instruction).sourceCall;
 				editor.replaceInstruction(
 					instruction,
-					"call",
+					construct ? "construct" : "call",
 					[
 						operands[0]!,
-						operands[1]!,
-						...operands.slice(3),
+						...(construct ? [] : [operands[1]!]),
+						...operands.slice(construct ? 2 : 3),
 						...(elements as Array<CoreValueId>),
 					],
 					{
@@ -3223,6 +3228,7 @@ function guardSpreadLiteralCall(
 	call: {
 		readonly instruction: CoreInstructionId;
 		readonly operands: ReadonlyArray<CoreValueId>;
+		readonly construct: boolean;
 	},
 	elements: ReadonlyArray<CoreValueId>,
 	literal: ReadonlyArray<CoreInstructionId>,
@@ -3285,10 +3291,15 @@ function guardSpreadLiteralCall(
 			: fn.kernel.blockParameterValue(fn.kernel.blockParameterStart(fallback));
 	editor.replaceInstruction(
 		site,
-		"callSpreadIterable",
+		call.construct ? "constructSpreadIterable" : "callSpreadIterable",
 		fallbackArray === undefined
 			? call.operands
-			: [call.operands[0]!, call.operands[1]!, fallbackArray, ...call.operands.slice(3)],
+			: [
+					call.operands[0]!,
+					...(call.construct ? [] : [call.operands[1]!]),
+					fallbackArray,
+					...call.operands.slice(call.construct ? 2 : 3),
+				],
 		{
 			attributes: {
 				...fn.instructionAttributes(site),
@@ -3362,8 +3373,13 @@ function guardSpreadLiteralCall(
 	});
 	const directResult = editor.appendInstruction(
 		direct,
-		"call",
-		[call.operands[0]!, call.operands[1]!, ...call.operands.slice(3), ...elements],
+		call.construct ? "construct" : "call",
+		[
+			call.operands[0]!,
+			...(call.construct ? [] : [call.operands[1]!]),
+			...call.operands.slice(call.construct ? 2 : 3),
+			...elements,
+		],
 		{
 			attributes: typeof sourceCall === "number" ? { sourceCall } : {},
 			sourcePosition,

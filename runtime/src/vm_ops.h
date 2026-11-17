@@ -760,6 +760,7 @@ void mal_op_call_spread_iterable(
 void mal_op_construct(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_construct_spread(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_construct_spread_iterable(MalCallable *callable, const MalInstruction *instruction);
 
 /**
  * `super(a, b)`: [[Construct]] the parent forwarding the derived constructor's
@@ -4835,6 +4836,9 @@ MalCompletion mal_vm_op_call_spread_iterable(
 
 /** Spread construct `new C(...args)` for the native backend; see call_spread. */
 MalCompletion mal_vm_op_construct_spread(MalVm *vm, MalValue callee, MalValue arguments_array);
+MalCompletion mal_vm_op_construct_spread_iterable(
+    MalVm *vm, MalValue callee, MalValue iterable,
+    const MalValue *prefix, i32 prefix_count);
 
 /** `super.p = v` / `super[k] = v`: write to `receiver` via the super base descriptor. */
 void mal_vm_op_store_super_property(

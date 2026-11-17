@@ -1285,6 +1285,13 @@ export type BytecodeInstruction =
 			prefixArguments: Array<number>;
 	  }
 	| {
+			opcode: "CONSTRUCT_SPREAD_ITERABLE";
+			dst: number;
+			callee: number;
+			iterable: number;
+			prefixArguments: Array<number>;
+	  }
+	| {
 			opcode: "CONSTRUCT_SPREAD";
 			dst: number;
 			callee: number;
@@ -2989,6 +2996,7 @@ const RUNTIME_INSTRUCTION_COPY_SCHEMA = {
 	LOAD_PROPERTY_STATIC_SHAPE_CASE: { slots: "copy-list" },
 	CALL_REST_ARGUMENTS: { prefixArguments: "copy-list", sourceArguments: "copy-list" },
 	CALL_SPREAD_ITERABLE: { prefixArguments: "copy-list" },
+	CONSTRUCT_SPREAD_ITERABLE: { prefixArguments: "copy-list" },
 	CONSTRUCT_SUPER: { arguments: "copy-list" },
 	CREATE_PRIVATE_NAMES: { capturedIndices: "copy-list" },
 	INIT_PRIVATE_FIELDS: { keyRegisters: "copy-list" },
@@ -4744,6 +4752,14 @@ function lowerInstructionToBytecodeInstruction(
 				dst: instruction.registers[0],
 				callee: instruction.registers[1],
 				argumentsArray: instruction.registers[2],
+			};
+		case "constructSpreadIterable":
+			return {
+				opcode: "CONSTRUCT_SPREAD_ITERABLE",
+				dst: instruction.registers[0],
+				callee: instruction.registers[1],
+				iterable: instruction.registers[2],
+				prefixArguments: instruction.registers.slice(3),
 			};
 		case "constructSuper":
 			return {

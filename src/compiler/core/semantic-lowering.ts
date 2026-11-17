@@ -16502,6 +16502,20 @@ function compileNewExpression(
 	}
 
 	if (expression.arguments.some((arg) => arg.type === "SpreadElement")) {
+		const trailing = compileTrailingSpreadArguments(
+			program,
+			fn,
+			cursor,
+			expression.arguments,
+		);
+		if (trailing !== undefined) {
+			const destination = nextCoreVariable(fn);
+			emitSourceCall(program, fn, cursor, expression, {
+				type: "constructSpreadIterable",
+				registers: [destination, callee, ...trailing],
+			});
+			return destination;
+		}
 		const argumentsArray = compileSpreadArgumentsArray(
 			program,
 			fn,

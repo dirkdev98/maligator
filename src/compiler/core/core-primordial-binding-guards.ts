@@ -751,6 +751,7 @@ function regionCandidateLoop(
 			if (
 				opcode === "construct" ||
 				opcode === "constructSpread" ||
+				opcode === "constructSpreadIterable" ||
 				opcode === "callSpread" ||
 				opcode === "callSpreadIterable" ||
 				opcode === "callKnown" ||

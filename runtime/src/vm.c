@@ -3283,6 +3283,11 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_construct_spread(frame, instruction));
                 break;
             }
+            MAL_VM_CASE(CONSTRUCT_SPREAD_ITERABLE) {
+                MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(
+                    mal_op_construct_spread_iterable(frame, instruction));
+                break;
+            }
             MAL_VM_CASE(CONSTRUCT_SUPER) {
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_construct_super(frame, instruction));
                 break;
@@ -5906,6 +5911,20 @@ static MalCompletion mal_vm_construct_with_native_target(MalVm *vm, MalValue cal
     MalCompletion completion = {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
     MalValue effective_new_target = mal_bound_function_object_new_target(callee, new_target);
+
+    if (mal_value_is_proxy_object(resolution.callee)) {
+        MalCalleeRoots roots;
+        mal_gc_callee_roots_begin(&roots, MAL_VALUE_UNDEFINED, effective_new_target,
+            resolution.callee, resolution.args, resolution.arg_count);
+        completion = mal_proxy_construct(vm, mal_value_to_proxy_object(resolution.callee),
+            resolution.args, resolution.arg_count, effective_new_target);
+        mal_gc_callee_roots_end(&roots);
+        free(resolution.owned_args);
+#if MAL_PROFILE && MAL_PERF_STATS
+        vm->profile_current_site_id = saved_profile_site;
+#endif
+        return completion;
+    }
 
     // EvaluateNew's IsConstructor failure belongs to the caller's running
     // execution context. Validate before crossing into a stamped callee realm.
