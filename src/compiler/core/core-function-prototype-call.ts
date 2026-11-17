@@ -3,6 +3,7 @@ import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attribut
 import { coreTerminatorInput } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type {
+	CoreAttributeValue,
 	CoreBlockId,
 	CoreFunctionId,
 	CoreInstructionId,
@@ -370,7 +371,7 @@ interface GuardedCallSplit {
 		destination: CoreBlockId,
 		opcode: string,
 		inputs: ReadonlyArray<CoreValueId>,
-		attributes?: Readonly<Record<string, string | number | boolean>>,
+		attributes?: Readonly<Record<string, CoreAttributeValue>>,
 	) => CoreValueId;
 	/** Branches to the next test, or to the original call, from the block the site was in. */
 	readonly test: (condition: CoreValueId) => CoreBlockId;

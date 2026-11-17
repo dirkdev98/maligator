@@ -196,6 +196,70 @@ function validBranchProgram() {
 }
 
 describe("Core verification", () => {
+	it.each([
+		{ expected: "string", positive: true, valid: true },
+		{ expected: "number", positive: true, valid: false },
+		{ expected: "string", positive: false, valid: false },
+		{ expected: "symbol", positive: false, valid: false },
+	])(
+		"replays the selected String edge for current-realm parsing: %j",
+		({ expected, positive, valid }) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const value = builder.blockParameterValue(entry, 0);
+			const checked = builder.createBlock(),
+				fast = builder.createBlock(),
+				slow = builder.createBlock();
+			const [holds] = builder.appendInstruction(entry, "guardSemanticEpoch", [], {
+				attributes: { family: "primordial-bindings" },
+			});
+			builder.setTerminator(entry, {
+				kind: "branch",
+				condition: holds!,
+				consequent: { block: checked, arguments: [] },
+				alternate: { block: slow, arguments: [] },
+			});
+			const [matches] = builder.appendInstruction(checked, "typeofCompare", [value], {
+				attributes: { expected, negated: false },
+			});
+			builder.setTerminator(checked, {
+				kind: "branch",
+				condition: matches!,
+				consequent: { block: positive ? fast : slow, arguments: [] },
+				alternate: { block: positive ? slow : fast, arguments: [] },
+			});
+			const [namespace] = builder.appendInstruction(fast, "loadIntrinsic", [], {
+				attributes: { intrinsic: "Date" },
+			});
+			const [result] = builder.appendInstruction(fast, "callKnown", [namespace!, value], {
+				attributes: {
+					operation: "Date.parse",
+					specialized: "Date.parse",
+					worldAssumptions: {
+						...builtinWorldAssumptions(
+							"Date.parse",
+							"exact-builtin-proof",
+							false,
+							"guarded",
+						),
+					},
+					knownBuiltinCall: guardedKnownOperationCall(
+						"Date.parse",
+						builder.functionId,
+						false,
+					) as unknown as CoreAttributeValue,
+				},
+			});
+			builder.setTerminator(fast, { kind: "return", value: result! });
+			builder.setTerminator(slow, { kind: "return", value });
+			const finished = builder.finish(entry);
+			const verify = () => verifyCoreFunction(program, finished.function);
+			if (valid) expect(verify).not.toThrow();
+			else
+				expect(verify).toThrow("Unsupported current-realm guarded operation Date.parse");
+		},
+	);
 	it.each([false, true])("replays Number inputs for current-realm UTC: %s", (number) => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });

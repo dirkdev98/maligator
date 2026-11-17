@@ -8,6 +8,7 @@ import { directBuiltinOperationIds } from "../src/compiler/shared/builtin-regist
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
@@ -409,6 +410,28 @@ it.each([undefined, [0], [COMPILER_VALUE_KIND_OBJECT], [COMPILER_VALUE_KIND_TOP]
 				kinds,
 			),
 		).toThrow("Unsupported current-realm guarded operation");
+	},
+);
+it.each([
+	{ kinds: undefined, allowed: false },
+	{ kinds: [], allowed: false },
+	{ kinds: [COMPILER_VALUE_KIND_NUMBER], allowed: false },
+	{ kinds: [COMPILER_VALUE_KIND_OBJECT], allowed: false },
+	{ kinds: [COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_OBJECT], allowed: false },
+	{ kinds: [COMPILER_VALUE_KIND_STRING], allowed: true },
+	{ kinds: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_STRING], allowed: false },
+])(
+	"requires one consumed String fact for current-realm parsing: %j",
+	({ kinds, allowed }) => {
+		const verify = () =>
+			verifyBuiltinWorldAssumptions(
+				builtinWorldAssumptions("Date.parse", "exact-builtin-proof", false, "guarded"),
+				"Date.parse",
+				undefined,
+				kinds,
+			);
+		if (allowed) expect(verify).not.toThrow();
+		else expect(verify).toThrow("Unsupported current-realm guarded operation Date.parse");
 	},
 );
 it.each(

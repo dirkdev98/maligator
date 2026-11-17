@@ -17,3 +17,10 @@ globalThis.realmUTC = function realmUTC(year) {
 globalThis.realmReplaceUTC = function realmReplaceUTC() {
 	Date.UTC = () => 31;
 };
+globalThis.realmParseText = "2020-02-29T12:34:56.789Z";
+globalThis.realmParse = function realmParse(value) {
+	return Date.parse(value);
+};
+globalThis.realmReplaceParse = function realmReplaceParse() {
+	Date.parse = () => 79;
+};

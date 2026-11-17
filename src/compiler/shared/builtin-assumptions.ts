@@ -1,5 +1,8 @@
 import type { WorldFacts } from "./compiler-facts.ts";
-import { COMPILER_VALUE_KIND_NUMBER } from "./compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_STRING,
+} from "./compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
 
 export interface BuiltinWorldAssumptions {
@@ -39,7 +42,10 @@ export function guardedCurrentRealmOperation(
 		GUARDED_CURRENT_REALM_OPERATIONS.has(operation) ||
 		(operation === "Date.UTC" &&
 			consumedArgumentKinds !== undefined &&
-			consumedArgumentKinds.every((kind) => kind === COMPILER_VALUE_KIND_NUMBER))
+			consumedArgumentKinds.every((kind) => kind === COMPILER_VALUE_KIND_NUMBER)) ||
+		(operation === "Date.parse" &&
+			consumedArgumentKinds?.length === 1 &&
+			consumedArgumentKinds[0] === COMPILER_VALUE_KIND_STRING)
 	);
 }
 

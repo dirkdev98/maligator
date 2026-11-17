@@ -3675,6 +3675,29 @@ describe("wide BigInt builtin constants", () => {
 });
 
 describe("mutable namespace guards in the executing realm", () => {
+	it.each([
+		"return Date.parse(value)",
+		"return Date.parse(value.input)",
+		"return Date.parse(value, prepare())",
+		"return Date.parse(String(value))",
+		"return Date.parse(value)+Date.parse(other)",
+	])("guards String parsing after original argument evaluation: %s", (body) => {
+		const output = inspectStaticValueFunction(
+			`function probe(value,prepare,other){${body}}globalThis.probe=probe;`,
+			"probe",
+			{ locked: false, realms: true },
+		).core;
+		const calls = output.filter(
+			(op) => op.opcode === "callKnown" && op.attributes.operation === "Date.parse",
+		);
+		expect(calls.length).toBeGreaterThan(0);
+		for (const call of calls)
+			expect(call.attributes).toMatchObject({
+				specialized: "Date.parse",
+				worldAssumptions: { primordials: "guarded", realm: "current-execution-realm" },
+			});
+		expect(output.some((op) => op.opcode === "call")).toBe(true);
+	});
 	it("guards UTC arithmetic with locally proven Number arguments", () => {
 		const output = inspectStaticValueFunction(
 			"function probe(value){const number=+value;return Date.UTC(2020+(number&3),number&7,1,0,0,0,0)}globalThis.probe=probe;",
@@ -3900,9 +3923,8 @@ describe("captured Date.parse calls after String conversion", () => {
 	it.each([
 		["Date.parse((+value,other))", false],
 		["Date.parse(String(value),other())", false],
-		["Date.parse(String(value))", true],
 	] as const)(
-		"retains unsupported parser inputs or execution realms: %s, realms=%s",
+		"retains unsupported captured parser inputs: %s, realms=%s",
 		(expression, realms) => {
 			const output = inspectStaticValueFunction(
 				`function probe(value,other){return ${expression}}globalThis.probe=probe;`,

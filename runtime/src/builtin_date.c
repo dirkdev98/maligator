@@ -792,8 +792,8 @@ static f64 date_parse_legacy(const c16 *u, usize len) {
 }
 
 /** Parse a date string: ISO 8601 first, then the legacy toString/toUTCString
- * forms. Flat UTF-16 text is read in place because parsing neither allocates nor
- * collects; Latin-1 text is widened on the stack, which parses faster than
+ * forms. Parsing neither runs JavaScript nor collects, so flat UTF-16 text can be
+ * read in place. Latin-1 text is widened on the stack, which parses faster than
  * reading it through an encoding-dispatching accessor. */
 static f64 date_parse_string_value(MalString *string) {
     usize length = mal_string_length(string);

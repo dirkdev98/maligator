@@ -16,13 +16,28 @@ function extra(value, prepare) {
 function ordinary(value) {
 	return Date.parse(value);
 }
+function argument(record) {
+	return Date.parse(record.input);
+}
+function ordinaryExtra(value, prepare) {
+	return Date.parse(value, prepare());
+}
 function empty() {
 	return Date.parse();
 }
 function shadow(Date, value) {
 	return Date.parse(String(value));
 }
-globalThis.parserConsumers = { captured, followed, extra, ordinary, empty, shadow };
+globalThis.parserConsumers = {
+	captured,
+	followed,
+	extra,
+	ordinary,
+	argument,
+	ordinaryExtra,
+	empty,
+	shadow,
+};
 function value(action, result = text) {
 	return {
 		[Symbol.toPrimitive](hint) {
@@ -35,7 +50,57 @@ function value(action, result = text) {
 }
 let result;
 try {
-	if (mode === "values") {
+	if (mode === "strings") {
+		result = [
+			ordinary(text),
+			Number.isNaN(ordinary("invalid date")),
+			ordinary(new String(text)),
+		];
+	} else if (mode === "argument-method" || mode === "argument-restore") {
+		if (mode === "argument-restore") Date.parse = () => 73;
+		const record = {
+			get input() {
+				events.push("get");
+				Date.parse = mode === "argument-restore" ? savedParse : () => 71;
+				collect();
+				return text;
+			},
+		};
+		result = [argument(record), ordinary(text), events];
+	} else if (mode === "argument-throw") {
+		const thrown = { label: "date input getter" };
+		try {
+			argument({
+				get input() {
+					events.push("get");
+					collect();
+					throw thrown;
+				},
+			});
+		} catch (error) {
+			result = [error === thrown, events];
+		}
+	} else if (mode === "ordinary-extra") {
+		result = [
+			ordinaryExtra(text, () => {
+				events.push("extra");
+				Date.parse = () => 79;
+				collect();
+			}),
+			ordinary(text),
+			events,
+		];
+	} else if (mode === "ordinary-extra-throw") {
+		const thrown = { label: "date extra argument" };
+		try {
+			ordinaryExtra(text, () => {
+				events.push("extra");
+				throw thrown;
+			});
+		} catch (error) {
+			result = [error === thrown, events];
+		}
+	} else if (mode === "values") {
 		result = [
 			captured(text),
 			captured(value(() => {})),

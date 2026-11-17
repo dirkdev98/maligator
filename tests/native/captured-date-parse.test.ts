@@ -15,36 +15,62 @@ import type { BackendPairResult } from "../../src/test-harness.ts";
 const fixture = "tests/local/captured-date-parse.mjs";
 const outDir = mkdtempSync(join(tmpdir(), "mal-captured-parser-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
-let pair: BackendPairResult;
+const realmPairs: Array<BackendPairResult> = [];
 beforeAll(() => {
-	pair = buildBackendPairFromOneProgramImage({
-		fixture,
-		name: "captured-date-parse",
-		outDir,
-		mainFile: HOST_MAIN,
-		nativeStackRoots: "precise",
-		config: resolveBuildConfig({
-			engine: { primordials: "mutable", realms: false, eval: false },
-			surface: { node: true },
-		}),
-	});
-	const fn = pair.programImage.native.functions.find(
-		(fn) =>
-			String.fromCharCode(
-				...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
-			) === "captured",
-	)!;
-	expect(
-		fn.body.instructions.some(
-			(op) =>
-				op.opcode === "CALL_KNOWN" &&
-				op.operation === "Date.parse" &&
-				op.specialized === "Date.parse",
-		),
-	).toBe(true);
+	for (const realms of [false, true]) {
+		const built = buildBackendPairFromOneProgramImage({
+			fixture,
+			name: `captured-date-parse-${realms}`,
+			outDir,
+			mainFile: HOST_MAIN,
+			nativeStackRoots: "precise",
+			config: resolveBuildConfig({
+				engine: { primordials: "mutable", realms, eval: false },
+				surface: { node: true },
+			}),
+		});
+		realmPairs.push(built);
+		const fn = built.programImage.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(built.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "captured",
+		)!;
+		expect(
+			fn.body.instructions.some(
+				(op) =>
+					op.opcode === "CALL_KNOWN" &&
+					op.operation === "Date.parse" &&
+					op.specialized === "Date.parse",
+			),
+		).toBe(true);
+		if (realms) {
+			const ordinary = built.programImage.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(built.programImage.runtime.stringConstants[fn.body.nameStringIndex] ??
+							[]),
+					) === "ordinary",
+			)!;
+			expect(
+				ordinary.body.instructions.some(
+					(op) =>
+						op.opcode === "CALL_KNOWN" &&
+						op.operation === "Date.parse" &&
+						op.specialized === "Date.parse",
+				),
+			).toBe(true);
+		}
+	}
 });
 describe("Date.parse captured before argument conversion", () => {
 	it.each([
+		["parses String inputs and retains boxed conversion", "strings"],
+		["retains the selected parser across argument getter mutation", "argument-method"],
+		["retains a replacement selected before argument restoration", "argument-restore"],
+		["propagates an argument getter throw before parsing", "argument-throw"],
+		["finishes ignored arguments before the late String guard", "ordinary-extra"],
+		["propagates ignored argument throws before parsing", "ordinary-extra-throw"],
 		["parses strings and converted values without repeating conversion", "values"],
 		["returns NaN without reading a missing operand", "empty"],
 		["retains the selected parser after method replacement", "method"],
@@ -63,9 +89,10 @@ describe("Date.parse captured before argument conversion", () => {
 			encoding: "utf8",
 			env: { ...process.env, ...env },
 		});
-		for (const binary of [pair.compiled, pair.interpreted])
-			for (const stress of [{}, STRESS_ENV])
-				expect(runToStdout(binary, { env: { ...env, ...stress } })).toBe(expected);
+		for (const built of realmPairs)
+			for (const binary of [built.compiled, built.interpreted])
+				for (const stress of [{}, STRESS_ENV])
+					expect(runToStdout(binary, { env: { ...env, ...stress } })).toBe(expected);
 	});
 	it("retains selected parser semantics in a static interpreted image", () => {
 		const binary = buildNativeBinary({

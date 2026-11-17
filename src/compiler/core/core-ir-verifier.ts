@@ -22,6 +22,8 @@ import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { primordialNodeAvailable } from "../shared/primordial-catalog.ts";
 import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import { analyzeCoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
+import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import { coreExactHeapBrand } from "./core-heap-brands.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
@@ -1306,6 +1308,7 @@ function verifyFunction(
 	const cfg = verifyControlFlow(fn, program);
 	verifyFactUses(fn, cfg);
 	let localKinds: CoreValueKindAnalysis | undefined;
+	let conditionalKinds: CoreConditionalValueKinds | undefined;
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		if (fn.instructionOpcodeName(instruction) === "callKnown") {
@@ -1316,18 +1319,28 @@ function verifyFunction(
 				| undefined;
 			let argumentKinds: Array<CompilerValueKindMask> | undefined;
 			if (
-				operation === "Date.UTC" &&
+				(operation === "Date.UTC" || operation === "Date.parse") &&
 				assumptions?.primordials === "guarded" &&
 				assumptions.realm === "current-execution-realm"
 			) {
 				if (attributes.construct || attributes.argumentMode !== undefined)
-					fail("Invalid current-realm UTC call");
+					fail(`Invalid current-realm ${operation} call`);
 				localKinds ??= analyzeCoreValueKinds(program, fn, cfg);
 				const limit = exactBuiltinCallDescriptor(operation)!.forwardedArgumentLimit!;
 				const start = fn.kernel.instructionOperandStart(instruction);
 				argumentKinds = Array.from(
 					{ length: Math.min(limit, fn.kernel.instructionOperandCount(instruction) - 1) },
-					(_, index) => localKinds!.kindMask(fn.kernel.operandAt(start + 1 + index)),
+					(_, index) => {
+						const value = fn.kernel.operandAt(start + 1 + index);
+						if (operation !== "Date.parse") return localKinds!.kindMask(value);
+						conditionalKinds ??= analyzeCoreConditionalValueKinds(
+							program,
+							fn,
+							cfg,
+							(value) => localKinds!.kindMask(value),
+						);
+						return conditionalKinds.kindMask(value, fn.instructionBlock(instruction));
+					},
 				);
 			}
 			verifyBuiltinWorldAssumptions(
