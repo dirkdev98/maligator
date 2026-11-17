@@ -1378,39 +1378,70 @@ function verifyFunction(
 				const consumer = coreInstructionId(fn.kernel.useInstruction(use));
 				if (
 					fn.instructionKind(consumer) !== "operation" ||
-					fn.instructionOpcodeName(consumer) !== "callRestArguments" ||
+					(fn.instructionOpcodeName(consumer) !== "callRestArguments" &&
+						fn.instructionOpcodeName(consumer) !== "constructRestArguments") ||
 					fn.kernel.useOperand(use) !== 3
 				)
 					fail("Rest state escapes its forwarding calls");
 			}
 		}
-		if (fn.instructionOpcodeName(instruction) !== "callRestArguments") continue;
+		if (
+			fn.instructionOpcodeName(instruction) !== "callRestArguments" &&
+			fn.instructionOpcodeName(instruction) !== "constructRestArguments"
+		)
+			continue;
+		const construct = fn.instructionOpcodeName(instruction) === "constructRestArguments";
 		const sourceArgumentCount = fn.instructionAttributes(instruction).sourceArgumentCount;
 		const state = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 3);
 		const definition = fn.kernel.valueDefinitionOwner(state);
 		if (
 			fn.kernel.valueDefinitionKind(state) !== 1 ||
 			fn.instructionOpcodeName(coreInstructionId(definition)) !==
-				"createRestArgumentsState" ||
-			(fn.metadata.mappedArguments && sourceArgumentCount === undefined)
+				"createRestArgumentsState"
 		)
 			fail("Invalid rest forwarding state");
-		const { startIndex, apply, argumentsObject } = fn.instructionAttributes(instruction);
+		const { startIndex, apply, argumentsObject, mappedArguments } =
+			fn.instructionAttributes(instruction);
+		const base = mappedArguments === true ? 5 : 4;
+		if (mappedArguments === true) {
+			if (fn.kernel.instructionOperandCount(instruction) < base)
+				fail("Missing mapped forwarding callee");
+			const owner = fn.kernel.operandAt(
+				fn.kernel.instructionOperandStart(instruction) + 4,
+			);
+			if (
+				!fn.metadata.mappedArguments ||
+				argumentsObject !== true ||
+				sourceArgumentCount !== undefined ||
+				fn.kernel.valueDefinitionKind(owner) !== 1 ||
+				fn.instructionOpcodeName(
+					coreInstructionId(fn.kernel.valueDefinitionOwner(owner)),
+				) !== "loadCallee"
+			)
+				fail("Invalid mapped forwarding owner");
+		} else if (
+			mappedArguments !== undefined ||
+			(fn.metadata.mappedArguments &&
+				sourceArgumentCount === undefined &&
+				argumentsObject === true)
+		)
+			fail("Missing mapped forwarding owner");
 		if (
 			typeof startIndex !== "number" ||
 			!Number.isSafeInteger(startIndex) ||
 			startIndex < 0 ||
 			typeof apply !== "boolean" ||
+			(construct && apply) ||
 			(argumentsObject !== undefined && (argumentsObject !== true || startIndex !== 0)) ||
 			(sourceArgumentCount !== undefined &&
 				(typeof sourceArgumentCount !== "number" ||
 					!Number.isSafeInteger(sourceArgumentCount) ||
 					sourceArgumentCount < 0 ||
 					sourceArgumentCount > 16 ||
-					sourceArgumentCount > fn.kernel.instructionOperandCount(instruction) - 4)) ||
+					sourceArgumentCount > fn.kernel.instructionOperandCount(instruction) - base)) ||
 			(apply &&
 				fn.kernel.instructionOperandCount(instruction) !==
-					4 + (typeof sourceArgumentCount === "number" ? sourceArgumentCount : 0))
+					base + (typeof sourceArgumentCount === "number" ? sourceArgumentCount : 0))
 		)
 			fail("Invalid rest forwarding arguments");
 	}

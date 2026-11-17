@@ -512,6 +512,38 @@ describe("Core verification", () => {
 		builder.finish(entry);
 		expect(() => verifyCoreProgram(program)).toThrow(/Rest state escapes/);
 	});
+	it.each(["missing", "different", "inlined"] as const)(
+		"rejects a %s mapped forwarding owner",
+		(mode) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [callee] = builder.appendInstruction(
+				entry,
+				mode === "different" ? "createUndefined" : "loadCallee",
+				[],
+			);
+			const [state] = builder.appendInstruction(entry, "createRestArgumentsState", []);
+			const [result] = builder.appendInstruction(
+				entry,
+				"callRestArguments",
+				[callee!, callee!, callee!, state!, ...(mode === "missing" ? [] : [callee!])],
+				{
+					attributes: {
+						startIndex: 0,
+						apply: false,
+						argumentsObject: true,
+						mappedArguments: true,
+						...(mode === "inlined" ? { sourceArgumentCount: 0 } : {}),
+					},
+				},
+			);
+			builder.setTerminator(entry, { kind: "return", value: result! });
+			builder.configureFunction({ metadata: { strict: false, mappedArguments: true } });
+			builder.finish(entry);
+			expect(() => verifyCoreProgram(program)).toThrow(/mapped forwarding/);
+		},
+	);
 
 	it.each([
 		["boxed", "string", false],

@@ -206,6 +206,7 @@ function remarkForInstruction(
 		case "CALL":
 		case "CALL_SPREAD":
 		case "CALL_REST_ARGUMENTS":
+		case "CONSTRUCT_REST_ARGUMENTS":
 		case "CALL_SPREAD_ITERABLE":
 			return {
 				phase: "lowering",

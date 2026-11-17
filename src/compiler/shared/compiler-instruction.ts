@@ -901,12 +901,25 @@ type CompilerOperation =
 	  }
 	| {
 			type: "callRestArguments";
-			// [result, callee, this, receiver, memoized state, ...prefix, ...source]
+			// [result, callee, this, receiver, state, ...owning callee, ...prefix, ...source]
 			registers: [number, number, number, number, number, ...Array<number>];
 			startIndex: number;
 			apply: boolean;
-			/** Forwards an unmapped `arguments`, which the fallback materializes as such. */
+			/** The fallback materializes the owning arguments object. */
 			argumentsObject?: boolean;
+			mappedArguments?: boolean;
+			/** Trailing operands snapshot an inlined activation instead of this frame. */
+			sourceArgumentCount?: number;
+	  }
+	| {
+			type: "constructRestArguments";
+			// [result, callee, this, receiver, state, ...owning callee, ...prefix, ...source]
+			registers: [number, number, number, number, number, ...Array<number>];
+			startIndex: number;
+			apply: boolean;
+			/** The fallback materializes the owning arguments object. */
+			argumentsObject?: boolean;
+			mappedArguments?: boolean;
 			/** Trailing operands snapshot an inlined activation instead of this frame. */
 			sourceArgumentCount?: number;
 	  }

@@ -42,6 +42,7 @@ export const CORE_OPCODES = [
 	"callSpread",
 	"callSpreadIterable",
 	"callRestArguments",
+	"constructRestArguments",
 	"checkSuperClass",
 	"construct",
 	"constructSpread",
@@ -273,6 +274,7 @@ const CALLS_USER_CODE = new Set<CoreOpcode>([
 	"callSpread",
 	"callSpreadIterable",
 	"callRestArguments",
+	"constructRestArguments",
 	"checkSuperClass",
 	"construct",
 	"constructSpread",
@@ -542,6 +544,12 @@ const OPCODE_ALLOCATIONS = {
  * operands, so they do not transfer script-function targets.
  */
 const OPCODE_CALL_TRANSFERS = {
+	constructRestArguments: {
+		calleeOperand: 0,
+		result: "construct-completion",
+		invocation: "construct",
+		arguments: { kind: "activation" },
+	},
 	callRestArguments: {
 		calleeOperand: 0,
 		result: "call-completion",
@@ -709,6 +717,7 @@ const INPUT_ARITIES = {
 	callSpread: [3, 3],
 	callSpreadIterable: [3, 65_535],
 	callRestArguments: [4, 65_535],
+	constructRestArguments: [4, 65_535],
 	checkSuperClass: [1, 1],
 	construct: [1, 65_535],
 	constructSpread: [2, 2],

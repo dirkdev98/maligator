@@ -145,6 +145,7 @@ export const BYTECODE_OPERATIONS = [
 	"LOAD_BOUND_FUNCTION_SLOT",
 	"WITH_CAPTURE_OBJECT",
 	"CONSTRUCT_SPREAD_ITERABLE",
+	"CONSTRUCT_REST_ARGUMENTS",
 ] as const;
 
 export type BytecodeOperation = (typeof BYTECODE_OPERATIONS)[number];

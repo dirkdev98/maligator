@@ -752,7 +752,7 @@ static inline bool mal_vm_rest_arguments_can_forward(
     return mal_value_is_callable(this_value);
 }
 
-MalCompletion mal_vm_op_call_rest_arguments(MalVm *vm, MalValue callee, MalValue this_value, MalValue receiver, const MalValue *args, i32 arg_count, i32 start, i32 flags, MalValue *state, const MalValue *prefix, i32 prefix_count);
+MalCompletion mal_vm_op_call_rest_arguments(MalVm *vm, MalValue callee, MalValue this_value, MalValue receiver, const MalValue *args, i32 arg_count, i32 start, i32 flags, MalValue *state, const MalValue *prefix, i32 prefix_count, MalValue owner_callee, MalEnv *owner_env, i32 owner_index);
 
 void mal_op_call_spread_iterable(
     MalCallable *callable, const MalInstruction *instruction);

@@ -4625,6 +4625,7 @@ function emitCompiledVariant(
 	const retainsIncomingArguments = fn.instructions.some(
 		(instruction) =>
 			instruction.opcode === "CALL_REST_ARGUMENTS" ||
+			instruction.opcode === "CONSTRUCT_REST_ARGUMENTS" ||
 			instruction.opcode === "CONSTRUCT_SUPER_FORWARD" ||
 			instruction.opcode === "LOAD_DYNAMIC_ARGUMENT",
 	);
@@ -17666,8 +17667,10 @@ class NativeInstructionEmission {
 					this.callPoll(),
 				];
 			}
-			case "CALL_REST_ARGUMENTS": {
+			case "CALL_REST_ARGUMENTS":
+			case "CONSTRUCT_REST_ARGUMENTS": {
 				const tmp = `call_rest_${this.ip}`;
+				const construct = instruction.opcode === "CONSTRUCT_REST_ARGUMENTS";
 				const prefix = instruction.prefixArguments;
 				const prefixName = prefix.length === 0 ? "NULL" : `rest_prefix_${this.ip}`;
 				const source = instruction.sourceArguments;
@@ -17682,7 +17685,7 @@ class NativeInstructionEmission {
 					source?.length === 0
 						? "NULL"
 						: `${tmp}_count > 0 ? ${sourceName} + ${instruction.startIndex} : NULL`;
-				const fallback = `${tmp} = mal_vm_op_call_rest_arguments(vm, ${this.boxed(instruction.callee)}, ${this.boxed(instruction.thisValue)}, ${this.boxed(instruction.receiver)}, ${sourceName}, ${sourceCount}, ${instruction.startIndex}, ${restForwardFlags(instruction)}, &r${instruction.state}, ${prefixName}, ${prefix.length});`;
+				const fallback = `${tmp} = mal_vm_op_call_rest_arguments(vm, ${this.boxed(instruction.callee)}, ${this.boxed(instruction.thisValue)}, ${this.boxed(instruction.receiver)}, ${sourceName}, ${sourceCount}, ${instruction.startIndex}, ${restForwardFlags(instruction)}, &r${instruction.state}, ${prefixName}, ${prefix.length}, ${instruction.mappedCallee === undefined ? "MAL_VALUE_UNDEFINED, nullptr, -1" : `${this.boxed(instruction.mappedCallee)}, env, ${this.context.relocation.functionIndex(this.context.functionIndex)}`});`;
 				return [
 					...(source === undefined
 						? []
@@ -17700,14 +17703,18 @@ class NativeInstructionEmission {
 								`MalValue ${prefixName}[${prefix.length}] = { ${prefix.map(this.boxed.bind(this)).join(", ")} };`,
 							]),
 					`MalCompletion ${tmp};`,
-					...(prefix.length > 0
+					...(prefix.length > 0 ||
+					(instruction.mappedCallee !== undefined &&
+						this.context.mappedArgumentSlots.length > 0)
 						? [fallback]
 						: [
 								`i32 ${tmp}_count = ${sourceCount} > ${instruction.startIndex} ? ${sourceCount} - ${instruction.startIndex} : 0;`,
 								`if (mal_value_is_undefined(r${instruction.state}) && ${tmp}_count <= vm->value_stack_capacity - vm->value_stack_size && mal_vm_rest_arguments_can_forward(vm, ${this.boxed(instruction.callee)}, ${this.boxed(instruction.thisValue)}, ${instruction.apply ? "true" : "false"})) {`,
 								`  MAL_PERF_COUNT(rest_forward_calls);`,
 								`  MAL_PERF_ADD(rest_forward_values, ${tmp}_count);`,
-								`  ${tmp} = mal_vm_call_cached(vm, ${this.boxed(instruction.apply ? instruction.thisValue : instruction.callee)}, ${this.boxed(instruction.apply ? instruction.receiver : instruction.thisValue)}, ${sourceSlice}, ${tmp}_count);`,
+								construct
+									? `  ${tmp} = mal_vm_construct_value(vm, ${this.boxed(instruction.callee)}, ${sourceSlice}, ${tmp}_count);`
+									: `  ${tmp} = mal_vm_call_cached(vm, ${this.boxed(instruction.apply ? instruction.thisValue : instruction.callee)}, ${this.boxed(instruction.apply ? instruction.receiver : instruction.thisValue)}, ${sourceSlice}, ${tmp}_count);`,
 								`} else { ${fallback} }`,
 							]),
 					...(source === undefined ? [] : [`mal_gc_unroot(&${tmp}_roots);`]),

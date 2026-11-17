@@ -1420,16 +1420,24 @@ carries the same source values for interpreted execution.
 
 Native forwarding without a prefix checks that its lazy list remains unmaterialized,
 the protocol still holds and the argument count fits the available call window.
-It then sends the rooted source span through cached dispatch from the instruction,
-avoiding the general forwarding helper's frame. Explicit source spans keep their own
-roots through fallback materialization. Mapped sloppy arguments retain their ordinary
-indexed observations. Failed guards preserve the original helper and its persistent
-materialized list.
+Rest and unmapped arguments can send their rooted incoming span directly through call
+or construction dispatch. Explicit source spans keep their roots through fallback
+materialization.
+
+Mapped arguments snapshot current owning-activation parameter cells before entering
+the target. Unmapped duplicate positions and incoming extras retain their original
+values, and missing actual arguments add no elements. The empty parameter map can use
+the incoming span directly. Fallback creates a genuine mapped object with its owning
+callee and environment; its identity, deletions and aliasing remain authoritative on
+later invocations. An explicit callee operand and retained parameter-map metadata
+preserve that ownership when native emission omits bytecode. Mapped forwarding stays
+in its owning activation instead of adopting an inliner's source span.
 
 Base-class constructor bodies use the same retained incoming span for ordinary
 forwarding calls. Field and parameter initialization keep their existing order, and
-constructor result selection and `new.target` stay at the construct boundary. Derived
-constructors and forwarding into construction retain materialized lists.
+constructor result selection and `new.target` stay at the construct boundary. Ordinary
+construction accepts deferred private lists under the same iteration proof. Explicit
+derived `super` consumers retain their materialized lists.
 
 Suspended bodies retain the same boxed lazy-list state across each await or yield.
 Incoming values stay rooted until the coroutine frame owns them; fresh async code

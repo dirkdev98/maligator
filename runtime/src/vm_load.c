@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 104u
+#define WIRE_VERSION 105u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1252,8 +1252,10 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             o->as.call_spread.this_value = rd_i32(r);
             o->as.call_spread.arguments_array = rd_i32(r);
             return;
-        case WIRE_CALL_REST_ARGUMENTS: {
-            o->opcode = MAL_OP_CALL_REST_ARGUMENTS;
+        case WIRE_CALL_REST_ARGUMENTS:
+        case WIRE_CONSTRUCT_REST_ARGUMENTS: {
+            bool construct = tag == WIRE_CONSTRUCT_REST_ARGUMENTS;
+            o->opcode = construct ? MAL_OP_CONSTRUCT_REST_ARGUMENTS : MAL_OP_CALL_REST_ARGUMENTS;
             o->as.call_rest_arguments.dst = rd_i32(r);
             o->as.call_rest_arguments.callee = rd_i32(r);
             o->as.call_rest_arguments.this_value = rd_i32(r);
@@ -1263,11 +1265,15 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             bool apply = (flags & MAL_REST_FORWARD_APPLY) != 0;
             bool arguments_object = (flags & MAL_REST_FORWARD_ARGUMENTS_OBJECT) != 0;
             i32 state = rd_i32(r);
+            i32 mapped_callee = rd_i32(r);
             u32 prefix_count = rd_count(r, 1);
             if (!r->ok || start < 0 || state < 0 || (apply && prefix_count != 0) ||
-                (flags & ~(MAL_REST_FORWARD_APPLY | MAL_REST_FORWARD_ARGUMENTS_OBJECT | MAL_REST_FORWARD_POSITIONAL)) != 0 ||
+                (flags & ~(MAL_REST_FORWARD_APPLY | MAL_REST_FORWARD_ARGUMENTS_OBJECT | MAL_REST_FORWARD_POSITIONAL | MAL_REST_FORWARD_CONSTRUCT | MAL_REST_FORWARD_MAPPED)) != 0 ||
+                construct != ((flags & MAL_REST_FORWARD_CONSTRUCT) != 0) || (construct && apply) ||
+                (((flags & MAL_REST_FORWARD_MAPPED) != 0) != (mapped_callee >= 0)) ||
+                ((flags & MAL_REST_FORWARD_MAPPED) != 0 && (!arguments_object || (flags & MAL_REST_FORWARD_POSITIONAL) != 0)) ||
                 (arguments_object && start != 0) ||
-                !i32_builder_reserve(side_data, r, 5 + (usize) prefix_count)) {
+                !i32_builder_reserve(side_data, r, 6 + (usize) prefix_count)) {
                 r->ok = false;
                 return;
             }
@@ -1276,6 +1282,7 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             side_data->data[side_data->count++] = start;
             side_data->data[side_data->count++] = flags;
             side_data->data[side_data->count++] = state;
+            side_data->data[side_data->count++] = mapped_callee;
             side_data->data[side_data->count++] = prefix_count;
             for (i32 i = 0; i < prefix_count; i++)
                 side_data->data[side_data->count++] = rd_i32(r);
@@ -1783,6 +1790,7 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_CALL_SPREAD, call_spread);
         MAL_WRITES_DST(MAL_OP_CALL_SPREAD_ITERABLE, call_spread_iterable);
         MAL_WRITES_DST(MAL_OP_CALL_REST_ARGUMENTS, call_rest_arguments);
+        MAL_WRITES_DST(MAL_OP_CONSTRUCT_REST_ARGUMENTS, call_rest_arguments);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SPREAD, construct_spread);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SPREAD_ITERABLE, construct_spread_iterable);
         MAL_WRITES_DST(MAL_OP_CONSTRUCT_SUPER, construct_super);
@@ -1907,7 +1915,8 @@ static i32 argument_retention_limit(const MalFunction *fn) {
             instruction->opcode == MAL_OP_LOAD_DYNAMIC_ARGUMENT) {
             return INT32_MAX;
         }
-        if (instruction->opcode == MAL_OP_CALL_REST_ARGUMENTS &&
+        if ((instruction->opcode == MAL_OP_CALL_REST_ARGUMENTS ||
+             instruction->opcode == MAL_OP_CONSTRUCT_REST_ARGUMENTS) &&
             (fn->instruction_data[instruction->as.call_rest_arguments.data_offset + 2] &
              MAL_REST_FORWARD_POSITIONAL) == 0) {
             return INT32_MAX;
@@ -3060,18 +3069,25 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                         r.ok = false;
                     }
                 }
-            } else if (instruction->opcode == MAL_OP_CALL_REST_ARGUMENTS) {
+            } else if (instruction->opcode == MAL_OP_CALL_REST_ARGUMENTS ||
+                       instruction->opcode == MAL_OP_CONSTRUCT_REST_ARGUMENTS) {
                 i32 offset = instruction->as.call_rest_arguments.data_offset;
-                if (offset < 0 || offset > fn->instruction_data_count - 5) { r.ok = false; continue; }
+                if (offset < 0 || offset > fn->instruction_data_count - 6) { r.ok = false; continue; }
                 const i32 *data = fn->instruction_data + offset;
-                i32 prefix_count = data[4];
+                i32 prefix_count = data[5];
                 i32 registers[] = { instruction->as.call_rest_arguments.dst,
                     instruction->as.call_rest_arguments.callee,
                     instruction->as.call_rest_arguments.this_value, data[0], data[3] };
                 i32 flags = data[2];
-                if (prefix_count < 0 || prefix_count > fn->instruction_data_count - offset - 5 ||
+                if (prefix_count < 0 || prefix_count > fn->instruction_data_count - offset - 6 ||
                     data[1] < 0 ||
-                    (flags & ~(MAL_REST_FORWARD_APPLY | MAL_REST_FORWARD_ARGUMENTS_OBJECT | MAL_REST_FORWARD_POSITIONAL)) != 0 ||
+                    (flags & ~(MAL_REST_FORWARD_APPLY | MAL_REST_FORWARD_ARGUMENTS_OBJECT | MAL_REST_FORWARD_POSITIONAL | MAL_REST_FORWARD_CONSTRUCT | MAL_REST_FORWARD_MAPPED)) != 0 ||
+                    (((flags & MAL_REST_FORWARD_CONSTRUCT) != 0) != (instruction->opcode == MAL_OP_CONSTRUCT_REST_ARGUMENTS)) ||
+                    ((flags & MAL_REST_FORWARD_CONSTRUCT) != 0 && (flags & MAL_REST_FORWARD_APPLY) != 0) ||
+                    (((flags & MAL_REST_FORWARD_MAPPED) != 0) != (data[4] >= 0)) ||
+                    ((flags & MAL_REST_FORWARD_MAPPED) != 0 &&
+                     (!fn->mapped_arguments || (flags & MAL_REST_FORWARD_ARGUMENTS_OBJECT) == 0 ||
+                      (flags & MAL_REST_FORWARD_POSITIONAL) != 0 || data[4] >= fn->register_count)) ||
                     ((flags & MAL_REST_FORWARD_APPLY) != 0 && prefix_count != 0) ||
                     ((flags & MAL_REST_FORWARD_ARGUMENTS_OBJECT) != 0 && data[1] != 0)) {
                     r.ok = false; continue;
@@ -3079,14 +3095,26 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                 for (usize index = 0; index < countof(registers); index++)
                     if (registers[index] < 0 || registers[index] >= fn->register_count) r.ok = false;
                 for (i32 index = 0; index < prefix_count; index++)
-                    if (data[5 + index] < 0 || data[5 + index] >= fn->register_count) r.ok = false;
+                    if (data[6 + index] < 0 || data[6 + index] >= fn->register_count) r.ok = false;
                 if ((flags & MAL_REST_FORWARD_POSITIONAL) != 0) {
-                    if (offset + 5 + prefix_count >= fn->instruction_data_count) { r.ok = false; continue; }
-                    i32 source_count = data[5 + prefix_count];
-                    if (source_count < 0 || source_count > 16 || source_count > fn->instruction_data_count - offset - 6 - prefix_count) { r.ok = false; continue; }
+                    if (offset + 6 + prefix_count >= fn->instruction_data_count) { r.ok = false; continue; }
+                    i32 source_count = data[6 + prefix_count];
+                    if (source_count < 0 || source_count > 16 || source_count > fn->instruction_data_count - offset - 7 - prefix_count) { r.ok = false; continue; }
                     for (i32 index = 0; index < source_count; index++)
-                        if (data[6 + prefix_count + index] < 0 || data[6 + prefix_count + index] >= fn->register_count) r.ok = false;
+                        if (data[7 + prefix_count + index] < 0 || data[7 + prefix_count + index] >= fn->register_count) r.ok = false;
                 }
+            } else if (instruction->opcode == MAL_OP_CONSTRUCT_SPREAD_ITERABLE) {
+                i32 offset = instruction->as.construct_spread_iterable.data_offset;
+                if (offset < 0 || offset > fn->instruction_data_count - 2) { r.ok = false; continue; }
+                const i32 *data = fn->instruction_data + offset;
+                i32 prefix_count = data[1];
+                i32 registers[] = { instruction->as.construct_spread_iterable.dst,
+                    instruction->as.construct_spread_iterable.callee, data[0] };
+                if (prefix_count < 0 || prefix_count > fn->instruction_data_count - offset - 2) { r.ok = false; continue; }
+                for (usize index = 0; index < countof(registers); index++)
+                    if (registers[index] < 0 || registers[index] >= fn->register_count) r.ok = false;
+                for (i32 index = 0; index < prefix_count; index++)
+                    if (data[2 + index] < 0 || data[2 + index] >= fn->register_count) r.ok = false;
             } else if (instruction->opcode == MAL_OP_CALL) {
                 const i32 *data =
                     &fn->instruction_data[instruction->as.call.data_offset];

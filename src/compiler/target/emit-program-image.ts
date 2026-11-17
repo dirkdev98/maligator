@@ -485,6 +485,18 @@ function instructionArrayRows(
 	);
 }
 
+function nativeNeedsMappedArgumentSlots(fn: RuntimeImage["functions"][number]): boolean {
+	return (
+		fn.mappedArgumentSlots.length > 0 &&
+		fn.instructions.some(
+			(instruction) =>
+				(instruction.opcode === "CALL_REST_ARGUMENTS" ||
+					instruction.opcode === "CONSTRUCT_REST_ARGUMENTS") &&
+				instruction.mappedCallee !== undefined,
+		)
+	);
+}
+
 function instructionData(fn: RuntimeImage["functions"][number]): {
 	data: Array<number>;
 	offsets: Array<number | undefined>;
@@ -510,12 +522,14 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 				data.push(instruction.templateOffset, staticDataQueryTag(instruction.queryKind));
 				break;
 			case "CALL_REST_ARGUMENTS":
+			case "CONSTRUCT_REST_ARGUMENTS":
 				offsets[index] = data.length;
 				data.push(
 					instruction.receiver,
 					instruction.startIndex,
 					restForwardFlags(instruction),
 					instruction.state,
+					instruction.mappedCallee ?? -1,
 					instruction.prefixArguments.length,
 					...instruction.prefixArguments,
 				);
@@ -1656,6 +1670,9 @@ function emitProgramImageParts(
 	// bytecode and handler tables are dead weight. Only uncompiled functions
 	// (generators/async) keep their overlay.
 	const omitBytecode = compiled.map((c) => c !== null);
+	const retainMappedSlots = runtime.functions.map(
+		(fn, index) => !omitBytecode[index] || nativeNeedsMappedArgumentSlots(fn),
+	);
 	const trustedSafepoints = runtime.functions.map(
 		(fn, index) =>
 			!omitBytecode[index] &&
@@ -1731,13 +1748,13 @@ function emitProgramImageParts(
 			}
 			closureCaptureSymbols.push(symbol);
 		}
+		if (retainMappedSlots[i] && fn.mappedArgumentSlots.length > 0) {
+			lines.push(
+				`static const i32 mal_function_${i}_mapped_argument_slots${suffix}[] = { ${fn.mappedArgumentSlots.join(", ")} };`,
+				"",
+			);
+		}
 		if (!omitBytecode[i]) {
-			if (fn.mappedArgumentSlots.length > 0) {
-				lines.push(
-					`static const i32 mal_function_${i}_mapped_argument_slots${suffix}[] = { ${fn.mappedArgumentSlots.join(", ")} };`,
-					"",
-				);
-			}
 			if (fn.argumentSnapshotPlan.length > 0) {
 				lines.push(
 					`static const MalArgumentSnapshotMove mal_function_${i}_argument_snapshot_plan${suffix}[] = {`,
@@ -1820,7 +1837,7 @@ function emitProgramImageParts(
 					? `mal_function_${i}_argument_snapshot_plan${suffix}`
 					: "nullptr",
 				omitBytecode[i] ? 0 : fn.argumentSnapshotPlan.length,
-				!omitBytecode[i] && fn.mappedArgumentSlots.length > 0
+				retainMappedSlots[i] && fn.mappedArgumentSlots.length > 0
 					? `mal_function_${i}_mapped_argument_slots${suffix}`
 					: "nullptr",
 				closureCaptureSymbols[i]!,
@@ -3170,7 +3187,15 @@ function emitBatchUnits(
 				gcSafepointCounts.push(0);
 				argumentSnapshotPlanSymbols.push("nullptr");
 				argumentSnapshotPlanCounts.push(0);
-				mappedArgumentSlotsSymbols.push("nullptr");
+				mappedArgumentSlotsSymbols.push(
+					nativeNeedsMappedArgumentSlots(fn)
+						? intern(
+								"mapped_argument_slots",
+								"i32",
+								`    ${fn.mappedArgumentSlots.join(", ")}`,
+							)
+						: "nullptr",
+				);
 				handlerSymbols.push("nullptr");
 				continue;
 			}
@@ -3470,6 +3495,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 			return `{ .opcode = MAL_OP_CALL_SPREAD, .as.call_spread = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .arguments_array = ${instruction.argumentsArray} } }`;
 		case "CALL_REST_ARGUMENTS":
 			return `{ .opcode = MAL_OP_CALL_REST_ARGUMENTS, .as.call_rest_arguments = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()} } }`;
+		case "CONSTRUCT_REST_ARGUMENTS":
+			return `{ .opcode = MAL_OP_CONSTRUCT_REST_ARGUMENTS, .as.call_rest_arguments = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()} } }`;
 		case "CALL_SPREAD_ITERABLE":
 			return `{ .opcode = MAL_OP_CALL_SPREAD_ITERABLE, .as.call_spread_iterable = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()} } }`;
 		case "CONSTRUCT_SPREAD":

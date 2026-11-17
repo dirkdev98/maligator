@@ -620,21 +620,24 @@ export function withClosureCaptureValues(
 	return result;
 }
 
-/** -1 never retains; INT32_MAX always retains nonempty input; otherwise the
- * largest static index whose absence requires the supplied argument slice. */
 /** CALL_REST_ARGUMENTS's MAL_REST_FORWARD_* flags. */
 export function restForwardFlags(instruction: {
 	readonly apply: boolean;
+	readonly opcode?: string;
+	readonly mappedCallee?: number;
 	readonly argumentsObject: boolean;
 	readonly sourceArguments?: ReadonlyArray<number>;
 }): number {
 	return (
 		(instruction.apply ? 1 : 0) |
 		(instruction.argumentsObject ? 2 : 0) |
-		(instruction.sourceArguments === undefined ? 0 : 4)
+		(instruction.sourceArguments === undefined ? 0 : 4) |
+		(instruction.opcode === "CONSTRUCT_REST_ARGUMENTS" ? 8 : 0) |
+		(instruction.mappedCallee === undefined ? 0 : 16)
 	);
 }
 
+/** -1 never retains; INT32_MAX retains every incoming argument; otherwise the largest static index. */
 export function computeArgumentRetentionLimit(
 	fn: Pick<BytecodeFunction, "argumentSnapshotCount" | "instructions">,
 ): number {
@@ -643,6 +646,7 @@ export function computeArgumentRetentionLimit(
 		const instruction = fn.instructions[ip]!;
 		switch (instruction.opcode) {
 			case "CALL_REST_ARGUMENTS":
+			case "CONSTRUCT_REST_ARGUMENTS":
 				if (instruction.sourceArguments === undefined) return 0x7fffffff;
 				break;
 			case "CREATE_ARGUMENTS_OBJECT":
@@ -1271,6 +1275,22 @@ export type BytecodeInstruction =
 			startIndex: number;
 			apply: boolean;
 			argumentsObject: boolean;
+			mappedCallee?: number;
+			state: number;
+			prefixArguments: Array<number>;
+			/** An inlined activation's snapshots; absent means the current activation. */
+			sourceArguments?: Array<number>;
+	  }
+	| {
+			opcode: "CONSTRUCT_REST_ARGUMENTS";
+			dst: number;
+			callee: number;
+			thisValue: number;
+			receiver: number;
+			startIndex: number;
+			apply: boolean;
+			argumentsObject: boolean;
+			mappedCallee?: number;
 			state: number;
 			prefixArguments: Array<number>;
 			/** An inlined activation's snapshots; absent means the current activation. */
@@ -1575,6 +1595,7 @@ export function vmInstructionWriteRegisters(
 		case "WITH_RESOLVE_BASE":
 			return [instruction.dst, instruction.kindDst];
 		case "CALL_REST_ARGUMENTS":
+		case "CONSTRUCT_REST_ARGUMENTS":
 			return [instruction.dst, instruction.state];
 		default: {
 			const dst = (instruction as { readonly dst?: number }).dst;
@@ -1584,6 +1605,7 @@ export function vmInstructionWriteRegisters(
 }
 
 const VM_REGISTER_USE_FIELDS = [
+	"mappedCallee",
 	"reserveSource",
 	"state",
 	"stateKey",
@@ -2995,6 +3017,10 @@ const RUNTIME_INSTRUCTION_COPY_SCHEMA = {
 	SELECT_SHAPE_CASE: { candidates: "nested" },
 	LOAD_PROPERTY_STATIC_SHAPE_CASE: { slots: "copy-list" },
 	CALL_REST_ARGUMENTS: { prefixArguments: "copy-list", sourceArguments: "copy-list" },
+	CONSTRUCT_REST_ARGUMENTS: {
+		prefixArguments: "copy-list",
+		sourceArguments: "copy-list",
+	},
 	CALL_SPREAD_ITERABLE: { prefixArguments: "copy-list" },
 	CONSTRUCT_SPREAD_ITERABLE: { prefixArguments: "copy-list" },
 	CONSTRUCT_SUPER: { arguments: "copy-list" },
@@ -4714,8 +4740,12 @@ function lowerInstructionToBytecodeInstruction(
 				argumentsArray: instruction.registers[3],
 			};
 		case "callRestArguments":
+		case "constructRestArguments":
 			return {
-				opcode: "CALL_REST_ARGUMENTS",
+				opcode:
+					instruction.type === "constructRestArguments"
+						? "CONSTRUCT_REST_ARGUMENTS"
+						: "CALL_REST_ARGUMENTS",
 				dst: instruction.registers[0],
 				callee: instruction.registers[1],
 				thisValue: instruction.registers[2],
@@ -4723,9 +4753,12 @@ function lowerInstructionToBytecodeInstruction(
 				startIndex: instruction.startIndex,
 				apply: instruction.apply,
 				argumentsObject: instruction.argumentsObject === true,
+				...(instruction.mappedArguments === true
+					? { mappedCallee: instruction.registers[5]! }
+					: {}),
 				state: instruction.registers[4],
 				prefixArguments: instruction.registers.slice(
-					5,
+					instruction.mappedArguments === true ? 6 : 5,
 					instruction.registers.length - (instruction.sourceArgumentCount ?? 0),
 				),
 				...(instruction.sourceArgumentCount === undefined

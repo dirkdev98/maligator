@@ -2811,8 +2811,8 @@ const forwardRestArguments: CoreFunctionPass = {
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
-		if (fn.metadata.isDerivedConstructor || fn.metadata.mappedArguments) return undefined;
-		// An unmapped arguments object forwards like a rest array from index 0. With a
+		if (fn.metadata.isDerivedConstructor) return undefined;
+		// An arguments object forwards from index 0. With a
 		// second producer the object's identity could be observed across both.
 		let argumentsObjects = 0;
 		for (const instruction of fn.instructionIds())
@@ -2834,6 +2834,7 @@ const forwardRestArguments: CoreFunctionPass = {
 				instruction: CoreInstructionId;
 				inputs: Array<CoreValueId>;
 				apply: boolean;
+				construct: boolean;
 			}> = [];
 			let valid = true;
 			for (
@@ -2850,9 +2851,14 @@ const forwardRestArguments: CoreFunctionPass = {
 				const opcode = fn.instructionOpcodeName(consumer);
 				const inputs = copyInstructionOperands(fn, consumer);
 				const apply = opcode === "call" && inputs.length === 4 && inputs[3] === rest;
+				const construct = opcode === "constructSpreadIterable";
 				if (
 					fn.instructionKind(consumer) !== "operation" ||
-					(!apply && !(opcode === "callSpreadIterable" && inputs[2] === rest)) ||
+					(!apply &&
+						!(
+							(construct || opcode === "callSpreadIterable") &&
+							inputs[construct ? 1 : 2] === rest
+						)) ||
 					inputs.filter((input) => input === rest).length !== 1
 				) {
 					valid = false;
@@ -2874,7 +2880,7 @@ const forwardRestArguments: CoreFunctionPass = {
 						break;
 					}
 				}
-				consumers.push({ instruction: consumer, inputs, apply });
+				consumers.push({ instruction: consumer, inputs, apply, construct });
 			}
 			if (!valid || consumers.length === 0) continue;
 			const startIndex = argumentsObject
@@ -2893,19 +2899,38 @@ const forwardRestArguments: CoreFunctionPass = {
 			)
 				continue;
 			editor ??= CoreEditor.open(program, item.function);
+			const mappedArguments = argumentsObject && fn.metadata.mappedArguments;
+			const ownerCallee = mappedArguments
+				? editor.insertInstruction(
+						fn.instructionBlock(producer),
+						producer,
+						"loadCallee",
+						[],
+					).outputs[0]!
+				: undefined;
 			editor.replaceInstruction(producer, "createRestArgumentsState", [], {
 				sourcePosition: fn.instructionSourcePosition(producer),
 			});
-			for (const { instruction: consumer, inputs, apply } of consumers) {
+			for (const { instruction: consumer, inputs, apply, construct } of consumers) {
+				const receiver = construct ? inputs[0]! : inputs[1]!;
+				const invocation = apply ? inputs.slice(0, 3) : [inputs[0]!, receiver, receiver];
 				editor.replaceInstruction(
 					consumer,
-					"callRestArguments",
-					apply
-						? [...inputs.slice(0, 3), rest]
-						: [inputs[0]!, inputs[1]!, inputs[1]!, rest, ...inputs.slice(3)],
+					construct ? "constructRestArguments" : "callRestArguments",
+					[
+						...invocation,
+						rest,
+						...(ownerCallee === undefined ? [] : [ownerCallee]),
+						...(apply ? [] : inputs.slice(construct ? 2 : 3)),
+					],
 					{
 						attributes: argumentsObject
-							? { startIndex, apply, argumentsObject }
+							? {
+									startIndex,
+									apply,
+									argumentsObject,
+									...(mappedArguments ? { mappedArguments } : {}),
+								}
 							: { startIndex, apply },
 						sourcePosition: fn.instructionSourcePosition(consumer),
 					},
@@ -2919,7 +2944,7 @@ const forwardRestArguments: CoreFunctionPass = {
 const forwardPositionalArguments: CoreFunctionPass = {
 	name: "forward-positional-arguments",
 	stage: "canonicalize",
-	requiredFunctionOpcodesAny: ["callRestArguments"],
+	requiredFunctionOpcodesAny: ["callRestArguments", "constructRestArguments"],
 	requiredAnalyses: [],
 	wakesOn: ["body", "cfg"],
 	changes: LOCAL_CHANGES,
@@ -2929,10 +2954,12 @@ const forwardPositionalArguments: CoreFunctionPass = {
 		for (const site of fn.instructionIds()) {
 			if (
 				fn.instructionKind(site) !== "operation" ||
-				fn.instructionOpcodeName(site) !== "callRestArguments"
+				(fn.instructionOpcodeName(site) !== "callRestArguments" &&
+					fn.instructionOpcodeName(site) !== "constructRestArguments")
 			)
 				continue;
 			const attributes = fn.instructionAttributes(site);
+			const construct = fn.instructionOpcodeName(site) === "constructRestArguments";
 			const count = attributes.sourceArgumentCount;
 			if (
 				typeof count !== "number" ||
@@ -2988,10 +3015,10 @@ const forwardPositionalArguments: CoreFunctionPass = {
 				direct,
 				split.append(
 					direct,
-					"call",
+					construct ? "construct" : "call",
 					attributes.apply === true
 						? [inputs[1]!, inputs[2]!, ...forwarded]
-						: [inputs[0]!, inputs[1]!, ...prefix, ...forwarded],
+						: [inputs[0]!, ...(construct ? [] : [inputs[1]!]), ...prefix, ...forwarded],
 				),
 			);
 			return editor.commit();

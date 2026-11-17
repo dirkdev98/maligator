@@ -896,6 +896,7 @@ function addOperationTransfer(
 		opcode === "construct" ||
 		opcode === "constructSpread" ||
 		opcode === "constructSpreadIterable" ||
+		opcode === "constructRestArguments" ||
 		(opcode === "callKnown" && fn.instructionAttributes(instruction).construct === true)
 	) {
 		masks[output] = masks[output]! | COMPILER_VALUE_KIND_OBJECT;

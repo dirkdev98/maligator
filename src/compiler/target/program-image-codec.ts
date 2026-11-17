@@ -47,7 +47,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 104;
+export const WIRE_VERSION = 105;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -1286,6 +1286,7 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.argumentsArray);
 			return;
 		case "CALL_REST_ARGUMENTS":
+		case "CONSTRUCT_REST_ARGUMENTS":
 			w.i32(i.dst);
 			w.i32(i.callee);
 			w.i32(i.thisValue);
@@ -1293,6 +1294,7 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.startIndex);
 			w.u8(restForwardFlags(i));
 			w.i32(i.state);
+			w.i32(i.mappedCallee ?? -1);
 			w.i32Array(i.prefixArguments);
 			if (i.sourceArguments !== undefined) {
 				if (i.sourceArguments.length > 16)
@@ -2416,16 +2418,25 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 				thisValue: r.i32(),
 				argumentsArray: r.i32(),
 			};
-		case "CALL_REST_ARGUMENTS": {
+		case "CALL_REST_ARGUMENTS":
+		case "CONSTRUCT_REST_ARGUMENTS": {
 			const dst = r.i32();
 			const callee = r.i32();
 			const thisValue = r.i32();
 			const receiver = r.i32();
 			const startIndex = r.i32();
 			const flags = r.u8();
-			if ((flags & ~7) !== 0)
+			if (
+				(flags & ~31) !== 0 ||
+				((flags & 8) !== 0) !== (opcode === "CONSTRUCT_REST_ARGUMENTS") ||
+				((flags & 8) !== 0 && (flags & 1) !== 0) ||
+				((flags & 16) !== 0 && ((flags & 2) === 0 || (flags & 4) !== 0))
+			)
 				throw new RangeError("program-image-codec: invalid rest forwarding flags");
 			const state = r.i32();
+			const mappedCallee = r.i32();
+			if (((flags & 16) !== 0) !== mappedCallee >= 0)
+				throw new RangeError("program-image-codec: invalid mapped forwarding callee");
 			const prefixArguments = r.i32Array();
 			const sourceArguments = (flags & 4) === 0 ? undefined : r.i32Array();
 			if (sourceArguments !== undefined && sourceArguments.length > 16)
@@ -2440,6 +2451,7 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 				apply: (flags & 1) !== 0,
 				argumentsObject: (flags & 2) !== 0,
 				state,
+				...(mappedCallee < 0 ? {} : { mappedCallee }),
 				prefixArguments,
 				...(sourceArguments === undefined ? {} : { sourceArguments }),
 			};

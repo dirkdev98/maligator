@@ -302,6 +302,93 @@ describe("wire loader side-data validation", () => {
 			),
 		);
 	});
+	it.each(["CONSTRUCT_REST_ARGUMENTS", "CONSTRUCT_SPREAD_ITERABLE"] as const)(
+		"validates forwarded constructor registers for %s",
+		(opcode) => {
+			const operation: BytecodeInstruction =
+				opcode === "CONSTRUCT_REST_ARGUMENTS"
+					? {
+							opcode,
+							dst: 0,
+							callee: 0,
+							thisValue: 0,
+							receiver: 0,
+							startIndex: 1,
+							state: 1,
+							apply: false,
+							argumentsObject: false,
+							prefixArguments: [2, 3],
+						}
+					: { opcode, dst: 0, callee: 0, iterable: 1, prefixArguments: [2, 3] };
+			const encode = (instruction: BytecodeInstruction) =>
+				serializeRuntimeImage(
+					{
+						...definition,
+						functions: [
+							{
+								...fn,
+								registerCount: 4,
+								needsArguments: opcode === "CONSTRUCT_REST_ARGUMENTS",
+								literalShapeCount: 0,
+								instructions: [
+									{ opcode: "CREATE_UNDEFINED", dst: 0 },
+									{ opcode: "RETURN", value: 0 },
+									instruction,
+								],
+							},
+						],
+					},
+					{ debugInfo: false },
+				);
+			acceptsWire(`forwarded-constructor-${opcode}`, encode(operation));
+			rejectsWire(
+				`forwarded-constructor-prefix-${opcode}`,
+				encode({ ...operation, prefixArguments: [4] }),
+			);
+		},
+	);
+	it("validates mapped forwarding callee registers", () => {
+		const operation: Extract<BytecodeInstruction, { opcode: "CALL_REST_ARGUMENTS" }> = {
+			opcode: "CALL_REST_ARGUMENTS",
+			dst: 0,
+			callee: 0,
+			thisValue: 0,
+			receiver: 0,
+			startIndex: 0,
+			state: 1,
+			mappedCallee: 2,
+			apply: false,
+			argumentsObject: true,
+			prefixArguments: [],
+		};
+		const encode = (mappedCallee: number) =>
+			serializeRuntimeImage(
+				{
+					...definition,
+					functions: [
+						{
+							...fn,
+							registerCount: 3,
+							needsArguments: true,
+							parameterCount: 1,
+							capturedCount: 1,
+							strict: false,
+							mappedArguments: true,
+							mappedArgumentSlots: [0],
+							literalShapeCount: 0,
+							instructions: [
+								{ opcode: "CREATE_UNDEFINED", dst: 0 },
+								{ opcode: "RETURN", value: 0 },
+								{ ...operation, mappedCallee },
+							],
+						},
+					],
+				},
+				{ debugInfo: false },
+			);
+		acceptsWire("mapped-forwarding-callee", encode(2));
+		rejectsWire("mapped-forwarding-callee-register", encode(3));
+	});
 	it("validates precise sum register bounds and bounded side data", () => {
 		const image: RuntimeImage = {
 			...definition,

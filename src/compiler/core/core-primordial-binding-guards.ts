@@ -752,6 +752,7 @@ function regionCandidateLoop(
 				opcode === "construct" ||
 				opcode === "constructSpread" ||
 				opcode === "constructSpreadIterable" ||
+				opcode === "constructRestArguments" ||
 				opcode === "callSpread" ||
 				opcode === "callSpreadIterable" ||
 				opcode === "callKnown" ||

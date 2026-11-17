@@ -80,6 +80,7 @@ function helperBody(
 				opcode === "createRestArguments" ||
 				opcode === "createRestArgumentsState" ||
 				opcode === "callRestArguments" ||
+				opcode === "constructRestArguments" ||
 				opcode === "constructSuperForward" ||
 				opcode === "storeCaptured" ||
 				opcode === "createPrivateNames" ||

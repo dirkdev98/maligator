@@ -567,6 +567,7 @@ function cloneInstruction(
 		case "LOAD_CALLEE":
 		case "CALL_SPREAD":
 		case "CALL_REST_ARGUMENTS":
+		case "CONSTRUCT_REST_ARGUMENTS":
 		case "CALL_SPREAD_ITERABLE":
 		case "CONSTRUCT_SPREAD":
 		case "CONSTRUCT_SPREAD_ITERABLE":

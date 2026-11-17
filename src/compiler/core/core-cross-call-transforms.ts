@@ -349,6 +349,7 @@ const INLINE_UNSUPPORTED_OPCODES = new Set([
 	"createRestArguments",
 	"createRestArgumentsState",
 	"callRestArguments",
+	"constructRestArguments",
 	"constructSuperForward",
 	"loadCallee",
 ]);
@@ -381,7 +382,8 @@ function inlineRestArguments(
 			const consumer = coreInstructionId(fn.kernel.useInstruction(use));
 			const attributes = fn.instructionAttributes(consumer);
 			if (
-				fn.instructionOpcodeName(consumer) !== "callRestArguments" ||
+				(fn.instructionOpcodeName(consumer) !== "callRestArguments" &&
+					fn.instructionOpcodeName(consumer) !== "constructRestArguments") ||
 				fn.kernel.useOperand(use) !== 3 ||
 				fn.kernel.instructionOperandCount(consumer) > 4 + 16 ||
 				attributes.sourceArgumentCount !== undefined ||
@@ -876,6 +878,11 @@ function inlineTarget(
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(instruction);
 		if (opcode === "loadArgument") hasArgumentSnapshots = true;
+		if (
+			(opcode === "callRestArguments" || opcode === "constructRestArguments") &&
+			fn.instructionAttributes(instruction).mappedArguments === true
+		)
+			return undefined;
 		if (opcode === "createRestArgumentsState") restProducers.push(instruction);
 	}
 	if (restProducers.length > 0) {
@@ -952,7 +959,7 @@ function inlineTarget(
 				(INLINE_UNSUPPORTED_OPCODES.has(opcode) &&
 					!restArguments.has(instruction) &&
 					!(
-						opcode === "callRestArguments" &&
+						(opcode === "callRestArguments" || opcode === "constructRestArguments") &&
 						restArguments.has(
 							coreInstructionId(
 								fn.kernel.valueDefinitionOwner(
@@ -3538,7 +3545,8 @@ function applyLinearInline(
 			if (inputs.some((value) => value === undefined)) {
 				throw new Error("Validated inline input has no caller value");
 			}
-			const forwarding = opcode === "callRestArguments";
+			const forwarding =
+				opcode === "callRestArguments" || opcode === "constructRestArguments";
 			const outputs = materializeInstructionResults(inline.function, instruction);
 			const inserted = editor.insertInstruction(
 				block,
@@ -4110,7 +4118,8 @@ function applyGuardedInline(
 				inputs.push(values.get(inline.function.kernel.operandAt(inputStart + index)));
 			if (inputs.some((value) => value === undefined))
 				throw new Error("Validated guarded inline input has no caller value");
-			const forwarding = opcode === "callRestArguments";
+			const forwarding =
+				opcode === "callRestArguments" || opcode === "constructRestArguments";
 			const outputs = materializeInstructionResults(inline.function, instruction);
 			const inserted = editor.appendInstruction(
 				destination,

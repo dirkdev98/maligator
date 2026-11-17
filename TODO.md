@@ -214,12 +214,13 @@ object. Retained loop experiments preserve effects, authoritative state and fall
       guarded positional literal elements and dense Array marshalling. Preserve
       iterator order and bound-Proxy construction through both backends.
 
-- [ ] Defer the remaining private rest Array for a repeated explicit construction or
-      `super` consumer. Preserve iterator effects, copied argument values, the loaded
-      callee, `new.target` and derived initialization. Mapped-arguments forwarding
-      needs current owning-activation parameter cells, incoming extras, duplicate-formal
-      mapping and a genuine mapped fallback with its owning callee. Require a repeated
-      consumer before extending either path.
+- [x] Defer private rest lists through ordinary construction, preserving iterator
+      effects, copied arguments, the loaded callee and `new.target`. Retain explicit
+      derived `super` fallbacks.
+
+- [x] Forward private mapped arguments from current owning-activation parameter
+      cells, incoming extras and duplicate-formal mappings. Preserve the owning
+      callee, aliasing, deletions and identity when fallback exposes the object.
 
 - [ ] Bound one typed-store side-exit experiment to core-to-execution or optimizer-queue
       and the corresponding compiler loop. First establish removable executed cost; then

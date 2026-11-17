@@ -45,6 +45,39 @@ function compile(body: string, primordials: "locked" | "mutable" = "mutable") {
 }
 
 describe("rest forwarding allocation contract", () => {
+	it.each([
+		"function forward(...args) { return new target(...args); }",
+		"function forward(first,...args) { return new target(first,...args); }",
+		"class Forward { constructor(...args) { this.value = new target(...args); } }",
+	])("defers a private rest list through construction: %s", (source) => {
+		const instructions = compile(source).runtime.functions.flatMap(
+			(fn) => fn.instructions,
+		);
+		expect(instructions.some((op) => op.opcode === "CONSTRUCT_REST_ARGUMENTS")).toBe(
+			true,
+		);
+		expect(instructions.some((op) => op.opcode === "CREATE_REST_ARGUMENTS")).toBe(false);
+	});
+	it.each([
+		"function forward(first) { first=8; return target(...arguments); }",
+		"function forward(first,first) { first=8; return target(...arguments); }",
+		"function forward() { return target.apply(this,arguments); }",
+		"function forward(first) { first=8; return new target(...arguments); }",
+	])("retains the owning callee for mapped forwarding: %s", (source) => {
+		const instructions = compile(source).runtime.functions.flatMap(
+			(fn) => fn.instructions,
+		);
+		const calls = instructions.filter(
+			(op) =>
+				op.opcode === "CALL_REST_ARGUMENTS" || op.opcode === "CONSTRUCT_REST_ARGUMENTS",
+		);
+		expect(calls.length).toBeGreaterThan(0);
+		for (const call of calls) expect(call.mappedCallee).toEqual(expect.any(Number));
+		expect(instructions.some((op) => op.opcode === "CREATE_ARGUMENTS_OBJECT")).toBe(
+			false,
+		);
+	});
+
 	it.each([undefined, [], [0, 1]])(
 		"retains the caller argument span only for implicit forwarding: %j",
 		(sourceArguments) => {
@@ -416,7 +449,6 @@ describe("rest forwarding allocation contract", () => {
 	for (const source of [
 		"function forward(...args) { args[0] = 7; return target(...args); }",
 		"class Forward extends Base { constructor(...args) { super(); target(...args); } }",
-		"class Forward { constructor(...args) { this.value = new target(...args); } }",
 		"class Forward { constructor(...args) { args[0] = 7; target(...args); } }",
 		"class Forward { constructor(...args) { this.saved = args; target(...args); } }",
 		"class Forward { constructor(...args) { this.read = () => target(...args); } }",

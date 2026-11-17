@@ -201,11 +201,12 @@ typedef struct MalCompletion {
 #define MAL_VALUE_OPERAND_I28_BASE (-0x20000000)
 #define MAL_VALUE_OPERAND_I28_MIN (MAL_VALUE_OPERAND_I28_BASE - MAL_VALUE_OPERAND_MAX_PAYLOAD)
 
-// CALL_REST_ARGUMENTS flags. The arguments-object form forwards an unmapped `arguments`
-// and builds that object, not an Array, when the call cannot forward the frame.
+// Deferred argument-list flags. Observable fallback preserves the owning arguments object.
 #define MAL_REST_FORWARD_APPLY 1
 #define MAL_REST_FORWARD_ARGUMENTS_OBJECT 2
 #define MAL_REST_FORWARD_POSITIONAL 4
+#define MAL_REST_FORWARD_CONSTRUCT 8
+#define MAL_REST_FORWARD_MAPPED 16
 
 typedef struct MalInstruction {
     MalOpcode opcode;
@@ -808,7 +809,7 @@ typedef struct MalInstruction {
             i32 dst, callee, data_offset;
         } construct_spread_iterable;
 
-        // Side data: [receiver, start, MAL_REST_FORWARD_* flags, state, prefix count, prefix].
+        // Side data: [receiver, start, flags, state, owning callee, prefix count, prefix].
         struct {
             i32 dst, callee, this_value, data_offset;
         } call_rest_arguments;

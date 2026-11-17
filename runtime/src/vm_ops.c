@@ -4394,18 +4394,35 @@ MalCompletion mal_vm_op_construct_spread_iterable(
 }
 
 static MalValue mal_vm_rest_forward_state(
-    MalVm *vm, const MalValue *args, i32 arg_count, i32 start, i32 flags) {
-    return (flags & MAL_REST_FORWARD_ARGUMENTS_OBJECT) != 0
-        ? mal_create_arguments_object(
-            vm, args, arg_count, mal_value_new_undefined(), nullptr, -1, false, 0, nullptr)
-        : mal_create_rest_arguments(vm, args, arg_count, start);
+    MalVm *vm, const MalValue *args, i32 arg_count, i32 start, i32 flags,
+    MalValue owner_callee, MalEnv *owner_env, i32 owner_index) {
+    if ((flags & MAL_REST_FORWARD_ARGUMENTS_OBJECT) == 0)
+        return mal_create_rest_arguments(vm, args, arg_count, start);
+    bool mapped = (flags & MAL_REST_FORWARD_MAPPED) != 0;
+    const MalFunction *owner = mapped ? &vm->runtime_image->functions[owner_index] : nullptr;
+    return mal_create_arguments_object(vm, args, arg_count, owner_callee,
+        owner_env, owner_index, mapped, mapped ? owner->mapped_argument_count : 0,
+        mapped ? owner->mapped_argument_slots : nullptr);
+}
+
+static MalValue mal_vm_rest_forward_argument(
+    const MalValue *args, i32 index, const MalFunction *owner, MalEnv *parameter_env) {
+    i32 slot = owner != nullptr && index < owner->mapped_argument_count
+        ? owner->mapped_argument_slots[index] : -1;
+    return slot < 0 ? args[index] : parameter_env->slots[slot];
 }
 
 MalCompletion mal_vm_op_call_rest_arguments(
     MalVm *vm, MalValue callee, MalValue this_value, MalValue receiver,
     const MalValue *args, i32 arg_count, i32 start, i32 flags,
-    MalValue *state, const MalValue *prefix, i32 prefix_count) {
+    MalValue *state, const MalValue *prefix, i32 prefix_count,
+    MalValue owner_callee, MalEnv *owner_env, i32 owner_index) {
     bool apply = (flags & MAL_REST_FORWARD_APPLY) != 0;
+    bool construct = (flags & MAL_REST_FORWARD_CONSTRUCT) != 0;
+    bool mapped = (flags & MAL_REST_FORWARD_MAPPED) != 0;
+    const MalFunction *owner = mapped ? &vm->runtime_image->functions[owner_index] : nullptr;
+    bool mapped_values = mapped && owner->mapped_argument_count > 0;
+    MalEnv *parameter_env = mapped_values ? mal_vm_capture_owner(owner_env, owner_index) : nullptr;
     i32 count = arg_count > start ? arg_count - start : 0;
     i32 base = vm->value_stack_size;
     if (mal_value_is_undefined(*state)
@@ -4414,31 +4431,43 @@ MalCompletion mal_vm_op_call_rest_arguments(
         && mal_vm_rest_arguments_can_forward(vm, callee, this_value, apply)) {
         MAL_PERF_COUNT(rest_forward_calls);
         MAL_PERF_ADD(rest_forward_values, count);
-        if (prefix_count == 0) return mal_vm_call_value(vm, apply ? this_value : callee,
-            apply ? receiver : this_value, count > 0 ? args + start : nullptr, count);
+        if (prefix_count == 0 && !mapped_values) return construct
+            ? mal_vm_construct_value(vm, callee, count > 0 ? args + start : nullptr, count)
+            : mal_vm_call_value(vm, apply ? this_value : callee,
+                apply ? receiver : this_value, count > 0 ? args + start : nullptr, count);
         MAL_PERF_ADD(rest_forward_copies, count);
         for (i32 i = 0; i < prefix_count; i++) vm->value_stack[base + i] = prefix[i];
-        if (count > 0) memcpy(&vm->value_stack[base + prefix_count], args + start,
-            (usize) count * sizeof(MalValue));
+        if (mapped_values) {
+            for (i32 i = 0; i < count; i++)
+                vm->value_stack[base + prefix_count + i] =
+                    mal_vm_rest_forward_argument(args, start + i, owner, parameter_env);
+        } else if (count > 0) {
+            memcpy(&vm->value_stack[base + prefix_count], args + start, (usize) count * sizeof(MalValue));
+        }
         vm->value_stack_size = base + prefix_count + count;
-        MalCompletion completion = mal_vm_call_value(vm, callee, this_value,
-            &vm->value_stack[base], prefix_count + count);
+        MalCompletion completion = construct
+            ? mal_vm_construct_value(vm, callee, &vm->value_stack[base], prefix_count + count)
+            : mal_vm_call_value(vm, apply ? this_value : callee, apply ? receiver : this_value,
+                &vm->value_stack[base], prefix_count + count);
         vm->value_stack_size = base;
         return completion;
     }
 
-    MalValue roots[3] = {callee, this_value, receiver};
+    MalValue roots[4] = {callee, this_value, receiver, owner_callee};
     MalRootSpan root, state_root, prefix_root;
     mal_gc_root(&root, roots, countof(roots));
     mal_gc_root(&state_root, state, 1);
     mal_gc_root(&prefix_root, (MalValue *) prefix, prefix_count);
-    // Once observable, the same Array remains authoritative even if the guard recovers.
+    // Exposure makes the same object authoritative, including after a protocol guard recovers.
     if (mal_value_is_undefined(*state))
-        *state = mal_vm_rest_forward_state(vm, args, arg_count, start, flags);
+        *state = mal_vm_rest_forward_state(vm, args, arg_count, start, flags,
+            owner_callee, owner_env, owner_index);
     MalCompletion completion;
     if (apply) {
         MalValue call_args[2] = {receiver, *state};
         completion = mal_vm_call_value(vm, callee, this_value, call_args, 2);
+    } else if (construct) {
+        completion = mal_vm_op_construct_spread_iterable(vm, callee, *state, prefix, prefix_count);
     } else {
         completion = mal_vm_op_call_spread_iterable(vm, callee, this_value, *state, prefix, prefix_count);
     }
@@ -4457,19 +4486,25 @@ void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *ins
     i32 start = data[1];
     i32 flags = data[2];
     bool apply = (flags & MAL_REST_FORWARD_APPLY) != 0;
+    bool construct = (flags & MAL_REST_FORWARD_CONSTRUCT) != 0;
+    bool mapped = (flags & MAL_REST_FORWARD_MAPPED) != 0;
+    MalValue owner_callee = data[4] < 0 ? MAL_VALUE_UNDEFINED : callable->registers[data[4]];
+    const MalFunction *owner = mapped ? &vm->runtime_image->functions[callable->function_index] : nullptr;
+    bool mapped_values = mapped && owner->mapped_argument_count > 0;
+    MalEnv *parameter_env = mapped_values ? mal_vm_capture_owner(callable->env, callable->function_index) : nullptr;
     MalValue *state = &callable->registers[data[3]];
-    i32 prefix_count = data[4];
+    i32 prefix_count = data[5];
     MalValue positional[16];
     const MalValue *arguments = callable->arguments;
     i32 argument_count = callable->argument_count;
     if ((flags & MAL_REST_FORWARD_POSITIONAL) != 0) {
-        argument_count = data[5 + prefix_count];
+        argument_count = data[6 + prefix_count];
         if (argument_count < 0 || argument_count > (i32) countof(positional)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid forwarded argument span");
             return;
         }
         for (i32 index = 0; index < argument_count; index++)
-            positional[index] = callable->registers[data[6 + prefix_count + index]];
+            positional[index] = callable->registers[data[7 + prefix_count + index]];
         arguments = positional;
     }
     i32 count = argument_count > start ? argument_count - start : 0;
@@ -4482,9 +4517,14 @@ void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *ins
         MAL_PERF_ADD(rest_forward_values, count);
         MAL_PERF_ADD(rest_forward_copies, count);
         for (i32 i = 0; i < prefix_count; i++)
-            vm->value_stack[base + i] = callable->registers[data[5 + i]];
-        if (count > 0) memcpy(&vm->value_stack[base + prefix_count], arguments + start,
-            (usize) count * sizeof(MalValue));
+            vm->value_stack[base + i] = callable->registers[data[6 + i]];
+        if (mapped_values) {
+            for (i32 i = 0; i < count; i++)
+                vm->value_stack[base + prefix_count + i] =
+                    mal_vm_rest_forward_argument(arguments, start + i, owner, parameter_env);
+        } else if (count > 0) {
+            memcpy(&vm->value_stack[base + prefix_count], arguments + start, (usize) count * sizeof(MalValue));
+        }
         count += prefix_count;
         vm->value_stack_size = base + count;
         if (apply) {
@@ -4495,7 +4535,7 @@ void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *ins
         if (mal_value_is_undefined(*state)) {
             MalRootSpan source_roots;
             mal_gc_root(&source_roots, (MalValue *) arguments, argument_count);
-            *state = mal_vm_rest_forward_state(vm, arguments, argument_count, start, flags);
+            *state = mal_vm_rest_forward_state(vm, arguments, argument_count, start, flags, owner_callee, callable->env, callable->function_index);
             mal_gc_unroot(&source_roots);
         }
         if (apply) {
@@ -4513,7 +4553,7 @@ void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *ins
                 return;
             }
             for (i32 i = 0; i < prefix_count; i++)
-                vm->value_stack[base + i] = callable->registers[data[5 + i]];
+                vm->value_stack[base + i] = callable->registers[data[6 + i]];
             vm->value_stack_size = base + prefix_count;
             count = mal_vm_marshal_spread_iterable(vm, *state);
             if (count < 0) { vm->value_stack_size = base; return; }
@@ -4521,7 +4561,10 @@ void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *ins
         }
     }
     // The iterative dispatcher preserves interpreter stack depth for repeated forwarding.
-    mal_vm_call_dispatch(vm, callee, this_value, base, count, instruction->as.call_rest_arguments.dst);
+    if (construct)
+        mal_vm_construct_dispatch(vm, callee, base, count, instruction->as.call_rest_arguments.dst);
+    else
+        mal_vm_call_dispatch(vm, callee, this_value, base, count, instruction->as.call_rest_arguments.dst);
 }
 
 MalCompletion mal_vm_op_construct_spread(MalVm *vm, MalValue callee, MalValue arguments_array) {

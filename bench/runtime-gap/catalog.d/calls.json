@@ -182,6 +182,19 @@
 			"sourceSeam": "src/compiler/core/semantic-lowering.ts; runtime/src/vm_ops.c",
 			"fixture": "cases/constructor-iterable-retained.mjs",
 			"controls": ["call-literal-construct", "constructor-derived-super-retained"]
+		},
+		{
+			"id": "constructor-rest-retained",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "owning rest construction",
+			"category": "allocation-gc",
+			"mechanisms": ["constructor-call", "rest-arguments", "argument-forwarding"],
+			"inputShape": "Opaque constructor receives a prefix and a private rest list through a forwarding activation; retained instances preserve values, prototype and new.target.",
+			"unit": "constructed instance",
+			"sourceSeam": "src/compiler/core/core-local-passes.ts; runtime/src/vm_ops.c",
+			"fixture": "cases/constructor-rest-retained.mjs",
+			"controls": ["constructor-iterable-retained", "call-rest-escape"]
 		}
 	]
 }

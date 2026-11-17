@@ -398,6 +398,9 @@ liveness preserves their values across earlier caller suspension. A linear forwa
 helper creates and consumes one fresh state in a single expansion and cannot itself
 suspend, so a caller await or yield cannot divide that state's lifetime. State
 initialization writes prevent CSE or loop motion from sharing it across invocations.
+The same source snapshots support ordinary construction. Mapped arguments keep their
+own activation and owning callee, because another caller's snapshots cannot replace
+current parameter cells or the fallback object's identity.
 
 Candidate claim headers and exact costs participate in ranking and admission before
 target payloads are materialized. Rejected candidates do not receive target blocks,

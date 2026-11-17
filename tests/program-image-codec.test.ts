@@ -263,6 +263,31 @@ const instructions: Array<BytecodeInstruction> = [
 		prefixArguments: [3, 7],
 	},
 	{
+		opcode: "CONSTRUCT_REST_ARGUMENTS",
+		dst: 11,
+		callee: 5,
+		thisValue: 10,
+		receiver: 10,
+		startIndex: 2,
+		apply: false,
+		argumentsObject: false,
+		state: 12,
+		prefixArguments: [3, 7],
+	},
+	{
+		opcode: "CALL_REST_ARGUMENTS",
+		dst: 11,
+		callee: 5,
+		thisValue: 10,
+		receiver: 10,
+		startIndex: 0,
+		apply: false,
+		argumentsObject: true,
+		state: 12,
+		mappedCallee: 9,
+		prefixArguments: [3, 7],
+	},
+	{
 		opcode: "CALL_REST_ARGUMENTS",
 		dst: 11,
 		callee: 5,
@@ -1102,6 +1127,7 @@ describe("program-image-codec", () => {
 			"LOAD_BOUND_FUNCTION_SLOT",
 			"WITH_CAPTURE_OBJECT",
 			"CONSTRUCT_SPREAD_ITERABLE",
+			"CONSTRUCT_REST_ARGUMENTS",
 		];
 		expect(WIRE_OPCODES.slice(-appended.length)).toEqual(appended);
 	});
