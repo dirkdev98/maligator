@@ -1313,6 +1313,8 @@ export type BytecodeInstruction =
 			parent: number;
 			argumentsArray: number;
 			newTarget: number;
+			state: number;
+			stateKey: number;
 	  }
 	| {
 			opcode: "SET_THIS";
@@ -1577,6 +1579,7 @@ export function vmInstructionWriteRegisters(
 const VM_REGISTER_USE_FIELDS = [
 	"reserveSource",
 	"state",
+	"stateKey",
 	"epoch",
 	"prefixLength",
 	"part",
@@ -1645,7 +1648,6 @@ export function vmInstructionReadRegisters(
 			}
 		}
 	}
-	if (instruction.opcode === "CONSTRUCT_SUPER_EXPLICIT") registers.push(instruction.dst);
 	return registers;
 }
 
@@ -1653,8 +1655,6 @@ export function vmInstructionUsesRegister(
 	instruction: BytecodeInstruction,
 	register: number,
 ): boolean {
-	if (instruction.opcode === "CONSTRUCT_SUPER_EXPLICIT" && instruction.dst === register)
-		return true;
 	if (
 		instruction.opcode === "CREATE_NUMBER" ||
 		instruction.opcode === "CREATE_F64" ||
@@ -4772,6 +4772,8 @@ function lowerInstructionToBytecodeInstruction(
 				parent: instruction.registers[1],
 				argumentsArray: instruction.registers[2],
 				newTarget: instruction.registers[3],
+				state: instruction.registers[4],
+				stateKey: instruction.registers[5],
 			};
 		case "setThis":
 			return { opcode: "SET_THIS", value: instruction.registers[0] };

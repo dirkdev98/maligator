@@ -299,6 +299,8 @@ const instructions: Array<BytecodeInstruction> = [
 		parent: 5,
 		argumentsArray: 12,
 		newTarget: 6,
+		state: 8,
+		stateKey: 9,
 	},
 	{
 		opcode: "GUARD_BASE_CONSTRUCTOR_LAYOUT",

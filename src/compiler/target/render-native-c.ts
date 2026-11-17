@@ -17838,12 +17838,10 @@ class NativeInstructionEmission {
 			}
 			case "CONSTRUCT_SUPER_EXPLICIT": {
 				const completion = `construct_super_explicit_${this.ip}`;
-				const boundThis = `bound_super_this_${this.ip}`;
 				return [
-					`MalValue ${boundThis};`,
-					`MalCompletion ${completion} = mal_vm_op_construct_super(vm, ${this.boxed(instruction.parent)}, ${this.boxed(instruction.argumentsArray)}, ${this.boxed(instruction.newTarget)}, ${this.boxed(instruction.dst)}, &${boundThis});`,
+					`MalCompletion ${completion} = mal_vm_op_construct_super_explicit(vm, ${this.boxed(instruction.parent)}, ${this.boxed(instruction.argumentsArray)}, ${this.boxed(instruction.newTarget)}, ${this.boxed(instruction.state)}, ${this.boxed(instruction.stateKey)});`,
 					`if (${completion}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
-					`r${instruction.dst} = ${boundThis};`,
+					`r${instruction.dst} = ${completion}.value;`,
 					this.callPoll(),
 				];
 			}

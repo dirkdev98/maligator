@@ -275,7 +275,7 @@ describe("Core target construction", () => {
 			["loops", LOOP_SOURCE],
 			["regions", REGION_SOURCE],
 			["projections", PROJECTION_SOURCE],
-			["two-address", SUPER_SOURCE],
+			["shared-super", SUPER_SOURCE],
 			["arguments", ARGUMENTS_SOURCE],
 		] as const) {
 			const program = optimizedTarget(source, `${name}.js`);
@@ -548,10 +548,7 @@ describe("Core target construction", () => {
 	});
 
 	it("constrains two-address operations to one register", () => {
-		for (const [source, type] of [
-			[SUPER_SOURCE, "constructSuperExplicit"],
-			[ARGUMENTS_SOURCE, "loadStaticArgument"],
-		] as const) {
+		for (const [source, type] of [[ARGUMENTS_SOURCE, "loadStaticArgument"]] as const) {
 			const program = optimizedTarget(source, `verified-${type}.js`);
 			const operations = program.functions.flatMap((fn) =>
 				fn.blocks.flatMap(({ instructions }) =>
@@ -561,7 +558,7 @@ describe("Core target construction", () => {
 
 			expect(operations.length).toBeGreaterThan(0);
 			for (const operation of operations) {
-				const [result, operand] = type === "constructSuperExplicit" ? [0, 4] : [1, 3];
+				const [result, operand] = [1, 3];
 				expect(registerOf(operation, result)).toBe(registerOf(operation, operand));
 			}
 		}
@@ -1060,12 +1057,6 @@ describe("Core target verification", () => {
 	it("rejects a violated two-address instruction constraint", () => {
 		for (const [source, type, operand, requirement] of [
 			[
-				SUPER_SOURCE,
-				"constructSuperExplicit",
-				4,
-				"one register for its current-this operand and its result",
-			],
-			[
 				ARGUMENTS_SOURCE,
 				"loadStaticArgument",
 				3,
@@ -1077,7 +1068,7 @@ describe("Core target verification", () => {
 			const registers = [
 				...(match.instruction as { readonly registers: ReadonlyArray<number> }).registers,
 			];
-			const result = type === "constructSuperExplicit" ? 0 : 1;
+			const result = 1;
 			registers[operand] = registers.findIndex(
 				(register, index) => index !== operand && register !== registers[result],
 			);
@@ -1108,14 +1099,14 @@ describe("Core target verification", () => {
 	});
 
 	it("rejects a temporary register read before its definition or without a class", () => {
-		const program = optimizedTarget(SUPER_SOURCE, "temporaries.js");
+		const program = optimizedTarget(LOOP_SOURCE, "temporaries.js");
 		const match = findInstruction(
 			program,
 			(instruction, fn) =>
-				instruction.type === "constructSuperExplicit" &&
-				fn.temporaryRegisters.includes(registerOf(instruction, 0)),
+				instruction.type === "move" &&
+				fn.temporaryRegisters.includes(registerOf(instruction, 1)),
 		);
-		const constrained = registerOf(match.instruction, 0);
+		const constrained = registerOf(match.instruction, 1);
 		const instructions = match.fn.blocks[match.block]!.instructions;
 		const definition = instructions.findIndex(
 			(instruction, index) =>
@@ -1132,7 +1123,10 @@ describe("Core target verification", () => {
 				withBlock(
 					match.fn,
 					match.block,
-					instructions.with(definition, { type: "move", registers: [source, source] }),
+					instructions.toSpliced(definition, 0, {
+						type: "move",
+						registers: [source, constrained],
+					}),
 				),
 			),
 		);
@@ -1140,8 +1134,8 @@ describe("Core target verification", () => {
 		expect(undefinedRead.context).toMatchObject({
 			functionIndex: match.functionIndex,
 			block: match.block,
-			instruction: match.index,
-			opcode: "constructSuperExplicit",
+			instruction: definition,
+			opcode: "move",
 			register: constrained,
 		});
 
@@ -1155,9 +1149,7 @@ describe("Core target verification", () => {
 				),
 			}),
 		);
-		expect(incomplete.detail).toBe(
-			"register introduced after allocation is not declared temporary",
-		);
+		expect(incomplete.detail).toBe("parallel copy uses an undeclared temporary register");
 		expect(incomplete.context).toMatchObject({
 			functionIndex: match.functionIndex,
 			register: undeclared,

@@ -530,6 +530,10 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 					...instruction.prefixArguments,
 				);
 				break;
+			case "CONSTRUCT_SUPER_EXPLICIT":
+				offsets[index] = data.length;
+				data.push(instruction.newTarget, instruction.state, instruction.stateKey);
+				break;
 			case "SELECT_SHAPE_CASE":
 				offsets[index] = data.length;
 				for (const candidate of instruction.candidates) {
@@ -3476,7 +3480,7 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 		case "CONSTRUCT_SUPER_SPREAD":
 			return `{ .opcode = MAL_OP_CONSTRUCT_SUPER_SPREAD, .as.construct_super_spread = { .dst = ${instruction.dst}, .parent = ${instruction.parent}, .arguments_array = ${instruction.argumentsArray} } }`;
 		case "CONSTRUCT_SUPER_EXPLICIT":
-			return `{ .opcode = MAL_OP_CONSTRUCT_SUPER_EXPLICIT, .as.construct_super_explicit = { .dst = ${instruction.dst}, .parent = ${instruction.parent}, .arguments_array = ${instruction.argumentsArray}, .new_target = ${instruction.newTarget} } }`;
+			return `{ .opcode = MAL_OP_CONSTRUCT_SUPER_EXPLICIT, .as.construct_super_explicit = { .dst = ${instruction.dst}, .parent = ${instruction.parent}, .arguments_array = ${instruction.argumentsArray}, .data_offset = ${sideDataOffset()} } }`;
 		case "SET_THIS":
 			return `{ .opcode = MAL_OP_SET_THIS, .as.set_this = { .value = ${instruction.value} } }`;
 		case "MERGE_DATA_PROPERTIES":

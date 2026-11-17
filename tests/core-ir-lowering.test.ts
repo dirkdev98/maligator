@@ -807,7 +807,7 @@ describe("Core IR lowering", () => {
 		);
 	});
 
-	it("satisfies the explicit-super two-address constraint by coalescing or moves", () => {
+	it("carries shared state and its key through explicit-super lowering", () => {
 		const compilation = optimize(`
 			class Parent {}
 			class Child extends Parent {
@@ -819,44 +819,29 @@ describe("Core IR lowering", () => {
 			new Child();
 		`);
 		const lowered = lowerCoreCompilationToExecution(compilation);
-		const instructions = lowered.functions
-			.flatMap((fn) => fn.blocks.flatMap((block) => block.instructions))
-			.filter(
-				({ type }) =>
-					type !== "sourcePos" &&
-					type !== "rootUse" &&
-					type !== "tryBegin" &&
-					type !== "tryEnd",
-			);
-		const constructIndexes = instructions.flatMap((instruction, index) =>
-			instruction.type === "constructSuperExplicit" ? [index] : [],
+		const constructs = lowered.functions.flatMap((fn) =>
+			fn.blocks.flatMap((block) =>
+				block.instructions.filter(
+					(instruction) => instruction.type === "constructSuperExplicit",
+				),
+			),
 		);
-		expect(constructIndexes.length).toBeGreaterThan(0);
-		for (const constructIndex of constructIndexes) {
-			const construct = instructions[constructIndex]!;
-			if (construct.type !== "constructSuperExplicit") {
-				throw new Error("missing explicit super construction");
-			}
-
-			const constrained = construct.registers[0];
-			expect(construct.registers[4]).toBe(constrained);
-			expect(construct.registers.slice(1, 4)).not.toContain(constrained);
-
-			const inputMove = instructions[constructIndex - 1]!;
-			if (inputMove.type === "move") {
-				expect(inputMove.registers[0]).toBe(constrained);
-			} else if (inputMove.type === "loadPropertyStatic") {
-				expect(inputMove.registers[0]).toBe(constrained);
-			} else {
-				throw new Error("missing target-constraint input definition");
-			}
-
-			const resultMove = instructions[constructIndex + 1]!;
-			if (resultMove.type === "move") {
-				expect(resultMove.registers[1]).toBe(constrained);
-			} else {
-				expect(inputMove.type).toBe("loadPropertyStatic");
-			}
-		}
+		expect(constructs.length).toBeGreaterThan(0);
+		const image = lowerExecutionToProgramImage(lowered);
+		const emitted = image.runtime.functions.flatMap((fn) =>
+			fn.instructions.filter(
+				(instruction) => instruction.opcode === "CONSTRUCT_SUPER_EXPLICIT",
+			),
+		);
+		expect(
+			emitted.map((instruction) => [
+				instruction.dst,
+				instruction.parent,
+				instruction.argumentsArray,
+				instruction.newTarget,
+				instruction.state,
+				instruction.stateKey,
+			]),
+		).toEqual(constructs.map((instruction) => instruction.registers));
 	});
 });

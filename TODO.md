@@ -196,6 +196,9 @@ Shared lifetime and fallback rules are recorded in
 An existing iterator cursor is not, by itself, permission to delete its language
 object. Retained loop experiments preserve effects, authoritative state and fallback.
 
+- [x] Check the shared derived `this` binding after parent construction, including
+      arrow and eval reentry, before running instance fields.
+
 - [ ] Remove the iterator-drain Array for a repeated explicit rest construction or
       `super` consumer. Preserve iterator effects, copied argument values, the loaded
       callee, `new.target` and derived initialization. Mapped-arguments forwarding

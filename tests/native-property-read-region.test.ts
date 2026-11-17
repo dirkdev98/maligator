@@ -95,10 +95,23 @@ describe("bounded native property read regions", () => {
 					parent: 5,
 					argumentsArray: 6,
 					newTarget: 7,
+					state: 8,
+					stateKey: 9,
 				},
-				4,
+				8,
 			),
 		).toBe(true);
+		const sharedSuper = {
+			opcode: "CONSTRUCT_SUPER_EXPLICIT" as const,
+			dst: 4,
+			parent: 5,
+			argumentsArray: 6,
+			newTarget: 7,
+			state: 8,
+			stateKey: 9,
+		};
+		expect(vmInstructionUsesRegister(sharedSuper, sharedSuper.stateKey)).toBe(true);
+		expect(vmInstructionUsesRegister(sharedSuper, sharedSuper.dst)).toBe(false);
 	});
 
 	it("retains boxed results across pure steps and names the generic continuation", () => {

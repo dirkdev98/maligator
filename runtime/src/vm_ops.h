@@ -4867,6 +4867,12 @@ MalCompletion mal_vm_op_construct_super(
     MalValue current_this, MalValue *this_out
 );
 
+/** Construct before checking and binding the state shared by lexical super calls. */
+MalCompletion mal_vm_op_construct_super_explicit(
+    MalVm *vm, MalValue parent, MalValue arguments_array, MalValue new_target,
+    MalValue state, MalValue state_key
+);
+
 /** GetThisBinding for a derived constructor: ReferenceError if `this` is unbound. */
 MalValue mal_vm_op_get_this(MalVm *vm, MalValue this_value);
 

@@ -5869,28 +5869,6 @@ function loadSharedSuperThis(
 	return value;
 }
 
-function storeSharedSuperThis(
-	program: CoreFrontendContext,
-	fn: CoreFrontendFunction,
-	cursor: CoreFrontendCursor,
-	value: number,
-): void {
-	const binding = fn.classContext?.superThisStateBinding;
-	if (!binding) {
-		throw new Error("Missing shared super this binding");
-	}
-	const state = loadRegisterFromLocation(
-		fn,
-		cursor.block,
-		getOrCreateBindingLocation(program, fn, binding),
-	);
-	const key = compileStaticString(program, fn, cursor, CORE_SUPER_THIS_STATE_KEY);
-	cursor.block.emitter.emit({
-		type: "storeProperty",
-		registers: [state, key, value],
-	});
-}
-
 /**
  * A function's own strictness: its body scope's, which sema marks strict for a
  * `"use strict"` directive or by inheritance from strict surrounding code. A
@@ -16366,18 +16344,18 @@ function compileSuperCall(
 			cursor.block,
 			getOrCreateBindingLocation(program, fn, fn.classContext.superNewTargetBinding),
 		);
-		const currentThis = loadSharedSuperThis(program, fn, cursor, false);
-		cursor.block.emitter.emit({
-			type: "move",
-			registers: [destination, currentThis],
-		});
+		const state = loadRegisterFromLocation(
+			fn,
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, fn.classContext.superThisStateBinding!),
+		);
+		const stateKey = compileStaticString(program, fn, cursor, CORE_SUPER_THIS_STATE_KEY);
 		emitSuperConstruct(fn, cursor, heritage, current, (parent) =>
 			emitSourceCall(program, fn, cursor, callExpression, {
 				type: "constructSuperExplicit",
-				registers: [destination, parent, argumentsArray, newTarget, destination],
+				registers: [destination, parent, argumentsArray, newTarget, state, stateKey],
 			}),
 		);
-		storeSharedSuperThis(program, fn, cursor, destination);
 
 		if (fn.classContext.instanceInitializerBinding) {
 			const initializer = loadRegisterFromLocation(

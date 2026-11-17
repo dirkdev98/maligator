@@ -942,11 +942,10 @@ type CompilerOperation =
 	  }
 	| {
 			type: "constructSuperExplicit";
-
-			// [destination, parent, arguments_array, new_target, current_this]. The
-			// final operand aliases destination: the packed VM op is two-address, while
-			// the duplicate keeps its read-before-write dependency explicit.
-			registers: [number, number, number, number, number];
+			// The shared state is read and bound after the parent returns, since
+			// reentry can initialize it while the parent constructor runs.
+			// [destination, parent, arguments_array, new_target, state, state_key]
+			registers: [number, number, number, number, number, number];
 	  }
 	| {
 			type: "setThis";
@@ -1358,11 +1357,6 @@ export const COMPILER_TWO_ADDRESS_OPERANDS: Readonly<
 		>
 	>
 > = {
-	constructSuperExplicit: {
-		result: 0,
-		operand: 4,
-		requirement: "one register for its current-this operand and its result",
-	},
 	loadStaticArgument: {
 		result: 1,
 		operand: 3,

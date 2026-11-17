@@ -4618,6 +4618,36 @@ MalCompletion mal_vm_op_construct_super(
     return completion;
 }
 
+MalCompletion mal_vm_op_construct_super_explicit(
+    MalVm *vm, MalValue parent, MalValue arguments_array, MalValue new_target,
+    MalValue state, MalValue state_key
+) {
+    MalValue roots[] = {state, state_key, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalCompletion completion = mal_vm_op_construct_super(
+        vm, parent, arguments_array, new_target, MAL_VALUE_EMPTY, &roots[2]);
+    if (completion.kind == MAL_COMPLETION_NORMAL) {
+        MalKey key;
+        MalValue current_this;
+        if (!mal_vm_to_property_key(vm, roots[1], &key) ||
+                !mal_vm_get_property(vm, roots[0], key, &current_this)) {
+            completion = vm->completion;
+        } else if (!mal_value_is_empty(current_this)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+                "Super constructor may only be called once");
+            completion = vm->completion;
+        } else if (mal_value_is_object(roots[2]) &&
+                !mal_vm_set_property(vm, roots[0], key, roots[2], roots[0])) {
+            completion = vm->completion;
+        } else {
+            completion.value = roots[2];
+        }
+    }
+    mal_gc_unroot(&span);
+    return completion;
+}
+
 void mal_op_construct_super(MalCallable *callable, const MalInstruction *instruction) {
     MalVm *vm = callable->vm;
     // Frames may relocate while the parent constructor runs; address the caller
@@ -4698,22 +4728,19 @@ void mal_op_construct_super_spread(MalCallable *callable, const MalInstruction *
 void mal_op_construct_super_explicit(MalCallable *callable, const MalInstruction *instruction) {
     MalVm *vm = callable->vm;
     i32 caller_frame_index = vm->frame_count - 1;
-    MalValue bound_this;
-    // Two-address encoding: dst carries current_this into the op and receives
-    // the newly bound value. new_target is explicit because lexical arrows and
-    // direct eval execute in frames that do not own the constructor environment.
-    MalCompletion completion = mal_vm_op_construct_super(
+    const i32 *data = mal_op_instruction_data(callable, instruction->as.construct_super_explicit.data_offset);
+    MalCompletion completion = mal_vm_op_construct_super_explicit(
         vm,
         callable->registers[instruction->as.construct_super_explicit.parent],
         callable->registers[instruction->as.construct_super_explicit.arguments_array],
-        callable->registers[instruction->as.construct_super_explicit.new_target],
-        callable->registers[instruction->as.construct_super_explicit.dst],
-        &bound_this
+        callable->registers[data[0]],
+        callable->registers[data[1]],
+        callable->registers[data[2]]
     );
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         return;
     }
-    vm->frames[caller_frame_index].registers[instruction->as.construct_super_explicit.dst] = bound_this;
+    vm->frames[caller_frame_index].registers[instruction->as.construct_super_explicit.dst] = completion.value;
 }
 
 void mal_op_set_this(MalCallable *callable, const MalInstruction *instruction) {
