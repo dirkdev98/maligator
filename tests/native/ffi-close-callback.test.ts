@@ -81,9 +81,21 @@ describe("one-shot C close completions", () => {
 				});
 				const succeeds =
 					entry === "main.ts" || entry === "combined.ts" || entry === "async.ts";
-				expect(executed.status, executed.stderr || executed.stdout).toBe(
-					succeeds ? 0 : 1,
-				);
+				const diagnostic = JSON.stringify({
+					entry,
+					backend,
+					mode,
+					error: executed.error?.message,
+					code:
+						executed.error !== undefined && "code" in executed.error
+							? executed.error.code
+							: undefined,
+					signal: executed.signal,
+					stdout: executed.stdout,
+					stderr: executed.stderr,
+				});
+				expect(executed.error, diagnostic).toBeUndefined();
+				expect(executed.status, diagnostic).toBe(succeeds ? 0 : 1);
 				if (succeeds)
 					expect(executed.stdout.trim()).toBe(
 						entry === "async.ts"

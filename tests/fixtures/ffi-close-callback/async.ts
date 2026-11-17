@@ -107,25 +107,68 @@ check(weak.deref() === undefined, "completion retires its newly installed listen
 
 const blockers = Array.from({ length: 128 }, () => c.close_block_async().catch(() => {}));
 c.close_wait_blocked();
-const retry = c.CloseState();
-const retained = new ArrayBuffer(8);
-retry.bytes = retained;
-let schedulingRejected = false;
+function attemptClose() {
+	const handle = c.CloseState();
+	const retained = new ArrayBuffer(8);
+	handle.bytes = retained;
+	const state = {
+		handle,
+		retained,
+		callbackCalls: 0,
+		rejected: false,
+		reason: undefined as unknown,
+	};
+	const pending = c
+		.close_now_async(handle, () => {
+			state.callbackCalls++;
+		})
+		.catch((reason: unknown) => {
+			state.rejected = true;
+			state.reason = reason;
+		});
+	return { state, pending };
+}
+const attempts: Array<ReturnType<typeof attemptClose>> = [];
+// A late worker start frees queue capacity, so some closes can be admitted.
+// Release the gate before awaiting either outcome, including rejected closes.
 try {
-	await c.close_now_async(retry, () => {
-		throw new Error("rejected close entered C");
-	});
-} catch (error) {
-	schedulingRejected = error instanceof Error && error.message.includes("scheduled");
+	for (let index = 0; index < blockers.length; index++) {
+		const attempt = attemptClose();
+		attempts.push(attempt);
+		await Promise.resolve();
+		if (attempt.state.rejected) break;
+	}
 } finally {
 	c.close_unblock();
 }
-check(
-	schedulingRejected && c.close_read(retry) === 0,
-	"admission restores handle ownership",
-);
-retry.bytes = null;
-check(retained.transfer().byteLength === 8, "admission restores managed field access");
-await Promise.all(blockers);
-await c.close_now_async(retry, () => {});
+await Promise.all([...blockers, ...attempts.map((attempt) => attempt.pending)]);
+await nextTurn();
+const rejected = attempts.filter((attempt) => attempt.state.rejected);
+check(rejected.length > 0, "saturation rejects close admission");
+for (const { state } of attempts) {
+	if (!state.rejected) {
+		check(state.callbackCalls === 1, "admitted closes complete once");
+		refuses(() => c.close_read(state.handle));
+		continue;
+	}
+	check(
+		state.reason instanceof Error && state.reason.message.includes("scheduled"),
+		"saturated closes reject scheduling",
+	);
+	check(
+		state.callbackCalls === 0 && c.close_read(state.handle) === 0,
+		"admission restores ownership without entering C",
+	);
+	state.handle.bytes = null;
+	check(
+		state.retained.transfer().byteLength === 8,
+		"admission restores managed field access",
+	);
+}
+let retried = false;
+await c.close_now_async(rejected[0]!.state.handle, () => {
+	retried = true;
+});
+await nextTurn();
+check(retried, "a rejected close can be retried");
 console.log("async close callbacks passed");

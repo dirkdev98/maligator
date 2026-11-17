@@ -29,6 +29,10 @@ themselves commit the project to optimizing every API.
 - [x] Place the complete span-parser fixture compilation and image round trip in
       the slow integration lane while retaining fast parser proof checks in the gate.
 
+- [x] Make async FFI close saturation checks independent of worker-start timing.
+      Observe rejected admissions, verify ownership and managed-pin recovery, and
+      release blocking work before awaiting admitted closes.
+
 - [ ] Extend runtime-gap coverage for a selected Intl, promise or weak-collection
       consumer, separating conversion, traversal and checksum cost. Preserve
       input-scaling coverage.
