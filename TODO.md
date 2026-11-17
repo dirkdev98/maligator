@@ -348,6 +348,10 @@ contracts or investigates costs still visible after the string follow-ups.
       Keep call-only recursion on private entries and retain the executing callee
       across interpreted ordinary, bound, Proxy and Reflect construction.
 
+- [x] Create `node:test` assertion wrappers in a synchronous immutable-input
+      factory, keeping the mutable assertion counter in one shared recorder.
+      Preserve detached method values, receiver, returns and assertion plans.
+
 - [ ] Reduce remaining no-capture closure and per-iteration capture
       costs. Source-immutable leaf captures can copy values in open images; synthetic
       iteration owners and mutually cyclic initializers still need per-creation snapshots before

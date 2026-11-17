@@ -60,6 +60,12 @@ closures use the same proof when their parameters have no mapped arguments alias
 An empty sloppy parameter map needs no owner cells; its arguments object still
 retains the real owning callee and ordinary mapped-object behavior.
 
+`node:test` creates assertion wrappers in a synchronous factory. Each wrapper
+captures the selected method, receiver and a shared recorder from one creator.
+The recorder retains the mutable assertion count. Local const bindings supply
+source immutability in open images; returning the arrow directly preserves its
+anonymous name and zero length.
+
 A closure's immutable self binding can use its active callee value. The creation
 must immediately initialize that binding in a nonrepeating straight-line prefix,
 with no other value stores or implicit aliases. Earlier TDZ stores and external

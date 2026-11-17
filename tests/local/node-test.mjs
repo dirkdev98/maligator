@@ -1,3 +1,4 @@
+import assertions from "node:assert";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import test, { test as namedTest, describe, beforeEach, afterEach } from "node:test";
@@ -10,6 +11,19 @@ assert.equal(require("../fixtures/node-test/require-override.mjs").answer, 42);
 const mode = process.argv[2] ?? "pass";
 
 if (mode === "pass") {
+	const equal = assertions.equal;
+	assertions.equal = function (...values) {
+		return { receiver: this, values };
+	};
+	test("forwards an assertion's receiver and return value", (t) => {
+		t.plan(1);
+		t.after(() => {
+			assertions.equal = equal;
+		});
+		const result = t.assert.equal(7, "7");
+		assert.equal(result.receiver, assertions);
+		assert.deepEqual(result.values, [7, "7"]);
+	});
 	const order = [];
 	describe("synchronous suite collection", () => {
 		order.push("collected");
@@ -27,6 +41,28 @@ if (mode === "pass") {
 		});
 	});
 	assert.deepEqual(order, ["collected"]);
+	test("keeps a detached assertion's original method", (t) => {
+		t.plan(1);
+		const ok = t.assert.ok;
+		const original = assertions.ok;
+		try {
+			assertions.ok = () => {
+				throw new Error("replacement assertion ran");
+			};
+			ok(true);
+		} finally {
+			assertions.ok = original;
+		}
+	});
+	test("returns promises from detached assertions", async (t) => {
+		t.plan(1);
+		const rejects = t.assert.rejects;
+		await rejects(Promise.reject(new Error("fixture rejection")), /fixture rejection/);
+	});
+	test("counts a caught assertion failure", (t) => {
+		t.plan(1);
+		assert.throws(() => t.assert.strictEqual(1, 2), assert.AssertionError);
+	});
 	test.skip("skipped body", () => {
 		throw new Error("skip executed");
 	});

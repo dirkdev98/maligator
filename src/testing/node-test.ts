@@ -196,6 +196,21 @@ async function runSuite(suite: Suite, ancestors: Array<Suite>): Promise<void> {
 	}
 }
 
+function makeAssertion(
+	method: (...values: Array<unknown>) => unknown,
+	receiver: typeof assert,
+	recordAssertion: () => void,
+): (...args: Array<unknown>) => unknown {
+	// Const aliases let open images copy this closure's immutable captures.
+	const target = method;
+	const targetReceiver = receiver;
+	const record = recordAssertion;
+	return (...args) => {
+		record();
+		return Reflect.apply(target, targetReceiver, args);
+	};
+}
+
 async function runTest(record: TestRecord, ancestors: Array<Suite>): Promise<void> {
 	const { name, options, fn } = record;
 	if (options.skip || fn === undefined) {
@@ -235,17 +250,17 @@ async function runTest(record: TestRecord, ancestors: Array<Suite>): Promise<voi
 			process.stdout.write(`# ${String(message)}\n`);
 		},
 	};
+	const recordAssertion = (): void => {
+		count++;
+	};
 	for (const [key, method] of Object.entries(assert)) {
 		if (typeof method !== "function" || ["Assert", "CallTracker", "strict"].includes(key))
 			continue;
-		context.assert[key] = (...args) => {
-			count++;
-			return Reflect.apply(
-				method as (...values: Array<unknown>) => unknown,
-				assert,
-				args,
-			);
-		};
+		context.assert[key] = makeAssertion(
+			method as (...values: Array<unknown>) => unknown,
+			assert,
+			recordAssertion,
+		);
 	}
 	const cancel = (reason: unknown): void => {
 		controller.abort(reason);
