@@ -3675,6 +3675,34 @@ describe("wide BigInt builtin constants", () => {
 });
 
 describe("mutable namespace guards in the executing realm", () => {
+	it.each([
+		["Number.parseFloat(value)", "parseFloat"],
+		["parseFloat(value)", "parseFloat"],
+		["Number.parseInt(value,radix)", "parseInt"],
+		["parseInt(value,radix)", "parseInt"],
+		["Number.parseInt(value)", "parseInt"],
+		["Number.parseInt(value,undefined)", "parseInt"],
+		["Number.parseInt(value,void prepare())", "parseInt"],
+		["Number.parseFloat(value.input,prepare())", "parseFloat"],
+	] as const)(
+		"guards numeric parser primitive inputs for %s",
+		(expression, operation) => {
+			const output = inspectStaticValueFunction(
+				`function probe(value,radix,prepare){return ${expression}}globalThis.probe=probe;`,
+				"probe",
+				{ locked: false, realms: true },
+			).core;
+			const call = output.find(
+				(op) => op.opcode === "callKnown" && op.attributes.operation === operation,
+			);
+			expect(call?.attributes.worldAssumptions).toMatchObject({
+				primordials: "guarded",
+				realm: "current-execution-realm",
+			});
+			expect(call?.attributes.specialized).toBeUndefined();
+			expect(output.some((op) => op.opcode === "call")).toBe(true);
+		},
+	);
 	it.each([false, true])(
 		"retains replayable String proofs for constant bindings: script=%s",
 		(script) => {

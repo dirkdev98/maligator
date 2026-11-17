@@ -1539,10 +1539,13 @@ the loaded call stays as fallback. The String branch cannot run user conversion 
 create a realm-owned error; verification replays the branch's kind restriction.
 Type-observation folding uses the same replayable SSA facts for this predicate;
 contextual global and field facts cannot erase the runtime proof.
-Ignored arguments still finish before either guard. Native parsing may allocate
-temporary UTF-16 storage without running JavaScript or collecting.
-These direct consumers create no realm-owned result or error;
-clock reads retain their host effect even when their result is unused. Their
+Ignored arguments still finish before either guard.
+Global numeric parsers and their Number aliases use the same late String proof.
+Integer parsing also checks a present radix for Number type; omitted or literal
+undefined radix uses the default. Their generic known-call transport retains the
+ordinary loaded fallback. Native String parsing can use temporary native storage,
+but cannot collect, reenter JavaScript or create a realm-owned result or error.
+Clock reads retain their host effect even when their result is unused. Their
 proof belongs to the executing function's realm, whose globals and intrinsics the call
 boundary installs. Ordinary loaded calls remain as the fallback, and reentry blocks later
 lookups or calls whose captured identity would be lost. The primordial graph cache

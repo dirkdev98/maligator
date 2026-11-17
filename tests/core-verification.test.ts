@@ -197,6 +197,81 @@ function validBranchProgram() {
 
 describe("Core verification", () => {
 	it.each([
+		{ expected: "number", positive: true, valid: true },
+		{ expected: "number", positive: false, valid: false },
+		{ expected: "string", positive: true, valid: false },
+		{ expected: undefined, positive: true, valid: false },
+		{ expected: "literal undefined", positive: true, valid: true },
+	])("replays numeric parser radix authority: %j", ({ expected, positive, valid }) => {
+		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[52, 50]] });
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{ representation: "boxed" }]);
+		const radix =
+			expected === "literal undefined"
+				? builder.appendInstruction(entry, "createUndefined", [])[0]!
+				: builder.blockParameterValue(entry, 0);
+		const [text] = builder.appendInstruction(entry, "createString", [], {
+			attributes: { stringIndex: 0 },
+		});
+		const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+		const checked = builder.createBlock(),
+			fast = builder.createBlock(),
+			slow = builder.createBlock();
+		const [holds] = builder.appendInstruction(entry, "guardSemanticEpoch", [], {
+			attributes: { family: "primordial-bindings" },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: holds!,
+			consequent: { block: checked, arguments: [] },
+			alternate: { block: slow, arguments: [] },
+		});
+		if (expected !== undefined && expected !== "literal undefined") {
+			const [matches] = builder.appendInstruction(checked, "typeofCompare", [radix], {
+				attributes: { expected, negated: false },
+			});
+			builder.setTerminator(checked, {
+				kind: "branch",
+				condition: matches!,
+				consequent: { block: positive ? fast : slow, arguments: [] },
+				alternate: { block: positive ? slow : fast, arguments: [] },
+			});
+		} else
+			builder.setTerminator(checked, {
+				kind: "jump",
+				edge: { block: fast, arguments: [] },
+			});
+		const [result] = builder.appendInstruction(
+			fast,
+			"callKnown",
+			[receiver!, text!, radix],
+			{
+				attributes: {
+					operation: "parseInt",
+					worldAssumptions: {
+						...builtinWorldAssumptions(
+							"parseInt",
+							"exact-builtin-proof",
+							false,
+							"guarded",
+						),
+					},
+					knownBuiltinCall: guardedKnownOperationCall(
+						"parseInt",
+						builder.functionId,
+						false,
+					) as unknown as CoreAttributeValue,
+				},
+			},
+		);
+		builder.setTerminator(fast, { kind: "return", value: result! });
+		builder.setTerminator(slow, { kind: "return", value: radix });
+		const finished = builder.finish(entry),
+			verify = () => verifyCoreFunction(program, finished.function);
+		if (valid) expect(verify).not.toThrow();
+		else expect(verify).toThrow("Unsupported current-realm guarded operation parseInt");
+	});
+	it.each([
 		{ expected: "string", positive: true, valid: true },
 		{ expected: "number", positive: true, valid: false },
 		{ expected: "string", positive: false, valid: false },

@@ -1319,20 +1319,28 @@ function verifyFunction(
 				| undefined;
 			let argumentKinds: Array<CompilerValueKindMask> | undefined;
 			if (
-				(operation === "Date.UTC" || operation === "Date.parse") &&
+				(operation === "Date.UTC" ||
+					operation === "Date.parse" ||
+					operation === "parseFloat" ||
+					operation === "parseInt") &&
 				assumptions?.primordials === "guarded" &&
 				assumptions.realm === "current-execution-realm"
 			) {
 				if (attributes.construct || attributes.argumentMode !== undefined)
 					fail(`Invalid current-realm ${operation} call`);
 				localKinds ??= analyzeCoreValueKinds(program, fn, cfg);
-				const limit = exactBuiltinCallDescriptor(operation)!.forwardedArgumentLimit!;
+				const limit =
+					operation === "parseInt"
+						? 2
+						: operation === "parseFloat"
+							? 1
+							: exactBuiltinCallDescriptor(operation)!.forwardedArgumentLimit!;
 				const start = fn.kernel.instructionOperandStart(instruction);
 				argumentKinds = Array.from(
 					{ length: Math.min(limit, fn.kernel.instructionOperandCount(instruction) - 1) },
 					(_, index) => {
 						const value = fn.kernel.operandAt(start + 1 + index);
-						if (operation !== "Date.parse") return localKinds!.kindMask(value);
+						if (operation === "Date.UTC") return localKinds!.kindMask(value);
 						conditionalKinds ??= analyzeCoreConditionalValueKinds(
 							program,
 							fn,

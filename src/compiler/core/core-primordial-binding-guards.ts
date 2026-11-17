@@ -1052,31 +1052,42 @@ function guardedCallAttributes(
 	};
 }
 
-function guardRealmDateParser(
-	fn: CoreFunctionStore,
-	editor: CoreEditor,
-	site: Site,
-): void {
+function guardRealmParser(fn: CoreFunctionStore, editor: CoreEditor, site: Site): void {
 	const block = fn.instructionBlock(site.call);
 	const split = splitGuardedCall(fn, editor, site.call);
 	// Argument evaluation may have replaced the namespace after selecting the callee.
 	const protectedCall = split.test(
 		split.append(block, "guardSemanticEpoch", [], { family: "primordial-bindings" }),
 	);
-	const stringCall = split.test(
+	let parserCall = split.test(
 		split.append(protectedCall, "typeofCompare", [split.operands[2]!], {
 			expected: "string",
 			negated: false,
 			[CORE_REPLAYABLE_TYPEOF_ATTRIBUTE]: true,
 		}),
 	);
+	const radix = split.operands[3];
+	const radixDefinition = radix === undefined ? undefined : definition(fn, radix);
+	if (
+		site.operation === "parseInt" &&
+		radix !== undefined &&
+		(radixDefinition === undefined || opcodeOf(fn, radixDefinition) !== "createUndefined")
+	) {
+		parserCall = split.test(
+			split.append(parserCall, "typeofCompare", [radix], {
+				expected: "number",
+				negated: false,
+				[CORE_REPLAYABLE_TYPEOF_ATTRIBUTE]: true,
+			}),
+		);
+	}
 	const result = split.append(
-		stringCall,
+		parserCall,
 		"callKnown",
 		split.operands.slice(1),
-		guardedCallAttributes(fn, site, true, false),
+		guardedCallAttributes(fn, site, site.operation === "Date.parse", false),
 	);
-	split.finish(stringCall, result);
+	split.finish(parserCall, result);
 }
 
 /*
@@ -1335,7 +1346,9 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 			if (site === undefined) continue;
 			if (
 				world.realms &&
-				site.operation === "Date.parse" &&
+				(site.operation === "Date.parse" ||
+					site.operation === "parseFloat" ||
+					site.operation === "parseInt") &&
 				operands(fn, instruction).length > 2 &&
 				fn.instructionAttributes(instruction)[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] !==
 					true
@@ -1366,7 +1379,7 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 				if (cost > remaining) break;
 				remaining -= cost;
 				editor ??= CoreEditor.open(program, item.function);
-				guardRealmDateParser(fn, editor, site);
+				guardRealmParser(fn, editor, site);
 			}
 			if (editor !== undefined) return editor.commit();
 		}

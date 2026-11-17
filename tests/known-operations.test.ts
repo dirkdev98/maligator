@@ -10,6 +10,7 @@ import {
 	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
 	INSTRUCTION_MAY_GC,
@@ -434,6 +435,51 @@ it.each([
 		else expect(verify).toThrow("Unsupported current-realm guarded operation Date.parse");
 	},
 );
+it.each([
+	{ operation: "parseFloat", kinds: [COMPILER_VALUE_KIND_STRING], allowed: true },
+	{ operation: "parseFloat", kinds: [], allowed: false },
+	{ operation: "parseFloat", kinds: [COMPILER_VALUE_KIND_OBJECT], allowed: false },
+	{ operation: "parseInt", kinds: [COMPILER_VALUE_KIND_STRING], allowed: true },
+	{
+		operation: "parseInt",
+		kinds: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_NUMBER],
+		allowed: true,
+	},
+	{
+		operation: "parseInt",
+		kinds: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_UNDEFINED],
+		allowed: true,
+	},
+	{
+		operation: "parseInt",
+		kinds: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_OBJECT],
+		allowed: false,
+	},
+	{
+		operation: "parseInt",
+		kinds: [
+			COMPILER_VALUE_KIND_STRING,
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED,
+		],
+		allowed: false,
+	},
+	{
+		operation: "parseInt",
+		kinds: [COMPILER_VALUE_KIND_OBJECT, COMPILER_VALUE_KIND_NUMBER],
+		allowed: false,
+	},
+	{ operation: "parseInt", kinds: [], allowed: false },
+])("requires noncoercing numeric parser inputs: %j", ({ operation, kinds, allowed }) => {
+	const verify = () =>
+		verifyBuiltinWorldAssumptions(
+			builtinWorldAssumptions(operation, "exact-builtin-proof", false, "guarded"),
+			operation,
+			undefined,
+			kinds,
+		);
+	if (allowed) expect(verify).not.toThrow();
+	else expect(verify).toThrow("Unsupported current-realm guarded operation");
+});
 it.each(
 	[[], [COMPILER_VALUE_KIND_NUMBER], Array(7).fill(COMPILER_VALUE_KIND_NUMBER)].map(
 		(kinds) => ({ kinds }),

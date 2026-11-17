@@ -174,6 +174,58 @@ done:
     return ok;
 }
 
+static bool check_number_parser_realms(
+    MalVm *vm, const byte *name, const byte *replacement,
+    bool integer, f64 expected, f64 replaced
+) {
+    MalValue roots[5] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED,
+        MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, countof(roots));
+    MalRealm *initial = vm->current_realm;
+    bool ok = false;
+    if (!get(vm, name, &roots[0]) || !get(vm, replacement, &roots[2]) ||
+        !get(vm, "realmNumberText", &roots[3])) goto done;
+    i32 parse = mal_function_object_function_index(mal_value_to_function_object(roots[0]));
+    i32 replace = mal_function_object_function_index(mal_value_to_function_object(roots[2]));
+    MalRealm *owned = mal_realm_create(vm, nullptr, nullptr);
+    mal_realm_switch(vm, owned);
+    roots[1] = mal_vm_op_create_function(vm, parse, nullptr);
+    roots[2] = mal_vm_op_create_function(vm, replace, nullptr);
+    mal_realm_switch(vm, initial);
+    MalValue args[2] = {roots[3], mal_value_from_i32(10)};
+    i32 count = integer ? 2 : 1;
+    u64 admissions = mal_perf_stats.primordial_binding_guard_admissions;
+    if (!number_result(invoke(vm, roots[0], args, count), expected) ||
+        !number_result(invoke(vm, roots[1], args, count), expected) ||
+        mal_perf_stats.primordial_binding_guard_admissions <= admissions ||
+        vm->current_realm != initial) goto done;
+    mal_gc_collect(vm);
+    for (i32 index = 0; index < count; index++) {
+        args[0] = roots[3];
+        args[1] = mal_value_from_i32(10);
+        args[index] = vm->intrinsics[MAL_INTRINSIC_SYMBOL_ITERATOR];
+        MalCompletion thrown = invoke(vm, roots[1], args, count);
+        roots[4] = thrown.value;
+        if (thrown.kind != MAL_COMPLETION_THROW || !mal_value_is_object(roots[4]) ||
+            mal_object_prototype(mal_value_to_object(roots[4])) !=
+                mal_value_to_object(owned->intrinsics[MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE]) ||
+            vm->current_realm != initial) goto done;
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = MAL_VALUE_UNDEFINED};
+    }
+    args[0] = roots[3];
+    args[1] = mal_value_from_i32(10);
+    if (invoke(vm, roots[2], nullptr, 0).kind != MAL_COMPLETION_NORMAL ||
+        !number_result(invoke(vm, roots[1], args, count), replaced) ||
+        !number_result(invoke(vm, roots[0], args, count), expected) ||
+        vm->current_realm != initial) goto done;
+    ok = true;
+done:
+    mal_realm_switch(vm, initial);
+    mal_gc_unroot(&span);
+    return ok;
+}
+
 static void run_entry(MalVm *vm) {
     MalCallable *entry = mal_vm_create_callable(vm, 0);
     mal_vm_run(vm, entry);
@@ -191,6 +243,15 @@ int main(void) {
         mal_vm_init(&vm, &mal_runtime_image);
         run_entry(&vm);
         ok = vm.completion.kind == MAL_COMPLETION_NORMAL && check_parse_realms(&vm);
+        mal_vm_free(&vm);
+    }
+    for (i32 index = 0; ok && index < 2; index++) {
+        mal_vm_init(&vm, &mal_runtime_image);
+        run_entry(&vm);
+        ok = vm.completion.kind == MAL_COMPLETION_NORMAL && check_number_parser_realms(
+            &vm, index ? "realmParseInt" : "realmParseFloat",
+            index ? "realmReplaceParseInt" : "realmReplaceParseFloat",
+            index != 0, index ? 42 : 42.5, index ? 67 : 61);
         mal_vm_free(&vm);
     }
     if (!ok) { fputs("realm-namespace-boundaries failure\n", stderr); return 1; }

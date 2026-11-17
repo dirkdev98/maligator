@@ -24,3 +24,16 @@ globalThis.realmParse = function realmParse(value) {
 globalThis.realmReplaceParse = function realmReplaceParse() {
 	Date.parse = () => 79;
 };
+globalThis.realmNumberText = "42.5tail";
+globalThis.realmParseFloat = function realmParseFloat(value) {
+	return Number.parseFloat(value);
+};
+globalThis.realmReplaceParseFloat = function realmReplaceParseFloat() {
+	Number.parseFloat = () => 61;
+};
+globalThis.realmParseInt = function realmParseInt(value, radix) {
+	return Number.parseInt(value, radix);
+};
+globalThis.realmReplaceParseInt = function realmReplaceParseInt() {
+	Number.parseInt = () => 67;
+};

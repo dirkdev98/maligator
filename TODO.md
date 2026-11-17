@@ -162,8 +162,8 @@ Runtime eval may remove source closure without invalidating authority closure.
       those consumers through a guarded join.
       A loop a numeric region can take keeps its own entry speculation;
       admitting `GUARD_SEMANTIC_EPOCH` as a region entry guard would let it use both.
-      Realm-enabled consumers with coercion or realm-owned allocation need their own
-      identity, conversion, allocation and error-realm proof. Keep existing captured-callee Math
+      Realm-enabled consumers beyond primitive String parsing need their own identity,
+      conversion, allocation and error-realm proof. Keep existing captured-callee Math
       kernels unless shared guarding removes enough work to repay copied code.
 
 ## Performance diagnosis and admission
