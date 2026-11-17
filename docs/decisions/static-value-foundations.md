@@ -1497,8 +1497,13 @@ errors. The loaded value remains available to existing call and region guards.
 Core twins a run of such calls in a block: the guard selects a copy with the realm's
 intrinsics and the known operations of the locked lowering, and the loaded calls stay
 as the generic twin. A copied load follows nothing that can run JavaScript or store a
-property. Math Number kernels and noncoercing Number predicates retain their selected
-semantics after reentry without resolving the mutable graph again. The interpreter
+property. Number-input kernels and noncoercing Number predicates retain their selected
+semantics after reentry without resolving the mutable graph again. Ordinary `String`
+calls whose consumed input has an independently replayable Number proof use primitive
+formatting inside the guarded copy, in either realm mode. The selected callee stays
+fixed across argument coercion, and ignored arguments still finish evaluation.
+Primitive formatting may allocate a String, retaining its roots and collection poll;
+construction and other input kinds keep their existing behavior. The interpreter
 retains the predicate specialization tag carried by the wire and static C image.
 A selected single-realm `Date.parse` also survives a recognized argument conversion
 when its forwarded input is proven String. Native and interpreted execution consume

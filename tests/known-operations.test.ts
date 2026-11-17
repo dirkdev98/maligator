@@ -436,6 +436,16 @@ it.each([
 	},
 );
 it.each([
+	{ operation: "String", kinds: [COMPILER_VALUE_KIND_NUMBER], allowed: true },
+	{ operation: "String", kinds: undefined, allowed: false },
+	{ operation: "String", kinds: [], allowed: false },
+	{ operation: "String", kinds: [COMPILER_VALUE_KIND_STRING], allowed: false },
+	{ operation: "String", kinds: [COMPILER_VALUE_KIND_OBJECT], allowed: false },
+	{
+		operation: "String",
+		kinds: [COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_OBJECT],
+		allowed: false,
+	},
 	{ operation: "Number", kinds: [COMPILER_VALUE_KIND_STRING], allowed: true },
 	{ operation: "Number", kinds: [COMPILER_VALUE_KIND_OBJECT], allowed: false },
 	{ operation: "Number", kinds: [], allowed: false },
@@ -472,17 +482,20 @@ it.each([
 		allowed: false,
 	},
 	{ operation: "parseInt", kinds: [], allowed: false },
-])("requires noncoercing numeric parser inputs: %j", ({ operation, kinds, allowed }) => {
-	const verify = () =>
-		verifyBuiltinWorldAssumptions(
-			builtinWorldAssumptions(operation, "exact-builtin-proof", false, "guarded"),
-			operation,
-			undefined,
-			kinds,
-		);
-	if (allowed) expect(verify).not.toThrow();
-	else expect(verify).toThrow("Unsupported current-realm guarded operation");
-});
+])(
+	"requires noncoercing primitive conversion inputs: %j",
+	({ operation, kinds, allowed }) => {
+		const verify = () =>
+			verifyBuiltinWorldAssumptions(
+				builtinWorldAssumptions(operation, "exact-builtin-proof", false, "guarded"),
+				operation,
+				undefined,
+				kinds,
+			);
+		if (allowed) expect(verify).not.toThrow();
+		else expect(verify).toThrow("Unsupported current-realm guarded operation");
+	},
+);
 it.each(
 	[[], [COMPILER_VALUE_KIND_NUMBER], Array(7).fill(COMPILER_VALUE_KIND_NUMBER)].map(
 		(kinds) => ({ kinds }),

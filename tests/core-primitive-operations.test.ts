@@ -3675,6 +3675,49 @@ describe("wide BigInt builtin constants", () => {
 });
 
 describe("mutable namespace guards in the executing realm", () => {
+	it.each(
+		[false, true].flatMap((realms) =>
+			["String(+value)", "String(+value*3+(offset&1))", "String(+value,+offset)"].map(
+				(expression) => ({ realms, expression }),
+			),
+		),
+	)(
+		"lowers selected Number-to-String conversion after coercion: %j",
+		({ realms, expression }) => {
+			const output = inspectStaticValueFunction(
+				`function probe(value,offset){return ${expression}}globalThis.probe=probe;`,
+				"probe",
+				{ locked: false, realms },
+			).core;
+			expect(output.some((op) => op.opcode === "guardSemanticEpoch")).toBe(true);
+			expect(
+				output.some(
+					(op) => op.opcode === "unary" && op.attributes.operator === "tostring",
+				),
+			).toBe(true);
+			expect(output.some((op) => op.opcode === "call")).toBe(true);
+		},
+	);
+	it.each(["String(value)", "String(new Number(value))", "String(Symbol(value))"])(
+		"retains current-realm conversion without an independent Number proof: %s",
+		(expression) => {
+			const output = inspectStaticValueFunction(
+				`function probe(value){return ${expression}}globalThis.probe=probe;`,
+				"probe",
+				{ locked: false, realms: true },
+			).core;
+			expect(
+				output.some(
+					(op) => op.opcode === "callKnown" && op.attributes.operation === "String",
+				),
+			).toBe(false);
+			expect(
+				output.some(
+					(op) => op.opcode === "unary" && op.attributes.operator === "tostring",
+				),
+			).toBe(false);
+		},
+	);
 	it.each([
 		["Number.parseFloat(value)", "parseFloat"],
 		["parseFloat(value)", "parseFloat"],

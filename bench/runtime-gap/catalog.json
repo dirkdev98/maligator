@@ -3073,6 +3073,7 @@
 		},
 		{
 			"id": "forwarded-regexp-replacer",
+			"features": ["regexp"],
 			"group": "runtime",
 			"suite": "runtime",
 			"owner": "functional RegExp replacement",

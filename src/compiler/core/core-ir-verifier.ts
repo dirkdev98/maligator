@@ -1323,7 +1323,8 @@ function verifyFunction(
 					operation === "Date.parse" ||
 					operation === "parseFloat" ||
 					operation === "parseInt" ||
-					operation === "Number") &&
+					operation === "Number" ||
+					operation === "String") &&
 				assumptions?.primordials === "guarded" &&
 				assumptions.realm === "current-execution-realm"
 			) {
@@ -1333,7 +1334,9 @@ function verifyFunction(
 				const limit =
 					operation === "parseInt"
 						? 2
-						: operation === "parseFloat" || operation === "Number"
+						: operation === "parseFloat" ||
+							  operation === "Number" ||
+							  operation === "String"
 							? 1
 							: exactBuiltinCallDescriptor(operation)!.forwardedArgumentLimit!;
 				const start = fn.kernel.instructionOperandStart(instruction);
@@ -1341,7 +1344,8 @@ function verifyFunction(
 					{ length: Math.min(limit, fn.kernel.instructionOperandCount(instruction) - 1) },
 					(_, index) => {
 						const value = fn.kernel.operandAt(start + 1 + index);
-						if (operation === "Date.UTC") return localKinds!.kindMask(value);
+						if (operation === "Date.UTC" || operation === "String")
+							return localKinds!.kindMask(value);
 						conditionalKinds ??= analyzeCoreConditionalValueKinds(
 							program,
 							fn,

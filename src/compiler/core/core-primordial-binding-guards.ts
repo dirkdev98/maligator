@@ -791,7 +791,7 @@ function regionCandidateBlocks(
 interface Run {
 	readonly instructions: ReadonlyArray<CoreInstructionId>;
 	readonly sites: ReadonlyArray<Site>;
-	/** Math calls on Numbers, which the copy runs as numeric kernels. */
+	/** Number-input calls whose selected operation needs no later builtin lookup. */
 	readonly kernels: ReadonlySet<Site>;
 }
 
@@ -807,7 +807,7 @@ class RunPlanner {
 	 * value or its copy's narrower one, and the kind analysis predates it.
 	 */
 	readonly #joined = new Map<CoreValueId, CoreValueId>();
-	readonly #utcKinds: CoreValueKindAnalysis | undefined;
+	readonly #replayableKinds: CoreValueKindAnalysis | undefined;
 
 	constructor(
 		program: CoreProgram,
@@ -821,10 +821,20 @@ class RunPlanner {
 		this.#realms = realms;
 		this.#sitesByInstruction = sitesByInstruction;
 		if (
-			realms &&
-			[...sitesByInstruction.values()].some((site) => site.operation === "Date.UTC")
+			[...sitesByInstruction.values()].some((site) => {
+				if (realms && site.operation === "Date.UTC") return true;
+				if (
+					site.operation !== "String" ||
+					fn.kernel.instructionOperandCount(site.call) <= 2
+				)
+					return false;
+				const value = fn.kernel.operandAt(
+					fn.kernel.instructionOperandStart(site.call) + 2,
+				);
+				return kinds.kindMask(value) === COMPILER_VALUE_KIND_NUMBER;
+			})
 		)
-			this.#utcKinds = analyzeCoreValueKinds(
+			this.#replayableKinds = analyzeCoreValueKinds(
 				program,
 				fn,
 				buildCoreControlFlow(program, fn.id),
@@ -855,11 +865,19 @@ class RunPlanner {
 	}
 
 	/**
-	 * A Math call on Numbers, which the copy runs as a numeric kernel that neither
-	 * runs JavaScript nor resolves its builtin, so it may follow code that could
-	 * have replaced it after its loads.
+	 * Number-input kernels neither run JavaScript nor resolve their builtin, so
+	 * their selected operation survives argument reentry.
 	 */
-	#mathKernel(site: Site): boolean {
+	#numberKernel(site: Site): boolean {
+		if (site.operation === "String") {
+			const fn = this.#fn;
+			if (fn.kernel.instructionOperandCount(site.call) <= 2) return false;
+			const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(site.call) + 2);
+			return (
+				this.#replayableKinds?.kindMask(this.#joined.get(value) ?? value) ===
+				COMPILER_VALUE_KIND_NUMBER
+			);
+		}
 		if (site.kind !== "method" || !MATH_NUMBER_KERNELS.has(site.operation)) return false;
 		const arguments_ = operands(this.#fn, site.call).slice(2);
 		return (
@@ -876,6 +894,11 @@ class RunPlanner {
 	}
 
 	#currentRealmOperation(site: Site): boolean {
+		if (site.operation === "String")
+			return guardedCurrentRealmOperation(
+				site.operation,
+				this.#numberKernel(site) ? [COMPILER_VALUE_KIND_NUMBER] : undefined,
+			);
 		if (site.operation !== "Date.UTC")
 			return guardedCurrentRealmOperation(site.operation);
 		// Verification replays local SSA facts without contextual field/global claims.
@@ -884,13 +907,15 @@ class RunPlanner {
 			site.operation,
 			operands(this.#fn, site.call)
 				.slice(2, 2 + limit)
-				.map((value) => this.#utcKinds!.kindMask(this.#joined.get(value) ?? value)),
+				.map((value) =>
+					this.#replayableKinds!.kindMask(this.#joined.get(value) ?? value),
+				),
 		);
 	}
 
 	/** Whether the known call can run JavaScript, which ends the run after it. */
 	#callReenters(site: Site): boolean {
-		if (NUMBER_PREDICATES.has(site.operation) || this.#mathKernel(site)) return false;
+		if (NUMBER_PREDICATES.has(site.operation) || this.#numberKernel(site)) return false;
 		if (
 			site.kind === "primitive" ||
 			FUNCTIONS.has(site.operation as CompilerIntrinsic) ||
@@ -979,7 +1004,7 @@ class RunPlanner {
 			if (site !== undefined) {
 				const loaded =
 					seen.has(site.name) && (site.method === undefined || seen.has(site.method));
-				const kernel = this.#mathKernel(site);
+				const kernel = this.#numberKernel(site);
 				if (this.#realms && !this.#currentRealmOperation(site)) break;
 				if (
 					!loaded ||
@@ -1227,6 +1252,17 @@ function twinRun(
 		}
 		if (site !== undefined && run.kernels.has(site)) {
 			const arguments_ = inputs.slice(2).map(map);
+			if (site.operation === "String") {
+				copied.set(
+					result!,
+					editor.appendInstruction(copy, "unary", [arguments_[0]!], {
+						attributes: { operator: "tostring" },
+						sourcePosition: position,
+						outputRepresentations: representations,
+					}).outputs[0]!,
+				);
+				continue;
+			}
 			copied.set(
 				result!,
 				editor.appendInstruction(

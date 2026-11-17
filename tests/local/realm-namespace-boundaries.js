@@ -44,3 +44,9 @@ globalThis.realmConvertNumber = function realmConvertNumber(value) {
 globalThis.realmReplaceConversion = function realmReplaceConversion() {
 	globalThis.Number = () => 73;
 };
+globalThis.realmFormatNumber = function realmFormatNumber(value) {
+	return String(+value) === "42.5" ? 1 : 0;
+};
+globalThis.realmReplaceString = function realmReplaceString() {
+	globalThis.String = () => "replacement";
+};

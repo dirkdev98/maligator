@@ -263,6 +263,14 @@ int main(void) {
             false, 42.5, 73);
         mal_vm_free(&vm);
     }
+    if (ok) {
+        mal_vm_init(&vm, &mal_runtime_image);
+        run_entry(&vm);
+        ok = vm.completion.kind == MAL_COMPLETION_NORMAL && check_number_conversion_realms(
+            &vm, "realmFormatNumber", "realmReplaceString", "realmConversionText",
+            false, 1, 0);
+        mal_vm_free(&vm);
+    }
     if (!ok) { fputs("realm-namespace-boundaries failure\n", stderr); return 1; }
     puts("realm-namespace-boundaries PASS");
     return 0;

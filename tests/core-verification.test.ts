@@ -341,7 +341,11 @@ describe("Core verification", () => {
 				);
 		},
 	);
-	it.each([false, true])("replays Number inputs for current-realm UTC: %s", (number) => {
+	it.each(
+		[false, true].flatMap((number) =>
+			["Date.UTC", "String"].map((operation) => ({ number, operation })),
+		),
+	)("replays Number inputs for current-realm calls: %j", ({ number, operation }) => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = builder.createBlock([{ representation: "boxed" }]);
@@ -372,17 +376,17 @@ describe("Core verification", () => {
 			[namespace!, number ? year! : value, month!],
 			{
 				attributes: {
-					operation: "Date.UTC",
+					operation,
 					worldAssumptions: {
 						...builtinWorldAssumptions(
-							"Date.UTC",
+							operation,
 							"exact-builtin-proof",
 							false,
 							"guarded",
 						),
 					},
 					knownBuiltinCall: guardedKnownOperationCall(
-						"Date.UTC",
+						operation,
 						builder.functionId,
 						false,
 					) as unknown as CoreAttributeValue,
@@ -394,7 +398,8 @@ describe("Core verification", () => {
 		const finished = builder.finish(entry);
 		const verify = () => verifyCoreFunction(program, finished.function);
 		if (number) expect(verify).not.toThrow();
-		else expect(verify).toThrow("Unsupported current-realm guarded operation Date.UTC");
+		else
+			expect(verify).toThrow(`Unsupported current-realm guarded operation ${operation}`);
 	});
 	it.each([
 		{ mask: 8, minimum: -0, maximum: 7 },
