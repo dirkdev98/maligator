@@ -44,7 +44,9 @@ export function guardedCurrentRealmOperation(
 		(operation === "Date.UTC" &&
 			consumedArgumentKinds !== undefined &&
 			consumedArgumentKinds.every((kind) => kind === COMPILER_VALUE_KIND_NUMBER)) ||
-		((operation === "Date.parse" || operation === "parseFloat") &&
+		((operation === "Date.parse" ||
+			operation === "parseFloat" ||
+			operation === "Number") &&
 			consumedArgumentKinds?.length === 1 &&
 			consumedArgumentKinds[0] === COMPILER_VALUE_KIND_STRING) ||
 		(operation === "parseInt" &&

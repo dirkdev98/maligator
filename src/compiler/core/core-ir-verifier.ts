@@ -1322,7 +1322,8 @@ function verifyFunction(
 				(operation === "Date.UTC" ||
 					operation === "Date.parse" ||
 					operation === "parseFloat" ||
-					operation === "parseInt") &&
+					operation === "parseInt" ||
+					operation === "Number") &&
 				assumptions?.primordials === "guarded" &&
 				assumptions.realm === "current-execution-realm"
 			) {
@@ -1332,7 +1333,7 @@ function verifyFunction(
 				const limit =
 					operation === "parseInt"
 						? 2
-						: operation === "parseFloat"
+						: operation === "parseFloat" || operation === "Number"
 							? 1
 							: exactBuiltinCallDescriptor(operation)!.forwardedArgumentLimit!;
 				const start = fn.kernel.instructionOperandStart(instruction);

@@ -3678,6 +3678,8 @@ describe("mutable namespace guards in the executing realm", () => {
 	it.each([
 		["Number.parseFloat(value)", "parseFloat"],
 		["parseFloat(value)", "parseFloat"],
+		["Number(value)", "Number"],
+		["Number(value.slice(1),prepare())", "Number"],
 		["Number.parseInt(value,radix)", "parseInt"],
 		["parseInt(value,radix)", "parseInt"],
 		["Number.parseInt(value)", "parseInt"],
@@ -3685,7 +3687,7 @@ describe("mutable namespace guards in the executing realm", () => {
 		["Number.parseInt(value,void prepare())", "parseInt"],
 		["Number.parseFloat(value.input,prepare())", "parseFloat"],
 	] as const)(
-		"guards numeric parser primitive inputs for %s",
+		"guards primitive String conversion inputs for %s",
 		(expression, operation) => {
 			const output = inspectStaticValueFunction(
 				`function probe(value,radix,prepare){return ${expression}}globalThis.probe=probe;`,
@@ -3879,7 +3881,6 @@ describe("mutable namespace guards in the executing realm", () => {
 		"Math.abs(+value)",
 		"Math.min(+value,2)",
 		"Object.create(value)",
-		"Number.isFinite(Number(value))",
 	])("retains the loaded call for %s", (expression) => {
 		const output = inspectStaticValueFunction(
 			`function probe(value){return ${expression}}globalThis.probe=probe;`,
@@ -3894,6 +3895,19 @@ describe("mutable namespace guards in the executing realm", () => {
 					op.opcode === "mathBinaryNumber",
 			),
 		).toBe(false);
+		expect(output.core.some((op) => op.opcode === "call")).toBe(true);
+	});
+	it("retains Number conversion fallback inside a captured predicate call", () => {
+		const output = inspectStaticValueFunction(
+			"function probe(value){return Number.isFinite(Number(value))}globalThis.probe=probe;",
+			"probe",
+			{ locked: false, realms: true },
+		);
+		expect(
+			output.core.some(
+				(op) => op.opcode === "callKnown" && op.attributes.operation === "Number",
+			),
+		).toBe(true);
 		expect(output.core.some((op) => op.opcode === "call")).toBe(true);
 	});
 	it("keeps shadowed namespaces outside the global binding proof", () => {

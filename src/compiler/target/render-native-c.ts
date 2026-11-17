@@ -13486,6 +13486,18 @@ class NativeInstructionEmission {
 						this.callPoll(),
 					];
 				} else if (
+					instruction.operation === "Number" &&
+					first !== undefined &&
+					this.operandKind(first) === COMPILER_VALUE_KIND_STRING
+				) {
+					const input = this.boxedOperand(first);
+					const parsed = `mal_ops_string_range_to_number(mal_value_to_string(${input}), 0, mal_value_to_string(${input})->length)`;
+					guard = "true";
+					direct = [
+						`r${instruction.dst} = ${this.callValue(instruction.dst, parsed)};`,
+						this.callPoll(),
+					];
+				} else if (
 					instruction.operation === "BigInt" &&
 					first !== undefined &&
 					((this.operandKind(first) ?? COMPILER_VALUE_KIND_TOP) &

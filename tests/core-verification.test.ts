@@ -271,14 +271,18 @@ describe("Core verification", () => {
 		if (valid) expect(verify).not.toThrow();
 		else expect(verify).toThrow("Unsupported current-realm guarded operation parseInt");
 	});
-	it.each([
-		{ expected: "string", positive: true, valid: true },
-		{ expected: "number", positive: true, valid: false },
-		{ expected: "string", positive: false, valid: false },
-		{ expected: "symbol", positive: false, valid: false },
-	])(
-		"replays the selected String edge for current-realm parsing: %j",
-		({ expected, positive, valid }) => {
+	it.each(
+		["Date.parse", "parseFloat", "Number"].flatMap((operation) =>
+			[
+				{ expected: "string", positive: true, valid: true },
+				{ expected: "number", positive: true, valid: false },
+				{ expected: "string", positive: false, valid: false },
+				{ expected: "symbol", positive: false, valid: false },
+			].map((test) => ({ ...test, operation })),
+		),
+	)(
+		"replays the selected String edge for current-realm conversion: %j",
+		({ expected, positive, valid, operation }) => {
 			const program = new CoreProgram(coreOpcodeRegistry);
 			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
 			const entry = builder.createBlock([{ representation: "boxed" }]);
@@ -309,18 +313,18 @@ describe("Core verification", () => {
 			});
 			const [result] = builder.appendInstruction(fast, "callKnown", [namespace!, value], {
 				attributes: {
-					operation: "Date.parse",
-					specialized: "Date.parse",
+					operation,
+					...(operation === "Date.parse" ? { specialized: operation } : {}),
 					worldAssumptions: {
 						...builtinWorldAssumptions(
-							"Date.parse",
+							operation,
 							"exact-builtin-proof",
 							false,
 							"guarded",
 						),
 					},
 					knownBuiltinCall: guardedKnownOperationCall(
-						"Date.parse",
+						operation,
 						builder.functionId,
 						false,
 					) as unknown as CoreAttributeValue,
@@ -332,7 +336,9 @@ describe("Core verification", () => {
 			const verify = () => verifyCoreFunction(program, finished.function);
 			if (valid) expect(verify).not.toThrow();
 			else
-				expect(verify).toThrow("Unsupported current-realm guarded operation Date.parse");
+				expect(verify).toThrow(
+					`Unsupported current-realm guarded operation ${operation}`,
+				);
 		},
 	);
 	it.each([false, true])("replays Number inputs for current-realm UTC: %s", (number) => {

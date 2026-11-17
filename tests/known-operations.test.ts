@@ -436,6 +436,9 @@ it.each([
 	},
 );
 it.each([
+	{ operation: "Number", kinds: [COMPILER_VALUE_KIND_STRING], allowed: true },
+	{ operation: "Number", kinds: [COMPILER_VALUE_KIND_OBJECT], allowed: false },
+	{ operation: "Number", kinds: [], allowed: false },
 	{ operation: "parseFloat", kinds: [COMPILER_VALUE_KIND_STRING], allowed: true },
 	{ operation: "parseFloat", kinds: [], allowed: false },
 	{ operation: "parseFloat", kinds: [COMPILER_VALUE_KIND_OBJECT], allowed: false },

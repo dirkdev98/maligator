@@ -616,6 +616,7 @@ function siteFor(
 			receiver === undefined ||
 			opcodeOf(fn, receiver) !== "createUndefined" ||
 			(SPAN_PARSERS.has(operation) &&
+				!(world.realms && operation === "Number") &&
 				inputs[2] !== undefined &&
 				stringSpan(program, fn, inputs[2]))
 		)
@@ -1052,14 +1053,18 @@ function guardedCallAttributes(
 	};
 }
 
-function guardRealmParser(fn: CoreFunctionStore, editor: CoreEditor, site: Site): void {
+function guardRealmStringConversion(
+	fn: CoreFunctionStore,
+	editor: CoreEditor,
+	site: Site,
+): void {
 	const block = fn.instructionBlock(site.call);
 	const split = splitGuardedCall(fn, editor, site.call);
 	// Argument evaluation may have replaced the namespace after selecting the callee.
 	const protectedCall = split.test(
 		split.append(block, "guardSemanticEpoch", [], { family: "primordial-bindings" }),
 	);
-	let parserCall = split.test(
+	let conversionCall = split.test(
 		split.append(protectedCall, "typeofCompare", [split.operands[2]!], {
 			expected: "string",
 			negated: false,
@@ -1073,8 +1078,8 @@ function guardRealmParser(fn: CoreFunctionStore, editor: CoreEditor, site: Site)
 		radix !== undefined &&
 		(radixDefinition === undefined || opcodeOf(fn, radixDefinition) !== "createUndefined")
 	) {
-		parserCall = split.test(
-			split.append(parserCall, "typeofCompare", [radix], {
+		conversionCall = split.test(
+			split.append(conversionCall, "typeofCompare", [radix], {
 				expected: "number",
 				negated: false,
 				[CORE_REPLAYABLE_TYPEOF_ATTRIBUTE]: true,
@@ -1082,12 +1087,12 @@ function guardRealmParser(fn: CoreFunctionStore, editor: CoreEditor, site: Site)
 		);
 	}
 	const result = split.append(
-		parserCall,
+		conversionCall,
 		"callKnown",
 		split.operands.slice(1),
 		guardedCallAttributes(fn, site, site.operation === "Date.parse", false),
 	);
-	split.finish(parserCall, result);
+	split.finish(conversionCall, result);
 }
 
 /*
@@ -1331,7 +1336,7 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 		const controlUse = (value: CoreValueId) =>
 			(controls ??= coreValueControlFlowUseMask(fn))[value] !== 0;
 		const sitesByInstruction = new Map<CoreInstructionId, Site>();
-		const lateParsers: Array<Site> = [];
+		const lateStringConversions: Array<Site> = [];
 		const blocks = new Set<CoreBlockId>();
 		let hasKnownEntries = false;
 		for (const instruction of fn.instructionIds()) {
@@ -1348,12 +1353,13 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 				world.realms &&
 				(site.operation === "Date.parse" ||
 					site.operation === "parseFloat" ||
-					site.operation === "parseInt") &&
+					site.operation === "parseInt" ||
+					site.operation === "Number") &&
 				operands(fn, instruction).length > 2 &&
 				fn.instructionAttributes(instruction)[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] !==
 					true
 			) {
-				lateParsers.push(site);
+				lateStringConversions.push(site);
 				continue;
 			}
 			sitesByInstruction.set(site.name, site);
@@ -1370,16 +1376,16 @@ export const guardPrimordialBindingCalls: CoreFunctionPass = {
 			);
 			if (projected !== undefined) return projected.commit();
 		}
-		if (lateParsers.length > 0) {
+		if (lateStringConversions.length > 0) {
 			let editor: CoreEditor | undefined;
 			let remaining = context.remainingEdits;
-			for (const site of lateParsers) {
+			for (const site of lateStringConversions) {
 				// A split moves the remaining block, so charge its whole function as an upper bound.
 				const cost = 2 * fn.liveStorageCounts().instructions + 32;
 				if (cost > remaining) break;
 				remaining -= cost;
 				editor ??= CoreEditor.open(program, item.function);
-				guardRealmParser(fn, editor, site);
+				guardRealmStringConversion(fn, editor, site);
 			}
 			if (editor !== undefined) return editor.commit();
 		}

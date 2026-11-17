@@ -174,8 +174,8 @@ done:
     return ok;
 }
 
-static bool check_number_parser_realms(
-    MalVm *vm, const byte *name, const byte *replacement,
+static bool check_number_conversion_realms(
+    MalVm *vm, const byte *name, const byte *replacement, const byte *text_name,
     bool integer, f64 expected, f64 replaced
 ) {
     MalValue roots[5] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED,
@@ -185,7 +185,7 @@ static bool check_number_parser_realms(
     MalRealm *initial = vm->current_realm;
     bool ok = false;
     if (!get(vm, name, &roots[0]) || !get(vm, replacement, &roots[2]) ||
-        !get(vm, "realmNumberText", &roots[3])) goto done;
+        !get(vm, text_name, &roots[3])) goto done;
     i32 parse = mal_function_object_function_index(mal_value_to_function_object(roots[0]));
     i32 replace = mal_function_object_function_index(mal_value_to_function_object(roots[2]));
     MalRealm *owned = mal_realm_create(vm, nullptr, nullptr);
@@ -248,10 +248,19 @@ int main(void) {
     for (i32 index = 0; ok && index < 2; index++) {
         mal_vm_init(&vm, &mal_runtime_image);
         run_entry(&vm);
-        ok = vm.completion.kind == MAL_COMPLETION_NORMAL && check_number_parser_realms(
+        ok = vm.completion.kind == MAL_COMPLETION_NORMAL && check_number_conversion_realms(
             &vm, index ? "realmParseInt" : "realmParseFloat",
             index ? "realmReplaceParseInt" : "realmReplaceParseFloat",
+            "realmNumberText",
             index != 0, index ? 42 : 42.5, index ? 67 : 61);
+        mal_vm_free(&vm);
+    }
+    if (ok) {
+        mal_vm_init(&vm, &mal_runtime_image);
+        run_entry(&vm);
+        ok = vm.completion.kind == MAL_COMPLETION_NORMAL && check_number_conversion_realms(
+            &vm, "realmConvertNumber", "realmReplaceConversion", "realmConversionText",
+            false, 42.5, 73);
         mal_vm_free(&vm);
     }
     if (!ok) { fputs("realm-namespace-boundaries failure\n", stderr); return 1; }

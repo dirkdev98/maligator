@@ -37,3 +37,10 @@ globalThis.realmParseInt = function realmParseInt(value, radix) {
 globalThis.realmReplaceParseInt = function realmReplaceParseInt() {
 	Number.parseInt = () => 67;
 };
+globalThis.realmConversionText = "42.5";
+globalThis.realmConvertNumber = function realmConvertNumber(value) {
+	return Number(value);
+};
+globalThis.realmReplaceConversion = function realmReplaceConversion() {
+	globalThis.Number = () => 73;
+};
