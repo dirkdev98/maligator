@@ -484,7 +484,11 @@ function insertConstant(
 					? "createBoolean"
 					: constant.kind === "string"
 						? "createString"
-						: representation === "boxed"
+						: representation === "boxed" &&
+							  Number.isInteger(constant.value) &&
+							  constant.value >= COMPILER_INT32_RANGE.minimum &&
+							  constant.value <= COMPILER_INT32_RANGE.maximum &&
+							  !Object.is(constant.value, -0)
 							? "createNumber"
 							: "createF64";
 	const attributes =

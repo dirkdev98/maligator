@@ -96,6 +96,54 @@ function optimizedClosedModule(source: string, sourcePath: string): CoreProgram 
 }
 
 describe("Core local canonicalization", () => {
+	it.each([-0, 1.25, NaN, Infinity, -Infinity, 2 ** 40, 0, 42])(
+		"preserves the VM constant encoding when merging boxed %s",
+		(value) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const entry = builder.createBlock([{ representation: "boxed" }]);
+			const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
+			const left = builder.createBlock();
+			const right = builder.createBlock();
+			const join = builder.createBlock([{ representation: "boxed" }]);
+			builder.setTerminator(entry, {
+				kind: "branch",
+				condition,
+				consequent: { block: left, arguments: [] },
+				alternate: { block: right, arguments: [] },
+			});
+			for (const block of [left, right]) {
+				const [constant] = builder.appendInstruction(block, "createF64", [], {
+					attributes: { value },
+					outputRepresentations: ["boxed"],
+				});
+				builder.setTerminator(block, {
+					kind: "jump",
+					edge: { block: join, arguments: [constant!] },
+				});
+			}
+			builder.setTerminator(join, {
+				kind: "return",
+				value: inspectCoreBlockParameters(builder, join)[0]!.value,
+			});
+			const functionId = builder.finish(entry).function;
+			const fn = optimizeCore(
+				{ program, context },
+				{ verification: "per-pass" },
+			).compilation.program.function(functionId);
+			const returned = returnedOperation(fn);
+			const integer =
+				Number.isInteger(value) &&
+				value >= -0x80000000 &&
+				value <= 0x7fffffff &&
+				!Object.is(value, -0);
+			expect(fn.instructionOpcodeName(returned)).toBe(
+				integer ? "createNumber" : "createF64",
+			);
+			expect(Object.is(fn.instructionAttributes(returned).value, value)).toBe(true);
+		},
+	);
+
 	it("withdraws an inherited Math guess after the receiver resolves to another namespace", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, {
 			stringConstants: ["console", "log"].map((text) =>

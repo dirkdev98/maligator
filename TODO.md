@@ -65,6 +65,9 @@ bounded consumer follow-up and explicit cost evidence; it is not a runtime win.
 
 ## Native SSA storage
 
+- [x] Preserve floating-point VM encodings when equal boxed constants merge at a
+      control-flow join, including signed zero, fractions and out-of-range integers.
+
 The independent target boundary and current storage contract are recorded in
 [native SSA lowering](docs/decisions/native-ssa-lowering.md).
 
