@@ -57,6 +57,16 @@ The bounded selection covers ordinary leaf closures whose only lexical
 operations read initialized bindings from one creator. Object values preserve their
 identity; immutability applies to the binding, not the object's properties. Sloppy
 closures use the same proof when their parameters have no mapped arguments aliases.
+An empty sloppy parameter map needs no owner cells; its arguments object still
+retains the real owning callee and ordinary mapped-object behavior.
+
+A closure's immutable self binding can use its active callee value. The creation
+must immediately initialize that binding in a nonrepeating straight-line prefix,
+with no other value stores or implicit aliases. Earlier TDZ stores and external
+reads stay in place. Observed mutable bindings require closed source; source const
+bindings retain their proof in open images. Reassignment and sibling writers keep
+the shared cell. Removing a self-cell read can let the remaining immutable captures
+use frame copies without retaining a closure-to-owner cycle.
 
 Native activations can keep captured bindings in rooted frame slots and copy them
 directly into eligible closures. A closure requiring shared lexical storage instead

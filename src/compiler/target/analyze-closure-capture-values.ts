@@ -230,7 +230,7 @@ export function analyzeClosureCaptureValues(
 			fn.metadata.isClassConstructor ||
 			fn.metadata.isDerivedConstructor ||
 			fn.metadata.capturedCount !== 0 ||
-			fn.metadata.mappedArguments
+			fn.metadata.mappedArgumentSlots.length > 0
 		)
 			return runtime;
 		const captured = new Map<string, Capture>();
@@ -302,7 +302,6 @@ export function analyzeClosureCaptureValues(
 			runtime.isGenerator ||
 			runtime.isClassConstructor ||
 			runtime.isDerivedConstructor ||
-			runtime.mappedArguments ||
 			runtime.mappedArgumentSlots.length > 0
 		)
 			return runtime;

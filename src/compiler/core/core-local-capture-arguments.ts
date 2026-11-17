@@ -1,10 +1,11 @@
 import { CoreFunctionBuilder } from "./core-builder.ts";
 import type { ConstructedCoreCompilation } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
+import { removeUnsharedProof } from "./core-effect-proof-edits.ts";
 import { buildCoreControlFlow, coreTerminatorInput } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
-import { coreInstructionId } from "./core-ir.ts";
+import { coreFunctionId, coreInstructionId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
 	CoreEdge,
@@ -459,12 +460,121 @@ function liftHelper(
 	).function;
 }
 
-/** Supply stable-for-the-call captures as ordinary SSA inputs to private helper entries. */
+function resolveSelfCaptures(
+	compilation: ConstructedCoreCompilation,
+	creations: ReadonlyMap<number, ReadonlyArray<Creation>>,
+	stores: ReadonlyMap<string, ReadonlyArray<Creation>>,
+	aliases: ReadonlySet<string>,
+): number {
+	const { program, context } = compilation;
+	const closed = context.facts.closure.sourceClosure.kind === "known";
+	const immutable = new Set(context.data.sourceImmutableCapturedSlots.map(key));
+	const entries = new Map<
+		CoreFunctionId,
+		ReadonlyMap<CoreInstructionId, number> | null
+	>();
+	let changed = 0;
+	for (const [target, sites] of creations) {
+		if (sites.length !== 1) continue;
+		const site = sites[0]!;
+		const owner = program.function(site.caller);
+		const fn = program.function(coreFunctionId(target));
+		if (
+			target === owner.id ||
+			owner.isAsync ||
+			owner.isGenerator ||
+			fn.isAsync ||
+			fn.isGenerator ||
+			fn.metadata.isClassConstructor
+		)
+			continue;
+		const store = owner.instructionNext(site.instruction);
+		if (
+			store === undefined ||
+			owner.instructionKind(store) !== "operation" ||
+			owner.instructionOpcodeName(store) !== "storeCaptured"
+		)
+			continue;
+		const slot = capture(owner, store);
+		if (slot?.owner !== owner.id) continue;
+		const address = key(slot);
+		if ((!closed && !immutable.has(address)) || aliases.has(address)) continue;
+		const value = owner.kernel.resultAt(
+			owner.kernel.instructionResultStart(site.instruction),
+		);
+		if (owner.kernel.operandAt(owner.kernel.instructionOperandStart(store)) !== value)
+			continue;
+		const readers = [...fn.instructionIds()].filter(
+			(instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "loadCaptured" &&
+				key(capture(fn, instruction)!) === address,
+		);
+		if (readers.length === 0) continue;
+		let order = entries.get(owner.id);
+		if (order === undefined) {
+			const flow = buildCoreControlFlow(program, owner.id);
+			order = null;
+			if ((flow.predecessors[owner.entry]?.length ?? 0) === 0) {
+				const prefix = new Map<CoreInstructionId, number>();
+				let block = owner.entry;
+				for (;;) {
+					for (const instruction of owner.instructionIds(block))
+						prefix.set(instruction, prefix.size);
+					const terminator = coreTerminatorInput(owner, owner.blockTerminator(block));
+					if (
+						terminator.kind !== "jump" ||
+						flow.predecessors[terminator.edge.block]?.length !== 1
+					)
+						break;
+					block = terminator.edge.block;
+				}
+				order = prefix;
+			}
+			entries.set(owner.id, order);
+		}
+		if (order === null || !order.has(store)) continue;
+		const initialized = order.get(store)!;
+		if (
+			(stores.get(address) ?? []).some((write) => {
+				if (write.caller !== owner.id || !order.has(write.instruction)) return true;
+				if (write.instruction === store) return false;
+				const input = owner.kernel.operandAt(
+					owner.kernel.instructionOperandStart(write.instruction),
+				);
+				return (
+					order.get(write.instruction)! >= initialized ||
+					owner.kernel.valueDefinitionKind(input) !== 1 ||
+					owner.instructionOpcodeName(
+						coreInstructionId(owner.kernel.valueDefinitionOwner(input)),
+					) !== "createEmpty"
+				);
+			})
+		)
+			continue;
+		// The only published value is this closure, and the owner cannot replace it.
+		// Earlier TDZ stores stay in place for reads outside the closure.
+		const editor = CoreEditor.open(program, fn.id);
+		for (const instruction of readers) {
+			const proof = fn.instructionEffectRefinement(instruction)?.proof;
+			editor.replaceInstruction(instruction, "loadCallee", [], {
+				sourcePosition: fn.instructionSourcePosition(instruction),
+			});
+			removeUnsharedProof(editor, fn, proof);
+			changed++;
+		}
+		editor.commit();
+	}
+	return changed;
+}
+
+/** Supply stable captures through callee identity or ordinary SSA inputs. */
 export function liftLocalCaptureArguments(
 	compilation: ConstructedCoreCompilation,
 ): number {
 	const { program, context } = compilation;
-	if (context.facts.closure.sourceClosure.kind !== "known") return 0;
+	const closed = context.facts.closure.sourceClosure.kind === "known";
+	if (!closed && context.data.sourceImmutableCapturedSlots.length === 0) return 0;
 	const functions = [...program.functionIds()];
 	const creations = new Map<number, Array<Creation>>();
 	const writers = new Map<string, Set<CoreFunctionId>>();
@@ -524,11 +634,14 @@ export function liftLocalCaptureArguments(
 			}
 		}
 	}
+	const aliases = new Set([...mappedArguments, ...privateNames]);
+	const selfChanges = resolveSelfCaptures(compilation, creations, stores, aliases);
+	if (!closed) return selfChanges;
 	const dominates = capturedStoreDominance(program);
 	const access: LocalCaptureAccess = {
 		singleStores,
 		loads,
-		implicitAliases: new Set([...mappedArguments, ...privateNames]),
+		implicitAliases: aliases,
 		dominates,
 		initialized: initializedCaptureQueries(program, stores, dominates),
 	};
@@ -622,5 +735,5 @@ export function liftLocalCaptureArguments(
 		}
 		editor.commit();
 	}
-	return candidates.length;
+	return selfChanges + candidates.length;
 }

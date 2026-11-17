@@ -313,6 +313,18 @@ describe("immutable closure capture artifact transport", () => {
 			image.runtime.functions[0]!.closureCaptureValues,
 		);
 	});
+	it("round-trips copied values with an empty sloppy parameter map", () => {
+		const image = captureImage();
+		for (const fn of [image.runtime.functions[0]!, image.native.functions[0]!.body]) {
+			fn.strict = false;
+			fn.mappedArguments = true;
+		}
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(restored.runtime.functions[0]!.mappedArguments).toBe(true);
+		expect(restored.runtime.functions[0]!.closureCaptureValues).toEqual(
+			image.runtime.functions[0]!.closureCaptureValues,
+		);
+	});
 
 	it.each<BytecodeInstruction>([
 		{ opcode: "STORE_CAPTURED", ownerFunctionIndex: 1, index: 0, src: 0 },

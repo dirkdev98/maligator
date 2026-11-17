@@ -342,9 +342,13 @@ contracts or investigates costs still visible after the string follow-ups.
       generic `for...in` and entries-pair iteration. Use existing consumers and preserve
       protocol observation, identity and coercion order.
 
+- [x] Replace proven once-initialized closure self cells with active callee identity,
+      allowing other immutable values to copy without the self cycle. Preserve
+      open-source const facts, owner and sibling writes, TDZ and sloppy owning callee.
+
 - [ ] Reduce remaining no-capture closure and per-iteration capture
       costs. Source-immutable leaf captures can copy values in open images; synthetic
-      iteration owners and cyclic initializers still need per-creation snapshots before
+      iteration owners and mutually cyclic initializers still need per-creation snapshots before
       owner elision.
       Require a repeated consumer before widening capture creation. Preserve
       closure and captured-object identity, TDZ,

@@ -2528,7 +2528,8 @@ MalValue mal_create_arguments_object(
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
     // Sloppy eval can prepend its persistent object scope before arguments are
     // materialized; the parameter map must retain the activation's own cells.
-    MalEnv *parameter_env = mapped ? mal_vm_capture_owner(env, owner_function_index) : nullptr;
+    MalEnv *parameter_env = mapped && mapped_argument_count > 0
+        ? mal_vm_capture_owner(env, owner_function_index) : nullptr;
     MalObject *arguments = mapped
         ? (MalObject *) mal_arguments_object_new(
             &vm->heap, prototype, parameter_env, mapped_argument_slots,

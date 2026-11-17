@@ -244,7 +244,6 @@ function validateClosureCaptureValues(
 		fn.isClassConstructor ||
 		fn.isDerivedConstructor ||
 		fn.capturedCount !== 0 ||
-		fn.mappedArguments ||
 		fn.mappedArgumentSlots.length !== 0
 	) {
 		throw new RangeError("program-image-codec: invalid closure capture values");

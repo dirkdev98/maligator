@@ -149,6 +149,54 @@ function singleStoreAlias(
 }
 
 describe("private local capture arguments", () => {
+	it("keeps a binding shared by repeated initializations", () => {
+		const image = compile(`globalThis.make = function make(count) {
+			var f;
+			const readers = [];
+			for (let i = 0; i < count; i++) { f = function () { return f; }; readers.push(f); }
+			return readers;
+		};`);
+		const fn = image.runtime.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.nameStringIndex] ?? []),
+				) === "f",
+		)!;
+		expect(fn.instructions.some((op) => op.opcode === "LOAD_CAPTURED")).toBe(true);
+		expect(fn.instructions.some((op) => op.opcode === "LOAD_CALLEE")).toBe(false);
+	});
+
+	it.each([
+		{ declaration: "var", closed: true, suffix: "", self: true },
+		{ declaration: "const", closed: false, suffix: "", self: true },
+		{ declaration: "var", closed: false, suffix: "", self: false },
+		{ declaration: "let", closed: true, suffix: "f = replacement;", self: false },
+		{
+			declaration: "let",
+			closed: true,
+			suffix: "globalThis.set = value => { f = value; };",
+			self: false,
+		},
+	])("preserves self binding proof %j", ({ declaration, closed, suffix, self }) => {
+		const image = compile(
+			`globalThis.make = function make(replacement) {
+			${declaration} f = function () { return f; };
+			${suffix}
+			return f;
+		};`,
+			closed,
+		);
+		const fn = image.runtime.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.nameStringIndex] ?? []),
+				) === "f",
+		);
+		expect(fn).toBeDefined();
+		expect(fn!.instructions.some((op) => op.opcode === "LOAD_CALLEE")).toBe(self);
+		expect(fn!.instructions.some((op) => op.opcode === "LOAD_CAPTURED")).toBe(!self);
+	});
+
 	it("lifts a sloppy capture reader that cannot expose its activation", () => {
 		expect(singleStoreAlias("after", false)).toBe(1);
 	});
