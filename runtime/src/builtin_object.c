@@ -1142,22 +1142,26 @@ static bool mal_builtin_object_collect_small_shaped(
 }
 
 static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalPropertyIterKind iter_kind, MalBuiltinObjectCollect collect) {
+    bool plain_object = mal_value_is_heap_type(target, MAL_HEAP_OBJECT);
+    bool function_keys = !plain_object && collect == MAL_BUILTIN_OBJECT_COLLECT_KEYS &&
+        iter_kind == MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER &&
+        mal_value_is_function_object(target);
+    if (function_keys) mal_vm_prepare_script_function_own_keys(vm, target);
+
     MalValue small;
-    if (mal_value_is_heap_type(target, MAL_HEAP_OBJECT) &&
+    if ((plain_object || function_keys) &&
         mal_builtin_object_collect_small_shaped(vm, target, iter_kind, collect, &small)) {
         return small;
     }
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
     MalValue result_box = mal_value_from_array_object(result);
-    if (mal_value_is_heap_type(target, MAL_HEAP_OBJECT) &&
-        collect == MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
+    if (plain_object && collect == MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
         return mal_builtin_object_collect_plain_keys(
                 vm, target, iter_kind, result)
             ? result_box
             : mal_value_new_undefined();
     }
-    if (mal_value_is_heap_type(target, MAL_HEAP_OBJECT) &&
-        collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
+    if (plain_object && collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
         if (mal_builtin_object_collect_plain_data(
                 vm, target, collect, result)) {
             return result_box;

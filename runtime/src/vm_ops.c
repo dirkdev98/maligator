@@ -605,6 +605,15 @@ static bool mal_vm_script_function_has_prototype(MalVm *vm, MalValue value) {
     return function->has_prototype && function->kind != MAL_FUNCTION_KIND_ASYNC;
 }
 
+void mal_vm_prepare_script_function_own_keys(MalVm *vm, MalValue object_value) {
+    // A constructor's prototype and legacy properties share the lazy setup.
+    if (mal_vm_script_function_has_prototype(vm, object_value) &&
+        !mal_object_get_own(mal_value_to_object(object_value),
+            mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE)).present) {
+        mal_vm_function_prototype(vm, object_value);
+    }
+}
+
 bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_out) {
     if (!mal_value_is_object(object_value)) {
         mal_vm_throw_error(
@@ -617,14 +626,7 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
     }
 
 
-    // Script constructor/generator functions expose their prototype property
-    // lazily. Reflection must include it even before an ordinary Get touched it.
-    if (mal_vm_script_function_has_prototype(vm, object_value) &&
-        !mal_object_get_own(
-            mal_value_to_object(object_value), mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE))
-             .present) {
-        mal_vm_function_prototype(vm, object_value);
-    }
+    mal_vm_prepare_script_function_own_keys(vm, object_value);
 
     MalArrayObject *keys = mal_intrinsic_new_array(vm, 0);
     *keys_out = mal_value_from_array_object(keys);

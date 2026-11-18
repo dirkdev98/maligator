@@ -356,6 +356,10 @@ contracts or investigates costs still visible after the string follow-ups.
       factory, keeping the mutable assertion counter in one shared recorder.
       Preserve detached method values, receiver, returns and assertion plans.
 
+- [x] Collect enumerable keys directly from small script function shapes for
+      `once` and `wrappy`. Preserve lazy constructor metadata, key ordering,
+      and fresh result arrays.
+
 - [ ] Reduce remaining no-capture closure and per-iteration capture
       costs. Source-immutable leaf captures can copy values in open images; synthetic
       iteration owners and mutually cyclic initializers still need per-creation snapshots before

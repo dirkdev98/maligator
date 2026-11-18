@@ -412,6 +412,7 @@ bool mal_vm_create_list_from_array_like(
  * Array, TypedArray, String-wrapper, and module-namespace exotic own keys. The
  * returned dense array contains String/Symbol key values in property order.
  */
+void mal_vm_prepare_script_function_own_keys(MalVm *vm, MalValue object);
 bool mal_vm_own_property_keys(MalVm *vm, MalValue object, MalValue *keys_out);
 
 /**

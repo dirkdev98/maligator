@@ -387,6 +387,28 @@ assert(
 	"Reflect.ownKeys materializes function prototype",
 );
 
+function decoratedCallback() {}
+decoratedCallback[symbol] = true;
+Object.defineProperty(decoratedCallback, "label", {
+	enumerable: true,
+	get() {
+		throw new Error("Object.keys reads a property value");
+	},
+});
+decoratedCallback.marker = true;
+const callbackKeys = Object.keys(decoratedCallback);
+assert(callbackKeys.join(",") === "label,marker", "enumerable function keys");
+callbackKeys[0] = "changed";
+assert(
+	Object.keys(decoratedCallback).join(",") === "label,marker",
+	"fresh function key array",
+);
+decoratedCallback[2] = true;
+assert(
+	Object.keys(decoratedCallback).join(",") === "2,label,marker",
+	"indexed function key order",
+);
+
 function strictArguments() {
 	"use strict";
 	return arguments;
