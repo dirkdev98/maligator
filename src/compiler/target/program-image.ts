@@ -69,12 +69,10 @@ import {
 } from "./native-virtual-value.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
-import { remapRuntimeFunctionConstants } from "./runtime-image.ts";
 import {
 	compactRuntimeImageConstants,
 	decodeVmValueOperand,
-	lowerVerifiedTargetsToRuntimePlans,
-	materializePortableSuspensionCleanup,
+	buildVerifiedRuntimeProducts,
 	validateRuntimeImageMetadata,
 	validateVmPropertyCacheLayout,
 	vmInstructionReadRegisters,
@@ -87,7 +85,7 @@ import type {
 	BytecodeInstruction,
 	RuntimeFunctionLoweringPlan,
 	RuntimeImage,
-	RuntimeImageConstantCompactionResult,
+	RuntimeConstantRelocation,
 	RuntimeImageConstantRetentionReport,
 } from "./runtime-image.ts";
 
@@ -3205,7 +3203,7 @@ export function compactProgramImageConstants(
 			native: remapNativeConstants(
 				native,
 				compacted,
-				(_fn, index) => compacted.runtime.functions[vmCount + index]!,
+				compacted.runtime.functions.slice(vmCount),
 			),
 		},
 		changed: true,
@@ -3216,7 +3214,7 @@ export function compactProgramImageConstants(
 /** A layout whose names did not survive compaction keeps its ordinal but licenses nothing. */
 function remapClassLayout(
 	layout: CoreTargetClassLayout,
-	compacted: RuntimeImageConstantCompactionResult,
+	compacted: RuntimeConstantRelocation,
 ): CoreTargetClassLayout {
 	const keys: Array<number> = [];
 	for (const key of layout.keys) {
@@ -3237,8 +3235,8 @@ function remapClassLayout(
 
 function remapNativeConstants(
 	native: NativePlan,
-	compacted: RuntimeImageConstantCompactionResult,
-	bodyFor: (fn: NativeFunctionPlan, index: number) => BytecodeFunction,
+	compacted: RuntimeConstantRelocation,
+	bodies?: ReadonlyArray<BytecodeFunction>,
 ): NativePlan {
 	if (!compacted.changed) return native;
 	const classLayouts = native.classLayouts?.map((layout) =>
@@ -3246,7 +3244,7 @@ function remapNativeConstants(
 	);
 	const functions = native.functions.map((fn, index) => ({
 		...fn,
-		body: bodyFor(fn, index),
+		body: bodies?.[index] ?? fn.body,
 		...(fn.literalSwitches === undefined
 			? {}
 			: {
@@ -3366,22 +3364,22 @@ export function lowerVerifiedExecutionToProgramImage(
 	nativeProgram: ExecutionProgram,
 	profile = false,
 ): ProgramImage {
-	const plans = lowerVerifiedTargetsToRuntimePlans(
-		nativeProgram === program ? [program] : [program, nativeProgram],
-	);
-	const originalRuntimePlan = plans[0]!;
-	const nativeRuntimePlan = plans[1] ?? originalRuntimePlan;
 	const context = program.context;
-	const nativeFunctions = nativeProgram.functions.map((fn, functionIndex) =>
-		lowerExecutionFunctionToNativePlan(
-			fn,
-			nativeRuntimePlan.functions[functionIndex]!,
-			program.core.stringConstants,
-			profile ? context.facts.instructionSites : undefined,
-		),
-	);
-	const runtimePlan = materializePortableSuspensionCleanup(program, originalRuntimePlan);
-	const runtime = runtimePlan.compacted.runtime;
+	const { runtime, relocation, nativeFunctions, instructionIps } =
+		buildVerifiedRuntimeProducts(
+			program,
+			{
+				program: nativeProgram,
+				lower: (fn, plan) =>
+					lowerExecutionFunctionToNativePlan(
+						fn,
+						plan,
+						program.core.stringConstants,
+						profile ? context.facts.instructionSites : undefined,
+					),
+			},
+			profile,
+		);
 	const semanticProtectors = (
 		["primitive-methods", "watched-methods", "array-elements"] as const
 	).map((family) => {
@@ -3411,12 +3409,7 @@ export function lowerVerifiedExecutionToProgramImage(
 					? {}
 					: { classLayouts: nativeProgram.classLayouts }),
 			},
-			nativeRuntimePlan.compacted,
-			// Native wrappers must not publish the compacted snapshot's VM root-map trust.
-			(fn, index) =>
-				nativeRuntimePlan === runtimePlan
-					? remapRuntimeFunctionConstants(fn.body, nativeRuntimePlan.compacted)
-					: { ...nativeRuntimePlan.compacted.runtime.functions[index]! },
+			relocation,
 		),
 		diagnostics: {},
 	};
@@ -3432,7 +3425,7 @@ export function lowerVerifiedExecutionToProgramImage(
 			context.facts,
 			program.functionMap,
 			runtime,
-			runtimePlan.functions.map((fn) => fn.instructionIndexByTargetInstruction),
+			instructionIps,
 			definition.native.functions,
 		);
 		validateRuntimeImageMetadata(runtime);
@@ -3615,13 +3608,14 @@ function lowerExecutionFunctionToNativePlan(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	instructionSites: WeakMap<object, { id: string }> | undefined,
 ): NativeFunctionPlan {
-	const {
-		bytecode,
-		blockStartIps,
-		instructionIndexByTargetInstruction,
-		propertyIcIndexByInstruction,
-	} = runtimePlan;
+	const { bytecode, blockStartIps, instructionIndexByTargetInstruction } = runtimePlan;
 	const instructions = bytecode.instructions;
+	const propertyCacheIndex = (instruction: CompilerInstruction): number | undefined => {
+		const ip = instructionIndexByTargetInstruction.get(instruction);
+		if (ip === undefined) return undefined;
+		const operation = instructions[ip]!;
+		return vmInstructionUsesPropertyCache(operation) ? operation.icIndex : undefined;
+	};
 	const handlers = bytecode.handlers;
 	const nativeInstructions = new Array<NativeInstructionPlan | undefined>(
 		instructions.length,
@@ -4813,9 +4807,7 @@ function lowerExecutionFunctionToNativePlan(
 													lowerPropertyIp: instructionIndexByTargetInstruction.get(
 														consumer.lowerProperty,
 													),
-													lowerIcIndex: propertyIcIndexByInstruction.get(
-														consumer.lowerProperty,
-													),
+													lowerIcIndex: propertyCacheIndex(consumer.lowerProperty),
 													lowerCallIp: instructionIndexByTargetInstruction.get(
 														consumer.lowerCall,
 													),
@@ -5316,7 +5308,7 @@ function lowerExecutionFunctionToNativePlan(
 			case "string-char-code-at-chain": {
 				const propertyIp = instructionIndexByTargetInstruction.get(region.property);
 				const callIp = instructionIndexByTargetInstruction.get(region.call);
-				const propertyIcIndex = propertyIcIndexByInstruction.get(region.property);
+				const propertyIcIndex = propertyCacheIndex(region.property);
 				const property = propertyIp === undefined ? undefined : instructions[propertyIp];
 				const call = callIp === undefined ? undefined : instructions[callIp];
 				const expectedMethodIdentity = vmGuardIsWorldInvariant(guard)
@@ -5394,7 +5386,7 @@ function lowerExecutionFunctionToNativePlan(
 			case "builtin-collection-call-chain": {
 				const propertyIp = instructionIndexByTargetInstruction.get(region.property);
 				const callIp = instructionIndexByTargetInstruction.get(region.call);
-				const propertyIcIndex = propertyIcIndexByInstruction.get(region.property);
+				const propertyIcIndex = propertyCacheIndex(region.property);
 				const property = propertyIp === undefined ? undefined : instructions[propertyIp];
 				const call = callIp === undefined ? undefined : instructions[callIp];
 				const callPlan =
@@ -5711,7 +5703,7 @@ function lowerExecutionFunctionToNativePlan(
 						: instructionIndexByTargetInstruction.get(region.advance);
 				const incrementIp = instructionIndexByTargetInstruction.get(region.increment);
 				const exitIp = blockStartIps.get(region.exitBlock);
-				const trimIcIndex = propertyIcIndexByInstruction.get(region.trimProperty);
+				const trimIcIndex = propertyCacheIndex(region.trimProperty);
 				const primitiveStringLengthIps = region.primitiveStringLengths.map((load) =>
 					instructionIndexByTargetInstruction.get(load),
 				);

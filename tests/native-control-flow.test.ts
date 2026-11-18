@@ -5,7 +5,7 @@ import type { CoreTargetFunction } from "../src/compiler/target/core-target-ir.t
 import { lowerCoreCompilationToExecutionProgram } from "../src/compiler/target/lower-execution.ts";
 import { layoutNativeBlocks } from "../src/compiler/target/lower-native-control-flow.ts";
 import { lowerCoreCompilationToNativeProgram } from "../src/compiler/target/lower-native.ts";
-import { lowerVerifiedTargetsToRuntimePlans } from "../src/compiler/target/runtime-image.ts";
+import { buildVerifiedRuntimeProducts } from "../src/compiler/target/runtime-image.ts";
 import { verifyCoreTargetBlockLayout } from "../src/compiler/target/verify-core-target-layout.ts";
 
 function compile(source: string) {
@@ -74,8 +74,12 @@ describe("native block layout", () => {
 		});
 		const observed = new Set(origins);
 		expect(origins).not.toEqual(fn.coreBlocks.filter((block) => observed.has(block)));
-		const [plan] = lowerVerifiedTargetsToRuntimePlans([native]);
-		const bytecode = plan!.functions[1]!.bytecode;
+		const { runtime, instructionIps } = buildVerifiedRuntimeProducts(
+			native,
+			undefined,
+			true,
+		);
+		const bytecode = runtime.functions[1]!;
 		expect(
 			bytecode.instructions.some(
 				(op, ip) => op.opcode === "JUMP" && op.targetIp === ip + 1,
@@ -83,7 +87,7 @@ describe("native block layout", () => {
 		).toBe(true);
 		for (const region of fn.specializations) {
 			const ips = region.claimedInstructions.map((instruction) =>
-				plan!.functions[1]!.instructionIndexByTargetInstruction.get(instruction)!,
+				instructionIps[1]!.get(instruction)!,
 			);
 			expect(ips.every((ip, index) => index === 0 || ip > ips[index - 1]!)).toBe(true);
 		}
@@ -207,13 +211,18 @@ describe("native block layout", () => {
 				fn.blocks.every((block) => block.sourcePosition === undefined),
 			),
 		).toBe(true);
-		const [nativePlan, vmPlan] = lowerVerifiedTargetsToRuntimePlans([native, vm]);
-		const fallthroughs = (plan: typeof nativePlan) =>
-			plan!.functions[1]!.bytecode.instructions.filter(
+		const { runtime, nativeFunctions } = buildVerifiedRuntimeProducts(vm, {
+			program: native,
+			lower: (_fn, plan) => plan.bytecode,
+		});
+		const fallthroughs = (body: (typeof runtime.functions)[number]) =>
+			body.instructions.filter(
 				(instruction, ip) =>
 					instruction.opcode === "JUMP" && instruction.targetIp === ip + 1,
 			).length;
-		expect(fallthroughs(nativePlan)).toBeGreaterThan(fallthroughs(vmPlan));
+		expect(fallthroughs(nativeFunctions[1]!)).toBeGreaterThan(
+			fallthroughs(runtime.functions[1]!),
+		);
 	});
 
 	it("preserves operation source positions and handler transport after copy threading", () => {
@@ -226,7 +235,11 @@ describe("native block layout", () => {
 			return left;
 		};`);
 		const native = lowerCoreCompilationToNativeProgram(core);
-		const [plan] = lowerVerifiedTargetsToRuntimePlans([native]);
+		const { runtime, instructionIps } = buildVerifiedRuntimeProducts(
+			native,
+			undefined,
+			true,
+		);
 		const fn = native.functions[1]!;
 		const source = core.program.function(native.functionMap.executionToCore[1]!);
 		let checked = 0;
@@ -234,18 +247,13 @@ describe("native block layout", () => {
 			if (point.kind !== "operation") continue;
 			const position = source.instructionSourcePosition(point.coreInstruction);
 			if (position === undefined) continue;
-			const ip = plan!.functions[1]!.instructionIndexByTargetInstruction.get(
-				point.instruction,
-			)!;
-			const actual =
-				plan!.compacted.runtime.sourcePositions[
-					plan!.functions[1]!.bytecode.positions[ip]!
-				];
+			const ip = instructionIps[1]!.get(point.instruction)!;
+			const actual = runtime.sourcePositions[runtime.functions[1]!.positions[ip]!];
 			expect(actual).toMatchObject(core.program.sourcePositions[position]!);
 			checked++;
 		}
 		expect(checked).toBeGreaterThan(0);
 		expect(fn.gc.safepoints.some((point) => point.kind === "loop-backedge")).toBe(true);
-		expect(plan!.functions[1]!.bytecode.handlers.length).toBeGreaterThan(0);
+		expect(runtime.functions[1]!.handlers.length).toBeGreaterThan(0);
 	});
 });

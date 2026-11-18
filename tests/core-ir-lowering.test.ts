@@ -17,7 +17,7 @@ import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/se
 import { coreRegisterClasses } from "../src/compiler/target/lower-execution.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import {
-	lowerVerifiedExecutionToRuntimePlan,
+	buildVerifiedRuntimeProducts,
 	vmSafepointRootMapsAreTrusted,
 } from "../src/compiler/target/runtime-image.ts";
 import {
@@ -537,9 +537,7 @@ describe("Core IR lowering", () => {
 			globalThis.keep = keep;
 		`);
 		const execution = lowerCoreCompilationToExecution(compilation);
-		const {
-			compacted: { runtime },
-		} = lowerVerifiedExecutionToRuntimePlan(execution);
+		const { runtime } = buildVerifiedRuntimeProducts(execution);
 		const generator = runtime.functions.find((fn) => fn.isGenerator)!;
 		expect(generator.gcSafepoints?.length).toBeGreaterThan(0);
 		expect(generator.positions.some((position) => position >= 0)).toBe(true);
@@ -550,6 +548,27 @@ describe("Core IR lowering", () => {
 		expect(vmSafepointRootMapsAreTrusted(generator)).toBe(true);
 		generator.instructions.splice(ip, 0, { opcode: "CREATE_UNDEFINED", dst: 0 });
 		expect(vmSafepointRootMapsAreTrusted(generator)).toBe(false);
+	});
+
+	it("publishes private-name operands independently of the execution target", () => {
+		const compilation = optimize(`
+			globalThis.make = () => class {
+				#value;
+				read() { return this.#value; }
+			};
+		`);
+		const execution = lowerCoreCompilationToExecution(compilation);
+		const { runtime } = buildVerifiedRuntimeProducts(execution);
+		const target = execution.functions
+			.flatMap(({ blocks }) => blocks.flatMap(({ instructions }) => instructions))
+			.find((instruction) => instruction.type === "createPrivateNames")!;
+		const portable = runtime.functions
+			.flatMap(({ instructions }) => instructions)
+			.find((instruction) => instruction.opcode === "CREATE_PRIVATE_NAMES")!;
+		const capturedIndices = [...target.capturedIndices];
+		expect(portable.capturedIndices).toEqual(capturedIndices);
+		portable.capturedIndices.length = 0;
+		expect(target.capturedIndices).toEqual(capturedIndices);
 	});
 
 	it("keeps root trust when profiling attaches metadata after final compaction", () => {

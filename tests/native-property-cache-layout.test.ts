@@ -13,7 +13,7 @@ import {
 	serializeRuntimeImage,
 } from "../src/compiler/target/program-image-codec.ts";
 import {
-	lowerVerifiedTargetsToRuntimePlans,
+	buildVerifiedRuntimeProducts,
 	vmInstructionUsesPropertyCache,
 } from "../src/compiler/target/runtime-image.ts";
 import type { BytecodeFunction } from "../src/compiler/target/runtime-image.ts";
@@ -183,9 +183,11 @@ describe("shared property caches across independent target layouts", () => {
 				};
 			}),
 		}));
-		const plans = lowerVerifiedTargetsToRuntimePlans(targets);
-		expect(plans.every((plan) => plan.functions[1]!.bytecode.propertyIcCount === 5)).toBe(
-			true,
-		);
+		const { runtime, nativeFunctions } = buildVerifiedRuntimeProducts(targets[1]!, {
+			program: targets[0]!,
+			lower: (_fn, plan) => plan.bytecode,
+		});
+		expect(runtime.functions[1]!.propertyIcCount).toBe(5);
+		expect(nativeFunctions[1]!.propertyIcCount).toBe(5);
 	});
 });

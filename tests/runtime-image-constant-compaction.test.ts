@@ -18,7 +18,6 @@ import {
 	compactRuntimeImageConstants,
 	decodeVmValueOperand,
 	encodeVmValueOperand,
-	remapRuntimeFunctionConstants,
 	vmSafepointRootMapsAreTrusted,
 } from "../src/compiler/target/runtime-image.ts";
 import type {
@@ -157,31 +156,35 @@ describe("RuntimeImage constant compaction", () => {
 			thisValue: -1,
 			argumentCount: 1,
 			arguments: [1],
-			guardedFunctionIndices: [3],
+			guardedFunctionIndices: [0],
 			guardedMathCall: { kind: "unary", operation: "Math.abs" },
 		};
 		const shaped: Extract<BytecodeInstruction, { opcode: "CREATE_OBJECT_SHAPED" }> = {
 			opcode: "CREATE_OBJECT_SHAPED",
 			dst: 3,
 			count: 1,
-			keyStringIndices: [2],
+			keyStringIndices: [0],
 			valueRegisters: [1],
 			shapeCacheIndex: 0,
 		};
 		const fn = vmFunction([call, shaped]);
+		fn.nameStringIndex = 0;
 		const original = structuredClone(fn);
-		const identity = new Map([[2, 2]]);
-		const compacted = remapRuntimeFunctionConstants(fn, {
-			stringOldToNew: identity,
-			bigintOldToNew: new Map(),
-			templateOldToNew: new Map(),
+		const compacted = compactRuntimeImageConstants({
+			...runtimeFixture(),
+			functions: [fn],
+			stringConstants: [units("live"), units("dead")],
+			bigintConstants: [],
+			literalTemplateData: [],
+			precompiledLiteralShapes: [],
 		});
+		expect(compacted.changed).toBe(true);
 		call.arguments[0] = 7;
 		call.guardedFunctionIndices!.push(4);
 		call.guardedMathCall!.operation = "Math.floor";
 		shaped.keyStringIndices[0] = 7;
 		shaped.valueRegisters[0] = 7;
-		expect(compacted).toEqual(original);
+		expect(compacted.runtime.functions[0]).toEqual(original);
 	});
 
 	it.each([false, true])(

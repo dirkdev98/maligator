@@ -174,14 +174,23 @@ function vmValueOperandEntries(
 	return entries;
 }
 
+function visitVmValueOperands(
+	instruction: VmCallInstruction,
+	visit: (operand: number) => void,
+): void {
+	if (instruction.opcode !== "CALL_KNOWN") visit(instruction.callee);
+	if (instruction.opcode !== "CONSTRUCT") visit(instruction.thisValue);
+	for (const operand of instruction.arguments) visit(operand);
+}
+
 /** Reject malformed tagged operands before they can reach portable or native output. */
 export function validateVmValueOperands(definition: RuntimeImage): void {
 	for (const fn of definition.functions) {
+		const validate = (operand: number): void =>
+			validateVmValueOperand(definition, fn, operand);
 		for (const instruction of fn.instructions) {
 			if (!isVmCallInstruction(instruction)) continue;
-			for (const { operand } of vmValueOperandEntries(instruction)) {
-				validateVmValueOperand(definition, fn, operand);
-			}
+			visitVmValueOperands(instruction, validate);
 			if (instruction.argumentCount !== instruction.arguments.length) {
 				throw new RangeError("invalid VM value operand count");
 			}
@@ -222,9 +231,6 @@ export function validateVmValueOperands(definition: RuntimeImage): void {
 						instruction.argumentCount > 4))
 			) {
 				throw new RangeError("invalid guarded builtin call");
-			}
-			for (const operand of instruction.arguments) {
-				validateVmValueOperand(definition, fn, operand);
 			}
 		}
 	}
@@ -2467,13 +2473,16 @@ export interface RuntimeImageConstantRetentionReport {
 	};
 }
 
-export interface RuntimeImageConstantCompactionResult {
-	readonly runtime: RuntimeImage;
+export interface RuntimeConstantRelocation {
 	readonly changed: boolean;
-	readonly report: RuntimeImageConstantRetentionReport;
 	readonly stringOldToNew: ReadonlyMap<number, number>;
 	readonly bigintOldToNew: ReadonlyMap<number, number>;
 	readonly templateOldToNew: ReadonlyMap<number, number>;
+}
+
+export interface RuntimeImageConstantCompactionResult extends RuntimeConstantRelocation {
+	readonly runtime: RuntimeImage;
+	readonly report: RuntimeImageConstantRetentionReport;
 }
 
 const RUNTIME_STRING_INDEX_KEY_NAMES = [
@@ -2677,8 +2686,9 @@ function remapRuntimeInstructionConstants(
 	stringOldToNew: ReadonlyMap<number, number>,
 	bigintOldToNew: ReadonlyMap<number, number>,
 	templateOldToNew: ReadonlyMap<number, number>,
+	inPlace = false,
 ): BytecodeInstruction {
-	const remapped = { ...instruction };
+	const remapped = inPlace ? instruction : { ...instruction };
 	const row = remapped as unknown as Record<string, unknown>;
 	const fields = RUNTIME_INSTRUCTION_REMAP_FIELDS.get(instruction.opcode);
 	if (fields !== undefined) {
@@ -2686,6 +2696,7 @@ function remapRuntimeInstructionConstants(
 			if (!Object.hasOwn(row, field.key)) continue;
 			const value = row[field.key];
 			if (value === undefined || value === null) continue;
+			if (inPlace && field.kind === "copy-list") continue;
 			row[field.key] =
 				field.kind === "operands"
 					? (value as ReadonlyArray<number>).map((operand, index) =>
@@ -2728,38 +2739,49 @@ function remapRuntimeInstructionConstants(
 	return remapped;
 }
 
-export function remapRuntimeFunctionConstants(
+function relocateRuntimeFunctionConstants(
 	fn: BytecodeFunction,
-	compacted: Pick<
-		RuntimeImageConstantCompactionResult,
-		"stringOldToNew" | "bigintOldToNew" | "templateOldToNew"
-	>,
+	{ stringOldToNew, bigintOldToNew, templateOldToNew }: RuntimeConstantRelocation,
+	inPlace: boolean,
 ): BytecodeFunction {
-	const remapped = {
-		...fn,
-		nameStringIndex:
-			fn.nameStringIndex < 0
-				? fn.nameStringIndex
-				: remapRuntimeConstantRequired(
-						compacted.stringOldToNew,
-						fn.nameStringIndex,
-						"function nameStringIndex",
-					),
-		instructions: fn.instructions.map((instruction) =>
+	const result = inPlace ? fn : { ...fn };
+	result.nameStringIndex =
+		fn.nameStringIndex < 0
+			? fn.nameStringIndex
+			: remapRuntimeConstantRequired(
+					stringOldToNew,
+					fn.nameStringIndex,
+					"function nameStringIndex",
+				);
+	if (inPlace) {
+		for (const instruction of fn.instructions) {
+			if (
+				RUNTIME_INSTRUCTION_CONSTANT_FIELDS.has(instruction.opcode) ||
+				isVmCallInstruction(instruction)
+			) {
+				remapRuntimeInstructionConstants(
+					instruction,
+					stringOldToNew,
+					bigintOldToNew,
+					templateOldToNew,
+					true,
+				);
+			}
+		}
+	} else {
+		result.instructions = fn.instructions.map((instruction) =>
 			remapRuntimeInstructionConstants(
 				instruction,
-				compacted.stringOldToNew,
-				compacted.bigintOldToNew,
-				compacted.templateOldToNew,
+				stringOldToNew,
+				bigintOldToNew,
+				templateOldToNew,
 			),
-		),
-	};
-	if (vmSafepointRootMapsAreTrusted(fn))
-		trustedVmSafepointRootMaps.set(
-			remapped,
-			vmSafepointRootMapTrustFingerprint(remapped),
 		);
-	return remapped;
+		if (vmSafepointRootMapsAreTrusted(fn)) {
+			trustedVmSafepointRootMaps.set(result, vmSafepointRootMapTrustFingerprint(result));
+		}
+	}
+	return result;
 }
 
 interface RuntimeConstantRetentionReasons {
@@ -3079,10 +3101,7 @@ function visitRuntimeInstructionConstantIndices(
 	}
 }
 
-export function compactRuntimeImageConstants(
-	definition: RuntimeImage,
-): RuntimeImageConstantCompactionResult {
-	validateRuntimeImageMetadata(definition);
+function planRuntimeImageConstantRelocation(definition: RuntimeImage) {
 	const liveStrings = new Set<number>();
 	const liveBigints = new Set<number>();
 	const liveTemplates = new Set<number>();
@@ -3099,15 +3118,16 @@ export function compactRuntimeImageConstants(
 		}
 		live.add(index);
 	};
+	const noteOperand = (operand: number): void => {
+		if (operand >= VM_VALUE_STRING_MIN && operand <= VM_VALUE_STRING_BASE)
+			note("string", VM_VALUE_STRING_BASE - operand);
+	};
 	for (const fn of definition.functions) {
 		if (fn.nameStringIndex >= 0) note("string", fn.nameStringIndex);
 		for (const instruction of fn.instructions) {
 			visitRuntimeInstructionConstantIndices(instruction, note);
-			if (!isVmCallInstruction(instruction)) continue;
-			for (const { operand } of vmValueOperandEntries(instruction)) {
-				const decoded = decodeVmValueOperand(operand);
-				if (decoded.kind === "string") note("string", decoded.index);
-			}
+			if (isVmCallInstruction(instruction))
+				visitVmValueOperands(instruction, noteOperand);
 		}
 	}
 	for (const shape of definition.precompiledLiteralShapes)
@@ -3133,6 +3153,76 @@ export function compactRuntimeImageConstants(
 	);
 	const stringOldToNew = stringPool.oldToNew;
 	const bigintOldToNew = bigintPool.oldToNew;
+	const changed =
+		stringPool.values.length !== definition.stringConstants.length ||
+		bigintPool.values.length !== definition.bigintConstants.length ||
+		templates.data.length !== definition.literalTemplateData.length;
+	return {
+		changed,
+		stringOldToNew,
+		bigintOldToNew,
+		templateOldToNew: templates.oldToNew,
+		stringPool,
+		bigintPool,
+		templates,
+	};
+}
+
+function relocateRuntimeConstantPools(
+	definition: RuntimeImage,
+	{
+		stringPool,
+		bigintPool,
+		templates,
+		stringOldToNew,
+		bigintOldToNew,
+	}: ReturnType<typeof planRuntimeImageConstantRelocation>,
+): Pick<
+	RuntimeImage,
+	| "stringConstants"
+	| "bigintConstants"
+	| "literalTemplateData"
+	| "precompiledLiteralShapes"
+> {
+	return {
+		stringConstants: stringPool.values.map((value) => [...value]),
+		bigintConstants: [...bigintPool.values],
+		literalTemplateData: remapLiteralTemplateConstants(
+			templates.data,
+			[...new Set(templates.oldToNew.values())],
+			"RuntimeImage literal-template",
+			(index) =>
+				remapRuntimeConstantRequired(stringOldToNew, index, "literal-template string"),
+			(index) =>
+				remapRuntimeConstantRequired(bigintOldToNew, index, "literal-template bigint"),
+		),
+		precompiledLiteralShapes: definition.precompiledLiteralShapes.map((shape) => ({
+			...shape,
+			keyStringIndices: shape.keyStringIndices.map((index) =>
+				remapRuntimeConstantRequired(
+					stringOldToNew,
+					index,
+					"precompiled literal shape keyStringIndices",
+				),
+			),
+		})),
+	};
+}
+
+export function compactRuntimeImageConstants(
+	definition: RuntimeImage,
+): RuntimeImageConstantCompactionResult {
+	validateRuntimeImageMetadata(definition);
+	const plan = planRuntimeImageConstantRelocation(definition);
+	const {
+		changed,
+		stringOldToNew,
+		bigintOldToNew,
+		templateOldToNew,
+		stringPool,
+		bigintPool,
+		templates,
+	} = plan;
 	// Reasons exist for diagnostics; compiling never needs to name each reference.
 	let reasons: RuntimeConstantRetentionReasons | undefined;
 	const retention = (): RuntimeConstantRetentionReasons =>
@@ -3162,83 +3252,17 @@ export function compactRuntimeImageConstants(
 			},
 		},
 	};
-	const changed =
-		stringPool.values.length !== definition.stringConstants.length ||
-		bigintPool.values.length !== definition.bigintConstants.length ||
-		templates.data.length !== definition.literalTemplateData.length;
-	if (!changed) {
-		return {
-			runtime: definition,
-			changed: false,
-			report,
-			stringOldToNew,
-			bigintOldToNew,
-			templateOldToNew: templates.oldToNew,
-		};
-	}
-	const functions = definition.functions.map((fn) => {
-		const trustedSafepoints = vmSafepointRootMapsAreTrusted(fn);
-		const remapped: BytecodeFunction = {
-			...fn,
-			nameStringIndex:
-				fn.nameStringIndex < 0
-					? fn.nameStringIndex
-					: remapRuntimeConstantRequired(
-							stringOldToNew,
-							fn.nameStringIndex,
-							"function nameStringIndex",
-						),
-			instructions: fn.instructions.map((instruction) =>
-				remapRuntimeInstructionConstants(
-					instruction,
-					stringOldToNew,
-					bigintOldToNew,
-					templates.oldToNew,
-				),
-			),
-		};
-		if (trustedSafepoints) {
-			trustedVmSafepointRootMaps.set(
-				remapped,
-				vmSafepointRootMapTrustFingerprint(remapped),
-			);
-		}
-		return remapped;
-	});
-	const runtime: RuntimeImage = {
+	const relocation = { changed, stringOldToNew, bigintOldToNew, templateOldToNew };
+	if (!changed) return { runtime: definition, report, ...relocation };
+	const runtime = {
 		...definition,
-		functions,
-		stringConstants: stringPool.values.map((value) => [...value]),
-		bigintConstants: [...bigintPool.values],
-		literalTemplateData: remapLiteralTemplateConstants(
-			templates.data,
-			[...new Set(templates.oldToNew.values())],
-			"RuntimeImage literal-template",
-			(index) =>
-				remapRuntimeConstantRequired(stringOldToNew, index, "literal-template string"),
-			(index) =>
-				remapRuntimeConstantRequired(bigintOldToNew, index, "literal-template bigint"),
+		...relocateRuntimeConstantPools(definition, plan),
+		functions: definition.functions.map((fn) =>
+			relocateRuntimeFunctionConstants(fn, relocation, false),
 		),
-		precompiledLiteralShapes: definition.precompiledLiteralShapes.map((shape) => ({
-			...shape,
-			keyStringIndices: shape.keyStringIndices.map((index) =>
-				remapRuntimeConstantRequired(
-					stringOldToNew,
-					index,
-					"precompiled literal shape keyStringIndices",
-				),
-			),
-		})),
 	};
 	validateRuntimeImageMetadata(runtime);
-	return {
-		runtime,
-		changed: true,
-		report,
-		stringOldToNew,
-		bigintOldToNew,
-		templateOldToNew: templates.oldToNew,
-	};
+	return { runtime, report, ...relocation };
 }
 
 function buildPropertyCacheLayout(programs: ReadonlyArray<ExecutionProgram>) {
@@ -3466,18 +3490,11 @@ export interface RuntimeFunctionLoweringPlan {
 	readonly bytecode: BytecodeFunction;
 	readonly blockStartIps: ReadonlyMap<number, number>;
 	readonly instructionIndexByTargetInstruction: ReadonlyMap<CompilerInstruction, number>;
-	readonly propertyIcIndexByInstruction: ReadonlyMap<CompilerInstruction, number>;
-}
-
-export interface RuntimeProgramLoweringPlan {
-	readonly compacted: RuntimeImageConstantCompactionResult;
-	/** Native materialization still uses the original Core constant indexes. */
-	readonly functions: ReadonlyArray<RuntimeFunctionLoweringPlan>;
 }
 
 function retainExecutionSourcePositions(
 	program: ExecutionProgram,
-	functionPlans: ReadonlyArray<RuntimeFunctionLoweringPlan>,
+	functions: ReadonlyArray<BytecodeFunction>,
 ): RuntimeImage["sourcePositions"] {
 	const retained = new Set<number>();
 	const retain = (positionId: number): void => {
@@ -3489,8 +3506,9 @@ function retainExecutionSourcePositions(
 		retained.add(positionId);
 		if (position.callerPosId !== undefined) retain(position.callerPosId);
 	};
-	for (const { bytecode } of functionPlans) {
-		for (const positionId of bytecode.positions) {
+	const positionTables = new Set(functions.map((fn) => fn.positions));
+	for (const positions of positionTables) {
+		for (const positionId of positions) {
 			if (positionId >= 0) retain(positionId);
 		}
 	}
@@ -3498,15 +3516,19 @@ function retainExecutionSourcePositions(
 	const relocatedIds = new Map(
 		retainedIds.map((positionId, index) => [positionId, index]),
 	);
-	for (const { bytecode } of functionPlans) {
-		bytecode.positions = bytecode.positions.map((positionId) => {
-			if (positionId < 0) return -1;
+	for (const positions of positionTables) {
+		for (let ip = 0; ip < positions.length; ip++) {
+			const positionId = positions[ip]!;
+			if (positionId < 0) {
+				positions[ip] = -1;
+				continue;
+			}
 			const relocated = relocatedIds.get(positionId);
 			if (relocated === undefined) {
 				throw new RangeError(`unretained Execution source position ${positionId}`);
 			}
-			return relocated;
-		});
+			positions[ip] = relocated;
+		}
 	}
 	return retainedIds.map((positionId) => {
 		const position = program.core.sourcePositions[positionId]!;
@@ -3535,16 +3557,28 @@ function retainExecutionSourcePositions(
 	});
 }
 
-/** Both target bodies share runtime resources, even when their instruction layouts differ. */
-export function lowerVerifiedTargetsToRuntimePlans(
-	programs: ReadonlyArray<ExecutionProgram>,
-): ReadonlyArray<RuntimeProgramLoweringPlan> {
-	const program = programs[0];
-	if (program === undefined)
-		throw new Error("Runtime lowering requires a target program");
+/**
+ * Build the native plan while its function's IP index and original constant IDs
+ * are available. The callback borrows the index and returns a product referring
+ * to the body, which this builder relocates before publication.
+ */
+export function buildVerifiedRuntimeProducts<T>(
+	program: ExecutionProgram,
+	native?: {
+		readonly program: ExecutionProgram;
+		readonly lower: (fn: ExecutionFunction, plan: RuntimeFunctionLoweringPlan) => T;
+	},
+	trackInstructions = false,
+) {
 	const { core, context } = program;
-	if (programs.some((target) => target.core !== core || target.context !== context))
+	if (
+		native !== undefined &&
+		(native.program.core !== core || native.program.context !== context)
+	)
 		throw new Error("Runtime targets must share the same Core compilation");
+	const sharedTarget = native?.program === program;
+	const programs =
+		native === undefined || sharedTarget ? [program] : [program, native.program];
 	const files: Array<string> = [];
 	const fileToIndex = new Map<string, number>();
 	const fileIndexFor = (path: string): number => {
@@ -3556,23 +3590,48 @@ export function lowerVerifiedTargetsToRuntimePlans(
 	};
 	const layout = buildKnownShapeLayout(programs);
 	const propertyCaches = buildPropertyCacheLayout(programs);
-	const targetPlans = programs.map((target) => {
-		return target.functions.map((fn, index) =>
-			lowerExecutionFunctionToBytecode(
-				fn,
-				fileIndexFor(fn.sourcePath),
-				core.stringConstants,
-				layout.origins,
-				layout.cacheIndexByInstruction,
-				layout.literalShapeCounts[index]!,
-				propertyCaches.indexByInstruction,
-				propertyCaches.counts[index]!,
-			),
+	const lowerBody = (fn: ExecutionFunction, fullIndex: boolean) =>
+		lowerExecutionFunctionToBytecode(
+			fn,
+			fileIndexFor(fn.sourcePath),
+			core.stringConstants,
+			layout.origins,
+			layout.cacheIndexByInstruction,
+			layout.literalShapeCounts[fn.functionIndex]!,
+			propertyCaches.indexByInstruction,
+			propertyCaches.counts[fn.functionIndex]!,
+			fullIndex,
 		);
+	const instructionIps: Array<ReadonlyMap<CompilerInstruction, number>> = [];
+	const nativeFunctions: Array<T> = [];
+	const nativeBodies: Array<BytecodeFunction> = [];
+	const runtimeFunctions = program.functions.map((fn) => {
+		const plan = lowerBody(fn, trackInstructions || sharedTarget);
+		if (sharedTarget) {
+			const body = { ...plan.bytecode };
+			nativeBodies.push(body);
+			nativeFunctions.push(native.lower(fn, { ...plan, bytecode: body }));
+		}
+		materializePortableSuspensionCleanup(
+			fn,
+			plan.bytecode,
+			plan.instructionIndexByTargetInstruction,
+			trackInstructions,
+		);
+		if (trackInstructions) instructionIps.push(plan.instructionIndexByTargetInstruction);
+		return plan.bytecode;
 	});
-	const functionPlans = targetPlans.flat();
-	const sourcePositions = retainExecutionSourcePositions(program, functionPlans);
-	const functions = functionPlans.map(({ bytecode }) => bytecode);
+	if (native !== undefined && !sharedTarget) {
+		for (const fn of native.program.functions) {
+			const plan = lowerBody(fn, true);
+			nativeFunctions.push(native.lower(fn, plan));
+			nativeBodies.push(plan.bytecode);
+		}
+	}
+	// Portable cleanup replaces positions and control transfers. A shared native
+	// body keeps its original control flow and must relocate positions independently.
+	const functions = [...runtimeFunctions, ...nativeBodies];
+	const sourcePositions = retainExecutionSourcePositions(program, functions);
 	const runtime: RuntimeImage = {
 		entrypointPath: context.data.entrypointPath,
 		functionCount: functions.length,
@@ -3611,145 +3670,110 @@ export function lowerVerifiedTargetsToRuntimePlans(
 					},
 				}),
 	};
-	const compacted = compactRuntimeImageConstants(runtime);
-	// No function escapes before relocation, compaction and validation finish.
-	for (const fn of compacted.runtime.functions) {
-		trustedVmSafepointRootMaps.set(fn, vmSafepointRootMapTrustFingerprint(fn));
+	const plan = planRuntimeImageConstantRelocation(runtime);
+	const { changed, stringOldToNew, bigintOldToNew, templateOldToNew } = plan;
+	const relocation = { changed, stringOldToNew, bigintOldToNew, templateOldToNew };
+	if (changed) {
+		// Shape proofs name exact string IDs. Deduplication could hide a mismatch.
+		if (stringOldToNew.size !== plan.stringPool.values.length)
+			validateVmShapeCases(runtime);
+		for (const body of nativeBodies) {
+			// A native overlay over the portable target can borrow its instructions.
+			// Detach those before relocating the portable body.
+			if (sharedTarget)
+				Object.assign(body, relocateRuntimeFunctionConstants(body, relocation, false));
+			else relocateRuntimeFunctionConstants(body, relocation, true);
+		}
+		for (const body of runtimeFunctions)
+			relocateRuntimeFunctionConstants(body, relocation, true);
+		Object.assign(runtime, relocateRuntimeConstantPools(runtime, plan));
 	}
-	let offset = 0;
-	return targetPlans.map((plans) => {
-		const functions = compacted.runtime.functions.slice(offset, offset + plans.length);
-		offset += plans.length;
-		return {
-			compacted: {
-				...compacted,
-				runtime: { ...compacted.runtime, functionCount: functions.length, functions },
-			},
-			functions: plans,
-		};
-	});
-}
-
-export function lowerVerifiedExecutionToRuntimePlan(
-	program: ExecutionProgram,
-): RuntimeProgramLoweringPlan {
-	return materializePortableSuspensionCleanup(
-		program,
-		lowerVerifiedTargetsToRuntimePlans([program])[0]!,
-	);
+	validateRuntimeImageMetadata(runtime);
+	runtime.functionCount = runtimeFunctions.length;
+	runtime.functions = runtimeFunctions;
+	for (const fn of runtimeFunctions)
+		trustedVmSafepointRootMaps.set(fn, vmSafepointRootMapTrustFingerprint(fn));
+	return { runtime, relocation, nativeFunctions, instructionIps };
 }
 
 /** Portable images cannot rely on trusted root maps to expire dead suspended temporaries. */
-export function materializePortableSuspensionCleanup(
-	program: ExecutionProgram,
-	plan: RuntimeProgramLoweringPlan,
-): RuntimeProgramLoweringPlan {
-	let changed = false;
-	const compactedFunctions = [...plan.compacted.runtime.functions];
-	const functions = plan.functions.map((lowering, functionIndex) => {
-		const fn = program.functions[functionIndex]!;
-		if (!fn.isAsync && !fn.isGenerator) return lowering;
-		const suspensions = new Set(
-			fn.blocks.flatMap(({ instructions }) =>
-				instructions.filter(({ type }) => type === "await" || type === "yield"),
-			),
-		);
-		const roots = executionSafepointRoots(fn, suspensions);
-		const traced = fn.registerRepresentations.flatMap((representation, register) =>
-			representation === "boxed" || representation === "string" ? [register] : [],
-		);
-		const clears = new Map<number, ReadonlyArray<number>>();
-		for (const instruction of suspensions) {
-			const incoming = new Set(roots.get(instruction)!.incomingRootRegisters);
-			const dead = traced.filter((register) => !incoming.has(register));
-			if (dead.length > 0)
-				clears.set(lowering.instructionIndexByTargetInstruction.get(instruction)!, dead);
-		}
-		if (clears.size === 0) return lowering;
-		changed = true;
-		const entryIps: Array<number> = [];
-		const operationIps: Array<number> = [];
-		let next = 0;
-		for (let ip = 0; ip < lowering.bytecode.instructions.length; ip++) {
-			entryIps.push(next);
-			next += clears.get(ip)?.length ?? 0;
-			operationIps.push(next++);
-		}
+function materializePortableSuspensionCleanup(
+	fn: ExecutionFunction,
+	bytecode: BytecodeFunction,
+	instructionIps: Map<CompilerInstruction, number>,
+	trackInstructions: boolean,
+): void {
+	if (!fn.isAsync && !fn.isGenerator) return;
+	const suspensions = new Set(
+		fn.blocks.flatMap(({ instructions }) =>
+			instructions.filter(({ type }) => type === "await" || type === "yield"),
+		),
+	);
+	const roots = executionSafepointRoots(fn, suspensions);
+	const traced = fn.registerRepresentations.flatMap((representation, register) =>
+		representation === "boxed" || representation === "string" ? [register] : [],
+	);
+	const clears = new Map<number, ReadonlyArray<number>>();
+	for (const instruction of suspensions) {
+		const incoming = new Set(roots.get(instruction)!.incomingRootRegisters);
+		const dead = traced.filter((register) => !incoming.has(register));
+		if (dead.length > 0) clears.set(instructionIps.get(instruction)!, dead);
+	}
+	if (clears.size === 0) return;
+	const entryIps: Array<number> = [];
+	const operationIps: Array<number> = [];
+	let next = 0;
+	for (let ip = 0; ip < bytecode.instructions.length; ip++) {
 		entryIps.push(next);
-		const entryIp = (ip: number): number => entryIps[ip]!;
-		const operationIp = (ip: number): number => operationIps[ip]!;
-		const relocate = (bytecode: BytecodeFunction): BytecodeFunction => {
-			const instructions: Array<BytecodeInstruction> = [];
-			const positions: Array<number> = [];
-			for (const [ip, original] of bytecode.instructions.entries()) {
-				for (const dst of clears.get(ip) ?? []) {
-					instructions.push({ opcode: "CREATE_UNDEFINED", dst });
-					if (bytecode.positions.length > 0) positions.push(-1);
-				}
-				const instruction =
-					"targetIp" in original
-						? { ...original, targetIp: entryIp(original.targetIp) }
-						: original.opcode === "TRY_BEGIN"
-							? { ...original, handlerIp: entryIp(original.handlerIp) }
-							: original;
-				instructions.push(instruction);
-				if (bytecode.positions.length > 0) positions.push(bytecode.positions[ip]!);
-			}
-			const relocated: BytecodeFunction = {
-				...bytecode,
-				instructions,
-				positions,
-				handlers: bytecode.handlers.map((handler) => ({
-					startIp: entryIp(handler.startIp),
-					endIp: entryIp(handler.endIp),
-					handlerIp: entryIp(handler.handlerIp),
-				})),
-				...(bytecode.gcSafepoints === undefined
-					? {}
-					: {
-							gcSafepoints: bytecode.gcSafepoints.map((row) => ({
-								...row,
-								instructionIp: operationIp(row.instructionIp),
-							})),
-						}),
-			};
-			if (vmSafepointRootMapsAreTrusted(bytecode))
-				trustedVmSafepointRootMaps.set(
-					relocated,
-					vmSafepointRootMapTrustFingerprint(relocated),
-				);
-			return relocated;
-		};
-		compactedFunctions[functionIndex] = relocate(compactedFunctions[functionIndex]!);
-		return {
-			...lowering,
-			bytecode: relocate(lowering.bytecode),
-			blockStartIps: new Map(
-				[...lowering.blockStartIps].map(([block, ip]) => [block, entryIp(ip)]),
-			),
-			instructionIndexByTargetInstruction: new Map(
-				[...lowering.instructionIndexByTargetInstruction].map(([instruction, ip]) => [
-					instruction,
-					operationIp(ip),
-				]),
-			),
-		};
+		next += clears.get(ip)?.length ?? 0;
+		operationIps.push(next++);
+	}
+	entryIps.push(next);
+	const entryIp = (ip: number): number => entryIps[ip]!;
+	const operationIp = (ip: number): number => operationIps[ip]!;
+	const instructions: Array<BytecodeInstruction> = [];
+	const positions: Array<number> = [];
+	for (const [ip, original] of bytecode.instructions.entries()) {
+		for (const dst of clears.get(ip) ?? []) {
+			instructions.push({ opcode: "CREATE_UNDEFINED", dst });
+			if (bytecode.positions.length > 0) positions.push(-1);
+		}
+		const instruction =
+			"targetIp" in original
+				? { ...original, targetIp: entryIp(original.targetIp) }
+				: original.opcode === "TRY_BEGIN"
+					? { ...original, handlerIp: entryIp(original.handlerIp) }
+					: original;
+		instructions.push(instruction);
+		if (bytecode.positions.length > 0) positions.push(bytecode.positions[ip]!);
+	}
+	Object.assign(bytecode, {
+		instructions,
+		positions,
+		handlers: bytecode.handlers.map((handler) => ({
+			startIp: entryIp(handler.startIp),
+			endIp: entryIp(handler.endIp),
+			handlerIp: entryIp(handler.handlerIp),
+		})),
+		...(bytecode.gcSafepoints === undefined
+			? {}
+			: {
+					gcSafepoints: bytecode.gcSafepoints.map((row) => ({
+						...row,
+						instructionIp: operationIp(row.instructionIp),
+					})),
+				}),
 	});
-	return changed
-		? {
-				functions,
-				compacted: {
-					...plan.compacted,
-					runtime: { ...plan.compacted.runtime, functions: compactedFunctions },
-				},
-			}
-		: plan;
+	if (trackInstructions) {
+		for (const [instruction, ip] of instructionIps)
+			instructionIps.set(instruction, operationIp(ip));
+	}
 }
 
 export function lowerExecutionToRuntimeImage(program: ExecutionProgram): RuntimeImage {
 	verifyExecutionProgram(program);
 	return compactRuntimeCaptureStorage(
-		lowerVerifiedExecutionToRuntimePlan(program).compacted.runtime,
+		buildVerifiedRuntimeProducts(program).runtime,
 		program.context,
 	);
 }
@@ -3818,7 +3842,8 @@ function lowerExecutionFunctionToBytecode(
 	literalShapeCount: number,
 	propertyCacheIndices: ReadonlyMap<CompilerInstruction, number>,
 	propertyIcCount: number,
-): RuntimeFunctionLoweringPlan {
+	fullIndex: boolean,
+) {
 	// Compile-only reachability, source-position, and exception-range markers carry
 	// no executable opcode, so block start IPs count only instructions that survive
 	// flattening.
@@ -3840,22 +3865,16 @@ function lowerExecutionFunctionToBytecode(
 	}
 
 	const instructions: Array<BytecodeInstruction> = [];
-	const propertyIcIndexByInstruction = new Map<CompilerInstruction, number>();
-	for (const block of fn.blocks) {
-		for (const instruction of block.instructions) {
-			if (targetInstructionUsesPropertyCache(instruction)) {
-				propertyIcIndexByInstruction.set(
-					instruction,
-					propertyCacheIndices.get(instruction)!,
-				);
-			}
-		}
-	}
 	let physicalLiteralShapeCount = 0;
 	const handlers: Array<BytecodeExceptionHandler> = [];
 	const openExceptionRanges: Array<{ startIp: number; handlerIp: number }> = [];
 	const positions: Array<number> = [];
 	const instructionIndexByTargetInstruction = new Map<CompilerInstruction, number>();
+	// Only native plans and profiling need IPs for ordinary instructions.
+	if (!fullIndex) {
+		for (const { instruction } of fn.gc.safepoints)
+			instructionIndexByTargetInstruction.set(instruction, -1);
+	}
 	let currentPos = -1;
 	for (const block of fn.blocks) {
 		currentPos = block.sourcePosition ?? currentPos;
@@ -3882,7 +3901,17 @@ function lowerExecutionFunctionToBytecode(
 				continue;
 			}
 			const instructionIndex = instructions.length;
-			instructionIndexByTargetInstruction.set(instruction, instructionIndex);
+			if (
+				fullIndex ||
+				instructionIndexByTargetInstruction.has(instruction) ||
+				((fn.isAsync || fn.isGenerator) &&
+					(instruction.type === "await" ||
+						instruction.type === "yield" ||
+						instruction.type === "return" ||
+						instruction.type === "throw"))
+			) {
+				instructionIndexByTargetInstruction.set(instruction, instructionIndex);
+			}
 			let vmInstruction: BytecodeInstruction;
 			if (instruction.type === "selectShapeCase") {
 				const candidates = instruction.shapeCaseCandidates.map((candidate) => {
@@ -3951,7 +3980,7 @@ function lowerExecutionFunctionToBytecode(
 			switch (vmInstruction.opcode) {
 				case "PROBE_READ":
 					if (probeReadIsNamed(vmInstruction))
-						vmInstruction.icIndex = propertyIcIndexByInstruction.get(instruction)!;
+						vmInstruction.icIndex = propertyCacheIndices.get(instruction)!;
 					break;
 				case "LOAD_PROPERTY":
 				case "LOAD_PROPERTY_STATIC":
@@ -3962,7 +3991,7 @@ function lowerExecutionFunctionToBytecode(
 				case "STORE_PROPERTY_STATIC":
 				case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				case "GUARD_BASE_CONSTRUCTOR_LAYOUT":
-					vmInstruction.icIndex = propertyIcIndexByInstruction.get(instruction)!;
+					vmInstruction.icIndex = propertyCacheIndices.get(instruction)!;
 					break;
 				case "CREATE_OBJECT_SHAPED":
 					{
@@ -4031,7 +4060,7 @@ function lowerExecutionFunctionToBytecode(
 	const gcSafepoints = portableSafepoints
 		.map(({ instruction: targetInstruction, rootRegisters }) => {
 			const instructionIp = instructionIndexByTargetInstruction.get(targetInstruction);
-			if (instructionIp === undefined) {
+			if (instructionIp === undefined || instructionIp < 0) {
 				throw new Error("Execution safepoint has no portable instruction");
 			}
 			const instruction = instructions[instructionIp]!;
@@ -4082,7 +4111,6 @@ function lowerExecutionFunctionToBytecode(
 		bytecode,
 		blockStartIps,
 		instructionIndexByTargetInstruction,
-		propertyIcIndexByInstruction,
 	};
 }
 
@@ -4633,7 +4661,7 @@ function lowerInstructionToBytecodeInstruction(
 				shapeCase: instruction.registers[2],
 				stringIndex: instruction.stringIndex,
 				icIndex: -1,
-				slots: instruction.shapeCaseSlots,
+				slots: [...instruction.shapeCaseSlots],
 			};
 		case "selectShapeCase":
 			throw new Error("selectShapeCase must resolve its shape origins before lowering");
@@ -4875,7 +4903,7 @@ function lowerInstructionToBytecodeInstruction(
 			return {
 				opcode: "CREATE_PRIVATE_NAMES",
 				ownerFunctionIndex: instruction.functionIndex,
-				capturedIndices: instruction.capturedIndices,
+				capturedIndices: [...instruction.capturedIndices],
 			};
 		case "definePrivate":
 			return {
