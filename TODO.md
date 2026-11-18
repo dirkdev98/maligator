@@ -360,6 +360,10 @@ contracts or investigates costs still visible after the string follow-ups.
       `once` and `wrappy`. Preserve lazy constructor metadata, key ordering,
       and fresh result arrays.
 
+- [x] Reduce empty `Object.entries` allocations in JSON Server list filtering.
+      Keep small appends in the array cell and preserve ordinary growth,
+      result identity, and realm prototypes.
+
 - [ ] Reduce remaining no-capture closure and per-iteration capture
       costs. Source-immutable leaf captures can copy values in open images; synthetic
       iteration owners and mutually cyclic initializers still need per-creation snapshots before

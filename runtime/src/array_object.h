@@ -328,6 +328,8 @@ void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prot
  */
 MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype);
 
+MalArrayObject *mal_array_object_new_compact_empty(MalHeap *heap, MalObject *prototype);
+
 MalArrayObject *mal_array_object_new_from_values_slow(
     MalHeap *heap, MalObject *prototype, const MalValue *values, u32 count
 );

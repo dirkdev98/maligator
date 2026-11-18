@@ -621,6 +621,14 @@ MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype) {
     return mal_array_object_new_inline(heap, prototype, mal_array_object_inline_capacity_for(0));
 }
 
+MalArrayObject *mal_array_object_new_compact_empty(MalHeap *heap, MalObject *prototype) {
+    MalArrayObject *array = mal_array_object_new_inline(heap, prototype, 2);
+    // Adopt the inline storage before geometric growth computes its first allocation.
+    array->elements = mal_array_object_inline_elements(array);
+    array->capacity = array->inline_capacity;
+    return array;
+}
+
 MalArrayObject *mal_array_object_new_from_values_slow(
     MalHeap *heap, MalObject *prototype, const MalValue *values, u32 count
 ) {

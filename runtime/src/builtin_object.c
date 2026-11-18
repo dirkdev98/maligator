@@ -1136,6 +1136,12 @@ static bool mal_builtin_object_collect_small_shaped(
     }
     MalObject *array_prototype =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]);
+    if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES && count == 0) {
+        // Empty entry lists commonly go straight to iteration. Keep room for a small append.
+        *out = mal_value_from_array_object(
+            mal_array_object_new_compact_empty(&vm->heap, array_prototype));
+        return true;
+    }
     *out = mal_value_from_array_object(
         mal_array_object_new_from_values(&vm->heap, array_prototype, items, count));
     return true;

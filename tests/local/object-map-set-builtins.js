@@ -450,6 +450,20 @@ check(
 			.join(",") === "2:2,7:7,beta:2,alpha:1",
 );
 
+const emptyEntries = Object.entries({});
+const independentEntries = Object.entries({});
+emptyEntries.push(["a", 1], ["b", 2]);
+emptyEntries.push(["c", 3]);
+check(
+	"Object.entries returns an independently growable empty Array",
+	Array.isArray(emptyEntries) &&
+		emptyEntries.length === 3 &&
+		emptyEntries[0][1] === 1 &&
+		emptyEntries[1][1] === 2 &&
+		emptyEntries[2][1] === 3 &&
+		independentEntries.length === 0,
+);
+
 const frozenPlain = Object.freeze({ alpha: 1, beta: 2 });
 const sealedPlain = Object.seal({ alpha: 1 });
 check(
