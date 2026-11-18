@@ -34,6 +34,7 @@ interface PassConsumption {
 	workItems: number;
 	edits: number;
 	exhausted: boolean;
+	lastRunChanged: boolean;
 }
 
 interface CoreFunctionPassSeedOptions {
@@ -142,7 +143,9 @@ export class CoreFunctionPassScheduler {
 		for (const pass of passes) this.#validatePass(stage, pass);
 		const localKey = passes.length;
 		const queue: Array<number> = [];
+		const deferred: Array<number> = [];
 		let queueIndex = 0;
+		let deferredIndex = 0;
 		const queued = new Uint8Array(passes.length + 1);
 		const runs =
 			this.#optionalMaxRunsPerWorkItem === Number.MAX_SAFE_INTEGER
@@ -185,8 +188,17 @@ export class CoreFunctionPassScheduler {
 			if (pass.candidates !== undefined && !this.#passContext(pass).hasCandidates())
 				return;
 			queued[passIndex] = 1;
-			queue.push(passIndex);
-			this.#report.recordQueuePush(queue.length - queueIndex);
+			// After an unchanged visit, give other pending work the chance to settle
+			// before repeating the proof. Every deferred wake still reaches the pass.
+			if (
+				pass.budget.exhaustion === "stop" &&
+				consumption[passIndex]?.lastRunChanged === false
+			)
+				deferred.push(passIndex);
+			else queue.push(passIndex);
+			this.#report.recordQueuePush(
+				queue.length - queueIndex + deferred.length - deferredIndex,
+			);
 		};
 		const enqueueLocal = (changes?: CoreChangeSet): void => {
 			if (!this.#localOptimization) return;
@@ -202,7 +214,9 @@ export class CoreFunctionPassScheduler {
 			if (queued[localKey] !== 0) return;
 			queued[localKey] = 1;
 			queue.push(localKey);
-			this.#report.recordQueuePush(queue.length - queueIndex);
+			this.#report.recordQueuePush(
+				queue.length - queueIndex + deferred.length - deferredIndex,
+			);
 		};
 		const enqueueChanges = (changes: CoreChangeSet, enqueueLocalWork = true): void => {
 			if (changes.function !== this.#functionId) {
@@ -227,8 +241,9 @@ export class CoreFunctionPassScheduler {
 				enqueueChanges(changes, seed.seedLocalFromInitialChanges !== false);
 			}
 		}
-		while (queueIndex < queue.length) {
-			const key = queue[queueIndex++]!;
+		while (queueIndex < queue.length || deferredIndex < deferred.length) {
+			const key =
+				queueIndex < queue.length ? queue[queueIndex++]! : deferred[deferredIndex++]!;
 			queued[key] = 0;
 			this.#report.recordQueuePop();
 			if (key === localKey) {
@@ -270,6 +285,7 @@ export class CoreFunctionPassScheduler {
 				workItems: 0,
 				edits: 0,
 				exhausted: false,
+				lastRunChanged: false,
 			};
 			if (used.exhausted) continue;
 			if (
@@ -295,6 +311,7 @@ export class CoreFunctionPassScheduler {
 			const edits = changes?.edits ?? 0;
 			used.workItems++;
 			used.edits += edits;
+			used.lastRunChanged = edits !== 0;
 			if (pass.budget.exhaustion === "error" && used.edits > pass.budget.maxEdits)
 				this.#exhaust(pass, used);
 			consumption[key] = used;

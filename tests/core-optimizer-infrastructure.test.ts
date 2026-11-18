@@ -433,6 +433,37 @@ describe("Core optimizer infrastructure", () => {
 		expect(runs).toEqual([1]);
 	});
 
+	it("rechecks an unchanged optional pass after pending edits settle", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const { id, value } = functions[0]!;
+		const fn = program.function(id);
+		const { analyses, report } = analysisHarness(program);
+		const observed: Array<string> = [];
+		const observe: CoreFunctionPass = {
+			...noOpPass("observe-representation", []),
+			run() {
+				observed.push(fn.valueRepresentation(value));
+				return undefined;
+			},
+		};
+		const widen: CoreFunctionPass = {
+			...noOpPass("widen-representation", []),
+			changes: { ...observe.changes, representations: true },
+			run() {
+				const current = fn.valueRepresentation(value);
+				if (current === "boxed") return undefined;
+				const editor = CoreEditor.open(program, id);
+				editor.setValueRepresentation(value, current === "i32" ? "f64" : "boxed");
+				return editor.commit();
+			},
+		};
+		new CoreFunctionPassScheduler(program, context(), analyses, report, id).runComponent(
+			"canonicalize",
+			[observe, widen],
+		);
+		expect(observed).toEqual(["i32", "boxed"]);
+	});
+
 	it("scopes primary function work to one session target", () => {
 		const { program, functions } = programWithTwoFunctions();
 		const { analyses, report } = analysisHarness(program);

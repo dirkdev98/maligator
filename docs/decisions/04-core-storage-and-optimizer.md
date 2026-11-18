@@ -203,7 +203,10 @@ domains it may change, and a compiler-work budget with an explicit exhaustion po
 The pass contract has no scope discriminator and the scheduler cannot enqueue work
 for another function.
 
-Edits enqueue only affected local components. Queue exhaustion defines convergence.
+Edits enqueue only affected local components. When an optional pass runs without
+edits, its next wake enters a deferred queue. Active work can then coalesce several
+edits before the pass repeats its proof. The component converges once both queues drain.
+
 There are no stage-major function sweeps, global optimization rounds, `maxRounds`,
 generic `dependsOnProgram`, or pass-private whole-program fixed-point loops. Program
 flow and cross-call selection remain explicit whole-program owners outside the
