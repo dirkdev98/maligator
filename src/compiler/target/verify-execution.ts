@@ -1,5 +1,4 @@
 import { coreDirectBuiltinCallbackTarget } from "../core/core-ir-call-targets.ts";
-import { coreOpcodeRegistry, isCoreOpcode } from "../core/core-ir-opcodes.ts";
 import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
 import type { CoreInstructionId } from "../core/core-ir.ts";
 import type { CoreFunctionStore } from "../core/core-store.ts";
@@ -15,12 +14,14 @@ import type {
 	ExecutionFunction,
 	ExecutionParallelCopy,
 	ExecutionProgram,
+	ExecutionSafepointRoots,
 } from "./execution-ir.ts";
 import {
 	executionLoopBackedgeInstructions,
-	executionSafepointRoots,
+	visitExecutionSafepointRoots,
 	nativeLoopBackedgeInstructions,
 } from "./execution-liveness.ts";
+import { executionOperandShape } from "./execution-operand-shapes.ts";
 
 export interface ExecutionVerificationContext {
 	readonly functionIndex?: number;
@@ -59,31 +60,6 @@ function fail(detail: string, context: ExecutionVerificationContext = {}): never
 	throw new ExecutionVerificationError(detail, context);
 }
 
-interface OperandShape {
-	/** Leading register operands the instruction defines. */
-	readonly writes: number;
-	readonly minimumRegisters: number;
-	readonly maximumRegisters: number;
-	readonly blocks: number;
-}
-
-/**
- * Control flow, exception entry, and source positions are structural Core concepts
- * that cannot be Core opcodes, so their operand shape is stated here. Every other
- * target instruction must answer to the Core opcode registry instead: a second
- * opcode table would be free to drift away from the arities Core already enforces.
- */
-const STRUCTURAL_SHAPES: Readonly<Record<string, OperandShape>> = {
-	sourcePos: { writes: 0, minimumRegisters: 0, maximumRegisters: 0, blocks: 0 },
-	jump: { writes: 0, minimumRegisters: 0, maximumRegisters: 0, blocks: 1 },
-	jumpIf: { writes: 0, minimumRegisters: 1, maximumRegisters: 1, blocks: 1 },
-	tryBegin: { writes: 0, minimumRegisters: 0, maximumRegisters: 0, blocks: 2 },
-	tryEnd: { writes: 0, minimumRegisters: 0, maximumRegisters: 0, blocks: 0 },
-	catch: { writes: 1, minimumRegisters: 1, maximumRegisters: 1, blocks: 0 },
-	return: { writes: 0, minimumRegisters: 1, maximumRegisters: 1, blocks: 0 },
-	throw: { writes: 0, minimumRegisters: 1, maximumRegisters: 1, blocks: 0 },
-};
-
 /** Instructions that end a block; anything else falls through to the next block. */
 const BLOCK_TERMINATORS: ReadonlySet<string> = new Set(["jump", "return", "throw"]);
 
@@ -109,25 +85,6 @@ function fallsThrough(instructions: ReadonlyArray<CompilerInstruction>): boolean
 	return last === undefined || !BLOCK_TERMINATORS.has(last.type);
 }
 
-function operandShape(type: string, context: ExecutionVerificationContext): OperandShape {
-	const structural = STRUCTURAL_SHAPES[type];
-	if (structural !== undefined) return structural;
-	if (!isCoreOpcode(type)) {
-		fail("instruction is neither a Core opcode nor a structural target form", context);
-	}
-	const descriptor = coreOpcodeRegistry.require(type);
-	if (descriptor.outputs.minimum !== descriptor.outputs.maximum) {
-		fail("instruction opcode has a variable result count", context);
-	}
-	const writes = descriptor.outputs.minimum;
-	return {
-		writes,
-		minimumRegisters: writes + descriptor.inputs.minimum,
-		maximumRegisters: writes + descriptor.inputs.maximum,
-		blocks: 0,
-	};
-}
-
 function instructionRegisters(
 	instruction: CompilerInstruction,
 ): ReadonlyArray<number> | undefined {
@@ -147,17 +104,48 @@ function instructionImmediates(
 		.immediateValues;
 }
 
-interface InstructionSite {
-	readonly block: number;
-	readonly index: number;
-	readonly shape: OperandShape;
-}
-
 interface FunctionModel {
 	readonly fn: ExecutionFunction;
 	readonly functionIndex: number;
-	readonly sites: ReadonlyMap<CompilerInstruction, InstructionSite>;
+	readonly sites: ReadonlyMap<CompilerInstruction, number>;
+	readonly siteBlocks: ReadonlyArray<number>;
+	readonly blockStarts: Uint32Array;
 	readonly handlerTargets: ReadonlySet<number>;
+}
+
+function failAtInstruction(
+	detail: string,
+	functionIndex: number,
+	block: number,
+	index: number,
+	opcode: string,
+	register?: number,
+): never {
+	fail(detail, {
+		functionIndex,
+		block,
+		instruction: index,
+		opcode,
+		...(register === undefined ? {} : { register }),
+	});
+}
+
+function failAtSite(
+	detail: string,
+	model: FunctionModel,
+	instruction: CompilerInstruction,
+	site: number,
+	register?: number,
+): never {
+	const block = model.siteBlocks[site]!;
+	failAtInstruction(
+		detail,
+		model.functionIndex,
+		block,
+		site - model.blockStarts[block]!,
+		instruction.type,
+		register,
+	);
 }
 
 function isBoxed(fn: ExecutionFunction, register: number): boolean {
@@ -167,22 +155,6 @@ function isBoxed(fn: ExecutionFunction, register: number): boolean {
 function isRooted(fn: ExecutionFunction, register: number): boolean {
 	const representation = fn.registerRepresentations[register];
 	return representation === "boxed" || representation === "string";
-}
-
-function reads(
-	instruction: CompilerInstruction,
-	shape: OperandShape,
-): ReadonlyArray<number> {
-	const registers = instructionRegisters(instruction) ?? [];
-	return registers.slice(shape.writes).filter((register) => register >= 0);
-}
-
-function writes(
-	instruction: CompilerInstruction,
-	shape: OperandShape,
-): ReadonlyArray<number> {
-	const registers = instructionRegisters(instruction) ?? [];
-	return registers.slice(0, shape.writes).filter((register) => register >= 0);
 }
 
 function verifyProgramCardinality(program: ExecutionProgram): void {
@@ -269,29 +241,31 @@ function verifyProgramCardinality(program: ExecutionProgram): void {
 }
 
 function buildFunctionModel(fn: ExecutionFunction, functionIndex: number): FunctionModel {
-	const sites = new Map<CompilerInstruction, InstructionSite>();
-	const handlerTargets = new Set<number>();
 	if (fn.blocks.length === 0) fail("target function has no blocks", { functionIndex });
-	for (const [block, { instructions }] of fn.blocks.entries()) {
-		for (const [index, instruction] of instructions.entries()) {
-			const context: ExecutionVerificationContext = {
-				functionIndex,
-				block,
-				instruction: index,
-				opcode: instruction.type,
-			};
+	const sites = new Map<CompilerInstruction, number>();
+	const siteBlocks: Array<number> = [];
+	const blockStarts = new Uint32Array(fn.blocks.length);
+	const handlerTargets = new Set<number>();
+	for (let block = 0; block < fn.blocks.length; block++) {
+		blockStarts[block] = siteBlocks.length;
+		const { instructions } = fn.blocks[block]!;
+		for (let index = 0; index < instructions.length; index++) {
+			const instruction = instructions[index]!;
 			if (sites.has(instruction)) {
-				fail("instruction appears at more than one position", context);
+				failAtInstruction(
+					"instruction appears at more than one position",
+					functionIndex,
+					block,
+					index,
+					instruction.type,
+				);
 			}
-			sites.set(instruction, {
-				block,
-				index,
-				shape: operandShape(instruction.type, context),
-			});
+			sites.set(instruction, siteBlocks.length);
+			siteBlocks.push(block);
 			if (instruction.type === "tryBegin") handlerTargets.add(instruction.blocks[0]);
 		}
 	}
-	return { fn, functionIndex, sites, handlerTargets };
+	return { fn, functionIndex, sites, siteBlocks, blockStarts, handlerTargets };
 }
 
 function verifyRegisterPlan(model: FunctionModel): void {
@@ -349,22 +323,38 @@ function verifyInstructionOperands(
 	unreachableMoves?: ReadonlySet<CompilerInstruction>,
 ): void {
 	const { fn, functionIndex } = model;
-	for (const [block, { instructions }] of fn.blocks.entries()) {
+	for (let block = 0; block < fn.blocks.length; block++) {
+		const { instructions } = fn.blocks[block]!;
 		let previousSemanticInstruction: CompilerInstruction | undefined;
-		for (const [index, instruction] of instructions.entries()) {
-			const context: ExecutionVerificationContext = {
-				functionIndex,
-				block,
-				instruction: index,
-				opcode: instruction.type,
-			};
-			const shape = model.sites.get(instruction)!.shape;
+		for (let index = 0; index < instructions.length; index++) {
+			const instruction = instructions[index]!;
+			const opcode = instruction.type;
+			const shape = executionOperandShape(opcode);
+			if (shape === undefined)
+				failAtInstruction(
+					"instruction is neither a Core opcode nor a structural target form",
+					functionIndex,
+					block,
+					index,
+					opcode,
+				);
+			if (shape === "variable-outputs")
+				failAtInstruction(
+					"instruction opcode has a variable result count",
+					functionIndex,
+					block,
+					index,
+					opcode,
+				);
 			const registers = instructionRegisters(instruction);
 			const count = registers?.length ?? 0;
 			if (count < shape.minimumRegisters || count > shape.maximumRegisters) {
-				fail(
+				failAtInstruction(
 					`instruction takes ${count} register operands, expected ${shape.minimumRegisters}..${shape.maximumRegisters}`,
-					context,
+					functionIndex,
+					block,
+					index,
+					opcode,
 				);
 			}
 			const immediates = instructionImmediates(instruction);
@@ -372,16 +362,26 @@ function verifyInstructionOperands(
 				instruction.type === "call" ||
 				instruction.type === "callKnown" ||
 				instruction.type === "construct";
-			for (const [position, register] of (registers ?? []).entries()) {
-				const operandContext = { ...context, register };
+			for (let position = 0; position < count; position++) {
+				const register = registers![position]!;
 				if (register === -1) {
 					if (!embeddable || position < shape.writes) {
-						fail("only a call-like operand may drop its register", {
-							...context,
-						});
+						failAtInstruction(
+							"only a call-like operand may drop its register",
+							functionIndex,
+							block,
+							index,
+							opcode,
+						);
 					}
 					if (immediates?.[position] === undefined) {
-						fail("dropped register operand has no embedded immediate value", context);
+						failAtInstruction(
+							"dropped register operand has no embedded immediate value",
+							functionIndex,
+							block,
+							index,
+							opcode,
+						);
 					}
 					continue;
 				}
@@ -390,33 +390,53 @@ function verifyInstructionOperands(
 					register < 0 ||
 					register >= fn.registerCount
 				) {
-					fail(
+					failAtInstruction(
 						`register operand is out of bounds for a ${fn.registerCount}-register function`,
-						operandContext,
+						functionIndex,
+						block,
+						index,
+						opcode,
+						register,
 					);
 				}
 				if (immediates?.[position] !== undefined) {
-					fail(
+					failAtInstruction(
 						"embedded immediate value must replace its register operand",
-						operandContext,
+						functionIndex,
+						block,
+						index,
+						opcode,
+						register,
 					);
 				}
 			}
 			if (immediates !== undefined && immediates.length > count) {
-				fail("embedded immediate values exceed the register operands", context);
+				failAtInstruction(
+					"embedded immediate values exceed the register operands",
+					functionIndex,
+					block,
+					index,
+					opcode,
+				);
 			}
 			const blocks = instructionBlocks(instruction);
 			if ((blocks?.length ?? 0) !== shape.blocks) {
-				fail(
+				failAtInstruction(
 					`instruction takes ${blocks?.length ?? 0} block operands, expected ${shape.blocks}`,
-					context,
+					functionIndex,
+					block,
+					index,
+					opcode,
 				);
 			}
 			for (const target of blocks ?? []) {
 				if (!Number.isSafeInteger(target) || target < 0 || target >= fn.blocks.length) {
-					fail(
+					failAtInstruction(
 						`block operand names unknown block ${target} in a ${fn.blocks.length}-block function`,
-						context,
+						functionIndex,
+						block,
+						index,
+						opcode,
 					);
 				}
 			}
@@ -425,10 +445,14 @@ function verifyInstructionOperands(
 				twoAddress !== undefined &&
 				registers?.[twoAddress.result] !== registers?.[twoAddress.operand]
 			) {
-				fail(`two-address instruction must use ${twoAddress.requirement}`, {
-					...context,
-					register: registers?.[twoAddress.result],
-				});
+				failAtInstruction(
+					`two-address instruction must use ${twoAddress.requirement}`,
+					functionIndex,
+					block,
+					index,
+					opcode,
+					registers?.[twoAddress.result],
+				);
 			}
 			if (instruction.type === "move") {
 				const [destination, source] = instruction.registers;
@@ -448,16 +472,24 @@ function verifyInstructionOperands(
 					!numericWidening &&
 					!unreachableMoves?.has(instruction)
 				) {
-					fail("move must not narrow its source register class", {
-						...context,
-						register: destination,
-					});
+					failAtInstruction(
+						"move must not narrow its source register class",
+						functionIndex,
+						block,
+						index,
+						opcode,
+						destination,
+					);
 				}
 				if (instruction.exactScalarAfterTdz !== undefined && !provenNarrowing) {
-					fail("post-TDZ scalar move carries an invalid narrowing proof", {
-						...context,
-						register: destination,
-					});
+					failAtInstruction(
+						"post-TDZ scalar move carries an invalid narrowing proof",
+						functionIndex,
+						block,
+						index,
+						opcode,
+						destination,
+					);
 				}
 			}
 			if (instruction.type !== "sourcePos" && instruction.type !== "rootUse") {
@@ -475,49 +507,94 @@ function verifyBlockStructure(model: FunctionModel): void {
 			block: 0,
 		});
 	}
-	for (const [block, { instructions }] of fn.blocks.entries()) {
+	for (let block = 0; block < fn.blocks.length; block++) {
+		const { instructions } = fn.blocks[block]!;
 		const context: ExecutionVerificationContext = { functionIndex, block };
 		let begins = 0;
 		let ends = 0;
 		let catches = 0;
-		for (const [index, instruction] of instructions.entries()) {
-			const site = { ...context, instruction: index, opcode: instruction.type };
+		let lastTransferOperand = instructions.length - 1;
+		while (
+			lastTransferOperand >= 0 &&
+			(instructions[lastTransferOperand]!.type === "sourcePos" ||
+				instructions[lastTransferOperand]!.type === "tryEnd")
+		)
+			lastTransferOperand--;
+		for (let index = 0; index < instructions.length; index++) {
+			const instruction = instructions[index]!;
 			if (
 				(instruction.type === "jump" || instruction.type === "jumpIf") &&
 				model.handlerTargets.has(instruction.blocks[0])
 			) {
-				fail("ordinary control flow may not target an exception-handler block", site);
+				failAtInstruction(
+					"ordinary control flow may not target an exception-handler block",
+					functionIndex,
+					block,
+					index,
+					instruction.type,
+				);
 			}
-			if (
-				BLOCK_TERMINATORS.has(instruction.type) &&
-				instructions
-					.slice(index + 1)
-					.some(({ type }) => type !== "sourcePos" && type !== "tryEnd")
-			) {
-				fail("unconditional control transfer must end its containing block", site);
+			if (BLOCK_TERMINATORS.has(instruction.type) && index < lastTransferOperand) {
+				failAtInstruction(
+					"unconditional control transfer must end its containing block",
+					functionIndex,
+					block,
+					index,
+					instruction.type,
+				);
 			}
 			if (instruction.type === "tryBegin") {
 				begins++;
 				if (index !== 0) {
-					fail("protected range must open at the start of its block", site);
+					failAtInstruction(
+						"protected range must open at the start of its block",
+						functionIndex,
+						block,
+						index,
+						instruction.type,
+					);
 				}
 				if (instruction.blocks[1] !== block) {
-					fail("tryBegin must name its own protected block", site);
+					failAtInstruction(
+						"tryBegin must name its own protected block",
+						functionIndex,
+						block,
+						index,
+						instruction.type,
+					);
 				}
 				if (instruction.blocks[0] === block) {
-					fail("protected block cannot be its own exception handler", site);
+					failAtInstruction(
+						"protected block cannot be its own exception handler",
+						functionIndex,
+						block,
+						index,
+						instruction.type,
+					);
 				}
 			}
 			if (instruction.type === "tryEnd") {
 				ends++;
 				if (index !== instructions.length - 1) {
-					fail("protected range must close at the end of its block", site);
+					failAtInstruction(
+						"protected range must close at the end of its block",
+						functionIndex,
+						block,
+						index,
+						instruction.type,
+					);
 				}
 			}
 			if (instruction.type === "catch") {
 				catches++;
 				if (!model.handlerTargets.has(block)) {
-					fail("catch may only appear in an exception-handler block", site);
+					failAtInstruction(
+						"catch may only appear in an exception-handler block",
+						functionIndex,
+						block,
+						index,
+						instruction.type,
+					);
 				}
 			}
 		}
@@ -610,8 +687,7 @@ function simulateParallelCopy(
 	}
 	const entryValue = (register: number): number => held.get(register) ?? register;
 	for (const move of copy.moves) {
-		const site = model.sites.get(move);
-		if (site === undefined) {
+		if (!model.sites.has(move)) {
 			fail("declared parallel-copy move is not present in this function", context);
 		}
 		if (
@@ -666,18 +742,20 @@ function verifyParallelCopies(
 				functionIndex,
 			});
 		}
+		const firstBlock = model.siteBlocks[firstSite]!;
+		const firstIndex = firstSite - model.blockStarts[firstBlock]!;
 		const context: ExecutionVerificationContext = {
 			functionIndex,
-			block: firstSite.block,
-			instruction: firstSite.index,
+			block: firstBlock,
+			instruction: firstIndex,
 			opcode: copy.kind,
 		};
 		for (const [offset, move] of copy.moves.entries()) {
 			const site = model.sites.get(move);
 			if (
 				site === undefined ||
-				site.block !== firstSite.block ||
-				site.index !== firstSite.index + offset
+				model.siteBlocks[site] !== firstBlock ||
+				site !== firstSite + offset
 			) {
 				fail("parallel-copy moves must run contiguously inside one block", context);
 			}
@@ -687,8 +765,8 @@ function verifyParallelCopies(
 			claimed.add(move);
 		}
 		if (copy.kind === "handler-input") {
-			const opening = fn.blocks[firstSite.block]!.instructions[0];
-			if (opening?.type !== "tryBegin" || firstSite.index !== 1) {
+			const opening = fn.blocks[firstBlock]!.instructions[0];
+			if (opening?.type !== "tryBegin" || firstIndex !== 1) {
 				fail(
 					"handler-input copy must follow the tryBegin of its protected block",
 					context,
@@ -716,7 +794,7 @@ function verifyExceptionEntries(model: FunctionModel): void {
 	for (const copy of fn.parallelCopies) {
 		if (copy.kind !== "handler-input") continue;
 		const site = model.sites.get(copy.moves[0]!);
-		if (site !== undefined) handlerInputCopies.set(site.block, copy);
+		if (site !== undefined) handlerInputCopies.set(model.siteBlocks[site]!, copy);
 	}
 	for (const block of model.handlerTargets) {
 		const instructions = fn.blocks[block]!.instructions;
@@ -788,40 +866,49 @@ function verifyTemporaryRegisters(model: FunctionModel, native: boolean): void {
 	for (const [block, { instructions }] of fn.blocks.entries()) {
 		const defined = new Set<number>();
 		for (const [index, instruction] of instructions.entries()) {
-			const shape = model.sites.get(instruction)!.shape;
-			const context: ExecutionVerificationContext = {
-				functionIndex,
-				block,
-				instruction: index,
-				opcode: instruction.type,
-			};
-			for (const register of instructionRegisters(instruction) ?? []) {
+			const shape = executionOperandShape(instruction.type);
+			if (shape === undefined || shape === "variable-outputs")
+				throw new Error("Expected a verified instruction shape");
+			const registers = instructionRegisters(instruction);
+			for (const register of registers ?? []) {
 				if (
 					reusable.has(register) &&
 					!copyByMove.get(instruction)?.temporaries.includes(register)
-				) {
-					fail("native copy scratch escapes its declared parallel copy", {
-						...context,
+				)
+					failAtInstruction(
+						"native copy scratch escapes its declared parallel copy",
+						functionIndex,
+						block,
+						index,
+						instruction.type,
 						register,
-					});
-				}
+					);
 			}
-			for (const register of reads(instruction, shape)) {
-				if (!seen.has(register) || defined.has(register)) continue;
-				fail("temporary register is read before its definition", {
-					...context,
-					register,
-				});
+			for (let position = shape.writes; position < (registers?.length ?? 0); position++) {
+				const register = registers![position]!;
+				if (seen.has(register) && !defined.has(register))
+					failAtInstruction(
+						"temporary register is read before its definition",
+						functionIndex,
+						block,
+						index,
+						instruction.type,
+						register,
+					);
 			}
-			for (const register of writes(instruction, shape)) {
+			for (let position = 0; position < shape.writes; position++) {
+				const register = registers![position]!;
 				if (!seen.has(register)) continue;
 				const existing = owner.get(register);
-				if (existing !== undefined && existing !== block && !reusable.has(register)) {
-					fail("temporary register is defined in more than one block", {
-						...context,
+				if (existing !== undefined && existing !== block && !reusable.has(register))
+					failAtInstruction(
+						"temporary register is defined in more than one block",
+						functionIndex,
+						block,
+						index,
+						instruction.type,
 						register,
-					});
-				}
+					);
 				owner.set(register, block);
 				defined.add(register);
 			}
@@ -832,6 +919,35 @@ function verifyTemporaryRegisters(model: FunctionModel, native: boolean): void {
 			fail("temporary register is never defined", { functionIndex, register: temporary });
 		}
 	}
+}
+
+const CORE_OPERATION = 1;
+const CORE_SAFEPOINT = 2;
+const CORE_ORIGIN_RECORDED = 4;
+const CORE_SAFEPOINT_COVERED = 8;
+
+const ROOT_BOUNDARIES = [
+	"rootRegisters",
+	"incomingRootRegisters",
+	"outgoingRootRegisters",
+] as const;
+
+function firstRootMismatch(
+	actual: ReadonlyArray<number>,
+	words: number | ArrayLike<number>,
+): number | null | undefined {
+	let index = 0;
+	const singleWord = typeof words === "number";
+	const count = singleWord ? 1 : words.length;
+	for (let word = 0; word < count; word++) {
+		let bits = singleWord ? words : words[word]!;
+		while (bits !== 0) {
+			const register = word * 32 + 31 - Math.clz32(bits & -bits);
+			if (actual[index++] !== register) return register;
+			bits &= bits - 1;
+		}
+	}
+	return index === actual.length ? undefined : (actual[index] ?? null);
 }
 
 function verifyGcRoots(
@@ -845,23 +961,22 @@ function verifyGcRoots(
 ): void {
 	const { fn, functionIndex } = model;
 	const reachable = new Set(fn.coreBlocks);
-	const expected = new Set<CoreInstructionId>();
-	const coreInstructions = new Set<CoreInstructionId>();
+	const expected: Array<CoreInstructionId> = [];
+	const coreFlags = new Uint8Array(core.instructionCapacity);
 	for (const instruction of core.instructionIds()) {
 		if (core.instructionKind(instruction) !== "operation") continue;
-		coreInstructions.add(instruction);
+		coreFlags[instruction] = CORE_OPERATION;
 		if (
 			reachable.has(core.instructionBlock(instruction)) &&
 			coreInstructionNeedsOperationSafepoint(core, instruction)
 		) {
-			expected.add(instruction);
+			coreFlags[instruction] |= CORE_SAFEPOINT;
+			expected.push(instruction);
 		}
 	}
-	const safepoints = new Set<CompilerInstruction>();
+	const safepoints = new Map<CompilerInstruction, number>();
 	const expectedBackedges = loopBackedgeInstructions(fn);
 	const recordedBackedges = new Set<CompilerInstruction>();
-	const recordedOrigins = new Set<number>();
-	const covered = new Set<number>();
 	const rootStamps = new Uint32Array(fn.registerCount);
 	let rootStamp = 0;
 	for (const safepoint of fn.gc.safepoints) {
@@ -871,48 +986,56 @@ function verifyGcRoots(
 			fail("recorded safepoint does not belong to this function", { functionIndex });
 		}
 		if (safepoints.has(instruction)) {
-			fail("instruction has two target safepoint records", {
-				functionIndex,
-				block: site.block,
-				instruction: site.index,
-				opcode: instruction.type,
-			});
+			failAtSite(
+				"instruction has two target safepoint records",
+				model,
+				instruction,
+				site,
+			);
 		}
-		safepoints.add(instruction);
+		safepoints.set(instruction, rootStamp);
 		rootStamp++;
-		const context = (register: number): ExecutionVerificationContext => ({
-			functionIndex,
-			block: site.block,
-			instruction: site.index,
-			opcode: instruction.type,
-			register,
-		});
 		for (const register of rootRegisters) {
 			if (
 				!Number.isSafeInteger(register) ||
 				register < 0 ||
 				register >= fn.registerCount
 			) {
-				fail(
+				failAtSite(
 					`GC root register is out of bounds for a ${fn.registerCount}-register function`,
-					context(register),
+					model,
+					instruction,
+					site,
+					register,
 				);
 			}
 			if (!isRooted(fn, register)) {
-				fail("GC root register must carry a traced value", context(register));
+				failAtSite(
+					"GC root register must carry a traced value",
+					model,
+					instruction,
+					site,
+					register,
+				);
 			}
 			if (rootStamps[register] === rootStamp)
-				fail("GC root register is listed twice", context(register));
+				failAtSite(
+					"GC root register is listed twice",
+					model,
+					instruction,
+					site,
+					register,
+				);
 			rootStamps[register] = rootStamp;
 		}
 		if (safepoint.kind === "loop-backedge") {
 			if (!expectedBackedges.has(instruction)) {
-				fail("loop-backedge safepoint does not name a native polling edge", {
-					functionIndex,
-					block: site.block,
-					instruction: site.index,
-					opcode: instruction.type,
-				});
+				failAtSite(
+					"loop-backedge safepoint does not name a native polling edge",
+					model,
+					instruction,
+					site,
+				);
 			}
 			recordedBackedges.add(instruction);
 			continue;
@@ -922,14 +1045,11 @@ function verifyGcRoots(
 				instruction.type !== "loadCaptured" ||
 				instruction.materializeClosure === undefined
 			) {
-				fail(
+				failAtSite(
 					"closure-materialization safepoint does not name a materializing captured load",
-					{
-						functionIndex,
-						block: site.block,
-						instruction: site.index,
-						opcode: instruction.type,
-					},
+					model,
+					instruction,
+					site,
 				);
 			}
 			continue;
@@ -938,21 +1058,26 @@ function verifyGcRoots(
 			fail("target safepoint has an unknown kind", { functionIndex });
 		}
 		const { coreInstruction, realizedCoreInstructions } = safepoint;
-		if (recordedOrigins.has(coreInstruction)) {
+		const originFlags =
+			typeof coreInstruction === "number" ? (coreFlags[coreInstruction] ?? 0) : 0;
+		if ((originFlags & CORE_ORIGIN_RECORDED) !== 0) {
 			fail(`Core instruction @${coreInstruction} has two target safepoint records`, {
 				functionIndex,
 			});
 		}
-		recordedOrigins.add(coreInstruction);
-		if (!coreInstructions.has(coreInstruction)) {
+		if ((originFlags & CORE_OPERATION) === 0) {
 			fail(`target safepoint names unknown Core instruction @${coreInstruction}`, {
 				functionIndex,
 			});
 		}
+		coreFlags[coreInstruction] = originFlags | CORE_ORIGIN_RECORDED;
 		const originOpcode = core.instructionOpcodeName(coreInstruction);
 		const attributes = core.instructionAttributes(coreInstruction);
-		const callee = fn.blocks[site.block]!.instructions[site.index - 1];
-		const foreignCallee = fn.blocks[site.block]!.instructions[site.index - 2];
+		const block = model.siteBlocks[site]!;
+		const index = site - model.blockStarts[block]!;
+		const instructions = fn.blocks[block]!.instructions;
+		const callee = instructions[index - 1];
+		const foreignCallee = instructions[index - 2];
 		const staticForeignCall =
 			originOpcode === "callForeign" &&
 			instruction.type === "call" &&
@@ -997,7 +1122,7 @@ function verifyGcRoots(
 			);
 		}
 		const immediates = instructionImmediates(instruction);
-		const embeddedSafepoints = new Set<number>();
+		let embeddedSafepoints: Set<number> | undefined;
 		const kernel = core.kernel;
 		const originInputStart = kernel.instructionOperandStart(coreInstruction);
 		const originInputCount = kernel.instructionOperandCount(coreInstruction);
@@ -1011,25 +1136,25 @@ function verifyGcRoots(
 				continue;
 			const input = kernel.operandAt(originInputStart + index);
 			if (kernel.valueDefinitionKind(input) === 1) {
-				embeddedSafepoints.add(kernel.valueDefinitionOwner(input));
+				(embeddedSafepoints ??= new Set()).add(kernel.valueDefinitionOwner(input));
 			}
 		}
 		if (realizedCoreInstructions.length === 0) {
 			fail("target safepoint realizes no Core collection point", { functionIndex });
 		}
 		for (const realized of realizedCoreInstructions) {
-			if (!expected.has(realized)) {
+			if (typeof realized !== "number" || (coreFlags[realized]! & CORE_SAFEPOINT) === 0) {
 				fail(`recorded Core instruction @${realized} is not a safepoint`, {
 					functionIndex,
 				});
 			}
-			if (realized !== coreInstruction && !embeddedSafepoints.has(realized)) {
+			if (realized !== coreInstruction && !embeddedSafepoints?.has(realized)) {
 				fail(
 					`Core safepoint @${realized} is neither the target origin nor an embedded input`,
 					{ functionIndex },
 				);
 			}
-			covered.add(realized);
+			coreFlags[realized]! |= CORE_SAFEPOINT_COVERED;
 		}
 	}
 	for (const [instruction, site] of model.sites)
@@ -1038,19 +1163,20 @@ function verifyGcRoots(
 			instruction.materializeClosure !== undefined &&
 			!safepoints.has(instruction)
 		)
-			fail("materializing captured load has no safepoint record", {
-				functionIndex,
-				block: site.block,
-				instruction: site.index,
-				opcode: instruction.type,
-			});
+			failAtSite(
+				"materializing captured load has no safepoint record",
+				model,
+				instruction,
+				site,
+			);
 	for (const { coreInstruction, instruction, reason } of entry?.discharged ?? []) {
 		const site = model.sites.get(instruction);
 		if (
 			reason !== "entry-argument" ||
 			site === undefined ||
-			!expected.has(coreInstruction) ||
-			covered.has(coreInstruction) ||
+			typeof coreInstruction !== "number" ||
+			(coreFlags[coreInstruction]! & (CORE_SAFEPOINT | CORE_SAFEPOINT_COVERED)) !==
+				CORE_SAFEPOINT ||
 			core.instructionOpcodeName(coreInstruction) !== instruction.type ||
 			entry?.suppliedArguments === undefined ||
 			!entrySuppliedArgumentRead(instruction, entry.suppliedArguments)
@@ -1058,47 +1184,56 @@ function verifyGcRoots(
 			fail(`Core safepoint @${coreInstruction} has no valid discharge`, {
 				functionIndex,
 			});
-		covered.add(coreInstruction);
+		coreFlags[coreInstruction]! |= CORE_SAFEPOINT_COVERED;
 	}
-	const missing = [...expected.keys()].find((instruction) => !covered.has(instruction));
+	const missing = expected.find(
+		(instruction) => (coreFlags[instruction]! & CORE_SAFEPOINT_COVERED) === 0,
+	);
 	if (missing !== undefined) {
 		fail(`Core safepoint @${missing} has no target safepoint record`, { functionIndex });
 	}
-	const missingBackedge = [...expectedBackedges].find(
-		(instruction) => !recordedBackedges.has(instruction),
-	);
-	if (missingBackedge !== undefined) {
-		const site = model.sites.get(missingBackedge)!;
-		fail("native polling edge has no loop-backedge safepoint record", {
-			functionIndex,
-			block: site.block,
-			instruction: site.index,
-			opcode: missingBackedge.type,
-		});
-	}
-	const exactRoots = executionSafepointRoots(fn, safepoints);
-	for (const safepoint of fn.gc.safepoints) {
-		for (const boundary of [
-			"rootRegisters",
-			"incomingRootRegisters",
-			"outgoingRootRegisters",
-		] as const) {
-			const expectedRoots = exactRoots.get(safepoint.instruction)![boundary];
-			const actualRoots = safepoint[boundary];
-			const mismatch = Math.max(expectedRoots.length, actualRoots.length);
-			for (let index = 0; index < mismatch; index++) {
-				if (expectedRoots[index] === actualRoots[index]) continue;
-				const site = model.sites.get(safepoint.instruction)!;
-				const phase = boundary === "rootRegisters" ? "" : ` (${boundary})`;
-				fail(`GC safepoint roots do not match exact execution liveness${phase}`, {
-					functionIndex,
-					block: site.block,
-					instruction: site.index,
-					opcode: safepoint.instruction.type,
-					register: expectedRoots[index] ?? actualRoots[index],
-				});
-			}
+	for (const instruction of expectedBackedges) {
+		if (!recordedBackedges.has(instruction)) {
+			failAtSite(
+				"native polling edge has no loop-backedge safepoint record",
+				model,
+				instruction,
+				model.sites.get(instruction)!,
+			);
 		}
+	}
+	let mismatch:
+		| {
+				ordinal: number;
+				boundary: keyof ExecutionSafepointRoots;
+				register: number | null;
+		  }
+		| undefined;
+	// Walks visit blocks in liveness order. Report errors in published safepoint order.
+	visitExecutionSafepointRoots(fn, safepoints, (instruction, boundary, words) => {
+		const ordinal = safepoints.get(instruction)!;
+		const actual = fn.gc.safepoints[ordinal]![boundary];
+		const register = firstRootMismatch(actual, words);
+		if (register === undefined) return;
+		if (
+			mismatch === undefined ||
+			ordinal < mismatch.ordinal ||
+			(ordinal === mismatch.ordinal &&
+				ROOT_BOUNDARIES.indexOf(boundary) < ROOT_BOUNDARIES.indexOf(mismatch.boundary))
+		) {
+			mismatch = { ordinal, boundary, register };
+		}
+	});
+	if (mismatch !== undefined) {
+		const instruction = fn.gc.safepoints[mismatch.ordinal]!.instruction;
+		const phase = mismatch.boundary === "rootRegisters" ? "" : ` (${mismatch.boundary})`;
+		failAtSite(
+			`GC safepoint roots do not match exact execution liveness${phase}`,
+			model,
+			instruction,
+			model.sites.get(instruction)!,
+			mismatch.register ?? undefined,
+		);
 	}
 }
 
@@ -1130,8 +1265,8 @@ function verifyRegions(model: FunctionModel): void {
 			) {
 				fail(`region ${role} names a marker rather than an executable instruction`, {
 					...context,
-					block: site.block,
-					instruction: site.index,
+					block: model.siteBlocks[site]!,
+					instruction: site - model.blockStarts[model.siteBlocks[site]!]!,
 				});
 			}
 		};
@@ -1213,8 +1348,8 @@ export function verifyExecutionProgram(
 			? nativeLoopBackedgeInstructions
 			: executionLoopBackedgeInstructions);
 	verifyProgramCardinality(program);
-	const models = program.functions.map((fn, index) => buildFunctionModel(fn, index));
-	for (const [index, model] of models.entries()) {
+	for (let index = 0; index < program.functions.length; index++) {
+		const model = buildFunctionModel(program.functions[index]!, index);
 		verifyRegisterPlan(model);
 		verifyInstructionOperands(model);
 		verifyBlockStructure(model);

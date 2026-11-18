@@ -1054,6 +1054,41 @@ describe("Core target verification", () => {
 		},
 	);
 
+	it("rejects reordered roots in a multiword register set", () => {
+		const parameters = Array.from({ length: 40 }, (_, index) => `value${index}`).join(
+			", ",
+		);
+		const program = optimizedTarget(
+			`globalThis.collect = function(target, ${parameters}) {
+				const result = target();
+				return target(result, ${parameters});
+			};`,
+			"wide-safepoint-roots.js",
+		);
+		const hasWideRoots = ({ rootRegisters }: { rootRegisters: ReadonlyArray<number> }) =>
+			rootRegisters.includes(31) && rootRegisters.some((register) => register >= 32);
+		const functionIndex = program.functions.findIndex((fn) =>
+			fn.gc.safepoints.some(hasWideRoots),
+		);
+		const fn = program.functions[functionIndex]!;
+		const safepointIndex = fn.gc.safepoints.findIndex(hasWideRoots);
+		const point = fn.gc.safepoints[safepointIndex]!;
+		const malformed = withFunction(program, functionIndex, {
+			gc: {
+				safepoints: fn.gc.safepoints.with(safepointIndex, {
+					...point,
+					rootRegisters: point.rootRegisters.toReversed(),
+				}),
+			},
+		});
+		const error = verificationError(malformed);
+		expect(error.detail).toBe("GC safepoint roots do not match exact execution liveness");
+		expect(error.context).toMatchObject({
+			functionIndex,
+			register: point.rootRegisters[0],
+		});
+	});
+
 	it("rejects a violated two-address instruction constraint", () => {
 		for (const [source, type, operand, requirement] of [
 			[

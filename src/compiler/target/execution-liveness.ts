@@ -1,17 +1,6 @@
-import { coreOpcodeRegistry, isCoreOpcode } from "../core/core-ir-opcodes.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 import type { ExecutionFunction, ExecutionSafepointRoots } from "./execution-ir.ts";
-
-const STRUCTURAL_WRITE_COUNTS: Readonly<Record<string, number>> = {
-	sourcePos: 0,
-	jump: 0,
-	jumpIf: 0,
-	tryBegin: 0,
-	tryEnd: 0,
-	catch: 1,
-	return: 0,
-	throw: 0,
-};
+import { executionOperandShape } from "./execution-operand-shapes.ts";
 
 const BLOCK_TERMINATORS: ReadonlySet<string> = new Set(["jump", "return", "throw"]);
 
@@ -20,16 +9,12 @@ function instructionRegisters(instruction: CompilerInstruction): ReadonlyArray<n
 }
 
 function writeCount(instruction: CompilerInstruction): number {
-	const structural = STRUCTURAL_WRITE_COUNTS[instruction.type];
-	if (structural !== undefined) return structural;
-	if (!isCoreOpcode(instruction.type)) {
+	const shape = executionOperandShape(instruction.type);
+	if (shape === undefined)
 		throw new Error(`Unknown execution instruction ${instruction.type}`);
-	}
-	const descriptor = coreOpcodeRegistry.require(instruction.type);
-	if (descriptor.outputs.minimum !== descriptor.outputs.maximum) {
+	if (shape === "variable-outputs")
 		throw new Error(`Execution instruction ${instruction.type} has variable outputs`);
-	}
-	return descriptor.outputs.minimum;
+	return shape.writes;
 }
 
 function lastExecutable(
@@ -81,13 +66,60 @@ export function executionSafepointRoots(
 	fn: ExecutionFunction,
 	safepoints: ReadonlySet<CompilerInstruction>,
 ): ReadonlyMap<CompilerInstruction, ExecutionSafepointRoots> {
-	if (safepoints.size === 0) return new Map();
-	const wordCount = Math.ceil(fn.registerCount / 32);
+	const roots = new Map<CompilerInstruction, ExecutionSafepointRoots>();
+	solveSafepointRoots(fn, safepoints, roots);
+	return roots;
+}
+
+type SafepointSelection = Pick<ReadonlySet<CompilerInstruction>, "has" | "size">;
+type RootBitmapVisitor = (
+	instruction: CompilerInstruction,
+	boundary: keyof ExecutionSafepointRoots,
+	words: number | ArrayLike<number>,
+) => void;
+
+// Multiword storage belongs to the solve and is valid only during each visit.
+export function visitExecutionSafepointRoots(
+	fn: ExecutionFunction,
+	safepoints: SafepointSelection,
+	visit: RootBitmapVisitor,
+): void {
+	solveSafepointRoots(fn, safepoints, undefined, visit);
+}
+
+function solveSafepointRoots(
+	fn: ExecutionFunction,
+	safepoints: SafepointSelection,
+	roots: Map<CompilerInstruction, ExecutionSafepointRoots> | undefined,
+	visit?: RootBitmapVisitor,
+): void {
+	if (safepoints.size === 0) return;
+	const successors = blockSuccessors(fn);
+	const predecessors: Array<Array<number>> = fn.blocks.map(() => []);
+	for (const [block, targets] of successors.entries()) {
+		for (const target of targets) predecessors[target]!.push(block);
+	}
+	const blockStarts = new Uint32Array(fn.blocks.length + 1);
+	for (let block = 0; block < fn.blocks.length; block++)
+		blockStarts[block + 1] = blockStarts[block]! + fn.blocks[block]!.instructions.length;
 	const firstSafepoints = new Int32Array(fn.blocks.length).fill(-1);
-	// Each instruction's packed span starts with its boxed write count, followed by writes and reads.
+	if (fn.registerCount <= 32)
+		return singleWordSafepointRoots(
+			fn,
+			safepoints,
+			blockStarts,
+			firstSafepoints,
+			successors,
+			predecessors,
+			roots,
+			visit,
+		);
+	const wordCount = Math.ceil(fn.registerCount / 32);
+	// Each span starts with its boxed write count, followed by writes and reads.
 	const operands: Array<number> = [];
-	const operandStarts = fn.blocks.map(({ instructions }, block) => {
-		const starts = new Uint32Array(instructions.length + 1);
+	const operandStarts = new Uint32Array(blockStarts[fn.blocks.length]! + 1);
+	for (let block = 0; block < fn.blocks.length; block++) {
+		const { instructions } = fn.blocks[block]!;
 		for (let index = 0; index < instructions.length; index++) {
 			const instruction = instructions[index]!;
 			if (firstSafepoints[block] === -1 && safepoints.has(instruction))
@@ -95,7 +127,7 @@ export function executionSafepointRoots(
 			const registers = instructionRegisters(instruction);
 			const outputCount = writeCount(instruction);
 			const start = operands.length;
-			starts[index] = start;
+			operandStarts[blockStarts[block]! + index] = start;
 			operands.push(0);
 			for (let operand = 0; operand < registers.length; operand++) {
 				const register = registers[operand]!;
@@ -106,24 +138,8 @@ export function executionSafepointRoots(
 				if (operand < outputCount) operands[start]!++;
 			}
 		}
-		starts[instructions.length] = operands.length;
-		return starts;
-	});
-	const successors = blockSuccessors(fn);
-	const predecessors: Array<Array<number>> = fn.blocks.map(() => []);
-	for (const [block, targets] of successors.entries()) {
-		for (const target of targets) predecessors[target]!.push(block);
 	}
-	if (wordCount <= 1)
-		return singleWordSafepointRoots(
-			fn,
-			safepoints,
-			operands,
-			operandStarts,
-			firstSafepoints,
-			successors,
-			predecessors,
-		);
+	operandStarts[operandStarts.length - 1] = operands.length;
 	const add = (registers: Uint32Array, register: number): boolean => {
 		const word = register >>> 5;
 		const previous = registers[word]!;
@@ -159,13 +175,13 @@ export function executionSafepointRoots(
 		}
 		return roots;
 	};
-	const transfers = operandStarts.map((starts) => {
+	const transfers = fn.blocks.map((_, block) => {
 		const generated = new Uint32Array(wordCount);
 		const killed = new Uint32Array(wordCount);
-		for (let index = starts.length - 2; index >= 0; index--) {
-			const start = starts[index]!;
+		for (let index = blockStarts[block + 1]! - 1; index >= blockStarts[block]!; index--) {
+			const start = operandStarts[index]!;
 			const writeEnd = start + 1 + operands[start]!;
-			const end = starts[index + 1]!;
+			const end = operandStarts[index + 1]!;
 			for (let operand = start + 1; operand < writeEnd; operand++) {
 				const register = operands[operand]!;
 				remove(generated, register);
@@ -207,7 +223,6 @@ export function executionSafepointRoots(
 		}
 	}
 
-	const roots = new Map<CompilerInstruction, ExecutionSafepointRoots>();
 	for (const [block, { instructions }] of fn.blocks.entries()) {
 		const firstSafepoint = firstSafepoints[block]!;
 		if (firstSafepoint < 0) continue;
@@ -220,20 +235,24 @@ export function executionSafepointRoots(
 		const snapshot = () => (materialized ??= rootRegisters(live));
 		for (let index = instructions.length - 1; index >= firstSafepoint; index--) {
 			const instruction = instructions[index]!;
-			const start = operandStarts[block]![index]!;
+			const row = blockStarts[block]! + index;
+			const start = operandStarts[row]!;
 			const writeEnd = start + 1 + operands[start]!;
-			const end = operandStarts[block]![index + 1]!;
+			const end = operandStarts[row + 1]!;
 			let outgoingRootRegisters: ReadonlyArray<number> | undefined;
 			let allRootRegisters: ReadonlyArray<number> | undefined;
-			if (safepoints.has(instruction)) {
+			const selected = safepoints.has(instruction);
+			if (selected) {
 				for (let operand = start + 1; operand < writeEnd; operand++) {
 					if (add(live, operands[operand]!)) materialized = undefined;
 				}
-				outgoingRootRegisters = snapshot();
+				if (visit === undefined) outgoingRootRegisters = snapshot();
+				else visit(instruction, "outgoingRootRegisters", live);
 				for (let operand = writeEnd; operand < end; operand++) {
 					if (add(live, operands[operand]!)) materialized = undefined;
 				}
-				allRootRegisters = snapshot();
+				if (visit === undefined) allRootRegisters = snapshot();
+				else visit(instruction, "rootRegisters", live);
 			}
 			// Killing writes also removes the outputs added for the outgoing/combined snapshots.
 			for (let operand = start + 1; operand < writeEnd; operand++) {
@@ -242,8 +261,10 @@ export function executionSafepointRoots(
 			for (let operand = writeEnd; operand < end; operand++) {
 				if (add(live, operands[operand]!)) materialized = undefined;
 			}
-			if (allRootRegisters !== undefined && outgoingRootRegisters !== undefined) {
-				roots.set(instruction, {
+			if (selected && visit !== undefined)
+				visit(instruction, "incomingRootRegisters", live);
+			else if (allRootRegisters !== undefined && outgoingRootRegisters !== undefined) {
+				roots!.set(instruction, {
 					rootRegisters: allRootRegisters,
 					incomingRootRegisters: snapshot(),
 					outgoingRootRegisters,
@@ -251,35 +272,49 @@ export function executionSafepointRoots(
 			}
 		}
 	}
-	return roots;
 }
 
-// Small physical register sets need one scalar per block, avoiding a typed-array
-// allocation for every transfer and live-in bitmap in the common one-word case.
+// A one-word transfer can compose directly from the operand masks. Reads occur
+// before writes, including when a two-address instruction uses its destination.
 function singleWordSafepointRoots(
 	fn: ExecutionFunction,
-	safepoints: ReadonlySet<CompilerInstruction>,
-	operands: ReadonlyArray<number>,
-	operandStarts: ReadonlyArray<Uint32Array>,
+	safepoints: SafepointSelection,
+	blockStarts: Uint32Array,
 	firstSafepoints: Int32Array,
 	successors: ReadonlyArray<ReadonlyArray<number>>,
 	predecessors: ReadonlyArray<ReadonlyArray<number>>,
-): ReadonlyMap<CompilerInstruction, ExecutionSafepointRoots> {
+	roots: Map<CompilerInstruction, ExecutionSafepointRoots> | undefined,
+	visit?: RootBitmapVisitor,
+): void {
+	const operandMasks = new Uint32Array(blockStarts[fn.blocks.length]! * 2);
 	const generated = new Uint32Array(fn.blocks.length);
 	const killed = new Uint32Array(fn.blocks.length);
-	for (const [block, starts] of operandStarts.entries()) {
+	for (let block = 0; block < fn.blocks.length; block++) {
 		let gen = 0;
 		let kill = 0;
-		for (let index = starts.length - 2; index >= 0; index--) {
-			const start = starts[index]!;
-			const writeEnd = start + 1 + operands[start]!;
-			for (let operand = start + 1; operand < writeEnd; operand++) {
-				const bit = 1 << operands[operand]!;
-				gen &= ~bit;
-				kill |= bit;
+		const { instructions } = fn.blocks[block]!;
+		for (let index = 0; index < instructions.length; index++) {
+			const instruction = instructions[index]!;
+			if (firstSafepoints[block] === -1 && safepoints.has(instruction))
+				firstSafepoints[block] = index;
+			const registers = instructionRegisters(instruction);
+			const outputCount = writeCount(instruction);
+			let defined = 0;
+			let used = 0;
+			for (let operand = 0; operand < registers.length; operand++) {
+				const register = registers[operand]!;
+				if (!(register >= 0)) continue;
+				const representation = fn.registerRepresentations[register];
+				if (representation !== "boxed" && representation !== "string") continue;
+				const bit = 1 << register;
+				if (operand < outputCount) defined |= bit;
+				else used |= bit;
 			}
-			for (let operand = writeEnd; operand < starts[index + 1]!; operand++)
-				gen |= 1 << operands[operand]!;
+			const row = (blockStarts[block]! + index) * 2;
+			operandMasks[row] = defined;
+			operandMasks[row + 1] = used;
+			gen |= used & ~kill;
+			kill |= defined;
 		}
 		generated[block] = gen;
 		killed[block] = kill;
@@ -301,7 +336,6 @@ function singleWordSafepointRoots(
 			worklist.push(predecessor);
 		}
 	}
-	const roots = new Map<CompilerInstruction, ExecutionSafepointRoots>();
 	for (const [block, { instructions }] of fn.blocks.entries()) {
 		const first = firstSafepoints[block]!;
 		if (first < 0) continue;
@@ -309,46 +343,39 @@ function singleWordSafepointRoots(
 		for (const successor of successors[block]!) live |= liveIn[successor]!;
 		live >>>= 0;
 		let materialized: ReadonlyArray<number> | undefined;
-		const starts = operandStarts[block]!;
 		for (let index = instructions.length - 1; index >= first; index--) {
 			const instruction = instructions[index]!;
-			const start = starts[index]!;
-			const writeEnd = start + 1 + operands[start]!;
-			const end = starts[index + 1]!;
+			const row = (blockStarts[block]! + index) * 2;
+			const defined = operandMasks[row]!;
+			const used = operandMasks[row + 1]!;
+			const selected = safepoints.has(instruction);
 			let outgoing: ReadonlyArray<number> | undefined;
 			let all: ReadonlyArray<number> | undefined;
-			if (safepoints.has(instruction)) {
-				let next = live;
-				for (let operand = start + 1; operand < writeEnd; operand++)
-					next |= 1 << operands[operand]!;
-				next >>>= 0;
-				if (next !== live) materialized = undefined;
-				live = next;
-				outgoing = materialized ??= singleWordRootRegisters(live);
-				for (let operand = writeEnd; operand < end; operand++)
-					next |= 1 << operands[operand]!;
-				next >>>= 0;
-				if (next !== live) materialized = undefined;
-				live = next;
-				all = materialized ??= singleWordRootRegisters(live);
+			if (selected) {
+				const written = (live | defined) >>> 0;
+				if (written !== live) materialized = undefined;
+				if (visit === undefined)
+					outgoing = materialized ??= singleWordRootRegisters(written);
+				else visit(instruction, "outgoingRootRegisters", written);
+				const combined = (written | used) >>> 0;
+				if (combined !== written) materialized = undefined;
+				if (visit === undefined) all = materialized ??= singleWordRootRegisters(combined);
+				else visit(instruction, "rootRegisters", combined);
+				live = combined;
 			}
-			let next = live;
-			for (let operand = start + 1; operand < writeEnd; operand++)
-				next &= ~(1 << operands[operand]!);
-			for (let operand = writeEnd; operand < end; operand++)
-				next |= 1 << operands[operand]!;
-			next >>>= 0;
-			if (next !== live) materialized = undefined;
-			live = next;
-			if (all !== undefined && outgoing !== undefined)
-				roots.set(instruction, {
+			const incoming = ((live & ~defined) | used) >>> 0;
+			if (incoming !== live) materialized = undefined;
+			live = incoming;
+			if (selected && visit !== undefined)
+				visit(instruction, "incomingRootRegisters", live);
+			else if (all !== undefined && outgoing !== undefined)
+				roots!.set(instruction, {
 					rootRegisters: all,
 					incomingRootRegisters: (materialized ??= singleWordRootRegisters(live)),
 					outgoingRootRegisters: outgoing,
 				});
 		}
 	}
-	return roots;
 }
 
 function singleWordRootRegisters(bits: number): Array<number> {
