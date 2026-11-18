@@ -159,7 +159,7 @@ function planInteriorKeepsAdmission(
 		if (!cfg.dominates(anchorBlock, block)) return false;
 		if (
 			block !== anchorBlock &&
-			(cfg.predecessors[block] ?? []).some(({ from }) => !interior.has(from))
+			(cfg.predecessors[block] ?? []).some((edge) => !interior.has(cfg.edges.from(edge)))
 		) {
 			return false;
 		}
@@ -176,7 +176,8 @@ function planInteriorKeepsAdmission(
 		const visited = new Set<CoreBlockId>([target]);
 		while (pending.length > 0) {
 			const block = pending.pop()!;
-			for (const { from } of cfg.predecessors[block] ?? []) {
+			for (const edge of cfg.predecessors[block] ?? []) {
+				const from = cfg.edges.from(edge);
 				if (!interior.has(from)) continue;
 				markEnd(from, bodyInstructionCount(fn, from));
 				if (from === anchorBlock || visited.has(from)) continue;

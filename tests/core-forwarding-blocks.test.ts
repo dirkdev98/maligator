@@ -627,7 +627,9 @@ describe("Core empty forwarding blocks", () => {
 			const terminator = inspectCoreTerminatorPayload(fn, fn.blockTerminator(block));
 			return (
 				terminator.kind === "jump" &&
-				(cfg.predecessors[block] ?? []).every(({ kind }) => kind === "ordinary")
+				(cfg.predecessors[block] ?? []).every(
+					(edge) => cfg.edges.kind(edge) === "ordinary",
+				)
 			);
 		});
 		expect(forwarding).toEqual([]);

@@ -229,9 +229,9 @@ function singleEvaluation(
 		if (visited.size >= LIMIT) return false;
 		visited.add(block);
 		for (const edge of control.successors[block] ?? []) {
-			if (edge.to === source) continue;
-			if (edge.to === destination) return false;
-			pending.push(edge.to);
+			if (control.edges.to(edge) === source) continue;
+			if (control.edges.to(edge) === destination) return false;
+			pending.push(control.edges.to(edge));
 		}
 	}
 	return true;

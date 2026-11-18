@@ -1836,20 +1836,23 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 				if (fn.kernel.valueDefinitionKind(value) === 0) {
 					const block = coreBlockId(fn.kernel.valueDefinitionOwner(value));
 					const index = fn.kernel.valueDefinitionIndex(value);
-					const incoming =
-						context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional()
-							.predecessors[block] ?? [];
+					const control = context
+						.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS)
+						.exceptional();
+					const incoming = control.predecessors[block] ?? [];
 					if (
 						block === fn.entry ||
 						incoming.length === 0 ||
 						incoming.some(
-							(edge) => edge.kind !== "ordinary" || edge.arguments[index] === undefined,
+							(edge) =>
+								control.edges.kind(edge) !== "ordinary" ||
+								control.edges.argument(edge, index) === undefined,
 						)
 					) {
 						safe = false;
 						break;
 					}
-					for (const edge of incoming) pending.push(edge.arguments[index]!);
+					for (const edge of incoming) pending.push(control.edges.argument(edge, index)!);
 				} else {
 					const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
 					if (fn.instructionOpcodeName(definition) === "move")

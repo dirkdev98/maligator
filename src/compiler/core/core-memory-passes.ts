@@ -1809,15 +1809,15 @@ function scalarizeRootedLayout(
 		if (block === allocationBlock) continue;
 		for (const edge of control.predecessors[block] ?? []) {
 			if (
-				edge.from !== allocationBlock &&
-				!control.instructionDominatesBlock(allocationBlock, edge.from)
+				control.edges.from(edge) !== allocationBlock &&
+				!control.instructionDominatesBlock(allocationBlock, control.edges.from(edge))
 			) {
 				valid = false;
 				break;
 			}
-			if (!blocks.has(edge.from)) {
-				blocks.add(edge.from);
-				worklist.push(edge.from);
+			if (!blocks.has(control.edges.from(edge))) {
+				blocks.add(control.edges.from(edge));
+				worklist.push(control.edges.from(edge));
 			}
 		}
 	}
@@ -1867,8 +1867,8 @@ function scalarizeRootedLayout(
 						...stores.filter((store) => store.block === block).map(({ index }) => index),
 						...loads.filter((load) => load.block === block).map(({ index }) => index),
 					);
-			const liveIntoSuccessor = (control.successors[block] ?? []).some(({ to }) =>
-				blocks.has(to),
+			const liveIntoSuccessor = (control.successors[block] ?? []).some((edge) =>
+				blocks.has(control.edges.to(edge)),
 			);
 			return instructions.some((instruction, index) => {
 				if (
@@ -1896,7 +1896,7 @@ function scalarizeRootedLayout(
 		const predecessors = control.predecessors[block] ?? [];
 		if (
 			predecessors.length === 1 &&
-			predecessors[0]!.kind === "ordinary" &&
+			control.edges.kind(predecessors[0]!) === "ordinary" &&
 			!handlerTargets.has(block)
 		)
 			continue;
@@ -1950,7 +1950,7 @@ function scalarizeRootedLayout(
 					)
 				: parameters !== undefined
 					? new Map(parameters)
-					: new Map(exitFields.get(control.predecessors[block]![0]!.from));
+					: new Map(exitFields.get(control.edges.from(control.predecessors[block]![0]!)));
 		entryFields.set(block, new Map(current));
 		const instructions = [...fn.bodyInstructionIds(block)];
 		const start = block === allocationBlock ? allocationIndex + 1 : 0;
@@ -1961,8 +1961,8 @@ function scalarizeRootedLayout(
 					...stores.filter((store) => store.block === block).map(({ index }) => index),
 					...loads.filter((load) => load.block === block).map(({ index }) => index),
 				);
-		const liveIntoSuccessor = (control.successors[block] ?? []).some(({ to }) =>
-			blocks.has(to),
+		const liveIntoSuccessor = (control.successors[block] ?? []).some((edge) =>
+			blocks.has(control.edges.to(edge)),
 		);
 		for (let index = start; index < instructions.length; index++) {
 			const instruction = instructions[index]!;
@@ -2469,8 +2469,8 @@ const sinkConditionalObjectAllocations: CoreFunctionPass = {
 			// A unique incoming edge keeps one object identity per original execution, even in loops.
 			if (
 				incoming.length !== 1 ||
-				incoming[0]!.from !== source ||
-				incoming[0]!.kind !== "ordinary"
+				control.edges.from(incoming[0]!) !== source ||
+				control.edges.kind(incoming[0]!) !== "ordinary"
 			)
 				continue;
 			const operandStart = fn.kernel.instructionOperandStart(instruction);

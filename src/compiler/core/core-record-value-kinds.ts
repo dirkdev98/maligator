@@ -570,9 +570,9 @@ export function coreReturnedRecordKinds(
 			const incoming = cfg.predecessors[block] ?? [];
 			if (incoming.length === 0) return undefined;
 			for (const edge of incoming) {
-				if (!cfg.reachable.has(edge.from)) continue;
-				const input = edge.arguments[index];
-				if (--remaining < 0 || edge.kind !== "ordinary" || input === undefined)
+				if (!cfg.reachable.has(cfg.edges.from(edge))) continue;
+				const input = cfg.edges.argument(edge, index);
+				if (--remaining < 0 || cfg.edges.kind(edge) !== "ordinary" || input === undefined)
 					return undefined;
 				pending.push(input);
 			}
@@ -1001,9 +1001,13 @@ function recordAccessPrefixes(
 				)
 					return undefined;
 				for (const edge of cfg.predecessors[block] ?? []) {
-					if (!cfg.reachable.has(edge.from)) continue;
-					const argument = edge.arguments[index];
-					if (--remaining < 0 || edge.kind !== "ordinary" || argument === undefined)
+					if (!cfg.reachable.has(cfg.edges.from(edge))) continue;
+					const argument = cfg.edges.argument(edge, index);
+					if (
+						--remaining < 0 ||
+						cfg.edges.kind(edge) !== "ordinary" ||
+						argument === undefined
+					)
 						return undefined;
 					pending.push(argument);
 				}
@@ -1058,8 +1062,8 @@ function recordAccessPrefixes(
 					break;
 				}
 				for (const edge of cfg.predecessors[sourceBlock] ?? []) {
-					if (!cfg.reachable.has(edge.from)) continue;
-					if (--remaining < 0 || edge.kind !== "ordinary") {
+					if (!cfg.reachable.has(cfg.edges.from(edge))) continue;
+					if (--remaining < 0 || cfg.edges.kind(edge) !== "ordinary") {
 						valid = false;
 						break;
 					}
@@ -1067,10 +1071,14 @@ function recordAccessPrefixes(
 				}
 				continue;
 			}
-			const selectedIncoming = incoming !== undefined && sourceBlock === incoming.to;
+			const selectedIncoming =
+				incoming !== undefined && sourceBlock === cfg.edges.to(incoming);
 			let selected = value;
 			if (selectedIncoming) {
-				const argument = incoming.arguments[fn.kernel.valueDefinitionIndex(value)];
+				const argument = cfg.edges.argument(
+					incoming,
+					fn.kernel.valueDefinitionIndex(value),
+				);
 				if (argument === undefined) {
 					valid = false;
 					break;
@@ -1094,9 +1102,12 @@ function recordAccessPrefixes(
 					const receiverIncoming =
 						incoming !== undefined &&
 						fn.kernel.valueDefinitionKind(receiver) === 0 &&
-						fn.kernel.valueDefinitionOwner(receiver) === incoming.to;
+						fn.kernel.valueDefinitionOwner(receiver) === cfg.edges.to(incoming);
 					if (receiverIncoming) {
-						const argument = incoming.arguments[fn.kernel.valueDefinitionIndex(receiver)];
+						const argument = cfg.edges.argument(
+							incoming,
+							fn.kernel.valueDefinitionIndex(receiver),
+						);
 						if (argument === undefined) {
 							valid = false;
 							break;
@@ -1113,8 +1124,8 @@ function recordAccessPrefixes(
 					overwritten =
 						receiver === selected &&
 						(selectedIncoming === receiverIncoming ||
-							(selectedBlock !== incoming!.to &&
-								cfg.dominates(selectedBlock, incoming!.to)));
+							(selectedBlock !== cfg.edges.to(incoming!) &&
+								cfg.dominates(selectedBlock, cfg.edges.to(incoming!))));
 					let disjoint = false;
 					if (!overwritten && receiver !== selected) {
 						const selectedSources = sources(selected);
@@ -1149,12 +1160,16 @@ function recordAccessPrefixes(
 							// A cyclic phi's argument can belong to an earlier execution of the writer.
 							if (
 								fn.kernel.valueDefinitionKind(value) === 0 &&
-								fn.kernel.valueDefinitionOwner(value) === incoming.to &&
-								!cfg.loops.some((loop) => loop.blocks.has(incoming.to)) &&
-								!cfg.irreducibleCycles.some((cycle) => cycle.blocks.has(incoming.to))
+								fn.kernel.valueDefinitionOwner(value) === cfg.edges.to(incoming) &&
+								!cfg.loops.some((loop) => loop.blocks.has(cfg.edges.to(incoming))) &&
+								!cfg.irreducibleCycles.some((cycle) =>
+									cycle.blocks.has(cfg.edges.to(incoming)),
+								)
 							) {
-								const argument =
-									incoming.arguments[fn.kernel.valueDefinitionIndex(value)];
+								const argument = cfg.edges.argument(
+									incoming,
+									fn.kernel.valueDefinitionIndex(value),
+								);
 								if (argument === undefined) {
 									valid = false;
 									break;
@@ -1186,28 +1201,35 @@ function recordAccessPrefixes(
 				continue;
 			}
 			for (const edge of cfg.predecessors[block] ?? []) {
-				if (incoming !== undefined && block === incoming.to && edge !== incoming)
+				if (
+					incoming !== undefined &&
+					block === cfg.edges.to(incoming) &&
+					edge !== incoming
+				)
 					continue;
-				if (!cfg.reachable.has(edge.from)) continue;
+				if (!cfg.reachable.has(cfg.edges.from(edge))) continue;
 				let argument = value;
 				if (block === sourceBlock) {
 					const index = fn.kernel.valueDefinitionIndex(value);
-					const argumentValue = edge.arguments[index];
-					if (edge.kind !== "ordinary" || argumentValue === undefined) {
+					const argumentValue = cfg.edges.argument(edge, index);
+					if (cfg.edges.kind(edge) !== "ordinary" || argumentValue === undefined) {
 						valid = false;
 						break;
 					}
 					argument = argumentValue;
 				}
 				const limits =
-					edge.kind === "exceptional"
-						? exceptionalPrefixes(edge.from)
+					cfg.edges.kind(edge) === "exceptional"
+						? exceptionalPrefixes(cfg.edges.from(edge))
 						: COMPLETE_RECORD_PREFIX;
 				if (limits === undefined) {
 					valid = false;
 					break;
 				}
-				const nextIncoming = block === incoming?.to ? undefined : incoming;
+				const nextIncoming =
+					incoming !== undefined && block === cfg.edges.to(incoming)
+						? undefined
+						: incoming;
 				let memo = ordinaryMemo;
 				if (nextIncoming !== undefined) {
 					let selectedMemo = incomingMemos?.get(nextIncoming);
@@ -1219,24 +1241,27 @@ function recordAccessPrefixes(
 					memo = selectedMemo;
 				}
 				for (const limit of limits) {
-					if (edge.kind === "exceptional" && --remaining < 0) {
+					if (cfg.edges.kind(edge) === "exceptional" && --remaining < 0) {
 						valid = false;
 						break;
 					}
 					let values: Map<CoreValueId, number> | undefined;
 					if (limit === Infinity) {
-						values = memo.fullBlocks.get(edge.from);
+						values = memo.fullBlocks.get(cfg.edges.from(edge));
 						if (values === undefined)
-							memo.fullBlocks.set(edge.from, (values = new Map<CoreValueId, number>()));
+							memo.fullBlocks.set(
+								cfg.edges.from(edge),
+								(values = new Map<CoreValueId, number>()),
+							);
 					} else {
 						memo.partialBlocks ??= new Map<
 							CoreBlockId,
 							Map<number, Map<CoreValueId, number>>
 						>();
-						let prefixes = memo.partialBlocks.get(edge.from);
+						let prefixes = memo.partialBlocks.get(cfg.edges.from(edge));
 						if (prefixes === undefined)
 							memo.partialBlocks.set(
-								edge.from,
+								cfg.edges.from(edge),
 								(prefixes = new Map<number, Map<CoreValueId, number>>()),
 							);
 						values = prefixes.get(limit);
@@ -1248,7 +1273,7 @@ function recordAccessPrefixes(
 					if ((seen & state) !== 0) continue;
 					values.set(argument, seen | state);
 					pending.push({
-						block: edge.from,
+						block: cfg.edges.from(edge),
 						limit,
 						value: argument,
 						overwritten,
@@ -1392,9 +1417,13 @@ function mergedRecordFieldAccesses(
 					break;
 				}
 				for (const edge of incoming) {
-					if (!cfg.reachable.has(edge.from)) continue;
-					const argument = edge.arguments[index];
-					if (--remaining < 0 || edge.kind !== "ordinary" || argument === undefined) {
+					if (!cfg.reachable.has(cfg.edges.from(edge))) continue;
+					const argument = cfg.edges.argument(edge, index);
+					if (
+						--remaining < 0 ||
+						cfg.edges.kind(edge) !== "ordinary" ||
+						argument === undefined
+					) {
 						valid = false;
 						break;
 					}

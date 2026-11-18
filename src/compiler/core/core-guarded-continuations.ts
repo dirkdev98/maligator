@@ -66,8 +66,11 @@ export const continueGuardedCallArithmetic: CoreFunctionPass = {
 					for (let index = 0; index < fn.kernel.blockParameterCount(block); index++) {
 						if (fn.kernel.blockParameterValue(start + index) !== value) continue;
 						for (const edge of incoming) {
-							if (edge.kind === "ordinary")
-								pending.push({ value: edge.arguments[index]!, depth: depth + 1 });
+							if (control.edges.kind(edge) === "ordinary")
+								pending.push({
+									value: control.edges.argument(edge, index)!,
+									depth: depth + 1,
+								});
 						}
 						break;
 					}
@@ -120,10 +123,10 @@ export const continueGuardedCallArithmetic: CoreFunctionPass = {
 				incoming.length !== 2 ||
 				incoming.some(
 					(edge) =>
-						edge.kind !== "ordinary" ||
-						edge.from === block ||
-						control.dominates(block, edge.from) ||
-						fn.kernel.blockHandlerBlock(edge.from) !== undefined,
+						control.edges.kind(edge) !== "ordinary" ||
+						control.edges.from(edge) === block ||
+						control.dominates(block, control.edges.from(edge)) ||
+						fn.kernel.blockHandlerBlock(control.edges.from(edge)) !== undefined,
 				)
 			)
 				continue;
@@ -147,9 +150,9 @@ export const continueGuardedCallArithmetic: CoreFunctionPass = {
 				continue;
 			const parameterIndex = parameters.get(inputs[position]!)!;
 			const rows = incoming.map((edge) => ({
-				block: edge.from,
-				terminator: coreTerminatorInput(fn, fn.blockTerminator(edge.from)),
-				arguments: [...edge.arguments],
+				block: control.edges.from(edge),
+				terminator: coreTerminatorInput(fn, fn.blockTerminator(control.edges.from(edge))),
+				arguments: control.edges.arguments(edge),
 			}));
 			if (
 				rows.some(

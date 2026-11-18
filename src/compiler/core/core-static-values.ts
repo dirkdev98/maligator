@@ -829,18 +829,20 @@ export class CoreStaticValueAnalysis {
 			: this.#fn.instructionBlock(definition);
 		const endBlock = this.#fn.instructionBlock(consumer);
 		const path: Array<CoreBlockId> = [endBlock];
+		const cfg = this.#cfg();
 		while (path[path.length - 1] !== startBlock) {
 			if (++this.statistics.visits > this.#limit)
 				return { kind: "unknown", reason: "work-limit" };
-			const predecessors = this.#cfg().predecessors[path[path.length - 1]!] ?? [];
+			const predecessors = cfg.predecessors[path[path.length - 1]!] ?? [];
 			const edge = predecessors[0];
 			if (
 				predecessors.length !== 1 ||
-				edge?.kind !== "ordinary" ||
-				path.includes(edge.from)
+				edge === undefined ||
+				cfg.edges.kind(edge) !== "ordinary" ||
+				path.includes(cfg.edges.from(edge))
 			)
 				return unknownContents();
-			path.push(edge.from);
+			path.push(cfg.edges.from(edge));
 		}
 		path.reverse();
 		this.statistics.visits += description.properties.length;
@@ -1651,10 +1653,11 @@ export class CoreStaticValueAnalysis {
 			const block = coreBlockId(fn.kernel.valueDefinitionOwner(value));
 			if (block === fn.entry) return false;
 			const index = fn.kernel.valueDefinitionIndex(value);
-			return (this.#cfg().predecessors[block] ?? []).every((edge) => {
-				const input = edge.arguments[index];
+			const cfg = this.#cfg();
+			return (cfg.predecessors[block] ?? []).every((edge) => {
+				const input = cfg.edges.argument(edge, index);
 				return (
-					edge.kind !== "exceptional" &&
+					cfg.edges.kind(edge) !== "exceptional" &&
 					input !== undefined &&
 					this.#mayDescribe(input, visiting)
 				);
@@ -1717,13 +1720,21 @@ export class CoreStaticValueAnalysis {
 			const block = coreBlockId(fn.kernel.valueDefinitionOwner(value));
 			if (block === fn.entry) return { kind: "unknown", reason: "unsupported-producer" };
 			const index = fn.kernel.valueDefinitionIndex(value);
-			const incoming = this.#cfg().predecessors[block] ?? [];
+			const cfg = this.#cfg();
+			const incoming = cfg.predecessors[block] ?? [];
 			const facts: Array<CoreStaticValue> = [];
 			for (const edge of incoming) {
-				const input = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
-				if (input === undefined || edge.kind === "exceptional")
+				const input = cfg.edges.argument(
+					edge,
+					cfg.edges.kind(edge) === "exceptional" ? index - 1 : index,
+				);
+				if (input === undefined || cfg.edges.kind(edge) === "exceptional")
 					return { kind: "unknown", reason: "conflicting-join" };
-				const fact = this.#queryAt(input, fn.blockTerminator(edge.from), requestedKey);
+				const fact = this.#queryAt(
+					input,
+					fn.blockTerminator(cfg.edges.from(edge)),
+					requestedKey,
+				);
 				if (fact.kind === "unknown") return fact;
 				facts.push(fact);
 			}

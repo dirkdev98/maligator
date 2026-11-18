@@ -1240,8 +1240,11 @@ function stackObjectControlUses(
 		for (let index = 0; index < parameterCount; index++) {
 			const parameter = root(fn.kernel.blockParameterValue(parameterStart + index));
 			for (const edge of incoming) {
-				if (!control.reachable.has(edge.from)) continue;
-				const argument = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+				if (!control.reachable.has(control.edges.from(edge))) continue;
+				const argument = control.edges.argument(
+					edge,
+					control.edges.kind(edge) === "exceptional" ? index - 1 : index,
+				);
 				if (argument === undefined) continue;
 				const argumentRoot = root(argument);
 				if (argumentRoot !== parameter) escapingRoots.add(argumentRoot);
@@ -1269,9 +1272,13 @@ function stackObjectControlUses(
 	while (pending.length > 0) {
 		const block = pending.pop()!;
 		for (const edge of control.predecessors[block] ?? []) {
-			if (edge.kind !== "ordinary" || reachesExceptionTransport.has(edge.from)) continue;
-			reachesExceptionTransport.add(edge.from);
-			pending.push(edge.from);
+			if (
+				control.edges.kind(edge) !== "ordinary" ||
+				reachesExceptionTransport.has(control.edges.from(edge))
+			)
+				continue;
+			reachesExceptionTransport.add(control.edges.from(edge));
+			pending.push(control.edges.from(edge));
 		}
 	}
 	return { escapingRoots, returns, reachesExceptionTransport };
@@ -1356,16 +1363,17 @@ function unconditionalStackObjectRecurrence(
 			}
 		if (parameter < 0) continue;
 		const incoming = control.predecessors[loop.header] ?? [];
-		if (!incoming.some((edge) => !loop.blocks.has(edge.from))) return false;
+		if (!incoming.some((edge) => !loop.blocks.has(control.edges.from(edge))))
+			return false;
 		if (
 			incoming.some((edge) => {
-				const argument = edge.arguments[parameter];
+				const argument = control.edges.argument(edge, parameter);
 				return (
-					edge.kind !== "ordinary" ||
+					control.edges.kind(edge) !== "ordinary" ||
 					argument === undefined ||
-					(loop.blocks.has(edge.from)
+					(loop.blocks.has(control.edges.from(edge))
 						? root(argument) !== allocationRoot ||
-							!control.dominates(allocationBlock, edge.from)
+							!control.dominates(allocationBlock, control.edges.from(edge))
 						: aliases.has(root(argument)))
 				);
 			})
@@ -1376,15 +1384,15 @@ function unconditionalStackObjectRecurrence(
 		// then, neither a saved alias nor a second execution of the producer is safe.
 		const after = new Set<CoreBlockId>();
 		const pending = (control.successors[allocationBlock] ?? [])
-			.filter((edge) => edge.kind === "ordinary")
-			.map((edge) => edge.to);
+			.filter((edge) => control.edges.kind(edge) === "ordinary")
+			.map((edge) => control.edges.to(edge));
 		while (pending.length > 0) {
 			const block = pending.pop()!;
 			if (block === loop.header || after.has(block)) continue;
 			if (block === allocationBlock) return false;
 			after.add(block);
 			for (const edge of control.successors[block] ?? [])
-				if (edge.kind === "ordinary") pending.push(edge.to);
+				if (control.edges.kind(edge) === "ordinary") pending.push(control.edges.to(edge));
 		}
 		const staleUse = (instruction: CoreInstructionId): boolean => {
 			const block = fn.instructionBlock(instruction);
@@ -1406,7 +1414,7 @@ function unconditionalStackObjectRecurrence(
 		for (const block of [allocationBlock, ...after])
 			if (
 				(control.successors[block] ?? []).some((edge) =>
-					edge.arguments.some((value) => root(value) === carried),
+					control.edges.arguments(edge).some((value) => root(value) === carried),
 				)
 			)
 				return false;
@@ -1498,24 +1506,30 @@ function consumedStackObjectRecurrence(
 			}
 		}
 		for (const edge of control.successors[block] ?? []) {
-			if (!control.reachable.has(edge.to)) continue;
-			if (edge.kind !== "ordinary") {
+			if (!control.reachable.has(control.edges.to(edge))) continue;
+			if (control.edges.kind(edge) !== "ordinary") {
 				if ([...state.values()].some((lifetime) => lifetime & (current | expired)))
 					return false;
-				merge(edge.to, new Map(initial));
+				merge(control.edges.to(edge), new Map(initial));
 				continue;
 			}
 			// Phi arguments refer to the predecessor state, even when parameters swap
 			// aliases. Sequential rebinding could make an expired generation fresh again.
-			const arguments_ = edge.arguments.map((value) => stateOf(state, value));
+			const arguments_ = control.edges
+				.arguments(edge)
+				.map((value) => stateOf(state, value));
 			if (arguments_.some((lifetime) => lifetime & expired)) return false;
 			const next = new Map(state);
-			const start = fn.kernel.blockParameterStart(edge.to);
-			for (let offset = 0; offset < fn.kernel.blockParameterCount(edge.to); offset++) {
+			const start = fn.kernel.blockParameterStart(control.edges.to(edge));
+			for (
+				let offset = 0;
+				offset < fn.kernel.blockParameterCount(control.edges.to(edge));
+				offset++
+			) {
 				const parameter = fn.kernel.blockParameterValue(start + offset);
 				if (related(parameter)) next.set(parameter, arguments_[offset] ?? outside);
 			}
-			merge(edge.to, next);
+			merge(control.edges.to(edge), next);
 		}
 	}
 	return produced;
@@ -1574,8 +1588,8 @@ function stackObjectCandidate(
 					if (aliases.has(root)) continue;
 					if (
 						(control.predecessors[block] ?? []).some((edge) => {
-							if (edge.kind !== "ordinary") return false;
-							const argument = edge.arguments[parameterIndex];
+							if (control.edges.kind(edge) !== "ordinary") return false;
+							const argument = control.edges.argument(edge, parameterIndex);
 							return (
 								argument !== undefined && aliases.has(roots.get(argument) ?? argument)
 							);
@@ -1592,9 +1606,14 @@ function stackObjectCandidate(
 			if (
 				(control.successors[block] ?? []).some(
 					(edge) =>
-						control.dominates(edge.to, block) &&
-						control.dominates(edge.to, fn.instructionBlock(layout.instruction)) &&
-						edge.arguments.some((value) => aliases.has(roots.get(value) ?? value)),
+						control.dominates(control.edges.to(edge), block) &&
+						control.dominates(
+							control.edges.to(edge),
+							fn.instructionBlock(layout.instruction),
+						) &&
+						control.edges
+							.arguments(edge)
+							.some((value) => aliases.has(roots.get(value) ?? value)),
 				)
 			)
 				carriedAcrossAllocation = true;
@@ -2033,10 +2052,12 @@ function denseArrayCandidates(
 		}
 		const latch = [...loop.latches][0]!;
 		const incoming = (control.predecessors[loop.header] ?? []).filter(
-			({ kind }) => kind === "ordinary",
+			(edge) => control.edges.kind(edge) === "ordinary",
 		);
-		const initialEdge = incoming.find(({ from }) => from === loop.preheader);
-		const updateEdge = incoming.find(({ from }) => from === latch);
+		const initialEdge = incoming.find(
+			(edge) => control.edges.from(edge) === loop.preheader,
+		);
+		const updateEdge = incoming.find((edge) => control.edges.from(edge) === latch);
 		if (
 			counter === undefined ||
 			counterParameter < 0 ||
@@ -2045,12 +2066,16 @@ function denseArrayCandidates(
 			length > MAX_FRESH_DENSE_INDEXED_RESERVE ||
 			initialEdge === undefined ||
 			updateEdge === undefined ||
-			exactIntegerValue(fn, initialEdge.arguments[counterParameter]!, roots) !== 0 ||
+			exactIntegerValue(
+				fn,
+				control.edges.argument(initialEdge, counterParameter)!,
+				roots,
+			) !== 0 ||
 			!loop.blocks.has(bodyBlock) ||
 			loop.blocks.has(exitBlock)
 		)
 			continue;
-		const updateValue = updateEdge.arguments[counterParameter];
+		const updateValue = control.edges.argument(updateEdge, counterParameter);
 		if (updateValue === undefined) continue;
 		const update = definingInstruction(fn, roots.get(updateValue) ?? updateValue);
 		if (
@@ -2520,9 +2545,12 @@ function stringCharCodeAtCandidates(
 					)
 						continue;
 					const incoming = (control.predecessors[comparison.body] ?? []).filter(
-						({ kind }) => kind === "ordinary",
+						(edge) => control.edges.kind(edge) === "ordinary",
 					);
-					if (incoming.length !== 1 || incoming[0]!.from !== induction.loop.header)
+					if (
+						incoming.length !== 1 ||
+						control.edges.from(incoming[0]!) !== induction.loop.header
+					)
 						continue;
 					const length = specializationDefinition(fn, roots, comparison.bound);
 					if (
@@ -2693,7 +2721,8 @@ function stringSplitCursorCandidates(
 			if (seen.has(block)) continue;
 			seen.add(block);
 			for (const edge of control.successors[block] ?? []) {
-				if (edge.kind === "ordinary" && !seen.has(edge.to)) pending.push(edge.to);
+				if (control.edges.kind(edge) === "ordinary" && !seen.has(control.edges.to(edge)))
+					pending.push(control.edges.to(edge));
 			}
 		}
 		return false;
@@ -3702,8 +3731,10 @@ function exclusiveIteratorCloses(
 				);
 				for (const edge of control.predecessors[block] ?? []) {
 					const argument =
-						edge.arguments[
-							edge.kind === "exceptional" ? parameterIndex - 1 : parameterIndex
+						control.edges.arguments(edge)[
+							control.edges.kind(edge) === "exceptional"
+								? parameterIndex - 1
+								: parameterIndex
 						];
 					if (
 						argument !== undefined &&

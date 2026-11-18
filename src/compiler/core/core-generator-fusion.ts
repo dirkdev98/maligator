@@ -212,17 +212,23 @@ function protocol(
 	if (
 		predecessors.some(
 			(edge) =>
-				edge.kind !== "ordinary" ||
-				(edge.from !== initial &&
-					!control.dominatesEdge(header, dispatch.alternate.block, edge.from)),
+				control.edges.kind(edge) !== "ordinary" ||
+				(control.edges.from(edge) !== initial &&
+					!control.dominatesEdge(
+						header,
+						dispatch.alternate.block,
+						control.edges.from(edge),
+					)),
 		) ||
-		predecessors.filter((edge) => edge.from === initial).length !== 1
+		predecessors.filter((edge) => control.edges.from(edge) === initial).length !== 1
 	)
 		return undefined;
 	if (
 		predecessors.some(
 			(edge) =>
-				!["jump", "branch"].includes(fn.instructionKind(fn.blockTerminator(edge.from))),
+				!["jump", "branch"].includes(
+					fn.instructionKind(fn.blockTerminator(control.edges.from(edge))),
+				),
 		)
 	)
 		return undefined;
@@ -254,7 +260,7 @@ function protocol(
 		closes,
 		header,
 		initial,
-		predecessors: [...new Set(predecessors.map((edge) => edge.from))],
+		predecessors: [...new Set(predecessors.map((edge) => control.edges.from(edge)))],
 	};
 }
 
@@ -387,7 +393,9 @@ function generatorShape(
 				if (instruction === definition) return false;
 				if (operands(fn, instruction).includes(value)) return true;
 			}
-			pending.push(...(control.successors[at] ?? []).map((edge) => edge.to));
+			pending.push(
+				...(control.successors[at] ?? []).map((edge) => control.edges.to(edge)),
+			);
 			return false;
 		};
 		const pending: Array<CoreBlockId> = [],

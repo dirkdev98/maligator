@@ -220,7 +220,7 @@ function planLoop(
 	const exits = new Set(loop.exits.map((edge) => edge.to));
 	if (exits.size !== 1) return undefined;
 	const exit = [...exits][0]!;
-	if (cfg.predecessors[exit]!.some((edge) => !loop.blocks.has(edge.from)))
+	if (cfg.predecessors[exit]!.some((edge) => !loop.blocks.has(cfg.edges.from(edge))))
 		return undefined;
 	let size = 0;
 	let operands = 0;
@@ -251,7 +251,7 @@ function planLoop(
 		] as const) {
 			if (!loop.blocks.has(fallback.block) || !loop.blocks.has(fast.block)) continue;
 			const incoming = cfg.predecessors[fallback.block]!;
-			if (incoming.length !== 1 || incoming[0]!.from !== block) continue;
+			if (incoming.length !== 1 || cfg.edges.from(incoming[0]!) !== block) continue;
 			const fallbackEnd = coreTerminatorInput(fn, fn.blockTerminator(fallback.block));
 			if (fallbackEnd.kind !== "jump" || !loop.blocks.has(fallbackEnd.edge.block))
 				continue;
@@ -289,15 +289,16 @@ function planLoop(
 			const index = parameters(fn, block).indexOf(value);
 			if (index < 0) return false;
 			for (const edge of cfg.predecessors[block]!) {
-				const diamond = candidates.get(edge.from);
+				const diamond = candidates.get(cfg.edges.from(edge));
 				if (diamond !== undefined) {
 					selected.add(diamond);
 					continue;
 				}
+				const argument = cfg.edges.argument(edge, index);
 				if (
-					edge.kind !== "ordinary" ||
-					edge.arguments[index] === undefined ||
-					!trace(edge.arguments[index])
+					cfg.edges.kind(edge) !== "ordinary" ||
+					argument === undefined ||
+					!trace(argument)
 				)
 					return false;
 			}

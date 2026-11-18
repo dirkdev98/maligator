@@ -426,24 +426,24 @@ function projectJoinedEntryPair(
 			const first = firstInstruction(fn, block);
 			const last = entryPairConsumer(program, fn, parameter, block, first, controlUse);
 			if (last === undefined) continue;
-			control ??= buildCoreControlFlow(program, fn.id);
-			const incoming = control.predecessors[block] ?? [];
+			const cfg = (control ??= buildCoreControlFlow(program, fn.id));
+			const incoming = cfg.predecessors[block] ?? [];
 			if (
 				incoming.length !== 2 ||
 				incoming.some(
 					(edge) =>
-						edge.kind !== "ordinary" ||
-						edge.from === block ||
-						control!.dominates(block, edge.from) ||
-						fn.kernel.blockHandlerBlock(edge.from) !== undefined,
+						cfg.edges.kind(edge) !== "ordinary" ||
+						cfg.edges.from(edge) === block ||
+						cfg.dominates(block, cfg.edges.from(edge)) ||
+						fn.kernel.blockHandlerBlock(cfg.edges.from(edge)) !== undefined,
 				)
 			)
 				continue;
 			let entries = false;
 			const rows = incoming.map((edge) => ({
-				block: edge.from,
-				arguments: edge.arguments,
-				terminator: coreTerminatorInput(fn, fn.blockTerminator(edge.from)),
+				block: cfg.edges.from(edge),
+				arguments: cfg.edges.arguments(edge),
+				terminator: coreTerminatorInput(fn, fn.blockTerminator(cfg.edges.from(edge))),
 			}));
 			if (
 				rows.some((row) => {

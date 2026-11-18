@@ -226,8 +226,11 @@ function returnOriginPlan(
 				continue;
 			const inputs: Array<CoreValueId> = [];
 			for (const edge of cfg.predecessors[block] ?? []) {
-				if (!cfg.reachable.has(edge.from)) continue;
-				const input = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+				if (!cfg.reachable.has(cfg.edges.from(edge))) continue;
+				const input = cfg.edges.argument(
+					edge,
+					cfg.edges.kind(edge) === "exceptional" ? index - 1 : index,
+				);
 				if (input !== undefined) inputs.push(input);
 			}
 			if (inputs.length > 0) node = { value, inputs };
@@ -461,8 +464,9 @@ function conditionalOwnSlotEffects(
 			if (fn.kernel.valueDefinitionKind(candidate) === 0) {
 				const index = fn.kernel.valueDefinitionIndex(candidate);
 				for (const edge of cfg.predecessors[owner as CoreBlockId] ?? []) {
-					const incoming = edge.arguments[index];
-					if (edge.kind === "ordinary" && incoming !== undefined) pending.push(incoming);
+					const incoming = cfg.edges.argument(edge, index);
+					if (cfg.edges.kind(edge) === "ordinary" && incoming !== undefined)
+						pending.push(incoming);
 				}
 			} else if (
 				fn.kernel.valueDefinitionKind(candidate) === 1 &&
@@ -634,8 +638,11 @@ function analyzeLocalSummary(
 			}
 			const incoming: Array<CoreValueId> = [];
 			for (const edge of cfg.predecessors[block] ?? []) {
-				if (!cfg.reachable.has(edge.from)) continue;
-				const argument = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+				if (!cfg.reachable.has(cfg.edges.from(edge))) continue;
+				const argument = cfg.edges.argument(
+					edge,
+					cfg.edges.kind(edge) === "exceptional" ? index - 1 : index,
+				);
 				if (argument !== undefined) incoming.push(argument);
 			}
 			if (incoming.length === 0) continue;

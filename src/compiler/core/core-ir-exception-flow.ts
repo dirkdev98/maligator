@@ -89,7 +89,8 @@ export function analyzeCoreLocalExceptionFlows(
 				!blockedHandlers.has(handler) &&
 				(cfg.predecessors[handler] ?? []).every(
 					(edge) =>
-						edge.kind === "exceptional" && candidateSources.get(edge.from) === handler,
+						cfg.edges.kind(edge) === "exceptional" &&
+						candidateSources.get(cfg.edges.from(edge)) === handler,
 				);
 			handlerEligibility.set(handler, eligible);
 		}

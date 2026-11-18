@@ -438,7 +438,8 @@ function alwaysObserved(
 	while (pending.length > 0) {
 		const successors = cfg.successors[pending.pop()!] ?? [];
 		if (successors.length === 0) return false;
-		for (const { to } of successors) {
+		for (const edge of successors) {
+			const to = cfg.edges.to(edge);
 			if (observed.has(to) || seen.has(to)) continue;
 			seen.add(to);
 			pending.push(to);

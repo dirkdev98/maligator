@@ -583,7 +583,10 @@ function privateArrayUses(
 			if (fn.kernel.blockParameterRole(row) === 1) continue;
 			const parameterRoot = root(fn.kernel.blockParameterValue(row));
 			for (const edge of incoming) {
-				const argument = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+				const argument = cfg.edges.argument(
+					edge,
+					cfg.edges.kind(edge) === "exceptional" ? index - 1 : index,
+				);
 				if (argument === undefined) continue;
 				const argumentRoot = root(argument);
 				if (candidates.has(argumentRoot) && parameterRoot !== argumentRoot) {
@@ -1230,7 +1233,7 @@ function solveCoreValueKinds(
 			// A no-throw proof can retire a catch edge before its outgoing edges are removed.
 			incoming = (cfg.predecessors[block] ?? []).filter(
 				(edge) =>
-					cfg.reachable.has(edge.from) &&
+					cfg.reachable.has(cfg.edges.from(edge)) &&
 					(inputs?.controlEdges === undefined || inputs.controlEdges.has(edge)),
 			);
 			filteredIncoming.set(block, incoming);
@@ -1254,7 +1257,10 @@ function solveCoreValueKinds(
 		) {
 			incomingValues = [];
 			for (const edge of incoming) {
-				const value = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+				const value = cfg.edges.argument(
+					edge,
+					cfg.edges.kind(edge) === "exceptional" ? index - 1 : index,
+				);
 				if (value !== undefined) incomingValues.push(value);
 			}
 			if (
@@ -1867,7 +1873,7 @@ export function coreValueKindDemand(
 			}
 			const cfg = control();
 			const incoming = (cfg.predecessors[block] ?? []).filter((edge) =>
-				cfg.reachable.has(edge.from),
+				cfg.reachable.has(cfg.edges.from(edge)),
 			);
 			if (incoming.length === 0) {
 				fixed.set(value, COMPILER_VALUE_KIND_TOP);
@@ -1875,7 +1881,10 @@ export function coreValueKindDemand(
 			}
 			const values: Array<CoreValueId> = [];
 			for (const edge of incoming) {
-				const input = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+				const input = cfg.edges.argument(
+					edge,
+					cfg.edges.kind(edge) === "exceptional" ? index - 1 : index,
+				);
 				if (input !== undefined) values.push(input);
 			}
 			addKindTransfer(transfers, KIND_TRANSFER_JOIN, value, 0, values);

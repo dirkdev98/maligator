@@ -142,19 +142,23 @@ export function analyzeCoreNativeEntryControlFlow(
 					? compilerIntegerRangeTruthiness(range(condition, block))
 					: undefined);
 			if (decision !== undefined)
-				selected = cfg.successors[block]!.filter((edge) => edge.kind === "ordinary")[
-					decision ? 0 : 1
-				];
+				selected = cfg.successors[block]!.filter(
+					(edge) => cfg.edges.kind(edge) === "ordinary",
+				)[decision ? 0 : 1];
 		}
 		let ordinal = fn.kernel.terminatorEdgeStart(terminator);
 		for (const edge of cfg.successors[block] ?? []) {
-			const ordinary = edge.kind === "ordinary" ? ordinal++ : undefined;
+			const ordinary = cfg.edges.kind(edge) === "ordinary" ? ordinal++ : undefined;
 			if (allowedEdges !== undefined && !allowedEdges.has(edge)) continue;
 			// Distinct branch edges can carry different phi arguments to the same block.
-			if (selected === undefined || edge.kind === "exceptional" || edge === selected) {
+			if (
+				selected === undefined ||
+				cfg.edges.kind(edge) === "exceptional" ||
+				edge === selected
+			) {
 				edges.add(edge);
 				if (ordinary !== undefined) ordinaryEdges.add(ordinary);
-				pending.push(edge.to);
+				pending.push(cfg.edges.to(edge));
 			}
 		}
 	}

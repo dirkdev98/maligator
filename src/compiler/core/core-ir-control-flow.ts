@@ -16,15 +16,17 @@ import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export type CoreControlEdgeKind = "ordinary" | "exceptional";
 
-export interface CoreControlEdge {
-	readonly from: CoreBlockId;
-	readonly to: CoreBlockId;
-	readonly kind: CoreControlEdgeKind;
-	readonly arguments: ReadonlyArray<CoreValueId>;
-}
+declare const controlEdgeBrand: unique symbol;
+export type CoreControlEdge = number & { readonly [controlEdgeBrand]: true };
 
 /** Edge points refine predecessor values after the branch outcome is known. */
 export type CoreControlPoint = CoreBlockId | CoreControlEdge;
+
+export function coreControlPointIsEdge(
+	point: CoreControlPoint,
+): point is CoreControlEdge {
+	return point < 0;
+}
 
 export interface CoreNaturalLoop {
 	readonly header: CoreBlockId;
@@ -50,6 +52,7 @@ export interface CoreControlFlow {
 	readonly function: CoreFunctionId;
 	readonly cfgVersion: number;
 	readonly exceptionFlowVersion: number;
+	readonly edges: CoreControlEdges;
 	readonly successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>;
 	readonly predecessors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>;
 	readonly reachable: ReadonlySet<CoreBlockId>;
@@ -66,6 +69,7 @@ export interface CoreStructuralControlFlow {
 	readonly function: CoreFunctionId;
 	readonly cfgVersion: number;
 	readonly exceptionFlowVersion: number;
+	readonly edges: CoreControlEdges;
 	readonly successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>;
 	readonly predecessors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>;
 	readonly reachable: ReadonlySet<CoreBlockId>;
@@ -83,53 +87,88 @@ export interface BuildCoreControlFlowOptions {
 }
 
 const runWithoutOwner: CoreOptimizationOwnerRunner = (_owner, run) => run();
-// CFG arrays stay unfrozen because V8 does not inline iteration or indexed reads on
-// frozen arrays: each for-of step would allocate an iterator result, and every Core
-// analysis walks these arrays. Their readonly types keep consumers from mutating them.
+const NO_CONTROL_EDGES: ReadonlyArray<CoreControlEdge> = [];
 const emptyEdgeArguments: ReadonlyArray<CoreValueId> = [];
 
-// A shared getter avoids accessor closures per edge while body edits refresh lazy operands.
-class ArgumentControlEdge implements CoreControlEdge {
-	readonly from: CoreBlockId;
-	readonly to: CoreBlockId;
-	readonly kind: CoreControlEdgeKind;
+// Negative IDs distinguish edges from block control points. Exceptional edges
+// use their source block as the row, so adding them never renumbers ordinary edges.
+function ordinaryEdge(row: number): CoreControlEdge {
+	return -(row * 2 + 1) as CoreControlEdge;
+}
+
+function exceptionalEdge(block: CoreBlockId): CoreControlEdge {
+	return -(block * 2 + 2) as CoreControlEdge;
+}
+
+function edgeRow(edge: CoreControlEdge): number {
+	return ~edge >>> 1;
+}
+
+/** Endpoints and operand ranges belong to the topology revision that named them. */
+export class CoreControlEdges {
 	readonly #fn: CoreFunctionStore;
-	readonly #start: number;
-	readonly #count: number;
-	#version = -1;
-	#arguments: ReadonlyArray<CoreValueId> | undefined;
+	readonly #ordinary: ReadonlyArray<number>;
+	readonly #exceptional: Int32Array | undefined;
 
 	constructor(
 		fn: CoreFunctionStore,
-		from: CoreBlockId,
-		to: CoreBlockId,
-		kind: CoreControlEdgeKind,
-		start: number,
-		count: number,
+		ordinary: ReadonlyArray<number>,
+		exceptional?: Int32Array,
 	) {
 		this.#fn = fn;
-		this.from = from;
-		this.to = to;
-		this.kind = kind;
-		this.#start = start;
-		this.#count = count;
+		this.#ordinary = ordinary;
+		this.#exceptional = exceptional;
 	}
 
-	get arguments(): ReadonlyArray<CoreValueId> {
-		const version = this.#fn.version("body");
-		if (this.#arguments === undefined || version !== this.#version) {
-			const arguments_ = new Array<CoreValueId>(this.#count);
-			if (this.kind === "ordinary") {
-				for (let index = 0; index < this.#count; index++)
-					arguments_[index] = this.#fn.kernel.operandAt(this.#start + index);
-			} else {
-				for (let index = 0; index < this.#count; index++)
-					arguments_[index] = this.#fn.kernel.handlerArgumentAt(this.#start + index);
-			}
-			this.#version = version;
-			this.#arguments = arguments_;
+	withExceptional(rows: Int32Array): CoreControlEdges {
+		return new CoreControlEdges(this.#fn, this.#ordinary, rows);
+	}
+
+	kind(edge: CoreControlEdge): CoreControlEdgeKind {
+		return (edge & 1) === 0 ? "exceptional" : "ordinary";
+	}
+
+	from(edge: CoreControlEdge): CoreBlockId {
+		const row = edgeRow(edge);
+		return ((edge & 1) === 0 ? row : this.#ordinary[row * 4]!) as CoreBlockId;
+	}
+
+	to(edge: CoreControlEdge): CoreBlockId {
+		const row = edgeRow(edge);
+		return (
+			(edge & 1) === 0 ? this.#exceptional![row * 3]! : this.#ordinary[row * 4 + 1]!
+		) as CoreBlockId;
+	}
+
+	argumentCount(edge: CoreControlEdge): number {
+		const row = edgeRow(edge);
+		return (edge & 1) === 0
+			? this.#exceptional![row * 3 + 2]!
+			: this.#ordinary[row * 4 + 3]!;
+	}
+
+	argument(edge: CoreControlEdge, index: number): CoreValueId | undefined {
+		this.#fn.assertCurrentGeneration();
+		const row = edgeRow(edge);
+		const kernel = this.#fn.kernel;
+		if ((edge & 1) !== 0) {
+			const offset = row * 4;
+			return index < 0 || index >= this.#ordinary[offset + 3]!
+				? undefined
+				: kernel.operandAt(this.#ordinary[offset + 2]! + index);
 		}
-		return this.#arguments;
+		const offset = row * 3;
+		return index < 0 || index >= this.#exceptional![offset + 2]!
+			? undefined
+			: kernel.handlerArgumentAt(this.#exceptional![offset + 1]! + index);
+	}
+
+	arguments(edge: CoreControlEdge): ReadonlyArray<CoreValueId> {
+		const count = this.argumentCount(edge);
+		if (count === 0) return emptyEdgeArguments;
+		const values: Array<CoreValueId> = [];
+		for (let index = 0; index < count; index++) values.push(this.argument(edge, index)!);
+		return values;
 	}
 }
 
@@ -198,66 +237,145 @@ function exceptionalExitsMatch(
 	for (let index = 0; index < fn.handlerBlockCount; index++) {
 		const block = fn.handlerBlockAt(index);
 		const outgoing = structural.successors[block]!;
-		const hadExit = outgoing.at(-1)?.kind === "exceptional";
+		const last = outgoing.at(-1);
+		const hadExit = last !== undefined && structural.edges.kind(last) === "exceptional";
 		if (hadExit !== blockHasExceptionalExit(fn, block)) return false;
 	}
 	return true;
 }
 
+type CoreAdjacency = ReadonlyArray<ReadonlyArray<CoreControlEdge>>;
+
 function buildEdges(fn: CoreFunctionStore): {
-	readonly successors: Array<Array<CoreControlEdge>>;
-	readonly predecessors: Array<Array<CoreControlEdge>>;
+	readonly successors: CoreAdjacency;
+	readonly predecessors: CoreAdjacency;
+	readonly edges: CoreControlEdges;
 } {
-	const successors = new Array<Array<CoreControlEdge>>(fn.blockCapacity);
-	const predecessors = new Array<Array<CoreControlEdge>>(fn.blockCapacity);
-	const empty: Array<CoreControlEdge> = [];
+	const successors = new Array<ReadonlyArray<CoreControlEdge>>(fn.blockCapacity);
+	const predecessors = new Array<ReadonlyArray<CoreControlEdge>>(fn.blockCapacity);
+	const counts = new Uint32Array(fn.blockCapacity);
+	const rows: Array<number> = [];
 	for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
 		const block = coreBlockId(blockIndex);
 		if (fn.kernel.blockLive(block) === 0) continue;
-		successors[block] = empty;
-		predecessors[block] = empty;
+		predecessors[block] = NO_CONTROL_EDGES;
 		const terminator = fn.blockTerminator(block);
 		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
 		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
+		if (edgeCount === 0) {
+			successors[block] = NO_CONTROL_EDGES;
+			continue;
+		}
+		const outgoing = new Array<CoreControlEdge>(edgeCount);
+		successors[block] = outgoing;
 		for (let offset = 0; offset < edgeCount; offset++) {
-			const edge = edgeStart + offset;
-			const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edge);
-			const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edge);
-			let controlEdge: CoreControlEdge;
-			if (argumentCount === 0) {
-				controlEdge = {
-					from: block,
-					to: fn.kernel.terminatorEdgeBlock(edge),
-					kind: "ordinary",
-					arguments: emptyEdgeArguments,
-				};
-			} else {
-				controlEdge = new ArgumentControlEdge(
-					fn,
-					block,
-					fn.kernel.terminatorEdgeBlock(edge),
-					"ordinary",
-					argumentStart,
-					argumentCount,
-				);
+			const row = edgeStart + offset;
+			const to = fn.kernel.terminatorEdgeBlock(row);
+			outgoing[offset] = ordinaryEdge(rows.length / 4);
+			rows.push(
+				block,
+				to,
+				fn.kernel.terminatorEdgeArgumentStart(row),
+				fn.kernel.terminatorEdgeArgumentCount(row),
+			);
+			counts[to]!++;
+		}
+	}
+	// The backward fill preserves predecessor order, including duplicate edges
+	// from a branch or switch to the same block.
+	for (let offset = rows.length - 4; offset >= 0; offset -= 4) {
+		const from = rows[offset]! as CoreBlockId;
+		const to = rows[offset + 1]! as CoreBlockId;
+		const edge = ordinaryEdge(offset / 4);
+		const index = --counts[to]!;
+		const incoming = predecessors[to];
+		if (incoming === undefined || incoming === NO_CONTROL_EDGES) {
+			const outgoing = successors[from]!;
+			if (index === 0) {
+				predecessors[to] = outgoing.length === 1 ? outgoing : [edge];
+				continue;
 			}
-			if (successors[block] === empty) successors[block] = [];
-			successors[block].push(controlEdge);
+			predecessors[to] = new Array<CoreControlEdge>(index + 1);
+		}
+		(predecessors[to] as Array<CoreControlEdge>)[index] = edge;
+	}
+	return { successors, predecessors, edges: new CoreControlEdges(fn, rows) };
+}
+
+class CoreBlockTopology {
+	readonly #successors: CoreAdjacency;
+	readonly #predecessors: CoreAdjacency;
+	readonly #edges: CoreControlEdges;
+	readonly #exitNodes: Uint32Array | undefined;
+	readonly #exitSources: Array<CoreBlockId> = [];
+
+	constructor(
+		successors: CoreAdjacency,
+		predecessors: CoreAdjacency,
+		edges: CoreControlEdges,
+		split = false,
+	) {
+		this.#successors = successors;
+		this.#predecessors = predecessors;
+		this.#edges = edges;
+		if (split) {
+			const exits = new Uint32Array(successors.length);
+			for (let block = 0; block < successors.length; block++) {
+				const last = successors[block]?.at(-1);
+				if (last === undefined || edges.kind(last) !== "exceptional") continue;
+				exits[block] = successors.length + this.#exitSources.push(coreBlockId(block));
+			}
+			this.#exitNodes = exits;
 		}
 	}
-	for (const outgoing of successors) {
-		if (outgoing === undefined) continue;
-		for (const edge of outgoing) {
-			if (predecessors[edge.to] === empty) predecessors[edge.to] = [];
-			(predecessors[edge.to] ??= []).push(edge);
-		}
+
+	get capacity(): number {
+		return this.#successors.length + this.#exitSources.length;
 	}
-	return { successors, predecessors };
+
+	exitOf(block: CoreBlockId): CoreBlockId {
+		const exit = this.#exitNodes?.[block] ?? 0;
+		return exit === 0 ? block : coreBlockId(exit - 1);
+	}
+
+	successorCount(block: CoreBlockId): number {
+		if (block >= this.#successors.length) {
+			const source = this.#exitSources[block - this.#successors.length]!;
+			return this.#successors[source]!.length - 1;
+		}
+		if (this.exitOf(block) !== block) return 2;
+		return this.#successors[block]?.length ?? 0;
+	}
+
+	successorAt(block: CoreBlockId, index: number): CoreBlockId {
+		if (block >= this.#successors.length)
+			return this.#edges.to(
+				this.#successors[this.#exitSources[block - this.#successors.length]!]![index]!,
+			);
+		const outgoing = this.#successors[block]!;
+		const exit = this.exitOf(block);
+		if (exit === block) return this.#edges.to(outgoing[index]!);
+		return index === 0 ? exit : this.#edges.to(outgoing[outgoing.length - 1]!);
+	}
+
+	predecessorCount(block: CoreBlockId): number {
+		return block >= this.#successors.length
+			? 1
+			: (this.#predecessors[block]?.length ?? 0);
+	}
+
+	predecessorAt(block: CoreBlockId, index: number): CoreBlockId {
+		if (block >= this.#successors.length)
+			return this.#exitSources[block - this.#successors.length]!;
+		const edge = this.#predecessors[block]![index]!;
+		const source = this.#edges.from(edge);
+		return this.#edges.kind(edge) === "ordinary" ? this.exitOf(source) : source;
+	}
 }
 
 function traversal(
 	entry: CoreBlockId,
-	successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
+	topology: CoreBlockTopology,
 ): {
 	readonly reachable: Set<CoreBlockId>;
 	readonly reversePostorder: Array<CoreBlockId>;
@@ -270,10 +388,9 @@ function traversal(
 	while (depth > 0) {
 		const frame = depth - 1;
 		const block = pending[frame]!;
-		const outgoing = successors[block] ?? [];
 		const next = cursors[frame]!;
-		if (next < outgoing.length) {
-			const target = outgoing[next]!.to;
+		if (next < topology.successorCount(block)) {
+			const target = topology.successorAt(block, next);
 			cursors[frame] = next + 1;
 			if (!reachable.has(target)) {
 				reachable.add(target);
@@ -292,13 +409,13 @@ function buildStructural(
 	fn: CoreFunctionStore,
 	runOwner: CoreOptimizationOwnerRunner,
 ): CoreStructuralControlFlow {
-	const { successors, predecessors } = runOwner(
+	const { successors, predecessors, edges } = runOwner(
 		CORE_OPTIMIZATION_OWNER.cfgEdgeConstruction,
 		() => buildEdges(fn),
 	);
 	const { reachable, reversePostorder } = runOwner(
 		CORE_OPTIMIZATION_OWNER.controlFlowTraversal,
-		() => traversal(fn.entry, successors),
+		() => traversal(fn.entry, new CoreBlockTopology(successors, predecessors, edges)),
 	);
 	return Object.freeze({
 		function: fn.id,
@@ -306,6 +423,7 @@ function buildStructural(
 		exceptionFlowVersion: 0,
 		successors,
 		predecessors,
+		edges,
 		reachable: Object.freeze(reachable),
 		reversePostorder,
 	});
@@ -316,11 +434,12 @@ function buildExceptionalStructural(
 	ordinary: CoreStructuralControlFlow,
 	runOwner: CoreOptimizationOwnerRunner,
 ): CoreStructuralControlFlow {
-	const { successors, predecessors } = runOwner(
+	const { successors, predecessors, edges } = runOwner(
 		CORE_OPTIMIZATION_OWNER.cfgEdgeConstruction,
 		() => {
 			const successors = ordinary.successors.slice() as Array<Array<CoreControlEdge>>;
 			const predecessors = ordinary.predecessors.slice() as Array<Array<CoreControlEdge>>;
+			const rows = new Int32Array(fn.blockCapacity * 3);
 			const mutablePredecessors = new Set<CoreBlockId>();
 			const handlerBlocks = Array.from({ length: fn.handlerBlockCount }, (_, index) =>
 				fn.handlerBlockAt(index),
@@ -330,17 +449,10 @@ function buildExceptionalStructural(
 				if (handler === undefined || !blockHasExceptionalExit(fn, block)) continue;
 				const start = fn.kernel.blockHandlerArgumentStart(block);
 				const count = fn.kernel.blockHandlerArgumentCount(block);
-				let edge: CoreControlEdge;
-				if (count === 0) {
-					edge = {
-						from: block,
-						to: handler,
-						kind: "exceptional",
-						arguments: emptyEdgeArguments,
-					};
-				} else {
-					edge = new ArgumentControlEdge(fn, block, handler, "exceptional", start, count);
-				}
+				const edge = exceptionalEdge(block);
+				rows[block * 3] = handler;
+				rows[block * 3 + 1] = start;
+				rows[block * 3 + 2] = count;
 				successors[block] = [...(successors[block] ?? []), edge];
 				if (!mutablePredecessors.has(handler)) {
 					predecessors[handler] = [...(predecessors[handler] ?? [])];
@@ -348,12 +460,12 @@ function buildExceptionalStructural(
 				}
 				predecessors[handler]!.push(edge);
 			}
-			return { successors, predecessors };
+			return { successors, predecessors, edges: ordinary.edges.withExceptional(rows) };
 		},
 	);
 	const { reachable, reversePostorder } = runOwner(
 		CORE_OPTIMIZATION_OWNER.controlFlowTraversal,
-		() => traversal(fn.entry, successors),
+		() => traversal(fn.entry, new CoreBlockTopology(successors, predecessors, edges)),
 	);
 	return Object.freeze({
 		function: fn.id,
@@ -361,6 +473,7 @@ function buildExceptionalStructural(
 		exceptionFlowVersion: fn.version("exceptionFlow"),
 		successors,
 		predecessors,
+		edges,
 		reachable: Object.freeze(reachable),
 		reversePostorder,
 	});
@@ -369,11 +482,10 @@ function buildExceptionalStructural(
 function immediateDominators(
 	entry: CoreBlockId,
 	reversePostorder: ReadonlyArray<CoreBlockId>,
-	predecessors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
-	successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
+	topology: CoreBlockTopology,
 	scratch: CoreAnalysisScratchPool,
 ): Array<CoreBlockId | null> {
-	const length = predecessors.length;
+	const length = topology.capacity;
 	if (reversePostorder.length === 1)
 		return new Array<CoreBlockId | null>(length).fill(null);
 	const orderLease = scratch.leaseInt32(length);
@@ -406,14 +518,18 @@ function immediateDominators(
 			const block = queue[cursor++]!;
 			queued[block] = 0;
 			let next: number | undefined;
-			for (const edge of predecessors[block] ?? []) {
-				if (dominators[edge.from]! < 0) continue;
-				next = next === undefined ? edge.from : intersect(next, edge.from);
+			const predecessors = topology.predecessorCount(block);
+			for (let index = 0; index < predecessors; index++) {
+				const from = topology.predecessorAt(block, index);
+				if (dominators[from]! < 0) continue;
+				next = next === undefined ? from : intersect(next, from);
 			}
 			if (next === undefined) continue;
 			if (dominators[block] === next) continue;
 			dominators[block] = next;
-			for (const { to: successor } of successors[block] ?? []) {
+			const successors = topology.successorCount(block);
+			for (let index = 0; index < successors; index++) {
+				const successor = topology.successorAt(block, index);
 				if (successor === entry || queued[successor] !== 0) continue;
 				queued[successor] = 1;
 				queue.push(successor);
@@ -436,10 +552,15 @@ function dominatorPredicate(
 ): (dominator: CoreBlockId, block: CoreBlockId) => boolean {
 	if (reachable.size === 1)
 		return (dominator, block) => dominator === entry && block === entry;
-	const children = parents.map(() => new Array<CoreBlockId>());
+	const children = new Int32Array(parents.length);
+	const siblings = new Int32Array(parents.length);
+	children.fill(-1);
+	siblings.fill(-1);
 	for (const block of reachable) {
 		const parent = parents[block];
-		if (parent !== null && parent !== undefined) children[parent]!.push(block);
+		if (parent === null || parent === undefined) continue;
+		siblings[block] = children[parent]!;
+		children[parent] = block;
 	}
 	const entries = new Int32Array(parents.length);
 	const exits = new Int32Array(parents.length);
@@ -447,25 +568,25 @@ function dominatorPredicate(
 	exits.fill(-1);
 	let clock = 0;
 	const pending: Array<CoreBlockId> = [entry];
-	const cursors = [0];
+	const cursors = [children[entry]!];
 	let depth = 1;
 	entries[entry] = clock++;
 	while (depth > 0) {
 		const frame = depth - 1;
 		const block = pending[frame]!;
-		const descendants = children[block] ?? [];
 		const next = cursors[frame]!;
-		if (next < descendants.length) {
-			const child = descendants[next]!;
-			cursors[frame] = next + 1;
+		if (next >= 0) {
+			const child = coreBlockId(next);
+			cursors[frame] = siblings[child]!;
 			entries[child] = clock++;
 			pending[depth] = child;
-			cursors[depth++] = 0;
+			cursors[depth++] = children[child]!;
 			continue;
 		}
 		exits[block] = clock++;
 		depth--;
 	}
+
 	return (dominator, block) =>
 		entries[dominator]! >= 0 &&
 		entries[block]! >= entries[dominator]! &&
@@ -476,6 +597,7 @@ function cyclicComponents(
 	allowed: ReadonlySet<CoreBlockId>,
 	successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
 	predecessors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
+	edges: CoreControlEdges,
 ): Array<ReadonlySet<CoreBlockId>> {
 	const visited = new Uint8Array(successors.length);
 	const postorder: Array<CoreBlockId> = [];
@@ -495,10 +617,14 @@ function cyclicComponents(
 			while (cursors[frame]! < outgoing.length) {
 				const edge = outgoing[cursors[frame]!]!;
 				cursors[frame]!++;
-				if (edge.kind !== "ordinary" || !allowed.has(edge.to) || visited[edge.to] !== 0)
+				if (
+					edges.kind(edge) !== "ordinary" ||
+					!allowed.has(edges.to(edge)) ||
+					visited[edges.to(edge)] !== 0
+				)
 					continue;
-				visited[edge.to] = 1;
-				pending[depth] = edge.to;
+				visited[edges.to(edge)] = 1;
+				pending[depth] = edges.to(edge);
 				cursors[depth++] = 0;
 				advanced = true;
 				break;
@@ -522,13 +648,13 @@ function cyclicComponents(
 			blocks.add(block);
 			for (const edge of predecessors[block] ?? []) {
 				if (
-					edge.kind !== "ordinary" ||
-					!allowed.has(edge.from) ||
-					assigned[edge.from] !== 0
+					edges.kind(edge) !== "ordinary" ||
+					!allowed.has(edges.from(edge)) ||
+					assigned[edges.from(edge)] !== 0
 				)
 					continue;
-				assigned[edge.from] = 1;
-				componentPending.push(edge.from);
+				assigned[edges.from(edge)] = 1;
+				componentPending.push(edges.from(edge));
 			}
 		}
 		components.push(blocks);
@@ -540,6 +666,7 @@ function findIrreducibleCycles(
 	entry: CoreBlockId,
 	successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
 	predecessors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
+	edges: CoreControlEdges,
 	reachable: ReadonlySet<CoreBlockId>,
 	dominates: (dominator: CoreBlockId, block: CoreBlockId) => boolean,
 ): ReadonlyArray<CoreIrreducibleCycle> {
@@ -547,10 +674,12 @@ function findIrreducibleCycles(
 		blocks.size > 1 ||
 		[...blocks].some((block) =>
 			(successors[block] ?? []).some(
-				(edge) => edge.kind === "ordinary" && edge.to === block,
+				(edge) => edges.kind(edge) === "ordinary" && edges.to(edge) === block,
 			),
 		);
-	const pending = cyclicComponents(reachable, successors, predecessors).filter(isCyclic);
+	const pending = cyclicComponents(reachable, successors, predecessors, edges).filter(
+		isCyclic,
+	);
 	const result: Array<CoreIrreducibleCycle> = [];
 	while (pending.length > 0) {
 		const blocks = pending.pop()!;
@@ -559,9 +688,9 @@ function findIrreducibleCycles(
 		for (const block of blocks) {
 			for (const edge of predecessors[block] ?? []) {
 				if (
-					edge.kind === "ordinary" &&
-					reachable.has(edge.from) &&
-					!blocks.has(edge.from)
+					edges.kind(edge) === "ordinary" &&
+					reachable.has(edges.from(edge)) &&
+					!blocks.has(edges.from(edge))
 				)
 					entries.add(block);
 			}
@@ -573,7 +702,9 @@ function findIrreducibleCycles(
 		}
 		const nested = new Set(blocks);
 		nested.delete(header);
-		pending.push(...cyclicComponents(nested, successors, predecessors).filter(isCyclic));
+		pending.push(
+			...cyclicComponents(nested, successors, predecessors, edges).filter(isCyclic),
+		);
 	}
 	return result.sort(
 		(left, right) => Math.min(...left.blocks) - Math.min(...right.blocks),
@@ -584,6 +715,7 @@ function naturalLoops(
 	fn: CoreFunctionStore,
 	successors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
 	predecessors: ReadonlyArray<ReadonlyArray<CoreControlEdge>>,
+	edges: CoreControlEdges,
 	reachable: ReadonlySet<CoreBlockId>,
 	reversePostorder: ReadonlyArray<CoreBlockId>,
 	dominates: (dominator: CoreBlockId, block: CoreBlockId) => boolean,
@@ -608,12 +740,12 @@ function naturalLoops(
 	let hasNonNaturalRetreatingEdge = false;
 	for (const from of reachable) {
 		for (const edge of successors[from] ?? []) {
-			if (edge.kind !== "ordinary") continue;
-			if (dominates(edge.to, from)) {
-				const latches = latchesByHeader.get(edge.to) ?? new Set<CoreBlockId>();
+			if (edges.kind(edge) !== "ordinary") continue;
+			if (dominates(edges.to(edge), from)) {
+				const latches = latchesByHeader.get(edges.to(edge)) ?? new Set<CoreBlockId>();
 				latches.add(from);
-				latchesByHeader.set(edge.to, latches);
-			} else if (reverseIndex[edge.to]! <= reverseIndex[from]!) {
+				latchesByHeader.set(edges.to(edge), latches);
+			} else if (reverseIndex[edges.to(edge)]! <= reverseIndex[from]!) {
 				hasNonNaturalRetreatingEdge = true;
 			}
 		}
@@ -626,20 +758,20 @@ function naturalLoops(
 			const current = pending.pop()!;
 			for (const edge of predecessors[current] ?? []) {
 				if (
-					edge.kind !== "ordinary" ||
-					!reachable.has(edge.from) ||
-					blocks.has(edge.from)
+					edges.kind(edge) !== "ordinary" ||
+					!reachable.has(edges.from(edge)) ||
+					blocks.has(edges.from(edge))
 				)
 					continue;
-				blocks.add(edge.from);
-				if (edge.from !== header) pending.push(edge.from);
+				blocks.add(edges.from(edge));
+				if (edges.from(edge) !== header) pending.push(edges.from(edge));
 			}
 		}
 		const ordinaryIncoming = (predecessors[header] ?? []).filter(
-			({ kind }) => kind === "ordinary",
+			(edge) => edges.kind(edge) === "ordinary",
 		);
-		const outside = ordinaryIncoming.filter(({ from }) => !blocks.has(from));
-		const outsideSource = outside.length === 1 ? outside[0]!.from : undefined;
+		const outside = ordinaryIncoming.filter((edge) => !blocks.has(edges.from(edge)));
+		const outsideSource = outside.length === 1 ? edges.from(outside[0]!) : undefined;
 		const preheader =
 			outsideSource !== undefined &&
 			jumpsTo(outsideSource, header) &&
@@ -652,15 +784,15 @@ function naturalLoops(
 		>();
 		for (const from of blocks) {
 			for (const edge of successors[from] ?? []) {
-				if (edge.kind !== "ordinary" || blocks.has(edge.to)) continue;
-				exitByEdge.set(`${from}\0${edge.to}`, { from, to: edge.to });
+				if (edges.kind(edge) !== "ordinary" || blocks.has(edges.to(edge))) continue;
+				exitByEdge.set(`${from}\0${edges.to(edge)}`, { from, to: edges.to(edge) });
 			}
 		}
 		const exits = [...exitByEdge.values()].map(({ from, to }) => ({
 			from,
 			to,
 			dedicated: (predecessors[to] ?? []).every(
-				(edge) => edge.kind === "ordinary" && blocks.has(edge.from),
+				(edge) => edges.kind(edge) === "ordinary" && blocks.has(edges.from(edge)),
 			),
 		}));
 		const latch = latches.size === 1 ? [...latches][0]! : undefined;
@@ -671,7 +803,7 @@ function naturalLoops(
 		const hasExceptionalControl = [...blocks].some(
 			(block) =>
 				fn.kernel.blockHandlerBlock(block) !== undefined ||
-				(predecessors[block] ?? []).some(({ kind }) => kind === "exceptional"),
+				(predecessors[block] ?? []).some((edge) => edges.kind(edge) === "exceptional"),
 		);
 		provisional.push({
 			header,
@@ -726,13 +858,18 @@ function buildFromStructural(
 	scratch: CoreAnalysisScratchPool,
 	runOwner: CoreOptimizationOwnerRunner,
 ): CoreControlFlow {
-	const { successors, predecessors, reachable, reversePostorder } = structural;
+	const { successors, predecessors, edges, reachable, reversePostorder } = structural;
 	// Deferred dominance must use this structural snapshot after the function changes.
 	const entry = fn.entry;
 	let parents: ReadonlyArray<CoreBlockId | null> | undefined;
 	const getParents = () =>
 		(parents ??= runOwner(CORE_OPTIMIZATION_OWNER.immediateDominators, () =>
-			immediateDominators(entry, reversePostorder, predecessors, successors, scratch),
+			immediateDominators(
+				entry,
+				reversePostorder,
+				new CoreBlockTopology(successors, predecessors, edges),
+				scratch,
+			),
 		));
 	let predicate: ReturnType<typeof dominatorPredicate> | undefined;
 	const dominates = (dominator: CoreBlockId, block: CoreBlockId): boolean =>
@@ -743,54 +880,27 @@ function buildFromStructural(
 	const buildInstructionDominance = (): typeof dominates => {
 		if (
 			!includeExceptions ||
-			!successors.some((edges) => edges.some(({ kind }) => kind === "exceptional"))
+			!successors.some((outgoing) =>
+				outgoing.some((edge) => edges.kind(edge) === "exceptional"),
+			)
 		)
 			return dominates;
-		const entryNode = (block: CoreBlockId): CoreBlockId => coreBlockId(block * 2);
-		const exitNode = (block: CoreBlockId): CoreBlockId => coreBlockId(block * 2 + 1);
-		const splitSuccessors = new Array<Array<CoreControlEdge>>(successors.length * 2);
-		for (let blockIndex = 0; blockIndex < successors.length; blockIndex++) {
-			const block = coreBlockId(blockIndex);
-			if (successors[block] === undefined) continue;
-			(splitSuccessors[entryNode(block)] ??= []).push({
-				from: entryNode(block),
-				to: exitNode(block),
-				kind: "ordinary",
-				arguments: [],
-			});
-			for (const edge of successors[block] ?? []) {
-				const from = edge.kind === "ordinary" ? exitNode(block) : entryNode(block);
-				(splitSuccessors[from] ??= []).push({
-					from,
-					to: entryNode(edge.to),
-					kind: edge.kind,
-					arguments: [],
-				});
-			}
-		}
-		const splitPredecessors = new Array<Array<CoreControlEdge>>(splitSuccessors.length);
-		for (const outgoing of splitSuccessors) {
-			if (outgoing === undefined) continue;
-			for (const edge of outgoing) (splitPredecessors[edge.to] ??= []).push(edge);
-		}
+		// An exceptional exit can leave before any instruction in its source block.
+		const topology = new CoreBlockTopology(successors, predecessors, edges, true);
+		const splitEntry = entry;
 		const splitTraversal = runOwner(CORE_OPTIMIZATION_OWNER.controlFlowTraversal, () =>
-			traversal(entryNode(entry), splitSuccessors),
+			traversal(splitEntry, topology),
 		);
 		const splitParents = runOwner(CORE_OPTIMIZATION_OWNER.immediateDominators, () =>
-			immediateDominators(
-				entryNode(entry),
-				splitTraversal.reversePostorder,
-				splitPredecessors,
-				splitSuccessors,
-				scratch,
-			),
+			immediateDominators(splitEntry, splitTraversal.reversePostorder, topology, scratch),
 		);
 		const splitDominates = dominatorPredicate(
-			entryNode(entry),
+			splitEntry,
 			splitTraversal.reachable,
 			splitParents,
 		);
-		return (dominator, block) => splitDominates(exitNode(dominator), entryNode(block));
+		return (dominator, block) =>
+			dominator !== block && splitDominates(topology.exitOf(dominator), block);
 	};
 	const uniqueEntryEdges = new Map<CoreBlockId, Map<CoreBlockId, boolean>>();
 	const edgeUniquelyEnters = (from: CoreBlockId, to: CoreBlockId): boolean => {
@@ -801,10 +911,12 @@ function buildFromStructural(
 		const unique =
 			to !== entry &&
 			reachable.has(from) &&
-			(successors[from] ?? []).filter((edge) => edge.to === to).length === 1 &&
+			(successors[from] ?? []).filter((edge) => edges.to(edge) === to).length === 1 &&
 			(predecessors[to] ?? []).every(
 				(edge) =>
-					edge.from === from || !reachable.has(edge.from) || dominates(to, edge.from),
+					edges.from(edge) === from ||
+					!reachable.has(edges.from(edge)) ||
+					dominates(to, edges.from(edge)),
 			);
 		const cache = fromEdges ?? new Map<CoreBlockId, boolean>();
 		cache.set(to, unique);
@@ -823,6 +935,7 @@ function buildFromStructural(
 				fn,
 				successors,
 				predecessors,
+				edges,
 				reachable,
 				reversePostorder,
 				dominates,
@@ -835,6 +948,7 @@ function buildFromStructural(
 								fn.entry,
 								successors,
 								predecessors,
+								edges,
 								reachable,
 								dominates,
 							)
@@ -848,6 +962,7 @@ function buildFromStructural(
 		exceptionFlowVersion: includeExceptions ? fn.version("exceptionFlow") : 0,
 		successors,
 		predecessors,
+		edges,
 		reachable: Object.freeze(reachable),
 		reversePostorder,
 		get immediateDominators() {
@@ -974,125 +1089,133 @@ export function coreCanonicalValueRoots(
 		instruction: CoreInstructionId,
 	) => ReadonlyArray<CoreValueId> | undefined,
 ): ReadonlyMap<CoreValueId, CoreValueId> {
-	const dependencies = new Array<ReadonlyArray<CoreValueId> | undefined>(
-		fn.valueCapacity,
-	);
+	const starts = new Int32Array(fn.valueCapacity);
+	starts.fill(-1);
+	const ends = new Int32Array(fn.valueCapacity);
+	const inputs: Array<CoreValueId> = [];
 	const nodes: Array<CoreValueId> = [];
-	const moveOpcode = fn.registry.get("move")?.id;
-	for (const block of fn.blockIds()) {
-		const predecessors = cfg.predecessors[block] ?? [];
-		const incoming =
-			controlEdges === undefined
-				? predecessors
-				: predecessors.filter((edge) => controlEdges.has(edge));
-		if (incoming.length === 0) continue;
-		const parameterStart = fn.kernel.blockParameterStart(block);
-		const parameterCount = fn.kernel.blockParameterCount(block);
+	const add = (value: CoreValueId, start: number): void => {
+		starts[value] = start;
+		ends[value] = inputs.length;
+		nodes.push(value);
+	};
+
+	const kernel = fn.kernel;
+	for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+		const block = coreBlockId(blockIndex);
+		if (kernel.blockLive(block) === 0) continue;
+		const predecessors = cfg.predecessors[block];
+		if (predecessors === undefined || predecessors.length === 0) continue;
+		const parameterStart = kernel.blockParameterStart(block);
+		const parameterCount = kernel.blockParameterCount(block);
 		for (let index = 0; index < parameterCount; index++) {
 			const row = parameterStart + index;
-			if (fn.kernel.blockParameterRole(row) === 1) continue;
-			const parameter = fn.kernel.blockParameterValue(row);
-			const sources = incoming.map(
-				(edge) => edge.arguments[edge.kind === "exceptional" ? index - 1 : index],
-			);
-			if (sources.some((value) => value === undefined)) continue;
-			dependencies[parameter] = sources as ReadonlyArray<CoreValueId>;
-			nodes.push(parameter);
+			if (kernel.blockParameterRole(row) === 1) continue;
+			const start = inputs.length;
+			for (let offset = 0; offset < predecessors.length; offset++) {
+				const edge = predecessors[offset]!;
+				if (controlEdges !== undefined && !controlEdges.has(edge)) continue;
+				const source = cfg.edges.argument(
+					edge,
+					cfg.edges.kind(edge) === "exceptional" ? index - 1 : index,
+				);
+				if (source === undefined) {
+					inputs.length = start;
+					break;
+				}
+				inputs.push(source);
+			}
+			if (inputs.length > start) add(kernel.blockParameterValue(row), start);
 		}
 	}
+	const moveOpcode = fn.registry.get("move")?.id;
 	for (const instruction of fn.instructionIds()) {
-		const move = fn.kernel.instructionOpcode(instruction) === moveOpcode;
+		const move = kernel.instructionOpcode(instruction) === moveOpcode;
 		if (
 			(!move && identityInputs === undefined) ||
-			fn.kernel.instructionResultCount(instruction) !== 1
+			kernel.instructionResultCount(instruction) !== 1
 		)
 			continue;
-		const inputs =
-			move && fn.kernel.instructionOperandCount(instruction) === 1
-				? [fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))]
-				: identityInputs?.(instruction);
-		if (inputs === undefined || inputs.length === 0) continue;
-		const output = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
-		dependencies[output] = inputs;
-		nodes.push(output);
+		const start = inputs.length;
+		if (move && kernel.instructionOperandCount(instruction) === 1)
+			inputs.push(kernel.operandAt(kernel.instructionOperandStart(instruction)));
+		else {
+			const alternatives = identityInputs?.(instruction);
+			if (alternatives !== undefined)
+				for (const alternative of alternatives) inputs.push(alternative);
+		}
+		if (inputs.length > start)
+			add(kernel.resultAt(kernel.instructionResultStart(instruction)), start);
 	}
 	if (nodes.length === 0) return new SparseCanonicalValueRoots();
-	const reverse = new Array<Array<CoreValueId> | undefined>(fn.valueCapacity);
-	for (const value of nodes) {
-		for (const dependency of dependencies[value]!) {
-			if (dependencies[dependency] === undefined) continue;
-			const users = reverse[dependency] ?? [];
-			users.push(value);
-			reverse[dependency] = users;
-		}
-	}
-	const visited = new Uint8Array(fn.valueCapacity);
-	const postorder: Array<CoreValueId> = [];
-	const pendingValues: Array<CoreValueId> = [];
-	const pendingEdges: Array<number> = [];
+
+	// Tarjan finishes an alias component after all its external inputs. Resolve
+	// these roots on completion, while both the DFS and the component stack are live.
+	const visited = new Int32Array(fn.valueCapacity);
+	const low = new Int32Array(fn.valueCapacity);
+	const components = new Int32Array(fn.valueCapacity);
+	const canonical = new Int32Array(fn.valueCapacity);
+	const stack: Array<CoreValueId> = [];
+	const pending: Array<CoreValueId> = [];
+	const cursors: Array<number> = [];
+	let clock = 0;
+	let component = 0;
+	const enter = (value: CoreValueId, depth: number): void => {
+		visited[value] = low[value] = ++clock;
+		stack.push(value);
+		pending[depth] = value;
+		cursors[depth] = starts[value]!;
+	};
 	for (const start of nodes) {
 		if (visited[start] !== 0) continue;
-		visited[start] = 1;
-		pendingValues[0] = start;
-		pendingEdges[0] = 0;
+		enter(start, 0);
 		let depth = 1;
 		while (depth > 0) {
 			const frame = depth - 1;
-			const value = pendingValues[frame]!;
-			const outgoing = dependencies[value]!;
-			let advanced = false;
-			while (pendingEdges[frame]! < outgoing.length) {
-				const dependency = outgoing[pendingEdges[frame]!]!;
-				pendingEdges[frame]!++;
-				if (dependencies[dependency] === undefined || visited[dependency] !== 0) continue;
-				visited[dependency] = 1;
-				pendingValues[depth] = dependency;
-				pendingEdges[depth++] = 0;
-				advanced = true;
-				break;
+			const value = pending[frame]!;
+			const cursor = cursors[frame]!;
+			if (cursor < ends[value]!) {
+				cursors[frame] = cursor + 1;
+				const dependency = inputs[cursor]!;
+				if (starts[dependency] === -1) continue;
+				if (visited[dependency] === 0) enter(dependency, depth++);
+				else if (components[dependency] === 0)
+					low[value] = Math.min(low[value]!, visited[dependency]!);
+				continue;
 			}
-			if (advanced) continue;
-			postorder.push(value);
+			if (low[value] === visited[value]) {
+				component++;
+				const end = stack.length;
+				let first = end;
+				do {
+					components[stack[--first]!] = component;
+				} while (stack[first] !== value);
+				let external: number | undefined;
+				let single = true;
+				for (let member = first; member < end && single; member++) {
+					const current = stack[member]!;
+					for (let index = starts[current]!; index < ends[current]!; index++) {
+						const dependency = inputs[index]!;
+						if (components[dependency] === component) continue;
+						const root = starts[dependency] === -1 ? dependency : canonical[dependency]!;
+						if (external === undefined) external = root;
+						else if (external !== root) {
+							single = false;
+							break;
+						}
+					}
+				}
+				for (let member = first; member < end; member++) {
+					const current = stack[member]!;
+					canonical[current] = single && external !== undefined ? external : current;
+				}
+				stack.length = first;
+			}
 			depth--;
-		}
-	}
-	const componentOf = new Int32Array(fn.valueCapacity);
-	const components: Array<Array<CoreValueId>> = [];
-	const componentPending: Array<CoreValueId> = [];
-	for (let index = postorder.length - 1; index >= 0; index--) {
-		const start = postorder[index]!;
-		if (componentOf[start] !== 0) continue;
-		const component = components.length;
-		const members: Array<CoreValueId> = [];
-		components.push(members);
-		componentOf[start] = component + 1;
-		componentPending.push(start);
-		while (componentPending.length > 0) {
-			const value = componentPending.pop()!;
-			members.push(value);
-			for (const user of reverse[value] ?? []) {
-				if (componentOf[user] !== 0) continue;
-				componentOf[user] = component + 1;
-				componentPending.push(user);
+			if (depth > 0) {
+				const parent = pending[depth - 1]!;
+				low[parent] = Math.min(low[parent]!, low[value]!);
 			}
-		}
-	}
-	const canonical = new Int32Array(fn.valueCapacity);
-	for (const value of nodes) canonical[value] = value;
-	for (let component = components.length - 1; component >= 0; component--) {
-		let externalRoot: number | undefined;
-		let singleRoot = true;
-		for (const value of components[component]!) {
-			for (const dependency of dependencies[value]!) {
-				if (componentOf[dependency] === component + 1) continue;
-				const root =
-					dependencies[dependency] === undefined ? dependency : canonical[dependency]!;
-				if (externalRoot === undefined) externalRoot = root;
-				else if (externalRoot !== root) singleRoot = false;
-			}
-		}
-		if (singleRoot && externalRoot !== undefined) {
-			for (const value of components[component]!) canonical[value] = externalRoot;
 		}
 	}
 	const roots = new SparseCanonicalValueRoots();
@@ -1119,14 +1242,6 @@ export const CORE_CANONICAL_VALUE_ROOTS_ANALYSIS: CoreAnalysisDefinition<
 		);
 	},
 };
-
-export function corePredecessorEdges(
-	program: CoreProgram,
-	functionId: CoreFunctionId,
-	options: BuildCoreControlFlowOptions = {},
-): ReadonlyArray<ReadonlyArray<CoreControlEdge>> {
-	return buildCoreControlFlow(program, functionId, options).predecessors;
-}
 
 function materializeTerminatorEdge(fn: CoreFunctionStore, edge: number): CoreEdge {
 	const start = fn.kernel.terminatorEdgeArgumentStart(edge);

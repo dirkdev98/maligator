@@ -7,7 +7,7 @@ import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 } from "./core-ir-control-flow.ts";
-import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import type { CoreControlEdge, CoreControlFlow } from "./core-ir-control-flow.ts";
 import {
 	coreInstructionInputsEqual,
 	coreInstructionInputsHash,
@@ -417,7 +417,9 @@ const canonicalizeNaturalLoops: CoreFunctionPass = {
 				[...loop.blocks].some(
 					(block) =>
 						fn.kernel.blockHandlerBlock(block) !== undefined ||
-						(cfg.predecessors[block] ?? []).some(({ kind }) => kind === "exceptional"),
+						(cfg.predecessors[block] ?? []).some(
+							(edge) => cfg.edges.kind(edge) === "exceptional",
+						),
 				)
 			)
 				continue;
@@ -438,12 +440,13 @@ const canonicalizeNaturalLoops: CoreFunctionPass = {
 			};
 			if (loop.preheader === undefined) {
 				const outside = (cfg.predecessors[loop.header] ?? []).filter(
-					(edge) => edge.kind === "ordinary" && !loop.blocks.has(edge.from),
+					(edge) =>
+						cfg.edges.kind(edge) === "ordinary" && !loop.blocks.has(cfg.edges.from(edge)),
 				);
 				if (outside.length === 0) continue;
 				const editor = CoreEditor.open(program, item.function);
 				const preheader = editor.createBlock(blockParameterSpecs(fn, loop.header));
-				for (const source of new Set(outside.map(({ from }) => from))) {
+				for (const source of new Set(outside.map((edge) => cfg.edges.from(edge)))) {
 					redirect(editor, source, loop.header, preheader);
 				}
 				editor.setTerminator(preheader, {
@@ -864,7 +867,7 @@ function translatedInputs(
 	cfg: CoreControlFlow,
 	block: CoreBlockId,
 	predecessor: CoreBlockId,
-	edge: CoreEdge,
+	edge: CoreControlEdge,
 	inputs: ReadonlyArray<CoreValueId>,
 ): ReadonlyArray<CoreValueId> | undefined {
 	const parameterStart = fn.kernel.blockParameterStart(block);
@@ -879,7 +882,7 @@ function translatedInputs(
 			}
 		}
 		if (parameter >= 0) {
-			const value = edge.arguments[parameter];
+			const value = cfg.edges.argument(edge, parameter);
 			if (value === undefined) return undefined;
 			translated.push(value);
 			continue;
@@ -932,12 +935,12 @@ const eliminatePartialRedundancy: CoreFunctionPass = {
 			if (fn.kernel.blockHandlerBlock(block) !== undefined || loopHeaders.has(block))
 				continue;
 			const incoming = (cfg.predecessors[block] ?? []).filter(
-				({ kind }) => kind === "ordinary",
+				(edge) => cfg.edges.kind(edge) === "ordinary",
 			);
 			if (
 				incoming.length < 2 ||
 				incoming.length !== (cfg.predecessors[block] ?? []).length ||
-				new Set(incoming.map(({ from }) => from)).size !== incoming.length
+				new Set(incoming.map((edge) => cfg.edges.from(edge))).size !== incoming.length
 			)
 				continue;
 			const terminator = fn.blockTerminator(block);
@@ -952,19 +955,12 @@ const eliminatePartialRedundancy: CoreFunctionPass = {
 				const output = instructionResult(fn, instruction, 0)!;
 				const inputs = copyInstructionOperands(fn, instruction);
 				const translated = incoming.map((edge) =>
-					translatedInputs(
-						fn,
-						cfg,
-						block,
-						edge.from,
-						{ block, arguments: edge.arguments },
-						inputs,
-					),
+					translatedInputs(fn, cfg, block, cfg.edges.from(edge), edge, inputs),
 				);
 				if (translated.some((inputs) => inputs === undefined)) continue;
 				const available = incoming.map((edge, index) => {
 					const hash = coreInstructionInputsHash(fn, instruction, translated[index]);
-					const candidate = predecessorExpressions(edge.from)
+					const candidate = predecessorExpressions(cfg.edges.from(edge))
 						.get(hash)
 						?.find((candidate) =>
 							expressionsEqual(fn, instruction, candidate, translated[index]),
@@ -979,8 +975,9 @@ const eliminatePartialRedundancy: CoreFunctionPass = {
 					incoming.some(
 						(edge, index) =>
 							available[index] === undefined &&
-							(cfg.successors[edge.from] ?? []).filter(({ kind }) => kind === "ordinary")
-								.length !== 1,
+							(cfg.successors[cfg.edges.from(edge)] ?? []).filter(
+								(edge) => cfg.edges.kind(edge) === "ordinary",
+							).length !== 1,
 					)
 				)
 					continue;
@@ -988,8 +985,8 @@ const eliminatePartialRedundancy: CoreFunctionPass = {
 				for (const [index, edge] of incoming.entries()) {
 					if (available[index] !== undefined) continue;
 					available[index] = editor.insertInstruction(
-						edge.from,
-						fn.blockTerminator(edge.from),
+						cfg.edges.from(edge),
+						fn.blockTerminator(cfg.edges.from(edge)),
 						fn.instructionOpcodeName(instruction),
 						translated[index]!,
 						{
@@ -1003,9 +1000,9 @@ const eliminatePartialRedundancy: CoreFunctionPass = {
 					representation: fn.valueRepresentation(output),
 				});
 				for (const [index, edge] of incoming.entries()) {
-					editor.redirectEdge(edge.from, block, {
+					editor.redirectEdge(cfg.edges.from(edge), block, {
 						block,
-						arguments: [...edge.arguments, available[index]!],
+						arguments: [...cfg.edges.arguments(edge), available[index]!],
 					});
 				}
 				editor.replaceValueUses(output, parameter);

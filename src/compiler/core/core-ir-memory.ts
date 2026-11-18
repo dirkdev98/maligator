@@ -436,12 +436,12 @@ function localMemoryRead(
 			if (block === fn.entry || transitions === 4) break;
 			let predecessor: CoreBlockId | undefined;
 			for (const edge of cfg.predecessors[block] ?? []) {
-				if (!cfg.reachable.has(edge.from)) continue;
-				if (predecessor !== undefined || edge.kind !== "ordinary") {
+				if (!cfg.reachable.has(cfg.edges.from(edge))) continue;
+				if (predecessor !== undefined || cfg.edges.kind(edge) !== "ordinary") {
 					predecessor = undefined;
 					break;
 				}
-				predecessor = edge.from;
+				predecessor = cfg.edges.from(edge);
 			}
 			if (predecessor === undefined) break;
 			visited ??= new Set([readBlock]);
@@ -963,14 +963,14 @@ function prepareMemoryVersions(
 			return { eventsByBlock, readers, readBlocks, definitions, upwardExposedReadBlocks };
 		});
 	const hasExceptionalEdges = cfg.reversePostorder.some((block) =>
-		(cfg.successors[block] ?? []).some((edge) => edge.kind === "exceptional"),
+		(cfg.successors[block] ?? []).some((edge) => cfg.edges.kind(edge) === "exceptional"),
 	);
 	const hasSinglePredecessorFlow = cfg.reversePostorder.every((block) => {
 		if (block === fn.entry) return true;
 		let incoming = 0;
 		for (const edge of cfg.predecessors[block] ?? []) {
-			if (!cfg.reachable.has(edge.from)) continue;
-			if (edge.kind !== "ordinary" || ++incoming > 1) return false;
+			if (!cfg.reachable.has(cfg.edges.from(edge))) continue;
+			if (cfg.edges.kind(edge) !== "ordinary" || ++incoming > 1) return false;
 		}
 		return incoming === 1;
 	});
@@ -1013,8 +1013,8 @@ function prepareMemoryVersions(
 		) {
 			const block = dominanceOrder[index]!;
 			for (const edge of cfg.successors[block] ?? []) {
-				if (cfg.immediateDominators[edge.to] !== block)
-					dominanceFrontiers.get(block)!.add(edge.to);
+				if (cfg.immediateDominators[cfg.edges.to(edge)] !== block)
+					dominanceFrontiers.get(block)!.add(cfg.edges.to(edge));
 			}
 			for (const child of dominatorChildren.get(block) ?? []) {
 				for (const frontier of dominanceFrontiers.get(child) ?? []) {
@@ -1063,14 +1063,20 @@ function prepareMemoryVersions(
 						if (liveIn.has(block)) continue;
 						liveIn.add(block);
 						for (const edge of cfg.predecessors[block] ?? []) {
-							if (edge.kind === "exceptional" || definitions.has(edge.from)) continue;
-							livePending.push(edge.from);
+							if (
+								cfg.edges.kind(edge) === "exceptional" ||
+								definitions.has(cfg.edges.from(edge))
+							)
+								continue;
+							livePending.push(cfg.edges.from(edge));
 						}
 					}
 					const phiPending = [...definitions];
 					for (const block of liveIn) {
 						if (
-							(cfg.predecessors[block] ?? []).some(({ kind }) => kind === "exceptional")
+							(cfg.predecessors[block] ?? []).some(
+								(edge) => cfg.edges.kind(edge) === "exceptional",
+							)
 						) {
 							phiBlocks.add(block);
 							phiPending.push(block);
@@ -1092,7 +1098,8 @@ function prepareMemoryVersions(
 				for (const block of phiBlocks) {
 					const phi = phiIdentity(block, slot);
 					phiOperands.set(phi, []);
-					for (const edge of cfg.predecessors[block] ?? []) relevantBlocks.add(edge.from);
+					for (const edge of cfg.predecessors[block] ?? [])
+						relevantBlocks.add(cfg.edges.from(edge));
 				}
 				const orderedBlocks = [...relevantBlocks]
 					.filter((block) => dominancePosition.has(block))
@@ -1115,11 +1122,13 @@ function prepareMemoryVersions(
 						version = event.definition ?? version;
 					}
 					for (const edge of cfg.successors[block] ?? []) {
-						if (!phiBlocks.has(edge.to)) continue;
+						if (!phiBlocks.has(cfg.edges.to(edge))) continue;
 						phiOperands
-							.get(phiIdentity(edge.to, slot))!
+							.get(phiIdentity(cfg.edges.to(edge), slot))!
 							.push(
-								edge.kind === "exceptional" ? exceptionIdentity(block, slot) : version,
+								cfg.edges.kind(edge) === "exceptional"
+									? exceptionIdentity(block, slot)
+									: version,
 							);
 					}
 					active.push({ block, version });
@@ -1227,15 +1236,17 @@ function prepareMemoryVersions(
 					visited = 0;
 				for (const block of cfg.reversePostorder) {
 					const incoming = (cfg.predecessors[block] ?? []).filter((edge) =>
-						cfg.reachable.has(edge.from),
+						cfg.reachable.has(cfg.edges.from(edge)),
 					);
 					const first =
-						incoming[0] === undefined ? undefined : ends.get(incoming[0].from);
+						incoming[0] === undefined ? undefined : ends.get(cfg.edges.from(incoming[0]));
 					// Backedges poll and exceptional edges do not carry successful read admission.
 					let lifetime =
 						first !== undefined &&
 						incoming.every(
-							(edge) => edge.kind === "ordinary" && ends.get(edge.from) === first,
+							(edge) =>
+								cfg.edges.kind(edge) === "ordinary" &&
+								ends.get(cfg.edges.from(edge)) === first,
 						)
 							? first
 							: ++next;

@@ -375,8 +375,10 @@ export class CorePrivateFieldElements {
 				const parameter = fn.kernel.blockParameterValue(row);
 				const sources: Array<CoreValueId> = [];
 				for (const edge of edges) {
-					const argument =
-						edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+					const argument = cfg.edges.argument(
+						edge,
+						cfg.edges.kind(edge) === "exceptional" ? index - 1 : index,
+					);
 					if (argument === undefined) continue;
 					sources.push(argument);
 					flow(argument, parameter);

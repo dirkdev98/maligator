@@ -957,7 +957,7 @@ function analyzeFunctionTargets(
 				enqueue(block, block !== activeBlock);
 				continue;
 			}
-			for (const edge of cfg.successors[block] ?? []) enqueue(edge.to);
+			for (const edge of cfg.successors[block] ?? []) enqueue(cfg.edges.to(edge));
 		}
 		for (
 			let use = fn.kernel.valueFirstHandlerUse(value);
@@ -1001,7 +1001,10 @@ function analyzeFunctionTargets(
 		}
 		for (const edge of cfg.predecessors[block] ?? []) {
 			for (let index = 0; index < parameterCount; index++) {
-				const argument = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+				const argument = cfg.edges.argument(
+					edge,
+					cfg.edges.kind(edge) === "exceptional" ? index - 1 : index,
+				);
 				if (argument !== undefined) {
 					raise(fn.kernel.blockParameterValue(parameterStart + index), values[argument]!);
 				}
@@ -1370,7 +1373,10 @@ function analyzeFunctionTargets(
 		if (kind === 0) {
 			const index = fn.kernel.valueDefinitionIndex(value);
 			for (const edge of cfg.predecessors[owner] ?? []) {
-				const argument = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+				const argument = cfg.edges.argument(
+					edge,
+					cfg.edges.kind(edge) === "exceptional" ? index - 1 : index,
+				);
 				if (argument !== undefined) publish(argument);
 			}
 		} else if (kind === 1) {

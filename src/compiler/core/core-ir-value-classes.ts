@@ -530,15 +530,19 @@ export function analyzeCoreValueClasses(
 				const block = coreBlockId(fn.kernel.valueDefinitionOwner(current));
 				const position = fn.kernel.valueDefinitionIndex(current);
 				const incoming = (controlFlow.predecessors[block] ?? []).filter((edge) =>
-					controlFlow!.reachable.has(edge.from),
+					controlFlow!.reachable.has(controlFlow!.edges.from(edge)),
 				);
 				if (
 					incoming.length > 0 &&
 					incoming.every(
-						(edge) => edge.kind === "ordinary" && edge.arguments[position] !== undefined,
+						(edge) =>
+							controlFlow!.edges.kind(edge) === "ordinary" &&
+							controlFlow!.edges.argument(edge, position) !== undefined,
 					)
 				)
-					inputs = incoming.map((edge) => root(edge.arguments[position]!));
+					inputs = incoming.map((edge) =>
+						root(controlFlow!.edges.argument(edge, position)!),
+					);
 			} else if (kind === 1) {
 				const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(current));
 				if (fn.instructionOpcodeName(instruction) === "move")

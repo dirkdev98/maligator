@@ -184,8 +184,10 @@ function forwardCellLoads(
 			block !== fn.entry &&
 			(control.predecessors[block] ?? []).every(
 				(edge, position, edges) =>
-					edge.kind === "ordinary" &&
-					edges.findIndex((other) => other.from === edge.from) === position,
+					control.edges.kind(edge) === "ordinary" &&
+					edges.findIndex(
+						(other) => control.edges.from(other) === control.edges.from(edge),
+					) === position,
 			);
 		let rounds = 0;
 		for (let changed = true; changed; rounds++) {
@@ -195,7 +197,7 @@ function forwardCellLoads(
 				if (!joinable(block)) value = UNKNOWN_SLOT;
 				else
 					for (const edge of control.predecessors[block] ?? []) {
-						const incoming = exit(edge.from);
+						const incoming = exit(control.edges.from(edge));
 						if (incoming === undefined) continue;
 						value =
 							value === undefined || sameSlotValue(value, incoming)
@@ -220,7 +222,7 @@ function forwardCellLoads(
 			for (const block of joins.keys()) {
 				if (!joins.get(block)) continue;
 				const valid = (control.predecessors[block] ?? []).every((edge) => {
-					const incoming = exit(edge.from);
+					const incoming = exit(control.edges.from(edge));
 					if (incoming === undefined || incoming.kind === "unknown") return false;
 					if (incoming.kind === "phi") return joins.get(incoming.block) === true;
 					const opcode = definition(incoming.value);
@@ -239,7 +241,7 @@ function forwardCellLoads(
 				if (!valid) continue;
 				let representation: CoreRepresentation | undefined;
 				for (const edge of control.predecessors[block] ?? []) {
-					const incoming = exit(edge.from);
+					const incoming = exit(control.edges.from(edge));
 					const next =
 						incoming?.kind === "value"
 							? fn.valueRepresentation(incoming.value)
@@ -271,22 +273,22 @@ function forwardCellLoads(
 			const parameter = editor.appendBlockParameter(block, { representation });
 			parameters.set(block, parameter);
 			for (const edge of control.predecessors[block] ?? []) {
-				const incoming = exit(edge.from);
+				const incoming = exit(control.edges.from(edge));
 				if (incoming === undefined || incoming.kind === "unknown")
 					throw new Error("Validated captured-slot join lost an incoming value");
 				let value =
 					incoming.kind === "value" ? incoming.value : materialize(incoming.block);
 				if (fn.valueRepresentation(value) !== representation)
 					value = editor.insertInstruction(
-						edge.from,
-						fn.blockTerminator(edge.from),
+						control.edges.from(edge),
+						fn.blockTerminator(control.edges.from(edge)),
 						"move",
 						[value],
 						{ outputRepresentations: [representation] },
 					).outputs[0]!;
-				editor.redirectEdge(edge.from, block, {
+				editor.redirectEdge(control.edges.from(edge), block, {
 					block,
-					arguments: [...liveEdgeArguments(fn, edge.from, block), value],
+					arguments: [...liveEdgeArguments(fn, control.edges.from(edge), block), value],
 				});
 			}
 			return parameter;

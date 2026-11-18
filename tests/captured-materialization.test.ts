@@ -145,9 +145,9 @@ it.each([
 		const pending = [...earlyReturns];
 		while (pending.length > 0)
 			for (const edge of flow.predecessors[pending.pop()!] ?? []) {
-				if (reachesEarlyReturn.has(edge.from)) continue;
-				reachesEarlyReturn.add(edge.from);
-				pending.push(edge.from);
+				if (reachesEarlyReturn.has(flow.edges.from(edge))) continue;
+				reachesEarlyReturn.add(flow.edges.from(edge));
+				pending.push(flow.edges.from(edge));
 			}
 		for (const instruction of allocations)
 			expect(reachesEarlyReturn.has(owner.instructionBlock(instruction))).toBe(false);

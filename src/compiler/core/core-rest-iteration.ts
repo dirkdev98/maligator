@@ -109,8 +109,9 @@ function restIteration(program: CoreProgram, fn: CoreFunctionStore) {
 	)
 		return undefined;
 	const incoming = (control.predecessors[header] ?? []).map((edge) => ({
-		...edge,
-		arguments: [...edge.arguments],
+		from: control.edges.from(edge),
+		kind: control.edges.kind(edge),
+		arguments: control.edges.arguments(edge),
 	}));
 	const external = incoming.filter((edge) => !loop.blocks.has(edge.from));
 	if (
@@ -133,8 +134,8 @@ function restIteration(program: CoreProgram, fn: CoreFunctionStore) {
 	const valueUses = uses(fn, result(fn, step));
 	if (
 		bodyIncoming.length !== 1 ||
-		bodyIncoming[0]!.from !== header ||
-		bodyIncoming[0]!.kind !== "ordinary" ||
+		control.edges.from(bodyIncoming[0]!) !== header ||
+		control.edges.kind(bodyIncoming[0]!) !== "ordinary" ||
 		valueUses === undefined ||
 		valueUses.length === 0 ||
 		valueUses.some(
@@ -151,10 +152,11 @@ function restIteration(program: CoreProgram, fn: CoreFunctionStore) {
 		if (seen.has(block)) return undefined;
 		seen.add(block);
 		const outgoing = control.successors[block] ?? [];
-		if (outgoing.length !== 1 || outgoing[0]!.kind !== "ordinary") return undefined;
-		block = outgoing[0]!.to;
+		if (outgoing.length !== 1 || control.edges.kind(outgoing[0]!) !== "ordinary")
+			return undefined;
+		block = control.edges.to(outgoing[0]!);
 		const predecessors = control.predecessors[block] ?? [];
-		if (predecessors.length !== 1 || predecessors[0]!.kind !== "ordinary")
+		if (predecessors.length !== 1 || control.edges.kind(predecessors[0]!) !== "ordinary")
 			return undefined;
 	}
 	return {

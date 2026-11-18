@@ -106,19 +106,20 @@ export function analyzeClosureCaptureValues(
 			const outgoing = new Int32Array(cfg.successors.length);
 			for (const from of alive)
 				for (const edge of cfg.successors[from] ?? []) {
-					if (!alive.has(edge.to)) continue;
+					if (!alive.has(cfg.edges.to(edge))) continue;
 					outgoing[from] = outgoing[from]! + 1;
-					incoming[edge.to] = incoming[edge.to]! + 1;
+					incoming[cfg.edges.to(edge)] = incoming[cfg.edges.to(edge)]! + 1;
 				}
 			const pending = [...alive].filter((id) => incoming[id] === 0 || outgoing[id] === 0);
 			for (let cursor = 0; cursor < pending.length; cursor++) {
 				const id = pending[cursor]!;
 				if (!alive.delete(id)) continue;
 				for (const edge of cfg.successors[id] ?? [])
-					if (alive.has(edge.to) && --incoming[edge.to]! === 0) pending.push(edge.to);
+					if (alive.has(cfg.edges.to(edge)) && --incoming[cfg.edges.to(edge)]! === 0)
+						pending.push(cfg.edges.to(edge));
 				for (const edge of cfg.predecessors[id] ?? [])
-					if (alive.has(edge.from) && --outgoing[edge.from]! === 0)
-						pending.push(edge.from);
+					if (alive.has(cfg.edges.from(edge)) && --outgoing[cfg.edges.from(edge)]! === 0)
+						pending.push(cfg.edges.from(edge));
 			}
 			// Every cycle survives source/sink pruning, including exceptional
 			// edges omitted from ordinary loop analysis. Paths between cycles may

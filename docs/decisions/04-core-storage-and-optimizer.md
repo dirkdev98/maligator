@@ -161,6 +161,11 @@ After a memory-effect edit, the exceptional CFG first checks whether any protect
 block gained or lost a throwing exit. Unchanged exits preserve the structural graph
 and its derived dominance; handler or handler-argument changes still invalidate it
 through the exception-flow version.
+Structural snapshots assign compact edge IDs and retain endpoints and operand ranges.
+Ordinary and exceptional views share the ordinary IDs, including distinct edges to
+the same successor. Consumers use the owning snapshot to read operands from Core.
+Instruction dominance projects exit nodes for blocks that can transfer to a handler.
+Canonical roots resolve alias cycles from compact input ranges in dependency order.
 Packed-rest consumers request value kinds and CFG only after finding a relevant
 access. A memory-version handle initially builds no graph. Its first proof query
 indexes raw memory accesses and writers; each requested partition then builds its

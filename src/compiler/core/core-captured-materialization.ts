@@ -149,7 +149,7 @@ function destination(
 		const exit = coreTerminatorInput(fn, fn.blockTerminator(block));
 		if (exit.kind !== "jump") break;
 		const incoming = flow.predecessors[exit.edge.block] ?? [];
-		if (incoming.length !== 1 || incoming[0]!.from !== block) break;
+		if (incoming.length !== 1 || flow.edges.from(incoming[0]!) !== block) break;
 		block = exit.edge.block;
 	}
 	if (!initial.has(origin)) return undefined;
@@ -161,7 +161,8 @@ function destination(
 		if (visited.has(block)) continue;
 		visited.add(block);
 		branches.push(block);
-		for (const edge of flow.successors[block] ?? []) pendingBranches.push(edge.to);
+		for (const edge of flow.successors[block] ?? [])
+			pendingBranches.push(flow.edges.to(edge));
 	}
 	let selected: CoreBlockId | undefined;
 	for (const branch of branches) {
@@ -173,7 +174,7 @@ function destination(
 			if (
 				target === fn.entry ||
 				incoming.length !== 1 ||
-				incoming[0]!.from !== branch ||
+				flow.edges.from(incoming[0]!) !== branch ||
 				flow.loops.some((loop) => loop.blocks.has(target)) ||
 				flow.irreducibleCycles.some((cycle) => cycle.blocks.has(target)) ||
 				!demands.every((instruction) =>
@@ -196,7 +197,8 @@ function destination(
 				seen.add(block);
 				const exit = coreTerminatorInput(fn, fn.blockTerminator(block));
 				returns ||= exit.kind === "return" || exit.kind === "throw";
-				for (const edge of flow.successors[block] ?? []) pending.push(edge.to);
+				for (const edge of flow.successors[block] ?? [])
+					pending.push(flow.edges.to(edge));
 			}
 			if (
 				pending.length === 0 &&

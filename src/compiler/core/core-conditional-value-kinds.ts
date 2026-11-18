@@ -7,7 +7,10 @@ import {
 	compilerValueKindTruthiness,
 } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
-import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
+import {
+	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
+	coreControlPointIsEdge,
+} from "./core-ir-control-flow.ts";
 import type {
 	CoreControlEdge,
 	CoreControlFlow,
@@ -196,7 +199,9 @@ export function analyzeCoreConditionalValueKinds(
 		const terminator = fn.blockTerminator(block);
 		const kind = fn.instructionKind(terminator);
 		if (kind !== "branch" && kind !== "guard") continue;
-		const edges = cfg.successors[block]!.filter((edge) => edge.kind === "ordinary");
+		const edges = cfg.successors[block]!.filter(
+			(edge) => cfg.edges.kind(edge) === "ordinary",
+		);
 		const yes = edges[0]!,
 			no = edges[1]!;
 		for (const restriction of predicateRestrictions(
@@ -211,7 +216,7 @@ export function analyzeCoreConditionalValueKinds(
 			] as const) {
 				if (mask === 0 || (base(restriction.subject) & ~mask) === 0) continue;
 				const list = bounds.get(restriction.subject) ?? [];
-				list.push({ edge, mask, exclusive: yes.to !== no.to });
+				list.push({ edge, mask, exclusive: cfg.edges.to(yes) !== cfg.edges.to(no) });
 				bounds.set(restriction.subject, list);
 			}
 		}
@@ -228,8 +233,12 @@ export function analyzeCoreConditionalValueKinds(
 			// A handler can leave the predicate block before its terminating branch runs.
 			if (
 				restriction.exclusive &&
-				cfg.instructionDominatesBlock(restriction.edge.from, block) &&
-				cfg.dominatesEdge(restriction.edge.from, restriction.edge.to, block)
+				cfg.instructionDominatesBlock(cfg.edges.from(restriction.edge), block) &&
+				cfg.dominatesEdge(
+					cfg.edges.from(restriction.edge),
+					cfg.edges.to(restriction.edge),
+					block,
+				)
 			)
 				mask &= restriction.mask;
 		}
@@ -239,14 +248,14 @@ export function analyzeCoreConditionalValueKinds(
 		return mask;
 	};
 	const onEdge = (value: CoreValueId, edge: CoreControlEdge): number => {
-		let mask = at(value, edge.from);
-		if (edge.kind === "ordinary")
+		let mask = at(value, cfg.edges.from(edge));
+		if (cfg.edges.kind(edge) === "ordinary")
 			for (const restriction of bounds.get(value) ?? [])
 				if (
 					restriction.edge === edge ||
 					(restriction.exclusive &&
-						restriction.edge.from === edge.from &&
-						restriction.edge.to === edge.to)
+						cfg.edges.from(restriction.edge) === cfg.edges.from(edge) &&
+						cfg.edges.to(restriction.edge) === cfg.edges.to(edge))
 				)
 					mask &= restriction.mask;
 		return mask;
@@ -263,7 +272,7 @@ export function analyzeCoreConditionalValueKinds(
 		const start = fn.kernel.blockParameterStart(block),
 			count = fn.kernel.blockParameterCount(block);
 		const incoming = (cfg.predecessors[block] ?? []).filter((edge) =>
-			cfg.reachable.has(edge.from),
+			cfg.reachable.has(cfg.edges.from(edge)),
 		);
 		if (incoming.length === 0) continue;
 		for (let offset = 0; offset < count; offset++) {
@@ -280,7 +289,10 @@ export function analyzeCoreConditionalValueKinds(
 			starts.push(inputs.length);
 			let seed = 0;
 			for (const edge of incoming) {
-				const input = edge.arguments[edge.kind === "exceptional" ? offset - 1 : offset];
+				const input = cfg.edges.argument(
+					edge,
+					cfg.edges.kind(edge) === "exceptional" ? offset - 1 : offset,
+				);
 				if (input === undefined) {
 					seed |= mask;
 				} else {
@@ -337,7 +349,7 @@ export function analyzeCoreConditionalValueKinds(
 			return (
 				mask &
 					(phi < 0 ? COMPILER_VALUE_KIND_TOP : masks[phi]!) &
-					(typeof point === "number" ? at(value, point) : onEdge(value, point)) ||
+					(coreControlPointIsEdge(point) ? onEdge(value, point) : at(value, point)) ||
 				mask ||
 				COMPILER_VALUE_KIND_TOP
 			);

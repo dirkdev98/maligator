@@ -241,15 +241,15 @@ export function coreReadAccessorLoopPlan(
 			(_, index) => index,
 		).find((index) => fn.kernel.blockParameterValue(parameterStart + index) === resolved);
 		const incoming =
-			flow.predecessors[owner]?.filter(({ kind }) => kind === "ordinary") ?? [];
+			flow.predecessors[owner]?.filter((edge) => flow.edges.kind(edge) === "ordinary") ??
+			[];
 		const okay =
 			parameterIndex !== undefined &&
 			incoming.length > 0 &&
-			incoming.every(
-				(edge) =>
-					edge.arguments[parameterIndex] !== undefined &&
-					numeric(edge.arguments[parameterIndex], remaining - 1),
-			);
+			incoming.every((edge) => {
+				const argument = flow.edges.argument(edge, parameterIndex);
+				return argument !== undefined && numeric(argument, remaining - 1);
+			});
 		checked.set(resolved, okay);
 		return okay;
 	};

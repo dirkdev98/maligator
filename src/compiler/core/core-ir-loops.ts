@@ -6,6 +6,7 @@ import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 } from "./core-ir-control-flow.ts";
+import { coreControlPointIsEdge } from "./core-ir-control-flow.ts";
 import type {
 	CoreControlEdge,
 	CoreControlFlow,
@@ -397,17 +398,17 @@ export function analyzeCoreLoopInductions(
 			continue;
 		const latch = [...loop.latches][0]!;
 		const incoming = (cfg.predecessors[loop.header] ?? []).filter(
-			({ kind }) => kind === "ordinary",
+			(edge) => cfg.edges.kind(edge) === "ordinary",
 		);
-		const initialEdge = incoming.find(({ from }) => from === loop.preheader);
-		const updateEdge = incoming.find(({ from }) => from === latch);
+		const initialEdge = incoming.find((edge) => cfg.edges.from(edge) === loop.preheader);
+		const updateEdge = incoming.find((edge) => cfg.edges.from(edge) === latch);
 		if (initialEdge === undefined || updateEdge === undefined) continue;
 		const parameterStart = fn.kernel.blockParameterStart(loop.header);
 		const parameterCount = fn.kernel.blockParameterCount(loop.header);
 		for (let parameterIndex = 0; parameterIndex < parameterCount; parameterIndex++) {
 			const parameter = fn.kernel.blockParameterValue(parameterStart + parameterIndex);
-			const initial = initialEdge.arguments[parameterIndex];
-			const update = updateEdge.arguments[parameterIndex];
+			const initial = cfg.edges.argument(initialEdge, parameterIndex);
+			const update = cfg.edges.argument(updateEdge, parameterIndex);
 			if (initial === undefined || update === undefined) continue;
 			const initialScalar = exactScalar?.(initial);
 			let representation = numericRepresentation(parameter);
@@ -675,10 +676,14 @@ export function analyzeCoreLoopInductions(
 					if (fn.kernel.blockParameterRole(row) !== 1 && incoming.length > 0) {
 						let joined: CoreIntegerRangeState = null;
 						for (const edge of incoming) {
-							const input =
-								edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+							const input = cfg.edges.argument(
+								edge,
+								cfg.edges.kind(edge) === "exceptional" ? index - 1 : index,
+							);
 							const bound =
-								input === undefined ? undefined : query(input, edge.from, budget);
+								input === undefined
+									? undefined
+									: query(input, cfg.edges.from(edge), budget);
 							if (bound === undefined) {
 								joined = undefined;
 								break;
@@ -887,19 +892,23 @@ export function analyzeCoreLoopInductions(
 			edge: CoreControlEdge,
 			budget: { remaining: number },
 		): CoreIntegerRangeState => {
-			if (edge.kind !== "ordinary") return undefined;
-			const initial = query(value, edge.from, budget);
+			if (cfg.edges.kind(edge) !== "ordinary") return undefined;
+			const initial = query(value, cfg.edges.from(edge), budget);
 			if (initial === undefined || initial === null || budget.remaining-- <= 0)
 				return initial;
-			const terminator = fn.blockTerminator(edge.from);
+			const terminator = fn.blockTerminator(cfg.edges.from(edge));
 			const kind = fn.instructionKind(terminator);
 			if (kind !== "branch" && kind !== "guard") return initial;
-			const edges = cfg.successors[edge.from]!.filter((edge) => edge.kind === "ordinary");
+			const edges = cfg.successors[cfg.edges.from(edge)]!.filter(
+				(edge) => cfg.edges.kind(edge) === "ordinary",
+			);
 			const yes = edges[0]!;
 			const no = edges[1]!;
-			const exclusive = yes.to !== no.to;
-			const yesTaken = edge === yes || (exclusive && edge.to === yes.to);
-			const noTaken = edge === no || (exclusive && edge.to === no.to);
+			const exclusive = cfg.edges.to(yes) !== cfg.edges.to(no);
+			const yesTaken =
+				edge === yes || (exclusive && cfg.edges.to(edge) === cfg.edges.to(yes));
+			const noTaken =
+				edge === no || (exclusive && cfg.edges.to(edge) === cfg.edges.to(no));
 			if (yesTaken === noTaken) return initial;
 			const condition = operand(fn, terminator, 0)!;
 			const definition = definitionInstruction(fn, root(condition));
@@ -921,7 +930,7 @@ export function analyzeCoreLoopInductions(
 			const constant = exactNumber(fn, boundValue, root);
 			let bound = constant;
 			if (bound === undefined) {
-				const range = query(boundValue, edge.from, budget);
+				const range = query(boundValue, cfg.edges.from(edge), budget);
 				if (range === null) return null;
 				if (range === undefined) return initial;
 				bound = operator === "<" || operator === "<=" ? range.maximum : range.minimum;
@@ -931,7 +940,7 @@ export function analyzeCoreLoopInductions(
 		};
 		return (value, point) => {
 			const budget = { remaining: 32 };
-			return point !== undefined && typeof point !== "number"
+			return point !== undefined && coreControlPointIsEdge(point)
 				? onEdge(value, point, budget)
 				: query(value, point, budget);
 		};

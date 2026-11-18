@@ -126,7 +126,7 @@ export function coreReadAccessorSummary(
 				parameter = index;
 		const edges = cfg.predecessors[block] ?? [];
 		if (parameter < 0 || edges.length !== 2) return undefined;
-		const alternatives = edges.map((edge) => edge.arguments[parameter]!);
+		const alternatives = edges.map((edge) => cfg.edges.argument(edge, parameter)!);
 		let value = alternatives[0]!;
 		let defaultIndex = 1;
 		defaultValue = constant(alternatives[1]!);
@@ -144,9 +144,9 @@ export function coreReadAccessorSummary(
 		if (branch.kind !== "branch") return undefined;
 		const onEdge = (target: typeof branch.consequent, index: number): boolean =>
 			target.block === block
-				? edges[index]!.from === branches[0] &&
+				? cfg.edges.from(edges[index]!) === branches[0] &&
 					target.arguments[parameter] === alternatives[index]
-				: cfg.dominates(target.block, edges[index]!.from);
+				: cfg.dominates(target.block, cfg.edges.from(edges[index]!));
 		if (
 			!onEdge(branch.consequent, defaultIndex) ||
 			!onEdge(branch.alternate, 1 - defaultIndex)

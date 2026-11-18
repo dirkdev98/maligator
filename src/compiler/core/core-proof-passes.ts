@@ -492,9 +492,9 @@ const normalizeNumericNullishJoins: CoreFunctionPass = {
 			const incoming = cfg.predecessors[direct.block] ?? [];
 			if (
 				incoming.length !== 2 ||
-				incoming.some(({ kind }) => kind !== "ordinary") ||
-				!incoming.some(({ from }) => from === block) ||
-				!incoming.some(({ from }) => from === fallback.block)
+				incoming.some((edge) => cfg.edges.kind(edge) !== "ordinary") ||
+				!incoming.some((edge) => cfg.edges.from(edge) === block) ||
+				!incoming.some((edge) => cfg.edges.from(edge) === fallback.block)
 			)
 				continue;
 			const matchingArguments = direct.arguments.flatMap((argument, index) =>

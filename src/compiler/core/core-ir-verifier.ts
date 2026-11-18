@@ -1012,13 +1012,17 @@ function verifyControlFlow(fn: CoreFunctionStore, program: CoreProgram): CoreCon
 	const cfg = buildCoreControlFlow(program, fn.id);
 	for (const block of fn.blockIds()) {
 		for (const edge of cfg.successors[block] ?? []) {
-			if (!(cfg.predecessors[edge.to] ?? []).includes(edge)) {
-				fail(`CFG predecessor index omits b${edge.from} -> b${edge.to}`);
+			if (!(cfg.predecessors[cfg.edges.to(edge)] ?? []).includes(edge)) {
+				fail(
+					`CFG predecessor index omits b${cfg.edges.from(edge)} -> b${cfg.edges.to(edge)}`,
+				);
 			}
 		}
 		for (const edge of cfg.predecessors[block] ?? []) {
-			if (!(cfg.successors[edge.from] ?? []).includes(edge)) {
-				fail(`CFG successor index omits b${edge.from} -> b${edge.to}`);
+			if (!(cfg.successors[cfg.edges.from(edge)] ?? []).includes(edge)) {
+				fail(
+					`CFG successor index omits b${cfg.edges.from(edge)} -> b${cfg.edges.to(edge)}`,
+				);
 			}
 		}
 	}

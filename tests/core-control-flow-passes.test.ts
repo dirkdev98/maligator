@@ -304,9 +304,14 @@ describe("Core control-flow analyses and passes", () => {
 		});
 		const finished = builder.finish(entry);
 		const cfg = buildCoreControlFlow(program, finished.function);
-		expect(cfg.successors[entry]).toMatchObject([
-			{ from: entry, to: handler, kind: "exceptional", arguments: [] },
-		]);
+		const outgoing = cfg.successors[entry]!;
+		expect(outgoing).toHaveLength(1);
+		const edge = outgoing[0]!;
+		expect(cfg.predecessors[handler]).toEqual([edge]);
+		expect(cfg.edges.from(edge)).toBe(entry);
+		expect(cfg.edges.to(edge)).toBe(handler);
+		expect(cfg.edges.kind(edge)).toBe("exceptional");
+		expect(cfg.edges.arguments(edge)).toEqual([]);
 		expect(
 			analyzeCoreLocalExceptionFlows(program.function(finished.function), cfg),
 		).toMatchObject([{ source: entry, handler, thrownValue: thrown }]);
@@ -342,11 +347,10 @@ describe("Core control-flow analyses and passes", () => {
 		expect(exceptional.successors[entry]![0]).toBe(ordinary.successors[entry]![0]);
 		expect(exceptional.successors[normal]).toBe(ordinary.successors[normal]);
 		expect(exceptional.predecessors[entry]).toBe(ordinary.predecessors[entry]);
-		expect(exceptional.successors[entry]![1]).toMatchObject({
-			from: entry,
-			to: handler,
-			kind: "exceptional",
-		});
+		const handlerEdge = exceptional.successors[entry]![1]!;
+		expect(exceptional.edges.from(handlerEdge)).toBe(entry);
+		expect(exceptional.edges.to(handlerEdge)).toBe(handler);
+		expect(exceptional.edges.kind(handlerEdge)).toBe("exceptional");
 
 		const call = [...program.function(functionId).bodyInstructionIds(entry)][0]!;
 		const editor = CoreEditor.open(program, functionId);
@@ -370,6 +374,7 @@ describe("Core control-flow analyses and passes", () => {
 		expect(refinedExceptional.successors[entry]![0]).toBe(ordinary.successors[entry]![0]);
 		expect(exceptional.dominates(entry, handler)).toBe(true);
 		expect(refinedExceptional.dominates(entry, handler)).toBe(false);
+		expect(exceptional.instructionDominatesBlock(normal, normal)).toBe(false);
 		expect(exceptional.instructionDominatesBlock(entry, normal)).toBe(false);
 		expect(refinedExceptional.instructionDominatesBlock(entry, normal)).toBe(true);
 	});
@@ -491,10 +496,13 @@ describe("Core control-flow analyses and passes", () => {
 		);
 		editor.commit();
 		const after = bundle.exceptional();
-		expect(after.successors[source]!.map((edge) => edge.kind)).toEqual(["ordinary"]);
-		expect(after.successors[destination]).toMatchObject([
-			{ to: handler, kind: "exceptional" },
+		expect(after.successors[source]!.map((edge) => after.edges.kind(edge))).toEqual([
+			"ordinary",
 		]);
+		const outgoing = after.successors[destination]!;
+		expect(outgoing).toHaveLength(1);
+		expect(after.edges.to(outgoing[0]!)).toBe(handler);
+		expect(after.edges.kind(outgoing[0]!)).toBe("exceptional");
 		expect(after.instructionDominatesBlock(source, destination)).toBe(true);
 		expect(before.instructionDominatesBlock(source, destination)).toBe(false);
 		expect(after.successors).toEqual(
@@ -1938,7 +1946,7 @@ describe("Core control-flow analyses and passes", () => {
 		);
 		const request = { scope: "function", function: functionId } as const;
 		const before = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
-		expect(before.successors[entry]![0]!.arguments).toEqual([copy!]);
+		expect(before.edges.arguments(before.successors[entry]![0]!)).toEqual([copy!]);
 		const editor = CoreEditor.open(program, functionId);
 		editor.replaceValueUses(copy!, parameter);
 		const changes = editor.commit();
@@ -1946,8 +1954,8 @@ describe("Core control-flow analyses and passes", () => {
 		expect(changes.domains).toContain("exceptionFlow");
 		const after = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
 		expect(after).not.toBe(before);
-		expect(after.successors[entry]![0]!.arguments).toEqual([parameter]);
-		expect(after.predecessors[handler]![0]!.arguments).toEqual([parameter]);
+		expect(after.edges.arguments(after.successors[entry]![0]!)).toEqual([parameter]);
+		expect(after.edges.arguments(after.predecessors[handler]![0]!)).toEqual([parameter]);
 	});
 
 	it("reuses the real CFG analysis across operand-only rewrites", () => {
@@ -1980,8 +1988,8 @@ describe("Core control-flow analyses and passes", () => {
 		const ordinary = bundle.ordinary();
 		const first = bundle.exceptional();
 		expect(first).toBe(ordinary);
-		expect(first.successors[entry]![0]!.arguments).toEqual([copy!]);
-		expect(first.successors[target]![0]!.arguments).toEqual([]);
+		expect(first.edges.arguments(first.successors[entry]![0]!)).toEqual([copy!]);
+		expect(first.edges.arguments(first.successors[target]![0]!)).toEqual([]);
 		expect(
 			analyses
 				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
@@ -2007,10 +2015,10 @@ describe("Core control-flow analyses and passes", () => {
 			})
 			.exceptional();
 		expect(second).toBe(first);
-		expect(second.successors[entry]![0]!.arguments).toEqual([parameter]);
-		expect(second.predecessors[target]![0]!.arguments).toEqual([parameter]);
-		expect(second.successors[target]![0]!.arguments).toEqual([]);
-		expect(second.predecessors[exit]![0]!.arguments).toEqual([]);
+		expect(second.edges.arguments(second.successors[entry]![0]!)).toEqual([parameter]);
+		expect(second.edges.arguments(second.predecessors[target]![0]!)).toEqual([parameter]);
+		expect(second.edges.arguments(second.successors[target]![0]!)).toEqual([]);
+		expect(second.edges.arguments(second.predecessors[exit]![0]!)).toEqual([]);
 		const result = report.finish(program, { directEntries: [], specializations: [] });
 		expect(result.analyses).toMatchObject([
 			{ analysis: "control-flow-bundle", queries: 3, hits: 2, recomputations: 1 },

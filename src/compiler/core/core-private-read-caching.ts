@@ -158,7 +158,9 @@ export const cacheStablePrivateReads: CoreFunctionPass = {
 					loop.canonical &&
 					loop.preheader !== undefined &&
 					![...loop.blocks].some((block) =>
-						(cfg.predecessors[block] ?? []).some(({ kind }) => kind === "exceptional"),
+						(cfg.predecessors[block] ?? []).some(
+							(edge) => cfg.edges.kind(edge) === "exceptional",
+						),
 					),
 			)
 			.sort((left, right) => left.depth - right.depth);
@@ -261,7 +263,7 @@ export const cacheStablePrivateReads: CoreFunctionPass = {
 								Array.from(slots, () => ({ representation: "boxed" as const })),
 							),
 						]
-					: [...outgoing.get(cfg.predecessors[block]![0]!.from)!];
+					: [...outgoing.get(cfg.edges.from(cfg.predecessors[block]![0]!))!];
 				for (const instruction of [...fn.bodyInstructionIds(block)]) {
 					const slot = loopReads.get(instruction);
 					if (slot === undefined) continue;

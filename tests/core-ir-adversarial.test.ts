@@ -75,9 +75,9 @@ function ordinaryPredecessorCount(
 	fn: CoreFunctionStore,
 	block: CoreBlockId,
 ): number {
-	return buildCoreControlFlow(program_, fn.id).predecessors[block]!.filter(
-		({ kind }) => kind === "ordinary",
-	).length;
+	const cfg = buildCoreControlFlow(program_, fn.id);
+	return cfg.predecessors[block]!.filter((edge) => cfg.edges.kind(edge) === "ordinary")
+		.length;
 }
 
 function optimizeVerified(
@@ -448,10 +448,14 @@ describe("adversarial Core graphs", () => {
 			expect.arrayContaining([[inspectCoreFunctionParameters(fn)[0]!], [finalCallee]]),
 		);
 		expect(
-			cfg.predecessors[finalHandler]!.filter(({ kind }) => kind === "exceptional"),
+			cfg.predecessors[finalHandler]!.filter(
+				(edge) => cfg.edges.kind(edge) === "exceptional",
+			),
 		).toHaveLength(2);
 		expect(
-			cfg.predecessors[finalHandler]!.every(({ kind }) => kind === "exceptional"),
+			cfg.predecessors[finalHandler]!.every(
+				(edge) => cfg.edges.kind(edge) === "exceptional",
+			),
 		).toBe(true);
 		expect(
 			coreOperations(fn).some(

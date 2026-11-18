@@ -240,8 +240,10 @@ export const foldLiteralArrayLengths: CoreFunctionPass = {
 				if (fn.kernel.blockParameterRole(start + index) === 1) continue;
 				const parameter = root(fn.kernel.blockParameterValue(start + index));
 				for (const edge of control.predecessors[block] ?? []) {
-					const argument =
-						edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+					const argument = control.edges.argument(
+						edge,
+						control.edges.kind(edge) === "exceptional" ? index - 1 : index,
+					);
 					if (argument !== undefined && root(argument) !== parameter)
 						rejected.add(root(argument));
 				}

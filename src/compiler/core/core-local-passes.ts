@@ -2027,8 +2027,10 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 					if (empty.has(value)) continue;
 					if (
 						incoming.some((edge) => {
-							const argument =
-								edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+							const argument = control.edges.argument(
+								edge,
+								control.edges.kind(edge) === "exceptional" ? index - 1 : index,
+							);
 							return argument === undefined || empty.has(argument);
 						})
 					) {
@@ -2174,8 +2176,8 @@ function removeUnreachableControlFlow(
 		if (reachable.has(block)) continue;
 		reachable.add(block);
 		for (const edge of control.successors[block] ?? []) {
-			if (edge.kind === "exceptional" || !abruptTails?.has(block))
-				pendingRoots.push(edge.to);
+			if (control.edges.kind(edge) === "exceptional" || !abruptTails?.has(block))
+				pendingRoots.push(control.edges.to(edge));
 		}
 	}
 	const blocks = [...fn.blockIds()].filter((block) => !reachable.has(block));
@@ -2296,7 +2298,10 @@ const eliminateForwardingBlocks: CoreFunctionPass = {
 			const terminator = fn.blockTerminator(block);
 			const kind = fn.instructionKind(terminator);
 			const incoming = control.predecessors[block] ?? [];
-			if (incoming.length === 0 || incoming.some(({ kind }) => kind === "exceptional"))
+			if (
+				incoming.length === 0 ||
+				incoming.some((edge) => control.edges.kind(edge) === "exceptional")
+			)
 				continue;
 			const parameters = Array.from({ length: parameterCount }, (_, index) =>
 				fn.kernel.blockParameterValue(parameterStart + index),
@@ -2310,7 +2315,7 @@ const eliminateForwardingBlocks: CoreFunctionPass = {
 				if (
 					condition < 0 ||
 					incoming.some((edge) => {
-						const value = edge.arguments[condition];
+						const value = control.edges.argument(edge, condition);
 						if (value === undefined) return true;
 						const constant = constantForValue(fn, value);
 						if (constant?.kind !== "boolean") return true;
@@ -2352,7 +2357,9 @@ const eliminateForwardingBlocks: CoreFunctionPass = {
 					return parameter < 0 ? value : edge.arguments[parameter]!;
 				}),
 			});
-			for (const source of new Set(candidate.incoming.map(({ from }) => from))) {
+			for (const source of new Set(
+				candidate.incoming.map((edge) => control.edges.from(edge)),
+			)) {
 				const sourceTerminator = fn.blockTerminator(source);
 				editor.replaceTerminator(
 					source,
@@ -2393,7 +2400,7 @@ const mergeLinearBlocks: CoreFunctionPass = {
 		const control = bundle.structural;
 		const throwsToHandler = (block: CoreBlockId) =>
 			(bundle.exceptional().successors[block] ?? []).some(
-				({ kind }) => kind === "exceptional",
+				(edge) => control.edges.kind(edge) === "exceptional",
 			);
 		let selected: Array<{
 			readonly predecessor: CoreBlockId;
@@ -2420,8 +2427,8 @@ const mergeLinearBlocks: CoreFunctionPass = {
 			const incoming = control.predecessors[target] ?? [];
 			if (
 				incoming.length !== 1 ||
-				incoming[0]!.kind !== "ordinary" ||
-				incoming[0]!.from !== predecessor
+				control.edges.kind(incoming[0]!) !== "ordinary" ||
+				control.edges.from(incoming[0]!) !== predecessor
 			)
 				continue;
 			const parameterStart = fn.kernel.blockParameterStart(target);
@@ -2539,11 +2546,14 @@ const simplifyBlockParameters: CoreFunctionPass = {
 			const parameterCount = fn.kernel.blockParameterCount(block);
 			if (parameterCount === 0) continue;
 			const incoming = control.predecessors[block] ?? [];
-			if (incoming.length === 0 || incoming.some(({ kind }) => kind === "exceptional")) {
+			if (
+				incoming.length === 0 ||
+				incoming.some((edge) => control.edges.kind(edge) === "exceptional")
+			) {
 				continue;
 			}
 			const parameterStart = fn.kernel.blockParameterStart(block);
-			const predecessors = [...new Set(incoming.map(({ from }) => from))];
+			const predecessors = [...new Set(incoming.map((edge) => control.edges.from(edge)))];
 			let argumentRows:
 				| Array<{ readonly start: number; readonly count: number }>
 				| undefined;
@@ -2727,7 +2737,10 @@ const canonicalizeBlockParameters: CoreFunctionPass = {
 		}> = [];
 		for (const block of fn.blockIds()) {
 			const incoming = control.predecessors[block] ?? [];
-			if (incoming.length === 0 || incoming.some(({ kind }) => kind === "exceptional")) {
+			if (
+				incoming.length === 0 ||
+				incoming.some((edge) => control.edges.kind(edge) === "exceptional")
+			) {
 				continue;
 			}
 			const parameterStart = fn.kernel.blockParameterStart(block);
@@ -2762,7 +2775,7 @@ const canonicalizeBlockParameters: CoreFunctionPass = {
 			if (replacements.length > 0) {
 				plans.push({
 					block,
-					predecessors: [...new Set(incoming.map(({ from }) => from))],
+					predecessors: [...new Set(incoming.map((edge) => control.edges.from(edge)))],
 					replacements,
 				});
 			}
