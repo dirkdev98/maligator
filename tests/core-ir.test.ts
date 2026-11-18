@@ -1530,13 +1530,12 @@ describe("Core IR", () => {
 		const fn = program.function(functionId);
 
 		expect(() => verifyCoreFunction(program, functionId)).not.toThrow();
-		expect(buildCoreControlFlow(program, functionId).successors[entry]).toEqual([
-			expect.objectContaining({ to: handler, kind: "exceptional" }),
-		]);
-		const canonical = coreCanonicalValueRoots(
-			fn,
-			buildCoreControlFlow(program, functionId),
-		);
+		const cfg = buildCoreControlFlow(program, functionId);
+		const outgoing = cfg.successors[entry]!;
+		expect(outgoing).toHaveLength(1);
+		expect(cfg.edges.to(outgoing[0]!)).toBe(handler);
+		expect(cfg.edges.kind(outgoing[0]!)).toBe("exceptional");
+		const canonical = coreCanonicalValueRoots(fn, cfg);
 		expect(canonical.get(inspectCoreBlockParameters(builder, handler)[1]!.value)).toBe(
 			input,
 		);
