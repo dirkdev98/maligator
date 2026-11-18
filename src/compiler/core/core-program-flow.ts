@@ -101,9 +101,12 @@ export interface CoreProgramFlowTargetIndex {
 	}>;
 }
 
-export interface CoreProgramFlowValueKindSummary {
+interface CoreProgramFlowKindInputs {
 	readonly parameterKinds: ReadonlyArray<number>;
 	readonly receiverKind: number;
+}
+
+export interface CoreProgramFlowValueKindSummary extends CoreProgramFlowKindInputs {
 	readonly returnKind: number;
 	readonly returnRecord?: CoreRecordValueKind;
 	readonly returnHeapBrand?: CoreHeapBrandState;
@@ -144,8 +147,10 @@ export interface CoreProgramFlowValueKindState<
 	Targets extends CoreProgramFlowTargetIndex = CoreProgramFlowTargetIndex,
 > extends CoreProgramFlowValueKinds<Analysis> {
 	readonly sourceClosed: boolean;
+	readonly dataEpoch: number;
 	readonly targets: Targets;
 	readonly external: ReadonlyMap<CoreFunctionId, boolean>;
+	readonly boundaryInputs: ReadonlyMap<CoreFunctionId, CoreProgramFlowKindInputs>;
 	readonly valueAnalyses: ReadonlyMap<CoreFunctionId, Analysis>;
 	readonly summaries: ReadonlyMap<CoreFunctionId, CoreProgramFlowValueKindSummary>;
 	readonly anyScriptAggregate: CoreProgramFlowValueKindAggregate | undefined;
@@ -1342,7 +1347,7 @@ interface LocalTransferEntry {
 
 interface LocalTransferStore {
 	generation: number;
-	sourcePositionEpoch: number;
+	dataEpoch: number;
 	entries: WeakMap<CoreFunctionStore, LocalTransferEntry>;
 }
 
@@ -1365,7 +1370,7 @@ export class CoreProgramFlowEngine {
 		if (store === undefined) {
 			store = {
 				generation: program.generation,
-				sourcePositionEpoch: program.sourcePositionEpoch,
+				dataEpoch: program.dataEpoch,
 				entries: new WeakMap(),
 			};
 			localTransferStores.set(program, store);
@@ -1405,11 +1410,11 @@ export class CoreProgramFlowEngine {
 		const store = this.#localTransfers;
 		if (
 			store.generation !== this.#program.generation ||
-			store.sourcePositionEpoch !== this.#program.sourcePositionEpoch
+			store.dataEpoch !== this.#program.dataEpoch
 		) {
 			store.entries = new WeakMap();
 			store.generation = this.#program.generation;
-			store.sourcePositionEpoch = this.#program.sourcePositionEpoch;
+			store.dataEpoch = this.#program.dataEpoch;
 			this.#report?.increment("programFlowTransferEpochResets");
 		}
 		const fn = this.#program.function(functionId);
@@ -2338,90 +2343,172 @@ export class CoreProgramFlowEngine {
 		externallyChangedFunctions?: ReadonlySet<CoreFunctionId>,
 		context?: CoreCompilationContext,
 	): CoreProgramFlowValueKindState<Analysis, Targets> {
-		const sameMasks = (
-			left: ReadonlyArray<number>,
-			right: ReadonlyArray<number>,
+		const dataEpoch = this.#program.dataEpoch;
+		if (previous?.dataEpoch !== dataEpoch) previous = undefined;
+		const sameInputs = (
+			left: CoreProgramFlowKindInputs | undefined,
+			right: CoreProgramFlowKindInputs,
 		): boolean =>
-			left.length === right.length &&
-			left.every((value, index) => value === right[index]);
-		const freezeSummary = (
-			summary: CoreProgramFlowValueKindSummary,
-		): CoreProgramFlowValueKindSummary =>
-			Object.freeze({
-				parameterKinds: Object.freeze([...summary.parameterKinds]),
-				receiverKind: summary.receiverKind,
-				returnKind: summary.returnKind,
-				returnHeapBrand: summary.returnHeapBrand,
-				...(summary.returnRecord === undefined
-					? {}
-					: { returnRecord: summary.returnRecord }),
-			});
-		const topology = this.topology(targets.graph);
-		const functionIds = [...this.#program.functionIds()];
-		const live = new Set(functionIds);
+			left?.receiverKind === right.receiverKind &&
+			left.parameterKinds.length === right.parameterKinds.length &&
+			left.parameterKinds.every((mask, index) => mask === right.parameterKinds[index]);
+		const sameReturn = (
+			left: CoreProgramFlowValueKindSummary | undefined,
+			right: CoreProgramFlowValueKindSummary,
+		): boolean =>
+			left?.returnKind === right.returnKind &&
+			left.returnHeapBrand === right.returnHeapBrand &&
+			sameCoreRecordValueKind(left.returnRecord, right.returnRecord);
+		const functionIds = targets.graph.functions;
 		const external = new Map(
 			functionIds.map((functionId) => [functionId, externallyReachable(functionId)]),
 		);
-		const affected = new Set<CoreFunctionId>();
-		let aggregateInitiallyAffected = false;
-		if (previous === undefined || previous.sourceClosed !== targets.sourceClosed) {
-			for (const functionId of functionIds) affected.add(functionId);
-			aggregateInitiallyAffected = targets.graph.hasAggregate();
-		} else {
-			for (const functionId of dirtyFunctions ?? functionIds) affected.add(functionId);
-			let targetsChanged = false;
-			for (const functionId of functionIds) {
-				const before = previous.targets.outgoing(functionId),
-					after = targets.outgoing(functionId);
-				if (before !== after && (before.length !== 0 || after.length !== 0)) {
-					affected.add(functionId);
-					targetsChanged = true;
+		type Site = ReturnType<Targets["outgoing"]>[number];
+		const dependencies = new Map<CoreFunctionId, Array<CoreFunctionId>>();
+		const returnReaders = new Map<CoreFunctionId, Set<CoreFunctionId>>();
+		const incoming = new Map<
+			CoreFunctionId,
+			Array<{ caller: CoreFunctionId; site: Site }>
+		>();
+		const argumentTargets = new Map<CoreFunctionId, Set<CoreFunctionId>>();
+		const wildcardReaders = new Set<CoreFunctionId>();
+		for (const functionId of functionIds) dependencies.set(functionId, []);
+		for (const caller of functionIds) {
+			for (const site of targets.outgoing(caller)) {
+				if (targets.sourceClosed && !site.targets.opaque && site.targets.anyScript)
+					wildcardReaders.add(caller);
+				for (const callee of site.targets.functions) {
+					if (!external.has(callee)) continue;
+					if (!site.targets.opaque && !site.targets.anyScript) {
+						let readers = returnReaders.get(callee);
+						if (readers === undefined) returnReaders.set(callee, (readers = new Set()));
+						if (!readers.has(caller)) dependencies.get(caller)!.push(callee);
+						readers.add(caller);
+					}
+					if (external.get(callee) === true) continue;
+					let sites = incoming.get(callee);
+					if (sites === undefined) incoming.set(callee, (sites = []));
+					sites.push({ caller, site });
+					let recipients = argumentTargets.get(caller);
+					if (recipients === undefined)
+						argumentTargets.set(caller, (recipients = new Set()));
+					if (!recipients.has(callee)) dependencies.get(callee)!.push(caller);
+					recipients.add(callee);
 				}
 			}
-			for (const functionId of externallyChangedFunctions ?? functionIds) {
-				if (previous.external.get(functionId) !== external.get(functionId)) {
-					affected.add(functionId);
-				}
-			}
-			aggregateInitiallyAffected =
-				targetsChanged ||
-				!sameMasks(previous.targets.graph.functions, targets.graph.functions) ||
-				!sameMasks(previous.targets.graph.wildcardCallers, targets.graph.wildcardCallers);
 		}
-		let anyScriptAggregate = targets.graph.hasAggregate()
+		// A return and an argument can feed back through the same site even when the call
+		// graph is acyclic. Solve the actual dependencies in dependency-first order.
+		const dependencyGraph = updateCoreCallGraph(
+			undefined,
+			functionIds,
+			functionIds.map((caller) => ({
+				caller,
+				exactTargets: dependencies.get(caller)!,
+				wildcard: wildcardReaders.has(caller),
+			})),
+		);
+		const { owner, sccs } = buildCoreProgramFlowTopology(dependencyGraph);
+		const forced = new Uint8Array(sccs.length);
+		const checkBoundary = new Uint8Array(sccs.length);
+		const force = (functionId: CoreFunctionId): void => {
+			const scc = owner.get(functionId);
+			if (scc !== undefined) forced[scc] = 1;
+		};
+		const checkInputs = (functionId: CoreFunctionId): void => {
+			const scc = owner.get(functionId);
+			if (scc !== undefined) checkBoundary[scc] = 1;
+		};
+		let anyScriptAggregate = dependencyGraph.hasAggregate()
 			? previous?.anyScriptAggregate
 			: undefined;
-		const seededSummary = (
-			functionId: CoreFunctionId,
-		): CoreProgramFlowValueKindSummary => {
-			const seed = external.get(functionId) === true ? semantics.top : 0;
-			return {
-				parameterKinds: Array<number>(
-					this.#program.function(functionId).parameterCount,
-				).fill(seed),
-				receiverKind: seed,
-				returnKind: 0,
-				returnHeapBrand: null,
-			};
-		};
+		const aggregateScc = owner.get(CORE_ANY_SCRIPT_AGGREGATE);
+		if (
+			aggregateScc !== undefined &&
+			(anyScriptAggregate === undefined ||
+				previous?.targets.graph.functions.some((id) => !external.has(id)))
+		) {
+			forced[aggregateScc] = 1;
+		}
+		if (previous === undefined || previous.sourceClosed !== targets.sourceClosed) {
+			forced.fill(1);
+		} else {
+			for (const functionId of dirtyFunctions ?? functionIds) force(functionId);
+			for (const functionId of externallyChangedFunctions ?? functionIds) {
+				if (previous.external.get(functionId) !== external.get(functionId))
+					force(functionId);
+			}
+			for (const functionId of functionIds) {
+				const before = previous.targets.outgoing(functionId);
+				const after = targets.outgoing(functionId);
+				if (before === after || (before.length === 0 && after.length === 0)) continue;
+				force(functionId);
+				const retained = new Set(after);
+				for (const site of before) {
+					if (retained.has(site)) continue;
+					// A removed internal contribution can leave the boundary masks unchanged.
+					for (const callee of site.targets.functions) {
+						if (external.get(callee) === false) force(callee);
+					}
+				}
+			}
+			for (const functionId of previous.targets.graph.functions) {
+				if (external.has(functionId)) continue;
+				for (const site of previous.targets.outgoing(functionId)) {
+					for (const callee of site.targets.functions) {
+						if (external.get(callee) === false) force(callee);
+					}
+				}
+			}
+		}
 		const summaries = new Map<CoreFunctionId, CoreProgramFlowValueKindSummary>();
 		const valueAnalyses = new Map<CoreFunctionId, Analysis>();
+		const boundaryInputs = new Map<CoreFunctionId, CoreProgramFlowKindInputs>();
 		for (const functionId of functionIds) {
-			if (!affected.has(functionId)) {
-				const summary = previous?.summaries.get(functionId);
-				const analysis = previous?.valueAnalyses.get(functionId);
-				if (summary !== undefined && analysis !== undefined) {
-					summaries.set(functionId, summary);
-					valueAnalyses.set(functionId, analysis);
-					continue;
-				}
-				affected.add(functionId);
-			}
-			summaries.set(functionId, seededSummary(functionId));
+			const summary = previous?.summaries.get(functionId);
+			const analysis = previous?.valueAnalyses.get(functionId);
+			const inputs = previous?.boundaryInputs.get(functionId);
+			if (summary !== undefined && analysis !== undefined && inputs !== undefined) {
+				summaries.set(functionId, summary);
+				valueAnalyses.set(functionId, analysis);
+				boundaryInputs.set(functionId, inputs);
+			} else force(functionId);
 		}
+		const mergeArguments = (
+			fn: CoreFunctionStore,
+			site: Site,
+			values: Analysis,
+			inputs: CoreProgramFlowKindInputs,
+		): CoreProgramFlowKindInputs => {
+			let parameters: Array<number> | undefined;
+			for (let index = 0; index < fn.parameterCount; index++) {
+				const argument = site.arguments?.[index];
+				const mask =
+					site.arguments === undefined
+						? semantics.top
+						: argument === undefined
+							? semantics.undefined
+							: semantics.latticeMask(values, argument);
+				const old = inputs.parameterKinds[index]!;
+				if ((old | mask) !== old)
+					(parameters ??= [...inputs.parameterKinds])[index] = old | mask;
+			}
+			const receiverKind =
+				inputs.receiverKind |
+				(!fn.metadata.strict
+					? semantics.object
+					: site.receiver === undefined
+						? semantics.top
+						: semantics.latticeMask(values, site.receiver));
+			return parameters === undefined && receiverKind === inputs.receiverKind
+				? inputs
+				: { parameterKinds: parameters ?? inputs.parameterKinds, receiverKind };
+		};
 		let callerWakeups = 0;
 		let calleeWakeups = 0;
 		let functionsEvaluated = 0;
+		let affectedFunctions = 0;
+		const changedFunctions = new Set<CoreFunctionId>();
 		const demands = new Map<CoreFunctionId, ReadonlyArray<CoreValueId>>();
 		const callSiteIndices = new Map<
 			CoreFunctionId,
@@ -2440,441 +2527,378 @@ export class CoreProgramFlowEngine {
 		let exactReverseCallerVisits = 0;
 		let wildcardReverseCallerVisits = 0;
 		let aggregateFunctionVisits = 0;
-		const activeSccs = new Set<number>();
-		const initialSccs = new Set<number>();
-		const pendingFunctionSccs = new Set<number>();
-		const pendingAggregateSccs = new Set<number>();
-		for (const functionId of affected) {
-			const scc = topology.owner.get(functionId);
-			if (scc !== undefined) {
-				initialSccs.add(scc);
-				pendingFunctionSccs.add(scc);
+		for (const [sccIndex, component] of sccs.entries()) {
+			if (forced[sccIndex] === 0 && checkBoundary[sccIndex] === 0) continue;
+			let reset = forced[sccIndex] !== 0;
+			// Every caller outside this component has converged. Rebuild its contribution
+			// from the current value snapshot before resetting any cyclic inputs.
+			for (const functionId of component.functions) {
+				const fn = this.#program.function(functionId);
+				const seed = external.get(functionId) ? semantics.top : 0;
+				let inputs: CoreProgramFlowKindInputs = {
+					parameterKinds: Array<number>(fn.parameterCount).fill(seed),
+					receiverKind: seed,
+				};
+				for (const { caller, site } of incoming.get(functionId) ?? []) {
+					if (owner.get(caller) === sccIndex) continue;
+					inputs = mergeArguments(fn, site, valueAnalyses.get(caller)!, inputs);
+				}
+				const previousInputs = boundaryInputs.get(functionId);
+				if (sameInputs(previousInputs, inputs)) continue;
+				Object.freeze(inputs.parameterKinds);
+				boundaryInputs.set(functionId, Object.freeze(inputs));
+				reset = true;
 			}
-		}
-		if (aggregateInitiallyAffected && targets.graph.hasAggregate()) {
-			const scc = topology.owner.get(CORE_ANY_SCRIPT_AGGREGATE);
-			if (scc !== undefined) {
-				initialSccs.add(scc);
-				pendingAggregateSccs.add(scc);
+			if (!reset) continue;
+			affectedFunctions += component.functions.length;
+			const priorAggregate = anyScriptAggregate;
+			if (component.hasAnyScriptAggregate) anyScriptAggregate = undefined;
+			for (const id of component.functions) {
+				summaries.set(id, {
+					...boundaryInputs.get(id)!,
+					returnKind: 0,
+					returnHeapBrand: null,
+				});
 			}
-		}
-		this.solveSccs(
-			topology,
-			[...initialSccs].map((scc) => ({
-				scc,
-				dimensions: CORE_PROGRAM_FLOW_RETURN_KIND,
-			})),
-			(sccIndex, dimensions, enqueueScc) => {
-				if ((dimensions & CORE_PROGRAM_FLOW_RETURN_KIND) === 0) return;
-				const runFunctions = pendingFunctionSccs.delete(sccIndex);
-				const runAggregate = pendingAggregateSccs.delete(sccIndex);
-				const activateScc = (scc: number): void => {
-					if (activeSccs.has(scc)) return;
-					activeSccs.add(scc);
-					const component = topology.sccs[scc]!;
-					for (const functionId of component.functions) {
-						affected.add(functionId);
-						valueAnalyses.delete(functionId);
-						summaries.set(functionId, seededSummary(functionId));
-					}
-					for (const functionId of component.functions) {
-						for (const graphIndex of [targets, previous?.targets]) {
-							if (graphIndex === undefined) continue;
-							for (const neighbor of [
-								...graphIndex.graph.exactOutgoing(functionId),
-								...graphIndex.graph.exactCallers(functionId),
-							]) {
-								if (!live.has(neighbor)) continue;
-								const neighborScc = topology.owner.get(neighbor);
-								if (
-									neighborScc !== undefined &&
-									neighborScc !== scc &&
-									!activeSccs.has(neighborScc)
-								) {
-									pendingFunctionSccs.add(neighborScc);
-									enqueueScc(neighborScc, CORE_PROGRAM_FLOW_RETURN_KIND);
-								}
-							}
-						}
-					}
-				};
-				if (runFunctions) activateScc(sccIndex);
-				const component = topology.sccs[sccIndex]!;
-				const queue: Array<CoreCallGraphNode> = [
-					...(runAggregate && component.hasAnyScriptAggregate
-						? [CORE_ANY_SCRIPT_AGGREGATE]
-						: []),
-					...(runFunctions ? component.functions : []),
-				];
-				const queued = new Set<CoreCallGraphNode>(queue);
-				const enqueueNode = (node: CoreCallGraphNode, caller: boolean): void => {
-					const scc = topology.owner.get(node);
-					if (scc === undefined) return;
-					if (node === CORE_ANY_SCRIPT_AGGREGATE) pendingAggregateSccs.add(scc);
-					else {
-						pendingFunctionSccs.add(scc);
-						activateScc(scc);
-					}
-					if (scc === sccIndex) {
-						if (queued.has(node)) return;
-						queued.add(node);
-						queue.push(node);
-						if (node === CORE_ANY_SCRIPT_AGGREGATE) pendingAggregateSccs.delete(scc);
-						else pendingFunctionSccs.delete(scc);
-					} else if (!enqueueScc(scc, CORE_PROGRAM_FLOW_RETURN_KIND)) {
-						return;
-					}
-					if (caller) callerWakeups++;
-					else calleeWakeups++;
-				};
-				const applyIncoming = (
-					callee: CoreFunctionId,
-					incomingParameterKinds: ReadonlyArray<number>,
-					strictReceiverKind: number,
-				): void => {
-					if (!live.has(callee)) return;
-					const calleeScc = topology.owner.get(callee);
-					if (calleeScc === undefined) return;
-					pendingFunctionSccs.add(calleeScc);
-					activateScc(calleeScc);
-					const calleeFn = this.#program.function(callee);
-					const prior = summaries.get(callee)!;
-					const parameterKinds = [...prior.parameterKinds];
-					for (let index = 0; index < calleeFn.parameterCount; index++) {
-						parameterKinds[index] =
-							parameterKinds[index]! | (incomingParameterKinds[index] ?? 0);
-					}
-					const incomingReceiver = calleeFn.metadata.strict
-						? strictReceiverKind
-						: semantics.object;
-					const receiverKind = prior.receiverKind | incomingReceiver;
-					if (
-						receiverKind === prior.receiverKind &&
-						parameterKinds.every((kind, index) => kind === prior.parameterKinds[index])
-					)
-						return;
-					summaries.set(callee, { ...prior, parameterKinds, receiverKind });
-					enqueueNode(callee, false);
-				};
-				let cursor = 0;
-				while (cursor < queue.length) {
-					const node = queue[cursor++]!;
-					queued.delete(node);
-					if (node === CORE_ANY_SCRIPT_AGGREGATE) {
-						let returnKind = 0;
-						let returnHeapBrand: CoreHeapBrandState = null;
-						for (const summary of summaries.values()) {
-							aggregateFunctionVisits++;
-							returnKind |= summary.returnKind;
-							if (summary.returnKind !== 0)
-								returnHeapBrand = joinCoreHeapBrands(
-									returnHeapBrand,
-									summary.returnHeapBrand,
-								);
-						}
-						const prior = anyScriptAggregate;
-						aggregateRecomputations++;
-						anyScriptAggregate = Object.freeze({ returnKind, returnHeapBrand });
-						if (
-							prior?.returnKind !== returnKind ||
-							prior?.returnHeapBrand !== returnHeapBrand
-						) {
-							for (const caller of targets.graph.wildcardCallers) {
-								wildcardReverseCallerVisits++;
-								enqueueNode(caller, true);
-							}
-						}
-						continue;
-					}
-					const functionId = node;
-					const fn = this.#program.function(functionId);
-					const summary = summaries.get(functionId)!;
-					const sites = targets.outgoing(functionId);
-					let byInstruction = callSiteIndices.get(functionId);
-					if (byInstruction === undefined) {
-						byInstruction = new Map(sites.map((site) => [site.instruction, site]));
-						callSiteIndices.set(functionId, byInstruction);
-					}
-					let recordReads = recordReadIndices.get(functionId);
-					if (recordReads === undefined) {
-						recordReads = semantics.recordReads(fn, () => controlFlow(functionId));
-						recordReadIndices.set(functionId, recordReads);
-						let alternatives:
-							| Map<CoreInstructionId, ReadonlyArray<CoreValueAlternative>>
-							| undefined;
-						for (const [instruction, read] of recordReads) {
-							if (read.writes === undefined) continue;
-							alternatives ??= new Map();
-							// An unknown contract must override a previously published field bound.
-							alternatives.set(instruction, noRecordAlternatives);
-						}
-						if (alternatives !== undefined)
-							recordAlternativeIndices.set(functionId, alternatives);
-					}
-					const returnedRecords = new Map<CoreInstructionId, CoreRecordValueKind>();
-					const recordResult = (instruction: CoreInstructionId): CoreRecordValueKind => {
-						if (returnedRecords.has(instruction)) return returnedRecords.get(instruction);
-						const site = byInstruction.get(instruction);
-						if (
-							site === undefined ||
-							site.targets.opaque ||
-							site.targets.anyScript ||
-							site.targets.functions.length === 0
-						)
-							return undefined;
-						let record: CoreRecordValueKind = null;
-						for (const callee of site.targets.functions) {
-							const returned = summaries.get(callee)!;
-							record = joinCoreRecordValueKinds(
-								record,
-								returned.returnKind === 0 ? null : returned.returnRecord,
-							);
-							if (record === undefined) break;
-						}
-						returnedRecords.set(instruction, record);
-						return record;
-					};
-					const alternatives = recordAlternativeIndices.get(functionId);
-					for (const [instruction, values] of alternatives ?? []) {
-						if (values.length !== 0) continue;
-						const read = recordReads.get(instruction)!;
-						const record = coreRecordAccessProducerFields(read, recordResult);
-						const producerKind = coreRecordFieldInitialKind(read, record, semantics.top);
-						if (producerKind === 0) continue;
-						const initial = coreRecordAccessInitialFields(read, record, recordResult);
-						if (
-							(initial === record
-								? producerKind
-								: coreRecordFieldInitialKind(read, initial, semantics.top)) ===
-							semantics.top
-						)
-							continue;
-						alternatives!.set(instruction, read.writes!);
-						// Producer contracts can emerge after the caller's first demand set was solved.
-						demands.delete(functionId);
-					}
-					const cfg = controlFlow(functionId);
-					let demandedValues = demands.get(functionId);
-					if (demandedValues === undefined) {
-						const roots = new Set(semantics.observationValues(this.#program, fn));
-						for (const [instruction, values] of alternatives ?? [])
-							if (values.length !== 0)
-								roots.add(
-									fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
-								);
-						for (const block of cfg.reachable) {
-							const terminator = fn.blockTerminator(block);
-							if (fn.instructionKind(terminator) === "return")
-								roots.add(
-									fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
-								);
-						}
-						for (const site of sites) {
-							let parameterCount = 0,
-								needsReceiver = false;
-							for (const callee of site.targets.functions) {
-								const target = this.#program.function(callee);
-								parameterCount = Math.max(parameterCount, target.parameterCount);
-								needsReceiver ||= target.metadata.strict;
-							}
-							for (let index = 0; index < parameterCount; index++) {
-								const argument = site.arguments?.[index];
-								if (argument !== undefined) roots.add(argument);
-							}
-							if (needsReceiver && site.receiver !== undefined) roots.add(site.receiver);
-						}
-						demandedValues = [...roots];
-						demands.set(functionId, demandedValues);
-					}
-					const values = semantics.analyze(this.#program, fn, cfg, {
-						context,
-						operationResultHeapBrand(instruction) {
-							const construct =
-								fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer
-									?.result === "construct-completion";
-							const site = byInstruction.get(instruction);
-							if (site === undefined) {
-								const read = recordReads.get(instruction);
-								if (read === undefined) return undefined;
-								const record = coreRecordAccessProducerFields(read, recordResult);
-								return coreRecordFieldInitialHeapBrand(
-									read,
-									coreRecordAccessInitialFields(read, record, recordResult),
-								);
-							}
-							if (
-								site.targets.opaque ||
-								(site.targets.anyScript && !targets.sourceClosed)
-							)
-								return undefined;
-							if (site.targets.anyScript)
-								return anyScriptAggregate === undefined
-									? null
-									: anyScriptAggregate.returnHeapBrand;
-							if (site.targets.functions.length === 0) return undefined;
-							let brand: CoreHeapBrandState = null;
-							for (const callee of site.targets.functions) {
-								const returned = summaries.get(callee)!;
-								if (returned.returnKind !== 0)
-									brand = joinCoreHeapBrands(
-										brand,
-										construct && returned.returnKind !== semantics.object
-											? undefined
-											: returned.returnHeapBrand,
-									);
-							}
-							return brand;
-						},
-						demandedValues,
-						parameterMasks: summary.parameterKinds,
-						receiverMask: summary.receiverKind,
-						operationResultAlternatives:
-							alternatives === undefined
-								? undefined
-								: (instruction) => {
-										const values = alternatives.get(instruction);
-										if (values === undefined) return undefined;
-										const read = recordReads.get(instruction)!;
-										return {
-											values,
-											hasNormalResult:
-												coreRecordFieldInitialKind(
-													read,
-													coreRecordAccessProducerFields(read, recordResult),
-													semantics.top,
-												) !== 0,
-										};
-									},
-						operationResultMask(instruction) {
-							const site = byInstruction.get(instruction);
-							if (site === undefined) {
-								const read = recordReads.get(instruction);
-								if (read === undefined) return undefined;
-								const record = coreRecordAccessProducerFields(read, recordResult);
-								const producerKind = coreRecordFieldInitialKind(
-									read,
-									record,
-									semantics.top,
-								);
-								if (producerKind === 0 || read.initialProducers === undefined)
-									return producerKind;
-								const initial = coreRecordAccessInitialFields(read, record, recordResult);
-								return initial === record
-									? producerKind
-									: coreRecordFieldInitialKind(read, initial, semantics.top);
-							}
-							if (
-								site.targets.opaque ||
-								(!targets.sourceClosed && site.targets.anyScript)
-							) {
-								return semantics.top;
-							}
-							if (site.targets.anyScript) {
-								return anyScriptAggregate?.returnKind ?? 0;
-							}
-							const callees = site.targets.functions;
-							if (callees.length === 0) return semantics.top;
-							return callees.reduce(
-								(mask, callee) => mask | summaries.get(callee)!.returnKind,
-								0,
-							);
-						},
-					});
-					valueAnalyses.set(functionId, values);
-					functionsEvaluated++;
+			const queue = [...component.functions];
+			const queued = new Set(queue);
+			const enqueue = (id: CoreFunctionId): boolean => {
+				if (owner.get(id) !== sccIndex || queued.has(id)) return false;
+				queued.add(id);
+				queue.push(id);
+				return true;
+			};
+			let cursor = 0;
+			let aggregateDirty = component.hasAnyScriptAggregate;
+			while (cursor < queue.length || aggregateDirty) {
+				if (cursor === queue.length) {
+					aggregateDirty = false;
+					aggregateRecomputations++;
 					let returnKind = 0;
 					let returnHeapBrand: CoreHeapBrandState = null;
-					// A call to an async function or a generator returns its promise or iterator;
-					// the body's return value only settles or completes that object.
-					if (fn.isAsync || fn.isGenerator) returnKind = semantics.object;
-					else
-						for (const block of cfg.reachable) {
-							const terminator = fn.blockTerminator(block);
-							if (fn.instructionKind(terminator) === "return") {
-								const returned = fn.kernel.operandAt(
-									fn.kernel.instructionOperandStart(terminator),
-								);
-								const mask = semantics.latticeMask(values, returned);
-								if (mask !== 0)
-									returnHeapBrand = joinCoreHeapBrands(
-										returnHeapBrand,
-										mask === semantics.object
-											? semantics.heapBrand(values, returned)
-											: undefined,
-									);
-								returnKind |= semantics.latticeMask(
-									values,
-									fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
-								);
-							}
-						}
-					if (fn.isAsync || fn.isGenerator) returnHeapBrand = undefined;
-					const returnRecord =
-						returnKind === 0
-							? undefined
-							: semantics.returnRecord(this.#program, fn, cfg, values, recordResult);
+					for (const summary of summaries.values()) {
+						aggregateFunctionVisits++;
+						returnKind |= summary.returnKind;
+						if (summary.returnKind !== 0)
+							returnHeapBrand = joinCoreHeapBrands(
+								returnHeapBrand,
+								summary.returnHeapBrand,
+							);
+						if (returnKind === semantics.top && returnHeapBrand === undefined) break;
+					}
 					if (
-						returnKind !== summary.returnKind ||
-						returnHeapBrand !== summary.returnHeapBrand ||
-						!sameCoreRecordValueKind(returnRecord, summary.returnRecord)
-					) {
-						summaries.set(functionId, {
-							...summary,
-							returnKind,
-							returnRecord,
-							returnHeapBrand,
-						});
-						for (const caller of targets.graph.exactCallers(functionId)) {
-							exactReverseCallerVisits++;
-							enqueueNode(caller, true);
-						}
-						if (
-							(returnKind !== summary.returnKind ||
-								returnHeapBrand !== summary.returnHeapBrand) &&
-							targets.graph.hasAggregate()
-						) {
-							enqueueNode(CORE_ANY_SCRIPT_AGGREGATE, true);
-						}
+						anyScriptAggregate?.returnKind === returnKind &&
+						anyScriptAggregate.returnHeapBrand === returnHeapBrand
+					)
+						continue;
+					anyScriptAggregate = Object.freeze({ returnKind, returnHeapBrand });
+					for (const caller of wildcardReaders) {
+						wildcardReverseCallerVisits++;
+						if (enqueue(caller)) callerWakeups++;
+					}
+					continue;
+				}
+				const functionId = queue[cursor++]!;
+				queued.delete(functionId);
+				const fn = this.#program.function(functionId);
+				const summary = summaries.get(functionId)!;
+				const sites = targets.outgoing(functionId);
+				let byInstruction = callSiteIndices.get(functionId);
+				if (byInstruction === undefined) {
+					byInstruction = new Map(sites.map((site) => [site.instruction, site]));
+					callSiteIndices.set(functionId, byInstruction);
+				}
+				let recordReads = recordReadIndices.get(functionId);
+				if (recordReads === undefined) {
+					recordReads = semantics.recordReads(fn, () => controlFlow(functionId));
+					recordReadIndices.set(functionId, recordReads);
+					let alternatives:
+						| Map<CoreInstructionId, ReadonlyArray<CoreValueAlternative>>
+						| undefined;
+					for (const [instruction, read] of recordReads) {
+						if (read.writes === undefined) continue;
+						alternatives ??= new Map();
+						// An unknown contract must override a previously published field bound.
+						alternatives.set(instruction, noRecordAlternatives);
+					}
+					if (alternatives !== undefined)
+						recordAlternativeIndices.set(functionId, alternatives);
+				}
+				const returnedRecords = new Map<CoreInstructionId, CoreRecordValueKind>();
+				const recordResult = (instruction: CoreInstructionId): CoreRecordValueKind => {
+					if (returnedRecords.has(instruction)) return returnedRecords.get(instruction);
+					const site = byInstruction.get(instruction);
+					if (
+						site === undefined ||
+						site.targets.opaque ||
+						site.targets.anyScript ||
+						site.targets.functions.length === 0
+					)
+						return undefined;
+					let record: CoreRecordValueKind = null;
+					for (const callee of site.targets.functions) {
+						const returned = summaries.get(callee)!;
+						record = joinCoreRecordValueKinds(
+							record,
+							returned.returnKind === 0 ? null : returned.returnRecord,
+						);
+						if (record === undefined) break;
+					}
+					returnedRecords.set(instruction, record);
+					return record;
+				};
+				const alternatives = recordAlternativeIndices.get(functionId);
+				for (const [instruction, values] of alternatives ?? []) {
+					if (values.length !== 0) continue;
+					const read = recordReads.get(instruction)!;
+					const record = coreRecordAccessProducerFields(read, recordResult);
+					const producerKind = coreRecordFieldInitialKind(read, record, semantics.top);
+					if (producerKind === 0) continue;
+					const initial = coreRecordAccessInitialFields(read, record, recordResult);
+					if (
+						(initial === record
+							? producerKind
+							: coreRecordFieldInitialKind(read, initial, semantics.top)) ===
+						semantics.top
+					)
+						continue;
+					alternatives!.set(instruction, read.writes!);
+					// Producer contracts can emerge after the caller's first demand set was solved.
+					demands.delete(functionId);
+				}
+				const cfg = controlFlow(functionId);
+				let demandedValues = demands.get(functionId);
+				if (demandedValues === undefined) {
+					const roots = new Set(semantics.observationValues(this.#program, fn));
+					for (const [instruction, values] of alternatives ?? [])
+						if (values.length !== 0)
+							roots.add(
+								fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+							);
+					for (const block of cfg.reachable) {
+						const terminator = fn.blockTerminator(block);
+						if (fn.instructionKind(terminator) === "return")
+							roots.add(
+								fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+							);
 					}
 					for (const site of sites) {
-						if (site.targets.functions.length === 0) continue;
-						let parameterCount = 0,
-							needsReceiver = false;
+						let parameterCount = 0;
 						for (const callee of site.targets.functions) {
 							const target = this.#program.function(callee);
 							parameterCount = Math.max(parameterCount, target.parameterCount);
-							needsReceiver ||= target.metadata.strict;
 						}
-						const incomingParameterKinds = Array<number>(parameterCount);
 						for (let index = 0; index < parameterCount; index++) {
 							const argument = site.arguments?.[index];
-							incomingParameterKinds[index] =
-								site.arguments === undefined
-									? semantics.top
-									: argument === undefined
-										? semantics.undefined
-										: semantics.latticeMask(values, argument);
+							if (argument !== undefined) roots.add(argument);
 						}
-						const receiverKind =
-							!needsReceiver || site.receiver === undefined
-								? semantics.top
-								: semantics.latticeMask(values, site.receiver);
-						for (const callee of site.targets.functions)
-							applyIncoming(callee, incomingParameterKinds, receiverKind);
+						if (site.targets.functions.length > 0 && site.receiver !== undefined)
+							roots.add(site.receiver);
+					}
+					demandedValues = [...roots];
+					demands.set(functionId, demandedValues);
+				}
+				const values = semantics.analyze(this.#program, fn, cfg, {
+					context,
+					operationResultHeapBrand(instruction) {
+						const construct =
+							fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ===
+							"construct-completion";
+						const site = byInstruction.get(instruction);
+						if (site === undefined) {
+							const read = recordReads.get(instruction);
+							if (read === undefined) return undefined;
+							const record = coreRecordAccessProducerFields(read, recordResult);
+							return coreRecordFieldInitialHeapBrand(
+								read,
+								coreRecordAccessInitialFields(read, record, recordResult),
+							);
+						}
+						if (site.targets.opaque || (site.targets.anyScript && !targets.sourceClosed))
+							return undefined;
+						if (site.targets.anyScript)
+							return anyScriptAggregate === undefined
+								? null
+								: anyScriptAggregate.returnHeapBrand;
+						if (site.targets.functions.length === 0) return undefined;
+						let brand: CoreHeapBrandState = null;
+						for (const callee of site.targets.functions) {
+							const returned = summaries.get(callee)!;
+							if (returned.returnKind !== 0)
+								brand = joinCoreHeapBrands(
+									brand,
+									construct && returned.returnKind !== semantics.object
+										? undefined
+										: returned.returnHeapBrand,
+								);
+						}
+						return brand;
+					},
+					demandedValues,
+					parameterMasks: summary.parameterKinds,
+					receiverMask: summary.receiverKind,
+					operationResultAlternatives:
+						alternatives === undefined
+							? undefined
+							: (instruction) => {
+									const values = alternatives.get(instruction);
+									if (values === undefined) return undefined;
+									const read = recordReads.get(instruction)!;
+									return {
+										values,
+										hasNormalResult:
+											coreRecordFieldInitialKind(
+												read,
+												coreRecordAccessProducerFields(read, recordResult),
+												semantics.top,
+											) !== 0,
+									};
+								},
+					operationResultMask(instruction) {
+						const site = byInstruction.get(instruction);
+						if (site === undefined) {
+							const read = recordReads.get(instruction);
+							if (read === undefined) return undefined;
+							const record = coreRecordAccessProducerFields(read, recordResult);
+							const producerKind = coreRecordFieldInitialKind(
+								read,
+								record,
+								semantics.top,
+							);
+							if (producerKind === 0 || read.initialProducers === undefined)
+								return producerKind;
+							const initial = coreRecordAccessInitialFields(read, record, recordResult);
+							return initial === record
+								? producerKind
+								: coreRecordFieldInitialKind(read, initial, semantics.top);
+						}
+						if (
+							site.targets.opaque ||
+							(!targets.sourceClosed && site.targets.anyScript)
+						) {
+							return semantics.top;
+						}
+						if (site.targets.anyScript) {
+							return anyScriptAggregate?.returnKind ?? 0;
+						}
+						const callees = site.targets.functions;
+						if (callees.length === 0) return semantics.top;
+						return callees.reduce(
+							(mask, callee) => mask | summaries.get(callee)!.returnKind,
+							0,
+						);
+					},
+				});
+				valueAnalyses.set(functionId, values);
+				functionsEvaluated++;
+				let returnKind = 0;
+				let returnHeapBrand: CoreHeapBrandState = null;
+				// A call to an async function or a generator returns its promise or iterator;
+				// the body's return value only settles or completes that object.
+				if (fn.isAsync || fn.isGenerator) returnKind = semantics.object;
+				else
+					for (const block of cfg.reachable) {
+						const terminator = fn.blockTerminator(block);
+						if (fn.instructionKind(terminator) === "return") {
+							const returned = fn.kernel.operandAt(
+								fn.kernel.instructionOperandStart(terminator),
+							);
+							const mask = semantics.latticeMask(values, returned);
+							if (mask !== 0)
+								returnHeapBrand = joinCoreHeapBrands(
+									returnHeapBrand,
+									mask === semantics.object
+										? semantics.heapBrand(values, returned)
+										: undefined,
+								);
+							returnKind |= mask;
+						}
+					}
+				if (fn.isAsync || fn.isGenerator) returnHeapBrand = undefined;
+				const returnRecord =
+					returnKind === 0
+						? undefined
+						: semantics.returnRecord(this.#program, fn, cfg, values, recordResult);
+				if (
+					returnKind !== summary.returnKind ||
+					returnHeapBrand !== summary.returnHeapBrand ||
+					!sameCoreRecordValueKind(returnRecord, summary.returnRecord)
+				) {
+					summaries.set(functionId, {
+						...summary,
+						returnKind,
+						returnRecord,
+						returnHeapBrand,
+					});
+					for (const caller of returnReaders.get(functionId) ?? []) {
+						exactReverseCallerVisits++;
+						if (enqueue(caller)) callerWakeups++;
+					}
+					aggregateDirty ||=
+						component.hasAnyScriptAggregate &&
+						(returnKind !== summary.returnKind ||
+							returnHeapBrand !== summary.returnHeapBrand);
+				}
+				for (const site of sites) {
+					for (const callee of site.targets.functions) {
+						if (external.get(callee) !== false || owner.get(callee) !== sccIndex)
+							continue;
+						const prior = summaries.get(callee)!;
+						const next = mergeArguments(
+							this.#program.function(callee),
+							site,
+							values,
+							prior,
+						);
+						if (next === prior) continue;
+						summaries.set(callee, { ...prior, ...next });
+						if (enqueue(callee)) calleeWakeups++;
 					}
 				}
-			},
-		);
-		const changedFunctions = new Set(affected);
-		for (const functionId of functionIds) {
-			const frozen = freezeSummary(summaries.get(functionId)!);
-			summaries.set(functionId, frozen);
+			}
+			for (const functionId of component.functions) {
+				const next = summaries.get(functionId)!;
+				const prior = previous?.summaries.get(functionId);
+				const returnChanged = !sameReturn(prior, next);
+				if (returnChanged || !sameInputs(prior, next)) {
+					changedFunctions.add(functionId);
+					Object.freeze(next.parameterKinds);
+					Object.freeze(next);
+				} else summaries.set(functionId, prior!);
+				if (returnChanged) {
+					for (const caller of returnReaders.get(functionId) ?? []) {
+						if (owner.get(caller) === sccIndex) continue;
+						exactReverseCallerVisits++;
+						force(caller);
+					}
+					if (
+						aggregateScc !== undefined &&
+						aggregateScc !== sccIndex &&
+						(prior?.returnKind !== next.returnKind ||
+							prior.returnHeapBrand !== next.returnHeapBrand)
+					) {
+						forced[aggregateScc] = 1;
+					}
+				}
+				for (const callee of argumentTargets.get(functionId) ?? []) {
+					if (owner.get(callee) !== sccIndex) checkInputs(callee);
+				}
+			}
+			if (
+				component.hasAnyScriptAggregate &&
+				(priorAggregate?.returnKind !== anyScriptAggregate?.returnKind ||
+					priorAggregate?.returnHeapBrand !== anyScriptAggregate?.returnHeapBrand)
+			) {
+				for (const caller of wildcardReaders) {
+					if (owner.get(caller) !== sccIndex) force(caller);
+				}
+			}
 		}
 		const statistics = Object.freeze({
 			functions: functionIds.length,
 			functionsEvaluated,
-			functionsReused: functionIds.length - affected.size,
-			affectedFunctions: affected.size,
+			functionsReused: functionIds.length - affectedFunctions,
+			affectedFunctions,
 			callerWakeups,
 			calleeWakeups,
 			aggregateRecomputations,
@@ -2885,7 +2909,9 @@ export class CoreProgramFlowEngine {
 		return Object.freeze({
 			sourceClosed: targets.sourceClosed,
 			targets,
+			dataEpoch,
 			external,
+			boundaryInputs,
 			valueAnalyses,
 			summaries,
 			anyScriptAggregate,

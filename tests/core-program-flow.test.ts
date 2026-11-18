@@ -303,6 +303,58 @@ describe("Core program flow", () => {
 		expect(second.summaries).not.toBe(first.summaries);
 	});
 
+	it("retracts the handler's return kind when a protected operation can no longer throw", () => {
+		const program = analysisProgram();
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const handler = builder.createBlock([{ role: "exception" }]);
+		const [number] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		builder.appendInstruction(entry, "unary", [number!], {
+			attributes: { operator: "+" },
+		});
+		const [, conversion] = builder.bodyInstructionIds(entry);
+		const [boolean] = builder.appendInstruction(handler, "createBoolean", [], {
+			attributes: { value: true },
+		});
+		builder.setHandler(entry, handler, []);
+		builder.setTerminator(entry, { kind: "return", value: number! });
+		builder.setTerminator(handler, { kind: "return", value: boolean! });
+		const { function: functionId } = builder.finish(entry);
+		const context = programAnalysisContext();
+		const createManager = () =>
+			new CoreAnalysisManager(
+				program,
+				context,
+				new CoreOptimizationReportBuilder(program),
+			);
+		const manager = createManager();
+		const returnKind = (analyses = manager) =>
+			analyses
+				.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" })
+				.kinds.summary(functionId).returnKind;
+		expect(returnKind()).toBe(COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN);
+
+		const editor = CoreEditor.open(program, functionId);
+		const proof = editor.addFact({
+			kind: "number-conversion",
+			value: true,
+			claims: [],
+			validity: { kind: "summary", digest: "number-conversion" },
+			obligations: [],
+			origin: "test",
+		});
+		editor.setInstructionEffectRefinement(conversion!, {
+			effects: CORE_NO_EFFECTS,
+			proof,
+		});
+		editor.commit();
+
+		expect(returnKind()).toBe(COMPILER_VALUE_KIND_NUMBER);
+		expect(returnKind()).toBe(returnKind(createManager()));
+	});
+
 	it("shares numeric local transfers across consumers and stable functions", () => {
 		const program = analysisProgram();
 		const target = appendLeaf(program);

@@ -2810,7 +2810,7 @@ export class CoreProgram {
 	#literalTemplates: Map<string, number> | undefined;
 	#literalPoolSlots = new Map<number, number>();
 	#sourcePositions: ReadonlyArray<CoreSourcePosition> = [];
-	#sourcePositionEpoch = 0;
+	#dataEpoch = 0;
 	#globalCount = 0;
 	readonly #constructionStatistics = {
 		virtualPhisCreated: 0,
@@ -2927,9 +2927,9 @@ export class CoreProgram {
 		return this.#sourcePositions;
 	}
 
-	// Appending frames preserves existing links; replacing the table invalidates structural transfers.
-	get sourcePositionEpoch(): number {
-		return this.#sourcePositionEpoch;
+	// Appends preserve existing references. Replacing the tables can change their meaning.
+	get dataEpoch(): number {
+		return this.#dataEpoch;
 	}
 
 	get globalCount(): number {
@@ -3164,7 +3164,7 @@ export class CoreProgram {
 	}
 
 	#wireData(data: CoreProgramDataTables): void {
-		this.#sourcePositionEpoch++;
+		this.#dataEpoch++;
 		this.#stringConstants = snapshotCoreArray(data.stringConstants ?? [], (units) =>
 			snapshotCoreArray(units),
 		);

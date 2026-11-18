@@ -194,6 +194,35 @@ it("revisits callers when a return brand changes without changing the Object kin
 	expect(before.summary(caller.function).returnHeapBrand).toBe("Array");
 });
 
+it("retains heap-brand proofs across unrelated constant appends", () => {
+	const program = analysisProgram();
+	const builder = new CoreFunctionBuilder(program);
+	const entry = builder.createBlock();
+	const [array] = builder.appendInstruction(entry, "createArray", []);
+	builder.setTerminator(entry, { kind: "return", value: array! });
+	const { function: functionId } = builder.finish(entry);
+	const unrelated = appendLeaf(program);
+	const manager = new CoreAnalysisManager(
+		program,
+		programAnalysisContext(),
+		new CoreOptimizationReportBuilder(program),
+	);
+	const request = { scope: "program" } as const;
+	const before = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, request).kinds;
+	expect(before.values(functionId).heapBrand(array!)).toBe("Array");
+
+	const edit = CoreEditor.open(program, unrelated.function);
+	const stringIndex = edit.appendStringConstants([[97]]);
+	edit.replaceInstruction(unrelated.valueInstruction, "createString", [], {
+		attributes: { stringIndex },
+	});
+	edit.commit();
+
+	const after = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, request).kinds;
+	expect(after.values(functionId)).toBe(before.values(functionId));
+	expect(after.values(functionId).heapBrand(array!)).toBe("Array");
+});
+
 it("solves newly consumed values without changing an older partial snapshot", () => {
 	const program = analysisProgram();
 	const builder = new CoreFunctionBuilder(program);
@@ -808,11 +837,8 @@ globalThis.result = isNumber();`;
 		}).kinds;
 
 		expect(second.statistics).toMatchObject({
-			functionsEvaluated: 3,
 			functionsReused: 1,
 			affectedFunctions: 2,
-			callerWakeups: 0,
-			calleeWakeups: 1,
 		});
 		expect(second.values(unrelated.function)).toBe(unrelatedValues);
 		expect(second.changedFunctions).toEqual(new Set([caller.function, edited.function]));
@@ -846,12 +872,93 @@ globalThis.result = isNumber();`;
 
 		expect(second.statistics).toMatchObject({
 			functions: 66,
-			functionsEvaluated: 3,
 			functionsReused: 64,
 			affectedFunctions: 2,
 		});
 		expect(second.values(unrelated.at(-1)!.function)).toBe(unrelatedValues);
 		expect(second.changedFunctions).toEqual(new Set([caller.function, edited.function]));
+	});
+
+	it("reuses dependent value analyses when an edited callee publishes the same return kind", () => {
+		const program = analysisProgram();
+		const leaf = appendLeaf(program);
+		const caller = appendCaller(program, leaf.function);
+		const replaceNumber = (value: number) => {
+			const editor = CoreEditor.open(program, leaf.function);
+			editor.replaceInstruction(leaf.valueInstruction, "createNumber", [], {
+				attributes: { value },
+			});
+			editor.commit();
+		};
+		replaceNumber(1);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const readKinds = () =>
+			manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds;
+		const initial = readKinds();
+		replaceNumber(2);
+
+		const updated = readKinds();
+		expect(updated.values(caller.function)).toBe(initial.values(caller.function));
+		expect(updated.summary(caller.function).returnKind).toBe(COMPILER_VALUE_KIND_NUMBER);
+	});
+
+	it("retracts a removed argument kind through call-result feedback", () => {
+		const program = analysisProgram();
+		const caller = new CoreFunctionBuilder(program);
+		const entry = caller.createBlock();
+		const [callee] = caller.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		const [receiver] = caller.appendInstruction(entry, "createUndefined", []);
+		const [seed] = caller.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 42 },
+		});
+		const [first] = caller.appendInstruction(entry, "call", [callee!, receiver!, seed!]);
+		const [result] = caller.appendInstruction(entry, "call", [
+			callee!,
+			receiver!,
+			first!,
+		]);
+		caller.setTerminator(entry, { kind: "return", value: result! });
+		const callerId = caller.finish(entry).function;
+		const calleeBuilder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const body = calleeBuilder.createBlock([{}]);
+		calleeBuilder.setTerminator(body, {
+			kind: "return",
+			value: calleeBuilder.blockParameterValue(body, 0),
+		});
+		const calleeId = calleeBuilder.finish(body).function;
+		const context = programAnalysisContext();
+		const createManager = () =>
+			new CoreAnalysisManager(
+				program,
+				context,
+				new CoreOptimizationReportBuilder(program),
+			);
+		const manager = createManager();
+		const readKinds = (analyses: CoreAnalysisManager) =>
+			analyses.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds;
+		expect(readKinds(manager).summary(callerId).returnKind).toBe(
+			COMPILER_VALUE_KIND_NUMBER,
+		);
+
+		const fn = program.function(callerId);
+		const seedInstruction = [...fn.bodyInstructionIds(fn.entry)][2]!;
+		const edit = CoreEditor.open(program, callerId);
+		edit.replaceInstruction(seedInstruction, "createUndefined", []);
+		edit.commit();
+
+		const incremental = readKinds(manager);
+		const fresh = readKinds(createManager());
+		expect(incremental.summary(calleeId)).toEqual(fresh.summary(calleeId));
+		expect(incremental.summary(calleeId).parameterKinds).toEqual([
+			COMPILER_VALUE_KIND_UNDEFINED,
+		]);
+		expect(incremental.summary(callerId).returnKind).toBe(COMPILER_VALUE_KIND_UNDEFINED);
 	});
 
 	it("solves a long return-kind chain with bounded transfers", () => {

@@ -103,8 +103,8 @@ Publishing a call result or initial own-field read changes its normal-result fac
 and specialization inputs without replacing the instruction's operands or effect
 proof. The `normalResults` domain wakes local kind/range consumers and the program's
 return-kind worklist. CFG, call targets, effects, provenance and memory versions
-remain reusable. Ordinary fact edits, including effect-only proofs, do not dirty
-the return-kind worklist.
+remain reusable. An effect refinement wakes the return-kind worklist for bodies
+with handlers, where it can change the set of reachable returns.
 
 Own-slot candidate hints change only specialization inputs. They preserve operand
 storage, effect proofs and structural analyses while invalidating specialization
@@ -220,6 +220,20 @@ A function publishes a new summary version only when its semantic summary change
 Only affected callers, SCC members, and registered consumers are then woken. An
 unchanged summary does not propagate work, and an edit cannot cause every function to
 be revisited merely because the program changed.
+
+Value-kind flow builds components from the inputs each transfer reads. Call results
+flow to callers, arguments flow to callees with known callers, and only a closed
+wildcard call reads the aggregate return. These directions can form a cycle even when
+the calls themselves do not recurse.
+
+Solve components in dependency order. A dirty component replaces its incoming masks
+with the join of current caller values from outside the component and any opaque
+entry seed. Its internal arguments and returns start from bottom so old feedback
+cannot keep a removed kind alive. A removed call also dirties its former recipients.
+After convergence, changed returns wake their readers, and argument recipients compare
+their new boundary masks with the saved ones before rebuilding local analyses.
+Appending constants preserves existing references and the heap-brand proofs that use
+them. Replacing the data tables invalidates those proofs and the value-kind snapshot.
 
 Call targets treat each parameter of a closure that some function creates as a
 cell. Every visible call writes its argument's targets into the callee's parameter

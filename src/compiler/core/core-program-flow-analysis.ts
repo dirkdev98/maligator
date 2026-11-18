@@ -161,12 +161,18 @@ export const CORE_PROGRAM_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreProgra
 			const dirty = new Set<CoreFunctionId>();
 			// Other dimensions can advance their journal cursor while kinds remain unrequested.
 			for (let cursor = prior?.flowRevision ?? 0; cursor < flowRevision; cursor++) {
+				const functionId = program.programFlowFunctionAt(cursor);
+				const domains = program.programFlowDomainMaskAt(cursor);
+				// Effect refinements can make a handler's return reachable or unreachable.
 				if (
-					(coreProgramFlowDimensionsForDomains(program.programFlowDomainMaskAt(cursor)) &
+					(coreProgramFlowDimensionsForDomains(domains) &
 						CORE_PROGRAM_FLOW_RETURN_KIND) !==
-					0
+						0 ||
+					((domains & CORE_PROGRAM_FLOW_MEMORY) !== 0 &&
+						program.hasFunction(functionId) &&
+						program.function(functionId).handlerBlockCount > 0)
 				)
-					dirty.add(program.programFlowFunctionAt(cursor));
+					dirty.add(functionId);
 			}
 			const externallyChanged = new Set<CoreFunctionId>();
 			for (const functionId of program.functionIds()) {
@@ -178,13 +184,14 @@ export const CORE_PROGRAM_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreProgra
 			}
 			const unjournaledInvalidation =
 				prior !== undefined && prior.flowRevision === flowRevision;
+			const previousKinds = prior?.kinds;
 			const kinds =
-				prior !== undefined &&
+				previousKinds?.dataEpoch === program.dataEpoch &&
 				!unjournaledInvalidation &&
 				dirty.size === 0 &&
 				externallyChanged.size === 0 &&
-				prior.kinds.targets === targets
-					? prior.kinds
+				previousKinds.targets === targets
+					? previousKinds
 					: programFlow.solveValueKinds(
 							targets,
 							(functionId) => summaries.summary(functionId)?.externallyReachable === true,
@@ -194,7 +201,7 @@ export const CORE_PROGRAM_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreProgra
 									function: functionId,
 								}).exceptional(),
 							CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS,
-							prior?.kinds,
+							previousKinds,
 							unjournaledInvalidation ? undefined : [...dirty],
 							externallyChanged,
 							context,

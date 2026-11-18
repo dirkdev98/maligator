@@ -211,14 +211,28 @@ export function analyzeCoreValueClasses(
 	const fn = program.function(functionId);
 	const generation = program.generation,
 		versions = fn.versions,
+		dataEpoch = program.dataEpoch,
 		dataVersion = program.programVersion("data");
+	// Program flow supplies operation brands and only queries heap-brand states.
+	// This path reads existing slots and ignores the plan hints and containment proofs.
+	const programFlowCurrent = () =>
+		program.dataEpoch === dataEpoch &&
+		versions.body === fn.version("body") &&
+		versions.cfg === fn.version("cfg") &&
+		versions.exceptionFlow === fn.version("exceptionFlow") &&
+		versions.representations === fn.version("representations") &&
+		versions.normalResults === fn.version("normalResults") &&
+		(fn.handlerBlockCount === 0 ||
+			versions.memoryEffects === fn.version("memoryEffects"));
 	const assertCurrent = () => {
 		if (
 			fn.hasActiveEditor ||
 			program.generation !== generation ||
 			program.function(functionId) !== fn ||
-			program.programVersion("data") !== dataVersion ||
-			!coreFunctionVersionsAreCurrent(fn, versions)
+			(options.operationResultBrand === undefined
+				? program.programVersion("data") !== dataVersion ||
+					!coreFunctionVersionsAreCurrent(fn, versions)
+				: !programFlowCurrent())
 		)
 			throw new Error("Stale value-class analysis");
 	};
