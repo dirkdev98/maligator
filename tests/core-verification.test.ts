@@ -652,7 +652,14 @@ describe("Core verification", () => {
 		const { program, fn, entry, consequent, alternate } = validBranchProgram();
 		expect(() => verifyCoreProgram(program, { stage: "construction" })).not.toThrow();
 		const cfg = buildCoreControlFlow(program, fn.id);
-		expect(cfg.successors[entry]).toMatchObject([
+		const outgoing = cfg.successors[entry]!;
+		expect(
+			outgoing.map((edge) => ({
+				from: cfg.edges.from(edge),
+				to: cfg.edges.to(edge),
+				kind: cfg.edges.kind(edge),
+			})),
+		).toEqual([
 			{ from: entry, to: consequent, kind: "ordinary" },
 			{ from: entry, to: alternate, kind: "ordinary" },
 		]);
