@@ -93,6 +93,7 @@ export interface CoreProgramFlowTargetIndex {
 		readonly instruction: CoreInstructionId;
 		readonly receiver?: CoreValueId;
 		readonly arguments?: ReadonlyArray<CoreValueId>;
+		readonly argumentPrefix?: ReadonlyArray<CoreValueId>;
 		readonly targets: {
 			readonly functions: ReadonlyArray<CoreFunctionId>;
 			readonly anyScript: boolean;
@@ -154,6 +155,7 @@ export interface CoreProgramFlowValueKindState<
 	readonly valueAnalyses: ReadonlyMap<CoreFunctionId, Analysis>;
 	readonly summaries: ReadonlyMap<CoreFunctionId, CoreProgramFlowValueKindSummary>;
 	readonly anyScriptAggregate: CoreProgramFlowValueKindAggregate | undefined;
+	readonly anyScriptAggregateFixed: boolean;
 }
 
 export interface CoreValueAlternative {
@@ -215,6 +217,127 @@ export interface CoreProgramFlowValueKindSemantics<Analysis> {
 	readonly top: number;
 	readonly object: number;
 	readonly undefined: number;
+}
+
+function coreValueKindResultReaders(
+	fn: CoreFunctionStore,
+	byInstruction: ReadonlyMap<CoreInstructionId, CoreProgramFlowIndexedCallSite>,
+	recordReads: ReadonlyMap<CoreInstructionId, CoreRecordFieldAccess>,
+	alternatives:
+		| ReadonlyMap<CoreInstructionId, ReadonlyArray<CoreValueAlternative>>
+		| undefined,
+	summaries: ReadonlyMap<CoreFunctionId, CoreProgramFlowValueKindSummary> | undefined,
+	anyScriptAggregate: CoreProgramFlowValueKindAggregate | undefined,
+	sourceClosed: boolean,
+	semantics: { readonly top: number; readonly object: number },
+): Pick<
+	CoreProgramFlowValueKindInputs,
+	"operationResultHeapBrand" | "operationResultAlternatives" | "operationResultMask"
+> & { readonly recordResult: (instruction: CoreInstructionId) => CoreRecordValueKind } {
+	const returnedRecords = new Map<CoreInstructionId, CoreRecordValueKind>();
+	const recordResult = (instruction: CoreInstructionId): CoreRecordValueKind => {
+		if (returnedRecords.has(instruction)) return returnedRecords.get(instruction);
+		const site = byInstruction.get(instruction);
+		if (
+			site === undefined ||
+			site.targets.opaque ||
+			site.targets.anyScript ||
+			site.targets.functions.length === 0
+		)
+			return undefined;
+		let record: CoreRecordValueKind = null;
+		for (const callee of site.targets.functions) {
+			const returned = summaries!.get(callee)!;
+			record = joinCoreRecordValueKinds(
+				record,
+				returned.returnKind === 0 ? null : returned.returnRecord,
+			);
+			if (record === undefined) break;
+		}
+		returnedRecords.set(instruction, record);
+		return record;
+	};
+	return {
+		recordResult,
+		operationResultHeapBrand(instruction) {
+			const construct =
+				fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ===
+				"construct-completion";
+			const site = byInstruction.get(instruction);
+			if (site === undefined) {
+				const read = recordReads.get(instruction);
+				if (read === undefined) return undefined;
+				const record = coreRecordAccessProducerFields(read, recordResult);
+				return coreRecordFieldInitialHeapBrand(
+					read,
+					coreRecordAccessInitialFields(read, record, recordResult),
+				);
+			}
+			if (site.targets.opaque || (site.targets.anyScript && !sourceClosed))
+				return undefined;
+			if (site.targets.anyScript)
+				return anyScriptAggregate === undefined
+					? null
+					: anyScriptAggregate.returnHeapBrand;
+			if (site.targets.functions.length === 0) return undefined;
+			let brand: CoreHeapBrandState = null;
+			for (const callee of site.targets.functions) {
+				const returned = summaries!.get(callee)!;
+				if (returned.returnKind !== 0)
+					brand = joinCoreHeapBrands(
+						brand,
+						construct && returned.returnKind !== semantics.object
+							? undefined
+							: returned.returnHeapBrand,
+					);
+			}
+			return brand;
+		},
+		operationResultAlternatives:
+			alternatives === undefined
+				? undefined
+				: (instruction) => {
+						const values = alternatives.get(instruction);
+						if (values === undefined) return undefined;
+						const read = recordReads.get(instruction)!;
+						return {
+							values,
+							hasNormalResult:
+								coreRecordFieldInitialKind(
+									read,
+									coreRecordAccessProducerFields(read, recordResult),
+									semantics.top,
+								) !== 0,
+						};
+					},
+		operationResultMask(instruction) {
+			const site = byInstruction.get(instruction);
+			if (site === undefined) {
+				const read = recordReads.get(instruction);
+				if (read === undefined) return undefined;
+				const record = coreRecordAccessProducerFields(read, recordResult);
+				const producerKind = coreRecordFieldInitialKind(read, record, semantics.top);
+				if (producerKind === 0 || read.initialProducers === undefined)
+					return producerKind;
+				const initial = coreRecordAccessInitialFields(read, record, recordResult);
+				return initial === record
+					? producerKind
+					: coreRecordFieldInitialKind(read, initial, semantics.top);
+			}
+			if (site.targets.opaque || (!sourceClosed && site.targets.anyScript)) {
+				return semantics.top;
+			}
+			if (site.targets.anyScript) {
+				return anyScriptAggregate?.returnKind ?? 0;
+			}
+			const callees = site.targets.functions;
+			if (callees.length === 0) return semantics.top;
+			return callees.reduce(
+				(mask, callee) => mask | summaries!.get(callee)!.returnKind,
+				0,
+			);
+		},
+	};
 }
 
 export interface CoreProgramFlowCallTargets {
@@ -407,6 +530,7 @@ export interface CoreProgramFlowSummaryState<
 	Targets extends CoreProgramFlowTargetIndex = CoreProgramFlowTargetIndex,
 > extends CoreProgramFlowSummaries<Targets> {
 	readonly sourceClosed: boolean;
+	readonly dataEpoch: number;
 	readonly local: ReadonlyMap<CoreFunctionId, Local>;
 	readonly published: ReadonlyMap<
 		CoreFunctionId,
@@ -414,7 +538,15 @@ export interface CoreProgramFlowSummaryState<
 	>;
 	readonly rootReasons: ReadonlyMap<CoreFunctionId, ReadonlyArray<SummaryRootReason>>;
 	readonly anyScriptSummary: Aggregate | undefined;
+	readonly anyScriptSummaryFixed: boolean;
+	readonly topology: CoreProgramFlowTopology;
 }
+
+export type CoreProgramFlowSummaryTransfer<Aggregate> = (
+	current: ReadonlyMap<CoreFunctionId, FunctionEffectSummary>,
+	aggregate: Aggregate | undefined,
+	includeCalls: boolean,
+) => FunctionEffectSummary;
 
 export interface CoreProgramFlowSummarySemantics<
 	Local,
@@ -433,22 +565,20 @@ export interface CoreProgramFlowSummarySemantics<
 		targets: Targets,
 		context: CoreCompilationContext,
 	): ReadonlyMap<CoreFunctionId, ReadonlyArray<SummaryRootReason>>;
-	derive(
+	prepare(
 		program: CoreProgram,
 		functionId: CoreFunctionId,
 		local: Local,
 		targets: Targets,
-		current: ReadonlyMap<CoreFunctionId, FunctionEffectSummary>,
-		aggregate: Aggregate | undefined,
 		summaryIds: ReadonlyMap<CoreFunctionId, string>,
-		reasons: ReadonlyMap<CoreFunctionId, ReadonlyArray<SummaryRootReason>>,
-		includeCalls?: boolean,
-	): FunctionEffectSummary;
+		reasons: ReadonlyArray<SummaryRootReason>,
+	): CoreProgramFlowSummaryTransfer<Aggregate>;
 	summarizeAggregate(
-		current: ReadonlyMap<CoreFunctionId, FunctionEffectSummary>,
+		summaries: Iterable<FunctionEffectSummary>,
 		parameterCount: number,
 	): Aggregate;
 	aggregateParameterCount(aggregate: Aggregate): number;
+	aggregateIsTop(aggregate: Aggregate): boolean;
 	sameAggregate(left: Aggregate | undefined, right: Aggregate | undefined): boolean;
 	summariesEqual(left: FunctionEffectSummary, right: FunctionEffectSummary): boolean;
 	moduleSummaries(
@@ -1122,39 +1252,68 @@ export function buildCoreProgramFlowTopology(
 		});
 	}
 
-	let nextIndex = 0;
-	const indices = new Map<CoreCallGraphNode, number>();
-	const lowlinks = new Map<CoreCallGraphNode, number>();
+	// Index zero belongs to the aggregate. Function IDs can be sparse after pruning.
+	const capacity = graph.functions.reduce((count, id) => Math.max(count, id + 2), 1);
+	const indices = new Uint32Array(capacity);
+	const lowlinks = new Uint32Array(capacity);
+	const onStack = new Uint8Array(capacity);
+	let nextIndex = 1;
 	const stack: Array<CoreCallGraphNode> = [];
-	const onStack = new Set<CoreCallGraphNode>();
+	const pending: Array<CoreCallGraphNode> = [];
+	const nextEdge: Array<number> = [];
 	const components: Array<Array<CoreCallGraphNode>> = [];
 	const visit = (node: CoreCallGraphNode): void => {
-		indices.set(node, nextIndex);
-		lowlinks.set(node, nextIndex++);
+		const slot = node + 1;
+		indices[slot] = nextIndex;
+		lowlinks[slot] = nextIndex++;
 		stack.push(node);
-		onStack.add(node);
-		graph.visitSuccessors(node, (successor) => {
-			edgeVisits++;
-			if (!affected.has(successor)) return;
-			if (!indices.has(successor)) {
-				visit(successor);
-				lowlinks.set(node, Math.min(lowlinks.get(node)!, lowlinks.get(successor)!));
-			} else if (onStack.has(successor)) {
-				lowlinks.set(node, Math.min(lowlinks.get(node)!, indices.get(successor)!));
-			}
-		});
-		if (lowlinks.get(node) !== indices.get(node)) return;
-		const component: Array<CoreCallGraphNode> = [];
-		while (stack.length > 0) {
-			const member = stack.pop()!;
-			onStack.delete(member);
-			component.push(member);
-			if (member === node) break;
-		}
-		components.push(component.sort((left, right) => left - right));
+		onStack[slot] = 1;
+		pending.push(node);
+		nextEdge.push(0);
 	};
-	for (const node of affected) {
-		if (!indices.has(node)) visit(node);
+	for (const root of affected) {
+		if (indices[root + 1] !== 0) continue;
+		visit(root);
+		while (pending.length !== 0) {
+			const depth = pending.length - 1;
+			const node = pending[depth]!;
+			const slot = node + 1;
+			const successors =
+				node === CORE_ANY_SCRIPT_AGGREGATE ? graph.functions : graph.exactOutgoing(node);
+			const edge = nextEdge[depth]!;
+			const successor =
+				edge < successors.length
+					? successors[edge]
+					: edge === successors.length &&
+						  node !== CORE_ANY_SCRIPT_AGGREGATE &&
+						  graph.isWildcardCaller(node)
+						? CORE_ANY_SCRIPT_AGGREGATE
+						: undefined;
+			if (successor !== undefined) {
+				nextEdge[depth] = edge + 1;
+				edgeVisits++;
+				if (!affected.has(successor)) continue;
+				const index = indices[successor + 1]!;
+				if (index === 0) visit(successor);
+				else if (onStack[successor + 1] !== 0)
+					lowlinks[slot] = Math.min(lowlinks[slot]!, index);
+				continue;
+			}
+			pending.pop();
+			nextEdge.pop();
+			const parent = pending[depth - 1];
+			if (parent !== undefined)
+				lowlinks[parent + 1] = Math.min(lowlinks[parent + 1]!, lowlinks[slot]!);
+			if (lowlinks[slot] !== indices[slot]) continue;
+			const component: Array<CoreCallGraphNode> = [];
+			for (;;) {
+				const member = stack.pop()!;
+				onStack[member + 1] = 0;
+				component.push(member);
+				if (member === node) break;
+			}
+			components.push(component.sort((left, right) => left - right));
+		}
 	}
 	const preserved = fullRebuild
 		? []
@@ -2046,6 +2205,8 @@ export class CoreProgramFlowEngine {
 		previous?: CoreProgramFlowSummaryState<Local, Aggregate, Targets>,
 		dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
 	): CoreProgramFlowSummaryState<Local, Aggregate, Targets> {
+		const dataEpoch = this.#program.dataEpoch;
+		if (previous?.dataEpoch !== dataEpoch) previous = undefined;
 		const functions = targets.graph.functions;
 		const dirty = new Uint8Array(this.#program.functionCapacity);
 		if (previous === undefined) {
@@ -2074,14 +2235,6 @@ export class CoreProgramFlowEngine {
 				functionsAnalyzed++;
 			}
 		}
-		const topology = this.topology(targets.graph);
-		const {
-			sccs,
-			owner,
-			nodesAnalyzed: sccNodesAnalyzed,
-			edgeVisits: sccEdgeVisits,
-			sccsReused,
-		} = topology;
 		const reasons = semantics.rootReasons(this.#program, targets, context);
 		const summaryIds = new Map(
 			[...local].map(([functionId, summary]) => [
@@ -2090,51 +2243,122 @@ export class CoreProgramFlowEngine {
 			]),
 		);
 		const current = new Map<CoreFunctionId, FunctionEffectSummary>();
+		const transfers = new Map<
+			CoreFunctionId,
+			CoreProgramFlowSummaryTransfer<Aggregate>
+		>();
+		const transfer = (id: CoreFunctionId): CoreProgramFlowSummaryTransfer<Aggregate> => {
+			let prepared = transfers.get(id);
+			if (prepared === undefined) {
+				prepared = semantics.prepare(
+					this.#program,
+					id,
+					local.get(id)!,
+					targets,
+					summaryIds,
+					reasons.get(id) ?? [],
+				);
+				transfers.set(id, prepared);
+			}
+			return prepared;
+		};
+		const localSeeds = new Map<CoreFunctionId, FunctionEffectSummary>();
+		const localSeed = (id: CoreFunctionId): FunctionEffectSummary => {
+			let seed = localSeeds.get(id);
+			if (seed === undefined) {
+				seed = transfer(id)(current, undefined, false);
+				localSeeds.set(id, seed);
+			}
+			return seed;
+		};
 		for (const functionId of functions) {
-			const prior = previous?.published.get(functionId)?.summary;
-			if (prior !== undefined) current.set(functionId, prior);
-		}
-		for (const functionId of functions) {
-			if (current.has(functionId)) continue;
 			current.set(
 				functionId,
-				semantics.derive(
-					this.#program,
-					functionId,
-					local.get(functionId)!,
-					targets,
-					current,
-					undefined,
-					summaryIds,
-					reasons,
-					false,
-				),
+				previous?.published.get(functionId)?.summary ?? localSeed(functionId),
 			);
 		}
 		let maximumWildcardArgumentCount = 0;
-		for (const functionId of functions) {
-			for (const site of targets.outgoing(functionId)) {
-				if (!site.targets.anyScript) continue;
-				maximumWildcardArgumentCount = Math.max(
-					maximumWildcardArgumentCount,
-					site.arguments?.length ?? 0,
-				);
+		const wildcardReaders = new Set<CoreFunctionId>();
+		if (targets.sourceClosed) {
+			for (const functionId of targets.graph.wildcardCallers) {
+				for (const site of targets.outgoing(functionId)) {
+					if (!site.targets.anyScript || site.targets.opaque) continue;
+					wildcardReaders.add(functionId);
+					maximumWildcardArgumentCount = Math.max(
+						maximumWildcardArgumentCount,
+						(site.arguments ?? site.argumentPrefix)?.length ?? 0,
+					);
+				}
 			}
 		}
-		let anyScriptSummary = targets.graph.hasAggregate()
-			? previous?.anyScriptSummary
-			: undefined;
+		let fixedAggregate: Aggregate | undefined;
+		if (wildcardReaders.size !== 0 && previous?.sourceClosed === targets.sourceClosed) {
+			// Root reasons are publication metadata; call-independent effects and escape
+			// contributions stay valid while the local transfer and its call sites do.
+			const cleanLeaves = function* () {
+				for (const id of functions) {
+					if (
+						wildcardReaders.has(id) ||
+						targets.graph.exactOutgoing(id).length !== 0 ||
+						changedFunctions.has(id) ||
+						(previous.targets !== targets && targets.changedCallers.has(id)) ||
+						previous.targets.outgoing(id) !== targets.outgoing(id)
+					)
+						continue;
+					const summary = previous.published.get(id)?.summary;
+					if (summary !== undefined) yield summary;
+				}
+			};
+			const bound = semantics.summarizeAggregate(
+				cleanLeaves(),
+				maximumWildcardArgumentCount,
+			);
+			if (semantics.aggregateIsTop(bound)) fixedAggregate = bound;
+		}
+		let anyScriptSummary =
+			fixedAggregate ??
+			(wildcardReaders.size === 0 ? undefined : previous?.anyScriptSummary);
 		if (
-			targets.graph.hasAggregate() &&
+			wildcardReaders.size !== 0 &&
 			(anyScriptSummary === undefined ||
 				semantics.aggregateParameterCount(anyScriptSummary) !==
 					maximumWildcardArgumentCount)
 		) {
 			anyScriptSummary = semantics.summarizeAggregate(
-				current,
+				current.values(),
 				maximumWildcardArgumentCount,
 			);
 		}
+		const priorTopology = previous?.topology;
+		const sameGraph =
+			previous?.targets === targets &&
+			previous.anyScriptSummaryFixed === (fixedAggregate !== undefined);
+		const graph = sameGraph
+			? priorTopology!.graph
+			: updateCoreCallGraph(
+					priorTopology?.graph,
+					functions,
+					functions.map((caller) => ({
+						caller,
+						exactTargets: targets.graph.exactOutgoing(caller),
+						wildcard: fixedAggregate === undefined && wildcardReaders.has(caller),
+					})),
+				);
+		const topology = sameGraph
+			? {
+					...priorTopology!,
+					nodesAnalyzed: 0,
+					edgeVisits: 0,
+					sccsReused: priorTopology!.sccs.length,
+				}
+			: buildCoreProgramFlowTopology(graph, priorTopology);
+		const {
+			sccs,
+			owner,
+			nodesAnalyzed: sccNodesAnalyzed,
+			edgeVisits: sccEdgeVisits,
+			sccsReused,
+		} = topology;
 		const initialSccMembership = new Uint8Array(sccs.length);
 		const initialSccs: Array<CoreProgramFlowSccSeed> = [];
 		const seed = (scc: number | undefined): void => {
@@ -2147,7 +2371,10 @@ export class CoreProgramFlowEngine {
 		} else {
 			for (const functionId of changedFunctions) seed(owner.get(functionId));
 			for (const functionId of targets.changedCallers) seed(owner.get(functionId));
-			if (targets.graph.changedNodes.has(CORE_ANY_SCRIPT_AGGREGATE)) {
+			if (
+				(!sameGraph && graph.changedNodes.has(CORE_ANY_SCRIPT_AGGREGATE)) ||
+				previous.anyScriptSummaryFixed
+			) {
 				seed(owner.get(CORE_ANY_SCRIPT_AGGREGATE));
 			}
 			for (const functionId of functions) {
@@ -2160,6 +2387,12 @@ export class CoreProgramFlowEngine {
 					seed(owner.get(functionId));
 				}
 			}
+		}
+		if (
+			fixedAggregate !== undefined &&
+			!semantics.sameAggregate(previous?.anyScriptSummary, fixedAggregate)
+		) {
+			for (const caller of wildcardReaders) seed(owner.get(caller));
 		}
 		let sccTransfers = 0;
 		let callerWakeups = 0;
@@ -2174,20 +2407,7 @@ export class CoreProgramFlowEngine {
 			const scc = sccs[sccIndex]!;
 			const aggregateBefore = anyScriptSummary;
 			for (const functionId of scc.functions) {
-				current.set(
-					functionId,
-					semantics.derive(
-						this.#program,
-						functionId,
-						local.get(functionId)!,
-						targets,
-						current,
-						anyScriptSummary,
-						summaryIds,
-						reasons,
-						false,
-					),
-				);
+				current.set(functionId, localSeed(functionId));
 			}
 			const memberQueue: Array<CoreCallGraphNode> = [];
 			let aggregateQueued = false;
@@ -2208,34 +2428,25 @@ export class CoreProgramFlowEngine {
 				if (node === CORE_ANY_SCRIPT_AGGREGATE) {
 					aggregateQueued = false;
 					const nextAggregate = semantics.summarizeAggregate(
-						current,
+						current.values(),
 						maximumWildcardArgumentCount,
 					);
 					aggregateRecomputations++;
 					if (semantics.sameAggregate(anyScriptSummary, nextAggregate)) continue;
 					anyScriptSummary = nextAggregate;
-					for (const caller of targets.graph.wildcardCallers) {
+					for (const caller of graph.wildcardCallers) {
 						wildcardReverseCallerVisits++;
 						if (owner.get(caller) === sccIndex) enqueueMember(caller);
 					}
 					continue;
 				}
 				memberQueued[node] = 0;
-				const next = semantics.derive(
-					this.#program,
-					node,
-					local.get(node)!,
-					targets,
-					current,
-					anyScriptSummary,
-					summaryIds,
-					reasons,
-				);
+				const next = transfer(node)(current, anyScriptSummary, true);
 				const prior = current.get(node);
 				current.set(node, next);
 				sccTransfers++;
 				if (prior !== undefined && semantics.summariesEqual(prior, next)) continue;
-				for (const caller of targets.graph.exactCallers(node)) {
+				for (const caller of graph.exactCallers(node)) {
 					exactReverseCallerVisits++;
 					if (owner.get(caller) === sccIndex) enqueueMember(caller);
 				}
@@ -2245,14 +2456,14 @@ export class CoreProgramFlowEngine {
 				const next = current.get(functionId)!;
 				const prior = previous?.published.get(functionId)?.summary;
 				if (prior !== undefined && semantics.summariesEqual(prior, next)) continue;
-				for (const caller of targets.graph.exactCallers(functionId)) {
+				for (const caller of graph.exactCallers(functionId)) {
 					exactReverseCallerVisits++;
 					const callerScc = owner.get(caller);
 					if (callerScc === sccIndex) continue;
 					if (enqueue(callerScc, CORE_PROGRAM_FLOW_SUMMARIES)) callerWakeups++;
 					affectedCallers.add(caller);
 				}
-				if (targets.graph.hasAggregate()) {
+				if (graph.hasAggregate()) {
 					const aggregateScc = owner.get(CORE_ANY_SCRIPT_AGGREGATE);
 					if (
 						aggregateScc !== sccIndex &&
@@ -2266,7 +2477,7 @@ export class CoreProgramFlowEngine {
 				scc.hasAnyScriptAggregate &&
 				!semantics.sameAggregate(aggregateBefore, anyScriptSummary)
 			) {
-				for (const caller of targets.graph.wildcardCallers) {
+				for (const caller of graph.wildcardCallers) {
 					wildcardReverseCallerVisits++;
 					const callerScc = owner.get(caller);
 					if (callerScc === sccIndex) continue;
@@ -2314,12 +2525,15 @@ export class CoreProgramFlowEngine {
 		});
 		return Object.freeze({
 			sourceClosed: targets.sourceClosed,
+			dataEpoch,
 			targets,
 			sccs,
 			local,
 			published,
 			rootReasons: reasons,
 			anyScriptSummary,
+			anyScriptSummaryFixed: fixedAggregate !== undefined,
+			topology,
 			functionEffects,
 			moduleEffects: modules,
 			changedFunctions: changedPublished,
@@ -2397,6 +2611,67 @@ export class CoreProgramFlowEngine {
 				}
 			}
 		}
+		const dirty = new Set<CoreFunctionId>();
+		if (previous === undefined || previous.sourceClosed !== targets.sourceClosed) {
+			for (const functionId of functionIds) dirty.add(functionId);
+		} else {
+			for (const functionId of dirtyFunctions ?? functionIds) dirty.add(functionId);
+			for (const functionId of externallyChangedFunctions ?? functionIds) {
+				if (previous.external.get(functionId) !== external.get(functionId))
+					dirty.add(functionId);
+			}
+			for (const functionId of functionIds) {
+				const before = previous.targets.outgoing(functionId);
+				const after = targets.outgoing(functionId);
+				if (before === after || (before.length === 0 && after.length === 0)) continue;
+				dirty.add(functionId);
+				const retained = new Set(after);
+				for (const site of before) {
+					if (retained.has(site)) continue;
+					// A removed internal contribution can leave the boundary masks unchanged.
+					for (const callee of site.targets.functions) {
+						if (external.get(callee) === false) dirty.add(callee);
+					}
+				}
+			}
+			for (const functionId of previous.targets.graph.functions) {
+				if (external.has(functionId)) continue;
+				for (const site of previous.targets.outgoing(functionId)) {
+					for (const callee of site.targets.functions) {
+						if (external.get(callee) === false) dirty.add(callee);
+					}
+				}
+			}
+		}
+		// A clean function that reads no interprocedural inputs can witness a saturated
+		// aggregate even while other functions are being retracted and solved again.
+		const fixedAggregate =
+			previous !== undefined &&
+			wildcardReaders.size !== 0 &&
+			functionIds.some((functionId) => {
+				if (
+					dirty.has(functionId) ||
+					dependencies.get(functionId)!.length !== 0 ||
+					wildcardReaders.has(functionId)
+				)
+					return false;
+				const summary = previous.summaries.get(functionId);
+				return (
+					summary?.returnKind === semantics.top && summary.returnHeapBrand === undefined
+				);
+			});
+		let anyScriptAggregate = fixedAggregate
+			? Object.freeze({ returnKind: semantics.top, returnHeapBrand: undefined })
+			: wildcardReaders.size === 0
+				? undefined
+				: previous?.anyScriptAggregate;
+		if (
+			fixedAggregate &&
+			(previous?.anyScriptAggregate?.returnKind !== semantics.top ||
+				previous.anyScriptAggregate.returnHeapBrand !== undefined)
+		) {
+			for (const caller of wildcardReaders) dirty.add(caller);
+		}
 		// A return and an argument can feed back through the same site even when the call
 		// graph is acyclic. Solve the actual dependencies in dependency-first order.
 		const dependencyGraph = updateCoreCallGraph(
@@ -2405,7 +2680,7 @@ export class CoreProgramFlowEngine {
 			functionIds.map((caller) => ({
 				caller,
 				exactTargets: dependencies.get(caller)!,
-				wildcard: wildcardReaders.has(caller),
+				wildcard: !fixedAggregate && wildcardReaders.has(caller),
 			})),
 		);
 		const { owner, sccs } = buildCoreProgramFlowTopology(dependencyGraph);
@@ -2419,47 +2694,15 @@ export class CoreProgramFlowEngine {
 			const scc = owner.get(functionId);
 			if (scc !== undefined) checkBoundary[scc] = 1;
 		};
-		let anyScriptAggregate = dependencyGraph.hasAggregate()
-			? previous?.anyScriptAggregate
-			: undefined;
+		for (const functionId of dirty) force(functionId);
 		const aggregateScc = owner.get(CORE_ANY_SCRIPT_AGGREGATE);
 		if (
 			aggregateScc !== undefined &&
 			(anyScriptAggregate === undefined ||
+				previous?.anyScriptAggregateFixed === true ||
 				previous?.targets.graph.functions.some((id) => !external.has(id)))
 		) {
 			forced[aggregateScc] = 1;
-		}
-		if (previous === undefined || previous.sourceClosed !== targets.sourceClosed) {
-			forced.fill(1);
-		} else {
-			for (const functionId of dirtyFunctions ?? functionIds) force(functionId);
-			for (const functionId of externallyChangedFunctions ?? functionIds) {
-				if (previous.external.get(functionId) !== external.get(functionId))
-					force(functionId);
-			}
-			for (const functionId of functionIds) {
-				const before = previous.targets.outgoing(functionId);
-				const after = targets.outgoing(functionId);
-				if (before === after || (before.length === 0 && after.length === 0)) continue;
-				force(functionId);
-				const retained = new Set(after);
-				for (const site of before) {
-					if (retained.has(site)) continue;
-					// A removed internal contribution can leave the boundary masks unchanged.
-					for (const callee of site.targets.functions) {
-						if (external.get(callee) === false) force(callee);
-					}
-				}
-			}
-			for (const functionId of previous.targets.graph.functions) {
-				if (external.has(functionId)) continue;
-				for (const site of previous.targets.outgoing(functionId)) {
-					for (const callee of site.targets.functions) {
-						if (external.get(callee) === false) force(callee);
-					}
-				}
-			}
 		}
 		const summaries = new Map<CoreFunctionId, CoreProgramFlowValueKindSummary>();
 		const valueAnalyses = new Map<CoreFunctionId, Analysis>();
@@ -2624,30 +2867,29 @@ export class CoreProgramFlowEngine {
 					if (alternatives !== undefined)
 						recordAlternativeIndices.set(functionId, alternatives);
 				}
-				const returnedRecords = new Map<CoreInstructionId, CoreRecordValueKind>();
-				const recordResult = (instruction: CoreInstructionId): CoreRecordValueKind => {
-					if (returnedRecords.has(instruction)) return returnedRecords.get(instruction);
-					const site = byInstruction.get(instruction);
-					if (
-						site === undefined ||
-						site.targets.opaque ||
-						site.targets.anyScript ||
-						site.targets.functions.length === 0
-					)
-						return undefined;
-					let record: CoreRecordValueKind = null;
+				let calleeSummaries:
+					| Map<CoreFunctionId, CoreProgramFlowValueKindSummary>
+					| undefined;
+				for (const site of sites) {
+					if (site.targets.opaque || site.targets.anyScript) continue;
 					for (const callee of site.targets.functions) {
-						const returned = summaries.get(callee)!;
-						record = joinCoreRecordValueKinds(
-							record,
-							returned.returnKind === 0 ? null : returned.returnRecord,
-						);
-						if (record === undefined) break;
+						(calleeSummaries ??= new Map()).set(callee, summaries.get(callee)!);
 					}
-					returnedRecords.set(instruction, record);
-					return record;
-				};
+				}
 				const alternatives = recordAlternativeIndices.get(functionId);
+				// A reused value snapshot can outlive this solve. Its lazy queries own only the
+				// summaries of the functions it calls and the aggregate visible to this transfer.
+				const resultReaders = coreValueKindResultReaders(
+					fn,
+					byInstruction,
+					recordReads,
+					alternatives,
+					calleeSummaries,
+					anyScriptAggregate,
+					targets.sourceClosed,
+					semantics,
+				);
+				const { recordResult } = resultReaders;
 				for (const [instruction, values] of alternatives ?? []) {
 					if (values.length !== 0) continue;
 					const read = recordReads.get(instruction)!;
@@ -2700,94 +2942,10 @@ export class CoreProgramFlowEngine {
 				}
 				const values = semantics.analyze(this.#program, fn, cfg, {
 					context,
-					operationResultHeapBrand(instruction) {
-						const construct =
-							fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ===
-							"construct-completion";
-						const site = byInstruction.get(instruction);
-						if (site === undefined) {
-							const read = recordReads.get(instruction);
-							if (read === undefined) return undefined;
-							const record = coreRecordAccessProducerFields(read, recordResult);
-							return coreRecordFieldInitialHeapBrand(
-								read,
-								coreRecordAccessInitialFields(read, record, recordResult),
-							);
-						}
-						if (site.targets.opaque || (site.targets.anyScript && !targets.sourceClosed))
-							return undefined;
-						if (site.targets.anyScript)
-							return anyScriptAggregate === undefined
-								? null
-								: anyScriptAggregate.returnHeapBrand;
-						if (site.targets.functions.length === 0) return undefined;
-						let brand: CoreHeapBrandState = null;
-						for (const callee of site.targets.functions) {
-							const returned = summaries.get(callee)!;
-							if (returned.returnKind !== 0)
-								brand = joinCoreHeapBrands(
-									brand,
-									construct && returned.returnKind !== semantics.object
-										? undefined
-										: returned.returnHeapBrand,
-								);
-						}
-						return brand;
-					},
+					...resultReaders,
 					demandedValues,
 					parameterMasks: summary.parameterKinds,
 					receiverMask: summary.receiverKind,
-					operationResultAlternatives:
-						alternatives === undefined
-							? undefined
-							: (instruction) => {
-									const values = alternatives.get(instruction);
-									if (values === undefined) return undefined;
-									const read = recordReads.get(instruction)!;
-									return {
-										values,
-										hasNormalResult:
-											coreRecordFieldInitialKind(
-												read,
-												coreRecordAccessProducerFields(read, recordResult),
-												semantics.top,
-											) !== 0,
-									};
-								},
-					operationResultMask(instruction) {
-						const site = byInstruction.get(instruction);
-						if (site === undefined) {
-							const read = recordReads.get(instruction);
-							if (read === undefined) return undefined;
-							const record = coreRecordAccessProducerFields(read, recordResult);
-							const producerKind = coreRecordFieldInitialKind(
-								read,
-								record,
-								semantics.top,
-							);
-							if (producerKind === 0 || read.initialProducers === undefined)
-								return producerKind;
-							const initial = coreRecordAccessInitialFields(read, record, recordResult);
-							return initial === record
-								? producerKind
-								: coreRecordFieldInitialKind(read, initial, semantics.top);
-						}
-						if (
-							site.targets.opaque ||
-							(!targets.sourceClosed && site.targets.anyScript)
-						) {
-							return semantics.top;
-						}
-						if (site.targets.anyScript) {
-							return anyScriptAggregate?.returnKind ?? 0;
-						}
-						const callees = site.targets.functions;
-						if (callees.length === 0) return semantics.top;
-						return callees.reduce(
-							(mask, callee) => mask | summaries.get(callee)!.returnKind,
-							0,
-						);
-					},
 				});
 				valueAnalyses.set(functionId, values);
 				functionsEvaluated++;
@@ -2915,16 +3073,17 @@ export class CoreProgramFlowEngine {
 			valueAnalyses,
 			summaries,
 			anyScriptAggregate,
+			anyScriptAggregateFixed: fixedAggregate,
 			changedFunctions,
 			statistics,
 			values(functionId: CoreFunctionId) {
-				const result = valueAnalyses.get(functionId);
+				const result = this.valueAnalyses.get(functionId);
 				if (result === undefined)
 					throw new Error(`No value-kind analysis for ${functionId}`);
 				return result;
 			},
 			summary(functionId: CoreFunctionId) {
-				const result = summaries.get(functionId);
+				const result = this.summaries.get(functionId);
 				if (result === undefined)
 					throw new Error(`No value-kind summary for ${functionId}`);
 				return result;

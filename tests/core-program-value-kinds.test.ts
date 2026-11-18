@@ -1116,8 +1116,7 @@ globalThis.result = isNumber();`;
 			expect(kinds.summary(leaf).parameterKinds).toEqual([COMPILER_VALUE_KIND_TOP]);
 	});
 
-	it("keeps a function no call reaches out of the any-script aggregate", () => {
-		const program = analysisProgram();
+	function appendWildcardCaller(program: CoreProgram) {
 		const wildcard = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = wildcard.createBlock([{ representation: "boxed" }]);
 		const condition = inspectCoreBlockParameters(wildcard, entry)[0]!.value;
@@ -1158,8 +1157,14 @@ globalThis.result = isNumber();`;
 			argument!,
 		]);
 		wildcard.setTerminator(join, { kind: "return", value: result! });
-		wildcard.finish(entry);
+		const { function: caller } = wildcard.finish(entry);
 		for (let index = 0; index < 5; index++) appendLeaf(program);
+		return caller;
+	}
+
+	it("keeps a function no call reaches out of the any-script aggregate", () => {
+		const program = analysisProgram();
+		appendWildcardCaller(program);
 		const isolatedBuilder = new CoreFunctionBuilder(program, {
 			parameterCount: 1,
 			metadata: { sourcePath: "/isolated.js" },
@@ -1195,5 +1200,47 @@ globalThis.result = isNumber();`;
 			aggregateRecomputations: 0,
 		});
 		expect(updated.summary(isolated.function).parameterKinds).toEqual([0]);
+	});
+
+	it("retracts wildcard return kinds when the independent saturation witness changes", () => {
+		const program = analysisProgram();
+		const caller = appendWildcardCaller(program);
+		const witness = appendLeaf(program);
+		const unrelated = appendLeaf(program);
+		const initialEdit = CoreEditor.open(program, witness.function);
+		const nameStringIndex = initialEdit.appendStringConstants([[97]]);
+		initialEdit.replaceInstruction(witness.valueInstruction, "loadGlobalProperty", [], {
+			attributes: { nameStringIndex },
+		});
+		initialEdit.commit();
+		const context = programAnalysisContext();
+		const createManager = () =>
+			new CoreAnalysisManager(
+				program,
+				context,
+				new CoreOptimizationReportBuilder(program),
+			);
+		const manager = createManager();
+		const readKinds = (analyses = manager) =>
+			analyses.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds;
+		const initial = readKinds();
+		expect(initial.summary(caller).returnKind).toBe(COMPILER_VALUE_KIND_TOP);
+
+		const otherEdit = CoreEditor.open(program, unrelated.function);
+		otherEdit.replaceInstruction(unrelated.valueInstruction, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		otherEdit.commit();
+		const saturated = readKinds();
+		expect(saturated.values(caller)).toBe(initial.values(caller));
+
+		const removeWitness = CoreEditor.open(program, witness.function);
+		removeWitness.replaceInstruction(witness.valueInstruction, "createUndefined", []);
+		removeWitness.commit();
+		const updated = readKinds();
+		expect(updated.summary(caller).returnKind).toBe(
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED,
+		);
+		expect(updated.summary(caller)).toEqual(readKinds(createManager()).summary(caller));
 	});
 });

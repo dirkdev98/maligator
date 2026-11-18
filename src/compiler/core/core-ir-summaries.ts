@@ -63,6 +63,7 @@ import type {
 	CoreProgramFlowPublishedFunctionSummary,
 	CoreProgramFlowSummaries,
 	CoreProgramFlowSummarySemantics,
+	CoreProgramFlowSummaryTransfer,
 	CoreProgramFlowSummaryState,
 	CoreProgramFlowSummaryStatistics,
 } from "./core-program-flow.ts";
@@ -990,7 +991,7 @@ export interface CoreAnyScriptCallSummary {
 }
 
 function summarizeAnyScriptCallees(
-	current: ReadonlyMap<CoreFunctionId, FunctionEffectSummary>,
+	summaries: Iterable<FunctionEffectSummary>,
 	parameterCount: number,
 ): CoreAnyScriptCallSummary {
 	let effects = NO_EFFECT_SUMMARY;
@@ -1002,7 +1003,7 @@ function summarizeAnyScriptCallees(
 	// Parameters below the top of either lattice. Every field joins to a top that absorbs
 	// later summaries, so a saturated aggregate stops the walk over every function.
 	let openParameters = parameterCount;
-	for (const summary of current.values()) {
+	for (const summary of summaries) {
 		if (effects !== EVERY_EFFECT_SUMMARY)
 			effects = joinEffectSummaries(effects, summary.effects);
 		if (openParameters !== 0) {
@@ -1135,159 +1136,184 @@ function deriveConditionalOwnSlotEffects(
 	});
 }
 
-function deriveSummary(
+function prepareSummary(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
 	local: CoreLocalFunctionSummary,
 	targets: CoreCallGraphIndex,
-	current: ReadonlyMap<CoreFunctionId, FunctionEffectSummary>,
-	anyScriptSummary: CoreAnyScriptCallSummary | undefined,
 	summaryIds: ReadonlyMap<CoreFunctionId, string>,
-	reasons: ReadonlyMap<CoreFunctionId, ReadonlyArray<SummaryRootReason>>,
-	includeCalls = true,
-): FunctionEffectSummary {
-	let effects = local.effects;
-	const parameterEscape = [...local.parameterEscape];
-	const parameterContainment = [...local.parameterContainment];
-	const receiver = {
+	rootReasons: ReadonlyArray<SummaryRootReason>,
+): CoreProgramFlowSummaryTransfer<CoreAnyScriptCallSummary> {
+	const sites = targets.outgoing(functionId);
+	const callees = new Set<string>();
+	const dynamicCalls: Array<CoreIndexedCallSite> = [];
+	let openCallEdge = false;
+	let hasOpaqueCall = false;
+	const opaqueParameterEscape = [...local.parameterEscape];
+	const opaqueParameterContainment = [...local.parameterContainment];
+	const opaqueReceiver = {
 		escape: local.receiverEscape,
 		containment: local.receiverContainment,
 	};
-	const noteCallFact = (
-		value: CoreValueId | undefined,
-		escape: ValueEscapeFact,
-		containment: ValueContainmentFact,
-	): void => {
+	// An opaque call's effects and escaping inputs are independent of every callee summary.
+	const retain = (value: CoreValueId | undefined): void => {
 		if (value === undefined) return;
 		noteEscape(
 			local.origins[value] ?? ORIGIN_UNKNOWN,
-			escape,
-			containment,
-			parameterEscape,
-			parameterContainment,
-			receiver,
+			"retained",
+			"unknown",
+			opaqueParameterEscape,
+			opaqueParameterContainment,
+			opaqueReceiver,
 		);
 	};
-	const callSites = includeCalls ? targets.outgoing(functionId) : [];
-	if (includeCalls) {
-		const callbackEffects = (target: CoreFunctionId) => current.get(target)?.effects;
-		for (const callback of local.builtinCallbacks)
-			effects = joinEffectSummaries(
-				effects,
-				coreBuiltinCallbackEffects(
-					program.function(functionId),
-					callback,
-					targets,
-					callbackEffects,
-				) ?? EVERY_EFFECT_SUMMARY,
-			);
-	}
-	for (const site of callSites) {
-		if (site.targets.opaque || (!targets.sourceClosed && site.targets.anyScript)) {
-			effects = EVERY_EFFECT_SUMMARY;
-			for (const argument of site.arguments ?? site.argumentPrefix ?? []) {
-				noteCallFact(argument, "retained", "unknown");
-			}
-			noteCallFact(site.receiver, "retained", "unknown");
-			continue;
-		}
-		if (site.targets.anyScript) {
-			if (anyScriptSummary === undefined) {
-				throw new Error("Missing AnyScriptAggregate summary");
-			}
-			if (effects !== EVERY_EFFECT_SUMMARY)
-				effects = joinEffectSummaries(effects, anyScriptSummary.effects);
-			for (const [index, argument] of (
-				site.arguments ??
-				site.argumentPrefix ??
-				[]
-			).entries()) {
-				noteCallFact(
-					argument,
-					anyScriptSummary.parameterEscape[index] ?? "retained",
-					anyScriptSummary.parameterContainment[index] ?? "unknown",
-				);
-			}
-			noteCallFact(
-				site.receiver,
-				anyScriptSummary.receiverEscape,
-				anyScriptSummary.receiverContainment,
-			);
-			continue;
-		}
+	for (const site of sites) {
 		for (const callee of site.targets.functions) {
-			const calleeSummary = current.get(callee);
-			if (calleeSummary === undefined) {
-				effects = EVERY_EFFECT_SUMMARY;
-				continue;
-			}
-			if (effects !== EVERY_EFFECT_SUMMARY)
-				effects = joinEffectSummaries(effects, calleeSummary.effects);
-			for (const [index, argument] of (
-				site.arguments ??
-				site.argumentPrefix ??
-				[]
-			).entries()) {
-				noteCallFact(
-					argument,
-					calleeSummary.parameterEscape[index] ?? calleeSummary.restParameterEscape,
-					calleeSummary.parameterContainment[index] ??
-						calleeSummary.restParameterContainment,
-				);
-			}
-			noteCallFact(
-				site.receiver,
-				calleeSummary.receiverEscape,
-				calleeSummary.receiverContainment,
-			);
+			const id = summaryIds.get(callee);
+			if (id !== undefined) callees.add(id);
 		}
+		openCallEdge ||= coreCalleeTargetsAreOpen(site.targets);
+		if (site.targets.opaque || (!targets.sourceClosed && site.targets.anyScript)) {
+			hasOpaqueCall = true;
+			for (const argument of site.arguments ?? site.argumentPrefix ?? [])
+				retain(argument);
+			retain(site.receiver);
+		} else dynamicCalls.push(site);
 	}
-	const roots = reasons.get(functionId) ?? [];
-	const conditional = deriveConditionalOwnSlotEffects(
-		local,
-		targets.outgoing(functionId),
-		current,
-		includeCalls,
-	);
-	return Object.freeze({
+	const metadata = {
 		id: local.summaryId,
 		readAccessor: local.readAccessor,
 		functionIndex: functionId,
 		module: local.moduleId,
-		effects,
-		...(conditional !== undefined ? { conditionalOwnSlotEffects: conditional } : {}),
-		callees: Object.freeze(
-			[
-				...new Set(
-					targets.outgoing(functionId).flatMap((site) =>
-						site.targets.functions.flatMap((callee) => {
-							const id = summaryIds.get(callee);
-							return id === undefined ? [] : [id];
-						}),
-					),
-				),
-			].sort(),
-		),
-		openCallEdge: targets
-			.outgoing(functionId)
-			.some((site) => coreCalleeTargetsAreOpen(site.targets)),
-		externallyReachable: roots.length > 0,
-		rootReasons: roots,
-		parameterEscape: Object.freeze(parameterEscape),
-		restParameterEscape: "retained",
-		receiverEscape: receiver.escape,
-		parameterContainment: Object.freeze(parameterContainment),
-		restParameterContainment: "unknown",
-		receiverContainment: receiver.containment,
-		returnProvenance: projectedReturnOrigin(
-			program,
+		callees: Object.freeze([...callees].sort()),
+		openCallEdge,
+		externallyReachable: rootReasons.length > 0,
+		rootReasons,
+		restParameterEscape: "retained" as const,
+		restParameterContainment: "unknown" as const,
+		returnRepresentation: local.returnRepresentation,
+	};
+	return (current, anyScriptSummary, includeCalls) => {
+		const applyOpaqueCalls = includeCalls && hasOpaqueCall;
+		let effects = applyOpaqueCalls ? EVERY_EFFECT_SUMMARY : local.effects;
+		const parameterEscape = [
+			...(applyOpaqueCalls ? opaqueParameterEscape : local.parameterEscape),
+		];
+		const parameterContainment = [
+			...(applyOpaqueCalls ? opaqueParameterContainment : local.parameterContainment),
+		];
+		const receiver = applyOpaqueCalls
+			? { ...opaqueReceiver }
+			: {
+					escape: local.receiverEscape,
+					containment: local.receiverContainment,
+				};
+
+		const noteCallFact = (
+			value: CoreValueId | undefined,
+			escape: ValueEscapeFact,
+			containment: ValueContainmentFact,
+		): void => {
+			if (value === undefined) return;
+			noteEscape(
+				local.origins[value] ?? ORIGIN_UNKNOWN,
+				escape,
+				containment,
+				parameterEscape,
+				parameterContainment,
+				receiver,
+			);
+		};
+		if (includeCalls && effects !== EVERY_EFFECT_SUMMARY) {
+			const callbackEffects = (target: CoreFunctionId) => current.get(target)?.effects;
+			for (const callback of local.builtinCallbacks) {
+				effects = joinEffectSummaries(
+					effects,
+					coreBuiltinCallbackEffects(
+						program.function(functionId),
+						callback,
+						targets,
+						callbackEffects,
+					) ?? EVERY_EFFECT_SUMMARY,
+				);
+				if (effects === EVERY_EFFECT_SUMMARY) break;
+			}
+		}
+		for (const site of includeCalls ? dynamicCalls : []) {
+			if (site.targets.anyScript) {
+				if (anyScriptSummary === undefined) {
+					throw new Error("Missing AnyScriptAggregate summary");
+				}
+				if (effects !== EVERY_EFFECT_SUMMARY)
+					effects = joinEffectSummaries(effects, anyScriptSummary.effects);
+				for (const [index, argument] of (
+					site.arguments ??
+					site.argumentPrefix ??
+					[]
+				).entries()) {
+					noteCallFact(
+						argument,
+						anyScriptSummary.parameterEscape[index] ?? "retained",
+						anyScriptSummary.parameterContainment[index] ?? "unknown",
+					);
+				}
+				noteCallFact(
+					site.receiver,
+					anyScriptSummary.receiverEscape,
+					anyScriptSummary.receiverContainment,
+				);
+				continue;
+			}
+			for (const callee of site.targets.functions) {
+				const calleeSummary = current.get(callee);
+				if (calleeSummary === undefined) {
+					effects = EVERY_EFFECT_SUMMARY;
+					continue;
+				}
+				if (effects !== EVERY_EFFECT_SUMMARY)
+					effects = joinEffectSummaries(effects, calleeSummary.effects);
+				for (const [index, argument] of (
+					site.arguments ??
+					site.argumentPrefix ??
+					[]
+				).entries()) {
+					noteCallFact(
+						argument,
+						calleeSummary.parameterEscape[index] ?? calleeSummary.restParameterEscape,
+						calleeSummary.parameterContainment[index] ??
+							calleeSummary.restParameterContainment,
+					);
+				}
+				noteCallFact(
+					site.receiver,
+					calleeSummary.receiverEscape,
+					calleeSummary.receiverContainment,
+				);
+			}
+		}
+		const conditional = deriveConditionalOwnSlotEffects(
 			local,
-			targets,
+			sites,
 			current,
 			includeCalls,
-		),
-		returnRepresentation: local.returnRepresentation,
-	});
+		);
+		return Object.freeze({
+			...metadata,
+			effects,
+			...(conditional === undefined ? {} : { conditionalOwnSlotEffects: conditional }),
+			parameterEscape: Object.freeze(parameterEscape),
+			receiverEscape: receiver.escape,
+			parameterContainment: Object.freeze(parameterContainment),
+			receiverContainment: receiver.containment,
+			returnProvenance: projectedReturnOrigin(
+				program,
+				local,
+				targets,
+				current,
+				includeCalls,
+			),
+		});
+	};
 }
 
 function moduleSummaries(
@@ -1341,10 +1367,19 @@ export const CORE_PROGRAM_FLOW_SUMMARY_SEMANTICS: CoreProgramFlowSummarySemantic
 		return local.summaryId;
 	},
 	rootReasons,
-	derive: deriveSummary,
+	prepare: prepareSummary,
 	summarizeAggregate: summarizeAnyScriptCallees,
 	aggregateParameterCount(aggregate: CoreAnyScriptCallSummary) {
 		return aggregate.parameterEscape.length;
+	},
+	aggregateIsTop(aggregate: CoreAnyScriptCallSummary) {
+		return (
+			aggregate.effects === EVERY_EFFECT_SUMMARY &&
+			aggregate.receiverEscape === "retained" &&
+			aggregate.receiverContainment === "unknown" &&
+			aggregate.parameterEscape.every((escape) => escape === "retained") &&
+			aggregate.parameterContainment.every((containment) => containment === "unknown")
+		);
 	},
 	sameAggregate: sameAnyScriptSummary,
 	summariesEqual,

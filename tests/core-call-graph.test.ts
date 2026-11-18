@@ -7,6 +7,7 @@ import {
 } from "../src/compiler/core/core-call-graph.ts";
 import type { CoreCallGraphRow } from "../src/compiler/core/core-call-graph.ts";
 import type { CoreFunctionId } from "../src/compiler/core/core-ir.ts";
+import { buildCoreProgramFlowTopology } from "../src/compiler/core/core-program-flow.ts";
 
 function functionIds(count: number): Array<CoreFunctionId> {
 	return Array.from({ length: count }, (_, index) => index as CoreFunctionId);
@@ -73,6 +74,24 @@ function random(seed: number): () => number {
 }
 
 describe("symbolic Core call graph", () => {
+	it("finds one component in a long chain of bidirectional flow dependencies", () => {
+		const functions = functionIds(12_000);
+		const graph = updateCoreCallGraph(
+			undefined,
+			functions,
+			functions.map((caller, index) => ({
+				caller,
+				exactTargets: functions
+					.slice(Math.max(0, index - 1), index)
+					.concat(functions.slice(index + 1, index + 2)),
+				wildcard: false,
+			})),
+		);
+		const topology = buildCoreProgramFlowTopology(graph);
+
+		expect(topology.sccs.map((component) => component.functions)).toEqual([functions]);
+	});
+
 	it("streams exact and wildcard reverse callers without duplicates", () => {
 		const functions = functionIds(4);
 		const graph = updateCoreCallGraph(undefined, functions, [

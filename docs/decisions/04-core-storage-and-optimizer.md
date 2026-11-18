@@ -232,8 +232,17 @@ entry seed. Its internal arguments and returns start from bottom so old feedback
 cannot keep a removed kind alive. A removed call also dirties its former recipients.
 After convergence, changed returns wake their readers, and argument recipients compare
 their new boundary masks with the saved ones before rebuilding local analyses.
+Lazy heap-brand queries retain the function's call results and record inputs from
+its last evaluation. A reused analysis does not hold the rest of that solve alive.
 Appending constants preserves existing references and the heap-brand proofs that use
 them. Replacing the data tables invalidates those proofs and the value-kind snapshot.
+
+An unchanged function with no input dependencies can witness a saturated wildcard
+aggregate. A valid witness lets the solver use the aggregate directly. When the
+witness is lost, wildcard readers and their dependencies converge together again.
+Effect summaries project only wildcard calls that can read their aggregate. The
+summary transfer prepares call-site metadata and opaque-call escapes once, then
+resolves the effects and provenance that depend on other summaries.
 
 Call targets treat each parameter of a closure that some function creates as a
 cell. Every visible call writes its argument's targets into the callee's parameter
