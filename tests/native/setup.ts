@@ -14,6 +14,7 @@ import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 import { ensureNativeArtifacts } from "../../src/runtime-build.ts";
 import {
 	defaultNodeEvalConfig,
+	owningArgumentForwardingEvalConfig,
 	preparedNativeEvalConfig,
 } from "../helpers/native-eval-config.ts";
 import { nativePreparations } from "../helpers/native-preparations.ts";
@@ -107,6 +108,15 @@ export function setup(project: TestProject): void {
 			label: "eval runtime (product defaults, Node on)",
 			config: defaultNodeEvalConfig(),
 		});
+	}
+	if (required.has("owning-argument-forwarding")) {
+		for (const primordials of ["mutable", "locked"] as const) {
+			variants.push({
+				environment,
+				label: `owning argument forwarding runtime (${primordials} primordials)`,
+				config: owningArgumentForwardingEvalConfig(primordials),
+			});
+		}
 	}
 	const progress = new CommandProgress("native-prepare", { cacheLease: false });
 	for (const [index, variant] of variants.entries()) {

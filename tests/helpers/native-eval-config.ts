@@ -36,3 +36,12 @@ export function preparedNativeEvalConfig({
 export function defaultNodeEvalConfig(): ResolvedBuildConfig {
 	return resolveBuildConfig({ engine: { eval: true }, surface: { node: true } });
 }
+
+export function owningArgumentForwardingEvalConfig(
+	primordials: "mutable" | "locked",
+): ResolvedBuildConfig {
+	return resolveBuildConfig({
+		engine: { primordials, eval: true, realms: false, intl: { enabled: false } },
+		surface: { node: true },
+	});
+}

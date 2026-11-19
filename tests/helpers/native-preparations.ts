@@ -8,7 +8,8 @@ export type NativePreparation =
 	| "perf-stats"
 	| "locked-perf-stats"
 	| "node-perf-stats"
-	| "node-eval-defaults";
+	| "node-eval-defaults"
+	| "owning-argument-forwarding";
 
 const perfManifests = new Map<string, ReadonlySet<string>>();
 
@@ -54,6 +55,9 @@ export function nativePreparations(root: string, file: string): Array<NativePrep
 		// Its product build config must keep resolving to `defaultNodeEvalConfig()`.
 		...(relative === "tests/native/express-valibot-build.test.ts"
 			? (["node-eval-defaults"] as const)
+			: []),
+		...(relative === "tests/native/owning-argument-forwarding.test.ts"
+			? (["owning-argument-forwarding"] as const)
 			: []),
 	];
 }

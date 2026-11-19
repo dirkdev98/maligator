@@ -3,12 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	buildBackendPairFromOneProgramImage,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
+import { owningArgumentForwardingEvalConfig } from "../helpers/native-eval-config.ts";
 
 it.each(["mutable", "locked"] as const)(
 	"preserves %s owning argument forwarding",
@@ -25,10 +25,7 @@ it.each(["mutable", "locked"] as const)(
 				name: "owning-forwarding",
 				outDir,
 				nativeStackRoots: "precise",
-				config: resolveBuildConfig({
-					engine: { primordials, eval: true, realms: false, intl: { enabled: false } },
-					surface: { node: true },
-				}),
+				config: owningArgumentForwardingEvalConfig(primordials),
 			});
 			for (const binary of [pair.compiled, pair.interpreted])
 				for (const env of [{}, STRESS_ENV])

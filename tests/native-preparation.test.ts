@@ -217,6 +217,25 @@ describe("native runtime preparation", () => {
 		expect(ensureNativeArtifacts).toHaveBeenCalledWith(contexts.at(-1));
 	});
 
+	it("prepares both owning argument forwarding runtimes before the timed tests", () => {
+		setup(selectedProject("owning-argument-forwarding.test.ts"));
+		const contexts = preparedContexts().filter(
+			(context) => context.features?.realmsEnabled === false,
+		);
+		expect(contexts.map((context) => context.features?.primordialsLocked)).toEqual([
+			false,
+			true,
+		]);
+		for (const context of contexts) {
+			expect(context.features).toMatchObject({
+				nodeEnabled: true,
+				evalEnabled: true,
+				intlEnabled: false,
+			});
+			expect(ensureNativeArtifacts).toHaveBeenCalledWith(context);
+		}
+	});
+
 	it("prepares Node instrumentation for the HTTP queue lifecycle fixture", () => {
 		setup(selectedProject("node-http-ready-queues.test.ts"));
 		const contexts = preparedContexts();
