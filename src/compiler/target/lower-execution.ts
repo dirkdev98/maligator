@@ -179,106 +179,79 @@ export function coreRegisterClasses(
 		}
 	}
 
-	interface BlockRange {
+	interface RegisterRange {
+		readonly block: CoreBlockId;
 		start: number;
 		end: number;
 	}
 	interface LiveInterval {
 		readonly value: CoreValueId;
-		start: number;
-		end: number;
-		readonly firstBlock: CoreBlockId;
-		readonly firstRange: BlockRange;
-		additionalRanges: Map<CoreBlockId, BlockRange> | undefined;
+		readonly firstRange: RegisterRange;
+		lastRange: RegisterRange;
+		laterRanges: Array<RegisterRange> | undefined;
 	}
 	const intervals = new Array<LiveInterval | undefined>(fn.valueCapacity);
-	const touch = (
-		value: CoreValueId,
-		block: CoreBlockId,
-		position: number,
-		blockPosition: number,
-	): void => {
+	const touch = (value: CoreValueId, block: CoreBlockId, position: number): void => {
 		let interval = intervals[value];
 		if (interval === undefined) {
+			const range = { block, start: position, end: position };
 			interval = {
 				value,
-				start: position,
-				end: position,
-				firstBlock: block,
-				firstRange: { start: blockPosition, end: blockPosition },
-				additionalRanges: undefined,
+				firstRange: range,
+				lastRange: range,
+				laterRanges: undefined,
 			};
 			intervals[value] = interval;
-			return;
-		}
-		interval.start = Math.min(interval.start, position);
-		interval.end = Math.max(interval.end, position);
-		const range =
-			block === interval.firstBlock
-				? interval.firstRange
-				: interval.additionalRanges?.get(block);
-		if (range === undefined) {
-			(interval.additionalRanges ??= new Map()).set(block, {
-				start: blockPosition,
-				end: blockPosition,
-			});
+		} else if (interval.lastRange.block !== block) {
+			const range = { block, start: position, end: position };
+			(interval.laterRanges ??= []).push(range);
+			interval.lastRange = range;
 		} else {
-			range.start = Math.min(range.start, blockPosition);
-			range.end = Math.max(range.end, blockPosition);
+			const range = interval.lastRange;
+			range.start = Math.min(range.start, position);
+			range.end = Math.max(range.end, position);
 		}
 	};
+	// Each block contributes one range per value on a disjoint position span.
+	const shapeCaseValues = new Set<CoreValueId>();
+	const selectShapeCase = fn.registry.get("selectShapeCase")?.id;
 	let nextPosition = 0;
 	for (const block of blockOrder) {
 		const blockStart = nextPosition++;
 		const parameterStart = kernel.blockParameterStart(block);
 		const parameterCount = kernel.blockParameterCount(block);
 		for (let index = 0; index < parameterCount; index++) {
-			touch(kernel.blockParameterValue(parameterStart + index), block, blockStart, 0);
+			touch(kernel.blockParameterValue(parameterStart + index), block, blockStart);
 		}
-		for (const value of liveIn[block]!) touch(value, block, blockStart, 0);
-		const instructions = [...fn.bodyInstructionIds(block)];
-		for (const [instructionIndex, instruction] of instructions.entries()) {
+		for (const value of liveIn[block]!) touch(value, block, blockStart);
+		for (const instruction of fn.bodyInstructionIds(block)) {
 			const readPosition = nextPosition++;
 			const writePosition = nextPosition++;
 			const operandStart = kernel.instructionOperandStart(instruction);
 			const operandCount = kernel.instructionOperandCount(instruction);
 			for (let index = 0; index < operandCount; index++) {
-				touch(
-					kernel.operandAt(operandStart + index),
-					block,
-					readPosition,
-					instructionIndex * 2 + 1,
-				);
+				touch(kernel.operandAt(operandStart + index), block, readPosition);
 			}
 			const resultStart = kernel.instructionResultStart(instruction);
 			const resultCount = kernel.instructionResultCount(instruction);
+			const unique = kernel.instructionOpcode(instruction) === selectShapeCase;
 			for (let index = 0; index < resultCount; index++) {
-				touch(
-					kernel.resultAt(resultStart + index),
-					block,
-					writePosition,
-					instructionIndex * 2 + 2,
-				);
+				const value = kernel.resultAt(resultStart + index);
+				touch(value, block, writePosition);
+				if (unique) shapeCaseValues.add(value);
 			}
 		}
 		const blockEnd = nextPosition++;
-		const blockEndPosition = instructions.length * 2 + 1;
-		for (const value of terminatorValues[block]!)
-			touch(value, block, blockEnd, blockEndPosition);
+		for (const value of terminatorValues[block]!) touch(value, block, blockEnd);
 		const handlerArgumentStart = kernel.blockHandlerArgumentStart(block);
 		const handlerArgumentCount = kernel.blockHandlerArgumentCount(block);
 		for (let index = 0; index < handlerArgumentCount; index++) {
-			touch(
-				kernel.handlerArgumentAt(handlerArgumentStart + index),
-				block,
-				blockEnd,
-				blockEndPosition,
-			);
+			touch(kernel.handlerArgumentAt(handlerArgumentStart + index), block, blockEnd);
 		}
-		for (const value of liveOut[block]!) touch(value, block, blockEnd, blockEndPosition);
+		for (const value of liveOut[block]!) touch(value, block, blockEnd);
 		for (const parameter of handlerParameters(block)) {
-			touch(parameter, block, blockStart, 0);
-			touch(parameter, block, blockEnd, blockEndPosition);
+			touch(parameter, block, blockStart);
+			touch(parameter, block, blockEnd);
 		}
 	}
 
@@ -287,18 +260,6 @@ export function coreRegisterClasses(
 		(interval): interval is LiveInterval => interval !== undefined,
 	);
 	for (const interval of liveIntervals) roots.set(interval.value, interval.value);
-	const shapeCaseValues = new Set<CoreValueId>();
-	for (const block of blockOrder) {
-		for (const instruction of fn.bodyInstructionIds(block)) {
-			if (fn.instructionOpcodeName(instruction) === "selectShapeCase") {
-				const resultStart = kernel.instructionResultStart(instruction);
-				const resultCount = kernel.instructionResultCount(instruction);
-				for (let index = 0; index < resultCount; index++) {
-					shapeCaseValues.add(kernel.resultAt(resultStart + index));
-				}
-			}
-		}
-	}
 	const abi = new Map<CoreValueId, number>();
 	for (let index = 0; index < fn.parameterCount; index++) {
 		abi.set(kernel.functionParameter(index), index);
@@ -311,93 +272,138 @@ export function coreRegisterClasses(
 		const output = kernel.resultAt(kernel.instructionResultStart(instruction));
 		abi.set(output, fn.parameterCount + snapshotIndex++);
 	}
+	interface RegisterColor {
+		readonly register: number;
+		readonly rangesByBlock: Map<CoreBlockId, Array<RegisterRange>>;
+		lastEnd: number;
+	}
 	const registers = new Map<CoreValueId, number>();
 	const registerRepresentations = new Map<number, CoreRepresentation>();
-	const variantClasses = new Map<number, string>();
-	const variantClass = (value: CoreValueId): string =>
-		variantRepresentations.map((representations) => representations[value]).join(",");
-	const rangesByRegister = new Map<number, Map<CoreBlockId, Array<BlockRange>>>();
-	const addRange = (
-		byBlock: Map<CoreBlockId, Array<BlockRange>>,
-		block: CoreBlockId,
-		range: BlockRange,
-	): void => {
-		const ranges = byBlock.get(block) ?? [];
+	const colorClasses = new Map<string, Array<RegisterColor>>();
+	const colorClass = (value: CoreValueId, representation: CoreRepresentation): string =>
+		variantRepresentations.length === 0
+			? representation
+			: `${representation}:${variantRepresentations.map((representations) => representations[value]).join(",")}`;
+	// Assigned ranges in a block are disjoint. The last range starting before
+	// the query ends is its only possible overlap.
+	const upperBound = (ranges: ReadonlyArray<RegisterRange>, position: number): number => {
 		let low = 0;
 		let high = ranges.length;
 		while (low < high) {
 			const middle = Math.floor((low + high) / 2);
-			if (ranges[middle]!.start <= range.start) low = middle + 1;
+			if (ranges[middle]!.start <= position) low = middle + 1;
 			else high = middle;
 		}
-		ranges.splice(low, 0, range);
-		byBlock.set(block, ranges);
+		return low;
 	};
-	const addRanges = (register: number, interval: LiveInterval): void => {
-		const byBlock =
-			rangesByRegister.get(register) ?? new Map<CoreBlockId, Array<BlockRange>>();
-		addRange(byBlock, interval.firstBlock, interval.firstRange);
-		if (interval.additionalRanges !== undefined)
-			for (const [block, range] of interval.additionalRanges)
-				addRange(byBlock, block, range);
-		rangesByRegister.set(register, byBlock);
+	const rangeOverlaps = (color: RegisterColor, range: RegisterRange): boolean => {
+		const ranges = color.rangesByBlock.get(range.block);
+		if (ranges === undefined) return false;
+		const next = upperBound(ranges, range.end);
+		return next > 0 && ranges[next - 1]!.end >= range.start;
 	};
-	const blockRangeOverlaps = (
-		byBlock: ReadonlyMap<CoreBlockId, ReadonlyArray<BlockRange>>,
-		block: CoreBlockId,
-		range: BlockRange,
-	): boolean => {
-		const candidates = byBlock.get(block);
-		if (candidates === undefined) return false;
-		for (const candidate of candidates) {
-			if (candidate.start > range.end) break;
-			if (range.start <= candidate.end) return true;
+	const overlaps = (color: RegisterColor, interval: LiveInterval): boolean => {
+		if (color.lastEnd < interval.firstRange.start) return false;
+		if (rangeOverlaps(color, interval.firstRange)) return true;
+		if (interval.laterRanges !== undefined)
+			for (const range of interval.laterRanges)
+				if (rangeOverlaps(color, range)) return true;
+		return false;
+	};
+	const addRange = (color: RegisterColor, range: RegisterRange): void => {
+		const ranges = color.rangesByBlock.get(range.block);
+		if (ranges === undefined) {
+			color.rangesByBlock.set(range.block, [range]);
+		} else if (ranges[ranges.length - 1]!.end < range.start) {
+			ranges.push(range);
+		} else {
+			ranges.splice(upperBound(ranges, range.start), 0, range);
 		}
-		return false;
 	};
-	const overlaps = (register: number, interval: LiveInterval): boolean => {
-		const byBlock = rangesByRegister.get(register);
-		if (byBlock === undefined) return false;
-		if (blockRangeOverlaps(byBlock, interval.firstBlock, interval.firstRange))
-			return true;
-		if (interval.additionalRanges !== undefined)
-			for (const [block, range] of interval.additionalRanges)
-				if (blockRangeOverlaps(byBlock, block, range)) return true;
-		return false;
+	const addColor = (register: number, key: string): RegisterColor => {
+		const color: RegisterColor = { register, rangesByBlock: new Map(), lastEnd: -1 };
+		let candidates = colorClasses.get(key);
+		if (candidates === undefined) {
+			candidates = [];
+			colorClasses.set(key, candidates);
+		}
+		if (
+			candidates.length === 0 ||
+			candidates[candidates.length - 1]!.register < register
+		) {
+			candidates.push(color);
+		} else {
+			let index = 0;
+			while (candidates[index]!.register < register) index++;
+			candidates.splice(index, 0, color);
+		}
+		return color;
 	};
-	const assign = (interval: LiveInterval, register: number, variantKey: string): void => {
+	const assign = (
+		interval: LiveInterval,
+		register: number,
+		representation: CoreRepresentation,
+		color: RegisterColor | undefined,
+	): void => {
 		registers.set(interval.value, register);
-		registerRepresentations.set(register, fn.valueRepresentation(interval.value));
-		variantClasses.set(register, variantKey);
-		addRanges(register, interval);
+		registerRepresentations.set(register, representation);
+		if (color !== undefined) {
+			color.lastEnd = Math.max(color.lastEnd, interval.lastRange.end);
+			addRange(color, interval.firstRange);
+			if (interval.laterRanges !== undefined)
+				for (const range of interval.laterRanges) addRange(color, range);
+		}
 	};
+	let nextUniqueRegister = 0;
 	for (const interval of liveIntervals) {
 		const register = abi.get(interval.value);
-		if (register !== undefined) assign(interval, register, variantClass(interval.value));
+		if (register === undefined) continue;
+		const representation = fn.valueRepresentation(interval.value);
+		const color =
+			reuseRegisters && !reservedAbiColors.has(register)
+				? addColor(register, colorClass(interval.value, representation))
+				: undefined;
+		assign(interval, register, representation, color);
+		nextUniqueRegister = Math.max(nextUniqueRegister, register + 1);
 	}
-	let nextUniqueRegister = Math.max(-1, ...registers.values()) + 1;
+	// The first unused non-ABI color competes with lower compatible colors.
+	let nextFreeRegister = 0;
 	const ordered = [...liveIntervals].sort(
 		(left, right) =>
-			left.start - right.start || left.end - right.end || left.value - right.value,
+			left.firstRange.start - right.firstRange.start ||
+			left.lastRange.end - right.lastRange.end ||
+			left.value - right.value,
 	);
 	for (const interval of ordered) {
 		if (registers.has(interval.value)) continue;
 		const representation = fn.valueRepresentation(interval.value);
-		const variantKey = variantClass(interval.value);
 		let register = nextUniqueRegister;
-		if (reuseRegisters && !shapeCaseValues.has(interval.value)) {
-			register = 0;
-			while (
-				reservedAbiColors.has(register) ||
-				(registerRepresentations.has(register) &&
-					registerRepresentations.get(register) !== representation) ||
-				(variantClasses.has(register) && variantClasses.get(register) !== variantKey) ||
-				overlaps(register, interval)
-			) {
-				register++;
+		let color: RegisterColor | undefined;
+		if (reuseRegisters) {
+			const key = colorClass(interval.value, representation);
+			if (!shapeCaseValues.has(interval.value)) {
+				while (
+					reservedAbiColors.has(nextFreeRegister) ||
+					registerRepresentations.has(nextFreeRegister)
+				) {
+					nextFreeRegister++;
+				}
+				register = nextFreeRegister;
+				const candidates = colorClasses.get(key);
+				if (candidates !== undefined)
+					for (const candidate of candidates) {
+						if (candidate.register >= register) break;
+						if (!overlaps(candidate, interval)) {
+							color = candidate;
+							register = candidate.register;
+							break;
+						}
+					}
 			}
+			if (color === undefined && !reservedAbiColors.has(register))
+				color = addColor(register, key);
 		}
-		assign(interval, register, variantKey);
+		assign(interval, register, representation, color);
 		nextUniqueRegister = Math.max(nextUniqueRegister, register + 1);
 	}
 	return { roots, registers, registerRepresentations };
