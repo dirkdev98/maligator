@@ -187,7 +187,7 @@ export const lowerLiteralObjectAssign: CoreFunctionPass = {
 		},
 	},
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
-	wakesOn: ["body", "cfg", "calls", "facts", "memoryEffects"],
+	wakesOn: ["body", "cfg", "calls", "facts", "normalResults", "memoryEffects"],
 	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {

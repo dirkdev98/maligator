@@ -66,7 +66,7 @@ export const prepareFreshArrayValues: CoreFunctionPass = {
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredFunctionOpcodesAny: ["createArray"],
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
-	wakesOn: ["body", "cfg", "facts", "memoryEffects", "representations"],
+	wakesOn: ["body", "cfg", "facts", "normalResults", "memoryEffects", "representations"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {

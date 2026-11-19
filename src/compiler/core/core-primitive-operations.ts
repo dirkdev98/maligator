@@ -375,7 +375,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 	requiredFunctionOpcodesAny: PRIMITIVE_OPERATION_CANDIDATES,
 	candidates: { dependencies: ["body"], opcodes: PRIMITIVE_OPERATION_CANDIDATES },
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
-	wakesOn: ["body", "cfg", "memoryEffects", "facts", "representations"],
+	wakesOn: ["body", "cfg", "memoryEffects", "facts", "normalResults", "representations"],
 	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
@@ -1752,7 +1752,7 @@ export const eliminatePrimitiveWrappers: CoreFunctionPass = {
 		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	],
-	wakesOn: ["body", "cfg", "memoryEffects", "facts", "representations"],
+	wakesOn: ["body", "cfg", "memoryEffects", "facts", "normalResults", "representations"],
 	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {

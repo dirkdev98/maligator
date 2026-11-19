@@ -99,12 +99,11 @@ specialization-plan inputs. A `CoreChangeSet` identifies the changed functions,
 blocks, instructions, values, facts, edges, calls, and exact version domains. An edit
 to one function leaves every version of unrelated functions unchanged.
 
-Publishing a call result or initial own-field read changes its normal-result facts
-and specialization inputs without replacing the instruction's operands or effect
-proof. The `normalResults` domain wakes local kind/range consumers and the program's
-return-kind worklist. CFG, call targets, effects, provenance and memory versions
-remain reusable. An effect refinement wakes the return-kind worklist for bodies
-with handlers, where it can change the set of reachable returns.
+Publishing a call result or initial own-field read advances its normal-result and
+specialization-input versions. Passes that read normal-completion kinds, brands or
+ranges declare a `normalResults` wake. The program's return-kind worklist observes
+the same domain. An effect refinement also wakes that worklist for bodies with
+handlers, where it can change the set of reachable returns.
 
 Own-slot candidate hints change only specialization inputs. They preserve operand
 storage, effect proofs and structural analyses while invalidating specialization

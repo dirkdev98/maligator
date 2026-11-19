@@ -1287,7 +1287,7 @@ const refineExactTypedArrayAccesses: CoreFunctionPass = {
 		},
 	},
 	requiredAnalyses: [CORE_LOCAL_FACT_BUNDLE_ANALYSIS, CORE_LOOP_INDUCTION_ANALYSIS],
-	wakesOn: ["body", "facts", "representations", "cfg"],
+	wakesOn: ["body", "facts", "normalResults", "representations", "cfg"],
 	changes: { cfg: false, calls: false, facts: true, representations: true },
 	budget: PROVENANCE_BUDGET,
 	run(context) {
@@ -2202,7 +2202,7 @@ const refineStackObjectCellRepresentations: CoreFunctionPass = {
 		CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS,
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	],
-	wakesOn: ["body", "facts", "representations", "specializationInputs"],
+	wakesOn: ["body", "facts", "normalResults", "representations", "specializationInputs"],
 	changes: { cfg: false, calls: false, facts: false, representations: true },
 	budget: PROVENANCE_BUDGET,
 	run(context) {
@@ -2436,7 +2436,7 @@ const sinkConditionalObjectAllocations: CoreFunctionPass = {
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 		CORE_STATIC_VALUE_ANALYSIS,
 	],
-	wakesOn: ["body", "cfg", "exceptionFlow", "facts", "representations"],
+	wakesOn: ["body", "cfg", "exceptionFlow", "facts", "normalResults", "representations"],
 	changes: { cfg: false, calls: true, facts: false, representations: false },
 	budget: PROVENANCE_BUDGET,
 	run(context) {

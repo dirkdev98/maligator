@@ -216,52 +216,50 @@ describe("normal-result fact publication", () => {
 		expect(fn.instructionAttributes(compare.instruction).value).toBe(true);
 	});
 
-	it.each(["call", "field"] as const)("changes only fact versions for a %s", (kind) => {
-		const { program, fn, value, instruction } = observedResult(kind);
-		const before = fn.versions;
-		const featureVersion = fn.featureVersion;
-		const operands = fn.kernel.instructionOperandStart(instruction);
-		const sourcePosition = fn.instructionSourcePosition(instruction);
-		const range = { ...bounded };
-		const edit = CoreEditor.open(program, fn.id);
-		edit.setNormalResultFacts(instruction, {
-			mask: COMPILER_VALUE_KIND_NUMBER,
-			integerRange: range,
-		});
-		const changes = edit.commit();
-		expect(changes.domains).toEqual(["facts", "normalResults", "specializationInputs"]);
-		expect(changes.values).toEqual([value]);
-		expect(fn.versions).toEqual({
-			...before,
-			facts: before.facts + 1,
-			normalResults: before.normalResults + 1,
-			specializationInputs: before.specializationInputs + 1,
-		});
-		expect(fn.featureVersion).toBe(featureVersion);
-		expect(fn.kernel.instructionOperandStart(instruction)).toBe(operands);
-		expect(fn.instructionSourcePosition(instruction)).toBe(sourcePosition);
-		expect(fn.instructionAttributes(instruction).marker).toBe("kept");
-		range.minimum = 15;
-		expect(fn.instructionAttributes(instruction).normalResultIntegerRange).toEqual(
-			bounded,
-		);
-		const same = CoreEditor.open(program, fn.id);
-		same.setNormalResultFacts(instruction, {
-			mask: COMPILER_VALUE_KIND_NUMBER,
-			integerRange: bounded,
-		});
-		expect(same.commit().edits).toBe(0);
-		const clear = CoreEditor.open(program, fn.id);
-		clear.setNormalResultFacts(instruction, undefined);
-		expect(clear.commit().domains).toEqual([
-			"facts",
-			"normalResults",
-			"specializationInputs",
-		]);
-		expect(fn.instructionAttributes(instruction)).toEqual(
-			kind === "call" ? { marker: "kept" } : { stringIndex: 0, marker: "kept" },
-		);
-	});
+	it.each(["call", "field"] as const)(
+		"publishes only result and specialization changes for a %s",
+		(kind) => {
+			const { program, fn, value, instruction } = observedResult(kind);
+			const before = fn.versions;
+			const featureVersion = fn.featureVersion;
+			const operands = fn.kernel.instructionOperandStart(instruction);
+			const sourcePosition = fn.instructionSourcePosition(instruction);
+			const range = { ...bounded };
+			const edit = CoreEditor.open(program, fn.id);
+			edit.setNormalResultFacts(instruction, {
+				mask: COMPILER_VALUE_KIND_NUMBER,
+				integerRange: range,
+			});
+			const changes = edit.commit();
+			expect(changes.domains).toEqual(["normalResults", "specializationInputs"]);
+			expect(changes.values).toEqual([value]);
+			expect(fn.versions).toEqual({
+				...before,
+				normalResults: before.normalResults + 1,
+				specializationInputs: before.specializationInputs + 1,
+			});
+			expect(fn.featureVersion).toBe(featureVersion);
+			expect(fn.kernel.instructionOperandStart(instruction)).toBe(operands);
+			expect(fn.instructionSourcePosition(instruction)).toBe(sourcePosition);
+			expect(fn.instructionAttributes(instruction).marker).toBe("kept");
+			range.minimum = 15;
+			expect(fn.instructionAttributes(instruction).normalResultIntegerRange).toEqual(
+				bounded,
+			);
+			const same = CoreEditor.open(program, fn.id);
+			same.setNormalResultFacts(instruction, {
+				mask: COMPILER_VALUE_KIND_NUMBER,
+				integerRange: bounded,
+			});
+			expect(same.commit().edits).toBe(0);
+			const clear = CoreEditor.open(program, fn.id);
+			clear.setNormalResultFacts(instruction, undefined);
+			expect(clear.commit().domains).toEqual(["normalResults", "specializationInputs"]);
+			expect(fn.instructionAttributes(instruction)).toEqual(
+				kind === "call" ? { marker: "kept" } : { stringIndex: 0, marker: "kept" },
+			);
+		},
+	);
 
 	it.each(["call", "field"] as const)(
 		"refreshes value consumers while retaining %s structure and memory",

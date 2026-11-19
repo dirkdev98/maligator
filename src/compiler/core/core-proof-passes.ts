@@ -670,7 +670,7 @@ const refinePrimitiveEffects: CoreFunctionPass = {
 		},
 	},
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
-	wakesOn: ["body", "facts", "representations", "data"],
+	wakesOn: ["body", "facts", "normalResults", "representations", "data"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: PROOF_BUDGET,
 	run(context) {
@@ -979,7 +979,7 @@ const materializeLocalScalars: CoreFunctionPass = {
 		},
 	},
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
-	wakesOn: ["body", "facts", "representations"],
+	wakesOn: ["body", "facts", "normalResults", "representations"],
 	changes: { cfg: false, calls: false, facts: false, representations: true },
 	budget: PROOF_BUDGET,
 	run(context) {
@@ -1093,7 +1093,7 @@ const materializeFlowScalars: CoreFunctionPass = {
 		},
 	},
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
-	wakesOn: ["body", "cfg", "facts", "representations"],
+	wakesOn: ["body", "cfg", "facts", "normalResults", "representations"],
 	changes: { cfg: false, calls: false, facts: false, representations: true },
 	budget: PROOF_BUDGET,
 	run(context) {

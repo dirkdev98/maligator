@@ -880,7 +880,7 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 	stage: "canonicalize",
 	requiredFunctionOpcodesAny: ["call", "callKnown"],
 	requiredAnalyses: [CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
-	wakesOn: ["body", "cfg", "facts", "representations"],
+	wakesOn: ["body", "cfg", "facts", "normalResults", "representations"],
 	changes: { ...LOCAL_CHANGES, representations: true },
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -3879,7 +3879,7 @@ const scalarizeBoundedRestReads: CoreFunctionPass = {
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 		CORE_LOOP_INDUCTION_ANALYSIS,
 	],
-	wakesOn: ["body", "cfg", "exceptionFlow", "facts", "representations"],
+	wakesOn: ["body", "cfg", "exceptionFlow", "facts", "normalResults", "representations"],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {

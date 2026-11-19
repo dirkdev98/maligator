@@ -74,7 +74,7 @@ export const foldFiniteStringConstruction: CoreFunctionPass = {
 	stage: "canonicalize",
 	candidates: { dependencies: ["body"], opcodes: ["concatStrings"] },
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS, CORE_LOOP_INDUCTION_ANALYSIS],
-	wakesOn: ["body", "cfg", "exceptionFlow", "facts", "representations"],
+	wakesOn: ["body", "cfg", "exceptionFlow", "facts", "normalResults", "representations"],
 	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: { maxWorkItems: 32, maxEdits: 4096, exhaustion: "stop" },
 	run(context) {

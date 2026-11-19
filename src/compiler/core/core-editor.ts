@@ -707,7 +707,6 @@ export class CoreEditor {
 		this.#instructions.add(instruction);
 		this.#touchBlock(fn.instructionBlock(instruction));
 		this.#touchInstructionResults(instruction);
-		this.#domains.add("facts");
 		this.#domains.add("normalResults");
 		this.#domains.add("specializationInputs");
 		this.#edits++;

@@ -37,6 +37,7 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 		"calls",
 		"memoryEffects",
 		"facts",
+		"normalResults",
 		"representations",
 	],
 	programDependencies: ["functions", "data", "calls", "facts", "representations"],
