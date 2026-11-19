@@ -14,21 +14,14 @@ export const continueGuardedCallArithmetic: CoreFunctionPass = {
 	name: "guarded-call-arithmetic-continuation",
 	stage: "canonicalize",
 	requiredFunctionOpcodesAny: ["call"],
-	admission: {
-		predicate: "guarded inline fallback with a numeric continuation",
-		hasOpportunity({ program, function: functionId }) {
-			const fn = program.function(functionId);
-			for (const instruction of fn.instructionIds()) {
-				if (
-					fn.instructionKind(instruction) === "operation" &&
-					fn.instructionOpcodeName(instruction) === "call" &&
-					fn.instructionAttributes(instruction)[
-						CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE
-					] === true
-				)
-					return true;
-			}
-			return false;
+	candidates: {
+		dependencies: ["body"],
+		opcodes: ["call"],
+		matches(fn, instruction) {
+			return (
+				fn.instructionAttributes(instruction)[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] ===
+				true
+			);
 		},
 	},
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],

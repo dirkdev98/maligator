@@ -7,6 +7,7 @@ import {
 	CORE_DEAD_INSTRUCTION_CODE,
 	CoreFunctionKernel,
 } from "./core-function-kernel.ts";
+import { CoreFunctionOpcodeSites } from "./core-function-opcode-sites.ts";
 import {
 	CoreInstructionChainCursor,
 	CoreLiveIdCursor,
@@ -725,6 +726,7 @@ export class CoreFunctionStore {
 	#sealedInstructions: ReadonlyArray<CoreInstructionId> | undefined;
 	#blockSnapshot: ReadonlyArray<CoreBlockId> | undefined;
 	#instructionSnapshot: ReadonlyArray<CoreInstructionId> | undefined;
+	#opcodeSites: CoreFunctionOpcodeSites | undefined;
 	readonly kernel: CoreFunctionKernel;
 
 	constructor(
@@ -932,6 +934,12 @@ export class CoreFunctionStore {
 
 	get featureVersion(): number {
 		return this.#featureVersion;
+	}
+
+	opcodeSites(): CoreFunctionOpcodeSites {
+		if (this.#retired) this.#throwRetiredGeneration();
+		if (this.#activeEditor) return new CoreFunctionOpcodeSites(this.#instructionOpcode);
+		return (this.#opcodeSites ??= new CoreFunctionOpcodeSites(this.#instructionOpcode));
 	}
 
 	memoryValueSources(create: () => CoreMemoryValueSources): CoreMemoryValueSources {
@@ -1703,6 +1711,7 @@ export class CoreFunctionStore {
 			throw new Error(`Core function ${this.id} has an active editor`);
 		}
 		this.#retired = true;
+		this.#opcodeSites = undefined;
 		this.kernel._retireGeneration(this.generation);
 	}
 
@@ -1930,6 +1939,7 @@ export class CoreFunctionStore {
 			throw new Error(`Core instruction ${instruction} is not an operation`);
 		}
 		this.#invalidateMemoryValueSources(this.#instructionOpcode[instruction]!);
+		if (this.#instructionOpcode[instruction] !== opcode) this.#opcodeSites = undefined;
 		this.#instructionOpcode[instruction] = opcode;
 		this.#instructionPayload[instruction] = freezeAttributes(attributes);
 		this.#instructionSourcePosition[instruction] = sourcePosition ?? -1;
@@ -2088,6 +2098,7 @@ export class CoreFunctionStore {
 		else this.#instructionNext[previous] = next;
 		if (next < 0) this.#blockLastInstruction[block] = previous;
 		else this.#instructionPrevious[next] = previous;
+		if (this.#instructionOpcode[instruction]! >= 0) this.#opcodeSites = undefined;
 		this.#instructionOpcode[instruction] = CORE_DEAD_INSTRUCTION_CODE;
 		this.#liveInstructions--;
 		this.#instructionPrevious[instruction] = -1;
@@ -2369,6 +2380,7 @@ export class CoreFunctionStore {
 		this.#sealedInstructions = [...this.instructionIds()];
 		this.#memoryValueSources = undefined;
 		this.#staticValueExclusions = undefined;
+		this.#opcodeSites = undefined;
 		this.#sealed = true;
 	}
 
@@ -2399,6 +2411,7 @@ export class CoreFunctionStore {
 				? this.#blockLastInstruction[block]!
 				: this.#instructionPrevious[beforeIndex]!;
 		this.#liveInstructions++;
+		if (opcode >= 0) this.#opcodeSites = undefined;
 		this.#instructionOpcode.push(opcode);
 		this.#instructionBlock.push(block);
 		this.#instructionPrevious.push(previous);

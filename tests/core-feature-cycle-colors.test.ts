@@ -4,6 +4,7 @@ import {
 	CORE_FUNCTION_HAS_BACKEDGES,
 	scanCoreFunctionFeatures,
 } from "../src/compiler/core/core-function-features.ts";
+import { CoreFunctionOpcodeSites } from "../src/compiler/core/core-function-opcode-sites.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import type { CoreFunctionStore } from "../src/compiler/core/core-store.ts";
 
@@ -12,6 +13,8 @@ interface Block {
 	edges: Array<number>;
 	handler?: number;
 }
+
+const emptySites = new CoreFunctionOpcodeSites([]);
 
 function featureCycle(blocks: Array<Block>): boolean {
 	const starts: Array<number> = [];
@@ -22,6 +25,7 @@ function featureCycle(blocks: Array<Block>): boolean {
 	}
 	const fn = {
 		registry: coreOpcodeRegistry,
+		opcodeSites: () => emptySites,
 		blockCapacity: blocks.length,
 		isBlockLive: (block: number) => blocks[block]?.live === true,
 		blockTerminator: (block: number) => block,

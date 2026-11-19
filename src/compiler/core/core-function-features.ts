@@ -1,5 +1,5 @@
-import { coreOpcodeId } from "./core-ir.ts";
-import type { CoreBlockId, CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
+import type { CoreFunctionOpcodeSites } from "./core-function-opcode-sites.ts";
+import type { CoreBlockId, CoreFunctionId, CoreOpcodeId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export const CORE_FUNCTION_HAS_BRANCHES = 1 << 0;
@@ -63,67 +63,46 @@ function hasControlCycle(fn: CoreFunctionStore): boolean {
 	return false;
 }
 
-function scanFeatures(
-	fn: CoreFunctionStore,
-	candidateOpcodes: ArrayLike<number> | undefined,
-	opcodePresence: Uint32Array | undefined,
-	opcodeOffset: number,
-): CoreFunctionFeatureBits {
+function controlFeatures(fn: CoreFunctionStore): CoreFunctionFeatureBits {
 	let bits = 0;
-	const opcodeFeatures: Array<CoreFunctionFeatureBits | undefined> = [];
 	for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
 		const block = blockIndex as CoreBlockId;
 		if (fn.kernel.blockLive(block) === 0) continue;
-		if (fn.kernel.blockHandlerBlock(block) !== undefined) {
+		if (fn.kernel.blockHandlerBlock(block) !== undefined)
 			bits |= CORE_FUNCTION_HAS_EXCEPTIONS;
-		}
 		const terminator = fn.blockTerminator(block);
 		const kind = fn.instructionKind(terminator);
+		if (kind === "branch" || kind === "switch" || kind === "guard")
+			bits |= CORE_FUNCTION_HAS_BRANCHES;
+		if (kind === "throw") bits |= CORE_FUNCTION_HAS_EXCEPTIONS;
+		if ((bits & CORE_FUNCTION_HAS_EDGE_ARGUMENTS) !== 0) continue;
 		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
 		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
 		for (let index = 0; index < edgeCount; index++) {
-			if (fn.kernel.terminatorEdgeArgumentCount(edgeStart + index) > 0) {
-				bits |= CORE_FUNCTION_HAS_EDGE_ARGUMENTS;
-				break;
-			}
-		}
-		if (kind === "branch" || kind === "switch" || kind === "guard") {
-			bits |= CORE_FUNCTION_HAS_BRANCHES;
-		}
-		if (kind === "throw") bits |= CORE_FUNCTION_HAS_EXCEPTIONS;
-		for (
-			let instructionIndex = fn.kernel.blockFirstInstruction(block);
-			instructionIndex >= 0;
-			instructionIndex = fn.kernel.instructionNext(instructionIndex as CoreInstructionId)
-		) {
-			const instruction = instructionIndex as CoreInstructionId;
-			const opcode = fn.kernel.instructionOpcode(instruction);
-			if (opcode < 0) continue;
-			if (opcodePresence !== undefined) {
-				opcodePresence[opcodeOffset + (opcode >>> 5)]! |= 1 << (opcode & 31);
-			}
-			let features = opcodeFeatures[opcode];
-			if (features === undefined) {
-				const descriptor = fn.registry.byId(coreOpcodeId(opcode));
-				features = 0;
-				if (descriptor.effects.mayThrow) features |= CORE_FUNCTION_HAS_EXCEPTIONS;
-				if (descriptor.effects.reads.length > 0 || descriptor.effects.writes.length > 0) {
-					features |= CORE_FUNCTION_HAS_MEMORY_ACCESSES;
-				}
-				if (descriptor.allocation !== undefined)
-					features |= CORE_FUNCTION_HAS_ALLOCATIONS;
-				if (descriptor.callTransfer !== undefined || descriptor.effects.callsUserCode) {
-					features |= CORE_FUNCTION_HAS_CALLS;
-				}
-				if ((candidateOpcodes?.[opcode] ?? 0) !== 0) {
-					features |= CORE_FUNCTION_HAS_CANDIDATE_OPCODES;
-				}
-				opcodeFeatures[opcode] = features;
-			}
-			bits |= features;
+			if (fn.kernel.terminatorEdgeArgumentCount(edgeStart + index) === 0) continue;
+			bits |= CORE_FUNCTION_HAS_EDGE_ARGUMENTS;
+			break;
 		}
 	}
 	if (hasControlCycle(fn)) bits |= CORE_FUNCTION_HAS_BACKEDGES;
+	return bits;
+}
+
+function opcodeFeatures(
+	fn: CoreFunctionStore,
+	opcode: CoreOpcodeId,
+	candidateOpcodes: ArrayLike<number> | undefined,
+): CoreFunctionFeatureBits {
+	const descriptor = fn.registry.byId(opcode);
+	let bits = 0;
+	if (descriptor.effects.mayThrow) bits |= CORE_FUNCTION_HAS_EXCEPTIONS;
+	if (descriptor.effects.reads.length > 0 || descriptor.effects.writes.length > 0)
+		bits |= CORE_FUNCTION_HAS_MEMORY_ACCESSES;
+	if (descriptor.allocation !== undefined) bits |= CORE_FUNCTION_HAS_ALLOCATIONS;
+	if (descriptor.callTransfer !== undefined || descriptor.effects.callsUserCode)
+		bits |= CORE_FUNCTION_HAS_CALLS;
+	if ((candidateOpcodes?.[opcode] ?? 0) !== 0)
+		bits |= CORE_FUNCTION_HAS_CANDIDATE_OPCODES;
 	return bits;
 }
 
@@ -131,92 +110,79 @@ export function scanCoreFunctionFeatures(
 	fn: CoreFunctionStore,
 	candidateOpcodes?: ArrayLike<number>,
 ): CoreFunctionFeatureBits {
-	return scanFeatures(fn, candidateOpcodes, undefined, 0);
+	let bits = controlFeatures(fn);
+	for (const opcode of fn.opcodeSites().opcodes)
+		bits |= opcodeFeatures(fn, opcode, candidateOpcodes);
+	return bits;
+}
+
+interface FunctionFeatures {
+	readonly fn: CoreFunctionStore;
+	version: number;
+	opcodes: CoreFunctionOpcodeSites | undefined;
+	opcodeBits: CoreFunctionFeatureBits;
+	cfgVersion: number;
+	exceptionVersion: number;
+	controlBits: CoreFunctionFeatureBits;
 }
 
 export class CoreFunctionFeatureIndex {
 	readonly #program: CoreProgram;
 	readonly #candidateOpcodes: ArrayLike<number> | undefined;
-	readonly #opcodeWords: number;
-	#bits: Uint32Array;
-	#versions: Float64Array;
-	#opcodeVersions: Float64Array;
-	#opcodePresence: Uint32Array;
-	#scans = 0;
+	readonly #opcodeBits: Array<CoreFunctionFeatureBits | undefined> = [];
+	readonly #features: Array<FunctionFeatures | undefined> = [];
 
 	constructor(program: CoreProgram, candidateOpcodes?: ArrayLike<number>) {
 		this.#program = program;
 		this.#candidateOpcodes = candidateOpcodes;
-		this.#opcodeWords = Math.ceil(program.registry.entries().length / 32);
-		this.#bits = new Uint32Array(program.functionCapacity);
-		this.#versions = new Float64Array(program.functionCapacity);
-		this.#opcodeVersions = new Float64Array(program.functionCapacity);
-		this.#opcodePresence = new Uint32Array(program.functionCapacity * this.#opcodeWords);
-		this.#versions.fill(-1);
-		this.#opcodeVersions.fill(-1);
-	}
-
-	get scans(): number {
-		return this.#scans;
 	}
 
 	get(functionId: CoreFunctionId): CoreFunctionFeatureBits {
-		this.#grow(functionId + 1);
 		const fn = this.#program.function(functionId);
-		if (this.#versions[functionId] !== fn.featureVersion) {
-			this.#scan(functionId, fn);
+		if (fn.hasActiveEditor) return scanCoreFunctionFeatures(fn, this.#candidateOpcodes);
+		let entry = this.#features[functionId];
+		if (entry?.fn !== fn) {
+			entry = {
+				fn,
+				version: -1,
+				opcodes: undefined,
+				opcodeBits: 0,
+				cfgVersion: -1,
+				exceptionVersion: -1,
+				controlBits: 0,
+			};
+			this.#features[functionId] = entry;
 		}
-		return this.#bits[functionId]!;
+		if (entry.version !== fn.featureVersion) {
+			const sites = fn.opcodeSites();
+			if (entry.opcodes !== sites) {
+				entry.opcodes = sites;
+				entry.opcodeBits = 0;
+				for (const opcode of sites.opcodes) {
+					const bits = (this.#opcodeBits[opcode] ??= opcodeFeatures(
+						fn,
+						opcode,
+						this.#candidateOpcodes,
+					));
+					entry.opcodeBits |= bits;
+				}
+			}
+			const cfgVersion = fn.version("cfg");
+			const exceptionVersion = fn.version("exceptionFlow");
+			if (
+				entry.cfgVersion !== cfgVersion ||
+				entry.exceptionVersion !== exceptionVersion
+			) {
+				entry.cfgVersion = cfgVersion;
+				entry.exceptionVersion = exceptionVersion;
+				entry.controlBits = controlFeatures(fn);
+			}
+			entry.version = fn.featureVersion;
+		}
+		return entry.opcodeBits | entry.controlBits;
 	}
 
 	hasAnyOpcode(functionId: CoreFunctionId, opcodes: ArrayLike<number>): boolean {
-		this.#grow(functionId + 1);
-		const fn = this.#program.function(functionId);
-		if (this.#opcodeVersions[functionId] !== fn.version("body")) {
-			this.#scan(functionId, fn);
-		}
-		const opcodeOffset = functionId * this.#opcodeWords;
-		for (let index = 0; index < opcodes.length; index++) {
-			const opcode = opcodes[index]!;
-			if (
-				(this.#opcodePresence[opcodeOffset + (opcode >>> 5)]! & (1 << (opcode & 31))) !==
-				0
-			)
-				return true;
-		}
-		return false;
-	}
-
-	#scan(functionId: CoreFunctionId, fn: CoreFunctionStore): void {
-		const opcodeOffset = functionId * this.#opcodeWords;
-		this.#opcodePresence.fill(0, opcodeOffset, opcodeOffset + this.#opcodeWords);
-		this.#bits[functionId] = scanFeatures(
-			fn,
-			this.#candidateOpcodes,
-			this.#opcodePresence,
-			opcodeOffset,
-		);
-		this.#versions[functionId] = fn.featureVersion;
-		this.#opcodeVersions[functionId] = fn.version("body");
-		this.#scans++;
-	}
-
-	#grow(required: number): void {
-		if (required <= this.#bits.length) return;
-		const capacity = Math.max(required, this.#bits.length * 2, 16);
-		const bits = new Uint32Array(capacity);
-		const versions = new Float64Array(capacity);
-		const opcodeVersions = new Float64Array(capacity);
-		const opcodePresence = new Uint32Array(capacity * this.#opcodeWords);
-		versions.fill(-1);
-		opcodeVersions.fill(-1);
-		bits.set(this.#bits);
-		versions.set(this.#versions);
-		opcodeVersions.set(this.#opcodeVersions);
-		opcodePresence.set(this.#opcodePresence);
-		this.#bits = bits;
-		this.#versions = versions;
-		this.#opcodeVersions = opcodeVersions;
-		this.#opcodePresence = opcodePresence;
+		return this.#program.function(functionId).opcodeSites().hasAny(opcodes);
 	}
 }

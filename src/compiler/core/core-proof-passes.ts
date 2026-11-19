@@ -47,7 +47,7 @@ import type {
 } from "./core-ir.ts";
 import { coreInstructionId, coreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
-import type { CoreFunctionPass } from "./core-pass.ts";
+import type { CoreFunctionPass, CoreFunctionPassContext } from "./core-pass.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
 const PROOF_BUDGET = CORE_O2_PASS_BUDGETS["proof-value-kind-representation"];
@@ -865,6 +865,7 @@ function scalarConsumersOnly(
 	value: CoreValueId,
 	edgeUses: Uint8Array,
 ): boolean {
+	if (edgeUses[value] !== 0) return false;
 	let use = fn.kernel.valueFirstUse(value);
 	while (use >= 0) {
 		const instruction = fn.kernel.useInstruction(use);
@@ -877,7 +878,7 @@ function scalarConsumersOnly(
 			return false;
 		use = fn.kernel.useNext(use);
 	}
-	return edgeUses[value] === 0;
+	return true;
 }
 
 function scalarProducerInputsSupportRepresentation(
@@ -929,20 +930,11 @@ function scalarProducerInputsSupportRepresentation(
 	return true;
 }
 
-function scalarCandidate(
+function scalarCandidateRepresentation(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
 	kinds: CoreValueKindAnalysis,
-	edgeUses: Uint8Array,
 ): CoreRepresentation | undefined {
-	if (fn.valueRepresentation(value) !== "boxed" || kinds.scalarKind(value) === undefined)
-		return undefined;
-	if (
-		fn.kernel.valueDefinitionKind(value) !== 1 ||
-		!scalarProducer(fn, coreInstructionId(fn.kernel.valueDefinitionOwner(value))) ||
-		!scalarConsumersOnly(fn, value, edgeUses)
-	)
-		return undefined;
 	const kind = kinds.exactScalar(value);
 	if (kind === undefined) return undefined;
 	const representation = scalarRepresentation(kind);
@@ -952,8 +944,10 @@ function scalarCandidate(
 	return representation;
 }
 
-function hasLocalScalarRepresentationOpportunity(fn: CoreFunctionStore): boolean {
-	const edgeUses = coreValueControlFlowUseMask(fn);
+function firstLocalScalarCandidate(
+	fn: CoreFunctionStore,
+	edgeUses: Uint8Array,
+): CoreValueId | undefined {
 	for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
 		const value = coreValueId(valueIndex);
 		if (
@@ -964,9 +958,9 @@ function hasLocalScalarRepresentationOpportunity(fn: CoreFunctionStore): boolean
 			continue;
 		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
 		if (scalarProducer(fn, definition) && scalarConsumersOnly(fn, value, edgeUses))
-			return true;
+			return value;
 	}
-	return false;
+	return undefined;
 }
 
 const materializeLocalScalars: CoreFunctionPass = {
@@ -974,36 +968,52 @@ const materializeLocalScalars: CoreFunctionPass = {
 	stage: "proofs",
 	admission: {
 		predicate: "boxed scalar producer with only local scalar consumers",
-		hasOpportunity({ program, function: functionId }) {
-			return hasLocalScalarRepresentationOpportunity(program.function(functionId));
+		prepare({ program, function: functionId }) {
+			const fn = program.function(functionId);
+			const edgeUses = coreValueControlFlowUseMask(fn);
+			const first = firstLocalScalarCandidate(fn, edgeUses);
+			if (first !== undefined)
+				return (context) => materializePreparedLocalScalars(context, fn, edgeUses, first);
 		},
 	},
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
-	wakesOn: ["body", "facts", "normalResults", "representations"],
+	wakesOn: ["body", "exceptionFlow", "facts", "normalResults", "representations"],
 	changes: { cfg: false, calls: false, facts: false, representations: true },
 	budget: PROOF_BUDGET,
-	run(context) {
-		const { program, item } = context;
-		const fn = program.function(item.function);
-		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
-		const edgeUses = coreValueControlFlowUseMask(fn);
-		const candidates: Array<{
-			readonly value: CoreValueId;
-			readonly representation: CoreRepresentation;
-		}> = [];
-		for (let valueIndex = 0; valueIndex < fn.valueCapacity; valueIndex++) {
-			const value = coreValueId(valueIndex);
-			if (!fn.isValueLive(value)) continue;
-			const representation = scalarCandidate(fn, value, kinds, edgeUses);
-			if (representation !== undefined) candidates.push({ value, representation });
-		}
-		if (candidates.length === 0) return undefined;
-		const editor = CoreEditor.open(program, item.function);
-		for (const { value, representation } of candidates)
-			editor.setValueRepresentation(value, representation);
-		return editor.commit();
-	},
 };
+
+function materializePreparedLocalScalars(
+	context: CoreFunctionPassContext,
+	fn: CoreFunctionStore,
+	edgeUses: Uint8Array,
+	first: CoreValueId,
+) {
+	const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+	const candidates: Array<{
+		readonly value: CoreValueId;
+		readonly representation: CoreRepresentation;
+	}> = [];
+	for (let valueIndex: number = first; valueIndex < fn.valueCapacity; valueIndex++) {
+		const value = coreValueId(valueIndex);
+		if (
+			value !== first &&
+			(!fn.isValueLive(value) ||
+				fn.valueRepresentation(value) !== "boxed" ||
+				kinds.scalarKind(value) === undefined ||
+				fn.kernel.valueDefinitionKind(value) !== 1 ||
+				!scalarProducer(fn, coreInstructionId(fn.kernel.valueDefinitionOwner(value))) ||
+				!scalarConsumersOnly(fn, value, edgeUses))
+		)
+			continue;
+		const representation = scalarCandidateRepresentation(fn, value, kinds);
+		if (representation !== undefined) candidates.push({ value, representation });
+	}
+	if (candidates.length === 0) return undefined;
+	const editor = CoreEditor.open(context.program, fn.id);
+	for (const { value, representation } of candidates)
+		editor.setValueRepresentation(value, representation);
+	return editor.commit();
+}
 
 function flowScalarRepresentation(
 	kinds: ReadonlyArray<CoreExactScalarKind>,

@@ -123,7 +123,7 @@ const cfgAnalysis = (recomputations: Array<number>): CoreAnalysisDefinition<numb
 	},
 });
 
-function noOpPass(name: string, runs: Array<number>): CoreFunctionPass {
+function noOpPass(name: string, runs: Array<number>) {
 	return {
 		name,
 		stage: "canonicalize",
@@ -135,7 +135,7 @@ function noOpPass(name: string, runs: Array<number>): CoreFunctionPass {
 			runs[item.function] = (runs[item.function] ?? 0) + 1;
 			return undefined;
 		},
-	};
+	} satisfies CoreFunctionPass;
 }
 
 describe("Core optimizer infrastructure", () => {
@@ -773,13 +773,6 @@ describe("Core optimizer infrastructure", () => {
 		);
 		scheduler.runComponent("canonicalize", [pass]);
 		expect(
-			pass.admission!.hasOpportunity({
-				program,
-				compilationContext: context(),
-				function: fn.id,
-			}),
-		).toBe(false);
-		expect(
 			report.finish(program, { directEntries: [], specializations: [] }).analyses,
 		).not.toContainEqual(
 			expect.objectContaining({ analysis: "structural-control-flow" }),
@@ -802,6 +795,53 @@ describe("Core optimizer infrastructure", () => {
 					fn.instructionOpcodeName(instruction) === "createObject",
 			),
 		).toBe(false);
+	});
+
+	it("reconsiders a rejected optional pass after pending edits settle", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const target = functions[0]!;
+		const fn = program.function(target.id);
+		const { analyses, report } = analysisHarness(program);
+		const admissions: Array<string> = [];
+		const executions: Array<string> = [];
+		const probe: CoreFunctionPass = {
+			name: "prepared-probe",
+			stage: "canonicalize",
+			requiredAnalyses: [],
+			wakesOn: ["representations"],
+			changes: { cfg: false, calls: false, facts: false, representations: false },
+			budget: { maxWorkItems: 1, maxEdits: 1, exhaustion: "stop" },
+			admission: {
+				predicate: "f64 result",
+				prepare() {
+					const representation = fn.valueRepresentation(target.value);
+					admissions.push(representation);
+					if (representation !== "f64") return undefined;
+					return () => {
+						executions.push(fn.valueRepresentation(target.value));
+						return undefined;
+					};
+				},
+			},
+		};
+		const edits = (["boxed", "f64"] as const).map((representation): CoreFunctionPass => ({
+			...noOpPass(`select-${representation}`, []),
+			changes: { cfg: false, calls: false, facts: false, representations: true },
+			run() {
+				const editor = CoreEditor.open(program, target.id);
+				editor.setValueRepresentation(target.value, representation);
+				return editor.commit();
+			},
+		}));
+		new CoreFunctionPassScheduler(
+			program,
+			context(),
+			analyses,
+			report,
+			target.id,
+		).runComponent("canonicalize", [probe, ...edits]);
+		expect(admissions).toEqual(["i32", "f64"]);
+		expect(executions).toEqual(["f64"]);
 	});
 
 	it("reuses syntax candidates across fact wakes and reopens them after body edits", () => {
@@ -861,6 +901,45 @@ describe("Core optimizer infrastructure", () => {
 		scheduler.runComponent("canonicalize", [pass], [facts.commit()]);
 		expect(visits).toEqual([[instruction], [instruction]]);
 		expect(scans).toBe(scanned);
+	});
+
+	it("refreshes a semantic candidate filter with unchanged opcode membership", () => {
+		const { program, functions } = programWithTwoFunctions();
+		const { id, value } = functions[0]!;
+		const { analyses, report } = analysisHarness(program);
+		const visits: Array<number> = [];
+		const pass: CoreFunctionPass = {
+			...noOpPass("unboxed-identity", []),
+			candidates: {
+				dependencies: ["body", "representations"],
+				opcodes: ["identity"],
+				matches(fn, instruction) {
+					return (
+						fn.valueRepresentation(
+							fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+						) === "f64"
+					);
+				},
+			},
+			run(context) {
+				visits.push(...context.instructions());
+				return undefined;
+			},
+		};
+		const scheduler = new CoreFunctionPassScheduler(
+			program,
+			context(),
+			analyses,
+			report,
+			id,
+		);
+		scheduler.runComponent("canonicalize", [pass]);
+		expect(visits).toEqual([]);
+
+		const editor = CoreEditor.open(program, id);
+		editor.setValueRepresentation(value, "f64");
+		scheduler.runComponent("canonicalize", [pass], [editor.commit()]);
+		expect(visits).toEqual([program.function(id).kernel.valueDefinitionOwner(value)]);
 	});
 
 	it("skips function passes without a matching candidate opcode", () => {

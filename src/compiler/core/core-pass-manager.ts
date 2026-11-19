@@ -34,8 +34,10 @@ interface PassConsumption {
 	workItems: number;
 	edits: number;
 	exhausted: boolean;
-	lastRunChanged: boolean;
 }
+
+const PASS_PENDING = 1;
+const PASS_UNCHANGED = 2;
 
 interface CoreFunctionPassSeedOptions {
 	readonly seedLocalFromInitialChanges?: boolean;
@@ -146,7 +148,7 @@ export class CoreFunctionPassScheduler {
 		const deferred: Array<number> = [];
 		let queueIndex = 0;
 		let deferredIndex = 0;
-		const queued = new Uint8Array(passes.length + 1);
+		const status = new Uint8Array(passes.length + 1);
 		const runs =
 			this.#optionalMaxRunsPerWorkItem === Number.MAX_SAFE_INTEGER
 				? undefined
@@ -157,7 +159,8 @@ export class CoreFunctionPassScheduler {
 		const appliedChanges: Array<CoreChangeSet> = [];
 		const enqueuePass = (passIndex: number): void => {
 			const pass = passes[passIndex]!;
-			if (queued[passIndex] !== 0) return;
+			const previous = status[passIndex]!;
+			if ((previous & PASS_PENDING) !== 0) return;
 			if (
 				pass.budget.exhaustion === "stop" &&
 				runs !== undefined &&
@@ -180,20 +183,10 @@ export class CoreFunctionPassScheduler {
 				!this.#features.hasAnyOpcode(this.#functionId, this.#opcodeIds(pass))
 			)
 				return;
-			if (
-				pass.admission !== undefined &&
-				!pass.admission.hasOpportunity(this.#admissionContext)
-			)
-				return;
-			if (pass.candidates !== undefined && !this.#passContext(pass).hasCandidates())
-				return;
-			queued[passIndex] = 1;
-			// After an unchanged visit, give other pending work the chance to settle
-			// before repeating the proof. Every deferred wake still reaches the pass.
-			if (
-				pass.budget.exhaustion === "stop" &&
-				consumption[passIndex]?.lastRunChanged === false
-			)
+			status[passIndex] = previous | PASS_PENDING;
+			// An admission rejection is also an unchanged visit. Accumulate its
+			// wakes while other work settles, then reconsider the current function.
+			if (pass.budget.exhaustion === "stop" && previous === PASS_UNCHANGED)
 				deferred.push(passIndex);
 			else queue.push(passIndex);
 			this.#report.recordQueuePush(
@@ -211,8 +204,8 @@ export class CoreFunctionPassScheduler {
 			pendingLocal ??= { full: false, changes: [] };
 			if (changes === undefined) pendingLocal.full = true;
 			else pendingLocal.changes.push(changes);
-			if (queued[localKey] !== 0) return;
-			queued[localKey] = 1;
+			if (status[localKey] !== 0) return;
+			status[localKey] = PASS_PENDING;
 			queue.push(localKey);
 			this.#report.recordQueuePush(
 				queue.length - queueIndex + deferred.length - deferredIndex,
@@ -244,7 +237,7 @@ export class CoreFunctionPassScheduler {
 		while (queueIndex < queue.length || deferredIndex < deferred.length) {
 			const key =
 				queueIndex < queue.length ? queue[queueIndex++]! : deferred[deferredIndex++]!;
-			queued[key] = 0;
+			status[key] = 0;
 			this.#report.recordQueuePop();
 			if (key === localKey) {
 				const pending = pendingLocal;
@@ -280,12 +273,35 @@ export class CoreFunctionPassScheduler {
 				continue;
 			}
 			const pass = passes[key]!;
+			const admission = pass.admission;
+			if (
+				admission !== undefined &&
+				"hasOpportunity" in admission &&
+				!admission.hasOpportunity(this.#admissionContext)
+			) {
+				status[key] = PASS_UNCHANGED;
+				continue;
+			}
+			const candidateContext =
+				pass.candidates === undefined ? undefined : this.#passContext(pass);
+			const candidates = candidateContext?.candidateInstructions();
+			if (candidates?.length === 0) {
+				status[key] = PASS_UNCHANGED;
+				continue;
+			}
+			const run =
+				admission !== undefined && "prepare" in admission
+					? admission.prepare(this.#admissionContext, candidates)
+					: pass.run;
+			if (run === undefined) {
+				status[key] = PASS_UNCHANGED;
+				continue;
+			}
 			if (runs !== undefined) runs[key] = runs[key]! + 1;
 			const used = consumption[key] ?? {
 				workItems: 0,
 				edits: 0,
 				exhausted: false,
-				lastRunChanged: false,
 			};
 			if (used.exhausted) continue;
 			if (
@@ -297,21 +313,19 @@ export class CoreFunctionPassScheduler {
 				continue;
 			}
 			const passStartedAt = this.#report.collectsDetails ? Date.now() : 0;
-			const passContext = this.#passContext(pass);
-			if (pass.candidates !== undefined && !passContext.hasCandidates()) continue;
 			const remainingEdits = pass.budget.maxEdits - used.edits;
 			const owner = passOwner(pass);
+			const passContext = candidateContext ?? this.#passContext(pass);
+			const context = passContext.prepare(remainingEdits);
 			const changes = this.#report.collectsDetails
-				? this.#report.measureOwner(owner, () =>
-						pass.run(passContext.prepare(remainingEdits)),
-					)
-				: pass.run(passContext.prepare(remainingEdits));
+				? this.#report.measureOwner(owner, () => run(context))
+				: run(context);
 			this.#report.recordOwnerWork(owner, 1);
 			const elapsedMs = this.#report.collectsDetails ? Date.now() - passStartedAt : 0;
 			const edits = changes?.edits ?? 0;
 			used.workItems++;
 			used.edits += edits;
-			used.lastRunChanged = edits !== 0;
+			if (edits === 0) status[key] = PASS_UNCHANGED;
 			if (pass.budget.exhaustion === "error" && used.edits > pass.budget.maxEdits)
 				this.#exhaust(pass, used);
 			consumption[key] = used;

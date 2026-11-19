@@ -4,7 +4,8 @@ import type {
 } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreFunctionFeatureBits } from "./core-function-features.ts";
-import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
+import type { CoreFunctionOpcodeSites } from "./core-function-opcode-sites.ts";
+import type { CoreFunctionId, CoreInstructionId, CoreOpcodeId } from "./core-ir.ts";
 import type {
 	CoreChangeDomain,
 	CoreChangeSet,
@@ -63,16 +64,28 @@ export interface CoreFunctionPassAdmission {
 	hasOpportunity(context: CoreFunctionPassAdmissionContext): boolean;
 }
 
-export interface CoreFunctionPass {
+type RunFunctionPass = (context: CoreFunctionPassContext) => CoreChangeSet | undefined;
+
+interface CoreFunctionPassPreparation {
+	readonly predicate: string;
+	// The prepared execution belongs to one dequeued function snapshot. The
+	// scheduler consumes it before any other pass can edit that snapshot.
+	prepare(
+		context: CoreFunctionPassAdmissionContext,
+		candidates: ReadonlyArray<CoreInstructionId> | undefined,
+	): RunFunctionPass | undefined;
+}
+
+interface CoreFunctionPassDefinition {
 	readonly name: string;
 	readonly stage: CoreOptimizationStage;
 	readonly requiredFunctionFeatures?: CoreFunctionFeatureBits;
 	readonly requiredFunctionOpcodesAny?: ReadonlyArray<string>;
-	readonly admission?: CoreFunctionPassAdmission;
 	readonly candidates?: {
 		readonly dependencies: ReadonlyArray<CoreChangeDomain>;
 		readonly opcodes: ReadonlyArray<string>;
 		matches?(
+			this: void,
 			fn: CoreFunctionStore,
 			instruction: CoreInstructionId,
 			opcode: string,
@@ -82,8 +95,13 @@ export interface CoreFunctionPass {
 	readonly wakesOn: ReadonlyArray<CorePassWakeKind>;
 	readonly changes: CorePassCapabilities;
 	readonly budget: CorePassBudget;
-	run(context: CoreFunctionPassContext): CoreChangeSet | undefined;
 }
+
+export type CoreFunctionPass = CoreFunctionPassDefinition &
+	(
+		| { readonly admission?: CoreFunctionPassAdmission; readonly run: RunFunctionPass }
+		| { readonly admission: CoreFunctionPassPreparation; readonly run?: never }
+	);
 
 export class CoreFunctionPassContextDriver implements CoreFunctionPassContext {
 	readonly program: CoreProgram;
@@ -94,10 +112,11 @@ export class CoreFunctionPassContextDriver implements CoreFunctionPassContext {
 	#remainingEdits = 0;
 	readonly #candidateIndex:
 		| {
-				readonly opcodes: Array<string | undefined>;
-				function: CoreFunctionStore | undefined;
+				readonly opcodes: ReadonlyArray<CoreOpcodeId>;
+				sites: CoreFunctionOpcodeSites | undefined;
 				readonly versions: Array<number>;
-				instructions: Array<CoreInstructionId>;
+				instructions: ReadonlyArray<CoreInstructionId>;
+				matches: ReadonlyArray<CoreInstructionId>;
 		  }
 		| undefined;
 
@@ -114,16 +133,17 @@ export class CoreFunctionPassContextDriver implements CoreFunctionPassContext {
 		this.#pass = pass;
 		this.item = Object.freeze({ function: functionId });
 		if (pass.candidates !== undefined) {
-			const opcodes: Array<string | undefined> = [];
+			const opcodes = new Set<CoreOpcodeId>();
 			for (const opcode of pass.candidates.opcodes) {
 				const descriptor = program.registry.get(opcode);
-				if (descriptor !== undefined) opcodes[descriptor.id] = opcode;
+				if (descriptor !== undefined) opcodes.add(descriptor.id);
 			}
 			this.#candidateIndex = {
-				opcodes,
-				function: undefined,
+				opcodes: [...opcodes],
+				sites: undefined,
 				versions: [],
 				instructions: [],
+				matches: [],
 			};
 		}
 	}
@@ -133,11 +153,26 @@ export class CoreFunctionPassContextDriver implements CoreFunctionPassContext {
 	}
 
 	instructions(): Iterable<CoreInstructionId> {
+		return (
+			this.candidateInstructions() ??
+			this.program.function(this.item.function).instructionIds()
+		);
+	}
+
+	candidateInstructions(): ReadonlyArray<CoreInstructionId> | undefined {
+		const index = this.#candidateIndex;
+		if (index === undefined) return undefined;
 		const fn = this.program.function(this.item.function);
-		const selector = this.#pass.candidates;
-		if (selector === undefined) return fn.instructionIds();
-		const index = this.#candidateIndex!;
-		let current = index.function === fn;
+		const selector = this.#pass.candidates!;
+		const sites = fn.opcodeSites();
+		let current = index.sites === sites;
+		if (!current) {
+			index.sites = sites;
+			index.instructions = sites.instructions(index.opcodes);
+			index.versions.length = 0;
+		}
+		const matches = selector.matches;
+		if (matches === undefined) return index.instructions;
 		for (
 			let dependency = 0;
 			current && dependency < selector.dependencies.length;
@@ -147,27 +182,14 @@ export class CoreFunctionPassContextDriver implements CoreFunctionPassContext {
 				index.versions[dependency] === fn.version(selector.dependencies[dependency]!);
 		}
 		if (!current) {
-			index.instructions = [];
-			for (const instruction of fn.instructionIds()) {
-				const opcode = index.opcodes[fn.kernel.instructionOpcode(instruction)];
-				if (
-					opcode !== undefined &&
-					(selector.matches === undefined || selector.matches(fn, instruction, opcode))
-				)
-					index.instructions.push(instruction);
-			}
-			index.function = fn;
+			index.matches = index.instructions.filter((instruction) =>
+				matches(fn, instruction, fn.instructionOpcodeName(instruction)),
+			);
 			for (let dependency = 0; dependency < selector.dependencies.length; dependency++) {
 				index.versions[dependency] = fn.version(selector.dependencies[dependency]!);
 			}
 		}
-		return index.instructions;
-	}
-
-	hasCandidates(): boolean {
-		if (this.#candidateIndex === undefined) return true;
-		this.instructions();
-		return this.#candidateIndex.instructions.length > 0;
+		return index.matches;
 	}
 
 	prepare(remainingEdits: number): CoreFunctionPassContext {

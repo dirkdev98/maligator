@@ -45,7 +45,7 @@ import {
 	coreRepresentationCanWiden,
 } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
-import type { CoreFunctionPass } from "./core-pass.ts";
+import type { CoreFunctionPass, CoreFunctionPassContext } from "./core-pass.ts";
 import { cacheStablePrivateReads } from "./core-private-read-caching.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
@@ -263,36 +263,64 @@ function hasRepeatedPureExpressionAcrossBlocks(fn: CoreFunctionStore): boolean {
 	return false;
 }
 
-function hasPartialRedundancyConsumer(fn: CoreFunctionStore): boolean {
-	const expressionsByBlock = Array.from(
-		{ length: fn.blockCapacity },
-		() => new Set<number>(),
-	);
-	const predecessors = Array.from(
-		{ length: fn.blockCapacity },
-		() => new Set<CoreBlockId>(),
+class PartialRedundancySites {
+	readonly fn: CoreFunctionStore;
+	readonly #expressions = new Array<ReadonlyArray<CoreInstructionId> | undefined>();
+
+	constructor(fn: CoreFunctionStore) {
+		this.fn = fn;
+	}
+
+	expressions(block: CoreBlockId): ReadonlyArray<CoreInstructionId> {
+		const instructions = this.#expressions[block];
+		if (instructions !== undefined) return instructions;
+		const found: Array<CoreInstructionId> = [];
+		for (const instruction of this.fn.bodyInstructionIds(block)) {
+			if (pureExpressionOpcode(this.fn, instruction) !== undefined)
+				found.push(instruction);
+		}
+		this.#expressions[block] = found;
+		return found;
+	}
+}
+
+function preparePartialRedundancy(
+	fn: CoreFunctionStore,
+): PartialRedundancySites | undefined {
+	const predecessors = new Array<CoreBlockId | Array<CoreBlockId> | undefined>(
+		fn.blockCapacity,
 	);
 	for (const block of fn.blockIds()) {
-		for (const instruction of fn.bodyInstructionIds(block)) {
-			const opcode = pureExpressionOpcode(fn, instruction);
-			if (opcode !== undefined) expressionsByBlock[block]!.add(opcode);
-		}
 		const terminator = fn.blockTerminator(block);
 		const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
 		const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
 		for (let index = 0; index < edgeCount; index++) {
-			predecessors[fn.kernel.terminatorEdgeBlock(edgeStart + index)]!.add(block);
+			const target = fn.kernel.terminatorEdgeBlock(edgeStart + index);
+			const incoming = predecessors[target];
+			// Each source's edges are visited together, including parallel switch edges.
+			if (Array.isArray(incoming)) {
+				if (incoming.at(-1) !== block) incoming.push(block);
+			} else if (incoming === undefined) predecessors[target] = block;
+			else if (incoming !== block) predecessors[target] = [incoming, block];
 		}
 	}
+	let sites: PartialRedundancySites | undefined;
 	for (const block of fn.blockIds()) {
-		if (predecessors[block]!.size < 2 || expressionsByBlock[block]!.size === 0) continue;
-		for (const predecessor of predecessors[block]!) {
-			for (const opcode of expressionsByBlock[block]!) {
-				if (expressionsByBlock[predecessor]!.has(opcode)) return true;
+		const incoming = predecessors[block];
+		if (!Array.isArray(incoming)) continue;
+		sites ??= new PartialRedundancySites(fn);
+		const expressions = sites.expressions(block);
+		if (expressions.length === 0) continue;
+		const opcodes = new Set(
+			expressions.map((instruction) => fn.kernel.instructionOpcode(instruction)),
+		);
+		for (const predecessor of incoming) {
+			for (const instruction of sites.expressions(predecessor)) {
+				if (opcodes.has(fn.kernel.instructionOpcode(instruction))) return sites;
 			}
 		}
 	}
-	return false;
+	return undefined;
 }
 
 function hasRelationalConstantComparison(fn: CoreFunctionStore): boolean {
@@ -900,119 +928,114 @@ const eliminatePartialRedundancy: CoreFunctionPass = {
 	stage: "control-flow",
 	admission: {
 		predicate: "join expression with the same pure opcode in an incoming block",
-		hasOpportunity({ program, function: functionId }) {
-			return hasPartialRedundancyConsumer(program.function(functionId));
+		prepare({ program, function: functionId }) {
+			const sites = preparePartialRedundancy(program.function(functionId));
+			if (sites !== undefined)
+				return (context) => eliminatePreparedPartialRedundancy(context, sites);
 		},
 	},
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects"],
 	changes: { ...CONTROL_FLOW_CHANGES, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
-	run(context) {
-		const { program, item } = context;
-		const fn = program.function(item.function);
-		const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
-		const loopHeaders = new Set(cfg.loops.map((loop) => loop.header));
-		const expressionsByBlock = new Map<
-			CoreBlockId,
-			Map<number, Array<CoreInstructionId>>
-		>();
-		const predecessorExpressions = (block: CoreBlockId) => {
-			let expressions = expressionsByBlock.get(block);
-			if (expressions !== undefined) return expressions;
-			expressions = new Map();
-			for (const instruction of fn.bodyInstructionIds(block)) {
-				if (pureExpressionOpcode(fn, instruction) === undefined) continue;
-				const hash = coreInstructionInputsHash(fn, instruction);
-				const bucket = expressions.get(hash) ?? [];
-				bucket.push(instruction);
-				expressions.set(hash, bucket);
-			}
-			expressionsByBlock.set(block, expressions);
-			return expressions;
-		};
-		for (const block of cfg.reversePostorder) {
-			if (fn.kernel.blockHandlerBlock(block) !== undefined || loopHeaders.has(block))
-				continue;
-			const incoming = (cfg.predecessors[block] ?? []).filter(
-				(edge) => cfg.edges.kind(edge) === "ordinary",
+};
+
+function eliminatePreparedPartialRedundancy(
+	context: CoreFunctionPassContext,
+	sites: PartialRedundancySites,
+) {
+	const { program, item } = context;
+	const fn = sites.fn;
+	const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
+	const loopHeaders = new Set(cfg.loops.map((loop) => loop.header));
+	const expressionsByBlock = new Map<
+		CoreBlockId,
+		Map<number, Array<CoreInstructionId>>
+	>();
+	const predecessorExpressions = (block: CoreBlockId) => {
+		let expressions = expressionsByBlock.get(block);
+		if (expressions !== undefined) return expressions;
+		expressions = new Map();
+		for (const instruction of sites.expressions(block)) {
+			const hash = coreInstructionInputsHash(fn, instruction);
+			const bucket = expressions.get(hash) ?? [];
+			bucket.push(instruction);
+			expressions.set(hash, bucket);
+		}
+		expressionsByBlock.set(block, expressions);
+		return expressions;
+	};
+	for (const block of cfg.reversePostorder) {
+		if (fn.kernel.blockHandlerBlock(block) !== undefined || loopHeaders.has(block))
+			continue;
+		const incoming = (cfg.predecessors[block] ?? []).filter(
+			(edge) => cfg.edges.kind(edge) === "ordinary",
+		);
+		if (
+			incoming.length < 2 ||
+			incoming.length !== (cfg.predecessors[block] ?? []).length ||
+			new Set(incoming.map((edge) => cfg.edges.from(edge))).size !== incoming.length
+		)
+			continue;
+		for (const instruction of sites.expressions(block)) {
+			const output = instructionResult(fn, instruction, 0)!;
+			const inputs = copyInstructionOperands(fn, instruction);
+			const translated = incoming.map((edge) =>
+				translatedInputs(fn, cfg, block, cfg.edges.from(edge), edge, inputs),
 			);
+			if (translated.some((inputs) => inputs === undefined)) continue;
+			const available = incoming.map((edge, index) => {
+				const hash = coreInstructionInputsHash(fn, instruction, translated[index]);
+				const candidate = predecessorExpressions(cfg.edges.from(edge))
+					.get(hash)
+					?.find((candidate) =>
+						expressionsEqual(fn, instruction, candidate, translated[index]),
+					);
+				return candidate === undefined ? undefined : instructionResult(fn, candidate, 0);
+			});
+			const existing = available.filter((value) => value !== undefined).length;
+			if (existing === 0) continue;
 			if (
-				incoming.length < 2 ||
-				incoming.length !== (cfg.predecessors[block] ?? []).length ||
-				new Set(incoming.map((edge) => cfg.edges.from(edge))).size !== incoming.length
+				incoming.some(
+					(edge, index) =>
+						available[index] === undefined &&
+						(cfg.successors[cfg.edges.from(edge)] ?? []).filter(
+							(edge) => cfg.edges.kind(edge) === "ordinary",
+						).length !== 1,
+				)
 			)
 				continue;
-			const terminator = fn.blockTerminator(block);
-			for (
-				let cursor = fn.kernel.blockFirstInstruction(block);
-				cursor >= 0 && cursor !== terminator;
-				cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
-			) {
-				const instruction = coreInstructionId(cursor);
-				const opcode = pureExpressionOpcode(fn, instruction);
-				if (opcode === undefined) continue;
-				const output = instructionResult(fn, instruction, 0)!;
-				const inputs = copyInstructionOperands(fn, instruction);
-				const translated = incoming.map((edge) =>
-					translatedInputs(fn, cfg, block, cfg.edges.from(edge), edge, inputs),
-				);
-				if (translated.some((inputs) => inputs === undefined)) continue;
-				const available = incoming.map((edge, index) => {
-					const hash = coreInstructionInputsHash(fn, instruction, translated[index]);
-					const candidate = predecessorExpressions(cfg.edges.from(edge))
-						.get(hash)
-						?.find((candidate) =>
-							expressionsEqual(fn, instruction, candidate, translated[index]),
-						);
-					return candidate === undefined
-						? undefined
-						: instructionResult(fn, candidate, 0);
-				});
-				const existing = available.filter((value) => value !== undefined).length;
-				if (existing === 0) continue;
-				if (
-					incoming.some(
-						(edge, index) =>
-							available[index] === undefined &&
-							(cfg.successors[cfg.edges.from(edge)] ?? []).filter(
-								(edge) => cfg.edges.kind(edge) === "ordinary",
-							).length !== 1,
-					)
-				)
-					continue;
-				const editor = CoreEditor.open(program, item.function);
-				for (const [index, edge] of incoming.entries()) {
-					if (available[index] !== undefined) continue;
-					available[index] = editor.insertInstruction(
-						cfg.edges.from(edge),
-						fn.blockTerminator(cfg.edges.from(edge)),
-						fn.instructionOpcodeName(instruction),
-						translated[index]!,
-						{
-							attributes: fn.instructionAttributes(instruction),
-							outputRepresentations: [fn.valueRepresentation(output)],
-							sourcePosition: fn.instructionSourcePosition(instruction),
-						},
-					).outputs[0];
-				}
-				const parameter = editor.appendBlockParameter(block, {
-					representation: fn.valueRepresentation(output),
-				});
-				for (const [index, edge] of incoming.entries()) {
-					editor.redirectEdge(cfg.edges.from(edge), block, {
-						block,
-						arguments: [...cfg.edges.arguments(edge), available[index]!],
-					});
-				}
-				editor.replaceValueUses(output, parameter);
-				editor.removeInstruction(instruction);
-				return editor.commit();
+			const editor = CoreEditor.open(program, item.function);
+			for (const [index, edge] of incoming.entries()) {
+				if (available[index] !== undefined) continue;
+				available[index] = editor.insertInstruction(
+					cfg.edges.from(edge),
+					fn.blockTerminator(cfg.edges.from(edge)),
+					fn.instructionOpcodeName(instruction),
+					translated[index]!,
+					{
+						attributes: fn.instructionAttributes(instruction),
+						outputRepresentations: [fn.valueRepresentation(output)],
+						sourcePosition: fn.instructionSourcePosition(instruction),
+					},
+				).outputs[0];
 			}
+			const parameter = editor.appendBlockParameter(block, {
+				representation: fn.valueRepresentation(output),
+			});
+			for (const [index, edge] of incoming.entries()) {
+				editor.redirectEdge(cfg.edges.from(edge), block, {
+					block,
+					arguments: [...cfg.edges.arguments(edge), available[index]!],
+				});
+			}
+			editor.replaceValueUses(output, parameter);
+			editor.removeInstruction(instruction);
+			return editor.commit();
 		}
-		return undefined;
-	},
-};
+	}
+	return undefined;
+}
 
 function proveComparison(
 	operator: CoreLoopComparison,

@@ -41,13 +41,17 @@ function scheduledStaticPasses() {
 		foldStaticPropertyReads,
 		foldStaticBindingConstants,
 		foldStaticReflections,
-	].map((pass) => ({
-		...pass,
-		run(context: CoreFunctionPassContext) {
-			visits.add(pass.name);
-			return pass.run(context);
-		},
-	}));
+	].map((pass) => {
+		if (pass.run === undefined) throw new Error(`Missing executor for ${pass.name}`);
+		const run = pass.run;
+		return {
+			...pass,
+			run(context: CoreFunctionPassContext) {
+				visits.add(pass.name);
+				return run(context);
+			},
+		};
+	});
 	scheduler.runComponent("memory", passes);
 	expect(visits.size).toBe(passes.length);
 	visits.clear();

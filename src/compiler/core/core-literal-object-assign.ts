@@ -16,7 +16,7 @@ import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreInstructionId } from "./core-ir.ts";
 import { literalDefinition } from "./core-literal-graph.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
-import type { CoreFunctionPass } from "./core-pass.ts";
+import type { CoreFunctionPass, CoreFunctionPassContext } from "./core-pass.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 /** Exact namespace call operands after identity and semantic obligations are discharged. */
@@ -119,7 +119,7 @@ export function guardableObjectAssignOperands(
 function literalAssign(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
-	operands = knownObjectAssignOperands(fn, instruction),
+	operands: ReturnType<typeof knownObjectAssignOperands>,
 ) {
 	if (operands === undefined) return undefined;
 	const { target, source } = operands;
@@ -150,30 +150,36 @@ function literalAssign(
 	return { target, source, keys, values, allocation };
 }
 
+interface LiteralAssignmentSite {
+	readonly instruction: CoreInstructionId;
+	readonly guarded: boolean;
+	readonly plan: NonNullable<ReturnType<typeof literalAssign>>;
+}
+
 export const lowerLiteralObjectAssign: CoreFunctionPass = {
 	name: "lower-literal-object-assign",
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["callKnown", "call"],
 	admission: {
 		predicate: "strict intrinsic Object.assign with a private shaped source",
-		hasOpportunity({ program, function: functionId, compilationContext }) {
+		prepare({ program, function: functionId, compilationContext }, candidates) {
 			const world = compilationContext.facts.world;
 			const fn = program.function(functionId);
-			return (
-				!world.realms &&
-				fn.metadata.strict &&
-				[...fn.instructionIds()].some(
-					(instruction) =>
-						literalAssign(
-							fn,
-							instruction,
-							knownObjectAssignOperands(fn, instruction, world) ??
-								(world.primordialPolicy === "mutable"
-									? guardableObjectAssignOperands(program, fn, instruction)
-									: undefined),
-						) !== undefined,
-				)
-			);
+			// Object.assign always uses throwing Set; ordinary stores inherit caller strictness.
+			if (!fn.metadata.strict || world.realms) return undefined;
+			let sites: Array<LiteralAssignmentSite> | undefined;
+			for (const instruction of candidates!) {
+				const known = knownObjectAssignOperands(fn, instruction, world);
+				const guarded = known === undefined && world.primordialPolicy === "mutable";
+				const plan = literalAssign(
+					fn,
+					instruction,
+					guarded ? guardableObjectAssignOperands(program, fn, instruction) : known,
+				);
+				if (plan !== undefined) (sites ??= []).push({ instruction, guarded, plan });
+			}
+			if (sites !== undefined)
+				return (context) => lowerPreparedLiteralAssignments(context, fn, sites);
 		},
 	},
 	candidates: {
@@ -190,76 +196,69 @@ export const lowerLiteralObjectAssign: CoreFunctionPass = {
 	wakesOn: ["body", "cfg", "calls", "facts", "normalResults", "memoryEffects"],
 	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
-	run(context) {
-		const fn = context.program.function(context.item.function);
-		const world = context.compilationContext.facts.world;
-		// Object.assign always uses throwing Set; ordinary stores inherit caller strictness.
-		if (!fn.metadata.strict || world.realms) return undefined;
-		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
-		let edgeUses: Uint8Array | undefined;
-		for (const instruction of context.instructions()) {
-			const known = knownObjectAssignOperands(fn, instruction, world);
-			const guarded = known === undefined && world.primordialPolicy === "mutable";
-			const plan = literalAssign(
-				fn,
-				instruction,
-				guarded ? guardableObjectAssignOperands(context.program, fn, instruction) : known,
-			);
-			if (
-				plan === undefined ||
-				context.remainingEdits < plan.keys.length + (guarded ? 20 : 2) ||
-				kinds.kindMask(plan.target) !== COMPILER_VALUE_KIND_OBJECT ||
-				(guarded &&
-					fn.instructionBlock(plan.allocation) !== fn.instructionBlock(instruction)) ||
-				(edgeUses ??= coreValueControlFlowUseMask(fn))[plan.source] !== 0
+};
+
+function lowerPreparedLiteralAssignments(
+	context: CoreFunctionPassContext,
+	fn: CoreFunctionStore,
+	sites: ReadonlyArray<LiteralAssignmentSite>,
+) {
+	const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+	let edgeUses: Uint8Array | undefined;
+	for (const { instruction, guarded, plan } of sites) {
+		if (
+			context.remainingEdits < plan.keys.length + (guarded ? 20 : 2) ||
+			kinds.kindMask(plan.target) !== COMPILER_VALUE_KIND_OBJECT ||
+			(guarded &&
+				fn.instructionBlock(plan.allocation) !== fn.instructionBlock(instruction)) ||
+			(edgeUses ??= coreValueControlFlowUseMask(fn))[plan.source] !== 0
+		)
+			continue;
+		// Later setters can observe weak lifetimes after an earlier setter ignores a field.
+		if (
+			plan.values.some(
+				(value) => !compilerValueKindCannotBeHeldWeakly(kinds.kindMask(value)),
 			)
-				continue;
-			// Later setters can observe weak lifetimes after an earlier setter ignores a field.
-			if (
-				plan.values.some(
-					(value) => !compilerValueKindCannotBeHeldWeakly(kinds.kindMask(value)),
-				)
-			)
-				continue;
-			const proof = fn.instructionEffectRefinement(instruction)?.proof;
-			const editor = CoreEditor.open(context.program, fn.id);
-			const block = fn.instructionBlock(instruction);
-			const sourcePosition = fn.instructionSourcePosition(instruction);
-			if (guarded) {
-				const split = splitGuardedCall(fn, editor, instruction);
-				const holds = split.append(block, "guardSemanticEpoch", [], {
-					family: "primordial-bindings",
-				});
-				const direct = split.test(holds);
-				// Only the retained call observes the private source object. All field
-				// evaluations stay before the branch, including effects that revoke it.
-				editor.moveInstruction(plan.allocation, split.fallback, instruction);
-				for (const [index, stringIndex] of plan.keys.entries())
-					editor.appendInstruction(
-						direct,
-						"storePropertyStatic",
-						[plan.target, plan.values[index]!],
-						{
-							outputCount: 0,
-							attributes: { stringIndex },
-							sourcePosition,
-						},
-					);
-				split.finish(direct, plan.target);
-				return editor.commit();
-			}
+		)
+			continue;
+		const proof = fn.instructionEffectRefinement(instruction)?.proof;
+		const editor = CoreEditor.open(context.program, fn.id);
+		const block = fn.instructionBlock(instruction);
+		const sourcePosition = fn.instructionSourcePosition(instruction);
+		if (guarded) {
+			const split = splitGuardedCall(fn, editor, instruction);
+			const holds = split.append(block, "guardSemanticEpoch", [], {
+				family: "primordial-bindings",
+			});
+			const direct = split.test(holds);
+			// Only the retained call observes the private source object. All field
+			// evaluations stay before the branch, including effects that revoke it.
+			editor.moveInstruction(plan.allocation, split.fallback, instruction);
 			for (const [index, stringIndex] of plan.keys.entries())
-				editor.insertInstruction(
-					block,
-					instruction,
+				editor.appendInstruction(
+					direct,
 					"storePropertyStatic",
 					[plan.target, plan.values[index]!],
-					{ outputCount: 0, attributes: { stringIndex }, sourcePosition },
+					{
+						outputCount: 0,
+						attributes: { stringIndex },
+						sourcePosition,
+					},
 				);
-			editor.replaceInstruction(instruction, "move", [plan.target], { sourcePosition });
-			removeUnsharedProof(editor, fn, proof);
+			split.finish(direct, plan.target);
 			return editor.commit();
 		}
-		return undefined;
-	},
-};
+		for (const [index, stringIndex] of plan.keys.entries())
+			editor.insertInstruction(
+				block,
+				instruction,
+				"storePropertyStatic",
+				[plan.target, plan.values[index]!],
+				{ outputCount: 0, attributes: { stringIndex }, sourcePosition },
+			);
+		editor.replaceInstruction(instruction, "move", [plan.target], { sourcePosition });
+		removeUnsharedProof(editor, fn, proof);
+		return editor.commit();
+	}
+	return undefined;
+}

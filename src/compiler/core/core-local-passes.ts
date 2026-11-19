@@ -91,6 +91,7 @@ import {
 } from "./core-module-globals.ts";
 import type {
 	CoreFunctionPass,
+	CoreFunctionPassAdmissionContext,
 	CoreFunctionPassContext,
 	CorePassBudget,
 } from "./core-pass.ts";
@@ -2529,7 +2530,7 @@ const mergeLinearBlocks: CoreFunctionPass = {
 	},
 };
 
-const simplifyBlockParameters: CoreFunctionPass = {
+const simplifyBlockParameters = {
 	name: "block-parameter-simplification",
 	stage: "canonicalize",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_EDGE_ARGUMENTS,
@@ -2709,7 +2710,7 @@ const simplifyBlockParameters: CoreFunctionPass = {
 		}
 		return editor?.commit();
 	},
-};
+} satisfies CoreFunctionPass;
 
 const canonicalizeBlockParameters: CoreFunctionPass = {
 	name: "canonical-block-parameter-elimination",
@@ -4201,7 +4202,7 @@ export const eliminateUnusedBlockParameters: CoreFunctionPass = {
 	name: "unused-block-parameter-elimination",
 	admission: {
 		predicate: "unused ordinary block parameter",
-		hasOpportunity({ program, function: functionId }) {
+		hasOpportunity({ program, function: functionId }: CoreFunctionPassAdmissionContext) {
 			const fn = program.function(functionId);
 			for (const block of fn.blockIds()) {
 				if (block === fn.entry) continue;

@@ -60,7 +60,7 @@ describe("Core function features", () => {
 		);
 	});
 
-	it("rescans once after a relevant committed edit", () => {
+	it("updates control features after handler and terminator edits", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock();
@@ -72,18 +72,14 @@ describe("Core function features", () => {
 		const features = new CoreFunctionFeatureIndex(program);
 
 		expect(features.get(functionId) & CORE_FUNCTION_HAS_BACKEDGES).toBe(0);
-		expect(features.get(functionId) & CORE_FUNCTION_HAS_BACKEDGES).toBe(0);
-		expect(features.scans).toBe(1);
 		const representationEditor = CoreEditor.open(program, functionId);
 		representationEditor.setValueRepresentation(value!, "f64");
 		representationEditor.commit();
 		expect(features.get(functionId) & CORE_FUNCTION_HAS_BACKEDGES).toBe(0);
-		expect(features.scans).toBe(1);
 		const handlerEditor = CoreEditor.open(program, functionId);
 		handlerEditor.setHandler(entry, handler, []);
 		handlerEditor.commit();
 		expect(features.get(functionId) & CORE_FUNCTION_HAS_EXCEPTIONS).not.toBe(0);
-		expect(features.scans).toBe(2);
 		const editor = CoreEditor.open(program, functionId);
 		editor.replaceTerminator(entry, {
 			kind: "jump",
@@ -92,7 +88,6 @@ describe("Core function features", () => {
 		editor.commit();
 
 		expect(features.get(functionId) & CORE_FUNCTION_HAS_BACKEDGES).not.toBe(0);
-		expect(features.scans).toBe(3);
 	});
 
 	it("refreshes opcode candidates after same-feature replacements", () => {
@@ -118,7 +113,35 @@ describe("Core function features", () => {
 
 		expect(features.hasAnyOpcode(functionId, [undefinedOpcode])).toBe(false);
 		expect(features.hasAnyOpcode(functionId, [nullOpcode])).toBe(true);
-		expect(features.scans).toBe(2);
+	});
+
+	it("keeps ordered opcode sites current across removals and generation compaction", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [removed] = builder.appendInstruction(entry, "createNull", []);
+		const [result] = builder.appendInstruction(entry, "createUndefined", []);
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const fn = program.function(builder.finish(entry).function);
+		const opcodes = ["createUndefined", "createNull"].map(
+			(opcode) => coreOpcodeRegistry.require(opcode).id,
+		);
+		const removedSite = coreInstructionId(fn.kernel.valueDefinitionOwner(removed!));
+		const resultSite = coreInstructionId(fn.kernel.valueDefinitionOwner(result!));
+		const original = fn.opcodeSites();
+		const editor = CoreEditor.open(program, fn.id);
+		editor.removeInstruction(removedSite);
+		editor.commit();
+
+		expect(original.instructions(opcodes)).toEqual([removedSite, resultSite]);
+		expect(fn.opcodeSites().instructions(opcodes)).toEqual([resultSite]);
+
+		program.finalizeConstructionGeneration();
+		const dense = program.function(fn.id);
+		const sites = dense.opcodeSites().instructions(opcodes);
+		expect(sites.map((site) => dense.instructionOpcodeName(site))).toEqual([
+			"createUndefined",
+		]);
 	});
 
 	it("does not infer cycles from block identity order", () => {
