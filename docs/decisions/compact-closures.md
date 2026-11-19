@@ -9,6 +9,13 @@ chain representation. A proved immutable leaf can retain an exact single-owner
 fallback layout even in an open source image. The portable wire loader does not
 trust native capture metadata.
 
+Core prunes unused stores and closure identities to a bounded fixed point before
+capture-slot compaction. Within those rounds, an instruction can leave the set of
+capture accesses, global accesses and closure creations only by deletion or by
+forwarding a load. One index of the original sites therefore suffices. Each round
+uses the current opcode and current uses to reconsider which sites keep a binding
+or function alive.
+
 Mutable and unproved captured bindings remain atomic slots in their activation or
 iteration owner.
 Siblings refer to the same owner and slot, while `ENV_COPY` supplies a new owner.

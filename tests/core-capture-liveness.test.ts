@@ -20,6 +20,62 @@ import {
 } from "./helpers/core-program-analysis.ts";
 
 describe("Core capture liveness", () => {
+	it("drops a binding store after its only reader becomes unreachable", () => {
+		const program = analysisProgram();
+		const entry = new CoreFunctionBuilder(program);
+		const reader = new CoreFunctionBuilder(program);
+		const target = appendLeaf(program).function;
+
+		const body = entry.createBlock();
+		const [readBinding] = entry.appendInstruction(body, "createFunction", [], {
+			attributes: { functionIndex: reader.functionId },
+		});
+		const [binding] = entry.appendInstruction(body, "createFunction", [], {
+			attributes: { functionIndex: target },
+		});
+		entry.appendInstruction(body, "storeGlobal", [readBinding!], {
+			attributes: { index: 0 },
+		});
+		entry.appendInstruction(body, "storeGlobal", [binding!], {
+			attributes: { index: 1 },
+		});
+		const [result] = entry.appendInstruction(body, "createUndefined", []);
+		entry.setTerminator(body, { kind: "return", value: result! });
+		entry.finish(body);
+
+		const readerBody = reader.createBlock();
+		const [loaded] = reader.appendInstruction(readerBody, "loadGlobal", [], {
+			attributes: { index: 1 },
+		});
+		reader.setTerminator(readerBody, { kind: "return", value: loaded! });
+		reader.finish(readerBody);
+		verifyCoreProgram(program);
+
+		const baseContext = programAnalysisContext();
+		const context = {
+			...baseContext,
+			data: { ...baseContext.data, moduleBindingSlots: [0, 1] },
+		};
+		const manager = new CoreAnalysisManager(
+			program,
+			context,
+			new CoreOptimizationReportBuilder(program),
+		);
+		pruneCoreCaptureLiveness(
+			program,
+			context,
+			manager.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }),
+		);
+
+		verifyCoreProgram(program);
+		const entryFunction = program.function(entry.functionId);
+		expect(
+			[...entryFunction.bodyInstructionIds(body)].map((instruction) =>
+				entryFunction.instructionOpcodeName(instruction),
+			),
+		).toEqual(["createUndefined"]);
+	});
+
 	it.each([false, true])(
 		"discards cross-block definitions and handler arguments with reverse storage order %s",
 		(reverse) => {

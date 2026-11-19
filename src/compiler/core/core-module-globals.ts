@@ -278,7 +278,7 @@ export function coreModuleGlobalLoadInitialized(
 }
 
 /** Global slots an instruction other than a binding store reads or hands to the runtime. */
-function referencedGlobalSlots(
+export function coreReferencedGlobalSlots(
 	opcode: string,
 	attributes: Readonly<Record<string, unknown>>,
 ): ReadonlyArray<number> {
@@ -316,7 +316,9 @@ function globalSlotReads(fn: CoreFunctionStore): ReadonlyArray<number> {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(instruction);
 		if (opcode !== "storeGlobal")
-			slots.push(...referencedGlobalSlots(opcode, fn.instructionAttributes(instruction)));
+			slots.push(
+				...coreReferencedGlobalSlots(opcode, fn.instructionAttributes(instruction)),
+			);
 	}
 	if (bodyVersion !== undefined) readScans.set(fn, { bodyVersion, slots });
 	return slots;
@@ -331,13 +333,14 @@ export function coreUnreadModuleBindingSlots(
 	program: CoreProgram,
 	context: CoreCompilationContext,
 	functions: Iterable<CoreFunctionId>,
+	readSlots: (fn: CoreFunctionStore) => Iterable<number> = globalSlotReads,
 ): Set<number> {
 	const unread = new Set(context.data.moduleBindingSlots ?? []);
 	for (const { exports } of context.data.hostInstallCandidates)
 		for (const { slot } of exports) unread.delete(slot);
 	if (unread.size === 0) return unread;
 	for (const id of functions)
-		for (const slot of globalSlotReads(program.function(id))) unread.delete(slot);
+		for (const slot of readSlots(program.function(id))) unread.delete(slot);
 	return unread;
 }
 
@@ -345,10 +348,12 @@ export function coreUnreadModuleBindingSlots(
 export function coreUnreadModuleBindingStores(
 	fn: CoreFunctionStore,
 	unread: ReadonlySet<number>,
+	candidates?: Iterable<CoreInstructionId>,
 ): Array<CoreInstructionId> {
 	const stores: Array<CoreInstructionId> = [];
 	if (unread.size === 0) return stores;
-	for (const instruction of fn.instructionIds()) {
+	for (const instruction of candidates ?? fn.instructionIds()) {
+		if (candidates !== undefined && !fn.isInstructionLive(instruction)) continue;
 		if (
 			fn.instructionKind(instruction) !== "operation" ||
 			fn.instructionOpcodeName(instruction) !== "storeGlobal"

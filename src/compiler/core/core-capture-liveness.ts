@@ -6,11 +6,12 @@ import {
 } from "./core-effect-proof-edits.ts";
 import { removeCoreInstructions } from "./core-instruction-removal.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
-import { coreFunctionId, coreInstructionId } from "./core-ir.ts";
+import { coreFunctionId, coreInstructionId, coreOpcodeId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
 	CoreFunctionId,
 	CoreInstructionId,
+	CoreOpcodeId,
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
@@ -19,12 +20,97 @@ import {
 	coreEvaluatorPrivateSlotMap,
 	coreUnreadModuleBindingSlots,
 	coreUnreadModuleBindingStores,
+	coreReferencedGlobalSlots,
 } from "./core-module-globals.ts";
 import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
 import type { CoreChangeSet, CoreFunctionStore } from "./core-store.ts";
 import type { CoreProgram } from "./core-store.ts";
 
 const key = (owner: unknown, index: unknown) => `${String(owner)}:${String(index)}`;
+
+interface CaptureLivenessSites {
+	readonly creations: Array<CoreInstructionId>;
+	readonly captures: Array<CoreInstructionId>;
+	readonly globalStores: Array<CoreInstructionId>;
+	readonly globalReaders: Array<{
+		instruction: CoreInstructionId;
+		opcode: CoreOpcodeId;
+		slots: ReadonlyArray<number>;
+	}>;
+}
+
+function collectCaptureLivenessSites(
+	program: CoreProgram,
+	functions: ReadonlyArray<CoreFunctionId>,
+	includePruningSites: boolean,
+): ReadonlyMap<CoreFunctionId, CaptureLivenessSites> {
+	const creations = includePruningSites
+		? program.registry.get("createFunction")?.id
+		: undefined;
+	const globalStore = includePruningSites
+		? program.registry.get("storeGlobal")?.id
+		: undefined;
+	const captures = new Set<CoreOpcodeId>();
+	const globalReads = new Set<CoreOpcodeId>();
+	for (const { id, opcode } of program.registry.entries()) {
+		if (
+			opcode === "loadCaptured" ||
+			opcode === "storeCaptured" ||
+			opcode === "createPrivateNames" ||
+			opcode.startsWith("with")
+		)
+			captures.add(id);
+		if (
+			includePruningSites &&
+			(opcode === "loadGlobal" ||
+				opcode === "loadGlobalIndex" ||
+				opcode === "createModuleNamespace")
+		)
+			globalReads.add(id);
+	}
+	const result = new Map<CoreFunctionId, CaptureLivenessSites>();
+	for (const functionId of functions) {
+		const fn = program.function(functionId);
+		const sites: CaptureLivenessSites = {
+			creations: [],
+			captures: [],
+			globalStores: [],
+			globalReaders: [],
+		};
+		for (const instruction of fn.instructionIds()) {
+			const code = fn.kernel.instructionOpcode(instruction);
+			if (code < 0) continue;
+			const opcode = coreOpcodeId(code);
+			if (opcode === creations) sites.creations.push(instruction);
+			else if (captures.has(opcode)) sites.captures.push(instruction);
+			if (!includePruningSites) continue;
+			if (opcode === globalStore) {
+				sites.globalStores.push(instruction);
+				continue;
+			}
+			const attributes = fn.kernel.instructionAttributes(instruction);
+			if (
+				globalReads.has(opcode) ||
+				typeof attributes.cacheSlot === "number" ||
+				typeof attributes.foreignSlot === "number"
+			) {
+				const slots = coreReferencedGlobalSlots(
+					fn.instructionOpcodeName(instruction),
+					attributes,
+				);
+				if (slots.length > 0) sites.globalReaders.push({ instruction, opcode, slots });
+			}
+		}
+		if (
+			sites.creations.length !== 0 ||
+			sites.captures.length !== 0 ||
+			sites.globalStores.length !== 0 ||
+			sites.globalReaders.length !== 0
+		)
+			result.set(functionId, sites);
+	}
+	return result;
+}
 
 type SlotValue =
 	| { readonly kind: "value"; readonly value: CoreValueId }
@@ -86,10 +172,12 @@ function forwardOwnCapturedLoads(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	foreignWrites: ReadonlySet<string>,
+	sites: ReadonlyArray<CoreInstructionId>,
 	edit: () => CoreEditor,
 ): void {
 	const slots = new Map<number, CellAccesses>();
-	for (const instruction of fn.instructionIds()) {
+	for (const instruction of sites) {
+		if (!fn.isInstructionLive(instruction)) continue;
 		const header = fn.instructionHeader(instruction);
 		if (typeof header === "string") continue;
 		const opcode = header.opcode;
@@ -383,6 +471,7 @@ interface CapturedSlotUses {
 function scanCapturedSlots(
 	program: CoreProgram,
 	functions: ReadonlyArray<CoreFunctionId>,
+	sites: ReadonlyMap<CoreFunctionId, CaptureLivenessSites>,
 ): CapturedSlotUses | undefined {
 	const foreignWrites = new Set<string>();
 	const implicitReads = new Set<string>();
@@ -392,7 +481,8 @@ function scanCapturedSlots(
 			foreignWrites.add(key(id, index));
 			if (index >= 0) implicitReads.add(key(id, index));
 		}
-		for (const instruction of fn.instructionIds()) {
+		for (const instruction of sites.get(id)?.captures ?? []) {
+			if (!fn.isInstructionLive(instruction)) continue;
 			const header = fn.instructionHeader(instruction);
 			if (typeof header === "string") continue;
 			const opcode = header.opcode;
@@ -419,6 +509,7 @@ function forwardAllOwnCapturedLoads(
 	program: CoreProgram,
 	context: CoreCompilationContext,
 	functions: ReadonlyArray<CoreFunctionId>,
+	sites: ReadonlyMap<CoreFunctionId, CaptureLivenessSites>,
 	foreignWrites: ReadonlySet<string>,
 	privateSlots: ReadonlyMap<CoreFunctionId, ReadonlySet<number>>,
 	edit: (id: CoreFunctionId) => CoreEditor,
@@ -426,7 +517,13 @@ function forwardAllOwnCapturedLoads(
 	for (const id of functions) {
 		const fn = program.function(id);
 		if (fn.isAsync || fn.isGenerator) continue;
-		forwardOwnCapturedLoads(program, fn, foreignWrites, () => edit(id));
+		forwardOwnCapturedLoads(
+			program,
+			fn,
+			foreignWrites,
+			sites.get(id)?.captures ?? [],
+			() => edit(id),
+		);
 		forwardEvaluatorGlobalLoads(program, context, fn, privateSlots, () => edit(id));
 	}
 }
@@ -441,7 +538,8 @@ export function forwardCoreOwnCapturedLoads(
 ): number {
 	if (context.facts.closure.sourceClosure.kind !== "known") return 0;
 	const functions = [...program.functionIds()];
-	const uses = scanCapturedSlots(program, functions);
+	const sites = collectCaptureLivenessSites(program, functions, false);
+	const uses = scanCapturedSlots(program, functions, sites);
 	if (uses === undefined) return 0;
 	const editors = new Map<CoreFunctionId, CoreEditor>();
 	const privateSlots = coreEvaluatorPrivateSlotMap(program, context);
@@ -449,6 +547,7 @@ export function forwardCoreOwnCapturedLoads(
 		program,
 		context,
 		functions,
+		sites,
 		uses.foreignWrites,
 		privateSlots,
 		(id) => {
@@ -489,6 +588,8 @@ export function pruneCoreCaptureLiveness(
 		].map(coreFunctionId),
 	);
 	const functions = [...program.functionIds()];
+	// These rounds only remove indexed sites or replace a load by a move.
+	const sites = collectCaptureLivenessSites(program, functions, true);
 	// Decided before any editor opens; rounds only drop stores, which adds no writer.
 	const privateSlots = coreEvaluatorPrivateSlotMap(program, context);
 	const entry = functions[0];
@@ -510,7 +611,7 @@ export function pruneCoreCaptureLiveness(
 	};
 	const emptied = new Set<CoreFunctionId>();
 	for (let round = 0; round < 8; round++) {
-		const identities = scanIdentities(program, functions);
+		const identities = scanIdentities(program, sites);
 		for (const id of functions) {
 			const fn = program.function(id);
 			if (
@@ -525,14 +626,15 @@ export function pruneCoreCaptureLiveness(
 				continue;
 			if (emptyBody(edit(id), fn)) emptied.add(id);
 		}
-		const instantiable = instantiableFunctions(program, roots);
+		const instantiable = instantiableFunctions(program, roots, sites);
 		const live = functions.filter((id) => instantiable.has(id));
-		const uses = scanCapturedSlots(program, live);
+		const uses = scanCapturedSlots(program, live, sites);
 		if (uses === undefined) break;
 		forwardAllOwnCapturedLoads(
 			program,
 			context,
 			live,
+			sites,
 			uses.foreignWrites,
 			privateSlots,
 			edit,
@@ -540,7 +642,8 @@ export function pruneCoreCaptureLiveness(
 		const readers = new Set(uses.implicitReads);
 		for (const id of live) {
 			const fn = program.function(id);
-			for (const instruction of fn.instructionIds()) {
+			for (const instruction of sites.get(id)?.captures ?? []) {
+				if (!fn.isInstructionLive(instruction)) continue;
 				if (
 					fn.instructionKind(instruction) === "operation" &&
 					fn.instructionOpcodeName(instruction) === "loadCaptured"
@@ -550,19 +653,34 @@ export function pruneCoreCaptureLiveness(
 				}
 			}
 		}
-		const unreadBindings = coreUnreadModuleBindingSlots(program, context, live);
+		const unreadBindings = coreUnreadModuleBindingSlots(
+			program,
+			context,
+			live,
+			function* (fn) {
+				for (const { instruction, opcode, slots } of sites.get(fn.id)?.globalReaders ??
+					[]) {
+					if (fn.kernel.instructionOpcode(instruction) === opcode) yield* slots;
+				}
+			},
+		);
 		let released = false;
 		for (const id of functions) {
 			const fn = program.function(id);
-			for (const store of coreUnreadModuleBindingStores(fn, unreadBindings))
+			const list = sites.get(id);
+			if (list === undefined) continue;
+			for (const store of coreUnreadModuleBindingStores(
+				fn,
+				unreadBindings,
+				list.globalStores,
+			))
 				edit(id).removeInstruction(store);
-			const closures: Array<CoreInstructionId> = [];
-			for (const instruction of fn.instructionIds()) {
-				const header = fn.instructionHeader(instruction);
-				if (typeof header === "string") continue;
-				const opcode = header.opcode;
-				if (opcode === "createFunction") closures.push(instruction);
-				if (opcode !== "storeCaptured") continue;
+			for (const instruction of list.captures) {
+				if (
+					!fn.isInstructionLive(instruction) ||
+					fn.instructionOpcodeName(instruction) !== "storeCaptured"
+				)
+					continue;
 				const { functionIndex, index } = fn.instructionAttributes(instruction);
 				if (
 					typeof functionIndex !== "number" ||
@@ -572,7 +690,8 @@ export function pruneCoreCaptureLiveness(
 					continue;
 				edit(id).removeInstruction(instruction);
 			}
-			for (const closure of closures) {
+			for (const closure of list.creations) {
+				if (!fn.isInstructionLive(closure)) continue;
 				const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(closure));
 				if (fn.valueUseCount(value) + fn.kernel.valueHandlerUseCount(value) !== 0)
 					continue;
@@ -615,12 +734,16 @@ export function coreInstantiableFunctions(
 function instantiableFunctions(
 	program: CoreProgram,
 	roots: ReadonlySet<CoreFunctionId>,
+	sites?: ReadonlyMap<CoreFunctionId, CaptureLivenessSites>,
 ): ReadonlySet<CoreFunctionId> {
 	const live = new Set(roots);
 	const pending = [...roots];
 	while (pending.length > 0) {
 		const fn = program.function(pending.pop()!);
-		for (const instruction of fn.instructionIds()) {
+		for (const instruction of sites === undefined
+			? fn.instructionIds()
+			: (sites.get(fn.id)?.creations ?? [])) {
+			if (sites !== undefined && !fn.isInstructionLive(instruction)) continue;
 			if (
 				fn.instructionKind(instruction) !== "operation" ||
 				fn.instructionOpcodeName(instruction) !== "createFunction"
@@ -637,17 +760,13 @@ function instantiableFunctions(
 
 function scanIdentities(
 	program: CoreProgram,
-	functions: ReadonlyArray<CoreFunctionId>,
+	sites: ReadonlyMap<CoreFunctionId, CaptureLivenessSites>,
 ): ReadonlySet<CoreFunctionId> {
 	const identities = new Set<CoreFunctionId>();
-	for (const id of functions) {
+	for (const [id, { creations }] of sites) {
 		const fn = program.function(id);
-		for (const instruction of fn.instructionIds()) {
-			if (
-				fn.instructionKind(instruction) !== "operation" ||
-				fn.instructionOpcodeName(instruction) !== "createFunction"
-			)
-				continue;
+		for (const instruction of creations) {
+			if (!fn.isInstructionLive(instruction)) continue;
 			const target = fn.instructionAttributes(instruction).functionIndex;
 			if (typeof target === "number") identities.add(coreFunctionId(target));
 		}
