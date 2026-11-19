@@ -44,6 +44,10 @@ externalized data after the retry state and intermediate source parts are releas
 It collects declarations once a candidate group can fit by definition size, or
 when emitting an individual definition.
 
+The body renderer prepares static context updates at the instruction positions
+that use them. It restores those fields at the next emitted instruction so that
+specialized paths and their generic fallbacks share the same context.
+
 Calls that stay generic, such as a method read from a prototype, can still reach a
 typed entry through the callee. A looping function whose parameters seed a loop
 recurrence and are never used as objects gets a Number variant, and its canonical

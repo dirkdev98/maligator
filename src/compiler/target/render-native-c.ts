@@ -9299,6 +9299,134 @@ function emitBody(
 				`u32 __enumeration_pair_${projection.elementIp}_index = 0;`,
 			);
 	}
+	// The instruction context is reused by the body loop. Record only fields
+	// whose plan supplies an action, along with the value to restore afterward.
+	type Field = keyof NativeInstructionActions;
+	type Assignment = {
+		readonly field: Field;
+		readonly value: NativeInstructionContext[Field];
+		readonly initial: NativeInstructionContext[Field];
+	};
+	let actionsByIp: Map<number, Array<Assignment>> | undefined;
+	const registerAction = <Key extends Field>(
+		ip: number,
+		field: Key,
+		value: NativeInstructionContext[Key],
+	): void => {
+		actionsByIp ??= new Map();
+		let actions = actionsByIp.get(ip);
+		if (actions === undefined) actionsByIp.set(ip, (actions = []));
+		actions.push({ field, value, initial: instructionContext[field] });
+	};
+	const registerActions = <Key extends Field>(
+		field: Key,
+		source: ReadonlyMap<number, NativeInstructionContext[Key]>,
+	): void => {
+		if (source.size === 0) return;
+		for (const [ip, action] of source) registerAction(ip, field, action);
+	};
+	registerActions("stackObjectSite", stackObjectSites);
+	registerActions("stackObjectAccess", stackObjectAccesses);
+	registerActions("stackObjectMaterialization", stackObjectMaterializations);
+	registerActions("stackObjectLends", stackObjectLends);
+	registerActions("stackObjectInheritedAccess", stackObjectInheritedAccesses);
+	registerActions("constantBoolean", directConstantBooleans);
+	registerActions("fieldLoad", fieldLoads);
+	registerActions("recordAllocation", records.allocations);
+	registerActions("recordObject", records.objects);
+	registerActions("recordForward", records.forwards);
+	registerActions("recordAccess", records.accesses);
+	registerActions("recordObservers", records.observers);
+	registerActions("recordCall", records.calls);
+	registerActions("recordPasses", records.passes);
+	registerActions("fieldAllocation", fieldAllocations);
+	registerActions("fieldCall", fieldCallSites);
+	registerActions("callTransport", callTransportByIp);
+	registerActions("callbackTransport", callbackTransportByIp);
+	registerActions("mathCall", mathCalls);
+	registerActions("recordColumnsProducer", columnsProducers);
+	registerActions("numberPredicate", numberPredicates);
+	registerActions("stringTransform", stringTransforms);
+	registerActions("arrayInitialization", arrayInitializations);
+	registerActions("mapEntry", mapEntries);
+	registerActions("objectEnumerationSnapshot", objectEnumerationSnapshots);
+	registerActions("indexedLengthLoopAction", indexedLengthLoopActionByIp);
+	registerActions("pairedArrayLoopAction", pairedArrayLoopActionByIp);
+	registerActions(
+		"nativeStringSplitProjectionAction",
+		nativeStringSplitProjectionActionByIp,
+	);
+	registerActions("nativeStringSplitCursorAction", nativeStringSplitCursorActionByIp);
+	registerActions("stringSplitTrimLengthSite", stringSplitTrimLengthSiteByIp);
+	registerActions(
+		"nativeRegExpExecProjectionAction",
+		nativeRegExpExecProjectionActionByIp,
+	);
+	registerActions(
+		"nativeRegExpIteratorProjectionAction",
+		nativeRegExpIteratorProjectionActionByIp,
+	);
+	registerActions("regexpLiteralAction", regexpLiteralActions);
+	registerActions("nativeStringSpanAction", nativeStringSpanActionByIp);
+	registerActions(
+		"nativeStringCharCodeAtChainAction",
+		nativeStringCharCodeAtChainActionByIp,
+	);
+	registerActions(
+		"nativeBuiltinCollectionCallChainAction",
+		nativeBuiltinCollectionCallChainActionByIp,
+	);
+	registerActions("nativeIteratorCursorAction", nativeIteratorCursorActionByIp);
+	registerActions(
+		"nativeArrayPairDestructureAction",
+		nativeArrayPairDestructureActionByIp,
+	);
+	registerActions(
+		"nativeIteratorResultVirtualizationAction",
+		nativeIteratorResultVirtualizationActionByIp,
+	);
+	registerActions(
+		"nativeIteratorEntryPairVirtualizationAction",
+		nativeIteratorEntryPairVirtualizationActionByIp,
+	);
+	registerActions("numericFusionAction", numericFusionActionByIp);
+	registerActions("numericFusionShadows", numericFusionShadows);
+	registerActions(
+		"staticPropertyProjectionAction",
+		nativeFastPaths.propertyReadPairActions,
+	);
+	registerActions("staticPropertyNumericAction", staticPropertyNumericActionByIp);
+	registerActions("propertyNumericUpdateAction", propertyNumericUpdateActionByIp);
+	registerActions("propertyReadRegionAction", propertyReadRegionActionByIp);
+	registerActions("constructorInitializationAction", constructorInitializationActionByIp);
+	registerActions(
+		"nativeArrayPresenceProjectionAction",
+		nativeArrayPresenceProjectionActionByIp,
+	);
+	for (const ip of numericFusionShadowedIps)
+		registerAction(ip, "numericFusionShadowed", true);
+	for (const ip of polymorphicMethodLoads)
+		registerAction(ip, "polymorphicMethodLoad", true);
+	if (privateFieldReserve !== undefined)
+		registerAction(
+			privateFieldReserve.id,
+			"privateFieldReserveCount",
+			privateFieldReserve.count,
+		);
+	for (const [ip, action] of nativeIteratorCursorActionByIp)
+		if (deferredIteratorCursors.has(action.cursor.initializeIp))
+			registerAction(ip, "deferredIteratorCursor", true);
+	for (const [ip, action] of propertyNumericUpdateActionByIp) {
+		const facts = nativeFacts?.[action.plan.operationIp];
+		if (facts !== undefined) registerAction(ip, "propertyNumericUpdateFacts", facts);
+	}
+	const setAction = <Key extends Field>(
+		field: Key,
+		value: NativeInstructionContext[Key],
+	): void => {
+		instructionContext[field] = value;
+	};
+	let activeActions: ReadonlyArray<Assignment> | undefined;
 	let lastPublishedPos = -1;
 	let lastPublishedSite = -1;
 	let lastPublishedInactiveRootMask: NativeInactiveRootMask | undefined;
@@ -9867,7 +9995,6 @@ function emitBody(
 			}
 			const instructionProfile: NativeInstructionProfile | undefined =
 				(fn.profileSiteIds?.[ip] ?? -1) >= 0 ? {} : undefined;
-			const arrayPresenceAction = nativeArrayPresenceProjectionActionByIp.get(ip);
 			emittedInstructions.add(ip);
 			let operatorMaskEmitted = false;
 			instructionContext.nativePlan = nativeInstructions[ip];
@@ -9920,90 +10047,17 @@ function emitBody(
 			instructionContext.guardedCallInactiveRootMask = guardedCallInactiveRootMask;
 			instructionContext.iteratorStepRootPublication = deferredIteratorRoots;
 			instructionContext.iteratorStepInactiveRootMask = iteratorStepInactiveRootMask;
-			instructionContext.stackObjectSite = stackObjectSites.get(ip);
-			instructionContext.stackObjectAccess = stackObjectAccesses.get(ip);
-			instructionContext.stackObjectMaterialization = stackObjectMaterializations.get(ip);
-			instructionContext.stackObjectLends = stackObjectLends.get(ip);
-			instructionContext.stackObjectInheritedAccess =
-				stackObjectInheritedAccesses.get(ip);
-			instructionContext.constantBoolean = directConstantBooleans.get(ip);
-			instructionContext.fieldLoad = fieldLoads.get(ip);
-			instructionContext.recordAllocation = records.allocations.get(ip);
-			instructionContext.recordObject = records.objects.get(ip);
-			instructionContext.recordForward = records.forwards.get(ip);
-			instructionContext.recordAccess = records.accesses.get(ip);
-			instructionContext.recordObservers = records.observers.get(ip);
-			instructionContext.recordCall = records.calls.get(ip);
-			instructionContext.recordPasses = records.passes.get(ip);
-			instructionContext.fieldAllocation = fieldAllocations.get(ip);
-			instructionContext.fieldCall = fieldCallSites.get(ip);
+			if (activeActions !== undefined)
+				for (const { field, initial } of activeActions) setAction(field, initial);
+			activeActions = actionsByIp?.get(ip);
+			if (activeActions !== undefined)
+				for (const { field, value } of activeActions) setAction(field, value);
 			instructionContext.fieldThrowSlots =
 				activeFieldSlots.size === 0 ? EMPTY_ROOTED_OUTPUTS : [...activeFieldSlots];
-			instructionContext.callTransport = callTransportByIp.get(ip);
-			instructionContext.callbackTransport = callbackTransportByIp.get(ip);
-			instructionContext.mathCall = mathCalls.get(ip);
-			instructionContext.recordColumnsProducer = columnsProducers.get(ip);
 			const contextInstruction = fn.instructions[ip]!;
 			instructionContext.watchedMathCallee =
 				contextInstruction.opcode === "LOAD_PROPERTY_STATIC" &&
 				mathCalleeRegisters.has(contextInstruction.dst);
-			instructionContext.numberPredicate = numberPredicates.get(ip);
-			instructionContext.stringTransform = stringTransforms.get(ip);
-			instructionContext.arrayInitialization = arrayInitializations.get(ip);
-			instructionContext.mapEntry = mapEntries.get(ip);
-			instructionContext.objectEnumerationSnapshot = objectEnumerationSnapshots.get(ip);
-			instructionContext.indexedLengthLoopAction = indexedLengthLoopActionByIp.get(ip);
-			instructionContext.nativeArrayPresenceProjectionAction = arrayPresenceAction;
-			instructionContext.pairedArrayLoopAction = pairedArrayLoopActionByIp.get(ip);
-
-			instructionContext.nativeStringSplitProjectionAction =
-				nativeStringSplitProjectionActionByIp.get(ip);
-			instructionContext.nativeStringSplitCursorAction =
-				nativeStringSplitCursorActionByIp.get(ip);
-			instructionContext.stringSplitTrimLengthSite =
-				stringSplitTrimLengthSiteByIp.get(ip);
-			instructionContext.nativeRegExpExecProjectionAction =
-				nativeRegExpExecProjectionActionByIp.get(ip);
-			instructionContext.nativeRegExpIteratorProjectionAction =
-				nativeRegExpIteratorProjectionActionByIp.get(ip);
-			instructionContext.regexpLiteralAction = regexpLiteralActions.get(ip);
-			instructionContext.nativeStringSpanAction = nativeStringSpanActionByIp.get(ip);
-			instructionContext.nativeStringCharCodeAtChainAction =
-				nativeStringCharCodeAtChainActionByIp.get(ip);
-			instructionContext.nativeBuiltinCollectionCallChainAction =
-				nativeBuiltinCollectionCallChainActionByIp.get(ip);
-			instructionContext.nativeIteratorCursorAction =
-				nativeIteratorCursorActionByIp.get(ip);
-			instructionContext.deferredIteratorCursor = deferredIteratorCursors.has(
-				instructionContext.nativeIteratorCursorAction?.cursor.initializeIp ?? -1,
-			);
-			instructionContext.nativeArrayPairDestructureAction =
-				nativeArrayPairDestructureActionByIp.get(ip);
-			instructionContext.nativeIteratorResultVirtualizationAction =
-				nativeIteratorResultVirtualizationActionByIp.get(ip);
-			instructionContext.nativeIteratorEntryPairVirtualizationAction =
-				nativeIteratorEntryPairVirtualizationActionByIp.get(ip);
-			instructionContext.numericFusionAction = numericFusionActionByIp.get(ip);
-			instructionContext.numericFusionShadows = numericFusionShadows.get(ip);
-			instructionContext.numericFusionShadowed = numericFusionShadowedIps.has(ip);
-			instructionContext.staticPropertyProjectionAction =
-				nativeFastPaths.propertyReadPairActions.get(ip);
-			instructionContext.staticPropertyNumericAction =
-				staticPropertyNumericActionByIp.get(ip);
-			instructionContext.propertyNumericUpdateAction =
-				propertyNumericUpdateActionByIp.get(ip);
-			instructionContext.propertyNumericUpdateFacts =
-				instructionContext.propertyNumericUpdateAction === undefined
-					? undefined
-					: nativeFacts?.[
-							instructionContext.propertyNumericUpdateAction.plan.operationIp
-						];
-			instructionContext.propertyReadRegionAction = propertyReadRegionActionByIp.get(ip);
-			instructionContext.constructorInitializationAction =
-				constructorInitializationActionByIp.get(ip);
-			instructionContext.privateFieldReserveCount =
-				privateFieldReserve?.id === ip ? privateFieldReserve.count : undefined;
-			instructionContext.polymorphicMethodLoad = polymorphicMethodLoads.has(ip);
 			const scalarInputDeclarations: Array<string> = [];
 			let scalarInputValues: Map<number, string> | undefined;
 			const instruction = fn.instructions[ip]!;
@@ -10455,7 +10509,89 @@ interface NativeSlowPathFramePosition {
 	elided: boolean;
 }
 
-interface NativeInstructionContext {
+interface NativeInstructionActions {
+	readonly stackObjectSite?: StackObjectSite;
+	readonly stackObjectAccess?: { site: StackObjectSite; slot: number };
+	readonly stackObjectMaterialization?: StackObjectMaterialization;
+	/** Stack objects a C library call borrows as arguments, instead of heap copies. */
+	readonly stackObjectLends?: ReadonlyArray<StackObjectMaterialization>;
+	readonly stackObjectInheritedAccess?: StackObjectSite;
+	readonly constantBoolean?: boolean;
+	readonly fieldLoad?: {
+		readonly field: number;
+		readonly representation: VmRegisterRepresentation;
+	};
+	readonly fieldAllocation?: NativeFieldCall;
+	readonly fieldCall?: NativeFieldCall;
+	/** An object literal created in caller storage instead of on the heap. */
+	readonly recordObject?: NativeRecordSite;
+	/** A record entry hands this allocation's fields to its caller instead of creating it. */
+	readonly recordAllocation?: {
+		readonly fields: ReadonlyArray<number>;
+		readonly shape?: number;
+		readonly storage: ReadonlyArray<NativeRecordField>;
+	};
+	/** A record entry returns this call's record; its fields go to the entry's own caller storage. */
+	readonly recordForward?: ReadonlyArray<NativeRecordField>;
+	/** A record field read or written in caller storage. */
+	readonly recordAccess?: NativeRecordAccess;
+	/** Uses of records that need the objects. */
+	readonly recordObservers?: ReadonlyArray<NativeRecordObserver>;
+	/** The caller storage a record call's entry fills. */
+	readonly recordCall?: NativeRecordSite;
+	/** Records whose storage this call hands to its entry's record parameters. */
+	readonly recordPasses?: ReadonlyArray<NativeRecordPassSite>;
+	readonly callTransport?: NativeCallTransportPlan;
+	readonly callbackTransport?: NativeCallbackTransportPlan;
+	readonly mathCall: NativeMathCallPlan | undefined;
+	/**
+	 * The record columns whose privacy this `Array.from` call establishes once its callee
+	 * and receiver are the realm's own.
+	 */
+	readonly recordColumnsProducer?: string;
+	/** The loaded value is a callee guarded against several function identities. */
+	readonly polymorphicMethodLoad?: boolean;
+	readonly numberPredicate?: NativeNumberPredicatePlan;
+	readonly stringTransform?: NativeStringTransformPlan;
+	readonly arrayInitialization?: {
+		readonly allocationIp: number;
+		readonly mode: "prepared" | "incremental";
+		readonly values: ReadonlyArray<number>;
+	};
+	readonly mapEntry?: { readonly getIp: number; readonly setIp: number };
+	readonly objectEnumerationSnapshot?: NativeObjectEnumerationSnapshotSite;
+	readonly indexedLengthLoopAction?: IndexedLengthLoopAction;
+	readonly nativeArrayPresenceProjectionAction?: NativeArrayPresenceProjectionAction;
+	readonly pairedArrayLoopAction?: NativePairedArrayLoopAction;
+	readonly nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction;
+	readonly nativeStringSplitCursorAction?: NativeStringSplitCursorAction;
+	readonly stringSplitTrimLengthSite?: NativeStringSplitCursorSite;
+	readonly nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction;
+	readonly nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction;
+	readonly regexpLiteralAction?: NativeRegExpLiteralAction;
+	readonly nativeStringSpanAction?: NativeStringSpanAction;
+	readonly nativeStringCharCodeAtChainAction?: NativeStringCharCodeAtChainAction;
+	readonly nativeBuiltinCollectionCallChainAction?: NativeBuiltinCollectionCallChainAction;
+	readonly nativeIteratorCursorAction?: NativeIteratorCursorAction;
+	readonly deferredIteratorCursor: boolean;
+	readonly nativeArrayPairDestructureAction?: NativeArrayPairDestructureAction;
+	readonly nativeIteratorResultVirtualizationAction?: NativeIteratorResultVirtualizationAction;
+	readonly nativeIteratorEntryPairVirtualizationAction?: NativeIteratorEntryPairVirtualizationAction;
+	readonly numericFusionAction?: NativeNumericFusionAction;
+	/** Boxed registers whose numeric value a fused finish also left in its temporaries. */
+	readonly numericFusionShadows?: ReadonlyMap<number, number>;
+	/** The fused finish here keeps its result in the chain's temporaries for later reads. */
+	readonly numericFusionShadowed?: boolean;
+	readonly staticPropertyProjectionAction?: NativePropertyReadPairAction;
+	readonly staticPropertyNumericAction?: NativePropertyProjectionAction;
+	readonly propertyNumericUpdateAction?: NativePropertyNumericUpdateAction;
+	readonly propertyNumericUpdateFacts?: InstructionFacts;
+	readonly propertyReadRegionAction?: NativePropertyReadRegionAction;
+	readonly constructorInitializationAction?: NativeConstructorInitializationAction;
+	readonly privateFieldReserveCount?: number;
+}
+
+interface NativeInstructionContext extends NativeInstructionActions {
 	readonly scalarInputValues?: ReadonlyMap<number, string>;
 	readonly inactiveRootMaskStatements?: ReadonlyMap<NativeInactiveRootMask, string>;
 	readonly ownedCaptureFunctionIndex?: number;
@@ -10498,12 +10634,6 @@ interface NativeInstructionContext {
 	readonly guardedCallInactiveRootMask?: NativeInactiveRootMask;
 	readonly iteratorStepRootPublication?: boolean;
 	readonly iteratorStepInactiveRootMask?: NativeInactiveRootMask;
-	readonly stackObjectSite?: StackObjectSite;
-	readonly stackObjectAccess?: { site: StackObjectSite; slot: number };
-	readonly stackObjectMaterialization?: StackObjectMaterialization;
-	/** Stack objects a C library call borrows as arguments, instead of heap copies. */
-	readonly stackObjectLends?: ReadonlyArray<StackObjectMaterialization>;
-	readonly stackObjectInheritedAccess?: StackObjectSite;
 	readonly strictCompiledTargets: ReadonlySet<number>;
 	readonly directCompiledTargets: ReadonlySet<number>;
 	readonly directCompiledEntries: DirectCompiledEntries;
@@ -10511,89 +10641,16 @@ interface NativeInstructionContext {
 	readonly onFastTryLookup?: (target: number, resultKind?: "undefined") => void;
 	readonly directResultRepresentation?: VmRegisterRepresentation;
 	readonly directArgumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
-	readonly constantBoolean?: boolean;
-	readonly fieldLoad?: {
-		readonly field: number;
-		readonly representation: VmRegisterRepresentation;
-	};
-	readonly fieldAllocation?: NativeFieldCall;
-	readonly fieldCall?: NativeFieldCall;
 	readonly fieldEntryCall?: NativeFieldCall;
 	readonly fieldThrowSlots?: ReadonlyArray<number>;
-	/** An object literal created in caller storage instead of on the heap. */
-	readonly recordObject?: NativeRecordSite;
-	/** A record entry hands this allocation's fields to its caller instead of creating it. */
-	readonly recordAllocation?: {
-		readonly fields: ReadonlyArray<number>;
-		readonly shape?: number;
-		readonly storage: ReadonlyArray<NativeRecordField>;
-	};
-	/** A record entry returns this call's record; its fields go to the entry's own caller storage. */
-	readonly recordForward?: ReadonlyArray<NativeRecordField>;
 	/** Forwarded calls that reached the callee's record entry with that storage. */
 	readonly recordForwarded?: Set<number>;
-	/** A record field read or written in caller storage. */
-	readonly recordAccess?: NativeRecordAccess;
-	/** Uses of records that need the objects. */
-	readonly recordObservers?: ReadonlyArray<NativeRecordObserver>;
-	/** The caller storage a record call's entry fills. */
-	readonly recordCall?: NativeRecordSite;
-	/** Records whose storage this call hands to its entry's record parameters. */
-	readonly recordPasses?: ReadonlyArray<NativeRecordPassSite>;
-	readonly callTransport?: NativeCallTransportPlan;
-	readonly callbackTransport?: NativeCallbackTransportPlan;
-	readonly mathCall: NativeMathCallPlan | undefined;
-	/**
-	 * The record columns whose privacy this `Array.from` call establishes once its callee
-	 * and receiver are the realm's own.
-	 */
-	readonly recordColumnsProducer?: string;
 	/** The load reads a callee that a guarded Math call checks, so its row is a watched intrinsic. */
 	readonly watchedMathCallee?: boolean;
-	/** The loaded value is a callee guarded against several function identities. */
-	readonly polymorphicMethodLoad?: boolean;
 	readonly stringComparisons?: ReadonlyMap<number, NativeStringComparisonPlan>;
-	readonly numberPredicate?: NativeNumberPredicatePlan;
-	readonly stringTransform?: NativeStringTransformPlan;
-	readonly arrayInitialization?: {
-		readonly allocationIp: number;
-		readonly mode: "prepared" | "incremental";
-		readonly values: ReadonlyArray<number>;
-	};
-	readonly mapEntry?: { readonly getIp: number; readonly setIp: number };
-	readonly objectEnumerationSnapshot?: NativeObjectEnumerationSnapshotSite;
 	readonly mappedArguments: boolean;
 	readonly mappedArgumentSlots: ReadonlyArray<number>;
 	readonly hasPrototype: boolean;
-	readonly indexedLengthLoopAction?: IndexedLengthLoopAction;
-	readonly nativeArrayPresenceProjectionAction?: NativeArrayPresenceProjectionAction;
-	readonly pairedArrayLoopAction?: NativePairedArrayLoopAction;
-	readonly nativeStringSplitProjectionAction?: NativeStringSplitProjectionAction;
-	readonly nativeStringSplitCursorAction?: NativeStringSplitCursorAction;
-	readonly stringSplitTrimLengthSite?: NativeStringSplitCursorSite;
-	readonly nativeRegExpExecProjectionAction?: NativeRegExpExecProjectionAction;
-	readonly nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction;
-	readonly regexpLiteralAction?: NativeRegExpLiteralAction;
-	readonly nativeStringSpanAction?: NativeStringSpanAction;
-	readonly nativeStringCharCodeAtChainAction?: NativeStringCharCodeAtChainAction;
-	readonly nativeBuiltinCollectionCallChainAction?: NativeBuiltinCollectionCallChainAction;
-	readonly nativeIteratorCursorAction?: NativeIteratorCursorAction;
-	readonly deferredIteratorCursor: boolean;
-	readonly nativeArrayPairDestructureAction?: NativeArrayPairDestructureAction;
-	readonly nativeIteratorResultVirtualizationAction?: NativeIteratorResultVirtualizationAction;
-	readonly nativeIteratorEntryPairVirtualizationAction?: NativeIteratorEntryPairVirtualizationAction;
-	readonly numericFusionAction?: NativeNumericFusionAction;
-	/** Boxed registers whose numeric value a fused finish also left in its temporaries. */
-	readonly numericFusionShadows?: ReadonlyMap<number, number>;
-	/** The fused finish here keeps its result in the chain's temporaries for later reads. */
-	readonly numericFusionShadowed?: boolean;
-	readonly staticPropertyProjectionAction?: NativePropertyReadPairAction;
-	readonly staticPropertyNumericAction?: NativePropertyProjectionAction;
-	readonly propertyNumericUpdateAction?: NativePropertyNumericUpdateAction;
-	readonly propertyNumericUpdateFacts?: InstructionFacts;
-	readonly propertyReadRegionAction?: NativePropertyReadRegionAction;
-	readonly constructorInitializationAction?: NativeConstructorInitializationAction;
-	readonly privateFieldReserveCount?: number;
 	/**
 	 * The instruction's pending frame-position store. An emitter whose fast path cannot
 	 * throw may move it into its slow path by marking it consumed; otherwise it
