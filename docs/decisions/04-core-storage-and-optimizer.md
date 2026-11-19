@@ -189,10 +189,12 @@ cached results or lazy dependencies.
 
 Static-value consumers share proofs of absence for unsupported producer shapes and
 slots with neither a direct writer nor a closed-cell proof path. A move, call, or
-property read can inherit absence from an operand it needs. A definition edit
-retracts the proof along the SSA use chains, and a direct writer edit retracts the
-slot proofs for that function. Positive observations belong to their analysis
-snapshot and are verified there before a pass applies them.
+property read can inherit absence from an operand with its own proof. An incoming
+rejection at a join is scoped to the current analysis because an edge edit can
+replace that argument. A definition edit retracts the proof along the SSA use
+chains, and a direct writer edit retracts the slot proofs for that function.
+Positive observations belong to their analysis snapshot and are verified there
+before a pass applies them.
 
 Repeated-load consumers first match opcode, operands, attributes, representation,
 and dominance. Only then do they request complete memory equivalence. Candidate

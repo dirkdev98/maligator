@@ -812,6 +812,57 @@ describe("static descriptions and allocation identities", () => {
 		expect(constant()).toBeUndefined();
 	});
 
+	it("reconsiders an alias when a rejected incoming block argument changes", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const left = builder.createBlock();
+		const right = builder.createBlock();
+		const join = builder.createBlock([{}]);
+		const [seven] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		const [loaded] = builder.appendInstruction(left, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		builder.setTerminator(entry, {
+			kind: "branch",
+			condition: builder.blockParameterValue(entry, 0),
+			consequent: { block: left, arguments: [] },
+			alternate: { block: right, arguments: [] },
+		});
+		builder.setTerminator(left, {
+			kind: "jump",
+			edge: { block: join, arguments: [loaded!] },
+		});
+		builder.setTerminator(right, {
+			kind: "jump",
+			edge: { block: join, arguments: [seven!] },
+		});
+		const [alias] = builder.appendInstruction(join, "move", [
+			builder.blockParameterValue(join, 0),
+		]);
+		builder.setTerminator(join, { kind: "return", value: alias! });
+		const fn = program.function(builder.finish(entry).function);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(false),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const constant = () =>
+			manager
+				.get(CORE_STATIC_VALUE_ANALYSIS, { scope: "function", function: fn.id })
+				.constant(alias!);
+		expect(constant()).toBeUndefined();
+		const edit = CoreEditor.open(program, fn.id);
+		edit.replaceTerminator(left, {
+			kind: "jump",
+			edge: { block: join, arguments: [seven!] },
+		});
+		edit.commit();
+		expect(constant()).toEqual({ kind: "number", value: 7 });
+	});
+
 	it("interns equal recipes without equating separately evaluated objects or aliases", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);

@@ -681,6 +681,10 @@ export class CoreStaticValueAnalysis {
 			this.#visiting.add(value);
 			try {
 				result = this.#describe(value, requestedKey);
+				// Reusing a rejection requires a witness on this value. A join can
+				// encounter a rejected incoming value without owning its proof.
+				if (result === EXCLUDED_PRODUCER && !this.#exclusions?.has(value))
+					result = UNSUPPORTED_PRODUCER;
 			} finally {
 				this.#visiting.delete(value);
 			}
