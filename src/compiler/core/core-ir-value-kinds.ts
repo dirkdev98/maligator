@@ -84,6 +84,7 @@ import type {
 	CoreBlockId,
 	CoreInstructionEffects,
 	CoreInstructionId,
+	CoreOpcodeRegistry,
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
@@ -1691,13 +1692,49 @@ export type CoreProgramValueKindState = CoreProgramFlowValueKindState<
 	CoreCallGraphIndex
 >;
 
+export const CORE_VALUE_KIND_OBSERVATION_OPCODE_NAMES = [
+	"unary",
+	"binary",
+	"typeofCompare",
+	"callKnown",
+] as const;
+
+type CoreValueKindObservationOpcode =
+	(typeof CORE_VALUE_KIND_OBSERVATION_OPCODE_NAMES)[number];
+const observationOpcodesByRegistry = new WeakMap<
+	CoreOpcodeRegistry,
+	ReadonlyArray<CoreValueKindObservationOpcode | undefined>
+>();
+
+export function coreValueKindObservationOpcodes(
+	registry: CoreOpcodeRegistry,
+): ReadonlyArray<CoreValueKindObservationOpcode | undefined> {
+	const prior = observationOpcodesByRegistry.get(registry);
+	if (prior !== undefined) return prior;
+	const names: Array<CoreValueKindObservationOpcode | undefined> = [];
+	let complete = true;
+	for (const name of CORE_VALUE_KIND_OBSERVATION_OPCODE_NAMES) {
+		const opcode = registry.get(name)?.id;
+		if (opcode === undefined) complete = false;
+		else names[opcode] = name;
+	}
+	// A partial registry can still register a missing opcode. Assigned IDs are permanent.
+	if (complete) observationOpcodesByRegistry.set(registry, names);
+	return names;
+}
+
 export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSemantics<CoreProgramFunctionValueKinds> =
 	Object.freeze({
 		observationValues(program: CoreProgram, fn: CoreFunctionStore) {
 			const values = new Set<CoreValueId>(coreRecordReturnKindInputs(fn));
+			const observationOpcodes = coreValueKindObservationOpcodes(fn.registry);
 			for (const instruction of fn.instructionIds()) {
-				const key = coreWeakCollectionKey(fn, instruction)?.input;
-				if (key !== undefined) values.add(key);
+				const opcode = observationOpcodes[fn.kernel.instructionOpcode(instruction)];
+				if (opcode === undefined) continue;
+				if (opcode === "callKnown") {
+					const key = coreWeakCollectionKey(fn, instruction)?.input;
+					if (key !== undefined) values.add(key);
+				}
 				coreValueKindObservation(program, fn, instruction, (value) => {
 					values.add(value);
 					return COMPILER_VALUE_KIND_TOP;

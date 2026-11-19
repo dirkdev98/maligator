@@ -67,6 +67,7 @@ import {
 	analyzeCoreValueKinds,
 	coreValueKindObservation,
 	coreValueKindObservationCandidate,
+	CORE_VALUE_KIND_OBSERVATION_OPCODE_NAMES,
 } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import {
@@ -1342,10 +1343,10 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 const foldValueKindObservations: CoreFunctionPass = {
 	name: "value-kind-observation-folding",
 	stage: "canonicalize",
-	requiredFunctionOpcodesAny: ["unary", "binary", "typeofCompare", "callKnown"],
+	requiredFunctionOpcodesAny: CORE_VALUE_KIND_OBSERVATION_OPCODE_NAMES,
 	candidates: {
 		dependencies: ["body"],
-		opcodes: ["unary", "binary", "typeofCompare", "callKnown"],
+		opcodes: CORE_VALUE_KIND_OBSERVATION_OPCODE_NAMES,
 		matches(fn, instruction, opcode) {
 			if (coreValueKindObservationCandidate(fn, instruction, opcode)) return true;
 			const key = coreWeakCollectionKey(fn, instruction);

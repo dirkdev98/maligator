@@ -115,6 +115,7 @@ import {
 	coreValueKindDemand,
 	coreInstructionResultIntegerRange,
 	coreValueKindObservation,
+	coreValueKindObservationOpcodes,
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
 } from "./core-ir-value-kinds.ts";
 import type {
@@ -4767,6 +4768,8 @@ function discoverProgramValueKindObservations(
 	const foldsByCaller = new Map<CoreFunctionId, ReadonlyArray<CoreValueKindFold>>();
 	const pending = new Map<CoreFunctionId, Array<CoreInstructionId>>();
 	const identity = createProgramValueIdentityQuery(program, analyses, flow);
+	const observationOpcodes = coreValueKindObservationOpcodes(program.registry);
+	const callOpcode = program.registry.get("call")?.id;
 	const integerRange = (
 		functionId: CoreFunctionId,
 		value: CoreValueId,
@@ -4806,10 +4809,12 @@ function discoverProgramValueKindObservations(
 		for (let index = 0; index < fn.instructionCapacity; index++) {
 			const instruction = index as CoreInstructionId;
 			if (fn.kernel.instructionLive(instruction) === 0) continue;
-			if (fn.instructionKind(instruction) !== "operation") continue;
+			const opcodeId = fn.kernel.instructionOpcode(instruction);
+			const opcode = observationOpcodes[opcodeId];
+			if (opcode === undefined && opcodeId !== callOpcode) continue;
 			demand = false;
 			if (
-				fn.instructionOpcodeName(instruction) === "unary" &&
+				opcode === "unary" &&
 				fn.instructionAttributes(instruction).operator === "typeof" &&
 				fn.kernel.instructionOperandCount(instruction) === 1 &&
 				callability(
@@ -4820,7 +4825,7 @@ function discoverProgramValueKindObservations(
 				continue;
 			}
 			const normal =
-				fn.instructionOpcodeName(instruction) === "callKnown" &&
+				opcode === "callKnown" &&
 				fn.kernel.instructionResultCount(instruction) === 1 &&
 				fn.valueUseCount(
 					fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
@@ -4835,21 +4840,23 @@ function discoverProgramValueKindObservations(
 				folds.push({ instruction, normal });
 				continue;
 			}
-			const result = coreValueKindObservation(
-				program,
-				fn,
-				instruction,
-				kindMask,
-				range,
-				root,
-				undefined,
-				callability,
-			);
+			const result =
+				opcode === undefined
+					? undefined
+					: coreValueKindObservation(
+							program,
+							fn,
+							instruction,
+							kindMask,
+							range,
+							root,
+							undefined,
+							callability,
+						);
 			if (result !== undefined) {
 				folds.push({ instruction, result });
 				continue;
 			}
-			const opcode = fn.instructionOpcodeName(instruction);
 			let firstOperand: number | undefined;
 			if (opcode === "binary") {
 				const operator = fn.instructionAttributes(instruction).operator;
@@ -4860,7 +4867,7 @@ function discoverProgramValueKindObservations(
 					operator === "!=="
 				)
 					firstOperand = 0;
-			} else if (opcode === "call") {
+			} else if (opcode === undefined) {
 				const builtin = fn.instructionAttributes(instruction).knownBuiltinCall as
 					| { operation?: string }
 					| undefined;
@@ -4878,7 +4885,7 @@ function discoverProgramValueKindObservations(
 					const preferred = compilerValueKindMaskIsSubset(kindMask(right), kindMask(left))
 						? firstOperand + 1
 						: firstOperand;
-					folds.push({ instruction, opcode, firstOperand, preferred });
+					folds.push({ instruction, opcode: opcode ?? "call", firstOperand, preferred });
 					continue;
 				}
 			}
