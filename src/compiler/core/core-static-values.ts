@@ -434,9 +434,17 @@ export class CoreStaticValueExclusions {
 		return this.#dependencies[value] !== undefined;
 	}
 
-	record(value: CoreValueId, dependency: StaticValueExclusion): void {
+	record(value: CoreValueId, dependency: StaticValueExclusion): boolean {
+		// A metadata edit can retract a witness while the cached analysis stays current.
+		if (
+			dependency !== UNSUPPORTED_DEFINITION &&
+			dependency !== UNWRITTEN_SLOT &&
+			!this.has(dependency)
+		)
+			return false;
 		this.#dependencies[value] = dependency;
 		if (dependency === UNWRITTEN_SLOT) this.#slotLoads.add(value);
+		return true;
 	}
 
 	invalidateProducer(fn: CoreFunctionStore, instruction: CoreInstructionId): void {
@@ -2766,8 +2774,9 @@ export class CoreStaticValueAnalysis {
 	#exclude(value: CoreValueId, dependency: StaticValueExclusion): CoreStaticValueResult {
 		if (this.#exclusions === undefined || this.#fn.hasActiveEditor)
 			return UNSUPPORTED_PRODUCER;
-		this.#exclusions.record(value, dependency);
-		return EXCLUDED_PRODUCER;
+		return this.#exclusions.record(value, dependency)
+			? EXCLUDED_PRODUCER
+			: UNSUPPORTED_PRODUCER;
 	}
 
 	inherited(value: CoreStaticValue, key: PrimordialKey) {

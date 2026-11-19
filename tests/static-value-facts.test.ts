@@ -863,6 +863,38 @@ describe("static descriptions and allocation identities", () => {
 		expect(constant()).toEqual({ kind: "number", value: 7 });
 	});
 
+	it("reconsiders an alias queried after its producer's normal-result facts change", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const [result] = builder.appendInstruction(
+			entry,
+			"callForeign",
+			[builder.blockParameterValue(entry, 0)],
+			{ attributes: { foreignSlot: 3 } },
+		);
+		const producer = builder.bodyInstructionIds(entry).at(-1)!;
+		const [alias] = builder.appendInstruction(entry, "move", [result!]);
+		builder.setTerminator(entry, { kind: "return", value: alias! });
+		const fn = program.function(builder.finish(entry).function);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(false),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const analysis = () =>
+			manager.get(CORE_STATIC_VALUE_ANALYSIS, { scope: "function", function: fn.id });
+		expect(analysis().constant(result!)).toBeUndefined();
+		const metadata = CoreEditor.open(program, fn.id);
+		metadata.setNormalResultFacts(producer, { mask: COMPILER_VALUE_KIND_NUMBER });
+		metadata.commit();
+		expect(analysis().constant(alias!)).toBeUndefined();
+		const edit = CoreEditor.open(program, fn.id);
+		edit.replaceInstruction(producer, "createNumber", [], { attributes: { value: 7 } });
+		edit.commit();
+		expect(analysis().constant(alias!)).toEqual({ kind: "number", value: 7 });
+	});
+
 	it("interns equal recipes without equating separately evaluated objects or aliases", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);
