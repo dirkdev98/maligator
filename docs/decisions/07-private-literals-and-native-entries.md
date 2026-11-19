@@ -33,6 +33,14 @@ every reachable call selects a typed entry, both the canonical C body and its by
 are omitted from the native image. Function identity and diagnostic metadata remain.
 Interpreted images and relocatable overlays retain their executable bodies.
 
+The emission plan records call, callback, and closure dependencies before
+rendering. Availability rounds reuse a rendered body while the capabilities it
+consumes agree. Fast-entry probes observe callees reachable from their current
+prefix and retain dependencies that can reserve relocation slots. A newly
+available callee can extend the prefix and expose further dependencies. A
+translation-unit size retry reapplies symbol exclusions to the prepared plan and
+reuses unchanged render results.
+
 Calls that stay generic, such as a method read from a prototype, can still reach a
 typed entry through the callee. A looping function whose parameters seed a loop
 recurrence and are never used as objects gets a Number variant, and its canonical

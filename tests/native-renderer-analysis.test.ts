@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { parseModule } from "../src/compiler/frontend/parser.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	createNativeFunctionRenderer,
 	directCompiledEntryKey,
@@ -45,6 +49,63 @@ const cases = [
 ] as const;
 
 describe("native rendering analysis lifetime", () => {
+	it("discovers downstream fast-entry dependencies when an earlier callee becomes available", () => {
+		const source = `const first = (value) => value + 1;
+			const second = (value) => value * 2;
+			function caller(value) { return second(first(value)); }
+			globalThis.result = caller(globalThis.input);`;
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				source,
+				"/fast-entry-dependencies.mjs",
+				parseModule(source),
+			),
+			{
+				facts: compilerProgramFactsFromConfig(
+					resolveBuildConfig({
+						engine: { primordials: "locked", eval: false, realms: false },
+					}),
+				),
+				coreOptimizationBenchmarkAblation: { family: "inlining-cross-call" },
+			},
+		);
+		const functionNamed = (name: string) =>
+			image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+		const caller = functionNamed("caller");
+		const first = functionNamed("first").functionIndex;
+		const second = functionNamed("second").functionIndex;
+		const lookups = new Set<number>();
+		const render = createNativeFunctionRenderer((_caller, target, kind) => {
+			if (kind === undefined) lookups.add(target);
+		});
+		const args: Parameters<typeof emitCompiledFunction> = [
+			caller,
+			caller.functionIndex,
+			"",
+			false,
+			"static",
+			new Set([first, second]),
+		];
+		const abi = { result: { kind: "boxed" } } as const;
+
+		expect(render(...args)?.trySymbol).toBeUndefined();
+		expect(lookups).toEqual(new Set([first]));
+		lookups.clear();
+		args[16] = new Map([[first, abi]]);
+		expect(render(...args)?.trySymbol).toBeUndefined();
+		expect(lookups).toEqual(new Set([first, second]));
+		args[16] = new Map([
+			[first, abi],
+			[second, abi],
+		]);
+		expect(render(...args)?.trySymbol).toBeDefined();
+	});
+
 	it("reports unavailable fast callees so later availability can reopen admission", () => {
 		const image = compileEntrypoint(
 			new URL("./local/frameless-forward-call.js", import.meta.url).pathname,

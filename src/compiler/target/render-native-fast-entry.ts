@@ -111,6 +111,7 @@ export function nativeFastTryParameterList(abi: NativeFastTryAbi): string {
 export interface NativeFastEntryInput {
 	readonly onSourceMap?: (ranges: ReadonlyArray<NativeSourceRange>) => void;
 	readonly onTryAbi?: (abi: NativeFastTryAbi) => void;
+	readonly onProbeReachability?: (reachable: Pick<ReadonlySet<number>, "has">) => void;
 	readonly fn: BytecodeFunction;
 	readonly facts: NativeFunctionPlan["facts"];
 	readonly instructions: NativeFunctionPlan["instructions"];
@@ -235,6 +236,7 @@ export function renderNativeFastEntry(
 			rejected.add(ip);
 	}
 	let graph = fastEntryGraph(fn.instructions, branches, unreachable, rejected);
+	input.onProbeReachability?.(graph);
 	const cyclicHeaders = cyclicFastEntryHeaders(graph);
 	for (const header of cyclicHeaders) rejected.add(header);
 	if (cyclicHeaders.size > 0)

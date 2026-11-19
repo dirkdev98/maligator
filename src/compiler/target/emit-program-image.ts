@@ -31,7 +31,7 @@ import {
 	createNativeFunctionRenderer,
 	numericSortKernelDeclaration,
 	numericReductionDeclaration,
-	numericSortKernelDemand,
+	numericSortSite,
 	nativeDirectClosureKey,
 } from "./render-native-c.ts";
 import type {
@@ -702,9 +702,12 @@ function handlerArrayRows(fn: RuntimeImage["functions"][number]): Array<string> 
  */
 export function emitProgramImage(image: ProgramImage, options: EmitOptions = {}) {
 	return [
-		...emitProgramImageParts(image, options, false).parts.map((part) =>
-			typeof part === "string" ? part : part.join("\n"),
-		),
+		...emitProgramImageParts(
+			image,
+			options,
+			false,
+			prepareProgramImageNativeEmission(image, options, false)(),
+		).parts.map((part) => (typeof part === "string" ? part : part.join("\n"))),
 		...inlineAssetData(options),
 	].join("\n");
 }
@@ -723,8 +726,7 @@ export function emitProgramImageWithSourceMap(
 		image,
 		options,
 		false,
-		undefined,
-		undefined,
+		prepareProgramImageNativeEmission(image, options, false, undefined, true)(),
 		true,
 	);
 	const parts = [
@@ -807,6 +809,7 @@ interface NativeCompilationAvailability {
 		string,
 		ProgramImage["native"]["functions"][number]["directEntries"][number] & {
 			readonly leaf?: true;
+			readonly sortMayDecline?: true;
 		}
 	>;
 }
@@ -822,6 +825,7 @@ interface NativeDirectClosureSite {
 
 function nativeDirectClosureSites(
 	image: ProgramImage,
+	uses: ReadonlyArray<NativeCallSite>,
 ): Map<string, NativeDirectClosureSite> {
 	const creations = new Map<
 		string,
@@ -836,41 +840,42 @@ function nativeDirectClosureSites(
 		participants.add(functionIndex);
 		functions.set(key, participants);
 	};
-	for (const [functionIndex, native] of image.native.functions.entries())
-		for (const [ip, plan] of native.instructions.entries()) {
-			const instruction = native.body.instructions[ip];
-			if (plan?.kind === "direct-closure" && instruction?.opcode === "CREATE_FUNCTION") {
-				const key = nativeDirectClosureKey(instruction.functionIndex, functionIndex);
-				creations.set(key, { target: instruction.functionIndex, owner: functionIndex });
-				participate(key, functionIndex);
-			} else if (
-				plan?.kind === "closure-materialization" &&
-				instruction?.opcode === "LOAD_CAPTURED"
-			) {
-				participate(
-					nativeDirectClosureKey(plan.functionIndex, instruction.ownerFunctionIndex),
-					functionIndex,
-				);
-			} else if (
-				plan?.kind === "call" &&
-				plan.directClosureOwner !== undefined &&
-				plan.directFunctionIndex !== undefined
-			) {
-				const key = nativeDirectClosureKey(
-					plan.directFunctionIndex,
-					plan.directClosureOwner,
-				);
-				participate(key, functionIndex);
-				called.add(key);
-				for (const entry of native.directEntries)
-					for (const call of entry.callOverrides ?? [])
-						if (
-							call.instructionIp === ip &&
-							(call.guarded === true || call.functionIndex !== plan.directFunctionIndex)
-						)
-							guarded.add(key);
-			}
+	for (const { functionIndex, ip } of uses) {
+		const native = image.native.functions[functionIndex]!;
+		const plan = native.instructions[ip];
+		const instruction = native.body.instructions[ip];
+		if (plan?.kind === "direct-closure" && instruction?.opcode === "CREATE_FUNCTION") {
+			const key = nativeDirectClosureKey(instruction.functionIndex, functionIndex);
+			creations.set(key, { target: instruction.functionIndex, owner: functionIndex });
+			participate(key, functionIndex);
+		} else if (
+			plan?.kind === "closure-materialization" &&
+			instruction?.opcode === "LOAD_CAPTURED"
+		) {
+			participate(
+				nativeDirectClosureKey(plan.functionIndex, instruction.ownerFunctionIndex),
+				functionIndex,
+			);
+		} else if (
+			plan?.kind === "call" &&
+			plan.directClosureOwner !== undefined &&
+			plan.directFunctionIndex !== undefined
+		) {
+			const key = nativeDirectClosureKey(
+				plan.directFunctionIndex,
+				plan.directClosureOwner,
+			);
+			participate(key, functionIndex);
+			called.add(key);
+			for (const entry of native.directEntries)
+				for (const call of entry.callOverrides ?? [])
+					if (
+						call.instructionIp === ip &&
+						(call.guarded === true || call.functionIndex !== plan.directFunctionIndex)
+					)
+						guarded.add(key);
 		}
+	}
 	const sites = new Map<string, NativeDirectClosureSite>();
 	for (const [key, { target, owner }] of creations) {
 		const closure = image.runtime.functions[target]!;
@@ -906,46 +911,14 @@ function nativeDirectClosureSites(
 function nativeCompilationAvailability(
 	image: ProgramImage,
 	compiled: ReadonlyArray<CompiledFunction | null>,
-	closureSites: ReadonlyMap<string, NativeDirectClosureSite> = new Map(),
+	plan: NativeEmissionReferences,
 ): NativeCompilationAvailability {
-	const compiledTargets = new Set<number>();
-	compiled.forEach((fn, index) => {
-		if (fn !== null) compiledTargets.add(index);
-	});
 	const directCompiledTargets = new Set<number>();
-	for (const [callerIndex, native] of image.native.functions.entries()) {
-		if (!compiledTargets.has(callerIndex)) continue;
-		for (const instruction of native.instructions) {
-			if (instruction?.kind !== "call") continue;
-			for (const target of [
-				instruction.directFunctionIndex,
-				instruction.directCallbackFunctionIndex,
-				...(instruction.numericSortCallback?.entries.map(
-					(entry) => entry.functionIndex,
-				) ?? []),
-				instruction.directCallTargetFunctionIndex,
-				...(instruction.guardedFunctionIndices ?? []),
-			]) {
-				if (
-					target !== undefined &&
-					compiledTargets.has(target) &&
-					compiled[target]!.source.length > 0 &&
-					!image.runtime.functions[target]!.isClassConstructor
-				) {
-					directCompiledTargets.add(target);
-				}
-			}
-		}
-		for (const entry of native.directEntries) {
-			for (const call of entry.callOverrides ?? []) {
-				if (
-					compiledTargets.has(call.functionIndex) &&
-					compiled[call.functionIndex]!.source.length > 0 &&
-					!image.runtime.functions[call.functionIndex]!.isClassConstructor
-				) {
-					directCompiledTargets.add(call.functionIndex);
-				}
-			}
+	for (const [caller, fn] of compiled.entries()) {
+		if (fn === null) continue;
+		for (const target of plan.functions[caller]!.directTargets) {
+			if (compiled[target] !== null && compiled[target]!.source.length > 0)
+				directCompiledTargets.add(target);
 		}
 	}
 	const directCompiledEntries: NativeCompilationAvailability["directCompiledEntries"] =
@@ -971,7 +944,7 @@ function nativeCompilationAvailability(
 		if (compiled[target]?.trySymbol !== undefined)
 			fastTryTargets.set(target, compiled[target].tryAbi!);
 	const directClosures = new Map<string, NativeDirectClosureEnvironment>();
-	for (const [key, site] of closureSites)
+	for (const [key, site] of plan.closureSites)
 		if (
 			site.environment !== undefined &&
 			(!site.called || directCompiledTargets.has(site.target)) &&
@@ -982,51 +955,28 @@ function nativeCompilationAvailability(
 }
 
 function omitUnreachableCanonicalBodies(
-	image: ProgramImage,
 	compiled: Array<CompiledFunction | null>,
+	references: NativeEmissionReferences,
 ): Array<CompiledFunction | null> {
-	const removable = new Set(
-		image.native.functions.flatMap((fn, index) =>
-			fn.specializedOnly === true &&
-			compiled[index] !== null &&
-			compiled[index]!.directEntries.length > 0
-				? [index]
-				: [],
-		),
-	);
-	if (removable.size === 0) return compiled;
-	// Each emitted caller variant must select a typed entry for every private target.
-	for (const [caller, native] of image.native.functions.entries()) {
-		if (removable.size === 0) return compiled;
-		const emitted = compiled[caller];
-		const variants =
-			emitted === null || emitted === undefined
-				? []
-				: [emitted, ...emitted.directEntries];
-		for (const [ip, instruction] of native.instructions.entries()) {
-			if (instruction?.kind !== "call") continue;
-			if (instruction.directCallbackFunctionIndex !== undefined)
-				removable.delete(instruction.directCallbackFunctionIndex);
-			for (const target of [
-				instruction.directFunctionIndex,
-				...(instruction.guardedFunctionIndices ?? []),
-			]) {
-				if (target === undefined || !removable.has(target)) continue;
-				if (
-					variants.length === 0 ||
-					variants.some(
-						(variant) =>
-							variant.emittedInstructions.has(ip) &&
-							!variant.directEntryCalls.get(ip)?.has(target),
-					)
+	return compiled.map((fn, target) => {
+		const sites = references.canonicalReferences[target];
+		if (fn === null || fn.directEntries.length === 0 || sites === undefined) return fn;
+		if (references.callbackCanonicalTargets.has(target)) return fn;
+		for (const { functionIndex, ip } of sites) {
+			const caller = compiled[functionIndex];
+			if (
+				caller === null ||
+				caller === undefined ||
+				[caller, ...caller.directEntries].some(
+					(variant) =>
+						variant.emittedInstructions.has(ip) &&
+						!variant.directEntryCalls.get(ip)?.has(target),
 				)
-					removable.delete(target);
-			}
+			)
+				return fn;
 		}
-	}
-	return compiled.map((fn, index) =>
-		fn !== null && removable.has(index) ? { ...fn, source: "" } : fn,
-	);
+		return { ...fn, source: "" };
+	});
 }
 
 function compiledAvailabilityMatches(
@@ -1056,60 +1006,43 @@ function compiledAvailabilityMatches(
 	return true;
 }
 
-function emitNativeFunctions(
-	image: ProgramImage,
-	options: {
-		useCompiled: boolean;
-		suffix: string;
-		debug: boolean;
-		captureSourceMap?: boolean;
-		linkage: "static" | "external";
-		maxCodeUnits?: number;
-		/** Definitions that do not fit one translation unit with their declarations. */
-		excludedSymbols?: ReadonlySet<string>;
-		/** Index-stable emission, naming each function by its stem. */
-		symbolStems?: ReadonlyArray<string>;
-		/** C expression for the relocation a spliced overlay's link slots are relative to. */
-		relocation?: string;
-		nativeFunctionSplit?: NativeSplitPolicy;
-		onRendererBailout?: EmitOptions["onRendererBailout"];
-	},
-): {
-	compiled: Array<CompiledFunction | null>;
-	availability: NativeCompilationAvailability;
-} {
-	const headerCodeUnits = NATIVE_C_HEADER_LINES.join("\n").length + 1;
-	const importedGlobals =
-		options.relocation === undefined ? undefined : nativeImportedGlobals(image.runtime);
-	const fits = (source: string): boolean =>
-		options.maxCodeUnits === undefined ||
-		source.length + headerCodeUnits <= options.maxCodeUnits;
-	const callbackEntries = new Set(
-		image.native.functions.flatMap((native) =>
-			[native.storage, ...native.directEntries.map((entry) => entry.storage)].flatMap(
-				(storage) =>
-					(storage?.callbackTransports ?? []).map((plan) =>
-						directCompiledEntryKey(plan.functionIndex, plan.entryId),
-					),
-			),
-		),
+interface NativeCallSite {
+	readonly functionIndex: number;
+	readonly ip: number;
+}
+
+interface NativeFunctionEmissionReferences {
+	readonly targets: ReadonlyArray<number>;
+	readonly entries: ReadonlyArray<string>;
+	readonly directTargets: ReadonlyArray<number>;
+	readonly sortEntries: ReadonlySet<string> | undefined;
+}
+
+interface NativeEmissionReferences {
+	readonly functions: ReadonlyArray<NativeFunctionEmissionReferences>;
+	readonly closureSites: ReadonlyMap<string, NativeDirectClosureSite>;
+	readonly callbackEntries: ReadonlySet<string>;
+	readonly reductionEntries: ReadonlySet<string>;
+	readonly sortKernelEntries: ReadonlySet<string>;
+	readonly canonicalReferences: ReadonlyArray<ReadonlyArray<NativeCallSite> | undefined>;
+	readonly callbackCanonicalTargets: ReadonlySet<number>;
+}
+
+function prepareNativeEmissionReferences(image: ProgramImage): NativeEmissionReferences {
+	const callbackEntries = new Set<string>();
+	const reductionEntries = new Set<string>();
+	const sortKernelEntries = new Set<string>();
+	const callbackCanonicalTargets = new Set<number>();
+	const canonicalReferences = image.native.functions.map((native) =>
+		native.specializedOnly === true ? ([] as Array<NativeCallSite>) : undefined,
 	);
-	const reductionEntries = new Set(
-		image.native.functions.flatMap((native) =>
-			[native.storage, ...native.directEntries.map((entry) => entry.storage)].flatMap(
-				(storage) =>
-					(storage?.callbackTransports ?? []).flatMap((plan) =>
-						plan.numericReduction === true
-							? [directCompiledEntryKey(plan.functionIndex, plan.entryId)]
-							: [],
-					),
-			),
-		),
-	);
-	const sortKernelEntries = numericSortKernelDemand(image.native.functions);
-	const references = image.native.functions.map((native, functionIndex) => {
+	const closureUses: Array<NativeCallSite> = [];
+	const functions = image.native.functions.map((native, functionIndex) => {
 		const targets = new Set<number>();
+		const directTargets = new Set<number>();
 		const entries = new Set<string>();
+		const entryTargets: Array<number> = [];
+		let sortEntries: Set<string> | undefined;
 		for (const entry of native.directEntries)
 			if (entry.canonicalDispatch === true)
 				entries.add(directCompiledEntryKey(functionIndex, entry.id));
@@ -1118,14 +1051,18 @@ function emitNativeFunctions(
 			...native.directEntries.map((entry) => entry.storage),
 		])
 			for (const plan of storage?.callbackTransports ?? []) {
+				const entry = directCompiledEntryKey(plan.functionIndex, plan.entryId);
 				targets.add(plan.functionIndex);
-				entries.add(directCompiledEntryKey(plan.functionIndex, plan.entryId));
+				entries.add(entry);
+				callbackEntries.add(entry);
+				if (plan.numericReduction === true) reductionEntries.add(entry);
 			}
 		validateNativeRecordCalls(native.body, native, image.native.functions);
 		for (const entry of native.directEntries) {
 			validateNativeDirectEntry(native.body, entry, image.native.functions);
 			for (const call of entry.callOverrides ?? []) {
 				targets.add(call.functionIndex);
+				entryTargets.push(call.functionIndex);
 				entries.add(directCompiledEntryKey(call.functionIndex, call.entryId));
 			}
 		}
@@ -1134,43 +1071,121 @@ function emitNativeFunctions(
 				targets.add(entry.functionIndex);
 				entries.add(directCompiledEntryKey(entry.functionIndex, entry.entryId));
 			}
-		for (const instruction of native.instructions) {
+		const demandTarget = (target: number | undefined) => {
+			if (target === undefined) return;
+			targets.add(target);
+			if (!image.runtime.functions[target]!.isClassConstructor) directTargets.add(target);
+		};
+		for (let ip = 0; ip < native.instructions.length; ip++) {
+			const instruction = native.instructions[ip];
+			if (
+				instruction?.kind === "direct-closure" ||
+				instruction?.kind === "closure-materialization" ||
+				(instruction?.kind === "call" && instruction.directClosureOwner !== undefined)
+			)
+				closureUses.push({ functionIndex, ip });
 			if (instruction?.kind !== "call") continue;
-			for (const target of [
-				instruction.directFunctionIndex,
-				instruction.directCallbackFunctionIndex,
-				...(instruction.numericSortCallback?.entries.map(
-					(entry) => entry.functionIndex,
-				) ?? []),
-				instruction.directCallTargetFunctionIndex,
-				...(instruction.guardedFunctionIndices ?? []),
-			]) {
-				if (target !== undefined) targets.add(target);
-			}
+			demandTarget(instruction.directFunctionIndex);
+			const callback = instruction.directCallbackFunctionIndex;
+			demandTarget(callback);
+			if (callback !== undefined && canonicalReferences[callback] !== undefined)
+				callbackCanonicalTargets.add(callback);
 			for (const entry of instruction.numericSortCallback?.entries ?? []) {
+				demandTarget(entry.functionIndex);
 				entries.add(directCompiledEntryKey(entry.functionIndex, entry.entryId));
 			}
+			demandTarget(instruction.directCallTargetFunctionIndex);
+			for (const target of instruction.guardedFunctionIndices ?? []) demandTarget(target);
+			const exactTarget = instruction.directFunctionIndex;
+			if (exactTarget !== undefined)
+				canonicalReferences[exactTarget]?.push({ functionIndex, ip });
+			for (const target of instruction.guardedFunctionIndices ?? [])
+				canonicalReferences[target]?.push({ functionIndex, ip });
 			if (
-				(instruction.directFunctionIndex !== undefined ||
-					instruction.guardedFunctionIndices?.length === 1) &&
+				(exactTarget !== undefined || instruction.guardedFunctionIndices?.length === 1) &&
 				instruction.directEntryId !== undefined
-			) {
+			)
 				entries.add(
 					directCompiledEntryKey(
-						instruction.directFunctionIndex ?? instruction.guardedFunctionIndices![0]!,
+						exactTarget ?? instruction.guardedFunctionIndices![0]!,
 						instruction.directEntryId,
 					),
 				);
+			for (const entry of numericSortSite(native.body.instructions[ip], instruction)
+				?.entries ?? []) {
+				const key = directCompiledEntryKey(entry.functionIndex, entry.entryId);
+				sortKernelEntries.add(key);
+				(sortEntries ??= new Set()).add(key);
 			}
 		}
-		return { targets: [...targets], entries: [...entries] };
+		for (const target of entryTargets) demandTarget(target);
+		return {
+			targets: [...targets],
+			entries: [...entries],
+			directTargets: [...directTargets],
+			sortEntries,
+		};
 	});
-	const closureSites = nativeDirectClosureSites(image);
+	return {
+		functions,
+		callbackEntries,
+		reductionEntries,
+		sortKernelEntries,
+		canonicalReferences,
+		callbackCanonicalTargets,
+		closureSites: nativeDirectClosureSites(image, closureUses),
+	};
+}
+
+interface NativeFunctionEmission {
+	readonly compiled: Array<CompiledFunction | null>;
+	readonly availability: NativeCompilationAvailability;
+}
+
+function prepareNativeFunctionEmission(
+	image: ProgramImage,
+	options: {
+		useCompiled: boolean;
+		suffix: string;
+		debug: boolean;
+		captureSourceMap?: boolean;
+		linkage: "static" | "external";
+		maxCodeUnits?: number;
+		/** Index-stable emission, naming each function by its stem. */
+		symbolStems?: ReadonlyArray<string>;
+		/** C expression for the relocation a spliced overlay's link slots are relative to. */
+		relocation?: string;
+		nativeFunctionSplit?: NativeSplitPolicy;
+		onRendererBailout?: EmitOptions["onRendererBailout"];
+	},
+): (excludedSymbols?: ReadonlySet<string>) => NativeFunctionEmission {
+	const headerCodeUnits = NATIVE_C_HEADER_LINES.join("\n").length + 1;
+	const importedGlobals =
+		options.relocation === undefined ? undefined : nativeImportedGlobals(image.runtime);
+	const fits = (source: string): boolean =>
+		options.maxCodeUnits === undefined ||
+		source.length + headerCodeUnits <= options.maxCodeUnits;
+	const plan = prepareNativeEmissionReferences(image);
+	const {
+		functions: references,
+		closureSites,
+		callbackEntries,
+		reductionEntries,
+		sortKernelEntries,
+	} = plan;
 	const closureParticipation: Array<Array<string>> = [];
 	for (const [key, site] of closureSites)
 		for (const functionIndex of site.functions)
 			(closureParticipation[functionIndex] ??= []).push(key);
-	const cached: Array<{ key: string; emitted: CompiledFunction | null } | undefined> = [];
+	const cached: Array<
+		| {
+				readonly key: string;
+				readonly raw: CompiledFunction | null;
+				excludedSymbols: ReadonlySet<string> | undefined;
+				emitted: CompiledFunction | null;
+		  }
+		| undefined
+	> = [];
 	const fastTryLookups: Array<Map<number, "all" | "undefined"> | undefined> = [];
 	const renderFunction = createNativeFunctionRenderer((caller, target, resultKind) => {
 		const lookups = (fastTryLookups[caller] ??= new Map());
@@ -1188,21 +1203,12 @@ function emitNativeFunctions(
 				)
 			: false,
 	);
-	const bailouts = new Set<number>();
 	const render = (
 		functionIndex: number,
 		availability: NativeCompilationAvailability,
 	): CompiledFunction | null => {
-		// A function the program never creates runs nowhere; its bytecode stays as the fallback.
-		// A closure site still needs every participant's native body to share its scope.
-		if (
-			!options.useCompiled ||
-			(image.native.functions[functionIndex]!.unreachable === true &&
-				closureParticipation[functionIndex] === undefined)
-		)
-			return null;
 		fastTryLookups[functionIndex]?.clear();
-		const emitted = renderFunction(
+		return renderFunction(
 			image.native.functions[functionIndex]!,
 			functionIndex,
 			options.suffix,
@@ -1231,31 +1237,25 @@ function emitNativeFunctions(
 			availability.fastTryTargets,
 			availability.directClosures,
 		);
-		if (emitted === null) {
-			if (!bailouts.has(functionIndex)) {
-				bailouts.add(functionIndex);
-				const fn = image.runtime.functions[functionIndex]!;
-				options.onRendererBailout?.({
-					file: image.runtime.files[fn.fileIndex] ?? "<unknown>",
-					name: String.fromCharCode(
-						...(image.runtime.stringConstants[fn.nameStringIndex] ?? []),
-					),
-				});
-			}
+	};
+
+	const fitVariants = (
+		emitted: CompiledFunction | null,
+		excludedSymbols: ReadonlySet<string> | undefined,
+	): CompiledFunction | null => {
+		if (
+			emitted === null ||
+			!fits(emitted.source) ||
+			excludedSymbols?.has(emitted.symbol) === true
+		)
 			return null;
-		}
-		if (!fits(emitted.source) || options.excludedSymbols?.has(emitted.symbol) === true)
-			return null;
-		const entries = emitted.directEntries.filter(
-			(entry) =>
-				fits(entry.source) && options.excludedSymbols?.has(entry.symbol) !== true,
+		// Typed siblings have independent budgets so they cannot evict the canonical ABI.
+		const directEntries = emitted.directEntries.filter(
+			(entry) => fits(entry.source) && excludedSymbols?.has(entry.symbol) !== true,
 		);
-		return {
-			...emitted,
-			// A typed entry is an optional native overlay. Keep it independently
-			// bounded so duplicating a large body can never evict the canonical ABI.
-			directEntries: entries,
-		};
+		return directEntries.length === emitted.directEntries.length
+			? emitted
+			: { ...emitted, directEntries };
 	};
 
 	const availabilityKey = (
@@ -1266,12 +1266,13 @@ function emitNativeFunctions(
 		let key = "";
 		for (const target of referenced.targets)
 			key += availability.directCompiledTargets.has(target) ? "1" : "0";
-		for (const entry of referenced.entries)
-			key += availability.directCompiledEntries.get(entry)?.leaf
-				? "2"
-				: availability.directCompiledEntries.has(entry)
-					? "1"
-					: "0";
+		for (const entry of referenced.entries) {
+			const current = availability.directCompiledEntries.get(entry);
+			if (current === undefined) key += "0";
+			else if (referenced.sortEntries?.has(entry)) {
+				key += current.sortMayDecline ? "3" : current.leaf ? "2" : "1";
+			} else key += "1";
+		}
 		for (const closure of closureParticipation[functionIndex] ?? [])
 			key += availability.directClosures.has(closure) ? "1" : "0";
 		key += ":";
@@ -1283,22 +1284,6 @@ function emitNativeFunctions(
 		}
 		return key;
 	};
-	const emit = (
-		functionIndex: number,
-		availability: NativeCompilationAvailability,
-	): CompiledFunction | null => {
-		const key = availabilityKey(functionIndex, availability);
-		const previous = cached[functionIndex];
-		if (previous?.key === key) return previous.emitted;
-		const emitted = render(functionIndex, availability);
-		// Fast admission can discover more callees after an earlier one becomes available.
-		cached[functionIndex] = {
-			key: availabilityKey(functionIndex, availability),
-			emitted,
-		};
-		return emitted;
-	};
-
 	const candidates: NativeCompilationAvailability = {
 		directCompiledTargets: new Set(
 			references.flatMap(({ targets }) =>
@@ -1321,22 +1306,69 @@ function emitNativeFunctions(
 			),
 		),
 	};
-	let compiled = image.runtime.functions.map((_fn, index) => emit(index, candidates));
-	for (let iteration = 0; iteration <= image.runtime.functions.length + 1; iteration++) {
-		const availability = nativeCompilationAvailability(image, compiled, closureSites);
-		const next = image.runtime.functions.map((_fn, index) =>
-			compiled[index] === null ? null : emit(index, availability),
-		);
-		if (compiledAvailabilityMatches(next, compiled)) {
-			const stripped = omitUnreachableCanonicalBodies(image, next);
-			return {
-				compiled: stripped,
-				availability: nativeCompilationAvailability(image, stripped, closureSites),
-			};
+	const shouldRender = image.native.functions.map(
+		(fn, index) =>
+			options.useCompiled &&
+			(fn.unreachable !== true || closureParticipation[index] !== undefined),
+	);
+	return (excludedSymbols) => {
+		const onBailout = options.onRendererBailout;
+		const bailouts = onBailout === undefined ? undefined : new Set<number>();
+		const emit = (
+			functionIndex: number,
+			availability: NativeCompilationAvailability,
+		): CompiledFunction | null => {
+			if (!shouldRender[functionIndex]) return null;
+			let record = cached[functionIndex];
+			if (
+				record === undefined ||
+				record.key !== availabilityKey(functionIndex, availability)
+			) {
+				const raw = render(functionIndex, availability);
+				// A newly admitted fast path can expose further dependencies.
+				cached[functionIndex] = record = {
+					key: availabilityKey(functionIndex, availability),
+					raw,
+					excludedSymbols,
+					emitted: fitVariants(raw, excludedSymbols),
+				};
+			} else if (record.excludedSymbols !== excludedSymbols) {
+				record.excludedSymbols = excludedSymbols;
+				record.emitted = fitVariants(record.raw, excludedSymbols);
+			}
+			if (record.raw === null && bailouts?.has(functionIndex) === false) {
+				bailouts.add(functionIndex);
+				const fn = image.runtime.functions[functionIndex]!;
+				onBailout?.({
+					file: image.runtime.files[fn.fileIndex] ?? "<unknown>",
+					name: String.fromCharCode(
+						...(image.runtime.stringConstants[fn.nameStringIndex] ?? []),
+					),
+				});
+			}
+			return record.emitted;
+		};
+		let compiled = image.runtime.functions.map((_fn, index) => emit(index, candidates));
+		for (
+			let iteration = 0;
+			iteration <= image.runtime.functions.length + 1;
+			iteration++
+		) {
+			const availability = nativeCompilationAvailability(image, compiled, plan);
+			const next = image.runtime.functions.map((_fn, index) =>
+				compiled[index] === null ? null : emit(index, availability),
+			);
+			if (compiledAvailabilityMatches(next, compiled)) {
+				const stripped = omitUnreachableCanonicalBodies(next, plan);
+				return {
+					compiled: stripped,
+					availability: nativeCompilationAvailability(image, stripped, plan),
+				};
+			}
+			compiled = next;
 		}
-		compiled = next;
-	}
-	throw new Error("native compiled-entry availability did not stabilize");
+		throw new Error("native compiled-entry availability did not stabilize");
+	};
 }
 
 /**
@@ -1498,15 +1530,37 @@ function validateImageForEmission(image: ProgramImage): void {
 				throw new RangeError("class layout site refers past the image's layout table");
 }
 
+function prepareProgramImageNativeEmission(
+	image: ProgramImage,
+	options: EmitOptions,
+	splitCompiledFunctions: boolean,
+	maxCodeUnits?: number,
+	captureSourceMap = false,
+) {
+	validateImageForEmission(image);
+	return prepareNativeFunctionEmission(image, {
+		captureSourceMap,
+		useCompiled: options.compiled !== false,
+		suffix: options.symbolSuffix ?? "",
+		debug: options.debugInfo !== false,
+		linkage: splitCompiledFunctions ? "external" : "static",
+		maxCodeUnits,
+		nativeFunctionSplit: options.nativeFunctionSplit,
+		onRendererBailout: options.onRendererBailout,
+		// Split units can reuse the same object when a different image index names the body.
+		...(splitCompiledFunctions
+			? { symbolStems: splitEmissionSymbolStems(image, options.partitionRoot) }
+			: {}),
+	});
+}
+
 function emitProgramImageParts(
 	image: ProgramImage,
 	options: EmitOptions,
 	splitCompiledFunctions: boolean,
-	maxCompiledFunctionCodeUnits?: number,
-	excludedSymbols?: ReadonlySet<string>,
+	nativeEmission: NativeFunctionEmission,
 	captureSourceMap = false,
 ): EmittedProgramImageParts {
-	validateImageForEmission(image);
 	const sourceMapParts: EmittedProgramImageParts["sourceMapParts"] = [];
 	const runtime = image.runtime;
 	const suffix = options.symbolSuffix ?? "";
@@ -1546,29 +1600,6 @@ function emitProgramImageParts(
 		),
 	);
 
-	// Native-backend functions. Emitted before the MalFunction table (which
-	// references their symbols) and after the constant pools (which they may
-	// reference). The bytecode is still emitted below as a fallback / for `new`.
-	// Exact script calls may target either the canonical compiled ABI or one of the
-	// explicit typed siblings. Iterate to a fixed point because a size-bounded
-	// split build can independently reject a canonical body or typed sibling, and
-	// no remaining caller may retain a reference to a body that was not emitted.
-	const nativeEmission = emitNativeFunctions(image, {
-		captureSourceMap,
-		useCompiled,
-		suffix,
-		debug,
-		linkage: splitCompiledFunctions ? "external" : "static",
-		maxCodeUnits: maxCompiledFunctionCodeUnits,
-		excludedSymbols,
-		nativeFunctionSplit: options.nativeFunctionSplit,
-		onRendererBailout: options.onRendererBailout,
-		// Split units are cached objects; stems and link tables keep their text
-		// independent of every other function's image index.
-		...(splitCompiledFunctions
-			? { symbolStems: splitEmissionSymbolStems(image, options.partitionRoot) }
-			: {}),
-	});
 	const compiled = nativeEmission.compiled;
 	{
 		const { directCompiledTargets } = nativeEmission.availability;
@@ -2075,13 +2106,18 @@ export function emitProgramTranslationUnits(
 			"translation-unit target and native function budget must be positive integers",
 		);
 	}
+	const prepareNative = prepareProgramImageNativeEmission(
+		image,
+		options,
+		true,
+		maximumNativeFunctionCodeUnits,
+	);
 	const emitInputs = (excludedSymbols: ReadonlySet<string>) => {
 		const emitted = emitProgramImageParts(
 			image,
 			{ ...options, includeHeader: false },
 			true,
-			maximumNativeFunctionCodeUnits,
-			excludedSymbols,
+			prepareNative(excludedSymbols),
 		);
 		const splitData = externalizeDataArrays(
 			emitted.parts,
@@ -2431,7 +2467,7 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 			? [`extern MalNativeProgramRelocation ${relocationCell};`]
 			: [];
 	const functionPartitionKeys = compiledFunctionPartitionKeys(image, undefined);
-	const { compiled } = emitNativeFunctions(image, {
+	const { compiled } = prepareNativeFunctionEmission(image, {
 		useCompiled: true,
 		suffix,
 		debug: true,
@@ -2442,7 +2478,7 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 			target.kind === "fragment"
 				? `&${relocationCell}`
 				: "&vm->compiler_native_relocation",
-	});
+	})();
 	const installed = compiled.map((fn) =>
 		fn === null || fn.source.length === 0 ? undefined : fn.symbol,
 	);
@@ -3056,12 +3092,12 @@ function emitBatchUnits(
 		// The batch path strips debug info, so compiled bodies emit no pos writes.
 		// It uses the same fixed-point entry selection as product emit-C; otherwise
 		// the test262 backend would carry typed bodies that no call could reach.
-		const nativeEmission = emitNativeFunctions(image, {
+		const nativeEmission = prepareNativeFunctionEmission(image, {
 			useCompiled,
 			suffix,
 			debug: false,
 			linkage: sharedPrefix > 0 ? "external" : "static",
-		});
+		})();
 		const { compiled } = nativeEmission;
 		const declarations = (fn: CompiledFunction, canonical: boolean): Array<string> => [
 			...(canonical && fn.source.length > 0

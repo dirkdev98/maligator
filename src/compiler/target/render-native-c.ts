@@ -5100,6 +5100,8 @@ function emitCompiledVariant(
 	const fullSymbol = `${symbol}_full`;
 	let fastSourceMap: ReadonlyArray<NativeSourceRange> = [];
 	let tryAbi: NativeFastTryAbi | undefined;
+	let probeLookups: Array<{ readonly ip: number; readonly target: number }> | undefined;
+	let probeComplete = false;
 	const fastEntry =
 		split === undefined &&
 		directEntry?.resultFields === undefined &&
@@ -5127,6 +5129,15 @@ function emitCompiledVariant(
 						directEntry === undefined && native.specializedOnly !== true
 							? `${symbol}_try`
 							: undefined,
+					onProbeReachability:
+						onFastTryLookup === undefined
+							? undefined
+							: (reachable) => {
+									for (const lookup of probeLookups ?? [])
+										if (reachable.has(lookup.ip)) onFastTryLookup(lookup.target);
+									probeLookups = undefined;
+									probeComplete = true;
+								},
 					calleeTry: (ip, callee) => {
 						const plan = nativeContract.instructions[ip];
 						const target =
@@ -5136,7 +5147,16 @@ function emitCompiledVariant(
 										? plan.guardedFunctionIndices[0]
 										: undefined))
 								: undefined;
-						if (target !== undefined) onFastTryLookup?.(target);
+						if (target !== undefined && onFastTryLookup !== undefined) {
+							// Dormant probes can reserve relocation slots in first-use order.
+							const emitsRelocation =
+								relocation.enabled &&
+								plan?.kind === "call" &&
+								(plan.directFunctionIndex === undefined ||
+									plan.directClosureOwner !== undefined);
+							if (probeComplete || emitsRelocation) onFastTryLookup(target);
+							else (probeLookups ??= []).push({ ip, target });
+						}
 						return target !== undefined && fastTryTargets.has(target)
 							? {
 									symbol: `mal_compiled_${relocation.stem(target)}${suffix}_try`,
@@ -6145,7 +6165,7 @@ function renderCompiledFunction(
 	};
 }
 
-function numericSortSite(
+export function numericSortSite(
 	instruction: BytecodeInstruction | undefined,
 	plan: Extract<NativeInstructionPlan, { kind: "call" }>,
 ): NonNullable<typeof plan.numericSortCallback> | undefined {
@@ -6155,23 +6175,6 @@ function numericSortSite(
 		instruction.arguments.length === (callback.viaCall ? 2 : 1)
 		? callback
 		: undefined;
-}
-
-/** Direct entries whose sort kernel a selected numeric sort site passes. */
-export function numericSortKernelDemand(
-	functions: ReadonlyArray<NativeFunctionPlan>,
-): ReadonlySet<string> {
-	const demand = new Set<string>();
-	for (const native of functions)
-		for (const [ip, plan] of native.instructions.entries()) {
-			const site =
-				plan?.kind === "call"
-					? numericSortSite(native.body.instructions[ip], plan)
-					: undefined;
-			for (const entry of site?.entries ?? [])
-				demand.add(directCompiledEntryKey(entry.functionIndex, entry.entryId));
-		}
-	return demand;
 }
 
 // A numeric sort site can pass this kernel only where it would call the same leaf.
