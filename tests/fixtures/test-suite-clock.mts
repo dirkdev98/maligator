@@ -12,6 +12,20 @@ const stages = JSON.parse(encodedStages) as Array<{
 }>;
 let now = Date.now();
 let index = 0;
+const execFileSync = childProcess.execFileSync;
+mock.method(
+	childProcess,
+	"execFileSync",
+	(
+		command: string,
+		args: Array<string>,
+		options: childProcess.ExecFileSyncOptionsWithStringEncoding,
+	) => {
+		if ((command === "cc" || command === "rustc") && args[0] === "--version")
+			return `${command} fixture version\n`;
+		return execFileSync(command, args, options);
+	},
+);
 mock.method(Date, "now", () => now);
 mock.method(childProcess, "spawnSync", () => {
 	const stage = stages[index++];

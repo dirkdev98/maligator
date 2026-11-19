@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
 	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	readdirSync,
@@ -41,9 +42,22 @@ function simulateSuiteStages(
 ) {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "maligator-smoke-budget-"));
 	try {
-		for (const entry of ["scripts", "src", "runtime", "tests", "package-lock.json"]) {
+		for (const entry of ["scripts", "tests", "package-lock.json"]) {
 			symlinkSync(path.join(root, entry), path.join(directory, entry));
 		}
+		mkdirSync(path.join(directory, "src", "test262"), { recursive: true });
+		mkdirSync(path.join(directory, "runtime", "rust"), { recursive: true });
+		for (const file of [
+			"cache-root.ts",
+			"command-progress.ts",
+			"file-tree.ts",
+			"test-telemetry.ts",
+			"test262/constants.ts",
+			"worker-budget.ts",
+		]) {
+			symlinkSync(path.join(root, "src", file), path.join(directory, "src", file));
+		}
+		writeFileSync(path.join(directory, "src", "input.ts"), "export {};\n");
 		writeFileSync(path.join(directory, ".gitignore"), ".cache/\ncache/\n");
 		writeFileSync(path.join(directory, "input.ts"), "export const value = 1;\n");
 		execFileSync("git", ["init", "--quiet"], { cwd: directory });
@@ -69,6 +83,7 @@ function simulateSuiteStages(
 					encoding: "utf8",
 					env: {
 						...process.env,
+						CC: "cc",
 						MALIGATOR_CACHE_DIR: path.join(directory, "cache"),
 						MAL_TEST_SUITE_FAKE_STAGES: JSON.stringify(stages),
 						MAL_TEST_SUITE_SOURCE_CHANGE: options.changeSource ? "1" : "0",
@@ -78,15 +93,12 @@ function simulateSuiteStages(
 		let result = run();
 		for (let index = 1; index < (options.runs ?? 1); index++) result = run();
 		if (result.error !== undefined) throw result.error;
-		const report = JSON.parse(
-			readFileSync(
-				path.join(
-					directory,
-					`.cache/mal-build/test-suite/report-${options.nativeRemainder ? "full-native-remainder" : "smoke"}${options.lane === undefined ? "" : `-${options.lane}`}.json`,
-				),
-				"utf8",
-			),
-		) as {
+		const latestReport = path.join(
+			directory,
+			`.cache/mal-build/test-suite/report-${options.nativeRemainder ? "full-native-remainder" : "smoke"}${options.lane === undefined ? "" : `-${options.lane}`}.json`,
+		);
+		if (!existsSync(latestReport)) throw new Error(result.stderr);
+		const report = JSON.parse(readFileSync(latestReport, "utf8")) as {
 			runId: string;
 			complete: boolean;
 			passed: boolean;

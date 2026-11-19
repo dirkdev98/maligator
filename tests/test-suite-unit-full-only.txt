@@ -36,3 +36,4 @@ tests/ffi-globals.test.ts
 tests/ffi-union-values.test.ts
 tests/ffi-probe.test.ts
 tests/core-generator-fusion-scale.test.ts
+tests/core-native-entry-benchmark.test.ts
