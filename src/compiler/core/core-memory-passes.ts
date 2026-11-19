@@ -800,7 +800,7 @@ const refineContainedOwnSlotAccesses: CoreFunctionPass = {
 		CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS,
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	],
-	wakesOn: ["body", "memoryEffects", "facts"],
+	wakesOn: ["body", "memoryEffects", "facts", "normalResults"],
 	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: PROVENANCE_BUDGET,
 	run(context) {
@@ -2568,7 +2568,7 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 		CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 		CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	],
-	wakesOn: ["body", "memoryEffects", "facts"],
+	wakesOn: ["body", "memoryEffects", "facts", "normalResults"],
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: PROVENANCE_BUDGET,
 	run(context) {
