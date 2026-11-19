@@ -153,7 +153,8 @@ export function selectNativeObjectEnumerationSnapshots(
 	const named = (index: number, name: string): boolean =>
 		stringConstantEquals(strings[index], name);
 	let candidates = 0;
-	for (const [ip, call] of fn.instructions.entries()) {
+	for (const ip of body.callIps) {
+		const call = fn.instructions[ip]!;
 		if (plans.length === 8) break;
 		if (
 			(call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN") ||

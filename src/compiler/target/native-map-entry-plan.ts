@@ -54,6 +54,8 @@ function entryPaths(native: NativeFunctionPlan, body: NativeBodyFacts) {
 	};
 }
 
+const MINIMUM_MAP_ENTRY_PLANS = 2;
+
 export function selectNativeMapEntries(
 	native: NativeFunctionPlan,
 	body: NativeBodyFacts,
@@ -69,6 +71,28 @@ export function selectNativeMapEntries(
 		fn.instructions.length > 4096
 	)
 		return plans;
+	let getCount = 0;
+	let setCount = 0;
+	const operationAt = (ip: number): string | undefined => {
+		const op = fn.instructions[ip]!;
+		const plan = native.instructions[ip];
+		return op.opcode === "CALL_KNOWN"
+			? op.operation
+			: plan?.kind === "call"
+				? plan.guardedBuiltinCall?.operation
+				: undefined;
+	};
+	for (const ip of body.callIps) {
+		if (body.projection?.unreachable.has(ip) || unavailable(ip)) continue;
+		const op = fn.instructions[ip]!;
+		if (op.opcode !== "CALL" && op.opcode !== "CALL_KNOWN") continue;
+		const operation = operationAt(ip);
+		if (operation === "Map.prototype.get" && op.arguments.length === 1) getCount++;
+		if (operation === "Map.prototype.set" && op.arguments.length === 2) setCount++;
+		if (getCount >= MINIMUM_MAP_ENTRY_PLANS && setCount >= MINIMUM_MAP_ENTRY_PLANS) break;
+	}
+	if (getCount < MINIMUM_MAP_ENTRY_PLANS || setCount < MINIMUM_MAP_ENTRY_PLANS)
+		return plans;
 	const gets = new Map<string, Array<number>>();
 	const sets: Array<{ ip: number; receiver: string; key: string }> = [];
 	const origins = new Map<number, string>();
@@ -76,14 +100,8 @@ export function selectNativeMapEntries(
 	// Origins only predict reuse: each update revalidates the current receiver, live index and key.
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (body.projection?.unreachable.has(ip)) continue;
-		const plan = native.instructions[ip];
-		const operation =
-			op.opcode === "CALL_KNOWN"
-				? op.operation
-				: plan?.kind === "call"
-					? plan.guardedBuiltinCall?.operation
-					: undefined;
 		if ((op.opcode === "CALL" || op.opcode === "CALL_KNOWN") && !unavailable(ip)) {
+			const operation = operationAt(ip);
 			const key = op.arguments[0];
 			const receiver = originOf(op.thisValue);
 			if (key !== undefined) {
@@ -121,7 +139,7 @@ export function selectNativeMapEntries(
 		});
 		if (plans.length === 16) break;
 	}
-	if (plans.length < 2) return [];
+	if (plans.length < MINIMUM_MAP_ENTRY_PLANS) return [];
 	const paths = entryPaths(native, body);
 	const between = plans.map((plan) => paths(plan.getIp, plan.setIp));
 	// Stop at either endpoint so another loop iteration cannot make adjacent get/set appear overlapping.

@@ -19,6 +19,11 @@ export interface NativeBodyFacts {
 	readonly reads: ReadonlyArray<ReadonlyArray<number>>;
 	readonly writes: ReadonlyArray<ReadonlyArray<number>>;
 	readonly staticPropertyLoadIps: ReadonlyArray<number>;
+	// Candidate sites refer to the original body, even when reachability is projected.
+	readonly callIps: ReadonlyArray<number>;
+	readonly arrayAllocationIps: ReadonlyArray<number>;
+	readonly propertyDefinitionIps: ReadonlyArray<number>;
+	readonly hasStringLiteral: boolean;
 	readonly branchSources: ReadonlyMap<number, ReadonlyArray<number>>;
 	readonly handlerEntries: ReadonlySet<number>;
 	readonly externalEntries: ReadonlySet<number>;
@@ -142,8 +147,29 @@ export function analyzeNativeBodyFacts(fn: BytecodeFunction): NativeBodyFacts {
 	const jumpTargets = new Set(handlerEntries);
 	const branchSources = new Map<number, Array<number>>();
 	const staticPropertyLoadIps: Array<number> = [];
+	const callIps: Array<number> = [];
+	const arrayAllocationIps: Array<number> = [];
+	const propertyDefinitionIps: Array<number> = [];
+	let hasStringLiteral = false;
 	for (const [ip, op] of fn.instructions.entries()) {
-		if (op.opcode === "LOAD_PROPERTY_STATIC") staticPropertyLoadIps.push(ip);
+		switch (op.opcode) {
+			case "LOAD_PROPERTY_STATIC":
+				staticPropertyLoadIps.push(ip);
+				break;
+			case "CALL":
+			case "CALL_KNOWN":
+				callIps.push(ip);
+				break;
+			case "CREATE_ARRAY":
+				arrayAllocationIps.push(ip);
+				break;
+			case "DEFINE_PROPERTY":
+				propertyDefinitionIps.push(ip);
+				break;
+			case "CREATE_STRING":
+				hasStringLiteral = true;
+				break;
+		}
 		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") {
 			jumpTargets.add(op.targetIp);
 			const sources = branchSources.get(op.targetIp) ?? [];
@@ -160,6 +186,10 @@ export function analyzeNativeBodyFacts(fn: BytecodeFunction): NativeBodyFacts {
 		reads,
 		writes,
 		staticPropertyLoadIps,
+		callIps,
+		arrayAllocationIps,
+		propertyDefinitionIps,
+		hasStringLiteral,
 		branchSources,
 		handlerEntries,
 		externalEntries,

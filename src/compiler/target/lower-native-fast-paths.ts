@@ -977,6 +977,8 @@ function propertyReadRegionPureInstruction(
 	}
 }
 
+const PROPERTY_READ_REGION_WINDOW = 128;
+
 function lowerPropertyReadRegion(
 	fn: BytecodeFunction,
 	firstIp: number,
@@ -984,6 +986,7 @@ function lowerPropertyReadRegion(
 	jumpTargets: ReadonlySet<number>,
 	conflicts: (ip: number) => boolean,
 	body: NativeBodyFacts,
+	limit: number,
 ): NativePropertyReadRegionPlan | undefined {
 	const first = fn.instructions[firstIp];
 	if (
@@ -998,7 +1001,6 @@ function lowerPropertyReadRegion(
 	const loads = [{ ip: firstIp, instruction: first }];
 	const admitted = new Map([[firstIp, new Set([first.object])]]);
 	const claimed = [firstIp];
-	const limit = Math.min(fn.instructions.length, firstIp + 128);
 	for (let ip = firstIp + 1; ip < limit; ip++) {
 		const sources = body.branchSources.get(ip) ?? [];
 		const previous = fn.instructions[ip - 1]!;
@@ -2768,16 +2770,11 @@ function numericLoopDataViewCalls(
 	body: NativeBodyFacts,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	callPlan: (ip: number) => NativeInstructionPlan | undefined,
+	writers: ReadonlyMap<number, ReadonlyArray<BytecodeInstruction>>,
 ): ReadonlyMap<number, NativeDataViewCall> {
-	const writers = new Map<number, Array<BytecodeInstruction>>();
-	for (const op of fn.instructions)
-		for (const register of vmInstructionWriteRegisters(op)) {
-			const registerWriters = writers.get(register);
-			if (registerWriters === undefined) writers.set(register, [op]);
-			else registerWriters.push(op);
-		}
 	const calls = new Map<number, NativeDataViewCall>();
-	for (const [ip, call] of fn.instructions.entries()) {
+	for (const ip of body.callIps) {
+		const call = fn.instructions[ip]!;
 		if (call.opcode !== "CALL" || call.callee === call.thisValue) continue;
 		const names = new Set(
 			(writers.get(call.callee) ?? []).map((writer) =>
@@ -2867,7 +2864,8 @@ export function numericLoopForeignCalls(
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 ): ReadonlyMap<number, FfiScalarEntry> {
 	const calls = new Map<number, FfiScalarEntry>();
-	for (const [ip, call] of fn.instructions.entries()) {
+	for (const ip of body.callIps) {
+		const call = fn.instructions[ip]!;
 		if (call.opcode !== "CALL") continue;
 		const plan = callPlan(ip);
 		const scalar = plan?.kind === "call" ? plan.foreignCall?.scalar : undefined;
@@ -4629,8 +4627,26 @@ export function lowerNativeFastPaths(
 	else {
 		const regionBody = body ?? analyzeNativeBodyFacts(fn);
 		let nextRegionIp = 0;
-		for (const ip of propertyLoadIps) {
+		let windowEnd = 0;
+		for (let index = 0; index < propertyLoadIps.length; index++) {
+			const ip = propertyLoadIps[index]!;
 			if (ip < nextRegionIp) continue;
+			let limit = Math.min(fn.instructions.length, ip + PROPERTY_READ_REGION_WINDOW);
+			// Only a later static load can lengthen the claimed prefix.
+			if (regionBody.projection === undefined) {
+				windowEnd = Math.max(windowEnd, index);
+				while (
+					windowEnd + 1 < propertyLoadIps.length &&
+					propertyLoadIps[windowEnd + 1]! < limit
+				)
+					windowEnd++;
+				if (
+					windowEnd === index ||
+					(windowEnd === index + 1 && propertyLoadIps[windowEnd] === ip + 1)
+				)
+					continue;
+				limit = propertyLoadIps[windowEnd]! + 1;
+			}
 			const plan = lowerPropertyReadRegion(
 				fn,
 				ip,
@@ -4644,6 +4660,7 @@ export function lowerNativeFastPaths(
 					propertyNumericUpdateActions.has(candidate) ||
 					propertyProjectionActions.has(candidate),
 				regionBody,
+				limit,
 			);
 			if (plan === undefined) continue;
 			propertyReadRegions.push(plan);
@@ -5009,10 +5026,11 @@ function selectLiteralPropertyDefinitions(
 	strings: ReadonlyArray<ReadonlyArray<number>>,
 	groups: ReadonlyArray<ReadonlyArray<number>>,
 ): Array<NativeLiteralPropertyDefinitionPlan> {
-	if (!native.body.instructions.some((op) => op.opcode === "CREATE_STRING")) return [];
+	if (!body.hasStringLiteral) return [];
 	let literalAt: ReturnType<typeof createNativeStringLiteralQuery> | undefined;
 	const plans: Array<NativeLiteralPropertyDefinitionPlan> = [];
-	for (const [ip, op] of native.body.instructions.entries()) {
+	for (const ip of body.propertyDefinitionIps) {
+		const op = native.body.instructions[ip]!;
 		if (op.opcode !== "DEFINE_PROPERTY" || body.projection?.unreachable.has(ip)) continue;
 		const representation = native.registerRepresentations[op.key];
 		if (
@@ -5050,11 +5068,21 @@ export function analyzeNativeFastPaths(
 } {
 	const fn = native.body;
 	const { handlerEntries, jumpTargets, branchSources } = body;
+	const loopHeaders: Array<number> = [];
+	let hasBackedge = false;
+	for (const [header, sources] of branchSources) {
+		if (!sources.some((source) => source >= header)) continue;
+		hasBackedge = true;
+		if (jumpTargets.has(header) && !body.externalEntries.has(header))
+			loopHeaders.push(header);
+	}
+	loopHeaders.sort((left, right) => left - right);
 	const literalPropertyDefinitions: Array<NativeLiteralPropertyDefinitionPlan> = [];
 	const mathCalls: Array<NativeMathCallPlan> = [];
 	const numberPredicates: Array<NativeNumberPredicatePlan> = [];
 	const stringTransforms: Array<NativeStringTransformPlan> = [];
-	for (const [ip, op] of fn.instructions.entries()) {
+	for (const ip of body.callIps) {
+		const op = fn.instructions[ip]!;
 		if (op.opcode === "CALL_KNOWN") {
 			const transform = selectNativeStringTransform(native, ip, stringConstants);
 			if (transform !== undefined) stringTransforms.push(transform);
@@ -5091,6 +5119,19 @@ export function analyzeNativeFastPaths(
 							: "boxed";
 			numberPredicates.push({ instructionIp: ip, mode });
 		}
+		const plan = native.instructions[ip];
+		const builtin = plan?.kind === "call" ? plan.guardedBuiltinCall : undefined;
+		if (op.opcode !== "CALL" || builtin === undefined) continue;
+		const arity = nativeGuardedMathArity(builtin.operation, op.arguments.length);
+		if (arity === undefined) continue;
+		mathCalls.push({
+			instructionIp: ip,
+			operation: builtin.operation,
+			arity,
+		});
+	}
+	for (const ip of body.propertyDefinitionIps) {
+		const op = fn.instructions[ip]!;
 		const prior = fn.instructions[ip - 1];
 		if (
 			op.opcode === "DEFINE_PROPERTY" &&
@@ -5106,16 +5147,6 @@ export function analyzeNativeFastPaths(
 				});
 			}
 		}
-		const plan = native.instructions[ip];
-		const builtin = plan?.kind === "call" ? plan.guardedBuiltinCall : undefined;
-		if (op.opcode !== "CALL" || builtin === undefined) continue;
-		const arity = nativeGuardedMathArity(builtin.operation, op.arguments.length);
-		if (arity === undefined) continue;
-		mathCalls.push({
-			instructionIp: ip,
-			operation: builtin.operation,
-			arity,
-		});
 	}
 	const transparent = new Set<number>();
 	if (native.mode === "direct" && (native.literalSwitches?.length ?? 0) === 0) {
@@ -5212,22 +5243,6 @@ export function analyzeNativeFastPaths(
 	// as their fallback.
 	const numericLoopBlocked = new Set(blocked);
 	const cursorSteps = new Map<number, { initializeIp: number; iterator: number }>();
-	// An Array view's length is an own data property, so any `.length` load can bound its loop.
-	const lengthLoads = new Set<number>();
-	// Element and length stores, the only ones a region makes, never change other keys,
-	// and a region stores no global name.
-	const invariantLoadCandidates = new Set<number>();
-	for (const [ip, op] of fn.instructions.entries()) {
-		if (op.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") lengthLoads.add(ip);
-		else if (op.opcode === "LOAD_GLOBAL_PROPERTY") invariantLoadCandidates.add(ip);
-		else if (op.opcode === "LOAD_PROPERTY_STATIC") {
-			const units = stringConstants[op.stringIndex];
-			if (units !== undefined && String.fromCharCode(...units) === "length")
-				lengthLoads.add(ip);
-			else if (units !== undefined && !stringConstantIsArrayIndex(units))
-				invariantLoadCandidates.add(ip);
-		}
-	}
 	const indexedLoops: Array<NativeIndexedLoopElement> = [];
 	for (const action of native.regionActions) {
 		const region = native.specializations[action.regionIndex]!;
@@ -5353,7 +5368,11 @@ export function analyzeNativeFastPaths(
 		!fn.isAsync &&
 		fn.profileSiteIds === undefined
 	) {
-		const loops = bytecodeLoopInstructions(fn);
+		const loops =
+			body.staticPropertyLoadIps.length > 0 &&
+			(hasBackedge || body.projection !== undefined)
+				? bytecodeLoopInstructions(fn)
+				: undefined;
 		for (const ip of body.staticPropertyLoadIps) {
 			if (unavailable(ip)) continue;
 			const plan = lowerNumberRecordRegion(
@@ -5369,7 +5388,7 @@ export function analyzeNativeFastPaths(
 						!nativePlanKeepsOrdinaryLowering(native.instructions[candidate])
 					);
 				},
-				loops[ip] === 1,
+				loops?.[ip] === 1,
 			);
 			if (plan === undefined) continue;
 			const members = new Set(plan.claimedIps);
@@ -5398,16 +5417,44 @@ export function analyzeNativeFastPaths(
 			receiverObjectPossible,
 		))
 			for (const ip of plan.claimedIps) numericLoopBlocked.add(ip);
-		// World facts alone make these the builtin on any primitive string, so a region
-		// reads their code units directly once its entry admits the string.
-		const calleeWriters = new Map<number, Array<BytecodeInstruction>>();
-		for (const op of fn.instructions)
-			for (const register of vmInstructionWriteRegisters(op))
-				calleeWriters.set(register, [...(calleeWriters.get(register) ?? []), op]);
-		const codeUnitReads = new Set(
-			fn.instructions.flatMap((call, ip) => {
+
+		if (loopHeaders.length > 0) {
+			// An Array view's length is an own data property, so any `.length` load can bound its loop.
+			const lengthLoads = new Set<number>();
+			// Element and length stores, the only ones a region makes, never change other keys,
+			// and a region stores no global name.
+			const invariantLoadCandidates = new Set<number>();
+			for (const [ip, op] of fn.instructions.entries()) {
+				if (op.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") lengthLoads.add(ip);
+				else if (op.opcode === "LOAD_GLOBAL_PROPERTY") invariantLoadCandidates.add(ip);
+				else if (op.opcode === "LOAD_PROPERTY_STATIC") {
+					const units = stringConstants[op.stringIndex];
+					if (units !== undefined && String.fromCharCode(...units) === "length")
+						lengthLoads.add(ip);
+					else if (units !== undefined && !stringConstantIsArrayIndex(units))
+						invariantLoadCandidates.add(ip);
+				}
+			}
+			// World facts alone make these the builtin on any primitive string, so a region
+			// reads their code units directly once its entry admits the string.
+			const calleeWriters = new Map<number, Array<BytecodeInstruction>>();
+			for (const [ip, op] of fn.instructions.entries()) {
+				const written =
+					body.projection === undefined
+						? body.writes[ip]!
+						: vmInstructionWriteRegisters(op);
+				for (const register of written) {
+					const writers = calleeWriters.get(register);
+					if (writers === undefined) calleeWriters.set(register, [op]);
+					else writers.push(op);
+				}
+			}
+			const codeUnitReads = new Set<number>();
+			for (const ip of body.callIps) {
+				const call = fn.instructions[ip]!;
 				const plan = native.instructions[ip];
-				return call.opcode === "CALL" &&
+				if (
+					call.opcode === "CALL" &&
 					plan?.kind === "call" &&
 					plan.guardedBuiltinCall?.operation === "String.prototype.charCodeAt" &&
 					plan.guardedBuiltinCall.guard.dependencies.every(
@@ -5421,103 +5468,106 @@ export function analyzeNativeFastPaths(
 							String.fromCharCode(...(stringConstants[writer.stringIndex] ?? [])) ===
 								"charCodeAt",
 					)
-					? [ip]
-					: [];
-			}),
-		);
-		const dataViewCalls = numericLoopDataViewCalls(
-			fn,
-			body,
-			stringConstants,
-			(ip) => native.instructions[ip],
-		);
-		const foreignCalls = numericLoopForeignCalls(
-			fn,
-			body,
-			(ip) => native.instructions[ip],
-			(ip) => native.facts?.[ip],
-			native.registerRepresentations,
-		);
-		const builtinCalls = numericLoopBuiltinCallCandidates(
-			fn,
-			(ip) => native.instructions[ip],
-		);
-		const builtinCallView = numericLoopBuiltinCallView(fn, builtinCalls);
-		const constructedKinds = constructedTypedArrayKinds(fn, stringConstants);
-		for (const header of [...body.jumpTargets].sort((a, b) => a - b)) {
-			if (numericLoopBlocked.has(header)) continue;
-			const plan = lowerNumericLoopRegion(
-				builtinCallView,
-				header,
-				native.registerRepresentations,
+				)
+					codeUnitReads.add(ip);
+			}
+			const dataViewCalls = numericLoopDataViewCalls(
+				fn,
 				body,
-				// Its back edge polls by returning the iteration to the original loop.
-				(candidate, use) => {
-					const plan = native.instructions[candidate];
-					const kind = plan?.kind;
-					return (
-						numericLoopBlocked.has(candidate) ||
-						!numberInputsPossible(candidate) ||
-						// Operand kind proofs refine the double lowering; the region replaces it.
-						(!nativePlanKeepsOrdinaryLowering(native.instructions[candidate]) &&
-							kind !== "unsigned-arithmetic" &&
-							!typedArrayElementPlan(kind) &&
-							kind !== "contained-fixed-typed-array-length" &&
-							!(
-								kind === "call" &&
-								(codeUnitReads.has(candidate) ||
-									dataViewCalls.has(candidate) ||
-									foreignCalls.has(candidate) ||
-									builtinCalls.has(candidate))
-							) &&
-							kind !== "primitive-string-length" &&
-							// Layout proofs choose a field read's lowering; the entry guards its own,
-							// and an element's field read checks the same class cells first.
-							!(
-								use === "entry-load" &&
-								(kind === "class-layout" ||
-									kind === "exact-own-slot" ||
-									kind === "known-own-data")
-							) &&
-							!(
-								use === "record-field" &&
-								plan?.kind === "class-layout" &&
-								plan.site.kind === "slot"
-							))
-					);
-				},
-				lengthLoads,
-				cursorSteps,
-				codeUnitReads,
-				dataViewCalls,
-				foreignCalls,
-				functions,
-				invariantLoadCandidates,
-				builtinCalls,
+				stringConstants,
+				(ip) => native.instructions[ip],
+				calleeWriters,
 			);
-			if (plan === undefined) continue;
-			// Without a counter the trip count is unknown, and proven element accesses are
-			// already cheaper than admitting a view for a few iterations.
-			if (
-				plan.kind === "fixed-numeric" &&
-				plan.counter === undefined &&
-				plan.claimedIps.some((ip) => typedArrayElementPlan(native.instructions[ip]?.kind))
-			)
-				continue;
-			const members = new Set(plan.claimedIps);
-			// A retained fallback fusion cannot carry its private intermediate across a region boundary.
-			if (
-				plan.claimedIps.some((ip) => {
-					const fusion = fusions.get(ip);
-					return (
-						fusion !== undefined &&
-						(!members.has(fusion.id) || !members.has(fusion.finishIp))
-					);
-				})
-			)
-				continue;
-			numericLoopRegions.push(withExpectedViewKinds(plan, constructedKinds));
-			for (const claimedIp of plan.claimedIps) claim(claimedIp);
+			const foreignCalls = numericLoopForeignCalls(
+				fn,
+				body,
+				(ip) => native.instructions[ip],
+				(ip) => native.facts?.[ip],
+				native.registerRepresentations,
+			);
+			const builtinCalls = numericLoopBuiltinCallCandidates(
+				fn,
+				(ip) => native.instructions[ip],
+			);
+			const builtinCallView = numericLoopBuiltinCallView(fn, builtinCalls);
+			const constructedKinds = constructedTypedArrayKinds(fn, stringConstants);
+			for (const header of loopHeaders) {
+				if (numericLoopBlocked.has(header)) continue;
+				const plan = lowerNumericLoopRegion(
+					builtinCallView,
+					header,
+					native.registerRepresentations,
+					body,
+					// Its back edge polls by returning the iteration to the original loop.
+					(candidate, use) => {
+						const plan = native.instructions[candidate];
+						const kind = plan?.kind;
+						return (
+							numericLoopBlocked.has(candidate) ||
+							!numberInputsPossible(candidate) ||
+							// Operand kind proofs refine the double lowering; the region replaces it.
+							(!nativePlanKeepsOrdinaryLowering(native.instructions[candidate]) &&
+								kind !== "unsigned-arithmetic" &&
+								!typedArrayElementPlan(kind) &&
+								kind !== "contained-fixed-typed-array-length" &&
+								!(
+									kind === "call" &&
+									(codeUnitReads.has(candidate) ||
+										dataViewCalls.has(candidate) ||
+										foreignCalls.has(candidate) ||
+										builtinCalls.has(candidate))
+								) &&
+								kind !== "primitive-string-length" &&
+								// Layout proofs choose a field read's lowering; the entry guards its own,
+								// and an element's field read checks the same class cells first.
+								!(
+									use === "entry-load" &&
+									(kind === "class-layout" ||
+										kind === "exact-own-slot" ||
+										kind === "known-own-data")
+								) &&
+								!(
+									use === "record-field" &&
+									plan?.kind === "class-layout" &&
+									plan.site.kind === "slot"
+								))
+						);
+					},
+					lengthLoads,
+					cursorSteps,
+					codeUnitReads,
+					dataViewCalls,
+					foreignCalls,
+					functions,
+					invariantLoadCandidates,
+					builtinCalls,
+				);
+				if (plan === undefined) continue;
+				// Without a counter the trip count is unknown, and proven element accesses are
+				// already cheaper than admitting a view for a few iterations.
+				if (
+					plan.kind === "fixed-numeric" &&
+					plan.counter === undefined &&
+					plan.claimedIps.some((ip) =>
+						typedArrayElementPlan(native.instructions[ip]?.kind),
+					)
+				)
+					continue;
+				const members = new Set(plan.claimedIps);
+				// A retained fallback fusion cannot carry its private intermediate across a region boundary.
+				if (
+					plan.claimedIps.some((ip) => {
+						const fusion = fusions.get(ip);
+						return (
+							fusion !== undefined &&
+							(!members.has(fusion.id) || !members.has(fusion.finishIp))
+						);
+					})
+				)
+					continue;
+				numericLoopRegions.push(withExpectedViewKinds(plan, constructedKinds));
+				for (const claimedIp of plan.claimedIps) claim(claimedIp);
+			}
 		}
 	}
 	const selected = lowerNativeFastPaths(

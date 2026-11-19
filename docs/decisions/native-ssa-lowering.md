@@ -263,11 +263,12 @@ reachable register uses and writes, keeping dead register capacity out of the fa
 entry's code and proof budget. Surviving liveness, scalar uses and entry result ABIs remain conservative
 until their analyses consume the refined edges.
 
-Read/write occurrences, branch sources, handler and resume entries, and handler
-targets are shared by storage and fast-path consumers. Property-window selection
-visits the shared ordered static-load index; dense window scans still check every
-intervening instruction, and their borrowing/write checks consume the same body
-facts. Root profitability builds
+Read/write occurrences, branch sources, handler and resume entries, and candidate
+sites are shared by storage and fast-path consumers. Candidate sites retain their
+original instruction indices when entry-specific reachability is projected. A
+property-read window ends at its last possible load and checks each intervening
+instruction against the same body facts. Numeric loop analysis requires an
+ordinary backward branch into a non-external entry. Root profitability builds
 ordinary-edge loop and cycle indexes lazily in the same invocation; incoming-root
 costs remain specific to each entry. C rendering shares immutable body analysis
 within one image emission. Region topology, ordered actions and sorted projection

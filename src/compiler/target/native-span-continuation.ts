@@ -99,7 +99,8 @@ export function selectNativeSpanContinuations(
 	}
 	// Discovery stays bounded independently of how many admitted children a parent has.
 	if (children.length)
-		for (const [ip, call] of fn.instructions.entries()) {
+		for (const ip of body.callIps) {
+			const call = fn.instructions[ip]!;
 			if (sources.length >= 32) break;
 			if ((call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN") || unavailable(ip))
 				continue;

@@ -63,7 +63,8 @@ export function selectNativeArrayInitializations(
 		projected &&
 		(fn.instructions[ip]!.opcode === "JUMP" || body.projection.branches.has(ip));
 	let attempted = 0;
-	for (const [allocationIp, allocation] of fn.instructions.entries()) {
+	for (const allocationIp of body.arrayAllocationIps) {
+		const allocation = fn.instructions[allocationIp]!;
 		if (
 			allocation.opcode !== "CREATE_ARRAY" ||
 			body.projection?.unreachable.has(allocationIp) ||
