@@ -2090,22 +2090,11 @@ function oversizedCodeDefinitions(
 	return oversized;
 }
 
-export function emitProgramTranslationUnits(
+function prepareTranslationUnitInputs(
 	image: ProgramImage,
-	options: EmitOptions = {},
-	policy: TranslationUnitPolicy = DEFAULT_TRANSLATION_UNIT_POLICY,
-): Array<GeneratedTranslationUnit> {
-	const { targetCodeUnits, maximumNativeFunctionCodeUnits } = policy;
-	if (
-		!Number.isSafeInteger(targetCodeUnits) ||
-		targetCodeUnits <= 0 ||
-		!Number.isSafeInteger(maximumNativeFunctionCodeUnits) ||
-		maximumNativeFunctionCodeUnits <= 0
-	) {
-		throw new RangeError(
-			"translation-unit target and native function budget must be positive integers",
-		);
-	}
+	options: EmitOptions,
+	maximumNativeFunctionCodeUnits: number,
+) {
 	const prepareNative = prepareProgramImageNativeEmission(
 		image,
 		options,
@@ -2157,6 +2146,30 @@ export function emitProgramTranslationUnits(
 		excludedSymbols = new Set([...excludedSymbols, ...oversized]);
 		inputs = emitInputs(excludedSymbols);
 	}
+	return inputs;
+}
+
+export function emitProgramTranslationUnits(
+	image: ProgramImage,
+	options: EmitOptions = {},
+	policy: TranslationUnitPolicy = DEFAULT_TRANSLATION_UNIT_POLICY,
+): Array<GeneratedTranslationUnit> {
+	const { targetCodeUnits, maximumNativeFunctionCodeUnits } = policy;
+	if (
+		!Number.isSafeInteger(targetCodeUnits) ||
+		targetCodeUnits <= 0 ||
+		!Number.isSafeInteger(maximumNativeFunctionCodeUnits) ||
+		maximumNativeFunctionCodeUnits <= 0
+	) {
+		throw new RangeError(
+			"translation-unit target and native function budget must be positive integers",
+		);
+	}
+	const inputs = prepareTranslationUnitInputs(
+		image,
+		options,
+		maximumNativeFunctionCodeUnits,
+	);
 	const {
 		emitted,
 		splitData,
