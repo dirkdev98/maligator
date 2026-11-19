@@ -1659,16 +1659,93 @@ const VM_REGISTER_USE_ARRAY_FIELDS = [
 	"excluded",
 ] as const;
 
+const NO_REGISTER_READS: ReadonlyArray<number> = Object.freeze([]);
+
+type VmRegisterUseField =
+	| (typeof VM_REGISTER_USE_FIELDS)[number]
+	| (typeof VM_REGISTER_USE_ARRAY_FIELDS)[number];
+type VmRegisterUseFields<Instruction> = Instruction extends {
+	opcode: "CREATE_NUMBER" | "CREATE_F64" | "CREATE_BOOLEAN";
+}
+	? never
+	: Instruction extends BytecodeInstruction
+		? Extract<keyof Instruction, VmRegisterUseField>
+		: never;
+type CompleteVmReadShape<Instruction, Field extends VmRegisterUseField | null> =
+	Exclude<VmRegisterUseFields<Instruction>, Field> extends never ? Field : never;
+
+function simpleRegisterOperand(
+	instruction: BytecodeInstruction,
+): number | null | undefined {
+	switch (instruction.opcode) {
+		case "CATCH":
+		case "CREATE_ARRAY":
+		case "CREATE_BOOLEAN":
+		case "CREATE_EMPTY":
+		case "CREATE_F64":
+		case "CREATE_FUNCTION":
+		case "CREATE_NULL":
+		case "CREATE_NUMBER":
+		case "CREATE_PRIVATE_NAME":
+		case "CREATE_STRING":
+		case "CREATE_UNDEFINED":
+		case "JUMP":
+		case "LOAD_CAPTURED":
+		case "LOAD_GLOBAL":
+		case "LOAD_GLOBAL_INDEX":
+		case "LOAD_INTRINSIC":
+		case "LOAD_THIS":
+			return null satisfies CompleteVmReadShape<typeof instruction, null>;
+		case "JUMP_IF":
+			return instruction[
+				"cond" satisfies CompleteVmReadShape<typeof instruction, "cond">
+			];
+		case "ITERATOR_CLOSE":
+			return instruction[
+				"iterator" satisfies CompleteVmReadShape<typeof instruction, "iterator">
+			];
+		case "LOAD_PROPERTY_STATIC":
+		case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
+		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
+			return instruction[
+				"object" satisfies CompleteVmReadShape<typeof instruction, "object">
+			];
+		case "CREATE_OBJECT":
+			return instruction[
+				"reserveSource" satisfies CompleteVmReadShape<typeof instruction, "reserveSource">
+			];
+		case "GET_ITERATOR":
+			return instruction[
+				"source" satisfies CompleteVmReadShape<typeof instruction, "source">
+			];
+		case "CREATE_ARRAY_FROM_ITERABLE":
+		case "MOVE":
+		case "REQUIRE_COERCIBLE":
+		case "STORE_CAPTURED":
+		case "STORE_GLOBAL":
+		case "THROW_IF_TDZ":
+		case "TYPEOF_COMPARE":
+		case "UNARY":
+			return instruction["src" satisfies CompleteVmReadShape<typeof instruction, "src">];
+		case "RETURN":
+		case "THROW":
+			return instruction[
+				"value" satisfies CompleteVmReadShape<typeof instruction, "value">
+			];
+		default:
+			return undefined;
+	}
+}
+
 /** Operand occurrences retain duplicates for native single-use expression planning. */
 export function vmInstructionReadRegisters(
 	instruction: BytecodeInstruction,
 ): ReadonlyArray<number> {
-	if (
-		instruction.opcode === "CREATE_NUMBER" ||
-		instruction.opcode === "CREATE_F64" ||
-		instruction.opcode === "CREATE_BOOLEAN"
-	)
-		return [];
+	const operand = simpleRegisterOperand(instruction);
+	if (operand === null) return NO_REGISTER_READS;
+	if (operand !== undefined) {
+		return typeof operand === "number" && operand >= 0 ? [operand] : NO_REGISTER_READS;
+	}
 	const row = instruction as unknown as Record<string, unknown>;
 	const registers: Array<number> = [];
 	for (const field of VM_REGISTER_USE_FIELDS) {
@@ -1690,18 +1767,17 @@ export function vmInstructionUsesRegister(
 	instruction: BytecodeInstruction,
 	register: number,
 ): boolean {
-	if (
-		instruction.opcode === "CREATE_NUMBER" ||
-		instruction.opcode === "CREATE_F64" ||
-		instruction.opcode === "CREATE_BOOLEAN"
-	) {
-		return false;
-	}
+	const operand = simpleRegisterOperand(instruction);
+	if (operand !== undefined) return operand === register;
 	const row = instruction as unknown as Record<string, unknown>;
-	if (VM_REGISTER_USE_FIELDS.some((field) => row[field] === register)) return true;
-	return VM_REGISTER_USE_ARRAY_FIELDS.some(
-		(field) => Array.isArray(row[field]) && row[field].includes(register),
-	);
+	for (const field of VM_REGISTER_USE_FIELDS) {
+		if (row[field] === register) return true;
+	}
+	for (const field of VM_REGISTER_USE_ARRAY_FIELDS) {
+		const operands = row[field];
+		if (Array.isArray(operands) && operands.includes(register)) return true;
+	}
+	return false;
 }
 
 /** Whether an instruction defines a physical register, including multi-result opcodes. */

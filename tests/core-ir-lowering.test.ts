@@ -18,6 +18,9 @@ import { coreRegisterClasses } from "../src/compiler/target/lower-execution.ts";
 import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
 import {
 	buildVerifiedRuntimeProducts,
+	encodeVmValueOperand,
+	vmInstructionReadRegisters,
+	vmInstructionUsesRegister,
 	vmSafepointRootMapsAreTrusted,
 } from "../src/compiler/target/runtime-image.ts";
 import {
@@ -48,6 +51,42 @@ function lower(source: string) {
 function optimize(source: string) {
 	return optimizeCore(construct(source)).compilation;
 }
+
+describe("VM physical register operands", () => {
+	it("skips numeric literals and jump destinations when collecting reads", () => {
+		const literal = { opcode: "CREATE_NUMBER", dst: 1, value: 2 } as const;
+		const jump = { opcode: "JUMP", targetIp: 2 } as const;
+		expect(vmInstructionReadRegisters(literal)).toEqual([]);
+		expect(vmInstructionReadRegisters(jump)).toEqual([]);
+		expect(vmInstructionUsesRegister(literal, 2)).toBe(false);
+		expect(vmInstructionUsesRegister(jump, 2)).toBe(false);
+	});
+
+	it("reads an iterator source without its two destination registers", () => {
+		const iterator = {
+			opcode: "GET_ITERATOR",
+			source: 1,
+			iteratorDst: 2,
+			nextDst: 3,
+		} as const;
+		expect(vmInstructionReadRegisters(iterator)).toEqual([1]);
+		expect(vmInstructionUsesRegister(iterator, 1)).toBe(true);
+		expect(vmInstructionUsesRegister(iterator, 2)).toBe(false);
+		expect(vmInstructionUsesRegister(iterator, 3)).toBe(false);
+	});
+
+	it("preserves call operand order and repeated register reads around an immediate", () => {
+		const call = {
+			opcode: "CALL" as const,
+			dst: 0,
+			callee: 1,
+			thisValue: 2,
+			argumentCount: 3,
+			arguments: [3, encodeVmValueOperand(0, { kind: "number", value: 42 }), 3],
+		};
+		expect(vmInstructionReadRegisters(call)).toEqual([1, 2, 3, 3]);
+	});
+});
 
 describe("Core IR lowering", () => {
 	it("constructs explicit SSA block parameters for mutable control flow", () => {
