@@ -531,6 +531,12 @@ Artifacts validate the selected window against each entry's body and representat
 Numeric-fusion overlays cut read admission because their hidden temporaries and
 slow paths have no read-region cooperation contract.
 
+The shared static-name probe dispatches on cache mode before entering the stages
+that need a frame. A negative site checks its local row once, then the shared stub
+and the protected builtin chain. Each stub bank checks the key before validating
+the chain. These probes cannot collect because generated callers may still hold
+private roots.
+
 Adjacent boxed property reads also carry per-entry persisted plans. The receiver,
 cache sites, borrowed values, and two claimed instructions are selected before
 storage planning. Rendering consumes the pair admission and preserves a separate

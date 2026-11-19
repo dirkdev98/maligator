@@ -1416,8 +1416,6 @@ static inline u64 mal_ic_unpack_prototype_epoch(const MalInlineCache *ic) {
     return epoch;
 }
 
-u64 mal_ic_recorded_prototype_epoch(const MalInlineCache *ic);
-
 static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 epoch) {
     for (u8 i = 0; i < 8; i++) {
         ic->poly_data[i] = (byte) (epoch >> (i * 8));
@@ -1995,96 +1993,29 @@ static inline MAL_PRESERVE_MOST bool mal_vm_inherited_value_try_load(const MalVm
     return true;
 }
 
-static inline bool mal_vm_inherited_try_load(const MalVm *vm, MalValue receiver, MalValue key,
-                                              const MalInlineCache *ic, MalValue *out) {
-    if (key != ic->key) {
-        return false;
-    }
+bool mal_vm_inherited_missing_try_load(
+    MalValue receiver, const MalInlineCache *ic, MalValue *out
+);
+bool mal_vm_inherited_holder_try_load(
+    MalValue receiver, const MalInlineCache *ic, MalValue *out
+);
 
-    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE) {
-        return mal_vm_inherited_value_try_load(vm, receiver, ic, out);
-    }
-
-    if (ic->mode == MAL_IC_MODE_MISSING) {
-        if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
+// Stub banks can reject a different key before the chain probe needs a frame.
+static inline __attribute__((always_inline)) bool mal_vm_inherited_try_load(
+    const MalVm *vm, MalValue receiver, MalValue key, const MalInlineCache *ic, MalValue *out
+) {
+    if (key != ic->key) return false;
+    switch (ic->mode) {
+        case MAL_IC_MODE_INHERITED_VALUE:
+            return mal_vm_inherited_value_try_load(vm, receiver, ic, out);
+        case MAL_IC_MODE_MISSING:
+            return mal_vm_inherited_missing_try_load(receiver, ic, out);
+        case MAL_IC_MODE_INHERITED_SLOT:
+        case MAL_IC_MODE_INHERITED_TABLE:
+            return mal_vm_inherited_holder_try_load(receiver, ic, out);
+        default:
             return false;
-        }
-        const MalObject *object = mal_value_to_object(receiver);
-        if (object->shape != ic->shape || mal_object_has_public_overflow(object)) {
-            return false;
-        }
-        if (ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN) {
-            if (ic->poly_count > 0) {
-                if (mal_object_prototype(object) != ic->proto_object[0]) {
-                    return false;
-                }
-            } else {
-                if (mal_object_prototype(object) != ic->proto_object[0] ||
-                    mal_prototype_chain_epoch == 0 ||
-                    mal_prototype_chain_epoch != mal_ic_recorded_prototype_epoch(ic)) {
-                    return false;
-                }
-            }
-        } else {
-            const MalObject *cursor = object;
-            for (u8 depth = 0; depth < ic->poly_count; depth++) {
-                cursor = mal_object_prototype(cursor);
-                if (cursor == nullptr || cursor->header.type != MAL_HEAP_OBJECT ||
-                    cursor->shape != ic->poly_shape[depth] ||
-                    mal_object_has_public_overflow(cursor)) {
-                    return false;
-                }
-            }
-            if (mal_object_prototype(cursor) != nullptr) {
-                return false;
-            }
-        }
-        *out = mal_value_new_undefined();
-        MAL_PERF_COUNT(ic_load_missing_hits);
-        return true;
     }
-
-    if ((ic->mode != MAL_IC_MODE_INHERITED_SLOT &&
-         ic->mode != MAL_IC_MODE_INHERITED_TABLE) ||
-        !mal_value_is_heap_type(receiver, ic->receiver_type)) {
-        return false;
-    }
-
-    const MalObject *object = mal_value_to_object(receiver);
-    if (object->shape != ic->shape || mal_object_has_public_overflow(object)) {
-        return false;
-    }
-    const MalObject *holder;
-    if (ic->poly_count > 0) {
-        if (mal_object_prototype(object) != ic->proto_object[0]) {
-            return false;
-        }
-        holder = ic->proto_object[1];
-    } else {
-        if (mal_object_prototype(object) != ic->proto_object[0] ||
-            mal_prototype_chain_epoch == 0 ||
-            mal_prototype_chain_epoch != mal_ic_recorded_prototype_epoch(ic)) {
-            return false;
-        }
-        holder = ic->proto_object[1];
-    }
-
-    if (ic->mode == MAL_IC_MODE_INHERITED_SLOT) {
-        *out = mal_object_field_load(holder, ic->slot);
-    } else {
-        if (mal_object_overflow(holder) == nullptr || !mal_table_entry_matches(
-                mal_object_overflow(holder), ic->entry, ic->table_handle_epoch,
-                mal_key_from_value(key))) {
-            return false;
-        }
-        MalPropertyDesc desc = mal_property_entry_desc(mal_object_overflow(holder), ic->entry);
-        if (desc.flags & MAL_PROPERTY_ACCESSOR) {
-            return false;
-        }
-        *out = desc.value;
-    }
-    mal_perf_ic_load_inherited_hit();
-    return true;
 }
 
 static inline bool mal_vm_inherited_try_load_static(const MalVm *vm, MalValue receiver,

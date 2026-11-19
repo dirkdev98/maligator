@@ -3032,11 +3032,15 @@ mal_vm_property_try_load_static_missing(
     MalVm *vm, MalValue receiver, const MalObject *object, MalInlineCache *ic
 ) {
     MalValue value;
-    if (mal_vm_inherited_try_load_static(vm, receiver, ic, &value) ||
-        (object != nullptr && mal_vm_object_try_load_polymorphic(object, ic->key, ic, &value))) {
+    if (mal_vm_inherited_missing_try_load(receiver, ic, &value) ||
+        mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, &value)) {
         return (MalStaticPropertyProbeResult) {.hit = true, .value = value};
     }
-    return mal_vm_property_try_load_static_rows(vm, receiver, object, ic);
+    if (mal_vm_builtin_chain_missing(vm, receiver, ic->key)) {
+        MAL_PERF_COUNT(ic_load_builtin_missing_hits);
+        return (MalStaticPropertyProbeResult) {.hit = true, .value = MAL_VALUE_UNDEFINED};
+    }
+    return (MalStaticPropertyProbeResult) {.hit = false, .value = MAL_VALUE_UNDEFINED};
 }
 
 static _Atomic(MalNativeGetterRead) mal_vm_native_getter_read = nullptr;
@@ -3057,6 +3061,12 @@ static inline bool mal_vm_native_getter_row_try_read(
         mal_value_is_native_function_object(ic->value) && read(vm, ic->value, receiver, out);
 }
 
+#if defined(__clang__) && !defined(__wasm__) && __has_attribute(musttail)
+#define MAL_STATIC_PROBE_TAIL __attribute__((musttail)) return
+#else
+#define MAL_STATIC_PROBE_TAIL return
+#endif
+
 // Keep all non-monomorphic static cache hits noncollecting: callers may hold private roots.
 // The hottest outcomes return before the row search saves the registers it uses.
 __attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
@@ -3074,9 +3084,23 @@ mal_vm_property_try_load_static_remaining(
         mal_perf_ic_load_primitive_hit();
         return (MalStaticPropertyProbeResult) {.hit = true, .value = ic->value};
     }
+    if (ic->mode == MAL_IC_MODE_INHERITED_GETTER || ic->mode == MAL_IC_MODE_OWN_GETTER) {
+        return (MalStaticPropertyProbeResult) {.hit = false};
+    }
+    if (ic->mode == MAL_IC_MODE_MISSING) {
+        MAL_STATIC_PROBE_TAIL mal_vm_property_try_load_static_missing(vm, receiver, object, ic);
+    }
+    MAL_STATIC_PROBE_TAIL mal_vm_property_try_load_static_rows(vm, receiver, object, ic);
+}
+
+#undef MAL_STATIC_PROBE_TAIL
+
+static __attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
+mal_vm_property_try_load_static_rows(
+    MalVm *vm, MalValue receiver, const MalObject *object, MalInlineCache *ic
+) {
     // The inline probe admits only ordinary objects. Functions, classes and builtin
-    // receivers keep named own fields under the same shape proof, and reads such as
-    // a module's `createDebug.namespaces` cost more behind the rows below than the read.
+    // receivers keep named own fields under the same shape proof.
     if (object == nullptr && ic->mode == MAL_IC_MODE_SHAPE) {
         const MalObject *own = mal_vm_as_own_slot_object(receiver);
         MalValue value;
@@ -3086,12 +3110,6 @@ mal_vm_property_try_load_static_remaining(
             return (MalStaticPropertyProbeResult) {.hit = true, .value = value};
         }
     }
-    // Getter rows run user code, which only the rooted miss path may do.
-    if (ic->mode == MAL_IC_MODE_INHERITED_GETTER || ic->mode == MAL_IC_MODE_OWN_GETTER) {
-        return (MalStaticPropertyProbeResult) { .hit = false };
-    }
-    // Dictionary-mode receivers, such as an enum object with hundreds of members, only
-    // ever hit this row; reaching it after every shape-mode row cost more than the read.
     if (ic->mode == MAL_IC_MODE_OWN_TABLE) {
         const MalObject *own = object != nullptr ? object : mal_vm_as_own_slot_object(receiver);
         MalValue value;
@@ -3099,21 +3117,6 @@ mal_vm_property_try_load_static_remaining(
             return (MalStaticPropertyProbeResult) {.hit = true, .value = value};
         }
     }
-    // Option bags read many absent keys; each read otherwise passes every row below.
-    if (ic->mode == MAL_IC_MODE_MISSING) {
-        return mal_vm_property_try_load_static_missing(vm, receiver, object, ic);
-    }
-    MalValue value;
-    if (object != nullptr && mal_vm_object_try_load_polymorphic(object, ic->key, ic, &value)) {
-        return (MalStaticPropertyProbeResult) {.hit = true, .value = value};
-    }
-    return mal_vm_property_try_load_static_rows(vm, receiver, object, ic);
-}
-
-static __attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
-mal_vm_property_try_load_static_rows(
-    MalVm *vm, MalValue receiver, const MalObject *object, MalInlineCache *ic
-) {
     // A method site that alternates between classes misses its one row for every class
     // but one; the shared stub holds the others, so try it before the unrelated rows.
     if (object != nullptr && ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0 &&
@@ -3227,10 +3230,7 @@ mal_vm_property_try_load_static_rows(
         hit = mal_vm_inherited_try_load_static(vm, receiver, ic, &value) ||
             mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, &value);
     } else {
-        const MalObject *own = object != nullptr ? object : mal_vm_as_own_slot_object(receiver);
-        hit = (own != nullptr && ic->mode == MAL_IC_MODE_OWN_TABLE &&
-               mal_vm_own_table_try_load(own, ic->key, ic, &value)) ||
-            mal_vm_watched_try_load_static(vm, receiver, ic, &value) ||
+        hit = mal_vm_watched_try_load_static(vm, receiver, ic, &value) ||
             mal_vm_special_try_load_static(vm, receiver, ic, &value) ||
             mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, &value);
     }
@@ -6756,8 +6756,78 @@ bool mal_vm_load_known_own_slot_miss(
     return false;
 }
 
-u64 mal_ic_recorded_prototype_epoch(const MalInlineCache *ic) {
-    return mal_ic_unpack_prototype_epoch(ic);
+static bool mal_ic_prototype_epoch_current(const MalInlineCache *ic) {
+    u64 epoch = mal_prototype_chain_epoch;
+    return epoch != 0 && epoch == mal_ic_unpack_prototype_epoch(ic);
+}
+
+__attribute__((noinline)) bool mal_vm_inherited_missing_try_load(
+    MalValue receiver, const MalInlineCache *ic, MalValue *out
+) {
+    if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
+        return false;
+    }
+    const MalObject *object = mal_value_to_object(receiver);
+    if (object->shape != ic->shape || mal_object_has_public_overflow(object)) {
+        return false;
+    }
+    if (ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN) {
+        if (mal_object_prototype(object) != ic->proto_object[0] ||
+            (ic->poly_count == 0 && !mal_ic_prototype_epoch_current(ic))) {
+            return false;
+        }
+    } else {
+        const MalObject *cursor = object;
+        for (u8 depth = 0; depth < ic->poly_count; depth++) {
+            cursor = mal_object_prototype(cursor);
+            if (cursor == nullptr || cursor->header.type != MAL_HEAP_OBJECT ||
+                cursor->shape != ic->poly_shape[depth] ||
+                mal_object_has_public_overflow(cursor)) {
+                return false;
+            }
+        }
+        if (mal_object_prototype(cursor) != nullptr) {
+            return false;
+        }
+    }
+    *out = mal_value_new_undefined();
+    MAL_PERF_COUNT(ic_load_missing_hits);
+    return true;
+}
+
+__attribute__((noinline)) bool mal_vm_inherited_holder_try_load(
+    MalValue receiver, const MalInlineCache *ic, MalValue *out
+) {
+    if (!mal_value_is_heap_type(receiver, ic->receiver_type)) {
+        return false;
+    }
+
+    const MalObject *object = mal_value_to_object(receiver);
+    if (object->shape != ic->shape || mal_object_has_public_overflow(object)) {
+        return false;
+    }
+    if (mal_object_prototype(object) != ic->proto_object[0] ||
+        (ic->poly_count == 0 && !mal_ic_prototype_epoch_current(ic))) {
+        return false;
+    }
+    const MalObject *holder = ic->proto_object[1];
+
+    if (ic->mode == MAL_IC_MODE_INHERITED_SLOT) {
+        *out = mal_object_field_load(holder, ic->slot);
+    } else {
+        const MalTable *overflow = mal_object_overflow(holder);
+        if (overflow == nullptr || !mal_table_entry_matches(
+                overflow, ic->entry, ic->table_handle_epoch, mal_key_from_value(ic->key))) {
+            return false;
+        }
+        MalPropertyDesc desc = mal_property_entry_desc(overflow, ic->entry);
+        if (desc.flags & MAL_PROPERTY_ACCESSOR) {
+            return false;
+        }
+        *out = desc.value;
+    }
+    mal_perf_ic_load_inherited_hit();
+    return true;
 }
 
 void mal_vm_property_cache_invalidate(void *cache) {
@@ -7339,7 +7409,7 @@ static MalInlineCache *mal_vm_inherited_stub_for_fill(
          (first->mode == MAL_IC_MODE_MISSING &&
           first->receiver_type == MAL_IC_MISSING_EXACT_CHAIN)) &&
         (mal_prototype_chain_epoch == 0 ||
-         mal_ic_recorded_prototype_epoch(first) != mal_prototype_chain_epoch)) {
+         mal_ic_unpack_prototype_epoch(first) != mal_prototype_chain_epoch)) {
         return first;
     }
     // Keep the first resident stable; only a full set's second way is replaced.
