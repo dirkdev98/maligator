@@ -39,7 +39,10 @@ consumes agree. Fast-entry probes observe callees reachable from their current
 prefix and retain dependencies that can reserve relocation slots. A newly
 available callee can extend the prefix and expose further dependencies. A
 translation-unit size retry reapplies symbol exclusions to the prepared plan and
-reuses unchanged render results. Packing begins after the retry state is released.
+reuses unchanged render results. Packing receives the final native definitions and
+externalized data after the retry state and intermediate source parts are released.
+It collects declarations once a candidate group can fit by definition size, or
+when emitting an individual definition.
 
 Calls that stay generic, such as a method read from a prototype, can still reach a
 typed entry through the callee. A looping function whose parameters seed a loop

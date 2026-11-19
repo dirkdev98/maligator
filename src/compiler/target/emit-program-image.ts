@@ -792,11 +792,9 @@ interface TranslationUnitPart {
 	declarationSymbols: ReadonlySet<string> | undefined;
 }
 
-interface TranslationUnitPartition {
-	parts: Array<TranslationUnitPart>;
-	declarationIndices: Array<number>;
-	declarationSourceCodeUnits: number;
-	partSourceCodeUnits: number;
+interface TranslationUnitDeclarations {
+	readonly indices: ReadonlyArray<number>;
+	readonly codeUnits: number;
 }
 
 interface NativeCompilationAvailability {
@@ -2057,13 +2055,13 @@ function compiledFunctionPartitionKeys(
 /** Code-unit symbols whose definition, header, and own declarations exceed one unit. */
 function oversizedCodeDefinitions(
 	inputs: {
-		readonly emitted: EmittedProgramImageParts;
+		readonly compiled: ReadonlyArray<CompiledFunction | null>;
 		readonly generatedDeclarations: ReadonlyArray<GeneratedDeclaration>;
 		readonly declarationIndicesBySymbol: ReadonlyMap<string, ReadonlyArray<number>>;
 	},
 	maximumNativeFunctionCodeUnits: number,
 ): Array<string> {
-	const { emitted, generatedDeclarations, declarationIndicesBySymbol } = inputs;
+	const { compiled, generatedDeclarations, declarationIndicesBySymbol } = inputs;
 	let headerCodeUnits = NATIVE_C_HEADER_LINES.length;
 	for (const line of NATIVE_C_HEADER_LINES) headerCodeUnits += line.length;
 	let allDeclarationCodeUnits = generatedDeclarations.length;
@@ -2081,7 +2079,7 @@ function oversizedCodeDefinitions(
 			unitCodeUnits += generatedDeclarations[index]!.source.length + 1;
 		if (unitCodeUnits > maximumNativeFunctionCodeUnits) oversized.push(symbol);
 	};
-	for (const fn of emitted.compiled) {
+	for (const fn of compiled) {
 		if (fn === null) continue;
 		if (fn.source.length > 0) check(fn.symbol, fn.source, fn.declarationSymbols);
 		for (const entry of fn.directEntries)
@@ -2127,8 +2125,8 @@ function prepareTranslationUnitInputs(
 			else indices.push(index);
 		}
 		return {
-			emitted,
-			splitData,
+			compiled: emitted.compiled,
+			dataDefinitions: splitData.definitions,
 			runtimeChunks,
 			generatedDeclarations,
 			declarationIndicesBySymbol,
@@ -2171,8 +2169,8 @@ export function emitProgramTranslationUnits(
 		maximumNativeFunctionCodeUnits,
 	);
 	const {
-		emitted,
-		splitData,
+		compiled,
+		dataDefinitions,
 		runtimeChunks,
 		generatedDeclarations,
 		declarationIndicesBySymbol,
@@ -2192,54 +2190,20 @@ export function emitProgramTranslationUnits(
 						),
 		};
 	};
-	const preparePartition = (
-		parts: Array<TranslationUnitPart>,
-	): TranslationUnitPartition => {
+	const resolveDeclarations = (
+		parts: ReadonlyArray<TranslationUnitPart>,
+	): TranslationUnitDeclarations => {
 		const referenced = new Set<number>();
-		let partSourceCodeUnits = 0;
-		for (const part of parts) {
-			partSourceCodeUnits += part.source.length;
+		for (const part of parts)
 			for (const index of part.declarationIndices) referenced.add(index);
-		}
-		const declarationIndices = [...referenced].sort((a, b) => a - b);
-		return {
-			parts,
-			declarationIndices,
-			declarationSourceCodeUnits: declarationIndices.reduce(
-				(total, index) => total + generatedDeclarations[index]!.source.length,
-				0,
-			),
-			partSourceCodeUnits,
-		};
+		const indices = [...referenced].sort((left, right) => left - right);
+		let codeUnits = 0;
+		for (const index of indices)
+			codeUnits += generatedDeclarations[index]!.source.length + 1;
+		return { indices, codeUnits };
 	};
-	const unitSourceCodeUnits = (
-		headerSourceCodeUnits: number,
-		headerLineCount: number,
-		partition: TranslationUnitPartition,
-	): number => {
-		const lineCount =
-			headerLineCount + partition.declarationIndices.length + 1 + partition.parts.length;
-		return (
-			headerSourceCodeUnits +
-			partition.declarationSourceCodeUnits +
-			partition.partSourceCodeUnits +
-			lineCount -
-			1
-		);
-	};
-	const unitSource = (
-		headerLines: ReadonlyArray<string>,
-		partition: TranslationUnitPartition,
-	): Array<string> => {
-		return separatedSourceChunks([
-			...headerLines,
-			...partition.declarationIndices.map(
-				(index) => generatedDeclarations[index]!.source,
-			),
-			"",
-			...partition.parts.map((part) => part.source),
-		]);
-	};
+	const partCodeUnits = (parts: ReadonlyArray<TranslationUnitPart>) =>
+		parts.reduce((total, part) => total + part.source.length + 1, 0);
 	const partition = (
 		kind: "data" | "code",
 		headerLines: ReadonlyArray<string>,
@@ -2247,37 +2211,43 @@ export function emitProgramTranslationUnits(
 		group = "",
 	): Array<GeneratedTranslationUnit> => {
 		const units: Array<GeneratedTranslationUnit> = [];
-		const headerSourceCodeUnits = headerLines.reduce(
-			(total, line) => total + line.length,
+		const headerCodeUnits = headerLines.reduce(
+			(total, line) => total + line.length + 1,
 			0,
 		);
 		const visit = (
-			current: TranslationUnitPartition,
+			parts: ReadonlyArray<TranslationUnitPart>,
+			bodyCodeUnits: number,
 			prefix: string,
 			depth: number,
+			declarations?: TranslationUnitDeclarations,
 		): void => {
-			const { parts } = current;
 			if (parts.length === 0) return;
-			const sourceCodeUnits = unitSourceCodeUnits(
-				headerSourceCodeUnits,
-				headerLines.length,
-				current,
-			);
-			if (sourceCodeUnits <= targetCodeUnits || parts.length === 1) {
-				const sourceChunks = unitSource(headerLines, current);
-				units.push({
-					id: `${kind}-${group}${prefix || "root"}`,
-					kind,
-					sourceChunks,
-					sourceCodeUnits,
-					headerFiles: generatedHeaderFiles(headerLines),
-					definitions: parts.map((part) => ({
-						kind: part.kind,
-						symbol: part.symbol,
-						sourceCodeUnits: part.source.length,
-					})),
-				});
-				return;
+			// A group already over budget without declarations needs to split.
+			if (parts.length === 1 || headerCodeUnits + bodyCodeUnits <= targetCodeUnits) {
+				declarations ??= resolveDeclarations(parts);
+				const sourceCodeUnits = headerCodeUnits + bodyCodeUnits + declarations.codeUnits;
+				if (sourceCodeUnits <= targetCodeUnits || parts.length === 1) {
+					const sourceChunks = separatedSourceChunks([
+						...headerLines,
+						...declarations.indices.map((index) => generatedDeclarations[index]!.source),
+						"",
+						...parts.map((part) => part.source),
+					]);
+					units.push({
+						id: `${kind}-${group}${prefix || "root"}`,
+						kind,
+						sourceChunks,
+						sourceCodeUnits,
+						headerFiles: generatedHeaderFiles(headerLines),
+						definitions: parts.map((part) => ({
+							kind: part.kind,
+							symbol: part.symbol,
+							sourceCodeUnits: part.source.length,
+						})),
+					});
+					return;
+				}
 			}
 
 			const left: Array<TranslationUnitPart> = [];
@@ -2287,12 +2257,15 @@ export function emitProgramTranslationUnits(
 					a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0,
 				);
 				const middle = Math.floor(ordered.length / 2);
-				visit(preparePartition(ordered.slice(0, middle)), `${prefix}0`, depth + 1);
-				visit(preparePartition(ordered.slice(middle)), `${prefix}1`, depth + 1);
+				const earlier = ordered.slice(0, middle);
+				const later = ordered.slice(middle);
+				visit(earlier, partCodeUnits(earlier), `${prefix}0`, depth + 1);
+				visit(later, partCodeUnits(later), `${prefix}1`, depth + 1);
 				return;
 			}
 			const round = Math.floor(depth / 32);
 			const bit = depth % 32;
+			let leftCodeUnits = 0;
 			for (const part of parts) {
 				const hash =
 					part.partitionHashes[round] ??
@@ -2302,20 +2275,31 @@ export function emitProgramTranslationUnits(
 						`${part.kind}:`,
 						part.kind === "data array" ? part.symbol : undefined,
 					));
-				const target = ((hash >>> bit) & 1) === 0 ? left : right;
-				target.push(part);
+				if (((hash >>> bit) & 1) === 0) {
+					left.push(part);
+					leftCodeUnits += part.source.length + 1;
+				} else {
+					right.push(part);
+				}
 			}
 			if (left.length === 0 || right.length === 0) {
-				visit(current, `${prefix}${left.length === 0 ? "1" : "0"}`, depth + 1);
+				visit(
+					parts,
+					bodyCodeUnits,
+					`${prefix}${left.length === 0 ? "1" : "0"}`,
+					depth + 1,
+					declarations,
+				);
 				return;
 			}
-			visit(preparePartition(left), `${prefix}0`, depth + 1);
-			visit(preparePartition(right), `${prefix}1`, depth + 1);
+			visit(left, leftCodeUnits, `${prefix}0`, depth + 1);
+			visit(right, bodyCodeUnits - leftCodeUnits, `${prefix}1`, depth + 1);
 		};
-		visit(preparePartition(inputs.map(preparePart)), "", 0);
+		const parts = inputs.map(preparePart);
+		visit(parts, partCodeUnits(parts), "", 0);
 		return units;
 	};
-	const dataParts = splitData.definitions.map((data) => ({
+	const dataParts = dataDefinitions.map((data) => ({
 		kind: "data array" as const,
 		symbol: data.symbol,
 		partitionKey: data.source,
@@ -2331,7 +2315,7 @@ export function emitProgramTranslationUnits(
 		options.partitionRoot,
 	);
 	const application = applicationFunctions(image, options.partitionRoot);
-	for (const [functionIndex, fn] of emitted.compiled.entries()) {
+	for (const [functionIndex, fn] of compiled.entries()) {
 		if (fn === null) continue;
 		const codeParts = application[functionIndex] ? applicationCode : dependencyCode;
 		if (fn.source.length > 0)
@@ -2352,7 +2336,7 @@ export function emitProgramTranslationUnits(
 			});
 		}
 	}
-	const linkParts = emitted.compiled.flatMap((fn, functionIndex) =>
+	const linkParts = compiled.flatMap((fn, functionIndex) =>
 		fn === null
 			? []
 			: [...(fn.source.length === 0 ? [] : [fn]), ...fn.directEntries].flatMap((part) =>
