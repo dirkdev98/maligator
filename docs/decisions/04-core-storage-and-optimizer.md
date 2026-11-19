@@ -151,7 +151,9 @@ depends on JavaScript object identity, and there are no `WeakMap<CoreFunction, .
 caches or manual `inheritControlFlow`, `inheritSummaries`, or equivalent preservation
 APIs.
 
-Cheap local analyses may recompute for a changed function. Whole-program analysis
+Cheap local analyses may recompute for a changed function. The per-definition cache
+keeps the first function's result inline. A second function needs the indexed table.
+The manager creates the program-flow engine on its first use. Whole-program analysis
 requires an explicit program dependency. The manager records queries, hits,
 recomputations, invalidations, and elapsed time for every analysis.
 

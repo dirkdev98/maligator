@@ -30,7 +30,7 @@ export interface CoreAnalysisComputation {
 	readonly context: CoreCompilationContext;
 	readonly request: CoreAnalysisRequest;
 	readonly previous?: unknown;
-	readonly programFlow: CoreProgramFlowEngine;
+	readonly getProgramFlow: () => CoreProgramFlowEngine;
 	readonly scratch: CoreAnalysisScratchPool;
 	readonly runOwner: CoreOptimizationOwnerRunner;
 	// Lazy results report deltas; the manager already records their initial statistics.
@@ -63,8 +63,10 @@ interface CachedAnalysis {
 
 interface DefinitionCache {
 	program?: CachedAnalysis;
-	readonly functions: Array<CachedAnalysis | undefined>;
-	readonly sccs: Array<CachedAnalysis | undefined>;
+	firstFunction?: CoreFunctionId;
+	firstFunctionResult?: CachedAnalysis;
+	otherFunctions?: Array<CachedAnalysis | undefined>;
+	sccs?: Array<CachedAnalysis | undefined>;
 }
 
 interface RegisteredAnalysis {
@@ -114,7 +116,11 @@ export class CoreAnalysisManager {
 	readonly #generation: number;
 	readonly #context: CoreCompilationContext;
 	readonly #report: CoreOptimizationReportBuilder;
-	readonly #programFlow: CoreProgramFlowEngine;
+	#programFlow: CoreProgramFlowEngine | undefined;
+	readonly #readProgramFlow = () =>
+		(this.#programFlow ??= new CoreProgramFlowEngine(this.#program, this.#report));
+	readonly #getDependency: CoreAnalysisComputation["get"] = (definition, request) =>
+		this.get(definition, request);
 	readonly #scratch: CoreAnalysisScratchPool;
 	readonly #cache = new WeakMap<CoreAnalysisDefinition<unknown>, DefinitionCache>();
 	readonly #contextIdentities = new WeakMap<CoreAnalysisDefinition<unknown>, unknown>();
@@ -134,7 +140,6 @@ export class CoreAnalysisManager {
 		this.#generation = program.generation;
 		this.#context = context;
 		this.#report = report;
-		this.#programFlow = new CoreProgramFlowEngine(program, report);
 		this.#scratch = scratch;
 	}
 
@@ -152,17 +157,19 @@ export class CoreAnalysisManager {
 			);
 		}
 		this.#validateDefinition(definition, request);
-		const definitionCache = this.#cache.get(definition) ?? {
-			functions: [],
-			sccs: [],
-		};
-		this.#cache.set(definition, definitionCache);
+		let definitionCache = this.#cache.get(definition);
+		if (definitionCache === undefined) {
+			definitionCache = {};
+			this.#cache.set(definition, definitionCache);
+		}
 		const cached =
 			request.scope === "program"
 				? definitionCache.program
 				: request.scope === "function"
-					? definitionCache.functions[request.function]
-					: definitionCache.sccs[request.index];
+					? definitionCache.firstFunction === request.function
+						? definitionCache.firstFunctionResult
+						: definitionCache.otherFunctions?.[request.function]
+					: definitionCache.sccs?.[request.index];
 		if (cached !== undefined && this.#versionsMatch(definition, request, cached)) {
 			this.#report.recordAnalysis(definition.key, "hit", false, 0);
 			return cached.value as Result;
@@ -183,10 +190,10 @@ export class CoreAnalysisManager {
 					program: this.#program,
 					context: this.#context,
 					request,
-					programFlow: this.#programFlow,
+					getProgramFlow: this.#readProgramFlow,
 					scratch: this.#scratch,
 					...analysisInstrumentation(this.#report, definition.key),
-					get: (dependency, dependencyRequest) => this.get(dependency, dependencyRequest),
+					get: this.#getDependency,
 					...(cached === undefined ? {} : { previous: cached.value }),
 				});
 			value =
@@ -207,8 +214,15 @@ export class CoreAnalysisManager {
 		const next = { ...versions, value };
 		if (request.scope === "program") definitionCache.program = next;
 		else if (request.scope === "function") {
-			definitionCache.functions[request.function] = next;
-		} else definitionCache.sccs[request.index] = next;
+			// Function optimization sessions usually query only one function per definition.
+			if (
+				definitionCache.firstFunction === undefined ||
+				definitionCache.firstFunction === request.function
+			) {
+				definitionCache.firstFunction = request.function;
+				definitionCache.firstFunctionResult = next;
+			} else (definitionCache.otherFunctions ??= [])[request.function] = next;
+		} else (definitionCache.sccs ??= [])[request.index] = next;
 		this.#report.recordAnalysisResult(definition.key, value);
 		if (definition.owner !== undefined) {
 			this.#report.recordOwnerWork(definition.owner, 1);

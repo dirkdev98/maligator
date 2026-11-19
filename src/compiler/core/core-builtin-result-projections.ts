@@ -60,10 +60,10 @@ export const CORE_BUILTIN_RESULT_PROJECTIONS_ANALYSIS: CoreAnalysisDefinition<
 	key: "builtin-result-projections",
 	scope: "function",
 	functionDependencies: ["body", "calls"],
-	compute({ program, request, programFlow }) {
+	compute({ program, request, getProgramFlow }) {
 		if (request.scope !== "function") throw new Error("Expected function analysis");
 		const fn = program.function(request.function);
-		const transfers = programFlow.local(request.function);
+		const transfers = getProgramFlow().local(request.function);
 		const projections = new Map<CoreInstructionId, CoreBuiltinResultProjection>();
 		for (let index = 0; index < transfers.operationCount; index++) {
 			const instruction = transfers.operationAt(index);

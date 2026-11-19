@@ -143,12 +143,12 @@ export const CORE_LOCAL_INTERPROCEDURAL_FLOW_ANALYSIS: CoreAnalysisDefinition<Co
 		key: "local-interprocedural-flow",
 		scope: "function",
 		functionDependencies: ["body", "calls"],
-		compute({ program, request, programFlow }) {
+		compute({ program, request, getProgramFlow }) {
 			if (request.scope !== "function")
 				throw new Error("Expected function analysis request");
 			return analyzeCoreInterproceduralValueFlow(
 				program.function(request.function),
-				programFlow.local(request.function),
+				getProgramFlow().local(request.function),
 			);
 		},
 	};

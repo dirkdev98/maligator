@@ -44,9 +44,10 @@ export const CORE_PROGRAM_FLOW_ANALYSIS: CoreAnalysisDefinition<CoreProgramFlowS
 	contextIdentity(context) {
 		return context.facts.closure.sourceClosure.kind;
 	},
-	compute({ program, context, request, previous, get, programFlow }) {
+	compute({ program, context, request, previous, get, getProgramFlow }) {
 		if (request.scope !== "program") throw new Error("Expected program analysis");
 		const prior = previous as CoreProgramFlowState | undefined;
+		const programFlow = getProgramFlow();
 		const epoch = programFlow.refresh(CORE_PROGRAM_FLOW_ALL_DIMENSIONS);
 		const dirtyFunctions = new Array<CoreFunctionId>();
 		if (prior !== undefined) {
@@ -153,7 +154,7 @@ export const CORE_PROGRAM_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreProgra
 		functionDependencies: CORE_PROGRAM_FLOW_ANALYSIS.functionDependencies,
 		programDependencies: CORE_PROGRAM_FLOW_ANALYSIS.programDependencies,
 		contextIdentity: CORE_PROGRAM_FLOW_ANALYSIS.contextIdentity,
-		compute({ program, context, request, previous, get, programFlow }) {
+		compute({ program, context, request, previous, get, getProgramFlow }) {
 			const prior = previous as CoreProgramValueKindAnalysis | undefined;
 			const { targets, summaries, flowRevision } = get(
 				CORE_PROGRAM_FLOW_ANALYSIS,
@@ -186,6 +187,7 @@ export const CORE_PROGRAM_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreProgra
 			const unjournaledInvalidation =
 				prior !== undefined && prior.flowRevision === flowRevision;
 			const previousKinds = prior?.kinds;
+			const programFlow = getProgramFlow();
 			const kinds =
 				previousKinds?.dataEpoch === program.dataEpoch &&
 				!unjournaledInvalidation &&
