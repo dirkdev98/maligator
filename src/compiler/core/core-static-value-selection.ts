@@ -23,6 +23,7 @@ import { coreTerminatorInput, mapCoreTerminatorEdges } from "./core-ir-control-f
 import type { CoreAttributeValue, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
+import type { CoreStaticValueAnalysis } from "./core-static-values.ts";
 import {
 	CORE_STATIC_VALUE_ANALYSIS,
 	CORE_STATIC_VALUE_FUNCTION_DEPENDENCIES,
@@ -281,11 +282,11 @@ export const foldStaticPropertyReads: CoreFunctionPass = {
 	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
-		const { program, item } = context,
+		const { program, item, compilationContext } = context,
 			fn = program.function(item.function);
 		const loadPropertyOpcode = program.registry.get("loadProperty")?.id;
 		const loadPropertyStaticOpcode = program.registry.get("loadPropertyStatic")?.id;
-		const analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
+		let facts: CoreStaticValueAnalysis | undefined;
 		const replacements: Array<{
 			instruction: CoreInstructionId;
 			opcode: string;
@@ -298,6 +299,8 @@ export const foldStaticPropertyReads: CoreFunctionPass = {
 			if (opcode !== loadPropertyOpcode && opcode !== loadPropertyStaticOpcode) continue;
 			const start = fn.kernel.instructionOperandStart(instruction),
 				receiver = fn.kernel.operandAt(start);
+			if (fn.excludesStaticValue(compilationContext, receiver)) continue;
+			const analysis = (facts ??= context.analysis(CORE_STATIC_VALUE_ANALYSIS));
 			const key =
 				opcode === loadPropertyStaticOpcode
 					? analysis.string(fn.instructionAttributes(instruction).stringIndex as number)
@@ -426,17 +429,18 @@ export const foldStaticBindingConstants: CoreFunctionPass = {
 	name: "fold-static-binding-constants",
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["loadGlobal", "loadCaptured"],
+	candidates: { dependencies: ["body"], opcodes: ["loadGlobal", "loadCaptured"] },
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
 	wakesOn: STATIC_VALUE_WAKES,
 	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
-		const { program, item } = context,
+		const { program, item, compilationContext } = context,
 			fn = program.function(item.function);
 		const loadGlobal = program.registry.get("loadGlobal")?.id;
 		const loadCaptured = program.registry.get("loadCaptured")?.id;
 		const throwIfTdz = program.registry.get("throwIfTdz")?.id;
-		const analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
+		let analysis: CoreStaticValueAnalysis | undefined;
 		const rewrites = new Map<CoreInstructionId, Map<CoreValueId, StaticBindingLiteral>>();
 		let edits = 0;
 		const consider = (consumer: CoreInstructionId, value: CoreValueId) => {
@@ -445,7 +449,13 @@ export const foldStaticBindingConstants: CoreFunctionPass = {
 				fn.kernel.valueDefinitionOwner(value) as CoreInstructionId,
 			);
 			if (definition !== loadGlobal && definition !== loadCaptured) return;
-			const literal = staticBindingLiteral(analysis.constant(value, consumer));
+			if (fn.excludesStaticValue(compilationContext, value)) return;
+			const literal = staticBindingLiteral(
+				(analysis ??= context.analysis(CORE_STATIC_VALUE_ANALYSIS)).constant(
+					value,
+					consumer,
+				),
+			);
 			if (literal === undefined) return;
 			let values = rewrites.get(consumer);
 			if (values === undefined) {
@@ -455,7 +465,18 @@ export const foldStaticBindingConstants: CoreFunctionPass = {
 			if (!values.has(value)) edits++;
 			values.set(value, literal);
 		};
-		for (const consumer of fn.instructionIds()) {
+		const consumers = new Set<CoreInstructionId>();
+		for (const load of context.instructions()) {
+			const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(load));
+			if (fn.excludesStaticValue(compilationContext, value)) continue;
+			for (
+				let use = fn.kernel.valueFirstUse(value);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			)
+				consumers.add(fn.kernel.useInstruction(use));
+		}
+		for (const consumer of [...consumers].sort((left, right) => left - right)) {
 			if (edits >= context.remainingEdits) break;
 			const kind = fn.instructionKind(consumer);
 			if (kind === "operation") {
@@ -551,7 +572,7 @@ export const foldStaticReflections: CoreFunctionPass = {
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
-		const { program, item } = context,
+		const { program, item, compilationContext } = context,
 			fn = program.function(item.function),
 			analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
 		const plans: Array<{
@@ -579,7 +600,9 @@ export const foldStaticReflections: CoreFunctionPass = {
 					fn.instructionAttributes(instruction)[CORE_REPLAYABLE_TYPEOF_ATTRIBUTE] === true
 				)
 					continue;
-				const fact = analysis.query(fn.kernel.operandAt(start));
+				const input = fn.kernel.operandAt(start);
+				if (fn.excludesStaticValue(compilationContext, input)) continue;
+				const fact = analysis.query(input);
 				if (fact.kind !== "known") continue;
 				const text = ["array", "null"].includes(fact.brand) ? "object" : fact.brand;
 				if (opcode === "typeofCompare") {
@@ -617,7 +640,9 @@ export const foldStaticReflections: CoreFunctionPass = {
 			const argument = opcode === "call" ? 2 : deletion ? 0 : 1;
 			if (fn.kernel.instructionOperandCount(instruction) <= argument) continue;
 			if (opcode === "call") {
-				const callee = analysis.query(fn.kernel.operandAt(start));
+				const target = fn.kernel.operandAt(start);
+				if (fn.excludesStaticValue(compilationContext, target)) continue;
+				const callee = analysis.query(target);
 				if (callee.kind === "known") canonical = callee.canonical;
 			} else if (opcode === "callKnown") {
 				const operation = fn.instructionAttributes(instruction).operation;
@@ -656,6 +681,7 @@ export const foldStaticReflections: CoreFunctionPass = {
 						: 0
 					: argument;
 			const receiver = fn.kernel.operandAt(start + receiverArgument);
+			if (fn.excludesStaticValue(compilationContext, receiver)) continue;
 			const initial =
 				canonical === "Array.isArray" ? analysis.query(receiver) : undefined;
 			const fact =

@@ -408,6 +408,73 @@ export type CoreStaticValueResult =
 				| "work-limit";
 	  };
 
+const UNSUPPORTED_PRODUCER = Object.freeze({
+	kind: "unknown",
+	reason: "unsupported-producer",
+} as const);
+const EXCLUDED_PRODUCER = Object.freeze({ ...UNSUPPORTED_PRODUCER });
+
+const UNSUPPORTED_DEFINITION = -1;
+const UNWRITTEN_SLOT = -2;
+type StaticValueExclusion =
+	| CoreValueId
+	| typeof UNSUPPORTED_DEFINITION
+	| typeof UNWRITTEN_SLOT;
+
+export class CoreStaticValueExclusions {
+	readonly context: CoreCompilationContext;
+	readonly #dependencies: Array<StaticValueExclusion | undefined> = [];
+	readonly #slotLoads = new Set<CoreValueId>();
+
+	constructor(context: CoreCompilationContext) {
+		this.context = context;
+	}
+
+	has(value: CoreValueId): boolean {
+		return this.#dependencies[value] !== undefined;
+	}
+
+	record(value: CoreValueId, dependency: StaticValueExclusion): void {
+		this.#dependencies[value] = dependency;
+		if (dependency === UNWRITTEN_SLOT) this.#slotLoads.add(value);
+	}
+
+	invalidateProducer(fn: CoreFunctionStore, instruction: CoreInstructionId): void {
+		const start = fn.kernel.instructionResultStart(instruction);
+		const count = fn.kernel.instructionResultCount(instruction);
+		for (let index = 0; index < count; index++)
+			this.invalidateValue(fn, fn.kernel.resultAt(start + index));
+	}
+
+	invalidateSlotWrites(fn: CoreFunctionStore): void {
+		for (const value of this.#slotLoads) this.invalidateValue(fn, value);
+	}
+
+	invalidateValue(fn: CoreFunctionStore, value: CoreValueId): void {
+		if (this.#dependencies[value] === undefined) return;
+		this.#dependencies[value] = undefined;
+		// A rejection follows at most one operand. The store's existing use chains
+		// supply its reverse edges when an edit reopens that operand.
+		const work = [value];
+		const kernel = fn.kernel;
+		while (work.length !== 0) {
+			const input = work.pop()!;
+			this.#slotLoads.delete(input);
+			for (let use = kernel.valueFirstUse(input); use >= 0; use = kernel.useNext(use)) {
+				const instruction = kernel.useInstruction(use);
+				const start = kernel.instructionResultStart(instruction);
+				const count = kernel.instructionResultCount(instruction);
+				for (let index = 0; index < count; index++) {
+					const output = kernel.resultAt(start + index);
+					if (this.#dependencies[output] !== input) continue;
+					this.#dependencies[output] = undefined;
+					work.push(output);
+				}
+			}
+		}
+	}
+}
+
 export interface CoreStaticValueStatistics {
 	queries: number;
 	visits: number;
@@ -474,6 +541,7 @@ export class CoreStaticValueAnalysis {
 	#memorySources: CoreMemoryValueSources | undefined;
 	readonly #describable = new Map<CoreValueId, boolean>();
 	readonly #cells: CoreStaticCellQueries | undefined;
+	readonly #exclusions: CoreStaticValueExclusions | undefined;
 	#cellRevision: object | undefined;
 	readonly #cache = new Map<CoreValueId, CoreStaticValueResult>();
 	readonly #visiting = new Set<CoreValueId>();
@@ -502,6 +570,7 @@ export class CoreStaticValueAnalysis {
 		context?: CoreCompilationContext,
 		memory?: () => CoreMemoryVersions,
 		cells?: CoreStaticCellQueries,
+		exclusions?: CoreStaticValueExclusions,
 	) {
 		this.#program = program;
 		this.#fn = fn;
@@ -512,6 +581,7 @@ export class CoreStaticValueAnalysis {
 		this.#limit = limit;
 		this.#context = context;
 		this.#cells = cells;
+		this.#exclusions = exclusions;
 		let cachedMemory: CoreMemoryVersions | undefined;
 		this.#memory =
 			memory ?? (() => (cachedMemory ??= analyzeCoreMemoryVersions(program, fn.id)));
@@ -604,12 +674,16 @@ export class CoreStaticValueAnalysis {
 			return { kind: "unknown", reason: "work-limit" };
 		}
 		this.statistics.visits++;
-		this.#visiting.add(value);
 		let result: CoreStaticValueResult;
-		try {
-			result = this.#describe(value, requestedKey);
-		} finally {
-			this.#visiting.delete(value);
+		if (this.#exclusions?.has(value) && !this.#fn.hasActiveEditor)
+			result = EXCLUDED_PRODUCER;
+		else {
+			this.#visiting.add(value);
+			try {
+				result = this.#describe(value, requestedKey);
+			} finally {
+				this.#visiting.delete(value);
+			}
 		}
 		if (requestedKey === undefined) this.#cache.set(value, result);
 		else this.#propertyCacheFor(requestedKey).set(value, result);
@@ -631,6 +705,8 @@ export class CoreStaticValueAnalysis {
 		requestedKey?: string,
 	): CoreStaticValueResult {
 		this.assertCurrent();
+		if (this.#exclusions?.has(value) && !this.#fn.hasActiveEditor)
+			return EXCLUDED_PRODUCER;
 		this.#refreshCells();
 		const key = this.#observationKey(value, consumer);
 		const full = this.#observations.get(key);
@@ -769,6 +845,7 @@ export class CoreStaticValueAnalysis {
 		requestedKey?: string,
 	): CoreStaticValueResult {
 		const initial = this.#query(value, requestedKey);
+		if (initial === EXCLUDED_PRODUCER && !this.#fn.hasActiveEditor) return initial;
 		if (
 			initial.kind === "unknown" &&
 			this.#cells !== undefined &&
@@ -1718,7 +1795,7 @@ export class CoreStaticValueAnalysis {
 		const program = this.#program;
 		if (fn.kernel.valueDefinitionKind(value) === 0) {
 			const block = coreBlockId(fn.kernel.valueDefinitionOwner(value));
-			if (block === fn.entry) return { kind: "unknown", reason: "unsupported-producer" };
+			if (block === fn.entry) return this.#exclude(value, UNSUPPORTED_DEFINITION);
 			const index = fn.kernel.valueDefinitionIndex(value);
 			const cfg = this.#cfg();
 			const incoming = cfg.predecessors[block] ?? [];
@@ -1742,11 +1819,11 @@ export class CoreStaticValueAnalysis {
 		}
 		const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
 		if (fn.instructionKind(instruction) !== "operation")
-			return { kind: "unknown", reason: "unsupported-producer" };
+			return this.#exclude(value, UNSUPPORTED_DEFINITION);
 		const originalOpcode = fn.instructionOpcodeName(instruction);
 		const attributes = fn.instructionAttributes(instruction);
 		if (originalOpcode === "callKnown" && attributes.argumentMode !== undefined)
-			return { kind: "unknown", reason: "unsupported-producer" };
+			return this.#exclude(value, UNSUPPORTED_DEFINITION);
 		const knownOperation =
 			originalOpcode === "callKnown" ? (attributes.operation as string) : undefined;
 		const opcode =
@@ -1859,6 +1936,7 @@ export class CoreStaticValueAnalysis {
 				opcode === "toPropertyKey"
 					? this.#keyFact(operand, instruction)
 					: this.#query(operand, requestedKey);
+			if (input === EXCLUDED_PRODUCER) return this.#exclude(value, operand);
 			// The base can still throw; a normal String/Symbol key preserves its identity.
 			if (
 				opcode === "toPropertyKey" &&
@@ -1880,11 +1958,18 @@ export class CoreStaticValueAnalysis {
 								owner: attributes.functionIndex as number,
 								index: attributes.index as number,
 							};
-			const sources = (this.#memorySources ??= new CoreMemoryValueSources(fn));
+			const sources = (this.#memorySources ??= CoreMemoryValueSources.forFunction(fn));
+			const writes = sources.slotWrites(location);
+			if (writes.length === 0) {
+				if (
+					this.#exclusions !== undefined &&
+					(opcode === "loadLocal" || !this.#cells?.contains(fn, instruction))
+				)
+					return this.#exclude(value, UNWRITTEN_SLOT);
+				return UNSUPPORTED_PRODUCER;
+			}
 			// Memory versions cost more than most proofs they feed; compute them only for a describable write.
-			const maySupply =
-				sources.maySupply(location) &&
-				sources.slotWrites(location).some((written) => this.#mayDescribe(written));
+			const maySupply = writes.some((written) => this.#mayDescribe(written));
 			const input = maySupply
 				? this.#memory().valueForRead(instruction, location)
 				: undefined;
@@ -1928,7 +2013,7 @@ export class CoreStaticValueAnalysis {
 			case "instantiateLiteralTemplate":
 				break;
 			default:
-				return { kind: "unknown", reason: "unsupported-producer" };
+				return this.#exclude(value, UNSUPPORTED_DEFINITION);
 		}
 
 		const operandStart = fn.kernel.instructionOperandStart(instruction);
@@ -2065,6 +2150,7 @@ export class CoreStaticValueAnalysis {
 				}
 				if (key !== undefined) {
 					const base = this.queryAt(operands[0]!, instruction);
+					if (base === EXCLUDED_PRODUCER) return this.#exclude(value, operands[0]!);
 					if (base.kind === "known")
 						canonical = (
 							base.canonical !== undefined && base.brand !== "symbol"
@@ -2205,6 +2291,7 @@ export class CoreStaticValueAnalysis {
 					? this.query(operands[0]!)
 					: { kind: "known" as const, canonical: knownOperation };
 			const canonical = callee.kind === "known" ? callee.canonical : undefined;
+			if (callee === EXCLUDED_PRODUCER) return this.#exclude(value, operands[0]!);
 
 			if (opcode === "call" && canonical !== undefined) {
 				const arrayCopy =
@@ -2672,6 +2759,13 @@ export class CoreStaticValueAnalysis {
 		};
 	}
 
+	#exclude(value: CoreValueId, dependency: StaticValueExclusion): CoreStaticValueResult {
+		if (this.#exclusions === undefined || this.#fn.hasActiveEditor)
+			return UNSUPPORTED_PRODUCER;
+		this.#exclusions.record(value, dependency);
+		return EXCLUDED_PRODUCER;
+	}
+
 	inherited(value: CoreStaticValue, key: PrimordialKey) {
 		if (this.#context === undefined) return undefined;
 		if (value.brand === "string" && typeof key === "string") {
@@ -2819,9 +2913,10 @@ export const CORE_STATIC_VALUE_ANALYSIS: CoreAnalysisDefinition<CoreStaticValueA
 			if (request.scope !== "function")
 				throw new Error("Expected function static-value analysis");
 			const cells = get(CORE_STATIC_CELL_INDEX, { scope: "program" });
+			const fn = program.function(request.function);
 			return new CoreStaticValueAnalysis(
 				program,
-				program.function(request.function),
+				fn,
 				() => get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional(),
 				65536,
 				context,
@@ -2848,6 +2943,7 @@ export const CORE_STATIC_VALUE_ANALYSIS: CoreAnalysisDefinition<CoreStaticValueA
 							requestedKey,
 						),
 				},
+				fn.staticValueExclusions(context, () => new CoreStaticValueExclusions(context)),
 			);
 		},
 	};

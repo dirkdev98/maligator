@@ -763,6 +763,55 @@ describe("static descriptions and allocation identities", () => {
 		},
 	);
 
+	it("reconsiders a slot load after its writers change", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 2 });
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [seven] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		});
+		const [nine] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 9 },
+		});
+		const [loaded] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const [alias] = builder.appendInstruction(entry, "move", [loaded!]);
+		builder.setTerminator(entry, { kind: "return", value: alias! });
+		const fn = program.function(builder.finish(entry).function);
+		const load = coreInstructionId(fn.kernel.valueDefinitionOwner(loaded!));
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(false),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const constant = () =>
+			manager
+				.get(CORE_STATIC_VALUE_ANALYSIS, { scope: "function", function: fn.id })
+				.constant(alias!);
+		expect(constant()).toBeUndefined();
+		const insert = CoreEditor.open(program, fn.id);
+		const { instruction: writer } = insert.insertInstruction(
+			entry,
+			load,
+			"storeGlobal",
+			[seven!],
+			{ attributes: { index: 0 } },
+		);
+		insert.commit();
+		expect(constant()).toEqual({ kind: "number", value: 7 });
+		const replace = CoreEditor.open(program, fn.id);
+		replace.replaceOperands(writer, [nine!]);
+		replace.commit();
+		expect(constant()).toEqual({ kind: "number", value: 9 });
+		const retarget = CoreEditor.open(program, fn.id);
+		retarget.replaceInstruction(writer, "storeGlobal", [nine!], {
+			attributes: { index: 1 },
+		});
+		retarget.commit();
+		expect(constant()).toBeUndefined();
+	});
+
 	it("interns equal recipes without equating separately evaluated objects or aliases", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);

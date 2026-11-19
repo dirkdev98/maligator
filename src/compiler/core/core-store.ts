@@ -10,6 +10,7 @@ import {
 	CoreSlotCursor,
 	CoreValueCursor,
 } from "./core-id-cursors.ts";
+import type { CoreMemoryValueSources } from "./core-ir-memory.ts";
 import {
 	coreBlockId,
 	coreFactId,
@@ -44,6 +45,7 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import type { CoreStaticCellIndex } from "./core-static-value-cells.ts";
+import type { CoreStaticValueExclusions } from "./core-static-values.ts";
 
 export interface CoreStoreMutation {
 	readonly __coreStoreMutation: never;
@@ -636,6 +638,8 @@ export class CoreFunctionStore {
 		specializationInputs: 0,
 	};
 	#featureVersion = 0;
+	#memoryValueSources: CoreMemoryValueSources | undefined;
+	#staticValueExclusions: CoreStaticValueExclusions | undefined;
 
 	readonly #blockLive: Array<number> = [];
 	readonly #blockFirstInstruction: Array<number> = [];
@@ -931,6 +935,37 @@ export class CoreFunctionStore {
 
 	get featureVersion(): number {
 		return this.#featureVersion;
+	}
+
+	memoryValueSources(create: () => CoreMemoryValueSources): CoreMemoryValueSources {
+		return (this.#memoryValueSources ??= create());
+	}
+
+	staticValueExclusions(
+		context: CoreCompilationContext,
+		create: () => CoreStaticValueExclusions,
+	): CoreStaticValueExclusions {
+		if (this.#staticValueExclusions?.context !== context)
+			this.#staticValueExclusions = create();
+		return this.#staticValueExclusions;
+	}
+
+	excludesStaticValue(context: CoreCompilationContext, value: CoreValueId): boolean {
+		const exclusions = this.#staticValueExclusions;
+		return (
+			exclusions?.context === context && !this.#activeEditor && exclusions.has(value)
+		);
+	}
+
+	#invalidateMemoryValueSources(opcode: number): void {
+		if (
+			this.#memoryValueSources !== undefined &&
+			opcode >= 0 &&
+			this.registry.byId(opcode as CoreOpcodeId).mayWriteSlotValue
+		) {
+			this.#memoryValueSources = undefined;
+			this.#staticValueExclusions?.invalidateSlotWrites(this);
+		}
 	}
 
 	get blockCapacity(): number {
@@ -1805,6 +1840,7 @@ export class CoreFunctionStore {
 			this.#valueDefinitionIndex[parameterValue] = destination;
 			destination++;
 		}
+		this.#staticValueExclusions?.invalidateValue(this, value);
 		this.#valueLive[value] = 0;
 		this.#replaceBlockParameterRange(block, values, roles);
 		return value;
@@ -1847,6 +1883,7 @@ export class CoreFunctionStore {
 			insertionPoint,
 			outputs,
 		);
+		this.#invalidateMemoryValueSources(opcode);
 		return { instruction, outputs: outputs ?? EMPTY_CORE_INSTRUCTION_OUTPUTS };
 	}
 
@@ -1890,6 +1927,7 @@ export class CoreFunctionStore {
 		if (this.instructionKind(instruction) !== "operation") {
 			throw new Error(`Core instruction ${instruction} is not an operation`);
 		}
+		this.#invalidateMemoryValueSources(this.#instructionOpcode[instruction]!);
 		this.#instructionOpcode[instruction] = opcode;
 		this.#instructionPayload[instruction] = freezeAttributes(attributes);
 		this.#instructionSourcePosition[instruction] = sourcePosition ?? -1;
@@ -1904,6 +1942,8 @@ export class CoreFunctionStore {
 	): void {
 		this.#assertEditing(mutation);
 		this.#requireInstruction(instruction);
+		this.#staticValueExclusions?.invalidateProducer(this, instruction);
+		this.#invalidateMemoryValueSources(this.#instructionOpcode[instruction]!);
 		this.#instructionPayload[instruction] = freezeAttributes(attributes);
 	}
 
@@ -1916,6 +1956,7 @@ export class CoreFunctionStore {
 		if (this.instructionKind(instruction) !== "operation") {
 			throw new Error(`Core instruction ${instruction} is not an operation`);
 		}
+		this.#invalidateMemoryValueSources(this.#instructionOpcode[instruction]!);
 		this.#replaceEffectRefinement(instruction, refinement);
 	}
 
@@ -1926,6 +1967,8 @@ export class CoreFunctionStore {
 	): void {
 		this.#assertEditing(mutation);
 		this.#requireInstruction(instruction);
+		this.#staticValueExclusions?.invalidateProducer(this, instruction);
+		this.#invalidateMemoryValueSources(this.#instructionOpcode[instruction]!);
 		this.#writeOperandRange(instruction, operands);
 	}
 
@@ -1945,6 +1988,7 @@ export class CoreFunctionStore {
 		if (this.#operandUses[operandIndex] !== use) {
 			throw new Error(`Core use ${use} does not own its operand`);
 		}
+		this.#staticValueExclusions?.invalidateProducer(this, instruction);
 		const previous = this.#usePrevious[use]!;
 		const next = this.#useNext[use]!;
 		if (previous < 0) this.#valueFirstUse[value] = next;
@@ -1959,6 +2003,7 @@ export class CoreFunctionStore {
 		this.#valueFirstUse[replacement] = use;
 		this.#valueUseCount[replacement] = this.#valueUseCount[replacement]! + 1;
 		this.#operands[operandIndex] = replacement;
+		this.#invalidateMemoryValueSources(this.#instructionOpcode[instruction]!);
 	}
 
 	_replaceHandlerArgumentUse(
@@ -1998,6 +2043,8 @@ export class CoreFunctionStore {
 	_removeInstruction(mutation: CoreStoreMutation, instruction: CoreInstructionId): void {
 		this.#assertEditing(mutation);
 		this.#requireInstruction(instruction);
+		this.#staticValueExclusions?.invalidateProducer(this, instruction);
+		this.#invalidateMemoryValueSources(this.#instructionOpcode[instruction]!);
 		const resultStart = this.#instructionResultStart[instruction]!;
 		const resultCount = this.#instructionResultCount[instruction]!;
 		for (let index = 0; index < resultCount; index++) {
@@ -2307,6 +2354,7 @@ export class CoreFunctionStore {
 			values[index] = value;
 		}
 		this.#parameters.splice(0, this.#parameters.length, ...values);
+		this.#staticValueExclusions = undefined;
 		this.#entry = entry;
 		this.#bodyEntry = bodyEntry;
 	}
@@ -2317,6 +2365,8 @@ export class CoreFunctionStore {
 			throw new Error(`Core function ${this.id} has an active editor`);
 		this.#sealedBlocks = [...this.blockIds()];
 		this.#sealedInstructions = [...this.instructionIds()];
+		this.#memoryValueSources = undefined;
+		this.#staticValueExclusions = undefined;
 		this.#sealed = true;
 	}
 

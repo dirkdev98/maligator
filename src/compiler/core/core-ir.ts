@@ -241,6 +241,7 @@ export interface CoreOpcodeDescriptor<Name extends string = string> {
 	 * domain for and the two can never drift apart.
 	 */
 	readonly accesses?: ReadonlyArray<CoreOpcodeAccess>;
+	readonly mayWriteSlotValue: boolean;
 	/** Fresh aggregate this opcode produces, when its layout is compiler-known. */
 	readonly allocation?: CoreOpcodeAllocation;
 	/**
@@ -273,7 +274,7 @@ export interface CoreAttributeRelocation {
 
 export type CoreOpcodeDefinition<Name extends string = string> = Omit<
 	CoreOpcodeDescriptor<Name>,
-	"id"
+	"id" | "mayWriteSlotValue"
 >;
 
 function validateEffectDomains(
@@ -510,6 +511,16 @@ export class CoreOpcodeRegistry {
 		const frozen: CoreOpcodeDescriptor<Name> = Object.freeze({
 			...descriptor,
 			id: coreOpcodeId(this.#descriptorsById.length),
+			mayWriteSlotValue:
+				descriptor.accesses?.some(
+					(access) =>
+						access.mode === "write" &&
+						access.valueOperand !== undefined &&
+						(access.family === "local-slot" ||
+							access.family === "global-slot" ||
+							access.family === "captured-slot" ||
+							access.family === "activation-this"),
+				) ?? false,
 			inputs: Object.freeze({ ...descriptor.inputs }),
 			outputs: Object.freeze({ ...descriptor.outputs }),
 			effects: Object.freeze({

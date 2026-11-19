@@ -154,23 +154,26 @@ function propertyKey(
 		: undefined;
 }
 
+const KNOWN_OPERATION_CANDIDATES = [
+	"call",
+	"callKnown",
+	"construct",
+	"callSpread",
+	"callSpreadIterable",
+	"constructSpread",
+	"constructSpreadIterable",
+	"loadProperty",
+	"loadPropertyStatic",
+	"loadGlobalProperty",
+	"storeProperty",
+	"storePropertyStatic",
+] as const;
+
 export const resolveKnownOperations: CoreFunctionPass = {
 	name: "resolve-known-operations",
 	stage: "memory",
-	requiredFunctionOpcodesAny: [
-		"call",
-		"callKnown",
-		"construct",
-		"callSpread",
-		"callSpreadIterable",
-		"constructSpread",
-		"constructSpreadIterable",
-		"loadProperty",
-		"loadPropertyStatic",
-		"loadGlobalProperty",
-		"storeProperty",
-		"storePropertyStatic",
-	],
+	requiredFunctionOpcodesAny: KNOWN_OPERATION_CANDIDATES,
+	candidates: { dependencies: ["body"], opcodes: KNOWN_OPERATION_CANDIDATES },
 	admission: {
 		predicate: "exact primordial operation in a locked single realm",
 		hasOpportunity({ compilationContext }) {
@@ -250,7 +253,7 @@ export const resolveKnownOperations: CoreFunctionPass = {
 						: {},
 			});
 		};
-		for (const instruction of fn.instructionIds()) {
+		for (const instruction of context.instructions()) {
 			if (plans.length + constants.length * 2 + 2 > context.remainingEdits) break;
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(instruction),
@@ -434,6 +437,7 @@ export const resolveKnownOperations: CoreFunctionPass = {
 			)
 				continue;
 			const lookupArgs = reflectGet ? args.slice(1) : args;
+			if (fn.excludesStaticValue(compilationContext, lookupArgs[0]!)) continue;
 			const key = propertyKey(analysis, fn, instruction, lookupArgs);
 			if (key === undefined) continue;
 			const base = analysis.queryAt(lookupArgs[0]!, instruction);

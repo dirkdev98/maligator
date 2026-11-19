@@ -549,7 +549,7 @@ function hasAggregateScalarReplacementConsumer(fn: CoreFunctionStore): boolean {
 				(access) =>
 					access.mode === "read" &&
 					coreMemoryLocationIsExact(access.location) &&
-					(sources ??= new CoreMemoryValueSources(fn)).maySupply(access.location),
+					(sources ??= CoreMemoryValueSources.forFunction(fn)).maySupply(access.location),
 			)
 		)
 			return true;
@@ -2631,7 +2631,7 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 				if (
 					access.mode !== "read" ||
 					!coreMemoryLocationIsExact(access.location) ||
-					!(sources ??= new CoreMemoryValueSources(fn)).maySupply(access.location)
+					!(sources ??= CoreMemoryValueSources.forFunction(fn)).maySupply(access.location)
 				)
 					continue;
 				const value = (memory ??= context.analysis(

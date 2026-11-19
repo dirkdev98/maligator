@@ -323,6 +323,15 @@ function movesWithoutNarrowing(
 	return coreRepresentationCanWiden(from, to);
 }
 
+const PRIMITIVE_OPERATION_CANDIDATES = [
+	"callKnown",
+	"mathUnaryNumber",
+	"mathBinaryNumber",
+	"binary",
+	"unary",
+	"loadPropertyStatic",
+] as const;
+
 export const lowerPrimitiveOperations: CoreFunctionPass = {
 	name: "lower-primitive-operations",
 	admission: {
@@ -363,20 +372,14 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 		},
 	},
 	stage: "memory",
-	requiredFunctionOpcodesAny: [
-		"callKnown",
-		"mathUnaryNumber",
-		"mathBinaryNumber",
-		"binary",
-		"unary",
-		"loadPropertyStatic",
-	],
+	requiredFunctionOpcodesAny: PRIMITIVE_OPERATION_CANDIDATES,
+	candidates: { dependencies: ["body"], opcodes: PRIMITIVE_OPERATION_CANDIDATES },
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "memoryEffects", "facts", "representations"],
 	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
-		const { program, item } = context,
+		const { program, item, compilationContext } = context,
 			fn = program.function(item.function);
 		const analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
 		let kinds: CoreValueKindAnalysis | undefined;
@@ -421,16 +424,16 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			payload: PrimitiveWrapperPayload;
 		}> = [];
 		let sequenceEdits = 0;
-		for (const instruction of fn.instructionIds()) {
+		for (const instruction of context.instructions()) {
 			if (plans.length * 4 + sequenceEdits + 4 > context.remainingEdits) break;
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			if (
 				fn.instructionKind(instruction) === "operation" &&
 				fn.instructionOpcodeName(instruction) === "unary"
 			) {
-				const value = analysis.constant(
-					fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
-				);
+				const output = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+				if (fn.excludesStaticValue(compilationContext, output)) continue;
+				const value = analysis.constant(output);
 				if (value !== undefined) plans.push({ instruction, value });
 				continue;
 			}
@@ -485,12 +488,13 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			) {
 				const start =
 					fn.kernel.instructionOperandStart(instruction) + (sameValue ? 1 : 0);
-				const equal = staticIdentityEqual(
-					analysis,
-					fn.kernel.operandAt(start),
-					fn.kernel.operandAt(start + 1),
-					instruction,
-				);
+				const left = fn.kernel.operandAt(start);
+				const right = fn.kernel.operandAt(start + 1);
+				const equal =
+					fn.excludesStaticValue(compilationContext, left) ||
+					fn.excludesStaticValue(compilationContext, right)
+						? undefined
+						: staticIdentityEqual(analysis, left, right, instruction);
 				if (equal !== undefined) {
 					plans.push({
 						instruction,

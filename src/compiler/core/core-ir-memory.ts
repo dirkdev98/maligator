@@ -128,6 +128,23 @@ export class CoreMemoryLocationTable {
 				return this.#pair(this.#elements, location.allocation, location.index);
 		}
 	}
+
+	lookup(location: CoreExactMemoryLocation): CoreMemoryLocationId | undefined {
+		switch (location.kind) {
+			case "global-slot":
+				return this.#globalSlots.get(location.slot);
+			case "local-slot":
+				return this.#localSlots.get(location.slot);
+			case "captured-slot":
+				return this.#capturedSlots.get(location.owner)?.get(location.index);
+			case "activation-this":
+				return this.#activationThis;
+			case "object-slot":
+				return this.#objectSlots.get(location.allocation)?.get(location.key);
+			case "element":
+				return this.#elements.get(location.allocation)?.get(location.index);
+		}
+	}
 }
 
 export interface CoreMemoryResolution {
@@ -297,28 +314,33 @@ export function coreMemoryAccesses(
 }
 
 export class CoreMemoryValueSources {
-	readonly #locations = new CoreMemoryLocationTable();
-	readonly #writes = new Map<CoreMemoryLocationId, Array<CoreValueId>>();
+	#locations: CoreMemoryLocationTable | undefined;
+	#writes: Map<CoreMemoryLocationId, Array<CoreValueId>> | undefined;
 
-	constructor(fn: CoreFunctionStore) {
+	static forFunction(fn: CoreFunctionStore): CoreMemoryValueSources {
+		return fn.memoryValueSources(() => new CoreMemoryValueSources(fn));
+	}
+
+	private constructor(fn: CoreFunctionStore) {
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
-			if (
-				!descriptor.accesses?.some(
-					(access) => access.mode === "write" && access.valueOperand !== undefined,
-				)
-			)
-				continue;
+			if (!descriptor.mayWriteSlotValue) continue;
 			for (const access of coreMemoryAccesses(fn, instruction)) {
 				if (
 					access.mode === "write" &&
 					access.value !== undefined &&
 					coreMemoryLocationIsExact(access.location)
 				) {
-					const id = this.#locations.id(access.location);
-					const values = this.#writes.get(id);
-					if (values === undefined) this.#writes.set(id, [access.value]);
+					const id = (this.#locations ??= new CoreMemoryLocationTable()).id(
+						access.location,
+					);
+					const writes = (this.#writes ??= new Map<
+						CoreMemoryLocationId,
+						Array<CoreValueId>
+					>());
+					const values = writes.get(id);
+					if (values === undefined) writes.set(id, [access.value]);
 					else values.push(access.value);
 				}
 			}
@@ -330,7 +352,7 @@ export class CoreMemoryValueSources {
 		return (
 			location.kind === "object-slot" ||
 			location.kind === "element" ||
-			this.#writes.has(this.#locations.id(location))
+			this.#locations?.lookup(location) !== undefined
 		);
 	}
 
@@ -338,7 +360,8 @@ export class CoreMemoryValueSources {
 	slotWrites(location: CoreExactMemoryLocation): ReadonlyArray<CoreValueId> {
 		if (location.kind === "object-slot" || location.kind === "element")
 			throw new Error("Heap locations have no complete write list");
-		return this.#writes.get(this.#locations.id(location)) ?? [];
+		const id = this.#locations?.lookup(location);
+		return id === undefined ? [] : this.#writes!.get(id)!;
 	}
 }
 
