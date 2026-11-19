@@ -7,6 +7,9 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 
+// Structural instructions use -1 through -7; operation IDs start at zero.
+export const CORE_DEAD_INSTRUCTION_CODE = -8;
+
 export interface CoreFunctionKernelColumns {
 	readonly blockLive: ReadonlyArray<number>;
 	readonly blockFirstInstruction: ReadonlyArray<number>;
@@ -19,7 +22,6 @@ export interface CoreFunctionKernelColumns {
 	readonly blockHandlerArgumentStart: ReadonlyArray<number>;
 	readonly blockHandlerArgumentCount: ReadonlyArray<number>;
 	readonly handlerArguments: ReadonlyArray<CoreValueId>;
-	readonly instructionLive: ReadonlyArray<number>;
 	readonly instructionOpcode: ReadonlyArray<number>;
 	readonly instructionPayload: ReadonlyArray<CoreInstructionAttributes | undefined>;
 	readonly instructionBlock: ReadonlyArray<number>;
@@ -127,7 +129,10 @@ export class CoreFunctionKernel {
 	}
 
 	instructionLive(instruction: CoreInstructionId): number {
-		return this.#columns.instructionLive[instruction] ?? 0;
+		return (this.#columns.instructionOpcode[instruction] ?? CORE_DEAD_INSTRUCTION_CODE) >
+			CORE_DEAD_INSTRUCTION_CODE
+			? 1
+			: 0;
 	}
 
 	instructionAttributes(instruction: CoreInstructionId): CoreInstructionAttributes {
@@ -135,7 +140,7 @@ export class CoreFunctionKernel {
 	}
 
 	instructionOpcode(instruction: CoreInstructionId): number {
-		return this.#columns.instructionOpcode[instruction]!;
+		return this.#columns.instructionOpcode[instruction] ?? CORE_DEAD_INSTRUCTION_CODE;
 	}
 
 	instructionBlock(instruction: CoreInstructionId): number {

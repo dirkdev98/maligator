@@ -52,14 +52,15 @@ High-volume fields use dense numeric tables indexed by stable function-local IDs
 These include:
 
 - block liveness and linked instruction-list heads and tails;
-- instruction liveness, numeric opcode, owning block, and previous/next links;
+- instruction codes, owning blocks, and previous/next links;
 - operand and result ranges;
 - source-position and effect-refinement references;
 - value representation and definition;
 - use-list records.
 
-Opcode IDs are owned by the existing opcode descriptor registry. Names remain
-descriptor and debugging data rather than hot-path identities.
+One instruction code identifies a registry opcode, a structural terminator or a
+deleted row. This lets a reader establish liveness and instruction kind with one
+table lookup. The registry owns the operation names and descriptors.
 
 Operand and use records are append-only during mutation. Replacing a range may
 abandon the old range until sealing, but it never shifts unrelated records. Deletion

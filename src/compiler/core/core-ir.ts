@@ -574,11 +574,12 @@ export class CoreOpcodeRegistry {
 	}
 
 	byId(id: CoreOpcodeId): CoreOpcodeDescriptor {
+		const known = this.#descriptorsById[id];
+		if (known !== undefined && known.id === id) return known;
 		this.#define();
 		const descriptor = this.#descriptorsById[id];
-		if (descriptor === undefined || descriptor.id !== id) {
+		if (descriptor === undefined || descriptor.id !== id)
 			throw new Error(`Unknown Core opcode id ${id}`);
-		}
 		return descriptor;
 	}
 

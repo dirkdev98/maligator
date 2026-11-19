@@ -456,6 +456,8 @@ describe("Core store", () => {
 		const removed = editor.appendInstruction(entry, "sink", [parameter]).instruction;
 		expect(fn.instructionHeader(removed)).toBe(program.registry.require("sink"));
 		editor.removeInstruction(removed);
+		expect(fn.kernel.instructionLive(removed)).toBe(0);
+		expect(fn.kernel.instructionOpcode(removed)).toBeLessThan(0);
 		expect(() => fn.instructionHeader(removed)).toThrow(
 			`Unknown Core instruction ${removed}`,
 		);

@@ -1,3 +1,4 @@
+import { CORE_DEAD_INSTRUCTION_CODE } from "./core-function-kernel.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 
 // Store ID walks are cursors rather than generators: V8 never inlines a generator, so
@@ -21,15 +22,17 @@ function cursorStep<Id extends number>(id: number): IteratorResult<Id, undefined
 	return { done, value: done ? undefined : id } as IteratorResult<Id, undefined>;
 }
 
-/** Walks the IDs whose live-flag column entry is 1, including IDs appended mid-walk. */
+/** Walks the live IDs in a store column, including IDs appended mid-walk. */
 export class CoreLiveIdCursor<Id extends number> implements Iterator<Id, undefined> {
 	readonly #owner: CoreCursorOwner;
 	readonly #live: ReadonlyArray<number>;
+	readonly #minimumLive: number;
 	#id = 0;
 
-	constructor(owner: CoreCursorOwner, live: ReadonlyArray<number>) {
+	constructor(owner: CoreCursorOwner, live: ReadonlyArray<number>, minimumLive = 1) {
 		this.#owner = owner;
 		this.#live = live;
+		this.#minimumLive = minimumLive;
 	}
 
 	[Symbol.iterator](): this {
@@ -43,7 +46,7 @@ export class CoreLiveIdCursor<Id extends number> implements Iterator<Id, undefin
 			const live = this.#live;
 			while (id < live.length) {
 				this.#owner.assertCurrentGeneration();
-				if (live[id++] === 1) {
+				if (live[id++]! >= this.#minimumLive) {
 					found = id - 1;
 					break;
 				}
@@ -147,7 +150,7 @@ export interface CoreValueCursorColumns {
 	readonly blockParameterStart: ReadonlyArray<number>;
 	readonly blockParameterCount: ReadonlyArray<number>;
 	readonly blockParameterValues: ReadonlyArray<CoreValueId>;
-	readonly instructionLive: ReadonlyArray<number>;
+	readonly instructionOpcode: ReadonlyArray<number>;
 	readonly instructionResultStart: ReadonlyArray<number>;
 	readonly instructionResultCount: ReadonlyArray<number>;
 	readonly results: ReadonlyArray<CoreValueId>;
@@ -193,11 +196,12 @@ export class CoreValueCursor implements Iterator<CoreValueId, undefined> {
 	}
 
 	#advanceDefiner(columns: CoreValueCursorColumns): void {
-		const live = this.#inResults ? columns.instructionLive : columns.blockLive;
+		const live = this.#inResults ? columns.instructionOpcode : columns.blockLive;
+		const minimumLive = this.#inResults ? CORE_DEAD_INSTRUCTION_CODE + 1 : 1;
 		let definer = this.#definer + 1;
 		while (definer < live.length) {
 			this.#owner.assertCurrentGeneration();
-			if (live[definer] === 1) break;
+			if (live[definer]! >= minimumLive) break;
 			definer++;
 		}
 		this.#index = 0;

@@ -3,7 +3,10 @@ import { StaticDescriptionInterner } from "../shared/static-values.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreInsertedInstruction } from "./core-editor.ts";
-import { CoreFunctionKernel } from "./core-function-kernel.ts";
+import {
+	CORE_DEAD_INSTRUCTION_CODE,
+	CoreFunctionKernel,
+} from "./core-function-kernel.ts";
 import {
 	CoreInstructionChainCursor,
 	CoreLiveIdCursor,
@@ -318,12 +321,9 @@ const TERMINATOR_CODES: Readonly<
 	unreachable: -7,
 };
 
-const TERMINATOR_KINDS = new Map<number, Exclude<CoreInstructionKind, "operation">>(
-	Object.entries(TERMINATOR_CODES).map(([kind, code]) => [
-		code,
-		kind as Exclude<CoreInstructionKind, "operation">,
-	]),
-);
+const TERMINATOR_KINDS: Array<Exclude<CoreInstructionKind, "operation"> | undefined> = [];
+for (const [kind, code] of Object.entries(TERMINATOR_CODES))
+	TERMINATOR_KINDS[-code] = kind as Exclude<CoreInstructionKind, "operation">;
 
 const FUNCTION_DOMAINS: ReadonlyArray<CoreChangeDomain> = [
 	"body",
@@ -660,7 +660,6 @@ export class CoreFunctionStore {
 	readonly #handlerArgumentNextUse: Array<number> = [];
 	readonly #handlerArgumentFreeBySize: Array<Array<number> | undefined> = [];
 
-	readonly #instructionLive: Array<number> = [];
 	readonly #instructionOpcode: Array<number> = [];
 	readonly #instructionBlock: Array<number> = [];
 	readonly #instructionPrevious: Array<number> = [];
@@ -784,7 +783,6 @@ export class CoreFunctionStore {
 			this.#handlerArgumentPreviousUse = storage.#handlerArgumentPreviousUse;
 			this.#handlerArgumentNextUse = storage.#handlerArgumentNextUse;
 			this.#handlerArgumentFreeBySize = storage.#handlerArgumentFreeBySize;
-			this.#instructionLive = storage.#instructionLive;
 			this.#instructionOpcode = storage.#instructionOpcode;
 			this.#instructionBlock = storage.#instructionBlock;
 			this.#instructionPrevious = storage.#instructionPrevious;
@@ -846,7 +844,6 @@ export class CoreFunctionStore {
 				handlerArgumentBlock: this.#handlerArgumentBlock,
 				handlerArgumentPreviousUse: this.#handlerArgumentPreviousUse,
 				handlerArgumentNextUse: this.#handlerArgumentNextUse,
-				instructionLive: this.#instructionLive,
 				instructionOpcode: this.#instructionOpcode,
 				instructionPayload: this.#instructionPayload,
 				instructionBlock: this.#instructionBlock,
@@ -973,7 +970,7 @@ export class CoreFunctionStore {
 	}
 
 	get instructionCapacity(): number {
-		return this.#instructionLive.length;
+		return this.#instructionOpcode.length;
 	}
 
 	get valueCapacity(): number {
@@ -1052,15 +1049,20 @@ export class CoreFunctionStore {
 		if (block === undefined && !this.#activeEditor) {
 			if (this.#instructionSnapshot === undefined) {
 				const instructions: Array<CoreInstructionId> = [];
-				for (let id = 0; id < this.#instructionLive.length; id++) {
-					if (this.#instructionLive[id] === 1) instructions.push(coreInstructionId(id));
+				for (let id = 0; id < this.#instructionOpcode.length; id++) {
+					if (this.#instructionOpcode[id]! > CORE_DEAD_INSTRUCTION_CODE)
+						instructions.push(coreInstructionId(id));
 				}
 				this.#instructionSnapshot = instructions;
 			}
 			return this.#instructionSnapshot;
 		}
 		if (block === undefined)
-			return new CoreLiveIdCursor<CoreInstructionId>(this, this.#instructionLive);
+			return new CoreLiveIdCursor<CoreInstructionId>(
+				this,
+				this.#instructionOpcode,
+				CORE_DEAD_INSTRUCTION_CODE + 1,
+			);
 		return this.#instructionChain(block, undefined);
 	}
 
@@ -1071,7 +1073,7 @@ export class CoreFunctionStore {
 			blockParameterStart: this.#blockParameterStart,
 			blockParameterCount: this.#blockParameterCount,
 			blockParameterValues: this.#blockParameterValues,
-			instructionLive: this.#instructionLive,
+			instructionOpcode: this.#instructionOpcode,
 			instructionResultStart: this.#instructionResultStart,
 			instructionResultCount: this.#instructionResultCount,
 			results: this.#results,
@@ -1119,7 +1121,10 @@ export class CoreFunctionStore {
 
 	isInstructionLive(id: CoreInstructionId): boolean {
 		if (this.#retired) this.#throwRetiredGeneration();
-		return this.#instructionLive[id] === 1;
+		return (
+			(this.#instructionOpcode[id] ?? CORE_DEAD_INSTRUCTION_CODE) >
+			CORE_DEAD_INSTRUCTION_CODE
+		);
 	}
 
 	isValueLive(id: CoreValueId): boolean {
@@ -1175,19 +1180,17 @@ export class CoreFunctionStore {
 	}
 
 	instructionHeader(id: CoreInstructionId): CoreInstructionHeader {
-		this.#requireInstruction(id);
-		const opcode = this.#instructionOpcode[id]!;
+		const opcode = this.#requireInstruction(id);
 		if (opcode >= 0) return this.registry.byId(opcode as CoreOpcodeId);
-		const kind = TERMINATOR_KINDS.get(opcode);
+		const kind = TERMINATOR_KINDS[-opcode];
 		if (kind === undefined) throw new Error(`Unknown Core structural opcode ${opcode}`);
 		return kind;
 	}
 
 	instructionKind(id: CoreInstructionId): CoreInstructionKind {
-		this.#requireInstruction(id);
-		const opcode = this.#instructionOpcode[id]!;
+		const opcode = this.#requireInstruction(id);
 		if (opcode >= 0) return "operation";
-		const kind = TERMINATOR_KINDS.get(opcode);
+		const kind = TERMINATOR_KINDS[-opcode];
 		if (kind === undefined) throw new Error(`Unknown Core structural opcode ${opcode}`);
 		return kind;
 	}
@@ -1210,10 +1213,9 @@ export class CoreFunctionStore {
 	}
 
 	instructionOpcode(id: CoreInstructionId): CoreOpcodeId {
-		this.#requireInstruction(id);
-		const opcode = this.#instructionOpcode[id]!;
+		const opcode = this.#requireInstruction(id);
 		if (opcode < 0) throw new Error(`Core instruction ${id} is not an operation`);
-		return coreOpcodeId(opcode);
+		return opcode as CoreOpcodeId;
 	}
 
 	instructionOpcodeName(id: CoreInstructionId): string {
@@ -1240,10 +1242,10 @@ export class CoreFunctionStore {
 	}
 
 	instructionAttributes(id: CoreInstructionId): CoreInstructionAttributes {
-		if (this.instructionKind(id) !== "operation") {
+		if (this.#requireInstruction(id) < 0) {
 			throw new Error(`Core instruction ${id} is not an operation`);
 		}
-		return this.#instructionPayload[id] ?? {};
+		return this.#instructionPayload[id] ?? EMPTY_CORE_INSTRUCTION_ATTRIBUTES;
 	}
 
 	valueRepresentation(id: CoreValueId): CoreRepresentation {
@@ -1306,7 +1308,7 @@ export class CoreFunctionStore {
 			);
 		if (
 			this.#blockLive.length !== this.#liveBlocks ||
-			this.#instructionLive.length !== this.#liveInstructions ||
+			this.#instructionOpcode.length !== this.#liveInstructions ||
 			this.#valueLive.length !==
 				this.#liveBlockParameters + this.#liveInstructionResults ||
 			this.#results.length !== this.#liveInstructionResults ||
@@ -2086,7 +2088,7 @@ export class CoreFunctionStore {
 		else this.#instructionNext[previous] = next;
 		if (next < 0) this.#blockLastInstruction[block] = previous;
 		else this.#instructionPrevious[next] = previous;
-		this.#instructionLive[instruction] = 0;
+		this.#instructionOpcode[instruction] = CORE_DEAD_INSTRUCTION_CODE;
 		this.#liveInstructions--;
 		this.#instructionPrevious[instruction] = -1;
 		this.#instructionNext[instruction] = -1;
@@ -2390,13 +2392,12 @@ export class CoreFunctionStore {
 		before: CoreInstructionId | undefined,
 		outputs?: Array<CoreValueId>,
 	): CoreInstructionId {
-		const instruction = coreInstructionId(this.#instructionLive.length);
+		const instruction = coreInstructionId(this.#instructionOpcode.length);
 		const beforeIndex = before ?? -1;
 		const previous =
 			beforeIndex < 0
 				? this.#blockLastInstruction[block]!
 				: this.#instructionPrevious[beforeIndex]!;
-		this.#instructionLive.push(1);
 		this.#liveInstructions++;
 		this.#instructionOpcode.push(opcode);
 		this.#instructionBlock.push(block);
@@ -2792,10 +2793,12 @@ export class CoreFunctionStore {
 		if (this.#blockLive[id] !== 1) throw new Error(`Unknown Core block ${id}`);
 	}
 
-	#requireInstruction(id: CoreInstructionId): void {
+	#requireInstruction(id: CoreInstructionId): number {
 		if (this.#retired) this.#throwRetiredGeneration();
-		if (this.#instructionLive[id] !== 1)
+		const opcode = this.#instructionOpcode[id] ?? CORE_DEAD_INSTRUCTION_CODE;
+		if (opcode === CORE_DEAD_INSTRUCTION_CODE)
 			throw new Error(`Unknown Core instruction ${id}`);
+		return opcode;
 	}
 
 	#requireValue(id: CoreValueId): void {
