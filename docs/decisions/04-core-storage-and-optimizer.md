@@ -251,6 +251,9 @@ entry seed. Its internal arguments and returns start from bottom so old feedback
 cannot keep a removed kind alive. A removed call also dirties its former recipients.
 After convergence, changed returns wake their readers, and argument recipients compare
 their new boundary masks with the saved ones before rebuilding local analyses.
+Within a reset, a clean function reuses its previous evaluation when its inputs,
+callee returns, wildcard aggregate and record alternatives match. The solver
+publishes that evaluation at the same worklist step as a fresh transfer.
 Lazy heap-brand queries retain the function's call results and record inputs from
 its last evaluation. A reused analysis does not hold the rest of that solve alive.
 Appending constants preserves existing references and the heap-brand proofs that use

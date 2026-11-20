@@ -116,6 +116,7 @@ export interface CoreProgramFlowValueKindSummary extends CoreProgramFlowKindInpu
 export interface CoreProgramFlowValueKindStatistics {
 	readonly functions: number;
 	readonly functionsEvaluated: number;
+	readonly evaluationsReused: number;
 	readonly functionsReused: number;
 	readonly affectedFunctions: number;
 	readonly callerWakeups: number;
@@ -153,6 +154,7 @@ export interface CoreProgramFlowValueKindState<
 	readonly external: ReadonlyMap<CoreFunctionId, boolean>;
 	readonly boundaryInputs: ReadonlyMap<CoreFunctionId, CoreProgramFlowKindInputs>;
 	readonly valueAnalyses: ReadonlyMap<CoreFunctionId, Analysis>;
+	readonly recordAlternatives: ReadonlyMap<CoreFunctionId, CoreRecordAlternatives>;
 	readonly summaries: ReadonlyMap<CoreFunctionId, CoreProgramFlowValueKindSummary>;
 	readonly anyScriptAggregate: CoreProgramFlowValueKindAggregate | undefined;
 	readonly anyScriptAggregateFixed: boolean;
@@ -163,6 +165,35 @@ export interface CoreValueAlternative {
 	readonly instruction: CoreInstructionId;
 	/** Carries predecessor-local facts without moving the originating operation. */
 	readonly edge?: CoreControlEdge;
+}
+
+type CoreRecordAlternatives = ReadonlyMap<
+	CoreInstructionId,
+	ReadonlyArray<CoreValueAlternative>
+>;
+
+function sameRecordAlternatives(
+	prior: CoreRecordAlternatives | undefined,
+	current: CoreRecordAlternatives | undefined,
+): boolean {
+	if (prior === current) return true;
+	if (prior === undefined || current === undefined || prior.size !== current.size)
+		return false;
+	for (const [instruction, writes] of current) {
+		const priorWrites = prior.get(instruction);
+		if (priorWrites === undefined || priorWrites.length !== writes.length) return false;
+		for (let index = 0; index < writes.length; index++) {
+			const left = priorWrites[index]!;
+			const right = writes[index]!;
+			if (
+				left.value !== right.value ||
+				left.instruction !== right.instruction ||
+				left.edge !== right.edge
+			)
+				return false;
+		}
+	}
+	return true;
 }
 
 export interface CoreValueAlternatives {
@@ -2706,6 +2737,7 @@ export class CoreProgramFlowEngine {
 		}
 		const summaries = new Map<CoreFunctionId, CoreProgramFlowValueKindSummary>();
 		const valueAnalyses = new Map<CoreFunctionId, Analysis>();
+		const recordAlternatives = new Map<CoreFunctionId, CoreRecordAlternatives>();
 		const boundaryInputs = new Map<CoreFunctionId, CoreProgramFlowKindInputs>();
 		for (const functionId of functionIds) {
 			const summary = previous?.summaries.get(functionId);
@@ -2714,6 +2746,8 @@ export class CoreProgramFlowEngine {
 			if (summary !== undefined && analysis !== undefined && inputs !== undefined) {
 				summaries.set(functionId, summary);
 				valueAnalyses.set(functionId, analysis);
+				const alternatives = previous!.recordAlternatives.get(functionId);
+				if (alternatives !== undefined) recordAlternatives.set(functionId, alternatives);
 				boundaryInputs.set(functionId, inputs);
 			} else force(functionId);
 		}
@@ -2750,6 +2784,7 @@ export class CoreProgramFlowEngine {
 		let callerWakeups = 0;
 		let calleeWakeups = 0;
 		let functionsEvaluated = 0;
+		let evaluationsReused = 0;
 		let affectedFunctions = 0;
 		const changedFunctions = new Set<CoreFunctionId>();
 		const demands = new Map<CoreFunctionId, ReadonlyArray<CoreValueId>>();
@@ -2864,8 +2899,11 @@ export class CoreProgramFlowEngine {
 						// An unknown contract must override a previously published field bound.
 						alternatives.set(instruction, noRecordAlternatives);
 					}
-					if (alternatives !== undefined)
+					if (alternatives === undefined) recordAlternatives.delete(functionId);
+					else {
 						recordAlternativeIndices.set(functionId, alternatives);
+						recordAlternatives.set(functionId, alternatives);
+					}
 				}
 				let calleeSummaries:
 					| Map<CoreFunctionId, CoreProgramFlowValueKindSummary>
@@ -2908,75 +2946,109 @@ export class CoreProgramFlowEngine {
 					// Producer contracts can emerge after the caller's first demand set was solved.
 					demands.delete(functionId);
 				}
-				const cfg = controlFlow(functionId);
-				let demandedValues = demands.get(functionId);
-				if (demandedValues === undefined) {
-					const roots = new Set(semantics.observationValues(this.#program, fn));
-					for (const [instruction, values] of alternatives ?? [])
-						if (values.length !== 0)
-							roots.add(
-								fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
-							);
-					for (const block of cfg.reachable) {
-						const terminator = fn.blockTerminator(block);
-						if (fn.instructionKind(terminator) === "return")
-							roots.add(
-								fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
-							);
+				// A reset starts at the least solution. Reuse an evaluation only where
+				// its old inputs are also the inputs at this point in the new solve.
+				const prior = dirty.has(functionId)
+					? undefined
+					: previous?.summaries.get(functionId);
+				let reusable =
+					prior !== undefined &&
+					sameInputs(prior, summary) &&
+					sameRecordAlternatives(
+						previous!.recordAlternatives.get(functionId),
+						alternatives,
+					) &&
+					(!wildcardReaders.has(functionId) ||
+						(previous!.anyScriptAggregate?.returnKind ===
+							anyScriptAggregate?.returnKind &&
+							previous!.anyScriptAggregate?.returnHeapBrand ===
+								anyScriptAggregate?.returnHeapBrand));
+				if (reusable && calleeSummaries !== undefined)
+					for (const [callee, current] of calleeSummaries) {
+						if (sameReturn(previous!.summaries.get(callee), current)) continue;
+						reusable = false;
+						break;
 					}
-					for (const site of sites) {
-						let parameterCount = 0;
-						for (const callee of site.targets.functions) {
-							const target = this.#program.function(callee);
-							parameterCount = Math.max(parameterCount, target.parameterCount);
-						}
-						for (let index = 0; index < parameterCount; index++) {
-							const argument = site.arguments?.[index];
-							if (argument !== undefined) roots.add(argument);
-						}
-						if (site.targets.functions.length > 0 && site.receiver !== undefined)
-							roots.add(site.receiver);
-					}
-					demandedValues = [...roots];
-					demands.set(functionId, demandedValues);
-				}
-				const values = semantics.analyze(this.#program, fn, cfg, {
-					context,
-					...resultReaders,
-					demandedValues,
-					parameterMasks: summary.parameterKinds,
-					receiverMask: summary.receiverKind,
-				});
-				valueAnalyses.set(functionId, values);
-				functionsEvaluated++;
+				const saved = reusable ? previous!.valueAnalyses.get(functionId) : undefined;
+				let values: Analysis;
 				let returnKind = 0;
 				let returnHeapBrand: CoreHeapBrandState = null;
-				// A call to an async function or a generator returns its promise or iterator;
-				// the body's return value only settles or completes that object.
-				if (fn.isAsync || fn.isGenerator) returnKind = semantics.object;
-				else
-					for (const block of cfg.reachable) {
-						const terminator = fn.blockTerminator(block);
-						if (fn.instructionKind(terminator) === "return") {
-							const returned = fn.kernel.operandAt(
-								fn.kernel.instructionOperandStart(terminator),
-							);
-							const mask = semantics.latticeMask(values, returned);
-							if (mask !== 0)
-								returnHeapBrand = joinCoreHeapBrands(
-									returnHeapBrand,
-									mask === semantics.object
-										? semantics.heapBrand(values, returned)
-										: undefined,
+				let returnRecord: CoreRecordValueKind;
+				if (saved !== undefined) {
+					values = saved;
+					returnKind = prior!.returnKind;
+					returnHeapBrand = prior!.returnHeapBrand;
+					returnRecord = prior!.returnRecord;
+					evaluationsReused++;
+				} else {
+					const cfg = controlFlow(functionId);
+					let demandedValues = demands.get(functionId);
+					if (demandedValues === undefined) {
+						const roots = new Set(semantics.observationValues(this.#program, fn));
+						for (const [instruction, values] of alternatives ?? [])
+							if (values.length !== 0)
+								roots.add(
+									fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
 								);
-							returnKind |= mask;
+						for (const block of cfg.reachable) {
+							const terminator = fn.blockTerminator(block);
+							if (fn.instructionKind(terminator) === "return")
+								roots.add(
+									fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+								);
 						}
+						for (const site of sites) {
+							let parameterCount = 0;
+							for (const callee of site.targets.functions) {
+								const target = this.#program.function(callee);
+								parameterCount = Math.max(parameterCount, target.parameterCount);
+							}
+							for (let index = 0; index < parameterCount; index++) {
+								const argument = site.arguments?.[index];
+								if (argument !== undefined) roots.add(argument);
+							}
+							if (site.targets.functions.length > 0 && site.receiver !== undefined)
+								roots.add(site.receiver);
+						}
+						demandedValues = [...roots];
+						demands.set(functionId, demandedValues);
 					}
-				if (fn.isAsync || fn.isGenerator) returnHeapBrand = undefined;
-				const returnRecord =
-					returnKind === 0
-						? undefined
-						: semantics.returnRecord(this.#program, fn, cfg, values, recordResult);
+					values = semantics.analyze(this.#program, fn, cfg, {
+						context,
+						...resultReaders,
+						demandedValues,
+						parameterMasks: summary.parameterKinds,
+						receiverMask: summary.receiverKind,
+					});
+					functionsEvaluated++;
+					// A call to an async function or a generator returns its promise or iterator;
+					// the body's return value only settles or completes that object.
+					if (fn.isAsync || fn.isGenerator) returnKind = semantics.object;
+					else
+						for (const block of cfg.reachable) {
+							const terminator = fn.blockTerminator(block);
+							if (fn.instructionKind(terminator) === "return") {
+								const returned = fn.kernel.operandAt(
+									fn.kernel.instructionOperandStart(terminator),
+								);
+								const mask = semantics.latticeMask(values, returned);
+								if (mask !== 0)
+									returnHeapBrand = joinCoreHeapBrands(
+										returnHeapBrand,
+										mask === semantics.object
+											? semantics.heapBrand(values, returned)
+											: undefined,
+									);
+								returnKind |= mask;
+							}
+						}
+					if (fn.isAsync || fn.isGenerator) returnHeapBrand = undefined;
+					returnRecord =
+						returnKind === 0
+							? undefined
+							: semantics.returnRecord(this.#program, fn, cfg, values, recordResult);
+				}
+				valueAnalyses.set(functionId, values);
 				if (
 					returnKind !== summary.returnKind ||
 					returnHeapBrand !== summary.returnHeapBrand ||
@@ -3055,6 +3127,7 @@ export class CoreProgramFlowEngine {
 		const statistics = Object.freeze({
 			functions: functionIds.length,
 			functionsEvaluated,
+			evaluationsReused,
 			functionsReused: functionIds.length - affectedFunctions,
 			affectedFunctions,
 			callerWakeups,
@@ -3071,6 +3144,7 @@ export class CoreProgramFlowEngine {
 			external,
 			boundaryInputs,
 			valueAnalyses,
+			recordAlternatives,
 			summaries,
 			anyScriptAggregate,
 			anyScriptAggregateFixed: fixedAggregate,

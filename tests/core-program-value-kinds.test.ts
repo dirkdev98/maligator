@@ -906,6 +906,53 @@ globalThis.result = isNumber();`;
 		expect(updated.summary(caller.function).returnKind).toBe(COMPILER_VALUE_KIND_NUMBER);
 	});
 
+	it("reuses a clean leaf within a reset call component", () => {
+		const program = analysisProgram();
+		const root = new CoreFunctionBuilder(program);
+		const entry = root.createBlock();
+		const [receiver] = root.appendInstruction(entry, "createUndefined", []);
+		const invoke = (functionIndex: number) => {
+			const [callee] = root.appendInstruction(entry, "createFunction", [], {
+				attributes: { functionIndex },
+			});
+			return root.appendInstruction(entry, "call", [callee!, receiver!])[0]!;
+		};
+		invoke(1);
+		const result = invoke(2);
+		root.setTerminator(entry, { kind: "return", value: result });
+		const caller = root.finish(entry).function;
+		const changed = appendLeaf(program);
+		const sibling = appendLeaf(program);
+		const context = programAnalysisContext();
+		const manager = new CoreAnalysisManager(
+			program,
+			context,
+			new CoreOptimizationReportBuilder(program),
+		);
+		const read = (analyses: CoreAnalysisManager) =>
+			analyses.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds;
+		const first = read(manager);
+
+		const editor = CoreEditor.open(program, changed.function);
+		editor.replaceInstruction(changed.valueInstruction, "createBoolean", [], {
+			attributes: { value: true },
+		});
+		editor.commit();
+
+		const updated = read(manager);
+		const fresh = read(
+			new CoreAnalysisManager(
+				program,
+				context,
+				new CoreOptimizationReportBuilder(program),
+			),
+		);
+		expect(updated.statistics.affectedFunctions).toBe(3);
+		expect(updated.values(sibling.function)).toBe(first.values(sibling.function));
+		for (const fn of [caller, changed.function, sibling.function])
+			expect(updated.summary(fn)).toEqual(fresh.summary(fn));
+	});
+
 	it("retracts a removed argument kind through call-result feedback", () => {
 		const program = analysisProgram();
 		const caller = new CoreFunctionBuilder(program);
