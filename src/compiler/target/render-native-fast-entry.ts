@@ -7,6 +7,7 @@ import {
 	COMPILER_VALUE_KIND_UNDEFINED,
 	COMPILER_VALUE_KIND_NULL,
 	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_BIGINT,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULLISH,
@@ -176,7 +177,7 @@ function fastClassRead(
 ): string {
 	const object = `__fast_object_${ip}`;
 	const guard = site.kind === "method" ? "MAL_CLASS_METHOD" : "MAL_CLASS_SLOT";
-	return `{ MalObject *const ${object} = mal_vm_as_object(__fast_r${receiver}); ${site.candidates.map(({ layout, index }, position) => `${position === 0 ? "if" : "else if"} (${guard}(${object}, ${layout})) __fast_r${destination} = ${site.kind === "method" ? `vm->class_cells[${layout}].methods[${index}]` : `mal_object_field_load_shaped(${object}, ${index})`};`).join(" ")} else goto __full; }`;
+	return `{ MalObject *const ${object} = mal_vm_as_object(__fast_r${receiver}); ${site.candidates.map(({ layout, index }, position) => `${position === 0 ? "if" : "else if"} (${guard}(${object}, ${layout})) __fast_r${destination} = ${site.kind === "method" ? `vm->class_cells[${layout}].methods[${index}]` : `mal_object_leaf_field_load_shaped(${object}, ${index})`};`).join(" ")} else goto __full; }`;
 }
 
 /** A fast path may restart only before JavaScript effects or allocation, using the original arguments. */
@@ -966,6 +967,61 @@ function storeNumber(values: FastNumbers, dst: number, expression: string): stri
 const NUMBER_COMPARISONS: ReadonlySet<string> = new Set(["<", "<=", ">", ">="]);
 
 /**
+ * A comparison of a boxed Number whose representation is unknown with an int32 operand.
+ * Most such Numbers are int32, so testing that tag first compares integers and leaves
+ * the conversion through double to the other branch.
+ */
+function int32FirstOperand(
+	values: FastNumbers,
+	left: number,
+	right: number,
+): { readonly boxed: number; readonly integer: string } | undefined {
+	for (const [boxed, other] of [
+		[left, right],
+		[right, left],
+	] as const) {
+		if (
+			boxed < 0 ||
+			values.constants.has(boxed) ||
+			values.cachedNumbers.has(boxed) ||
+			values.isInt32(boxed) ||
+			(values.kind(boxed) & COMPILER_VALUE_KIND_NUMBER) === 0
+		)
+			continue;
+		if (other >= 0) {
+			const integer = exactInteger(values, other);
+			if (integer !== undefined) return { boxed, integer };
+			continue;
+		}
+		const decoded = decodeVmValueOperand(other);
+		if (
+			decoded.kind === "number" &&
+			Number.isInteger(decoded.value) &&
+			!Object.is(decoded.value, -0) &&
+			decoded.value >= -0x8000_0000 &&
+			decoded.value <= 0x7fff_ffff
+		)
+			return { boxed, integer: `((i32) ${decoded.value})` };
+	}
+	return undefined;
+}
+
+function int32FirstComparison(
+	values: FastNumbers,
+	operator: string,
+	left: number,
+	right: number,
+	otherwise: string,
+): string {
+	const operand = int32FirstOperand(values, left, right);
+	if (operand === undefined) return otherwise;
+	const integer = `mal_value_to_i32(__fast_r${operand.boxed})`;
+	const [a, b] =
+		operand.boxed === left ? [integer, operand.integer] : [operand.integer, integer];
+	return `(mal_value_is_int32(__fast_r${operand.boxed}) ? (${a} ${operator} ${b}) : (${otherwise}))`;
+}
+
+/**
  * The relational comparison of two Strings, which compares code units. It reads both
  * strings without collecting or running JavaScript, so a fast body can finish it.
  */
@@ -1015,24 +1071,31 @@ function fastBinary(
 			return `__fast_r${dst} = mal_value_new_boolean(${expression});`;
 	}
 	if (operator === "===" || operator === "!==") {
+		const strings = nativeStringComparisonExpression(
+			values.stringComparison,
+			left,
+			`__fast_r${left}`,
+			`__fast_r${right}`,
+		);
 		const equal =
-			nativeStringComparisonExpression(
-				values.stringComparison,
+			strings ??
+			int32FirstComparison(
+				values,
+				"==",
 				left,
-				`__fast_r${left}`,
-				`__fast_r${right}`,
-			) ??
-			nativeEqualityExpression(
-				"strict",
-				`__fast_r${left}`,
-				`__fast_r${right}`,
-				values.kind(left),
-				values.kind(right),
-				equalityScalar(values, left, `__fast_r${left}`),
-				equalityScalar(values, right, `__fast_r${right}`),
-				values.isInt32(left) && values.isInt32(right),
-				values.range(left),
-				values.range(right),
+				right,
+				nativeEqualityExpression(
+					"strict",
+					`__fast_r${left}`,
+					`__fast_r${right}`,
+					values.kind(left),
+					values.kind(right),
+					equalityScalar(values, left, `__fast_r${left}`),
+					equalityScalar(values, right, `__fast_r${right}`),
+					values.isInt32(left) && values.isInt32(right),
+					values.range(left),
+					values.range(right),
+				),
 			);
 		return `__fast_r${dst} = mal_value_new_boolean(${operator === "!==" ? `!(${equal})` : equal});`;
 	}
@@ -1096,7 +1159,7 @@ function fastBinary(
 			return `${guard} ${storeNumber(values, dst, expression)}`;
 	}
 	if (NUMBER_COMPARISONS.has(operator)) {
-		const compared = `${guard} __fast_r${dst} = mal_value_new_boolean(${numeric(left)} ${operator} ${numeric(right)});`;
+		const compared = `${guard} __fast_r${dst} = mal_value_new_boolean(${int32FirstComparison(values, operator, left, right, `${numeric(left)} ${operator} ${numeric(right)}`)});`;
 		return lexical === undefined
 			? compared
 			: `if (${lexical.strings}) { ${lexical.statement} } else { ${compared} }`;
@@ -1126,9 +1189,44 @@ function fastBinary(
 	return undefined;
 }
 
+/**
+ * ToBoolean of a register without a call, so the entry stays a leaf. Only a BigInt
+ * declines; a kind without one needs no guard.
+ */
+function fastTruthiness(
+	values: FastNumbers,
+	register: number,
+	ip: number,
+): { readonly guard: string; readonly truthy: string } {
+	const kind = values.kind(register);
+	const boxed = `__fast_r${register}`;
+	if (compilerValueKindMaskIsSubset(kind, COMPILER_VALUE_KIND_BOOLEAN))
+		return { guard: "", truthy: `${boxed} == MAL_VALUE_TRUE` };
+	if (
+		compilerValueKindMaskIsSubset(
+			kind,
+			COMPILER_VALUE_KIND_BOOLEAN |
+				COMPILER_VALUE_KIND_NULLISH |
+				COMPILER_VALUE_KIND_OBJECT,
+		)
+	)
+		return {
+			guard: "",
+			truthy: `(${boxed} == MAL_VALUE_TRUE || mal_value_is_object(${boxed}))`,
+		};
+	if ((kind & COMPILER_VALUE_KIND_BIGINT) === 0)
+		return { guard: "", truthy: `mal_value_leaf_truthiness(${boxed}) > 0` };
+	const truth = `__truth_${ip}`;
+	return {
+		guard: `const i32 ${truth} = mal_value_leaf_truthiness(${boxed}); if (${truth} < 0) goto __full;`,
+		truthy: `${truth} > 0`,
+	};
+}
+
 function fastUnary(
 	op: Extract<BytecodeInstruction, { opcode: "UNARY" }>,
 	values: FastNumbers,
+	ip: number,
 ): string | undefined {
 	const { dst, src, operator } = op;
 	const primitive = compilerValueKindMaskIsSubset(
@@ -1152,11 +1250,12 @@ function fastUnary(
 			const constant =
 				compilerIntegerRangeTruthiness(values.range(src)) ??
 				compilerValueKindTruthiness(values.kind(src));
-			return constant === undefined
-				? values.kind(src) === COMPILER_VALUE_KIND_NUMBER
-					? `__fast_r${dst} = mal_value_new_boolean(!mal_number_is_truthy(${number(values, src)}));`
-					: `__fast_r${dst} = mal_value_new_boolean(!mal_value_is_truthy(__fast_r${src}));`
-				: `__fast_r${dst} = ${constant ? "MAL_VALUE_FALSE" : "MAL_VALUE_TRUE"};`;
+			if (constant !== undefined)
+				return `__fast_r${dst} = ${constant ? "MAL_VALUE_FALSE" : "MAL_VALUE_TRUE"};`;
+			if (values.kind(src) === COMPILER_VALUE_KIND_NUMBER)
+				return `__fast_r${dst} = mal_value_new_boolean(!mal_number_is_truthy(${number(values, src)}));`;
+			const { guard: truthGuard, truthy } = fastTruthiness(values, src, ip);
+			return `${truthGuard}${truthGuard === "" ? "" : " "}__fast_r${dst} = (${truthy}) ? MAL_VALUE_FALSE : MAL_VALUE_TRUE;`;
 		}
 		case "-":
 			return `${guard} ${storeNumber(values, dst, `-${numeric}`)}`;
@@ -1375,7 +1474,7 @@ function fastInstruction(
 				return `__fast_r${op.dst} = mal_value_from_i32((i32) mal_string_length(mal_value_to_string(__fast_r${op.object})));`;
 			const probe = input.lengthProperty(op.stringIndex)
 				? "mal_vm_property_try_load_length_static"
-				: "mal_vm_property_try_load_static";
+				: "mal_vm_property_leaf_try_load_static";
 			return `if (!${probe}(vm, __fast_r${op.object}, &__fast_ic[${op.icIndex}], &__fast_r${op.dst})) goto __full;`;
 		}
 		case "LOAD_PROPERTY": {
@@ -1384,18 +1483,27 @@ function fastInstruction(
 			if (failure === "true") return undefined;
 			const guard = failure === "false" ? "" : `${failure} || `;
 			const integral = values.isInt32(op.key) || integers.has(op.key);
+			const array = `MalArrayObject *const __array = mal_vm_as_array(__fast_r${op.object});`;
+			// A boxed key of unknown representation tests the int32 tag before any double.
+			if (
+				!integral &&
+				op.key >= 0 &&
+				!values.constants.has(op.key) &&
+				!values.cachedNumbers.has(op.key)
+			)
+				return `{ ${array} if (__array == nullptr || !mal_vm_array_leaf_get_value_index(__array, __fast_r${op.key}, &__fast_r${op.dst})) goto __full; }`;
 			const index = integral ? int32(values, op.key) : number(values, op.key);
 			const bound =
 				integral && (values.range(op.key)?.minimum ?? -1) < 0 ? `${index} < 0 || ` : "";
 			const probe = integral
-				? `mal_vm_array_try_get_proven_index(__array, (u32) ${index}, &__fast_r${op.dst})`
-				: `mal_vm_array_try_get_index(__array, ${index}, &__fast_r${op.dst})`;
-			return `{ MalArrayObject *const __array = mal_vm_as_array(__fast_r${op.object}); if (__array == nullptr || ${guard}${bound}!${probe}) goto __full; }`;
+				? `mal_vm_array_leaf_get_proven_index(__array, (u32) ${index}, &__fast_r${op.dst})`
+				: `mal_vm_array_leaf_get_index(__array, ${index}, &__fast_r${op.dst})`;
+			return `{ ${array} if (__array == nullptr || ${guard}${bound}!${probe}) goto __full; }`;
 		}
 		case "BINARY":
 			return fastBinary(op, values);
 		case "UNARY":
-			return fastUnary(op, values);
+			return fastUnary(op, values, ip);
 		case "MATH_UNARY_NUMBER":
 			return fastMath(op.operation, [op.src], op.dst, values, value);
 		case "MATH_BINARY_NUMBER":
@@ -1419,11 +1527,12 @@ function fastInstruction(
 				compilerIntegerRangeTruthiness(values.range(op.cond)) ??
 				compilerValueKindTruthiness(values.kind(op.cond));
 			if (constant !== undefined) return constant ? target : "";
-			return integers.has(op.cond)
-				? `if (mal_ops_number_value_to_i32(__fast_r${op.cond}) != 0) ${target}`
-				: values.kind(op.cond) === COMPILER_VALUE_KIND_NUMBER
-					? `if (mal_number_is_truthy(${number(values, op.cond)})) ${target}`
-					: `if (mal_value_is_truthy(__fast_r${op.cond})) ${target}`;
+			if (integers.has(op.cond))
+				return `if (mal_ops_number_value_to_i32(__fast_r${op.cond}) != 0) ${target}`;
+			if (values.kind(op.cond) === COMPILER_VALUE_KIND_NUMBER)
+				return `if (mal_number_is_truthy(${number(values, op.cond)})) ${target}`;
+			const { guard, truthy } = fastTruthiness(values, op.cond, ip);
+			return `${guard}${guard === "" ? "" : " "}if (${truthy}) ${target}`;
 		}
 		case "RETURN": {
 			const returned = value(op.value);

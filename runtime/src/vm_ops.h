@@ -3537,6 +3537,121 @@ static inline __attribute__((always_inline)) bool mal_vm_array_try_get_value_ind
         mal_vm_array_try_get_index(arr, mal_ops_number_as_f64(key), out);
 }
 
+/*
+ * Leaf variants for frameless fast entries, which may restart in their full body at
+ * any point. A call anywhere in such an entry, even on a rare path that rejoins the
+ * common one, makes it save callee-saved registers on every call and reload its guards
+ * after the join. These decide inline what the shared helpers decide out of line, and
+ * report anything else to the caller, which declines. They carry no branch hints:
+ * Clang's hot/cold splitting outlines a hinted-cold path into a called function,
+ * which brings the frame back.
+ */
+
+/** ToBoolean: 1 or 0, or -1 for a BigInt. */
+static inline __attribute__((always_inline)) i32 mal_value_leaf_truthiness(MalValue value) {
+    if (value == MAL_VALUE_TRUE || mal_value_is_object(value)) return 1;
+    if (value == MAL_VALUE_FALSE || mal_value_is_nil(value)) return 0;
+    if (mal_value_is_int32(value)) return mal_value_to_i32(value) != 0;
+    if (mal_ops_is_number(value)) return mal_number_is_truthy(mal_ops_number_as_f64(value));
+    if (mal_value_is_string(value)) return mal_string_length(mal_value_to_string(value)) != 0;
+    return mal_value_is_bigint(value) ? -1 : 1;
+}
+
+/** `mal_object_field_load_shaped` with embedded and external storage read inline. */
+static inline __attribute__((always_inline)) MalValue mal_object_leaf_field_load_shaped(
+    const MalObject *object, u32 ordinal
+) {
+    if (object->storage_kind == MAL_OBJECT_COMPACT) {
+        return ((const MalValue *) ((const u8 *) (object + 1) + sizeof(void *)))[ordinal];
+    }
+    const MalObjectStorage *storage;
+    if (object->storage_kind == MAL_OBJECT_EMBEDDED) {
+        storage = (const MalObjectStorage *) (object + 1);
+    } else {
+        memcpy(&storage, object + 1, sizeof(storage));
+    }
+    return ((const MalValue *) storage->fields)[ordinal];
+}
+
+/**
+ * `mal_vm_array_try_get_proven_index` with the absent element's proof inline. On macOS
+ * the isolate record is read only while it is the sole one, since the per-thread lookup
+ * is a call.
+ */
+static inline __attribute__((always_inline)) bool mal_vm_array_leaf_get_proven_index(
+    const MalArrayObject *arr, u32 index, MalValue *out
+) {
+    if (mal_array_object_dense_get(arr, index, out)) return true;
+#if defined(__APPLE__) && !defined(__wasi__)
+    const MalIsolateLocals *isolate =
+        atomic_load_explicit(&mal_sole_isolate, memory_order_relaxed);
+    if (isolate == nullptr) return false;
+#else
+    const MalIsolateLocals *isolate = mal_isolate_locals();
+#endif
+    if (arr->dense_deopted || !isolate->array_elements_protector ||
+        isolate->array_prototype_object == nullptr ||
+        arr->object.storage_kind == MAL_OBJECT_EXTERNAL) {
+        return false;
+    }
+    MalObject *prototype;
+    memcpy(&prototype, &arr->object + 1, sizeof(prototype));
+    if (prototype != isolate->array_prototype_object) return false;
+    *out = MAL_VALUE_UNDEFINED;
+    return true;
+}
+
+static inline __attribute__((always_inline)) bool mal_vm_array_leaf_get_index(
+    const MalArrayObject *arr, f64 index, MalValue *out
+) {
+    if (!(index >= 0 && index < (f64) UINT32_MAX)) return false;
+    u32 integer = (u32) index;
+    return (f64) integer == index && mal_vm_array_leaf_get_proven_index(arr, integer, out);
+}
+
+/**
+ * `mal_vm_property_try_load_static` with its own-slot rows read inline. The remaining
+ * rows are out-of-line calls that preserve the caller's registers, so a leaf entry
+ * pays for a frame only on those rows.
+ */
+static inline __attribute__((always_inline)) bool mal_vm_property_leaf_try_load_static(
+    MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
+) {
+    const MalObject *object = mal_vm_as_object(receiver);
+    if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE) {
+        if (object->shape == ic->shape) {
+            mal_perf_ic_load_mono_hit();
+            *out = mal_object_leaf_field_load_shaped(object, ic->slot);
+            return true;
+        }
+        if (ic->prim_kind == 0 &&
+            mal_shape_slot_holds_data_key(object->shape, ic->slot, ic->key)) {
+            MAL_PERF_COUNT(ic_load_slot_key_hits);
+            *out = mal_object_leaf_field_load_shaped(object, ic->slot);
+            return true;
+        }
+    }
+    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE &&
+        mal_vm_inherited_value_try_load(vm, receiver, ic, out)) {
+        return true;
+    }
+    MalStaticPropertyProbeResult result =
+        mal_vm_property_try_load_static_remaining(vm, receiver, object, ic);
+    if (!result.hit) return false;
+    *out = result.value;
+    return true;
+}
+
+/** A boxed Number key tests the int32 tag before any conversion through double. */
+static inline __attribute__((always_inline)) bool mal_vm_array_leaf_get_value_index(
+    const MalArrayObject *arr, MalValue key, MalValue *out
+) {
+    u32 index;
+    if (mal_vm_int32_index(key, &index)) return mal_vm_array_leaf_get_proven_index(arr, index, out);
+    return mal_ops_is_number(key) &&
+        mal_vm_array_leaf_get_index(arr, mal_ops_number_as_f64(key), out);
+}
+
 static inline bool mal_vm_private_array_try_get_proven_index(
     const MalArrayObject *arr, u32 index, MalValue *out
 ) {

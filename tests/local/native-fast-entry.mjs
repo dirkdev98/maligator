@@ -1038,5 +1038,117 @@ const numericGetter = {
 };
 log.push(`numeric getter result ${numericProperty(numericGetter, { value: 3 })}`);
 
+// Class accessors answer rare reads inline or restart, without calls in the fast body.
+const ACCESSOR_KINDS = [];
+ACCESSOR_KINDS[1] = "jump";
+ACCESSOR_KINDS[3] = "return";
+class AccessorStore {
+	#retired;
+	#ops;
+	#names;
+	constructor(ops, names, retired) {
+		this.#ops = ops;
+		this.#names = names;
+		this.#retired = retired;
+	}
+	retire(value) {
+		this.#retired = value;
+	}
+	kind(id) {
+		if (this.#retired) return "retired";
+		const op = this.#ops[id] ?? -8;
+		if (op === -8) return "dead";
+		if (op >= 0) return "operation";
+		return ACCESSOR_KINDS[-op] ?? "unknown";
+	}
+	name(id) {
+		const active = !this.#retired;
+		if (active === false) return "retired";
+		const op = this.#ops[id] ?? -8;
+		if (op < 0) return "none";
+		return this.#names[op] ?? "fallback";
+	}
+}
+const accessorOps = [0, 1, -1, -2, -3, 2.5, -0, 2, 9];
+accessorOps[12] = 1;
+const accessorStore = new AccessorStore(accessorOps, ["a", "b", "c"], false);
+const accessorRead = (store, id) => `${store.kind(id)}/${store.name(id)}`;
+for (let round = 0; round < 40; round++)
+	for (let id = 0; id < 14; id++) accessorRead(accessorStore, id);
+for (let id = 0; id < 14; id++)
+	log.push(`accessor ${id} ${accessorRead(accessorStore, id)}`);
+for (const retired of [
+	0,
+	1,
+	-0,
+	0.5,
+	NaN,
+	"",
+	"x",
+	0n,
+	7n,
+	null,
+	undefined,
+	{},
+	Symbol("s"),
+]) {
+	accessorStore.retire(retired);
+	log.push(`accessor retired ${String(retired)} ${accessorRead(accessorStore, 1)}`);
+}
+accessorStore.retire(false);
+
+// A private name stamped on through a constructor's returned object moves the
+// receiver's fields to outside storage without changing its shape.
+class Stamped {
+	#seed = 0;
+	value = 5;
+	read(index) {
+		return this.value + index + this.#seed;
+	}
+}
+const Stamper = class extends class {
+	constructor(target) {
+		return target;
+	}
+} {
+	#stamp = true;
+};
+const stamped = new Stamped();
+let stampedTotal = 0;
+for (let index = 0; index < 50; index++) stampedTotal += stamped.read(index);
+new Stamper(stamped);
+for (let index = 0; index < 50; index++) stampedTotal += stamped.read(index);
+log.push(`stamped fields ${stampedTotal}`);
+
+// A prototype value read and a getter read through the same static-name accessor.
+class Base {
+	describe(index) {
+		return this.label.length + index;
+	}
+}
+Base.prototype.label = "inherited";
+class WithGetter extends Base {
+	get label() {
+		log.push("label getter");
+		return "getter";
+	}
+}
+const plain = new Base();
+let inheritedTotal = 0;
+for (let index = 0; index < 50; index++) inheritedTotal += plain.describe(index);
+log.push(`inherited ${inheritedTotal} ${new WithGetter().describe(1)}`);
+
+// An indexed prototype element makes holes and out-of-range reads visible.
+Object.defineProperty(Array.prototype, 10, {
+	configurable: true,
+	get() {
+		log.push("array prototype getter");
+		return 3;
+	},
+});
+for (const id of [6, 10, 11, 12])
+	log.push(`accessor prototype ${id} ${accessorRead(accessorStore, id)}`);
+delete Array.prototype[10];
+
 if (globalThis.gc) globalThis.gc();
 console.log(log.join("\n"));

@@ -42,7 +42,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_vm_as_object",
 	"mal_vm_callee_has_index",
 	"mal_vm_guard_semantic_epoch",
-	"mal_object_field_load_shaped",
+	"mal_object_leaf_field_load_shaped",
 	"mal_vm_leaf_stack_available",
 	"mal_value_is_undefined",
 	"mal_value_is_object",
@@ -55,7 +55,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_string_equals",
 	"mal_string_compare",
 	"mal_string_length",
-	"mal_vm_property_try_load_static",
+	"mal_vm_property_leaf_try_load_static",
 	"mal_vm_load_known_own_data",
 	"mal_vm_property_try_load_length_static",
 	"mal_vm_global_data_property_cached",
@@ -95,7 +95,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_value_from_string",
 	"mal_value_new_boolean",
 	"mal_value_to_boolean",
-	"mal_value_is_truthy",
+	"mal_value_leaf_truthiness",
 	"mal_number_is_truthy",
 	"mal_value_is_nil",
 	"mal_value_is_nan",
@@ -103,8 +103,9 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_vm_typeof_compare",
 	"mal_vm_load_captured",
 	"mal_vm_as_array",
-	"mal_vm_array_try_get_index",
-	"mal_vm_array_try_get_proven_index",
+	"mal_vm_array_leaf_get_index",
+	"mal_vm_array_leaf_get_proven_index",
+	"mal_vm_array_leaf_get_value_index",
 ]);
 
 const template = compileSemanticProgramToProgramImage(
@@ -946,7 +947,7 @@ it("uses Number and nonnegative integer proofs in frameless indexed reads", () =
 		expect(unexpectedHelpers(lines)).toEqual([]);
 		const c = lines.join("\n");
 		expect(c).not.toContain("mal_ops_is_number(__fast_r1)");
-		expect(c.includes("mal_vm_array_try_get_proven_index(")).toBe(range !== undefined);
+		expect(c.includes("mal_vm_array_leaf_get_proven_index(")).toBe(range !== undefined);
 		expect(c.includes("< 0")).toBe(range !== undefined && range.minimum < 0);
 	}
 });
@@ -962,7 +963,7 @@ it("transports an index as an Int32 only after guarding the canonical arguments"
 	expect(source).toContain("i32 __fast_p1");
 	expect(source).toContain("arg_count > 1 && mal_value_is_int32(args[1])");
 	expect(source).toContain("mal_value_to_i32(args[1])");
-	expect(source).toContain("mal_vm_array_try_get_proven_index");
+	expect(source).toContain("mal_vm_array_leaf_get_proven_index");
 	expect(unexpectedHelpers(lines)).toEqual([]);
 });
 
@@ -1348,7 +1349,9 @@ describe("native fast entries", () => {
 		expect(lines).toBeDefined();
 		expect(unexpectedHelpers(lines)).toEqual([]);
 		const c = lines.join("\n");
-		expect(c).toContain("if (mal_value_is_truthy(__fast_r0)) goto F5;");
+		expect(c).toContain(
+			"const i32 __truth_0 = mal_value_leaf_truthiness(__fast_r0); if (__truth_0 < 0) goto __full; if (__truth_0 > 0) goto F5;",
+		);
 		expect(c).not.toContain("__fast_r200");
 		expect(c).not.toContain("__fast_r201");
 		expect(c).not.toContain("__fast_ic");
@@ -1396,7 +1399,7 @@ describe("native fast entries", () => {
 				resultKindMasks: [COMPILER_VALUE_KIND_TOP],
 			},
 		])!.join("\n");
-		expect(c).not.toContain("mal_vm_array_try_get");
+		expect(c).not.toContain("mal_vm_array_leaf_get");
 		expect(c).not.toContain("__fast_r2");
 		expect(c).toContain("F3:;");
 	});
@@ -1641,7 +1644,7 @@ describe("native fast entries", () => {
 		expect(lines).toBeDefined();
 		expect(lines.join("\n")).toContain("goto F4;");
 		expect(lines.join("\n")).toContain("F4:;");
-		expect(lines.join("\n")).not.toContain("mal_value_is_truthy");
+		expect(lines.join("\n")).not.toContain("truthiness");
 		expect(lines.join("\n")).not.toContain("__fast_r0");
 		expect(unexpectedHelpers(lines)).toEqual([]);
 	});
@@ -1757,7 +1760,7 @@ describe("native fast entries", () => {
 				{ opcode: "RETURN", value: 1 },
 			]),
 		)!.join("\n");
-		expect(integer).toContain("mal_value_is_truthy(__fast_r2)");
+		expect(integer).toContain("mal_value_leaf_truthiness(__fast_r2)");
 		expect(integer).not.toContain("mal_ops_number_value_to_i32(__fast_r2)");
 		expect(integer).toContain("__fast_r2 = MAL_VALUE_UNDEFINED;");
 	});
@@ -1835,7 +1838,7 @@ describe("native fast entries", () => {
 			]),
 		)!.join("\n");
 		expect(text).toContain("if (mal_ops_number_value_to_i32(__fast_r2) != 0)");
-		expect(text).not.toContain("mal_value_is_truthy(__fast_r2)");
+		expect(text).not.toContain("mal_value_leaf_truthiness(__fast_r2)");
 	});
 
 	it("read a Number constant's literal instead of converting it per call", () => {
@@ -2348,7 +2351,7 @@ describe("successful fast arithmetic Number results", () => {
 				{ opcode: "RETURN", value: 1 },
 			]),
 		)!.join("\n");
-		expect(text).toContain("mal_value_is_truthy(__fast_r2)");
+		expect(text).toContain("mal_value_leaf_truthiness(__fast_r2)");
 	});
 
 	it("retains generic truthiness when a branch bypasses the numeric definition", () => {
@@ -2361,7 +2364,7 @@ describe("successful fast arithmetic Number results", () => {
 				{ opcode: "RETURN", value: 1 },
 			]),
 		)!.join("\n");
-		expect(text).toContain("mal_value_is_truthy(__fast_r2)");
+		expect(text).toContain("mal_value_leaf_truthiness(__fast_r2)");
 	});
 });
 
@@ -2397,4 +2400,59 @@ it("uses the cached Number directly when a scalar chain feeds a bitwise operatio
 	])!.join("\n");
 	expect(text).toMatch(/mal_ops_number_to_i32\(__fast_n\d+\)/);
 	expect(text).not.toContain("mal_ops_number_value_to_i32(");
+});
+
+it("tests a Boolean condition with one comparison and declines nothing", () => {
+	const lines = fastEntry(
+		body([
+			{ opcode: "JUMP_IF", cond: 0, targetIp: 2 },
+			{ opcode: "RETURN", value: 1 },
+			{ opcode: "RETURN", value: 0 },
+		]),
+		undefined,
+		true,
+		undefined,
+		[
+			{
+				registers: [0],
+				inputOffset: 0,
+				inputKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+				resultKindMasks: [],
+			},
+		],
+	)!;
+	expect(unexpectedHelpers(lines)).toEqual([]);
+	expect(lines.join("\n")).toContain("if (__fast_r0 == MAL_VALUE_TRUE) goto F2;");
+});
+
+it("compares a boxed Number with an int32 operand through its int32 tag first", () => {
+	const lines = fastEntry(
+		body([
+			{ opcode: "CREATE_NUMBER", dst: 2, value: -8 },
+			{ opcode: "BINARY", dst: 3, left: 0, right: 2, operator: "===" },
+			{ opcode: "BINARY", dst: 4, left: 2, right: 0, operator: "<" },
+			{ opcode: "RETURN", value: 4 },
+		]),
+		undefined,
+		true,
+		undefined,
+		[
+			undefined,
+			undefined,
+			{
+				registers: [4, 2, 0],
+				inputOffset: 1,
+				inputKindMasks: [COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_NUMBER],
+				resultKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+			},
+		],
+	)!;
+	expect(unexpectedHelpers(lines)).toEqual([]);
+	const text = lines.join("\n");
+	expect(text).toContain(
+		"mal_value_is_int32(__fast_r0) ? (mal_value_to_i32(__fast_r0) == ((i32) -8))",
+	);
+	expect(text).toContain(
+		"mal_value_is_int32(__fast_r0) ? (((i32) -8) < mal_value_to_i32(__fast_r0))",
+	);
 });

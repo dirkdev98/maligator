@@ -363,7 +363,14 @@ loads through their cache rows and indexed loads through dense Array elements,
 computes on Numbers, and branches. Any miss, non-Number operand, construct call or
 observed profile restarts the activation in the full entry; nothing observable has
 happened by then and nothing in the fast entry can allocate, so it needs no frame
-row, root frame or safepoint. A canonical fast body is also exported as a `_try`
+row, root frame or safepoint. Its hot path must also stay a leaf: one out-of-line
+call on a rare path that rejoins the common one makes the entry save callee-saved
+registers on every call and reload its guards after the join. Fast bodies therefore
+use the `leaf` runtime helpers, which decide inline what the shared helpers decide
+out of line (truthiness, out-of-line object storage, absent dense elements, int32
+keys) and decline the rest; they carry no branch hints, since hot/cold splitting
+outlines a hinted path into a call again. Comparisons of a boxed Number with an
+int32 operand test the int32 tag before converting through double. A canonical fast body is also exported as a `_try`
 function, and a fast body may call another one's `_try` at a proven exact call
 site. Small boxed parameter lists use fixed positional arguments to avoid building
 an argument vector between fast bodies. The canonical entry still adapts omitted
