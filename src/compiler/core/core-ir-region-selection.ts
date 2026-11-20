@@ -1128,6 +1128,9 @@ function buildCoreLocalOptimizationPlanInput(
 	let operationCount = 0;
 	if (scanned) {
 		// This only orders function scans; proved candidates still use the full cost model.
+		let iteratorInitializations = 0;
+		let iteratorSteps = 0;
+		let iteratorStepWeight = 0;
 		const loopWeights = new Uint8Array(fn.blockCapacity);
 		for (const loop of cfg.loops) {
 			for (const block of loop.blocks)
@@ -1138,22 +1141,38 @@ function buildCoreLocalOptimizationPlanInput(
 			const header = fn.instructionHeader(instruction);
 			if (typeof header === "string") continue;
 			const opcode = header.opcode;
-			const benefit =
-				opcode === "iteratorStep" || opcode === "getIterator"
-					? 24
-					: opcode === "createObject" ||
-						  opcode === "createObjectShaped" ||
-						  opcode === "createArray"
+			const loopWeight = loopWeights[fn.instructionBlock(instruction)]!;
+			let benefit: number;
+			if (opcode === "iteratorStep") {
+				iteratorSteps++;
+				iteratorStepWeight = loopWeight;
+				benefit = 24;
+			} else if (opcode === "getIterator") {
+				iteratorInitializations++;
+				benefit = 24;
+			} else {
+				benefit =
+					opcode === "createObject" ||
+					opcode === "createObjectShaped" ||
+					opcode === "createArray"
 						? 12
 						: opcode === "call" || opcode === "callKnown"
 							? 8
 							: opcode === "binary"
 								? 2
 								: 0;
-			priorityScore = Math.min(
-				priorityScore,
-				-benefit * Math.max(1, loopWeights[fn.instructionBlock(instruction)]!),
-			);
+			}
+			priorityScore = Math.min(priorityScore, -benefit * Math.max(1, loopWeight));
+		}
+		// A single loop cursor can remove both allocation at entry and protocol dispatch per step.
+		if (
+			!fn.isAsync &&
+			!fn.isGenerator &&
+			iteratorInitializations === 1 &&
+			iteratorSteps === 1 &&
+			iteratorStepWeight > 0
+		) {
+			priorityScore = Math.min(priorityScore, -96 * iteratorStepWeight);
 		}
 	}
 	const blocks = Object.freeze([...cfg.reversePostorder]);
