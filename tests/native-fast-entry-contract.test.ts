@@ -40,6 +40,7 @@ import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 const NONCOLLECTING_HELPERS = new Set([
 	"mal_vm_leaf_unobserved",
 	"mal_vm_as_object",
+	"mal_class_receiver",
 	"mal_vm_callee_has_index",
 	"mal_vm_guard_semantic_epoch",
 	"mal_object_leaf_field_load_shaped",

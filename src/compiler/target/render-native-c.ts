@@ -9669,7 +9669,7 @@ function emitBody(
 							if (layout?.kind !== "class-layout" || relocation.relative) return load;
 							const object = `__loop_co_${bindingIp}`;
 							return [
-								`{ MalObject *${object} = mal_vm_as_object(r${binding.object});`,
+								`{ MalObject *${object} = mal_class_receiver(r${binding.object});`,
 								...classLayoutAccess(
 									layout.site.kind,
 									layout.site.candidates,
@@ -11997,7 +11997,7 @@ class NativeInstructionEmission {
 			classLayout === undefined
 				? inlineCacheLoad(position)
 				: [
-						`{ MalObject *__co_${this.ip} = mal_vm_as_object(${this.boxed(instruction.object)});`,
+						`{ MalObject *__co_${this.ip} = mal_class_receiver(${this.boxed(instruction.object)});`,
 						...classLayoutAccess(
 							classLayout.kind,
 							classLayout.candidates,
@@ -16111,19 +16111,27 @@ class NativeInstructionEmission {
 			this.classLayoutsEnabled
 				? this.context.nativePlan.site
 				: undefined;
+		if (classLayout === undefined)
+			return [
+				`MalObject *${receiverName} = mal_vm_as_object(${this.boxed(instruction.object)});`,
+				...inlineCacheStore,
+			];
+		// The store cache expects an ordinary object or null, which the class guard's
+		// receiver is not.
 		return [
-			`MalObject *${receiverName} = mal_vm_as_object(${this.boxed(instruction.object)});`,
-			...(classLayout === undefined
-				? inlineCacheStore
-				: classLayoutAccess(
-						"slot",
-						classLayout.candidates,
-						receiverName,
-						this.boxed(instruction.object),
-						({ index }) =>
-							`mal_vm_object_slot_store(${receiverName}, ${index}, ${this.boxed(instruction.value)});`,
-						inlineCacheStore,
-					)),
+			`MalObject *${receiverName} = mal_class_receiver(${this.boxed(instruction.object)});`,
+			...classLayoutAccess(
+				"slot",
+				classLayout.candidates,
+				receiverName,
+				this.boxed(instruction.object),
+				({ index }) =>
+					`mal_vm_object_slot_store(${receiverName}, ${index}, ${this.boxed(instruction.value)});`,
+				[
+					`${receiverName} = mal_vm_as_object(${this.boxed(instruction.object)});`,
+					...inlineCacheStore,
+				],
+			),
 		];
 	}
 	emitUnary(
@@ -17616,7 +17624,7 @@ class NativeInstructionEmission {
 					!this.classLayoutsEnabled
 						? hinted
 						: [
-								`{ MalObject *${object} = mal_vm_as_object(${this.boxed(instruction.object)});`,
+								`{ MalObject *${object} = mal_class_receiver(${this.boxed(instruction.object)});`,
 								...classLayoutAccess(
 									"slot",
 									this.context.nativePlan.site.candidates,
@@ -17697,7 +17705,7 @@ class NativeInstructionEmission {
 					return hinted;
 				const object = `__co_${this.ip}`;
 				return [
-					`{ MalObject *${object} = mal_vm_as_object(${this.boxed(instruction.object)});`,
+					`{ MalObject *${object} = mal_class_receiver(${this.boxed(instruction.object)});`,
 					...classLayoutAccess(
 						"slot",
 						this.context.nativePlan.site.candidates,

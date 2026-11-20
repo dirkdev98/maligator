@@ -147,4 +147,116 @@ try {
 const literal = { kind: "literal", size: 9 };
 results.push(["literal", literal.kind, literal.size, "area" in literal]);
 
+// Exotic objects share shapes with instances, the empty root included, and may own
+// properties outside them; a guard admits only ordinary objects.
+class Point {
+	x = 0;
+	y = 0;
+	length() {
+		return "point";
+	}
+	sum() {
+		return this.x + this.y;
+	}
+}
+class Marker {
+	length() {
+		return "marker";
+	}
+}
+function lengthKind(value) {
+	return typeof value.length;
+}
+function pointSum(value) {
+	return value.sum() + value.x;
+}
+const points = [];
+for (let index = 0; index < 32; index++) {
+	const point = new Point();
+	point.x = index;
+	points.push(point);
+}
+const markers = [new Marker(), new Marker()];
+let warmed = 0;
+for (let round = 0; round < 50; round++)
+	for (const value of [...points, ...markers]) {
+		warmed += lengthKind(value).length;
+		if (value instanceof Point) warmed += pointSum(value);
+	}
+function argumentsOf() {
+	return arguments;
+}
+const exotics = {
+	array: () => [],
+	callable: () => function () {},
+	string: () => new String("abc"),
+	arguments: () => argumentsOf(1, 2),
+	typed: () => new Uint8Array(2),
+	date: () => new Date(0),
+	map: () => new Map(),
+	proxy: () =>
+		new Proxy(new Point(), {
+			get(target, key, receiver) {
+				return key === "x" ? 100 : Reflect.get(target, key, receiver);
+			},
+		}),
+};
+const exoticResults = [warmed];
+for (const [name, make] of Object.entries(exotics)) {
+	const fielded = make();
+	if (name !== "proxy") {
+		fielded.x = 3;
+		fielded.y = 4;
+		Object.setPrototypeOf(fielded, Point.prototype);
+	}
+	const bare = make();
+	Object.setPrototypeOf(bare, Marker.prototype);
+	exoticResults.push([name, lengthKind(fielded), pointSum(fielded), lengthKind(bare)]);
+}
+results.push(["exotic", exoticResults]);
+
+// A String wrapper or arguments object on a zero-field class's prototype carries the
+// instances' empty shape and prototype, but its own `length` shadows the method.
+function callLength(value) {
+	try {
+		return value.length();
+	} catch (error) {
+		return error instanceof TypeError ? "not callable" : "other";
+	}
+}
+const lengthResults = [];
+for (let round = 0; round < 50; round++)
+	lengthResults.push(callLength(markers[round % 2]));
+for (const make of [() => new String("abc"), () => argumentsOf(), () => argumentsOf(1)]) {
+	const shadowed = make();
+	Object.setPrototypeOf(shadowed, Marker.prototype);
+	lengthResults.push(callLength(shadowed));
+}
+results.push(["shadowed length", lengthResults.slice(-4)]);
+
+// A private name stamped onto an instance through a constructor return moves its
+// fields to external storage under the same shape.
+class Returning {
+	constructor(target) {
+		return target;
+	}
+}
+class Stamp extends Returning {
+	#stamp = true;
+	static has(value) {
+		return #stamp in value;
+	}
+}
+const stamped = new Point();
+stamped.x = 5;
+new Stamp(stamped);
+stamped.y = 6;
+results.push([
+	"stamped",
+	Stamp.has(stamped),
+	pointSum(stamped),
+	lengthKind(stamped),
+	stamped.length(),
+]);
+
 console.log(JSON.stringify(results));

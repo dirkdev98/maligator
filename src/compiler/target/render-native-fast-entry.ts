@@ -177,7 +177,7 @@ function fastClassRead(
 ): string {
 	const object = `__fast_object_${ip}`;
 	const guard = site.kind === "method" ? "MAL_CLASS_METHOD" : "MAL_CLASS_SLOT";
-	return `{ MalObject *const ${object} = mal_vm_as_object(__fast_r${receiver}); ${site.candidates.map(({ layout, index }, position) => `${position === 0 ? "if" : "else if"} (${guard}(${object}, ${layout})) __fast_r${destination} = ${site.kind === "method" ? `vm->class_cells[${layout}].methods[${index}]` : `mal_object_leaf_field_load_shaped(${object}, ${index})`};`).join(" ")} else goto __full; }`;
+	return `{ MalObject *const ${object} = mal_class_receiver(__fast_r${receiver}); ${site.candidates.map(({ layout, index }, position) => `${position === 0 ? "if" : "else if"} (${guard}(${object}, ${layout})) __fast_r${destination} = ${site.kind === "method" ? `vm->class_cells[${layout}].methods[${index}]` : `mal_object_leaf_field_load_shaped(${object}, ${index})`};`).join(" ")} else goto __full; }`;
 }
 
 /** A fast path may restart only before JavaScript effects or allocation, using the original arguments. */
