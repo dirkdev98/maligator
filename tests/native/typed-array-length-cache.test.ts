@@ -6,7 +6,7 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-describe("TypedArray length resolution cache", () => {
+describe("TypedArray and ArrayBuffer extent resolution cache", () => {
 	it.each([
 		["compiled", true],
 		["interpreted", false],
@@ -24,9 +24,9 @@ describe("TypedArray length resolution cache", () => {
 				intlEnabled: false,
 				temporalEnabled: false,
 			});
-			expect(runToStdout(binary)).toContain("TYPED ARRAY LENGTH PASS 126");
+			expect(runToStdout(binary)).toContain("TYPED ARRAY LENGTH PASS 172");
 			expect(runToStdout(binary, { env: STRESS_ENV })).toContain(
-				"TYPED ARRAY LENGTH PASS 126",
+				"TYPED ARRAY LENGTH PASS 172",
 			);
 		},
 	);

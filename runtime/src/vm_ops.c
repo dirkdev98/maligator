@@ -12,6 +12,7 @@
 #include "bound_function_object.h"
 #include "checked_size.h"
 #include "builtin_array.h"
+#include "builtin_array_buffer.h"
 #include "builtin_typed_array.h"
 #include "builtin_async_generator.h"
 #include "builtin_async_iterator.h"
@@ -3025,6 +3026,39 @@ mal_vm_property_try_load_static_rows(
     MalVm *vm, MalValue receiver, const MalObject *object, MalInlineCache *ic
 );
 
+static inline bool mal_vm_builtin_extent_row_holds(
+    const MalObject *object, const MalInlineCache *ic
+) {
+    return object->shape == ic->shape && !mal_object_has_public_overflow(object) &&
+        mal_object_prototype(object) == ic->proto_object[0];
+}
+
+/**
+ * The receiver's current `byteLength` under a held typed-array or ArrayBuffer row, or -1.
+ * The result comes back by value: an out-parameter took a stack slot in the
+ * preserve_most static probe, whose larger frame every probe entry then paid for.
+ */
+static inline i64 mal_vm_byte_length_row_read(MalValue receiver, const MalInlineCache *ic) {
+    if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_BYTE_LENGTH) {
+        if (!mal_value_is_typed_array_object(receiver)) return -1;
+        const MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
+        if (!mal_vm_builtin_extent_row_holds(&array->object, ic)) return -1;
+        return mal_typed_array_object_byte_length(array);
+    }
+    if (ic->mode == MAL_IC_MODE_ARRAY_BUFFER_BYTE_LENGTH) {
+        if (!mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_BUFFER_OBJECT)) return -1;
+        const MalArrayBufferObject *buffer =
+            (const MalArrayBufferObject *) mal_value_to_heap(receiver);
+        // The ArrayBuffer getter rejects a SharedArrayBuffer whatever chain reaches it.
+        if (buffer->shared || !mal_vm_builtin_extent_row_holds(&buffer->object, ic)) {
+            return -1;
+        }
+        // Detaching zeroes the length.
+        return buffer->byte_length;
+    }
+    return -1;
+}
+
 // The chain check stays out of the front, whose every caller would otherwise pay for
 // the registers it saves.
 static __attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
@@ -3230,6 +3264,14 @@ mal_vm_property_try_load_static_rows(
         hit = mal_vm_inherited_try_load_static(vm, receiver, ic, &value) ||
             mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, &value);
     } else {
+        // The byteLength rows test their modes here rather than beside the extent rows
+        // above, which every polymorphic inherited-row probe passes through.
+        i64 byte_length = mal_vm_byte_length_row_read(receiver, ic);
+        if (byte_length >= 0) {
+            MAL_PERF_COUNT(ic_load_byte_length_hits);
+            return (MalStaticPropertyProbeResult) {
+                .hit = true, .value = mal_value_from_u32((u32) byte_length)};
+        }
         hit = mal_vm_watched_try_load_static(vm, receiver, ic, &value) ||
             mal_vm_special_try_load_static(vm, receiver, ic, &value) ||
             mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, &value);
@@ -6493,6 +6535,8 @@ static void mal_ic_detach_prototype_cache(MalInlineCache *ic) {
 		(ic->mode == MAL_IC_MODE_TRANSITION && ic->obj != nullptr) ||
 		ic->mode == MAL_IC_MODE_CONSTRUCTOR_LAYOUT ||
         ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH ||
+        ic->mode == MAL_IC_MODE_TYPED_ARRAY_BYTE_LENGTH ||
+        ic->mode == MAL_IC_MODE_ARRAY_BUFFER_BYTE_LENGTH ||
 		(ic->mode == MAL_IC_MODE_MISSING &&
          ic->receiver_type == MAL_IC_MISSING_EXACT_CHAIN &&
          ic->poly_count > 0)) {
@@ -6852,7 +6896,9 @@ static bool mal_ic_record_local_prototype_chain(
          ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
          ic->mode == MAL_IC_MODE_INHERITED_GETTER ||
          ic->mode == MAL_IC_MODE_INHERITED_SETTER ||
-         ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH) &&
+         ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH ||
+         ic->mode == MAL_IC_MODE_TYPED_ARRAY_BYTE_LENGTH ||
+         ic->mode == MAL_IC_MODE_ARRAY_BUFFER_BYTE_LENGTH) &&
         ic->poly_count > 0 &&
         ic->proto_object[0] == mal_object_prototype(receiver) &&
         ic->proto_object[1] == holder &&
@@ -6876,15 +6922,29 @@ static bool mal_ic_record_local_prototype_chain(
     return true;
 }
 
-bool mal_vm_resolve_typed_array_length(
-    MalVm *vm, MalValue receiver, MalInlineCache *ic,
-    MalTypedArrayObject **out, u32 *length
+/** Whether `getter` is the intrinsic accessor whose result a builtin-extent `mode` reads. */
+static bool mal_ic_builtin_extent_getter(u8 mode, MalValue getter) {
+    switch (mode) {
+        case MAL_IC_MODE_TYPED_ARRAY_LENGTH:
+            return mal_builtin_typed_array_is_length_getter(getter);
+        case MAL_IC_MODE_TYPED_ARRAY_BYTE_LENGTH:
+            return mal_builtin_typed_array_is_byte_length_getter(getter);
+        case MAL_IC_MODE_ARRAY_BUFFER_BYTE_LENGTH:
+            return mal_builtin_array_buffer_is_byte_length_getter(getter);
+        default:
+            return false;
+    }
+}
+
+/**
+ * Record builtin-extent `mode` for a receiver whose `key` resolves through ordinary
+ * prototypes to that mode's intrinsic accessor; the chain registration clears the row
+ * on any change between the receiver and that holder.
+ */
+static bool mal_vm_record_builtin_extent(
+    MalObject *object, MalKey key, u8 mode, MalInlineCache *ic
 ) {
-    if (!mal_value_is_typed_array_object(receiver)) return false;
-    MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
-    MalObject *object = &array->object;
     if (mal_object_has_public_overflow(object)) return false;
-    MalKey key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH);
     if (mal_object_get_own(object, key).present) return false;
     for (MalObject *holder = mal_object_prototype(object); holder != nullptr;
          holder = mal_object_prototype(holder)) {
@@ -6892,23 +6952,39 @@ bool mal_vm_resolve_typed_array_length(
         MalPropertyLookup lookup = mal_object_get_own(holder, key);
         if (!lookup.present) continue;
         if (!(lookup.desc.flags & MAL_PROPERTY_ACCESSOR) ||
-            !mal_builtin_typed_array_is_length_getter(lookup.desc.getter)) return false;
+            !mal_ic_builtin_extent_getter(mode, lookup.desc.getter)) {
+            return false;
+        }
         if (!mal_ic_record_local_prototype_chain(object, holder, ic, false)) return false;
-        mal_perf_ic_note_replacement(ic, MAL_IC_MODE_TYPED_ARRAY_LENGTH);
+        mal_perf_ic_note_replacement(ic, mode);
         *ic = (MalInlineCache) {
             .shape = object->shape,
             .key = key.value,
             .proto_object = {mal_object_prototype(object), holder},
             .slot = MAL_IC_VALUE_SLOT,
             .poly_count = 1,
-            .mode = MAL_IC_MODE_TYPED_ARRAY_LENGTH,
+            .mode = mode,
         };
-        *out = array;
-        // Cache getter resolution; detachment and resizing still change each read.
-        *length = mal_typed_array_object_length(array);
         return true;
     }
     return false;
+}
+
+bool mal_vm_resolve_typed_array_length(
+    MalVm *vm, MalValue receiver, MalInlineCache *ic,
+    MalTypedArrayObject **out, u32 *length
+) {
+    if (!mal_value_is_typed_array_object(receiver)) return false;
+    MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
+    if (!mal_vm_record_builtin_extent(
+            &array->object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH),
+            MAL_IC_MODE_TYPED_ARRAY_LENGTH, ic)) {
+        return false;
+    }
+    *out = array;
+    // Cache getter resolution; detachment and resizing still change each read.
+    *length = mal_typed_array_object_length(array);
+    return true;
 }
 
 /**
@@ -7046,6 +7122,25 @@ static bool mal_ic_chain_object_admits(const MalObject *object, MalKey key) {
          !mal_vm_key_is_prototype(key));
 }
 
+/*
+ * Builtin receivers with no exotic string-named own properties: their named properties
+ * live in MalObject storage, so the receiver's shape proves which names it owns.
+ */
+static bool mal_ic_builtin_storage_receiver(MalHeapType type) {
+    switch (type) {
+        case MAL_HEAP_MAP_OBJECT:
+        case MAL_HEAP_SET_OBJECT:
+        case MAL_HEAP_DATE_OBJECT:
+        case MAL_HEAP_REGEXP_OBJECT:
+        case MAL_HEAP_PROMISE_OBJECT:
+        case MAL_HEAP_ARRAY_BUFFER_OBJECT:
+        case MAL_HEAP_DATA_VIEW_OBJECT:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool mal_ic_try_record_inherited_slot(
     MalValue receiver, MalValue key_value, MalPropertyResolution resolution,
     MalInlineCache *ic, bool count_fill
@@ -7053,10 +7148,11 @@ static bool mal_ic_try_record_inherited_slot(
     MalHeapType receiver_type = mal_value_heap_type(receiver);
     MalObject *object = mal_value_to_object(receiver);
     MalKey key = mal_key_from_value(key_value);
-    // Generators and C library handles keep their state in internal fields, so their
-    // own properties resolve like an ordinary object's.
+    // Generators, C library handles and builtin-storage receivers keep their state in
+    // internal fields, so their own properties resolve like an ordinary object's.
     bool internal_state = receiver_type == MAL_HEAP_GENERATOR_OBJECT ||
-        receiver_type == MAL_HEAP_FFI_HANDLE_OBJECT;
+        receiver_type == MAL_HEAP_FFI_HANDLE_OBJECT ||
+        mal_ic_builtin_storage_receiver(receiver_type);
     if ((!internal_state && !mal_ic_chain_object_admits(object, key)) ||
         (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
         return false;
@@ -7464,7 +7560,11 @@ static void mal_ic_try_record_inherited(
         return;
     }
 
-    if (mal_ic_try_record_inherited_slot(
+    // A Map or Set reading its builtin method keeps the watched row that compiled
+    // collection calls and loop regions recognize; only a subclass chain, which no
+    // watched row covers, takes a dependency-registered row.
+    bool builtin_storage = mal_ic_builtin_storage_receiver(object->header.type);
+    if (!builtin_storage && mal_ic_try_record_inherited_slot(
             receiver, key_value, resolution, ic, true)) {
         // Shared rows are probed for ordinary receivers only.
         if (!fill_shared || object->header.type != MAL_HEAP_OBJECT) return;
@@ -7476,13 +7576,10 @@ static void mal_ic_try_record_inherited(
         return;
     }
 
-    if (!mal_vm_watched_rows_fillable(vm)) {
-        MAL_PERF_COUNT(ic_inherited_reject_basic);
-        return;
-    }
-
+    bool fillable = mal_vm_watched_rows_fillable(vm);
     bool stable_chain = false;
-    for (MalObject *cursor = mal_object_prototype(object); cursor != nullptr; cursor = mal_object_prototype(cursor)) {
+    for (MalObject *cursor = fillable ? mal_object_prototype(object) : nullptr; cursor != nullptr;
+         cursor = mal_object_prototype(cursor)) {
         if (!cursor->watched_method_proto) {
             break;
         }
@@ -7492,7 +7589,12 @@ static void mal_ic_try_record_inherited(
         }
     }
     if (!stable_chain) {
-        MAL_PERF_COUNT(ic_inherited_reject_chain);
+        if (builtin_storage &&
+            mal_ic_try_record_inherited_slot(receiver, key_value, resolution, ic, true)) {
+            return;
+        }
+        if (fillable) MAL_PERF_COUNT(ic_inherited_reject_chain);
+        else MAL_PERF_COUNT(ic_inherited_reject_basic);
         return;
     }
 
@@ -7681,6 +7783,25 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             mal_vm_admit_typed_array_length(vm, object_value, ic, &array, &length)) {
             return mal_value_from_u32(length);
         }
+    }
+    u8 byte_length_mode = mal_value_is_typed_array_object(object_value)
+        ? MAL_IC_MODE_TYPED_ARRAY_BYTE_LENGTH
+        : mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_BUFFER_OBJECT) &&
+                !mal_value_to_array_buffer_object(object_value)->shared
+            ? MAL_IC_MODE_ARRAY_BUFFER_BYTE_LENGTH
+            : MAL_IC_MODE_SHAPE;
+    if (byte_length_mode != MAL_IC_MODE_SHAPE && mal_value_is_string(key_value) &&
+        mal_string_equals_ascii(mal_value_to_string(key_value), "byteLength") &&
+        mal_ic_key_is_stable_string(key_value)) {
+        i64 byte_length =
+            key_value == ic->key ? mal_vm_byte_length_row_read(object_value, ic) : -1;
+        if (byte_length < 0 &&
+            mal_vm_record_builtin_extent(
+                mal_value_to_object(object_value),
+                (MalKey) {.kind = MAL_KEY_STRING, .value = key_value}, byte_length_mode, ic)) {
+            byte_length = mal_vm_byte_length_row_read(object_value, ic);
+        }
+        if (byte_length >= 0) return mal_value_from_u32((u32) byte_length);
     }
     u32 data_view_length;
     if (mal_value_is_data_view_object(object_value) && mal_value_is_string(key_value) &&

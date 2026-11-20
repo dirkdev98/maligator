@@ -1454,6 +1454,11 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 #define MAL_IC_MODE_OWN_GETTER 17u
 // A DataView's `byteLength` through the intact accessor; the view's extent is read per hit.
 #define MAL_IC_MODE_DATA_VIEW_BYTE_LENGTH 18u
+// A typed array's or ArrayBuffer's `byteLength` through the intrinsic getter, under the
+// same dependency-registered chain proof as MAL_IC_MODE_TYPED_ARRAY_LENGTH. The extent is
+// read per hit.
+#define MAL_IC_MODE_TYPED_ARRAY_BYTE_LENGTH 19u
+#define MAL_IC_MODE_ARRAY_BUFFER_BYTE_LENGTH 20u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u

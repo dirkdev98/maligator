@@ -39,6 +39,7 @@ tests/native/function-inherited-cache.test.ts
 tests/native/function-own-slot-cache.test.ts
 tests/native/gc-raw-realloc.test.ts
 tests/native/grouped-hash-index.test.ts
+tests/native/inherited-builtin-receiver-cache.test.ts
 tests/native/inherited-method-cache.test.ts
 tests/native/interpreter-property-ic.test.ts
 tests/native/interpreter-strict-equality.test.ts

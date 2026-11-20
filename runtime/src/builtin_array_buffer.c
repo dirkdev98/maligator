@@ -162,7 +162,13 @@ static MalValue mal_builtin_array_buffer_byte_length_getter(MalVm *vm, MalValue 
     if (buffer == nullptr) {
         return mal_value_new_undefined();
     }
-    return mal_value_from_i32((i32) buffer->byte_length);
+    return mal_value_from_u32(buffer->byte_length);
+}
+
+bool mal_builtin_array_buffer_is_byte_length_getter(MalValue getter) {
+    return mal_value_is_native_function_object(getter) &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(getter)) ==
+            mal_builtin_array_buffer_byte_length_getter;
 }
 
 static MalValue mal_builtin_array_buffer_max_byte_length_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

@@ -145,4 +145,121 @@ for (let i = 0; i < 40; i++) {
 	equal(lengthOf(view), 2, "temporary prototype");
 }
 equal(lengthOf(buffer), 3, "Buffer after collection");
+
+function byteLengthOf(view) {
+	return view.byteLength;
+}
+for (const Ctor of constructors) {
+	equal(byteLengthOf(new Ctor(3)), 3 * Ctor.BYTES_PER_ELEMENT, Ctor.name + " byteLength");
+}
+const words = new Uint32Array(5);
+let warmBytes = 0;
+for (let i = 0; i < 64; i++) warmBytes += byteLengthOf(words);
+equal(warmBytes, 64 * 20, "warm byteLength site");
+equal(byteLengthOf(buffer), 3, "Buffer byteLength");
+const sized = new Bytes([1, 2, 3]);
+equal(byteLengthOf(sized), 3, "subclass byteLength");
+Object.defineProperty(sized, "byteLength", { value: 99, configurable: true });
+equal(byteLengthOf(sized), 99, "own byteLength shadow");
+delete sized.byteLength;
+equal(byteLengthOf(sized), 3, "own byteLength shadow removed");
+const middle = Object.create(Bytes.prototype);
+Object.setPrototypeOf(sized, middle);
+equal(byteLengthOf(sized), 3, "byteLength through custom chain");
+Object.defineProperty(middle, "byteLength", {
+	get() {
+		return 31;
+	},
+	configurable: true,
+});
+equal(byteLengthOf(sized), 31, "intermediate byteLength getter");
+delete middle.byteLength;
+equal(byteLengthOf(sized), 3, "intermediate byteLength removed");
+Object.setPrototypeOf(
+	sized,
+	new Proxy(Uint8Array.prototype, {
+		get(target, key, receiver) {
+			return key === "byteLength" ? 23 : Reflect.get(target, key, receiver);
+		},
+	}),
+);
+equal(byteLengthOf(sized), 23, "byteLength through proxy chain");
+Object.setPrototypeOf(sized, Bytes.prototype);
+equal(byteLengthOf(sized), 3, "byteLength proxy removed");
+const growable = new ArrayBuffer(8, { maxByteLength: 16 });
+const trackingWords = new Uint16Array(growable);
+const fixedWords = new Uint16Array(growable, 2, 2);
+equal(byteLengthOf(trackingWords), 8, "tracking byteLength");
+equal(byteLengthOf(fixedWords), 4, "fixed byteLength");
+growable.resize(3);
+equal(byteLengthOf(trackingWords), 2, "tracking byteLength shrunk");
+equal(byteLengthOf(fixedWords), 0, "fixed byteLength out of bounds");
+growable.resize(12);
+equal(byteLengthOf(trackingWords), 12, "tracking byteLength grown");
+equal(byteLengthOf(fixedWords), 4, "fixed byteLength restored");
+growable.transfer();
+equal(byteLengthOf(trackingWords), 0, "tracking byteLength detached");
+equal(byteLengthOf(fixedWords), 0, "fixed byteLength detached");
+Object.defineProperty(Uint32Array.prototype, "byteLength", {
+	value: 7,
+	configurable: true,
+});
+equal(byteLengthOf(words), 7, "kind prototype byteLength shadow");
+delete Uint32Array.prototype.byteLength;
+equal(byteLengthOf(words), 20, "kind prototype byteLength restored");
+const plainBuffer = new ArrayBuffer(16);
+let warmBufferBytes = 0;
+for (let i = 0; i < 64; i++) warmBufferBytes += byteLengthOf(plainBuffer);
+equal(warmBufferBytes, 64 * 16, "warm ArrayBuffer byteLength site");
+class Chunk extends ArrayBuffer {}
+const chunk = new Chunk(6, { maxByteLength: 12 });
+equal(byteLengthOf(chunk), 6, "ArrayBuffer subclass byteLength");
+chunk.resize(9);
+equal(byteLengthOf(chunk), 9, "resized ArrayBuffer byteLength");
+Object.defineProperty(chunk, "byteLength", { value: 1, configurable: true });
+equal(byteLengthOf(chunk), 1, "own ArrayBuffer byteLength shadow");
+delete chunk.byteLength;
+equal(byteLengthOf(chunk), 9, "own ArrayBuffer byteLength removed");
+const moved = chunk.transfer();
+equal(byteLengthOf(chunk), 0, "detached ArrayBuffer byteLength");
+equal(byteLengthOf(moved), 9, "transferred ArrayBuffer byteLength");
+const shared = new SharedArrayBuffer(4);
+equal(byteLengthOf(shared), 4, "SharedArrayBuffer byteLength");
+Object.setPrototypeOf(shared, ArrayBuffer.prototype);
+let sharedError = "";
+try {
+	byteLengthOf(shared);
+} catch (error) {
+	sharedError = error.constructor.name;
+}
+equal(sharedError, "TypeError", "ArrayBuffer getter rejects a SharedArrayBuffer");
+equal(byteLengthOf(plainBuffer), 16, "ArrayBuffer byteLength after rejection");
+const intrinsicBufferByteLength = Object.getOwnPropertyDescriptor(
+	ArrayBuffer.prototype,
+	"byteLength",
+);
+Object.defineProperty(ArrayBuffer.prototype, "byteLength", {
+	get() {
+		return "redefined";
+	},
+	configurable: true,
+});
+equal(byteLengthOf(plainBuffer), "redefined", "redefined ArrayBuffer byteLength getter");
+Object.defineProperty(ArrayBuffer.prototype, "byteLength", intrinsicBufferByteLength);
+equal(byteLengthOf(plainBuffer), 16, "ArrayBuffer byteLength getter restored");
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const intrinsicByteLength = Object.getOwnPropertyDescriptor(
+	typedArrayPrototype,
+	"byteLength",
+);
+Object.defineProperty(typedArrayPrototype, "byteLength", {
+	get() {
+		return -this.length;
+	},
+	configurable: true,
+});
+equal(byteLengthOf(words), -5, "redefined intrinsic byteLength getter");
+equal(keyed(words, "byteLength"), -5, "redefined intrinsic byteLength computed");
+Object.defineProperty(typedArrayPrototype, "byteLength", intrinsicByteLength);
+equal(byteLengthOf(words), 20, "intrinsic byteLength getter restored");
 console.log("TYPED ARRAY LENGTH PASS " + checks);
