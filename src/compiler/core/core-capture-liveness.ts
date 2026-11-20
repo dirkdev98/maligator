@@ -249,18 +249,25 @@ function forwardCellLoads(
 	);
 	if (cells.length === 0) return;
 	const control = buildCoreControlFlow(program, fn.id);
+	const kernel = fn.kernel;
 	const definition = (value: CoreValueId): string | undefined =>
 		fn.kernel.valueDefinitionKind(value) === 1
 			? fn.instructionOpcodeName(coreInstructionId(fn.kernel.valueDefinitionOwner(value)))
 			: undefined;
 	const stored = (store: CoreInstructionId): CoreValueId =>
-		fn.kernel.operandAt(fn.kernel.instructionOperandStart(store));
+		kernel.operandAt(kernel.instructionOperandStart(store));
 	for (const { loads, stores } of cells) {
 		const storeSet = new Set(stores);
 		const lastStore = new Map<CoreBlockId, CoreValueId>();
 		for (const block of control.reversePostorder) {
-			for (const instruction of fn.instructionIds(block))
+			for (
+				let instructionRow = fn.blockFirstInstruction(block);
+				instructionRow >= 0;
+				instructionRow = kernel.instructionNext(instructionRow as CoreInstructionId)
+			) {
+				const instruction = instructionRow as CoreInstructionId;
 				if (storeSet.has(instruction)) lastStore.set(block, stored(instruction));
+			}
 		}
 		const entry = new Map<CoreBlockId, SlotValue>();
 		const exit = (block: CoreBlockId): SlotValue | undefined => {

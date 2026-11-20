@@ -1178,6 +1178,12 @@ export class CoreFunctionStore {
 		return value;
 	}
 
+	/** Start a live instruction walk. An empty block has a negative first row. */
+	blockFirstInstruction(id: CoreBlockId): number {
+		this.#requireBlock(id);
+		return this.#blockFirstInstruction[id] ?? -1;
+	}
+
 	blockTerminator(id: CoreBlockId): CoreInstructionId {
 		this.#requireBlock(id);
 		const last = this.#blockLastInstruction[id] ?? -1;

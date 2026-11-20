@@ -746,6 +746,7 @@ function captureEnvironmentIsStable(
 	}
 	if (!canReachSite.has(creationBlock) || canReachSite.size > 64) return false;
 
+	const kernel = fn.kernel;
 	let reachedSite = false;
 	const pending = [creationBlock];
 	const visited = new Set<CoreBlockId>();
@@ -754,7 +755,13 @@ function captureEnvironmentIsStable(
 		if (visited.has(block)) continue;
 		visited.add(block);
 		let afterCreation = block !== creationBlock;
-		for (const instruction of fn.bodyInstructionIds(block)) {
+		for (
+			let instructionRow = fn.blockFirstInstruction(block);
+			instructionRow >= 0;
+			instructionRow = kernel.instructionNext(instructionRow as CoreInstructionId)
+		) {
+			const instruction = instructionRow as CoreInstructionId;
+			if (kernel.instructionOpcode(instruction) < 0) continue;
 			if (!afterCreation) {
 				afterCreation = instruction === creation;
 				continue;
@@ -929,7 +936,14 @@ function inlineTarget(
 			return false;
 		visited.add(block);
 		active.add(block);
-		for (const instruction of fn.bodyInstructionIds(block)) {
+		const kernel = fn.kernel;
+		for (
+			let instructionRow = fn.blockFirstInstruction(block);
+			instructionRow >= 0;
+			instructionRow = kernel.instructionNext(instructionRow as CoreInstructionId)
+		) {
+			const instruction = instructionRow as CoreInstructionId;
+			if (kernel.instructionOpcode(instruction) < 0) continue;
 			const opcode = fn.instructionOpcodeName(instruction);
 			// Stores inherit the destination frame's mode; user code can observe
 			// a strict frame boundary through legacy caller/arguments reflection.

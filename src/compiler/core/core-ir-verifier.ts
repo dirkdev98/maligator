@@ -1042,10 +1042,15 @@ function verifyDominance(
 	instructionDominatesBlock: (dominator: CoreBlockId, block: CoreBlockId) => boolean,
 ): void {
 	const instructionOrder = new Int32Array(fn.instructionCapacity);
+	const kernel = fn.kernel;
 	for (const block of fn.blockIds()) {
 		let index = 0;
-		for (const instruction of fn.instructionIds(block))
-			instructionOrder[instruction] = index++;
+		for (
+			let instructionRow = fn.blockFirstInstruction(block);
+			instructionRow >= 0;
+			instructionRow = kernel.instructionNext(instructionRow as CoreInstructionId)
+		)
+			instructionOrder[instructionRow] = index++;
 	}
 	const availableAtInstruction = (
 		value: CoreValueId,

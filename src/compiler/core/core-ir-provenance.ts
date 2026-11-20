@@ -545,8 +545,15 @@ export function buildCoreProvenance(
 		if (allocationsByRoot !== undefined) return allocationsByRoot;
 		allocationInstructions = [];
 		allocationsByRoot = new Map();
+		const kernel = fn.kernel;
 		for (const block of fn.blockIds())
-			for (const instruction of fn.bodyInstructionIds(block)) {
+			for (
+				let instructionRow = fn.blockFirstInstruction(block);
+				instructionRow >= 0;
+				instructionRow = kernel.instructionNext(instructionRow as CoreInstructionId)
+			) {
+				const instruction = instructionRow as CoreInstructionId;
+				if (kernel.instructionOpcode(instruction) < 0) continue;
 				if (fn.registry.byId(fn.instructionOpcode(instruction)).allocation === undefined)
 					continue;
 				const result = instructionResult(fn, instruction, 0);

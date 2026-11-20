@@ -62,6 +62,11 @@ One instruction code identifies a registry opcode, a structural terminator or a
 deleted row. This lets a reader establish liveness and instruction kind with one
 table lookup. The registry owns the operation names and descriptors.
 
+Hot instruction walks start with a checked block head and follow live kernel links
+to avoid iterator allocation and dispatch. Reading the next link after processing
+the current instruction preserves the cursor's behavior during edits. A retired
+generation rejects both walks.
+
 Operand and use records are append-only during mutation. Replacing a range may
 abandon the old range until sealing, but it never shifts unrelated records. Deletion
 marks table rows as tombstones. Rare instruction attributes, facts, proof data, and

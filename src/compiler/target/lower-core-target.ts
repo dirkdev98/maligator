@@ -2276,7 +2276,13 @@ function lowerFunctionToTarget(
 			});
 		}
 
-		for (const instruction of coreFunction.bodyInstructionIds(blockId)) {
+		for (
+			let instructionRow = coreFunction.blockFirstInstruction(blockId);
+			instructionRow >= 0;
+			instructionRow = kernel.instructionNext(instructionRow as CoreInstructionId)
+		) {
+			const instruction = instructionRow as CoreInstructionId;
+			if (kernel.instructionOpcode(instruction) < 0) continue;
 			if (omittedInstructions.has(instruction)) continue;
 			instructions.push(
 				...sourcePositionMarker(coreFunction.instructionSourcePosition(instruction)),

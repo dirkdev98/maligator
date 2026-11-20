@@ -1119,6 +1119,7 @@ const materializeFlowScalars: CoreFunctionPass = {
 			neighbors.set(left, leftNeighbors);
 			neighbors.set(right, rightNeighbors);
 		};
+		const kernel = fn.kernel;
 		for (const block of fn.blockIds()) {
 			const terminator = fn.blockTerminator(block);
 			const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
@@ -1155,7 +1156,13 @@ const materializeFlowScalars: CoreFunctionPass = {
 					);
 				}
 			}
-			for (const instruction of fn.bodyInstructionIds(block)) {
+			for (
+				let instructionRow = fn.blockFirstInstruction(block);
+				instructionRow >= 0;
+				instructionRow = kernel.instructionNext(instructionRow as CoreInstructionId)
+			) {
+				const instruction = instructionRow as CoreInstructionId;
+				if (kernel.instructionOpcode(instruction) < 0) continue;
 				if (!scalarConsumer(fn, instruction)) continue;
 				const byFamily: Array<Array<CoreValueId> | undefined> = [];
 				const includeValue = (value: CoreValueId): void => {

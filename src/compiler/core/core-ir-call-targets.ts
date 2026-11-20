@@ -985,6 +985,7 @@ function analyzeFunctionTargets(
 		);
 	}
 	const inputTargets = (input: CoreValueId) => values[input];
+	const kernel = fn.kernel;
 	for (const block of cfg.reversePostorder) enqueue(block);
 	for (let cursor = 0; cursor < queue.length; cursor++) {
 		const block = queue[cursor]!;
@@ -1010,7 +1011,13 @@ function analyzeFunctionTargets(
 				}
 			}
 		}
-		for (const instruction of fn.bodyInstructionIds(block)) {
+		for (
+			let instructionRow = fn.blockFirstInstruction(block);
+			instructionRow >= 0;
+			instructionRow = kernel.instructionNext(instructionRow as CoreInstructionId)
+		) {
+			const instruction = instructionRow as CoreInstructionId;
+			if (kernel.instructionOpcode(instruction) < 0) continue;
 			const opcode = fn.instructionOpcodeName(instruction);
 			const resultStart = fn.kernel.instructionResultStart(instruction);
 			const resultCount = fn.kernel.instructionResultCount(instruction);
