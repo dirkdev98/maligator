@@ -17,6 +17,7 @@ import {
 	builtinResultIsInt32,
 	primordialGlobalBindings,
 } from "../shared/builtin-registry.ts";
+import type { CompilerExactCollectionBrand } from "../shared/compiler-instruction.ts";
 import { GUARDED_SEMANTIC_EPOCH_MASKS } from "../shared/compiler-instruction.ts";
 import {
 	compilerComparisonInputKindsAvoidObjectCoercion,
@@ -7339,6 +7340,8 @@ type NativeBuiltinCollectionCallChain = Extract<
 interface NativeBuiltinCollectionCallChainAction {
 	readonly chain: NativeBuiltinCollectionCallChain;
 	readonly role: "property" | "call";
+	/** The brand the chain's call plan proves for the receiver, on the property role. */
+	readonly exactReceiver?: CompilerExactCollectionBrand;
 }
 
 function dataViewAccessorName(call: Omit<NativeDataViewCall, "ip">): string {
@@ -7362,6 +7365,54 @@ function dataViewAccessor(
 				size: DATA_VIEW_ELEMENT_SIZES[call.type],
 				set: call.set,
 			};
+}
+
+/**
+ * Attaches the call plan's exact receiver brand to each chain's property role, so the
+ * capture can skip the brand dispatch the call plan already settled.
+ */
+function withExactCollectionReceivers(
+	actions: ReadonlyMap<number, NativeBuiltinCollectionCallChainAction>,
+	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
+): ReadonlyMap<number, NativeBuiltinCollectionCallChainAction> {
+	if (actions.size === 0) return actions;
+	return new Map(
+		[...actions].map(([ip, action]) => {
+			const call = nativeInstructions[action.chain.callIp];
+			const exactReceiver =
+				action.role === "property" && call?.kind === "call"
+					? call.exactCollectionReceiver
+					: undefined;
+			return [ip, exactReceiver === undefined ? action : { ...action, exactReceiver }];
+		}),
+	);
+}
+
+const EXACT_COLLECTION_PROTOTYPES: Readonly<
+	Record<
+		CompilerExactCollectionBrand,
+		{ readonly stem: string; readonly methods: ReadonlyArray<string> }
+	>
+> = {
+	Map: { stem: "MAP", methods: ["get", "set", "has", "delete"] },
+	Set: { stem: "SET", methods: ["add", "has", "delete"] },
+	WeakMap: { stem: "WEAK_MAP", methods: ["get", "set", "has", "delete"] },
+	WeakSet: { stem: "WEAK_SET", methods: ["add", "has", "delete"] },
+};
+
+/**
+ * The intrinsic prototype and method a receiver of `brand` resolves for `operation`'s
+ * method name, or undefined when that brand has no such method.
+ */
+function exactCollectionMethodIntrinsics(
+	brand: CompilerExactCollectionBrand,
+	operation: NativeBuiltinCollectionCallChain["operation"],
+): { readonly prototype: string; readonly method: string } | undefined {
+	const { stem, methods } = EXACT_COLLECTION_PROTOTYPES[brand];
+	const method = operation.slice(operation.lastIndexOf(".") + 1);
+	if (!methods.includes(method)) return undefined;
+	const prototype = `MAL_INTRINSIC_${stem}_PROTOTYPE`;
+	return { prototype, method: `${prototype}_${method.toUpperCase()}` };
 }
 
 function nativeBuiltinCollectionOperation(
@@ -9375,7 +9426,10 @@ function emitBody(
 	);
 	registerActions(
 		"nativeBuiltinCollectionCallChainAction",
-		nativeBuiltinCollectionCallChainActionByIp,
+		withExactCollectionReceivers(
+			nativeBuiltinCollectionCallChainActionByIp,
+			nativeInstructions,
+		),
 	);
 	registerActions("nativeIteratorCursorAction", nativeIteratorCursorActionByIp);
 	registerActions(
@@ -11575,8 +11629,17 @@ class NativeInstructionEmission {
 		) {
 			const fallback = this.emitGenericInstruction();
 			if (fallback === null) return null;
+			const { chain, exactReceiver } =
+				this.context.nativeBuiltinCollectionCallChainAction;
+			const receiver = this.boxed(instruction.object);
+			const exact =
+				exactReceiver === undefined
+					? undefined
+					: exactCollectionMethodIntrinsics(exactReceiver, chain.operation);
 			return [
-				`if (!mal_vm_try_capture_collection_method(vm, ${nativeBuiltinCollectionOperation(this.context.nativeBuiltinCollectionCallChainAction.chain.operation)}, ${this.boxed(instruction.object)}, &r${instruction.dst})) {`,
+				exact === undefined
+					? `if (!mal_vm_try_capture_collection_method(vm, ${nativeBuiltinCollectionOperation(chain.operation)}, ${receiver}, &r${instruction.dst})) {`
+					: `if (!mal_vm_try_capture_exact_collection_method(vm, ${receiver}, ${exact.prototype}, ${exact.method}, &r${instruction.dst})) {`,
 				...fallback.map((line) => `  ${line}`),
 				`}`,
 			];

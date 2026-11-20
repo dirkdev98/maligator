@@ -43,7 +43,8 @@ export function nativePreparations(root: string, file: string): Array<NativePrep
 		...(relative === "tests/native/arguments-alias.test.ts" ||
 		relative === "tests/native/arguments-forwarding.test.ts" ||
 		relative === "tests/native/arguments-element-reads.test.ts" ||
-		relative === "tests/native/arguments-slice-copy.test.ts"
+		relative === "tests/native/arguments-slice-copy.test.ts" ||
+		relative === "tests/native/exact-collection-capture.test.ts"
 			? (["locked-perf-stats"] as const)
 			: []),
 		...(relative === "tests/native/forwarded-callback-counters.test.ts" ||

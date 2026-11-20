@@ -331,6 +331,39 @@ static inline bool mal_vm_try_capture_collection_method(
 }
 
 /**
+ * `mal_vm_try_capture_collection_method` for a receiver the compiler proved has the
+ * collection brand whose `prototype_intrinsic` and `method_intrinsic` the site names.
+ * With the brand and the method fixed at compile time, the capture reduces to the
+ * protector and the receiver's prototype and own-property state. A receiver with any
+ * own property, not just a shadowing one, is left to the site's generic load:
+ * collections rarely carry own properties, and the load produces the same method.
+ */
+static inline bool mal_vm_try_capture_exact_collection_method(
+    const MalVm *vm,
+    MalValue receiver,
+    MalIntrinsic prototype_intrinsic,
+    MalIntrinsic method_intrinsic,
+    MalValue *method_out
+) {
+    const MalObject *collection = mal_value_to_object(receiver);
+    // Collection allocators use embedded storage, which an object never moves out of,
+    // so the test always passes and the prototype and overflow table sit at fixed
+    // offsets without decoding the storage kind.
+    const MalObjectStorage *storage = (const MalObjectStorage *) (collection + 1);
+    if (!mal_vm_watched_methods_intact(vm) ||
+        collection->storage_kind != MAL_OBJECT_EMBEDDED ||
+        storage->prototype != mal_value_to_object(vm->intrinsics[prototype_intrinsic]) ||
+        storage->overflow != nullptr ||
+        (collection->shape != nullptr && collection->shape->inline_count != 0)) {
+        MAL_PERF_COUNT(collection_exact_capture_misses);
+        return false;
+    }
+    MAL_PERF_COUNT(collection_exact_capture_hits);
+    *method_out = vm->intrinsics[method_intrinsic];
+    return true;
+}
+
+/**
  * Speculative-call-inlining guard: whether `callee` is a plain function object with the
  * given function index — the candidate the call site was inlined against. A miss deopts to
  * the real call (so a reassigned global, a bound/native/proxy callee, or any other function
