@@ -63,7 +63,66 @@ describe("iterator cursor discovery priority", () => {
 			},
 		});
 		expect(
-			projectCoreSpecializationRecipes(limited.recipes).map((region) => region.id),
+			projectCoreSpecializationRecipes(limited.recipes)
+				.filter((region) => region.cost.generatedCode > 0)
+				.map((region) => region.id),
 		).toEqual([cursor.id]);
+	});
+
+	it("fits two Array cursors when the first already emits its result overlay", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			`globalThis.walkFirst = function walkFirst(values) {
+				let total = 0;
+				for (const value of values) total += value;
+				return total;
+			};
+			globalThis.walkSecond = function walkSecond(values) {
+				let total = 0;
+				for (const value of values) total += value;
+				return total;
+			};`,
+			"iterator-overlay-budget.js",
+		);
+		const { program, context, plan } = optimizeSemanticProgramToCore(
+			semantic,
+			{},
+			(_phase, run) => run(),
+		);
+		const cursors = projectCoreSpecializationRecipes(plan.recipes).filter(
+			(region) => region.kind === "array-values-iterator-cursor",
+		);
+		expect(cursors).toHaveLength(2);
+		const analyses = new CoreAnalysisManager(
+			program,
+			context,
+			new CoreOptimizationReportBuilder(program),
+		);
+		const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, { scope: "program" });
+		const limited = buildCoreOptimizationPlan(
+			program,
+			analyses,
+			summaries,
+			cursors.map((cursor) => cursor.function),
+			{
+				context,
+				budgets: {
+					...DEFAULT_CORE_SPECIALIZATION_BUDGETS,
+					programGeneratedCode:
+						cursors.reduce((sum, cursor) => sum + cursor.cost.generatedCode, 0) + 1,
+				},
+			},
+		);
+		const selected = projectCoreSpecializationRecipes(limited.recipes);
+		expect(
+			new Set(
+				selected
+					.filter((region) => region.kind === "array-values-iterator-cursor")
+					.map((region) => region.id),
+			),
+		).toEqual(new Set(cursors.map((cursor) => cursor.id)));
+		const result = selected.find(
+			(region) => region.kind === "iterator-result-virtualization",
+		);
+		expect(result?.cost.generatedCode).toBe(0);
 	});
 });

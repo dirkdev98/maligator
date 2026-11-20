@@ -29,7 +29,10 @@ import {
 } from "./core-ir-call-targets.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
-import { coreGeneratedCodeCostModel } from "./core-ir-generated-cost.ts";
+import {
+	coreGeneratedCodeCostModel,
+	coreGeneratedCodeOverheadCost,
+} from "./core-ir-generated-cost.ts";
 import type { CoreGeneratedCodeCostModel } from "./core-ir-generated-cost.ts";
 import { CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS } from "./core-ir-provenance.ts";
 import type {
@@ -126,7 +129,7 @@ export interface CorePendingOptimizationCandidate {
 	readonly budget: CoreTransformCandidate;
 	readonly claims: CorePendingClaims;
 	readonly source?: CoreLocalSpecializationCandidate;
-	readonly materialize: () => CorePlanSpecialization;
+	readonly materialize: (generatedCode?: number) => CorePlanSpecialization;
 }
 
 interface PendingDirectEntry {
@@ -560,7 +563,8 @@ function pendingLocalCandidate(
 			: [lockedLiteral.constructorIntrinsic, lockedLiteral.construct]),
 	]);
 	const closes = isIteratorCursorCandidate(candidate) ? candidate.closes : undefined;
-	// Deferred closes only materialize the iterator; the cursor's work is its own steps.
+	// A deferred close adds a guard and a materializing call. The cursor earns its
+	// runtime benefit from acquiring and stepping the iterator.
 	const costed =
 		closes === undefined
 			? instructions
@@ -579,6 +583,13 @@ function pendingLocalCandidate(
 			? { materializationPaths: 1 }
 			: {}),
 	});
+	const closeOverhead =
+		closes === undefined || closes.length === 0
+			? undefined
+			: coreGeneratedCodeOverheadCost({ stateSynchronizations: closes.length });
+	const generatedCodeCost =
+		cost.estimatedCStatements + (closeOverhead?.estimatedCStatements ?? 0);
+	const compilerWorkCost = cost.compileScore + (closeOverhead?.compileScore ?? 0);
 	// Observers and lenders still call C or user code. Counting them as savings can
 	// prefer a cold seed object over the hot loop result that replaces it.
 	const runtimeBenefit =
@@ -591,7 +602,7 @@ function pendingLocalCandidate(
 					0,
 				)
 			: cost.runtimeScore;
-	const materialize = (): CorePlanSpecialization => {
+	const materialize = (generatedCode = generatedCodeCost): CorePlanSpecialization => {
 		const blocks = Object.freeze(
 			[
 				...new Set(
@@ -719,8 +730,8 @@ function pendingLocalCandidate(
 			),
 			admission,
 			cost: Object.freeze({
-				generatedCode: cost.estimatedCStatements,
-				compilerWork: cost.compileScore,
+				generatedCode,
+				compilerWork: compilerWorkCost,
 				runtimeBenefit: runtimeBenefit + candidate.fanOut,
 			}),
 		} as const;
@@ -1087,8 +1098,8 @@ function pendingLocalCandidate(
 					? [candidate.targetFunction]
 					: [],
 			),
-			generatedCodeCost: cost.estimatedCStatements,
-			compilerWorkCost: cost.compileScore,
+			generatedCodeCost,
+			compilerWorkCost,
 			// Dispatch overlays do not clone bodies; code and work budgets still apply.
 			expansive:
 				!fusedExecResult &&
@@ -2490,7 +2501,7 @@ function conflicts(
 		// plan composes with them; any other plan would lower those instructions itself.
 		if (selection.kind === "record-storage")
 			return (
-				state.exclusive ||
+				state.exclusive !== undefined ||
 				[...state.overlays].some(
 					(kind) => kind !== "record-storage" && kind !== "guarded-direct-call",
 				)
@@ -2505,13 +2516,13 @@ function conflicts(
 			return true;
 		}
 		return selection.composition === "exclusive"
-			? state.exclusive
+			? state.exclusive !== undefined
 			: state.overlays.has(selection.kind);
 	});
 }
 
 interface ClaimState {
-	exclusive: boolean;
+	exclusive: CorePendingClaims["kind"] | undefined;
 	readonly overlays: Set<CorePlanSpecializationKind | "field-call" | "record-storage">;
 }
 
@@ -2523,11 +2534,11 @@ function claim(
 		claimed.get(selection.function) ?? new Map<CoreInstructionId, ClaimState>();
 	for (const instruction of selection.claimedInstructions) {
 		const state = owned.get(instruction) ?? {
-			exclusive: false,
+			exclusive: undefined,
 			overlays: new Set(),
 		};
 		if (selection.composition === "exclusive" && selection.kind !== "record-storage")
-			state.exclusive = true;
+			state.exclusive = selection.kind;
 		if (
 			selection.composition !== "exclusive" ||
 			selection.kind === "field-call" ||
@@ -2838,7 +2849,7 @@ export function buildCoreOptimizationPlan(
 			byBudget.set(budget, candidate);
 		}
 
-		for (let budget = service.next(); budget !== undefined; budget = service.next()) {
+		for (let queued = service.next(); queued !== undefined; queued = service.next()) {
 			const exhausted = service.programBudgetExhaustionReason();
 			if (exhausted !== undefined) {
 				service.recordDeclined(exhausted);
@@ -2847,7 +2858,18 @@ export function buildCoreOptimizationPlan(
 					(declinedByPlanReason[exhausted] ?? 0) + discarded;
 				break;
 			}
-			const candidate = byBudget.get(budget)!;
+			const candidate = byBudget.get(queued)!;
+			// An Array cursor already emits the dense step guarded by the captured next.
+			const budget =
+				!isPendingDirectEntry(candidate) &&
+				candidate.claims.kind === "iterator-result-virtualization" &&
+				candidate.claims.claimedInstructions.every(
+					(instruction) =>
+						claimed.get(queued.caller)?.get(instruction)?.exclusive ===
+						"array-values-iterator-cursor",
+				)
+					? { ...queued, generatedCodeCost: 0 }
+					: queued;
 			const claims: ReadonlyArray<CorePendingClaims> = isPendingDirectEntry(candidate)
 				? candidate.callSites.flatMap((site) => [
 						...(site.fieldObject === undefined
@@ -2940,7 +2962,7 @@ export function buildCoreOptimizationPlan(
 				directEntriesByFunction.set(candidate.function, entries);
 			} else {
 				claim(candidate.claims, claimed);
-				specializations.push(candidate.materialize());
+				specializations.push(candidate.materialize(budget.generatedCodeCost));
 				options.onMaterialize?.();
 			}
 		}

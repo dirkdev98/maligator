@@ -16407,9 +16407,11 @@ class NativeInstructionEmission {
 		const rec = `iter_rec_${this.ip}`;
 		const val = `iter_val_${this.ip}`;
 		const done = `iter_done_${this.ip}`;
+		// A failed Array cursor admission already ruled out the overlay's dense probe.
 		const virtualResult =
-			this.context.nativeIteratorResultVirtualizationAction !== undefined ||
-			this.context.nativeRegExpIteratorProjectionAction?.role === "step";
+			this.context.nativeRegExpIteratorProjectionAction?.role === "step" ||
+			(this.context.nativeIteratorResultVirtualizationAction !== undefined &&
+				this.context.nativeIteratorCursorAction?.cursor.protocol !== "array-values");
 		if (this.context.nativeIteratorResultVirtualizationAction !== undefined) {
 			regionAdmissionGuard(
 				this.context.nativeIteratorResultVirtualizationAction.region.license,
