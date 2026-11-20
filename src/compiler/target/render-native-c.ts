@@ -1207,11 +1207,11 @@ function nativeRelocationExpressions(
 		stringIndex: (index) => indexed("string_base", index),
 		bigintIndex: (index) => indexed("bigint_base", index),
 		templateOffset: (index) => indexed("literal_template_base", index),
-		// Widening mutates the row, so literals must use the current VM's copy.
+		// Widening rewrites a row in place, so literals use the current VM's copy. Only
+		// an overlay's relocated index can land in a splice page; root-image indices
+		// always fall in the primary array.
 		stringValue: (index) =>
-			enabled
-				? `mal_value_from_string(mal_vm_string_constant(vm, ${indexed("string_base", index)}))`
-				: `mal_value_from_string(&vm->runtime_image->string_constants[${index}])`,
+			`mal_value_from_string(${enabled && relative ? "mal_vm_string_constant" : "mal_vm_primary_string_constant"}(vm, ${indexed("string_base", index)}))`,
 		bigintValue: (index, suffix) =>
 			enabled
 				? `mal_value_from_bigint(mal_vm_bigint_constant(vm, ${indexed("bigint_base", index)}))`

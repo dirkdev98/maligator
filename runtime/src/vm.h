@@ -2386,9 +2386,18 @@ static inline __attribute__((always_inline)) bool mal_vm_gc_poll_requested(const
     return mal_gc_poll_requested_in(vm->isolate);
 }
 
+/**
+ * A string constant whose index is below `string_primary_capacity`. The primary array
+ * is sized for the whole root image and never moves, so every root-image index
+ * qualifies and the returned row stays valid for the VM's lifetime.
+ */
+static inline MalString *mal_vm_primary_string_constant(const MalVm *vm, i32 index) {
+    return &vm->live_runtime_image.string_constants[index];
+}
+
 static inline MalString *mal_vm_string_constant(const MalVm *vm, i32 index) {
     if (index < vm->string_primary_capacity)
-        return &vm->runtime_image->string_constants[index];
+        return mal_vm_primary_string_constant(vm, index);
     u32 offset = (u32) (index - vm->string_primary_capacity);
     MalString *page = vm->string_constant_pages.pages[offset >> MAL_CONSTANT_PAGE_BITS];
     return &page[offset & (MAL_CONSTANT_PAGE_SIZE - 1)];

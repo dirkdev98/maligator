@@ -44,7 +44,7 @@ describe("immutable native string storage", () => {
 				),
 			).toBe(true);
 			expect(out.c.source).toContain(
-				`#define r${out.op.dst} (mal_value_from_string(&vm->runtime_image->string_constants[${out.op.stringIndex}]))`,
+				`#define r${out.op.dst} (mal_value_from_string(mal_vm_primary_string_constant(vm, ${out.op.stringIndex})))`,
 			);
 			expect(out.c.source).not.toMatch(new RegExp(`MalValue r${out.op.dst}\\b`));
 			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
@@ -52,6 +52,29 @@ describe("immutable native string storage", () => {
 			);
 		},
 	);
+
+	it("reads a split body's literal from the primary array through its link slot", () => {
+		const out = literal();
+		const emitted = emitCompiledFunction(
+			out.native,
+			out.native.functionIndex,
+			"",
+			false,
+			"external",
+			new Set(),
+			[],
+			new Map(),
+			{ symbolStem: "split" },
+		)!;
+		const slot = emitted.link!.findIndex(
+			(entry) => entry.base === "string_base" && entry.index === out.op.stringIndex,
+		);
+		expect(slot).toBeGreaterThanOrEqual(0);
+		expect(emitted.source).toContain(
+			`mal_vm_primary_string_constant(vm, ${emitted.symbol}_link[${slot}])`,
+		);
+		expect(emitted.source).not.toContain("mal_vm_string_constant(");
+	});
 
 	it("uses page-aware string-base relocation for an immutable literal expression", () => {
 		const out = literal();
