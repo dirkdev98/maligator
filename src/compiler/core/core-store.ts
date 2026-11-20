@@ -2906,6 +2906,7 @@ export class CoreProgram {
 	#literalTemplates: Map<string, number> | undefined;
 	#literalPoolSlots = new Map<number, number>();
 	#sourcePositions: ReadonlyArray<CoreSourcePosition> = [];
+	#sourcePositionsDense = true;
 	#dataEpoch = 0;
 	#globalCount = 0;
 	readonly #constructionStatistics = {
@@ -3212,11 +3213,15 @@ export class CoreProgram {
 	): number {
 		this.#requireMutation(mutation);
 		if (this.#sealed) throw new Error("Core program is sealed");
-		const start = this.#sourcePositions.length;
-		this.#sourcePositions = freezeCoreData([
-			...this.#sourcePositions,
-			...positions.map(snapshotSourcePosition),
-		]);
+		const previous = this.#sourcePositions;
+		const start = previous.length;
+		// The first append turns any holes in the imported snapshot into indexed values.
+		this.#sourcePositions = freezeCoreData(
+			this.#sourcePositionsDense
+				? previous.concat([...positions.map(snapshotSourcePosition)])
+				: [...previous, ...positions.map(snapshotSourcePosition)],
+		);
+		this.#sourcePositionsDense = true;
 		return start;
 	}
 
@@ -3274,6 +3279,7 @@ export class CoreProgram {
 			data.sourcePositions ?? [],
 			snapshotSourcePosition,
 		);
+		this.#sourcePositionsDense = false;
 		this.#globalCount = checkedCount(data.globalCount ?? 0, "Core global count");
 	}
 

@@ -1748,14 +1748,17 @@ export function vmInstructionReadRegisters(
 	}
 	const row = instruction as unknown as Record<string, unknown>;
 	const registers: Array<number> = [];
-	for (const field of VM_REGISTER_USE_FIELDS) {
+	for (let index = 0; index < VM_REGISTER_USE_FIELDS.length; index++) {
+		const field = VM_REGISTER_USE_FIELDS[index]!;
 		const value = row[field];
 		if (typeof value === "number" && value >= 0) registers.push(value);
 	}
-	for (const field of VM_REGISTER_USE_ARRAY_FIELDS) {
+	for (let index = 0; index < VM_REGISTER_USE_ARRAY_FIELDS.length; index++) {
+		const field = VM_REGISTER_USE_ARRAY_FIELDS[index]!;
 		const values = row[field];
 		if (Array.isArray(values)) {
-			for (const value of values) {
+			for (let offset = 0; offset < values.length; offset++) {
+				const value: unknown = values[offset];
 				if (typeof value === "number" && value >= 0) registers.push(value);
 			}
 		}
@@ -1770,10 +1773,12 @@ export function vmInstructionUsesRegister(
 	const operand = simpleRegisterOperand(instruction);
 	if (operand !== undefined) return operand === register;
 	const row = instruction as unknown as Record<string, unknown>;
-	for (const field of VM_REGISTER_USE_FIELDS) {
+	for (let index = 0; index < VM_REGISTER_USE_FIELDS.length; index++) {
+		const field = VM_REGISTER_USE_FIELDS[index]!;
 		if (row[field] === register) return true;
 	}
-	for (const field of VM_REGISTER_USE_ARRAY_FIELDS) {
+	for (let index = 0; index < VM_REGISTER_USE_ARRAY_FIELDS.length; index++) {
+		const field = VM_REGISTER_USE_ARRAY_FIELDS[index]!;
 		const operands = row[field];
 		if (Array.isArray(operands) && operands.includes(register)) return true;
 	}

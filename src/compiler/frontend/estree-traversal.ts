@@ -130,7 +130,9 @@ export function forEachEstreeChild(
 	node: ESTree.Node,
 	visit: (child: ESTree.Node, key: string | number) => void,
 ): void {
-	for (const key of ESTREE_VISITOR_KEYS[node.type] ?? Object.keys(node)) {
+	const keys = ESTREE_VISITOR_KEYS[node.type] ?? Object.keys(node);
+	for (let index = 0; index < keys.length; index++) {
+		const key = keys[index]!;
 		const value: unknown = (node as unknown as Record<string, unknown>)[key];
 		if (isEstreeNode(value)) {
 			visit(value, key);
@@ -179,7 +181,9 @@ export function traverseEstree<Context = undefined>(
 		}
 		if (action === ESTREE_SKIP) return;
 
-		for (const childKey of ESTREE_VISITOR_KEYS[value.type] ?? Object.keys(value)) {
+		const keys = ESTREE_VISITOR_KEYS[value.type] ?? Object.keys(value);
+		for (let index = 0; index < keys.length; index++) {
+			const childKey = keys[index]!;
 			const child: unknown = (value as unknown as Record<string, unknown>)[childKey];
 			if (Array.isArray(child)) {
 				for (let index = 0; index < child.length && !stopped; index++) {

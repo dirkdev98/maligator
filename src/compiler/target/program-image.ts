@@ -2533,7 +2533,9 @@ function validateNativeRecordPasses(
 	for (const { layout, uses } of sources)
 		for (const pass of uses.passes ?? [])
 			handed.set(`${pass.callIp}:${pass.argument}`, layout);
-	for (const [ip, plan] of native.instructions.entries()) {
+	const instructionPlans = native.instructions;
+	for (let ip = 0; ip < instructionPlans.length; ip++) {
+		const plan = instructionPlans[ip];
 		if (
 			plan?.kind !== "call" ||
 			plan.directFunctionIndex === undefined ||

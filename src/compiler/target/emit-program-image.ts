@@ -1519,13 +1519,17 @@ function validateImageForEmission(image: ProgramImage): void {
 	validateRuntimeImageMetadata(image.runtime);
 	validateNativeProgramStorage(image.native, image.runtime.stringConstants);
 	const layoutCount = image.native.classLayouts?.length ?? 0;
-	for (const fn of image.native.functions)
-		for (const plan of fn.instructions)
+	for (const fn of image.native.functions) {
+		const plans = fn.instructions;
+		for (let ip = 0; ip < plans.length; ip++) {
+			const plan = plans[ip];
 			if (
 				plan?.kind === "class-layout" &&
 				plan.site.candidates.some(({ layout }) => layout >= layoutCount)
 			)
 				throw new RangeError("class layout site refers past the image's layout table");
+		}
+	}
 }
 
 function prepareProgramImageNativeEmission(

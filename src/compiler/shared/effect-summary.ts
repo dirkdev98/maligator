@@ -131,7 +131,8 @@ DOMAIN_SETS[(1 << EFFECT_DOMAINS.length) - 1] = EVERY_EFFECT_SUMMARY.reads;
 
 function effectDomainMask(domains: ReadonlyArray<EffectDomain>): number {
 	let mask = 0;
-	for (const domain of domains) mask |= DOMAIN_BITS[domain];
+	for (let index = 0; index < domains.length; index++)
+		mask |= DOMAIN_BITS[domains[index]!];
 	return mask;
 }
 

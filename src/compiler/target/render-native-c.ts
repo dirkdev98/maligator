@@ -9247,7 +9247,8 @@ function emitBody(
 			if (!nullTested(specializations[action.regionIndex])) claimed.add(action.ip);
 		for (const region of specializations)
 			if (!nullTested(region)) for (const ip of region.claimedIps) claimed.add(ip);
-		for (const [ip, plan] of nativeInstructions.entries()) {
+		for (let ip = 0; ip < nativeInstructions.length; ip++) {
+			const plan = nativeInstructions[ip];
 			const operation =
 				plan?.kind === "call" ? plan.guardedBuiltinCall?.operation : undefined;
 			if (

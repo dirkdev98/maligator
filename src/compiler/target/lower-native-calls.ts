@@ -99,7 +99,9 @@ function selectTransports(
 		...(native.recordCalls?.map((site) => site.callIp) ?? []),
 		...(native.recordForwardIps ?? []),
 	]);
-	for (const [instructionIp, call] of native.instructions.entries()) {
+	const instructionPlans = native.instructions;
+	for (let instructionIp = 0; instructionIp < instructionPlans.length; instructionIp++) {
+		const call = instructionPlans[instructionIp];
 		if (call?.kind !== "call" || call.directFunctionCall) continue;
 		const fieldCall = fieldCalls?.get(instructionIp);
 		if (call.directEntryId === undefined && fieldCall === undefined) continue;

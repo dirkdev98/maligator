@@ -69,6 +69,10 @@ to avoid iterator allocation and dispatch. Reading the next link after processin
 the current instruction preserves the cursor's behavior during edits. A retired
 generation rejects both walks.
 
+Source-position appends publish a frozen snapshot. The first append materializes
+any holes in imported data as indexed `undefined` values. Subsequent appends can
+bulk-copy the dense prefix while preserving older snapshots.
+
 Operand and use records are append-only during mutation. Replacing a range may
 abandon the old range until sealing, but it never shifts unrelated records. Deletion
 marks table rows as tombstones. Rare instruction attributes, facts, proof data, and

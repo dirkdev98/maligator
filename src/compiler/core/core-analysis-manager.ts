@@ -323,14 +323,16 @@ export class CoreAnalysisManager {
 		}
 		const programDependencies = definition.programDependencies ?? [];
 		if (programDependencies.length !== cached.programVersions.length) return false;
-		for (const [index, domain] of programDependencies.entries()) {
+		for (let index = 0; index < programDependencies.length; index++) {
+			const domain = programDependencies[index]!;
 			if (this.#program.programVersion(domain) !== cached.programVersions[index])
 				return false;
 		}
 		const programFunctionDependencies = definition.programFunctionDependencies ?? [];
 		if (programFunctionDependencies.length !== cached.programFunctionVersions.length)
 			return false;
-		for (const [index, domain] of programFunctionDependencies.entries()) {
+		for (let index = 0; index < programFunctionDependencies.length; index++) {
+			const domain = programFunctionDependencies[index]!;
 			if (this.#program.functionVersion(domain) !== cached.programFunctionVersions[index])
 				return false;
 		}
@@ -338,7 +340,8 @@ export class CoreAnalysisManager {
 		let versionIndex = 0;
 		const functionMatches = (functionId: CoreFunctionId): boolean => {
 			const fn = this.#program.function(functionId);
-			for (const domain of functionDependencies) {
+			for (let index = 0; index < functionDependencies.length; index++) {
+				const domain = functionDependencies[index]!;
 				if (fn.version(domain) !== cached.functionVersions[versionIndex++]) return false;
 			}
 			return true;
@@ -350,7 +353,8 @@ export class CoreAnalysisManager {
 				if (!functionMatches(functionId)) return false;
 			}
 		} else {
-			for (const domain of functionDependencies) {
+			for (let index = 0; index < functionDependencies.length; index++) {
+				const domain = functionDependencies[index]!;
 				if (
 					this.#program.functionVersion(domain) !==
 					cached.functionVersions[versionIndex++]

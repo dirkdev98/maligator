@@ -1590,6 +1590,23 @@ describe("Core store", () => {
 		expect(program.versions.data).toBe(programVersions.data);
 	});
 
+	it("keeps source-position append holes as indexed values", () => {
+		const { program, fn } = oneFunction();
+		const sparse = new Array<(typeof program.sourcePositions)[number]>(2);
+		sparse[1] = { line: 4, column: 2 };
+		CoreEditor.configureProgram(program, { sourcePositions: sparse });
+
+		const editor = CoreEditor.open(program, fn.id);
+		expect(editor.appendSourcePositions(sparse)).toBe(2);
+		expect(editor.appendSourcePositions(sparse)).toBe(4);
+		editor.commit();
+
+		for (const index of [0, 2, 4]) {
+			expect(Object.hasOwn(program.sourcePositions, index)).toBe(true);
+			expect(program.sourcePositions[index]).toBeUndefined();
+		}
+	});
+
 	it("stores effect refinements out of line behind dense numeric instruction refs", () => {
 		const program = new CoreProgram(registry());
 		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
