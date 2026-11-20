@@ -465,6 +465,23 @@ describe("Core store", () => {
 		verifyCoreProgram(program);
 	});
 
+	it("resolves an opcode registered after its function store was created", () => {
+		const { program, fn, entry, parameter } = oneFunction();
+		const opcode = program.registry.define({
+			opcode: "observe",
+			inputs: coreArity(1),
+			outputs: coreArity(0),
+			effects: CORE_NO_EFFECTS,
+			discardable: false,
+			attributeRelocations: [],
+		});
+		const editor = CoreEditor.open(program, fn.id);
+		const { instruction } = editor.appendInstruction(entry, "observe", [parameter]);
+		editor.commit();
+		expect(fn.instructionHeader(instruction)).toBe(opcode);
+		expect(fn.instructionOpcodeName(instruction)).toBe("observe");
+	});
+
 	it("observes empty block bodies during construction and after edits", () => {
 		const program = new CoreProgram(registry());
 		const builder = new CoreFunctionBuilder(program);

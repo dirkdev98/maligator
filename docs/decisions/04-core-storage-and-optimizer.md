@@ -60,7 +60,9 @@ These include:
 
 One instruction code identifies a registry opcode, a structural terminator or a
 deleted row. This lets a reader establish liveness and instruction kind with one
-table lookup. The registry owns the operation names and descriptors.
+table lookup. Function stores read the registry's append-only name and descriptor
+columns after checking the generation and decoding the instruction code. The shared
+columns also expose opcodes registered after a store was created.
 
 Hot instruction walks start with a checked block head and follow live kernel links
 to avoid iterator allocation and dispatch. Reading the next link after processing

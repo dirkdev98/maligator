@@ -477,6 +477,7 @@ function validateAttributeRelocations(descriptor: CoreOpcodeDefinition): void {
 export class CoreOpcodeRegistry {
 	readonly #descriptors = new Map<string, CoreOpcodeDescriptor>();
 	readonly #descriptorsById: Array<CoreOpcodeDescriptor> = [];
+	readonly #namesById: Array<string> = [];
 	#pendingDefinitions: ((registry: CoreOpcodeRegistry) => void) | undefined;
 
 	/**
@@ -559,6 +560,7 @@ export class CoreOpcodeRegistry {
 		});
 		this.#descriptors.set(descriptor.opcode, frozen);
 		this.#descriptorsById.push(frozen);
+		this.#namesById.push(frozen.opcode);
 		return frozen;
 	}
 
@@ -571,6 +573,15 @@ export class CoreOpcodeRegistry {
 		const descriptor = this.get(opcode);
 		if (descriptor === undefined) throw new Error(`Unknown Core opcode ${opcode}`);
 		return descriptor;
+	}
+
+	/** Store readers use the live columns so registration can follow construction. */
+	get descriptorIndex(): ReadonlyArray<CoreOpcodeDescriptor> {
+		return this.#descriptorsById;
+	}
+
+	get nameIndex(): ReadonlyArray<string> {
+		return this.#namesById;
 	}
 
 	byId(id: CoreOpcodeId): CoreOpcodeDescriptor {

@@ -727,6 +727,8 @@ export class CoreFunctionStore {
 	#blockSnapshot: ReadonlyArray<CoreBlockId> | undefined;
 	#instructionSnapshot: ReadonlyArray<CoreInstructionId> | undefined;
 	#opcodeSites: CoreFunctionOpcodeSites | undefined;
+	readonly #descriptorsByOpcode: ReadonlyArray<CoreOpcodeDescriptor>;
+	readonly #namesByOpcode: ReadonlyArray<string>;
 	readonly kernel: CoreFunctionKernel;
 
 	constructor(
@@ -741,6 +743,8 @@ export class CoreFunctionStore {
 		this.#program = program;
 		this.id = id;
 		this.registry = program.registry;
+		this.#descriptorsByOpcode = this.registry.descriptorIndex;
+		this.#namesByOpcode = this.registry.nameIndex;
 		this.generation = generation;
 		this.#isGenerator = options.isGenerator === true;
 		this.#isAsync = options.isAsync === true;
@@ -1194,15 +1198,24 @@ export class CoreFunctionStore {
 	}
 
 	instructionHeader(id: CoreInstructionId): CoreInstructionHeader {
-		const opcode = this.#requireInstruction(id);
-		if (opcode >= 0) return this.registry.byId(opcode as CoreOpcodeId);
+		if (this.#retired) this.#throwRetiredGeneration();
+		const opcode = this.#instructionOpcode[id] ?? CORE_DEAD_INSTRUCTION_CODE;
+		if (opcode === CORE_DEAD_INSTRUCTION_CODE)
+			throw new Error(`Unknown Core instruction ${id}`);
+		if (opcode >= 0)
+			return (
+				this.#descriptorsByOpcode[opcode] ?? this.registry.byId(opcode as CoreOpcodeId)
+			);
 		const kind = TERMINATOR_KINDS[-opcode];
 		if (kind === undefined) throw new Error(`Unknown Core structural opcode ${opcode}`);
 		return kind;
 	}
 
 	instructionKind(id: CoreInstructionId): CoreInstructionKind {
-		const opcode = this.#requireInstruction(id);
+		if (this.#retired) this.#throwRetiredGeneration();
+		const opcode = this.#instructionOpcode[id] ?? CORE_DEAD_INSTRUCTION_CODE;
+		if (opcode === CORE_DEAD_INSTRUCTION_CODE)
+			throw new Error(`Unknown Core instruction ${id}`);
 		if (opcode >= 0) return "operation";
 		const kind = TERMINATOR_KINDS[-opcode];
 		if (kind === undefined) throw new Error(`Unknown Core structural opcode ${opcode}`);
@@ -1233,7 +1246,14 @@ export class CoreFunctionStore {
 	}
 
 	instructionOpcodeName(id: CoreInstructionId): string {
-		return this.registry.byId(this.instructionOpcode(id)).opcode;
+		if (this.#retired) this.#throwRetiredGeneration();
+		const opcode = this.#instructionOpcode[id] ?? CORE_DEAD_INSTRUCTION_CODE;
+		if (opcode === CORE_DEAD_INSTRUCTION_CODE)
+			throw new Error(`Unknown Core instruction ${id}`);
+		if (opcode < 0) throw new Error(`Core instruction ${id} is not an operation`);
+		return (
+			this.#namesByOpcode[opcode] ?? this.registry.byId(opcode as CoreOpcodeId).opcode
+		);
 	}
 
 	instructionSourcePosition(id: CoreInstructionId): number | undefined {
@@ -1256,7 +1276,11 @@ export class CoreFunctionStore {
 	}
 
 	instructionAttributes(id: CoreInstructionId): CoreInstructionAttributes {
-		if (this.#requireInstruction(id) < 0) {
+		if (this.#retired) this.#throwRetiredGeneration();
+		const opcode = this.#instructionOpcode[id] ?? CORE_DEAD_INSTRUCTION_CODE;
+		if (opcode === CORE_DEAD_INSTRUCTION_CODE)
+			throw new Error(`Unknown Core instruction ${id}`);
+		if (opcode < 0) {
 			throw new Error(`Core instruction ${id} is not an operation`);
 		}
 		return this.#instructionPayload[id] ?? EMPTY_CORE_INSTRUCTION_ATTRIBUTES;
