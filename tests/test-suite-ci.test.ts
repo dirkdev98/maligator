@@ -123,7 +123,7 @@ describe("CI check coverage aggregation", () => {
 			for (const report of reports(identity, toolchain, { native: 2, sanitizer: 3 })) {
 				const lane = path.join(
 					artifacts,
-					`linux-${report.runId}-reports-123-1`,
+					`linux-${report.runId}-reports-123`,
 					"test-suite/runs",
 					report.runId,
 				);
@@ -160,7 +160,7 @@ describe("CI check coverage aggregation", () => {
 					"utf8",
 				),
 			).toBe(latest);
-			rmSync(path.join(artifacts, "linux-quality-reports-123-1"), { recursive: true });
+			rmSync(path.join(artifacts, "linux-quality-reports-123"), { recursive: true });
 			const incomplete = run();
 			expect(incomplete.error).toBeUndefined();
 			expect(incomplete.status).not.toBe(0);

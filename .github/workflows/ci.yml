@@ -67,11 +67,14 @@ jobs:
         if: always()
         uses: ./.github/actions/save-native-cache
 
+      # One artifact per lane for the whole run: rerunning failed jobs replaces only those
+      # lanes' reports, so Linux check still finds the passing lanes' earlier reports.
       - name: Retain verification reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: linux-${{ matrix.lane }}${{ matrix.shards && format('-{0}-of-{1}', matrix.shard, matrix.shards) || '' }}-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          name: linux-${{ matrix.lane }}${{ matrix.shards && format('-{0}-of-{1}', matrix.shard, matrix.shards) || '' }}-reports-${{ github.run_id }}
+          overwrite: true
           path: |
             .cache/mal-build/test-suite/runs/*/report.json
             .cache/mal-build/test262*/report-*.json
@@ -103,7 +106,7 @@ jobs:
       - name: Download lane reports
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: linux-*-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: linux-*-reports-${{ github.run_id }}
           path: .cache/ci-lane-reports
 
       - name: Verify complete canonical coverage
