@@ -1,7 +1,13 @@
 import { expect, test } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import {
+	compilerProgramFactsFromConfig,
+	programClosureCertificate,
+	withProgramClosure,
+} from "../src/compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -120,4 +126,50 @@ test("classes in a function scope extend their parent's layout and reserve it in
 		(fn) => name(fn.body.nameStringIndex) === "Base",
 	)!;
 	expect(base.body.constructorSlotReserve).toBe(2);
+});
+
+test("a name-guessed method site skips receivers Core proves are Arrays or collections", () => {
+	const sourcePath = "/class-layout-brands.mjs";
+	const source = `
+		class Bag {
+			#items = [];
+			push(value) { this.#items.push(value); return this; }
+			has(value) { return this.#items.includes(value); }
+			get(index) { return this.#items[index]; }
+		}
+		function fill(bag, values) {
+			const seen = new Set();
+			const list = [];
+			const index = new Map();
+			for (const value of values) {
+				if (seen.has(value) || bag.has(value)) continue;
+				seen.add(value);
+				list.push(value);
+				index.set(value, list.length);
+			}
+			return index.get(values[0]) + list.length;
+		}
+		globalThis.total = fill(new Bag().push(3), [1, 2, 1, 3]);
+	`;
+	const image = compileSemanticProgramToProgramImage(
+		analyzeSourceAndRunSemanticAnalysis(source, sourcePath, parseModule(source)),
+		{
+			facts: withProgramClosure(
+				compilerProgramFactsFromConfig(resolveBuildConfig({})),
+				programClosureCertificate({ kind: "whole-program", entry: sourcePath }, [], []),
+			),
+		},
+	);
+	const name = (index: number) =>
+		String.fromCharCode(...(image.runtime.stringConstants[index] ?? []));
+	const fill = image.native.functions.find(
+		(fn) => name(fn.body.nameStringIndex) === "fill",
+	)!;
+	const guarded = fill.instructions.flatMap((plan, ip) => {
+		const instruction = fill.body.instructions[ip]!;
+		return plan?.kind === "class-layout" && instruction.opcode === "LOAD_PROPERTY_STATIC"
+			? [name(instruction.stringIndex)]
+			: [];
+	});
+	expect(guarded).toEqual(["has"]);
 });

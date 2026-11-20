@@ -2,6 +2,9 @@ import { coreClassLayoutKeyId, coreClassLayouts } from "../core/core-class-layou
 import type { CoreClassLayout } from "../core/core-class-layouts.ts";
 import type { CoreCompilation } from "../core/core-compilation.ts";
 import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "../core/core-constructor-layout.ts";
+import { CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE } from "../core/core-internal-attributes.ts";
+import { analyzeCoreValueClasses } from "../core/core-ir-value-classes.ts";
+import type { CoreValueClassAnalysis } from "../core/core-ir-value-classes.ts";
 import { coreInstructionId } from "../core/core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "../core/core-ir.ts";
 import { coreModulePrivateNames } from "../core/core-private-names.ts";
@@ -22,6 +25,20 @@ const UNDER_CONSTRUCTION: ReadonlySet<string> = new Set([
 
 /** A guard chain longer than this costs more on a miss than the inline cache it precedes. */
 const CLASS_LAYOUT_SITE_CANDIDATES = 4;
+
+/**
+ * Operations whose result the value-class analysis can brand. Parameters, joins and
+ * results with a recorded normal-result brand can carry one too; any other receiver
+ * skips the analysis.
+ */
+const HEAP_BRAND_PRODUCERS: ReadonlySet<string> = new Set([
+	"createArray",
+	"construct",
+	"call",
+	"callKnown",
+	"loadPrivate",
+	"loadGlobal",
+]);
 
 export interface CoreClassLayoutPlan {
 	readonly layouts: ReadonlyArray<CoreTargetClassLayout>;
@@ -60,6 +77,16 @@ function rootDefinition(
 	return fn.kernel.valueDefinitionKind(root) === 1
 		? coreInstructionId(fn.kernel.valueDefinitionOwner(root))
 		: undefined;
+}
+
+function mayHaveHeapBrand(fn: CoreFunctionStore, value: CoreValueId): boolean {
+	const definition = rootDefinition(fn, value);
+	return (
+		definition === undefined ||
+		HEAP_BRAND_PRODUCERS.has(fn.instructionOpcodeName(definition)) ||
+		fn.instructionAttributes(definition)[CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE] !==
+			undefined
+	);
 }
 
 function calledOnReceiver(fn: CoreFunctionStore, load: CoreInstructionId): boolean {
@@ -175,6 +202,7 @@ export function planCoreClassLayouts(
 		const owner = fn.metadata.lexicalThis ? undefined : index.methodClass.get(core);
 		const family = owner === undefined ? undefined : index.family.get(owner);
 		let functionSites: Map<CoreInstructionId, CompilerClassLayoutSite> | undefined;
+		let classes: CoreValueClassAnalysis | undefined;
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(instruction);
@@ -226,6 +254,14 @@ export function planCoreClassLayouts(
 				if (slots !== undefined) result = { kind: "slot", candidates: slots };
 			}
 			if (result === undefined) continue;
+			// Cells admit only ordinary objects. A site guessed by name also sees the
+			// program's Arrays, Maps and Sets that share the name, where the guard can
+			// only miss before the inline cache.
+			if (!own && mayHaveHeapBrand(fn, fn.kernel.operandAt(start))) {
+				classes ??= analyzeCoreValueClasses(program, core, compilation.context);
+				if (classes.exactHeapBrand(fn.kernel.operandAt(start), instruction) !== undefined)
+					continue;
+			}
 			functionSites ??= new Map();
 			functionSites.set(instruction, result);
 		}

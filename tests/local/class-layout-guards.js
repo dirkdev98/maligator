@@ -259,4 +259,55 @@ results.push([
 	stamped.length(),
 ]);
 
+// Method names a class shares with Arrays and collections: receivers Core brands get no
+// guard, and the rest, class instances among them, still resolve through it.
+class Bag {
+	#items = [];
+	push(value) {
+		this.#items.push(value);
+		return this.#items.length;
+	}
+	has(value) {
+		return this.#items.includes(value);
+	}
+	get(index) {
+		return this.#items[index];
+	}
+}
+function shared(bag, values) {
+	const seen = new Set();
+	const list = [];
+	const index = new Map();
+	for (const value of values) {
+		if (seen.has(value) || bag.has(value)) continue;
+		seen.add(value);
+		list.push(value);
+		index.set(value, list.length);
+		bag.push(value * 10);
+	}
+	return [index.get(values[0]), list.length, bag.get(0), bag.has(30)];
+}
+const bag = new Bag();
+bag.push(3);
+const sharedResults = [];
+for (let round = 0; round < 40; round++)
+	sharedResults.push(shared(bag, [1, 2, 1, 3, round]));
+Bag.prototype.has = function (value) {
+	return value === 2;
+};
+const plainBag = {
+	items: [7],
+	push(value) {
+		return this.items.push(value);
+	},
+	has(value) {
+		return this.items.includes(value);
+	},
+	get(index) {
+		return this.items[index];
+	},
+};
+sharedResults.push(shared(bag, [1, 2, 3]), shared(plainBag, [7, 8]));
+results.push(["shared names", sharedResults.slice(-6)]);
+
 console.log(JSON.stringify(results));
