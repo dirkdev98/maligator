@@ -173,7 +173,9 @@ through the exception-flow version.
 Structural snapshots assign compact edge IDs and retain endpoints and operand ranges.
 Ordinary and exceptional views share the ordinary IDs, including distinct edges to
 the same successor. Consumers use the owning snapshot to read operands from Core.
-Instruction dominance projects exit nodes for blocks that can transfer to a handler.
+Instruction dominance uses block and edge dominance when they determine whether a
+protected block can bypass its ordinary exit. Queries that need an explicit exit
+node build the split graph on demand.
 Canonical roots resolve alias cycles from compact input ranges in dependency order.
 Packed-rest consumers request value kinds and CFG only after finding a relevant
 access. A memory-version handle initially builds no graph. Its first proof query

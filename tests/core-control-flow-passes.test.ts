@@ -259,6 +259,73 @@ describe("Core control-flow analyses and passes", () => {
 		},
 	);
 
+	it("matches instruction dominance with ordinary-exit removal", () => {
+		const ordinary = [[1, 2], [3, 4], [4], [1], [5], [], [4], [4], [8], [5]];
+		const handlers = new Map([
+			[0, 9],
+			[1, 6],
+			[2, 6],
+			[3, 7],
+			[4, 7],
+			[5, 6],
+		]);
+		const handlerEntries = new Set(handlers.values());
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const blocks = ordinary.map((_, index) =>
+			builder.createBlock(handlerEntries.has(index) ? [{ role: "exception" }] : []),
+		);
+		for (const [index, successors] of ordinary.entries()) {
+			const block = blocks[index]!;
+			const [condition] = builder.appendInstruction(block, "createBoolean", [], {
+				attributes: { value: true },
+			});
+			const handler = handlers.get(index);
+			if (handler !== undefined) {
+				builder.appendInstruction(block, "call", [condition!, condition!]);
+				builder.setHandler(block, blocks[handler]!);
+			}
+			const edge = (target: number) => ({ block: blocks[target]!, arguments: [] });
+			if (successors.length === 0)
+				builder.setTerminator(block, { kind: "return", value: condition! });
+			else if (successors.length === 1)
+				builder.setTerminator(block, { kind: "jump", edge: edge(successors[0]!) });
+			else
+				builder.setTerminator(block, {
+					kind: "branch",
+					condition: condition!,
+					consequent: edge(successors[0]!),
+					alternate: edge(successors[1]!),
+				});
+		}
+		const id = builder.finish(blocks[0]!).function;
+		const reachableWithoutExit = (source?: number): ReadonlySet<number> => {
+			const seen = new Set<number>();
+			const pending = [0];
+			for (const block of pending) {
+				if (seen.has(block)) continue;
+				seen.add(block);
+				if (block !== source) pending.push(...ordinary[block]!);
+				const handler = handlers.get(block);
+				if (handler !== undefined) pending.push(handler);
+			}
+			return seen;
+		};
+		const reachable = reachableWithoutExit();
+		for (const [sourceIndex, source] of blocks.entries()) {
+			const withoutExit = reachableWithoutExit(sourceIndex);
+			for (const withBlockDominance of [false, true]) {
+				const cfg = buildCoreControlFlow(program, id);
+				if (withBlockDominance) cfg.dominates(blocks[0]!, source);
+				for (const [index, block] of blocks.entries()) {
+					const expected =
+						index !== sourceIndex && reachable.has(index) && !withoutExit.has(index);
+					expect(cfg.instructionDominatesBlock(source, block)).toBe(expected);
+				}
+			}
+		}
+	});
+
 	it("classifies a multi-entry cycle without inventing a natural loop", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);

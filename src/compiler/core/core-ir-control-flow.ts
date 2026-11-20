@@ -885,22 +885,40 @@ function buildFromStructural(
 			)
 		)
 			return dominates;
-		// An exceptional exit can leave before any instruction in its source block.
-		const topology = new CoreBlockTopology(successors, predecessors, edges, true);
-		const splitEntry = entry;
-		const splitTraversal = runOwner(CORE_OPTIMIZATION_OWNER.controlFlowTraversal, () =>
-			traversal(splitEntry, topology),
-		);
-		const splitParents = runOwner(CORE_OPTIMIZATION_OWNER.immediateDominators, () =>
-			immediateDominators(splitEntry, splitTraversal.reversePostorder, topology, scratch),
-		);
-		const splitDominates = dominatorPredicate(
-			splitEntry,
-			splitTraversal.reachable,
-			splitParents,
-		);
-		return (dominator, block) =>
-			dominator !== block && splitDominates(topology.exitOf(dominator), block);
+		let split: typeof dominates | undefined;
+		return (dominator, block) => {
+			if (dominator === block) return false;
+			if (split !== undefined) return split(dominator, block);
+			const outgoing = successors[dominator] ?? NO_CONTROL_EDGES;
+			const last = outgoing[outgoing.length - 1];
+			if (last === undefined || edges.kind(last) !== "exceptional")
+				return dominates(dominator, block);
+			// With one ordinary exit, taking that edge is equivalent to passing
+			// the synthetic exit. A parallel exceptional edge defeats that proof.
+			if (outgoing.length === 1) return false;
+			if (outgoing.length === 2)
+				return dominatesEdge(dominator, edges.to(outgoing[0]!), block);
+			if (parents !== undefined) {
+				if (!dominates(dominator, block)) return false;
+				// An alternate route to the handler would contradict dominance of
+				// the target if the handler could bypass the source's instructions.
+				if (!dominates(dominator, edges.to(last))) return true;
+			}
+			const topology = new CoreBlockTopology(successors, predecessors, edges, true);
+			const splitTraversal = runOwner(CORE_OPTIMIZATION_OWNER.controlFlowTraversal, () =>
+				traversal(entry, topology),
+			);
+			const splitParents = runOwner(CORE_OPTIMIZATION_OWNER.immediateDominators, () =>
+				immediateDominators(entry, splitTraversal.reversePostorder, topology, scratch),
+			);
+			const splitDominates = dominatorPredicate(
+				entry,
+				splitTraversal.reachable,
+				splitParents,
+			);
+			split = (source, target) => splitDominates(topology.exitOf(source), target);
+			return split(dominator, block);
+		};
 	};
 	const uniqueEntryEdges = new Map<CoreBlockId, Map<CoreBlockId, boolean>>();
 	const edgeUniquelyEnters = (from: CoreBlockId, to: CoreBlockId): boolean => {
@@ -908,21 +926,37 @@ function buildFromStructural(
 		const cached = fromEdges?.get(to);
 		if (cached !== undefined) return cached;
 		// A function call enters its entry block without traversing a Core edge.
-		const unique =
-			to !== entry &&
-			reachable.has(from) &&
-			(successors[from] ?? []).filter((edge) => edges.to(edge) === to).length === 1 &&
-			(predecessors[to] ?? []).every(
-				(edge) =>
-					edges.from(edge) === from ||
-					!reachable.has(edges.from(edge)) ||
-					dominates(to, edges.from(edge)),
-			);
+		let unique = to !== entry && reachable.has(from);
+		if (unique) {
+			let matchingEdges = 0;
+			for (const edge of successors[from] ?? NO_CONTROL_EDGES) {
+				if (edges.to(edge) === to && ++matchingEdges === 2) break;
+			}
+			unique = matchingEdges === 1;
+		}
+		if (unique) {
+			for (const edge of predecessors[to] ?? NO_CONTROL_EDGES) {
+				const predecessor = edges.from(edge);
+				if (
+					predecessor !== from &&
+					reachable.has(predecessor) &&
+					!dominates(to, predecessor)
+				) {
+					unique = false;
+					break;
+				}
+			}
+		}
 		const cache = fromEdges ?? new Map<CoreBlockId, boolean>();
 		cache.set(to, unique);
 		uniqueEntryEdges.set(from, cache);
 		return unique;
 	};
+	const dominatesEdge = (
+		from: CoreBlockId,
+		to: CoreBlockId,
+		block: CoreBlockId,
+	): boolean => dominates(to, block) && edgeUniquelyEnters(from, to);
 	let loopAnalysis:
 		| {
 				readonly loops: ReadonlyArray<CoreNaturalLoop>;
@@ -981,8 +1015,7 @@ function buildFromStructural(
 				block,
 			);
 		},
-		dominatesEdge: (from: CoreBlockId, to: CoreBlockId, block: CoreBlockId) =>
-			dominates(to, block) && edgeUniquelyEnters(from, to),
+		dominatesEdge,
 	});
 }
 

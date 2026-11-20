@@ -230,10 +230,9 @@ export function analyzeCoreConditionalValueKinds(
 		if (cached !== undefined) return cached;
 		let mask = COMPILER_VALUE_KIND_TOP;
 		for (const restriction of restrictions) {
-			// A handler can leave the predicate block before its terminating branch runs.
+			// A dominating ordinary edge executes after its source instructions.
 			if (
 				restriction.exclusive &&
-				cfg.instructionDominatesBlock(cfg.edges.from(restriction.edge), block) &&
 				cfg.dominatesEdge(
 					cfg.edges.from(restriction.edge),
 					cfg.edges.to(restriction.edge),
