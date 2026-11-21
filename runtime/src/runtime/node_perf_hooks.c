@@ -22,6 +22,7 @@
 #include "vm_ops.h"
 #include "value_ops.h"
 #include "web_host_timer.h"
+#include "web_surface.h"
 
 #define PERF_HOOKS_VISIBLE \
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
@@ -1243,6 +1244,7 @@ void mal_host_install_node_perf_hooks(
     }
     bool shared = mal_value_is_object(existing);
     if (shared) {
+        roots[2] = existing;
         // Marks must share the clock of the web platform's performance.now().
         MalValue now_fn, now_value;
         if (mal_vm_get_property(vm, existing, mal_intrinsic_string_key(vm, (const byte *) "now"), &now_fn)
@@ -1258,8 +1260,16 @@ void mal_host_install_node_perf_hooks(
             mal_gc_unroot(&root);
             return;
         }
+    } else {
+        if (mal_web_events_ensure(vm) == nullptr) {
+            mal_gc_unroot(&root);
+            return;
+        }
+        MalObject *event_target_proto =
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_EVENT_TARGET_PROTOTYPE]);
+        roots[2] = mal_value_from_event_target_object(
+            mal_event_target_object_new(&vm->heap, event_target_proto));
     }
-    roots[2] = shared ? existing : mal_value_from_object(mal_intrinsic_new_object(vm));
     perf_state[PERF_PERFORMANCE] = roots[2];
     MalValue performance_prototype = perf_prototype(vm,
         mal_value_from_object(mal_object_get_prototype(mal_value_to_object(roots[2]))));

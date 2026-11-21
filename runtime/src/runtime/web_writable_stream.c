@@ -128,6 +128,20 @@ static MalReadableStreamObject *ws_writer_for(MalReadableStreamObject *stream) {
     return mal_value_to_readable_stream_object(stream->as.writable_stream.writer);
 }
 
+static void ws_ensure_writer_promise_rejected(MalVm *vm,
+    MalReadableStreamObject *writer, MalValue *slot, MalValue reason) {
+    MalPromiseObject *promise = mal_value_to_promise_object(*slot);
+    if (promise->state != MAL_PROMISE_PENDING) {
+        promise = ws_new_promise(vm);
+        mal_gc_write_barrier(*slot);
+        *slot = mal_value_from_promise_object(promise);
+        mal_gc_card(&writer->object.header, *slot);
+    }
+    // Streams marks the writer's monitoring promises handled even without JS observers.
+    promise->is_handled = true;
+    mal_promise_reject(vm, promise, reason);
+}
+
 static void ws_set_ready_pending(MalVm *vm, MalReadableStreamObject *stream) {
     MalReadableStreamObject *writer = ws_writer_for(stream);
     if (writer == nullptr ||
@@ -181,19 +195,7 @@ static void ws_error_stream(
     MalReadableStreamObject *controller = ws_controller_for(stream);
     MalReadableStreamObject *writer = ws_writer_for(stream);
     if (writer != nullptr) {
-        MalPromiseObject *ready =
-            mal_value_to_promise_object(writer->as.writer.ready_promise);
-        // EnsureReadyPromiseRejected and RejectCloseAndClosedPromiseIfNeeded mark the writer's promises handled.
-        if (ready->state == MAL_PROMISE_PENDING) {
-            ready->is_handled = true;
-            mal_promise_reject(vm, ready, roots[1]);
-        } else {
-            MalValue replacement = ws_rejected_promise(vm, roots[1]);
-            mal_value_to_promise_object(replacement)->is_handled = true;
-            mal_gc_write_barrier(writer->as.writer.ready_promise);
-            writer->as.writer.ready_promise = replacement;
-            mal_gc_card(&writer->object.header, replacement);
-        }
+        ws_ensure_writer_promise_rejected(vm, writer, &writer->as.writer.ready_promise, roots[1]);
     }
     MalWritableStreamWriteRequest *request =
         controller->as.writable_controller.queue_head;
@@ -554,10 +556,9 @@ static MalReadableStreamObject *ws_acquire_writer(
         mal_promise_fulfill(vm, mal_value_to_promise_object(roots[3]),
             mal_value_new_undefined());
     } else if (stream->as.writable_stream.state == MAL_READABLE_STREAM_ERRORED) {
-        mal_promise_reject(vm, mal_value_to_promise_object(roots[2]),
-            stream->as.writable_stream.stored_error);
-        mal_promise_reject(vm, mal_value_to_promise_object(roots[3]),
-            stream->as.writable_stream.stored_error);
+        MalValue reason = stream->as.writable_stream.stored_error;
+        ws_ensure_writer_promise_rejected(vm, writer, &writer->as.writer.closed_promise, reason);
+        ws_ensure_writer_promise_rejected(vm, writer, &writer->as.writer.ready_promise, reason);
     } else if (controller->as.writable_controller.queue_total_size <
         controller->as.writable_controller.high_water_mark) {
         mal_promise_fulfill(vm, mal_value_to_promise_object(roots[3]),
@@ -846,22 +847,8 @@ static MalValue ws_writer_release(MalVm *vm, MalValue self,
     mal_gc_root(&span, roots, 2);
     MalReadableStreamObject *stream =
         mal_value_to_readable_stream_object(writer->as.writer.stream);
-    MalPromiseObject *ready = mal_value_to_promise_object(writer->as.writer.ready_promise);
-    if (ready->state == MAL_PROMISE_PENDING) mal_promise_reject(vm, ready, roots[1]);
-    else {
-        MalValue replacement = ws_rejected_promise(vm, roots[1]);
-        mal_gc_write_barrier(writer->as.writer.ready_promise);
-        writer->as.writer.ready_promise = replacement;
-        mal_gc_card(&writer->object.header, replacement);
-    }
-    MalPromiseObject *closed = mal_value_to_promise_object(writer->as.writer.closed_promise);
-    if (closed->state == MAL_PROMISE_PENDING) mal_promise_reject(vm, closed, roots[1]);
-    else {
-        MalValue replacement = ws_rejected_promise(vm, roots[1]);
-        mal_gc_write_barrier(writer->as.writer.closed_promise);
-        writer->as.writer.closed_promise = replacement;
-        mal_gc_card(&writer->object.header, replacement);
-    }
+    ws_ensure_writer_promise_rejected(vm, writer, &writer->as.writer.ready_promise, roots[1]);
+    ws_ensure_writer_promise_rejected(vm, writer, &writer->as.writer.closed_promise, roots[1]);
     stream->as.writable_stream.writer = mal_value_new_undefined();
     writer->as.writer.stream = mal_value_new_undefined();
     mal_gc_unroot(&span);
@@ -924,13 +911,8 @@ MalValue mal_writable_stream_default_writer_abort(
 }
 
 void mal_writable_stream_default_writer_release(MalVm *vm, MalValue value) {
-    MalReadableStreamObject *writer = mal_value_to_readable_stream_object(value);
-    mal_value_to_promise_object(writer->as.writer.ready_promise)->is_handled = true;
-    mal_value_to_promise_object(writer->as.writer.closed_promise)->is_handled = true;
     (void) ws_writer_release(vm, value, nullptr, 0,
         mal_value_new_undefined(), mal_value_new_undefined());
-    mal_value_to_promise_object(writer->as.writer.ready_promise)->is_handled = true;
-    mal_value_to_promise_object(writer->as.writer.closed_promise)->is_handled = true;
 }
 
 static MalValue ws_stream_abort(MalVm *vm, MalValue self,

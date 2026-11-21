@@ -3109,12 +3109,8 @@ static void rs_pipe_abort_begin(
     }
 }
 
-static void rs_pipe_shutdown_source_error(
-    MalVm *vm, MalNativeFunctionObject *state, MalValue reason) {
-    if (rs_pipe_state_bool(state, RS_PIPE_SHUTTING_DOWN)) return;
-    mal_native_function_object_set_slot(
-        state, RS_PIPE_SHUTTING_DOWN, mal_value_new_boolean(true));
-    mal_native_function_object_set_slot(state, RS_PIPE_REASON, reason);
+static void rs_pipe_source_error_run_action(MalVm *vm, MalNativeFunctionObject *state) {
+    MalValue reason = mal_native_function_object_get_slot(state, RS_PIPE_REASON);
     if (rs_pipe_has_flag(state, RS_PIPE_PREVENT_ABORT)) {
         rs_pipe_settle(vm, state, true, reason);
         return;
@@ -3124,6 +3120,34 @@ static void rs_pipe_shutdown_source_error(
         mal_native_function_object_get_slot(state, RS_PIPE_WRITER), reason);
     rs_pipe_attach(vm, action, rs_pipe_action_fulfilled,
         rs_pipe_action_rejected, state_value);
+}
+
+static MalValue rs_pipe_source_error_write_settled(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    rs_pipe_source_error_run_action(vm, rs_pipe_state(callee));
+    return mal_value_new_undefined();
+}
+
+static void rs_pipe_shutdown_source_error(
+    MalVm *vm, MalNativeFunctionObject *state, MalValue reason) {
+    if (rs_pipe_state_bool(state, RS_PIPE_SHUTTING_DOWN)) return;
+    mal_native_function_object_set_slot(
+        state, RS_PIPE_SHUTTING_DOWN, mal_value_new_boolean(true));
+    mal_native_function_object_set_slot(state, RS_PIPE_REASON, reason);
+    MalValue pending_write = mal_native_function_object_get_slot(state, RS_PIPE_PENDING_WRITE);
+    MalValue writer = mal_native_function_object_get_slot(state, RS_PIPE_WRITER);
+    // Writes are FIFO, and shutting down prevents the pipe from enqueueing more.
+    if (!mal_value_is_undefined(pending_write) &&
+        mal_writable_stream_default_writer_is_writable(writer)) {
+        rs_pipe_attach(vm, pending_write, rs_pipe_source_error_write_settled,
+            rs_pipe_source_error_write_settled, mal_value_from_native_function_object(state));
+    } else {
+        rs_pipe_source_error_run_action(vm, state);
+    }
 }
 
 static void rs_pipe_shutdown_destination_error(
