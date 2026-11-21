@@ -1,4 +1,4 @@
-Read and write files and work with directories on disk using `maligator:fs`. It needs no surface flag. Filesystem operations run on background threads and return promises.
+Use `maligator:fs` to read, write, and watch files and directories on disk. It needs no surface flag. File reads and writes run on background threads.
 
 ## Read a file
 
@@ -35,6 +35,22 @@ await file("out/events.log").append(`${new Date().toISOString()} report written\
 - `createDirectories` creates missing parent directories first.
 - `atomic` writes a temporary file in the same directory, flushes it and renames it over the target. Readers see the old or the new contents, never a partial file, and a failed write removes the temporary file. The replaced file keeps its permission bits unless you pass `mode`, and a symbolic link keeps pointing at its target.
 - `mode` sets the permission bits of a file the write creates, before the umask.
+
+## Stream a file
+
+```typescript src/copy-chunks.ts
+import { file } from "maligator:fs";
+
+await using output = file("out/copy.bin").writer({ createDirectories: true });
+for await (const chunk of file("input.bin").stream({ chunkSize: 64 * 1024 })) {
+	await output.write(chunk);
+}
+await output.flush();
+```
+
+`stream()` opens the file when a reader requests its first chunk. It reads up to `chunkSize` bytes at a time and closes at the end of the stream. Use `start` and `end` to select a byte range with inclusive offsets. Cancel the stream to stop early, or break from a `for await` loop to cancel automatically.
+
+`writer()` opens the file on the first write, flush, or close. Use `append: true` to keep existing contents. Calls run in the order you make them. Await each write before reusing its input buffer. Use `flush()` to sync preceding writes to disk, then `close()`, `end()`, or `await using` to release the descriptor.
 
 ## Inspect, copy, move and delete
 
@@ -79,6 +95,23 @@ Filter either listing with `include` and `exclude` patterns relative to the dire
 
 `delete()` removes an empty directory. Pass `recursive: true` to remove its whole tree. Symbolic links in the tree are removed as links and their targets stay in place.
 
+## Watch for changes
+
+```typescript src/watch.ts
+import { watch } from "maligator:fs";
+
+for await (const { kind, path } of watch("inbox", { recursive: true })) {
+	if (kind === "create") {
+		console.log(path);
+		break;
+	}
+}
+```
+
+Watch a file or a directory. A directory watch reports changes to its direct children by default. Set `recursive: true` to include subdirectories. Each event names the changed path, for example `inbox/new.txt` when watching `inbox`. The first iteration starts the watch. Break out of the loop to close it, or pass an abort signal to stop an iteration that is waiting for an event.
+
+The OS can coalesce notifications. A move may appear as a deletion or creation when only one side is visible to the watcher.
+
 ## Handle failures
 
 A failed operation rejects with a `FileSystemError`. Its `code` is the system error name, such as `ENOENT` for a missing file, `EISDIR` for a directory, `EEXIST` for an existing destination or `EACCES` for missing permission. `syscall` names the failed call, `path` the path it failed on and `destination` the target of a copy or move. The message reads like Node's:
@@ -94,6 +127,6 @@ try {
 }
 ```
 
-Invalid arguments cause a `TypeError`. Handle constructors throw for invalid paths and URLs, and asynchronous methods reject for data or options they don't take.
+Invalid paths and URLs throw a `TypeError` when creating a handle. Stream offsets and chunk sizes throw a `RangeError` when out of range. A watch rejects with the signal's reason when aborted.
 
 Libraries written against Node can keep using `node:fs`, which needs the Node surface. Both modules run file operations on the same pool of threads.

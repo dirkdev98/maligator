@@ -151,8 +151,8 @@ MalArrayBufferObject *mal_array_buffer_object_new_sensitive(
 /**
  * Adopt a malloc-compatible allocation as a fixed-length backing store;
  * ownership transfers, including on the paths that release it. The store
- * charges `byte_length` to the process budget here, so `data` must not already
- * carry a charge. `data` may be
+ * charges `byte_length` to the process budget and the isolate allocation clock,
+ * so `data` must not already carry a charge. `data` may be
  * null only when `byte_length` is zero. `sensitive` selects the
  * scrub-before-release contract; pass false for ordinary bytes.
  */

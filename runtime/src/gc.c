@@ -444,6 +444,8 @@ struct MalGcState {
     usize cycle_minor_at;
     usize last_major_live_bytes;
     usize last_major_raw_owned_bytes;
+    usize last_major_array_buffer_bytes;
+    usize last_collection_array_buffer_bytes;
     usize promotion_debt;
     u64 promoted_bytes;
 
@@ -1304,6 +1306,7 @@ void mal_gc_configure_heap(MalVm *vm) {
         if (vm->heap.next_gc_at == 0) {
             vm->heap.next_gc_at = 1;
         }
+        if (vm->heap.next_gc_at != SIZE_MAX) vm->heap.next_array_buffer_gc_at = MAL_GC_MIN_INCREMENT;
     }
     // Poisoning dead cells makes a missed root fail before the cell is reused.
     vm->heap.poison_on_free = g->verify_enabled;
@@ -1337,7 +1340,8 @@ void mal_gc_begin_teardown(MalVm *vm) {
     mal_gc_marking_active = false;
     mal_heap_set_black_alloc(&vm->heap, false);
     mal_gc_poll = false;
-    vm->heap.next_gc_at = (usize) -1;
+    vm->heap.next_gc_at = SIZE_MAX;
+    vm->heap.next_array_buffer_gc_at = SIZE_MAX;
 }
 
 void mal_gc_set_mutator_busy(MalVm *vm, bool busy) {
@@ -3643,6 +3647,13 @@ static usize mal_gc_advance_trigger(MalVm *vm) {
         vm->heap.next_gc_at = grow > SIZE_MAX - vm->heap.bytes_allocated
             ? SIZE_MAX : vm->heap.bytes_allocated + grow;
     }
+    if (vm->heap.next_array_buffer_gc_at != SIZE_MAX) {
+        usize buffers = vm->heap.current_usage.array_buffer_bytes;
+        g_gc->last_collection_array_buffer_bytes = buffers;
+        // Reset to surviving occupancy so freed buffers return all their headroom.
+        usize headroom = buffers > MAL_GC_MIN_INCREMENT ? buffers : MAL_GC_MIN_INCREMENT;
+        vm->heap.next_array_buffer_gc_at = headroom > SIZE_MAX - buffers ? SIZE_MAX : buffers + headroom;
+    }
     return grow;
 }
 
@@ -3743,6 +3754,7 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
     if (major) {
         g_gc->last_major_live_bytes = vm->heap.live_bytes;
         g_gc->last_major_raw_owned_bytes = vm->heap.current_usage.raw_owned_bytes;
+        g_gc->last_major_array_buffer_bytes = vm->heap.current_usage.array_buffer_bytes;
         g_gc->promotion_debt = 0;
     } else if (vm->heap.live_bytes > live_before) {
         usize promoted = vm->heap.live_bytes - live_before;
@@ -3963,6 +3975,7 @@ static void mal_gc_cycle_finish_sweep(MalVm *vm) {
     g_gc->major_collection = false;
     g_gc->last_major_live_bytes = vm->heap.live_bytes;
     g_gc->last_major_raw_owned_bytes = vm->heap.current_usage.raw_owned_bytes;
+    g_gc->last_major_array_buffer_bytes = vm->heap.current_usage.array_buffer_bytes;
     g_gc->promotion_debt = 0;
 
     if (g_gc->verify_enabled) {
@@ -4228,7 +4241,8 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
     if (!polled && !pressure) {
         return;
     }
-    if (!pressure && vm->heap.bytes_allocated < vm->heap.next_gc_at) {
+    bool buffers_due = vm->heap.current_usage.array_buffer_bytes >= vm->heap.next_array_buffer_gc_at;
+    if (!pressure && !buffers_due && vm->heap.bytes_allocated < vm->heap.next_gc_at) {
         return; // polled for preemption only; nothing owed
     }
 
@@ -4242,10 +4256,16 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
         : pressure ? 0 : MAL_GC_MIN_MAJOR_DEBT;
     usize raw_growth = vm->heap.current_usage.raw_owned_bytes > g_gc->last_major_raw_owned_bytes
         ? vm->heap.current_usage.raw_owned_bytes - g_gc->last_major_raw_owned_bytes : 0;
+    // Minor survivors can own much more external storage than their managed cells.
+    usize last_major_buffers = g_gc->last_major_array_buffer_bytes;
+    usize surviving_buffers = g_gc->last_collection_array_buffer_bytes;
+    usize buffer_growth = surviving_buffers > last_major_buffers ? surviving_buffers - last_major_buffers : 0;
+    usize buffer_major_debt = last_major_buffers > MAL_GC_MIN_INCREMENT ? last_major_buffers : MAL_GC_MIN_INCREMENT;
     bool major = g_gc->major_cadence_fixed
         ? (pressure && g_gc->promotion_debt >= major_debt) ||
             (g_gc->collection_index % g_gc->major_every) == 0
         : g_gc->collection_index == 0 || g_gc->promotion_debt >= required_debt ||
+            (buffers_due && buffer_growth >= buffer_major_debt) ||
             (pressure && raw_growth >= required_debt - g_gc->promotion_debt);
     if (!major) {
         g_gc->process_pressure = false;

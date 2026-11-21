@@ -153,12 +153,14 @@ typedef struct MalHeap {
     MalGcBlock *young_blocks;
     // Per-block free chains permit O(1) recycling without scanning another block's cells.
     MalGcBlock *raw_partial[MAL_GC_NUM_SIZE_CLASSES];
-    /** Monotonic total of claimed cell sizes, which drives the collection trigger. */
+    /** Monotonic allocation clock, including separately allocated backing stores. */
     usize bytes_allocated;
     /** Mutator-owned occupancy; valid until finalize-all begins teardown. */
     MalHeapCurrentUsage current_usage;
     /** Automatic collection is disabled while this is SIZE_MAX. */
     usize next_gc_at;
+    /** Backing-store occupancy that requests collection ahead of the allocation clock. */
+    usize next_array_buffer_gc_at;
     /** Poison reclaimed payloads when verification is enabled. */
     bool poison_on_free;
     /** Without the collector's finalizers, every dead cell reaches the sweep's finalizer. */

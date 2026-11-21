@@ -1,8 +1,10 @@
-import { execFileSync } from "node:child_process";
+import { Buffer } from "node:buffer";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
 	chmodSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	readdirSync,
 	rmSync,
 	symlinkSync,
@@ -14,6 +16,8 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import {
 	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
+	resolveHarnessExecutionInvocation,
+	scaledNativeRunTimeoutMs,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -99,5 +103,136 @@ it("takes file: URLs where the web surface provides URL", () => {
 	expect(expected.stdout).toContain("url /tmp/a b.txt");
 	for (const binary of [webSurface.compiled, webSurface.interpreted]) {
 		expectScenario(binary, expected);
+	}
+});
+
+const streamInput = Buffer.from([0, 1, 2, 254, 255, 10, 123, 128, 99]);
+const backends = (pair: BackendPairResult) => [pair.compiled, pair.interpreted];
+
+function incrementalDirectory(name: string, input?: Buffer): string {
+	const cwd = path.join(root, `run-${runs++}`);
+	mkdirSync(cwd);
+	writeFileSync(path.join(cwd, ".incremental"), name);
+	if (input !== undefined) writeFileSync(path.join(cwd, "input.bin"), input);
+	return cwd;
+}
+
+function incrementalReference(name: string, input?: Buffer): string {
+	return execFileSync(
+		process.execPath,
+		[path.resolve("tests/local/maligator-fs-incremental-node.mjs"), name],
+		{ cwd: incrementalDirectory(name, input), encoding: "utf8", timeout: 15000 },
+	);
+}
+
+it("streams the same bytes as Node's web and filesystem read streams", () => {
+	const expected = incrementalReference("read", streamInput);
+	for (const binary of backends(defaultSurface)) {
+		for (const env of [{}, STRESS_ENV]) {
+			expect(
+				runToStdout(binary, { cwd: incrementalDirectory("read", streamInput), env }),
+			).toBe(expected);
+		}
+	}
+});
+
+it("releases descriptors after cancelling a reader, including while it opens", () => {
+	for (const binary of backends(defaultSurface)) {
+		const { executable, args } = resolveHarnessExecutionInvocation(binary);
+		for (const env of [{}, STRESS_ENV]) {
+			const stdout = execFileSync(
+				"/bin/sh",
+				["-c", 'ulimit -n 32; exec "$@"', "cancel", executable, ...args],
+				{
+					cwd: incrementalDirectory("cancel", streamInput),
+					encoding: "utf8",
+					env: { ...process.env, ...env },
+					timeout: scaledNativeRunTimeoutMs(20000, { ...process.env, ...env }),
+				},
+			);
+			const chunk = JSON.parse(stdout) as Array<number>;
+			expect(chunk.length).toBeGreaterThan(0);
+			expect(chunk.length).toBeLessThanOrEqual(3);
+			expect(chunk).toEqual([...streamInput.subarray(0, chunk.length)]);
+		}
+	}
+});
+
+function memoryRun(binary: string, input: Buffer): { peak: number; output: unknown } {
+	const { executable, args } = resolveHarnessExecutionInvocation(binary);
+	const darwin = process.platform === "darwin";
+	const cwd = incrementalDirectory("size", input);
+	const report = path.join(cwd, "rss.txt");
+	const result = spawnSync(
+		"/usr/bin/time",
+		[...(darwin ? ["-l"] : ["-f", "%M", "-o", report]), executable, ...args],
+		{ cwd, encoding: "utf8", timeout: scaledNativeRunTimeoutMs(20000) },
+	);
+	if (result.status !== 0 || result.error !== undefined)
+		throw new Error(
+			`Stream process failed: ${result.error ?? result.stderr ?? result.signal}`,
+		);
+	const measurement = darwin
+		? /^\s*(\d+)\s+maximum resident set size/m.exec(result.stderr)?.[1]
+		: readFileSync(report, "utf8").trim();
+	const peak = Number(measurement) * (darwin ? 1 : 1024);
+	if (!Number.isFinite(peak) || peak <= 0)
+		throw new Error("Missing peak RSS measurement");
+	return { peak, output: JSON.parse(result.stdout) };
+}
+
+it("streams a 16 MiB file with bounded peak resident memory", () => {
+	const input = Buffer.alloc(16 * 1024 * 1024, 7);
+	const expected = { length: input.length, checksum: 7 * input.length };
+	for (const binary of backends(defaultSurface)) {
+		if (process.env.MAL_ASAN === "1" || process.env.MAL_TSAN === "1") {
+			// Instrumented allocators retain freed stores and change the RSS baseline.
+			const stdout = runToStdout(binary, { cwd: incrementalDirectory("size", input) });
+			expect(JSON.parse(stdout)).toEqual(expected);
+			continue;
+		}
+		const control = memoryRun(binary, input.subarray(0, 1));
+		const streamed = memoryRun(binary, input);
+		expect(streamed.output).toEqual(expected);
+		expect(
+			streamed.peak - control.peak,
+			`${streamed.peak} B streamed, ${control.peak} B control`,
+		).toBeLessThan(input.length / 2);
+	}
+});
+
+it("orders writer operations on an open descriptor and appends after reopening", () => {
+	const expected = incrementalReference("writer");
+	for (const binary of backends(defaultSurface)) {
+		for (const env of [{}, STRESS_ENV]) {
+			expect(runToStdout(binary, { cwd: incrementalDirectory("writer"), env })).toBe(
+				expected,
+			);
+		}
+	}
+});
+
+it.each(["watch", "watch-recursive"])(
+	"matches Node's notifications for %s and closes on return",
+	(name) => {
+		const expected = incrementalReference(name);
+		for (const binary of backends(defaultSurface)) {
+			for (const env of [{}, STRESS_ENV]) {
+				expect(runToStdout(binary, { cwd: incrementalDirectory(name), env })).toBe(
+					expected,
+				);
+			}
+		}
+	},
+);
+
+it("rejects a pending watch on abort and releases the watcher", () => {
+	const expected = incrementalReference("watch-abort");
+	for (const binary of backends(webSurface)) {
+		const stdout = runToStdout(binary, {
+			cwd: incrementalDirectory("watch-abort"),
+			env: STRESS_ENV,
+		});
+		expect(stdout).toBe(expected);
 	}
 });

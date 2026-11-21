@@ -37,7 +37,7 @@ bool mal_array_buffer_object_move_out_of_cell(MalHeap *heap, MalArrayBufferObjec
     buffer->data = data;
     mal_heap_cell_needs_finalizer(&buffer->object.header);
     mal_heap_array_buffer_acquire(heap, capacity);
-    mal_gc_process_charge(capacity);
+    mal_heap_charge_external(heap, capacity);
     mal_profile_native_allocation(heap, capacity, MAL_PROFILE_ALLOCATION_FAMILY_BUFFER);
     return true;
 }
@@ -166,7 +166,7 @@ static MalArrayBufferObject *mal_array_buffer_object_new_impl(
     }
     if (buffer->data != nullptr && !shared && !store_inline) {
         mal_heap_array_buffer_acquire(heap, capacity);
-        mal_gc_process_charge(capacity);
+        mal_heap_charge_external(heap, capacity);
         mal_profile_native_allocation(
             heap, capacity, MAL_PROFILE_ALLOCATION_FAMILY_BUFFER);
     }
@@ -278,7 +278,7 @@ MalArrayBufferObject *mal_array_buffer_object_adopt(
     buffer->sensitive = sensitive;
     if (data != nullptr) {
         mal_heap_array_buffer_acquire(heap, byte_length);
-        mal_gc_process_charge(byte_length);
+        mal_heap_charge_external(heap, byte_length);
     }
     return buffer;
 }

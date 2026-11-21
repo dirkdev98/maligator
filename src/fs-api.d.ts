@@ -1,8 +1,7 @@
 // Generated from src/platform/catalog.ts; edit the catalog and regenerate.
 /**
- * Read and write files and work with directories through lazy handles. No surface
- * flag is required. Filesystem operations run asynchronously on the blocking-work
- * pool.
+ * Read, write, and stream files, work with directories, and watch for changes. No
+ * surface flag is required.
  */
 declare module "maligator:fs" {
 	/**
@@ -44,6 +43,73 @@ declare module "maligator:fs" {
 		createDirectories?: boolean;
 		/** Permission bits for a created file, before the umask. Defaults to 0o666. */
 		mode?: number;
+	};
+
+	/**
+	 * Byte range and read size for `DiskFile.stream()`.
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#FileStreamOptions
+	 */
+	export type FileStreamOptions = {
+		/** First byte to read, inclusive. Defaults to 0. */
+		start?: number;
+		/** Last byte to read, inclusive. Defaults to the end of the file. */
+		end?: number;
+		/** Maximum bytes per chunk. Defaults to 64 KiB. */
+		chunkSize?: number;
+	};
+
+	/**
+	 * How `DiskFile.writer()` opens its file.
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#FileWriterOptions
+	 */
+	export type FileWriterOptions = AppendOptions & {
+		/** Append to the existing file. Defaults to false, which truncates it when opened. */
+		append?: boolean;
+	};
+
+	/**
+	 * A sink that opens the file on its first operation and queues operations in call
+	 * order. Await a write before reusing its input buffer.
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#FileWriter
+	 */
+	export interface FileWriter {
+		/** Write a chunk and fulfill with the number of bytes written. */
+		write(data: FileData): Promise<number>;
+		/** Flush preceding writes to the filesystem with fsync. */
+		flush(): Promise<void>;
+		/** Close after preceding operations. Repeated calls share the same result. */
+		close(): Promise<void>;
+		/** Close after preceding operations. */
+		end(): Promise<void>;
+		[Symbol.asyncDispose](): Promise<void>;
+	}
+
+	/**
+	 * How `watch()` observes changes.
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#WatchOptions
+	 */
+	export type WatchOptions = {
+		/** Also watch subdirectories. Defaults to false. */
+		recursive?: boolean;
+		/** Reject with the signal's reason and close the watcher when it aborts. */
+		signal?: AbortSignal;
+	};
+
+	/**
+	 * A filesystem notification. The OS can coalesce changes and may report a move as
+	 * creation or deletion.
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#FileChange
+	 */
+	export type FileChange = {
+		/** The change reported by the filesystem. */
+		kind: "create" | "modify" | "delete" | "rename";
+		/** The changed path, including the watched path for a child. */
+		path: string;
 	};
 
 	/**
@@ -105,6 +171,10 @@ declare module "maligator:fs" {
 		text(): Promise<string>;
 		/** The contents parsed as JSON. */
 		json(): Promise<unknown>;
+		/** Read a range incrementally. Cancellation closes the file. */
+		stream(options?: FileStreamOptions): ReadableStream<Uint8Array<ArrayBuffer>>;
+		/** Open a sink for incremental writes. */
+		writer(options?: FileWriterOptions): FileWriter;
 		/** Replace the contents, creating the file when it is missing. Fulfills with the number of bytes written. */
 		write(data: FileData, options?: WriteOptions): Promise<number>;
 		/** Add to the end of the file, creating it when it is missing. Fulfills with the number of bytes written. */
@@ -247,6 +317,25 @@ declare module "maligator:fs" {
 	 * @see https://maligator.ddv.tools/api/fs#directory
 	 */
 	export const directory: (path: FilePath) => DiskDirectory;
+	/**
+	 * Watch a file or directory using an async iterator. The first `next()` starts the
+	 * watch. Breaking out of the loop, calling `return()`, or aborting the signal closes
+	 * it.
+	 *
+	 * @example
+	 * import { watch } from "maligator:fs";
+	 *
+	 * for await (const change of watch("inbox", { recursive: true })) {
+	 *   console.log(change.kind, change.path);
+	 *   if (change.kind === "create") break;
+	 * }
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#watch
+	 */
+	export const watch: (
+		path: FilePath,
+		options?: WatchOptions,
+	) => AsyncIterableIterator<FileChange>;
 	/**
 	 * The class of every rejection a failed filesystem operation causes.
 	 *

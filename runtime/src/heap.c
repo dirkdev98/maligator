@@ -737,6 +737,7 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->bytes_allocated = 0;
     heap->current_usage = (MalHeapCurrentUsage) {0};
     heap->next_gc_at = (usize) -1;
+    heap->next_array_buffer_gc_at = SIZE_MAX;
     heap->poison_on_free = false;
     heap->finalize_every_dead_cell = true;
     heap->live_bytes = 0;
@@ -826,6 +827,7 @@ void mal_heap_free(MalHeap *heap) {
     heap->bytes_allocated = 0;
     heap->current_usage = (MalHeapCurrentUsage) {0};
     heap->next_gc_at = (usize) -1;
+    heap->next_array_buffer_gc_at = SIZE_MAX;
     heap->poison_on_free = false;
     heap->finalize_every_dead_cell = true;
     heap->live_bytes = 0;
@@ -948,6 +950,8 @@ MalHeapCurrentUsage mal_heap_current_usage(const MalHeap *heap) {
 void mal_heap_array_buffer_acquire(MalHeap *heap, usize bytes) {
     if (bytes > SIZE_MAX - heap->current_usage.array_buffer_bytes) abort();
     heap->current_usage.array_buffer_bytes += bytes;
+    if (heap->current_usage.array_buffer_bytes >= heap->next_array_buffer_gc_at)
+        mal_isolate_request_poll(mal_isolate_locals());
 }
 
 void mal_heap_array_buffer_release(MalHeap *heap, usize bytes) {

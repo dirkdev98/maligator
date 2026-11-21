@@ -448,6 +448,34 @@ const fsTypes: ReadonlyArray<PlatformTypeDefinition> = [
 		"How `append` creates a missing file.",
 	),
 	workerType(
+		"FileStreamOptions",
+		"{\n /** First byte to read, inclusive. Defaults to 0. */\n start?: number;\n /** Last byte to read, inclusive. Defaults to the end of the file. */\n end?: number;\n /** Maximum bytes per chunk. Defaults to 64 KiB. */\n chunkSize?: number;\n}",
+		"Byte range and read size for `DiskFile.stream()`.",
+	),
+	workerType(
+		"FileWriterOptions",
+		"AppendOptions & {\n /** Append to the existing file. Defaults to false, which truncates it when opened. */\n append?: boolean;\n}",
+		"How `DiskFile.writer()` opens its file.",
+	),
+	{
+		...workerType(
+			"FileWriter",
+			"{\n /** Write a chunk and fulfill with the number of bytes written. */\n write(data: FileData): Promise<number>;\n /** Flush preceding writes to the filesystem with fsync. */\n flush(): Promise<void>;\n /** Close after preceding operations. Repeated calls share the same result. */\n close(): Promise<void>;\n /** Close after preceding operations. */\n end(): Promise<void>;\n [Symbol.asyncDispose](): Promise<void>;\n}",
+			"A sink that opens the file on its first operation and queues operations in call order. Await a write before reusing its input buffer.",
+		),
+		declaration: "interface",
+	},
+	workerType(
+		"WatchOptions",
+		"{\n /** Also watch subdirectories. Defaults to false. */\n recursive?: boolean;\n /** Reject with the signal's reason and close the watcher when it aborts. */\n signal?: AbortSignal;\n}",
+		"How `watch()` observes changes.",
+	),
+	workerType(
+		"FileChange",
+		'{\n /** The change reported by the filesystem. */\n kind: "create" | "modify" | "delete" | "rename";\n /** The changed path, including the watched path for a child. */\n path: string;\n}',
+		"A filesystem notification. The OS can coalesce changes and may report a move as creation or deletion.",
+	),
+	workerType(
 		"TransferOptions",
 		"{\n /** Replace an existing destination. Defaults to false, which rejects with `EEXIST`. */\n overwrite?: boolean;\n}",
 		"How `copyTo` and `moveTo` treat an existing destination.",
@@ -465,7 +493,7 @@ const fsTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	{
 		...workerType(
 			"DiskFile",
-			"{\n /** The path as given, or the path of a `file:` URL. */\n readonly path: string;\n /** The media type implied by the file extension; text types carry `charset=utf-8`. */\n readonly type: string;\n /** Whether the path resolves, following symbolic links. Never rejects. */\n exists(): Promise<boolean>;\n /** Metadata of the entry; rejects when it is missing. */\n stat(options?: StatOptions): Promise<FileStat>;\n /** The contents as a Uint8Array over a fresh ArrayBuffer. */\n bytes(): Promise<Uint8Array<ArrayBuffer>>;\n /** The contents decoded as UTF-8, without a byte order mark. */\n text(): Promise<string>;\n /** The contents parsed as JSON. */\n json(): Promise<unknown>;\n /** Replace the contents, creating the file when it is missing. Fulfills with the number of bytes written. */\n write(data: FileData, options?: WriteOptions): Promise<number>;\n /** Add to the end of the file, creating it when it is missing. Fulfills with the number of bytes written. */\n append(data: FileData, options?: AppendOptions): Promise<number>;\n /** Remove the file; rejects when it is missing or a directory. */\n delete(): Promise<void>;\n /** Copy the contents and permission bits to another path. */\n copyTo(destination: FilePath | DiskFile, options?: TransferOptions): Promise<void>;\n /** Rename the file, copying across file systems. This handle keeps naming the old path. */\n moveTo(destination: FilePath | DiskFile, options?: TransferOptions): Promise<void>;\n}",
+			"{\n /** The path as given, or the path of a `file:` URL. */\n readonly path: string;\n /** The media type implied by the file extension; text types carry `charset=utf-8`. */\n readonly type: string;\n /** Whether the path resolves, following symbolic links. Never rejects. */\n exists(): Promise<boolean>;\n /** Metadata of the entry; rejects when it is missing. */\n stat(options?: StatOptions): Promise<FileStat>;\n /** The contents as a Uint8Array over a fresh ArrayBuffer. */\n bytes(): Promise<Uint8Array<ArrayBuffer>>;\n /** The contents decoded as UTF-8, without a byte order mark. */\n text(): Promise<string>;\n /** The contents parsed as JSON. */\n json(): Promise<unknown>;\n /** Read a range incrementally. Cancellation closes the file. */\n stream(options?: FileStreamOptions): ReadableStream<Uint8Array<ArrayBuffer>>;\n /** Open a sink for incremental writes. */\n writer(options?: FileWriterOptions): FileWriter;\n /** Replace the contents, creating the file when it is missing. Fulfills with the number of bytes written. */\n write(data: FileData, options?: WriteOptions): Promise<number>;\n /** Add to the end of the file, creating it when it is missing. Fulfills with the number of bytes written. */\n append(data: FileData, options?: AppendOptions): Promise<number>;\n /** Remove the file; rejects when it is missing or a directory. */\n delete(): Promise<void>;\n /** Copy the contents and permission bits to another path. */\n copyTo(destination: FilePath | DiskFile, options?: TransferOptions): Promise<void>;\n /** Rename the file, copying across file systems. This handle keeps naming the old path. */\n moveTo(destination: FilePath | DiskFile, options?: TransferOptions): Promise<void>;\n}",
 			"A file on disk. Creating a handle does no I/O; each method reads or changes the file when called. Failed operations reject with a `FileSystemError`.",
 		),
 		declaration: "interface",
@@ -1271,7 +1299,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 		sourceFile: "fs/runtime.ts",
 		declarationFile: "fs-api.d.ts",
 		description:
-			"Read and write files and work with directories through lazy handles. No surface flag is required. Filesystem operations run asynchronously on the blocking-work pool.",
+			"Read, write, and stream files, work with directories, and watch for changes. No surface flag is required.",
 		types: fsTypes,
 		exports: [
 			{
@@ -1281,6 +1309,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 					"A handle for the file at `path`. It does no I/O, so the file need not exist yet. Throws a TypeError for an empty path, a path with a null byte or a URL that is not a `file:` URL.",
 				examples: [
 					'import { file } from "maligator:fs";\n\nconst settings = file("settings.json");\nif (await settings.exists()) console.log(await settings.json());\nawait file("out/report.txt").write("done\\n", { atomic: true, createDirectories: true });',
+					'import { file } from "maligator:fs";\n\nawait using output = file("copy.bin").writer();\nfor await (const chunk of file("input.bin").stream()) await output.write(chunk);',
 				],
 				contract: {
 					phase: "runtime",
@@ -1304,6 +1333,15 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 					effects: EVERY_EFFECT_SUMMARY,
 				},
 			},
+			workerExport(
+				"watch",
+				"(path: FilePath, options?: WatchOptions) => AsyncIterableIterator<FileChange>",
+				"Watch a file or directory using an async iterator. The first `next()` starts the watch. Breaking out of the loop, calling `return()`, or aborting the signal closes it.",
+				false,
+				[
+					'import { watch } from "maligator:fs";\n\nfor await (const change of watch("inbox", { recursive: true })) {\n  console.log(change.kind, change.path);\n  if (change.kind === "create") break;\n}',
+				],
+			),
 			{
 				name: "FileSystemError",
 				type: {
@@ -1386,6 +1424,97 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 				"removeDirectory",
 				"(path: string, recursive: boolean) => Promise<void>",
 				"Remove a directory, with its contents when requested.",
+			),
+		],
+	},
+	{
+		kind: "native",
+		id: "maligator:internal/fs-descriptor",
+		internal: true,
+		stability: "experimental",
+		evaluation: "side-effect-free",
+		installer: "mal_host_install_maligator_internal_fs_descriptor",
+		declarationFile: "fs/descriptor-host-api.d.ts",
+		description: "Descriptor operations for incremental I/O on the blocking-work pool.",
+		types: [
+			workerType(
+				"Descriptor",
+				"{ readonly __descriptor: unique symbol }",
+				"An opaque, GC-owned file descriptor.",
+			),
+		],
+		exports: [
+			workerExport(
+				"openDescriptor",
+				"(path: string, access: 0 | 1 | 2, createDirectories: boolean, mode: number | undefined) => Promise<Descriptor>",
+				"Open a descriptor for reading, writing, or appending.",
+			),
+			workerExport(
+				"readChunk",
+				"(path: string, descriptor: Descriptor, offset: number, length: number) => Promise<Uint8Array<ArrayBuffer> | undefined>",
+				"Read up to length bytes, or return undefined at EOF.",
+			),
+			workerExport(
+				"writeChunk",
+				"(path: string, descriptor: Descriptor, data: string | ArrayBufferView | ArrayBuffer) => Promise<number>",
+				"Write the chunk in full at the descriptor's current write position.",
+			),
+			workerExport(
+				"flushDescriptor",
+				"(path: string, descriptor: Descriptor) => Promise<void>",
+				"Sync an open descriptor to disk.",
+			),
+			workerExport(
+				"closeDescriptor",
+				"(path: string, descriptor: Descriptor) => Promise<void>",
+				"Close an open descriptor.",
+			),
+		],
+	},
+	{
+		kind: "native",
+		id: "maligator:internal/fs-stream",
+		internal: true,
+		stability: "experimental",
+		evaluation: "side-effect-free",
+		installer: "mal_host_install_maligator_internal_fs_stream",
+		declarationFile: "fs/stream-host-api.d.ts",
+		description: "The filesystem's access to the runtime's readable stream constructor.",
+		types: [],
+		exports: [
+			workerExport(
+				"readableStream",
+				"(source: UnderlyingDefaultSource<Uint8Array<ArrayBuffer>>, strategy: QueuingStrategy<Uint8Array<ArrayBuffer>>) => ReadableStream<Uint8Array<ArrayBuffer>>",
+				"Create a readable stream without installing web globals.",
+			),
+		],
+	},
+	{
+		kind: "native",
+		id: "maligator:internal/fs-watch",
+		internal: true,
+		stability: "experimental",
+		evaluation: "side-effect-free",
+		installer: "mal_host_install_maligator_internal_fs_watch",
+		declarationFile: "fs/watch-host-api.d.ts",
+		description: "Reactor-backed filesystem change notifications.",
+		types: [
+			workerType(
+				"WatchListener",
+				'(kind: "create" | "modify" | "delete" | "rename" | "error", path: string, failure?: unknown) => void',
+				"The listener identifies its watch until it is stopped.",
+			),
+		],
+		exports: [
+			workerExport(
+				"openWatch",
+				"(path: string, recursive: boolean, listener: WatchListener) => void",
+				"Register change notifications on the reactor.",
+			),
+			workerExport(
+				"closeWatch",
+				"(listener: WatchListener) => void",
+				"Stop change notifications and close the watch.",
 			),
 		],
 	},

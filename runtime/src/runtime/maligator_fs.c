@@ -206,18 +206,19 @@ static void fs_write_atomic(FsJob *job) {
     free(resolved);
 }
 
+int mal_fs_create_parents(const char *path, char **directory) {
+    usize length = fs_directory_length(path);
+    if (length == 0) return 0;
+    *directory = strndup(path, length);
+    return *directory == nullptr ? ENOMEM : mal_posix_fs_mkdir(*directory, true);
+}
+
 static void fs_write(FsJob *job) {
-    usize directory = fs_directory_length(job->path);
-    if ((job->flags & FS_WRITE_CREATE_DIRECTORIES) != 0 && directory > 0) {
-        job->directory = strndup(job->path, directory);
-        if (job->directory == nullptr) {
-            fs_fail(job, ENOMEM, "mkdir");
-            return;
-        }
-        int error = mal_posix_fs_mkdir(job->directory, true);
+    if ((job->flags & FS_WRITE_CREATE_DIRECTORIES) != 0) {
+        int error = mal_fs_create_parents(job->path, &job->directory);
         if (error != 0) {
             fs_fail(job, error, "mkdir");
-            job->error_path = job->directory;
+            if (job->directory != nullptr) job->error_path = job->directory;
             return;
         }
     }
@@ -331,7 +332,7 @@ static MalValue fs_string(MalVm *vm, const char *text) {
 
 /* `{ code, description, syscall, path, destination }`, which the source module turns
  * into a FileSystemError. */
-static MalValue fs_failure(
+MalValue mal_fs_failure(
     MalVm *vm, int error, const char *syscall, const char *path, const char *destination) {
     const char *names[] = {"code", "description", "syscall", "path", "destination"};
     const char *texts[] = {mal_posix_fs_errno_name(error), mal_posix_errno_description(error),
@@ -363,17 +364,16 @@ static MalValue fs_stat_result(MalVm *vm, const MalPosixStat *status) {
     return result;
 }
 
-static MalValue fs_bytes_result(MalVm *vm, FsJob *job) {
-    if (job->length > UINT32_MAX) {
+MalValue mal_fs_take_bytes(MalVm *vm, byte *bytes, usize length) {
+    if (length > UINT32_MAX) {
+        free(bytes);
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
             (const byte *) "File is too large for an ArrayBuffer");
         return mal_value_new_undefined();
     }
-    byte *bytes = job->bytes;
-    job->bytes = nullptr;
     MalArrayBufferObject *buffer = mal_array_buffer_object_adopt(&vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
-        bytes, (u32) job->length, false);
+        bytes, (u32) length, false);
     if (buffer == nullptr) {
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
@@ -383,7 +383,7 @@ static MalValue fs_bytes_result(MalVm *vm, FsJob *job) {
     mal_gc_root(&root, roots, 1);
     MalTypedArrayObject *view = mal_typed_array_object_new(&vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]),
-        buffer, MAL_TA_UINT8, 0, (u32) job->length, false);
+        buffer, MAL_TA_UINT8, 0, (u32) length, false);
     mal_gc_unroot(&root);
     if (view == nullptr) {
         mal_vm_throw_allocation_error(vm);
@@ -450,7 +450,11 @@ static MalValue fs_job_result(MalVm *vm, FsJob *job) {
         case FS_EXISTS: return mal_value_new_boolean(job->exists);
         case FS_STAT:
         case FS_LSTAT: return fs_stat_result(vm, &job->stat);
-        case FS_READ_BYTES: return fs_bytes_result(vm, job);
+        case FS_READ_BYTES: {
+            byte *bytes = job->bytes;
+            job->bytes = nullptr;
+            return mal_fs_take_bytes(vm, bytes, job->length);
+        }
         case FS_READ_TEXT: return fs_text_result(vm, job);
         case FS_WRITE: return mal_value_from_f64((f64) job->length);
         case FS_LIST: return fs_list_result(vm, job);
@@ -470,10 +474,10 @@ static void fs_job_settle(
     MalValue result;
     bool failed = true;
     if (cancelled || job == nullptr) {
-        result = fs_failure(vm, ECANCELED, fs_operation_syscall((FsOperation) tag), nullptr, nullptr);
+        result = mal_fs_failure(vm, ECANCELED, fs_operation_syscall((FsOperation) tag), nullptr, nullptr);
     } else if (job->error != 0) {
         bool two_paths = job->operation == FS_COPY || job->operation == FS_MOVE;
-        result = fs_failure(vm, job->error, job->syscall, job->error_path,
+        result = mal_fs_failure(vm, job->error, job->syscall, job->error_path,
             two_paths ? job->destination : nullptr);
     } else {
         result = fs_job_result(vm, job);
@@ -510,7 +514,7 @@ static MalValue fs_start(MalVm *vm, FsJob *job) {
         mal_blocking_work_reservation_release(&reservation);
         if (started == MAL_BLOCKING_JOB_NO_MEMORY) mal_vm_throw_allocation_error(vm);
         else {
-            MalValue failure = fs_failure(vm, EAGAIN, fs_operation_syscall(job->operation),
+            MalValue failure = mal_fs_failure(vm, EAGAIN, fs_operation_syscall(job->operation),
                 job->path, job->destination);
             if (vm->completion.kind != MAL_COMPLETION_THROW)
                 mal_promise_reject(vm, mal_value_to_promise_object(promise), failure);
@@ -521,8 +525,7 @@ static MalValue fs_start(MalVm *vm, FsJob *job) {
     return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : promise;
 }
 
-static char *fs_path(MalVm *vm, const MalValue *args, i32 argc, i32 index) {
-    MalValue value = index < argc ? args[index] : mal_value_new_undefined();
+char *mal_fs_path(MalVm *vm, MalValue value) {
     if (!mal_value_is_string(value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, (const byte *) "path must be a string");
         return nullptr;
@@ -555,7 +558,7 @@ static FsJob *fs_job_new(MalVm *vm, FsOperation operation, const MalValue *args,
         return nullptr;
     }
     job->operation = operation;
-    job->path = fs_path(vm, args, argc, 0);
+    job->path = mal_fs_path(vm, argc > 0 ? args[0] : mal_value_new_undefined());
     if (job->path == nullptr) {
         fs_job_free(job);
         return nullptr;
@@ -567,7 +570,7 @@ static FsJob *fs_job_new(MalVm *vm, FsOperation operation, const MalValue *args,
 static MalValue fs_media_type(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self; (void) nt; (void) callee;
-    char *path = fs_path(vm, args, argc, 0);
+    char *path = mal_fs_path(vm, argc > 0 ? args[0] : mal_value_new_undefined());
     if (path == nullptr) return mal_value_new_undefined();
     MalValue type = fs_string(vm, mal_asset_media_type(path));
     free(path);
@@ -600,10 +603,10 @@ static MalValue fs_read(
 }
 
 /* Copy the bytes to write, so the worker never reads a buffer JavaScript can detach. */
-static bool fs_data(MalVm *vm, MalValue data, FsJob *job) {
+bool mal_fs_copy_data(MalVm *vm, MalValue data, byte **bytes, usize *length) {
     if (mal_value_is_string(data)) {
-        job->bytes = mal_string_to_utf8(mal_value_to_string(data), &job->length);
-        if (job->bytes == nullptr && job->length > 0) {
+        *bytes = mal_string_to_utf8(mal_value_to_string(data), length);
+        if (*bytes == nullptr && *length > 0) {
             mal_vm_throw_allocation_error(vm);
             return false;
         }
@@ -623,14 +626,14 @@ static bool fs_data(MalVm *vm, MalValue data, FsJob *job) {
                 (const byte *) "write data must be a string, an ArrayBuffer or an ArrayBufferView");
             return false;
     }
-    job->length = span.length;
+    *length = span.length;
     if (span.length == 0) return true;
-    job->bytes = malloc(span.length);
-    if (job->bytes == nullptr) {
+    *bytes = malloc(span.length);
+    if (*bytes == nullptr) {
         mal_vm_throw_allocation_error(vm);
         return false;
     }
-    mal_buffer_source_span_read(&span, 0, job->bytes, span.length);
+    mal_buffer_source_span_read(&span, 0, *bytes, span.length);
     return true;
 }
 
@@ -640,7 +643,7 @@ static MalValue fs_write_file(
     (void) self; (void) nt; (void) callee;
     FsJob *job = fs_job_new(vm, FS_WRITE, args, argc);
     if (job == nullptr) return mal_value_new_undefined();
-    if (!fs_data(vm, argc > 1 ? args[1] : mal_value_new_undefined(), job)) {
+    if (!mal_fs_copy_data(vm, argc > 1 ? args[1] : mal_value_new_undefined(), &job->bytes, &job->length)) {
         fs_job_free(job);
         return mal_value_new_undefined();
     }
@@ -662,7 +665,7 @@ static MalValue fs_transfer(
     MalVm *vm, FsOperation operation, const MalValue *args, i32 argc) {
     FsJob *job = fs_job_new(vm, operation, args, argc);
     if (job == nullptr) return mal_value_new_undefined();
-    job->destination = fs_path(vm, args, argc, 1);
+    job->destination = mal_fs_path(vm, argc > 1 ? args[1] : mal_value_new_undefined());
     if (job->destination == nullptr) {
         fs_job_free(job);
         return mal_value_new_undefined();
@@ -702,7 +705,7 @@ static bool fs_read_patterns(MalVm *vm, MalValue list, FsPatterns *patterns, usi
     for (u32 i = 0; i < length; i++) {
         MalValue value;
         if (!mal_vm_get_property(vm, list, mal_key_index(i), &value)) return false;
-        char *pattern = fs_path(vm, &value, 1, 0);
+        char *pattern = mal_fs_path(vm, value);
         if (pattern == nullptr) return false;
         patterns->values[patterns->count++] = pattern;
         *footprint += strlen(pattern) + 1;

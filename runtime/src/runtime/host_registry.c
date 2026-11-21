@@ -77,6 +77,9 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_maligator_application);
     MATCH_INSTALLER(mal_host_install_maligator_assets);
     MATCH_INSTALLER(mal_host_install_maligator_internal_fs);
+    MATCH_INSTALLER(mal_host_install_maligator_internal_fs_descriptor);
+    MATCH_INSTALLER(mal_host_install_maligator_internal_fs_stream);
+    MATCH_INSTALLER(mal_host_install_maligator_internal_fs_watch);
 #if MAL_WEB_PLATFORM
     // Serving needs the Fetch API objects only the web surface links.
     MATCH_INSTALLER(mal_host_install_maligator_internal_http);
