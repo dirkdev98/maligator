@@ -191,14 +191,9 @@ describe("prepared platform execution data", () => {
 		});
 		const wire = path.join(root, "supervisor.wire");
 		writeFileSync(wire, serializeRuntimeImage(control.runtime));
-		const assets = path.join(root, "supervisor.mala");
-		const emptyManifest = Buffer.alloc(12);
-		emptyManifest.write("MALA");
-		emptyManifest.writeUInt32LE(1, 4);
-		writeFileSync(assets, emptyManifest);
 		const result = spawnSync(
 			runner,
-			["--maligator-internal-run-wires-assets", "1", assets, entryPath, wire],
+			["--maligator-internal-run-wires", "1", entryPath, wire],
 			{
 				encoding: "utf8",
 				timeout: 30_000,

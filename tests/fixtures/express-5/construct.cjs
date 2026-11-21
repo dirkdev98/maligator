@@ -4,6 +4,9 @@
 
 const net = require("net");
 const canonicalNet = require("node:net");
+// The driver checks every companion module, so the fixture installs os itself.
+const os = require("os");
+const canonicalOs = require("node:os");
 const http = require("http");
 const canonicalHttp = require("node:http");
 const querystring = require("querystring");
@@ -22,6 +25,7 @@ parsed.pathname += "/";
 
 const checks = [
 	net === canonicalNet,
+	os === canonicalOs,
 	http === canonicalHttp,
 	querystring === canonicalQuerystring,
 	url === canonicalUrl,

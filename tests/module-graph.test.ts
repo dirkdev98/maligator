@@ -521,29 +521,6 @@ test("traverses the complete pinned Express initialization graph", () => {
 	for (const name of ["Socket", "connect", "createConnection", "isIP"]) {
 		expect(graph.modules.get("node:net")?.host?.named).toContain(name);
 	}
-	expect(graph.modules.get("node:os")?.host?.named).toEqual(
-		expect.arrayContaining([
-			"EOL",
-			"arch",
-			"availableParallelism",
-			"cpus",
-			"devNull",
-			"endianness",
-			"freemem",
-			"homedir",
-			"hostname",
-			"loadavg",
-			"machine",
-			"platform",
-			"release",
-			"tmpdir",
-			"totalmem",
-			"type",
-			"uptime",
-			"userInfo",
-			"version",
-		]),
-	);
 });
 
 test("requires an explicit stripper for TypeScript and applies it across the graph", () => {

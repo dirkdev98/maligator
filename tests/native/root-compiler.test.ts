@@ -135,8 +135,6 @@ it(
 			} finally {
 				await roots.close();
 			}
-			const assets = path.join(directory, "empty.mala");
-			writeFileSync(assets, Buffer.from([77, 65, 76, 65, 1, 0, 0, 0, 0, 0, 0, 0]));
 			const bootstrap = compileEntrypoint(path.join(fixtures, "bootstrap.mts"), {
 				buildConfig: hostConfig,
 				stripTypes: stripCompactTypes,
@@ -158,7 +156,7 @@ it(
 					toolchainBridge: true,
 				}),
 			}).binaryPath;
-			const result = spawnSync(binary, [ownerWire, workerManifest, assets, entry], {
+			const result = spawnSync(binary, [ownerWire, workerManifest, entry], {
 				encoding: "utf8",
 				timeout: scaledNativeRunTimeoutMs(90_000, process.env),
 				killSignal: "SIGKILL",
