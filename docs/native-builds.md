@@ -24,9 +24,10 @@ checkout and without Node.js. `npm run selfhost:cli` exercises that transfer pat
 ## Packaged runtime archives
 
 Each npm platform package includes machine-code archives for the default
-development flavour, with locked primordials and realms disabled. The CLI looks
-beside its installed binary for `runtime-libraries/manifest.json` when a
-development build needs to link a runner or application. The manifest key covers
+development flavour, with locked primordials and realms disabled. The launcher
+passes the platform package's `runtime-libraries` directory to the native CLI
+and its compiler workers. A development build reads the manifest when it needs
+to link a runner or application. The manifest key covers
 the C and Rust sources, target and ABI baseline, compile flags, and pinned Zig
 producer. It is independent of the consumer's tool paths and `PATH`.
 

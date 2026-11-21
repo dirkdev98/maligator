@@ -9,7 +9,7 @@ import type {
 import { maligatorCacheDirectory } from "./cache-root.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
 import { requireToolchain } from "./toolchain.ts";
-import type { Toolchain } from "./toolchain.ts";
+import type { Toolchain, ToolExecutable } from "./toolchain.ts";
 
 export interface BuildCacheEvent {
 	artifact: "runtime" | "rust" | "binary";
@@ -20,6 +20,8 @@ export interface BuildCacheEvent {
 export interface NativeBuildPhaseEvent {
 	phase:
 		| "runtime"
+		| "runtime prebuilt"
+		| "runtime local build"
 		| "runtime C projection"
 		| "runtime C object reuse"
 		| "runtime C object compile"
@@ -27,6 +29,8 @@ export interface NativeBuildPhaseEvent {
 		| "runtime C · host"
 		| "runtime C · runtime"
 		| "rust"
+		| "rust prebuilt"
+		| "rust local build"
 		| "write generated C"
 		| "generated C projection"
 		| "generated C objects"
@@ -60,6 +64,7 @@ export interface NativeBuildContext {
 	readonly cacheDirectory: string;
 	readonly features: Readonly<NativeFeatureSpec>;
 	readonly toolchain: Toolchain;
+	readonly runtimeObjectCompiler?: ToolExecutable;
 	readonly plan: NativeBuildPlan;
 	readonly compilerBake?: Readonly<CompilerBakeInput>;
 	readonly environment: Readonly<NodeJS.ProcessEnv>;
@@ -77,6 +82,8 @@ export interface NativeBuildContextOptions {
 	cacheDirectory?: string;
 	features?: NativeFeatureInput | NativeFeatureSpec;
 	toolchain?: Toolchain;
+	/** The release producer uses Zig's Clang driver for already-preprocessed C. */
+	runtimeObjectCompiler?: ToolExecutable;
 	plan?: NativeBuildPlan;
 	production?: boolean;
 	/** Rust target triple. Explicit targets are cross-built through Zig. */
@@ -179,6 +186,40 @@ export function nativeBuildEnvironmentFingerprint(env: NodeJS.ProcessEnv): strin
 	return hash("sha256", JSON.stringify(filtered), "hex");
 }
 
+function withMacosDeploymentTarget(
+	toolchain: Toolchain,
+	environment: NodeJS.ProcessEnv,
+): Toolchain {
+	const version = environment.MACOSX_DEPLOYMENT_TARGET;
+	if (
+		toolchain.cross !== true ||
+		toolchain.platform !== "darwin" ||
+		toolchain.zigTarget?.includes(".") ||
+		!version
+	)
+		return toolchain;
+
+	// Zig forwards preprocessed C to Clang, which needs the deployment flag for
+	// its unversioned Darwin target to support thread-local storage.
+	const flag = `-mmacosx-version-min=${version}`;
+	const withFlag = (tool: ToolExecutable): ToolExecutable => ({
+		...tool,
+		args: [...(tool.args ?? []), flag],
+	});
+	const fingerprint = (base: string): string =>
+		hash("sha256", JSON.stringify([base, flag]), "hex");
+	return {
+		...toolchain,
+		tools: {
+			...toolchain.tools,
+			cc: withFlag(toolchain.tools.cc),
+			cxx: toolchain.tools.cxx === undefined ? undefined : withFlag(toolchain.tools.cxx),
+		},
+		fingerprint: fingerprint(toolchain.fingerprint),
+		ccFingerprint: fingerprint(toolchain.ccFingerprint),
+	};
+}
+
 /** Resolve native defaults once and freeze the values consumed by every backend stage. */
 export function resolveNativeBuildContext(
 	options: NativeBuildContextOptions = {},
@@ -196,7 +237,7 @@ export function resolveNativeBuildContext(
 		cDefines: Object.freeze([...normalizedFeatures.cDefines]),
 		cargoFeatures: Object.freeze([...normalizedFeatures.cargoFeatures]),
 	}) as Readonly<NativeFeatureSpec>;
-	const toolchain =
+	const selectedToolchain =
 		options.toolchain ??
 		requireToolchain({
 			env: baseEnvironment,
@@ -204,6 +245,7 @@ export function resolveNativeBuildContext(
 			rustDir: path.join(runtimeDirectory, "rust"),
 			target: options.target,
 		});
+	const toolchain = withMacosDeploymentTarget(selectedToolchain, baseEnvironment);
 	const environment = Object.freeze({
 		...baseEnvironment,
 		...(toolchain.environmentOverrides ?? {}),
@@ -228,6 +270,7 @@ export function resolveNativeBuildContext(
 		cacheDirectory,
 		features,
 		toolchain,
+		runtimeObjectCompiler: options.runtimeObjectCompiler,
 		plan,
 		compilerBake,
 		environment,

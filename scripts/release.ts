@@ -14,9 +14,18 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
+import {
+	PREBUILT_RUNTIME_DIRECTORY,
+	PREBUILT_RUNTIME_MANIFEST,
+	PREBUILT_RUNTIME_OVERRIDE,
+	prebuiltRuntimeCxxLibraries,
+	readPrebuiltRuntime,
+	RELEASE_MACOS_VERSION,
+} from "../src/prebuilt-runtime.ts";
 import { buildProductCli } from "../src/product-builder.ts";
 import { clangMajorVersion, resolvePathExecutable } from "../src/toolchain.ts";
 import { requireHeapLimit } from "./heap-limit.ts";
+import { prebuildRuntime } from "./prebuild-runtime.ts";
 import { createReleaseArchive } from "./release-archive.ts";
 import { nextAlphaVersion } from "./release-version.ts";
 
@@ -259,6 +268,19 @@ function copyLicenses(directory: string): void {
 	}
 }
 
+export function createPlatformPackageJson(
+	version: string,
+	target: (typeof targets)[number],
+): PackageJson {
+	return {
+		...commonPackageFields(target.packageName, version),
+		os: [target.platform],
+		cpu: [target.arch],
+		files: ["bin/maligator", PREBUILT_RUNTIME_DIRECTORY, ...LICENSE_FILES],
+		bin: { maligator: "bin/maligator" },
+	};
+}
+
 function stagePlatformPackage(
 	target: (typeof targets)[number],
 	version: string,
@@ -270,13 +292,10 @@ function stagePlatformPackage(
 	copyFileSync(path.join(artifactDirectory, "bin/maligator"), binaryPath);
 	chmodSync(binaryPath, 0o755);
 	copyLicenses(directory);
-	writeJson(path.join(directory, "package.json"), {
-		...commonPackageFields(target.packageName, version),
-		os: [target.platform],
-		cpu: [target.arch],
-		files: ["bin/maligator", ...LICENSE_FILES],
-		bin: { maligator: "bin/maligator" },
-	});
+	writeJson(
+		path.join(directory, "package.json"),
+		createPlatformPackageJson(version, target),
+	);
 	return directory;
 }
 
@@ -349,15 +368,23 @@ function buildRelease(args: Array<string>): void {
 		releaseLog(`${prefix} build started`);
 		const rootName = releaseRootName(version, target);
 		const artifactDirectory = path.join(releaseRoot, "artifacts", rootName);
-		buildProductCli({
-			repositoryRoot,
-			outDir: path.join(releaseRoot, "build", target.rust),
-			name: "maligator",
-			target: target.rust,
-			production: true,
-			artifactDirectory,
-			onProgress: (message) => releaseLog(`${prefix} ${message}`),
-		});
+		const deploymentTarget = process.env.MACOSX_DEPLOYMENT_TARGET;
+		if (target.platform === "darwin")
+			process.env.MACOSX_DEPLOYMENT_TARGET = RELEASE_MACOS_VERSION;
+		try {
+			buildProductCli({
+				repositoryRoot,
+				outDir: path.join(releaseRoot, "build", target.rust),
+				name: "maligator",
+				target: target.rust,
+				production: true,
+				artifactDirectory,
+				onProgress: (message) => releaseLog(`${prefix} ${message}`),
+			});
+		} finally {
+			if (deploymentTarget === undefined) delete process.env.MACOSX_DEPLOYMENT_TARGET;
+			else process.env.MACOSX_DEPLOYMENT_TARGET = deploymentTarget;
+		}
 		releaseLog(`${prefix} creating deterministic archive`);
 		createReleaseArchive(
 			artifactDirectory,
@@ -365,7 +392,12 @@ function buildRelease(args: Array<string>): void {
 			rootName,
 		);
 		releaseLog(`${prefix} staging ${target.packageName}`);
-		stagePlatformPackage(target, version, artifactDirectory);
+		const platformPackage = stagePlatformPackage(target, version, artifactDirectory);
+		prebuildRuntime(
+			target.rust,
+			path.join(platformPackage, PREBUILT_RUNTIME_DIRECTORY),
+			(message) => releaseLog(`${prefix} ${message}`),
+		);
 		releaseLog(
 			`${prefix} complete in ${formatDuration(performance.now() - targetStartedAt)}`,
 		);
@@ -398,10 +430,16 @@ function assembleRelease(args: Array<string>): void {
 	const selected = selectedTargets(args);
 	for (const target of selected) {
 		const rootName = releaseRootName(version, target);
+		const platformPackage = path.join(
+			releaseRoot,
+			"npm",
+			target.packageName.split("/")[1]!,
+		);
 		const missing = [
 			path.join(releaseRoot, "artifacts", rootName, "bin/maligator"),
 			path.join(releaseRoot, "artifacts", `${rootName}.tar.gz`),
-			path.join(releaseRoot, "npm", target.packageName.split("/")[1]!, "bin/maligator"),
+			path.join(platformPackage, "bin/maligator"),
+			path.join(platformPackage, PREBUILT_RUNTIME_DIRECTORY, PREBUILT_RUNTIME_MANIFEST),
 		].filter((file) => !existsSync(file));
 		if (missing.length > 0) {
 			throw new Error(
@@ -638,17 +676,52 @@ function smokePackedLauncher(
 			stdio: "pipe",
 			env: npmEnvironment(),
 		});
-		const output = execFileSync(
-			path.join(project, "node_modules/.bin/maligator"),
-			["--version"],
-			{
-				cwd: project,
-				encoding: "utf-8",
-			},
-		);
+		const launcher = path.join(project, "node_modules/.bin/maligator");
+		const output = execFileSync(launcher, ["--version"], {
+			cwd: project,
+			encoding: "utf-8",
+		});
 		if (output.trim() !== version) {
 			throw new Error(`packed launcher reported ${output.trim()}, expected ${version}`);
 		}
+		writeFileSync(
+			path.join(project, "maligator.build.ts"),
+			"export default { surface: { node: true, webPlatform: true } };\n",
+		);
+		writeFileSync(
+			path.join(project, "main.mts"),
+			'import { createServer } from "node:http";\n' +
+				'console.log(typeof createServer, new URL("http://localhost/").hostname);\n',
+		);
+		const env: NodeJS.ProcessEnv = {
+			...process.env,
+			MALIGATOR_CACHE_DIR: path.join(project, "native-cache"),
+			MALIGATOR_CACHE_MAINTENANCE: "off",
+		};
+		delete env[PREBUILT_RUNTIME_OVERRIDE];
+		const build = spawnSync(launcher, ["build", "--verbose", "main.mts"], {
+			cwd: project,
+			env,
+			encoding: "utf8",
+			maxBuffer: 16 * 1024 * 1024,
+		});
+		if (build.error !== undefined) throw build.error;
+		if (
+			build.status !== 0 ||
+			!build.stderr.includes("Native phase · runtime prebuilt:") ||
+			!build.stderr.includes("Native phase · rust prebuilt:")
+		)
+			throw new Error(
+				`packed launcher did not link its prebuilt runtime\n${build.stderr.slice(-16_384)}`,
+			);
+		const builtOutput = execFileSync(build.stdout.trim(), [], {
+			cwd: project,
+			encoding: "utf8",
+		});
+		if (builtOutput.trim() !== "function localhost")
+			throw new Error(
+				`packed launcher built an application reporting ${builtOutput.trim()}`,
+			);
 	} finally {
 		rmSync(project, { recursive: true, force: true });
 	}
@@ -683,7 +756,24 @@ function packRelease(args: Array<string>): void {
 		if (!existsSync(directory)) {
 			throw new Error("build the complete target matrix before packing");
 		}
-		const packed = packDirectory(directory, packs, [...LICENSE_FILES, "bin/maligator"]);
+		const bundle = readPrebuiltRuntime(
+			path.join(directory, PREBUILT_RUNTIME_DIRECTORY),
+			target.rust,
+		);
+		if (bundle === undefined)
+			throw new Error(`invalid prebuilt runtime for ${target.rust}`);
+		const runtimeFiles = [
+			PREBUILT_RUNTIME_MANIFEST,
+			...bundle.manifest.files.map(({ name }) => name),
+			...prebuiltRuntimeCxxLibraries(target.rust).map(
+				({ license }) => `LICENSE.${license}`,
+			),
+		].map((file) => `${PREBUILT_RUNTIME_DIRECTORY}/${file}`);
+		const packed = packDirectory(directory, packs, [
+			...LICENSE_FILES,
+			"bin/maligator",
+			...runtimeFiles,
+		]);
 		platformTarballs.set(target.rust, packed);
 		packedPackages.push({
 			name: target.packageName,

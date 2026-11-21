@@ -51,7 +51,7 @@ jobs:
       - name: Check the runner environment
         run: npm run env:check -- --json
 
-      - name: Build the release target
+      - name: Build the release target and development runtime archives
         run: npm run release:build -- --target ${{ matrix.target }}
 
       - name: Archive the target build

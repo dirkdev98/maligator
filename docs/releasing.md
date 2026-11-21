@@ -40,10 +40,23 @@ crate has no license text; a crate that publishes none gets its repository's
 
 The `Prepare release packages` GitHub Actions workflow is the preferred packaging
 path. Dispatch it on the exact release commit. It cross-builds each of the four
-targets in its own macOS ARM job, assembles and packs them in one workspace, executes
-the native binary and installed npm launcher on every supported host, and retains
-the validated tarballs plus `packages.json` for seven days. The intermediate
-per-target builds and workspace are deleted after the smoke matrix passes.
+targets in its own macOS ARM job, including the development runtime archives for
+its platform package. It assembles and packs them in one workspace. The smoke
+matrix executes the native binary and builds an application with the archives
+from the installed package on each host. The workflow retains the validated
+tarballs and `packages.json` for seven days and deletes the intermediate builds
+and workspace after the smoke matrix passes.
+
+Build just the development archives with the same Zig version pinned in the
+workflow. The Rust toolchain needs the target's standard library installed.
+
+```shell
+npm run release:prebuild-runtime -- --target aarch64-apple-darwin
+```
+
+The command writes to `.cache/prebuilt-runtime/<rust-triple>` unless you pass
+`--out <directory>`. The manifest records the portable key and each archive's
+SHA-256 digest and size.
 
 ## Create the GitHub release
 

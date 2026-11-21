@@ -17,9 +17,16 @@ import {
 	hashDirectoryTrees,
 	hashDirectoryTreesCached,
 	legacyLocaleNameComparator,
+	lexicalNameComparator,
 } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
 import { runNativeCommand } from "./native-command.ts";
+import {
+	importPrebuiltRuntimeAction,
+	NATIVE_OUTPUT_PREFIX,
+	RUST_LIBRARY_OUTPUT,
+} from "./prebuilt-runtime.ts";
+import type { PrebuiltRuntime } from "./prebuilt-runtime.ts";
 import { formatToolCommand, toolArguments } from "./toolchain.ts";
 import { buildWorkerCount } from "./worker-budget.ts";
 
@@ -43,11 +50,15 @@ export function rustSourceDigest(rustDirectory: string): string {
 	return hashDirectoryTrees(rustSourceHashOptions(rustRoot));
 }
 
-function cachedRustSourceDigest(rustDirectory: string, cacheDirectory: string): string {
+function cachedRustSourceDigest(
+	rustDirectory: string,
+	cacheDirectory: string,
+	compareNames = legacyLocaleNameComparator,
+): string {
 	const rustRoot = path.resolve(rustDirectory);
 	const rootKey = hash("sha256", rustRoot, "hex").slice(0, 16);
 	return hashDirectoryTreesCached(
-		rustSourceHashOptions(rustRoot),
+		{ ...rustSourceHashOptions(rustRoot), compareNames },
 		path.join(cacheDirectory, "source-digests", `rust-${rootKey}.json`),
 		"rust-source-v1",
 	).digest;
@@ -66,10 +77,16 @@ export function rustArtifactKey(inputs: RustArtifactKeyInputs): string {
 	return artifactActionKey(RUST_PRODUCER, inputs);
 }
 
-const RUST_PRODUCER = artifactProducer("rust-library", 2, "cargo-build");
+export const RUST_PRODUCER = artifactProducer("rust-library", 2, "cargo-build");
 const RUST_TARGET_PRODUCER = artifactProducer("rust-target", 1, "cargo-build");
-const RUST_LIBRARY_OUTPUT = "libmal_rust.a";
-const NATIVE_OUTPUT_PREFIX = "native.";
+
+export function portableRustSourceDigest(context: NativeBuildContext): string {
+	return cachedRustSourceDigest(
+		path.join(context.runtimeDirectory, "rust"),
+		context.cacheDirectory,
+		lexicalNameComparator,
+	);
+}
 
 /**
  * Build-script libraries that leave the Rust archive and link only when one of
@@ -95,6 +112,7 @@ export interface RustBuildPlan {
 
 /** A build-script static library published beside the Rust archive. */
 export interface RustNativeComponent {
+	name: string;
 	packageName: string;
 	library: string;
 }
@@ -190,12 +208,14 @@ function resolvedRustArtifacts(
 	context: NativeBuildContext,
 	plan: RustBuildPlan,
 	action: RustLibraryAction,
+	prebuilt = false,
 ): RustArtifacts {
 	const library = artifactOutput(action, RUST_LIBRARY_OUTPUT).path;
 	const nativeComponents = action.outputs.flatMap((output) =>
 		output.name.startsWith(NATIVE_OUTPUT_PREFIX)
 			? [
 					{
+						name: output.name,
 						packageName: output.name.slice(NATIVE_OUTPUT_PREFIX.length).split(".")[0]!,
 						library: output.path,
 					},
@@ -211,14 +231,22 @@ function resolvedRustArtifacts(
 		linkEveryComponent ||
 		(NATIVE_COMPONENT_FEATURES[packageName]?.some((feature) => features.has(feature)) ??
 			false);
+	const componentLibraries = nativeComponents
+		.filter(selected)
+		.map((item) => item.library);
+	const linkCxx = linkEveryComponent || features.has("url");
+	// Zig's Ada archive uses the bundled libc++ ABI even if the host links libstdc++.
+	const groupComponents = prebuilt && linkCxx && context.toolchain.platform === "linux";
 	return {
 		...plan,
 		library,
 		nativeComponents,
 		linkArgs: [
 			library,
-			...nativeComponents.filter(selected).map((component) => component.library),
-			...(linkEveryComponent || features.has("url") ? cxxLinkArgs : []),
+			...(groupComponents ? ["-Wl,--start-group"] : []),
+			...componentLibraries,
+			...(groupComponents ? ["-Wl,--end-group"] : []),
+			...(linkCxx && !prebuilt ? cxxLinkArgs : []),
 			...sectionGcLinkArgs,
 			...platformLinkArgs(
 				context.toolchain.platform ?? process.platform,
@@ -346,6 +374,7 @@ function separateNativeComponents(
 export function ensureRustArtifacts(
 	context: NativeBuildContext,
 	verbose = false,
+	bundle?: PrebuiltRuntime,
 ): RustArtifacts {
 	if (context.toolchain.tools.cxx === undefined) {
 		throw new Error(
@@ -354,15 +383,39 @@ export function ensureRustArtifacts(
 	}
 	const startedAt = performance.now();
 	const plan = resolveRustArtifacts(context);
-	const cached = readArtifactAction(
+	const local = readArtifactAction(
 		context.cacheDirectory,
 		"rust-library",
 		RUST_PRODUCER,
 		plan.cacheKey,
 	);
+	const prebuilt =
+		local === undefined && bundle !== undefined
+			? importPrebuiltRuntimeAction(
+					context.cacheDirectory,
+					"rust-library",
+					RUST_PRODUCER,
+					plan.cacheKey,
+					bundle,
+				)
+			: undefined;
+	const cached = local ?? prebuilt;
 	if (cached !== undefined) {
-		const artifacts = resolvedRustArtifacts(context, plan, cached);
+		const artifacts = resolvedRustArtifacts(
+			context,
+			plan,
+			cached,
+			prebuilt !== undefined,
+		);
 		context.onCacheEvent?.({ artifact: "rust", hit: true, path: artifacts.library });
+		if (prebuilt !== undefined) {
+			context.onBuildPhase?.({
+				phase: "rust prebuilt",
+				durationMs: performance.now() - startedAt,
+				cache: "hit",
+				path: artifacts.library,
+			});
+		}
 		context.onBuildPhase?.({
 			phase: "rust",
 			durationMs: performance.now() - startedAt,
@@ -405,6 +458,7 @@ export function ensureRustArtifacts(
 						),
 						RUSTC: context.toolchain.tools.rustc.path,
 					};
+					const buildStartedAt = performance.now();
 					runNativeCommand(
 						context,
 						cargo.path,
@@ -431,7 +485,7 @@ export function ensureRustArtifacts(
 						cwd,
 						env,
 					);
-					return publishArtifactAction(
+					const built = publishArtifactAction(
 						context.cacheDirectory,
 						"rust-library",
 						RUST_PRODUCER,
@@ -447,6 +501,12 @@ export function ensureRustArtifacts(
 							})),
 						],
 					);
+					context.onBuildPhase?.({
+						phase: "rust local build",
+						durationMs: performance.now() - buildStartedAt,
+						cache: "miss",
+					});
+					return built;
 				},
 			);
 		},

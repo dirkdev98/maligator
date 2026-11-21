@@ -30,11 +30,23 @@ import {
 	hashDirectoryTrees,
 	hashDirectoryTreesCached,
 	legacyLocaleNameComparator,
+	lexicalNameComparator,
 } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
 import { normalizeRuntimeBuildArgument } from "./native-cache-identity.ts";
 import { runNativeCommand, runNativeCommands } from "./native-command.ts";
-import { ensureRustArtifacts } from "./rust-build.ts";
+import {
+	importPrebuiltRuntimeAction,
+	prebuiltRuntimeDirectory,
+	prebuiltRuntimeIdentity,
+	readPrebuiltRuntime,
+	RUNTIME_ARCHIVES,
+} from "./prebuilt-runtime.ts";
+import {
+	ensureRustArtifacts,
+	portableRustSourceDigest,
+	RUST_PRODUCER,
+} from "./rust-build.ts";
 import type { RustArtifacts } from "./rust-build.ts";
 import { clangMajorVersion, toolArguments } from "./toolchain.ts";
 
@@ -44,6 +56,7 @@ const RUNTIME_ARCHIVE_PRODUCER = artifactProducer("runtime-archive", 5, "ar");
 function runtimeSourceSnapshot(
 	runtimeDirectory: string,
 	cacheDirectory: string,
+	compareNames = legacyLocaleNameComparator,
 ): { digest: string; version: string } {
 	const root = path.resolve(runtimeDirectory);
 	const llhttp = path.join(root, "vendor/llhttp");
@@ -65,7 +78,7 @@ function runtimeSourceSnapshot(
 				...(existsSync(sqlite) ? [sqlite] : []),
 			],
 			include: (entry) => /\.(?:c|h|inc)$/.test(entry.name),
-			compareNames: legacyLocaleNameComparator,
+			compareNames,
 		},
 		manifestPath,
 		"runtime-source-v2",
@@ -191,6 +204,7 @@ interface RuntimeLayout {
 	includeArguments: Array<string>;
 	sqliteIncludeArguments: Array<string>;
 	cacheKey: string;
+	compileArguments: Array<string>;
 	sourceVersion: string;
 	compilerWireDigest?: string;
 	compilerNativeDigest?: string;
@@ -282,21 +296,22 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 			: normalizeRuntimeBuildArgument(context.runtimeDirectory, flag),
 	);
 	const source = runtimeSourceSnapshot(context.runtimeDirectory, context.cacheDirectory);
+	const compileArguments = [
+		"-std=c2x",
+		...identityFlags,
+		...runtimeOptimizationFlags(context.environment),
+		...includeArguments.map((argument) =>
+			normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
+		),
+		"-c",
+		"<source>",
+		"-o",
+		"<object>",
+	];
 	const cacheKey = runtimeArtifactKey({
 		compilerWireDigest,
 		compilerNativeDigest,
-		compileArguments: [
-			"-std=c2x",
-			...identityFlags,
-			...runtimeOptimizationFlags(context.environment),
-			...includeArguments.map((argument) =>
-				normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
-			),
-			"-c",
-			"<source>",
-			"-o",
-			"<object>",
-		],
+		compileArguments,
 		environmentFingerprint: context.environmentFingerprint,
 		sourceHash: source.digest,
 		toolchainFingerprint: context.toolchain.fingerprint,
@@ -307,11 +322,33 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		includeArguments,
 		sqliteIncludeArguments,
 		cacheKey,
+		compileArguments,
 		sourceVersion: source.version,
 		compilerWireDigest,
 		compilerNativeDigest,
 		compilerNativeSources,
 	};
+}
+
+export function runtimeReleaseArchiveIdentity(
+	context: NativeBuildContext,
+	layout = runtimeLayout(context),
+) {
+	return prebuiltRuntimeIdentity({
+		target: context.toolchain.rustTarget,
+		flavour: context.features,
+		compileArguments: layout.compileArguments,
+		// Local keys retain their historical collation. Release keys must also agree
+		// between Node and the installed CLI, whose locale capabilities can differ.
+		cSourceDigest: runtimeSourceSnapshot(
+			context.runtimeDirectory,
+			context.cacheDirectory,
+			lexicalNameComparator,
+		).digest,
+		rustSourceDigest: portableRustSourceDigest(context),
+		cArchiveProducer: RUNTIME_ARCHIVE_PRODUCER,
+		rustArchiveProducer: RUST_PRODUCER,
+	});
 }
 
 function runtimeSources(
@@ -505,7 +542,8 @@ function ensureRuntimeObjects(
 	verbose: boolean,
 ): Array<RuntimeObject> {
 	mkdirSync(directory, { recursive: true });
-	const clangVersion = clangMajorVersion(context.toolchain.tools.cc.version);
+	const compiler = context.runtimeObjectCompiler ?? context.toolchain.tools.cc;
+	const clangVersion = clangMajorVersion(compiler.version);
 	const sources = runtimeSources(context, layout);
 	const projected = projectRuntimeSources(context, layout, sources, directory, verbose);
 	if (
@@ -549,8 +587,8 @@ function ensureRuntimeObjects(
 					statSync(right.source.path).size - statSync(left.source.path).size,
 			)
 			.map(({ source, output, projectedPath }) => ({
-				tool: context.toolchain.tools.cc.path,
-				args: toolArguments(context.toolchain.tools.cc, [
+				tool: compiler.path,
+				args: toolArguments(compiler, [
 					"-std=c2x",
 					...runtimeSourceCompileFlags(context, layout, source),
 					// Expansion loses macro provenance, so Clang warns on intentional macro parentheses.
@@ -600,9 +638,9 @@ function ensureRuntimeObjects(
 function archivesFromAction(
 	action: NonNullable<ReturnType<typeof readArtifactAction>>,
 ): RuntimeArchives {
-	const runtime = artifactOutput(action, "libMalRuntime.a").path;
-	const host = artifactOutput(action, "libMalHost.a").path;
-	const engine = artifactOutput(action, "libLibMaligator.a").path;
+	const runtime = artifactOutput(action, RUNTIME_ARCHIVES.runtime).path;
+	const host = artifactOutput(action, RUNTIME_ARCHIVES.host).path;
+	const engine = artifactOutput(action, RUNTIME_ARCHIVES.engine).path;
 	return { runtime, host, engine, linkArgs: [runtime, host, engine] };
 }
 
@@ -635,12 +673,7 @@ function buildRuntimeArchives(
 				copyFileSync(object.path, destination);
 				return destination;
 			});
-			const archiveName =
-				layer === "engine"
-					? "libLibMaligator.a"
-					: layer === "host"
-						? "libMalHost.a"
-						: "libMalRuntime.a";
+			const archiveName = RUNTIME_ARCHIVES[layer];
 			const archive = path.join(temporaryDirectory, archiveName);
 			runNativeCommand(
 				context,
@@ -676,12 +709,32 @@ export function ensureNativeArtifacts(
 ): NativeArtifacts {
 	const startedAt = performance.now();
 	const layout = runtimeLayout(context);
-	const cached = readArtifactAction(
+	const directory = prebuiltRuntimeDirectory(context);
+	const bundle =
+		directory === undefined
+			? undefined
+			: readPrebuiltRuntime(
+					directory,
+					context.toolchain.rustTarget,
+					runtimeReleaseArchiveIdentity(context, layout).key,
+				);
+	const local = readArtifactAction(
 		context.cacheDirectory,
 		"runtime-archive",
 		RUNTIME_ARCHIVE_PRODUCER,
 		layout.cacheKey,
 	);
+	const prebuilt =
+		local === undefined && bundle !== undefined
+			? importPrebuiltRuntimeAction(
+					context.cacheDirectory,
+					"runtime-archive",
+					RUNTIME_ARCHIVE_PRODUCER,
+					layout.cacheKey,
+					bundle,
+				)
+			: undefined;
+	const cached = local ?? prebuilt;
 	const cacheHit = cached !== undefined;
 	context.onCacheEvent?.({
 		artifact: "runtime",
@@ -702,18 +755,33 @@ export function ensureNativeArtifacts(
 							RUNTIME_ARCHIVE_PRODUCER,
 							layout.cacheKey,
 						);
-						return raced === undefined
-							? buildRuntimeArchives(context, layout, verbose)
-							: archivesFromAction(raced);
+						if (raced !== undefined) return archivesFromAction(raced);
+						const buildStartedAt = performance.now();
+						const built = buildRuntimeArchives(context, layout, verbose);
+						context.onBuildPhase?.({
+							phase: "runtime local build",
+							durationMs: performance.now() - buildStartedAt,
+							cache: "miss",
+							path: built.runtime,
+						});
+						return built;
 					},
 				)
 			: archivesFromAction(cached);
+	if (prebuilt !== undefined) {
+		context.onBuildPhase?.({
+			phase: "runtime prebuilt",
+			durationMs: performance.now() - startedAt,
+			cache: "hit",
+			path: c.runtime,
+		});
+	}
 	context.onBuildPhase?.({
 		phase: "runtime",
 		durationMs: performance.now() - startedAt,
 		cache: cacheHit ? "hit" : "miss",
 		path: c.runtime,
 	});
-	const rust = ensureRustArtifacts(context, verbose);
+	const rust = ensureRustArtifacts(context, verbose, bundle);
 	return { c, rust, linkArgs: [...c.linkArgs, ...rust.linkArgs] };
 }

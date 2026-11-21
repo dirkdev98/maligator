@@ -1,5 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -12,6 +19,7 @@ import {
 	assertGitHubTrustedPublishingEnvironment,
 	assertReleaseTag,
 	createLauncherPackageJson,
+	createPlatformPackageJson,
 	expectedReleaseTag,
 	matchingPublishedIntegrity,
 	NPM_WEB_LOGIN_ARGUMENTS,
@@ -164,6 +172,16 @@ describe("alpha versions", () => {
 });
 
 describe("release targets", () => {
+	it("packs development runtime archives in the platform package", () => {
+		const manifest = createPlatformPackageJson("0.1.0-alpha.2", {
+			rust: "aarch64-apple-darwin",
+			platform: "darwin",
+			arch: "arm64",
+			packageName: "@maligator/cli-darwin-arm64",
+		});
+		expect(manifest.files).toContain("runtime-libraries");
+	});
+
 	it("defaults to Apple Silicon macOS and retains an explicit complete matrix", () => {
 		expect(selectReleaseTargetTriples([])).toEqual(["aarch64-apple-darwin"]);
 		expect(selectReleaseTargetTriples(["--all-targets"])).toEqual([
@@ -407,7 +425,7 @@ describe("npm launcher", () => {
 	});
 
 	it.runIf(process.platform === "darwin" || process.platform === "linux")(
-		"executes the current platform package without changing arguments",
+		"passes arguments and the archive directory to the current platform binary",
 		() => {
 			const root = temporaryDirectory();
 			const launcherDirectory = path.join(root, "cli");
@@ -429,14 +447,25 @@ describe("npm launcher", () => {
 					"utf-8",
 				),
 			);
-			writeFileSync(binary, "#!/bin/sh\nprintf '%s\\n' \"$1|$2\"\n");
+			writeFileSync(
+				binary,
+				'#!/bin/sh\nprintf \'%s\\n\' "$1|$2" "$MALIGATOR_PREBUILT_RUNTIME_DIR"\n',
+			);
 			chmodSync(binary, 0o755);
 
+			const env = { ...process.env };
+			delete env.MALIGATOR_PREBUILT_RUNTIME_DIR;
 			const result = spawnSync(process.execPath, [launcher, "alpha", "two words"], {
 				encoding: "utf-8",
+				env,
 			});
 			expect(result.status, result.stderr).toBe(0);
-			expect(result.stdout).toBe("alpha|two words\n");
+			const archiveDirectory = path.resolve(
+				realpathSync(binaryDirectory),
+				"..",
+				"runtime-libraries",
+			);
+			expect(result.stdout).toBe(`alpha|two words\n${archiveDirectory}\n`);
 		},
 	);
 });

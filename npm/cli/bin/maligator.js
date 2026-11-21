@@ -2,6 +2,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
 
 /** @type {Record<string, string>} */
 const packages = {
@@ -33,7 +34,16 @@ try {
 	process.exit(1);
 }
 
-const result = spawnSync(binary, process.argv.slice(2), { stdio: "inherit" });
+// Native compiler workers have their own argv[0] and inherit this package location.
+const result = spawnSync(binary, process.argv.slice(2), {
+	stdio: "inherit",
+	env: {
+		...process.env,
+		MALIGATOR_PREBUILT_RUNTIME_DIR:
+			process.env.MALIGATOR_PREBUILT_RUNTIME_DIR ??
+			resolve(dirname(binary), "..", "runtime-libraries"),
+	},
+});
 if (result.error !== undefined) {
 	console.error(`Could not start Maligator: ${result.error.message}`);
 	process.exit(1);
