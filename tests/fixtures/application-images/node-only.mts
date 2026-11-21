@@ -1,7 +1,6 @@
 import type { AddressInfo } from "node:net";
 import type { ApplicationData, FixtureBridge } from "./types.ts";
 const bridge = Reflect.get(globalThis, "mal") as FixtureBridge;
-import "../../../src/node-globals.mjs";
 import { createServer, get } from "node:http";
 import { ready } from "maligator:application";
 

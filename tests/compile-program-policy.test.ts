@@ -1,9 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import { analyzeEntrypoint } from "../src/compiler/pipeline/compile-program-common.ts";
 import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
@@ -142,27 +141,5 @@ describe("compileEntrypoint build policy", () => {
 				buildConfig: resolveBuildConfig({ engine: { regexp: false } }),
 			}),
 		).toThrow(/engine\.regexp is false/);
-	});
-
-	test("allows the Node globals prelude when RegExp is disabled", () => {
-		expect(() =>
-			analyzeEntrypoint(
-				entrypoint('void fetch("data:;base64,aGVsbG8=");'),
-				{
-					buildConfig: resolveBuildConfig({
-						engine: { regexp: false },
-						surface: { node: true },
-					}),
-					entryPrelude: {
-						specifier: "maligator-internal:node-globals",
-						source: readFileSync(
-							new URL("../src/node-globals.mjs", import.meta.url),
-							"utf8",
-						),
-					},
-				},
-				(_phase, run) => run(),
-			),
-		).not.toThrow();
 	});
 });

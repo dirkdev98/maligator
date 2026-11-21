@@ -1,5 +1,4 @@
 import http from "node:http";
-import { maligatorFetch as fetch } from "../../src/node-globals.mjs";
 
 for (const id of [
 	"assert",

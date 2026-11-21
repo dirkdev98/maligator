@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
-import "../../src/node-globals.mjs";
 
 let firstChunk;
 const server = createServer((request, response) => {

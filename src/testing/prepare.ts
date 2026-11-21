@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { ApplicationImageDescriptor } from "../application-images.ts";
 import { embedDeclarationsOfWires } from "../assets.ts";
@@ -79,10 +78,7 @@ function prepareTestApplicationImage(
 		stripTypes: context.stripTypes,
 		stripperIdentity: context.installation.frontendIdentity,
 		testModuleSource: readFileSync(context.installation.testModulePath, "utf8"),
-		nodeGlobalsSource: readFileSync(context.installation.nodeGlobalsPath, "utf8"),
-		platformSourceRoot:
-			context.installation.platformSourceRoot ??
-			path.dirname(context.installation.nodeGlobalsPath),
+		platformSourceRoot: context.installation.platformSourceRoot,
 		session,
 		dependencyWorker: context.dependencyWorker,
 		runner: { kind: "application" as const },

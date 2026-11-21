@@ -102,7 +102,6 @@ const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
 	"build-frontend",
 );
-const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
@@ -183,8 +182,6 @@ export interface CompileBuildFrontendOptions {
 	execution?: Execution;
 	stripTypes: BuildModuleGraphOptions["stripTypes"];
 	stripperIdentity: string;
-	/** Node compatibility globals evaluated before a Node-surface application. */
-	nodeGlobalsSource?: string;
 	optimization?: "development" | "full";
 	/**
 	 * Core verification depth. Not part of cache identity: verification observes
@@ -231,9 +228,6 @@ function cacheRoot(override: string | undefined): string {
 }
 
 function cacheIdentity(options: CompileBuildFrontendOptions): string {
-	const nodeGlobalsSource = options.config.surface.node
-		? options.nodeGlobalsSource
-		: undefined;
 	return digest(
 		JSON.stringify({
 			schema: BUILD_FRONTEND_CACHE_SCHEMA,
@@ -244,8 +238,6 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			compilerArtifactVersion: COMPILER_ARTIFACT_VERSION,
 			stripper: options.stripperIdentity,
 			platformSourceRoot: options.platformSourceRoot,
-			nodeGlobals:
-				nodeGlobalsSource === undefined ? undefined : digest(nodeGlobalsSource),
 			optimization: options.optimization ?? "full",
 			// Profiled images keep per-instruction sites and select different native plans.
 			profile: options.profile === true,
@@ -707,10 +699,6 @@ function prepareBuildFrontend(
 	// Compiler artifacts omit the source identities and remarks needed by a profile.
 	const liveProfile = options.profile === true;
 	const forceCompile = options.forceCompile === true || liveProfile;
-	const entryPrelude: BuildModuleGraphOptions["entryPrelude"] =
-		options.config.surface.node && options.nodeGlobalsSource !== undefined
-			? { specifier: NODE_GLOBALS_MODULE_ID, source: options.nodeGlobalsSource }
-			: undefined;
 	const session = options.session ?? new BuildCompilationSession();
 	session.useCacheDirectory(options.cacheDirectory);
 	const parseStatsBefore = session.moduleParses.statistics();
@@ -784,7 +772,6 @@ function prepareBuildFrontend(
 		execution: options.execution,
 		stripTypes: options.stripTypes,
 		parseCache: session.moduleParses,
-		entryPrelude,
 		platformSourceRoot: options.platformSourceRoot,
 	});
 	phases.graphMs = Date.now() - graphStartedAt;
@@ -887,7 +874,6 @@ function prepareBuildFrontend(
 					phases,
 					onCompilePhase: options.onCompilePhase,
 					dependencyWorker: options.dependencyWorker,
-					entryPrelude,
 				});
 				const native = fragments.native;
 				if (native !== undefined) loadProgramImage = () => native.programImage;
@@ -970,7 +956,6 @@ function prepareBuildFrontend(
 		execution: options.execution,
 		stripTypes: options.stripTypes,
 		parseCache: session.moduleParses,
-		entryPrelude,
 		platformSourceRoot: options.platformSourceRoot,
 		optimization: options.optimization,
 		coreVerification: options.coreVerification,

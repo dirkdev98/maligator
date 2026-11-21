@@ -1,6 +1,5 @@
 import http from "node:http";
 import https from "node:https";
-import { maligatorFetch as fetch } from "../../src/node-globals.mjs";
 
 const port = Number(process.env.MAL_HTTPS_PORT);
 const base = "https://localhost:" + port;

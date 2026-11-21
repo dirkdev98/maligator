@@ -395,7 +395,6 @@ describe("command shell", { timeout: 30_000 }, () => {
 			],
 			testModulePath: path.join(repoRoot, "src/testing/runtime.mjs"),
 			testHostModulePath: path.join(repoRoot, "src/testing/host-driver.mts"),
-			nodeGlobalsPath: path.join(repoRoot, "src/node-globals.mjs"),
 			platformSourceRoot: path.join(repoRoot, "src"),
 			frontendIdentity: TYPE_STRIPPER_IDENTITY,
 			evalCompiler: {
@@ -414,12 +413,10 @@ describe("command shell", { timeout: 30_000 }, () => {
 			"test-runtime.mjs",
 			undefined,
 			"bin/maligator",
-			undefined,
 			"bin/maligator-mutable",
 		);
 		expect(installation.runtimeDirectory).toBe(path.resolve("relative-runtime"));
 		expect(installation.testModulePath).toBe(path.resolve("test-runtime.mjs"));
-		expect(installation.nodeGlobalsPath).toBe(path.resolve("node-globals.mjs"));
 		// One stripper means the development and product front ends share cache entries.
 		expect(installation.frontendIdentity).toBe(
 			developmentCompilerInstallation(path.join(repoRoot, "src")).frontendIdentity,
@@ -495,7 +492,6 @@ describe("command shell", { timeout: 30_000 }, () => {
 				path.join(repoRoot, "LICENSE"),
 				path.join(repoRoot, "THIRD_PARTY_NOTICES.md"),
 				path.join(repoRoot, "src/testing/runtime.mjs"),
-				path.join(repoRoot, "src/node-globals.mjs"),
 			]),
 		);
 		const runtime = declarations.find(

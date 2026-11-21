@@ -104,7 +104,6 @@ describe("linked test images", () => {
 			stripTypes: stripCompactTypes,
 			stripperIdentity: "node-globals-regression",
 			testModuleSource,
-			nodeGlobalsSource: readFileSync(path.resolve("src/node-globals.mjs"), "utf-8"),
 			cacheDirectory: path.join(root, "cache"),
 		});
 

@@ -182,7 +182,6 @@ export function prepareProfiledTestCommand(
 	const discoveryMs = Date.now() - discoveryStartedAt;
 	if (files.length === 0) throw new Error("no test files were discovered");
 	const moduleSource = readFileSync(context.installation.testModulePath, "utf-8");
-	const nodeGlobalsSource = readFileSync(context.installation.nodeGlobalsPath, "utf-8");
 	const frontendStartedAt = Date.now();
 	const runOptions = testConfig(command);
 	const execution = resolveExecution(
@@ -205,10 +204,7 @@ export function prepareProfiledTestCommand(
 			stripTypes: context.stripTypes,
 			stripperIdentity: context.installation.frontendIdentity,
 			testModuleSource: moduleSource,
-			nodeGlobalsSource,
-			platformSourceRoot:
-				context.installation.platformSourceRoot ??
-				path.dirname(context.installation.nodeGlobalsPath),
+			platformSourceRoot: context.installation.platformSourceRoot,
 		},
 		runOptions,
 	);
@@ -232,7 +228,6 @@ export function prepareIsolatedTestCommand(
 	const discoveryMs = Date.now() - discoveryStartedAt;
 	if (files.length === 0) throw new Error("no test files were discovered");
 	const moduleSource = readFileSync(context.installation.testModulePath, "utf-8");
-	const nodeGlobalsSource = readFileSync(context.installation.nodeGlobalsPath, "utf-8");
 	const frontendStartedAt = Date.now();
 	const runOptions = testConfig(command);
 	const execution = resolveExecution(
@@ -253,10 +248,7 @@ export function prepareIsolatedTestCommand(
 		stripTypes: context.stripTypes,
 		stripperIdentity: context.installation.frontendIdentity,
 		testModuleSource: moduleSource,
-		nodeGlobalsSource,
-		platformSourceRoot:
-			context.installation.platformSourceRoot ??
-			path.dirname(context.installation.nodeGlobalsPath),
+		platformSourceRoot: context.installation.platformSourceRoot,
 		session,
 		dependencyWorker: context.dependencyWorker,
 	};

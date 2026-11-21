@@ -229,8 +229,6 @@ export interface CompilerInstallation {
 	/** Source implementation supplied for the virtual maligator:test module. */
 	testModulePath: string;
 	testHostModulePath?: string;
-	/** Node-compatible globals installed before applications and interpreted tests. */
-	nodeGlobalsPath: string;
 	/** Cache identity of the active TypeScript erasure frontend. */
 	frontendIdentity: string;
 	/** Prebuilt executables capable of running compile-time-specialized wire images. */
@@ -267,7 +265,6 @@ export function developmentCompilerInstallation(
 		],
 		testModulePath: path.join(sourceDirectory, "testing/runtime.mjs"),
 		testHostModulePath: path.join(sourceDirectory, "testing/host-driver.mts"),
-		nodeGlobalsPath: path.join(sourceDirectory, "node-globals.mjs"),
 		frontendIdentity: TYPE_STRIPPER_IDENTITY,
 		evalCompiler: {
 			kind: "source",
@@ -283,16 +280,13 @@ export function productCompilerInstallation(
 	testModulePath: string,
 	licensePaths?: Array<string>,
 	developmentRunnerPath?: string,
-	nodeGlobalsPath?: string,
 	mutableDevelopmentRunnerPath?: string,
 	platformSourceRoot?: string,
 	testHostModulePath?: string,
 ): CompilerInstallation {
 	return {
 		runtimeDirectory: path.resolve(runtimeDirectory),
-		...(platformSourceRoot === undefined
-			? {}
-			: { platformSourceRoot: path.resolve(platformSourceRoot) }),
+		platformSourceRoot: path.resolve(platformSourceRoot ?? path.dirname(testModulePath)),
 		...(licensePaths === undefined
 			? {}
 			: { licensePaths: licensePaths.map((file) => path.resolve(file)) }),
@@ -300,9 +294,6 @@ export function productCompilerInstallation(
 		...(testHostModulePath === undefined
 			? {}
 			: { testHostModulePath: path.resolve(testHostModulePath) }),
-		nodeGlobalsPath: path.resolve(
-			nodeGlobalsPath ?? path.join(path.dirname(testModulePath), "node-globals.mjs"),
-		),
 		frontendIdentity: TYPE_STRIPPER_IDENTITY,
 		...(developmentRunnerPath === undefined
 			? {}
@@ -740,17 +731,10 @@ function prepareCommandState(
 	const relocatable = interpreted || developmentFragments;
 	const compilerPhases: Array<{ phase: string; durationMs: number }> = [];
 	const frontendOptions: CompileBuildFrontendOptions = {
-		platformSourceRoot:
-			context.installation.platformSourceRoot ??
-			path.dirname(context.installation.nodeGlobalsPath),
+		platformSourceRoot: context.installation.platformSourceRoot,
 		entrypoint: entrypointPath,
 		config: frontendConfig,
 		execution,
-		...(buildConfig.surface.node
-			? {
-					nodeGlobalsSource: readFileSync(context.installation.nodeGlobalsPath, "utf-8"),
-				}
-			: {}),
 		stripTypes: context.stripTypes,
 		stripperIdentity: context.installation.frontendIdentity,
 		session: frontendSession,
@@ -2167,11 +2151,7 @@ function prepareLinkedTestHost(
 		...testConfig,
 		surface: { webPlatform: true, node: true },
 	};
-	const driverFiles = [
-		entry,
-		path.join(path.dirname(entry), "host-protocol.mts"),
-		context.installation.nodeGlobalsPath,
-	];
+	const driverFiles = [entry, path.join(path.dirname(entry), "host-protocol.mts")];
 	const dependencies = [...new Set([...libraries.dependencies, ...driverFiles])].sort();
 	context.onFfiDependencies?.(dependencies);
 	const identity = artifactIdentity({
@@ -2199,7 +2179,6 @@ function prepareLinkedTestHost(
 				platformSourceRoot: context.installation.platformSourceRoot,
 				stripTypes: context.stripTypes,
 				stripperIdentity: context.installation.frontendIdentity,
-				nodeGlobalsSource: readFileSync(context.installation.nodeGlobalsPath, "utf8"),
 				optimization: "development",
 				interpreted: true,
 			});

@@ -58,7 +58,6 @@ const TEST_CACHE_SCHEMA = 3;
 const TEST_CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "test");
 export const TEST_MODULE_ID = "maligator:test";
 export const TEST_BOOTSTRAP_MODULE_ID = "maligator-internal:test-bootstrap";
-export const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 const TEST_IMAGE_TRANSFORM = 1;
 
 export type DependencyIdentity = FrontendDependencyIdentity;
@@ -83,7 +82,6 @@ interface CompileTestOptions {
 	stripTypes: BuildModuleGraphOptions["stripTypes"];
 	stripperIdentity: string;
 	testModuleSource: string;
-	nodeGlobalsSource?: string;
 	platformSourceRoot?: string;
 	cacheDirectory?: string;
 	session?: FrontendCompilationSession;
@@ -152,10 +150,6 @@ function cacheIdentity(options: CompileTestOptions): string {
 			configuration: compilerConfigurationIdentity(options.config),
 			execution: executionIdentity(options.execution),
 			testModule: digest(options.testModuleSource),
-			nodeGlobals:
-				options.config.surface.node === true
-					? digest(options.nodeGlobalsSource ?? "")
-					: undefined,
 			platformSourceRoot: options.platformSourceRoot,
 			testImageTransform: TEST_IMAGE_TRANSFORM,
 			runner: options.runner,
@@ -231,7 +225,7 @@ function syntheticEntry(
 	runner?: TestImageRunner,
 ): string {
 	const imports = entries.map((file) => `import ${JSON.stringify(file)};`).join("\n");
-	return `${node ? `import ${JSON.stringify(NODE_GLOBALS_MODULE_ID)};\n` : ""}import ${JSON.stringify(TEST_BOOTSTRAP_MODULE_ID)};
+	return `import ${JSON.stringify(TEST_BOOTSTRAP_MODULE_ID)};
 import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
 ${imports}
 ${testRunnerSource("__run", entries, runner)}
@@ -261,7 +255,7 @@ export function wrapTestEntry(source: string, file: string): string {
 
 /** The toolchain modules a test program evaluates before its test files. */
 export function testVirtualModules(
-	options: Pick<CompileTestOptions, "config" | "testModuleSource" | "nodeGlobalsSource">,
+	options: Pick<CompileTestOptions, "testModuleSource">,
 ): NonNullable<BuildModuleGraphOptions["virtualModules"]> {
 	return new Map([
 		[
@@ -275,14 +269,6 @@ export function testVirtualModules(
 				goal: "module",
 			},
 		],
-		...(options.config.surface.node
-			? [
-					[
-						NODE_GLOBALS_MODULE_ID,
-						{ source: options.nodeGlobalsSource ?? "", goal: "module" },
-					] as const,
-				]
-			: []),
 	]);
 }
 
@@ -419,12 +405,6 @@ function compileTestWorkerImages(
 		parseCache: session.moduleParses,
 		platformSourceRoot: options.platformSourceRoot,
 		optimization,
-		entryPrelude: options.config.surface.node
-			? {
-					specifier: "maligator-internal:node-globals",
-					source: options.nodeGlobalsSource ?? "",
-				}
-			: undefined,
 		virtualModules: new Map([
 			[
 				TEST_MODULE_ID,

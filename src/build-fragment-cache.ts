@@ -15,7 +15,6 @@ import {
 	isExternalModule,
 } from "./dependency-fragment-cache.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
-import { frontendDigest as digest } from "./frontend-cache.ts";
 import type {
 	FrontendArtifactIdentity,
 	FrontendCompilationSession,
@@ -56,7 +55,6 @@ export interface CompiledBuildFragments {
 export interface CompileBuildFragmentsOptions {
 	target: LinkedImageTarget;
 	graph: ModuleGraph;
-	entryPrelude?: BuildModuleGraphOptions["entryPrelude"];
 	config: ResolvedBuildConfig;
 	execution?: Execution;
 	facts: CompilerProgramFacts;
@@ -101,66 +99,6 @@ export function assertDependenciesPrecedeImporters(graph: ModuleGraph): void {
 	}
 }
 
-/**
- * The toolchain prelude's own subgraph. The development runner evaluates images
- * in order, so a separately cached prelude keeps its before-application contract
- * without re-running semantic analysis and Core optimization after every edit.
- */
-export function preludeGraph(
-	graph: ModuleGraph,
-	specifier: string,
-	execution: Execution | undefined,
-): ModuleGraph {
-	const reachable = new Set<string>();
-	const pending = [specifier];
-	while (pending.length > 0) {
-		const current = pending.pop()!;
-		if (reachable.has(current)) continue;
-		const record = graph.modules.get(current);
-		if (record === undefined) {
-			throw new UnsupportedLinkedImagesError(
-				`toolchain prelude module '${current}' is missing from the graph`,
-			);
-		}
-		if (current !== specifier && record.host === undefined) {
-			throw new UnsupportedLinkedImagesError(
-				"a toolchain prelude with source dependencies requires the whole-image fallback",
-			);
-		}
-		reachable.add(current);
-		for (const dependency of record.dependencies) {
-			if (dependency.resolvedPath === null) {
-				throw new UnsupportedLinkedImagesError(
-					"a toolchain prelude with a computed dependency requires the whole-image fallback",
-				);
-			}
-			pending.push(dependency.resolvedPath);
-		}
-	}
-	for (const cycle of graph.cycles) {
-		if (
-			cycle.some((module) => reachable.has(module)) &&
-			cycle.some((module) => !reachable.has(module))
-		) {
-			throw new UnsupportedLinkedImagesError(
-				"a toolchain prelude cycle requires the whole-image fallback",
-			);
-		}
-	}
-	return {
-		resolutionInputs: graph.resolutionInputs,
-		entry: specifier,
-		nodeEnabled: graph.nodeEnabled,
-		webPlatformEnabled: graph.webPlatformEnabled,
-		execution,
-		modules: new Map([...graph.modules].filter(([module]) => reachable.has(module))),
-		evaluationOrder: graph.evaluationOrder.filter((module) => reachable.has(module)),
-		cycles: graph.cycles.filter((cycle) =>
-			cycle.every((module) => reachable.has(module)),
-		),
-	};
-}
-
 function nativeImage(artifact: LinkedImageArtifact): LinkedNativeImage {
 	if (artifact.native === undefined)
 		throw new Error(
@@ -189,13 +127,6 @@ export function compileBuildFragments(
 		cacheDirectory: options.cacheDirectory,
 		phases: options.phases,
 		onCompilePhase: options.onCompilePhase,
-		inputs:
-			options.entryPrelude === undefined
-				? undefined
-				: {
-						specifier: options.entryPrelude.specifier,
-						source: digest(options.entryPrelude.source),
-					},
 	});
 	const dependencyArtifacts = compileDependencyFragments({
 		target: options.target,
@@ -212,15 +143,6 @@ export function compileBuildFragments(
 		onCompilePhase: options.onCompilePhase,
 		worker: options.dependencyWorker,
 	});
-	const preludeArtifact =
-		options.entryPrelude === undefined
-			? undefined
-			: compileLinkedImage(
-					environment,
-					"toolchain-prelude",
-					preludeGraph(options.graph, options.entryPrelude.specifier, options.execution),
-					undefined,
-				);
 	const graphStartedAt = Date.now();
 	const application = buildModuleGraph(options.graph.entry, {
 		stripTypes: options.stripTypes,
@@ -237,7 +159,6 @@ export function compileBuildFragments(
 		undefined,
 	);
 	const images: Array<LinkedImageArtifact> = [
-		...(preludeArtifact === undefined ? [] : [preludeArtifact]),
 		...dependencyArtifacts,
 		applicationArtifact,
 	];

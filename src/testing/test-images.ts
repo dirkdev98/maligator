@@ -41,7 +41,6 @@ import type {
 } from "./cache.ts";
 import {
 	dependenciesUnchanged,
-	NODE_GLOBALS_MODULE_ID,
 	resolvedEntries,
 	TEST_BOOTSTRAP_MODULE_ID,
 	TEST_MODULE_ID,
@@ -220,24 +219,11 @@ function importsOf(specifiers: ReadonlyArray<string>): string {
 	return specifiers.map((specifier) => `import ${JSON.stringify(specifier)};\n`).join("");
 }
 
-/** Toolchain modules every test program evaluates before its dependencies. */
-function runtimeImports(options: Pick<CompileTestImageOptions, "config">): Array<string> {
-	return [
-		...(options.config.surface.node ? [NODE_GLOBALS_MODULE_ID] : []),
-		TEST_BOOTSTRAP_MODULE_ID,
-	];
-}
-
-/** The image every test program evaluates first: Node globals and the test runtime. */
+/** The image every test program evaluates first: the test runtime. */
 function testRuntimeGraph(
 	options: Pick<
 		CompileTestImageOptions,
-		| "config"
-		| "execution"
-		| "stripTypes"
-		| "platformSourceRoot"
-		| "testModuleSource"
-		| "nodeGlobalsSource"
+		"config" | "execution" | "stripTypes" | "platformSourceRoot" | "testModuleSource"
 	>,
 	session: TestCompilationSession,
 ): ModuleGraph {
@@ -250,7 +236,7 @@ function testRuntimeGraph(
 			execution: options.execution,
 			parseCache: session.moduleParses,
 			entryGoal: "module",
-			entrySource: importsOf(runtimeImports(options)),
+			entrySource: importsOf([TEST_BOOTSTRAP_MODULE_ID]),
 			virtualModules: testVirtualModules(options),
 		},
 	);
@@ -264,7 +250,6 @@ interface TestRuntimeRequest {
 	cacheDirectory?: string;
 	platformSourceRoot?: string;
 	testModuleSource: string;
-	nodeGlobalsSource?: string;
 }
 
 function testRuntimeTask(root: string, options: CompileTestImageOptions): Array<string> {
@@ -280,9 +265,6 @@ function testRuntimeTask(root: string, options: CompileTestImageOptions): Array<
 			? {}
 			: { platformSourceRoot: options.platformSourceRoot }),
 		testModuleSource: options.testModuleSource,
-		...(options.nodeGlobalsSource === undefined
-			? {}
-			: { nodeGlobalsSource: options.nodeGlobalsSource }),
 	};
 	const file = path.join(root, "requests", `${digest(JSON.stringify(request))}.json`);
 	writeFileAtomically(file, `${JSON.stringify(request)}\n`);
@@ -343,7 +325,7 @@ function planningGraph(
 		{
 			...graphOptions(options, session),
 			entryGoal: "module",
-			entrySource: importsOf([...runtimeImports(options), ...entries]),
+			entrySource: importsOf([TEST_BOOTSTRAP_MODULE_ID, ...entries]),
 			virtualModules: testVirtualModules(options),
 			transformSource: { files: selected, transform: wrapTestEntry },
 		},

@@ -36,7 +36,6 @@ export const testRuntime = embedFile("./testing/runtime.mjs");
 export const testHost = embedDirectory("./testing", {
 	include: ["host-driver.mts", "host-protocol.mts"],
 });
-export const nodeGlobals = embedFile("./node-globals.mjs");
 /** Source platform modules the compiler reads from disk. */
 export const platformSources = embedDirectory(".", {
 	include: ["assets/**", "http/**", "workers/**", "testing/node-test.ts"],

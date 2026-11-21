@@ -18,23 +18,16 @@ const source = `module.exports = function mapped(value) {
 	return [value, arguments];
 };`;
 
-describe.each([false, true])("CommonJS arguments with prelude %s", (prelude) => {
-	const entryPrelude = prelude
-		? { specifier: "maligator:arguments-prelude", source: "export {};" }
-		: undefined;
-
+describe("CommonJS arguments", () => {
 	it.each(["entry", "require", "import"])(
 		"maps sloppy parameters reached through %s",
 		(route) => {
-			const target = join(directory, `sloppy-${route}-${prelude}.cjs`);
+			const target = join(directory, `sloppy-${route}.cjs`);
 			writeFileSync(target, source);
 			const entry =
 				route === "entry"
 					? target
-					: join(
-							directory,
-							`entry-${route}-${prelude}.${route === "require" ? "cjs" : "mjs"}`,
-						);
+					: join(directory, `entry-${route}.${route === "require" ? "cjs" : "mjs"}`);
 			if (route !== "entry") {
 				writeFileSync(
 					entry,
@@ -43,7 +36,7 @@ describe.each([false, true])("CommonJS arguments with prelude %s", (prelude) => 
 						: `"use strict"; module.exports = require(${JSON.stringify(target)});`,
 				);
 			}
-			const graph = buildModuleGraph(entry, { entryPrelude });
+			const graph = buildModuleGraph(entry);
 			expect(graph.modules.get(target)?.parsed.strict).toBe(false);
 			const program = lowerSemanticProgramToCore(
 				runSemanticAnalysisForGraph(graph),
@@ -57,9 +50,9 @@ describe.each([false, true])("CommonJS arguments with prelude %s", (prelude) => 
 	it.each(['"use strict";', '"custom directive"; "use strict";'])(
 		"keeps the wrapper and its functions strict after %s",
 		(directive) => {
-			const entry = join(directory, `strict-${prelude}.cjs`);
+			const entry = join(directory, `strict.cjs`);
 			writeFileSync(entry, directive + source);
-			const graph = buildModuleGraph(entry, { entryPrelude });
+			const graph = buildModuleGraph(entry);
 			expect(graph.modules.get(entry)?.parsed.strict).toBe(true);
 			const program = lowerSemanticProgramToCore(
 				runSemanticAnalysisForGraph(graph),
@@ -69,12 +62,6 @@ describe.each([false, true])("CommonJS arguments with prelude %s", (prelude) => 
 			expect(fn?.metadata.mappedArguments).toBe(false);
 		},
 	);
-
-	it("enforces a strict CommonJS directive before injecting its prelude", () => {
-		const entry = join(directory, `strict-error-${prelude}.cjs`);
-		writeFileSync(entry, '"use strict"; function duplicate(value, value) {}');
-		expect(() => buildModuleGraph(entry, { entryPrelude })).toThrow(SyntaxError);
-	});
 });
 
 it.each([

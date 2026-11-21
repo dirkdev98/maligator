@@ -392,16 +392,6 @@ export interface BuildModuleGraphOptions {
 	entrySource?: string;
 
 	/**
-	 * Toolchain-owned module evaluated before the application entrypoint. CommonJS
-	 * entries synchronously require it; ESM entries import it. The module remains a
-	 * virtual graph record, so it never becomes a runtime filesystem dependency.
-	 */
-	entryPrelude?: {
-		specifier: string;
-		source: string;
-	};
-
-	/**
 	 * Force the goal of *every* module in the graph, bypassing all detection.
 	 * Used when the caller knows the whole graph is one goal (e.g. test262 module
 	 * tests, where `.js` fixtures are modules despite the extension).
@@ -595,7 +585,6 @@ export function buildModuleGraph(
 						goalOverride: options.goalOverride,
 						dependencyGoalOverride: options.dependencyGoalOverride,
 						stripTypes: options.stripTypes !== undefined,
-						entryPrelude: options.entryPrelude,
 						virtualModules: [...(options.virtualModules ?? [])],
 					}),
 					"hex",
@@ -607,12 +596,6 @@ export function buildModuleGraph(
 	const virtualModule = (specifier: string) => {
 		const supplied = options.virtualModules?.get(specifier);
 		if (supplied !== undefined) return supplied;
-		if (options.entryPrelude?.specifier === specifier)
-			return {
-				source: options.entryPrelude.source,
-				goal: "module" as const,
-				platform: false,
-			};
 		const module = lookupPlatformModule(specifier);
 		const hostSource = SOURCE_HOST_MODULES.get(specifier);
 		if (hostSource !== undefined && !nodeEnabled) return undefined;
@@ -803,12 +786,6 @@ export function buildModuleGraph(
 					: recordObservations(memoKey !== undefined, () => {
 							const sourcePath = catalogSources.get(filePath)?.sourcePath;
 							let parseSource = baseParseSource(filePath, source, goal, sourcePath);
-							let cjsPrelude: string | undefined;
-							if (filePath === entry && options.entryPrelude !== undefined) {
-								const specifier = JSON.stringify(options.entryPrelude.specifier);
-								if (goal === "cjs") cjsPrelude = `require(${specifier});`;
-								else parseSource = `import ${specifier};\n${parseSource}`;
-							}
 							parseSource =
 								options.transformSource?.files.has(filePath) === true
 									? options.transformSource.transform(parseSource, filePath)
@@ -819,12 +796,6 @@ export function buildModuleGraph(
 							const parse = () => {
 								try {
 									const parsed = parseWithGoal(parseSource, goal, strict);
-									// Parse the user's directive prologue before adding executable prelude code.
-									if (cjsPrelude !== undefined) {
-										parsed.ast.body.unshift(
-											...parseScript(cjsPrelude, { strict: false }).ast.body,
-										);
-									}
 									return { parsed, dependencies: extractDependencies(parsed.ast, goal) };
 								} catch (error) {
 									if (error instanceof SyntaxError) {
@@ -837,10 +808,8 @@ export function buildModuleGraph(
 									throw error;
 								}
 							};
-							const cacheSource =
-								cjsPrelude === undefined ? parseSource : `${cjsPrelude}\n${parseSource}`;
 							const parsedModule =
-								options.parseCache?.parse(filePath, cacheSource, goal, parse, strict) ??
+								options.parseCache?.parse(filePath, parseSource, goal, parse, strict) ??
 								parse();
 							const parsed = parsedModule.parsed;
 
@@ -918,9 +887,6 @@ export function buildModuleGraph(
 									const toolchainModule = virtualModule(aliasedSpecifier);
 									if (toolchainModule !== undefined) {
 										rejectDataImport();
-										const entryPreludeRequire =
-											dependency.kind === "require" &&
-											dependency.specifier === options.entryPrelude?.specifier;
 										const sourceBuiltin = SOURCE_HOST_MODULES.has(aliasedSpecifier);
 										if (
 											(dependency.kind === "dynamic" &&
@@ -929,9 +895,7 @@ export function buildModuleGraph(
 													toolchainModule.platform &&
 													lookupPlatformModule(aliasedSpecifier)?.kind === "source"
 												)) ||
-											(dependency.kind === "require" &&
-												!entryPreludeRequire &&
-												!sourceBuiltin)
+											(dependency.kind === "require" && !sourceBuiltin)
 										) {
 											throw new SyntaxDiagnostic(
 												"resolution",

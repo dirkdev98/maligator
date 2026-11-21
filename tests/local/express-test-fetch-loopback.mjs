@@ -1,5 +1,4 @@
 import express from "express";
-import "../../src/node-globals.mjs";
 
 const app = express();
 app.use(express.json());

@@ -450,32 +450,45 @@ static MalValue fetch_upload_fulfilled(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self; (void) nt;
     FetchClient *client = fetch_slot_client(vm, callee);
-    if (client == nullptr || client->operation == 0 || client->aborted) return mal_value_new_undefined();
+    if (client == nullptr || client->operation == 0 || client->aborted || !mal_value_is_object(client->reader))
+        return mal_value_new_undefined();
     MalValue result = argc > 0 ? args[0] : mal_value_new_undefined();
-    MalValue roots[2] = {result, mal_value_new_undefined()};
+    MalValue roots[3] = {result, mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    MalValue done = mal_value_new_undefined();
-    if (mal_vm_get_property(vm, result, mal_intrinsic_string_key(vm, (const byte *) "done"), &done)
-        && mal_value_is_boolean(done) && mal_value_to_boolean(done)) {
+    // Undefined while the upload goes on; otherwise the error that ends the request.
+    MalValue *failure = &roots[2];
+    if (mal_vm_get_property(vm, result, mal_intrinsic_string_key(vm, (const byte *) "done"), &roots[1])
+        && mal_value_is_boolean(roots[1]) && mal_value_to_boolean(roots[1])) {
         client->reader = mal_value_new_undefined();
         if (!fetch_write(vm, client, nullptr, 0, true))
-            fetch_fail(vm, client, fetch_failure(vm, "the request body could not be sent"));
+            *failure = fetch_failure(vm, "the request body could not be sent");
     } else if (mal_vm_get_property(vm, result, mal_intrinsic_string_key(vm, (const byte *) "value"), &roots[1])) {
         MalBufferSourceSpan span;
-        if (!mal_value_is_typed_array_object(roots[1])
-            || mal_buffer_source_span(roots[1], &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
-            fetch_fail(vm, client, fetch_type_error(vm,
-                "fetch request body chunks must be Uint8Array", mal_value_new_undefined()));
+        byte *bytes = nullptr;
+        usize length = 0;
+        if (vm->host_node && mal_value_is_string(roots[1])) {
+            // Node's fetch sends a string chunk as its UTF-8 bytes.
+            bytes = mal_string_to_utf8(mal_value_to_string(roots[1]), &length);
+        } else if (mal_value_is_typed_array_object(roots[1])
+            && mal_buffer_source_span(roots[1], &span) == MAL_BUFFER_SOURCE_SPAN_OK) {
+            length = span.length;
+            bytes = malloc(length == 0 ? 1 : length);
+            if (bytes != nullptr) mal_buffer_source_span_read(&span, 0, bytes, length);
         } else {
-            byte *copy = malloc(span.length == 0 ? 1 : span.length);
-            if (copy != nullptr) mal_buffer_source_span_read(&span, 0, copy, span.length);
-            bool written = copy != nullptr && fetch_write(vm, client, copy, span.length, false);
-            free(copy);
-            if (!written) fetch_fail(vm, client, fetch_failure(vm, "the request body could not be sent"));
+            *failure = fetch_type_error(vm, "fetch request body chunks must be Uint8Array",
+                mal_value_new_undefined());
         }
+        if (mal_value_is_undefined(*failure) && (bytes == nullptr || !fetch_write(vm, client, bytes, length, false)))
+            *failure = fetch_failure(vm, "the request body could not be sent");
+        free(bytes);
     }
-    if (vm->completion.kind == MAL_COMPLETION_THROW) fetch_fail(vm, client, fetch_take_exception(vm));
+    if (vm->completion.kind == MAL_COMPLETION_THROW) *failure = fetch_take_exception(vm);
+    if (!mal_value_is_undefined(*failure)) {
+        // The server is still reading the body, so the request must end too.
+        fetch_fail(vm, client, *failure);
+        fetch_abandon(vm, client);
+    }
     mal_gc_unroot(&root);
     return mal_value_new_undefined();
 }
@@ -484,7 +497,8 @@ static MalValue fetch_upload_rejected(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self; (void) nt;
     FetchClient *client = fetch_slot_client(vm, callee);
-    if (client == nullptr || client->aborted) return mal_value_new_undefined();
+    if (client == nullptr || client->aborted || !mal_value_is_object(client->reader))
+        return mal_value_new_undefined();
     client->reader = mal_value_new_undefined();
     fetch_fail(vm, client, argc > 0 ? args[0] : mal_value_new_undefined());
     fetch_abandon(vm, client);
@@ -696,6 +710,12 @@ static bool fetch_follow(MalVm *vm, FetchClient *client, const MalHttpCodecHead 
     free(origin);
     free(next_origin);
     if (to_get) {
+        if (mal_value_is_object(client->reader)) {
+            MalValue reader = client->reader;
+            client->reader = mal_value_new_undefined();
+            mal_readable_stream_default_reader_release(vm, reader);
+        }
+        client->stream_body = false;
         char *get = strdup("GET");
         if (get != nullptr) {
             free(client->method);
@@ -1052,6 +1072,7 @@ static MalValue fetch_function(
         vm, mal_web_group_export(vm, fetch_group, "Request"), arguments, argc > 1 ? 2 : 1);
     MalValue result;
     if (made.kind == MAL_COMPLETION_THROW) {
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
         result = fetch_rejected(vm, made.value);
         goto done;
     }
