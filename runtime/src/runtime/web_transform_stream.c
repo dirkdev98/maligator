@@ -31,8 +31,7 @@ enum {
     TS_ALGORITHM_JS,
     TS_ALGORITHM_ENCODE,
     TS_ALGORITHM_DECODE,
-    TS_ALGORITHM_COMPRESS,
-    TS_ALGORITHM_DECOMPRESS,
+    TS_ALGORITHM_CODEC,
 };
 
 #define TS_VISIBLE (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
@@ -234,7 +233,19 @@ static bool ts_enqueue(MalVm *vm, MalReadableStreamObject *stream, MalValue chun
 
 static bool ts_encode_chunk(MalVm *vm, MalReadableStreamObject *controller, MalValue chunk);
 static bool ts_decode_chunk(MalVm *vm, MalReadableStreamObject *controller, MalValue chunk, bool flush);
-static bool ts_zlib_chunk(MalVm *vm, MalReadableStreamObject *controller, MalValue chunk, bool flush);
+typedef struct TsCodec {
+    // The constructor supplies the codec so a plain TransformStream can link without zlib.
+    bool (*chunk)(MalVm *vm, MalReadableStreamObject *controller, MalValue chunk, bool flush);
+} TsCodec;
+
+static bool ts_codec_chunk(MalVm *vm, MalReadableStreamObject *controller, MalValue chunk, bool flush) {
+    TsCodec *codec = controller->as.transform_controller.codec;
+    if (codec == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "The compression stream is closed");
+        return false;
+    }
+    return codec->chunk(vm, controller, chunk, flush);
+}
 
 static MalValue ts_transform_algorithm(MalVm *vm, MalReadableStreamObject *controller, MalValue chunk) {
     MalValue roots[2] = {mal_value_from_readable_stream_object(controller), chunk};
@@ -246,8 +257,7 @@ static MalValue ts_transform_algorithm(MalVm *vm, MalReadableStreamObject *contr
     switch (controller->as.transform_controller.algorithm) {
         case TS_ALGORITHM_ENCODE: ok = ts_encode_chunk(vm, controller, roots[1]); break;
         case TS_ALGORITHM_DECODE: ok = ts_decode_chunk(vm, controller, roots[1], false); break;
-        case TS_ALGORITHM_COMPRESS:
-        case TS_ALGORITHM_DECOMPRESS: ok = ts_zlib_chunk(vm, controller, roots[1], false); break;
+        case TS_ALGORITHM_CODEC: ok = ts_codec_chunk(vm, controller, roots[1], false); break;
         default:
             if (mal_value_is_callable(controller->as.transform_controller.transform_method)) {
                 MalValue args[2] = {roots[1], roots[0]};
@@ -407,7 +417,7 @@ static MalValue ts_finish(MalVm *vm, MalReadableStreamObject *controller, i32 mo
     if (mode == 0 && algorithm != TS_ALGORITHM_JS) {
         ok = algorithm == TS_ALGORITHM_ENCODE ? ts_encode_chunk(vm, controller, mal_value_new_undefined())
             : algorithm == TS_ALGORITHM_DECODE ? ts_decode_chunk(vm, controller, mal_value_new_undefined(), true)
-            : ts_zlib_chunk(vm, controller, mal_value_new_undefined(), true);
+            : ts_codec_chunk(vm, controller, mal_value_new_undefined(), true);
     } else {
         MalValue method = mode == 0 ? controller->as.transform_controller.flush_method
             : controller->as.transform_controller.cancel_method;
@@ -758,7 +768,7 @@ static MalReadableStreamObject *ts_wrapper_controller(MalReadableStreamObject *w
 }
 
 static MalValue ts_wrapper_new(MalVm *vm, MalReadableStreamKind kind, MalValue new_target, MalValue callee,
-    u8 algorithm, MalValue helper, void *codec) {
+    u8 algorithm, MalValue helper, TsCodec *codec, void (*codec_free)(void *)) {
     MalValue roots[3] = {helper, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
     MalRootSpan root;
     mal_gc_root(&root, roots, 3);
@@ -774,17 +784,11 @@ static MalValue ts_wrapper_new(MalVm *vm, MalReadableStreamKind kind, MalValue n
         MalReadableStreamObject *controller = ts_wrapper_controller(wrapper);
         controller->as.transform_controller.helper = roots[0];
         controller->as.transform_controller.codec = codec;
+        controller->as.transform_controller.codec_free = codec_free;
         codec = nullptr;
         result = roots[1];
     }
-#if MAL_NODE
-    if (codec != nullptr) {
-        MalZlibStream *handle = codec;
-        mal_zlib_free(&handle);
-    }
-#else
-    (void) codec;
-#endif
+    if (codec != nullptr) codec_free(codec);
     mal_gc_unroot(&root);
     return result;
 }
@@ -852,15 +856,22 @@ static bool ts_decode_chunk(MalVm *vm, MalReadableStreamObject *controller, MalV
 }
 
 #if MAL_NODE
-static void ts_codec_free(void *codec) {
-    MalZlibStream *handle = codec;
-    mal_zlib_free(&handle);
+typedef struct TsZlibCodec {
+    TsCodec base;
+    MalZlibStream *stream;
+    bool encode;
+} TsZlibCodec;
+
+static void ts_zlib_free(void *codec) {
+    TsZlibCodec *state = codec;
+    mal_zlib_free(&state->stream);
+    free(state);
 }
 
 static bool ts_zlib_chunk(MalVm *vm, MalReadableStreamObject *controller, MalValue chunk, bool flush) {
     MalReadableStreamObject *stream = ts_stream_of(controller);
-    MalZlibStream *codec = controller->as.transform_controller.codec;
-    bool encode = controller->as.transform_controller.algorithm == TS_ALGORITHM_COMPRESS;
+    TsZlibCodec *codec = controller->as.transform_controller.codec;
+    bool encode = codec->encode;
     MalBufferSourceSpan span = {0};
     if (!flush && mal_buffer_source_span(chunk, &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -868,10 +879,6 @@ static bool ts_zlib_chunk(MalVm *vm, MalReadableStreamObject *controller, MalVal
         return false;
     }
     usize length = span.length;
-    if (codec == nullptr) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, (const byte *) "The compression stream is closed");
-        return false;
-    }
     byte *copy = nullptr;
     if (length > 0) {
         copy = malloc(length);
@@ -898,7 +905,7 @@ static bool ts_zlib_chunk(MalVm *vm, MalReadableStreamObject *controller, MalVal
             capacity *= 2;
         }
         usize consumed = 0, produced = 0;
-        status = mal_zlib_pump(codec, (const uint8_t *) (copy == nullptr ? nullptr : copy + offset), length - offset,
+        status = mal_zlib_pump(codec->stream, (const uint8_t *) (copy == nullptr ? nullptr : copy + offset), length - offset,
             (uint8_t *) (output + used), capacity - used, mode, &consumed, &produced);
         offset += consumed;
         used += produced;
@@ -908,7 +915,7 @@ static bool ts_zlib_chunk(MalVm *vm, MalReadableStreamObject *controller, MalVal
     }
     free(copy);
     if (ok && flush && !encode && status >= 0 && status != MAL_ZLIB_STATUS_STREAM_END) {
-        status = mal_zlib_finish(codec);
+        status = mal_zlib_finish(codec->stream);
     }
     if (ok && !flush && !encode && status == MAL_ZLIB_STATUS_STREAM_END && offset < length) {
         status = MAL_ZLIB_STATUS_DATA_ERROR;
@@ -925,7 +932,7 @@ static bool ts_zlib_chunk(MalVm *vm, MalReadableStreamObject *controller, MalVal
         return false;
     }
     if (flush) {
-        ts_codec_free(codec);
+        ts_zlib_free(codec);
         controller->as.transform_controller.codec = nullptr;
     }
     bool result = true;
@@ -977,17 +984,19 @@ static MalValue ts_zlib_constructor(MalVm *vm, const MalValue *args, i32 argc, M
         mal_gc_unroot(&root);
         return mal_value_new_undefined();
     }
-    MalZlibStream *codec = nullptr;
-    if (mal_zlib_create_codec(kind, encode ? 1 : 0, -1, 15, &codec) < 0 || codec == nullptr) {
+    TsZlibCodec *codec = malloc(sizeof *codec);
+    if (codec == nullptr) {
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
     }
-    MalValue result = ts_wrapper_new(vm, encode ? MAL_COMPRESSION_STREAM : MAL_DECOMPRESSION_STREAM, new_target,
-        callee, encode ? TS_ALGORITHM_COMPRESS : TS_ALGORITHM_DECOMPRESS, mal_value_new_undefined(), codec);
-    if (mal_value_is_readable_stream_object(result)) {
-        ts_wrapper_controller(mal_value_to_readable_stream_object(result))->as.transform_controller.codec_free = ts_codec_free;
+    *codec = (TsZlibCodec) {.base = {.chunk = ts_zlib_chunk}, .encode = encode};
+    if (mal_zlib_create_codec(kind, encode ? 1 : 0, -1, 15, &codec->stream) < 0 || codec->stream == nullptr) {
+        ts_zlib_free(codec);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
     }
-    return result;
+    return ts_wrapper_new(vm, encode ? MAL_COMPRESSION_STREAM : MAL_DECOMPRESSION_STREAM, new_target,
+        callee, TS_ALGORITHM_CODEC, mal_value_new_undefined(), &codec->base, ts_zlib_free);
 }
 
 static MalValue ts_compression_constructor(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
@@ -1000,11 +1009,6 @@ static MalValue ts_decompression_constructor(MalVm *vm, MalValue self, const Mal
     MalValue new_target, MalValue callee) {
     (void) self;
     return ts_zlib_constructor(vm, args, argc, new_target, callee, false);
-}
-#else
-static bool ts_zlib_chunk(MalVm *vm, MalReadableStreamObject *controller, MalValue chunk, bool flush) {
-    (void) vm; (void) controller; (void) chunk; (void) flush;
-    return true;
 }
 #endif
 
@@ -1022,7 +1026,7 @@ static MalValue ts_text_encoder_stream_constructor(MalVm *vm, MalValue self, con
     MalValue constructor = mal_web_group_export(vm, encoding, "TextEncoder");
     MalCompletion encoder = mal_vm_construct_value(vm, constructor, nullptr, 0);
     if (encoder.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
-    return ts_wrapper_new(vm, MAL_TEXT_ENCODER_STREAM, new_target, callee, TS_ALGORITHM_ENCODE, encoder.value, nullptr);
+    return ts_wrapper_new(vm, MAL_TEXT_ENCODER_STREAM, new_target, callee, TS_ALGORITHM_ENCODE, encoder.value, nullptr, nullptr);
 }
 
 static MalValue ts_text_decoder_stream_constructor(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
@@ -1039,7 +1043,7 @@ static MalValue ts_text_decoder_stream_constructor(MalVm *vm, MalValue self, con
     MalValue constructor = mal_web_group_export(vm, encoding, "TextDecoder");
     MalCompletion decoder = mal_vm_construct_value(vm, constructor, args, argc > 2 ? 2 : argc);
     if (decoder.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
-    return ts_wrapper_new(vm, MAL_TEXT_DECODER_STREAM, new_target, callee, TS_ALGORITHM_DECODE, decoder.value, nullptr);
+    return ts_wrapper_new(vm, MAL_TEXT_DECODER_STREAM, new_target, callee, TS_ALGORITHM_DECODE, decoder.value, nullptr, nullptr);
 }
 
 static MalValue ts_text_property(MalVm *vm, MalValue self, MalReadableStreamKind kind, const char *name) {
@@ -1133,16 +1137,6 @@ void mal_transform_stream_install(MalVm *vm, MalObject *global_this) {
     ts_define_getter(vm, decoder, "ignoreBOM", ts_decoder_stream_ignore_bom);
     ts_define_getter(vm, decoder, "readable", ts_wrapper_readable);
     ts_define_getter(vm, decoder, "writable", ts_wrapper_writable);
-#if MAL_NODE
-    MalObject *compression = ts_install_class(vm, global_this, "CompressionStream", 1,
-        ts_compression_constructor, roots, roots[2]);
-    ts_define_getter(vm, compression, "readable", ts_wrapper_readable);
-    ts_define_getter(vm, compression, "writable", ts_wrapper_writable);
-    MalObject *decompression = ts_install_class(vm, global_this, "DecompressionStream", 1,
-        ts_decompression_constructor, roots, roots[2]);
-    ts_define_getter(vm, decompression, "readable", ts_wrapper_readable);
-    ts_define_getter(vm, decompression, "writable", ts_wrapper_writable);
-#endif
     mal_gc_unroot(&root);
 }
 
@@ -1155,3 +1149,33 @@ static bool web_streams_build(MalVm *vm, MalObject *exports) {
 }
 
 MAL_WEB_GROUP_DEFINE(streams, MAL_WEB_GROUP_STREAMS, web_streams_build)
+
+#if MAL_NODE
+void mal_host_install_web_compression(MalVm *vm, const MalHostInstallSlot *slots,
+    i32 count, const MalHostLaunchContext *launch) {
+    (void) slots;
+    (void) count;
+    (void) launch;
+    MalObject *streams = mal_web_streams_ensure(vm);
+    if (streams == nullptr) return;
+    MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
+    MalValue controller = mal_web_group_export(vm, streams, "TransformStreamDefaultController");
+    MalValue roots[] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, mal_vm_function_prototype(vm, controller)};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    static const struct {
+        const char *name;
+        MalNativeFunctionCallback constructor;
+    } classes[] = {
+        {"CompressionStream", ts_compression_constructor},
+        {"DecompressionStream", ts_decompression_constructor},
+    };
+    for (usize i = 0; i < countof(classes); i++) {
+        MalObject *prototype = ts_install_class(vm, global_this, classes[i].name, 1,
+            classes[i].constructor, roots, roots[2]);
+        ts_define_getter(vm, prototype, "readable", ts_wrapper_readable);
+        ts_define_getter(vm, prototype, "writable", ts_wrapper_writable);
+    }
+    mal_gc_unroot(&root);
+}
+#endif

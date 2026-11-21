@@ -113,14 +113,6 @@ export const WORKER_THREADS_INSTALLER_SYMBOL = hostInstallerSymbol("node:worker_
 /** The node:http installer, which also defines Node's WebSocket globals. */
 export const HTTP_INSTALLER_SYMBOL = hostInstallerSymbol("node:http");
 
-/** Free WebSocket globals that node:http defines; Node 26 exports all but ErrorEvent from it too. */
-export const WEBSOCKET_GLOBALS: ReadonlyArray<string> = [
-	"WebSocket",
-	"MessageEvent",
-	"CloseEvent",
-	"ErrorEvent",
-];
-
 /** Free messaging globals that node:worker_threads defines. */
 export const WORKER_GLOBALS: ReadonlyArray<string> = [
 	"BroadcastChannel",
@@ -180,11 +172,15 @@ export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 			"CountQueuingStrategy",
 			"TextEncoderStream",
 			"TextDecoderStream",
-			"CompressionStream",
-			"DecompressionStream",
 		],
 		computedMember: true,
 		surface: "web",
+	},
+	{
+		installer: "mal_host_install_web_compression",
+		globals: ["CompressionStream", "DecompressionStream"],
+		computedMember: true,
+		surface: "node",
 	},
 	{
 		installer: "mal_host_install_web_url",
@@ -241,8 +237,14 @@ export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 		surface: "node",
 	},
 	{
+		installer: "mal_host_install_web_node_events",
+		globals: ["MessageEvent", "CloseEvent", "ErrorEvent"],
+		computedMember: false,
+		surface: "node",
+	},
+	{
 		installer: HTTP_INSTALLER_SYMBOL,
-		globals: WEBSOCKET_GLOBALS,
+		globals: ["WebSocket"],
 		computedMember: false,
 		surface: "node",
 	},

@@ -47,6 +47,11 @@ Each run writes a report under `.cache/bench-size/`. On macOS, it also writes
 linker maps and ranks the retained, file-backed symbol bytes by input object and
 Rust crate where the linker and symbol names provide that information. The file
 sizes include headers, alignment, and other data outside those symbol totals.
+On macOS, the command exits with an error if a link map contains a live symbol
+from a component forbidden for that fixture. The report identifies the component,
+object, and symbol. See the [fixture definitions](../scripts/binary-size.ts) for
+the checked components.
+
 Compare reports from the same target, toolchain, and absolute source directory.
 The source directory can affect generated symbol names and link layout.
 

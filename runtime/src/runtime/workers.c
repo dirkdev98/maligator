@@ -22,7 +22,6 @@
 #include "worker_manifest.h"
 #if MAL_NODE
 #include "node_module.h"
-#include "web_websocket.h"
 #endif
 #include "gc.h"
 #include "gc_process.h"
@@ -42,6 +41,7 @@
 #include "vm_ops.h"
 #include "atomics_async.h"
 #include "personality.h"
+#include "web_events_message.h"
 #include "web_events_object.h"
 #include "web_surface.h"
 #include "web_globals.h"

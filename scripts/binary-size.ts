@@ -21,13 +21,72 @@ const lean = resolveBuildConfig({});
 const web = resolveBuildConfig({ surface: { webPlatform: true } });
 const node = resolveBuildConfig({ surface: { node: true } });
 const nodeWeb = resolveBuildConfig({ surface: { node: true, webPlatform: true } });
-const fixtures = [
-	{ name: "hello", file: "bench/size/hello.mjs", config: lean, bun: true },
-	{ name: "serve", file: "bench/size/serve.mjs", config: web, bun: false },
+
+interface LinkedSymbol {
+	object: string;
+	symbol: string;
+	crate: string | undefined;
+}
+
+const forbiddenComponents = {
+	brotli: ({ crate }) => crate === "brotli" || crate === "brotli_decompressor",
+	rustls: ({ crate }) => /^rustls(?:_|$)/.test(crate ?? ""),
+	"sqlite3.o": ({ object }) => /(?:^|[(-])sqlite3\.o\)?$/.test(object),
+	node_fs: ({ object }) => /(?:^|[(-])node_fs\.o\)?$/.test(object),
+	"HTTP client": ({ object, symbol }) =>
+		/(?:^|[(-])(?:web_fetch_client|http_client)\.o\)?$/.test(object) ||
+		/^_mal_(?:web_fetch_client|http_client)_/.test(symbol),
+	TLS: ({ crate, object, symbol }) =>
+		/^rustls(?:_|$)/.test(crate ?? "") ||
+		/(?:^|[(-])node_tls\.o\)?$/.test(object) ||
+		symbol.startsWith("_mal_tls_"),
+} satisfies Record<string, (entry: LinkedSymbol) => boolean>;
+
+type ForbiddenComponent = keyof typeof forbiddenComponents;
+
+const fixtures: Array<{
+	name: string;
+	file: string;
+	config: typeof lean;
+	bun: boolean;
+	forbidden?: ReadonlyArray<ForbiddenComponent>;
+}> = [
+	{
+		name: "hello",
+		file: "bench/size/hello.mjs",
+		config: lean,
+		bun: true,
+		forbidden: ["HTTP client", "TLS"],
+	},
+	{
+		name: "serve",
+		file: "bench/size/serve.mjs",
+		config: web,
+		bun: false,
+		forbidden: ["brotli", "rustls"],
+	},
 	{ name: "fetch", file: "bench/size/fetch.mjs", config: web, bun: true },
-	{ name: "node-hello", file: "bench/size/node-hello.mjs", config: node, bun: true },
-	{ name: "node-fs", file: "bench/size/node-fs.mjs", config: node, bun: true },
-	{ name: "http-bare", file: "bench/http/server_mal.js", config: web, bun: false },
+	{
+		name: "node-hello",
+		file: "bench/size/node-hello.mjs",
+		config: node,
+		bun: true,
+		forbidden: ["sqlite3.o", "node_fs"],
+	},
+	{
+		name: "node-fs",
+		file: "bench/size/node-fs.mjs",
+		config: node,
+		bun: true,
+		forbidden: ["brotli", "rustls", "sqlite3.o"],
+	},
+	{
+		name: "http-bare",
+		file: "bench/http/server_mal.js",
+		config: web,
+		bun: false,
+		forbidden: ["brotli", "rustls"],
+	},
 	{ name: "express", file: "bench/http/express-server.cjs", config: nodeWeb, bun: true },
 ];
 
@@ -52,7 +111,11 @@ function rustCrate(symbol: string): string | undefined {
 	return crate?.[2]?.slice(0, Number(crate[1]));
 }
 
-function darwinAttribution(mapFile: string, built: LocalBuildResult) {
+function darwinAttribution(
+	mapFile: string,
+	built: LocalBuildResult,
+	forbidden: ReadonlyArray<ForbiddenComponent>,
+) {
 	const { c, rust } = built.artifacts;
 	const archiveNames = new Map([
 		[c.runtime, "libMalRuntime.a"],
@@ -65,6 +128,7 @@ function darwinAttribution(mapFile: string, built: LocalBuildResult) {
 	);
 	const byObject = new Map<string, number>();
 	const byRustCrate = new Map<string, number>();
+	const retainedForbidden = new Map<ForbiddenComponent, LinkedSymbol>();
 	const names = new Map<number, string>();
 	const zeroFill: Array<{ address: number; end: number }> = [];
 	let section = "";
@@ -100,6 +164,16 @@ function darwinAttribution(mapFile: string, built: LocalBuildResult) {
 		if (section === "# Symbols:") {
 			const entry = /^(0x\w+)\s+(0x\w+)\s+\[\s*(\d+)\]\s+(.+)$/.exec(line);
 			if (entry === null) continue;
+			const symbol = entry[4]!;
+			const object = names.get(Number(entry[3]));
+			if (object === undefined)
+				throw new Error(`Unknown object for map symbol ${symbol}`);
+			const crate = rustCrate(symbol);
+			const linked = { object, symbol, crate };
+			for (const component of forbidden) {
+				if (!retainedForbidden.has(component) && forbiddenComponents[component](linked))
+					retainedForbidden.set(component, linked);
+			}
 			const address = Number(entry[1]);
 			const bytes = Number(entry[2]);
 			if (
@@ -107,11 +181,7 @@ function darwinAttribution(mapFile: string, built: LocalBuildResult) {
 				zeroFill.some((range) => range.address <= address && address < range.end)
 			)
 				continue;
-			const object = names.get(Number(entry[3]));
-			if (object === undefined)
-				throw new Error(`Unknown object for map symbol ${entry[4]}`);
 			addBytes(byObject, object, bytes);
-			const crate = rustCrate(entry[4]!);
 			if (crate !== undefined) addBytes(byRustCrate, crate, bytes);
 		}
 	}
@@ -120,6 +190,10 @@ function darwinAttribution(mapFile: string, built: LocalBuildResult) {
 		mapFile: path.basename(mapFile),
 		byObject: rankedBytes(byObject),
 		byRustCrate: rankedBytes(byRustCrate),
+		retainedForbidden: [...retainedForbidden].map(([component, entry]) => ({
+			component,
+			...entry,
+		})),
 	};
 }
 
@@ -193,7 +267,9 @@ try {
 				: undefined,
 		});
 		const binaryBytes = statSync(built.binaryPath).size;
-		const attribution = collectMap ? darwinAttribution(mapFile, built) : undefined;
+		const attribution = collectMap
+			? darwinAttribution(mapFile, built, fixture.forbidden ?? [])
+			: undefined;
 		let bunBytes: number | undefined;
 		if (fixture.bun && bunVersion !== undefined) {
 			const outfile = path.join(scratch, `${name}-bun`);
@@ -221,6 +297,10 @@ try {
 		);
 		if (attribution !== undefined) {
 			console.log(`  Link map ${mapFile}`);
+			for (const { component, object } of attribution.retainedForbidden) {
+				console.error(`  ${name} retains forbidden component ${component} in ${object}`);
+				process.exitCode = 1;
+			}
 			for (const [label, groups] of [
 				["Objects", attribution.byObject],
 				["Rust crates", attribution.byRustCrate],

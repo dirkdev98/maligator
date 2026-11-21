@@ -52,6 +52,8 @@
 #include "node_vm.h"
 #include "node_worker_threads.h"
 #include "node_zlib.h"
+#include "web_events_message.h"
+#include "web_transform_stream.h"
 #endif
 
 // A program that links C libraries defines the real resolver in its generated registry unit.
@@ -94,6 +96,8 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_web_crypto);
 #endif
 #if MAL_NODE
+    MATCH_INSTALLER(mal_host_install_web_compression);
+    MATCH_INSTALLER(mal_host_install_web_node_events);
     MATCH_INSTALLER(mal_host_install_process);
     MATCH_INSTALLER(mal_host_install_node_assert);
     MATCH_INSTALLER(mal_host_install_node_assert_strict);
