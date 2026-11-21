@@ -762,10 +762,25 @@ bool mal_op_call_guarded_math(
     MalCallable *callable, const MalInstruction *instruction);
 bool mal_op_call_guarded_builtin(
     MalCallable *callable, const MalInstruction *instruction);
+/**
+ * A CALL of a primordial DataView accessor, performed in place when its Number
+ * operands need no conversion and the access fits a fixed view over an attached,
+ * unshared buffer; false leaves the call, and every error it raises, to the builtin.
+ */
+bool mal_op_call_data_view(MalCallable *callable, const MalInstruction *instruction);
 #include "generated/known_native_entries.inc"
 MalValue mal_vm_call_known_native(MalVm *vm, MalNativeFunctionCallback callback, i32 operation, MalValue receiver, const MalValue *args, i32 count, i32 flags);
 MalValue mal_vm_call_known(MalVm *vm, i32 operation, MalValue receiver, const MalValue *args, i32 count, i32 flags);
 void mal_op_call_known(MalCallable *callable, const MalInstruction *instruction);
+#if !MAL_REALMS
+/** The offset that marks a binary Math kernel in `MalVm.known_math_operations`. */
+#define MAL_VM_KNOWN_MATH_BINARY 64
+/**
+ * A CALL_KNOWN of a loaded Math primordial on Number arguments, computed in place;
+ * false leaves the call, and any conversion it performs, to the builtin.
+ */
+bool mal_op_call_known_math(MalCallable *callable, const MalInstruction *instruction);
+#endif
 
 
 void mal_op_call_spread(MalCallable *callable, const MalInstruction *instruction);
@@ -2379,8 +2394,39 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     return mal_vm_property_try_load_static(vm, receiver, ic, out);
 }
 
-/** Typed arrays whose prototype is the kind prototype or this site's registered
- * intermediate prototype answer when the view has no own named properties. */
+/**
+ * A typed-array `length` row: a view whose prototype is its kind's prototype or this
+ * site's registered intermediate prototype answers when it has no own named
+ * properties. Only a dispatch site shared by every static load inlines it; a site
+ * expanded per load reaches it through the out-of-line remainder, since only the
+ * Array row may grow every such site.
+ */
+static inline __attribute__((always_inline)) bool mal_vm_typed_array_length_try_load(
+    MalVm *vm, MalValue receiver, const MalInlineCache *ic, MalValue *out
+) {
+    if (ic->mode != MAL_IC_MODE_TYPED_ARRAY_LENGTH || !mal_vm_watched_methods_intact(vm) ||
+        !mal_value_is_typed_array_object(receiver)) {
+        return false;
+    }
+    const MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
+    const MalObject *prototype = mal_object_prototype(&array->object);
+    const MalArrayBufferObject *buffer = array->buffer;
+    if (prototype == nullptr ||
+        (prototype != ic->proto_object[0] &&
+         prototype != mal_value_to_object(
+             vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + array->kind])) ||
+        array->object.shape->inline_count != 0 ||
+        mal_object_has_public_overflow(&array->object) ||
+        // A fixed view over a fixed buffer keeps its validated extent until detached.
+        array->length_tracking || buffer == nullptr || buffer->detached ||
+        buffer->resizable || buffer->shared) {
+        return false;
+    }
+    *out = mal_value_from_u32(array->length);
+    mal_perf_ic_load_typed_array_length_hit();
+    return true;
+}
+
 __attribute__((noinline)) MAL_PRESERVE_MOST bool mal_vm_property_try_load_length_static_remaining(
     MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out);
 

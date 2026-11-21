@@ -588,8 +588,10 @@ static uptr mal_vm_compute_stack_top(void) {
 static void mal_vm_init_engine_state(MalVm *vm) {
     vm->literal_cache_count = 0;
     vm->literal_cache_cursor = 0;
+    vm->data_view_accessor_hint = 0;
 #if !MAL_REALMS
     memset(vm->known_primordial_values, 0, sizeof(vm->known_primordial_values));
+    memset(vm->known_math_operations, 0, sizeof(vm->known_math_operations));
 #endif
     vm->error_stack_marker = mal_value_new_undefined();
     vm->error_callsite_marker = mal_value_new_undefined();
@@ -2690,7 +2692,9 @@ static void mal_vm_run_until_frame_count(
         MalVmFrame *frame = &vm->frames[vm->frame_count - 1];
         const MalInstruction *instructions = frame->function->instructions;
         MalValue *registers = frame->registers;
-        i32 instruction_pointer = frame->instruction_pointer;
+        // Pointer width, so no dispatch sign-extends it to index `instructions`;
+        // frames keep the i32 every instruction index fits in.
+        size instruction_pointer = frame->instruction_pointer;
         MAL_PERF_COUNT(interpreter_state_reloads);
 
         while (true) {
@@ -2999,20 +3003,44 @@ static void mal_vm_run_until_frame_count(
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;
                 }
+                // A Number operand converts nothing, so these match `mal_vm_unary_op`
+                // without the helper boundary.
                 if (mal_ops_is_number(value)) {
-                    if (op == MAL_UNARY_TO_NUMERIC) {
-                        registers[instruction->as.unary.dst] = value;
-                        MAL_VM_INTERPRETER_DIRECT_LEAF();
-                        continue;
+                    MalValue result;
+                    i32 integer = mal_value_to_i32(value);
+                    switch (op) {
+                        case MAL_UNARY_TO_NUMERIC:
+                        case MAL_UNARY_PLUS:
+                            result = value;
+                            break;
+                        case MAL_UNARY_INCREMENT:
+                        case MAL_UNARY_DECREMENT: {
+                            i32 unit = op == MAL_UNARY_INCREMENT ? 1 : -1;
+                            i32 sum;
+                            result = mal_value_is_int32(value) &&
+                                    !__builtin_add_overflow(integer, unit, &sum)
+                                ? mal_value_from_i32(sum)
+                                : mal_ops_number_value(mal_ops_number_as_f64(value) + unit);
+                            break;
+                        }
+                        case MAL_UNARY_NEGATE:
+                            // Zero and INT32_MIN negate through f64 to keep -0 and 2^31 exact.
+                            result = mal_value_is_int32(value) && integer != 0 &&
+                                    integer != INT32_MIN
+                                ? mal_value_from_i32(-integer)
+                                : mal_value_from_f64_convert_nan(-mal_ops_number_as_f64(value));
+                            break;
+                        case MAL_UNARY_BIT_NOT:
+                            result = mal_value_from_i32(~mal_ops_number_value_to_i32(value));
+                            break;
+                        default:
+                            goto mal_vm_interpreter_unary_slow;
                     }
-                    if (op == MAL_UNARY_INCREMENT || op == MAL_UNARY_DECREMENT) {
-                        f64 unit = op == MAL_UNARY_INCREMENT ? 1.0 : -1.0;
-                        registers[instruction->as.unary.dst] = mal_ops_number_value(
-                            mal_ops_number_as_f64(value) + unit);
-                        MAL_VM_INTERPRETER_DIRECT_LEAF();
-                        continue;
-                    }
+                    registers[instruction->as.unary.dst] = result;
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
                 }
+            mal_vm_interpreter_unary_slow:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_unary(frame, instruction));
                 break;
             }
@@ -3131,6 +3159,7 @@ static void mal_vm_run_until_frame_count(
                 }
                 bool cache_hit = (ic->mode == MAL_IC_MODE_INHERITED_VALUE &&
                         mal_vm_inherited_value_try_load(vm, object, ic, &result)) ||
+                    mal_vm_typed_array_length_try_load(vm, object, ic, &result) ||
                     mal_vm_property_try_load_length_static(vm, object, ic, &result);
                 if (cache_hit) {
                     registers[instruction->as.load_property_static.dst] = result;
@@ -3771,10 +3800,24 @@ static void mal_vm_run_until_frame_count(
                     }
                     break;
                 }
+                // Only a DataView receiver pays for identifying the callee.
+                i32 receiver = instruction->as.call.this_value;
+                if (receiver >= 0 &&
+                    mal_value_is_heap_type(registers[receiver], MAL_HEAP_DATA_VIEW_OBJECT) &&
+                    mal_op_call_data_view(frame, instruction)) {
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call(frame, instruction));
                 break;
             }
             MAL_VM_CASE(CALL_KNOWN)
+#if !MAL_REALMS
+                if (mal_op_call_known_math(frame, instruction)) {
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
+#endif
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call_known(frame, instruction));
                 break;
             MAL_VM_CASE(CONSTRUCT) {

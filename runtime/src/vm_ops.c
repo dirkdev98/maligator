@@ -3036,26 +3036,8 @@ bool mal_vm_object_try_store_static_remaining(
 MAL_PRESERVE_MOST bool mal_vm_property_try_load_length_static_remaining(
     MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
 ) {
-    if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH && mal_vm_watched_methods_intact(vm) &&
-        mal_value_is_typed_array_object(receiver)) {
-        const MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
-        const MalObject *prototype = mal_object_prototype(&array->object);
-        const MalArrayBufferObject *buffer = array->buffer;
-        if (prototype != nullptr &&
-            (prototype == ic->proto_object[0] ||
-             prototype == mal_value_to_object(
-                 vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + array->kind])) &&
-            array->object.shape->inline_count == 0 &&
-            !mal_object_has_public_overflow(&array->object) &&
-            // A fixed view over a fixed buffer keeps its validated extent until detached.
-            !array->length_tracking && buffer != nullptr && !buffer->detached &&
-            !buffer->resizable && !buffer->shared) {
-            *out = mal_value_from_u32(array->length);
-            mal_perf_ic_load_typed_array_length_hit();
-            return true;
-        }
-    }
-    return mal_vm_property_try_load_static(vm, receiver, ic, out);
+    return mal_vm_typed_array_length_try_load(vm, receiver, ic, out) ||
+        mal_vm_property_try_load_static(vm, receiver, ic, out);
 }
 
 static __attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
@@ -3947,6 +3929,70 @@ bool mal_op_call_guarded_math(
     return true;
 }
 
+bool mal_op_call_data_view(MalCallable *callable, const MalInstruction *instruction) {
+    static const u8 sizes[MAL_DATA_VIEW_ACCESSOR_COUNT] = {
+        [MAL_DATA_VIEW_GET_INT8] = 1, [MAL_DATA_VIEW_GET_UINT8] = 1,
+        [MAL_DATA_VIEW_GET_INT16] = 2, [MAL_DATA_VIEW_GET_UINT16] = 2,
+        [MAL_DATA_VIEW_GET_INT32] = 4, [MAL_DATA_VIEW_GET_UINT32] = 4,
+        [MAL_DATA_VIEW_GET_FLOAT32] = 4, [MAL_DATA_VIEW_GET_FLOAT64] = 8,
+        [MAL_DATA_VIEW_SET_INT8] = 1, [MAL_DATA_VIEW_SET_UINT8] = 1,
+        [MAL_DATA_VIEW_SET_INT16] = 2, [MAL_DATA_VIEW_SET_UINT16] = 2,
+        [MAL_DATA_VIEW_SET_INT32] = 4, [MAL_DATA_VIEW_SET_UINT32] = 4,
+        [MAL_DATA_VIEW_SET_FLOAT32] = 4, [MAL_DATA_VIEW_SET_FLOAT64] = 8,
+    };
+    MalValue callee = mal_op_value_operand(callable, instruction->as.call.callee);
+    if (!mal_value_is_native_function_object(callee)) return false;
+    MalNativeFunctionCallback callback =
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee));
+    MalVm *vm = callable->vm;
+    MalDataViewAccessor accessor = (MalDataViewAccessor) vm->data_view_accessor_hint;
+    if (mal_data_view_accessor_callbacks[accessor] != callback) {
+        accessor = MAL_DATA_VIEW_ACCESSOR_COUNT;
+        for (i32 candidate = 0; candidate < MAL_DATA_VIEW_ACCESSOR_COUNT; candidate++) {
+            if (mal_data_view_accessor_callbacks[candidate] == callback) {
+                accessor = (MalDataViewAccessor) candidate;
+                break;
+            }
+        }
+        if (accessor == MAL_DATA_VIEW_ACCESSOR_COUNT) return false;
+        vm->data_view_accessor_hint = (u8) accessor;
+    }
+    bool set = accessor >= MAL_DATA_VIEW_SET_INT8;
+
+    const i32 *data = mal_op_instruction_data(callable, instruction->as.call.data_offset);
+    i32 argument_count = data[0];
+    const i32 *arguments = &data[3 + data[2]];
+    // ToIndex(undefined) is 0; any other non-Number offset may convert through user code.
+    f64 index = 0.0;
+    if (argument_count >= 1) {
+        MalValue offset = mal_op_value_operand(callable, arguments[0]);
+        if (!mal_ops_is_number(offset)) return false;
+        index = mal_ops_number_as_f64(offset);
+    }
+    // ToNumber(undefined) is NaN; any other non-Number value may convert through user code.
+    f64 number = NAN;
+    if (set && argument_count >= 2) {
+        MalValue value = mal_op_value_operand(callable, arguments[1]);
+        if (!mal_ops_is_number(value)) return false;
+        number = mal_ops_number_as_f64(value);
+    }
+    i32 endian_argument = set ? 2 : 1;
+    bool little_endian = argument_count > endian_argument &&
+        mal_value_is_truthy(mal_op_value_operand(callable, arguments[endian_argument]));
+    byte *bytes = mal_data_view_try_bytes(
+        mal_op_value_operand(callable, instruction->as.call.this_value),
+        index, sizes[accessor], set);
+    if (bytes == nullptr) return false;
+    if (set) {
+        mal_data_view_write(bytes, accessor, number, little_endian);
+        callable->registers[instruction->as.call.dst] = MAL_VALUE_UNDEFINED;
+    } else {
+        callable->registers[instruction->as.call.dst] =
+            mal_ops_number_value(mal_data_view_read(bytes, accessor, little_endian));
+    }
+    return true;
+}
+
 bool mal_op_call_guarded_builtin(
     MalCallable *callable, const MalInstruction *instruction
 ) {
@@ -4212,12 +4258,72 @@ bool mal_op_call_guarded_builtin(
     return true;
 }
 
-MalValue mal_vm_call_known_native(MalVm *vm, MalNativeFunctionCallback callback, i32 operation, MalValue receiver, const MalValue *args, i32 count, i32 flags) {
-    static const i32 nodes[] = {
+/** The primordial node each known operation calls. */
+static const i32 mal_known_operation_nodes[] = {
 #define MAL_KNOWN_OPERATION(index, node) node,
 #include "generated/known_primordials.inc"
 #undef MAL_KNOWN_OPERATION
-    };
+};
+
+#if !MAL_REALMS
+static_assert(MAL_MATH_UNARY_ROUND < MAL_VM_KNOWN_MATH_BINARY, "Math kernel tags overlap");
+static_assert(MAL_VM_KNOWN_MATH_BINARY + MAL_MATH_BINARY_MAX <= INT8_MAX, "Math kernel tags overflow");
+
+static i8 mal_vm_resolve_known_math(MalValue callee) {
+    if (!mal_value_is_native_function_object(callee)) return -1;
+    MalNativeFunctionCallback callback =
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee));
+    for (i32 unary = MAL_MATH_UNARY_NONE + 1; unary <= MAL_MATH_UNARY_ROUND; unary++) {
+        if (mal_builtin_math_unary_callbacks[unary] == callback) return (i8) unary;
+    }
+    for (i32 binary = MAL_MATH_BINARY_NONE + 1; binary <= MAL_MATH_BINARY_MAX; binary++) {
+        if (mal_builtin_math_binary_callbacks[binary] == callback) {
+            return (i8) (MAL_VM_KNOWN_MATH_BINARY + binary);
+        }
+    }
+    return -1;
+}
+
+bool mal_op_call_known_math(MalCallable *callable, const MalInstruction *instruction) {
+    u32 operation = instruction->as.call_known.operation;
+    u32 known = (operation >> 4) & 0xfffffu;
+    if ((operation & 15) != 0 || known >= MAL_KNOWN_OPERATION_COUNT) return false;
+    MalVm *vm = callable->vm;
+    i8 kernel = vm->known_math_operations[known];
+    if (kernel < 0) return false;
+    if (kernel == 0) {
+        // An unloaded primordial is left to the generic call, which loads it.
+        MalValue callee = vm->known_primordial_values[mal_known_operation_nodes[known]];
+        if (callee == 0) return false;
+        kernel = mal_vm_resolve_known_math(callee);
+        vm->known_math_operations[known] = kernel;
+        if (kernel < 0) return false;
+    }
+    const i32 *data = mal_op_instruction_data(callable, instruction->as.call_known.data_offset);
+    i32 count = data[0];
+    f64 result;
+    if (kernel < MAL_VM_KNOWN_MATH_BINARY) {
+        if (count < 1) return false;
+        MalValue argument = mal_op_value_operand(callable, data[1]);
+        if (!mal_ops_is_number(argument)) return false;
+        result = mal_builtin_math_unary_number_known(
+            (MalMathUnaryOp) kernel, mal_ops_number_as_f64(argument));
+    } else {
+        if (count != 2) return false;
+        MalValue left = mal_op_value_operand(callable, data[1]);
+        MalValue right = mal_op_value_operand(callable, data[2]);
+        if (!mal_ops_is_number(left) || !mal_ops_is_number(right)) return false;
+        result = mal_builtin_math_binary_number_known(
+            (MalMathBinaryOp) (kernel - MAL_VM_KNOWN_MATH_BINARY),
+            mal_ops_number_as_f64(left), mal_ops_number_as_f64(right));
+    }
+    callable->registers[instruction->as.call_known.dst] = mal_ops_number_value(result);
+    return true;
+}
+#endif
+
+MalValue mal_vm_call_known_native(MalVm *vm, MalNativeFunctionCallback callback, i32 operation, MalValue receiver, const MalValue *args, i32 count, i32 flags) {
+    const i32 *nodes = mal_known_operation_nodes;
 #if !MAL_REALMS
     // A plain call to a loaded primordial cannot collect before the exact call roots
     // its own operands, so it needs neither this frame's roots nor its value stack.

@@ -1893,7 +1893,18 @@ typedef struct MalVm {
 
 #if !MAL_REALMS
     MalValue known_primordial_values[MAL_KNOWN_PRIMORDIAL_COUNT];
+    /**
+     * Per known operation, the Math kernel its loaded primordial runs, resolved by an
+     * interpreted CALL_KNOWN: a unary operation, `MAL_VM_KNOWN_MATH_BINARY` plus a
+     * binary one, -1 for none, or 0 while unresolved.
+     */
+    i8 known_math_operations[MAL_KNOWN_OPERATION_COUNT];
 #endif
+    /**
+     * The DataView accessor an interpreted call matched last, tested before scanning
+     * the accessor callbacks; a loop seldom alternates between accessors.
+     */
+    u8 data_view_accessor_hint;
     const MalRuntimeImage *runtime_image;
 
     /** Initial immutable string table retained for native code's direct constants. */
