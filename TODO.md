@@ -529,6 +529,18 @@ completions.
       fd-reuse safety and avoid idle spin; accept only lower end-to-end CPU or request
       latency with stable throughput and bounded registrations.
 
+## Embedded assets
+
+- [ ] Let `EmbeddedFile.bytes()` view embedded storage in place. ArrayBuffers cannot
+      borrow static memory yet, so each call copies the embedded bytes.
+
+- [ ] Add `EmbeddedFile.stream()` once a consumer needs incremental reads; serving
+      already writes embedded bytes from the host.
+
+- [ ] Accept `maligator:assets` declarations in CommonJS modules. Only ES modules
+      can declare assets today; a CommonJS application imports a small ES module
+      that declares them.
+
 # WinterTC web platform
 
 The target is the complete ECMA-429 server surface except WebAssembly. Mal.serve

@@ -14,7 +14,7 @@ afterAll(async () => {
 	await close();
 });
 
-test("serves files materialized from the configured Mal asset", async () => {
+test("serves files materialized from an embedded directory", async () => {
 	const response = await fetch(`${origin}/assets/hello.txt`);
 	expect(response.status).toBe(200);
 	await expect(response.text()).resolves.toBe("static payload\n");

@@ -4,7 +4,6 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
-	renameSync,
 	rmSync,
 	utimesSync,
 	writeFileSync,
@@ -12,7 +11,7 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { includeConfiguredAssets } from "../src/assets.ts";
+import { matchAssetPath } from "../src/assets.ts";
 import * as cacheManagement from "../src/cache-management.ts";
 import {
 	applicationDriverPath,
@@ -30,11 +29,13 @@ import {
 	stripCompactTypes,
 	TYPE_STRIPPER_IDENTITY,
 } from "../src/compiler/frontend/compact-type-strip.ts";
-import { FrontendCompilationSession } from "../src/frontend-cache.ts";
 import {
-	PRODUCT_RUNTIME_ASSET_INCLUDE,
-	productCliConfig,
-} from "../src/product-builder.ts";
+	embedModuleDeclaration,
+	isEmbedModule,
+} from "../src/compiler/frontend/embed-declarations.ts";
+import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
+import { FrontendCompilationSession } from "../src/frontend-cache.ts";
+import { productCliConfig } from "../src/product-builder.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const cliEntry = path.join(repoRoot, "src/index.ts");
@@ -432,7 +433,6 @@ describe("command shell", () => {
 				executablePath: path.resolve("bin/maligator"),
 				inProcess: true,
 				wireProtocol: "product",
-				externalAssets: true,
 				primordials: "locked",
 				webPlatform: true,
 				node: true,
@@ -446,7 +446,6 @@ describe("command shell", () => {
 				executablePath: path.resolve("bin/maligator-mutable"),
 				inProcess: false,
 				wireProtocol: "wire-list",
-				externalAssets: true,
 				primordials: "mutable",
 				webPlatform: true,
 				node: true,
@@ -470,58 +469,60 @@ describe("command shell", () => {
 		expect(applicationDriverPath(installation, false)).toBe(
 			path.join(repoRoot, "runtime/test262_main.c"),
 		);
-		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("host_main.c");
-		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("dev_main.c");
-		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("test262_main.c");
-		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("vendor/llhttp/include/**");
-		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("vendor/llhttp/src/**");
-		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("vendor/sqlite/**");
-		for (const notice of [
+	});
+
+	it("embeds the runtime drivers and redistributed notices into the product CLI", () => {
+		const config = productCliConfig(
+			path.join(repoRoot, "compiler.malw"),
+			path.join(repoRoot, "compiler-producers.json"),
+			path.join(repoRoot, "maligator-mutable"),
+		);
+		expect(config.engine.realms).toBe(true);
+		expect(config.surface).toEqual({ webPlatform: true, node: true });
+		const graph = buildModuleGraph(path.join(repoRoot, "src/product-assets.mts"), {
+			buildConfig: config,
+			stripTypes: stripCompactTypes,
+		});
+		const declarations = [...graph.modules.keys()]
+			.filter(isEmbedModule)
+			.map(embedModuleDeclaration);
+		expect(declarations.map((declaration) => declaration.path)).toEqual(
+			expect.arrayContaining([
+				path.join(repoRoot, "compiler.malw"),
+				path.join(repoRoot, "compiler-producers.json"),
+				path.join(repoRoot, "maligator-mutable"),
+				path.join(repoRoot, "LICENSE"),
+				path.join(repoRoot, "THIRD_PARTY_NOTICES.md"),
+				path.join(repoRoot, "src/testing/runtime.mjs"),
+				path.join(repoRoot, "src/node-globals.mjs"),
+			]),
+		);
+		const runtime = declarations.find(
+			(declaration) => declaration.path === path.join(repoRoot, "runtime"),
+		)!;
+		const sources = declarations.find(
+			(declaration) => declaration.path === path.join(repoRoot, "src"),
+		)!;
+		const embeds = (declaration: typeof runtime, file: string) =>
+			declaration.include!.some((pattern) =>
+				matchAssetPath(pattern.split("/"), file.split("/"), false),
+			);
+		for (const file of [
+			"host_main.c",
+			"dev_main.c",
+			"test262_main.c",
+			"vendor/llhttp/include/llhttp.h",
+			"vendor/sqlite/sqlite3.c",
 			"vendor/llhttp/LICENSE-MIT",
 			"vendor/libuv/LICENSE",
 			"vendor/node/LICENSE",
 			"vendor/unicode/LICENSE.txt",
 		]) {
-			expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain(notice);
-			expect(existsSync(path.join(repoRoot, "runtime", notice))).toBe(true);
+			expect(existsSync(path.join(repoRoot, "runtime", file))).toBe(true);
+			expect(embeds(runtime, file)).toBe(true);
 		}
-		const productConfig = productCliConfig(
-			repoRoot,
-			path.join(repoRoot, "compiler.malw"),
-			path.join(repoRoot, "compiler-producers.json"),
-			path.join(repoRoot, "maligator-mutable"),
-		);
-		expect(productConfig.engine.realms).toBe(true);
-		expect(productConfig.surface.webPlatform).toBe(true);
-		expect(productConfig.surface.node).toBe(true);
-		expect(productConfig.assets.runtime).toMatchObject({
-			path: path.join(repoRoot, "runtime"),
-			include: PRODUCT_RUNTIME_ASSET_INCLUDE,
-		});
-		expect(productConfig.assets.license).toEqual({
-			type: "file",
-			path: path.join(repoRoot, "LICENSE"),
-		});
-		expect(productConfig.assets.thirdPartyNotices).toEqual({
-			type: "file",
-			path: path.join(repoRoot, "THIRD_PARTY_NOTICES.md"),
-		});
-		expect(productConfig.assets.testRuntime).toEqual({
-			type: "file",
-			path: path.join(repoRoot, "src/testing/runtime.mjs"),
-		});
-		expect(productConfig.assets.compilerProducerDigests).toEqual({
-			type: "file",
-			path: path.join(repoRoot, "compiler-producers.json"),
-		});
-		expect(productConfig.assets.mutableDevelopmentRunner).toEqual({
-			type: "file",
-			path: path.join(repoRoot, "maligator-mutable"),
-		});
-		expect(productConfig.assets.nodeGlobals).toEqual({
-			type: "file",
-			path: path.join(repoRoot, "src/node-globals.mjs"),
-		});
+		for (const file of ["assets/runtime.ts", "workers/runtime.ts"])
+			expect(embeds(sources, file)).toBe(true);
 	});
 
 	it("prints help without entering the compiler", () => {
@@ -619,115 +620,6 @@ describe("command shell", () => {
 });
 
 describe("development coordinator", () => {
-	it.each(["rename", "add", "remove", "subtree"])(
-		"rejects stale asset membership after %s without a source edit",
-		async (change) => {
-			const directory = tmpdir();
-			const tree = path.join(directory, "assets");
-			const empty = path.join(tree, "empty");
-			const entry = path.join(directory, "entry.mts");
-			const configPath = path.join(directory, "maligator.config.mts");
-			mkdirSync(empty, { recursive: true });
-			writeFileSync(entry, "export const value = 1;\n");
-			writeFileSync(path.join(tree, "keep.txt"), "keep");
-			writeFileSync(path.join(tree, "remove.txt"), "remove");
-			writeFileSync(path.join(empty, "ignored.bin"), "renamed");
-			const assets = {
-				content: { type: "directory" as const, path: tree, include: ["**/*.txt"] },
-			};
-			writeFileSync(configPath, `export default ${JSON.stringify({ entry, assets })};\n`);
-			let preparations = 0;
-			let running = false;
-			const spawned: Array<string> = [];
-			const watched: Array<string> = [];
-			try {
-				await devCommand(
-					{
-						kind: "dev",
-						entry,
-						configPath,
-						verbose: false,
-						profile: false,
-						programArgs: [],
-					},
-					{
-						stripTypes: stripCompactTypes,
-						installation: productCompilerInstallation(
-							directory,
-							"compiler.malw",
-							"test-runtime.mjs",
-						),
-						compiler: {
-							prepare() {
-								const included = includeConfiguredAssets(assets);
-								const files = included.flatMap((asset) =>
-									asset.files.map((file) => file.inputPath),
-								);
-								const snapshots = new FrontendCompilationSession();
-								for (const file of files) snapshots.snapshot(file);
-								const dependencyIdentities = snapshots.dependencyIdentities(files);
-								if (++preparations === 1) {
-									if (change === "rename")
-										renameSync(
-											path.join(empty, "ignored.bin"),
-											path.join(empty, "added.txt"),
-										);
-									if (change === "add")
-										writeFileSync(path.join(empty, "added.txt"), "added");
-									if (change === "remove") rmSync(path.join(tree, "remove.txt"));
-									if (change === "subtree") {
-										mkdirSync(path.join(empty, "new"));
-										writeFileSync(path.join(empty, "new/added.txt"), "added");
-									}
-								}
-								return Promise.resolve({
-									binaryPath: preparations === 1 ? "stale" : "current",
-									dependencies: [entry, ...files],
-									dependencyIdentities,
-									assetDirectories: included.flatMap((asset) => asset.directories),
-								});
-							},
-							async close() {},
-						},
-						developmentWatcher: {
-							create(_files, directories) {
-								watched.push(...directories);
-								return {};
-							},
-							update(_handle, _files, directories) {
-								watched.push(...directories);
-							},
-							wait(_handle, timeoutMs) {
-								return new Promise<void>((resolve) => {
-									setTimeout(resolve, timeoutMs);
-								});
-							},
-							close() {},
-						},
-						developmentProcesses: {
-							spawn(binary) {
-								spawned.push(binary);
-								running = true;
-								process.emit("SIGINT");
-								return {};
-							},
-							kill() {
-								running = false;
-							},
-							status() {
-								return running ? undefined : 0;
-							},
-						},
-					},
-				);
-				expect(spawned).toEqual(["current"]);
-				expect(watched).toContain(empty);
-			} finally {
-				rmSync(directory, { recursive: true, force: true });
-			}
-		},
-	);
-
 	it("rejects a changed newly imported dependency before replacing the application", async () => {
 		const directory = tmpdir();
 		const entry = path.join(directory, "entry.mts");

@@ -5,7 +5,6 @@ export interface ApplicationImageDescriptor {
 	wires: Array<{ path: string; sha256: string }>;
 	entryPath: string;
 	workerManifestPath?: string;
-	assetManifestPath?: string;
 	webPlatform: boolean;
 	node: boolean;
 	engine: {
@@ -61,7 +60,7 @@ export interface ApplicationResources {
 	ownedWorkers: number;
 	processWorkers: number;
 	processImageDomains: number;
-	/** Retained worker-domain wires, excluding application roots, assets and baked code. */
+	/** Retained worker-domain wires, excluding application roots and baked code. */
 	processWorkerWireBytes: number;
 }
 

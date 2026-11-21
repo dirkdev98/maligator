@@ -2,11 +2,8 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { ApplicationImageDescriptor } from "../application-images.ts";
-import { includeConfiguredAssets } from "../assets.ts";
 import type { ResolvedBuildConfig } from "../build-config.ts";
-import { maligatorCacheDirectory } from "../cache-root.ts";
 import type { CommandContext } from "../cli-commands.ts";
-import { cacheDevelopmentAssets } from "../development-assets.ts";
 import { cacheFrontendWire, frontendDigest } from "../frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "../frontend-cache.ts";
 import { UnsupportedLinkedImagesError } from "../linked-images.ts";
@@ -98,17 +95,7 @@ function prepareTestApplicationImage(
 	};
 	const compiled = compile();
 	context.checkpoint?.();
-	const assets = includeConfiguredAssets(request.config.assets, process.cwd(), {
-		cacheDirectory: maligatorCacheDirectory(),
-		session,
-	});
-	const assetManifestPath = cacheDevelopmentAssets(assets);
-	const dependencies = [
-		...new Set([
-			...compiled.dependencies,
-			...assets.flatMap((asset) => asset.files.map((file) => file.inputPath)),
-		]),
-	].sort();
+	const dependencies = [...new Set(compiled.dependencies)].sort();
 	const dependencyIdentities = new Map(
 		session
 			.dependencyIdentities(dependencies)
@@ -143,7 +130,6 @@ function prepareTestApplicationImage(
 			wires,
 			entryPath: request.files[0]!,
 			workerManifestPath,
-			...(assetManifestPath === undefined ? {} : { assetManifestPath }),
 			webPlatform: request.config.surface.webPlatform,
 			node: request.config.surface.node,
 			engine: {

@@ -2,233 +2,143 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
-	renameSync,
-	rmSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-	ASSET_FORMAT_VERSION,
-	assetDirectoryUnchanged,
-	configuredAssetDirectories,
-	includeConfiguredAssets,
-} from "../src/assets.ts";
+import { ASSET_FORMAT_VERSION, collectEmbeddedAssets } from "../src/assets.ts";
 import { BuildConfigError } from "../src/build-config.ts";
-import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
-import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
+import type { EmbedDeclaration } from "../src/compiler/frontend/embed-declarations.ts";
 import { FrontendCompilationSession } from "../src/frontend-cache.ts";
 
 function fixture(): string {
 	const root = mkdtempSync(path.join(tmpdir(), "mal-assets-unit-"));
 	mkdirSync(path.join(root, "tree", "nested"), { recursive: true });
+	mkdirSync(path.join(root, "tree", ".config"), { recursive: true });
 	writeFileSync(path.join(root, "tree", "root.txt"), "root\n");
+	writeFileSync(path.join(root, "tree", "Zebra.txt"), "zebra\n");
+	writeFileSync(path.join(root, "tree", ".env"), "SECRET=1\n");
+	writeFileSync(path.join(root, "tree", ".config", "app.txt"), "config\n");
 	writeFileSync(path.join(root, "tree", "nested", "child.txt"), "child\n");
 	writeFileSync(path.join(root, "tree", "nested", "ignored.bin"), new Uint8Array([0, 1]));
 	writeFileSync(path.join(root, "empty.bin"), "");
 	return root;
 }
 
-describe("configured asset inclusion", () => {
-	it("collects a deterministic filtered directory manifest", () => {
-		const root = fixture();
-		const [asset] = includeConfiguredAssets(
-			{
-				docs: {
-					type: "directory",
-					path: "tree",
-					include: ["*.txt", "nested/**/*.txt"],
-				},
-			},
-			root,
-		);
+function directory(root: string, options: Omit<EmbedDeclaration, "kind" | "path"> = {}) {
+	return { kind: "directory" as const, path: path.join(root, "tree"), ...options };
+}
 
-		expect(asset?.version).toBe(ASSET_FORMAT_VERSION);
-		expect(asset?.files.map((file) => file.path)).toEqual([
+function paths(declaration: EmbedDeclaration): Array<string> {
+	return collectEmbeddedAssets([declaration])[0]!.files.map((file) => file.path);
+}
+
+describe("embedded asset collection", () => {
+	it("lists member files in code point order, without dotfiles by default", () => {
+		const root = fixture();
+		expect(paths(directory(root))).toEqual([
+			"Zebra.txt",
+			"nested/child.txt",
+			"nested/ignored.bin",
+			"root.txt",
+		]);
+		expect(paths(directory(root, { dot: true }))).toEqual([
+			".config/app.txt",
+			".env",
+			"Zebra.txt",
+			"nested/child.txt",
+			"nested/ignored.bin",
+			"root.txt",
+		]);
+	});
+
+	it("filters members by include and exclude patterns", () => {
+		const root = fixture();
+		expect(paths(directory(root, { include: ["**/*.txt"], exclude: ["Z*"] }))).toEqual([
 			"nested/child.txt",
 			"root.txt",
 		]);
-		expect(asset?.hash).toMatch(/^[0-9a-f]{64}$/);
-		expect(
-			includeConfiguredAssets(
-				{
-					docs: {
-						type: "directory",
-						path: "tree",
-						include: ["*.txt", "nested/**/*.txt"],
-					},
-				},
-				root,
-			)[0]?.hash,
-		).toBe(asset?.hash);
-	});
-
-	it("includes an empty file with its materialized basename", () => {
-		const root = fixture();
-		const [asset] = includeConfiguredAssets(
-			{ empty: { type: "file", path: "empty.bin" } },
-			root,
-		);
-		expect(asset?.files).toEqual([
-			expect.objectContaining({ path: "empty.bin", size: 0 }),
+		expect(paths(directory(root, { include: [".config/*.txt"] }))).toEqual([
+			".config/app.txt",
 		]);
-	});
-
-	it("changes the content hash when a file changes", () => {
-		const root = fixture();
-		const config = {
-			docs: { type: "directory" as const, path: "tree", include: ["**/*.txt"] },
-		};
-		const before = includeConfiguredAssets(config, root)[0]?.hash;
-		writeFileSync(path.join(root, "tree", "root.txt"), "changed\n");
-		expect(includeConfiguredAssets(config, root)[0]?.hash).not.toBe(before);
-	});
-
-	it("snapshots the exact bytes used for the inclusion hash", () => {
-		const root = fixture();
-		const [asset] = includeConfiguredAssets(
-			{ data: { type: "file", path: "empty.bin" } },
-			root,
-		);
-		const snapshot = asset!.files[0]!.sourcePath;
-		writeFileSync(path.join(root, "empty.bin"), "changed after inclusion");
-		expect(readFileSync(snapshot)).toEqual(Buffer.from([]));
-		expect(asset!.files[0]!.size).toBe(0);
-	});
-
-	it("reuses and repairs content-addressed development snapshots", () => {
-		const root = fixture();
-		const cacheDirectory = path.join(root, "cache");
-		const config = { data: { type: "file" as const, path: "tree/root.txt" } };
-		const coldSession = new FrontendCompilationSession();
-		coldSession.useCacheDirectory(cacheDirectory);
-		const cold = includeConfiguredAssets(config, root, {
-			cacheDirectory,
-			session: coldSession,
-		})[0]!.files[0]!;
-		coldSession.flush();
-
-		const warmSession = new FrontendCompilationSession();
-		warmSession.useCacheDirectory(cacheDirectory);
-		const warm = includeConfiguredAssets(config, root, {
-			cacheDirectory,
-			session: warmSession,
-		})[0]!.files[0]!;
-		expect(warm.sourcePath).toBe(cold.sourcePath);
-		expect(warm.inputPath).toBe(path.join(root, "tree/root.txt"));
-		expect(warmSession.digestStatistics()).toEqual({ hits: 1, misses: 0 });
-
-		writeFileSync(warm.sourcePath, "xxxxx");
-		const repairSession = new FrontendCompilationSession();
-		repairSession.useCacheDirectory(cacheDirectory);
-		const repaired = includeConfiguredAssets(config, root, {
-			cacheDirectory,
-			session: repairSession,
-		})[0]!.files[0]!;
-		expect(readFileSync(repaired.sourcePath, "utf-8")).toBe("root\n");
 	});
 
 	it("fails when an include pattern matches no files", () => {
 		const root = fixture();
 		expect(() =>
-			includeConfiguredAssets(
-				{ docs: { type: "directory", path: "tree", include: ["missing/**"] } },
-				root,
-			),
+			collectEmbeddedAssets([directory(root, { include: ["missing/**"] })]),
 		).toThrow(BuildConfigError);
 	});
 
+	it("fails for a declared path that is missing or of the wrong kind", () => {
+		const root = fixture();
+		expect(() =>
+			collectEmbeddedAssets([{ kind: "file", path: path.join(root, "missing.txt") }]),
+		).toThrow(/missing\.txt': cannot read/);
+		expect(() =>
+			collectEmbeddedAssets([{ kind: "file", path: path.join(root, "tree") }]),
+		).toThrow(/not a regular file/);
+		expect(() =>
+			collectEmbeddedAssets([{ kind: "directory", path: path.join(root, "empty.bin") }]),
+		).toThrow(/not a directory/);
+	});
+
 	it.skipIf(process.platform === "win32")(
-		"rejects symlinks within directory assets",
+		"rejects a symbolic link it would embed",
 		() => {
 			const root = fixture();
 			symlinkSync(path.join(root, "empty.bin"), path.join(root, "tree", "linked.txt"));
-			expect(() =>
-				includeConfiguredAssets(
-					{ docs: { type: "directory", path: "tree", include: ["**/*.txt"] } },
-					root,
-				),
-			).toThrow("unsupported non-regular file 'linked.txt'");
-		},
-	);
-
-	it("emits C23 payloads, manifest rows, and the mal installer", () => {
-		const root = fixture();
-		const entry = path.join(root, "main.js");
-		writeFileSync(entry, "globalThis.result = 1;\n");
-		const assets = includeConfiguredAssets(
-			{ empty: { type: "file", path: "empty.bin" } },
-			root,
-		);
-		const output = emitProgramImage(compileEntrypoint(entry), {
-			assets,
-			compiled: false,
-			maligatorSurface: true,
-		});
-		expect(output).toContain("static const MalAsset mal_assets[]");
-		expect(output).toContain(`.hash = "${assets[0]?.hash}"`);
-		expect(output).toContain(".asset_count = 1");
-		expect(output).toContain(".installer = mal_host_install_maligator");
-		expect(output).toContain("static const u8 mal_asset_0_file_0_data[] = { 0 };");
-	});
-});
-
-describe("asset directory observations", () => {
-	it.each(["rename", "add", "remove", "subtree"])(
-		"invalidates consumed membership after %s",
-		(change) => {
-			const root = fixture();
-			try {
-				const config = {
-					docs: {
-						type: "directory" as const,
-						path: "tree",
-						include: ["**/*.txt"],
-					},
-				};
-				const [asset] = includeConfiguredAssets(config, root);
-				expect(asset!.directories.every(assetDirectoryUnchanged)).toBe(true);
-				if (change === "rename")
-					renameSync(
-						path.join(root, "tree/nested/ignored.bin"),
-						path.join(root, "tree/nested/renamed.txt"),
-					);
-				if (change === "add") writeFileSync(path.join(root, "tree/added.txt"), "added");
-				if (change === "remove") rmSync(path.join(root, "tree/nested/child.txt"));
-				if (change === "subtree") {
-					mkdirSync(path.join(root, "tree/new/empty"), { recursive: true });
-					writeFileSync(path.join(root, "tree/new/added.txt"), "added");
-				}
-				expect(asset!.directories.every(assetDirectoryUnchanged)).toBe(false);
-				const current = includeConfiguredAssets(config, root)[0]!;
-				expect(current.directories.every(assetDirectoryUnchanged)).toBe(true);
-				expect(current.hash).not.toBe(asset!.hash);
-			} finally {
-				rmSync(root, { recursive: true, force: true });
-			}
-		},
-	);
-
-	it("watches empty subdirectories and the parent of a missing root", () => {
-		const root = fixture();
-		try {
-			mkdirSync(path.join(root, "tree/empty"));
-			const config = {
-				docs: {
-					type: "directory" as const,
-					path: "tree",
-					include: ["**/*.txt"],
-				},
-			};
-			expect(configuredAssetDirectories(config, root)).toContain(
-				path.join(root, "tree/empty"),
+			expect(() => collectEmbeddedAssets([directory(root)])).toThrow(
+				"'linked.txt' is not a regular file",
 			);
-			rmSync(path.join(root, "tree"), { recursive: true });
-			expect(configuredAssetDirectories(config, root)).toEqual([root]);
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
+			expect(paths(directory(root, { exclude: ["linked.txt"] }))).not.toContain(
+				"linked.txt",
+			);
+		},
+	);
+
+	it("names an asset by its declaration and identifies it by its contents", () => {
+		const root = fixture();
+		const declaration = directory(root, { include: ["**/*.txt"] });
+		const [asset] = collectEmbeddedAssets([declaration]);
+		expect(asset?.name).toBe(JSON.stringify(declaration));
+		expect(asset?.version).toBe(ASSET_FORMAT_VERSION);
+		expect(collectEmbeddedAssets([declaration])[0]?.hash).toBe(asset?.hash);
+		writeFileSync(path.join(root, "tree", "root.txt"), "changed\n");
+		expect(collectEmbeddedAssets([declaration])[0]?.hash).not.toBe(asset?.hash);
+	});
+
+	it("snapshots the exact bytes it recorded", () => {
+		const root = fixture();
+		const [asset] = collectEmbeddedAssets([
+			{ kind: "file", path: path.join(root, "empty.bin") },
+		]);
+		const file = asset!.files[0]!;
+		writeFileSync(path.join(root, "empty.bin"), "changed after collection");
+		expect(readFileSync(file.sourcePath)).toEqual(Buffer.from([]));
+		expect(file).toMatchObject({ path: "empty.bin", size: 0 });
+	});
+
+	it("reuses and repairs content-addressed snapshots", () => {
+		const root = fixture();
+		const cacheDirectory = path.join(root, "cache");
+		const declaration = { kind: "file" as const, path: path.join(root, "tree/root.txt") };
+		const collect = () => {
+			const session = new FrontendCompilationSession();
+			session.useCacheDirectory(cacheDirectory);
+			const file = collectEmbeddedAssets([declaration], { cacheDirectory, session })[0]!
+				.files[0]!;
+			session.flush();
+			return { file, session };
+		};
+		const cold = collect().file;
+		const warm = collect();
+		expect(warm.file.sourcePath).toBe(cold.sourcePath);
+		expect(warm.session.digestStatistics()).toEqual({ hits: 1, misses: 0 });
+
+		writeFileSync(warm.file.sourcePath, "xxxxx");
+		expect(readFileSync(collect().file.sourcePath, "utf-8")).toBe("root\n");
 	});
 });

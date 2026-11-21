@@ -15,8 +15,7 @@
 #include "builtin_promise.h"
 #include "builtin_weak_ref.h"
 #include "function_object.h"
-#include "development_assets.h"
-#include "mal_assets.h"
+#include "mal_bridge.h"
 #include "host_registry.h"
 #include "hex.h"
 #include "sha256.h"
@@ -444,7 +443,6 @@ struct MalWorkerDomain {
     char *pool_entry;
     u64 wire_bytes;
     bool counted;
-    MalDevelopmentAssets *assets;
     // Dynamic domains retain their host initializer without retaining it in static workers.
     MalHostInstaller initialize_host;
     bool has_context;
@@ -472,7 +470,6 @@ void mal_worker_domain_release(MalWorkerDomain *domain) {
     }
     free(domain->entries);
     free(domain->pool_entry);
-    mal_development_assets_free(domain->assets);
     if (domain->counted) {
         atomic_fetch_sub_explicit(&g_domain_wire_bytes, domain->wire_bytes, memory_order_relaxed);
         atomic_fetch_sub_explicit(&g_live_domains, 1, memory_order_relaxed);
@@ -2644,9 +2641,6 @@ static void *worker_thread_main(void *arg) {
         worker_thread_finish(thread);
         return nullptr;
     }
-    if (thread->domain != nullptr && thread->domain->assets != nullptr) {
-        vm->live_runtime_image.assets = mal_development_assets_get(thread->domain->assets, &vm->live_runtime_image.asset_count);
-    }
     mal_runtime_personality_install(vm, thread->web_platform, thread->node);
     mal_atomics_set_agent(true, thread->interrupt);
     bool installed = mal_workers_install(vm);
@@ -2661,7 +2655,7 @@ static void *worker_thread_main(void *arg) {
         : (MalHostLaunchContext) {.argc = 1, .argv = &argv0, .script_path = thread->entry->href};
     if (installed) {
         if (thread->domain != nullptr && thread->domain->initialize_host != nullptr
-            && (thread->application != nullptr || thread->domain->assets != nullptr)) {
+            && thread->application != nullptr) {
             thread->domain->initialize_host(vm, nullptr, 0, &launch);
         }
         mal_vm_run_host_installs(vm, &launch);
@@ -4232,16 +4226,6 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
     image->domain->has_context = true;
     image->domain->web_platform = web;
     image->domain->node = node;
-    if (!get_named(vm, roots[0], "assetManifestPath", &roots[1])) goto failed;
-    if (!mal_value_is_undefined(roots[1])) {
-        if (!mal_value_is_string(roots[1])) goto failed;
-        char *path = application_string(roots[1]);
-        if (path == nullptr) goto failed;
-        const char *error = "invalid assets";
-        image->domain->assets = mal_development_assets_load(path, &error);
-        free(path);
-        if (image->domain->assets == nullptr || !mal_development_assets_snapshot(image->domain->assets)) goto failed;
-    }
     if (!get_named(vm, roots[0], "wires", &roots[1]) || !mal_value_is_array_object(roots[1])) goto failed;
     u32 count = mal_array_object_length(mal_value_to_array_object(roots[1]));
     if (count == 0) goto failed;

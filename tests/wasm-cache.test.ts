@@ -26,7 +26,7 @@ const config = resolveBuildConfig({
 		temporal: false,
 		intl: { enabled: false },
 	},
-	surface: { node: false, webPlatform: false, maligator: false },
+	surface: { node: false, webPlatform: false },
 });
 
 function sourceCheckout(directory: string): string {

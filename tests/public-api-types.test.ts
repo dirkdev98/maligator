@@ -13,7 +13,7 @@ function formatDiagnostics(diagnostics: ReadonlyArray<ts.Diagnostic>): string {
 }
 
 describe("@maligator/cli public TypeScript API", () => {
-	it("types build configuration, assets, and Mal.serve in a consumer project", () => {
+	it("types build configuration, embedded assets, and Mal.serve in a consumer project", () => {
 		const project = mkdtempSync(path.join(os.tmpdir(), "maligator-public-types-"));
 		try {
 			const packageDirectory = path.join(project, "node_modules/@maligator/cli");
@@ -26,6 +26,7 @@ describe("@maligator/cli public TypeScript API", () => {
 			);
 			for (const declaration of [
 				"application-api.d.ts",
+				"assets-api.d.ts",
 				"test-api.d.ts",
 				"platform-api.d.ts",
 				"process-api.d.ts",
@@ -67,11 +68,8 @@ describe("@maligator/cli public TypeScript API", () => {
 
 export default defineBuild({
 	entry: "src/index.ts",
-	assets: {
-		templates: { type: "directory", path: "templates", include: ["**/*.html"] },
-	},
 	engine: { primordials: "mutable", intl: { enabled: true, features: ["number-format"] } },
-	surface: { webPlatform: true, maligator: true },
+	surface: { webPlatform: true },
 });
 
 defineBuild({
@@ -96,11 +94,9 @@ defineBuild({
 			const entryPath = path.join(sourceDirectory, "index.ts");
 			writeFileSync(
 				entryPath,
-				`import type {
-	MaligatorMaterializeOptions,
-	MaligatorServeOptions,
-	MaligatorServer,
-} from "@maligator/cli";
+				`import type { MaligatorServeOptions, MaligatorServer } from "@maligator/cli";
+import { embedDirectory, embedFile } from "maligator:assets";
+import type { EmbeddedDirectory, EmbeddedFile, MaterializeOptions } from "maligator:assets";
 import {
 	afterAll,
 	afterEach,
@@ -187,11 +183,23 @@ describe.only("focused suite", () => {
 	test.only("focused test", () => undefined);
 });
 
-const materializeOptions: MaligatorMaterializeOptions = {
-	baseDirectory: ".cache/application",
-};
-const assetPath: string = mal.assets.materialize("templates", materializeOptions);
-const globalAssetPath: string = globalThis.mal.assets.materialize("templates");
+const templates: EmbeddedDirectory = embedDirectory("../templates", {
+	include: ["**/*.html"],
+	exclude: ["drafts/**"],
+	dot: false,
+});
+const materializeOptions: MaterializeOptions = { baseDirectory: ".cache/application" };
+const assetPath: string = templates.materialize(materializeOptions);
+const home: EmbeddedFile | undefined = templates.get("home.html");
+const logo = embedFile("../logo.png");
+const logoBytes: Uint8Array<ArrayBuffer> = logo.bytes();
+const logoMeta: [string, number, string, string] = [logo.path, logo.size, logo.digest, logo.type];
+// @ts-expect-error A file declaration takes no options.
+embedFile("../logo.png", { include: ["*"] });
+// @ts-expect-error Directory patterns are strings.
+embedDirectory("../templates", { include: [1] });
+// @ts-expect-error The legacy configured-asset global is gone.
+mal.assets;
 const serveOptions: MaligatorServeOptions = {
 	hostname: "127.0.0.1",
 	port: 3000,
@@ -205,7 +213,7 @@ const serveOptions: MaligatorServeOptions = {
 };
 const server: MaligatorServer = Mal.serve(serveOptions);
 const port: number = server.port;
-console.log(assetPath, globalAssetPath, port);
+console.log(assetPath, home?.text(), logoBytes, logoMeta, port);
 `,
 			);
 

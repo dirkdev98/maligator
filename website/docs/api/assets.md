@@ -1,0 +1,1 @@
+`maligator build` captures the declared files when it compiles, so the executable needs no source files at runtime. Other commands read the source files each time a handle is used: an edit is visible on the next read, and a missing file throws then. See [Embed files](/guides/assets) for a walkthrough.

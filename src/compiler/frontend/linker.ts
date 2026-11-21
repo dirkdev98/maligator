@@ -100,6 +100,7 @@ export interface ModuleLinkage {
 			name: string;
 			binding: Binding;
 			constant?: PlatformData;
+			data?: PlatformData;
 			direct?: FfiDirectEntry;
 		}>;
 	}>;
@@ -363,6 +364,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 			name: string;
 			binding: Binding;
 			constant?: PlatformData;
+			data?: PlatformData;
 			direct?: FfiDirectEntry;
 		}> = [];
 		const declareHostExport = (name: string) => {
@@ -381,6 +383,9 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 				binding,
 				...(spec.constants !== undefined && Object.hasOwn(spec.constants, name)
 					? { constant: spec.constants[name]! }
+					: {}),
+				...(spec.installData !== undefined && Object.hasOwn(spec.installData, name)
+					? { data: spec.installData[name]! }
 					: {}),
 				...(spec.direct !== undefined && Object.hasOwn(spec.direct, name)
 					? { direct: spec.direct[name]! }

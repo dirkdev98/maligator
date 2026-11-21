@@ -15,16 +15,6 @@ export type MaligatorIntlFeature =
 	| "duration-format";
 
 /**
- * Capture a regular file or a directory tree at build time. Paths are relative to
- * the project root. Directory patterns support *, ?, and whole-segment **;
- * every pattern must match a regular file. Symlinks are rejected.
- * @see https://maligator.ddv.tools/api/build#AssetInclusion
- */
-export type AssetInclusion =
-	| { type: "file"; path: string }
-	| { type: "directory"; path: string; include: Array<string> };
-
-/**
  * How the build finds a C library's headers and binaries. Relative paths resolve
  * against the file that declares them. Name at least `pkgConfig`, `libraries`, or
  * `sources`; the other fields add to what those provide.
@@ -498,8 +488,6 @@ export interface MaligatorBuildConfig {
 	entry?: string;
 	/** Binary name; otherwise inferred from the unscoped package name or project directory. */
 	outputName?: string;
-	/** Named build-time snapshots. Requires surface.maligator; portable serialized images cannot carry these filesystem resources. */
-	assets?: Record<string, AssetInclusion>;
 	modules?: {
 		/** Exact specifier replacements applied before module resolution. Defaults to an empty map. */
 		aliases?: Record<string, string>;
@@ -551,10 +539,6 @@ export interface MaligatorBuildConfig {
 		 * @default false
 		 */
 		node?: boolean;
-		/** Include the mal namespace. Required for configured assets.
-		 * @default true
-		 */
-		maligator?: boolean;
 	};
 	/** C libraries keyed by the name the program imports them under (`maligator:ffi/<name>`).
 	 * Names use lowercase letters, digits, and underscores.
@@ -582,25 +566,6 @@ export declare function defineBuild<const Config extends MaligatorBuildConfig>(
 export declare function defineLibrary<const Contract extends MaligatorLibraryContract>(
 	contract: Contract,
 ): Contract;
-
-export interface MaligatorMaterializeOptions {
-	/** Parent directory for the content-addressed materialization. Defaults to the OS temporary directory. */
-	baseDirectory?: string;
-}
-
-export interface MaligatorAssets {
-	/**
-	 * Atomically write a named snapshot and return its absolute file/directory path.
-	 * Completed materializations are reused by content identity. Unknown names,
-	 * invalid options, and filesystem failures throw synchronously.
-	 * @see https://maligator.ddv.tools/api/runtime#mal.assets.materialize
-	 */
-	materialize(name: string, options?: MaligatorMaterializeOptions): string;
-}
-
-export interface MaligatorRuntime {
-	readonly assets: MaligatorAssets;
-}
 
 export interface MaligatorServeOptions {
 	/** Bind address. Defaults to 0.0.0.0; use 127.0.0.1 for a local-only listener. */
@@ -639,10 +604,6 @@ export interface MaligatorWebRuntime {
 }
 
 declare global {
-	/** Core namespace, available when surface.maligator is enabled.
-	 * @see https://maligator.ddv.tools/api/runtime#mal
-	 */
-	var mal: MaligatorRuntime;
 	/** Web host namespace, available when surface.webPlatform is enabled.
 	 * @see https://maligator.ddv.tools/api/runtime#Mal
 	 */

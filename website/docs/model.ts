@@ -93,7 +93,7 @@ export const guides = [
 	[
 		"assets",
 		"Embed files",
-		"Capture files at build time and materialize them at runtime.",
+		"Declare files the build embeds and read them while you develop.",
 	],
 	["http", "Serve HTTP", "Start a listener and return responses."],
 	[
@@ -120,7 +120,11 @@ export const guides = [
 ] as const;
 
 export const references = [
-	["build", "Build configuration", "defineBuild, engine features, surfaces, and assets."],
+	[
+		"build",
+		"Build configuration",
+		"defineBuild, engine features, surfaces, and aliases.",
+	],
 	[
 		"application",
 		"Application lifecycle",
@@ -132,8 +136,9 @@ export const references = [
 		"Read immutable compile-time command and configuration values.",
 	],
 	["workers", "Workers", "Pools, isolated modules, channels, and transfers."],
+	["assets", "Embedded assets", "Declare files and directory trees the build embeds."],
 	["test", "Test API", "Tests, suites, hooks, and assertions."],
-	["runtime", "Runtime globals", "Materialize assets with mal and serve HTTP with Mal."],
+	["runtime", "Runtime globals", "Serve HTTP with Mal."],
 	["cli", "CLI", "Commands, flags, defaults, and output paths."],
 ] as const;
 
@@ -348,7 +353,6 @@ function publicReference(
 	);
 	const buildNames = new Set([
 		"MaligatorIntlFeature",
-		"AssetInclusion",
 		"MaligatorFfiFind",
 		"MaligatorFfiLibrary",
 		"MaligatorFfiHandle",
@@ -406,7 +410,6 @@ function publicReference(
 				(
 					{
 						MaligatorBuildConfig: "",
-						MaligatorAssets: "mal.assets",
 						MaligatorWebRuntime: "Mal",
 					} as Record<string, string>
 				)[name] ?? name;
@@ -435,10 +438,7 @@ function publicReference(
 						signature: `var ${declaration.getText(source)};`,
 						module: "global",
 						url: `/api/runtime#${name}`,
-						availability:
-							name === "mal"
-								? "Requires surface.maligator."
-								: "Requires surface.webPlatform.",
+						availability: "Requires surface.webPlatform.",
 						...comments(statement, source),
 					});
 				}

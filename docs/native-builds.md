@@ -142,7 +142,7 @@ reason: eval-enabled feature sets that share a realm layout share one overlay.
 Pragmas, emitted definitions, and anything the slicer cannot classify are always
 part of the key. Debug builds and large preprocessed inputs stream a hash of the
 whole expansion instead. A memo keyed by the raw unit and header contents means a
-warm build never preprocesses its units. Embedded bytes (configured assets, and the
+warm build never preprocesses its units. Embedded bytes (assets, and the
 images of a development build) live in header-free units keyed by their text and the
 embedded files' content digests. These units are never preprocessed: an expansion
 spells each byte out as a C literal, multiplying its processing and storage cost.

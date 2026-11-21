@@ -39,7 +39,7 @@ const hostConfig = resolveBuildConfig({
 		temporal: false,
 		intl: { enabled: false },
 	},
-	surface: { node: true, webPlatform: true, maligator: true },
+	surface: { node: true, webPlatform: true },
 });
 
 // Both large worker roots and the owner wire hold the whole compiler. Building the graph
@@ -155,7 +155,7 @@ it(
 				cSource: emitProgramTranslationUnits(bootstrap, {
 					sourcePath: nativeSourcePath,
 					compiled: true,
-					maligatorSurface: true,
+					toolchainBridge: true,
 				}),
 			}).binaryPath;
 			const result = spawnSync(binary, [ownerWire, workerManifest, assets, entry], {

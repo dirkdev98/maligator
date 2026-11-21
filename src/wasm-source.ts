@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { artifactDigest, artifactProducer } from "./artifact-store.ts";
+import { embedDeclarationsOf } from "./assets.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { compilerImplementationDigestForRoot } from "./compiler-cache-identity.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
@@ -76,6 +77,8 @@ export function prepareWasmSource(
 					return execute();
 				},
 			});
+			if (embedDeclarationsOf([image.runtime]).length > 0)
+				throw new Error("The Wasm reactor has no file system to embed assets into");
 			// The reactor ignores the dev runner's entry path; observable module paths remain keyed.
 			// Wasm cannot scan its own stack, so its roots stay in shadow frames.
 			const portable = lowerNativeStorage(

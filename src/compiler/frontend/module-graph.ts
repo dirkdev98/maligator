@@ -4,12 +4,24 @@ import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "../../build-config.ts";
-import type { PlatformModule } from "../../platform/catalog.ts";
+import type { PlatformData, PlatformModule } from "../../platform/catalog.ts";
 import { PLATFORM_MODULES, lookupPlatformModule } from "../../platform/catalog.ts";
 import type { Execution } from "../../platform/execution.ts";
 import { executionData } from "../../platform/execution.ts";
 import { stripCompactTypes } from "./compact-type-strip.ts";
 import { moduleCreateRequireDeclarators } from "./create-require.ts";
+import {
+	EMBED_INSTALLER,
+	EmbedDeclarationError,
+	canonicalEmbedDeclaration,
+	embedModuleDeclaration,
+	embedModuleId,
+	isEmbedModule,
+	isEmbedRequest,
+	parseEmbedRequest,
+	transformEmbedDeclarations,
+} from "./embed-declarations.ts";
+import type { EmbedRequest } from "./embed-declarations.ts";
 import { traverseEstree } from "./estree-traversal.ts";
 import type { HostModuleSpec } from "./host-modules.ts";
 import {
@@ -660,6 +672,19 @@ export function buildModuleGraph(
 			}
 			parseSource = stripTypes(parseSource, sourcePath ?? filePath);
 		}
+		if (goal === "module" && !catalogFiles.owned.has(filePath)) {
+			try {
+				parseSource = transformEmbedDeclarations(parseSource, sourcePath ?? filePath);
+			} catch (error) {
+				if (error instanceof EmbedDeclarationError)
+					throw new SyntaxDiagnostic(
+						filePath === entry ? "parse" : "resolution",
+						error.message,
+						{ cause: error },
+					);
+				throw error;
+			}
+		}
 		return parseSource;
 	};
 	let lastObservations: ReadonlyArray<readonly [string, string]> = [];
@@ -827,6 +852,24 @@ export function buildModuleGraph(
 										// A computed import/require cannot be resolved while building the
 										// graph. Preserve the edge for later lowering/runtime handling.
 										return [{ ...dependency, resolvedPath: null }];
+									}
+									if (isEmbedRequest(dependency.specifier)) {
+										if (dependency.kind !== "import")
+											throw new SyntaxDiagnostic(
+												"resolution",
+												`Cannot ${dependency.kind === "dynamic" ? "dynamically import" : "re-export"} an embed request`,
+											);
+										return [
+											{
+												...dependency,
+												resolvedPath: resolveEmbedRequest(
+													parseEmbedRequest(dependency.specifier),
+													sourcePath ?? filePath,
+													options.buildConfig?.modules.aliases ?? {},
+													ctx,
+												),
+											},
+										];
 									}
 									const aliasedSpecifier =
 										options.buildConfig?.modules.aliases[dependency.specifier] ??
@@ -1038,6 +1081,10 @@ export function buildModuleGraph(
 				: options.externalModules?.get(resolvedPath);
 			if (external !== undefined) {
 				modules.set(resolvedPath, externalModuleRecord(resolvedPath, external));
+				continue;
+			}
+			if (isEmbedModule(resolvedPath)) {
+				modules.set(resolvedPath, hostModuleRecord(embedHostModule(resolvedPath)));
 				continue;
 			}
 			// A `node:*` host built-in resolves to a virtual record from the catalog —
@@ -1654,6 +1701,68 @@ function hostModuleRecord(host: HostModuleSpec, execution?: Execution): ModuleRe
 		dependencies: [],
 		host,
 	};
+}
+
+/** The handle module of one embed declaration; its installer reads the declaration. */
+function embedHostModule(id: string): HostModuleSpec {
+	return {
+		id,
+		named: [],
+		hasDefault: true,
+		installer: EMBED_INSTALLER,
+		installData: { default: embedModuleDeclaration(id) as unknown as PlatformData },
+	};
+}
+
+/**
+ * Resolve the specifier of an embed declaration from its module. Relative and
+ * absolute specifiers name a path that need not exist yet: only a build reads it. A
+ * bare specifier names a path inside the package that `node_modules` lookup finds;
+ * package `exports` govern imports, not the files a package ships.
+ */
+function resolveEmbedRequest(
+	request: EmbedRequest,
+	importerPath: string,
+	aliases: Readonly<Record<string, string>>,
+	ctx: ResolveContext,
+): string {
+	const specifier = aliases[request.specifier] ?? request.specifier;
+	const fail = (reason: string): never => {
+		throw new SyntaxDiagnostic(
+			"resolution",
+			`Cannot resolve embedded ${request.kind} '${request.specifier}' from ${importerPath}: ${reason}`,
+		);
+	};
+	let resolved: string;
+	if (specifier.startsWith("file:")) {
+		resolved = fileURLToPath(specifier);
+	} else if (
+		path.isAbsolute(specifier) ||
+		specifier === "." ||
+		specifier === ".." ||
+		specifier.startsWith("./") ||
+		specifier.startsWith("../")
+	) {
+		resolved = path.resolve(path.dirname(importerPath), specifier);
+	} else if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(specifier) || specifier.startsWith("#")) {
+		return fail("only relative, absolute and package specifiers name files");
+	} else {
+		const { packageName, subpath } = splitBareSpecifier(specifier);
+		let packageDir: string | undefined;
+		for (let dir = path.dirname(importerPath); ;) {
+			const candidate = path.join(dir, "node_modules", packageName);
+			if (isDirectory(candidate, ctx)) {
+				packageDir = candidate;
+				break;
+			}
+			const parent = path.dirname(dir);
+			if (parent === dir) break;
+			dir = parent;
+		}
+		if (packageDir === undefined) return fail(`cannot find package '${packageName}'`);
+		resolved = path.resolve(packageDir, subpath);
+	}
+	return embedModuleId(canonicalEmbedDeclaration(request, resolved));
 }
 
 /**

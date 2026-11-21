@@ -111,7 +111,10 @@ function importedIdentity(
 	return undefined;
 }
 
-const moduleParents = new WeakMap<ModuleRecord, ReadonlyMap<ESTree.Node, ESTree.Node>>();
+/** What scope lookups need of a module: its parsed program. */
+export type ParsedModule = Pick<ModuleRecord, "parsed">;
+
+const moduleParents = new WeakMap<ParsedModule, ReadonlyMap<ESTree.Node, ESTree.Node>>();
 const stableAggregates = new WeakMap<
 	ModuleRecord,
 	WeakMap<ESTree.ObjectExpression, boolean>
@@ -149,7 +152,7 @@ function loopBinding(node: ESTree.Node): ESTree.VariableDeclaration | undefined 
 	return binding?.type === "VariableDeclaration" ? binding : undefined;
 }
 
-function parentsFor(record: ModuleRecord): ReadonlyMap<ESTree.Node, ESTree.Node> {
+function parentsFor(record: ParsedModule): ReadonlyMap<ESTree.Node, ESTree.Node> {
 	const parents = moduleParents.get(record);
 	if (parents !== undefined) return parents;
 	const result = new Map<ESTree.Node, ESTree.Node>();
@@ -213,8 +216,9 @@ function statementBinding(
 	return undefined;
 }
 
-function bindingAt(
-	record: ModuleRecord,
+/** The declaration `local` resolves to at `node`, or undefined for a free name. */
+export function bindingAt(
+	record: ParsedModule,
 	node: ESTree.Node,
 	local: string,
 ): ESTree.Node | undefined {

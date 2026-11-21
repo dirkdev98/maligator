@@ -27,12 +27,12 @@ const { stripCompactTypes } = (await load(
 const image = compileEntrypoint(input, {
 	buildConfig: resolveBuildConfig({
 		engine: { eval: false, realms: false, intl: { enabled: false } },
-		surface: { webPlatform: false, node: true, maligator: true },
+		surface: { webPlatform: false, node: true },
 	}),
 	stripTypes: stripCompactTypes,
 	coreInstrumentation: "off",
 });
-const units = emitProgramTranslationUnits(image, { maligatorSurface: true });
+const units = emitProgramTranslationUnits(image, { toolchainBridge: true });
 mkdirSync(output, { recursive: true });
 let codeUnits = 0;
 for (const unit of units) {

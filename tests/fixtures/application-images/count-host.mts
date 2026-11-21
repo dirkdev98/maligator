@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import process from "node:process";
 import type { ApplicationImageDescriptor } from "../../../src/application-images.ts";
 import type { FixtureBridge } from "./types.ts";
-const bridge = mal as unknown as FixtureBridge;
+const bridge = Reflect.get(globalThis, "mal") as FixtureBridge;
 const descriptor = JSON.parse(
 	readFileSync(process.argv[2]!, "utf8"),
 ) as ApplicationImageDescriptor;

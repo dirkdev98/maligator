@@ -243,15 +243,11 @@ export async function watchTestCommand(
 		const dirs = new Set<string>();
 		for (const root of roots) collectDirectories(root, dirs, true);
 		for (const nativePath of nativePaths) collectDirectories(nativePath, dirs, false);
-		for (const asset of Object.values(config?.assets ?? {}))
-			if (asset.type === "directory")
-				collectDirectories(path.resolve(asset.path), dirs, false);
 		const files = new Set([
 			configPath,
 			...roots,
 			...dependencies.keys(),
 			...nativePaths,
-			...Object.values(config?.assets ?? {}).map((asset) => path.resolve(asset.path)),
 			...dirs,
 			...(keepPrevious ? states.keys() : []),
 		]);

@@ -48,7 +48,7 @@ function fixture(workers = true): CompileBuildFrontendOptions {
 		entrypoint: path.join(root, "entry.mts"),
 		cacheDirectory: path.join(root, "cache"),
 		config: resolveBuildConfig({
-			surface: { node: false, webPlatform: false, maligator: true },
+			surface: { node: false, webPlatform: false },
 			engine: { eval: false, regexp: false, intl: { enabled: false } },
 		}),
 		optimization: "full",
@@ -495,7 +495,7 @@ for (const automatic of [false, true])
 		if (!automatic)
 			writeFileSync(
 				config,
-				"export default {surface:{node:false,webPlatform:false,maligator:true},engine:{eval:false,regexp:false,intl:{enabled:false}}};",
+				"export default {surface:{node:false,webPlatform:false},engine:{eval:false,regexp:false,intl:{enabled:false}}};",
 			);
 		const base = immediateCompiler();
 		const result = deferred<RootCompilationResult>();
@@ -534,7 +534,7 @@ for (const automatic of [false, true])
 			assert.ok(accepted);
 			writeFileSync(
 				config,
-				"export default {surface:{node:false,webPlatform:false,maligator:true},engine:{eval:false,regexp:true,intl:{enabled:false}}};",
+				"export default {surface:{node:false,webPlatform:false},engine:{eval:false,regexp:true,intl:{enabled:false}}};",
 			);
 			result.resolve(accepted);
 			await assert.rejects(pending, /configuration changed before build publication/);
@@ -581,73 +581,6 @@ test("cancellation after owner compilation waits for root cleanup and publishes 
 	close.resolve();
 	await observed;
 	assert.equal(compileBuildFrontend(options).cache, "miss");
-});
-
-test("a consumed asset edit across root join drains helpers and prevents native publication", async () => {
-	const options = fixture();
-	const root = path.dirname(options.entrypoint);
-	const asset = path.join(root, "data.bin");
-	const config = path.join(root, "assets.build.mts");
-	writeFileSync(asset, new Uint8Array([0, 128, 255]));
-	writeFileSync(
-		config,
-		'export default {outputName:"asset-guard",assets:{data:{type:"file",path:"data.bin"}},surface:{node:false,webPlatform:false,maligator:true},engine:{eval:false,regexp:false,intl:{enabled:false}}};',
-	);
-	const result = deferred<RootCompilationResult>();
-	const base = immediateCompiler();
-	let accepted: RootCompilationResult | undefined;
-	let closed = false;
-	const phases: Array<string> = [];
-	const rootCompiler: BuildRootCompiler = {
-		validateInputs: validateRootInputs,
-		start(graph, workerOptions, inputs, controls) {
-			const handle = base.start(graph, workerOptions, inputs, controls);
-			void handle.result.then((value) => {
-				accepted = value;
-			});
-			return {
-				...handle,
-				result: result.promise,
-				close() {
-					closed = true;
-					return Promise.resolve();
-				},
-			};
-		},
-	};
-	const command = parseCliArgs([
-		"build",
-		options.entrypoint,
-		"--production",
-		"--compile-concurrency",
-		"3",
-		"--config",
-		config,
-	]) as BuildCommand;
-	const cwd = vi.spyOn(process, "cwd").mockReturnValue(root);
-	try {
-		const pending = prepareCommandAsync(command, {
-			stripTypes: stripCompactTypes,
-			installation: developmentCompilerInstallation(
-				path.resolve(import.meta.dirname, "../src"),
-			),
-			rootCompiler,
-			availableCompileConcurrency: 3,
-			onCompilationPhase: (phase) => {
-				phases.push(phase.label);
-			},
-		});
-		await Promise.resolve();
-		assert.ok(accepted);
-		writeFileSync(asset, new Uint8Array([0, 129, 255]));
-		result.resolve(accepted);
-		await assert.rejects(pending, /asset changed before build publication/);
-		assert.equal(closed, true);
-		assert.equal(phases.includes("Generate native code"), false);
-		assert.equal(phases.includes("Build native binary"), false);
-	} finally {
-		cwd.mockRestore();
-	}
 });
 
 for (const budget of [1, 3])

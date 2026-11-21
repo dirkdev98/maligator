@@ -113,7 +113,7 @@ const image = compileEntrypoint(path.resolve(inputPath), {
 if (optimizationReport === undefined) throw new Error("missing Core optimization report");
 
 const units = measure("emitMs", () =>
-	emitProgramTranslationUnits(image, { maligatorSurface: true }),
+	emitProgramTranslationUnits(image, { toolchainBridge: true }),
 );
 
 let wireBytes = 0;

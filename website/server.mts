@@ -1,66 +1,54 @@
-import { readFileSync } from "node:fs";
+import { embedDirectory, embedFile } from "maligator:assets";
 import { siteResponse } from "./responses.ts";
 import type { ExplorerAsset, SiteResource } from "./responses.ts";
 
-const explorerRoot = mal.assets.materialize("explorer");
+const explorer = embedDirectory("../.cache/explorer-site/current", {
+	include: ["index.html", "manifest.json", "*.js", "*.css", "*.wasm.br", "*.txt"],
+});
+const documentation = embedDirectory("maligator-site:documentation");
+const member = (directory: typeof explorer, path: string) => {
+	const file = directory.get(path);
+	if (file === undefined) throw new Error(`The site build did not produce ${path}`);
+	return file;
+};
+
 const pages = new Map<string, SiteResource>([
 	[
 		"/.well-known/maligator-site.json",
 		{
-			body: readFileSync(mal.assets.materialize("deployment"), "utf8"),
+			body: embedFile("../.cache/website-build/deployment.json").text(),
 			type: "application/json",
 		},
 	],
 	[
 		"/favicon.ico",
-		{
-			body: readFileSync(mal.assets.materialize("favicon")),
-			type: "image/vnd.microsoft.icon",
-		},
+		{ body: embedFile("./favicon.ico").bytes(), type: "image/vnd.microsoft.icon" },
 	],
 	[
 		"/favicon-32x32.png",
-		{
-			body: readFileSync(mal.assets.materialize("faviconPng")),
-			type: "image/png",
-		},
+		{ body: embedFile("./favicon-32x32.png").bytes(), type: "image/png" },
 	],
 	[
 		"/apple-touch-icon.png",
-		{
-			body: readFileSync(mal.assets.materialize("appleTouchIcon")),
-			type: "image/png",
-		},
+		{ body: embedFile("./apple-touch-icon.png").bytes(), type: "image/png" },
 	],
-	[
-		"/",
-		{
-			body: readFileSync(mal.assets.materialize("site"), "utf8"),
-			type: "text/html; charset=utf-8",
-		},
-	],
+	["/", { body: embedFile("./index.html").text(), type: "text/html; charset=utf-8" }],
 	[
 		"/compatibility",
-		{
-			body: readFileSync(mal.assets.materialize("compatibility"), "utf8"),
-			type: "text/html; charset=utf-8",
-		},
+		{ body: embedFile("./compatibility.html").text(), type: "text/html; charset=utf-8" },
 	],
 	[
 		"/explorer",
 		{
-			body: readFileSync(`${explorerRoot}/index.html`, "utf8"),
+			body: member(explorer, "index.html").text(),
 			type: "text/html; charset=utf-8",
 			explorer: true,
 		},
 	],
 ]);
-const assets = JSON.parse(
-	readFileSync(`${explorerRoot}/manifest.json`, "utf8"),
-) as Array<ExplorerAsset>;
-for (const asset of assets) {
+for (const asset of member(explorer, "manifest.json").json() as Array<ExplorerAsset>) {
 	pages.set(asset.url, {
-		body: readFileSync(`${explorerRoot}/${asset.file}`),
+		body: member(explorer, asset.file).bytes(),
 		type: asset.type,
 		bytes: asset.bytes,
 		etag: `"${asset.digest}"`,
@@ -69,13 +57,12 @@ for (const asset of assets) {
 		explorer: true,
 	});
 }
-const documentationRoot = mal.assets.materialize("documentation");
-const documentation = JSON.parse(
-	readFileSync(`${documentationRoot}/manifest.json`, "utf8"),
-) as Array<ExplorerAsset>;
-for (const asset of documentation) {
+for (const asset of member(
+	documentation,
+	"manifest.json",
+).json() as Array<ExplorerAsset>) {
 	pages.set(asset.url, {
-		body: readFileSync(`${documentationRoot}/${asset.file}`),
+		body: member(documentation, asset.file).bytes(),
 		type: asset.type,
 		bytes: asset.bytes,
 		etag: `"${asset.digest}"`,

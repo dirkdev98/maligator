@@ -14,7 +14,7 @@ Check resolved `CC`/`CXX`, `PATH`, Rust, and the requested target against [the r
 
 ## Unknown import or missing global
 
-If the editor cannot resolve `maligator:workers`, load [the package types](/guides/typescript). If the compiler rejects a `node:` or Web API, enable its surface and check [Compatibility](/compatibility). Enabling a surface does not add an unsupported API. `Mal` uses `surface.webPlatform`; `mal` uses `surface.maligator`.
+If the editor cannot resolve `maligator:workers`, load [the package types](/guides/typescript). If the compiler rejects a `node:` or Web API, enable its surface and check [Compatibility](/compatibility). Enabling a surface does not add an unsupported API. `Mal` uses `surface.webPlatform`.
 
 ## Eval or RegExp is disabled
 
@@ -34,7 +34,7 @@ A shutdown that never finishes can be a task that does not settle after cancella
 
 ## Asset inclusion fails
 
-Check the path from the project root, confirm each directory pattern matches a regular file, and remove symlinks or special files. Assets require `surface.maligator`. At runtime, ensure the materialization parent is writable. See [Embed files](/guides/assets).
+A declaration the compiler rejects names its file and line: pass a string literal specifier and literal options, and call `embedFile` or `embedDirectory` directly. A build that fails to embed names the declared path: check it relative to the declaring module, confirm each `include` pattern matches a regular file, and remove symlinks or special files. At runtime, ensure the materialization parent is writable. See [Embed files](/guides/assets).
 
 ## HTTP startup fails
 

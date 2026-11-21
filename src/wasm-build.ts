@@ -82,12 +82,10 @@ export function assertWasmEngineConfig(config: ResolvedBuildConfig): void {
 		config.engine.temporal ||
 		config.engine.intl.enabled ||
 		config.surface.webPlatform ||
-		config.surface.node ||
-		config.surface.maligator ||
-		Object.keys(config.assets).length > 0
+		config.surface.node
 	) {
 		throw new Error(
-			"The Wasm reactor supports the synchronous engine with eval, realms, Intl, Temporal, host surfaces, and assets disabled",
+			"The Wasm reactor supports the synchronous engine with eval, realms, Intl, Temporal and host surfaces disabled",
 		);
 	}
 }

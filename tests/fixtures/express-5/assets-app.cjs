@@ -16,7 +16,7 @@ app.post("/api/echo", (request, response) => {
 	response.status(201).json({ body: request.body });
 });
 
-const publicDirectory = globalThis.mal.assets.materialize("public");
+const { publicDirectory } = require("./public-assets.mjs");
 app.use("/assets", express.static(publicDirectory));
 
 app.use((request, response) => {

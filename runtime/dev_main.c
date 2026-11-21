@@ -5,7 +5,6 @@
 #include <string.h>
 
 static const char development_wires_command[] = "--maligator-internal-run-wires";
-static const char development_wires_assets_command[] = "--maligator-internal-run-wires-assets";
 
 int main(int argc, char **argv) {
     const char *worker_manifest_path = nullptr;
@@ -19,8 +18,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s <program.malw> [program arguments...]\n", argv[0]);
         return 2;
     }
-    if (argv[1][0] == '-' && strcmp(argv[1], development_wires_command) != 0 &&
-        strcmp(argv[1], development_wires_assets_command) != 0) {
+    if (argv[1][0] == '-' && strcmp(argv[1], development_wires_command) != 0) {
         fprintf(stderr, "unsupported development runtime option: %s\n", argv[1]);
         return 2;
     }
@@ -28,19 +26,11 @@ int main(int argc, char **argv) {
     int wire_count = 1;
     int wire_offset = 1;
     int entry_offset = 0;
-    const char *asset_manifest_path = nullptr;
     if (strcmp(argv[1], development_wires_command) == 0) {
         if (argc < 4) return 2;
         wire_count = atoi(argv[2]);
         entry_offset = 3;
         wire_offset = 4;
-        if (wire_count < 1 || wire_offset + wire_count > argc) return 2;
-    } else if (strcmp(argv[1], development_wires_assets_command) == 0) {
-        if (argc < 5) return 2;
-        wire_count = atoi(argv[2]);
-        asset_manifest_path = argv[3];
-        entry_offset = 4;
-        wire_offset = 5;
         if (wire_count < 1 || wire_offset + wire_count > argc) return 2;
     }
 
@@ -58,7 +48,6 @@ int main(int argc, char **argv) {
 
     int code = mal_dev_run_wires(
         (const char *const *) &argv[wire_offset], wire_count,
-        asset_manifest_path,
         entry_offset > 0 ? argv[entry_offset] : nullptr,
         program_argc, program_argv, MAL_WEB_PLATFORM != 0, MAL_NODE != 0, worker_manifest_path);
     free(program_argv);

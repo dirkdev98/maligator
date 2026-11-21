@@ -11,12 +11,9 @@ import type { NativeFeatureSpec } from "./build-flags.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import type { BuildConfigTypeStripper, Leaf, ObjectSchema } from "./definition-module.ts";
 import {
-	SchemaViolation,
 	booleanLeaf,
 	evaluateDefinitionModule,
 	expect,
-	expectKeys,
-	expectObject,
 	stringArrayLeaf,
 	stringLeaf,
 	stringRecordLeaf,
@@ -25,7 +22,7 @@ import {
 import { ffiLibrariesLeaf } from "./ffi/contract.ts";
 import type { MaligatorBuildConfig } from "./public-api.d.ts";
 
-export type { AssetInclusion, MaligatorBuildConfig } from "./public-api.d.ts";
+export type { MaligatorBuildConfig } from "./public-api.d.ts";
 export type { BuildConfigTypeStripper } from "./definition-module.ts";
 export { BuildConfigError } from "./build-config-error.ts";
 export {
@@ -89,46 +86,10 @@ const primordialsLeaf: Leaf = {
 	leaf: (value, at) =>
 		expect(value === "locked" || value === "mutable", at, `"locked" or "mutable"`),
 };
-const assetsLeaf: Leaf = {
-	leaf: (value, at) => {
-		expectObject(value, at);
-		for (const [name, entry] of Object.entries(value)) {
-			const entryAt = `${at}.${name}`;
-			expect(name.length > 0 && !name.includes("\0"), entryAt, "a non-empty asset name");
-			expectObject(entry, entryAt);
-			expectKeys(entry, entryAt, ["type", "path", "include"]);
-			expect(
-				entry.type === "file" || entry.type === "directory",
-				`${entryAt}.type`,
-				`"file" or "directory"`,
-			);
-			expect(
-				typeof entry.path === "string" && entry.path.length > 0,
-				`${entryAt}.path`,
-				"a non-empty string",
-			);
-			if (entry.type === "directory") {
-				expect(
-					Array.isArray(entry.include) &&
-						entry.include.length > 0 &&
-						entry.include.every((item) => typeof item === "string"),
-					`${entryAt}.include`,
-					"a non-empty array of strings",
-				);
-			} else if (entry.include !== undefined) {
-				throw new SchemaViolation(
-					`'${entryAt}.include' is only valid for directory assets`,
-				);
-			}
-		}
-	},
-};
-
 const CONFIG_SCHEMA: ObjectSchema = {
 	object: {
 		entry: stringLeaf,
 		outputName: stringLeaf,
-		assets: assetsLeaf,
 		modules: { object: { aliases: stringRecordLeaf } },
 		engine: {
 			object: {
@@ -147,7 +108,7 @@ const CONFIG_SCHEMA: ObjectSchema = {
 			},
 		},
 		surface: {
-			object: { webPlatform: booleanLeaf, node: booleanLeaf, maligator: booleanLeaf },
+			object: { webPlatform: booleanLeaf, node: booleanLeaf },
 		},
 		ffi: ffiLibrariesLeaf,
 	},

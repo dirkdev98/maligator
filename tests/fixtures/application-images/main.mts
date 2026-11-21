@@ -1,5 +1,5 @@
 import type { FixtureBridge } from "./types.ts";
-const bridge = mal as unknown as FixtureBridge;
+const bridge = Reflect.get(globalThis, "mal") as FixtureBridge;
 import { readFileSync, unlinkSync } from "node:fs";
 import { createServer } from "node:http";
 import process from "node:process";
@@ -146,9 +146,6 @@ for (const descriptor of [first, second]) {
 		}
 	).entries)
 		unlinkSync(entry.wirePath);
-	unlinkSync(
-		descriptor.assetManifestPath!.replace("assets-", "asset-").replace(".mala", ".txt"),
-	);
 }
 for (const descriptor of descriptors)
 	for (const wire of descriptor.wires) unlinkSync(wire.path);
@@ -196,7 +193,6 @@ for (let index = 0; index < results.length; index++) {
 		result.generation === expected && result.child.generation === expected,
 		"same href child domain",
 	);
-	check(result.child.asset === expected, "shared asset generation");
 	check(
 		result.main &&
 			result.threadId === 0 &&
@@ -291,7 +287,7 @@ const answer = new Promise<ChildResult>((resolve) => {
 	);
 });
 escaped.port.postMessage(null);
-check((await answer).asset === "first", "escaped URL retains assets");
+check((await answer).generation === "first", "escaped URL retains its domain");
 await escaped.terminate();
 check(scopedResources(0, 0, 0).processWorkers === 0, "escaped worker joined");
 process.stdout.write("application images PASS\n");

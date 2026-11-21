@@ -755,7 +755,7 @@ async function compileSample(
 		benchmarkCase.sourceRoot,
 	);
 	const units = emitProgramTranslationUnits(emissionImage, {
-		maligatorSurface: true,
+		toolchainBridge: true,
 	});
 	phases.emitMs = performance.now() - emitStartedAt;
 	recordMemory("after-emit");

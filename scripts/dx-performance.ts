@@ -280,12 +280,10 @@ server.listen(0, "127.0.0.1", () => {
 		write(`public/asset-${String(index).padStart(3, "0")}.txt`, `asset ${index}\n`);
 	}
 	write(
-		"maligator.assets.build.mts",
-		`export default {
-	entry: "app.mts",
-	assets: { public: { type: "directory", path: "public", include: ["**/*"] } },
-		surface: { node: true, webPlatform: true },
-};\n`,
+		"assets.mts",
+		`import { embedDirectory } from "maligator:assets";
+console.log(embedDirectory("./public").files().length);
+`,
 	);
 	write(
 		"app.test.mts",
@@ -352,20 +350,8 @@ test("representative graph", () => {
 		}
 	}
 	if (measureAssets && (selectedLane === undefined || selectedLane === "run")) {
-		invoke("assets cold", [
-			"run",
-			"app.mts",
-			"--config",
-			"maligator.assets.build.mts",
-			"--verbose",
-		]);
-		invoke("assets hot", [
-			"run",
-			"app.mts",
-			"--config",
-			"maligator.assets.build.mts",
-			"--verbose",
-		]);
+		invoke("assets cold", ["run", "assets.mts", "--verbose"]);
+		invoke("assets hot", ["run", "assets.mts", "--verbose"]);
 	}
 	for (const sample of samples) report(sample);
 	complete = true;
@@ -373,7 +359,7 @@ test("representative graph", () => {
 	progress.complete();
 
 	if (!measureAssets) {
-		console.log("\nAdd --assets to measure the current native toolchain asset path.");
+		console.log("\nAdd --assets to measure an embedded directory read in place.");
 	}
 } catch (error) {
 	failure = error instanceof Error ? error.message : String(error);

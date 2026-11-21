@@ -28,6 +28,6 @@ export function runtimeGapBuildConfig(
 				],
 			},
 		},
-		surface: { node: true, webPlatform: false, maligator: true },
+		surface: { node: true, webPlatform: false },
 	});
 }

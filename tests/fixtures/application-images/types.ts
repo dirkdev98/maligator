@@ -10,7 +10,6 @@ export interface ApplicationData {
 }
 export interface ChildResult {
 	generation: string;
-	asset: string;
 }
 export interface ApplicationResult {
 	generation: string;
@@ -29,7 +28,6 @@ export interface ApplicationResult {
 export interface FixtureBridge extends NativeApplicationBridge {
 	_applicationData(): unknown;
 	_applicationResult(value: unknown): void;
-	assets: { materialize(name: string): string };
 }
 export interface FixtureGlobals {
 	launchCount?: number;

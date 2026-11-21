@@ -58,7 +58,7 @@ Run commands from the project root. Maligator does not search parent directories
 for configuration.
 
 `run` and `dev` use compile-time-specialized runtimes embedded in the platform
-package for locked or mutable primordials, configured assets, the Web and Node
+package for locked or mutable primordials, embedded assets, the Web and Node
 surfaces, and Realm support when Intl, profiling, and C libraries are disabled.
 Those profiles do not need a local native toolchain. `dev` retains compiler identities
 between edits and restarts a fresh

@@ -340,13 +340,11 @@ describe("retained test application images", () => {
 		}
 	});
 	it.skipIf(process.platform === "win32")(
-		"rediscovers added tests and asset members, then reruns unchanged state through the native signal control",
+		"rediscovers added tests, then reruns unchanged state through the native signal control",
 		async () => {
 			const directory = mkdtempSync(path.join(os.tmpdir(), "mal-test-watch-files-"));
 			const tests = path.join(directory, "tests");
-			const assets = path.join(directory, "assets");
 			mkdirSync(tests);
-			mkdirSync(assets);
 			const first = path.join(tests, "one.test.mts");
 			writeFileSync(first, "export {};\n");
 			const configPath = path.join(directory, "maligator.build.mts");
@@ -407,15 +405,11 @@ describe("retained test application images", () => {
 						},
 					},
 				},
-				() =>
-					resolveBuildConfig({
-						assets: { public: { type: "directory", path: assets, include: ["**/*"] } },
-					}),
+				() => resolveBuildConfig({}),
 			);
 			try {
 				await completed[0]!.promise;
 				writeFileSync(path.join(tests, "two.test.mts"), "export {};\n");
-				writeFileSync(path.join(assets, "new.txt"), "new asset\n");
 				wake();
 				await completed[1]!.promise;
 				expect(requests[1]?.input.files).toHaveLength(2);

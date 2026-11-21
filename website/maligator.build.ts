@@ -5,25 +5,10 @@ import { defineBuild } from "@maligator/cli";
 export default defineBuild({
 	entry: "website/server.mts",
 	outputName: "maligator-site",
-	assets: {
-		deployment: { type: "file", path: ".cache/website-build/deployment.json" },
-		favicon: { type: "file", path: "website/favicon.ico" },
-		faviconPng: { type: "file", path: "website/favicon-32x32.png" },
-		appleTouchIcon: { type: "file", path: "website/apple-touch-icon.png" },
-		site: { type: "file", path: "website/index.html" },
-		documentation: {
-			type: "directory",
-			path:
-				process.env.MALIGATOR_SITE_CONTAINER === "1"
-					? ".cache/documentation/container"
-					: ".cache/documentation/plain",
-			include: ["**"],
-		},
-		compatibility: { type: "file", path: "website/compatibility.html" },
-		explorer: {
-			type: "directory",
-			path: ".cache/explorer-site/current",
-			include: ["index.html", "manifest.json", "*.js", "*.css", "*.wasm.br", "*.txt"],
+	modules: {
+		aliases: {
+			// The container image serves documentation built for its own base URL.
+			"maligator-site:documentation": `${process.cwd()}/.cache/documentation/${process.env.MALIGATOR_SITE_CONTAINER === "1" ? "container" : "plain"}`,
 		},
 	},
 	engine: {
@@ -33,5 +18,5 @@ export default defineBuild({
 		temporal: false,
 		intl: { enabled: false },
 	},
-	surface: { webPlatform: true, node: true, maligator: true },
+	surface: { webPlatform: true, node: true },
 });

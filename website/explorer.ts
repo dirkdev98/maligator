@@ -30,7 +30,6 @@ const booleanSettings = [
 	"intl",
 	"webPlatform",
 	"node",
-	"maligator",
 ] as const;
 type MappingRange = ExplorerResult["mapping"]["ranges"][number];
 let result: ExplorerResult | undefined;

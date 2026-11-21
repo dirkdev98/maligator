@@ -23,7 +23,7 @@ The working directory is the project root. An explicit entry overrides `config.e
 
 ## Select features and host APIs
 
-Enable only the APIs your application uses. `surface.node` includes supported Node modules; `surface.webPlatform` includes Web APIs and `Mal.serve`. `surface.maligator` defaults to enabled and provides `mal.assets`.
+Enable only the APIs your application uses. `surface.node` includes supported Node modules; `surface.webPlatform` includes Web APIs and `Mal.serve`. `maligator:` modules need no surface flag.
 
 Engine choices apply to the whole image, including workers. RegExp is enabled by default. Eval, Realm support, Temporal, and Intl are opt-in. `engine.eval: true` embeds the runtime compiler; `"compile-check"` rejects visible dynamic compilation and keeps it disabled at runtime.
 
@@ -48,4 +48,4 @@ Aliases replace exact specifiers before resolution. They are not prefix mappings
 
 For `config file not found`, verify the working directory and `--config` path. For an unknown field, check the full field path in the diagnostic against [the reference](/api/build). Locale-data filtering is not implemented: `engine.intl.languages` must remain empty.
 
-Assets require `surface.maligator`. Follow [Embed files](/guides/assets) for inclusion patterns, or [Build for production](/guides/production) for target and artifact options.
+Assets are declared in source; follow [Embed files](/guides/assets). See [Build for production](/guides/production) for target and artifact options.

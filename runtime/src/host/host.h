@@ -39,9 +39,6 @@ typedef struct MalHost {
     i64 timer_next_id;
     bool node_timers;
 
-    /** Runtime-owned external assets installed for in-process development tests. */
-    void *development_assets;
-    void (*development_assets_free)(void *assets);
 
 } MalHost;
 

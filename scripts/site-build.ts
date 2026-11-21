@@ -1,8 +1,17 @@
 import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { includeConfiguredAssets } from "../src/assets.ts";
+import * as path from "node:path";
+import { collectEmbeddedAssets } from "../src/assets.ts";
 import { loadBuildConfig } from "../src/build-config.ts";
+import { maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress } from "../src/command-progress.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import {
+	embedModuleDeclaration,
+	isEmbedModule,
+} from "../src/compiler/frontend/embed-declarations.ts";
+import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
+import { FrontendCompilationSession } from "../src/frontend-cache.ts";
 import { requireToolchain } from "../src/toolchain.ts";
 import { buildExplorerSite } from "./build-explorer-site.ts";
 import { generateSite } from "./generate-site.ts";
@@ -23,6 +32,21 @@ if (targetIndex >= 0 && (target === undefined || target.startsWith("--")))
 	throw new Error("--target requires a Rust target triple");
 if (container) process.env.MALIGATOR_SITE_CONTAINER = "1";
 else delete process.env.MALIGATOR_SITE_CONTAINER;
+
+/** The files the server embeds; every declaration it makes is reachable. */
+function siteAssets() {
+	const graph = buildModuleGraph(path.resolve("website/server.mts"), {
+		buildConfig: loadBuildConfig("website/maligator.build.ts"),
+		stripTypes: stripCompactTypes,
+	});
+	return collectEmbeddedAssets(
+		[...graph.modules.keys()].filter(isEmbedModule).map(embedModuleDeclaration),
+		{
+			cacheDirectory: maligatorCacheDirectory(),
+			session: new FrontendCompilationSession(),
+		},
+	);
+}
 
 function build(): string {
 	const output = execFileSync(
@@ -59,9 +83,7 @@ for (let attempt = 0; attempt < 4; attempt++) {
 	updateSite();
 	binary = build();
 	const bytes = statSync(binary).size;
-	const assets = includeConfiguredAssets(
-		loadBuildConfig("website/maligator.build.ts").assets,
-	);
+	const assets = siteAssets();
 	const binaryPlatform =
 		target ?? requireToolchain({ rootDir: process.cwd() }).rustTarget;
 	const embeddedAssetBytes = assets.reduce(

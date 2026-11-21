@@ -1,8 +1,6 @@
 import type { MaligatorBuildConfig, MaligatorLibraryContract } from "./public-api.d.ts";
 
 export type {
-	AssetInclusion,
-	MaligatorAssets,
 	MaligatorBuildConfig,
 	MaligatorFfiCallback,
 	MaligatorFfiCount,
@@ -16,8 +14,6 @@ export type {
 	MaligatorFfiVariant,
 	MaligatorIntlFeature,
 	MaligatorLibraryContract,
-	MaligatorMaterializeOptions,
-	MaligatorRuntime,
 	MaligatorServeOptions,
 	MaligatorServer,
 	MaligatorWebRuntime,

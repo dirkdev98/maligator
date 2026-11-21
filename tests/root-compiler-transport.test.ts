@@ -335,7 +335,7 @@ test("ordered root results preserve full compiler, wire, diagnostic and C artifa
 			const emission = {
 				sourcePath: nativeSourcePath,
 				compiled: true,
-				maligatorSurface: config.surface.maligator,
+				toolchainBridge: true,
 			};
 			assert.deepEqual(
 				[...emitWorkerImageTranslationUnits(parallel.workers, emission)],

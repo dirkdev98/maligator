@@ -1,9 +1,4 @@
-import { BuildConfigError } from "./build-config-error.ts";
-import type {
-	AssetInclusion,
-	MaligatorBuildConfig,
-	MaligatorFfiLibrary,
-} from "./public-api.d.ts";
+import type { MaligatorBuildConfig, MaligatorFfiLibrary } from "./public-api.d.ts";
 
 /**
  * An entry native code calls instead of the function object: the C symbol takes the
@@ -217,7 +212,6 @@ export interface FfiCallbackReach {
 export interface ResolvedBuildConfig {
 	entry: string | undefined;
 	outputName: string | undefined;
-	assets: Record<string, AssetInclusion>;
 	modules: { aliases: Record<string, string> };
 	engine: {
 		primordials: "locked" | "mutable";
@@ -227,7 +221,7 @@ export interface ResolvedBuildConfig {
 		temporal: boolean;
 		intl: { enabled: boolean; features: Array<string>; languages: Array<string> };
 	};
-	surface: { webPlatform: boolean; node: boolean; maligator: boolean };
+	surface: { webPlatform: boolean; node: boolean };
 	ffi: Record<string, MaligatorFfiLibrary>;
 	/** Derived from the libraries' headers before compilation; empty until then. */
 	ffiModules: ReadonlyArray<FfiModule>;
@@ -235,18 +229,9 @@ export interface ResolvedBuildConfig {
 
 /** Apply defaults over a validated config. Absent fields take the product default. */
 export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildConfig {
-	if (
-		Object.keys(config.assets ?? {}).length > 0 &&
-		config.surface?.maligator === false
-	) {
-		throw new BuildConfigError(
-			"maligator.build.ts: configured assets require surface.maligator to be enabled",
-		);
-	}
 	return {
 		entry: config.entry,
 		outputName: config.outputName,
-		assets: { ...(config.assets ?? {}) },
 		modules: { aliases: { ...(config.modules?.aliases ?? {}) } },
 		engine: {
 			primordials: config.engine?.primordials ?? "locked",
@@ -266,7 +251,6 @@ export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildC
 		surface: {
 			webPlatform: config.surface?.webPlatform ?? false,
 			node: config.surface?.node ?? false,
-			maligator: config.surface?.maligator ?? true,
 		},
 		ffi: { ...(config.ffi ?? {}) },
 		ffiModules: [],

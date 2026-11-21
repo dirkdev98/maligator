@@ -37,10 +37,7 @@ describe("public documentation contracts", () => {
 		expect(symbols.find((entry) => entry.name === "engine.eval")?.url).toBe(
 			"/api/build#engine.eval",
 		);
-		for (const name of ["mal", "Mal"])
-			expect(symbols.find((entry) => entry.name === name)?.url).toBe(
-				`/api/runtime#${name}`,
-			);
+		expect(symbols.find((entry) => entry.name === "Mal")?.url).toBe("/api/runtime#Mal");
 	});
 	it("uses the same maintained worker example in guides and reference", () => {
 		const { pages, symbols } = documentationModel();

@@ -21,15 +21,8 @@ import { deserializeRuntimeImage } from "../src/compiler/target/program-image-co
 const SRC = `$cfg={
 entry: "tests/fixtures/express-5/assets-smoke.cjs",
 outputName: "express-assets-real-world",
-assets: {
-public: {
-type: "directory",
-path: "tests/fixtures/express-5/public",
-include: ["**/*"],
-},
-},
 engine: { primordials: "mutable", intl: { enabled: false } },
-surface: { webPlatform: true, node: true, maligator: true },
+surface: { webPlatform: true, node: true },
 };`;
 
 function digest(buf: Uint8Array | Array<number>): string {
@@ -85,7 +78,7 @@ export default defineBuild({
 		regexp: true,
 		intl: { enabled: true, features: [], languages: [] },
 	},
-	surface: { webPlatform: true, node: false, maligator: true },
+	surface: { webPlatform: true, node: false },
 });
 `,
 	);

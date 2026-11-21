@@ -37,11 +37,11 @@ const engine: NonNullable<MaligatorBuildConfig["engine"]> = {
 	intl: { enabled: false },
 };
 const config = resolveBuildConfig({
-	surface: { webPlatform: true, node: true, maligator: true },
+	surface: { webPlatform: true, node: true },
 	engine,
 });
 const nodeOnlyConfig = resolveBuildConfig({
-	surface: { webPlatform: false, node: true, maligator: true },
+	surface: { webPlatform: false, node: true },
 	engine,
 });
 function image(name: string, generation = "first", buildConfig = config) {
@@ -60,35 +60,6 @@ function wire(directory: string, name: string, generation: string, buildConfig =
 	const filename = path.join(directory, `${name}-${generation}.malw`);
 	writeFileSync(filename, bytes);
 	return { path: filename, sha256: hash("sha256", bytes, "hex") };
-}
-function assetManifest(directory: string, generation: string) {
-	const snapshot = path.join(directory, `asset-${generation}.txt`);
-	writeFileSync(snapshot, generation);
-	const chunks: Array<Buffer> = [Buffer.from("MALA")];
-	function u32(value: number) {
-		const bytes = Buffer.alloc(4);
-		bytes.writeUInt32LE(value);
-		chunks.push(bytes);
-	}
-	function string(value: string) {
-		const bytes = Buffer.from(value);
-		u32(bytes.length);
-		chunks.push(bytes);
-	}
-	u32(1);
-	u32(1);
-	string("payload");
-	string(hash("sha256", generation));
-	string("1");
-	chunks.push(Buffer.from([0]));
-	u32(1);
-	string("payload.txt");
-	string(snapshot);
-	u32(Buffer.byteLength(generation));
-	u32(0);
-	const manifest = path.join(directory, `assets-${generation}.mala`);
-	writeFileSync(manifest, Buffer.concat(chunks));
-	return manifest;
 }
 function descriptor(directory: string, generation: string) {
 	const child = wire(directory, "worker", generation);
@@ -110,7 +81,6 @@ function descriptor(directory: string, generation: string) {
 		schema: 1,
 		wires: [wire(directory, "fragment", generation), wire(directory, "app", generation)],
 		workerManifestPath,
-		assetManifestPath: assetManifest(directory, generation),
 		entryPath: path.join(fixtures, "app.mts"),
 		webPlatform: true,
 		node: true,
@@ -143,7 +113,6 @@ for (const compiled of [true, false]) {
 			) as ApplicationImageDescriptor;
 			unresolved.wires = [wire(directory, "unresolved", "third")];
 			delete unresolved.workerManifestPath;
-			delete unresolved.assetManifestPath;
 			const unresolvedPath = path.join(directory, "unresolved.json");
 			writeFileSync(unresolvedPath, JSON.stringify(unresolved));
 			descriptors.push(unresolvedPath);
@@ -170,7 +139,7 @@ for (const compiled of [true, false]) {
 				cSource: emitProgramTranslationUnits(definition, {
 					sourcePath: nativeSourcePath,
 					compiled,
-					maligatorSurface: true,
+					toolchainBridge: true,
 				}),
 			}).binaryPath;
 			const invocation = resolveHarnessExecutionInvocation(binary);
@@ -256,7 +225,7 @@ it("executes every fragment when an application has more than 4096 images", () =
 			verbose: false,
 			mainFile: path.join(fixtures, "main.c"),
 			cSource: emitProgramTranslationUnits(image("count-host"), {
-				maligatorSurface: true,
+				toolchainBridge: true,
 			}),
 		}).binaryPath;
 		const invocation = resolveHarnessExecutionInvocation(binary);

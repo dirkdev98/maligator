@@ -34,7 +34,7 @@ maligator run
 
 Your application prints `Hello, Maligator`. `run` builds a portable development image and executes it in a fresh VM. Ordinary profiles with Intl disabled use the runtime embedded in the distributed CLI; they do not require a local C or Rust toolchain.
 
-Run commands from this directory. Entries, config paths, and asset paths resolve from the working directory; Maligator does not look for configuration in parent directories.
+Run commands from this directory. Entries and config paths resolve from the working directory; Maligator does not look for configuration in parent directories.
 
 ## Build a native executable
 

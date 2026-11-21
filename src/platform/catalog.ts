@@ -52,7 +52,8 @@ export interface PlatformExport extends PlatformDocumentation {
 		readonly value: "deep-frozen-data" | "callable" | "runtime-data";
 		readonly identity: "application-context" | "module";
 		readonly provider?: "execution";
-		readonly declaration?: "worker-entry";
+		/** The compiler replaces each literal call with what it declares. */
+		readonly declaration?: "worker-entry" | "embed";
 		readonly workerSource?: string;
 		readonly effects: EffectSummary;
 	};
@@ -344,6 +345,56 @@ const workerType = (
 	source: string,
 	description: string,
 ): PlatformTypeDefinition => property(name, { kind: "signature", source }, description);
+
+const assetTypes: ReadonlyArray<PlatformTypeDefinition> = [
+	workerType(
+		"MaterializeOptions",
+		"{\n /** Parent directory for a materialized copy. Defaults to the OS temporary directory. */\n baseDirectory?: string;\n}",
+		"Where an embedded copy is written. Outside `maligator build` the source file is used in place and this option is ignored.",
+	),
+	{
+		...workerType(
+			"EmbeddedFile",
+			"{\n /** The path below its directory declaration, or the file name. */\n readonly path: string;\n /** The size in bytes. */\n readonly size: number;\n /** Lowercase hexadecimal SHA-256 of the contents. */\n readonly digest: string;\n /** The media type implied by the file extension; text types carry `charset=utf-8`. */\n readonly type: string;\n /** The contents as a Uint8Array over an immutable ArrayBuffer. */\n bytes(): Uint8Array<ArrayBuffer>;\n /** The contents decoded as UTF-8, without a byte order mark. */\n text(): string;\n /** The contents parsed as JSON. */\n json(): unknown;\n /** A filesystem path to the contents. Treat it as read-only. */\n materialize(options?: MaterializeOptions): string;\n}",
+			"A file the build embeds. `maligator build` fixes its contents; other commands read the source file each time.",
+		),
+		declaration: "interface",
+	},
+	{
+		...workerType(
+			"EmbeddedDirectory",
+			"{\n /** The member files in code point order of their paths. */\n files(): ReadonlyArray<EmbeddedFile>;\n /** The member file at a slash-separated path, if any. */\n get(path: string): EmbeddedFile | undefined;\n /** A filesystem path to a directory holding the member files. Treat it as read-only. */\n materialize(options?: MaterializeOptions): string;\n}",
+			"A directory tree the build embeds. `maligator build` fixes its member files; other commands list the source directory each time.",
+		),
+		declaration: "interface",
+	},
+	workerType(
+		"EmbedDirectoryOptions",
+		"{\n /** Patterns of member paths, with `*`, `?` and whole-segment `**`. Defaults to every file. Each pattern must match a file. */\n include?: ReadonlyArray<string>;\n /** Patterns of paths to leave out, even when included. */\n exclude?: ReadonlyArray<string>;\n /** Let wildcards match names that start with a dot. Defaults to false. */\n dot?: boolean;\n}",
+		"Which files of the directory belong to the declaration. Patterns are relative to the directory and use `/` separators.",
+	),
+];
+
+function embedExport(
+	name: string,
+	source: string,
+	description: string,
+	examples: ReadonlyArray<string>,
+): PlatformExport {
+	return {
+		name,
+		type: { kind: "signature", source },
+		description,
+		examples,
+		contract: {
+			phase: "preparation",
+			value: "callable",
+			identity: "module",
+			effects: NO_EFFECT_SUMMARY,
+			declaration: "embed",
+		},
+	};
+}
 
 const workerTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	workerType(
@@ -710,7 +761,7 @@ function workerExport(
 	};
 }
 
-export const PLATFORM_CATALOG_VERSION = 2;
+export const PLATFORM_CATALOG_VERSION = 3;
 
 export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 	{
@@ -910,6 +961,35 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 					workerSource: "workers/pool-worker.ts",
 				},
 			},
+		],
+	},
+	{
+		kind: "source",
+		id: "maligator:assets",
+		stability: "experimental",
+		evaluation: "side-effect-free",
+		sourceFile: "assets/runtime.ts",
+		declarationFile: "assets-api.d.ts",
+		description:
+			"Embed files and directory trees into the application. Each call must take a string literal specifier, resolved like an import from the calling module, and literal options. `maligator build` captures the files of every declaration the program can reach; other commands read the source files live, so edits need no rebuild.",
+		types: assetTypes,
+		exports: [
+			embedExport(
+				"embedFile",
+				"(specifier: string) => EmbeddedFile",
+				"Declare a file to embed and return its handle. Repeated declarations of the same file share one handle.",
+				[
+					'import { embedFile } from "maligator:assets";\n\nconst certificate = embedFile("./certs/ca.pem");\nconsole.log(certificate.text().length);',
+				],
+			),
+			embedExport(
+				"embedDirectory",
+				"(specifier: string, options?: EmbedDirectoryOptions) => EmbeddedDirectory",
+				"Declare a directory tree to embed and return its handle. Repeated declarations with the same options share one handle.",
+				[
+					'import { embedDirectory } from "maligator:assets";\n\nconst migrations = embedDirectory("./migrations", { include: ["*.sql"] });\nfor (const file of migrations.files()) console.log(file.path);',
+				],
+			),
 		],
 	},
 	{

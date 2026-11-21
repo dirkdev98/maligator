@@ -1,4 +1,4 @@
-import { chmodSync, readFileSync } from "node:fs";
+import { chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { capabilities, createPool, createWorkerUrl } from "maligator:workers";
 import type { WorkerPool } from "maligator:workers";
@@ -15,11 +15,20 @@ import {
 	startNativeRootCompilation,
 	validateRootInputs,
 } from "./native-root-compiler.ts";
+import {
+	compilerProducerDigests,
+	compilerWire,
+	license,
+	mutableDevelopmentRunner as mutableDevelopmentRunnerFile,
+	nodeGlobals,
+	platformSources,
+	runtime,
+	testHost,
+	testRuntime,
+	thirdPartyNotices,
+} from "./product-assets.mts";
 import { workerBudget } from "./worker-budget.ts";
 
-const { assets } = Reflect.get(globalThis, "mal") as {
-	assets: { materialize(name: string): string };
-};
 const mal = Reflect.get(globalThis, "mal") as unknown as NativeApplicationBridge & {
 	_spawnDevelopmentProcess(executablePath: string, args: Array<string>): number;
 	_killDevelopmentProcess(handle: number, force: boolean): void;
@@ -32,11 +41,12 @@ const developmentWatchEntry = createWorkerUrl<DevelopmentWatchWorker>(
 	import.meta.url,
 );
 
-const producerDigests = JSON.parse(
-	readFileSync(assets.materialize("compilerProducerDigests"), "utf8"),
-) as Record<CompilerProducerStage, string>;
+const producerDigests = compilerProducerDigests.json() as Record<
+	CompilerProducerStage,
+	string
+>;
 installCompilerProducerDigests(producerDigests);
-const mutableDevelopmentRunner = assets.materialize("mutableDevelopmentRunner");
+const mutableDevelopmentRunner = mutableDevelopmentRunnerFile.materialize();
 chmodSync(mutableDevelopmentRunner, 0o755);
 
 interface ProductDevelopmentWatcher {
@@ -55,15 +65,15 @@ function updateDevelopmentDirectories(
 }
 
 const installation = productCompilerInstallation(
-	assets.materialize("runtime"),
-	assets.materialize("compilerWire"),
-	assets.materialize("testRuntime"),
-	[assets.materialize("license"), assets.materialize("thirdPartyNotices")],
+	runtime.materialize(),
+	compilerWire.materialize(),
+	testRuntime.materialize(),
+	[license.materialize(), thirdPartyNotices.materialize()],
 	process.argv[0],
-	assets.materialize("nodeGlobals"),
+	nodeGlobals.materialize(),
 	mutableDevelopmentRunner,
-	assets.materialize("platformSources"),
-	join(assets.materialize("testHost"), "host-driver.mts"),
+	platformSources.materialize(),
+	join(testHost.materialize(), "host-driver.mts"),
 );
 
 setCacheMaintenanceCommand([process.argv[0]!]);

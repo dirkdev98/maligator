@@ -16,7 +16,8 @@ typedef struct MalDevelopmentImage {
 
 typedef struct MalAsset MalAsset;
 
-/** Load and execute ordered development images in a fresh host VM with these assets. */
+/** Load and execute ordered development images in a fresh host VM. `assets` is the
+ * embedded asset table of a built executable, or null to read declared assets live. */
 int mal_dev_run_images(
     const MalDevelopmentImage *images,
     int image_count,
@@ -33,7 +34,6 @@ int mal_dev_run_images(
 int mal_dev_run_wires(
     const char *const *wire_paths,
     int wire_count,
-    const char *asset_manifest_path,
     const char *entry_path,
     int argc,
     char **argv,

@@ -34,9 +34,8 @@ __attribute__((weak)) void mal_register_compiled_worker_entries(void) {}
 
 #if MAL_DEVELOPMENT_API
 static const char development_wire_command[] = "--maligator-internal-run-wire";
-static const char development_wire_assets_command[] = "--maligator-internal-run-wire-assets";
 
-static int run_development_wire(int argc, char **argv, bool has_assets, const char *worker_manifest_path) {
+static int run_development_wire(int argc, char **argv, const char *worker_manifest_path) {
     if (argc < 6 || strlen(argv[2]) != 1 ||
         argv[2][0] < '0' || argv[2][0] > '3') {
         fprintf(stderr, "invalid internal development wire invocation\n");
@@ -44,7 +43,7 @@ static int run_development_wire(int argc, char **argv, bool has_assets, const ch
     }
     int surface_mask = argv[2][0] - '0';
     int wire_count = atoi(argv[3]);
-    int entry_offset = has_assets ? 5 : 4;
+    int entry_offset = 4;
     int wire_offset = entry_offset + 1;
     if (wire_count < 1 || wire_offset + wire_count > argc) {
         fprintf(stderr, "invalid internal development wire count\n");
@@ -61,7 +60,6 @@ static int run_development_wire(int argc, char **argv, bool has_assets, const ch
     }
     int code = mal_dev_run_wires(
         (const char *const *) &argv[wire_offset], wire_count,
-        has_assets ? argv[4] : nullptr,
         argv[entry_offset],
         program_argc, program_argv,
         (surface_mask & 1) != 0, (surface_mask & 2) != 0, worker_manifest_path);
@@ -80,10 +78,7 @@ int main(int argc, char **argv) {
         argc -= 2;
     }
     if (argc >= 2 && strcmp(argv[1], development_wire_command) == 0) {
-        return run_development_wire(argc, argv, false, worker_manifest_path);
-    }
-    if (argc >= 2 && strcmp(argv[1], development_wire_assets_command) == 0) {
-        return run_development_wire(argc, argv, true, worker_manifest_path);
+        return run_development_wire(argc, argv, worker_manifest_path);
     }
 #endif
     // Line-buffer stdout: a server logs then blocks in the event loop indefinitely,

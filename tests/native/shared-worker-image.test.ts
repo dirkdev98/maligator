@@ -20,7 +20,7 @@ let binary: string;
 beforeAll(() => {
 	const config = resolveBuildConfig({
 		engine: { eval: false, intl: { enabled: false } },
-		surface: { node: true, maligator: true },
+		surface: { node: true },
 	});
 	const semantic = loadEntrypointAndRunSemanticAnalysis(
 		path.resolve("tests/local/shared-worker-image.mjs"),
@@ -38,7 +38,7 @@ beforeAll(() => {
 		cacheSuffix: derivation.cacheSuffix,
 		verbose: false,
 		cSource: [
-			...emitProgramTranslationUnits(image, { compiled: true, maligatorSurface: true }),
+			...emitProgramTranslationUnits(image, { compiled: true, toolchainBridge: true }),
 			emitWorkerRegistryTranslationUnit(
 				workerRootEntries(semantic.graph ?? {}).map((entry) => ({
 					entry,

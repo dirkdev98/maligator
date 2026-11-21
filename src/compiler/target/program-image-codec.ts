@@ -47,7 +47,12 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 105;
+export const WIRE_VERSION = 106;
+
+/** Host install slot payload kinds; runtime/src/vm_load.c reads the same tags. */
+const HOST_SLOT_EMPTY = 0;
+const HOST_SLOT_CONSTANT = 1;
+const HOST_SLOT_DATA = 2;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -673,10 +678,18 @@ export function writeRuntimeImage(
 			w.u32(name.length);
 			for (const byte of name) w.u8(byte);
 			w.i32(entry.slot);
-			const constant =
-				entry.constant === undefined ? [] : utf8Encode(JSON.stringify(entry.constant));
-			w.u32(constant.length);
-			for (const byte of constant) w.u8(byte);
+			// The installer reads either kind as its slot data; only a constant may fold.
+			const payload = entry.constant ?? entry.data;
+			w.u8(
+				entry.constant !== undefined
+					? HOST_SLOT_CONSTANT
+					: entry.data !== undefined
+						? HOST_SLOT_DATA
+						: HOST_SLOT_EMPTY,
+			);
+			const bytes = payload === undefined ? [] : utf8Encode(JSON.stringify(payload));
+			w.u32(bytes.length);
+			for (const byte of bytes) w.u8(byte);
 		}
 	}
 
@@ -1679,15 +1692,24 @@ export function readRuntimeImage(
 			const nameBytes = new Array<number>(nameLength);
 			for (let byte = 0; byte < nameLength; byte++) nameBytes[byte] = r.u8();
 			const slot = r.i32();
-			const constantLength = r.count(1);
-			const constantBytes = new Array<number>(constantLength);
-			for (let byte = 0; byte < constantLength; byte++) constantBytes[byte] = r.u8();
+			const payloadKind = r.u8();
+			if (payloadKind > HOST_SLOT_DATA)
+				throw new Error(`program-image-codec: invalid host slot payload ${payloadKind}`);
+			const payloadLength = r.count(1);
+			const payloadBytes = new Array<number>(payloadLength);
+			for (let byte = 0; byte < payloadLength; byte++) payloadBytes[byte] = r.u8();
+			const payload =
+				payloadKind === HOST_SLOT_EMPTY
+					? undefined
+					: (JSON.parse(utf8Decode(payloadBytes)) as PlatformData);
 			hostExports.push({
 				name: utf8Decode(nameBytes),
 				slot,
-				...(constantLength === 0
+				...(payload === undefined
 					? {}
-					: { constant: JSON.parse(utf8Decode(constantBytes)) as PlatformData }),
+					: payloadKind === HOST_SLOT_CONSTANT
+						? { constant: payload }
+						: { data: payload }),
 			});
 		}
 		hostInstalls.push({ installer: utf8Decode(installerBytes), exports: hostExports });

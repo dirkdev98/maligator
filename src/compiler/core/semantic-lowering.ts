@@ -338,6 +338,7 @@ interface CoreFrontendContext {
 			name: string;
 			binding: Binding;
 			constant?: PlatformData;
+			data?: PlatformData;
 			direct?: FfiDirectEntry;
 		}>;
 	}>;
@@ -2155,13 +2156,14 @@ function coreHostInstallCandidates(
 	>();
 	for (const hostModule of program.hostModules) {
 		const entries = candidates.get(hostModule.installer) ?? [];
-		for (const { name, binding, constant, direct } of hostModule.exports) {
+		for (const { name, binding, constant, data, direct } of hostModule.exports) {
 			const location = program.bindingToStorage.get(binding);
 			if (location?.type === "global") {
 				entries.push({
 					name,
 					slot: location.index,
 					...(constant === undefined ? {} : { constant }),
+					...(data === undefined ? {} : { data }),
 					...(direct === undefined ? {} : { direct }),
 				});
 				if (constant !== undefined) {

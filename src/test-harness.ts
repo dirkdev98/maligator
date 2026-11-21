@@ -3,7 +3,7 @@ import { execFileSync, spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import * as path from "node:path";
-import { includeConfiguredAssets } from "./assets.ts";
+import { collectEmbeddedAssets, embedDeclarationsOf } from "./assets.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { normalizeNativeFeatures } from "./build-flags.ts";
@@ -403,8 +403,13 @@ function linkProgramImage(
 			path.isAbsolute(file) ? path.relative(fixtureDirectory, file) : file,
 		partitionRoot: fixtureDirectory,
 		compiled,
-		assets: includeConfiguredAssets(config.assets),
-		maligatorSurface: config.surface.maligator,
+		assets: collectEmbeddedAssets(
+			embedDeclarationsOf([
+				image.runtime,
+				...workerImages.map((worker) => worker.image.runtime),
+			]),
+		),
+		toolchainBridge: true,
 		nativeFunctionSplit: options.nativeFunctionSplit,
 		onRendererBailout: ({
 			file,

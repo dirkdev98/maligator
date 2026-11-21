@@ -1076,7 +1076,7 @@ try {
 
 	writeFileSync(
 		configPath,
-		`import { defineBuild } from "@maligator/cli";\n\nconst nodeSurface: boolean = process.env.SELFHOST_CLI_NODE === "1";\nexport default defineBuild({\n\tentry: ${JSON.stringify(fixture)},\n\toutputName: "selfhost-cli-app",\n\tassets: { payload: { type: "file", path: "payload.bin" } },\n\tengine: { eval: true, regexp: false, intl: { enabled: false } },\n\tsurface: { webPlatform: false, node: nodeSurface, maligator: true },\n});\n`,
+		`import { defineBuild } from "@maligator/cli";\n\nconst nodeSurface: boolean = process.env.SELFHOST_CLI_NODE === "1";\nexport default defineBuild({\n\tentry: ${JSON.stringify(fixture)},\n\toutputName: "selfhost-cli-app",\n\tengine: { eval: true, regexp: false, intl: { enabled: false } },\n\tsurface: { webPlatform: false, node: nodeSurface },\n});\n`,
 	);
 	writeFileSync(
 		path.join(project, "payload.bin"),
@@ -1088,7 +1088,7 @@ try {
 	);
 	writeFileSync(
 		path.join(project, fixture),
-		`import { readFileSync } from "node:fs";\nimport helperDefault, { ok, type HelperValue } from "./helper.mts";\n\nconst expected = [0, 255, 195, 40, 65];\nconst payload = readFileSync(globalThis.mal.assets.materialize("payload"));\nif (payload.length !== expected.length || payload.some((value, index) => value !== expected[index])) process.exit(18);\nif (eval("20 + 22") !== 42) process.exit(19);\nconst genericResult: { value: HelperValue } = ok(helperDefault);\nif (genericResult.value.label !== "compact") process.exit(20);\nconst actual = process.argv.slice(2);\nconsole.log(\`selfhost-cli \${actual.join("|")}\`);\n`,
+		`import { embedFile } from "maligator:assets";\nimport helperDefault, { ok, type HelperValue } from "./helper.mts";\n\nconst expected = [0, 255, 195, 40, 65];\nconst payload = embedFile("./payload.bin").bytes();\nif (payload.length !== expected.length || payload.some((value, index) => value !== expected[index])) process.exit(18);\nif (eval("20 + 22") !== 42) process.exit(19);\nconst genericResult: { value: HelperValue } = ok(helperDefault);\nif (genericResult.value.label !== "compact") process.exit(20);\nconst actual = process.argv.slice(2);\nconsole.log(\`selfhost-cli \${actual.join("|")}\`);\n`,
 	);
 	writeFileSync(
 		developmentConfigPath,
@@ -1167,7 +1167,7 @@ setTimeout(() => {
 	entry: "workers.mts",
 	outputName: "selfhost-workers",
 	engine: { eval: false, regexp: false, intl: { enabled: false } },
-	surface: { webPlatform: false, node: true, maligator: true },
+	surface: { webPlatform: false, node: true },
 };
 `,
 	);
@@ -1249,7 +1249,7 @@ try {
 		);
 		writeFileSync(
 			path.join(project, rootsConfig),
-			'export default {entry:"production-roots.mts",outputName:"selfhost-production-roots",assets:{large:{type:"file",path:"production-large-asset.bin"}},surface:{node:false,webPlatform:false,maligator:true},engine:{eval:false,regexp:false,intl:{enabled:false}}};\n',
+			'export default {entry:"production-roots.mts",outputName:"selfhost-production-roots",surface:{node:false,webPlatform:false},engine:{eval:false,regexp:false,intl:{enabled:false}}};\n',
 		);
 		for (const [name, increment] of [
 			["first", 38],
@@ -1261,7 +1261,9 @@ try {
 			);
 		writeFileSync(
 			path.join(project, "production-roots.mts"),
-			`import {createPool,createWorkerUrl} from "maligator:workers";
+			`import {embedFile} from "maligator:assets";
+import {createPool,createWorkerUrl} from "maligator:workers";
+if (embedFile("./production-large-asset.bin").size !== 4 * 1024 * 1024) throw new Error("large asset");
 const first = createPool<typeof import("./production-root-first.mts")>(createWorkerUrl("./production-root-first.mts",import.meta.url),{size:1});
 const second = createPool<typeof import("./production-root-second.mts")>(createWorkerUrl("./production-root-second.mts",import.meta.url),{size:1});
 try {
@@ -1699,9 +1701,8 @@ test("passes a pointer-valued constant through a macro alias", () => {
 			`export default {
 	entry: "production-entry.mts",
 	outputName: "selfhost-cli-production",
-	assets: { payload: { type: "file", path: "payload.bin" } },
 	engine: { eval: true, regexp: true, intl: { enabled: false } },
-	surface: { webPlatform: false, node: true, maligator: true },
+	surface: { webPlatform: false, node: true },
 };
 `,
 		);
@@ -1765,7 +1766,9 @@ ${readFileSync(path.join(project, fixture), "utf-8")}`,
 				`Express asset run did not complete its HTTP checks:\n${expressRunOutput}`,
 			);
 		}
-		console.log("ok   run served Express routes from an external Mal asset snapshot");
+		console.log(
+			"ok   run served Express routes from an embedded directory read in place",
+		);
 
 		const expressWatcher = spawn(
 			distributedCli,
@@ -1814,12 +1817,11 @@ ${readFileSync(path.join(project, fixture), "utf-8")}`,
 			await waitForOutput(() => expressWatchOutput, "EXPRESS_ASSETS_READY", 60_000);
 			await expectAsset("static payload\n");
 			writeFileSync(isolatedPublicAsset, "static payload updated\n");
-			await waitForOutput(
-				() => (expressOrigins().length >= 2 ? "EXPRESS_ASSETS_RESTARTED" : ""),
-				"EXPRESS_ASSETS_RESTARTED",
-				60_000,
-			);
+			// Outside a build the application reads embedded files in place, so the edit
+			// reaches the running server without a restart.
 			await expectAsset("static payload updated\n");
+			if (expressOrigins().length !== 1)
+				throw new Error(`Express dev server restarted for an asset edit`);
 		} finally {
 			expressWatchExit = await stopDevelopmentChild(
 				expressWatcher,
@@ -1835,7 +1837,7 @@ ${readFileSync(path.join(project, fixture), "utf-8")}`,
 				`Express watcher exited with ${expressWatchExit}:\n${expressWatchOutput}`,
 			);
 		}
-		console.log("ok   dev rebuilt Express after a configured asset edit");
+		console.log("ok   dev served an edited asset without restarting Express");
 
 		const expressBuildOutput = invoke(["build", "--config", expressConfigPath]);
 		const expressBinary = path.resolve(project, expressBuildOutput.trim());
@@ -1884,7 +1886,7 @@ ${readFileSync(path.join(project, fixture), "utf-8")}`,
 				`Express asset tests did not run inside the product test command:\n${expressTestOutput}`,
 			);
 		}
-		console.log("ok   test exercised Express HTTP behavior with project Mal assets");
+		console.log("ok   test exercised Express HTTP behavior with embedded assets");
 	}
 
 	unlinkSync(projectNodeModules);

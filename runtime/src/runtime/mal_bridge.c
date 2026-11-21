@@ -1,4 +1,4 @@
-#include "mal_assets.h"
+#include "mal_bridge.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -17,7 +17,6 @@
 
 #include "array_object.h"
 #include "builtin_data_view.h"
-#include "development_assets.h"
 #include "gc.h"
 #include "heap_string.h"
 #include "host.h"
@@ -39,12 +38,11 @@
 #define MAL_DEVELOPMENT_API 0
 #endif
 
-#define MAL_ASSET_COMPLETION_MARKER ".maligator-asset-complete"
-
-static const MalPropertyFlags MAL_ASSET_VISIBLE =
+static const MalPropertyFlags MAL_BRIDGE_VISIBLE =
     MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
 
-static MalValue mal_asset_string(MalVm *vm, const char *bytes) {
+#if MAL_DEVELOPMENT_API
+static MalValue mal_bridge_string(MalVm *vm, const char *bytes) {
     MalString *string = mal_string_from_utf8(&vm->heap, (const byte *) bytes, strlen(bytes));
     if (string == nullptr) {
         mal_vm_throw_allocation_error(vm);
@@ -53,15 +51,15 @@ static MalValue mal_asset_string(MalVm *vm, const char *bytes) {
     return mal_value_from_string(string);
 }
 
-static void mal_asset_throw_utf8(MalVm *vm, MalIntrinsic prototype, const char *message) {
-    MalValue value = mal_asset_string(vm, message);
+static void mal_bridge_throw_utf8(MalVm *vm, MalIntrinsic prototype, const char *message) {
+    MalValue value = mal_bridge_string(vm, message);
     MalRootSpan root;
     mal_gc_root(&root, &value, 1);
     mal_vm_throw_error_value(vm, prototype, value);
     mal_gc_unroot(&root);
 }
 
-static char *mal_asset_to_cstr(MalVm *vm, MalValue value, const char *argument) {
+static char *mal_bridge_to_cstr(MalVm *vm, MalValue value, const char *argument) {
     if (!mal_value_is_string(value)) {
         char message[96];
         snprintf(message, sizeof message, "The \"%s\" argument must be a string", argument);
@@ -75,7 +73,7 @@ static char *mal_asset_to_cstr(MalVm *vm, MalValue value, const char *argument) 
         mal_value_to_string(value), &bytes, &length);
     if (result == MAL_UTF8_C_STRING_EMBEDDED_NUL) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Asset names and paths must not contain null bytes");
+            "Bridge arguments must not contain null bytes");
         return nullptr;
     }
     if (result == MAL_UTF8_C_STRING_ALLOCATION_FAILED) {
@@ -93,12 +91,11 @@ static void mal_host_throw_errno(
     if (message != nullptr) {
         snprintf(message, length, "%s: %s '%s': %s", scope, operation, path, description);
     }
-    mal_asset_throw_utf8(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+    mal_bridge_throw_utf8(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
         message != nullptr ? message : "Maligator host operation failed");
     free(message);
 }
 
-#if MAL_DEVELOPMENT_API
 static MalValue mal_test_register_worker_manifest(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self; (void) nt; (void) callee;
@@ -106,7 +103,7 @@ static MalValue mal_test_register_worker_manifest(
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "mal._registerWorkerManifest requires a path");
         return mal_value_new_undefined();
     }
-    char *path = mal_asset_to_cstr(vm, args[0], "path");
+    char *path = mal_bridge_to_cstr(vm, args[0], "path");
     if (path == nullptr) return mal_value_new_undefined();
     mal_worker_manifest_register(vm, path);
     free(path);
@@ -118,7 +115,7 @@ static MalValue mal_test_run_wire_bytes(MalVm *vm, const u8 *bytes, usize length
     MalLoadedRuntimeImage *loaded = mal_runtime_image_load_with_host_resolver(
         bytes, length, &error, mal_host_resolve_installer);
     if (loaded == nullptr) {
-        mal_asset_throw_utf8(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, error);
+        mal_bridge_throw_utf8(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, error);
         return mal_value_new_undefined();
     }
 
@@ -183,7 +180,7 @@ static MalValue mal_test_run_wire_path(
             "mal._runWirePath requires a path");
         return mal_value_new_undefined();
     }
-    char *path = mal_asset_to_cstr(vm, args[0], "path");
+    char *path = mal_bridge_to_cstr(vm, args[0], "path");
     if (path == nullptr) return mal_value_new_undefined();
     byte *bytes = nullptr;
     usize length = 0;
@@ -200,59 +197,6 @@ static MalValue mal_test_run_wire_path(
     return result;
 }
 
-static void mal_test_development_assets_free(void *assets) {
-    mal_development_assets_free((MalDevelopmentAssets *) assets);
-}
-
-/** Replace the product CLI's own embedded assets while executing project tests. */
-static MalValue mal_test_set_development_assets(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) self;
-    (void) nt;
-    (void) callee;
-    MalHost *host = mal_host(vm);
-    if (host == nullptr) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-            "mal._setDevelopmentAssets requires a host runtime");
-        return mal_value_new_undefined();
-    }
-
-    MalDevelopmentAssets *loaded = nullptr;
-    const MalAsset *assets = nullptr;
-    i32 asset_count = 0;
-    if (argc > 0 && !mal_value_is_undefined(args[0])) {
-        char *path = mal_asset_to_cstr(vm, args[0], "manifestPath");
-        if (path == nullptr) return mal_value_new_undefined();
-        const char *error = "unknown error";
-        loaded = mal_development_assets_load(path, &error);
-        if (loaded == nullptr) {
-            usize length = strlen(path) + strlen(error) + 48;
-            char *message = malloc(length);
-            if (message != nullptr) {
-                snprintf(message, length,
-                    "mal._setDevelopmentAssets could not load '%s': %s", path, error);
-            }
-            mal_asset_throw_utf8(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-                message != nullptr ? message : "Could not load development assets");
-            free(message);
-            free(path);
-            return mal_value_new_undefined();
-        }
-        free(path);
-        assets = mal_development_assets_get(loaded, &asset_count);
-    }
-
-    if (host->development_assets_free != nullptr) {
-        host->development_assets_free(host->development_assets);
-    }
-    host->development_assets = loaded;
-    host->development_assets_free =
-        loaded == nullptr ? nullptr : mal_test_development_assets_free;
-    vm->live_runtime_image.assets = assets;
-    vm->live_runtime_image.asset_count = asset_count;
-    return mal_value_new_undefined();
-}
-
 static MalValue mal_dev_spawn(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;
@@ -264,7 +208,7 @@ static MalValue mal_dev_spawn(
         return mal_value_new_undefined();
     }
 
-    char *executable = mal_asset_to_cstr(vm, args[0], "executable");
+    char *executable = mal_bridge_to_cstr(vm, args[0], "executable");
     if (executable == nullptr) return mal_value_new_undefined();
     u32 argument_count = mal_array_object_length(mal_value_to_array_object(args[1]));
     char **child_argv = calloc((usize) argument_count + 2, sizeof(char *));
@@ -277,7 +221,7 @@ static MalValue mal_dev_spawn(
     for (u32 i = 0; i < argument_count; i++) {
         MalValue argument;
         if (!mal_vm_get_property(vm, args[1], mal_key_index(i), &argument)) goto fail;
-        child_argv[i + 1] = mal_asset_to_cstr(vm, argument, "argument");
+        child_argv[i + 1] = mal_bridge_to_cstr(vm, argument, "argument");
         if (child_argv[i + 1] == nullptr) goto fail;
     }
 
@@ -382,7 +326,7 @@ static MalValue mal_dev_wait_change(
         for (u32 i = 0; i < count; i++) {
             MalValue value;
             if (!mal_vm_get_property(vm, args[0], mal_key_index(i), &value)) break;
-            char *directory = mal_asset_to_cstr(vm, value, "directory");
+            char *directory = mal_bridge_to_cstr(vm, value, "directory");
             if (directory == nullptr) break;
             int descriptor = open(directory, O_EVTONLY);
             free(directory);
@@ -421,280 +365,6 @@ static MalValue mal_dev_wait_change(
     return mal_value_new_undefined();
 }
 #endif
-
-static char *mal_asset_join(const char *left, const char *right) {
-    usize left_length = strlen(left);
-    usize right_length = strlen(right);
-    bool separator = left_length > 0 && left[left_length - 1] != '/';
-    if (left_length > SIZE_MAX - right_length - (separator ? 2 : 1)) return nullptr;
-    char *joined = malloc(left_length + right_length + (separator ? 2 : 1));
-    if (joined == nullptr) return nullptr;
-    memcpy(joined, left, left_length);
-    usize offset = left_length;
-    if (separator) joined[offset++] = '/';
-    memcpy(joined + offset, right, right_length + 1);
-    return joined;
-}
-
-static bool mal_asset_safe_relative_path(const char *path) {
-    if (path[0] == '\0' || path[0] == '/') return false;
-    const char *component = path;
-    for (const char *cursor = path;; cursor++) {
-        if (*cursor == '\\') return false;
-        if (*cursor == '/' || *cursor == '\0') {
-            usize length = (usize) (cursor - component);
-            if (length == 0 || (length == 1 && component[0] == '.')
-                || (length == 2 && component[0] == '.' && component[1] == '.')) {
-                return false;
-            }
-            if (*cursor == '\0') return true;
-            component = cursor + 1;
-        }
-    }
-}
-
-static const MalAsset *mal_asset_find(const MalVm *vm, const char *name) {
-    for (i32 i = 0; i < vm->runtime_image->asset_count; i++) {
-        const MalAsset *asset = &vm->runtime_image->assets[i];
-        if (strcmp(asset->name, name) == 0) return asset;
-    }
-    return nullptr;
-}
-
-static const char *mal_asset_tmpdir(void) {
-    const char *names[] = {"TMPDIR", "TMP", "TEMP"};
-    for (usize i = 0; i < countof(names); i++) {
-        const char *value = getenv(names[i]);
-        if (value != nullptr && value[0] != '\0') return value;
-    }
-    return "/tmp";
-}
-
-static char *mal_asset_identity(const MalAsset *asset) {
-    usize hash_length = strlen(asset->hash);
-    usize version_length = strlen(asset->version);
-    if (hash_length > SIZE_MAX - version_length - 2) return nullptr;
-    char *identity = malloc(hash_length + version_length + 2);
-    if (identity == nullptr) return nullptr;
-    memcpy(identity, asset->hash, hash_length);
-    identity[hash_length] = '-';
-    memcpy(identity + hash_length + 1, asset->version, version_length + 1);
-    return identity;
-}
-
-/* A marker is trusted only below a private directory owned by this user. */
-static int mal_asset_cache_valid(
-    const char *target, const char *identity, bool *out_exists, bool *out_valid) {
-    *out_exists = false;
-    *out_valid = false;
-    bool private_directory = false;
-    int err = mal_posix_fs_private_directory(target, &private_directory);
-    if (err == ENOENT) return 0;
-    if (err != 0) return err;
-    *out_exists = true;
-    if (!private_directory) return EACCES;
-
-    char *marker = mal_asset_join(target, MAL_ASSET_COMPLETION_MARKER);
-    if (marker == nullptr) return ENOMEM;
-    byte *contents = nullptr;
-    usize length = 0;
-    err = mal_posix_fs_read_file(marker, &contents, &length);
-    free(marker);
-    if (err == ENOENT) return 0;
-    if (err != 0) return err;
-    *out_valid = length == strlen(identity) && memcmp(contents, identity, length) == 0;
-    free(contents);
-    return 0;
-}
-
-static int mal_asset_write_tree(const MalAsset *asset, const char *root, const char *identity) {
-    for (i32 i = 0; i < asset->file_count; i++) {
-        const MalAssetFile *file = &asset->files[i];
-        if (!mal_asset_safe_relative_path(file->path)
-            || strcmp(file->path, MAL_ASSET_COMPLETION_MARKER) == 0) {
-            return EINVAL;
-        }
-        char *destination = mal_asset_join(root, file->path);
-        if (destination == nullptr) return ENOMEM;
-        char *slash = strrchr(destination, '/');
-        if (slash != nullptr) {
-            *slash = '\0';
-            int err = mal_posix_fs_mkdir(destination, true);
-            *slash = '/';
-            if (err != 0) {
-                free(destination);
-                return err;
-            }
-        }
-        const byte *contents = (const byte *) file->data;
-        byte *owned_contents = nullptr;
-        usize length = file->length;
-        int err = 0;
-        if (contents == nullptr) {
-            if (file->source_path == nullptr) {
-                free(destination);
-                return EINVAL;
-            }
-            err = mal_posix_fs_read_file(file->source_path, &owned_contents, &length);
-            if (err == 0 && length != file->length) err = EIO;
-            contents = owned_contents;
-        }
-        if (err == 0) err = mal_posix_fs_write_file(destination, contents, length);
-        free(owned_contents);
-        free(destination);
-        if (err != 0) return err;
-    }
-
-    char *marker = mal_asset_join(root, MAL_ASSET_COMPLETION_MARKER);
-    if (marker == nullptr) return ENOMEM;
-    int err = mal_posix_fs_write_file(
-        marker, (const byte *) identity, strlen(identity));
-    free(marker);
-    return err;
-}
-
-static int mal_asset_materialize(
-    const MalAsset *asset, const char *base, char **out_path) {
-    int err = mal_posix_fs_mkdir(base, true);
-    if (err != 0) return err;
-
-    char *absolute_base = nullptr;
-    err = mal_posix_fs_realpath(base, &absolute_base);
-    if (err != 0) return err;
-    char *identity = mal_asset_identity(asset);
-    char *target = identity != nullptr ? mal_asset_join(absolute_base, identity) : nullptr;
-    free(absolute_base);
-    if (identity == nullptr || target == nullptr) {
-        free(identity);
-        free(target);
-        return ENOMEM;
-    }
-
-    bool exists;
-    bool valid;
-    err = mal_asset_cache_valid(target, identity, &exists, &valid);
-    if (err != 0) goto fail;
-    if (valid) goto ready;
-    if (exists) {
-        err = mal_posix_fs_rm(target, true, false);
-        if (err != 0 && err != ENOENT) goto fail;
-    }
-
-    char *temp_prefix = mal_asset_join(base, ".maligator-asset-tmp-");
-    char *temp = nullptr;
-    if (temp_prefix == nullptr) {
-        err = ENOMEM;
-        goto fail;
-    }
-    err = mal_posix_fs_mkdtemp(temp_prefix, &temp);
-    free(temp_prefix);
-    if (err != 0) { free(temp); goto fail; }
-    err = mal_asset_write_tree(asset, temp, identity);
-    if (err == 0) err = mal_posix_fs_rename(temp, target);
-    if (err != 0) {
-        bool race_exists;
-        bool race_valid;
-        int race_err = mal_asset_cache_valid(target, identity, &race_exists, &race_valid);
-        mal_posix_fs_rm(temp, true, true);
-        free(temp);
-        if (race_err == 0 && race_valid) {
-            err = 0;
-            goto ready;
-        }
-        if (race_err != 0) err = race_err;
-        goto fail;
-    }
-    free(temp);
-
-ready:
-    free(identity);
-    if (asset->directory) {
-        *out_path = target;
-        return 0;
-    }
-    if (asset->file_count != 1) {
-        err = EINVAL;
-        goto fail_without_identity;
-    }
-    *out_path = mal_asset_join(target, asset->files[0].path);
-    free(target);
-    return *out_path != nullptr ? 0 : ENOMEM;
-
-fail:
-    free(identity);
-fail_without_identity:
-    free(target);
-    return err;
-}
-
-static MalValue mal_assets_materialize(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) self;
-    (void) nt;
-    (void) callee;
-    if (argc < 1) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "mal.assets.materialize requires an asset name");
-        return mal_value_new_undefined();
-    }
-    char *name = mal_asset_to_cstr(vm, args[0], "name");
-    if (name == nullptr) return mal_value_new_undefined();
-    const MalAsset *asset = mal_asset_find(vm, name);
-    if (asset == nullptr) {
-        usize length = strlen(name) + 48;
-        char *message = malloc(length);
-        if (message != nullptr) {
-            snprintf(message, length, "Unknown configured asset \"%s\"", name);
-        }
-        mal_asset_throw_utf8(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-            message != nullptr ? message : "Unknown configured asset");
-        free(message);
-        free(name);
-        return mal_value_new_undefined();
-    }
-    free(name);
-
-    const char *default_base = mal_asset_tmpdir();
-    char *owned_base = nullptr;
-    const char *base = default_base;
-    if (argc >= 2 && !mal_value_is_undefined(args[1])) {
-        if (!mal_value_is_object(args[1])) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "The \"options\" argument must be an object");
-            return mal_value_new_undefined();
-        }
-        MalValue value;
-        if (!mal_vm_get_property(vm, args[1],
-                mal_intrinsic_string_key(vm, (const byte *) "baseDirectory"), &value)) {
-            return mal_value_new_undefined();
-        }
-        if (!mal_value_is_undefined(value)) {
-            owned_base = mal_asset_to_cstr(vm, value, "baseDirectory");
-            if (owned_base == nullptr) return mal_value_new_undefined();
-            if (owned_base[0] == '\0') {
-                free(owned_base);
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                    "The \"baseDirectory\" argument must not be empty");
-                return mal_value_new_undefined();
-            }
-            base = owned_base;
-        }
-    }
-
-    char *materialized = nullptr;
-    int err = mal_asset_materialize(asset, base, &materialized);
-    if (err != 0) {
-        mal_host_throw_errno(
-            vm, err, "mal.assets.materialize", "cannot materialize into", base);
-        free(owned_base);
-        free(materialized);
-        return mal_value_new_undefined();
-    }
-    free(owned_base);
-    MalValue result = mal_asset_string(vm, materialized);
-    free(materialized);
-    return result;
-}
 
 #if MAL_PROFILE
 static bool mal_profile_phase_argument(MalVm *vm, const MalValue *args, i32 argc, u32 *out) {
@@ -749,9 +419,6 @@ static void mal_install_development_api(MalVm *vm, MalObject *mal) {
     mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_runWirePath", 1, mal_test_run_wire_path);
     mal_intrinsic_define_method_n(
-        vm, mal, (const byte *) "_setDevelopmentAssets", 1,
-        mal_test_set_development_assets);
-    mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_spawnDevelopmentProcess", 2, mal_dev_spawn);
     mal_intrinsic_define_method_n(
         vm, mal, (const byte *) "_killDevelopmentProcess", 2, mal_dev_kill);
@@ -768,29 +435,21 @@ void mal_host_install_maligator(
     (void) count;
     (void) launch;
 
-    MalValue roots[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalValue roots[1] = {mal_value_new_undefined()};
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, countof(roots));
     roots[0] = mal_value_from_object(mal_intrinsic_new_object(vm));
-    roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
-    MalObject *mal = mal_value_to_object(roots[0]);
-    MalObject *assets = mal_value_to_object(roots[1]);
-
-    mal_intrinsic_define_method_n(
-        vm, assets, (const byte *) "materialize", 1, mal_assets_materialize);
-    mal_intrinsic_define_data(
-        vm, mal, (const byte *) "assets", roots[1], MAL_ASSET_VISIBLE);
 #if MAL_PROFILE
-    mal_intrinsic_define_method_n(
-        vm, mal, (const byte *) "_profilePhaseBegin", 1, mal_profile_phase_begin);
-    mal_intrinsic_define_method_n(
-        vm, mal, (const byte *) "_profilePhaseEnd", 1, mal_profile_phase_end);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]),
+        (const byte *) "_profilePhaseBegin", 1, mal_profile_phase_begin);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]),
+        (const byte *) "_profilePhaseEnd", 1, mal_profile_phase_end);
 #endif
 #if MAL_DEVELOPMENT_API
-    mal_install_development_api(vm, mal);
+    mal_install_development_api(vm, mal_value_to_object(roots[0]));
 #endif
     MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
     mal_intrinsic_define_data(
-        vm, global_this, (const byte *) "mal", roots[0], MAL_ASSET_VISIBLE);
+        vm, global_this, (const byte *) "mal", roots[0], MAL_BRIDGE_VISIBLE);
     mal_gc_unroot(&root_span);
 }

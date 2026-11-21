@@ -14,14 +14,14 @@ export function selfhostNativeTargetConfig(evalEnabled: boolean): ResolvedBuildC
 			regexp: false,
 			intl: { enabled: false },
 		},
-		surface: { webPlatform: false, node: false, maligator: true },
+		surface: { webPlatform: false, node: false },
 	});
 }
 
 export const SELFHOST_NATIVE_FRONTEND = { stripTypes: stripCompactTypes } as const;
 export const SELFHOST_NATIVE_EMISSION = {
 	sourcePath: nativeSourcePath,
-	maligatorSurface: true,
+	toolchainBridge: true,
 } as const;
 
 // The artifact codec would push the self-hosted compiler past Node's default heap while

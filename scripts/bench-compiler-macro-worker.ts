@@ -26,7 +26,7 @@ const { stripCompactTypes } = (await load(
 )) as typeof Frontend;
 const config = resolveBuildConfig({
 	engine: { eval: false, realms: false, intl: { enabled: false } },
-	surface: { node: true, webPlatform: false, maligator: false },
+	surface: { node: true, webPlatform: false },
 });
 const options: Pipeline.CompileEntrypointOptions = {
 	buildConfig: config,

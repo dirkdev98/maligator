@@ -144,7 +144,6 @@ describe("explorer compilation", () => {
 			realms: true,
 			webPlatform: true,
 			node: true,
-			maligator: true,
 		};
 		const first = request(source, config);
 		expect(first).toMatchObject({

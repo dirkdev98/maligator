@@ -1,5 +1,5 @@
 import type { FixtureBridge } from "./types.ts";
-const bridge = mal as unknown as FixtureBridge;
+const bridge = Reflect.get(globalThis, "mal") as FixtureBridge;
 import process from "node:process";
 import { isMainThread, threadId, parentPort, workerData } from "node:worker_threads";
 import { ready } from "maligator:application";

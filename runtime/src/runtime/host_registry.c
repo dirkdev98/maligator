@@ -3,8 +3,9 @@
 #include <string.h>
 
 #include "../ffi/mal_ffi.h"
-#include "mal_assets.h"
+#include "mal_bridge.h"
 #include "mal_application.h"
+#include "maligator_assets.h"
 #include "mal_process.h"
 #include "workers.h"
 
@@ -62,6 +63,7 @@ __attribute__((weak)) MalFfiInstaller mal_ffi_resolve_installer(const char *name
 MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_maligator);
     MATCH_INSTALLER(mal_host_install_maligator_application);
+    MATCH_INSTALLER(mal_host_install_maligator_assets);
     MATCH_INSTALLER(mal_host_install_maligator_process);
     MATCH_INSTALLER(mal_host_install_maligator_internal_workers);
 #if MAL_NODE

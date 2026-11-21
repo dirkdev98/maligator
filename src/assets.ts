@@ -1,32 +1,32 @@
 import { hash } from "node:crypto";
 import {
-	mkdirSync,
 	lstatSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
-	readdirSync,
 	renameSync,
 	rmSync,
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import type { Dirent } from "node:fs";
 import * as path from "node:path";
 import { writeFileAtomically } from "./atomic-file.ts";
-import { BuildConfigError } from "./build-config.ts";
-import type { AssetInclusion } from "./build-config.ts";
-import { legacyLocaleNameComparator, walkDirectoryTree } from "./file-tree.ts";
+import { BuildConfigError } from "./build-config-error.ts";
+import { EMBED_INSTALLER } from "./compiler/frontend/embed-declarations.ts";
+import type { EmbedDeclaration } from "./compiler/frontend/embed-declarations.ts";
+import type { RuntimeImage } from "./compiler/target/runtime-image.ts";
+import { walkDirectoryTree } from "./file-tree.ts";
 import type { FrontendCompilationSession } from "./frontend-cache.ts";
 
-export const ASSET_FORMAT_VERSION = "1";
+export const ASSET_FORMAT_VERSION = "2";
 export const ASSET_COMPLETION_MARKER = ".maligator-asset-complete";
 
 export interface IncludedAssetFile {
-	/** Slash-separated path below the materialized asset root. */
+	/** Slash-separated path below the asset's directory, or the file name. */
 	path: string;
 	/** Absolute build-host path consumed by C23 `#embed`. */
 	sourcePath: string;
-	/** Original project input watched for development changes. */
+	/** Original project input watched for changes. */
 	inputPath: string;
 	size: number;
 	digest: string;
@@ -46,105 +46,49 @@ interface AssetSnapshotManifest {
 }
 
 export interface IncludedAsset {
+	/** The declaration's canonical JSON, which its installer slot data repeats. */
 	name: string;
 	type: "file" | "directory";
 	hash: string;
 	version: string;
 	files: Array<IncludedAssetFile>;
-	directories: Array<AssetDirectoryIdentity>;
 }
 
-export interface AssetDirectoryIdentity {
-	path: string;
-	stat: string;
-	members: string;
+/** The distinct embed declarations a set of images installs, in a stable order. */
+export function embedDeclarationsOf(
+	images: Iterable<Pick<RuntimeImage, "hostInstalls">>,
+): Array<EmbedDeclaration> {
+	const declarations = new Map<string, EmbedDeclaration>();
+	for (const image of images)
+		for (const install of image.hostInstalls) {
+			if (install.installer !== EMBED_INSTALLER) continue;
+			for (const entry of install.exports) {
+				if (entry.data === undefined) continue;
+				declarations.set(
+					JSON.stringify(entry.data),
+					entry.data as unknown as EmbedDeclaration,
+				);
+			}
+		}
+	return [...declarations]
+		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+		.map(([, declaration]) => declaration);
 }
 
-function directoryStat(directory: string): string | undefined {
-	try {
-		const stats = lstatSync(directory);
-		return stats.isDirectory()
-			? `${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}:${stats.ino}:${stats.dev}`
-			: undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-function directoryMembers(entries: ReadonlyArray<Dirent>): string {
-	return hash(
-		"sha256",
-		JSON.stringify(
-			entries
-				.map((entry) => [
-					entry.name,
-					entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other",
-				])
-				.sort((a, b) => (a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0)),
-		),
-		"hex",
+function assetError(declaration: EmbedDeclaration, message: string): never {
+	throw new BuildConfigError(
+		`embedded ${declaration.kind} '${declaration.path}': ${message}`,
 	);
 }
 
-/** Validate the exact enumeration consumed by the build, including unmatched entries. */
-export function assetDirectoryUnchanged(identity: AssetDirectoryIdentity): boolean {
-	if (directoryStat(identity.path) !== identity.stat) return false;
-	try {
-		return (
-			directoryMembers(readdirSync(identity.path, { withFileTypes: true })) ===
-			identity.members
-		);
-	} catch {
-		return false;
-	}
-}
-
-/** Watch parents as well as existing subtrees so missing or renamed roots can recover. */
-export function configuredAssetDirectories(
-	assets: Record<string, AssetInclusion>,
-	projectRoot: string = process.cwd(),
-): Array<string> {
-	const directories = new Set<string>();
-	for (const asset of Object.values(assets)) {
-		const root = path.resolve(projectRoot, asset.path);
-		directories.add(path.dirname(root));
-		if (asset.type !== "directory" || directoryStat(root) === undefined) continue;
-		try {
-			walkDirectoryTree(
-				root,
-				() => {},
-				undefined,
-				undefined,
-				(directory) => directories.add(directory),
-			);
-		} catch {
-			// Keep the observed parents when an entry disappears during enumeration.
-		}
-	}
-	return [...directories].sort();
-}
-
-function assetError(name: string, message: string): never {
-	throw new BuildConfigError(`assets.${name}: ${message}`);
-}
-
-function validatePattern(name: string, pattern: string): Array<string> {
-	if (
-		pattern.length === 0 ||
-		pattern.includes("\\") ||
-		pattern.includes("\0") ||
-		pattern.startsWith("/")
-	) {
-		assetError(name, `invalid include pattern '${pattern}'`);
-	}
-	const segments = pattern.split("/");
-	if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
-		assetError(name, `invalid include pattern '${pattern}'`);
-	}
-	return segments;
-}
-
-function matchSegment(pattern: string, value: string): boolean {
+/*
+ * The pattern dialect the runtime matches live directories with
+ * (runtime/src/runtime/maligator_assets.c): `*` and `?` within a segment and `**`
+ * for whole segments. Without `dot`, a wildcard never matches a segment starting
+ * with a dot, while a pattern segment that spells the dot does.
+ */
+function matchSegment(pattern: string, value: string, dot: boolean): boolean {
+	if (!dot && value.startsWith(".") && !pattern.startsWith(".")) return false;
 	let p = 0;
 	let v = 0;
 	let star = -1;
@@ -167,18 +111,26 @@ function matchSegment(pattern: string, value: string): boolean {
 	return p === pattern.length;
 }
 
-function matchPath(pattern: Array<string>, value: Array<string>, p = 0, v = 0): boolean {
+export function matchAssetPath(
+	pattern: ReadonlyArray<string>,
+	value: ReadonlyArray<string>,
+	dot: boolean,
+	p = 0,
+	v = 0,
+): boolean {
 	if (p === pattern.length) return v === value.length;
 	if (pattern[p] === "**") {
 		return (
-			matchPath(pattern, value, p + 1, v) ||
-			(v < value.length && matchPath(pattern, value, p, v + 1))
+			matchAssetPath(pattern, value, dot, p + 1, v) ||
+			(v < value.length &&
+				(dot || !value[v]!.startsWith(".")) &&
+				matchAssetPath(pattern, value, dot, p, v + 1))
 		);
 	}
 	return (
 		v < value.length &&
-		matchSegment(pattern[p]!, value[v]!) &&
-		matchPath(pattern, value, p + 1, v + 1)
+		matchSegment(pattern[p]!, value[v]!, dot) &&
+		matchAssetPath(pattern, value, dot, p + 1, v + 1)
 	);
 }
 
@@ -269,76 +221,57 @@ function fileRow(
 	};
 }
 
-function includeFile(
-	name: string,
-	sourcePath: string,
-	stagingDirectory: string,
-	options?: AssetCollectionOptions,
-): Array<IncludedAssetFile> {
-	const basename = path.basename(sourcePath);
-	if (basename === ASSET_COMPLETION_MARKER) {
-		assetError(name, `file name '${ASSET_COMPLETION_MARKER}' is reserved`);
-	}
-	return [fileRow(sourcePath, basename, stagingDirectory, options)];
+/** UTF-8 byte order, which is code point order and the order the runtime lists in. */
+function compareMemberPaths(left: IncludedAssetFile, right: IncludedAssetFile): number {
+	return Buffer.compare(Buffer.from(left.path), Buffer.from(right.path));
 }
 
 function includeDirectory(
-	name: string,
-	sourcePath: string,
-	config: Extract<AssetInclusion, { type: "directory" }>,
+	declaration: EmbedDeclaration,
 	stagingDirectory: string,
-	directories: Array<AssetDirectoryIdentity>,
 	options?: AssetCollectionOptions,
 ): Array<IncludedAssetFile> {
-	const patterns = config.include.map((pattern) => validatePattern(name, pattern));
-	const matched = patterns.map(() => false);
+	const dot = declaration.dot === true;
+	const include = (declaration.include ?? ["**"]).map((pattern) => pattern.split("/"));
+	const exclude = (declaration.exclude ?? []).map((pattern) => pattern.split("/"));
+	const matched = include.map(() => false);
 	const files: Array<IncludedAssetFile> = [];
 
-	walkDirectoryTree(
-		sourcePath,
-		({ dirent, fullPath, relativeSegments }) => {
-			if (!dirent.isFile()) {
-				assetError(name, `unsupported non-regular file '${relativeSegments.join("/")}'`);
-			}
-			for (let index = 0; index < patterns.length; index++) {
-				if (matchPath(patterns[index]!, relativeSegments)) matched[index] = true;
-			}
-			if (patterns.some((pattern) => matchPath(pattern, relativeSegments))) {
-				const relativePath = relativeSegments.join("/");
-				if (relativePath === ASSET_COMPLETION_MARKER) {
-					assetError(name, `path '${ASSET_COMPLETION_MARKER}' is reserved`);
-				}
-				files.push(fileRow(fullPath, relativePath, stagingDirectory, options));
-			}
-		},
-		legacyLocaleNameComparator,
-		undefined,
-		(directory, entries) => {
-			const stat = directoryStat(directory);
-			if (stat === undefined)
-				assetError(name, `directory changed while collecting '${directory}'`);
-			directories.push({
-				path: directory,
-				stat,
-				members: directoryMembers(entries),
-			});
-		},
-	);
-	for (let index = 0; index < matched.length; index++) {
-		if (!matched[index]) {
-			assetError(name, `include pattern '${config.include[index]}' matched no files`);
+	walkDirectoryTree(declaration.path, ({ dirent, fullPath, relativeSegments }) => {
+		let included = false;
+		for (let index = 0; index < include.length; index++) {
+			if (!matchAssetPath(include[index]!, relativeSegments, dot)) continue;
+			matched[index] = true;
+			included = true;
 		}
-	}
-	return files;
+		if (
+			!included ||
+			exclude.some((pattern) => matchAssetPath(pattern, relativeSegments, dot))
+		)
+			return;
+		const relativePath = relativeSegments.join("/");
+		if (!dirent.isFile())
+			assetError(declaration, `'${relativePath}' is not a regular file`);
+		if (relativePath === ASSET_COMPLETION_MARKER)
+			assetError(declaration, `path '${ASSET_COMPLETION_MARKER}' is reserved`);
+		files.push(fileRow(fullPath, relativePath, stagingDirectory, options));
+	});
+	if (declaration.include !== undefined)
+		for (let index = 0; index < matched.length; index++) {
+			if (!matched[index])
+				assetError(
+					declaration,
+					`include pattern '${declaration.include[index]}' matched no files`,
+				);
+		}
+	return files.sort(compareMemberPaths);
 }
 
-/** Resolve and hash every configured asset from the project root. */
-export function includeConfiguredAssets(
-	assets: Record<string, AssetInclusion>,
-	projectRoot: string = process.cwd(),
+/** Read and hash the files of every embed declaration a build reaches. */
+export function collectEmbeddedAssets(
+	declarations: ReadonlyArray<EmbedDeclaration>,
 	options?: AssetCollectionOptions,
 ): Array<IncludedAsset> {
-	const included: Array<IncludedAsset> = [];
 	const temporaryDirectory =
 		process.env.TMPDIR ?? process.env.TMP ?? process.env.TEMP ?? "/tmp";
 	const stagingDirectory = path.resolve(
@@ -346,54 +279,45 @@ export function includeConfiguredAssets(
 		"maligator-asset-inputs",
 		String(process.pid),
 	);
-	for (const name of Object.keys(assets).sort()) {
-		const config = assets[name]!;
-		const sourcePath = path.resolve(projectRoot, config.path);
+	return declarations.map((declaration) => {
 		let stats;
 		try {
-			const rootEntry = readdirSync(path.dirname(sourcePath), {
-				withFileTypes: true,
-			}).find((entry) => entry.name === path.basename(sourcePath));
-			if (rootEntry !== undefined && !rootEntry.isFile() && !rootEntry.isDirectory()) {
-				assetError(name, `'${sourcePath}' is not a regular file or directory`);
-			}
-			stats = statSync(sourcePath);
+			stats = lstatSync(declaration.path);
 		} catch (error) {
-			if (error instanceof BuildConfigError) throw error;
-			assetError(name, `cannot read '${sourcePath}': ${(error as Error).message}`);
+			return assetError(declaration, `cannot read: ${(error as Error).message}`);
 		}
-		if (config.type === "file" && !stats.isFile()) {
-			assetError(name, `'${sourcePath}' is not a regular file`);
-		}
-		if (config.type === "directory" && !stats.isDirectory()) {
-			assetError(name, `'${sourcePath}' is not a directory`);
-		}
+		if (declaration.kind === "file" && !stats.isFile())
+			assetError(declaration, "is not a regular file");
+		if (declaration.kind === "directory" && !stats.isDirectory())
+			assetError(declaration, "is not a directory");
+		if (
+			declaration.kind === "file" &&
+			path.basename(declaration.path) === ASSET_COMPLETION_MARKER
+		)
+			assetError(declaration, `file name '${ASSET_COMPLETION_MARKER}' is reserved`);
 
-		const directories: Array<AssetDirectoryIdentity> = [];
 		const files =
-			config.type === "file"
-				? includeFile(name, sourcePath, stagingDirectory, options)
-				: includeDirectory(
-						name,
-						sourcePath,
-						config,
-						stagingDirectory,
-						directories,
-						options,
-					);
+			declaration.kind === "file"
+				? [
+						fileRow(
+							declaration.path,
+							path.basename(declaration.path),
+							stagingDirectory,
+							options,
+						),
+					]
+				: includeDirectory(declaration, stagingDirectory, options);
 		const digestInput = {
 			version: ASSET_FORMAT_VERSION,
-			type: config.type,
+			type: declaration.kind,
 			files: files.map((file) => [file.path, file.size, file.digest]),
 		};
-		included.push({
-			name,
-			type: config.type,
+		return {
+			name: JSON.stringify(declaration),
+			type: declaration.kind,
 			hash: hash("sha256", JSON.stringify(digestInput), "hex"),
 			version: ASSET_FORMAT_VERSION,
 			files,
-			directories,
-		});
-	}
-	return included;
+		};
+	});
 }

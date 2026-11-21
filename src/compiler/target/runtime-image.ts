@@ -339,7 +339,12 @@ export interface RuntimeImage {
 	}>;
 	hostInstalls: Array<{
 		installer: string;
-		exports: Array<{ name: string; slot: number; constant?: PlatformData }>;
+		exports: Array<{
+			name: string;
+			slot: number;
+			constant?: PlatformData;
+			data?: PlatformData;
+		}>;
 	}>;
 	/**
 	 * Present on an image of a relocatable program. The loader aliases each import

@@ -48,7 +48,7 @@ Run `npx tsc --noEmit` independently of `maligator run`. TypeScript catches type
 
 ## Enable the required runtime surface
 
-Types for `Mal.serve` and `node:` modules do not enable those APIs. Set `surface.webPlatform` for Web APIs and `Mal`, or `surface.node` for supported Node modules. The lowercase `mal` namespace uses `surface.maligator`, which defaults to enabled.
+Types for `Mal.serve` and `node:` modules do not enable those APIs. Set `surface.webPlatform` for Web APIs and `Mal`, or `surface.node` for supported Node modules. `maligator:` modules need no surface flag.
 
 The [build reference](/api/build#surface) lists the defaults. [Compatibility](/compatibility) lists supported standard APIs. If an import is unknown to the editor, first check type loading; if it fails at build time, check the module and surface support.
 

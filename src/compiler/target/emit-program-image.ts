@@ -103,11 +103,11 @@ export interface EmitOptions {
 	 */
 	compiled?: boolean;
 
-	/** Assets captured by the resolved build config and baked into this executable. */
+	/** The embedded copies of the `maligator:assets` declarations this executable reaches. */
 	assets?: Array<IncludedAsset>;
 
-	/** Install the lowercase `mal` host surface. */
-	maligatorSurface?: boolean;
+	/** Install the internal `mal` global that toolchain programs reach their host through. */
+	toolchainBridge?: boolean;
 
 	/** Outlining thresholds for oversized native functions; tests force small parts. */
 	nativeFunctionSplit?: NativeSplitPolicy;
@@ -2723,7 +2723,7 @@ export function assetTableLines(
 			const symbol =
 				file.embeddedSymbol ?? assetFileSymbol(assetIndex, fileIndex, suffix);
 			lines.push(
-				`    { .path = "${cEscapeString(file.path)}", .data = ${symbol}, .source_path = nullptr, .length = ${file.size} },`,
+				`    { .path = "${cEscapeString(file.path)}", .data = ${symbol}, .length = ${file.size}, .digest = "${file.digest}" },`,
 			);
 		}
 		lines.push("};", "");
@@ -2802,7 +2802,7 @@ function malRuntimeImageStruct(
 	debug: boolean,
 	conservativeStackRoots: boolean,
 	sharedLiteralTemplates?: string,
-	options: Pick<EmitOptions, "assets" | "maligatorSurface" | "sourcePath"> = {},
+	options: Pick<EmitOptions, "assets" | "toolchainBridge" | "sourcePath"> = {},
 	profileSiteCount?: number,
 	classLayouts: ReadonlyArray<CoreTargetClassLayout> = [],
 ): Array<string> {
@@ -2922,7 +2922,7 @@ function malRuntimeImageStruct(
 	// extern decls / arrays below are absent — nothing to resolve at link.
 	const hostInstalls = [...runtime.hostInstalls];
 	if (
-		options.maligatorSurface === true &&
+		options.toolchainBridge === true &&
 		!hostInstalls.some((install) => install.installer === "mal_host_install_maligator")
 	) {
 		hostInstalls.push({ installer: "mal_host_install_maligator", exports: [] });
@@ -2943,9 +2943,10 @@ function malRuntimeImageStruct(
 			lines.push(
 				`static const MalHostInstallSlot mal_host_install_${i}_slots${suffix}[] = {`,
 			);
-			for (const { name, slot, constant } of install.exports) {
+			for (const { name, slot, constant, data } of install.exports) {
+				const payload = constant ?? data;
 				lines.push(
-					`    { .name = "${cEscapeString(name)}", .slot = ${slot}, .data = ${constant === undefined ? "nullptr" : `"${cEscapeString(JSON.stringify(constant))}"`} },`,
+					`    { .name = "${cEscapeString(name)}", .slot = ${slot}, .data = ${payload === undefined ? "nullptr" : `"${cEscapeString(JSON.stringify(payload))}"`} },`,
 				);
 			}
 			lines.push("};", "");

@@ -184,18 +184,18 @@ describe("development builds from relocatable fragments", () => {
 		expect(runBinary(workers, "workers")).toBe("worker-math-cache PASS\n");
 	});
 
-	it("embeds configured assets in units an asset edit alone recompiles", () => {
+	it("embeds declared assets in units an asset edit alone recompiles", () => {
 		const assets = path.join(project, "assets");
 		mkdirSync(assets, { recursive: true });
 		const greeting = path.join(assets, "greeting.txt");
 		writeFileSync(greeting, "hello from an asset\n");
 		writeFileSync(
 			path.join(assets, "main.mjs"),
-			'import { readFileSync } from "node:fs";\nprocess.stdout.write(readFileSync(mal.assets.materialize("greeting"), "utf-8"));\n',
+			'import { embedFile } from "maligator:assets";\nprocess.stdout.write(embedFile("./greeting.txt").text());\n',
 		);
 		writeFileSync(
 			path.join(assets, "maligator.build.ts"),
-			'export default { entry: "main.mjs", outputName: "assets", surface: { node: true }, assets: { greeting: { type: "file", path: "greeting.txt" } } };\n',
+			'export default { entry: "main.mjs", outputName: "assets", surface: { node: true } };\n',
 		);
 		const runWithoutSource = () => {
 			renameSync(greeting, `${greeting}.hidden`);

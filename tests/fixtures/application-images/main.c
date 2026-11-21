@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include "gc_process.h"
 #include "host.h"
-#include "mal_assets.h"
+#include "mal_bridge.h"
 #include "personality.h"
 #include "web_host_timer.h"
 #include "workers.h"

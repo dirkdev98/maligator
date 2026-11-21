@@ -331,7 +331,6 @@ describe("compiler cache identity", () => {
 		const nativeOnly = resolveBuildConfig({
 			entry: "src/main.ts",
 			outputName: "application",
-			assets: { data: { type: "file", path: "data.json" } },
 			engine: { intl: { features: ["collator"], languages: ["en"] } },
 		});
 		expect(JSON.stringify(compilerConfigurationIdentity(nativeOnly))).toBe(base);
@@ -346,7 +345,6 @@ describe("compiler cache identity", () => {
 			resolveBuildConfig({ engine: { intl: { enabled: true } } }),
 			resolveBuildConfig({ surface: { webPlatform: true } }),
 			resolveBuildConfig({ surface: { node: true } }),
-			resolveBuildConfig({ surface: { maligator: false } }),
 		];
 		for (const config of frontendDimensions) {
 			expect(JSON.stringify(compilerConfigurationIdentity(config))).not.toBe(base);

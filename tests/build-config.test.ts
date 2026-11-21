@@ -40,8 +40,7 @@ describe("resolveBuildConfig defaults", () => {
 		expect(config.engine.primordials).toBe("locked");
 		expect(config.engine.eval).toBe(false);
 		expect(config.engine.intl.enabled).toBe(false);
-		expect(config.surface).toEqual({ webPlatform: false, node: false, maligator: true });
-		expect(config.assets).toEqual({});
+		expect(config.surface).toEqual({ webPlatform: false, node: false });
 		expect(config.modules.aliases).toEqual({});
 	});
 
@@ -91,7 +90,7 @@ describe("loadBuildConfig", () => {
 			JSON.stringify({
 				entry: "src/main.ts",
 				engine: { eval: false, intl: { enabled: false, languages: [] } },
-				surface: { webPlatform: false, node: false, maligator: true },
+				surface: { webPlatform: false, node: false },
 			}),
 		);
 		expect(loadBuildConfig(undefined, dir).engine.eval).toBe(false);
@@ -122,47 +121,13 @@ describe("loadBuildConfig", () => {
 		);
 	});
 
-	it("accepts strict file and directory asset entries", () => {
+	it("rejects the removed asset configuration", () => {
 		const dir = tmpdir();
 		writeConfig(
 			dir,
-			JSON.stringify({
-				assets: {
-					wire: { type: "file", path: "compiler.malw" },
-					runtime: {
-						type: "directory",
-						path: "runtime",
-						include: ["rust/Cargo.toml", "src/**"],
-					},
-				},
-			}),
+			JSON.stringify({ assets: { data: { type: "file", path: "data.bin" } } }),
 		);
-		expect(loadBuildConfig(undefined, dir).assets.runtime).toEqual({
-			type: "directory",
-			path: "runtime",
-			include: ["rust/Cargo.toml", "src/**"],
-		});
-	});
-
-	it("rejects malformed asset entries and unknown fields", () => {
-		const dir = tmpdir();
-		writeConfig(
-			dir,
-			JSON.stringify({ assets: { runtime: { type: "directory", path: "runtime" } } }),
-		);
-		expect(() => loadBuildConfig(undefined, dir)).toThrow(
-			/'assets\.runtime\.include' must be a non-empty array of strings/,
-		);
-
-		writeConfig(
-			dir,
-			JSON.stringify({
-				assets: { runtime: { type: "file", path: "runtime", exclude: [] } },
-			}),
-		);
-		expect(() => loadBuildConfig(undefined, dir)).toThrow(
-			/unknown key 'assets\.runtime\.exclude'/,
-		);
+		expect(() => loadBuildConfig(undefined, dir)).toThrow(/unknown key 'assets'/);
 	});
 
 	it("accepts C libraries with discovery overrides", () => {
@@ -200,15 +165,6 @@ describe("loadBuildConfig", () => {
 			{ raylib: { contract: "a.ts", link: "dynamic" } },
 			/'ffi\.raylib\.link' must be "static" or "shared"/,
 		);
-	});
-
-	it("requires the Maligator surface when assets are configured", () => {
-		expect(() =>
-			resolveBuildConfig({
-				assets: { data: { type: "file", path: "data.bin" } },
-				surface: { maligator: false },
-			}),
-		).toThrow(/assets require surface\.maligator/);
 	});
 
 	it("throws when an explicit --config path is missing", () => {
@@ -614,14 +570,6 @@ describe("build-cache suffix stability", () => {
 
 	it.each(configs)("%s has a stable output suffix", (_name, config, expected) => {
 		expect(buildConfigCacheSuffix(config)).toBe(expected);
-	});
-
-	it("does not include executable assets in the output suffix", () => {
-		const plain = resolveBuildConfig({});
-		const withAssets = resolveBuildConfig({
-			assets: { data: { type: "file", path: "data.bin" } },
-		});
-		expect(buildConfigCacheSuffix(withAssets)).toBe(buildConfigCacheSuffix(plain));
 	});
 });
 

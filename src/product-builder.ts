@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { includeConfiguredAssets } from "./assets.ts";
+import { collectEmbeddedAssets, embedDeclarationsOf } from "./assets.ts";
 import { createBuildArtifact } from "./build-artifact.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
@@ -24,28 +24,6 @@ import type { PreparedProfile } from "./profile-artifact.ts";
 import { requireToolchain } from "./toolchain.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
-export const PRODUCT_RUNTIME_ASSET_INCLUDE = [
-	"dev_main.c",
-	"fragment_main.c",
-	"host_main.c",
-	"test262_main.c",
-	"src/**",
-	"rust/Cargo.toml",
-	"rust/Cargo.lock",
-	"rust/rust-toolchain.toml",
-	"rust/src/**",
-	"rust/include/**",
-	"rust/vendor/regress/**",
-	"vendor/llhttp/include/**",
-	"vendor/llhttp/src/**",
-	"vendor/llhttp/LICENSE-MIT",
-	"vendor/libuv/LICENSE",
-	"vendor/node/LICENSE",
-	"vendor/sqlite/**",
-	"vendor/unicode/LICENSE.txt",
-	"vendor/cldr/LICENSE",
-];
-
 function productRuntimeConfig(primordials: "locked" | "mutable") {
 	return {
 		engine: {
@@ -55,54 +33,25 @@ function productRuntimeConfig(primordials: "locked" | "mutable") {
 			regexp: true,
 			intl: { enabled: false },
 		},
-		surface: { webPlatform: true, node: true, maligator: true },
+		surface: { webPlatform: true, node: true },
 	};
 }
 
+/**
+ * The product CLI's own build. It embeds files the product builder writes, through
+ * aliases its asset declarations name (src/product-assets.mts).
+ */
 export function productCliConfig(
-	repositoryRoot: string,
 	compilerWirePath: string,
 	compilerProducerDigestsPath: string,
 	mutableDevelopmentRunnerPath: string,
 ): ResolvedBuildConfig {
 	return resolveBuildConfig({
-		assets: {
-			compilerWire: { type: "file", path: path.resolve(compilerWirePath) },
-			compilerProducerDigests: {
-				type: "file",
-				path: path.resolve(compilerProducerDigestsPath),
-			},
-			mutableDevelopmentRunner: {
-				type: "file",
-				path: path.resolve(mutableDevelopmentRunnerPath),
-			},
-			testRuntime: {
-				type: "file",
-				path: path.resolve(repositoryRoot, "src/testing/runtime.mjs"),
-			},
-			testHost: {
-				type: "directory",
-				path: path.resolve(repositoryRoot, "src/testing"),
-				include: ["host-driver.mts", "host-protocol.mts"],
-			},
-			nodeGlobals: {
-				type: "file",
-				path: path.resolve(repositoryRoot, "src/node-globals.mjs"),
-			},
-			platformSources: {
-				type: "directory",
-				path: path.resolve(repositoryRoot, "src"),
-				include: ["workers/**", "testing/node-test.ts"],
-			},
-			license: { type: "file", path: path.resolve(repositoryRoot, "LICENSE") },
-			thirdPartyNotices: {
-				type: "file",
-				path: path.resolve(repositoryRoot, "THIRD_PARTY_NOTICES.md"),
-			},
-			runtime: {
-				type: "directory",
-				path: path.resolve(repositoryRoot, "runtime"),
-				include: [...PRODUCT_RUNTIME_ASSET_INCLUDE],
+		modules: {
+			aliases: {
+				"maligator-product:compiler-wire": path.resolve(compilerWirePath),
+				"maligator-product:compiler-producers": path.resolve(compilerProducerDigestsPath),
+				"maligator-product:mutable-runner": path.resolve(mutableDevelopmentRunnerPath),
 			},
 		},
 		...productRuntimeConfig("locked"),
@@ -185,22 +134,14 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 	).binaryPath;
 
 	const config = productCliConfig(
-		repositoryRoot,
 		compilerWirePath,
 		compilerProducerDigestsPath,
 		mutableDevelopmentRunnerPath,
 	);
-	progress("embedding product CLI assets");
-	const assets = includeConfiguredAssets(config.assets, repositoryRoot);
-	const compilerWire = assets.find((asset) => asset.name === "compilerWire");
-	if (compilerWire?.files.length !== 1) {
-		throw new Error("Product compilerWire asset must contain exactly one file");
-	}
-	compilerWire.files[0]!.embeddedSymbol = "mal_compiler_wire_data";
 	const { units: cSource, definition } = emitProductCliTranslationUnits(
 		repositoryRoot,
 		config,
-		assets,
+		compilerWirePath,
 		options.profile !== undefined,
 		progress,
 	);
@@ -263,7 +204,7 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 function emitProductCliTranslationUnits(
 	repositoryRoot: string,
 	config: ResolvedBuildConfig,
-	assets: ReturnType<typeof includeConfiguredAssets>,
+	compilerWirePath: string,
 	profile: boolean,
 	progress: (message: string) => void,
 ): {
@@ -285,6 +226,18 @@ function emitProductCliTranslationUnits(
 			return result;
 		},
 	});
+	progress("embedding product CLI assets");
+	const assets = collectEmbeddedAssets(embedDeclarationsOf([definition.runtime]));
+	const compilerWire = assets.find(
+		(asset) =>
+			asset.type === "file" &&
+			(JSON.parse(asset.name) as { path: string }).path ===
+				path.resolve(compilerWirePath),
+	);
+	if (compilerWire === undefined)
+		throw new Error("The product CLI must embed the compiler wire it bakes");
+	// The baked eval compiler already links these bytes; the asset reuses that symbol.
+	compilerWire.files[0]!.embeddedSymbol = "mal_compiler_wire_data";
 	progress("emitting the product CLI translation units");
 	const graph = semanticProgram.graph;
 	return {
@@ -293,7 +246,7 @@ function emitProductCliTranslationUnits(
 				sourcePath: nativeSourcePath,
 				compiled: true,
 				assets,
-				maligatorSurface: config.surface.maligator,
+				toolchainBridge: true,
 			}),
 			emitWorkerRegistryTranslationUnit(
 				workerRootEntries(graph ?? {}).map((entry) => ({

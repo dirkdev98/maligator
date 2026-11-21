@@ -38,12 +38,12 @@ function compile(
 }
 
 describe("catalog platform constants", () => {
-	it("resolves the module without enabling a Maligator or Node surface", () => {
+	it("resolves the module without enabling the Node surface", () => {
 		const graph = buildModuleGraph(entry, {
 			entrySource:
 				'import { execution } from "maligator:process"; globalThis.context = execution;',
 			entryGoal: "module",
-			buildConfig: resolveBuildConfig({ surface: { maligator: false, node: false } }),
+			buildConfig: resolveBuildConfig({ surface: { node: false } }),
 			execution,
 		});
 		expect(graph.modules.get("maligator:process")?.host?.constants?.execution).toEqual(

@@ -3136,7 +3136,6 @@ describe("emit-program-image instruction packing", () => {
 				{
 					name: "compilerWire",
 					type: "file",
-					directories: [],
 					hash: "hash",
 					version: "1",
 					files: [
@@ -3154,7 +3153,7 @@ describe("emit-program-image instruction packing", () => {
 		});
 		expect(output).toContain("extern const u8 mal_compiler_wire_data[];");
 		expect(output).toContain(
-			".data = mal_compiler_wire_data, .source_path = nullptr, .length = 825000",
+			'.data = mal_compiler_wire_data, .length = 825000, .digest = "digest"',
 		);
 		expect(output).not.toContain('#embed "/unused/compiler.malw"');
 	});
@@ -3172,7 +3171,6 @@ describe("emit-program-image instruction packing", () => {
 				{
 					name: "catalog",
 					type: "file",
-					directories: [],
 					hash: "hash",
 					version: "1",
 					files: [{ ...file, path: "catalog.json" }],

@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 105u
+#define WIRE_VERSION 106u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -3371,8 +3371,8 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
             err = "unsupported host installer";
             goto fail;
         }
-        // Names, destinations and optional data each occupy at least one wire byte.
-        u32 slot_count = rd_count(&r, 3);
+        // Names, destinations, payload kinds and data lengths each occupy at least one byte.
+        u32 slot_count = rd_count(&r, 4);
         MalHostInstallSlot *slots = arena_array(
             L, &r, slot_count, sizeof(MalHostInstallSlot), alignof(MalHostInstallSlot));
         host_installs[i].slots = slots;
@@ -3385,6 +3385,11 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
             }
             slots[slot].name = name;
             slots[slot].slot = rd_i32(&r);
+            // A folded constant or installer configuration; installers read both alike.
+            if (rd_u8(&r) > 2) {
+                err = "invalid host slot payload";
+                goto fail;
+            }
             u32 data_length = rd_count(&r, 1);
             if (data_length > 0) {
                 char *data = arena(L, &r, (usize) data_length + 1, alignof(char));

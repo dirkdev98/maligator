@@ -1194,17 +1194,19 @@ typedef struct MalModuleLinkRegistry {
     i32 table_size;
 } MalModuleLinkRegistry;
 
-/** One immutable regular file in a configured executable asset. */
+/** One immutable regular file of an embedded asset. */
 typedef struct MalAssetFile {
+    /** Slash-separated path below the asset's directory, or the file name. */
     const char *path;
     const u8 *data;
-    /** Development manifests use an immutable external snapshot instead of data. */
-    const char *source_path;
     usize length;
+    /** Lowercase hexadecimal SHA-256 of the data. */
+    const char *digest;
 } MalAssetFile;
 
-/** A named file or directory captured by maligator.build.ts. */
+/** A file or directory a `maligator:assets` declaration embeds into an executable. */
 typedef struct MalAsset {
+    /** The declaration's canonical JSON, which its installer slot data repeats. */
     const char *name;
     const char *hash;
     const char *version;
@@ -1322,7 +1324,7 @@ typedef struct MalRuntimeImage {
     i32 profile_site_count;
 #endif
 
-    /** Immutable configured assets baked into this native executable. */
+    /** Immutable assets embedded into this native executable. */
     i32 asset_count;
     const MalAsset *assets;
 

@@ -66,7 +66,6 @@ const CACHE_FAMILIES: Array<CacheFamilyPolicy> = [
 	// generation rather than a few hundred arbitrary corpus entries.
 	{ path: "test262-program-images", keep: 1 },
 	{ path: "test262-wires", keep: 512, entryKind: "grandchildren" },
-	{ path: "development-assets", keep: 64 },
 	{ path: "toolchains", keep: 8 },
 	{ path: "source-digests", keep: 8 },
 	{ path: "zig", keep: 2 },

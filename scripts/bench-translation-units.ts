@@ -363,7 +363,6 @@ function emissionInvariants(
 	const emitOptions = {
 		sourcePath: nativeSourcePath,
 		compiled: true,
-		maligatorSurface: config.surface.maligator,
 	};
 	const units = emitProgramTranslationUnits(result.programImage, emitOptions, policy);
 	const definitions = units.flatMap((unit) => unit.definitions);
@@ -1283,7 +1282,7 @@ function run(options: Options): void {
 			const emitOptions = {
 				sourcePath: nativeSourcePath,
 				compiled: true,
-				maligatorSurface: SELF_COMPILE_CONFIG.surface.maligator,
+				toolchainBridge: true,
 			};
 			const selectedUnits = emitProgramTranslationUnits(
 				diagnostic.result.programImage,

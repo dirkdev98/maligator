@@ -18,7 +18,7 @@ describe("native Unicode transformations", () => {
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 			config: resolveBuildConfig({
 				engine: { eval: false, realms: false, regexp: false, intl: { enabled: false } },
-				surface: { node: false, webPlatform: false, maligator: false },
+				surface: { node: false, webPlatform: false },
 			}),
 		});
 	});

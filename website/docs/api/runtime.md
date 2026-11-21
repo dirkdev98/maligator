@@ -1,8 +1,4 @@
-The lowercase `mal` namespace exposes captured assets. The uppercase `Mal` namespace exposes the Web host extension. Their declarations are always available after loading the package types; the build configuration controls runtime availability.
-
-## mal {#mal}
-
-Requires `surface.maligator` (enabled by default). Configure named assets before calling `mal.assets.materialize`. Unknown names, invalid options, and filesystem failures throw synchronously. Completed snapshots are reused by content identity; the returned path is absolute. See [Embed files](/guides/assets) for a complete file/directory example.
+The uppercase `Mal` namespace exposes the Web host extension. Its declarations are always available after loading the package types; the build configuration controls runtime availability.
 
 ## Mal {#Mal}
 

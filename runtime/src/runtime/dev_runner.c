@@ -1,7 +1,6 @@
 #include "dev_runner.h"
 
 #include "compiler_native.h"
-#include "development_assets.h"
 #include "vm.h"
 #include "perf_stats.h"
 #include "promise_object.h"
@@ -14,7 +13,7 @@
 #include "web_fetch.h"
 #include "host.h"
 #include "host_registry.h"
-#include "mal_assets.h"
+#include "mal_bridge.h"
 #include "node_immediate.h"
 #include "web_host_timer.h"
 #include "web_readable_stream_object.h"
@@ -82,7 +81,6 @@ static bool attach_overlay(
 int mal_dev_run_wires(
     const char *const *wire_paths,
     int wire_count,
-    const char *asset_manifest_path,
     const char *entry_path,
     int argc,
     char **argv,
@@ -90,19 +88,6 @@ int mal_dev_run_wires(
     bool node,
     const char *worker_manifest_path) {
     if (wire_count < 1) return 2;
-    MalDevelopmentAssets *development_assets = nullptr;
-    const MalAsset *assets = nullptr;
-    i32 asset_count = 0;
-    if (asset_manifest_path != nullptr) {
-        const char *asset_error = "unknown error";
-        development_assets = mal_development_assets_load(asset_manifest_path, &asset_error);
-        if (development_assets == nullptr) {
-            fprintf(stderr, "could not load development assets %s: %s\n",
-                asset_manifest_path, asset_error);
-            return 2;
-        }
-        assets = mal_development_assets_get(development_assets, &asset_count);
-    }
     MalDevelopmentImage *images = calloc((usize) wire_count, sizeof(MalDevelopmentImage));
     int code = 2;
     if (images == nullptr) goto done;
@@ -112,14 +97,13 @@ int mal_dev_run_wires(
         images[index].bytes = bytes;
         images[index].label = wire_paths[index];
     }
-    code = mal_dev_run_images(images, wire_count, assets, asset_count, entry_path, argc, argv,
+    code = mal_dev_run_images(images, wire_count, nullptr, 0, entry_path, argc, argv,
         web_platform, node, worker_manifest_path);
 done:
     if (images != nullptr) {
         for (int index = 0; index < wire_count; index++) free((u8 *) images[index].bytes);
     }
     free(images);
-    mal_development_assets_free(development_assets);
     return code;
 }
 
@@ -177,14 +161,10 @@ int mal_dev_run_images(
         .argv = argv,
         .script_path = entry_path != nullptr ? entry_path : root_program.entry_path,
     };
-    bool install_maligator = assets != nullptr;
 #if MAL_DEVELOPMENT_API
-    // Tool hosts need their application bridge even without attached assets.
-    install_maligator = true;
+    // Tool hosts reach their application bridge through the internal `mal` global.
+    mal_host_install_maligator(&vm, nullptr, 0, &launch);
 #endif
-    if (install_maligator) {
-        mal_host_install_maligator(&vm, nullptr, 0, &launch);
-    }
     mal_perf_stats_reset();
     MalCallable **callables = calloc((usize) wire_count, sizeof(MalCallable *));
     if (callables == nullptr) {

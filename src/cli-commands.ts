@@ -15,12 +15,7 @@ import type {
 	ApplicationImageHost,
 } from "./application-images.ts";
 import { artifactDigest, artifactIdentity } from "./artifact-store.ts";
-import {
-	assetDirectoryUnchanged,
-	configuredAssetDirectories,
-	includeConfiguredAssets,
-} from "./assets.ts";
-import type { AssetDirectoryIdentity } from "./assets.ts";
+import { collectEmbeddedAssets, embedDeclarationsOf } from "./assets.ts";
 import { createBuildArtifact } from "./build-artifact.ts";
 import {
 	BuildConfigError,
@@ -86,9 +81,9 @@ import {
 import { embeddedCompilerOptions } from "./compiler/pipeline/embedded-compiler-options.ts";
 import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { emitWorkerImageTranslationUnits } from "./compiler/target/emit-worker-images.ts";
+import { deserializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
-import { cacheDevelopmentAssets } from "./development-assets.ts";
 import {
 	DEVELOPMENT_FRAGMENT_MAIN,
 	developmentFragmentUnits,
@@ -246,7 +241,6 @@ export interface CompilerInstallation {
 		regexp: boolean;
 		temporal: boolean;
 		intl: boolean;
-		externalAssets: boolean;
 	}>;
 	evalCompiler:
 		| { kind: "source"; sourceDirectory: string; entrypoint: string }
@@ -321,7 +315,6 @@ export function productCompilerInstallation(
 							regexp: true,
 							temporal: false,
 							intl: false,
-							externalAssets: true,
 						},
 						...(mutableDevelopmentRunnerPath === undefined
 							? []
@@ -338,7 +331,6 @@ export function productCompilerInstallation(
 										regexp: true,
 										temporal: false,
 										intl: false,
-										externalAssets: true,
 									},
 								]),
 					],
@@ -358,7 +350,6 @@ export interface BuildCommandResult {
 	runArguments?: Array<string>;
 	dependencies?: Array<string>;
 	dependencyIdentities?: Array<FrontendDependencyIdentity>;
-	assetDirectories?: Array<AssetDirectoryIdentity>;
 	profile?: PreparedProfile;
 }
 
@@ -505,7 +496,6 @@ function compatibleDevelopmentRunner(
 	if (Object.keys(config.ffi).length > 0) return undefined;
 	return context.installation.developmentRunners?.find(
 		(runner) =>
-			(Object.keys(config.assets).length === 0 || runner.externalAssets) &&
 			config.engine.primordials === runner.primordials &&
 			(!config.surface.webPlatform || runner.webPlatform) &&
 			(!config.surface.node || runner.node) &&
@@ -637,15 +627,8 @@ function prepareCommandState(
 	reporter.detail("Config", command.configPath ?? "automatic/default");
 	reporter.detail(
 		"Surface",
-		`web ${buildConfig.surface.webPlatform ? "on" : "off"}, node ${buildConfig.surface.node ? "on" : "off"}, maligator ${buildConfig.surface.maligator ? "on" : "off"}`,
+		`web ${buildConfig.surface.webPlatform ? "on" : "off"}, node ${buildConfig.surface.node ? "on" : "off"}`,
 	);
-	if (
-		command.kind === "build" &&
-		command.internal.serializePath !== undefined &&
-		Object.keys(buildConfig.assets).length > 0
-	) {
-		commandError("error: configured assets are not supported by portable wire output");
-	}
 	if (
 		command.kind === "build" &&
 		command.internal.serializePath !== undefined &&
@@ -676,39 +659,7 @@ function prepareCommandState(
 	}
 	const frontendSession = context.frontendSession ?? new FrontendCompilationSession();
 	frontendSession.useCacheDirectory();
-	const assets = reporter.phase("Collect assets", () => {
-		try {
-			return includeConfiguredAssets(buildConfig.assets, process.cwd(), {
-				cacheDirectory: maligatorCacheDirectory(),
-				session: frontendSession,
-			});
-		} catch (error) {
-			if (error instanceof BuildConfigError) commandError(`error: ${error.message}`);
-			throw error;
-		}
-	});
-	const assetDirectories = assets.flatMap((asset) => asset.directories);
-	const assetIdentities = frontendSession.dependencyIdentities(
-		assets.flatMap((asset) => asset.files.map((file) => file.inputPath)),
-	);
-	const validatePreparedInputs = () => {
-		validateConfig();
-		for (const identity of assetDirectories) {
-			if (!assetDirectoryUnchanged(identity))
-				throw new BuildConfigError(
-					`asset directory changed before build publication: ${identity.path}`,
-				);
-		}
-		for (const identity of assetIdentities) {
-			if (!frontendDependencyUnchanged(identity))
-				throw new BuildConfigError(
-					`asset changed before build publication: ${identity.path}`,
-				);
-		}
-	};
-	const assetManifest = reporter.phase("Prepare development assets", () =>
-		command.kind === "build" ? undefined : cacheDevelopmentAssets(assets),
-	);
+	const validatePreparedInputs = () => validateConfig();
 	const { toolchain, plan } = reporter.phase("Resolve toolchain", () =>
 		selectToolchain(command, buildConfig, context),
 	);
@@ -906,6 +857,33 @@ function prepareCommandState(
 				reporter.detail(label, value);
 			}
 		}
+		const serializePath =
+			command.kind === "build" ? command.internal.serializePath : undefined;
+		const embedDeclarations = () =>
+			embedDeclarationsOf([
+				...(developmentFragments
+					? (frontend.wires ?? [frontend.wire]).map(deserializeRuntimeImage)
+					: [frontend.programImage.runtime]),
+				...frontend.workerImages.map((worker) => worker.image.runtime),
+			]);
+		if (serializePath !== undefined && embedDeclarations().length > 0)
+			commandError("error: embedded assets are not supported by portable wire output");
+		// Only `build` embeds; every other command reads declared files live.
+		const assets =
+			command.kind === "build" && serializePath === undefined
+				? reporter.phase("Collect assets", () => {
+						try {
+							return collectEmbeddedAssets(embedDeclarations(), {
+								cacheDirectory: maligatorCacheDirectory(),
+								session: frontendSession,
+							});
+						} catch (error) {
+							if (error instanceof BuildConfigError)
+								commandError(`error: ${error.message}`);
+							throw error;
+						}
+					})
+				: [];
 		const dependencies = [
 			...new Set([
 				...frontend.dependencies,
@@ -921,8 +899,6 @@ function prepareCommandState(
 		reporter.detail("Functions", stats.functionCount);
 		reporter.detail("Instructions", stats.instructionCount);
 
-		const serializePath =
-			command.kind === "build" ? command.internal.serializePath : undefined;
 		if (serializePath !== undefined) {
 			reporter.phase("Write runtime image", () =>
 				writeFileSync(serializePath, frontend.wire),
@@ -939,7 +915,6 @@ function prepareCommandState(
 				serializedPath: serializePath,
 				dependencies,
 				dependencyIdentities,
-				assetDirectories,
 			};
 		}
 
@@ -960,22 +935,16 @@ function prepareCommandState(
 			const runArguments = workerManifestArguments(workerManifest).concat(
 				packagedRunner.wireProtocol === "product"
 					? [
-							assetManifest === undefined
-								? "--maligator-internal-run-wire"
-								: "--maligator-internal-run-wire-assets",
+							"--maligator-internal-run-wire",
 							String(surfaceMask),
 							String(wirePaths.length),
-							...(assetManifest === undefined ? [] : [assetManifest]),
 							entrypointPath,
 							...wirePaths,
 							...command.programArgs,
 						]
 					: [
-							assetManifest === undefined
-								? "--maligator-internal-run-wires"
-								: "--maligator-internal-run-wires-assets",
+							"--maligator-internal-run-wires",
 							String(wirePaths.length),
-							...(assetManifest === undefined ? [] : [assetManifest]),
 							entrypointPath,
 							...wirePaths,
 							...command.programArgs,
@@ -997,9 +966,6 @@ function prepareCommandState(
 								...(workerManifest === undefined
 									? {}
 									: { workerManifestPath: workerManifest }),
-								...(assetManifest === undefined
-									? {}
-									: { assetManifestPath: assetManifest }),
 								webPlatform: buildConfig.surface.webPlatform,
 								node: buildConfig.surface.node,
 								engine: {
@@ -1017,7 +983,6 @@ function prepareCommandState(
 				runArguments,
 				dependencies,
 				dependencyIdentities,
-				assetDirectories,
 			};
 		}
 
@@ -1175,18 +1140,14 @@ function prepareCommandState(
 				binaryPath,
 				runArguments: [
 					...workerManifestArguments(workerManifest),
-					assetManifest === undefined
-						? "--maligator-internal-run-wires"
-						: "--maligator-internal-run-wires-assets",
+					"--maligator-internal-run-wires",
 					String(wirePaths.length),
-					...(assetManifest === undefined ? [] : [assetManifest]),
 					entrypointPath,
 					...wirePaths,
 					...command.programArgs,
 				],
 				dependencies,
 				dependencyIdentities,
-				assetDirectories,
 			};
 		}
 
@@ -1206,7 +1167,6 @@ function prepareCommandState(
 					partitionRoot: process.cwd(),
 					compiled: compiledNativeOutput,
 					assets,
-					maligatorSurface: buildConfig.surface.maligator,
 					onRendererBailout: ({ file, name }) =>
 						reporter.warning(
 							`${file}: ${name || "<anonymous>"} runs in the bytecode interpreter because native code generation declined it`,
@@ -1218,13 +1178,12 @@ function prepareCommandState(
 				partitionRoot: process.cwd(),
 				compiled: compiledNativeOutput,
 				assets,
-				maligatorSurface: buildConfig.surface.maligator,
 			});
 		}
 		if (command.kind === "build" && command.internal.emitC) {
 			for (const unit of generatedUnits())
 				writeSourceChunks(1, [...unit.sourceChunks, "\n"]);
-			return { dependencies, dependencyIdentities, assetDirectories };
+			return { dependencies, dependencyIdentities };
 		}
 		const output = reporter.phase("Generate native code", () =>
 			prepareGeneratedSources(
@@ -1349,7 +1308,6 @@ function prepareCommandState(
 				artifactDirectory: artifact.directory,
 				dependencies,
 				dependencyIdentities,
-				assetDirectories,
 				...(preparedProfile === undefined ? {} : { profile: preparedProfile }),
 			};
 		}
@@ -1362,7 +1320,6 @@ function prepareCommandState(
 			binaryPath,
 			dependencies,
 			dependencyIdentities,
-			assetDirectories,
 			...(preparedProfile === undefined ? {} : { profile: preparedProfile }),
 		};
 	};
@@ -1722,17 +1679,9 @@ export async function devCommand(
 			initialDependencies = [];
 		}
 	}
-	const assetWatchDirectories = () => {
-		try {
-			return configuredAssetDirectories(
-				loadCommandConfig(command, context.stripTypes).assets,
-			);
-		} catch {
-			return [];
-		}
-	};
-	let directories = assetWatchDirectories();
-	let states = watchedFiles(command, [...initialDependencies, ...directories]);
+	// Embedded assets are read live outside `build`, so dev watches only module files.
+	const directories: Array<string> = [];
+	let states = watchedFiles(command, initialDependencies);
 	const watchHost = context.developmentWatcher;
 	const watchHandle = watchHost?.create(
 		states.map((state) => state.file),
@@ -1860,12 +1809,6 @@ export async function devCommand(
 	const development = createDevelopmentSession(command, compiler, {
 		async publish(build, generation, isCurrent, signal) {
 			if (!isCurrent()) return false;
-			directories = [
-				...new Set([
-					...assetWatchDirectories(),
-					...(build.assetDirectories ?? []).map((identity) => identity.path),
-				]),
-			];
 			watchHost?.update(
 				watchHandle,
 				states.map((state) => state.file),
@@ -1874,9 +1817,6 @@ export async function devCommand(
 			const validate = () => [
 				...new Set([
 					...changedFiles(states, true),
-					...(build.assetDirectories ?? [])
-						.filter((identity) => !assetDirectoryUnchanged(identity))
-						.map((identity) => identity.path),
 					...(build.dependencyIdentities ?? [])
 						.filter((identity) => !frontendDependencyUnchanged(identity))
 						.map((identity) => identity.path),
@@ -2016,14 +1956,9 @@ export async function devCommand(
 		writeStderr(
 			`Changed ${changedPaths.map((file) => path.relative(process.cwd(), file)).join(", ")}`,
 		);
-		directories = assetWatchDirectories();
-		const changed = new Set([...changedPaths, ...directories]);
+		const changed = new Set(changedPaths);
 		const previous = new Map(states.map((state) => [state.file, state]));
-		states = watchedFiles(command, [
-			...previous.keys(),
-			...changedPaths,
-			...directories,
-		]).map((state) =>
+		states = watchedFiles(command, [...previous.keys(), ...changedPaths]).map((state) =>
 			changed.has(state.file) ? state : (previous.get(state.file) ?? state),
 		);
 		watchHost?.update(
@@ -2178,8 +2113,7 @@ function prepareLinkedTestHost(
 	const testConfig = { ...config, ffiModules: libraries.modules };
 	const hostConfig: ResolvedBuildConfig = {
 		...testConfig,
-		assets: {},
-		surface: { webPlatform: true, node: true, maligator: true },
+		surface: { webPlatform: true, node: true },
 	};
 	const driverFiles = [
 		entry,
@@ -2275,22 +2209,14 @@ async function executeIsolatedTests(
 		"wires" in compiled
 			? compiled.wires.map((wire) => wire.path)
 			: [cacheFrontendWire(compiled.wire)];
-	const assets = includeConfiguredAssets(config.assets, process.cwd(), {
-		cacheDirectory: maligatorCacheDirectory(),
-		session: new FrontendCompilationSession(),
-	});
-	const assetManifest = cacheDevelopmentAssets(assets);
 	const entrypoint = compiled.files[0]!;
 	const workerManifest = cacheDevelopmentWorkerManifest(
 		"workerImages" in compiled ? compiled.workerImages : [],
 	);
 	const args = [
 		...workerManifestArguments(workerManifest),
-		assetManifest === undefined
-			? "--maligator-internal-run-wires"
-			: "--maligator-internal-run-wires-assets",
+		"--maligator-internal-run-wires",
 		String(wirePaths.length),
-		...(assetManifest === undefined ? [] : [assetManifest]),
 		entrypoint,
 		...wirePaths,
 	];
@@ -2448,17 +2374,9 @@ async function executeProfiledTests(
 				: undefined,
 		}),
 	);
-	const assets = reporter.phase("Collect assets", () =>
-		includeConfiguredAssets(config.assets, process.cwd(), {
-			cacheDirectory: maligatorCacheDirectory(),
-			session: new FrontendCompilationSession(),
-		}),
-	);
 	const emitOptions = {
 		sourcePath: nativeSourcePath,
 		compiled: true,
-		assets,
-		maligatorSurface: config.surface.maligator,
 	};
 	const source = reporter.phase("Generate native code", () => [
 		...emitProgramTranslationUnits(compiled.programImage, emitOptions),

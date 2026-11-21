@@ -37,7 +37,13 @@ export interface HostModuleSpec {
 	 */
 	installer: string;
 	platform?: PlatformModule;
+	/** Export values the compiler may fold: the installed value is exactly this data. */
 	constants?: Readonly<Record<string, PlatformData>>;
+	/**
+	 * Configuration the installer receives for an export whose value it builds itself.
+	 * Unlike `constants`, the compiler learns nothing about the installed value.
+	 */
+	installData?: Readonly<Record<string, PlatformData>>;
 	/** Exports native code may call through a C entry instead of the function object. */
 	direct?: Readonly<Record<string, FfiDirectEntry>>;
 	callbacks?: FfiCallbackReach;

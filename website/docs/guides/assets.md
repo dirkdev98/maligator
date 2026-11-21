@@ -1,61 +1,73 @@
-Capture files into the application image and obtain a filesystem path when the application runs. Enable `surface.node` in these examples to read the materialized files; `surface.maligator` must also remain enabled.
+Declare the files an application ships with in its source, with `maligator:assets`. `maligator build` embeds them in the executable; `run`, `dev` and `test` read them from disk, so edits show up without a rebuild.
 
-## Include a file and a directory
-
-Create `message.txt` containing `hello`, and `templates/home.html` containing your HTML:
-
-```typescript maligator.build.ts
-import { defineBuild } from "@maligator/cli";
-
-export default defineBuild({
-	entry: "src/index.ts",
-	surface: { node: true },
-	assets: {
-		message: { type: "file", path: "message.txt" },
-		templates: {
-			type: "directory",
-			path: "templates",
-			include: ["**/*.html"],
-		},
-	},
-});
-```
-
-Paths resolve from the project root. Capture includes configured assets even if the application never reads them. Only regular files are accepted; symlinks and special files fail the build. Patterns support `*`, `?`, and a whole-segment `**`. Every include pattern must match at least one file.
-
-## Read a materialized resource
+## Embed a file and a directory
 
 ```typescript src/index.ts
-import { readFileSync } from "node:fs";
+import { embedDirectory, embedFile } from "maligator:assets";
 
-const message = mal.assets.materialize("message");
-const templates = mal.assets.materialize("templates");
-console.log(readFileSync(message, "utf8").trim());
-console.log(readFileSync(`${templates}/home.html`, "utf8"));
+const message = embedFile("../message.txt");
+const templates = embedDirectory("../templates", { include: ["**/*.html"] });
+
+console.log(message.text().trim());
+for (const file of templates.files()) console.log(file.path, file.size, file.type);
+console.log(templates.get("home.html")?.text());
 ```
+
+Create `message.txt` containing `hello` and `templates/home.html` next to `src`, then run:
 
 ```shell
-maligator run
-maligator build --production
+maligator run src/index.ts
+maligator build --production src/index.ts
 ```
 
-The application prints the captured message and HTML. Editing the original file after building does not change an existing executable. Rebuild to capture new content.
+Both print the message, the template list and the home page. The built executable keeps working after you delete the source files: it carries the copies it embedded.
 
-[materialize](/api/runtime#mal.assets.materialize) returns an absolute file or directory path. It writes atomically beneath the OS temporary directory by default and reuses completed materializations by content identity. Pass `{ baseDirectory: "/chosen/parent" }` when your host needs another location; ensure that parent is writable.
+Specifiers resolve like imports from the declaring module. A relative or absolute specifier names a path; a package specifier such as `ui-kit/dist` names a path inside that package. [Module aliases](/api/build#MaligatorBuildConfig) apply too, which suits a file a build step writes to a location the config chooses.
 
-## Import a file's contents
+## Write declarations the build can see
 
-When the program only needs a file's contents, import them instead. The build embeds the file, so this works without `surface.node`:
+`embedFile` and `embedDirectory` take a string literal specifier and literal options. The compiler replaces each call with its handle, so a declaration can't come from a variable, a wrapper function or a re-export. Repeated declarations of the same file, with the same options, share one handle.
+
+`maligator build` embeds only the declarations the program can still reach after optimization. A declaration in an unused function or behind a branch the build removes adds nothing to the executable and may name a file that doesn't exist.
+
+## Choose directory members
+
+`include` and `exclude` take patterns relative to the directory, with `*` and `?` inside one path segment and `**` for any number of segments. Without `include`, every file belongs to the directory. Wildcards skip names that start with a dot unless you pass `dot: true`; a pattern segment that spells the dot, such as `.well-known/*`, still matches.
+
+```typescript src/migrations.ts
+import { embedDirectory } from "maligator:assets";
+
+const migrations = embedDirectory("../migrations", { include: ["*.sql"] });
+for (const file of migrations.files()) console.log(file.path);
+```
+
+`files()` lists members in code point order of their paths. In a build, each `include` pattern must match a file and every member must be a regular file; symbolic links fail the build.
+
+## Read contents or a path
+
+A file handle has `path`, `size`, `digest` (hexadecimal SHA-256) and `type` (the media type of its extension). `bytes()` returns a `Uint8Array` over an immutable buffer, `text()` decodes UTF-8 without a byte order mark and `json()` parses the text.
+
+Use `materialize()` when a library needs a filesystem path, such as a template engine or a C library loading a font. A built executable writes the embedded copy once per content identity below the OS temporary directory, or below `baseDirectory` when you pass one, and returns that path. Other commands return the source path itself. Treat the path as read-only either way.
+
+```typescript src/fonts.ts
+import { embedDirectory } from "maligator:assets";
+
+const fonts = embedDirectory("../fonts");
+console.log(fonts.materialize({ baseDirectory: "/var/lib/my-app" }));
+```
+
+## Import contents instead
+
+When the program needs a file's contents as a value, import it with the standard attribute syntax. The build inlines the value and recompiles when the file changes:
 
 ```typescript src/index.ts
 import logo from "./logo.png" with { type: "bytes" };
 import message from "./message.txt" with { type: "text" };
+import settings from "./settings.json" with { type: "json" };
 
-console.log(message.trim(), logo.length);
+console.log(message.trim(), logo.length, settings);
 ```
 
-A `text` import is the file decoded as UTF-8, without a byte order mark. A `bytes` import is a `Uint8Array` over an immutable `ArrayBuffer`. Each import of a file with a different type is its own module, so a file can also be imported as code. Editing the file invalidates cached builds, like editing a module.
+A `text` import is the file decoded as UTF-8, without a byte order mark. A `bytes` import is a `Uint8Array` over an immutable `ArrayBuffer`.
 
-Treat captured resources as application inputs. Use a separate location for data that must survive rebuilding or replacement. Filesystem assets are supported in native executables and development execution, but cannot be included in portable `--serialize` output.
-
-If a pattern fails, inspect its directory and spelling before widening it. An unknown asset name or a materialization filesystem failure throws synchronously. See [AssetInclusion](/api/build#AssetInclusion) and [materialization options](/api/runtime#MaligatorMaterializeOptions).
+Treat embedded files as application inputs. Use a separate location for data that must survive rebuilding or replacement. Portable `--serialize` output and the Wasm reactor cannot embed assets. See [the API reference](/api/assets) for every handle member.

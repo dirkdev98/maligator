@@ -38,6 +38,8 @@ export interface CoreHostInstallCandidate {
 		readonly name: string;
 		readonly slot: number;
 		readonly constant?: PlatformData;
+		/** Installer configuration; see `HostModuleSpec.installData`. */
+		readonly data?: PlatformData;
 		/** A C entry native code may call instead of the installed function. */
 		readonly direct?: FfiDirectEntry;
 	}>;

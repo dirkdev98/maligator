@@ -1,5 +1,5 @@
 import type { FixtureBridge } from "./types.ts";
-const bridge = mal as unknown as FixtureBridge;
+const bridge = Reflect.get(globalThis, "mal") as FixtureBridge;
 import type { ApplicationData, FixtureGlobals } from "./types.ts";
 const globals = globalThis as typeof globalThis & FixtureGlobals;
 globals.fragmentOrder = ["started"];
