@@ -36,12 +36,14 @@ export function capturePrimordialInventory(mode: string, outDir: string) {
 	const fixture = path.join(outDir, `inventory-${mode}.mjs`);
 	writeFileSync(
 		fixture,
-		modules
-			.map(
+		[
+			...modules.map(
 				(id, index) =>
 					`import * as module${index} from ${JSON.stringify(id)};\nglobalThis.module${index} = module${index};`,
-			)
-			.join("\n"),
+			),
+			// Web globals install by use; observing the global object installs all of them.
+			"Object.getOwnPropertyNames(globalThis);",
+		].join("\n"),
 	);
 	const mainFile = writePrimordialInventoryDriver(outDir);
 	const command = parseCliArgs(["build", fixture]);

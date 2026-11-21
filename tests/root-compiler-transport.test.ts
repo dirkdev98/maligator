@@ -47,6 +47,7 @@ function graphFor(files: ReadonlyArray<string>): ModuleGraph {
 		entry: files[0]!,
 		modules: new Map(),
 		nodeEnabled: false,
+		webPlatformEnabled: false,
 		evaluationOrder: [],
 		cycles: [],
 		workerEntries: files.map((file) => ({

@@ -45,6 +45,7 @@
 #include "value.h"
 #include "value_ops.h"
 #include "vm_ops.h"
+#include "web_surface.h"
 
 #define UTIL_VISIBLE \
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
@@ -2712,6 +2713,9 @@ void mal_host_install_node_util(
     const MalHostLaunchContext *launch) {
     if (mal_node_module_install_cached(vm, "node:util", slots, count)) return;
     (void) launch;
+    if (mal_web_events_ensure(vm) == nullptr) return;
+    MalObject *encoding = mal_web_encoding_ensure(vm);
+    if (encoding == nullptr) return;
     const usize types_index = countof(util_exports);
     const usize namespace_index = types_index + 1;
     MalValue values[countof(util_exports) + 2];
@@ -2798,12 +2802,8 @@ void mal_host_install_node_util(
     }
     static const char *const util_globals[] = {"TextDecoder", "TextEncoder"};
     for (usize i = 0; i < countof(util_globals); i++) {
-        MalPropertyLookup global = mal_object_get_own(
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]),
-            mal_intrinsic_string_key(vm, (const byte *) util_globals[i]));
-        if (global.present && (global.desc.flags & MAL_PROPERTY_ACCESSOR) == 0) {
-            mal_intrinsic_define_data(vm, namespace, (const byte *) util_globals[i], global.desc.value, UTIL_VISIBLE);
-        }
+        mal_intrinsic_define_data(vm, namespace, (const byte *) util_globals[i],
+            mal_web_group_export(vm, encoding, util_globals[i]), UTIL_VISIBLE);
     }
 
     mal_node_module_publish(vm, "node:util/types", nullptr, 0, values[types_index]);

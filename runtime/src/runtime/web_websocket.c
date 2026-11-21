@@ -33,6 +33,7 @@
 #include "vm_ops.h"
 #include "web_events_object.h"
 #include "web_host_timer.h"
+#include "web_surface.h"
 
 enum { WS_CONNECTING = 0, WS_OPEN = 1, WS_CLOSING = 2, WS_CLOSED = 3 };
 
@@ -1205,7 +1206,9 @@ MalValue mal_web_message_event_new(
 }
 
 void mal_web_websocket_install(MalVm *vm, MalObject *module) {
-    // Embedders may install node:http before the web event classes exist; WebSocket needs them.
+    if (mal_web_events_ensure(vm) == nullptr || mal_web_fetch_ensure(vm) == nullptr
+        || mal_web_url_ensure(vm) == nullptr)
+        return;
     static const MalIntrinsic required[] = {
         MAL_INTRINSIC_EVENT_CONSTRUCTOR, MAL_INTRINSIC_EVENT_PROTOTYPE,
         MAL_INTRINSIC_EVENT_TARGET_CONSTRUCTOR, MAL_INTRINSIC_EVENT_TARGET_PROTOTYPE,

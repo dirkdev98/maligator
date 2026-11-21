@@ -36,6 +36,7 @@ function graphFor(count = 1): ModuleGraph {
 		entry: paths[0]!,
 		modules: new Map(),
 		nodeEnabled: false,
+		webPlatformEnabled: false,
 		evaluationOrder: [],
 		cycles: [],
 		workerEntries: paths.map((file) => ({

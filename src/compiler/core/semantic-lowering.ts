@@ -33,7 +33,11 @@ import {
 	traverseEstree,
 } from "../frontend/estree-traversal.ts";
 import { importsForeignCallbacks } from "../frontend/foreign-callbacks.ts";
-import { HOST_GLOBAL_INSTALLERS, hostInstallerSymbol } from "../frontend/host-modules.ts";
+import {
+	HOST_GLOBAL_INSTALLERS,
+	hostGlobalInstallerAvailable,
+	hostInstallerSymbol,
+} from "../frontend/host-modules.ts";
 import { isImportMeta, isImportMetaResolveCall } from "../frontend/import-meta.ts";
 import { linkModules } from "../frontend/linker.ts";
 import { planModuleEvaluation } from "../frontend/module-evaluation-plan.ts";
@@ -356,6 +360,9 @@ interface CoreFrontendContext {
 
 	/** Linked HOST_GLOBAL_INSTALLERS rows; a reachable read of one of their globals retains them. */
 	hostGlobals: Array<(typeof HOST_GLOBAL_INSTALLERS)[number] & { retained: boolean }>;
+
+	/** Reads that hand the global object on; reaching one retains every unfollowed global. */
+	globalObjectEscapes: ReadonlySet<ESTree.Node>;
 
 	/** Retain Node's dynamic resolver when a public loader value escapes static lowering. */
 	nodeModuleInstaller: string | null;
@@ -979,6 +986,7 @@ export function constructSemanticProgramCore(
 		hostProcess: null,
 		hostBuffer: null,
 		hostGlobals: [],
+		globalObjectEscapes: new Set(),
 		nodeModuleInstaller: null,
 		commonJsExportNames: () => [],
 	};
@@ -1045,9 +1053,21 @@ export function constructSemanticProgramCore(
 	program.hostBuffer = linkage.hostBuffer
 		? { installer: linkage.hostBuffer.installer, retained: false }
 		: null;
-	program.hostGlobals = HOST_GLOBAL_INSTALLERS.filter((host) =>
-		linkage.hostGlobalInstallers.includes(host.installer),
-	).map((host) => ({ ...host, retained: false }));
+	// Runtime eval runs the embedded compiler and its output in this isolate without
+	// installing globals, so both find the global object as the program left it.
+	const runtimeEval = program.facts.world.eval === "runtime";
+	const surfaces = {
+		webPlatform: program.semantic.graph?.webPlatformEnabled ?? false,
+		node: program.semantic.graph?.nodeEnabled ?? false,
+	};
+	program.hostGlobals = HOST_GLOBAL_INSTALLERS.filter(
+		(host) =>
+			linkage.hostGlobalInstallers.includes(host.installer) ||
+			(runtimeEval &&
+				host.computedMember &&
+				hostGlobalInstallerAvailable(host, surfaces)),
+	).map((host) => ({ ...host, retained: runtimeEval && host.computedMember }));
+	program.globalObjectEscapes = linkage.globalObjectEscapes;
 
 	const initFile = program.semantic.files.find(
 		(it) => it.path === program.semantic.entrypointPath,
@@ -16898,6 +16918,7 @@ function compileStaticIdentifier(
 		return -1;
 	}
 	retainHostGlobal(program, binding);
+	if (program.globalObjectEscapes.has(identifier)) retainUnfollowedGlobals(program);
 	retainCommonJsLoader(program, fn, binding);
 
 	if (binding.undeclared && identifierLoadsIntrinsic(program, identifier.name)) {
@@ -16994,13 +17015,24 @@ function retainHostMember(
 			: member.property.type === "Literal" && typeof member.property.value === "string"
 				? member.property.value
 				: undefined;
-	if (program.hostProcess && (key === undefined || key === "process" || key === "global"))
+	if (key === undefined) {
+		retainUnfollowedGlobals(program);
+		return;
+	}
+	if (program.hostProcess && (key === "process" || key === "global"))
 		program.hostProcess.retained = true;
-	if (program.hostBuffer && (key === undefined || key === "Buffer"))
-		program.hostBuffer.retained = true;
+	if (program.hostBuffer && key === "Buffer") program.hostBuffer.retained = true;
 	for (const host of program.hostGlobals) {
-		if (key === undefined ? host.computedMember : host.globals.includes(key))
-			host.retained = true;
+		if (host.globals.includes(key)) host.retained = true;
+	}
+}
+
+/** Retain every global that code reading the global object by a computed key may observe. */
+function retainUnfollowedGlobals(program: CoreFrontendContext): void {
+	if (program.hostProcess) program.hostProcess.retained = true;
+	if (program.hostBuffer) program.hostBuffer.retained = true;
+	for (const host of program.hostGlobals) {
+		if (host.computedMember) host.retained = true;
 	}
 }
 

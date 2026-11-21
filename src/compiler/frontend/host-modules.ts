@@ -119,34 +119,135 @@ export const WORKER_GLOBALS: ReadonlyArray<string> = [
 ];
 
 /**
- * Module installers that define free Node globals or that those globals need,
- * retained at startup when a program names one of them. `computedMember` means a
- * computed `globalThis[key]` read retains the installer once it is linked.
+ * Installers that define free globals, retained at startup when a program names one
+ * of them. `computedMember` means the installer is also retained when the program
+ * reads the global object in a way the compiler cannot follow, such as
+ * `globalThis[key]` or passing `globalThis` along. `surface` says which build
+ * surfaces have the installer: `node` with the Node surface, `web` with either the
+ * web or the Node surface, and `web-only` with the web surface alone, where Node
+ * defines the same globals through its own modules.
  */
 export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 	readonly installer: string;
 	readonly globals: ReadonlyArray<string>;
 	readonly computedMember: boolean;
+	readonly surface: "node" | "web" | "web-only";
 }> = [
+	{
+		installer: "mal_host_install_web_events",
+		globals: [
+			"Event",
+			"CustomEvent",
+			"EventTarget",
+			"DOMException",
+			"AbortSignal",
+			"AbortController",
+		],
+		computedMember: true,
+		surface: "web",
+	},
+	{
+		installer: "mal_host_install_web_encoding",
+		globals: ["TextEncoder", "TextDecoder"],
+		computedMember: true,
+		surface: "web",
+	},
+	{
+		installer: "mal_host_install_web_streams",
+		globals: [
+			"ReadableStream",
+			"ReadableStreamDefaultReader",
+			"ReadableStreamBYOBReader",
+			"ReadableStreamBYOBRequest",
+			"ReadableStreamDefaultController",
+			"ReadableByteStreamController",
+			"WritableStream",
+			"WritableStreamDefaultWriter",
+			"WritableStreamDefaultController",
+			"TransformStream",
+			"TransformStreamDefaultController",
+			"ByteLengthQueuingStrategy",
+			"CountQueuingStrategy",
+			"TextEncoderStream",
+			"TextDecoderStream",
+			"CompressionStream",
+			"DecompressionStream",
+		],
+		computedMember: true,
+		surface: "web",
+	},
+	{
+		installer: "mal_host_install_web_url",
+		globals: ["URL", "URLSearchParams"],
+		computedMember: true,
+		surface: "web",
+	},
+	{
+		installer: "mal_host_install_web_fetch",
+		globals: ["Headers", "Request", "Response", "Blob", "File", "FormData"],
+		computedMember: true,
+		surface: "web",
+	},
+	{
+		installer: "mal_host_install_web_basics",
+		globals: ["atob", "btoa", "queueMicrotask", "structuredClone", "navigator"],
+		computedMember: true,
+		surface: "web",
+	},
+	{
+		installer: "mal_host_install_web_performance",
+		globals: ["performance"],
+		computedMember: true,
+		surface: "web-only",
+	},
+	{
+		installer: "mal_host_install_web_crypto",
+		globals: ["crypto"],
+		computedMember: true,
+		surface: "web-only",
+	},
 	{
 		installer: PERFORMANCE_INSTALLER_SYMBOL,
 		globals: PERFORMANCE_GLOBALS,
 		computedMember: true,
+		surface: "node",
 	},
-	{ installer: CRYPTO_INSTALLER_SYMBOL, globals: CRYPTO_GLOBALS, computedMember: false },
+	{
+		installer: CRYPTO_INSTALLER_SYMBOL,
+		globals: CRYPTO_GLOBALS,
+		computedMember: false,
+		surface: "node",
+	},
 	{
 		installer: WORKER_THREADS_INSTALLER_SYMBOL,
 		globals: WORKER_GLOBALS,
 		computedMember: false,
+		surface: "node",
 	},
-	{ installer: HTTP_INSTALLER_SYMBOL, globals: WEBSOCKET_GLOBALS, computedMember: false },
+	{
+		installer: HTTP_INSTALLER_SYMBOL,
+		globals: WEBSOCKET_GLOBALS,
+		computedMember: false,
+		surface: "node",
+	},
 	// Node Request and Response bodies convert async-iterable chunks with Buffer.from.
 	{
 		installer: BUFFER_INSTALLER_SYMBOL,
 		globals: ["Request", "Response"],
 		computedMember: true,
+		surface: "node",
 	},
 ];
+
+/** Whether a HOST_GLOBAL_INSTALLERS row's installer exists on these surfaces. */
+export function hostGlobalInstallerAvailable(
+	row: (typeof HOST_GLOBAL_INSTALLERS)[number],
+	surfaces: { readonly webPlatform: boolean; readonly node: boolean },
+): boolean {
+	if (row.surface === "node") return surfaces.node;
+	if (row.surface === "web") return surfaces.webPlatform || surfaces.node;
+	return surfaces.webPlatform && !surfaces.node;
+}
 
 // path is the one module with a planned default export (`import path from
 // "node:path"`) alongside its named functions — `relative` included.

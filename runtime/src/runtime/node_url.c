@@ -22,6 +22,7 @@
 #include "text_buffer.h"
 #include "utf8.h"
 #include "vm_ops.h"
+#include "web_surface.h"
 
 #define URL_VISIBLE \
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
@@ -1730,6 +1731,7 @@ void mal_host_install_node_url(
     const MalHostLaunchContext *launch) {
     if (mal_node_module_install_cached(vm, "node:url", slots, count)) return;
     (void) launch;
+    if (mal_web_url_ensure(vm) == nullptr) return;
     MalValue module = vm->intrinsics[MAL_INTRINSIC_NODE_URL_MODULE];
     if (mal_value_is_undefined(module)) {
         MalValue roots[] = {

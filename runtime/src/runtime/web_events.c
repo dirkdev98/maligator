@@ -20,6 +20,7 @@
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
+#include "web_surface.h"
 
 /* ---------------------------------------------------------------------------
  * Shared helpers.
@@ -152,6 +153,8 @@ static MalValue dom_exception_create(
 }
 
 static MalValue dom_exception_new(MalVm *vm, const char *message, const char *name) {
+    // Host code throws DOMExceptions whether or not the program names the class.
+    if (mal_web_events_ensure(vm) == nullptr) return vm->completion.value;
     MalValue values[] = {
         mal_value_from_string(mal_string_new_ascii(&vm->heap, message, strlen(message))),
         mal_value_new_undefined(),
@@ -1312,3 +1315,10 @@ void mal_events_install(MalVm *vm, MalObject *global_this) {
     mal_gc_register_finalizer(MAL_HEAP_EVENT_TARGET_OBJECT, event_target_finalize);
     mal_gc_register_tracer(MAL_HEAP_EVENT_TARGET_OBJECT, event_target_trace);
 }
+
+static bool web_events_build(MalVm *vm, MalObject *exports) {
+    mal_events_install(vm, exports);
+    return true;
+}
+
+MAL_WEB_GROUP_DEFINE(events, MAL_WEB_GROUP_EVENTS, web_events_build)

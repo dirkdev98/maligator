@@ -151,6 +151,7 @@ export function preludeGraph(
 		resolutionInputs: graph.resolutionInputs,
 		entry: specifier,
 		nodeEnabled: graph.nodeEnabled,
+		webPlatformEnabled: graph.webPlatformEnabled,
 		execution,
 		modules: new Map([...graph.modules].filter(([module]) => reachable.has(module))),
 		evaluationOrder: graph.evaluationOrder.filter((module) => reachable.has(module)),

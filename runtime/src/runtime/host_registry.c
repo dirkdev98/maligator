@@ -8,6 +8,7 @@
 #include "maligator_assets.h"
 #include "maligator_http.h"
 #include "mal_process.h"
+#include "web_surface.h"
 #include "workers.h"
 
 #if MAL_NODE
@@ -71,6 +72,20 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
 #endif
     MATCH_INSTALLER(mal_host_install_maligator_process);
     MATCH_INSTALLER(mal_host_install_maligator_internal_workers);
+    MATCH_INSTALLER(mal_host_install_web_events);
+#if MAL_WEB_PLATFORM || MAL_NODE
+    MATCH_INSTALLER(mal_host_install_web_encoding);
+    MATCH_INSTALLER(mal_host_install_web_streams);
+    MATCH_INSTALLER(mal_host_install_web_fetch);
+    MATCH_INSTALLER(mal_host_install_web_basics);
+#endif
+#if MAL_URL
+    MATCH_INSTALLER(mal_host_install_web_url);
+#endif
+#if MAL_WEB_PLATFORM
+    MATCH_INSTALLER(mal_host_install_web_performance);
+    MATCH_INSTALLER(mal_host_install_web_crypto);
+#endif
 #if MAL_NODE
     MATCH_INSTALLER(mal_host_install_process);
     MATCH_INSTALLER(mal_host_install_node_assert);

@@ -33,6 +33,7 @@
 #include "typed_array_object.h"
 #include "value.h"
 #include "vm_ops.h"
+#include "web_surface.h"
 
 #define STREAM_VISIBLE \
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
@@ -5955,6 +5956,9 @@ static void stream_install_exports(
 void mal_host_install_node_stream(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
+    if (mal_web_events_ensure(vm) == nullptr || mal_web_streams_ensure(vm) == nullptr
+        || mal_web_fetch_ensure(vm) == nullptr)
+        return;
     if (!mal_value_is_undefined(
             vm->intrinsics[MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR])) {
         stream_install_exports(vm, slots, count);
@@ -6235,10 +6239,10 @@ static MalValue consume_finish(MalVm *vm, MalValue chunks, i32 kind) {
     mal_gc_root(&root, roots, 3);
     MalValue result = mal_value_new_undefined();
     if (kind == CONSUME_BLOB) {
-        MalValue blob;
-        if (stream_get(vm, vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS], "Blob", &blob)
-            && vm->completion.kind != MAL_COMPLETION_THROW) {
-            MalCompletion made = mal_vm_construct_value(vm, blob, roots, 1);
+        MalObject *fetch = mal_web_fetch_ensure(vm);
+        if (fetch != nullptr) {
+            MalCompletion made =
+                mal_vm_construct_value(vm, mal_web_group_export(vm, fetch, "Blob"), roots, 1);
             if (made.kind != MAL_COMPLETION_THROW) result = made.value;
         }
         goto done;
@@ -6390,15 +6394,16 @@ void mal_host_install_node_stream_web(
         "CountQueuingStrategy", "TextEncoderStream", "TextDecoderStream", "CompressionStream",
         "DecompressionStream",
     };
+    MalObject *streams = mal_web_streams_ensure(vm);
+    if (streams == nullptr) return;
     MalValue roots[1] = {mal_value_from_object(mal_intrinsic_new_object(vm))};
     MalRootSpan root;
     mal_gc_root(&root, roots, 1);
-    MalObject *global = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
     for (usize i = 0; i < countof(names); i++) {
-        MalPropertyLookup found = mal_object_get_own(global, stream_static_key(vm, names[i]));
-        if (!found.present || (found.desc.flags & MAL_PROPERTY_ACCESSOR) != 0) continue;
+        MalValue value = mal_web_group_export(vm, streams, names[i]);
+        if (mal_value_is_undefined(value)) continue;
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) names[i],
-                                  found.desc.value, STREAM_VISIBLE);
+                                  value, STREAM_VISIBLE);
     }
     mal_node_module_publish(vm, "node:stream/web", slots, count, roots[0]);
     mal_gc_unroot(&root);

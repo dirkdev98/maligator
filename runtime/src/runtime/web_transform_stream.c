@@ -22,6 +22,7 @@
 #include "vm.h"
 #include "vm_ops.h"
 #include "web_readable_stream_object.h"
+#include "web_surface.h"
 #if MAL_NODE
 #include "mal_zlib.h"
 #endif
@@ -1015,10 +1016,10 @@ static MalValue ts_text_encoder_stream_constructor(MalVm *vm, MalValue self, con
             (const byte *) "Class constructor TextEncoderStream cannot be invoked without 'new'");
         return mal_value_new_undefined();
     }
-    MalValue constructor;
-    if (!mal_vm_get_property(vm, vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS], ts_key(vm, "TextEncoder"), &constructor)) {
-        return mal_value_new_undefined();
-    }
+    // The program's own TextEncoder global, possibly replaced or never named, is not the codec.
+    MalObject *encoding = mal_web_encoding_ensure(vm);
+    if (encoding == nullptr) return mal_value_new_undefined();
+    MalValue constructor = mal_web_group_export(vm, encoding, "TextEncoder");
     MalCompletion encoder = mal_vm_construct_value(vm, constructor, nullptr, 0);
     if (encoder.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
     return ts_wrapper_new(vm, MAL_TEXT_ENCODER_STREAM, new_target, callee, TS_ALGORITHM_ENCODE, encoder.value, nullptr);
@@ -1032,10 +1033,10 @@ static MalValue ts_text_decoder_stream_constructor(MalVm *vm, MalValue self, con
             (const byte *) "Class constructor TextDecoderStream cannot be invoked without 'new'");
         return mal_value_new_undefined();
     }
-    MalValue constructor;
-    if (!mal_vm_get_property(vm, vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS], ts_key(vm, "TextDecoder"), &constructor)) {
-        return mal_value_new_undefined();
-    }
+    // The program's own TextDecoder global, possibly replaced or never named, is not the codec.
+    MalObject *encoding = mal_web_encoding_ensure(vm);
+    if (encoding == nullptr) return mal_value_new_undefined();
+    MalValue constructor = mal_web_group_export(vm, encoding, "TextDecoder");
     MalCompletion decoder = mal_vm_construct_value(vm, constructor, args, argc > 2 ? 2 : argc);
     if (decoder.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
     return ts_wrapper_new(vm, MAL_TEXT_DECODER_STREAM, new_target, callee, TS_ALGORITHM_DECODE, decoder.value, nullptr);
@@ -1144,3 +1145,13 @@ void mal_transform_stream_install(MalVm *vm, MalObject *global_this) {
 #endif
     mal_gc_unroot(&root);
 }
+
+static bool web_streams_build(MalVm *vm, MalObject *exports) {
+    if (mal_web_events_ensure(vm) == nullptr || mal_web_encoding_ensure(vm) == nullptr) return false;
+    mal_readable_stream_install(vm, exports);
+    mal_writable_stream_install(vm, exports);
+    mal_transform_stream_install(vm, exports);
+    return true;
+}
+
+MAL_WEB_GROUP_DEFINE(streams, MAL_WEB_GROUP_STREAMS, web_streams_build)

@@ -22,6 +22,7 @@
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
+#include "web_surface.h"
 
 // The entire URL surface depends on the ada C++ parser (mal_url_* FFI). A build
 // with neither webPlatform nor Node drops ada + the `-lc++` link (Rust `url`
@@ -1441,5 +1442,13 @@ void mal_url_install(MalVm *vm, MalObject *global_this) {
     mal_gc_register_tracer(
         MAL_HEAP_URL_SEARCH_PARAMS_ITERATOR_OBJECT, usp_iterator_trace);
 }
+
+
+static bool web_url_build(MalVm *vm, MalObject *exports) {
+    mal_url_install(vm, exports);
+    return true;
+}
+
+MAL_WEB_GROUP_DEFINE(url, MAL_WEB_GROUP_URL, web_url_build)
 
 #endif // MAL_URL

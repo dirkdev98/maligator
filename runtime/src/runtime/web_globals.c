@@ -44,6 +44,7 @@
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
+#include "web_surface.h"
 
 /* Per-isolate baselines captured at install: each worker has its own timeOrigin. */
 static MAL_ISOLATE_LOCAL f64 mal_web_time_origin_ms = 0;   // wall-clock ms (performance.timeOrigin)
@@ -1122,22 +1123,14 @@ void mal_navigator_global_install(MalVm *vm, MalObject *global_this) {
     mal_gc_unroot(&root);
 }
 
-void mal_web_globals_install(MalVm *vm, MalObject *global_this) {
-    mal_web_mono_base_ns = mal_monotonic_now_ns();
-    struct timespec rt;
-    clock_gettime(CLOCK_REALTIME, &rt);
-    mal_web_time_origin_ms = (f64) rt.tv_sec * 1000.0 + (f64) rt.tv_nsec / 1.0e6;
-
-    mal_text_encoding_globals_install(vm, global_this);
-    mal_navigator_global_install(vm, global_this);
-
-    mal_base64_globals_install(vm, global_this);
-
-    mal_microtask_global_install(vm, global_this);
-
-    mal_structured_clone_global_install(vm, global_this);
-
-    // performance (now / timeOrigin).
+void mal_web_performance_install(MalVm *vm, MalObject *global_this) {
+    // Host installs run before the entry, so the first install is the program's start.
+    if (mal_web_mono_base_ns == 0) {
+        mal_web_mono_base_ns = mal_monotonic_now_ns();
+        struct timespec rt;
+        clock_gettime(CLOCK_REALTIME, &rt);
+        mal_web_time_origin_ms = (f64) rt.tv_sec * 1000.0 + (f64) rt.tv_nsec / 1.0e6;
+    }
     MalObject *event_target_proto =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_EVENT_TARGET_PROTOTYPE]);
     MalEventTargetObject *performance_target =
@@ -1153,7 +1146,9 @@ void mal_web_globals_install(MalVm *vm, MalObject *global_this) {
         performance_value,
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_gc_unroot(&performance_root);
+}
 
+void mal_web_crypto_install(MalVm *vm, MalObject *global_this) {
     // crypto (randomUUID / getRandomValues). This program already links the
     // entropy boundary, so Math.random's generator can be seeded from it rather
     // than from process divergence. Math.random remains non-cryptographic; see
@@ -1167,3 +1162,33 @@ void mal_web_globals_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_data(vm, global_this, (const byte *) "crypto",
         mal_value_from_object(crypto), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
+
+static bool web_encoding_build(MalVm *vm, MalObject *exports) {
+    mal_text_encoding_globals_install(vm, exports);
+    return true;
+}
+
+static bool web_basics_build(MalVm *vm, MalObject *exports) {
+    if (mal_web_events_ensure(vm) == nullptr) return false;
+    mal_navigator_global_install(vm, exports);
+    mal_base64_globals_install(vm, exports);
+    mal_microtask_global_install(vm, exports);
+    mal_structured_clone_global_install(vm, exports);
+    return true;
+}
+
+static bool web_performance_build(MalVm *vm, MalObject *exports) {
+    if (mal_web_events_ensure(vm) == nullptr) return false;
+    mal_web_performance_install(vm, exports);
+    return true;
+}
+
+static bool web_crypto_build(MalVm *vm, MalObject *exports) {
+    mal_web_crypto_install(vm, exports);
+    return true;
+}
+
+MAL_WEB_GROUP_DEFINE(encoding, MAL_WEB_GROUP_ENCODING, web_encoding_build)
+MAL_WEB_GROUP_DEFINE(basics, MAL_WEB_GROUP_BASICS, web_basics_build)
+MAL_WEB_GROUP_DEFINE(performance, MAL_WEB_GROUP_PERFORMANCE, web_performance_build)
+MAL_WEB_GROUP_DEFINE(crypto, MAL_WEB_GROUP_CRYPTO, web_crypto_build)

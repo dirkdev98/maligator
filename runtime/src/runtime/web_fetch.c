@@ -44,6 +44,7 @@
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h" // mal_vm_get_property
+#include "web_surface.h"
 
 static const char *mal_fetch_reason(int status) {
     switch (status) {
@@ -4958,6 +4959,12 @@ void mal_fetch_types_install(MalVm *vm, MalObject *global_this) {
         MAL_HEAP_FORM_DATA_ITERATOR_OBJECT, mal_form_data_iterator_trace);
 }
 
-void mal_fetch_install(MalVm *vm, MalObject *global_this) {
-    mal_fetch_types_install(vm, global_this);
+static bool web_fetch_build(MalVm *vm, MalObject *exports) {
+    if (mal_web_events_ensure(vm) == nullptr || mal_web_streams_ensure(vm) == nullptr
+        || mal_web_url_ensure(vm) == nullptr || mal_web_encoding_ensure(vm) == nullptr)
+        return false;
+    mal_fetch_types_install(vm, exports);
+    return true;
 }
+
+MAL_WEB_GROUP_DEFINE(fetch, MAL_WEB_GROUP_FETCH, web_fetch_build)

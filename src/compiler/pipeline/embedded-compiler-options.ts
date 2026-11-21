@@ -1,6 +1,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import { resolveBuildConfig } from "../../build-config-values.ts";
 import type { CompileEntrypointOptions } from "./compile-program-common.ts";
 
 /** Bind the embedded compiler's host dependencies inside its module graph. */
@@ -26,6 +27,9 @@ export function embeddedCompilerOptions(sourceDirectory: string) {
 	return {
 		entryResultExport: "__compile",
 		intrinsicGlobalReads: true,
+		// The compiler runs spliced into a program that installs no globals for it, and
+		// its image must not ask for installers the eval loader cannot resolve.
+		buildConfig: resolveBuildConfig({ surface: { webPlatform: false, node: false } }),
 		transformSource: {
 			files,
 			transform: (source: string) =>
@@ -33,6 +37,6 @@ export function embeddedCompilerOptions(sourceDirectory: string) {
 		},
 	} satisfies Pick<
 		CompileEntrypointOptions,
-		"entryResultExport" | "intrinsicGlobalReads" | "transformSource"
+		"entryResultExport" | "intrinsicGlobalReads" | "transformSource" | "buildConfig"
 	>;
 }

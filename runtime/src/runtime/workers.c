@@ -43,6 +43,7 @@
 #include "atomics_async.h"
 #include "personality.h"
 #include "web_events_object.h"
+#include "web_surface.h"
 #include "web_globals.h"
 #include "web_host_timer.h"
 #include "web_url_object.h"
@@ -3862,8 +3863,8 @@ bool mal_workers_install(MalVm *vm) {
     if (g_isolate != nullptr) return g_isolate->vm == vm;
     MalHost *host = mal_host(vm);
     if (host == nullptr) return false;
-    // Ports and workers are EventTargets even when no personality installed events.
-    mal_runtime_events_ensure(vm);
+    // Ports and workers are EventTargets even when the program names no event class.
+    if (mal_web_events_ensure(vm) == nullptr) return false;
     Isolate *iso = calloc(1, sizeof(Isolate));
     Owner *owner = owner_new(&host->reactor);
     if (iso == nullptr || owner == nullptr || !mal_vm_register_runtime_cleanup(vm, workers_cleanup)) {
@@ -4110,9 +4111,9 @@ static MalValue worker_fail_current(MalVm *vm, MalValue self, const MalValue *ar
 void mal_host_install_maligator_internal_workers(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
     (void) launch;
-    // The public pool cancels tasks with AbortController even on a minimal host, where
-    // an earlier lazy events ensure may have built the classes without global names.
-    if (!vm->host_web_platform && !vm->host_node) mal_runtime_events_install_globals(vm);
+    // The public pool cancels tasks with AbortController even on a minimal host, which
+    // installs no web globals by use.
+    if (!vm->host_web_platform && !vm->host_node) mal_host_install_web_events(vm, nullptr, 0, launch);
     if (thrown(vm)) return;
     if (!mal_workers_install(vm)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "maligator:workers requires a host event loop");

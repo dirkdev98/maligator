@@ -19,6 +19,7 @@
 #include "web_fetch.h"
 #include "web_headers_object.h"
 #include "web_response_object.h"
+#include "web_surface.h"
 
 struct MalHttpAssetRoute {
     /** Empty, or a path prefix without a trailing slash, such as "/static". */
@@ -558,6 +559,8 @@ static MalValue http_listen(
 void mal_host_install_maligator_internal_http(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
     (void) launch;
+    // Handlers receive Requests and the native paths build Responses either way.
+    if (mal_web_fetch_ensure(vm) == nullptr) return;
     for (i32 i = 0; i < count; i++) {
         MalNativeFunctionCallback callback = nullptr;
         i32 length = 1;

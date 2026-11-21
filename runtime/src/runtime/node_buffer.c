@@ -32,6 +32,7 @@
 #include "value.h"
 #include "value_ops.h"
 #include "vm_ops.h"
+#include "web_surface.h"
 
 #define MAL_BUFFER_VISIBLE \
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
@@ -2953,15 +2954,21 @@ void mal_host_install_node_buffer(
         mal_value_from_f64((f64) MAL_STRING_MAX_CODE_UNITS), MAL_BUFFER_VISIBLE);
     mal_intrinsic_define_data(vm, module_default, "INSPECT_MAX_BYTES",
         mal_value_from_i32((i32) MAL_BUFFER_INSPECT_MAX_BYTES), MAL_BUFFER_VISIBLE);
-    static const char *const globals[] = {"atob", "btoa", "Blob", "File"};
-    MalObject *global_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
-    for (usize i = 0; i < countof(globals); i++) {
-        MalPropertyLookup found = mal_object_get_own(
-            global_object, mal_intrinsic_string_key(vm, (const byte *) globals[i]));
-        if (found.present && (found.desc.flags & MAL_PROPERTY_ACCESSOR) == 0) {
-            mal_intrinsic_define_data(vm, module_default, (const byte *) globals[i],
-                found.desc.value, MAL_BUFFER_VISIBLE);
-        }
+    MalObject *basics = mal_web_basics_ensure(vm);
+    MalObject *fetch = basics == nullptr ? nullptr : mal_web_fetch_ensure(vm);
+    if (fetch == nullptr) {
+        mal_gc_unroot(&root);
+        return;
+    }
+    static const char *const basic_exports[] = {"atob", "btoa"};
+    for (usize i = 0; i < countof(basic_exports); i++) {
+        mal_intrinsic_define_data(vm, module_default, (const byte *) basic_exports[i],
+            mal_web_group_export(vm, basics, basic_exports[i]), MAL_BUFFER_VISIBLE);
+    }
+    static const char *const fetch_exports[] = {"Blob", "File"};
+    for (usize i = 0; i < countof(fetch_exports); i++) {
+        mal_intrinsic_define_data(vm, module_default, (const byte *) fetch_exports[i],
+            mal_web_group_export(vm, fetch, fetch_exports[i]), MAL_BUFFER_VISIBLE);
     }
     roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),

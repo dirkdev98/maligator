@@ -13,13 +13,8 @@ void mal_navigator_global_install(MalVm *vm, MalObject *global_this);
 void mal_base64_globals_install(MalVm *vm, MalObject *global_this);
 void mal_microtask_global_install(MalVm *vm, MalObject *global_this);
 
-/*
- * Install the self-contained WinterTC "Minimum Common API" globals that need no
- * external library: TextEncoder / TextDecoder, btoa / atob, queueMicrotask,
- * performance (now / timeOrigin), and crypto (randomUUID / getRandomValues via
- * the engine-neutral host entropy API).
- *
- * Host entry only (like mal_fetch_install): these are not part of the shared
- * intrinsics, so the bare test262 VM never sees them.
- */
-void mal_web_globals_install(MalVm *vm, MalObject *global_this);
+/* performance (now / timeOrigin); the first install in an isolate fixes its time origin. */
+void mal_web_performance_install(MalVm *vm, MalObject *global_this);
+
+/* crypto (randomUUID / getRandomValues) over the engine-neutral host entropy API. */
+void mal_web_crypto_install(MalVm *vm, MalObject *global_this);

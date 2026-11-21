@@ -812,6 +812,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->host = nullptr;
     vm->host_web_platform = false;
     vm->host_node = false;
+    vm->web_groups_published = 0;
     vm->console_node_hooks = nullptr;
     vm->prepared_values = nullptr;
     vm->runtime_cleanup_count = 0;

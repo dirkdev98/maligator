@@ -174,6 +174,8 @@ export interface ModuleGraph {
 	 * binding + `process` retention on it without re-reading the build config.
 	 */
 	nodeEnabled: boolean;
+	/** Whether the web platform surface (`surface.webPlatform`) is on for this build. */
+	webPlatformEnabled: boolean;
 	modules: Map<string, ModuleRecord>;
 	/**
 	 * Post-order over the static-import edges: dependencies precede dependents,
@@ -1300,6 +1302,7 @@ export function buildModuleGraph(
 		entry,
 		execution: options.execution,
 		nodeEnabled: ctx.nodeEnabled,
+		webPlatformEnabled: options.buildConfig?.surface.webPlatform !== false,
 		modules,
 		evaluationOrder: computeEvaluationOrder(entry, modules),
 		cycles: detectCycles(modules),

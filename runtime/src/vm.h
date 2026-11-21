@@ -2326,6 +2326,8 @@ typedef struct MalVm {
     void *host;
     bool host_web_platform;
     bool host_node;
+    // MalWebGroup bits whose globals this isolate defined (web_surface.c).
+    u16 web_groups_published;
     /* Node's console formatting, registered by the runtime personality (see builtin_console.h). */
     const struct MalConsoleNodeHooks *console_node_hooks;
 
