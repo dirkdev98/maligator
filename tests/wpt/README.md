@@ -102,7 +102,7 @@ numbers while reporting the upstream harness error, and correlates
 `WPT_START`/`WPT_RESULT` records by numeric ID. It does not attempt full browser
 harness emulation.
 
-`wave-0.txt` lists candidates for further curation. Assess each against the current
-runtime and runner before adding it. Adding a curated path requires reviewing
+Uncurated candidates are tracked in [TODO.md](../../TODO.md). Assess each against the
+current runtime and runner before adding it. Adding a curated path requires reviewing
 server-main applicability, metadata and support dependencies, fixture hashes,
 declared modes, variant behavior, and adapter API use.

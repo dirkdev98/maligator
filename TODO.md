@@ -557,23 +557,28 @@ remains a Maligator extension and does not count as global fetch conformance.
 ## W2: bytes, bodies, URLs, and transforms
 
 - [ ] Complete BodyInit validation, arbitrary stream bodies, asynchronous consumption,
-      BYOB, tee, and remaining Request and Response properties. Preserve single-use and
-      cancellation behavior. Stream incoming Mal.serve bodies instead of imposing
-      the buffered 16 MiB total-size ceiling, and expose configurable budgets for
-      callers that choose buffering.
+      BYOB, tee, and remaining Request and Response properties, and curate
+      `fetch/api/response/json.any.js`. Preserve single-use and cancellation behavior.
+      Stream incoming Mal.serve bodies instead of imposing the buffered 16 MiB
+      total-size ceiling, and expose configurable budgets for callers that choose
+      buffering.
 
 - [ ] Complete Blob, File and FormData Web IDL behavior and curate the applicable
       File API, XHR and Fetch WPT. Check byte ownership, lifetime and MIME behavior
       through the public APIs.
 
 - [ ] Complete Headers Web IDL record conversion, descriptors, and
-      Proxy-sensitive behavior. Expand applicable WPT with outbound fetch.
+      Proxy-sensitive behavior. Expand applicable WPT with outbound fetch, starting with
+      `fetch/api/headers/header-values-normalize.any.js`.
 
-- [ ] Complete URL and URLSearchParams Web IDL behavior and broader WPT, then implement
-      URLPattern. Connect object URLs after Blob lifetime and revocation are defined.
+- [ ] Complete URL and URLSearchParams Web IDL behavior and broader WPT, starting with
+      `url/url-origin.any.js` and `url/url-setters.any.js`, then implement URLPattern.
+      Connect object URLs after Blob lifetime and revocation are defined.
 
 - [ ] Add remaining TextDecoder labels and Web IDL details, and curate the
-      encoding/streams WPT. Use versioned encoding data and incremental state.
+      encoding/streams WPT, starting with `encoding/api-invalid-label.any.js`,
+      `encoding/encodeInto.any.js` and `encoding/textdecoder-streaming.any.js`. Use
+      versioned encoding data and incremental state.
 
 - [ ] Offer CompressionStream and DecompressionStream without the Node surface: the
       zlib codec links only with the node-zlib feature. Curate the compression WPT and
@@ -593,8 +598,9 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 ## W4: compatibility closure
 
-- [ ] Complete Console, timers, Performance, base64, global aliases, and remaining
-      descriptors. Keep clocks and timer state isolate-owned.
+- [ ] Complete Console, timers, Performance, base64 (curate
+      `html/webappapis/atob/base64.any.js`), global aliases, and remaining descriptors.
+      Keep clocks and timer state isolate-owned.
 
 - [ ] Complete EventTarget, event subclasses, MessageChannel, and MessagePort. Include
       listener options, entanglement, transfer, task delivery, reentrancy, and lifetime.

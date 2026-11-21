@@ -89,7 +89,6 @@ them. A single round is indicative, and the report does not classify an optimiza
 or replace a saved baseline.
 
 Use `--owner primordial-methods` to select the grouped primordial microbenchmarks.
-`bench/runtime-gap/primordial-methods.json` records the selected callable identities.
 Their catalog `methods` list records the methods exercised in each measured workload;
 the result is a group workload offset, not an individual method cost. Case `features`
 enable optional runtime components only where required, and plans and reports record

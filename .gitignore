@@ -1,29 +1,18 @@
 .cache
 .maligator
 .idea
-coverage
 dist
 node_modules
 website/cloudflare/.wrangler
-!/website/cloudflare/wrangler.jsonc
-runtime/build*
-
-local*.js
 
 tsconfig.tsbuildinfo
 
 tests/local/tmp*.js
-maligator_static_values*
 *_todo.md
 *_local.md
 .claude
 AGENTS.local.md
 scripts/local-gh-push.sh
-/error.log
 
-/bench/*.json
-!/bench/baseline.json
-!/bench/compiler-scale-manifest.json
-!/bench/performance-portfolio.json
 *.cpuprofile
 *.heapprofile

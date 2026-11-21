@@ -73,9 +73,6 @@ class LongNativeFilesFirst extends BaseSequencer {
 export default defineConfig({
 	test: {
 		watch: false,
-		coverage: {
-			provider: "v8",
-		},
 		fsModuleCache: true,
 		fsModuleCachePath: ".cache/vitest",
 		sequence: { shuffle: { files: true }, sequencer: LongNativeFilesFirst },
