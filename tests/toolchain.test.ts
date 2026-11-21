@@ -1011,6 +1011,7 @@ printf '!<arch>\\n' > "$2"
 			expect(report.toolchain).toBeDefined();
 			const toolchain = report.toolchain!;
 			const production = selectNativeBuildPlan(toolchain, true);
+			const ccInvocations: Array<ReadonlyArray<string>> = [];
 			const context = resolveNativeBuildContext({
 				toolchain,
 				runtimeDirectory,
@@ -1020,6 +1021,9 @@ printf '!<arch>\\n' > "$2"
 					evalEnabled: false,
 					webPlatformEnabled: false,
 					intlFeatures: ["intl-segmenter"],
+				},
+				onCommand: ({ tool, args }) => {
+					if (tool === toolchain.tools.cc.path) ccInvocations.push(args);
 				},
 			});
 			writeFileSync(fake.logPath, "");
@@ -1031,20 +1035,30 @@ printf '!<arch>\\n' > "$2"
 				outDir: fake.root,
 			});
 
-			const invocations = readFileSync(fake.logPath, "utf-8");
-			expect(invocations).toMatch(/-O2 -g0 -flto=thin .*runtime\/src\/engine\.c/);
-			expect(invocations).toContain(`-O2 -g0 -flto=thin`);
-			expect(invocations).toContain("-Wl,--thinlto-cache-dir=");
-			expect(invocations).toContain(`strip --strip-all ${binary}`);
-			const compilations = invocations
-				.split("\n")
-				.filter((line) => line.includes(" -c "));
-			expect(compilations.length).toBeGreaterThan(0);
-			for (const invocation of compilations) {
-				for (const define of context.features.cDefines) {
-					expect(invocation.split(" ")).toContain(define);
-				}
+			const preprocessing = ccInvocations.filter((args) => args.includes("-E"));
+			expect(preprocessing).toContainEqual(
+				expect.arrayContaining([path.join(runtimeDirectory, "src/engine.c")]),
+			);
+			for (const args of preprocessing) {
+				expect(args).toEqual(expect.arrayContaining(context.features.cDefines));
 			}
+
+			const productionFlags = ["-O2", "-g0", "-flto=thin"];
+			const compilations = ccInvocations.filter((args) => args.includes("-c"));
+			expect(compilations).not.toHaveLength(0);
+			for (const args of compilations) {
+				expect(args).toEqual(expect.arrayContaining(productionFlags));
+			}
+			const link = ccInvocations.find((args) => args.at(-1) === binary);
+			expect(link).toEqual(
+				expect.arrayContaining([
+					...productionFlags,
+					expect.stringMatching(/^-Wl,--thinlto-cache-dir=/),
+				]),
+			);
+			expect(readFileSync(fake.logPath, "utf-8")).toContain(
+				`strip --strip-all ${binary}`,
+			);
 
 			writeFileSync(fake.logPath, "");
 			buildLocalBinary({

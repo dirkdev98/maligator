@@ -1742,6 +1742,26 @@ describe("wire loader side-data validation", () => {
 		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
+	it("loads a wire image that uses Unicode normalization", () => {
+		const entrypoint = path.join(directory, "unicode-normalization.mjs");
+		writeFileSync(
+			entrypoint,
+			`if ("e\\u0301".normalize("NFC") !== "\\u00e9") {
+				throw new Error("normalization returned the wrong string");
+			}`,
+		);
+		const wirePath = path.join(directory, "unicode-normalization.malw");
+		writeFileSync(
+			wirePath,
+			compileEntrypointToBuffer(entrypoint, {
+				stripTypes: stripCompactTypes,
+				buildConfig: resolveBuildConfig({}),
+			}),
+		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
 	it("loads a nonempty String.slice Number proof region payload", () => {
 		const entrypoint = path.join(directory, "string-span-region.mjs");
 		writeFileSync(

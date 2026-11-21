@@ -1,5 +1,7 @@
 #include "vm.h"
 #include "perf_stats.h"
+#include "regexp_engine.h"
+#include "unicode.h"
 #include "vm_load.h"
 
 #include <stdio.h>
@@ -43,6 +45,21 @@ static u8 *read_file(const char *path, usize *len_out) {
     return buffer;
 }
 
+#define MATCH_INSTALLER(symbol) \
+    if (length == sizeof(#symbol) - 1 && memcmp(name, #symbol, length) == 0) return symbol
+
+// The wire driver runs without an attached host. Only language components can
+// install into its VM without host state.
+static MalHostInstaller resolve_language_installer(const char *name, usize length) {
+#if MAL_REGEXP
+    MATCH_INSTALLER(mal_host_install_regexp);
+#endif
+    MATCH_INSTALLER(mal_host_install_unicode_normalization);
+    return nullptr;
+}
+
+#undef MATCH_INSTALLER
+
 static MalLoadedRuntimeImage *load(const char *path) {
     usize len = 0;
     u8 *buffer = read_file(path, &len);
@@ -50,7 +67,8 @@ static MalLoadedRuntimeImage *load(const char *path) {
         return nullptr;
     }
     const char *err = "ok";
-    MalLoadedRuntimeImage *loaded = mal_runtime_image_load(buffer, len, &err);
+    MalLoadedRuntimeImage *loaded = mal_runtime_image_load_with_host_resolver(
+        buffer, len, &err, resolve_language_installer);
     free(buffer);
     if (loaded == nullptr) {
         fprintf(stderr, "mal_runtime_image_load(%s): %s\n", path, err);
@@ -147,10 +165,6 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // A from-wire program's installers are unresolved (null), so this is a
-    // no-op here; the call site stays uniform with the C-baked entry points. The
-    // launch context carries the loader's own command line (never consulted, as
-    // the installers are null).
     MalHostLaunchContext launch = {.argc = argc, .argv = argv};
     mal_vm_run_host_installs(&vm, &launch);
 
@@ -166,11 +180,13 @@ int main(int argc, char **argv) {
             return 2;
         }
         vm.completion = (MalCompletion){.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-		i32 string_base = vm.runtime_image->string_constant_count;
-        i32 entry = mal_vm_splice_runtime_image(&vm, mal_loaded_runtime_image_get(spliced));
+        const MalRuntimeImage *program = mal_loaded_runtime_image_get(spliced);
+        i32 string_base = vm.runtime_image->string_constant_count;
+        i32 entry = mal_vm_splice_runtime_image(&vm, program);
+        if (entry < 0) return 1;
+        mal_vm_run_program_host_installs(&vm, program, &launch);
         if (getenv("MAL_EXPECT_PRECOMPILED_SHAPES") != nullptr
-            && !precompiled_literal_shapes_ready(
-                &vm, mal_loaded_runtime_image_get(spliced), entry, string_base)) {
+            && !precompiled_literal_shapes_ready(&vm, program, entry, string_base)) {
             fprintf(stderr, "spliced precompiled literal shapes were not initialized\n");
             return 1;
         }

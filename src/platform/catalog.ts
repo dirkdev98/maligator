@@ -1434,7 +1434,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 		stability: "experimental",
 		evaluation: "side-effect-free",
 		installer: "mal_host_install_maligator_internal_fs_descriptor",
-		declarationFile: "fs/descriptor-host-api.d.ts",
+		declarationFile: "fs-descriptor-host-api.d.ts",
 		description: "Descriptor operations for incremental I/O on the blocking-work pool.",
 		types: [
 			workerType(
@@ -1478,7 +1478,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 		stability: "experimental",
 		evaluation: "side-effect-free",
 		installer: "mal_host_install_maligator_internal_fs_stream",
-		declarationFile: "fs/stream-host-api.d.ts",
+		declarationFile: "fs-stream-host-api.d.ts",
 		description: "The filesystem's access to the runtime's readable stream constructor.",
 		types: [],
 		exports: [
@@ -1496,7 +1496,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 		stability: "experimental",
 		evaluation: "side-effect-free",
 		installer: "mal_host_install_maligator_internal_fs_watch",
-		declarationFile: "fs/watch-host-api.d.ts",
+		declarationFile: "fs-watch-host-api.d.ts",
 		description: "Reactor-backed filesystem change notifications.",
 		types: [
 			workerType(
