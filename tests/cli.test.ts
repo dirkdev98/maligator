@@ -37,6 +37,7 @@ import {
 import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
 import { FrontendCompilationSession } from "../src/frontend-cache.ts";
 import { productCliConfig } from "../src/product-builder.ts";
+import { PINNED_ZIG_VERSION } from "../src/toolchain-fetch.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const cliEntry = path.join(repoRoot, "src/index.ts");
@@ -613,15 +614,20 @@ describe("command shell", { timeout: 30_000 }, () => {
 		expect(result.stdout).not.toContain("managed");
 	});
 
-	it("returns nonzero and actionable diagnostics when doctor cannot find tools", () => {
-		const result = invokeCli(["doctor"], repoRoot, { ...process.env, PATH: "" });
-		expect(result.status).toBe(1);
-		expect(result.stdout).toContain("[missing] cc");
-		expect(result.stdout).toContain("Install Rustup");
-		if (process.platform === "darwin") {
-			expect(result.stdout).toContain("xcode-select --install");
-		} else if (process.platform === "linux") {
-			expect(result.stdout).toContain("apt install build-essential");
+	it("reports the pending production Zig download and missing Rustup", () => {
+		const directory = tmpdir();
+		try {
+			const result = invokeCli(["doctor"], directory, {
+				PATH: directory,
+				MALIGATOR_CACHE_DIR: directory,
+			});
+			expect(result.status).toBe(1);
+			expect(result.stdout).toContain(
+				`Production builds will download Zig ${PINNED_ZIG_VERSION} from`,
+			);
+			expect(result.stdout).toContain("Install Rustup");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
 		}
 	});
 });
