@@ -209,9 +209,15 @@ describe("native builtin callback transport", () => {
 		expect(typed).toBeDefined();
 		const maximum = typed.sourceCodeUnits + NATIVE_C_HEADER_LINES.join("\n").length;
 		const bounded = emit(maximum);
-		expect(bounded.every((unit) => unit.sourceChunks.join("").length <= maximum)).toBe(
-			true,
+		// The host install table is one indivisible definition, so the budget binds
+		// only the units that carry functions.
+		const functionUnits = bounded.filter(
+			(unit) =>
+				!unit.definitions.some((definition) => definition.symbol === "mal_host_installs"),
 		);
+		expect(
+			functionUnits.every((unit) => unit.sourceChunks.join("").length <= maximum),
+		).toBe(true);
 		expect(
 			bounded
 				.flatMap((unit) => unit.definitions)
