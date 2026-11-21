@@ -15,6 +15,7 @@
 #include "web_request_object.h"
 #include "web_response_object.h"
 #include "web_readable_stream_object.h"
+#include "web_surface.h"
 
 extern const MalRuntimeImage mal_runtime_image;
 
@@ -122,9 +123,7 @@ int main(void) {
     usize before = mal_gc_process_bytes();
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
-    mal_events_install(&vm, mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]));
-    mal_readable_stream_install(&vm, mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]));
-    mal_fetch_install(&vm, mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]));
+    mal_host_install_web_fetch(&vm, nullptr, 0, nullptr);
     bool ok = bodies_charge_and_release(&vm);
     mal_vm_free(&vm);
     if (!ok || mal_gc_process_bytes() != before) return 1;

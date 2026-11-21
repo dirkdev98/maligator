@@ -1266,7 +1266,7 @@ export function buildModuleGraph(
 		entry,
 		execution: options.execution,
 		nodeEnabled: ctx.nodeEnabled,
-		webPlatformEnabled: options.buildConfig?.surface.webPlatform !== false,
+		webPlatformEnabled: options.buildConfig?.surface.webPlatform ?? false,
 		modules,
 		evaluationOrder: computeEvaluationOrder(entry, modules),
 		cycles: detectCycles(modules),

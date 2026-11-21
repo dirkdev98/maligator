@@ -10,6 +10,7 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { HOST_MODULES } from "../src/compiler/frontend/host-modules.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -41,11 +42,11 @@ function compile(source: string, options: { node?: boolean } = {}): ProgramImage
 	roots.push(root);
 	const entry = path.join(root, "main.mjs");
 	writeFileSync(entry, source);
-	const program = loadEntrypointAndRunSemanticAnalysis(
-		entry,
-		options.node ? { buildConfig: nodeOn } : {},
-	);
-	return compileSemanticProgramToProgramImage(program);
+	const buildConfig = options.node ? nodeOn : resolveBuildConfig({});
+	const program = loadEntrypointAndRunSemanticAnalysis(entry, { buildConfig });
+	return compileSemanticProgramToProgramImage(program, {
+		facts: compilerProgramFactsFromConfig(buildConfig),
+	});
 }
 
 /** Every LOAD_GLOBAL slot index read anywhere in the program. */
@@ -265,11 +266,9 @@ describe("host-install manifest", () => {
 			`import { createRequire } from "node:module";\nglobalThis.sink = createRequire;\n`,
 			{ node: true },
 		);
-		expect(def.runtime.hostInstalls).toEqual([
-			expect.objectContaining({
-				installer: "mal_host_install_node_module",
-			}),
-		]);
+		expect(def.runtime.hostInstalls).toContainEqual(
+			expect.objectContaining({ installer: "mal_host_install_node_module" }),
+		);
 	});
 
 	it("binds asynchronous child process entrypoints", () => {
@@ -420,9 +419,10 @@ describe("host-install manifest", () => {
 		"installs process through %s without a free process identifier",
 		(expression) => {
 			const def = compile(`globalThis.sink = ${expression}.argv;`, { node: true });
-			expect(def.runtime.hostInstalls).toEqual([
-				{ installer: "mal_host_install_process", exports: [] },
-			]);
+			expect(def.runtime.hostInstalls).toContainEqual({
+				installer: "mal_host_install_process",
+				exports: [],
+			});
 		},
 	);
 
@@ -484,9 +484,11 @@ globalThis.sink = read({process: 1});`,
 		);
 	});
 
-	it("leaves Node text encoding globals to host surface initialization", () => {
+	it("installs a named web global through its group while reads stay on the global object", () => {
 		const def = compile(`globalThis.sink = new TextDecoder();\n`, { node: true });
-		expect(def.runtime.hostInstalls).toEqual([]);
+		expect(def.runtime.hostInstalls).toEqual([
+			{ installer: "mal_host_install_web_encoding", exports: [] },
+		]);
 		expect(def.runtime.functions.flatMap((fn) => fn.instructions)).toContainEqual(
 			expect.objectContaining({ opcode: "LOAD_GLOBAL_PROPERTY" }),
 		);
