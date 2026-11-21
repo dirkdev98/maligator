@@ -99,5 +99,12 @@ MalValue mal_node_module_get_builtin(MalVm *vm, MalString *name) {
     return mal_value_new_undefined();
 }
 
+void mal_host_install_node_builtin_loader(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    (void) slots;
+    (void) count;
+    (void) launch;
+    vm->node_builtin_loader = mal_node_module_get_builtin;
+}
 
 #endif

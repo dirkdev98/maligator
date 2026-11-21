@@ -562,6 +562,12 @@ void mal_host_install_maligator_internal_http(
     // Handlers receive Requests and the native paths build Responses either way.
     if (mal_web_fetch_ensure(vm) == nullptr) return;
     for (i32 i = 0; i < count; i++) {
+        if (strcmp(slots[i].name, "watching") == 0) {
+            // Only a whole-program build proves that no declaration watches.
+            vm->globals[slots[i].slot] = mal_value_new_boolean(
+                slots[i].data == nullptr || strcmp(slots[i].data, "false") != 0);
+            continue;
+        }
         MalNativeFunctionCallback callback = nullptr;
         i32 length = 1;
         if (strcmp(slots[i].name, "listen") == 0) callback = http_listen;

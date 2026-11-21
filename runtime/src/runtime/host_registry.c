@@ -29,6 +29,7 @@
 #include "node_https.h"
 #include "node_http2.h"
 #include "node_inspector.h"
+#include "node_module.h"
 #include "node_module_api.h"
 #include "node_dgram.h"
 #include "node_net.h"
@@ -113,6 +114,8 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_http2);
     MATCH_INSTALLER(mal_host_install_node_inspector);
     MATCH_INSTALLER(mal_host_install_node_module);
+    MATCH_INSTALLER(mal_host_install_node_builtin_loader);
+    MATCH_INSTALLER(mal_host_install_node_installed_builtins);
     MATCH_INSTALLER(mal_host_install_node_dgram);
     MATCH_INSTALLER(mal_host_install_node_net);
     MATCH_INSTALLER(mal_host_install_node_os);

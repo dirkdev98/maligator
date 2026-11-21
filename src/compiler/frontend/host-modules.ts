@@ -68,6 +68,16 @@ export function hostInstallerSymbol(specifier: string): string {
  */
 export const PROCESS_INSTALLER_SYMBOL = "mal_host_install_process";
 
+/**
+ * Lets `process.getBuiltinModule` load any builtin by name. It links every `node:*`
+ * installer, so a program retains it only for a module name the compiler cannot see.
+ */
+export const NODE_BUILTIN_LOADER_INSTALLER = "mal_host_install_node_builtin_loader";
+
+/** Lets `process.getBuiltinModule` return the builtins the program installed. */
+export const NODE_INSTALLED_BUILTINS_INSTALLER =
+	"mal_host_install_node_installed_builtins";
+
 /** Installer shared by the free `Buffer` global and the `node:buffer` module. */
 export const BUFFER_INSTALLER_SYMBOL = hostInstallerSymbol("node:buffer");
 

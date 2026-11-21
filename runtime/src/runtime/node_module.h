@@ -64,3 +64,18 @@ bool mal_node_validate_integer(
 void mal_node_throw_errno(
     MalVm *vm, int err, const char *syscall, const char *path, const char *dest);
 MalValue mal_node_module_get_builtin(MalVm *vm, MalString *name);
+
+/**
+ * Let `process.getBuiltinModule` and `require` load any builtin by name. Retaining this
+ * installer links every `node:*` installer, so the compiler retains it only for a
+ * module name it cannot see.
+ */
+void mal_host_install_node_builtin_loader(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);
+
+/**
+ * Let `process.getBuiltinModule` return the modules this isolate installed. The
+ * compiler retains it with the installer of each module a literal name loads.
+ */
+void mal_host_install_node_installed_builtins(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);

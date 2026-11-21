@@ -41,4 +41,10 @@ declare module "maligator:internal/http" {
 	export const assetProxy: (
 		handle: Assets.EmbeddedFile | Assets.EmbeddedDirectory,
 	) => string | undefined;
+	/**
+	 * Whether a declaration may be served from its watcher. A whole-program build knows
+	 * its declarations, so the compiler folds this and drops forwarding when none
+	 * watches.
+	 */
+	export const watching: boolean;
 }

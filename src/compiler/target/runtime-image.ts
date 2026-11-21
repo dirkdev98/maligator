@@ -3717,6 +3717,15 @@ export function buildVerifiedRuntimeProducts<T>(
 	// Portable cleanup replaces positions and control transfers. A shared native
 	// body keeps its original control flow and must relocate positions independently.
 	const functions = [...runtimeFunctions, ...nativeBodies];
+	const nativeProgram = sharedTarget ? program : native?.program;
+	const executedFunctions = [
+		...runtimeFunctions.filter(
+			(_, index) => program.functions[index]!.unreachable !== true,
+		),
+		...nativeBodies.filter(
+			(_, index) => nativeProgram!.functions[index]!.unreachable !== true,
+		),
+	];
 	const sourcePositions = retainExecutionSourcePositions(program, functions);
 	const runtime: RuntimeImage = {
 		entrypointPath: context.data.entrypointPath,
@@ -3744,7 +3753,7 @@ export function buildVerifiedRuntimeProducts<T>(
 				),
 			}),
 		),
-		hostInstalls: buildHostInstalls(context, functions),
+		hostInstalls: buildHostInstalls(context, executedFunctions),
 		files,
 		sourcePositions,
 		...(context.data.moduleLinks === undefined
@@ -3864,11 +3873,18 @@ export function lowerExecutionToRuntimeImage(program: ExecutionProgram): Runtime
 	);
 }
 
+/**
+ * The installers and slots the image's code can read. `functions` holds only bodies
+ * some running code can create: a body kept as an inlining or guard source never
+ * runs, so its reads must not link a host component.
+ */
 function buildHostInstalls(
 	context: CoreCompilationContext,
-	functions: Array<BytecodeFunction>,
+	functions: ReadonlyArray<BytecodeFunction>,
 ): RuntimeImage["hostInstalls"] {
-	// Later images read published slots, so a re-exported host export stays installed.
+	// Only a linked multi-image build publishes module exports. A later image may read
+	// a published slot, so a re-exported host export stays installed there; a
+	// whole-program image keeps only the slots its own code reads.
 	const readGlobalSlots = new Set<number>(
 		(context.data.moduleLinks?.exports ?? []).flatMap((link) =>
 			link.kind === "binding" ? [link.slot] : [],

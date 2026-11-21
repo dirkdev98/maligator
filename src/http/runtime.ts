@@ -7,7 +7,7 @@ import type {
 	Server,
 } from "maligator:http";
 import { fetch } from "maligator:internal/fetch";
-import { assetProxy, assetResponse, listen } from "maligator:internal/http";
+import { assetProxy, assetResponse, listen, watching } from "maligator:internal/http";
 
 export { fetch };
 
@@ -114,9 +114,13 @@ export function serveAsset(
 		throw new TypeError("serveAsset option 'fallback' must be a member path");
 	if (!isPatternList(immutable))
 		throw new TypeError("serveAsset option 'immutable' must be an array of patterns");
-	// A watched declaration's files come from its dev server while one runs.
-	const target = assetProxy(asset);
-	if (target !== undefined) return proxy(target);
+	// A watched declaration's files come from its dev server while one runs. Forwarding
+	// reaches the fetch client, TLS and decompression, so a program whose declarations
+	// never watch must not reach it: `watching` folds to false there.
+	if (watching) {
+		const target = assetProxy(asset);
+		if (target !== undefined) return proxy(target);
+	}
 	const route: AssetRoute = Object.freeze({
 		handle: asset,
 		prefix,

@@ -1166,6 +1166,18 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 				"(handle: Assets.EmbeddedFile | Assets.EmbeddedDirectory) => string | undefined",
 				"The URL of the watcher a handle's files come from in this command.",
 			),
+			{
+				name: "watching",
+				type: boolean,
+				description:
+					"Whether a declaration may be served from its watcher. A whole-program build knows its declarations, so the compiler folds this and drops forwarding when none watches.",
+				contract: {
+					phase: "runtime",
+					value: "runtime-data",
+					identity: "module",
+					effects: NO_EFFECT_SUMMARY,
+				},
+			},
 		],
 	},
 	{

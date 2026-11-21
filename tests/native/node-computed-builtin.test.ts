@@ -15,6 +15,7 @@ const fixtures = {
 	created: "tests/local/node-computed-create-require.mjs",
 	selective: "tests/local/node-link-cjs-computed.cjs",
 	eval: "tests/local/node-computed-builtin-eval.cjs",
+	literal: "tests/local/node-literal-builtin.mjs",
 };
 const outDir = mkdtempSync(join(tmpdir(), "mal-node-computed-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
@@ -74,4 +75,6 @@ describe("computed native builtin require", () => {
 	it("loads a computed builtin without a process global", () => compare("selective", []));
 	it("keeps the loader when eval exposes the wrapper require", () =>
 		compare("eval", ["node:os"]));
+	it("loads literal getBuiltinModule names without the builtin loader", () =>
+		compare("literal", []));
 });
