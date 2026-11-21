@@ -453,9 +453,19 @@ describe("CLI application images", () => {
 		expect(images.released).toEqual([image]);
 	});
 
-	it("terminates and releases an image when evaluation fails", async () => {
+	it("reports the original application stack once when evaluation fails", async () => {
 		const images = imageHarness();
 		const image = descriptor("/broken.mts");
+		const error = new Error("evaluation failed");
+		error.stack = "Error: evaluation failed\n    at start (/broken.mts:3:5)";
+		const exit: ApplicationExit = {
+			id: 1,
+			code: 1,
+			reason: "error",
+			error,
+			hasResult: false,
+		};
+		const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
 		const run = runCommand(
 			{ kind: "run", verbose: false, profile: false, programArgs: [] },
 			{
@@ -473,14 +483,19 @@ describe("CLI application images", () => {
 				applications: images.host,
 			},
 		);
-		const assertion = expect(run).rejects.toThrow("evaluation failed");
-		const launch = await images.launches.next();
-		launch.evaluated.reject(new Error("evaluation failed"));
-		await launch.terminating.promise;
-		launch.exit.resolve(completed);
-		launch.stop.resolve(completed);
-		await assertion;
-		expect(images.released).toEqual([image]);
+		try {
+			const launch = await images.launches.next();
+			launch.evaluated.reject(error);
+			launch.exit.resolve(exit);
+			await launch.terminating.promise;
+			launch.stop.resolve(exit);
+			expect(await run).toMatchObject({ status: 1 });
+			const output = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+			expect(output.match(/at start \(\/broken\.mts:3:5\)/g)).toHaveLength(1);
+			expect(images.released).toEqual([image]);
+		} finally {
+			stderr.mockRestore();
+		}
 	});
 
 	it("joins and releases the image even if terminate reports a failure", async () => {
@@ -535,7 +550,7 @@ describe("CLI application images", () => {
 			restoreOutcome: "watch-close-failure",
 		},
 		{
-			name: "retains a newer application while deferred natural-exit cleanup joins the old instance",
+			name: "reports one stack and retains a newer application while joining a crashed instance",
 			restoreOutcome: "natural-exit",
 		},
 	])("$name", async ({ restoreOutcome }) => {
@@ -651,13 +666,22 @@ describe("CLI application images", () => {
 			await original.terminating.promise;
 			expect(watched.at(-1)).toContain(leaf);
 			if (restoreOutcome === "natural-exit") {
-				original.exit.resolve(completed);
+				const error = new Error("application crashed");
+				error.stack = "Error: application crashed\n    at update (/fixture.mts:7:9)";
+				const crash: ApplicationExit = {
+					id: 1,
+					code: 1,
+					reason: "error",
+					error,
+					hasResult: false,
+				};
+				original.exit.resolve(crash);
 				await new Promise<void>((resolve) => {
 					setImmediate(resolve);
 				});
 				wake();
 				await naturalExitObserved.promise;
-				original.stop.resolve(completed);
+				original.stop.resolve(crash);
 				const latest = await images.launches.next();
 				latest.evaluated.resolve();
 				expect(await active.next()).toBe(2);
@@ -668,6 +692,9 @@ describe("CLI application images", () => {
 				latest.exit.resolve(completed);
 				await dev;
 				expect(images.released).toEqual([lastGood, stale]);
+				expect(messages.join("").match(/at update \(\/fixture\.mts:7:9\)/g)).toHaveLength(
+					1,
+				);
 				return;
 			}
 			writeFileSync(leaf, "export const value = 100;\n");

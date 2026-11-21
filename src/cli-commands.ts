@@ -59,7 +59,7 @@ import {
 	volumeFreeBytes,
 } from "./cache-management.ts";
 import { maligatorCacheDirectory, MaligatorCacheRootError } from "./cache-root.ts";
-import { BUILD_CONFIG_NAME, initProject, InitError } from "./cli-init.ts";
+import { BUILD_CONFIG_NAME, initProject } from "./cli-init.ts";
 import { executeBinary, executeBinaryReported } from "./cli-run.ts";
 import type { RunOutcome } from "./cli-run.ts";
 import { CliUsageError, MALIGATOR_VERSION, formatCliHelp, parseCliArgs } from "./cli.ts";
@@ -669,8 +669,13 @@ function prepareCommandState(
 	const frontendSession = context.frontendSession ?? new FrontendCompilationSession();
 	frontendSession.useCacheDirectory();
 	const validatePreparedInputs = () => validateConfig();
-	const { toolchain, plan } = reporter.phase("Resolve toolchain", () =>
-		selectToolchain(command, buildConfig, context),
+	const { toolchain, plan } = reporter.phase(
+		"Resolve toolchain",
+		() => selectToolchain(command, buildConfig, context),
+		({ toolchain }) =>
+			toolchain === undefined
+				? undefined
+				: `toolchain cache ${toolchain.cacheHit ? "hit" : "miss"}`,
 	);
 	if (toolchain !== undefined) {
 		reporter.detail("Target", toolchain.target);
@@ -682,7 +687,6 @@ function prepareCommandState(
 			"Rust compiler",
 			`${formatToolCommand(toolchain.tools.rustc)} (${toolchain.tools.rustc.version})`,
 		);
-		reporter.detail("Toolchain cache", toolchain.cacheHit ? "hit" : "miss");
 	}
 	for (const warning of plan?.warnings ?? []) reporter.warning(warning);
 	const libraries =
@@ -1117,13 +1121,12 @@ function prepareCommandState(
 			reporter.detail("Development images", wirePaths.join(", "));
 			const runnerKey = `${toolchain!.fingerprint}:${derivation.cacheSuffix}:${libraries?.identity ?? ""}`;
 			const retainedRunner = context.developmentCache?.runners.get(runnerKey);
+			const useRetainedRunner =
+				retainedRunner !== undefined && existsSync(retainedRunner);
 			const binaryPath = reporter.phase(
 				"Prepare development runtime",
 				() => {
-					if (retainedRunner !== undefined && existsSync(retainedRunner)) {
-						reporter.detail("Development runtime cache", "retained");
-						return retainedRunner;
-					}
+					if (useRetainedRunner) return retainedRunner;
 					const built = buildDevelopmentRunner(
 						nativeContext,
 						verbose,
@@ -1134,15 +1137,17 @@ function prepareCommandState(
 					return built;
 				},
 				() => {
+					if (useRetainedRunner) return "development runtime cache hit";
 					const caches = (["runtime", "rust", "binary"] as const)
 						.map((artifact) =>
 							nativeCache.has(artifact)
-								? `${artifact} ${nativeCache.get(artifact) ? "hit" : "miss"}`
+								? `${artifact} cache ${nativeCache.get(artifact) ? "hit" : "miss"}`
 								: undefined,
 						)
 						.filter((value) => value !== undefined);
 					return caches.join(" · ");
 				},
+				{ elapsed: !useRetainedRunner },
 			);
 			reporter.complete("Ready", binaryPath, false);
 			return {
@@ -1261,13 +1266,14 @@ function prepareCommandState(
 				const caches = (["runtime", "rust", "binary"] as const)
 					.map((artifact) =>
 						nativeCache.has(artifact)
-							? `${artifact} ${nativeCache.get(artifact) ? "hit" : "miss"}`
+							? `${artifact} cache ${nativeCache.get(artifact) ? "hit" : "miss"}`
 							: undefined,
 					)
 					.filter((value) => value !== undefined);
 				caches.push(`${generatedObjectHits}/${generatedObjects} objects cached`);
 				return caches.join(" · ");
 			},
+			{ elapsed: true },
 		);
 		const preparedProfile = command.profile
 			? reporter.phase("Prepare profile metadata", () =>
@@ -1350,20 +1356,19 @@ interface ApplicationRunOutcome extends RunOutcome {
 	applicationExit?: ApplicationExit;
 }
 
+function formatApplicationError(error: unknown): string {
+	return error instanceof Error ? error.stack || error.toString() : String(error);
+}
+
 function reportRunOutcome(outcome: ApplicationRunOutcome): void {
 	if (outcome.applicationExit?.reason === "error") {
-		const error = outcome.applicationExit.error;
 		writeStderr(
-			`Application error: ${error instanceof Error ? error.message : String(error)}`,
+			`Application error: ${formatApplicationError(outcome.applicationExit.error)}`,
 		);
 	}
-	if (outcome.status === 0) {
-		writeStderr("Exited with code 0");
-		return;
-	}
-	writeStderr(
-		`Exited with ${outcome.signal ? `signal ${outcome.signal}` : `code ${outcome.status ?? "unknown"}`}`,
-	);
+	if (outcome.signal !== undefined) writeStderr(`Exited with signal ${outcome.signal}`);
+	else if (outcome.status !== undefined && outcome.status !== 0)
+		writeStderr(`Exited with code ${outcome.status}`);
 }
 
 /** Compile, link, and execute one parsed `run` command. */
@@ -1373,8 +1378,8 @@ export async function runCommand(
 ): Promise<ApplicationRunOutcome> {
 	const result =
 		context.compiler === undefined
-			? prepareCommand(command, context)
-			: await context.compiler.prepare(command);
+			? prepareCommand(command, context, true)
+			: await context.compiler.prepare(command, { compact: true });
 	const producers = new CommandProducers("run", writeStderr);
 	try {
 		await producers.prepare(result.embedDeclarations ?? []);
@@ -1400,7 +1405,8 @@ async function runPreparedCommand(
 	) {
 		const application = launchApplication(result, command.programArgs, context);
 		try {
-			await application.evaluated;
+			// An error or explicit exit during evaluation also settles the joined exit.
+			await application.evaluated.catch(() => {});
 			const outcome = await application.closed!;
 			reportRunOutcome(outcome);
 			return outcome;
@@ -1725,6 +1731,7 @@ export async function devCommand(
 	let childGeneration = 0;
 	let activeBuild: BuildCommandResult | undefined;
 	let activeGeneration = 0;
+	const applicationEvaluationFailed = new Error("Application evaluation failed");
 	const spawnApplication = (build: BuildCommandResult, generation: number) => {
 		activeProfile = nextProfile(build);
 		// The next generation adopts the listening sockets this one leaves, so a
@@ -1780,6 +1787,10 @@ export async function devCommand(
 						...(exit.reason === "error" ? { error: String(exit.error) } : {}),
 					}),
 		});
+		if (exit?.reason === "error") {
+			// Status snapshots repeat past events, so render the stack on its own line.
+			writeStderr(`Application error: ${formatApplicationError(exit.error)}`);
+		}
 		child = undefined;
 		finalizeActiveProfile();
 	};
@@ -1904,6 +1915,7 @@ export async function devCommand(
 				if (launched !== undefined) await stopApplication();
 				restoreActiveApplication();
 				if (!isCurrent()) return false;
+				if (launched?.exit?.()?.reason === "error") throw applicationEvaluationFailed;
 				throw error;
 			}
 			changed = validate();
@@ -1935,8 +1947,11 @@ export async function devCommand(
 			return true;
 		},
 		failed(error) {
-			if (error instanceof SyntaxDiagnostic && error.location !== undefined) {
-				writeStderr(renderSyntaxDiagnostic(error));
+			if (
+				error === applicationEvaluationFailed ||
+				(error instanceof SyntaxDiagnostic && error.location !== undefined)
+			) {
+				if (error instanceof SyntaxDiagnostic) writeStderr(renderSyntaxDiagnostic(error));
 				writeStderr(
 					child === undefined
 						? "Rebuild failed. Waiting for changes."
@@ -2046,9 +2061,6 @@ export async function devCommand(
 					writeStderr(
 						`Application ${status === 0 ? "stopped" : "crashed"} with code ${status}; waiting for changes.`,
 					);
-					const exit = current.exit?.();
-					if (exit?.reason === "error")
-						reportRunOutcome({ status, applicationExit: exit });
 					await stopApplication(current);
 				}
 				continue;
@@ -2472,6 +2484,8 @@ async function executeProfiledTests(
 				),
 				cacheSuffix: derivation.cacheSuffix,
 			}).binaryPath,
+		undefined,
+		{ elapsed: true },
 	);
 	const profile = reporter.phase("Prepare profile metadata", () =>
 		prepareProfile(
@@ -2596,13 +2610,12 @@ export async function runCli(
 			return;
 		}
 		if (command.kind === "init") {
-			try {
-				log.info(`Created ${initProject()}`);
-				return;
-			} catch (error) {
-				if (error instanceof InitError) commandError(`error: ${error.message}`);
-				throw error;
-			}
+			const { entry, messages } = initProject();
+			for (const message of messages) log.info(message);
+			log.info(
+				`\nNext steps\n  maligator run ${entry}\n  maligator dev\n  maligator test`,
+			);
+			return;
 		}
 		if (command.kind === "doctor") {
 			const report = inspectToolchain({

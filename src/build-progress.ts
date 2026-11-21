@@ -1,5 +1,9 @@
 import { performance } from "node:perf_hooks";
-import { formatCommandDuration } from "./command-progress.ts";
+import {
+	clearProgressLine,
+	formatCommandDuration,
+	startElapsedTicker,
+} from "./command-progress.ts";
 import type { CompilationPhase } from "./compiler-service.ts";
 
 function writeLine(stream: NodeJS.WriteStream, message: string): void {
@@ -13,6 +17,7 @@ export class BuildReporter {
 	readonly #startedAt = performance.now();
 	readonly #checkpoint: (() => void) | undefined;
 	readonly #onPhase: ((phase: CompilationPhase) => void) | undefined;
+	#elapsed: { label: string; stop?: () => boolean; shown: boolean } | undefined;
 
 	constructor(
 		verbose: boolean,
@@ -39,12 +44,27 @@ export class BuildReporter {
 		label: string,
 		run: () => Result,
 		detail?: (result: Result) => string | undefined,
+		options?: { elapsed: boolean },
 	): Result {
 		const startedAt = this.#startPhase(label);
+		let shown = false;
 		try {
-			return this.#completePhase(label, startedAt, run(), detail);
+			const stop =
+				options?.elapsed === true && !this.verbose
+					? startElapsedTicker(label)
+					: undefined;
+			if (stop !== undefined) this.#elapsed = { label, stop, shown: false };
+			let result: Result;
+			try {
+				result = run();
+			} finally {
+				const elapsed = this.#elapsed;
+				this.#elapsed = undefined;
+				shown = (elapsed?.stop?.() ?? false) || elapsed?.shown === true;
+			}
+			return this.#completePhase(label, startedAt, result, detail, shown);
 		} catch (error) {
-			return this.#failPhase(label, startedAt, error);
+			return this.#failPhase(label, startedAt, error, shown);
 		}
 	}
 
@@ -81,6 +101,7 @@ export class BuildReporter {
 		startedAt: number,
 		result: Result,
 		detail?: (result: Result) => string | undefined,
+		shown = false,
 	): Result {
 		this.#checkpoint?.();
 		this.#onPhase?.({
@@ -88,7 +109,7 @@ export class BuildReporter {
 			state: "completed",
 			durationMs: performance.now() - startedAt,
 		});
-		if (this.compact) return result;
+		if (this.compact && !shown) return result;
 		const elapsed = formatCommandDuration(performance.now() - startedAt);
 		const suffix = detail?.(result);
 		if (this.verbose) {
@@ -97,6 +118,7 @@ export class BuildReporter {
 				`[+${formatCommandDuration(performance.now() - this.#startedAt)}] ${label} completed in ${elapsed}${suffix === undefined ? "" : ` · ${suffix}`}`,
 			);
 		} else {
+			if (shown) process.stderr.write(`${clearProgressLine}  ${label}... `);
 			process.stderr.write(
 				`done in ${elapsed}${suffix === undefined ? "" : ` · ${suffix}`}\n`,
 			);
@@ -104,13 +126,13 @@ export class BuildReporter {
 		return result;
 	}
 
-	#failPhase(label: string, startedAt: number, error: unknown): never {
+	#failPhase(label: string, startedAt: number, error: unknown, shown = false): never {
 		this.#onPhase?.({
 			label,
 			state: "failed",
 			durationMs: performance.now() - startedAt,
 		});
-		if (this.compact) throw error;
+		if (this.compact && !shown) throw error;
 		const elapsed = formatCommandDuration(performance.now() - startedAt);
 		if (this.verbose) {
 			writeLine(
@@ -118,6 +140,7 @@ export class BuildReporter {
 				`[+${formatCommandDuration(performance.now() - this.#startedAt)}] ${label} failed after ${elapsed}`,
 			);
 		} else {
+			if (shown) process.stderr.write(`${clearProgressLine}  ${label}... `);
 			process.stderr.write(`failed after ${elapsed}\n`);
 		}
 		throw error;
@@ -135,7 +158,15 @@ export class BuildReporter {
 	}
 
 	warning(message: string): void {
+		const elapsed = this.#elapsed;
+		if (elapsed !== undefined) {
+			elapsed.shown = (elapsed.stop?.() ?? false) || elapsed.shown;
+			elapsed.stop = undefined;
+			if (elapsed.shown || !this.compact) process.stderr.write(clearProgressLine);
+		}
 		writeLine(process.stderr, `warning: ${message}`);
+		if (elapsed !== undefined && !this.compact && !elapsed.shown)
+			process.stderr.write(`  ${elapsed.label}... `);
 	}
 
 	complete(

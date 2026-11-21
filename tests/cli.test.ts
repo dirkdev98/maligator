@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import ts from "typescript-v6-api";
 import { describe, expect, it, vi } from "vitest";
 import { matchAssetPath } from "../src/assets.ts";
 import * as cacheManagement from "../src/cache-management.ts";
@@ -22,7 +23,7 @@ import {
 	runCommand,
 } from "../src/cli-commands.ts";
 import type { BuildCommandResult } from "../src/cli-commands.ts";
-import { BUILD_CONFIG_NAME, detectInitialEntry, initProject } from "../src/cli-init.ts";
+import { BUILD_CONFIG_NAME } from "../src/cli-init.ts";
 import { CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "../src/cli.ts";
 import type { CompilationOptions } from "../src/compiler-service.ts";
 import {
@@ -1003,28 +1004,73 @@ describe("development coordinator", () => {
 describe("maligator init", () => {
 	it("selects the first existing conventional entry", () => {
 		const dir = tmpdir();
-		mkdirSync(path.join(dir, "src"));
-		writeFileSync(path.join(dir, "src/main.ts"), "");
-		writeFileSync(path.join(dir, "index.ts"), "");
-		expect(detectInitialEntry(dir)).toBe("src/main.ts");
+		try {
+			mkdirSync(path.join(dir, "src"));
+			writeFileSync(path.join(dir, "src/main.ts"), "export const value = 7;\n");
+			writeFileSync(path.join(dir, "index.ts"), "");
+			const result = invokeCli(["init"], dir);
+			expect(result.status, result.stderr).toBe(0);
+			expect(result.stdout).toMatch(/skipped.*src\/main\.ts/i);
+			expect(readFileSync(path.join(dir, BUILD_CONFIG_NAME), "utf8")).toContain(
+				"src/main.ts",
+			);
+			expect(readFileSync(path.join(dir, "src/main.ts"), "utf8")).toBe(
+				"export const value = 7;\n",
+			);
+			expect(existsSync(path.join(dir, "src/index.ts"))).toBe(false);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
-	it("creates an executable build config from the command", () => {
+	it("preserves existing build settings and package type", () => {
 		const dir = tmpdir();
-		const result = invokeCli(["init"], dir);
-		expect(result.status).toBe(0);
-		const configPath = path.join(dir, BUILD_CONFIG_NAME);
-		expect(result.stdout).toContain(configPath);
-		expect(readFileSync(configPath, "utf-8")).toBe(
-			`import { defineBuild } from "@maligator/cli";\n\nexport default defineBuild({\n\tentry: "src/index.ts",\n});\n`,
-		);
+		try {
+			const configPath = path.join(dir, BUILD_CONFIG_NAME);
+			const packagePath = path.join(dir, "package.json");
+			const config = 'export default { entry: "entry.ts" };\n';
+			const manifest = '{"type":"commonjs","private":true}\n';
+			writeFileSync(configPath, config);
+			writeFileSync(packagePath, manifest);
+			const result = invokeCli(["init"], dir);
+			expect(result.status, result.stderr).toBe(0);
+			expect(result.stdout).toMatch(/skipped.*maligator\.build\.ts/i);
+			expect(result.stdout).toMatch(/skipped.*package\.json/i);
+			expect(readFileSync(configPath, "utf8")).toBe(config);
+			expect(readFileSync(packagePath, "utf8")).toBe(manifest);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
-	it("refuses to overwrite an existing config", () => {
+	it("extends existing project metadata without changing its settings", () => {
 		const dir = tmpdir();
-		initProject(dir);
-		const result = invokeCli(["init"], dir);
-		expect(result.status).toBe(1);
-		expect(result.stderr).toContain("build config already exists");
+		try {
+			const packagePath = path.join(dir, "package.json");
+			const tsconfigPath = path.join(dir, "tsconfig.json");
+			writeFileSync(packagePath, '{"name":"garden","private":true}\n');
+			writeFileSync(
+				tsconfigPath,
+				'{\n  "compilerOptions": {\n    // Editor types\n    "types": ["node",],\n  },\n}\n',
+			);
+			const result = invokeCli(["init"], dir);
+			expect(result.status, result.stderr).toBe(0);
+			expect(JSON.parse(readFileSync(packagePath, "utf8"))).toEqual({
+				name: "garden",
+				private: true,
+				type: "module",
+			});
+			const tsconfig = readFileSync(tsconfigPath, "utf8");
+			expect(tsconfig).toContain("// Editor types");
+			const parsed = ts.parseConfigFileTextToJson(tsconfigPath, tsconfig);
+			expect(parsed.error).toBeUndefined();
+			expect(parsed.config).toMatchObject({
+				compilerOptions: { types: ["node", "@maligator/cli"] },
+			});
+			expect(invokeCli(["init"], dir).status).toBe(0);
+			expect(readFileSync(tsconfigPath, "utf8")).toBe(tsconfig);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

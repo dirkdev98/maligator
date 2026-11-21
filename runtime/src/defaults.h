@@ -105,14 +105,9 @@ typedef size_t usize;
 #define MAL_TEMPORAL 1
 #endif
 
-// Whether this build includes the node host built-in surface (`node:path`,
-// `node:fs`, `node:child_process`, `node:crypto`). Unlike the features above this
-// is OPT-IN: default OFF, the build config sets `-DMAL_NODE=1` (see build-flags.ts)
-// when `surface.node` is true. Off by default because it is a host-capability
-// surface (filesystem, process spawning) most builds should not expose. The host
-// exports themselves are not implemented yet — this define exists so the C archive
-// fingerprint (buildConfigCacheSuffix) and the eventual host installs agree on the
-// axis. Not tied to any Rust Cargo feature (node adds no Rust deps).
+// The build config enables the Node host surface with `surface.node`. Keep it
+// opt-in because it exposes host capabilities such as filesystem access and
+// process spawning.
 #ifndef MAL_NODE
 #define MAL_NODE 0
 #endif

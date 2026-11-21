@@ -16,6 +16,18 @@ Check resolved `CC`/`CXX`, `PATH`, Rust, and the requested target against [the r
 
 If the editor cannot resolve `maligator:workers`, load [the package types](/guides/typescript). If the compiler rejects a `node:` or Web API, enable its surface and check [Compatibility](/compatibility). Enabling a surface does not add an unsupported API. `maligator:http` uses `surface.webPlatform`.
 
+## Compile error locations
+
+Syntax errors, invalid JSON modules, and unresolved imports show `file:line:column` when the compiler has a source location. The next line shows the source, with a caret under the token or import specifier to check.
+
+## Runtime stack traces
+
+For an uncaught error, start with the first stack frame in your code. The frame gives the function and its original source path, line, and column. Read the following frames to see the callers. Use `maligator run --verbose` when you also need build diagnostics.
+
+## Edits are slow to trigger a rebuild
+
+`dev` watches filesystem events where available and polls file identities as a fallback. On a filesystem that misses events, such as some mounted volumes, a rebuild starts after the next scan detects the change. Run `maligator dev --verbose` to see which watcher the CLI selected. Check that the file is an entry, a dependency, or the build config.
+
 ## Eval or RegExp is disabled
 
 `eval is disabled in this build` means a dynamic compilation call ran under the default `engine.eval: false`. Set `engine.eval: true` to embed the runtime compiler, or `"compile-check"` to reject statically visible calls during the build instead. `RegExp is disabled by your build config` lists the regular expressions in an `engine.regexp: false` build; remove the setting or the expressions. See [engine choices](/guides/build-configuration).
@@ -39,6 +51,10 @@ A declaration the compiler rejects names its file and line: pass a string litera
 ## HTTP startup fails
 
 Use an enabled Web or Node surface, a valid handler, and an available port. `serve` throws when it cannot bind, naming the address and the reason, such as an address already in use. Bind `127.0.0.1` for local testing and read `server.url` for the address it reached. See [Serve HTTP](/guides/http).
+
+## HTTP bodies and buffering
+
+`serve` returns HTTP 413 when an incoming request body exceeds 16 MiB. It buffers response bodies in full before writing them, including responses backed by a `ReadableStream`.
 
 ## Inspect cache usage
 

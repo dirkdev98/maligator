@@ -1,6 +1,78 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { cleanTestEnvironment } from "../scripts/test-environment.ts";
 import { runEnv } from "../src/build-flags.ts";
 import { executeBinary, executeBinaryReported } from "../src/cli-run.ts";
+
+const cliEntry = resolve("src/index.ts");
+const buildTimeoutMs = 120_000;
+
+function invokeCli(cwd: string, ...args: Array<string>) {
+	return spawnSync(process.execPath, [cliEntry, ...args], {
+		cwd,
+		env: cleanTestEnvironment(),
+		encoding: "utf8",
+		timeout: buildTimeoutMs,
+	});
+}
+
+it(
+	"initializes an empty project that runs with only application output",
+	() => {
+		const directory = mkdtempSync(join(tmpdir(), "mal-cli-init-run-"));
+		try {
+			const init = invokeCli(directory, "init");
+			expect(init.status, init.stderr).toBe(0);
+			expect(init.stdout).toContain("maligator run src/index.ts");
+			expect(init.stdout).toContain("maligator dev");
+			expect(init.stdout).toContain("maligator test");
+			expect(
+				JSON.parse(readFileSync(join(directory, "package.json"), "utf8")),
+			).toMatchObject({
+				type: "module",
+			});
+			const tsconfig = JSON.parse(
+				readFileSync(join(directory, "tsconfig.json"), "utf8"),
+			) as {
+				compilerOptions: { types: Array<string> };
+			};
+			expect(tsconfig.compilerOptions.types).toContain("@maligator/cli");
+			const run = invokeCli(directory, "run");
+			expect(run.error).toBeUndefined();
+			expect(run.status, run.stderr).toBe(0);
+			expect(run.stdout.trim()).toBe("Hello, Maligator");
+			expect(run.stderr).toBe("");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	},
+	buildTimeoutMs + 5000,
+);
+
+it(
+	"reports a failed run and its application stack once",
+	() => {
+		const directory = mkdtempSync(join(tmpdir(), "mal-cli-error-run-"));
+		try {
+			writeFileSync(
+				join(directory, "entry.mts"),
+				'function fail() {\n  throw new Error("fixture failed");\n}\nfail();\n',
+			);
+			const run = invokeCli(directory, "run", "entry.mts");
+			expect(run.error).toBeUndefined();
+			expect(run.status, run.stderr).toBe(1);
+			expect(run.stderr).toMatch(/Exited with .*1/);
+			expect(run.stderr).toMatch(/at fail .*entry\.mts:2:\d+/);
+			expect(run.stderr.match(/fixture failed/g)).toHaveLength(1);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	},
+	buildTimeoutMs + 5000,
+);
 
 describe("executeBinary", () => {
 	it("streams successful stderr alongside stdout", async () => {

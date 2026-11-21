@@ -1,4 +1,4 @@
-Install the CLI, create an entry point, and run it from your project root. The npm launcher needs Node.js 20 or newer. The installed native CLI and the executables it produces do not need Node.js.
+Install the CLI, initialize a project, and run its entry point. The npm launcher needs Node.js 20 or newer. The installed native CLI and the executables it produces do not need Node.js.
 
 Prebuilt packages cover macOS and glibc-based Linux on arm64 and x64. Windows is not supported yet.
 
@@ -9,30 +9,22 @@ npm install --global @maligator/cli@alpha
 maligator --version
 mkdir hello-maligator
 cd hello-maligator
-npm init --yes
-npm pkg set type=module
 maligator init
 ```
 
-`init` creates `maligator.build.ts` without overwriting a config that already exists. It looks for `src/index.ts`, `src/main.ts`, `index.ts`, then `main.ts`. If none exists, it also creates `src/index.ts`.
+`init` creates a build config and uses the first entry it finds in `src/index.ts`, `src/main.ts`, `index.ts`, or `main.ts`. If it finds none, it writes a starter to `src/index.ts`. It keeps existing entry files and build configs.
 
-`"type": "module"` enables imports, exports, and top-level `await` in `.js` and `.ts` files. Keep it when following these guides, or use `.mjs` and `.mts` for individual ES modules.
+`init` adds `"type": "module"` to `package.json` when the field is missing and adds `@maligator/cli` to the TypeScript config's `compilerOptions.types`. It creates either file if needed. Use a project-local CLI installation to resolve the package declarations in your editor.
 
 For a project-local installation, use `npm install --save-dev @maligator/cli@alpha` and prefix the commands below with `npx`.
 
 ## Run an entry point
 
-Replace the starter with:
-
-{{example:hello.ts}}
-
-Save it as `src/index.ts`, then run:
-
 ```shell
-maligator run
+maligator run src/index.ts
 ```
 
-Your application prints `Hello, Maligator`. `run` builds a portable development image and executes it in a fresh VM. Ordinary profiles with Intl disabled use the runtime embedded in the distributed CLI; they do not require a local C or Rust toolchain.
+The starter prints `Hello, Maligator`. Edit `src/index.ts` to change it. You can also run `maligator run` to use the entry from the build config. `run` builds a portable development image and executes it in a fresh VM. Ordinary profiles with Intl disabled use the runtime embedded in the distributed CLI and need no local C or Rust toolchain.
 
 Run commands from this directory. Entries and config paths resolve from the working directory; Maligator does not look for configuration in parent directories.
 
