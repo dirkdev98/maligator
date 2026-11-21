@@ -2209,7 +2209,9 @@ static void mal_gc_scan_native_stack(const MalHeapCellIndex *index, uptr low, up
 #define MAL_GC_CLEARED_STACK_BYTES (16u * 1024u)
 #define MAL_GC_STACK_CLEAR_WINDOW ((usize) 256 * 1024)
 
-__attribute__((noinline)) void mal_gc_clear_unused_native_stack(void) {
+/* ASan's stack redzone would leave stale words just below the caller's frame. */
+__attribute__((noinline, no_sanitize("address")))
+void mal_gc_clear_unused_native_stack(void) {
     u8 unused[MAL_GC_CLEARED_STACK_BYTES];
     memset(unused, 0, sizeof(unused));
     __asm__ volatile("" : : "r"(unused) : "memory");
