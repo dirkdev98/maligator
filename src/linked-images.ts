@@ -12,6 +12,7 @@ import type { CompilerProducerStage } from "./compiler-cache-identity.ts";
 import type { CoreModuleInterface } from "./compiler/core/core-compilation.ts";
 import { lowerPrivateRestIteration } from "./compiler/core/core-rest-iteration.ts";
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/analyze-module-graph.ts";
+import { SOURCE_HOST_MODULES } from "./compiler/frontend/host-modules.ts";
 import type {
 	ExternalModuleInterface,
 	ModuleGraph,
@@ -227,46 +228,57 @@ export function assertStaticImageBoundary(
 }
 
 /**
- * Split `members` into one image per import cycle (or single module), ordered so
- * every image follows the images it imports from. Undefined when one member reaches
- * another through `require`, `import()` or a deferred import: only a single image
- * evaluates those edges at the right time.
+ * Split `members` into images that together evaluate them in graph order, each
+ * after the images it imports from. A component is a run of modules contiguous in
+ * evaluation order holding whole import cycles, usually one module or one cycle.
+ * Its last module reaches every other one first, so an image rooted at that module
+ * evaluates the component exactly as the whole graph does; rooting it at another
+ * member would reorder a cycle.
+ *
+ * Undefined when one member reaches another through `require`, `import()` or a
+ * deferred import, or loads a computed specifier, or when a data module or a source
+ * built-in evaluates among them: every graph that imports one of those compiles its
+ * own copy. Only a single image keeps those edges and identities.
  */
 export function moduleImageComponents(
 	graph: ModuleGraph,
 	members: ReadonlySet<string>,
 ): Array<Array<string>> | undefined {
+	const staticEdge = (kind: string) => kind === "import" || kind === "export";
 	for (const member of members) {
 		const record = graph.modules.get(member);
-		if (record === undefined) return undefined;
+		if (record === undefined || record.importType !== undefined) return undefined;
 		for (const dependency of record.dependencies) {
+			if (dependency.specifier === null && !staticEdge(dependency.kind)) return undefined;
 			if (dependency.resolvedPath === null || !members.has(dependency.resolvedPath))
 				continue;
-			if (dependency.kind !== "import" && dependency.kind !== "export") return undefined;
+			if (!staticEdge(dependency.kind)) return undefined;
 		}
 	}
-	const componentOf = new Map<string, Array<string>>();
-	for (const cycle of graph.cycles) {
-		const component = cycle.filter((module) => members.has(module));
-		if (component.length !== cycle.length) return undefined;
-		for (const module of component) componentOf.set(module, component);
-	}
-	// A component's last module in evaluation order completes after all its imports.
 	const order = graph.evaluationOrder.filter((module) => members.has(module));
+	if (order.some((module) => SOURCE_HOST_MODULES.has(module))) return undefined;
 	const position = new Map(order.map((module, index) => [module, index]));
-	const components = new Map<Array<string>, number>();
-	for (const module of order) {
-		const component = componentOf.get(module) ?? [module];
-		components.set(
-			component,
-			Math.max(components.get(component) ?? -1, position.get(module)!),
-		);
+	// Post-order places a cycle's members between its first and last position, but
+	// may interleave modules only the cycle reaches; the run covers those too.
+	const cycleEnd = new Map<string, number>();
+	for (const cycle of graph.cycles) {
+		const owned = cycle.filter((module) => members.has(module)).length;
+		if (owned === 0) continue;
+		if (owned !== cycle.length) return undefined;
+		const end = Math.max(...cycle.map((module) => position.get(module) ?? -1));
+		for (const module of cycle) cycleEnd.set(module, end);
 	}
-	return [...components]
-		.sort(([, left], [, right]) => left - right)
-		.map(([component]) =>
-			[...component].sort((left, right) => position.get(left)! - position.get(right)!),
-		);
+	const components: Array<Array<string>> = [];
+	let component: Array<string> = [];
+	let end = -1;
+	for (const [index, module] of order.entries()) {
+		component.push(module);
+		end = Math.max(end, cycleEnd.get(module) ?? index);
+		if (index < end) continue;
+		components.push(component);
+		component = [];
+	}
+	return components;
 }
 
 /** The module a package-root image publishes for the packages under `directory`. */

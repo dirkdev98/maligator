@@ -550,16 +550,23 @@ use the matched experiment workflow above for performance conclusions.
 ## DX performance exercise
 
 `npm run bench:dx -- <maligator-binary>` creates an isolated representative
-Express, Drizzle, Valibot, SQLite, and TypeScript project. It reports cold and
-warm `run` and `test` latency plus cold and cached `dev` startup and a leaf-edit
-restart. Development measurements check the application's served revision before
-and after the edit; a compiler restart message alone cannot satisfy the check.
-Use `--only run`, `--only test`, or `--only dev` for independent lanes,
-and `--fresh-cache` to give the selected project a disposable empty user cache.
-The generated project and optional fresh cache are removed afterward. Add
-`--assets` after the binary to include the deliberately slower 100-file configured-
-asset path; this is optional while development assets still require the native
-toolchain.
+Express, Drizzle, Valibot, SQLite, and TypeScript project whose application imports
+a chain of local modules. It reports cold and warm `run` and `test` latency, a
+`run` after a leaf edit, cold and cached `dev` startup, and a leaf-edit restart.
+Development measurements check the application's served revision before and after
+the edit; a compiler restart message alone cannot satisfy the check. Use
+`--only run`, `--only test`, or `--only dev` for independent lanes, and
+`--fresh-cache` to give the selected project a disposable empty user cache. The
+generated project and optional fresh cache are removed afterward; `--keep` retains
+the project. Add `--assets` after the binary to also `run` a program that reads a
+100-file directory in place through `maligator:assets`.
+
+Each sample also reports peak resident set sizes: the CLI process, which holds the
+compiler and an in-process application, descendants running another executable,
+such as the packaged development runner, and the whole process tree including
+compiler workers. The script polls `ps` every 100 ms, so the peaks are lower bounds
+and an application that exits between polls reports 0 MB. `--json-out PATH` keeps
+every sample with its output and memory.
 
 The exercise records measurements rather than enforcing machine-specific timing
 thresholds. Performance changes should compare the same binary, host, and cache

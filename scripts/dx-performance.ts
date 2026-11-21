@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import {
 	mkdirSync,
 	mkdtempSync,
@@ -19,13 +19,26 @@ interface Sample {
 	stdout: string;
 	stderr: string;
 	servedRevision?: number;
+	memory?: PeakMemory;
 }
+
+/** Peak resident set sizes in bytes, sampled while a command or development window ran. */
+interface PeakMemory {
+	/** The Maligator CLI process: the compiler, and an in-process application. */
+	cliRssBytes: number;
+	/** Descendants running another executable, such as a packaged application runner. */
+	applicationRssBytes: number;
+	/** The CLI with all of its descendants, compiler workers included. */
+	treeRssBytes: number;
+}
+
+const MEMORY_SAMPLE_MS = 100;
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const requestedBinary = process.argv[2];
 if (requestedBinary === undefined) {
 	throw new Error(
-		"usage: node scripts/dx-performance.ts <maligator-binary|--source> [--only run|test|dev] [--fresh-cache] [--assets] [--json-out PATH]",
+		"usage: node scripts/dx-performance.ts <maligator-binary|--source> [--only run|test|dev] [--fresh-cache] [--assets] [--keep] [--json-out PATH]",
 	);
 }
 const sourceMode = requestedBinary === "--source";
@@ -54,7 +67,7 @@ const persist = () => {
 	mkdirSync(path.dirname(path.resolve(output)), { recursive: true });
 	writeFileSync(
 		output,
-		`${JSON.stringify({ schemaVersion: 1, complete, failure, host: { platform: process.platform, arch: process.arch, node: process.version, cpu: os.cpus()[0]?.model }, sourceMode, selectedLane, freshCache: options.includes("--fresh-cache"), measureAssets: options.includes("--assets"), samples }, null, 2)}\n`,
+		`${JSON.stringify({ schemaVersion: 2, complete, failure, host: { platform: process.platform, arch: process.arch, node: process.version, cpu: os.cpus()[0]?.model }, sourceMode, selectedLane, freshCache: options.includes("--fresh-cache"), measureAssets: options.includes("--assets"), samples }, null, 2)}\n`,
 	);
 };
 const measureAssets = options.includes("--assets");
@@ -86,26 +99,132 @@ function linkPackages(source: string): void {
 	}
 }
 
-function invoke(name: string, args: Array<string>): Sample {
+interface ProcessRow {
+	pid: number;
+	parent: number;
+	rssBytes: number;
+	command: string;
+}
+
+/** Read asynchronously, so sampling never delays the development driver's requests. */
+async function processTable(): Promise<Array<ProcessRow>> {
+	const stdout = await new Promise<string>((resolve) => {
+		execFile("ps", ["-A", "-o", "pid=,ppid=,rss=,comm="], (error, output) => {
+			resolve(error === null ? output : "");
+		});
+	});
+	return stdout.split("\n").flatMap((line) => {
+		const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+		return match === null
+			? []
+			: [
+					{
+						pid: Number(match[1]),
+						parent: Number(match[2]),
+						rssBytes: Number(match[3]) * 1024,
+						// An exiting process is listed as `(name)`, without its directory.
+						command: path.basename(match[4]!.trim().replace(/^\((.*)\)$/, "$1")),
+					},
+				];
+	});
+}
+
+/**
+ * Poll the process tree under `root` and keep the peak of each memory class. Polling
+ * misses spikes shorter than the interval, so peaks are lower bounds; `ps` costs a
+ * few milliseconds per sample.
+ */
+function startMemorySampler(root: () => number | undefined) {
+	const peak: PeakMemory = { cliRssBytes: 0, applicationRssBytes: 0, treeRssBytes: 0 };
+	let sampling = false;
+	const sample = async () => {
+		const pid = root();
+		if (pid === undefined || sampling) return;
+		sampling = true;
+		const rows = await processTable().finally(() => {
+			sampling = false;
+		});
+		const cli = rows.find((row) => row.pid === pid);
+		if (cli === undefined) return;
+		const children = new Map<number, Array<ProcessRow>>();
+		for (const row of rows) {
+			const siblings = children.get(row.parent);
+			if (siblings === undefined) children.set(row.parent, [row]);
+			else siblings.push(row);
+		}
+		let application = 0;
+		let tree = cli.rssBytes;
+		const pending = [...(children.get(pid) ?? [])];
+		while (pending.length > 0) {
+			const row = pending.pop()!;
+			tree += row.rssBytes;
+			if (row.command !== cli.command) application += row.rssBytes;
+			pending.push(...(children.get(row.pid) ?? []));
+		}
+		peak.cliRssBytes = Math.max(peak.cliRssBytes, cli.rssBytes);
+		peak.applicationRssBytes = Math.max(peak.applicationRssBytes, application);
+		peak.treeRssBytes = Math.max(peak.treeRssBytes, tree);
+	};
+	const timer = setInterval(() => void sample(), MEMORY_SAMPLE_MS);
+	return {
+		/** The peaks since the last window, after which the next window starts. */
+		window(): PeakMemory {
+			const result = { ...peak };
+			peak.cliRssBytes = 0;
+			peak.applicationRssBytes = 0;
+			peak.treeRssBytes = 0;
+			return result;
+		},
+		stop(): void {
+			clearInterval(timer);
+		},
+	};
+}
+
+async function invoke(name: string, args: Array<string>): Promise<Sample> {
 	progress.detail(`${name} started`);
 	const startedAt = performance.now();
-	const result = spawnSync(binary, [...argumentPrefix, ...args], {
+	const child = spawn(binary, [...argumentPrefix, ...args], {
 		cwd: project,
-		encoding: "utf-8",
 		env: childEnvironment,
-		maxBuffer: 32 * 1024 * 1024,
-		timeout: 180_000,
-		killSignal: "SIGKILL",
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	const sampler = startMemorySampler(() => child.pid);
+	let stdout = "";
+	let stderr = "";
+	child.stdout.setEncoding("utf-8");
+	child.stderr.setEncoding("utf-8");
+	child.stdout.on("data", (chunk: string) => {
+		stdout += chunk;
+	});
+	child.stderr.on("data", (chunk: string) => {
+		stderr += chunk;
+	});
+	const timeout = setTimeout(() => child.kill("SIGKILL"), 180_000);
+	let memory: PeakMemory | undefined;
+	const status = await new Promise<number | null>((resolve, reject) => {
+		child.once("error", reject);
+		child.once("exit", () => {
+			memory = sampler.window();
+		});
+		child.once("close", (code) => resolve(code));
+	}).finally(() => {
+		clearTimeout(timeout);
+		sampler.stop();
 	});
 	const durationMs = performance.now() - startedAt;
-	if (result.status !== 0) {
-		const diagnostics = `${result.stdout}\n${result.stderr}`;
-		throw new Error(
-			`${name} exited with ${result.status}:\n${diagnostics.slice(-24_000)}`,
-		);
+	if (status !== 0) {
+		const diagnostics = `${stdout}\n${stderr}`;
+		throw new Error(`${name} exited with ${status}:\n${diagnostics.slice(-24_000)}`);
 	}
 	progress.detail(`${name} completed in ${(durationMs / 1000).toFixed(1)}s`);
-	const sample = { name, durationMs, stdout: result.stdout, stderr: result.stderr };
+	const sample: Sample = {
+		name,
+		durationMs,
+		stdout,
+		stderr,
+		...(memory === undefined ? {} : { memory }),
+	};
 	samples.push(sample);
 	persist();
 	return sample;
@@ -121,6 +240,7 @@ async function developmentSamples(
 		[...argumentPrefix, "dev", "dev-app.mts", "--config", "maligator.build.mts"],
 		{ cwd: project, env: childEnvironment },
 	);
+	const sampler = startMemorySampler(() => driver.pid);
 	let result: Array<Sample> | undefined;
 	let failed: { error: unknown } | undefined;
 	try {
@@ -133,6 +253,7 @@ async function developmentSamples(
 				stdout: driver.stdout,
 				stderr: driver.stderr,
 				servedRevision: 0,
+				memory: sampler.window(),
 			},
 		];
 		if (measureEdit) {
@@ -149,11 +270,13 @@ async function developmentSamples(
 				stdout: driver.stdout.slice(beforeStdout),
 				stderr: driver.stderr.slice(beforeStderr),
 				servedRevision: 1,
+				memory: sampler.window(),
 			});
 		}
 	} catch (error) {
 		failed = { error };
 	}
+	sampler.stop();
 	try {
 		await driver.stop();
 	} catch (error) {
@@ -177,6 +300,11 @@ async function developmentSamples(
 
 const SUITE_FILES = 20;
 const LIBRARY_MODULES = 30;
+
+/** A leaf only the application imports; an edit keeps its exported names. */
+function featureModule(revision: number): string {
+	return `export const feature = "feature revision ${revision}";\n`;
+}
 
 /** A chain of application modules, so each test reaches a different slice of it. */
 function libraryModule(index: number, revision: number): string {
@@ -231,8 +359,13 @@ function report(sample: Sample): void {
 		.map((line) => line.trim())
 		.filter((line) => detailPrefixes.some((prefix) => line.startsWith(prefix)))
 		.join(" · ");
+	const megabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
+	const memory =
+		sample.memory === undefined
+			? ""
+			: ` · peak RSS cli ${megabytes(sample.memory.cliRssBytes)}, application ${megabytes(sample.memory.applicationRssBytes)}, tree ${megabytes(sample.memory.treeRssBytes)}`;
 	console.log(
-		`${sample.name.padEnd(30)} ${sample.durationMs.toFixed(1).padStart(8)} ms${
+		`${sample.name.padEnd(30)} ${sample.durationMs.toFixed(1).padStart(8)} ms${memory}${
 			details === "" ? "" : ` · ${details}`
 		}`,
 	);
@@ -243,6 +376,7 @@ try {
 	linkPackages(path.join(repositoryRoot, "node_modules"));
 	write("package.json", `{"type":"module","private":true}\n`);
 	write("local.mts", "export const localRevision = 0;\n");
+	write("feature.mts", featureModule(0));
 	write(
 		"app.mts",
 		`import { DatabaseSync } from "node:sqlite";
@@ -250,13 +384,15 @@ import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-sqlite";
 import express from "express";
 import { literal, object, parse } from "valibot";
+import { feature } from "./feature.mts";
+import { label${LIBRARY_MODULES - 1}, value${LIBRARY_MODULES - 1} } from "./lib/module-${LIBRARY_MODULES - 1}.mts";
 import { localRevision } from "./local.mts";
 
 const client = new DatabaseSync(":memory:");
 const database = drizzle({ client });
 database.run(sql\`create table message (value text not null)\`);
 const response = parse(object({ status: literal("ok") }), { status: "ok" });
-console.log(typeof express(), response.status, localRevision);
+console.log(typeof express(), response.status, localRevision, feature, value${LIBRARY_MODULES - 1}(), label${LIBRARY_MODULES - 1});
 `,
 	);
 	write(
@@ -307,37 +443,56 @@ test("representative graph", () => {
 
 	persist();
 	if (selectedLane === undefined || selectedLane === "run") {
-		invoke("run cold", [
+		await invoke("run cold", [
 			"run",
 			"app.mts",
 			"--config",
 			"maligator.build.mts",
 			"--verbose",
 		]);
-		invoke("run hot", ["run", "app.mts", "--config", "maligator.build.mts", "--verbose"]);
+		await invoke("run hot", [
+			"run",
+			"app.mts",
+			"--config",
+			"maligator.build.mts",
+			"--verbose",
+		]);
+		write("feature.mts", featureModule(1));
+		await invoke("run leaf edit", [
+			"run",
+			"app.mts",
+			"--config",
+			"maligator.build.mts",
+			"--verbose",
+		]);
 	}
 	if (selectedLane === undefined || selectedLane === "test") {
-		invoke("test cold", ["test", "app.test.mts", "--config", "maligator.build.mts"]);
-		invoke("test hot", ["test", "app.test.mts", "--config", "maligator.build.mts"]);
+		await invoke("test cold", [
+			"test",
+			"app.test.mts",
+			"--config",
+			"maligator.build.mts",
+		]);
+		await invoke("test hot", ["test", "app.test.mts", "--config", "maligator.build.mts"]);
 		const suite = ["test", "suite", "--config", "maligator.build.mts"];
-		invoke("suite cold", suite);
-		invoke("suite hot", suite);
+		await invoke("suite cold", suite);
+		await invoke("suite hot", suite);
 		write("suite/unit-07.test.mts", suiteTest(7, 1));
-		invoke("suite test edit", suite);
+		await invoke("suite test edit", suite);
 		write("lib/module-29.mts", libraryModule(29, 1));
-		invoke("suite library edit", suite);
+		await invoke("suite library edit", suite);
 		write("suite/unit-07.test.mts", suiteTest(7, 2));
-		invoke("suite single file after edit", [
+		await invoke("suite single file after edit", [
 			"test",
 			"suite/unit-07.test.mts",
 			"--config",
 			"maligator.build.mts",
 		]);
-		invoke("suite after single file", suite);
+		await invoke("suite after single file", suite);
 		const namespaced = ["test", "namespaced", "--config", "maligator.build.mts"];
-		invoke("namespace suite cold", namespaced);
+		await invoke("namespace suite cold", namespaced);
 		write("namespaced/unit-03.test.mts", suiteTest(3, 1, true));
-		invoke("namespace suite test edit", namespaced);
+		await invoke("namespace suite test edit", namespaced);
 	}
 	if (selectedLane === undefined || selectedLane === "dev") {
 		for (const sample of await developmentSamples("dev cold served revision", false)) {
@@ -350,8 +505,8 @@ test("representative graph", () => {
 		}
 	}
 	if (measureAssets && (selectedLane === undefined || selectedLane === "run")) {
-		invoke("assets cold", ["run", "assets.mts", "--verbose"]);
-		invoke("assets hot", ["run", "assets.mts", "--verbose"]);
+		await invoke("assets cold", ["run", "assets.mts", "--verbose"]);
+		await invoke("assets hot", ["run", "assets.mts", "--verbose"]);
 	}
 	for (const sample of samples) report(sample);
 	complete = true;

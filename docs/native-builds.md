@@ -60,10 +60,12 @@ link. Cross-built outputs live under `.cache/mal-build/<mode>/<rust-triple>/`;
 Development builds use `-O2`, keep symbols, and do not use LTO. They are intended for
 normal iteration and useful native crash diagnostics.
 
-A development build links the same ordered images `run` loads instead of one whole
-program. Each image gets a relocatable native overlay that depends only on that
-image, and the binary splices the embedded images at startup, so an application edit
-recompiles only the application's objects.
+A development build links the dependency images `run` loads plus one application
+image instead of one whole program. Each image gets a relocatable native overlay that
+depends only on that image, and the binary splices the embedded images at startup, so
+an application edit recompiles only the application's objects. `run` and `dev` split
+the application further, into images of a few modules each, so an edit recompiles only
+its own image, and the images that import it only when its exported names change.
 
 Images link the way modules do. An image publishes the bindings of the modules later
 images import, and the loader aliases each import to that slot while it splices

@@ -364,9 +364,10 @@ function compileImage(
 
 /**
  * Compile a test program as linked images in evaluation order: the test runtime,
- * dependency islands, one image per application module (or import cycle), one per
- * test file, and the runner. An edit recompiles only the images whose own modules
- * changed, and imports across images keep live bindings.
+ * dependency islands, one image per application module (or import cycle; see
+ * `moduleImageComponents`), one per test file, and the runner. An edit recompiles
+ * only the images whose own modules changed, and imports across images keep live
+ * bindings.
  */
 export function compileLinkedTestImage(
 	options: CompileTestImageOptions,
@@ -479,7 +480,7 @@ export function compileLinkedTestImage(
 			{
 				...graphOptions(options, session),
 				entryGoal: "module",
-				entrySource: importsOf(component),
+				entrySource: importsOf([component.at(-1)!]),
 				externalModules: externalModulesOf(linked.map(({ artifact }) => artifact)),
 			},
 		);

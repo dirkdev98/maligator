@@ -376,10 +376,16 @@ distinct when measuring text work.
       The loader already aliases CommonJS registry entries and namespace slots;
       `import()` additionally needs the earlier image's module evaluation state.
 
-- [ ] Evaluate per-application-module linked images for run, dev and development builds
-      using one frozen multi-module edit cycle. Preserve singleton, require/import and
-      evaluation-state semantics; choose granularity from incremental and clean build
-      time, link units, overlays and memory on both compiler hosts before rolling it out.
+- [ ] Split native development builds into per-module application images. Measure
+      cold build time with per-image overlay translation units first.
+
+- [ ] Cut the fixed cost per linked image (optimizer setup per program, wire
+      publication in `frontend-cache.ts`), so `run` and `dev` can use finer application
+      images without slowing clean builds.
+
+- [ ] Give `node:test` and data modules a single owning image. A lazily loaded
+      `node:test` provider is still copied into every image that reads `process` or
+      `global`, and dependency images share that limitation.
 
 - [ ] Prototype shipping one existing toolchain runtime image or common runtime-library
       artifact with the matching platform package. Key it by full source, toolchain,
