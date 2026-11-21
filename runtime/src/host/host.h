@@ -38,8 +38,8 @@ typedef struct MalHost {
     usize pending_http_completions;
     i64 timer_next_id;
     bool node_timers;
-
-
+    // A supervised development generation: its listening sockets outlive it.
+    bool retain_listeners;
 } MalHost;
 
 /* Standalone lifecycle for embedders and host-only tests. */

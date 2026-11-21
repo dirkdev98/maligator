@@ -2,6 +2,8 @@ import type { FixtureBridge } from "./types.ts";
 const bridge = Reflect.get(globalThis, "mal") as FixtureBridge;
 import { readFileSync, unlinkSync } from "node:fs";
 import { createServer } from "node:http";
+import { connect } from "node:net";
+import type { AddressInfo } from "node:net";
 import process from "node:process";
 import { ready } from "maligator:application";
 import { Worker } from "maligator:workers";
@@ -35,8 +37,12 @@ const descriptors = process.argv
 		(filename) =>
 			JSON.parse(readFileSync(filename, "utf8")) as ApplicationImageDescriptor,
 	);
-const [first, second, unresolvedDescriptor, nodeOnly] = descriptors;
-check(first && second && unresolvedDescriptor && nodeOnly, "four fixture descriptors");
+const [first, second, unresolvedDescriptor, nodeOnly, listenerFirst, listenerSecond] =
+	descriptors;
+check(
+	first && second && unresolvedDescriptor && nodeOnly && listenerFirst && listenerSecond,
+	"six fixture descriptors",
+);
 function rejected(callback: () => unknown, message: string) {
 	let threw = false;
 	try {
@@ -132,6 +138,76 @@ check(
 );
 bridge._releaseApplicationImage(nodeOnlyHandle);
 scopedResources(0, 0, 0);
+
+async function freePort(): Promise<number> {
+	const probe = createServer();
+	await new Promise<void>((resolve) => {
+		probe.listen(0, "127.0.0.1", resolve);
+	});
+	const { port } = probe.address() as AddressInfo;
+	await new Promise<void>((resolve) => {
+		probe.close(() => resolve());
+	});
+	return port;
+}
+/** One request on a fresh connection, so no pooled connection outlives a generation. */
+function requestBody(port: number): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const socket = connect(port, "127.0.0.1");
+		let response = "";
+		socket.setEncoding("utf8");
+		socket.on("data", (chunk: string) => {
+			response += chunk;
+		});
+		socket.on("end", () => resolve(response.slice(response.indexOf("\r\n\r\n") + 4)));
+		socket.on("error", reject);
+		socket.write("GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n");
+	});
+}
+const ports = [await freePort(), await freePort()];
+const listenerHandles = [load(listenerFirst), load(listenerSecond)];
+const listenerEntry = listenerFirst.entryPath;
+function launchListener(handle: object) {
+	return bridge._launchApplicationImage(handle, {
+		argv: ["application-host", listenerEntry],
+		data: { ports },
+		retainListeners: true,
+	});
+}
+const firstGeneration = launchListener(listenerHandles[0]!);
+await firstGeneration.ready;
+for (const port of ports)
+	check((await requestBody(port)) === "first", "first generation serves both listeners");
+check(
+	(await firstGeneration.terminate()).reason === "terminated",
+	"first generation terminated",
+);
+check(scopedResources(2, 0, 0).retainedListeners === 2, "terminated listeners retained");
+const waiting = ports.map((port) => requestBody(port));
+const secondGeneration = launchListener(listenerHandles[1]!);
+check(
+	(await Promise.all(waiting)).every((body) => body === "second"),
+	"requests during the restart reach the next generation",
+);
+check(
+	bridge._releaseUnclaimedListeners() === 0,
+	"a running generation keeps its listeners",
+);
+await secondGeneration.terminate();
+check(bridge._releaseUnclaimedListeners() === 2, "unclaimed listeners released");
+for (const port of ports)
+	check(
+		await requestBody(port).then(
+			() => false,
+			() => true,
+		),
+		"a released port refuses connections",
+	);
+for (const handle of listenerHandles) bridge._releaseApplicationImage(handle);
+check(
+	scopedResources(0, 0, 0).retainedListeners === 0,
+	"no listener outlives the release",
+);
 const a = load(first);
 const b = load(second);
 const loadedResources = scopedResources(2, 0, 0);

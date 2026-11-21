@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "host.h"
+#include "listener_pool.h"
 #if MAL_NODE
 #include "mal_tls.h"
 #endif
@@ -1421,7 +1422,7 @@ static void server_accept_cb(void *data) {
     server->accept_op.interest = MAL_IO_READ;
     server->accept_op.waker = (MalWaker) {.fn = server_accept_cb, .data = server};
     if (!mal_reactor_add_op(&mal_host(server->vm)->reactor, &server->accept_op)) {
-        mal_net_close(server->listen_fd);
+        mal_listener_pool_close(server->listen_fd);
         server->listen_fd = -1;
     }
 }
@@ -1434,13 +1435,15 @@ static MalHttpServer *server_start(
     socklen_t length;
     const char *numeric_host = host == nullptr || host[0] == '\0' ? "0.0.0.0" : host;
     if (!mal_net_parse_ip(numeric_host, port, &address, &length)) { errno = EINVAL; return nullptr; }
-    int fd = mal_net_listen_address((const struct sockaddr *) &address, length, backlog, ipv6_only);
+    MalHost *owner = mal_host(vm);
+    int fd = mal_listener_pool_listen(owner->retain_listeners ? owner : nullptr,
+        (const struct sockaddr *) &address, length, backlog, ipv6_only);
     if (fd < 0) {
         return nullptr;
     }
     MalHttpServer *server = calloc(1, sizeof(MalHttpServer));
     if (server == nullptr) {
-        mal_net_close(fd);
+        mal_listener_pool_close(fd);
         return nullptr;
     }
     server->vm = vm;
@@ -1457,7 +1460,7 @@ static MalHttpServer *server_start(
     server->accept_op.interest = MAL_IO_READ;
     server->accept_op.waker = (MalWaker) {.fn = server_accept_cb, .data = server};
     if (!mal_reactor_add_op(&mal_host(vm)->reactor, &server->accept_op)) {
-        mal_net_close(fd);
+        mal_listener_pool_close(fd);
         free(server);
         return nullptr;
     }
@@ -1612,7 +1615,7 @@ void mal_http_server_close(
     server->close_callback = callback;
     server->close_data = data;
     (void) mal_reactor_cancel_op(&mal_host(server->vm)->reactor, &server->accept_op);
-    mal_net_close(server->listen_fd);
+    mal_listener_pool_close(server->listen_fd);
     server->listen_fd = -1;
     MalHttpConn *conn = server->connections;
     while (conn != nullptr) {

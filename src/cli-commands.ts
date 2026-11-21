@@ -1464,6 +1464,7 @@ function launchApplication(
 	programArgs: Array<string>,
 	context: CommandContext,
 	environment?: NodeJS.ProcessEnv,
+	retainListeners = false,
 ): LaunchedApplication {
 	if (
 		build.profile === undefined &&
@@ -1479,6 +1480,7 @@ function launchApplication(
 					...programArgs,
 				],
 				name: build.applicationImage.entryPath,
+				retainListeners,
 			});
 			void instance.applicationReady.catch(() => {});
 			let status: number | undefined;
@@ -1730,6 +1732,8 @@ export async function devCommand(
 	let activeGeneration = 0;
 	const spawnApplication = (build: BuildCommandResult, generation: number) => {
 		activeProfile = nextProfile(build);
+		// The next generation adopts the listening sockets this one leaves, so a
+		// request during the restart waits instead of being refused.
 		const launched = launchApplication(
 			build,
 			command.programArgs,
@@ -1740,6 +1744,7 @@ export async function devCommand(
 						...activeProfile.environment,
 						...compilerProfileRuntimeEnvironment(command),
 					},
+			true,
 		);
 		child = launched;
 		childGeneration = generation;
@@ -1790,6 +1795,7 @@ export async function devCommand(
 			const task = awaitApplicationEvaluation(restored, shutdown.signal)
 				.then(() => {
 					if (child !== restored || stopping) return;
+					context.applications?.releaseUnclaimedListeners?.();
 					if (
 						restored.backend === "thread" &&
 						development.snapshot().application?.state !== "ready"
@@ -1928,6 +1934,9 @@ export async function devCommand(
 			);
 			activeBuild = build;
 			activeGeneration = generation;
+			// Sockets the new generation did not listen on during evaluation belong to
+			// servers the edit removed.
+			context.applications?.releaseUnclaimedListeners?.();
 			return true;
 		},
 		failed(error) {
@@ -1947,6 +1956,7 @@ export async function devCommand(
 				failures.push(error);
 			}
 			await Promise.all(restorations);
+			context.applications?.releaseUnclaimedListeners?.();
 			try {
 				finalizeActiveProfile();
 			} catch (error) {

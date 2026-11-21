@@ -28,6 +28,7 @@
 #include "gc_process.h"
 #include "host.h"
 #include "intrinsics.h"
+#include "listener_pool.h"
 #include "node_immediate.h"
 #include "object.h"
 #include "heap_symbol.h"
@@ -637,6 +638,7 @@ typedef struct ApplicationLaunch {
     char **argv;
     i32 argc;
     bool exit_on_result;
+    bool retain_listeners;
 } ApplicationLaunch;
 
 static void application_image_release(ApplicationImage *image) {
@@ -663,6 +665,8 @@ struct WorkerThread {
     MalWorkerDomain *domain;
     ApplicationLaunch *application;
     MalSerializedValue *result;
+    // Inherited by the whole application tree, so a worker's server survives too.
+    bool retain_listeners;
     bool application_ready;
     bool application_ready_pending;
     char *name;
@@ -2630,6 +2634,8 @@ static void *worker_thread_main(void *arg) {
             mal_vm_free(vm);
             free(vm);
             vm = nullptr;
+        } else {
+            mal_host(vm)->retain_listeners = thread->retain_listeners;
         }
     }
     if (vm == nullptr) {
@@ -2736,6 +2742,9 @@ static void *worker_thread_main(void *arg) {
     pthread_mutex_lock(&thread->mutex);
     thread->reactor = nullptr;
     pthread_mutex_unlock(&thread->mutex);
+    // Teardown closes every listener, but a socket the program never closed itself
+    // stays open for the next generation.
+    if (thread->retain_listeners) mal_listener_pool_retire(mal_host(vm));
     mal_workers_shutdown(vm);
     if (callable != nullptr) mal_vm_free_callable(callable);
 #if MAL_NODE
@@ -3531,6 +3540,8 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
     mal_worker_domain_retain(domain);
     thread->application = application;
     if (application != nullptr) atomic_fetch_add_explicit(&application->refs, 1, memory_order_relaxed);
+    thread->retain_listeners = application != nullptr ? application->retain_listeners
+                                                      : mal_host(vm) != nullptr && mal_host(vm)->retain_listeners;
     thread->web_platform = domain != nullptr && domain->has_context ? domain->web_platform : vm->host_web_platform;
     thread->node = domain != nullptr && domain->has_context ? domain->node : vm->host_node;
     thread->name = value_to_cstring(name);
@@ -4332,6 +4343,11 @@ static MalValue application_launch(MalVm *vm, MalValue self, const MalValue *arg
         if (!mal_value_is_boolean(value)) goto failed;
         launch->exit_on_result = mal_value_to_boolean(value);
     }
+    if (!get_named(vm, options, "retainListeners", &value)) goto failed;
+    if (!mal_value_is_undefined(value)) {
+        if (!mal_value_is_boolean(value)) goto failed;
+        launch->retain_listeners = mal_value_to_boolean(value);
+    }
     MalValue worker_args[] = {mal_value_new_undefined(), options};
     MalValue result = worker_construct_entry(vm, worker_args, 2, false, launch->image->domain, &launch->image->entries[0], launch);
     application_launch_release(launch);
@@ -4339,7 +4355,7 @@ static MalValue application_launch(MalVm *vm, MalValue self, const MalValue *arg
     return result;
 failed:
     application_launch_release(launch);
-    if (!thrown(vm)) throw_type(vm, "application launch requires string argv and boolean exitOnResult");
+    if (!thrown(vm)) throw_type(vm, "application launch requires string argv and boolean exitOnResult and retainListeners");
     mal_gc_unroot(&root);
     return mal_value_new_undefined();
 }
@@ -4371,6 +4387,12 @@ static MalValue application_ready(MalVm *vm, MalValue self, const MalValue *args
     return mal_value_new_boolean(mal_workers_application_ready(vm));
 }
 
+static MalValue application_release_listeners(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) vm; (void) self; (void) args; (void) argc; (void) nt; (void) callee;
+    return mal_value_from_f64((f64) mal_listener_pool_release_unclaimed());
+}
+
 static MalValue application_resources(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
     MalValue nt, MalValue callee) {
     (void) self; (void) args; (void) argc; (void) nt; (void) callee;
@@ -4393,9 +4415,9 @@ static MalValue application_resources(MalVm *vm, MalValue self, const MalValue *
     // Process fields are independent atomic samples; bytes exclude root wires and assets.
     MalWorkerDomainUsage process = mal_worker_domain_usage();
     const char *names[] = {"loadedImages", "runningApplications", "ownedWorkers",
-        "processWorkers", "processImageDomains", "processWorkerWireBytes"};
+        "processWorkers", "processImageDomains", "processWorkerWireBytes", "retainedListeners"};
     f64 values[] = {loaded, applications, workers, mal_workers_live_count(),
-        process.live_domains, (f64) process.wire_bytes};
+        process.live_domains, (f64) process.wire_bytes, (f64) mal_listener_pool_size()};
     MalValue result = mal_value_from_object(mal_intrinsic_new_object(vm));
     MalRootSpan root;
     mal_gc_root(&root, &result, 1);
@@ -4417,5 +4439,6 @@ void mal_workers_install_application_api(MalVm *vm, MalObject *mal) {
     mal_intrinsic_define_method_n(vm, mal, "_applicationResult", 1, application_result);
     mal_intrinsic_define_method_n(vm, mal, "_applicationReady", 0, application_ready);
     mal_intrinsic_define_method_n(vm, mal, "_applicationResources", 0, application_resources);
+    mal_intrinsic_define_method_n(vm, mal, "_releaseUnclaimedListeners", 0, application_release_listeners);
 }
 #endif

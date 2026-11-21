@@ -550,6 +550,14 @@ completions.
 - [ ] Forward WebSocket upgrades in `proxy`, so a frontend's hot-reload socket can use
       the application's origin instead of the dev server's port.
 
+- [ ] Let a stopping `dev` generation finish requests in progress before its isolate
+      ends. Termination closes their connections today; the retained listener only
+      queues requests that arrive after it.
+
+- [ ] Retain listeners for applications on the development process runner (mutable
+      primordials) by passing the sockets to each new process. Only supervised
+      isolates keep their sockets across a restart now.
+
 # WinterTC web platform
 
 The target is the complete ECMA-429 server surface except WebAssembly.

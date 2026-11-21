@@ -3769,9 +3769,14 @@ struct MalFetchServer {
     MalHttpServer *native;
     u32 slot;
     bool closing;
+    /* The isolate is going away: the close completes without settling its promise. */
+    bool torn_down;
     /* Set when the handler is a serveAsset handler: requests never reach JavaScript. */
     MalHttpAssetRoute *route;
+    MalFetchServer *next;
 };
+
+static MAL_ISOLATE_LOCAL MalFetchServer *fetch_servers;
 
 enum {
     MAL_FETCH_SERVER_HANDLER = 0,
@@ -4397,6 +4402,9 @@ static void mal_fetch_server_closed_job(
         mal_array_object_store(mal_value_to_array_object(registry),
             mal_key_index(server->slot), mal_value_new_undefined());
     }
+    MalFetchServer **link = &fetch_servers;
+    while (*link != nullptr && *link != server) link = &(*link)->next;
+    if (*link == server) *link = server->next;
     mal_http_asset_route_free(server->route);
     free(server);
     if (mal_value_is_callable(resolve)) {
@@ -4409,8 +4417,41 @@ static void mal_fetch_server_closed_job(
 
 static void mal_fetch_server_closed(void *data) {
     MalFetchServer *server = data;
+    server->native = nullptr;
+    if (server->torn_down) {
+        mal_http_asset_route_free(server->route);
+        free(server);
+        return;
+    }
     mal_vm_enqueue_host_job(
         server->vm, mal_fetch_server_closed_job, server, false, mal_value_new_undefined());
+}
+
+/* An isolate torn down with servers still open, such as a terminated application,
+ * must release their sockets and connections: the process outlives it. */
+static void mal_fetch_servers_cleanup(MalVm *vm) {
+    MalFetchServer **link = &fetch_servers;
+    while (*link != nullptr) {
+        MalFetchServer *server = *link;
+        if (server->vm != vm) {
+            link = &server->next;
+            continue;
+        }
+        *link = server->next;
+        server->torn_down = true;
+        MalHttpServer *native = server->native;
+        if (native == nullptr) {
+            // Closed, but the job that settles the close never runs now.
+            mal_http_asset_route_free(server->route);
+            free(server);
+            continue;
+        }
+        // A close already under way completes, and frees the server, once its last
+        // connection goes.
+        bool closing = server->closing;
+        mal_http_server_close_connections(native, false);
+        if (!closing) mal_http_server_close(native, mal_fetch_server_closed, server);
+    }
 }
 
 /* Stop accepting, let in-flight requests finish, then fulfill. Repeated calls share
@@ -4518,7 +4559,8 @@ MalValue mal_fetch_server_start(MalVm *vm, MalValue options) {
     }
     limits.max_connections = max_connections;
 
-    MalFetchServer *server = calloc(1, sizeof(MalFetchServer));
+    MalFetchServer *server = mal_vm_register_runtime_cleanup(vm, mal_fetch_servers_cleanup)
+        ? calloc(1, sizeof(MalFetchServer)) : nullptr;
     if (server == nullptr) {
         mal_http_asset_route_free(route);
         mal_vm_throw_allocation_error(vm);
@@ -4563,6 +4605,8 @@ MalValue mal_fetch_server_start(MalVm *vm, MalValue options) {
     mal_array_object_store(entry, mal_key_index(MAL_FETCH_SERVER_ASSET),
         route == nullptr ? mal_value_new_undefined() : asset_handle);
     mal_array_object_store(registry, mal_key_index(server->slot), roots[2]);
+    server->next = fetch_servers;
+    fetch_servers = server;
 
     roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
     MalObject *handle = mal_value_to_object(roots[2]);

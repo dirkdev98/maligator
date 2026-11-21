@@ -195,6 +195,109 @@ describe("CLI application images", () => {
 			stderr.mockRestore();
 		}
 	});
+	it("retains listeners across generations and releases unclaimed ones once a generation evaluates", async () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-image-listeners-"));
+		const entry = path.join(directory, "entry.mts");
+		writeFileSync(entry, "export const revision = 0;\n");
+		const images = imageHarness();
+		const builds = channel<ReturnType<typeof deferred<BuildCommandResult>>>();
+		const active = channel<number>();
+		let releases = 0;
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation((text) => {
+			const line = String(text);
+			if (line.startsWith("Session ")) {
+				const snapshot = JSON.parse(line.slice(8)) as {
+					phase: string;
+					activeGeneration?: number;
+				};
+				if (snapshot.phase === "active" && snapshot.activeGeneration !== undefined)
+					active.push(snapshot.activeGeneration);
+			}
+			return true;
+		});
+		let wake = () => {};
+		const dev = devCommand(
+			{
+				kind: "dev",
+				entry,
+				verbose: false,
+				status: true,
+				profile: false,
+				programArgs: [],
+			},
+			{
+				stripTypes: stripCompactTypes,
+				installation: productCompilerInstallation(directory, "compiler.malw", "test.mjs"),
+				applications: {
+					...images.host,
+					releaseUnclaimedListeners() {
+						releases++;
+					},
+				},
+				compiler: {
+					prepare() {
+						const result = deferred<BuildCommandResult>();
+						builds.push(result);
+						return result.promise;
+					},
+					close: () => Promise.resolve(),
+				},
+				developmentWatcher: {
+					create: () => ({}),
+					update() {},
+					wait() {
+						return new Promise<void>((resolve) => {
+							wake = resolve;
+						});
+					},
+					close() {
+						wake();
+					},
+				},
+			},
+		);
+		try {
+			(await builds.next()).resolve({
+				binaryPath: "/maligator",
+				applicationImage: descriptor(entry),
+				dependencies: [entry],
+			});
+			const first = await images.launches.next();
+			expect(first.options.retainListeners).toBe(true);
+			expect(releases).toBe(0);
+			first.evaluated.resolve();
+			expect(await active.next()).toBe(1);
+			expect(releases).toBe(1);
+
+			writeFileSync(entry, "export const revision = 1;\n");
+			wake();
+			(await builds.next()).resolve({
+				binaryPath: "/maligator",
+				applicationImage: descriptor(entry),
+				dependencies: [entry],
+			});
+			await first.terminating.promise;
+			first.stop.resolve(completed);
+			first.exit.resolve(completed);
+			const second = await images.launches.next();
+			expect(second.options.retainListeners).toBe(true);
+			expect(releases).toBe(1);
+			second.evaluated.resolve();
+			expect(await active.next()).toBe(2);
+			expect(releases).toBe(2);
+
+			process.emit("SIGINT");
+			wake();
+			await second.terminating.promise;
+			second.stop.resolve(completed);
+			second.exit.resolve(completed);
+			await dev;
+			expect(releases).toBe(3);
+		} finally {
+			stderr.mockRestore();
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
 	it("prepares digest-identified images only for an in-process compatible runner", () => {
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-image-descriptor-"));
 		try {

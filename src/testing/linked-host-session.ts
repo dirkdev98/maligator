@@ -36,6 +36,7 @@ export class LinkedTestHostSession implements TestApplicationHost {
 				processWorkers: 0,
 				processImageDomains: 0,
 				processWorkerWireBytes: 0,
+				retainedListeners: 0,
 			}
 		);
 	}

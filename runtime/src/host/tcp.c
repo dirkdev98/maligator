@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "host.h"
+#include "listener_pool.h"
 #include "mal_tls.h"
 #include "net.h"
 #include "posix_fs.h"
@@ -849,7 +850,7 @@ static void tcp_listener_destroy(MalTcpListener *listener) {
     if (*link == listener) *link = listener->next;
     (void) tcp_listener_disarm(listener);
     mal_host_operation_unbind(&listener->host->tasks, listener->operation, listener);
-    mal_net_close(listener->fd);
+    mal_listener_pool_close(listener->fd);
     free(listener);
 }
 
@@ -937,12 +938,13 @@ int mal_tcp_listen_start(
     MalHost *host, const struct sockaddr *address, socklen_t length, int backlog, bool ipv6_only,
     MalHostHandle *operation) {
     if (host == nullptr || address == nullptr || operation == nullptr) return EINVAL;
-    int fd = mal_net_listen_address(address, length, backlog, ipv6_only);
+    int fd = mal_listener_pool_listen(
+        host->retain_listeners ? host : nullptr, address, length, backlog, ipv6_only);
     if (fd < 0) return errno != 0 ? errno : EIO;
     MalTcpListener *listener = calloc(1, sizeof(MalTcpListener));
     if (listener == nullptr || !mal_host_operation_start(&host->tasks, operation)) {
         free(listener);
-        mal_net_close(fd);
+        mal_listener_pool_close(fd);
         return ENOMEM;
     }
     listener->host = host;
@@ -953,7 +955,7 @@ int mal_tcp_listen_start(
         (void) mal_reactor_cancel_op(&host->reactor, &listener->accept_op);
         mal_host_operation_unbind(&host->tasks, *operation, listener);
         (void) mal_host_operation_abort_start(&host->tasks, *operation);
-        mal_net_close(fd);
+        mal_listener_pool_close(fd);
         free(listener);
         return EIO;
     }

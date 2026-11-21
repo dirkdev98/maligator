@@ -125,6 +125,18 @@ for (const compiled of [true, false]) {
 			const nodeOnlyPath = path.join(directory, "node-only.json");
 			writeFileSync(nodeOnlyPath, JSON.stringify(nodeOnly));
 			descriptors.push(nodeOnlyPath);
+			for (const generation of ["first", "second"]) {
+				const listenerPath = path.join(directory, `listener-${generation}.json`);
+				writeFileSync(
+					listenerPath,
+					JSON.stringify({
+						...unresolved,
+						wires: [wire(directory, "listener", generation)],
+						entryPath: path.join(fixtures, "listener.mts"),
+					}),
+				);
+				descriptors.push(listenerPath);
+			}
 			const definition = image("main");
 			const derivation = buildDerivationFromConfig(config);
 			const context = resolveNativeBuildContext({

@@ -22,6 +22,12 @@ export interface ApplicationLaunchOptions {
 	name?: string;
 	data?: unknown;
 	exitOnResult?: boolean;
+	/**
+	 * Keep the sockets this application listens on open after it ends, so a client of
+	 * the next launch on the same address waits instead of being refused. They stay
+	 * open until a launch listens there again or `releaseUnclaimedListeners` runs.
+	 */
+	retainListeners?: boolean;
 }
 
 export interface ApplicationExit extends WorkerExit {
@@ -52,6 +58,8 @@ export interface ApplicationImage {
 export interface ApplicationImageHost {
 	load(descriptor: ApplicationImageDescriptor): ApplicationImage;
 	resources?(): ApplicationResources;
+	/** Closes retained listening sockets that no running application listens on. */
+	releaseUnclaimedListeners?(): void;
 }
 
 export interface ApplicationResources {
@@ -62,6 +70,8 @@ export interface ApplicationResources {
 	processImageDomains: number;
 	/** Retained worker-domain wires, excluding application roots and baked code. */
 	processWorkerWireBytes: number;
+	/** Listening sockets held for `retainListeners` launches, in use or not. */
+	retainedListeners: number;
 }
 
 export interface NativeApplicationBridge {
@@ -72,6 +82,7 @@ export interface NativeApplicationBridge {
 	): ApplicationInstance;
 	_releaseApplicationImage(handle: object): void;
 	_applicationResources(): ApplicationResources;
+	_releaseUnclaimedListeners(): number;
 }
 
 export function createApplicationImageHost(
@@ -79,6 +90,9 @@ export function createApplicationImageHost(
 ): ApplicationImageHost {
 	return {
 		resources: () => bridge._applicationResources(),
+		releaseUnclaimedListeners() {
+			bridge._releaseUnclaimedListeners();
+		},
 		load(descriptor) {
 			const handle = bridge._loadApplicationImage(descriptor);
 			let closed = false;

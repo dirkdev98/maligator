@@ -30,7 +30,13 @@ createServer((_request, response) => response.end("hello")).listen(
 
 Enable `surface.node` in your config for this example. `ready()` returns `true` under the development supervisor and `false` in a standalone application or ordinary worker. Repeated calls are harmless.
 
-Readiness is a notification. It does not reserve a port or hand traffic to another listener. Plan port ownership and persistent connections separately when your application needs them.
+Readiness is a notification only: it does not change how `dev` handles your listeners.
+
+## Keep servers reachable
+
+A supervised generation's listening sockets stay open while `dev` restarts it. A request that arrives during the restart waits in the socket's queue, and the next generation answers it once its server listens on the same address and port. This works for [maligator:http](/api/http), `node:http` and `node:net` servers on a fixed port.
+
+A socket the next generation does not listen on by the end of its evaluation closes, which frees ports of servers you removed. A server your code closes frees its port at once, as it would outside `dev`. Requests in progress when the old generation stops end with it, and an application on the process runner restarts without this queue, so its clients see refused connections until the new process listens.
 
 ## Inspect a restart
 

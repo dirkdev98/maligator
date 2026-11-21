@@ -125,6 +125,7 @@ export async function startLinkedTestHost(options: {
 		processWorkers: 0,
 		processImageDomains: 0,
 		processWorkerWireBytes: 0,
+		retainedListeners: 0,
 	};
 	let requestId = 0;
 	let objectId = 0;
