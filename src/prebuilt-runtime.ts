@@ -186,6 +186,7 @@ export interface PrebuiltRuntimeManifest extends PrebuiltRuntimeIdentity {
 
 export interface PrebuiltDevelopmentRunner extends PrebuiltRuntimeFile {
 	key: string;
+	evalComponent: boolean;
 }
 
 export interface PrebuiltRuntime {
@@ -454,7 +455,10 @@ export function readPrebuiltDevelopmentRunner(
 	directory: string,
 	target: string,
 	kind: DevelopmentRunnerKind,
-	key?: string,
+	selection?: {
+		requiresEval: boolean;
+		keyForEvalComponent: (evalComponent: boolean) => string;
+	},
 ): string | undefined {
 	const runner = readRuntimeManifest(directory, target)?.runners?.[kind];
 	const name = DEVELOPMENT_RUNNERS[kind];
@@ -462,9 +466,17 @@ export function readPrebuiltDevelopmentRunner(
 		runner?.name !== name ||
 		typeof runner.key !== "string" ||
 		!/^[0-9a-f]{64}$/.test(runner.key) ||
-		(key !== undefined && runner.key !== key) ||
+		typeof runner.evalComponent !== "boolean" ||
+		(selection?.requiresEval === true && !runner.evalComponent) ||
 		!Number.isSafeInteger(runner.size) ||
 		runner.size <= 0
+	)
+		return undefined;
+	// The wire image gates eval. Match the executable's component set after checking
+	// that it supplies the capabilities the image needs.
+	if (
+		selection !== undefined &&
+		runner.key !== selection.keyForEvalComponent(runner.evalComponent)
 	)
 		return undefined;
 	const file = path.join(directory, name);

@@ -758,17 +758,30 @@ function supportsDevelopmentShims(context: NativeBuildContext): boolean {
 	return platform === "darwin" || platform === "linux";
 }
 
-export function sharedDevelopmentRunnerFeatures(
+function sharedDevelopmentRunnerFeatures(
 	features: NativeBuildContext["features"],
 ): NativeBuildContext["features"] {
 	return normalizeNativeFeatures({
 		...features,
-		// The image gates eval, so both policies can use a runner with the compiler.
-		evalEnabled: true,
 		usesHost: true,
 		temporalEnabled: true,
 		intlEnabled: true,
 		intlFeatures: [],
+	});
+}
+
+export function localDevelopmentRunnerKey(
+	context: NativeBuildContext,
+	linkedLibraries?: string,
+): string {
+	return artifactIdentity({
+		toolchain: context.toolchain.fingerprint,
+		environment: context.environmentFingerprint,
+		features:
+			linkedLibraries === undefined
+				? sharedDevelopmentRunnerFeatures(context.features)
+				: context.features,
+		libraries: linkedLibraries,
 	});
 }
 
@@ -807,15 +820,19 @@ export function packagedDevelopmentRunner(
 		directory,
 		target,
 		features.developmentApiEnabled ? "testHost" : "standalone",
-		sharedDevelopmentRunnerKey(
-			{
-				runtimeDirectory,
-				cacheDirectory: maligatorCacheDirectory(undefined, environment),
-				features,
-				environment,
-			},
-			target,
-		),
+		{
+			requiresEval: features.evalEnabled,
+			keyForEvalComponent: (evalComponent) =>
+				sharedDevelopmentRunnerKey(
+					{
+						runtimeDirectory,
+						cacheDirectory: maligatorCacheDirectory(undefined, environment),
+						features: { ...features, evalEnabled: evalComponent },
+						environment,
+					},
+					target,
+				),
+		},
 	);
 }
 

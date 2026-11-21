@@ -125,9 +125,9 @@ import {
 	buildDevelopmentRunner,
 	buildLocalBinary,
 	buildSharedDevelopmentRunner,
+	localDevelopmentRunnerKey,
 	packagedDevelopmentRunner,
 	prepareGeneratedSources,
-	sharedDevelopmentRunnerFeatures,
 } from "./local-build.ts";
 import {
 	productionToolchainOptions,
@@ -1193,15 +1193,10 @@ function prepareCommandState(
 			);
 			reporter.detail("Execution backend", "interpreted development image");
 			reporter.detail("Development images", wirePaths.join(", "));
-			const runnerKey = artifactIdentity({
-				toolchain: nativeContext.toolchain.fingerprint,
-				environment: nativeContext.environmentFingerprint,
-				features:
-					linkedLibraries === undefined
-						? sharedDevelopmentRunnerFeatures(nativeContext.features)
-						: nativeContext.features,
-				libraries: linkedLibraries?.identity,
-			});
+			const runnerKey = localDevelopmentRunnerKey(
+				nativeContext,
+				linkedLibraries?.identity,
+			);
 			const retainedRunner = context.developmentCache?.runners.get(runnerKey);
 			const useRetainedRunner =
 				retainedRunner !== undefined && existsSync(retainedRunner);

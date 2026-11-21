@@ -4,13 +4,19 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { artifactDigest } from "../src/artifact-store.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../src/build-config.ts";
-import { sharedDevelopmentRunnerKey } from "../src/local-build.ts";
+import {
+	localDevelopmentRunnerKey,
+	packagedDevelopmentRunner,
+	sharedDevelopmentRunnerKey,
+} from "../src/local-build.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
 import {
 	DEVELOPMENT_RUNNERS,
 	PREBUILT_RUNTIME_MANIFEST,
 	PREBUILT_RUNTIME_OVERRIDE,
-	readPrebuiltDevelopmentRunner,
+	prebuiltDevelopmentRunnerTarget,
+	prebuiltRuntimeCxxLibraries,
+	prebuiltRuntimeTarget,
 } from "../src/prebuilt-runtime.ts";
 import type { PrebuiltRuntimeManifest } from "../src/prebuilt-runtime.ts";
 import {
@@ -28,8 +34,6 @@ const archiveNames = [
 	"libmal_rust.a",
 	"native.ada-url.libada.a",
 	"native.ring.libring_core_example.a",
-	"native.ada-url.libcxx.a",
-	"native.ada-url.libcxxabi.a",
 ];
 const localBuild = new Error("local compiler invoked");
 let root: string;
@@ -44,7 +48,12 @@ afterEach(() => {
 
 function fixtureContext(
 	installation: string,
-	options: { production?: boolean; realms?: boolean } = {},
+	options: {
+		eval?: boolean;
+		production?: boolean;
+		realms?: boolean;
+		target?: string;
+	} = {},
 ) {
 	const directory = path.join(root, installation);
 	const runtimeDirectory = path.join(directory, "runtime");
@@ -62,10 +71,11 @@ function fixtureContext(
 		path: path.join(toolsDirectory, name),
 		version: "1",
 	});
+	const { rustTarget, platform } = prebuiltRuntimeTarget(options.target ?? macTarget);
 	const toolchain: Toolchain = {
-		target: "arm64-apple-darwin",
-		rustTarget: macTarget,
-		platform: "darwin",
+		target: rustTarget,
+		rustTarget,
+		platform,
 		fingerprint: artifactDigest(toolsDirectory),
 		ccFingerprint: artifactDigest(tool("cc").path),
 		cacheHit: false,
@@ -94,12 +104,13 @@ function fixtureContext(
 		cacheDirectory: path.join(directory, "cache"),
 		features: buildDerivationFromConfig(
 			resolveBuildConfig({
-				engine: { realms: options.realms },
+				engine: { eval: options.eval, realms: options.realms },
 			}),
 		).features,
 		toolchain,
 		environment: {
 			PATH: toolsDirectory,
+			MALIGATOR_CACHE_DIR: path.join(directory, "cache"),
 			[PREBUILT_RUNTIME_OVERRIDE]: path.join(root, "package"),
 		},
 		production: options.production,
@@ -111,28 +122,31 @@ function fixtureContext(
 
 function stageRelease(
 	identity: ReturnType<typeof runtimeReleaseArchiveIdentity>,
-	runnerKey?: string,
+	runner?: { key: string; evalComponent: boolean },
 ) {
 	const directory = path.join(root, "package");
 	mkdirSync(directory);
 	const name = DEVELOPMENT_RUNNERS.standalone;
 	const bytes = "#!/bin/sh\nprintf 'ready\\n'\n";
-	if (runnerKey !== undefined)
+	if (runner !== undefined)
 		writeFileSync(path.join(directory, name), bytes, { mode: 0o755 });
+	const cxxArchives = prebuiltRuntimeCxxLibraries(identity.target).map(
+		({ license }) => `native.ada-url.${license}.a`,
+	);
 	const manifest: PrebuiltRuntimeManifest = {
 		...identity,
 		runners:
-			runnerKey === undefined
+			runner === undefined
 				? {}
 				: {
 						standalone: {
 							name,
-							key: runnerKey,
+							...runner,
 							sha256: artifactDigest(bytes),
 							size: Buffer.byteLength(bytes),
 						},
 					},
-		files: archiveNames.map((name) => {
+		files: [...archiveNames, ...cxxArchives].map((name) => {
 			const bytes = `release fixture ${name}`;
 			writeFileSync(path.join(directory, name), bytes);
 			return { name, size: Buffer.byteLength(bytes), sha256: artifactDigest(bytes) };
@@ -220,73 +234,93 @@ describe("prebuilt runtime archives", () => {
 	});
 });
 
-describe("prebuilt development runners", () => {
-	it("selects the same runner for eval-enabled and eval-disabled images", () => {
-		const disabled = fixtureContext("producer");
-		const enabled = {
-			...disabled,
-			features: buildDerivationFromConfig(resolveBuildConfig({ engine: { eval: true } }))
-				.features,
-		};
-		const directory = stageRelease(
-			runtimeReleaseArchiveIdentity(disabled),
-			sharedDevelopmentRunnerKey(enabled, macTarget),
+describe("local development runner keys", () => {
+	it("keeps eval-on and eval-off projects in separate runners", () => {
+		const disabled = fixtureContext("consumer", { eval: false });
+		const enabled = fixtureContext("consumer", { eval: true });
+		expect(localDevelopmentRunnerKey(disabled)).not.toBe(
+			localDevelopmentRunnerKey(enabled),
 		);
-		expect(
-			readPrebuiltDevelopmentRunner(
-				directory,
-				macTarget,
-				"standalone",
-				sharedDevelopmentRunnerKey(disabled, macTarget),
-			),
-		).toBe(path.join(directory, DEVELOPMENT_RUNNERS.standalone));
 	});
+});
 
-	it("selects a runner from the same sources under different paths and tools", () => {
-		const producer = fixtureContext("producer");
-		const consumer = fixtureContext("consumer");
-		const directory = stageRelease(
-			runtimeReleaseArchiveIdentity(producer),
-			sharedDevelopmentRunnerKey(producer, macTarget),
-		);
+const hostTarget = prebuiltDevelopmentRunnerTarget({});
+
+describe.skipIf(hostTarget === undefined)("prebuilt development runners", () => {
+	const target = hostTarget!;
+
+	function stageRunner(context: ReturnType<typeof fixtureContext>): string {
+		return stageRelease(runtimeReleaseArchiveIdentity(context), {
+			key: sharedDevelopmentRunnerKey(context, target),
+			evalComponent: context.features.evalEnabled,
+		});
+	}
+
+	it.each([
+		{
+			name: "uses a runner with the eval component for an eval-off project",
+			evalComponent: true,
+			evalEnabled: false,
+			selected: true,
+		},
+		{
+			name: "uses a runner without the eval component for an eval-off project",
+			evalComponent: false,
+			evalEnabled: false,
+			selected: true,
+		},
+		{
+			name: "uses a runner with the eval component for an eval-on project",
+			evalComponent: true,
+			evalEnabled: true,
+			selected: true,
+		},
+		{
+			name: "rejects a runner without the eval component for an eval-on project",
+			evalComponent: false,
+			evalEnabled: true,
+			selected: false,
+		},
+	])("$name", ({ evalComponent, evalEnabled, selected }) => {
+		const producer = fixtureContext("producer", { target, eval: evalComponent });
+		const consumer = fixtureContext("consumer", { target, eval: evalEnabled });
+		const directory = stageRunner(producer);
 		expect(
-			readPrebuiltDevelopmentRunner(
-				directory,
-				macTarget,
-				"standalone",
-				sharedDevelopmentRunnerKey(consumer, macTarget),
+			packagedDevelopmentRunner(
+				consumer.runtimeDirectory,
+				consumer.features,
+				consumer.environment,
 			),
-		).toBe(path.join(directory, DEVELOPMENT_RUNNERS.standalone));
+		).toBe(selected ? path.join(directory, DEVELOPMENT_RUNNERS.standalone) : undefined);
 	});
 
 	it("rejects a runner built from a different driver source", () => {
-		const context = fixtureContext("consumer");
-		const directory = stageRelease(
-			runtimeReleaseArchiveIdentity(context),
-			sharedDevelopmentRunnerKey(context, macTarget),
-		);
+		const context = fixtureContext("consumer", { target });
+		stageRunner(context);
 		writeFileSync(
 			path.join(context.runtimeDirectory, "dev_main.c"),
 			"int main(void) { return 1; }\n",
 		);
 		expect(
-			readPrebuiltDevelopmentRunner(
-				directory,
-				macTarget,
-				"standalone",
-				sharedDevelopmentRunnerKey(context, macTarget),
+			packagedDevelopmentRunner(
+				context.runtimeDirectory,
+				context.features,
+				context.environment,
 			),
 		).toBeUndefined();
 	});
 
 	it("rejects same-size runner tampering and leaves the archives available for a local link", () => {
-		const context = fixtureContext("consumer");
-		const key = sharedDevelopmentRunnerKey(context, macTarget);
-		const directory = stageRelease(runtimeReleaseArchiveIdentity(context), key);
+		const context = fixtureContext("consumer", { target });
+		const directory = stageRunner(context);
 		const executable = path.join(directory, DEVELOPMENT_RUNNERS.standalone);
 		writeFileSync(executable, readFileSync(executable, "utf8").replace("ready", "wrong"));
 		expect(
-			readPrebuiltDevelopmentRunner(directory, macTarget, "standalone", key),
+			packagedDevelopmentRunner(
+				context.runtimeDirectory,
+				context.features,
+				context.environment,
+			),
 		).toBeUndefined();
 		expect(readFileSync(ensureNativeArtifacts(context).c.runtime, "utf8")).toBe(
 			"release fixture libMalRuntime.a",

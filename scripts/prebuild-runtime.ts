@@ -230,6 +230,7 @@ export function prebuildRuntime(
 				compilerBake,
 				features: normalizeNativeFeatures({
 					...context.features,
+					evalEnabled: true,
 					developmentApiEnabled: kind === "testHost",
 				}),
 			};
@@ -244,6 +245,7 @@ export function prebuildRuntime(
 			chmodSync(file, 0o755);
 			runners[kind] = {
 				key,
+				evalComponent: runnerContext.features.evalEnabled,
 				name,
 				sha256: artifactFileDigest(file),
 				size: statSync(file).size,
