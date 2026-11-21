@@ -15,7 +15,12 @@ import type {
 	ApplicationImageHost,
 } from "./application-images.ts";
 import { artifactDigest, artifactIdentity } from "./artifact-store.ts";
-import { collectEmbeddedAssets, embedDeclarationsOf } from "./assets.ts";
+import { CommandProducers, producerTasks, runBuildProducers } from "./asset-producers.ts";
+import {
+	collectEmbeddedAssets,
+	embedDeclarationsOf,
+	embedDeclarationsOfWires,
+} from "./assets.ts";
 import { createBuildArtifact } from "./build-artifact.ts";
 import {
 	BuildConfigError,
@@ -74,6 +79,7 @@ import {
 	TYPE_STRIPPER_IDENTITY,
 	stripCompactTypes,
 } from "./compiler/frontend/compact-type-strip.ts";
+import type { EmbedDeclaration } from "./compiler/frontend/embed-declarations.ts";
 import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
@@ -81,7 +87,6 @@ import {
 import { embeddedCompilerOptions } from "./compiler/pipeline/embedded-compiler-options.ts";
 import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { emitWorkerImageTranslationUnits } from "./compiler/target/emit-worker-images.ts";
-import { deserializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import {
@@ -350,6 +355,8 @@ export interface BuildCommandResult {
 	runArguments?: Array<string>;
 	dependencies?: Array<string>;
 	dependencyIdentities?: Array<FrontendDependencyIdentity>;
+	/** The `maligator:assets` declarations the prepared images reach. */
+	embedDeclarations?: Array<EmbedDeclaration>;
 	profile?: PreparedProfile;
 }
 
@@ -859,21 +866,25 @@ function prepareCommandState(
 		}
 		const serializePath =
 			command.kind === "build" ? command.internal.serializePath : undefined;
-		const embedDeclarations = () =>
-			embedDeclarationsOf([
-				...(developmentFragments
-					? (frontend.wires ?? [frontend.wire]).map(deserializeRuntimeImage)
-					: [frontend.programImage.runtime]),
-				...frontend.workerImages.map((worker) => worker.image.runtime),
-			]);
-		if (serializePath !== undefined && embedDeclarations().length > 0)
+		const embedDeclarations = relocatable
+			? embedDeclarationsOfWires([
+					...(frontend.wires ?? [frontend.wire]),
+					...frontend.workerImages.map((worker) => worker.wire),
+				])
+			: embedDeclarationsOf([
+					frontend.programImage.runtime,
+					...frontend.workerImages.map((worker) => worker.image.runtime),
+				]);
+		const declared = embedDeclarations.length === 0 ? {} : { embedDeclarations };
+		if (serializePath !== undefined && embedDeclarations.length > 0)
 			commandError("error: embedded assets are not supported by portable wire output");
 		// Only `build` embeds; every other command reads declared files live.
 		const assets =
 			command.kind === "build" && serializePath === undefined
 				? reporter.phase("Collect assets", () => {
 						try {
-							return collectEmbeddedAssets(embedDeclarations(), {
+							runBuildProducers(producerTasks(embedDeclarations, "build"), writeStderr);
+							return collectEmbeddedAssets(embedDeclarations, {
 								cacheDirectory: maligatorCacheDirectory(),
 								session: frontendSession,
 							});
@@ -915,6 +926,7 @@ function prepareCommandState(
 				serializedPath: serializePath,
 				dependencies,
 				dependencyIdentities,
+				...declared,
 			};
 		}
 
@@ -983,6 +995,7 @@ function prepareCommandState(
 				runArguments,
 				dependencies,
 				dependencyIdentities,
+				...declared,
 			};
 		}
 
@@ -1148,6 +1161,7 @@ function prepareCommandState(
 				],
 				dependencies,
 				dependencyIdentities,
+				...declared,
 			};
 		}
 
@@ -1183,7 +1197,7 @@ function prepareCommandState(
 		if (command.kind === "build" && command.internal.emitC) {
 			for (const unit of generatedUnits())
 				writeSourceChunks(1, [...unit.sourceChunks, "\n"]);
-			return { dependencies, dependencyIdentities };
+			return { dependencies, dependencyIdentities, ...declared };
 		}
 		const output = reporter.phase("Generate native code", () =>
 			prepareGeneratedSources(
@@ -1308,6 +1322,7 @@ function prepareCommandState(
 				artifactDirectory: artifact.directory,
 				dependencies,
 				dependencyIdentities,
+				...declared,
 				...(preparedProfile === undefined ? {} : { profile: preparedProfile }),
 			};
 		}
@@ -1320,6 +1335,7 @@ function prepareCommandState(
 			binaryPath,
 			dependencies,
 			dependencyIdentities,
+			...declared,
 			...(preparedProfile === undefined ? {} : { profile: preparedProfile }),
 		};
 	};
@@ -1363,6 +1379,23 @@ export async function runCommand(
 		context.compiler === undefined
 			? prepareCommand(command, context)
 			: await context.compiler.prepare(command);
+	const producers = new CommandProducers("run", writeStderr);
+	try {
+		await producers.prepare(result.embedDeclarations ?? []);
+		return await runPreparedCommand(command, context, result);
+	} catch (error) {
+		if (error instanceof BuildConfigError) commandError(`error: ${error.message}`);
+		throw error;
+	} finally {
+		await producers.close();
+	}
+}
+
+async function runPreparedCommand(
+	command: RunCommand,
+	context: CommandContext,
+	result: BuildCommandResult,
+): Promise<ApplicationRunOutcome> {
 	const binaryPath = result.binaryPath!;
 	if (
 		!command.profile &&
@@ -1806,6 +1839,8 @@ export async function devCommand(
 		},
 	};
 	let buildStartedAt = initialBuildStartedAt;
+	// Asset watchers outlive application generations: they stop with the session.
+	const producers = new CommandProducers("dev", writeStderr);
 	const development = createDevelopmentSession(command, compiler, {
 		async publish(build, generation, isCurrent, signal) {
 			if (!isCurrent()) return false;
@@ -1860,6 +1895,7 @@ export async function devCommand(
 			}
 			let launched: LaunchedApplication | undefined;
 			try {
+				await producers.prepare(build.embedDeclarations ?? []);
 				launched = spawnApplication(build, generation);
 				await awaitApplicationEvaluation(launched, signal);
 			} catch (error) {
@@ -2020,6 +2056,11 @@ export async function devCommand(
 		}
 		try {
 			await development.close();
+		} catch (error) {
+			failures.push(error);
+		}
+		try {
+			await producers.close();
 		} catch (error) {
 			failures.push(error);
 		}
@@ -2225,13 +2266,22 @@ async function executeIsolatedTests(
 		binaryPath: runner,
 		wirePaths,
 	});
+	const producers = new CommandProducers("test", writeStderr);
 	const executionStartedAt = Date.now();
-	const outcome = await executeBinaryReported(runner, args, runEnv(environment), {
-		timeoutMs: options.timeoutMs,
-		resultPrefix: ISOLATED_TEST_RESULT_PREFIX,
-		stdout: options.stdout,
-		stderr: options.stderr,
-	});
+	let outcome: Awaited<ReturnType<typeof executeBinaryReported>>;
+	try {
+		await producers.prepare(
+			embedDeclarationsOfWires(wirePaths.map((wire) => readFileSync(wire))),
+		);
+		outcome = await executeBinaryReported(runner, args, runEnv(environment), {
+			timeoutMs: options.timeoutMs,
+			resultPrefix: ISOLATED_TEST_RESULT_PREFIX,
+			stdout: options.stdout,
+			stderr: options.stderr,
+		});
+	} finally {
+		await producers.close();
+	}
 	const executionMs = Date.now() - executionStartedAt;
 	options.onExecution?.(outcome, executionMs);
 	if (outcome.timedOut || outcome.status !== 0 || outcome.result === undefined) {
@@ -2427,19 +2477,31 @@ async function executeProfiledTests(
 	const capture = reporter.phase("Start profile capture", () =>
 		createProfileCapture("test", profile),
 	);
+	const producers = new CommandProducers("test", writeStderr);
 	const executionStartedAt = Date.now();
-	const outcome = await reporter.phaseAsync("Run profiled tests", () =>
-		executeBinaryReported(
-			binary,
-			[],
-			{
-				...runEnv(),
-				...capture.environment,
-				...compilerProfileRuntimeEnvironment(command),
-			},
-			{ resultPrefix: PROFILED_TEST_RESULT_PREFIX },
-		),
-	);
+	let outcome: Awaited<ReturnType<typeof executeBinaryReported>>;
+	try {
+		await producers.prepare(
+			embedDeclarationsOf([
+				compiled.programImage.runtime,
+				...compiled.workerImages.map((worker) => worker.image.runtime),
+			]),
+		);
+		outcome = await reporter.phaseAsync("Run profiled tests", () =>
+			executeBinaryReported(
+				binary,
+				[],
+				{
+					...runEnv(),
+					...capture.environment,
+					...compilerProfileRuntimeEnvironment(command),
+				},
+				{ resultPrefix: PROFILED_TEST_RESULT_PREFIX },
+			),
+		);
+	} finally {
+		await producers.close();
+	}
 	const executionMs = Date.now() - executionStartedAt;
 	if (outcome.status !== 0 || outcome.result === undefined) {
 		commandError(

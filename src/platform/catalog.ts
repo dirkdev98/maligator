@@ -369,9 +369,29 @@ const assetTypes: ReadonlyArray<PlatformTypeDefinition> = [
 		declaration: "interface",
 	},
 	workerType(
+		"EmbedProducer",
+		"{\n /** The executable and its arguments; no shell interprets them. */\n command: ReadonlyArray<string>;\n /** The working directory, resolved from the declaring module. Defaults to its directory. */\n cwd?: string;\n}",
+		"A command that writes the declared files.",
+	),
+	workerType(
+		"EmbedWatchProducer",
+		"EmbedProducer & {\n /** A server the watcher starts; the command waits until it answers. */\n url?: string;\n}",
+		"A long-running command that keeps the declared files current, such as a frontend dev server.",
+	),
+	workerType(
+		"EmbedProducerUse",
+		"{\n /** Defaults to build. */\n build?: 'build' | 'existing';\n /** Defaults to build. */\n run?: 'build' | 'watch' | 'existing';\n /** Defaults to existing. */\n test?: 'build' | 'watch' | 'existing';\n /** Defaults to watch, or build without a watcher. */\n dev?: 'build' | 'watch' | 'existing';\n}",
+		"Which producer each command runs. `existing` uses the files already on disk; a selected producer must be declared.",
+	),
+	workerType(
+		"EmbedFileOptions",
+		"{\n /** Runs before the files are read: once per run or test, once per dev session, before a build embeds them. */\n build?: EmbedProducer;\n /** Runs alongside the command and stops with it. */\n watch?: EmbedWatchProducer;\n use?: EmbedProducerUse;\n}",
+		"How the declared files are produced. Only the project's own modules may name commands; they never reach a built executable.",
+	),
+	workerType(
 		"EmbedDirectoryOptions",
-		"{\n /** Patterns of member paths, with `*`, `?` and whole-segment `**`. Defaults to every file. Each pattern must match a file. */\n include?: ReadonlyArray<string>;\n /** Patterns of paths to leave out, even when included. */\n exclude?: ReadonlyArray<string>;\n /** Let wildcards match names that start with a dot. Defaults to false. */\n dot?: boolean;\n}",
-		"Which files of the directory belong to the declaration. Patterns are relative to the directory and use `/` separators.",
+		"EmbedFileOptions & {\n /** Patterns of member paths, with `*`, `?` and whole-segment `**`. Defaults to every file. Each pattern must match a file. */\n include?: ReadonlyArray<string>;\n /** Patterns of paths to leave out, even when included. */\n exclude?: ReadonlyArray<string>;\n /** Let wildcards match names that start with a dot. Defaults to false. */\n dot?: boolean;\n}",
+		"Which files of the directory belong to the declaration, and how they are produced. Patterns are relative to the directory and use `/` separators.",
 	),
 ];
 
@@ -976,7 +996,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 		exports: [
 			embedExport(
 				"embedFile",
-				"(specifier: string) => EmbeddedFile",
+				"(specifier: string, options?: EmbedFileOptions) => EmbeddedFile",
 				"Declare a file to embed and return its handle. Repeated declarations of the same file share one handle.",
 				[
 					'import { embedFile } from "maligator:assets";\n\nconst certificate = embedFile("./certs/ca.pem");\nconsole.log(certificate.text().length);',

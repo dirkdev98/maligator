@@ -1206,7 +1206,7 @@ typedef struct MalAssetFile {
 
 /** A file or directory a `maligator:assets` declaration embeds into an executable. */
 typedef struct MalAsset {
-    /** The declaration's canonical JSON, which its installer slot data repeats. */
+    /** The declaration's `name`, which its installer slot data repeats. */
     const char *name;
     const char *hash;
     const char *version;

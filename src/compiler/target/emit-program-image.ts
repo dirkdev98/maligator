@@ -1,4 +1,7 @@
 import type { IncludedAsset } from "../../assets.ts";
+import type { PlatformData } from "../../platform/catalog.ts";
+import { EMBED_INSTALLER, embeddedAsset } from "../frontend/embed-declarations.ts";
+import type { EmbedDeclaration } from "../frontend/embed-declarations.ts";
 import { bigintLimbs } from "../shared/bigint-digits.ts";
 import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import {
@@ -2944,7 +2947,15 @@ function malRuntimeImageStruct(
 				`static const MalHostInstallSlot mal_host_install_${i}_slots${suffix}[] = {`,
 			);
 			for (const { name, slot, constant, data } of install.exports) {
-				const payload = constant ?? data;
+				// A built executable keeps where its assets came from, not the commands
+				// that produced them.
+				const payload =
+					constant ??
+					(install.installer === EMBED_INSTALLER && data !== undefined
+						? (embeddedAsset(
+								data as unknown as EmbedDeclaration,
+							) as unknown as PlatformData)
+						: data);
 				lines.push(
 					`    { .name = "${cEscapeString(name)}", .slot = ${slot}, .data = ${payload === undefined ? "nullptr" : `"${cEscapeString(JSON.stringify(payload))}"`} },`,
 				);

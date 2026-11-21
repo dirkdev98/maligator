@@ -558,6 +558,9 @@ export async function executeTestCommand(
 			group.files.some((file) => selectedFiles.includes(file));
 
 		progress.stage(3, 3, "execute tests");
+		await applicationSession.producers.prepare(
+			groups.flatMap((group) => group.compiled.embedDeclarations ?? []),
+		);
 		let executionFailed = false;
 		const executionStageStartedAt = Date.now();
 		const executed = isolated
@@ -745,7 +748,13 @@ export async function executeTestCommand(
 		try {
 			applicationSession.finish();
 		} finally {
-			if (retained === undefined) applicationSession.close();
+			if (retained === undefined) {
+				try {
+					applicationSession.close();
+				} finally {
+					await applicationSession.producers.close();
+				}
+			}
 		}
 	}
 }

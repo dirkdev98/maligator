@@ -58,12 +58,66 @@ declare module "maligator:assets" {
 	}
 
 	/**
-	 * Which files of the directory belong to the declaration. Patterns are relative to
-	 * the directory and use `/` separators.
+	 * A command that writes the declared files.
+	 *
+	 * @see https://maligator.ddv.tools/api/assets#EmbedProducer
+	 */
+	export type EmbedProducer = {
+		/** The executable and its arguments; no shell interprets them. */
+		command: ReadonlyArray<string>;
+		/** The working directory, resolved from the declaring module. Defaults to its directory. */
+		cwd?: string;
+	};
+
+	/**
+	 * A long-running command that keeps the declared files current, such as a frontend
+	 * dev server.
+	 *
+	 * @see https://maligator.ddv.tools/api/assets#EmbedWatchProducer
+	 */
+	export type EmbedWatchProducer = EmbedProducer & {
+		/** A server the watcher starts; the command waits until it answers. */
+		url?: string;
+	};
+
+	/**
+	 * Which producer each command runs. `existing` uses the files already on disk; a
+	 * selected producer must be declared.
+	 *
+	 * @see https://maligator.ddv.tools/api/assets#EmbedProducerUse
+	 */
+	export type EmbedProducerUse = {
+		/** Defaults to build. */
+		build?: "build" | "existing";
+		/** Defaults to build. */
+		run?: "build" | "watch" | "existing";
+		/** Defaults to existing. */
+		test?: "build" | "watch" | "existing";
+		/** Defaults to watch, or build without a watcher. */
+		dev?: "build" | "watch" | "existing";
+	};
+
+	/**
+	 * How the declared files are produced. Only the project's own modules may name
+	 * commands; they never reach a built executable.
+	 *
+	 * @see https://maligator.ddv.tools/api/assets#EmbedFileOptions
+	 */
+	export type EmbedFileOptions = {
+		/** Runs before the files are read: once per run or test, once per dev session, before a build embeds them. */
+		build?: EmbedProducer;
+		/** Runs alongside the command and stops with it. */
+		watch?: EmbedWatchProducer;
+		use?: EmbedProducerUse;
+	};
+
+	/**
+	 * Which files of the directory belong to the declaration, and how they are produced.
+	 * Patterns are relative to the directory and use `/` separators.
 	 *
 	 * @see https://maligator.ddv.tools/api/assets#EmbedDirectoryOptions
 	 */
-	export type EmbedDirectoryOptions = {
+	export type EmbedDirectoryOptions = EmbedFileOptions & {
 		/** Patterns of member paths, with `*`, `?` and whole-segment `**`. Defaults to every file. Each pattern must match a file. */
 		include?: ReadonlyArray<string>;
 		/** Patterns of paths to leave out, even when included. */
@@ -84,7 +138,7 @@ declare module "maligator:assets" {
 	 *
 	 * @see https://maligator.ddv.tools/api/assets#embedFile
 	 */
-	export const embedFile: (specifier: string) => EmbeddedFile;
+	export const embedFile: (specifier: string, options?: EmbedFileOptions) => EmbeddedFile;
 	/**
 	 * Declare a directory tree to embed and return its handle. Repeated declarations
 	 * with the same options share one handle.

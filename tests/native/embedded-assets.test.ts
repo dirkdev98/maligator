@@ -12,6 +12,7 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { collectEmbeddedAssets } from "../../src/assets.ts";
 import { resolveBuildConfig } from "../../src/build-config.ts";
+import { canonicalEmbedDeclaration } from "../../src/compiler/frontend/embed-declarations.ts";
 import { buildNativeBinary, runToStdout, STRESS_ENV } from "../../src/test-harness.ts";
 
 const root = mkdtempSync(path.join(os.tmpdir(), "mal-embedded-assets-"));
@@ -62,8 +63,13 @@ lines.push(JSON.stringify(text()));
 console.log(lines.join("\\n"));
 `,
 		);
-		directoryHash = collectEmbeddedAssets([{ kind: "directory", path: sourceTree }])[0]!
-			.hash;
+		directoryHash = collectEmbeddedAssets([
+			canonicalEmbedDeclaration(
+				{ kind: "directory", specifier: sourceTree },
+				sourceTree,
+				() => root,
+			),
+		])[0]!.hash;
 		binary = buildNativeBinary({
 			fixture: entry,
 			name: "embedded-assets",

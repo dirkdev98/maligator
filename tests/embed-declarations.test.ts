@@ -7,6 +7,7 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { transformEmbedDeclarations } from "../src/compiler/frontend/embed-declarations.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
+import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
 
 const root = mkdtempSync(path.join(tmpdir(), "mal-embed-declarations-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -29,7 +30,13 @@ function declarationsOf(
 		buildConfig: resolveBuildConfig({ modules: { aliases } }),
 		stripTypes: stripCompactTypes,
 	});
-	return { directory, declarations: embedDeclarationsOf([image.runtime]) };
+	return {
+		directory,
+		declarations: embedDeclarationsOf([image.runtime]).map(({ name, ...declaration }) => {
+			expect(name).toMatch(/^[0-9a-f]{32}$/);
+			return declaration;
+		}),
+	};
 }
 
 function rejects(source: string, message: RegExp): void {
@@ -67,7 +74,8 @@ describe("embed declarations", () => {
 		);
 		rejects(`${header}embedFile(name);`, /string literal specifier/);
 		rejects(`${header}embedFile(\`./\${name}\`);`, /string literal specifier/);
-		rejects(`${header}embedFile("./a", {});`, /one argument/);
+		rejects(`${header}embedFile("./a", {}, {});`, /at most two arguments/);
+		rejects(`${header}embedFile("./a", { include: ["*"] });`, /unknown embedFile option/);
 		rejects(`${header}embedDirectory("./d", options);`, /object literal/);
 		rejects(`${header}embedDirectory("./d", { include: [pattern] });`, /string literals/);
 		rejects(`${header}embedDirectory("./d", { include: [] });`, /at least one pattern/);
@@ -114,6 +122,68 @@ describe("embed declarations", () => {
 			]),
 		);
 		expect(declarations).toHaveLength(4);
+	});
+
+	it("validates producer commands and the producer each command selects", () => {
+		const header = 'import { embedDirectory } from "maligator:assets";\n';
+		rejects(
+			`${header}embedDirectory("./d", { build: { command: [] } });`,
+			/non-empty array/,
+		);
+		rejects(
+			`${header}embedDirectory("./d", { build: { command: ["npm"], shell: true } });`,
+			/unknown .* property 'shell'/,
+		);
+		rejects(
+			`${header}embedDirectory("./d", { watch: { command: ["vite"], url: "localhost:5173" } });`,
+			/http or https URL/,
+		);
+		rejects(
+			`${header}embedDirectory("./d", { use: { run: "watch" } });`,
+			/use\.run' selects 'watch', which the declaration does not define/,
+		);
+		rejects(
+			`${header}embedDirectory("./d", { build: { command: ["make"] }, use: { build: "watch" } });`,
+			/use\.build' must be "build", "existing"/,
+		);
+	});
+
+	it("resolves producer directories and keeps commands to the project's modules", () => {
+		const { directory, declarations } = declarationsOf(
+			'import { embedDirectory } from "maligator:assets";\nglobalThis.web = embedDirectory("./web/dist", { build: { command: ["npm", "run", "build"], cwd: "./web" }, watch: { command: ["vite"], url: "http://127.0.0.1:5173" }, use: { test: "build" } });\n',
+		);
+		expect(declarations).toEqual([
+			{
+				kind: "directory",
+				path: path.join(directory, "web/dist"),
+				build: { command: ["npm", "run", "build"], cwd: path.join(directory, "web") },
+				watch: { command: ["vite"], url: "http://127.0.0.1:5173", cwd: directory },
+				use: { test: "build" },
+			},
+		]);
+		expect(() =>
+			declarationsOf('import "pkg";\n', {
+				"node_modules/pkg/package.json": '{ "type": "module", "main": "index.js" }',
+				"node_modules/pkg/index.js":
+					'import { embedFile } from "maligator:assets";\nglobalThis.asset = embedFile("./a.txt", { build: { command: ["make"] } });\n',
+			}),
+		).toThrow(/only the project's own modules may declare build or watch commands/);
+	});
+
+	it("keeps producer commands out of a built executable", () => {
+		const directory = path.join(root, "emitted");
+		mkdirSync(directory, { recursive: true });
+		const entry = path.join(directory, "main.mjs");
+		writeFileSync(
+			entry,
+			'import { embedFile } from "maligator:assets";\nglobalThis.asset = embedFile("./generated.txt", { build: { command: ["generate-secret-asset"] } });\n',
+		);
+		const output = emitProgramImage(
+			compileEntrypoint(entry, { stripTypes: stripCompactTypes }),
+			{ compiled: false },
+		);
+		expect(output).toContain(path.join(directory, "generated.txt"));
+		expect(output).not.toContain("generate-secret-asset");
 	});
 
 	it("installs one handle per distinct declaration the program reaches", () => {

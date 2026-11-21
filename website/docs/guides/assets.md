@@ -43,6 +43,39 @@ for (const file of migrations.files()) console.log(file.path);
 
 `files()` lists members in code point order of their paths. In a build, each `include` pattern must match a file and every member must be a regular file; symbolic links fail the build.
 
+## Produce files with a build step
+
+A frontend built by a tool such as Vite declares how its files come about next to where they are embedded:
+
+```typescript src/frontend.ts
+import { embedDirectory } from "maligator:assets";
+
+export const frontend = embedDirectory("../web/dist", {
+	build: { command: ["npm", "run", "build"], cwd: "../web" },
+	watch: {
+		command: ["npm", "run", "dev", "--", "--port", "5173", "--strictPort"],
+		cwd: "../web",
+		url: "http://127.0.0.1:5173",
+	},
+});
+```
+
+`build` runs a command to completion before the files are read: before `maligator build` embeds them and before `run` starts the application. `watch` starts a long-running command, waits until its `url` answers, and keeps it running for the whole command: across every generation of `dev` and every rerun of `test --watch`. Commands run without a shell, from `cwd` resolved against the declaring module, and stop with Maligator.
+
+By default `build` and `run` use the build command, `test` uses the files that already exist and `dev` uses the watcher, or the build command when there is none. Choose per command with `use`:
+
+```typescript src/frontend.ts
+import { embedDirectory } from "maligator:assets";
+
+export const frontend = embedDirectory("../web/dist", {
+	build: { command: ["npm", "run", "build"], cwd: "../web" },
+	watch: { command: ["npm", "run", "dev"], cwd: "../web", url: "http://127.0.0.1:5173" },
+	use: { run: "watch", test: "build" },
+});
+```
+
+`existing` runs nothing, which suits a CI job that built the frontend in an earlier step. Commands only run for declarations the command reaches, and only the project's own modules may declare them; packages in `node_modules` embed what they ship. A built executable never contains the commands.
+
 ## Read contents or a path
 
 A file handle has `path`, `size`, `digest` (hexadecimal SHA-256) and `type` (the media type of its extension). `bytes()` returns a `Uint8Array` over an immutable buffer, `text()` decodes UTF-8 without a byte order mark and `json()` parses the text.

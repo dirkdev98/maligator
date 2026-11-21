@@ -13,7 +13,11 @@ import * as path from "node:path";
 import { writeFileAtomically } from "./atomic-file.ts";
 import { BuildConfigError } from "./build-config-error.ts";
 import { EMBED_INSTALLER } from "./compiler/frontend/embed-declarations.ts";
-import type { EmbedDeclaration } from "./compiler/frontend/embed-declarations.ts";
+import type {
+	EmbedDeclaration,
+	EmbeddedAsset,
+} from "./compiler/frontend/embed-declarations.ts";
+import { deserializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import type { RuntimeImage } from "./compiler/target/runtime-image.ts";
 import { walkDirectoryTree } from "./file-tree.ts";
 import type { FrontendCompilationSession } from "./frontend-cache.ts";
@@ -46,12 +50,30 @@ interface AssetSnapshotManifest {
 }
 
 export interface IncludedAsset {
-	/** The declaration's canonical JSON, which its installer slot data repeats. */
+	/** The declaration's `name`, which the installer looks its embedded copy up by. */
 	name: string;
 	type: "file" | "directory";
 	hash: string;
 	version: string;
 	files: Array<IncludedAssetFile>;
+}
+
+const installerName = new TextEncoder().encode(EMBED_INSTALLER);
+
+/**
+ * The embed declarations serialized images install. Most images declare none, so an
+ * image is decoded only when its bytes name the installer.
+ */
+export function embedDeclarationsOfWires(
+	wires: Iterable<Uint8Array>,
+): Array<EmbedDeclaration> {
+	const images = [];
+	for (const wire of wires)
+		if (
+			Buffer.from(wire.buffer, wire.byteOffset, wire.byteLength).includes(installerName)
+		)
+			images.push(deserializeRuntimeImage(wire));
+	return embedDeclarationsOf(images);
 }
 
 /** The distinct embed declarations a set of images installs, in a stable order. */
@@ -75,7 +97,7 @@ export function embedDeclarationsOf(
 		.map(([, declaration]) => declaration);
 }
 
-function assetError(declaration: EmbedDeclaration, message: string): never {
+function assetError(declaration: EmbeddedAsset, message: string): never {
 	throw new BuildConfigError(
 		`embedded ${declaration.kind} '${declaration.path}': ${message}`,
 	);
@@ -227,7 +249,7 @@ function compareMemberPaths(left: IncludedAssetFile, right: IncludedAssetFile): 
 }
 
 function includeDirectory(
-	declaration: EmbedDeclaration,
+	declaration: EmbeddedAsset,
 	stagingDirectory: string,
 	options?: AssetCollectionOptions,
 ): Array<IncludedAssetFile> {
@@ -269,7 +291,7 @@ function includeDirectory(
 
 /** Read and hash the files of every embed declaration a build reaches. */
 export function collectEmbeddedAssets(
-	declarations: ReadonlyArray<EmbedDeclaration>,
+	declarations: ReadonlyArray<EmbeddedAsset>,
 	options?: AssetCollectionOptions,
 ): Array<IncludedAsset> {
 	const temporaryDirectory =
@@ -313,7 +335,7 @@ export function collectEmbeddedAssets(
 			files: files.map((file) => [file.path, file.size, file.digest]),
 		};
 		return {
-			name: JSON.stringify(declaration),
+			name: declaration.name,
 			type: declaration.kind,
 			hash: hash("sha256", JSON.stringify(digestInput), "hex"),
 			version: ASSET_FORMAT_VERSION,

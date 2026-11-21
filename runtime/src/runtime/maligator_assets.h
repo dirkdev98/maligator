@@ -4,9 +4,9 @@
 
 /**
  * Install the handle of each `maligator:assets` declaration the program reaches. A
- * slot's data is the declaration's canonical JSON. An executable built by
- * `maligator build` embeds an asset under that name; without an embedded copy the
- * handle reads the declared path on the file system each time.
+ * slot's data is the declaration as JSON. An executable built by `maligator build`
+ * embeds an asset under the declaration's `name`; without an embedded copy the handle
+ * reads the declared path on the file system each time.
  */
 void mal_host_install_maligator_assets(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);

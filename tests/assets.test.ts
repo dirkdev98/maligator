@@ -10,7 +10,11 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ASSET_FORMAT_VERSION, collectEmbeddedAssets } from "../src/assets.ts";
 import { BuildConfigError } from "../src/build-config.ts";
-import type { EmbedDeclaration } from "../src/compiler/frontend/embed-declarations.ts";
+import { canonicalEmbedDeclaration } from "../src/compiler/frontend/embed-declarations.ts";
+import type {
+	EmbedDeclaration,
+	EmbedRequest,
+} from "../src/compiler/frontend/embed-declarations.ts";
 import { FrontendCompilationSession } from "../src/frontend-cache.ts";
 
 function fixture(): string {
@@ -27,8 +31,16 @@ function fixture(): string {
 	return root;
 }
 
-function directory(root: string, options: Omit<EmbedDeclaration, "kind" | "path"> = {}) {
-	return { kind: "directory" as const, path: path.join(root, "tree"), ...options };
+type Options = Omit<EmbedRequest, "kind" | "specifier">;
+
+function declare(kind: "file" | "directory", file: string, options: Options = {}) {
+	return canonicalEmbedDeclaration({ kind, specifier: file, ...options }, file, (cwd) =>
+		path.dirname(cwd ?? file),
+	);
+}
+
+function directory(root: string, options: Options = {}) {
+	return declare("directory", path.join(root, "tree"), options);
 }
 
 function paths(declaration: EmbedDeclaration): Array<string> {
@@ -75,13 +87,13 @@ describe("embedded asset collection", () => {
 	it("fails for a declared path that is missing or of the wrong kind", () => {
 		const root = fixture();
 		expect(() =>
-			collectEmbeddedAssets([{ kind: "file", path: path.join(root, "missing.txt") }]),
+			collectEmbeddedAssets([declare("file", path.join(root, "missing.txt"))]),
 		).toThrow(/missing\.txt': cannot read/);
 		expect(() =>
-			collectEmbeddedAssets([{ kind: "file", path: path.join(root, "tree") }]),
+			collectEmbeddedAssets([declare("file", path.join(root, "tree"))]),
 		).toThrow(/not a regular file/);
 		expect(() =>
-			collectEmbeddedAssets([{ kind: "directory", path: path.join(root, "empty.bin") }]),
+			collectEmbeddedAssets([declare("directory", path.join(root, "empty.bin"))]),
 		).toThrow(/not a directory/);
 	});
 
@@ -103,7 +115,7 @@ describe("embedded asset collection", () => {
 		const root = fixture();
 		const declaration = directory(root, { include: ["**/*.txt"] });
 		const [asset] = collectEmbeddedAssets([declaration]);
-		expect(asset?.name).toBe(JSON.stringify(declaration));
+		expect(asset?.name).toBe(declaration.name);
 		expect(asset?.version).toBe(ASSET_FORMAT_VERSION);
 		expect(collectEmbeddedAssets([declaration])[0]?.hash).toBe(asset?.hash);
 		writeFileSync(path.join(root, "tree", "root.txt"), "changed\n");
@@ -113,7 +125,7 @@ describe("embedded asset collection", () => {
 	it("snapshots the exact bytes it recorded", () => {
 		const root = fixture();
 		const [asset] = collectEmbeddedAssets([
-			{ kind: "file", path: path.join(root, "empty.bin") },
+			declare("file", path.join(root, "empty.bin")),
 		]);
 		const file = asset!.files[0]!;
 		writeFileSync(path.join(root, "empty.bin"), "changed after collection");
@@ -124,7 +136,7 @@ describe("embedded asset collection", () => {
 	it("reuses and repairs content-addressed snapshots", () => {
 		const root = fixture();
 		const cacheDirectory = path.join(root, "cache");
-		const declaration = { kind: "file" as const, path: path.join(root, "tree/root.txt") };
+		const declaration = declare("file", path.join(root, "tree/root.txt"));
 		const collect = () => {
 			const session = new FrontendCompilationSession();
 			session.useCacheDirectory(cacheDirectory);

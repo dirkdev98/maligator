@@ -14,6 +14,7 @@ import {
 	EMBED_INSTALLER,
 	EmbedDeclarationError,
 	canonicalEmbedDeclaration,
+	declaresProducers,
 	embedModuleDeclaration,
 	embedModuleId,
 	isEmbedModule,
@@ -1762,7 +1763,14 @@ function resolveEmbedRequest(
 		if (packageDir === undefined) return fail(`cannot find package '${packageName}'`);
 		resolved = path.resolve(packageDir, subpath);
 	}
-	return embedModuleId(canonicalEmbedDeclaration(request, resolved));
+	// A dependency's declarations embed what its package ships; only the project runs commands.
+	if (declaresProducers(request) && importerPath.split(path.sep).includes("node_modules"))
+		return fail("only the project's own modules may declare build or watch commands");
+	return embedModuleId(
+		canonicalEmbedDeclaration(request, resolved, (cwd) =>
+			path.resolve(path.dirname(importerPath), cwd ?? "."),
+		),
+	);
 }
 
 /**

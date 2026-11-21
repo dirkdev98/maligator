@@ -1,3 +1,4 @@
+import { hash } from "node:crypto";
 import { parse as meriyahParse } from "meriyah";
 import type { ESTree } from "meriyah";
 import { traverseEstree } from "./estree-traversal.ts";
@@ -15,8 +16,33 @@ export const EMBED_INSTALLER = "mal_host_install_maligator_assets";
 const EMBED_REQUEST_PREFIX = "maligator:embed?";
 const EMBED_MODULE_PREFIX = "maligator:embed:";
 
+/** A command that produces the declared files, run from `cwd`. */
+export interface EmbedProducer {
+	readonly command: ReadonlyArray<string>;
+	readonly cwd?: string;
+}
+
+/** A long-running producer; `url` names the server it answers on once ready. */
+export interface EmbedWatchProducer extends EmbedProducer {
+	readonly url?: string;
+}
+
+/** The commands that run a producer, and which one: `existing` runs none. */
+export interface EmbedProducerUse {
+	readonly build?: "build" | "existing";
+	readonly run?: "build" | "watch" | "existing";
+	readonly test?: "build" | "watch" | "existing";
+	readonly dev?: "build" | "watch" | "existing";
+}
+
+interface EmbedProducers {
+	readonly build?: EmbedProducer;
+	readonly watch?: EmbedWatchProducer;
+	readonly use?: EmbedProducerUse;
+}
+
 /** What a call declares, before its specifier is resolved. */
-export interface EmbedRequest {
+export interface EmbedRequest extends EmbedProducers {
 	readonly kind: "file" | "directory";
 	readonly specifier: string;
 	readonly include?: ReadonlyArray<string>;
@@ -24,18 +50,23 @@ export interface EmbedRequest {
 	readonly dot?: true;
 }
 
-/**
- * A resolved declaration. Its canonical JSON is the host module identity, the
- * installer's slot data and the name of the embedded copy in a built executable.
- */
-export interface EmbedDeclaration {
+/** The files a declaration embeds, which a built executable needs to find them. */
+export interface EmbeddedAsset {
 	readonly kind: "file" | "directory";
 	/** Absolute path of the file or directory. */
 	readonly path: string;
 	readonly include?: ReadonlyArray<string>;
 	readonly exclude?: ReadonlyArray<string>;
 	readonly dot?: true;
+	/** Identifies the embedded copy independently of producer options. */
+	readonly name: string;
 }
+
+/**
+ * A resolved declaration. Its canonical JSON is the host module identity and the
+ * installer's slot data; producer cwd paths are absolute.
+ */
+export interface EmbedDeclaration extends EmbeddedAsset, EmbedProducers {}
 
 export class EmbedDeclarationError extends SyntaxError {}
 
@@ -55,13 +86,43 @@ export function parseEmbedRequest(specifier: string): EmbedRequest {
 export function canonicalEmbedDeclaration(
 	request: EmbedRequest,
 	resolvedPath: string,
+	resolveCwd: (cwd: string | undefined) => string,
 ): EmbedDeclaration {
-	return {
+	const asset = {
 		kind: request.kind,
 		path: resolvedPath,
 		...(request.include === undefined ? {} : { include: [...request.include] }),
 		...(request.exclude === undefined ? {} : { exclude: [...request.exclude] }),
 		...(request.dot === true ? { dot: true as const } : {}),
+	};
+	const producer = <Producer extends EmbedProducer>(entry: Producer) => ({
+		...entry,
+		command: [...entry.command],
+		cwd: resolveCwd(entry.cwd),
+	});
+	return {
+		...asset,
+		name: hash("sha256", JSON.stringify(asset), "hex").slice(0, 32),
+		...(request.build === undefined ? {} : { build: producer(request.build) }),
+		...(request.watch === undefined ? {} : { watch: producer(request.watch) }),
+		...(request.use === undefined ? {} : { use: { ...request.use } }),
+	};
+}
+
+/** Whether a declaration names commands the CLI would run. */
+export function declaresProducers(request: EmbedRequest): boolean {
+	return request.build !== undefined || request.watch !== undefined;
+}
+
+/** The part of a declaration a built executable keeps: no producer commands. */
+export function embeddedAsset(declaration: EmbedDeclaration): EmbeddedAsset {
+	return {
+		kind: declaration.kind,
+		path: declaration.path,
+		...(declaration.include === undefined ? {} : { include: declaration.include }),
+		...(declaration.exclude === undefined ? {} : { exclude: declaration.exclude }),
+		...(declaration.dot === true ? { dot: true as const } : {}),
+		name: declaration.name,
 	};
 }
 
@@ -293,11 +354,7 @@ function declaration(
 	const node = call as Located;
 	if (call.optional) fail(node, `${kind} cannot be called optionally`);
 	const [specifierNode, optionsNode, ...rest] = call.arguments;
-	if (rest.length > 0 || (kind === "embedFile" && optionsNode !== undefined))
-		fail(
-			node,
-			`${kind} takes ${kind === "embedFile" ? "one argument" : "at most two arguments"}`,
-		);
+	if (rest.length > 0) fail(node, `${kind} takes at most two arguments`);
 	const specifier = literalString(specifierNode);
 	if (specifier === undefined)
 		fail(node, `${kind} needs a string literal specifier, resolved like an import`);
@@ -320,15 +377,16 @@ function literalString(node: ESTree.Node | undefined): string | undefined {
 	return undefined;
 }
 
-function literalOptions(
+type Fail = (node: Located, message: string) => never;
+
+/** The plain `key: value` properties of an object literal, in source order. */
+function literalProperties(
 	node: ESTree.Node,
-	kind: string,
-	fail: (node: Located, message: string) => never,
-): Pick<EmbedRequest, "include" | "exclude" | "dot"> {
-	if (node.type !== "ObjectExpression")
-		fail(node, `${kind} options must be an object literal`);
-	const options: { include?: Array<string>; exclude?: Array<string>; dot?: true } = {};
-	for (const property of node.properties) {
+	what: string,
+	fail: Fail,
+): Array<{ name: string; value: ESTree.Node; property: ESTree.Property }> {
+	if (node.type !== "ObjectExpression") fail(node, `${what} must be an object literal`);
+	return node.properties.map((property) => {
 		if (
 			property.type !== "Property" ||
 			property.kind !== "init" ||
@@ -336,35 +394,134 @@ function literalOptions(
 			property.method ||
 			property.shorthand
 		)
-			fail(property, `${kind} options must be plain literal properties`);
-		const entry = property;
+			fail(property, `${what} must have plain literal properties`);
 		const name =
-			entry.key.type === "Identifier"
-				? entry.key.name
-				: entry.key.type === "Literal"
-					? String(entry.key.value)
-					: undefined;
+			property.key.type === "Identifier"
+				? property.key.name
+				: property.key.type === "Literal"
+					? String(property.key.value)
+					: "";
+		return { name, value: property.value, property };
+	});
+}
+
+function literalOptions(
+	node: ESTree.Node,
+	kind: "embedFile" | "embedDirectory",
+	fail: Fail,
+): Omit<EmbedRequest, "kind" | "specifier"> {
+	const allowed =
+		kind === "embedFile"
+			? ["build", "watch", "use"]
+			: ["include", "exclude", "dot", "build", "watch", "use"];
+	const options: {
+		include?: Array<string>;
+		exclude?: Array<string>;
+		dot?: true;
+		build?: EmbedProducer;
+		watch?: EmbedWatchProducer;
+		use?: EmbedProducerUse;
+	} = {};
+	let useNode: ESTree.Node | undefined;
+	for (const { name, value, property } of literalProperties(
+		node,
+		`${kind} options`,
+		fail,
+	)) {
+		if (!allowed.includes(name))
+			fail(property, `unknown ${kind} option '${name}' (allowed: ${allowed.join(", ")})`);
 		if (name === "include" || name === "exclude") {
-			const patterns = literalStrings(entry.value);
+			const patterns = literalStrings(value);
 			if (patterns === undefined)
-				fail(entry.value, `${kind} option '${name}' must be an array of string literals`);
+				fail(value, `${kind} option '${name}' must be an array of string literals`);
 			if (name === "include" && patterns.length === 0)
-				fail(entry.value, `${kind} option 'include' needs at least one pattern`);
+				fail(value, `${kind} option 'include' needs at least one pattern`);
 			for (const pattern of patterns) {
 				const error = embedPatternError(pattern);
-				if (error !== undefined) fail(entry.value, `${kind} option '${name}': ${error}`);
+				if (error !== undefined) fail(value, `${kind} option '${name}': ${error}`);
 			}
 			if (name === "exclude" && patterns.length === 0) continue;
 			options[name] = patterns;
 		} else if (name === "dot") {
-			if (entry.value.type !== "Literal" || typeof entry.value.value !== "boolean")
-				fail(entry.value, `${kind} option 'dot' must be a boolean literal`);
-			if (entry.value.value === true) options.dot = true;
+			if (value.type !== "Literal" || typeof value.value !== "boolean")
+				fail(value, `${kind} option 'dot' must be a boolean literal`);
+			if (value.value === true) options.dot = true;
+		} else if (name === "build" || name === "watch") {
+			options[name] = producerOptions(value, `${kind} option '${name}'`, name, fail);
 		} else {
-			fail(entry, `unknown ${kind} option '${name}' (allowed: include, exclude, dot)`);
+			useNode = value;
+			options.use = useOptions(value, kind, fail);
 		}
 	}
+	for (const [command, choice] of Object.entries(options.use ?? {}))
+		if (choice !== "existing" && options[choice as "build" | "watch"] === undefined)
+			fail(
+				useNode!,
+				`${kind} option 'use.${command}' selects '${choice}', which the declaration does not define`,
+			);
 	return options;
+}
+
+function producerOptions(
+	node: ESTree.Node,
+	what: string,
+	kind: "build" | "watch",
+	fail: Fail,
+): EmbedWatchProducer {
+	let command: Array<string> | undefined;
+	let cwd: string | undefined;
+	let url: string | undefined;
+	for (const { name, value, property } of literalProperties(node, what, fail)) {
+		if (name === "command") {
+			command = literalStrings(value);
+			if (command === undefined || command.length === 0 || command[0] === "")
+				fail(value, `${what}.command must be a non-empty array of string literals`);
+		} else if (name === "cwd") {
+			cwd = literalString(value);
+			if (cwd === undefined || cwd.length === 0)
+				fail(value, `${what}.cwd must be a non-empty string literal`);
+		} else if (name === "url" && kind === "watch") {
+			url = literalString(value);
+			if (url === undefined || !/^https?:\/\/[^/]/.test(url))
+				fail(value, `${what}.url must be an http or https URL literal`);
+		} else {
+			fail(
+				property,
+				`unknown ${what} property '${name}' (allowed: command, cwd${kind === "watch" ? ", url" : ""})`,
+			);
+		}
+	}
+	if (command === undefined) fail(node, `${what} needs a command`);
+	return {
+		command,
+		...(cwd === undefined ? {} : { cwd }),
+		...(url === undefined ? {} : { url }),
+	};
+}
+
+function useOptions(node: ESTree.Node, kind: string, fail: Fail): EmbedProducerUse {
+	const use: Record<string, "build" | "watch" | "existing"> = {};
+	for (const { name, value, property } of literalProperties(
+		node,
+		`${kind} option 'use'`,
+		fail,
+	)) {
+		if (name !== "build" && name !== "run" && name !== "test" && name !== "dev")
+			fail(
+				property,
+				`unknown ${kind} option 'use.${name}' (allowed: build, run, test, dev)`,
+			);
+		const choice = literalString(value);
+		const choices =
+			name === "build" ? ["build", "existing"] : ["build", "watch", "existing"];
+		if (choice === undefined || !choices.includes(choice))
+			fail(
+				value,
+				`${kind} option 'use.${name}' must be ${choices.map((entry) => `"${entry}"`).join(", ")}`,
+			);
+		use[name] = choice as "build" | "watch" | "existing";
+	}
+	return use;
 }
 
 function literalStrings(node: ESTree.Node): Array<string> | undefined {

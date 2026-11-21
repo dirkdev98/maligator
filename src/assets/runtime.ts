@@ -1,5 +1,6 @@
 import type {
 	EmbedDirectoryOptions,
+	EmbedFileOptions,
 	EmbeddedDirectory,
 	EmbeddedFile,
 } from "maligator:assets";
@@ -12,7 +13,7 @@ function undeclared(name: string): never {
 	);
 }
 
-export function embedFile(_specifier: string): EmbeddedFile {
+export function embedFile(_specifier: string, _options?: EmbedFileOptions): EmbeddedFile {
 	return undeclared("embedFile");
 }
 

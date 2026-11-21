@@ -893,7 +893,13 @@ static MalValue asset_install_one(MalVm *vm, const char *data) {
         goto done;
     bool directory = mal_value_is_string(kind)
         && mal_string_equals_ascii(mal_value_to_string(kind), "directory");
-    i32 index = asset_find(vm, data);
+    MalValue name_value;
+    if (!mal_vm_get_property(vm, roots[1], mal_intrinsic_string_key(vm, (const byte *) "name"), &name_value))
+        goto done;
+    char *asset_name = asset_cstr(vm, name_value, "name");
+    if (asset_name == nullptr) goto done;
+    i32 index = asset_find(vm, asset_name);
+    free(asset_name);
     // A built executable embeds every declaration it can reach, so a miss there is a
     // packaging defect rather than a reason to read the build machine's files.
     if (index < 0 && vm->runtime_image->asset_count > 0) {

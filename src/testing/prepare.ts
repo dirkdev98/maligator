@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { ApplicationImageDescriptor } from "../application-images.ts";
+import { embedDeclarationsOfWires } from "../assets.ts";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import type { CommandContext } from "../cli-commands.ts";
+import type { EmbedDeclaration } from "../compiler/frontend/embed-declarations.ts";
 import { cacheFrontendWire, frontendDigest } from "../frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "../frontend-cache.ts";
 import { UnsupportedLinkedImagesError } from "../linked-images.ts";
@@ -35,6 +37,8 @@ export interface PreparedTestApplication {
 	artifactHits: number;
 	artifactMisses: number;
 	nativeHostIdentity?: string;
+	/** The `maligator:assets` declarations the test images reach. */
+	embedDeclarations?: Array<EmbedDeclaration>;
 }
 
 export function prepareTestApplication(
@@ -121,10 +125,14 @@ function prepareTestApplicationImage(
 						sha256: frontendDigest(compiled.wire),
 					},
 				];
+	const embedDeclarations = embedDeclarationsOfWires(
+		wires.map((wire) => readFileSync(wire.path)),
+	);
 	return {
 		...(request.native === undefined
 			? {}
 			: { nativeHostIdentity: request.native.identity }),
+		...(embedDeclarations.length === 0 ? {} : { embedDeclarations }),
 		image: {
 			schema: 1,
 			wires,

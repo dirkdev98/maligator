@@ -1,3 +1,4 @@
+import { CommandProducers } from "../asset-producers.ts";
 import type { CompilationOptions } from "../compiler-service.ts";
 import { frontendDependencyUnchanged } from "../frontend-cache.ts";
 import type { TestApplicationHost, TestApplicationImage } from "./application-host.ts";
@@ -29,6 +30,10 @@ export class TestSourceChangedError extends Error {
 export class TestApplicationSession {
 	readonly frontend: TestCompilationSession;
 	readonly options: TestRunOptions;
+	/** Asset producers stay up across reruns; `closeProducers` stops them. */
+	readonly producers = new CommandProducers("test", (message) =>
+		process.stderr.write(`${message}\n`),
+	);
 	readonly #prepared = new Map<string, PreparedTestApplication>();
 	readonly #images = new Map<string, TestApplicationImage>();
 	readonly #used = new Set<string>();

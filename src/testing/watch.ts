@@ -369,6 +369,11 @@ export async function watchTestCommand(
 					failures.push(error);
 				}
 				try {
+					await applicationSession.producers.close();
+				} catch (error) {
+					failures.push(error);
+				}
+				try {
 					await context.testApplications?.close?.();
 				} catch (error) {
 					failures.push(error);

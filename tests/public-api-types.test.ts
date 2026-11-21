@@ -194,8 +194,15 @@ const home: EmbeddedFile | undefined = templates.get("home.html");
 const logo = embedFile("../logo.png");
 const logoBytes: Uint8Array<ArrayBuffer> = logo.bytes();
 const logoMeta: [string, number, string, string] = [logo.path, logo.size, logo.digest, logo.type];
-// @ts-expect-error A file declaration takes no options.
+// @ts-expect-error Directory patterns do not apply to a file.
 embedFile("../logo.png", { include: ["*"] });
+const frontend = embedDirectory("../web/dist", {
+	build: { command: ["npm", "run", "build"], cwd: "../web" },
+	watch: { command: ["npm", "run", "dev"], cwd: "../web", url: "http://127.0.0.1:5173" },
+	use: { run: "watch", test: "existing" },
+});
+// @ts-expect-error A build embeds files, so it cannot use a watcher.
+embedDirectory("../web/dist", { use: { build: "watch" } });
 // @ts-expect-error Directory patterns are strings.
 embedDirectory("../templates", { include: [1] });
 // @ts-expect-error The legacy configured-asset global is gone.
@@ -213,7 +220,7 @@ const serveOptions: MaligatorServeOptions = {
 };
 const server: MaligatorServer = Mal.serve(serveOptions);
 const port: number = server.port;
-console.log(assetPath, home?.text(), logoBytes, logoMeta, port);
+console.log(assetPath, home?.text(), logoBytes, logoMeta, frontend, port);
 `,
 			);
 
