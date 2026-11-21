@@ -58,7 +58,7 @@ static MalFinalizationRegistryObject *mal_finalization_registry_object_new(
 ) {
     MalFinalizationRegistryObject *reg = mal_heap_alloc(
         heap, sizeof(MalFinalizationRegistryObject), MAL_HEAP_FINALIZATION_REGISTRY_OBJECT);
-    mal_object_init(heap, &reg->object, MAL_HEAP_FINALIZATION_REGISTRY_OBJECT, prototype);
+    mal_object_init_deferred(heap, &reg->object, prototype);
     reg->cleanup_callback = cleanup_callback;
     reg->cells = nullptr;
     return reg;

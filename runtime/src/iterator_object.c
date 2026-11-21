@@ -17,7 +17,7 @@ void mal_iterator_object_init(
     MalIteratorKind kind,
     MalValue target
 ) {
-    mal_object_init(heap, &iterator->object, MAL_HEAP_ITERATOR_OBJECT, prototype);
+    mal_object_init_deferred(heap, &iterator->object, prototype);
     iterator->kind = kind;
     iterator->target = target;
     iterator->index = 0;

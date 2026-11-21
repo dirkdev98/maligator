@@ -25,8 +25,8 @@ static_assert(sizeof(MalWeakStorage) + 4 * MAL_WEAK_MAP_WIDTH <= 96,
     "WeakMap descriptor outgrew its allocation class");
 static_assert(sizeof(MalWeakStorage) + 4 * MAL_WEAK_SET_WIDTH <= 64,
     "WeakSet descriptor outgrew its allocation class");
-static_assert(sizeof(MalWeakMapObject) <= 64, "WeakMap owner outgrew its allocation class");
-static_assert(sizeof(MalWeakSetObject) <= 64, "WeakSet owner outgrew its allocation class");
+static_assert(sizeof(MalWeakMapObject) <= 32, "WeakMap owner outgrew its allocation class");
+static_assert(sizeof(MalWeakSetObject) <= 32, "WeakSet owner outgrew its allocation class");
 
 static MalValue *mal_weak_row(const MalWeakStorage *storage, usize width, u32 index) {
     void *base = storage->buckets == nullptr ? (void *) storage->small : storage->buckets;
@@ -248,7 +248,7 @@ static usize mal_weak_retain(MalWeakStorage *storage, usize width, bool (*keep)(
 
 MalWeakMapObject *mal_weak_map_object_new(MalHeap *heap, MalObject *prototype) {
     MalWeakMapObject *map = mal_heap_alloc(heap, sizeof(MalWeakMapObject), MAL_HEAP_WEAK_MAP_OBJECT);
-    mal_object_init(heap, &map->object, MAL_HEAP_WEAK_MAP_OBJECT, prototype);
+    mal_object_init_deferred(heap, &map->object, prototype);
     map->entries = nullptr;
     mal_perf_collection_new(map, MAL_PERF_COLLECTION_WEAK_MAP, heap->epoch);
     return map;
@@ -311,7 +311,7 @@ bool mal_weak_map_object_reserve(MalWeakMapObject *map, usize desired_size) {
 
 MalWeakSetObject *mal_weak_set_object_new(MalHeap *heap, MalObject *prototype) {
     MalWeakSetObject *set = mal_heap_alloc(heap, sizeof(MalWeakSetObject), MAL_HEAP_WEAK_SET_OBJECT);
-    mal_object_init(heap, &set->object, MAL_HEAP_WEAK_SET_OBJECT, prototype);
+    mal_object_init_deferred(heap, &set->object, prototype);
     set->entries = nullptr;
     mal_perf_collection_new(set, MAL_PERF_COLLECTION_WEAK_SET, heap->epoch);
     return set;

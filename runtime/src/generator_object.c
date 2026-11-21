@@ -12,7 +12,7 @@ static MalGeneratorObject *mal_generator_object_alloc(
     // Every traced field is initialized before publication or another allocation.
     MalGeneratorObject *generator = mal_heap_alloc_uninitialized(
         heap, alloc_size, MAL_HEAP_GENERATOR_OBJECT);
-    mal_object_init(heap, &generator->object, MAL_HEAP_GENERATOR_OBJECT, prototype);
+    mal_object_init_deferred(heap, &generator->object, prototype);
 
     // An unpopulated frame must trace and finalize without reading stale cell bytes.
     generator->activation.frame = (MalVmFrame) {

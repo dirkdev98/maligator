@@ -45,7 +45,7 @@ MalDataViewObject *mal_data_view_object_new(
     u32 byte_offset, u32 byte_length, bool length_tracking) {
     MalDataViewObject *view = mal_heap_alloc(
         heap, sizeof(MalDataViewObject), MAL_HEAP_DATA_VIEW_OBJECT);
-    mal_object_init(heap, &view->object, MAL_HEAP_DATA_VIEW_OBJECT, prototype);
+    mal_object_init_deferred(heap, &view->object, prototype);
     view->buffer = buffer;
     view->byte_offset = byte_offset;
     view->byte_length = byte_length;

@@ -1,7 +1,7 @@
 #include "./intl_object.h"
 
 void mal_intl_object_init(MalHeap *heap, MalIntlObject *intl, MalObject *prototype, MalIntlKind kind, void *handle, MalValue data) {
-    mal_object_init(heap, &intl->object, MAL_HEAP_INTL_OBJECT, prototype);
+    mal_object_init_deferred(heap, &intl->object, prototype);
     intl->kind = kind;
     intl->handle = handle;
     intl->data = data;

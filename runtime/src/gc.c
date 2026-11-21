@@ -463,6 +463,9 @@ struct MalGcState {
     usize nursery_max_bytes;
     usize memory_trace_interval;
     u64 memory_sample;
+    bool census_enabled; // MAL_HEAP_CENSUS
+    bool census_exit_printed;
+    u64 census_sample;
 
     // --- Per-collection statistics (MAL_GC_STATS=1) ---------------------------
     u64 collections;
@@ -1040,6 +1043,169 @@ usize mal_gc_worker_limit(MalVm *vm) {
 // Promotion that justifies a major while the last one left a small live set.
 #define MAL_GC_MIN_MAJOR_DEBT ((usize) 16 * 1024 * 1024)
 
+static const char *const mal_gc_census_type_names[MAL_HEAP_TYPE_COUNT] = {
+    [MAL_HEAP_PRIMITIVE_WRAPPER_OBJECT] = "primitive_wrapper",
+    [MAL_HEAP_STRING] = "string",
+    [MAL_HEAP_SYMBOL] = "symbol",
+    [MAL_HEAP_BIGINT] = "bigint",
+    [MAL_HEAP_OBJECT] = "object",
+    [MAL_HEAP_ARGUMENTS_OBJECT] = "arguments",
+#if MAL_REALMS
+    [MAL_HEAP_SHADOW_REALM_OBJECT] = "shadow_realm",
+#endif
+    [MAL_HEAP_FUNCTION_OBJECT] = "function",
+    [MAL_HEAP_NATIVE_FUNCTION_OBJECT] = "native_function",
+    [MAL_HEAP_BOUND_FUNCTION_OBJECT] = "bound_function",
+    [MAL_HEAP_ARRAY_OBJECT] = "array",
+    [MAL_HEAP_MAP_OBJECT] = "map",
+    [MAL_HEAP_SET_OBJECT] = "set",
+    [MAL_HEAP_ITERATOR_OBJECT] = "iterator",
+    [MAL_HEAP_GENERATOR_OBJECT] = "generator",
+    [MAL_HEAP_ASYNC_FUNCTION_STATE] = "async_function_state",
+    [MAL_HEAP_ARRAY_BUFFER_OBJECT] = "array_buffer",
+    [MAL_HEAP_TYPED_ARRAY_OBJECT] = "typed_array",
+    [MAL_HEAP_DATA_VIEW_OBJECT] = "data_view",
+    [MAL_HEAP_PROMISE_OBJECT] = "promise",
+    [MAL_HEAP_DISPOSABLE_STACK_OBJECT] = "disposable_stack",
+    [MAL_HEAP_ITERATOR_HELPER_OBJECT] = "iterator_helper",
+    [MAL_HEAP_MODULE_NAMESPACE_OBJECT] = "module_namespace",
+    [MAL_HEAP_PROXY_OBJECT] = "proxy",
+    [MAL_HEAP_DATE_OBJECT] = "date",
+    [MAL_HEAP_TEMPORAL_OBJECT] = "temporal",
+    [MAL_HEAP_INTL_OBJECT] = "intl",
+    [MAL_HEAP_REGEXP_OBJECT] = "regexp",
+    [MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT] = "regexp_string_iterator",
+    [MAL_HEAP_ENV] = "env",
+    [MAL_HEAP_SHAPE] = "shape",
+    [MAL_HEAP_WEAK_REF_OBJECT] = "weak_ref",
+    [MAL_HEAP_FINALIZATION_REGISTRY_OBJECT] = "finalization_registry",
+    [MAL_HEAP_RESPONSE_OBJECT] = "response",
+    [MAL_HEAP_REQUEST_OBJECT] = "request",
+    [MAL_HEAP_HEADERS_OBJECT] = "headers",
+    [MAL_HEAP_HEADERS_ITERATOR_OBJECT] = "headers_iterator",
+    [MAL_HEAP_BLOB_OBJECT] = "blob",
+    [MAL_HEAP_FORM_DATA_OBJECT] = "form_data",
+    [MAL_HEAP_FORM_DATA_ITERATOR_OBJECT] = "form_data_iterator",
+    [MAL_HEAP_URL_OBJECT] = "url",
+    [MAL_HEAP_URL_SEARCH_PARAMS_OBJECT] = "url_search_params",
+    [MAL_HEAP_URL_SEARCH_PARAMS_ITERATOR_OBJECT] = "url_search_params_iterator",
+    [MAL_HEAP_EVENT_TARGET_OBJECT] = "event_target",
+    [MAL_HEAP_READABLE_STREAM_OBJECT] = "readable_stream",
+    [MAL_HEAP_NODE_ZLIB_OBJECT] = "node_zlib",
+    [MAL_HEAP_NODE_SQLITE_DATABASE_OBJECT] = "node_sqlite_database",
+    [MAL_HEAP_NODE_SQLITE_STATEMENT_OBJECT] = "node_sqlite_statement",
+    [MAL_HEAP_NODE_FS_FILE_HANDLE_OBJECT] = "node_fs_file_handle",
+    [MAL_HEAP_FFI_HANDLE_OBJECT] = "ffi_handle",
+    [MAL_HEAP_ASYNC_CONTEXT] = "async_context",
+    [MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE] = "async_local_storage_state",
+    [MAL_HEAP_ASYNC_RESOURCE_STATE] = "async_resource_state",
+    [MAL_HEAP_ASYNC_RUN_SCOPE_STATE] = "async_run_scope_state",
+    [MAL_HEAP_STRING_CURSOR] = "string_cursor",
+    [MAL_HEAP_WEAK_MAP_OBJECT] = "weak_map",
+    [MAL_HEAP_WEAK_SET_OBJECT] = "weak_set",
+    [MAL_HEAP_PROMISE_COMBINATOR_STATE] = "promise_combinator_state",
+};
+
+static void mal_gc_census_print_classes(
+    const MalHeapCensus *census, const u64 *counts, u64 large_bytes
+) {
+    const char *separator = "";
+    for (usize size_class = 0; size_class < MAL_GC_NUM_SIZE_CLASSES; ++size_class) {
+        if (counts[size_class] == 0) continue;
+        fprintf(stderr, "%s%u:%llu", separator, census->class_cell_size[size_class],
+            (unsigned long long) counts[size_class]);
+        separator = ",";
+    }
+    if (counts[MAL_GC_NUM_SIZE_CLASSES] != 0) {
+        fprintf(stderr, "%slarge:%llu/%llu", separator,
+            (unsigned long long) counts[MAL_GC_NUM_SIZE_CLASSES],
+            (unsigned long long) large_bytes);
+    }
+    fprintf(stderr, "\n");
+}
+
+/* One line per heap type with its cells by size class (`cell_size:count`), then RAW
+ * buffers, each class's blocks and free cells, and totals. Every line of one census
+ * shares its sample number. */
+static void mal_gc_print_census(MalVm *vm, const char *moment) {
+    MalHeapCensus *census = malloc(sizeof(*census));
+    if (census == nullptr) return;
+    mal_heap_census(&vm->heap, census);
+    u64 sample = ++g_gc->census_sample;
+    u64 managed_count = 0;
+    u64 managed_bytes = 0;
+    for (usize type = 0; type < MAL_HEAP_TYPE_COUNT; ++type) {
+        const u64 *counts = census->cells[type];
+        u64 count = counts[MAL_GC_NUM_SIZE_CLASSES];
+        u64 bytes = census->large_bytes[type];
+        for (usize size_class = 0; size_class < MAL_GC_NUM_SIZE_CLASSES; ++size_class) {
+            count += counts[size_class];
+            bytes += counts[size_class] * census->class_cell_size[size_class];
+        }
+        if (count == 0) continue;
+        managed_count += count;
+        managed_bytes += bytes;
+        const char *name = mal_gc_census_type_names[type];
+        fprintf(stderr, "[heap-census] schema=1 sample=%llu moment=%s type=",
+            (unsigned long long) sample, moment);
+        if (name != nullptr) {
+            fprintf(stderr, "%s", name);
+        } else {
+            fprintf(stderr, "heap_type_%zu", type);
+        }
+        fprintf(stderr, " count=%llu bytes=%llu classes=",
+            (unsigned long long) count, (unsigned long long) bytes);
+        mal_gc_census_print_classes(census, counts, census->large_bytes[type]);
+    }
+    u64 raw_count = 0;
+    u64 raw_bytes = 0;
+    for (usize size_class = 0; size_class <= MAL_GC_NUM_SIZE_CLASSES; ++size_class) {
+        raw_count += census->raw_count[size_class];
+        raw_bytes += census->raw_bytes[size_class];
+    }
+    fprintf(stderr, "[heap-census] schema=1 sample=%llu moment=%s type=raw count=%llu "
+        "bytes=%llu classes=", (unsigned long long) sample, moment,
+        (unsigned long long) raw_count, (unsigned long long) raw_bytes);
+    mal_gc_census_print_classes(census, census->raw_count,
+        census->raw_bytes[MAL_GC_NUM_SIZE_CLASSES]);
+    for (usize size_class = 0; size_class < MAL_GC_NUM_SIZE_CLASSES; ++size_class) {
+        if (census->class_blocks[size_class] == 0) continue;
+        fprintf(stderr, "[heap-census] schema=1 sample=%llu moment=%s class=%u blocks=%llu "
+            "free_cells=%llu free_bytes=%llu\n", (unsigned long long) sample, moment,
+            census->class_cell_size[size_class],
+            (unsigned long long) census->class_blocks[size_class],
+            (unsigned long long) census->class_free_cells[size_class],
+            (unsigned long long) census->class_free_cells[size_class] *
+                census->class_cell_size[size_class]);
+    }
+    fprintf(stderr, "[heap-census] schema=1 sample=%llu moment=%s total managed_count=%llu "
+        "managed_bytes=%llu raw_count=%llu raw_bytes=%llu\n",
+        (unsigned long long) sample, moment, (unsigned long long) managed_count,
+        (unsigned long long) managed_bytes, (unsigned long long) raw_count,
+        (unsigned long long) raw_bytes);
+    free(census);
+}
+
+// Most processes exit with their VM still live, so the exit census also runs from atexit.
+static void mal_gc_print_census_at_exit(void) {
+    if (g_gc == nullptr || g_gc_vm == nullptr || g_gc_vm->gc != g_gc) return;
+    if (!g_gc->census_enabled || g_gc->census_exit_printed) return;
+    g_gc->census_exit_printed = true;
+    mal_gc_print_census(g_gc_vm, "exit");
+}
+
+static void mal_gc_census_claim_exit(void) {
+#if defined(__wasi__)
+    static bool registered = false;
+    if (registered) return;
+    registered = true;
+#else
+    static _Atomic(bool) registered = false;
+    if (atomic_exchange_explicit(&registered, true, memory_order_relaxed)) return;
+#endif
+    if (atexit(mal_gc_print_census_at_exit) != 0) abort();
+}
+
 void mal_gc_init(MalVm *vm) {
     if (getenv("MAL_GC_GENERATIONAL") != nullptr ||
         getenv("MAL_GC_CONCURRENT") != nullptr ||
@@ -1087,6 +1253,8 @@ void mal_gc_init(MalVm *vm) {
         g->stats_enabled = true;
         mal_gc_stats_claim(g);
     }
+    g->census_enabled = getenv("MAL_HEAP_CENSUS") != nullptr;
+    if (g->census_enabled) mal_gc_census_claim_exit();
     const char *memory_trace = getenv("MAL_GC_MEMORY_TRACE");
     if (memory_trace != nullptr) {
         char *end;
@@ -1149,6 +1317,10 @@ void mal_gc_begin_teardown(MalVm *vm) {
         return;
     }
     if (g_gc != g || g_gc_vm != vm) abort();
+    if (g->census_enabled && !g->census_exit_printed) {
+        g->census_exit_printed = true;
+        mal_gc_print_census(vm, "exit");
+    }
 #if !defined(__wasi__)
     mal_gc_workers_stop(g);
 #endif
@@ -3594,6 +3766,7 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
     if (g_gc->verify_enabled && g_gc->phase == MAL_GC_PHASE_IDLE) {
         mal_gc_verify(vm);
     }
+    if (g_gc->census_enabled && major) mal_gc_print_census(vm, "major");
 
     mal_gc_advance_trigger(vm);
 
@@ -3804,6 +3977,7 @@ static void mal_gc_cycle_finish_sweep(MalVm *vm) {
     if (g_gc->verify_enabled) {
         mal_gc_verify(vm);
     }
+    if (g_gc->census_enabled) mal_gc_print_census(vm, "major");
     mal_gc_advance_trigger(vm);
 
     if (g_gc->stats_enabled) {
@@ -4125,6 +4299,7 @@ static void gc_safepoint_step(MalVm *vm) {
     if (g_gc_stats_owner && g_gc_stats_snapshot_requested != 0) {
         g_gc_stats_snapshot_requested = 0;
         mal_gc_print_stats_now();
+        if (g_gc->census_enabled) mal_gc_print_census(vm, "signal");
     }
     mal_gc_incremental_safepoint(vm);
 }

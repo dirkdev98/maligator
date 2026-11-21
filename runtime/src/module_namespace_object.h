@@ -25,7 +25,7 @@ typedef struct MalModuleNamespaceExport {
  */
 typedef struct MalModuleNamespaceObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
     MalModuleNamespaceExport *exports;
     i32 export_count;
     MalValue init_fn;

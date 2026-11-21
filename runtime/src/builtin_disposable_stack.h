@@ -16,7 +16,7 @@ typedef struct MalDisposableResource {
 
 typedef struct MalDisposableStackObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
     MalDisposableResource *resources;
     usize resource_count;
     usize resource_capacity;

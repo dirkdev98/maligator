@@ -23,8 +23,7 @@ static MalDisposableStackObject *mal_disposable_stack_new(
         sizeof(MalDisposableStackObject),
         MAL_HEAP_DISPOSABLE_STACK_OBJECT
     );
-    mal_object_init(
-        &vm->heap, &stack->object, MAL_HEAP_DISPOSABLE_STACK_OBJECT, prototype);
+    mal_object_init_deferred(&vm->heap, &stack->object, prototype);
     stack->resources = nullptr;
     stack->resource_count = 0;
     stack->resource_capacity = 0;

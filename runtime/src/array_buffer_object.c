@@ -135,7 +135,7 @@ static MalArrayBufferObject *mal_array_buffer_object_new_impl(
     MalArrayBufferObject *buffer = mal_heap_alloc(
         heap, sizeof(MalArrayBufferObject) + (store_inline ? capacity : 0),
         MAL_HEAP_ARRAY_BUFFER_OBJECT);
-    mal_object_init(heap, &buffer->object, MAL_HEAP_ARRAY_BUFFER_OBJECT, prototype);
+    mal_object_init_deferred(heap, &buffer->object, prototype);
 
     buffer->data = nullptr;
     buffer->shared_memory = nullptr;

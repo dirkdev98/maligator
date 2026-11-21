@@ -829,7 +829,7 @@ static MalValue mal_ih_proto_return(MalVm *vm, MalValue this_value, const MalVal
 
 static MalValue mal_ih_new(MalVm *vm, MalIteratorHelperKind kind, const MalIteratorRecord *record, MalValue callback, f64 counter) {
     MalIteratorHelperObject *helper = mal_heap_alloc(&vm->heap, sizeof(MalIteratorHelperObject), MAL_HEAP_ITERATOR_HELPER_OBJECT);
-    mal_object_init(&vm->heap, &helper->object, MAL_HEAP_ITERATOR_HELPER_OBJECT, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ITERATOR_HELPER_PROTOTYPE]));
+    mal_object_init_deferred(&vm->heap, &helper->object, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ITERATOR_HELPER_PROTOTYPE]));
     helper->kind = kind;
     helper->iterator = record->iterator;
     helper->next_method = record->next_method;

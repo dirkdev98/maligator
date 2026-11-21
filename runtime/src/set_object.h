@@ -15,7 +15,7 @@ typedef enum MalSetKeyDomain : u8 {
 
 typedef struct MalSetObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
     MalSetStorage *entries;
 } MalSetObject;
 

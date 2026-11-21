@@ -346,15 +346,13 @@ static inline bool mal_vm_try_capture_exact_collection_method(
     MalValue *method_out
 ) {
     const MalObject *collection = mal_value_to_object(receiver);
-    // Collection allocators use embedded storage, which an object never moves out of,
-    // so the test always passes and the prototype and overflow table sit at fixed
-    // offsets without decoding the storage kind.
-    const MalObjectStorage *storage = (const MalObjectStorage *) (collection + 1);
+    // Collections defer their storage until the first own property externalizes it,
+    // so the deferred kind alone proves there is none and leaves the prototype in
+    // the word after the prefix.
     if (!mal_vm_watched_methods_intact(vm) ||
-        collection->storage_kind != MAL_OBJECT_EMBEDDED ||
-        storage->prototype != mal_value_to_object(vm->intrinsics[prototype_intrinsic]) ||
-        storage->overflow != nullptr ||
-        (collection->shape != nullptr && collection->shape->inline_count != 0)) {
+        collection->storage_kind != MAL_OBJECT_DEFERRED ||
+        mal_object_prototype(collection) !=
+            mal_value_to_object(vm->intrinsics[prototype_intrinsic])) {
         MAL_PERF_COUNT(collection_exact_capture_misses);
         return false;
     }

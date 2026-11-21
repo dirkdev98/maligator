@@ -82,7 +82,7 @@ MalRegExpObject *mal_regexp_object_new(MalHeap *heap, MalObject *prototype);
  */
 typedef struct MalRegExpStringIteratorObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
     MalValue regexp;     // [[IteratingRegExp]]
     MalString *string;   // [[IteratedString]]
     bool global;         // [[Global]]

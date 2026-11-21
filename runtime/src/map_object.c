@@ -41,7 +41,7 @@ struct MalMapStorage {
 };
 
 static_assert(sizeof(MalMapStorage) <= 128, "Map descriptor outgrew its small allocation");
-static_assert(sizeof(MalMapObject) <= 64, "Map object outgrew its allocation class");
+static_assert(sizeof(MalMapObject) <= 32, "Map object outgrew its allocation class");
 static_assert(sizeof(MalMapPair) == 2 * sizeof(MalValue), "Map pairs must not add payload padding");
 
 static MalMapKeyDomain mal_map_key_domain(MalValue key) {
@@ -381,7 +381,7 @@ MalMapStorage *mal_map_object_storage(MalMapObject *map) {
 }
 
 void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalObject *prototype) {
-    mal_object_init(heap, &map->object, MAL_HEAP_MAP_OBJECT, prototype);
+    mal_object_init_deferred(heap, &map->object, prototype);
     map->entries = nullptr;
     mal_perf_collection_new(map, MAL_PERF_COLLECTION_MAP, heap->epoch);
 }

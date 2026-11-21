@@ -13,7 +13,7 @@
  */
 typedef struct MalShadowRealmObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
     MalRealm *shadow_realm;
 } MalShadowRealmObject;
 

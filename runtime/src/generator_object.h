@@ -69,7 +69,7 @@ typedef struct MalCoroutineActivation {
  */
 struct MalGeneratorObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
     MalCoroutineActivation activation;
 };
 
@@ -108,7 +108,7 @@ static inline void mal_async_function_note_owned_storage(MalAsyncFunctionState *
     }
 }
 
-static_assert(sizeof(MalGeneratorObject) <= (MAL_REALMS ? 208 : 192),
+static_assert(sizeof(MalGeneratorObject) <= 192,
               "synchronous generator state outgrew its compact size class");
 static_assert(sizeof(MalGeneratorObject) + sizeof(MalGeneratorAsyncData) <= 224,
               "coallocated async generator state outgrew its size class");

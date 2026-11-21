@@ -32,10 +32,13 @@ typedef enum MalPrimitiveWrapperKind {
  */
 typedef struct MalPrimitiveWrapperObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
     MalPrimitiveWrapperKind kind;
     MalValue primitive_data;
 } MalPrimitiveWrapperObject;
+
+static_assert(sizeof(MalPrimitiveWrapperObject) <= 48,
+              "primitive wrapper outgrew its allocation class");
 
 /**
  * Allocate and initialize a new primitive wrapper object holding primitive_data.

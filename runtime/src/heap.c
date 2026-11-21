@@ -891,6 +891,50 @@ MalHeapUsage mal_heap_usage(const MalHeap *heap) {
     return usage;
 }
 
+void mal_heap_census(const MalHeap *heap, MalHeapCensus *census) {
+    memset(census, 0, sizeof(*census));
+    memcpy(census->class_cell_size, g_class_cell_size, sizeof(census->class_cell_size));
+    for (const MalGcChunk *chunk = heap->chunks; chunk != nullptr; chunk = chunk->next) {
+        for (usize index = 0; index < chunk->next_block; ++index) {
+            const MalGcBlock *block =
+                (const MalGcBlock *) ((const u8 *) chunk->base + index * MAL_GC_BLOCK_SIZE);
+            if (block->recycled) continue;
+            if (block->kind == MAL_GC_BLOCK_RAW) {
+                census->raw_count[block->size_class] += block->live;
+                census->raw_bytes[block->size_class] += (u64) block->live * block->cell_size;
+                continue;
+            }
+            // A class cursor holds cells claimed from the bitmap but not handed out.
+            const MalHeapCellCursor *cursor = &heap->cell_cursors[block->size_class];
+            usize cursor_word = cursor->block == block
+                ? cursor->word_offset / (64 * MAL_GC_CELL_ALIGN) : MAL_GC_BLOCK_WORDS;
+            const u64 *starts = g_class_cell_starts[block->size_class];
+            census->class_blocks[block->size_class]++;
+            for (usize word = 0; word < MAL_GC_BLOCK_WORDS; word++) {
+                u64 allocated = starts[word] & ~block->free_cells[word];
+                if (word == cursor_word) allocated &= ~cursor->bits;
+                census->class_free_cells[block->size_class] +=
+                    (u64) __builtin_popcountll(starts[word] & ~allocated);
+                for (u64 rest = allocated; rest != 0; rest &= rest - 1) {
+                    const MalHeapHeader *cell =
+                        mal_heap_block_cell(block, word * 64 + (usize) __builtin_ctzll(rest));
+                    census->cells[cell->type][block->size_class]++;
+                }
+            }
+        }
+    }
+    for (const MalGcLarge *large = heap->large; large != nullptr; large = large->next) {
+        const MalHeapHeader *cell =
+            (const MalHeapHeader *) ((const u8 *) large + mal_gc_large_data_offset());
+        census->cells[cell->type][MAL_GC_NUM_SIZE_CLASSES]++;
+        census->large_bytes[cell->type] += large->size;
+    }
+    for (const MalGcLarge *large = heap->raw_large; large != nullptr; large = large->next) {
+        census->raw_count[MAL_GC_NUM_SIZE_CLASSES]++;
+        census->raw_bytes[MAL_GC_NUM_SIZE_CLASSES] += large->size;
+    }
+}
+
 MalHeapCurrentUsage mal_heap_current_usage(const MalHeap *heap) {
     MalHeapCurrentUsage usage = heap->current_usage;
     // Claims charge whole bitmap words; cells still in a cursor are not handed out.

@@ -16,7 +16,7 @@ void mal_module_namespace_object_init(
 ) {
     // Null [[Prototype]] and non-extensible remain the baseline; deferred
     // namespaces layer evaluation triggers ahead of the ordinary rejection.
-    mal_object_init(heap, &ns->object, MAL_HEAP_MODULE_NAMESPACE_OBJECT, nullptr);
+    mal_object_init_deferred(heap, &ns->object, nullptr);
     ns->object.extensible = false;
     ns->exports = exports;
     ns->export_count = export_count;

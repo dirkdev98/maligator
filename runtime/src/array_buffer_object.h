@@ -24,7 +24,7 @@ typedef struct MalArrayBufferStoreLease MalArrayBufferStoreLease;
  */
 typedef struct MalArrayBufferObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
     // For a shared buffer: the retained process-global backing, and `data`
     // aliases its stable bytes. Null for every ordinary ArrayBuffer.
     MalSharedMemory *shared_memory;

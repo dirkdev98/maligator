@@ -470,6 +470,11 @@ samples and complete rows at the largest sampled managed occupancy and process
 reservation. `--gc-memory-interval 256` samples every 256 pauses and each major
 pause ending with an idle collector. This reduces heap walks while retaining
 completed-cycle observations. Snapshot row counts are not collection counts.
+Set `MAL_HEAP_CENSUS=1` on a native program to print `[heap-census]` lines on stderr
+after every completed major collection and at exit: count and bytes per heap type
+with their cell sizes, RAW buffers and free cells per size class. A layout change
+saves memory only when a type moves to a smaller 16-byte size class and that class's
+blocks stay well filled, which the free-cell counts show.
 Those traced timings are diagnostic. Keep ordinary elapsed time, peak RSS and
 pause costs separate, and do not sum overlapping reserve categories. Every timed
 sample also records process CPU, which includes GC worker threads, and on macOS

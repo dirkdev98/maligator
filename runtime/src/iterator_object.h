@@ -29,7 +29,7 @@ typedef enum MalIteratorKind : u8 {
  */
 typedef struct MalIteratorObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
     MalValue target;
 
     /**
@@ -56,7 +56,7 @@ typedef struct MalIteratorObject {
     bool collection_pinned;
 } MalIteratorObject;
 
-static_assert(sizeof(MalIteratorObject) <= 80,
+static_assert(sizeof(MalIteratorObject) <= 64,
               "built-in iterator outgrew its frontier-pointer layout");
 
 /**

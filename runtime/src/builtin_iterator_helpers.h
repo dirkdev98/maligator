@@ -36,7 +36,7 @@ typedef enum MalIteratorZipMode : u8 {
  */
 typedef struct MalIteratorHelperObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
 
     // Underlying iterator record.
     MalValue iterator;
@@ -78,7 +78,7 @@ typedef struct MalIteratorHelperObject {
     } state;
 } MalIteratorHelperObject;
 
-static_assert(sizeof(MalIteratorHelperObject) <= 128, "MalIteratorHelperObject outgrew its 128-byte size class");
+static_assert(sizeof(MalIteratorHelperObject) <= 112, "MalIteratorHelperObject outgrew its 112-byte size class");
 
 /**
  * Consume an exact built-in Iterator Helper step without materializing its

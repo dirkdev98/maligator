@@ -602,6 +602,25 @@ void mal_heap_begin_major(MalHeap *heap);
  */
 void mal_heap_free(MalHeap *heap);
 MalHeapUsage mal_heap_usage(const MalHeap *heap);
+
+/** Allocated cells by heap type and size class, for the MAL_HEAP_CENSUS diagnostic.
+ * Slot MAL_GC_NUM_SIZE_CLASSES holds large-object-space allocations. RAW buffers
+ * carry no header, so they are counted by size class only. */
+typedef struct MalHeapCensus {
+    u32 class_cell_size[MAL_GC_NUM_SIZE_CLASSES];
+    /** Managed blocks bound to each class and their free cells: the class's
+     * fragmentation, which no other class can reuse until a block empties. */
+    u64 class_blocks[MAL_GC_NUM_SIZE_CLASSES];
+    u64 class_free_cells[MAL_GC_NUM_SIZE_CLASSES];
+    u64 cells[MAL_HEAP_TYPE_COUNT][MAL_GC_NUM_SIZE_CLASSES + 1];
+    u64 large_bytes[MAL_HEAP_TYPE_COUNT];
+    u64 raw_count[MAL_GC_NUM_SIZE_CLASSES + 1];
+    u64 raw_bytes[MAL_GC_NUM_SIZE_CLASSES + 1];
+} MalHeapCensus;
+
+/** Count every allocated cell without disturbing allocation state. Cells that died
+ * since the last sweep are still counted. */
+void mal_heap_census(const MalHeap *heap, MalHeapCensus *census);
 MalHeapCurrentUsage mal_heap_current_usage(const MalHeap *heap);
 void mal_heap_array_buffer_acquire(MalHeap *heap, usize bytes);
 void mal_heap_array_buffer_release(MalHeap *heap, usize bytes);

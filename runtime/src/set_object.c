@@ -27,7 +27,7 @@ struct MalSetStorage {
 };
 
 static_assert(sizeof(MalSetStorage) <= 80, "Set descriptor outgrew its small allocation");
-static_assert(sizeof(MalSetObject) <= 64, "Set object outgrew its allocation class");
+static_assert(sizeof(MalSetObject) <= 32, "Set object outgrew its allocation class");
 
 static MalSetKeyDomain mal_set_key_domain(MalValue key) {
     if (mal_value_is_f64(key)) {
@@ -374,7 +374,7 @@ MalSetStorage *mal_set_object_storage(MalSetObject *set) {
 
 MalSetObject *mal_set_object_new(MalHeap *heap, MalObject *prototype) {
     MalSetObject *set = mal_heap_alloc(heap, sizeof(MalSetObject), MAL_HEAP_SET_OBJECT);
-    mal_object_init(heap, &set->object, MAL_HEAP_SET_OBJECT, prototype);
+    mal_object_init_deferred(heap, &set->object, prototype);
     set->entries = nullptr;
     mal_perf_collection_new(
         set, MAL_PERF_COLLECTION_SET, heap->epoch);

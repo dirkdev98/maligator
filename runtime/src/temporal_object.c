@@ -5,7 +5,7 @@ MalTemporalObject *mal_temporal_object_new(
 ) {
     MalTemporalObject *temporal =
         mal_heap_alloc(heap, sizeof(MalTemporalObject), MAL_HEAP_TEMPORAL_OBJECT);
-    mal_object_init(heap, &temporal->object, MAL_HEAP_TEMPORAL_OBJECT, prototype);
+    mal_object_init_deferred(heap, &temporal->object, prototype);
     temporal->handle = handle;
     temporal->kind = kind;
     return temporal;

@@ -20,13 +20,15 @@ typedef struct MalVm MalVm;
  */
 typedef struct MalProxyObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
     MalValue target;
     MalValue handler;
     bool callable;
     bool constructor;
     bool revoked;
 } MalProxyObject;
+
+static_assert(sizeof(MalProxyObject) <= 48, "Proxy object outgrew its allocation class");
 
 static inline bool mal_value_is_proxy_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_PROXY_OBJECT);

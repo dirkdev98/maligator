@@ -14,7 +14,7 @@ MalPrimitiveWrapperObject *mal_primitive_wrapper_object_new(
         sizeof(MalPrimitiveWrapperObject),
         MAL_HEAP_PRIMITIVE_WRAPPER_OBJECT
     );
-    mal_object_init(heap, &wrapper->object, MAL_HEAP_PRIMITIVE_WRAPPER_OBJECT, prototype);
+    mal_object_init_deferred(heap, &wrapper->object, prototype);
     wrapper->kind = kind;
     wrapper->primitive_data = primitive_data;
 

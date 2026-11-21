@@ -7,13 +7,13 @@ typedef struct MalWeakStorage MalWeakStorage;
 
 typedef struct MalWeakMapObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
     MalWeakStorage *entries;
 } MalWeakMapObject;
 
 typedef struct MalWeakSetObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
     MalWeakStorage *entries;
 } MalWeakSetObject;
 

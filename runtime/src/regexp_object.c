@@ -28,7 +28,7 @@ void mal_regexp_string_iterator_object_init(
     MalHeap *heap, MalRegExpStringIteratorObject *iterator, MalObject *prototype, MalValue regexp, MalString *string,
     bool global, bool unicode
 ) {
-    mal_object_init(heap, &iterator->object, MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT, prototype);
+    mal_object_init_deferred(heap, &iterator->object, prototype);
     iterator->regexp = regexp;
     iterator->string = string;
     iterator->global = global;

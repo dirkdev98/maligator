@@ -31,11 +31,11 @@ typedef enum MalObjectStorageKind {
     MAL_OBJECT_DEFERRED,
 } MalObjectStorageKind;
 
-/** Ordinary cells keep their prototype and fields after this prefix. Exotic
- * cells embed MalObjectStorage immediately after it; generalized ordinary cells
- * replace the prototype word with a pointer to separately owned storage. Deferred
- * exotic cells keep only that word until named properties need external storage.
- * Known-shape Arrays can borrow that storage from their own cell's tail. */
+/** Ordinary cells keep their prototype and fields after this prefix. Embedded
+ * exotic cells keep MalObjectStorage immediately after it; generalized ordinary
+ * cells replace the prototype word with a pointer to separately owned storage.
+ * Deferred exotic cells keep only that word until named properties need external
+ * storage. Known-shape Arrays can borrow that storage from their own cell's tail. */
 typedef struct MalObject {
     MalHeapHeader header;
     /*
@@ -99,6 +99,14 @@ typedef struct MalEmbeddedObject {
     MalObject object;
     MalObjectStorage storage;
 } MalEmbeddedObject;
+
+/** The word after a deferred exotic cell's prefix. Exotic objects rarely carry named
+ * properties, so they keep only their prototype here and leave the sidecar out of
+ * the cell until the first named property externalizes it. */
+typedef union MalObjectDeferredStorage {
+    MalObject *prototype;
+    MalObjectStorage *external;
+} MalObjectDeferredStorage;
 
 static inline const MalObjectStorage *mal_object_storage_const(const MalObject *object) {
     if (object->storage_kind == MAL_OBJECT_EMBEDDED) {
@@ -197,6 +205,8 @@ static_assert(sizeof(MalEmbeddedObject) == sizeof(MalObject) + sizeof(MalObjectS
               "exotic object base grew");
 static_assert(offsetof(MalEmbeddedObject, storage) == sizeof(MalObject),
               "embedded storage must follow the object prefix");
+static_assert(sizeof(MalObjectDeferredStorage) == sizeof(void *),
+              "deferred exotic storage must stay one word");
 static_assert((sizeof(MalObject) + sizeof(void *)) % alignof(MalValue) == 0,
               "compact payload must be aligned for tagged fields");
 

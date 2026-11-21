@@ -9,7 +9,7 @@ MalShadowRealmObject *mal_shadow_realm_object_new(
 ) {
     MalShadowRealmObject *object =
         mal_heap_alloc(heap, sizeof(MalShadowRealmObject), MAL_HEAP_SHADOW_REALM_OBJECT);
-    mal_object_init(heap, &object->object, MAL_HEAP_SHADOW_REALM_OBJECT, prototype);
+    mal_object_init_deferred(heap, &object->object, prototype);
     object->shadow_realm = shadow_realm;
     return object;
 }

@@ -1,7 +1,7 @@
 #include "./date_object.h"
 
 void mal_date_object_init(MalHeap *heap, MalDateObject *date, MalObject *prototype, f64 date_value) {
-    mal_object_init(heap, &date->object, MAL_HEAP_DATE_OBJECT, prototype);
+    mal_object_init_deferred(heap, &date->object, prototype);
     date->date_value = date_value;
 }
 

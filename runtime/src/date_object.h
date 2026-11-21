@@ -14,9 +14,11 @@ typedef struct MalHeap MalHeap;
  */
 typedef struct MalDateObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
     f64 date_value;
 } MalDateObject;
+
+static_assert(sizeof(MalDateObject) <= 32, "Date object outgrew its allocation class");
 
 /**
  * Initialize Date object state in caller-provided storage.

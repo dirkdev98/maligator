@@ -23,7 +23,7 @@ MalProxyObject *mal_proxy_object_new(MalVm *vm, MalValue target, MalValue handle
     MalProxyObject *proxy = mal_heap_alloc(&vm->heap, sizeof(MalProxyObject), MAL_HEAP_PROXY_OBJECT);
     // The base object fields are unused by proxy MOP, but initialize them so the
     // shared object accessors (and any GC walk) see a well-formed header.
-    mal_object_init(&vm->heap, &proxy->object, MAL_HEAP_PROXY_OBJECT, nullptr);
+    mal_object_init_deferred(&vm->heap, &proxy->object, nullptr);
     proxy->target = target;
     proxy->handler = handler;
     // ProxyCreate installs [[Call]]/[[Construct]] from the target once. Revocation

@@ -20,7 +20,7 @@ typedef enum MalTemporalKind : u8 {
 /** Ordinary object shell plus the spec internal slots owned by temporal_rs. */
 typedef struct MalTemporalObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
     void *handle;
     MalTemporalKind kind;
 } MalTemporalObject;
