@@ -19399,32 +19399,6 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:stream/web\\\"]\",\"CompressionStream\"]",
-			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"]",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"]",
-				"mal_host_install_node_stream_web:default"
-			],
-			"key": "CompressionStream",
-			"kind": "data",
-			"operations": ["globalThis.CompressionStream"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:stream/web\\\"]\",\"DecompressionStream\"]",
-			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"]",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"]",
-				"mal_host_install_node_stream_web:default"
-			],
-			"key": "DecompressionStream",
-			"kind": "data",
-			"operations": ["globalThis.DecompressionStream"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
 			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:string_decoder\\\"]\",\"StringDecoder\"]",
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:string_decoder\"]",
 			"ownerPaths": [
@@ -65607,32 +65581,6 @@
 			"key": "TextDecoderStream",
 			"kind": "data",
 			"operations": ["globalThis.TextDecoderStream"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"CompressionStream\"]",
-			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
-				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
-			],
-			"key": "CompressionStream",
-			"kind": "data",
-			"operations": ["globalThis.CompressionStream"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"DecompressionStream\"]",
-			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
-				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
-			],
-			"key": "DecompressionStream",
-			"kind": "data",
-			"operations": ["globalThis.DecompressionStream"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -127057,11 +127005,8 @@
 			"id": "[\"globalThis.CompressionStream\",\"length\"]",
 			"owner": "globalThis.CompressionStream",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].CompressionStream",
-				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.CompressionStream",
 				"globalThis.CompressionStream",
-				"globalThis.CompressionStream.prototype.constructor",
-				"mal_host_install_node_stream_web:CompressionStream"
+				"globalThis.CompressionStream.prototype.constructor"
 			],
 			"key": "length",
 			"kind": "data",
@@ -127073,11 +127018,8 @@
 			"id": "[\"globalThis.CompressionStream\",\"name\"]",
 			"owner": "globalThis.CompressionStream",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].CompressionStream",
-				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.CompressionStream",
 				"globalThis.CompressionStream",
-				"globalThis.CompressionStream.prototype.constructor",
-				"mal_host_install_node_stream_web:CompressionStream"
+				"globalThis.CompressionStream.prototype.constructor"
 			],
 			"key": "name",
 			"kind": "data",
@@ -127089,11 +127031,8 @@
 			"id": "[\"globalThis.CompressionStream\",\"prototype\"]",
 			"owner": "globalThis.CompressionStream",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].CompressionStream",
-				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.CompressionStream",
 				"globalThis.CompressionStream",
-				"globalThis.CompressionStream.prototype.constructor",
-				"mal_host_install_node_stream_web:CompressionStream"
+				"globalThis.CompressionStream.prototype.constructor"
 			],
 			"key": "prototype",
 			"kind": "data",
@@ -128355,11 +128294,8 @@
 			"id": "[\"globalThis.DecompressionStream\",\"length\"]",
 			"owner": "globalThis.DecompressionStream",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].DecompressionStream",
-				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.DecompressionStream",
 				"globalThis.DecompressionStream",
-				"globalThis.DecompressionStream.prototype.constructor",
-				"mal_host_install_node_stream_web:DecompressionStream"
+				"globalThis.DecompressionStream.prototype.constructor"
 			],
 			"key": "length",
 			"kind": "data",
@@ -128371,11 +128307,8 @@
 			"id": "[\"globalThis.DecompressionStream\",\"name\"]",
 			"owner": "globalThis.DecompressionStream",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].DecompressionStream",
-				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.DecompressionStream",
 				"globalThis.DecompressionStream",
-				"globalThis.DecompressionStream.prototype.constructor",
-				"mal_host_install_node_stream_web:DecompressionStream"
+				"globalThis.DecompressionStream.prototype.constructor"
 			],
 			"key": "name",
 			"kind": "data",
@@ -128387,11 +128320,8 @@
 			"id": "[\"globalThis.DecompressionStream\",\"prototype\"]",
 			"owner": "globalThis.DecompressionStream",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].DecompressionStream",
-				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.DecompressionStream",
 				"globalThis.DecompressionStream",
-				"globalThis.DecompressionStream.prototype.constructor",
-				"mal_host_install_node_stream_web:DecompressionStream"
+				"globalThis.DecompressionStream.prototype.constructor"
 			],
 			"key": "prototype",
 			"kind": "data",
@@ -277791,11 +277721,8 @@
 			"id": "[\"globalThis.CompressionStream\",\"<call>\"]",
 			"owner": "globalThis.CompressionStream",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].CompressionStream",
-				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.CompressionStream",
 				"globalThis.CompressionStream",
-				"globalThis.CompressionStream.prototype.constructor",
-				"mal_host_install_node_stream_web:CompressionStream"
+				"globalThis.CompressionStream.prototype.constructor"
 			],
 			"key": "<call>",
 			"kind": "call",
@@ -277807,11 +277734,8 @@
 			"id": "[\"globalThis.CompressionStream\",\"<construct>\"]",
 			"owner": "globalThis.CompressionStream",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].CompressionStream",
-				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.CompressionStream",
 				"globalThis.CompressionStream",
-				"globalThis.CompressionStream.prototype.constructor",
-				"mal_host_install_node_stream_web:CompressionStream"
+				"globalThis.CompressionStream.prototype.constructor"
 			],
 			"key": "<construct>",
 			"kind": "construct",
@@ -278103,11 +278027,8 @@
 			"id": "[\"globalThis.DecompressionStream\",\"<call>\"]",
 			"owner": "globalThis.DecompressionStream",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].DecompressionStream",
-				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.DecompressionStream",
 				"globalThis.DecompressionStream",
-				"globalThis.DecompressionStream.prototype.constructor",
-				"mal_host_install_node_stream_web:DecompressionStream"
+				"globalThis.DecompressionStream.prototype.constructor"
 			],
 			"key": "<call>",
 			"kind": "call",
@@ -278119,11 +278040,8 @@
 			"id": "[\"globalThis.DecompressionStream\",\"<construct>\"]",
 			"owner": "globalThis.DecompressionStream",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].DecompressionStream",
-				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.DecompressionStream",
 				"globalThis.DecompressionStream",
-				"globalThis.DecompressionStream.prototype.constructor",
-				"mal_host_install_node_stream_web:DecompressionStream"
+				"globalThis.DecompressionStream.prototype.constructor"
 			],
 			"key": "<construct>",
 			"kind": "construct",
@@ -301986,7 +301904,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_stream_web:CompressionStream",
 			"kind": "binding",
-			"operations": ["globalThis.CompressionStream"],
+			"operations": [],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -302006,7 +301924,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_stream_web:DecompressionStream",
 			"kind": "binding",
-			"operations": ["globalThis.DecompressionStream"],
+			"operations": [],
 			"task": "N-06",
 			"decisions": []
 		},
