@@ -1,6 +1,9 @@
 #include "vm.h"
 #include "perf_stats.h"
 #include "profile.h"
+#if MAL_REALMS
+#include "test262_host.h"
+#endif
 #ifndef MAL_DEVELOPMENT_API
 #define MAL_DEVELOPMENT_API 0
 #endif
@@ -113,6 +116,11 @@ int main(int argc, char **argv) {
         .script_path = mal_runtime_image.entry_path,
     };
     mal_vm_run_host_installs(&vm, &launch);
+#if MAL_REALMS
+    if (getenv("MAL_TEST262") != nullptr) {
+        mal_test262_install(&vm);
+    }
+#endif
 
     MalCallable *callable = mal_vm_create_callable(&vm, 0);
     mal_perf_stats_reset();
