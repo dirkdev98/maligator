@@ -1,15 +1,7 @@
 import { hash } from "node:crypto";
-import {
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	readFileSync,
-	renameSync,
-	rmSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
+import { writeFileAtomically } from "./atomic-file.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 import { compilerProducerIdentity } from "./compiler-cache-identity.ts";
 import { ModuleParseCache } from "./compiler/frontend/module-graph.ts";
@@ -21,6 +13,14 @@ import type {
 const MODULE_PARSE_SCHEMA = 2;
 
 export const FRONTEND_CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "frontend");
+export const DEPENDENCY_LOCKFILES = [
+	"bun.lock",
+	"bun.lockb",
+	"npm-shrinkwrap.json",
+	"package-lock.json",
+	"pnpm-lock.yaml",
+	"yarn.lock",
+];
 
 export interface FrontendDependencyIdentity {
 	path: string;
@@ -78,19 +78,6 @@ function readModuleParseManifest(
 		return manifest;
 	} catch {
 		return undefined;
-	}
-}
-
-function publishManifest(file: string, manifest: object): void {
-	const directory = path.dirname(file);
-	mkdirSync(directory, { recursive: true });
-	const temporaryDirectory = mkdtempSync(path.join(directory, ".publish-"));
-	try {
-		const temporaryPath = path.join(temporaryDirectory, "manifest.json");
-		writeFileSync(temporaryPath, `${JSON.stringify(manifest)}\n`);
-		renameSync(temporaryPath, file);
-	} finally {
-		rmSync(temporaryDirectory, { recursive: true, force: true });
 	}
 }
 
@@ -249,6 +236,7 @@ export class FrontendCompilationSession {
 	#digestManifestDirty = false;
 	#invalidated = new Set<string>();
 	#invalidateAll = false;
+	#dependencyInputsInvalidated = false;
 	#digestHits = 0;
 	#digestMisses = 0;
 
@@ -294,13 +282,27 @@ export class FrontendCompilationSession {
 			this.#snapshots.clear();
 			this.moduleParses.invalidate();
 			this.#invalidateAll = true;
+			this.#dependencyInputsInvalidated = true;
 			this.#invalidated.clear();
 		} else {
 			const resolved = path.resolve(file);
 			this.#snapshots.delete(resolved);
 			this.moduleParses.invalidate(resolved);
 			this.#invalidated.add(resolved);
+			if (
+				resolved.split(path.sep).includes("node_modules") ||
+				DEPENDENCY_LOCKFILES.includes(path.basename(resolved))
+			)
+				this.#dependencyInputsInvalidated = true;
 		}
+	}
+
+	get dependencyInputsInvalidated(): boolean {
+		return this.#dependencyInputsInvalidated;
+	}
+
+	refreshDependencyInputs(): void {
+		this.#dependencyInputsInvalidated = false;
 	}
 
 	snapshot(file: string, knownSource?: string): FrontendDependencyIdentity {
@@ -372,13 +374,14 @@ export class FrontendCompilationSession {
 		if (learned !== undefined && this.#parseManifest !== undefined) {
 			const { path: file, producer, projectRoot } = this.#parseManifest;
 			const current = readModuleParseManifest(file, producer, projectRoot);
-			publishManifest(file, {
+			const manifest = {
 				schema: MODULE_PARSE_SCHEMA,
 				producer,
 				projectRoot,
 				parses: { ...current?.parses, ...learned.parses },
 				loads: { ...current?.loads, ...learned.loads },
-			} satisfies ModuleParseManifest);
+			} satisfies ModuleParseManifest;
+			writeFileAtomically(file, `${JSON.stringify(manifest)}\n`);
 		}
 		if (
 			!this.#digestManifestDirty ||
@@ -395,7 +398,7 @@ export class FrontendCompilationSession {
 			...this.#digestManifest,
 			files: { ...current?.files, ...this.#digestManifest.files },
 		};
-		publishManifest(this.#digestManifestPath, manifest);
+		writeFileAtomically(this.#digestManifestPath, `${JSON.stringify(manifest)}\n`);
 		this.#digestManifest = manifest;
 		this.#digestManifestDirty = false;
 	}
@@ -415,58 +418,66 @@ export function frontendArtifactCacheRoot(override?: string): string {
 
 function validArtifact(file: string, expectedDigest: string): boolean {
 	try {
-		return frontendDigest(new Uint8Array(readFileSync(file))) === expectedDigest;
+		return frontendDigest(readFileSync(file)) === expectedDigest;
 	} catch {
 		return false;
 	}
 }
 
-function cacheFrontendArtifact(
+function publishFrontendArtifact(
 	contents: Uint8Array,
 	file: string,
 	digest: string,
-): string {
-	if (validArtifact(file, digest)) return file;
-
-	const directory = path.dirname(file);
-	mkdirSync(directory, { recursive: true });
-	const temporaryDirectory = mkdtempSync(path.join(directory, ".publish-"));
-	const temporaryPath = path.join(temporaryDirectory, path.basename(file));
+): FrontendArtifactIdentity {
+	const existing = artifactIdentityAt(digest, file);
+	if (existing?.size === contents.byteLength && validArtifact(file, digest))
+		return existing;
 	try {
-		writeFileSync(temporaryPath, contents);
-		try {
-			renameSync(temporaryPath, file);
-		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
-			if (code !== "EEXIST" || !validArtifact(file, digest)) throw error;
-		}
-	} finally {
-		rmSync(temporaryDirectory, { recursive: true, force: true });
+		writeFileAtomically(file, contents);
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code !== "EEXIST" || !validArtifact(file, digest)) throw error;
 	}
-	if (!existsSync(file) || !validArtifact(file, digest)) {
+	// The completed rename already published the bytes that named this artifact.
+	const published = artifactIdentityAt(digest, file);
+	if (published?.size !== contents.byteLength) {
 		throw new Error(`frontend artifact publication failed: ${file}`);
 	}
-	return file;
+	return published;
 }
 
 /** Publish a runtime-only MALW image into the frontend artifact store. */
+export function publishFrontendWire(
+	wire: Uint8Array,
+	root = FRONTEND_CACHE_DIRECTORY,
+): FrontendArtifactIdentity {
+	const digest = frontendDigest(wire);
+	return publishFrontendArtifact(wire, frontendWirePath(digest, root), digest);
+}
+
 export function cacheFrontendWire(
 	wire: Uint8Array,
 	root = FRONTEND_CACHE_DIRECTORY,
 ): string {
-	const digest = frontendDigest(wire);
-	return cacheFrontendArtifact(wire, frontendWirePath(digest, root), digest);
+	return publishFrontendWire(wire, root).path;
 }
 
 /** Publish a compiler-only MALC ProgramImage artifact into its separate store. */
-export function cacheFrontendCompilerArtifact(
+export function publishFrontendCompilerArtifact(
 	artifact: Uint8Array,
 	root = FRONTEND_CACHE_DIRECTORY,
-): string {
+): FrontendArtifactIdentity {
 	const digest = frontendDigest(artifact);
-	return cacheFrontendArtifact(
+	return publishFrontendArtifact(
 		artifact,
 		frontendCompilerArtifactPath(digest, root),
 		digest,
 	);
+}
+
+export function cacheFrontendCompilerArtifact(
+	artifact: Uint8Array,
+	root = FRONTEND_CACHE_DIRECTORY,
+): string {
+	return publishFrontendCompilerArtifact(artifact, root).path;
 }

@@ -259,6 +259,7 @@ export function compileBuildFragments(
 					phases: options.phases,
 					onCompilePhase: options.onCompilePhase,
 					worker: options.dependencyWorker,
+					reuseOnRebuild: options.target === "runtime",
 				});
 	const external = externalModulesOf(dependencyArtifacts);
 	const applicationArtifacts: Array<LinkedImageArtifact> = [];

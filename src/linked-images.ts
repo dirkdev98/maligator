@@ -16,6 +16,7 @@ import { SOURCE_HOST_MODULES } from "./compiler/frontend/host-modules.ts";
 import type {
 	ExternalModuleInterface,
 	ModuleGraph,
+	ModuleRecord,
 } from "./compiler/frontend/module-graph.ts";
 import { collectPrimordialMutationDiagnostics } from "./compiler/frontend/primordial-diagnostics.ts";
 import {
@@ -50,14 +51,12 @@ import { runtimeImageStats } from "./compiler/target/program-image.ts";
 import type { ProgramImage, ProgramImageStats } from "./compiler/target/program-image.ts";
 import type { RuntimeImage, RuntimeModuleLink } from "./compiler/target/runtime-image.ts";
 import {
-	cacheFrontendCompilerArtifact,
-	cacheFrontendWire,
 	frontendArtifactCacheRoot,
-	frontendArtifactIdentity,
 	frontendArtifactUnchanged,
-	frontendCompilerArtifactIdentity,
 	frontendCompilerArtifactUnchanged,
 	frontendDigest as digest,
+	publishFrontendCompilerArtifact,
+	publishFrontendWire,
 } from "./frontend-cache.ts";
 import type { FrontendArtifactIdentity } from "./frontend-cache.ts";
 
@@ -293,6 +292,20 @@ export function packageRootSource(directory: string): string {
 	);
 }
 
+const sourceDigests = new WeakMap<
+	ModuleRecord["parsed"],
+	{ source: string; digest: string }
+>();
+
+/** Reuse a source digest across graph walks that share the same parsed module. */
+export function linkedSourceDigest(record: ModuleRecord): string {
+	const previous = sourceDigests.get(record.parsed);
+	if (previous?.source === record.source) return previous.digest;
+	const sourceDigest = digest(record.source);
+	sourceDigests.set(record.parsed, { source: record.source, digest: sourceDigest });
+	return sourceDigest;
+}
+
 /** The identity an image of this graph is cached under, for data derived from it. */
 export function linkedImageIdentity(
 	environment: LinkedImageEnvironment,
@@ -320,7 +333,19 @@ export function linkedImageIdentity(
 				.map((record) => ({
 					path: located(record.path),
 					goal: record.goal,
-					source: digest(record.source),
+					source: linkedSourceDigest(record),
+					dependencies: record.dependencies.map((dependency) => [
+						dependency.kind,
+						dependency.specifier,
+						dependency.resolvedPath === null ? null : located(dependency.resolvedPath),
+						dependency.importType,
+						dependency.catchableMissing,
+					]),
+					importMetaResolutions: record.importMetaResolutions?.map((resolution) =>
+						"path" in resolution
+							? { ...resolution, path: located(resolution.path) }
+							: resolution,
+					),
 					// The execution snapshot reaches an image only through these constants.
 					host:
 						record.host === undefined
@@ -354,14 +379,39 @@ function storedNativeImage(
 	};
 }
 
-interface LinkedImageReference {
+export interface LinkedImageReference {
 	readonly runtimeArtifact: FrontendArtifactIdentity;
 	readonly compilerArtifact?: FrontendArtifactIdentity;
-	readonly diagnostics: Array<CompilerDiagnostic>;
-	readonly interfaces: Array<CoreModuleInterface>;
+	readonly diagnostics: ReadonlyArray<CompilerDiagnostic>;
+	readonly interfaces: ReadonlyArray<CoreModuleInterface>;
 	readonly stats: ProgramImageStats;
 	/** Where an image shared across locations was compiled; others rebase it. */
 	readonly packageRoot?: string;
+}
+
+function validReference(
+	environment: LinkedImageEnvironment,
+	reference: Partial<LinkedImageReference>,
+): reference is LinkedImageReference {
+	const compilerArtifact = reference.compilerArtifact;
+	return (
+		reference.runtimeArtifact !== undefined &&
+		(environment.target === "native") === (compilerArtifact !== undefined) &&
+		Array.isArray(reference.diagnostics) &&
+		Array.isArray(reference.interfaces) &&
+		reference.stats !== undefined &&
+		frontendArtifactUnchanged(reference.runtimeArtifact, environment.artifactRoot) &&
+		(compilerArtifact === undefined ||
+			frontendCompilerArtifactUnchanged(compilerArtifact, environment.artifactRoot))
+	);
+}
+
+/** Restore an image described by a previously published, still available artifact. */
+export function restoreLinkedImage(
+	environment: LinkedImageEnvironment,
+	reference: LinkedImageReference,
+): LinkedImageArtifact | undefined {
+	return validReference(environment, reference) ? storedImage(reference) : undefined;
 }
 
 /**
@@ -391,21 +441,10 @@ function readReference(
 		const reference = JSON.parse(readFileSync(file, "utf-8")) as Partial<
 			LinkedImageReference & { schema: number }
 		>;
-		const compilerArtifact = reference.compilerArtifact;
-		if (
-			reference.schema !== LINKED_IMAGE_SCHEMA ||
-			reference.runtimeArtifact === undefined ||
-			(environment.target === "native") !== (compilerArtifact !== undefined) ||
-			!Array.isArray(reference.diagnostics) ||
-			!Array.isArray(reference.interfaces) ||
-			reference.stats === undefined ||
-			!frontendArtifactUnchanged(reference.runtimeArtifact, environment.artifactRoot) ||
-			(compilerArtifact !== undefined &&
-				!frontendCompilerArtifactUnchanged(compilerArtifact, environment.artifactRoot))
-		) {
-			return undefined;
-		}
-		return reference as LinkedImageReference;
+		return reference.schema === LINKED_IMAGE_SCHEMA &&
+			validReference(environment, reference)
+			? reference
+			: undefined;
 	} catch {
 		return undefined;
 	}
@@ -477,14 +516,7 @@ function rebasedImage(
 					},
 				}),
 	});
-	cacheFrontendWire(wire, environment.artifactRoot);
-	const runtimeArtifact = frontendArtifactIdentity(
-		digest(wire),
-		environment.artifactRoot,
-	);
-	if (runtimeArtifact === undefined) {
-		throw new Error("rebased linked image is missing after publication");
-	}
+	const runtimeArtifact = publishFrontendWire(wire, environment.artifactRoot);
 	const diagnostics = reference.diagnostics.map((diagnostic) => {
 		const separator = diagnostic.siteId.indexOf(":");
 		const site = rebase(decodeURIComponent(diagnostic.siteId.slice(0, separator)));
@@ -525,6 +557,14 @@ export function findLinkedImage(
 	packageRoot?: string,
 ): LinkedImageArtifact | undefined {
 	const key = linkedImageIdentity(environment, kind, graph, exports, packageRoot);
+	return linkedImageAt(environment, key, packageRoot);
+}
+
+function linkedImageAt(
+	environment: LinkedImageEnvironment,
+	key: string,
+	packageRoot: string | undefined,
+): LinkedImageArtifact | undefined {
 	if (packageRoot === undefined) {
 		const reference = readReference(
 			environment,
@@ -563,7 +603,8 @@ export function compileLinkedImage(
 	exports: "all" | ReadonlySet<string> | undefined,
 	packageRoot?: string,
 ): LinkedImageArtifact {
-	const cached = findLinkedImage(environment, kind, graph, exports, packageRoot);
+	const key = linkedImageIdentity(environment, kind, graph, exports, packageRoot);
+	const cached = linkedImageAt(environment, key, packageRoot);
 	if (cached !== undefined) return cached;
 	if (packageRoot !== undefined && environment.target !== "runtime") {
 		throw new Error("only interpreted images compile against a package root");
@@ -630,30 +671,15 @@ export function compileLinkedImage(
 		const compilerWire = serializeCompilerArtifact(programImage);
 		wire = serializeRuntimeImage(programImage.runtime);
 		phases.serializeMs += Date.now() - serializeStartedAt;
-		cacheFrontendCompilerArtifact(compilerWire, environment.artifactRoot);
-		const compilerArtifact = frontendCompilerArtifactIdentity(
-			digest(compilerWire),
+		const compilerArtifact = publishFrontendCompilerArtifact(
+			compilerWire,
 			environment.artifactRoot,
 		);
-		if (compilerArtifact === undefined) {
-			throw new Error("linked image compiler artifact is missing after publication");
-		}
 		native = { compilerArtifact, programImage };
 	}
-	cacheFrontendWire(wire, environment.artifactRoot);
-	const runtimeArtifact = frontendArtifactIdentity(
-		digest(wire),
-		environment.artifactRoot,
-	);
-	if (runtimeArtifact === undefined) {
-		throw new Error("linked image runtime artifact is missing after publication");
-	}
+	const runtimeArtifact = publishFrontendWire(wire, environment.artifactRoot);
 	writeFileAtomically(
-		referencePath(
-			environment,
-			linkedImageIdentity(environment, kind, graph, exports, packageRoot),
-			shared ? undefined : packageRoot,
-		),
+		referencePath(environment, key, shared ? undefined : packageRoot),
 		`${JSON.stringify({
 			schema: LINKED_IMAGE_SCHEMA,
 			runtimeArtifact,

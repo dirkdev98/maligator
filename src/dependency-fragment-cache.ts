@@ -1,13 +1,19 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
+import { fileIdentity } from "./artifact-store.ts";
 import { writeFileAtomically } from "./atomic-file.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import type {
 	BuildModuleGraphOptions,
 	ExternalModuleInterface,
+	ModuleGoal,
 	ModuleGraph,
+	ModuleResolutionInput,
 } from "./compiler/frontend/module-graph.ts";
-import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
+import {
+	buildModuleGraph,
+	moduleResolutionInputUnchanged,
+} from "./compiler/frontend/module-graph.ts";
 import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
@@ -19,24 +25,31 @@ import {
 	storeDependencyChunkPlan,
 } from "./dependency-chunks.ts";
 import type { DependencyChunk, DependencyChunkPlan } from "./dependency-chunks.ts";
-import { frontendDigest } from "./frontend-cache.ts";
-import { FrontendCompilationSession } from "./frontend-cache.ts";
+import {
+	DEPENDENCY_LOCKFILES,
+	frontendDigest,
+	FrontendCompilationSession,
+} from "./frontend-cache.ts";
 import {
 	compiledByWorker,
 	compileLinkedImage,
 	findLinkedImage,
 	linkedImageEnvironment,
 	linkedImageIdentity,
+	linkedSourceDigest,
 	packageRootModule,
 	packageRootSource,
+	restoreLinkedImage,
 	UnsupportedLinkedImagesError,
 } from "./linked-images.ts";
 import type {
 	LinkedImageArtifact,
 	LinkedImageEnvironment,
+	LinkedImageReference,
 	LinkedImageTarget,
 } from "./linked-images.ts";
 import { nativeBuildJobs, runIndependentCommands } from "./native-command.ts";
+import { executionIdentity } from "./platform/execution.ts";
 import type { Execution } from "./platform/execution.ts";
 
 const DEPENDENCY_FRAGMENT_FAMILY = "dependency-fragments";
@@ -78,6 +91,8 @@ export interface CompileDependencyFragmentsOptions {
 	phases: DependencyFragmentPhases;
 	onCompilePhase?: (phase: CompileCorePhase, durationMs: number) => void;
 	worker?: DependencyFragmentWorker;
+	/** Reuse the resolved set of images on a subsequent application build. */
+	reuseOnRebuild?: boolean;
 	/** Hidden CLI tasks for other missing images, run beside the islands' workers. */
 	parallelTasks?: ReadonlyArray<ReadonlyArray<string>>;
 }
@@ -116,6 +131,16 @@ interface DependencyUnit {
 	plan?: DependencyChunkPlan;
 }
 
+interface DependencyImageSet {
+	readonly sources: ReadonlyArray<
+		readonly [file: string, goal: ModuleGoal, digest: string]
+	>;
+	readonly resolutionInputs: ReadonlyArray<ModuleResolutionInput>;
+	readonly images: ReadonlyArray<
+		LinkedImageReference & { targets: ReadonlyArray<string> }
+	>;
+}
+
 export function isExternalModule(file: string): boolean {
 	return file.split(path.sep).includes("node_modules");
 }
@@ -143,6 +168,130 @@ function islandEnvironment(
 		phases: options.phases,
 		onCompilePhase: options.onCompilePhase,
 	});
+}
+
+function dependencyLockfileIdentities(
+	entry: string,
+): Array<readonly [file: string, identity: string | null]> {
+	const directories = new Set<string>();
+	for (const start of [path.dirname(entry), process.cwd()]) {
+		let directory = start;
+		while (!directories.has(directory)) {
+			directories.add(directory);
+			const parent = path.dirname(directory);
+			if (parent === directory) break;
+			directory = parent;
+		}
+	}
+	return [...directories].sort().flatMap((directory) =>
+		DEPENDENCY_LOCKFILES.map((name) => {
+			const file = path.join(directory, name);
+			const stats = statSync(file, { throwIfNoEntry: false });
+			return [file, stats === undefined ? null : fileIdentity(stats)] as const;
+		}),
+	);
+}
+
+function dependencyImageSetPath(
+	environment: LinkedImageEnvironment,
+	options: CompileDependencyFragmentsOptions,
+): string | undefined {
+	try {
+		const identity = frontendDigest(
+			JSON.stringify({
+				environment: environment.identity,
+				targets: options.targets,
+				chunking: options.worker !== undefined,
+				config: options.config,
+				execution: executionIdentity(options.execution),
+				locks: dependencyLockfileIdentities(options.graph.entry),
+			}),
+		);
+		return path.join(environment.root, "image-sets", `${identity}.json`);
+	} catch {
+		return undefined;
+	}
+}
+
+function readDependencyImageSet(
+	file: string,
+	environment: LinkedImageEnvironment,
+	graph: ModuleGraph,
+): Array<DependencyFragmentArtifact> | undefined {
+	try {
+		const stored = JSON.parse(readFileSync(file, "utf-8")) as DependencyImageSet;
+		const observed = new Map(graph.resolutionInputs);
+		for (const input of stored.resolutionInputs) {
+			const current = observed.get(input[0]);
+			// Synthetic island entries make some resolver observations of their own.
+			if (
+				current === undefined
+					? !moduleResolutionInputUnchanged(input)
+					: current !== input[1]
+			)
+				return undefined;
+		}
+		for (const [file, goal, digest] of stored.sources) {
+			const record = graph.modules.get(file);
+			if (record?.goal !== goal || linkedSourceDigest(record) !== digest)
+				return undefined;
+		}
+		const images: Array<DependencyFragmentArtifact> = [];
+		for (const reference of stored.images) {
+			const image = restoreLinkedImage(environment, reference);
+			if (image === undefined || !Array.isArray(reference.targets)) return undefined;
+			images.push(Object.assign(image, { targets: reference.targets }));
+		}
+		return images.length === 0 ? undefined : images;
+	} catch {
+		return undefined;
+	}
+}
+
+function publishDependencyImageSet(
+	file: string,
+	graph: ModuleGraph,
+	dependencyGraphs: ReadonlySet<ModuleGraph>,
+	artifacts: ReadonlyArray<DependencyFragmentArtifact>,
+): boolean {
+	const sources = new Map<string, readonly [string, ModuleGoal, string]>();
+	const resolutionInputs = new Map<string, string>();
+	for (const dependencyGraph of dependencyGraphs) {
+		for (const [key, observation] of dependencyGraph.resolutionInputs) {
+			const previous = resolutionInputs.get(key);
+			if (previous !== undefined && previous !== observation) return false;
+			resolutionInputs.set(key, observation);
+		}
+		for (const record of dependencyGraph.modules.values()) {
+			if (
+				record.path === dependencyGraph.entry ||
+				record.host !== undefined ||
+				record.external !== undefined
+			)
+				continue;
+			const original = graph.modules.get(record.path);
+			// The next application graph has to supply the source for every dependency.
+			if (original?.goal !== record.goal || original.source !== record.source)
+				return false;
+			sources.set(record.path, [record.path, record.goal, linkedSourceDigest(record)]);
+		}
+	}
+	const stored: DependencyImageSet = {
+		sources: [...sources.values()],
+		resolutionInputs: [...resolutionInputs],
+		images: artifacts.map((artifact) => ({
+			runtimeArtifact: artifact.runtimeArtifact,
+			...(artifact.native === undefined
+				? {}
+				: { compilerArtifact: artifact.native.compilerArtifact }),
+			diagnostics: artifact.diagnostics,
+			interfaces: artifact.interfaces,
+			stats: artifact.stats,
+			targets: artifact.targets,
+		})),
+	};
+	writeFileAtomically(file, `${JSON.stringify(stored)}\n`);
+	return true;
 }
 
 function reachableExternalModules(graph: ModuleGraph, target: string): Set<string> {
@@ -484,6 +633,18 @@ export function compileDependencyFragments(
 ): Array<DependencyFragmentArtifact> {
 	const environment = islandEnvironment(options);
 	const graphStartedAt = Date.now();
+	const tasks = options.parallelTasks ?? [];
+	const setPath =
+		options.reuseOnRebuild && tasks.length === 0
+			? dependencyImageSetPath(environment, options)
+			: undefined;
+	if (setPath !== undefined && !options.session.dependencyInputsInvalidated) {
+		const images = readDependencyImageSet(setPath, environment, options.graph);
+		if (images !== undefined) {
+			options.phases.graphMs += Date.now() - graphStartedAt;
+			return images;
+		}
+	}
 	const islands = dependencyIslands(options.graph, options.targets).map(
 		({ targets }): Island => {
 			const graph = islandGraph(targets, options);
@@ -534,17 +695,22 @@ export function compileDependencyFragments(
 	});
 	options.phases.graphMs += Date.now() - graphStartedAt;
 	const units = islandUnits.flat();
-	const missing = units.filter(
-		(unit) =>
-			findLinkedImage(
-				environment,
-				unit.kind,
-				unit.graph,
-				unit.exports,
-				unit.packageRoot,
-			) === undefined,
-	);
-	const tasks = options.parallelTasks ?? [];
+	const cached = new Map<DependencyUnit, LinkedImageArtifact>();
+	const missing =
+		options.worker === undefined
+			? []
+			: units.filter((unit) => {
+					const image = findLinkedImage(
+						environment,
+						unit.kind,
+						unit.graph,
+						unit.exports,
+						unit.packageRoot,
+					);
+					if (image === undefined) return true;
+					cached.set(unit, image);
+					return false;
+				});
 	const worker = missing.length + tasks.length > 1 ? options.worker : undefined;
 	if (worker !== undefined) {
 		const sourceBytes = (unit: DependencyUnit) =>
@@ -580,13 +746,16 @@ export function compileDependencyFragments(
 	}
 	const compiledByWorkers = new Set(worker === undefined ? [] : missing);
 	const compile = (unit: DependencyUnit): DependencyFragmentArtifact => {
-		const artifact = compileLinkedImage(
-			environment,
-			unit.kind,
-			unit.graph,
-			unit.exports,
-			unit.packageRoot,
-		);
+		// Workers can run long enough for a previously available artifact to be evicted.
+		const artifact =
+			(worker === undefined ? cached.get(unit) : undefined) ??
+			compileLinkedImage(
+				environment,
+				unit.kind,
+				unit.graph,
+				unit.exports,
+				unit.packageRoot,
+			);
 		return Object.assign(
 			compiledByWorkers.has(unit) ? compiledByWorker(artifact) : artifact,
 			{ targets: unit.targets },
@@ -595,7 +764,7 @@ export function compileDependencyFragments(
 	const packageRoots = [
 		...new Set(islands.flatMap(({ packageRoot }) => packageRoot ?? [])),
 	].sort();
-	return [
+	const artifacts = [
 		...packageRoots.map((directory) => {
 			const graphStartedAt = Date.now();
 			const graph = packageRootGraph(directory, options);
@@ -619,4 +788,13 @@ export function compileDependencyFragments(
 			return [compile(islandUnit(islands[index]!))];
 		}),
 	];
+	if (setPath !== undefined) {
+		const graphs = new Set([
+			...islands.map(({ graph }) => graph),
+			...units.map(({ graph }) => graph),
+		]);
+		if (publishDependencyImageSet(setPath, options.graph, graphs, artifacts))
+			options.session.refreshDependencyInputs();
+	}
+	return artifacts;
 }

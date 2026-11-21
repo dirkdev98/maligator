@@ -1,14 +1,6 @@
-import {
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	readFileSync,
-	renameSync,
-	rmSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
+import { writeFileAtomically } from "./atomic-file.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
 import { compileBuildFragments } from "./build-fragment-cache.ts";
@@ -76,14 +68,14 @@ import { programImageStats } from "./compiler/target/program-image.ts";
 import type { ProgramImageStats } from "./compiler/target/program-image.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import {
-	cacheFrontendCompilerArtifact,
-	cacheFrontendWire,
 	frontendArtifactCacheRoot,
 	frontendCompilerArtifactIdentity,
 	frontendCompilerArtifactPath,
 	frontendDigest as digest,
 	FrontendCompilationSession,
 	frontendWirePath,
+	publishFrontendCompilerArtifact,
+	publishFrontendWire,
 } from "./frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
 import { graphReadsExecution, UnsupportedLinkedImagesError } from "./linked-images.ts";
@@ -513,8 +505,10 @@ function graphDependencyInputs(graph: ModuleGraph): GraphDependencyInputs {
 
 function packageResolutionInputs(directories: ReadonlyArray<string>): Array<string> {
 	const inputs = new Set<string>();
+	const visited = new Set<string>();
 	for (let directory of directories) {
-		for (;;) {
+		while (!visited.has(directory)) {
+			visited.add(directory);
 			const packagePath = path.join(directory, "package.json");
 			if (existsSync(packagePath)) inputs.add(packagePath);
 			const parent = path.dirname(directory);
@@ -558,19 +552,6 @@ function contentKey(
 			})),
 		}),
 	);
-}
-
-function publish(file: string, contents: string | Uint8Array): void {
-	const directory = path.dirname(file);
-	mkdirSync(directory, { recursive: true });
-	const temporaryDirectory = mkdtempSync(path.join(directory, ".publish-"));
-	const temporaryPath = path.join(temporaryDirectory, path.basename(file));
-	try {
-		writeFileSync(temporaryPath, contents);
-		renameSync(temporaryPath, file);
-	} finally {
-		rmSync(temporaryDirectory, { recursive: true, force: true });
-	}
 }
 
 export interface BuildRootCompiler {
@@ -1008,33 +989,29 @@ function prepareBuildFrontend(
 		const runtimeArtifacts =
 			runtimeArtifactIdentities ??
 			wires!.map((runtimeWire) => {
-				const wireDigest = digest(runtimeWire);
-				cacheFrontendWire(runtimeWire, artifactRoot);
-				const artifact = artifactIdentity(wireDigest, artifactRoot);
-				if (artifact === undefined) {
-					throw new Error(
-						`frontend artifact is missing after publication: ${wireDigest}`,
-					);
-				}
-				return artifact;
+				const {
+					digest: wireDigest,
+					size,
+					mtimeMs,
+					ctimeMs,
+					ino,
+					dev,
+				} = publishFrontendWire(runtimeWire, artifactRoot);
+				return { digest: wireDigest, size, mtimeMs, ctimeMs, ino, dev };
 			});
 		const compilerArtifact =
 			compilerArtifactIdentity ??
 			(compilerWire === undefined
 				? undefined
 				: (() => {
-						const compilerDigest = digest(compilerWire);
-						cacheFrontendCompilerArtifact(compilerWire, artifactRoot);
-						const artifact = frontendCompilerArtifactIdentity(
-							compilerDigest,
-							artifactRoot,
-						);
-						if (artifact === undefined) {
-							throw new Error(
-								`frontend compiler artifact is missing after publication: ${compilerDigest}`,
-							);
-						}
-						const { digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev } = artifact;
+						const {
+							digest: artifactDigest,
+							size,
+							mtimeMs,
+							ctimeMs,
+							ino,
+							dev,
+						} = publishFrontendCompilerArtifact(compilerWire, artifactRoot);
 						return { digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev };
 					})());
 		// A whole-program fallback compiles one image, which its compiler artifact describes.
@@ -1046,7 +1023,7 @@ function prepareBuildFrontend(
 		// A forced compile builds one image where fragments apply; publishing it would
 		// hand later unforced builds a different program shape under the same identity.
 		if (!liveProfile && (!forceCompile || !fragmentsApply))
-			publish(
+			writeFileAtomically(
 				manifestPath(root, entrypoint, identity),
 				`${JSON.stringify({
 					schema: BUILD_FRONTEND_CACHE_SCHEMA,

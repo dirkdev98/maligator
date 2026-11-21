@@ -4,7 +4,9 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { compileBuildFrontend } from "../src/build-frontend-cache.ts";
+import type { CompileBuildFrontendOptions } from "../src/build-frontend-cache.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { FrontendCompilationSession } from "../src/frontend-cache.ts";
 
 const roots: Array<string> = [];
 
@@ -20,6 +22,7 @@ function project(files: Record<string, string>) {
 		const file = path.join(root, name);
 		mkdirSync(path.dirname(file), { recursive: true });
 		writeFileSync(file, source);
+		return file;
 	};
 	write("package.json", `{"type":"module"}\n`);
 	write("node_modules/answer/package.json", `{"type":"module","exports":"./index.js"}\n`);
@@ -27,7 +30,16 @@ function project(files: Record<string, string>) {
 	for (const [name, source] of Object.entries(files)) write(name, source);
 	return {
 		write,
-		compile: () =>
+		pruneDependencyReferences: () =>
+			rmSync(path.join(root, "cache", "dependency-fragments", "artifacts"), {
+				recursive: true,
+				force: true,
+			}),
+		compile: (
+			overrides: Partial<
+				Pick<CompileBuildFrontendOptions, "session" | "config" | "stripperIdentity">
+			> = {},
+		) =>
 			compileBuildFrontend({
 				entrypoint: path.join(root, "entry.mjs"),
 				config: resolveBuildConfig({}),
@@ -37,6 +49,7 @@ function project(files: Record<string, string>) {
 				optimization: "development",
 				relocatable: true,
 				interpreted: true,
+				...overrides,
 			}),
 	};
 }
@@ -61,6 +74,105 @@ describe("interpreted application images", () => {
 			}).compile().runtimeArtifacts.length - 1;
 		// The dependency's images, `label.mjs`'s and the entry's are reused.
 		expect(edited.fragmentArtifacts).toEqual({ hits: dependencyImages + 2, misses: 1 });
+	});
+
+	it("reuses resolved dependency images across sessions on a project-only edit", () => {
+		const { write, compile, pruneDependencyReferences } = project(layered);
+		compile();
+		pruneDependencyReferences();
+
+		write("prefix.mjs", `export const prefix = "the answer ";\n`);
+
+		expect(compile().fragmentArtifacts?.misses).toBe(1);
+	});
+
+	it("republishes a missing dependency artifact before loading the image set", () => {
+		const { compile } = project(layered);
+		const original = compile();
+		const wires = original.wires;
+		rmSync(original.runtimeArtifacts[0]!.path);
+
+		const rebuilt = compile();
+
+		expect(rebuilt.fragmentArtifacts?.misses).toBe(1);
+		expect(rebuilt.wires).toEqual(wires);
+	});
+
+	it("refreshes the dependency images after a path in node_modules is invalidated", () => {
+		const { write, compile, pruneDependencyReferences } = project(layered);
+		const session = new FrontendCompilationSession();
+		compile({ session });
+		pruneDependencyReferences();
+
+		session.invalidate(write("node_modules/answer/README.txt", "Package update\n"));
+		session.invalidate(write("prefix.mjs", `export const prefix = "the answer ";\n`));
+
+		expect(compile({ session }).fragmentArtifacts?.misses).toBeGreaterThan(1);
+	});
+
+	it("refreshes the dependency images when a lockfile changes between sessions", () => {
+		const { write, compile, pruneDependencyReferences } = project(layered);
+		write("package-lock.json", `{"lockfileVersion":3}\n`);
+		compile();
+		pruneDependencyReferences();
+
+		write("package-lock.json", `{"lockfileVersion":3,"packages":{}}\n`);
+		write("prefix.mjs", `export const prefix = "the answer ";\n`);
+
+		expect(compile().fragmentArtifacts?.misses).toBeGreaterThan(1);
+	});
+
+	it("recompiles a dependency whose package export redirects to an already loaded module", () => {
+		const packageExports = (target: string) =>
+			JSON.stringify({
+				type: "module",
+				exports: { ".": "./index.js", "./choice": target },
+			});
+		const { write, compile } = project({
+			...layered,
+			"node_modules/answer/package.json": packageExports("./first.js"),
+			"node_modules/answer/index.js": `
+				import "./first.js";
+				import "./second.js";
+				export { answer } from "answer/choice";
+			`,
+			"node_modules/answer/first.js": "export const answer = 41;\n",
+			"node_modules/answer/second.js": "export const answer = 42;\n",
+		});
+		const first = compile();
+
+		write("node_modules/answer/package.json", packageExports("./second.js"));
+		const second = compile();
+
+		expect(second.fragmentArtifacts?.misses).toBe(1);
+		expect(second.runtimeArtifacts.map(({ digest }) => digest)).not.toEqual(
+			first.runtimeArtifacts.map(({ digest }) => digest),
+		);
+	});
+
+	it("refreshes the dependency images after the build configuration changes", () => {
+		const { write, compile, pruneDependencyReferences } = project(layered);
+		const session = new FrontendCompilationSession();
+		compile({ session });
+		pruneDependencyReferences();
+
+		session.invalidate(write("prefix.mjs", `export const prefix = "the answer ";\n`));
+
+		const rebuilt = compile({
+			session,
+			config: resolveBuildConfig({ outputName: "different" }),
+		});
+		expect(rebuilt.fragmentArtifacts?.misses).toBeGreaterThan(1);
+	});
+
+	it("refreshes the dependency images after the frontend toolchain identity changes", () => {
+		const { compile } = project(layered);
+		const session = new FrontendCompilationSession();
+		compile({ session });
+
+		const rebuilt = compile({ session, stripperIdentity: "next-stripper" });
+
+		expect(rebuilt.fragmentArtifacts?.hits).toBe(0);
 	});
 
 	it("recompiles the importers of a module whose exported names change", () => {
