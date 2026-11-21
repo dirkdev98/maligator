@@ -30,6 +30,8 @@ const forbiddenComponents = {
 	rustls: ({ crate }) => /^rustls(?:_|$)/.test(crate ?? ""),
 	"sqlite3.o": ({ object }) => /(?:^|[(-])sqlite3\.o\)?$/.test(object),
 	node_fs: ({ object }) => /(?:^|[(-])node_fs\.o\)?$/.test(object),
+	"Node streams": ({ object }) => /(?:^|[(-])node_stream\.o\)?$/.test(object),
+	"Fetch objects": ({ object }) => /(?:^|[(-])web_fetch\.o\)?$/.test(object),
 	"HTTP client": ({ object, symbol }) =>
 		/(?:^|[(-])(?:web_fetch_client|http_client)\.o\)?$/.test(object) ||
 		/^_mal_(?:web_fetch_client|http_client)_/.test(symbol),
@@ -119,7 +121,14 @@ const fixtures: Array<{
 		name: "node-fs",
 		file: "bench/size/node-fs.mjs",
 		bun: true,
-		forbidden: ["brotli", "rustls", "sqlite3.o"],
+		forbidden: [
+			"brotli",
+			"TLS",
+			"HTTP client",
+			"Node streams",
+			"Fetch objects",
+			"sqlite3.o",
+		],
 	},
 	{
 		name: "http-bare",

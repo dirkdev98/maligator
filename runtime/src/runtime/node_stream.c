@@ -1577,7 +1577,7 @@ static bool stream_decode_write_chunk(
     }
     if (mal_value_is_undefined(
             vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR])) {
-        mal_host_install_node_buffer(vm, nullptr, 0, nullptr);
+        mal_node_buffer_ensure(vm);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             return false;
         }
@@ -6212,7 +6212,7 @@ static MalValue consume_concat(MalVm *vm, MalValue chunks) {
     mal_gc_root(&root, roots, 3);
     MalValue result = mal_value_new_undefined();
     if (mal_value_is_undefined(vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR])) {
-        mal_host_install_node_buffer(vm, nullptr, 0, nullptr);
+        mal_node_buffer_ensure(vm);
     }
     roots[2] = vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR];
     MalArrayObject *list = mal_value_to_array_object(roots[0]);

@@ -10,6 +10,9 @@ import {
 	installerUsesNodePersonality,
 	NODE_BUILTIN_LOADER_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
+	NODE_FS_FULL_EXPORTS,
+	NODE_FS_INSTALLER,
+	NODE_FS_NAMED_INSTALLER,
 	NODE_PERSONALITY_INSTALLER,
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
@@ -3962,6 +3965,7 @@ function buildHostInstalls(
 		}
 		return install;
 	};
+	const retained = context.data.retainedHostInstallers;
 	for (const hostModule of context.data.hostInstallCandidates) {
 		const usedExports: RuntimeImage["hostInstalls"][number]["exports"] = [];
 		for (const entry of hostModule.exports) {
@@ -3969,12 +3973,16 @@ function buildHostInstalls(
 				usedExports.push(entry);
 			}
 		}
-		if (usedExports.length > 0) {
-			installFor(hostModule.installer).exports.push(...usedExports);
-		}
+		if (usedExports.length === 0) continue;
+		const installer =
+			hostModule.installer === NODE_FS_INSTALLER &&
+			!retained.includes(NODE_FS_INSTALLER) &&
+			usedExports.every(({ name }) => !NODE_FS_FULL_EXPORTS.has(name))
+				? NODE_FS_NAMED_INSTALLER
+				: hostModule.installer;
+		installFor(installer).exports.push(...usedExports);
 	}
 
-	const retained = context.data.retainedHostInstallers;
 	const usesNode =
 		retained.some(installerUsesNodePersonality) ||
 		manifest.some(({ installer }) => installerUsesNodePersonality(installer));
@@ -3991,9 +3999,14 @@ function buildHostInstalls(
 	}
 	if (usesNode) installFor(NODE_ERROR_HOOKS_INSTALLER);
 
+	const bufferModule = hostInstallerSymbol("node:buffer");
+	const hasBufferModule =
+		manifest.some(({ installer }) => installer === bufferModule) ||
+		retained.includes(bufferModule);
 	const world = context.facts.world;
 	for (const installer of retained) {
 		if (HOST_PERSONALITY_INSTALLERS.includes(installer)) continue;
+		if (hasBufferModule && installer === BUFFER_INSTALLER_SYMBOL) continue;
 		// An eval-enabled runtime supplies both engines even to spliced wire
 		// images, whose loaders don't run a host manifest.
 		if (
@@ -4005,7 +4018,11 @@ function buildHostInstalls(
 			continue;
 		installFor(installer);
 	}
-	if (usesNode && manifest.some(({ installer }) => installer === WEB_FETCH_INSTALLER)) {
+	if (
+		usesNode &&
+		!hasBufferModule &&
+		manifest.some(({ installer }) => installer === WEB_FETCH_INSTALLER)
+	) {
 		// Node Request and Response bodies convert async-iterable chunks with Buffer.from.
 		installFor(BUFFER_INSTALLER_SYMBOL);
 	}

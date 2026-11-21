@@ -891,6 +891,8 @@ static void client_write_ready(void *data) {
     }
 }
 
+static void client_shutdown(MalHost *host);
+
 bool mal_http_client_start(
     MalHost *host, const char *host_name, u16 port, bool secure,
     const byte *ca_pem, usize ca_pem_length, const MalTlsClientIdentity *identity,
@@ -966,6 +968,7 @@ bool mal_http_client_start(
     }
     client->next = host->http_clients;
     host->http_clients = client;
+    host->http_client_shutdown = client_shutdown;
     client_arm_timeout(client);
     struct sockaddr_storage address;
     socklen_t address_length;
@@ -1136,8 +1139,7 @@ bool mal_http_client_cancel(MalHost *host, MalHostHandle operation) {
     return mal_host_operation_cancel(&host->tasks, operation);
 }
 
-void mal_http_client_shutdown(MalHost *host) {
-    if (host == nullptr) return;
+static void client_shutdown(MalHost *host) {
     mal_http_client_close_idle(host);
     while (host->http_clients != nullptr) {
         MalHttpClient *client = host->http_clients;

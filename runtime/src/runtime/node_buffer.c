@@ -485,7 +485,7 @@ MalValue mal_node_buffer_fixed_view(MalVm *vm, MalValue value) {
     mal_gc_root(&root, &value, 1);
     MalValue result = mal_value_new_undefined();
     if (mal_value_is_undefined(vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR])) {
-        mal_host_install_node_buffer(vm, nullptr, 0, nullptr);
+        mal_node_buffer_ensure(vm);
         if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
     }
     MalArrayBufferObject *buffer;
@@ -593,7 +593,7 @@ static MalValue mal_node_buffer_adopt_bytes(
     }
     if (mal_value_is_undefined(
             vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR])) {
-        mal_host_install_node_buffer(vm, nullptr, 0, nullptr);
+        mal_node_buffer_ensure(vm);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             // Ownership is consumed on failure too, and these bytes never
             // reached JavaScript, so a secret allocation is cleared here.
@@ -1370,7 +1370,7 @@ MalValue mal_node_buffer_from_value(MalVm *vm, MalValue value, MalValue encoding
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     if (mal_value_is_undefined(vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR]))
-        mal_host_install_node_buffer(vm, nullptr, 0, nullptr);
+        mal_node_buffer_ensure(vm);
     MalValue result = vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined()
         : mal_buffer_from_impl(vm, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_PROTOTYPE]), roots, countof(roots));
     mal_gc_unroot(&root);
@@ -2769,34 +2769,10 @@ static void mal_buffer_alias(MalVm *vm, MalObject *object, const char *name, con
     mal_intrinsic_define_data(vm, object, (const byte *) alias, found.desc.value, MAL_BUFFER_VISIBLE);
 }
 
-static void mal_buffer_install_exports(
-    MalVm *vm, const MalHostInstallSlot *slots, i32 count,
-    MalValue constructor, MalValue module_default
-) {
-    MalObject *global_this = mal_value_to_object(
-        vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
-    mal_intrinsic_define_data(vm, global_this, "Buffer", constructor,
-                              MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_node_module_publish(vm, "node:buffer", slots, count, module_default);
-}
+void mal_node_buffer_ensure(MalVm *vm) {
+    if (!mal_value_is_undefined(vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR])) return;
 
-void mal_host_install_node_buffer(
-    MalVm *vm, const MalHostInstallSlot *slots, i32 count,
-    const MalHostLaunchContext *launch
-) {
-    (void) launch;
-    mal_readable_stream_set_node_chunk_converter(mal_node_buffer_from_value);
-    MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR];
-    if (!mal_value_is_undefined(cached)) {
-        mal_buffer_install_exports(
-            vm, slots, count, cached,
-            vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_MODULE]);
-        return;
-    }
-    MalValue roots[7] = {
-        mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalValue roots[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
 
@@ -2932,18 +2908,54 @@ void mal_host_install_node_buffer(
     mal_intrinsic_define_data(vm, (MalObject *) constructor, "poolSize", mal_value_from_i32(65536),
         MAL_BUFFER_VISIBLE);
 
+    vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR] = roots[1];
+    vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_PROTOTYPE] = roots[0];
+    mal_intrinsic_define_data(vm,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]), "Buffer", roots[1],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_readable_stream_set_node_chunk_converter(mal_node_buffer_from_value);
+    mal_gc_unroot(&root);
+}
+
+void mal_host_install_node_buffer_global(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count,
+    const MalHostLaunchContext *launch
+) {
+    (void) slots; (void) count; (void) launch;
+    mal_node_buffer_ensure(vm);
+}
+
+void mal_host_install_node_buffer(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count,
+    const MalHostLaunchContext *launch
+) {
+    (void) launch;
+    MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_MODULE];
+    if (!mal_value_is_undefined(cached)) {
+        mal_node_module_publish(vm, "node:buffer", slots, count, cached);
+        return;
+    }
+    mal_node_buffer_ensure(vm);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+
+    MalValue roots[5] = {
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+
     MalObject *module_default = mal_intrinsic_new_object(vm);
-    roots[2] = mal_value_from_object(module_default);
-    mal_intrinsic_define_data(vm, module_default, "Buffer", roots[1],
+    roots[0] = mal_value_from_object(module_default);
+    mal_intrinsic_define_data(vm, module_default, "Buffer", vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR],
                               MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
                                   MAL_PROPERTY_CONFIGURABLE);
-    roots[3] = mal_value_from_object(mal_intrinsic_new_object(vm));
-    mal_intrinsic_define_data(vm, mal_value_to_object(roots[3]),
+    roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]),
         "MAX_LENGTH", mal_value_from_i32(MAL_BUFFER_MAX_LENGTH), MAL_PROPERTY_ENUMERABLE);
-    mal_intrinsic_define_data(vm, mal_value_to_object(roots[3]),
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]),
         "MAX_STRING_LENGTH", mal_value_from_f64((f64) MAL_STRING_MAX_CODE_UNITS),
         MAL_PROPERTY_ENUMERABLE);
-    mal_intrinsic_define_data(vm, module_default, "constants", roots[3],
+    mal_intrinsic_define_data(vm, module_default, "constants", roots[1],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
             MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_data(vm, module_default, "kMaxLength",
@@ -2968,40 +2980,38 @@ void mal_host_install_node_buffer(
         mal_intrinsic_define_data(vm, module_default, (const byte *) fetch_exports[i],
             mal_web_group_export(vm, fetch, fetch_exports[i]), MAL_BUFFER_VISIBLE);
     }
-    roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
+    roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "isAscii"), 1, mal_buffer_is_ascii));
-    roots[5] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
+    roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "isUtf8"), 1, mal_buffer_is_utf8));
-    for (usize index = 4; index <= 5; index++) {
+    for (usize index = 2; index <= 3; index++) {
         MalNativeFunctionObject *function = mal_value_to_native_function_object(roots[index]);
         mal_native_function_object_set_constructor(function);
         mal_native_function_object_set_handles_new_target_prototype(function);
-        roots[6] = mal_value_from_object(mal_intrinsic_new_object(vm));
-        mal_intrinsic_define_data(vm, (MalObject *) function, "prototype", roots[6],
+        roots[4] = mal_value_from_object(mal_intrinsic_new_object(vm));
+        mal_intrinsic_define_data(vm, (MalObject *) function, "prototype", roots[4],
             MAL_PROPERTY_WRITABLE);
-        mal_intrinsic_define_data(vm, mal_value_to_object(roots[6]), "constructor", roots[index],
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[4]), "constructor", roots[index],
             MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     }
-    mal_intrinsic_define_data(vm, module_default, "isAscii", roots[4],
+    mal_intrinsic_define_data(vm, module_default, "isAscii", roots[2],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_intrinsic_define_data(vm, module_default, "isUtf8", roots[5],
+    mal_intrinsic_define_data(vm, module_default, "isUtf8", roots[3],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
-    roots[6] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
+    roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "transcode"), 3, mal_buffer_transcode));
-    mal_intrinsic_define_data(vm, module_default, "transcode", roots[6],
+    mal_intrinsic_define_data(vm, module_default, "transcode", roots[4],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
-    roots[6] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
+    roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "resolveObjectURL"), 1, mal_buffer_resolve_object_url));
-    mal_intrinsic_define_data(vm, module_default, "resolveObjectURL", roots[6],
+    mal_intrinsic_define_data(vm, module_default, "resolveObjectURL", roots[4],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
 
-    vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR] = roots[1];
-    vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_PROTOTYPE] = roots[0];
-    vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_MODULE] = roots[2];
-    mal_buffer_install_exports(vm, slots, count, roots[1], roots[2]);
+    vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_MODULE] = roots[0];
+    mal_node_module_publish(vm, "node:buffer", slots, count, roots[0]);
     mal_gc_unroot(&root);
 }

@@ -223,7 +223,7 @@ describe("host-install manifest", () => {
 		]);
 	});
 
-	it("binds descriptor operations through the node:fs installer", () => {
+	it("binds descriptor operations without the complete node:fs module", () => {
 		const def = compile(
 			`import { accessSync, closeSync, constants, fstatSync, fsyncSync, ftruncateSync, openSync, readSync } from "node:fs";\n` +
 				`globalThis.sink = [accessSync, constants, openSync, readSync, fstatSync, fsyncSync, ftruncateSync, closeSync];\n`,
@@ -231,7 +231,7 @@ describe("host-install manifest", () => {
 		);
 		expect(def.runtime.hostInstalls).toEqual([
 			expect.objectContaining({
-				installer: "mal_host_install_node_fs",
+				installer: "mal_host_install_node_fs_named",
 				exports: [
 					expect.objectContaining({ name: "accessSync" }),
 					expect.objectContaining({ name: "closeSync" }),
@@ -437,7 +437,7 @@ describe("host-install manifest", () => {
 	it("installs free Buffer without a module import", () => {
 		const def = compile(`globalThis.sink = Buffer.from("x");\n`, { node: true });
 		expect(def.runtime.hostInstalls).toEqual([
-			{ installer: "mal_host_install_node_buffer", exports: [] },
+			{ installer: "mal_host_install_node_buffer_global", exports: [] },
 		]);
 	});
 
@@ -455,7 +455,7 @@ describe("host-install manifest", () => {
 	it("installs Buffer through the global object while preserving shadowed globals", () => {
 		const def = compile(`globalThis.sink = globalThis.Buffer.from("x");`, { node: true });
 		expect(def.runtime.hostInstalls).toEqual([
-			{ installer: "mal_host_install_node_buffer", exports: [] },
+			{ installer: "mal_host_install_node_buffer_global", exports: [] },
 		]);
 		const shadowed = compile(
 			`function read(globalThis) { return globalThis.process; }

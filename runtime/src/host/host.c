@@ -3,9 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "http_client.h"
 #include "posix_signal.h"
-#include "tcp.h"
 
 static bool mal_host_wake(void *data) {
     return mal_reactor_wake(data);
@@ -128,8 +126,8 @@ usize mal_host_drain_posted(MalHost *host) {
 
 void mal_host_shutdown(MalHost *host) {
     if (host != nullptr) {
-        mal_tcp_shutdown(host);
-        mal_http_client_shutdown(host);
+        if (host->tcp_shutdown != nullptr) host->tcp_shutdown(host);
+        if (host->http_client_shutdown != nullptr) host->http_client_shutdown(host);
         mal_dns_shutdown(&host->dns);
         mal_argon2_shutdown(&host->argon2);
         mal_blocking_work_shutdown(&host->blocking_work);

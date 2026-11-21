@@ -79,8 +79,8 @@ export const NODE_BUILTIN_LOADER_INSTALLER = "mal_host_install_node_builtin_load
 export const NODE_INSTALLED_BUILTINS_INSTALLER =
 	"mal_host_install_node_installed_builtins";
 
-/** Installer shared by the free `Buffer` global and the `node:buffer` module. */
-export const BUFFER_INSTALLER_SYMBOL = hostInstallerSymbol("node:buffer");
+/** Installs the free Buffer global. */
+export const BUFFER_INSTALLER_SYMBOL = "mal_host_install_node_buffer_global";
 
 /** The node:perf_hooks installer, which gives Node's surface to the free `performance` global. */
 export const PERFORMANCE_INSTALLER_SYMBOL = hostInstallerSymbol("node:perf_hooks");
@@ -346,6 +346,21 @@ const PATH_WIN32: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:path/win32"),
 };
 
+export const NODE_FS_INSTALLER = hostInstallerSymbol("node:fs");
+export const NODE_FS_NAMED_INSTALLER = "mal_host_install_node_fs_named";
+
+/** These exports need the complete fs module or its stream prototypes. */
+export const NODE_FS_FULL_EXPORTS: ReadonlySet<string> = new Set([
+	"default",
+	"promises",
+	"ReadStream",
+	"WriteStream",
+	"FileReadStream",
+	"FileWriteStream",
+	"createReadStream",
+	"createWriteStream",
+]);
+
 const FS: HostModuleSpec = {
 	id: "node:fs",
 	named: [
@@ -450,7 +465,7 @@ const FS: HostModuleSpec = {
 		"writevSync",
 	],
 	hasDefault: true,
-	installer: hostInstallerSymbol("node:fs"),
+	installer: NODE_FS_INSTALLER,
 };
 
 const FS_PROMISES: HostModuleSpec = {
@@ -1051,7 +1066,7 @@ const BUFFER: HostModuleSpec = {
 		"transcode",
 	],
 	hasDefault: true,
-	installer: BUFFER_INSTALLER_SYMBOL,
+	installer: hostInstallerSymbol("node:buffer"),
 };
 
 const PROCESS: HostModuleSpec = {

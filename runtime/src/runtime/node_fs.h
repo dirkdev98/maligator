@@ -2,25 +2,12 @@
 
 #include "vm.h"
 
-/*
- * The native `node:fs` synchronous surface (runtime layer). This TU owns all JS
- * marshalling — coercing arguments, building result values (strings, Stats /
- * Dirent objects, arrays), and translating errno into Node-shaped Errors — and
- * rejecting embedded NUL in paths before delegating syscalls to the host layer
- * (posix_fs.c). It provides the synchronous helpers used by compiler caches plus
- * callback-style stat and a buffered Readable implementation of createReadStream.
- *
- * Keeping the whole surface in one translation unit preserves module dead-code
- * elimination: nothing else references this object, so unless a program imports
- * `node:fs` (which makes the emitted host-install manifest reference
- * mal_host_install_node_fs) neither this nor posix_fs.c is pulled from the archive.
- */
+/* Bind named filesystem operations without installing stream prototypes. */
+void mal_host_install_node_fs_named(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count,
+    const MalHostLaunchContext *launch);
 
-/*
- * Host installer for `node:fs`. Fills each requested export's global slot with the
- * matching native function. Engine-neutral MalHostInstaller ABI (see vm.h); the
- * emitted install manifest references it by name for any reached `node:fs` import.
- */
+/* Install the complete node:fs module for default and dynamic imports. */
 void mal_host_install_node_fs(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch
 );

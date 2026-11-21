@@ -7595,22 +7595,6 @@ static MalValue node_fs_export(
     if (strcmp(name, "accessSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "accessSync", 2, node_fs_access_sync);
     }
-    if (strcmp(name, "createReadStream") == 0) {
-        return node_fs_make_fn_slot(vm, fn_proto, "createReadStream", 2,
-            node_fs_create_read_stream, protos[3]);
-    }
-    if (strcmp(name, "createWriteStream") == 0) {
-        return node_fs_make_fn_slot(vm, fn_proto, "createWriteStream", 2,
-            node_fs_create_write_stream, protos[4]);
-    }
-    if (strcmp(name, "ReadStream") == 0) {
-        return node_fs_make_constructor_slot(
-            vm, fn_proto, "ReadStream", node_fs_create_read_stream, protos[3]);
-    }
-    if (strcmp(name, "WriteStream") == 0) {
-        return node_fs_make_constructor_slot(
-            vm, fn_proto, "WriteStream", node_fs_create_write_stream, protos[4]);
-    }
     if (strcmp(name, "Dir") == 0) {
         return node_fs_make_constructor_slot(vm, fn_proto, "Dir", node_fs_dir_constructor, protos[2]);
     }
@@ -7790,18 +7774,8 @@ static void node_fs_install_promises_slots(
     }
 }
 
-void mal_host_install_node_fs(
-    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
-    if (mal_node_module_install_cached(vm, "node:fs", slots, count)) {
-        node_fs_install_promises_slots(vm, slots, count);
-        return;
-    }
-    MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_FS_MODULE];
-    if (!mal_value_is_undefined(cached)) {
-        mal_node_module_publish(vm, "node:fs", slots, count, cached);
-        node_fs_install_promises_slots(vm, slots, count);
-        return;
-    }
+static bool node_fs_ensure_operations(MalVm *vm) {
+    if (!mal_value_is_undefined(vm->intrinsics[MAL_INTRINSIC_NODE_FS_MODULE])) return true;
     if (!node_fs_cp_roots_installed) {
         mal_gc_register_root_source(node_fs_cp_scan_drivers, nullptr);
         node_fs_cp_roots_installed = true;
@@ -7809,16 +7783,12 @@ void mal_host_install_node_fs(
     if (!mal_blocking_jobs_install(vm) || !mal_vm_register_runtime_cleanup(vm, node_fs_cp_free_drivers)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
             "Could not register node:fs runtime cleanup");
-        return;
+        return false;
     }
-    mal_host_install_node_stream(vm, nullptr, 0, launch);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) return;
     MalObject *obj_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
     MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
 
-    // The Stats, Dirent, Dir, ReadStream and WriteStream prototypes stay alive through
-    // the export closure slots that hold them; root them until those closures are built.
-    MalValue protos[5];
+    MalValue protos[3];
     for (usize i = 0; i < countof(protos); i++) protos[i] = mal_value_new_undefined();
     MalRootSpan proto_rs;
     mal_gc_root(&proto_rs, protos, countof(protos));
@@ -7903,11 +7873,7 @@ void mal_host_install_node_fs(
             mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ASYNC_ITERATOR), &descriptor);
         mal_gc_unroot(&iterator_root);
     }
-    protos[3] = mal_value_from_object(mal_object_new(&vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_READABLE_PROTOTYPE])));
-    protos[4] = mal_value_from_object(mal_object_new(&vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_WRITABLE_PROTOTYPE])));
-
+    // The full installer fills the stream entries in place to preserve export order.
     static const char *names[] = {
         "Dir", "Dirent", "ReadStream", "WriteStream", "createWriteStream", "opendir",
         "opendirSync", "readv", "readvSync", "statfs", "writev", "writevSync",
@@ -7935,16 +7901,10 @@ void mal_host_install_node_fs(
             (const byte *) names[i], value, NODE_FS_VISIBLE);
         mal_gc_unroot(&value_root);
     }
-    static const struct {
-        const char *alias;
-        const char *name;
-    } aliases[] = {{"FileReadStream", "ReadStream"}, {"FileWriteStream", "WriteStream"}};
-    for (usize i = 0; i < countof(aliases); i++) {
-        MalValue value = mal_value_new_undefined();
-        mal_vm_get_property(vm, module, mal_intrinsic_string_key(vm, aliases[i].name), &value);
-        mal_intrinsic_define_data(vm, mal_value_to_object(module), aliases[i].alias, value,
-            NODE_FS_VISIBLE);
-    }
+    mal_intrinsic_define_data(vm, mal_value_to_object(module),
+        "FileReadStream", mal_value_new_undefined(), NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(module),
+        "FileWriteStream", mal_value_new_undefined(), NODE_FS_VISIBLE);
     MalValue constants = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
     MalRootSpan constants_root;
     mal_gc_root(&constants_root, &constants, 1);
@@ -7961,37 +7921,84 @@ void mal_host_install_node_fs(
         node_fs_get_promises, MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_gc_unroot(&constants_root);
     vm->intrinsics[MAL_INTRINSIC_NODE_FS_MODULE] = module;
-    mal_node_module_publish(vm, "node:fs", nullptr, 0, module);
-    // Capture the filesystem implementations before public export mutation can replace them.
-    mal_host_install_node_fs_promises(vm, nullptr, 0, launch);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        mal_gc_unroot(&module_root);
-        mal_gc_unroot(&proto_rs);
-        return;
-    }
-    mal_node_module_publish(vm, "node:fs", slots, count, module);
-    node_fs_install_promises_slots(vm, slots, count);
     mal_gc_unroot(&module_root);
-
     mal_gc_unroot(&proto_rs);
+    return true;
+}
+
+static void node_fs_add_stream_exports(
+    MalVm *vm, const MalHostLaunchContext *launch) {
+    mal_host_install_node_stream(vm, nullptr, 0, launch);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+
+    MalValue roots[] = {
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[0] = mal_value_from_object(mal_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_READABLE_PROTOTYPE])));
+    roots[1] = mal_value_from_object(mal_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_WRITABLE_PROTOTYPE])));
+    MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalValue *module = &vm->intrinsics[MAL_INTRINSIC_NODE_FS_MODULE];
+    static const struct {
+        const char *name;
+        const char *alias;
+        const char *factory;
+        MalNativeFunctionCallback create;
+    } streams[] = {
+        {"ReadStream", "FileReadStream", "createReadStream", node_fs_create_read_stream},
+        {"WriteStream", "FileWriteStream", "createWriteStream", node_fs_create_write_stream},
+    };
+    for (usize index = 0; index < countof(streams); index++) {
+        roots[2] = node_fs_make_fn_slot(
+            vm, fn_proto, streams[index].factory, 2, streams[index].create, roots[index]);
+        mal_intrinsic_define_data(vm, mal_value_to_object(*module),
+            (const byte *) streams[index].factory, roots[2], NODE_FS_VISIBLE);
+        roots[2] = node_fs_make_constructor_slot(
+            vm, fn_proto, streams[index].name, streams[index].create, roots[index]);
+        mal_intrinsic_define_data(vm, mal_value_to_object(*module),
+            (const byte *) streams[index].name, roots[2], NODE_FS_VISIBLE);
+        mal_intrinsic_define_data(vm, mal_value_to_object(*module),
+            (const byte *) streams[index].alias, roots[2], NODE_FS_VISIBLE);
+    }
+    mal_gc_unroot(&root);
+}
+
+void mal_host_install_node_fs_named(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    (void) launch;
+    if (!node_fs_ensure_operations(vm)) return;
+    // Keep the module private until the full installer can publish its stream exports.
+    for (i32 index = 0; index < count; index++) {
+        MalKey key = mal_intrinsic_string_key(vm, (const byte *) slots[index].name);
+        MalObject *module = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_FS_MODULE]);
+        MalPropertyLookup property = mal_object_get_own(module, key);
+        if (property.present) vm->globals[slots[index].slot] = property.desc.value;
+    }
+}
+
+void mal_host_install_node_fs(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    if (!mal_node_module_install_cached(vm, "node:fs", slots, count)) {
+        if (!node_fs_ensure_operations(vm)) return;
+        node_fs_add_stream_exports(vm, launch);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+        // Capture the implementations before public export mutation can replace them.
+        mal_host_install_node_fs_promises(vm, nullptr, 0, launch);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+        mal_node_module_publish(vm, "node:fs", slots, count,
+            vm->intrinsics[MAL_INTRINSIC_NODE_FS_MODULE]);
+    }
+    node_fs_install_promises_slots(vm, slots, count);
 }
 
 void mal_host_install_node_fs_promises(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    (void) launch;
     if (mal_node_module_install_cached(vm, "node:fs/promises", slots, count)) return;
-    MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_FS_PROMISES_MODULE];
-    if (!mal_value_is_undefined(cached)) {
-        mal_node_module_publish(vm, "node:fs/promises", slots, count, cached);
-        return;
-    }
-
-    mal_host_install_node_fs(vm, nullptr, 0, launch);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) return;
-    cached = vm->intrinsics[MAL_INTRINSIC_NODE_FS_PROMISES_MODULE];
-    if (!mal_value_is_undefined(cached)) {
-        mal_node_module_publish(vm, "node:fs/promises", slots, count, cached);
-        return;
-    }
+    if (!node_fs_ensure_operations(vm)) return;
     mal_gc_register_finalizer(
         MAL_HEAP_NODE_FS_FILE_HANDLE_OBJECT, node_fs_file_handle_finalize);
 

@@ -99,7 +99,6 @@ bool mal_tcp_listen_set_referenced(MalHost *host, MalHostHandle operation, bool 
 bool mal_tcp_listen_close(MalHost *host, MalHostHandle operation);
 bool mal_tcp_connection_endpoints(
     MalHost *host, MalHostHandle operation, MalNetEndpoint *local, MalNetEndpoint *remote);
-void mal_tcp_shutdown(MalHost *host);
 
 /* An explicit CA replaces defaults; otherwise use host roots plus NODE_EXTRA_CA_CERTS. */
 int mal_tcp_tls_create_client_config(

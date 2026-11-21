@@ -100,6 +100,7 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_assert_strict);
     MATCH_INSTALLER(mal_host_install_node_async_hooks);
     MATCH_INSTALLER(mal_host_install_node_buffer);
+    MATCH_INSTALLER(mal_host_install_node_buffer_global);
     MATCH_INSTALLER(mal_host_install_node_child_process);
     MATCH_INSTALLER(mal_host_install_node_cluster);
     MATCH_INSTALLER(mal_host_install_node_console);
@@ -111,6 +112,7 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_domain);
     MATCH_INSTALLER(mal_host_install_node_events);
     MATCH_INSTALLER(mal_host_install_node_fs);
+    MATCH_INSTALLER(mal_host_install_node_fs_named);
     MATCH_INSTALLER(mal_host_install_node_fs_promises);
     MATCH_INSTALLER(mal_host_install_node_http);
     MATCH_INSTALLER(mal_host_install_node_https);

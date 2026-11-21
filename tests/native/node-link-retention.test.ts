@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
+	BUFFER_INSTALLER_SYMBOL,
 	HOST_GLOBAL_INSTALLERS,
 	HOST_MODULES,
 	NODE_BUILTIN_LOADER_INSTALLER,
@@ -102,6 +103,7 @@ describe("node host installer link retention", () => {
 	it("omits optional installers from an empty Node program", () => {
 		const optionalInstallers = new Set([
 			...MODULE_INSTALLERS,
+			BUFFER_INSTALLER_SYMBOL,
 			...HOST_GLOBAL_INSTALLERS.map(({ installer }) => installer),
 			NODE_BUILTIN_LOADER_INSTALLER,
 			NODE_INSTALLED_BUILTINS_INSTALLER,
@@ -177,17 +179,22 @@ describe("node host installer link retention", () => {
 		expect(deadPathInstallers).toEqual(hostMainInstallers);
 	});
 
-	it("retains Buffer for a reachable free global", () => {
+	it("links the Buffer global without installing the node:buffer module", () => {
+		expect(bufferInstallers).toContain(BUFFER_INSTALLER_SYMBOL);
 		if (process.platform === "linux") {
-			// Buffer's web dependencies retain their installer sections on ELF.
+			// ELF development builds may retain both Buffer installers in one text section.
 			expect(
-				bufferInstallers.filter((installer) => MODULE_INSTALLERS.has(installer)),
-			).toEqual(["mal_host_install_node_buffer"]);
+				bufferInstallers.filter(
+					(installer) =>
+						MODULE_INSTALLERS.has(installer) &&
+						installer !== "mal_host_install_node_buffer",
+				),
+			).toEqual([]);
 			expect(bufferInstallers).not.toContain(BUILTIN_REGISTRY_LOOKUP);
 			return;
 		}
 		expect(bufferInstallers).toEqual(
-			withInstallers(hostMainInstallers, "mal_host_install_node_buffer", ...NODE_HOST),
+			withInstallers(hostMainInstallers, BUFFER_INSTALLER_SYMBOL, ...NODE_HOST),
 		);
 	});
 

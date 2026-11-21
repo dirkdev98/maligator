@@ -469,6 +469,8 @@ static bool tcp_flush(MalTcpConnection *connection) {
         ? tcp_flush_raw(connection) : tcp_flush_tls(connection);
 }
 
+static void tcp_shutdown(MalHost *host);
+
 bool mal_tcp_connect_tls_address_start(
     MalHost *host, const struct sockaddr *address, socklen_t length,
     const MalTlsClientConfig *config, MalHostHandle *operation) {
@@ -502,6 +504,7 @@ bool mal_tcp_connect_tls_address_start(
     }
     connection->next = host->tcp_connections;
     host->tcp_connections = connection;
+    host->tcp_shutdown = tcp_shutdown;
     return true;
 
 fail_connection:
@@ -889,6 +892,7 @@ int mal_tcp_listen_start(
     }
     listener->next = tcp_listeners;
     tcp_listeners = listener;
+    host->tcp_shutdown = tcp_shutdown;
     return 0;
 }
 
@@ -949,8 +953,7 @@ bool mal_tcp_reset(MalHost *host, MalHostHandle operation) {
     return mal_tcp_cancel(host, operation);
 }
 
-void mal_tcp_shutdown(MalHost *host) {
-    if (host == nullptr) return;
+static void tcp_shutdown(MalHost *host) {
     for (MalTcpListener *listener = tcp_listeners, *next; listener != nullptr; listener = next) {
         next = listener->next;
         if (listener->host != host) continue;
