@@ -44,6 +44,14 @@ const nodeOnlyConfig = resolveBuildConfig({
 	surface: { webPlatform: false, node: true },
 	engine,
 });
+const intlConfig = resolveBuildConfig({
+	surface: config.surface,
+	engine: { ...engine, intl: { enabled: true, features: ["number-format"] } },
+});
+const evalConfig = resolveBuildConfig({
+	surface: config.surface,
+	engine: { ...engine, eval: true },
+});
 function image(name: string, generation = "first", buildConfig = config) {
 	const entrypoint = path.join(fixtures, `${name}.mts`);
 	return compileEntrypoint(entrypoint, {
@@ -111,10 +119,13 @@ for (const compiled of [true, false]) {
 			const unresolved = JSON.parse(
 				readFileSync(descriptors[0]!, "utf8"),
 			) as ApplicationImageDescriptor;
-			unresolved.wires = [wire(directory, "unresolved", "third")];
+			unresolved.wires = [wire(directory, "unresolved", "third", intlConfig)];
 			delete unresolved.workerManifestPath;
 			const unresolvedPath = path.join(directory, "unresolved.json");
-			writeFileSync(unresolvedPath, JSON.stringify(unresolved));
+			writeFileSync(
+				unresolvedPath,
+				JSON.stringify({ ...unresolved, engine: { ...unresolved.engine, intl: true } }),
+			);
 			descriptors.push(unresolvedPath);
 			const nodeOnly = {
 				...unresolved,
@@ -137,6 +148,29 @@ for (const compiled of [true, false]) {
 				);
 				descriptors.push(listenerPath);
 			}
+			const intlPath = path.join(directory, "intl.json");
+			writeFileSync(
+				intlPath,
+				JSON.stringify({
+					...unresolved,
+					wires: [wire(directory, "intl-format", "first", intlConfig)],
+					entryPath: path.join(fixtures, "intl-format.mts"),
+					engine: { ...unresolved.engine, intl: true },
+				}),
+			);
+			descriptors.push(intlPath);
+			const evalPath = path.join(directory, "eval.json");
+			writeFileSync(
+				evalPath,
+				JSON.stringify({
+					...unresolved,
+					wires: [
+						wire(directory, "count-fragment", "eval-root"),
+						wire(directory, "count-fragment", "eval", evalConfig),
+					],
+				}),
+			);
+			descriptors.push(evalPath);
 			const definition = image("main");
 			const derivation = buildDerivationFromConfig(config);
 			const context = resolveNativeBuildContext({

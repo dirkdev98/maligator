@@ -1122,10 +1122,14 @@ function prepareCommandState(
 							}),
 					}
 				: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
-		const usesHost = [
-			frontend.programImage,
-			...frontend.workerImages.map((worker) => worker.image),
-		].some((image) => imageUsesHost(image.runtime.hostInstalls));
+		// Interpreted runs use the shared development runner, which links every host
+		// component, and their split frontends carry wires rather than one program image.
+		const usesHost =
+			interpreted ||
+			[
+				frontend.programImage,
+				...frontend.workerImages.map((worker) => worker.image),
+			].some((image) => imageUsesHost(image.runtime.hostInstalls));
 		const linkDerivation = buildDerivationFromConfig(buildConfig, usesHost);
 		const derivation = command.profile
 			? {

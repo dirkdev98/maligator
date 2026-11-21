@@ -37,11 +37,26 @@ const descriptors = process.argv
 		(filename) =>
 			JSON.parse(readFileSync(filename, "utf8")) as ApplicationImageDescriptor,
 	);
-const [first, second, unresolvedDescriptor, nodeOnly, listenerFirst, listenerSecond] =
-	descriptors;
+const [
+	first,
+	second,
+	unresolvedDescriptor,
+	nodeOnly,
+	listenerFirst,
+	listenerSecond,
+	intlUnavailable,
+	evalUnavailable,
+] = descriptors;
 check(
-	first && second && unresolvedDescriptor && nodeOnly && listenerFirst && listenerSecond,
-	"six fixture descriptors",
+	first &&
+		second &&
+		unresolvedDescriptor &&
+		nodeOnly &&
+		listenerFirst &&
+		listenerSecond &&
+		intlUnavailable &&
+		evalUnavailable,
+	"fixture descriptors",
 );
 function rejected(callback: () => unknown, message: string) {
 	let threw = false;
@@ -61,9 +76,12 @@ rejected(
 	"policy rejected",
 );
 rejected(
-	() =>
-		bridge._loadApplicationImage({ ...first, engine: { ...first.engine, intl: true } }),
-	"capability rejected",
+	() => bridge._loadApplicationImage(intlUnavailable),
+	"unlinked Intl installer rejected",
+);
+rejected(
+	() => bridge._loadApplicationImage(evalUnavailable),
+	"fragment requiring an unlinked eval compiler rejected",
 );
 rejected(
 	() =>

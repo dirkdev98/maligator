@@ -622,6 +622,7 @@ static u32 workers_max(void) {
 typedef struct ApplicationWire {
     _Atomic(u32) refs;
     _Atomic(MalLoadedRuntimeImage *) first_load;
+    u32 engine_policy;
     struct stat stamp;
     byte digest[64];
     byte bytes[];
@@ -4276,6 +4277,7 @@ static ApplicationWire *application_wire_read(
     if (loaded == nullptr) goto failed;
     atomic_init(&wire->refs, 1);
     atomic_init(&wire->first_load, loaded);
+    wire->engine_policy = mal_loaded_runtime_image_get(loaded)->engine_policy;
     wire->stamp = *stamp;
     memcpy(wire->digest, hex, sizeof(wire->digest));
     return wire;
@@ -4322,18 +4324,13 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
         || !application_boolean(vm, roots[0], "node", &node)
         || !get_named(vm, roots[0], "engine", &roots[1]) || !mal_value_is_object(roots[1])) goto failed;
     if (!get_named(vm, roots[1], "primordials", &roots[2]) || !mal_value_is_string(roots[2])) goto failed;
+    // Primordial policy and Realm support depend on the runtime flavour.
     char *policy = application_string(roots[2]);
     bool compatible = policy != nullptr && strcmp(policy, MAL_PRIMORDIALS_LOCKED ? "locked" : "mutable") == 0;
     free(policy);
-    // RegExp is in every runtime; each image's own policy decides whether it may use it.
-    const char *features[] = {"eval", "realms"};
-    const bool available[] = {mal_eval_compiler != nullptr, MAL_REALMS};
-    for (usize index = 0; index < countof(features); index++) {
-        bool required;
-        if (!application_boolean(vm, roots[1], features[index], &required)) goto failed;
-        if (required && !available[index]) compatible = false;
-    }
-    if (!compatible) {
+    bool realms;
+    if (!application_boolean(vm, roots[1], "realms", &realms)) goto failed;
+    if (!compatible || (realms && !MAL_REALMS)) {
         throw_type(vm, "application image requires incompatible runtime capabilities or primordial policy"); goto failed;
     }
     image = calloc(1, sizeof(ApplicationImage));
@@ -4374,6 +4371,11 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
         free(path);
         free(digest);
         if (wire == nullptr) goto failed;
+        // Eval has no installer entry, so its link is checked against the wire header.
+        if ((wire->engine_policy & MAL_ENGINE_POLICY_NO_EVAL) == 0 && mal_eval_compiler == nullptr) {
+            throw_type(vm, "application image requires the eval compiler");
+            goto failed;
+        }
         image->wires->ordered[index] = wire;
     }
     if (!mal_workers_install(vm) || thrown(vm)) goto failed;
