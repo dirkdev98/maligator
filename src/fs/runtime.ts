@@ -399,9 +399,7 @@ function patterns(value: ReadonlyArray<string> | undefined, option: string) {
 	if (!Array.isArray(value))
 		throw new TypeError(`${option} must be an array of patterns`);
 	const checked: Array<string> = [];
-	const length = value.length;
-	for (let index = 0; index < length; index++) {
-		const pattern: unknown = value[index];
+	for (const pattern of value as ReadonlyArray<unknown>) {
 		if (!validRelativePath(pattern))
 			throw new TypeError(`${option} patterns must be slash-separated relative paths`);
 		checked.push(pattern);
