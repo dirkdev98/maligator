@@ -1,4 +1,4 @@
-Enable the Web surface and start an HTTP listener with `Mal.serve`. Set an explicit bind address and port for a service whose address other programs need to know.
+Serve HTTP with `maligator:http`: a `fetch` handler takes a `Request` and returns a `Response`, as in other Fetch API servers. Enable the Web surface, which provides those types.
 
 ## Start a listener
 
@@ -23,13 +23,64 @@ curl -i http://127.0.0.1:3000/missing
 
 The first request returns `hello`; the second returns status 404. [ready](/api/application#ready) reports startup completion to the development supervisor after the listener has started.
 
-The `fetch` handler may return a `Response` or an awaited response. The server handle exposes its actual bound `port`; port `0` asks the OS to choose. The current public handle has no stop method, so this listener lives with the application process.
+`serve` throws for invalid options and when it cannot bind, such as a port in use. Port `0` lets the OS choose; `server.port` and `server.url` report the result. Bind `127.0.0.1` for a listener only this machine reaches.
 
-## Set connection limits
+## Handle failures and shut down
 
-[MaligatorServeOptions](/api/runtime#MaligatorServeOptions) includes header, request, and keep-alive deadlines in milliseconds, plus a concurrent connection limit. Use integer values; `0` selects the host default. Invalid limit values throw.
+A handler that throws or rejects reaches the `error` handler. Without one, the server logs the error and answers a plain 500, so clients never see its details:
 
-`Mal.serve` remains experimental. Invalid handler options and bind failures are not yet consistently reported as exceptions. Use valid options, confirm the bound port, and inspect startup output. Do not assume a complete production server lifecycle API.
+```typescript src/index.ts
+import { serve } from "maligator:http";
+
+await using server = serve({
+	port: 3000,
+	fetch: () => {
+		throw new Error("unavailable");
+	},
+	error: (error) => new Response(`failed: ${String(error)}`, { status: 503 }),
+});
+```
+
+`server.close()` stops accepting connections and fulfills once in-flight requests have finished. `await using` closes the server at the end of its scope, and a `signal` option closes it when an `AbortSignal` aborts.
+
+## Serve files
+
+`serveAsset` turns a [declared asset](/guides/assets) into a handler. It sets the media type, an `ETag` and `Cache-Control`, answers `If-None-Match` with 304, honours a single `Range`, and serves a directory's `index.html` for paths that end in `/`:
+
+```typescript src/index.ts
+import { embedDirectory } from "maligator:assets";
+import { serve, serveAsset } from "maligator:http";
+
+const site = serveAsset(embedDirectory("../public"), {
+	fallback: "index.html",
+	immutable: ["assets/**"],
+});
+serve({ port: 3000, fetch: site });
+```
+
+`fallback` answers paths that name no file, as a client-side router expects. `immutable` marks content-hashed files as cacheable forever; other files revalidate. `prefix` serves the directory below a path, such as `/static`. A production build stores Brotli and gzip copies of the text files a program serves and picks one by `Accept-Encoding`.
+
+When `serveAsset` is the whole handler, the server answers in native code without running JavaScript for each request. Call the handler from your own `fetch` to combine it with routes:
+
+```typescript src/index.ts
+import { embedDirectory } from "maligator:assets";
+import { serve, serveAsset } from "maligator:http";
+
+const files = serveAsset(embedDirectory("../web/dist"), { fallback: "index.html" });
+
+serve({
+	port: 3000,
+	fetch(request) {
+		const { pathname } = new URL(request.url);
+		if (pathname.startsWith("/api/")) return Response.json({ path: pathname });
+		return files(request);
+	},
+});
+```
+
+## Develop a frontend behind the server
+
+A declaration with a [watcher](/guides/assets#produce-files-with-a-build-step) serves from its dev server while the watcher runs: `serveAsset` forwards each request to the watcher's `url`, so the page, the API and the frontend's live updates share one origin. Point the dev server's hot-reload socket at its own port, such as Vite's `server.hmr.clientPort`, because the forwarding answers plain requests. A build embeds the produced files instead.
 
 ## Use node:http
 

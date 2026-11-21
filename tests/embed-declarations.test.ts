@@ -27,7 +27,10 @@ function declarationsOf(
 	const entry = path.join(directory, "main.mjs");
 	writeFileSync(entry, source);
 	const image = compileEntrypoint(entry, {
-		buildConfig: resolveBuildConfig({ modules: { aliases } }),
+		buildConfig: resolveBuildConfig({
+			modules: { aliases },
+			surface: { webPlatform: true },
+		}),
 		stripTypes: stripCompactTypes,
 	});
 	return {
@@ -184,6 +187,27 @@ describe("embed declarations", () => {
 		);
 		expect(output).toContain(path.join(directory, "generated.txt"));
 		expect(output).not.toContain("generate-secret-asset");
+	});
+
+	it("marks the declarations a program passes to serveAsset", () => {
+		const { directory, declarations } = declarationsOf(
+			[
+				'import { serveAsset } from "maligator:http";',
+				'import { site } from "./site.mjs";',
+				'import { embedFile } from "maligator:assets";',
+				"const local = embedFile('./local.txt');",
+				"globalThis.handlers = [serveAsset(site), serveAsset(local), embedFile('./plain.txt')];",
+			].join("\n"),
+			{
+				"site.mjs":
+					'import { embedDirectory } from "maligator:assets";\nconst tree = embedDirectory("./public");\nexport { tree as site };\n',
+			},
+		);
+		const served = (file: string) =>
+			declarations.find((entry) => entry.path === path.join(directory, file))?.served;
+		expect(served("public")).toBe(true);
+		expect(served("local.txt")).toBe(true);
+		expect(served("plain.txt")).toBeUndefined();
 	});
 
 	it("installs one handle per distinct declaration the program reaches", () => {

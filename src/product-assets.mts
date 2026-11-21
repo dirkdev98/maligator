@@ -39,5 +39,5 @@ export const testHost = embedDirectory("./testing", {
 export const nodeGlobals = embedFile("./node-globals.mjs");
 /** Source platform modules the compiler reads from disk. */
 export const platformSources = embedDirectory(".", {
-	include: ["assets/**", "workers/**", "testing/node-test.ts"],
+	include: ["assets/**", "http/**", "workers/**", "testing/node-test.ts"],
 });

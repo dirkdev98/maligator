@@ -14,9 +14,6 @@ export type {
 	MaligatorFfiVariant,
 	MaligatorIntlFeature,
 	MaligatorLibraryContract,
-	MaligatorServeOptions,
-	MaligatorServer,
-	MaligatorWebRuntime,
 } from "./public-api.d.ts";
 
 export function defineBuild<const Config extends MaligatorBuildConfig>(

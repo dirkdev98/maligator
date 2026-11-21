@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { BuildConfigError } from "./build-config-error.ts";
+import { producerMode } from "./compiler/frontend/embed-declarations.ts";
 import type {
 	EmbedDeclaration,
 	EmbedProducer,
@@ -19,10 +20,8 @@ export interface ProducerTask {
 }
 
 /**
- * The producer each declaration selects for `command`. Without a `use` entry, `build`
- * and `run` build, `test` uses the files that exist, and `dev` watches when the
- * declaration defines a watcher. Declarations naming the same command and directory
- * share one task.
+ * The producer each declaration selects for `command` (see `producerMode`).
+ * Declarations naming the same command and directory share one task.
  */
 export function producerTasks(
 	declarations: ReadonlyArray<EmbedDeclaration>,
@@ -30,17 +29,9 @@ export function producerTasks(
 ): Array<ProducerTask> {
 	const tasks = new Map<string, ProducerTask & { outputs: Array<string> }>();
 	for (const declaration of declarations) {
-		if (declaration.build === undefined && declaration.watch === undefined) continue;
-		const fallback =
-			command === "test"
-				? "existing"
-				: command === "dev" && declaration.watch !== undefined
-					? "watch"
-					: "build";
-		const mode = declaration.use?.[command] ?? fallback;
-		if (mode === "existing") continue;
-		const producer = declaration[mode];
-		if (producer === undefined) continue;
+		const mode = producerMode(declaration, command);
+		if (mode === undefined) continue;
+		const producer = declaration[mode]!;
 		const key = JSON.stringify([mode, producer]);
 		const task = tasks.get(key);
 		if (task === undefined)

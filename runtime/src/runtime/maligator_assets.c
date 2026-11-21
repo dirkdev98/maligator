@@ -125,7 +125,7 @@ static bool asset_safe_relative_path(const char *path) {
  * Media types by extension. Text types carry their charset because the bytes are
  * served as written; anything unknown is opaque.
  */
-static const char *asset_media_type(const char *path) {
+const char *mal_asset_media_type(const char *path) {
     static const struct {
         const char *extension;
         const char *type;
@@ -222,23 +222,23 @@ static usize asset_segment_length(const char *text) {
     return slash == nullptr ? strlen(text) : (usize) (slash - text);
 }
 
-static bool asset_path_match(const char *pattern, const char *path, bool dot) {
+bool mal_asset_pattern_match(const char *pattern, const char *path, bool dot) {
     if (*pattern == '\0') return *path == '\0';
     usize pattern_length = asset_segment_length(pattern);
     const char *pattern_rest = pattern[pattern_length] == '/' ? pattern + pattern_length + 1
                                                               : pattern + pattern_length;
     if (pattern_length == 2 && pattern[0] == '*' && pattern[1] == '*') {
-        if (asset_path_match(pattern_rest, path, dot)) return true;
+        if (mal_asset_pattern_match(pattern_rest, path, dot)) return true;
         if (*path == '\0' || (!dot && path[0] == '.')) return false;
         usize path_length = asset_segment_length(path);
         const char *path_rest = path[path_length] == '/' ? path + path_length + 1 : path + path_length;
-        return asset_path_match(pattern, path_rest, dot);
+        return mal_asset_pattern_match(pattern, path_rest, dot);
     }
     if (*path == '\0') return false;
     usize path_length = asset_segment_length(path);
     const char *path_rest = path[path_length] == '/' ? path + path_length + 1 : path + path_length;
     return asset_segment_match(pattern, pattern_length, path, path_length, dot)
-        && asset_path_match(pattern_rest, path_rest, dot);
+        && mal_asset_pattern_match(pattern_rest, path_rest, dot);
 }
 
 /* A live directory declaration's membership rule. */
@@ -263,14 +263,14 @@ static void asset_filter_dispose(AssetFilter *filter) {
 static bool asset_filter_admits(const AssetFilter *filter, const char *path) {
     bool included = false;
     if (filter->include_count == 0) {
-        included = asset_path_match("**", path, filter->dot);
+        included = mal_asset_pattern_match("**", path, filter->dot);
     } else {
         for (usize i = 0; !included && i < filter->include_count; i++)
-            included = asset_path_match(filter->include[i], path, filter->dot);
+            included = mal_asset_pattern_match(filter->include[i], path, filter->dot);
     }
     if (!included) return false;
     for (usize i = 0; i < filter->exclude_count; i++) {
-        if (asset_path_match(filter->exclude[i], path, filter->dot)) return false;
+        if (mal_asset_pattern_match(filter->exclude[i], path, filter->dot)) return false;
     }
     return true;
 }
@@ -678,31 +678,35 @@ static void asset_define_method(
 
 /*
  * A frozen file handle. Embedded handles carry (asset index, file index); live ones
- * carry (absolute path, member path). Methods read their state from their own slots,
- * so a detached method keeps working.
+ * carry (absolute path, member path). A declared handle also keeps its declaration,
+ * which says where `maligator:http` proxies it. Methods read their state from their
+ * own slots, so a detached method keeps working.
  */
-static MalValue asset_file_handle(MalVm *vm, MalValue first, MalValue second, const char *member) {
-    MalValue roots[4] = {first, second, mal_value_new_undefined(), mal_value_new_undefined()};
+static MalValue asset_file_handle(
+    MalVm *vm, MalValue first, MalValue second, MalValue declaration, const char *member) {
+    MalValue roots[5] = {
+        first, second, declaration, mal_value_new_undefined(), mal_value_new_undefined(),
+    };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
-    MalObject *handle = mal_value_to_object(roots[2]);
-    roots[3] = asset_string(vm, member);
+    roots[3] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalObject *handle = mal_value_to_object(roots[3]);
+    roots[4] = asset_string(vm, member);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
-        mal_intrinsic_define_data(vm, handle, (const byte *) "path", roots[3], ASSET_FIELD);
-        roots[3] = asset_string(vm, asset_media_type(member));
+        mal_intrinsic_define_data(vm, handle, (const byte *) "path", roots[4], ASSET_FIELD);
+        roots[4] = asset_string(vm, mal_asset_media_type(member));
     }
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
-        mal_intrinsic_define_data(vm, handle, (const byte *) "type", roots[3], ASSET_FIELD);
-        asset_define_getter(vm, handle, "size", "get size", asset_file_size, roots, 2);
-        asset_define_getter(vm, handle, "digest", "get digest", asset_file_digest, roots, 2);
-        asset_define_method(vm, handle, "bytes", 0, asset_file_bytes_method, roots, 2);
-        asset_define_method(vm, handle, "text", 0, asset_file_text, roots, 2);
-        asset_define_method(vm, handle, "json", 0, asset_file_json, roots, 2);
-        asset_define_method(vm, handle, "materialize", 1, asset_file_materialize, roots, 2);
-        mal_builtin_object_set_integrity(vm, roots[2], true);
+        mal_intrinsic_define_data(vm, handle, (const byte *) "type", roots[4], ASSET_FIELD);
+        asset_define_getter(vm, handle, "size", "get size", asset_file_size, roots, 3);
+        asset_define_getter(vm, handle, "digest", "get digest", asset_file_digest, roots, 3);
+        asset_define_method(vm, handle, "bytes", 0, asset_file_bytes_method, roots, 3);
+        asset_define_method(vm, handle, "text", 0, asset_file_text, roots, 3);
+        asset_define_method(vm, handle, "json", 0, asset_file_json, roots, 3);
+        asset_define_method(vm, handle, "materialize", 1, asset_file_materialize, roots, 3);
+        mal_builtin_object_set_integrity(vm, roots[3], true);
     }
-    MalValue result = roots[2];
+    MalValue result = roots[3];
     mal_gc_unroot(&root);
     return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result;
 }
@@ -722,7 +726,7 @@ static MalValue asset_live_member(MalVm *vm, const char *root, const char *membe
     values[1] = asset_string(vm, member);
     MalValue result = vm->completion.kind == MAL_COMPLETION_THROW
         ? mal_value_new_undefined()
-        : asset_file_handle(vm, values[0], values[1], member);
+        : asset_file_handle(vm, values[0], values[1], mal_value_new_undefined(), member);
     mal_gc_unroot(&span);
     return result;
 }
@@ -767,7 +771,8 @@ static MalValue asset_directory_files(
         const MalAsset *asset = asset_embedded(vm, mal_value_to_i32(state));
         roots[1] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, (u32) asset->file_count));
         for (i32 i = 0; i < asset->file_count; i++) {
-            MalValue handle = asset_file_handle(vm, state, mal_value_from_i32(i), asset->files[i].path);
+            MalValue handle = asset_file_handle(
+                vm, state, mal_value_from_i32(i), mal_value_new_undefined(), asset->files[i].path);
             if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
             mal_array_object_store(mal_value_to_array_object(roots[1]), mal_key_index((u32) i), handle);
         }
@@ -810,7 +815,8 @@ static MalValue asset_directory_get(
         const MalAsset *asset = asset_embedded(vm, mal_value_to_i32(state));
         for (i32 i = 0; i < asset->file_count; i++) {
             if (strcmp(asset->files[i].path, member) != 0) continue;
-            result = asset_file_handle(vm, state, mal_value_from_i32(i), asset->files[i].path);
+            result = asset_file_handle(
+                vm, state, mal_value_from_i32(i), mal_value_new_undefined(), asset->files[i].path);
             break;
         }
     } else {
@@ -919,7 +925,7 @@ static MalValue asset_install_one(MalVm *vm, const char *data) {
     if (index >= 0) {
         const MalAsset *asset = asset_embedded(vm, index);
         result = asset_file_handle(vm, mal_value_from_i32(index), mal_value_from_i32(0),
-            asset->files[0].path);
+            mal_value_new_undefined(), asset->files[0].path);
         goto done;
     }
     if (!mal_vm_get_property(vm, roots[1], mal_intrinsic_string_key(vm, (const byte *) "path"), &path))
@@ -928,13 +934,108 @@ static MalValue asset_install_one(MalVm *vm, const char *data) {
     if (absolute == nullptr) goto done;
     const char *name = strrchr(absolute, '/');
     roots[0] = path;
-    roots[1] = asset_string(vm, name == nullptr ? absolute : name + 1);
+    mal_builtin_object_set_integrity(vm, roots[1], true);
+    MalValue declaration = roots[1];
+    MalValue member[2] = {declaration, asset_string(vm, name == nullptr ? absolute : name + 1)};
+    MalRootSpan member_root;
+    mal_gc_root(&member_root, member, countof(member));
     if (vm->completion.kind != MAL_COMPLETION_THROW)
-        result = asset_file_handle(vm, roots[0], roots[1], name == nullptr ? absolute : name + 1);
+        result = asset_file_handle(
+            vm, roots[0], member[1], member[0], name == nullptr ? absolute : name + 1);
+    mal_gc_unroot(&member_root);
     free(absolute);
 done:
     mal_gc_unroot(&root);
     return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result;
+}
+
+/* Which handle `value` is, recognized by its own materialize method. */
+static MalNativeFunctionObject *asset_handle_method(MalVm *vm, MalValue value, bool *directory) {
+    if (!mal_value_is_object(value)) return nullptr;
+    MalValue method;
+    if (!mal_vm_get_property(vm, value,
+            mal_intrinsic_string_key(vm, (const byte *) "materialize"), &method)
+        || !mal_value_is_native_function_object(method))
+        return nullptr;
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(method);
+    MalNativeFunctionCallback callback = mal_native_function_object_callback(function);
+    if (callback != asset_file_materialize && callback != asset_directory_materialize)
+        return nullptr;
+    *directory = callback == asset_directory_materialize;
+    return function;
+}
+
+int mal_asset_member(MalVm *vm, MalValue handle, const char *member, MalAssetMember *out) {
+    *out = (MalAssetMember) {0};
+    bool directory = false;
+    MalNativeFunctionObject *method = asset_handle_method(vm, handle, &directory);
+    if (method == nullptr) {
+        if (vm->completion.kind != MAL_COMPLETION_THROW)
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                (const byte *) "Expected a handle from maligator:assets");
+        return -1;
+    }
+    MalValue first = mal_native_function_object_get_slot(method, 0);
+    if (!directory) {
+        if (mal_value_is_int32(first)) {
+            const MalAsset *asset = asset_embedded(vm, mal_value_to_i32(first));
+            out->embedded = &asset->files[mal_value_to_i32(mal_native_function_object_get_slot(method, 1))];
+            out->path = strdup(out->embedded->path);
+        } else {
+            out->live_path = asset_cstr(vm, first, "path");
+            if (out->live_path == nullptr) return -1;
+            out->path = asset_cstr(vm, mal_native_function_object_get_slot(method, 1), "path");
+        }
+    } else {
+        if (!asset_safe_relative_path(member)) return 0;
+        if (mal_value_is_int32(first)) {
+            const MalAsset *asset = asset_embedded(vm, mal_value_to_i32(first));
+            for (i32 i = 0; i < asset->file_count && out->embedded == nullptr; i++) {
+                if (strcmp(asset->files[i].path, member) == 0) out->embedded = &asset->files[i];
+            }
+            if (out->embedded == nullptr) return 0;
+        } else {
+            AssetFilter filter;
+            if (!asset_filter_read(vm, first, &filter)) return -1;
+            MalPosixStat stats;
+            char *absolute = asset_join(filter.root, member);
+            bool found = absolute != nullptr && asset_filter_admits(&filter, member)
+                && mal_posix_fs_lstat(absolute, &stats) == 0 && (stats.mode & 0170000) == 0100000;
+            asset_filter_dispose(&filter);
+            if (!found) {
+                free(absolute);
+                return 0;
+            }
+            out->live_path = absolute;
+        }
+        out->path = strdup(member);
+    }
+    if (out->path == nullptr) {
+        mal_asset_member_dispose(out);
+        mal_vm_throw_allocation_error(vm);
+        return -1;
+    }
+    return 1;
+}
+
+void mal_asset_member_dispose(MalAssetMember *member) {
+    free(member->live_path);
+    free(member->path);
+    *member = (MalAssetMember) {0};
+}
+
+char *mal_asset_proxy_url(MalVm *vm, MalValue handle) {
+    bool directory = false;
+    MalNativeFunctionObject *method = asset_handle_method(vm, handle, &directory);
+    if (method == nullptr) return nullptr;
+    MalValue declaration = mal_native_function_object_get_slot(method, directory ? 0 : 2);
+    MalValue url;
+    if (!mal_value_is_object(declaration)
+        || !mal_vm_get_property(vm, declaration,
+            mal_intrinsic_string_key(vm, (const byte *) "proxy"), &url)
+        || !mal_value_is_string(url))
+        return nullptr;
+    return asset_cstr(vm, url, "proxy");
 }
 
 void mal_host_install_maligator_assets(

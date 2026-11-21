@@ -1202,6 +1202,11 @@ typedef struct MalAssetFile {
     usize length;
     /** Lowercase hexadecimal SHA-256 of the data. */
     const char *digest;
+    /** Precompressed copies for serving, or null when compression would not pay. */
+    const u8 *brotli;
+    usize brotli_length;
+    const u8 *gzip;
+    usize gzip_length;
 } MalAssetFile;
 
 /** A file or directory a `maligator:assets` declaration embeds into an executable. */

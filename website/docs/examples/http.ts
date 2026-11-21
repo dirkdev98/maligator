@@ -1,6 +1,7 @@
 import { ready } from "maligator:application";
+import { serve } from "maligator:http";
 
-const server = Mal.serve({
+const server = serve({
 	hostname: "127.0.0.1",
 	port: 3000,
 	fetch(request) {
@@ -10,5 +11,5 @@ const server = Mal.serve({
 		return new Response("Not found", { status: 404 });
 	},
 });
-console.log(`Listening on http://127.0.0.1:${server.port}`);
+console.log(`Listening on ${server.url}`);
 ready();

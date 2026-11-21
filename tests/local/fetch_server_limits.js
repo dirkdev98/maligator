@@ -1,14 +1,16 @@
-// Fixture for the Mal.serve transport-limit regressions
+import { serve } from "maligator:http";
+
+// Fixture for the maligator:http serve transport-limit regressions
 // (tests/native/fetch-hardening.test.ts). The option-validation results are served
 // back so every assertion can live in the runner next to the wire-level ones.
 function attempt(options) {
 	options.port = 0;
 	options.fetch = () => new Response("unused");
 	try {
-		Mal.serve(options);
+		void serve(options).close();
 		return "accepted";
 	} catch (error) {
-		return error instanceof TypeError ? "TypeError" : "other";
+		return error.name;
 	}
 }
 
@@ -21,7 +23,7 @@ const validation = [
 	attempt({ requestTimeout: Number.POSITIVE_INFINITY }),
 ].join(",");
 
-const server = Mal.serve({
+const server = serve({
 	port: 0,
 	headersTimeout: 400,
 	requestTimeout: 400,

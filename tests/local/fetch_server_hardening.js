@@ -1,18 +1,20 @@
-// Fixture for the Mal.serve hardening regressions (tests/native/fetch-hardening.test.ts).
+import { serve } from "maligator:http";
+
+// Fixture for the maligator:http serve hardening regressions (tests/native/fetch-hardening.test.ts).
 // Every route is deliberately boring: the assertions live on the wire, not here.
 // "İ" narrowed to a byte is "0", so this hostname must be refused rather than bind 0.0.0.0.
 let hostnameRefusal = "accepted";
 try {
-	Mal.serve({
+	void serve({
 		hostname: "\u0130.0.0.0",
 		port: 0,
 		fetch: () => new Response(""),
-	}).stop?.();
+	}).close();
 } catch (error) {
 	hostnameRefusal = error.name;
 }
 
-const server = Mal.serve({
+const server = serve({
 	port: 0,
 	async fetch(request) {
 		const path = request.url.slice(request.url.indexOf("/", "http://".length));

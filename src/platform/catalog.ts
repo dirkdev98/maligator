@@ -395,6 +395,37 @@ const assetTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	),
 ];
 
+const httpTypes: ReadonlyArray<PlatformTypeDefinition> = [
+	workerType(
+		"Handler",
+		"(request: Request) => Response | PromiseLike<Response>",
+		"Answers a buffered request. A thrown error or rejection reaches the server's error handler.",
+	),
+	workerType(
+		"ErrorHandler",
+		"(error: unknown, request: Request) => Response | PromiseLike<Response>",
+		"Turns a handler failure into a response.",
+	),
+	workerType(
+		"ServeOptions",
+		"{\n /** Answers each request. */\n fetch: Handler;\n /** Answers instead when `fetch` throws or rejects. Defaults to logging the error and a plain 500 response. */\n error?: ErrorHandler;\n /** Bind address. Defaults to 0.0.0.0; use 127.0.0.1 for a local-only listener. */\n hostname?: string;\n /** TCP port, 0 through 65535. Defaults to 0, which lets the OS choose. */\n port?: number;\n /** Closes the server when aborted. */\n signal?: AbortSignal;\n /** Header deadline in milliseconds; 0 selects the default of 60000. */\n headersTimeout?: number;\n /** Request deadline in milliseconds; 0 selects the default of 300000. */\n requestTimeout?: number;\n /** Idle keep-alive deadline in milliseconds; 0 selects the default of 5000. */\n keepAliveTimeout?: number;\n /** Concurrent connection limit; 0 selects the default of 1024. */\n maxConnections?: number;\n}",
+		"Where to listen and how to answer. Limits are integers from 0 through 2147483647.",
+	),
+	{
+		...workerType(
+			"Server",
+			"{\n /** The bound port, including one the OS chose. */\n readonly port: number;\n readonly hostname: string;\n /** A URL that reaches the server from this machine. */\n readonly url: string;\n /** Stops accepting and fulfills once in-flight requests finished. Repeated calls share one promise. */\n close(): Promise<void>;\n [Symbol.asyncDispose](): Promise<void>;\n}",
+			"A listening server. `await using` closes it at the end of a scope.",
+		),
+		declaration: "interface",
+	},
+	workerType(
+		"ServeAssetOptions",
+		"{\n /** The URL path the directory is served below, such as `/static`. Defaults to the root. */\n prefix?: string;\n /** The member served for paths below the prefix that name no file, such as `index.html` for a client-side router. */\n fallback?: string;\n /** Patterns of member paths with content-hashed names, served as cacheable forever. */\n immutable?: ReadonlyArray<string>;\n}",
+		"How request paths map onto the asset. A path ending in `/` serves its `index.html`.",
+	),
+];
+
 function embedExport(
 	name: string,
 	source: string,
@@ -1009,6 +1040,98 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 				[
 					'import { embedDirectory } from "maligator:assets";\n\nconst migrations = embedDirectory("./migrations", { include: ["*.sql"] });\nfor (const file of migrations.files()) console.log(file.path);',
 				],
+			),
+		],
+	},
+	{
+		kind: "source",
+		id: "maligator:http",
+		stability: "experimental",
+		evaluation: "side-effect-free",
+		sourceFile: "http/runtime.ts",
+		declarationFile: "http-api.d.ts",
+		typeImports: [{ namespace: "Assets", from: "maligator:assets" }],
+		description:
+			"Serve HTTP with Fetch API handlers and embedded assets. Requires `surface.webPlatform`. A server whose whole handler serves an asset answers without running JavaScript per request.",
+		types: httpTypes,
+		exports: [
+			{
+				name: "serve",
+				type: { kind: "signature", source: "(options: ServeOptions) => Server" },
+				description:
+					"Listen and answer each request with `fetch`. Invalid options and bind failures throw.",
+				examples: [
+					'import { serve } from "maligator:http";\n\nconst server = serve({\n  hostname: "127.0.0.1",\n  port: 3000,\n  fetch: () => new Response("hello"),\n});\nconsole.log(server.url);',
+				],
+				contract: {
+					phase: "runtime",
+					value: "callable",
+					identity: "module",
+					effects: EVERY_EFFECT_SUMMARY,
+				},
+			},
+			{
+				name: "serveAsset",
+				type: {
+					kind: "signature",
+					source:
+						"(asset: Assets.EmbeddedFile | Assets.EmbeddedDirectory, options?: ServeAssetOptions) => Handler",
+				},
+				description:
+					"A handler that serves an embedded file or directory with its media type, ETag, cache headers, conditional and range requests, and precompressed copies in production builds. While a declaration's watcher runs, the handler forwards to the watcher's URL instead.",
+				examples: [
+					'import { embedDirectory } from "maligator:assets";\nimport { serve, serveAsset } from "maligator:http";\n\nconst files = serveAsset(embedDirectory("./public"), { fallback: "index.html" });\nserve({ port: 3000, fetch: files });',
+				],
+				contract: {
+					phase: "runtime",
+					value: "callable",
+					identity: "module",
+					effects: EVERY_EFFECT_SUMMARY,
+				},
+			},
+			{
+				name: "proxy",
+				type: { kind: "signature", source: "(target: string) => Handler" },
+				description:
+					"A handler that forwards each request to the same path below `target` and returns the buffered answer.",
+				contract: {
+					phase: "runtime",
+					value: "callable",
+					identity: "module",
+					effects: EVERY_EFFECT_SUMMARY,
+				},
+			},
+		],
+	},
+	{
+		kind: "native",
+		id: "maligator:internal/http",
+		internal: true,
+		stability: "experimental",
+		evaluation: "side-effect-free",
+		installer: "mal_host_install_maligator_internal_http",
+		declarationFile: "http-host-api.d.ts",
+		typeImports: [
+			{ namespace: "Http", from: "maligator:http" },
+			{ namespace: "Assets", from: "maligator:assets" },
+		],
+		description: "Native listeners and asset responses under `maligator:http`.",
+		types: [],
+		exports: [
+			workerExport(
+				"listen",
+				"(options: { handler: Http.Handler; asset?: { readonly handle: Assets.EmbeddedFile | Assets.EmbeddedDirectory; readonly prefix: string; readonly fallback?: string; readonly immutable: ReadonlyArray<string> }; hostname: string; port?: number; headersTimeout?: number; requestTimeout?: number; keepAliveTimeout?: number; maxConnections?: number }) => { readonly port: number; close(): Promise<void> }",
+				"Bind a listener; with `asset`, requests are answered from the handle natively.",
+			),
+			workerExport(
+				"assetResponse",
+				"(handle: Assets.EmbeddedFile | Assets.EmbeddedDirectory, request: Request, route: { readonly prefix: string; readonly fallback?: string; readonly immutable: ReadonlyArray<string> }) => Response",
+				"The response an asset route gives a request.",
+			),
+			workerExport(
+				"assetProxy",
+				"(handle: Assets.EmbeddedFile | Assets.EmbeddedDirectory) => string | undefined",
+				"The URL of the watcher a handle's files come from in this command.",
 			),
 		],
 	},

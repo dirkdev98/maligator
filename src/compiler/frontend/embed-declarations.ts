@@ -66,7 +66,12 @@ export interface EmbeddedAsset {
  * A resolved declaration. Its canonical JSON is the host module identity and the
  * installer's slot data; producer cwd paths are absolute.
  */
-export interface EmbedDeclaration extends EmbeddedAsset, EmbedProducers {}
+export interface EmbedDeclaration extends EmbeddedAsset, EmbedProducers {
+	/** Set when the program passes the handle to `serveAsset`. */
+	readonly served?: true;
+	/** The watcher URL `serveAsset` forwards to in this command. */
+	readonly proxy?: string;
+}
 
 export class EmbedDeclarationError extends SyntaxError {}
 
@@ -107,6 +112,27 @@ export function canonicalEmbedDeclaration(
 		...(request.watch === undefined ? {} : { watch: producer(request.watch) }),
 		...(request.use === undefined ? {} : { use: { ...request.use } }),
 	};
+}
+
+/**
+ * The producer `command` runs for a declaration. Without a `use` entry, `build` and
+ * `run` build, `test` uses the files that exist, and `dev` watches when the
+ * declaration defines a watcher.
+ */
+export function producerMode(
+	declaration: EmbedProducers,
+	command: "build" | "run" | "test" | "dev",
+): "build" | "watch" | undefined {
+	if (declaration.build === undefined && declaration.watch === undefined)
+		return undefined;
+	const fallback =
+		command === "test"
+			? "existing"
+			: command === "dev" && declaration.watch !== undefined
+				? "watch"
+				: "build";
+	const mode = declaration.use?.[command] ?? fallback;
+	return mode === "existing" || declaration[mode] === undefined ? undefined : mode;
 }
 
 /** Whether a declaration names commands the CLI would run. */

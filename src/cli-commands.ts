@@ -884,10 +884,11 @@ function prepareCommandState(
 				? reporter.phase("Collect assets", () => {
 						try {
 							runBuildProducers(producerTasks(embedDeclarations, "build"), writeStderr);
-							return collectEmbeddedAssets(embedDeclarations, {
-								cacheDirectory: maligatorCacheDirectory(),
-								session: frontendSession,
-							});
+							return collectEmbeddedAssets(
+								embedDeclarations,
+								{ cacheDirectory: maligatorCacheDirectory(), session: frontendSession },
+								production,
+							);
 						} catch (error) {
 							if (error instanceof BuildConfigError)
 								commandError(`error: ${error.message}`);

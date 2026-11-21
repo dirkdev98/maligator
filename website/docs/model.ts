@@ -137,8 +137,8 @@ export const references = [
 	],
 	["workers", "Workers", "Pools, isolated modules, channels, and transfers."],
 	["assets", "Embedded assets", "Declare files and directory trees the build embeds."],
+	["http", "HTTP", "Serve Fetch API handlers and embedded assets."],
 	["test", "Test API", "Tests, suites, hooks, and assertions."],
-	["runtime", "Runtime globals", "Serve HTTP with Mal."],
 	["cli", "CLI", "Commands, flags, defaults, and output paths."],
 ] as const;
 
@@ -341,10 +341,8 @@ function platformReference(id: string, symbols: Array<ReferenceSymbol>): string 
 	return markdown;
 }
 
-function publicReference(
-	kind: "build" | "runtime",
-	symbols: Array<ReferenceSymbol>,
-): string {
+function publicReference(symbols: Array<ReferenceSymbol>): string {
+	const kind = "build";
 	const source = ts.createSourceFile(
 		"public-api.d.ts",
 		readFileSync("src/public-api.d.ts", "utf8"),
@@ -381,19 +379,16 @@ function publicReference(
 		)
 			continue;
 		const name = node.name.text;
-		if (buildNames.has(name) !== (kind === "build")) continue;
+		if (!buildNames.has(name)) continue;
 		const url = `/api/${kind}`;
 		const docs = comments(node, source);
 		const signature = node.getText(source);
-		const availability =
-			kind === "build"
-				? "Build configuration; trusted project code."
-				: "Requires the corresponding host surface.";
+		const availability = "Build configuration; trusted project code.";
 		symbols.push({
 			name,
 			kind: ts.isFunctionDeclaration(node) ? "export" : "type",
 			signature,
-			module: kind === "build" ? "@maligator/cli" : "global",
+			module: "@maligator/cli",
 			url: `${url}#${name}`,
 			availability,
 			...docs,
@@ -406,43 +401,15 @@ function publicReference(
 			ts.isInterfaceDeclaration(node) && node.members.length > 0,
 		);
 		if (ts.isInterfaceDeclaration(node)) {
-			const owner =
-				(
-					{
-						MaligatorBuildConfig: "",
-						MaligatorWebRuntime: "Mal",
-					} as Record<string, string>
-				)[name] ?? name;
 			markdown += addMembers(
 				node.members,
 				source,
-				owner,
-				kind === "build" ? "@maligator/cli" : "global",
+				name === "MaligatorBuildConfig" ? "" : name,
+				"@maligator/cli",
 				url,
 				symbols,
 				availability,
 			);
-		}
-	}
-	if (kind === "runtime") {
-		for (const node of source.statements) {
-			if (!ts.isModuleDeclaration(node) || !node.body || !ts.isModuleBlock(node.body))
-				continue;
-			for (const statement of node.body.statements) {
-				if (!ts.isVariableStatement(statement)) continue;
-				for (const declaration of statement.declarationList.declarations) {
-					const name = declaration.name.getText(source);
-					symbols.push({
-						name,
-						kind: "export",
-						signature: `var ${declaration.getText(source)};`,
-						module: "global",
-						url: `/api/runtime#${name}`,
-						availability: "Requires surface.webPlatform.",
-						...comments(statement, source),
-					});
-				}
-			}
 		}
 	}
 	return markdown;
@@ -471,14 +438,14 @@ export function documentationModel(): {
 			summary,
 			layer: "API reference",
 			source:
-				id === "build" || id === "runtime"
+				id === "build"
 					? "src/public-api.d.ts"
 					: id === "cli"
 						? "src/cli.ts"
 						: "src/platform/catalog.ts",
 			markdown: expandExamples(
-				id === "build" || id === "runtime"
-					? publicReference(id, symbols)
+				id === "build"
+					? publicReference(symbols)
 					: id === "cli"
 						? readFileSync("website/docs/api/cli.md", "utf8")
 						: platformReference(id, symbols),

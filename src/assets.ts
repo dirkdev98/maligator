@@ -10,6 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import { writeFileAtomically } from "./atomic-file.ts";
 import { BuildConfigError } from "./build-config-error.ts";
 import { EMBED_INSTALLER } from "./compiler/frontend/embed-declarations.ts";
@@ -36,6 +37,16 @@ export interface IncludedAssetFile {
 	digest: string;
 	/** Existing linked C byte-array symbol used instead of emitting another #embed. */
 	embeddedSymbol?: string;
+	/** Compressed copies a server picks by `Accept-Encoding`. */
+	brotli?: CompressedAssetFile;
+	gzip?: CompressedAssetFile;
+}
+
+export interface CompressedAssetFile {
+	/** Absolute build-host path consumed by C23 `#embed`. */
+	sourcePath: string;
+	size: number;
+	digest: string;
 }
 
 export interface AssetCollectionOptions {
@@ -289,10 +300,81 @@ function includeDirectory(
 	return files.sort(compareMemberPaths);
 }
 
-/** Read and hash the files of every embed declaration a build reaches. */
+/** Extensions whose files compress well enough to serve compressed. */
+const COMPRESSIBLE = new Set([
+	".css",
+	".csv",
+	".htm",
+	".html",
+	".ico",
+	".js",
+	".json",
+	".map",
+	".md",
+	".mjs",
+	".svg",
+	".txt",
+	".wasm",
+	".webmanifest",
+	".xml",
+	".yaml",
+	".yml",
+]);
+
+/** Smaller files gain less from compression than a request header costs. */
+const COMPRESSION_THRESHOLD = 1024;
+
+/**
+ * A compressed copy of `file`, kept only when it saves at least a tenth. Copies are
+ * cached by content digest, so an unchanged file is compressed once per cache.
+ */
+function compressedCopy(
+	file: IncludedAssetFile,
+	encoding: "brotli" | "gzip",
+	directory: string,
+): CompressedAssetFile | undefined {
+	const target = path.join(directory, "asset-compressed", `${file.digest}.${encoding}`);
+	let bytes: Uint8Array;
+	try {
+		bytes = new Uint8Array(readFileSync(target));
+	} catch {
+		const source = readFileSync(file.sourcePath);
+		bytes = new Uint8Array(
+			encoding === "brotli"
+				? brotliCompressSync(source, {
+						params: {
+							[zlibConstants.BROTLI_PARAM_QUALITY]: zlibConstants.BROTLI_MAX_QUALITY,
+							[zlibConstants.BROTLI_PARAM_SIZE_HINT]: source.length,
+						},
+					})
+				: gzipSync(source, { level: zlibConstants.Z_BEST_COMPRESSION }),
+		);
+		mkdirSync(path.dirname(target), { recursive: true });
+		writeFileAtomically(target, bytes);
+	}
+	if (bytes.length > file.size * 0.9) return undefined;
+	return { sourcePath: target, size: bytes.length, digest: hash("sha256", bytes, "hex") };
+}
+
+function compressServedFiles(files: Array<IncludedAssetFile>, directory: string): void {
+	for (const file of files) {
+		if (file.size < COMPRESSION_THRESHOLD) continue;
+		if (!COMPRESSIBLE.has(path.extname(file.path).toLowerCase())) continue;
+		const brotli = compressedCopy(file, "brotli", directory);
+		const gzip = compressedCopy(file, "gzip", directory);
+		if (brotli !== undefined) file.brotli = brotli;
+		if (gzip !== undefined) file.gzip = gzip;
+	}
+}
+
+/**
+ * Read and hash the files of every embed declaration a build reaches. With
+ * `compress`, the text files of declarations a program serves gain compressed copies.
+ */
 export function collectEmbeddedAssets(
-	declarations: ReadonlyArray<EmbeddedAsset>,
+	declarations: ReadonlyArray<EmbeddedAsset & { readonly served?: true }>,
 	options?: AssetCollectionOptions,
+	compress = false,
 ): Array<IncludedAsset> {
 	const temporaryDirectory =
 		process.env.TMPDIR ?? process.env.TMP ?? process.env.TEMP ?? "/tmp";
@@ -329,6 +411,8 @@ export function collectEmbeddedAssets(
 						),
 					]
 				: includeDirectory(declaration, stagingDirectory, options);
+		if (compress && declaration.served === true)
+			compressServedFiles(files, options?.cacheDirectory ?? stagingDirectory);
 		const digestInput = {
 			version: ASSET_FORMAT_VERSION,
 			type: declaration.kind,

@@ -13,7 +13,7 @@ function formatDiagnostics(diagnostics: ReadonlyArray<ts.Diagnostic>): string {
 }
 
 describe("@maligator/cli public TypeScript API", () => {
-	it("types build configuration, embedded assets, and Mal.serve in a consumer project", () => {
+	it("types build configuration, embedded assets, and HTTP serving in a consumer project", () => {
 		const project = mkdtempSync(path.join(os.tmpdir(), "maligator-public-types-"));
 		try {
 			const packageDirectory = path.join(project, "node_modules/@maligator/cli");
@@ -27,6 +27,8 @@ describe("@maligator/cli public TypeScript API", () => {
 			for (const declaration of [
 				"application-api.d.ts",
 				"assets-api.d.ts",
+				"http-api.d.ts",
+				"http-host-api.d.ts",
 				"test-api.d.ts",
 				"platform-api.d.ts",
 				"process-api.d.ts",
@@ -94,8 +96,9 @@ defineBuild({
 			const entryPath = path.join(sourceDirectory, "index.ts");
 			writeFileSync(
 				entryPath,
-				`import type { MaligatorServeOptions, MaligatorServer } from "@maligator/cli";
-import { embedDirectory, embedFile } from "maligator:assets";
+				`import { embedDirectory, embedFile } from "maligator:assets";
+import { serve, serveAsset } from "maligator:http";
+import type { Handler, Server, ServeOptions } from "maligator:http";
 import type { EmbeddedDirectory, EmbeddedFile, MaterializeOptions } from "maligator:assets";
 import {
 	afterAll,
@@ -207,7 +210,7 @@ embedDirectory("../web/dist", { use: { build: "watch" } });
 embedDirectory("../templates", { include: [1] });
 // @ts-expect-error The legacy configured-asset global is gone.
 mal.assets;
-const serveOptions: MaligatorServeOptions = {
+const serveOptions: ServeOptions = {
 	hostname: "127.0.0.1",
 	port: 3000,
 	headersTimeout: 60000,
@@ -217,10 +220,16 @@ const serveOptions: MaligatorServeOptions = {
 	async fetch(request) {
 		return new Response(request.url);
 	},
+	error: (error) => new Response(String(error), { status: 500 }),
 };
-const server: MaligatorServer = Mal.serve(serveOptions);
+const server: Server = serve(serveOptions);
 const port: number = server.port;
-console.log(assetPath, home?.text(), logoBytes, logoMeta, frontend, port);
+const closed: Promise<void> = server.close();
+const files: Handler = serveAsset(templates, { prefix: "/templates", fallback: "home.html" });
+// @ts-expect-error serveAsset takes a declared asset handle.
+serveAsset("../templates");
+void closed;
+console.log(assetPath, home?.text(), logoBytes, logoMeta, frontend, files, port);
 `,
 			);
 

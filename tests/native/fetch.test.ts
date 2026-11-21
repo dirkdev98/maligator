@@ -11,12 +11,12 @@ import {
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-fetch-"));
 
-// WinterTC fetch server: Mal.serve + native Request/Response. Two binaries — the
+// WinterTC fetch server: maligator:http serve + native Request/Response. Two binaries — the
 // async handler (proves Promise<Response> under normal auto-GC) and the sync
 // handler (rigorously validates server / Request / Response / promise-reaction
 // rooting under collect-at-every-safepoint, without tripping the known async-frame
 // rooting gap under STRESS).
-describe("Mal.serve fetch server", () => {
+describe("maligator:http fetch server", () => {
 	let asyncBin: string;
 	let syncBin: string;
 	beforeAll(() => {

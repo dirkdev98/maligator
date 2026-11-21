@@ -1,6 +1,8 @@
+import { serve } from "maligator:http";
+
 // Sync-handler variant (no async/await) to isolate whether the STRESS segfault is
 // in the fetch server code or the pre-existing async-frame rooting gap.
-const server = Mal.serve({
+const server = serve({
 	port: 0,
 	fetch(request) {
 		if (request.url.endsWith("/created")) {

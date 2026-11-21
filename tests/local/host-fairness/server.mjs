@@ -1,4 +1,5 @@
 import { MessageChannel } from "node:worker_threads";
+import { serve } from "maligator:http";
 
 const { port1, port2 } = new MessageChannel();
 let pendingCheckpoint = false;
@@ -15,7 +16,7 @@ port2.on("message", () => {
 });
 port1.postMessage(0);
 
-const server = Mal.serve({
+const server = serve({
 	port: 0,
 	fetch() {
 		pendingCheckpoint = true;

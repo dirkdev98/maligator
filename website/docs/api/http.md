@@ -1,0 +1,1 @@
+Each `fetch` handler receives a buffered `Request`. Request bodies are limited to 16 MiB, and handlers return a `Response` whose body the server writes whole. See [Serve HTTP](/guides/http) for walkthroughs of handlers, assets and frontends.

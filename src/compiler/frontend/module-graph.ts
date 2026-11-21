@@ -16,6 +16,7 @@ import {
 	canonicalEmbedDeclaration,
 	declaresProducers,
 	embedModuleDeclaration,
+	producerMode,
 	embedModuleId,
 	isEmbedModule,
 	isEmbedRequest,
@@ -39,6 +40,7 @@ import { dynamicImportType, moduleImportType } from "./module-import-type.ts";
 import type { ModuleImportType } from "./module-import-type.ts";
 import { parseModule, parseScript } from "./parser.ts";
 import type { SemanticFile } from "./semantic-analysis.ts";
+import { markServedAssets } from "./served-assets.ts";
 import { SyntaxDiagnostic } from "./syntax-diagnostic.ts";
 import { discoverWorkerEntries } from "./worker-entries.ts";
 import type { WorkerEntryDeclaration } from "./worker-entries.ts";
@@ -876,6 +878,15 @@ export function buildModuleGraph(
 										options.buildConfig?.modules.aliases[dependency.specifier] ??
 										dependency.specifier;
 									const platform = lookupPlatformModule(aliasedSpecifier);
+									// Its handlers take and return Fetch API objects.
+									if (
+										aliasedSpecifier === "maligator:http" &&
+										options.buildConfig?.surface.webPlatform === false
+									)
+										throw new SyntaxDiagnostic(
+											"resolution",
+											`Cannot import '${dependency.specifier}' from ${filePath}: it requires surface.webPlatform`,
+										);
 									if (
 										(platform as { internal?: boolean } | undefined)?.internal === true &&
 										lookupPlatformModule(filePath)?.kind !== "source" &&
@@ -1085,7 +1096,10 @@ export function buildModuleGraph(
 				continue;
 			}
 			if (isEmbedModule(resolvedPath)) {
-				modules.set(resolvedPath, hostModuleRecord(embedHostModule(resolvedPath)));
+				modules.set(
+					resolvedPath,
+					hostModuleRecord(embedHostModule(resolvedPath, options.execution)),
+				);
 				continue;
 			}
 			// A `node:*` host built-in resolves to a virtual record from the catalog —
@@ -1276,6 +1290,7 @@ export function buildModuleGraph(
 		const loadError = modules.get(modulePath)?.loadError;
 		if (loadError !== undefined) throw loadError;
 	}
+	markServedAssets(modules);
 
 	return {
 		resolutionInputs: [...ctx.observed],
@@ -1704,14 +1719,27 @@ function hostModuleRecord(host: HostModuleSpec, execution?: Execution): ModuleRe
 	};
 }
 
-/** The handle module of one embed declaration; its installer reads the declaration. */
-function embedHostModule(id: string): HostModuleSpec {
+/**
+ * The handle module of one embed declaration; its installer reads the declaration.
+ * When this command runs the declaration's watcher, `proxy` names the URL that
+ * `serveAsset` forwards to.
+ */
+function embedHostModule(id: string, execution: Execution | undefined): HostModuleSpec {
+	const declaration = embedModuleDeclaration(id);
+	const proxy =
+		execution !== undefined && producerMode(declaration, execution.command) === "watch"
+			? declaration.watch?.url
+			: undefined;
 	return {
 		id,
 		named: [],
 		hasDefault: true,
 		installer: EMBED_INSTALLER,
-		installData: { default: embedModuleDeclaration(id) as unknown as PlatformData },
+		installData: {
+			default: (proxy === undefined
+				? declaration
+				: { ...declaration, proxy }) as unknown as PlatformData,
+		},
 	};
 }
 

@@ -1,4 +1,5 @@
 import { embedDirectory, embedFile } from "maligator:assets";
+import { serve } from "maligator:http";
 import { siteResponse } from "./responses.ts";
 import type { ExplorerAsset, SiteResource } from "./responses.ts";
 
@@ -71,7 +72,7 @@ for (const asset of member(
 }
 const hostname = process.env.SITE_HOST ?? "0.0.0.0";
 const port = Number(process.env.PORT ?? "3000");
-const server = Mal.serve({
+const server = serve({
 	hostname,
 	port,
 	fetch: (request) => siteResponse(request, pages),

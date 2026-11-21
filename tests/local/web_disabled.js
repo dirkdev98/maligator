@@ -10,11 +10,10 @@ const absent = [
 	// URL / URLSearchParams (web_url.c → ada).
 	"URL",
 	"URLSearchParams",
-	// fetch surface + Mal.serve (web_fetch.c).
+	// fetch surface (web_fetch.c).
 	"fetch",
 	"Response",
 	"Request",
-	"Mal",
 	// timers (web_host_timer.c).
 	"setTimeout",
 	"clearTimeout",

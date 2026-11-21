@@ -1060,20 +1060,12 @@
 								<div class="code-title">
 									<span>website/server.mts</span><span>simplified</span>
 								</div>
-								<pre><code><span class="kw">import</span> { readFileSync } <span class="kw">from</span> <span class="str">"node:fs"</span>;
+								<pre><code><span class="kw">import</span> { embedFile } <span class="kw">from</span> <span class="str">"maligator:assets"</span>;
+<span class="kw">import</span> { serve, serveAsset } <span class="kw">from</span> <span class="str">"maligator:http"</span>;
 
-<span class="kw">const</span> html = readFileSync(
-  mal.assets.materialize(<span class="str">"site"</span>),
-  <span class="str">"utf8"</span>,
-);
-
-Mal.serve({
+serve({
   port: Number(process.env.PORT ?? <span class="str">"3000"</span>),
-  fetch() {
-    <span class="kw">return new</span> Response(html, {
-      headers: { <span class="str">"Content-Type"</span>: <span class="str">"text/html; charset=utf-8"</span> },
-    });
-  },
+  fetch: serveAsset(embedFile(<span class="str">"./index.html"</span>)),
 });</code></pre>
 							</article>
 							<div class="command">npm run site:build</div>

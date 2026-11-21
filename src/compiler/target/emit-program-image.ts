@@ -2688,8 +2688,30 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 	return units;
 }
 
-function assetFileSymbol(assetIndex: number, fileIndex: number, suffix: string): string {
-	return `mal_asset_${assetIndex}_file_${fileIndex}_data${suffix}`;
+type AssetEncoding = "data" | "brotli" | "gzip";
+
+function assetFileSymbol(
+	assetIndex: number,
+	fileIndex: number,
+	suffix: string,
+	encoding: AssetEncoding = "data",
+): string {
+	return `mal_asset_${assetIndex}_file_${fileIndex}_${encoding}${suffix}`;
+}
+
+/** The bytes a file row embeds: its contents and any compressed copies. */
+function assetFileBytes(
+	file: IncludedAsset["files"][number],
+): Array<{ encoding: AssetEncoding; sourcePath: string; size: number; digest: string }> {
+	return [
+		...(file.embeddedSymbol === undefined && file.size > 0
+			? [{ encoding: "data" as const, ...file }]
+			: []),
+		...(file.brotli === undefined
+			? []
+			: [{ encoding: "brotli" as const, ...file.brotli }]),
+		...(file.gzip === undefined ? [] : [{ encoding: "gzip" as const, ...file.gzip }]),
+	];
 }
 
 /**
@@ -2714,6 +2736,11 @@ export function assetTableLines(
 				declared.add(symbol);
 				lines.push(`extern const u8 ${symbol}[];`);
 			}
+			for (const encoding of ["brotli", "gzip"] as const)
+				if (file[encoding] !== undefined)
+					lines.push(
+						`extern const u8 ${assetFileSymbol(assetIndex, fileIndex, suffix, encoding)}[];`,
+					);
 		}
 	}
 	if (lines.length > 0) lines.push("");
@@ -2725,8 +2752,12 @@ export function assetTableLines(
 			const file = asset.files[fileIndex]!;
 			const symbol =
 				file.embeddedSymbol ?? assetFileSymbol(assetIndex, fileIndex, suffix);
+			const variant = (encoding: "brotli" | "gzip") =>
+				file[encoding] === undefined
+					? `.${encoding} = nullptr, .${encoding}_length = 0`
+					: `.${encoding} = ${assetFileSymbol(assetIndex, fileIndex, suffix, encoding)}, .${encoding}_length = ${file[encoding].size}`;
 			lines.push(
-				`    { .path = "${cEscapeString(file.path)}", .data = ${symbol}, .length = ${file.size}, .digest = "${file.digest}" },`,
+				`    { .path = "${cEscapeString(file.path)}", .data = ${symbol}, .length = ${file.size}, .digest = "${file.digest}", ${variant("brotli")}, ${variant("gzip")} },`,
 			);
 		}
 		lines.push("};", "");
@@ -2755,17 +2786,18 @@ export function assetDataTranslationUnits(
 ): Array<GeneratedTranslationUnit> {
 	return assets.flatMap((asset, assetIndex) => {
 		const files = asset.files.flatMap((file, fileIndex) =>
-			file.embeddedSymbol === undefined && file.size > 0
-				? [{ file, symbol: assetFileSymbol(assetIndex, fileIndex, suffix) }]
-				: [],
+			assetFileBytes(file).map((bytes) => ({
+				...bytes,
+				symbol: assetFileSymbol(assetIndex, fileIndex, suffix, bytes.encoding),
+			})),
 		);
 		if (files.length === 0) return [];
 		const source = files
-			.flatMap(({ file, symbol }) => [
+			.flatMap(({ sourcePath, size, symbol }) => [
 				`const unsigned char ${symbol}[] = {`,
-				`#embed "${cEscapeString(file.sourcePath)}"`,
+				`#embed "${cEscapeString(sourcePath)}"`,
 				"};",
-				`static_assert(sizeof ${symbol} == ${file.size}, "asset file changed after it was recorded");`,
+				`static_assert(sizeof ${symbol} == ${size}, "asset file changed after it was recorded");`,
 			])
 			.join("\n");
 		return [
@@ -2776,7 +2808,7 @@ export function assetDataTranslationUnits(
 				sourceCodeUnits: source.length,
 				headerFiles: [],
 				definitions: [],
-				embeddedFileDigests: files.map(({ file }) => file.digest),
+				embeddedFileDigests: files.map(({ digest }) => digest),
 			},
 		];
 	});

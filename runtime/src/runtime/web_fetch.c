@@ -1,5 +1,6 @@
 #include "web_fetch.h"
 
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +27,7 @@
 #include "intrinsics.h"
 #include "microtask.h"
 #include "mal_url.h"
+#include "maligator_http.h"
 #include "object.h"
 #include "object_ops.h"
 #include "promise_object.h"
@@ -3478,7 +3480,7 @@ static MalValue mal_request_clone(
 }
 
 /* ---------------------------------------------------------------------------
- * Mal.serve request state.
+ * maligator:http request state.
  *
  * Inbound framing is llhttp's (MalHttpCodec) — this layer only buffers the decoded
  * body so the WinterTC handler can see a whole Request. Two bounds matter: the total
@@ -3519,9 +3521,12 @@ typedef struct MalFetchHead {
  * `refs` (transport + pending promise reaction) keeps the struct itself alive.
  * Nothing may dereference `conn` without a null check.
  */
+typedef struct MalFetchServer MalFetchServer;
+
 typedef struct MalFetchRequest {
     MalVm *vm;
     MalHttpConn *conn;
+    MalFetchServer *server;
     int refs;
     bool responded;
     bool head_request;
@@ -3750,8 +3755,54 @@ static MalValue mal_fetch_make_request(MalVm *vm, MalFetchRequest *req) {
 }
 
 /* ---------------------------------------------------------------------------
- * The handler hook + Mal.serve.
+ * maligator:http servers and their handler hook.
  * --------------------------------------------------------------------------- */
+
+/*
+ * One listener. Its JavaScript state lives in the VM's handler registry
+ * (MAL_INTRINSIC_FETCH_HANDLER), an array whose entry at `slot` is
+ * [handler, resolve close, close promise]; the registry roots them. Closing waits
+ * until every accepted connection drained, so no request outlives its server.
+ */
+struct MalFetchServer {
+    MalVm *vm;
+    MalHttpServer *native;
+    u32 slot;
+    bool closing;
+    /* Set when the handler is a serveAsset handler: requests never reach JavaScript. */
+    MalHttpAssetRoute *route;
+};
+
+enum {
+    MAL_FETCH_SERVER_HANDLER = 0,
+    MAL_FETCH_SERVER_RESOLVE = 1,
+    MAL_FETCH_SERVER_CLOSED = 2,
+    MAL_FETCH_SERVER_ASSET = 3,
+    MAL_FETCH_SERVER_FIELDS = 4,
+};
+
+static MalValue mal_fetch_server_entry(MalVm *vm, const MalFetchServer *server) {
+    MalValue registry = vm->intrinsics[MAL_INTRINSIC_FETCH_HANDLER];
+    MalValue entry = mal_value_new_undefined();
+    if (server != nullptr && mal_value_is_array_object(registry)) {
+        mal_array_object_dense_get(
+            mal_value_to_array_object(registry), server->slot, &entry);
+    }
+    return entry;
+}
+
+static MalValue mal_fetch_server_field(MalVm *vm, const MalFetchServer *server, u32 field) {
+    MalValue entry = mal_fetch_server_entry(vm, server);
+    MalValue value = mal_value_new_undefined();
+    if (mal_value_is_array_object(entry)) {
+        mal_array_object_dense_get(mal_value_to_array_object(entry), field, &value);
+    }
+    return value;
+}
+
+static MalValue mal_fetch_server_handler(MalVm *vm, const MalFetchServer *server) {
+    return mal_fetch_server_field(vm, server, MAL_FETCH_SERVER_HANDLER);
+}
 
 /* MalFetchRequest is a host C struct (not a GC cell), so a native reaction carries
  * the pointer in a slot boxed as an f64 (48-bit pointers are exact in a double).
@@ -3967,6 +4018,55 @@ static void mal_fetch_settle_job(MalVm *vm, void *data, MalValue argument, bool 
     mal_fetch_request_release(req);
 }
 
+static const char *mal_fetch_head_header(void *context, const char *name, usize *length) {
+    const char *value = nullptr;
+    return mal_fetch_snapshot_header(context, name, &value, length) ? value : nullptr;
+}
+
+/* Answer from the route's asset handle in C: no Request, Response or promise. */
+static void mal_fetch_dispatch_asset(MalVm *vm, MalFetchRequest *req) {
+    MalValue handle = mal_fetch_server_field(vm, req->server, MAL_FETCH_SERVER_ASSET);
+    MalRootSpan root;
+    mal_gc_root(&root, &handle, 1);
+    MalHttpAssetRequest request = {
+        .method = req->head.method,
+        .method_length = req->head.method_len,
+        .target = req->head.target,
+        .target_length = req->head.target_len,
+        .header = mal_fetch_head_header,
+        .context = &req->head,
+    };
+    MalHttpAssetReply reply;
+    bool replied = mal_http_asset_reply(vm, req->server->route, handle, &request, &reply);
+    mal_gc_unroot(&root);
+    if (!replied) {
+        vm->completion =
+            (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+        mal_http_asset_reply_dispose(&reply);
+        mal_fetch_respond_text(req, 500, "Internal Server Error", "handler error", 13);
+        return;
+    }
+    char block[MAL_HTTP_ASSET_REPLY_HEADERS * 200];
+    usize length = 0;
+    for (usize i = 0; i < reply.header_count; i++) {
+        int written = snprintf(block + length, sizeof block - length, "%s: %s\r\n",
+            reply.headers[i].name, reply.headers[i].value);
+        if (written > 0 && (usize) written < sizeof block - length) length += (usize) written;
+    }
+    req->responded = true;
+    const char *reason = mal_fetch_reason(reply.status);
+    if (reply.status == 304) {
+        mal_http_conn_respond_framed(req->conn, reply.status, reason, block, length, "", 0, -1);
+    } else if (req->head_request) {
+        mal_http_conn_respond_framed(req->conn, reply.status, reason, block, length, "", 0,
+            (i64) reply.body_length);
+    } else {
+        mal_http_conn_respond(req->conn, reply.status, reason, block, length,
+            (const char *) reply.body, reply.body_length);
+    }
+    mal_http_asset_reply_dispose(&reply);
+}
+
 /* Run the WinterTC handler now that the whole request is buffered. */
 static void mal_fetch_dispatch(MalVm *vm, MalFetchRequest *req) {
     if (req->responded || req->conn == nullptr) return;
@@ -3980,7 +4080,11 @@ static void mal_fetch_dispatch(MalVm *vm, MalFetchRequest *req) {
         mal_fetch_respond_text(req, 500, "Internal Server Error", "handler error", 13);
         return;
     }
-    MalValue handler = vm->intrinsics[MAL_INTRINSIC_FETCH_HANDLER];
+    if (req->server != nullptr && req->server->route != nullptr) {
+        mal_fetch_dispatch_asset(vm, req);
+        return;
+    }
+    MalValue handler = mal_fetch_server_handler(vm, req->server);
     if (!mal_value_is_callable(handler)) {
         mal_fetch_respond_text(req, 500, "Internal Server Error", "no handler", 10);
         return;
@@ -4182,7 +4286,6 @@ static bool mal_fetch_host_valid(const char *value, usize length) {
 
 static void mal_fetch_stream_handler(
     void *data, MalVm *vm, MalHttpConn *conn, const MalHttpCodecHead *head) {
-    (void) data;
     // Reject over-long targets before composing an absolute URL from them; leaving
     // the stream callbacks unregistered makes the transport discard the body.
     const char *host = nullptr;
@@ -4236,6 +4339,7 @@ static void mal_fetch_stream_handler(
     }
 
     MalFetchRequest *req = mal_fetch_request_new(vm, conn, head);
+    if (req != nullptr) req->server = data;
     if (req == nullptr) {
         mal_http_conn_close_after_response(conn);
         mal_http_conn_respond(conn, 500, "Internal Server Error", nullptr, 0,
@@ -4255,104 +4359,225 @@ static void mal_fetch_stream_handler(
  * (0) in place, which the transport reads as "use the secure default" — a limit is
  * never disabled, only retuned. Anything that is not an exact non-negative integer
  * is a configuration mistake and throws rather than silently degrading the bound. */
-static bool mal_serve_limit(
+static bool mal_fetch_server_limit(
     MalVm *vm, MalValue opts, const char *name, u32 *out) {
     MalValue value;
     if (!mal_vm_get_property(
             vm, opts, mal_intrinsic_string_key(vm, (const byte *) name), &value)
         || mal_value_is_undefined(value)) {
-        return true;
+        return vm->completion.kind != MAL_COMPLETION_THROW;
     }
-    f64 number = mal_ops_is_number(value) ? mal_ops_to_number(value) : (f64) NAN;
+    char message[128];
+    snprintf(message, sizeof message,
+        "serve option '%s' must be an integer from 0 through 2147483647", name);
+    if (!mal_ops_is_number(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, (const byte *) message);
+        return false;
+    }
+    f64 number = mal_ops_to_number(value);
     if (!(number >= 0) || number > 2147483647.0 || floor(number) != number) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Mal.serve limits must be integers from 0 through 2147483647");
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, (const byte *) message);
         return false;
     }
     *out = (u32) number;
     return true;
 }
 
-static MalValue mal_serve(
-    MalVm *vm,
-    MalValue this_value,
-    const MalValue *args,
-    i32 arg_count,
-    MalValue new_target,
-    MalValue callee) {
-    (void) this_value;
-    (void) new_target;
-    (void) callee;
-
-    if (arg_count < 1 || !mal_value_is_object(args[0])) {
-        return mal_value_new_undefined(); // The required TypeError remains unsupported.
+/* The close callback runs on the reactor path, so settling waits for a host job. */
+static void mal_fetch_server_closed_job(
+    MalVm *vm, void *data, MalValue argument, bool is_reject) {
+    (void) argument;
+    (void) is_reject;
+    MalFetchServer *server = data;
+    MalValue resolve = mal_fetch_server_field(vm, server, MAL_FETCH_SERVER_RESOLVE);
+    MalRootSpan root;
+    mal_gc_root(&root, &resolve, 1);
+    MalValue registry = vm->intrinsics[MAL_INTRINSIC_FETCH_HANDLER];
+    if (mal_value_is_array_object(registry)) {
+        mal_array_object_store(mal_value_to_array_object(registry),
+            mal_key_index(server->slot), mal_value_new_undefined());
     }
-    MalValue opts = args[0];
+    mal_http_asset_route_free(server->route);
+    free(server);
+    if (mal_value_is_callable(resolve)) {
+        MalCompletion completion =
+            mal_vm_call_value(vm, resolve, mal_value_new_undefined(), nullptr, 0);
+        (void) completion;
+    }
+    mal_gc_unroot(&root);
+}
 
-    MalValue fetch_val;
-    if (!mal_vm_get_property(vm, opts, mal_intrinsic_string_key(vm, (const byte *) "fetch"), &fetch_val)
-        || !mal_value_is_callable(fetch_val)) {
-        return mal_value_new_undefined(); // The required TypeError remains unsupported.
+static void mal_fetch_server_closed(void *data) {
+    MalFetchServer *server = data;
+    mal_vm_enqueue_host_job(
+        server->vm, mal_fetch_server_closed_job, server, false, mal_value_new_undefined());
+}
+
+/* Stop accepting, let in-flight requests finish, then fulfill. Repeated calls share
+ * one promise. */
+static MalValue mal_fetch_server_close(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt;
+    MalFetchServer *server = (MalFetchServer *) (uptr) mal_value_to_f64(
+        mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0));
+    if (server->closing) return mal_fetch_server_field(vm, server, MAL_FETCH_SERVER_CLOSED);
+    MalValue roots[3] = {
+        mal_fetch_server_entry(vm, server), mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = mal_value_from_promise_object(mal_promise_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE])));
+    MalValue reject;
+    mal_promise_create_resolving(vm, roots[1], &roots[2], &reject);
+    MalArrayObject *entry = mal_value_to_array_object(roots[0]);
+    mal_array_object_store(entry, mal_key_index(MAL_FETCH_SERVER_RESOLVE), roots[2]);
+    mal_array_object_store(entry, mal_key_index(MAL_FETCH_SERVER_CLOSED), roots[1]);
+    server->closing = true;
+    mal_http_server_close(server->native, mal_fetch_server_closed, server);
+    MalValue promise = roots[1];
+    mal_gc_unroot(&root);
+    return promise;
+}
+
+MalValue mal_fetch_server_start(MalVm *vm, MalValue options) {
+    if (!mal_value_is_object(options)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "serve options must be an object");
+        return mal_value_new_undefined();
+    }
+    MalValue roots[3] = {options, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    if (!mal_vm_get_property(vm, options,
+            mal_intrinsic_string_key(vm, (const byte *) "handler"), &roots[1]))
+        goto done;
+    if (!mal_value_is_callable(roots[1])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "serve option 'fetch' must be a function");
+        goto done;
     }
 
+    MalValue value;
     u16 port = 0;
-    MalValue pv;
-    if (mal_vm_get_property(vm, opts, mal_intrinsic_string_key(vm, (const byte *) "port"), &pv)
-        && mal_ops_is_number(pv)) {
-        port = (u16) mal_ops_to_number(pv);
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, (const byte *) "port"), &value))
+        goto done;
+    if (!mal_value_is_undefined(value)) {
+        f64 number = mal_ops_is_number(value) ? mal_ops_to_number(value) : (f64) NAN;
+        if (!(number >= 0) || number > 65535 || floor(number) != number) {
+            mal_vm_throw_error(vm,
+                mal_ops_is_number(value) ? MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE
+                                         : MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                (const byte *) "serve option 'port' must be an integer from 0 through 65535");
+            goto done;
+        }
+        port = (u16) number;
     }
 
     char host[64] = "0.0.0.0";
-    MalValue hv;
-    if (mal_vm_get_property(vm, opts, mal_intrinsic_string_key(vm, (const byte *) "hostname"), &hv)
-        && mal_value_is_string(hv)) {
-        MalString *hs = mal_value_to_string(hv);
-        usize hl = mal_string_length(hs);
-        const c16 *u = mal_string_code_units(hs);
-        // Narrowing or dropping a hostname could bind a different address, such as "İ.0.0.0"
-        // becoming 0.0.0.0, so anything that is not short NUL-free ASCII is refused.
-        bool ascii = hl < sizeof(host);
-        for (usize i = 0; ascii && i < hl; i++) ascii = u[i] != 0 && u[i] < 0x80;
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, (const byte *) "hostname"), &value))
+        goto done;
+    if (!mal_value_is_undefined(value)) {
+        MalString *hs = mal_value_is_string(value) ? mal_value_to_string(value) : nullptr;
+        usize hl = hs == nullptr ? 0 : mal_string_length(hs);
+        // Narrowing or dropping a hostname could bind a different address, such as
+        // "İ.0.0.0" becoming 0.0.0.0, so anything but short NUL-free ASCII is refused.
+        bool ascii = hs != nullptr && hl > 0 && hl < sizeof(host);
+        const c16 *units = ascii ? mal_string_code_units(hs) : nullptr;
+        for (usize i = 0; ascii && i < hl; i++) ascii = units[i] != 0 && units[i] < 0x80;
         if (!ascii) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "serve hostname must be an ASCII host name or address");
-            return mal_value_new_undefined();
+                (const byte *) "serve option 'hostname' must be an ASCII host name or address");
+            goto done;
         }
-        for (usize i = 0; i < hl; i++) host[i] = (char) u[i];
+        for (usize i = 0; i < hl; i++) host[i] = (char) units[i];
         host[hl] = '\0';
+    }
+
+    MalHttpAssetRoute *route = nullptr;
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, (const byte *) "asset"), &roots[2]))
+        goto done;
+    if (mal_value_is_object(roots[2])) {
+        route = mal_http_asset_route_new(vm, roots[2]);
+        if (route == nullptr
+            || !mal_vm_get_property(vm, roots[2], mal_intrinsic_string_key(vm, (const byte *) "handle"), &roots[2])) {
+            mal_http_asset_route_free(route);
+            goto done;
+        }
     }
 
     MalHttpServerLimits limits = {0};
     u32 max_connections = 0;
-    if (!mal_serve_limit(vm, opts, "headersTimeout", &limits.headers_timeout_ms)
-        || !mal_serve_limit(vm, opts, "requestTimeout", &limits.request_timeout_ms)
-        || !mal_serve_limit(vm, opts, "keepAliveTimeout", &limits.keep_alive_timeout_ms)
-        || !mal_serve_limit(vm, opts, "maxConnections", &max_connections)) {
-        return mal_value_new_undefined();
+    if (!mal_fetch_server_limit(vm, options, "headersTimeout", &limits.headers_timeout_ms)
+        || !mal_fetch_server_limit(vm, options, "requestTimeout", &limits.request_timeout_ms)
+        || !mal_fetch_server_limit(vm, options, "keepAliveTimeout", &limits.keep_alive_timeout_ms)
+        || !mal_fetch_server_limit(vm, options, "maxConnections", &max_connections)) {
+        mal_http_asset_route_free(route);
+        goto done;
     }
     limits.max_connections = max_connections;
 
-    // Store the handler in a rooted intrinsic slot and install the transport hook.
-    vm->intrinsics[MAL_INTRINSIC_FETCH_HANDLER] = fetch_val;
-
-    MalHttpServer *server =
-        mal_http_server_start_stream_handler(vm, host, port, 128, false, mal_fetch_stream_handler, nullptr);
+    MalFetchServer *server = calloc(1, sizeof(MalFetchServer));
     if (server == nullptr) {
-        return mal_value_new_undefined(); // The required exception remains unsupported.
+        mal_http_asset_route_free(route);
+        mal_vm_throw_allocation_error(vm);
+        goto done;
     }
-    // The reactor cannot accept before this JS turn yields, so the policy is in
-    // force for every connection this server will ever see.
-    if (!mal_http_server_configure_limits(server, &limits)) {
-        mal_http_server_stop(server);
+    server->vm = vm;
+    server->route = route;
+    server->native = mal_http_server_start_stream_handler(
+        vm, host, port, 128, false, mal_fetch_stream_handler, server);
+    if (server->native == nullptr) {
+        int err = errno;
+        mal_http_asset_route_free(route);
+        free(server);
+        char message[160];
+        snprintf(message, sizeof message, "cannot listen on %s:%u: %s", host, (unsigned) port,
+            strerror(err != 0 ? err : EINVAL));
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, (const byte *) message);
+        goto done;
+    }
+    // The reactor cannot accept before this turn yields, so the policy is in force
+    // for every connection this server will ever see.
+    if (!mal_http_server_configure_limits(server->native, &limits)) {
+        mal_http_server_stop(server->native);
+        mal_http_asset_route_free(route);
+        free(server);
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-            "Failed to configure Mal.serve limits");
-        return mal_value_new_undefined();
+            (const byte *) "cannot configure the server limits");
+        goto done;
     }
 
-    MalObject *handle = mal_intrinsic_new_object(vm);
-    mal_object_set(handle, mal_intrinsic_string_key(vm, (const byte *) "port"),
-        mal_value_from_f64((f64) mal_http_server_port(server)));
-    return mal_value_from_object(handle);
+    if (!mal_value_is_array_object(vm->intrinsics[MAL_INTRINSIC_FETCH_HANDLER])) {
+        vm->intrinsics[MAL_INTRINSIC_FETCH_HANDLER] =
+            mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
+    }
+    MalArrayObject *registry = mal_value_to_array_object(vm->intrinsics[MAL_INTRINSIC_FETCH_HANDLER]);
+    server->slot = mal_array_object_length(registry);
+    MalValue asset_handle = roots[2];
+    roots[2] = mal_value_from_array_object(
+        mal_intrinsic_new_dense_array(vm, MAL_FETCH_SERVER_FIELDS));
+    MalArrayObject *entry = mal_value_to_array_object(roots[2]);
+    mal_array_object_store(entry, mal_key_index(MAL_FETCH_SERVER_HANDLER), roots[1]);
+    mal_array_object_store(entry, mal_key_index(MAL_FETCH_SERVER_ASSET),
+        route == nullptr ? mal_value_new_undefined() : asset_handle);
+    mal_array_object_store(registry, mal_key_index(server->slot), roots[2]);
+
+    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalObject *handle = mal_value_to_object(roots[2]);
+    mal_intrinsic_define_data(vm, handle, (const byte *) "port",
+        mal_value_from_f64((f64) mal_http_server_port(server->native)), MAL_PROPERTY_ENUMERABLE);
+    MalValue slot = mal_value_from_f64((f64) (uptr) server);
+    roots[1] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) "close"), 0, mal_fetch_server_close, &slot, 1));
+    mal_intrinsic_define_data(vm, handle, (const byte *) "close", roots[1],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    result = roots[2];
+done:
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result;
 }
 
 /* ---------------------------------------------------------------------------
@@ -4691,8 +4916,4 @@ void mal_fetch_types_install(MalVm *vm, MalObject *global_this) {
 
 void mal_fetch_install(MalVm *vm, MalObject *global_this) {
     mal_fetch_types_install(vm, global_this);
-    MalObject *mal_ns = mal_intrinsic_new_object(vm);
-    mal_intrinsic_define_method_n(vm, mal_ns, (const byte *) "serve", 1, mal_serve);
-    mal_intrinsic_define_data(vm, global_this, (const byte *) "Mal",
-        mal_value_from_object(mal_ns), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }

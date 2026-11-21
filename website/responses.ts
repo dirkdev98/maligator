@@ -97,6 +97,6 @@ export function siteResponse(
 			return new Response(null, { status: 304, headers });
 	}
 	if (resource.bytes !== undefined) headers.set("Content-Length", String(resource.bytes));
-	// Mal.serve suppresses HEAD bodies while deriving their GET-equivalent length.
+	// The server suppresses HEAD bodies while deriving their GET-equivalent length.
 	return new Response(resource.body, { headers });
 }

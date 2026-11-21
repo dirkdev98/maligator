@@ -541,10 +541,19 @@ completions.
       can declare assets today; a CommonJS application imports a small ES module
       that declares them.
 
+## HTTP serving
+
+- [ ] Add route tables to `maligator:http` once a server API settles in WinterTC or a
+      clear consumer pattern emerges. A literal table can compile to a native matcher
+      that dispatches static files without entering JavaScript.
+
+- [ ] Forward WebSocket upgrades in `proxy`, so a frontend's hot-reload socket can use
+      the application's origin instead of the dev server's port.
+
 # WinterTC web platform
 
-The target is the complete ECMA-429 server surface except WebAssembly. Mal.serve
-remains a Maligator extension and does not count as global fetch conformance.
+The target is the complete ECMA-429 server surface except WebAssembly.
+`maligator:http` remains a Maligator extension and does not count as global fetch conformance.
 
 ## W1: semantic substrate and streaming boundary
 
@@ -571,9 +580,9 @@ remains a Maligator extension and does not count as global fetch conformance.
 - [ ] Complete BodyInit validation, arbitrary stream bodies, asynchronous consumption,
       BYOB, tee, and remaining Request and Response properties, and curate
       `fetch/api/response/json.any.js`. Preserve single-use and cancellation behavior.
-      Stream incoming Mal.serve bodies instead of imposing the buffered 16 MiB
-      total-size ceiling, and expose configurable budgets for callers that choose
-      buffering.
+      Stream `maligator:http` request and response bodies instead of imposing the
+      buffered 16 MiB total-size ceiling, and expose configurable budgets for callers
+      that choose buffering.
 
 - [ ] Complete Blob, File and FormData Web IDL behavior and curate the applicable
       File API, XHR and Fetch WPT. Check byte ownership, lifetime and MIME behavior

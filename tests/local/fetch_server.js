@@ -1,7 +1,9 @@
-// WinterTC fetch server smoke test. Mal.serve starts an HTTP server on an
+import { serve } from "maligator:http";
+
+// WinterTC fetch server smoke test. serve starts an HTTP server on an
 // ephemeral port; the handler returns a Response. The native test reads the port,
 // drives it with Node's fetch, and asserts.
-const server = Mal.serve({
+const server = serve({
 	port: 0,
 	async fetch(request) {
 		if (request.url.endsWith("/created")) {

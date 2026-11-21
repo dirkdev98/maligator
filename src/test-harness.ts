@@ -403,11 +403,14 @@ function linkProgramImage(
 			path.isAbsolute(file) ? path.relative(fixtureDirectory, file) : file,
 		partitionRoot: fixtureDirectory,
 		compiled,
+		// Internal fixtures exercise the production asset path, compressed copies included.
 		assets: collectEmbeddedAssets(
 			embedDeclarationsOf([
 				image.runtime,
 				...workerImages.map((worker) => worker.image.runtime),
 			]),
+			undefined,
+			true,
 		),
 		toolchainBridge: true,
 		nativeFunctionSplit: options.nativeFunctionSplit,

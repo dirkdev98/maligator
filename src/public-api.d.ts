@@ -531,7 +531,7 @@ export interface MaligatorBuildConfig {
 		};
 	};
 	surface?: {
-		/** Include Web APIs and Mal.serve. Declarations alone do not enable them.
+		/** Include Web APIs and maligator:http. Declarations alone do not enable them.
 		 * @default false
 		 */
 		webPlatform?: boolean;
@@ -566,46 +566,3 @@ export declare function defineBuild<const Config extends MaligatorBuildConfig>(
 export declare function defineLibrary<const Contract extends MaligatorLibraryContract>(
 	contract: Contract,
 ): Contract;
-
-export interface MaligatorServeOptions {
-	/** Bind address. Defaults to 0.0.0.0; use 127.0.0.1 for a local-only listener. */
-	hostname?: string;
-	/** TCP port, 0 through 65535. Defaults to 0, which asks the OS to choose a port. */
-	port?: number;
-	/** Handle a request with a Response or an awaited response. */
-	fetch(request: Request): Response | PromiseLike<Response>;
-	/** Header deadline in milliseconds; 0 also selects the default. Integer 0..2147483647.
-	 * @default 60000 */
-	headersTimeout?: number;
-	/** Request deadline in milliseconds; 0 also selects the default. Integer 0..2147483647.
-	 * @default 300000 */
-	requestTimeout?: number;
-	/** Idle keep-alive deadline in milliseconds; 0 also selects the default. Integer 0..2147483647.
-	 * @default 5000 */
-	keepAliveTimeout?: number;
-	/** Concurrent connection limit; 0 also selects the default. Integer 0..2147483647.
-	 * @default 1024 */
-	maxConnections?: number;
-}
-
-export interface MaligatorServer {
-	/** Actual bound port, including an OS-selected port when the requested port was 0. */
-	readonly port: number;
-}
-
-export interface MaligatorWebRuntime {
-	/**
-	 * Start an HTTP listener. Requires surface.webPlatform. The current handle exposes
-	 * its bound port; it has no public stop method. Invalid timeout/connection limits throw,
-	 * as does a hostname that is not ASCII or is 64 characters or longer.
-	 * @see https://maligator.ddv.tools/api/runtime#Mal.serve
-	 */
-	serve(options: MaligatorServeOptions): MaligatorServer;
-}
-
-declare global {
-	/** Web host namespace, available when surface.webPlatform is enabled.
-	 * @see https://maligator.ddv.tools/api/runtime#Mal
-	 */
-	var Mal: MaligatorWebRuntime;
-}

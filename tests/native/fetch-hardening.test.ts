@@ -70,10 +70,10 @@ function statusLine(response: string): string {
 	return response.split("\r\n", 1)[0] ?? "";
 }
 
-// Defensive regressions for the Mal.serve transport. Each case asserts that a
+// Defensive regressions for the maligator:http transport. Each case asserts that a
 // hostile or awkward message is *refused* or handled safely, and that the server
 // keeps serving afterwards — never that some smuggled request becomes reachable.
-describe("Mal.serve hardening", () => {
+describe("maligator:http serve hardening", () => {
 	let bin: string;
 	let limitsBin: string;
 	beforeAll(() => {
@@ -105,7 +105,7 @@ describe("Mal.serve hardening", () => {
 	// The transport bounds used to be reachable only from the native test main, so a
 	// JS application had no way to tighten them. Zero still selects the engine
 	// default for each field — a bound can be retuned but never switched off.
-	it("applies validated Mal.serve transport limits", async () => {
+	it("applies validated serve transport limits", async () => {
 		await withServer(limitsBin, {}, async (base) => {
 			const url = new URL(base);
 			const open = (): Promise<Socket> =>
@@ -145,7 +145,7 @@ describe("Mal.serve hardening", () => {
 			const response = await body;
 			expect(response).toContain("HTTP/1.1 200");
 			expect(response.slice(response.indexOf("\r\n\r\n") + 4)).toBe(
-				"TypeError,TypeError,TypeError,TypeError,TypeError,TypeError",
+				"RangeError,RangeError,TypeError,RangeError,RangeError,RangeError",
 			);
 			expect(held.destroyed).toBe(true);
 		});
@@ -195,7 +195,7 @@ describe("Mal.serve hardening", () => {
 		});
 	});
 
-	// Mal.serve and node:http share one llhttp parser, so the ambiguous framing that
+	// maligator:http and node:http share one llhttp parser, so the ambiguous framing that
 	// creates proxy differentials must be rejected here too, not just in the codec
 	// unit test. These are single malformed messages, not a smuggling chain.
 	it("rejects ambiguous request framing at the transport", async () => {

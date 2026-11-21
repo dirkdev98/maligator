@@ -14,7 +14,7 @@ Check resolved `CC`/`CXX`, `PATH`, Rust, and the requested target against [the r
 
 ## Unknown import or missing global
 
-If the editor cannot resolve `maligator:workers`, load [the package types](/guides/typescript). If the compiler rejects a `node:` or Web API, enable its surface and check [Compatibility](/compatibility). Enabling a surface does not add an unsupported API. `Mal` uses `surface.webPlatform`.
+If the editor cannot resolve `maligator:workers`, load [the package types](/guides/typescript). If the compiler rejects a `node:` or Web API, enable its surface and check [Compatibility](/compatibility). Enabling a surface does not add an unsupported API. `maligator:http` uses `surface.webPlatform`.
 
 ## Eval or RegExp is disabled
 
@@ -38,7 +38,7 @@ A declaration the compiler rejects names its file and line: pass a string litera
 
 ## HTTP startup fails
 
-Use an enabled Web or Node surface, a valid handler, and an available port. Bind `127.0.0.1` for local testing. Inspect startup output and the actual bound port; the experimental `Mal.serve` API does not yet consistently throw on bind failure. See [Serve HTTP](/guides/http).
+Use an enabled Web or Node surface, a valid handler, and an available port. `serve` throws when it cannot bind, naming the address and the reason, such as an address already in use. Bind `127.0.0.1` for local testing and read `server.url` for the address it reached. See [Serve HTTP](/guides/http).
 
 ## Inspect cache usage
 
