@@ -10,11 +10,21 @@ typedef struct MalEnv MalEnv;
 typedef struct MalRealm MalRealm;
 #endif
 
+typedef enum MalFunctionOwnKey {
+    MAL_FUNCTION_OWN_LENGTH = 1 << 0,
+    MAL_FUNCTION_OWN_NAME = 1 << 1,
+    MAL_FUNCTION_OWN_ARGUMENTS = 1 << 2,
+    MAL_FUNCTION_OWN_CALLER = 1 << 3,
+    MAL_FUNCTION_OWN_PROTOTYPE = 1 << 4,
+} MalFunctionOwnKey;
+
 typedef struct MalFunctionObject {
     MalObject object;
     MalObject *property_storage;
     MalValue metadata[2];
     i32 function_index;
+    // Creation-time keys retain their order even when installed lazily or moved to a table.
+    u8 initial_own_keys;
 
     // Closed images select a tagged owner, inline vector, or exact complete chain.
     // Dynamic images retain the ordinary lexical chain.
@@ -159,6 +169,7 @@ static inline MalFunctionObject *mal_function_object_new(
     function->property_storage = prototype;
     mal_object_mark_as_prototype(prototype);
     function->function_index = function_index;
+    function->initial_own_keys = MAL_FUNCTION_OWN_LENGTH | MAL_FUNCTION_OWN_NAME;
     function->creation_env = nullptr;
 #if MAL_REALMS
     function->realm = heap->current_realm;

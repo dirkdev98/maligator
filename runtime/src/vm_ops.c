@@ -647,6 +647,27 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
         return true;
     }
 
+    MalValue lazy_function_keys[3];
+    u32 lazy_function_key_count = 0;
+    u32 initial_function_metadata = 0;
+    if (mal_value_is_function_object(object_value)) {
+        u8 initial = mal_value_to_function_object(object_value)->initial_own_keys;
+        if (initial & MAL_FUNCTION_OWN_PROTOTYPE) {
+            initial_function_metadata = (u32) ((initial & MAL_FUNCTION_OWN_LENGTH) != 0) +
+                (u32) ((initial & MAL_FUNCTION_OWN_NAME) != 0);
+            if (initial & MAL_FUNCTION_OWN_ARGUMENTS) {
+                lazy_function_keys[lazy_function_key_count++] =
+                    mal_intrinsic_string_key(vm, (const byte *) "arguments").value;
+            }
+            if (initial & MAL_FUNCTION_OWN_CALLER) {
+                lazy_function_keys[lazy_function_key_count++] =
+                    mal_intrinsic_string_key(vm, (const byte *) "caller").value;
+            }
+            lazy_function_keys[lazy_function_key_count++] =
+                mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE).value;
+        }
+    }
+
     MalObject *object = mal_value_to_object(object_value);
     bool typed_array = mal_value_is_typed_array_object(object_value);
     u32 typed_array_length = typed_array
@@ -686,6 +707,7 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
 
     bool length_pending = mal_value_is_array_object(object_value);
     bool string_length_pending = string_wrapper;
+    bool lazy_function_keys_pending = lazy_function_key_count != 0;
     MalPropertyIter iter;
     mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
     MalKey key;
@@ -714,6 +736,21 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
                 keys,
                 mal_value_from_string(mal_intrinsic_ascii(vm, "length")));
             length_pending = false;
+        }
+        if (lazy_function_key_count != 0 && key.kind == MAL_KEY_STRING) {
+            if (initial_function_metadata != 0) {
+                initial_function_metadata--;
+            } else {
+                // Storage order puts the lazy keys at the time of the first access.
+                // Only surviving creation-time metadata precedes them in string-key order.
+                bool lazy_key = false;
+                for (u32 i = 0; i < lazy_function_key_count; i++) {
+                    if (lazy_function_keys_pending) mal_vm_own_keys_append(keys, lazy_function_keys[i]);
+                    lazy_key |= mal_key_value_equals(key.value, lazy_function_keys[i]);
+                }
+                lazy_function_keys_pending = false;
+                if (lazy_key) continue;
+            }
         }
         mal_vm_own_keys_append(keys, mal_vm_own_key_value(vm, key));
     }
@@ -5500,15 +5537,27 @@ MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
 
     MalFunctionKind kind = MAL_FUNCTION_KIND_NORMAL;
     bool is_class_constructor = false;
+    u8 lazy_keys = 0;
     if (function_object != nullptr) {
         i32 index = mal_function_object_function_index(function_object);
         const MalFunction *definition = &vm->runtime_image->functions[index];
         kind = definition->kind;
         is_class_constructor = definition->is_class_constructor;
+        if (!is_class_constructor && definition->has_prototype && kind != MAL_FUNCTION_KIND_ASYNC) {
+            lazy_keys = MAL_FUNCTION_OWN_PROTOTYPE;
+        }
         if (mal_vm_function_has_legacy_properties(definition)) {
             MalPropertyDesc legacy = mal_intrinsic_data_desc(mal_value_new_null(), MAL_PROPERTY_NONE);
-            mal_object_define_own(function, mal_intrinsic_string_key(vm, (const byte *) "arguments"), &legacy);
-            mal_object_define_own(function, mal_intrinsic_string_key(vm, (const byte *) "caller"), &legacy);
+            MalKey arguments = mal_intrinsic_string_key(vm, (const byte *) "arguments");
+            bool new_arguments = !mal_object_get_own(function, arguments).present;
+            if (mal_object_define_own(function, arguments, &legacy) == MAL_DEFINE_OWN_APPLIED && new_arguments) {
+                lazy_keys |= MAL_FUNCTION_OWN_ARGUMENTS;
+            }
+            MalKey caller = mal_intrinsic_string_key(vm, (const byte *) "caller");
+            bool new_caller = !mal_object_get_own(function, caller).present;
+            if (mal_object_define_own(function, caller, &legacy) == MAL_DEFINE_OWN_APPLIED && new_caller) {
+                lazy_keys |= MAL_FUNCTION_OWN_CALLER;
+            }
         }
     }
     bool is_generator_kind = kind == MAL_FUNCTION_KIND_GENERATOR || kind == MAL_FUNCTION_KIND_ASYNC_GENERATOR;
@@ -5533,7 +5582,9 @@ MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
     // non-configurable, non-enumerable); an ordinary function's is writable.
     MalPropertyDesc desc = mal_intrinsic_data_desc(
         mal_value_from_object(prototype), is_class_constructor ? 0 : MAL_PROPERTY_WRITABLE);
-    mal_object_define_own(function, key, &desc);
+    if (mal_object_define_own(function, key, &desc) == MAL_DEFINE_OWN_APPLIED && lazy_keys != 0) {
+        function_object->initial_own_keys |= lazy_keys;
+    }
     return desc.value;
 }
 

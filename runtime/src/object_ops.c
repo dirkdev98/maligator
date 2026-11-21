@@ -1088,6 +1088,16 @@ bool mal_object_delete_own(MalObject *object, MalKey key) {
         mal_invalidate_primordial_binding();
     }
 
+    if (object->header.type == MAL_HEAP_FUNCTION_OBJECT && key.kind == MAL_KEY_STRING) {
+        MalFunctionObject *function = (MalFunctionObject *) object;
+        const MalString *name = mal_value_to_string(key.value);
+        if (mal_string_equals_ascii(name, "length")) {
+            function->initial_own_keys &= ~MAL_FUNCTION_OWN_LENGTH;
+        } else if (mal_string_equals_ascii(name, "name")) {
+            function->initial_own_keys &= ~MAL_FUNCTION_OWN_NAME;
+        }
+    }
+
     // SATB: shade the deleted property's descriptor refs. mal_table_delete shades
     // the key + inline value generically, but a property's value/getter/setter
     // live in the descriptor, so shade them here where the descriptor is known.
