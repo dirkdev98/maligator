@@ -15,6 +15,9 @@ import { artifactFileDigest, artifactIdentity } from "../src/artifact-store.ts";
 import { writeFileAtomically } from "../src/atomic-file.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../src/build-config.ts";
 import { normalizeNativeFeatures } from "../src/build-flags.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-program.ts";
+import { embeddedCompilerOptions } from "../src/compiler/pipeline/embedded-compiler-options.ts";
 import {
 	buildSharedDevelopmentRunner,
 	sharedDevelopmentRunnerKey,
@@ -203,9 +206,25 @@ export function prebuildRuntime(
 		];
 		const runnerKinds = Object.keys(DEVELOPMENT_RUNNERS) as Array<DevelopmentRunnerKind>;
 		const runners: PrebuiltRuntimeManifest["runners"] = {};
+		const compilerSourceDirectory = path.join(repositoryRoot, "src");
+		const compilerEntrypoint = path.join(
+			compilerSourceDirectory,
+			"compiler/pipeline/eval-compiler-entry.mts",
+		);
+		const compilerBake = {
+			kind: "source" as const,
+			sourceDirectory: compilerSourceDirectory,
+			entrypoint: compilerEntrypoint,
+			bake: () =>
+				compileEntrypointToBuffer(compilerEntrypoint, {
+					...embeddedCompilerOptions(compilerSourceDirectory),
+					stripTypes: stripCompactTypes,
+				}),
+		};
 		for (const kind of runnerKinds) {
 			const runnerContext = {
 				...context,
+				compilerBake,
 				features: normalizeNativeFeatures({
 					...context.features,
 					developmentApiEnabled: kind === "testHost",

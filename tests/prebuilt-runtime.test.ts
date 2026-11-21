@@ -203,6 +203,27 @@ describe("prebuilt runtime archives", () => {
 });
 
 describe("prebuilt development runners", () => {
+	it("selects the same runner for eval-enabled and eval-disabled images", () => {
+		const disabled = fixtureContext("producer");
+		const enabled = {
+			...disabled,
+			features: buildDerivationFromConfig(resolveBuildConfig({ engine: { eval: true } }))
+				.features,
+		};
+		const directory = stageRelease(
+			runtimeReleaseArchiveIdentity(disabled),
+			sharedDevelopmentRunnerKey(enabled, macTarget),
+		);
+		expect(
+			readPrebuiltDevelopmentRunner(
+				directory,
+				macTarget,
+				"standalone",
+				sharedDevelopmentRunnerKey(disabled, macTarget),
+			),
+		).toBe(path.join(directory, DEVELOPMENT_RUNNERS.standalone));
+	});
+
 	it("selects a runner from the same sources under different paths and tools", () => {
 		const producer = fixtureContext("producer");
 		const consumer = fixtureContext("consumer");

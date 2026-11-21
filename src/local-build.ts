@@ -763,6 +763,8 @@ export function sharedDevelopmentRunnerFeatures(
 ): NativeBuildContext["features"] {
 	return normalizeNativeFeatures({
 		...features,
+		// The image gates eval, so both policies can use a runner with the compiler.
+		evalEnabled: true,
 		webPlatformEnabled: true,
 		nodeEnabled: true,
 		temporalEnabled: true,

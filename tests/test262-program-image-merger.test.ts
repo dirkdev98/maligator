@@ -79,6 +79,24 @@ function image(
 }
 
 describe("Test262 VM image merger", () => {
+	it("retains the engine policy shared by all inputs", () => {
+		const enginePolicy = { regexp: false, eval: false };
+		const { image: merged } = mergeProgramImages([
+			image({ enginePolicy }),
+			image({ enginePolicy: { ...enginePolicy } }),
+		]);
+		expect(merged.runtime.enginePolicy).toEqual(enginePolicy);
+	});
+
+	it.each([
+		{ regexp: false, eval: true },
+		{ regexp: true, eval: false },
+	])("rejects an input with a different engine policy (%o)", (enginePolicy) => {
+		expect(() => mergeProgramImages([image(), image({ enginePolicy })])).toThrow(
+			"VM image engine policies do not match",
+		);
+	});
+
 	it.each([
 		'function target(input){return Object.is(input,"ready");}',
 		'function target(input){return Object.is("ready",input);}',

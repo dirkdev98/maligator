@@ -554,6 +554,9 @@ function sharedSemanticFacts(
 
 	const immutableGlobalBindings = new Map<string, CompilerFact<"immutable">>();
 	for (const binding of primordialGlobalBindings) {
+		// The disabled policy leaves the RegExp slot undefined. An intrinsic load
+		// for the global binding would advertise the catalog's callable constructor.
+		if (binding.feature === "regexp" && !world.ecmaFeatures.regexp) continue;
 		immutableGlobalBindings.set(
 			binding.name,
 			world.primordialPolicy === "locked"

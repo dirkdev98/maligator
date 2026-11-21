@@ -10,7 +10,10 @@ import type {
 	NativeRecordLayout,
 	VmRegion,
 } from "../compiler/target/program-image.ts";
-import { rebaseVmValueOperand } from "../compiler/target/runtime-image.ts";
+import {
+	enginePolicyBits,
+	rebaseVmValueOperand,
+} from "../compiler/target/runtime-image.ts";
 import type { BytecodeInstruction } from "../compiler/target/runtime-image.ts";
 
 export interface MergedProgramImage {
@@ -674,8 +677,13 @@ function copyRecordUses(uses: NativeRecordUses): NativeRecordUses {
 }
 
 export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramImage {
+	const enginePolicy = images[0]?.runtime.enginePolicy;
+	const policyBits = enginePolicyBits({ enginePolicy });
+	if (images.some(({ runtime }) => enginePolicyBits(runtime) !== policyBits))
+		throw new Error("VM image engine policies do not match");
 	const mergedNativeFunctions: Array<ProgramImage["native"]["functions"][number]> = [];
 	const mergedRuntime: ProgramImage["runtime"] = {
+		...(enginePolicy === undefined ? {} : { enginePolicy: { ...enginePolicy } }),
 		entrypointPath: images[0]?.runtime.entrypointPath ?? "",
 		functionCount: 0,
 		functions: [],
