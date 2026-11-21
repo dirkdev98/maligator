@@ -1,6 +1,6 @@
 import { resolveBuildConfig } from "../build-config-values.ts";
 
-export const EXPLORER_SCHEMA = 5;
+export const EXPLORER_SCHEMA = 6;
 export const EXPLORER_SOURCE_PATH = "output-explorer/snippet.ts";
 export const EXPLORER_LIMITS = Object.freeze({
 	sourceBytes: 64 * 1024,
@@ -21,8 +21,6 @@ export interface ExplorerConfig {
 	realms: boolean;
 	temporal: boolean;
 	intl: boolean;
-	webPlatform: boolean;
-	node: boolean;
 }
 
 export const EXPLORER_DEFAULT_CONFIG: Readonly<ExplorerConfig> = Object.freeze({
@@ -32,8 +30,6 @@ export const EXPLORER_DEFAULT_CONFIG: Readonly<ExplorerConfig> = Object.freeze({
 	realms: false,
 	temporal: false,
 	intl: false,
-	webPlatform: false,
-	node: false,
 });
 
 export function normalizeExplorerConfig(value: unknown): ExplorerConfig {
@@ -54,9 +50,7 @@ export function normalizeExplorerConfig(value: unknown): ExplorerConfig {
 			key === "regexp" ||
 			key === "realms" ||
 			key === "temporal" ||
-			key === "intl" ||
-			key === "webPlatform" ||
-			key === "node"
+			key === "intl"
 		) {
 			if (typeof entry !== "boolean") throw new Error(`Expected ${key} to be on or off`);
 			config[key] = entry;
@@ -76,10 +70,6 @@ export function explorerBuildConfig(config: ExplorerConfig) {
 			realms: config.realms,
 			temporal: config.temporal,
 			intl: { enabled: config.intl },
-		},
-		surface: {
-			webPlatform: config.webPlatform,
-			node: config.node,
 		},
 	});
 }

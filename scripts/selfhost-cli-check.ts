@@ -154,7 +154,6 @@ const isolatedEnv = {
 	PATH: tools,
 	CC: path.join(tools, "cc"),
 	CXX: path.join(tools, "c++"),
-	SELFHOST_CLI_NODE: "1",
 };
 const testOnlyEnv = {
 	PATH: noTools,
@@ -293,14 +292,11 @@ function checkProfile(directory: string, command: "run" | "test"): void {
 		throw new Error(`profile ${command} did not publish a valid completed capture`);
 }
 
-function checkProfileCommands({
-	engine,
-	surface,
-}: Pick<MaligatorBuildConfig, "engine" | "surface">): void {
+function checkProfileCommands({ engine }: Pick<MaligatorBuildConfig, "engine">): void {
 	const profileConfig = "profile.build.mts";
 	writeFileSync(
 		path.join(project, profileConfig),
-		`export default ${JSON.stringify({ entry: "profile-entry.mts", engine, surface })};\n`,
+		`export default ${JSON.stringify({ entry: "profile-entry.mts", engine })};\n`,
 	);
 	writeFileSync(
 		path.join(project, "profile-entry.mts"),
@@ -1079,7 +1075,7 @@ try {
 
 	writeFileSync(
 		configPath,
-		`import { defineBuild } from "@maligator/cli";\n\nconst nodeSurface: boolean = process.env.SELFHOST_CLI_NODE === "1";\nexport default defineBuild({\n\tentry: ${JSON.stringify(fixture)},\n\toutputName: "selfhost-cli-app",\n\tengine: { eval: true, regexp: false, intl: { enabled: false } },\n\tsurface: { webPlatform: false, node: nodeSurface },\n});\n`,
+		`import { defineBuild } from "@maligator/cli";\nexport default defineBuild({\n\tentry: ${JSON.stringify(fixture)},\n\toutputName: "selfhost-cli-app",\n\tengine: { eval: true, regexp: false, intl: { enabled: false } },\n});\n`,
 	);
 	writeFileSync(
 		path.join(project, "payload.bin"),
@@ -1097,7 +1093,7 @@ try {
 		developmentConfigPath,
 		`export default {
 	entry: "development.mts",
-	surface: { webPlatform: true, node: true },
+
 };
 `,
 	);
@@ -1110,7 +1106,7 @@ try {
 		`export default {
 	entry: "development.mts",
 	engine: { primordials: "mutable" },
-	surface: { webPlatform: true, node: true },
+
 };
 `,
 	);
@@ -1170,7 +1166,7 @@ setTimeout(() => {
 	entry: "workers.mts",
 	outputName: "selfhost-workers",
 	engine: { eval: false, regexp: false, intl: { enabled: false } },
-	surface: { webPlatform: false, node: true },
+
 };
 `,
 	);
@@ -1252,7 +1248,7 @@ try {
 		);
 		writeFileSync(
 			path.join(project, rootsConfig),
-			'export default {entry:"production-roots.mts",outputName:"selfhost-production-roots",surface:{node:false,webPlatform:false},engine:{eval:false,regexp:false,intl:{enabled:false}}};\n',
+			'export default {entry:"production-roots.mts",outputName:"selfhost-production-roots",engine:{eval:false,regexp:false,intl:{enabled:false}}};\n',
 		);
 		for (const [name, increment] of [
 			["first", 38],
@@ -1706,7 +1702,7 @@ test("passes a pointer-valued constant through a macro alias", () => {
 	entry: "production-entry.mts",
 	outputName: "selfhost-cli-production",
 	engine: { eval: true, regexp: true, intl: { enabled: false } },
-	surface: { webPlatform: false, node: true },
+
 };
 `,
 		);

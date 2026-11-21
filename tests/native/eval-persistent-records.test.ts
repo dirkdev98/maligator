@@ -25,7 +25,7 @@ describe("persistent direct eval records", () => {
 			fixture,
 			name: "eval-records",
 			outDir,
-			config: resolveBuildConfig({ engine: { eval: true }, surface: { node: true } }),
+			config: resolveBuildConfig({ engine: { eval: true } }),
 		});
 		const sanitized = ["MAL_ASAN", "MAL_UBSAN", "MAL_TSAN"].some(
 			(key) => process.env[key] === "1",

@@ -22,8 +22,6 @@ describe("postgres.js package loading", () => {
 				name: `postgres-${fixture}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
-				webPlatformEnabled: false,
 			});
 			return [compiled, interpreted];
 		});

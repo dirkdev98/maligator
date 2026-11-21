@@ -21,7 +21,6 @@ describe("Node deep equality engine", () => {
 				name: `node-deep-equal-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

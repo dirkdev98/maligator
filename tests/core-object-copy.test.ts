@@ -49,7 +49,7 @@ describe("initial object spread", () => {
 			console.log(copy(Date.now()));`,
 			);
 			const image = compileEntrypoint(entry, {
-				buildConfig: resolveBuildConfig({ surface: { node: true } }),
+				buildConfig: resolveBuildConfig({}),
 				optimization: "full",
 			});
 			const operations = image.runtime.functions.flatMap((fn) => fn.instructions);

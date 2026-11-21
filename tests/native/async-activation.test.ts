@@ -26,7 +26,7 @@ beforeAll(() => {
 			name: `async-activation-${primordials}`,
 			mainFile: HOST_MAIN,
 			outDir,
-			config: resolveBuildConfig({ surface: { node: true }, engine: { primordials } }),
+			config: resolveBuildConfig({ engine: { primordials } }),
 		});
 		binaries.push(pair.compiled, pair.interpreted);
 	}
@@ -40,7 +40,6 @@ beforeAll(() => {
 		mainFile: HOST_MAIN,
 		outDir,
 		config: resolveBuildConfig({
-			surface: { node: true },
 			engine: { primordials: "mutable" },
 		}),
 	});

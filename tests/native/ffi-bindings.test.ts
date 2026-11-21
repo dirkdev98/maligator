@@ -147,13 +147,12 @@ describe("C library bindings", () => {
 	}, 300_000);
 
 	it("releases a dropped handle with collect when the garbage collector reclaims it", () => {
-		const { engine, surface } = preparedNativeEvalConfig({ node: true });
+		const { engine } = preparedNativeEvalConfig();
 		writeFileSync(
 			path.join(project, "collect.build.ts"),
 			`export default ${JSON.stringify({
 				entry: "collect.ts",
 				engine,
-				surface,
 				ffi: { shapes: { contract: "shapes.ffi.ts" } },
 			})};\n`,
 		);
@@ -169,7 +168,7 @@ describe("C library bindings", () => {
 			path.join(project, "async.build.ts"),
 			`export default ${JSON.stringify({
 				entry: "async.ts",
-				surface: { webPlatform: true },
+
 				ffi: { shapes: { contract: "shapes.ffi.ts" } },
 			})};\n`,
 		);

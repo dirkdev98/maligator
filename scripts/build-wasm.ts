@@ -34,7 +34,6 @@ if (values.help === true) {
 						temporal: false,
 						intl: { enabled: false },
 					},
-					surface: { webPlatform: false, node: false },
 				})
 			: loadBuildConfig(values.config);
 	const result = buildWasmEngine({

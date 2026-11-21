@@ -26,7 +26,6 @@ beforeAll(() => {
 			nativeStackRoots: "precise",
 			config: resolveBuildConfig({
 				engine: { primordials: "mutable", realms, eval: false },
-				surface: { node: true },
 			}),
 		});
 		realmPairs.push(built);

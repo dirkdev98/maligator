@@ -22,7 +22,6 @@ beforeAll(() => {
 		environment: { ...process.env, MAL_PERF_STATS: "1" },
 		config: resolveBuildConfig({
 			engine: { primordials: "mutable" },
-			surface: { node: true },
 		}),
 	});
 });

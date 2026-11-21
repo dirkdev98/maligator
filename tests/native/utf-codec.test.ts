@@ -20,7 +20,6 @@ describe("shared UTF codecs", () => {
 			name: "utf-codec",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 	}, 600_000);
 

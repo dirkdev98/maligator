@@ -20,7 +20,6 @@ it("loads a large worker manifest and releases its wires after successful and du
 	try {
 		const config = resolveBuildConfig({
 			engine: { eval: false, realms: false, regexp: false, intl: { enabled: false } },
-			surface: { node: false, webPlatform: false },
 		});
 		const image = compileEntrypoint("tests/local/fibertest_stub.js", {
 			buildConfig: config,

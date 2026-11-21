@@ -11,7 +11,7 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-const config = resolveBuildConfig({ surface: { webPlatform: true, node: false } });
+const config = resolveBuildConfig({});
 
 for (const compiled of [true, false]) {
 	it(`keeps independent root state after the last Worker joins (${compiled ? "native" : "interpreted"})`, () => {

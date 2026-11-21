@@ -21,7 +21,6 @@ beforeAll(() => {
 		name: "node-fs-bigint-stats",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 		evalEnabled: false,
 		realmsEnabled: false,
 		intlEnabled: false,

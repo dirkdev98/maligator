@@ -139,14 +139,12 @@ function prepared(input: TestCompilationInput): PreparedTestApplication {
 	);
 	return {
 		image: {
-			schema: 1,
+			schema: 2,
 			wires: identities.map((dependency) => ({
 				path: `${dependency.path}.malw`,
 				sha256: dependency.digest,
 			})),
 			entryPath: input.files[0]!,
-			node: false,
-			webPlatform: false,
 			engine: {
 				primordials: "locked",
 				eval: false,

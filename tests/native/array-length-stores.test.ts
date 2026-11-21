@@ -29,14 +29,12 @@ describe("stores of an array length", () => {
 			name: "array-length-stores-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "array-length-stores-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

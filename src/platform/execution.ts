@@ -72,7 +72,6 @@ export function resolveExecution(
 					languages: [...config.engine.intl.languages],
 				},
 			},
-			surface: { webPlatform: config.surface.webPlatform, node: config.surface.node },
 			modules: { aliases: { ...config.modules.aliases } },
 		},
 	};

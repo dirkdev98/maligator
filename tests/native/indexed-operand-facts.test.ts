@@ -33,7 +33,6 @@ it.each(["mutable", "locked"] as const)(
 			});
 			const config = resolveBuildConfig({
 				engine: { primordials, eval: false, realms: false },
-				surface: { node: true },
 			});
 			const { programImage } = compileBuildFrontend({
 				entrypoint: resolve(fixture),

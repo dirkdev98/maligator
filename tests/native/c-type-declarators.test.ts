@@ -26,7 +26,6 @@ it("preserves nested C declarators and optional bounds across backends and colle
 					realms: false,
 					intl: { enabled: false },
 				},
-				surface: { node: false, webPlatform: false },
 			}),
 		});
 		for (const binary of [pair.compiled, pair.interpreted])

@@ -162,6 +162,14 @@ function packageVersion(): string {
 	return value;
 }
 
+function nodeDeclarationVersion(): string {
+	const dependencies = readJson(packagePath).devDependencies as Record<string, unknown>;
+	const version = dependencies["@types/node"];
+	if (typeof version !== "string")
+		throw new Error("package.json#devDependencies needs @types/node");
+	return version;
+}
+
 function generatedVersionSource(version: string): string {
 	return `// Generated from package.json by scripts/release.ts. Do not edit by hand.
 export const MALIGATOR_VERSION = ${JSON.stringify(version)};
@@ -256,6 +264,7 @@ export function createLauncherPackageJson(
 				import: "./index.js",
 			},
 		},
+		dependencies: { "@types/node": nodeDeclarationVersion() },
 		optionalDependencies: Object.fromEntries(
 			platformPackageNames.map((packageName) => [packageName, version]),
 		),
@@ -687,10 +696,7 @@ function smokePackedLauncher(
 		if (output.trim() !== version) {
 			throw new Error(`packed launcher reported ${output.trim()}, expected ${version}`);
 		}
-		writeFileSync(
-			path.join(project, "maligator.build.ts"),
-			"export default { surface: { node: true, webPlatform: true } };\n",
-		);
+		writeFileSync(path.join(project, "maligator.build.ts"), "export default {};\n");
 		writeFileSync(
 			path.join(project, "main.mts"),
 			'import { createServer } from "node:http";\n' +
@@ -706,10 +712,7 @@ function smokePackedLauncher(
 		mkdirSync(tools);
 		symlinkSync(process.execPath, path.join(tools, "node"));
 		const runConfig = path.join(project, "run.build.ts");
-		writeFileSync(
-			runConfig,
-			"export default { surface: { node: true, webPlatform: true }, engine: { intl: { enabled: true } } };\n",
-		);
+		writeFileSync(runConfig, "export default { engine: { intl: { enabled: true } } };\n");
 		const toolchainFreeEnvironment = {
 			...env,
 			PATH: tools,

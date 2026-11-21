@@ -30,7 +30,6 @@ describe("regexp capture span continuations", () => {
 				mainFile: HOST_MAIN,
 				config: resolveBuildConfig({
 					engine: { primordials, eval: false, realms: false },
-					surface: { node: true },
 				}),
 				environment: { ...process.env, MAL_PERF_STATS: "1" },
 			});

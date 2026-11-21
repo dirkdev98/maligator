@@ -19,7 +19,6 @@ it("restores oversized profiling metadata after the worker replaces its sidecar"
 			mainFile: HOST_MAIN,
 			config: resolveBuildConfig({
 				engine: { eval: false, realms: false, intl: { enabled: false } },
-				surface: { node: true, webPlatform: false },
 			}),
 		});
 		for (const binary of [pair.compiled, pair.interpreted])

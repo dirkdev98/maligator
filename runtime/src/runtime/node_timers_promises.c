@@ -451,7 +451,7 @@ void mal_host_install_node_timers_promises(
     if (mal_node_module_install_cached(vm, "node:timers/promises", slots, count)) return;
     (void) launch;
     MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
-    mal_host_timers_install_node(vm, global_this);
+    mal_host_timers_install(vm, global_this);
     MalValue roots[] = {
         mal_value_from_object(mal_intrinsic_new_object(vm)),
         mal_value_from_object(mal_intrinsic_new_object(vm)),

@@ -81,7 +81,7 @@ const { primordials, realms } = preparedNativeEvalConfig().engine;
 const files = {
 	"package.json": `{"type":"module"}\n`,
 	// Use the eval compiler variant native setup has already built.
-	"maligator.build.mjs": `export default {\n\tengine: { primordials: "${primordials}", realms: ${realms} },\n\tsurface: { node: true },\n};\n`,
+	"maligator.build.mjs": `export default {\n\tengine: { primordials: "${primordials}", realms: ${realms} },\n};\n`,
 	"node_modules/counter/package.json": `{"type":"module","exports":"./index.js"}\n`,
 	"node_modules/counter/index.js":
 		"export let count = 0;\nexport function increment() { return ++count; }\n",

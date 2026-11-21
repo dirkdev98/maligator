@@ -39,11 +39,17 @@ declare module "maligator:internal/workers" {
 		_discard(ticket: number): boolean;
 		addEventListener(
 			type: "message",
-			listener: (event: MessageEvent<Receive>) => void | Promise<void>,
+			listener: (
+				event: Omit<MessageEvent, "data"> & { readonly data: Receive },
+			) => void | Promise<void>,
 			options?: AddEventListenerOptions | boolean,
 		): void;
-		onmessage: ((event: MessageEvent<Receive>) => void) | null;
-		onmessageerror: ((event: MessageEvent<unknown>) => void) | null;
+		onmessage:
+			| ((event: Omit<MessageEvent, "data"> & { readonly data: Receive }) => void)
+			| null;
+		onmessageerror:
+			| ((event: Omit<MessageEvent, "data"> & { readonly data: unknown }) => void)
+			| null;
 		start(): void;
 		close(): void;
 		ref(): MessagePort<Send, Receive>;

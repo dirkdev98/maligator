@@ -29,14 +29,12 @@ describe("closures entered without a function object", () => {
 			name: "native-direct-closures-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "native-direct-closures-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

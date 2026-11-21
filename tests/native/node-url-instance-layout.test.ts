@@ -26,8 +26,6 @@ describe("legacy URL instance layout", () => {
 			name: "url-instance-layout",
 			outDir: directory,
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
-			webPlatformEnabled: false,
 		});
 		binaries = [pair.compiled, pair.interpreted];
 	}, 600_000);

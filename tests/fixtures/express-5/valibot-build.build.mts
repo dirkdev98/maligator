@@ -6,7 +6,4 @@ export default {
 	engine: {
 		eval: true,
 	},
-	surface: {
-		node: true,
-	},
 };

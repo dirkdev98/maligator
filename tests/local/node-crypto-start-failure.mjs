@@ -1,4 +1,4 @@
-// Transient `crypto.argon2` start failures (behind surface.node).
+// Transient `crypto.argon2` start failures.
 //
 // A call that has already accepted a callback must report a transient host
 // condition through that callback, exactly once, rather than throwing out of a

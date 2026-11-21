@@ -25,7 +25,6 @@ beforeAll(() => {
 		name: "options",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 	});
 	const build = (compiled: boolean): string =>
 		buildNativeBinary({
@@ -33,8 +32,6 @@ beforeAll(() => {
 			name: compiled ? "compiled" : "interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
-			webPlatformEnabled: true,
 			compiled,
 		});
 	binaries = [build(true), build(false)];

@@ -1,3 +1,4 @@
+#include "atomics_async.h"
 #include "vm.h"
 
 #include <pthread.h>
@@ -90,7 +91,8 @@ int main(void) {
     mal_vm_init(&vm, &mal_runtime_image);
     mal_register_compiled_worker_entries();
     if (mal_host_attach(&vm) == nullptr) return 2;
-    mal_runtime_personality_install(&vm, true, false);
+    mal_atomics_async_install(&vm, false);
+    mal_host_install_web_personality(&vm, nullptr, 0, nullptr);
     const MalHostLaunchContext launch = {.script_path = mal_runtime_image.entry_path};
     mal_vm_run_host_installs(&vm, &launch);
     MalObject *global = mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);

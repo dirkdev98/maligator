@@ -364,7 +364,7 @@ describe("production toolchain selection", () => {
 					runtimeDirectory,
 					cacheDirectory: options.cacheDirectory,
 					environment: options.env,
-					features: { evalEnabled: false, webPlatformEnabled: false },
+					features: { evalEnabled: false, usesHost: false },
 					production: true,
 				}),
 				name: "pinned-zig-output",
@@ -590,7 +590,7 @@ exit 7
 			toolchain,
 			runtimeDirectory,
 			cacheDirectory: path.join(fake.root, "cross-cache"),
-			features: { evalEnabled: false, webPlatformEnabled: false },
+			features: { evalEnabled: false, usesHost: false },
 			production: true,
 		});
 		expect(context.plan).toMatchObject({ mode: "production", lto: true, strip: true });
@@ -880,7 +880,7 @@ printf '!<arch>\\n' > "$2"
 			cacheDirectory: path.join(fake.root, "cache"),
 			features: {
 				evalEnabled: false,
-				webPlatformEnabled: false,
+				usesHost: false,
 			},
 			onBuildPhase: (event) => phases.push(event),
 			onCommand: (event) => commands.push(event),
@@ -1013,7 +1013,7 @@ printf '!<arch>\\n' > "$2"
 		const context = resolveNativeBuildContext({
 			toolchain: report.toolchain!,
 			cacheDirectory: path.join(fake.root, "cache"),
-			features: { evalEnabled: false, webPlatformEnabled: false },
+			features: { evalEnabled: false, usesHost: false },
 		});
 		const events: Array<GeneratedObjectMeasurement> = [];
 		const build = (secondSource: string) =>
@@ -1084,7 +1084,7 @@ printf '!<arch>\\n' > "$2"
 			toolchain,
 			runtimeDirectory,
 			cacheDirectory: path.join(fake.root, "stable-unit-cache"),
-			features: { evalEnabled: false, webPlatformEnabled: false },
+			features: { evalEnabled: false, usesHost: false },
 		});
 		const events: Array<GeneratedObjectMeasurement> = [];
 		const build = (codeSource: string) =>
@@ -1168,7 +1168,7 @@ printf '!<arch>\\n' > "$2"
 				cacheDirectory: path.join(fake.root, "cache"),
 				features: {
 					evalEnabled: false,
-					webPlatformEnabled: false,
+					usesHost: false,
 					intlFeatures: ["intl-segmenter"],
 				},
 				onCommand: ({ tool, args }) => {
@@ -1241,7 +1241,7 @@ printf '!<arch>\\n' > "$2"
 			toolchain: toolchain!,
 			production: true,
 			cacheDirectory: path.join(fake.root, "cache"),
-			features: { evalEnabled: false, webPlatformEnabled: false },
+			features: { evalEnabled: false, usesHost: false },
 			onCacheEvent: (event) => {
 				if (event.artifact === "binary") binaryHits.push(event.hit);
 			},
@@ -1289,7 +1289,7 @@ printf '!<arch>\\n' > "$2"
 			runtimeDirectory,
 			plan: development,
 			cacheDirectory: path.join(fake.root, "development-cache"),
-			features: { evalEnabled: false, webPlatformEnabled: false },
+			features: { evalEnabled: false, usesHost: false },
 		});
 		buildLocalBinary({
 			context: developmentContext,
@@ -1309,7 +1309,7 @@ printf '!<arch>\\n' > "$2"
 			runtimeDirectory,
 			plan: production,
 			cacheDirectory: path.join(fake.root, "production-cache"),
-			features: { evalEnabled: false, webPlatformEnabled: false },
+			features: { evalEnabled: false, usesHost: false },
 		});
 		buildLocalBinary({
 			context: productionContext,
@@ -1341,7 +1341,7 @@ printf '!<arch>\\n' > "$2"
 			toolchain: report.toolchain!,
 			plan: selectNativeBuildPlan(report.toolchain!, true),
 			cacheDirectory: path.join(fake.root, "cache"),
-			features: { evalEnabled: false, webPlatformEnabled: false },
+			features: { evalEnabled: false, usesHost: false },
 		});
 		writeFileSync(fake.logPath, "");
 
@@ -1376,7 +1376,7 @@ printf '!<arch>\\n' > "$2"
 					toolchain: report.toolchain!,
 					production: true,
 					cacheDirectory: path.join(fake.root, "cache"),
-					features: { evalEnabled: false, webPlatformEnabled: false },
+					features: { evalEnabled: false, usesHost: false },
 					environment: { ...fake.env, [sanitizer]: "1" },
 				});
 				writeFileSync(fake.logPath, "");
@@ -1503,7 +1503,7 @@ printf '!<arch>\\n' > "$2"
 				toolchain,
 				runtimeDirectory,
 				cacheDirectory: path.join(fake.root, "sqlite-cache"),
-				features: { evalEnabled: false, nodeEnabled: false, webPlatformEnabled: false },
+				features: { evalEnabled: false, usesHost: false },
 			}),
 		);
 		const invocations = readFileSync(fake.logPath, "utf-8").split("\n");
@@ -1538,7 +1538,7 @@ printf '!<arch>\\n' > "$2"
 						toolchain,
 						runtimeDirectory,
 						cacheDirectory: path.join(fake.root, "sections-cache"),
-						features: { evalEnabled: false, webPlatformEnabled: false },
+						features: { evalEnabled: false, usesHost: false },
 					}),
 				);
 				const engineCompile = readFileSync(fake.logPath, "utf-8")
@@ -1597,7 +1597,7 @@ printf '!<arch>\\n' > "$2"
 			runtimeDirectory,
 			cacheDirectory: path.join(fake.root, "snapshot-cache"),
 			environment,
-			features: { evalEnabled: false, webPlatformEnabled: false },
+			features: { evalEnabled: false, usesHost: false },
 		});
 		environment.MAL_TEST_BUILD_ENV = "mutated";
 		ensureNativeArtifacts(context);
@@ -1623,7 +1623,7 @@ printf '!<arch>\\n' > "$2"
 				runtimeDirectory,
 				cacheDirectory: path.join(fake.root, "environment-cache"),
 				environment: { ...fake.env, RUSTFLAGS: rustflags },
-				features: { evalEnabled: false, webPlatformEnabled: false },
+				features: { evalEnabled: false, usesHost: false },
 			});
 		const first = context("-Copt-level=1");
 		const second = context("-Copt-level=2");
@@ -1663,12 +1663,11 @@ printf '!<arch>\\n' > "$2"
 
 		const lean = build(toolchain(false), {
 			intlFeatures: ["intl-collator"],
-			webPlatformEnabled: false,
+			usesHost: false,
 			regexpEnabled: false,
 		});
 		const hosted = build(toolchain(true), {
-			nodeEnabled: true,
-			webPlatformEnabled: true,
+			usesHost: true,
 		});
 
 		expect(hosted.cacheKey).toBe(lean.cacheKey);
@@ -1679,7 +1678,7 @@ printf '!<arch>\\n' > "$2"
 			path.join(runtimeDirectory, "rust/src/lib.rs"),
 			"pub fn value() -> i32 { 2 }\n",
 		);
-		const changedSource = build(toolchain(false), { webPlatformEnabled: false });
+		const changedSource = build(toolchain(false), { usesHost: false });
 		expect(changedSource.cacheKey).not.toBe(lean.cacheKey);
 		expect(changedSource.targetDirectory).not.toBe(lean.targetDirectory);
 		expect(cargoCompileCount()).toBe(2);
@@ -1688,18 +1687,16 @@ printf '!<arch>\\n' > "$2"
 	it("derives coherent C defines and Cargo features from one feature spec", () => {
 		const features = normalizeNativeFeatures({
 			intlFeatures: ["intl-segmenter"],
-			webPlatformEnabled: false,
+			usesHost: false,
 			regexpEnabled: false,
 		});
 		expect(features.cargoFeatures).toEqual(["intl-segmenter", "temporal"]);
 	});
 
-	it("compiles the same C runtime for every host surface and RegExp or eval policy", () => {
+	it("compiles the same C runtime for with or without host installers, RegExp, and eval", () => {
 		const defines = [
-			{ webPlatformEnabled: false },
-			{ webPlatformEnabled: true },
-			{ nodeEnabled: true },
-			{ webPlatformEnabled: true, nodeEnabled: true },
+			{ usesHost: false },
+			{ usesHost: true },
 			{ regexpEnabled: false },
 			{ evalEnabled: false },
 		].map((features) => normalizeNativeFeatures(features).cDefines);
@@ -1720,10 +1717,10 @@ printf '!<arch>\\n' > "$2"
 				evalEnabled: false,
 				realmsEnabled: false,
 				intlEnabled: false,
-				webPlatformEnabled: false,
+				usesHost: true,
 				regexpEnabled: false,
 				temporalEnabled: false,
-				nodeEnabled: true,
+
 				intlFeatures: [],
 			});
 			const context = resolveNativeBuildContext({
@@ -1756,7 +1753,7 @@ printf '!<arch>\\n' > "$2"
 				toolchain,
 				runtimeDirectory,
 				cacheDirectory: path.join(fake.root, "cache"),
-				features: { evalEnabled: false, webPlatformEnabled: false },
+				features: { evalEnabled: false, usesHost: false },
 			});
 			const options = { context, name: "streamed", outDir: fake.root };
 			const first = "int first;\n";
@@ -1806,7 +1803,7 @@ printf '!<arch>\\n' > "$2"
 			environment,
 			features: {
 				evalEnabled: false,
-				webPlatformEnabled: false,
+				usesHost: false,
 			},
 			compilerBake: {
 				kind: "source",
@@ -1887,7 +1884,7 @@ ${compilerScript(`clang version ${major}.0.0`, fake.logPath)}`,
 					runtimeDirectory,
 					cacheDirectory: path.join(fake.root, "native-cache"),
 					environment: fake.env,
-					features: { evalEnabled: true, webPlatformEnabled: false },
+					features: { evalEnabled: true, usesHost: false },
 					compilerBake: {
 						kind: "bytes",
 						bytes: new Uint8Array([0, 127, 128, 255]),
@@ -1929,7 +1926,7 @@ ${compilerScript(`clang version ${major}.0.0`, fake.logPath)}`,
 					runtimeDirectory,
 					cacheDirectory: path.join(fake.root, "snapshot-cache"),
 					environment,
-					features: { evalEnabled: false, webPlatformEnabled: false },
+					features: { evalEnabled: false, usesHost: false },
 					onCommand: ({ args }) => {
 						if (args.includes("-c")) {
 							compiled.push(args[args.indexOf("-o") + 1]!);
@@ -1968,7 +1965,7 @@ ${compilerScript(`clang version ${major}.0.0`, fake.logPath)}`,
 					toolchain,
 					runtimeDirectory,
 					cacheDirectory: path.join(fake.root, "changing-runtime-cache"),
-					features: { evalEnabled: false, webPlatformEnabled: false },
+					features: { evalEnabled: false, usesHost: false },
 					onBuildPhase: ({ phase }) => {
 						if (phase === "runtime C projection") {
 							writeFileSync(
@@ -2015,7 +2012,7 @@ ${compilerScript(`clang version ${major}.0.0`, fake.logPath)}`,
 					features: {
 						evalEnabled: false,
 						realmsEnabled,
-						webPlatformEnabled: false,
+						usesHost: false,
 					},
 					onBuildPhase: (event) => phases.push(event),
 				}),
@@ -2059,7 +2056,7 @@ ${compilerScript(`clang version ${major}.0.0`, fake.logPath)}`,
 					features: {
 						evalEnabled: false,
 						realmsEnabled: false,
-						webPlatformEnabled: false,
+						usesHost: false,
 					},
 				}),
 			);
@@ -2094,7 +2091,7 @@ ${compilerScript(`clang version ${major}.0.0`, fake.logPath)}`,
 					features: {
 						evalEnabled: false,
 						realmsEnabled: false,
-						webPlatformEnabled: false,
+						usesHost: false,
 					},
 				}),
 			);
@@ -2123,7 +2120,7 @@ ${compilerScript(`clang version ${major}.0.0`, fake.logPath)}`,
 			runtimeDirectory,
 			cacheDirectory: path.join(fake.root, "rust-manifest-cache"),
 			environment: fake.env,
-			features: { evalEnabled: false, webPlatformEnabled: false },
+			features: { evalEnabled: false, usesHost: false },
 		});
 		const cargoBuildCount = (): number =>
 			readFileSync(fake.logPath, "utf-8")
@@ -2161,7 +2158,7 @@ ${compilerScript(`clang version ${major}.0.0`, fake.logPath)}`,
 				cacheDirectory: process.env.MAL_TEST_CACHE,
 				features: {
 					evalEnabled: false,
-					webPlatformEnabled: false,
+					usesHost: false,
 				},
 			});
 			ensureNativeArtifacts(context);
@@ -2198,7 +2195,7 @@ ${compilerScript(`clang version ${major}.0.0`, fake.logPath)}`,
 				cacheDirectory,
 				features: {
 					evalEnabled: false,
-					webPlatformEnabled: false,
+					usesHost: false,
 				},
 				onCacheEvent: (event) => {
 					if (event.artifact === "runtime") runtimeEvents.push(event.hit);
@@ -2241,7 +2238,7 @@ ${compilerScript(`clang version ${major}.0.0`, fake.logPath)}`,
 			cacheDirectory: path.join(fake.root, "event-cache"),
 			features: {
 				evalEnabled: false,
-				webPlatformEnabled: false,
+				usesHost: false,
 			},
 			onCacheEvent: (event: {
 				artifact: "runtime" | "rust" | "binary";

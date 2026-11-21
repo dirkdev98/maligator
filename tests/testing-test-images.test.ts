@@ -100,7 +100,7 @@ describe("linked test images", () => {
 				path.resolve("tests/fixtures/node-headers.test.ts"),
 				path.resolve("tests/fixtures/node-fetch.test.ts"),
 			],
-			config: resolveBuildConfig({ surface: { node: true } }),
+			config: resolveBuildConfig({}),
 			stripTypes: stripCompactTypes,
 			stripperIdentity: "node-globals-regression",
 			testModuleSource,
@@ -125,7 +125,7 @@ describe("linked test images", () => {
 		onTestFinished(() => lowering.mockRestore());
 		const compiled = compileLinkedTestImage({
 			files: [path.resolve("tests/fixtures/drizzle-simple-table.test.ts")],
-			config: resolveBuildConfig({ surface: { node: true } }),
+			config: resolveBuildConfig({}),
 			stripTypes: stripCompactTypes,
 			stripperIdentity: "drizzle-cold-regression",
 			testModuleSource,

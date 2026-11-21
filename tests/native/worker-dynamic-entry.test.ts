@@ -18,7 +18,6 @@ it.each([true, false])(
 			name: `worker-dynamic-entry-${compiled ? "compiled" : "interpreted"}`,
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled,
 		});
 		expect(runToStdout(binary, { timeoutMs: 30_000 })).toBe(expected);

@@ -22,14 +22,12 @@ describe("node:querystring", () => {
 			name: "node-querystring-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/node-querystring.mjs",
 			name: "node-querystring-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

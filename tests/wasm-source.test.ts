@@ -9,7 +9,6 @@ import { prepareWasmSource } from "../src/wasm-source.ts";
 const root = path.resolve(import.meta.dirname, "..");
 const config = resolveBuildConfig({
 	engine: { eval: false, realms: false, temporal: false, intl: { enabled: false } },
-	surface: { node: false, webPlatform: false },
 });
 const directories: Array<string> = [];
 

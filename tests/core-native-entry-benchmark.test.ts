@@ -14,7 +14,6 @@ it("connects the declaration benchmark through exact numeric leaf entries", () =
 				resolve("bench/runtime-gap/cases/connected-numeric-helpers.mjs"),
 				{
 					buildConfig: resolveBuildConfig({
-						surface: { node: true },
 						engine: { eval: false, realms: false, primordials: "locked" },
 					}),
 					coreVerification: "per-pass",

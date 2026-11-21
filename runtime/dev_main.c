@@ -49,7 +49,7 @@ int main(int argc, char **argv) {
         wire_count = atoi(argv[2]);
         entry_offset = 3;
         wire_offset = 4;
-        if (wire_count < 1 || wire_offset + wire_count > argc) return 2;
+        if (wire_count < 1 || wire_count > argc - wire_offset) return 2;
     }
 
     // Hide the development images from process.argv. The loaded definition supplies
@@ -67,7 +67,7 @@ int main(int argc, char **argv) {
     int code = mal_dev_run_wires(
         (const char *const *) &argv[wire_offset], wire_count,
         entry_offset > 0 ? argv[entry_offset] : nullptr,
-        program_argc, program_argv, false, false, worker_manifest_path);
+        program_argc, program_argv, worker_manifest_path);
     free(program_argv);
     return code;
 }

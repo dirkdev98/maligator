@@ -24,7 +24,7 @@ it.each([false, true])(
 			});
 			writeFileSync(
 				path.join(project, "maligator.build.ts"),
-				`export default { engine: { eval: false, regexp: false, intl: { enabled: false } }, surface: { node: true, webPlatform: false }, ffi: { watch: { contract: "watch.ffi.ts" } } };\n`,
+				`export default { engine: { eval: false, regexp: false, intl: { enabled: false } }, ffi: { watch: { contract: "watch.ffi.ts" } } };\n`,
 			);
 			const messageLength = 17 * 1024 * 1024;
 			writeFileSync(

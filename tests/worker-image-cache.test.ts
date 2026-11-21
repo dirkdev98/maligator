@@ -18,7 +18,7 @@ test("worker roots survive a frontend cache hit independently of parent runtime 
 		writeFileSync(worker, "globalThis.workerResult = 42;");
 		const options = {
 			entrypoint,
-			config: resolveBuildConfig({ surface: { node: true } }),
+			config: resolveBuildConfig({}),
 			stripTypes: (source: string) => source,
 			stripperIdentity: "worker-cache-fixture",
 			cacheDirectory: path.join(root, "cache"),

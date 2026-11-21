@@ -847,9 +847,7 @@ function prepareBuildFrontend(
 		semantic: ReturnType<typeof runSemanticAnalysisForGraph>,
 	): Array<CompilerDiagnostic> =>
 		world.primordialPolicy === "locked"
-			? collectPrimordialMutationDiagnostics(semantic, world, {
-					nodeEnabled: options.config.surface.node,
-				})
+			? collectPrimordialMutationDiagnostics(semantic, world)
 			: [];
 	let diagnostics: Array<CompilerDiagnostic> = [];
 	let loadProgramImage: (() => ProgramImage) | undefined;

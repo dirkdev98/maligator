@@ -230,22 +230,6 @@ const executionTypes: ReadonlyArray<PlatformTypeDefinition> = [
 				"Engine configuration after validation and default resolution.",
 			),
 			property(
-				"surface",
-				object([
-					property(
-						"webPlatform",
-						boolean,
-						"Whether Web globals are requested. Defaults to false; native module imports are independent of this global installation policy.",
-					),
-					property(
-						"node",
-						boolean,
-						"Whether Node compatibility, globals, and node: module resolution are requested. Defaults to false.",
-					),
-				]),
-				"Global and compatibility surface policy. maligator:process requires no enable flag.",
-			),
-			property(
 				"modules",
 				object([
 					property(
@@ -257,7 +241,7 @@ const executionTypes: ReadonlyArray<PlatformTypeDefinition> = [
 				"Resolved module-resolution policy.",
 			),
 		]),
-		"Resolved application engine, Web/Node surface, and module policies. Excludes build-host paths, asset declarations, and output controls.",
+		"Resolved application engine and module policies. Excludes build-host paths, asset declarations, and output controls.",
 	),
 	property(
 		"ExecutionCommon",
@@ -637,7 +621,7 @@ const workerTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	{
 		...workerType(
 			"MessagePort<Send = unknown, Receive = unknown>",
-			"{\n /** Clones and admits a message synchronously. Transfer commits only after successful validation/admission. */\n postMessage(value: Send, transfer?: ReadonlyArray<Transferable>): void;\n /** Setting this handler starts delivery. addEventListener listeners need start(). */\n onmessage: ((event: MessageEvent<Receive>) => void) | null;\n /** Receives message decoding failures in the receiving isolate. */\n onmessageerror: ((event: MessageEvent<unknown>) => void) | null;\n /** Enables delivery to event listeners; repeated calls are harmless. */\n start(): void;\n /** Discards queued messages and closes this endpoint. */\n close(): void;\n /** Keeps the receiving isolate alive; returns this port. */\n ref(): MessagePort<Send, Receive>;\n /** Allows the receiving isolate to exit; returns this port. */\n unref(): MessagePort<Send, Receive>;\n hasRef(): boolean;\n}",
+			"{\n /** Clones and admits a message synchronously. Transfer commits only after successful validation/admission. */\n postMessage(value: Send, transfer?: ReadonlyArray<Transferable>): void;\n /** Setting this handler starts delivery. addEventListener listeners need start(). */\n onmessage: ((event: Omit<MessageEvent, 'data'> & { readonly data: Receive }) => void) | null;\n /** Receives message decoding failures in the receiving isolate. */\n onmessageerror: ((event: Omit<MessageEvent, 'data'> & { readonly data: unknown }) => void) | null;\n /** Enables delivery to event listeners; repeated calls are harmless. */\n start(): void;\n /** Discards queued messages and closes this endpoint. */\n close(): void;\n /** Keeps the receiving isolate alive; returns this port. */\n ref(): MessagePort<Send, Receive>;\n /** Allows the receiving isolate to exit; returns this port. */\n unref(): MessagePort<Send, Receive>;\n hasRef(): boolean;\n}",
 			"An ordered bidirectional endpoint with transactional transfer and bounded queues. Message listeners and values are owned by the receiving isolate.",
 		),
 		// An interface permits Transferable's recursion through this generic port contract.
@@ -674,7 +658,7 @@ const internalWorkerTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	),
 	workerType(
 		"MessagePort<Send = unknown, Receive = unknown>",
-		"{ postMessage(value: Send, transfer?: ReadonlyArray<Transferable>): number | undefined; _discard(ticket: number): boolean; addEventListener(type: 'message', listener: (event: MessageEvent<Receive>) => void | Promise<void>, options?: AddEventListenerOptions | boolean): void; onmessage: ((event: MessageEvent<Receive>) => void) | null; onmessageerror: ((event: MessageEvent<unknown>) => void) | null; start(): void; close(): void; ref(): MessagePort<Send, Receive>; unref(): MessagePort<Send, Receive>; hasRef(): boolean } & EventTarget",
+		"{ postMessage(value: Send, transfer?: ReadonlyArray<Transferable>): number | undefined; _discard(ticket: number): boolean; addEventListener(type: 'message', listener: (event: Omit<MessageEvent, 'data'> & { readonly data: Receive }) => void | Promise<void>, options?: AddEventListenerOptions | boolean): void; onmessage: ((event: Omit<MessageEvent, 'data'> & { readonly data: Receive }) => void) | null; onmessageerror: ((event: Omit<MessageEvent, 'data'> & { readonly data: unknown }) => void) | null; start(): void; close(): void; ref(): MessagePort<Send, Receive>; unref(): MessagePort<Send, Receive>; hasRef(): boolean } & EventTarget",
 		"A transactional endpoint. postMessage returns the admission ticket, or undefined when nothing was queued; _discard drops a posted message the peer has not received.",
 	),
 	workerType(
@@ -1163,7 +1147,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 		declarationFile: "http-api.d.ts",
 		typeImports: [{ namespace: "Assets", from: "maligator:assets" }],
 		description:
-			"Serve HTTP with Fetch API handlers and embedded assets. Requires `surface.webPlatform`. A server whose whole handler serves an asset answers without running JavaScript per request.",
+			"Serve HTTP with Fetch API handlers and embedded assets. A server whose whole handler serves an asset answers without running JavaScript per request.",
 		types: httpTypes,
 		exports: [
 			{
@@ -1189,7 +1173,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 						"(asset: Assets.EmbeddedFile | Assets.EmbeddedDirectory, options?: ServeAssetOptions) => Handler",
 				},
 				description:
-					"A handler that serves an embedded file or directory with its media type, ETag, cache headers, conditional and range requests, and precompressed copies in production builds. While a declaration's watcher runs, the handler forwards to the watcher's URL instead, which needs `surface.node` for `fetch`.",
+					"A handler that serves an embedded file or directory with its media type, ETag, cache headers, conditional and range requests, and precompressed copies in production builds. While a declaration's watcher runs, the handler forwards to the watcher's URL instead.",
 				examples: [
 					'import { embedDirectory } from "maligator:assets";\nimport { serve, serveAsset } from "maligator:http";\n\nconst files = serveAsset(embedDirectory("./public"), { fallback: "index.html" });\nserve({ port: 3000, fetch: files });',
 				],
@@ -1299,7 +1283,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 		sourceFile: "fs/runtime.ts",
 		declarationFile: "fs-api.d.ts",
 		description:
-			"Read, write, and stream files, work with directories, and watch for changes. No surface flag is required.",
+			"Read, write, and stream files, work with directories, and watch for changes.",
 		types: fsTypes,
 		exports: [
 			{
@@ -1526,7 +1510,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 		installer: "mal_host_install_maligator_process",
 		declarationFile: "process-api.d.ts",
 		description:
-			"Read the compile-time command, target, and resolved application configuration. No surface flag is required. Runtime arguments, environment, working directory, and PID are separate process values.",
+			"Read the compile-time command, target, and resolved application configuration. Runtime arguments, environment, working directory, and PID are separate process values.",
 		types: executionTypes,
 		exports: [
 			{

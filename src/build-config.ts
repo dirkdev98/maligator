@@ -107,9 +107,6 @@ const CONFIG_SCHEMA: ObjectSchema = {
 				},
 			},
 		},
-		surface: {
-			object: { webPlatform: booleanLeaf, node: booleanLeaf },
-		},
 		ffi: ffiLibrariesLeaf,
 	},
 };
@@ -301,10 +298,9 @@ export function buildDerivationFromConfig(
 		realmsEnabled: config.engine.realms,
 		intlEnabled: config.engine.intl.enabled,
 		intlFeatures,
-		webPlatformEnabled: usesHost,
+		usesHost,
 		regexpEnabled: config.engine.regexp,
 		temporalEnabled: config.engine.temporal,
-		nodeEnabled: usesHost,
 	});
 	return {
 		features,

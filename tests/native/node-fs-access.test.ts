@@ -28,8 +28,6 @@ it("checks filesystem access off-thread with Node callbacks, promises, errors, a
 			name: "node-fs-access",
 			outDir: directory,
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
-			webPlatformEnabled: false,
 		});
 		for (const binary of [pair.compiled, pair.interpreted]) {
 			for (const env of [{}, STRESS_ENV]) {

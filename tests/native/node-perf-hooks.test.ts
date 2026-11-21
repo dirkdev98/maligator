@@ -29,14 +29,12 @@ describe("node:perf_hooks user timing and observers", () => {
 			name: "node-perf-hooks-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "node-perf-hooks-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

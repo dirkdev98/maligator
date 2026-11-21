@@ -32,7 +32,6 @@ beforeAll(() => {
 						temporal: false,
 						intl: { enabled: false },
 					},
-					surface: { node: true, webPlatform: false },
 				}),
 			}),
 		);

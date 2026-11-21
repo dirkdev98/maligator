@@ -6,13 +6,9 @@ import type { ResolvedBuildConfig } from "../../src/build-config.ts";
  * sets; an eval fixture with any other set compiles that compiler inside its timed hook.
  */
 export function preparedNativeEvalConfig({
-	node = false,
-	webPlatform = true,
 	realms = true,
 	primordials = "mutable",
 }: {
-	node?: boolean;
-	webPlatform?: boolean;
 	realms?: boolean;
 	primordials?: "mutable" | "locked";
 } = {}): ResolvedBuildConfig {
@@ -25,16 +21,14 @@ export function preparedNativeEvalConfig({
 			temporal: true,
 			intl: { enabled: true, features: [] },
 		},
-		surface: { webPlatform, node },
 	});
 }
 
 /**
- * The runtime `maligator build` resolves for an application that enables only eval and
- * the Node surface. Native global setup prebuilds it for product builds of such configs.
+ * The eval-enabled product defaults, prepared for builds launched by native tests.
  */
-export function defaultNodeEvalConfig(): ResolvedBuildConfig {
-	return resolveBuildConfig({ engine: { eval: true }, surface: { node: true } });
+export function defaultProductEvalConfig(): ResolvedBuildConfig {
+	return resolveBuildConfig({ engine: { eval: true } });
 }
 
 export function owningArgumentForwardingEvalConfig(
@@ -42,6 +36,5 @@ export function owningArgumentForwardingEvalConfig(
 ): ResolvedBuildConfig {
 	return resolveBuildConfig({
 		engine: { primordials, eval: true, realms: false, intl: { enabled: false } },
-		surface: { node: true },
 	});
 }

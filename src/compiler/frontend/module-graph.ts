@@ -175,9 +175,6 @@ export interface ModuleGraph {
 	 * Whether `node:*` modules and Node's globals resolve. Every program may reach
 	 * them; a program links only what it uses.
 	 */
-	nodeEnabled: boolean;
-	/** Whether the web globals and `maligator:http` resolve; true for every program. */
-	webPlatformEnabled: boolean;
 	modules: Map<string, ModuleRecord>;
 	/**
 	 * Post-order over the static-import edges: dependencies precede dependents,
@@ -1287,8 +1284,6 @@ export function buildModuleGraph(
 		dynamicImportCandidates: [...declaredCandidates].sort(),
 		entry,
 		execution: options.execution,
-		nodeEnabled: true,
-		webPlatformEnabled: true,
 		modules,
 		evaluationOrder: computeEvaluationOrder(entry, modules),
 		cycles: detectCycles(modules),

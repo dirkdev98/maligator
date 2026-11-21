@@ -16,7 +16,7 @@ import {
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-credential-auth-"));
 const FIXTURE = "tests/local/credential-auth-flow.mts";
 
-describe("credential authentication flow (surface.node)", () => {
+describe("credential authentication flow", () => {
 	let compiled: string;
 	let interpreted: string;
 	beforeAll(() => {
@@ -25,14 +25,12 @@ describe("credential authentication flow (surface.node)", () => {
 			name: "credential-auth-flow-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: FIXTURE,
 			name: "credential-auth-flow-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

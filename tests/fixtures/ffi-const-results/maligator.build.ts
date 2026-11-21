@@ -2,6 +2,6 @@
 export default {
 	entry: "main.ts",
 	engine: { eval: false, realms: false },
-	surface: { webPlatform: true },
+
 	ffi: { const_values: { contract: "values.ffi.ts" } },
 };

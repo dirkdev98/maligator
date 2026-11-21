@@ -29,14 +29,12 @@ describe("node:crypto asymmetric keys, signing and key generation", () => {
 			name: "node-crypto-asymmetric-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "node-crypto-asymmetric-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

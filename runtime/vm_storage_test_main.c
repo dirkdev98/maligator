@@ -1,7 +1,7 @@
+#include "atomics_async.h"
 #include "vm.h"
 #include "gc.h"
 #include "host.h"
-#include "personality.h"
 #include "web_host_timer.h"
 #include "workers.h"
 
@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
     mal_register_compiled_worker_entries();
     if (mal_host_attach(vm) == nullptr) return 2;
     // The image's install table applies its host personality.
-    mal_runtime_personality_install(vm, false, false);
+    mal_atomics_async_install(vm, false);
     MalHostLaunchContext launch = {
         .argc = argc,
         .argv = argv,

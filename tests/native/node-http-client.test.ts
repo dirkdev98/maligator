@@ -22,7 +22,6 @@ function buildClient(fixture: string, name: string, compiled: boolean): string {
 		name,
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 		evalEnabled: false,
 		realmsEnabled: false,
 		intlEnabled: false,

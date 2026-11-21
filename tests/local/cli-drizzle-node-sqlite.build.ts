@@ -3,7 +3,4 @@
 export default {
 	entry: "tests/local/drizzle-node-sqlite.mjs",
 	outputName: "cli-drizzle-node-sqlite",
-	surface: {
-		node: true,
-	},
 };

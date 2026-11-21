@@ -31,7 +31,7 @@ import type { ProgramImage } from "../src/compiler/target/program-image.ts";
  * slot-free manifest entry.
  */
 
-const nodeOn = resolveBuildConfig({ surface: { node: true } });
+const defaultConfig = resolveBuildConfig({});
 const roots: Array<string> = [];
 
 afterEach(() => {
@@ -46,12 +46,12 @@ function compile(source: string, options: { node?: boolean } = {}): ProgramImage
 	roots.push(root);
 	const entry = path.join(root, "main.mjs");
 	writeFileSync(entry, source);
-	const buildConfig = options.node ? nodeOn : resolveBuildConfig({});
+	const buildConfig = options.node ? defaultConfig : resolveBuildConfig({});
 	const program = loadEntrypointAndRunSemanticAnalysis(entry, { buildConfig });
 	const image = compileSemanticProgramToProgramImage(program, {
 		facts: compilerProgramFactsFromConfig(buildConfig),
 	});
-	// Every surface program lists its personality and Node's Error hooks; these tests
+	// Compare module exports separately from host personality installers; these tests
 	// assert the installers a program's own module reads retain.
 	return {
 		...image,

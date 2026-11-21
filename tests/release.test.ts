@@ -398,6 +398,7 @@ describe("npm launcher", () => {
 			"LICENSE",
 			"THIRD_PARTY_NOTICES.md",
 		]);
+		expect(manifest.dependencies).toHaveProperty("@types/node");
 		expect(manifest.optionalDependencies).toEqual({
 			"@maligator/cli-darwin-arm64": "0.1.0-alpha.2",
 		});

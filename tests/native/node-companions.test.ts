@@ -23,8 +23,6 @@ describe("Express Node initialization companions", () => {
 				name: `node-companions-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: "tests/native/node_companions_main.c",
 				outDir,
-				nodeEnabled: true,
-				webPlatformEnabled: false,
 				compiled,
 			}),
 		);
@@ -34,8 +32,6 @@ describe("Express Node initialization companions", () => {
 				name: `express-construct-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: "tests/native/node_companions_main.c",
 				outDir,
-				nodeEnabled: true,
-				webPlatformEnabled: false,
 				compiled,
 			}),
 		);

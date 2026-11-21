@@ -23,7 +23,6 @@ it("exports complete signed BigInt decimal values through the inventory driver",
 				temporal: false,
 				intl: { enabled: false },
 			},
-			surface: { node: false, webPlatform: false },
 		}),
 	});
 	const values = execFileSync(binary, ["--check-bigints"], {

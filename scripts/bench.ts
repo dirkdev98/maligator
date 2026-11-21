@@ -86,12 +86,8 @@ const CLOSED_CONFIG = resolveBuildConfig({});
 const OPEN_CONFIG = resolveBuildConfig({
 	engine: { primordials: "mutable", eval: true, realms: true },
 });
-const CLOSED_HTTP_CONFIG = resolveBuildConfig({
-	surface: { webPlatform: true },
-});
-const CLOSED_EXPRESS_CONFIG = resolveBuildConfig({
-	surface: { node: true, webPlatform: true },
-});
+const CLOSED_HTTP_CONFIG = resolveBuildConfig({});
+const CLOSED_EXPRESS_CONFIG = resolveBuildConfig({});
 
 interface PhaseOutput {
 	checksum: number;

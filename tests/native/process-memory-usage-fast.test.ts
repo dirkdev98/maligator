@@ -13,7 +13,6 @@ for (const compiled of [true, false]) {
 				name: `process-memory-usage-fast-${compiled ? "native" : "interpreted"}`,
 				outDir,
 				compiled,
-				nodeEnabled: true,
 			});
 			expect(runToStdout(binary, { env: { MAL_HOST_GC: "1" } })).toBe(
 				"process-memory-usage-fast PASS\n",
@@ -34,7 +33,6 @@ for (const compiled of [true, false]) {
 				name: `process-memory-usage-transfer-${compiled ? "native" : "interpreted"}`,
 				outDir,
 				compiled,
-				nodeEnabled: true,
 			});
 			for (const env of [{ MAL_HOST_GC: "1" }, { ...STRESS_ENV, MAL_HOST_GC: "1" }]) {
 				expect(runToStdout(binary, { env, timeoutMs: 30_000 })).toBe(

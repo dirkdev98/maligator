@@ -13,7 +13,6 @@ for (const compiled of [true, false]) {
 				name: `worker-pool-private-ref-${compiled ? "native" : "interpreted"}`,
 				outDir,
 				compiled,
-				nodeEnabled: true,
 			});
 			expect(runToStdout(binary, { timeoutMs: 10_000 })).toBe("pool-private-ref PASS\n");
 		} finally {

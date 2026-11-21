@@ -24,7 +24,6 @@ describe("node:http responses ended after an acknowledged write", () => {
 					: "node-http-split-response-interpreted",
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			}),
 		);

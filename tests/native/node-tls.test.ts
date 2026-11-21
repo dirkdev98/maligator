@@ -79,7 +79,6 @@ describe("node:tls socket wrapping", () => {
 				name: compiled ? "node-tls-compiled" : "node-tls-interpreted",
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			}),
 		);

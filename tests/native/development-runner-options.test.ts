@@ -11,7 +11,7 @@ import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 import { prebuiltCompilerBake } from "../../src/test-harness.ts";
 
 let runner: string;
-const config = resolveBuildConfig({ surface: { node: true }, engine: { eval: true } });
+const config = resolveBuildConfig({ engine: { eval: true } });
 const directory = mkdtempSync(join(tmpdir(), "mal-development-runner-options-"));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
 beforeAll(() => {

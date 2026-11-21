@@ -23,7 +23,6 @@ describe("node:http ClientRequest lifecycle", () => {
 					: "node-http-client-lifecycle-interpreted",
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			}),
 		);

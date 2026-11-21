@@ -48,7 +48,6 @@ function fixture(workers = true): CompileBuildFrontendOptions {
 		entrypoint: path.join(root, "entry.mts"),
 		cacheDirectory: path.join(root, "cache"),
 		config: resolveBuildConfig({
-			surface: { node: false, webPlatform: false },
 			engine: { eval: false, regexp: false, intl: { enabled: false } },
 		}),
 		optimization: "full",
@@ -495,7 +494,7 @@ for (const automatic of [false, true])
 		if (!automatic)
 			writeFileSync(
 				config,
-				"export default {surface:{node:false,webPlatform:false},engine:{eval:false,regexp:false,intl:{enabled:false}}};",
+				"export default {engine:{eval:false,regexp:false,intl:{enabled:false}}};",
 			);
 		const base = immediateCompiler();
 		const result = deferred<RootCompilationResult>();
@@ -534,7 +533,7 @@ for (const automatic of [false, true])
 			assert.ok(accepted);
 			writeFileSync(
 				config,
-				"export default {surface:{node:false,webPlatform:false},engine:{eval:false,regexp:true,intl:{enabled:false}}};",
+				"export default {engine:{eval:false,regexp:true,intl:{enabled:false}}};",
 			);
 			result.resolve(accepted);
 			await assert.rejects(pending, /configuration changed before build publication/);

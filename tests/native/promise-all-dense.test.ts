@@ -36,14 +36,13 @@ describe("typed intrinsic Promise.all aggregation", () => {
 		pair = buildBackendPairFromOneProgramImage({
 			...shared,
 			name: "promise-all-dense",
-			config: resolveBuildConfig({ surface: { node: true } }),
+			config: resolveBuildConfig({}),
 		});
 		mutable = buildBackendPairFromOneProgramImage({
 			...shared,
 			name: "promise-all-dense-mutable",
 			config: resolveBuildConfig({
 				engine: { primordials: "mutable" },
-				surface: { node: true },
 			}),
 		});
 		realm = buildNativeBinary({

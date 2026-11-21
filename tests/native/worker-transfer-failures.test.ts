@@ -41,7 +41,7 @@ it("admits large unique backings, releases quotas and forwards asynchronous work
 			fixture: `${fixtureDir}/main.mjs`,
 			name: "worker-transfer-failures",
 			outDir,
-			config: resolveBuildConfig({ surface: { node: true, webPlatform: true } }),
+			config: resolveBuildConfig({}),
 		});
 		for (const target of [pair.compiled, pair.interpreted]) {
 			const invocation = resolveHarnessExecutionInvocation(target);

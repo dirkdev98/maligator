@@ -39,7 +39,7 @@ for focused work, and `--preset confirm --case ID` for deeper selected evidence.
 
 Run `npm run bench:size -- --plan=json` to inspect the fixtures, then
 `npm run bench:size` from a checkout with dependencies installed. It builds
-small default, Web Platform, and Node surface programs and the existing bare and
+small programs using core JavaScript, Web APIs, or Node APIs and the existing bare and
 Express HTTP benchmark servers in production mode. It reports file sizes in bytes
 and uses `bun build --compile` for compatible fixtures when Bun is on `PATH`.
 

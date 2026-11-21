@@ -23,8 +23,6 @@ describe("postgres.js feature matrix", () => {
 						: "postgres-features-live-interpreted",
 					mainFile: HOST_MAIN,
 					outDir,
-					nodeEnabled: true,
-					webPlatformEnabled: false,
 					compiled,
 				}),
 			);

@@ -24,7 +24,6 @@ describe("numeric abstract operations", () => {
 				name: "number-format-prefix",
 				nativeStackRoots: "precise",
 				config: resolveBuildConfig({
-					surface: { node: true },
 					engine: { eval: false, realms: false },
 				}),
 			});

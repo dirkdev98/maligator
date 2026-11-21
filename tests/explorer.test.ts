@@ -142,8 +142,6 @@ describe("explorer compilation", () => {
 			intl: true,
 			temporal: true,
 			realms: true,
-			webPlatform: true,
-			node: true,
 		};
 		const first = request(source, config);
 		expect(first).toMatchObject({

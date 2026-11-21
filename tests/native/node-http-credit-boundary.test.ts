@@ -16,7 +16,6 @@ beforeAll(() => {
 		name: "node-http-credit-boundary",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 	});
 });
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));

@@ -1,3 +1,1 @@
-export default {
-	surface: { node: true, webPlatform: true },
-};
+export default {};

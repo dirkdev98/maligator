@@ -26,8 +26,6 @@ int mal_dev_run_images(
     const char *entry_path,
     int argc,
     char **argv,
-    bool web_platform,
-    bool node,
     const char *worker_manifest_path);
 
 /** Load and execute ordered development wire images in a fresh host VM. */
@@ -37,6 +35,4 @@ int mal_dev_run_wires(
     const char *entry_path,
     int argc,
     char **argv,
-    bool web_platform,
-    bool node,
     const char *worker_manifest_path);

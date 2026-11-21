@@ -15,7 +15,6 @@ import * as path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
 	buildBackendPairFromOneProgramImage,
-	HOST_MAIN,
 	resolveHarnessExecutionInvocation,
 	scaledNativeRunTimeoutMs,
 	runToStdout,
@@ -25,21 +24,14 @@ import type { BackendPairResult } from "../../src/test-harness.ts";
 
 const root = mkdtempSync(path.join(tmpdir(), "mal-maligator-fs-"));
 let runs = 0;
-let defaultSurface: BackendPairResult;
-let webSurface: BackendPairResult;
+let pair: BackendPairResult;
 
 beforeAll(() => {
-	const build = (name: string, webPlatformEnabled: boolean) =>
-		buildBackendPairFromOneProgramImage({
-			fixture: "tests/local/maligator-fs.mjs",
-			name,
-			outDir: path.join(root, "out"),
-			mainFile: HOST_MAIN,
-			webPlatformEnabled,
-			nodeEnabled: false,
-		});
-	defaultSurface = build("maligator-fs", false);
-	webSurface = build("maligator-fs-web", true);
+	pair = buildBackendPairFromOneProgramImage({
+		fixture: "tests/local/maligator-fs.mjs",
+		name: "maligator-fs",
+		outDir: path.join(root, "out"),
+	});
 });
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -65,11 +57,11 @@ function tree(directory: string): Array<string> {
 }
 
 /** Node's output and final tree for the scenario, in a fresh working directory. */
-function reference(args: Array<string> = []): { stdout: string; tree: Array<string> } {
+function reference(): { stdout: string; tree: Array<string> } {
 	const cwd = workingDirectory();
 	const stdout = execFileSync(
 		process.execPath,
-		[path.resolve("tests/local/maligator-fs-node.mjs"), ...args],
+		[path.resolve("tests/local/maligator-fs-node.mjs")],
 		{ cwd, encoding: "utf8" },
 	);
 	return { stdout, tree: tree(cwd) };
@@ -87,22 +79,15 @@ function expectScenario(
 }
 
 it("matches Node's fs/promises for file and directory operations", () => {
-	const expected = reference(["--without-url"]);
+	const expected = reference();
+	expect(expected.stdout).toContain("url /tmp/a b.txt");
 	if (process.getuid?.() !== 0) {
 		expect(expected.stdout).toContain(
 			"locked write FileSystemError true EACCES open locked/new.txt",
 		);
 	}
-	for (const binary of [defaultSurface.compiled, defaultSurface.interpreted]) {
+	for (const binary of [pair.compiled, pair.interpreted]) {
 		for (const env of [{}, STRESS_ENV]) expectScenario(binary, expected, env);
-	}
-});
-
-it("takes file: URLs where the web surface provides URL", () => {
-	const expected = reference();
-	expect(expected.stdout).toContain("url /tmp/a b.txt");
-	for (const binary of [webSurface.compiled, webSurface.interpreted]) {
-		expectScenario(binary, expected);
 	}
 });
 
@@ -127,7 +112,7 @@ function incrementalReference(name: string, input?: Buffer): string {
 
 it("streams the same bytes as Node's web and filesystem read streams", () => {
 	const expected = incrementalReference("read", streamInput);
-	for (const binary of backends(defaultSurface)) {
+	for (const binary of backends(pair)) {
 		for (const env of [{}, STRESS_ENV]) {
 			expect(
 				runToStdout(binary, { cwd: incrementalDirectory("read", streamInput), env }),
@@ -137,7 +122,7 @@ it("streams the same bytes as Node's web and filesystem read streams", () => {
 });
 
 it("releases descriptors after cancelling a reader, including while it opens", () => {
-	for (const binary of backends(defaultSurface)) {
+	for (const binary of backends(pair)) {
 		const { executable, args } = resolveHarnessExecutionInvocation(binary);
 		for (const env of [{}, STRESS_ENV]) {
 			const stdout = execFileSync(
@@ -184,7 +169,7 @@ function memoryRun(binary: string, input: Buffer): { peak: number; output: unkno
 it("streams a 16 MiB file with bounded peak resident memory", () => {
 	const input = Buffer.alloc(16 * 1024 * 1024, 7);
 	const expected = { length: input.length, checksum: 7 * input.length };
-	for (const binary of backends(defaultSurface)) {
+	for (const binary of backends(pair)) {
 		if (process.env.MAL_ASAN === "1" || process.env.MAL_TSAN === "1") {
 			// Instrumented allocators retain freed stores and change the RSS baseline.
 			const stdout = runToStdout(binary, { cwd: incrementalDirectory("size", input) });
@@ -203,7 +188,7 @@ it("streams a 16 MiB file with bounded peak resident memory", () => {
 
 it("orders writer operations on an open descriptor and appends after reopening", () => {
 	const expected = incrementalReference("writer");
-	for (const binary of backends(defaultSurface)) {
+	for (const binary of backends(pair)) {
 		for (const env of [{}, STRESS_ENV]) {
 			expect(runToStdout(binary, { cwd: incrementalDirectory("writer"), env })).toBe(
 				expected,
@@ -216,7 +201,7 @@ it.each(["watch", "watch-recursive"])(
 	"matches Node's notifications for %s and closes on return",
 	(name) => {
 		const expected = incrementalReference(name);
-		for (const binary of backends(defaultSurface)) {
+		for (const binary of backends(pair)) {
 			for (const env of [{}, STRESS_ENV]) {
 				expect(runToStdout(binary, { cwd: incrementalDirectory(name), env })).toBe(
 					expected,
@@ -228,7 +213,7 @@ it.each(["watch", "watch-recursive"])(
 
 it("rejects a pending watch on abort and releases the watcher", () => {
 	const expected = incrementalReference("watch-abort");
-	for (const binary of backends(webSurface)) {
+	for (const binary of backends(pair)) {
 		const stdout = runToStdout(binary, {
 			cwd: incrementalDirectory("watch-abort"),
 			env: STRESS_ENV,

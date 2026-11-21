@@ -22,7 +22,6 @@ beforeAll(() => {
 		name: "commonjs-under-esm",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 	});
 });
 it.each(["compiled", "interpreted"] as const)(

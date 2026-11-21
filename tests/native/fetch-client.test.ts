@@ -137,7 +137,6 @@ beforeAll(async () => {
 		outDir,
 		config: resolveBuildConfig({
 			engine: { eval: false },
-			surface: { webPlatform: true, node: false },
 		}),
 	});
 	const invocation = resolveHarnessExecutionInvocation(binary);

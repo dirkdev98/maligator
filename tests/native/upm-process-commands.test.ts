@@ -26,7 +26,6 @@ beforeAll(() => {
 		name: "upm-process-commands",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 	});
 }, 300_000);
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));

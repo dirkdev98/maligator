@@ -51,11 +51,9 @@ function channel<T>() {
 
 function descriptor(entryPath: string): ApplicationImageDescriptor {
 	return {
-		schema: 1,
+		schema: 2,
 		wires: [{ path: "app.malw", sha256: "digest" }],
 		entryPath,
-		node: true,
-		webPlatform: true,
 		engine: {
 			primordials: "locked",
 			eval: true,
@@ -306,7 +304,7 @@ describe("CLI application images", () => {
 			writeFileSync(entry, "console.log(42);\n");
 			writeFileSync(
 				config,
-				"export default { surface: { node: false, webPlatform: false }, engine: { eval: 'compile-check', realms: false, regexp: false, temporal: false, intl: { enabled: false } } };\n",
+				"export default { engine: { eval: 'compile-check', realms: false, regexp: false, temporal: false, intl: { enabled: false } } };\n",
 			);
 			const context = {
 				stripTypes: stripCompactTypes,
@@ -328,10 +326,8 @@ describe("CLI application images", () => {
 			};
 			const prepared = prepareCommand(command, context);
 			expect(prepared.applicationImage).toMatchObject({
-				schema: 1,
+				schema: 2,
 				entryPath: entry,
-				node: true,
-				webPlatform: true,
 				engine: { eval: false, temporal: false },
 			});
 			expect(prepared.applicationImage?.wires).toHaveLength(1);
@@ -354,7 +350,7 @@ describe("CLI application images", () => {
 			writeFileSync(entry, `${mutation("first")}\nconsole.log(1);\n`);
 			writeFileSync(
 				config,
-				"export default { surface: { node: false, webPlatform: false }, engine: { eval: false, realms: false, regexp: false, temporal: false, intl: { enabled: false } } };\n",
+				"export default { engine: { eval: false, realms: false, regexp: false, temporal: false, intl: { enabled: false } } };\n",
 			);
 			const context = {
 				stripTypes: stripCompactTypes,

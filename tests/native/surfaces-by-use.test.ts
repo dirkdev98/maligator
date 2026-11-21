@@ -6,7 +6,6 @@ import { resolveBuildConfig } from "../../src/build-config.ts";
 import type { MaligatorBuildConfig } from "../../src/build-config.ts";
 import { buildNativeBinary, runToStdout } from "../../src/test-harness.ts";
 
-// Every program may reach the web and Node globals and modules without surface flags.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-surfaces-by-use-"));
 const dataFile = path.join(outDir, "data.txt");
 writeFileSync(dataFile, "data\n");
@@ -71,7 +70,7 @@ setTimeout(() => console.log(order.sort().join(",")), 30);
 describe.each([
 	["compiled", true],
 	["interpreted", false],
-])("a program without surface flags (%s)", (_backend, compiled) => {
+])("host APIs with default build settings (%s)", (_backend, compiled) => {
 	it("uses node:fs, fetch, URL, Buffer and process", () => {
 		expect(runToStdout(build("host-apis", HOST_APIS, compiled)).trim()).toBe(
 			"data fetched c 6869 number",

@@ -25,7 +25,6 @@ beforeAll(() => {
 		name: "bigint-arbitrary",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 		evalEnabled: true,
 		realmsEnabled: false,
 		intlEnabled: false,

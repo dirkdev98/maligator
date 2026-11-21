@@ -17,7 +17,6 @@ function optimizedProgram(): CoreProgram {
 	compileEntrypoint("tests/local/guarded-loop-versioning.mjs", {
 		buildConfig: resolveBuildConfig({
 			engine: { primordials: "mutable" },
-			surface: { node: true },
 		}),
 		coreVerification: "per-pass",
 		afterCoreOptimization(program) {

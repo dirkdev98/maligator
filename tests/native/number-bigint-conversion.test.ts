@@ -28,7 +28,6 @@ it.each(["locked", "mutable"] as const)(
 			outDir,
 			config: resolveBuildConfig({
 				engine: { primordials, eval: false, realms: false },
-				surface: { node: true },
 			}),
 		});
 		for (const target of [pair.compiled, pair.interpreted]) {

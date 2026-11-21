@@ -22,14 +22,12 @@ describe("node:http initialization floor", () => {
 				name: "node-http-esm-compiled",
 				mainFile: "tests/native/node_http_main.c",
 				outDir,
-				nodeEnabled: true,
 			}),
 			buildNativeBinary({
 				fixture: "tests/local/node-http.mjs",
 				name: "node-http-esm-interpreted",
 				mainFile: "tests/native/node_http_main.c",
 				outDir,
-				nodeEnabled: true,
 				compiled: false,
 			}),
 			buildNativeBinary({
@@ -37,14 +35,12 @@ describe("node:http initialization floor", () => {
 				name: "node-http-cjs-compiled",
 				mainFile: "tests/native/node_http_main.c",
 				outDir,
-				nodeEnabled: true,
 			}),
 			buildNativeBinary({
 				fixture: "tests/local/node-http.cjs",
 				name: "node-http-cjs-interpreted",
 				mainFile: "tests/native/node_http_main.c",
 				outDir,
-				nodeEnabled: true,
 				compiled: false,
 			}),
 		];

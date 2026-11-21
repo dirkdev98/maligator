@@ -21,7 +21,6 @@ describe("worker isolates", () => {
 						name: `worker-${fixture}-${compiled ? "native" : "interpreted"}`,
 						outDir,
 						compiled,
-						nodeEnabled: fixture !== "port-gc",
 						...(fixture === "port-gc"
 							? { mainFile: "runtime/workers_gc_test_main.c" }
 							: {}),
@@ -42,7 +41,6 @@ describe("worker isolates", () => {
 				fixture: "tests/local/workers-runtime/main.mjs",
 				name: "workers-runtime",
 				outDir,
-				nodeEnabled: true,
 			});
 		});
 		afterAll(() => {
@@ -73,7 +71,6 @@ describe("worker isolates", () => {
 				fixture: "tests/local/workers-runtime/transport.mjs",
 				name: "workers-transport",
 				outDir,
-				nodeEnabled: true,
 			});
 			const invocation = resolveHarnessExecutionInvocation(binary);
 			const result = spawnSync(invocation.executable, invocation.args, {
@@ -102,7 +99,6 @@ describe("worker isolates", () => {
 				fixture: "tests/local/workers-runtime/tla.mjs",
 				name: "workers-tla",
 				outDir,
-				nodeEnabled: true,
 			});
 		});
 		afterAll(() => {
@@ -132,7 +128,6 @@ describe("worker isolates", () => {
 				fixture: "tests/local/workers-runtime/admission.mjs",
 				name: "workers-admission",
 				outDir,
-				nodeEnabled: true,
 			});
 			const invocation = resolveHarnessExecutionInvocation(binary);
 			const result = spawnSync(invocation.executable, invocation.args, {

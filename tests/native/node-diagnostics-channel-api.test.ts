@@ -21,7 +21,6 @@ describe("node:diagnostics_channel channels, stores and tracing", () => {
 				name: `node-diagnostics-channel-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

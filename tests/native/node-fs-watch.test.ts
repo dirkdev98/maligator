@@ -32,14 +32,12 @@ describe("node:fs watchers", () => {
 			name: "node-fs-watch-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "node-fs-watch-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});
@@ -66,7 +64,6 @@ it.runIf(process.platform === "darwin")(
 			outDir,
 			config: resolveBuildConfig({
 				engine: { eval: false, realms: false, regexp: false, intl: { enabled: false } },
-				surface: { node: true, webPlatform: false },
 			}),
 		});
 		const invocation = resolveHarnessExecutionInvocation(binary);

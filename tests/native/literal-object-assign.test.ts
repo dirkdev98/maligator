@@ -27,7 +27,6 @@ describe.each([fixture, commonjsFixture])("literal Object.assign in %s", (fixtur
 	beforeAll(() => {
 		const config = resolveBuildConfig({
 			engine: { eval: false, realms: false },
-			surface: { node: true },
 		});
 		pair = buildBackendPairFromOneProgramImage({
 			fixture,
@@ -48,7 +47,6 @@ describe.each([fixture, commonjsFixture])("literal Object.assign in %s", (fixtur
 			outDir,
 			config: resolveBuildConfig({
 				engine: { primordials: "mutable", eval: false, realms: false },
-				surface: { node: true },
 			}),
 		});
 	});
@@ -148,7 +146,6 @@ describe.each([fixture, commonjsFixture])("literal Object.assign in %s", (fixtur
 			outDir,
 			config: resolveBuildConfig({
 				engine: { primordials: "mutable", realms: true, eval: true },
-				surface: { node: true },
 			}),
 		});
 		const oracle = execFileSync(process.execPath, [realmFixture], { encoding: "utf8" });

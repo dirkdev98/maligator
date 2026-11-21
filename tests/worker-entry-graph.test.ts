@@ -18,7 +18,7 @@ function fixture(files: Record<string, string>, run: (root: string) => void): vo
 	}
 }
 
-const config = resolveBuildConfig({ surface: { node: true } });
+const config = resolveBuildConfig({});
 
 test("a library worker bootstrap is bundled without entering the parent evaluation order", () => {
 	fixture(
@@ -372,7 +372,6 @@ test("configured aliases cannot expose internal platform modules", () => {
 		},
 		(root) => {
 			const privateConfig = resolveBuildConfig({
-				surface: { node: true },
 				modules: { aliases: { "private-workers": "maligator:internal/workers" } },
 			});
 			expect(() =>

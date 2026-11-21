@@ -50,7 +50,7 @@ int probe_pause(void) {
 	);
 	writeFileSync(
 		path.join(directory, "maligator.build.ts"),
-		'export default { engine: { eval: false, realms: false }, surface: { node: false, webPlatform: false }, ffi: { probe: { contract: "probe.ffi.ts" } } };\n',
+		'export default { engine: { eval: false, realms: false }, ffi: { probe: { contract: "probe.ffi.ts" } } };\n',
 	);
 	writeFileSync(
 		path.join(directory, "probe.test.ts"),

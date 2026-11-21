@@ -4,7 +4,11 @@ import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { parseCliArgs } from "../src/cli.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
-import { HOST_MODULES } from "../src/compiler/frontend/host-modules.ts";
+import {
+	HOST_GLOBAL_INSTALLERS,
+	HOST_MODULES,
+	installerUsesNodePersonality,
+} from "../src/compiler/frontend/host-modules.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
 import { hostExecutionTarget, resolveExecution } from "../src/platform/execution.ts";
@@ -27,15 +31,16 @@ export function capturePrimordialInventory(mode: string, outDir: string) {
 	rmSync(metadataFile, { force: true });
 	const source = captureVerificationSource(process.cwd());
 	const modules = [
-		...(config.surface.node
-			? Array.from(HOST_MODULES.keys(), (id) => ({ id, exports: [] }))
-			: []),
-		// Public source namespaces retain their private native substrate without exposing reserved imports.
+		...(mode === "minimal" || mode === "web"
+			? []
+			: Array.from(HOST_MODULES.keys(), (id) => ({ id, exports: [] }))),
+		// Reading the public namespaces retains their private native imports.
 		...PLATFORM_MODULES.filter(
 			(module) =>
+				mode !== "minimal" &&
 				!module.internal &&
 				module.id !== "maligator:test" &&
-				(config.surface.webPlatform || module.id !== "maligator:http"),
+				(mode !== "web" || module.id === "maligator:http"),
 		),
 	];
 	const fixture = path.join(outDir, `inventory-${mode}.mjs`);
@@ -72,8 +77,13 @@ export function capturePrimordialInventory(mode: string, outDir: string) {
 					return `import { ${name} as ${binding} } from ${specifier};\nglobalThis.${binding} = ${value};`;
 				});
 			}),
-			// Web globals install by use; observing the global object installs all of them.
-			"Object.getOwnPropertyNames(globalThis);",
+			...(mode === "minimal"
+				? []
+				: mode === "web"
+					? HOST_GLOBAL_INSTALLERS.filter(
+							({ installer }) => !installerUsesNodePersonality(installer),
+						).flatMap(({ globals }) => globals.map((name) => `globalThis.${name};`))
+					: ["Object.getOwnPropertyNames(globalThis);"]),
 		].join("\n"),
 	);
 	const mainFile = writePrimordialInventoryDriver(outDir);

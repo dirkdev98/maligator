@@ -6,7 +6,6 @@ import { defineBuild } from "@maligator/cli";
 export default defineBuild({
 	entry: "src/index.ts",
 	outputName: "my-app",
-	surface: { webPlatform: true },
 });
 ```
 

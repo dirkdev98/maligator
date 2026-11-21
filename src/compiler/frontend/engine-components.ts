@@ -144,8 +144,7 @@ function collectEngineComponentUses(program: SemanticProgram): EngineComponentUs
 			for (const service of services) uses.intlServices.add(service);
 		}
 	};
-	const globalNames =
-		program.graph?.nodeEnabled === true ? ["globalThis", "global"] : ["globalThis"];
+	const globalNames = ["globalThis", "global"];
 
 	for (const file of program.files) {
 		const undeclared = (node: ESTree.Node, names: ReadonlyArray<string>) => {

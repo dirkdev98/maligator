@@ -24,7 +24,6 @@ describe("AsyncLocalStorage contexts installed by callbacks that start without o
 				name: `node-async-context-null-entry-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			}),
 		);

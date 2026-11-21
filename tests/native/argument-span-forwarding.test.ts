@@ -26,7 +26,7 @@ describe("argument span forwarding with mutable primordials and realms", () => {
 			fixture,
 			name: "argument-span-forwarding",
 			outDir,
-			config: preparedNativeEvalConfig({ node: true }),
+			config: preparedNativeEvalConfig(),
 		});
 	});
 	afterAll(() => rmSync(outDir, { recursive: true, force: true }));

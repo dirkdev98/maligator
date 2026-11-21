@@ -13,7 +13,7 @@ import { embeddedCompilerOptions } from "../../src/compiler/pipeline/embedded-co
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 import { ensureNativeArtifacts } from "../../src/runtime-build.ts";
 import {
-	defaultNodeEvalConfig,
+	defaultProductEvalConfig,
 	owningArgumentForwardingEvalConfig,
 	preparedNativeEvalConfig,
 } from "../helpers/native-eval-config.ts";
@@ -57,22 +57,16 @@ export function setup(project: TestProject): void {
 	const internal = (
 		variantEnvironment: NodeJS.ProcessEnv,
 		profile: {
-			node: boolean;
-			webPlatform: boolean;
 			realms?: boolean;
 			primordials?: "mutable" | "locked";
 		},
 	): Preparation => ({
 		environment: variantEnvironment,
-		label: `eval runtime (Node ${profile.node ? "on" : "off"}, web ${profile.webPlatform ? "on" : "off"}, realms ${profile.realms === false ? "off" : "on"}, primordials ${profile.primordials ?? "mutable"}, stats ${perfStatsEnabled(variantEnvironment) ? "on" : "off"})`,
+		label: `eval runtime (realms ${profile.realms === false ? "off" : "on"}, primordials ${profile.primordials ?? "mutable"}, stats ${perfStatsEnabled(variantEnvironment) ? "on" : "off"})`,
 		config: preparedNativeEvalConfig(profile),
 	});
 	const statsEnvironment = { ...environment, MAL_PERF_STATS: "1" };
-	// Both default surfaces must prepare their shared compiler before timed fixture builds.
-	const variants: Array<Preparation> = [
-		internal(environment, { node: false, webPlatform: true }),
-		internal(environment, { node: true, webPlatform: true }),
-	];
+	const variants: Array<Preparation> = [internal(environment, {})];
 	// Vitest records selected paths before global setup; collected files are still empty.
 	const required = new Set(
 		project.vitest.state
@@ -80,30 +74,23 @@ export function setup(project: TestProject): void {
 			.flatMap((file) => nativePreparations(process.cwd(), path.resolve(file))),
 	);
 	if (required.has("realms-disabled")) {
-		variants.push(
-			internal(environment, { node: false, webPlatform: true, realms: false }),
-		);
+		variants.push(internal(environment, { realms: false }));
 	}
 	if (!perfStatsEnabled(environment) && required.has("perf-stats")) {
-		variants.push(internal(statsEnvironment, { node: false, webPlatform: true }));
-	}
-	if (!perfStatsEnabled(environment) && required.has("node-perf-stats")) {
-		variants.push(internal(statsEnvironment, { node: true, webPlatform: true }));
+		variants.push(internal(statsEnvironment, {}));
 	}
 	if (required.has("locked-perf-stats")) {
 		variants.push(
 			internal(statsEnvironment, {
-				node: false,
-				webPlatform: true,
 				primordials: "locked",
 			}),
 		);
 	}
-	if (required.has("node-eval-defaults")) {
+	if (required.has("product-eval-defaults")) {
 		variants.push({
 			environment,
-			label: "eval runtime (product defaults, Node on)",
-			config: defaultNodeEvalConfig(),
+			label: "eval runtime (product defaults)",
+			config: defaultProductEvalConfig(),
 		});
 	}
 	if (required.has("owning-argument-forwarding")) {

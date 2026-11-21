@@ -21,7 +21,6 @@ describe("node:readline and node:readline/promises", () => {
 				name: `node-readline-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

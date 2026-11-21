@@ -12,8 +12,7 @@ import {
 import type { ModuleGraph } from "../src/compiler/frontend/module-graph.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 
-/** A resolved config with the node host surface enabled. */
-const nodeOn = resolveBuildConfig({ surface: { node: true } });
+const defaultConfig = resolveBuildConfig({});
 
 test.each([
 	["static-node-test.mjs", 'import { test } from "node:test"; globalThis.test = test;'],
@@ -47,7 +46,7 @@ test("keeps the bare test package separate from the prefix-only builtin", () => 
 		'import { value } from "test"; globalThis.value = value;',
 	);
 	const graph = buildModuleGraph(path.join(root, "bare-test-package/main.mjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(
 		graph.modules.has(path.join(root, "bare-test-package/node_modules/test/index.js")),
@@ -61,7 +60,7 @@ test("retains runtime source providers without adding eager evaluation edges", (
 		"lazy-source-provider.mjs",
 		"globalThis.load = id => process.getBuiltinModule(id);",
 	);
-	const graph = buildModuleGraph(entry, { buildConfig: nodeOn });
+	const graph = buildModuleGraph(entry, { buildConfig: defaultConfig });
 	expect(graph.sourceBuiltinProviders).toContain("node:test");
 	expect(graph.evaluationOrder).not.toContain("node:test");
 	expect(
@@ -81,7 +80,7 @@ test.each([
 	(file, source) => {
 		write(file, source);
 		const graph = buildModuleGraph(path.join(root, file), {
-			buildConfig: nodeOn,
+			buildConfig: defaultConfig,
 			stripTypes: (source) => source,
 		});
 		const builtin = graph.modules.get("node:test");
@@ -106,7 +105,7 @@ test.each(["worker", "dynamic", "required"] as const)(
 				: "export const value = 1;",
 		);
 		const graph = buildModuleGraph(entry, {
-			buildConfig: nodeOn,
+			buildConfig: defaultConfig,
 			stripTypes: stripCompactTypes,
 			...(kind === "dynamic" ? { dynamicImportCandidates: [child] } : {}),
 			...(kind === "required" ? { requiredRoots: [child] } : {}),
@@ -130,7 +129,7 @@ test.each([".", ".."])(
 				? "relative-directory/current.cjs"
 				: "relative-directory/nested/parent.cjs";
 		write(file, `module.exports = require(${JSON.stringify(specifier)});`);
-		const graph = buildModuleGraph(path.join(root, file), { buildConfig: nodeOn });
+		const graph = buildModuleGraph(path.join(root, file), { buildConfig: defaultConfig });
 		expect(graph.modules.get(graph.entry)?.dependencies[0]?.resolvedPath).toBe(
 			path.join(root, "relative-directory/index.cjs"),
 		);
@@ -490,7 +489,7 @@ test("explicit entry goals and goal-specific extensions take precedence over pac
 
 test("traverses the complete pinned Express initialization graph", () => {
 	const entry = path.resolve("tests/fixtures/express-5/app.js");
-	const graph = buildModuleGraph(entry, { buildConfig: nodeOn });
+	const graph = buildModuleGraph(entry, { buildConfig: defaultConfig });
 
 	expect(graph.modules.has("node:http")).toBe(true);
 	for (const name of [
@@ -721,7 +720,7 @@ test("rejects missing requires not dynamically protected by a catch", () => {
 test("resolves node: CommonJS built-ins to their canonical host identity", () => {
 	write("cjs-node.cjs", `module.exports = require("node:path");\n`);
 	const graph = buildModuleGraph(path.join(root, "cjs-node.cjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe("node:path");
 	expect(graph.modules.get("node:path")?.host?.id).toBe("node:path");
@@ -730,7 +729,7 @@ test("resolves node: CommonJS built-ins to their canonical host identity", () =>
 test("canonicalizes bare CommonJS built-ins to the same node: host module", () => {
 	write("cjs-bare-path.cjs", `module.exports = require("path");\n`);
 	const graph = buildModuleGraph(path.join(root, "cjs-bare-path.cjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe("node:path");
 	expect(
@@ -741,7 +740,7 @@ test("canonicalizes bare CommonJS built-ins to the same node: host module", () =
 test("canonicalizes bare tty to the node:tty host module", () => {
 	write("cjs-bare-tty.cjs", `module.exports = require("tty");\n`);
 	const graph = buildModuleGraph(path.join(root, "cjs-bare-tty.cjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe("node:tty");
 	expect(graph.modules.get("node:tty")?.host?.named).toEqual([
@@ -819,7 +818,7 @@ test("rejects a text import of a host module", () => {
 	);
 
 	expect(() =>
-		buildModuleGraph(path.join(root, "data-host.mjs"), { buildConfig: nodeOn }),
+		buildModuleGraph(path.join(root, "data-host.mjs"), { buildConfig: defaultConfig }),
 	).toThrow("only files hold data modules");
 });
 
@@ -1082,13 +1081,13 @@ test("a package imports its own name through its exports", () => {
 	expect(resolvedDependency("self-package/main.mjs")).toBe("self-package/util.js");
 });
 
-test("resolves supported node:* imports to virtual host modules (no disk read) when surface.node is on", () => {
+test("resolves supported node:* imports to virtual host modules without reading from disk", () => {
 	write(
 		"node-host.mjs",
 		`import { join } from "node:path";\nimport { readFileSync } from "node:fs";\nglobalThis.sink = [join, readFileSync];\n`,
 	);
 	const graph = buildModuleGraph(path.join(root, "node-host.mjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 
 	// The importer's edges carry the canonical specifier as the resolved identity.
@@ -1126,7 +1125,7 @@ test("host catalog includes path and postgres.js loading companions", () => {
 		`import "node:path";\nimport "node:crypto";\nimport "node:perf_hooks";\nimport "node:tls";\n`,
 	);
 	const graph = buildModuleGraph(path.join(root, "catalog.mjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 
 	const pathSpec = graph.modules.get("node:path")!.host!;
@@ -1172,7 +1171,7 @@ test("host catalog includes path and postgres.js loading companions", () => {
 test("canonicalizes bare buffer and exposes the node:buffer constructor", () => {
 	write("buffer.cjs", `module.exports = require("buffer");\n`);
 	const graph = buildModuleGraph(path.join(root, "buffer.cjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	const dependency = graph.modules.get(graph.entry)!.dependencies[0]!;
 	expect(dependency.resolvedPath).toBe("node:buffer");
@@ -1185,7 +1184,7 @@ test("canonicalizes bare buffer and exposes the node:buffer constructor", () => 
 test("canonicalizes bare ESM buffer to node:buffer", () => {
 	write("buffer.mjs", `import { Buffer } from "buffer";\nBuffer;\n`);
 	const graph = buildModuleGraph(path.join(root, "buffer.mjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
 		"node:buffer",
@@ -1199,7 +1198,7 @@ test("canonicalizes the promise-based filesystem submodule", () => {
 			`globalThis.sink = [fsPromises, readdir];\n`,
 	);
 	const graph = buildModuleGraph(path.join(root, "fs-promises.mjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
 		"node:fs/promises",
@@ -1218,7 +1217,7 @@ test("canonicalizes the promise-based stream submodule", () => {
 			`globalThis.sink = [streamPromises, pipeline];\n`,
 	);
 	const graph = buildModuleGraph(path.join(root, "stream-promises.mjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
 		"node:stream/promises",
@@ -1238,7 +1237,7 @@ test("resolves curated V8 and VM context helpers", () => {
 			`globalThis.sink = [setFlagsFromString, runInNewContext];\n`,
 	);
 	const graph = buildModuleGraph(path.join(root, "node-vm.mjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get("node:v8")?.host).toMatchObject({
 		hasDefault: true,
@@ -1260,7 +1259,7 @@ test("resolves the diagnostics tracing channel", () => {
 		`module.exports = require("node:diagnostics_channel").tracingChannel;\n`,
 	);
 	const graph = buildModuleGraph(path.join(root, "diagnostics.cjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get("node:diagnostics_channel")?.host).toMatchObject({
 		hasDefault: true,
@@ -1280,7 +1279,7 @@ test("resolves the diagnostics tracing channel", () => {
 test("canonicalizes the worker_threads main-thread identity", () => {
 	write("worker.cjs", `module.exports = require("worker_threads").isMainThread;\n`);
 	const graph = buildModuleGraph(path.join(root, "worker.cjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
 		"node:worker_threads",
@@ -1308,7 +1307,7 @@ test("canonicalizes the worker_threads main-thread identity", () => {
 test("canonicalizes the CommonJS module API", () => {
 	write("module-api.cjs", `module.exports = require("module").createRequire;\n`);
 	const graph = buildModuleGraph(path.join(root, "module-api.cjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
 		"node:module",
@@ -1329,7 +1328,7 @@ test("resolves asynchronous child process entrypoints", () => {
 			`globalThis.sink = [exec, spawn, fork];\n`,
 	);
 	const graph = buildModuleGraph(path.join(root, "child-process.mjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get("node:child_process")?.host).toMatchObject({
 		named: [
@@ -1353,13 +1352,13 @@ test("links optional child-process backends while rejecting unknown unused impor
 	);
 	const supported = loadEntrypointAndRunSemanticAnalysis(
 		path.join(root, "optional-child-process.mjs"),
-		{ buildConfig: nodeOn },
+		{ buildConfig: defaultConfig },
 	);
 	expect(() => linkModules(supported)).not.toThrow();
 	write("unknown-child-process.mjs", `import { missing } from "node:child_process";`);
 	const unknown = loadEntrypointAndRunSemanticAnalysis(
 		path.join(root, "unknown-child-process.mjs"),
-		{ buildConfig: nodeOn },
+		{ buildConfig: defaultConfig },
 	);
 	expect(() => linkModules(unknown)).toThrow(
 		/node:child_process does not export 'missing'/,
@@ -1369,7 +1368,7 @@ test("links optional child-process backends while rejecting unknown unused impor
 test("links unmodified Tinypool's thread bootstrap and optional backend imports", () => {
 	const program = loadEntrypointAndRunSemanticAnalysis(
 		path.resolve("tests/local/tinypool-workers/main.mjs"),
-		{ buildConfig: nodeOn, stripTypes: stripCompactTypes },
+		{ buildConfig: defaultConfig, stripTypes: stripCompactTypes },
 	);
 	expect(() => linkModules(program)).not.toThrow();
 	expect(
@@ -1386,7 +1385,7 @@ test("resolves a node:* import without configuration", () => {
 test("canonicalizes bare zlib and exposes compression adapters", () => {
 	write("zlib.cjs", `module.exports = [require("zlib"), require("node:zlib")];\n`);
 	const graph = buildModuleGraph(path.join(root, "zlib.cjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	const dependencies = graph.modules.get(graph.entry)!.dependencies;
 	expect(dependencies.map((dependency) => dependency.resolvedPath)).toEqual([
@@ -1412,7 +1411,7 @@ test("canonicalizes bare zlib and exposes compression adapters", () => {
 test("canonicalizes bare and node: HTTP specifiers to one host module", () => {
 	write("http.cjs", `module.exports = [require("http"), require("node:http")];\n`);
 	const graph = buildModuleGraph(path.join(root, "http.cjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	const dependencies = graph.modules.get(graph.entry)!.dependencies;
 	expect(dependencies.map((dependency) => dependency.resolvedPath)).toEqual([
@@ -1447,7 +1446,7 @@ test("canonicalizes strict assert and exposes the smoke-runner assertions", () =
 		`module.exports = [require("assert/strict"), require("node:assert/strict")];\n`,
 	);
 	const graph = buildModuleGraph(path.join(root, "assert-strict.cjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	const dependencies = graph.modules.get(graph.entry)!.dependencies;
 	expect(dependencies.map((dependency) => dependency.resolvedPath)).toEqual([
@@ -1534,17 +1533,17 @@ test("parse caches distinguish transformed source from the on-disk module", () =
 	expect(parseCache.statistics()).toEqual({ hits: 0, misses: 2 });
 });
 
-test("rejects an unknown node:* built-in clearly even when surface.node is on", () => {
+test("rejects an unknown node:* built-in clearly", () => {
 	write("node-unknown.mjs", `import "node:repl";\n`);
 	expect(() =>
-		buildModuleGraph(path.join(root, "node-unknown.mjs"), { buildConfig: nodeOn }),
+		buildModuleGraph(path.join(root, "node-unknown.mjs"), { buildConfig: defaultConfig }),
 	).toThrow(/unknown node built-in module 'node:repl'/);
 });
 
 test("canonicalizes a bare ESM path specifier to the host built-in", () => {
 	write("bare-path.mjs", `import { join } from "path";\njoin;\n`);
 	const graph = buildModuleGraph(path.join(root, "bare-path.mjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe("node:path");
 });
@@ -1567,7 +1566,7 @@ test("gives supported bare assert precedence over npm packages", () => {
 	write("node_modules/assert/index.js", `module.exports = "npm-shadow";\n`);
 	write("bare-assert.cjs", `module.exports = require("assert");\n`);
 	const graph = buildModuleGraph(path.join(root, "bare-assert.cjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
 		"node:assert",
@@ -1598,7 +1597,7 @@ test("gives supported bare assert precedence over npm packages", () => {
 test("recognizes inspector as a bare core module", () => {
 	write("bare-inspector.cjs", `module.exports = require("inspector");\n`);
 	const graph = buildModuleGraph(path.join(root, "bare-inspector.cjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
 		"node:inspector",
@@ -1612,7 +1611,7 @@ test("recognizes inspector as a bare core module", () => {
 test("does not treat prefix-only node:test as a bare core module", () => {
 	write("bare-test.cjs", `module.exports = require("test");\n`);
 	expect(() =>
-		buildModuleGraph(path.join(root, "bare-test.cjs"), { buildConfig: nodeOn }),
+		buildModuleGraph(path.join(root, "bare-test.cjs"), { buildConfig: defaultConfig }),
 	).toThrow(/Cannot resolve 'test'/);
 });
 
@@ -1623,7 +1622,7 @@ test("resolves prefix-only node:sqlite without treating bare sqlite as core", ()
 			`globalThis.sink = [DatabaseSync, StatementSync];\n`,
 	);
 	const graph = buildModuleGraph(path.join(root, "node-sqlite.mjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get("node:sqlite")?.host?.named).toEqual([
 		"DatabaseSync",
@@ -1633,7 +1632,7 @@ test("resolves prefix-only node:sqlite without treating bare sqlite as core", ()
 	write("bare-sqlite.cjs", `module.exports = require("sqlite");\n`);
 	expect(() =>
 		buildModuleGraph(path.join(root, "bare-sqlite.cjs"), {
-			buildConfig: nodeOn,
+			buildConfig: defaultConfig,
 		}),
 	).toThrow(/Cannot resolve 'sqlite'/);
 });
@@ -1645,7 +1644,7 @@ test("canonicalizes node:process and bare process to the shared host module", ()
 			`globalThis.sink = [process, emitWarning, env];\n`,
 	);
 	const graph = buildModuleGraph(path.join(root, "node-process.mjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get("node:process")?.host).toEqual(
 		expect.objectContaining({
@@ -1656,7 +1655,7 @@ test("canonicalizes node:process and bare process to the shared host module", ()
 
 	write("bare-process.cjs", `module.exports = require("process");\n`);
 	const bareGraph = buildModuleGraph(path.join(root, "bare-process.cjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(bareGraph.modules.get(bareGraph.entry)!.dependencies[0]!.resolvedPath).toBe(
 		"node:process",
@@ -1666,7 +1665,7 @@ test("canonicalizes node:process and bare process to the shared host module", ()
 test("canonicalizes bare string_decoder instead of resolving an ancestor shim", () => {
 	write("bare-decoder.cjs", `module.exports = require("string_decoder");\n`);
 	const graph = buildModuleGraph(path.join(root, "bare-decoder.cjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
 		"node:string_decoder",
@@ -1679,7 +1678,7 @@ test("a literal dynamic import of a supported node:* resolves to its host module
 		`async function f() {\n\treturn import("node:crypto");\n}\nglobalThis.sink = f;\n`,
 	);
 	const graph = buildModuleGraph(path.join(root, "dyn-node.mjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	expect(graph.modules.get(graph.entry)?.dependencies).toEqual([
 		expect.objectContaining({
@@ -1694,14 +1693,14 @@ test("a literal dynamic import of a supported node:* resolves to its host module
 test("a literal dynamic import of an unknown node:* is rejected, not deferred", () => {
 	write("dyn-unknown.mjs", `import("node:repl");\n`);
 	expect(() =>
-		buildModuleGraph(path.join(root, "dyn-unknown.mjs"), { buildConfig: nodeOn }),
+		buildModuleGraph(path.join(root, "dyn-unknown.mjs"), { buildConfig: defaultConfig }),
 	).toThrow(/unknown node built-in module 'node:repl'/);
 });
 
 test("a computed dynamic import of a node: string is deferred (only literals are checked)", () => {
 	write("dyn-computed.mjs", `const m = "node:zlib";\nimport(m);\n`);
 	const graph = buildModuleGraph(path.join(root, "dyn-computed.mjs"), {
-		buildConfig: nodeOn,
+		buildConfig: defaultConfig,
 	});
 	const entry = graph.modules.get(path.join(root, "dyn-computed.mjs"))!;
 	expect(entry.dependencies).toEqual([

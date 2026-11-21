@@ -75,8 +75,7 @@ also side-effect-free on the Test262 and WPT runners.
 
 ## Node test suites
 
-With `surface.node` enabled, `maligator run path/to/suite.mjs` can run suites
-that import `node:test`. CommonJS suites can require its callable test function.
+`maligator run path/to/suite.mjs` runs suites that import `node:test`. CommonJS suites can require its callable test function.
 Suite callbacks collect synchronously, and tests run sequentially with promise
 completion, context assertions, assertion plans, cleanup hooks and explicit
 timeouts. Failures set the process exit code; an unresolved test is cancelled
@@ -403,17 +402,12 @@ owns a shared runtime build from compiling on one core while every other core wa
 on its artifact lock. Native global setup and Test262 runtime preparation can use
 the full budget. Serial WPT and self-hosted checks can also use the full build
 allocation. Cargo compiles Rust tests before running the Rust test pool.
-Native global setup prepares both default Node surface variants before timed
-fixture builds, including their shared eval compiler and Rust dependencies.
-It also prepares the instrumented default runtime without Node when a selected
-file is listed in `tests/test-suite-native-perf.txt`. Keep that manifest in sync
-with tests using the default internal feature profile and `MAL_PERF_STATS=1`:
-compiling the shared native eval compiler belongs in preparation, before timed
-fixture hooks. Node-enabled counter fixtures need the separate `node-perf-stats`
-preparation in `tests/helpers/native-preparations.ts`. A unit audit checks literal
-harness builds using implicit default profiles. Explicit configs, dynamic options
-and profiling builds need their preparation identities reviewed separately.
-Focused selections outside the manifest keep ordinary preparation.
+Native global setup prepares the shared eval compiler and Rust dependencies before
+timed fixture builds. It also prepares the instrumented runtime when a selected file
+is listed in `tests/test-suite-native-perf.txt`. Keep the manifest in sync with tests
+that use the default internal feature profile and `MAL_PERF_STATS=1`. A unit audit
+checks builds that pass literal default harness options. Review preparation for
+explicit configurations, dynamic options, and profile builds separately.
 `MAL_BUILD_JOBS` and `CARGO_BUILD_JOBS` can lower a build pool further; neither can
 raise it above the inherited allocation. Resource controls survive canonical
 environment cleaning without retaining ambient runtime modes.

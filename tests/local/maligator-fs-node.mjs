@@ -283,5 +283,4 @@ function directory(value) {
 	return new Directory(toPath(value));
 }
 
-const url = process.argv.includes("--without-url") ? undefined : URL;
-console.log((await scenario({ directory, file, FileSystemError, URL: url })).join("\n"));
+console.log((await scenario({ directory, file, FileSystemError, URL })).join("\n"));

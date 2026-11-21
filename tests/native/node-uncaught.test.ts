@@ -22,7 +22,6 @@ describe("process uncaught exception and unhandled rejection handling", () => {
 		binaries = buildBackendPairFromOneProgramImage({
 			fixture,
 			name: "node-uncaught",
-			nodeEnabled: true,
 			mainFile: HOST_MAIN,
 			outDir,
 		});

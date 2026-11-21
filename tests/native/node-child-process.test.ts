@@ -29,14 +29,12 @@ describe("node:child_process execFileSync (POSIX)", () => {
 			name: "node-child-process-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "node-child-process-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});
@@ -63,7 +61,6 @@ describe("node:child_process detached spawn and unref", () => {
 			name: "node-child-process-unref",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 	});
 

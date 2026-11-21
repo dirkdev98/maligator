@@ -29,14 +29,12 @@ describe("global Buffer and node:buffer", () => {
 			name: "node-buffer-esm-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		esmInterpreted = buildNativeBinary({
 			fixture: "tests/local/node-buffer.mjs",
 			name: "node-buffer-esm-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 		cjsCompiled = buildNativeBinary({
@@ -44,14 +42,12 @@ describe("global Buffer and node:buffer", () => {
 			name: "node-buffer-cjs-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		cjsInterpreted = buildNativeBinary({
 			fixture: "tests/local/node-buffer.cjs",
 			name: "node-buffer-cjs-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 		globalOnly = buildNativeBinary({
@@ -59,14 +55,12 @@ describe("global Buffer and node:buffer", () => {
 			name: "node-buffer-global",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		expressDependencySmoke = buildNativeBinary({
 			fixture: "tests/fixtures/express-5/buffer-smoke.cjs",
 			name: "node-buffer-express-dependency-smoke",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 	}, 600_000);
 
@@ -115,7 +109,6 @@ describe("node:buffer text validation", () => {
 				name: "node-buffer-encoding",
 				outDir: directory,
 				mainFile: HOST_MAIN,
-				nodeEnabled: true,
 			});
 			for (const binary of [pair.compiled, pair.interpreted]) {
 				for (const env of [{}, STRESS_ENV])
@@ -142,7 +135,6 @@ describe("node:buffer text validation", () => {
 			const pair = buildBackendPairFromOneProgramImage({
 				fixture,
 				name: "node-buffer-validation",
-				nodeEnabled: true,
 				mainFile: HOST_MAIN,
 				outDir: directory,
 			});
@@ -162,7 +154,6 @@ describe("node:buffer text validation", () => {
 			const pair = buildBackendPairFromOneProgramImage({
 				fixture,
 				name: "node-buffer-api",
-				nodeEnabled: true,
 				mainFile: HOST_MAIN,
 				outDir: directory,
 			});

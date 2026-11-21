@@ -26,7 +26,6 @@ describe("global lexical and object records", () => {
 			outDir,
 			config: resolveBuildConfig({
 				engine: { primordials: "mutable", eval: true, realms: true },
-				surface: { node: true },
 			}),
 		});
 		const sanitized = ["MAL_ASAN", "MAL_UBSAN", "MAL_TSAN"].some(

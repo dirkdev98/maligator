@@ -15,7 +15,7 @@ import {
 } from "../src/compiler/target/program-image-codec.ts";
 import { executionTarget, resolveExecution } from "../src/platform/execution.ts";
 
-const config = resolveBuildConfig({ engine: { regexp: false }, surface: { node: true } });
+const config = resolveBuildConfig({ engine: { regexp: false } });
 const parsedCommand = parseCliArgs(["build", "--production"]);
 if (parsedCommand.kind !== "build") throw new Error("Expected build command");
 const execution = resolveExecution(parsedCommand, config, {
@@ -39,28 +39,27 @@ function compile(
 		optimization,
 		coreVerification: "per-pass",
 	}).runtime;
-	// Every Node-surface program lists its personality and Node's Error hooks; these
-	// tests assert what the platform module's own reads retain.
+	// Keep the assertions specific to the installers retained by platform reads.
 	return {
 		...runtime,
 		hostInstalls: runtime.hostInstalls.filter(
-			(install) => !SURFACE_INSTALLERS.has(install.installer),
+			(install) => !PERSONALITY_INSTALLERS.has(install.installer),
 		),
 	};
 }
 
-const SURFACE_INSTALLERS = new Set([
+const PERSONALITY_INSTALLERS = new Set([
 	...HOST_PERSONALITY_INSTALLERS,
 	NODE_ERROR_HOOKS_INSTALLER,
 ]);
 
 describe("catalog platform constants", () => {
-	it("resolves the module without enabling the Node surface", () => {
+	it("resolves the compile-time snapshot from a platform import", () => {
 		const graph = buildModuleGraph(entry, {
 			entrySource:
 				'import { execution } from "maligator:process"; globalThis.context = execution;',
 			entryGoal: "module",
-			buildConfig: resolveBuildConfig({ surface: { node: false } }),
+			buildConfig: resolveBuildConfig({}),
 			execution,
 		});
 		expect(graph.modules.get("maligator:process")?.host?.constants?.execution).toEqual(

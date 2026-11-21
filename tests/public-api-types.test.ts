@@ -1,4 +1,11 @@
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	mkdirSync,
+	mkdtempSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as ts from "typescript-v6-api";
@@ -21,6 +28,14 @@ describe("@maligator/cli public TypeScript API", () => {
 			const sourceDirectory = path.join(project, "src");
 			mkdirSync(packageDirectory, { recursive: true });
 			mkdirSync(sourceDirectory);
+			for (const dependency of ["@types/node", "undici-types"]) {
+				const target = path.join(project, "node_modules", dependency);
+				mkdirSync(path.dirname(target), { recursive: true });
+				symlinkSync(
+					path.resolve(import.meta.dirname, "../node_modules", dependency),
+					target,
+				);
+			}
 			copyFileSync(
 				path.resolve(import.meta.dirname, "../src/public-api.d.ts"),
 				path.join(packageDirectory, "index.d.ts"),
@@ -65,7 +80,7 @@ describe("@maligator/cli public TypeScript API", () => {
 export default defineBuild({
 	entry: "src/index.ts",
 	engine: { primordials: "mutable", intl: { enabled: true, features: ["number-format"] } },
-	surface: { webPlatform: true },
+
 });
 
 defineBuild({
@@ -118,6 +133,14 @@ import { listen } from "maligator:internal/http";
 import { parentPort } from "maligator:internal/workers";
 void [fetch, listen, parentPort, read];
 
+const timeout: NodeJS.Timeout = setTimeout(() => undefined, 20);
+timeout.unref();
+clearTimeout(+timeout);
+const response: Promise<Response> = fetch("https://example.com", { duplex: "half" });
+void response;
+// @ts-expect-error The server runtime has no browser document.
+document.createElement("div");
+
 const settings: DiskFile = file(new URL("file:///etc/settings.json"));
 const settingsBytes: Promise<Uint8Array<ArrayBuffer>> = settings.bytes();
 const settingsStat: Promise<FileStat> = settings.stat({ followSymlinks: false });
@@ -155,6 +178,11 @@ pool.run("sum", ["1", 2]);
 // @ts-expect-error A transferred result unwraps its value in the returned promise.
 const wrongResult: Promise<string> = pool.run("bytes", []);
 const worker = new Worker<number, string>(workerEntry);
+worker.port.onmessage = (event) => {
+	event.data.toUpperCase();
+	// @ts-expect-error The receive type controls the event's data.
+	event.data.toFixed();
+};
 worker.port.postMessage(3);
 // @ts-expect-error The send side retains its declared message type.
 worker.port.postMessage("3");

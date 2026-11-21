@@ -19,7 +19,6 @@ describe("Unicode scalar, ECMAScript whitespace, and ASCII helpers", () => {
 			name: "unicode-whitespace-ascii",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 	});
 

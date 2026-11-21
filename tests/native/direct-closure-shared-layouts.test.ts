@@ -29,14 +29,12 @@ describe("direct closures sharing one owner layout", () => {
 			name: "direct-closure-shared-layouts-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "direct-closure-shared-layouts-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

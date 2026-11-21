@@ -36,7 +36,7 @@ writeFileSync(
 );
 writeFileSync(
 	path.join(project, "maligator.build.ts"),
-	'export default { entry: "main.mjs", outputName: "fragments", surface: { node: true } };\n',
+	'export default { entry: "main.mjs", outputName: "fragments" };\n',
 );
 
 function writeApplication(extra: string): void {
@@ -198,7 +198,7 @@ describe("development builds from relocatable fragments", () => {
 		);
 		writeFileSync(
 			path.join(commonjs, "maligator.build.ts"),
-			'export default { entry: "main.mjs", outputName: "commonjs", surface: { node: true } };\n',
+			'export default { entry: "main.mjs", outputName: "commonjs" };\n',
 		);
 		build(commonjs);
 		expect(runBinary(commonjs, "commonjs")).toBe("createGreeter hello images 42\n");
@@ -231,7 +231,7 @@ describe("development builds from relocatable fragments", () => {
 		);
 		writeFileSync(
 			path.join(assets, "maligator.build.ts"),
-			'export default { entry: "main.mjs", outputName: "assets", surface: { node: true } };\n',
+			'export default { entry: "main.mjs", outputName: "assets" };\n',
 		);
 		const runWithoutSource = () => {
 			renameSync(greeting, `${greeting}.hidden`);

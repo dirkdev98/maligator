@@ -61,10 +61,9 @@ that same context. The final linker returns a typed result containing the execut
 path, exact artifact bundle, and context, so callers such as size tracking cannot
 accidentally resolve and measure a different build.
 
-Applications that enable `surface.webPlatform` or `surface.node`, or that start
-workers, link `host_main.c`, which installs the host globals and drives the host event
-loop. Other applications retain the lean synchronous `test262_main.c` driver. The
-product CLI itself uses `host_main.c` for its hosted command surface.
+Applications that use host APIs or start workers link `host_main.c`. It applies the
+image’s host installers and drives the event loop. Synchronous applications can
+link the smaller `test262_main.c` driver.
 
 ## Cross builds
 
@@ -117,7 +116,7 @@ the configuration and the project has no C bindings. The platform package includ
 a separate runner for the private application API used by `test --watch`. When a
 command needs a local runner, the linked-binary cache gives projects
 with the same runtime flavour and toolchain one executable. The application and its
-workers supply runtime images that select the host surface, Intl services, Temporal,
+workers supply runtime images that select host installers, Intl services, Temporal,
 and the RegExp and eval policy. A runner for `engine.eval: true` also links the eval
 component. Compiler defines that change native code enter the runner's cache key.
 

@@ -33,7 +33,6 @@ describe("private compiler bootstrap", () => {
 			outDir,
 			config: resolveBuildConfig({
 				engine: { primordials: "mutable", eval: true, realms: true },
-				surface: { node: true },
 			}),
 		});
 	});

@@ -27,7 +27,6 @@ describe("guarded numeric loop versions", () => {
 			outDir,
 			config: resolveBuildConfig({
 				engine: { primordials: "mutable" },
-				surface: { node: true },
 			}),
 		});
 		precise = buildNativeBinary({
@@ -37,7 +36,6 @@ describe("guarded numeric loop versions", () => {
 			nativeStackRoots: "precise",
 			config: resolveBuildConfig({
 				engine: { primordials: "mutable" },
-				surface: { node: true },
 			}),
 		});
 	});

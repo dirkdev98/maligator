@@ -33,7 +33,7 @@ if (inputPath === undefined || outputPath === undefined) {
 
 const bytes = compileEntrypointToBuffer(inputPath, {
 	stripTypes: stripCompactTypes,
-	buildConfig: resolveBuildConfig({ surface: { webPlatform: false, node: true } }),
+	buildConfig: resolveBuildConfig({}),
 	runPhase: runProfilePhase,
 });
 writeFileSync(outputPath, bytes);

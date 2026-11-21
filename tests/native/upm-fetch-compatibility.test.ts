@@ -18,8 +18,6 @@ beforeAll(() => {
 		name: "upm-fetch-compatibility",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
-		webPlatformEnabled: true,
 		compiled: true,
 	});
 }, 180_000);

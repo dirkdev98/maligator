@@ -22,7 +22,6 @@ beforeAll(() => {
 		name: "upm-process-lifecycle",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 	});
 }, 300_000);
 

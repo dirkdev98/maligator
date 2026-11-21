@@ -32,7 +32,6 @@ describe.each([false, true])("Array.from result transport with realms=%s", (real
 					intl: { enabled: false },
 					temporal: false,
 				},
-				surface: { node: true, webPlatform: false },
 			}),
 		});
 	});

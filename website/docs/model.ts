@@ -64,7 +64,7 @@ export const guideGroups: ReadonlyArray<DocGroup> = [
 			[
 				"build-configuration",
 				"Configure a build",
-				"Choose engine features, host surfaces, and module aliases.",
+				"Choose engine features and module resolution options.",
 			],
 			[
 				"assets",
@@ -169,7 +169,11 @@ export const referenceGroups: ReadonlyArray<DocGroup> = [
 	{
 		label: "Configuration",
 		entries: [
-			["build", "Build configuration", "Choose engine features, surfaces, and aliases."],
+			[
+				"build",
+				"Build configuration",
+				"Choose engine features and module resolution options.",
+			],
 			["library", "C library contracts", "Declare how to find and bind a C library."],
 			["cli", "CLI", "Look up commands, flags, defaults, and output paths."],
 		],
@@ -358,7 +362,7 @@ function platformMembers(
 		module,
 		url,
 		symbols,
-		"Experimental; no surface flag required.",
+		"Experimental.",
 	);
 }
 
@@ -369,7 +373,7 @@ function platformReference(id: string, symbols: Array<ReferenceSymbol>): string 
 	const url = `/api/${id}`;
 	let markdown =
 		`${platform.description}\n\nImport from \`${platform.id}\`. This API is ${platform.stability}. ` +
-		"Load declarations as described in [Use TypeScript](/guides/typescript). Platform imports do not require a surface flag.\n";
+		"Load declarations as described in [Use TypeScript](/guides/typescript).\n";
 	markdown += readFileSync(`website/docs/api/${id}.md`, "utf8");
 	const exports = [...platform.exports];
 	if (id === "workers")

@@ -21,7 +21,7 @@ describe("live imports in direct eval", () => {
 			fixture,
 			name: "eval-imports",
 			outDir,
-			config: resolveBuildConfig({ engine: { eval: true }, surface: { node: true } }),
+			config: resolveBuildConfig({ engine: { eval: true } }),
 		});
 	});
 	it("observes exporter changes and retains import binding semantics", () => {

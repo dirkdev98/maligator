@@ -17,8 +17,6 @@ beforeAll(() => {
 		name: "node-fetch-upload",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
-		webPlatformEnabled: false,
 	});
 });
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));

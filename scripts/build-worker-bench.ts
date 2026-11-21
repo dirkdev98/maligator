@@ -57,7 +57,6 @@ const configuration = (await import(
 	pathToFileURL(path.join(root, "src/build-config.ts")).href
 )) as typeof Configuration;
 const config = configuration.resolveBuildConfig({
-	surface: { node: true },
 	engine: { primordials: "locked" },
 });
 for (const name of [

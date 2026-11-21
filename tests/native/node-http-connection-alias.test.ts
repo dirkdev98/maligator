@@ -17,7 +17,6 @@ beforeAll(() => {
 		name: "node-http-connection-alias",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 	});
 });
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));

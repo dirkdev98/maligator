@@ -22,7 +22,6 @@ describe("template literal string conversion", () => {
 			fixture: "tests/local/template-literal-coercion.js",
 			name: "template-literal-coercion",
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
 			outDir,
 		}));
 	}, 600_000);

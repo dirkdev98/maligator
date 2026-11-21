@@ -436,7 +436,7 @@ async function build(): Promise<void> {
 		);
 	writeFileSync(
 		path.join(inputs, "maligator.build.ts"),
-		`export default ${JSON.stringify({ entry: "maligator.mjs", surface: { node: true, webPlatform: true }, ffi: Object.fromEntries(Object.keys(contracts).map((name) => [name, { contract: `${name}.ffi.ts`, link: "shared" }])) }, null, 2)};\n`,
+		`export default ${JSON.stringify({ entry: "maligator.mjs", ffi: Object.fromEntries(Object.keys(contracts).map((name) => [name, { contract: `${name}.ffi.ts`, link: "shared" }])) }, null, 2)};\n`,
 	);
 	const result = await execute(
 		"maligator-build",

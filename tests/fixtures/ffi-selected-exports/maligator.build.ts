@@ -2,7 +2,7 @@
 export default {
 	entry: "main.ts",
 	engine: { eval: false, realms: false },
-	surface: { webPlatform: true, node: true },
+
 	ffi: {
 		shapes: { contract: "shapes.ffi.ts" },
 		thin: { contract: "thin.ffi.ts" },

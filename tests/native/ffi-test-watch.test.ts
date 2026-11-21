@@ -225,7 +225,7 @@ test("recovered diagnostic", () => expect(watch_value()).toBe(1));\n`,
 		);
 		writeFileSync(
 			path.join(project, "maligator.build.ts"),
-			`export default ${JSON.stringify({ surface: { node: true, webPlatform: true }, ffi: { watch: { contract: "watch.ffi.ts", link: "static" } } })};\n`,
+			`export default ${JSON.stringify({ ffi: { watch: { contract: "watch.ffi.ts", link: "static" } } })};\n`,
 		);
 		const pkgConfig = path.join(external, "pkg-config");
 		writeFileSync(
@@ -333,7 +333,7 @@ test("recovered diagnostic", () => expect(watch_value()).toBe(1));\n`,
 		writeFileSync(header, `${valid}\nthis is invalid C;\n`);
 		writeFileSync(
 			path.join(project, "maligator.build.ts"),
-			`export default ${JSON.stringify({ surface: { node: true, webPlatform: true }, ffi: { watch: { contract: "watch.ffi.ts", find: { includeDirs: [external], sources: [path.join(external, "watch.c")] } } } })};\n`,
+			`export default ${JSON.stringify({ ffi: { watch: { contract: "watch.ffi.ts", find: { includeDirs: [external], sources: [path.join(external, "watch.c")] } } } })};\n`,
 		);
 		const session = watch(project);
 		try {

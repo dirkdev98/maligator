@@ -1,7 +1,6 @@
 // Generated from src/platform/catalog.ts; edit the catalog and regenerate.
 /**
- * Read, write, and stream files, work with directories, and watch for changes. No
- * surface flag is required.
+ * Read, write, and stream files, work with directories, and watch for changes.
  */
 declare module "maligator:fs" {
 	/**

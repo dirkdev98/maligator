@@ -80,7 +80,10 @@ import {
 	stripCompactTypes,
 } from "./compiler/frontend/compact-type-strip.ts";
 import type { EmbedDeclaration } from "./compiler/frontend/embed-declarations.ts";
-import { imageUsesHost } from "./compiler/frontend/host-modules.ts";
+import {
+	imageNeedsHostEventLoop,
+	imageUsesHost,
+} from "./compiler/frontend/host-modules.ts";
 import {
 	formatSyntaxDiagnostic,
 	SyntaxDiagnostic,
@@ -251,10 +254,7 @@ export interface CompilerInstallation {
 	developmentRunners?: Array<{
 		executablePath: string;
 		inProcess: boolean;
-		wireProtocol: "product" | "wire-list";
 		primordials: "locked" | "mutable";
-		webPlatform: boolean;
-		node: boolean;
 		eval: boolean;
 		realms: boolean;
 		regexp: boolean;
@@ -318,10 +318,7 @@ export function productCompilerInstallation(
 						{
 							executablePath: path.resolve(developmentRunnerPath),
 							inProcess: true,
-							wireProtocol: "product" as const,
 							primordials: "locked" as const,
-							webPlatform: true,
-							node: true,
 							eval: true,
 							realms: true,
 							regexp: true,
@@ -334,10 +331,7 @@ export function productCompilerInstallation(
 									{
 										executablePath: path.resolve(mutableDevelopmentRunnerPath),
 										inProcess: false,
-										wireProtocol: "wire-list" as const,
 										primordials: "mutable" as const,
-										webPlatform: true,
-										node: true,
 										eval: true,
 										realms: true,
 										regexp: true,
@@ -438,20 +432,13 @@ function resolveEntrypoint(
 	return path.resolve(entrypoint);
 }
 
-function configNeedsCxx(config: ResolvedBuildConfig): boolean {
-	return config.surface.webPlatform || config.surface.node;
-}
-
 function selectToolchain(
 	command: BuildCommand | RunCommand | DevCommand,
 	config: ResolvedBuildConfig,
 	context: CommandContext,
 ): { toolchain?: Toolchain; plan?: NativeBuildPlan } {
 	if (command.kind === "build" && command.internal.serializePath !== undefined) return {};
-	const needsCxx =
-		(command.kind !== "build" && !command.profile) || configNeedsCxx(config);
 	const selectionKey = JSON.stringify({
-		needsCxx,
 		target: command.kind === "build" ? command.target : undefined,
 		production: command.profile || (command.kind === "build" && command.production),
 	});
@@ -460,7 +447,7 @@ function selectToolchain(
 	try {
 		const runtimeDirectory = context.installation.runtimeDirectory;
 		const inspection = {
-			needsCxx,
+			needsCxx: true,
 			rustDir: path.join(runtimeDirectory, "rust"),
 			target: command.kind === "build" ? command.target : undefined,
 		};
@@ -549,8 +536,6 @@ function compatibleDevelopmentRunner(
 	return context.installation.developmentRunners?.find(
 		(runner) =>
 			config.engine.primordials === runner.primordials &&
-			(!config.surface.webPlatform || runner.webPlatform) &&
-			(!config.surface.node || runner.node) &&
 			(config.engine.eval !== true || runner.eval) &&
 			(!config.engine.realms || runner.realms) &&
 			(!config.engine.regexp || runner.regexp) &&
@@ -689,10 +674,6 @@ function prepareCommandState(
 	);
 	reporter.detail("Entrypoint", entrypointPath);
 	reporter.detail("Config", command.configPath ?? "automatic/default");
-	reporter.detail(
-		"Surface",
-		`web ${buildConfig.surface.webPlatform ? "on" : "off"}, node ${buildConfig.surface.node ? "on" : "off"}`,
-	);
 	if (
 		command.kind === "build" &&
 		command.internal.serializePath !== undefined &&
@@ -1044,27 +1025,13 @@ function prepareCommandState(
 			const wirePaths = reporter.phase("Cache development image", () =>
 				frontend.runtimeArtifacts.map((artifact) => artifact.path),
 			);
-			const surfaceMask =
-				(buildConfig.surface.webPlatform ? 1 : 0) | (buildConfig.surface.node ? 2 : 0);
-			const runArguments = workerManifestArguments(workerManifest).concat(
-				shimArguments,
-				embeddedRunner?.wireProtocol === "product"
-					? [
-							"--maligator-internal-run-wire",
-							String(surfaceMask),
-							String(wirePaths.length),
-							entrypointPath,
-							...wirePaths,
-							...command.programArgs,
-						]
-					: [
-							"--maligator-internal-run-wires",
-							String(wirePaths.length),
-							entrypointPath,
-							...wirePaths,
-							...command.programArgs,
-						],
-			);
+			const runArguments = workerManifestArguments(workerManifest).concat(shimArguments, [
+				"--maligator-internal-run-wires",
+				String(wirePaths.length),
+				entrypointPath,
+				...wirePaths,
+				...command.programArgs,
+			]);
 			reporter.detail("Execution backend", "packaged development runtime");
 			reporter.detail("Development images", wirePaths.join(", "));
 			reporter.complete("Ready", prebuiltExecutable, false);
@@ -1072,7 +1039,7 @@ function prepareCommandState(
 				...(embeddedRunner?.inProcess
 					? {
 							applicationImage: {
-								schema: 1 as const,
+								schema: 2 as const,
 								wires: frontend.runtimeArtifacts.map((artifact) => ({
 									path: artifact.path,
 									sha256: artifact.digest,
@@ -1081,8 +1048,6 @@ function prepareCommandState(
 								...(workerManifest === undefined
 									? {}
 									: { workerManifestPath: workerManifest }),
-								webPlatform: buildConfig.surface.webPlatform,
-								node: buildConfig.surface.node,
 								engine: {
 									primordials: buildConfig.engine.primordials,
 									eval: buildConfig.engine.eval === true,
@@ -1184,8 +1149,7 @@ function prepareCommandState(
 			features: interpreted
 				? normalizeNativeFeatures({
 						...derivation.features,
-						webPlatformEnabled: true,
-						nodeEnabled: true,
+						usesHost: true,
 					})
 				: derivation.features,
 			compilerBake,
@@ -1389,7 +1353,9 @@ function prepareCommandState(
 						? path.join(context.installation.runtimeDirectory, DEVELOPMENT_FRAGMENT_MAIN)
 						: applicationDriverPath(
 								context.installation,
-								usesHost,
+								usesHost ||
+									imageNeedsHostEventLoop(programImage.runtime.hostInstalls) ||
+									nativeLibraries?.needsHostEventLoop === true,
 								frontend.workerImages.length > 0,
 							),
 					cacheSuffix: derivation.cacheSuffix,
@@ -2233,14 +2199,12 @@ const PROFILED_TEST_RESULT_PREFIX = "__MALIGATOR_TEST_RESULT__";
 
 function testToolchain(
 	context: CommandContext,
-	config: ResolvedBuildConfig,
 	environment: NodeJS.ProcessEnv = process.env,
-	developmentRunner = false,
 ): Toolchain {
 	try {
 		return requireToolchain({
 			env: environment,
-			needsCxx: developmentRunner || configNeedsCxx(config),
+			needsCxx: true,
 			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
 		});
 	} catch (error) {
@@ -2264,9 +2228,7 @@ function prepareTestRunnerLibraries(
 ) {
 	if (Object.keys(config.ffi).length === 0) return undefined;
 	const toolchain =
-		packagedRunner === undefined
-			? testToolchain(context, config, environment, true)
-			: undefined;
+		packagedRunner === undefined ? testToolchain(context, environment) : undefined;
 	const tools =
 		toolchain !== undefined
 			? libraryBuildTools(toolchain, environment)
@@ -2299,8 +2261,7 @@ function buildIsolatedTestRunner(
 		return { binaryPath: packagedRunner, shims: shimPaths };
 
 	const derivation = buildDerivationFromConfig(config);
-	const toolchain =
-		bindings?.toolchain ?? testToolchain(context, config, environment, true);
+	const toolchain = bindings?.toolchain ?? testToolchain(context, environment);
 	const evalCompiler = context.installation.evalCompiler;
 	const compilerBake =
 		evalCompiler.kind === "source"
@@ -2367,10 +2328,6 @@ function prepareLinkedTestHost(
 	const libraries = bindings?.libraries;
 	const testConfig =
 		libraries === undefined ? config : { ...config, ffiModules: libraries.modules };
-	const hostConfig: ResolvedBuildConfig = {
-		...testConfig,
-		surface: { webPlatform: true, node: true },
-	};
 	const driverFiles = [entry, path.join(path.dirname(entry), "host-protocol.mts")];
 	const dependencies = [
 		...new Set([...(libraries?.dependencies ?? []), ...driverFiles]),
@@ -2399,14 +2356,14 @@ function prepareLinkedTestHost(
 		build() {
 			const frontend = compileBuildFrontend({
 				entrypoint: entry,
-				config: hostConfig,
+				config: testConfig,
 				platformSourceRoot: context.installation.platformSourceRoot,
 				stripTypes: context.stripTypes,
 				stripperIdentity: context.installation.frontendIdentity,
 				optimization: "development",
 				interpreted: true,
 			});
-			const runner = buildIsolatedTestRunner(context, hostConfig, {
+			const runner = buildIsolatedTestRunner(context, testConfig, {
 				bindings,
 				packagedRunner,
 				environment,
@@ -2565,7 +2522,7 @@ async function executeProfiledTests(
 		prepareConfiguredLibraries(
 			config,
 			context,
-			libraryBuildTools(testToolchain(context, config)),
+			libraryBuildTools(testToolchain(context)),
 		),
 	);
 	const compiled = reporter.phase("Compile modules", () =>
@@ -2579,7 +2536,11 @@ async function executeProfiledTests(
 	reporter.detail("Test files", compiled.files.length);
 	reporter.timing("Test discovery", compiled.discoveryMs);
 	reporter.timing("Test frontend", compiled.frontendMs);
-	const baseDerivation = buildDerivationFromConfig(config);
+	const usesHost = [
+		compiled.programImage,
+		...compiled.workerImages.map(({ image }) => image),
+	].some((image) => imageUsesHost(image.runtime.hostInstalls));
+	const baseDerivation = buildDerivationFromConfig(config, usesHost);
 	const derivation = {
 		features: normalizeNativeFeatures({
 			...baseDerivation.features,
@@ -2593,7 +2554,7 @@ async function executeProfiledTests(
 			.filter((part) => part !== "")
 			.join("-"),
 	};
-	const toolchain = testToolchain(context, config);
+	const toolchain = testToolchain(context);
 	const evalCompiler = context.installation.evalCompiler;
 	const compilerBake =
 		evalCompiler.kind === "source"
@@ -2666,6 +2627,10 @@ async function executeProfiledTests(
 		"Generated C code units",
 		source.reduce((total, unit) => total + unit.sourceCodeUnits, 0),
 	);
+	const nativeLibraries =
+		libraries === undefined
+			? undefined
+			: nativeLibraryInputs(libraries, context.installation.runtimeDirectory);
 	const binary = reporter.phase(
 		"Build native binary",
 		() =>
@@ -2673,9 +2638,7 @@ async function executeProfiledTests(
 				context: nativeContext,
 				name: "maligator-profile-test",
 				cSource: source,
-				...(libraries === undefined
-					? {}
-					: nativeLibraryInputs(libraries, context.installation.runtimeDirectory)),
+				...nativeLibraries,
 				verbose,
 				onWarning: (warning) => reporter.warning(warning),
 				onGeneratedObject: (event) =>
@@ -2685,7 +2648,9 @@ async function executeProfiledTests(
 					),
 				mainFile: applicationDriverPath(
 					context.installation,
-					imageUsesHost(compiled.programImage.runtime.hostInstalls),
+					usesHost ||
+						imageNeedsHostEventLoop(compiled.programImage.runtime.hostInstalls) ||
+						nativeLibraries?.needsHostEventLoop === true,
 					compiled.workerImages.length > 0,
 				),
 				cacheSuffix: derivation.cacheSuffix,

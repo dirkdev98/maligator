@@ -40,7 +40,6 @@ describe("Math.random seeding", () => {
 			name: "math-random-seed-crypto",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 	});
 

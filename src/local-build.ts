@@ -765,8 +765,7 @@ export function sharedDevelopmentRunnerFeatures(
 		...features,
 		// The image gates eval, so both policies can use a runner with the compiler.
 		evalEnabled: true,
-		webPlatformEnabled: true,
-		nodeEnabled: true,
+		usesHost: true,
 		temporalEnabled: true,
 		intlEnabled: true,
 		intlFeatures: [],
@@ -859,7 +858,7 @@ export function buildSharedDevelopmentRunner(
 /**
  * A binary that resolves host installers by name, such as the development runner or a
  * development fragment program, references every installer, so it links the native
- * components of every host surface. The C runtime is the same for all of them.
+ * components of all host installers. The C runtime is the same for all of them.
  */
 function resolvesInstallersByName(options: LocalBuildOptions): boolean {
 	const main =
@@ -883,8 +882,7 @@ export function buildLocalBinary(
 				features: Object.freeze(
 					normalizeNativeFeatures({
 						...options.context.features,
-						webPlatformEnabled: true,
-						nodeEnabled: true,
+						usesHost: true,
 					}),
 				),
 			})

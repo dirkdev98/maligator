@@ -17,7 +17,6 @@ beforeAll(() => {
 		intlEnabled: false,
 		temporalEnabled: false,
 		regexpEnabled: false,
-		webPlatformEnabled: true,
 	});
 }, 240_000);
 afterAll(() => rmSync(directory, { recursive: true, force: true }));

@@ -24,14 +24,12 @@ describe("node:tty", () => {
 			name: "node-tty-esm-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		esmInterpreted = buildNativeBinary({
 			fixture: "tests/local/node-tty.mjs",
 			name: "node-tty-esm-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 		cjsCompiled = buildNativeBinary({
@@ -39,14 +37,12 @@ describe("node:tty", () => {
 			name: "node-tty-cjs-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		cjsInterpreted = buildNativeBinary({
 			fixture: "tests/local/node-tty.cjs",
 			name: "node-tty-cjs-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

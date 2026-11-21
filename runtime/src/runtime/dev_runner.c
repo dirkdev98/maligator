@@ -1,5 +1,6 @@
 #include "dev_runner.h"
 
+#include "atomics_async.h"
 #include "compiler_native.h"
 #include "vm.h"
 #include "perf_stats.h"
@@ -93,21 +94,24 @@ static int run_images(
     const char *entry_path,
     int argc,
     char **argv,
-    bool web_platform,
-    bool node,
     const char *worker_manifest_path) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
     if (wire_count < 1) return 2;
     const MalDevelopmentImage *images = owned_images != nullptr ? owned_images : baked_images;
-    MalLoadedRuntimeImage *loaded = load_runtime_image(images, owned_images, 0);
-    if (loaded == nullptr) {
-        return 2;
+    MalLoadedRuntimeImage **loaded_images = calloc((usize) wire_count, sizeof(*loaded_images));
+    if (loaded_images == nullptr) return 2;
+    int code = 2;
+    MalHostInstaller personality = nullptr;
+    for (int index = 0; index < wire_count; index++) {
+        loaded_images[index] = load_runtime_image(images, owned_images, index);
+        if (loaded_images[index] == nullptr) goto free_images;
+        personality = mal_runtime_image_personality(
+            mal_loaded_runtime_image_get(loaded_images[index]), personality);
     }
-    MalRuntimeImage root_program = *mal_loaded_runtime_image_get(loaded);
+    MalRuntimeImage root_program = *mal_loaded_runtime_image_get(loaded_images[0]);
     if (root_program.module_import_count > 0) {
         fprintf(stderr, "development image %s imports from no earlier image\n", images[0].label);
-        mal_loaded_runtime_image_free(loaded);
-        return 2;
+        goto free_images;
     }
     if (assets != nullptr) {
         root_program.assets = assets;
@@ -119,27 +123,25 @@ static int run_images(
     const MalNativeProgramRelocation root_relocation = {0};
     if (!attach_overlay(&vm, &images[0], vm.runtime_image, &root_relocation)) {
         mal_vm_free(&vm);
-        mal_loaded_runtime_image_free(loaded);
-        return 2;
+        goto free_images;
     }
     if (mal_host_attach(&vm) == nullptr) {
         mal_vm_free(&vm);
-        mal_loaded_runtime_image_free(loaded);
-        return 2;
+        goto free_images;
     }
     if (worker_manifest_path != nullptr && !mal_worker_manifest_register(&vm, worker_manifest_path)) {
         mal_host_detach(&vm);
         mal_vm_free(&vm);
-        mal_loaded_runtime_image_free(loaded);
-        return 2;
+        goto free_images;
     }
-    mal_runtime_personality_install(&vm, web_platform, node);
+    mal_atomics_async_install(&vm, false);
 
     MalHostLaunchContext launch = {
         .argc = argc,
         .argv = argv,
         .script_path = entry_path != nullptr ? entry_path : root_program.entry_path,
     };
+    if (personality != nullptr) personality(&vm, nullptr, 0, &launch);
 #if MAL_DEVELOPMENT_API
     // Tool hosts reach their application bridge through the internal `mal` global.
     mal_host_install_maligator(&vm, nullptr, 0, &launch);
@@ -149,19 +151,13 @@ static int run_images(
     if (callables == nullptr) {
         mal_host_detach(&vm);
         mal_vm_free(&vm);
-        mal_loaded_runtime_image_free(loaded);
-        return 2;
+        goto free_images;
     }
     for (int index = 0; index < wire_count; index++) {
         i32 entry = 0;
         const MalRuntimeImage *program = vm.runtime_image;
         if (index > 0) {
-            MalLoadedRuntimeImage *fragment = load_runtime_image(images, owned_images, index);
-            if (fragment == nullptr) {
-                vm.completion.kind = MAL_COMPLETION_THROW;
-                break;
-            }
-            program = mal_loaded_runtime_image_get(fragment);
+            program = mal_loaded_runtime_image_get(loaded_images[index]);
             const MalNativeProgramRelocation relocation = {
                 .function_base = vm.runtime_image->function_count,
                 .global_base = vm.runtime_image->global_count,
@@ -171,11 +167,9 @@ static int run_images(
             };
             entry = mal_vm_splice_runtime_image(&vm, program);
             if (entry < 0) {
-                mal_loaded_runtime_image_free(fragment);
                 mal_vm_report_uncaught(&vm);
                 break;
             }
-            mal_vm_retain_loaded_runtime_image(&vm, fragment);
             if (!attach_overlay(&vm, &images[index], program, &relocation)) {
                 vm.completion.kind = MAL_COMPLETION_THROW;
                 break;
@@ -196,18 +190,22 @@ static int run_images(
         }
     }
     mal_host_run_event_loop(&vm);
-    int code = mal_host_finish_process(&vm, vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0);
+    code = mal_host_finish_process(&vm, vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0);
     mal_workers_shutdown(&vm);
 
     if (getenv("MAL_GC_AT_EXIT") != nullptr) mal_gc_collect(&vm);
     for (int index = 0; index < wire_count; index++) {
         if (callables[index] != nullptr) mal_vm_free_callable(callables[index]);
     }
-    if (vm.host_web_platform || vm.host_node) mal_host_timers_free(&vm);
+    mal_host_timers_free(&vm);
     mal_host_detach(&vm);
     mal_vm_free(&vm);
     free(callables);
-    mal_loaded_runtime_image_free(loaded);
+free_images:
+    for (int index = 0; index < wire_count; index++) {
+        if (loaded_images[index] != nullptr) mal_loaded_runtime_image_free(loaded_images[index]);
+    }
+    free(loaded_images);
     return code;
 }
 
@@ -217,8 +215,6 @@ int mal_dev_run_wires(
     const char *entry_path,
     int argc,
     char **argv,
-    bool web_platform,
-    bool node,
     const char *worker_manifest_path) {
     if (wire_count < 1) return 2;
     MalDevelopmentImage *images = calloc((usize) wire_count, sizeof(MalDevelopmentImage));
@@ -231,7 +227,7 @@ int mal_dev_run_wires(
         images[index].label = wire_paths[index];
     }
     code = run_images(nullptr, images, wire_count, nullptr, 0, entry_path, argc, argv,
-        web_platform, node, worker_manifest_path);
+        worker_manifest_path);
 done:
     for (int index = 0; index < wire_count; index++) free((void *) images[index].bytes);
     free(images);
@@ -246,9 +242,7 @@ int mal_dev_run_images(
     const char *entry_path,
     int argc,
     char **argv,
-    bool web_platform,
-    bool node,
     const char *worker_manifest_path) {
     return run_images(images, nullptr, wire_count, assets, asset_count, entry_path, argc, argv,
-        web_platform, node, worker_manifest_path);
+        worker_manifest_path);
 }

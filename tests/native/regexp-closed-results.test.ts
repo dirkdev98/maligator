@@ -30,7 +30,6 @@ describe("closed RegExp results", () => {
 						intl: { enabled: false },
 						temporal: false,
 					},
-					surface: { node: true },
 				}),
 			});
 			const sanitized = ["MAL_ASAN", "MAL_UBSAN", "MAL_TSAN"].some(

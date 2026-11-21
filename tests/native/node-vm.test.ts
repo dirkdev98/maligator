@@ -30,14 +30,12 @@ describe("node:vm contexts, scripts and compiled functions", () => {
 			name: "node-vm-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "node-vm-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});
@@ -62,7 +60,6 @@ describe("node:v8 flags reaching node:vm contexts", () => {
 			fixture: "tests/local/node-vm.mts",
 			name: "node-vm-v8",
 			outDir,
-			nodeEnabled: true,
 			evalEnabled: true,
 			realmsEnabled: true,
 		});

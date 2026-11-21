@@ -21,7 +21,6 @@ describe("the free performance global", () => {
 				name: `node-performance-global-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

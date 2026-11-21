@@ -35,14 +35,12 @@ describe("node:util", () => {
 			name: "node-util-esm-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		esmInterpreted = buildNativeBinary({
 			fixture: "tests/local/node-util.mjs",
 			name: "node-util-esm-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 		cjsCompiled = buildNativeBinary({
@@ -50,14 +48,12 @@ describe("node:util", () => {
 			name: "node-util-cjs-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		cjsInterpreted = buildNativeBinary({
 			fixture: "tests/local/node-util.cjs",
 			name: "node-util-cjs-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});
@@ -95,7 +91,6 @@ describe("node:util Unicode conversion", () => {
 			name: "node-util-usv",
 			outDir,
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
 		});
 		for (const binary of [pair.compiled, pair.interpreted]) {
 			for (const env of [{}, STRESS_ENV])
@@ -115,7 +110,6 @@ describe("node:util/types", () => {
 			name: "node-util-brands",
 			outDir,
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
 		});
 		for (const binary of [pair.compiled, pair.interpreted]) {
 			for (const env of [{}, STRESS_ENV])
@@ -132,7 +126,6 @@ describe("node:util/types", () => {
 			name: "node-util-types-cache",
 			outDir,
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
 		});
 		for (const binary of [pair.compiled, pair.interpreted]) {
 			for (const env of [{}, STRESS_ENV])
@@ -158,7 +151,6 @@ describe("node:util/types", () => {
 			name: "node-util-types",
 			outDir,
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
 		});
 		for (const binary of [pair.compiled, pair.interpreted]) {
 			for (const env of [{}, STRESS_ENV]) {

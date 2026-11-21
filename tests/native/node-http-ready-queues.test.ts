@@ -34,7 +34,6 @@ describe("node:http ready request queues", () => {
 			name: "node-http-ready-queues",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
 	});

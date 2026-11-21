@@ -20,7 +20,6 @@ describe("compact TypeScript application erasure", () => {
 				evalEnabled: false,
 				intlEnabled: false,
 				regexpEnabled: false,
-				webPlatformEnabled: false,
 			}),
 		);
 	}, 300_000);

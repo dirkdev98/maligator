@@ -221,7 +221,6 @@ export interface ResolvedBuildConfig {
 		temporal: boolean;
 		intl: { enabled: boolean; features: Array<string>; languages: Array<string> };
 	};
-	surface: { webPlatform: boolean; node: boolean };
 	ffi: Record<string, MaligatorFfiLibrary>;
 	/** Derived from the libraries' headers before compilation; empty until then. */
 	ffiModules: ReadonlyArray<FfiModule>;
@@ -257,9 +256,6 @@ export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildC
 				languages: config.engine?.intl?.languages ?? [],
 			},
 		},
-		// Every program may reach the web and Node globals and modules; a program links
-		// only those it uses. The parsed surface flags no longer select anything.
-		surface: { webPlatform: true, node: true },
 		ffi: { ...(config.ffi ?? {}) },
 		ffiModules: [],
 	};

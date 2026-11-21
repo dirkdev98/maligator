@@ -16,7 +16,6 @@ describe("maligator:test fetch against local Express", () => {
 				name: `express-test-fetch-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			}),
 		);

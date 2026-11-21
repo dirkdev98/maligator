@@ -24,7 +24,6 @@ beforeAll(() => {
 		name: "http-stalled-pipeline",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 		evalEnabled: false,
 		realmsEnabled: false,
 		intlEnabled: false,

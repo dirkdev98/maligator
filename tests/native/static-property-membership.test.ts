@@ -102,7 +102,6 @@ it.each(
 				outDir: directory,
 				config: resolveBuildConfig({
 					engine: { primordials, eval: false, realms: false },
-					surface: { node: true },
 				}),
 				nativeStackRoots: "precise",
 			});

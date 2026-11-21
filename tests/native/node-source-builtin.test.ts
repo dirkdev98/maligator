@@ -36,7 +36,6 @@ describe("computed source builtin loading", () => {
 					intl: { enabled: false },
 					temporal: false,
 				},
-				surface: { node: true },
 			}),
 		});
 	});
@@ -69,7 +68,6 @@ describe("source builtin image ownership", () => {
 			intl: { enabled: false },
 			temporal: false,
 		},
-		surface: { node: true },
 	});
 	let runner: string;
 	beforeAll(() => {
@@ -186,7 +184,6 @@ describe("source builtin loader realm", () => {
 					eval: true,
 					realms: true,
 				},
-				surface: { node: true },
 			}),
 		});
 		const sanitized = ["MAL_ASAN", "MAL_UBSAN", "MAL_TSAN"].some(
@@ -217,7 +214,6 @@ describe("CommonJS source builtin loading", () => {
 					intl: { enabled: false },
 					temporal: false,
 				},
-				surface: { node: true },
 			}),
 		});
 		const sanitized = ["MAL_ASAN", "MAL_UBSAN", "MAL_TSAN"].some(

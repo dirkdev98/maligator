@@ -26,7 +26,6 @@ beforeAll(() => {
 		name: "http-header-ownership",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 		evalEnabled: false,
 		realmsEnabled: false,
 		intlEnabled: false,

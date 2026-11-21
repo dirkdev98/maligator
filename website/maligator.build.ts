@@ -18,5 +18,4 @@ export default defineBuild({
 		temporal: false,
 		intl: { enabled: false },
 	},
-	surface: { webPlatform: true, node: true },
 });

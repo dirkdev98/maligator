@@ -33,7 +33,6 @@ function productRuntimeConfig(primordials: "locked" | "mutable") {
 			regexp: true,
 			intl: { enabled: false },
 		},
-		surface: { webPlatform: true, node: true },
 	};
 }
 

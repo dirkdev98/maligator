@@ -22,8 +22,6 @@ it("exposes the shared filesystem constants with Node descriptors and named-impo
 			name: "node-fs-promises-constants",
 			outDir: directory,
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
-			webPlatformEnabled: false,
 		});
 		for (const binary of [pair.compiled, pair.interpreted]) {
 			for (const env of [{}, STRESS_ENV]) {

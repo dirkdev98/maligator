@@ -15,7 +15,7 @@ import {
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-crypto-async-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
-describe("node:crypto async (surface.node)", () => {
+describe("node:crypto async", () => {
 	let compiled: string;
 	let interpreted: string;
 	beforeAll(() => {
@@ -24,14 +24,12 @@ describe("node:crypto async (surface.node)", () => {
 			name: "node-crypto-async-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/node-crypto-async.mjs",
 			name: "node-crypto-async-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

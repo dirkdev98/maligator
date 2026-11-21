@@ -21,7 +21,6 @@ describe("node:module package, compile-cache and hook APIs", () => {
 				name: `node-module-extras-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

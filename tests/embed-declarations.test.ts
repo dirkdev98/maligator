@@ -29,7 +29,6 @@ function declarationsOf(
 	const image = compileEntrypoint(entry, {
 		buildConfig: resolveBuildConfig({
 			modules: { aliases },
-			surface: { webPlatform: true },
 		}),
 		stripTypes: stripCompactTypes,
 	});

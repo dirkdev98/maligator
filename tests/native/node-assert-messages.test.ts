@@ -21,7 +21,6 @@ describe("node:assert messages and validation", () => {
 				name: `node-assert-messages-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

@@ -149,7 +149,6 @@ const wireConfig = resolveBuildConfig({
 		intl: { enabled: false },
 		primordials: "mutable",
 	},
-	surface: { webPlatform: true },
 });
 const wireDerivation = buildDerivationFromConfig(wireConfig);
 const wireSession = new BuildCompilationSession();

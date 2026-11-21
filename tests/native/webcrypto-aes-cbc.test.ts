@@ -16,7 +16,6 @@ beforeAll(() => {
 		name: "webcrypto-aes-cbc",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 	});
 });
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));

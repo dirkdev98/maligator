@@ -17,7 +17,6 @@ beforeAll(() => {
 		name: "node-http-bodyless-length",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 	});
 });
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));

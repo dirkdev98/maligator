@@ -21,14 +21,12 @@ describe("filesystem and workspace Node contracts", () => {
 			name: "compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/upm-filesystem-compatibility.mts",
 			name: "interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

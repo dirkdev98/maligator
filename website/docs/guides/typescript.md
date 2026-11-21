@@ -12,6 +12,7 @@ Include the build file in your TypeScript project, or explicitly load the packag
 {
 	"compilerOptions": {
 		"target": "ESNext",
+		"lib": ["ESNext"],
 		"module": "NodeNext",
 		"strict": true,
 		"noEmit": true,
@@ -46,10 +47,8 @@ import type { TaskContext } from "maligator:workers";
 
 Run `npx tsc --noEmit` independently of `maligator run`. TypeScript catches type errors; Maligator checks compilation and runtime availability.
 
-## Enable the required runtime surface
+## Type runtime APIs
 
-Types for Web APIs and `node:` modules do not enable those APIs. Set `surface.webPlatform` for Web APIs and `maligator:http`, or `surface.node` for supported Node modules. Other `maligator:` modules need no surface flag.
-
-The [build reference](/api/build#surface) lists the defaults. [Compatibility](/compatibility) lists supported standard APIs. If an import is unknown to the editor, first check type loading; if it fails at build time, check the module and surface support.
+The CLI declarations load Node types for timers, fetch, and other Web globals available in Node. Set `"lib": ["ESNext"]` for a server-only project. See [Compatibility](/compatibility) for the APIs Maligator implements.
 
 Continue with [Configure a build](/guides/build-configuration) or the [worker guide](/guides/workers).

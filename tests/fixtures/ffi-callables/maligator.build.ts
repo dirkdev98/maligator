@@ -2,6 +2,6 @@
 export default {
 	entry: "main.ts",
 	engine: { eval: false, realms: false },
-	surface: { webPlatform: true },
+
 	ffi: { callables: { contract: "callables.ffi.ts" } },
 };

@@ -26,16 +26,12 @@ describe("Node per-realm installer identity", () => {
 			name: "node-identity-esm-compiled",
 			mainFile: "tests/native/node_identity_main.c",
 			outDir,
-			nodeEnabled: true,
-			webPlatformEnabled: false,
 		});
 		esmInterpreted = buildNativeBinary({
 			fixture: "tests/local/node-identity.mjs",
 			name: "node-identity-esm-interpreted",
 			mainFile: "tests/native/node_identity_main.c",
 			outDir,
-			nodeEnabled: true,
-			webPlatformEnabled: false,
 			compiled: false,
 		});
 		cjsCompiled = buildNativeBinary({
@@ -43,16 +39,12 @@ describe("Node per-realm installer identity", () => {
 			name: "node-identity-cjs-compiled",
 			mainFile: "tests/native/node_identity_main.c",
 			outDir,
-			nodeEnabled: true,
-			webPlatformEnabled: false,
 		});
 		cjsInterpreted = buildNativeBinary({
 			fixture: "tests/local/node-identity.cjs",
 			name: "node-identity-cjs-interpreted",
 			mainFile: "tests/native/node_identity_main.c",
 			outDir,
-			nodeEnabled: true,
-			webPlatformEnabled: false,
 			compiled: false,
 		});
 		allModes = [esmCompiled, esmInterpreted, cjsCompiled, cjsInterpreted];

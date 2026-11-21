@@ -187,8 +187,8 @@ export async function prepareHttpBinaries(
 			throw new Error(`HTTP fixture differs between revisions: ${fixture}`);
 	}
 	const configurations = {
-		bare: "export default { surface: { webPlatform: true } };\n",
-		express: "export default { surface: { node: true, webPlatform: true } };\n",
+		bare: "export default {};\n",
+		express: "export default {};\n",
 	};
 	const binaries = {} as Record<Revision, Binaries>;
 	const binaryHashes = {} as Record<Revision, Record<ServerKind, string>>;

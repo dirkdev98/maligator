@@ -34,7 +34,6 @@ import { startNodeRootCompilation } from "../src/node-root-compiler.ts";
 
 const config = resolveBuildConfig({
 	engine: { eval: false, regexp: false },
-	surface: { node: false, webPlatform: false },
 });
 const options = {
 	stripTypes: stripCompactTypes,
@@ -46,8 +45,6 @@ function graphFor(files: ReadonlyArray<string>): ModuleGraph {
 		resolutionInputs: [],
 		entry: files[0]!,
 		modules: new Map(),
-		nodeEnabled: false,
-		webPlatformEnabled: false,
 		evaluationOrder: [],
 		cycles: [],
 		workerEntries: files.map((file) => ({

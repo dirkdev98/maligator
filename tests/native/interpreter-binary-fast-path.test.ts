@@ -23,7 +23,6 @@ describe("interpreter boxed-number binary fast path", () => {
 				realmsEnabled: false,
 				intlEnabled: false,
 				regexpEnabled: false,
-				webPlatformEnabled: false,
 				outDir,
 			}),
 		);

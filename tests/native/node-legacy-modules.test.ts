@@ -23,7 +23,6 @@ describe("node:constants, node:sys and node:punycode", () => {
 				name: `node-legacy-modules-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

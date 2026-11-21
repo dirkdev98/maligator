@@ -25,7 +25,6 @@ beforeAll(() => {
 		name: "intl-list-format",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 		intlFeatures: ["list-format"],
 	});
 });

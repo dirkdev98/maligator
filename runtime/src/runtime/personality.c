@@ -1,6 +1,5 @@
 #include "personality.h"
 
-#include "atomics_async.h"
 #include "builtin_console.h"
 #include "host.h"
 #include "intrinsics.h"
@@ -23,9 +22,9 @@ static MalObject *personality_global(MalVm *vm) {
 }
 
 // A host driver may already have applied the personality its image lists.
-static bool personality_begin(MalVm *vm, bool web_platform, bool node) {
-    if (vm->host_web_platform || vm->host_node) return false;
-    vm->host_web_platform = web_platform;
+static bool personality_begin(MalVm *vm, bool node) {
+    if (vm->host_personality_installed) return false;
+    vm->host_personality_installed = true;
     vm->host_node = node;
     return true;
 }
@@ -34,22 +33,16 @@ static bool personality_begin(MalVm *vm, bool web_platform, bool node) {
 // API classes install by use (web_surface.h). An isolate without a host event loop,
 // such as an installer test, gets no timers.
 static void personality_web(MalVm *vm) {
-    if (!personality_begin(vm, true, false) || mal_host(vm) == nullptr) return;
-    mal_host_timers_install_node(vm, personality_global(vm));
+    if (!personality_begin(vm, false) || mal_host(vm) == nullptr) return;
+    mal_host_timers_install(vm, personality_global(vm));
 }
 
-static void personality_node(MalVm *vm, bool web_platform) {
-    if (!personality_begin(vm, web_platform, true)) return;
+static void personality_node(MalVm *vm) {
+    if (!personality_begin(vm, true)) return;
     vm->console_node_hooks = &node_console_hooks;
     if (mal_host(vm) == nullptr) return;
-    mal_host_timers_install_node(vm, personality_global(vm));
+    mal_host_timers_install(vm, personality_global(vm));
     mal_node_immediates_install(vm, personality_global(vm));
-}
-
-void mal_runtime_personality_install(MalVm *vm, bool web_platform, bool node) {
-    mal_atomics_async_install(vm, false);
-    if (node) personality_node(vm, web_platform);
-    else if (web_platform) personality_web(vm);
 }
 
 void mal_host_install_web_personality(
@@ -60,18 +53,21 @@ void mal_host_install_web_personality(
     personality_web(vm);
 }
 
-void mal_host_install_node_personality(
-    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
-    (void) slots;
-    (void) count;
-    (void) launch;
-    personality_node(vm, false);
-}
-
 void mal_host_install_node_web_personality(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
     (void) slots;
     (void) count;
     (void) launch;
-    personality_node(vm, true);
+    personality_node(vm);
+}
+
+MalHostInstaller mal_runtime_image_personality(
+    const MalRuntimeImage *program, MalHostInstaller selected) {
+    if (selected == mal_host_install_node_web_personality) return selected;
+    for (i32 i = 0; i < program->host_install_count; i++) {
+        MalHostInstaller installer = program->host_installs[i].installer;
+        if (installer == mal_host_install_node_web_personality) return installer;
+        if (installer == mal_host_install_web_personality) selected = installer;
+    }
+    return selected;
 }

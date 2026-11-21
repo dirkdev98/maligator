@@ -20,8 +20,6 @@ describe("default Node-only host driver", () => {
 				fixture: "tests/local/node-scheduling.cjs",
 				name: `node-scheduling-${compiled ? "compiled" : "interpreted"}`,
 				outDir,
-				nodeEnabled: true,
-				webPlatformEnabled: false,
 				compiled,
 			}),
 		);

@@ -24,7 +24,6 @@ describe("node:dns lookup and the system resolver", () => {
 				name: `node-dns-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

@@ -21,7 +21,6 @@ describe("node:console Console class", () => {
 				name: `node-console-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

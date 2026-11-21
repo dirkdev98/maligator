@@ -14,7 +14,6 @@ import {
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-error-stack-locked-"));
 const config = resolveBuildConfig({
 	engine: { primordials: "locked" },
-	surface: { node: true },
 });
 
 describe("Node Error stack hooks with locked primordials", () => {

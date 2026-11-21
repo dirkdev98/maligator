@@ -84,7 +84,6 @@ console.log(`ok   node does not resolve on isolated PATH (${tools})`);
 
 const compilerConfig = resolveBuildConfig({
 	engine: { eval: false, regexp: true, intl: { enabled: false } },
-	surface: { webPlatform: false, node: true },
 });
 const compiler = buildNativeBinary({
 	fixture: "src/selfhost-native-entry.mts",
@@ -95,7 +94,6 @@ const compiler = buildNativeBinary({
 
 const targetConfig = resolveBuildConfig({
 	engine: { eval: false, regexp: false, intl: { enabled: false } },
-	surface: { webPlatform: false, node: false },
 });
 const reference = buildNativeBinary({
 	fixture,
@@ -211,7 +209,6 @@ writeFileSync(
 );
 const evalConfig = resolveBuildConfig({
 	engine: { eval: true, regexp: false, intl: { enabled: false } },
-	surface: { webPlatform: false, node: false },
 });
 const evalReference = buildNativeBinary({
 	fixture,

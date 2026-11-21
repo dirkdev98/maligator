@@ -20,7 +20,6 @@ beforeAll(() => {
 		name: "object-accessor-tail",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 	});
 });
 

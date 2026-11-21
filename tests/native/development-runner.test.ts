@@ -38,10 +38,7 @@ describe("development wire runner", () => {
 				"	1,\n" +
 				");\n",
 		);
-		writeFileSync(
-			path.join(directory, "maligator.build.mjs"),
-			"export default { surface: { node: true } };\n",
-		);
+		writeFileSync(path.join(directory, "maligator.build.mjs"), "export default {};\n");
 
 		const result = spawnSync(
 			process.execPath,
@@ -77,7 +74,7 @@ describe("development wire runner", () => {
 		expect(result.stderr).not.toContain("Generate native code");
 	}, 300_000);
 
-	it("installs Node text encoding globals when the web surface is disabled", () => {
+	it("installs named text encoding globals in development images", () => {
 		const projectDirectory = path.join(directory, "node-text-encoding");
 		mkdirSync(projectDirectory, { recursive: true });
 		writeFileSync(
@@ -91,7 +88,7 @@ describe("development wire runner", () => {
 		);
 		writeFileSync(
 			path.join(projectDirectory, "maligator.build.mjs"),
-			"export default { surface: { node: true, webPlatform: false } };\n",
+			"export default {};\n",
 		);
 
 		const result = spawnSync(

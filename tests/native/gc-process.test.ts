@@ -32,8 +32,6 @@ it("reclaims side storage grown by old arrays under process pressure", () => {
 			evalEnabled: false,
 			realmsEnabled: false,
 			intlEnabled: false,
-			webPlatformEnabled: false,
-			nodeEnabled: false,
 			regexpEnabled: false,
 			temporalEnabled: false,
 		});

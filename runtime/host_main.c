@@ -32,19 +32,17 @@ extern const MalRuntimeImage mal_runtime_image;
 __attribute__((weak)) void mal_register_compiled_worker_entries(void) {}
 
 #if MAL_DEVELOPMENT_API
-static const char development_wire_command[] = "--maligator-internal-run-wire";
+static const char development_wire_command[] = "--maligator-internal-run-wires";
 
 static int run_development_wire(int argc, char **argv, const char *worker_manifest_path) {
-    if (argc < 6 || strlen(argv[2]) != 1 ||
-        argv[2][0] < '0' || argv[2][0] > '3') {
+    if (argc < 5) {
         fprintf(stderr, "invalid internal development wire invocation\n");
         return 2;
     }
-    int surface_mask = argv[2][0] - '0';
-    int wire_count = atoi(argv[3]);
-    int entry_offset = 4;
+    int wire_count = atoi(argv[2]);
+    int entry_offset = 3;
     int wire_offset = entry_offset + 1;
-    if (wire_count < 1 || wire_offset + wire_count > argc) {
+    if (wire_count < 1 || wire_count > argc - wire_offset) {
         fprintf(stderr, "invalid internal development wire count\n");
         return 2;
     }
@@ -61,7 +59,7 @@ static int run_development_wire(int argc, char **argv, const char *worker_manife
         (const char *const *) &argv[wire_offset], wire_count,
         argv[entry_offset],
         program_argc, program_argv,
-        (surface_mask & 1) != 0, (surface_mask & 2) != 0, worker_manifest_path);
+        worker_manifest_path);
     free(program_argv);
     return code;
 }

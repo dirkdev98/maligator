@@ -21,7 +21,6 @@ describe("node:stream toWeb and fromWeb interop", () => {
 				name: `node-stream-web-interop-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

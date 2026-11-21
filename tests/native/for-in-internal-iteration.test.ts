@@ -24,7 +24,6 @@ describe("for-in key iteration", () => {
 			mainFile: HOST_MAIN,
 			config: resolveBuildConfig({
 				engine: { primordials: "mutable", eval: false, realms: false },
-				surface: { node: true },
 			}),
 		});
 		const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });

@@ -17,7 +17,7 @@ import {
 // empty pool start. Maligator-only: Node's pool has neither seam.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-crypto-start-failure-"));
 
-describe("node:crypto argon2 start failures (surface.node)", () => {
+describe("node:crypto argon2 start failures", () => {
 	let compiled: string;
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -25,7 +25,6 @@ describe("node:crypto argon2 start failures (surface.node)", () => {
 			name: "node-crypto-start-failure",
 			mainFile: CRYPTO_START_FAILURE_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 	});
 

@@ -23,7 +23,6 @@ describe("crypto surfaces fail closed", () => {
 			name: "node-tls-options",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		getRandomValues = buildNativeBinary({
 			fixture: "tests/local/web-crypto-get-random-values.mjs",

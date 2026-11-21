@@ -19,7 +19,7 @@ import {
 
 describe("immutable boxed literal ABI", () => {
 	const fixture = "tests/local/native-boxed-literal-storage.js";
-	const config = resolveBuildConfig({ surface: { webPlatform: true } });
+	const config = resolveBuildConfig({});
 	const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-native-boxed-literals-"));
 	afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 	let compiled: string;

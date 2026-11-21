@@ -29,14 +29,12 @@ describe("node:http request bridge", () => {
 				name: "node-http-request-compiled",
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 			}),
 			buildNativeBinary({
 				fixture: "tests/local/node-http-request.cjs",
 				name: "node-http-request-interpreted",
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled: false,
 			}),
 		];
@@ -45,7 +43,6 @@ describe("node:http request bridge", () => {
 			name: "node-http-request-perf",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
 	});

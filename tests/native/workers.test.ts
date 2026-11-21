@@ -20,7 +20,6 @@ for (const compiled of [true, false]) {
 				name: `workers-${compiled ? "native" : "interpreted"}`,
 				outDir,
 				compiled,
-				nodeEnabled: true,
 			});
 			expect(runToStdout(binary, { env: STRESS_ENV, timeoutMs: 30_000 })).toBe(
 				"workers PASS\n",
@@ -40,7 +39,6 @@ for (const compiled of [true, false]) {
 				name: `tinypool-workers-${compiled ? "native" : "interpreted"}`,
 				outDir,
 				compiled,
-				nodeEnabled: true,
 			});
 			const invocation = resolveHarnessExecutionInvocation(binary);
 			const result = spawnSync(invocation.executable, invocation.args, {

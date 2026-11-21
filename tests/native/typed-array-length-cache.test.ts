@@ -17,7 +17,6 @@ describe("TypedArray and ArrayBuffer extent resolution cache", () => {
 				fixture: "tests/local/typed-array-length-cache.mjs",
 				name: `typed-array-length-cache-${compiled ? "compiled" : "interpreted"}`,
 				compiled,
-				nodeEnabled: true,
 				mainFile: HOST_MAIN,
 				evalEnabled: false,
 				realmsEnabled: false,

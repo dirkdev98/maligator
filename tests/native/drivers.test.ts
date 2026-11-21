@@ -36,11 +36,12 @@ describe.each(DRIVERS)("$tag", ({ tag, mainFile, stress }) => {
 			name: tag,
 			mainFile,
 			outDir,
+			evalEnabled: false,
 		});
 	});
 
 	it("retains the exact final-link result", () => {
-		expect(build.context.features.webPlatformEnabled).toBe(true);
+		expect(build.context.features.usesHost).toBe(true);
 		expect(build.artifacts.linkArgs).toEqual([
 			...build.artifacts.c.linkArgs,
 			...build.artifacts.rust.linkArgs,

@@ -36,7 +36,6 @@ describe.each([false, true])("mutable globals with realms=%s", (realms) => {
 			name: `mutable-primordial-sites-${realms}`,
 			config: resolveBuildConfig({
 				engine: { primordials: "mutable", realms },
-				surface: { node: true },
 			}),
 		});
 	});

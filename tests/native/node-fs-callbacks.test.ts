@@ -22,8 +22,6 @@ it("runs node:fs callback operations on the blocking-work pool with Node results
 			name: "node-fs-callbacks",
 			outDir: directory,
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
-			webPlatformEnabled: false,
 		});
 		for (const binary of [pair.compiled, pair.interpreted]) {
 			for (const env of [{}, STRESS_ENV]) {

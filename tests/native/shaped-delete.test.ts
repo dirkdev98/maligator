@@ -43,7 +43,7 @@ describe("deleting shaped properties", () => {
 			name: "shaped-delete",
 			mainFile: HOST_MAIN,
 			outDir,
-			config: resolveBuildConfig({ surface: { node: true } }),
+			config: resolveBuildConfig({}),
 		}));
 	}, 600_000);
 

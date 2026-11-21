@@ -17,7 +17,6 @@ describe("computed dynamic import", () => {
 			name: "dynamic-import-computed",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		const result = spawnSync(binary, [], { encoding: "utf8", timeout: 20_000 });
 		expect(result.status, result.stderr).toBe(0);

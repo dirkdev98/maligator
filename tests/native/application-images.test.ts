@@ -37,19 +37,12 @@ const engine: NonNullable<MaligatorBuildConfig["engine"]> = {
 	intl: { enabled: false },
 };
 const config = resolveBuildConfig({
-	surface: { webPlatform: true, node: true },
-	engine,
-});
-const nodeOnlyConfig = resolveBuildConfig({
-	surface: { webPlatform: false, node: true },
 	engine,
 });
 const intlConfig = resolveBuildConfig({
-	surface: config.surface,
 	engine: { ...engine, intl: { enabled: true, features: ["number-format"] } },
 });
 const evalConfig = resolveBuildConfig({
-	surface: config.surface,
 	engine: { ...engine, eval: true },
 });
 function image(name: string, generation = "first", buildConfig = config) {
@@ -86,12 +79,10 @@ function descriptor(directory: string, generation: string) {
 		}),
 	);
 	const descriptor: ApplicationImageDescriptor = {
-		schema: 1,
+		schema: 2,
 		wires: [wire(directory, "fragment", generation), wire(directory, "app", generation)],
 		workerManifestPath,
 		entryPath: path.join(fixtures, "app.mts"),
-		webPlatform: true,
-		node: true,
 		engine: {
 			primordials: "locked",
 			eval: false,
@@ -129,9 +120,8 @@ for (const compiled of [true, false]) {
 			descriptors.push(unresolvedPath);
 			const nodeOnly = {
 				...unresolved,
-				wires: [wire(directory, "node-only", "node-only", nodeOnlyConfig)],
+				wires: [wire(directory, "node-only", "node-only")],
 				entryPath: path.join(fixtures, "node-only.mts"),
-				webPlatform: false,
 			};
 			const nodeOnlyPath = path.join(directory, "node-only.json");
 			writeFileSync(nodeOnlyPath, JSON.stringify(nodeOnly));
@@ -171,6 +161,16 @@ for (const compiled of [true, false]) {
 				}),
 			);
 			descriptors.push(evalPath);
+			const webRejectionPath = path.join(directory, "web-rejection.json");
+			writeFileSync(
+				webRejectionPath,
+				JSON.stringify({
+					...unresolved,
+					wires: [wire(directory, "web-rejection", "first")],
+					entryPath: path.join(fixtures, "web-rejection.mts"),
+				}),
+			);
+			descriptors.push(webRejectionPath);
 			const definition = image("main");
 			const derivation = buildDerivationFromConfig(config);
 			const context = resolveNativeBuildContext({
@@ -229,6 +229,9 @@ for (const compiled of [true, false]) {
 				result.stderr || result.stdout || result.signal || "missing exit status",
 			).toBe(0);
 			expect(result.stdout).toBe("application images PASS\n");
+			expect(result.stderr).toContain(
+				"Uncaught (in promise) Error: application web rejection",
+			);
 			passed = true;
 		} finally {
 			if (passed) rmSync(directory, { recursive: true, force: true });
@@ -243,14 +246,12 @@ it("reloads an edited wire at the same path alongside an unchanged dependency", 
 	);
 	try {
 		const descriptor: ApplicationImageDescriptor = {
-			schema: 1,
+			schema: 2,
 			wires: [
 				wire(directory, "count-fragment", "first"),
 				wire(directory, "wire-cache-result", "first"),
 			],
 			entryPath: path.join(fixtures, "wire-cache-result.mts"),
-			webPlatform: config.surface.webPlatform,
-			node: config.surface.node,
 			engine: {
 				...config.engine,
 				eval: config.engine.eval === true,
@@ -295,14 +296,12 @@ it("executes every fragment when an application has more than 4096 images", () =
 		const fragmentCount = 4097;
 		const fragment = wire(directory, "count-fragment", "first");
 		const descriptor: ApplicationImageDescriptor = {
-			schema: 1,
+			schema: 2,
 			wires: [
 				...Array.from({ length: fragmentCount }, () => fragment),
 				wire(directory, "count-result", "first"),
 			],
 			entryPath: path.join(fixtures, "count-result.mts"),
-			webPlatform: config.surface.webPlatform,
-			node: config.surface.node,
 			engine: {
 				...config.engine,
 				eval: config.engine.eval === true,

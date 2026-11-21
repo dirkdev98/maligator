@@ -20,8 +20,6 @@ it("copies typed-array bytes with Node's bounds, validation, and construction be
 			name: "node-buffer-copy-bytes",
 			outDir: directory,
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
-			webPlatformEnabled: false,
 		});
 		for (const binary of [pair.compiled, pair.interpreted]) {
 			for (const env of [{}, STRESS_ENV]) {

@@ -25,7 +25,6 @@ beforeAll(() => {
 		name: "intl-relative-time",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 		intlFeatures: ["relative-time-format"],
 	});
 });

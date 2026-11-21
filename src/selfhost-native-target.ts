@@ -14,7 +14,6 @@ export function selfhostNativeTargetConfig(evalEnabled: boolean): ResolvedBuildC
 			regexp: false,
 			intl: { enabled: false },
 		},
-		surface: { webPlatform: false, node: false },
 	});
 }
 

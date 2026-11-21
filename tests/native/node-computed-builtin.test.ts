@@ -59,7 +59,6 @@ describe("computed native builtin require", () => {
 							eval: name === "eval",
 							intl: { enabled: false },
 						},
-						surface: { node: true },
 					}),
 				}),
 			);

@@ -25,7 +25,6 @@ describe("large UTF-8 file reads", () => {
 			outDir: directory,
 			config: resolveBuildConfig({
 				engine: { eval: false, regexp: false, intl: { enabled: false } },
-				surface: { node: true },
 			}),
 		});
 	});

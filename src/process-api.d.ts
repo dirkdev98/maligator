@@ -1,8 +1,8 @@
 // Generated from src/platform/catalog.ts; edit the catalog and regenerate.
 /**
- * Read the compile-time command, target, and resolved application configuration. No
- * surface flag is required. Runtime arguments, environment, working directory, and
- * PID are separate process values.
+ * Read the compile-time command, target, and resolved application configuration.
+ * Runtime arguments, environment, working directory, and PID are separate process
+ * values.
  */
 declare module "maligator:process" {
 	/**
@@ -141,8 +141,8 @@ declare module "maligator:process" {
 	};
 
 	/**
-	 * Resolved application engine, Web/Node surface, and module policies. Excludes
-	 * build-host paths, asset declarations, and output controls.
+	 * Resolved application engine and module policies. Excludes build-host paths, asset
+	 * declarations, and output controls.
 	 *
 	 * @see https://maligator.ddv.tools/api/process#ExecutionConfig
 	 */
@@ -151,22 +151,6 @@ declare module "maligator:process" {
 		 * Engine configuration after validation and default resolution.
 		 */
 		readonly engine: ExecutionEngineConfig;
-		/**
-		 * Global and compatibility surface policy. maligator:process requires no enable
-		 * flag.
-		 */
-		readonly surface: {
-			/**
-			 * Whether Web globals are requested. Defaults to false; native module imports are
-			 * independent of this global installation policy.
-			 */
-			readonly webPlatform: boolean;
-			/**
-			 * Whether Node compatibility, globals, and node: module resolution are requested.
-			 * Defaults to false.
-			 */
-			readonly node: boolean;
-		};
 		/**
 		 * Resolved module-resolution policy.
 		 */

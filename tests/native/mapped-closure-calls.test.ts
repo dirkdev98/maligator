@@ -30,7 +30,6 @@ describe("mapped closure calls", () => {
 		const shared = { fixture, outDir };
 		const config = resolveBuildConfig({
 			engine: { eval: false, realms: false },
-			surface: { node: true },
 		});
 		pair = buildBackendPairFromOneProgramImage({
 			...shared,
@@ -48,7 +47,6 @@ describe("mapped closure calls", () => {
 			name: "mapped-closure-calls-mutable",
 			config: resolveBuildConfig({
 				engine: { eval: false, realms: false, primordials: "mutable" },
-				surface: { node: true },
 			}),
 		});
 		realms = buildNativeBinary({
@@ -56,7 +54,6 @@ describe("mapped closure calls", () => {
 			name: "mapped-closure-calls-realms",
 			config: resolveBuildConfig({
 				engine: { eval: false, realms: true },
-				surface: { node: true },
 			}),
 		});
 	});

@@ -29,14 +29,12 @@ describe("calls through Function.prototype.call and apply", () => {
 			name: "function-call-forwarding-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "function-call-forwarding-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

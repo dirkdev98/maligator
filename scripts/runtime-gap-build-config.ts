@@ -28,6 +28,5 @@ export function runtimeGapBuildConfig(
 				],
 			},
 		},
-		surface: { node: true, webPlatform: false },
 	});
 }

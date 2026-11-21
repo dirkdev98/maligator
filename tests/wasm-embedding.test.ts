@@ -15,7 +15,6 @@ const config = resolveBuildConfig({
 		temporal: false,
 		intl: { enabled: false },
 	},
-	surface: { node: false, webPlatform: false },
 });
 let module: WebAssembly.Module;
 const directory = mkdtempSync(path.join(os.tmpdir(), "mal-wasm-test-"));

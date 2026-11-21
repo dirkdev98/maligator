@@ -21,7 +21,6 @@ describe("Node util.inspect and console formatting", () => {
 				name: `node-inspect-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

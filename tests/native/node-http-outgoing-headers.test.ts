@@ -17,7 +17,6 @@ beforeAll(() => {
 		name: "http-outgoing-headers",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 	});
 });
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));

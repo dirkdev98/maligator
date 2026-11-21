@@ -27,7 +27,6 @@ describe("ordinary constructor storage capacity", () => {
 				mainFile: HOST_MAIN,
 				config: resolveBuildConfig({
 					engine: { primordials, eval: false, realms: false },
-					surface: { node: true },
 				}),
 			});
 			for (const name of ["Pair", "Constrained"]) {

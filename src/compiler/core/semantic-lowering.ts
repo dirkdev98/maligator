@@ -43,7 +43,6 @@ import {
 	canonicalNodeHostModuleId,
 	HOST_GLOBAL_INSTALLERS,
 	HOST_MODULES,
-	hostGlobalInstallerAvailable,
 	HOST_PERSONALITY_INSTALLER,
 	HOST_PERSONALITY_INSTALLERS,
 	hostInstallerSymbol,
@@ -1112,17 +1111,9 @@ export function constructSemanticProgramCore(
 	// Runtime eval runs the embedded compiler and its output in this isolate without
 	// installing globals, so both find the global object as the program left it.
 	const runtimeEval = program.facts.world.eval === "runtime";
-	const surfaces = {
-		webPlatform: program.semantic.graph?.webPlatformEnabled ?? false,
-		node: program.semantic.graph?.nodeEnabled ?? false,
-	};
 	program.hostGlobals = HOST_GLOBAL_INSTALLERS.filter(
-		(host) =>
-			linkage.hostGlobalInstallers.includes(host.installer) ||
-			(runtimeEval &&
-				host.computedMember &&
-				hostGlobalInstallerAvailable(host, surfaces)),
-	).map((host) => ({ ...host, retained: runtimeEval && host.computedMember }));
+		(host) => runtimeEval || linkage.hostGlobalInstallers.includes(host.installer),
+	).map((host) => ({ ...host, retained: runtimeEval }));
 	program.globalObjectEscapes = linkage.globalObjectEscapes;
 	program.nonRegExpStringCallees = linkage.nonRegExpStringCallees;
 	program.processExports = new Map(
@@ -1189,9 +1180,8 @@ function processReachable(
 	candidates: ReadonlyArray<CoreHostInstallCandidate>,
 ): boolean {
 	return (
-		program.semantic.graph?.nodeEnabled === true &&
-		(program.hostProcess?.retained === true ||
-			candidates.some((candidate) => candidate.installer === PROCESS_INSTALLER_SYMBOL))
+		program.hostProcess?.retained === true ||
+		candidates.some((candidate) => candidate.installer === PROCESS_INSTALLER_SYMBOL)
 	);
 }
 
@@ -1426,7 +1416,7 @@ function hostInstallSelection(
 	if (!usesNode && !installers.some(installerUsesHostPersonality)) return reached;
 	return [
 		usesNode ? NODE_PERSONALITY_INSTALLER : HOST_PERSONALITY_INSTALLER,
-		...(usesNode && program.facts.world.nodeSurface ? [NODE_ERROR_HOOKS_INSTALLER] : []),
+		...(usesNode ? [NODE_ERROR_HOOKS_INSTALLER] : []),
 		...reached.filter((installer) => !HOST_PERSONALITY_INSTALLERS.includes(installer)),
 		...(usesNode ? retained.filter(companion).map((host) => host.installer) : []),
 	];
@@ -4065,34 +4055,32 @@ function emitImportMetaInit(
 		program.semantic.graph?.modules.get(file.path)?.sourcePath ?? file.path,
 		"url",
 	);
-	if (program.semantic.graph?.nodeEnabled) {
-		const filename = compileModulePath(program, fn, cursor, file.path, "path");
+	const filename = compileModulePath(program, fn, cursor, file.path, "path");
+	emitStoreProperty(
+		program,
+		fn,
+		cursor,
+		object,
+		"dirname",
+		compileModulePath(program, fn, cursor, moduleDirname(file.path), "path"),
+	);
+	emitStoreProperty(program, fn, cursor, object, "filename", filename);
+	const main = nextCoreVariable(fn);
+	block.emitter.emit({
+		type: "createBoolean",
+		registers: [main],
+		value: file.path === program.semantic.entrypointPath,
+	});
+	emitStoreProperty(program, fn, cursor, object, "main", main);
+	if (importMetaResolveUse(program, file).observable) {
 		emitStoreProperty(
 			program,
 			fn,
 			cursor,
 			object,
-			"dirname",
-			compileModulePath(program, fn, cursor, moduleDirname(file.path), "path"),
+			"resolve",
+			emitImportMetaResolveFunction(program, fn, cursor, file, url, filename),
 		);
-		emitStoreProperty(program, fn, cursor, object, "filename", filename);
-		const main = nextCoreVariable(fn);
-		block.emitter.emit({
-			type: "createBoolean",
-			registers: [main],
-			value: file.path === program.semantic.entrypointPath,
-		});
-		emitStoreProperty(program, fn, cursor, object, "main", main);
-		if (importMetaResolveUse(program, file).observable) {
-			emitStoreProperty(
-				program,
-				fn,
-				cursor,
-				object,
-				"resolve",
-				emitImportMetaResolveFunction(program, fn, cursor, file, url, filename),
-			);
-		}
 	}
 	emitStoreProperty(program, fn, cursor, object, "url", url);
 	block.emitter.emit({
@@ -16120,7 +16108,7 @@ function compileCall(
 	if (!fn.semanticFile.commonjs) {
 		const required = tryCompileCreateRequireCall(program, fn, cursor, callExpression);
 		if (required !== undefined) return required;
-		if (program.semantic.graph?.nodeEnabled && isImportMetaResolveCall(callExpression)) {
+		if (isImportMetaResolveCall(callExpression)) {
 			const resolved = tryCompileImportMetaResolveCall(
 				program,
 				fn,
@@ -17276,9 +17264,7 @@ function retainUnfollowedGlobals(program: CoreFrontendContext): void {
 	program.builtinModuleLoads.any = true;
 	if (program.hostProcess) program.hostProcess.retained = true;
 	if (program.hostBuffer) program.hostBuffer.retained = true;
-	for (const host of program.hostGlobals) {
-		if (host.computedMember) host.retained = true;
-	}
+	for (const host of program.hostGlobals) host.retained = true;
 }
 
 function retainLanguageMember(
@@ -17319,8 +17305,7 @@ function retainUnfollowedLanguageMembers(program: CoreFrontendContext): void {
  * name or reflection selects them even without the personality.
  */
 function retainNodeErrorHooks(program: CoreFrontendContext): void {
-	if (program.facts.world.nodeSurface)
-		program.languageInstallers.add(NODE_ERROR_HOOKS_INSTALLER);
+	program.languageInstallers.add(NODE_ERROR_HOOKS_INSTALLER);
 }
 
 function retainCommonJsLoader(
@@ -17329,7 +17314,6 @@ function retainCommonJsLoader(
 	binding: Binding,
 ): void {
 	if (
-		program.semantic.graph?.nodeEnabled &&
 		fn.semanticFile.commonjs &&
 		binding.name === "require" &&
 		binding.declarationNode === fn.semanticFile.ast

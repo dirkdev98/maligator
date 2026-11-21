@@ -18,7 +18,6 @@ beforeAll(() => {
 		name: "upm-crypto-compatibility",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 		compiled: true,
 	});
 }, 180_000);

@@ -33,14 +33,12 @@ describe("node:async_hooks context compatibility", () => {
 			name: "node-async-hooks-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/node-async-hooks.mjs",
 			name: "node-async-hooks-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 		expressFoundations = buildNativeBinary({
@@ -48,21 +46,18 @@ describe("node:async_hooks context compatibility", () => {
 			name: "node-express-body-compat",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		storageCompiled = buildNativeBinary({
 			fixture: "tests/local/node-async-local-storage.mjs",
 			name: "node-async-local-storage-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		storageInterpreted = buildNativeBinary({
 			fixture: "tests/local/node-async-local-storage.mjs",
 			name: "node-async-local-storage-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 		storageExpected = execFileSync(
@@ -78,7 +73,6 @@ describe("node:async_hooks context compatibility", () => {
 					: "node-async-local-storage-v26-interpreted",
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			}),
 		);
@@ -97,7 +91,6 @@ describe("node:async_hooks context compatibility", () => {
 					: "node-async-local-storage-http-interpreted",
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			}),
 		);
@@ -114,7 +107,6 @@ describe("node:async_hooks context compatibility", () => {
 					: "node-async-local-storage-net-interpreted",
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			}),
 		);

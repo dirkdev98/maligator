@@ -29,14 +29,12 @@ describe("static names missing from builtin prototype chains", () => {
 			name: "builtin-missing-properties-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "builtin-missing-properties-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

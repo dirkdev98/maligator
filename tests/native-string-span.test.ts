@@ -51,7 +51,6 @@ describe("composable string spans", () => {
 		const image = compileEntrypoint("tests/local/string-span-case.js", {
 			buildConfig: resolveBuildConfig({
 				engine: { primordials: "locked", eval: false, realms: false },
-				surface: { node: true },
 			}),
 			enforcePolicies: false,
 			coreInstrumentation: "off",

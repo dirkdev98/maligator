@@ -18,6 +18,7 @@
 #include "function_object.h"
 #include "mal_bridge.h"
 #include "host_registry.h"
+#include "personality.h"
 #include "hex.h"
 #include "sha256.h"
 #include "worker_manifest.h"
@@ -621,7 +622,9 @@ static u32 workers_max(void) {
 
 typedef struct ApplicationWire {
     _Atomic(u32) refs;
+    bool node_personality;
     _Atomic(MalLoadedRuntimeImage *) first_load;
+    MalHostInstaller personality;
     u32 engine_policy;
     struct stat stamp;
     byte digest[64];
@@ -2675,6 +2678,7 @@ static void *worker_thread_main(void *arg) {
     if (vm != nullptr) {
         mal_vm_init(vm, image);
         vm->errors_forwarded = true;
+        vm->worker_rejections_fatal = thread->application == nullptr;
         if (mal_host_attach(vm) == nullptr) {
             mal_vm_free(vm);
             free(vm);
@@ -2706,6 +2710,16 @@ static void *worker_thread_main(void *arg) {
         ? (MalHostLaunchContext) {.argc = thread->application->argc, .argv = thread->application->argv, .script_path = thread->application->image->entry_path}
         : (MalHostLaunchContext) {.argc = 1, .argv = &argv0, .script_path = thread->entry->href};
     if (installed) {
+        if (thread->application != nullptr) {
+            ApplicationWires *wires = thread->application->image->wires;
+            MalHostInstaller personality = nullptr;
+            for (u32 index = 0; index < wires->count; index++) {
+                const ApplicationWire *wire = wires->ordered[index];
+                if (wire->personality != nullptr) personality = wire->personality;
+                if (wire->node_personality) break;
+            }
+            if (personality != nullptr) personality(vm, nullptr, 0, &launch);
+        }
         if (thread->domain != nullptr && thread->domain->initialize_host != nullptr
             && thread->application != nullptr) {
             thread->domain->initialize_host(vm, nullptr, 0, &launch);
@@ -4154,7 +4168,7 @@ void mal_host_install_maligator_internal_workers(
     (void) launch;
     // The public pool cancels tasks with AbortController even on a minimal host, which
     // installs no web globals by use.
-    if (!vm->host_web_platform && !vm->host_node) mal_host_install_web_events(vm, nullptr, 0, launch);
+    if (!vm->host_personality_installed) mal_host_install_web_events(vm, nullptr, 0, launch);
     if (thrown(vm)) return;
     if (!mal_workers_install(vm)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "maligator:workers requires a host event loop");
@@ -4277,6 +4291,8 @@ static ApplicationWire *application_wire_read(
     if (loaded == nullptr) goto failed;
     atomic_init(&wire->refs, 1);
     atomic_init(&wire->first_load, loaded);
+    wire->personality = mal_runtime_image_personality(mal_loaded_runtime_image_get(loaded), nullptr);
+    wire->node_personality = wire->personality == mal_host_install_node_web_personality;
     wire->engine_policy = mal_loaded_runtime_image_get(loaded)->engine_policy;
     wire->stamp = *stamp;
     memcpy(wire->digest, hex, sizeof(wire->digest));
@@ -4317,11 +4333,7 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
     mal_gc_root(&root, roots, countof(roots));
     ApplicationImage *image = nullptr;
     ApplicationWires *previous = nullptr;
-    // Validated only: each image's install table applies its own host personality.
-    bool web, node;
-    if (!get_named(vm, roots[0], "schema", &roots[1]) || !mal_value_is_int32(roots[1]) || mal_value_to_i32(roots[1]) != 1
-        || !application_boolean(vm, roots[0], "webPlatform", &web)
-        || !application_boolean(vm, roots[0], "node", &node)
+    if (!get_named(vm, roots[0], "schema", &roots[1]) || !mal_value_is_int32(roots[1]) || mal_value_to_i32(roots[1]) != 2
         || !get_named(vm, roots[0], "engine", &roots[1]) || !mal_value_is_object(roots[1])) goto failed;
     if (!get_named(vm, roots[1], "primordials", &roots[2]) || !mal_value_is_string(roots[2])) goto failed;
     // Primordial policy and Realm support depend on the runtime flavour.

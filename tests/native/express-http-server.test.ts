@@ -20,7 +20,6 @@ describe("Express 5 HTTP server", () => {
 			name: "express-http-server",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 	});
 

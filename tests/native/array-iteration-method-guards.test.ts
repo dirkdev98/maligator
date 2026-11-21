@@ -22,7 +22,6 @@ describe("guarded array iteration methods", () => {
 			outDir,
 			config: resolveBuildConfig({
 				engine: { primordials: "mutable", realms: true, eval: true },
-				surface: { node: true, webPlatform: true },
 			}),
 		});
 		binaries = [pair.compiled, pair.interpreted];

@@ -55,7 +55,6 @@ describe("node:http hardening configuration", () => {
 					name: compiled ? `${name}-compiled` : `${name}-interpreted`,
 					mainFile: HOST_MAIN,
 					outDir,
-					nodeEnabled: true,
 					compiled,
 				}),
 			);

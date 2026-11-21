@@ -157,14 +157,12 @@ describe("process as an EventEmitter", () => {
 			name: "node-process-events",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		eventsInterpreted = buildNativeBinary({
 			fixture: "tests/local/node-process-events.mts",
 			name: "node-process-events-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 		processWithoutEvents = buildNativeBinary({
@@ -172,14 +170,12 @@ describe("process as an EventEmitter", () => {
 			name: "node-process-without-events",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		shutdown = buildNativeBinary({
 			fixture: "tests/local/node-process-graceful-shutdown.cjs",
 			name: "node-process-graceful-shutdown",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 	}, 900_000);
 

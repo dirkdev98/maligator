@@ -27,7 +27,6 @@ const { stripCompactTypes } = (await load(
 const image = compileEntrypoint(input, {
 	buildConfig: resolveBuildConfig({
 		engine: { eval: false, realms: false, intl: { enabled: false } },
-		surface: { webPlatform: false, node: true },
 	}),
 	stripTypes: stripCompactTypes,
 	coreInstrumentation: "off",

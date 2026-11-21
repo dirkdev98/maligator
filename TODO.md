@@ -621,18 +621,12 @@ The target is the complete ECMA-429 server surface except WebAssembly.
       `encoding/encodeInto.any.js` and `encoding/textdecoder-streaming.any.js`. Use
       versioned encoding data and incremental state.
 
-- [ ] Offer CompressionStream and DecompressionStream without the Node surface: the
-      zlib codec links only with the node-zlib feature. Curate the compression WPT and
-      match Node's messages for corrupt input.
+- [ ] Curate the compression WPT and match Node’s messages for corrupt input.
 
 ## W3: fetch and crypto
 
 - [ ] Verify fetch `integrity` metadata (sha256, sha384, sha512). A request that sets
       it rejects today.
-
-- [ ] Let `maligator:http` work with neither surface enabled. Its native features
-      (URL parsing, TLS, codecs, the C++ runtime) follow the configured surfaces, so
-      importing it would need usage-derived native features.
 
 - [ ] Release a fetch response's connection when its body is dropped unread. A body
       larger than the initial read credit keeps the request, and the event loop,

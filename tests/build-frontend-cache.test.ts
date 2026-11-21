@@ -901,7 +901,7 @@ console.log(message, blob.length);
 
 			const options = {
 				entrypoint,
-				config: resolveBuildConfig({ surface: { node: true } }),
+				config: resolveBuildConfig({}),
 				stripTypes: stripCompactTypes,
 				stripperIdentity: "build-fragment-diagnostics-test",
 				cacheDirectory: path.join(root, "cache"),

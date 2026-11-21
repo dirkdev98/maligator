@@ -29,7 +29,6 @@ describe("split cursor trim lengths", () => {
 				outDir,
 				config: resolveBuildConfig({
 					engine: { primordials, eval: false, realms: false, intl: { enabled: false } },
-					surface: { node: true },
 				}),
 			});
 			const sanitized = ["MAL_ASAN", "MAL_UBSAN", "MAL_TSAN"].some(

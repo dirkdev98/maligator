@@ -21,7 +21,6 @@ for (const compiled of [true, false]) {
 				name: `node-dns-records-${compiled ? "compiled" : "interpreted"}`,
 				outDir,
 				compiled,
-				nodeEnabled: true,
 			});
 		});
 		afterAll(() => {

@@ -1,4 +1,4 @@
-// Asynchronous node:crypto acceptance fixture (behind surface.node).
+// Asynchronous node:crypto acceptance fixture.
 //
 // What this pins that the synchronous fixture cannot: the callback is
 // unreachable from JavaScript between `argon2(...)` returning and the macrotask

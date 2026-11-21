@@ -12,7 +12,6 @@ describe("compact string runtime and host boundaries", () => {
 			mainFile: "tests/fixtures/compact-string-boundaries/main.c",
 			config: resolveBuildConfig({
 				engine: { primordials: "mutable", regexp: false },
-				surface: { webPlatform: true, node: true },
 			}),
 		});
 	}, 600_000);

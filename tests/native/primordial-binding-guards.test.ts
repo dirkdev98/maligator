@@ -7,7 +7,6 @@ import { resolveBuildConfig } from "../../src/build-config.ts";
 import type { ResolvedBuildConfig } from "../../src/build-config.ts";
 import {
 	buildBackendPairFromOneProgramImage,
-	HOST_MAIN,
 	resolveHarnessExecutionInvocation,
 	runToStdout,
 	STRESS_ENV,
@@ -70,7 +69,6 @@ function build(name: string, file: string, config: ResolvedBuildConfig, perf = f
 		name,
 		outDir,
 		config,
-		...(config.surface.node ? { mainFile: HOST_MAIN } : {}),
 		...(perf ? { environment: { ...process.env, MAL_PERF_STATS: "1" } } : {}),
 	});
 }
@@ -123,7 +121,6 @@ describe("global primordial calls behind the primordial-bindings guard", () => {
 				fixture,
 				resolveBuildConfig({
 					engine: { primordials: "mutable", realms },
-					surface: { node: true },
 				}),
 			);
 		});
@@ -140,7 +137,6 @@ describe("global primordial calls behind the primordial-bindings guard", () => {
 				evalFixture,
 				resolveBuildConfig({
 					engine: { primordials: "mutable", eval: true, realms },
-					surface: { node: true },
 				}),
 			);
 		});
@@ -160,7 +156,6 @@ describe("pure namespace calls in the executing realm", () => {
 			pilot,
 			resolveBuildConfig({
 				engine: { primordials: "mutable", realms: true },
-				surface: { node: true },
 			}),
 			true,
 		);

@@ -25,7 +25,6 @@ beforeAll(() => {
 		name: "intl-datetime",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 		intlFeatures: ["date-time-format"],
 	});
 });

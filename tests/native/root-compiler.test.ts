@@ -29,7 +29,6 @@ import { scaledNativeRunTimeoutMs } from "../../src/test-harness.ts";
 const fixtures = path.resolve("tests/fixtures/root-compiler");
 const compilerConfig = resolveBuildConfig({
 	engine: { eval: false, regexp: false },
-	surface: { node: false, webPlatform: false },
 });
 const hostConfig = resolveBuildConfig({
 	engine: {
@@ -39,7 +38,6 @@ const hostConfig = resolveBuildConfig({
 		temporal: false,
 		intl: { enabled: false },
 	},
-	surface: { node: true, webPlatform: true },
 });
 
 // Both large worker roots and the owner wire hold the whole compiler. Building the graph

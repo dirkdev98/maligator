@@ -27,14 +27,12 @@ describe("node:events", () => {
 			name: "node-events-esm-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		esmInterpreted = buildNativeBinary({
 			fixture: "tests/local/node-events.mjs",
 			name: "node-events-esm-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 		cjsCompiled = buildNativeBinary({
@@ -42,14 +40,12 @@ describe("node:events", () => {
 			name: "node-events-cjs-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		cjsInterpreted = buildNativeBinary({
 			fixture: "tests/local/node-events.cjs",
 			name: "node-events-cjs-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 		perfCompiled = buildNativeBinary({
@@ -57,7 +53,6 @@ describe("node:events", () => {
 			name: "node-events-perf-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
 		gcCompiled = buildNativeBinary({
@@ -65,7 +60,6 @@ describe("node:events", () => {
 			name: "node-events-gc-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 	}, 1_200_000);
 

@@ -16,7 +16,6 @@ beforeAll(() => {
 		name: "node-crypto-encrypted-pkcs8",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 	});
 });
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));

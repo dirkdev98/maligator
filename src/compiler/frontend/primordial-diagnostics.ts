@@ -15,10 +15,6 @@ interface PrimordialReference {
 	kind: "binding" | "object";
 }
 
-export interface PrimordialDiagnosticHostFacts {
-	nodeEnabled: boolean;
-}
-
 function isNodeErrorHook(target: PrimordialReference): boolean {
 	return (
 		target.display === "Error.prepareStackTrace" ||
@@ -196,7 +192,6 @@ function diagnostic(
 export function collectPrimordialMutationDiagnostics(
 	program: SemanticProgram,
 	world: WorldFacts,
-	host: PrimordialDiagnosticHostFacts = { nodeEnabled: false },
 ): Array<CompilerDiagnostic> {
 	if (world.primordialPolicy !== "locked") return [];
 	const diagnostics: Array<CompilerDiagnostic> = [];
@@ -207,7 +202,7 @@ export function collectPrimordialMutationDiagnostics(
 					file,
 					node.type === "AssignmentExpression" ? node.left : node.argument,
 				);
-				if (target !== undefined && !(host.nodeEnabled && isNodeErrorHook(target))) {
+				if (target !== undefined && !isNodeErrorHook(target)) {
 					diagnostics.push(diagnostic(file, node, target, "assignment"));
 				}
 			} else if (node.type === "UnaryExpression" && node.operator === "delete") {

@@ -19,7 +19,6 @@ beforeAll(() => {
 		name: "node-fs-write-workers",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 	});
 }, 180_000);
 

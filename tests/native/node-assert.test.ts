@@ -17,7 +17,6 @@ describe("node:assert", () => {
 			fixture: "tests/local/node-assert.cjs",
 			name: "node-assert",
 			outDir,
-			nodeEnabled: true,
 		});
 	});
 

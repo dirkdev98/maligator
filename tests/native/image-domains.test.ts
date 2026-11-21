@@ -24,7 +24,7 @@ import {
 } from "../../src/test-harness.ts";
 
 const fixtures = path.resolve("tests/fixtures/image-domains");
-const config = resolveBuildConfig({ surface: { webPlatform: true, node: false } });
+const config = resolveBuildConfig({});
 
 function writeDomain(directory: string, generation: "first" | "second"): string {
 	const entries = ["worker", "leaf", "receiver"].map((name) => {

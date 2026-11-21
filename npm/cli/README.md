@@ -97,7 +97,7 @@ defaults, availability, and direct links.
 - A C23 compiler and archive tool: Apple clang, clang 19 or newer, or GCC 15 or
   newer
 - Rustup with the `cargo` and `rustc` toolchain selected by Maligator
-- A C++ compiler/runtime when `surface.webPlatform` or `surface.node` is enabled
+- A C++ compiler and runtime for local native runtime builds
 
 Projects with C library bindings also need Clang and a linker to build their
 development shims. Set `CC` to Clang's executable if the CLI cannot find it.

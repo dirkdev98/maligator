@@ -159,10 +159,8 @@ describe("prepared platform execution data", () => {
 			'import { execution } from "maligator:process"; if (execution !== globalThis.first || !Object.isFrozen(execution.config.engine)) throw new Error("supervised context changed"); mal._applicationResult(execution);',
 		];
 		const descriptor: ApplicationImageDescriptor = {
-			schema: 1,
+			schema: 2,
 			entryPath,
-			webPlatform: config.surface.webPlatform,
-			node: config.surface.node,
 			engine: {
 				primordials: config.engine.primordials,
 				eval: config.engine.eval === true,

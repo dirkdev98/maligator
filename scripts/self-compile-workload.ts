@@ -13,7 +13,6 @@ import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.t
 
 export const SELF_COMPILE_CONFIG = resolveBuildConfig({
 	engine: { eval: false, realms: false, regexp: true, intl: { enabled: false } },
-	surface: { webPlatform: false, node: true },
 });
 
 export function digestSelfCompileOutput(

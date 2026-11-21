@@ -20,7 +20,6 @@ let binary: string;
 beforeAll(() => {
 	const config = resolveBuildConfig({
 		engine: { eval: false, intl: { enabled: false } },
-		surface: { node: true },
 	});
 	const semantic = loadEntrypointAndRunSemanticAnalysis(
 		path.resolve("tests/local/shared-worker-image.mjs"),

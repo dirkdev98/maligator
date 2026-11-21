@@ -15,7 +15,6 @@ const orderedEntry = createWorkerUrl("./ordered-worker.mts", import.meta.url);
 const cancelledEntry = createWorkerUrl("./cancelled-worker.mts", import.meta.url);
 const config = resolveBuildConfig({
 	engine: { eval: false, regexp: false },
-	surface: { node: false, webPlatform: false },
 });
 const options = {
 	stripTypes: stripCompactTypes,
@@ -35,8 +34,6 @@ function graphFor(count = 1): ModuleGraph {
 		resolutionInputs: [],
 		entry: paths[0]!,
 		modules: new Map(),
-		nodeEnabled: false,
-		webPlatformEnabled: false,
 		evaluationOrder: [],
 		cycles: [],
 		workerEntries: paths.map((file) => ({

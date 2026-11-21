@@ -38,7 +38,6 @@ describe("functional replacer callback nomination", () => {
 				outDir,
 				mainFile: HOST_MAIN,
 				config: resolveBuildConfig({
-					surface: { node: true },
 					engine: { primordials, eval: true, realms: true },
 				}),
 				environment: { ...process.env, MAL_PERF_STATS: "1" },
@@ -124,7 +123,6 @@ describe("functional replacer callback nomination", () => {
 			outDir,
 			mainFile: HOST_MAIN,
 			config: resolveBuildConfig({
-				surface: { node: true },
 				engine: { primordials: "locked", eval: false, realms: true },
 			}),
 			environment: { ...process.env, MAL_PERF_STATS: "1" },

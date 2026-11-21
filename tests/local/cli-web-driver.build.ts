@@ -1,9 +1,5 @@
 export default {
 	outputName: "native-cli-web-driver",
-	engine: {
-		eval: false,
-		realms: false,
-		intl: { enabled: false },
-	},
-	surface: { webPlatform: true },
+	// The native suite prepares this runtime flavour before starting its checks.
+	engine: { primordials: "mutable", eval: false, realms: true },
 };

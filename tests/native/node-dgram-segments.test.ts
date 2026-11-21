@@ -20,7 +20,6 @@ beforeAll(() => {
 		outDir: directory,
 		config: resolveBuildConfig({
 			engine: { eval: false, realms: false, regexp: false, intl: { enabled: false } },
-			surface: { node: true, webPlatform: false },
 		}),
 	});
 });

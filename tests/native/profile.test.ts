@@ -64,7 +64,6 @@ describe("production profile recorder", () => {
 			name: "profile-runtime-attribution",
 			compiled: true,
 			profileEnabled: true,
-			nodeEnabled: true,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 			outDir: directory,
 		});
@@ -73,7 +72,6 @@ describe("production profile recorder", () => {
 			name: "profile-background-workers",
 			compiled: true,
 			profileEnabled: true,
-			nodeEnabled: true,
 			mainFile: HOST_MAIN,
 			outDir: directory,
 		});
@@ -82,7 +80,6 @@ describe("production profile recorder", () => {
 			name: "profile-dns-workers",
 			compiled: true,
 			profileEnabled: true,
-			nodeEnabled: true,
 			mainFile: HOST_MAIN,
 			outDir: directory,
 		});
@@ -91,7 +88,6 @@ describe("production profile recorder", () => {
 			name: "profile-sqlite-workers",
 			compiled: true,
 			profileEnabled: true,
-			nodeEnabled: true,
 			mainFile: HOST_MAIN,
 			outDir: directory,
 		});

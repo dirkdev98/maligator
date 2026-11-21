@@ -27,7 +27,6 @@ describe("Map and Set exact callback invocation", () => {
 				outDir,
 				mainFile: HOST_MAIN,
 				config: resolveBuildConfig({
-					surface: { node: true },
 					engine: { primordials, eval: false, realms: false },
 				}),
 				environment: { ...process.env, MAL_PERF_STATS: "1" },
@@ -94,7 +93,6 @@ describe("Map and Set exact callback invocation", () => {
 				outDir,
 				mainFile: HOST_MAIN,
 				config: resolveBuildConfig({
-					surface: { node: true },
 					engine: { primordials, eval: false, realms: false },
 				}),
 				environment: { ...process.env, MAL_PERF_STATS: "1" },

@@ -48,7 +48,6 @@ describe("relocatable build CommonJS boundary", () => {
 
 		const config = resolveBuildConfig({
 			engine: { realms: false, intl: { enabled: false } },
-			surface: { webPlatform: false },
 		});
 		const frontend = compileBuildFrontend({
 			entrypoint,
@@ -119,7 +118,7 @@ describe("dependency images across project locations", () => {
 	it("runs a dependency image compiled at another location as installed here", () => {
 		const root = mkdtempSync(path.join(os.tmpdir(), "mal-located-dependencies-"));
 		roots.push(root);
-		const config = resolveBuildConfig({ surface: { node: true } });
+		const config = resolveBuildConfig({});
 		const derivation = buildDerivationFromConfig(config);
 		const runner = buildDevelopmentRunner(
 			resolveNativeBuildContext({ features: derivation.features }),
@@ -233,7 +232,7 @@ describe("dependency island chunks", () => {
 		const root = mkdtempSync(path.join(os.tmpdir(), "mal-dependency-chunks-"));
 		roots.push(root);
 		const entrypoint = chunkedProject(root);
-		const config = resolveBuildConfig({ surface: { node: true } });
+		const config = resolveBuildConfig({});
 		const derivation = buildDerivationFromConfig(config);
 		const runner = buildDevelopmentRunner(
 			resolveNativeBuildContext({ features: derivation.features }),

@@ -21,14 +21,12 @@ describe("CommonJS loader runtime", () => {
 			name: "commonjs-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/commonjs.cjs",
 			name: "commonjs-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

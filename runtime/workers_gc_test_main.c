@@ -1,7 +1,7 @@
+#include "atomics_async.h"
 #include "vm.h"
 #include "gc_process.h"
 #include "host.h"
-#include "personality.h"
 #include "web_host_timer.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +14,7 @@ int main(void) {
     mal_vm_init(&vm, &mal_runtime_image);
     mal_register_compiled_worker_entries();
     if (mal_host_attach(&vm) == nullptr) abort();
-    mal_runtime_personality_install(&vm, false, false);
+    mal_atomics_async_install(&vm, false);
     const MalHostLaunchContext launch = {.script_path = mal_runtime_image.entry_path};
     mal_vm_run_host_installs(&vm, &launch);
     MalCallable *callable = mal_vm_create_callable(&vm, 0);

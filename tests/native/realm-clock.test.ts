@@ -25,7 +25,6 @@ beforeAll(() => {
 		mainFile: HOST_MAIN,
 		config: resolveBuildConfig({
 			engine: { primordials: "mutable", realms: true, eval: false },
-			surface: { node: true },
 		}),
 	});
 	const fn = pair.programImage.native.functions.find(

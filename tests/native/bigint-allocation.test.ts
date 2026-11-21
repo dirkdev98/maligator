@@ -17,7 +17,6 @@ beforeAll(() => {
 		mainFile: "tests/fixtures/bigint-allocation/main.c",
 		outDir,
 		environment: { ...process.env, MAL_PERF_STATS: "1" },
-		nodeEnabled: true,
 		evalEnabled: false,
 		realmsEnabled: false,
 		intlEnabled: false,

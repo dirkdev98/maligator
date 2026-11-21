@@ -46,7 +46,6 @@ describe("node host installer link retention", () => {
 					name,
 					mainFile: HOST_MAIN,
 					outDir,
-					nodeEnabled: true,
 					// Production builds disable eval. Runtime eval keeps every global group
 					// and builtin that code compiled at run time could name.
 					evalEnabled: false,

@@ -62,7 +62,6 @@ describe.each([fixture, commonjsFixture])("private record columns in %s", (fixtu
 		};
 		const config = resolveBuildConfig({
 			engine: { eval: false, realms: false },
-			surface: { node: true },
 		});
 		pair = buildBackendPairFromOneProgramImage({
 			...shared,
@@ -80,7 +79,6 @@ describe.each([fixture, commonjsFixture])("private record columns in %s", (fixtu
 			name: "record-columns-mutable",
 			config: resolveBuildConfig({
 				engine: { primordials: "mutable", eval: false, realms: false },
-				surface: { node: true },
 			}),
 		});
 	});

@@ -1,3 +1,4 @@
+#include "atomics_async.h"
 #include "vm.h"
 #include "vm_ops.h"
 #include "intrinsics.h"
@@ -14,7 +15,6 @@
 #include "web_readable_stream_object.h"
 #include "web_url_object.h"
 #include "web_globals.h"
-#include "personality.h"
 
 #include <stdio.h>
 #include <inttypes.h>
@@ -208,7 +208,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     // The image's install table applies its host personality.
-    mal_runtime_personality_install(&vm, false, false);
+    mal_atomics_async_install(&vm, false);
     MalHostLaunchContext launch = {
         .argc = argc,
         .argv = argv,

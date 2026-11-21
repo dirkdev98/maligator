@@ -22,14 +22,12 @@ describe("shared Base64 and hex kernels", () => {
 			name: "codec-kernels-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/codec-kernels.mjs",
 			name: "codec-kernels-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

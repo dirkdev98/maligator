@@ -1,4 +1,4 @@
-Use `maligator:fs` to read, write, and watch files and directories on disk. It needs no surface flag. File reads and writes run on background threads.
+Use `maligator:fs` to read, write, and watch files and directories on disk. File reads and writes run on background threads.
 
 ## Read a file
 
@@ -13,7 +13,7 @@ if (await settings.exists()) {
 console.log((await file("notes.txt").text()).length);
 ```
 
-`file()` returns a handle without touching the disk, so the file need not exist yet. A relative path resolves against the working directory when an operation runs. A `file:` URL works too, where the web surface provides `URL`.
+`file()` returns a handle without touching the disk, so the file need not exist yet. A relative path resolves against the working directory when an operation runs. A `file:` URL works too.
 
 `text()` decodes UTF-8 and drops a byte order mark, `bytes()` returns a fresh `Uint8Array` and `json()` parses the text. A handle reads like an [embedded file](/guides/assets), except that each method returns a promise, so code that awaits `bytes()`, `text()` or `json()` takes either.
 
@@ -129,4 +129,4 @@ try {
 
 Invalid paths and URLs throw a `TypeError` when creating a handle. Stream offsets and chunk sizes throw a `RangeError` when out of range. A watch rejects with the signal's reason when aborted.
 
-Libraries written against Node can keep using `node:fs`, which needs the Node surface. Both modules run file operations on the same pool of threads.
+Libraries written against Node can keep using `node:fs`. Both modules run file operations on the same pool of threads.

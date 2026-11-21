@@ -46,6 +46,7 @@ const [
 	listenerSecond,
 	intlUnavailable,
 	evalUnavailable,
+	webRejection,
 ] = descriptors;
 check(
 	first &&
@@ -55,7 +56,8 @@ check(
 		listenerFirst &&
 		listenerSecond &&
 		intlUnavailable &&
-		evalUnavailable,
+		evalUnavailable &&
+		webRejection,
 	"fixture descriptors",
 );
 function rejected(callback: () => unknown, message: string) {
@@ -114,6 +116,14 @@ function launch(handle: object, mode = "normal", gate = new SharedArrayBuffer(4)
 		exitOnResult: true,
 	});
 }
+const webRejectionHandle = load(webRejection);
+const webRejectionExit = await bridge._launchApplicationImage(webRejectionHandle, {
+	argv: ["application-host", webRejection.entryPath],
+}).closed;
+check(webRejectionExit.code === 0, "the web rejection keeps the application running");
+bridge._releaseApplicationImage(webRejectionHandle);
+scopedResources(0, 0, 0);
+
 const unresolvedHandle = load(unresolvedDescriptor);
 const unresolvedExit = await launch(unresolvedHandle, "unresolved").closed;
 check(

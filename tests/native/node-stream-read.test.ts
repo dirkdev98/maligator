@@ -23,7 +23,6 @@ for (const compiled of [true, false]) {
 				name: `node-stream-read-${compiled ? "compiled" : "interpreted"}`,
 				outDir,
 				compiled,
-				nodeEnabled: true,
 			});
 		});
 		afterAll(() => {

@@ -23,7 +23,6 @@ beforeAll(() => {
 		mainFile: HOST_MAIN,
 		config: resolveBuildConfig({
 			engine: { primordials: "mutable", eval: false, realms: false },
-			surface: { node: true },
 		}),
 	};
 	const pair = buildBackendPairFromOneProgramImage({ ...common, name: "projection" });

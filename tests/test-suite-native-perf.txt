@@ -24,6 +24,7 @@ tests/native/compiled-call-cache-family.test.ts
 tests/native/constant-key-property-cache.test.ts
 tests/native/exact-collection-capture.test.ts
 tests/native/for-of-body-environment.test.ts
+tests/native/forwarded-callback-counters.test.ts
 tests/native/in-operator-cache.test.ts
 tests/native/string-builder-accumulator.test.ts
 tests/native/string-code-points.test.ts
@@ -58,6 +59,9 @@ tests/native/native-constructor-prototypes.test.ts
 tests/native/native-for-in-own-keys.test.ts
 tests/native/native-inherited-setters.test.ts
 tests/native/native-shape-snapshots.test.ts
+tests/native/node-events.test.ts
+tests/native/node-http-ready-queues.test.ts
+tests/native/node-http-request.test.ts
 tests/native/numeric-sort-callback.test.ts
 tests/native/object-rest-shaped.test.ts
 tests/native/object-slot-coallocation.test.ts

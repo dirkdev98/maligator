@@ -37,7 +37,7 @@ write(
 	"package.json",
 	`{"name":"cold-external-project","private":true,"type":"module"}\n`,
 );
-write("maligator.build.ts", "export default { surface: { node: true } };\n");
+write("maligator.build.ts", "export default {};\n");
 write(
 	"node_modules/greeting-suffix/package.json",
 	`{"type":"module","exports":"./index.mjs"}\n`,

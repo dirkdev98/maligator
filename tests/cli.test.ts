@@ -431,10 +431,7 @@ describe("command shell", { timeout: 30_000 }, () => {
 			{
 				executablePath: path.resolve("bin/maligator"),
 				inProcess: true,
-				wireProtocol: "product",
 				primordials: "locked",
-				webPlatform: true,
-				node: true,
 				eval: true,
 				realms: true,
 				regexp: true,
@@ -444,10 +441,7 @@ describe("command shell", { timeout: 30_000 }, () => {
 			{
 				executablePath: path.resolve("bin/maligator-mutable"),
 				inProcess: false,
-				wireProtocol: "wire-list",
 				primordials: "mutable",
-				webPlatform: true,
-				node: true,
 				eval: true,
 				realms: true,
 				regexp: true,
@@ -477,7 +471,6 @@ describe("command shell", { timeout: 30_000 }, () => {
 			path.join(repoRoot, "maligator-mutable"),
 		);
 		expect(config.engine.realms).toBe(true);
-		expect(config.surface).toEqual({ webPlatform: true, node: true });
 		const graph = buildModuleGraph(path.join(repoRoot, "src/product-assets.mts"), {
 			buildConfig: config,
 			stripTypes: stripCompactTypes,

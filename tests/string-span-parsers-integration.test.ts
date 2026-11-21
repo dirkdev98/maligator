@@ -13,7 +13,6 @@ import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts"
 function config(primordials: "mutable" | "locked") {
 	return resolveBuildConfig({
 		engine: { primordials, eval: false, realms: false },
-		surface: { node: true },
 	});
 }
 function named(

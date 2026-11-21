@@ -130,12 +130,10 @@ function prepareTestApplicationImage(
 			: { nativeHostIdentity: request.native.identity }),
 		...(embedDeclarations.length === 0 ? {} : { embedDeclarations }),
 		image: {
-			schema: 1,
+			schema: 2,
 			wires,
 			entryPath: request.files[0]!,
 			workerManifestPath,
-			webPlatform: request.config.surface.webPlatform,
-			node: request.config.surface.node,
 			engine: {
 				primordials: request.config.engine.primordials,
 				eval: request.config.engine.eval === true,

@@ -24,7 +24,6 @@ beforeAll(() => {
 		fixture,
 		name: "object-attributed-data",
 		outDir,
-		nodeEnabled: true,
 	});
 });
 

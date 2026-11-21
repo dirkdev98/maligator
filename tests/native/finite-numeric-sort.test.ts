@@ -26,7 +26,6 @@ describe.each([false, true])("finite numeric sorts (realms=%s)", (realms) => {
 			production: true,
 			config: resolveBuildConfig({
 				engine: { eval: false, realms, primordials: "mutable" },
-				surface: { node: true },
 			}),
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});

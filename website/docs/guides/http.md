@@ -1,14 +1,11 @@
-Serve HTTP with `maligator:http`: a `fetch` handler takes a `Request` and returns a `Response`, as in other Fetch API servers. Enable the Web surface, which provides those types.
+Serve HTTP with `maligator:http`: a `fetch` handler takes a `Request` and returns a `Response`, as in other Fetch API servers.
 
 ## Start a listener
 
 ```typescript maligator.build.ts
 import { defineBuild } from "@maligator/cli";
 
-export default defineBuild({
-	entry: "src/index.ts",
-	surface: { webPlatform: true },
-});
+export default defineBuild({ entry: "src/index.ts" });
 ```
 
 {{example:http.ts}}
@@ -84,7 +81,7 @@ A declaration with a [watcher](/guides/assets#produce-files-with-a-build-step) s
 
 ## Make requests
 
-`fetch` is global with either surface and is also exported from `maligator:http`. It streams request and response bodies, follows redirects, decodes gzip, deflate and Brotli bodies, and stops when its `AbortSignal` fires:
+You can call the global `fetch` or import it from `maligator:http`. It streams request and response bodies, follows redirects, decodes gzip, deflate and Brotli bodies, and stops when its `AbortSignal` fires:
 
 ```typescript
 const response = await fetch("https://api.example.com/items", {
@@ -100,7 +97,7 @@ As in Deno and Node, a server has no browser context: `fetch` enforces no CORS, 
 
 ## Use node:http
 
-Enable `surface.node` to use the supported Node HTTP personality instead:
+Import `createServer` from `node:http` to use Node’s request and response streams.
 
 ```typescript src/index.ts
 import { createServer } from "node:http";

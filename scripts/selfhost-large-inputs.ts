@@ -27,7 +27,7 @@ interface LargeInputCheckOptions {
 		timeoutMs?: number,
 	): SpawnSyncReturns<string>;
 	checkProfile(directory: string, command: "run" | "test"): void;
-	checkProfileCommands(config: Pick<MaligatorBuildConfig, "engine" | "surface">): void;
+	checkProfileCommands(config: Pick<MaligatorBuildConfig, "engine">): void;
 	waitForOutput(read: () => string, expected: string, timeoutMs: number): Promise<void>;
 }
 
@@ -53,7 +53,7 @@ export function checkLargeRootArtifacts(
 	const config = "root-artifacts.build.mts";
 	writeFileSync(
 		path.join(options.project, config),
-		`export default { entry: "root-artifacts-main.mts", engine: { eval: false, regexp: false, intl: { enabled: false } }, surface: { node: false, webPlatform: false } };\n`,
+		`export default { entry: "root-artifacts-main.mts", engine: { eval: false, regexp: false, intl: { enabled: false } } };\n`,
 	);
 	const output = path.join(options.reports, "root-artifacts.c");
 	const errors = path.join(options.reports, "root-artifacts.stderr");
@@ -122,7 +122,6 @@ export async function checkLargeInputs(options: LargeInputCheckOptions): Promise
 		entry: "large-main.mts",
 		outputName: "selfhost-large-inputs",
 		engine: { eval: false, regexp: false, intl: { enabled: false } },
-		surface: { node: true },
 	};
 	writeFileSync(
 		path.join(project, config),

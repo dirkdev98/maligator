@@ -75,12 +75,11 @@ export interface NativeFeatureInput {
 	evalEnabled?: boolean;
 	realmsEnabled?: boolean;
 	intlEnabled?: boolean;
-	webPlatformEnabled?: boolean;
+	/** Selects the native components shared by host installers. */
+	usesHost?: boolean;
 	regexpEnabled?: boolean;
 	/** Selects the Temporal Cargo feature for Wasm; native archives always contain Temporal. */
 	temporalEnabled?: boolean;
-	/** The Node host surface selects the Rust components its modules link (default off). */
-	nodeEnabled?: boolean;
 	/** `-DMAL_PROFILE=1` for the production-faithful profiling runtime. */
 	profileEnabled?: boolean;
 	/** Compile the private self-hosted CLI development and test API. */
@@ -101,10 +100,9 @@ export interface NativeFeatureSpec {
 	evalEnabled: boolean;
 	realmsEnabled: boolean;
 	intlEnabled: boolean;
-	webPlatformEnabled: boolean;
+	usesHost: boolean;
 	regexpEnabled: boolean;
 	temporalEnabled: boolean;
-	nodeEnabled: boolean;
 	profileEnabled: boolean;
 	developmentApiEnabled: boolean;
 	intlFeatures: Array<string>;
@@ -116,7 +114,7 @@ function sortedUnique(values: Array<string>): Array<string> {
 	return [...new Set(values)].sort();
 }
 
-/** Normalize legacy feature fields into the single native backend specification. */
+/** Derive C defines and Cargo features from the native feature inputs. */
 export function normalizeNativeFeatures(
 	input: NativeFeatureInput = {},
 ): NativeFeatureSpec {
@@ -124,10 +122,9 @@ export function normalizeNativeFeatures(
 	const evalEnabled = input.evalEnabled ?? true;
 	const realmsEnabled = input.realmsEnabled ?? true;
 	const intlEnabled = input.intlEnabled ?? true;
-	const webPlatformEnabled = input.webPlatformEnabled ?? true;
+	const usesHost = input.usesHost ?? true;
 	const regexpEnabled = input.regexpEnabled ?? true;
 	const temporalEnabled = input.temporalEnabled ?? true;
-	const nodeEnabled = input.nodeEnabled ?? false;
 	const profileEnabled = input.profileEnabled ?? false;
 	const developmentApiEnabled = input.developmentApiEnabled ?? false;
 	const services = Object.values(INTL_SERVICE_FEATURES);
@@ -150,22 +147,19 @@ export function normalizeNativeFeatures(
 	];
 	const cargoFeatures = sortedUnique([
 		...(intlEnabled ? (intlFeatures.length > 0 ? intlFeatures : ["intl-full"]) : []),
-		// Either surface may fetch over TLS and decode compressed bodies; a program that
-		// never does links none of it.
-		...(webPlatformEnabled || nodeEnabled ? ["tls", "url", "zlib"] : []),
+		// The host installers share transport, URL, compression and crypto components.
+		...(usesHost ? ["tls", "url", "zlib", "node-argon2", "node-crypto"] : []),
 		...(regexpEnabled ? ["regexp"] : []),
 		...(temporalEnabled ? ["temporal"] : []),
-		...(nodeEnabled ? ["node-argon2", "node-crypto"] : []),
 	]);
 	return {
 		primordialsLocked,
 		evalEnabled,
 		realmsEnabled,
 		intlEnabled,
-		webPlatformEnabled,
+		usesHost,
 		regexpEnabled,
 		temporalEnabled,
-		nodeEnabled,
 		profileEnabled,
 		developmentApiEnabled,
 		intlFeatures,

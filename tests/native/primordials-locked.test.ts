@@ -22,7 +22,6 @@ const config = resolveBuildConfig({
 		temporal: true,
 		intl: { enabled: true },
 	},
-	surface: { webPlatform: true },
 });
 
 describe("engine.primordials: locked", () => {

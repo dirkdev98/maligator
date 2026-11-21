@@ -50,7 +50,6 @@ describe("Error.captureStackTrace", () => {
 			name: "error-stack-pinned-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 	});
 	beforeAll(() => {
@@ -59,7 +58,6 @@ describe("Error.captureStackTrace", () => {
 			name: "error-stack-pinned-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

@@ -20,8 +20,6 @@ it("converts URL fields and enumerable extensions with Node's getter and coercio
 			name: "node-url-http-options",
 			outDir: directory,
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
-			webPlatformEnabled: false,
 		});
 		for (const binary of [pair.compiled, pair.interpreted]) {
 			for (const env of [{}, STRESS_ENV]) {

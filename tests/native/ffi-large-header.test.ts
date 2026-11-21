@@ -64,7 +64,6 @@ describe("large C headers", () => {
 				mainFile: HOST_MAIN,
 				config: resolveBuildConfig({
 					engine: { eval: false, realms: false },
-					surface: { node: true },
 				}),
 			});
 			for (const [index, binary] of [pair.compiled, pair.interpreted].entries()) {
@@ -166,7 +165,6 @@ describe("large C headers", () => {
 				mainFile: HOST_MAIN,
 				config: resolveBuildConfig({
 					engine: { eval: false, realms: false },
-					surface: { node: true },
 				}),
 			});
 			for (const binary of [pair.compiled, pair.interpreted])
@@ -267,7 +265,6 @@ describe("large C headers", () => {
 					mainFile: HOST_MAIN,
 					config: resolveBuildConfig({
 						engine: { eval: false, realms: false },
-						surface: { node: true },
 					}),
 				});
 				const cache = join(directory, "native-cache");

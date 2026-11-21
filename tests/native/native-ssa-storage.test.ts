@@ -31,7 +31,7 @@ describe("independent native SSA storage", () => {
 			fixture,
 			name: "native-ssa-storage",
 			mainFile: HOST_MAIN,
-			config: resolveBuildConfig({ surface: { webPlatform: true } }),
+			config: resolveBuildConfig({}),
 			outDir,
 		});
 		({ compiled, interpreted, programImage: image } = pair);

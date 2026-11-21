@@ -22,14 +22,12 @@ describe("engine string length limit", () => {
 			fixture: "tests/local/string-limit-p0.js",
 			name: "string-limit-p0",
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
 			outDir,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/string-limit-p0.js",
 			name: "string-limit-p0-interpreted",
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
 			compiled: false,
 			outDir,
 		});

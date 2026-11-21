@@ -21,7 +21,6 @@ it("keeps old values and property keys valid while loaded constant pools grow", 
 				regexp: false,
 				intl: { features: ["collator"] },
 			},
-			surface: { node: false, webPlatform: false },
 		}),
 	});
 	expect(runToStdout(binary, { env: { MAL_GC_VERIFY: "1" } })).toBe(

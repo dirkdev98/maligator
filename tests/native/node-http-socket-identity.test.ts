@@ -127,7 +127,7 @@ describe("HTTP socket connection identity", () => {
 			name: "http-socket-identity",
 			outDir,
 			mainFile: HOST_MAIN,
-			config: resolveBuildConfig({ surface: { node: true, webPlatform: true } }),
+			config: resolveBuildConfig({}),
 			production: true,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		}));

@@ -43,8 +43,6 @@ describe("postgres.js authentication", () => {
 				name: compiled ? "postgres-auth-compiled" : "postgres-auth-interpreted",
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
-				webPlatformEnabled: false,
 				compiled,
 			}),
 		);

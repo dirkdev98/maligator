@@ -5,7 +5,6 @@ import { buildNativeBinary, HOST_MAIN, runToStdout } from "../../src/test-harnes
 describe("UTF-8 string storage and decoded-unit limits", () => {
 	const config = resolveBuildConfig({
 		engine: { primordials: "mutable", regexp: false },
-		surface: { webPlatform: true, node: true },
 	});
 	let storageBinary: string;
 	let boundariesBinary: string;

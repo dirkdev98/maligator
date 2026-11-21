@@ -17,7 +17,6 @@ describe("node:diagnostics_channel", () => {
 			fixture: "tests/local/node-diagnostics-channel.cjs",
 			name: "node-diagnostics-channel",
 			outDir,
-			nodeEnabled: true,
 		});
 	});
 

@@ -21,7 +21,6 @@ for (const compiled of [true, false]) {
 				name: `node-worker-post-policy-${compiled ? "compiled" : "interpreted"}`,
 				outDir,
 				compiled,
-				nodeEnabled: true,
 			});
 		});
 		afterAll(() => {

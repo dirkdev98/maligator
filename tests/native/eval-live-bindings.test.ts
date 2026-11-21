@@ -21,7 +21,7 @@ describe("live caller bindings in direct eval", () => {
 			fixture,
 			name: "eval-live",
 			outDir,
-			config: resolveBuildConfig({ engine: { eval: true }, surface: { node: true } }),
+			config: resolveBuildConfig({ engine: { eval: true } }),
 		});
 	});
 	it("retains caller storage across throws and escaped closures", () => {

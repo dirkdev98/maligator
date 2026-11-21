@@ -137,32 +137,23 @@ export const NODE_PERSONALITY_INSTALLER = "mal_host_install_node_web_personality
 
 /**
  * Installers that define free globals, retained at startup when a program names one
- * of them. `computedMember` means the installer is also retained when the program
- * reads the global object in a way the compiler cannot follow, such as
- * `globalThis[key]` or passing `globalThis` along. `surface` says which build
- * surfaces have the installer: `node` with the Node surface, `web` with either the
- * web or the Node surface, and `web-only` with the web surface alone, where Node
- * defines the same globals through its own modules.
+ * of them.
+ * The compiler also retains these installers when it cannot follow an access to
+ * the global object, such as `globalThis[key]` or passing `globalThis` along.
  */
 export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 	readonly installer: string;
 	readonly globals: ReadonlyArray<string>;
-	readonly computedMember: boolean;
-	readonly surface: "node" | "web" | "web-only";
 	/** Retained only for an image that uses Node through another installer. */
 	readonly nodeCompanion?: true;
 }> = [
 	{
 		installer: HOST_PERSONALITY_INSTALLER,
 		globals: ["setTimeout", "setInterval", "clearTimeout", "clearInterval"],
-		computedMember: true,
-		surface: "web",
 	},
 	{
 		installer: NODE_PERSONALITY_INSTALLER,
 		globals: ["setImmediate", "clearImmediate"],
-		computedMember: true,
-		surface: "web",
 	},
 	{
 		installer: "mal_host_install_web_events",
@@ -174,14 +165,10 @@ export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 			"AbortSignal",
 			"AbortController",
 		],
-		computedMember: true,
-		surface: "web",
 	},
 	{
 		installer: "mal_host_install_web_encoding",
 		globals: ["TextEncoder", "TextDecoder"],
-		computedMember: true,
-		surface: "web",
 	},
 	{
 		installer: "mal_host_install_web_streams",
@@ -202,87 +189,51 @@ export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 			"TextEncoderStream",
 			"TextDecoderStream",
 		],
-		computedMember: true,
-		surface: "web",
 	},
 	{
 		installer: "mal_host_install_web_compression",
 		globals: ["CompressionStream", "DecompressionStream"],
-		computedMember: true,
-		surface: "node",
 	},
 	{
 		installer: "mal_host_install_web_url",
 		globals: ["URL", "URLSearchParams"],
-		computedMember: true,
-		surface: "web",
 	},
 	{
 		installer: "mal_host_install_web_fetch",
 		globals: ["Headers", "Request", "Response", "Blob", "File", "FormData"],
-		computedMember: true,
-		surface: "web",
 	},
 	{
 		installer: "mal_host_install_web_fetch_client",
 		globals: ["fetch"],
-		computedMember: true,
-		surface: "web",
 	},
 	{
 		installer: "mal_host_install_web_basics",
 		globals: ["atob", "btoa", "queueMicrotask", "structuredClone", "navigator"],
-		computedMember: true,
-		surface: "web",
-	},
-	{
-		installer: "mal_host_install_web_performance",
-		globals: ["performance"],
-		computedMember: true,
-		surface: "web-only",
-	},
-	{
-		installer: "mal_host_install_web_crypto",
-		globals: ["crypto"],
-		computedMember: true,
-		surface: "web-only",
 	},
 	{
 		installer: PERFORMANCE_INSTALLER_SYMBOL,
 		globals: PERFORMANCE_GLOBALS,
-		computedMember: true,
-		surface: "node",
 	},
 	{
 		installer: CRYPTO_INSTALLER_SYMBOL,
 		globals: CRYPTO_GLOBALS,
-		computedMember: false,
-		surface: "node",
 	},
 	{
 		installer: WORKER_THREADS_INSTALLER_SYMBOL,
 		globals: WORKER_GLOBALS,
-		computedMember: false,
-		surface: "node",
 	},
 	{
 		installer: "mal_host_install_web_node_events",
 		globals: ["MessageEvent", "CloseEvent", "ErrorEvent"],
-		computedMember: false,
-		surface: "node",
 	},
 	{
 		installer: HTTP_INSTALLER_SYMBOL,
 		globals: ["WebSocket"],
-		computedMember: false,
-		surface: "node",
 	},
 	// Node Request and Response bodies convert async-iterable chunks with Buffer.from.
 	{
 		installer: BUFFER_INSTALLER_SYMBOL,
 		globals: ["Request", "Response"],
-		computedMember: true,
-		surface: "node",
 		nodeCompanion: true,
 	},
 ];
@@ -302,17 +253,27 @@ export function imageUsesHost(
 	);
 }
 
+/** Platform installers that submit I/O independently of a host personality. */
+export function imageNeedsHostEventLoop(
+	hostInstalls: ReadonlyArray<{ readonly installer: string }>,
+): boolean {
+	return hostInstalls.some(
+		({ installer }) =>
+			installer.startsWith("mal_host_install_maligator_internal_fs") ||
+			installer === "mal_host_install_maligator_internal_workers",
+	);
+}
+
 /** Every personality the runtime carries; images list at most one of the two above. */
 export const HOST_PERSONALITY_INSTALLERS: ReadonlyArray<string> = [
 	HOST_PERSONALITY_INSTALLER,
-	"mal_host_install_node_personality",
 	NODE_PERSONALITY_INSTALLER,
 ];
 
 /**
  * Selects Node's `Error.prepareStackTrace` and `Error.stackTraceLimit` hooks. The
  * runtime reads it from the image's install table while it builds the intrinsics,
- * so it follows the same Node-surface rule as the primordial catalog's entries.
+ * even when the rest of the Node personality is absent.
  */
 export const NODE_ERROR_HOOKS_INSTALLER = "mal_host_install_node_error_hooks";
 
@@ -337,16 +298,6 @@ export function installerUsesHostPersonality(installer: string): boolean {
 		installer === "mal_host_install_maligator_internal_http" ||
 		installer === "mal_host_install_maligator_internal_fetch"
 	);
-}
-
-/** Whether a HOST_GLOBAL_INSTALLERS row's installer exists on these surfaces. */
-export function hostGlobalInstallerAvailable(
-	row: (typeof HOST_GLOBAL_INSTALLERS)[number],
-	surfaces: { readonly webPlatform: boolean; readonly node: boolean },
-): boolean {
-	if (row.surface === "node") return surfaces.node;
-	if (row.surface === "web") return surfaces.webPlatform || surfaces.node;
-	return surfaces.webPlatform && !surfaces.node;
 }
 
 // path is the one module with a planned default export (`import path from
@@ -1574,7 +1525,7 @@ const SQLITE: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:sqlite"),
 };
 
-/** Source built-ins keep ordinary ESM evaluation and remain gated by the Node surface. */
+/** Source built-ins keep ordinary ESM evaluation. */
 export const SOURCE_HOST_MODULES: ReadonlyMap<string, string> = new Map([
 	["node:test", "testing/node-test.ts"],
 ]);

@@ -1,8 +1,7 @@
 // Generated from src/platform/catalog.ts; edit the catalog and regenerate.
 /**
- * Serve HTTP with Fetch API handlers and embedded assets. Requires
- * `surface.webPlatform`. A server whose whole handler serves an asset answers without
- * running JavaScript per request.
+ * Serve HTTP with Fetch API handlers and embedded assets. A server whose whole
+ * handler serves an asset answers without running JavaScript per request.
  */
 declare module "maligator:http" {
 	import type * as Assets from "maligator:assets";
@@ -102,7 +101,7 @@ declare module "maligator:http" {
 	 * A handler that serves an embedded file or directory with its media type, ETag,
 	 * cache headers, conditional and range requests, and precompressed copies in
 	 * production builds. While a declaration's watcher runs, the handler forwards to the
-	 * watcher's URL instead, which needs `surface.node` for `fetch`.
+	 * watcher's URL instead.
 	 *
 	 * @example
 	 * import { embedDirectory } from "maligator:assets";

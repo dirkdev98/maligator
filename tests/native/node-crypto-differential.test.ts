@@ -29,14 +29,12 @@ describe("node:crypto differential vs the installed Node", () => {
 			name: "node-crypto-differential-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: FIXTURE,
 			name: "node-crypto-differential-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

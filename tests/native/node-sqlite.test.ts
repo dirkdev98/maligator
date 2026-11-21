@@ -22,14 +22,12 @@ describe("node:sqlite amalgamation adapter", () => {
 			name: "node-sqlite-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/node-sqlite.mjs",
 			name: "node-sqlite-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

@@ -13,7 +13,6 @@ for (const compiled of [true, false]) {
 				name: `worker-ready-transfer-${compiled ? "native" : "interpreted"}`,
 				outDir,
 				compiled,
-				nodeEnabled: true,
 			});
 			expect(runToStdout(binary, { timeoutMs: 30_000 })).toBe(
 				"worker-ready-transfer PASS\n",

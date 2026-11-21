@@ -21,7 +21,7 @@ describe("deletable direct-eval bindings", () => {
 			fixture,
 			name: "eval-delete",
 			outDir,
-			config: resolveBuildConfig({ engine: { eval: true }, surface: { node: true } }),
+			config: resolveBuildConfig({ engine: { eval: true } }),
 		});
 	});
 	it("resolves reads, typeof and writes after deletion like Node", () => {

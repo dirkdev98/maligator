@@ -15,7 +15,6 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-web-globals-"));
 // Runtime eval installs every web global up front, so these programs leave it off.
 const config = resolveBuildConfig({
 	engine: { eval: false },
-	surface: { webPlatform: true, node: false },
 });
 
 function build(name: string, source: string): string {
@@ -61,11 +60,11 @@ console.log(String.fromCharCode(...value), body.constructor.name, encoded.readab
 		]);
 	});
 
-	it("installs every web global when the program reads the global object", () => {
+	it("installs host globals when the program enumerates the global object", () => {
 		const binary = build(
 			"escape",
 			`const names = Object.getOwnPropertyNames(globalThis);
-console.log(["Response", "URL", "ReadableStream", "structuredClone", "AbortController"].every((name) => names.includes(name)));
+console.log(["Response", "URL", "ReadableStream", "structuredClone", "AbortController", "crypto", "WebSocket", "MessageChannel"].every((name) => names.includes(name)));
 `,
 		);
 		expect(runToStdout(binary).trim()).toBe("true");

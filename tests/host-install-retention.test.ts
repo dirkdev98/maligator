@@ -24,9 +24,7 @@ import { executionTarget, resolveExecution } from "../src/platform/execution.ts"
 const FETCH_INSTALLER = "mal_host_install_maligator_internal_fetch";
 const HTTP_INSTALLER = "mal_host_install_maligator_internal_http";
 
-const web = resolveBuildConfig({ surface: { webPlatform: true } });
-const node = resolveBuildConfig({ surface: { node: true } });
-const lean = resolveBuildConfig({});
+const defaultConfig = resolveBuildConfig({});
 const roots: Array<string> = [];
 
 afterEach(() => {
@@ -36,7 +34,7 @@ afterEach(() => {
 /** The install manifest of a whole-program build, as a production executable links it. */
 function manifest(
 	source: string,
-	config: typeof web,
+	config: typeof defaultConfig,
 	options: { execution?: Execution; files?: Record<string, string> } = {},
 ): Map<string, Array<string>> {
 	const root = mkdtempSync(path.join(tmpdir(), "maligator-install-retention-"));
@@ -60,7 +58,7 @@ function manifest(
 	);
 }
 
-/** The installers a program reaches, without the surface ones every image of its surface lists. */
+/** The installers a program reaches, apart from the personality and Error hooks. */
 function reachedInstallers(installs: Map<string, Array<string>>): Array<string> {
 	return [...installs.keys()].filter(
 		(installer) =>
@@ -72,7 +70,7 @@ function reachedInstallers(installs: Map<string, Array<string>>): Array<string> 
 function execution(args: Array<string>): Execution {
 	const command = parseCliArgs(args);
 	if (command.kind !== "run") throw new Error("Expected a run command");
-	return resolveExecution(command, web, {
+	return resolveExecution(command, defaultConfig, {
 		compiled: true,
 		optimization: "full",
 		target: executionTarget("aarch64-apple-darwin"),
@@ -81,7 +79,7 @@ function execution(args: Array<string>): Execution {
 
 describe("language component retention", () => {
 	it("omits both engines for a program that only writes to the console", () => {
-		expect([...manifest(`console.log("hello");`, lean).keys()]).toEqual([]);
+		expect([...manifest(`console.log("hello");`, defaultConfig).keys()]).toEqual([]);
 	});
 
 	it.each([
@@ -96,7 +94,7 @@ describe("language component retention", () => {
 		`console.log("x".split(separator));`,
 		`const replace = "x".replace; console.log(replace.call("x", separator, "y"));`,
 	])("retains only RegExp for %s", (source) => {
-		expect([...manifest(source, lean).keys()]).toEqual([REGEXP_INSTALLER]);
+		expect([...manifest(source, defaultConfig).keys()]).toEqual([REGEXP_INSTALLER]);
 	});
 
 	it.each([
@@ -104,7 +102,9 @@ describe("language component retention", () => {
 		`console.log("e\\u0301"["normalize"]());`,
 		`const { normalize } = String.prototype; console.log(normalize.call("e\\u0301"));`,
 	])("retains only Unicode normalization for %s", (source) => {
-		expect([...manifest(source, lean).keys()]).toEqual([UNICODE_NORMALIZATION_INSTALLER]);
+		expect([...manifest(source, defaultConfig).keys()]).toEqual([
+			UNICODE_NORMALIZATION_INSTALLER,
+		]);
 	});
 
 	it.each([
@@ -115,7 +115,7 @@ describe("language component retention", () => {
 		`console.log(Object.getOwnPropertyDescriptor(String.prototype, name));`,
 		`console.log(Reflect.get(String.prototype, name));`,
 	])("retains both engines for %s", (source) => {
-		const installs = manifest(source, lean);
+		const installs = manifest(source, defaultConfig);
 		expect(installs.has(REGEXP_INSTALLER)).toBe(true);
 		expect(installs.has(UNICODE_NORMALIZATION_INSTALLER)).toBe(true);
 	});
@@ -126,7 +126,7 @@ describe("language component retention", () => {
 		`console.log("x".split("x"));`,
 		`console.log(("x"?.split)("x"));`,
 	])("omits both engines for %s", (source) => {
-		expect([...manifest(source, lean).keys()]).toEqual([]);
+		expect([...manifest(source, defaultConfig).keys()]).toEqual([]);
 	});
 
 	it("honors the RegExp opt-out during dynamic member retention", () => {
@@ -139,7 +139,7 @@ describe("language component retention", () => {
 	it("retains the matcher for native terminal-control stripping", () => {
 		const installs = manifest(
 			`import { stripVTControlCharacters } from "node:util"; console.log(stripVTControlCharacters("text"));`,
-			node,
+			defaultConfig,
 		);
 		expect(installs.has(REGEXP_INSTALLER)).toBe(true);
 	});
@@ -156,14 +156,14 @@ describe("maligator:http client retention", () => {
 	it("links no fetch client for a server that never forwards", () => {
 		const installs = manifest(
 			`import { serve } from "maligator:http";\nserve({ port: 0, fetch: () => new Response("ok") });\n`,
-			web,
+			defaultConfig,
 		);
 		expect(installs.get(HTTP_INSTALLER)).toEqual(["listen"]);
 		expect(installs.has(FETCH_INSTALLER)).toBe(false);
 	});
 
 	it("links no fetch client for served assets no declaration watches", () => {
-		const installs = manifest(servedSite(""), web, {
+		const installs = manifest(servedSite(""), defaultConfig, {
 			files: { "public/index.html": "hi\n" },
 		});
 		expect(installs.get(HTTP_INSTALLER)).not.toContain("assetProxy");
@@ -175,7 +175,7 @@ describe("maligator:http client retention", () => {
 			servedSite(
 				`, { watch: { command: ["true"], url: "http://127.0.0.1:1/" }, use: { run: "watch" } }`,
 			),
-			web,
+			defaultConfig,
 			{
 				execution: execution(["run", "main.mjs"]),
 				files: { "public/index.html": "hi\n" },
@@ -188,7 +188,7 @@ describe("maligator:http client retention", () => {
 	it("links the fetch client a program imports from maligator:http", () => {
 		const installs = manifest(
 			`import { fetch } from "maligator:http";\nglobalThis.sink = await fetch("data:,x");\n`,
-			web,
+			defaultConfig,
 		);
 		expect(installs.get(FETCH_INSTALLER)).toEqual(["fetch"]);
 	});
@@ -199,7 +199,7 @@ describe("host surface installers", () => {
 		["a web global", `globalThis.sink = new URL("https://example.com/").host;\n`],
 		["a timer", `setTimeout(() => {}, 1);\n`],
 	])("lists the web personality first for a program that uses %s", (_name, source) => {
-		const installers = [...manifest(source, lean).keys()];
+		const installers = [...manifest(source, defaultConfig).keys()];
 		expect(installers[0]).toBe(HOST_PERSONALITY_INSTALLER);
 		expect(installers).not.toContain(NODE_PERSONALITY_INSTALLER);
 		expect(installers).not.toContain(NODE_ERROR_HOOKS_INSTALLER);
@@ -217,7 +217,7 @@ describe("host surface installers", () => {
 			`import { join } from "node:path";\nglobalThis.sink = new URL(join("a"), "file:///");\n`,
 		],
 	])("lists the Node personality first for a program that uses %s", (_name, source) => {
-		const installers = [...manifest(source, lean).keys()];
+		const installers = [...manifest(source, defaultConfig).keys()];
 		expect(installers[0]).toBe(NODE_PERSONALITY_INSTALLER);
 		expect(installers).not.toContain(HOST_PERSONALITY_INSTALLER);
 		expect(installers).toContain(NODE_ERROR_HOOKS_INSTALLER);
@@ -225,7 +225,7 @@ describe("host surface installers", () => {
 
 	it("selects Node's Error hooks for a program that reads them without a personality", () => {
 		expect([
-			...manifest(`globalThis.sink = Error.stackTraceLimit;\n`, lean).keys(),
+			...manifest(`globalThis.sink = Error.stackTraceLimit;\n`, defaultConfig).keys(),
 		]).toEqual([NODE_ERROR_HOOKS_INSTALLER]);
 	});
 });
@@ -234,7 +234,7 @@ describe("process.getBuiltinModule retention", () => {
 	const os = hostInstallerSymbol("node:os");
 
 	it("installs only process for a program that reads static process members", () => {
-		const installs = manifest(`process.stdout.write("hello\\n");\n`, node);
+		const installs = manifest(`process.stdout.write("hello\\n");\n`, defaultConfig);
 		expect(reachedInstallers(installs)).toEqual([PROCESS_INSTALLER_SYMBOL]);
 	});
 
@@ -253,7 +253,7 @@ describe("process.getBuiltinModule retention", () => {
 			`import { getBuiltinModule } from "node:process";\nglobalThis.sink = getBuiltinModule("os");`,
 		],
 	])("installs the module %s names and the lookup, not the loader", (_name, source) => {
-		const installs = manifest(`${source}\n`, node);
+		const installs = manifest(`${source}\n`, defaultConfig);
 		expect(installs.has(os)).toBe(true);
 		expect(installs.has(NODE_INSTALLED_BUILTINS_INSTALLER)).toBe(true);
 		expect(installs.has(NODE_BUILTIN_LOADER_INSTALLER)).toBe(false);
@@ -262,7 +262,7 @@ describe("process.getBuiltinModule retention", () => {
 	it("installs nothing for feature detection of the loader", () => {
 		const installs = manifest(
 			`globalThis.sink = typeof process.getBuiltinModule === "function";\n`,
-			node,
+			defaultConfig,
 		);
 		expect(reachedInstallers(installs)).toEqual([PROCESS_INSTALLER_SYMBOL]);
 	});
@@ -270,7 +270,7 @@ describe("process.getBuiltinModule retention", () => {
 	it("installs nothing for a literal name Node does not load", () => {
 		const installs = manifest(
 			`globalThis.sink = process.getBuiltinModule("node:missing");\n`,
-			node,
+			defaultConfig,
 		);
 		expect(reachedInstallers(installs)).toEqual([PROCESS_INSTALLER_SYMBOL]);
 	});
@@ -278,7 +278,7 @@ describe("process.getBuiltinModule retention", () => {
 	it("keeps static destructuring of process selective", () => {
 		const installs = manifest(
 			`import process from "node:process";\nconst { stdout, env } = process;\nstdout.write(typeof env);\n`,
-			node,
+			defaultConfig,
 		);
 		expect(installs.has(NODE_BUILTIN_LOADER_INSTALLER)).toBe(false);
 	});
@@ -294,14 +294,14 @@ describe("process.getBuiltinModule retention", () => {
 		],
 		["a computed global object read", `globalThis[process.argv[2]]`],
 	])("installs the loader for %s", (_name, load) => {
-		const installs = manifest(`globalThis.sink = ${load};\n`, node);
+		const installs = manifest(`globalThis.sink = ${load};\n`, defaultConfig);
 		expect(installs.has(NODE_BUILTIN_LOADER_INSTALLER)).toBe(true);
 	});
 
 	it("installs the loader when runtime eval can name any module", () => {
 		const installs = manifest(
 			`globalThis.sink = process.argv.length;\n`,
-			resolveBuildConfig({ surface: { node: true }, engine: { eval: true } }),
+			resolveBuildConfig({ engine: { eval: true } }),
 		);
 		expect(installs.has(NODE_BUILTIN_LOADER_INSTALLER)).toBe(true);
 	});

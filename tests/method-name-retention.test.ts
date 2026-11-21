@@ -8,7 +8,7 @@ import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.t
 import { hostInstallerSymbol } from "../src/compiler/frontend/host-modules.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 
-const node = resolveBuildConfig({ surface: { node: true } });
+const node = resolveBuildConfig({});
 const OS_INSTALLER = hostInstallerSymbol("node:os");
 const roots: Array<string> = [];
 
@@ -85,7 +85,6 @@ describe("class method retention", () => {
 
 	it("keeps every method when run-time code can name any key", () => {
 		const evaluating = resolveBuildConfig({
-			surface: { node: true },
 			engine: { eval: true },
 		});
 		expect(retainsOs(file(`extra() { return hostname(); }`), evaluating)).toBe(true);

@@ -21,7 +21,6 @@ describe("node:timers and node:timers/promises", () => {
 				name: `node-timers-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

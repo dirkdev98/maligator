@@ -91,7 +91,7 @@ it("prints generated C without building or publishing an executable artifact", (
 			`export default {
 	entry: "main.mts",
 	engine: { eval: false, regexp: false, intl: { enabled: false } },
-	surface: { node: false, webPlatform: false },
+
 };\n`,
 		);
 		const artifact = path.join(directory, "artifact");

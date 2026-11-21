@@ -219,11 +219,7 @@ function cachedWire(
 	}
 }
 
-function syntheticEntry(
-	entries: Array<string>,
-	node: boolean,
-	runner?: TestImageRunner,
-): string {
+function syntheticEntry(entries: Array<string>, runner?: TestImageRunner): string {
 	const imports = entries.map((file) => `import ${JSON.stringify(file)};`).join("\n");
 	return `import ${JSON.stringify(TEST_BOOTSTRAP_MODULE_ID)};
 import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
@@ -276,7 +272,7 @@ function buildTestGraph(
 	options: CompileTestImageOptions,
 	entries: Array<string>,
 	session: FrontendCompilationSession,
-	entrySource = syntheticEntry(entries, options.config.surface.node),
+	entrySource = syntheticEntry(entries),
 ): ModuleGraph {
 	const entrySet = new Set(entries);
 	const entry = path.join(path.dirname(entries[0]!), ".maligator-test-image-entry.mts");
@@ -306,11 +302,10 @@ export type CompiledIsolatedTestImage = CompiledTestImage;
 
 function testProcessEntrySource(
 	entries: Array<string>,
-	node: boolean,
 	runOptions: object,
 	resultPrefix: string,
 ): string {
-	return syntheticEntry(entries, node, { kind: "process", runOptions, resultPrefix });
+	return syntheticEntry(entries, { kind: "process", runOptions, resultPrefix });
 }
 
 /** Cold, production-optimized test image used only by `test --profile`. Ordinary
@@ -328,7 +323,6 @@ export function compileProfiledTestImage(
 	const session = options.session ?? new TestCompilationSession();
 	const entrySource = testProcessEntrySource(
 		entries,
-		options.config.surface.node,
 		runOptions,
 		"__MALIGATOR_TEST_RESULT__",
 	);
@@ -496,11 +490,7 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 	}
 
 	const graphStartedAt = Date.now();
-	const entrySource = syntheticEntry(
-		entries,
-		options.config.surface.node,
-		options.runner,
-	);
+	const entrySource = syntheticEntry(entries, options.runner);
 	const graph = buildTestGraph(options, entries, session, entrySource);
 	phases.graphMs = Date.now() - graphStartedAt;
 	const dependencies = dependencyIdentities(graph, session);

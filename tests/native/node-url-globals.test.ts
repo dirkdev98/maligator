@@ -12,7 +12,7 @@ import {
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-url-globals-"));
 
-describe("Node shared globals without the broader web surface", () => {
+describe("URL, text encoding, and structured clone globals", () => {
 	let binaries: Array<string>;
 
 	beforeAll(() => {
@@ -22,14 +22,12 @@ describe("Node shared globals without the broader web surface", () => {
 				name: `node-url-globals-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
-				webPlatformEnabled: false,
 				compiled,
 			}),
 		);
 	}, 600_000);
 
-	it("provides the Node-owned URL, encoding, and structured-clone globals", () => {
+	it("provides shared Web globals", () => {
 		for (const binary of binaries) assertResultPass(runToStdout(binary));
 	});
 

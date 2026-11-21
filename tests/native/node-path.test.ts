@@ -19,8 +19,7 @@ afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 // both the native codegen backend and the bytecode interpreter (path methods are
 // plain native functions, dispatched identically by both), so a divergence in
 // either tier fails. This includes embedded-NUL strings, which path handles
-// lexically rather than as host filesystem paths. The Node compatibility surface
-// is off by default, so every build opts in with `nodeEnabled`.
+// lexically rather than as host filesystem paths.
 describe("node:path (POSIX)", () => {
 	let compiled: string;
 	let interpreted: string;
@@ -30,14 +29,12 @@ describe("node:path (POSIX)", () => {
 			name: "nodepath-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/node-path.mts",
 			name: "nodepath-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});
@@ -66,7 +63,6 @@ describe("node:path/posix", () => {
 			name: "node-path-posix",
 			outDir,
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
 		});
 		for (const binary of [pair.compiled, pair.interpreted]) {
 			for (const env of [{}, STRESS_ENV])

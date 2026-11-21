@@ -22,7 +22,6 @@ describe.each(["conservative", "precise"] as const)("%s roots", (nativeStackRoot
 			name: `iterator-results-${nativeStackRoots}`,
 			nativeStackRoots,
 			config: resolveBuildConfig({
-				surface: { node: true },
 				engine: { primordials: "mutable", eval: false, realms: false },
 			}),
 		});

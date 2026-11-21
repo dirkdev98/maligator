@@ -28,7 +28,6 @@ it.each(["mutable", "locked"] as const)(
 				mainFile: HOST_MAIN,
 				config: resolveBuildConfig({
 					engine: { primordials, eval: false, realms: false },
-					surface: { node: true },
 				}),
 				nativeStackRoots: "precise",
 			});

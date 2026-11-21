@@ -25,14 +25,12 @@ describe("node:stream in-memory foundation", () => {
 			name: "node-stream-esm-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		esmInterpreted = buildNativeBinary({
 			fixture: "tests/local/node-stream.mjs",
 			name: "node-stream-esm-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 		cjsCompiled = buildNativeBinary({
@@ -40,14 +38,12 @@ describe("node:stream in-memory foundation", () => {
 			name: "node-stream-cjs-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		cjsInterpreted = buildNativeBinary({
 			fixture: "tests/local/node-stream.cjs",
 			name: "node-stream-cjs-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

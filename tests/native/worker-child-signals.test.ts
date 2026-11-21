@@ -13,7 +13,6 @@ for (const compiled of [true, false]) {
 				name: `worker-child-signals-${compiled ? "native" : "interpreted"}`,
 				outDir,
 				compiled,
-				nodeEnabled: true,
 			});
 			expect(runToStdout(binary, { timeoutMs: 30_000 })).toBe(
 				"worker-child-signals PASS\n",

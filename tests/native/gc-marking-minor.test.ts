@@ -21,7 +21,6 @@ beforeAll(() => {
 		evalEnabled: false,
 		realmsEnabled: false,
 		intlEnabled: false,
-		webPlatformEnabled: false,
 		regexpEnabled: false,
 		temporalEnabled: false,
 	});

@@ -26,7 +26,7 @@ describe.each(["conservative", "precise"] as const)(
 					outDir,
 					name: `copied-closure-captures-${nativeStackRoots}`,
 					nativeStackRoots,
-					config: resolveBuildConfig({ surface: { node: true } }),
+					config: resolveBuildConfig({}),
 				});
 				const factory = pair.programImage.native.functions.find(
 					(fn) =>

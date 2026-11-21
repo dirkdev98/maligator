@@ -245,9 +245,13 @@ declare module "maligator:workers" {
 		/** Clones and admits a message synchronously. Transfer commits only after successful validation/admission. */
 		postMessage(value: Send, transfer?: ReadonlyArray<Transferable>): void;
 		/** Setting this handler starts delivery. addEventListener listeners need start(). */
-		onmessage: ((event: MessageEvent<Receive>) => void) | null;
+		onmessage:
+			| ((event: Omit<MessageEvent, "data"> & { readonly data: Receive }) => void)
+			| null;
 		/** Receives message decoding failures in the receiving isolate. */
-		onmessageerror: ((event: MessageEvent<unknown>) => void) | null;
+		onmessageerror:
+			| ((event: Omit<MessageEvent, "data"> & { readonly data: unknown }) => void)
+			| null;
 		/** Enables delivery to event listeners; repeated calls are harmless. */
 		start(): void;
 		/** Discards queued messages and closes this endpoint. */

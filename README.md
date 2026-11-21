@@ -4,9 +4,8 @@
 
 An ahead-of-time JavaScript compiler and native runtime. Maligator compiles
 JavaScript and erasable TypeScript to C and links it with its runtime into a
-standalone executable. Engine features and host APIs are selected per build, so a
-program that does not ask for `eval`, Intl, or the Node.js surface does not carry
-them.
+standalone executable. Configure language features such as eval and Intl.
+Maligator links supported Web APIs and Node.js modules by use.
 
 Maligator is an experimental alpha. Check
 [compatibility](https://maligator.ddv.tools/compatibility) before relying on a Web
@@ -46,7 +45,7 @@ Native builds compile the runtime on your machine and need:
 - A C compiler and archive tool with C23 support: Apple clang, clang 19 or newer, or
   gcc 15 or newer.
 - Rustup, for the Rust toolchain pinned by the runtime.
-- A C++ compiler when `surface.webPlatform` or `surface.node` is enabled.
+- A C++ compiler for local native runtime builds.
 
 `maligator doctor --verbose` checks all of it.
 [Set up native builds](https://maligator.ddv.tools/guides/native-toolchain) covers
@@ -57,8 +56,7 @@ installation per host and cross-builds through Zig.
 What works today:
 
 - Standalone native executables, with optional embedded files and an HTTP server.
-- A runtime shaped per build: eval, Realms, RegExp, Temporal, Intl, Web APIs, and a
-  curated Node.js surface are each opt-in or opt-out.
+- Configurable eval, Realms, RegExp, Temporal and Intl.
 - Isolated workers with shared memory, transferable ports, and task pools.
 - The [Compatibility page](https://maligator.ddv.tools/compatibility) reports Test262
   coverage from the committed baseline.
@@ -66,7 +64,7 @@ What works today:
 What does not, yet:
 
 - Application compatibility needs verification against representative workloads.
-- The Node.js surface is curated, not complete.
+- Some Node.js APIs are still missing.
 - Some paths are quick; ordinary constructs can still be much slower.
 - Windows is not supported, and the alpha binaries are unsigned and not notarized.
 

@@ -22,14 +22,12 @@ describe("node:string_decoder", () => {
 			name: "node-string-decoder-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/node-string-decoder.mjs",
 			name: "node-string-decoder-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	}, 600_000);

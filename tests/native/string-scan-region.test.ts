@@ -43,7 +43,6 @@ describe("string scan loop regions", () => {
 				mainFile: HOST_MAIN,
 				config: resolveBuildConfig({
 					engine: { primordials, eval: false, realms: false },
-					surface: { node: true },
 				}),
 			});
 			// Only locked primordials make `charCodeAt` on a primitive string the builtin.

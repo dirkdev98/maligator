@@ -16,9 +16,7 @@ export function validateSemanticBuildPolicy(
 ) {
 	assertEvalPolicy(config, collectDisallowedEvalUsage(semantic));
 	assertRegexpPolicy(config, collectDisallowedRegexpUsage(semantic));
-	return collectPrimordialMutationDiagnostics(semantic, world, {
-		nodeEnabled: config.surface.node,
-	});
+	return collectPrimordialMutationDiagnostics(semantic, world);
 }
 
 export function assertEvalPolicy(

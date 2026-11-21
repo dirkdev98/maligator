@@ -24,7 +24,6 @@ function configFor(primordials: "mutable" | "locked") {
 			temporal: true,
 			intl: { enabled: true },
 		},
-		surface: { webPlatform: true },
 	});
 }
 

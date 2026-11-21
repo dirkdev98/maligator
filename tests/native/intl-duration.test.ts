@@ -25,7 +25,6 @@ beforeAll(() => {
 		name: "intl-duration",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 		intlFeatures: ["duration-format"],
 	});
 });

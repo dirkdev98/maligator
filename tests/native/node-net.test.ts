@@ -22,7 +22,6 @@ describe("node:net Socket", () => {
 				name: compiled ? "node-net-compiled" : "node-net-interpreted",
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			}),
 		);

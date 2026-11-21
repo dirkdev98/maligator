@@ -7,7 +7,6 @@ describe("CommonJS star re-exports", () => {
 			fixture: "tests/local/cjs-star-reexports.mjs",
 			name: "cjs-star-reexports",
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
 		});
 		expect(runToStdout(binary)).toBe("star star true\n");
 	});

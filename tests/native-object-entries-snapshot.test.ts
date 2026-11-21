@@ -224,7 +224,6 @@ describe("Object.entries snapshot transport", () => {
 		(primordials) => {
 			const config = resolveBuildConfig({
 				engine: { primordials, eval: false, realms: false },
-				surface: { node: true },
 			});
 			const semantic = loadEntrypointAndRunSemanticAnalysis(
 				resolve("tests/local/object-entries-snapshot.js"),

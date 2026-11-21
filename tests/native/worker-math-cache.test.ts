@@ -13,7 +13,6 @@ for (const compiled of [true, false]) {
 				name: `worker-math-cache-${compiled ? "native" : "interpreted"}`,
 				outDir,
 				compiled,
-				nodeEnabled: true,
 			});
 			if (compiled) {
 				const workerCode = readdirSync(outDir)

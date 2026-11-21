@@ -23,7 +23,6 @@ it("writes identical UTF-8 bytes across fragment and encoding boundaries", () =>
 			mainFile: HOST_MAIN,
 			config: resolveBuildConfig({
 				engine: { eval: false, realms: false },
-				surface: { node: true, webPlatform: false },
 			}),
 		});
 		for (const binary of [pair.compiled, pair.interpreted])

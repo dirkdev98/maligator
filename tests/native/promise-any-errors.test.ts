@@ -21,7 +21,6 @@ beforeAll(() => {
 		outDir,
 		config: resolveBuildConfig({
 			engine: { primordials: "mutable" },
-			surface: { node: true },
 		}),
 	});
 });

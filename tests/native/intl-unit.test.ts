@@ -30,7 +30,6 @@ beforeAll(() => {
 		name: "intl-unit",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 		intlFeatures: ["number-format"],
 	});
 });

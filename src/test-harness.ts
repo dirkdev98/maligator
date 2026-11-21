@@ -16,7 +16,10 @@ import {
 	stripCompactTypes,
 	TYPE_STRIPPER_IDENTITY,
 } from "./compiler/frontend/compact-type-strip.ts";
-import { imageUsesHost } from "./compiler/frontend/host-modules.ts";
+import {
+	imageNeedsHostEventLoop,
+	imageUsesHost,
+} from "./compiler/frontend/host-modules.ts";
 import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
 import type { ModuleGoal } from "./compiler/frontend/module-graph.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semantic-program.ts";
@@ -167,13 +170,6 @@ export interface BuildOptions {
 	 */
 	intlFeatures?: Array<MaligatorIntlFeature>;
 	/**
-	 * Include the broader web surface. Defaults to true — internal tooling opts in.
-	 * With Node also disabled, false drops ada / URL and the C++ runtime link.
-	 */
-	webPlatformEnabled?: boolean;
-	/** Include the Node compatibility surface. Defaults to false. */
-	nodeEnabled?: boolean;
-	/**
 	 * Include the RegExp engine (regress). Defaults to true. Set false to build the
 	 * `engine.regexp: false` archive (no regress; RegExp uninstalled, String regex
 	 * methods throw).
@@ -201,8 +197,7 @@ export interface BuildOptions {
 	nativeFunctionSplit?: NativeSplitPolicy;
 	/**
 	 * A fully-resolved build config to build under. When provided it wins over the
-	 * flat `evalEnabled` / `intlEnabled` / `intlFeatures` / `webPlatformEnabled` /
-	 * `nodeEnabled`
+	 * flat `evalEnabled` / `intlEnabled` / `intlFeatures`
 	 * fields (used by the size bench to build a matrix of real config profiles);
 	 * otherwise a config is reconstructed from those flags.
 	 */
@@ -316,10 +311,6 @@ function resolveHarnessBuildConfig(options: BuildOptions): ResolvedBuildConfig {
 					enabled: options.intlEnabled ?? true,
 					features: options.intlFeatures ?? [],
 				},
-			},
-			surface: {
-				webPlatform: options.webPlatformEnabled ?? true,
-				node: options.nodeEnabled ?? false,
 			},
 		})
 	);
@@ -439,11 +430,15 @@ function linkProgramImage(
 	const usesHost = [image, ...workerImages.map((worker) => worker.image)].some((entry) =>
 		imageUsesHost(entry.runtime.hostInstalls),
 	);
+	// A custom C driver can call host components that the JavaScript image never names.
+	const customDriver =
+		options.mainFile !== undefined &&
+		path.resolve(options.mainFile) !== path.resolve(HOST_MAIN);
 	const { context, cacheSuffix } = resolveHarnessNativeContext(
 		options,
 		config,
 		name,
-		usesHost,
+		usesHost || customDriver,
 	);
 	return buildLocalBinary({
 		context,
@@ -451,7 +446,12 @@ function linkProgramImage(
 		cSource,
 		verbose: false,
 		mainFile:
-			options.mainFile ?? (usesHost || workerImages.length > 0 ? HOST_MAIN : undefined),
+			options.mainFile ??
+			(usesHost ||
+			imageNeedsHostEventLoop(image.runtime.hostInstalls) ||
+			workerImages.length > 0
+				? HOST_MAIN
+				: undefined),
 		outDir: options.outDir ?? defaultHarnessArtifactDirectory(),
 		cacheSuffix,
 		objectCacheVariant: options.nativeObjectCacheVariant,

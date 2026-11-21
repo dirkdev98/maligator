@@ -21,7 +21,6 @@ describe("node:os interfaces, priority and constants", () => {
 				name: `node-os-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

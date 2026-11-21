@@ -224,7 +224,11 @@ export function nativeLibraryInputs(
 	prepared: PreparedLibraries,
 	runtimeDirectory: string,
 	selectedExports?: ReadonlyMap<string, ReadonlySet<string>>,
-): { externalUnits: Array<ExternalTranslationUnit>; linkInputs: Array<LinkInput> } {
+): {
+	externalUnits: Array<ExternalTranslationUnit>;
+	linkInputs: Array<LinkInput>;
+	needsHostEventLoop: boolean;
+} {
 	const bindingArguments = [FFI_C_STANDARD, "-I", path.join(runtimeDirectory, "src/ffi")];
 	const selections = prepared.libraries.map((entry) => {
 		if (selectedExports === undefined) return { plan: entry.plan, exports: undefined };
@@ -268,5 +272,10 @@ export function nativeLibraryInputs(
 	return {
 		externalUnits,
 		linkInputs: prepared.libraries.flatMap((entry) => entry.library.linkInputs),
+		needsHostEventLoop:
+			hasCallbacks ||
+			selections.some(({ plan }) =>
+				plan.functions.some(({ async }) => async !== undefined),
+			),
 	};
 }

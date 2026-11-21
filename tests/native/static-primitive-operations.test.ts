@@ -277,7 +277,6 @@ console.log(used(long,long),discarded(long,long));
 					name: "boolean-wrapper-lifetime",
 					config: resolveBuildConfig({
 						engine: { primordials, eval: false, realms: false },
-						surface: { node: true },
 					}),
 					mainFile: HOST_MAIN,
 					outDir,

@@ -60,7 +60,6 @@ i64 mal_host_set_interval(MalVm *vm, MalValue callback, i64 period_ms, MalValue 
  * clearTimeout and clearInterval (shared id space). */
 void mal_host_clear_timeout(MalVm *vm, i64 id);
 void mal_host_timer_set_referenced(MalVm *vm, i64 id, bool referenced);
-bool mal_host_timers_are_node(MalVm *vm);
 
 /* Drive the event loop until the isolate is idle (no timers, fd ops, or
  * microtasks). Runs after the top-level program's synchronous phase. */
@@ -91,4 +90,3 @@ void mal_host_timers_free(MalVm *vm);
 
 /* Install setTimeout / clearTimeout as own methods of `global_this`. */
 void mal_host_timers_install(MalVm *vm, MalObject *global_this);
-void mal_host_timers_install_node(MalVm *vm, MalObject *global_this);

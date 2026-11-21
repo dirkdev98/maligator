@@ -22,14 +22,12 @@ describe("node:http server lifecycle", () => {
 				name: "node-http-listen-compiled",
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 			}),
 			buildNativeBinary({
 				fixture: "tests/local/node-http-listen.cjs",
 				name: "node-http-listen-interpreted",
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled: false,
 			}),
 		];

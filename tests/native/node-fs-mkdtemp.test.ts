@@ -17,7 +17,6 @@ it.each([
 		label: "eval and realms disabled",
 		config: resolveBuildConfig({
 			engine: { eval: false, realms: false },
-			surface: { node: true, webPlatform: false },
 		}),
 	},
 ])(
@@ -36,8 +35,6 @@ it.each([
 				name: "node-fs-mkdtemp",
 				outDir: directory,
 				mainFile: HOST_MAIN,
-				nodeEnabled: true,
-				webPlatformEnabled: false,
 			});
 			for (const binary of [pair.compiled, pair.interpreted]) {
 				for (const env of [{}, STRESS_ENV]) {

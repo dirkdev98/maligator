@@ -1,4 +1,4 @@
-// node:crypto acceptance fixture (behind surface.node). Covers the synchronous
+// node:crypto acceptance fixture. Covers the synchronous
 // surface: `hash` against known SHA-256 vectors over string, UTF-8, and
 // byte-source (TypedArray / DataView / ArrayBuffer) inputs; streaming
 // hash/HMAC with the full Buffer encoding set; PBKDF2; timingSafeEqual across

@@ -28,7 +28,7 @@ createServer((_request, response) => response.end("hello")).listen(
 );
 ```
 
-Enable `surface.node` in your config for this example. `ready()` returns `true` under the development supervisor and `false` in a standalone application or ordinary worker. Repeated calls are harmless.
+`ready()` returns `true` under the development supervisor and `false` in a standalone application or ordinary worker. Repeated calls are harmless.
 
 Readiness is a notification only: it does not change how `dev` handles your listeners.
 

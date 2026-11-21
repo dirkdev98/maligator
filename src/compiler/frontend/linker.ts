@@ -8,7 +8,6 @@ import { traverseEstree } from "./estree-traversal.ts";
 import {
 	BUFFER_INSTALLER_SYMBOL,
 	HOST_GLOBAL_INSTALLERS,
-	hostGlobalInstallerAvailable,
 	PROCESS_INSTALLER_SYMBOL,
 } from "./host-modules.ts";
 import { staticModuleClosure } from "./module-closure.ts";
@@ -109,11 +108,10 @@ export interface ModuleLinkage {
 
 	/**
 	 * Node globals installed with `process`, when the program reads `process`,
-	 * `TextEncoder`, or `TextDecoder` as a free global and the node surface is on. The
+	 * `TextEncoder`, or `TextDecoder` as a free global. The
 	 * binding remains unresolved so reads and writes retain ordinary global-object
 	 * semantics; this marker only statically retains the native installer.
-	 * Undefined when these globals are unused, shadowed by locals, or the node surface
-	 * is off. See {@link PROCESS_INSTALLER_SYMBOL}.
+	 * Undefined when these globals are unused or shadowed by locals. See {@link PROCESS_INSTALLER_SYMBOL}.
 	 */
 	hostProcess?: { installer: string };
 
@@ -850,41 +848,33 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		linkage.namespaceImports.set(file.path, list);
 	}
 
-	// --- Free host globals ---
-	// Do not rebind these: installed values are properties of globalThis, and
-	// identifier reads/writes must observe those same mutable properties.
-	const surfaces = { webPlatform: graph.webPlatformEnabled, node: graph.nodeEnabled };
-	if (surfaces.webPlatform || surfaces.node) {
-		const freeGlobalUsed = (name: string) =>
-			program.files.some((file) =>
-				file.scopes[0]?.bindings.some(
-					(binding) =>
-						binding.name === name && binding.undeclared && binding.usageNodes.length > 0,
-				),
-			);
-		const unfollowed = members.computed || linkage.globalObjectEscapes.size > 0;
-		if (surfaces.node) {
-			if (
-				freeGlobalUsed("process") ||
-				freeGlobalUsed("global") ||
-				members.names.has("process") ||
-				members.names.has("global") ||
-				unfollowed
-			) {
-				linkage.hostProcess = { installer: PROCESS_INSTALLER_SYMBOL };
-			}
-			if (freeGlobalUsed("Buffer") || members.names.has("Buffer") || unfollowed) {
-				linkage.hostBuffer = { installer: BUFFER_INSTALLER_SYMBOL };
-			}
-		}
-		for (const host of HOST_GLOBAL_INSTALLERS) {
-			if (!hostGlobalInstallerAvailable(host, surfaces)) continue;
-			if (
-				host.globals.some((name) => freeGlobalUsed(name) || members.names.has(name)) ||
-				(host.computedMember && unfollowed)
-			) {
-				linkage.hostGlobalInstallers.push(host.installer);
-			}
+	// Identifier reads and writes share the installed globalThis properties.
+	const freeGlobalUsed = (name: string) =>
+		program.files.some((file) =>
+			file.scopes[0]?.bindings.some(
+				(binding) =>
+					binding.name === name && binding.undeclared && binding.usageNodes.length > 0,
+			),
+		);
+	const unfollowed = members.computed || linkage.globalObjectEscapes.size > 0;
+	if (
+		unfollowed ||
+		freeGlobalUsed("process") ||
+		freeGlobalUsed("global") ||
+		members.names.has("process") ||
+		members.names.has("global")
+	) {
+		linkage.hostProcess = { installer: PROCESS_INSTALLER_SYMBOL };
+	}
+	if (unfollowed || freeGlobalUsed("Buffer") || members.names.has("Buffer")) {
+		linkage.hostBuffer = { installer: BUFFER_INSTALLER_SYMBOL };
+	}
+	for (const host of HOST_GLOBAL_INSTALLERS) {
+		if (
+			unfollowed ||
+			host.globals.some((name) => freeGlobalUsed(name) || members.names.has(name))
+		) {
+			linkage.hostGlobalInstallers.push(host.installer);
 		}
 	}
 
@@ -896,8 +886,7 @@ function collectGlobalAndStringMemberUses(
 	program: SemanticProgram,
 	linkage: ModuleLinkage,
 ) {
-	const globalNames =
-		program.graph?.nodeEnabled === true ? ["globalThis", "global"] : ["globalThis"];
+	const globalNames = ["globalThis", "global"];
 	const names = new Set<string>();
 	let computed = false;
 	for (const file of program.files) {

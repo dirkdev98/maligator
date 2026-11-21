@@ -18,7 +18,6 @@ for (const compiled of [true, false]) {
 				name: `worker-events-${compiled ? "native" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 			expect(runToStdout(binary, { env: STRESS_ENV })).toBe("worker-events PASS\n");

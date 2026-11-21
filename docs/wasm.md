@@ -37,8 +37,8 @@ npm run wasm:build -- --entry example.mts --output .cache/wasm/example.wasm
 ```
 
 The default host profile has locked primordials and RegExp enabled. Eval, realms,
-Intl, Temporal, web/Node/Maligator host surfaces and embedded assets must be disabled.
-Unsupported host configurations fail before compilation. Snippet compilation settings
+Intl, Temporal, host APIs, and embedded assets are unavailable in the Wasm host.
+The build rejects unsupported settings and host imports. Snippet compilation settings
 are independent: the compiler can describe native programs with capabilities that
 its own engine host does not install.
 

@@ -21,7 +21,6 @@ describe("node:util Node 26 additions", () => {
 				name: `node-util-extras-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

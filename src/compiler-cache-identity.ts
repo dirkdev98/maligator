@@ -180,7 +180,6 @@ export function compilerConfigurationIdentity(config: ResolvedBuildConfig): unkn
 				intlServices: config.engine.intl.enabled ? config.engine.intl.features : [],
 			},
 		},
-		hostSurface: config.surface,
 		ffiModules: config.ffiModules,
 	};
 }

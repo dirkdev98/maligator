@@ -19,7 +19,6 @@ const fixtures = [
 	{
 		name: "leakargon2",
 		fixture: "tests/local/leakargon2.mjs",
-		nodeEnabled: true,
 		mainFile: HOST_MAIN,
 		// Node 24 can attempt the deliberately oversized request instead of rejecting it.
 		expectedOutput: "leakargon2-ok\n",
@@ -37,7 +36,6 @@ beforeAll(() => {
 			fixture.name,
 			buildBackendPairFromOneProgramImage({
 				fixture: fixture.fixture,
-				nodeEnabled: fixture.nodeEnabled,
 				mainFile: fixture.mainFile,
 				name: `leakcheck-${fixture.name}`,
 				outDir,

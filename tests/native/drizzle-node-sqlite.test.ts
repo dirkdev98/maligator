@@ -22,14 +22,12 @@ describe("Drizzle v1 node:sqlite compatibility", () => {
 			name: "drizzle-node-sqlite-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/drizzle-node-sqlite.mjs",
 			name: "drizzle-node-sqlite-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

@@ -71,7 +71,6 @@ describe("forwarded callback counter windows", () => {
 				name: `forwarded-counters-${scope}-${kind}`,
 				entryGoal: "script",
 				entryStrict: false,
-				nodeEnabled: true,
 				mainFile: realms ? "runtime/test262_main.c" : HOST_MAIN,
 				outDir,
 				environment: { ...process.env, MAL_PERF_STATS: "1" },

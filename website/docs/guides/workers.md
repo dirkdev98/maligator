@@ -1,6 +1,6 @@
 Use a worker pool to run exported functions in parallel, with work isolated from the main application. Declare the worker entry before building the application. Each worker keeps its own module state, VM, heap, and event loop.
 
-Use a pool for request/result tasks. Use a long-lived [Worker](/api/workers#Worker) when you need a message protocol or an independent event loop. The public `maligator:workers` API does not require a surface flag; worker execution requires a threaded host.
+Use a pool for request/result tasks. Use a long-lived [Worker](/api/workers#Worker) when you need a message protocol or an independent event loop. Worker execution requires a threaded host.
 
 Use an [ES module project](/guides/typescript#use-es-modules) for the `.ts` files below.
 

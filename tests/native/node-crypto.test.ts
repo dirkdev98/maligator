@@ -14,7 +14,7 @@ import {
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-crypto-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
-describe("node:crypto (surface.node)", () => {
+describe("node:crypto", () => {
 	let compiled: string;
 	let interpreted: string;
 	let pinnedCompiled: string;
@@ -25,14 +25,12 @@ describe("node:crypto (surface.node)", () => {
 			name: "node-crypto-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/node-crypto.mts",
 			name: "node-crypto-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 		pinnedCompiled = buildNativeBinary({
@@ -40,14 +38,12 @@ describe("node:crypto (surface.node)", () => {
 			name: "node-crypto-pinned-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		pinnedInterpreted = buildNativeBinary({
 			fixture: "tests/fixtures/express-5/crypto-smoke.cjs",
 			name: "node-crypto-pinned-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

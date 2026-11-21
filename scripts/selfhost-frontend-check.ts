@@ -23,7 +23,6 @@ mkdirSync(outDir, { recursive: true });
 
 const config = resolveBuildConfig({
 	engine: { eval: false, regexp: true, intl: { enabled: false } },
-	surface: { webPlatform: false, node: true },
 });
 
 progress.stage(1, 3, "compile Node reference");

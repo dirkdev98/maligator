@@ -22,7 +22,6 @@ for (const compiled of [true, false]) {
 				name: `node-stream-duplex-from-${compiled ? "compiled" : "interpreted"}`,
 				outDir,
 				compiled,
-				nodeEnabled: true,
 			});
 		});
 		afterAll(() => {

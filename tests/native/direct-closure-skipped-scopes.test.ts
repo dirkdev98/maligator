@@ -29,14 +29,12 @@ describe("direct closures whose layouts skip a scope", () => {
 			name: "direct-closure-skipped-scopes-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "direct-closure-skipped-scopes-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

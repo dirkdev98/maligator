@@ -29,14 +29,12 @@ describe("direct closures called by their owner", () => {
 			name: "direct-closure-owner-calls-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "direct-closure-owner-calls-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

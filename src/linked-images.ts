@@ -616,9 +616,7 @@ export function compileLinkedImage(
 	assertRegexpPolicy(config, collectDisallowedRegexpUsage(semantic));
 	const diagnostics =
 		facts.world.primordialPolicy === "locked"
-			? collectPrimordialMutationDiagnostics(semantic, facts.world, {
-					nodeEnabled: config.surface.node,
-				})
+			? collectPrimordialMutationDiagnostics(semantic, facts.world)
 			: [];
 	phases.semanticMs += Date.now() - semanticStartedAt;
 	const compileOptions: CompileCoreOptions = {

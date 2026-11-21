@@ -24,7 +24,6 @@ describe("exact callback contexts across runtime compilation", () => {
 				outDir,
 				mainFile: HOST_MAIN,
 				config: resolveBuildConfig({
-					surface: { node: true },
 					engine: { eval: true, realms: true, primordials },
 				}),
 				environment: { ...process.env, MAL_PERF_STATS: "1" },

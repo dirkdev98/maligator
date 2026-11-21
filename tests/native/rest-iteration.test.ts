@@ -29,7 +29,6 @@ describe("private rest iteration", () => {
 		const shared = { fixture, outDir };
 		const config = resolveBuildConfig({
 			engine: { eval: false, realms: false },
-			surface: { node: true },
 		});
 		pair = buildBackendPairFromOneProgramImage({
 			...shared,
@@ -47,7 +46,6 @@ describe("private rest iteration", () => {
 			name: "rest-iteration-mutable",
 			config: resolveBuildConfig({
 				engine: { primordials: "mutable", eval: false, realms: true },
-				surface: { node: true },
 			}),
 		});
 	});

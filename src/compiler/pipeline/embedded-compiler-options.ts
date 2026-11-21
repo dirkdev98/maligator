@@ -29,7 +29,7 @@ export function embeddedCompilerOptions(sourceDirectory: string) {
 		intrinsicGlobalReads: true,
 		// The compiler runs spliced into a program that installs no globals for it, and
 		// its image must not ask for installers the eval loader cannot resolve.
-		buildConfig: resolveBuildConfig({ surface: { webPlatform: false, node: false } }),
+		buildConfig: resolveBuildConfig({}),
 		transformSource: {
 			files,
 			transform: (source: string) =>

@@ -3983,7 +3983,6 @@ describe("native update-expression representation", () => {
 			{
 				buildConfig: resolveBuildConfig({
 					engine: { eval: false, realms: false },
-					surface: { node: true },
 				}),
 			},
 		);

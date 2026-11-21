@@ -106,7 +106,7 @@ describe("module image components", () => {
 			"b.mjs": `import { describe } from "node:test";\nexport const b = describe;\n`,
 		});
 		const graph = buildModuleGraph(file("entry.mjs"), {
-			buildConfig: resolveBuildConfig({ surface: { node: true } }),
+			buildConfig: resolveBuildConfig({}),
 		});
 
 		expect(

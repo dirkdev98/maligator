@@ -21,7 +21,6 @@ describe("node:tls identity checks, roots and constants", () => {
 				name: `node-tls-extras-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

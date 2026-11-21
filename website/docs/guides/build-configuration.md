@@ -8,7 +8,6 @@ import { defineBuild } from "@maligator/cli";
 export default defineBuild({
 	entry: "src/index.ts",
 	outputName: "my-app",
-	surface: { node: true },
 });
 ```
 
@@ -23,15 +22,13 @@ The working directory is the project root. An explicit entry overrides `config.e
 
 ## Select features and host APIs
 
-Enable only the APIs your application uses. `surface.node` includes supported Node modules; `surface.webPlatform` includes Web APIs and `maligator:http`, whose handlers use them. Other `maligator:` modules need no surface flag.
-
-A surface makes its globals available; the build installs and links the ones your code uses. A program that never names `fetch` or `Response` carries no Fetch API, and one that never names `URL` carries no URL parser. Code that reads the global object in a way the build cannot follow, such as `Object.keys(globalThis)` or `globalThis[name]`, gets every global its surfaces provide, and so does a program built with `engine.eval: true`, since code it evaluates later may name any of them.
+Supported Web globals, `node:` modules, and `maligator:` modules are available directly. Maligator links the native components your code uses. Code that reads the global object through reflection, such as `Object.keys(globalThis)` or `globalThis[name]`, retains all globals. Builds with `engine.eval: true` do the same so code evaluated later can read them.
 
 Engine choices apply to the whole image, including workers. RegExp is enabled by default. Eval, Realm support, Temporal, and Intl are opt-in. `engine.eval: true` embeds the runtime compiler; `"compile-check"` rejects visible dynamic compilation and keeps it disabled at runtime.
 
 Code from `new Function`, indirect eval such as `(0, eval)(source)`, and the other function constructors runs as global code, so with locked primordials and without realms the rest of the program keeps its whole-program optimizations. A direct `eval(source)` call can read and assign the bindings in scope at the call and call what they hold, which in a CommonJS module include `module`, `exports` and `require`; the build treats those values as reachable from unseen code and keeps optimizing everything else, such as other modules and functions the call cannot see. CommonJS modules compile as strict code, so a direct eval's `var` declarations stay inside the eval. A script entry that shares its top-level declarations with global code makes the build optimize the whole program as open to unseen code.
 
-The [configuration reference](/api/build#MaligatorBuildConfig) lists each default and interaction. Type declarations remain visible even for disabled surfaces. Check [Compatibility](/compatibility) for support within an enabled surface.
+The [configuration reference](/api/build#MaligatorBuildConfig) lists each default and interaction. [Compatibility](/compatibility) lists supported Web and Node APIs.
 
 ## Replace a module specifier
 
@@ -43,6 +40,8 @@ export default defineBuild({
 	modules: { aliases: { "app-store": "./src/store.ts" } },
 });
 ```
+
+Package exports match the conditions `maligator` and `node`, the importing syntax’s `import` or `require` condition, and `default`. Set `modules.conditions` to replace the leading conditions.
 
 Aliases replace exact specifiers before resolution. They are not prefix mappings or TypeScript `paths` configuration. Create the replacement module before building.
 

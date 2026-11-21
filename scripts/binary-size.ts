@@ -17,10 +17,7 @@ import type { NativeBuildCommandEvent } from "../src/native-build-context.ts";
 import { buildNativeBinaryResult } from "../src/test-harness.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
-const lean = resolveBuildConfig({});
-const web = resolveBuildConfig({ surface: { webPlatform: true } });
-const node = resolveBuildConfig({ surface: { node: true } });
-const nodeWeb = resolveBuildConfig({ surface: { node: true, webPlatform: true } });
+const config = resolveBuildConfig({});
 
 interface LinkedSymbol {
 	object: string;
@@ -80,7 +77,6 @@ function dynamicLibraries(binaryPath: string, env: NodeJS.ProcessEnv): Array<str
 const fixtures: Array<{
 	name: string;
 	file: string;
-	config: typeof lean;
 	bun: boolean;
 	forbidden?: ReadonlyArray<ForbiddenComponent>;
 	forbiddenLibraries?: ReadonlyArray<ForbiddenLibrary>;
@@ -88,7 +84,6 @@ const fixtures: Array<{
 	{
 		name: "hello",
 		file: "bench/size/hello.mjs",
-		config: lean,
 		bun: true,
 		forbidden: [
 			"HTTP client",
@@ -105,39 +100,34 @@ const fixtures: Array<{
 	{
 		name: "serve",
 		file: "bench/size/serve.mjs",
-		config: web,
 		bun: false,
 		forbidden: ["brotli", "rustls", "Node runtime", "sqlite3.o", "argon2"],
 	},
 	{
 		name: "fetch",
 		file: "bench/size/fetch.mjs",
-		config: web,
 		bun: true,
 		forbidden: ["Node runtime", "sqlite3.o", "argon2"],
 	},
 	{
 		name: "node-hello",
 		file: "bench/size/node-hello.mjs",
-		config: node,
 		bun: true,
 		forbidden: ["sqlite3.o", "node_fs", "argon2"],
 	},
 	{
 		name: "node-fs",
 		file: "bench/size/node-fs.mjs",
-		config: node,
 		bun: true,
 		forbidden: ["brotli", "rustls", "sqlite3.o"],
 	},
 	{
 		name: "http-bare",
 		file: "bench/http/server_mal.js",
-		config: web,
 		bun: false,
 		forbidden: ["brotli", "rustls", "Node runtime", "sqlite3.o", "argon2"],
 	},
-	{ name: "express", file: "bench/http/express-server.cjs", config: nodeWeb, bun: true },
+	{ name: "express", file: "bench/http/express-server.cjs", bun: true },
 ];
 
 function rankedBytes(groups: Map<string, number>) {
@@ -286,7 +276,16 @@ function replayWithMap(
 
 const args = process.argv.slice(2);
 if (args.length === 1 && args[0] === "--plan=json") {
-	console.log(JSON.stringify({ mode: "production", fixtures }, null, 2));
+	console.log(
+		JSON.stringify(
+			{
+				mode: "production",
+				fixtures: fixtures.map((fixture) => ({ ...fixture, config })),
+			},
+			null,
+			2,
+		),
+	);
 	process.exit(0);
 }
 if (args.length !== 0) throw new Error("usage: npm run bench:size -- [--plan=json]");
@@ -301,7 +300,7 @@ const bunVersion = bun.status === 0 ? bun.stdout.trim() : undefined;
 const results = [];
 try {
 	for (const fixture of fixtures) {
-		const { name, file, config } = fixture;
+		const { name, file } = fixture;
 		console.log(`Building ${name}`);
 		const mapFile = path.join(reportDirectory, `${name}.map`);
 		const collectMap = process.platform === "darwin";

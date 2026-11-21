@@ -30,14 +30,13 @@ function preparedContexts(): Array<NativeBuildContextOptions> {
 	return vi.mocked(resolveNativeBuildContext).mock.calls.map(([options]) => options!);
 }
 
-function implicitInstrumentedConsumers(): Array<{ file: string; node: boolean }> {
+function implicitInstrumentedConsumers(): Array<{ file: string }> {
 	const overrides = new Set<keyof BuildOptions>([
 		"config",
 		"evalEnabled",
 		"realmsEnabled",
 		"intlEnabled",
 		"intlFeatures",
-		"webPlatformEnabled",
 		"regexpEnabled",
 		"temporalEnabled",
 		"profileEnabled",
@@ -52,7 +51,7 @@ function implicitInstrumentedConsumers(): Array<{ file: string; node: boolean }>
 		["buildNativeProgramImageResult", 1],
 		["buildBackendPairFromOneProgramImage", 0],
 	]);
-	const consumers: Array<{ file: string; node: boolean }> = [];
+	const consumers: Array<{ file: string }> = [];
 	for (const file of readdirSync("tests/native", {
 		recursive: true,
 		encoding: "utf8",
@@ -79,7 +78,7 @@ function implicitInstrumentedConsumers(): Array<{ file: string; node: boolean }>
 				if (index !== undefined) imported.set(binding.name.text, index);
 			}
 		}
-		const profiles = new Set<boolean>();
+		let usesInstrumentation = false;
 		// Importing native modules would execute their process and temporary-directory setup.
 		const visit = (expression: ts.Node): void => {
 			if (ts.isCallExpression(expression) && ts.isIdentifier(expression.expression)) {
@@ -105,12 +104,8 @@ function implicitInstrumentedConsumers(): Array<{ file: string; node: boolean }>
 						}
 					}
 					const environment = properties.get("environment");
-					const node = properties.get("nodeEnabled");
 					if (
 						implicit &&
-						(node === undefined ||
-							node.kind === ts.SyntaxKind.TrueKeyword ||
-							node.kind === ts.SyntaxKind.FalseKeyword) &&
 						environment !== undefined &&
 						ts.isObjectLiteralExpression(environment) &&
 						environment.properties.some(
@@ -123,13 +118,13 @@ function implicitInstrumentedConsumers(): Array<{ file: string; node: boolean }>
 								property.initializer.text === "1",
 						)
 					)
-						profiles.add(node?.kind === ts.SyntaxKind.TrueKeyword);
+						usesInstrumentation = true;
 				}
 			}
 			ts.forEachChild(expression, visit);
 		};
 		visit(source);
-		for (const node of profiles) consumers.push({ file, node });
+		if (usesInstrumentation) consumers.push({ file });
 	}
 	return consumers;
 }
@@ -151,9 +146,8 @@ describe("native runtime preparation", () => {
 		({ file }) => {
 			setup(selectedProject(file));
 			const contexts = preparedContexts();
-			expect(contexts).toHaveLength(3);
+			expect(contexts).toHaveLength(2);
 			expect(contexts.map((context) => perfStatsDefines(context.environment))).toEqual([
-				[],
 				[],
 				["-DMAL_PERF_STATS=1"],
 			]);
@@ -163,8 +157,7 @@ describe("native runtime preparation", () => {
 					realmsEnabled: true,
 					intlEnabled: true,
 					temporalEnabled: true,
-					webPlatformEnabled: true,
-					nodeEnabled: true,
+					usesHost: true,
 					profileEnabled: false,
 				});
 				expect(context.environment).toMatchObject({
@@ -178,7 +171,7 @@ describe("native runtime preparation", () => {
 
 	it("prepares the instrumented archive once for multiple selected consumers", () => {
 		setup(selectedProject("map-get-set-cache.test.ts", "collection-direct.test.ts"));
-		expect(ensureNativeArtifacts).toHaveBeenCalledTimes(3);
+		expect(ensureNativeArtifacts).toHaveBeenCalledTimes(2);
 	});
 
 	it("prepares the realms-disabled profile before its timed hook", () => {
@@ -186,12 +179,10 @@ describe("native runtime preparation", () => {
 		const contexts = preparedContexts();
 		expect(contexts.map((context) => context.features?.realmsEnabled)).toEqual([
 			true,
-			true,
 			false,
 		]);
 		expect(contexts.at(-1)?.features).toMatchObject({
-			nodeEnabled: true,
-			webPlatformEnabled: true,
+			usesHost: true,
 		});
 		expect(ensureNativeArtifacts).toHaveBeenCalledWith(contexts.at(-1));
 	});
@@ -207,24 +198,11 @@ describe("native runtime preparation", () => {
 		]);
 		for (const context of contexts) {
 			expect(context.features).toMatchObject({
-				nodeEnabled: true,
 				evalEnabled: true,
 				intlEnabled: false,
 			});
 			expect(ensureNativeArtifacts).toHaveBeenCalledWith(context);
 		}
-	});
-
-	it("prepares Node instrumentation for the HTTP queue lifecycle fixture", () => {
-		setup(selectedProject("node-http-ready-queues.test.ts"));
-		const contexts = preparedContexts();
-		expect(contexts).toHaveLength(3);
-		expect(contexts.map((context) => perfStatsDefines(context.environment))).toEqual([
-			[],
-			[],
-			["-DMAL_PERF_STATS=1"],
-		]);
-		expect(ensureNativeArtifacts).toHaveBeenCalledWith(contexts.at(-1));
 	});
 
 	it.each(["arguments-forwarding.test.ts", "arguments-alias.test.ts"])(
@@ -236,8 +214,7 @@ describe("native runtime preparation", () => {
 			);
 			expect(locked).toHaveLength(1);
 			expect(locked[0]?.features).toMatchObject({
-				nodeEnabled: true,
-				webPlatformEnabled: true,
+				usesHost: true,
 			});
 			expect(perfStatsDefines(locked[0]?.environment)).toEqual(["-DMAL_PERF_STATS=1"]);
 			expect(ensureNativeArtifacts).toHaveBeenCalledWith(locked[0]);
@@ -254,9 +231,8 @@ describe("native runtime preparation", () => {
 	])("keeps %s outside default instrumented preparation", (file) => {
 		setup(selectedProject(file));
 		const contexts = preparedContexts();
-		expect(contexts).toHaveLength(2);
+		expect(contexts).toHaveLength(1);
 		expect(contexts.map((context) => perfStatsDefines(context.environment))).toEqual([
-			[],
 			[],
 		]);
 	});
@@ -266,11 +242,11 @@ describe("native runtime preparation", () => {
 		const inherited = { ...process.env };
 		setup(selectedProject("map-get-set-cache.test.ts"));
 		expect(process.env).toEqual(inherited);
-		const [ordinary, node, instrumented] = preparedContexts();
+		const [ordinary, instrumented] = preparedContexts();
 		expect(ordinary!.environment).not.toBe(instrumented!.environment);
 		expect(ordinary!.environment?.MAL_PERF_STATS).toBeUndefined();
 		expect(instrumented!.environment?.MAL_PERF_STATS).toBe("1");
-		for (const context of [ordinary!, node!, instrumented!]) {
+		for (const context of [ordinary!, instrumented!]) {
 			expect(context.environment?.MAL_UBSAN).toBe("1");
 		}
 	});
@@ -279,9 +255,8 @@ describe("native runtime preparation", () => {
 		vi.stubEnv("MAL_PERF_STATS", "1");
 		setup(selectedProject("map-get-set-cache.test.ts"));
 		const contexts = preparedContexts();
-		expect(contexts).toHaveLength(2);
+		expect(contexts).toHaveLength(1);
 		expect(contexts.map((context) => perfStatsDefines(context.environment))).toEqual([
-			["-DMAL_PERF_STATS=1"],
 			["-DMAL_PERF_STATS=1"],
 		]);
 	});

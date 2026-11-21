@@ -24,7 +24,6 @@ describe("nested record iteration", () => {
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 			config: resolveBuildConfig({
 				engine: { eval: false, realms: false },
-				surface: { node: true },
 			}),
 		});
 	});

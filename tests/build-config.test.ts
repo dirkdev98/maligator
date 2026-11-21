@@ -43,15 +43,7 @@ describe("resolveBuildConfig defaults", () => {
 		expect(config.modules.conditions).toEqual(["maligator", "node"]);
 	});
 
-	it("ignores the surface flags", () => {
-		const flagged = resolveBuildConfig({ surface: { webPlatform: false, node: false } });
-		expect(flagged).toEqual(resolveBuildConfig({}));
-		expect(buildDerivationFromConfig(flagged)).toEqual(
-			buildDerivationFromConfig(resolveBuildConfig({ surface: { node: true } })),
-		);
-	});
-
-	it("defaults RegExp ON (core language, unlike eval/Intl/web)", () => {
+	it("defaults RegExp ON (core language policy)", () => {
 		expect(resolveBuildConfig({}).engine.regexp).toBe(true);
 		expect(resolveBuildConfig({ engine: { regexp: false } }).engine.regexp).toBe(false);
 	});
@@ -97,7 +89,6 @@ describe("loadBuildConfig", () => {
 			JSON.stringify({
 				entry: "src/main.ts",
 				engine: { eval: false, intl: { enabled: false, languages: [] } },
-				surface: { webPlatform: false, node: false },
 			}),
 		);
 		expect(loadBuildConfig(undefined, dir).engine.eval).toBe(false);
@@ -396,11 +387,9 @@ describe("intl feature → cargo features", () => {
 	it("distinct feature sets get distinct output suffixes; all-services is canonical", () => {
 		const all = resolveBuildConfig({
 			engine: { eval: true, realms: true, temporal: true, intl: { enabled: true } },
-			surface: { webPlatform: true },
 		});
 		const subset = resolveBuildConfig({
 			engine: { eval: true, intl: { enabled: true, features: ["number-format"] } },
-			surface: { webPlatform: true },
 		});
 		expect(buildConfigCacheSuffix(all)).toBe(""); // canonical
 		expect(buildConfigCacheSuffix(subset)).toMatch(/^[0-9a-f]{8}$/);
@@ -409,12 +398,11 @@ describe("intl feature → cargo features", () => {
 });
 
 describe("buildConfigCacheSuffix", () => {
-	it("is empty for the canonical (eval-on, realms-on, Intl-on, web-on) archive", () => {
+	it("is empty for the canonical (eval, realms, Intl, Temporal and RegExp enabled) archive", () => {
 		expect(
 			buildConfigCacheSuffix(
 				resolveBuildConfig({
 					engine: { eval: true, realms: true, temporal: true, intl: { enabled: true } },
-					surface: { webPlatform: true },
 				}),
 			),
 		).toBe("");
@@ -430,7 +418,6 @@ describe("buildConfigCacheSuffix", () => {
 	it("separates mutable and locked primordial artifacts", () => {
 		const locked = resolveBuildConfig({
 			engine: { eval: true, realms: true, temporal: true, intl: { enabled: true } },
-			surface: { webPlatform: true },
 		});
 		const mutable = resolveBuildConfig({
 			engine: {
@@ -440,7 +427,6 @@ describe("buildConfigCacheSuffix", () => {
 				temporal: true,
 				intl: { enabled: true },
 			},
-			surface: { webPlatform: true },
 		});
 		expect(buildConfigCacheSuffix(locked)).toBe("");
 		expect(buildConfigCacheSuffix(mutable)).toMatch(/^[0-9a-f]{8}$/);
@@ -462,11 +448,9 @@ describe("buildConfigCacheSuffix", () => {
 	it("regexp-off gets a distinct non-empty output suffix", () => {
 		const canonical = resolveBuildConfig({
 			engine: { eval: true, intl: { enabled: true } },
-			surface: { webPlatform: true },
 		});
 		const noRegexp = resolveBuildConfig({
 			engine: { eval: true, regexp: false, intl: { enabled: true } },
-			surface: { webPlatform: true },
 		});
 		expect(buildConfigCacheSuffix(noRegexp)).toMatch(/^[0-9a-f]{8}$/);
 		expect(buildConfigCacheSuffix(noRegexp)).not.toBe(buildConfigCacheSuffix(canonical));
@@ -475,11 +459,9 @@ describe("buildConfigCacheSuffix", () => {
 	it("Temporal-off gets a distinct non-empty output suffix", () => {
 		const canonical = resolveBuildConfig({
 			engine: { eval: true, realms: true, temporal: true, intl: { enabled: true } },
-			surface: { webPlatform: true },
 		});
 		const noTemporal = resolveBuildConfig({
 			engine: { eval: true, realms: true, temporal: false, intl: { enabled: true } },
-			surface: { webPlatform: true },
 		});
 		expect(buildDerivationFromConfig(noTemporal).features.temporalEnabled).toBe(false);
 		expect(buildDerivationFromConfig(canonical).features.temporalEnabled).toBe(true);
@@ -504,11 +486,9 @@ describe("host component derivation", () => {
 describe("engine.realms build plumbing", () => {
 	const canonical = resolveBuildConfig({
 		engine: { eval: true, realms: true, temporal: true, intl: { enabled: true } },
-		surface: { webPlatform: true },
 	});
 	const realmsOff = resolveBuildConfig({
 		engine: { eval: true, realms: false, intl: { enabled: true } },
-		surface: { webPlatform: true },
 	});
 
 	it("defaults realms OFF (product default), honors explicit true", () => {

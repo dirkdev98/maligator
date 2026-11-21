@@ -420,7 +420,6 @@ export function test262PrepareBuild() {
 			temporal: true,
 			intl: { enabled: true },
 		},
-		surface: { webPlatform: true, node: false },
 	});
 	const compilerSourceDirectory = path.resolve("src");
 	const compilerEntrypoint = path.resolve(

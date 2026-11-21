@@ -21,7 +21,6 @@ describe("node:async_hooks ids and createHook", () => {
 				name: `node-async-hooks-extras-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

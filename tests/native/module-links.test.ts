@@ -14,7 +14,7 @@ import { buildDevelopmentRunner } from "../../src/local-build.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 
 const root = mkdtempSync(path.join(os.tmpdir(), "mal-module-links-"));
-const config = resolveBuildConfig({ surface: { webPlatform: true } });
+const config = resolveBuildConfig({});
 let runner: string;
 
 function write(relativePath: string, source: string): string {

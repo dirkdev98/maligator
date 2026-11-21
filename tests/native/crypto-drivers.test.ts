@@ -18,19 +18,17 @@ import {
 // the CSPRNG boundary itself, and the scrub a secret-bearing ArrayBuffer store
 // gets before it is released. None of it is observable from JavaScript.
 //
-// Kept out of drivers.test.ts because the Argon2 driver needs the node-enabled
-// archive, and that file runs inside the smoke tier's fixed time budget.
+// Kept out of drivers.test.ts because the Argon2 driver needs the native crypto
+// dependencies, and that file runs inside the smoke tier's fixed time budget.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-crypto-drivers-"));
 
 const DRIVERS = [
-	// The Argon2 pool links the Rust backend, which is behind surface.node.
-	{ tag: "argon2test", mainFile: ARGON2_MAIN, nodeEnabled: true },
-	{ tag: "entropytest", mainFile: ENTROPY_MAIN, nodeEnabled: false },
-	// The backing-store contract is an engine one; node is off to keep it there.
-	{ tag: "secretbuffertest", mainFile: SECRET_BUFFER_MAIN, nodeEnabled: false },
+	{ tag: "argon2test", mainFile: ARGON2_MAIN },
+	{ tag: "entropytest", mainFile: ENTROPY_MAIN },
+	{ tag: "secretbuffertest", mainFile: SECRET_BUFFER_MAIN },
 ];
 
-describe.each(DRIVERS)("$tag", ({ tag, mainFile, nodeEnabled }) => {
+describe.each(DRIVERS)("$tag", ({ tag, mainFile }) => {
 	let binary: string;
 	beforeAll(() => {
 		binary = buildNativeBinary({
@@ -38,7 +36,6 @@ describe.each(DRIVERS)("$tag", ({ tag, mainFile, nodeEnabled }) => {
 			name: tag,
 			mainFile,
 			outDir,
-			nodeEnabled,
 		});
 	});
 

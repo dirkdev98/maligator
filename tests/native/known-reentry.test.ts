@@ -23,7 +23,6 @@ describe.each([false, true])("captured predicates with realms=%s", (realms) => {
 			nativeStackRoots: "precise",
 			config: resolveBuildConfig({
 				engine: { primordials: "mutable", realms, eval: false },
-				surface: { node: true },
 			}),
 		});
 	});

@@ -31,7 +31,6 @@ beforeAll(() => {
 				intl: { enabled: false },
 				primordials: "mutable",
 			},
-			surface: { node: false, webPlatform: false },
 		}),
 	});
 });

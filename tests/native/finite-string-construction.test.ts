@@ -31,7 +31,6 @@ beforeAll(() => {
 			outDir,
 			config: resolveBuildConfig({
 				engine: { eval: false, realms: false, primordials },
-				surface: { node: true },
 			}),
 		});
 	locked = build("locked");

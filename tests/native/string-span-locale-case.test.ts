@@ -26,7 +26,6 @@ describe("Locale-sensitive case output from rooted string spans", () => {
 				mainFile: HOST_MAIN,
 				config: resolveBuildConfig({
 					engine: { primordials, eval: false, realms: false, intl: { enabled: true } },
-					surface: { node: true },
 				}),
 				environment: { ...process.env, MAL_PERF_STATS: "1" },
 			});

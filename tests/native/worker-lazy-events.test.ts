@@ -13,7 +13,6 @@ for (const compiled of [true, false]) {
 				name: `worker-lazy-events-${compiled ? "native" : "interpreted"}`,
 				outDir,
 				compiled,
-				nodeEnabled: true,
 			});
 			expect(
 				runToStdout(binary, {

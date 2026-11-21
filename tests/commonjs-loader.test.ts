@@ -7,7 +7,7 @@ import { hostInstallerSymbol } from "../src/compiler/frontend/host-modules.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 
-const nodeOn = resolveBuildConfig({ surface: { node: true } });
+const nodeOn = resolveBuildConfig({});
 const roots: Array<string> = [];
 
 afterEach(() => {

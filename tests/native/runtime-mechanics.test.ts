@@ -19,8 +19,6 @@ describe("shared runtime mechanics", () => {
 			fixture: "tests/local/runtime-mechanics.mjs",
 			name: "runtime-mechanics",
 			outDir,
-			nodeEnabled: true,
-			webPlatformEnabled: false,
 		});
 		binaries = [pair.compiled, pair.interpreted];
 	}, 600_000);

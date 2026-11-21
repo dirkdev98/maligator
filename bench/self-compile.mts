@@ -54,7 +54,7 @@ const coreOptimizationBenchmarkAblation =
 		? undefined
 		: { family: ablationValue as CoreOptimizationBenchmarkAblation["family"] };
 
-const config = resolveBuildConfig({ surface: { webPlatform: false, node: true } });
+const config = resolveBuildConfig({});
 
 const phases = {
 	graphMs: 0,

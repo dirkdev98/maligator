@@ -1,12 +1,10 @@
 import type { MessagePort, WorkerExit } from "maligator:workers";
 
 export interface ApplicationImageDescriptor {
-	schema: 1;
+	schema: 2;
 	wires: Array<{ path: string; sha256: string }>;
 	entryPath: string;
 	workerManifestPath?: string;
-	webPlatform: boolean;
-	node: boolean;
 	engine: {
 		primordials: "locked" | "mutable";
 		eval: boolean;

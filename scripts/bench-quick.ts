@@ -73,11 +73,9 @@ const GC_LONG_ITERATIONS = 2000;
 const APP_CONFIG = {
 	outputName: "app-batch",
 	engine: { eval: false, realms: false, intl: { enabled: false } },
-	surface: { node: true, webPlatform: false },
 } satisfies MaligatorBuildConfig;
 const SELF_COMPILE_BUILD_CONFIG = {
 	engine: { eval: false, realms: false, regexp: true, intl: { enabled: false } },
-	surface: { webPlatform: false, node: true },
 } satisfies MaligatorBuildConfig;
 const HELP = `Usage: npm run bench:quick -- --baseline REF|CHECKOUT [options]
 

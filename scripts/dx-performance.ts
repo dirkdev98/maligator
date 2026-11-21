@@ -395,10 +395,7 @@ const response = parse(object({ status: literal("ok") }), { status: "ok" });
 console.log(typeof express(), response.status, localRevision, feature, value${LIBRARY_MODULES - 1}(), label${LIBRARY_MODULES - 1});
 `,
 	);
-	write(
-		"maligator.build.mts",
-		`export default { entry: "app.mts", surface: { node: true, webPlatform: true } };\n`,
-	);
+	write("maligator.build.mts", `export default { entry: "app.mts" };\n`);
 	write(
 		"dev-app.mts",
 		`import "./app.mts";

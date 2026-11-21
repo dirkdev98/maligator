@@ -27,8 +27,6 @@ describe("Express without HTTP transport", () => {
 			fixture,
 			name: "express-in-process",
 			outDir: directory,
-			nodeEnabled: true,
-			webPlatformEnabled: true,
 			evalEnabled: false,
 			realmsEnabled: false,
 			intlEnabled: false,

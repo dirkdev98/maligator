@@ -22,7 +22,6 @@ describe("Readable pipe backpressure", () => {
 			name: "stream-pipe-drain",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 	});
 

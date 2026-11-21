@@ -21,7 +21,6 @@ describe("Node 26 compatibility APIs", () => {
 				name: `node-compat-26-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}

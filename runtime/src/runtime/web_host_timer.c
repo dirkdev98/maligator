@@ -205,11 +205,6 @@ void mal_host_timer_set_referenced(MalVm *vm, i64 id, bool referenced) {
     if (timer != nullptr && !timer->cancelled) timer->referenced = referenced;
 }
 
-bool mal_host_timers_are_node(MalVm *vm) {
-    MalHost *host = mal_host(vm);
-    return host != nullptr && host->node_timers;
-}
-
 /* Run one fired-but-not-run timer callback (a macrotask). Returns false when none
  * are ready. Runs at most one per call so the caller drains microtasks between
  * macrotasks (HTML event-loop ordering). */
@@ -431,52 +426,6 @@ static i64 mal_host_schedule_native(MalVm *vm, const MalValue *args, i32 arg_cou
     return t == nullptr ? 0 : t->id;
 }
 
-static MalValue mal_host_set_timeout_native(
-    MalVm *vm,
-    MalValue this_value,
-    const MalValue *args,
-    i32 arg_count,
-    MalValue new_target,
-    MalValue callee) {
-    (void) this_value;
-    (void) new_target;
-    (void) callee;
-    return mal_value_from_f64((f64) mal_host_schedule_native(vm, args, arg_count, false));
-}
-
-static MalValue mal_host_set_interval_native(
-    MalVm *vm,
-    MalValue this_value,
-    const MalValue *args,
-    i32 arg_count,
-    MalValue new_target,
-    MalValue callee) {
-    (void) this_value;
-    (void) new_target;
-    (void) callee;
-    return mal_value_from_f64((f64) mal_host_schedule_native(vm, args, arg_count, true));
-}
-
-static MalValue mal_host_clear_timeout_native(
-    MalVm *vm,
-    MalValue this_value,
-    const MalValue *args,
-    i32 arg_count,
-    MalValue new_target,
-    MalValue callee) {
-    (void) this_value;
-    (void) new_target;
-    (void) callee;
-    if (arg_count >= 1) {
-        f64 d;
-        if (mal_vm_to_number(vm, args[0], &d) && isfinite(d)
-            && d >= 0 && d <= 9007199254740991.0) {
-            mal_host_clear_timeout(vm, (i64) d);
-        }
-    }
-    return mal_value_new_undefined();
-}
-
 /*
  * Node's Timeout objects. One prototype per VM carries the methods, and each object
  * records its timer id under a private symbol, which reflection can neither see nor
@@ -625,7 +574,7 @@ static void timeout_prototype_install(MalVm *vm) {
     mal_gc_unroot(&root);
 }
 
-static MalValue mal_host_schedule_node_native(
+static MalValue mal_host_schedule_handle(
     MalVm *vm, const MalValue *args, i32 argc, bool repeat) {
     i64 id = mal_host_schedule_native(vm, args, argc, repeat);
     if (id == 0) return mal_value_new_undefined();
@@ -637,44 +586,43 @@ static MalValue mal_host_schedule_node_native(
     return timer->handle;
 }
 
-static MalValue mal_host_set_timeout_node_native(
+static MalValue mal_host_set_timeout_native(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self; (void) nt; (void) callee;
-    return mal_host_schedule_node_native(vm, args, argc, false);
+    return mal_host_schedule_handle(vm, args, argc, false);
 }
 
-static MalValue mal_host_set_interval_node_native(
+static MalValue mal_host_set_interval_native(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self; (void) nt; (void) callee;
-    return mal_host_schedule_node_native(vm, args, argc, true);
+    return mal_host_schedule_handle(vm, args, argc, true);
 }
 
-/* clearTimeout reads a Timeout's id directly and converts anything else to a number. */
-static MalValue mal_host_clear_timeout_node_native(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    i64 id = argc >= 1 ? timeout_id(vm, args[0]) : 0;
-    if (id == 0) return mal_host_clear_timeout_native(vm, self, args, argc, nt, callee);
-    mal_host_clear_timeout(vm, id);
+/* clearTimeout accepts a Timeout handle or its numeric id. */
+static MalValue mal_host_clear_timeout_native(
+    MalVm *vm, MalValue self, const MalValue *args, i32 arg_count, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    i64 id = arg_count >= 1 ? timeout_id(vm, args[0]) : 0;
+    if (id != 0) {
+        mal_host_clear_timeout(vm, id);
+        return mal_value_new_undefined();
+    }
+    if (arg_count >= 1) {
+        f64 d;
+        if (mal_vm_to_number(vm, args[0], &d) && isfinite(d)
+            && d >= 0 && d <= 9007199254740991.0) {
+            mal_host_clear_timeout(vm, (i64) d);
+        }
+    }
     return mal_value_new_undefined();
 }
 
-void mal_host_timers_install_node(MalVm *vm, MalObject *global_this) {
-    mal_host(vm)->node_timers = true;
-    mal_host_timers_install(vm, global_this);
-    timeout_prototype_install(vm);
-    mal_intrinsic_define_method_n(vm, global_this, "setTimeout", 2, mal_host_set_timeout_node_native);
-    mal_intrinsic_define_method_n(vm, global_this, "setInterval", 2, mal_host_set_interval_node_native);
-    mal_intrinsic_define_method_n(vm, global_this, "clearTimeout", 1, mal_host_clear_timeout_node_native);
-    mal_intrinsic_define_method_n(vm, global_this, "clearInterval", 1, mal_host_clear_timeout_node_native);
-}
-
 void mal_host_timers_install(MalVm *vm, MalObject *global_this) {
+    if (timeout_vm == vm) return;
     mal_gc_register_root_source(mal_host_timers_scan_roots, nullptr);
+    timeout_prototype_install(vm);
     mal_intrinsic_define_method_n(vm, global_this, "setTimeout", 2, mal_host_set_timeout_native);
-    mal_intrinsic_define_method_n(
-        vm, global_this, "clearTimeout", 1, mal_host_clear_timeout_native);
     mal_intrinsic_define_method_n(vm, global_this, "setInterval", 2, mal_host_set_interval_native);
-    // clearInterval shares clearTimeout's id space / cancellation path.
-    mal_intrinsic_define_method_n(
-        vm, global_this, "clearInterval", 1, mal_host_clear_timeout_native);
+    mal_intrinsic_define_method_n(vm, global_this, "clearTimeout", 1, mal_host_clear_timeout_native);
+    mal_intrinsic_define_method_n(vm, global_this, "clearInterval", 1, mal_host_clear_timeout_native);
 }

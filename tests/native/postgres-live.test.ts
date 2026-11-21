@@ -19,8 +19,6 @@ describe("postgres.js live database", () => {
 				name: "postgres-live",
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
-				webPlatformEnabled: false,
 			});
 			assertResultPass(runToStdout(binary, { timeoutMs: 30_000 }));
 		},

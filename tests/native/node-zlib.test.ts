@@ -32,7 +32,6 @@ describe("node:zlib decompression adapter", () => {
 			name: "node-zlib-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
 			...nativeFeatures,
@@ -40,7 +39,6 @@ describe("node:zlib decompression adapter", () => {
 			name: "node-zlib-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			compiled: false,
 		});
 	});

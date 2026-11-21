@@ -25,7 +25,6 @@ beforeAll(() => {
 		name: "intl-number",
 		mainFile: HOST_MAIN,
 		outDir,
-		nodeEnabled: true,
 		intlFeatures: ["number-format"],
 	});
 });

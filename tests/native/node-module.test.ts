@@ -36,7 +36,6 @@ describe("node:module", () => {
 			fixture: "tests/local/node-module.cjs",
 			name: "node-module",
 			outDir,
-			nodeEnabled: true,
 		});
 	});
 
@@ -58,7 +57,6 @@ describe("node:module builtin registry", () => {
 			name: "node-builtin-modules",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		for (const binary of [pair.compiled, pair.interpreted]) {
 			for (const env of [{}, STRESS_ENV]) {

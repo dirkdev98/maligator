@@ -6,8 +6,7 @@ export type NativePreparation =
 	| "realms-disabled"
 	| "perf-stats"
 	| "locked-perf-stats"
-	| "node-perf-stats"
-	| "node-eval-defaults"
+	| "product-eval-defaults"
 	| "owning-argument-forwarding";
 
 const perfManifests = new Map<string, ReadonlySet<string>>();
@@ -43,15 +42,9 @@ export function nativePreparations(root: string, file: string): Array<NativePrep
 		relative === "tests/native/exact-collection-capture.test.ts"
 			? (["locked-perf-stats"] as const)
 			: []),
-		...(relative === "tests/native/forwarded-callback-counters.test.ts" ||
-		relative === "tests/native/node-events.test.ts" ||
-		relative === "tests/native/node-http-request.test.ts" ||
-		relative === "tests/native/node-http-ready-queues.test.ts"
-			? (["node-perf-stats"] as const)
-			: []),
-		// Its product build config must keep resolving to `defaultNodeEvalConfig()`.
+		// Its product build config must keep resolving to `defaultProductEvalConfig()`.
 		...(relative === "tests/native/express-valibot-build.test.ts"
-			? (["node-eval-defaults"] as const)
+			? (["product-eval-defaults"] as const)
 			: []),
 		...(relative === "tests/native/owning-argument-forwarding.test.ts"
 			? (["owning-argument-forwarding"] as const)

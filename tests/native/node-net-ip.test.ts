@@ -20,8 +20,6 @@ it("matches Node IP predicates, coercion order, zone identifiers, and constructi
 			name: "node-net-ip",
 			outDir: directory,
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
-			webPlatformEnabled: false,
 		});
 		for (const binary of [pair.compiled, pair.interpreted]) {
 			for (const env of [{}, STRESS_ENV]) {

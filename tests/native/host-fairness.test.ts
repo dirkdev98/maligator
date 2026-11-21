@@ -18,15 +18,12 @@ for (const compiled of [true, false]) {
 				name: `host-fairness-${compiled ? "native" : "interpreted"}`,
 				outDir,
 				compiled,
-				nodeEnabled: true,
 			});
 			const server = buildNativeBinary({
 				fixture: "tests/local/host-fairness/server.mjs",
 				name: `reactor-checkpoint-${compiled ? "native" : "interpreted"}`,
 				outDir,
 				compiled,
-				nodeEnabled: true,
-				webPlatformEnabled: true,
 			});
 			for (const env of [{}, STRESS_ENV]) {
 				expect(runToStdout(messages, { env, timeoutMs: 10_000 })).toBe(

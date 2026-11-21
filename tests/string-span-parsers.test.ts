@@ -9,7 +9,6 @@ import { vmRegionActions } from "../src/compiler/target/program-image.ts";
 function config(primordials: "mutable" | "locked") {
 	return resolveBuildConfig({
 		engine: { primordials, eval: false, realms: false },
-		surface: { node: true },
 	});
 }
 function compile(body: string, mode: "mutable" | "locked" = "mutable") {

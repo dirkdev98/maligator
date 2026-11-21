@@ -23,7 +23,6 @@ describe("Express 5 fixture smoke runner", () => {
 			name: "express-smoke",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 			// Framework coverage exercises application backends; eval can use the shared compiler wire.
 			compilerBake: prebuiltCompilerBake(),
 		}));

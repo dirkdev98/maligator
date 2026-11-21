@@ -2189,8 +2189,10 @@ typedef struct MalVm {
      * evaluate, which the entry turns into a non-zero exit. Undefined otherwise.
      */
     MalValue entry_async_promise;
-    // Workers fail on uncaught asynchronous errors and forward the reason to their parent.
+    // Child isolates forward uncaught failures to their parent.
     bool errors_forwarded;
+    // Worker threads fail on unhandled rejections regardless of host personality.
+    bool worker_rejections_fatal;
     // The pending throw was already printed as uncaught, so the event loop only stops.
     bool uncaught_reported;
 
@@ -2343,7 +2345,7 @@ typedef struct MalVm {
      * the bare test262 runner). See host.h.
      */
     void *host;
-    bool host_web_platform;
+    bool host_personality_installed;
     bool host_node;
     // MalWebGroup bits whose globals this isolate defined (web_surface.c).
     u16 web_groups_published;

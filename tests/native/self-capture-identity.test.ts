@@ -25,7 +25,6 @@ describe.each(["conservative", "precise"] as const)(
 				nativeStackRoots,
 				config: resolveBuildConfig({
 					engine: { eval: false, realms: false, primordials: "mutable" },
-					surface: { node: true },
 				}),
 			});
 			const byName = (name: string) =>

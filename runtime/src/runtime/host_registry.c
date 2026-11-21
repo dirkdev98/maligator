@@ -91,7 +91,6 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_web_performance);
     MATCH_INSTALLER(mal_host_install_web_crypto);
     MATCH_INSTALLER(mal_host_install_web_personality);
-    MATCH_INSTALLER(mal_host_install_node_personality);
     MATCH_INSTALLER(mal_host_install_node_web_personality);
     MATCH_INSTALLER(mal_host_install_node_error_hooks);
     MATCH_INSTALLER(mal_host_install_web_compression);

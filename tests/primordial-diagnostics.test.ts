@@ -5,16 +5,11 @@ import { collectPrimordialMutationDiagnostics } from "../src/compiler/frontend/p
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { worldFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 
-function diagnostics(
-	source: string,
-	policy: "locked" | "mutable" = "locked",
-	nodeEnabled = false,
-) {
+function diagnostics(source: string, policy: "locked" | "mutable" = "locked") {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(source, "diagnostic.js");
 	return collectPrimordialMutationDiagnostics(
 		semantic,
 		worldFactsFromConfig(resolveBuildConfig({ engine: { primordials: policy } })),
-		{ nodeEnabled },
 	);
 }
 
@@ -70,7 +65,6 @@ user.extra = 1;
 			collectPrimordialMutationDiagnostics(
 				semantic,
 				worldFactsFromConfig(resolveBuildConfig({ engine: { primordials: "locked" } })),
-				{ nodeEnabled: false },
 			),
 		).toEqual([]);
 		expect(diagnostics("var unescape = (text) => text;\n")).toHaveLength(1);
@@ -87,10 +81,9 @@ Error.stackTraceLimit = 20;
 Error.captureStackTrace = replacement;
 delete Error.prepareStackTrace;
 `;
-		expect(diagnostics(source, "locked", true).map(({ message }) => message)).toEqual([
+		expect(diagnostics(source).map(({ message }) => message)).toEqual([
 			expect.stringContaining("Error.captureStackTrace"),
 			expect.stringContaining("Error.prepareStackTrace"),
 		]);
-		expect(diagnostics(source, "locked", false)).toHaveLength(4);
 	});
 });

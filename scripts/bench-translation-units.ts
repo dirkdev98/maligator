@@ -830,7 +830,6 @@ function runIncrementalScenarios(options: {
 	restore();
 	const config = resolveBuildConfig({
 		engine: { eval: false, realms: false, intl: { enabled: false }, temporal: false },
-		surface: { webPlatform: false, node: false },
 	});
 	const build = (
 		production: boolean,

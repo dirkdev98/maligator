@@ -354,7 +354,7 @@ async function measureHttpLane(
 ): Promise<LaneResult> {
 	if (!ohaAvailable()) throw new Error("profile overhead HTTP gate requires `oha`");
 	console.log("building HTTP images...");
-	const config = resolveBuildConfig({ surface: { node: true, webPlatform: true } });
+	const config = resolveBuildConfig({});
 	const ordinary = buildNativeBinary({
 		fixture: "bench/http/express-server.cjs",
 		name: "profile-overhead-http-ordinary",

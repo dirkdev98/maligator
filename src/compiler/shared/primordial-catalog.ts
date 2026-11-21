@@ -166,11 +166,6 @@ export function primordialNodeAvailable(world: WorldFacts, id: string): boolean 
 		return world.ecmaFeatures.regexp;
 	if (resolved.startsWith("Realm") || resolved.startsWith("ShadowRealm"))
 		return world.realms;
-	if (
-		resolved.startsWith("Error.prepareStackTrace<") ||
-		resolved.startsWith("Error.stackTraceLimit<")
-	)
-		return world.nodeSurface;
 	const segmenterPrototype = resolved.startsWith("%MAL_INTRINSIC_INTL_SEGMENT");
 	if (!resolved.startsWith("Intl") && !segmenterPrototype) return true;
 	if (!world.ecmaFeatures.intl) return false;

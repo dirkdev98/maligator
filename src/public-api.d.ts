@@ -1,4 +1,4 @@
-/// <reference lib="dom" />
+/// <reference types="node" />
 
 import "./platform-api.d.ts";
 
@@ -534,16 +534,6 @@ export interface MaligatorBuildConfig {
 			 */
 			languages?: Array<string>;
 		};
-	};
-	surface?: {
-		/** Include Web APIs and maligator:http. Declarations alone do not enable them.
-		 * @default false
-		 */
-		webPlatform?: boolean;
-		/** Include supported node: modules; see the compatibility table for coverage.
-		 * @default false
-		 */
-		node?: boolean;
 	};
 	/** C libraries keyed by the name the program imports them under (`maligator:ffi/<name>`).
 	 * Names use lowercase letters, digits, and underscores.

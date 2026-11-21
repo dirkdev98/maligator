@@ -812,7 +812,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->fibers_head = nullptr;
     // Host context (reactor/timers) is attached by the host layer, not the engine.
     vm->host = nullptr;
-    vm->host_web_platform = false;
+    vm->host_personality_installed = false;
     vm->host_node = false;
     vm->web_groups_published = 0;
     vm->console_node_hooks = nullptr;
@@ -869,6 +869,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->unhandled_capacity = 0;
 	vm->entry_async_promise = mal_value_new_undefined();
     vm->errors_forwarded = false;
+    vm->worker_rejections_fatal = false;
     vm->uncaught_reported = false;
 }
 
@@ -4131,13 +4132,14 @@ void mal_vm_report_unhandled_rejections(MalVm *vm) {
         MalPromiseObject *promise = mal_value_to_promise_object(promise_value);
         // A handler attached between rejection and the checkpoint clears it.
         if (promise->state == MAL_PROMISE_REJECTED && !promise->is_handled) {
-            if (vm->errors_forwarded) {
+            if (vm->errors_forwarded && (vm->host_node || vm->worker_rejections_fatal)) {
                 // Completion roots the reason before the rejection candidates are released.
                 vm->completion = (MalCompletion) {
                     .kind = MAL_COMPLETION_THROW, .value = promise->result};
                 break;
             }
-            if (mal_vm_uncaught_handler == nullptr && !vm->host_node) {
+            // A parent can register the process handler while a child uses web behavior.
+            if (!vm->host_node && (vm->errors_forwarded || mal_vm_uncaught_handler == nullptr)) {
                 mal_vm_print_thrown(vm, promise->result, "Uncaught (in promise) ");
                 continue;
             }

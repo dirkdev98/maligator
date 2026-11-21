@@ -38,7 +38,6 @@ describe("recoverable allocation failure", () => {
 				outDir: directory,
 				config: resolveBuildConfig({
 					engine: { eval: false, realms: false },
-					surface: { node: true },
 				}),
 			});
 			for (const binary of [pair.compiled, pair.interpreted]) {

@@ -10,12 +10,8 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-// Acceptance coverage for the statically-retained native `process` global. Builds
-// the fixture ONCE (node surface on, so the linker retains the global-property
-// installer and the manifest names mal_host_install_process),
-// then runs it under different OS argv / environments to assert forwarding,
-// enumeration, cwd, and exit status. Runs on the host entry (HOST_MAIN), which
-// threads its own argc/argv into the installer.
+// Reuse one executable across launches to check the driver's process arguments,
+// environment, working directory, and exit status.
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-process-"));
 const FIXTURE = "tests/local/node-process.mts";
@@ -80,14 +76,12 @@ describe("native process global", () => {
 			name: "node-process",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 		yamlBin = buildNativeBinary({
 			fixture: "tests/local/node-process-yaml.cjs",
 			name: "node-process-yaml",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 	}, 600_000);
 
@@ -197,7 +191,6 @@ describe("process on an entry without a host reactor", () => {
 			fixture: "tests/local/node-process-hostless.mjs",
 			name: "node-process-hostless",
 			outDir,
-			nodeEnabled: true,
 		});
 	}, 600_000);
 

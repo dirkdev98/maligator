@@ -27,7 +27,6 @@ beforeAll(() => {
 			intl: { enabled: false },
 			temporal: false,
 		},
-		surface: { node: true, webPlatform: false },
 	});
 	const common = {
 		fixture,

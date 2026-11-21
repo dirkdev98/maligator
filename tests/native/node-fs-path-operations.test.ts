@@ -23,8 +23,6 @@ it("renames and unlinks paths off-thread with Node callbacks, errors, and captur
 			name: "node-fs-path-operations",
 			outDir: directory,
 			mainFile: HOST_MAIN,
-			nodeEnabled: true,
-			webPlatformEnabled: false,
 		});
 		for (const binary of [pair.compiled, pair.interpreted]) {
 			for (const env of [{}, STRESS_ENV]) {

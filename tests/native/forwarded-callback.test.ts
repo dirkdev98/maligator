@@ -28,7 +28,6 @@ describe("runtime nomination of forwarded callbacks", () => {
 				outDir,
 				mainFile: HOST_MAIN,
 				config: resolveBuildConfig({
-					surface: { node: true },
 					engine: { primordials, eval: false, realms: true },
 				}),
 				environment: { ...process.env, MAL_PERF_STATS: "1" },

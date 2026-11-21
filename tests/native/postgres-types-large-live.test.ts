@@ -23,8 +23,6 @@ describe("postgres.js types and large objects", () => {
 						: "postgres-types-live-interpreted",
 					mainFile: HOST_MAIN,
 					outDir,
-					nodeEnabled: true,
-					webPlatformEnabled: false,
 					compiled,
 				}),
 			);

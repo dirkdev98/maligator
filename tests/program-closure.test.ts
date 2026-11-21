@@ -304,7 +304,6 @@ describe("closure root enumeration", () => {
 			{
 				config: resolveBuildConfig({
 					engine: { eval: false },
-					surface: { node: true },
 				}),
 			},
 		);

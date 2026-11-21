@@ -23,14 +23,7 @@ const examples = element<HTMLSelectElement>("example");
 const functions = element<HTMLSelectElement>("function");
 const tables = element<HTMLInputElement>("tables");
 const linked = element<HTMLInputElement>("linked");
-const booleanSettings = [
-	"regexp",
-	"realms",
-	"temporal",
-	"intl",
-	"webPlatform",
-	"node",
-] as const;
+const booleanSettings = ["regexp", "realms", "temporal", "intl"] as const;
 type MappingRange = ExplorerResult["mapping"]["ranges"][number];
 let result: ExplorerResult | undefined;
 let compiledSource = "";
@@ -406,7 +399,7 @@ element("download-config").onclick = () => {
 	const config = explorerBuildConfig(settings());
 	download(
 		"maligator.build.ts",
-		`import { defineBuild } from "@maligator/cli";\n\nexport default defineBuild(${JSON.stringify({ entry: "snippet.ts", engine: config.engine, surface: config.surface }, null, 2)});\n`,
+		`import { defineBuild } from "@maligator/cli";\n\nexport default defineBuild(${JSON.stringify({ entry: "snippet.ts", engine: config.engine }, null, 2)});\n`,
 	);
 };
 document.addEventListener("keydown", (event) => {

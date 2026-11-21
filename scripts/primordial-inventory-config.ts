@@ -44,6 +44,5 @@ export function primordialInventoryConfig(mode: string) {
 				features: selected === undefined ? [] : [selected],
 			},
 		},
-		surface: { webPlatform: enabled || mode === "web", node: enabled || mode === "node" },
 	});
 }

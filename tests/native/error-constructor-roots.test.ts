@@ -29,7 +29,6 @@ beforeAll(() => {
 				realms: false,
 				intl: { enabled: false },
 			},
-			surface: { node: false, webPlatform: false },
 		}),
 	});
 });

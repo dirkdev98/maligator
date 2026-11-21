@@ -203,7 +203,6 @@ describe("host BufferSource consumers over shared memory", () => {
 			name: "shared-buffer-consumers",
 			mainFile: HOST_MAIN,
 			outDir,
-			nodeEnabled: true,
 		});
 	});
 	afterAll(() => {

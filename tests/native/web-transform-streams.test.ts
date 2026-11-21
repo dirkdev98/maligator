@@ -21,7 +21,6 @@ describe("WHATWG TransformStream, text and compression streams", () => {
 				name: `web-transform-streams-${compiled ? "compiled" : "interpreted"}`,
 				mainFile: HOST_MAIN,
 				outDir,
-				nodeEnabled: true,
 				compiled,
 			});
 		}
