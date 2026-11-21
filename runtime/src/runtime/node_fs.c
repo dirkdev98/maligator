@@ -23,6 +23,7 @@
 #include "ascii.h"
 #include "async_context.h"
 #include "array_object.h"
+#include "blocking_job.h"
 #include "builtin_iterator.h"
 #include "builtin_data_view.h"
 #include "builtin_date.h"
@@ -3494,24 +3495,13 @@ typedef struct NodeFsJob {
     NodeFsCp *cp;
 } NodeFsJob;
 
-typedef struct NodeFsPending {
-    struct NodeFsPending *next;
-    MalVm *vm;
-    MalHostHandle operation;
-    MalValue completion;
-    MalValue encoding;
-    MalValue extra;
-    bool callback;
-    const char *syscall;
-    MalAsyncContext *async_context;
-#if MAL_REALMS
-    MalRealm *realm;
-#endif
-} NodeFsPending;
+/* A blocking job's tag: its kind, plus whether it completes a callback or a promise. */
+#define NODE_FS_JOB_CALLBACK (1u << 31)
 
-// Pending operations and their root registration belong to this mutator's isolate.
-static MAL_ISOLATE_LOCAL NodeFsPending *node_fs_pending;
-static MAL_ISOLATE_LOCAL bool node_fs_async_installed;
+enum { NODE_FS_JOB_COMPLETION, NODE_FS_JOB_ENCODING, NODE_FS_JOB_EXTRA };
+
+// The filtered-copy root registration belongs to this mutator's isolate.
+static MAL_ISOLATE_LOCAL bool node_fs_cp_roots_installed;
 
 static void node_fs_job_clear(NodeFsJob *job) {
     node_fs_cp_free(job->cp);
@@ -3754,37 +3744,6 @@ static void node_fs_job_run(void *data) {
     }
 }
 
-static void node_fs_cp_scan_drivers(MalVm *vm);
-
-static void node_fs_async_scan_roots(MalVm *vm, void *data) {
-    (void) data;
-    node_fs_cp_scan_drivers(vm);
-    for (NodeFsPending *state = node_fs_pending;
-        state != nullptr; state = state->next) {
-        if (state->vm != vm) continue;
-        mal_gc_mark_value(state->completion);
-        mal_gc_mark_value(state->encoding);
-        mal_gc_mark_value(state->extra);
-        mal_gc_mark_value(mal_async_internal_value((MalHeapHeader *) state->async_context));
-    }
-}
-
-static void node_fs_cp_free_drivers(MalVm *vm);
-
-static void node_fs_async_free(MalVm *vm) {
-    node_fs_cp_free_drivers(vm);
-    NodeFsPending **link = &node_fs_pending;
-    while (*link != nullptr) {
-        NodeFsPending *state = *link;
-        if (state->vm != vm) {
-            link = &state->next;
-            continue;
-        }
-        *link = state->next;
-        free(state);
-    }
-}
-
 static void node_fs_cp_throw(MalVm *vm, const NodeFsCp *cp);
 
 static void node_fs_job_throw(MalVm *vm, NodeFsJob *job) {
@@ -3888,114 +3847,87 @@ static i32 node_fs_job_results(
     }
 }
 
-static bool node_fs_async_drain(MalVm *vm) {
-    MalHost *host = mal_host(vm);
-    MalHostTask task;
-    if (host == nullptr || !mal_host_peek_task(&host->tasks, &task)) return false;
-    NodeFsPending **link = &node_fs_pending;
-    while (*link != nullptr &&
-        ((*link)->vm != vm || (*link)->operation != task.operation)) {
-        link = &(*link)->next;
-    }
-    NodeFsPending *state = *link;
-    if (state == nullptr || !mal_host_next_task(&host->tasks, &task)) return false;
-#if MAL_REALMS
-    MalRealm *saved_realm = vm->current_realm;
-    mal_realm_switch(vm, state->realm);
-#endif
-    *link = state->next;
-    enum { DRAIN_COMPLETION, DRAIN_ENCODING, DRAIN_EXTRA, DRAIN_ERROR, DRAIN_RESULT };
-    MalValue roots[] = {state->completion, state->encoding, state->extra,
-        mal_value_new_null(), mal_value_new_undefined(), mal_value_new_undefined()};
+static void node_fs_job_settle(
+    MalVm *vm, void *data, bool cancelled, u32 tag, MalValue values[MAL_BLOCKING_JOB_VALUES]) {
+    enum { SETTLE_ERROR, SETTLE_RESULT };
+    MalValue roots[] = {mal_value_new_null(), mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    MalAsyncContextScope async_scope;
-    mal_async_context_scope_enter(vm, &async_scope, state->async_context);
-    bool callback = state->callback;
-    const char *syscall = state->syscall;
-    free(state);
-    NodeFsJob *job = mal_blocking_work_result_data(task.data);
-    bool cancelled = task.result == MAL_HOST_TERMINAL_CANCELLED;
+    bool callback = (tag & NODE_FS_JOB_CALLBACK) != 0;
+    NodeFsJobKind kind = (NodeFsJobKind) (tag & ~NODE_FS_JOB_CALLBACK);
+    MalValue completion = values[NODE_FS_JOB_COMPLETION];
+    NodeFsJob *job = data;
     if (cancelled) {
-        roots[DRAIN_ERROR] = node_fs_errno_value(vm, ECANCELED, syscall, nullptr);
+        roots[SETTLE_ERROR] = node_fs_errno_value(vm, ECANCELED, node_fs_job_syscall(kind), nullptr);
     } else if (job->error != 0) {
         node_fs_job_throw(vm, job);
-        roots[DRAIN_ERROR] = vm->completion.value;
+        roots[SETTLE_ERROR] = vm->completion.value;
         node_fs_clear_completion(vm);
     }
     i32 result_count = 0;
-    if (mal_value_is_null(roots[DRAIN_ERROR]) && job != nullptr) {
-        result_count = node_fs_job_results(vm, job, roots[DRAIN_ENCODING], roots[DRAIN_EXTRA], roots + DRAIN_RESULT);
+    if (mal_value_is_null(roots[SETTLE_ERROR]) && job != nullptr) {
+        result_count = node_fs_job_results(vm, job, values[NODE_FS_JOB_ENCODING],
+            values[NODE_FS_JOB_EXTRA], roots + SETTLE_RESULT);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
-            roots[DRAIN_ERROR] = vm->completion.value;
+            roots[SETTLE_ERROR] = vm->completion.value;
             node_fs_clear_completion(vm);
             result_count = 0;
         }
     }
-    if (callback && job != nullptr && job->kind == NODE_FS_JOB_EXISTS) {
-        roots[DRAIN_ERROR] = mal_value_new_boolean(!cancelled && job->error == 0);
-        mal_vm_call_value(vm, roots[DRAIN_COMPLETION], mal_value_new_undefined(), roots + DRAIN_ERROR, 1);
+    if (callback && kind == NODE_FS_JOB_EXISTS) {
+        roots[SETTLE_ERROR] = mal_value_new_boolean(!cancelled && job->error == 0);
+        mal_vm_call_value(vm, completion, mal_value_new_undefined(), roots + SETTLE_ERROR, 1);
     } else if (callback) {
         // fs.close accepts an omitted callback.
-        if (!mal_value_is_undefined(roots[DRAIN_COMPLETION])) {
-            mal_vm_call_value(vm, roots[DRAIN_COMPLETION], mal_value_new_undefined(), roots + DRAIN_ERROR,
-                mal_value_is_null(roots[DRAIN_ERROR]) ? 1 + result_count : 1);
+        if (!mal_value_is_undefined(completion)) {
+            mal_vm_call_value(vm, completion, mal_value_new_undefined(), roots + SETTLE_ERROR,
+                mal_value_is_null(roots[SETTLE_ERROR]) ? 1 + result_count : 1);
         }
     } else {
-        MalPromiseObject *promise = mal_value_to_promise_object(roots[DRAIN_COMPLETION]);
-        if (mal_value_is_null(roots[DRAIN_ERROR])) {
+        MalPromiseObject *promise = mal_value_to_promise_object(completion);
+        if (mal_value_is_null(roots[SETTLE_ERROR])) {
             mal_promise_fulfill(vm, promise,
-                result_count > 0 ? roots[DRAIN_RESULT] : mal_value_new_undefined());
+                result_count > 0 ? roots[SETTLE_RESULT] : mal_value_new_undefined());
         } else {
-            mal_promise_reject(vm, promise, roots[DRAIN_ERROR]);
+            mal_promise_reject(vm, promise, roots[SETTLE_ERROR]);
         }
     }
-    mal_async_context_scope_exit(vm, &async_scope);
     mal_gc_unroot(&root);
-#if MAL_REALMS
-    mal_realm_switch(vm, saved_realm);
-#endif
-    mal_host_task_release(&host->tasks, &task);
-    return true;
 }
 
 static bool node_fs_start_job(
     MalVm *vm, NodeFsJob *job, MalBlockingWorkReservation *reservation,
     MalValue completion, bool callback, MalValue encoding, MalValue extra
 ) {
-    NodeFsPending *state = calloc(1, sizeof(*state));
-    if (state == nullptr) {
-        node_fs_job_free(job);
-        mal_blocking_work_reservation_release(reservation);
-        mal_vm_throw_allocation_error(vm);
-        return false;
+    const char *syscall = node_fs_job_syscall(job->kind);
+    MalBlockingJob blocking = {
+        .run = node_fs_job_run,
+        .destroy = node_fs_job_free,
+        .settle = node_fs_job_settle,
+        .data = job,
+        .footprint = sizeof(*job) + job->length
+            + (job->path == nullptr ? 0 : strlen(job->path) + 1)
+            + (job->destination == nullptr ? 0 : strlen(job->destination) + 1),
+        .tag = (u32) job->kind | (callback ? NODE_FS_JOB_CALLBACK : 0),
+        .values = {
+            [NODE_FS_JOB_COMPLETION] = completion,
+            [NODE_FS_JOB_ENCODING] = encoding,
+            [NODE_FS_JOB_EXTRA] = extra,
+        },
+    };
+    switch (mal_blocking_job_start(vm, &blocking, reservation)) {
+        case MAL_BLOCKING_JOB_STARTED:
+            return true;
+        case MAL_BLOCKING_JOB_NO_MEMORY:
+            mal_vm_throw_allocation_error(vm);
+            break;
+        case MAL_BLOCKING_JOB_BUSY:
+            node_fs_throw_errno_with_dest(vm, EAGAIN, syscall, job->path, job->destination);
+            break;
     }
-    state->vm = vm;
-    state->completion = completion;
-    state->encoding = encoding;
-    state->extra = extra;
-    state->callback = callback;
-    state->syscall = node_fs_job_syscall(job->kind);
-    state->async_context = mal_async_context_capture(vm);
-#if MAL_REALMS
-    state->realm = vm->current_realm;
-#endif
-    usize footprint = sizeof(*job) + job->length
-        + (job->path == nullptr ? 0 : strlen(job->path) + 1)
-        + (job->destination == nullptr ? 0 : strlen(job->destination) + 1);
-    if ((!reservation->active
-            && !mal_blocking_work_reserve(mal_host(vm), footprint, reservation))
-        || !mal_blocking_work_start(mal_host(vm), node_fs_job_run, job,
-            node_fs_job_free, reservation, &state->operation, false)) {
-        node_fs_throw_errno_with_dest(vm, EAGAIN, state->syscall, job->path, job->destination);
-        node_fs_job_free(job);
-        mal_blocking_work_reservation_release(reservation);
-        free(state);
-        return false;
-    }
-    state->next = node_fs_pending;
-    node_fs_pending = state;
-    return true;
+    node_fs_job_free(job);
+    mal_blocking_work_reservation_release(reservation);
+    return false;
 }
 
 static bool node_fs_queue_write(
@@ -4443,7 +4375,8 @@ typedef struct NodeFsCpDriver {
 static MAL_ISOLATE_LOCAL NodeFsCpDriver *node_fs_cp_drivers;
 static MAL_ISOLATE_LOCAL u32 node_fs_cp_next_id;
 
-static void node_fs_cp_scan_drivers(MalVm *vm) {
+static void node_fs_cp_scan_drivers(MalVm *vm, void *data) {
+    (void) data;
     for (NodeFsCpDriver *driver = node_fs_cp_drivers; driver != nullptr; driver = driver->next) {
         if (driver->vm != vm) continue;
         mal_gc_mark_value(driver->filter);
@@ -8391,12 +8324,11 @@ void mal_host_install_node_fs(
         node_fs_install_promises_slots(vm, slots, count);
         return;
     }
-    if (!node_fs_async_installed) {
-        mal_gc_register_root_source(node_fs_async_scan_roots, nullptr);
-        mal_host_register_macrotask_drain(node_fs_async_drain, false);
-        node_fs_async_installed = true;
+    if (!node_fs_cp_roots_installed) {
+        mal_gc_register_root_source(node_fs_cp_scan_drivers, nullptr);
+        node_fs_cp_roots_installed = true;
     }
-    if (!mal_vm_register_runtime_cleanup(vm, node_fs_async_free)) {
+    if (!mal_blocking_jobs_install(vm) || !mal_vm_register_runtime_cleanup(vm, node_fs_cp_free_drivers)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
             "Could not register node:fs runtime cleanup");
         return;

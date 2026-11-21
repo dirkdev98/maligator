@@ -104,15 +104,38 @@ import {
 	test,
 } from "maligator:test";
 import { execution } from "maligator:process";
+import { file, FileSystemError } from "maligator:fs";
+import type { DiskFile, FileStat } from "maligator:fs";
 import { createPool, createWorkerUrl, transfer, Worker } from "maligator:workers";
 import type { TaskContext, TransferResult } from "maligator:workers";
 // @ts-expect-error Internal modules are reserved for platform sources.
 import { fetch } from "maligator:internal/fetch";
 // @ts-expect-error Internal modules are reserved for platform sources.
+import { read } from "maligator:internal/fs";
+// @ts-expect-error Internal modules are reserved for platform sources.
 import { listen } from "maligator:internal/http";
 // @ts-expect-error Internal modules are reserved for platform sources.
 import { parentPort } from "maligator:internal/workers";
-void [fetch, listen, parentPort];
+void [fetch, listen, parentPort, read];
+
+const settings: DiskFile = file(new URL("file:///etc/settings.json"));
+const settingsBytes: Promise<Uint8Array<ArrayBuffer>> = settings.bytes();
+const settingsStat: Promise<FileStat> = settings.stat({ followSymlinks: false });
+const written: Promise<number> = file("out.bin").write(new Uint8Array(2), { atomic: true });
+const copied: Promise<void> = settings.copyTo(file("copy.json"), { overwrite: true });
+// @ts-expect-error Appending has no atomic mode.
+file("log.txt").append("line", { atomic: true });
+// @ts-expect-error Reads are asynchronous, unlike embedded files.
+const syncText: string = settings.text();
+// @ts-expect-error Handles describe a path; their media type is fixed.
+settings.type = "text/plain";
+void [settingsBytes, settingsStat, written, copied, syncText];
+settings.json().catch((error: unknown) => {
+	if (error instanceof FileSystemError) {
+		const failure: { code: string; syscall: string; path: string; destination?: string } = error;
+		void failure;
+	}
+});
 
 type Jobs = {
 	sum(context: TaskContext, left: number, right: number): number;

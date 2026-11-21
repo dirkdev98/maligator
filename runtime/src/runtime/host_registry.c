@@ -6,6 +6,7 @@
 #include "mal_bridge.h"
 #include "mal_application.h"
 #include "maligator_assets.h"
+#include "maligator_fs.h"
 #include "maligator_http.h"
 #include "mal_process.h"
 #include "web_surface.h"
@@ -67,6 +68,7 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_maligator);
     MATCH_INSTALLER(mal_host_install_maligator_application);
     MATCH_INSTALLER(mal_host_install_maligator_assets);
+    MATCH_INSTALLER(mal_host_install_maligator_internal_fs);
 #if MAL_WEB_PLATFORM
     // Serving needs the Fetch API objects only the web surface links.
     MATCH_INSTALLER(mal_host_install_maligator_internal_http);

@@ -85,7 +85,10 @@ export const guideGroups: ReadonlyArray<DocGroup> = [
 	},
 	{
 		label: "Platform",
-		entries: [["http", "Serve HTTP", "Start a listener and return responses."]],
+		entries: [
+			["http", "Serve HTTP", "Start a listener and return responses."],
+			["files", "Read and write files", "Read, write, copy and move files on disk."],
+		],
 		groups: [
 			{
 				label: "Workers",
@@ -190,6 +193,7 @@ export const referenceGroups: ReadonlyArray<DocGroup> = [
 				"Declare files and directory trees the build embeds.",
 			],
 			["http", "maligator:http", "Serve Fetch API handlers and embedded assets."],
+			["fs", "maligator:fs", "Read and write files through lazy handles."],
 			["test", "maligator:test", "Write tests with suites, hooks, and assertions."],
 			[
 				"process",

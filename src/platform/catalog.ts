@@ -426,6 +426,61 @@ const httpTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	),
 ];
 
+const fsTypes: ReadonlyArray<PlatformTypeDefinition> = [
+	workerType(
+		"FilePath",
+		"string | URL",
+		"A path, or a `file:` URL. A relative path resolves against the working directory when an operation runs.",
+	),
+	workerType(
+		"FileData",
+		"string | ArrayBufferView | ArrayBuffer",
+		"Contents to write. Strings are written as UTF-8; views write the bytes they cover.",
+	),
+	workerType(
+		"WriteOptions",
+		"{\n /** Write a temporary file next to the target and rename it over the target, so readers see the old or the new contents and never a partial file. Defaults to false. */\n atomic?: boolean;\n /** Create missing parent directories first. Defaults to false. */\n createDirectories?: boolean;\n /** Permission bits for a created file, before the umask. Defaults to 0o666; an atomic write keeps the bits of the file it replaces. */\n mode?: number;\n}",
+		"How `write` stores the contents.",
+	),
+	workerType(
+		"AppendOptions",
+		"{\n /** Create missing parent directories first. Defaults to false. */\n createDirectories?: boolean;\n /** Permission bits for a created file, before the umask. Defaults to 0o666. */\n mode?: number;\n}",
+		"How `append` creates a missing file.",
+	),
+	workerType(
+		"TransferOptions",
+		"{\n /** Replace an existing destination. Defaults to false, which rejects with `EEXIST`. */\n overwrite?: boolean;\n}",
+		"How `copyTo` and `moveTo` treat an existing destination.",
+	),
+	workerType(
+		"StatOptions",
+		"{\n /** Describe the target of a symbolic link instead of the link. Defaults to true. */\n followSymlinks?: boolean;\n}",
+		"Which entry `stat` describes.",
+	),
+	workerType(
+		"FileStat",
+		"{\n /** The size in bytes. */\n readonly size: number;\n /** The last modification time. */\n readonly mtime: Date;\n readonly isFile: boolean;\n readonly isDirectory: boolean;\n /** True only when `followSymlinks` is false and the path is a link. */\n readonly isSymbolicLink: boolean;\n /** The file type and permission bits, as `st_mode` reports them. */\n readonly mode: number;\n}",
+		"Metadata of a filesystem entry.",
+	),
+	{
+		...workerType(
+			"DiskFile",
+			"{\n /** The path as given, or the path of a `file:` URL. */\n readonly path: string;\n /** The media type implied by the file extension; text types carry `charset=utf-8`. */\n readonly type: string;\n /** Whether the path resolves, following symbolic links. Never rejects. */\n exists(): Promise<boolean>;\n /** Metadata of the entry; rejects when it is missing. */\n stat(options?: StatOptions): Promise<FileStat>;\n /** The contents as a Uint8Array over a fresh ArrayBuffer. */\n bytes(): Promise<Uint8Array<ArrayBuffer>>;\n /** The contents decoded as UTF-8, without a byte order mark. */\n text(): Promise<string>;\n /** The contents parsed as JSON. */\n json(): Promise<unknown>;\n /** Replace the contents, creating the file when it is missing. Fulfills with the number of bytes written. */\n write(data: FileData, options?: WriteOptions): Promise<number>;\n /** Add to the end of the file, creating it when it is missing. Fulfills with the number of bytes written. */\n append(data: FileData, options?: AppendOptions): Promise<number>;\n /** Remove the file; rejects when it is missing or a directory. */\n delete(): Promise<void>;\n /** Copy the contents and permission bits to another path. */\n copyTo(destination: FilePath | DiskFile, options?: TransferOptions): Promise<void>;\n /** Rename the file, copying across file systems. This handle keeps naming the old path. */\n moveTo(destination: FilePath | DiskFile, options?: TransferOptions): Promise<void>;\n}",
+			"A file on disk. Creating a handle does no I/O; each method reads or changes the file when called. Failed operations reject with a `FileSystemError`.",
+		),
+		declaration: "interface",
+	},
+	{
+		...workerType(
+			"FileSystemError",
+			"{\n /** The error name, such as `ENOENT` or `EACCES`. */\n readonly code: string;\n /** The system call that failed, such as `open` or `rename`. */\n readonly syscall: string;\n /** The path the call failed on. */\n readonly path: string;\n /** The destination of a failed copy or move. */\n readonly destination?: string;\n}",
+			"A failed filesystem operation. The message reads like Node's: the code, a description, the system call and the paths.",
+		),
+		declaration: "interface",
+		extends: ["Error"],
+	},
+];
+
 function embedExport(
 	name: string,
 	source: string,
@@ -1178,6 +1233,102 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 					effects: NO_EFFECT_SUMMARY,
 				},
 			},
+		],
+	},
+	{
+		kind: "source",
+		id: "maligator:fs",
+		stability: "experimental",
+		evaluation: "side-effect-free",
+		sourceFile: "fs/runtime.ts",
+		declarationFile: "fs-api.d.ts",
+		description:
+			"Read and write files through lazy handles. No surface flag is required. Every operation is asynchronous and runs on the blocking-work pool, so the event loop keeps running while a file is read or written.",
+		types: fsTypes,
+		exports: [
+			{
+				name: "file",
+				type: { kind: "signature", source: "(path: FilePath) => DiskFile" },
+				description:
+					"A handle for the file at `path`. It does no I/O, so the file need not exist yet. Throws a TypeError for an empty path, a path with a null byte or a URL that is not a `file:` URL.",
+				examples: [
+					'import { file } from "maligator:fs";\n\nconst settings = file("settings.json");\nif (await settings.exists()) console.log(await settings.json());\nawait file("out/report.txt").write("done\\n", { atomic: true, createDirectories: true });',
+				],
+				contract: {
+					phase: "runtime",
+					value: "callable",
+					identity: "module",
+					effects: EVERY_EFFECT_SUMMARY,
+				},
+			},
+			{
+				name: "FileSystemError",
+				type: {
+					kind: "signature",
+					source:
+						"{\n new (message: string, options: { code: string; syscall: string; path: string; destination?: string }): FileSystemError;\n readonly prototype: FileSystemError;\n}",
+				},
+				description: "The class of every rejection a failed filesystem operation causes.",
+				examples: [
+					'import { file, FileSystemError } from "maligator:fs";\n\ntry {\n  console.log(await file("notes.txt").text());\n} catch (error) {\n  if (!(error instanceof FileSystemError) || error.code !== "ENOENT") throw error;\n  console.log("no notes yet");\n}',
+				],
+				contract: {
+					phase: "runtime",
+					value: "callable",
+					identity: "module",
+					effects: EVERY_EFFECT_SUMMARY,
+				},
+			},
+		],
+	},
+	{
+		kind: "native",
+		id: "maligator:internal/fs",
+		internal: true,
+		stability: "experimental",
+		evaluation: "side-effect-free",
+		installer: "mal_host_install_maligator_internal_fs",
+		declarationFile: "fs-host-api.d.ts",
+		description:
+			"Native file operations under `maligator:fs`. Failures reject with `{ code, description, syscall, path, destination }`.",
+		types: [],
+		exports: [
+			workerExport(
+				"mediaType",
+				"(path: string) => string",
+				"The media type the extension of `path` implies.",
+			),
+			workerExport(
+				"exists",
+				"(path: string) => Promise<boolean>",
+				"Whether `path` resolves, following symbolic links.",
+			),
+			workerExport(
+				"stat",
+				"(path: string, follow: boolean) => Promise<{ readonly type: number; readonly size: number; readonly mtimeMs: number; readonly mode: number }>",
+				"stat(2), or lstat(2) without `follow`. `type` is the host's file type code: 1 file, 2 directory, 3 symbolic link.",
+			),
+			workerExport(
+				"read",
+				"{ (path: string, text: false): Promise<Uint8Array<ArrayBuffer>>; (path: string, text: true): Promise<string> }",
+				"The whole file as bytes, or as UTF-8 text without a byte order mark.",
+			),
+			workerExport(
+				"write",
+				"(path: string, data: string | ArrayBufferView | ArrayBuffer, flags: number, mode: number | undefined) => Promise<number>",
+				"Write `data`; flags: 1 append, 2 atomic, 4 create parent directories.",
+			),
+			workerExport("remove", "(path: string) => Promise<void>", "Unlink a file."),
+			workerExport(
+				"copy",
+				"(source: string, destination: string, overwrite: boolean) => Promise<void>",
+				"Copy a file with its permission bits.",
+			),
+			workerExport(
+				"move",
+				"(source: string, destination: string, overwrite: boolean) => Promise<void>",
+				"Rename a file, copying it across file systems.",
+			),
 		],
 	},
 	{
