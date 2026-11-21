@@ -1235,6 +1235,9 @@ function graphServesWatchedAssets(graph: ModuleGraph): boolean {
 }
 
 function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompilation {
+	// The compiler and its eval output run in the application's existing realm.
+	// Optional reads there cannot request installation into that realm.
+	const inheritsHostComponents = program.intrinsicGlobalReads || program.evalCompletion;
 	// Re-exports may allocate application host slots before lazy provider dependencies do.
 	coreModuleLinks(program);
 	// Freeze loader admission before provider bodies add their own host dependencies.
@@ -1245,13 +1248,14 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 		),
 	);
 	const runtimeBuiltinLoader =
-		program.nodeModuleInstaller !== null ||
-		builtinModuleLoaderRetained(program, initialHostCandidates) ||
-		initialHostCandidates.some(
-			(candidate) =>
-				candidate.installer === hostInstallerSymbol("node:module") &&
-				candidate.exports.length > 0,
-		);
+		!inheritsHostComponents &&
+		(program.nodeModuleInstaller !== null ||
+			builtinModuleLoaderRetained(program, initialHostCandidates) ||
+			initialHostCandidates.some(
+				(candidate) =>
+					candidate.installer === hostInstallerSymbol("node:module") &&
+					candidate.exports.length > 0,
+			));
 	const sourceBuiltinProviders = (program.semantic.graph?.sourceBuiltinProviders ?? [])
 		.filter(
 			(id) =>
@@ -1288,7 +1292,17 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 	// Exports first: publishing a re-exported import or host export allocates its slot.
 	const moduleLinks = coreModuleLinks(program);
 	const hostInstallCandidates = coreHostInstallCandidates(program);
-	const reachedHostInstallers = hostInstallSelection(program, hostInstallCandidates);
+	const reachedHostInstallers = inheritsHostComponents
+		? []
+		: [
+				...hostInstallSelection(program, hostInstallCandidates),
+				...program.languageInstallers,
+				...engineComponentInstallers(
+					program.semantic,
+					program.facts.world,
+					moduleLinks !== undefined,
+				),
+			];
 	CoreEditor.configureProgram(program.core, {
 		stringConstants: program.stringConstants,
 		bigintConstants: program.bigintConstants,
@@ -1366,22 +1380,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 					initializedModuleGlobalSlots,
 				),
 				...coreInitializedLexicalReads(program),
-				retainedHostInstallers: reachedHostInstallers
-					// The embedded compiler uses the eval runtime's already installed intrinsics.
-					.concat(program.intrinsicGlobalReads ? [] : [...program.languageInstallers])
-					// Runtime eval code uses the components its host program installed.
-					.concat(
-						program.intrinsicGlobalReads || program.evalCompletion
-							? []
-							: engineComponentInstallers(
-									program.semantic,
-									program.facts.world,
-									moduleLinks !== undefined,
-								),
-					)
-					.filter(
-						(installer, index, installers) => installers.indexOf(installer) === index,
-					),
+				retainedHostInstallers: [...new Set(reachedHostInstallers)],
 				...(moduleLinks === undefined ? {} : { moduleLinks }),
 			}),
 		},

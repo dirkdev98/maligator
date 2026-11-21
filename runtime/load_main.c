@@ -1,4 +1,5 @@
 #include "vm.h"
+#include "builtin_error.h"
 #include "language_components.h"
 #include "perf_stats.h"
 #include "vm_load.h"
@@ -44,6 +45,15 @@ static u8 *read_file(const char *path, usize *len_out) {
     return buffer;
 }
 
+static MalHostInstaller resolve_installer(const char *name, usize length) {
+    // Error hooks are selected during intrinsic initialization without host state.
+    static const char node_error_hooks[] = "mal_host_install_node_error_hooks";
+    if (length == sizeof(node_error_hooks) - 1 && memcmp(name, node_error_hooks, length) == 0) {
+        return mal_host_install_node_error_hooks;
+    }
+    return mal_language_component_resolve_installer(name, length);
+}
+
 static MalLoadedRuntimeImage *load(const char *path) {
     usize len = 0;
     u8 *buffer = read_file(path, &len);
@@ -51,9 +61,8 @@ static MalLoadedRuntimeImage *load(const char *path) {
         return nullptr;
     }
     const char *err = "ok";
-    // This driver has no host state for host installers to use.
     MalLoadedRuntimeImage *loaded = mal_runtime_image_load_with_host_resolver(
-        buffer, len, &err, mal_language_component_resolve_installer);
+        buffer, len, &err, resolve_installer);
     free(buffer);
     if (loaded == nullptr) {
         fprintf(stderr, "mal_runtime_image_load(%s): %s\n", path, err);

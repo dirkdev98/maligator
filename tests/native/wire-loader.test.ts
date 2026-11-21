@@ -285,7 +285,10 @@ describe("wire loader side-data validation", () => {
 			globalThis.inspect = inspect;
 			if (inspect("") !== '{"":["","xx","xx","Symbol()"]}') throw new Error("empty string operations");`,
 		);
-		const image = compileEntrypoint(entrypoint, { stripTypes: stripCompactTypes });
+		const image = compileEntrypoint(entrypoint, {
+			stripTypes: stripCompactTypes,
+			buildConfig: resolveBuildConfig({}),
+		});
 		acceptsWire(
 			"empty-string-operations",
 			serializeRuntimeImage(image.runtime, { debugInfo: false }),
@@ -1658,6 +1661,7 @@ describe("wire loader side-data validation", () => {
 		);
 		const cursorDefinition = compileEntrypoint(entrypoint, {
 			stripTypes: stripCompactTypes,
+			buildConfig: resolveBuildConfig({}),
 		});
 		expect(
 			cursorDefinition.native.functions.flatMap((fn) =>

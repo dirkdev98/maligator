@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -55,4 +55,21 @@ describe("private compiler bootstrap", () => {
 					expect(runToStdout(binary, { env: { ...env, ...selection } })).toBe(expected);
 		},
 	);
+
+	it("compiles eval in an application without a process global", () => {
+		const leanFixture = join(outDir, "lean.mjs");
+		writeFileSync(
+			leanFixture,
+			`console.log(eval("const name = 'process'; [6 * 7, typeof globalThis[name]].join(' ')"));`,
+		);
+		const binaries = buildBackendPairFromOneProgramImage({
+			fixture: leanFixture,
+			name: "eval-lean",
+			outDir,
+			config: resolveBuildConfig({ engine: { eval: true } }),
+		});
+		for (const binary of [binaries.compiled, binaries.interpreted]) {
+			expect(runToStdout(binary)).toBe("42 undefined\n");
+		}
+	});
 });
