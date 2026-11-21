@@ -66006,6 +66006,214 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:copy%\",\"length\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:copy%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:copy%",
+				"mal_host_install_maligator_internal_fs:copy"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:copy%\",\"name\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:copy%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:copy%",
+				"mal_host_install_maligator_internal_fs:copy"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:exists%\",\"length\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:exists%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:exists%",
+				"mal_host_install_maligator_internal_fs:exists"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:exists%\",\"name\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:exists%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:exists%",
+				"mal_host_install_maligator_internal_fs:exists"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:mediaType%\",\"length\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:mediaType%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:mediaType%",
+				"mal_host_install_maligator_internal_fs:mediaType"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:mediaType%\",\"name\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:mediaType%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:mediaType%",
+				"mal_host_install_maligator_internal_fs:mediaType"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:move%\",\"length\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:move%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:move%",
+				"mal_host_install_maligator_internal_fs:move"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:move%\",\"name\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:move%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:move%",
+				"mal_host_install_maligator_internal_fs:move"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:read%\",\"length\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:read%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:read%",
+				"mal_host_install_maligator_internal_fs:read"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:read%\",\"name\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:read%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:read%",
+				"mal_host_install_maligator_internal_fs:read"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:remove%\",\"length\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:remove%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:remove%",
+				"mal_host_install_maligator_internal_fs:remove"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:remove%\",\"name\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:remove%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:remove%",
+				"mal_host_install_maligator_internal_fs:remove"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:stat%\",\"length\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:stat%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:stat%",
+				"mal_host_install_maligator_internal_fs:stat"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:stat%\",\"name\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:stat%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:stat%",
+				"mal_host_install_maligator_internal_fs:stat"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:write%\",\"length\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:write%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:write%",
+				"mal_host_install_maligator_internal_fs:write"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:write%\",\"name\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:write%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:write%",
+				"mal_host_install_maligator_internal_fs:write"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%mal_host_install_maligator_internal_http:assetProxy%\",\"length\"]",
 			"owner": "%mal_host_install_maligator_internal_http:assetProxy%",
 			"ownerPaths": [
@@ -174820,6 +175028,214 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.text"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:copy%\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:copy%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:copy%",
+				"mal_host_install_maligator_internal_fs:copy"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_internal_fs:copy%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:copy%\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:copy%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:copy%",
+				"mal_host_install_maligator_internal_fs:copy"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_internal_fs:copy%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:exists%\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:exists%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:exists%",
+				"mal_host_install_maligator_internal_fs:exists"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_internal_fs:exists%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:exists%\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:exists%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:exists%",
+				"mal_host_install_maligator_internal_fs:exists"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_internal_fs:exists%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:mediaType%\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:mediaType%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:mediaType%",
+				"mal_host_install_maligator_internal_fs:mediaType"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_internal_fs:mediaType%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:mediaType%\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:mediaType%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:mediaType%",
+				"mal_host_install_maligator_internal_fs:mediaType"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_internal_fs:mediaType%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:move%\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:move%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:move%",
+				"mal_host_install_maligator_internal_fs:move"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_internal_fs:move%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:move%\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:move%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:move%",
+				"mal_host_install_maligator_internal_fs:move"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_internal_fs:move%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:read%\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:read%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:read%",
+				"mal_host_install_maligator_internal_fs:read"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_internal_fs:read%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:read%\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:read%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:read%",
+				"mal_host_install_maligator_internal_fs:read"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_internal_fs:read%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:remove%\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:remove%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:remove%",
+				"mal_host_install_maligator_internal_fs:remove"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_internal_fs:remove%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:remove%\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:remove%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:remove%",
+				"mal_host_install_maligator_internal_fs:remove"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_internal_fs:remove%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:stat%\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:stat%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:stat%",
+				"mal_host_install_maligator_internal_fs:stat"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_internal_fs:stat%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:stat%\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:stat%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:stat%",
+				"mal_host_install_maligator_internal_fs:stat"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_internal_fs:stat%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:write%\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:write%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:write%",
+				"mal_host_install_maligator_internal_fs:write"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_internal_fs:write%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_fs:write%\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_internal_fs:write%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_fs:write%",
+				"mal_host_install_maligator_internal_fs:write"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_internal_fs:write%"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -294803,6 +295219,86 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_internal_fs:copy\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_internal_fs:copy",
+			"kind": "binding",
+			"operations": ["%mal_host_install_maligator_internal_fs:copy%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_internal_fs:exists\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_internal_fs:exists",
+			"kind": "binding",
+			"operations": ["%mal_host_install_maligator_internal_fs:exists%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_internal_fs:mediaType\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_internal_fs:mediaType",
+			"kind": "binding",
+			"operations": ["%mal_host_install_maligator_internal_fs:mediaType%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_internal_fs:move\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_internal_fs:move",
+			"kind": "binding",
+			"operations": ["%mal_host_install_maligator_internal_fs:move%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_internal_fs:read\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_internal_fs:read",
+			"kind": "binding",
+			"operations": ["%mal_host_install_maligator_internal_fs:read%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_internal_fs:remove\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_internal_fs:remove",
+			"kind": "binding",
+			"operations": ["%mal_host_install_maligator_internal_fs:remove%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_internal_fs:stat\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_internal_fs:stat",
+			"kind": "binding",
+			"operations": ["%mal_host_install_maligator_internal_fs:stat%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_internal_fs:write\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_internal_fs:write",
+			"kind": "binding",
+			"operations": ["%mal_host_install_maligator_internal_fs:write%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_maligator_internal_http:assetProxy\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -309217,6 +309713,38 @@
 		{
 			"id": "%mal_host_install_maligator_assets:EmbeddedFile%.text",
 			"identities": ["%mal_host_install_maligator_assets:EmbeddedFile%.text"]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_fs:copy%",
+			"identities": ["%mal_host_install_maligator_internal_fs:copy%"]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_fs:exists%",
+			"identities": ["%mal_host_install_maligator_internal_fs:exists%"]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_fs:mediaType%",
+			"identities": ["%mal_host_install_maligator_internal_fs:mediaType%"]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_fs:move%",
+			"identities": ["%mal_host_install_maligator_internal_fs:move%"]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_fs:read%",
+			"identities": ["%mal_host_install_maligator_internal_fs:read%"]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_fs:remove%",
+			"identities": ["%mal_host_install_maligator_internal_fs:remove%"]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_fs:stat%",
+			"identities": ["%mal_host_install_maligator_internal_fs:stat%"]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_fs:write%",
+			"identities": ["%mal_host_install_maligator_internal_fs:write%"]
 		},
 		{
 			"id": "%mal_host_install_maligator_internal_http:assetProxy%",
