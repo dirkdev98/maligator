@@ -7,7 +7,7 @@
 #include "object_ops.h"
 #include "vm_ops.h"
 
-static_assert(MAL_INTRINSIC_WEB_GROUP_CRYPTO - MAL_INTRINSIC_WEB_GROUP_EVENTS + 1 == MAL_WEB_GROUP_COUNT,
+static_assert(MAL_INTRINSIC_WEB_GROUP_FETCH_CLIENT - MAL_INTRINSIC_WEB_GROUP_EVENTS + 1 == MAL_WEB_GROUP_COUNT,
     "one intrinsic slot per web group");
 
 MalObject *mal_web_group_ensure(MalVm *vm, MalWebGroup group, MalWebGroupBuild build) {

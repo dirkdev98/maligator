@@ -21,6 +21,7 @@ import {
 	selectReleaseTargetTriples,
 } from "../scripts/release.ts";
 import { createBuildArtifact } from "../src/build-artifact.ts";
+import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
 import { MALIGATOR_VERSION } from "../src/version.ts";
 import { documentationModel } from "../website/docs/model.ts";
 
@@ -374,14 +375,7 @@ describe("npm launcher", () => {
 			"index.js",
 			"index.d.ts",
 			"platform-api.d.ts",
-			"application-api.d.ts",
-			"assets-api.d.ts",
-			"http-api.d.ts",
-			"http-host-api.d.ts",
-			"process-api.d.ts",
-			"test-api.d.ts",
-			"workers-api.d.ts",
-			"workers-host-api.d.ts",
+			...PLATFORM_MODULES.map((module) => module.declarationFile).sort(),
 			"README.md",
 			"LICENSE",
 			"THIRD_PARTY_NOTICES.md",

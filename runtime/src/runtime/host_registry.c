@@ -79,6 +79,10 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_web_fetch);
     MATCH_INSTALLER(mal_host_install_web_basics);
 #endif
+#if MAL_TLS && MAL_ZLIB
+    MATCH_INSTALLER(mal_host_install_web_fetch_client);
+    MATCH_INSTALLER(mal_host_install_maligator_internal_fetch);
+#endif
 #if MAL_URL
     MATCH_INSTALLER(mal_host_install_web_url);
 #endif

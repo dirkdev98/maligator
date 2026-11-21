@@ -44,3 +44,4 @@ tests/native/http-stalled-pipeline.test.ts
 tests/native/application-images.test.ts
 tests/native/http-assets.test.ts
 tests/native/http-watch-proxy.test.ts
+tests/native/fetch-client.test.ts

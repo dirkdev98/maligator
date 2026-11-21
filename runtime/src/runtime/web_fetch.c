@@ -887,6 +887,8 @@ MalResponseObject *mal_response_object_new(
     r->body_charge = body == nullptr ? 0 : body_len == 0 ? 1 : body_len;
     mal_heap_charge_external(heap, r->body_charge);
     r->body_stream = mal_value_new_undefined();
+    r->url = mal_value_new_undefined();
+    r->redirected = false;
     return r;
 }
 
@@ -905,6 +907,7 @@ static void mal_response_trace(MalHeapHeader *cell) {
     mal_gc_mark_value(response->status_text);
     mal_gc_mark_value(response->headers);
     mal_gc_mark_value(response->body_stream);
+    mal_gc_mark_value(response->url);
 }
 
 /* Get(dict, name) for a dictionary member name that %Object.prototype% does not define.
@@ -2389,12 +2392,14 @@ static MalValue mal_response_get_url(
     (void) argc;
     (void) nt;
     (void) callee;
-    if (mal_response_this(self) == nullptr) {
+    MalResponseObject *r = mal_response_this(self);
+    if (r == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "Response getter called on incompatible receiver");
         return mal_value_new_undefined();
     }
-    return mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
+    return mal_value_is_string(r->url) ? r->url
+                                       : mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
 }
 
 static MalValue mal_response_get_redirected(
@@ -2403,12 +2408,13 @@ static MalValue mal_response_get_redirected(
     (void) argc;
     (void) nt;
     (void) callee;
-    if (mal_response_this(self) == nullptr) {
+    MalResponseObject *r = mal_response_this(self);
+    if (r == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "Response getter called on incompatible receiver");
         return mal_value_new_undefined();
     }
-    return mal_value_new_boolean(false);
+    return mal_value_new_boolean(r->redirected);
 }
 
 static MalValue mal_response_get_headers(
@@ -3922,6 +3928,8 @@ static void mal_fetch_respond_text(
 }
 
 /* Serialize a settled handler result (a Response, or a 500 if it isn't one). */
+static void mal_fetch_respond_after_body(MalFetchRequest *req, MalValue response);
+
 static void mal_fetch_respond_with(MalFetchRequest *req, MalValue result) {
     if (req->conn == nullptr || req->responded) return;
     if (!mal_value_is_response_object(result)) {
@@ -3936,6 +3944,11 @@ static void mal_fetch_respond_with(MalFetchRequest *req, MalValue result) {
     if (r->status < 100 || r->status > 599) {
         mal_fetch_respond_text(req, 500, "Internal Server Error",
             "handler returned a network error response", 41);
+        return;
+    }
+    bool sends_body = !req->head_request && r->status >= 200 && r->status != 204 && r->status != 304;
+    if (sends_body && r->body == nullptr && mal_value_is_object(r->body_stream)) {
+        mal_fetch_respond_after_body(req, result);
         return;
     }
     usize hlen = 0;
@@ -4010,6 +4023,72 @@ static MalValue mal_fetch_on_rejected(
     mal_fetch_respond_text(req, 500, "Internal Server Error", "handler rejected", 16);
     mal_fetch_request_release(req);
     return mal_value_new_undefined();
+}
+
+/* A streamed Response's bytes arrived: answer with them as a buffered body. */
+static MalValue mal_fetch_on_body(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt,
+    MalValue callee) {
+    (void) this_value;
+    (void) nt;
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    MalFetchRequest *req =
+        mal_fetch_unbox_request(mal_native_function_object_get_slot(self, 0));
+    MalValue response = mal_native_function_object_get_slot(self, 1);
+    MalBufferSourceSpan span;
+    MalResponseObject *r = mal_value_to_response_object(response);
+    if (arg_count < 1 || mal_buffer_source_span(args[0], &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        mal_fetch_respond_text(req, 500, "Internal Server Error", "handler error", 13);
+    } else {
+        byte *body = malloc(span.length == 0 ? 1 : span.length);
+        if (body == nullptr) {
+            mal_fetch_respond_text(req, 500, "Internal Server Error", "handler error", 13);
+        } else {
+            mal_buffer_source_span_read(&span, 0, body, span.length);
+            r->body = body;
+            r->body_len = span.length;
+            r->body_charge = span.length == 0 ? 1 : span.length;
+            mal_heap_charge_external(&vm->heap, r->body_charge);
+            mal_fetch_respond_with(req, response);
+        }
+    }
+    mal_fetch_request_release(req);
+    return mal_value_new_undefined();
+}
+
+// The server writes whole bodies, so a Response with a stream body is read first.
+static void mal_fetch_respond_after_body(MalFetchRequest *req, MalValue response) {
+    MalVm *vm = req->vm;
+    MalValue roots[4] = {response, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined()};
+    MalRootSpan rs;
+    mal_gc_root(&rs, roots, countof(roots));
+    MalCompletion bytes = {.kind = MAL_COMPLETION_THROW};
+    if (mal_vm_get_property(vm, response,
+            mal_intrinsic_string_key(vm, (const byte *) "arrayBuffer"), &roots[1])
+        && mal_value_is_callable(roots[1])) {
+        bytes = mal_vm_call_value(vm, roots[1], response, nullptr, 0);
+    }
+    if (bytes.kind == MAL_COMPLETION_THROW || vm->completion.kind == MAL_COMPLETION_THROW) {
+        vm->completion =
+            (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+        mal_gc_unroot(&rs);
+        mal_fetch_respond_text(req, 500, "Internal Server Error", "handler error", 13);
+        return;
+    }
+    roots[1] = bytes.value;
+    MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalString *name = mal_intrinsic_ascii(vm, (const byte *) "");
+    MalValue slots[2] = {mal_fetch_box_request(req), response};
+    roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+        &vm->heap, fn_proto, name, mal_fetch_on_body, slots, 2));
+    roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+        &vm->heap, fn_proto, name, mal_fetch_on_rejected, slots, 1));
+    // Exactly one reaction runs, so one reference covers the pair.
+    mal_fetch_request_retain(req);
+    mal_promise_perform_then(vm, roots[1], roots[2], roots[3],
+        mal_value_new_undefined(), mal_value_new_undefined());
+    mal_gc_unroot(&rs);
 }
 
 /* The single reaction to a Response the handler returned synchronously. */
@@ -4957,6 +5036,27 @@ void mal_fetch_types_install(MalVm *vm, MalObject *global_this) {
     mal_gc_register_finalizer(MAL_HEAP_FORM_DATA_OBJECT, mal_form_data_finalize);
     mal_gc_register_tracer(
         MAL_HEAP_FORM_DATA_ITERATOR_OBJECT, mal_form_data_iterator_trace);
+}
+
+MalValue mal_fetch_response_new(MalVm *vm, i32 status, MalValue status_text,
+    MalHeadersObject *headers, MalValue body, MalValue url, bool redirected) {
+    MalValue roots[4] = {status_text, mal_value_from_headers_object(headers), body, url};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalResponseObject *response = mal_response_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_RESPONSE_PROTOTYPE]), status, nullptr, 0);
+    headers->guard = MAL_HEADERS_GUARD_IMMUTABLE;
+    response->status_text = roots[0];
+    response->headers = roots[1];
+    response->body_stream = roots[2];
+    response->url = roots[3];
+    response->redirected = redirected;
+    mal_gc_card(&response->object.header, roots[0]);
+    mal_gc_card(&response->object.header, roots[1]);
+    mal_gc_card(&response->object.header, roots[2]);
+    mal_gc_card(&response->object.header, roots[3]);
+    mal_gc_unroot(&root);
+    return mal_value_from_response_object(response);
 }
 
 static bool web_fetch_build(MalVm *vm, MalObject *exports) {

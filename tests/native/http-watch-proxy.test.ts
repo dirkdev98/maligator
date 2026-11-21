@@ -70,7 +70,7 @@ await server.close();
 		);
 		writeFileSync(
 			path.join(project, "maligator.build.ts"),
-			'export default { entry: "main.mjs", surface: { webPlatform: true, node: true } };\n',
+			'export default { entry: "main.mjs", surface: { webPlatform: true } };\n',
 		);
 
 		const result = spawnSync(

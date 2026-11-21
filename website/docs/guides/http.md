@@ -80,7 +80,23 @@ serve({
 
 ## Develop a frontend behind the server
 
-A declaration with a [watcher](/guides/assets#produce-files-with-a-build-step) serves from its dev server while the watcher runs: `serveAsset` forwards each request to the watcher's `url`, so the page, the API and the frontend's live updates share one origin. Point the dev server's hot-reload socket at its own port, such as Vite's `server.hmr.clientPort`, because the forwarding answers plain requests. Forwarding uses `fetch`, so enable `surface.node` alongside `surface.webPlatform`. A build embeds the produced files instead.
+A declaration with a [watcher](/guides/assets#produce-files-with-a-build-step) serves from its dev server while the watcher runs: `serveAsset` forwards each request to the watcher's `url`, so the page, the API and the frontend's live updates share one origin. Point the dev server's hot-reload socket at its own port, such as Vite's `server.hmr.clientPort`, because the forwarding answers plain requests. A build embeds the produced files instead.
+
+## Make requests
+
+`fetch` is global with either surface and is also exported from `maligator:http`. It streams request and response bodies, follows redirects, decodes gzip, deflate and Brotli bodies, and stops when its `AbortSignal` fires:
+
+```typescript
+const response = await fetch("https://api.example.com/items", {
+	method: "POST",
+	headers: { "content-type": "application/json" },
+	body: JSON.stringify({ name: "widget" }),
+	signal: AbortSignal.timeout(5000),
+});
+console.log(response.status, await response.json());
+```
+
+As in Deno and Node, a server has no browser context: `fetch` enforces no CORS, keeps no cookies or HTTP cache, sends no referrer, and resolves `redirect: "manual"` with the 3xx response itself. A network failure rejects with a `TypeError` whose `cause` says what failed. Requests use HTTP/1.1, and `integrity` metadata is not verified yet, so a request that sets it rejects.
 
 ## Use node:http
 

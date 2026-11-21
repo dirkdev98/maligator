@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as ts from "typescript-v6-api";
 import { describe, expect, it } from "vitest";
+import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
 
 function formatDiagnostics(diagnostics: ReadonlyArray<ts.Diagnostic>): string {
 	return ts.formatDiagnosticsWithColorAndContext(diagnostics, {
@@ -25,15 +26,8 @@ describe("@maligator/cli public TypeScript API", () => {
 				path.join(packageDirectory, "index.d.ts"),
 			);
 			for (const declaration of [
-				"application-api.d.ts",
-				"assets-api.d.ts",
-				"http-api.d.ts",
-				"http-host-api.d.ts",
-				"test-api.d.ts",
 				"platform-api.d.ts",
-				"process-api.d.ts",
-				"workers-api.d.ts",
-				"workers-host-api.d.ts",
+				...PLATFORM_MODULES.map((module) => module.declarationFile),
 			]) {
 				copyFileSync(
 					path.resolve(import.meta.dirname, "../src", declaration),

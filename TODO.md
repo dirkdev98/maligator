@@ -615,9 +615,16 @@ The target is the complete ECMA-429 server surface except WebAssembly.
 
 ## W3: fetch and crypto
 
-- [ ] Implement global fetch over shared streaming HTTP and optional TLS after H3 and
-      H4 are ready. Cover redirects, aborts, streamed bodies, limits, errors, and
-      finalization without a private HTTP stack.
+- [ ] Verify fetch `integrity` metadata (sha256, sha384, sha512). A request that sets
+      it rejects today.
+
+- [ ] Let `maligator:http` work with neither surface enabled. Its native features
+      (URL parsing, TLS, codecs, the C++ runtime) follow the configured surfaces, so
+      importing it would need usage-derived native features.
+
+- [ ] Release a fetch response's connection when its body is dropped unread. A body
+      larger than the initial read credit keeps the request, and the event loop,
+      alive until it is read or cancelled.
 
 - [ ] Define server-runtime origin, credentials, cache, default User-Agent, and
       decompression policies. Document intentional Fetch divergences.

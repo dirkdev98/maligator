@@ -189,6 +189,12 @@ export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 		surface: "web",
 	},
 	{
+		installer: "mal_host_install_web_fetch_client",
+		globals: ["fetch"],
+		computedMember: true,
+		surface: "web",
+	},
+	{
 		installer: "mal_host_install_web_basics",
 		globals: ["atob", "btoa", "queueMicrotask", "structuredClone", "navigator"],
 		computedMember: true,

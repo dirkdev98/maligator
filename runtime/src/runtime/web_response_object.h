@@ -20,6 +20,8 @@ typedef struct MalResponseObject {
     usize body_len;
     usize body_charge;
     MalValue body_stream; // lazily-created ReadableStream, or undefined
+    MalValue url;         // the fetched URL as a string, or undefined for a constructed Response
+    bool redirected;      // fetch followed at least one redirect
 } MalResponseObject;
 
 MalResponseObject *mal_response_object_new(

@@ -1,7 +1,7 @@
 /*
  * mal_zlib.h - flat streaming codec ABI (deflate, gzip, Brotli) for the Rust backend.
  * The caller owns all input/output storage; the opaque stream retains no buffer
- * pointers across calls. Available only when Cargo feature `node-zlib` is linked.
+ * pointers across calls. Available only when Cargo feature `zlib` is linked.
  */
 #pragma once
 

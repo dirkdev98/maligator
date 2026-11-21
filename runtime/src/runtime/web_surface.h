@@ -24,6 +24,7 @@ typedef enum MalWebGroup {
     MAL_WEB_GROUP_BASICS,
     MAL_WEB_GROUP_PERFORMANCE,
     MAL_WEB_GROUP_CRYPTO,
+    MAL_WEB_GROUP_FETCH_CLIENT,
     MAL_WEB_GROUP_COUNT,
 } MalWebGroup;
 
@@ -64,3 +65,9 @@ MAL_WEB_GROUP_DECLARE(fetch)
 MAL_WEB_GROUP_DECLARE(basics)
 MAL_WEB_GROUP_DECLARE(performance)
 MAL_WEB_GROUP_DECLARE(crypto)
+MAL_WEB_GROUP_DECLARE(fetch_client)
+
+/* maligator:internal/fetch: the fetch_client group's `fetch` for `maligator:http`,
+ * without defining the global. */
+void mal_host_install_maligator_internal_fetch(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);

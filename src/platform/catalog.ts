@@ -1093,7 +1093,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 				name: "proxy",
 				type: { kind: "signature", source: "(target: string) => Handler" },
 				description:
-					"A handler that forwards each request to the same path below `target` and returns the buffered answer. Forwarding uses `fetch`, which `surface.node` provides.",
+					"A handler that forwards each request to the same path below `target` and returns the answer.",
 				contract: {
 					phase: "runtime",
 					value: "callable",
@@ -1101,6 +1101,39 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 					effects: EVERY_EFFECT_SUMMARY,
 				},
 			},
+			{
+				name: "fetch",
+				type: { kind: "signature", source: "typeof globalThis.fetch" },
+				description:
+					"The Fetch API's `fetch`, the same function as the global one. Importing it links the HTTP client without installing the global.",
+				examples: [
+					'import { fetch } from "maligator:http";\n\nconst response = await fetch("https://example.com/");\nconsole.log(response.status);',
+				],
+				contract: {
+					phase: "runtime",
+					value: "callable",
+					identity: "module",
+					effects: EVERY_EFFECT_SUMMARY,
+				},
+			},
+		],
+	},
+	{
+		kind: "native",
+		id: "maligator:internal/fetch",
+		internal: true,
+		stability: "experimental",
+		evaluation: "side-effect-free",
+		installer: "mal_host_install_maligator_internal_fetch",
+		declarationFile: "fetch-host-api.d.ts",
+		description: "The native fetch behind `maligator:http`'s `fetch` export.",
+		types: [],
+		exports: [
+			workerExport(
+				"fetch",
+				"typeof globalThis.fetch",
+				"fetch() over the runtime's HTTP client.",
+			),
 		],
 	},
 	{

@@ -119,9 +119,22 @@ declare module "maligator:http" {
 	) => Handler;
 	/**
 	 * A handler that forwards each request to the same path below `target` and returns
-	 * the buffered answer. Forwarding uses `fetch`, which `surface.node` provides.
+	 * the answer.
 	 *
 	 * @see https://maligator.ddv.tools/api/http#proxy
 	 */
 	export const proxy: (target: string) => Handler;
+	/**
+	 * The Fetch API's `fetch`, the same function as the global one. Importing it links
+	 * the HTTP client without installing the global.
+	 *
+	 * @example
+	 * import { fetch } from "maligator:http";
+	 *
+	 * const response = await fetch("https://example.com/");
+	 * console.log(response.status);
+	 *
+	 * @see https://maligator.ddv.tools/api/http#fetch
+	 */
+	export const fetch: typeof globalThis.fetch;
 }

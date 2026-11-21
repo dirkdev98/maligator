@@ -6,7 +6,10 @@ import type {
 	ServeOptions,
 	Server,
 } from "maligator:http";
+import { fetch } from "maligator:internal/fetch";
 import { assetProxy, assetResponse, listen } from "maligator:internal/http";
+
+export { fetch };
 
 interface AssetRoute {
 	readonly handle: EmbeddedFile | EmbeddedDirectory;
@@ -113,14 +116,7 @@ export function serveAsset(
 		throw new TypeError("serveAsset option 'immutable' must be an array of patterns");
 	// A watched declaration's files come from its dev server while one runs.
 	const target = assetProxy(asset);
-	if (target !== undefined) {
-		// Global fetch comes from the Node surface until the web platform has its own.
-		if (typeof fetch !== "function")
-			throw new TypeError(
-				`serveAsset forwards to the watcher at ${target}, which requires surface.node`,
-			);
-		return proxy(target);
-	}
+	if (target !== undefined) return proxy(target);
 	const route: AssetRoute = Object.freeze({
 		handle: asset,
 		prefix,
@@ -142,27 +138,24 @@ const upstreamOnly = new Set([
 	"transfer-encoding",
 ]);
 
-const nullBodyStatuses = new Set([101, 103, 204, 205, 304]);
-
 export function proxy(target: string): Handler {
 	const base = new URL(target);
 	return async (request: Request) => {
 		const url = new URL(request.url);
-		const upstream = await fetch(new URL(url.pathname + url.search, base), {
+		// A streamed body needs duplex "half", which TypeScript's RequestInit omits.
+		const init: RequestInit & { duplex: "half" } = {
 			method: request.method,
 			headers: request.headers,
-			body:
-				request.method === "GET" || request.method === "HEAD"
-					? undefined
-					: await request.arrayBuffer(),
+			body: request.body,
+			duplex: "half",
 			redirect: "manual",
-		});
+		};
+		const upstream = await fetch(new URL(url.pathname + url.search, base), init);
 		const headers = new Headers();
 		upstream.headers.forEach((value, name) => {
 			if (!upstreamOnly.has(name)) headers.append(name, value);
 		});
-		const empty = request.method === "HEAD" || nullBodyStatuses.has(upstream.status);
-		return new Response(empty ? null : await upstream.arrayBuffer(), {
+		return new Response(upstream.body, {
 			status: upstream.status,
 			statusText: upstream.statusText,
 			headers,
