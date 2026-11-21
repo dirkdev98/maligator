@@ -15,6 +15,7 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreRunnableFunctions } from "./core-method-reachability.ts";
 import {
 	coreEvaluatorGlobalWrites,
 	coreEvaluatorPrivateSlotMap,
@@ -572,8 +573,10 @@ export function forwardCoreOwnCapturedLoads(
 
 /**
  * Source-frame retention does not make an uninstantiated function body executable,
- * and captured slots and module bindings that no remaining code reads need no stores. Dropping a store
- * can leave its closure unused, which in turn uninstantiates that closure's body.
+ * nor does class evaluation make a method body executable whose key no running code
+ * reads. Captured slots and module bindings that no remaining code reads need no
+ * stores. Dropping a store can leave its closure unused, which in turn uninstantiates
+ * that closure's body.
  */
 export function pruneCoreCaptureLiveness(
 	program: CoreProgram,
@@ -601,6 +604,7 @@ export function pruneCoreCaptureLiveness(
 	const privateSlots = coreEvaluatorPrivateSlotMap(program, context);
 	const entry = functions[0];
 	if (entry !== undefined) roots.add(entry);
+	const dynamicScope = runtimeKeyReaders(context);
 	for (const installer of context.data.hostInstallCandidates) {
 		for (const { slot } of installer.exports) {
 			for (const target of flow.targets.globalStoreTargets(slot).functions)
@@ -633,8 +637,11 @@ export function pruneCoreCaptureLiveness(
 				continue;
 			if (emptyBody(edit(id), fn)) emptied.add(id);
 		}
-		const instantiable = instantiableFunctions(program, roots, sites);
-		const live = functions.filter((id) => instantiable.has(id));
+		const runnable = coreRunnableFunctions(program, roots, {
+			dynamicScope,
+			creations: (fn) => sites.get(fn.id)?.creations ?? [],
+		});
+		const live = functions.filter((id) => runnable.has(id));
 		const uses = scanCapturedSlots(program, live, sites);
 		if (uses === undefined) break;
 		forwardAllOwnCapturedLoads(
@@ -713,8 +720,9 @@ export function pruneCoreCaptureLiveness(
 
 /**
  * Functions a closed program can run: the entry, CommonJS module wrappers and every
- * function their code can create. Calling a function needs its identity, so a body
- * nothing creates never runs, even while it stays an inlining or guard source.
+ * function their code can create, except class methods whose keys no running code
+ * can read. Calling a function needs its identity, so a body nothing creates never
+ * runs, even while it stays an inlining or guard source.
  */
 export function coreInstantiableFunctions(
 	program: CoreProgram,
@@ -733,36 +741,14 @@ export function coreInstantiableFunctions(
 		roots.add(entry);
 		break;
 	}
-	return instantiableFunctions(program, roots);
+	return coreRunnableFunctions(program, roots, {
+		dynamicScope: runtimeKeyReaders(context),
+	});
 }
 
-// Functions some running code can create; a body nothing creates never runs, even
-// while it stays in the program as an inlining or guard source.
-function instantiableFunctions(
-	program: CoreProgram,
-	roots: ReadonlySet<CoreFunctionId>,
-	sites?: ReadonlyMap<CoreFunctionId, CaptureLivenessSites>,
-): ReadonlySet<CoreFunctionId> {
-	const live = new Set(roots);
-	const pending = [...roots];
-	while (pending.length > 0) {
-		const fn = program.function(pending.pop()!);
-		for (const instruction of sites === undefined
-			? fn.instructionIds()
-			: (sites.get(fn.id)?.creations ?? [])) {
-			if (sites !== undefined && !fn.isInstructionLive(instruction)) continue;
-			if (
-				fn.instructionKind(instruction) !== "operation" ||
-				fn.instructionOpcodeName(instruction) !== "createFunction"
-			)
-				continue;
-			const target = fn.instructionAttributes(instruction).functionIndex;
-			if (typeof target !== "number" || live.has(coreFunctionId(target))) continue;
-			live.add(coreFunctionId(target));
-			pending.push(coreFunctionId(target));
-		}
-	}
-	return live;
+// Run-time code and later linked images read keys this program never names.
+function runtimeKeyReaders(context: CoreCompilationContext): boolean {
+	return context.facts.world.eval === "runtime" || context.data.moduleLinks !== undefined;
 }
 
 function scanIdentities(
