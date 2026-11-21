@@ -223,10 +223,17 @@ function resolvedRustArtifacts(
 			: [],
 	);
 	const features = new Set(context.features.cargoFeatures);
-	const { sectionGcLinkArgs, cxxLinkArgs } = context.toolchain.probes;
+	const {
+		sectionGcLinkArgs,
+		cxxLinkArgs,
+		cxxStaticLinkArgs = [],
+		linkerArgs = [],
+		linkAllRustComponents = false,
+	} = context.toolchain.probes;
 	// Without section GC the linker keeps every loaded Rust function, and with
-	// them their references into each component.
-	const linkEveryComponent = sectionGcLinkArgs.length === 0;
+	// them their references into each component. GNU ld can also need those
+	// references resolved before it discards the unused sections.
+	const linkEveryComponent = sectionGcLinkArgs.length === 0 || linkAllRustComponents;
 	const selected = ({ packageName }: RustNativeComponent) =>
 		linkEveryComponent ||
 		(NATIVE_COMPONENT_FEATURES[packageName]?.some((feature) => features.has(feature)) ??
@@ -237,6 +244,15 @@ function resolvedRustArtifacts(
 	const linkCxx = linkEveryComponent || features.has("url");
 	// Zig's Ada archive uses the bundled libc++ ABI even if the host links libstdc++.
 	const groupComponents = prebuilt && linkCxx && context.toolchain.platform === "linux";
+	// BFD may extract Ada for a reference from dead Rust code. Its static
+	// initializers then keep C++ symbols live even under --as-needed.
+	const cxxRuntime =
+		linkAllRustComponents && !features.has("url") && cxxStaticLinkArgs.length > 0
+			? cxxStaticLinkArgs
+			: cxxLinkArgs;
+	const localCxx = linkAllRustComponents
+		? ["-Wl,--push-state,--as-needed", ...cxxRuntime, "-Wl,--pop-state"]
+		: cxxRuntime;
 	return {
 		...plan,
 		library,
@@ -246,7 +262,8 @@ function resolvedRustArtifacts(
 			...(groupComponents ? ["-Wl,--start-group"] : []),
 			...componentLibraries,
 			...(groupComponents ? ["-Wl,--end-group"] : []),
-			...(linkCxx && !prebuilt ? cxxLinkArgs : []),
+			...(linkCxx && !prebuilt ? localCxx : []),
+			...linkerArgs,
 			...sectionGcLinkArgs,
 			...platformLinkArgs(
 				context.toolchain.platform ?? process.platform,

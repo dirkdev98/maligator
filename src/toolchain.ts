@@ -17,7 +17,7 @@ import * as path from "node:path";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 
 const CACHE_SCHEMA = 2;
-const INSPECTION_SCHEMA = 2;
+const INSPECTION_SCHEMA = 3;
 /** The environment that selects tools or changes what they report. */
 const INSPECTION_ENVIRONMENT = [
 	"PATH",
@@ -70,6 +70,9 @@ export interface ToolchainProbes {
 	cxxLink: boolean;
 	stripArgs: Array<string>;
 	cxxLinkArgs: Array<string>;
+	cxxStaticLinkArgs?: Array<string>;
+	linkerArgs?: Array<string>;
+	linkAllRustComponents?: boolean;
 	/**
 	 * Linker flags that drop unreferenced sections. The Rust archive carries every
 	 * feature, so each link relies on them to keep only what C code reaches.
@@ -297,6 +300,11 @@ function isCachedProbes(value: unknown, fingerprint: string): value is CachedPro
 		probes.stripArgs.every((item) => typeof item === "string") &&
 		Array.isArray(probes.cxxLinkArgs) &&
 		probes.cxxLinkArgs.every((item) => typeof item === "string") &&
+		Array.isArray(probes.cxxStaticLinkArgs) &&
+		probes.cxxStaticLinkArgs.every((item) => typeof item === "string") &&
+		Array.isArray(probes.linkerArgs) &&
+		probes.linkerArgs.every((item) => typeof item === "string") &&
+		typeof probes.linkAllRustComponents === "boolean" &&
 		Array.isArray(probes.sectionGcLinkArgs) &&
 		probes.sectionGcLinkArgs.every((item) => typeof item === "string")
 	);
@@ -489,6 +497,7 @@ function fingerprintFor(
 	platform: NodeJS.Platform,
 	arch: string,
 	cacheDirectory: string,
+	linkers: ReadonlyArray<{ path: string; argument: string }>,
 ): string {
 	const testedFlags = {
 		c2x: C2X_FLAGS,
@@ -517,6 +526,11 @@ function fingerprintFor(
 			rustTarget,
 			testedFlags,
 			identities,
+			linkers: linkers.map(({ path: file, argument }) => ({
+				file,
+				argument,
+				digest: executableDigest(file, cacheDirectory),
+			})),
 		}),
 		"hex",
 	);
@@ -553,11 +567,33 @@ function compile(
 	return run(cc.path, toolArguments(cc, args), { cwd, env }).ok;
 }
 
+function lldCandidates(
+	tools: ToolchainTools,
+	searchPath: string,
+	rootDir: string,
+): Array<{ path: string; argument: string }> {
+	const cc = tools.cc;
+	if (tools.zig?.path === cc.path) return [];
+	const clangMajor = clangMajorVersion(cc.version);
+	const driverPath = [cc.installedDir, path.dirname(cc.path), searchPath]
+		.filter((directory) => directory !== undefined)
+		.join(path.delimiter);
+	return [...(clangMajor === undefined ? [] : [`lld-${clangMajor}`]), "lld"].flatMap(
+		(name) => {
+			const executable = resolveExecutable(`ld.${name}`, driverPath, rootDir);
+			return executable === undefined
+				? []
+				: [{ path: executable, argument: `-fuse-ld=${name}` }];
+		},
+	);
+}
+
 function probeCapabilities(
 	tools: ToolchainTools,
 	probeDir: string,
 	env: NodeJS.ProcessEnv,
 	platform: NodeJS.Platform,
+	linkers: ReadonlyArray<{ argument: string }>,
 ): ToolchainProbes {
 	// The runtime relies on real C23, not just the __STDC_VERSION__ stamp: the
 	// bool/true/false keywords with no <stdbool.h> (defaults.h), nullptr, and
@@ -584,12 +620,31 @@ function probeCapabilities(
 			"",
 		].join("\n"),
 	);
-	const c2x = compile(
-		tools.cc,
-		[...C2X_FLAGS, "main.c", "-o", "c2x-probe"],
-		probeDir,
-		env,
-	);
+	const defaultLinker =
+		tools.zig?.path === tools.cc.path
+			? "LLD"
+			: run(
+					tools.cc.path,
+					toolArguments(tools.cc, [...C2X_FLAGS, "main.c", "-Wl,--version"]),
+					{ cwd: probeDir, env },
+				).stdout;
+	const bfd = /^GNU ld\b/m.test(defaultLinker);
+	const useLld = (platform === "linux" || bfd) && !/^LLD\b/m.test(defaultLinker);
+	const lld = useLld
+		? linkers.find(({ argument }) =>
+				compile(
+					tools.cc,
+					[...C2X_FLAGS, argument, "main.c", "-o", "c2x-probe"],
+					probeDir,
+					env,
+				),
+			)
+		: undefined;
+	const linkerArgs = lld === undefined ? [] : [lld.argument];
+	const linkAllRustComponents = bfd && lld === undefined;
+	const link = (args: Array<string>) =>
+		compile(tools.cc, [...linkerArgs, ...args], probeDir, env);
+	const c2x = lld !== undefined || link([...C2X_FLAGS, "main.c", "-o", "c2x-probe"]);
 
 	writeFileSync(
 		path.join(probeDir, "lto-lib.c"),
@@ -622,12 +677,7 @@ function probeCapabilities(
 			).ok;
 		return (
 			ltoArchive &&
-			compile(
-				tools.cc,
-				[...C2X_FLAGS, ...flags, "lto-main.o", "liblto-probe.a", "-o", "lto-probe"],
-				probeDir,
-				env,
-			)
+			link([...C2X_FLAGS, ...flags, "lto-main.o", "liblto-probe.a", "-o", "lto-probe"])
 		);
 	};
 	let ltoFlags: Array<string> = [];
@@ -666,20 +716,15 @@ function probeCapabilities(
 			const directory = path.join(probeDir, `thinlto-cache-${candidate.kind}`);
 			mkdirSync(directory, { recursive: true });
 			if (
-				compile(
-					tools.cc,
-					[
-						...C2X_FLAGS,
-						...ltoFlags,
-						candidate.argument(directory),
-						"lto-main.o",
-						"liblto-probe.a",
-						"-o",
-						"thinlto-cache-probe",
-					],
-					probeDir,
-					env,
-				)
+				link([
+					...C2X_FLAGS,
+					...ltoFlags,
+					candidate.argument(directory),
+					"lto-main.o",
+					"liblto-probe.a",
+					"-o",
+					"thinlto-cache-probe",
+				])
 			) {
 				thinLtoCache = candidate.kind;
 				break;
@@ -689,10 +734,11 @@ function probeCapabilities(
 
 	let cxxLink = false;
 	let cxxLinkArgs: Array<string> = [];
+	let cxxStaticLinkArgs: Array<string> = [];
 	if (tools.cxx !== undefined) {
 		writeFileSync(
 			path.join(probeDir, "cxx.cc"),
-			'extern "C" int mal_cxx_probe(void) { int *p = new int(0); int n = *p; delete p; return n; }\n',
+			'#include <string>\nextern "C" int mal_cxx_probe(void) { return std::string("maligator").size(); }\n',
 		);
 		writeFileSync(
 			path.join(probeDir, "cxx-main.c"),
@@ -702,29 +748,37 @@ function probeCapabilities(
 		for (const args of CXX_LINK_CANDIDATES) {
 			if (
 				cxxObject &&
-				compile(
-					tools.cc,
-					[...C2X_FLAGS, "cxx-main.c", "cxx.o", ...args, "-o", "cxx-probe"],
-					probeDir,
-					env,
-				)
+				link([...C2X_FLAGS, "cxx-main.c", "cxx.o", ...args, "-o", "cxx-probe"])
 			) {
 				cxxLink = true;
 				cxxLinkArgs = args;
 				break;
 			}
 		}
+		if (cxxLink && linkAllRustComponents) {
+			const staticArgs = [
+				"-Wl,--push-state,-Bstatic",
+				...cxxLinkArgs,
+				...(cxxLinkArgs.includes("-lc++") ? ["-lc++abi"] : []),
+				"-Wl,--pop-state",
+			];
+			if (
+				link([
+					...C2X_FLAGS,
+					"cxx-main.c",
+					"cxx.o",
+					...staticArgs,
+					"-o",
+					"cxx-static-probe",
+				])
+			)
+				cxxStaticLinkArgs = staticArgs;
+		}
 	}
 
 	const sectionGcLinkArgs = sectionGcLinkFlags(platform);
 	const sectionGc =
-		c2x &&
-		compile(
-			tools.cc,
-			[...C2X_FLAGS, "main.c", ...sectionGcLinkArgs, "-o", "section-gc-probe"],
-			probeDir,
-			env,
-		);
+		c2x && link([...C2X_FLAGS, "main.c", ...sectionGcLinkArgs, "-o", "section-gc-probe"]);
 
 	let strip = false;
 	let stripArgs: Array<string> = [];
@@ -771,6 +825,9 @@ function probeCapabilities(
 		cxxLink,
 		stripArgs,
 		cxxLinkArgs,
+		cxxStaticLinkArgs,
+		linkerArgs,
+		linkAllRustComponents,
 		sectionGcLinkArgs: sectionGc ? sectionGcLinkArgs : [],
 	};
 }
@@ -1030,6 +1087,7 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 		"unknown";
 	report.target = target;
 	report.rustTarget = rustTarget;
+	const linkers = lldCandidates(completeTools, searchPath, rootDir);
 	const fingerprint = fingerprintFor(
 		completeTools,
 		target,
@@ -1037,6 +1095,7 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 		platform,
 		arch,
 		cacheDirectory,
+		linkers,
 	);
 	report.fingerprint = fingerprint;
 	const cacheDir = path.join(cacheDirectory, "toolchains");
@@ -1058,7 +1117,7 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 		mkdirSync(cacheDir, { recursive: true });
 		const probeDir = mkdtempSync(path.join(cacheDir, "probe-"));
 		try {
-			probes = probeCapabilities(completeTools, probeDir, env, platform);
+			probes = probeCapabilities(completeTools, probeDir, env, platform, linkers);
 			if (requiredProbesPass(probes, needsCxx)) {
 				writeFileSync(
 					cachePath,
@@ -1155,6 +1214,9 @@ function inspectionInputs(
 	return [
 		...new Set([
 			...tools.map((tool) => tool.path),
+			...lldCandidates(toolchain.tools, env.PATH ?? "", process.cwd()).map(
+				(linker) => linker.path,
+			),
 			...tools.flatMap((tool) =>
 				tool.installedDir === undefined ? [] : [path.join(tool.installedDir, "clang")],
 			),
