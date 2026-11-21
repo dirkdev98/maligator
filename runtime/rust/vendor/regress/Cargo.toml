@@ -49,42 +49,6 @@ utf16 = []
 name = "regress"
 path = "src/lib.rs"
 
-[[test]]
-name = "anchored_optimization"
-path = "tests/anchored_optimization.rs"
-
-[[test]]
-name = "escape_tests"
-path = "tests/escape_tests.rs"
-
-[[test]]
-name = "pattern_tests"
-path = "tests/pattern_tests.rs"
-
-[[test]]
-name = "pcre_tests"
-path = "tests/pcre_tests.rs"
-
-[[test]]
-name = "replacement_tests"
-path = "tests/replacement_tests.rs"
-
-[[test]]
-name = "syntax_error_tests"
-path = "tests/syntax_error_tests.rs"
-
-[[test]]
-name = "tests"
-path = "tests/tests.rs"
-
-[[test]]
-name = "unicode_property_escapes"
-path = "tests/unicode_property_escapes.rs"
-
-[[test]]
-name = "unicodesets"
-path = "tests/unicodesets.rs"
-
 [dependencies.hashbrown]
 version = ">=0.16, <0.18"
 optional = true

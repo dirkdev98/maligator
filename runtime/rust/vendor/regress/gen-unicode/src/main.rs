@@ -25,7 +25,6 @@ const MAX_LENGTH: u32 = 1 << LENGTH_BITS;
 pub(crate) struct GenUnicode {
     pub(crate) ucd_path: String,
     pub(crate) scope: Scope,
-    pub(crate) scope_tests: Scope,
     pub(crate) case_folds: Vec<CaseFold>,
     pub(crate) property_value_aliases: Vec<PropertyValueAlias>,
     pub(crate) scripts: Vec<Script>,
@@ -44,7 +43,6 @@ fn main() {
     let mut r#gen = GenUnicode {
         ucd_path: ucd_path.clone(),
         scope: Scope::new(),
-        scope_tests: Scope::new(),
         case_folds: parse(&ucd_path).expect("could not parse CaseFolding.txt"),
         property_value_aliases: parse(&ucd_path).expect("could not parse PropertyValueAliases.txt"),
         scripts: parse(&ucd_path).expect("could not parse Scripts.txt"),
@@ -62,7 +60,6 @@ fn main() {
     };
 
     let file_unicode_tables_path = "../src/unicodetables.rs";
-    let file_tests_path = "../tests/unicode_property_escapes.rs";
 
     let mut file_unicode_tables = OpenOptions::new()
         .create(true)
@@ -71,23 +68,9 @@ fn main() {
         .open(file_unicode_tables_path)
         .expect("Failed to open file for unicode tables");
 
-    let mut file_tests = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(file_tests_path)
-        .expect("Failed to open file for tests");
-
     file_unicode_tables
         .write_all(b"// Generated from Unicode 18.0.0 by gen-unicode; see MALIGATOR.md for inputs and licenses.\n")
         .expect("Failed to write to unicode tables file");
-
-    file_tests
-        .write_all(
-            b"// Generated from Unicode 18.0.0 by gen-unicode; see MALIGATOR.md for inputs and licenses.\n\
-#![allow(clippy::single_range_in_vec_init)]\n",
-        )
-        .expect("Failed to write to tests file");
 
     r#gen.scope.import("crate::unicode", "FoldRange");
     r#gen.scope.import("crate::codepointset", "Interval");
@@ -100,24 +83,14 @@ fn main() {
     r#gen.generate_uppercase();
     r#gen.generate_string_properties();
 
-    r#gen.scope_tests.import("common", "*");
-    r#gen.scope_tests.raw("pub mod common;");
-
-    r#gen.generate_binary_properties_tests();
-    r#gen.generate_general_category_tests();
-
     file_unicode_tables
         .write_all(r#gen.scope.to_string().as_bytes())
         .expect("Failed to write to unicode tables file");
 
-    file_tests
-        .write_all(r#gen.scope_tests.to_string().as_bytes())
-        .expect("Failed to write to tests file");
-
     let formatted = std::process::Command::new("rustfmt")
-        .args(["--edition", "2024", file_unicode_tables_path, file_tests_path])
+        .args(["--edition", "2024", file_unicode_tables_path])
         .status()
-        .expect("Failed to format Unicode tables and tests");
+        .expect("Failed to format Unicode tables");
     assert!(formatted.success(), "Rust formatting failed");
 }
 

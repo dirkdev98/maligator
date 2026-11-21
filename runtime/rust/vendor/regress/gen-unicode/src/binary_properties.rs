@@ -135,63 +135,6 @@ impl GenUnicode {
             .push_enum(property_enum)
             .push_fn(property_from_str_fn);
     }
-
-    pub(crate) fn generate_binary_properties_tests(&mut self) {
-        for (alias, orig_name, name, ucd_file) in BINARY_PROPERTIES {
-            let chars = ucd_file.chars(orig_name, self);
-
-            self.scope_tests
-                .new_fn(format!(
-                    "unicode_escape_property_binary_{}",
-                    name.to_lowercase()
-                ))
-                .attr("test")
-                .line(format!(
-                    "test_with_configs(unicode_escape_property_binary_{}_tc)",
-                    name.to_lowercase()
-                ));
-
-            let f = self.scope_tests.new_fn(format!(
-                "unicode_escape_property_binary_{}_tc",
-                name.to_lowercase()
-            ));
-
-            f.arg("tc", "TestConfig");
-
-            let code_points: Vec<String> = chars
-                .iter()
-                .map(|c| format!("\"\\u{{{:x}}}\"", c.0))
-                .collect();
-
-            f.line(format!(
-                "static CODE_POINTS: [&str; {}] = [\n    {},\n];",
-                code_points.len(),
-                code_points.join(",\n    ")
-            ));
-
-            let mut regexes = vec![format!(r#""^\\p{{{}}}+$""#, orig_name)];
-
-            if !alias.is_empty() {
-                regexes.push(format!(r#""^\\p{{{}}}+$""#, alias));
-            }
-
-            f.line(format!(
-                "const REGEXES: [&str; {}] = [\n    {},\n];",
-                regexes.len(),
-                regexes.join(",\n    ")
-            ));
-
-            let mut b = Block::new("for regex in REGEXES");
-            b.line(r#"let regex = tc.compilef(regex, "u");"#);
-
-            let mut bb = Block::new("for code_point in CODE_POINTS");
-            bb.line("regex.test_succeeds(code_point);");
-
-            b.push_block(bb);
-
-            f.push_block(b);
-        }
-    }
 }
 
 enum UCDFile {

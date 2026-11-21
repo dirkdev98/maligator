@@ -1,9 +1,15 @@
+# Vendored files
+
+The crate keeps the library, the Unicode generator and the licenses. Upstream's
+tests, performance notes, formatter config and lockfile are left out because the
+runtime never builds or runs them.
+
 # Unicode data
 
 The runtime uses the published Regress 0.12.0 sources with Unicode 18 tables.
 The upstream generator comes from commit
 `aae35dee1596cc9a9caaad2425b088081c09e5d5`; its local changes accept an input
-directory and check formatting failures.
+directory, check formatting failures and skip upstream's generated tests.
 
 Regress's published tables predate Unicode 18, including simple case-folding
 equivalences used by ECMAScript regular expressions. Keep the backend's folding,
