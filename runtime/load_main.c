@@ -1,8 +1,6 @@
 #include "vm.h"
 #include "language_components.h"
 #include "perf_stats.h"
-#include "regexp_engine.h"
-#include "unicode.h"
 #include "vm_load.h"
 
 #include <stdio.h>
@@ -46,19 +44,6 @@ static u8 *read_file(const char *path, usize *len_out) {
     return buffer;
 }
 
-#define MATCH_INSTALLER(symbol) \
-    if (length == sizeof(#symbol) - 1 && memcmp(name, #symbol, length) == 0) return symbol
-
-// The wire driver runs without an attached host. Only language components can
-// install into its VM without host state.
-static MalHostInstaller resolve_language_installer(const char *name, usize length) {
-    MATCH_INSTALLER(mal_host_install_regexp);
-    MATCH_INSTALLER(mal_host_install_unicode_normalization);
-    return mal_language_component_resolve_installer(name, length);
-}
-
-#undef MATCH_INSTALLER
-
 static MalLoadedRuntimeImage *load(const char *path) {
     usize len = 0;
     u8 *buffer = read_file(path, &len);
@@ -66,8 +51,9 @@ static MalLoadedRuntimeImage *load(const char *path) {
         return nullptr;
     }
     const char *err = "ok";
+    // This driver has no host state for host installers to use.
     MalLoadedRuntimeImage *loaded = mal_runtime_image_load_with_host_resolver(
-        buffer, len, &err, resolve_language_installer);
+        buffer, len, &err, mal_language_component_resolve_installer);
     free(buffer);
     if (loaded == nullptr) {
         fprintf(stderr, "mal_runtime_image_load(%s): %s\n", path, err);

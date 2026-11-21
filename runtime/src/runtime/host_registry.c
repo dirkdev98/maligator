@@ -11,8 +11,6 @@
 #include "maligator_http.h"
 #include "mal_process.h"
 #include "language_components.h"
-#include "regexp_engine.h"
-#include "unicode.h"
 #include "web_surface.h"
 #include "workers.h"
 
@@ -70,8 +68,6 @@ __attribute__((weak)) MalFfiInstaller mal_ffi_resolve_installer(const char *name
     if (length == sizeof(#symbol) - 1 && memcmp(name, #symbol, length) == 0) return symbol
 
 MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
-    MATCH_INSTALLER(mal_host_install_regexp);
-    MATCH_INSTALLER(mal_host_install_unicode_normalization);
     MalHostInstaller language = mal_language_component_resolve_installer(name, length);
     if (language != nullptr) return language;
     MATCH_INSTALLER(mal_host_install_maligator);

@@ -1,6 +1,10 @@
 #pragma once
 
+#include <string.h>
+
 #include "./defaults.h"
+#include "regexp_engine.h"
+#include "unicode.h"
 #include "vm.h"
 
 /*
@@ -56,14 +60,28 @@ MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intl_segmenter);
 MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intl_duration_format);
 #undef MAL_LANGUAGE_COMPONENT_INSTALLER
 
-/**
- * Resolve the installer of a linked component by its manifest name, or null. Loaders of
- * wire images use it; a loader links the components its images may list itself.
- */
-MalHostInstaller mal_language_component_resolve_installer(const char *name, usize length);
-
 /** Components linked into this process, filled by their constructors before main. */
 extern const MalLanguageComponent *mal_language_components[MAL_LANGUAGE_COMPONENT_COUNT];
+
+/**
+ * Resolve a language installer for a wire image. Keep the direct references at
+ * the loader so linking realm initialization alone leaves both engines optional.
+ */
+static inline MalHostInstaller mal_language_component_resolve_installer(const char *name, usize length) {
+#define MATCH_LANGUAGE_INSTALLER(symbol) \
+    if (length == sizeof(#symbol) - 1 && memcmp(name, #symbol, length) == 0) return symbol
+    MATCH_LANGUAGE_INSTALLER(mal_host_install_regexp);
+    MATCH_LANGUAGE_INSTALLER(mal_host_install_unicode_normalization);
+#undef MATCH_LANGUAGE_INSTALLER
+    for (i32 id = 0; id < MAL_LANGUAGE_COMPONENT_COUNT; id++) {
+        const MalLanguageComponent *component = mal_language_components[id];
+        if (component != nullptr && strlen(component->name) == length &&
+            memcmp(component->name, name, length) == 0) {
+            return component->installer;
+        }
+    }
+    return nullptr;
+}
 
 /** Whether the component is linked and the VM's image selects it. */
 bool mal_language_component_selected(const MalVm *vm, MalLanguageComponentId id);

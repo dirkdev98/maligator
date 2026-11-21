@@ -876,7 +876,8 @@ export function buildLocalBinary(
 	options: LocalBuildOptions,
 	sharedRunner = false,
 ): LocalBuildResult {
-	const context = resolvesInstallersByName(options)
+	const resolvesByName = resolvesInstallersByName(options);
+	const context = resolvesByName
 		? Object.freeze({
 				...options.context,
 				features: Object.freeze(
@@ -960,11 +961,40 @@ export function buildLocalBinary(
 	const mainFile =
 		options.mainFile ?? path.join(context.runtimeDirectory, "test262_main.c");
 	const mainSource = readFileSync(mainFile);
+	const languageComponents: Array<GeneratedObjectInput> = [];
+	const componentLinkArgs: Array<string> = [];
+	if (context.features.intlEnabled || context.features.temporalEnabled) {
+		const main = path.basename(mainFile);
+		const hasComponentAnchor = ["dev_main.c", "load_main.c", "test262_wire.c"].includes(
+			main,
+		);
+		if (resolvesByName && !hasComponentAnchor) {
+			// Wire manifests carry names without linker references.
+			const unitId = "wire-language-components";
+			const sourcePath = path.join(outputDirectory, `${artifactName}.${unitId}.c`);
+			const source = languageComponentAnchorSource(context.features);
+			writeFileSync(sourcePath, source);
+			languageComponents.push({
+				sourcePath,
+				unitId,
+				sourceDigest: artifactDigest(source),
+				sourceBytes: Buffer.byteLength(source),
+				role: "driver",
+			});
+		}
+		if (resolvesByName || hasComponentAnchor) {
+			const prefix =
+				(context.toolchain.platform ?? process.platform) === "darwin" ? "_" : "";
+			componentLinkArgs.push(`-Wl,-u,${prefix}mal_wire_language_components`);
+		}
+	}
+	const runtimeLinkArgs = [...componentLinkArgs, ...artifacts.linkArgs];
 	const { objects: generatedObjects, projectionDurationMs } = ensureGeneratedObjects(
 		context,
 		[
 			...sources.units,
 			...externalInputs,
+			...languageComponents,
 			{
 				sourcePath: mainFile,
 				unitId: normalizeRuntimeBuildArgument(context.runtimeDirectory, mainFile),
@@ -1024,7 +1054,7 @@ export function buildLocalBinary(
 			normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
 		),
 		objects: [...objects, mainObject].map((object) => object.digest),
-		artifacts: artifacts.linkArgs.map((argument) =>
+		artifacts: runtimeLinkArgs.map((argument) =>
 			argument.startsWith("-")
 				? argument
 				: artifactDigest(new Uint8Array(readFileSync(argument))),
@@ -1145,7 +1175,7 @@ export function buildLocalBinary(
 						? [materializeArchive(input.path)]
 						: libraryLinkArguments(input),
 				);
-				const materializedArtifacts = artifacts.linkArgs.map((argument) =>
+				const materializedArtifacts = runtimeLinkArgs.map((argument) =>
 					argument.startsWith("-") ? argument : materializeArchive(argument),
 				);
 				const materializedLinkArguments = toolArguments(context.toolchain.tools.cc, [

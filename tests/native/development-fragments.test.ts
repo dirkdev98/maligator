@@ -98,6 +98,42 @@ describe("development builds from relocatable fragments", () => {
 		expect(runBinary()).toBe("14 2 42 1 1\n");
 	});
 
+	it.each([false, true])(
+		"loads language components and host installers with engine.eval %s",
+		(evalEnabled) => {
+			const components = path.join(project, `components-${evalEnabled}`);
+			mkdirSync(components);
+			writeFileSync(
+				path.join(components, "maligator.build.ts"),
+				`export default {
+					entry: "main.mjs",
+					outputName: "components",
+					engine: { eval: ${evalEnabled}, regexp: true, temporal: true, intl: { enabled: true } },
+				};\n`,
+			);
+			writeFileSync(
+				path.join(components, "main.mjs"),
+				`import { basename } from "node:path";
+				import { sum } from "tiny-dep";
+				const services = [
+					Intl.Collator, Intl.PluralRules, Intl.NumberFormat, Intl.DateTimeFormat,
+					Intl.ListFormat, Intl.DisplayNames, Intl.RelativeTimeFormat, Intl.Segmenter,
+					Intl.DurationFormat,
+				];
+				console.log(services.every(service => typeof service === "function"));
+				console.log(basename("/orchard/harvest"), sum([1, 2]), /fruit/.test("fruit"), "e\\u0301".normalize() === "\\u00e9");
+				console.log(new Intl.NumberFormat("de-DE").format(1234.5), new Date(0).toTemporalInstant().epochMilliseconds);
+				console.log(new URL("https://example.test/").host);\n`,
+			);
+			expect(build(components)).toMatch(
+				/Development fragments: \d+ reused, \d+ compiled/,
+			);
+			expect(runBinary(components, "components")).toBe(
+				"true\nharvest 3 true true\n1.234,5 0\nexample.test\n",
+			);
+		},
+	);
+
 	it("retains const capture values through a wire-loaded native overlay", () => {
 		writeApplication(
 			[
