@@ -1,8 +1,8 @@
 // Generated from src/platform/catalog.ts; edit the catalog and regenerate.
 /**
- * Read and write files through lazy handles. No surface flag is required. Every
- * operation is asynchronous and runs on the blocking-work pool, so the event loop
- * keeps running while a file is read or written.
+ * Read and write files and work with directories through lazy handles. No surface
+ * flag is required. Filesystem operations run asynchronously on the blocking-work
+ * pool.
  */
 declare module "maligator:fs" {
 	/**
@@ -118,6 +118,88 @@ declare module "maligator:fs" {
 	}
 
 	/**
+	 * Which entries to list. Patterns use `*`, `?` and whole-segment `**` on
+	 * slash-separated paths relative to the directory. A pattern can match zero entries.
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#DirectoryListOptions
+	 */
+	export type DirectoryListOptions = {
+		/** Include paths that match any of these patterns. Defaults to `['**']`. */
+		include?: ReadonlyArray<string>;
+		/** Leave out paths that match any of these patterns, even when included. */
+		exclude?: ReadonlyArray<string>;
+		/** Let wildcards match segments starting with a dot. Defaults to false. */
+		dot?: boolean;
+		/** Visit subdirectories. Defaults to true for `files()` and false for `entries()`. */
+		recursive?: boolean;
+	};
+
+	/**
+	 * An entry returned by `DiskDirectory.entries()`.
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#DirectoryEntry
+	 */
+	export type DirectoryEntry = {
+		/** The final component of the entry's path. */
+		name: string;
+		/** A slash-separated path relative to the listed directory. */
+		path: string;
+		/** The entry's own kind. */
+		kind: "file" | "directory" | "symlink" | "other";
+	};
+
+	/**
+	 * How `DiskDirectory.create()` creates a directory.
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#CreateDirectoryOptions
+	 */
+	export type CreateDirectoryOptions = {
+		/** Create missing parents and succeed if the directory already exists. Defaults to false. */
+		recursive?: boolean;
+		/** Permission bits for created directories before the umask. Defaults to 0o777. */
+		mode?: number;
+	};
+
+	/**
+	 * How `DiskDirectory.delete()` removes a directory.
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#DeleteDirectoryOptions
+	 */
+	export type DeleteDirectoryOptions = {
+		/** Remove the directory and its contents. Defaults to false. */
+		recursive?: boolean;
+	};
+
+	/**
+	 * A directory on disk. Creating a handle does no I/O. Directory walks report
+	 * symbolic links as entries and skip descending into them.
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#DiskDirectory
+	 */
+	export interface DiskDirectory {
+		/** The path as given, or the path of a `file:` URL. */
+		readonly path: string;
+		/** Whether the path resolves, following symbolic links. */
+		exists(): Promise<boolean>;
+		/** Metadata of the entry at `path`. */
+		stat(options?: StatOptions): Promise<FileStat>;
+		/** A lazy file handle at a slash-separated path below the directory. */
+		file(relative: string): DiskFile;
+		/** A lazy directory handle at a slash-separated path below the directory. */
+		directory(relative: string): DiskDirectory;
+		/** A handle if the named entry is a regular file, or undefined if absent or another kind. */
+		get(relative: string): Promise<DiskFile | undefined>;
+		/** Regular files ordered by the code points of their relative paths. Visits subdirectories by default. */
+		files(options?: DirectoryListOptions): Promise<Array<DiskFile>>;
+		/** Entries ordered by the code points of their relative paths. Lists direct children by default. */
+		entries(options?: DirectoryListOptions): Promise<Array<DirectoryEntry>>;
+		/** Create the directory. A non-recursive create rejects if the path already exists. */
+		create(options?: CreateDirectoryOptions): Promise<void>;
+		/** Remove the directory. A non-recursive delete requires an empty directory. */
+		delete(options?: DeleteDirectoryOptions): Promise<void>;
+	}
+
+	/**
 	 * A failed filesystem operation. The message reads like Node's: the code, a
 	 * description, the system call and the paths.
 	 *
@@ -149,6 +231,22 @@ declare module "maligator:fs" {
 	 * @see https://maligator.ddv.tools/api/fs#file
 	 */
 	export const file: (path: FilePath) => DiskFile;
+	/**
+	 * A handle for the directory at `path`. It does no I/O, so the directory need not
+	 * exist yet. Throws a TypeError for an empty path, a path with a null byte or a URL
+	 * that is not a `file:` URL.
+	 *
+	 * @example
+	 * import { directory } from "maligator:fs";
+	 *
+	 * const reports = directory("out/reports");
+	 * await reports.create({ recursive: true });
+	 * await reports.file("latest.txt").write("done\n");
+	 * for (const report of await reports.files({ include: ["*.txt"] })) console.log(report.path);
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#directory
+	 */
+	export const directory: (path: FilePath) => DiskDirectory;
 	/**
 	 * The class of every rejection a failed filesystem operation causes.
 	 *

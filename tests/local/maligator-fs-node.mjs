@@ -175,15 +175,17 @@ class Handle {
 	}
 	async moveTo(destination, options = {}) {
 		const target = toPath(destination);
-		if (
-			!options.overwrite &&
-			(await fs.lstat(target).then(
-				() => true,
-				() => false,
-			))
-		)
-			throw failure("EEXIST", "file already exists", "rename", this.path, target);
-		await node(() => fs.rename(this.path, target), this.path, target);
+		if (options.overwrite) {
+			await node(() => fs.rename(this.path, target), this.path, target);
+			return;
+		}
+		// Node has no exclusive rename. Publish a hard link before removing the source.
+		try {
+			await fs.link(this.path, target);
+		} catch (error) {
+			throw failure(error.code, description(error), "rename", this.path, target);
+		}
+		await node(() => fs.unlink(this.path), this.path, target);
 	}
 }
 
@@ -191,5 +193,95 @@ function file(value) {
 	return new Handle(toPath(value));
 }
 
+function childPath(base, relative) {
+	if (
+		typeof relative !== "string" ||
+		!relative
+			.split("/")
+			.every((segment) => segment && segment !== "." && segment !== "..") ||
+		/[\\\0]/.test(relative)
+	)
+		throw new TypeError("invalid relative path");
+	return path.join(base, relative);
+}
+
+class Directory extends Handle {
+	file(relative) {
+		return file(childPath(this.path, relative));
+	}
+	directory(relative) {
+		return directory(childPath(this.path, relative));
+	}
+	async get(relative) {
+		const handle = this.file(relative);
+		const entry = await fs.lstat(handle.path).catch((error) => {
+			if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
+		});
+		return entry?.isFile() ? handle : undefined;
+	}
+	async entries({ recursive = false, include, exclude = [], dot = false } = {}) {
+		for (const pattern of [...(include ?? []), ...exclude]) childPath(this.path, pattern);
+		const rows = [];
+		const readDirectory = async (directory) => {
+			const children = await node(
+				() => fs.readdir(directory, { withFileTypes: true }),
+				directory,
+			);
+			rows.push(...children);
+			// A recursive Node readdir can follow directory symlinks.
+			if (recursive)
+				for (const row of children) {
+					if (row.isDirectory()) await readDirectory(path.join(directory, row.name));
+				}
+		};
+		await readDirectory(this.path);
+		return rows
+			.map((row) => ({
+				name: row.name,
+				path: path.relative(this.path, path.join(row.parentPath, row.name)),
+				kind: row.isFile()
+					? "file"
+					: row.isDirectory()
+						? "directory"
+						: row.isSymbolicLink()
+							? "symlink"
+							: "other",
+			}))
+			.filter(
+				({ path: relative }) =>
+					(include === undefined
+						? dot || path.matchesGlob(relative, "**")
+						: include.some((pattern) => path.matchesGlob(relative, pattern))) &&
+					!exclude.some((pattern) => path.matchesGlob(relative, pattern)),
+			)
+			.sort((left, right) =>
+				Buffer.compare(Buffer.from(left.path), Buffer.from(right.path)),
+			);
+	}
+	async files({ recursive = true, ...options } = {}) {
+		return (await this.entries({ recursive, ...options }))
+			.filter(({ kind }) => kind === "file")
+			.map(({ path: relative }) => this.file(relative));
+	}
+	async create({ recursive = false, mode } = {}) {
+		checkMode(mode);
+		await node(() => fs.mkdir(this.path, { recursive, mode }), this.path);
+	}
+	async delete({ recursive = false } = {}) {
+		const target = this.path.replace(/(.)\/+$/, "$1");
+		const removeTree = recursive && !["", ".", ".."].includes(path.basename(target));
+		if (removeTree && !(await node(() => fs.lstat(target), this.path)).isDirectory())
+			throw failure("ENOTDIR", "not a directory", "rmdir", this.path);
+		await node(
+			() => (removeTree ? fs.rm(target, { recursive: true }) : fs.rmdir(target)),
+			this.path,
+		);
+	}
+}
+
+function directory(value) {
+	return new Directory(toPath(value));
+}
+
 const url = process.argv.includes("--without-url") ? undefined : URL;
-console.log((await scenario({ file, FileSystemError, URL: url })).join("\n"));
+console.log((await scenario({ directory, file, FileSystemError, URL: url })).join("\n"));

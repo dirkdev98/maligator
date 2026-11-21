@@ -547,6 +547,12 @@ completions.
       can declare assets today; a CommonJS application imports a small ES module
       that declares them.
 
+- [ ] Make the live pattern matcher (runtime/src/runtime/maligator_assets.c), which
+      `embedDirectory` outside `build` and `maligator:fs` `files()` share, agree with
+      the build-time matcher (src/assets.ts) on `?` for non-ASCII names. The live one
+      counts UTF-8 bytes, the build-time one UTF-16 code units; both should match one
+      code point.
+
 ## HTTP serving
 
 - [ ] Add route tables to `maligator:http` once a server API settles in WinterTC or a

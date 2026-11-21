@@ -29,6 +29,7 @@
 #include <sys/vfs.h>
 #if defined(__linux__)
 #include <linux/fs.h>
+#include <sys/syscall.h>
 #endif
 #endif
 
@@ -131,37 +132,7 @@ const MalPosixFsConstant *mal_posix_fs_constants(usize *out_count) {
     return constants;
 }
 
-/* Classify a directory entry by lstat on the joined "dir/name" path (the entry's
- * own type — symlinks are not followed). Used only when the readdir d_type is
- * unavailable or DT_UNKNOWN. Any failure degrades to OTHER. */
-static u32 mal_posix_lstat_type(const char *dir, const char *name) {
-    usize dl = strlen(dir);
-    usize nl = strlen(name);
-    if (dl > SIZE_MAX - nl - 2) {
-        return MAL_POSIX_FT_OTHER;
-    }
-    char *full = malloc(dl + 1 + nl + 1);
-    if (full == nullptr) {
-        return MAL_POSIX_FT_OTHER;
-    }
-    memcpy(full, dir, dl);
-    usize o = dl;
-    if (dl == 0 || dir[dl - 1] != '/') {
-        full[o++] = '/';
-    }
-    memcpy(full + o, name, nl);
-    o += nl;
-    full[o] = '\0';
-    struct stat st;
-    u32 type = MAL_POSIX_FT_OTHER;
-    if (lstat(full, &st) == 0) {
-        type = mal_posix_ft_from_mode(st.st_mode);
-    }
-    free(full);
-    return type;
-}
-
-static u32 mal_posix_dirent_type(const char *dir, const struct dirent *de) {
+static u32 mal_posix_dirent_type(DIR *dir, const struct dirent *de) {
 #ifdef DT_DIR
     switch (de->d_type) {
         case DT_DIR:
@@ -194,7 +165,9 @@ static u32 mal_posix_dirent_type(const char *dir, const struct dirent *de) {
             return MAL_POSIX_FT_OTHER; // fifo / socket / device
     }
 #endif
-    return mal_posix_lstat_type(dir, de->d_name);
+    struct stat st;
+    return fstatat(dirfd(dir), de->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0
+        ? mal_posix_ft_from_mode(st.st_mode) : MAL_POSIX_FT_OTHER;
 }
 
 bool mal_posix_fs_exists(const char *path) {
@@ -648,54 +621,49 @@ void mal_posix_fs_free_dirents(MalPosixDirent *entries, usize count) {
     free(entries);
 }
 
+static bool posix_dot_dirent(const char *name) {
+    return name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'));
+}
+
+static bool posix_append_dirent(MalPosixDirent **entries, usize *capacity, usize count,
+    char *name, u32 type) {
+    if (count == *capacity) {
+        if (*capacity > SIZE_MAX / 2 / sizeof(MalPosixDirent)) return false;
+        usize next = *capacity == 0 ? 16 : *capacity * 2;
+        MalPosixDirent *grown = realloc(*entries, sizeof(MalPosixDirent) * next);
+        if (grown == nullptr) return false;
+        *entries = grown;
+        *capacity = next;
+    }
+    (*entries)[count] = (MalPosixDirent) {.name = name, .type = type};
+    return true;
+}
+
 int mal_posix_fs_readdir(const char *path, MalPosixDirent **out_entries, usize *out_count) {
     DIR *dir = opendir(path);
     if (dir == nullptr) {
         return errno;
     }
-    usize cap = 16;
+    usize cap = 0;
     usize count = 0;
-    MalPosixDirent *arr = malloc(sizeof(MalPosixDirent) * cap);
-    if (arr == nullptr) {
-        closedir(dir);
-        return ENOMEM;
-    }
-    errno = 0; // readdir returns null both at end-of-stream and on error
-    struct dirent *de;
-    while ((de = readdir(dir)) != nullptr) {
-        const char *nm = de->d_name;
-        if (nm[0] == '.' && (nm[1] == '\0' || (nm[1] == '.' && nm[2] == '\0'))) {
-            continue; // skip "." and ".."
+    MalPosixDirent *arr = nullptr;
+    int err = 0;
+    for (;;) {
+        errno = 0; // readdir returns null both at end-of-stream and on error
+        struct dirent *de = readdir(dir);
+        if (de == nullptr) {
+            err = errno;
+            break;
         }
-        if (count == cap) {
-            if (cap > SIZE_MAX / 2 / sizeof(MalPosixDirent)) {
-                mal_posix_fs_free_dirents(arr, count);
-                closedir(dir);
-                return ENOMEM;
-            }
-            cap *= 2;
-            MalPosixDirent *grown = realloc(arr, sizeof(MalPosixDirent) * cap);
-            if (grown == nullptr) {
-                mal_posix_fs_free_dirents(arr, count);
-                closedir(dir);
-                return ENOMEM;
-            }
-            arr = grown;
+        if (posix_dot_dirent(de->d_name)) continue;
+        char *name = strdup(de->d_name);
+        if (name == nullptr || !posix_append_dirent(&arr, &cap, count, name, mal_posix_dirent_type(dir, de))) {
+            free(name);
+            err = ENOMEM;
+            break;
         }
-        usize nlen = strlen(nm);
-        char *name = malloc(nlen + 1);
-        if (name == nullptr) {
-            mal_posix_fs_free_dirents(arr, count);
-            closedir(dir);
-            return ENOMEM;
-        }
-        memcpy(name, nm, nlen + 1);
-        arr[count].name = name;
-        arr[count].type = mal_posix_dirent_type(path, de);
         count++;
-        errno = 0;
     }
-    int err = errno;
     if (closedir(dir) != 0 && err == 0) {
         err = errno;
     }
@@ -704,6 +672,129 @@ int mal_posix_fs_readdir(const char *path, MalPosixDirent **out_entries, usize *
         return err;
     }
     *out_entries = arr;
+    *out_count = count;
+    return 0;
+}
+
+static char *posix_join_path(const char *parent, const char *name) {
+    usize parent_length = strlen(parent);
+    usize name_length = strlen(name);
+    if (parent_length > SIZE_MAX - name_length - 2) return nullptr;
+    bool slash = parent_length != 0 && parent[parent_length - 1] != '/';
+    char *path = malloc(parent_length + slash + name_length + 1);
+    if (path == nullptr) return nullptr;
+    memcpy(path, parent, parent_length);
+    if (slash) path[parent_length++] = '/';
+    memcpy(path + parent_length, name, name_length + 1);
+    return path;
+}
+
+static DIR *posix_open_directory_at(int parent, const char *name) {
+    int fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd == -1) return nullptr;
+    DIR *dir = fdopendir(fd);
+    if (dir == nullptr) {
+        int err = errno;
+        close(fd);
+        errno = err;
+    }
+    return dir;
+}
+
+typedef struct PosixTreeFrame {
+    struct PosixTreeFrame *parent;
+    DIR *dir;
+    char *relative;
+} PosixTreeFrame;
+
+static int posix_compare_dirents(const void *left, const void *right) {
+    return strcmp(((const MalPosixDirent *) left)->name, ((const MalPosixDirent *) right)->name);
+}
+
+int mal_posix_fs_readdir_tree(const char *path, bool recursive,
+    MalPosixTreeFilter filter, const void *context,
+    MalPosixDirent **out_entries, usize *out_count, char **out_failed_path) {
+    *out_failed_path = nullptr;
+    PosixTreeFrame root = {.dir = opendir(path)};
+    if (root.dir == nullptr) return errno;
+    PosixTreeFrame *frame = &root;
+    MalPosixDirent *entries = nullptr;
+    usize capacity = 0;
+    usize count = 0;
+    int err = 0;
+    while (frame != nullptr) {
+        const char *parent = frame->relative == nullptr ? "" : frame->relative;
+        errno = 0;
+        struct dirent *entry = readdir(frame->dir);
+        if (entry == nullptr) {
+            err = errno;
+            if (closedir(frame->dir) != 0 && err == 0) err = errno;
+            frame->dir = nullptr;
+            if (err != 0) break;
+            PosixTreeFrame *finished = frame;
+            frame = frame->parent;
+            if (finished != &root) {
+                free(finished->relative);
+                free(finished);
+            }
+            continue;
+        }
+        if (posix_dot_dirent(entry->d_name)) continue;
+        char *relative = posix_join_path(parent, entry->d_name);
+        if (relative == nullptr) {
+            err = ENOMEM;
+            break;
+        }
+        u32 type = mal_posix_dirent_type(frame->dir, entry);
+        if (recursive && type == MAL_POSIX_FT_DIR) {
+            DIR *child = posix_open_directory_at(dirfd(frame->dir), entry->d_name);
+            if (child == nullptr) {
+                err = errno;
+                *out_failed_path = posix_join_path(path, relative);
+                free(relative);
+                break;
+            }
+            PosixTreeFrame *next = malloc(sizeof(*next));
+            char *directory = strdup(relative);
+            if (next == nullptr || directory == nullptr) {
+                free(next);
+                free(directory);
+                free(relative);
+                closedir(child);
+                err = ENOMEM;
+                break;
+            }
+            *next = (PosixTreeFrame) {.parent = frame, .dir = child, .relative = directory};
+            frame = next;
+        }
+        if (!filter(relative, type, context)) {
+            free(relative);
+            continue;
+        }
+        if (!posix_append_dirent(&entries, &capacity, count, relative, type)) {
+            free(relative);
+            err = ENOMEM;
+            break;
+        }
+        count++;
+    }
+    if (err != 0) {
+        if (*out_failed_path == nullptr && frame != &root)
+            *out_failed_path = posix_join_path(path, frame->relative);
+        while (frame != nullptr) {
+            PosixTreeFrame *parent = frame->parent;
+            if (frame->dir != nullptr) closedir(frame->dir);
+            if (frame != &root) {
+                free(frame->relative);
+                free(frame);
+            }
+            frame = parent;
+        }
+        mal_posix_fs_free_dirents(entries, count);
+        return err;
+    }
+    if (count > 1) qsort(entries, count, sizeof(*entries), posix_compare_dirents);
+    *out_entries = entries;
     *out_count = count;
     return 0;
 }
@@ -763,6 +854,8 @@ int mal_posix_fs_mkdir_mode(const char *path, bool recursive, u32 mode, char **o
                 } else if (err == EEXIST && S_ISDIR(st.st_mode)) {
                     buf[i] = saved;
                     continue;
+                } else if (err == EEXIST && saved == '/') {
+                    err = ENOTDIR;
                 }
                 free(first_created);
                 free(buf);
@@ -923,43 +1016,70 @@ int mal_posix_fs_rename(const char *source, const char *destination) {
     return rename(source, destination) == 0 ? 0 : errno;
 }
 
-static int mal_posix_fs_rm_recursive(const char *path) {
+int mal_posix_fs_rename_exclusive(const char *source, const char *destination) {
+#if defined(__APPLE__) && defined(RENAME_EXCL)
+    if (renamex_np(source, destination, RENAME_EXCL) == 0) return 0;
+#elif defined(__linux__) && defined(SYS_renameat2) && defined(RENAME_NOREPLACE)
+    if (syscall(SYS_renameat2, AT_FDCWD, source, AT_FDCWD, destination, RENAME_NOREPLACE) == 0)
+        return 0;
+#else
+    errno = ENOSYS;
+#endif
+    int error = errno;
+    if (error == ENOTEMPTY) return EEXIST;
+    if (error != ENOSYS && error != EINVAL && error != ENOTSUP && error != EOPNOTSUPP)
+        return error;
     struct stat st;
-    if (lstat(path, &st) != 0) return errno;
-    if (!S_ISDIR(st.st_mode)) return unlink(path) == 0 ? 0 : errno;
+    if (lstat(destination, &st) == 0) return EEXIST;
+    return mal_posix_fs_rename(source, destination);
+}
 
-    DIR *dir = opendir(path);
+static int posix_rm_recursive_at(int parent, const char *path, bool directory_only) {
+    struct stat st;
+    if (fstatat(parent, path, &st, AT_SYMLINK_NOFOLLOW) != 0) return errno;
+    if (!S_ISDIR(st.st_mode)) {
+        if (directory_only) return ENOTDIR;
+        return unlinkat(parent, path, 0) == 0 ? 0 : errno;
+    }
+
+    DIR *dir = posix_open_directory_at(parent, path);
     if (dir == nullptr) return errno;
     int result = 0;
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != nullptr) {
-        if (entry->d_name[0] == '.'
-            && (entry->d_name[1] == '\0'
-                || (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
-            continue;
-        }
-        usize path_len = strlen(path);
-        usize name_len = strlen(entry->d_name);
-        char *child = malloc(path_len + name_len + 2);
-        if (child == nullptr) {
-            result = ENOMEM;
+    while (result == 0) {
+        errno = 0;
+        struct dirent *entry = readdir(dir);
+        if (entry == nullptr) {
+            result = errno;
             break;
         }
-        memcpy(child, path, path_len);
-        child[path_len] = '/';
-        memcpy(child + path_len + 1, entry->d_name, name_len + 1);
-        result = mal_posix_fs_rm_recursive(child);
-        free(child);
-        if (result != 0) break;
+        if (!posix_dot_dirent(entry->d_name))
+            result = posix_rm_recursive_at(dirfd(dir), entry->d_name, false);
     }
     if (closedir(dir) != 0 && result == 0) result = errno;
-    if (result == 0 && rmdir(path) != 0) result = errno;
+    if (result == 0 && unlinkat(parent, path, AT_REMOVEDIR) != 0) result = errno;
     return result;
+}
+
+int mal_posix_fs_rmdir_recursive(const char *path) {
+    usize length = strlen(path);
+    usize end = length;
+    while (end > 1 && path[end - 1] == '/') end--;
+    // A trailing slash makes the kernel follow a terminal symlink before opening it.
+    char *trimmed = end == length ? nullptr : strndup(path, end);
+    if (end != length && trimmed == nullptr) return ENOMEM;
+    const char *target = trimmed == nullptr ? path : trimmed;
+    const char *slash = strrchr(target, '/');
+    const char *name = slash == nullptr ? target : slash + 1;
+    // The kernel refuses these names. Get that error before removing any children.
+    int error = *name == '\0' || posix_dot_dirent(name) ? mal_posix_fs_rmdir(path)
+        : posix_rm_recursive_at(AT_FDCWD, target, true);
+    free(trimmed);
+    return error;
 }
 
 int mal_posix_fs_rm(const char *path, bool recursive, bool force) {
     int result;
-    if (recursive) result = mal_posix_fs_rm_recursive(path);
+    if (recursive) result = posix_rm_recursive_at(AT_FDCWD, path, false);
     else result = unlink(path) == 0 ? 0 : errno;
     return force && result == ENOENT ? 0 : result;
 }

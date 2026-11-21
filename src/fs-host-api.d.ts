@@ -61,4 +61,38 @@ declare module "maligator:internal/fs" {
 		destination: string,
 		overwrite: boolean,
 	) => Promise<void>;
+	/**
+	 * Find matching entries and sort their relative paths by code point. With
+	 * `filesOnly`, return only the paths of regular files.
+	 */
+	export const list: {
+		(
+			path: string,
+			recursive: boolean,
+			filesOnly: true,
+			dot: boolean,
+			include: ReadonlyArray<string> | undefined,
+			exclude: ReadonlyArray<string> | undefined,
+		): Promise<Array<string>>;
+		(
+			path: string,
+			recursive: boolean,
+			filesOnly: false,
+			dot: boolean,
+			include: ReadonlyArray<string> | undefined,
+			exclude: ReadonlyArray<string> | undefined,
+		): Promise<Array<{ path: string; type: number }>>;
+	};
+	/**
+	 * Create a directory with optional parents and permission bits.
+	 */
+	export const createDirectory: (
+		path: string,
+		recursive: boolean,
+		mode: number | undefined,
+	) => Promise<void>;
+	/**
+	 * Remove a directory, with its contents when requested.
+	 */
+	export const removeDirectory: (path: string, recursive: boolean) => Promise<void>;
 }

@@ -5,6 +5,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,6 +47,12 @@ function workingDirectory(): string {
 	chmodSync(path.join(directory, "locked"), 0o555);
 	writeFileSync(path.join(directory, "unreadable.txt"), "secret");
 	chmodSync(path.join(directory, "unreadable.txt"), 0o000);
+	mkdirSync(path.join(directory, "outside"));
+	writeFileSync(path.join(directory, "outside/kept.txt"), "outside");
+	mkdirSync(path.join(directory, "listing"));
+	symlinkSync("../outside", path.join(directory, "listing/link"), "dir");
+	symlinkSync("missing.txt", path.join(directory, "listing/dangling"));
+	execFileSync("mkfifo", [path.join(directory, "listing/pipe")]);
 	return directory;
 }
 
@@ -75,7 +82,7 @@ function expectScenario(
 	expect(tree(cwd)).toEqual(expected.tree);
 }
 
-it("matches Node's fs/promises for reads, writes, metadata, copies, moves and failures", () => {
+it("matches Node's fs/promises for file and directory operations", () => {
 	const expected = reference(["--without-url"]);
 	if (process.getuid?.() !== 0) {
 		expect(expected.stdout).toContain(

@@ -470,6 +470,34 @@ const fsTypes: ReadonlyArray<PlatformTypeDefinition> = [
 		),
 		declaration: "interface",
 	},
+	workerType(
+		"DirectoryListOptions",
+		"{\n /** Include paths that match any of these patterns. Defaults to `['**']`. */\n include?: ReadonlyArray<string>;\n /** Leave out paths that match any of these patterns, even when included. */\n exclude?: ReadonlyArray<string>;\n /** Let wildcards match segments starting with a dot. Defaults to false. */\n dot?: boolean;\n /** Visit subdirectories. Defaults to true for `files()` and false for `entries()`. */\n recursive?: boolean;\n}",
+		"Which entries to list. Patterns use `*`, `?` and whole-segment `**` on slash-separated paths relative to the directory. A pattern can match zero entries.",
+	),
+	workerType(
+		"DirectoryEntry",
+		'{\n /** The final component of the entry\'s path. */\n name: string;\n /** A slash-separated path relative to the listed directory. */\n path: string;\n /** The entry\'s own kind. */\n kind: "file" | "directory" | "symlink" | "other";\n}',
+		"An entry returned by `DiskDirectory.entries()`.",
+	),
+	workerType(
+		"CreateDirectoryOptions",
+		"{\n /** Create missing parents and succeed if the directory already exists. Defaults to false. */\n recursive?: boolean;\n /** Permission bits for created directories before the umask. Defaults to 0o777. */\n mode?: number;\n}",
+		"How `DiskDirectory.create()` creates a directory.",
+	),
+	workerType(
+		"DeleteDirectoryOptions",
+		"{\n /** Remove the directory and its contents. Defaults to false. */\n recursive?: boolean;\n}",
+		"How `DiskDirectory.delete()` removes a directory.",
+	),
+	{
+		...workerType(
+			"DiskDirectory",
+			"{\n /** The path as given, or the path of a `file:` URL. */\n readonly path: string;\n /** Whether the path resolves, following symbolic links. */\n exists(): Promise<boolean>;\n /** Metadata of the entry at `path`. */\n stat(options?: StatOptions): Promise<FileStat>;\n /** A lazy file handle at a slash-separated path below the directory. */\n file(relative: string): DiskFile;\n /** A lazy directory handle at a slash-separated path below the directory. */\n directory(relative: string): DiskDirectory;\n /** A handle if the named entry is a regular file, or undefined if absent or another kind. */\n get(relative: string): Promise<DiskFile | undefined>;\n /** Regular files ordered by the code points of their relative paths. Visits subdirectories by default. */\n files(options?: DirectoryListOptions): Promise<Array<DiskFile>>;\n /** Entries ordered by the code points of their relative paths. Lists direct children by default. */\n entries(options?: DirectoryListOptions): Promise<Array<DirectoryEntry>>;\n /** Create the directory. A non-recursive create rejects if the path already exists. */\n create(options?: CreateDirectoryOptions): Promise<void>;\n /** Remove the directory. A non-recursive delete requires an empty directory. */\n delete(options?: DeleteDirectoryOptions): Promise<void>;\n}",
+			"A directory on disk. Creating a handle does no I/O. Directory walks report symbolic links as entries and skip descending into them.",
+		),
+		declaration: "interface",
+	},
 	{
 		...workerType(
 			"FileSystemError",
@@ -1243,7 +1271,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 		sourceFile: "fs/runtime.ts",
 		declarationFile: "fs-api.d.ts",
 		description:
-			"Read and write files through lazy handles. No surface flag is required. Every operation is asynchronous and runs on the blocking-work pool, so the event loop keeps running while a file is read or written.",
+			"Read and write files and work with directories through lazy handles. No surface flag is required. Filesystem operations run asynchronously on the blocking-work pool.",
 		types: fsTypes,
 		exports: [
 			{
@@ -1253,6 +1281,21 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 					"A handle for the file at `path`. It does no I/O, so the file need not exist yet. Throws a TypeError for an empty path, a path with a null byte or a URL that is not a `file:` URL.",
 				examples: [
 					'import { file } from "maligator:fs";\n\nconst settings = file("settings.json");\nif (await settings.exists()) console.log(await settings.json());\nawait file("out/report.txt").write("done\\n", { atomic: true, createDirectories: true });',
+				],
+				contract: {
+					phase: "runtime",
+					value: "callable",
+					identity: "module",
+					effects: EVERY_EFFECT_SUMMARY,
+				},
+			},
+			{
+				name: "directory",
+				type: { kind: "signature", source: "(path: FilePath) => DiskDirectory" },
+				description:
+					"A handle for the directory at `path`. It does no I/O, so the directory need not exist yet. Throws a TypeError for an empty path, a path with a null byte or a URL that is not a `file:` URL.",
+				examples: [
+					'import { directory } from "maligator:fs";\n\nconst reports = directory("out/reports");\nawait reports.create({ recursive: true });\nawait reports.file("latest.txt").write("done\\n");\nfor (const report of await reports.files({ include: ["*.txt"] })) console.log(report.path);',
 				],
 				contract: {
 					phase: "runtime",
@@ -1328,6 +1371,21 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 				"move",
 				"(source: string, destination: string, overwrite: boolean) => Promise<void>",
 				"Rename a file, copying it across file systems.",
+			),
+			workerExport(
+				"list",
+				"{ (path: string, recursive: boolean, filesOnly: true, dot: boolean, include: ReadonlyArray<string> | undefined, exclude: ReadonlyArray<string> | undefined): Promise<Array<string>>; (path: string, recursive: boolean, filesOnly: false, dot: boolean, include: ReadonlyArray<string> | undefined, exclude: ReadonlyArray<string> | undefined): Promise<Array<{ path: string; type: number }>> }",
+				"Find matching entries and sort their relative paths by code point. With `filesOnly`, return only the paths of regular files.",
+			),
+			workerExport(
+				"createDirectory",
+				"(path: string, recursive: boolean, mode: number | undefined) => Promise<void>",
+				"Create a directory with optional parents and permission bits.",
+			),
+			workerExport(
+				"removeDirectory",
+				"(path: string, recursive: boolean) => Promise<void>",
+				"Remove a directory, with its contents when requested.",
 			),
 		],
 	},

@@ -196,12 +196,21 @@ int mal_posix_fs_lstat(const char *path, MalPosixStat *out);
 
 /* Read the directory at `path` into a fresh malloc'd array (*out_entries,
  * *out_count), skipping "." and "..". Each entry's `type` is the entry's own type
- * (symlinks stay OTHER, like readdir withFileTypes). On success the caller frees
+ * (including symlinks). On success the caller frees
  * the array with mal_posix_fs_free_dirents. Returns 0 or an errno. */
 int mal_posix_fs_readdir(const char *path, MalPosixDirent **out_entries, usize *out_count);
 
 /* Free an array returned by mal_posix_fs_readdir (its owned names + the array). */
 void mal_posix_fs_free_dirents(MalPosixDirent *entries, usize count);
+
+typedef bool (*MalPosixTreeFilter)(const char *relative, u32 type, const void *context);
+
+/* Read filtered entries in UTF-8 order of their relative paths. The root can be a
+ * symlink, but descendants are opened relative to their parent without following
+ * symlinks. Free the result with mal_posix_fs_free_dirents, and free any failed path. */
+int mal_posix_fs_readdir_tree(const char *path, bool recursive,
+    MalPosixTreeFilter filter, const void *context,
+    MalPosixDirent **out_entries, usize *out_count, char **out_failed_path);
 
 /* Create the directory `path` (mode 0777 & umask). With `recursive`, create every
  * missing parent and treat an already-existing directory as success (mkdir -p /
@@ -211,6 +220,7 @@ int mal_posix_fs_mkdir(const char *path, bool recursive);
  * malloc-owned first created prefix in `*out_first_created` when it is non-null. */
 int mal_posix_fs_mkdir_mode(const char *path, bool recursive, u32 mode, char **out_first_created);
 int mal_posix_fs_rmdir(const char *path);
+int mal_posix_fs_rmdir_recursive(const char *path);
 int mal_posix_fs_sleep_milliseconds(i64 milliseconds);
 
 /* The additional synchronous operations used by native compiler caches. String
@@ -225,6 +235,9 @@ int mal_posix_fs_mkdtemp(const char *prefix, char **out_path);
  * real directory, owned by the effective user, with no group/other access. */
 int mal_posix_fs_private_directory(const char *path, bool *out_private);
 int mal_posix_fs_rename(const char *source, const char *destination);
+/* Refuse an existing destination. On file systems without exclusive rename this
+ * falls back to checking the destination before a regular rename. */
+int mal_posix_fs_rename_exclusive(const char *source, const char *destination);
 int mal_posix_fs_rm(const char *path, bool recursive, bool force);
 
 /* The symbolic name of an errno ("ENOENT", ...) for Node-shaped error `.code`.

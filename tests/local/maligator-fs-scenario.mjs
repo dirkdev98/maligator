@@ -7,8 +7,102 @@ function show(value) {
 	return typeof value === "string" ? value : JSON.stringify(value);
 }
 
+async function directoryScenario(directory, URL, log, outcome) {
+	const listing = directory("listing/");
+	const empty = listing.directory("empty");
+	log("directory handles", listing.path, empty.path, await empty.exists());
+	await empty.create({ mode: 0o700 });
+	const status = await empty.stat();
+	log("directory stat", status.isDirectory, status.mode & 0o777);
+	log("empty entries", await empty.entries(), await empty.files());
+	await outcome("directory already exists", () => empty.create());
+	await empty.create({ recursive: true });
+	await empty.delete();
+	log("empty deleted", await empty.exists());
+	await empty.create();
+
+	const deepPath = `${"deep/".repeat(24)}last`;
+	await outcome("missing parent", () => listing.directory(deepPath).create());
+	await listing.directory(deepPath).create({ recursive: true });
+	await listing.directory(".hidden").create();
+	for (const relative of [
+		"top.txt",
+		"\uE000.txt",
+		"\u{10000}.txt",
+		".root.txt",
+		".hidden/hidden.txt",
+		"deep/skip.txt",
+		`${deepPath}/bottom.txt`,
+		"deep/data.json",
+	])
+		await listing.file(relative).write(relative);
+
+	await outcome("recursive delete of dot directory", () =>
+		directory("listing/.").delete({ recursive: true }),
+	);
+	log(
+		"directory get",
+		(await listing.get("top.txt"))?.path,
+		await listing.get("gone.txt"),
+		await listing.get("empty"),
+		await listing.get("link"),
+	);
+	log("directory entries shallow", await listing.entries());
+	log("directory entries recursive", await listing.entries({ recursive: true }));
+	log(
+		"directory entries filtered",
+		await listing.entries({ recursive: true, include: ["deep/?ata.json", "link"] }),
+	);
+	log(
+		"directory files",
+		(await listing.files()).map(({ path }) => path),
+	);
+	log(
+		"directory files shallow",
+		(await listing.files({ recursive: false })).map(({ path }) => path),
+	);
+	log(
+		"directory files filtered",
+		(await listing.files({ include: ["**/*.txt"], exclude: ["**/s?ip.txt"] })).map(
+			({ path }) => path,
+		),
+	);
+	log(
+		"explicit dot path",
+		(await listing.files({ include: [".hidden/*.txt"] })).map(({ path }) => path),
+	);
+	log(
+		"directory files with dots",
+		(await listing.files({ dot: true })).map(({ path }) => path),
+	);
+	log("directory files no match", await listing.files({ include: ["**/*.sql"] }));
+	await outcome("nonrecursive delete of nonempty directory", () => listing.delete());
+	await outcome("invalid child path", () => listing.file("../outside/kept.txt"));
+	await outcome("invalid include", () => listing.files({ include: ["../*.txt"] }));
+	await outcome("listing a regular file", () => listing.directory("top.txt").entries());
+	await outcome("creating beneath a regular file", () =>
+		listing.directory("top.txt/child").create({ recursive: true }),
+	);
+	await outcome("deleting a regular file as a directory", () =>
+		listing.directory("top.txt").delete({ recursive: true }),
+	);
+	await outcome("deleting a directory symlink with trailing slash", () =>
+		directory("listing/link/").delete({ recursive: true }),
+	);
+	await listing.delete({ recursive: true });
+	log(
+		"recursive directory delete",
+		await listing.exists(),
+		await directory("outside").file("kept.txt").text(),
+	);
+	await outcome("listing a missing directory", () => listing.entries());
+	await outcome("deleting a missing directory", () => listing.delete());
+	if (URL !== undefined)
+		log("directory url", directory(new URL("file:///tmp/a%20b")).path);
+}
+
 // `URL` is absent from a program built without the web surface.
-export async function scenario({ file, FileSystemError, URL }) {
+export async function scenario({ directory, file, FileSystemError, URL }) {
 	const lines = [];
 	const log = (...parts) => lines.push(parts.map(show).join(" "));
 	const outcome = async (label, operation) => {
@@ -157,6 +251,11 @@ export async function scenario({ file, FileSystemError, URL }) {
 	await file("copy.txt").moveTo("moved.txt");
 	log("move", await file("copy.txt").exists(), await file("moved.txt").text());
 	await outcome("move onto existing", () => file("moved.txt").moveTo("notes.txt"));
+	log(
+		"existing move destination keeps contents",
+		(await notes.text()).length,
+		await file("moved.txt").exists(),
+	);
 	await file("moved.txt").moveTo(file("notes.txt"), { overwrite: true });
 	log("move overwrite", await file("moved.txt").exists(), await file("notes.txt").text());
 	await outcome("delete", () => file("copy-from-handle.txt").delete());
@@ -175,6 +274,33 @@ export async function scenario({ file, FileSystemError, URL }) {
 	]) {
 		await outcome(label, () => file(value));
 	}
+	await directoryScenario(directory, URL, log, outcome);
+
+	const contenders = Array.from({ length: 24 }, (_, i) => file(`contender-${i}.txt`));
+	await Promise.all(contenders.map((handle) => handle.write(handle.path)));
+	const shared = file("move-winner.txt");
+	const moved = await Promise.all(
+		contenders.map(async (handle) => {
+			try {
+				await handle.moveTo(shared);
+				return handle.path;
+			} catch (error) {
+				if (!(error instanceof FileSystemError) || error.code !== "EEXIST") throw error;
+				return undefined;
+			}
+		}),
+	);
+	const retained = await Promise.all(contenders.map((handle) => handle.exists()));
+	const winners = moved.filter(Boolean);
+	log(
+		"exclusive concurrent moves",
+		winners.length,
+		retained.filter(Boolean).length,
+		(await shared.text()) === winners[0],
+	);
+	await Promise.all(
+		contenders.filter((_, index) => retained[index]).map((handle) => handle.delete()),
+	);
 
 	const large = "0123456789abcdef".repeat(LARGE / 16);
 	log("large write", await file("large.txt").write(large, { atomic: true }));

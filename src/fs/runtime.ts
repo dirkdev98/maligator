@@ -1,5 +1,10 @@
 import type {
 	AppendOptions,
+	CreateDirectoryOptions,
+	DeleteDirectoryOptions,
+	DirectoryEntry,
+	DirectoryListOptions,
+	DiskDirectory,
 	DiskFile,
 	FileData,
 	FilePath,
@@ -10,11 +15,14 @@ import type {
 } from "maligator:fs";
 import {
 	copy,
+	createDirectory,
 	exists,
+	list,
 	mediaType,
 	move,
 	read,
 	remove,
+	removeDirectory,
 	stat,
 	write,
 } from "maligator:internal/fs";
@@ -81,12 +89,15 @@ function failed(failure: unknown): never {
 
 // fileURLToPath's POSIX rules, without reaching the URL class: a program that never
 // passes a URL must not link it.
-function urlPath(url: { protocol: string; hostname: string; pathname: string }): string {
-	if (url.protocol !== "file:") throw new TypeError("file() takes a file: URL");
+function urlPath(
+	url: { protocol: string; hostname: string; pathname: string },
+	handle: string,
+): string {
+	if (url.protocol !== "file:") throw new TypeError(`${handle} takes a file: URL`);
 	if (url.hostname !== "" && url.hostname !== "localhost")
-		throw new TypeError("file() takes a file: URL without a host");
+		throw new TypeError(`${handle} takes a file: URL without a host`);
 	if (url.pathname.toLowerCase().includes("%2f"))
-		throw new TypeError("file() takes a file: URL without encoded slashes");
+		throw new TypeError(`${handle} takes a file: URL without encoded slashes`);
 	return decodeURIComponent(url.pathname);
 }
 
@@ -101,14 +112,14 @@ function isUrl(
 	);
 }
 
-function toPath(value: unknown): string {
+function toPath(value: unknown, handle = "file()"): string {
 	const path =
 		typeof value === "string"
 			? value
 			: value instanceof DiskFileHandle
 				? value.path
 				: isUrl(value)
-					? urlPath(value)
+					? urlPath(value, handle)
 					: undefined;
 	if (path === undefined) throw new TypeError("path must be a string or a file: URL");
 	if (path === "") throw new TypeError("path must not be empty");
@@ -123,7 +134,7 @@ function optionsObject<T extends object>(options: T | undefined, method: string)
 	return options;
 }
 
-function writeMode(mode: unknown, method: string): number | undefined {
+function permissionMode(mode: unknown, method: string): number | undefined {
 	if (mode === undefined) return undefined;
 	if (typeof mode !== "number" || !Number.isInteger(mode) || mode < 0 || mode > 0o7777)
 		throw new TypeError(`${method} option 'mode' must be an integer from 0 to 0o7777`);
@@ -144,6 +155,11 @@ function fileStat(entry: {
 		isSymbolicLink: entry.type === TYPE_SYMLINK,
 		mode: entry.mode,
 	});
+}
+
+function statPath(path: string, options: StatOptions | undefined): Promise<FileStat> {
+	const { followSymlinks } = optionsObject(options, "stat");
+	return stat(path, followSymlinks !== false).then(fileStat);
 }
 
 // Every method settles through here, so invalid arguments reject rather than throw and a
@@ -173,10 +189,7 @@ class DiskFileHandle implements DiskFile {
 	}
 
 	stat(options?: StatOptions): Promise<FileStat> {
-		return settle(() => {
-			const { followSymlinks } = optionsObject(options, "stat");
-			return stat(this.path, followSymlinks !== false).then(fileStat);
-		});
+		return settle(() => statPath(this.path, options));
 	}
 
 	bytes(): Promise<Uint8Array<ArrayBuffer>> {
@@ -197,7 +210,7 @@ class DiskFileHandle implements DiskFile {
 			const flags =
 				(atomic === true ? ATOMIC : 0) |
 				(createDirectories === true ? CREATE_DIRECTORIES : 0);
-			return write(this.path, data, flags, writeMode(mode, "write"));
+			return write(this.path, data, flags, permissionMode(mode, "write"));
 		});
 	}
 
@@ -205,7 +218,7 @@ class DiskFileHandle implements DiskFile {
 		return settle(() => {
 			const { createDirectories, mode } = optionsObject(options, "append");
 			const flags = APPEND | (createDirectories === true ? CREATE_DIRECTORIES : 0);
-			return write(this.path, data, flags, writeMode(mode, "append"));
+			return write(this.path, data, flags, permissionMode(mode, "append"));
 		});
 	}
 
@@ -228,6 +241,152 @@ class DiskFileHandle implements DiskFile {
 	}
 }
 
+function validRelativePath(path: unknown): path is string {
+	return (
+		typeof path === "string" &&
+		!path.includes("\\") &&
+		!path.includes("\0") &&
+		path.split("/").every((part) => part !== "" && part !== "." && part !== "..")
+	);
+}
+
+function joinPath(base: string, relative: string): string {
+	return base.endsWith("/") ? base + relative : `${base}/${relative}`;
+}
+
+function childPath(base: string, relative: string): string {
+	if (!validRelativePath(relative))
+		throw new TypeError("child path must be a slash-separated path below the directory");
+	return joinPath(base, relative);
+}
+
+function patterns(value: ReadonlyArray<string> | undefined, option: string) {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value))
+		throw new TypeError(`${option} must be an array of patterns`);
+	const checked: Array<string> = [];
+	const length = value.length;
+	for (let index = 0; index < length; index++) {
+		const pattern: unknown = value[index];
+		if (!validRelativePath(pattern))
+			throw new TypeError(`${option} patterns must be slash-separated relative paths`);
+		checked.push(pattern);
+	}
+	return checked;
+}
+
+function entryKind(type: number): DirectoryEntry["kind"] {
+	switch (type) {
+		case TYPE_FILE:
+			return "file";
+		case TYPE_DIRECTORY:
+			return "directory";
+		case TYPE_SYMLINK:
+			return "symlink";
+		default:
+			return "other";
+	}
+}
+
+class DiskDirectoryHandle implements DiskDirectory {
+	readonly path: string;
+
+	constructor(path: string) {
+		this.path = path;
+		Object.freeze(this);
+	}
+
+	exists(): Promise<boolean> {
+		return settle(() => exists(this.path));
+	}
+
+	stat(options?: StatOptions): Promise<FileStat> {
+		return settle(() => statPath(this.path, options));
+	}
+
+	file(relative: string): DiskFile {
+		return new DiskFileHandle(childPath(this.path, relative));
+	}
+
+	directory(relative: string): DiskDirectory {
+		return new DiskDirectoryHandle(childPath(this.path, relative));
+	}
+
+	get(relative: string): Promise<DiskFile | undefined> {
+		return settle(async () => {
+			const handle = this.file(relative);
+			let entry;
+			try {
+				entry = await stat(handle.path, false);
+			} catch (failure) {
+				if (
+					isNativeFailure(failure) &&
+					(failure.code === "ENOENT" || failure.code === "ENOTDIR")
+				)
+					return undefined;
+				throw failure;
+			}
+			return entry.type === TYPE_FILE ? handle : undefined;
+		});
+	}
+
+	files(options?: DirectoryListOptions): Promise<Array<DiskFile>> {
+		return settle(async () => {
+			const { recursive, include, exclude, dot } = optionsObject(options, "files");
+			const paths = await list(
+				this.path,
+				recursive !== false,
+				true,
+				dot === true,
+				patterns(include, "include"),
+				patterns(exclude, "exclude"),
+			);
+			return paths.map((path) => new DiskFileHandle(joinPath(this.path, path)));
+		});
+	}
+
+	entries(options?: DirectoryListOptions): Promise<Array<DirectoryEntry>> {
+		return settle(async () => {
+			const { recursive, include, exclude, dot } = optionsObject(options, "entries");
+			const entries = await list(
+				this.path,
+				recursive === true,
+				false,
+				dot === true,
+				patterns(include, "include"),
+				patterns(exclude, "exclude"),
+			);
+			return entries.map(({ path, type }) => ({
+				name: path.slice(path.lastIndexOf("/") + 1),
+				path,
+				kind: entryKind(type),
+			}));
+		});
+	}
+
+	create(options?: CreateDirectoryOptions): Promise<void> {
+		return settle(() => {
+			const { recursive, mode } = optionsObject(options, "create");
+			return createDirectory(
+				this.path,
+				recursive === true,
+				permissionMode(mode, "create"),
+			);
+		});
+	}
+
+	delete(options?: DeleteDirectoryOptions): Promise<void> {
+		return settle(() => {
+			const { recursive } = optionsObject(options, "delete");
+			return removeDirectory(this.path, recursive === true);
+		});
+	}
+}
+
 export function file(path: FilePath): DiskFile {
 	return new DiskFileHandle(toPath(path));
+}
+
+export function directory(path: FilePath): DiskDirectory {
+	return new DiskDirectoryHandle(toPath(path, "directory()"));
 }
