@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -7,6 +7,18 @@ import { buildNativeBinary, runToStdout, STRESS_ENV } from "../../src/test-harne
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-private-shaped-"));
 const fixture = "tests/local/private-shaped.js";
+
+function dictionaryMigrations(binary: string): number {
+	const result = spawnSync(binary, [], {
+		env: { ...process.env, MAL_GC_STATS: "1", MAL_GC_AT_EXIT: "1" },
+		encoding: "utf-8",
+	});
+	expect(result.status, result.stderr).toBe(0);
+	expect(result.stdout).toBe("private-shaped PASS\n");
+	const migrations = result.stderr.match(/object_slot_dictionary_migrations=([0-9]+)/);
+	expect(migrations, result.stderr).not.toBeNull();
+	return Number(migrations![1]);
+}
 
 describe("private-name overflow with public shapes", () => {
 	let compiled: string;
@@ -36,15 +48,17 @@ describe("private-name overflow with public shapes", () => {
 	});
 
 	it("keeps private-only overflow out of public dictionary storage", () => {
-		const result = spawnSync(interpreted, [], {
-			env: { ...process.env, MAL_GC_STATS: "1", MAL_GC_AT_EXIT: "1" },
-			encoding: "utf-8",
+		const baselineFixture = path.join(outDir, "baseline.mjs");
+		writeFileSync(baselineFixture, 'console.log("private-shaped PASS");\n');
+		const baseline = buildNativeBinary({
+			fixture: baselineFixture,
+			name: "private-shaped-baseline",
+			compiled: false,
+			outDir,
 		});
-		expect(result.status).toBe(0);
-		expect(result.stdout).toBe("private-shaped PASS\n");
-		const migrations = Number(
-			result.stderr.match(/object_slot_dictionary_migrations=([0-9]+)/)?.[1] ?? -1,
-		);
-		expect(migrations).toBeLessThan(100);
+		// Runtime eval retains web installers whose startup migrations share this counter.
+		expect(
+			dictionaryMigrations(interpreted) - dictionaryMigrations(baseline),
+		).toBeLessThan(100);
 	});
 });

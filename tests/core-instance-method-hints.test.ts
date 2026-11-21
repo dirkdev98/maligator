@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "../src/compiler/core/core-internal-attributes.ts";
 import { projectCoreSpecializationRecipes } from "../src/compiler/core/core-specialization-recipes.ts";
+import type { BuildModuleGraphOptions } from "../src/compiler/frontend/module-graph.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import { analyzeEntrypoint } from "../src/compiler/pipeline/compile-program-common.ts";
 
@@ -43,27 +44,22 @@ function boxed(box) {
 function compile(
 	name: string,
 	entry: string,
-	prelude?: string,
-	modules: Readonly<Record<string, string>> = {},
-	extension = "mjs",
+	options: {
+		virtualModules?: BuildModuleGraphOptions["virtualModules"];
+		modules?: Readonly<Record<string, string>>;
+		extension?: "mjs" | "cjs";
+	} = {},
 ) {
-	const file = join(directory, `${name}.${extension}`);
+	const file = join(directory, `${name}.${options.extension ?? "mjs"}`);
 	writeFileSync(file, entry);
-	for (const [moduleName, source] of Object.entries(modules))
+	for (const [moduleName, source] of Object.entries(options.modules ?? {}))
 		writeFileSync(join(directory, moduleName), source);
 	const analysis = analyzeEntrypoint(
 		file,
 		{
 			buildConfig: resolveBuildConfig({}),
 			stripTypes: (text) => text,
-			...(prelude === undefined
-				? {}
-				: {
-						entryPrelude: {
-							specifier: "maligator-internal:hint-prelude",
-							source: prelude,
-						},
-					}),
+			virtualModules: options.virtualModules,
 		},
 		(_phase, run) => run(),
 	);
@@ -117,14 +113,16 @@ function compile(
 }
 
 describe("instance method hints", () => {
-	it("keeps toolchain methods from guessing application callees", () => {
-		const { core, named, guessed } = compile(
-			"toolchain",
-			MAP_LOOP,
-			`${BOX}${BOX_LOOP}
+	it("keeps application calls from guessing toolchain methods", () => {
+		const toolchainModule = "maligator:hint-toolchain";
+		const toolchainSource = `${BOX}${BOX_LOOP}
 const box = new Box();
 for (let index = 0; index < 64; index += 3) box.add(index);
-globalThis.__hintedBoxCount = boxed(box);`,
+globalThis.__hintedBoxCount = boxed(box);`;
+		const { core, named, guessed } = compile(
+			"toolchain",
+			`import "${toolchainModule}";${MAP_LOOP}`,
+			{ virtualModules: new Map([[toolchainModule, { source: toolchainSource }]]) },
 		);
 		expect(core.program.function(named("has")).metadata.toolchain).toBe(true);
 		expect(guessed("probe")).toBe(false);
@@ -231,9 +229,7 @@ function run(n) {
 	return acc;
 }
 console.log(run(64));`,
-			undefined,
-			{ "required-util.cjs": exports },
-			"cjs",
+			{ modules: { "required-util.cjs": exports }, extension: "cjs" },
 		);
 		expect(guessed("run")).toBe(true);
 	});

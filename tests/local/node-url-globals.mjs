@@ -23,7 +23,7 @@ checks.push(
 	cloned !== original,
 	cloned.imported !== original.imported,
 	cloned.imported.type === "Identifier" && cloned.imported.name === "value",
-	typeof fetch === "undefined",
+	typeof fetch === "function",
 	typeof Response === "function",
 	typeof EventTarget === "function",
 );

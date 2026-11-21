@@ -13554,8 +13554,15 @@ class NativeInstructionEmission {
 			// IsRegExp is false and %RegExp%.prototype is non-writable and non-configurable.
 			if (pattern?.kind === "string" && flags?.kind === "string") {
 				const value = `known_result_${this.ip}`;
+				const patternValue = this.context.relocation.stringValue(pattern.index);
+				const flagsValue = this.context.relocation.stringValue(flags.index);
+				// The eval compiler overlay is baked independently of the application's engine flags.
 				return [
-					`MalValue ${value} = mal_regexp_create(vm, mal_value_to_string(${this.context.relocation.stringValue(pattern.index)}), mal_value_to_string(${this.context.relocation.stringValue(flags.index)}));`,
+					"#if MAL_REGEXP",
+					`MalValue ${value} = mal_regexp_create(vm, mal_value_to_string(${patternValue}), mal_value_to_string(${flagsValue}));`,
+					"#else",
+					`MalValue ${value} = mal_vm_call_known(vm, ${knownOperationIndex(instruction.operation)!}, ${this.boxedOperand(instruction.thisValue)}, ((MalValue[]){ ${patternValue}, ${flagsValue} }), 2, ${knownOperationFlags(instruction)});`,
+					"#endif",
 					this.throwCheck(),
 					`r${instruction.dst} = ${this.callValue(instruction.dst, value)};`,
 					this.callPoll(),

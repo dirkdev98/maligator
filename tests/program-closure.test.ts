@@ -52,14 +52,12 @@ function certify(
 	options: {
 		config?: ResolvedBuildConfig;
 		environment?: ClosureEnvironment;
-		entryPrelude?: { specifier: string; source: string };
 		entryGoal?: "script";
 	} = {},
 ): ProgramClosureCertificate {
 	const config = options.config ?? resolveBuildConfig({ engine: { eval: false } });
 	const graph = buildModuleGraph(entry, {
 		buildConfig: config,
-		...(options.entryPrelude === undefined ? {} : { entryPrelude: options.entryPrelude }),
 		...(options.entryGoal === undefined ? {} : { entryGoal: options.entryGoal }),
 	});
 	return certifyProgramClosure(graph, config, options.environment ?? wholeProgram);
@@ -280,19 +278,19 @@ describe("closure root enumeration", () => {
 		]);
 	});
 
-	test("names a toolchain prelude as a virtual module root", () => {
-		const entry = project({ "entry.mjs": "export const answer = 42;\n" });
-		const certificate = certify(entry, {
-			entryPrelude: {
-				specifier: "maligator:prelude",
-				source: "globalThis.ready = true;\n",
-			},
+	test("names an explicitly imported virtual module root", () => {
+		const entry = project({ "entry.mjs": 'import "maligator:virtual";\n' });
+		const config = resolveBuildConfig({ engine: { eval: false } });
+		const graph = buildModuleGraph(entry, {
+			buildConfig: config,
+			virtualModules: new Map([["maligator:virtual", { source: "export {};\n" }]]),
 		});
+		const certificate = certifyProgramClosure(graph, config, wholeProgram);
 
-		expect(certificate.roots).toContainEqual({
-			kind: "virtual-module",
-			module: "maligator:prelude",
-		});
+		expect(certificate.roots).toEqual([
+			{ kind: "entry-module", module: entry },
+			{ kind: "virtual-module", module: "maligator:virtual" },
+		]);
 	});
 
 	test("names a resolved host built-in as a host module root", () => {
