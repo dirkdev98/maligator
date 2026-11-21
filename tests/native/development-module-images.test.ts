@@ -1,8 +1,18 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	mkdirSync,
+	mkdtempSync,
+	openSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { preparedNativeEvalConfig } from "../helpers/native-eval-config.ts";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "mal-module-images-")));
@@ -28,21 +38,39 @@ function node(): string {
 }
 
 function run(): { stdout: string; stderr: string } {
-	const result = spawnSync(
-		process.execPath,
-		[
-			path.join(repositoryRoot, "src/index.ts"),
-			"run",
-			"entry.mjs",
-			"--config",
-			"maligator.build.mjs",
-			"--verbose",
-		],
-		{ cwd: directory, encoding: "utf-8", timeout: 300_000 },
-	);
-	expect(result.status, result.stderr || result.stdout).toBe(0);
-	return { stdout: result.stdout, stderr: result.stderr };
+	const stderrPath = path.join(directory, "run.stderr.log");
+	// The verbose build can exceed the child process buffer on a cold runner build.
+	const stderrFile = openSync(stderrPath, "w");
+	let result;
+	try {
+		result = spawnSync(
+			process.execPath,
+			[
+				path.join(repositoryRoot, "src/index.ts"),
+				"run",
+				"entry.mjs",
+				"--config",
+				"maligator.build.mjs",
+				"--verbose",
+			],
+			{
+				cwd: directory,
+				encoding: "utf-8",
+				stdio: ["ignore", "pipe", stderrFile],
+				timeout: 300_000,
+			},
+		);
+	} finally {
+		closeSync(stderrFile);
+	}
+	const stderr = readFileSync(stderrPath, "utf-8");
+	const diagnostic = (stderr || result.stdout || "").slice(-8192);
+	expect(result.error, diagnostic).toBeUndefined();
+	expect(result.status, `${result.signal ?? ""}\n${diagnostic}`.trim()).toBe(0);
+	return { stdout: result.stdout, stderr };
 }
+
+const { primordials, realms } = preparedNativeEvalConfig().engine;
 
 /**
  * Every application module gets its own image here except where evaluation order
@@ -52,7 +80,8 @@ function run(): { stdout: string; stderr: string } {
  */
 const files = {
 	"package.json": `{"type":"module"}\n`,
-	"maligator.build.mjs": "export default { surface: { node: true } };\n",
+	// Use the eval compiler variant native setup has already built.
+	"maligator.build.mjs": `export default {\n\tengine: { primordials: "${primordials}", realms: ${realms} },\n\tsurface: { node: true },\n};\n`,
 	"node_modules/counter/package.json": `{"type":"module","exports":"./index.js"}\n`,
 	"node_modules/counter/index.js":
 		"export let count = 0;\nexport function increment() { return ++count; }\n",
