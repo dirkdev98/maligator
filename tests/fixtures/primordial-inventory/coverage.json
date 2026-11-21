@@ -67727,16 +67727,6 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%mal_host_install_maligator_process:execution%.config\",\"surface\"]",
-			"owner": "%mal_host_install_maligator_process:execution%.config",
-			"ownerPaths": ["%mal_host_install_maligator_process:execution%.config"],
-			"key": "surface",
-			"kind": "data",
-			"operations": [],
-			"task": "N-05",
-			"decisions": []
-		},
-		{
 			"id": "[\"%mal_host_install_maligator_process:execution%.config.engine\",\"eval\"]",
 			"owner": "%mal_host_install_maligator_process:execution%.config.engine",
 			"ownerPaths": ["%mal_host_install_maligator_process:execution%.config.engine"],
@@ -67855,26 +67845,6 @@
 			"owner": "%mal_host_install_maligator_process:execution%.config.modules",
 			"ownerPaths": ["%mal_host_install_maligator_process:execution%.config.modules"],
 			"key": "aliases",
-			"kind": "data",
-			"operations": [],
-			"task": "N-05",
-			"decisions": []
-		},
-		{
-			"id": "[\"%mal_host_install_maligator_process:execution%.config.surface\",\"node\"]",
-			"owner": "%mal_host_install_maligator_process:execution%.config.surface",
-			"ownerPaths": ["%mal_host_install_maligator_process:execution%.config.surface"],
-			"key": "node",
-			"kind": "data",
-			"operations": [],
-			"task": "N-05",
-			"decisions": []
-		},
-		{
-			"id": "[\"%mal_host_install_maligator_process:execution%.config.surface\",\"webPlatform\"]",
-			"owner": "%mal_host_install_maligator_process:execution%.config.surface",
-			"ownerPaths": ["%mal_host_install_maligator_process:execution%.config.surface"],
-			"key": "webPlatform",
 			"kind": "data",
 			"operations": [],
 			"task": "N-05",
@@ -121519,21 +121489,6 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"clearTimeout\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "clearTimeout",
-			"kind": "data",
-			"operations": ["globalThis.clearInterval"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
 			"id": "[\"globalThis\",\"setInterval\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
@@ -121545,6 +121500,21 @@
 			"key": "setInterval",
 			"kind": "data",
 			"operations": ["globalThis.setInterval"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"clearTimeout\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "clearTimeout",
+			"kind": "data",
+			"operations": ["globalThis.clearInterval"],
 			"task": "C-01",
 			"decisions": []
 		},
