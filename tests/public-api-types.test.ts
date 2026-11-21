@@ -106,6 +106,13 @@ import {
 import { execution } from "maligator:process";
 import { createPool, createWorkerUrl, transfer, Worker } from "maligator:workers";
 import type { TaskContext, TransferResult } from "maligator:workers";
+// @ts-expect-error Internal modules are reserved for platform sources.
+import { fetch } from "maligator:internal/fetch";
+// @ts-expect-error Internal modules are reserved for platform sources.
+import { listen } from "maligator:internal/http";
+// @ts-expect-error Internal modules are reserved for platform sources.
+import { parentPort } from "maligator:internal/workers";
+void [fetch, listen, parentPort];
 
 type Jobs = {
 	sum(context: TaskContext, left: number, right: number): number;

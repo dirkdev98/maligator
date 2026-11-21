@@ -4,6 +4,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -16,6 +17,8 @@ import { developmentCompilerInstallation } from "../src/cli-commands.ts";
 import { parseCliArgs } from "../src/cli.ts";
 import { compilerProducerDigestsForRoot } from "../src/compiler-cache-identity.ts";
 import { prepare, prepareTests } from "../src/compiler-service-worker.ts";
+import { SyntaxDiagnostic } from "../src/compiler/frontend/syntax-diagnostic.ts";
+import { deserializeRootFailure } from "../src/compiler/root-compilation.ts";
 import { hostExecutionTarget, resolveExecution } from "../src/platform/execution.ts";
 
 it("observes shared cancellation at the phase boundary before publishing a runtime image", () => {
@@ -42,22 +45,63 @@ it("observes shared cancellation at the phase boundary before publishing a runti
 			cancellation,
 		};
 		const context = { signal: new AbortController().signal, throwIfCancelled() {} };
-		expect(() =>
-			prepare(
-				{
-					...context,
-					report(phase) {
-						if (phase.label === "Compile modules" && phase.state === "started")
-							Atomics.store(flag, 0, 1);
-					},
+		const cancelled = prepare(
+			{
+				...context,
+				report(phase) {
+					if (phase.label === "Compile modules" && phase.state === "started")
+						Atomics.store(flag, 0, 1);
 				},
-				request,
-			),
-		).toThrow("Compiler task cancelled");
+			},
+			request,
+		);
+		if (cancelled.ok) throw new Error("expected cancelled build");
+		expect(deserializeRootFailure(cancelled.failure)).toMatchObject({
+			message: "Compiler task cancelled",
+		});
 		expect(existsSync(output)).toBe(false);
 		Atomics.store(flag, 0, 0);
-		expect(prepare(context, request).serializedPath).toBe(output);
+		const completed = prepare(context, request);
+		if (!completed.ok) throw deserializeRootFailure(completed.failure);
+		expect(completed.value.serializedPath).toBe(output);
 		expect(readFileSync(output).subarray(0, 4).toString()).toBe("MALW");
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+it("keeps the syntax diagnostic when a compiler worker reply is cloned", () => {
+	const directory = mkdtempSync(path.join(tmpdir(), "mal-compiler-diagnostic-"));
+	try {
+		const entry = path.join(directory, "entry.mts");
+		const source = "const answer = ;";
+		writeFileSync(entry, source);
+		const command = parseCliArgs(["build", entry, "--serialize", "entry.malw"]);
+		if (command.kind !== "build") throw new Error("expected build command");
+		const reply = structuredClone(
+			prepare(
+				{ signal: new AbortController().signal, throwIfCancelled() {} },
+				{
+					command,
+					profileDirectory: directory,
+					installation: developmentCompilerInstallation(path.resolve("src")),
+					producerDigests: compilerProducerDigestsForRoot(
+						path.resolve("src"),
+						maligatorCacheDirectory(),
+					),
+					compact: true,
+					invalidatedPaths: [],
+					invalidateAll: false,
+				},
+			),
+		);
+		if (reply.ok) throw new Error("expected syntax error");
+		const error = deserializeRootFailure(reply.failure);
+		expect(error).toBeInstanceOf(SyntaxDiagnostic);
+		expect(error).toMatchObject({
+			location: { file: realpathSync(entry), line: 1, column: 16 },
+			sourceLine: source,
+		});
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
@@ -117,8 +161,9 @@ test("islands", () => alpha + beta);
 				},
 			},
 		);
-		expect(prepared.phases.workerMs).toBeGreaterThan(0);
-		expect(prepared.artifactMisses).toBeGreaterThanOrEqual(2);
+		if (!prepared.ok) throw deserializeRootFailure(prepared.failure);
+		expect(prepared.value.phases.workerMs).toBeGreaterThan(0);
+		expect(prepared.value.artifactMisses).toBeGreaterThanOrEqual(2);
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}

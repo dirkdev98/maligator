@@ -10,6 +10,8 @@ import type {
 	CompilationRequest,
 	CompilerService,
 } from "./compiler-service.ts";
+import { deserializeRootFailure } from "./compiler/root-compilation.ts";
+import type { RootFailure } from "./compiler/root-compilation.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 
 export interface NodeCompilationJob {
@@ -21,7 +23,7 @@ export interface NodeCompilationJob {
 
 type NodeCompilationResult =
 	| { id: number; ok: true; value: CompilerResultMessage }
-	| { id: number; ok: false; error: unknown };
+	| { id: number; ok: false; failure: RootFailure };
 
 export type NodeCompilationReply =
 	| NodeCompilationResult
@@ -48,15 +50,18 @@ export function createNodeCompilerService(
 	let closing = false;
 	let closed: Promise<void> | undefined;
 	let resolveClosed: (() => void) | undefined;
-	const settle = (pending: PendingCompilation, reply: NodeCompilationResult) => {
+	const settle = (
+		pending: PendingCompilation,
+		result: { value: CompilerResultMessage } | { error: unknown },
+	) => {
 		pending.signal?.removeEventListener("abort", pending.abort);
 		const directory = pending.job.request.profileDirectory;
 		let outcome: { value: BuildCommandResult } | { error: unknown };
 		try {
 			if (pending.signal?.aborted) throw pending.signal.reason;
 			if (pending.observerFailure !== undefined) throw pending.observerFailure.error;
-			if (!reply.ok) throw reply.error;
-			outcome = { value: restoreCompilerResult(reply.value, directory) };
+			if ("error" in result) throw result.error;
+			outcome = { value: restoreCompilerResult(result.value, directory) };
 		} catch (error) {
 			outcome = { error };
 		}
@@ -73,7 +78,7 @@ export function createNodeCompilerService(
 		while (queued.length > 0) {
 			const next = queued.shift()!;
 			if (next.signal?.aborted) {
-				settle(next, { id: next.job.id, ok: false, error: next.signal.reason });
+				settle(next, { error: next.signal.reason });
 				continue;
 			}
 			active = next;
@@ -82,7 +87,7 @@ export function createNodeCompilerService(
 				return;
 			} catch (error) {
 				active = undefined;
-				settle(next, { id: next.job.id, ok: false, error });
+				settle(next, { error });
 			}
 		}
 		if (closing) {
@@ -112,18 +117,21 @@ export function createNodeCompilerService(
 			}
 			const previous = active;
 			active = undefined;
-			settle(previous, reply);
+			settle(
+				previous,
+				reply.ok ? reply : { error: deserializeRootFailure(reply.failure) },
+			);
 			dispatch();
 		});
 		current.on("exit", (code) => {
 			worker = undefined;
 			const error = failure ?? new Error(`compiler worker exited with code ${code}`);
 			if (active !== undefined) {
-				settle(active, { id: active.job.id, ok: false, error });
+				settle(active, { error });
 				active = undefined;
 			}
 			for (const pending of queued.splice(0)) {
-				settle(pending, { id: pending.job.id, ok: false, error });
+				settle(pending, { error });
 			}
 			if (closing) resolveClosed?.();
 		});

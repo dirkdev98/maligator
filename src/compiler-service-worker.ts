@@ -9,6 +9,7 @@ import type {
 	TestCompilationRequest,
 } from "./compiler-service.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
+import { serializeRootFailure } from "./compiler/root-compilation.ts";
 import { FrontendCompilationSession } from "./frontend-cache.ts";
 import { prepareTestApplication } from "./testing/prepare.ts";
 
@@ -69,14 +70,19 @@ function compilationContext(
 
 export function prepare(context: CompilationTaskContext, request: CompilationRequest) {
 	try {
-		return publishCompilerResult(
-			prepareCommand(
-				request.command,
-				compilationContext(context, request),
-				request.compact,
+		return {
+			ok: true as const,
+			value: publishCompilerResult(
+				prepareCommand(
+					request.command,
+					compilationContext(context, request),
+					request.compact,
+				),
+				request.profileDirectory,
 			),
-			request.profileDirectory,
-		);
+		};
+	} catch (error) {
+		return { ok: false as const, failure: serializeRootFailure(error) };
 	} finally {
 		request.progress?.close();
 	}
@@ -87,7 +93,12 @@ export function prepareTests(
 	request: TestCompilationRequest,
 ) {
 	try {
-		return prepareTestApplication(request.input, compilationContext(context, request));
+		return {
+			ok: true as const,
+			value: prepareTestApplication(request.input, compilationContext(context, request)),
+		};
+	} catch (error) {
+		return { ok: false as const, failure: serializeRootFailure(error) };
 	} finally {
 		request.progress?.close();
 	}

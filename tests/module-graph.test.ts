@@ -686,12 +686,14 @@ module.exports = probe();
 `,
 	);
 	const graph = buildModuleGraph(path.join(root, "optional-require.cjs"));
-	expect(graph.modules.get(graph.entry)!.dependencies).toContainEqual({
-		specifier: "missing-optional-package",
-		kind: "require",
-		resolvedPath: null,
-		catchableMissing: true,
-	});
+	expect(graph.modules.get(graph.entry)!.dependencies).toContainEqual(
+		expect.objectContaining({
+			specifier: "missing-optional-package",
+			kind: "require",
+			resolvedPath: null,
+			catchableMissing: true,
+		}),
+	);
 });
 
 test("rejects missing requires not dynamically protected by a catch", () => {
@@ -1104,8 +1106,16 @@ test("resolves supported node:* imports to virtual host modules (no disk read) w
 	// The importer's edges carry the canonical specifier as the resolved identity.
 	const entry = graph.modules.get(path.join(root, "node-host.mjs"))!;
 	expect(entry.dependencies).toEqual([
-		{ specifier: "node:path", kind: "import", resolvedPath: "node:path" },
-		{ specifier: "node:fs", kind: "import", resolvedPath: "node:fs" },
+		expect.objectContaining({
+			specifier: "node:path",
+			kind: "import",
+			resolvedPath: "node:path",
+		}),
+		expect.objectContaining({
+			specifier: "node:fs",
+			kind: "import",
+			resolvedPath: "node:fs",
+		}),
 	]);
 
 	// Virtual records keyed by specifier, marked host, with no on-disk source.

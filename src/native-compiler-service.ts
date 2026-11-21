@@ -14,6 +14,7 @@ import type { CompilerProducerStage } from "./compiler-cache-identity.ts";
 import { restoreCompilerResult } from "./compiler-profile-result.ts";
 import type { prepare, prepareTests } from "./compiler-service-worker.ts";
 import type { CompilationPhase, CompilerService } from "./compiler-service.ts";
+import { deserializeRootFailure } from "./compiler/root-compilation.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 
 type CompilerWorker = { prepare: typeof prepare; prepareTests: typeof prepareTests };
@@ -131,8 +132,9 @@ export function createNativeCompilerService(
 				);
 				const failure = progress?.drain();
 				cancellation.check();
+				if (!result.ok) throw deserializeRootFailure(result.failure);
 				if (failure !== undefined) throw failure.error;
-				return restoreCompilerResult(result, profileDirectory);
+				return restoreCompilerResult(result.value, profileDirectory);
 			} catch (error) {
 				progress?.drain();
 				cancellation.check();
@@ -170,8 +172,9 @@ export function createNativeCompilerService(
 				);
 				const failure = progress?.drain();
 				cancellation.check();
+				if (!result.ok) throw deserializeRootFailure(result.failure);
 				if (failure !== undefined) throw failure.error;
-				return result;
+				return result.value;
 			} catch (error) {
 				progress?.drain();
 				cancellation.check();

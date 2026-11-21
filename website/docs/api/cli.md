@@ -1,4 +1,6 @@
-Run commands from your application project root. Relative entries, config paths, and assets resolve there. No ancestor search occurs. Unknown options, missing values, and unexpected positional arguments are errors. Use `maligator --help` and `maligator --version` to inspect the installed CLI.
+Run commands from your application project root. Relative entries, config paths, and assets resolve there. No ancestor search occurs. Unknown options, missing values, and unexpected positional arguments are errors.
+
+Use `maligator --help` to list commands and `maligator --version` to see the installed version. Put `--help` after a command or subcommand to see its options and defaults, as in `maligator build --help` or `maligator ffi check --help`.
 
 ## init {#init}
 
@@ -41,7 +43,7 @@ Artifacts contain `artifact.json`, `LICENSE`, `SHA256SUMS`, and `bin/<name>`, pl
 ## run {#run}
 
 ```shell
-maligator run [entry] [--config path] [--profile[=compiler]] [-- args...]
+maligator run [entry] [--config path] [--profile[=compiler]] [--verbose] [-- args...]
 ```
 
 Compiles a portable development image and runs a fresh VM. For supported profiles with Intl disabled, the distributed CLI supplies the specialized runtime without a local native toolchain. Forwards arguments after `--` without parsing them and propagates the application's exit status or terminating signal. A config is optional when an explicit entry supplies the program.
@@ -50,7 +52,7 @@ Compiles a portable development image and runs a fresh VM. For supported profile
 
 ```shell
 maligator dev [entry] [--config path] [--status]
-  [--profile[=compiler]] [-- args...]
+  [--profile[=compiler]] [--verbose] [-- args...]
 ```
 
 Watches dependencies and replaces the application after successful rebuilds. A compile error preserves the watcher and last good application. Every replacement has fresh module instances. `--status` streams generations and resource states. Ctrl+C joins active work. See [Develop an application](/guides/development).
@@ -61,7 +63,7 @@ Watches dependencies and replaces the application after successful rebuilds. A c
 maligator test [path ...] [--config path] [--run name]
   [--shuffle [seed]] [--repeat count] [--timeout milliseconds] [--bail]
   [--isolate] [--compile-concurrency count] [--concurrency count]
-  [--watch] [--watch-failed] [--status] [--profile[=compiler]]
+  [--watch] [--watch-failed] [--status] [--profile[=compiler]] [--verbose]
 ```
 
 Discovers `*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}`. Ordinary runs interpret a development image. Selected files share one application isolate by default; results are not cached. A failing test produces a nonzero exit status.
@@ -80,7 +82,7 @@ Discovers `*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}`. Ordinary runs i
 | `--watch-failed`        | Off. Requires watch; restrict unchanged SIGHUP reruns to failed files.               |
 | `--status`              | Off. Requires watch; stream generation and resource states.                          |
 
-`--isolate` cannot combine with profiling. See [Test an application](/guides/testing) for a complete suite.
+`--verbose` shows compiler diagnostics during profiling. `--isolate` cannot combine with profiling. See [Test an application](/guides/testing) for a complete suite.
 
 ## --profile {#profile}
 

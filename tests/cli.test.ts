@@ -23,7 +23,7 @@ import {
 } from "../src/cli-commands.ts";
 import type { BuildCommandResult } from "../src/cli-commands.ts";
 import { BUILD_CONFIG_NAME, detectInitialEntry, initProject } from "../src/cli-init.ts";
-import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "../src/cli.ts";
+import { CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "../src/cli.ts";
 import type { CompilationOptions } from "../src/compiler-service.ts";
 import {
 	stripCompactTypes,
@@ -522,10 +522,26 @@ describe("command shell", { timeout: 30_000 }, () => {
 			expect(embeds(sources, file)).toBe(true);
 	});
 
-	it("prints help without entering the compiler", () => {
+	it("lists commands in the help overview", () => {
 		const result = invokeCli(["--help"]);
 		expect(result.status).toBe(0);
-		expect(result.stdout.trim()).toBe(CLI_HELP);
+		expect(result.stdout).toMatch(/^Usage: maligator <command>/);
+		expect(result.stdout).toMatch(/^\s+build\b/m);
+		expect(result.stdout).toMatch(/^\s+test\b/m);
+		expect(result.stderr).toBe("");
+	});
+
+	it.each([
+		{ command: ["build"], option: "--artifact", otherOption: "--watch-failed" },
+		{ command: ["test"], option: "--timeout", otherOption: "--core-report" },
+		{ command: ["cache", "prune"], option: "--dry-run", otherOption: "--all" },
+		{ command: ["ffi", "types"], option: "--out", otherOption: "--update" },
+	])("shows options specific to $command in help", ({ command, option, otherOption }) => {
+		const result = invokeCli([...command, "--help"]);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(`Usage: maligator ${command.join(" ")}`);
+		expect(result.stdout).toContain(option);
+		expect(result.stdout).not.toContain(otherOption);
 		expect(result.stderr).toBe("");
 	});
 

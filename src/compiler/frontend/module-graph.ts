@@ -2,6 +2,7 @@ import { hash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isParseError } from "meriyah";
 import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "../../build-config.ts";
 import type { PlatformData, PlatformModule } from "../../platform/catalog.ts";
@@ -80,6 +81,7 @@ export interface ModuleDependency {
 	/** The raw specifier as written, or null for a computed `import(expr)`. */
 	specifier: string | null;
 	kind: ModuleDependencyKind;
+	specifierLocation?: ESTree.SourceLocation;
 	/**
 	 * Set when the import reads its target as data. Module identity includes the type,
 	 * so a file imported as text and as JavaScript yields two modules.
@@ -638,8 +640,15 @@ export function buildModuleGraph(
 				if (error instanceof SyntaxError) {
 					throw new SyntaxDiagnostic(
 						filePath === entry ? "parse" : "resolution",
-						error.message,
-						{ cause: error },
+						jsonDiagnosticMessage(error.message),
+						{
+							cause: error,
+							...diagnosticSite(
+								sourcePath ?? filePath,
+								source,
+								jsonErrorPosition(source, error.message),
+							),
+						},
 					);
 				}
 				throw error;
@@ -785,11 +794,31 @@ export function buildModuleGraph(
 						})()
 					: recordObservations(memoKey !== undefined, () => {
 							const sourcePath = catalogSources.get(filePath)?.sourcePath;
-							let parseSource = baseParseSource(filePath, source, goal, sourcePath);
-							parseSource =
+							const baseSource = baseParseSource(filePath, source, goal, sourcePath);
+							const parseSource =
 								options.transformSource?.files.has(filePath) === true
-									? options.transformSource.transform(parseSource, filePath)
-									: parseSource;
+									? options.transformSource.transform(baseSource, filePath)
+									: baseSource;
+							const diagnosticFor = (loc: ESTree.SourceLocation | undefined) => {
+								if (loc === undefined) return undefined;
+								const sourceStart =
+									parseSource === baseSource ? 0 : parseSource.indexOf(baseSource);
+								if (sourceStart < 0) return undefined;
+								const prefix = positionAtOffset(parseSource, sourceStart);
+								const originalPosition = (position: ESTree.Position) => ({
+									line: position.line - prefix.line + 1,
+									column:
+										position.line === prefix.line
+											? position.column - prefix.column
+											: position.column,
+								});
+								return diagnosticSite(
+									sourcePath ?? filePath,
+									source,
+									originalPosition(loc.start),
+									originalPosition(loc.end),
+								);
+							};
 							const strict =
 								goal !== "cjs" &&
 								(filePath === entry ? (options.entryStrict ?? true) : true);
@@ -799,10 +828,11 @@ export function buildModuleGraph(
 									return { parsed, dependencies: extractDependencies(parsed.ast, goal) };
 								} catch (error) {
 									if (error instanceof SyntaxError) {
+										const parseError = isParseError(error) ? error : undefined;
 										throw new SyntaxDiagnostic(
 											filePath === entry ? "parse" : "resolution",
-											error.message,
-											{ cause: error },
+											parseError?.description ?? error.message,
+											{ cause: error, ...diagnosticFor(parseError?.loc) },
 										);
 									}
 									throw error;
@@ -819,6 +849,15 @@ export function buildModuleGraph(
 										? resolveImportMeta(dependency.specifier, sourcePath ?? filePath, ctx)
 										: [],
 							);
+							const resolutionError = (
+								dependency: Pick<ModuleDependency, "specifierLocation">,
+								message: string,
+							) =>
+								new SyntaxDiagnostic(
+									"resolution",
+									message,
+									diagnosticFor(dependency.specifierLocation),
+								);
 							const dependencies = parsedModule.dependencies.flatMap(
 								(dependency): Array<ModuleDependency> => {
 									if (dependency.kind === "import-meta-resolve") return [];
@@ -854,8 +893,8 @@ export function buildModuleGraph(
 										aliasedSpecifier === "maligator:http" &&
 										options.buildConfig?.surface.webPlatform === false
 									)
-										throw new SyntaxDiagnostic(
-											"resolution",
+										throw resolutionError(
+											dependency,
 											`Cannot import '${dependency.specifier}' from ${filePath}: it requires surface.webPlatform`,
 										);
 									if (
@@ -863,15 +902,15 @@ export function buildModuleGraph(
 										lookupPlatformModule(filePath)?.kind !== "source" &&
 										!catalogFiles.owned.has(filePath)
 									) {
-										throw new SyntaxDiagnostic(
-											"resolution",
+										throw resolutionError(
+											dependency,
 											`Internal module '${dependency.specifier}' is reserved for platform sources`,
 										);
 									}
 									const rejectDataImport = () => {
 										if (dependency.importType === undefined) return;
-										throw new SyntaxDiagnostic(
-											"resolution",
+										throw resolutionError(
+											dependency,
 											`Cannot import '${dependency.specifier}' as ${dependency.importType}: only files hold data modules`,
 										);
 									};
@@ -897,8 +936,8 @@ export function buildModuleGraph(
 												)) ||
 											(dependency.kind === "require" && !sourceBuiltin)
 										) {
-											throw new SyntaxDiagnostic(
-												"resolution",
+											throw resolutionError(
+												dependency,
 												`Toolchain module '${dependency.specifier}' supports static ESM imports only`,
 											);
 										}
@@ -939,9 +978,9 @@ export function buildModuleGraph(
 										}
 										// A static import that cannot resolve fails the graph — the
 										// resolution-phase SyntaxError of 16.2.1.6.1.
-										throw new SyntaxDiagnostic(
-											"resolution",
-											`Cannot resolve '${dependency.specifier}' from ${filePath}: ${resolved.error}`,
+										throw resolutionError(
+											dependency,
+											`Cannot resolve '${dependency.specifier}': ${resolved.error}`,
 										);
 									}
 
@@ -1288,6 +1327,116 @@ function parseWithGoal(source: string, goal: ModuleGoal, strict: boolean) {
 	return parsed;
 }
 
+function positionAtOffset(source: string, offset: number): ESTree.Position {
+	const lines = source.slice(0, offset).split(/\r\n|[\n\r\u2028\u2029]/);
+	return { line: lines.length, column: lines.at(-1)!.length };
+}
+
+function diagnosticSite(
+	file: string,
+	source: string,
+	start: ESTree.Position,
+	end?: ESTree.Position,
+) {
+	const sourceLine = source.split(/\r\n|[\n\r\u2028\u2029]/)[start.line - 1];
+	if (sourceLine === undefined || start.column < 0) return undefined;
+	return {
+		location: {
+			file,
+			line: start.line,
+			column: start.column + 1,
+			...(end === undefined ? {} : { end: { line: end.line, column: end.column + 1 } }),
+		},
+		sourceLine,
+	};
+}
+
+function jsonDiagnosticMessage(message: string): string {
+	if (!message.endsWith("is not valid JSON"))
+		return message.replace(JSON_ERROR_OFFSET, "");
+	const token = /^Unexpected token ('[\s\S]*?'), /.exec(message)?.[1];
+	return token === undefined ? "Invalid JSON" : `Unexpected token ${token} in JSON`;
+}
+
+const JSON_ERROR_OFFSET = / at position (\d+)(?: \(line \d+ column \d+\))?$/;
+
+function jsonErrorPosition(source: string, message: string): ESTree.Position {
+	const position = JSON_ERROR_OFFSET.exec(message)?.[1];
+	const offset =
+		position !== undefined
+			? Number(position)
+			: message === "Unexpected end of JSON input"
+				? source.length
+				: locateInvalidJsonToken(source);
+	return positionAtOffset(source, offset);
+}
+
+// JSON.parse validates the file. Its unexpected-token errors can omit the offset,
+// so locate the first invalid token on the failure path, without building a value.
+function locateInvalidJsonToken(source: string): number {
+	type Expected =
+		| "value"
+		| "first-element"
+		| "first-key"
+		| "key"
+		| ":"
+		| "array-end"
+		| "object-end";
+	const expected: Array<Expected> = ["value"];
+	// oxlint-disable-next-line no-control-regex -- JSON strings require control characters to be escaped.
+	const string = /"(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"/y;
+	const number = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+	const whitespace = /[ \t\n\r]*/y;
+	let offset = 0;
+	while (expected.length > 0) {
+		whitespace.lastIndex = offset;
+		whitespace.exec(source);
+		offset = whitespace.lastIndex;
+		const next = source[offset];
+		const state = expected.pop();
+		if (state === "first-key" || state === "key") {
+			if (state === "first-key" && next === "}") {
+				offset++;
+			} else {
+				string.lastIndex = offset;
+				if (!string.test(source)) return offset;
+				offset = string.lastIndex;
+				expected.push("object-end", "value", ":");
+			}
+		} else if (state === ":") {
+			if (next !== ":") return offset;
+			offset++;
+		} else if (state === "array-end" || state === "object-end") {
+			const array = state === "array-end";
+			if (next === ",") expected.push(state, array ? "value" : "key");
+			else if (next !== (array ? "]" : "}")) return offset;
+			offset++;
+		} else if (state === "first-element" && next === "]") {
+			offset++;
+		} else {
+			if (state === "first-element") expected.push("array-end");
+			if (next === "[" || next === "{") {
+				expected.push(next === "[" ? "first-element" : "first-key");
+				offset++;
+			} else if (next === "t" || next === "f" || next === "n") {
+				const word = next === "t" ? "true" : next === "f" ? "false" : "null";
+				for (const character of word) {
+					if (source[offset] !== character) return offset;
+					offset++;
+				}
+			} else {
+				const token = next === '"' ? string : number;
+				token.lastIndex = offset;
+				if (!token.test(source)) return offset;
+				offset = token.lastIndex;
+			}
+		}
+	}
+	whitespace.lastIndex = offset;
+	whitespace.exec(source);
+	return whitespace.lastIndex;
+}
+
 /**
  * A module's automatic goal follows Node: extension, then the nearest `package.json`
  * "type". A `.js` file under `type: module` is a module; otherwise it is
@@ -1372,14 +1521,20 @@ function dataModuleSource(bytes: Buffer, importType: ModuleImportType): string {
 }
 
 type ExtractedDependency =
-	| {
-			specifier: string | null;
-			kind: ModuleDependencyKind;
-			catchableMissing?: true;
-			importType?: ModuleImportType;
-	  }
+	| Omit<ModuleDependency, "resolvedPath">
 	// Asks for a resolution only; nothing is loaded for it.
 	| { specifier: string; kind: "import-meta-resolve" };
+
+function dependencySpecifier(node: ESTree.Node | undefined): {
+	specifier: string | null;
+	specifierLocation?: ESTree.SourceLocation;
+} {
+	const specifier = literalString(node);
+	const specifierLocation = node?.loc ?? undefined;
+	return specifier !== null && specifierLocation !== undefined
+		? { specifier, specifierLocation }
+		: { specifier };
+}
 
 function requireErrorIsCatchable(
 	call: ESTree.CallExpression,
@@ -1430,7 +1585,7 @@ function extractDependencies(
 		switch (node.type) {
 			case "ImportDeclaration":
 				dependencies.push({
-					specifier: literalString(node.source),
+					...dependencySpecifier(node.source),
 					kind: node.phase === "defer" ? "deferred-import" : "import",
 					...importTypeField(node),
 				});
@@ -1439,7 +1594,7 @@ function extractDependencies(
 				// Only re-exports carry a source (`export { x } from "y"`).
 				if (node.source) {
 					dependencies.push({
-						specifier: literalString(node.source),
+						...dependencySpecifier(node.source),
 						kind: "export",
 						...importTypeField(node),
 					});
@@ -1447,7 +1602,7 @@ function extractDependencies(
 				break;
 			case "ExportAllDeclaration":
 				dependencies.push({
-					specifier: literalString(node.source),
+					...dependencySpecifier(node.source),
 					kind: "export",
 					...importTypeField(node),
 				});
@@ -1455,7 +1610,7 @@ function extractDependencies(
 			case "ImportExpression": {
 				const importType = dynamicImportType(node.options);
 				dependencies.push({
-					specifier: literalString(node.source),
+					...dependencySpecifier(node.source),
 					kind: "dynamic",
 					...(importType === undefined ? {} : { importType }),
 				});
@@ -1480,7 +1635,7 @@ function extractDependencies(
 					node.arguments.length === 1
 				) {
 					dependencies.push({
-						specifier: literalString(node.arguments[0]),
+						...dependencySpecifier(node.arguments[0]),
 						kind: "require",
 						...(requireErrorIsCatchable(node, parents)
 							? { catchableMissing: true as const }
@@ -1493,7 +1648,7 @@ function extractDependencies(
 				) {
 					const direct = requireCallees.get(callee.name) === "direct";
 					dependencies.push({
-						specifier: literalString(node.arguments[0]),
+						...dependencySpecifier(node.arguments[0]),
 						kind: "require",
 						// A forwarder may pass along values that are not specifiers at all, so
 						// a missing target there throws at runtime, as Node's lookup would.
@@ -1794,7 +1949,11 @@ function resolveSpecifier(
 		const host = lookupHostModule(specifier);
 		return host === undefined
 			? {
-					error: `unknown Maligator module '${specifier}' (supported native modules: ${PLATFORM_MODULES.map((module) => module.id).join(", ")})`,
+					error: `unknown Maligator module '${specifier}' (supported native modules: ${PLATFORM_MODULES.filter(
+						(module) => !module.internal,
+					)
+						.map((module) => module.id)
+						.join(", ")})`,
 					hard: true,
 				}
 			: { host };

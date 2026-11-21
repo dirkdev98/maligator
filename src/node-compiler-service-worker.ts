@@ -2,6 +2,7 @@ import { parentPort } from "node:worker_threads";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 import { compilerProducerDigestsForRoot } from "./compiler-cache-identity.ts";
 import { prepare } from "./compiler-service-worker.ts";
+import { serializeRootFailure } from "./compiler/root-compilation.ts";
 import type {
 	NodeCompilationJob,
 	NodeCompilationReply,
@@ -25,7 +26,7 @@ parentPort!.on("message", (job: NodeCompilationJob | { close: true }) => {
 	};
 	let reply: NodeCompilationReply;
 	try {
-		const value = prepare(
+		const result = prepare(
 			{
 				signal: controller.signal,
 				throwIfCancelled,
@@ -39,9 +40,9 @@ parentPort!.on("message", (job: NodeCompilationJob | { close: true }) => {
 			},
 		);
 		throwIfCancelled();
-		reply = { id: job.id, ok: true, value };
+		reply = { id: job.id, ...result };
 	} catch (error) {
-		reply = { id: job.id, ok: false, error };
+		reply = { id: job.id, ok: false, failure: serializeRootFailure(error) };
 	}
 	parentPort!.postMessage(reply);
 });

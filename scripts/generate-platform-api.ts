@@ -13,7 +13,7 @@ export async function generatePlatformApi(check = false): Promise<void> {
 			path.resolve("src/platform-api.d.ts"),
 			[
 				"// Generated from src/platform/catalog.ts; edit the catalog and regenerate.",
-				...PLATFORM_MODULES.map(
+				...PLATFORM_MODULES.filter((module) => !module.internal).map(
 					(module) => `import ${JSON.stringify(`./${module.declarationFile}`)};`,
 				),
 				"",

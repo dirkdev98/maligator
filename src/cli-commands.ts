@@ -62,7 +62,7 @@ import { maligatorCacheDirectory, MaligatorCacheRootError } from "./cache-root.t
 import { BUILD_CONFIG_NAME, initProject, InitError } from "./cli-init.ts";
 import { executeBinary, executeBinaryReported } from "./cli-run.ts";
 import type { RunOutcome } from "./cli-run.ts";
-import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
+import { CliUsageError, MALIGATOR_VERSION, formatCliHelp, parseCliArgs } from "./cli.ts";
 import type {
 	BuildCommand,
 	CacheCommand,
@@ -80,6 +80,10 @@ import {
 	stripCompactTypes,
 } from "./compiler/frontend/compact-type-strip.ts";
 import type { EmbedDeclaration } from "./compiler/frontend/embed-declarations.ts";
+import {
+	formatSyntaxDiagnostic,
+	SyntaxDiagnostic,
+} from "./compiler/frontend/syntax-diagnostic.ts";
 import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
@@ -370,6 +374,13 @@ function commandError(message: string, exitCode = 1): never {
 
 function writeStderr(message: string): void {
 	process.stderr.write(`${message}\n`);
+}
+
+function renderSyntaxDiagnostic(error: SyntaxDiagnostic): string {
+	return formatSyntaxDiagnostic(
+		error,
+		process.stderr.isTTY === true && process.env.NO_COLOR === undefined,
+	);
 }
 
 type ProfileCommand = BuildCommand | RunCommand | DevCommand | TestCommand;
@@ -1924,6 +1935,15 @@ export async function devCommand(
 			return true;
 		},
 		failed(error) {
+			if (error instanceof SyntaxDiagnostic && error.location !== undefined) {
+				writeStderr(renderSyntaxDiagnostic(error));
+				writeStderr(
+					child === undefined
+						? "Rebuild failed. Waiting for changes."
+						: "Rebuild failed. Last successful application is still running.",
+				);
+				return;
+			}
 			writeStderr(
 				`Rebuild failed: ${error instanceof Error ? error.message : String(error)}${
 					child === undefined
@@ -2568,7 +2588,7 @@ export async function runCli(
 				command.verbose === true) ||
 			(command.kind === "doctor" && command.verbose);
 		if (command.kind === "help") {
-			log.info(CLI_HELP);
+			log.info(formatCliHelp(command.command));
 			return;
 		}
 		if (command.kind === "version") {
@@ -2685,6 +2705,7 @@ export async function runCli(
 						? await executeTestCommand(command, context, config)
 						: await executeIsolatedTests(command, context, config, developmentRunner);
 			} catch (error) {
+				if (error instanceof SyntaxDiagnostic) throw error;
 				commandError(`error: ${error instanceof Error ? error.message : String(error)}`);
 			}
 			if (result.exitCode !== 0) exitCode = result.exitCode;
@@ -2699,6 +2720,10 @@ export async function runCli(
 			exitCode = error.exitCode;
 		} else if (error instanceof MaligatorCacheRootError) {
 			writeStderr(`error: ${error.message}`);
+			exitCode = 1;
+		} else if (error instanceof SyntaxDiagnostic && error.location !== undefined) {
+			writeStderr(renderSyntaxDiagnostic(error));
+			if (verbose && error.stack !== undefined) writeStderr(error.stack);
 			exitCode = 1;
 		} else {
 			if (verbose && error instanceof Error && error.stack !== undefined) {
