@@ -2,7 +2,7 @@ Aborting a running task signals cancellation. The worker stays occupied until th
 
 ## Pass a cancellation signal
 
-Use `tasks.ts` from [Run tasks in workers](/guides/workers), then create:
+Use `tasks.ts` from [Run tasks in a pool](/guides/workers) with this example.
 
 {{example:cancel.ts}}
 

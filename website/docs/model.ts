@@ -28,119 +28,205 @@ export interface ReferenceSymbol {
 	guides?: Array<string>;
 }
 
-export const guides = [
-	[
-		"getting-started",
-		"Getting started",
-		"Install Maligator and run your first application.",
-	],
-	[
-		"development",
-		"Develop an application",
-		"Watch source files and restart after successful builds.",
-	],
-	["typescript", "Use TypeScript", "Load declarations and check your application."],
-	[
-		"testing",
-		"Test an application",
-		"Write assertions, filter tests, and watch changes.",
-	],
-	[
-		"c-libraries",
-		"Call C libraries",
-		"Bind a C library through its headers and call it.",
-	],
-	[
-		"c-libraries/pointers",
-		"Pointers and buffers",
-		"Pass buffers, arrays, text, and outputs to C.",
-	],
-	[
-		"c-libraries/resources",
-		"C resources",
-		"Wrap C allocations and caller-owned state in handles.",
-	],
-	[
-		"c-libraries/callbacks",
-		"Callbacks",
-		"Pass JavaScript functions to C and call the functions it returns.",
-	],
-	[
-		"c-libraries/values",
-		"Globals, unions, and variadics",
-		"Read C globals, select union members, and call variadic functions.",
-	],
-	[
-		"workers",
-		"Run tasks in workers",
-		"Create a persistent pool with isolated module state.",
-	],
-	[
-		"workers/messages",
-		"Messages and transfers",
-		"Choose what to copy, move, or share between isolates.",
-	],
-	[
-		"workers/cancellation",
-		"Cancel work and shut down",
-		"Signal cancellation and release worker resources.",
-	],
-	[
-		"build-configuration",
-		"Configure a build",
-		"Choose engine features, host surfaces, and module aliases.",
-	],
-	[
-		"assets",
-		"Embed files",
-		"Declare files the build embeds and read them while you develop.",
-	],
-	["http", "Serve HTTP", "Start a listener and return responses."],
-	[
-		"native-toolchain",
-		"Set up native builds",
-		"Install the C and Rust toolchains and cross-build for another target.",
-	],
-	[
-		"production",
-		"Build for production",
-		"Create a native executable or deployable artifact.",
-	],
-	["profiling", "Profile an application", "Capture CPU, allocation, and GC evidence."],
-	[
-		"troubleshooting",
-		"Troubleshooting",
-		"Diagnose configuration, build, and runtime failures.",
-	],
-	[
-		"contributing",
-		"Develop Maligator",
-		"Set up the compiler repository and select focused checks.",
-	],
-] as const;
+type DocEntry = readonly [slug: string, title: string, summary: string];
 
-export const references = [
-	[
-		"build",
-		"Build configuration",
-		"defineBuild, engine features, surfaces, and aliases.",
-	],
-	[
-		"application",
-		"Application lifecycle",
-		"Notify the development supervisor when startup is complete.",
-	],
-	[
-		"process",
-		"Execution context",
-		"Read immutable compile-time command and configuration values.",
-	],
-	["workers", "Workers", "Pools, isolated modules, channels, and transfers."],
-	["assets", "Embedded assets", "Declare files and directory trees the build embeds."],
-	["http", "HTTP", "Serve Fetch API handlers and embedded assets."],
-	["test", "Test API", "Tests, suites, hooks, and assertions."],
-	["cli", "CLI", "Commands, flags, defaults, and output paths."],
-] as const;
+export interface DocGroup {
+	label: string;
+	entries: ReadonlyArray<DocEntry>;
+	groups?: ReadonlyArray<DocGroup>;
+}
+
+export const guideGroups: ReadonlyArray<DocGroup> = [
+	{
+		label: "Start",
+		entries: [
+			[
+				"getting-started",
+				"Getting started",
+				"Install Maligator and run your first application.",
+			],
+			["typescript", "Use TypeScript", "Load declarations and check your application."],
+			[
+				"development",
+				"Develop an application",
+				"Watch source files and restart after successful builds.",
+			],
+			[
+				"testing",
+				"Test an application",
+				"Write assertions, filter tests, and watch changes.",
+			],
+		],
+	},
+	{
+		label: "Build and ship",
+		entries: [
+			[
+				"build-configuration",
+				"Configure a build",
+				"Choose engine features, host surfaces, and module aliases.",
+			],
+			[
+				"assets",
+				"Embed files",
+				"Declare files the build embeds and read them while you develop.",
+			],
+			[
+				"native-toolchain",
+				"Set up native builds",
+				"Install the C and Rust toolchains and cross-build for another target.",
+			],
+			[
+				"production",
+				"Build for production",
+				"Create a native executable or deployable artifact.",
+			],
+		],
+	},
+	{
+		label: "Platform",
+		entries: [["http", "Serve HTTP", "Start a listener and return responses."]],
+		groups: [
+			{
+				label: "Workers",
+				entries: [
+					[
+						"workers",
+						"Run tasks in a pool",
+						"Create a worker pool with isolated module state.",
+					],
+					[
+						"workers/messages",
+						"Messages and transfers",
+						"Choose what to copy, move, or share between isolates.",
+					],
+					[
+						"workers/cancellation",
+						"Cancel work and shut down",
+						"Signal cancellation and release worker resources.",
+					],
+				],
+			},
+		],
+	},
+	{
+		label: "C libraries",
+		entries: [
+			[
+				"c-libraries",
+				"Bind a library",
+				"Declare a C library through its headers and call it.",
+			],
+			[
+				"c-libraries/pointers",
+				"Pointers and buffers",
+				"Pass buffers, arrays, text, and outputs to C.",
+			],
+			[
+				"c-libraries/resources",
+				"Resources",
+				"Wrap C allocations and caller-owned state in handles.",
+			],
+			[
+				"c-libraries/callbacks",
+				"Callbacks",
+				"Pass JavaScript functions to C and call the functions it returns.",
+			],
+			[
+				"c-libraries/values",
+				"Globals, unions and variadics",
+				"Read C globals, select union members, and call variadic functions.",
+			],
+		],
+	},
+	{
+		label: "Diagnose",
+		entries: [
+			[
+				"profiling",
+				"Profile an application",
+				"Capture CPU, allocation, and GC evidence.",
+			],
+			[
+				"troubleshooting",
+				"Troubleshooting",
+				"Diagnose configuration, build, and runtime failures.",
+			],
+		],
+	},
+];
+
+export const contributorGuide: DocEntry = [
+	"contributing",
+	"Develop Maligator",
+	"Set up the compiler repository and select focused checks.",
+];
+
+export const referenceGroups: ReadonlyArray<DocGroup> = [
+	{
+		label: "Configuration",
+		entries: [
+			["build", "Build configuration", "Choose engine features, surfaces, and aliases."],
+			["library", "C library contracts", "Declare how to find and bind a C library."],
+			["cli", "CLI", "Look up commands, flags, defaults, and output paths."],
+		],
+	},
+	{
+		label: "Modules",
+		entries: [
+			[
+				"application",
+				"maligator:application",
+				"Notify the development supervisor when startup is complete.",
+			],
+			[
+				"workers",
+				"maligator:workers",
+				"Run isolated modules and exchange messages with them.",
+			],
+			[
+				"assets",
+				"maligator:assets",
+				"Declare files and directory trees the build embeds.",
+			],
+			["http", "maligator:http", "Serve Fetch API handlers and embedded assets."],
+			["test", "maligator:test", "Write tests with suites, hooks, and assertions."],
+			[
+				"process",
+				"maligator:process",
+				"Read immutable compile-time command and configuration values.",
+			],
+		],
+	},
+];
+
+function groupEntries(groups: ReadonlyArray<DocGroup>): Array<DocEntry> {
+	return groups.flatMap(({ entries, groups = [] }) => [
+		...entries,
+		...groupEntries(groups),
+	]);
+}
+
+function groupIndex(groups: ReadonlyArray<DocGroup>, prefix: string, depth = 2): string {
+	return groups
+		.map(({ label, entries, groups = [] }) =>
+			[
+				`${"#".repeat(depth)} ${label}`,
+				entries
+					.map(
+						([slug, title, summary]) => `- [${title}](${prefix}/${slug})  \n  ${summary}`,
+					)
+					.join("\n"),
+				groupIndex(groups, prefix, depth + 1),
+			]
+				.filter(Boolean)
+				.join("\n\n"),
+		)
+		.join("\n\n");
+}
+
+export const guides = groupEntries(guideGroups);
+const references = groupEntries(referenceGroups);
 
 function fenced(code: string, language = "typescript", filename = ""): string {
 	return `\n\`\`\`${language}${filename ? ` ${filename}` : ""}\n${code.trim()}\n\`\`\`\n`;
@@ -341,32 +427,49 @@ function platformReference(id: string, symbols: Array<ReferenceSymbol>): string 
 	return markdown;
 }
 
-function publicReference(symbols: Array<ReferenceSymbol>): string {
-	const kind = "build";
+const publicReferenceNames = {
+	build: new Set([
+		"defineBuild",
+		"MaligatorBuildConfig",
+		"MaligatorIntlFeature",
+		"MaligatorFfiLibrary",
+	]),
+	library: new Set([
+		"defineLibrary",
+		"MaligatorLibraryContract",
+		"MaligatorFfiFind",
+		"MaligatorFfiHandle",
+		"MaligatorFfiTypeFacts",
+		"MaligatorFfiFieldFacts",
+		"MaligatorFfiEvidence",
+		"MaligatorFfiCount",
+		"MaligatorFfiShape",
+		"MaligatorFfiValueFacts",
+		"MaligatorFfiCallable",
+		"MaligatorFfiCallback",
+		"MaligatorFfiCallbackResult",
+		"MaligatorFfiFunctionFacts",
+		"MaligatorFfiVariant",
+		"MaligatorFfiGlobalValueFacts",
+		"MaligatorFfiGlobalFacts",
+	]),
+};
+
+function publicReference(
+	kind: keyof typeof publicReferenceNames,
+	symbols: Array<ReferenceSymbol>,
+): string {
 	const source = ts.createSourceFile(
 		"public-api.d.ts",
 		readFileSync("src/public-api.d.ts", "utf8"),
 		ts.ScriptTarget.Latest,
 		true,
 	);
-	const buildNames = new Set([
-		"MaligatorIntlFeature",
-		"MaligatorFfiFind",
-		"MaligatorFfiLibrary",
-		"MaligatorFfiHandle",
-		"MaligatorFfiEvidence",
-		"MaligatorFfiCount",
-		"MaligatorFfiCallback",
-		"MaligatorFfiTypeFacts",
-		"MaligatorFfiValueFacts",
-		"MaligatorFfiFunctionFacts",
-		"MaligatorFfiGlobalFacts",
-		"MaligatorFfiVariant",
-		"MaligatorLibraryContract",
-		"MaligatorBuildConfig",
-		"defineBuild",
-		"defineLibrary",
-	]);
+	const url = `/api/${kind}`;
+	const availability =
+		kind === "library"
+			? "Trusted project code in a C library contract."
+			: "Trusted project code in a build configuration.";
 	let markdown = readFileSync(`website/docs/api/${kind}.md`, "utf8");
 	for (const node of source.statements) {
 		if (
@@ -379,11 +482,9 @@ function publicReference(symbols: Array<ReferenceSymbol>): string {
 		)
 			continue;
 		const name = node.name.text;
-		if (!buildNames.has(name)) continue;
-		const url = `/api/${kind}`;
+		if (!publicReferenceNames[kind].has(name)) continue;
 		const docs = comments(node, source);
 		const signature = node.getText(source);
-		const availability = "Build configuration; trusted project code.";
 		symbols.push({
 			name,
 			kind: ts.isFunctionDeclaration(node) ? "export" : "type",
@@ -420,32 +521,34 @@ export function documentationModel(): {
 	symbols: Array<ReferenceSymbol>;
 } {
 	const symbols: Array<ReferenceSymbol> = [];
-	const pages: Array<DocPage> = guides.map(([slug, title, summary]) => {
-		const source = `website/docs/guides/${slug}.md`;
-		return {
-			url: `/guides/${slug}`,
-			title,
-			summary,
-			layer: "Guides",
-			source,
-			markdown: expandExamples(readFileSync(source, "utf8")),
-		};
-	});
+	const pages: Array<DocPage> = [...guides, contributorGuide].map(
+		([slug, title, summary]) => {
+			const source = `website/docs/guides/${slug}.md`;
+			return {
+				url: `/guides/${slug}`,
+				title,
+				summary,
+				layer: slug === contributorGuide[0] ? "Documentation" : "Guides",
+				source,
+				markdown: expandExamples(readFileSync(source, "utf8")),
+			};
+		},
+	);
 	for (const [id, title, summary] of references) {
+		const configReference = id === "build" || id === "library";
 		pages.push({
 			url: `/api/${id}`,
 			title,
 			summary,
 			layer: "API reference",
-			source:
-				id === "build"
-					? "src/public-api.d.ts"
-					: id === "cli"
-						? "src/cli.ts"
-						: "src/platform/catalog.ts",
+			source: configReference
+				? "src/public-api.d.ts"
+				: id === "cli"
+					? "src/cli.ts"
+					: "src/platform/catalog.ts",
 			markdown: expandExamples(
-				id === "build"
-					? publicReference(symbols)
+				configReference
+					? publicReference(id, symbols)
 					: id === "cli"
 						? readFileSync("website/docs/api/cli.md", "utf8")
 						: platformReference(id, symbols),
@@ -467,14 +570,8 @@ export function documentationModel(): {
 				url === "/docs"
 					? readFileSync("website/docs/index.md", "utf8")
 					: url === "/guides"
-						? guides
-								.map(
-									([slug, name, summary]) => `- [${name}](/guides/${slug}) — ${summary}`,
-								)
-								.join("\n")
-						: references
-								.map(([slug, name, summary]) => `- [${name}](/api/${slug}) — ${summary}`)
-								.join("\n"),
+						? `${groupIndex(guideGroups, "/guides")}\n\n---\n\nTo work on the compiler itself, follow [${contributorGuide[1]}](/guides/${contributorGuide[0]}).`
+						: groupIndex(referenceGroups, "/api"),
 		});
 	}
 	const cli = pages.find((page) => page.url === "/api/cli")!;
@@ -516,12 +613,19 @@ export function documentationModel(): {
 		);
 	}
 	const apiIndex = pages.find((page) => page.url === "/api")!;
+	apiIndex.markdown += "\n\n## Symbols";
 	apiIndex.markdown += references
 		.map(([slug, title]) => {
 			const entries = symbols.filter((symbol) => symbol.url.startsWith(`/api/${slug}#`));
 			const primary = entries.filter((symbol) => symbol.kind !== "member");
 			const members = entries.filter((symbol) => symbol.kind === "member");
-			return `\n\n## ${title}\n\n${primary.map((symbol) => `- [\`${symbol.name}\`](${symbol.url}) — ${symbol.description}`).join("\n")}\n\n${members.length ? `<details><summary>Members and options (${members.length})</summary>\n\n${members.map((symbol) => `- [\`${symbol.name}\`](${symbol.url})`).join("\n")}\n\n</details>` : ""}`;
+			const descriptions = primary.map(({ name, url, description }) => {
+				const link = `- [\`${name}\`](${url})`;
+				return description
+					? `${link}  \n  ${description.trim().replaceAll("\n", "\n  ")}`
+					: link;
+			});
+			return `\n\n### ${title}\n\n${descriptions.join("\n")}\n\n${members.length ? `<details><summary>Members and options</summary>\n\n${members.map((symbol) => `- [\`${symbol.name}\`](${symbol.url})`).join("\n")}\n\n</details>` : ""}`;
 		})
 		.join("");
 	for (const page of pages) {

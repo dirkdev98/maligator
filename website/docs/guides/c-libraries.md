@@ -27,7 +27,7 @@ double stats_mean(const double *values, int count) {
 }
 ```
 
-Declare the library in a contract and name the contract in the build config:
+Declare the library with [`defineLibrary`](/api/library#defineLibrary) and name its contract in the build config.
 
 ```typescript native/stats.ffi.ts
 import { defineLibrary } from "@maligator/cli";
@@ -243,18 +243,18 @@ callbacks, and asynchronous calls use private input copies.
 Headers give types, not intent. A fact in the contract states the rest, and a fact
 that does not fit its declaration fails the build:
 
-| What the C code does                                    | Fact                              | Guide                                                        |
-| ------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------ |
-| Writes through a pointer, or reads and writes it        | `out`, `inout`                    | [Pointers and buffers](/guides/c-libraries/pointers)         |
-| Takes a buffer or array with a count                    | `bytes`, `array` with `length`    | [Pointers and buffers](/guides/c-libraries/pointers)         |
-| Takes or returns text                                   | `string`                          | [Pointers and buffers](/guides/c-libraries/pointers)         |
-| Selects what a `void *` points at with another argument | `pointee` with `variants`         | [Pointers and buffers](/guides/c-libraries/pointers)         |
-| Allocates a resource the program must release           | `handle` with `destroy`           | [C resources](/guides/c-libraries/resources)                 |
-| Keeps owning a pointer it returns                       | `borrowed`                        | [C resources](/guides/c-libraries/resources)                 |
-| Fills state the caller allocates                        | `handle` with `storage: "caller"` | [C resources](/guides/c-libraries/resources)                 |
-| Calls back into the program                             | `callback`                        | [Callbacks](/guides/c-libraries/callbacks)                   |
-| Returns a function pointer                              | `callable`                        | [Callbacks](/guides/c-libraries/callbacks)                   |
-| Exposes globals, unions, or variadic functions          | `globals`, `shape`, `variants`    | [Globals, unions, and variadics](/guides/c-libraries/values) |
+| What the C code does                                    | Fact                              | Guide                                                       |
+| ------------------------------------------------------- | --------------------------------- | ----------------------------------------------------------- |
+| Writes through a pointer, or reads and writes it        | `out`, `inout`                    | [Pointers and buffers](/guides/c-libraries/pointers)        |
+| Takes a buffer or array with a count                    | `bytes`, `array` with `length`    | [Pointers and buffers](/guides/c-libraries/pointers)        |
+| Takes or returns text                                   | `string`                          | [Pointers and buffers](/guides/c-libraries/pointers)        |
+| Selects what a `void *` points at with another argument | `pointee` with `variants`         | [Pointers and buffers](/guides/c-libraries/pointers)        |
+| Allocates a resource the program must release           | `handle` with `destroy`           | [Resources](/guides/c-libraries/resources)                  |
+| Keeps owning a pointer it returns                       | `borrowed`                        | [Resources](/guides/c-libraries/resources)                  |
+| Fills state the caller allocates                        | `handle` with `storage: "caller"` | [Resources](/guides/c-libraries/resources)                  |
+| Calls back into the program                             | `callback`                        | [Callbacks](/guides/c-libraries/callbacks)                  |
+| Returns a function pointer                              | `callable`                        | [Callbacks](/guides/c-libraries/callbacks)                  |
+| Exposes globals, unions, or variadic functions          | `globals`, `shape`, `variants`    | [Globals, unions and variadics](/guides/c-libraries/values) |
 
 Facts go on a function's `params`, keyed by C name or 1-based position, on its
 `returns`, or on a type under `types`.

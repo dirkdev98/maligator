@@ -18,7 +18,7 @@ export type MaligatorIntlFeature =
  * How the build finds a C library's headers and binaries. Relative paths resolve
  * against the file that declares them. Name at least `pkgConfig`, `libraries`, or
  * `sources`; the other fields add to what those provide.
- * @see https://maligator.ddv.tools/api/build#MaligatorFfiFind
+ * @see https://maligator.ddv.tools/api/library#MaligatorFfiFind
  */
 export interface MaligatorFfiFind {
 	/** A pkg-config package that supplies include directories and linker inputs. */
@@ -56,7 +56,7 @@ export interface MaligatorFfiLibrary {
  * A C resource or caller-owned state struct. Its handles
  * close on `[Symbol.dispose]()` or when passed to `destroy`; a closed handle throws
  * instead of reaching C.
- * @see https://maligator.ddv.tools/api/build#MaligatorFfiHandle
+ * @see https://maligator.ddv.tools/api/library#MaligatorFfiHandle
  */
 export interface MaligatorFfiHandle {
 	/** Export a factory named by the type fact. It allocates aligned,
@@ -465,7 +465,7 @@ export interface MaligatorFfiGlobalFacts {
 /**
  * Facts about a C library that hold wherever it is installed. The binding comes from
  * the headers plus these facts.
- * @see https://maligator.ddv.tools/api/build#MaligatorLibraryContract
+ * @see https://maligator.ddv.tools/api/library#MaligatorLibraryContract
  */
 export interface MaligatorLibraryContract {
 	/** Headers to bind, spelled as C code includes them, such as `raylib.h` or `curl/curl.h`. */
@@ -561,7 +561,7 @@ export declare function defineBuild<const Config extends MaligatorBuildConfig>(
  * @example
  * import { defineLibrary } from "@maligator/cli";
  * export default defineLibrary({ headers: ["raylib.h"], find: [{ pkgConfig: "raylib" }] });
- * @see https://maligator.ddv.tools/api/build#defineLibrary
+ * @see https://maligator.ddv.tools/api/library#defineLibrary
  */
 export declare function defineLibrary<const Contract extends MaligatorLibraryContract>(
 	contract: Contract,

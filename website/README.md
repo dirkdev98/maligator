@@ -2,9 +2,14 @@
 
 Guide sources live in `docs/guides/`; reference introductions live in `docs/api/`.
 `src/platform/catalog.ts` owns public module signatures and contracts.
-`src/public-api.d.ts` owns build configuration and globals. `docs/model.ts` extracts
-those declarations and combines them with the authored content. Keep defaults beside
-fields; the documentation tests compare declared build defaults with runtime resolution.
+`src/public-api.d.ts` owns build configuration and C library contract declarations.
+`docs/model.ts` extracts those declarations and combines them with the authored
+content. Keep defaults beside fields so the documentation tests can compare them
+with runtime resolution.
+
+Set guide and API groups, page titles, and summaries in `docs/model.ts`. Group order
+sets the order in the sidebar, indexes, and `llms.txt`. Previous and Next follow
+the application guides across groups.
 
 `docs/render.ts`, `docs/docs.css`, and `docs/client.ts` own the documentation shell,
 code blocks, navigation, and search interface. `templates/shared.css` owns the palette;

@@ -1,4 +1,4 @@
-Start with [Run tasks in workers](/guides/workers) for a complete pool example. Use [messages and transfers](/guides/workers/messages) for buffer ownership, or [cancellation and shutdown](/guides/workers/cancellation) for lifecycle handling.
+Start with [Run tasks in a pool](/guides/workers) for a complete example. See [Messages and transfers](/guides/workers/messages) for buffer ownership and [Cancel work and shut down](/guides/workers/cancellation) for lifecycle handling.
 
 Task submissions can throw before admission: invalid task names or argument tuples (`TypeError`), a closed pool (`InvalidStateError`), saturation (`QueueFullError`), clone/transfer validation (`DataCloneError`), and an already-aborted signal's reason. Once admitted, execution and cancellation settle through the returned promise. A failed worker does not replay accepted work.
 

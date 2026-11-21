@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { Marked } from "marked";
 import { renderSiteTemplate } from "../templates/layout.ts";
-import { guides, references } from "./model.ts";
-import type { DocPage, ReferenceSymbol } from "./model.ts";
+import { contributorGuide, guideGroups, guides, referenceGroups } from "./model.ts";
+import type { DocGroup, DocPage, ReferenceSymbol } from "./model.ts";
 
 export function escapeHtml(value: string): string {
 	return value
@@ -71,7 +71,7 @@ export function renderDocumentation(
 					}),
 		)
 		.join("");
-	if (page.layer === "API reference") {
+	if (page.layer === "API reference" && page.url !== "/api") {
 		body = body
 			.split(/(?=<h2 )/g)
 			.map((part) => {
@@ -88,14 +88,13 @@ export function renderDocumentation(
 			})
 			.join("");
 	}
-	const nav = (
-		entries: ReadonlyArray<readonly [string, string, string]>,
-		prefix: string,
-	) =>
-		entries
+	const navLink = (url: string, title: string) =>
+		`<a href="${url}"${page.url === url ? ' aria-current="page"' : ""}>${escapeHtml(title)}</a>`;
+	const navGroups = (groups: ReadonlyArray<DocGroup>, prefix: string): string =>
+		groups
 			.map(
-				([slug, title]) =>
-					`<a href="${prefix}/${slug}"${page.url === `${prefix}/${slug}` ? ' aria-current="page"' : ""}>${escapeHtml(title)}</a>`,
+				({ label, entries, groups = [] }) =>
+					`<div class="docs-nav-group" role="group" aria-label="${escapeHtml(label)}"><p>${escapeHtml(label)}</p>${entries.map(([slug, title]) => navLink(`${prefix}/${slug}`, title)).join("")}${navGroups(groups, prefix)}</div>`,
 			)
 			.join("");
 	const guideIndex = guides.findIndex(([slug]) => page.url === `/guides/${slug}`);
@@ -119,7 +118,7 @@ __SITE_ICONS____SITE_STYLES__<style>${readFileSync("website/docs/docs.css", "utf
 <script type="module" src="/docs/assets/client.js"></script></head>
 <body data-search-ready="${prepared}"><a class="skip-link" href="#main">Skip to content</a>__SITE_NAVIGATION__
 <div class="docs-toolbar"><nav aria-label="Documentation layers"><a href="/guides"${page.layer === "Guides" ? ' aria-current="location"' : ""}>Guides</a><a href="/api"${page.layer === "API reference" ? ' aria-current="location"' : ""}>API reference</a></nav><button type="button" id="open-search">Search docs <kbd>⌘ K</kbd></button></div>
-<div class="docs-layout"><details class="docs-menu" open><summary>Documentation menu</summary><nav aria-label="Documentation topics"><a href="/docs"${page.url === "/docs" ? ' aria-current="page"' : ""}>Documentation</a><p>Guides</p>${nav(guides, "/guides")}<p>API reference</p>${nav(references, "/api")}</nav></details>
+<div class="docs-layout"><details class="docs-menu" open><summary>Documentation menu</summary><nav aria-label="Documentation topics">${navLink("/docs", "Documentation")}<p class="docs-nav-layer">Guides</p>${navGroups(guideGroups, "/guides")}<p class="docs-nav-layer">API reference</p>${navGroups(referenceGroups, "/api")}${navLink(`/guides/${contributorGuide[0]}`, contributorGuide[1])}</nav></details>
 <main id="main"><article data-pagefind-body data-pagefind-weight="${page.layer === "Guides" ? "2" : "1"}"><div class="page-meta" data-pagefind-ignore><span>${page.layer}</span><a href="${page.url}.md">Markdown ↗</a></div><h1 data-pagefind-meta="title">${escapeHtml(page.title)}</h1><details class="inline-contents" data-pagefind-ignore><summary>On this page</summary><nav>${toc.map((entry) => `<a href="#${escapeHtml(entry.id)}">${escapeHtml(entry.title)}</a>`).join("")}</nav></details><span class="visually-hidden" data-pagefind-meta="layer">${page.layer}</span><span class="visually-hidden" data-pagefind-meta="version">${escapeHtml(version)}</span>${body}</article>${adjacent ? `<nav class="adjacent" aria-label="Guide sequence">${adjacent}</nav>` : ""}<div class="source-meta">Maligator ${escapeHtml(version)} · Experimental · Source ${escapeHtml(revision.slice(0, 12))}<br><a href="https://github.com/dirkdev98/maligator/blob/${revision}/${page.source}">Edit this page</a> · <a href="/compatibility">Compatibility</a></div></main>
 <aside class="page-contents"><nav aria-label="On this page"><p>On this page</p>${toc.map((entry) => `<a href="#${escapeHtml(entry.id)}">${escapeHtml(entry.title)}</a>`).join("")}</nav></aside></div>
 __SITE_FOOTER__<dialog id="search-dialog" aria-labelledby="search-label"><div class="search-heading"><label id="search-label" for="search-input">Search documentation</label><button type="button" id="close-search" aria-label="Close search">Esc</button></div><input id="search-input" type="search" placeholder="Search a task, symbol, or flag" autocomplete="off"><p id="search-status" role="status">Search guides and API reference.</p><div id="search-results"></div><p class="search-help"><a href="/api">Browse the API</a> · <a href="/guides/troubleshooting">Troubleshooting</a></p></dialog></body></html>`,

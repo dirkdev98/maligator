@@ -38,4 +38,4 @@ Use [WorkerOptions](/api/workers#WorkerOptions) and [MessageChannelOptions](/api
 
 A rejected message can throw `DataCloneError` for unsupported values or transfer lists, and `QueueFullError` for saturation. Keep a retry policy at the application layer and retain ownership until admission succeeds. Do not repeatedly post a detached buffer.
 
-Close standalone channel endpoints when finished. Join workers with `terminate()` or `closed`; see [cancellation and shutdown](/guides/workers/cancellation).
+Close standalone channel endpoints when finished. Join workers with `terminate()` or `closed` as shown in [Cancel work and shut down](/guides/workers/cancellation).

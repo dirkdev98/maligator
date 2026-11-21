@@ -91,11 +91,23 @@ kbd {
 	background: var(--accent-wash);
 	color: var(--ink);
 }
-.docs-menu nav p {
+.docs-nav-layer {
 	font-size: 0.75rem;
 	font-weight: 750;
 	letter-spacing: 0.03em;
-	margin: 1.6rem 0.65rem 0.5rem;
+	margin: 1.4rem 0.65rem 0.65rem;
+}
+.docs-nav-group {
+	margin-bottom: 0.7rem;
+}
+.docs-nav-group > p {
+	margin: 0 0.65rem 0.2rem;
+	font-size: 0.75rem;
+	font-weight: 650;
+	color: var(--muted);
+}
+.docs-nav-group .docs-nav-group {
+	margin: 0.4rem 0 0 0.65rem;
 }
 main {
 	min-width: 0;

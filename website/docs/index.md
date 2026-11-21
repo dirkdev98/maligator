@@ -16,14 +16,14 @@ maligator run
 
 - [Use TypeScript](/guides/typescript) to load runtime declarations and check your code.
 - [Write application tests](/guides/testing) and rerun a selected suite.
-- [Run tasks in workers](/guides/workers) with a bounded pool and explicit cleanup.
+- [Run tasks in a pool](/guides/workers) with bounded queues and explicit cleanup.
 - [Serve HTTP](/guides/http) or [embed files](/guides/assets).
-- [Call C libraries](/guides/c-libraries) through their headers.
+- [Bind a library](/guides/c-libraries) through its C headers.
 - [Build for production](/guides/production) and [profile a workload](/guides/profiling).
 
 ## Look up a contract
 
-The [API reference](/api) covers build configuration, runtime globals, public modules, and CLI commands. Each page includes callable signatures, member contracts, and links to the relevant guide.
+The [API reference](/api) covers build configuration, C library contracts, public modules, and CLI commands. Look up a symbol to find its signature, options, and related guides.
 
 Read [Troubleshooting](/guides/troubleshooting) when a command fails. To change the compiler itself, follow [Develop Maligator](/guides/contributing).
 
