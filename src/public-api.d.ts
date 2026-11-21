@@ -491,6 +491,11 @@ export interface MaligatorBuildConfig {
 	modules?: {
 		/** Exact specifier replacements applied before module resolution. Defaults to an empty map. */
 		aliases?: Record<string, string>;
+		/** Package `exports` conditions to resolve with. `import` or `require` follows each
+		 * dependency edge and `default` always matches, so neither belongs in the list.
+		 * @default ["maligator", "node"]
+		 */
+		conditions?: Array<string>;
 	};
 	engine?: {
 		/** Lock built-in objects for the entire build. Mutable is intended for compatibility experiments.

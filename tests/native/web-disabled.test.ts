@@ -1,7 +1,8 @@
-import { mkdtempSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	assertResultPass,
 	buildNativeBinary,
@@ -9,13 +10,15 @@ import {
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
-import { preparedNativeEvalConfig } from "../helpers/native-eval-config.ts";
 import { matchingNativeSymbols } from "../helpers/native-symbols.ts";
 
-// Linking HOST_MAIN with web and Node disabled must not retain ada or its C++ dependency.
+// Linking HOST_MAIN for a program that names no web global must not retain ada or its
+// C++ dependency.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-web-off-"));
+// Runtime eval can name any global, so it would link every web global.
+const config = resolveBuildConfig({ engine: { eval: false, primordials: "mutable" } });
 
-describe("surface.webPlatform: false runtime gate", () => {
+describe("a host program that names no web global", () => {
 	let webOffBin: string;
 	beforeAll(() => {
 		webOffBin = buildNativeBinary({
@@ -23,11 +26,11 @@ describe("surface.webPlatform: false runtime gate", () => {
 			name: "web-disabled",
 			mainFile: HOST_MAIN,
 			outDir,
-			config: preparedNativeEvalConfig({ webPlatform: false }),
+			config,
 		});
 	});
 
-	it("links with ada gone and installs no URL / URLSearchParams globals", () => {
+	it("links without the URL parser and runs the core engine", () => {
 		assertResultPass(runToStdout(webOffBin));
 	});
 
@@ -43,12 +46,18 @@ describe("surface.webPlatform: false runtime gate", () => {
 		).toEqual([]);
 	});
 
-	it("drops the ada URL parser (smaller than the web-on binary)", () => {
+	it("drops the ada URL parser (smaller than the same program parsing a URL)", () => {
+		const webOnFixture = path.join(outDir, "web-enabled.js");
+		writeFileSync(
+			webOnFixture,
+			`${readFileSync("tests/local/web_disabled.js", "utf8")}\nconsole.log(new URL("https://example.com/").host);\n`,
+		);
 		const webOnBin = buildNativeBinary({
-			fixture: "tests/local/web_disabled.js",
+			fixture: webOnFixture,
 			name: "web-enabled",
 			mainFile: HOST_MAIN,
 			outDir,
+			config,
 		});
 		const offSize = statSync(webOffBin).size;
 		const onSize = statSync(webOnBin).size;

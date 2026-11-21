@@ -6,7 +6,9 @@ import {
 	HOST_GLOBAL_INSTALLERS,
 	HOST_MODULES,
 	NODE_BUILTIN_LOADER_INSTALLER,
+	NODE_ERROR_HOOKS_INSTALLER,
 	NODE_INSTALLED_BUILTINS_INSTALLER,
+	NODE_PERSONALITY_INSTALLER,
 } from "../../src/compiler/frontend/host-modules.ts";
 import { buildNativeBinary, HOST_MAIN } from "../../src/test-harness.ts";
 import { matchingNativeSymbols } from "../helpers/native-symbols.ts";
@@ -15,6 +17,9 @@ const MODULE_INSTALLERS = new Set(
 	[...HOST_MODULES.values()].map((module) => module.installer),
 );
 const BUILTIN_REGISTRY_LOOKUP = "mal_node_module_get_builtin";
+// A program that reads a Node module or global lists the Node personality and hooks.
+// They follow the reads lowering sees, so they stay when optimization drops the read.
+const NODE_HOST = [NODE_PERSONALITY_INSTALLER, NODE_ERROR_HOOKS_INSTALLER];
 
 function withInstallers(base: ReadonlyArray<string>, ...added: Array<string>) {
 	return [...new Set([...base, ...added])].sort();
@@ -128,7 +133,7 @@ describe("node host installer link retention", () => {
 				? pathInstallers.filter((installer) => !variants.has(installer))
 				: pathInstallers;
 		expect(retained).toEqual(
-			withInstallers(hostMainInstallers, "mal_host_install_node_path"),
+			withInstallers(hostMainInstallers, "mal_host_install_node_path", ...NODE_HOST),
 		);
 	});
 
@@ -170,7 +175,7 @@ describe("node host installer link retention", () => {
 	});
 
 	it("omits the path installer when its only read is optimized away", () => {
-		expect(deadPathInstallers).toEqual(hostMainInstallers);
+		expect(deadPathInstallers).toEqual(withInstallers(hostMainInstallers, ...NODE_HOST));
 	});
 
 	it("retains Buffer for a reachable free global", () => {
@@ -183,11 +188,13 @@ describe("node host installer link retention", () => {
 			return;
 		}
 		expect(bufferInstallers).toEqual(
-			withInstallers(hostMainInstallers, "mal_host_install_node_buffer"),
+			withInstallers(hostMainInstallers, "mal_host_install_node_buffer", ...NODE_HOST),
 		);
 	});
 
 	it("omits the Buffer installer when its imported read is optimized away", () => {
-		expect(deadBufferInstallers).toEqual(hostMainInstallers);
+		expect(deadBufferInstallers).toEqual(
+			withInstallers(hostMainInstallers, ...NODE_HOST),
+		);
 	});
 });

@@ -80,6 +80,7 @@ import {
 	stripCompactTypes,
 } from "./compiler/frontend/compact-type-strip.ts";
 import type { EmbedDeclaration } from "./compiler/frontend/embed-declarations.ts";
+import { imageUsesHost } from "./compiler/frontend/host-modules.ts";
 import {
 	formatSyntaxDiagnostic,
 	SyntaxDiagnostic,
@@ -557,15 +558,15 @@ function prepareDevelopmentShims(
 	});
 }
 
+/** A program that applies the host personality or starts workers runs the event loop. */
 export function applicationDriverPath(
 	installation: CompilerInstallation,
-	webPlatform: boolean,
-	node = false,
+	usesHost: boolean,
 	workers = false,
 ): string {
 	return path.join(
 		installation.runtimeDirectory,
-		webPlatform || node || workers ? "host_main.c" : "test262_main.c",
+		usesHost || workers ? "host_main.c" : "test262_main.c",
 	);
 }
 
@@ -1105,21 +1106,26 @@ function prepareCommandState(
 							}),
 					}
 				: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
+		const usesHost = [
+			frontend.programImage,
+			...frontend.workerImages.map((worker) => worker.image),
+		].some((image) => imageUsesHost(image.runtime.hostInstalls));
+		const linkDerivation = buildDerivationFromConfig(buildConfig, usesHost);
 		const derivation = command.profile
 			? {
 					features: normalizeNativeFeatures({
-						...baseDerivation.features,
+						...linkDerivation.features,
 						profileEnabled: command.profile,
 					}),
 					cacheSuffix: [
-						baseDerivation.cacheSuffix,
+						linkDerivation.cacheSuffix,
 						"profile",
 						command.profileCompiler ? "compiler" : "",
 					]
 						.filter((part) => part !== "")
 						.join("-"),
 				}
-			: baseDerivation;
+			: linkDerivation;
 		reporter.detail(
 			"Rust features",
 			derivation.features.cargoFeatures.length === 0
@@ -1363,8 +1369,7 @@ function prepareCommandState(
 						? path.join(context.installation.runtimeDirectory, DEVELOPMENT_FRAGMENT_MAIN)
 						: applicationDriverPath(
 								context.installation,
-								buildConfig.surface.webPlatform,
-								buildConfig.surface.node,
+								usesHost,
 								frontend.workerImages.length > 0,
 							),
 					cacheSuffix: derivation.cacheSuffix,
@@ -2660,8 +2665,7 @@ async function executeProfiledTests(
 					),
 				mainFile: applicationDriverPath(
 					context.installation,
-					config.surface.webPlatform,
-					config.surface.node,
+					imageUsesHost(compiled.programImage.runtime.hostInstalls),
 					compiled.workerImages.length > 0,
 				),
 				cacheSuffix: derivation.cacheSuffix,

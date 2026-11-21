@@ -2971,7 +2971,13 @@ static MalValue mal_node_crypto_random_fill(
 static MalValue mal_node_crypto_get_random_values(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
     (void) receiver; (void) new_target; (void) callee;
-    MalValue array = argc > 0 ? args[0] : mal_value_new_undefined();
+    // WebIDL rejects a missing required argument with a TypeError before type checks.
+    if (argc < 1) {
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Failed to execute 'getRandomValues' on 'Crypto': 1 argument required, but only 0 present.");
+        return mal_value_new_undefined();
+    }
+    MalValue array = args[0];
     bool integer = false;
     if (mal_value_is_typed_array_object(array)) {
         MalTypedArrayKind kind = mal_value_to_typed_array_object(array)->kind;

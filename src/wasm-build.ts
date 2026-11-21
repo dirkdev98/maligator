@@ -80,12 +80,10 @@ export function assertWasmEngineConfig(config: ResolvedBuildConfig): void {
 		config.engine.eval !== false ||
 		config.engine.realms ||
 		config.engine.temporal ||
-		config.engine.intl.enabled ||
-		config.surface.webPlatform ||
-		config.surface.node
+		config.engine.intl.enabled
 	) {
 		throw new Error(
-			"The Wasm reactor supports the synchronous engine with eval, realms, Intl, Temporal and host surfaces disabled",
+			"The Wasm reactor supports the synchronous engine with eval, realms, Intl and Temporal disabled",
 		);
 	}
 }
@@ -137,7 +135,8 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 			...process.env,
 			RUSTC: toolchain.tools.rustc.path,
 		};
-		const features = buildDerivationFromConfig(options.config).features;
+		// The reactor has no host, so it compiles none of the host components.
+		const features = buildDerivationFromConfig(options.config, false).features;
 		const runtime = path.join(root, "runtime");
 		const includes = ["src", "src/host", "src/runtime", "rust/include"].flatMap(
 			(directory) => ["-I", path.join(runtime, directory)],

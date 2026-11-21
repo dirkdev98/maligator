@@ -35,10 +35,13 @@ typedef struct MalHostTimer {
     MalValue *args; /* heap copy of setTimeout extra args (nullptr if none) */
     i32 arg_count;
     MalAsyncContext *async_context;
+    i64 delay_ms;   /* normalized delay, which Timeout.refresh() restarts */
     i64 repeat_ms;  /* normalized setInterval period, including zero */
     bool repeating; /* distinguishes zero-delay intervals from one-shot timers */
     bool ready;     /* timer fired; callback awaits the macrotask phase */
     bool cancelled; /* clearTimeout'd before it fired/ran */
+    bool running;   /* a one-shot timer's callback is on the stack */
+    bool refreshed; /* Timeout.refresh() re-arms it once that callback returns */
     bool referenced;
     MalVm *vm;      /* back-ref for the reactor waker */
     struct MalHostTimer *previous;

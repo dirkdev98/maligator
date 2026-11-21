@@ -79,9 +79,6 @@ export function setup(project: TestProject): void {
 			.getPaths()
 			.flatMap((file) => nativePreparations(process.cwd(), path.resolve(file))),
 	);
-	if (required.has("web-disabled")) {
-		variants.push(internal(environment, { node: false, webPlatform: false }));
-	}
 	if (required.has("realms-disabled")) {
 		variants.push(
 			internal(environment, { node: false, webPlatform: true, realms: false }),

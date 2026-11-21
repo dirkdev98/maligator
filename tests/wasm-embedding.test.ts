@@ -155,9 +155,9 @@ describe("Wasm reactor embedding", () => {
 		}
 	});
 
-	it("rejects unsupported host capabilities before a build", () => {
+	it("rejects unsupported engine capabilities before a build", () => {
 		expect(() =>
-			assertWasmEngineConfig(resolveBuildConfig({ surface: { node: true } })),
+			assertWasmEngineConfig(resolveBuildConfig({ engine: { realms: true } })),
 		).toThrow(/engine/);
 	});
 });

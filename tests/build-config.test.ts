@@ -34,13 +34,21 @@ function writeConfig(dir: string, contents: string): void {
 }
 
 describe("resolveBuildConfig defaults", () => {
-	it("defaults eval OFF and picks the conservative product surface", () => {
+	it("defaults eval OFF and resolves packages with the server conditions", () => {
 		const config = resolveBuildConfig({});
 		expect(config.engine.primordials).toBe("locked");
 		expect(config.engine.eval).toBe(false);
 		expect(config.engine.intl.enabled).toBe(false);
-		expect(config.surface).toEqual({ webPlatform: false, node: false });
 		expect(config.modules.aliases).toEqual({});
+		expect(config.modules.conditions).toEqual(["maligator", "node"]);
+	});
+
+	it("ignores the surface flags", () => {
+		const flagged = resolveBuildConfig({ surface: { webPlatform: false, node: false } });
+		expect(flagged).toEqual(resolveBuildConfig({}));
+		expect(buildDerivationFromConfig(flagged)).toEqual(
+			buildDerivationFromConfig(resolveBuildConfig({ surface: { node: true } })),
+		);
 	});
 
 	it("defaults RegExp ON (core language, unlike eval/Intl/web)", () => {
@@ -111,6 +119,27 @@ describe("loadBuildConfig", () => {
 			"package-entry": "./src/pure.ts",
 		});
 	});
+
+	it("accepts module export conditions", () => {
+		const dir = tmpdir();
+		writeConfig(
+			dir,
+			JSON.stringify({ modules: { conditions: ["maligator", "worker"] } }),
+		);
+		expect(loadBuildConfig(undefined, dir).modules.conditions).toEqual([
+			"maligator",
+			"worker",
+		]);
+	});
+
+	it.each(["import", "require", "default", ""])(
+		"rejects the module export condition %j",
+		(condition) => {
+			const dir = tmpdir();
+			writeConfig(dir, JSON.stringify({ modules: { conditions: [condition] } }));
+			expect(() => loadBuildConfig(undefined, dir)).toThrow(/modules\.conditions/);
+		},
+	);
 
 	it("rejects malformed module aliases", () => {
 		const dir = tmpdir();
@@ -430,19 +459,6 @@ describe("buildConfigCacheSuffix", () => {
 		expect(buildConfigCacheSuffix(checked)).toBe(buildConfigCacheSuffix(off));
 	});
 
-	it("webPlatform-off gets a distinct non-empty output suffix", () => {
-		const canonical = resolveBuildConfig({
-			engine: { eval: true, intl: { enabled: true } },
-			surface: { webPlatform: true },
-		});
-		const noWeb = resolveBuildConfig({
-			engine: { eval: true, intl: { enabled: true } },
-			surface: { webPlatform: false },
-		});
-		expect(buildConfigCacheSuffix(noWeb)).toMatch(/^[0-9a-f]{8}$/);
-		expect(buildConfigCacheSuffix(noWeb)).not.toBe(buildConfigCacheSuffix(canonical));
-	});
-
 	it("regexp-off gets a distinct non-empty output suffix", () => {
 		const canonical = resolveBuildConfig({
 			engine: { eval: true, intl: { enabled: true } },
@@ -473,36 +489,15 @@ describe("buildConfigCacheSuffix", () => {
 	});
 });
 
-describe("surface.node build derivation + cache", () => {
-	const canonical = resolveBuildConfig({
-		engine: { eval: true, realms: true, temporal: true, intl: { enabled: true } },
-		surface: { webPlatform: true },
-	});
-	const nodeOn = resolveBuildConfig({
-		engine: { eval: true, realms: true, temporal: true, intl: { enabled: true } },
-		surface: { webPlatform: true, node: true },
-	});
-
-	it("defaults node OFF and threads surface.node into the build derivation", () => {
-		expect(buildDerivationFromConfig(resolveBuildConfig({})).features.nodeEnabled).toBe(
-			false,
-		);
-		expect(buildDerivationFromConfig(nodeOn).features.nodeEnabled).toBe(true);
-	});
-
-	it("keeps the shared URL runtime in a node-only build", () => {
-		const nodeOnly = resolveBuildConfig({
-			surface: { webPlatform: false, node: true },
-		});
-		expect(buildDerivationFromConfig(nodeOnly).features.cargoFeatures).toContain("url");
-	});
-
-	it("node-on gets a distinct non-empty C cache suffix; node-off stays canonical", () => {
-		// node defaults off and all internal-tooling builds are node-off, so node-off
-		// keeps the unsuffixed (canonical) archive; node-on gets its own C archive.
-		expect(buildConfigCacheSuffix(canonical)).toBe("");
-		expect(buildConfigCacheSuffix(nodeOn)).toMatch(/^[0-9a-f]{8}$/);
-		expect(buildConfigCacheSuffix(nodeOn)).not.toBe(buildConfigCacheSuffix(canonical));
+describe("host component derivation", () => {
+	it("links the web and Node components only for a program that uses the host", () => {
+		const config = resolveBuildConfig({});
+		const host = buildDerivationFromConfig(config).features.cargoFeatures;
+		expect(host).toEqual(expect.arrayContaining(["node-crypto", "tls", "url", "zlib"]));
+		const lean = buildDerivationFromConfig(config, false).features.cargoFeatures;
+		expect(
+			lean.filter((feature) => host.includes(feature) && feature !== "regexp"),
+		).toEqual([]);
 	});
 });
 
@@ -545,26 +540,22 @@ describe("engine.realms build plumbing", () => {
 
 describe("build-cache suffix stability", () => {
 	const configs: Array<[string, ResolvedBuildConfig, string]> = [
-		["eval-off", resolveBuildConfig({ engine: { eval: false } }), "fdaeecf2"],
+		["eval-off", resolveBuildConfig({ engine: { eval: false } }), "2f257836"],
 		[
-			"node-on",
-			resolveBuildConfig({
-				engine: { eval: true, intl: { enabled: true } },
-				surface: { webPlatform: true, node: true },
-			}),
-			"cd505751",
+			"eval-on + Intl",
+			resolveBuildConfig({ engine: { eval: true, intl: { enabled: true } } }),
+			"4a420e1e",
 		],
 		[
-			"intl-subset + web-off",
+			"intl-subset + regexp-off",
 			resolveBuildConfig({
 				engine: {
 					eval: true,
 					regexp: false,
 					intl: { enabled: true, features: ["segmenter"] },
 				},
-				surface: { webPlatform: false },
 			}),
-			"680c6d9c",
+			"14dd91a8",
 		],
 	];
 

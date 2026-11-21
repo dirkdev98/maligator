@@ -16,6 +16,7 @@ import {
 	stripCompactTypes,
 	TYPE_STRIPPER_IDENTITY,
 } from "./compiler/frontend/compact-type-strip.ts";
+import { imageUsesHost } from "./compiler/frontend/host-modules.ts";
 import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
 import type { ModuleGoal } from "./compiler/frontend/module-graph.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semantic-program.ts";
@@ -138,7 +139,7 @@ export interface BuildOptions {
 	entryGoal?: ModuleGoal;
 	/** Initial script strictness; explicit source directives still take effect. */
 	entryStrict?: boolean;
-	/** C driver override; Node and worker programs default to the host event loop. */
+	/** C driver override; web, Node and worker programs default to the host event loop. */
 	mainFile?: string;
 	/** Artifact directory; defaults to process-scoped shared-cache work space. */
 	outDir?: string;
@@ -435,15 +436,22 @@ function linkProgramImage(
 		...(typeof mainSource === "string" ? [mainSource] : mainSource),
 		...workerUnits,
 	];
-	const { context, cacheSuffix } = resolveHarnessNativeContext(options, config, name);
+	const usesHost = [image, ...workerImages.map((worker) => worker.image)].some((entry) =>
+		imageUsesHost(entry.runtime.hostInstalls),
+	);
+	const { context, cacheSuffix } = resolveHarnessNativeContext(
+		options,
+		config,
+		name,
+		usesHost,
+	);
 	return buildLocalBinary({
 		context,
 		name,
 		cSource,
 		verbose: false,
 		mainFile:
-			options.mainFile ??
-			(config.surface.node || workerImages.length > 0 ? HOST_MAIN : undefined),
+			options.mainFile ?? (usesHost || workerImages.length > 0 ? HOST_MAIN : undefined),
 		outDir: options.outDir ?? defaultHarnessArtifactDirectory(),
 		cacheSuffix,
 		objectCacheVariant: options.nativeObjectCacheVariant,
@@ -480,8 +488,9 @@ function resolveHarnessNativeContext(
 	options: BuildOptions,
 	config: ResolvedBuildConfig,
 	subject: string,
+	usesHost = true,
 ): { context: NativeBuildContext; cacheSuffix: string } {
-	const baseDerivation = buildDerivationFromConfig(config);
+	const baseDerivation = buildDerivationFromConfig(config, usesHost);
 	const derivation = options.profileEnabled
 		? {
 				features: normalizeNativeFeatures({

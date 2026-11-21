@@ -361,9 +361,12 @@ check(
 );
 
 // --- async: AbortSignal.timeout finalizes the run ---
+// As in Node, the signal's timer does not keep the process alive on its own.
 const ts = AbortSignal.timeout(10);
+const keepAlive = setTimeout(() => {}, 10_000);
 check("timeout not yet aborted", ts.aborted === false);
 ts.addEventListener("abort", () => {
+	clearTimeout(keepAlive);
 	check("timeout aborted", ts.aborted === true);
 	check(
 		"timeout reason is TimeoutError DOMException",

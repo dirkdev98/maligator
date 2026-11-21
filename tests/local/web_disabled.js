@@ -1,39 +1,12 @@
-// Runtime fixture for `surface.webPlatform: false`. Built with webPlatformEnabled:
-// false against the host entry, so the entire WinterTC web personality is gated out
-// of host_main — and with it the ada C++ URL parser + `-lc++`. Unlike eval (which
-// keeps a throwing binding), these globals are simply never installed. The main
-// point of this fixture is that a host binary LINKS AT ALL with the web surface +
-// ada gone (no undefined symbols); it then asserts the surface is absent and the
-// core engine intact.
-
-const absent = [
-	// URL / URLSearchParams (web_url.c → ada).
-	"URL",
-	"URLSearchParams",
-	// fetch surface (web_fetch.c).
-	"fetch",
-	"Response",
-	"Request",
-	// timers (web_host_timer.c).
-	"setTimeout",
-	"clearTimeout",
-	// web globals (web_globals.c).
-	"TextEncoder",
-	"structuredClone",
-	"queueMicrotask",
-	// events (web_events.c).
-	"Event",
-	"CustomEvent",
-	"EventTarget",
-	"AbortController",
+// A host program that names no web or Node global. It links with the host entry but
+// without the web globals, the ada C++ URL parser and `-lc++`; the core engine stays
+// intact. `globalThis[name]` would count as naming every global, so the checks below
+// read only the engine.
+const results = [
+	["core intact", [1, 2, 3].map((x) => x * 2).join(",") === "2,4,6"],
+	["promises", typeof Promise.resolve === "function"],
+	["json", JSON.stringify({ a: [1] }) === '{"a":[1]}'],
 ];
-
-const results = [];
-for (const name of absent) {
-	results.push([name + " undefined", typeof globalThis[name] === "undefined"]);
-}
-// The core engine is unaffected by dropping the web surface.
-results.push(["core intact", [1, 2, 3].map((x) => x * 2).join(",") === "2,4,6"]);
 
 let passed = 0;
 for (const [name, ok] of results) {

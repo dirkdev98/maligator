@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isParseError } from "meriyah";
 import type { ESTree } from "meriyah";
+import { DEFAULT_EXPORT_CONDITIONS } from "../../build-config-values.ts";
 import type { ResolvedBuildConfig } from "../../build-config.ts";
 import type { PlatformData, PlatformModule } from "../../platform/catalog.ts";
 import { PLATFORM_MODULES, lookupPlatformModule } from "../../platform/catalog.ts";
@@ -171,12 +172,11 @@ export interface ModuleGraph {
 	/** Absolute path of the entrypoint. */
 	entry: string;
 	/**
-	 * Whether the node host built-in surface (`surface.node`) is on for this
-	 * build. Recorded so downstream stages (linker/ir) gate host-module export
-	 * binding + `process` retention on it without re-reading the build config.
+	 * Whether `node:*` modules and Node's globals resolve. Every program may reach
+	 * them; a program links only what it uses.
 	 */
 	nodeEnabled: boolean;
-	/** Whether the web platform surface (`surface.webPlatform`) is on for this build. */
+	/** Whether the web globals and `maligator:http` resolve; true for every program. */
 	webPlatformEnabled: boolean;
 	modules: Map<string, ModuleRecord>;
 	/**
@@ -423,9 +423,8 @@ export interface BuildModuleGraphOptions {
 	requiredRoots?: ReadonlyArray<string>;
 
 	/**
-	 * The resolved build config, which gates surface-dependent resolution: the
-	 * `node` package export condition and `node:*` host built-in imports are active
-	 * only under `surface.node`. Defaults to the product defaults (node OFF).
+	 * The resolved build config: its aliases, export conditions and C library modules.
+	 * Defaults to the product defaults.
 	 */
 	buildConfig?: ResolvedBuildConfig;
 	/** Immutable application context shared by all compilation fragments. */
@@ -464,23 +463,21 @@ export interface BuildModuleGraphOptions {
 }
 
 /**
- * Package `exports` conditions recognized regardless of surface. The `node`
- * condition is added only under `surface.node` (see {@link exportConditions}),
- * so a package's `node`-specific entry is inert unless the build opts into the
- * node surface.
+ * The active `exports` conditions for a dependency edge: the build's conditions,
+ * `import` or `require` for the edge, and `default`. The package's key order picks
+ * among them, so the set has no order.
  */
-/** The active `exports` conditions for a dependency edge. */
 function exportConditions(
-	nodeEnabled: boolean,
+	configured: ReadonlyArray<string>,
 	mode: "import" | "require",
 ): ReadonlySet<string> {
-	const conditions = ["maligator", mode, "default"];
-	return new Set(nodeEnabled ? [...conditions, "node"] : conditions);
+	return new Set([...configured, mode, "default"]);
 }
 
 interface ResolveContext {
 	conditions: ReadonlySet<string>;
-	nodeEnabled: boolean;
+	/** The build's own conditions, without the edge's `import`/`require` and `default`. */
+	configuredConditions: ReadonlyArray<string>;
 	/** Host modules of the build's C libraries, keyed by specifier. */
 	ffiModules: ReadonlyMap<string, HostModuleSpec>;
 	// Metadata and derived goals share one graph's lifetime, including cached misses.
@@ -546,10 +543,11 @@ export function buildModuleGraph(
 	const entry = path.resolve(entryPath);
 	const modules = new Map<string, ModuleRecord>();
 
-	const nodeEnabled = options.buildConfig?.surface.node ?? false;
+	const configuredConditions =
+		options.buildConfig?.modules.conditions ?? DEFAULT_EXPORT_CONDITIONS;
 	const ffiModules = options.buildConfig?.ffiModules ?? [];
 	const ctx: ResolveContext = {
-		nodeEnabled,
+		configuredConditions,
 		ffiModules: new Map(
 			ffiModules.map((library) => [
 				library.id,
@@ -563,7 +561,7 @@ export function buildModuleGraph(
 				},
 			]),
 		),
-		conditions: exportConditions(nodeEnabled, "import"),
+		conditions: exportConditions(configuredConditions, "import"),
 		packageJsonCache: new Map(),
 		packageTypeCache: new Map(),
 		observed: new Map(),
@@ -581,7 +579,7 @@ export function buildModuleGraph(
 					"sha256",
 					JSON.stringify({
 						aliases: options.buildConfig?.modules.aliases ?? {},
-						nodeEnabled,
+						conditions: configuredConditions,
 						ffiModules,
 						sourceRoot,
 						goalOverride: options.goalOverride,
@@ -600,7 +598,6 @@ export function buildModuleGraph(
 		if (supplied !== undefined) return supplied;
 		const module = lookupPlatformModule(specifier);
 		const hostSource = SOURCE_HOST_MODULES.get(specifier);
-		if (hostSource !== undefined && !nodeEnabled) return undefined;
 		if (
 			hostSource === undefined &&
 			(module?.kind !== "source" || specifier === "maligator:test")
@@ -888,15 +885,6 @@ export function buildModuleGraph(
 										options.buildConfig?.modules.aliases[dependency.specifier] ??
 										dependency.specifier;
 									const platform = lookupPlatformModule(aliasedSpecifier);
-									// Its handlers take and return Fetch API objects.
-									if (
-										aliasedSpecifier === "maligator:http" &&
-										options.buildConfig?.surface.webPlatform === false
-									)
-										throw resolutionError(
-											dependency,
-											`Cannot import '${dependency.specifier}' from ${filePath}: it requires surface.webPlatform`,
-										);
 									if (
 										(platform as { internal?: boolean } | undefined)?.internal === true &&
 										lookupPlatformModule(filePath)?.kind !== "source" &&
@@ -951,7 +939,7 @@ export function buildModuleGraph(
 										{
 											...ctx,
 											conditions: exportConditions(
-												ctx.nodeEnabled,
+												ctx.configuredConditions,
 												dependency.kind === "require" ? "require" : "import",
 											),
 										},
@@ -962,7 +950,7 @@ export function buildModuleGraph(
 										return [{ ...dependency, resolvedPath: resolved.host.id }];
 									}
 									if ("error" in resolved) {
-										// A `node:*` error (surface disabled / unknown built-in) is `hard`: it
+										// A `node:*` error (an unknown built-in) is `hard`: it
 										// rejects even a literal dynamic import rather than silently deferring,
 										// so an unsupported host import fails loudly at build time. A plain
 										// dynamic resolution failure (missing file) still defers to the graph.
@@ -1149,61 +1137,56 @@ export function buildModuleGraph(
 	const loadRuntimeSourceProviders = (): boolean => {
 		if (sourceBuiltinLookup) return false;
 		const count = modules.size;
-		if (nodeEnabled)
-			for (const record of modules.values()) {
-				if (
-					record.host !== undefined ||
-					SOURCE_HOST_MODULES.has(record.path) ||
-					scannedSourceModules.has(record.path)
+		for (const record of modules.values()) {
+			if (
+				record.host !== undefined ||
+				SOURCE_HOST_MODULES.has(record.path) ||
+				scannedSourceModules.has(record.path)
+			)
+				continue;
+			scannedSourceModules.add(record.path);
+			if (
+				record.dependencies.some(
+					(dependency) =>
+						dependency.resolvedPath === "node:module" ||
+						dependency.resolvedPath === "node:process" ||
+						(dependency.specifier === null &&
+							(dependency.kind === "require" || dependency.kind === "dynamic")),
 				)
-					continue;
-				scannedSourceModules.add(record.path);
-				if (
-					record.dependencies.some(
-						(dependency) =>
-							dependency.resolvedPath === "node:module" ||
-							dependency.resolvedPath === "node:process" ||
-							(dependency.specifier === null &&
-								(dependency.kind === "require" || dependency.kind === "dynamic")),
-					)
-				) {
-					sourceBuiltinLookup = true;
-					break;
-				}
-				traverseEstree([record.parsed.ast], (node, { parent, key }) => {
-					if (sourceBuiltinLookup || node.type !== "Identifier") return;
-					if (
-						parent?.type === "MemberExpression" &&
-						key === "property" &&
-						!parent.computed
-					)
-						return;
-					if (node.name === "process" || node.name === "global" || node.name === "eval") {
-						sourceBuiltinLookup = true;
-					} else if (node.name === "require") {
-						const argument =
-							parent?.type === "CallExpression" && key === "callee"
-								? parent.arguments[0]
-								: undefined;
-						if (argument?.type !== "Literal" || typeof argument.value !== "string")
-							sourceBuiltinLookup = true;
-					} else if (node.name === "globalThis") {
-						if (parent?.type !== "MemberExpression" || key !== "object")
-							sourceBuiltinLookup = true;
-						else if (!parent.computed && parent.property.type === "Identifier") {
-							if (parent.property.name === "process" || parent.property.name === "global")
-								sourceBuiltinLookup = true;
-						} else if (
-							parent.property.type !== "Literal" ||
-							typeof parent.property.value !== "string" ||
-							parent.property.value === "process" ||
-							parent.property.value === "global"
-						)
-							sourceBuiltinLookup = true;
-					}
-				});
-				if (sourceBuiltinLookup) break;
+			) {
+				sourceBuiltinLookup = true;
+				break;
 			}
+			traverseEstree([record.parsed.ast], (node, { parent, key }) => {
+				if (sourceBuiltinLookup || node.type !== "Identifier") return;
+				if (parent?.type === "MemberExpression" && key === "property" && !parent.computed)
+					return;
+				if (node.name === "process" || node.name === "global" || node.name === "eval") {
+					sourceBuiltinLookup = true;
+				} else if (node.name === "require") {
+					const argument =
+						parent?.type === "CallExpression" && key === "callee"
+							? parent.arguments[0]
+							: undefined;
+					if (argument?.type !== "Literal" || typeof argument.value !== "string")
+						sourceBuiltinLookup = true;
+				} else if (node.name === "globalThis") {
+					if (parent?.type !== "MemberExpression" || key !== "object")
+						sourceBuiltinLookup = true;
+					else if (!parent.computed && parent.property.type === "Identifier") {
+						if (parent.property.name === "process" || parent.property.name === "global")
+							sourceBuiltinLookup = true;
+					} else if (
+						parent.property.type !== "Literal" ||
+						typeof parent.property.value !== "string" ||
+						parent.property.value === "process" ||
+						parent.property.value === "global"
+					)
+						sourceBuiltinLookup = true;
+				}
+			});
+			if (sourceBuiltinLookup) break;
+		}
 		if (sourceBuiltinLookup)
 			for (const id of SOURCE_HOST_MODULES.keys()) {
 				if (modules.has(id)) continue;
@@ -1288,9 +1271,9 @@ export function buildModuleGraph(
 		if (!loaded) break;
 	}
 
-	const sourceBuiltinProviders = nodeEnabled
-		? [...SOURCE_HOST_MODULES.keys()].filter((id) => modules.has(id))
-		: [];
+	const sourceBuiltinProviders = [...SOURCE_HOST_MODULES.keys()].filter((id) =>
+		modules.has(id),
+	);
 	for (const modulePath of staticModuleClosure(modules, entry)) {
 		const loadError = modules.get(modulePath)?.loadError;
 		if (loadError !== undefined) throw loadError;
@@ -1304,8 +1287,8 @@ export function buildModuleGraph(
 		dynamicImportCandidates: [...declaredCandidates].sort(),
 		entry,
 		execution: options.execution,
-		nodeEnabled: ctx.nodeEnabled,
-		webPlatformEnabled: options.buildConfig?.surface.webPlatform ?? false,
+		nodeEnabled: true,
+		webPlatformEnabled: true,
 		modules,
 		evaluationOrder: computeEvaluationOrder(entry, modules),
 		cycles: detectCycles(modules),
@@ -1765,7 +1748,7 @@ function resolveImportMeta(
 	if (builtin !== undefined) return [{ specifier, url: builtin }];
 	const resolved = resolveSpecifier(specifier, importerPath, {
 		...ctx,
-		conditions: exportConditions(ctx.nodeEnabled, "import"),
+		conditions: exportConditions(ctx.configuredConditions, "import"),
 	});
 	return "path" in resolved ? [{ specifier, path: resolved.path }] : [];
 }
@@ -1786,7 +1769,7 @@ type ResolveResult =
 	// A supported `node:*` host built-in (from the static catalog).
 	| { host: HostModuleSpec }
 	// `hard` marks a `node:*` error that must reject even a literal dynamic import
-	// (not defer): the surface is off, or the built-in is unknown.
+	// (not defer): the built-in is unknown.
 	| { error: string; hard?: boolean };
 
 function externalModuleRecord(
@@ -1959,14 +1942,6 @@ function resolveSpecifier(
 			: { host };
 	}
 	if (isNodeSpecifier(specifier)) {
-		if (!ctx.nodeEnabled) {
-			return {
-				error:
-					`node built-in modules are disabled — set "surface": { "node": true } in ` +
-					`maligator.build.ts to import '${specifier}'`,
-				hard: true,
-			};
-		}
 		const host = lookupHostModule(specifier);
 		if (host) {
 			return { host };

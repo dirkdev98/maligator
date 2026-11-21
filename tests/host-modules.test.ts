@@ -520,11 +520,6 @@ globalThis.sink = read({process: 1});`,
 		);
 	});
 
-	it("leaves an ordinary program's manifest empty", () => {
-		const def = compile(`globalThis.sink = process;\n`, { node: false });
-		expect(def.runtime.hostInstalls).toEqual([]);
-	});
-
 	it("drops process used only by an unreachable function", () => {
 		const def = compile(`function unused() { return process; }\nglobalThis.sink = 1;\n`, {
 			node: true,

@@ -6,12 +6,13 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { parseCliArgs } from "../src/cli.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import {
+	HOST_PERSONALITY_INSTALLER,
 	HOST_PERSONALITY_INSTALLERS,
 	hostInstallerSymbol,
-	hostPersonalityInstaller,
 	NODE_BUILTIN_LOADER_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
 	NODE_INSTALLED_BUILTINS_INSTALLER,
+	NODE_PERSONALITY_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
@@ -131,7 +132,8 @@ describe("language component retention", () => {
 	it("honors the RegExp opt-out during dynamic member retention", () => {
 		const config = resolveBuildConfig({ engine: { regexp: false } });
 		const installs = manifest(`console.log("x"[method]());`, config);
-		expect([...installs.keys()]).toEqual([UNICODE_NORMALIZATION_INSTALLER]);
+		expect(installs.has(REGEXP_INSTALLER)).toBe(false);
+		expect(installs.has(UNICODE_NORMALIZATION_INSTALLER)).toBe(true);
 	});
 
 	it("retains the matcher for native terminal-control stripping", () => {
@@ -193,26 +195,38 @@ describe("maligator:http client retention", () => {
 });
 
 describe("host surface installers", () => {
-	const source = `globalThis.sink = new URL("https://example.com/").host;\n`;
-
 	it.each([
-		[
-			"the web surface",
-			web,
-			hostPersonalityInstaller({ webPlatform: true, node: false }),
-		],
-		[
-			"the Node surface",
-			node,
-			hostPersonalityInstaller({ webPlatform: false, node: true }),
-		],
-	])("lists the personality of %s first", (_name, config, personality) => {
-		expect([...manifest(source, config).keys()][0]).toBe(personality);
+		["a web global", `globalThis.sink = new URL("https://example.com/").host;\n`],
+		["a timer", `setTimeout(() => {}, 1);\n`],
+	])("lists the web personality first for a program that uses %s", (_name, source) => {
+		const installers = [...manifest(source, lean).keys()];
+		expect(installers[0]).toBe(HOST_PERSONALITY_INSTALLER);
+		expect(installers).not.toContain(NODE_PERSONALITY_INSTALLER);
+		expect(installers).not.toContain(NODE_ERROR_HOOKS_INSTALLER);
 	});
 
-	it("selects Node's Error hooks only on the Node surface", () => {
-		expect(manifest(source, node).has(NODE_ERROR_HOOKS_INSTALLER)).toBe(true);
-		expect(manifest(source, web).has(NODE_ERROR_HOOKS_INSTALLER)).toBe(false);
+	it.each([
+		["a Node global", `globalThis.sink = typeof process;\n`],
+		["an immediate", `setImmediate(() => {});\n`],
+		[
+			"a node: module",
+			`import { join } from "node:path";\nglobalThis.sink = join("a");\n`,
+		],
+		[
+			"a web global next to a node: module",
+			`import { join } from "node:path";\nglobalThis.sink = new URL(join("a"), "file:///");\n`,
+		],
+	])("lists the Node personality first for a program that uses %s", (_name, source) => {
+		const installers = [...manifest(source, lean).keys()];
+		expect(installers[0]).toBe(NODE_PERSONALITY_INSTALLER);
+		expect(installers).not.toContain(HOST_PERSONALITY_INSTALLER);
+		expect(installers).toContain(NODE_ERROR_HOOKS_INSTALLER);
+	});
+
+	it("selects Node's Error hooks for a program that reads them without a personality", () => {
+		expect([
+			...manifest(`globalThis.sink = Error.stackTraceLimit;\n`, lean).keys(),
+		]).toEqual([NODE_ERROR_HOOKS_INSTALLER]);
 	});
 });
 

@@ -148,7 +148,7 @@ describe("native runtime preparation", () => {
 
 	it.each(implicitInstrumentedConsumers())(
 		"prepares the selected instrumented profile for $file before hooks",
-		({ file, node }) => {
+		({ file }) => {
 			setup(selectedProject(file));
 			const contexts = preparedContexts();
 			expect(contexts).toHaveLength(3);
@@ -157,11 +157,6 @@ describe("native runtime preparation", () => {
 				[],
 				["-DMAL_PERF_STATS=1"],
 			]);
-			expect(contexts.map((context) => context.features?.nodeEnabled)).toEqual([
-				false,
-				true,
-				node,
-			]);
 			for (const [index, context] of contexts.entries()) {
 				expect(context.features).toMatchObject({
 					evalEnabled: true,
@@ -169,6 +164,7 @@ describe("native runtime preparation", () => {
 					intlEnabled: true,
 					temporalEnabled: true,
 					webPlatformEnabled: true,
+					nodeEnabled: true,
 					profileEnabled: false,
 				});
 				expect(context.environment).toMatchObject({
@@ -185,23 +181,6 @@ describe("native runtime preparation", () => {
 		expect(ensureNativeArtifacts).toHaveBeenCalledTimes(3);
 	});
 
-	it("prepares the web-disabled runtime before its timed hook without instrumenting that variant", () => {
-		setup(selectedProject("web-disabled.test.ts", "collection-direct.test.ts"));
-		const contexts = preparedContexts();
-		expect(contexts).toHaveLength(4);
-		const webDisabled = contexts.filter(
-			(context) => context.features?.webPlatformEnabled === false,
-		);
-		expect(webDisabled).toHaveLength(1);
-		expect(webDisabled[0]!.features?.nodeEnabled).toBe(false);
-		expect(perfStatsDefines(webDisabled[0]!.environment)).toEqual([]);
-		expect(webDisabled[0]!.environment).toMatchObject({
-			MAL_BUILD_JOBS: "4",
-			CARGO_BUILD_JOBS: "4",
-		});
-		expect(ensureNativeArtifacts).toHaveBeenCalledWith(webDisabled[0]);
-	});
-
 	it("prepares the realms-disabled profile before its timed hook", () => {
 		setup(selectedProject("realms-disabled.test.ts"));
 		const contexts = preparedContexts();
@@ -211,7 +190,7 @@ describe("native runtime preparation", () => {
 			false,
 		]);
 		expect(contexts.at(-1)?.features).toMatchObject({
-			nodeEnabled: false,
+			nodeEnabled: true,
 			webPlatformEnabled: true,
 		});
 		expect(ensureNativeArtifacts).toHaveBeenCalledWith(contexts.at(-1));
@@ -239,11 +218,7 @@ describe("native runtime preparation", () => {
 	it("prepares Node instrumentation for the HTTP queue lifecycle fixture", () => {
 		setup(selectedProject("node-http-ready-queues.test.ts"));
 		const contexts = preparedContexts();
-		expect(contexts.map((context) => context.features?.nodeEnabled)).toEqual([
-			false,
-			true,
-			true,
-		]);
+		expect(contexts).toHaveLength(3);
 		expect(contexts.map((context) => perfStatsDefines(context.environment))).toEqual([
 			[],
 			[],
@@ -261,7 +236,7 @@ describe("native runtime preparation", () => {
 			);
 			expect(locked).toHaveLength(1);
 			expect(locked[0]?.features).toMatchObject({
-				nodeEnabled: false,
+				nodeEnabled: true,
 				webPlatformEnabled: true,
 			});
 			expect(perfStatsDefines(locked[0]?.environment)).toEqual(["-DMAL_PERF_STATS=1"]);
@@ -279,10 +254,7 @@ describe("native runtime preparation", () => {
 	])("keeps %s outside default instrumented preparation", (file) => {
 		setup(selectedProject(file));
 		const contexts = preparedContexts();
-		expect(contexts.map((context) => context.features?.nodeEnabled)).toEqual([
-			false,
-			true,
-		]);
+		expect(contexts).toHaveLength(2);
 		expect(contexts.map((context) => perfStatsDefines(context.environment))).toEqual([
 			[],
 			[],
@@ -307,10 +279,7 @@ describe("native runtime preparation", () => {
 		vi.stubEnv("MAL_PERF_STATS", "1");
 		setup(selectedProject("map-get-set-cache.test.ts"));
 		const contexts = preparedContexts();
-		expect(contexts.map((context) => context.features?.nodeEnabled)).toEqual([
-			false,
-			true,
-		]);
+		expect(contexts).toHaveLength(2);
 		expect(contexts.map((context) => perfStatsDefines(context.environment))).toEqual([
 			["-DMAL_PERF_STATS=1"],
 			["-DMAL_PERF_STATS=1"],

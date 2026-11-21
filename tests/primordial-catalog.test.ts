@@ -149,50 +149,41 @@ describe("shared primordial catalog and coverage obligations", () => {
 			).toBe("Date.prototype.toISOString");
 		},
 	);
-	it.each([false, true])(
-		"proves Node Error accessors only with their configured surface: %s",
-		(node) => {
-			const world = worldFactsFromConfig(
-				resolveBuildConfig({
-					engine: { primordials: "locked" },
-					surface: { node },
-				}),
-			);
-			for (const id of ["Error", "TypeError"])
-				for (const key of ["prepareStackTrace", "stackTraceLimit"]) {
-					const proof = provePrimordialAccess(
-						world,
-						{ kind: "intrinsic", id, realm: "current" },
-						key,
-					);
-					if (node) {
-						expect(proof?.resolution?.owner[0]).toBe("Error");
-						expect(proof?.resolution?.getter?.[0]).toBe(`Error.${key}<get>`);
-						expect(proof?.resolution?.setter?.[0]).toBe(`Error.${key}<set>`);
-					} else expect(proof).toBeUndefined();
-					for (const accessor of ["get", "set"]) {
-						const accessorProof = provePrimordialAccess(
-							world,
-							{
-								kind: "intrinsic",
-								id: `Error.${key}<${accessor}>`,
-								realm: "current",
-							},
-							"name",
-						);
-						if (node) expect(accessorProof?.kind).toBe("descriptor");
-						else expect(accessorProof).toBeUndefined();
-					}
-				}
-			expect(
-				provePrimordialAccess(
+	it("proves Node Error accessors", () => {
+		const world = worldFactsFromConfig(
+			resolveBuildConfig({ engine: { primordials: "locked" } }),
+		);
+		for (const id of ["Error", "TypeError"])
+			for (const key of ["prepareStackTrace", "stackTraceLimit"]) {
+				const proof = provePrimordialAccess(
 					world,
-					{ kind: "intrinsic", id: "Error", realm: "current" },
-					"captureStackTrace",
-				)?.resolution?.value?.[0],
-			).toBe("Error.captureStackTrace");
-		},
-	);
+					{ kind: "intrinsic", id, realm: "current" },
+					key,
+				);
+				expect(proof?.resolution?.owner[0]).toBe("Error");
+				expect(proof?.resolution?.getter?.[0]).toBe(`Error.${key}<get>`);
+				expect(proof?.resolution?.setter?.[0]).toBe(`Error.${key}<set>`);
+				for (const accessor of ["get", "set"]) {
+					const accessorProof = provePrimordialAccess(
+						world,
+						{
+							kind: "intrinsic",
+							id: `Error.${key}<${accessor}>`,
+							realm: "current",
+						},
+						"name",
+					);
+					expect(accessorProof?.kind).toBe("descriptor");
+				}
+			}
+		expect(
+			provePrimordialAccess(
+				world,
+				{ kind: "intrinsic", id: "Error", realm: "current" },
+				"captureStackTrace",
+			)?.resolution?.value?.[0],
+		).toBe("Error.captureStackTrace");
+	});
 
 	it("covers every native-discovered descriptor without claiming pending work is complete", () => {
 		expect(() =>

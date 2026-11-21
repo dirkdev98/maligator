@@ -337,14 +337,13 @@ describe("compiler cache identity", () => {
 
 		const frontendDimensions = [
 			resolveBuildConfig({ modules: { aliases: { package: "./replacement.ts" } } }),
+			resolveBuildConfig({ modules: { conditions: ["maligator"] } }),
 			resolveBuildConfig({ engine: { primordials: "mutable" } }),
 			resolveBuildConfig({ engine: { eval: true } }),
 			resolveBuildConfig({ engine: { realms: true } }),
 			resolveBuildConfig({ engine: { regexp: false } }),
 			resolveBuildConfig({ engine: { temporal: true } }),
 			resolveBuildConfig({ engine: { intl: { enabled: true } } }),
-			resolveBuildConfig({ surface: { webPlatform: true } }),
-			resolveBuildConfig({ surface: { node: true } }),
 		];
 		for (const config of frontendDimensions) {
 			expect(JSON.stringify(compilerConfigurationIdentity(config))).not.toBe(base);

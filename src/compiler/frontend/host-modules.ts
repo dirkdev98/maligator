@@ -1,6 +1,6 @@
 /**
- * The central catalog of supported `node:*` host built-in modules (the first
- * Node-compatibility slice, behind `surface.node`). It is the single source of
+ * The central catalog of supported `node:*` host built-in modules, which every
+ * program may import. It is the single source of
  * truth for which `node:*` specifiers resolve and what each is planned to
  * export, shared by the module graph (resolution → virtual module records)
  * and the linker (host export binding synthesis).
@@ -121,6 +121,21 @@ export const WORKER_GLOBALS: ReadonlyArray<string> = [
 ];
 
 /**
+ * The host personality: Node's timers and the host flags the other installers build
+ * on. An image that uses a web global or module lists it first in its install table,
+ * and one that uses neither web nor Node lists no personality.
+ */
+export const HOST_PERSONALITY_INSTALLER = "mal_host_install_web_personality";
+
+/**
+ * The host personality plus Node's immediates, console formatting and host
+ * behaviour, which an image that uses a Node global or module lists instead.
+ * Keeping them out of `HOST_PERSONALITY_INSTALLER` keeps web programs off the Node
+ * runtime.
+ */
+export const NODE_PERSONALITY_INSTALLER = "mal_host_install_node_web_personality";
+
+/**
  * Installers that define free globals, retained at startup when a program names one
  * of them. `computedMember` means the installer is also retained when the program
  * reads the global object in a way the compiler cannot follow, such as
@@ -134,7 +149,21 @@ export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 	readonly globals: ReadonlyArray<string>;
 	readonly computedMember: boolean;
 	readonly surface: "node" | "web" | "web-only";
+	/** Retained only for an image that uses Node through another installer. */
+	readonly nodeCompanion?: true;
 }> = [
+	{
+		installer: HOST_PERSONALITY_INSTALLER,
+		globals: ["setTimeout", "setInterval", "clearTimeout", "clearInterval"],
+		computedMember: true,
+		surface: "web",
+	},
+	{
+		installer: NODE_PERSONALITY_INSTALLER,
+		globals: ["setImmediate", "clearImmediate"],
+		computedMember: true,
+		surface: "web",
+	},
 	{
 		installer: "mal_host_install_web_events",
 		globals: [
@@ -254,6 +283,7 @@ export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 		globals: ["Request", "Response"],
 		computedMember: true,
 		surface: "node",
+		nodeCompanion: true,
 	},
 ];
 
@@ -261,26 +291,22 @@ export const REGEXP_INSTALLER = "mal_host_install_regexp";
 export const UNICODE_NORMALIZATION_INSTALLER = "mal_host_install_unicode_normalization";
 
 /**
- * Each image's install table lists its host personality first: the timers, console
- * and surface flags the other installers build on. The runtime carries every
- * personality, and a program links only the one its image lists.
+ * Whether an image applies the host personality, so its driver must attach the host
+ * and run the event loop after the program's synchronous phase.
  */
-export function hostPersonalityInstaller(surfaces: {
-	readonly webPlatform: boolean;
-	readonly node: boolean;
-}): string | undefined {
-	if (surfaces.node) {
-		return surfaces.webPlatform
-			? "mal_host_install_node_web_personality"
-			: "mal_host_install_node_personality";
-	}
-	return surfaces.webPlatform ? "mal_host_install_web_personality" : undefined;
+export function imageUsesHost(
+	hostInstalls: ReadonlyArray<{ readonly installer: string }>,
+) {
+	return hostInstalls.some(({ installer }) =>
+		HOST_PERSONALITY_INSTALLERS.includes(installer),
+	);
 }
 
+/** Every personality the runtime carries; images list at most one of the two above. */
 export const HOST_PERSONALITY_INSTALLERS: ReadonlyArray<string> = [
-	"mal_host_install_web_personality",
+	HOST_PERSONALITY_INSTALLER,
 	"mal_host_install_node_personality",
-	"mal_host_install_node_web_personality",
+	NODE_PERSONALITY_INSTALLER,
 ];
 
 /**
@@ -289,6 +315,29 @@ export const HOST_PERSONALITY_INSTALLERS: ReadonlyArray<string> = [
  * so it follows the same Node-surface rule as the primordial catalog's entries.
  */
 export const NODE_ERROR_HOOKS_INSTALLER = "mal_host_install_node_error_hooks";
+
+/** Whether an installer belongs to the Node host and builds on `NODE_PERSONALITY_INSTALLER`. */
+export function installerUsesNodePersonality(installer: string): boolean {
+	return (
+		installer === PROCESS_INSTALLER_SYMBOL ||
+		(installer.startsWith("mal_host_install_node_") &&
+			installer !== NODE_ERROR_HOOKS_INSTALLER)
+	);
+}
+
+/**
+ * Whether an installer belongs to the web or Node host and builds on a personality.
+ * Language components, C libraries, workers and the other Maligator modules work
+ * without one.
+ */
+export function installerUsesHostPersonality(installer: string): boolean {
+	return (
+		installerUsesNodePersonality(installer) ||
+		installer.startsWith("mal_host_install_web_") ||
+		installer === "mal_host_install_maligator_internal_http" ||
+		installer === "mal_host_install_maligator_internal_fetch"
+	);
+}
 
 /** Whether a HOST_GLOBAL_INSTALLERS row's installer exists on these surfaces. */
 export function hostGlobalInstallerAvailable(

@@ -65,7 +65,7 @@ console.log(String.fromCharCode(...value), body.constructor.name, encoded.readab
 		const binary = build(
 			"escape",
 			`const names = Object.getOwnPropertyNames(globalThis);
-console.log(["Response", "URL", "ReadableStream", "structuredClone", "AbortController", "crypto"].every((name) => names.includes(name)));
+console.log(["Response", "URL", "ReadableStream", "structuredClone", "AbortController"].every((name) => names.includes(name)));
 `,
 		);
 		expect(runToStdout(binary).trim()).toBe("true");

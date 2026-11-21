@@ -25,15 +25,12 @@ test.each([
 	],
 ])("loads the effectful Node source builtin through %s", (file, source) => {
 	write(file, source);
-	const graph = buildModuleGraph(path.join(root, file), { buildConfig: nodeOn });
+	const graph = buildModuleGraph(path.join(root, file));
 	const builtin = graph.modules.get("node:test");
 	expect(builtin?.goal).toBe("module");
 	expect(builtin?.host).toBeUndefined();
 	expect(builtin?.platform).toBeUndefined();
 	expect(builtin?.sourcePath).toMatch(/testing\/node-test\.ts$/);
-	expect(() => buildModuleGraph(path.join(root, file))).toThrow(
-		"node built-in modules are disabled",
-	);
 });
 
 test("keeps the bare test package separate from the prefix-only builtin", () => {
@@ -846,7 +843,10 @@ test("records unresolved dynamic imports without adding graph nodes", () => {
 		{ specifier: "./missing.mjs", kind: "dynamic", resolved: null },
 		{ specifier: null, kind: "dynamic", resolved: null },
 	]);
-	expect([...graph.modules.keys()].map(rel)).toEqual(["unresolved-dynamic.mjs"]);
+	// A computed import may load a source builtin by name, so those providers join.
+	expect(
+		[...graph.modules.keys()].filter((id) => !id.startsWith("node:")).map(rel),
+	).toEqual(["unresolved-dynamic.mjs"]);
 });
 
 test("still rejects an unresolved static import", () => {
@@ -856,44 +856,32 @@ test("still rejects an unresolved static import", () => {
 	);
 });
 
-test("the node export condition is gated on surface.node", () => {
+test("resolves packages with the node condition unless the build replaces the conditions", () => {
 	// Declaration order lists `node` before `import`, so `node` wins WHEN active.
 	write(
 		"node_modules/ordered/package.json",
 		JSON.stringify({
 			type: "module",
-			exports: { node: "./node.mjs", import: "./import.mjs" },
+			exports: { browser: "./browser.mjs", node: "./node.mjs", import: "./import.mjs" },
 		}),
 	);
+	write("node_modules/ordered/browser.mjs", `export const selected = "browser";\n`);
 	write("node_modules/ordered/node.mjs", `export const selected = "node";\n`);
 	write("node_modules/ordered/import.mjs", `export const selected = "import";\n`);
 	write("ordered-entry.mjs", `import { selected } from "ordered";\n`);
-
-	// Default (surface.node off): the `node` condition is inactive, so `import` wins.
-	expect(
+	const resolved = (conditions?: Array<string>) =>
 		depSummary(
-			buildModuleGraph(path.join(root, "ordered-entry.mjs")),
+			buildModuleGraph(path.join(root, "ordered-entry.mjs"), {
+				buildConfig: resolveBuildConfig(conditions ? { modules: { conditions } } : {}),
+			}),
 			"ordered-entry.mjs",
-		),
-	).toEqual([
-		{
-			specifier: "ordered",
-			kind: "import",
-			resolved: path.join("node_modules", "ordered", "import.mjs"),
-		},
-	]);
+		)[0]?.resolved;
 
-	// surface.node on: the `node` condition is active and wins by declaration order.
-	const graph = buildModuleGraph(path.join(root, "ordered-entry.mjs"), {
-		buildConfig: nodeOn,
-	});
-	expect(depSummary(graph, "ordered-entry.mjs")).toEqual([
-		{
-			specifier: "ordered",
-			kind: "import",
-			resolved: path.join("node_modules", "ordered", "node.mjs"),
-		},
-	]);
+	expect(resolved()).toBe(path.join("node_modules", "ordered", "node.mjs"));
+	expect(resolved(["maligator"])).toBe(
+		path.join("node_modules", "ordered", "import.mjs"),
+	);
+	expect(resolved(["browser"])).toBe(path.join("node_modules", "ordered", "browser.mjs"));
 });
 
 test("selects package export conditions by dependency kind", () => {
@@ -1389,11 +1377,10 @@ test("links unmodified Tinypool's thread bootstrap and optional backend imports"
 	).toBe(true);
 });
 
-test("rejects a node:* import clearly when surface.node is off (the default)", () => {
-	write("node-off.mjs", `import { join } from "node:path";\n`);
-	expect(() => buildModuleGraph(path.join(root, "node-off.mjs"))).toThrow(
-		/node built-in modules are disabled/,
-	);
+test("resolves a node:* import without configuration", () => {
+	write("node-default.mjs", `import { join } from "node:path";\n`);
+	const graph = buildModuleGraph(path.join(root, "node-default.mjs"));
+	expect(graph.modules.get("node:path")?.host?.id).toBe("node:path");
 });
 
 test("canonicalizes bare zlib and exposes compression adapters", () => {
@@ -1709,13 +1696,6 @@ test("a literal dynamic import of an unknown node:* is rejected, not deferred", 
 	expect(() =>
 		buildModuleGraph(path.join(root, "dyn-unknown.mjs"), { buildConfig: nodeOn }),
 	).toThrow(/unknown node built-in module 'node:repl'/);
-});
-
-test("a literal dynamic import of node:* is rejected when surface.node is off", () => {
-	write("dyn-off.mjs", `import("node:path");\n`);
-	expect(() => buildModuleGraph(path.join(root, "dyn-off.mjs"))).toThrow(
-		/node built-in modules are disabled/,
-	);
 });
 
 test("a computed dynamic import of a node: string is deferred (only literals are checked)", () => {

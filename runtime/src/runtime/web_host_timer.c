@@ -6,9 +6,10 @@
 #include <stdatomic.h>
 
 #include "async_context.h"
-#include "array_object.h"
 #include "gc.h"
 #include "function_object.h"
+#include "heap_symbol.h"
+#include "shape.h"
 #include "host.h"
 #include "intrinsics.h"
 #include "microtask.h"
@@ -121,14 +122,14 @@ static void mal_host_unlink_timer(MalHost *host, MalHostTimer *t) {
     }
 }
 
-static i64 mal_host_add_timer(
+static MalHostTimer *mal_host_add_timer(
     MalVm *vm, MalValue callback, i64 delay_ms, MalValue *args, i32 arg_count,
     i64 repeat_ms, bool repeating) {
     MalHostTimer *t = calloc(1, sizeof(MalHostTimer));
     if (t == nullptr) {
         free(args);
         mal_vm_throw_allocation_error(vm);
-        return 0;
+        return nullptr;
     }
     t->id = mal_host(vm)->timer_next_id++;
     t->callback = callback;
@@ -137,13 +138,13 @@ static i64 mal_host_add_timer(
     t->args = args;
     t->arg_count = arg_count;
     t->async_context = mal_async_context_capture(vm);
+    t->delay_ms = delay_ms < 0 ? 0 : delay_ms;
     t->repeat_ms = repeat_ms;
     t->repeating = repeating;
     t->ready = false;
     t->cancelled = false;
     t->vm = vm;
-    t->timer.deadline_ns =
-        mal_reactor_now_ns() + (delay_ms < 0 ? 0 : delay_ms) * 1000000;
+    t->timer.deadline_ns = mal_reactor_now_ns() + t->delay_ms * 1000000;
     t->timer.waker = (MalWaker) {.fn = mal_host_timer_waker, .data = t};
     t->timer.heap_index = -1;
 
@@ -156,46 +157,52 @@ static i64 mal_host_add_timer(
     }
     mal_host(vm)->timers_tail = t;
     mal_reactor_add_timer(&mal_host(vm)->reactor, &t->timer);
-    return t->id;
+    return t;
+}
+
+static MalHostTimer *mal_host_add_timeout_or_interval(
+    MalVm *vm, MalValue callback, i64 delay_ms, MalValue *args, i32 arg_count, bool repeat) {
+    if (!repeat) return mal_host_add_timer(vm, callback, delay_ms, args, arg_count, 0, false);
+    i64 period_ms = delay_ms < 0 ? 0 : delay_ms;
+    return mal_host_add_timer(vm, callback, period_ms, args, arg_count, period_ms, true);
 }
 
 i64 mal_host_set_timeout(
     MalVm *vm, MalValue callback, i64 delay_ms, MalValue *args, i32 arg_count) {
-    return mal_host_add_timer(vm, callback, delay_ms, args, arg_count, 0, false);
+    MalHostTimer *t = mal_host_add_timeout_or_interval(vm, callback, delay_ms, args, arg_count, false);
+    return t == nullptr ? 0 : t->id;
 }
 
 i64 mal_host_set_interval(
     MalVm *vm, MalValue callback, i64 period_ms, MalValue *args, i32 arg_count) {
-    if (period_ms < 0) {
-        period_ms = 0;
+    MalHostTimer *t = mal_host_add_timeout_or_interval(vm, callback, period_ms, args, arg_count, true);
+    return t == nullptr ? 0 : t->id;
+}
+
+static MalHostTimer *mal_host_find_timer(MalVm *vm, i64 id) {
+    for (MalHostTimer *t = mal_host(vm)->timers; t != nullptr; t = t->next) {
+        if (t->id == id) return t;
     }
-    return mal_host_add_timer(vm, callback, period_ms, args, arg_count, period_ms, true);
+    return nullptr;
 }
 
 void mal_host_clear_timeout(MalVm *vm, i64 id) {
     MalHost *host = mal_host(vm);
-    for (MalHostTimer *t = host->timers; t != nullptr; t = t->next) {
-        if (t->id == id) {
-            if (t->ready) {
-                t->cancelled = true;
-            } else {
-                mal_reactor_cancel_timer(&host->reactor, &t->timer);
-                mal_host_unlink_timer(host, t);
-                free(t->args);
-                free(t);
-            }
-            return;
-        }
+    MalHostTimer *t = mal_host_find_timer(vm, id);
+    if (t == nullptr) return;
+    if (t->ready) {
+        t->cancelled = true;
+    } else {
+        mal_reactor_cancel_timer(&host->reactor, &t->timer);
+        mal_host_unlink_timer(host, t);
+        free(t->args);
+        free(t);
     }
 }
 
 void mal_host_timer_set_referenced(MalVm *vm, i64 id, bool referenced) {
-    for (MalHostTimer *timer = mal_host(vm)->timers; timer != nullptr; timer = timer->next) {
-        if (timer->id == id && !timer->cancelled) {
-            timer->referenced = referenced;
-            return;
-        }
-    }
+    MalHostTimer *timer = mal_host_find_timer(vm, id);
+    if (timer != nullptr && !timer->cancelled) timer->referenced = referenced;
 }
 
 bool mal_host_timers_are_node(MalVm *vm) {
@@ -245,33 +252,25 @@ static bool mal_host_run_one_ready(MalVm *vm) {
             return true;
         }
 
-        mal_host_unlink_timer(host, t); // callback may mutate the pending list
-        MalValue cb = t->callback;
-        MalValue handle = t->handle;
-        MalValue *cargs = t->args;
-        i32 cargc = t->arg_count;
-        MalAsyncContext *async_context = t->async_context;
-        free(t); // the task struct is done; cb/cargs kept alive below
-
-        MalRootSpan rs_cb;
-        mal_gc_root(&rs_cb, &cb, 1);
-        MalRootSpan rs_handle;
-        mal_gc_root(&rs_handle, &handle, 1);
-        MalRootSpan rs_args;
-        if (cargc > 0) {
-            mal_gc_root(&rs_args, cargs, cargc);
-        }
+        // The timer stays listed, and so rooted, while its callback runs: clearing it
+        // there only marks it, and Timeout.refresh() can still re-arm it.
+        t->running = true;
         MalAsyncContextScope async_scope;
-        mal_async_context_scope_enter(vm, &async_scope, async_context);
-        mal_vm_call_value(vm, cb, handle, cargs, cargc);
+        mal_async_context_scope_enter(vm, &async_scope, t->async_context);
+        mal_vm_call_value(vm, t->callback, t->handle, t->args, t->arg_count);
         mal_async_context_scope_exit(vm, &async_scope);
-        if (cargc > 0) {
-            mal_gc_unroot(&rs_args);
+        t->running = false;
+        if (t->refreshed && !t->cancelled) {
+            t->refreshed = false;
+            t->ready = false;
+            t->timer.deadline_ns = mal_reactor_now_ns() + t->delay_ms * 1000000;
+            t->timer.heap_index = -1;
+            mal_reactor_add_timer(&host->reactor, &t->timer);
+        } else {
+            mal_host_unlink_timer(host, t);
+            free(t->args);
+            free(t);
         }
-        mal_gc_unroot(&rs_handle);
-        mal_gc_unroot(&rs_cb);
-
-        free(cargs);
         return true;
     }
     return false;
@@ -428,8 +427,8 @@ static i64 mal_host_schedule_native(MalVm *vm, const MalValue *args, i32 arg_cou
             extra_args[i] = args[i + 2];
         }
     }
-    return repeat ? mal_host_set_interval(vm, args[0], delay, extra_args, extra)
-                  : mal_host_set_timeout(vm, args[0], delay, extra_args, extra);
+    MalHostTimer *t = mal_host_add_timeout_or_interval(vm, args[0], delay, extra_args, extra, repeat);
+    return t == nullptr ? 0 : t->id;
 }
 
 static MalValue mal_host_set_timeout_native(
@@ -478,10 +477,25 @@ static MalValue mal_host_clear_timeout_native(
     return mal_value_new_undefined();
 }
 
+/*
+ * Node's Timeout objects. One prototype per VM carries the methods, and each object
+ * records its timer id under a private symbol, which reflection can neither see nor
+ * forge. The prototype and symbol live as long as the VM that created them.
+ */
+static MAL_ISOLATE_LOCAL MalVm *timeout_vm;
+static MAL_ISOLATE_LOCAL MalValue timeout_prototype;
+static MAL_ISOLATE_LOCAL MalValue timeout_id_symbol;
+// The heap's transition tree interns this shape and retains its key.
+static MAL_ISOLATE_LOCAL MalShape *timeout_shape;
+
 /* Root source: pending timer callbacks + their args must survive until they run.
  * Registered with the engine so the collector roots them without knowing the type. */
 static void mal_host_timers_scan_roots(MalVm *vm, void *data) {
     (void) data;
+    if (vm == timeout_vm) {
+        mal_gc_mark_value(timeout_prototype);
+        mal_gc_mark_value(timeout_id_symbol);
+    }
     MalHost *host = mal_host(vm);
     if (host == nullptr) return;
     for (MalHostTimer *t = host->timers; t != nullptr; t = t->next) {
@@ -493,63 +507,121 @@ static void mal_host_timers_scan_roots(MalVm *vm, void *data) {
     }
 }
 
-static MalHostTimer *mal_host_timer_from_method(MalVm *vm, MalValue callee) {
-    MalValue state = mal_native_function_object_get_slot(
-        mal_value_to_native_function_object(callee), 0);
-    MalValue id = mal_object_get_own(mal_value_to_object(state), mal_key_index(0)).desc.value;
-    for (MalHostTimer *timer = mal_host(vm)->timers; timer != nullptr; timer = timer->next) {
-        if (timer->id == (i64) mal_ops_number_as_f64(id) && !timer->cancelled) return timer;
-    }
-    return nullptr;
+static MalKey timeout_id_key(void) {
+    return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = timeout_id_symbol};
 }
 
-static MalValue mal_host_timer_ref(
+/* The timer id a Timeout object records, or 0 when `value` is not one. */
+static i64 timeout_id(MalVm *vm, MalValue value) {
+    if (vm != timeout_vm || !mal_value_is_object(value)) return 0;
+    MalObject *object = mal_value_to_object(value);
+    // A Timeout nobody extended still has its allocation shape, whose only slot is the id.
+    if (object->shape == timeout_shape)
+        return (i64) mal_ops_number_as_f64(mal_object_field_load_shaped(object, 0));
+    MalPropertyLookup id = mal_object_get_own(object, timeout_id_key());
+    return id.present ? (i64) mal_ops_number_as_f64(id.desc.value) : 0;
+}
+
+/* The pending timer behind a Timeout receiver, or nullptr once it ran or was cleared. */
+static MalHostTimer *timeout_timer(MalVm *vm, MalValue self) {
+    i64 id = timeout_id(vm, self);
+    MalHostTimer *timer = id == 0 ? nullptr : mal_host_find_timer(vm, id);
+    return timer != nullptr && !timer->cancelled ? timer : nullptr;
+}
+
+static MalValue timeout_ref(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) args; (void) argc; (void) nt;
-    MalValue state = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
-    mal_object_set(mal_value_to_object(state), mal_key_index(1), mal_value_new_boolean(true));
-    MalHostTimer *timer = mal_host_timer_from_method(vm, callee);
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalHostTimer *timer = timeout_timer(vm, self);
     if (timer != nullptr) timer->referenced = true;
     return self;
 }
 
-static MalValue mal_host_timer_unref(
+static MalValue timeout_unref(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) args; (void) argc; (void) nt;
-    MalValue state = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
-    mal_object_set(mal_value_to_object(state), mal_key_index(1), mal_value_new_boolean(false));
-    MalHostTimer *timer = mal_host_timer_from_method(vm, callee);
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalHostTimer *timer = timeout_timer(vm, self);
     if (timer != nullptr) timer->referenced = false;
     return self;
 }
 
-static MalValue mal_host_timer_has_ref(
+/* A timeout that ran or was cleared keeps nothing alive, so it reports false. */
+static MalValue timeout_has_ref(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) self; (void) args; (void) argc; (void) nt;
-    (void) vm;
-    MalValue state = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
-    return mal_object_get_own(mal_value_to_object(state), mal_key_index(1)).desc.value;
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalHostTimer *timer = timeout_timer(vm, self);
+    return mal_value_new_boolean(timer != nullptr && timer->referenced);
 }
 
-static MalValue mal_host_timer_to_primitive(
+/*
+ * Restart a pending timer's delay from now; a one-shot timer whose callback is running
+ * re-arms once it returns. A timer already queued to run keeps its turn.
+ */
+static MalValue timeout_refresh(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) vm; (void) self; (void) args; (void) argc; (void) nt;
-    MalValue state = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
-    return mal_object_get_own(mal_value_to_object(state), mal_key_index(0)).desc.value;
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalHostTimer *timer = timeout_timer(vm, self);
+    if (timer != nullptr && timer->running) {
+        timer->refreshed = true;
+    } else if (timer != nullptr && !timer->ready) {
+        MalReactor *reactor = &mal_host(vm)->reactor;
+        mal_reactor_cancel_timer(reactor, &timer->timer);
+        timer->timer.deadline_ns = mal_reactor_now_ns() + timer->delay_ms * 1000000;
+        timer->timer.heap_index = -1;
+        mal_reactor_add_timer(reactor, &timer->timer);
+    }
+    return self;
 }
 
-static void mal_host_timer_handle_method(
-    MalVm *vm, MalValue handle, MalKey key, const char *name,
-    MalNativeFunctionCallback callback, MalValue state) {
-    MalValue method = mal_value_from_native_function_object(
-        mal_native_function_object_new_with_slots(&vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) name), callback, &state, 1));
+static MalValue timeout_close(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    i64 id = timeout_id(vm, self);
+    if (id != 0) mal_host_clear_timeout(vm, id);
+    return self;
+}
+
+/* The numeric id keeps arithmetic on handles and clearTimeout(Number(handle)) working. */
+static MalValue timeout_to_primitive(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    i64 id = timeout_id(vm, self);
+    if (id == 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Receiver is not a Timeout");
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_f64((f64) id);
+}
+
+static void timeout_runtime_cleanup(MalVm *vm) {
+    if (timeout_vm != vm) return;
+    timeout_vm = nullptr;
+    timeout_prototype = mal_value_new_undefined();
+    timeout_id_symbol = mal_value_new_undefined();
+    timeout_shape = nullptr;
+}
+
+static void timeout_prototype_install(MalVm *vm) {
+    if (timeout_vm == vm) return;
+    MalValue roots[] = {
+        mal_value_from_object(mal_intrinsic_new_object(vm)),
+        mal_value_from_symbol(mal_symbol_new_private(&vm->heap)),
+    };
     MalRootSpan root;
-    mal_gc_root(&root, &method, 1);
-    MalPropertyDesc descriptor = {.value = method,
-        .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE};
-    mal_object_define_own(mal_value_to_object(handle), key, &descriptor);
+    mal_gc_root(&root, roots, countof(roots));
+    MalObject *prototype = mal_value_to_object(roots[0]);
+    mal_intrinsic_define_method_n(vm, prototype, "ref", 0, timeout_ref);
+    mal_intrinsic_define_method_n(vm, prototype, "unref", 0, timeout_unref);
+    mal_intrinsic_define_method_n(vm, prototype, "hasRef", 0, timeout_has_ref);
+    mal_intrinsic_define_method_n(vm, prototype, "refresh", 0, timeout_refresh);
+    mal_intrinsic_define_method_n(vm, prototype, "close", 0, timeout_close);
+    mal_intrinsic_define_symbol_method(vm, prototype, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE,
+        (const byte *) "[Symbol.toPrimitive]", timeout_to_primitive);
+    timeout_prototype = roots[0];
+    timeout_id_symbol = roots[1];
+    timeout_shape = mal_shape_add_property(mal_shape_root(&vm->heap), timeout_id_key(), MAL_PROPERTY_NONE);
+    timeout_vm = vm;
+    (void) mal_vm_register_runtime_cleanup(vm, timeout_runtime_cleanup);
     mal_gc_unroot(&root);
 }
 
@@ -557,32 +629,12 @@ static MalValue mal_host_schedule_node_native(
     MalVm *vm, const MalValue *args, i32 argc, bool repeat) {
     i64 id = mal_host_schedule_native(vm, args, argc, repeat);
     if (id == 0) return mal_value_new_undefined();
-    MalValue handle = mal_value_from_object(mal_intrinsic_new_object(vm));
-    MalRootSpan root;
-    mal_gc_root(&root, &handle, 1);
-    MalValue state = mal_value_from_array_object(mal_intrinsic_new_array(vm, 2));
-    MalRootSpan state_root;
-    mal_gc_root(&state_root, &state, 1);
-    mal_object_set(mal_value_to_object(state), mal_key_index(0), mal_value_from_f64((f64) id));
-    mal_object_set(mal_value_to_object(state), mal_key_index(1), mal_value_new_boolean(true));
-    mal_host_timer_handle_method(vm, handle,
-        mal_intrinsic_string_key(vm, (const byte *) "ref"), "ref", mal_host_timer_ref, state);
-    mal_host_timer_handle_method(vm, handle,
-        mal_intrinsic_string_key(vm, (const byte *) "unref"), "unref", mal_host_timer_unref, state);
-    mal_host_timer_handle_method(vm, handle,
-        mal_intrinsic_string_key(vm, (const byte *) "hasRef"), "hasRef", mal_host_timer_has_ref, state);
-    mal_host_timer_handle_method(vm, handle,
-        mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE),
-        "[Symbol.toPrimitive]", mal_host_timer_to_primitive, state);
-    for (MalHostTimer *timer = mal_host(vm)->timers_tail; timer != nullptr; timer = timer->previous) {
-        if (timer->id == id) {
-            timer->handle = handle;
-            break;
-        }
-    }
-    mal_gc_unroot(&state_root);
-    mal_gc_unroot(&root);
-    return handle;
+    // The timer just scheduled is the newest, and its handle is `this` in the callback.
+    MalValue id_value = mal_value_from_f64((f64) id);
+    MalHostTimer *timer = mal_host(vm)->timers_tail;
+    timer->handle = mal_value_from_object(mal_object_new_shaped(
+        &vm->heap, mal_value_to_object(timeout_prototype), timeout_shape, &id_value, 1));
+    return timer->handle;
 }
 
 static MalValue mal_host_set_timeout_node_native(
@@ -597,11 +649,23 @@ static MalValue mal_host_set_interval_node_native(
     return mal_host_schedule_node_native(vm, args, argc, true);
 }
 
+/* clearTimeout reads a Timeout's id directly and converts anything else to a number. */
+static MalValue mal_host_clear_timeout_node_native(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    i64 id = argc >= 1 ? timeout_id(vm, args[0]) : 0;
+    if (id == 0) return mal_host_clear_timeout_native(vm, self, args, argc, nt, callee);
+    mal_host_clear_timeout(vm, id);
+    return mal_value_new_undefined();
+}
+
 void mal_host_timers_install_node(MalVm *vm, MalObject *global_this) {
     mal_host(vm)->node_timers = true;
     mal_host_timers_install(vm, global_this);
+    timeout_prototype_install(vm);
     mal_intrinsic_define_method_n(vm, global_this, "setTimeout", 2, mal_host_set_timeout_node_native);
     mal_intrinsic_define_method_n(vm, global_this, "setInterval", 2, mal_host_set_interval_node_native);
+    mal_intrinsic_define_method_n(vm, global_this, "clearTimeout", 1, mal_host_clear_timeout_node_native);
+    mal_intrinsic_define_method_n(vm, global_this, "clearInterval", 1, mal_host_clear_timeout_node_native);
 }
 
 void mal_host_timers_install(MalVm *vm, MalObject *global_this) {

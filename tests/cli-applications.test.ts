@@ -330,8 +330,8 @@ describe("CLI application images", () => {
 			expect(prepared.applicationImage).toMatchObject({
 				schema: 1,
 				entryPath: entry,
-				node: false,
-				webPlatform: false,
+				node: true,
+				webPlatform: true,
 				engine: { eval: false, temporal: false },
 			});
 			expect(prepared.applicationImage?.wires).toHaveLength(1);

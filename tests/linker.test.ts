@@ -402,14 +402,12 @@ test("detects assignment to a free global `process` under the node surface", () 
 	expect(linkModules(program).hostProcess?.installer).toBe("mal_host_install_process");
 });
 
-test("does not treat `process` as a host global without the node surface", () => {
+test("treats `process` as a host global without configuration", () => {
 	const root = tree({
 		"main.mjs": `globalThis.sink = process.argv;\n`,
 	});
-	// Default config: node surface off.
 	const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"));
-	const linkage = linkModules(program);
-	expect(linkage.hostProcess).toBeUndefined();
+	expect(linkModules(program).hostProcess?.installer).toBe("mal_host_install_process");
 });
 
 test("does not treat a locally-declared `process` as the host global", () => {

@@ -59,24 +59,20 @@ describe("CommonJS loader lowering", () => {
 	});
 
 	it.each([
-		["escaped require", "globalThis.load = require;", true],
-		["eval-exposed require", "globalThis.load = eval('require');", true],
-		["Node-disabled require", "globalThis.load = require;", false],
-	] as const)(
-		"retains the dynamic Node loader for %s only when enabled",
-		(_name, source, node) => {
-			const root = fixture({ "main.cjs": source });
-			const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.cjs"), {
-				buildConfig: resolveBuildConfig({ surface: { node } }),
-			});
-			const image = compileSemanticProgramToProgramImage(program);
-			expect(
-				image.runtime.hostInstalls.some(
-					(install) => install.installer === "mal_host_install_node_module",
-				),
-			).toBe(node);
-		},
-	);
+		["escaped require", "globalThis.load = require;"],
+		["eval-exposed require", "globalThis.load = eval('require');"],
+	] as const)("retains the dynamic Node loader for %s", (_name, source) => {
+		const root = fixture({ "main.cjs": source });
+		const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.cjs"), {
+			buildConfig: resolveBuildConfig({}),
+		});
+		const image = compileSemanticProgramToProgramImage(program);
+		expect(
+			image.runtime.hostInstalls.some(
+				(install) => install.installer === "mal_host_install_node_module",
+			),
+		).toBe(true);
+	});
 
 	it("assigns one wrapper per file across JSON and CommonJS cycles", () => {
 		const root = fixture({

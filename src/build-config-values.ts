@@ -212,7 +212,7 @@ export interface FfiCallbackReach {
 export interface ResolvedBuildConfig {
 	entry: string | undefined;
 	outputName: string | undefined;
-	modules: { aliases: Record<string, string> };
+	modules: { aliases: Record<string, string>; conditions: Array<string> };
 	engine: {
 		primordials: "locked" | "mutable";
 		eval: boolean | "compile-check";
@@ -227,12 +227,21 @@ export interface ResolvedBuildConfig {
 	ffiModules: ReadonlyArray<FfiModule>;
 }
 
+/**
+ * Package `exports` conditions a server program resolves with, besides `import` or
+ * `require` for the edge and the always-matching `default`. Never `browser`.
+ */
+export const DEFAULT_EXPORT_CONDITIONS: ReadonlyArray<string> = ["maligator", "node"];
+
 /** Apply defaults over a validated config. Absent fields take the product default. */
 export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildConfig {
 	return {
 		entry: config.entry,
 		outputName: config.outputName,
-		modules: { aliases: { ...(config.modules?.aliases ?? {}) } },
+		modules: {
+			aliases: { ...(config.modules?.aliases ?? {}) },
+			conditions: [...(config.modules?.conditions ?? DEFAULT_EXPORT_CONDITIONS)],
+		},
 		engine: {
 			primordials: config.engine?.primordials ?? "locked",
 			eval: config.engine?.eval ?? false,
@@ -248,10 +257,9 @@ export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildC
 				languages: config.engine?.intl?.languages ?? [],
 			},
 		},
-		surface: {
-			webPlatform: config.surface?.webPlatform ?? false,
-			node: config.surface?.node ?? false,
-		},
+		// Every program may reach the web and Node globals and modules; a program links
+		// only those it uses. The parsed surface flags no longer select anything.
+		surface: { webPlatform: true, node: true },
 		ffi: { ...(config.ffi ?? {}) },
 		ffiModules: [],
 	};

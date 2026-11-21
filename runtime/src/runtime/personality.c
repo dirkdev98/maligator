@@ -30,11 +30,12 @@ static bool personality_begin(MalVm *vm, bool web_platform, bool node) {
     return true;
 }
 
-// The event loop's timers stay global; the API classes install by use (web_surface.h).
-// An isolate without a host event loop, such as an installer test, gets no timers.
+// The event loop's timers stay global and follow Node, returning Timeout objects; the
+// API classes install by use (web_surface.h). An isolate without a host event loop,
+// such as an installer test, gets no timers.
 static void personality_web(MalVm *vm) {
     if (!personality_begin(vm, true, false) || mal_host(vm) == nullptr) return;
-    mal_host_timers_install(vm, personality_global(vm));
+    mal_host_timers_install_node(vm, personality_global(vm));
 }
 
 static void personality_node(MalVm *vm, bool web_platform) {

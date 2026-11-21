@@ -5,8 +5,10 @@
 
 #include "async_context.h"
 #include "gc.h"
+#include "heap_symbol.h"
 #include "intrinsics.h"
 #include "object.h"
+#include "shape.h"
 #include "value_ops.h"
 #include "vm_ops.h"
 #include "web_host_timer.h"
@@ -15,8 +17,10 @@ typedef struct MalNodeImmediate {
     i64 id;
     MalVm *vm;
     MalValue callback;
+    MalValue handle;
     MalValue *args;
     i32 arg_count;
+    bool referenced;
     MalAsyncContext *async_context;
     struct MalNodeImmediate *previous;
     struct MalNodeImmediate *next;
@@ -27,6 +31,15 @@ static MAL_ISOLATE_LOCAL MalNodeImmediate *node_immediates;
 static MAL_ISOLATE_LOCAL MalNodeImmediate *node_immediates_tail;
 static MAL_ISOLATE_LOCAL i64 node_immediate_next_id = 1;
 static MAL_ISOLATE_LOCAL bool node_immediate_roots_installed;
+/*
+ * Node's Immediate objects share one prototype per VM and record their id under a
+ * private symbol, as Timeout objects do (web_host_timer.c).
+ */
+static MAL_ISOLATE_LOCAL MalVm *immediate_vm;
+static MAL_ISOLATE_LOCAL MalValue immediate_prototype;
+static MAL_ISOLATE_LOCAL MalValue immediate_id_symbol;
+// The heap's transition tree interns this shape and retains its key.
+static MAL_ISOLATE_LOCAL MalShape *immediate_shape;
 
 static void node_immediate_unlink(MalNodeImmediate *immediate) {
     if (immediate->previous == nullptr) node_immediates = immediate->next;
@@ -37,10 +50,15 @@ static void node_immediate_unlink(MalNodeImmediate *immediate) {
 
 static void node_immediate_scan_roots(MalVm *vm, void *data) {
     (void) data;
+    if (vm == immediate_vm) {
+        mal_gc_mark_value(immediate_prototype);
+        mal_gc_mark_value(immediate_id_symbol);
+    }
     for (MalNodeImmediate *immediate = node_immediates; immediate != nullptr;
          immediate = immediate->next) {
         if (immediate->vm != vm) continue;
         mal_gc_mark_value(immediate->callback);
+        mal_gc_mark_value(immediate->handle);
         mal_gc_mark_values(immediate->args, immediate->arg_count);
         mal_gc_mark_value(
             mal_async_internal_value((MalHeapHeader *) immediate->async_context));
@@ -53,23 +71,119 @@ static bool node_immediate_drain(MalVm *vm) {
     if (immediate == nullptr) return false;
     node_immediate_unlink(immediate);
 
-    MalValue callback = immediate->callback;
+    MalValue frame[] = {immediate->callback, immediate->handle};
     MalValue *args = immediate->args;
     i32 arg_count = immediate->arg_count;
     MalAsyncContext *async_context = immediate->async_context;
     free(immediate);
-    MalRootSpan callback_root;
-    mal_gc_root(&callback_root, &callback, 1);
+    MalRootSpan frame_root;
+    mal_gc_root(&frame_root, frame, countof(frame));
     MalRootSpan args_root;
     if (arg_count > 0) mal_gc_root(&args_root, args, arg_count);
     MalAsyncContextScope async_scope;
     mal_async_context_scope_enter(vm, &async_scope, async_context);
-    mal_vm_call_value(vm, callback, mal_value_new_undefined(), args, arg_count);
+    mal_vm_call_value(vm, frame[0], frame[1], args, arg_count);
     mal_async_context_scope_exit(vm, &async_scope);
     if (arg_count > 0) mal_gc_unroot(&args_root);
-    mal_gc_unroot(&callback_root);
+    mal_gc_unroot(&frame_root);
     free(args);
     return true;
+}
+
+static MalKey immediate_id_key(void) {
+    return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = immediate_id_symbol};
+}
+
+/* The id an Immediate object records, or 0 when `value` is not one. */
+static i64 immediate_id(MalVm *vm, MalValue value) {
+    if (vm != immediate_vm || !mal_value_is_object(value)) return 0;
+    MalObject *object = mal_value_to_object(value);
+    // An Immediate nobody extended still has its allocation shape, whose only slot is the id.
+    if (object->shape == immediate_shape)
+        return (i64) mal_ops_number_as_f64(mal_object_field_load_shaped(object, 0));
+    MalPropertyLookup id = mal_object_get_own(object, immediate_id_key());
+    return id.present ? (i64) mal_ops_number_as_f64(id.desc.value) : 0;
+}
+
+/* The queued immediate behind an Immediate receiver, or nullptr once it ran or was cleared. */
+static MalNodeImmediate *immediate_pending(MalVm *vm, MalValue self) {
+    i64 id = immediate_id(vm, self);
+    for (MalNodeImmediate *immediate = node_immediates; id != 0 && immediate != nullptr;
+         immediate = immediate->next) {
+        if (immediate->vm == vm && immediate->id == id) return immediate;
+    }
+    return nullptr;
+}
+
+/*
+ * The flag is observable through hasRef(); the loop still runs every queued
+ * immediate before it can go idle, so unref() does not end the process early.
+ */
+static MalValue immediate_set_ref(MalVm *vm, MalValue self, bool referenced) {
+    MalNodeImmediate *immediate = immediate_pending(vm, self);
+    if (immediate != nullptr) immediate->referenced = referenced;
+    return self;
+}
+
+static MalValue immediate_ref(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    return immediate_set_ref(vm, self, true);
+}
+
+static MalValue immediate_unref(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    return immediate_set_ref(vm, self, false);
+}
+
+static MalValue immediate_has_ref(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    MalNodeImmediate *immediate = immediate_pending(vm, self);
+    return mal_value_new_boolean(immediate != nullptr && immediate->referenced);
+}
+
+static MalValue immediate_to_primitive(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    i64 id = immediate_id(vm, self);
+    if (id == 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Receiver is not an Immediate");
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_f64((f64) id);
+}
+
+static void immediate_runtime_cleanup(MalVm *vm) {
+    mal_node_immediates_free(vm);
+    if (immediate_vm != vm) return;
+    immediate_vm = nullptr;
+    immediate_prototype = mal_value_new_undefined();
+    immediate_id_symbol = mal_value_new_undefined();
+    immediate_shape = nullptr;
+}
+
+static void immediate_prototype_install(MalVm *vm) {
+    if (immediate_vm == vm) return;
+    MalValue roots[] = {
+        mal_value_from_object(mal_intrinsic_new_object(vm)),
+        mal_value_from_symbol(mal_symbol_new_private(&vm->heap)),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalObject *prototype = mal_value_to_object(roots[0]);
+    mal_intrinsic_define_method_n(vm, prototype, "ref", 0, immediate_ref);
+    mal_intrinsic_define_method_n(vm, prototype, "unref", 0, immediate_unref);
+    mal_intrinsic_define_method_n(vm, prototype, "hasRef", 0, immediate_has_ref);
+    mal_intrinsic_define_symbol_method(vm, prototype, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE,
+        (const byte *) "[Symbol.toPrimitive]", immediate_to_primitive);
+    immediate_prototype = roots[0];
+    immediate_id_symbol = roots[1];
+    immediate_shape =
+        mal_shape_add_property(mal_shape_root(&vm->heap), immediate_id_key(), MAL_PROPERTY_NONE);
+    immediate_vm = vm;
+    mal_gc_unroot(&root);
 }
 
 static MalValue node_set_immediate(
@@ -91,6 +205,8 @@ static MalValue node_set_immediate(
     immediate->id = node_immediate_next_id++;
     immediate->vm = vm;
     immediate->callback = args[0];
+    immediate->handle = mal_value_new_undefined();
+    immediate->referenced = true;
     immediate->async_context = mal_async_context_capture(vm);
     immediate->arg_count = argc - 1;
     if (immediate->arg_count > 0) {
@@ -106,7 +222,10 @@ static MalValue node_set_immediate(
     if (node_immediates_tail == nullptr) node_immediates = immediate;
     else node_immediates_tail->next = immediate;
     node_immediates_tail = immediate;
-    return mal_value_from_f64((f64) immediate->id);
+    MalValue id_value = mal_value_from_f64((f64) immediate->id);
+    immediate->handle = mal_value_from_object(mal_object_new_shaped(
+        &vm->heap, mal_value_to_object(immediate_prototype), immediate_shape, &id_value, 1));
+    return immediate->handle;
 }
 
 static MalValue node_clear_immediate(
@@ -116,10 +235,13 @@ static MalValue node_clear_immediate(
     (void) new_target;
     (void) callee;
     if (argc < 1) return mal_value_new_undefined();
-    f64 number;
-    if (!mal_vm_to_number(vm, args[0], &number)) return mal_value_new_undefined();
-    if (!isfinite(number) || trunc(number) != number) return mal_value_new_undefined();
-    i64 id = (i64) number;
+    i64 id = immediate_id(vm, args[0]);
+    if (id == 0) {
+        f64 number;
+        if (!mal_vm_to_number(vm, args[0], &number)) return mal_value_new_undefined();
+        if (!isfinite(number) || trunc(number) != number) return mal_value_new_undefined();
+        id = (i64) number;
+    }
     for (MalNodeImmediate *immediate = node_immediates; immediate != nullptr;
          immediate = immediate->next) {
         if (immediate->vm != vm || immediate->id != id) continue;
@@ -137,7 +259,8 @@ void mal_node_immediates_install(MalVm *vm, MalObject *global_this) {
         mal_host_register_macrotask_drain(node_immediate_drain, false);
         node_immediate_roots_installed = true;
     }
-    (void) mal_vm_register_runtime_cleanup(vm, mal_node_immediates_free);
+    immediate_prototype_install(vm);
+    (void) mal_vm_register_runtime_cleanup(vm, immediate_runtime_cleanup);
     mal_intrinsic_define_method_n(vm, global_this, "setImmediate", 1, node_set_immediate);
     mal_intrinsic_define_method_n(vm, global_this, "clearImmediate", 1, node_clear_immediate);
 }

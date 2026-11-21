@@ -14,7 +14,7 @@ import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { LocalBuildResult } from "../src/local-build.ts";
 import type { NativeBuildCommandEvent } from "../src/native-build-context.ts";
-import { buildNativeBinaryResult, HOST_MAIN } from "../src/test-harness.ts";
+import { buildNativeBinaryResult } from "../src/test-harness.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
 const lean = resolveBuildConfig({});
@@ -309,7 +309,6 @@ try {
 			fixture: file,
 			name,
 			config,
-			mainFile: config.surface.webPlatform ? HOST_MAIN : undefined,
 			production: true,
 			outDir: scratch,
 			environment: env,

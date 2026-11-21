@@ -64,6 +64,24 @@ const evalLeaf: Leaf = {
 			`a boolean or "compile-check"`,
 		),
 };
+// `import`/`require` follow the dependency edge and `default` always matches, so a
+// configured set names only the conditions a project chooses.
+const EDGE_CONDITIONS = new Set(["import", "require", "default"]);
+const conditionsLeaf: Leaf = {
+	leaf: (value, at) =>
+		expect(
+			Array.isArray(value) &&
+				value.every(
+					(item) =>
+						typeof item === "string" &&
+						item.length > 0 &&
+						!item.startsWith(".") &&
+						!EDGE_CONDITIONS.has(item),
+				),
+			at,
+			`an array of condition names other than "import", "require" and "default"`,
+		),
+};
 const primordialsLeaf: Leaf = {
 	leaf: (value, at) =>
 		expect(value === "locked" || value === "mutable", at, `"locked" or "mutable"`),
@@ -72,7 +90,7 @@ const CONFIG_SCHEMA: ObjectSchema = {
 	object: {
 		entry: stringLeaf,
 		outputName: stringLeaf,
-		modules: { object: { aliases: stringRecordLeaf } },
+		modules: { object: { aliases: stringRecordLeaf, conditions: conditionsLeaf } },
 		engine: {
 			object: {
 				primordials: primordialsLeaf,
@@ -216,39 +234,26 @@ function shortHash(value: unknown): string {
  * A short stable hash of the build-affecting projection of the config, used as the
  * output-name suffix (build-flags.ts) so binaries built under different
  * capabilities do not clobber each other. Native archives are content-addressed
- * from their exact inputs. The output depends
- * on `engine.eval` (whether the eval component and compiler wire are linked),
- * `engine.intl` and `engine.temporal` (which language components the program links),
- * `surface.webPlatform` and `surface.node` (which host personality and installers the
- * program links; the runtime archive itself is the same for every surface).
- * Returns "" for the canonical build (eval on, Temporal on, Intl on, all
- * locales, web on, node OFF) so it keeps the unsuffixed binary name — node defaults
- * off and every internal-tooling build is node-off, so node-off stays canonical.
+ * from their exact inputs. The output depends on `engine.eval` (whether the eval
+ * component and compiler wire are linked), `engine.intl` and `engine.temporal`
+ * (which language components the program links), RegExp and the primordial and
+ * realm flavours, but not on the locale set, which only changes Rust/ICU datagen.
+ * Returns "" for the canonical build (eval, realms, Intl with all services, RegExp
+ * and Temporal on, locked primordials) so it keeps the unsuffixed binary name.
  */
 export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
-	// The generated binary depends on eval, whether Intl is on, which services are selected,
-	// shared URL (web or Node), regexp
-	// (builtin_regexp/regexp_object/gc/string gating), Temporal, and node (the host built-in
-	// surface), primordial policy, but NOT on the locale set (that only changes
-	// Rust/ICU datagen).
-	// Empty services = all; eval + realms + Intl + all-services + web + regexp + Temporal on and
-	// node off = canonical.
 	const services = selectedIntlServices(config).sort();
-	const web = config.surface.webPlatform;
 	const regexp = config.engine.regexp;
 	const temporal = config.engine.temporal;
-	const node = config.surface.node;
 	const realms = config.engine.realms;
 	if (
 		config.engine.eval === true &&
 		realms &&
 		config.engine.intl.enabled &&
 		services.length === 0 &&
-		web &&
 		regexp &&
 		temporal &&
-		config.engine.primordials === "locked" &&
-		!node
+		config.engine.primordials === "locked"
 	) {
 		return "";
 	}
@@ -256,11 +261,9 @@ export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 		eval: config.engine.eval === true,
 		intl: config.engine.intl.enabled,
 		services,
-		web,
 		regexp,
 		temporal,
 		primordials: config.engine.primordials,
-		node,
 		realms,
 	});
 }
@@ -279,8 +282,18 @@ export interface BuildDerivation {
 	cacheSuffix: string;
 }
 
-/** Project a resolved config onto the {@link BuildDerivation} the build layer consumes. */
-export function buildDerivationFromConfig(config: ResolvedBuildConfig): BuildDerivation {
+/**
+ * Project a resolved config onto the {@link BuildDerivation} the build layer consumes.
+ * `usesHost` says whether the program applies the host personality. Only then does its
+ * link list the web and Node components (TLS, URL with its C++ runtime, zlib, Node
+ * crypto): the Rust archive references them all, so a listed component library joins
+ * the link even for a program that reaches none of it. A caller that links before it
+ * knows the program keeps the default.
+ */
+export function buildDerivationFromConfig(
+	config: ResolvedBuildConfig,
+	usesHost = true,
+): BuildDerivation {
 	const intlFeatures = intlCargoFeatures(config);
 	const features = normalizeNativeFeatures({
 		primordialsLocked: config.engine.primordials === "locked",
@@ -288,10 +301,10 @@ export function buildDerivationFromConfig(config: ResolvedBuildConfig): BuildDer
 		realmsEnabled: config.engine.realms,
 		intlEnabled: config.engine.intl.enabled,
 		intlFeatures,
-		webPlatformEnabled: config.surface.webPlatform,
+		webPlatformEnabled: usesHost,
 		regexpEnabled: config.engine.regexp,
 		temporalEnabled: config.engine.temporal,
-		nodeEnabled: config.surface.node,
+		nodeEnabled: usesHost,
 	});
 	return {
 		features,

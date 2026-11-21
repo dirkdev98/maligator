@@ -164,7 +164,10 @@ export function compilerProducerIdentity(
 /** Configuration facts consumed before native emission. */
 export function compilerConfigurationIdentity(config: ResolvedBuildConfig): unknown {
 	return {
-		moduleResolution: { aliases: config.modules.aliases },
+		moduleResolution: {
+			aliases: config.modules.aliases,
+			conditions: config.modules.conditions,
+		},
 		world: {
 			primordialPolicy: config.engine.primordials,
 			dynamicCompilation: config.engine.eval,

@@ -44,11 +44,15 @@ import {
 	HOST_GLOBAL_INSTALLERS,
 	HOST_MODULES,
 	hostGlobalInstallerAvailable,
+	HOST_PERSONALITY_INSTALLER,
+	HOST_PERSONALITY_INSTALLERS,
 	hostInstallerSymbol,
-	hostPersonalityInstaller,
+	installerUsesHostPersonality,
+	installerUsesNodePersonality,
 	NODE_BUILTIN_LOADER_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
 	NODE_INSTALLED_BUILTINS_INSTALLER,
+	NODE_PERSONALITY_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
@@ -1294,6 +1298,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 	// Exports first: publishing a re-exported import or host export allocates its slot.
 	const moduleLinks = coreModuleLinks(program);
 	const hostInstallCandidates = coreHostInstallCandidates(program);
+	const reachedHostInstallers = hostInstallSelection(program, hostInstallCandidates);
 	CoreEditor.configureProgram(program.core, {
 		stringConstants: program.stringConstants,
 		bigintConstants: program.bigintConstants,
@@ -1371,15 +1376,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 					initializedModuleGlobalSlots,
 				),
 				...coreInitializedLexicalReads(program),
-				retainedHostInstallers: [
-					program.hostProcess,
-					program.hostBuffer,
-					...program.hostGlobals,
-				]
-					.flatMap((host) => (host?.retained === true ? [host.installer] : []))
-					.concat(program.nodeModuleInstaller ?? [])
-					.concat(builtinModuleInstallers(program, hostInstallCandidates))
-					.concat(hostSurfaceInstallers(program))
+				retainedHostInstallers: reachedHostInstallers
 					// The embedded compiler uses the eval runtime's already installed intrinsics.
 					.concat(program.intrinsicGlobalReads ? [] : [...program.languageInstallers])
 					// Runtime eval code uses the components its host program installed.
@@ -1401,15 +1398,37 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 	};
 }
 
-/** The host personality and Node's Error hooks, which every image of a surface program lists. */
-function hostSurfaceInstallers(program: CoreFrontendContext): Array<string> {
-	const personality = hostPersonalityInstaller({
-		webPlatform: program.semantic.graph?.webPlatformEnabled ?? false,
-		node: program.semantic.graph?.nodeEnabled ?? false,
-	});
+/**
+ * The retained host installers, led by the personality an image that reaches a web
+ * or Node installer lists: the Node one, with Node's Error hooks, once it reaches a
+ * Node installer. A host module counts while lowered code reads one of its exports,
+ * even if optimization later drops that read. An image that reaches neither lists
+ * no personality, so it links no host and keeps the lean driver.
+ */
+function hostInstallSelection(
+	program: CoreFrontendContext,
+	candidates: ReadonlyArray<CoreHostInstallCandidate>,
+): Array<string> {
+	const retained = [
+		program.hostProcess,
+		program.hostBuffer,
+		...program.hostGlobals,
+	].filter((host): host is NonNullable<typeof host> => host?.retained === true);
+	const companion = (host: (typeof retained)[number]) =>
+		"nodeCompanion" in host && host.nodeCompanion === true;
+	const reached = retained
+		.filter((host) => !companion(host))
+		.map((host) => host.installer)
+		.concat(program.nodeModuleInstaller ?? [])
+		.concat(builtinModuleInstallers(program, candidates));
+	const installers = [...reached, ...candidates.map(({ installer }) => installer)];
+	const usesNode = installers.some(installerUsesNodePersonality);
+	if (!usesNode && !installers.some(installerUsesHostPersonality)) return reached;
 	return [
-		...(personality === undefined ? [] : [personality]),
-		...(program.facts.world.nodeSurface ? [NODE_ERROR_HOOKS_INSTALLER] : []),
+		usesNode ? NODE_PERSONALITY_INSTALLER : HOST_PERSONALITY_INSTALLER,
+		...(usesNode && program.facts.world.nodeSurface ? [NODE_ERROR_HOOKS_INSTALLER] : []),
+		...reached.filter((installer) => !HOST_PERSONALITY_INSTALLERS.includes(installer)),
+		...(usesNode ? retained.filter(companion).map((host) => host.installer) : []),
 	];
 }
 
@@ -17276,6 +17295,8 @@ function retainLanguageMember(
 		retainUnfollowedLanguageMembers(program);
 	} else if (key === "normalize") {
 		program.languageInstallers.add(UNICODE_NORMALIZATION_INSTALLER);
+	} else if (key === "stackTraceLimit" || key === "prepareStackTrace") {
+		retainNodeErrorHooks(program);
 	} else if (
 		key === "RegExp" ||
 		key === "match" ||
@@ -17290,6 +17311,16 @@ function retainLanguageMember(
 function retainUnfollowedLanguageMembers(program: CoreFrontendContext): void {
 	program.languageInstallers.add(REGEXP_INSTALLER);
 	program.languageInstallers.add(UNICODE_NORMALIZATION_INSTALLER);
+	retainNodeErrorHooks(program);
+}
+
+/**
+ * The primordial catalog lists Node's Error hooks, so code that can observe them by
+ * name or reflection selects them even without the personality.
+ */
+function retainNodeErrorHooks(program: CoreFrontendContext): void {
+	if (program.facts.world.nodeSurface)
+		program.languageInstallers.add(NODE_ERROR_HOOKS_INSTALLER);
 }
 
 function retainCommonJsLoader(
