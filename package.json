@@ -33,6 +33,7 @@
 		"bench:quick": "node ./scripts/bench-quick.ts",
 		"bench:self-compile-experiment": "node ./scripts/self-compile-experiment.ts",
 		"bench:self-compile-profile": "node ./scripts/profile-self-compile.ts",
+		"bench:size": "node ./scripts/binary-size.ts",
 		"bench:translation-units": "node ./scripts/bench-translation-units.ts",
 		"ci:status": "node ./scripts/ci-status.ts",
 		"env:check": "node ./scripts/agent-environment.ts",

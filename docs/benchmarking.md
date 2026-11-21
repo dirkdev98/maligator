@@ -35,6 +35,21 @@ artifact identity, image counts, generated-object measurements, executable size,
 cache outcomes. Use `--plan=json` before execution, `--category` or repeatable `--case`
 for focused work, and `--preset confirm --case ID` for deeper selected evidence.
 
+### Executable size
+
+Run `npm run bench:size -- --plan=json` to inspect the fixtures, then
+`npm run bench:size` from a checkout with dependencies installed. It builds
+small default, Web Platform, and Node surface programs and the existing bare and
+Express HTTP benchmark servers in production mode. It reports file sizes in bytes
+and uses `bun build --compile` for compatible fixtures when Bun is on `PATH`.
+
+Each run writes a report under `.cache/bench-size/`. On macOS, it also writes
+linker maps and ranks the retained, file-backed symbol bytes by input object and
+Rust crate where the linker and symbol names provide that information. The file
+sizes include headers, alignment, and other data outside those symbol totals.
+Compare reports from the same target, toolchain, and absolute source directory.
+The source directory can affect generated symbol names and link layout.
+
 ### C library calls
 
 On macOS, `bench:ffi` compares C, Bun FFI, and Maligator FFI against the same
