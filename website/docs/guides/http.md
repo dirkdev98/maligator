@@ -80,7 +80,7 @@ serve({
 
 ## Develop a frontend behind the server
 
-A declaration with a [watcher](/guides/assets#produce-files-with-a-build-step) serves from its dev server while the watcher runs: `serveAsset` forwards each request to the watcher's `url`, so the page, the API and the frontend's live updates share one origin. Point the dev server's hot-reload socket at its own port, such as Vite's `server.hmr.clientPort`, because the forwarding answers plain requests. A build embeds the produced files instead.
+A declaration with a [watcher](/guides/assets#produce-files-with-a-build-step) serves from its dev server while the watcher runs: `serveAsset` forwards each request to the watcher's `url`, so the page, the API and the frontend's live updates share one origin. Point the dev server's hot-reload socket at its own port, such as Vite's `server.hmr.clientPort`, because the forwarding answers plain requests. Forwarding uses `fetch`, so enable `surface.node` alongside `surface.webPlatform`. A build embeds the produced files instead.
 
 ## Use node:http
 

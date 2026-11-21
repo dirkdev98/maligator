@@ -113,7 +113,14 @@ export function serveAsset(
 		throw new TypeError("serveAsset option 'immutable' must be an array of patterns");
 	// A watched declaration's files come from its dev server while one runs.
 	const target = assetProxy(asset);
-	if (target !== undefined) return proxy(target);
+	if (target !== undefined) {
+		// Global fetch comes from the Node surface until the web platform has its own.
+		if (typeof fetch !== "function")
+			throw new TypeError(
+				`serveAsset forwards to the watcher at ${target}, which requires surface.node`,
+			);
+		return proxy(target);
+	}
 	const route: AssetRoute = Object.freeze({
 		handle: asset,
 		prefix,

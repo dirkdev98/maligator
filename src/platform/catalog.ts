@@ -1078,7 +1078,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 						"(asset: Assets.EmbeddedFile | Assets.EmbeddedDirectory, options?: ServeAssetOptions) => Handler",
 				},
 				description:
-					"A handler that serves an embedded file or directory with its media type, ETag, cache headers, conditional and range requests, and precompressed copies in production builds. While a declaration's watcher runs, the handler forwards to the watcher's URL instead.",
+					"A handler that serves an embedded file or directory with its media type, ETag, cache headers, conditional and range requests, and precompressed copies in production builds. While a declaration's watcher runs, the handler forwards to the watcher's URL instead, which needs `surface.node` for `fetch`.",
 				examples: [
 					'import { embedDirectory } from "maligator:assets";\nimport { serve, serveAsset } from "maligator:http";\n\nconst files = serveAsset(embedDirectory("./public"), { fallback: "index.html" });\nserve({ port: 3000, fetch: files });',
 				],
@@ -1093,7 +1093,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 				name: "proxy",
 				type: { kind: "signature", source: "(target: string) => Handler" },
 				description:
-					"A handler that forwards each request to the same path below `target` and returns the buffered answer.",
+					"A handler that forwards each request to the same path below `target` and returns the buffered answer. Forwarding uses `fetch`, which `surface.node` provides.",
 				contract: {
 					phase: "runtime",
 					value: "callable",

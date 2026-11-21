@@ -102,7 +102,7 @@ declare module "maligator:http" {
 	 * A handler that serves an embedded file or directory with its media type, ETag,
 	 * cache headers, conditional and range requests, and precompressed copies in
 	 * production builds. While a declaration's watcher runs, the handler forwards to the
-	 * watcher's URL instead.
+	 * watcher's URL instead, which needs `surface.node` for `fetch`.
 	 *
 	 * @example
 	 * import { embedDirectory } from "maligator:assets";
@@ -119,7 +119,7 @@ declare module "maligator:http" {
 	) => Handler;
 	/**
 	 * A handler that forwards each request to the same path below `target` and returns
-	 * the buffered answer.
+	 * the buffered answer. Forwarding uses `fetch`, which `surface.node` provides.
 	 *
 	 * @see https://maligator.ddv.tools/api/http#proxy
 	 */
