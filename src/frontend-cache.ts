@@ -307,8 +307,14 @@ export class FrontendCompilationSession {
 
 	snapshot(file: string, knownSource?: string): FrontendDependencyIdentity {
 		const resolved = path.resolve(file);
+		const sourceDigest =
+			knownSource === undefined ? undefined : frontendDigest(knownSource);
 		const cached = this.#snapshots.get(resolved);
-		if (cached !== undefined) return cached;
+		if (
+			cached !== undefined &&
+			(sourceDigest === undefined || cached.digest === sourceDigest)
+		)
+			return cached;
 		const stats = statSync(resolved);
 		if (!stats.isFile())
 			throw new Error(`frontend dependency is not a file: ${resolved}`);
@@ -330,11 +336,10 @@ export class FrontendCompilationSession {
 			path: resolved,
 			...statIdentity,
 			digest:
-				knownSource !== undefined
-					? frontendDigest(knownSource)
-					: mayReuse
-						? persistent.digest
-						: frontendDigest(new Uint8Array(readFileSync(resolved))),
+				sourceDigest ??
+				(mayReuse
+					? persistent.digest
+					: frontendDigest(new Uint8Array(readFileSync(resolved)))),
 		};
 		if (knownSource === undefined) {
 			if (mayReuse) this.#digestHits++;

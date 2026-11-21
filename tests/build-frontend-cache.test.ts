@@ -641,6 +641,37 @@ describe("normal build frontend cache", () => {
 		expect(compile(entrypoint, cacheDirectory).cache).toBe("miss");
 	});
 
+	it("invalidates a retained build when a platform module's bytes change", () => {
+		const root = temporaryDirectory();
+		try {
+			const entrypoint = path.join(root, "entry.mjs");
+			const platformSourceRoot = path.join(root, "platform");
+			const source = path.join(platformSourceRoot, "fs", "runtime.ts");
+			mkdirSync(path.dirname(source), { recursive: true });
+			write(entrypoint, 'import { file } from "maligator:fs"; console.log(file());\n');
+			write(source, 'export function file() { return "before"; }\n');
+			const options = {
+				entrypoint,
+				platformSourceRoot,
+				config: resolveBuildConfig({}),
+				stripTypes: stripCompactTypes,
+				stripperIdentity: "platform-source-edit",
+				cacheDirectory: path.join(root, "cache"),
+				session: new BuildCompilationSession(),
+			};
+			const before = compileBuildFrontend(options).wire;
+			expect(compileBuildFrontend(options).cache).toBe("hit");
+
+			write(source, 'export function file() { return "edited"; }\n');
+			const changed = compileBuildFrontend(options);
+			expect(changed.cache).toBe("miss");
+			expect(changed.wire).not.toEqual(before);
+			expect(compileBuildFrontend(options).cache).toBe("hit");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("invalidates a build when a text or bytes import's file changes", () => {
 		const root = temporaryDirectory();
 		try {

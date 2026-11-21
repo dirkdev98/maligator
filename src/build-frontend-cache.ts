@@ -18,6 +18,7 @@ import type { CoreInstrumentationMode } from "./compiler/core/core-optimization-
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/analyze-module-graph.ts";
 import { certifyProgramClosure } from "./compiler/frontend/certify-closure.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
+import { SOURCE_HOST_MODULES } from "./compiler/frontend/host-modules.ts";
 import type {
 	BuildModuleGraphOptions,
 	ModuleGraph,
@@ -79,6 +80,7 @@ import {
 } from "./frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
 import { graphReadsExecution, UnsupportedLinkedImagesError } from "./linked-images.ts";
+import { PLATFORM_MODULES } from "./platform/catalog.ts";
 import { executionIdentity } from "./platform/execution.ts";
 import type { Execution } from "./platform/execution.ts";
 import {
@@ -94,6 +96,17 @@ const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
 	"build-frontend",
 );
+const platformSourceModules = new Map(SOURCE_HOST_MODULES);
+const platformSourceFiles = new Set(SOURCE_HOST_MODULES.values());
+for (const platformModule of PLATFORM_MODULES) {
+	if (platformModule.kind === "source" && platformModule.id !== "maligator:test") {
+		platformSourceModules.set(platformModule.id, platformModule.sourceFile);
+		platformSourceFiles.add(platformModule.sourceFile);
+	}
+	for (const { contract } of platformModule.exports)
+		if (contract.workerSource !== undefined)
+			platformSourceFiles.add(contract.workerSource);
+}
 
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
@@ -219,7 +232,10 @@ function cacheRoot(override: string | undefined): string {
 	return path.resolve(override ?? BUILD_FRONTEND_CACHE_DIRECTORY);
 }
 
-function cacheIdentity(options: CompileBuildFrontendOptions): string {
+function cacheIdentity(
+	options: CompileBuildFrontendOptions,
+	platformSourceRoot: string,
+): string {
 	return digest(
 		JSON.stringify({
 			schema: BUILD_FRONTEND_CACHE_SCHEMA,
@@ -229,7 +245,7 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			),
 			compilerArtifactVersion: COMPILER_ARTIFACT_VERSION,
 			stripper: options.stripperIdentity,
-			platformSourceRoot: options.platformSourceRoot,
+			platformSourceRoot,
 			optimization: options.optimization ?? "full",
 			// Profiled images keep per-instruction sites and select different native plans.
 			profile: options.profile === true,
@@ -256,9 +272,18 @@ function readManifest(file: string): BuildFrontendManifest | undefined {
 function dependenciesUnchanged(
 	dependencies: Array<BuildDependencyIdentity>,
 	session: FrontendCompilationSession,
+	platformSourceRoot: string,
 ): boolean {
+	const platformPaths = new Set(
+		[...platformSourceFiles].map((file) => path.resolve(platformSourceRoot, file)),
+	);
 	return dependencies.every((dependency) => {
 		try {
+			if (platformPaths.has(dependency.path)) {
+				// Platform sources can change independently of the application's session snapshots.
+				const source = readFileSync(dependency.path, "utf8");
+				return session.snapshot(dependency.path, source).digest === dependency.digest;
+			}
 			const current = session.snapshot(dependency.path);
 			return (
 				current.size === dependency.size &&
@@ -372,6 +397,7 @@ function loadCached(
 	identity: string,
 	execution: string,
 	session: FrontendCompilationSession,
+	platformSourceRoot: string,
 ):
 	| {
 			workerImages: ReadonlyArray<CompiledWorkerImage>;
@@ -416,7 +442,7 @@ function loadCached(
 						validArtifactIdentity(artifact) &&
 						compilerArtifactUnchanged(artifact, artifactRoot),
 				))) ||
-		!dependenciesUnchanged(manifest.dependencies, session)
+		!dependenciesUnchanged(manifest.dependencies, session, platformSourceRoot)
 	) {
 		return undefined;
 	}
@@ -486,12 +512,23 @@ interface GraphDependencyInputs {
 	readonly directories: ReadonlyArray<string>;
 }
 
-function graphDependencyInputs(graph: ModuleGraph): GraphDependencyInputs {
+function graphDependencyInputs(
+	graph: ModuleGraph,
+	platformSourceRoot: string,
+): GraphDependencyInputs {
 	const sources: Array<{ path: string; source?: string }> = [];
 	const directories: Array<string> = [];
 	for (const record of graph.modules.values()) {
-		if (record.host || (record.virtual && record.sourcePath === undefined)) continue;
-		const file = record.sourcePath ?? record.path;
+		if (record.host) continue;
+		let file = record.sourcePath;
+		if (file === undefined) {
+			// A deferred load error can leave a catalog module recorded by specifier alone.
+			const platformSource = platformSourceModules.get(record.path);
+			if (platformSource !== undefined)
+				file = path.resolve(platformSourceRoot, platformSource);
+			else if (record.virtual) continue;
+			else file = record.path;
+		}
 		// A data module's source is generated from its file, so the file is digested as is.
 		sources.push(
 			record.importType === undefined
@@ -676,7 +713,10 @@ function prepareBuildFrontend(
 	const entrypoint = path.resolve(options.entrypoint);
 	const root = cacheRoot(options.cacheDirectory);
 	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
-	const identity = cacheIdentity(options);
+	const platformSourceRoot = path.resolve(
+		options.platformSourceRoot ?? import.meta.dirname,
+	);
+	const identity = cacheIdentity(options, platformSourceRoot);
 	// Compiler artifacts omit the source identities and remarks needed by a profile.
 	const liveProfile = options.profile === true;
 	const forceCompile = options.forceCompile === true || liveProfile;
@@ -708,6 +748,7 @@ function prepareBuildFrontend(
 			identity,
 			executionIdentity(options.execution),
 			session,
+			platformSourceRoot,
 		);
 		phases.validationMs = Date.now() - validationStartedAt;
 		if (cached !== undefined) {
@@ -753,7 +794,7 @@ function prepareBuildFrontend(
 		execution: options.execution,
 		stripTypes: options.stripTypes,
 		parseCache: session.moduleParses,
-		platformSourceRoot: options.platformSourceRoot,
+		platformSourceRoot,
 	});
 	phases.graphMs = Date.now() - graphStartedAt;
 	const ownerResolutionInputs = builtGraph.resolutionInputs;
@@ -765,7 +806,7 @@ function prepareBuildFrontend(
 		workerEntries: builtGraph.workerEntries,
 		dynamicImportCandidates: builtGraph.dynamicImportCandidates,
 	};
-	const dependencyInputs = graphDependencyInputs(builtGraph);
+	const dependencyInputs = graphDependencyInputs(builtGraph, platformSourceRoot);
 	// Semantic analysis is the graph's last reader; its ASTs must not share the optimizer's peak.
 	let graph: ModuleGraph | undefined = builtGraph;
 	const currentGraph = (): ModuleGraph => {
@@ -937,7 +978,7 @@ function prepareBuildFrontend(
 		execution: options.execution,
 		stripTypes: options.stripTypes,
 		parseCache: session.moduleParses,
-		platformSourceRoot: options.platformSourceRoot,
+		platformSourceRoot,
 		optimization: options.optimization,
 		coreVerification: options.coreVerification,
 		coreInstrumentation: options.coreInstrumentation,
