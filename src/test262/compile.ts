@@ -1,5 +1,9 @@
 import { readdirSync } from "node:fs";
 import * as path from "node:path";
+import {
+	installerUsesHostPersonality,
+	NODE_ERROR_HOOKS_INSTALLER,
+} from "../compiler/frontend/host-modules.ts";
 import { parseModule, parseScript } from "../compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../compiler/frontend/semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../compiler/frontend/semantic-program.ts";
@@ -52,6 +56,13 @@ export function compileTest262ProgramImage(
 					})
 				: analyzeSourceAndRunSemanticAnalysis(source, file.path, parsed);
 		const image = compileSemanticProgramToProgramImage(semantic);
+		// The Test262 shell installs its own host globals. Keep the language components
+		// that the VM uses to initialize the realm.
+		image.runtime.hostInstalls = image.runtime.hostInstalls.filter(
+			({ installer }) =>
+				!installerUsesHostPersonality(installer) &&
+				installer !== NODE_ERROR_HOOKS_INSTALLER,
+		);
 		const negative = file.frontmatter.negative;
 		if (negative !== undefined && negative.phase !== "runtime") {
 			return {
