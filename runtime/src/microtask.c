@@ -21,25 +21,7 @@
 #define g_reaction_reuses (mal_isolate_locals()->reaction_reuses)
 
 // Six blocks hold 4,092 jobs, matching the old 4,096-node pool's 192 KiB budget.
-#define MAL_PROMISE_JOB_BLOCK_SIZE 32768
 #define MAL_PROMISE_JOB_RETAINED_BLOCK_LIMIT 6
-
-typedef struct MalJobBlock MalJobBlock;
-
-struct MalJobBlock {
-    MalJobBlock *next;
-    MalJob *free_list;
-    u32 next_unused;
-    u32 live_count;
-    MalJob jobs[];
-};
-
-static_assert(
-    (MAL_PROMISE_JOB_BLOCK_SIZE & (MAL_PROMISE_JOB_BLOCK_SIZE - 1)) == 0,
-    "Promise job block size must be a power of two");
-
-#define MAL_PROMISE_JOBS_PER_BLOCK \
-    ((u32) ((MAL_PROMISE_JOB_BLOCK_SIZE - sizeof(MalJobBlock)) / sizeof(MalJob)))
 
 u64 mal_promise_job_allocation_count(void) {
     return g_job_allocations;
@@ -80,12 +62,21 @@ static MalJobBlock *mal_job_find_block(MalVm *vm) {
     block = aligned_alloc(MAL_PROMISE_JOB_BLOCK_SIZE, MAL_PROMISE_JOB_BLOCK_SIZE);
     block->next = vm->job_blocks;
     block->free_list = nullptr;
+    block->async_contexts = nullptr;
     block->next_unused = 0;
     block->live_count = 0;
     vm->job_blocks = block;
     vm->job_active_block = block;
     MAL_PERF_COUNT(promise_job_slab_block_allocations);
     return block;
+}
+
+// Out of line so the allocation call does not cost mal_job_new registers.
+static __attribute__((noinline)) MalAsyncContext **mal_job_block_new_async_contexts(
+    MalJobBlock *block) {
+    block->async_contexts = calloc(MAL_PROMISE_JOBS_PER_BLOCK, sizeof(*block->async_contexts));
+    if (block->async_contexts == nullptr) abort();
+    return block->async_contexts;
 }
 
 static MalJob *mal_job_new(MalVm *vm, MalJobKind kind, bool pending) {
@@ -96,7 +87,8 @@ static MalJob *mal_job_new(MalVm *vm, MalJobKind kind, bool pending) {
 
     MalJob *job;
     if (block->free_list == nullptr) {
-        job = &block->jobs[block->next_unused++];
+        job = &block->jobs[block->next_unused];
+        job->block_index = (u16) block->next_unused++;
         if (pending) g_reaction_allocations++;
         else g_job_allocations++;
         MAL_PERF_COUNT(promise_job_slab_fresh_slots);
@@ -113,15 +105,20 @@ static MalJob *mal_job_new(MalVm *vm, MalJobKind kind, bool pending) {
     job->is_reject = false;
     job->iterator_done = false;
     job->close_on_rejection = false;
-#if MAL_NODE
-    job->async_context = mal_async_context_capture(vm);
-#endif
+    job->has_async_context = false;
+    if (vm->async_context != nullptr) {
+        MalAsyncContext **contexts = block->async_contexts;
+        if (contexts == nullptr) {
+            contexts = mal_job_block_new_async_contexts(block);
+        }
+        contexts[job->block_index] = vm->async_context;
+        job->has_async_context = true;
+    }
     return job;
 }
 
 static void mal_job_release(MalVm *vm, MalJob *job) {
-    MalJobBlock *block = (MalJobBlock *) (
-        (uintptr_t) job & ~((uintptr_t) MAL_PROMISE_JOB_BLOCK_SIZE - 1));
+    MalJobBlock *block = mal_job_block(job);
     job->next = block->free_list;
     block->free_list = job;
     block->live_count--;
@@ -147,6 +144,7 @@ static void mal_job_release(MalVm *vm, MalJob *job) {
     }
     *link = block->next;
     vm->job_active_block = nullptr;
+    free(block->async_contexts);
     free(block);
     MAL_PERF_COUNT(promise_job_slab_block_frees);
 }
@@ -181,11 +179,14 @@ static void mal_job_clear(MalJob *job) {
         job->as.thenable.resolve_fn = mal_value_new_undefined();
         job->as.thenable.reject_fn = mal_value_new_undefined();
     }
-#if MAL_NODE
-    mal_gc_write_barrier(
-        mal_async_internal_value((MalHeapHeader *) job->async_context));
-    job->async_context = nullptr;
-#endif
+    if (job->has_async_context) {
+        MalAsyncContext **context = &mal_job_block(job)->async_contexts[job->block_index];
+        if (mal_gc_marking_active) {
+            mal_gc_write_barrier(mal_value_from_heap(&(*context)->header));
+        }
+        *context = nullptr;
+        job->has_async_context = false;
+    }
 }
 
 static void mal_job_recycle(MalVm *vm, MalJob *job) {
@@ -211,6 +212,7 @@ void mal_vm_free_job_pool(MalVm *vm) {
     MalJobBlock *block = vm->job_blocks;
     while (block != nullptr) {
         MalJobBlock *next = block->next;
+        free(block->async_contexts);
         free(block);
         MAL_PERF_COUNT(promise_job_slab_block_frees);
         block = next;
@@ -584,15 +586,33 @@ static void mal_vm_run_thenable_job(MalVm *vm, MalJob *job) {
     }
 }
 
+/*
+ * Promise chains normally capture the context already installed by the preceding
+ * reaction, so a checkpoint keeps one rooted scope across that run of jobs and
+ * restores its caller's context only when the capture changes or the queue
+ * empties. The scope opens at the first job that has or finds a context, so
+ * programs without AsyncLocalStorage never open it. A scope that opens late was
+ * preceded only by null contexts, unless an earlier job installed one with
+ * enterWith(), which must not outlive that job.
+ */
+static void mal_vm_enter_job_context(
+    MalVm *vm, const MalJob *job, MalAsyncContextScope *scope, bool *scope_active,
+    MalAsyncContext *caller_context) {
+    MalAsyncContext *context = mal_job_async_context(job);
+    if (!*scope_active) {
+        vm->async_context = caller_context;
+        mal_async_context_scope_enter(vm, scope, context);
+        *scope_active = true;
+    } else if (context != vm->async_context) {
+        mal_async_context_scope_exit(vm, scope);
+        mal_async_context_scope_enter(vm, scope, context);
+    }
+}
+
 void mal_vm_drain_microtasks(MalVm *vm) {
-#if MAL_NODE
-    // Promise chains normally capture the context already installed by the
-    // preceding reaction. Keep one rooted scope across that run of jobs and
-    // restore the checkpoint's caller context only when the capture changes or
-    // the queue empties.
+    MalAsyncContext *caller_context = vm->async_context;
     MalAsyncContextScope async_scope;
     bool async_scope_active = false;
-#endif
     // A terminating isolate runs no further JS; queued jobs are freed at teardown.
     while (vm->job_head != nullptr && !mal_gc_terminating()) {
         MalJob *job = vm->job_head;
@@ -604,15 +624,9 @@ void mal_vm_drain_microtasks(MalVm *vm) {
         // Keep the dequeued job's MalValues reachable: the handler can trigger a
         // collection, and its capabilities are settled afterwards.
         vm->active_job = job;
-#if MAL_NODE
-        if (!async_scope_active) {
-            mal_async_context_scope_enter(vm, &async_scope, job->async_context);
-            async_scope_active = true;
-        } else if (job->async_context != vm->async_context) {
-            mal_async_context_scope_exit(vm, &async_scope);
-            mal_async_context_scope_enter(vm, &async_scope, job->async_context);
+        if (job->has_async_context || async_scope_active || vm->async_context != nullptr) {
+            mal_vm_enter_job_context(vm, job, &async_scope, &async_scope_active, caller_context);
         }
-#endif
         switch (job->kind) {
             case MAL_JOB_PROMISE_REACTION:
                 mal_vm_run_reaction_job(vm, job);
@@ -661,11 +675,11 @@ void mal_vm_drain_microtasks(MalVm *vm) {
         // needed.
         vm->completion = mal_completion_normal();
     }
-#if MAL_NODE
     if (async_scope_active) {
         mal_async_context_scope_exit(vm, &async_scope);
+    } else {
+        vm->async_context = caller_context;
     }
-#endif
 
     // Microtask checkpoint: report promises that rejected and were never handled,
     // and release WeakRef targets pinned during this turn (ClearKeptObjects).

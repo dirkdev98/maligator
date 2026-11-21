@@ -38,11 +38,7 @@ MalAsyncResourceState *mal_async_resource_state_new(MalVm *vm) {
         &vm->heap, sizeof(MalAsyncResourceState), MAL_HEAP_ASYNC_RESOURCE_STATE);
     state->async_id = atomic_fetch_add_explicit(&next_resource_id, 1, memory_order_relaxed);
     state->trigger_async_id = current_resource_id;
-#if MAL_NODE
     state->context = vm->async_context;
-#else
-    state->context = nullptr;
-#endif
     return state;
 }
 
@@ -83,12 +79,7 @@ MalAsyncRunScopeState *mal_async_run_scope_state_from_value(MalValue value) {
 }
 
 MalAsyncContext *mal_async_context_capture(const MalVm *vm) {
-#if MAL_NODE
     return vm->async_context;
-#else
-    (void) vm;
-    return nullptr;
-#endif
 }
 
 MalAsyncContext *mal_async_context_push(
@@ -97,7 +88,6 @@ MalAsyncContext *mal_async_context_push(
     MalValue store,
     bool has_store
 ) {
-#if MAL_NODE
     MalAsyncContext *context = mal_heap_alloc(
         &vm->heap, sizeof(MalAsyncContext), MAL_HEAP_ASYNC_CONTEXT);
     context->parent = vm->async_context;
@@ -106,13 +96,6 @@ MalAsyncContext *mal_async_context_push(
     context->generation = storage->generation;
     context->has_store = has_store;
     return context;
-#else
-    (void) vm;
-    (void) storage;
-    (void) store;
-    (void) has_store;
-    return nullptr;
-#endif
 }
 
 bool mal_async_context_lookup(
@@ -120,7 +103,6 @@ bool mal_async_context_lookup(
     const MalAsyncLocalStorageState *storage,
     MalValue *store
 ) {
-#if MAL_NODE
     if (!storage->enabled) {
         return false;
     }
@@ -135,40 +117,31 @@ bool mal_async_context_lookup(
         *store = context->store;
         return true;
     }
-#else
-    (void) vm;
-    (void) storage;
-    (void) store;
-#endif
     return false;
 }
 
 void mal_async_context_scope_enter(
     MalVm *vm, MalAsyncContextScope *scope, MalAsyncContext *context) {
-#if MAL_NODE
     scope->previous = vm->async_context;
+    scope->rooted = scope->previous != nullptr || context != nullptr;
+    if (!scope->rooted) {
+        return;
+    }
     scope->roots[0] = mal_async_internal_value((MalHeapHeader *) scope->previous);
     scope->roots[1] = mal_async_internal_value((MalHeapHeader *) context);
     mal_gc_root(&scope->root, scope->roots, countof(scope->roots));
     vm->async_context = context;
-#else
-    (void) vm;
-    (void) scope;
-    (void) context;
-#endif
 }
 
 void mal_async_context_scope_exit(MalVm *vm, MalAsyncContextScope *scope) {
-#if MAL_NODE
+    // An unrooted scope entered from a null context still restores it: the
+    // callback may have installed one with enterWith().
     vm->async_context = scope->previous;
-    mal_gc_unroot(&scope->root);
-#else
-    (void) vm;
-    (void) scope;
-#endif
+    if (scope->rooted) {
+        mal_gc_unroot(&scope->root);
+    }
 }
 
-#if MAL_NODE
 static MalValue mal_async_bound_callback_call(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -187,11 +160,9 @@ static MalValue mal_async_bound_callback_call(
     mal_async_context_scope_exit(vm, &scope);
     return completion.value;
 }
-#endif
 
 MalValue mal_async_context_bind_callback(
     MalVm *vm, MalValue callback, MalAsyncContext *context) {
-#if MAL_NODE
     i32 length = 0;
     MalValue raw_length;
     if (!mal_vm_get_property(
@@ -214,9 +185,4 @@ MalValue mal_async_context_bind_callback(
                 vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
             mal_intrinsic_ascii(vm, "bound"), length,
             mal_async_bound_callback_call, slots, countof(slots)));
-#else
-    (void) vm;
-    (void) context;
-    return callback;
-#endif
 }

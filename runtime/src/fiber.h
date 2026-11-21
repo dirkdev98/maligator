@@ -66,9 +66,7 @@ typedef struct MalFiberExec {
 
     MalCompletion completion;
 
-#if MAL_NODE
     struct MalAsyncContext *async_context;
-#endif
 
     /* The compiled-frame shadow stack + transient root spans for this fiber —
      * vm->root_frame_head and the global mal_root_span_head while it runs. */

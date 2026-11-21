@@ -61,12 +61,15 @@ static_assert(
 /**
  * A scoped context switch. Both sides are rooted through the existing C root-span
  * chain, so a collection inside the callback cannot reclaim the context restored
- * on exit. Root spans are already fiber-local across scheduler switches.
+ * on exit. Root spans are already fiber-local across scheduler switches. When both
+ * sides are null, as in every program that never creates a context, the scope roots
+ * and switches nothing.
  */
 typedef struct MalAsyncContextScope {
     MalAsyncContext *previous;
     MalValue roots[2];
     MalRootSpan root;
+    bool rooted;
 } MalAsyncContextScope;
 
 MalAsyncLocalStorageState *mal_async_local_storage_state_new(MalVm *vm);
@@ -84,6 +87,11 @@ MalAsyncLocalStorageState *mal_async_local_storage_state_from_value(MalValue val
 MalAsyncResourceState *mal_async_resource_state_from_value(MalValue value);
 MalAsyncRunScopeState *mal_async_run_scope_state_from_value(MalValue value);
 
+/**
+ * The current context, or null. Only `mal_async_context_push` creates contexts,
+ * so null until a program binds an AsyncLocalStorage store; capture sites skip
+ * their bookkeeping for null.
+ */
 MalAsyncContext *mal_async_context_capture(const MalVm *vm);
 MalAsyncContext *mal_async_context_push(
     MalVm *vm,

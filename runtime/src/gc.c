@@ -2016,11 +2016,10 @@ static void mal_gc_trace_cell_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
                 mal_gc_mark_value_in(ctx, r->as.reaction.cap_reject);
                 mal_gc_mark_value_in(ctx, r->as.reaction.handler);
                 mal_gc_mark_value_in(ctx, r->as.reaction.argument);
-#if MAL_NODE
-                if (r->async_context != nullptr) {
-                    mal_gc_shade_in(ctx, &r->async_context->header);
+                MalAsyncContext *async_context = mal_job_async_context(r);
+                if (async_context != nullptr) {
+                    mal_gc_shade_in(ctx, &async_context->header);
                 }
-#endif
             }
             if (promise->async_owner != nullptr) {
                 mal_gc_shade_in(ctx, &promise->async_owner->header);
@@ -2041,11 +2040,10 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
 
 /** Trace a microtask job's live MalValue fields (queued or currently running). */
 static void mal_gc_mark_job(MalJob *job) {
-#if MAL_NODE
-    if (job->async_context != nullptr) {
-        mal_gc_shade_in(&g_gc_thread, &job->async_context->header);
+    MalAsyncContext *async_context = mal_job_async_context(job);
+    if (async_context != nullptr) {
+        mal_gc_shade_in(&g_gc_thread, &async_context->header);
     }
-#endif
     if (job->kind == MAL_JOB_PROMISE_REACTION ||
         job->kind == MAL_JOB_PROMISE_COMBINATOR ||
         job->kind == MAL_JOB_ASYNC_AWAIT ||
@@ -2335,11 +2333,9 @@ static void mal_gc_scan_roots(MalVm *vm) {
             f->exec.completion.value,
             f->exec.root_frame_head,
             f->exec.root_span_head);
-#if MAL_NODE
         if (f->exec.async_context != nullptr) {
             mal_gc_shade_in(&g_gc_thread, &f->exec.async_context->header);
         }
-#endif
     }
 
     // Isolate-shared roots (one per isolate, not per fiber).
@@ -2351,11 +2347,9 @@ static void mal_gc_scan_roots(MalVm *vm) {
     for (MalPreparedValue *entry = vm->prepared_values; entry != nullptr; entry = entry->next) {
         mal_gc_mark_value(entry->value);
     }
-#if MAL_NODE
     if (vm->async_context != nullptr) {
         mal_gc_shade_in(&g_gc_thread, &vm->async_context->header);
     }
-#endif
 #if MAL_REALMS
     // Every realm's globals and intrinsics are roots. The VM aliases point into the
     // current realm, which this loop already covers.

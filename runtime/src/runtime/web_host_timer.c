@@ -136,9 +136,7 @@ static i64 mal_host_add_timer(
     t->referenced = true;
     t->args = args;
     t->arg_count = arg_count;
-#if MAL_NODE
     t->async_context = mal_async_context_capture(vm);
-#endif
     t->repeat_ms = repeat_ms;
     t->repeating = repeating;
     t->ready = false;
@@ -228,14 +226,10 @@ static bool mal_host_run_one_ready(MalVm *vm) {
             i32 cargc = t->arg_count;
             MalRootSpan rs_cb;
             mal_gc_root(&rs_cb, &cb, 1);
-#if MAL_NODE
             MalAsyncContextScope async_scope;
             mal_async_context_scope_enter(vm, &async_scope, t->async_context);
-#endif
             mal_vm_call_value(vm, cb, t->handle, cargs, cargc);
-#if MAL_NODE
             mal_async_context_scope_exit(vm, &async_scope);
-#endif
             mal_gc_unroot(&rs_cb);
             if (t->cancelled) {
                 mal_host_unlink_timer(host, t);
@@ -256,9 +250,7 @@ static bool mal_host_run_one_ready(MalVm *vm) {
         MalValue handle = t->handle;
         MalValue *cargs = t->args;
         i32 cargc = t->arg_count;
-#if MAL_NODE
         MalAsyncContext *async_context = t->async_context;
-#endif
         free(t); // the task struct is done; cb/cargs kept alive below
 
         MalRootSpan rs_cb;
@@ -269,14 +261,10 @@ static bool mal_host_run_one_ready(MalVm *vm) {
         if (cargc > 0) {
             mal_gc_root(&rs_args, cargs, cargc);
         }
-#if MAL_NODE
         MalAsyncContextScope async_scope;
         mal_async_context_scope_enter(vm, &async_scope, async_context);
-#endif
         mal_vm_call_value(vm, cb, handle, cargs, cargc);
-#if MAL_NODE
         mal_async_context_scope_exit(vm, &async_scope);
-#endif
         if (cargc > 0) {
             mal_gc_unroot(&rs_args);
         }
@@ -500,10 +488,8 @@ static void mal_host_timers_scan_roots(MalVm *vm, void *data) {
         mal_gc_mark_value(t->callback);
         mal_gc_mark_value(t->handle);
         mal_gc_mark_values(t->args, t->arg_count);
-#if MAL_NODE
         mal_gc_mark_value(
             mal_async_internal_value((MalHeapHeader *) t->async_context));
-#endif
     }
 }
 

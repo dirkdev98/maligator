@@ -12,7 +12,7 @@ typedef void (*MalHostJobFn)(MalVm *vm, void *data, MalValue argument, bool is_r
 /**
  * Promise reactions and typed async continuations, pending or queued.
  */
-typedef enum MalJobKind {
+typedef enum MalJobKind : u8 {
     MAL_JOB_PROMISE_REACTION,
     MAL_JOB_PROMISE_COMBINATOR,
     MAL_JOB_PROMISE_RESOLVE_THENABLE,
@@ -35,10 +35,10 @@ typedef struct MalJob {
     bool is_reject;
     bool iterator_done;
     bool close_on_rejection;
-#if MAL_NODE
-    /** Execution context captured when this job was registered. */
-    MalAsyncContext *async_context;
-#endif
+    /** The job captured a context, held in its block's `async_contexts`. */
+    bool has_async_context;
+    /** Position in the owning block, fixed when the slot is first carved. */
+    u16 block_index;
     union {
         /** Promise reaction or typed continuation payload. */
         struct {
@@ -65,11 +65,52 @@ typedef struct MalJob {
     } as;
 } MalJob;
 
-#if MAL_NODE
-static_assert(sizeof(MalJob) == 56, "Node MalJob must remain a 56-byte pooled node");
-#else
 static_assert(sizeof(MalJob) == 48, "MalJob must remain a 48-byte pooled node");
-#endif
+
+#define MAL_PROMISE_JOB_BLOCK_SIZE 32768
+
+/**
+ * Jobs are carved from aligned blocks, so a job finds its block by masking its
+ * address. The execution context a job captured at registration lives in the
+ * block's `async_contexts` at the job's `block_index`, not in `MalJob`: only
+ * programs that create an AsyncLocalStorage context allocate the array, and
+ * every other program keeps the 48-byte job and tests one byte of it. An entry
+ * is null while its job holds no context, and is traced as a field of that job.
+ */
+typedef struct MalJobBlock {
+    struct MalJobBlock *next;
+    MalJob *free_list;
+    MalAsyncContext **async_contexts;
+    u32 next_unused;
+    u32 live_count;
+    MalJob jobs[];
+} MalJobBlock;
+
+static_assert(
+    (MAL_PROMISE_JOB_BLOCK_SIZE & (MAL_PROMISE_JOB_BLOCK_SIZE - 1)) == 0,
+    "Promise job block size must be a power of two");
+
+#define MAL_PROMISE_JOBS_PER_BLOCK \
+    ((u32) ((MAL_PROMISE_JOB_BLOCK_SIZE - sizeof(MalJobBlock)) / sizeof(MalJob)))
+
+static_assert(MAL_PROMISE_JOBS_PER_BLOCK <= UINT16_MAX, "MalJob.block_index is 16 bits");
+
+static inline MalJobBlock *mal_job_block(const MalJob *job) {
+    return (MalJobBlock *) ((uintptr_t) job & ~((uintptr_t) MAL_PROMISE_JOB_BLOCK_SIZE - 1));
+}
+
+/**
+ * The context `job` captured when it was registered, or null. Collector workers
+ * call this while the mutator runs, so it tolerates seeing the flag before the
+ * array that the flag's store followed.
+ */
+static inline MalAsyncContext *mal_job_async_context(const MalJob *job) {
+    if (!job->has_async_context) {
+        return nullptr;
+    }
+    MalAsyncContext **contexts = mal_job_block(job)->async_contexts;
+    return contexts == nullptr ? nullptr : contexts[job->block_index];
+}
 
 /** Process-wide Promise pool counters used by the benchmark tracker. */
 u64 mal_promise_job_allocation_count(void);

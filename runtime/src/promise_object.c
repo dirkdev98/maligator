@@ -43,10 +43,10 @@ static void mal_promise_append_job(MalPromiseObject *promise, MalJob *job) {
     mal_gc_card(&promise->object.header, job->as.reaction.cap_resolve);
     mal_gc_card(&promise->object.header, job->as.reaction.cap_reject);
     mal_gc_card(&promise->object.header, job->as.reaction.argument);
-#if MAL_NODE
-    mal_gc_card(&promise->object.header,
-        mal_async_internal_value((MalHeapHeader *) job->async_context));
-#endif
+    MalAsyncContext *async_context = mal_job_async_context(job);
+    if (async_context != nullptr) {
+        mal_gc_card(&promise->object.header, mal_value_from_heap(&async_context->header));
+    }
 }
 
 static MalJob *mal_promise_new_reaction(
@@ -113,14 +113,18 @@ void mal_promise_append_dispose_resources_reaction(
 }
 
 static void mal_promise_barrier_reactions(MalJob *job) {
+    if (!mal_gc_marking_active) {
+        return;
+    }
     for (; job != nullptr; job = job->next) {
         mal_gc_write_barrier(job->as.reaction.handler);
         mal_gc_write_barrier(job->as.reaction.cap_resolve);
         mal_gc_write_barrier(job->as.reaction.cap_reject);
         mal_gc_write_barrier(job->as.reaction.argument);
-#if MAL_NODE
-        mal_gc_write_barrier(mal_async_internal_value((MalHeapHeader *) job->async_context));
-#endif
+        MalAsyncContext *async_context = mal_job_async_context(job);
+        if (async_context != nullptr) {
+            mal_gc_write_barrier(mal_value_from_heap(&async_context->header));
+        }
     }
 }
 
