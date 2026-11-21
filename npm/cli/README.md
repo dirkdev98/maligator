@@ -57,11 +57,10 @@ maligator test [path ...] [--run name] [--shuffle [seed]] [--repeat count] [--ba
 Run commands from the project root. Maligator does not search parent directories
 for configuration.
 
-`run` and `dev` use compile-time-specialized runtimes embedded in the platform
-package for locked or mutable primordials, embedded assets, the Web and Node
-surfaces, and Realm support when Intl, profiling, and C libraries are disabled.
-Those profiles do not need a local native toolchain. `dev` retains compiler identities
-between edits and restarts a fresh
+`run`, `dev`, and `test` use the runtimes shipped in the platform package when
+one matches your configuration. The default flavour includes Intl and Temporal
+support and runs without a native toolchain. `dev` retains compiler identities
+between edits and starts a fresh
 application VM after every successful rebuild. Build failures keep the watcher alive
 for recovery on the next edit.
 
@@ -93,14 +92,15 @@ defaults, availability, and direct links.
 
 ## Build toolchain
 
-Supported `run`, `dev`, and `test` profiles use the development runtime embedded in
-the platform CLI. Native builds, profiling, Intl-enabled development execution, and
-projects with C libraries require:
+`build`, profiling, and configurations that need a locally linked runner require:
 
 - A C23 compiler and archive tool: Apple clang, clang 19 or newer, or GCC 15 or
   newer
 - Rustup with the `cargo` and `rustc` toolchain selected by Maligator
 - A C++ compiler/runtime when `surface.webPlatform` or `surface.node` is enabled
+
+Projects with C library bindings also need Clang and a linker to build their
+development shims. Set `CC` to Clang's executable if the CLI cannot find it.
 
 On macOS, install Apple command-line tools with `xcode-select --install`. On Linux,
 install a recent compiler and set `CC` and `CXX` when it is not your system default.

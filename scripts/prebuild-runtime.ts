@@ -1,9 +1,11 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+	chmodSync,
 	copyFileSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	renameSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -12,20 +14,30 @@ import * as path from "node:path";
 import { artifactFileDigest, artifactIdentity } from "../src/artifact-store.ts";
 import { writeFileAtomically } from "../src/atomic-file.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../src/build-config.ts";
+import { normalizeNativeFeatures } from "../src/build-flags.ts";
+import {
+	buildSharedDevelopmentRunner,
+	sharedDevelopmentRunnerKey,
+} from "../src/local-build.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
 import {
+	DEVELOPMENT_RUNNERS,
 	PREBUILT_RUNTIME_CC_FLAGS,
 	PREBUILT_RUNTIME_MANIFEST,
 	PREBUILT_RUNTIME_OVERRIDE,
 	PREBUILT_RUNTIME_ZIG_VERSION,
 	prebuiltRuntimeCxxLibraries,
 	prebuiltRuntimeTarget,
+	readPrebuiltDevelopmentRunner,
 	readPrebuiltRuntime,
 	RELEASE_MACOS_VERSION,
 	RUNTIME_ARCHIVES,
 	RUST_LIBRARY_OUTPUT,
 } from "../src/prebuilt-runtime.ts";
-import type { PrebuiltRuntimeManifest } from "../src/prebuilt-runtime.ts";
+import type {
+	DevelopmentRunnerKind,
+	PrebuiltRuntimeManifest,
+} from "../src/prebuilt-runtime.ts";
 import {
 	ensureNativeArtifacts,
 	runtimeReleaseArchiveIdentity,
@@ -129,7 +141,7 @@ export function prebuildRuntime(
 	});
 	if (base.tools.zig?.version !== PREBUILT_RUNTIME_ZIG_VERSION) {
 		throw new Error(
-			`runtime archives require Zig ${PREBUILT_RUNTIME_ZIG_VERSION}; set ZIG to its executable`,
+			`development runtime prebuild requires Zig ${PREBUILT_RUNTIME_ZIG_VERSION}; set ZIG to its executable`,
 		);
 	}
 	const cc = [
@@ -189,10 +201,37 @@ export function prebuildRuntime(
 				),
 			...bundledCxxLibraries(toolchain, context.environment, work),
 		];
+		const runnerKinds = Object.keys(DEVELOPMENT_RUNNERS) as Array<DevelopmentRunnerKind>;
+		const runners: PrebuiltRuntimeManifest["runners"] = {};
+		for (const kind of runnerKinds) {
+			const runnerContext = {
+				...context,
+				features: normalizeNativeFeatures({
+					...context.features,
+					developmentApiEnabled: kind === "testHost",
+				}),
+			};
+			const name = DEVELOPMENT_RUNNERS[kind];
+			const key = sharedDevelopmentRunnerKey(runnerContext, triple);
+			onProgress?.(`linking ${name}`);
+			const runner = buildSharedDevelopmentRunner(runnerContext, false);
+			if (sharedDevelopmentRunnerKey(runnerContext, triple) !== key)
+				throw new Error(`runtime sources changed during ${name} preparation`);
+			const file = path.join(work, name);
+			copyFileSync(runner, file);
+			chmodSync(file, 0o755);
+			runners[kind] = {
+				key,
+				name,
+				sha256: artifactFileDigest(file),
+				size: statSync(file).size,
+			};
+		}
 		if (runtimeReleaseArchiveIdentity(context).key !== identity.key)
 			throw new Error("runtime sources changed during archive preparation");
 		const manifest: PrebuiltRuntimeManifest = {
 			...identity,
+			runners,
 			files: files
 				.filter(({ name }) => name.endsWith(".a"))
 				.map(({ name, file }) => ({
@@ -202,13 +241,23 @@ export function prebuildRuntime(
 				})),
 		};
 		for (const { name, file } of files) copyFileSync(file, path.join(output, name));
+		for (const kind of runnerKinds) {
+			const name = DEVELOPMENT_RUNNERS[kind];
+			renameSync(path.join(work, name), path.join(output, name));
+		}
 		writeFileAtomically(
 			path.join(output, PREBUILT_RUNTIME_MANIFEST),
 			`${JSON.stringify(manifest, null, 2)}\n`,
 		);
 		if (readPrebuiltRuntime(output, triple, manifest.key) === undefined)
 			throw new Error(`incomplete prebuilt runtime set in ${output}`);
-		onProgress?.(`runtime archives ready at ${output}`);
+		for (const kind of runnerKinds) {
+			if (readPrebuiltDevelopmentRunner(output, triple, kind) === undefined)
+				throw new Error(
+					`incomplete prebuilt runner ${DEVELOPMENT_RUNNERS[kind]} in ${output}`,
+				);
+		}
+		onProgress?.(`development runtime ready at ${output}`);
 		return manifest;
 	} finally {
 		rmSync(work, { recursive: true, force: true });

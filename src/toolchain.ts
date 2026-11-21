@@ -410,6 +410,21 @@ function inspectExecutable(
 	};
 }
 
+/** Header extraction and shim linking need Clang, independently of the runtime toolchain. */
+export function requireDevelopmentShimCompiler(env: NodeJS.ProcessEnv): ToolExecutable {
+	const name = env.CC?.trim();
+	const candidates = name ? [name] : ["cc", "clang"];
+	for (const candidate of candidates) {
+		const compiler = inspectExecutable(candidate, env.PATH ?? "", process.cwd(), env);
+		if (compiler !== undefined && clangMajorVersion(compiler.version) !== undefined)
+			return compiler;
+	}
+	throw new Error(
+		"C library bindings require a Clang C compiler and linker to build development shims. " +
+			"Install Clang and set CC to its executable.",
+	);
+}
+
 function selectedRustTool(
 	rustup: ToolExecutable,
 	name: "cargo" | "rustc",

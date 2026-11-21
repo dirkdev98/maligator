@@ -108,7 +108,7 @@ import { FfiError, FfiSourceChangedError } from "./ffi/ffi-error.ts";
 import { formatInspection, inspectBindings } from "./ffi/inspect.ts";
 import { ffiJsonChunks } from "./ffi/json.ts";
 import { nativeLibraryInputs, prepareLibraries, prepareLibrary } from "./ffi/library.ts";
-import type { PreparedLibraries } from "./ffi/library.ts";
+import type { LibraryPreparation, PreparedLibraries } from "./ffi/library.ts";
 import { runFfiProbe } from "./ffi/probe.ts";
 import {
 	cacheFrontendWire,
@@ -121,11 +121,11 @@ import {
 	buildDevelopmentRunner,
 	buildLocalBinary,
 	buildSharedDevelopmentRunner,
+	packagedDevelopmentRunner,
 	prepareGeneratedSources,
 	sharedDevelopmentRunnerFeatures,
 } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
-import type { NativeBuildContext } from "./native-build-context.ts";
 import { nativeBuildJobs } from "./native-command.ts";
 import { nativeSourcePath } from "./native-source-path.ts";
 import {
@@ -164,6 +164,7 @@ import {
 	formatToolchainReport,
 	formatToolCommand,
 	inspectToolchain,
+	requireDevelopmentShimCompiler,
 	requireToolchain,
 	ToolchainError,
 } from "./toolchain.ts";
@@ -443,13 +444,6 @@ function selectToolchain(
 	context: CommandContext,
 ): { toolchain?: Toolchain; plan?: NativeBuildPlan } {
 	if (command.kind === "build" && command.internal.serializePath !== undefined) return {};
-	if (
-		command.kind !== "build" &&
-		!command.profile &&
-		compatibleDevelopmentRunner(config, context) !== undefined
-	) {
-		return {};
-	}
 	const needsCxx =
 		(command.kind !== "build" && !command.profile) || configNeedsCxx(config);
 	const selectionKey = JSON.stringify({
@@ -478,22 +472,48 @@ function selectToolchain(
 	}
 }
 
+type LibraryTools = Pick<
+	LibraryPreparation,
+	"compiler" | "environment" | "platform" | "cross"
+>;
+
+function libraryBuildTools(
+	toolchain: Toolchain,
+	environment: NodeJS.ProcessEnv = process.env,
+): LibraryTools {
+	return {
+		compiler: toolchain.tools.cc,
+		environment: { ...environment, ...toolchain.environmentOverrides },
+		platform: toolchain.platform ?? process.platform,
+		cross: toolchain.cross === true,
+	};
+}
+
+function developmentShimTools(environment: NodeJS.ProcessEnv): LibraryTools {
+	try {
+		return {
+			compiler: requireDevelopmentShimCompiler(environment),
+			environment,
+			platform: process.platform,
+			cross: false,
+		};
+	} catch (error) {
+		commandError(`error: ${error instanceof Error ? error.message : String(error)}`);
+	}
+}
+
 /** Read the headers of every C library the config declares, or undefined for none. */
 function prepareConfiguredLibraries(
 	config: ResolvedBuildConfig,
 	context: CommandContext,
-	toolchain: Toolchain,
-	environment: NodeJS.ProcessEnv = process.env,
+	tools: LibraryTools,
 ): PreparedLibraries | undefined {
 	if (Object.keys(config.ffi).length === 0) return undefined;
 	try {
 		return prepareLibraries(config, {
 			projectRoot: process.cwd(),
 			stripTypes: context.stripTypes,
-			compiler: toolchain.tools.cc,
-			environment: { ...environment, ...toolchain.environmentOverrides },
-			platform: toolchain.platform ?? process.platform,
-			cross: toolchain.cross === true,
+			...tools,
 			onDependencies: context.onFfiDependencies,
 		});
 	} catch (error) {
@@ -527,15 +547,13 @@ function compatibleDevelopmentRunner(
 
 function prepareDevelopmentShims(
 	libraries: PreparedLibraries,
-	context: NativeBuildContext,
+	tools: LibraryTools,
+	runtimeDirectory: string,
 ) {
 	return buildDevelopmentShims(libraries.libraries, {
-		compiler: context.toolchain.tools.cc,
-		environment: context.environment,
-		platform: context.toolchain.platform ?? process.platform,
-		cross: context.toolchain.cross === true,
-		runtimeDirectory: context.runtimeDirectory,
-		cacheDirectory: context.cacheDirectory,
+		...tools,
+		runtimeDirectory,
+		cacheDirectory: maligatorCacheDirectory(undefined, tools.environment),
 	});
 }
 
@@ -692,31 +710,55 @@ function prepareCommandState(
 	const frontendSession = context.frontendSession ?? new FrontendCompilationSession();
 	frontendSession.useCacheDirectory();
 	const validatePreparedInputs = () => validateConfig();
-	const { toolchain, plan } = reporter.phase(
-		"Resolve toolchain",
-		() => selectToolchain(command, buildConfig, context),
-		({ toolchain }) =>
-			toolchain === undefined
-				? undefined
-				: `toolchain cache ${toolchain.cacheHit ? "hit" : "miss"}`,
-	);
-	if (toolchain !== undefined) {
-		reporter.detail("Target", toolchain.target);
-		reporter.detail(
-			"C compiler",
-			`${formatToolCommand(toolchain.tools.cc)} (${toolchain.tools.cc.version})`,
+	const interpreted = command.kind !== "build" && !command.profile;
+	const baseDerivation = buildDerivationFromConfig(buildConfig);
+	const embeddedRunner = interpreted
+		? compatibleDevelopmentRunner(buildConfig, context)
+		: undefined;
+	const runtimeDirectory = context.installation.runtimeDirectory;
+	const packagedRunner =
+		interpreted && embeddedRunner === undefined
+			? packagedDevelopmentRunner(runtimeDirectory, baseDerivation.features, process.env)
+			: undefined;
+	const resolveLocalTools = () => {
+		const selection = reporter.phase(
+			"Resolve toolchain",
+			() => selectToolchain(command, buildConfig, context),
+			({ toolchain }) =>
+				toolchain === undefined
+					? undefined
+					: `toolchain cache ${toolchain.cacheHit ? "hit" : "miss"}`,
 		);
-		reporter.detail(
-			"Rust compiler",
-			`${formatToolCommand(toolchain.tools.rustc)} (${toolchain.tools.rustc.version})`,
-		);
-	}
-	for (const warning of plan?.warnings ?? []) reporter.warning(warning);
+		const { toolchain, plan } = selection;
+		if (toolchain !== undefined) {
+			reporter.detail("Target", toolchain.target);
+			reporter.detail(
+				"C compiler",
+				`${formatToolCommand(toolchain.tools.cc)} (${toolchain.tools.cc.version})`,
+			);
+			reporter.detail(
+				"Rust compiler",
+				`${formatToolCommand(toolchain.tools.rustc)} (${toolchain.tools.rustc.version})`,
+			);
+		}
+		for (const warning of plan?.warnings ?? []) reporter.warning(warning);
+		return selection;
+	};
+	let { toolchain, plan } =
+		embeddedRunner === undefined && packagedRunner === undefined
+			? resolveLocalTools()
+			: {};
+	const libraryTools =
+		Object.keys(buildConfig.ffi).length === 0
+			? undefined
+			: toolchain === undefined
+				? developmentShimTools(process.env)
+				: libraryBuildTools(toolchain);
 	const libraries =
-		toolchain === undefined
+		libraryTools === undefined
 			? undefined
 			: reporter.phase("Prepare C libraries", () =>
-					prepareConfiguredLibraries(buildConfig, context, toolchain),
+					prepareConfiguredLibraries(buildConfig, context, libraryTools),
 				);
 	// Watched like sources, so editing a contract, header, or library source rebuilds.
 	for (const file of libraries?.dependencies ?? []) frontendSession.snapshot(file);
@@ -765,7 +807,6 @@ function prepareCommandState(
 				: hostExecutionTarget(process.platform, process.arch),
 	});
 	const compilerDiagnostics = command.kind === "build" && command.internal.dumpCore;
-	const interpreted = command.kind !== "build" && !command.profile;
 	const relocatable = interpreted || developmentFragments;
 	const compilerPhases: Array<{ phase: string; durationMs: number }> = [];
 	const frontendOptions: CompileBuildFrontendOptions = {
@@ -953,22 +994,44 @@ function prepareCommandState(
 			};
 		}
 
-		const packagedRunner =
-			command.kind !== "build" && !command.profile
-				? compatibleDevelopmentRunner(buildConfig, context)
-				: undefined;
+		const shims =
+			!interpreted || libraries === undefined || libraryTools === undefined
+				? []
+				: reporter.phase("Prepare C library shims", () =>
+						prepareDevelopmentShims(libraries, libraryTools, runtimeDirectory),
+					);
+		const linkedLibraries = shims.some((shim) => shim.kind === "linked")
+			? libraries
+			: undefined;
+		for (const shim of shims) {
+			reporter.detail(
+				`C library ${shim.library} development runtime`,
+				shim.kind === "shim"
+					? `shared shim (${shim.path})`
+					: `linked runner (${shim.reason})`,
+			);
+		}
+		const shimArguments = developmentShimArguments(
+			linkedLibraries === undefined
+				? shims.flatMap((shim) => (shim.kind === "shim" ? [shim.path] : []))
+				: [],
+		);
+		const prebuiltExecutable =
+			embeddedRunner?.executablePath ??
+			(linkedLibraries === undefined ? packagedRunner : undefined);
 		const workerManifest =
 			command.kind === "build"
 				? undefined
 				: cacheDevelopmentWorkerManifest(frontend.workerImages);
-		if (command.kind !== "build" && packagedRunner !== undefined) {
+		if (command.kind !== "build" && prebuiltExecutable !== undefined) {
 			const wirePaths = reporter.phase("Cache development image", () =>
 				frontend.runtimeArtifacts.map((artifact) => artifact.path),
 			);
 			const surfaceMask =
 				(buildConfig.surface.webPlatform ? 1 : 0) | (buildConfig.surface.node ? 2 : 0);
 			const runArguments = workerManifestArguments(workerManifest).concat(
-				packagedRunner.wireProtocol === "product"
+				shimArguments,
+				embeddedRunner?.wireProtocol === "product"
 					? [
 							"--maligator-internal-run-wire",
 							String(surfaceMask),
@@ -987,9 +1050,9 @@ function prepareCommandState(
 			);
 			reporter.detail("Execution backend", "packaged development runtime");
 			reporter.detail("Development images", wirePaths.join(", "));
-			reporter.complete("Ready", packagedRunner.executablePath, false);
+			reporter.complete("Ready", prebuiltExecutable, false);
 			return {
-				...(packagedRunner.inProcess
+				...(embeddedRunner?.inProcess
 					? {
 							applicationImage: {
 								schema: 1 as const,
@@ -1014,13 +1077,14 @@ function prepareCommandState(
 							},
 						}
 					: {}),
-				binaryPath: packagedRunner.executablePath,
+				binaryPath: prebuiltExecutable,
 				runArguments,
 				dependencies,
 				dependencyIdentities,
 				...declared,
 			};
 		}
+		if (packagedRunner !== undefined) ({ toolchain, plan } = resolveLocalTools());
 
 		const evalCompiler = context.installation.evalCompiler;
 		const compilerBake =
@@ -1041,7 +1105,6 @@ function prepareCommandState(
 							}),
 					}
 				: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
-		const baseDerivation = buildDerivationFromConfig(buildConfig);
 		const derivation = command.profile
 			? {
 					features: normalizeNativeFeatures({
@@ -1140,23 +1203,6 @@ function prepareCommandState(
 			);
 			reporter.detail("Execution backend", "interpreted development image");
 			reporter.detail("Development images", wirePaths.join(", "));
-			const shims =
-				libraries === undefined
-					? []
-					: reporter.phase("Prepare C library shims", () =>
-							prepareDevelopmentShims(libraries, nativeContext),
-						);
-			const linkedLibraries = shims.some((shim) => shim.kind === "linked")
-				? libraries
-				: undefined;
-			for (const shim of shims) {
-				reporter.detail(
-					`C library ${shim.library} development runtime`,
-					shim.kind === "shim"
-						? `shared shim (${shim.path})`
-						: `linked runner (${shim.reason})`,
-				);
-			}
 			const runnerKey = artifactIdentity({
 				toolchain: nativeContext.toolchain.fingerprint,
 				environment: nativeContext.environmentFingerprint,
@@ -1206,11 +1252,7 @@ function prepareCommandState(
 				binaryPath,
 				runArguments: [
 					...workerManifestArguments(workerManifest),
-					...developmentShimArguments(
-						linkedLibraries !== undefined
-							? []
-							: shims.flatMap((shim) => (shim.kind === "shim" ? [shim.path] : [])),
-					),
+					...shimArguments,
 					"--maligator-internal-run-wires",
 					String(wirePaths.length),
 					entrypointPath,
@@ -2182,15 +2224,58 @@ function testToolchain(
 	}
 }
 
+function testRunnerFeatures(config: ResolvedBuildConfig, applicationHost: boolean) {
+	return normalizeNativeFeatures({
+		...buildDerivationFromConfig(config).features,
+		developmentApiEnabled: applicationHost,
+	});
+}
+
+function prepareTestRunnerLibraries(
+	config: ResolvedBuildConfig,
+	context: CommandContext,
+	environment: NodeJS.ProcessEnv,
+	packagedRunner: string | undefined,
+) {
+	if (Object.keys(config.ffi).length === 0) return undefined;
+	const toolchain =
+		packagedRunner === undefined
+			? testToolchain(context, config, environment, true)
+			: undefined;
+	const tools =
+		toolchain !== undefined
+			? libraryBuildTools(toolchain, environment)
+			: developmentShimTools(environment);
+	const libraries = prepareConfiguredLibraries(config, context, tools);
+	return libraries === undefined ? undefined : { libraries, tools, toolchain };
+}
+
 function buildIsolatedTestRunner(
 	context: CommandContext,
 	config: ResolvedBuildConfig,
-	libraries: PreparedLibraries | undefined,
-	environment: NodeJS.ProcessEnv = process.env,
-	applicationHost = false,
+	options: {
+		bindings: ReturnType<typeof prepareTestRunnerLibraries>;
+		packagedRunner: string | undefined;
+		environment: NodeJS.ProcessEnv;
+		applicationHost: boolean;
+	},
 ): { binaryPath: string; shims: Array<string> } {
+	const { bindings, packagedRunner, environment, applicationHost } = options;
+	const runtimeDirectory = context.installation.runtimeDirectory;
+	const shims =
+		bindings === undefined
+			? []
+			: prepareDevelopmentShims(bindings.libraries, bindings.tools, runtimeDirectory);
+	const linkedLibraries = shims.some((shim) => shim.kind === "linked")
+		? bindings?.libraries
+		: undefined;
+	const shimPaths = shims.flatMap((shim) => (shim.kind === "shim" ? [shim.path] : []));
+	if (linkedLibraries === undefined && packagedRunner !== undefined)
+		return { binaryPath: packagedRunner, shims: shimPaths };
+
 	const derivation = buildDerivationFromConfig(config);
-	const toolchain = testToolchain(context, config, environment, true);
+	const toolchain =
+		bindings?.toolchain ?? testToolchain(context, config, environment, true);
 	const evalCompiler = context.installation.evalCompiler;
 	const compilerBake =
 		evalCompiler.kind === "source"
@@ -2214,21 +2299,14 @@ function buildIsolatedTestRunner(
 		toolchain,
 		environment,
 		plan: selectNativeBuildPlan(toolchain, false),
-		runtimeDirectory: context.installation.runtimeDirectory,
-		features: applicationHost
-			? normalizeNativeFeatures({
-					...derivation.features,
-					developmentApiEnabled: true,
-				})
-			: derivation.features,
+		runtimeDirectory,
+		features: testRunnerFeatures(config, applicationHost),
 		compilerBake,
 	});
-	const shims =
-		libraries === undefined ? [] : prepareDevelopmentShims(libraries, nativeContext);
-	if (libraries === undefined || shims.every((shim) => shim.kind === "shim")) {
+	if (linkedLibraries === undefined) {
 		return {
 			binaryPath: buildSharedDevelopmentRunner(nativeContext, false),
-			shims: shims.flatMap((shim) => (shim.kind === "shim" ? [shim.path] : [])),
+			shims: shimPaths,
 		};
 	}
 	return {
@@ -2236,7 +2314,7 @@ function buildIsolatedTestRunner(
 			nativeContext,
 			false,
 			`${derivation.cacheSuffix}${applicationHost ? "-test-host" : ""}`,
-			nativeLibraryInputs(libraries, context.installation.runtimeDirectory),
+			nativeLibraryInputs(linkedLibraries, runtimeDirectory),
 		).binaryPath,
 		shims: [],
 	};
@@ -2249,22 +2327,36 @@ function prepareLinkedTestHost(
 	const entry = context.installation.testHostModulePath;
 	if (entry === undefined)
 		throw new Error("this installation does not include the linked test host driver");
-	const toolchain = testToolchain(context, config);
-	const libraries = prepareConfiguredLibraries(config, context, toolchain);
-	if (libraries === undefined)
-		throw new Error("a linked test host needs configured C libraries");
-	const testConfig = { ...config, ffiModules: libraries.modules };
+	const environment = process.env;
+	const packagedRunner = packagedDevelopmentRunner(
+		context.installation.runtimeDirectory,
+		testRunnerFeatures(config, true),
+		environment,
+	);
+	const bindings = prepareTestRunnerLibraries(
+		config,
+		context,
+		environment,
+		packagedRunner,
+	);
+	const libraries = bindings?.libraries;
+	const testConfig =
+		libraries === undefined ? config : { ...config, ffiModules: libraries.modules };
 	const hostConfig: ResolvedBuildConfig = {
 		...testConfig,
 		surface: { webPlatform: true, node: true },
 	};
 	const driverFiles = [entry, path.join(path.dirname(entry), "host-protocol.mts")];
-	const dependencies = [...new Set([...libraries.dependencies, ...driverFiles])].sort();
+	const dependencies = [
+		...new Set([...(libraries?.dependencies ?? []), ...driverFiles]),
+	].sort();
 	context.onFfiDependencies?.(dependencies);
 	const identity = artifactIdentity({
-		libraries: libraries.identity,
+		libraries: libraries?.identity,
 		engine: config.engine,
-		toolchain: toolchain.fingerprint,
+		compiler: bindings?.tools.compiler,
+		toolchain: bindings?.toolchain?.fingerprint,
+		packagedRunner,
 		runtime: context.installation.runtimeDirectory,
 		driver: driverFiles.map((file) => [
 			file,
@@ -2289,13 +2381,12 @@ function prepareLinkedTestHost(
 				optimization: "development",
 				interpreted: true,
 			});
-			const runner = buildIsolatedTestRunner(
-				context,
-				hostConfig,
-				libraries,
-				process.env,
-				true,
-			);
+			const runner = buildIsolatedTestRunner(context, hostConfig, {
+				bindings,
+				packagedRunner,
+				environment,
+				applicationHost: true,
+			});
 			return {
 				executable: runner.binaryPath,
 				shims: runner.shims,
@@ -2320,7 +2411,7 @@ async function executeIsolatedTests(
 	command: TestCommand,
 	context: CommandContext,
 	config: ResolvedBuildConfig,
-	packagedRunner?: DevelopmentRunner,
+	embeddedRunner?: DevelopmentRunner,
 	options: IsolatedTestExecutionOptions = {},
 ): Promise<TestCommandSummary> {
 	const environment = options.environment ?? process.env;
@@ -2329,23 +2420,31 @@ async function executeIsolatedTests(
 		((text: string) => {
 			process.stdout.write(text);
 		});
-	// The packaged test host has no shim-loading protocol.
-	const libraries =
-		packagedRunner === undefined
-			? prepareConfiguredLibraries(
-					config,
-					context,
-					testToolchain(context, config, environment, true),
+	const packagedRunner =
+		embeddedRunner === undefined
+			? packagedDevelopmentRunner(
+					context.installation.runtimeDirectory,
+					testRunnerFeatures(config, false),
 					environment,
 				)
 			: undefined;
+	const bindings =
+		embeddedRunner === undefined
+			? prepareTestRunnerLibraries(config, context, environment, packagedRunner)
+			: undefined;
+	const libraries = bindings?.libraries;
 	const testConfig =
 		libraries === undefined ? config : { ...config, ffiModules: libraries.modules };
 	const compiled = prepareIsolatedTestCommand(command, context, testConfig);
 	const { binaryPath: runner, shims } =
-		packagedRunner === undefined
-			? buildIsolatedTestRunner(context, testConfig, libraries, environment)
-			: { binaryPath: packagedRunner.executablePath, shims: [] };
+		embeddedRunner === undefined
+			? buildIsolatedTestRunner(context, testConfig, {
+					bindings,
+					packagedRunner,
+					environment,
+					applicationHost: false,
+				})
+			: { binaryPath: embeddedRunner.executablePath, shims: [] };
 	const wirePaths =
 		"wires" in compiled
 			? compiled.wires.map((wire) => wire.path)
@@ -2438,7 +2537,11 @@ async function executeProfiledTests(
 		command.profileCompiler === true ? "compiler counters" : "sampling",
 	);
 	const libraries = reporter.phase("Prepare C libraries", () =>
-		prepareConfiguredLibraries(config, context, testToolchain(context, config)),
+		prepareConfiguredLibraries(
+			config,
+			context,
+			libraryBuildTools(testToolchain(context, config)),
+		),
 	);
 	const compiled = reporter.phase("Compile modules", () =>
 		prepareProfiledTestCommand(
@@ -2735,19 +2838,14 @@ export async function runCli(
 			let result: Awaited<ReturnType<typeof executeTestCommand>>;
 			try {
 				if (command.watch) {
-					if (
-						context.applications === undefined &&
-						Object.keys(loadCommandConfig(command, context.stripTypes).ffi).length === 0
-					) {
-						commandError(
-							"error: test --watch requires a compatible native application host",
-						);
-					}
 					const hosts = new LinkedTestHostSession(context.applications);
 					const watchContext = { ...context, testApplications: hosts };
 					const watchConfig = async (controls?: TestGenerationControls) => {
 						const current = loadCommandConfig(command, context.stripTypes);
-						if (Object.keys(current.ffi).length > 0) {
+						if (
+							context.applications === undefined ||
+							compatibleDevelopmentRunner(current, context)?.inProcess !== true
+						) {
 							if (controls === undefined) return current;
 							return await hosts.activate(
 								prepareLinkedTestHost(current, {
@@ -2758,14 +2856,6 @@ export async function runCli(
 									},
 								}),
 								controls,
-							);
-						}
-						if (
-							compatibleDevelopmentRunner(current, context)?.inProcess !== true ||
-							context.applications === undefined
-						) {
-							commandError(
-								"error: test --watch requires a compatible native application host",
 							);
 						}
 						if (controls !== undefined) await hosts.useLocal();
@@ -2797,7 +2887,8 @@ export async function runCli(
 						? await executeTestCommand(command, context, config)
 						: await executeIsolatedTests(command, context, config, developmentRunner);
 			} catch (error) {
-				if (error instanceof SyntaxDiagnostic) throw error;
+				if (error instanceof SyntaxDiagnostic || error instanceof CommandError)
+					throw error;
 				commandError(`error: ${error instanceof Error ? error.message : String(error)}`);
 			}
 			if (result.exitCode !== 0) exitCode = result.exitCode;

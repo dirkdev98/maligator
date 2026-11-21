@@ -4,10 +4,13 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { artifactDigest } from "../src/artifact-store.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../src/build-config.ts";
+import { sharedDevelopmentRunnerKey } from "../src/local-build.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
 import {
+	DEVELOPMENT_RUNNERS,
 	PREBUILT_RUNTIME_MANIFEST,
 	PREBUILT_RUNTIME_OVERRIDE,
+	readPrebuiltDevelopmentRunner,
 } from "../src/prebuilt-runtime.ts";
 import type { PrebuiltRuntimeManifest } from "../src/prebuilt-runtime.ts";
 import {
@@ -50,6 +53,10 @@ function fixtureContext(
 	writeFileSync(path.join(runtimeDirectory, "src/runtime.c"), "int runtime(void);\n");
 	writeFileSync(path.join(runtimeDirectory, "src/runtime.h"), "int runtime(void);\n");
 	writeFileSync(path.join(runtimeDirectory, "rust/src/lib.rs"), "pub fn demo() {}\n");
+	writeFileSync(
+		path.join(runtimeDirectory, "dev_main.c"),
+		"int main(void) { return 0; }\n",
+	);
 	const toolsDirectory = path.join(directory, "tools");
 	const tool = (name: string) => ({
 		path: path.join(toolsDirectory, name),
@@ -102,11 +109,29 @@ function fixtureContext(
 	});
 }
 
-function stageRelease(identity: ReturnType<typeof runtimeReleaseArchiveIdentity>) {
+function stageRelease(
+	identity: ReturnType<typeof runtimeReleaseArchiveIdentity>,
+	runnerKey?: string,
+) {
 	const directory = path.join(root, "package");
 	mkdirSync(directory);
+	const name = DEVELOPMENT_RUNNERS.standalone;
+	const bytes = "#!/bin/sh\nprintf 'ready\\n'\n";
+	if (runnerKey !== undefined)
+		writeFileSync(path.join(directory, name), bytes, { mode: 0o755 });
 	const manifest: PrebuiltRuntimeManifest = {
 		...identity,
+		runners:
+			runnerKey === undefined
+				? {}
+				: {
+						standalone: {
+							name,
+							key: runnerKey,
+							sha256: artifactDigest(bytes),
+							size: Buffer.byteLength(bytes),
+						},
+					},
 		files: archiveNames.map((name) => {
 			const bytes = `release fixture ${name}`;
 			writeFileSync(path.join(directory, name), bytes);
@@ -174,5 +199,58 @@ describe("prebuilt runtime archives", () => {
 		expect(() =>
 			ensureRustArtifacts(fixtureContext("consumer", { production: true })),
 		).toThrow(localBuild);
+	});
+});
+
+describe("prebuilt development runners", () => {
+	it("selects a runner from the same sources under different paths and tools", () => {
+		const producer = fixtureContext("producer");
+		const consumer = fixtureContext("consumer");
+		const directory = stageRelease(
+			runtimeReleaseArchiveIdentity(producer),
+			sharedDevelopmentRunnerKey(producer, macTarget),
+		);
+		expect(
+			readPrebuiltDevelopmentRunner(
+				directory,
+				macTarget,
+				"standalone",
+				sharedDevelopmentRunnerKey(consumer, macTarget),
+			),
+		).toBe(path.join(directory, DEVELOPMENT_RUNNERS.standalone));
+	});
+
+	it("rejects a runner built from a different driver source", () => {
+		const context = fixtureContext("consumer");
+		const directory = stageRelease(
+			runtimeReleaseArchiveIdentity(context),
+			sharedDevelopmentRunnerKey(context, macTarget),
+		);
+		writeFileSync(
+			path.join(context.runtimeDirectory, "dev_main.c"),
+			"int main(void) { return 1; }\n",
+		);
+		expect(
+			readPrebuiltDevelopmentRunner(
+				directory,
+				macTarget,
+				"standalone",
+				sharedDevelopmentRunnerKey(context, macTarget),
+			),
+		).toBeUndefined();
+	});
+
+	it("rejects same-size runner tampering and leaves the archives available for a local link", () => {
+		const context = fixtureContext("consumer");
+		const key = sharedDevelopmentRunnerKey(context, macTarget);
+		const directory = stageRelease(runtimeReleaseArchiveIdentity(context), key);
+		const executable = path.join(directory, DEVELOPMENT_RUNNERS.standalone);
+		writeFileSync(executable, readFileSync(executable, "utf8").replace("ready", "wrong"));
+		expect(
+			readPrebuiltDevelopmentRunner(directory, macTarget, "standalone", key),
+		).toBeUndefined();
+		expect(readFileSync(ensureNativeArtifacts(context).c.runtime, "utf8")).toBe(
+			"release fixture libMalRuntime.a",
+		);
 	});
 });

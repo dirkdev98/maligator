@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 import {
+	artifactDigest,
 	artifactFileDigest,
 	artifactIdentity,
 	artifactProducer,
@@ -17,6 +18,9 @@ import {
 	readArtifactAction,
 	withArtifactActionLock,
 } from "./artifact-store.ts";
+import { ccExtraFlags, runtimeOptimizationFlags } from "./build-flags.ts";
+import type { NativeFeatureSpec } from "./build-flags.ts";
+import { hashDirectoryTreesCached, lexicalNameComparator } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
 import { resolveZigCrossTarget, SUPPORTED_ZIG_CROSS_TARGETS } from "./toolchain.ts";
 
@@ -34,6 +38,11 @@ export const RUNTIME_ARCHIVES = {
 const runtimeArchiveNames: ReadonlyArray<string> = Object.values(RUNTIME_ARCHIVES);
 export const RUST_LIBRARY_OUTPUT = "libmal_rust.a";
 export const NATIVE_OUTPUT_PREFIX = "native.";
+export const DEVELOPMENT_RUNNERS = {
+	standalone: "maligator-dev",
+	testHost: "maligator-test-host",
+} as const;
+export type DevelopmentRunnerKind = keyof typeof DEVELOPMENT_RUNNERS;
 export function prebuiltRuntimeCxxLibraries(target: string) {
 	const platform = prebuiltRuntimeTarget(target).platform;
 	return [
@@ -142,6 +151,11 @@ export interface PrebuiltRuntimeFile {
 
 export interface PrebuiltRuntimeManifest extends PrebuiltRuntimeIdentity {
 	files: Array<PrebuiltRuntimeFile>;
+	runners: Partial<Record<DevelopmentRunnerKind, PrebuiltDevelopmentRunner>>;
+}
+
+export interface PrebuiltDevelopmentRunner extends PrebuiltRuntimeFile {
+	key: string;
 }
 
 export interface PrebuiltRuntime {
@@ -162,6 +176,12 @@ export function prebuiltRuntimeDirectory(
 		!canUsePrebuiltRuntime(toolchain.rustTarget, toolchain.target, environment)
 	)
 		return undefined;
+	return packagedRuntimeDirectory(environment);
+}
+
+export function packagedRuntimeDirectory(
+	environment: NodeJS.ProcessEnv,
+): string | undefined {
 	const override = environment[PREBUILT_RUNTIME_OVERRIDE];
 	if (override !== undefined) return override === "" ? undefined : path.resolve(override);
 	try {
@@ -176,6 +196,19 @@ export function prebuiltRuntimeDirectory(
 	} catch {
 		return undefined;
 	}
+}
+
+/** A runner needs the host ABI, with no dependency on the host compiler's target. */
+export function prebuiltDevelopmentRunnerTarget(
+	environment: NodeJS.ProcessEnv,
+): string | undefined {
+	const target = SUPPORTED_ZIG_CROSS_TARGETS.find((triple) => {
+		const { platform, arch } = prebuiltRuntimeTarget(triple);
+		return platform === process.platform && arch === process.arch;
+	});
+	return target !== undefined && canUsePrebuiltRuntime(target, target, environment)
+		? target
+		: undefined;
 }
 
 /** The consumer's compilation and link must target the producer's native ABI. */
@@ -209,6 +242,56 @@ function canUsePrebuiltRuntime(
 	);
 }
 
+/** Portable link identity for an executable that embeds the release runtime. */
+export function prebuiltDevelopmentRunnerKey(inputs: {
+	target: string;
+	runtimeDirectory: string;
+	cacheDirectory: string;
+	features: Readonly<NativeFeatureSpec>;
+	environment: NodeJS.ProcessEnv;
+	anchorSource: string;
+}): string {
+	const target = prebuiltRuntimeTarget(inputs.target);
+	const root = inputs.runtimeDirectory;
+	const source = hashDirectoryTreesCached(
+		{
+			root,
+			directories: [
+				"src",
+				"rust",
+				"vendor/llhttp/include",
+				"vendor/llhttp/src",
+				"vendor/sqlite",
+			]
+				.map((directory) => path.join(root, directory))
+				.filter(existsSync),
+			include: (entry) => /\.(?:c|h|inc|rs|toml|lock)$/.test(entry.name),
+			descend: ({ fullPath }) =>
+				fullPath !== path.join(root, "rust", "target") &&
+				fullPath !== path.join(root, "rust", ".cache"),
+			compareNames: lexicalNameComparator,
+		},
+		path.join(
+			inputs.cacheDirectory,
+			"source-digests",
+			`development-runner-${artifactDigest(root).slice(0, 16)}.json`,
+		),
+		"release-development-runner-v1",
+	).digest;
+	return artifactIdentity({
+		schema: 1,
+		target,
+		producer: releaseProducer,
+		zigFlags: PREBUILT_RUNTIME_CC_FLAGS,
+		features: inputs.features,
+		compileArguments: ccExtraFlags(undefined, inputs.environment, target.platform),
+		runtimeOptimization: runtimeOptimizationFlags(inputs.environment),
+		runtimeSourceDigest: source,
+		mainSourceDigest: artifactFileDigest(path.join(root, "dev_main.c")),
+		anchorSource: inputs.anchorSource,
+	});
+}
+
 function validArchiveNames(names: ReadonlyArray<string>, target: string): boolean {
 	const ringArchive = /^native\.ring\.libring_core_[a-z0-9_]+\.a$/;
 	const required = [
@@ -227,21 +310,25 @@ function validArchiveNames(names: ReadonlyArray<string>, target: string): boolea
 	);
 }
 
-function matchesFile(file: string, expected: PrebuiltRuntimeFile): boolean {
+function matchesFile(
+	file: string,
+	expected: PrebuiltRuntimeFile,
+	executable = false,
+): boolean {
 	const stats = statSync(file);
 	return (
 		stats.isFile() &&
+		(!executable || (stats.mode & 0o111) !== 0) &&
 		stats.size === expected.size &&
 		artifactFileDigest(file) === expected.sha256
 	);
 }
 
-/** A release set is usable only when every listed archive is present and intact. */
-export function readPrebuiltRuntime(
+function readRuntimeManifest(
 	directory: string,
 	target: string,
 	key?: string,
-): PrebuiltRuntime | undefined {
+): PrebuiltRuntimeManifest | undefined {
 	try {
 		const manifest = JSON.parse(
 			readFileSync(path.join(directory, PREBUILT_RUNTIME_MANIFEST), "utf8"),
@@ -254,8 +341,27 @@ export function readPrebuiltRuntime(
 			manifest.producer !== releaseProducer ||
 			manifest.flavour.primordialsLocked !== releaseFlavour.primordialsLocked ||
 			manifest.flavour.realmsEnabled !== releaseFlavour.realmsEnabled ||
+			typeof manifest.key !== "string" ||
 			!/^[0-9a-f]{64}$/.test(manifest.key) ||
-			(key !== undefined && manifest.key !== key) ||
+			(key !== undefined && manifest.key !== key)
+		)
+			return undefined;
+		return manifest;
+	} catch {
+		return undefined;
+	}
+}
+
+/** A release archive set is usable only when every listed archive is intact. */
+export function readPrebuiltRuntime(
+	directory: string,
+	target: string,
+	key?: string,
+): PrebuiltRuntime | undefined {
+	const manifest = readRuntimeManifest(directory, target, key);
+	if (manifest === undefined) return undefined;
+	try {
+		if (
 			!Array.isArray(manifest.files) ||
 			!validArchiveNames(
 				manifest.files.map(({ name }) => name),
@@ -270,6 +376,32 @@ export function readPrebuiltRuntime(
 		)
 			return undefined;
 		return { directory, manifest };
+	} catch {
+		return undefined;
+	}
+}
+
+/** Check only the executable being selected, so archive damage and runner damage are independent. */
+export function readPrebuiltDevelopmentRunner(
+	directory: string,
+	target: string,
+	kind: DevelopmentRunnerKind,
+	key?: string,
+): string | undefined {
+	const runner = readRuntimeManifest(directory, target)?.runners?.[kind];
+	const name = DEVELOPMENT_RUNNERS[kind];
+	if (
+		runner?.name !== name ||
+		typeof runner.key !== "string" ||
+		!/^[0-9a-f]{64}$/.test(runner.key) ||
+		(key !== undefined && runner.key !== key) ||
+		!Number.isSafeInteger(runner.size) ||
+		runner.size <= 0
+	)
+		return undefined;
+	const file = path.join(directory, name);
+	try {
+		return matchesFile(file, runner, true) ? file : undefined;
 	} catch {
 		return undefined;
 	}

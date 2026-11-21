@@ -15,13 +15,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
 import {
+	DEVELOPMENT_RUNNERS,
 	PREBUILT_RUNTIME_DIRECTORY,
 	PREBUILT_RUNTIME_MANIFEST,
 	PREBUILT_RUNTIME_OVERRIDE,
 	prebuiltRuntimeCxxLibraries,
+	readPrebuiltDevelopmentRunner,
 	readPrebuiltRuntime,
 	RELEASE_MACOS_VERSION,
 } from "../src/prebuilt-runtime.ts";
+import type { DevelopmentRunnerKind } from "../src/prebuilt-runtime.ts";
 import { buildProductCli } from "../src/product-builder.ts";
 import { clangMajorVersion, resolvePathExecutable } from "../src/toolchain.ts";
 import { requireHeapLimit } from "./heap-limit.ts";
@@ -699,6 +702,61 @@ function smokePackedLauncher(
 			MALIGATOR_CACHE_MAINTENANCE: "off",
 		};
 		delete env[PREBUILT_RUNTIME_OVERRIDE];
+		const tools = path.join(project, "node-only");
+		mkdirSync(tools);
+		symlinkSync(process.execPath, path.join(tools, "node"));
+		const runConfig = path.join(project, "run.build.ts");
+		writeFileSync(
+			runConfig,
+			"export default { surface: { node: true, webPlatform: true }, engine: { intl: { enabled: true } } };\n",
+		);
+		const toolchainFreeEnvironment = {
+			...env,
+			PATH: tools,
+			CC: path.join(tools, "unavailable-cc"),
+			CXX: path.join(tools, "unavailable-cxx"),
+			ZIG: path.join(tools, "unavailable-zig"),
+		};
+		const run = spawnSync(
+			launcher,
+			["run", "--verbose", "--config", runConfig, "main.mts"],
+			{
+				cwd: project,
+				env: toolchainFreeEnvironment,
+				encoding: "utf8",
+				timeout: 60_000,
+			},
+		);
+		if (run.error !== undefined) throw run.error;
+		if (
+			run.status !== 0 ||
+			run.stdout.trim() !== "function localhost" ||
+			!run.stderr.includes(DEVELOPMENT_RUNNERS.standalone) ||
+			run.stderr.includes("Native phase · link:")
+		) {
+			throw new Error(
+				`packed launcher did not run with the packaged executable on a Node-only PATH\n${run.stderr.slice(-16_384)}`,
+			);
+		}
+		writeFileSync(
+			path.join(project, "smoke.test.mts"),
+			'import { expect, test } from "maligator:test";\n' +
+				'test("formats numbers", () => expect(new Intl.NumberFormat("en").format(1000)).toBe("1,000"));\n',
+		);
+		const testOutput = execFileSync(
+			launcher,
+			["test", "--config", runConfig, "smoke.test.mts"],
+			{
+				cwd: project,
+				env: toolchainFreeEnvironment,
+				encoding: "utf8",
+				timeout: 60_000,
+			},
+		);
+		if (!testOutput.includes("1 passed, 0 failed"))
+			throw new Error(
+				`packed launcher did not pass its toolchain-free test\n${testOutput}`,
+			);
 		const build = spawnSync(launcher, ["build", "--verbose", "main.mts"], {
 			cwd: project,
 			env,
@@ -756,15 +814,24 @@ function packRelease(args: Array<string>): void {
 		if (!existsSync(directory)) {
 			throw new Error("build the complete target matrix before packing");
 		}
-		const bundle = readPrebuiltRuntime(
-			path.join(directory, PREBUILT_RUNTIME_DIRECTORY),
-			target.rust,
-		);
+		const runtimeDirectory = path.join(directory, PREBUILT_RUNTIME_DIRECTORY);
+		const bundle = readPrebuiltRuntime(runtimeDirectory, target.rust);
 		if (bundle === undefined)
 			throw new Error(`invalid prebuilt runtime for ${target.rust}`);
+		const runners = Object.keys(DEVELOPMENT_RUNNERS).map((kind) => {
+			const runner = readPrebuiltDevelopmentRunner(
+				runtimeDirectory,
+				target.rust,
+				kind as DevelopmentRunnerKind,
+			);
+			if (runner === undefined)
+				throw new Error(`invalid prebuilt ${kind} runner for ${target.rust}`);
+			return path.basename(runner);
+		});
 		const runtimeFiles = [
 			PREBUILT_RUNTIME_MANIFEST,
 			...bundle.manifest.files.map(({ name }) => name),
+			...runners,
 			...prebuiltRuntimeCxxLibraries(target.rust).map(
 				({ license }) => `LICENSE.${license}`,
 			),

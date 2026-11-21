@@ -35,7 +35,7 @@ import {
 	expandedGeneratedUnitDigest,
 } from "./c-declaration-slice.ts";
 import type { PreludeDeclarations } from "./c-declaration-slice.ts";
-import { maligatorBuildDirectory } from "./cache-root.ts";
+import { maligatorBuildDirectory, maligatorCacheDirectory } from "./cache-root.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
 import { languageComponentAnchorSource } from "./compiler/frontend/engine-components.ts";
 import type {
@@ -52,6 +52,13 @@ import type { NativeBuildContext } from "./native-build-context.ts";
 import { normalizeRuntimeBuildArgument } from "./native-cache-identity.ts";
 import { runNativeCommand, runNativeCommands } from "./native-command.ts";
 import type { NativeCommandMeasurement } from "./native-command.ts";
+import {
+	packagedRuntimeDirectory,
+	PREBUILT_RUNTIME_MANIFEST,
+	prebuiltDevelopmentRunnerKey,
+	prebuiltDevelopmentRunnerTarget,
+	readPrebuiltDevelopmentRunner,
+} from "./prebuilt-runtime.ts";
 import { ensureNativeArtifacts } from "./runtime-build.ts";
 import type { NativeArtifacts } from "./runtime-build.ts";
 import { generatedHeaderDependencyHash, runtimeHeaderHash } from "./runtime-build.ts";
@@ -762,6 +769,53 @@ export function sharedDevelopmentRunnerFeatures(
 		intlEnabled: true,
 		intlFeatures: [],
 	});
+}
+
+export function sharedDevelopmentRunnerKey(
+	inputs: Pick<
+		NativeBuildContext,
+		"runtimeDirectory" | "cacheDirectory" | "features" | "environment"
+	>,
+	target: string,
+): string {
+	const features = sharedDevelopmentRunnerFeatures(inputs.features);
+	return prebuiltDevelopmentRunnerKey({
+		...inputs,
+		target,
+		features,
+		anchorSource: languageComponentAnchorSource(features),
+	});
+}
+
+export function packagedDevelopmentRunner(
+	runtimeDirectory: string,
+	features: NativeBuildContext["features"],
+	environment: NodeJS.ProcessEnv,
+): string | undefined {
+	if (!features.primordialsLocked || features.realmsEnabled || features.profileEnabled)
+		return undefined;
+	const target = prebuiltDevelopmentRunnerTarget(environment);
+	const directory = packagedRuntimeDirectory(environment);
+	if (
+		target === undefined ||
+		directory === undefined ||
+		!existsSync(path.join(directory, PREBUILT_RUNTIME_MANIFEST))
+	)
+		return undefined;
+	return readPrebuiltDevelopmentRunner(
+		directory,
+		target,
+		features.developmentApiEnabled ? "testHost" : "standalone",
+		sharedDevelopmentRunnerKey(
+			{
+				runtimeDirectory,
+				cacheDirectory: maligatorCacheDirectory(undefined, environment),
+				features,
+				environment,
+			},
+			target,
+		),
+	);
 }
 
 export function buildSharedDevelopmentRunner(

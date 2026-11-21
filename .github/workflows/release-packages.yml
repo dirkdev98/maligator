@@ -51,7 +51,7 @@ jobs:
       - name: Check the runner environment
         run: npm run env:check -- --json
 
-      - name: Build the release target and development runtime archives
+      - name: Build the release target, runtime archives and development runners
         run: npm run release:build -- --target ${{ matrix.target }}
 
       - name: Archive the target build
@@ -180,7 +180,7 @@ jobs:
       - name: Smoke the native release
         run: npm run release:smoke
 
-      - name: Repack and smoke the installed launcher
+      - name: Repack and smoke toolchain-free development and native builds
         shell: bash
         run: |
           cp dist/release/packs/packages.json "$RUNNER_TEMP/packages.json"

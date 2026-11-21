@@ -172,7 +172,7 @@ describe("alpha versions", () => {
 });
 
 describe("release targets", () => {
-	it("packs development runtime archives in the platform package", () => {
+	it("packs the development runtime bundle in the platform package", () => {
 		const manifest = createPlatformPackageJson("0.1.0-alpha.2", {
 			rust: "aarch64-apple-darwin",
 			platform: "darwin",
@@ -425,7 +425,7 @@ describe("npm launcher", () => {
 	});
 
 	it.runIf(process.platform === "darwin" || process.platform === "linux")(
-		"passes arguments and the archive directory to the current platform binary",
+		"passes arguments and the runtime bundle directory to the current platform binary",
 		() => {
 			const root = temporaryDirectory();
 			const launcherDirectory = path.join(root, "cli");

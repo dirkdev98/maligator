@@ -21,22 +21,20 @@ prebuilt eval compiler wire as its `runtime` and `compilerWire` assets
 startup, so the copied compiler can run the full native pipeline outside a Maligator
 checkout and without Node.js. `npm run selfhost:cli` exercises that transfer path.
 
-## Packaged runtime archives
+## Packaged development runtime
 
-Each npm platform package includes machine-code archives for the default
+Each npm platform package includes runtime archives and runners for the default
 development flavour, with locked primordials and realms disabled. The launcher
-passes the platform package's `runtime-libraries` directory to the native CLI
-and its compiler workers. A development build reads the manifest when it needs
-to link a runner or application. The manifest key covers
-the C and Rust sources, target and ABI baseline, compile flags, and pinned Zig
-producer. It is independent of the consumer's tool paths and `PATH`.
+passes the platform package's `runtime-libraries` directory to the native CLI and
+its compiler workers. Portable keys cover the sources, target and ABI baseline,
+native flags, and pinned Zig producer.
 
-On a match, the CLI verifies the archive sizes and SHA-256 digests and imports the
-archives under the consumer's local action keys in a separate cache namespace.
-Missing or mismatched packages fall back to local builds. Production builds use
-the local runtime cache and the selected toolchain's LTO support. Use
-`MALIGATOR_PREBUILT_RUNTIME_DIR` to test a different archive directory and
-`--verbose` to see which archives a build uses.
+The CLI verifies SHA-256 digests before using packaged files. It executes a matching
+runner directly. A local development link can import matching archives under its
+local cache keys. Missing or mismatched files fall back to local builds. Production
+builds use the local runtime cache and the selected toolchain's LTO support.
+Use `MALIGATOR_PREBUILT_RUNTIME_DIR` to test a different runtime directory and
+`--verbose` to see which runner or archives a command uses.
 
 ## Toolchain discovery
 
@@ -110,14 +108,17 @@ tables.
 
 ## Development runner
 
-`run`, `dev`, and `test` use a packaged runner when one matches the
-configuration. When they need a local runner, the linked-binary cache gives projects
+`run`, `dev`, and `test` skip toolchain discovery when a packaged runner matches
+the configuration and the project has no C bindings. The platform package includes
+a separate runner for the private application API used by `test --watch`. When a
+command needs a local runner, the linked-binary cache gives projects
 with the same runtime flavour and toolchain one executable. The application and its
 workers supply runtime images that select the host surface, Intl services and
 Temporal. Compiler defines that change native code enter the runner's cache key.
 
-On macOS and Linux, the local runner loads C bindings from cached shims before it
-loads any images. Each shim links its library and supplies an installer to the runner.
+The shared runner loads C bindings from cached shims before it loads any images.
+Install Clang and set `CC` to its executable if the CLI cannot find a compiler for
+your bindings. Each shim links its library and supplies an installer to the runner.
 Its cache key covers the contract, headers, library sources and files, compiler, and
 FFI runtime interface. If a library needs the executable link, Maligator links the
 project's libraries together in a local runner. `maligator ffi check` reports the
