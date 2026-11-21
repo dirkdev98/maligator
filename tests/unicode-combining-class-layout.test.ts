@@ -9,7 +9,7 @@ function table(name: string): Array<number> {
 		"utf8",
 	);
 	const match = new RegExp(
-		`static const u8 mal_unicode_${name}\\[\\] = \\{([\\s\\S]*?)\\};`,
+		`(?:static )?const u8 mal_unicode_${name}\\[\\] = \\{([\\s\\S]*?)\\};`,
 	).exec(source);
 	ok(match, `Missing native combining-class table ${name}`);
 	return (match[1]!.match(/\d+/g) ?? []).map(Number);
