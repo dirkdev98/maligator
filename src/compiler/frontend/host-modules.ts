@@ -136,6 +136,8 @@ export const HOST_PERSONALITY_INSTALLER = "mal_host_install_web_personality";
  */
 export const NODE_PERSONALITY_INSTALLER = "mal_host_install_node_web_personality";
 
+export const WEB_FETCH_INSTALLER = "mal_host_install_web_fetch";
+
 /**
  * Installers that define free globals, retained at startup when a program names one
  * of them.
@@ -145,8 +147,6 @@ export const NODE_PERSONALITY_INSTALLER = "mal_host_install_node_web_personality
 export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 	readonly installer: string;
 	readonly globals: ReadonlyArray<string>;
-	/** Retained only for an image that uses Node through another installer. */
-	readonly nodeCompanion?: true;
 }> = [
 	{
 		installer: HOST_PERSONALITY_INSTALLER,
@@ -200,7 +200,7 @@ export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 		globals: ["URL", "URLSearchParams"],
 	},
 	{
-		installer: "mal_host_install_web_fetch",
+		installer: WEB_FETCH_INSTALLER,
 		globals: ["Headers", "Request", "Response", "Blob", "File", "FormData"],
 	},
 	{
@@ -230,12 +230,6 @@ export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 	{
 		installer: HTTP_INSTALLER_SYMBOL,
 		globals: ["WebSocket"],
-	},
-	// Node Request and Response bodies convert async-iterable chunks with Buffer.from.
-	{
-		installer: BUFFER_INSTALLER_SYMBOL,
-		globals: ["Request", "Response"],
-		nodeCompanion: true,
 	},
 ];
 

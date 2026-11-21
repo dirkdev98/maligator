@@ -43,15 +43,10 @@ import {
 	canonicalNodeHostModuleId,
 	HOST_GLOBAL_INSTALLERS,
 	HOST_MODULES,
-	HOST_PERSONALITY_INSTALLER,
-	HOST_PERSONALITY_INSTALLERS,
 	hostInstallerSymbol,
-	installerUsesHostPersonality,
-	installerUsesNodePersonality,
 	NODE_BUILTIN_LOADER_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
 	NODE_INSTALLED_BUILTINS_INSTALLER,
-	NODE_PERSONALITY_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
@@ -1298,7 +1293,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 	const reachedHostInstallers = inheritsHostComponents
 		? []
 		: [
-				...hostInstallSelection(program, hostInstallCandidates),
+				...slotFreeHostInstallers(program, hostInstallCandidates),
 				...program.languageInstallers,
 				...engineComponentInstallers(
 					program.semantic,
@@ -1390,38 +1385,14 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 	};
 }
 
-/**
- * The retained host installers, led by the personality an image that reaches a web
- * or Node installer lists: the Node one, with Node's Error hooks, once it reaches a
- * Node installer. A host module counts while lowered code reads one of its exports,
- * even if optimization later drops that read. An image that reaches neither lists
- * no personality, so it links no host and keeps the lean driver.
- */
-function hostInstallSelection(
+function slotFreeHostInstallers(
 	program: CoreFrontendContext,
 	candidates: ReadonlyArray<CoreHostInstallCandidate>,
 ): Array<string> {
-	const retained = [
-		program.hostProcess,
-		program.hostBuffer,
-		...program.hostGlobals,
-	].filter((host): host is NonNullable<typeof host> => host?.retained === true);
-	const companion = (host: (typeof retained)[number]) =>
-		"nodeCompanion" in host && host.nodeCompanion === true;
-	const reached = retained
-		.filter((host) => !companion(host))
-		.map((host) => host.installer)
+	return [program.hostProcess, program.hostBuffer, ...program.hostGlobals]
+		.flatMap((host) => (host?.retained === true ? [host.installer] : []))
 		.concat(program.nodeModuleInstaller ?? [])
 		.concat(builtinModuleInstallers(program, candidates));
-	const installers = [...reached, ...candidates.map(({ installer }) => installer)];
-	const usesNode = installers.some(installerUsesNodePersonality);
-	if (!usesNode && !installers.some(installerUsesHostPersonality)) return reached;
-	return [
-		usesNode ? NODE_PERSONALITY_INSTALLER : HOST_PERSONALITY_INSTALLER,
-		...(usesNode ? [NODE_ERROR_HOOKS_INSTALLER] : []),
-		...reached.filter((installer) => !HOST_PERSONALITY_INSTALLERS.includes(installer)),
-		...(usesNode ? retained.filter(companion).map((host) => host.installer) : []),
-	];
 }
 
 /** Source-module cells can be supplied by an earlier image, including its private bindings. */

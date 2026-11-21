@@ -173,8 +173,8 @@ describe("node host installer link retention", () => {
 		expect(computedCjsInstallers).toEqual(expect.arrayContaining([...MODULE_INSTALLERS]));
 	});
 
-	it("omits the path installer when its only read is optimized away", () => {
-		expect(deadPathInstallers).toEqual(withInstallers(hostMainInstallers, ...NODE_HOST));
+	it("links no Node host when the path import's only read is optimized away", () => {
+		expect(deadPathInstallers).toEqual(hostMainInstallers);
 	});
 
 	it("retains Buffer for a reachable free global", () => {
@@ -191,9 +191,7 @@ describe("node host installer link retention", () => {
 		);
 	});
 
-	it("omits the Buffer installer when its imported read is optimized away", () => {
-		expect(deadBufferInstallers).toEqual(
-			withInstallers(hostMainInstallers, ...NODE_HOST),
-		);
+	it("links no Node host when the Buffer import's only read is optimized away", () => {
+		expect(deadBufferInstallers).toEqual(hostMainInstallers);
 	});
 });

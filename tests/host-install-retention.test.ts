@@ -196,6 +196,24 @@ describe("maligator:http client retention", () => {
 
 describe("host surface installers", () => {
 	it.each([
+		["no remaining host reads", "", []],
+		["a remaining web read", "setTimeout(() => {}, 1);", [HOST_PERSONALITY_INSTALLER]],
+	])(
+		"selects the personality after removing a Node read with %s",
+		(_name, tail, expected) => {
+			const installs = manifest(
+				`import { execution } from "maligator:process";
+import { join } from "node:path";
+if (execution.production) console.log(join("unused"));
+${tail}`,
+				defaultConfig,
+				{ execution: execution(["run", "main.mjs"]) },
+			);
+			expect([...installs.keys()]).toEqual(expected);
+		},
+	);
+
+	it.each([
 		["a web global", `globalThis.sink = new URL("https://example.com/").host;\n`],
 		["a timer", `setTimeout(() => {}, 1);\n`],
 	])("lists the web personality first for a program that uses %s", (_name, source) => {

@@ -2,11 +2,18 @@ import type { PlatformData } from "../../platform/catalog.ts";
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "../core/core-constructor-layout.ts";
 import {
+	BUFFER_INSTALLER_SYMBOL,
+	HOST_PERSONALITY_INSTALLER,
 	HOST_PERSONALITY_INSTALLERS,
 	hostInstallerSymbol,
+	installerUsesHostPersonality,
+	installerUsesNodePersonality,
 	NODE_BUILTIN_LOADER_INSTALLER,
+	NODE_ERROR_HOOKS_INSTALLER,
+	NODE_PERSONALITY_INSTALLER,
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
+	WEB_FETCH_INSTALLER,
 } from "../frontend/host-modules.ts";
 import { directBuiltinOperationIds } from "../shared/builtin-registry.ts";
 import type { DirectBuiltinOperationId } from "../shared/builtin-registry.ts";
@@ -3955,10 +3962,6 @@ function buildHostInstalls(
 		}
 		return install;
 	};
-	// The personality sets the host surface the other installers build on.
-	for (const installer of context.data.retainedHostInstallers) {
-		if (HOST_PERSONALITY_INSTALLERS.includes(installer)) installFor(installer);
-	}
 	for (const hostModule of context.data.hostInstallCandidates) {
 		const usedExports: RuntimeImage["hostInstalls"][number]["exports"] = [];
 		for (const entry of hostModule.exports) {
@@ -3971,8 +3974,26 @@ function buildHostInstalls(
 		}
 	}
 
+	const retained = context.data.retainedHostInstallers;
+	const usesNode =
+		retained.some(installerUsesNodePersonality) ||
+		manifest.some(({ installer }) => installerUsesNodePersonality(installer));
+	const usesHost =
+		usesNode ||
+		retained.some(installerUsesHostPersonality) ||
+		manifest.some(({ installer }) => installerUsesHostPersonality(installer));
+	if (usesHost) {
+		// The personality sets the host behavior the other installers build on.
+		manifest.unshift({
+			installer: usesNode ? NODE_PERSONALITY_INSTALLER : HOST_PERSONALITY_INSTALLER,
+			exports: [],
+		});
+	}
+	if (usesNode) installFor(NODE_ERROR_HOOKS_INSTALLER);
+
 	const world = context.facts.world;
-	for (const installer of context.data.retainedHostInstallers) {
+	for (const installer of retained) {
+		if (HOST_PERSONALITY_INSTALLERS.includes(installer)) continue;
 		// An eval-enabled runtime supplies both engines even to spliced wire
 		// images, whose loaders don't run a host manifest.
 		if (
@@ -3983,6 +4004,10 @@ function buildHostInstalls(
 		if (installer === UNICODE_NORMALIZATION_INSTALLER && world.eval === "runtime")
 			continue;
 		installFor(installer);
+	}
+	if (usesNode && manifest.some(({ installer }) => installer === WEB_FETCH_INSTALLER)) {
+		// Node Request and Response bodies convert async-iterable chunks with Buffer.from.
+		installFor(BUFFER_INSTALLER_SYMBOL);
 	}
 	if (
 		world.ecmaFeatures.regexp &&
