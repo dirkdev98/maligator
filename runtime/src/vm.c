@@ -631,6 +631,8 @@ static void mal_vm_adopt_program_image(MalVm *vm, const MalRuntimeImage *program
     }
 
     vm->live_runtime_image = *program;
+    // Realm initialization reads the policy, so it is fixed before any intrinsic exists.
+    vm->engine_policy = program->engine_policy;
     // Links describe one image; the merged program spliced from them has none.
     vm->live_runtime_image.module_import_count = 0;
     vm->live_runtime_image.module_imports = nullptr;

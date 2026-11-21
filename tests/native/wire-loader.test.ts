@@ -237,6 +237,35 @@ describe("wire loader side-data validation", () => {
 		);
 		rejectsWire("stale-wire-abi", wire, "version mismatch");
 	});
+	it("withholds RegExp and eval when the image's engine policy disables them", () => {
+		const entrypoint = path.join(directory, "engine-policy.mjs");
+		writeFileSync(
+			entrypoint,
+			`function thrown(run) {
+				try { run(); } catch (error) { return error; }
+			}
+			if (globalThis.RegExp !== undefined) throw new Error("RegExp is installed");
+			if (!(thrown(() => "abc".search("b")) instanceof TypeError)) throw new Error("search coerced a RegExp");
+			if (!(thrown(() => (0, eval)("1")) instanceof EvalError)) throw new Error("eval compiled");
+			if (!(thrown(() => Function("return 1")) instanceof EvalError)) throw new Error("Function compiled");`,
+		);
+		const image = compileEntrypoint(entrypoint, {
+			stripTypes: stripCompactTypes,
+			buildConfig: resolveBuildConfig({ engine: { regexp: false, eval: false } }),
+		});
+		expect(image.runtime.enginePolicy).toEqual({ regexp: false, eval: false });
+		acceptsWire(
+			"engine-policy",
+			serializeRuntimeImage(image.runtime, { debugInfo: false }),
+		);
+	});
+	it("rejects an engine policy bit it does not know", () => {
+		const wire = serializeRuntimeImage(definition, { debugInfo: false });
+		// The policy follows the fixed magic and version and the one-byte flags.
+		expect(wire[9]).toBe(0);
+		wire[9] = 4;
+		rejectsWire("unknown-engine-policy", wire, "unknown engine policy");
+	});
 	it("interns empty wire strings before installing language intrinsics", () => {
 		acceptsWire(
 			"empty-string-constant",

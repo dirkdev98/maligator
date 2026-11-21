@@ -144,9 +144,7 @@ export function normalizeNativeFeatures(
 
 	const cDefines = [
 		...(primordialsLocked ? [] : ["-DMAL_PRIMORDIALS_LOCKED=0"]),
-		...(evalEnabled ? [] : ["-DMAL_EVAL=0"]),
 		...(realmsEnabled ? [] : ["-DMAL_REALMS=0"]),
-		...(regexpEnabled ? [] : ["-DMAL_REGEXP=0"]),
 		...(profileEnabled ? ["-DMAL_PROFILE=1"] : []),
 		...(developmentApiEnabled ? ["-DMAL_DEVELOPMENT_API=1"] : []),
 	];
@@ -335,6 +333,22 @@ export function runtimeOptimizationFlags(
 	env: NodeJS.ProcessEnv = process.env,
 ): Array<string> {
 	return sanitizerMode(env) === "none" ? ["-O3"] : [];
+}
+
+/**
+ * Every program links the same runtime archives and keeps what it reaches, so runtime
+ * objects give each function and datum its own section wherever the final link
+ * removes unused sections. Without them an ELF link keeps a whole object, such as
+ * every Intl service, for one reachable function. Mach-O links already divide
+ * sections at each symbol.
+ */
+export function runtimeSectionFlags(
+	platform: NodeJS.Platform,
+	sectionGcLinkArgs: ReadonlyArray<string>,
+): Array<string> {
+	return platform !== "darwin" && sectionGcLinkArgs.length > 0
+		? ["-ffunction-sections", "-fdata-sections"]
+		: [];
 }
 
 /** Shared compiler flags; callers append the normalized feature defines. */

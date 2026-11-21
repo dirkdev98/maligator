@@ -2569,14 +2569,12 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
             break;
         }
         case MAL_HEAP_REGEXP_OBJECT: {
-#if MAL_REGEXP
             MalRegExpObject *re = (MalRegExpObject *) cell;
             if (re->matcher != nullptr && !re->matcher_borrowed) {
                 mal_gc_process_release(mal_regexp_release_matcher(re->matcher));
             }
             re->matcher = nullptr;
             mal_regexp_object_clear_group_layout(re);
-#endif
             break;
         }
         case MAL_HEAP_TEMPORAL_OBJECT: {

@@ -64,10 +64,8 @@ typedef struct MalRegExpObject {
 
 void mal_regexp_object_clear_group_layout(MalRegExpObject *regexp);
 
-#if MAL_REGEXP
 /** Drop a matcher's reference and return its released external memory charge. */
 usize mal_regexp_release_matcher(void *matcher);
-#endif
 
 /**
  * Initialize RegExp object state in caller-provided storage. The matcher/source/

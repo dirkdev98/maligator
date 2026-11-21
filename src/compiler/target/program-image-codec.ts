@@ -22,6 +22,9 @@ import { BYTECODE_OPERATIONS } from "./bytecode-operation-spec.ts";
 import {
 	buildArgumentSnapshotPlan,
 	compressPositions,
+	ENGINE_POLICY_NO_EVAL,
+	ENGINE_POLICY_NO_REGEXP,
+	enginePolicyBits,
 	restForwardFlags,
 	validateRuntimeImageMetadata,
 	validateVmPropertyCacheLayout,
@@ -47,7 +50,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 106;
+export const WIRE_VERSION = 107;
 
 /** Host install slot payload kinds; runtime/src/vm_load.c reads the same tags. */
 const HOST_SLOT_EMPTY = 0;
@@ -573,6 +576,7 @@ export function writeRuntimeImage(
 	w.fixedU32(magic);
 	w.fixedU32(version);
 	w.u32(debug ? FLAG_HAS_DEBUG : 0);
+	w.u32(enginePolicyBits(def));
 	w.u32(def.globalCount);
 	const entrypoint = utf8Encode(def.entrypointPath);
 	w.u32(entrypoint.length);
@@ -1556,6 +1560,16 @@ export function readRuntimeImage(
 		);
 	}
 	const debug = (r.u32() & FLAG_HAS_DEBUG) !== 0;
+	const policyBits = r.u32();
+	if ((policyBits & ~(ENGINE_POLICY_NO_REGEXP | ENGINE_POLICY_NO_EVAL)) !== 0)
+		throw new Error(`program-image-codec: unknown engine policy ${policyBits}`);
+	const enginePolicy =
+		policyBits === 0
+			? undefined
+			: {
+					regexp: (policyBits & ENGINE_POLICY_NO_REGEXP) === 0,
+					eval: (policyBits & ENGINE_POLICY_NO_EVAL) === 0,
+				};
 	const globalCount = r.u32();
 	const entrypointLength = r.count(1);
 	const entrypointBytes = new Array<number>(entrypointLength);
@@ -1734,6 +1748,7 @@ export function readRuntimeImage(
 
 	const runtimeImage: RuntimeImage = {
 		entrypointPath,
+		...(enginePolicy === undefined ? {} : { enginePolicy }),
 		functionCount,
 		functions,
 		stringConstants,

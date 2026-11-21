@@ -28,6 +28,7 @@
 #include "listener_pool.h"
 #include "node_immediate.h"
 #include "object.h"
+#include "eval_component.h"
 #include "heap_symbol.h"
 #include "object_ops.h"
 #include "promise_object.h"
@@ -4180,8 +4181,9 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
     char *policy = application_string(roots[2]);
     bool compatible = policy != nullptr && strcmp(policy, MAL_PRIMORDIALS_LOCKED ? "locked" : "mutable") == 0;
     free(policy);
-    const char *features[] = {"eval", "realms", "regexp"};
-    const bool available[] = {MAL_EVAL, MAL_REALMS, MAL_REGEXP};
+    // RegExp is in every runtime; each image's own policy decides whether it may use it.
+    const char *features[] = {"eval", "realms"};
+    const bool available[] = {mal_eval_compiler != nullptr, MAL_REALMS};
     for (usize index = 0; index < countof(features); index++) {
         bool required;
         if (!application_boolean(vm, roots[1], features[index], &required)) goto failed;

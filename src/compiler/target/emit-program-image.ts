@@ -49,6 +49,7 @@ import {
 import {
 	compressPositions,
 	computeArgumentRetentionLimit,
+	enginePolicyBits,
 	positionTableEntries,
 	restForwardFlags,
 	validateRuntimeImageMetadata,
@@ -3005,6 +3006,7 @@ function malRuntimeImageStruct(
 		`const MalRuntimeImage mal_runtime_image${suffix} = {`,
 		`    .function_count = ${runtime.functionCount},`,
 		`    .functions = mal_functions${suffix},`,
+		`    .engine_policy = ${enginePolicyBits(runtime)},`,
 		`    .conservative_stack_roots = ${conservativeStackRoots},`,
 		"    .initialize_generated_data = nullptr,",
 		`    .string_constant_count = ${runtime.stringConstants.length},`,

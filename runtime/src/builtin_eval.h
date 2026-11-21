@@ -6,7 +6,7 @@
  * Runtime `eval` / `new Function` (eval Phase 4).
  *
  * Registers the global `eval` function on globalThis. On first use it splices
- * the baked compiler (compiler_wire.c) into the running VM, then for each call
+ * the baked compiler (eval_component.h) into the running VM, then for each call
  * compiles the source through it, splices the result at the current bases, and
  * runs the entry on the interpreter.
  */

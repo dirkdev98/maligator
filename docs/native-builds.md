@@ -31,10 +31,11 @@ native flags, and pinned Zig producer.
 
 The CLI verifies SHA-256 digests before using packaged files. It executes a matching
 runner directly. A local development link can import matching archives under its
-local cache keys. Missing or mismatched files fall back to local builds. Production
-builds use the local runtime cache and the selected toolchain's LTO support.
-Use `MALIGATOR_PREBUILT_RUNTIME_DIR` to test a different runtime directory and
-`--verbose` to see which runner or archives a command uses.
+local cache keys. Missing or mismatched files fall back to local builds. The eval
+component is not packaged: `engine.eval: true` builds it locally from the compiler
+wire. Production builds use the local runtime cache and the selected toolchain's LTO
+support. Use `MALIGATOR_PREBUILT_RUNTIME_DIR` to test a different runtime directory
+and `--verbose` to see which runner or archives a command uses.
 
 ## Toolchain discovery
 
@@ -113,8 +114,9 @@ the configuration and the project has no C bindings. The platform package includ
 a separate runner for the private application API used by `test --watch`. When a
 command needs a local runner, the linked-binary cache gives projects
 with the same runtime flavour and toolchain one executable. The application and its
-workers supply runtime images that select the host surface, Intl services and
-Temporal. Compiler defines that change native code enter the runner's cache key.
+workers supply runtime images that select the host surface, Intl services, Temporal,
+and the RegExp and eval policy. A runner for `engine.eval: true` also links the eval
+component. Compiler defines that change native code enter the runner's cache key.
 
 The shared runner loads C bindings from cached shims before it loads any images.
 Install Clang and set `CC` to its executable if the CLI cannot find a compiler for
@@ -139,6 +141,21 @@ use the locale-insensitive behaviour ECMA-402 allows. Drivers that load wire ima
 such as the development runner, link every component their engine policy allows,
 since those images name components only by installer name.
 
+## Engine policy and eval
+
+`engine.regexp` and `engine.eval` leave the C runtime archive unchanged, so every
+configuration of a flavour shares one archive. The compiler records the policy in the
+image header (`MalEnginePolicy` in `runtime/src/vm.h`), and the isolate started from
+that image enforces it. Without RegExp, `%RegExp%` is not installed and every way to
+create a RegExp object throws a TypeError. Without eval, eval and the Function
+constructors throw an EvalError. The RegExp engine still links by use.
+
+The baked eval compiler is a component of its own (`runtime/src/eval`): an archive of
+the compiler wire, its native overlay, and the unit that registers them, keyed by the
+runtime archive and the compiler wire. Only `engine.eval: true` links it. Code
+compiled at run time carries no host manifest, so that link also names the
+normalization engine and, when the policy allows it, the RegExp engine.
+
 ## Rust archive
 
 Native builds compile the Rust crate once with every Cargo feature and the release
@@ -146,7 +163,9 @@ profile's fat LTO into one codegen unit. Every link passes the linker's
 unused-section flag (`-dead_strip` or `--gc-sections`), so a binary keeps only the
 Rust functions and data its C runtime references. Disabled Intl services, TLS and
 codecs never reach the binary, while one codegen unit keeps shared Rust code from
-being duplicated.
+being duplicated. Where that flag works on ELF targets, runtime C objects compile with
+`-ffunction-sections -fdata-sections` too, so section removal works per function
+there as Mach-O's per-symbol sections do.
 
 Build-script libraries are the exception. A reference from unused Rust code still
 loads their archive members, and section removal cannot shed them afterwards: Ada

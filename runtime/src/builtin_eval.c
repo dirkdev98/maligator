@@ -1,6 +1,5 @@
 #include "vm.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -11,8 +10,7 @@
 #include "builtin_object.h"
 #include "builtin_eval.h"
 #include "builtin_regexp.h"
-#include "compiler_wire.h"
-#include "compiler_native.h"
+#include "eval_component.h"
 #include "function_object.h"
 #include "heap_string.h"
 #include "intrinsics.h"
@@ -21,7 +19,6 @@
 #include "promise_object.h"
 #include "typed_array_object.h"
 #include "value.h"
-#include "vm_load.h"
 #include "vm_ops.h"
 
 // Runtime `eval` / `new Function` (eval Phase 4). Runtime compilation can collect,
@@ -42,12 +39,11 @@ static i32 eval_compiler_stress_interval(void) {
 // Exact no-flags literals avoid one permanent runtime image per dynamic pattern;
 // comments, embedded delimiters, flags, and surrounding syntax fall back.
 static bool eval_try_regexp_literal(MalVm *vm, MalValue source, MalValue *result) {
-#if !MAL_REGEXP
-    (void) vm;
-    (void) source;
-    (void) result;
-    return false;
-#else
+    // The shortcut stands in for compiled code, so it needs both policies to allow it.
+    if ((vm->engine_policy & (MAL_ENGINE_POLICY_NO_EVAL | MAL_ENGINE_POLICY_NO_REGEXP)) != 0 ||
+        mal_eval_compiler == nullptr) {
+        return false;
+    }
     MalString *text = mal_value_to_string(source);
     usize length = mal_string_length(text);
     if (length < 3) {
@@ -81,80 +77,29 @@ static bool eval_try_regexp_literal(MalVm *vm, MalValue source, MalValue *result
         vm, mal_value_to_string(roots[0]), mal_value_to_string(roots[1]));
     mal_gc_unroot(&root_span);
     return true;
-#endif
 }
 
-// The embedded entry returns its compiler closure privately; application global
-// properties cannot intercept initialization. The VM roots the closure and its cells.
+const MalEvalCompiler *mal_eval_compiler;
+
 static bool ensure_compiler(MalVm *vm) {
-#if !MAL_EVAL
-    // eval-disabled build (`engine.eval: false`): the baked compiler is not
-    // embedded. Every dynamic-code path (eval, new Function, the async/generator
-    // Function families, aliased indirect eval) reaches here, so this single
-    // throw is the runtime gate the static compile-time check cannot cover.
-    mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE,
-                       "eval is disabled in this build (engine.eval is false)");
-    return false;
-#else
     if (vm->compiler_installed) {
         return true;
     }
-    MalValue roots[2] = {
-        mal_value_new_undefined(),
-        mal_value_new_undefined(),
-    };
-    MalRootSpan root_span;
-    mal_gc_root(&root_span, roots, 2);
-    bool installed = false;
-
-    usize len = 0;
-    const u8 *bytes = mal_compiler_wire_bytes(&len);
-    const char *err = "ok";
-    MalLoadedRuntimeImage *loaded = mal_runtime_image_load(bytes, len, &err);
-    if (loaded == nullptr) {
-        char message[160];
-        snprintf(message, sizeof message, "eval: baked compiler failed to load: %s", err);
-        mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE, (const byte *) message);
-        goto done;
-    }
-    mal_vm_retain_loaded_runtime_image(vm, loaded);
-    const MalRuntimeImage *compiler_image = mal_loaded_runtime_image_get(loaded);
-    MalNativeProgramRelocation relocation = {
-        .function_base = vm->runtime_image->function_count,
-        .global_base = vm->runtime_image->global_count,
-        .string_base = vm->runtime_image->string_constant_count,
-        .bigint_base = vm->runtime_image->bigint_constant_count,
-        .literal_template_base = vm->runtime_image->literal_template_data_count,
-    };
-    i32 entry = mal_vm_splice_runtime_image(vm, compiler_image);
-    if (entry < 0) {
-        goto done; // splice set a pending RangeError (constant-table overflow)
-    }
-    if (!mal_compiler_native_attach(
-            vm, entry, compiler_image->function_count, &relocation)) {
-        goto done;
-    }
-    roots[0] = mal_vm_op_create_function(vm, entry, nullptr);
-    MalCompletion run = mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), nullptr, 0);
-    if (run.kind == MAL_COMPLETION_THROW) {
-        vm->completion = run;
-        goto done;
-    }
-
-    roots[1] = run.value;
-    if (!mal_value_is_callable(roots[1])) {
+    // Every dynamic-code path (eval, new Function, the async/generator Function
+    // families, aliased indirect eval) reaches here, so this is the runtime gate the
+    // static compile-time check cannot cover.
+    if ((vm->engine_policy & MAL_ENGINE_POLICY_NO_EVAL) != 0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE,
-            "eval: baked compiler entry did not return a callable");
-        goto done;
+                           "eval is disabled in this build (engine.eval is false)");
+        return false;
     }
-    vm->compiler_fn = roots[1];
-    vm->compiler_installed = true;
-    installed = true;
-
-done:
-    mal_gc_unroot(&root_span);
-    return installed;
-#endif
+    const MalEvalCompiler *compiler = mal_eval_compiler;
+    if (compiler == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE,
+                           "eval: this executable does not link the eval compiler");
+        return false;
+    }
+    return compiler->install(vm);
 }
 
 // Compile `source` (a JS string value) to a runtime entry via the baked
@@ -221,25 +166,17 @@ static i32 compile_source(MalVm *vm, MalValue source, bool direct, bool caller_s
         mal_vm_throw_allocation_error(vm);
         goto done;
     }
-    const char *err = "ok";
-    // A parse error surfaces as a compiler throw above; a load failure here means
-    // the wire buffer itself is malformed, which is an internal error.
-    MalLoadedRuntimeImage *loaded = mal_runtime_image_load(data, span.length, &err);
+    bool failed = false;
+    bool stateless = false;
+    entry = mal_eval_compiler->splice(vm, data, span.length, &failed, &stateless);
     free(owned);
-    if (loaded == nullptr) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, err);
-        goto done;
-    }
-    mal_vm_retain_loaded_runtime_image(vm, loaded);
-    const MalRuntimeImage *image = mal_loaded_runtime_image_get(loaded);
-    entry = mal_vm_splice_runtime_image(vm, image);
-    if (entry < 0 && splice_failed != nullptr) {
+    if (failed && splice_failed != nullptr) {
         *splice_failed = true;
     }
     // Global slots carry per-compilation identity and state, including tagged
     // template registries and eval lexical bindings. Only stateless images can
     // safely reuse the already-relocated entry across separate eval calls.
-    if (entry >= 0 && image->global_count == 0) {
+    if (entry >= 0 && stateless) {
         buffer->runtime_image_entry = entry;
     }
 
@@ -365,15 +302,15 @@ MalCompletion mal_shadow_realm_eval_script(MalVm *vm, MalRealm *caller_realm,
             completion = vm->completion;
             goto done;
         }
-#if MAL_EVAL
-        // The baked compiler's errors can belong to the realm in which it was
-        // first installed. Parse/early errors must instead be fresh caller errors.
-        mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
-                           "ShadowRealm evaluate: invalid source text");
-        *failure_out = MAL_SHADOW_REALM_EVAL_FAILURE_CALLER_PARSE;
-#else
-        *failure_out = MAL_SHADOW_REALM_EVAL_FAILURE_CALLER_POLICY;
-#endif
+        if (vm->compiler_installed) {
+            // The baked compiler's errors can belong to the realm in which it was
+            // first installed. Parse/early errors must instead be fresh caller errors.
+            mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
+                               "ShadowRealm evaluate: invalid source text");
+            *failure_out = MAL_SHADOW_REALM_EVAL_FAILURE_CALLER_PARSE;
+        } else {
+            *failure_out = MAL_SHADOW_REALM_EVAL_FAILURE_CALLER_POLICY;
+        }
         completion = vm->completion;
         goto done;
     }
@@ -518,15 +455,16 @@ MalValue mal_vm_construct_function(MalVm *vm, const MalValue *args, i32 arg_coun
         if (splice_failed) {
             goto done;
         }
-#if MAL_EVAL
-        // The baked compiler may belong to the realm where eval was first used.
+        // Without an installed compiler the gate's EvalError stands. Otherwise the
+        // baked compiler may belong to the realm where eval was first used, and
         // CreateDynamicFunction parse/early errors belong to the active constructor.
+        if (vm->compiler_installed) {
 #if MAL_REALMS
-        mal_vm_realm_switch_to(vm, constructor_realm);
+            mal_vm_realm_switch_to(vm, constructor_realm);
 #endif
-        mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
-                           "CreateDynamicFunction: invalid source text");
-#endif
+            mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
+                               "CreateDynamicFunction: invalid source text");
+        }
         goto done;
     }
 

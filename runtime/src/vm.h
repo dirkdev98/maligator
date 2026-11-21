@@ -1257,9 +1257,26 @@ typedef struct MalSourceBuiltinProvider {
     const MalSourceBuiltinImport *imports;
 } MalSourceBuiltinProvider;
 
+/**
+ * Language features the build's engine policy withholds from a program. The
+ * runtime archive is the same for every policy; the root image carries the policy
+ * and mal_vm_init adopts it for the isolate. Zero is the full language.
+ */
+typedef enum MalEnginePolicy {
+    /** `engine.regexp: false`: %RegExp% is not installed and no RegExp object can be created. */
+    MAL_ENGINE_POLICY_NO_REGEXP = 1u << 0,
+    /** `engine.eval` other than true: eval and the Function constructors throw EvalError. */
+    MAL_ENGINE_POLICY_NO_EVAL = 1u << 1,
+} MalEnginePolicy;
+
+#define MAL_ENGINE_POLICY_MASK (MAL_ENGINE_POLICY_NO_REGEXP | MAL_ENGINE_POLICY_NO_EVAL)
+
 typedef struct MalRuntimeImage {
     i32 function_count;
     const MalFunction *functions;
+
+    /** MalEnginePolicy bits. Only the image an isolate starts from sets its policy. */
+    u32 engine_policy;
 
     /** Compiled functions keep live values in C locals, so collections scan native
      * stacks. Precise images (Wasm, bytecode wires) publish shadow-frame roots. */
@@ -2148,6 +2165,8 @@ typedef struct MalVm {
      */
     MalValue compiler_fn;
     bool compiler_installed;
+    /** MalEnginePolicy bits adopted from the root image; spliced images never change them. */
+    u32 engine_policy;
     MalNativeProgramRelocation compiler_native_relocation;
     MalLoadedRuntimeImage **loaded_images;
     i32 loaded_image_count;

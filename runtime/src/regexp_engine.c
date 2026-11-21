@@ -1,6 +1,5 @@
 #include "regexp_engine.h"
 
-#if MAL_REGEXP
 static const MalRegExpEngine regexp_engine = {
     .compile = mal_regexp_compile,
     .retain = mal_regexp_retain,
@@ -28,4 +27,3 @@ void mal_host_install_regexp(struct MalVm *vm, const struct MalHostInstallSlot *
     (void) launch;
     regexp_register_engine();
 }
-#endif

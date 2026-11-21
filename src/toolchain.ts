@@ -561,7 +561,7 @@ function probeCapabilities(
 ): ToolchainProbes {
 	// The runtime relies on real C23, not just the __STDC_VERSION__ stamp: the
 	// bool/true/false keywords with no <stdbool.h> (defaults.h), nullptr, and
-	// #embed (compiler_wire.c inlines the baked compiler). GCC 12 accepts
+	// #embed (the eval component inlines the baked compiler). GCC 12 accepts
 	// -std=c2x and sets __STDC_VERSION__ to 202000L but supports none of these, so
 	// probe the features themselves or the macro would green-light a compiler the
 	// build then fails on deep inside the runtime archive.

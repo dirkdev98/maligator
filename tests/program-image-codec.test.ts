@@ -2612,6 +2612,17 @@ describe("program-image-codec", () => {
 		);
 	});
 
+	it.each([
+		{ regexp: false, eval: true },
+		{ regexp: true, eval: false },
+		{ regexp: false, eval: false },
+	])("round-trips the engine policy %o", (enginePolicy) => {
+		const runtime = { ...definition.runtime, enginePolicy };
+		expect(deserializeRuntimeImage(serializeRuntimeImage(runtime)).enginePolicy).toEqual(
+			enginePolicy,
+		);
+	});
+
 	it("drops debug tables when debugInfo is false", () => {
 		const restored = deserializeCompilerArtifact(
 			serializeCompilerArtifact(definition, { debugInfo: false }),
@@ -2658,10 +2669,10 @@ describe("program-image-codec", () => {
 				native: createConservativeNativePlan(functions),
 			};
 			const wire = serializeCompilerArtifact(probe, { debugInfo: false });
-			// Fixed magic/version, one-byte flags/global/entry length, the entry bytes,
-			// then one-byte string and bigint counts.
+			// Fixed magic/version, one-byte flags/engine policy/global/entry length, the
+			// entry bytes, then one-byte string and bigint counts.
 			const literalCountOffset =
-				13 + new TextEncoder().encode(probe.runtime.entrypointPath).length;
+				14 + new TextEncoder().encode(probe.runtime.entrypointPath).length;
 			expect(
 				Array.from(
 					wire.subarray(literalCountOffset, literalCountOffset + encoding.length),

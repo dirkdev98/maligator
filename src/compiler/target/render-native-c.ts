@@ -13556,13 +13556,10 @@ class NativeInstructionEmission {
 				const value = `known_result_${this.ip}`;
 				const patternValue = this.context.relocation.stringValue(pattern.index);
 				const flagsValue = this.context.relocation.stringValue(flags.index);
-				// The eval compiler overlay is baked independently of the application's engine flags.
+				// RegExpCreate refuses under engine.regexp:false; the eval compiler overlay is
+				// baked independently of the application's engine policy.
 				return [
-					"#if MAL_REGEXP",
 					`MalValue ${value} = mal_regexp_create(vm, mal_value_to_string(${patternValue}), mal_value_to_string(${flagsValue}));`,
-					"#else",
-					`MalValue ${value} = mal_vm_call_known(vm, ${knownOperationIndex(instruction.operation)!}, ${this.boxedOperand(instruction.thisValue)}, ((MalValue[]){ ${patternValue}, ${flagsValue} }), 2, ${knownOperationFlags(instruction)});`,
-					"#endif",
 					this.throwCheck(),
 					`r${instruction.dst} = ${this.callValue(instruction.dst, value)};`,
 					this.callPoll(),

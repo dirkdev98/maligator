@@ -11,9 +11,9 @@ import {
 } from "../../src/test-harness.ts";
 
 // The runtime behavior of `engine.eval: false`. The separate `"compile-check"`
-// source audit is covered by tests/build-config.test.ts. This builds the fixture
-// into the eval-off archive (no compiler embed, -DMAL_EVAL=0); every dynamic-code
-// path must throw EvalError at runtime, including aliased indirect eval.
+// source audit is covered by tests/build-config.test.ts. The fixture links no eval
+// component and its image withholds eval; every dynamic-code path must throw
+// EvalError at runtime, including aliased indirect eval.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-eval-off-"));
 
 describe("engine.eval: false runtime gate", () => {

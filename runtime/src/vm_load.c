@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 106u
+#define WIRE_VERSION 107u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -2839,6 +2839,12 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
     u32 flags = rd_u32(&r);
     bool debug = (flags & WIRE_FLAG_HAS_DEBUG) != 0;
     MalRuntimeImage *def = &L->runtime_image;
+    u32 engine_policy = rd_u32(&r);
+    if (r.ok && (engine_policy & ~(u32) MAL_ENGINE_POLICY_MASK) != 0) {
+        err = "unknown engine policy";
+        goto fail;
+    }
+    def->engine_policy = engine_policy;
     u32 global_count = rd_u32(&r);
     if (global_count > (u32) INT32_MAX) {
         r.ok = false;

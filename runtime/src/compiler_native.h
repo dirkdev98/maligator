@@ -20,14 +20,6 @@ typedef struct MalNativeOverlay {
     i32 global_import_count;
 } MalNativeOverlay;
 
-/** Attach a matching optional native overlay to the newly spliced compiler image. */
-bool mal_compiler_native_attach(
-    MalVm *vm,
-    i32 function_base,
-    i32 function_count,
-    const MalNativeProgramRelocation *relocation
-);
-
 /**
  * Install a program fragment's overlay on `program`, the image just loaded or
  * spliced at `relocation` with its imports resolved. Fails when the overlay belongs

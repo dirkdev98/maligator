@@ -19,7 +19,12 @@ import {
 	readArtifactAction,
 	withArtifactActionLock,
 } from "./artifact-store.ts";
-import { ccExtraFlags, runtimeOptimizationFlags, sanitizerMode } from "./build-flags.ts";
+import {
+	ccExtraFlags,
+	runtimeOptimizationFlags,
+	runtimeSectionFlags,
+	sanitizerMode,
+} from "./build-flags.ts";
 import {
 	compileArgumentsEmitDebugInfo,
 	expandedGeneratedUnitDigest,
@@ -51,7 +56,8 @@ import type { RustArtifacts } from "./rust-build.ts";
 import { clangMajorVersion, toolArguments } from "./toolchain.ts";
 
 const RUNTIME_OBJECT_PRODUCER = artifactProducer("runtime-object", 3, "cc");
-const RUNTIME_ARCHIVE_PRODUCER = artifactProducer("runtime-archive", 5, "ar");
+const RUNTIME_ARCHIVE_PRODUCER = artifactProducer("runtime-archive", 6, "ar");
+const EVAL_COMPONENT_PRODUCER = artifactProducer("eval-component", 1, "ar");
 
 function runtimeSourceSnapshot(
 	runtimeDirectory: string,
@@ -165,8 +171,6 @@ export function generatedHeaderDependencyHash(
 }
 
 export function runtimeArtifactKey(inputs: {
-	compilerWireDigest?: string;
-	compilerNativeDigest?: string;
 	compileArguments: Array<string>;
 	environmentFingerprint: string;
 	sourceHash: string;
@@ -174,8 +178,6 @@ export function runtimeArtifactKey(inputs: {
 	target: string;
 }): string {
 	return artifactActionKey(RUNTIME_ARCHIVE_PRODUCER, {
-		compilerWireDigest: inputs.compilerWireDigest,
-		compilerNativeDigest: inputs.compilerNativeDigest,
 		compileArguments: inputs.compileArguments,
 		environmentFingerprint: inputs.environmentFingerprint,
 		sourceHash: inputs.sourceHash,
@@ -194,6 +196,8 @@ export interface RuntimeArchives {
 
 export interface NativeArtifacts {
 	c: RuntimeArchives;
+	/** The eval component's archive, present only for `engine.eval: true`. */
+	eval?: string;
 	rust: RustArtifacts;
 	/** Complete final-link order, including Rust and its platform libraries. */
 	linkArgs: Array<string>;
@@ -206,15 +210,16 @@ interface RuntimeLayout {
 	cacheKey: string;
 	compileArguments: Array<string>;
 	sourceVersion: string;
-	compilerWireDigest?: string;
-	compilerNativeDigest?: string;
-	compilerNativeSources: Array<string>;
+}
+
+interface EvalComponentLayout extends RuntimeLayout {
+	sources: Array<RuntimeSource>;
 }
 
 interface RuntimeSource {
 	name: string;
 	path: string;
-	layer: "engine" | "host" | "runtime";
+	layer: "engine" | "host" | "runtime" | "eval";
 	layerDirectory: string;
 	logicalPath: string;
 	includeArguments?: Array<string>;
@@ -231,47 +236,11 @@ export function compilerNativeOverlayEnabled(
 }
 
 function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
-	let compilerWire: string | undefined;
-	let compilerWireDigest: string | undefined;
-	let compilerNativeDigest: string | undefined;
-	let compilerNativeSources: Array<string> = [];
-	if (context.features.evalEnabled) {
-		if (context.compilerBake === undefined) {
-			throw new Error("eval-enabled build requires an explicit compiler wire input");
-		}
-		const useNativeOverlay = compilerNativeOverlayEnabled(
-			context.features.profileEnabled,
-			context.environment,
-		);
-		const compiler = ensureCompilerArtifacts(
-			useNativeOverlay || context.compilerBake.kind !== "source"
-				? context.compilerBake
-				: { ...context.compilerBake, bakeProgram: undefined },
-		);
-		compilerWire = compiler.wirePath;
-		compilerWireDigest = compiler.wireDigest;
-		if (useNativeOverlay) {
-			compilerNativeDigest = compiler.nativeDigest;
-			compilerNativeSources = compiler.nativeSourcePaths;
-		}
-		if ((compilerNativeDigest === undefined) !== (compilerNativeSources.length === 0)) {
-			throw new Error("native compiler manifest is missing its source set or digest");
-		}
-	}
+	const platform = context.toolchain.platform ?? process.platform;
 	const flags = [
-		...ccExtraFlags(
-			context.plan,
-			context.environment,
-			context.toolchain.platform ?? process.platform,
-		),
+		...ccExtraFlags(context.plan, context.environment, platform),
+		...runtimeSectionFlags(platform, context.toolchain.probes.sectionGcLinkArgs),
 		...context.features.cDefines,
-		...(compilerWire === undefined ? [] : [`-DMAL_COMPILER_WIRE="${compilerWire}"`]),
-		...(compilerNativeDigest === undefined
-			? []
-			: [
-					"-DMAL_COMPILER_NATIVE=1",
-					`-DMAL_COMPILER_WIRE_DIGEST="${compilerWireDigest}"`,
-				]),
 		`-ffile-prefix-map=${context.runtimeDirectory}=<runtime>`,
 	];
 	const sourceRoot = path.join(context.runtimeDirectory, "src");
@@ -291,9 +260,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		...sqliteIncludeArguments,
 	];
 	const identityFlags = flags.map((flag) =>
-		flag.startsWith("-DMAL_COMPILER_WIRE=")
-			? "-DMAL_COMPILER_WIRE=<content>"
-			: normalizeRuntimeBuildArgument(context.runtimeDirectory, flag),
+		normalizeRuntimeBuildArgument(context.runtimeDirectory, flag),
 	);
 	const source = runtimeSourceSnapshot(context.runtimeDirectory, context.cacheDirectory);
 	const compileArguments = [
@@ -309,8 +276,6 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		"<object>",
 	];
 	const cacheKey = runtimeArtifactKey({
-		compilerWireDigest,
-		compilerNativeDigest,
 		compileArguments,
 		environmentFingerprint: context.environmentFingerprint,
 		sourceHash: source.digest,
@@ -324,9 +289,73 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		cacheKey,
 		compileArguments,
 		sourceVersion: source.version,
-		compilerWireDigest,
-		compilerNativeDigest,
-		compilerNativeSources,
+	};
+}
+
+/**
+ * The eval component: the baked compiler wire, its optional native overlay, and the
+ * unit that registers them with the runtime. Only `engine.eval: true` builds it, so
+ * the runtime archive's identity never includes the compiler.
+ */
+function evalComponentLayout(
+	context: NativeBuildContext,
+	runtime: RuntimeLayout,
+): EvalComponentLayout | undefined {
+	if (!context.features.evalEnabled) return undefined;
+	if (context.compilerBake === undefined) {
+		throw new Error("eval-enabled build requires an explicit compiler wire input");
+	}
+	const useNativeOverlay = compilerNativeOverlayEnabled(
+		context.features.profileEnabled,
+		context.environment,
+	);
+	const compiler = ensureCompilerArtifacts(
+		useNativeOverlay || context.compilerBake.kind !== "source"
+			? context.compilerBake
+			: { ...context.compilerBake, bakeProgram: undefined },
+	);
+	const nativeSources = useNativeOverlay ? compiler.nativeSourcePaths : [];
+	const nativeDigest = useNativeOverlay ? compiler.nativeDigest : undefined;
+	if ((nativeDigest === undefined) !== (nativeSources.length === 0)) {
+		throw new Error("native compiler manifest is missing its source set or digest");
+	}
+	const componentDirectory = path.join(context.runtimeDirectory, "src", "eval");
+	const sources: Array<RuntimeSource> = [
+		{
+			name: "eval_component.c",
+			path: path.join(componentDirectory, "eval_component.c"),
+			layer: "eval",
+			layerDirectory: componentDirectory,
+			logicalPath: path.posix.join("<runtime>", "src", "eval", "eval_component.c"),
+		},
+		...nativeSources.map((source) => ({
+			name: path.basename(source),
+			path: source,
+			layer: "eval" as const,
+			layerDirectory: componentDirectory,
+			logicalPath: path.posix.join("<eval-compiler>", path.basename(source)),
+			objectStage: "compiler-overlay-object" as const,
+		})),
+	];
+	return {
+		...runtime,
+		flags: [
+			...runtime.flags,
+			`-DMAL_COMPILER_WIRE="${compiler.wirePath}"`,
+			...(nativeDigest === undefined
+				? []
+				: [
+						"-DMAL_COMPILER_NATIVE=1",
+						`-DMAL_COMPILER_WIRE_DIGEST="${compiler.wireDigest}"`,
+					]),
+		],
+		sources,
+		// The runtime key covers the component's own source, the flags and the tools.
+		cacheKey: artifactActionKey(EVAL_COMPONENT_PRODUCER, {
+			runtime: runtime.cacheKey,
+			compilerWireDigest: compiler.wireDigest,
+			compilerNativeDigest: nativeDigest,
+		}),
 	};
 }
 
@@ -399,17 +428,6 @@ function runtimeSources(
 			layerDirectory: path.join(sourceRoot, "host"),
 			includeArguments: layout.sqliteIncludeArguments,
 			logicalPath: path.posix.join("<runtime>", "vendor", "sqlite", "sqlite3.c"),
-		});
-	}
-	for (const compilerSource of layout.compilerNativeSources) {
-		const name = path.basename(compilerSource);
-		sources.push({
-			name,
-			path: compilerSource,
-			layer: "engine",
-			layerDirectory: sourceRoot,
-			logicalPath: path.posix.join("<eval-compiler>", name),
-			objectStage: "compiler-overlay-object",
 		});
 	}
 	return sources;
@@ -538,13 +556,13 @@ function projectRuntimeSources(
 function ensureRuntimeObjects(
 	context: NativeBuildContext,
 	layout: RuntimeLayout,
+	sources: Array<RuntimeSource>,
 	directory: string,
 	verbose: boolean,
 ): Array<RuntimeObject> {
 	mkdirSync(directory, { recursive: true });
 	const compiler = context.runtimeObjectCompiler ?? context.toolchain.tools.cc;
 	const clangVersion = clangMajorVersion(compiler.version);
-	const sources = runtimeSources(context, layout);
 	const projected = projectRuntimeSources(context, layout, sources, directory, verbose);
 	if (
 		runtimeSourceSnapshot(context.runtimeDirectory, context.cacheDirectory).version !==
@@ -596,7 +614,7 @@ function ensureRuntimeObjects(
 					// Older Clang expands high #embed bytes as large unsigned integers;
 					// conversion to u8 restores the bytes but warns once per high byte.
 					// https://github.com/llvm/llvm-project/issues/102798
-					...(source.name === "compiler_wire.c" &&
+					...(source.name === "eval_component.c" &&
 					clangVersion !== undefined &&
 					Number(clangVersion) < 20
 						? ["-Wno-constant-conversion"]
@@ -656,6 +674,7 @@ function buildRuntimeArchives(
 		const objects = ensureRuntimeObjects(
 			context,
 			layout,
+			runtimeSources(context, layout),
 			path.join(temporaryDirectory, "compiled"),
 			verbose,
 		);
@@ -700,6 +719,99 @@ function buildRuntimeArchives(
 	} finally {
 		rmSync(temporaryDirectory, { recursive: true, force: true });
 	}
+}
+
+const EVAL_COMPONENT_ARCHIVE = "libmaligator_eval.a";
+
+function buildEvalComponent(
+	context: NativeBuildContext,
+	layout: EvalComponentLayout,
+	verbose: boolean,
+): string {
+	const workRoot = path.join(context.cacheDirectory, "work", "runtime");
+	mkdirSync(workRoot, { recursive: true });
+	const temporaryDirectory = mkdtempSync(path.join(workRoot, "eval-"));
+	try {
+		const objects = ensureRuntimeObjects(
+			context,
+			layout,
+			layout.sources,
+			path.join(temporaryDirectory, "compiled"),
+			verbose,
+		);
+		const objectDirectory = path.join(temporaryDirectory, "objects");
+		mkdirSync(objectDirectory, { recursive: true });
+		const materialized = objects.map((object, index) => {
+			const destination = path.join(
+				objectDirectory,
+				`${String(index).padStart(4, "0")}-${object.source.name.slice(0, -2)}.o`,
+			);
+			copyFileSync(object.path, destination);
+			return destination;
+		});
+		const archive = path.join(temporaryDirectory, EVAL_COMPONENT_ARCHIVE);
+		runNativeCommand(
+			context,
+			context.toolchain.tools.ar.path,
+			toolArguments(context.toolchain.tools.ar, ["rcs", archive, ...materialized]),
+			{ verbose },
+		);
+		const published = publishArtifactAction(
+			context.cacheDirectory,
+			"eval-component",
+			EVAL_COMPONENT_PRODUCER,
+			layout.cacheKey,
+			[{ name: EVAL_COMPONENT_ARCHIVE, file: archive }],
+		);
+		return artifactOutput(published, EVAL_COMPONENT_ARCHIVE).path;
+	} finally {
+		rmSync(temporaryDirectory, { recursive: true, force: true });
+	}
+}
+
+/**
+ * The eval component's link arguments. Nothing in the runtime references the
+ * component, which registers itself from a constructor, so the link names one of
+ * its symbols to load the registering member. Code compiled at run time carries no
+ * host manifest, so the link also names the engines the policy lets it reach.
+ */
+function ensureEvalComponent(
+	context: NativeBuildContext,
+	runtime: RuntimeLayout,
+	verbose: boolean,
+): { archive: string; linkArgs: Array<string> } | undefined {
+	const layout = evalComponentLayout(context, runtime);
+	if (layout === undefined) return undefined;
+	const load = () => {
+		const cached = readArtifactAction(
+			context.cacheDirectory,
+			"eval-component",
+			EVAL_COMPONENT_PRODUCER,
+			layout.cacheKey,
+		);
+		return cached === undefined
+			? undefined
+			: artifactOutput(cached, EVAL_COMPONENT_ARCHIVE).path;
+	};
+	const archive =
+		load() ??
+		withArtifactActionLock(
+			context.cacheDirectory,
+			"eval-component",
+			EVAL_COMPONENT_PRODUCER,
+			layout.cacheKey,
+			() => load() ?? buildEvalComponent(context, layout, verbose),
+		);
+	const prefix = (context.toolchain.platform ?? process.platform) === "darwin" ? "_" : "";
+	const symbols = [
+		"mal_compiler_wire_data",
+		"mal_host_install_unicode_normalization",
+		...(context.features.regexpEnabled ? ["mal_host_install_regexp"] : []),
+	];
+	return {
+		archive,
+		linkArgs: [...symbols.map((symbol) => `-Wl,-u,${prefix}${symbol}`), archive],
+	};
 }
 
 /** Ensure the C and Rust runtime artifacts selected by one resolved context. */
@@ -782,6 +894,13 @@ export function ensureNativeArtifacts(
 		cache: cacheHit ? "hit" : "miss",
 		path: c.runtime,
 	});
+	const evalComponent = ensureEvalComponent(context, layout, verbose);
 	const rust = ensureRustArtifacts(context, verbose, bundle);
-	return { c, rust, linkArgs: [...c.linkArgs, ...rust.linkArgs] };
+	return {
+		c,
+		...(evalComponent === undefined ? {} : { eval: evalComponent.archive }),
+		rust,
+		// The component precedes the archives that resolve its runtime references.
+		linkArgs: [...(evalComponent?.linkArgs ?? []), ...c.linkArgs, ...rust.linkArgs],
+	};
 }

@@ -1279,10 +1279,6 @@ printf '!<arch>\\n' > "$2"
 		};
 		const key = runtimeArtifactKey(base);
 		expect(runtimeArtifactKey({ ...base, sourceHash: "source-b" })).not.toBe(key);
-		expect(runtimeArtifactKey({ ...base, compilerWireDigest: "wire-a" })).not.toBe(key);
-		expect(runtimeArtifactKey({ ...base, compilerNativeDigest: "native-a" })).not.toBe(
-			key,
-		);
 		expect(
 			runtimeArtifactKey({
 				...base,
@@ -1370,6 +1366,44 @@ printf '!<arch>\\n' > "$2"
 		expect(sqliteInvocation).not.toContain(`-I ${path.join(runtimeDirectory, "src")}`);
 		expect(adapterInvocation).toContain(`-I ${sqliteDirectory}`);
 	});
+
+	it.each([
+		["linux", true],
+		["darwin", false],
+	] as const)(
+		"gives %s runtime objects per-function sections only where ELF needs them",
+		(platform, sectioned) => {
+			const fake = createFakeToolchain();
+			try {
+				const runtimeDirectory = createMinimalRuntime(fake);
+				const toolchain = inspectToolchain({
+					rootDir: fake.root,
+					rustDir: path.join(runtimeDirectory, "rust"),
+					env: fake.env,
+					needsCxx: false,
+					platform,
+				}).toolchain!;
+				expect(toolchain.probes.sectionGcLinkArgs).not.toEqual([]);
+				ensureNativeArtifacts(
+					resolveNativeBuildContext({
+						toolchain,
+						runtimeDirectory,
+						cacheDirectory: path.join(fake.root, "sections-cache"),
+						features: { evalEnabled: false, webPlatformEnabled: false },
+					}),
+				);
+				const engineCompile = readFileSync(fake.logPath, "utf-8")
+					.split("\n")
+					.find((line) => line.includes(" -c ") && line.includes(".i "));
+				expect(engineCompile).toBeDefined();
+				expect(engineCompile!.includes("-ffunction-sections -fdata-sections")).toBe(
+					sectioned,
+				);
+			} finally {
+				rmSync(fake.root, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it("fingerprints only build environment and snapshots it for native subprocesses", () => {
 		const fake = createFakeToolchain();
@@ -1509,16 +1543,17 @@ printf '!<arch>\\n' > "$2"
 			regexpEnabled: false,
 		});
 		expect(features.cargoFeatures).toEqual(["intl-segmenter", "temporal"]);
-		expect(features.cDefines).toContain("-DMAL_REGEXP=0");
 	});
 
-	it("compiles the same C runtime for every host surface", () => {
+	it("compiles the same C runtime for every host surface and RegExp or eval policy", () => {
 		const defines = [
 			{ webPlatformEnabled: false },
 			{ webPlatformEnabled: true },
 			{ nodeEnabled: true },
 			{ webPlatformEnabled: true, nodeEnabled: true },
-		].map((surfaces) => normalizeNativeFeatures(surfaces).cDefines);
+			{ regexpEnabled: false },
+			{ evalEnabled: false },
+		].map((features) => normalizeNativeFeatures(features).cDefines);
 		expect(new Set(defines.map((entry) => JSON.stringify(entry))).size).toBe(1);
 	});
 
@@ -1677,8 +1712,9 @@ printf '!<arch>\\n' > "$2"
 			try {
 				const runtimeDirectory = createMinimalRuntime(fake);
 				const highBytes = major < 20 ? "4294967168, 4294967295" : "128, 255";
+				mkdirSync(path.join(runtimeDirectory, "src/eval"));
 				writeFileSync(
-					path.join(runtimeDirectory, "src/compiler_wire.c"),
+					path.join(runtimeDirectory, "src/eval/eval_component.c"),
 					`const unsigned char bytes[] = {0, 127, ${highBytes}};\n`,
 				);
 				executable(
@@ -1702,9 +1738,14 @@ ${compilerScript(`clang version ${major}.0.0`, fake.logPath)}`,
 					runtimeDirectory,
 					cacheDirectory: path.join(fake.root, "native-cache"),
 					environment: fake.env,
-					features: { evalEnabled: false, webPlatformEnabled: false },
+					features: { evalEnabled: true, webPlatformEnabled: false },
+					compilerBake: {
+						kind: "bytes",
+						bytes: new Uint8Array([0, 127, 128, 255]),
+						cacheRoot: path.join(fake.root, "compiler-wire"),
+					},
 				});
-				expect(existsSync(ensureNativeArtifacts(context).c.runtime)).toBe(true);
+				expect(existsSync(ensureNativeArtifacts(context).eval!)).toBe(true);
 				writeFileSync(
 					path.join(runtimeDirectory, "src/engine.c"),
 					"const unsigned char truncated = 4294967295;\n",

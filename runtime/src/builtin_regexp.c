@@ -26,10 +26,6 @@
 #include "vm.h"
 #include "vm_ops.h"
 
-// The build policy controls the JavaScript surface. The matcher is supplied
-// independently by the RegExp component in builds that expose it.
-#if MAL_REGEXP
-
 // The CreateDataPropertyOrThrow descriptor used for exec result-array members.
 #define REGEXP_WEC (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 
@@ -758,7 +754,17 @@ static const RegexpTemplate *regexp_template_bind(
     return template;
 }
 
+// `engine.regexp: false` leaves %RegExp% uninstalled. Every RegExp object starts at
+// a guarded entry, so under that policy none exists and no matcher compiles.
+static bool regexp_policy_allows(MalVm *vm) {
+    if ((vm->engine_policy & MAL_ENGINE_POLICY_NO_REGEXP) == 0) return true;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "RegExp is disabled (engine.regexp is false)");
+    return false;
+}
+
 MalValue mal_regexp_create(MalVm *vm, MalString *pattern, MalString *flags) {
+    if (!regexp_policy_allows(vm)) return mal_value_new_undefined();
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE]);
     MalRegExpObject *re = mal_regexp_object_new(&vm->heap, prototype);
     if (!regexp_initialize(vm, re, pattern, flags)) {
@@ -1452,6 +1458,7 @@ static bool regexp_is_regexp(MalVm *vm, MalValue arg, bool *out) {
 
 static MalValue regexp_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
+    if (!regexp_policy_allows(vm)) return mal_value_new_undefined();
     // A regex literal: string operands run no IsRegExp or ToString step, and the
     // intrinsic new.target names the intrinsic prototype.
     if (arg_count == 2 && new_target == vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR] &&
@@ -1728,7 +1735,9 @@ bool mal_regexp_literal_bind(
     site->matcher = nullptr;
     // With string operands and %RegExp% as its own new.target, construction is
     // RegExpCreate: no IsRegExp or prototype lookup, nor any conversion, can run code.
-    if (constructor != vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR] ||
+    // An unbound site constructs normally, which the engine policy refuses.
+    if ((vm->engine_policy & MAL_ENGINE_POLICY_NO_REGEXP) != 0 ||
+        constructor != vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR] ||
         !mal_value_is_string(pattern) || !mal_value_is_string(flags)) {
         return false;
     }
@@ -4136,176 +4145,11 @@ int mal_regexp_try_exact_iterator_capture_projection(
     return ok ? 1 : -1;
 }
 
-#else // !MAL_REGEXP
-
-// engine.regexp:false — no RegExp global (typeof RegExp === "undefined").
-void mal_builtin_regexp_install(MalVm *vm) {
-    (void) vm;
-}
-
-bool mal_regexp_try_exact_string_dispatch(
-    MalVm *vm, MalValue regexp, i32 symbol_slot, MalValue string,
-    const MalValue *extra, i32 extra_count, MalValue *out
-) {
-    (void) vm;
-    (void) regexp;
-    (void) symbol_slot;
-    (void) string;
-    (void) extra;
-    (void) extra_count;
-    (void) out;
-    return false;
-}
-
-bool mal_regexp_try_canonical_match_all(
-    MalVm *vm, MalValue regexp, MalValue string, MalValue *out
-) {
-    (void) vm;
-    (void) regexp;
-    (void) string;
-    (void) out;
-    return false;
-}
-
-bool mal_regexp_exec_capture_projection(
-    MalVm *vm,
-    MalValue callee,
-    MalValue regexp,
-    MalValue string,
-    const MalRegExpProjectionRequest *requests,
-    MalValue **capture_outputs,
-    u32 capture_count,
-    u8 capture_span_mask,
-    i32 *capture_starts,
-    i32 *capture_ends,
-    MalValue *subject_output,
-    MalValue *result_out
-) {
-    (void) vm;
-    (void) callee;
-    (void) regexp;
-    (void) string;
-    (void) requests;
-    (void) capture_outputs;
-    (void) capture_count;
-    (void) capture_span_mask;
-    (void) capture_starts;
-    (void) capture_ends;
-    (void) subject_output;
-    (void) result_out;
-    return false;
-}
-
-void mal_regexp_exec_capture_projection_locked(
-    MalVm *vm,
-    MalValue regexp,
-    MalValue string,
-    const MalRegExpProjectionRequest *requests,
-    MalValue **capture_outputs,
-    u32 capture_count,
-    u8 capture_span_mask,
-    i32 *capture_starts,
-    i32 *capture_ends,
-    MalValue *subject_output,
-    MalValue *result_out
-) {
-    (void) vm;
-    (void) regexp;
-    (void) string;
-    (void) requests;
-    (void) capture_outputs;
-    (void) capture_count;
-    (void) capture_span_mask;
-    (void) capture_starts;
-    (void) capture_ends;
-    (void) subject_output;
-    (void) result_out;
-}
-
-MalValue mal_regexp_materialize_capture_span(
-    MalVm *vm, MalValue string, i32 start, i32 end
-) {
-    (void) vm;
-    (void) string;
-    (void) start;
-    (void) end;
-    return mal_value_new_undefined();
-}
-
-int mal_regexp_try_exact_iterator_capture_projection(
-    MalVm *vm, MalValue iterator, MalValue next_method,
-    const u32 *capture_indices, MalValue **capture_outputs, u32 capture_count,
-    i32 *capture_starts, i32 *capture_ends, MalValue *subject_output,
-    MalValue *value_out, bool *done_out
-) {
-    (void) vm;
-    (void) iterator;
-    (void) next_method;
-    (void) capture_indices;
-    if (capture_outputs != nullptr) {
-        for (u32 i = 0; i < capture_count; i++) {
-            if (capture_outputs[i] != nullptr) {
-                *capture_outputs[i] = mal_value_new_undefined();
-            }
-            if (capture_starts != nullptr) capture_starts[i] = -1;
-            if (capture_ends != nullptr) capture_ends[i] = -1;
-        }
-    }
-    if (subject_output != nullptr) *subject_output = mal_value_new_undefined();
-    if (value_out != nullptr) *value_out = mal_value_new_undefined();
-    if (done_out != nullptr) *done_out = false;
-    return 0;
-}
-
-int mal_regexp_try_exact_iterator_step(
-    MalVm *vm, MalValue iterator, MalValue next_method,
-    MalValue *value_out, bool *done_out
-) {
-    (void) vm;
-    (void) iterator;
-    (void) next_method;
-    (void) value_out;
-    (void) done_out;
-    return 0;
-}
-
-MalValue mal_regexp_test_call(MalVm *vm, MalValue callee, MalValue receiver, MalValue argument) {
-    return mal_vm_call_cached_value(vm, callee, receiver, &argument, 1);
-}
-
-// Without RegExp no site binds, so the bound-site entries below are unreachable.
-bool mal_regexp_literal_bind(
-    MalVm *vm, MalRegExpLiteralSite *site, MalValue constructor, MalValue pattern, MalValue flags
-) {
-    (void) vm;
-    (void) constructor;
-    (void) pattern;
-    (void) flags;
-    site->matcher = nullptr;
-    return false;
-}
-
-MalValue mal_regexp_literal_test(MalVm *vm, const MalRegExpLiteralSite *site, MalValue subject) {
-    (void) vm;
-    (void) site;
-    (void) subject;
-    abort();
-}
-
-MalValue mal_regexp_literal_exec(MalVm *vm, const MalRegExpLiteralSite *site, MalValue subject) {
-    (void) vm;
-    (void) site;
-    (void) subject;
-    abort();
-}
-
-#endif // MAL_REGEXP
 
 MalValue mal_regexp_exec_result_projection(
     MalVm *vm, MalValue callee, MalValue regexp, MalValue string
 ) {
     MalValue args[1] = {string};
-#if MAL_REGEXP
     // The captured exec only observes the RegExp brand and lastIndex; unrelated
     // prototype mutations do not change its authority or matching algorithm.
     if (mal_value_is_native_function_object(callee) &&
@@ -4334,7 +4178,6 @@ MalValue mal_regexp_exec_result_projection(
         mal_gc_callee_roots_end(&roots);
         return result;
     }
-#endif
     return mal_vm_call_cached_value(vm, callee, regexp, args, 1);
 }
 

@@ -45,17 +45,6 @@ typedef size_t usize;
 #define MAL_ISOLATE_LOCAL _Thread_local
 #endif
 
-// Whether this build includes runtime `eval` / `new Function` and the embedded
-// baked compiler they need. Default on; the build config sets `-DMAL_EVAL=0`
-// (see build-flags.ts) when `engine.eval` is false, which drops the `#embed` of
-// compiler.malw (compiler_wire.c) and makes the eval/Function path throw an
-// EvalError instead of compiling (builtin_eval.c). All dynamic-code entry points
-// funnel through that one gate, so this covers indirect eval and the
-// AsyncFunction/GeneratorFunction families too.
-#ifndef MAL_EVAL
-#define MAL_EVAL 1
-#endif
-
 // Whether this build includes the Realm surface (the `Realm` global / callable
 // boundary). Default on; the build config sets `-DMAL_REALMS=0` (see
 // build-flags.ts) when `engine.realms` is false. Kept in lockstep with the
@@ -63,19 +52,6 @@ typedef size_t usize;
 // (buildConfigCacheSuffix) and the realm installs agree on the axis.
 #ifndef MAL_REALMS
 #define MAL_REALMS 1
-#endif
-
-// Whether this build includes the RegExp engine (regress). Core ECMAScript, so
-// default on; the build config sets `-DMAL_REGEXP=0` (see build-flags.ts) when
-// `engine.regexp` is false, which compiles builtin_regexp.c / regexp_object.c away
-// (RegExp is not installed → `typeof RegExp === "undefined"`), makes the String
-// regex methods (match / matchAll / search, which coerce their arg to a RegExp)
-// throw, and guards the GC finalizer's `mal_regexp_release`. Must be kept in lockstep
-// with the Rust crate's `regexp` Cargo feature (rust-build.ts) — with it off the
-// regress FFI symbols are not linked, so a stray call would fail to link. Pure
-// string ops (split / replace / includes with a string arg) are unaffected.
-#ifndef MAL_REGEXP
-#define MAL_REGEXP 1
 #endif
 
 /* Production-faithful source profiler. Profile builds opt in explicitly so

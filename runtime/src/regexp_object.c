@@ -1,6 +1,5 @@
 #include "./regexp_object.h"
 
-#if MAL_REGEXP
 #include <stdio.h>
 
 #include "regexp_engine.h"
@@ -16,7 +15,6 @@ usize mal_regexp_release_matcher(void *matcher) {
     if (matcher == nullptr) return 0;
     return mal_regexp_require_engine()->release(matcher);
 }
-#endif
 
 void mal_regexp_object_init(MalHeap *heap, MalRegExpObject *regexp, MalObject *prototype) {
     mal_object_init(heap, &regexp->object, MAL_HEAP_REGEXP_OBJECT, prototype);

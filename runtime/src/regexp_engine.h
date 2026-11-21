@@ -5,7 +5,6 @@
 #include "defaults.h"
 #include "mal_regexp.h"
 
-#if MAL_REGEXP
 typedef struct MalRegExpEngine {
     typeof(&mal_regexp_compile) compile;
     typeof(&mal_regexp_retain) retain;
@@ -34,4 +33,3 @@ struct MalHostLaunchContext;
 
 void mal_host_install_regexp(struct MalVm *vm, const struct MalHostInstallSlot *slots,
     i32 count, const struct MalHostLaunchContext *launch);
-#endif

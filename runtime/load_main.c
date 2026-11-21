@@ -52,9 +52,7 @@ static u8 *read_file(const char *path, usize *len_out) {
 // The wire driver runs without an attached host. Only language components can
 // install into its VM without host state.
 static MalHostInstaller resolve_language_installer(const char *name, usize length) {
-#if MAL_REGEXP
     MATCH_INSTALLER(mal_host_install_regexp);
-#endif
     MATCH_INSTALLER(mal_host_install_unicode_normalization);
     return mal_language_component_resolve_installer(name, length);
 }

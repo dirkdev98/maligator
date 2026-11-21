@@ -323,6 +323,12 @@ export interface VmShapeCaseCandidate {
 export interface RuntimeImage {
 	/** Absolute source entry used for Node-compatible process.argv[1]. */
 	entrypointPath: string;
+	/**
+	 * Language features the build's engine policy allows, absent when it allows them
+	 * all. Every runtime archive contains both, so the image carries the policy
+	 * and the isolate started from it enforces it (runtime/src/vm.h MalEnginePolicy).
+	 */
+	enginePolicy?: RuntimeEnginePolicy;
 	functionCount: number;
 	functions: Array<BytecodeFunction>;
 	stringConstants: Array<Array<number>>;
@@ -362,6 +368,25 @@ export interface RuntimeImage {
 		imports: Array<RuntimeModuleLink>;
 		exports: Array<RuntimeModuleLink>;
 	};
+}
+
+export interface RuntimeEnginePolicy {
+	regexp: boolean;
+	eval: boolean;
+}
+
+/** MalEnginePolicy bits in runtime/src/vm.h; each withholds one feature. */
+export const ENGINE_POLICY_NO_REGEXP = 1;
+export const ENGINE_POLICY_NO_EVAL = 2;
+
+/** The image's MalEnginePolicy bits, as the wire header and a C image record them. */
+export function enginePolicyBits(image: Pick<RuntimeImage, "enginePolicy">): number {
+	const policy = image.enginePolicy;
+	if (policy === undefined) return 0;
+	return (
+		(policy.regexp ? 0 : ENGINE_POLICY_NO_REGEXP) |
+		(policy.eval ? 0 : ENGINE_POLICY_NO_EVAL)
+	);
 }
 
 export interface RuntimeModuleLink {
@@ -3734,8 +3759,13 @@ export function buildVerifiedRuntimeProducts<T>(
 		),
 	];
 	const sourcePositions = retainExecutionSourcePositions(program, functions);
+	const enginePolicy = {
+		regexp: context.facts.world.ecmaFeatures.regexp,
+		eval: context.facts.world.eval === "runtime",
+	};
 	const runtime: RuntimeImage = {
 		entrypointPath: context.data.entrypointPath,
+		...(enginePolicy.regexp && enginePolicy.eval ? {} : { enginePolicy }),
 		functionCount: functions.length,
 		functions,
 		stringConstants: core.stringConstants.map((units) => [...units]),

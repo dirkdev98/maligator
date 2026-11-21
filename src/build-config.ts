@@ -217,7 +217,7 @@ function shortHash(value: unknown): string {
  * output-name suffix (build-flags.ts) so binaries built under different
  * capabilities do not clobber each other. Native archives are content-addressed
  * from their exact inputs. The output depends
- * on `engine.eval` (flips `-DMAL_EVAL` + whether the compiler wire is embedded),
+ * on `engine.eval` (whether the eval component and compiler wire are linked),
  * `engine.intl` and `engine.temporal` (which language components the program links),
  * `surface.webPlatform` and `surface.node` (which host personality and installers the
  * program links; the runtime archive itself is the same for every surface).
