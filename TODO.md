@@ -626,6 +626,9 @@ The target is the complete ECMA-429 server surface except WebAssembly.
       larger than the initial read credit keeps the request, and the event loop,
       alive until it is read or cancelled.
 
+- [ ] Curate the WPT `fetch/api` tests that need a server, with a local stand-in for
+      wptserve's handlers, and run them on the native fetch.
+
 - [ ] Define server-runtime origin, credentials, cache, default User-Agent, and
       decompression policies. Document intentional Fetch divergences.
 
