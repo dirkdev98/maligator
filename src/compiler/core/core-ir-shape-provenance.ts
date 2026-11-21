@@ -20,8 +20,6 @@ import type { CoreProgram } from "./core-store.ts";
 
 export const CORE_SHAPE_ORIGIN_CAP = 4;
 export const CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT = "exact-shape-own-slot-effects";
-export const CORE_SHAPE_CASE_CANDIDATES_ATTRIBUTE = "shapeCaseCandidates";
-export const CORE_SHAPE_CASE_SLOTS_ATTRIBUTE = "shapeCaseSlots";
 export const CORE_EXACT_OWN_SLOT_ATTRIBUTE = "exactOwnSlot";
 
 export interface CoreKnownOwnSlotCandidate {
@@ -85,19 +83,6 @@ export function coreShapeCaseCandidatesFromAttribute(
 		);
 	}
 	return Object.freeze(candidates);
-}
-
-export function coreShapeCaseSlotsFromAttribute(
-	value: unknown,
-): ReadonlyArray<number> | undefined {
-	if (
-		!Array.isArray(value) ||
-		value.length < 1 ||
-		value.length > CORE_SHAPE_ORIGIN_CAP ||
-		!value.every((slot) => nonnegativeInteger(slot) && slot < 64)
-	)
-		return undefined;
-	return Object.freeze([...(value as ReadonlyArray<number>)]);
 }
 
 export function coreKnownOwnSlotFromAttribute(
@@ -172,11 +157,6 @@ export interface CoreShapeCandidates {
 	readonly origins: ReadonlyArray<CoreShapeOrigin>;
 	readonly opaque: boolean;
 }
-
-export const CORE_SHAPE_CANDIDATES_BOTTOM: CoreShapeCandidates = Object.freeze({
-	origins: Object.freeze([]),
-	opaque: false,
-});
 
 export const CORE_SHAPE_CANDIDATES_OPAQUE: CoreShapeCandidates = Object.freeze({
 	origins: Object.freeze([]),
@@ -346,10 +326,3 @@ export const CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS: CoreAnalysisDefinition<CoreSh
 			);
 		},
 	};
-
-export function coreExactShapeOwnSlotDigest(value: unknown): string | undefined {
-	const claim = coreExactShapeOwnSlotFromAttribute(value);
-	return claim === undefined
-		? undefined
-		: `exact-shape-slot:${claim.slot}:${claim.origins.map((origin) => `${origin.shapeFunctionIndex}:${origin.shapeInstruction}`).join(",")}`;
-}

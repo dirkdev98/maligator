@@ -316,7 +316,6 @@ describe("incremental Core program summaries", () => {
 		expect(flowSource).toMatch(/epoch\.dirtyFunctionAt/);
 		expect(flowSource).toMatch(/programFlow\.solveSummaries\(/);
 		expect(engineSource).toMatch(/solveSummaries<.*CoreProgramFlowTargetIndex/s);
-		expect(source).toMatch(/new CoreProgramFlowEngine\(program\)\.solveSummaries\(/);
 		expect(source).not.toMatch(/solveCoreProgramFlowSccs|\.solveSccs\(|memberQueue/);
 		expect(source).not.toMatch(/function callGraphSccs\(/);
 		expect(source).not.toMatch(/readonly evaluate|evaluate:\s*\(/);

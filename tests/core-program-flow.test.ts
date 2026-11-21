@@ -193,7 +193,6 @@ describe("Core program flow", () => {
 		);
 		expect(owner).toMatch(/programFlow\.solveValueKinds\(/);
 		expect(engine).toMatch(/solveValueKinds<.*CoreProgramFlowTargetIndex/s);
-		expect(valueKinds).toMatch(/new CoreProgramFlowEngine\(program\)\.solveValueKinds\(/);
 		expect(valueKinds).not.toMatch(
 			/solveCoreProgramFlowSccs|\.solveSccs\(|activeSccs|pendingFunctionSccs/,
 		);

@@ -658,8 +658,4 @@ type JsonText<Value> = Value extends FfiText
 			? { [Key in keyof Value]: JsonText<Value[Key]> }
 			: Value;
 export type FfiInspection = JsonText<FfiInspectionData>;
-export type CModelInspection = JsonText<CModelInspectionData>;
 export type FunctionInspection = JsonText<FunctionInspectionData>;
-export type TypeInspection = JsonText<TypeInspectionData>;
-export type HandleInspection = JsonText<HandleInspectionData>;
-export type ConstantInspection = JsonText<ConstantInspectionData>;

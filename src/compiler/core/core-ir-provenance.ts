@@ -181,16 +181,6 @@ export interface CoreProvenance {
 	cannotBeHeldWeakly(value: CoreValueId): boolean;
 }
 
-export interface CoreContainedAggregateOwnSlot {
-	readonly slot: number;
-	readonly origins: ReadonlyArray<CoreInstructionId>;
-}
-
-export interface CoreContainedAggregateProvenance {
-	ownSlot(instruction: CoreInstructionId): CoreContainedAggregateOwnSlot | undefined;
-	isInBounds(instruction: CoreInstructionId): boolean;
-}
-
 export interface CoreProvenanceOptions {
 	readonly canonicalRoots?: ReadonlyMap<CoreValueId, CoreValueId>;
 	readonly index?: CoreLocalFactIndex | (() => CoreLocalFactIndex);
@@ -239,17 +229,6 @@ function literalArrayIndex(
 			? 0
 			: immediate
 		: undefined;
-}
-
-export function coreOwnCellsEqual(left: CoreOwnCell, right: CoreOwnCell): boolean {
-	return (
-		left.kind === right.kind &&
-		(left.kind === "element"
-			? left.index ===
-				(right as { readonly kind: "element"; readonly index: number }).index
-			: left.key ===
-				(right as { readonly kind: "object-slot"; readonly key: number }).key)
-	);
 }
 
 type CoreOwnCellResolve = (index: number) => CoreOwnCell | undefined;
@@ -764,8 +743,6 @@ export function analyzeCoreProvenance(
 	);
 }
 
-export const coreProvenance = analyzeCoreProvenance;
-
 export interface CoreLocalFactBundle {
 	readonly function: CoreFunctionId;
 	readonly control: CoreControlFlow;
@@ -892,45 +869,6 @@ export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFa
 			});
 		},
 	};
-
-export function coreContainedAggregateProvenance(
-	program: CoreProgram,
-	functionId: CoreFunctionId,
-): CoreContainedAggregateProvenance {
-	const fn = program.function(functionId);
-	const analysis = analyzeCoreProvenance(program, functionId);
-	const result: CoreContainedAggregateProvenance = {
-		ownSlot(instruction) {
-			if (
-				!fn.isInstructionLive(instruction) ||
-				fn.instructionKind(instruction) !== "operation"
-			)
-				return undefined;
-			for (const access of fn.registry.byId(fn.instructionOpcode(instruction)).accesses ??
-				[]) {
-				if (access.baseOperand === undefined) continue;
-				const base = instructionOperand(fn, instruction, access.baseOperand);
-				const key = accessKey(fn, instruction, access);
-				if (base === undefined || key === undefined) continue;
-				const resolved = analysis.ownCell(base, key, access.mode);
-				if (
-					resolved?.layout.kind !== "named-slots" ||
-					resolved.cell.kind !== "object-slot"
-				)
-					continue;
-				const slot = resolved.layout.keys.indexOf(resolved.cell.key);
-				if (slot >= 0)
-					return Object.freeze({
-						slot,
-						origins: Object.freeze([resolved.layout.instruction]),
-					});
-			}
-			return undefined;
-		},
-		isInBounds: () => false,
-	};
-	return Object.freeze(result);
-}
 
 export type CoreLocalSpecializationCandidateKind =
 	| "stack-object"

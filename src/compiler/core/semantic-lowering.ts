@@ -17565,24 +17565,6 @@ function getOrCreateSourcePosition(
 }
 
 /**
- * Append an *inline* source position: code from `inlinedFunctionIndex` at
- * (line, column) that was inlined at `callerPosId` (a position one level out).
- * Not interned (each inline site is distinct). The trace formatter walks the
- * `callerPosId` chain, emitting one frame per inline level. Used by the inliner.
- */
-export function addInlineSourcePosition(
-	program: CoreFrontendContext,
-	line: number,
-	column: number,
-	inlinedFunctionIndex: number,
-	callerPosId: number,
-): number {
-	return (
-		program.sourcePositions.push({ line, column, inlinedFunctionIndex, callerPosId }) - 1
-	);
-}
-
-/**
  * Emit a source-position marker for `node` into `block`. A no-op when the node
  * carries no location (synthesized nodes). The marker sets the source position
  * inherited by every following instruction until the next marker.

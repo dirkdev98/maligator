@@ -120,19 +120,6 @@ export function factDependencyArraysEqual(
 	);
 }
 
-export function factRequirementsEqual(
-	left: FactRequirements,
-	right: FactRequirements,
-): boolean {
-	return (
-		factDependencyArraysEqual(left.dependencies, right.dependencies) &&
-		left.obligations.length === right.obligations.length &&
-		left.obligations.every((obligation, index) =>
-			factObligationEquals(obligation, right.obligations[index]!),
-		)
-	);
-}
-
 export function factDependencyKey(dependency: FactDependency): string {
 	switch (dependency.kind) {
 		case "world":

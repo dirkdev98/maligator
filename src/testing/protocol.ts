@@ -1,5 +1,3 @@
-export type TestMode = "normal" | "skip" | "todo" | "only";
-
 export type TestFailureKind =
 	| "assertion"
 	| "test"
@@ -99,11 +97,4 @@ export interface TestRunResult {
 	todo: number;
 	durationMs: number;
 	focused: boolean;
-}
-
-export interface TestFileResult extends TestRunResult {
-	file: string;
-	cache: "hit" | "miss";
-	frontendMs: number;
-	executionMs: number;
 }

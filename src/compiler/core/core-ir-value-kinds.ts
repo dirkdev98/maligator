@@ -80,7 +80,6 @@ import type {
 import { analyzeCoreValueClasses } from "./core-ir-value-classes.ts";
 import type { CoreValueClassAnalysis } from "./core-ir-value-classes.ts";
 import type {
-	CoreFunctionId,
 	CoreBlockId,
 	CoreInstructionEffects,
 	CoreInstructionId,
@@ -95,15 +94,12 @@ import {
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreOptimizationOwnerRunner } from "./core-optimization-owners.ts";
 import { corePrivateFieldFacts } from "./core-private-field-facts.ts";
-import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
 	CoreValueAlternatives,
 	CoreProgramFlowValueKinds,
 	CoreProgramFlowValueKindSemantics,
 	CoreProgramFlowValueKindInputs,
 	CoreProgramFlowValueKindState,
-	CoreProgramFlowValueKindStatistics,
-	CoreProgramFlowValueKindSummary,
 } from "./core-program-flow.ts";
 import type { CoreRecordValueKind } from "./core-record-value-kinds.ts";
 import {
@@ -128,7 +124,6 @@ const STATIC_OWN_KEY_EFFECTS: CoreInstructionEffects = Object.freeze({
 });
 
 export type CoreExactScalarKind = "int32" | "number" | "boolean" | "string";
-export type CoreExactCallArgumentRepresentation = "boxed" | CoreExactScalarKind;
 
 export interface CoreValueKindAnalysis {
 	readonly statistics: {
@@ -779,20 +774,6 @@ export function corePrivateNumericArrayLoads(
 ): ReadonlySet<CoreInstructionId> {
 	return new Set(
 		corePrivateNumericArrays(program, fn, cfg, context).flatMap(
-			(array) => array.elementLoads,
-		),
-	);
-}
-
-export function corePrivatePackedRestArrayLoads(
-	program: CoreProgram,
-	fn: CoreFunctionStore,
-	cfg: CoreControlFlow,
-	context: CoreCompilationContext,
-	numberValue: (value: CoreValueId) => boolean,
-): ReadonlySet<CoreInstructionId> {
-	return new Set(
-		corePrivatePackedRestArrays(program, fn, () => cfg, context, numberValue).flatMap(
 			(array) => array.elementLoads,
 		),
 	);
@@ -1672,8 +1653,6 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 		},
 	};
 
-export type CoreProgramValueKindSummary = CoreProgramFlowValueKindSummary;
-export type CoreProgramValueKindStatistics = CoreProgramFlowValueKindStatistics;
 export interface CoreProgramFunctionValueKinds extends Pick<
 	CoreValueKindAnalysis,
 	"kindMask"
@@ -1843,26 +1822,6 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 		object: COMPILER_VALUE_KIND_OBJECT,
 		undefined: COMPILER_VALUE_KIND_UNDEFINED,
 	});
-
-export function solveCoreProgramValueKinds(
-	program: CoreProgram,
-	targets: CoreCallGraphIndex,
-	externallyReachable: (functionId: CoreFunctionId) => boolean,
-	controlFlow: (functionId: CoreFunctionId) => CoreControlFlow,
-	previous?: CoreProgramValueKindState,
-	dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
-	externallyChangedFunctions?: ReadonlySet<CoreFunctionId>,
-): CoreProgramValueKindState {
-	return new CoreProgramFlowEngine(program).solveValueKinds(
-		targets,
-		externallyReachable,
-		controlFlow,
-		CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS,
-		previous,
-		dirtyFunctions,
-		externallyChangedFunctions,
-	);
-}
 
 // Undefined requests propagation; a fixed TOP means propagation cannot refine the value.
 export function coreValueKindDemand(
@@ -2336,24 +2295,6 @@ function valueIsFreshAllocation(fn: CoreFunctionStore, value: CoreValueId): bool
 	return fn.registry.byId(fn.instructionOpcode(instruction)).allocation !== undefined;
 }
 
-export function coreOperatorInputKindMasks(
-	fn: CoreFunctionStore,
-	instruction: CoreInstructionId,
-	kinds: CoreValueKindAnalysis,
-): CompilerOperatorInputKindMasks | undefined {
-	const opcode = fn.instructionOpcodeName(instruction);
-	const start = fn.kernel.instructionOperandStart(instruction);
-	const left = kinds.kindMask(fn.kernel.operandAt(start));
-	if (left === 0) return undefined;
-	if (opcode === "unary") return left === COMPILER_VALUE_KIND_TOP ? undefined : [left];
-	if (opcode !== "binary") return undefined;
-	const right = kinds.kindMask(fn.kernel.operandAt(start + 1));
-	if (right === 0) return undefined;
-	return left === COMPILER_VALUE_KIND_TOP && right === COMPILER_VALUE_KIND_TOP
-		? undefined
-		: [left, right];
-}
-
 export function coreExactOperatorInputKindMasks(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
@@ -2500,41 +2441,4 @@ export function corePrimitiveEffectRefinement(
 		mayGc: gcFree ? false : baseline.mayGc,
 		callsUserCode: false,
 	};
-}
-
-export function coreExactCallArgumentRepresentations(
-	value: unknown,
-	parameterCount?: number,
-): ReadonlyArray<CoreExactCallArgumentRepresentation> | undefined {
-	if (
-		!Array.isArray(value) ||
-		(parameterCount !== undefined && value.length !== parameterCount) ||
-		value.some(
-			(entry) =>
-				entry !== "boxed" &&
-				entry !== "int32" &&
-				entry !== "number" &&
-				entry !== "boolean" &&
-				entry !== "string",
-		)
-	)
-		return undefined;
-	return value as ReadonlyArray<CoreExactCallArgumentRepresentation>;
-}
-
-export interface CoreExactValueFactSelection {
-	readonly program: CoreProgram;
-	readonly changed: boolean;
-}
-
-export function materializeCoreExactScalarRepresentations(
-	program: CoreProgram,
-): CoreExactValueFactSelection {
-	return { program, changed: false };
-}
-
-export function selectCoreExactValueFacts(
-	program: CoreProgram,
-): CoreExactValueFactSelection {
-	return { program, changed: false };
 }

@@ -3157,13 +3157,3 @@ export function buildCoreOptimizationPlan(
 	options.onPhase?.("selection", Date.now() - selectionStartedAt);
 	return plan;
 }
-
-export function withCorePlanVerificationTime(
-	plan: CoreOptimizationPlan,
-	verificationMs: number,
-): CoreOptimizationPlan {
-	return Object.freeze({
-		...plan,
-		statistics: Object.freeze({ ...plan.statistics, verificationMs }),
-	});
-}

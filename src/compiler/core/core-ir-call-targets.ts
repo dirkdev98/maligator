@@ -1531,5 +1531,3 @@ export function analyzeCoreCallGraph(
 export function analyzeCoreCalleeTargets(program: CoreProgram): CoreCallGraphIndex {
 	return analyzeCoreCallGraph(program, false);
 }
-
-export type CoreCalleeTargetAnalysis = CoreCallGraphIndex;

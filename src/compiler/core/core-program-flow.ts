@@ -1094,14 +1094,6 @@ export interface CoreProgramFlowSccWorkStatistics {
 	readonly wakeups: number;
 }
 
-export interface CoreProgramFlowSccSolver {
-	solveSccs(
-		topology: CoreProgramFlowTopology,
-		seeds: Iterable<CoreProgramFlowSccSeed>,
-		transfer: CoreProgramFlowSccTransfer,
-	): CoreProgramFlowSccWorkStatistics;
-}
-
 export type CoreProgramFlowFunctionEnqueue = (functionId: CoreFunctionId) => boolean;
 
 export type CoreProgramFlowFunctionTransfer = (
@@ -1112,13 +1104,6 @@ export type CoreProgramFlowFunctionTransfer = (
 export interface CoreProgramFlowFunctionWorkStatistics {
 	readonly pops: number;
 	readonly wakeups: number;
-}
-
-export interface CoreProgramFlowFunctionSolver {
-	solveFunctions(
-		seeds: Iterable<CoreFunctionId>,
-		transfer: CoreProgramFlowFunctionTransfer,
-	): CoreProgramFlowFunctionWorkStatistics;
 }
 
 class CoreProgramFlowFunctionWorklist {

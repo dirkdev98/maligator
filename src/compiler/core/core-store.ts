@@ -379,10 +379,6 @@ function decodeCoreString(units: ReadonlyArray<number>): string {
 	return text;
 }
 
-function sortedIds<Id extends number>(ids: ReadonlySet<Id>): Array<Id> {
-	return [...ids].sort((left, right) => left - right);
-}
-
 function freezeImmediate(value: CoreImmediate): CoreImmediate {
 	return Object.freeze({ ...value });
 }
@@ -3296,5 +3292,3 @@ export class CoreProgram {
 export type SealedCoreProgram = CoreProgram & { readonly sealed: true };
 
 export const CORE_FUNCTION_VERSION_DOMAINS = FUNCTION_DOMAINS;
-export const CORE_PROGRAM_VERSION_DOMAINS = PROGRAM_DOMAINS;
-export const sortCoreIds = sortedIds;

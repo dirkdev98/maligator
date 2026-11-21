@@ -42,9 +42,7 @@ import type { CoreBuiltinCallbackInvocation } from "./core-builtin-effects.ts";
 import { coreBuiltinResultProjection } from "./core-builtin-result-projections.ts";
 import { coreCalleeTargetsAreOpen } from "./core-callee-targets.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { analyzeCoreCallGraph } from "./core-ir-call-targets.ts";
 import type { CoreCallGraphIndex, CoreIndexedCallSite } from "./core-ir-call-targets.ts";
-import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreAttributeValuesEqual } from "./core-ir-equality.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
@@ -57,7 +55,6 @@ import type {
 } from "./core-ir.ts";
 import type { CoreAttributeValue } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
 	CoreProgramFlowLocalTransfers,
 	CoreProgramFlowPublishedFunctionSummary,
@@ -65,7 +62,6 @@ import type {
 	CoreProgramFlowSummarySemantics,
 	CoreProgramFlowSummaryTransfer,
 	CoreProgramFlowSummaryState,
-	CoreProgramFlowSummaryStatistics,
 } from "./core-program-flow.ts";
 import { coreReadAccessorSummary } from "./core-read-accessors.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -125,7 +121,6 @@ export interface CoreLocalFunctionSummary {
 }
 
 export type CorePublishedFunctionSummary = CoreProgramFlowPublishedFunctionSummary;
-export type CoreProgramSummaryStatistics = CoreProgramFlowSummaryStatistics;
 export type CoreProgramSummaries = CoreProgramFlowSummaries<CoreCallGraphIndex>;
 export type CoreProgramSummaryState = CoreProgramFlowSummaryState<
 	CoreLocalFunctionSummary,
@@ -1392,37 +1387,3 @@ export const CORE_PROGRAM_FLOW_SUMMARY_SEMANTICS: CoreProgramFlowSummarySemantic
 	summariesEqual,
 	moduleSummaries,
 });
-
-export function analyzeProgramSummaries(
-	program: CoreProgram,
-	context: CoreCompilationContext,
-	targets: CoreCallGraphIndex,
-	controlFlow: (functionId: CoreFunctionId) => CoreControlFlow,
-	previous?: CoreProgramSummaryState,
-	dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
-): CoreProgramSummaryState {
-	return new CoreProgramFlowEngine(program).solveSummaries(
-		context,
-		targets,
-		controlFlow,
-		CORE_PROGRAM_FLOW_SUMMARY_SEMANTICS,
-		previous,
-		dirtyFunctions,
-	);
-}
-
-export function analyzeCoreProgramSummaries(
-	program: CoreProgram,
-	context: CoreCompilationContext,
-): CoreProgramSummaries {
-	const targets = analyzeCoreCallGraph(
-		program,
-		context.facts.closure.sourceClosure.kind === "known",
-		undefined,
-		undefined,
-		context,
-	);
-	return analyzeProgramSummaries(program, context, targets, (functionId) =>
-		buildCoreControlFlow(program, functionId, { exceptions: true }),
-	);
-}

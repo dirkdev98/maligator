@@ -220,15 +220,6 @@ export function coreFactClaimFamilyKey(claim: CoreFactClaim): string {
 	}
 }
 
-/**
- * Every family a fact can be found under. Implying claims always share a family
- * key, so scanning one family of a fact's claims finds every fact that could
- * imply it.
- */
-export function coreFactFamilyKeys(fact: CoreFact): ReadonlyArray<string> {
-	return [...new Set(fact.claims.map(coreFactClaimFamilyKey))].sort(compareKeys);
-}
-
 function normalizeIdentities(
 	identities: ReadonlyArray<Identity>,
 ): ReadonlyArray<Identity> {

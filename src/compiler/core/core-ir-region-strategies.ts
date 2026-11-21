@@ -272,7 +272,6 @@ export const CORE_REGION_STRATEGIES = {
 } as const satisfies Record<string, CoreRegionStrategyDefinition>;
 
 export type RegisteredCoreRegionKind = keyof typeof CORE_REGION_STRATEGIES;
-export type CoreRegionKind = RegisteredCoreRegionKind | `test-${string}`;
 
 const CORE_REGION_KIND_BY_ARTIFACT_TAG = new Map<number, RegisteredCoreRegionKind>(
 	Object.entries(CORE_REGION_STRATEGIES).map(([kind, definition]) => [
@@ -297,12 +296,6 @@ export function coreRegionStrategy(
 	kind: RegisteredCoreRegionKind,
 ): CoreRegionStrategyDefinition {
 	return CORE_REGION_STRATEGIES[kind];
-}
-
-export function coreRegionKindFromArtifactTag(
-	tag: number,
-): RegisteredCoreRegionKind | undefined {
-	return CORE_REGION_KIND_BY_ARTIFACT_TAG.get(tag);
 }
 
 const CORE_PLAN_ONLY_TARGET_STRATEGIES: ReadonlySet<string> = new Set([

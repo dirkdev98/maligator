@@ -1,7 +1,3 @@
-export function isNil(value: unknown): value is null | undefined {
-	return value === null || value === undefined;
-}
-
 // `typeof` guard so this module loads on MalVm too (the self-hosted compiler),
 // where there is no `process` global — `typeof process` is then "undefined".
 export const debugEnabled =

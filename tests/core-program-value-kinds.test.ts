@@ -366,7 +366,6 @@ it("uses program-flow dirtiness without serialized version or target keys", () =
 	expect(flowSource).toMatch(/epoch\.dirtyFunctionAt/);
 	expect(flowSource).toMatch(/programFlow\.solveValueKinds\(/);
 	expect(engineSource).toMatch(/solveValueKinds<.*CoreProgramFlowTargetIndex/s);
-	expect(source).toMatch(/new CoreProgramFlowEngine\(program\)\.solveValueKinds\(/);
 	expect(source).not.toMatch(
 		/solveCoreProgramFlowSccs|\.solveSccs\(|activeSccs|pendingFunctionSccs/,
 	);

@@ -80,14 +80,6 @@ export function literalPrototypeMethods(): ReadonlyArray<LiteralPrototypeMethod>
 	return literalMethodTable().methods;
 }
 
-export function literalPrototypeMethodIndex(
-	receiver: LiteralReceiverKind,
-	key: LiteralPrototypeKey,
-): number | undefined {
-	const { indices } = literalMethodTable();
-	return indices.get(receiver)?.get(key) ?? indices.get("object")?.get(key);
-}
-
 export type BuiltinFeature =
 	| "always"
 	| "eval"
@@ -460,8 +452,6 @@ export const mathUnaryOperationKeys = [
 	["Math.expm1", "expm1"],
 	["Math.fround", "fround"],
 ] as const;
-
-export type MathUnaryOperationKey = (typeof mathUnaryOperationKeys)[number][1];
 
 const mathOperations: ReadonlyArray<BuiltinOperationDescriptor> =
 	mathUnaryOperationKeys.map(([id, key]) => ({
@@ -1768,25 +1758,6 @@ export function builtinCallbackInvocation(
 	)
 		return undefined;
 	return invocation;
-}
-
-// Family member numeric roles nominate guarded adapters, never unconditional argument facts.
-export function builtinCallbackNumberArgumentCandidates(
-	id: string,
-): ReadonlyArray<number> {
-	const invocation = builtinCallbackInvocation(id);
-	if (invocation === undefined) return [];
-	const members = builtinOperationDescriptor(id)?.guardedCallees ?? [];
-	return invocation.argumentKinds.flatMap((kind, index) =>
-		kind === "number" ||
-		(kind === "any" &&
-			members.some(
-				(member) =>
-					builtinOperationDescriptor(member)?.callback?.argumentKinds[index] === "number",
-			))
-			? [index]
-			: [],
-	);
 }
 
 function featureGuard(feature: BuiltinFeature): string {

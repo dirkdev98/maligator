@@ -95,8 +95,6 @@ export function coreCalleeTargetsSingleFunction(
 		: undefined;
 }
 
-export const coreCalleeTargetsClosedFunction = coreCalleeTargetsSingleFunction;
-
 export function coreCalleeTargetsEqual(
 	left: CoreCalleeTargets,
 	right: CoreCalleeTargets,

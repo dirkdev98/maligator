@@ -30,19 +30,6 @@ export interface CoreLocalInterproceduralFlow {
 	};
 }
 
-export type CoreInterproceduralCallSite = CoreLocalCallSite;
-export type CoreInterproceduralValueFlow = CoreLocalInterproceduralFlow;
-
-export function corePositionalCallArguments(
-	call: CoreLocalCallSite,
-): ReadonlyArray<CoreValueId> | undefined {
-	return call.arguments;
-}
-
-export function coreCallReceiver(call: CoreLocalCallSite): CoreValueId | undefined {
-	return call.receiver;
-}
-
 const emptyPositionalArguments: ReadonlyArray<CoreValueId> = Object.freeze([]);
 
 export function analyzeCoreInterproceduralValueFlow(

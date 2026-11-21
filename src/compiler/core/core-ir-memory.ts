@@ -1503,8 +1503,6 @@ export function analyzeCoreMemoryVersions(
 	);
 }
 
-export const coreMemoryVersions = analyzeCoreMemoryVersions;
-
 export const CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS: CoreAnalysisDefinition<CoreMemoryVersions> =
 	{
 		key: "local-memory-versions",

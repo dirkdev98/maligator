@@ -275,17 +275,6 @@ export function effectSummaryCovers(
 	);
 }
 
-/** Stable text form used inside proof digests; never parsed back. */
-export function effectSummaryKey(effects: EffectSummary): string {
-	const flags = [
-		effects.mayThrow ? "t" : "-",
-		effects.maySuspend ? "s" : "-",
-		effects.mayGc ? "g" : "-",
-		effects.callsUserCode ? "u" : "-",
-	].join("");
-	return `r[${effects.reads.join(",")}]w[${effects.writes.join(",")}]${flags}`;
-}
-
 /**
  * How far a value the caller supplied can travel. `invoked` means it was called
  * but never stored; `returned` means it can leave through the result; `retained`
@@ -308,14 +297,6 @@ export function joinValueEscape(
 	return ESCAPE_RANK[left] >= ESCAPE_RANK[right] ? left : right;
 }
 
-/** Whether `claim` is at least as pessimistic as `actual`. */
-export function valueEscapeCovers(
-	claim: ValueEscapeFact,
-	actual: ValueEscapeFact,
-): boolean {
-	return ESCAPE_RANK[claim] >= ESCAPE_RANK[actual];
-}
-
 /**
  * Whether a value can cross the function without losing a caller-owned exact
  * allocation proof. `preserved` permits forwarding, strict identity/typeof
@@ -332,13 +313,6 @@ export function joinValueContainment(
 	right: ValueContainmentFact,
 ): ValueContainmentFact {
 	return left === "unknown" || right === "unknown" ? "unknown" : "preserved";
-}
-
-export function valueContainmentCovers(
-	claim: ValueContainmentFact,
-	actual: ValueContainmentFact,
-): boolean {
-	return claim === "unknown" || actual === "preserved";
 }
 
 /**

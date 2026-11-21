@@ -412,40 +412,6 @@ const EMPTY_CONSTRUCTION_STATISTICS: CoreConstructionStatistics = Object.freeze(
 	maximumUnresolvedPhiDepth: 0,
 });
 
-function liveCounts(
-	program: CoreProgram,
-): Omit<CoreOptimizationCounts, "planCandidates"> {
-	let functions = 0;
-	let blocks = 0;
-	let instructions = 0;
-	let values = 0;
-	let facts = 0;
-	for (const functionId of program.functionIds()) {
-		functions++;
-		const counts = program.function(functionId).liveStorageCounts();
-		blocks += counts.blocks;
-		instructions += counts.instructions;
-		values += counts.values;
-		facts += counts.facts;
-	}
-	return { functions, blocks, instructions, values, facts };
-}
-
-export function coreOptimizationCounts(
-	program: CoreProgram,
-	plan?: Pick<CoreOptimizationPlan, "directEntries"> & {
-		readonly recipes?: Pick<CoreOptimizationPlan["recipes"], "count">;
-		readonly specializations?: ReadonlyArray<unknown>;
-	},
-): CoreOptimizationCounts {
-	return {
-		...liveCounts(program),
-		planCandidates:
-			(plan?.directEntries.length ?? 0) +
-			(plan?.recipes?.count ?? plan?.specializations?.length ?? 0),
-	};
-}
-
 function coreOptimizationCheckpoint(
 	program: CoreProgram,
 	checkpoint: string,

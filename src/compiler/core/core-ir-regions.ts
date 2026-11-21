@@ -18,10 +18,7 @@ import type {
 import type { CoreRecordStorageWidths } from "./core-record-storage-widths.ts";
 import type { CoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import type { CoreFunctionVersions, CoreProgramVersions } from "./core-store.ts";
-import type {
-	CoreTransformBudgetStatistics,
-	CoreTransformDeclineReason,
-} from "./core-transform-candidates.ts";
+import type { CoreTransformBudgetStatistics } from "./core-transform-candidates.ts";
 
 export type CorePlanSpecializationKind =
 	| "guarded-direct-call"
@@ -688,13 +685,6 @@ export interface CoreDirectEntryPlan {
 	readonly fallback: "canonical-core";
 	readonly cost: CorePlanCost;
 }
-
-export type CorePlanDeclineReason =
-	| CoreTransformDeclineReason
-	| "overlap"
-	| "stale-anchor"
-	| "representation"
-	| "target-support";
 
 export interface CoreOptimizationPlanStatistics extends CoreTransformBudgetStatistics {
 	readonly discovery: {

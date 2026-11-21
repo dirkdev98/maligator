@@ -135,16 +135,6 @@ export function resolvePrimordialProperty(
 	return undefined;
 }
 
-export function primordialOwnKeys(id: string): ReadonlyArray<PrimordialKey> {
-	return (
-		primordialNode(id)?.[4].map(([key]) =>
-			typeof key === "string"
-				? key
-				: { symbol: getPrimordialCatalog().nodes[key[0]]![0] },
-		) ?? []
-	);
-}
-
 export type PrimordialReceiverEvidence =
 	| { readonly kind: "brand-only"; readonly brand: string }
 	| {

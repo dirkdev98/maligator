@@ -2502,23 +2502,6 @@ function validateNativeRecordUses(
 	);
 }
 
-/** The record layout a call's direct entry expects as `argument`, when it takes one. */
-export function nativeRecordParameterOf(
-	functions: ReadonlyArray<NativeFunctionPlan>,
-	plan: NativeInstructionPlan | undefined,
-	argument: number,
-): NativeRecordParameter | undefined {
-	if (
-		plan?.kind !== "call" ||
-		plan.directFunctionIndex === undefined ||
-		plan.directEntryId === undefined
-	)
-		return undefined;
-	return functions[plan.directFunctionIndex]?.directEntries[
-		plan.directEntryId
-	]?.recordParameters?.find((parameter) => parameter.index === argument);
-}
-
 /** A call enters a record parameter only with storage of that layout to hand over. */
 function validateNativeRecordPasses(
 	native: NativeFunctionPlan,

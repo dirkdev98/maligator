@@ -319,27 +319,10 @@ export function coreBlockLoopFrequency(cfg: CoreControlFlow, block: CoreBlockId)
 	return weights.base ** Math.min(depth, weights.maximumDepth);
 }
 
-export function coreGeneratedCodeCostForInstructions(
-	fn: CoreFunctionStore,
-	sites: ReadonlyArray<CoreGeneratedCodeInstructionSite>,
-	overhead: CoreGeneratedCodeOverhead = {},
-): CoreGeneratedCodeCost {
-	return coreGeneratedCodeCostModel(fn).forInstructions(sites, overhead);
-}
-
 export function coreGeneratedCodeOverheadCost(
 	overhead: CoreGeneratedCodeOverhead,
 ): CoreGeneratedCodeCost {
 	return generatedCodeCost(undefined, [], overhead);
-}
-
-export function coreGeneratedCodeCostForRegion(
-	fn: CoreFunctionStore,
-	cfg: CoreControlFlow,
-	claimedInstructions: ReadonlyArray<CoreInstructionId>,
-	overhead: CoreGeneratedCodeOverhead = {},
-): CoreGeneratedCodeCost {
-	return coreGeneratedCodeCostModel(fn, cfg).forRegion(claimedInstructions, overhead);
 }
 
 export function coreGeneratedCodeAdmitsRegion(
