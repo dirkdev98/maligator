@@ -217,6 +217,8 @@ describe("Object.entries snapshot transport", () => {
 		for (const plan of plans) expect(plan.entryProjections).toEqual([]);
 	});
 
+	// Each case compiles the whole native fixture with the Node surface, which takes
+	// seconds on a loaded CI runner and outgrew the default budget.
 	it.each(["mutable", "locked"] as const)(
 		"admits bundled count, pair and materializing observations under %s primordials",
 		(primordials) => {
@@ -256,6 +258,7 @@ describe("Object.entries snapshot transport", () => {
 				image,
 			);
 		},
+		30_000,
 	);
 
 	it("publishes unrelated live values before a numeric pair allocation and roots its result before polling", () => {
