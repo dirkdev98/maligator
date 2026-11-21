@@ -55,10 +55,16 @@ static bool image_entry_settled(MalVm *vm, void *data) {
         mal_value_to_promise_object(vm->entry_async_promise)->state != MAL_PROMISE_PENDING;
 }
 
-static MalLoadedRuntimeImage *load_runtime_image(const MalDevelopmentImage *image) {
+static MalLoadedRuntimeImage *load_runtime_image(
+    const MalDevelopmentImage *images, MalDevelopmentImage *owned_images, int index) {
+    const MalDevelopmentImage *image = &images[index];
     const char *error = "ok";
     MalLoadedRuntimeImage *loaded = mal_runtime_image_load_with_host_resolver(
         image->bytes, image->length, &error, mal_host_resolve_installer);
+    if (owned_images != nullptr) {
+        free((void *) owned_images[index].bytes);
+        owned_images[index].bytes = nullptr;
+    }
     if (loaded == nullptr) {
         fprintf(stderr, "could not load development image %s: %s\n", image->label, error);
     }
@@ -78,37 +84,9 @@ static bool attach_overlay(
     return false;
 }
 
-int mal_dev_run_wires(
-    const char *const *wire_paths,
-    int wire_count,
-    const char *entry_path,
-    int argc,
-    char **argv,
-    bool web_platform,
-    bool node,
-    const char *worker_manifest_path) {
-    if (wire_count < 1) return 2;
-    MalDevelopmentImage *images = calloc((usize) wire_count, sizeof(MalDevelopmentImage));
-    int code = 2;
-    if (images == nullptr) goto done;
-    for (int index = 0; index < wire_count; index++) {
-        u8 *bytes = read_file(wire_paths[index], &images[index].length);
-        if (bytes == nullptr) goto done;
-        images[index].bytes = bytes;
-        images[index].label = wire_paths[index];
-    }
-    code = mal_dev_run_images(images, wire_count, nullptr, 0, entry_path, argc, argv,
-        web_platform, node, worker_manifest_path);
-done:
-    if (images != nullptr) {
-        for (int index = 0; index < wire_count; index++) free((u8 *) images[index].bytes);
-    }
-    free(images);
-    return code;
-}
-
-int mal_dev_run_images(
-    const MalDevelopmentImage *images,
+static int run_images(
+    const MalDevelopmentImage *baked_images,
+    MalDevelopmentImage *owned_images,
     int wire_count,
     const MalAsset *assets,
     i32 asset_count,
@@ -120,7 +98,8 @@ int mal_dev_run_images(
     const char *worker_manifest_path) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
     if (wire_count < 1) return 2;
-    MalLoadedRuntimeImage *loaded = load_runtime_image(&images[0]);
+    const MalDevelopmentImage *images = owned_images != nullptr ? owned_images : baked_images;
+    MalLoadedRuntimeImage *loaded = load_runtime_image(images, owned_images, 0);
     if (loaded == nullptr) {
         return 2;
     }
@@ -175,9 +154,9 @@ int mal_dev_run_images(
     }
     for (int index = 0; index < wire_count; index++) {
         i32 entry = 0;
-		const MalRuntimeImage *program = vm.runtime_image;
+        const MalRuntimeImage *program = vm.runtime_image;
         if (index > 0) {
-            MalLoadedRuntimeImage *fragment = load_runtime_image(&images[index]);
+            MalLoadedRuntimeImage *fragment = load_runtime_image(images, owned_images, index);
             if (fragment == nullptr) {
                 vm.completion.kind = MAL_COMPLETION_THROW;
                 break;
@@ -230,4 +209,46 @@ int mal_dev_run_images(
     free(callables);
     mal_loaded_runtime_image_free(loaded);
     return code;
+}
+
+int mal_dev_run_wires(
+    const char *const *wire_paths,
+    int wire_count,
+    const char *entry_path,
+    int argc,
+    char **argv,
+    bool web_platform,
+    bool node,
+    const char *worker_manifest_path) {
+    if (wire_count < 1) return 2;
+    MalDevelopmentImage *images = calloc((usize) wire_count, sizeof(MalDevelopmentImage));
+    if (images == nullptr) return 2;
+    int code = 2;
+    for (int index = 0; index < wire_count; index++) {
+        u8 *bytes = read_file(wire_paths[index], &images[index].length);
+        if (bytes == nullptr) goto done;
+        images[index].bytes = bytes;
+        images[index].label = wire_paths[index];
+    }
+    code = run_images(nullptr, images, wire_count, nullptr, 0, entry_path, argc, argv,
+        web_platform, node, worker_manifest_path);
+done:
+    for (int index = 0; index < wire_count; index++) free((void *) images[index].bytes);
+    free(images);
+    return code;
+}
+
+int mal_dev_run_images(
+    const MalDevelopmentImage *images,
+    int wire_count,
+    const MalAsset *assets,
+    i32 asset_count,
+    const char *entry_path,
+    int argc,
+    char **argv,
+    bool web_platform,
+    bool node,
+    const char *worker_manifest_path) {
+    return run_images(images, nullptr, wire_count, assets, asset_count, entry_path, argc, argv,
+        web_platform, node, worker_manifest_path);
 }

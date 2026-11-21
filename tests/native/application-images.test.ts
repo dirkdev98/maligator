@@ -203,6 +203,56 @@ for (const compiled of [true, false]) {
 	}, 300_000);
 }
 
+it("reloads an edited wire at the same path alongside an unchanged dependency", () => {
+	const directory = mkdtempSync(
+		path.join(path.resolve(".cache"), "application-wire-reload-"),
+	);
+	try {
+		const descriptor: ApplicationImageDescriptor = {
+			schema: 1,
+			wires: [
+				wire(directory, "count-fragment", "first"),
+				wire(directory, "wire-cache-result", "first"),
+			],
+			entryPath: path.join(fixtures, "wire-cache-result.mts"),
+			webPlatform: config.surface.webPlatform,
+			node: config.surface.node,
+			engine: {
+				...config.engine,
+				eval: config.engine.eval === true,
+				intl: config.engine.intl.enabled,
+			},
+		};
+		const replacement = wire(directory, "wire-cache-result", "other");
+		const inputPath = path.join(directory, "reload.json");
+		writeFileSync(inputPath, JSON.stringify({ descriptor, replacement }));
+		const derivation = buildDerivationFromConfig(config);
+		const binary = buildLocalBinary({
+			context: resolveNativeBuildContext({
+				features: { ...derivation.features, developmentApiEnabled: true },
+			}),
+			name: "application-wire-reload",
+			outDir: directory,
+			verbose: false,
+			mainFile: path.join(fixtures, "main.c"),
+			cSource: emitProgramTranslationUnits(image("wire-cache-host"), {
+				toolchainBridge: true,
+			}),
+		}).binaryPath;
+		const invocation = resolveHarnessExecutionInvocation(binary);
+		const result = spawnSync(invocation.executable, [...invocation.args, inputPath], {
+			encoding: "utf8",
+			env: { ...process.env, ...STRESS_ENV },
+			timeout: scaledNativeRunTimeoutMs(10_000, STRESS_ENV),
+		});
+		expect(result.error).toBeUndefined();
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		expect(result.stdout).toBe("first:1\nother:1\n");
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+}, 300_000);
+
 it("executes every fragment when an application has more than 4096 images", () => {
 	const directory = mkdtempSync(
 		path.join(path.resolve(".cache"), "application-fragment-growth-"),

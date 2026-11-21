@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "array_object.h"
 #include "map_object.h"
@@ -618,10 +619,26 @@ static u32 workers_max(void) {
     return cap < 16 ? 16 : cap > 256 ? 256 : cap;
 }
 
+typedef struct ApplicationWire {
+    _Atomic(u32) refs;
+    _Atomic(MalLoadedRuntimeImage *) first_load;
+    struct stat stamp;
+    byte digest[64];
+    byte bytes[];
+} ApplicationWire;
+
+typedef struct ApplicationWires {
+    _Atomic(u32) refs;
+    u32 count;
+    usize lookup_capacity;
+    ApplicationWire **lookup;
+    ApplicationWire **ordered;
+} ApplicationWires;
+
 typedef struct ApplicationImage {
     _Atomic(u32) refs;
-    MalWorkerEntry *entries;
-    u32 count;
+    MalWorkerEntry entry;
+    ApplicationWires *wires;
     char *entry_path;
     MalWorkerDomain *domain;
 } ApplicationImage;
@@ -635,10 +652,54 @@ typedef struct ApplicationLaunch {
     bool retain_listeners;
 } ApplicationLaunch;
 
+static void application_wires_release(ApplicationWires *wires) {
+    if (wires == nullptr || atomic_fetch_sub_explicit(&wires->refs, 1, memory_order_acq_rel) != 1) return;
+    for (usize index = 0; index < wires->lookup_capacity; index++) {
+        ApplicationWire *wire = wires->lookup[index];
+        if (wire != nullptr && atomic_fetch_sub_explicit(&wire->refs, 1, memory_order_acq_rel) == 1) {
+            mal_loaded_runtime_image_free(atomic_load_explicit(&wire->first_load, memory_order_relaxed));
+            free(wire);
+        }
+    }
+    free(wires->lookup);
+    free(wires->ordered);
+    free(wires);
+}
+
+static MalLoadedRuntimeImage *application_wire_decode(
+    ApplicationWire *wire, const char **error, MalHostInstallerResolver resolver) {
+    // The initial decode validates the wire. Splicing needs exclusive ownership
+    // of that arena, so only one launch can use it.
+    MalLoadedRuntimeImage *loaded = atomic_exchange_explicit(&wire->first_load, nullptr, memory_order_acq_rel);
+    if (loaded != nullptr) return loaded;
+    return mal_runtime_image_load_with_host_resolver(
+        (const u8 *) wire->bytes, (usize) wire->stamp.st_size, error, resolver);
+}
+
+#if MAL_DEVELOPMENT_API
+static pthread_mutex_t g_application_wires_mutex = PTHREAD_MUTEX_INITIALIZER;
+static ApplicationWires *g_application_wires;
+static MalVm *g_application_wires_owner;
+
+// Keep the last successful generation between launches. Open handles and running
+// isolates retain their own snapshots independently of this cache.
+static void application_wires_publish(MalVm *owner, ApplicationWires *wires) {
+    ApplicationWires *previous = nullptr;
+    pthread_mutex_lock(&g_application_wires_mutex);
+    if (wires != nullptr || owner == g_application_wires_owner) {
+        previous = g_application_wires;
+        g_application_wires = wires;
+        g_application_wires_owner = wires != nullptr ? owner : nullptr;
+        if (wires != nullptr) atomic_fetch_add_explicit(&wires->refs, 1, memory_order_relaxed);
+    }
+    pthread_mutex_unlock(&g_application_wires_mutex);
+    application_wires_release(previous);
+}
+#endif
+
 static void application_image_release(ApplicationImage *image) {
     if (image == nullptr || atomic_fetch_sub_explicit(&image->refs, 1, memory_order_acq_rel) != 1) return;
-    for (u32 index = 0; index < image->count; index++) free((void *) image->entries[index].wire);
-    free(image->entries);
+    application_wires_release(image->wires);
     free(image->entry_path);
     mal_worker_domain_release(image->domain);
     free(image);
@@ -2597,11 +2658,15 @@ static void *worker_thread_main(void *arg) {
     thread->exit_code = 0;
     MalLoadedRuntimeImage *loaded = nullptr;
     const MalRuntimeImage *image = thread->entry->image;
-    if (!cancelled && image == nullptr && thread->entry->wire != nullptr) {
-        // Splicing mutates loaded wire data, so each isolate loads its own copy.
+    if (!cancelled && image == nullptr) {
         const char *error = "ok";
-        loaded = mal_runtime_image_load_with_host_resolver(
-            (const u8 *) thread->entry->wire, thread->entry->wire_size, &error, thread->entry->resolve_installer);
+        if (thread->application != nullptr) {
+            loaded = application_wire_decode(
+                thread->application->image->wires->ordered[0], &error, thread->entry->resolve_installer);
+        } else if (thread->entry->wire != nullptr) {
+            loaded = mal_runtime_image_load_with_host_resolver(
+                (const u8 *) thread->entry->wire, thread->entry->wire_size, &error, thread->entry->resolve_installer);
+        }
         image = loaded != nullptr ? mal_loaded_runtime_image_get(loaded) : nullptr;
     }
     MalVm *vm = cancelled || image == nullptr ? nullptr : calloc(1, sizeof(MalVm));
@@ -2656,14 +2721,13 @@ static void *worker_thread_main(void *arg) {
         callable = mal_vm_create_callable(vm, 0);
         mal_vm_run(vm, callable);
         if (thread->application != nullptr) {
-            ApplicationImage *bundle = thread->application->image;
+            ApplicationWires *wires = thread->application->image->wires;
             for (u32 index = 0; !thrown(vm) && !worker_termination_check(vm); index++) {
                 mal_host_run_event_loop_until(vm, application_entry_settled, nullptr);
-                if (!application_entry_fulfilled(vm) || index + 1 == bundle->count) break;
-                MalWorkerEntry *fragment = &bundle->entries[index + 1];
+                if (!application_entry_fulfilled(vm) || index + 1 == wires->count) break;
                 const char *error = "invalid application fragment";
-                MalLoadedRuntimeImage *next = mal_runtime_image_load_with_host_resolver(
-                    (const u8 *) fragment->wire, fragment->wire_size, &error, fragment->resolve_installer);
+                MalLoadedRuntimeImage *next = application_wire_decode(
+                    wires->ordered[index + 1], &error, thread->entry->resolve_installer);
                 if (next == nullptr) { mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, error); break; }
                 const MalRuntimeImage *program = mal_loaded_runtime_image_get(next);
                 i32 entry_index = mal_vm_splice_runtime_image(vm, program);
@@ -4066,6 +4130,9 @@ void mal_workers_shutdown(MalVm *vm) {
         application_image_release(handle->image);
         free(handle);
     }
+#if MAL_DEVELOPMENT_API
+    application_wires_publish(vm, nullptr);
+#endif
     mal_worker_domain_release(iso->domain);
     owner_release(owner);
     g_isolate = nullptr;
@@ -4140,19 +4207,95 @@ static bool application_boolean(MalVm *vm, MalValue object, const char *name, bo
     return true;
 }
 
-static byte *application_read_wire(const char *path, usize *length) {
+static ApplicationWires *application_wires_new(u32 count) {
+    ApplicationWires *wires = calloc(1, sizeof(ApplicationWires));
+    if (wires == nullptr) return nullptr;
+    atomic_init(&wires->refs, 1);
+    wires->ordered = calloc(count, sizeof(*wires->ordered));
+    wires->lookup = calloc(count, 2 * sizeof(*wires->lookup));
+    if (wires->ordered == nullptr || wires->lookup == nullptr) {
+        application_wires_release(wires);
+        return nullptr;
+    }
+    wires->count = count;
+    wires->lookup_capacity = (usize) count * 2;
+    return wires;
+}
+
+static bool application_wire_same_file(const struct stat *a, const struct stat *b) {
+#if defined(__APPLE__)
+    struct timespec a_modified = a->st_mtimespec, b_modified = b->st_mtimespec;
+    struct timespec a_changed = a->st_ctimespec, b_changed = b->st_ctimespec;
+#else
+    struct timespec a_modified = a->st_mtim, b_modified = b->st_mtim;
+    struct timespec a_changed = a->st_ctim, b_changed = b->st_ctim;
+#endif
+    // The change time catches writes followed by restoring the modification time.
+    return a->st_dev == b->st_dev && a->st_ino == b->st_ino && a->st_size == b->st_size
+        && a_modified.tv_sec == b_modified.tv_sec && a_modified.tv_nsec == b_modified.tv_nsec
+        && a_changed.tv_sec == b_changed.tv_sec && a_changed.tv_nsec == b_changed.tv_nsec;
+}
+
+static ApplicationWire **application_wire_slot(
+    ApplicationWires *wires, const struct stat *stamp, const char *digest) {
+    usize index = (u64) stamp->st_ino % wires->lookup_capacity;
+    ApplicationWire *wire = wires->lookup[index];
+    while (wire != nullptr && (!application_wire_same_file(&wire->stamp, stamp)
+        || memcmp(wire->digest, digest, sizeof(wire->digest)) != 0)) {
+        index = (index + 1) % wires->lookup_capacity;
+        wire = wires->lookup[index];
+    }
+    return &wires->lookup[index];
+}
+
+static ApplicationWire *application_wire_read(
+    const char *path, const struct stat *stamp, const char *digest) {
     FILE *file = fopen(path, "rb");
     if (file == nullptr) return nullptr;
-    if (fseeko(file, 0, SEEK_END) != 0) { fclose(file); return nullptr; }
-    off_t size = ftello(file);
-    if (size <= 0 || (u64) size > SIZE_MAX || fseeko(file, 0, SEEK_SET) != 0) { fclose(file); return nullptr; }
-    byte *bytes = malloc((usize) size);
-    if (bytes == nullptr || fread(bytes, 1, (usize) size, file) != (usize) size) {
-        free(bytes); fclose(file); return nullptr;
+    struct stat opened;
+    usize length = (usize) stamp->st_size;
+    ApplicationWire *wire = nullptr;
+    if (fstat(fileno(file), &opened) == 0 && application_wire_same_file(stamp, &opened)) {
+        wire = malloc(sizeof(ApplicationWire) + length);
     }
+    bool read = wire != nullptr && fread(wire->bytes, 1, length, file) == length
+        && fstat(fileno(file), &opened) == 0 && application_wire_same_file(stamp, &opened);
     fclose(file);
-    *length = (usize) size;
-    return bytes;
+    if (!read) goto failed;
+
+    MalSha256 hash;
+    u8 actual[32];
+    byte hex[64];
+    mal_sha256_init(&hash);
+    mal_sha256_update(&hash, (const u8 *) wire->bytes, length);
+    mal_sha256_final(&hash, actual);
+    mal_hex_encode_lower((const byte *) actual, sizeof(actual), hex);
+    if (memcmp(hex, digest, sizeof(hex)) != 0) goto failed;
+    MalLoadedRuntimeImage *loaded = mal_runtime_image_load_with_host_resolver(
+        (const u8 *) wire->bytes, length, nullptr, mal_host_resolve_installer);
+    if (loaded == nullptr) goto failed;
+    atomic_init(&wire->refs, 1);
+    atomic_init(&wire->first_load, loaded);
+    wire->stamp = *stamp;
+    memcpy(wire->digest, hex, sizeof(wire->digest));
+    return wire;
+failed:
+    free(wire);
+    return nullptr;
+}
+
+static ApplicationWire *application_wire_get(
+    ApplicationWires *current, ApplicationWires *previous, const char *path, const char *digest) {
+    struct stat stamp;
+    if (stat(path, &stamp) != 0 || !S_ISREG(stamp.st_mode)
+        || stamp.st_size <= 0 || (u64) stamp.st_size > SIZE_MAX - sizeof(ApplicationWire)) return nullptr;
+    ApplicationWire **slot = application_wire_slot(current, &stamp, digest);
+    if (*slot != nullptr) return *slot;
+    ApplicationWire *wire = previous != nullptr ? *application_wire_slot(previous, &stamp, digest) : nullptr;
+    if (wire != nullptr) atomic_fetch_add_explicit(&wire->refs, 1, memory_order_relaxed);
+    else wire = application_wire_read(path, &stamp, digest);
+    *slot = wire;
+    return wire;
 }
 
 static ApplicationHandle *application_handle(MalValue value) {
@@ -4171,6 +4314,7 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     ApplicationImage *image = nullptr;
+    ApplicationWires *previous = nullptr;
     // Validated only: each image's install table applies its own host personality.
     bool web, node;
     if (!get_named(vm, roots[0], "schema", &roots[1]) || !mal_value_is_int32(roots[1]) || mal_value_to_i32(roots[1]) != 1
@@ -4211,35 +4355,26 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
     if (!get_named(vm, roots[0], "wires", &roots[1]) || !mal_value_is_array_object(roots[1])) goto failed;
     u32 count = mal_array_object_length(mal_value_to_array_object(roots[1]));
     if (count == 0) goto failed;
-    image->entries = calloc(count, sizeof(MalWorkerEntry));
-    if (image->entries == nullptr) { mal_vm_throw_allocation_error(vm); goto failed; }
-    image->count = count;
+    image->entry.href = image->entry_path;
+    image->entry.resolve_installer = mal_host_resolve_installer;
+    image->wires = application_wires_new(count);
+    if (image->wires == nullptr) { mal_vm_throw_allocation_error(vm); goto failed; }
+    pthread_mutex_lock(&g_application_wires_mutex);
+    previous = g_application_wires;
+    if (previous != nullptr) atomic_fetch_add_explicit(&previous->refs, 1, memory_order_relaxed);
+    pthread_mutex_unlock(&g_application_wires_mutex);
     for (u32 index = 0; index < count; index++) {
         if (!mal_vm_get_property(vm, roots[1], mal_key_index(index), &roots[2]) || !mal_value_is_object(roots[2])) goto failed;
         if (!get_named(vm, roots[2], "path", &roots[3]) || !mal_value_is_string(roots[3])) goto failed;
         char *path = application_string(roots[3]);
         if (path == nullptr) goto failed;
-        MalWorkerEntry *entry = &image->entries[index];
-        entry->wire = application_read_wire(path, &entry->wire_size);
+        char *digest = get_named(vm, roots[2], "sha256", &roots[3]) ? application_string(roots[3]) : nullptr;
+        ApplicationWire *wire = digest != nullptr && strlen(digest) == 64
+            ? application_wire_get(image->wires, previous, path, digest) : nullptr;
         free(path);
-        if (entry->wire == nullptr) goto failed;
-        if (!get_named(vm, roots[2], "sha256", &roots[3]) || !mal_value_is_string(roots[3])) goto failed;
-        char *digest = application_string(roots[3]);
-        MalSha256 hash;
-        u8 actual[32]; byte hex[64];
-        mal_sha256_init(&hash);
-        mal_sha256_update(&hash, (const u8 *) entry->wire, entry->wire_size);
-        mal_sha256_final(&hash, actual);
-        mal_hex_encode_lower((const byte *) actual, sizeof(actual), hex);
-        bool matches = digest != nullptr && strlen(digest) == 64 && memcmp(digest, hex, 64) == 0;
         free(digest);
-        if (!matches) goto failed;
-        const char *error = "invalid wire";
-        MalLoadedRuntimeImage *check = mal_runtime_image_load_with_host_resolver((const u8 *) entry->wire, entry->wire_size, &error, mal_host_resolve_installer);
-        if (check == nullptr) goto failed;
-        mal_loaded_runtime_image_free(check);
-        entry->href = image->entry_path;
-        entry->resolve_installer = mal_host_resolve_installer;
+        if (wire == nullptr) goto failed;
+        image->wires->ordered[index] = wire;
     }
     if (!mal_workers_install(vm) || thrown(vm)) goto failed;
     urls_prune(g_isolate);
@@ -4254,10 +4389,13 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
     handle->image = image;
     handle->next = g_isolate->applications;
     g_isolate->applications = handle;
+    application_wires_publish(vm, image->wires);
+    application_wires_release(previous);
     MalValue result = roots[3];
     mal_gc_unroot(&root);
     return result;
 failed:
+    application_wires_release(previous);
     application_image_release(image);
     if (!thrown(vm)) mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Invalid application image descriptor, artifact or digest");
     mal_gc_unroot(&root);
@@ -4320,7 +4458,7 @@ static MalValue application_launch(MalVm *vm, MalValue self, const MalValue *arg
         launch->retain_listeners = mal_value_to_boolean(value);
     }
     MalValue worker_args[] = {mal_value_new_undefined(), options};
-    MalValue result = worker_construct_entry(vm, worker_args, 2, false, launch->image->domain, &launch->image->entries[0], launch);
+    MalValue result = worker_construct_entry(vm, worker_args, 2, false, launch->image->domain, &launch->image->entry, launch);
     application_launch_release(launch);
     mal_gc_unroot(&root);
     return result;
