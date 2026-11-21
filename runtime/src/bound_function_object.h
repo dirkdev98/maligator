@@ -3,18 +3,27 @@
 #include "./defaults.h"
 #include "object.h"
 
+/**
+ * A compact cell: the prototype word, then the `length` and `name` fields, then the
+ * bound state and the bound arguments. Property growth moves the fields out of the
+ * cell, as for any compact object whose inline payload is full.
+ */
 typedef struct MalBoundFunctionObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObject *prototype;
+    MalValue metadata[2];
     MalValue target;
     MalValue bound_this;
     i32 bound_count;
-    /** Trailing argument vector coallocated after the two metadata slots. */
-    MalValue *bound_args;
 } MalBoundFunctionObject;
 
-static_assert(sizeof(MalBoundFunctionObject) <= 80,
+static_assert(sizeof(MalBoundFunctionObject) <= 64,
               "bound function outgrew its packed layout");
+
+/** [[BoundArguments]], coallocated after the cell. */
+static inline MalValue *mal_bound_function_object_args(const MalBoundFunctionObject *bound) {
+    return (MalValue *) (bound + 1);
+}
 
 #define MAL_BOUND_INLINE_ARGS 16
 
@@ -50,7 +59,7 @@ MalBoundFunctionObject *mal_bound_function_object_new(
     i32 bound_count
 );
 
-/** Install the bound function's `length`, then `name`, in coallocated shape slots. */
+/** Install the bound function's `length`, then `name`, in its inline fields. */
 void mal_bound_function_object_init_metadata(
     MalBoundFunctionObject *bound,
     MalKey length_key,

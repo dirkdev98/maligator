@@ -5411,7 +5411,7 @@ __attribute__((noinline)) MAL_SCALAR_COPIES static MalValue mal_vm_call_bound_va
         if (bound_count == 0)
             return mal_vm_dispatch_cached_value(
                 vm, bound->target, bound->bound_this, args, arg_count);
-        const MalValue *bound_args = bound->bound_args;
+        const MalValue *bound_args = mal_bound_function_object_args(bound);
         for (i32 i = 0; i < bound_count; i++) inline_args[i] = bound_args[i];
         for (i32 i = 0; i < arg_count; i++) inline_args[bound_count + i] = args[i];
         return mal_vm_dispatch_cached_value(

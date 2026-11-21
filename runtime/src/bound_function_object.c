@@ -8,7 +8,9 @@
 #include "value.h"
 
 static_assert(sizeof(MalBoundFunctionObject) % alignof(MalValue) == 0,
-              "bound function trailing metadata slots are misaligned");
+              "bound function trailing arguments are misaligned");
+static_assert(offsetof(MalBoundFunctionObject, metadata) == sizeof(MalObject) + sizeof(void *),
+              "compact bound function fields must follow the prototype word");
 
 MalBoundFunctionObject *mal_bound_function_object_new(
     MalHeap *heap,
@@ -18,21 +20,28 @@ MalBoundFunctionObject *mal_bound_function_object_new(
     const MalValue *bound_args,
     i32 bound_count
 ) {
-    usize trailing_count = 2 + (usize) bound_count;
     MalBoundFunctionObject *bound = mal_heap_alloc(
         heap,
-        sizeof(MalBoundFunctionObject) + trailing_count * sizeof(MalValue),
+        sizeof(MalBoundFunctionObject) + (usize) bound_count * sizeof(MalValue),
         MAL_HEAP_BOUND_FUNCTION_OBJECT);
-    mal_object_init(heap, &bound->object, MAL_HEAP_BOUND_FUNCTION_OBJECT, prototype);
+    MalHeapHeader header = bound->object.header;
+    bound->object = (MalObject) {
+        .header = header,
+        .extensible = true,
+        .storage_kind = MAL_OBJECT_COMPACT,
+        // The metadata fields follow; bound state after them must never be grown into.
+        .inline_payload_eights = 2,
+        .shape = mal_shape_root(heap),
+    };
+    bound->prototype = prototype;
+    mal_object_mark_as_prototype(prototype);
 
     bound->target = target;
     bound->bound_this = bound_this;
     bound->bound_count = bound_count;
-    bound->bound_args = bound_count > 0
-        ? ((MalValue *) (bound + 1)) + 2
-        : nullptr;
+    MalValue *args = mal_bound_function_object_args(bound);
     for (i32 i = 0; i < bound_count; i++) {
-        bound->bound_args[i] = bound_args[i];
+        args[i] = bound_args[i];
     }
 
     return bound;
@@ -52,8 +61,8 @@ void mal_bound_function_object_init_metadata(
     MalShape *shape =
         mal_shape_add_property(object->shape, length_key, MAL_PROPERTY_CONFIGURABLE);
     shape = mal_shape_add_property(shape, name_key, MAL_PROPERTY_CONFIGURABLE);
+    object->slot_capacity = 2;
     object->shape = shape;
-    mal_object_set_fields_pointer(object, (MalValue *) (bound + 1));
     mal_object_field_initialize(object, shape, 0, length);
     mal_object_field_initialize(object, shape, 1, name);
     // Target metadata lookup can run user code and collect after the bound cell
@@ -131,7 +140,7 @@ MalBoundResolution mal_bound_function_object_resolve(
         MalBoundFunctionObject *bound = mal_value_to_bound_function_object(current);
         front -= bound->bound_count;
         for (i32 i = 0; i < bound->bound_count; i++) {
-            merged_args[front + i] = bound->bound_args[i];
+            merged_args[front + i] = mal_bound_function_object_args(bound)[i];
         }
 
         current = bound->target;

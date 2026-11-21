@@ -1851,7 +1851,7 @@ static void mal_gc_trace_cell_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
             MalBoundFunctionObject *bound = (MalBoundFunctionObject *) cell;
             mal_gc_mark_value_in(ctx, bound->target);
             mal_gc_mark_value_in(ctx, bound->bound_this);
-            mal_gc_mark_values_in(ctx, bound->bound_args, bound->bound_count);
+            mal_gc_mark_values_in(ctx, mal_bound_function_object_args(bound), bound->bound_count);
             break;
         }
         case MAL_HEAP_PRIMITIVE_WRAPPER_OBJECT:

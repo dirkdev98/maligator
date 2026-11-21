@@ -407,7 +407,8 @@ static inline MalValue mal_vm_load_bound_function_slot(MalValue callee, i32 slot
     const MalBoundFunctionObject *bound = mal_value_to_bound_function_object(callee);
     if (slot == 0) return bound->target;
     if (slot == 1) return bound->bound_this;
-    return slot - 2 < bound->bound_count ? bound->bound_args[slot - 2] : MAL_VALUE_UNDEFINED;
+    return slot - 2 < bound->bound_count
+        ? mal_bound_function_object_args(bound)[slot - 2] : MAL_VALUE_UNDEFINED;
 }
 
 /**

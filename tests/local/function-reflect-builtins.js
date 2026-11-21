@@ -689,4 +689,24 @@ for (let index = 0; index < propertyClosures.length; index++) {
 	);
 }
 
+const boundTarget = function boundTarget(a, b, c) {
+	return [this.tag, a, b, c].join("/");
+};
+const boundWithProperties = boundTarget.bind({ tag: "t" }, 1);
+boundWithProperties.first = 1;
+boundWithProperties.second = 2;
+boundWithProperties.third = 3;
+assert(
+	Reflect.ownKeys(boundWithProperties).join(",") === "length,name,first,second,third",
+	"bound function property growth keeps key order",
+);
+assert(
+	boundWithProperties(2, 3) === "t/1/2/3" && boundWithProperties.third === 3,
+	"bound function state survives property growth",
+);
+assert(
+	boundWithProperties.name === "bound boundTarget" && boundWithProperties.length === 2,
+	"bound function metadata survives property growth",
+);
+
 console.log("function-reflect-builtins PASS");
