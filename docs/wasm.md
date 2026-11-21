@@ -36,11 +36,12 @@ The doctor compiles and runs a small C23 reactor. The build emits
 npm run wasm:build -- --entry example.mts --output .cache/wasm/example.wasm
 ```
 
-The default host profile has locked primordials and RegExp enabled. Eval, realms,
-Intl, Temporal, host APIs, and embedded assets are unavailable in the Wasm host.
-The build rejects unsupported settings and host imports. Snippet compilation settings
-are independent: the compiler can describe native programs with capabilities that
-its own engine host does not install.
+The default reactor profile has locked primordials and RegExp enabled. The build
+requires eval, realms, Intl and Temporal to be disabled. It rejects embedded
+assets, host module imports and direct references to host globals such as
+`fetch` and `process`. Computed global access reads the reactor's own global
+object. The Explorer's snippet settings describe the program being compiled and
+can enable native capabilities independently of the reactor profile.
 
 The build shares the normal compiler, feature derivation, cache leases and verified
 artifact store. Its source, C object, archive, Rust library and link stages have

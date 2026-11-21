@@ -35,6 +35,7 @@ import {
 	lookupHostModule,
 	SOURCE_HOST_MODULES,
 	supportedHostModuleIds,
+	unsupportedHostApi,
 } from "./host-modules.ts";
 import { isImportMetaResolveCall } from "./import-meta.ts";
 import { staticModuleClosure } from "./module-closure.ts";
@@ -539,6 +540,8 @@ export function buildModuleGraph(
 ): ModuleGraph {
 	const entry = path.resolve(entryPath);
 	const modules = new Map<string, ModuleRecord>();
+	const target = options.execution?.target;
+	const wasmTarget = target?.platform === "wasi" ? target.triple : undefined;
 
 	const configuredConditions =
 		options.buildConfig?.modules.conditions ?? DEFAULT_EXPORT_CONDITIONS;
@@ -581,6 +584,7 @@ export function buildModuleGraph(
 						sourceRoot,
 						goalOverride: options.goalOverride,
 						dependencyGoalOverride: options.dependencyGoalOverride,
+						wasmTarget,
 						stripTypes: options.stripTypes !== undefined,
 						virtualModules: [...(options.virtualModules ?? [])],
 					}),
@@ -861,6 +865,12 @@ export function buildModuleGraph(
 										return [{ ...dependency, resolvedPath: null }];
 									}
 									if (isEmbedRequest(dependency.specifier)) {
+										if (wasmTarget !== undefined)
+											throw unsupportedHostApi(
+												dependency.specifier,
+												wasmTarget,
+												filePath,
+											);
 										if (dependency.kind !== "import")
 											throw new SyntaxDiagnostic(
 												"resolution",
@@ -881,7 +891,22 @@ export function buildModuleGraph(
 									const aliasedSpecifier =
 										options.buildConfig?.modules.aliases[dependency.specifier] ??
 										dependency.specifier;
+									const canonicalHostId = canonicalNodeHostModuleId(aliasedSpecifier);
+									const canonicalBuiltinId = canonicalNodeBuiltinId(aliasedSpecifier);
 									const platform = lookupPlatformModule(aliasedSpecifier);
+									if (
+										wasmTarget !== undefined &&
+										(canonicalHostId !== undefined ||
+											canonicalBuiltinId !== undefined ||
+											isNodeSpecifier(aliasedSpecifier) ||
+											platform?.kind === "native" ||
+											ctx.ffiModules.has(aliasedSpecifier))
+									)
+										throw unsupportedHostApi(
+											canonicalHostId ?? canonicalBuiltinId ?? aliasedSpecifier,
+											wasmTarget,
+											filePath,
+										);
 									if (
 										(platform as { internal?: boolean } | undefined)?.internal === true &&
 										lookupPlatformModule(filePath)?.kind !== "source" &&
@@ -928,8 +953,6 @@ export function buildModuleGraph(
 										}
 										return [{ ...dependency, resolvedPath: aliasedSpecifier }];
 									}
-									const canonicalHostId = canonicalNodeHostModuleId(aliasedSpecifier);
-									const canonicalBuiltinId = canonicalNodeBuiltinId(aliasedSpecifier);
 									const resolved = resolveSpecifier(
 										canonicalHostId ?? canonicalBuiltinId ?? aliasedSpecifier,
 										sourcePath ?? filePath,
@@ -970,6 +993,8 @@ export function buildModuleGraph(
 									}
 
 									const catalogSource = catalogFiles.sources.get(resolved.path);
+									if (wasmTarget !== undefined && catalogSource?.startsWith("node:"))
+										throw unsupportedHostApi(catalogSource, wasmTarget, filePath);
 									if (dependency.importType !== undefined) {
 										if (catalogSource !== undefined) rejectDataImport();
 										return [
@@ -1132,7 +1157,7 @@ export function buildModuleGraph(
 	let sourceBuiltinLookup = false;
 	const scannedSourceModules = new Set<string>();
 	const loadRuntimeSourceProviders = (): boolean => {
-		if (sourceBuiltinLookup) return false;
+		if (sourceBuiltinLookup || wasmTarget !== undefined) return false;
 		const count = modules.size;
 		for (const record of modules.values()) {
 			if (

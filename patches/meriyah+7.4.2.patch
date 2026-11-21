@@ -1,8 +1,27 @@
 diff --git a/node_modules/meriyah/dist/meriyah.cjs b/node_modules/meriyah/dist/meriyah.cjs
-index 8663d67..0415f4a 100644
+index 8663d67..af7417f 100644
 --- a/node_modules/meriyah/dist/meriyah.cjs
 +++ b/node_modules/meriyah/dist/meriyah.cjs
-@@ -3298,11 +3298,11 @@ function finishExpressionOrLabelledStatement(parser, context, scope, privateScop
+@@ -3037,11 +3037,13 @@ class Parser {
+         }
+         return undefined;
+     }
+-    cloneIdentifier(original) {
+-        return structuredClone(original);
+-    }
+-    cloneStringLiteral(original) {
+-        return structuredClone(original);
++    cloneName(original) {
++        const clone = { ...original };
++        if (original.range)
++            clone.range = [...original.range];
++        if (original.loc)
++            clone.loc = { ...original.loc, start: { ...original.loc.start }, end: { ...original.loc.end } };
++        return clone;
+     }
+ }
+ function pushComment(comments, options) {
+@@ -3298,11 +3300,11 @@ function finishExpressionOrLabelledStatement(parser, context, scope, privateScop
      }
      return parseExpressionStatement(parser, context, expression, tokenStart);
  }
@@ -16,7 +35,7 @@ index 8663d67..0415f4a 100644
      }
      consume(parser, context | 32, 1074790415);
      return parser.finishNode({
-@@ -3635,8 +3635,8 @@ function parseCatchBlock(parser, context, scope, privateScope, labels, start) {
+@@ -3635,8 +3637,8 @@ function parseCatchBlock(parser, context, scope, privateScope, labels, start) {
      }, start);
  }
  function parseStaticBlock(parser, context, scope, privateScope, start) {
@@ -27,7 +46,7 @@ index 8663d67..0415f4a 100644
          4096 |
          1024 |
          4 |
-@@ -3648,7 +3648,7 @@ function parseStaticBlock(parser, context, scope, privateScope, start) {
+@@ -3648,7 +3650,7 @@ function parseStaticBlock(parser, context, scope, privateScope, start) {
              2048 |
              524288 |
              65536;
@@ -36,11 +55,66 @@ index 8663d67..0415f4a 100644
  }
  function parseDoWhileStatement(parser, context, scope, privateScope, labels) {
      const start = parser.tokenStart;
+@@ -4317,7 +4319,7 @@ function parseImportSpecifierOrNamedImports(parser, context, scope, specifiers)
+         }
+         else if (imported.type === 'Identifier') {
+             validateBindingIdentifier(parser, context, 16, token, 0);
+-            local = parser.cloneIdentifier(imported);
++            local = parser.cloneName(imported);
+         }
+         else {
+             parser.report(25, KeywordDescTable[77932 & 255]);
+@@ -4472,7 +4474,7 @@ function parseExportDeclaration(parser, context, scope) {
+                         tmpExportedNames.push(parser.tokenValue);
+                         tmpExportedBindings.push(parser.tokenValue);
+                     }
+-                    exported = local.type === 'Literal' ? parser.cloneStringLiteral(local) : parser.cloneIdentifier(local);
++                    exported = parser.cloneName(local);
+                 }
+                 specifiers.push(parser.finishNode({
+                     type: 'ExportSpecifier',
+@@ -6008,7 +6010,7 @@ function parseObjectLiteralOrPattern(parser, context, scope, privateScope, skipI
+                                 (parser.destructible & 128 ? 128 : 0);
+                         value = parser.finishNode({
+                             type: 'AssignmentPattern',
+-                            left: parser.cloneIdentifier(key),
++                            left: parser.cloneName(key),
+                             right,
+                         }, tokenStart);
+                     }
+@@ -6016,7 +6018,7 @@ function parseObjectLiteralOrPattern(parser, context, scope, privateScope, skipI
+                         destructible |=
+                             ((token & 255) === (209006 & 255) ? 128 : 0) |
+                                 (token === -2147483527 ? 16 : 0);
+-                        value = parser.cloneIdentifier(key);
++                        value = parser.cloneName(key);
+                     }
+                 }
+                 else if (consumeOpt(parser, context | 32, 21)) {
 diff --git a/node_modules/meriyah/dist/meriyah.mjs b/node_modules/meriyah/dist/meriyah.mjs
-index 070becb..db74580 100644
+index 070becb..cb02498 100644
 --- a/node_modules/meriyah/dist/meriyah.mjs
 +++ b/node_modules/meriyah/dist/meriyah.mjs
-@@ -3296,11 +3296,11 @@ function finishExpressionOrLabelledStatement(parser, context, scope, privateScop
+@@ -3035,11 +3035,13 @@ class Parser {
+         }
+         return undefined;
+     }
+-    cloneIdentifier(original) {
+-        return structuredClone(original);
+-    }
+-    cloneStringLiteral(original) {
+-        return structuredClone(original);
++    cloneName(original) {
++        const clone = { ...original };
++        if (original.range)
++            clone.range = [...original.range];
++        if (original.loc)
++            clone.loc = { ...original.loc, start: { ...original.loc.start }, end: { ...original.loc.end } };
++        return clone;
+     }
+ }
+ function pushComment(comments, options) {
+@@ -3296,11 +3298,11 @@ function finishExpressionOrLabelledStatement(parser, context, scope, privateScop
      }
      return parseExpressionStatement(parser, context, expression, tokenStart);
  }
@@ -54,7 +128,7 @@ index 070becb..db74580 100644
      }
      consume(parser, context | 32, 1074790415);
      return parser.finishNode({
-@@ -3633,8 +3633,8 @@ function parseCatchBlock(parser, context, scope, privateScope, labels, start) {
+@@ -3633,8 +3635,8 @@ function parseCatchBlock(parser, context, scope, privateScope, labels, start) {
      }, start);
  }
  function parseStaticBlock(parser, context, scope, privateScope, start) {
@@ -65,7 +139,7 @@ index 070becb..db74580 100644
          4096 |
          1024 |
          4 |
-@@ -3646,7 +3646,7 @@ function parseStaticBlock(parser, context, scope, privateScope, start) {
+@@ -3646,7 +3648,7 @@ function parseStaticBlock(parser, context, scope, privateScope, start) {
              2048 |
              524288 |
              65536;
@@ -74,3 +148,39 @@ index 070becb..db74580 100644
  }
  function parseDoWhileStatement(parser, context, scope, privateScope, labels) {
      const start = parser.tokenStart;
+@@ -4315,7 +4317,7 @@ function parseImportSpecifierOrNamedImports(parser, context, scope, specifiers)
+         }
+         else if (imported.type === 'Identifier') {
+             validateBindingIdentifier(parser, context, 16, token, 0);
+-            local = parser.cloneIdentifier(imported);
++            local = parser.cloneName(imported);
+         }
+         else {
+             parser.report(25, KeywordDescTable[77932 & 255]);
+@@ -4470,7 +4472,7 @@ function parseExportDeclaration(parser, context, scope) {
+                         tmpExportedNames.push(parser.tokenValue);
+                         tmpExportedBindings.push(parser.tokenValue);
+                     }
+-                    exported = local.type === 'Literal' ? parser.cloneStringLiteral(local) : parser.cloneIdentifier(local);
++                    exported = parser.cloneName(local);
+                 }
+                 specifiers.push(parser.finishNode({
+                     type: 'ExportSpecifier',
+@@ -6006,7 +6008,7 @@ function parseObjectLiteralOrPattern(parser, context, scope, privateScope, skipI
+                                 (parser.destructible & 128 ? 128 : 0);
+                         value = parser.finishNode({
+                             type: 'AssignmentPattern',
+-                            left: parser.cloneIdentifier(key),
++                            left: parser.cloneName(key),
+                             right,
+                         }, tokenStart);
+                     }
+@@ -6014,7 +6016,7 @@ function parseObjectLiteralOrPattern(parser, context, scope, privateScope, skipI
+                         destructible |=
+                             ((token & 255) === (209006 & 255) ? 128 : 0) |
+                                 (token === -2147483527 ? 16 : 0);
+-                        value = parser.cloneIdentifier(key);
++                        value = parser.cloneName(key);
+                     }
+                 }
+                 else if (consumeOpt(parser, context | 32, 21)) {

@@ -1,7 +1,6 @@
-// `typeof` guard so this module loads on MalVm too (the self-hosted compiler),
-// where there is no `process` global — `typeof process` is then "undefined".
-export const debugEnabled =
-	typeof process !== "undefined" && process.env.MAL_DEBUG === "true";
+import { debugEnabled } from "./compiler/shared/debug-env.ts";
+
+export { debugEnabled };
 
 export const log = {
 	debug(args: unknown, depth: number | null = null) {

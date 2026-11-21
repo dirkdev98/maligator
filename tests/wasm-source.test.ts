@@ -91,3 +91,35 @@ describe("Wasm source cache identity", () => {
 		expect(second.sourceIdentity).not.toBe(first.sourceIdentity);
 	});
 });
+
+describe("Wasm reactor capabilities", () => {
+	it.each([
+		["fetch", "globalThis.run = () => fetch('/items');"],
+		["Buffer", "globalThis.run = () => globalThis['Buffer'];"],
+		["process", "globalThis.run = () => typeof process;"],
+		["setTimeout", "globalThis.run = () => setTimeout(() => {}, 0);"],
+		["node:fs", "import 'node:fs';"],
+		["node:test", "globalThis.run = () => import('node:test');"],
+	])("diagnoses %s at compile time", (name, source) => {
+		const project = fixture({ "entry.mjs": source });
+		expect(() => project.prepare().compile(() => {})).toThrow(
+			`Host API '${name}' is unavailable on wasm32-wasip1`,
+		);
+	});
+
+	it("links language components for computed global reads", () => {
+		const project = fixture({
+			"entry.mjs": "globalThis.read = (key) => globalThis[key];",
+		});
+		const units = project.prepare().compile(() => {});
+		const installers = units.flatMap((unit) =>
+			[...unit.sourceChunks.join("").matchAll(/\.installer = (\w+)/g)].map(
+				(match) => match[1],
+			),
+		);
+		expect(installers.sort()).toEqual([
+			"mal_host_install_regexp",
+			"mal_host_install_unicode_normalization",
+		]);
+	});
+});

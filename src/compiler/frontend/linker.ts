@@ -8,7 +8,9 @@ import { traverseEstree } from "./estree-traversal.ts";
 import {
 	BUFFER_INSTALLER_SYMBOL,
 	HOST_GLOBAL_INSTALLERS,
+	isHostGlobal,
 	PROCESS_INSTALLER_SYMBOL,
+	unsupportedHostApi,
 } from "./host-modules.ts";
 import { staticModuleClosure } from "./module-closure.ts";
 import { moduleDependencyKey, moduleImportType } from "./module-import-type.ts";
@@ -179,7 +181,9 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 	};
 
 	const graph = program.graph;
-	const members = collectGlobalAndStringMemberUses(program, linkage);
+	const target = graph?.execution?.target;
+	const wasmTarget = target?.platform === "wasi" ? target.triple : undefined;
+	const members = collectGlobalAndStringMemberUses(program, linkage, wasmTarget);
 	if (!graph) {
 		return linkage;
 	}
@@ -848,6 +852,8 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		linkage.namespaceImports.set(file.path, list);
 	}
 
+	if (wasmTarget !== undefined) return linkage;
+
 	// Identifier reads and writes share the installed globalThis properties.
 	const freeGlobalUsed = (name: string) =>
 		program.files.some((file) =>
@@ -885,6 +891,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 function collectGlobalAndStringMemberUses(
 	program: SemanticProgram,
 	linkage: ModuleLinkage,
+	wasmTarget: string | undefined,
 ) {
 	const globalNames = ["globalThis", "global"];
 	const names = new Set<string>();
@@ -921,10 +928,21 @@ function collectGlobalAndStringMemberUses(
 			followed.add(node.object);
 			const key = staticMemberKey(node);
 			if (key === undefined) computed = true;
-			else names.add(key);
+			else {
+				if (wasmTarget !== undefined && isHostGlobal(key))
+					throw unsupportedHostApi(key, wasmTarget, file.path);
+				names.add(key);
+			}
 		});
 		for (const binding of file.scopes[0]?.bindings ?? []) {
-			if (!binding.undeclared || !globalNames.includes(binding.name)) continue;
+			if (!binding.undeclared) continue;
+			if (
+				wasmTarget !== undefined &&
+				binding.usageNodes.length > 0 &&
+				isHostGlobal(binding.name)
+			)
+				throw unsupportedHostApi(binding.name, wasmTarget, file.path);
+			if (!globalNames.includes(binding.name)) continue;
 			for (const usage of binding.usageNodes)
 				if (usage.type === "Identifier" && !followed.has(usage))
 					linkage.globalObjectEscapes.add(usage);

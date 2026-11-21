@@ -55,6 +55,7 @@ import {
 	PROCESS_INSTALLER_SYMBOL,
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
+	unsupportedHostApi,
 } from "../frontend/host-modules.ts";
 import { isImportMeta, isImportMetaResolveCall } from "../frontend/import-meta.ts";
 import { linkModules } from "../frontend/linker.ts";
@@ -1110,7 +1111,9 @@ export function constructSemanticProgramCore(
 		: null;
 	// Runtime eval runs the embedded compiler and its output in this isolate without
 	// installing globals, so both find the global object as the program left it.
-	const runtimeEval = program.facts.world.eval === "runtime";
+	const runtimeEval =
+		graph?.execution?.target.platform !== "wasi" &&
+		program.facts.world.eval === "runtime";
 	program.hostGlobals = HOST_GLOBAL_INSTALLERS.filter(
 		(host) => runtimeEval || linkage.hostGlobalInstallers.includes(host.installer),
 	).map((host) => ({ ...host, retained: runtimeEval }));
@@ -4172,6 +4175,9 @@ function emitImportMetaResolveFunction(
 	url: number,
 	filename: number,
 ): number {
+	const target = program.semantic.graph?.execution?.target;
+	if (target?.platform === "wasi")
+		throw unsupportedHostApi("import.meta.resolve", target.triple, file.path);
 	program.nodeModuleInstaller = hostInstallerSymbol("node:module");
 	const graph = program.semantic.graph;
 	const record = graph?.modules.get(file.path);
@@ -17304,7 +17310,8 @@ function retainUnfollowedLanguageMembers(program: CoreFrontendContext): void {
  * name or reflection selects them even without the personality.
  */
 function retainNodeErrorHooks(program: CoreFrontendContext): void {
-	program.languageInstallers.add(NODE_ERROR_HOOKS_INSTALLER);
+	if (program.semantic.graph?.execution?.target.platform !== "wasi")
+		program.languageInstallers.add(NODE_ERROR_HOOKS_INSTALLER);
 }
 
 function retainCommonJsLoader(
@@ -17316,8 +17323,12 @@ function retainCommonJsLoader(
 		fn.semanticFile.commonjs &&
 		binding.name === "require" &&
 		binding.declarationNode === fn.semanticFile.ast
-	)
+	) {
+		const target = program.semantic.graph?.execution?.target;
+		if (target?.platform === "wasi")
+			throw unsupportedHostApi("require", target.triple, fn.semanticFile.path);
 		program.nodeModuleInstaller = hostInstallerSymbol("node:module");
+	}
 }
 
 /** Mark a reachable free Node global and keep it on globalThis storage. */

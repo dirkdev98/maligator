@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { artifactDigest, artifactProducer } from "./artifact-store.ts";
-import { embedDeclarationsOf } from "./assets.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
+import { parseCliArgs } from "./cli.ts";
 import { compilerImplementationDigestForRoot } from "./compiler-cache-identity.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import { ESTREE_STOP, traverseEstree } from "./compiler/frontend/estree-traversal.ts";
@@ -11,6 +11,7 @@ import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
 import { compileEntrypoint } from "./compiler/pipeline/compile-program.ts";
 import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { lowerNativeStorage } from "./compiler/target/lower-native-storage.ts";
+import { executionTarget, resolveExecution } from "./platform/execution.ts";
 
 export function prepareWasmSource(
 	root: string,
@@ -18,11 +19,24 @@ export function prepareWasmSource(
 	config: ResolvedBuildConfig,
 	cache: string,
 ) {
+	const command = parseCliArgs(["build"]);
+	if (command.kind !== "build") throw new Error("Expected build command");
+	const execution = resolveExecution(command, config, {
+		compiled: true,
+		optimization: "full",
+		target: executionTarget("wasm32-wasip1"),
+	});
 	const compileOptions = {
 		buildConfig: config,
+		execution,
 		stripTypes: stripCompactTypes,
 		entryGoal: "module" as const,
 		coreInstrumentation: "off" as const,
+		// The embedded compiler has no process environment to read for MAL_DEBUG.
+		transformSource: {
+			files: new Set([path.resolve(root, "src/compiler/shared/debug-env.ts")]),
+			transform: () => "export const debugEnabled = false;",
+		},
 	};
 	const entryPath = path.resolve(root, entry);
 	const graph = buildModuleGraph(entryPath, compileOptions);
@@ -77,8 +91,6 @@ export function prepareWasmSource(
 					return execute();
 				},
 			});
-			if (embedDeclarationsOf([image.runtime]).length > 0)
-				throw new Error("The Wasm reactor has no file system to embed assets into");
 			// The reactor ignores the dev runner's entry path; observable module paths remain keyed.
 			// Wasm cannot scan its own stack, so its roots stay in shadow frames.
 			const portable = lowerNativeStorage(

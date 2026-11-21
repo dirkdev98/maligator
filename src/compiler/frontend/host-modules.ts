@@ -15,6 +15,7 @@
  * exports and installers remain eligible for dead-code elimination.
  */
 
+import { BuildConfigError } from "../../build-config-error.ts";
 import type { FfiCallbackReach, FfiDirectEntry } from "../../build-config-values.ts";
 import { PLATFORM_MODULES } from "../../platform/catalog.ts";
 import type { PlatformData, PlatformModule } from "../../platform/catalog.ts";
@@ -240,6 +241,19 @@ export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 
 export const REGEXP_INSTALLER = "mal_host_install_regexp";
 export const UNICODE_NORMALIZATION_INSTALLER = "mal_host_install_unicode_normalization";
+
+export function isHostGlobal(name: string): boolean {
+	return (
+		name === "process" ||
+		name === "global" ||
+		name === "Buffer" ||
+		HOST_GLOBAL_INSTALLERS.some(({ globals }) => globals.includes(name))
+	);
+}
+
+export function unsupportedHostApi(name: string, target: string, file: string): Error {
+	return new BuildConfigError(`Host API '${name}' is unavailable on ${target} (${file})`);
+}
 
 /**
  * Whether an image applies the host personality, so its driver must attach the host
