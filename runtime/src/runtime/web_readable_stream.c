@@ -4494,13 +4494,11 @@ static MalValue rs_from_pull(MalVm *vm, MalValue self,
 static MalValue rs_from_cancel(MalVm *vm, MalValue self,
     const MalValue *args, i32 argc, MalValue nt, MalValue callee);
 
-#if MAL_NODE
 static MAL_ISOLATE_LOCAL MalNodeBodyChunkConverter rs_node_chunk_converter;
 
 void mal_readable_stream_set_node_chunk_converter(MalNodeBodyChunkConverter converter) {
     rs_node_chunk_converter = converter;
 }
-#endif
 
 static MalValue rs_from_pull_fulfilled(MalVm *vm, MalValue self,
     const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
@@ -4525,7 +4523,6 @@ static MalValue rs_from_pull_fulfilled(MalVm *vm, MalValue self,
         goto done;
     }
     if (!mal_vm_get_property(vm, roots[1], mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_VALUE), &roots[2])) goto done;
-#if MAL_NODE
     if (bytes) {
         if (!mal_value_is_typed_array_object(roots[2])
             || mal_value_to_typed_array_object(roots[2])->kind != MAL_TA_UINT8) {
@@ -4555,9 +4552,6 @@ static MalValue rs_from_pull_fulfilled(MalVm *vm, MalValue self,
             goto done;
         }
     }
-#else
-    (void) bytes;
-#endif
     result = rs_controller_enqueue(vm, roots[0], &roots[2], 1, mal_value_new_undefined(), mal_value_new_undefined());
 done:
     mal_gc_unroot(&root);
@@ -4719,11 +4713,9 @@ static MalValue rs_from(MalVm *vm, MalValue self,
     return rs_from_iterable(vm, argc >= 1 ? args[0] : mal_value_new_undefined(), false);
 }
 
-#if MAL_NODE
 MalValue mal_readable_stream_from_node_body(MalVm *vm, MalValue value) {
     return rs_from_iterable(vm, value, true);
 }
-#endif
 
 static void rs_trace(MalHeapHeader *cell) {
     MalReadableStreamObject *object = (MalReadableStreamObject *) cell;

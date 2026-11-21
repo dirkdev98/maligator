@@ -1,7 +1,5 @@
 #include "web_events_message.h"
 
-#if MAL_NODE
-
 #include <stdio.h>
 #include <string.h>
 
@@ -267,5 +265,3 @@ MalValue mal_web_message_event_new(
     mal_gc_unroot(&root);
     return roots[3];
 }
-
-#endif /* MAL_NODE */

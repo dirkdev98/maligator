@@ -10,16 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if MAL_NODE
 #include "mal_argon2.h"
-#else
-/* Status codes are part of this module's contract regardless of the backend, so
- * the stub build keeps the same numbers rather than inventing its own. */
-#define MAL_ARGON2_STATUS_OK 0
-#define MAL_ARGON2_STATUS_INVALID_ARGUMENT (-1)
-#define MAL_ARGON2_STATUS_MEMORY (-2)
-#define MAL_ARGON2_STATUS_INTERNAL (-3)
-#endif
 
 #define MAL_ARGON2_DEFAULT_WORKERS 2
 #define MAL_ARGON2_DEFAULT_QUEUE_CAPACITY 64
@@ -196,7 +187,6 @@ static i32 mal_argon2_policy(
     if (limits->max_passes != 0 && params->passes > limits->max_passes) {
         return MAL_ARGON2_STATUS_POLICY;
     }
-#if MAL_NODE
     u64 blocks = 0;
     if (mal_argon2_block_count(params->parallelism, params->memory_kib, &blocks)
         != MAL_ARGON2_STATUS_OK) {
@@ -205,7 +195,6 @@ static i32 mal_argon2_policy(
     if (limits->max_memory_kib != 0 && blocks > (u64) limits->max_memory_kib) {
         return MAL_ARGON2_STATUS_POLICY;
     }
-#endif
     return MAL_ARGON2_STATUS_OK;
 }
 
@@ -225,10 +214,10 @@ static i32 mal_argon2_backend_derive(
     const MalArgon2Limits *limits) {
     i32 policy = mal_argon2_policy(params, limits);
     if (policy != MAL_ARGON2_STATUS_OK) return policy;
-#if MAL_NODE
-    // mal_argon2_init refuses a mismatched archive up front; this repeats the
-    // check on the one path that can be reached without a host context
-    // (argon2Sync in a hostless embedding). One compare against a derivation.
+    // The linked archive and mal_argon2.h must agree on the request layout and
+    // status codes, or every derivation would be mis-marshalled. The check sits on
+    // the derive path rather than in mal_argon2_init, so a host that never derives
+    // links no Rust argon2 code. One compare against a derivation.
     if (mal_argon2_abi_version() != MAL_ARGON2_ABI_VERSION) {
         return MAL_ARGON2_STATUS_INTERNAL;
     }
@@ -248,11 +237,6 @@ static i32 mal_argon2_backend_derive(
         .associated_data_len = params->associated_data_len,
     };
     return mal_argon2_hash(&request, (uint8_t *) out, out_len);
-#else
-    (void) out;
-    (void) out_len;
-    return MAL_ARGON2_STATUS_INTERNAL;
-#endif
 }
 
 /* Injected derive hooks stand in for the backend, but the resource policy is the
@@ -398,14 +382,6 @@ bool mal_argon2_init(MalArgon2 *argon2, MalHost *host) {
     if (argon2 == nullptr || host == nullptr) {
         return false;
     }
-#if MAL_NODE
-    // The linked archive and mal_argon2.h must agree on the request layout and
-    // status codes. A mismatch would mis-marshal every derivation, so refuse to
-    // stand the pool up rather than derive against the wrong struct.
-    if (mal_argon2_abi_version() != MAL_ARGON2_ABI_VERSION) {
-        return false;
-    }
-#endif
     argon2->state = nullptr;
     MalArgon2State *state = calloc(1, sizeof(MalArgon2State));
     if (state == nullptr) {

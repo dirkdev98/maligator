@@ -123,20 +123,16 @@ static bool client_transport_clean(MalHttpClient *client) {
     do { count = client_transport_read(client, &probe, 1); } while (count < 0 && errno == EINTR);
     if (count >= 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) return false;
     if (client->tls_input_offset < client->tls_input_length || client->tls_ciphertext != nullptr) return false;
-#if MAL_TLS
     if (client->tls != nullptr && (mal_tls_client_peer_closed(client->tls) != 0
         || mal_tls_client_is_handshaking(client->tls) != 0
         || mal_tls_client_has_pending_input(client->tls) != 0
         || mal_tls_client_wants_write(client->tls) != 0)) return false;
-#endif
     return true;
 }
 
 static void client_idle_free(MalHttpClientIdle *idle) {
     mal_net_close(idle->transport.fd);
-#if MAL_TLS
     mal_tls_client_free(&idle->transport.tls);
-#endif
     free(idle->transport.tls_input);
     free(idle->transport.host_name);
     free(idle);
@@ -168,9 +164,7 @@ static void client_idle_prune(MalHost *host) {
 static bool client_idle_take(MalHttpClient *client) {
     client_idle_prune(client->host);
     u64 config_id = 0;
-#if MAL_TLS
     config_id = mal_tls_client_config_id(client->tls);
-#endif
     MalHttpClientIdle **link = &client->host->http_idle_clients;
     while (*link != nullptr) {
         MalHttpClientIdle *idle = *link;
@@ -178,9 +172,7 @@ static bool client_idle_take(MalHttpClient *client) {
             && (idle->transport.tls != nullptr) == (client->tls != nullptr)
             && strcmp(idle->transport.host_name, client->host_name) == 0) {
             *link = idle->next;
-#if MAL_TLS
             mal_tls_client_free(&client->tls);
-#endif
             client->fd = idle->transport.fd;
             client->tls = idle->transport.tls;
             client->tls_input = idle->transport.tls_input;
@@ -209,9 +201,7 @@ static void client_idle_put(MalHttpClient *client) {
     idle->transport.tls_input_offset = client->tls_input_offset;
     idle->transport.host_name = client->host_name;
     idle->transport.port = client->port;
-#if MAL_TLS
     idle->tls_config_id = mal_tls_client_config_id(client->tls);
-#endif
     idle->expires_ns = mal_reactor_now_ns() + MAL_HTTP_CLIENT_IDLE_NS;
     client->fd = -1;
     client->tls = nullptr;
@@ -269,9 +259,7 @@ static void client_destroy(MalHttpClient *client) {
     }
     if (client->fd >= 0) mal_net_close(client->fd);
     mal_dns_result_release(client->connect_addresses);
-#if MAL_TLS
     mal_tls_client_free(&client->tls);
-#endif
     free(client->tls_input);
     free(client->tls_ciphertext);
     free(client->host_name);
@@ -604,7 +592,6 @@ static void client_process_response(MalHttpClient *client) {
 }
 
 static int client_flush_tls(MalHttpClient *client) {
-#if MAL_TLS
     if (client->tls == nullptr) return 1;
     usize turn = 0;
     while (turn < MAL_HTTP_CLIENT_IO_TURN) {
@@ -641,14 +628,9 @@ static int client_flush_tls(MalHttpClient *client) {
         return -1;
     }
     return 0;
-#else
-    (void) client;
-    return 1;
-#endif
 }
 
 static ssize_t client_transport_read(MalHttpClient *client, byte *bytes, usize length) {
-#if MAL_TLS
     if (client->tls != nullptr) {
         usize turn = 0;
         while (turn < MAL_HTTP_CLIENT_IO_TURN) {
@@ -696,12 +678,10 @@ static ssize_t client_transport_read(MalHttpClient *client, byte *bytes, usize l
         errno = EAGAIN;
         return -1;
     }
-#endif
     return read(client->fd, bytes, length);
 }
 
 static ssize_t client_transport_write(MalHttpClient *client, const byte *bytes, usize length) {
-#if MAL_TLS
     if (client->tls != nullptr) {
         usize consumed = 0;
         if (length > 16384) length = 16384;
@@ -711,7 +691,6 @@ static ssize_t client_transport_write(MalHttpClient *client, const byte *bytes, 
         }
         return (ssize_t)consumed;
     }
-#endif
     return mal_net_write(client->fd, bytes, length);
 }
 
@@ -793,12 +772,8 @@ static void client_read_ready(void *data) {
     MalHost *host = client->host;
     MalHostHandle operation = client->operation;
     client_process_response(client);
-#if MAL_TLS
     if (client_find(host, operation) == client && client->tls != nullptr)
         client_write_ready(client);
-#else
-    (void) host; (void) operation;
-#endif
 }
 
 static void client_write_ready(void *data) {
@@ -829,9 +804,7 @@ static void client_write_ready(void *data) {
             if (!client_arm_write(client)) client_fail(client, "Failed to continue TLS request");
             return;
         }
-#if MAL_TLS
         if (client->tls != nullptr && mal_tls_client_is_handshaking(client->tls) != 0) return;
-#endif
         if (client->write_head == nullptr || turn >= MAL_HTTP_CLIENT_IO_TURN) break;
         MalHttpClientWireWrite *write = client->write_head;
         byte *bytes;

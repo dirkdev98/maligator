@@ -23,9 +23,7 @@
 #include "vm_ops.h"
 #include "web_readable_stream_object.h"
 #include "web_surface.h"
-#if MAL_NODE
 #include "mal_zlib.h"
-#endif
 
 enum {
     TS_ALGORITHM_JS,
@@ -855,7 +853,6 @@ static bool ts_decode_chunk(MalVm *vm, MalReadableStreamObject *controller, MalV
     return ok;
 }
 
-#if MAL_NODE
 typedef struct TsZlibCodec {
     TsCodec base;
     MalZlibStream *stream;
@@ -1010,7 +1007,6 @@ static MalValue ts_decompression_constructor(MalVm *vm, MalValue self, const Mal
     (void) self;
     return ts_zlib_constructor(vm, args, argc, new_target, callee, false);
 }
-#endif
 
 static MalValue ts_text_encoder_stream_constructor(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -1150,7 +1146,6 @@ static bool web_streams_build(MalVm *vm, MalObject *exports) {
 
 MAL_WEB_GROUP_DEFINE(streams, MAL_WEB_GROUP_STREAMS, web_streams_build)
 
-#if MAL_NODE
 void mal_host_install_web_compression(MalVm *vm, const MalHostInstallSlot *slots,
     i32 count, const MalHostLaunchContext *launch) {
     (void) slots;
@@ -1178,4 +1173,3 @@ void mal_host_install_web_compression(MalVm *vm, const MalHostInstallSlot *slots
     }
     mal_gc_unroot(&root);
 }
-#endif

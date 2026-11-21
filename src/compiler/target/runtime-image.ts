@@ -2,6 +2,7 @@ import type { PlatformData } from "../../platform/catalog.ts";
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "../core/core-constructor-layout.ts";
 import {
+	HOST_PERSONALITY_INSTALLERS,
 	hostInstallerSymbol,
 	NODE_BUILTIN_LOADER_INSTALLER,
 	REGEXP_INSTALLER,
@@ -3924,6 +3925,10 @@ function buildHostInstalls(
 		}
 		return install;
 	};
+	// The personality sets the host surface the other installers build on.
+	for (const installer of context.data.retainedHostInstallers) {
+		if (HOST_PERSONALITY_INSTALLERS.includes(installer)) installFor(installer);
+	}
 	for (const hostModule of context.data.hostInstallCandidates) {
 		const usedExports: RuntimeImage["hostInstalls"][number]["exports"] = [];
 		for (const entry of hostModule.exports) {

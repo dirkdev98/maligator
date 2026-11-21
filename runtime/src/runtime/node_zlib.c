@@ -1,7 +1,5 @@
 #include "node_zlib.h"
 
-#if MAL_NODE
-
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -1486,5 +1484,3 @@ void mal_host_install_node_zlib(
     zlib_install_exports(vm, slots, count, roots[MODULE]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

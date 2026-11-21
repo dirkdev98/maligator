@@ -1,8 +1,6 @@
 #include "node_http2.h"
 #include "node_module.h"
 
-#if MAL_NODE
-
 #include <string.h>
 
 #include "function_object.h"
@@ -47,5 +45,3 @@ void mal_host_install_node_http2(
     mal_node_module_publish(vm, "node:http2", slots, count, roots[0]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

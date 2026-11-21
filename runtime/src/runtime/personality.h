@@ -2,5 +2,20 @@
 
 #include "vm.h"
 
-// A universal development binary applies the image's requested surface, rather than all compiled features.
+/*
+ * Apply a host personality the driver chose itself, such as a universal development
+ * binary applying the surfaces its images request. Links every personality.
+ */
 void mal_runtime_personality_install(MalVm *vm, bool web_platform, bool node);
+
+/*
+ * The host personalities a compiled image lists first in its install table, so a
+ * program links only its own. Each applies once per isolate: a personality the
+ * driver already applied wins.
+ */
+void mal_host_install_web_personality(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);
+void mal_host_install_node_personality(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);
+void mal_host_install_node_web_personality(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);

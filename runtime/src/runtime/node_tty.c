@@ -13,8 +13,6 @@ enum { MAL_TIOCGWINSZ = TIOCGWINSZ };
 #include "node_tty.h"
 #include "node_module.h"
 
-#if MAL_NODE
-
 #include "array_object.h"
 #include "function_object.h"
 #include "gc.h"
@@ -368,5 +366,3 @@ void mal_host_install_node_tty(
     mal_node_module_publish(vm, "node:tty", slots, count, values[TTY_DEFAULT]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

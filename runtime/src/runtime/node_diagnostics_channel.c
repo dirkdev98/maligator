@@ -1,8 +1,6 @@
 // Portions derived from Node.js lib/diagnostics_channel.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_diagnostics_channel.h"
 
-#if MAL_NODE
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -770,5 +768,3 @@ void mal_host_install_node_diagnostics_channel(
     }
     mal_node_module_publish(vm, "node:diagnostics_channel", slots, count, module);
 }
-
-#endif /* MAL_NODE */

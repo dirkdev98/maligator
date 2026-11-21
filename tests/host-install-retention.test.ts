@@ -6,8 +6,11 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { parseCliArgs } from "../src/cli.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import {
+	HOST_PERSONALITY_INSTALLERS,
 	hostInstallerSymbol,
+	hostPersonalityInstaller,
 	NODE_BUILTIN_LOADER_INSTALLER,
+	NODE_ERROR_HOOKS_INSTALLER,
 	NODE_INSTALLED_BUILTINS_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
 	REGEXP_INSTALLER,
@@ -53,6 +56,15 @@ function manifest(
 			install.installer,
 			install.exports.map((entry) => entry.name),
 		]),
+	);
+}
+
+/** The installers a program reaches, without the surface ones every image of its surface lists. */
+function reachedInstallers(installs: Map<string, Array<string>>): Array<string> {
+	return [...installs.keys()].filter(
+		(installer) =>
+			!HOST_PERSONALITY_INSTALLERS.includes(installer) &&
+			installer !== NODE_ERROR_HOOKS_INSTALLER,
 	);
 }
 
@@ -180,12 +192,36 @@ describe("maligator:http client retention", () => {
 	});
 });
 
+describe("host surface installers", () => {
+	const source = `globalThis.sink = new URL("https://example.com/").host;\n`;
+
+	it.each([
+		[
+			"the web surface",
+			web,
+			hostPersonalityInstaller({ webPlatform: true, node: false }),
+		],
+		[
+			"the Node surface",
+			node,
+			hostPersonalityInstaller({ webPlatform: false, node: true }),
+		],
+	])("lists the personality of %s first", (_name, config, personality) => {
+		expect([...manifest(source, config).keys()][0]).toBe(personality);
+	});
+
+	it("selects Node's Error hooks only on the Node surface", () => {
+		expect(manifest(source, node).has(NODE_ERROR_HOOKS_INSTALLER)).toBe(true);
+		expect(manifest(source, web).has(NODE_ERROR_HOOKS_INSTALLER)).toBe(false);
+	});
+});
+
 describe("process.getBuiltinModule retention", () => {
 	const os = hostInstallerSymbol("node:os");
 
 	it("installs only process for a program that reads static process members", () => {
 		const installs = manifest(`process.stdout.write("hello\\n");\n`, node);
-		expect([...installs.keys()]).toEqual([PROCESS_INSTALLER_SYMBOL]);
+		expect(reachedInstallers(installs)).toEqual([PROCESS_INSTALLER_SYMBOL]);
 	});
 
 	it.each([
@@ -214,7 +250,7 @@ describe("process.getBuiltinModule retention", () => {
 			`globalThis.sink = typeof process.getBuiltinModule === "function";\n`,
 			node,
 		);
-		expect([...installs.keys()]).toEqual([PROCESS_INSTALLER_SYMBOL]);
+		expect(reachedInstallers(installs)).toEqual([PROCESS_INSTALLER_SYMBOL]);
 	});
 
 	it("installs nothing for a literal name Node does not load", () => {
@@ -222,7 +258,7 @@ describe("process.getBuiltinModule retention", () => {
 			`globalThis.sink = process.getBuiltinModule("node:missing");\n`,
 			node,
 		);
-		expect([...installs.keys()]).toEqual([PROCESS_INSTALLER_SYMBOL]);
+		expect(reachedInstallers(installs)).toEqual([PROCESS_INSTALLER_SYMBOL]);
 	});
 
 	it("keeps static destructuring of process selective", () => {

@@ -207,7 +207,8 @@ int main(int argc, char **argv) {
         mal_vm_free(&vm);
         return 2;
     }
-    mal_runtime_personality_install(&vm, MAL_WEB_PLATFORM != 0, MAL_NODE != 0);
+    // The image's install table applies its host personality.
+    mal_runtime_personality_install(&vm, false, false);
     MalHostLaunchContext launch = {
         .argc = argc,
         .argv = argv,

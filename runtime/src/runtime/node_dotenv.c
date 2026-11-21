@@ -1,8 +1,6 @@
 // Portions derived from Node.js src/node_dotenv.cc (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_dotenv.h"
 
-#if MAL_NODE
-
 #include "gc.h"
 #include "heap_string.h"
 #include "object.h"
@@ -107,5 +105,3 @@ bool mal_node_dotenv_parse(MalVm *vm, MalString *content, MalValue target, bool 
     mal_gc_unroot(&root);
     return vm->completion.kind != MAL_COMPLETION_THROW;
 }
-
-#endif /* MAL_NODE */

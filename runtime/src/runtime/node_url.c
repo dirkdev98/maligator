@@ -1,8 +1,6 @@
 // Portions derived from Node.js lib/url.js, lib/internal/querystring.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_url.h"
 
-#if MAL_NODE
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1814,5 +1812,3 @@ void mal_host_install_node_url(
     }
     mal_node_module_publish(vm, "node:url", slots, count, module);
 }
-
-#endif /* MAL_NODE */

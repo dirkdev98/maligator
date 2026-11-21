@@ -1,8 +1,6 @@
 #include "node_readline.h"
 #include "node_module.h"
 
-#if MAL_NODE
-
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -970,5 +968,3 @@ void mal_host_install_node_readline_promises(
     mal_node_module_publish(vm, "node:readline/promises", slots, count, module);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

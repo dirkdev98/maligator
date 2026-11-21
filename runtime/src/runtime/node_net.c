@@ -1,8 +1,6 @@
 // Portions derived from Node.js lib/net.js, lib/_tls_wrap.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_net.h"
 
-#if MAL_NODE
-
 #include <arpa/inet.h>
 #include <errno.h>
 #include <math.h>
@@ -2750,5 +2748,3 @@ void mal_host_install_node_net(
     mal_node_module_publish(vm, "node:net", slots, count, roots[0]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

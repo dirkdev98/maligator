@@ -2,8 +2,6 @@
 #include "node_module.h"
 #include "node_async_hooks.h"
 
-#if MAL_NODE
-
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
@@ -1701,5 +1699,3 @@ void mal_host_install_node_events(
     ee_publish_default_max_listeners(vm, slots, count);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

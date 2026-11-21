@@ -6,8 +6,6 @@
 
 #include "node_inspect.h"
 
-#if MAL_NODE
-
 #include "array_buffer_object.h"
 #include "array_object.h"
 #include "ascii.h"
@@ -2272,6 +2270,3 @@ void mal_node_inspect_install_tables(MalVm *vm, MalObject *inspect) {
     mal_intrinsic_define_data(vm, inspect, (const byte *) "colors", values[0], UTIL_VISIBLE);
     mal_gc_unroot(&root);
 }
-
-
-#endif /* MAL_NODE */

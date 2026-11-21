@@ -1289,24 +1289,24 @@ printf '!<arch>\\n' > "$2"
 	it("keys generated objects by runtime headers rather than implementations", () => {
 		const fake = createFakeToolchain();
 		const runtimeDirectory = createMinimalRuntime(fake);
-		const initial = runtimeHeaderHash(runtimeDirectory, false);
+		const initial = runtimeHeaderHash(runtimeDirectory);
 
 		writeFileSync(path.join(runtimeDirectory, "src/engine.c"), "int engine_value = 2;\n");
-		expect(runtimeHeaderHash(runtimeDirectory, false)).toBe(initial);
+		expect(runtimeHeaderHash(runtimeDirectory)).toBe(initial);
 
 		writeFileSync(
 			path.join(runtimeDirectory, "rust/include/mal.h"),
 			"#define MAL_ABI 2\n",
 		);
-		expect(runtimeHeaderHash(runtimeDirectory, false)).not.toBe(initial);
-		const afterHeader = runtimeHeaderHash(runtimeDirectory, false);
+		expect(runtimeHeaderHash(runtimeDirectory)).not.toBe(initial);
+		const afterHeader = runtimeHeaderHash(runtimeDirectory);
 		const include = path.join(runtimeDirectory, "src/generated/entries.inc");
 		mkdirSync(path.dirname(include), { recursive: true });
 		writeFileSync(include, "ENTRY(first)\n");
-		const afterInclude = runtimeHeaderHash(runtimeDirectory, false);
+		const afterInclude = runtimeHeaderHash(runtimeDirectory);
 		expect(afterInclude).not.toBe(afterHeader);
 		writeFileSync(include, "ENTRY(other)\n");
-		expect(runtimeHeaderHash(runtimeDirectory, false)).not.toBe(afterInclude);
+		expect(runtimeHeaderHash(runtimeDirectory)).not.toBe(afterInclude);
 	});
 
 	it("narrows generated header identity to each transitive include closure", () => {
@@ -1323,52 +1323,39 @@ printf '!<arch>\\n' > "$2"
 		expect(generatedHeaderDependencyHash(runtimeDirectory, ["vm.h"])).not.toBe(initial);
 	});
 
-	it.each([false, true])(
-		"selects SQLite sources and isolates vendor includes with Node=%s",
-		(nodeEnabled) => {
-			const fake = createFakeToolchain();
-			const runtimeDirectory = createMinimalRuntime(fake);
-			const sqliteDirectory = path.join(runtimeDirectory, "vendor/sqlite");
-			const sqliteAdapter = path.join(runtimeDirectory, "src/host/sqlite.c");
-			mkdirSync(sqliteDirectory, { recursive: true });
-			writeFileSync(path.join(sqliteDirectory, "sqlite3.c"), "int sqlite_value = 1;\n");
-			writeFileSync(path.join(sqliteDirectory, "sqlite3.h"), "#pragma once\n");
-			writeFileSync(sqliteAdapter, '#include "sqlite3.h"\nint sqlite_adapter;\n');
-			const toolchain = inspectToolchain({
-				rootDir: fake.root,
-				rustDir: path.join(runtimeDirectory, "rust"),
-				env: fake.env,
-				needsCxx: false,
-				platform: "linux",
-			}).toolchain!;
-			ensureNativeArtifacts(
-				resolveNativeBuildContext({
-					toolchain,
-					runtimeDirectory,
-					cacheDirectory: path.join(fake.root, "sqlite-cache"),
-					features: {
-						evalEnabled: false,
-						nodeEnabled,
-						webPlatformEnabled: false,
-					},
-				}),
-			);
-			const invocations = readFileSync(fake.logPath, "utf-8").split("\n");
-			const sqliteInvocation = invocations.find((line) =>
-				line.includes("vendor/sqlite/sqlite3.c"),
-			);
-			const adapterInvocation = invocations.find((line) => line.includes(sqliteAdapter));
-			if (!nodeEnabled) {
-				expect(sqliteInvocation).toBeUndefined();
-				expect(adapterInvocation).toBeUndefined();
-				return;
-			}
-			expect(sqliteInvocation).toBeDefined();
-			expect(sqliteInvocation).toContain(`-I ${sqliteDirectory}`);
-			expect(sqliteInvocation).not.toContain(`-I ${path.join(runtimeDirectory, "src")}`);
-			expect(adapterInvocation).toContain(`-I ${sqliteDirectory}`);
-		},
-	);
+	it("compiles SQLite into every runtime archive with isolated vendor includes", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		const sqliteDirectory = path.join(runtimeDirectory, "vendor/sqlite");
+		const sqliteAdapter = path.join(runtimeDirectory, "src/host/sqlite.c");
+		mkdirSync(sqliteDirectory, { recursive: true });
+		writeFileSync(path.join(sqliteDirectory, "sqlite3.c"), "int sqlite_value = 1;\n");
+		writeFileSync(path.join(sqliteDirectory, "sqlite3.h"), "#pragma once\n");
+		writeFileSync(sqliteAdapter, '#include "sqlite3.h"\nint sqlite_adapter;\n');
+		const toolchain = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: path.join(runtimeDirectory, "rust"),
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		}).toolchain!;
+		ensureNativeArtifacts(
+			resolveNativeBuildContext({
+				toolchain,
+				runtimeDirectory,
+				cacheDirectory: path.join(fake.root, "sqlite-cache"),
+				features: { evalEnabled: false, nodeEnabled: false, webPlatformEnabled: false },
+			}),
+		);
+		const invocations = readFileSync(fake.logPath, "utf-8").split("\n");
+		const sqliteInvocation = invocations.find((line) =>
+			line.includes("vendor/sqlite/sqlite3.c"),
+		);
+		const adapterInvocation = invocations.find((line) => line.includes(sqliteAdapter));
+		expect(sqliteInvocation).toContain(`-I ${sqliteDirectory}`);
+		expect(sqliteInvocation).not.toContain(`-I ${path.join(runtimeDirectory, "src")}`);
+		expect(adapterInvocation).toContain(`-I ${sqliteDirectory}`);
+	});
 
 	it("fingerprints only build environment and snapshots it for native subprocesses", () => {
 		const fake = createFakeToolchain();
@@ -1509,7 +1496,6 @@ printf '!<arch>\\n' > "$2"
 		});
 		expect(features.cargoFeatures).toEqual(["intl-segmenter", "temporal"]);
 		expect(features.cDefines).toContain("-DMAL_INTL_HAS_COLLATOR=0");
-		expect(features.cDefines).toContain("-DMAL_WEB_PLATFORM=0");
 		expect(features.cDefines).toContain("-DMAL_REGEXP=0");
 		expect(() =>
 			normalizeNativeFeatures({
@@ -1517,6 +1503,16 @@ printf '!<arch>\\n' > "$2"
 				intlServiceDefines: ["-DMAL_INTL_HAS_NUMBER_FORMAT=0"],
 			}),
 		).toThrow(/different services/);
+	});
+
+	it("compiles the same C runtime for every host surface", () => {
+		const defines = [
+			{ webPlatformEnabled: false },
+			{ webPlatformEnabled: true },
+			{ nodeEnabled: true },
+			{ webPlatformEnabled: true, nodeEnabled: true },
+		].map((surfaces) => normalizeNativeFeatures(surfaces).cDefines);
+		expect(new Set(defines.map((entry) => JSON.stringify(entry))).size).toBe(1);
 	});
 
 	it("re-derives backend arrays supplied on a native feature spec", () => {

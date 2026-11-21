@@ -1,8 +1,6 @@
 #include "node_sqlite.h"
 #include "node_module.h"
 
-#if MAL_NODE
-
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1023,5 +1021,3 @@ void mal_host_install_node_sqlite(
     mal_node_module_publish(vm, "node:sqlite", slots, count, roots[4]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

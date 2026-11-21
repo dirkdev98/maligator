@@ -11,8 +11,6 @@
 #include "node_dotenv.h"
 #include "posix_fs.h"
 
-#if MAL_NODE
-
 #include "array_object.h"
 #include "ascii.h"
 #include "array_buffer_object.h"
@@ -2819,5 +2817,3 @@ void mal_host_install_node_util_types(
     if (vm->completion.kind == MAL_COMPLETION_THROW) return;
     (void) mal_node_module_install_cached(vm, "node:util/types", slots, count);
 }
-
-#endif /* MAL_NODE */

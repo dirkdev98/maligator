@@ -1,7 +1,5 @@
 #include "node_module.h"
 
-#if MAL_NODE
-
 #include <string.h>
 #include "heap_string.h"
 
@@ -36,5 +34,3 @@ void mal_host_install_node_installed_builtins(
     // The full loader answers every name this lookup does; install order must not matter.
     if (vm->node_builtin_loader == nullptr) vm->node_builtin_loader = node_installed_builtin;
 }
-
-#endif

@@ -2,8 +2,6 @@
 #include "node_tls.h"
 #include "node_crypto.h"
 
-#if MAL_NODE
-
 #include <arpa/inet.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1247,5 +1245,3 @@ void mal_host_install_node_tls(
     node_tls_publish_lazy(vm, slots, count, module);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

@@ -1,8 +1,6 @@
 // Portions derived from Node.js lib/internal/assert/assertion_error.js, lib/internal/assert/myers_diff.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_assert_strict.h"
 
-#if MAL_NODE
-
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1440,5 +1438,3 @@ void mal_host_install_node_assert_strict(
     mal_node_module_publish(vm, "node:assert/strict", slots, count,
         vm->intrinsics[MAL_INTRINSIC_NODE_ASSERT_STRICT_MODULE]);
 }
-
-#endif /* MAL_NODE */

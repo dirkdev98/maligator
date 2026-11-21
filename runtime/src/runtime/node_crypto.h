@@ -4,7 +4,7 @@
 #include "value.h"
 
 /*
- * node:crypto host built-in (runtime layer, behind surface.node / MAL_NODE).
+ * node:crypto host built-in (runtime layer).
  *
  * Covers MD5/SHA-1/SHA-224/SHA-256/SHA-384/SHA-512 `createHash`, `createHmac`
  * (string, buffer or secret KeyObject keys), one-shot `hash`, `pbkdf2`/`pbkdf2Sync`,

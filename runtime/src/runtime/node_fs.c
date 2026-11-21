@@ -1,8 +1,6 @@
 // Portions derived from Node.js lib/internal/fs/cp/cp.js, lib/internal/fs/cp/cp-sync.js, src/node_file.cc (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_fs.h"
 
-#if MAL_NODE
-
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -8205,5 +8203,3 @@ void mal_host_install_node_fs_promises(
     mal_node_module_publish(vm, "node:fs/promises", slots, count, roots[2]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

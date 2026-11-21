@@ -1,8 +1,6 @@
 // Portions derived from Node.js lib/internal/util/comparisons.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_deep_equal.h"
 
-#if MAL_NODE
-
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -787,5 +785,3 @@ bool mal_node_myers_diff(
     *op_count = count;
     return true;
 }
-
-#endif /* MAL_NODE */

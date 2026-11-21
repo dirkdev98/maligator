@@ -12,8 +12,7 @@ bool mal_node_path_glob_match(MalVm *vm, MalString *path, MalString *pattern, bo
 MalValue mal_node_path_resolve_path(MalVm *vm, MalValue path);
 
 /**
- * Host installer for the `node:path` built-in (POSIX semantics), implemented
- * behind surface.node / MAL_NODE. Matches the
+ * Host installer for the `node:path` built-in (POSIX semantics). Matches the
  * engine-neutral MalHostInstaller ABI (see vm.h): fills the export global slots
  * the emitted manifest hands it — the named functions `basename`, `dirname`,
  * `extname`, `isAbsolute`, `join`, `normalize`, `relative`, `resolve`, the POSIX

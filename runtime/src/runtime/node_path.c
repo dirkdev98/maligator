@@ -1,8 +1,6 @@
 // Portions derived from Node.js lib/path.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_path.h"
 
-#if MAL_NODE
-
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2315,5 +2313,3 @@ void mal_host_install_node_path_win32(
         mal_node_module_publish(vm, "node:path/win32", slots, count, win32);
     }
 }
-
-#endif /* MAL_NODE */

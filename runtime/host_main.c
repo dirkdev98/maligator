@@ -12,15 +12,14 @@
 #include <stdlib.h> // getenv
 #include <string.h>
 
+#include "atomics_async.h"
 #include "web_events_object.h"
 #include "web_fetch.h"
 #include "host.h"
-#include "node_immediate.h"
 #include "web_host_timer.h"
 #include "web_readable_stream_object.h"
 #include "web_url_object.h"
 #include "web_globals.h"
-#include "personality.h"
 #include "workers.h"
 #include "worker_manifest.h"
 
@@ -104,10 +103,10 @@ int main(int argc, char **argv) {
         return 2;
     }
 #endif
-    mal_runtime_personality_install(&vm, MAL_WEB_PLATFORM != 0, MAL_NODE != 0);
+    mal_atomics_async_install(&vm, false);
 
-    // Fill the reached host built-in / `process` global slots before execution
-    // (a no-op for a program that imports none). After host attach so an installer
+    // Apply the image's host personality, then fill the reached host built-in /
+    // `process` global slots before execution. After host attach so an installer
     // may lean on the reactor/timers; before run so LOAD_GLOBAL sees the values.
     // The launch context carries the process command line (for `process.argv`).
     MalHostLaunchContext launch = {
@@ -129,9 +128,6 @@ int main(int argc, char **argv) {
     if (getenv("MAL_GC_AT_EXIT") != nullptr) {
         mal_gc_collect(&vm);
         mal_vm_free_callable(callable);
-#if MAL_NODE
-        mal_node_immediates_free(&vm);
-#endif
         mal_host_timers_free(&vm); // runtime cleanup (before the host reactor goes)
         mal_host_detach(&vm);
         mal_vm_free(&vm);

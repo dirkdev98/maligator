@@ -90,7 +90,7 @@ export interface NativeFeatureInput {
 	regexpEnabled?: boolean;
 	/** `-DMAL_TEMPORAL=0` when the Temporal surface is excluded (default on internally). */
 	temporalEnabled?: boolean;
-	/** `-DMAL_NODE=1` when the node host built-in surface is enabled (default off). */
+	/** The Node host surface selects the Rust components its modules link (default off). */
 	nodeEnabled?: boolean;
 	/** `-DMAL_PROFILE=1` for the production-faithful profiling runtime. */
 	profileEnabled?: boolean;
@@ -187,10 +187,8 @@ export function normalizeNativeFeatures(
 		...(evalEnabled ? [] : ["-DMAL_EVAL=0"]),
 		...(realmsEnabled ? [] : ["-DMAL_REALMS=0"]),
 		...(intlEnabled ? intlDefines : ["-DMAL_INTL=0"]),
-		...(webPlatformEnabled ? [] : ["-DMAL_WEB_PLATFORM=0"]),
 		...(regexpEnabled ? [] : ["-DMAL_REGEXP=0"]),
 		...(temporalEnabled ? [] : ["-DMAL_TEMPORAL=0"]),
-		...(nodeEnabled ? ["-DMAL_NODE=1"] : []),
 		...(profileEnabled ? ["-DMAL_PROFILE=1"] : []),
 		...(developmentApiEnabled ? ["-DMAL_DEVELOPMENT_API=1"] : []),
 	];

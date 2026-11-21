@@ -1,7 +1,5 @@
 #include "node_perf_hooks.h"
 
-#if MAL_NODE
-
 #include <math.h>
 #include <string.h>
 #include "array_buffer_object.h"
@@ -1321,5 +1319,3 @@ void mal_host_install_node_perf_hooks(
     mal_node_module_publish(vm, "node:perf_hooks", slots, count, roots[0]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

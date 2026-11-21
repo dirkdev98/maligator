@@ -1091,7 +1091,23 @@ static void mal_builtin_error_define_stack_accessor(MalVm *vm, MalObject *protot
         MAL_PROPERTY_CONFIGURABLE);
 }
 
-#if MAL_NODE && MAL_PRIMORDIALS_LOCKED
+void mal_host_install_node_error_hooks(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    (void) vm;
+    (void) slots;
+    (void) count;
+    (void) launch;
+}
+
+#if MAL_PRIMORDIALS_LOCKED
+static bool mal_builtin_error_node_hooks_selected(const MalVm *vm) {
+    const MalRuntimeImage *image = vm->runtime_image;
+    for (i32 i = 0; image != nullptr && i < image->host_install_count; i++) {
+        if (image->host_installs[i].installer == mal_host_install_node_error_hooks) return true;
+    }
+    return false;
+}
+
 static MalValue mal_builtin_error_node_hook_set(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalIntrinsic slot, const byte *name
@@ -1249,6 +1265,44 @@ static MalObject *mal_builtin_error_install_kind(
     return prototype;
 }
 
+/*
+ * Define Node's Error.prepareStackTrace and Error.stackTraceLimit when the image
+ * lists mal_host_install_node_error_hooks. Error is frozen before any installer
+ * runs, so the hooks are locked accessors whose setters stay callable. A mutable
+ * flavour keeps Error.stackTraceLimit an ordinary data property instead.
+ */
+static bool mal_builtin_error_define_node_hooks(MalVm *vm, MalObject *error_constructor) {
+#if MAL_PRIMORDIALS_LOCKED
+    if (!mal_builtin_error_node_hooks_selected(vm)) return false;
+    vm->intrinsics[MAL_INTRINSIC_ERROR_PREPARE_STACK_TRACE_VALUE] =
+        mal_value_new_undefined();
+    vm->intrinsics[MAL_INTRINSIC_ERROR_STACK_TRACE_LIMIT_VALUE] =
+        mal_value_from_i32(10);
+    mal_intrinsic_define_accessor_n(
+        vm, error_constructor,
+        mal_intrinsic_string_key(vm, "prepareStackTrace"),
+        "get prepareStackTrace", 0,
+        mal_builtin_error_prepare_stack_trace_getter,
+        "set prepareStackTrace", 1,
+        mal_builtin_error_prepare_stack_trace_setter,
+        MAL_PROPERTY_CONFIGURABLE | MAL_PROPERTY_LOCKED_SETTER);
+    mal_intrinsic_define_accessor_n(
+        vm, error_constructor,
+        mal_intrinsic_string_key(vm, "stackTraceLimit"),
+        "get stackTraceLimit", 0,
+        mal_builtin_error_stack_trace_limit_getter,
+        "set stackTraceLimit", 1,
+        mal_builtin_error_stack_trace_limit_setter,
+        MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE |
+            MAL_PROPERTY_LOCKED_SETTER);
+    return true;
+#else
+    (void) vm;
+    (void) error_constructor;
+    return false;
+#endif
+}
+
 void mal_builtin_error_install(MalVm *vm) {
     if (mal_value_is_undefined(vm->error_stack_marker)) {
         vm->error_stack_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
@@ -1284,34 +1338,12 @@ void mal_builtin_error_install(MalVm *vm) {
     );
     MalObject *error_constructor =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ERROR_CONSTRUCTOR]);
-#if MAL_NODE && MAL_PRIMORDIALS_LOCKED
-    vm->intrinsics[MAL_INTRINSIC_ERROR_PREPARE_STACK_TRACE_VALUE] =
-        mal_value_new_undefined();
-    vm->intrinsics[MAL_INTRINSIC_ERROR_STACK_TRACE_LIMIT_VALUE] =
-        mal_value_from_i32(10);
-    mal_intrinsic_define_accessor_n(
-        vm, error_constructor,
-        mal_intrinsic_string_key(vm, "prepareStackTrace"),
-        "get prepareStackTrace", 0,
-        mal_builtin_error_prepare_stack_trace_getter,
-        "set prepareStackTrace", 1,
-        mal_builtin_error_prepare_stack_trace_setter,
-        MAL_PROPERTY_CONFIGURABLE | MAL_PROPERTY_LOCKED_SETTER);
-    mal_intrinsic_define_accessor_n(
-        vm, error_constructor,
-        mal_intrinsic_string_key(vm, "stackTraceLimit"),
-        "get stackTraceLimit", 0,
-        mal_builtin_error_stack_trace_limit_getter,
-        "set stackTraceLimit", 1,
-        mal_builtin_error_stack_trace_limit_setter,
-        MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE |
-            MAL_PROPERTY_LOCKED_SETTER);
-#else
-    mal_intrinsic_define_data(
-        vm, error_constructor, "stackTraceLimit", mal_value_from_i32(10),
-        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
-            MAL_PROPERTY_CONFIGURABLE);
-#endif
+    if (!mal_builtin_error_define_node_hooks(vm, error_constructor)) {
+        mal_intrinsic_define_data(
+            vm, error_constructor, "stackTraceLimit", mal_value_from_i32(10),
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+                MAL_PROPERTY_CONFIGURABLE);
+    }
 
     // NativeError / AggregateError constructors have [[Prototype]] === %Error%
     // (the Error constructor), not %Function.prototype%.

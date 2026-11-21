@@ -1,8 +1,6 @@
 #include "node_inspector.h"
 #include "node_module.h"
 
-#if MAL_NODE
-
 #include <string.h>
 
 #include "function_object.h"
@@ -85,5 +83,3 @@ void mal_host_install_node_inspector(
     mal_node_module_publish(vm, "node:inspector", slots, count, roots[0]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

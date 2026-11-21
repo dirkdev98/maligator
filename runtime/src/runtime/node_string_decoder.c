@@ -1,8 +1,6 @@
 #include "node_string_decoder.h"
 #include "node_module.h"
 
-#if MAL_NODE
-
 #include <stdlib.h>
 #include <string.h>
 
@@ -631,5 +629,3 @@ void mal_host_install_node_string_decoder(
     mal_node_module_publish(vm, "node:string_decoder", slots, count, roots[5]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

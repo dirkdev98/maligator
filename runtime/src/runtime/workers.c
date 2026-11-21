@@ -20,9 +20,7 @@
 #include "hex.h"
 #include "sha256.h"
 #include "worker_manifest.h"
-#if MAL_NODE
 #include "node_module.h"
-#endif
 #include "gc.h"
 #include "gc_process.h"
 #include "host.h"
@@ -40,7 +38,6 @@
 #include "vm_load.h"
 #include "vm_ops.h"
 #include "atomics_async.h"
-#include "personality.h"
 #include "web_events_message.h"
 #include "web_events_object.h"
 #include "web_surface.h"
@@ -447,9 +444,6 @@ struct MalWorkerDomain {
     bool counted;
     // Dynamic domains retain their host initializer without retaining it in static workers.
     MalHostInstaller initialize_host;
-    bool has_context;
-    bool web_platform;
-    bool node;
 };
 
 static pthread_mutex_t g_startup_domain_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -629,8 +623,6 @@ typedef struct ApplicationImage {
     u32 count;
     char *entry_path;
     MalWorkerDomain *domain;
-    bool web_platform;
-    bool node;
 } ApplicationImage;
 
 typedef struct ApplicationLaunch {
@@ -671,9 +663,6 @@ struct WorkerThread {
     bool application_ready;
     bool application_ready_pending;
     char *name;
-    // The parent's host personality, applied to the worker isolate.
-    bool web_platform;
-    bool node;
     // Child-side endpoint handle (the worker's parentPort); moved into the thread.
     Endpoint *child_endpoint;
     MalSerializedValue *data;
@@ -1508,9 +1497,8 @@ static MalValue message_event_new(MalVm *vm, const char *type, MalValue data, Ma
     MalValue roots[] = {data, target, mal_value_new_undefined(), ports};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-#if MAL_NODE
     // Node delivers port messages as MessageEvent instances whose fields are prototype getters.
-    if (strcmp(type, "close") != 0) {
+    if (vm->host_node && strcmp(type, "close") != 0) {
         if (!mal_value_is_object(roots[3])) {
             roots[3] = mal_value_from_array_object(mal_array_object_new_from_values(
                 &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), &roots[3], 0));
@@ -1526,7 +1514,6 @@ static MalValue message_event_new(MalVm *vm, const char *type, MalValue data, Ma
             return made;
         }
     }
-#endif
     roots[2] = mal_event_new(vm, type, true);
     MalObject *event = mal_value_to_object(roots[2]);
     mal_intrinsic_define_data(vm, event, (const byte *) "type", str_value(vm, type), MAL_PROPERTY_ENUMERABLE);
@@ -2124,8 +2111,6 @@ static MalValue receive_message_on_port(MalVm *vm, MalValue receiver, const MalV
     return result;
 }
 
-#if MAL_NODE
-
 // Process-wide BroadcastChannel membership in creation order. Each member keeps the
 // receive side (side[0]) of its own channel; the registry owns the side[1] handle.
 // Lock order: registry, then channel, then owner.
@@ -2445,14 +2430,6 @@ static void broadcast_install(MalVm *vm) {
         iso->broadcast_prototype);
 }
 
-#else
-
-static void broadcast_leave(Channel *channel) {
-    (void) channel;
-}
-
-#endif /* MAL_NODE */
-
 static MAL_ISOLATE_LOCAL WorkerThread *g_self_thread;
 static MAL_ISOLATE_LOCAL bool g_exit_requested;
 static MAL_ISOLATE_LOCAL int g_exit_code;
@@ -2648,7 +2625,8 @@ static void *worker_thread_main(void *arg) {
         worker_thread_finish(thread);
         return nullptr;
     }
-    mal_runtime_personality_install(vm, thread->web_platform, thread->node);
+    // The worker image's install table applies its host personality.
+    mal_atomics_async_install(vm, false);
     mal_atomics_set_agent(true, thread->interrupt);
     bool installed = mal_workers_install(vm);
     mal_host_set_termination_check(worker_termination_check);
@@ -2748,9 +2726,6 @@ static void *worker_thread_main(void *arg) {
     if (thread->retain_listeners) mal_listener_pool_retire(mal_host(vm));
     mal_workers_shutdown(vm);
     if (callable != nullptr) mal_vm_free_callable(callable);
-#if MAL_NODE
-    mal_node_immediates_free(vm);
-#endif
     mal_host_timers_free(vm);
     mal_host_detach(vm);
     mal_vm_free(vm);
@@ -3543,8 +3518,6 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
     if (application != nullptr) atomic_fetch_add_explicit(&application->refs, 1, memory_order_relaxed);
     thread->retain_listeners = application != nullptr ? application->retain_listeners
                                                       : mal_host(vm) != nullptr && mal_host(vm)->retain_listeners;
-    thread->web_platform = domain != nullptr && domain->has_context ? domain->web_platform : vm->host_web_platform;
-    thread->node = domain != nullptr && domain->has_context ? domain->node : vm->host_node;
     thread->name = value_to_cstring(name);
     thread->child_endpoint = &channel->side[1];
     thread->data = snapshot;
@@ -3922,9 +3895,6 @@ bool mal_workers_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, node_proto, (const byte *) "hasRef", 0, worker_has_ref);
     define_emitter_methods(vm, node_proto);
     iso->node_worker_constructor = define_constructor(vm, "Worker", 1, worker_construct_node, iso->node_worker_prototype);
-#if MAL_NODE
-    broadcast_install(vm);
-#endif
 
     iso->receive_function = mal_value_from_native_function_object(mal_native_function_object_new_arity(
         &vm->heap, function_prototype, mal_intrinsic_ascii(vm, (const byte *) "receiveMessageOnPort"), 1,
@@ -4019,8 +3989,10 @@ MalValue mal_workers_node_message_port_constructor(MalVm *vm) {
 }
 
 MalValue mal_workers_node_broadcast_channel_constructor(MalVm *vm) {
-    (void) vm;
-    return g_isolate != nullptr ? g_isolate->broadcast_constructor : mal_value_new_undefined();
+    if (g_isolate == nullptr) return mal_value_new_undefined();
+    // Defined on first request, so only programs that name BroadcastChannel link it.
+    if (mal_value_is_undefined(g_isolate->broadcast_constructor)) broadcast_install(vm);
+    return g_isolate->broadcast_constructor;
 }
 
 MalValue mal_workers_receive_message_function(MalVm *vm) {
@@ -4198,6 +4170,7 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     ApplicationImage *image = nullptr;
+    // Validated only: each image's install table applies its own host personality.
     bool web, node;
     if (!get_named(vm, roots[0], "schema", &roots[1]) || !mal_value_is_int32(roots[1]) || mal_value_to_i32(roots[1]) != 1
         || !application_boolean(vm, roots[0], "webPlatform", &web)
@@ -4214,14 +4187,12 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
         if (!application_boolean(vm, roots[1], features[index], &required)) goto failed;
         if (required && !available[index]) compatible = false;
     }
-    if (!compatible || (web && !MAL_WEB_PLATFORM) || (node && !MAL_NODE)) {
+    if (!compatible) {
         throw_type(vm, "application image requires incompatible runtime capabilities or primordial policy"); goto failed;
     }
     image = calloc(1, sizeof(ApplicationImage));
     if (image == nullptr) { mal_vm_throw_allocation_error(vm); goto failed; }
     atomic_init(&image->refs, 1);
-    image->web_platform = web;
-    image->node = node;
     if (!get_named(vm, roots[0], "entryPath", &roots[1]) || !mal_value_is_string(roots[1])) goto failed;
     image->entry_path = application_string(roots[1]);
     if (image->entry_path == nullptr || image->entry_path[0] == 0) goto failed;
@@ -4235,9 +4206,6 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
     } else image->domain = mal_worker_domain_new(nullptr, 0, nullptr);
     if (image->domain == nullptr) goto failed;
     image->domain->initialize_host = mal_host_install_maligator;
-    image->domain->has_context = true;
-    image->domain->web_platform = web;
-    image->domain->node = node;
     if (!get_named(vm, roots[0], "wires", &roots[1]) || !mal_value_is_array_object(roots[1])) goto failed;
     u32 count = mal_array_object_length(mal_value_to_array_object(roots[1]));
     if (count == 0) goto failed;

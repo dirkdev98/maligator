@@ -1,7 +1,5 @@
 #include "node_timers_promises.h"
 
-#if MAL_NODE
-
 #include <string.h>
 
 #include "builtin_promise.h"
@@ -495,5 +493,3 @@ void mal_host_install_node_timers(
     mal_node_module_publish(vm, "node:timers", slots, count, roots[0]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

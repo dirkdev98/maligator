@@ -1,8 +1,6 @@
 // Portions derived from Node.js lib/internal/mime.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_util_mime.h"
 
-#if MAL_NODE
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -615,5 +613,3 @@ void mal_node_util_mime_install(MalVm *vm, MalObject *util) {
     mal_intrinsic_define_data(vm, util, "MIMEParams", roots[PARAMS_CTOR], MIME_METHOD | MAL_PROPERTY_ENUMERABLE);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

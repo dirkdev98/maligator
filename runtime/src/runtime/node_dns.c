@@ -1,8 +1,6 @@
 // Portions derived from Node.js lib/dns.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_dns.h"
 
-#if MAL_NODE
-
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -1876,5 +1874,3 @@ void mal_host_install_node_dns_promises(
     mal_node_module_publish(vm, "node:dns/promises", slots, count, module);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "../ffi/mal_ffi.h"
+#include "builtin_error.h"
 #include "mal_bridge.h"
 #include "mal_application.h"
 #include "maligator_assets.h"
@@ -14,7 +15,6 @@
 #include "web_surface.h"
 #include "workers.h"
 
-#if MAL_NODE
 #include "node_assert_strict.h"
 #include "node_async_hooks.h"
 #include "node_buffer.h"
@@ -55,8 +55,8 @@
 #include "node_worker_threads.h"
 #include "node_zlib.h"
 #include "web_events_message.h"
+#include "personality.h"
 #include "web_transform_stream.h"
-#endif
 
 // A program that links C libraries defines the real resolver in its generated registry unit.
 __attribute__((weak)) MalFfiInstaller mal_ffi_resolve_installer(const char *name, size_t length) {
@@ -80,31 +80,23 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_maligator_internal_fs_descriptor);
     MATCH_INSTALLER(mal_host_install_maligator_internal_fs_stream);
     MATCH_INSTALLER(mal_host_install_maligator_internal_fs_watch);
-#if MAL_WEB_PLATFORM
-    // Serving needs the Fetch API objects only the web surface links.
     MATCH_INSTALLER(mal_host_install_maligator_internal_http);
-#endif
     MATCH_INSTALLER(mal_host_install_maligator_process);
     MATCH_INSTALLER(mal_host_install_maligator_internal_workers);
     MATCH_INSTALLER(mal_host_install_web_events);
-#if MAL_WEB_PLATFORM || MAL_NODE
     MATCH_INSTALLER(mal_host_install_web_encoding);
     MATCH_INSTALLER(mal_host_install_web_streams);
     MATCH_INSTALLER(mal_host_install_web_fetch);
     MATCH_INSTALLER(mal_host_install_web_basics);
-#endif
-#if MAL_TLS && MAL_ZLIB
     MATCH_INSTALLER(mal_host_install_web_fetch_client);
     MATCH_INSTALLER(mal_host_install_maligator_internal_fetch);
-#endif
-#if MAL_URL
     MATCH_INSTALLER(mal_host_install_web_url);
-#endif
-#if MAL_WEB_PLATFORM
     MATCH_INSTALLER(mal_host_install_web_performance);
     MATCH_INSTALLER(mal_host_install_web_crypto);
-#endif
-#if MAL_NODE
+    MATCH_INSTALLER(mal_host_install_web_personality);
+    MATCH_INSTALLER(mal_host_install_node_personality);
+    MATCH_INSTALLER(mal_host_install_node_web_personality);
+    MATCH_INSTALLER(mal_host_install_node_error_hooks);
     MATCH_INSTALLER(mal_host_install_web_compression);
     MATCH_INSTALLER(mal_host_install_web_node_events);
     MATCH_INSTALLER(mal_host_install_process);
@@ -160,6 +152,5 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_vm);
     MATCH_INSTALLER(mal_host_install_node_worker_threads);
     MATCH_INSTALLER(mal_host_install_node_zlib);
-#endif
     return mal_ffi_resolve_installer(name, length);
 }

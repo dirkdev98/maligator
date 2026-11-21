@@ -2,8 +2,6 @@
 #include "node_http.h"
 #include "node_https.h"
 
-#if MAL_NODE
-
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
@@ -7319,5 +7317,3 @@ void mal_host_install_node_http(
     http_install_exports(vm, slots, count, roots[0]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

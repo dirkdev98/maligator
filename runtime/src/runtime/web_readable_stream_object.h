@@ -176,7 +176,6 @@ void mal_writable_stream_install(MalVm *vm, MalObject *global_this);
 /** Create a default stream containing one owned Uint8Array copy of `bytes`. */
 MalValue mal_readable_stream_from_bytes(MalVm *vm, const byte *bytes, usize length);
 
-#if MAL_NODE
 /** Stream Node BodyInit chunks with Buffer conversion, backpressure and iterator cancellation. */
 MalValue mal_readable_stream_from_node_body(MalVm *vm, MalValue value);
 
@@ -188,7 +187,6 @@ MalValue mal_readable_stream_from_node_body(MalVm *vm, MalValue value);
  */
 typedef MalValue (*MalNodeBodyChunkConverter)(MalVm *vm, MalValue chunk, MalValue encoding);
 void mal_readable_stream_set_node_chunk_converter(MalNodeBodyChunkConverter converter);
-#endif
 
 /** Internal Body-state hooks shared with the Fetch runtime. */
 bool mal_readable_stream_is_locked(MalValue value);

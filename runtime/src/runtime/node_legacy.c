@@ -1,7 +1,5 @@
 #include "node_legacy.h"
 
-#if MAL_NODE
-
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -533,5 +531,3 @@ void mal_host_install_node_punycode(
     mal_node_module_publish(vm, "node:punycode", slots, count, roots[0]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

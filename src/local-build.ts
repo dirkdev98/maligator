@@ -24,7 +24,12 @@ import {
 	readArtifactAction,
 	withArtifactActionLock,
 } from "./artifact-store.ts";
-import { buildSuffix, ccExtraFlags, optFlags } from "./build-flags.ts";
+import {
+	buildSuffix,
+	ccExtraFlags,
+	normalizeNativeFeatures,
+	optFlags,
+} from "./build-flags.ts";
 import {
 	compileArgumentsEmitDebugInfo,
 	expandedGeneratedUnitDigest,
@@ -37,6 +42,7 @@ import type {
 	GeneratedTranslationUnitDefinition,
 	GeneratedTranslationUnitKind,
 } from "./compiler/target/emit-program-image.ts";
+import { DEVELOPMENT_FRAGMENT_MAIN } from "./development-fragments.ts";
 import type { LinkInput } from "./ffi/discovery.ts";
 import { writeSourceChunks } from "./generated-source.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
@@ -472,11 +478,7 @@ function ensureGeneratedObjects(
 		if (cached !== undefined) return cached;
 		const digest =
 			input.headerFiles === undefined
-				? runtimeHeaderHash(
-						context.runtimeDirectory,
-						context.features.nodeEnabled,
-						context.cacheDirectory,
-					)
+				? runtimeHeaderHash(context.runtimeDirectory, context.cacheDirectory)
 				: generatedHeaderDependencyHash(context.runtimeDirectory, input.headerFiles);
 		headerHashes.set(identity, digest);
 		return digest;
@@ -731,9 +733,35 @@ export function buildDevelopmentRunner(
 	});
 }
 
+/**
+ * A binary that resolves host installers by name, such as the development runner or a
+ * development fragment program, references every installer, so it links the native
+ * components of every host surface. The C runtime is the same for all of them.
+ */
+function resolvesInstallersByName(options: LocalBuildOptions): boolean {
+	const main =
+		options.mainFile === undefined ? undefined : path.basename(options.mainFile);
+	return (
+		main === "dev_main.c" ||
+		main === DEVELOPMENT_FRAGMENT_MAIN ||
+		options.context.features.developmentApiEnabled
+	);
+}
+
 /** Link emitted generated C into a standalone binary using one resolved context. */
 export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
-	const { context } = options;
+	const context = resolvesInstallersByName(options)
+		? Object.freeze({
+				...options.context,
+				features: Object.freeze(
+					normalizeNativeFeatures({
+						...options.context.features,
+						webPlatformEnabled: true,
+						nodeEnabled: true,
+					}),
+				),
+			})
+		: options.context;
 	// Zig's strip capability is probed and applied through its cc driver because
 	// objcopy can reject large LTO ELFs after succeeding on a small probe.
 	const zigLinkTimeStrip =

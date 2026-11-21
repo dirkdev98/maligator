@@ -1,8 +1,6 @@
 // Portions derived from Node.js lib/internal/util/inspect.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_module.h"
 
-#if MAL_NODE
-
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -474,5 +472,3 @@ void mal_node_throw_errno(
     if (path != nullptr) mal_node_define_utf8(vm, error, "path", path);
     if (dest != nullptr) mal_node_define_utf8(vm, error, "dest", dest);
 }
-
-#endif

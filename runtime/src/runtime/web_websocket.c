@@ -1,8 +1,6 @@
 /* WHATWG WebSocket client (RFC 6455) over the host TCP/TLS connections, on the reactor. */
 #include "web_websocket.h"
 
-#if MAL_NODE
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1059,5 +1057,3 @@ void mal_web_websocket_install(MalVm *vm, MalObject *module) {
     mal_web_node_events_export(vm, module);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

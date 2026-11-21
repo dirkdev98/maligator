@@ -4,8 +4,6 @@
 #include "http_client.h"
 #include "host.h"
 
-#if MAL_NODE
-
 #include <string.h>
 #include <stdio.h>
 
@@ -263,5 +261,3 @@ void mal_host_install_node_https(
     mal_node_module_publish(vm, "node:https", slots, count, roots[HTTPS_MODULE]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

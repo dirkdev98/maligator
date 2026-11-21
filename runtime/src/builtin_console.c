@@ -21,10 +21,8 @@
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
-#if MAL_NODE
 #include "function_object.h"
 #include "runtime/node_inspect.h"
-#endif
 
 #define CONSOLE_VISIBLE (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 
@@ -125,9 +123,9 @@ static bool console_instance_stream(MalVm *vm, FILE *stream, MalValue *out) {
         stream == stderr ? "stderr" : "stdout", out);
 }
 
-#if MAL_NODE
+// Only the Node personality registers hooks, so their presence selects Node's console.
 static bool console_node(const MalVm *vm) {
-    return vm->host_node && vm->console_node_hooks != nullptr;
+    return vm->console_node_hooks != nullptr;
 }
 
 // Node's console colors only a TTY whose color depth exceeds two colors.
@@ -152,7 +150,6 @@ static bool console_colors(MalVm *vm, FILE *stream) {
     const char *term = getenv("TERM");
     return term == nullptr || strcmp(term, "dumb") != 0;
 }
-#endif
 
 static bool console_buffer_ok(MalVm *vm, MalTextBuffer *buffer) {
     if (buffer->status == MAL_TEXT_BUFFER_OK) return true;
@@ -166,17 +163,16 @@ static bool console_buffer_ok(MalVm *vm, MalTextBuffer *buffer) {
     return false;
 }
 
-static bool console_format(MalVm *vm, FILE *stream, MalTextBuffer *out, const MalValue *args, i32 argc) {
-#if MAL_NODE
-    if (console_node(vm)) {
-        MalValue options = mal_value_new_undefined();
-        if (mal_value_is_object(console_receiver)) {
-            (void) console_state_value(vm, mal_value_to_object(console_receiver), "inspectOptions", &options);
-        }
-        return vm->console_node_hooks->format_into(vm, out, options, console_colors(vm, stream), args, argc);
+bool mal_console_node_format(MalVm *vm, FILE *stream, MalTextBuffer *out, const MalValue *args, i32 argc) {
+    MalValue options = mal_value_new_undefined();
+    if (mal_value_is_object(console_receiver)) {
+        (void) console_state_value(vm, mal_value_to_object(console_receiver), "inspectOptions", &options);
     }
-#endif
-    (void) stream;
+    return vm->console_node_hooks->format_into(vm, out, options, console_colors(vm, stream), args, argc);
+}
+
+static bool console_format(MalVm *vm, FILE *stream, MalTextBuffer *out, const MalValue *args, i32 argc) {
+    if (console_node(vm)) return vm->console_node_hooks->format(vm, stream, out, args, argc);
     for (i32 i = 0; i < argc; i++) {
         if (i > 0) mal_text_buffer_push(out, ' ');
         if (!console_plain_value(vm, out, args[i], false)) return false;
@@ -368,25 +364,27 @@ CONSOLE_METHOD(console_assert) {
     return mal_value_new_undefined();
 }
 
+void mal_console_node_dir(MalVm *vm, MalValue value, MalValue options) {
+    MalTextBuffer line = {0};
+    MalNodeInspectOptions inspect = {
+        .options = options,
+        .colors = console_colors(vm, stdout),
+        .dir = true,
+    };
+    if (!vm->console_node_hooks->inspect_into(vm, &line, value, &inspect)) {
+        mal_text_buffer_dispose(&line);
+        return;
+    }
+    console_emit(vm, stdout, &line);
+}
+
 CONSOLE_METHOD(console_dir) {
     CONSOLE_UNUSED;
     MalValue value = argc > 0 ? args[0] : mal_value_new_undefined();
-#if MAL_NODE
     if (console_node(vm)) {
-        MalTextBuffer line = {0};
-        MalNodeInspectOptions options = {
-            .options = argc > 1 ? args[1] : mal_value_new_undefined(),
-            .colors = console_colors(vm, stdout),
-            .dir = true,
-        };
-        if (!vm->console_node_hooks->inspect_into(vm, &line, value, &options)) {
-            mal_text_buffer_dispose(&line);
-            return mal_value_new_undefined();
-        }
-        console_emit(vm, stdout, &line);
+        vm->console_node_hooks->dir(vm, value, argc > 1 ? args[1] : mal_value_new_undefined());
         return mal_value_new_undefined();
     }
-#endif
     return console_print(vm, stdout, &value, 1);
 }
 
@@ -556,7 +554,6 @@ CONSOLE_METHOD(console_time_log) {
     return console_time_report(vm, args, argc, false);
 }
 
-#if MAL_NODE
 typedef struct ConsoleList {
     MalValue *items;
     usize count;
@@ -689,7 +686,7 @@ static void console_row(MalTextBuffer *out, const MalValue *cells, const usize *
 }
 
 // Node's console.table: an index column, one column per property, and a Values column for primitives.
-static MalValue console_table_print(MalVm *vm, MalValue data, MalValue properties) {
+MalValue mal_console_node_table(MalVm *vm, MalValue data, MalValue properties) {
     ConsoleList head = {0}, grid = {0}, rows = {0}, scratch = {0};
     bool map = mal_value_is_map_object(data), set = mal_value_is_set_object(data);
     usize row_count = 0;
@@ -816,15 +813,12 @@ static MalValue console_table_print(MalVm *vm, MalValue data, MalValue propertie
     console_list_dispose(&scratch);
     return mal_value_new_undefined();
 }
-#endif
 
 CONSOLE_METHOD(console_table) {
     CONSOLE_UNUSED;
-#if MAL_NODE
     if (console_node(vm) && argc > 0 && mal_value_is_object(args[0])) {
-        return console_table_print(vm, args[0], argc > 1 ? args[1] : mal_value_new_undefined());
+        return vm->console_node_hooks->table(vm, args[0], argc > 1 ? args[1] : mal_value_new_undefined());
     }
-#endif
     return console_print(vm, stdout, args, argc > 0 ? 1 : 0);
 }
 
@@ -836,50 +830,78 @@ CONSOLE_METHOD(console_noop) {
     return mal_value_new_undefined();
 }
 
-static const struct {
+typedef struct ConsoleMethod {
     const char *name;
     MalNativeFunctionCallback callback;
-    MalNativeFunctionCallback global;
-} console_methods[] = {
-    {"log", console_log, console_log_global},
-    {"info", console_log, console_log_global},
-    {"debug", console_log, console_log_global},
-    {"warn", console_error, console_error_global},
-    {"error", console_error, console_error_global},
-    {"dir", console_dir, console_dir_global},
-    {"dirxml", console_log, console_log_global},
-    {"table", console_table, console_table_global},
-    {"trace", console_trace, console_trace_global},
-    {"group", console_group, console_group_global},
-    {"groupCollapsed", console_group, console_group_global},
-    {"groupEnd", console_group_end, console_group_end_global},
-    {"count", console_count, console_count_global},
-    {"countReset", console_count_reset, console_count_reset_global},
-    {"time", console_time, console_time_global},
-    {"timeEnd", console_time_end, console_time_end_global},
-    {"timeLog", console_time_log, console_time_log_global},
-    {"assert", console_assert, console_assert_global},
-    {"clear", console_noop, console_noop_global},
-    {"profile", console_noop, console_noop_global},
-    {"profileEnd", console_noop, console_noop_global},
-    {"timeStamp", console_noop, console_noop_global},
-};
+} ConsoleMethod;
 
 // Like Node's bound global console methods, the global ones ignore their receiver.
-static void console_define_methods(MalVm *vm, MalObject *target, bool global) {
-    for (usize i = 0; i < countof(console_methods); i++) {
-        mal_intrinsic_define_method_n(vm, target, (const byte *) console_methods[i].name, 0,
-            global ? console_methods[i].global : console_methods[i].callback);
+static const ConsoleMethod console_global_methods[] = {
+    {"log", console_log_global},
+    {"info", console_log_global},
+    {"debug", console_log_global},
+    {"warn", console_error_global},
+    {"error", console_error_global},
+    {"dir", console_dir_global},
+    {"dirxml", console_log_global},
+    {"table", console_table_global},
+    {"trace", console_trace_global},
+    {"group", console_group_global},
+    {"groupCollapsed", console_group_global},
+    {"groupEnd", console_group_end_global},
+    {"count", console_count_global},
+    {"countReset", console_count_reset_global},
+    {"time", console_time_global},
+    {"timeEnd", console_time_end_global},
+    {"timeLog", console_time_log_global},
+    {"assert", console_assert_global},
+    {"clear", console_noop_global},
+    {"profile", console_noop_global},
+    {"profileEnd", console_noop_global},
+    {"timeStamp", console_noop_global},
+};
+
+// Separate from the global table, so programs without console.Console link none of them.
+static const ConsoleMethod console_instance_methods[] = {
+    {"log", console_log},
+    {"info", console_log},
+    {"debug", console_log},
+    {"warn", console_error},
+    {"error", console_error},
+    {"dir", console_dir},
+    {"dirxml", console_log},
+    {"table", console_table},
+    {"trace", console_trace},
+    {"group", console_group},
+    {"groupCollapsed", console_group},
+    {"groupEnd", console_group_end},
+    {"count", console_count},
+    {"countReset", console_count_reset},
+    {"time", console_time},
+    {"timeEnd", console_time_end},
+    {"timeLog", console_time_log},
+    {"assert", console_assert},
+    {"clear", console_noop},
+    {"profile", console_noop},
+    {"profileEnd", console_noop},
+    {"timeStamp", console_noop},
+};
+
+static_assert(countof(console_global_methods) == countof(console_instance_methods),
+    "console.Console instances define the same methods as the global console");
+
+static void console_define_methods(MalVm *vm, MalObject *target, const ConsoleMethod *methods) {
+    for (usize i = 0; i < countof(console_global_methods); i++) {
+        mal_intrinsic_define_method_n(vm, target, (const byte *) methods[i].name, 0, methods[i].callback);
     }
 }
 
 void mal_builtin_console_install(MalVm *vm) {
     MalObject *console = mal_intrinsic_new_object(vm);
     vm->intrinsics[MAL_INTRINSIC_CONSOLE] = mal_value_from_object(console);
-    console_define_methods(vm, console, true);
+    console_define_methods(vm, console, console_global_methods);
 }
 
-#if MAL_NODE
 static bool console_writable(MalVm *vm, MalValue stream, const char *name) {
     MalValue write = mal_value_new_undefined();
     if (mal_value_is_object(stream)
@@ -964,11 +986,10 @@ void mal_builtin_console_install_class(MalVm *vm) {
     mal_gc_root(&root, roots, 2);
     mal_native_function_object_set_constructor(constructor);
     mal_native_function_object_set_handles_new_target_prototype(constructor);
-    console_define_methods(vm, mal_value_to_object(roots[1]), false);
+    console_define_methods(vm, mal_value_to_object(roots[1]), console_instance_methods);
     mal_intrinsic_define_data(vm, (MalObject *) constructor, (const byte *) "prototype", roots[1], 0);
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]), (const byte *) "constructor", roots[0],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_data(vm, console, (const byte *) "Console", roots[0], CONSOLE_VISIBLE);
     mal_gc_unroot(&root);
 }
-#endif

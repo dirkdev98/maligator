@@ -50,8 +50,6 @@ int mal_proc_fork(void) {
     return (int) pid;
 }
 
-#if MAL_NODE
-
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
@@ -1007,4 +1005,3 @@ const char *mal_proc_signal_name(int sig) {
     }
 }
 
-#endif /* MAL_NODE */

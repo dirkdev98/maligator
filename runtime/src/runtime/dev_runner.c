@@ -224,12 +224,7 @@ int mal_dev_run_images(
     for (int index = 0; index < wire_count; index++) {
         if (callables[index] != nullptr) mal_vm_free_callable(callables[index]);
     }
-#if MAL_NODE
-    if (node) mal_node_immediates_free(&vm);
-#endif
-#if MAL_WEB_PLATFORM || MAL_NODE
-    if (web_platform || node) mal_host_timers_free(&vm);
-#endif
+    if (vm.host_web_platform || vm.host_node) mal_host_timers_free(&vm);
     mal_host_detach(&vm);
     mal_vm_free(&vm);
     free(callables);

@@ -77,12 +77,6 @@ typedef size_t usize;
 #define MAL_INTL 1
 #endif
 
-// Whether this build includes the broader WinterTC web surface. URL is shared with
-// Node and therefore has its own derived MAL_URL capability below.
-#ifndef MAL_WEB_PLATFORM
-#define MAL_WEB_PLATFORM 1
-#endif
-
 // Whether this build includes the RegExp engine (regress). Core ECMAScript, so
 // default on; the build config sets `-DMAL_REGEXP=0` (see build-flags.ts) when
 // `engine.regexp` is false, which compiles builtin_regexp.c / regexp_object.c away
@@ -103,29 +97,6 @@ typedef size_t usize;
 // either present together or compiled out together.
 #ifndef MAL_TEMPORAL
 #define MAL_TEMPORAL 1
-#endif
-
-// The build config enables the Node host surface with `surface.node`. Keep it
-// opt-in because it exposes host capabilities such as filesystem access and
-// process spawning.
-#ifndef MAL_NODE
-#define MAL_NODE 0
-#endif
-
-// WHATWG URL / URLSearchParams are globals in both supported host personalities.
-// Keep this in lockstep with the Rust crate's `url` feature and the C++ link flag.
-#ifndef MAL_URL
-#define MAL_URL (MAL_WEB_PLATFORM || MAL_NODE)
-#endif
-
-// TLS clients and the deflate/gzip/brotli codecs serve fetch on either surface, and
-// Node's modules on top. Keep these in lockstep with the Rust crate's `tls` and
-// `zlib` features.
-#ifndef MAL_TLS
-#define MAL_TLS (MAL_WEB_PLATFORM || MAL_NODE)
-#endif
-#ifndef MAL_ZLIB
-#define MAL_ZLIB (MAL_WEB_PLATFORM || MAL_NODE)
 #endif
 
 /* Production-faithful source profiler. Profile builds opt in explicitly so

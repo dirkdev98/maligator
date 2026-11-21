@@ -15,7 +15,7 @@ MalValue mal_known_native_mal_builtin_error_is_error(MalVm *vm, MalValue receive
     return mal_builtin_error_is_error(vm, receiver, args, count, target, callee);
 }
 MalValue mal_known_native_mal_builtin_error_prepare_stack_trace_getter(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
-#if (MAL_NODE && MAL_PRIMORDIALS_LOCKED)
+#if (MAL_PRIMORDIALS_LOCKED)
     return mal_builtin_error_prepare_stack_trace_getter(vm, receiver, args, count, target, callee);
 #else
     (void) receiver; (void) args; (void) count; (void) target; (void) callee;
@@ -24,7 +24,7 @@ MalValue mal_known_native_mal_builtin_error_prepare_stack_trace_getter(MalVm *vm
 #endif
 }
 MalValue mal_known_native_mal_builtin_error_prepare_stack_trace_setter(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
-#if (MAL_NODE && MAL_PRIMORDIALS_LOCKED)
+#if (MAL_PRIMORDIALS_LOCKED)
     return mal_builtin_error_prepare_stack_trace_setter(vm, receiver, args, count, target, callee);
 #else
     (void) receiver; (void) args; (void) count; (void) target; (void) callee;
@@ -42,7 +42,7 @@ MalValue mal_known_native_mal_builtin_error_prototype_to_string(MalVm *vm, MalVa
     return mal_builtin_error_prototype_to_string(vm, receiver, args, count, target, callee);
 }
 MalValue mal_known_native_mal_builtin_error_stack_trace_limit_getter(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
-#if (MAL_NODE && MAL_PRIMORDIALS_LOCKED)
+#if (MAL_PRIMORDIALS_LOCKED)
     return mal_builtin_error_stack_trace_limit_getter(vm, receiver, args, count, target, callee);
 #else
     (void) receiver; (void) args; (void) count; (void) target; (void) callee;
@@ -51,7 +51,7 @@ MalValue mal_known_native_mal_builtin_error_stack_trace_limit_getter(MalVm *vm, 
 #endif
 }
 MalValue mal_known_native_mal_builtin_error_stack_trace_limit_setter(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
-#if (MAL_NODE && MAL_PRIMORDIALS_LOCKED)
+#if (MAL_PRIMORDIALS_LOCKED)
     return mal_builtin_error_stack_trace_limit_setter(vm, receiver, args, count, target, callee);
 #else
     (void) receiver; (void) args; (void) count; (void) target; (void) callee;

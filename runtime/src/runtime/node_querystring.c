@@ -1,7 +1,5 @@
 #include "node_querystring.h"
 
-#if MAL_NODE
-
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -671,5 +669,3 @@ void mal_host_install_node_querystring(
     }
     mal_node_module_publish(vm, "node:querystring", slots, count, module);
 }
-
-#endif /* MAL_NODE */

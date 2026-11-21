@@ -9,6 +9,17 @@
  */
 void mal_builtin_error_install(MalVm *vm);
 
+/*
+ * Node's Error.prepareStackTrace and Error.stackTraceLimit. The compiler lists this
+ * installer in a Node program's install table, and the intrinsics look for it while
+ * they build Error, because the primordial lock freezes Error before any installer
+ * runs. Run as an installer, it has nothing left to do.
+ */
+typedef struct MalHostInstallSlot MalHostInstallSlot;
+typedef struct MalHostLaunchContext MalHostLaunchContext;
+void mal_host_install_node_error_hooks(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);
+
 /**
  * Publish Promise.any's private ordered errors Array on an intrinsic AggregateError.
  * The list is already collected, so this path must not consult an iterator.

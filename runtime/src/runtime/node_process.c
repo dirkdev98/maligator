@@ -1,7 +1,5 @@
 #include "node_process.h"
 
-#if MAL_NODE
-
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -1952,5 +1950,3 @@ void mal_host_install_process(
     mal_node_module_publish(vm, "node:process", slots, count, process_val);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

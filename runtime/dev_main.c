@@ -49,7 +49,7 @@ int main(int argc, char **argv) {
     int code = mal_dev_run_wires(
         (const char *const *) &argv[wire_offset], wire_count,
         entry_offset > 0 ? argv[entry_offset] : nullptr,
-        program_argc, program_argv, MAL_WEB_PLATFORM != 0, MAL_NODE != 0, worker_manifest_path);
+        program_argc, program_argv, false, false, worker_manifest_path);
     free(program_argv);
     return code;
 }

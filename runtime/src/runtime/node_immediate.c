@@ -1,7 +1,5 @@
 #include "node_immediate.h"
 
-#if MAL_NODE
-
 #include <math.h>
 #include <stdlib.h>
 
@@ -139,6 +137,7 @@ void mal_node_immediates_install(MalVm *vm, MalObject *global_this) {
         mal_host_register_macrotask_drain(node_immediate_drain, false);
         node_immediate_roots_installed = true;
     }
+    (void) mal_vm_register_runtime_cleanup(vm, mal_node_immediates_free);
     mal_intrinsic_define_method_n(vm, global_this, "setImmediate", 1, node_set_immediate);
     mal_intrinsic_define_method_n(vm, global_this, "clearImmediate", 1, node_clear_immediate);
 }
@@ -155,5 +154,3 @@ void mal_node_immediates_free(MalVm *vm) {
         immediate = next;
     }
 }
-
-#endif /* MAL_NODE */

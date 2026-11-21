@@ -238,8 +238,8 @@ function shortHash(value: unknown): string {
  * on `engine.eval` (flips `-DMAL_EVAL` + whether the compiler wire is embedded),
  * `engine.intl` (flips `-DMAL_INTL` + the locale-sensitive fallbacks),
  * `engine.temporal` (flips `-DMAL_TEMPORAL` + calendar/time-zone support),
- * `surface.webPlatform` (flips `-DMAL_WEB_PLATFORM` + whether web_url.c compiles), and
- * `surface.node` (flips `-DMAL_NODE` + the node host built-in surface).
+ * `surface.webPlatform` and `surface.node` (which host personality and installers the
+ * program links; the runtime archive itself is the same for every surface).
  * Returns "" for the canonical build (eval on, Temporal on, Intl on, all
  * locales, web on, node OFF) so it keeps the unsuffixed binary name — node defaults
  * off and every internal-tooling build is node-off, so node-off stays canonical.

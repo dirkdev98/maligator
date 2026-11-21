@@ -12,6 +12,5 @@ int main(int argc, char **argv) {
     mal_register_compiled_worker_entries();
     return mal_dev_run_images(
         mal_fragment_images, mal_fragment_image_count, mal_fragment_assets,
-        mal_fragment_asset_count, mal_fragment_entry_path, argc, argv, MAL_WEB_PLATFORM != 0,
-        MAL_NODE != 0, nullptr);
+        mal_fragment_asset_count, mal_fragment_entry_path, argc, argv, false, false, nullptr);
 }

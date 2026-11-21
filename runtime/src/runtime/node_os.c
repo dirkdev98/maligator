@@ -1,7 +1,5 @@
 #include "node_os.h"
 
-#if MAL_NODE
-
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <dlfcn.h>
@@ -747,5 +745,3 @@ void mal_host_install_node_os(
     }
     mal_node_module_publish(vm, "node:os", slots, count, module);
 }
-
-#endif /* MAL_NODE */

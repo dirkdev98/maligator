@@ -260,6 +260,36 @@ export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 export const REGEXP_INSTALLER = "mal_host_install_regexp";
 export const UNICODE_NORMALIZATION_INSTALLER = "mal_host_install_unicode_normalization";
 
+/**
+ * Each image's install table lists its host personality first: the timers, console
+ * and surface flags the other installers build on. The runtime carries every
+ * personality, and a program links only the one its image lists.
+ */
+export function hostPersonalityInstaller(surfaces: {
+	readonly webPlatform: boolean;
+	readonly node: boolean;
+}): string | undefined {
+	if (surfaces.node) {
+		return surfaces.webPlatform
+			? "mal_host_install_node_web_personality"
+			: "mal_host_install_node_personality";
+	}
+	return surfaces.webPlatform ? "mal_host_install_web_personality" : undefined;
+}
+
+export const HOST_PERSONALITY_INSTALLERS: ReadonlyArray<string> = [
+	"mal_host_install_web_personality",
+	"mal_host_install_node_personality",
+	"mal_host_install_node_web_personality",
+];
+
+/**
+ * Selects Node's `Error.prepareStackTrace` and `Error.stackTraceLimit` hooks. The
+ * runtime reads it from the image's install table while it builds the intrinsics,
+ * so it follows the same Node-surface rule as the primordial catalog's entries.
+ */
+export const NODE_ERROR_HOOKS_INSTALLER = "mal_host_install_node_error_hooks";
+
 /** Whether a HOST_GLOBAL_INSTALLERS row's installer exists on these surfaces. */
 export function hostGlobalInstallerAvailable(
 	row: (typeof HOST_GLOBAL_INSTALLERS)[number],

@@ -1,8 +1,6 @@
 #include "node_async_hooks.h"
 #include "node_module.h"
 
-#if MAL_NODE
-
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -1173,5 +1171,3 @@ void mal_host_install_node_async_hooks(
     mal_node_module_publish(vm, "node:async_hooks", slots, count, roots[MODULE]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

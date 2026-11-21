@@ -1,8 +1,6 @@
 // Portions derived from Node.js lib/dgram.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_dgram.h"
 
-#if MAL_NODE
-
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -1587,5 +1585,3 @@ void mal_host_install_node_dgram(
     mal_node_module_publish(vm, "node:dgram", slots, count, roots[0]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

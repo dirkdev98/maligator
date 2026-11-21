@@ -9,9 +9,7 @@
 
 #include "host.h"
 #include "listener_pool.h"
-#if MAL_NODE
 #include "mal_tls.h"
-#endif
 #include "net.h"
 #include "reactor.h"
 #include "vm.h"
@@ -46,6 +44,16 @@ typedef enum MalHttpTimeoutPhase {
     MAL_HTTP_TIMEOUT_KEEP_ALIVE,
 } MalHttpTimeoutPhase;
 
+// A server that terminates TLS reaches the backend only through this table.
+typedef struct MalHttpServerTls {
+    void (*config_free)(MalTlsServerConfig **config);
+    void (*conn_free)(MalHttpConn *c);
+    int (*conn_start)(MalHttpServer *server, MalHttpConn *c);
+    ssize_t (*read)(MalHttpConn *c, char *out, usize length);
+    ssize_t (*writev)(MalHttpConn *c, const struct iovec *iov, int count);
+    bool (*drain)(MalHttpConn *c);
+} MalHttpServerTls;
+
 struct MalHttpServer {
     MalVm *vm;
     int listen_fd;
@@ -68,6 +76,8 @@ struct MalHttpServer {
     void *close_data;
     /* Owned; accepted connections then speak TLS in the server role. */
     MalTlsServerConfig *tls_config;
+    /* Set together with tls_config. */
+    const MalHttpServerTls *tls;
     MalHttpServerTlsCallback tls_callback;
     void *tls_data;
     MalHttpServerTlsHelloCallback tls_hello;
@@ -239,9 +249,7 @@ static void conn_refresh_inactivity_timeout(MalHttpConn *c) {
     conn_cancel_inactivity_timeout(c);
     if (c->inactivity_timeout_ms <= 0 ||
         (c->timeout_phase == MAL_HTTP_TIMEOUT_KEEP_ALIVE && !c->inactivity_keep_alive_override)) return;
-#if MAL_NODE
     if ((c->tls != nullptr || c->tls_acceptor != nullptr) && !c->tls_secure) return;
-#endif
     f64 milliseconds = c->inactivity_timeout_ms > INT32_MAX ? INT32_MAX : c->inactivity_timeout_ms;
     i64 duration = (i64) (milliseconds * 1000000);
     i64 now = mal_reactor_now_ns();
@@ -314,9 +322,7 @@ static void conn_arm_keep_alive_timeout(MalHttpConn *c) {
 static void server_finish_close(MalHttpServer *server) {
     MalHttpServerCloseCallback callback = server->close_callback;
     void *data = server->close_data;
-#if MAL_NODE
-    mal_tls_server_config_free(&server->tls_config);
-#endif
+    if (server->tls != nullptr) server->tls->config_free(&server->tls_config);
     free(server);
     if (callback != nullptr) {
         callback(data);
@@ -329,12 +335,10 @@ static void conn_close(MalHttpConn *c) {
         return;
     }
     MalHttpServer *server = c->server;
-#if MAL_NODE
     if ((c->tls != nullptr || c->tls_acceptor != nullptr) && !c->tls_secure && server->tls_callback != nullptr) {
         c->tls_secure = true;
         server->tls_callback(server->tls_data, c, c->tls_error != 0 ? c->tls_error : ECONNRESET);
     }
-#endif
     conn_cancel_timeout(c);
     conn_cancel_inactivity_timeout(c);
     (void) mal_reactor_cancel_op(conn_reactor(c), &c->read_op);
@@ -349,10 +353,7 @@ static void conn_close(MalHttpConn *c) {
         server->connection_count--;
     }
     free(c->rbuf);
-#if MAL_NODE
-    mal_tls_client_free(&c->tls);
-    mal_tls_acceptor_free(&c->tls_acceptor);
-#endif
+    if (server->tls != nullptr) server->tls->conn_free(c);
     free(c->tls_out);
     if (c->codec_initialized) mal_http_codec_free(&c->codec);
     MalHttpWireWrite *write = c->write_head;
@@ -1008,7 +1009,6 @@ static void conn_process_stream(MalHttpConn *c) {
     }
 }
 
-#if MAL_NODE
 /* Writes queued ciphertext; false with errno EAGAIN while the socket is full. */
 static bool conn_tls_flush(MalHttpConn *c) {
     for (;;) {
@@ -1146,21 +1146,36 @@ static ssize_t conn_tls_writev(MalHttpConn *c, const struct iovec *iov, int coun
     }
     return (ssize_t) total;
 }
-#endif
+
+static void conn_tls_free(MalHttpConn *c) {
+    mal_tls_client_free(&c->tls);
+    mal_tls_acceptor_free(&c->tls_acceptor);
+}
+
+static int conn_tls_start(MalHttpServer *server, MalHttpConn *c) {
+    return server->tls_hello != nullptr
+        ? mal_tls_acceptor_create(&c->tls_acceptor)
+        : mal_tls_server_create(server->tls_config, &c->tls);
+}
+
+static const MalHttpServerTls server_tls = {
+    .config_free = mal_tls_server_config_free,
+    .conn_free = conn_tls_free,
+    .conn_start = conn_tls_start,
+    .read = conn_tls_read,
+    .writev = conn_tls_writev,
+    .drain = conn_tls_drain,
+};
 
 static ssize_t conn_read(MalHttpConn *c, char *out, usize length) {
-#if MAL_NODE
-    if (c->tls != nullptr || c->tls_acceptor != nullptr) return conn_tls_read(c, out, length);
-#endif
+    if (c->tls != nullptr || c->tls_acceptor != nullptr) return c->server->tls->read(c, out, length);
     ssize_t count = read(c->fd, out, length);
     if (count > 0) conn_refresh_inactivity_timeout(c);
     return count;
 }
 
 static ssize_t conn_writev(MalHttpConn *c, const struct iovec *iov, int count) {
-#if MAL_NODE
-    if (c->tls != nullptr) return conn_tls_writev(c, iov, count);
-#endif
+    if (c->tls != nullptr) return c->server->tls->writev(c, iov, count);
     ssize_t written = mal_net_writev(c->fd, iov, count);
     if (written > 0) conn_refresh_inactivity_timeout(c);
     return written;
@@ -1220,18 +1235,14 @@ static void conn_read_cb(void *data) {
 static void conn_write_cb(void *data) {
     MalHttpConn *c = data;
     usize turn = 0;
-#if MAL_NODE
-    if (c->tls != nullptr && !conn_tls_drain(c)) return;
-#endif
+    if (c->tls != nullptr && !c->server->tls->drain(c)) return;
     while (c->write_head != nullptr) {
         MalHttpWireWrite *write = c->write_head;
         if (write->prefix_offset == write->prefix_length
             && write->offset == write->length
             && write->suffix_offset == write->suffix_length) {
-#if MAL_NODE
             // A response is complete only once its records have reached the socket.
-            if (c->tls != nullptr && !conn_tls_drain(c)) return;
-#endif
+            if (c->tls != nullptr && !c->server->tls->drain(c)) return;
             c->write_head = write->next;
             if (c->write_head == nullptr) c->write_tail = nullptr;
             bool final = write->final;
@@ -1395,18 +1406,13 @@ static void server_accept_cb(void *data) {
         c->codec_initialized = true;
         mal_http_codec_set_max_header_size(&c->codec, server->max_header_size);
         mal_http_codec_set_max_header_fields(&c->codec, server->max_header_fields);
-#if MAL_NODE
-        if (server->tls_config != nullptr
-            && (server->tls_hello != nullptr
-                ? mal_tls_acceptor_create(&c->tls_acceptor)
-                : mal_tls_server_create(server->tls_config, &c->tls)) != MAL_TLS_STATUS_OK) {
+        if (server->tls != nullptr && server->tls->conn_start(server, c) != MAL_TLS_STATUS_OK) {
             mal_http_codec_free(&c->codec);
             mal_net_close(fd);
             free(c->rbuf);
             free(c);
             continue;
         }
-#endif
         c->next = server->connections;
         server->connections = c;
         server->connection_count++;
@@ -1519,40 +1525,27 @@ bool mal_http_server_configure_limits(
 bool mal_http_server_set_tls(
     MalHttpServer *server, MalTlsServerConfig *config,
     MalHttpServerTlsCallback callback, void *data) {
-#if MAL_NODE
     if (server == nullptr || server->tls_config != nullptr) return false;
     server->tls_config = config;
+    server->tls = &server_tls;
     server->tls_callback = callback;
     server->tls_data = data;
     return true;
-#else
-    (void) server; (void) config; (void) callback; (void) data;
-    return false;
-#endif
 }
 
 bool mal_http_server_replace_tls(MalHttpServer *server, MalTlsServerConfig *config) {
-#if MAL_NODE
     if (server == nullptr || server->tls_config == nullptr || config == nullptr) return false;
     mal_tls_server_config_free(&server->tls_config);
     server->tls_config = config;
     return true;
-#else
-    (void) server; (void) config;
-    return false;
-#endif
 }
 
 void mal_http_conn_tls_failure(const MalHttpConn *conn, char *out, usize capacity) {
     if (capacity == 0) return;
     out[0] = '\0';
-#if MAL_NODE
     if (conn == nullptr || conn->tls == nullptr) return;
     intptr_t length = mal_tls_session_info(conn->tls, MAL_TLS_INFO_FAILURE, (uint8_t *) out, capacity - 1);
     out[length > 0 && (usize) length < capacity ? (usize) length : 0] = '\0';
-#else
-    (void) conn;
-#endif
 }
 
 void mal_http_server_set_tls_hello(MalHttpServer *server, MalHttpServerTlsHelloCallback callback) {
@@ -1560,7 +1553,6 @@ void mal_http_server_set_tls_hello(MalHttpServer *server, MalHttpServerTlsHelloC
 }
 
 bool mal_http_conn_tls_select(MalHttpConn *c, const MalTlsServerConfig *config) {
-#if MAL_NODE
     if (c == nullptr || c->tls_acceptor == nullptr || !c->tls_selecting) return false;
     if (config == nullptr) config = c->server->tls_config;
     int status = config == nullptr ? MAL_TLS_STATUS_INVALID_ARGUMENT
@@ -1582,10 +1574,6 @@ bool mal_http_conn_tls_select(MalHttpConn *c, const MalTlsServerConfig *config) 
         return false;
     }
     return true;
-#else
-    (void) c; (void) config;
-    return false;
-#endif
 }
 
 void mal_http_conn_tls_mark_reported(MalHttpConn *conn) {

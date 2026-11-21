@@ -1,7 +1,5 @@
 #include "node_v8.h"
 
-#if MAL_NODE
-
 #include <unistd.h>
 
 #include "function_object.h"
@@ -232,5 +230,3 @@ void mal_host_install_node_v8(
     }
     mal_node_module_publish(vm, "node:v8", slots, count, module);
 }
-
-#endif /* MAL_NODE */

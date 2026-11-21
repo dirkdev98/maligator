@@ -1,7 +1,5 @@
 #include "node_net_blocklist.h"
 
-#if MAL_NODE
-
 #include <arpa/inet.h>
 #include <math.h>
 #include <stdio.h>
@@ -292,5 +290,3 @@ void mal_node_net_blocklist_install(MalVm *vm, MalValue module) {
         BLOCKLIST_METHOD | MAL_PROPERTY_ENUMERABLE);
     mal_gc_unroot(&root);
 }
-
-#endif

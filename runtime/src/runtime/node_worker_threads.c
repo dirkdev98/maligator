@@ -1,7 +1,5 @@
 #include "node_worker_threads.h"
 
-#if MAL_NODE
-
 #include "function_object.h"
 #include "gc.h"
 #include "heap_symbol.h"
@@ -183,5 +181,3 @@ void mal_host_install_node_worker_threads(
     }
     mal_node_module_publish(vm, "node:worker_threads", slots, count, module);
 }
-
-#endif /* MAL_NODE */

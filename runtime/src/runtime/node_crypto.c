@@ -49,8 +49,6 @@
 #include "date_object.h"
 #include "web_host_timer.h"
 
-#if MAL_NODE
-
 #include "mal_argon2.h"
 #include "mal_crypto_cipher.h"
 #include "mal_crypto_pkey.h"
@@ -7390,5 +7388,3 @@ void mal_host_install_node_crypto(
     mal_node_module_publish(vm, "node:crypto", slots, count, roots[6]);
     mal_gc_unroot(&root);
 }
-
-#endif // MAL_NODE

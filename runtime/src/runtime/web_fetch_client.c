@@ -1,7 +1,5 @@
 #include "web_surface.h"
 
-#if MAL_TLS && MAL_ZLIB
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1246,5 +1244,3 @@ void mal_host_install_maligator_internal_fetch(
             vm->globals[slots[i].slot] = mal_web_group_export(vm, client, "fetch");
     }
 }
-
-#endif

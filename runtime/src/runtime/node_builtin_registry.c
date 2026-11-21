@@ -1,7 +1,5 @@
 #include "node_module.h"
 
-#if MAL_NODE
-
 #include <string.h>
 #include "gc.h"
 #include "vm_ops.h"
@@ -106,5 +104,3 @@ void mal_host_install_node_builtin_loader(
     (void) launch;
     vm->node_builtin_loader = mal_node_module_get_builtin;
 }
-
-#endif

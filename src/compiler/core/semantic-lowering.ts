@@ -44,7 +44,9 @@ import {
 	HOST_MODULES,
 	hostGlobalInstallerAvailable,
 	hostInstallerSymbol,
+	hostPersonalityInstaller,
 	NODE_BUILTIN_LOADER_INSTALLER,
+	NODE_ERROR_HOOKS_INSTALLER,
 	NODE_INSTALLED_BUILTINS_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
 	REGEXP_INSTALLER,
@@ -1376,6 +1378,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 					.flatMap((host) => (host?.retained === true ? [host.installer] : []))
 					.concat(program.nodeModuleInstaller ?? [])
 					.concat(builtinModuleInstallers(program, hostInstallCandidates))
+					.concat(hostSurfaceInstallers(program))
 					// The embedded compiler uses the eval runtime's already installed intrinsics.
 					.concat(program.intrinsicGlobalReads ? [] : [...program.languageInstallers])
 					.filter(
@@ -1385,6 +1388,18 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 			}),
 		},
 	};
+}
+
+/** The host personality and Node's Error hooks, which every image of a surface program lists. */
+function hostSurfaceInstallers(program: CoreFrontendContext): Array<string> {
+	const personality = hostPersonalityInstaller({
+		webPlatform: program.semantic.graph?.webPlatformEnabled ?? false,
+		node: program.semantic.graph?.nodeEnabled ?? false,
+	});
+	return [
+		...(personality === undefined ? [] : [personality]),
+		...(program.facts.world.nodeSurface ? [NODE_ERROR_HOOKS_INSTALLER] : []),
+	];
 }
 
 /** Source-module cells can be supplied by an earlier image, including its private bindings. */

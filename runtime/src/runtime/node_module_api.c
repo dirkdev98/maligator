@@ -1,7 +1,5 @@
 #include "node_module_api.h"
 
-#if MAL_NODE
-
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -754,5 +752,3 @@ void mal_host_install_node_module(
     }
     mal_node_module_publish(vm, "node:module", slots, count, module);
 }
-
-#endif /* MAL_NODE */

@@ -1,8 +1,6 @@
 // Portions derived from Node.js lib/internal/streams/compose.js, lib/internal/streams/duplex.js, lib/internal/streams/duplexify.js, lib/internal/streams/from.js, lib/internal/streams/pipeline.js, lib/internal/streams/readable.js, lib/internal/streams/utils.js, lib/internal/streams/writable.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_stream.h"
 
-#if MAL_NODE
-
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -6408,5 +6406,3 @@ void mal_host_install_node_stream_web(
     mal_node_module_publish(vm, "node:stream/web", slots, count, roots[0]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

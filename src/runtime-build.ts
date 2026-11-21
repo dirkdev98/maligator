@@ -43,7 +43,6 @@ const RUNTIME_ARCHIVE_PRODUCER = artifactProducer("runtime-archive", 5, "ar");
 
 function runtimeSourceSnapshot(
 	runtimeDirectory: string,
-	nodeEnabled: boolean,
 	cacheDirectory: string,
 ): { digest: string; version: string } {
 	const root = path.resolve(runtimeDirectory);
@@ -52,7 +51,7 @@ function runtimeSourceSnapshot(
 	const manifestPath = path.join(
 		cacheDirectory,
 		"source-digests",
-		`runtime-${nodeEnabled ? "node" : "base"}-${artifactDigest(root).slice(0, 16)}.json`,
+		`runtime-${artifactDigest(root).slice(0, 16)}.json`,
 	);
 	const { digest } = hashDirectoryTreesCached(
 		{
@@ -63,7 +62,7 @@ function runtimeSourceSnapshot(
 				...(existsSync(llhttp)
 					? [path.join(llhttp, "include"), path.join(llhttp, "src")]
 					: []),
-				...(nodeEnabled && existsSync(sqlite) ? [sqlite] : []),
+				...(existsSync(sqlite) ? [sqlite] : []),
 			],
 			include: (entry) => /\.(?:c|h|inc)$/.test(entry.name),
 			compareNames: legacyLocaleNameComparator,
@@ -78,7 +77,6 @@ function runtimeSourceSnapshot(
 /** Headers that generated application translation units compile against. */
 export function runtimeHeaderHash(
 	runtimeDirectory: string,
-	nodeEnabled: boolean,
 	cacheDirectory?: string,
 ): string {
 	const root = path.resolve(runtimeDirectory);
@@ -90,7 +88,7 @@ export function runtimeHeaderHash(
 			path.join(root, "src"),
 			path.join(root, "rust/include"),
 			...(existsSync(llhttp) ? [llhttp] : []),
-			...(nodeEnabled && existsSync(sqlite) ? [sqlite] : []),
+			...(existsSync(sqlite) ? [sqlite] : []),
 		],
 		include: (entry: { name: string }) => /\.(?:h|inc)$/.test(entry.name),
 		compareNames: legacyLocaleNameComparator,
@@ -101,7 +99,7 @@ export function runtimeHeaderHash(
 		path.join(
 			cacheDirectory,
 			"source-digests",
-			`runtime-headers-${nodeEnabled ? "node" : "base"}-${artifactDigest(root).slice(0, 16)}.json`,
+			`runtime-headers-${artifactDigest(root).slice(0, 16)}.json`,
 		),
 		"runtime-headers-v2",
 	).digest;
@@ -265,8 +263,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 	const sourceRoot = path.join(context.runtimeDirectory, "src");
 	const llhttpRoot = path.join(context.runtimeDirectory, "vendor/llhttp");
 	const sqliteRoot = path.join(context.runtimeDirectory, "vendor/sqlite");
-	const sqliteIncludeArguments =
-		context.features.nodeEnabled && existsSync(sqliteRoot) ? ["-I", sqliteRoot] : [];
+	const sqliteIncludeArguments = existsSync(sqliteRoot) ? ["-I", sqliteRoot] : [];
 	const includeArguments = [
 		"-I",
 		sourceRoot,
@@ -284,11 +281,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 			? "-DMAL_COMPILER_WIRE=<content>"
 			: normalizeRuntimeBuildArgument(context.runtimeDirectory, flag),
 	);
-	const source = runtimeSourceSnapshot(
-		context.runtimeDirectory,
-		context.features.nodeEnabled,
-		context.cacheDirectory,
-	);
+	const source = runtimeSourceSnapshot(context.runtimeDirectory, context.cacheDirectory);
 	const cacheKey = runtimeArtifactKey({
 		compilerWireDigest,
 		compilerNativeDigest,
@@ -332,8 +325,6 @@ function runtimeSources(
 		for (const name of readdirSync(layerDirectory)
 			.filter((entry) => entry.endsWith(".c"))
 			.sort()) {
-			if (layer === "host" && name === "sqlite.c" && !context.features.nodeEnabled)
-				continue;
 			sources.push({
 				name,
 				path: path.join(layerDirectory, name),
@@ -363,7 +354,7 @@ function runtimeSources(
 		}
 	}
 	const sqliteSource = path.join(context.runtimeDirectory, "vendor/sqlite/sqlite3.c");
-	if (context.features.nodeEnabled && existsSync(sqliteSource)) {
+	if (existsSync(sqliteSource)) {
 		sources.push({
 			name: "sqlite3.c",
 			path: sqliteSource,
@@ -518,11 +509,8 @@ function ensureRuntimeObjects(
 	const sources = runtimeSources(context, layout);
 	const projected = projectRuntimeSources(context, layout, sources, directory, verbose);
 	if (
-		runtimeSourceSnapshot(
-			context.runtimeDirectory,
-			context.features.nodeEnabled,
-			context.cacheDirectory,
-		).version !== layout.sourceVersion
+		runtimeSourceSnapshot(context.runtimeDirectory, context.cacheDirectory).version !==
+		layout.sourceVersion
 	)
 		throw new Error(
 			"Runtime sources changed during preprocessing; no objects were published",

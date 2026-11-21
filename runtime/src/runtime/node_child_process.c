@@ -1,7 +1,5 @@
 #include "node_child_process.h"
 
-#if MAL_NODE
-
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2018,5 +2016,3 @@ void mal_host_install_node_child_process(
     mal_node_module_publish(vm, "node:child_process", slots, count, roots[0]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */

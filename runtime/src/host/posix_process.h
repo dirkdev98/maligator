@@ -3,7 +3,7 @@
 #include "./defaults.h"
 
 /*
- * Synchronous child-process spawning (host layer, behind surface.node / MAL_NODE).
+ * Synchronous child-process spawning (host layer).
  *
  * A thin, engine-neutral POSIX wrapper the `node:child_process` runtime layer
  * sits on: it knows only C strings, fds, and byte buffers — no MalValue, no GC,
@@ -18,9 +18,9 @@
  */
 
 /*
- * fork() for a child that will exec; available without MAL_NODE. The calling
- * thread blocks every signal across the fork, so no runtime handler runs in the
- * child, and restores its own mask afterwards. The child returns 0 with every
+ * fork() for a child that will exec. The calling thread blocks every signal
+ * across the fork, so no runtime handler runs in the child, and restores its own
+ * mask afterwards. The child returns 0 with every
  * catchable signal at SIG_DFL and an empty mask whatever the spawning thread
  * blocked, which is the state the exec'd program inherits. Returns the child PID
  * in the parent, or -1 with errno set.

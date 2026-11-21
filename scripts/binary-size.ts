@@ -42,6 +42,19 @@ const forbiddenComponents = {
 		symbol.startsWith("_mal_tls_"),
 	ring: ({ symbol }) => symbol.startsWith("_ring_core_"),
 	Ada: ({ object }) => /(?:^|[(-])ada\.o\)?$/.test(object),
+	regress: ({ crate, symbol }) =>
+		crate === "regress" || /^_mal_regexp_(?:compile|release)(?:$|\.)/.test(symbol),
+	"unicode.o": ({ object, symbol }) =>
+		/(?:^|[(-])unicode\.o\)?$/.test(object) ||
+		/^_mal_unicode_(?:decomposition|composition)(?:$|\.)/.test(symbol),
+	// Every runtime archive carries the Node modules; only Node programs may link them.
+	"Node runtime": ({ object, symbol }) =>
+		/(?:^|[(-])node_[a-z0-9_]+\.o\)?$/.test(object) ||
+		/^_mal_node_/.test(symbol) ||
+		// The Error intrinsics compare against the hooks marker, which every program links.
+		/^_mal_host_install_node_(?!error_hooks$)/.test(symbol),
+	argon2: ({ crate, symbol }) =>
+		crate === "argon2" || symbol.startsWith("_mal_argon2_abi"),
 } satisfies Record<string, (entry: LinkedSymbol) => boolean>;
 
 type ForbiddenComponent = keyof typeof forbiddenComponents;
@@ -77,7 +90,16 @@ const fixtures: Array<{
 		file: "bench/size/hello.mjs",
 		config: lean,
 		bun: true,
-		forbidden: ["HTTP client", "TLS", "ring", "Ada"],
+		forbidden: [
+			"HTTP client",
+			"TLS",
+			"ring",
+			"Ada",
+			"regress",
+			"unicode.o",
+			"Node runtime",
+			"sqlite3.o",
+		],
 		forbiddenLibraries: ["C++ runtime"],
 	},
 	{
@@ -85,15 +107,21 @@ const fixtures: Array<{
 		file: "bench/size/serve.mjs",
 		config: web,
 		bun: false,
-		forbidden: ["brotli", "rustls"],
+		forbidden: ["brotli", "rustls", "Node runtime", "sqlite3.o", "argon2"],
 	},
-	{ name: "fetch", file: "bench/size/fetch.mjs", config: web, bun: true },
+	{
+		name: "fetch",
+		file: "bench/size/fetch.mjs",
+		config: web,
+		bun: true,
+		forbidden: ["Node runtime", "sqlite3.o", "argon2"],
+	},
 	{
 		name: "node-hello",
 		file: "bench/size/node-hello.mjs",
 		config: node,
 		bun: true,
-		forbidden: ["sqlite3.o", "node_fs"],
+		forbidden: ["sqlite3.o", "node_fs", "argon2"],
 	},
 	{
 		name: "node-fs",
@@ -107,7 +135,7 @@ const fixtures: Array<{
 		file: "bench/http/server_mal.js",
 		config: web,
 		bun: false,
-		forbidden: ["brotli", "rustls"],
+		forbidden: ["brotli", "rustls", "Node runtime", "sqlite3.o", "argon2"],
 	},
 	{ name: "express", file: "bench/http/express-server.cjs", config: nodeWeb, bun: true },
 ];

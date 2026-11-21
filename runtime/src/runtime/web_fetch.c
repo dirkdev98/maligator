@@ -986,7 +986,6 @@ static bool mal_response_validate_init(MalVm *vm, i32 status, MalValue status_te
     return valid;
 }
 
-#if MAL_NODE
 // For a Node stream, stream.isDisturbed() reads only these public flags. Probing them
 // here rather than through node:stream keeps that module out of programs without it.
 static bool mal_fetch_node_body_disturbed(MalVm *vm, MalValue body) {
@@ -1022,7 +1021,6 @@ done:
     mal_gc_unroot(&root);
     return roots[2];
 }
-#endif
 
 static MalValue mal_response_constructor(
     MalVm *vm,
@@ -1104,13 +1102,12 @@ static MalValue mal_response_constructor(
             }
             body_len = src_len;
         } else if (!mal_value_is_nil(args[0])) {
-#if MAL_NODE
-            if (!mal_value_is_url_search_params_object(args[0])) {
+            // Node also accepts async iterables and Node streams as BodyInit.
+            if (vm->host_node && !mal_value_is_url_search_params_object(args[0])) {
                 roots[3] = mal_fetch_node_iterable(vm, args[0]);
                 if (vm->completion.kind == MAL_COMPLETION_THROW) goto response_error;
             }
             if (!mal_value_is_undefined(roots[3])) goto response_body_ready;
-#endif
             bool is_search_params = mal_value_is_url_search_params_object(args[0]);
             MalString *str;
             if (!mal_vm_to_string(vm, args[0], &str)) {
@@ -1123,9 +1120,7 @@ static MalValue mal_response_constructor(
                 : "text/plain;charset=UTF-8";
         }
     }
-#if MAL_NODE
 response_body_ready:
-#endif
     if (!mal_response_validate_init(vm, status, roots[2])) goto response_error;
     if (has_body && (status == 204 || status == 205 || status == 304)) {
         free(body);
@@ -3155,8 +3150,7 @@ static MalValue mal_request_constructor(
     // dictionary exposes its byte-backed body through the Body stream getter;
     // preserve those source bytes rather than treating that lazy stream as a
     // streaming upload.
-#if MAL_NODE
-    if (!mal_value_is_readable_stream_object(slots[4]) && !mal_fetch_is_form_data(slots[4])
+    if (vm->host_node && !mal_value_is_readable_stream_object(slots[4]) && !mal_fetch_is_form_data(slots[4])
         && !mal_fetch_is_blob(slots[4]) && !mal_value_is_url_search_params_object(slots[4])
         && !mal_value_is_array_buffer_object(slots[4]) && !mal_value_is_typed_array_object(slots[4])
         && !mal_value_is_data_view_object(slots[4])) {
@@ -3164,7 +3158,6 @@ static MalValue mal_request_constructor(
         if (vm->completion.kind == MAL_COMPLETION_THROW) goto request_error;
         if (!mal_value_is_undefined(normalized)) slots[4] = normalized;
     }
-#endif
     if (mal_value_is_readable_stream_object(slots[4])) {
         MalRequestObject *body_source = argc >= 2 && mal_value_is_request_object(args[1])
             ? mal_value_to_request_object(args[1]) : nullptr;

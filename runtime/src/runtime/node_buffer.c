@@ -1,8 +1,6 @@
 // Portions derived from Node.js lib/buffer.js, src/node_buffer.cc (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_buffer.h"
 
-#if MAL_NODE
-
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -3007,5 +3005,3 @@ void mal_host_install_node_buffer(
     mal_buffer_install_exports(vm, slots, count, roots[1], roots[2]);
     mal_gc_unroot(&root);
 }
-
-#endif /* MAL_NODE */
