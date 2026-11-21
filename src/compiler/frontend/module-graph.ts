@@ -8,10 +8,10 @@ import type { PlatformData, PlatformModule } from "../../platform/catalog.ts";
 import { PLATFORM_MODULES, lookupPlatformModule } from "../../platform/catalog.ts";
 import type { Execution } from "../../platform/execution.ts";
 import { executionData } from "../../platform/execution.ts";
+import { EMBED_INSTALLER } from "../shared/embedded-asset.ts";
 import { stripCompactTypes } from "./compact-type-strip.ts";
 import { moduleCreateRequireDeclarators } from "./create-require.ts";
 import {
-	EMBED_INSTALLER,
 	EmbedDeclarationError,
 	canonicalEmbedDeclaration,
 	declaresProducers,

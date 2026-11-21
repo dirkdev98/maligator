@@ -1,7 +1,5 @@
 import type { IncludedAsset } from "../../assets.ts";
 import type { PlatformData } from "../../platform/catalog.ts";
-import { EMBED_INSTALLER, embeddedAsset } from "../frontend/embed-declarations.ts";
-import type { EmbedDeclaration } from "../frontend/embed-declarations.ts";
 import { bigintLimbs } from "../shared/bigint-digits.ts";
 import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import {
@@ -9,6 +7,8 @@ import {
 	PROBE_READ_KINDS,
 	probeReadIsNamed,
 } from "../shared/compiler-instruction.ts";
+import { EMBED_INSTALLER, embeddedAsset } from "../shared/embedded-asset.ts";
+import type { EmbeddedAsset } from "../shared/embedded-asset.ts";
 import { knownOperationFlags } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
 import { staticDataQueryTag } from "../shared/static-data-query.ts";
@@ -2984,9 +2984,7 @@ function malRuntimeImageStruct(
 				const payload =
 					constant ??
 					(install.installer === EMBED_INSTALLER && data !== undefined
-						? (embeddedAsset(
-								data as unknown as EmbedDeclaration,
-							) as unknown as PlatformData)
+						? (embeddedAsset(data as unknown as EmbeddedAsset) as unknown as PlatformData)
 						: data);
 				lines.push(
 					`    { .name = "${cEscapeString(name)}", .slot = ${slot}, .data = ${payload === undefined ? "nullptr" : `"${cEscapeString(JSON.stringify(payload))}"`} },`,

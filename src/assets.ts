@@ -13,11 +13,9 @@ import * as path from "node:path";
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import { writeFileAtomically } from "./atomic-file.ts";
 import { BuildConfigError } from "./build-config-error.ts";
-import { EMBED_INSTALLER } from "./compiler/frontend/embed-declarations.ts";
-import type {
-	EmbedDeclaration,
-	EmbeddedAsset,
-} from "./compiler/frontend/embed-declarations.ts";
+import type { EmbedDeclaration } from "./compiler/frontend/embed-declarations.ts";
+import { EMBED_INSTALLER } from "./compiler/shared/embedded-asset.ts";
+import type { EmbeddedAsset } from "./compiler/shared/embedded-asset.ts";
 import { deserializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import type { RuntimeImage } from "./compiler/target/runtime-image.ts";
 import { walkDirectoryTree } from "./file-tree.ts";

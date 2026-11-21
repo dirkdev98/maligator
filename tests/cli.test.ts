@@ -383,7 +383,8 @@ describe("parseCliArgs", () => {
 	});
 });
 
-describe("command shell", () => {
+// These tests spawn the whole CLI, which a loaded CI runner can take seconds to start.
+describe("command shell", { timeout: 30_000 }, () => {
 	it("resolves development compiler resources from the CLI module", () => {
 		const installation = developmentCompilerInstallation(path.join(repoRoot, "src"));
 		expect(installation).toEqual({
@@ -586,7 +587,7 @@ describe("command shell", () => {
 		expect(result.stderr).toContain("Compiler phase · construct core ir:");
 		expect(result.stderr).toContain("Core optimizer input:");
 		expect(result.stderr).toContain("Core optimizer queue:");
-	}, 30_000);
+	});
 
 	it("rejects a configured cache root that is a file instead of reporting an empty cache", () => {
 		const configured = path.join(tmpdir(), "cache-file");

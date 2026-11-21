@@ -1,6 +1,7 @@
 import { hash } from "node:crypto";
 import { parse as meriyahParse } from "meriyah";
 import type { ESTree } from "meriyah";
+import type { EmbeddedAsset } from "../shared/embedded-asset.ts";
 import { traverseEstree } from "./estree-traversal.ts";
 import { bindingAt } from "./worker-entries.ts";
 
@@ -12,7 +13,6 @@ import { bindingAt } from "./worker-entries.ts";
  * longer reach after optimization leaves its installer slot, and its files, unused.
  */
 export const EMBED_SOURCE_MODULE = "maligator:assets";
-export const EMBED_INSTALLER = "mal_host_install_maligator_assets";
 const EMBED_REQUEST_PREFIX = "maligator:embed?";
 const EMBED_MODULE_PREFIX = "maligator:embed:";
 
@@ -48,18 +48,6 @@ export interface EmbedRequest extends EmbedProducers {
 	readonly include?: ReadonlyArray<string>;
 	readonly exclude?: ReadonlyArray<string>;
 	readonly dot?: true;
-}
-
-/** The files a declaration embeds, which a built executable needs to find them. */
-export interface EmbeddedAsset {
-	readonly kind: "file" | "directory";
-	/** Absolute path of the file or directory. */
-	readonly path: string;
-	readonly include?: ReadonlyArray<string>;
-	readonly exclude?: ReadonlyArray<string>;
-	readonly dot?: true;
-	/** Identifies the embedded copy independently of producer options. */
-	readonly name: string;
 }
 
 /**
@@ -138,18 +126,6 @@ export function producerMode(
 /** Whether a declaration names commands the CLI would run. */
 export function declaresProducers(request: EmbedRequest): boolean {
 	return request.build !== undefined || request.watch !== undefined;
-}
-
-/** The part of a declaration a built executable keeps: no producer commands. */
-export function embeddedAsset(declaration: EmbedDeclaration): EmbeddedAsset {
-	return {
-		kind: declaration.kind,
-		path: declaration.path,
-		...(declaration.include === undefined ? {} : { include: declaration.include }),
-		...(declaration.exclude === undefined ? {} : { exclude: declaration.exclude }),
-		...(declaration.dot === true ? { dot: true as const } : {}),
-		name: declaration.name,
-	};
 }
 
 export function embedModuleId(declaration: EmbedDeclaration): string {

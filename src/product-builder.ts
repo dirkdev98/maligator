@@ -227,13 +227,13 @@ function emitProductCliTranslationUnits(
 		},
 	});
 	progress("embedding product CLI assets");
-	const assets = collectEmbeddedAssets(embedDeclarationsOf([definition.runtime]));
-	const compilerWire = assets.find(
-		(asset) =>
-			asset.type === "file" &&
-			(JSON.parse(asset.name) as { path: string }).path ===
-				path.resolve(compilerWirePath),
-	);
+	const declarations = embedDeclarationsOf([definition.runtime]);
+	const assets = collectEmbeddedAssets(declarations);
+	const compilerWireName = declarations.find(
+		(declaration) =>
+			declaration.kind === "file" && declaration.path === path.resolve(compilerWirePath),
+	)?.name;
+	const compilerWire = assets.find((asset) => asset.name === compilerWireName);
 	if (compilerWire === undefined)
 		throw new Error("The product CLI must embed the compiler wire it bakes");
 	// The baked eval compiler already links these bytes; the asset reuses that symbol.
