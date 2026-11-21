@@ -433,6 +433,7 @@ export function compileLinkedTestImage(
 		targets: dependencyTargets(planning),
 		config: options.config,
 		execution: options.execution,
+		platformSourceRoot: options.platformSourceRoot,
 		facts,
 		stripTypes: options.stripTypes,
 		stripperIdentity: options.stripperIdentity,

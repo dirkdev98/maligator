@@ -83,6 +83,7 @@ export interface CompileDependencyFragmentsOptions {
 	targets: ReadonlyArray<string>;
 	config: ResolvedBuildConfig;
 	execution?: Execution;
+	platformSourceRoot?: string;
 	facts: CompilerProgramFacts;
 	stripTypes: BuildModuleGraphOptions["stripTypes"];
 	stripperIdentity: string;
@@ -98,11 +99,12 @@ export interface CompileDependencyFragmentsOptions {
 }
 
 interface DependencyFragmentRequest {
-	schema: 4;
+	schema: 5;
 	target: LinkedImageTarget;
 	targets: Array<string>;
 	config: ResolvedBuildConfig;
 	execution?: Execution;
+	platformSourceRoot?: string;
 	stripperIdentity: string;
 	cacheDirectory?: string;
 	/** Present when the request compiles one chunk of the island of `targets`. */
@@ -367,7 +369,7 @@ function islandGraph(
 	targets: ReadonlyArray<string>,
 	options: Pick<
 		CompileDependencyFragmentsOptions,
-		"config" | "execution" | "stripTypes" | "session"
+		"config" | "execution" | "platformSourceRoot" | "stripTypes" | "session"
 	>,
 ): ModuleGraph {
 	const directory = path.dirname(targets[0]!);
@@ -387,6 +389,7 @@ function islandGraph(
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
 		execution: options.execution,
+		platformSourceRoot: options.platformSourceRoot,
 		parseCache: options.session.moduleParses,
 	});
 }
@@ -418,7 +421,7 @@ function packageRootGraph(
 	directory: string,
 	options: Pick<
 		CompileDependencyFragmentsOptions,
-		"config" | "execution" | "stripTypes" | "session"
+		"config" | "execution" | "platformSourceRoot" | "stripTypes" | "session"
 	>,
 ): ModuleGraph {
 	return buildModuleGraph(packageRootModule(directory), {
@@ -427,6 +430,7 @@ function packageRootGraph(
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
 		execution: options.execution,
+		platformSourceRoot: options.platformSourceRoot,
 		parseCache: options.session.moduleParses,
 	});
 }
@@ -440,7 +444,7 @@ function chunkGraph(
 	external: ReadonlyMap<string, ExternalModuleInterface>,
 	options: Pick<
 		CompileDependencyFragmentsOptions,
-		"config" | "execution" | "stripTypes" | "session"
+		"config" | "execution" | "platformSourceRoot" | "stripTypes" | "session"
 	>,
 ): ModuleGraph {
 	const members = chunk.members;
@@ -464,6 +468,7 @@ function chunkGraph(
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
 		execution: options.execution,
+		platformSourceRoot: options.platformSourceRoot,
 		parseCache: options.session.moduleParses,
 	});
 	const memberSet = new Set(members);
@@ -579,7 +584,7 @@ export function compileDependencyFragmentRequest(
 		| DependencyFragmentRequest
 		| undefined;
 	if (
-		request?.schema !== 4 ||
+		request?.schema !== 5 ||
 		!Array.isArray(request.targets) ||
 		request.targets.length === 0
 	) {
@@ -598,6 +603,7 @@ export function compileDependencyFragmentRequest(
 	const graphOptions = {
 		config: request.config,
 		execution: request.execution,
+		platformSourceRoot: request.platformSourceRoot,
 		stripTypes,
 		session,
 	};
@@ -729,11 +735,12 @@ export function compileDependencyFragments(
 		options.phases.workerMs += compileWithWorkers(
 			environment.root,
 			queued.map((unit) => ({
-				schema: 4,
+				schema: 5,
 				target: options.target,
 				targets: unit.islandTargets,
 				config: options.config,
 				execution: options.execution,
+				platformSourceRoot: options.platformSourceRoot,
 				stripperIdentity: options.stripperIdentity,
 				...(options.cacheDirectory === undefined
 					? {}

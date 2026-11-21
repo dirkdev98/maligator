@@ -38,5 +38,5 @@ export const testHost = embedDirectory("./testing", {
 });
 /** Source platform modules the compiler reads from disk. */
 export const platformSources = embedDirectory(".", {
-	include: ["assets/**", "http/**", "workers/**", "testing/node-test.ts"],
+	include: ["assets/**", "fs/**", "http/**", "workers/**", "testing/node-test.ts"],
 });

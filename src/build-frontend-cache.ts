@@ -888,6 +888,7 @@ function prepareBuildFrontend(
 					graph: currentGraph(),
 					config: options.config,
 					execution: options.execution,
+					platformSourceRoot,
 					facts,
 					stripTypes: options.stripTypes,
 					stripperIdentity: options.stripperIdentity,

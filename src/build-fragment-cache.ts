@@ -66,6 +66,7 @@ export interface CompileBuildFragmentsOptions {
 	graph: ModuleGraph;
 	config: ResolvedBuildConfig;
 	execution?: Execution;
+	platformSourceRoot: string;
 	facts: CompilerProgramFacts;
 	stripTypes: BuildModuleGraphOptions["stripTypes"];
 	stripperIdentity: string;
@@ -251,6 +252,7 @@ export function compileBuildFragments(
 					targets,
 					config: options.config,
 					execution: options.execution,
+					platformSourceRoot: options.platformSourceRoot,
 					facts: options.facts,
 					stripTypes: options.stripTypes,
 					stripperIdentity: options.stripperIdentity,
@@ -276,6 +278,7 @@ export function compileBuildFragments(
 				stripTypes: options.stripTypes,
 				buildConfig: options.config,
 				execution: options.execution,
+				platformSourceRoot: options.platformSourceRoot,
 				parseCache: options.session.moduleParses,
 				entryGoal: "module",
 				entrySource: group.roots
@@ -298,6 +301,7 @@ export function compileBuildFragments(
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
 		execution: options.execution,
+		platformSourceRoot: options.platformSourceRoot,
 		parseCache: options.session.moduleParses,
 		externalModules: external,
 	});
