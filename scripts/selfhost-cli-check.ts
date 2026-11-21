@@ -1069,7 +1069,10 @@ let createdConfig = false;
 try {
 	const initOutput = invoke(["init"]);
 	createdConfig = true;
-	if (!initOutput.includes("Created") || !initOutput.includes(configPath)) {
+	if (
+		!initOutput.includes(`Created ${path.relative(project, configPath)}`) ||
+		!initOutput.includes("maligator run src/index.ts")
+	) {
 		throw new Error(`init output was not actionable:\n${initOutput}`);
 	}
 	console.log("ok   init created maligator.build.ts");
