@@ -21,12 +21,28 @@ prebuilt eval compiler wire as its `runtime` and `compilerWire` assets
 startup, so the copied compiler can run the full native pipeline outside a Maligator
 checkout and without Node.js. `npm run selfhost:cli` exercises that transfer path.
 
+## Packaged runtime archives
+
+Each npm platform package includes machine-code archives for the default
+development flavour, with locked primordials and realms disabled. The CLI looks
+beside its installed binary for `runtime-libraries/manifest.json` when a
+development build needs to link a runner or application. The manifest key covers
+the C and Rust sources, target and ABI baseline, compile flags, and pinned Zig
+producer. It is independent of the consumer's tool paths and `PATH`.
+
+On a match, the CLI verifies the archive sizes and SHA-256 digests and imports the
+archives under the consumer's local action keys in a separate cache namespace.
+Missing or mismatched packages fall back to local builds. Production builds use
+the local runtime cache and the selected toolchain's LTO support. Use
+`MALIGATOR_PREBUILT_RUNTIME_DIR` to test a different archive directory and
+`--verbose` to see which archives a build uses.
+
 ## Toolchain discovery
 
 Every native build performs the same discovery and capability checks used by
 `doctor`. `CC` and `CXX` override compiler selection; otherwise tools are resolved
-strictly from `PATH`. Runtime translation units are compiled directly with `CC` and
-collected into three static archives with `ar`. The Rust half is built with the
+strictly from `PATH`. Local runtime builds compile translation units with `CC` and
+collect them into three static archives with `ar`. The Rust half is built with the
 `cargo`/`rustc` that Rustup selects for `runtime/rust/rust-toolchain.toml`. Building
 it needs a C++ compiler for the bundled Ada URL parser; linking the C++ runtime is
 required only when `surface.webPlatform` or `surface.node` is enabled.
@@ -90,6 +106,35 @@ option that GNU ld and gold use. Unsupported LTO or stripping emits a warning an
 continues with a valid `-O2` executable. Missing required C2x or C++ link capability
 is a hard error. Stripping does not remove Maligator's own JavaScript source-position
 tables.
+
+## Development runner
+
+`run`, `dev`, and isolated `test` use a packaged runner when one matches the
+configuration. When they need a local runner, the linked-binary cache gives projects
+with the same runtime capabilities and toolchain one executable. The application and
+its workers supply their own runtime images.
+
+On macOS and Linux, the local runner loads C bindings from cached shims before it
+loads any images. Each shim links its library and supplies an installer to the runner.
+Its cache key covers the contract, headers, library sources and files, compiler, and
+FFI runtime interface. If a library needs the executable link, Maligator links the
+project's libraries together in a local runner. `maligator ffi check` reports the
+reason. Executables produced by `build` link their bindings directly.
+
+## Language components
+
+Temporal and the Intl services are compiled into every runtime archive. A program
+links one only when the engine policy allows it and the program can reach it: the
+compiler lists the component's installer in the image's host manifest
+(`src/compiler/frontend/engine-components.ts`), that reference links the component's
+own translation unit, and realm initialization installs each selected component
+before the primordials lock (`runtime/src/language_components.h`). Runtime eval, a
+global object handed to unknown code, and every image of a linked development build
+retain all allowed components; a member read by an unknown key retains Temporal and
+the services behind the locale-sensitive methods. Without a component, those methods
+use the locale-insensitive behaviour ECMA-402 allows. Drivers that load wire images,
+such as the development runner, link every component their engine policy allows,
+since those images name components only by installer name.
 
 ## Rust archive
 

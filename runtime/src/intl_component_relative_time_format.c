@@ -1,0 +1,4 @@
+#include "builtin_intl.h"
+#include "language_components.h"
+
+MAL_LANGUAGE_COMPONENT_UNIT(mal_host_install_intl_relative_time_format, MAL_LANGUAGE_COMPONENT_INTL_RELATIVE_TIME_FORMAT, mal_intl_install_relative_time_format, &mal_intl_relative_time_format_operations)

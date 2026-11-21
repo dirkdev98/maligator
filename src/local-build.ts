@@ -37,6 +37,7 @@ import {
 import type { PreludeDeclarations } from "./c-declaration-slice.ts";
 import { maligatorBuildDirectory } from "./cache-root.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
+import { languageComponentAnchorSource } from "./compiler/frontend/engine-components.ts";
 import type {
 	GeneratedTranslationUnit,
 	GeneratedTranslationUnitDefinition,
@@ -707,7 +708,7 @@ export function buildLoadDriver(
 	return buildLocalBinary({
 		context,
 		name: "MaligatorLoad",
-		cSource: '#include "vm.h"\n',
+		cSource: languageComponentAnchorSource(context.features),
 		verbose,
 		mainFile: path.join(context.runtimeDirectory, "load_main.c"),
 		outDir: runnerWorkDirectory(context),
@@ -724,7 +725,7 @@ export function buildDevelopmentRunner(
 	return buildLocalBinary({
 		context,
 		name: "MaligatorDev",
-		cSource: '#include "vm.h"\n',
+		cSource: languageComponentAnchorSource(context.features),
 		verbose,
 		mainFile: path.join(context.runtimeDirectory, "dev_main.c"),
 		cacheSuffix,

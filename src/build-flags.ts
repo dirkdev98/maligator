@@ -56,26 +56,17 @@ export interface NativeBuildPlan {
 	warnings: Array<string>;
 }
 
-/** One source of truth for each selectable Intl service's C gate and Cargo feature. */
-export const INTL_SERVICE_FEATURES: Record<string, { cargo: string; define: string }> = {
-	collator: { cargo: "intl-collator", define: "MAL_INTL_HAS_COLLATOR" },
-	"number-format": { cargo: "intl-number-format", define: "MAL_INTL_HAS_NUMBER_FORMAT" },
-	"date-time-format": {
-		cargo: "intl-date-time-format",
-		define: "MAL_INTL_HAS_DATE_TIME_FORMAT",
-	},
-	"plural-rules": { cargo: "intl-plural-rules", define: "MAL_INTL_HAS_PLURAL_RULES" },
-	"list-format": { cargo: "intl-list-format", define: "MAL_INTL_HAS_LIST_FORMAT" },
-	segmenter: { cargo: "intl-segmenter", define: "MAL_INTL_HAS_SEGMENTER" },
-	"display-names": { cargo: "intl-display-names", define: "MAL_INTL_HAS_DISPLAY_NAMES" },
-	"relative-time-format": {
-		cargo: "intl-relative-time-format",
-		define: "MAL_INTL_HAS_RELATIVE_TIME_FORMAT",
-	},
-	"duration-format": {
-		cargo: "intl-duration-format",
-		define: "MAL_INTL_HAS_DURATION_FORMAT",
-	},
+/** Each selectable Intl service's Cargo feature, which Wasm builds compile alone. */
+export const INTL_SERVICE_FEATURES: Record<string, { cargo: string }> = {
+	collator: { cargo: "intl-collator" },
+	"number-format": { cargo: "intl-number-format" },
+	"date-time-format": { cargo: "intl-date-time-format" },
+	"plural-rules": { cargo: "intl-plural-rules" },
+	"list-format": { cargo: "intl-list-format" },
+	segmenter: { cargo: "intl-segmenter" },
+	"display-names": { cargo: "intl-display-names" },
+	"relative-time-format": { cargo: "intl-relative-time-format" },
+	"duration-format": { cargo: "intl-duration-format" },
 };
 
 export interface NativeFeatureInput {
@@ -84,11 +75,9 @@ export interface NativeFeatureInput {
 	evalEnabled?: boolean;
 	realmsEnabled?: boolean;
 	intlEnabled?: boolean;
-	/** `-DMAL_INTL_HAS_<SERVICE>=0` for each dropped service (subset Intl build). */
-	intlServiceDefines?: Array<string>;
 	webPlatformEnabled?: boolean;
 	regexpEnabled?: boolean;
-	/** `-DMAL_TEMPORAL=0` when the Temporal surface is excluded (default on internally). */
+	/** Selects the Temporal Cargo feature for Wasm; native archives always contain Temporal. */
 	temporalEnabled?: boolean;
 	/** The Node host surface selects the Rust components its modules link (default off). */
 	nodeEnabled?: boolean;
@@ -143,9 +132,7 @@ export function normalizeNativeFeatures(
 	const developmentApiEnabled = input.developmentApiEnabled ?? false;
 	const services = Object.values(INTL_SERVICE_FEATURES);
 	const knownCargoFeatures = new Set(services.map(({ cargo }) => cargo));
-	const knownDisableDefines = new Set(services.map(({ define }) => `-D${define}=0`));
-	let intlFeatures = sortedUnique(input.intlFeatures ?? []);
-	const suppliedDefines = sortedUnique(input.intlServiceDefines ?? []);
+	const intlFeatures = sortedUnique(input.intlFeatures ?? []);
 
 	if (intlEnabled) {
 		for (const feature of intlFeatures) {
@@ -153,42 +140,13 @@ export function normalizeNativeFeatures(
 				throw new Error(`unknown Intl Cargo feature: ${feature}`);
 			}
 		}
-		for (const define of suppliedDefines) {
-			if (!knownDisableDefines.has(define)) {
-				throw new Error(`unknown Intl service define: ${define}`);
-			}
-		}
-		if (intlFeatures.length === 0 && suppliedDefines.length > 0) {
-			const disabled = new Set(suppliedDefines);
-			intlFeatures = sortedUnique(
-				services
-					.filter(({ define }) => !disabled.has(`-D${define}=0`))
-					.map(({ cargo }) => cargo),
-			);
-		}
-	}
-
-	const intlDefines =
-		!intlEnabled || intlFeatures.length === 0
-			? []
-			: sortedUnique(
-					services
-						.filter(({ cargo }) => !intlFeatures.includes(cargo))
-						.map(({ define }) => `-D${define}=0`),
-				);
-	if (intlEnabled && suppliedDefines.length > 0) {
-		if (JSON.stringify(suppliedDefines) !== JSON.stringify(intlDefines)) {
-			throw new Error("Intl C defines and Cargo features select different services");
-		}
 	}
 
 	const cDefines = [
 		...(primordialsLocked ? [] : ["-DMAL_PRIMORDIALS_LOCKED=0"]),
 		...(evalEnabled ? [] : ["-DMAL_EVAL=0"]),
 		...(realmsEnabled ? [] : ["-DMAL_REALMS=0"]),
-		...(intlEnabled ? intlDefines : ["-DMAL_INTL=0"]),
 		...(regexpEnabled ? [] : ["-DMAL_REGEXP=0"]),
-		...(temporalEnabled ? [] : ["-DMAL_TEMPORAL=0"]),
 		...(profileEnabled ? ["-DMAL_PROFILE=1"] : []),
 		...(developmentApiEnabled ? ["-DMAL_DEVELOPMENT_API=1"] : []),
 	];

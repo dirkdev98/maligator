@@ -1,0 +1,4 @@
+#include "builtin_intl.h"
+#include "language_components.h"
+
+MAL_LANGUAGE_COMPONENT_UNIT(mal_host_install_intl_plural_rules, MAL_LANGUAGE_COMPONENT_INTL_PLURAL_RULES, mal_intl_install_plural_rules, &mal_intl_plural_rules_operations)

@@ -4180,8 +4180,8 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
     char *policy = application_string(roots[2]);
     bool compatible = policy != nullptr && strcmp(policy, MAL_PRIMORDIALS_LOCKED ? "locked" : "mutable") == 0;
     free(policy);
-    const char *features[] = {"eval", "realms", "regexp", "temporal", "intl"};
-    const bool available[] = {MAL_EVAL, MAL_REALMS, MAL_REGEXP, MAL_TEMPORAL, MAL_INTL};
+    const char *features[] = {"eval", "realms", "regexp"};
+    const bool available[] = {MAL_EVAL, MAL_REALMS, MAL_REGEXP};
     for (usize index = 0; index < countof(features); index++) {
         bool required;
         if (!application_boolean(vm, roots[1], features[index], &required)) goto failed;

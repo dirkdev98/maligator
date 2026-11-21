@@ -65,18 +65,6 @@ typedef size_t usize;
 #define MAL_REALMS 1
 #endif
 
-// Whether this build includes the Intl (ECMA-402 / ICU4X) surface and its ~9 MB
-// of baked CLDR data. Default on; the build config sets `-DMAL_INTL=0` (see
-// build-flags.ts) when `engine.intl` is disabled, which makes builtin_intl.c
-// install no `Intl` global (so `typeof Intl === "undefined"`) and the
-// locale-sensitive methods (localeCompare / toLocaleString) fall back to
-// locale-insensitive behaviour. Must be kept in lockstep with the Rust crate's
-// `intl` Cargo feature (rust-build.ts) — with it off the ICU FFI symbols are not
-// linked, so a stray call would fail to link.
-#ifndef MAL_INTL
-#define MAL_INTL 1
-#endif
-
 // Whether this build includes the RegExp engine (regress). Core ECMAScript, so
 // default on; the build config sets `-DMAL_REGEXP=0` (see build-flags.ts) when
 // `engine.regexp` is false, which compiles builtin_regexp.c / regexp_object.c away
@@ -90,53 +78,9 @@ typedef size_t usize;
 #define MAL_REGEXP 1
 #endif
 
-// Whether this build includes the Temporal global and its calendar/time-zone
-// implementation. Default on for internal tooling; product build configs set
-// `-DMAL_TEMPORAL=0` unless `engine.temporal` is explicitly enabled. The Cargo
-// `temporal` feature must be selected in lockstep so Rust symbols and data are
-// either present together or compiled out together.
-#ifndef MAL_TEMPORAL
-#define MAL_TEMPORAL 1
-#endif
-
 /* Production-faithful source profiler. Profile builds opt in explicitly so
  * ordinary binaries retain identical generated/runtime code and cache identity. */
 #ifndef MAL_PROFILE
 #define MAL_PROFILE 0
 #endif
 
-// Per-ECMA-402-service gates for engine.intl.features. Each defaults to MAL_INTL
-// (so `MAL_INTL=0` forces every service off, and a full Intl build has them all
-// on). A subset build passes `-DMAL_INTL_HAS_<SERVICE>=0` for each UNSELECTED
-// service (build-flags.ts), in lockstep with the Rust `intl-<service>` Cargo
-// features — an off service's icu sub-crate + baked data are not compiled.
-// Intl.Locale / getCanonicalLocales are the floor (gated by MAL_INTL, not
-// per-service). Named MAL_INTL_HAS_* to avoid colliding with the MalIntlKind enum
-// values (MAL_INTL_COLLATOR, …) in intl_object.h.
-#ifndef MAL_INTL_HAS_COLLATOR
-#define MAL_INTL_HAS_COLLATOR MAL_INTL
-#endif
-#ifndef MAL_INTL_HAS_NUMBER_FORMAT
-#define MAL_INTL_HAS_NUMBER_FORMAT MAL_INTL
-#endif
-#ifndef MAL_INTL_HAS_DATE_TIME_FORMAT
-#define MAL_INTL_HAS_DATE_TIME_FORMAT MAL_INTL
-#endif
-#ifndef MAL_INTL_HAS_PLURAL_RULES
-#define MAL_INTL_HAS_PLURAL_RULES MAL_INTL
-#endif
-#ifndef MAL_INTL_HAS_LIST_FORMAT
-#define MAL_INTL_HAS_LIST_FORMAT MAL_INTL
-#endif
-#ifndef MAL_INTL_HAS_SEGMENTER
-#define MAL_INTL_HAS_SEGMENTER MAL_INTL
-#endif
-#ifndef MAL_INTL_HAS_DISPLAY_NAMES
-#define MAL_INTL_HAS_DISPLAY_NAMES MAL_INTL
-#endif
-#ifndef MAL_INTL_HAS_RELATIVE_TIME_FORMAT
-#define MAL_INTL_HAS_RELATIVE_TIME_FORMAT MAL_INTL
-#endif
-#ifndef MAL_INTL_HAS_DURATION_FORMAT
-#define MAL_INTL_HAS_DURATION_FORMAT MAL_INTL
-#endif

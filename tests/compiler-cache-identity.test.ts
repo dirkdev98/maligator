@@ -349,5 +349,20 @@ describe("compiler cache identity", () => {
 		for (const config of frontendDimensions) {
 			expect(JSON.stringify(compilerConfigurationIdentity(config))).not.toBe(base);
 		}
+		expect(
+			JSON.stringify(
+				compilerConfigurationIdentity(
+					resolveBuildConfig({
+						engine: { intl: { enabled: true, features: ["collator"] } },
+					}),
+				),
+			),
+		).not.toBe(
+			JSON.stringify(
+				compilerConfigurationIdentity(
+					resolveBuildConfig({ engine: { intl: { enabled: true } } }),
+				),
+			),
+		);
 	});
 });

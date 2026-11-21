@@ -13912,11 +13912,14 @@ class NativeInstructionEmission {
 						expression = `mal_builtin_string_normalize_known(vm, ${string}, ${transform.form.includes("K")}, ${transform.form.endsWith("C")})`;
 						break;
 					case "case": {
+						// Without the Intl namespace, case mapping ignores the requested locale.
+						const tailored = (name: string) =>
+							`(mal_value_is_undefined(vm->intrinsics[MAL_INTRINSIC_INTL]) ? MAL_UNICODE_LOCALE_ROOT : ${name})`;
 						const locale =
 							transform.locale === "turkic"
-								? "(MAL_INTL ? MAL_UNICODE_LOCALE_TURKIC : MAL_UNICODE_LOCALE_ROOT)"
+								? tailored("MAL_UNICODE_LOCALE_TURKIC")
 								: transform.locale === "lithuanian"
-									? "(MAL_INTL ? MAL_UNICODE_LOCALE_LITHUANIAN : MAL_UNICODE_LOCALE_ROOT)"
+									? tailored("MAL_UNICODE_LOCALE_LITHUANIAN")
 									: "MAL_UNICODE_LOCALE_ROOT";
 						expression = `mal_builtin_string_case_known(vm, ${string}, ${transform.upper}, ${locale})`;
 						break;

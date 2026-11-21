@@ -1,4 +1,5 @@
 #include "vm.h"
+#include "language_components.h"
 #include "perf_stats.h"
 #include "regexp_engine.h"
 #include "unicode.h"
@@ -55,7 +56,7 @@ static MalHostInstaller resolve_language_installer(const char *name, usize lengt
     MATCH_INSTALLER(mal_host_install_regexp);
 #endif
     MATCH_INSTALLER(mal_host_install_unicode_normalization);
-    return nullptr;
+    return mal_language_component_resolve_installer(name, length);
 }
 
 #undef MATCH_INSTALLER

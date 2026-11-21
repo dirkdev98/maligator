@@ -56,17 +56,8 @@
 #include "./typed_array_object.h"
 #include "./vm.h"
 #include "./vm_ops.h"
-#include "mal_i18n.h"
-#if MAL_TEMPORAL
-#include "temporal_rs/Duration.h"
-#include "temporal_rs/Instant.h"
-#include "temporal_rs/PlainDate.h"
-#include "temporal_rs/PlainDateTime.h"
-#include "temporal_rs/PlainMonthDay.h"
-#include "temporal_rs/PlainTime.h"
-#include "temporal_rs/PlainYearMonth.h"
-#include "temporal_rs/ZonedDateTime.h"
-#endif
+#include "builtin_temporal.h"
+#include "language_components.h"
 
 MAL_ISOLATE_LOCAL MalIsolateLocals mal_isolate = {
     .prototype_chain_epoch = 1,
@@ -2589,79 +2580,20 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
             break;
         }
         case MAL_HEAP_TEMPORAL_OBJECT: {
-#if MAL_TEMPORAL
             MalTemporalObject *temporal = (MalTemporalObject *) cell;
             if (temporal->handle != nullptr) {
-                switch (temporal->kind) {
-                    case MAL_TEMPORAL_DURATION:
-                        temporal_rs_Duration_destroy(temporal->handle);
-                        break;
-                    case MAL_TEMPORAL_INSTANT:
-                        temporal_rs_Instant_destroy(temporal->handle);
-                        break;
-                    case MAL_TEMPORAL_PLAIN_DATE:
-                        temporal_rs_PlainDate_destroy(temporal->handle);
-                        break;
-                    case MAL_TEMPORAL_PLAIN_DATE_TIME:
-                        temporal_rs_PlainDateTime_destroy(temporal->handle);
-                        break;
-                    case MAL_TEMPORAL_PLAIN_MONTH_DAY:
-                        temporal_rs_PlainMonthDay_destroy(temporal->handle);
-                        break;
-                    case MAL_TEMPORAL_PLAIN_TIME:
-                        temporal_rs_PlainTime_destroy(temporal->handle);
-                        break;
-                    case MAL_TEMPORAL_PLAIN_YEAR_MONTH:
-                        temporal_rs_PlainYearMonth_destroy(temporal->handle);
-                        break;
-                    case MAL_TEMPORAL_ZONED_DATE_TIME:
-                        temporal_rs_ZonedDateTime_destroy(temporal->handle);
-                        break;
-                }
+                // Temporal objects exist only once the Temporal component is linked.
+                const MalTemporalOperations *operations =
+                    mal_language_component_operations(MAL_LANGUAGE_COMPONENT_TEMPORAL);
+                operations->release(temporal->kind, temporal->handle);
                 temporal->handle = nullptr;
             }
-#endif
             break;
         }
         case MAL_HEAP_INTL_OBJECT: {
             MalIntlObject *intl = (MalIntlObject *) cell;
             if (intl->handle != nullptr) {
-                // Only selected services can create handles or link their finalizers.
-#if MAL_INTL_HAS_COLLATOR
-                if (intl->kind == MAL_INTL_COLLATOR) {
-                    mal_i18n_collator_free(intl->handle);
-                }
-#endif
-#if MAL_INTL_HAS_PLURAL_RULES
-                if (intl->kind == MAL_INTL_PLURAL_RULES) {
-                    mal_i18n_plural_rules_free(intl->handle);
-                }
-#endif
-#if MAL_INTL_HAS_NUMBER_FORMAT
-                if (intl->kind == MAL_INTL_NUMBER_FORMAT) {
-                    mal_gc_process_release(mal_i18n_number_formatter_free(intl->handle));
-                }
-#endif
-#if MAL_INTL_HAS_DATE_TIME_FORMAT
-                if (intl->kind == MAL_INTL_DATE_TIME_FORMAT) {
-                    mal_gc_process_release(mal_i18n_datetime_formatter_free(intl->handle));
-                }
-#endif
-#if MAL_INTL_HAS_LIST_FORMAT
-                if (intl->kind == MAL_INTL_LIST_FORMAT) {
-                    mal_i18n_list_formatter_free(intl->handle);
-                }
-#endif
-#if MAL_INTL_HAS_RELATIVE_TIME_FORMAT
-                if (intl->kind == MAL_INTL_RELATIVE_TIME_FORMAT) {
-                    mal_gc_process_release(mal_i18n_relative_time_free(intl->handle));
-                }
-#endif
-#if MAL_INTL_HAS_DURATION_FORMAT
-                if (intl->kind == MAL_INTL_DURATION_FORMAT) {
-                    mal_gc_process_release(mal_i18n_duration_free(intl->handle));
-                }
-#endif
+                mal_gc_process_release(mal_intl_object_release_handle(intl->kind, intl->handle));
                 intl->handle = nullptr;
             }
             break;

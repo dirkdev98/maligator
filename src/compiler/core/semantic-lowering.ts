@@ -32,6 +32,7 @@ import type {
 	DirectEvalPrivateNameContext,
 	DirectEvalPrivateSlot,
 } from "../frontend/direct-eval-context.ts";
+import { engineComponentInstallers } from "../frontend/engine-components.ts";
 import {
 	ESTREE_SKIP,
 	ESTREE_STOP,
@@ -1381,6 +1382,16 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 					.concat(hostSurfaceInstallers(program))
 					// The embedded compiler uses the eval runtime's already installed intrinsics.
 					.concat(program.intrinsicGlobalReads ? [] : [...program.languageInstallers])
+					// Runtime eval code uses the components its host program installed.
+					.concat(
+						program.intrinsicGlobalReads || program.evalCompletion
+							? []
+							: engineComponentInstallers(
+									program.semantic,
+									program.facts.world,
+									moduleLinks !== undefined,
+								),
+					)
 					.filter(
 						(installer, index, installers) => installers.indexOf(installer) === index,
 					),

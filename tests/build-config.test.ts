@@ -9,12 +9,11 @@ import {
 	buildConfigCacheSuffix,
 	buildDerivationFromConfig,
 	intlCargoFeatures,
-	intlDisabledDefines,
 	loadBuildConfig,
 	resolveBuildConfig,
 	resolveOutputName,
 } from "../src/build-config.ts";
-import type { ResolvedBuildConfig } from "../src/build-config.ts";
+import type { MaligatorBuildConfig, ResolvedBuildConfig } from "../src/build-config.ts";
 import { normalizeNativeFeatures } from "../src/build-flags.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import {
@@ -332,33 +331,37 @@ describe("resolveOutputName", () => {
 	);
 });
 
-describe("intl feature → cargo features + C defines", () => {
+describe("intl feature → cargo features", () => {
 	const config = (intl: object) => resolveBuildConfig({ engine: { intl } });
 
-	it("Intl off → no cargo features, no service defines (-DMAL_INTL=0 handles it)", () => {
-		const off = config({ enabled: false });
-		expect(intlCargoFeatures(off)).toEqual([]);
-		expect(intlDisabledDefines(off)).toEqual([]);
+	it("Intl off → no cargo features", () => {
+		expect(intlCargoFeatures(config({ enabled: false }))).toEqual([]);
 	});
 
-	it("all services (empty features) → default intl-full, no disable defines", () => {
-		const all = config({ enabled: true });
-		expect(intlCargoFeatures(all)).toEqual([]); // empty → cargo default (intl-full)
-		expect(intlDisabledDefines(all)).toEqual([]);
+	it("all services (empty features) → default intl-full", () => {
+		expect(intlCargoFeatures(config({ enabled: true }))).toEqual([]); // empty → cargo default (intl-full)
 	});
 
-	it("subset → per-service cargo features + disable defines for the rest", () => {
+	it("subset → per-service cargo features", () => {
 		const subset = config({ enabled: true, features: ["number-format", "collator"] });
 		expect(intlCargoFeatures(subset).sort()).toEqual([
 			"intl-collator",
 			"intl-number-format",
 		]);
-		const defines = intlDisabledDefines(subset);
-		expect(defines).toContain("-DMAL_INTL_HAS_SEGMENTER=0");
-		expect(defines).toContain("-DMAL_INTL_HAS_DISPLAY_NAMES=0");
-		// selected services are NOT disabled
-		expect(defines).not.toContain("-DMAL_INTL_HAS_COLLATOR=0");
-		expect(defines).not.toContain("-DMAL_INTL_HAS_NUMBER_FORMAT=0");
+	});
+
+	it("compiles the same C runtime for every Intl and Temporal policy", () => {
+		const engines: Array<NonNullable<MaligatorBuildConfig["engine"]>> = [
+			{},
+			{ temporal: true },
+			{ intl: { enabled: true } },
+			{ intl: { enabled: true, features: ["segmenter"] } },
+		];
+		const defines = engines.map(
+			(engine) =>
+				buildDerivationFromConfig(resolveBuildConfig({ engine })).features.cDefines,
+		);
+		expect(new Set(defines.map((entry) => JSON.stringify(entry))).size).toBe(1);
 	});
 
 	it("distinct feature sets get distinct output suffixes; all-services is canonical", () => {
@@ -464,9 +467,6 @@ describe("buildConfigCacheSuffix", () => {
 		});
 		expect(buildDerivationFromConfig(noTemporal).features.temporalEnabled).toBe(false);
 		expect(buildDerivationFromConfig(canonical).features.temporalEnabled).toBe(true);
-		expect(normalizeNativeFeatures({ temporalEnabled: false }).cDefines).toContain(
-			"-DMAL_TEMPORAL=0",
-		);
 		expect(buildConfigCacheSuffix(noTemporal)).not.toBe(
 			buildConfigCacheSuffix(canonical),
 		);

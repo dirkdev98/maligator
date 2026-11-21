@@ -1865,6 +1865,17 @@ MalValue mal_builtin_string_locale_compare_prepared(MalVm *vm, MalValue receiver
     return result;
 }
 
+MalValue mal_builtin_string_locale_compare_prepared_tag(MalVm *vm, MalValue receiver, MalValue that, MalString *locale, u8 options) {
+    MalValue roots[2] = {receiver, that};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 2);
+    MalString *string = mal_builtin_string_this_to_string(vm, roots[0]);
+    MalValue result = vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined()
+        : mal_intl_locale_compare_prepared_tag(vm, mal_value_from_string(string), roots[1], locale, options);
+    mal_gc_unroot(&root_span);
+    return result;
+}
+
 bool mal_builtin_string_span_locale_compare(
     MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
     MalValue that, MalValue locales, MalValue options, MalValue *out) {

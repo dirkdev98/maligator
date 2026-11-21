@@ -34,11 +34,8 @@ describe("engine.temporal", () => {
 		});
 	});
 
-	it("selects C and Cargo features in lockstep", () => {
-		expect(enabled.context.features.cargoFeatures).toContain("temporal");
-		expect(enabled.context.features.cDefines).not.toContain("-DMAL_TEMPORAL=0");
-		expect(disabled.context.features.cargoFeatures).not.toContain("temporal");
-		expect(disabled.context.features.cDefines).toContain("-DMAL_TEMPORAL=0");
+	it("links both policies against one C runtime archive", () => {
+		expect(enabled.artifacts.c.runtime).toBe(disabled.artifacts.c.runtime);
 	});
 
 	it("runs Duration through temporal_rs", () => {

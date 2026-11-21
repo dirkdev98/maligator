@@ -173,6 +173,8 @@ export function compilerConfigurationIdentity(config: ResolvedBuildConfig): unkn
 				regexp: config.engine.regexp,
 				temporal: config.engine.temporal,
 				intl: config.engine.intl.enabled,
+				// Selected services decide which Intl components an image retains.
+				intlServices: config.engine.intl.enabled ? config.engine.intl.features : [],
 			},
 		},
 		hostSurface: config.surface,

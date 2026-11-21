@@ -1773,7 +1773,7 @@ function featureGuard(feature: BuiltinFeature): string {
 		case "regexp":
 			return "1";
 		case "temporal":
-			return "MAL_TEMPORAL";
+			return "1";
 		case "intl":
 			return "1";
 	}

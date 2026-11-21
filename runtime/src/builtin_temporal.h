@@ -1,15 +1,23 @@
 #pragma once
 
 #include "./defaults.h"
+#include "function_object.h"
+#include "temporal_object.h"
 #include "value.h"
 
 typedef struct MalVm MalVm;
 
-/** Install the Stage 4 Temporal namespace when MAL_TEMPORAL is enabled. */
-void mal_builtin_temporal_install(MalVm *vm);
+/** Entry points the Temporal component offers to built-ins outside Temporal. */
+typedef struct MalTemporalOperations {
+    /** Free an object's temporal_rs handle. */
+    void (*release)(MalTemporalKind kind, void *handle);
+    /** Read a Temporal.Duration's units, years through nanoseconds; false for other objects. */
+    bool (*duration_units)(const MalTemporalObject *object, f64 units[10]);
+    /** Date.prototype.toTemporalInstant, which Date defines when Temporal is installed. */
+    MalNativeFunctionCallback date_to_temporal_instant;
+} MalTemporalOperations;
 
-/** Create a Temporal.Instant directly from an integral Date time value. */
-MalValue mal_builtin_temporal_instant_from_epoch_milliseconds(
-    MalVm *vm,
-    f64 milliseconds
-);
+/** Install the Temporal namespace. */
+void mal_temporal_install(MalVm *vm);
+
+extern const MalTemporalOperations mal_temporal_operations;

@@ -281,7 +281,6 @@ typedef enum MalIntrinsic {
      * stay undefined; scripts/generate-known-operations.ts reads availability from
      * these `requires` markers.
      */
-    /* requires MAL_TEMPORAL */
     MAL_INTRINSIC_TEMPORAL,
     MAL_INTRINSIC_TEMPORAL_DURATION_CONSTRUCTOR,
     MAL_INTRINSIC_TEMPORAL_DURATION_PROTOTYPE,
@@ -299,7 +298,6 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_TEMPORAL_PLAIN_YEAR_MONTH_PROTOTYPE,
     MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_CONSTRUCTOR,
     MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_PROTOTYPE,
-    /* end requires */
     MAL_INTRINSIC_REGEXP_CONSTRUCTOR,
     MAL_INTRINSIC_REGEXP_PROTOTYPE,
     /** Per-realm Annex B RegExp input/match/capture state. */

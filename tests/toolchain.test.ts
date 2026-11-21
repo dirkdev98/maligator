@@ -1509,14 +1509,7 @@ printf '!<arch>\\n' > "$2"
 			regexpEnabled: false,
 		});
 		expect(features.cargoFeatures).toEqual(["intl-segmenter", "temporal"]);
-		expect(features.cDefines).toContain("-DMAL_INTL_HAS_COLLATOR=0");
 		expect(features.cDefines).toContain("-DMAL_REGEXP=0");
-		expect(() =>
-			normalizeNativeFeatures({
-				intlFeatures: ["intl-segmenter"],
-				intlServiceDefines: ["-DMAL_INTL_HAS_NUMBER_FORMAT=0"],
-			}),
-		).toThrow(/different services/);
 	});
 
 	it("compiles the same C runtime for every host surface", () => {

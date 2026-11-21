@@ -46,3 +46,6 @@ typedef struct MalIntlObject {
 void mal_intl_object_init(MalHeap *heap, MalIntlObject *intl, MalObject *prototype, MalIntlKind kind, void *handle, MalValue data);
 
 MalIntlObject *mal_intl_object_new(MalHeap *heap, MalObject *prototype, MalIntlKind kind, void *handle, MalValue data);
+
+/** Free an instance's native handle through its service; returns the external bytes it charged. */
+usize mal_intl_object_release_handle(MalIntlKind kind, void *handle);

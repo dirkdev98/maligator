@@ -10,6 +10,7 @@
 #include "maligator_fs.h"
 #include "maligator_http.h"
 #include "mal_process.h"
+#include "language_components.h"
 #include "regexp_engine.h"
 #include "unicode.h"
 #include "web_surface.h"
@@ -73,6 +74,8 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_regexp);
 #endif
     MATCH_INSTALLER(mal_host_install_unicode_normalization);
+    MalHostInstaller language = mal_language_component_resolve_installer(name, length);
+    if (language != nullptr) return language;
     MATCH_INSTALLER(mal_host_install_maligator);
     MATCH_INSTALLER(mal_host_install_maligator_application);
     MATCH_INSTALLER(mal_host_install_maligator_assets);

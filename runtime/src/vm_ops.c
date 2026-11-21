@@ -9826,14 +9826,10 @@ void mal_op_concat_strings(MalCallable *callable, const MalInstruction *instruct
 
 void mal_op_prepared_string_compare(MalCallable *callable, const MalInstruction *instruction) {
     u32 plan = instruction->as.prepared_string_compare.locale_options;
-    MalString *locale = mal_vm_string_constant(callable->vm, plan >> 6);
-    usize length = mal_string_length(locale);
-    byte bytes[128];
-    for (usize i = 0; i < length; i++) bytes[i] = (byte) mal_string_code_unit_at(locale, i);
-    callable->registers[instruction->as.prepared_string_compare.dst] = mal_builtin_string_locale_compare_prepared(
+    callable->registers[instruction->as.prepared_string_compare.dst] = mal_builtin_string_locale_compare_prepared_tag(
         callable->vm, callable->registers[instruction->as.prepared_string_compare.left],
-        callable->registers[instruction->as.prepared_string_compare.right], bytes, length,
-        (u8) (plan & 63));
+        callable->registers[instruction->as.prepared_string_compare.right],
+        mal_vm_string_constant(callable->vm, plan >> 6), (u8) (plan & 63));
 }
 
 // ClassDefinitionEvaluation heritage check: the superclass must be null or a

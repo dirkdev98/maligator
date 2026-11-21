@@ -511,16 +511,16 @@ export interface MaligatorBuildConfig {
 		 * @default true
 		 */
 		regexp?: boolean;
-		/** Include Temporal and its calendar/time-zone data.
+		/** Allow Temporal. A program links its calendar and time-zone data only when it can reach Temporal.
 		 * @default false
 		 */
 		temporal?: boolean;
 		intl?: {
-			/** Include internationalization services and their native data.
+			/** Allow internationalization. A program links only the services, and their native data, it can reach.
 			 * @default false
 			 */
 			enabled?: boolean;
-			/** Select services. An empty list includes all services when enabled.
+			/** Select the services a program may use. An empty list allows all services when enabled.
 			 * @default []
 			 */
 			features?: Array<MaligatorIntlFeature>;

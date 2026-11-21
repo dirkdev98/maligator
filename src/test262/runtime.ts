@@ -23,6 +23,7 @@ import {
 	sanitizerCcFlags,
 } from "../build-flags.ts";
 import { stripCompactTypes } from "../compiler/frontend/compact-type-strip.ts";
+import { languageComponentAnchorSource } from "../compiler/frontend/engine-components.ts";
 import {
 	compileEntrypoint,
 	compileEntrypointToBuffer,
@@ -449,7 +450,7 @@ export function test262PrepareBuild() {
 		? buildLocalBinary({
 				context: nativeContext,
 				name: "Test262Wire",
-				cSource: '#include "vm.h"\n',
+				cSource: languageComponentAnchorSource(nativeContext.features),
 				verbose: false,
 				mainFile: path.resolve("runtime/test262_wire.c"),
 				outDir: WORK_PATH,

@@ -140,15 +140,6 @@ MalValue mal_known_native_date_proto_to_locale_time_string(MalVm *vm, MalValue r
 MalValue mal_known_native_date_proto_to_string(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
     return date_proto_to_string(vm, receiver, args, count, target, callee);
 }
-MalValue mal_known_native_date_proto_to_temporal_instant(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
-#if (MAL_TEMPORAL)
-    return date_proto_to_temporal_instant(vm, receiver, args, count, target, callee);
-#else
-    (void) receiver; (void) args; (void) count; (void) target; (void) callee;
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Known native operation is unavailable");
-    return mal_value_new_undefined();
-#endif
-}
 MalValue mal_known_native_date_proto_to_time_string(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
     return date_proto_to_time_string(vm, receiver, args, count, target, callee);
 }

@@ -1,7 +1,5 @@
 #include "builtin_temporal.h"
 
-#if MAL_TEMPORAL
-
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -10,6 +8,7 @@
 
 #include "ascii.h"
 #include "builtin_bigint.h"
+#include "date_object.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "intrinsics.h"
@@ -3842,7 +3841,7 @@ static MalValue instant_wrap_intrinsic(MalVm *vm, Instant *handle) {
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TEMPORAL_INSTANT_PROTOTYPE]));
 }
 
-MalValue mal_builtin_temporal_instant_from_epoch_milliseconds(
+static MalValue temporal_instant_from_epoch_milliseconds(
     MalVm *vm,
     f64 milliseconds
 ) {
@@ -3943,7 +3942,7 @@ static MalValue instant_from_epoch_milliseconds(
                            "Invalid epoch milliseconds");
         return mal_value_new_undefined();
     }
-    return mal_builtin_temporal_instant_from_epoch_milliseconds(vm, number);
+    return temporal_instant_from_epoch_milliseconds(vm, number);
 }
 
 static MalValue instant_from_epoch_nanoseconds(
@@ -5903,7 +5902,7 @@ static void temporal_install_plain_time(MalVm *vm, MalObject *temporal) {
     temporal_set_tag(vm, prototype, "Temporal.PlainTime");
 }
 
-void mal_builtin_temporal_install(MalVm *vm) {
+void mal_temporal_install(MalVm *vm) {
     MalObject *object_prototype =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
     MalObject *function_prototype =
@@ -5996,10 +5995,85 @@ void mal_builtin_temporal_install(MalVm *vm) {
     temporal_set_tag(vm, temporal, "Temporal");
 }
 
-#else
 
-void mal_builtin_temporal_install(MalVm *vm) { (void) vm; }
 
-#endif
+static MalValue date_proto_to_temporal_instant(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    if (!mal_value_is_date_object(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Date.prototype method called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    f64 time_value = mal_value_to_date_object(this_value)->date_value;
+    if (!isfinite(time_value)) {
+        mal_vm_throw_error(
+            vm,
+            MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Invalid time value"
+        );
+        return mal_value_new_undefined();
+    }
+    return temporal_instant_from_epoch_milliseconds(vm, time_value);
+}
+
+static void temporal_release(MalTemporalKind kind, void *handle) {
+    switch (kind) {
+        case MAL_TEMPORAL_DURATION:
+            temporal_rs_Duration_destroy(handle);
+            break;
+        case MAL_TEMPORAL_INSTANT:
+            temporal_rs_Instant_destroy(handle);
+            break;
+        case MAL_TEMPORAL_PLAIN_DATE:
+            temporal_rs_PlainDate_destroy(handle);
+            break;
+        case MAL_TEMPORAL_PLAIN_DATE_TIME:
+            temporal_rs_PlainDateTime_destroy(handle);
+            break;
+        case MAL_TEMPORAL_PLAIN_MONTH_DAY:
+            temporal_rs_PlainMonthDay_destroy(handle);
+            break;
+        case MAL_TEMPORAL_PLAIN_TIME:
+            temporal_rs_PlainTime_destroy(handle);
+            break;
+        case MAL_TEMPORAL_PLAIN_YEAR_MONTH:
+            temporal_rs_PlainYearMonth_destroy(handle);
+            break;
+        case MAL_TEMPORAL_ZONED_DATE_TIME:
+            temporal_rs_ZonedDateTime_destroy(handle);
+            break;
+    }
+}
+
+static bool temporal_duration_units(const MalTemporalObject *object, f64 units[10]) {
+    if (object->kind != MAL_TEMPORAL_DURATION || object->handle == nullptr) return false;
+    const Duration *duration = object->handle;
+    units[0] = (f64) temporal_rs_Duration_years(duration);
+    units[1] = (f64) temporal_rs_Duration_months(duration);
+    units[2] = (f64) temporal_rs_Duration_weeks(duration);
+    units[3] = (f64) temporal_rs_Duration_days(duration);
+    units[4] = (f64) temporal_rs_Duration_hours(duration);
+    units[5] = (f64) temporal_rs_Duration_minutes(duration);
+    units[6] = (f64) temporal_rs_Duration_seconds(duration);
+    units[7] = (f64) temporal_rs_Duration_milliseconds(duration);
+    units[8] = temporal_rs_Duration_microseconds(duration);
+    units[9] = temporal_rs_Duration_nanoseconds(duration);
+    return true;
+}
+
+const MalTemporalOperations mal_temporal_operations = {
+    .release = temporal_release,
+    .duration_units = temporal_duration_units,
+    .date_to_temporal_instant = date_proto_to_temporal_instant,
+};
 
 #include "generated/known_native_builtin_temporal_c.inc"

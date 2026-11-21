@@ -32,10 +32,9 @@ export {
 
 /**
  * The selectable Intl services (engine.intl.features), each mapped to its Rust
- * Cargo feature and C build define. Intl.Locale / getCanonicalLocales are the
- * always-on floor and are not listed. An omitted / empty `features` list means ALL
- * services (the canonical `intl-full` build). Selecting a subset drops the rest's
- * icu sub-crate + baked data — Segmenter alone is ~12 MB.
+ * Cargo feature. Intl.Locale / getCanonicalLocales are the floor every Intl program
+ * gets and are not listed. An omitted / empty `features` list means ALL services.
+ * A program links only the selected services it can reach.
  */
 export const INTL_SERVICES = INTL_SERVICE_FEATURES;
 
@@ -55,23 +54,6 @@ export function intlCargoFeatures(config: ResolvedBuildConfig): Array<string> {
 		return [];
 	}
 	return selectedIntlServices(config).map((name) => INTL_SERVICES[name]!.cargo);
-}
-
-/**
- * C `-D…=0` defines disabling each UNSELECTED Intl service on a subset build. Empty
- * when Intl is off (`-DMAL_INTL=0` covers everything) or all services are selected.
- */
-export function intlDisabledDefines(config: ResolvedBuildConfig): Array<string> {
-	if (!config.engine.intl.enabled) {
-		return [];
-	}
-	const selected = new Set(selectedIntlServices(config));
-	if (selected.size === 0) {
-		return [];
-	}
-	return Object.entries(INTL_SERVICES)
-		.filter(([name]) => !selected.has(name))
-		.map(([, service]) => `-D${service.define}=0`);
 }
 
 const evalLeaf: Leaf = {
@@ -236,8 +218,7 @@ function shortHash(value: unknown): string {
  * capabilities do not clobber each other. Native archives are content-addressed
  * from their exact inputs. The output depends
  * on `engine.eval` (flips `-DMAL_EVAL` + whether the compiler wire is embedded),
- * `engine.intl` (flips `-DMAL_INTL` + the locale-sensitive fallbacks),
- * `engine.temporal` (flips `-DMAL_TEMPORAL` + calendar/time-zone support),
+ * `engine.intl` and `engine.temporal` (which language components the program links),
  * `surface.webPlatform` and `surface.node` (which host personality and installers the
  * program links; the runtime archive itself is the same for every surface).
  * Returns "" for the canonical build (eval on, Temporal on, Intl on, all
@@ -245,8 +226,8 @@ function shortHash(value: unknown): string {
  * off and every internal-tooling build is node-off, so node-off stays canonical.
  */
 export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
-	// The generated binary depends on eval, whether Intl is on, which services are selected
-	// (each flips a -DMAL_INTL_HAS_* define), shared URL (web or Node), regexp
+	// The generated binary depends on eval, whether Intl is on, which services are selected,
+	// shared URL (web or Node), regexp
 	// (builtin_regexp/regexp_object/gc/string gating), Temporal, and node (the host built-in
 	// surface), primordial policy, but NOT on the locale set (that only changes
 	// Rust/ICU datagen).
@@ -301,13 +282,11 @@ export interface BuildDerivation {
 /** Project a resolved config onto the {@link BuildDerivation} the build layer consumes. */
 export function buildDerivationFromConfig(config: ResolvedBuildConfig): BuildDerivation {
 	const intlFeatures = intlCargoFeatures(config);
-	const intlServiceDefines = intlDisabledDefines(config);
 	const features = normalizeNativeFeatures({
 		primordialsLocked: config.engine.primordials === "locked",
 		evalEnabled: config.engine.eval === true,
 		realmsEnabled: config.engine.realms,
 		intlEnabled: config.engine.intl.enabled,
-		intlServiceDefines,
 		intlFeatures,
 		webPlatformEnabled: config.surface.webPlatform,
 		regexpEnabled: config.engine.regexp,

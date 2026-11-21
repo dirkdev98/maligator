@@ -6,6 +6,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "language_components.h"
 #include "test262_agent.h"
 #include "test262_host.h"
 #include "vm.h"
@@ -39,7 +40,9 @@ static MalLoadedRuntimeImage *mal_test262_load_wire(const char *path) {
         return nullptr;
     }
     const char *error = "ok";
-    MalLoadedRuntimeImage *loaded = mal_runtime_image_load(buffer, length, &error);
+    // Without a host, only language components can install into the VM.
+    MalLoadedRuntimeImage *loaded = mal_runtime_image_load_with_host_resolver(
+        buffer, length, &error, mal_language_component_resolve_installer);
     free(buffer);
     if (loaded == nullptr) {
         fprintf(stderr, "mal_runtime_image_load(%s): %s\n", path, error);

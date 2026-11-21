@@ -21,76 +21,14 @@
 #include "intl_object.h"
 #include "intrinsics.h"
 #include "mal_i18n.h"
-#if MAL_TEMPORAL && MAL_INTL_HAS_DURATION_FORMAT
+#include "builtin_temporal.h"
+#include "language_components.h"
 #include "temporal_object.h"
-#include "temporal_rs/Duration.h"
-#endif
 #include "shape.h"
 #include "value_ops.h"
 #include "utf16.h"
 #include "vm.h"
 #include "vm_ops.h"
-
-// Locale-insensitive fallbacks for the non-namespace locale-sensitive methods
-// (String.localeCompare / Number.toLocaleString / Date.toLocale*String), used when
-// the backing Intl service is absent — either the whole Intl surface is off
-// (MAL_INTL=0) or just that service (engine.intl.features drops it). ECMA-402
-// permits this for an Intl-less implementation. Defined only when the service is
-// off (`#if !MAL_INTL_<SERVICE>`), so there is no unused-function warning when it is
-// on; consumed by both the in-namespace dispatch and the MAL_INTL=0 stubs below.
-
-#if !MAL_INTL_HAS_COLLATOR
-// localeCompare → UTF-16 code-unit ordering. `this_string` is already a String
-// (the caller coerced it); ToString `that_value` (may throw on a Symbol).
-static MalValue intl_fallback_locale_compare(MalVm *vm, MalValue this_string, usize start, usize length, MalValue that_value) {
-    MalValue roots[2] = {this_string, that_value};
-    MalRootSpan root_span;
-    mal_gc_root(&root_span, roots, 2);
-
-    MalString *b = nullptr;
-    if (!mal_vm_to_string(vm, roots[1], &b)) {
-        mal_gc_unroot(&root_span);
-        return mal_value_new_undefined();
-    }
-    roots[1] = mal_value_from_string(b);
-    (void) mal_string_code_units(mal_value_to_string(roots[1]));
-    c16 stack[MAL_STRING_UTF16_SCRATCH_UNITS];
-    c16 *scratch;
-    const c16 *ua = mal_string_range_utf16(mal_value_to_string(roots[0]), start, length, stack, &scratch);
-    b = mal_value_to_string(roots[1]);
-    usize la = length;
-    usize lb = mal_string_length(b);
-    const c16 *ub = mal_string_code_units(b);
-    usize n = la < lb ? la : lb;
-    i32 comparison = la == lb ? 0 : (la < lb ? -1 : 1);
-    for (usize i = 0; i < n; i++) {
-        if (ua[i] != ub[i]) {
-            comparison = ua[i] < ub[i] ? -1 : 1;
-            break;
-        }
-    }
-    free(scratch);
-    mal_gc_unroot(&root_span);
-    return mal_value_from_i32(comparison);
-}
-#endif
-
-#if !MAL_INTL_HAS_NUMBER_FORMAT
-// Number.toLocaleString → base-10 Number::toString.
-static MalValue intl_fallback_number_to_locale_string(MalVm *vm, f64 number) {
-    return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
-}
-#endif
-
-#if !MAL_INTL_HAS_DATE_TIME_FORMAT
-// Date.toLocale{,Date,Time}String → fixed non-localized civil-time render (which:
-// 0 date+time, 1 date, 2 time). Non-finite time → "Invalid Date" (as toString does).
-static MalValue intl_fallback_date_to_locale_string(MalVm *vm, f64 time_value, i32 which) {
-    return mal_date_fallback_locale_string(vm, time_value, which);
-}
-#endif
-
-#if MAL_INTL
 
 /*
  * Intl (ECMA-402). The JS-spec glue — option-bag parsing, coercions, locale
@@ -1124,7 +1062,7 @@ static MalString *intl_resolve_locale(MalVm *vm, MalValue locales) {
     return mal_intrinsic_ascii(vm, "en-US");
 }
 
-bool mal_intl_case_locale(MalVm *vm, MalValue locales, MalUnicodeLocale *locale) {
+static bool intl_case_locale(MalVm *vm, MalValue locales, MalUnicodeLocale *locale) {
     MalString *tag = intl_resolve_locale(vm, locales);
     if (tag == nullptr) return false;
     const c16 *units = mal_string_code_units(tag);
@@ -1185,7 +1123,6 @@ static MalValue intl_resolved_copy(MalVm *vm, MalValue template_value, const cha
     return mal_vm_create_object_shaped(vm, shape, values, count);
 }
 
-#if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_DATE_TIME_FORMAT || MAL_INTL_HAS_RELATIVE_TIME_FORMAT
 /** CoerceOptionsToObject: undefined creates a null-prototype bag; all other
  * non-null values pass through ToObject. */
 static bool intl_coerce_options_to_object(MalVm *vm, MalValue options, MalValue *out) {
@@ -1200,9 +1137,7 @@ static bool intl_coerce_options_to_object(MalVm *vm, MalValue options, MalValue 
     *out = mal_value_is_object(options) ? options : mal_builtin_object_box_primitive(vm, options);
     return true;
 }
-#endif
 
-#if MAL_INTL_HAS_NUMBER_FORMAT
 /** DefaultNumberOption for the integer digit options supported by the backend. */
 static bool intl_number_option(MalVm *vm, MalValue value, i32 minimum, i32 maximum, i32 *out, bool *present) {
     if (mal_value_is_undefined(value)) {
@@ -1283,9 +1218,7 @@ static bool intl_number_format_digits(
     return result;
 }
 
-#endif
 
-#if MAL_INTL_HAS_COLLATOR
 static MalValue intl_collator_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -1476,12 +1409,8 @@ static MalValue intl_collator_supported_locales_of(MalVm *vm, MalValue this_valu
     return intl_supported_locales_of_impl(vm, args, arg_count);
 }
 
-#endif // MAL_INTL_HAS_COLLATOR — collator service statics
 
-// String.prototype.localeCompare: a real Collator when the service is present,
-// else the UTF-16 code-unit fallback. Always defined (builtin_string.c calls it).
-MalValue mal_intl_locale_compare_range(MalVm *vm, MalValue this_string, usize start, usize length, MalValue that_value, MalValue locales, MalValue options) {
-#if MAL_INTL_HAS_COLLATOR
+static MalValue intl_collator_locale_compare_range(MalVm *vm, MalValue this_string, usize start, usize length, MalValue that_value, MalValue locales, MalValue options) {
     MalValue roots[5] = {
         this_string, that_value,
         mal_value_new_undefined(), locales, options,
@@ -1535,15 +1464,10 @@ MalValue mal_intl_locale_compare_range(MalVm *vm, MalValue this_string, usize st
     }
     mal_gc_unroot(&root_span);
     return mal_value_from_i32(result);
-#else
-    (void) locales;
-    (void) options;
-    return intl_fallback_locale_compare(vm, this_string, start, length, that_value);
-#endif
 }
 
-#if MAL_INTL_HAS_COLLATOR
-static void intl_install_collator(MalVm *vm, MalObject *intl_object) {
+void mal_intl_install_collator(MalVm *vm) {
+    MalObject *intl_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_INTL]);
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
@@ -1566,13 +1490,11 @@ static void intl_install_collator(MalVm *vm, MalObject *intl_object) {
     mal_intrinsic_define_data(vm, intl_object, "Collator", vm->intrinsics[MAL_INTRINSIC_INTL_COLLATOR_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
-#endif // MAL_INTL_HAS_COLLATOR — install
 
 // ---------------------------------------------------------------------------
 // Intl.PluralRules
 // ---------------------------------------------------------------------------
 
-#if MAL_INTL_HAS_PLURAL_RULES
 static const char *const PLURAL_CATEGORIES[6] = {"zero", "one", "two", "few", "many", "other"};
 
 static MalValue intl_plural_rules_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1672,7 +1594,8 @@ static MalValue intl_plural_rules_supported_locales_of(MalVm *vm, MalValue this_
     return intl_supported_locales_of_impl(vm, args, arg_count);
 }
 
-static void intl_install_plural_rules(MalVm *vm, MalObject *intl_object) {
+void mal_intl_install_plural_rules(MalVm *vm) {
+    MalObject *intl_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_INTL]);
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
@@ -1695,7 +1618,6 @@ static void intl_install_plural_rules(MalVm *vm, MalObject *intl_object) {
     mal_intrinsic_define_data(vm, intl_object, "PluralRules", vm->intrinsics[MAL_INTRINSIC_INTL_PLURAL_RULES_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
-#endif // MAL_INTL_HAS_PLURAL_RULES
 
 // Exact decimal inputs share rounding and UTF-16 numeric parts across output paths.
 
@@ -1715,11 +1637,8 @@ static MalString *intl_data_string(MalVm *vm, MalValue data, const char *key) {
     return nullptr;
 }
 
-#if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_DATE_TIME_FORMAT || MAL_INTL_HAS_DURATION_FORMAT
 static MalValue intl_formatted_result(MalVm *vm, const c16 *units, usize length, const MalI18nFormattedPart *spans, usize span_count, bool to_parts, bool with_unit);
-#endif
 
-#if MAL_INTL_HAS_NUMBER_FORMAT
 /** signDisplay values in FFI-code order (mirrors mal_i18n.h / SignDisplay in lib.rs). */
 static const char *const INTL_SIGN_DISPLAYS[] = {"auto", "never", "always", "exceptZero", "negative"};
 
@@ -2165,11 +2084,8 @@ static MalValue intl_number_format_supported_locales_of(MalVm *vm, MalValue this
     return intl_supported_locales_of_impl(vm, args, arg_count);
 }
 
-#endif // MAL_INTL_HAS_NUMBER_FORMAT — number format service statics
 
-// Number.prototype.toLocaleString: real NumberFormat when present, else base-10.
-MalValue mal_intl_number_to_locale_string(MalVm *vm, f64 number, MalValue locales, MalValue options) {
-#if MAL_INTL_HAS_NUMBER_FORMAT
+static MalValue intl_number_format_to_locale_string(MalVm *vm, f64 number, MalValue locales, MalValue options) {
     if (mal_value_is_undefined(locales) && mal_value_is_undefined(options)) {
         if (!isfinite(number)) {
             return intl_nonfinite_number(vm, number, 0);
@@ -2182,15 +2098,10 @@ MalValue mal_intl_number_to_locale_string(MalVm *vm, f64 number, MalValue locale
         return mal_value_new_undefined();
     }
     return intl_number_format_value(vm, mal_value_to_intl_object(nf), number);
-#else
-    (void) locales;
-    (void) options;
-    return intl_fallback_number_to_locale_string(vm, number);
-#endif
 }
 
-#if MAL_INTL_HAS_NUMBER_FORMAT
-static void intl_install_number_format(MalVm *vm, MalObject *intl_object) {
+void mal_intl_install_number_format(MalVm *vm) {
+    MalObject *intl_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_INTL]);
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
@@ -2214,9 +2125,7 @@ static void intl_install_number_format(MalVm *vm, MalObject *intl_object) {
     mal_intrinsic_define_data(vm, intl_object, "NumberFormat", vm->intrinsics[MAL_INTRINSIC_INTL_NUMBER_FORMAT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
-#endif // MAL_INTL_HAS_NUMBER_FORMAT
 
-#if MAL_INTL_HAS_DATE_TIME_FORMAT
 // Output slots must stay rooted while later option getters can collect.
 static bool intl_datetime_locale_options(MalVm *vm, MalValue *options, MalValue *calendar, MalValue *numbering) {
     if (!intl_coerce_options_to_object(vm, *options, options) || !intl_check_locale_matcher(vm, *options)) return false;
@@ -2624,12 +2533,8 @@ static MalValue intl_date_time_format_supported_locales_of(MalVm *vm, MalValue t
     return intl_supported_locales_of_impl(vm, args, arg_count);
 }
 
-#endif // MAL_INTL_HAS_DATE_TIME_FORMAT — date/time format service statics
 
-// Date.prototype.toLocale{,Date,Time}String: real DateTimeFormat when present,
-// else a fixed non-localized civil-time render.
-MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue locales, MalValue options, i32 which) {
-#if MAL_INTL_HAS_DATE_TIME_FORMAT
+static MalValue intl_date_time_format_to_locale_string(MalVm *vm, f64 time_value, MalValue locales, MalValue options, i32 which) {
     if (!isfinite(time_value)) {
         return mal_value_from_string(mal_intrinsic_ascii(vm, "Invalid Date"));
     }
@@ -2679,15 +2584,10 @@ MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue loca
     if (option_bytes.allocation != nullptr) free(option_bytes.allocation);
     mal_gc_unroot(&root);
     return result;
-#else
-    (void) locales;
-    (void) options;
-    return intl_fallback_date_to_locale_string(vm, time_value, which);
-#endif
 }
 
-#if MAL_INTL_HAS_DATE_TIME_FORMAT
-static void intl_install_date_time_format(MalVm *vm, MalObject *intl_object) {
+void mal_intl_install_date_time_format(MalVm *vm) {
+    MalObject *intl_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_INTL]);
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
@@ -2713,13 +2613,11 @@ static void intl_install_date_time_format(MalVm *vm, MalObject *intl_object) {
     mal_intrinsic_define_data(vm, intl_object, "DateTimeFormat", vm->intrinsics[MAL_INTRINSIC_INTL_DATE_TIME_FORMAT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
-#endif // MAL_INTL_HAS_DATE_TIME_FORMAT
 
 // ---------------------------------------------------------------------------
 // Intl.ListFormat — icu::list (conjunction/disjunction/unit; long/short/narrow).
 // ---------------------------------------------------------------------------
 
-#if MAL_INTL_HAS_LIST_FORMAT || MAL_INTL_HAS_RELATIVE_TIME_FORMAT
 static i32 intl_length_code(const MalString *style) {
     if (style != nullptr && intl_string_eq_ascii(style, "short")) {
         return 1;
@@ -2729,9 +2627,7 @@ static i32 intl_length_code(const MalString *style) {
     }
     return 0;
 }
-#endif
 
-#if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_DATE_TIME_FORMAT || MAL_INTL_HAS_LIST_FORMAT || MAL_INTL_HAS_RELATIVE_TIME_FORMAT || MAL_INTL_HAS_DURATION_FORMAT
 static MalObject *intl_parts_push(MalVm *vm, MalArrayObject *parts, u32 *index, const char *type, MalValue value) {
     MalValue roots[] = {mal_value_from_array_object(parts), value, mal_value_new_undefined()};
     MalRootSpan root;
@@ -2745,7 +2641,6 @@ static MalObject *intl_parts_push(MalVm *vm, MalArrayObject *parts, u32 *index, 
     return part;
 }
 
-#if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_DATE_TIME_FORMAT || MAL_INTL_HAS_DURATION_FORMAT
 static MalValue intl_formatted_result(MalVm *vm, const c16 *units, usize length, const MalI18nFormattedPart *spans, usize span_count, bool to_parts, bool with_unit) {
     MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
@@ -2772,11 +2667,8 @@ static MalValue intl_formatted_result(MalVm *vm, const c16 *units, usize length,
     mal_gc_unroot(&root);
     return result;
 }
-#endif
 
-#endif
 
-#if MAL_INTL_HAS_LIST_FORMAT
 static i32 intl_list_type_code(const MalString *type) {
     if (type != nullptr && intl_string_eq_ascii(type, "disjunction")) {
         return 1;
@@ -3035,7 +2927,8 @@ static MalValue intl_list_format_supported_locales_of(MalVm *vm, MalValue this_v
     return intl_supported_locales_of_impl(vm, args, arg_count);
 }
 
-static void intl_install_list_format(MalVm *vm, MalObject *intl_object) {
+void mal_intl_install_list_format(MalVm *vm) {
+    MalObject *intl_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_INTL]);
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
@@ -3063,9 +2956,7 @@ static void intl_install_list_format(MalVm *vm, MalObject *intl_object) {
 // Intl.DisplayNames — icu::experimental::displaynames (region/script/language).
 // ---------------------------------------------------------------------------
 
-#endif // MAL_INTL_HAS_LIST_FORMAT
 
-#if MAL_INTL_HAS_DISPLAY_NAMES
 static MalValue intl_display_names_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -3222,7 +3113,8 @@ static MalValue intl_display_names_supported_locales_of(MalVm *vm, MalValue this
     return intl_supported_locales_of_impl(vm, args, arg_count);
 }
 
-static void intl_install_display_names(MalVm *vm, MalObject *intl_object) {
+void mal_intl_install_display_names(MalVm *vm) {
+    MalObject *intl_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_INTL]);
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
@@ -3245,13 +3137,11 @@ static void intl_install_display_names(MalVm *vm, MalObject *intl_object) {
     mal_intrinsic_define_data(vm, intl_object, "DisplayNames", vm->intrinsics[MAL_INTRINSIC_INTL_DISPLAY_NAMES_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
-#endif // MAL_INTL_HAS_DISPLAY_NAMES
 
 // ---------------------------------------------------------------------------
 // Intl.RelativeTimeFormat — icu::experimental::relativetime.
 // ---------------------------------------------------------------------------
 
-#if MAL_INTL_HAS_RELATIVE_TIME_FORMAT
 static const char *const INTL_RELATIVE_UNITS[] = {"second", "minute", "hour", "day", "week", "month", "quarter", "year"};
 
 /** SingularRelativeTimeUnit: map a unit string (singular or plural) to 0..7, or -1. */
@@ -3466,7 +3356,8 @@ static MalValue intl_relative_time_format_supported_locales_of(MalVm *vm, MalVal
     return intl_supported_locales_of_impl(vm, args, arg_count);
 }
 
-static void intl_install_relative_time_format(MalVm *vm, MalObject *intl_object) {
+void mal_intl_install_relative_time_format(MalVm *vm) {
+    MalObject *intl_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_INTL]);
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
@@ -3490,7 +3381,6 @@ static void intl_install_relative_time_format(MalVm *vm, MalObject *intl_object)
     mal_intrinsic_define_data(vm, intl_object, "RelativeTimeFormat", vm->intrinsics[MAL_INTRINSIC_INTL_RELATIVE_TIME_FORMAT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
-#endif // MAL_INTL_HAS_RELATIVE_TIME_FORMAT
 
 // ---------------------------------------------------------------------------
 // Intl.Segmenter — icu::segmenter (grapheme / word / sentence). The segment()
@@ -3498,7 +3388,6 @@ static void intl_install_relative_time_format(MalVm *vm, MalObject *intl_object)
 // containing(); iteration yields Segment Iterators (kind MAL_INTL_SEGMENT_ITERATOR).
 // ---------------------------------------------------------------------------
 
-#if MAL_INTL_HAS_SEGMENTER
 static i32 intl_segment_granularity_code(const MalString *g) {
     if (g != nullptr && intl_string_eq_ascii(g, "word")) {
         return 1;
@@ -3751,7 +3640,8 @@ static MalValue intl_segment_iterator_next(MalVm *vm, MalValue this_value, const
     return mal_vm_create_iter_result(vm, data, false);
 }
 
-static void intl_install_segmenter(MalVm *vm, MalObject *intl_object) {
+void mal_intl_install_segmenter(MalVm *vm) {
+    MalObject *intl_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_INTL]);
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
@@ -3794,9 +3684,7 @@ static void intl_install_segmenter(MalVm *vm, MalObject *intl_object) {
     mal_intrinsic_define_data(vm, intl_object, "Segmenter", vm->intrinsics[MAL_INTRINSIC_INTL_SEGMENTER_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
-#endif
 
-#if MAL_INTL_HAS_DURATION_FORMAT
 static const struct {
     const char *unit;
     const char *display;
@@ -4029,24 +3917,11 @@ static bool intl_to_duration_record(MalVm *vm, MalValue input, f64 *units) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid duration string");
         return false;
     }
-#if MAL_TEMPORAL
     if (mal_value_is_temporal_object(input)) {
-        MalTemporalObject *object = mal_value_to_temporal_object(input);
-        if (object->kind == MAL_TEMPORAL_DURATION && object->handle != nullptr) {
-            units[0] = (f64) temporal_rs_Duration_years(object->handle);
-            units[1] = (f64) temporal_rs_Duration_months(object->handle);
-            units[2] = (f64) temporal_rs_Duration_weeks(object->handle);
-            units[3] = (f64) temporal_rs_Duration_days(object->handle);
-            units[4] = (f64) temporal_rs_Duration_hours(object->handle);
-            units[5] = (f64) temporal_rs_Duration_minutes(object->handle);
-            units[6] = (f64) temporal_rs_Duration_seconds(object->handle);
-            units[7] = (f64) temporal_rs_Duration_milliseconds(object->handle);
-            units[8] = temporal_rs_Duration_microseconds(object->handle);
-            units[9] = temporal_rs_Duration_nanoseconds(object->handle);
-            return true;
-        }
+        // Temporal objects exist only once the Temporal component is linked.
+        const MalTemporalOperations *temporal = mal_language_component_operations(MAL_LANGUAGE_COMPONENT_TEMPORAL);
+        if (temporal->duration_units(mal_value_to_temporal_object(input), units)) return true;
     }
-#endif
     if (!mal_value_is_object(input)) {
         mal_vm_throw_error(vm, mal_value_is_string(input) ? MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE : MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "duration must be an object");
         return false;
@@ -4168,7 +4043,8 @@ static MalValue intl_duration_format_supported_locales_of(MalVm *vm, MalValue th
     return intl_supported_locales_of_impl(vm, args, arg_count);
 }
 
-static void intl_install_duration_format(MalVm *vm, MalObject *intl_object) {
+void mal_intl_install_duration_format(MalVm *vm) {
+    MalObject *intl_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_INTL]);
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
@@ -4192,92 +4068,9 @@ static void intl_install_duration_format(MalVm *vm, MalObject *intl_object) {
     mal_intrinsic_define_data(vm, intl_object, "DurationFormat", vm->intrinsics[MAL_INTRINSIC_INTL_DURATION_FORMAT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
-// ---------------------------------------------------------------------------
-// Install
-// ---------------------------------------------------------------------------
-
-#endif // MAL_INTL_HAS_DURATION_FORMAT
-
-void mal_builtin_intl_install(MalVm *vm) {
-    MalObject *intl = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
-    vm->intrinsics[MAL_INTRINSIC_INTL] = mal_value_from_object(intl);
-    intl_set_to_string_tag(vm, intl, "Intl");
-
-    mal_intrinsic_define_method_n(vm, intl, "getCanonicalLocales", 1, intl_get_canonical_locales);
-    mal_intrinsic_define_method_n(vm, intl, "supportedValuesOf", 1, intl_supported_values_of);
-
-    intl_install_locale(vm, intl); // floor: Intl.Locale (always present when Intl is on)
-#if MAL_INTL_HAS_COLLATOR
-    intl_install_collator(vm, intl);
-#endif
-#if MAL_INTL_HAS_PLURAL_RULES
-    intl_install_plural_rules(vm, intl);
-#endif
-#if MAL_INTL_HAS_NUMBER_FORMAT
-    intl_install_number_format(vm, intl);
-#endif
-#if MAL_INTL_HAS_DATE_TIME_FORMAT
-    intl_install_date_time_format(vm, intl);
-#endif
-#if MAL_INTL_HAS_LIST_FORMAT
-    intl_install_list_format(vm, intl);
-#endif
-#if MAL_INTL_HAS_DISPLAY_NAMES
-    intl_install_display_names(vm, intl);
-#endif
-#if MAL_INTL_HAS_RELATIVE_TIME_FORMAT
-    intl_install_relative_time_format(vm, intl);
-#endif
-#if MAL_INTL_HAS_SEGMENTER
-    intl_install_segmenter(vm, intl);
-#endif
-#if MAL_INTL_HAS_DURATION_FORMAT
-    intl_install_duration_format(vm, intl);
-#endif
-}
-
-#else // !MAL_INTL
-
-// engine.intl fully disabled: no ICU, no `Intl` global (typeof Intl ===
-// "undefined"). The locale-sensitive non-namespace methods delegate to the
-// locale-insensitive fallbacks above (all services are off here, so the
-// #if !MAL_INTL_<SERVICE> helpers are all defined).
-
-bool mal_intl_case_locale(MalVm *vm, MalValue locales, MalUnicodeLocale *locale) {
-    (void) vm;
-    (void) locales;
-    *locale = MAL_UNICODE_LOCALE_ROOT;
-    return true;
-}
-
-void mal_builtin_intl_install(MalVm *vm) {
-    (void) vm; // no Intl namespace in this build
-}
-
-MalValue mal_intl_locale_compare_range(MalVm *vm, MalValue this_string, usize start, usize length, MalValue that_value, MalValue locales, MalValue options) {
-    (void) locales;
-    (void) options;
-    return intl_fallback_locale_compare(vm, this_string, start, length, that_value);
-}
-
-MalValue mal_intl_number_to_locale_string(MalVm *vm, f64 number, MalValue locales, MalValue options) {
-    (void) locales;
-    (void) options;
-    return intl_fallback_number_to_locale_string(vm, number);
-}
-
-MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue locales, MalValue options, i32 which) {
-    (void) locales;
-    (void) options;
-    return intl_fallback_date_to_locale_string(vm, time_value, which);
-}
-
-#endif // MAL_INTL
-
 #include "generated/known_native_builtin_intl_c.inc"
 
-MalValue mal_intl_locale_compare_prepared_range(MalVm *vm, MalValue this_string, usize start, usize length, MalValue that, const byte *locale, usize locale_length, u8 options) {
-#if MAL_INTL_HAS_COLLATOR
+static MalValue intl_collator_locale_compare_prepared_range(MalVm *vm, MalValue this_string, usize start, usize length, MalValue that, const byte *locale, usize locale_length, u8 options) {
     MalValue roots[2] = {this_string, that};
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, 2);
@@ -4306,18 +4099,77 @@ MalValue mal_intl_locale_compare_prepared_range(MalVm *vm, MalValue this_string,
  done:
     mal_gc_unroot(&root_span);
     return result;
-#else
-    (void) locale;
-    (void) locale_length;
-    (void) options;
-    return intl_fallback_locale_compare(vm, this_string, start, length, that);
-#endif
 }
 
-MalValue mal_intl_locale_compare(MalVm *vm, MalValue this_string, MalValue that, MalValue locales, MalValue options) {
-    return mal_intl_locale_compare_range(vm, this_string, 0, mal_string_length(mal_value_to_string(this_string)), that, locales, options);
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
+void mal_intl_install_namespace(MalVm *vm) {
+    MalObject *intl = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+    vm->intrinsics[MAL_INTRINSIC_INTL] = mal_value_from_object(intl);
+    intl_set_to_string_tag(vm, intl, "Intl");
+
+    mal_intrinsic_define_method_n(vm, intl, "getCanonicalLocales", 1, intl_get_canonical_locales);
+    mal_intrinsic_define_method_n(vm, intl, "supportedValuesOf", 1, intl_supported_values_of);
+    intl_install_locale(vm, intl);
 }
 
-MalValue mal_intl_locale_compare_prepared(MalVm *vm, MalValue this_string, MalValue that, const byte *locale, usize locale_length, u8 options) {
-    return mal_intl_locale_compare_prepared_range(vm, this_string, 0, mal_string_length(mal_value_to_string(this_string)), that, locale, locale_length, options);
+static usize intl_collator_release(void *handle) {
+    mal_i18n_collator_free(handle);
+    return 0;
 }
+
+static usize intl_plural_rules_release(void *handle) {
+    mal_i18n_plural_rules_free(handle);
+    return 0;
+}
+
+static usize intl_list_format_release(void *handle) {
+    mal_i18n_list_formatter_free(handle);
+    return 0;
+}
+
+const MalIntlServiceOperations mal_intl_namespace_operations = {
+    .case_locale = intl_case_locale,
+};
+
+static MalValue intl_collator_locale_compare_prepared_tag(MalVm *vm, MalValue this_string, MalValue that, MalString *locale, u8 options) {
+    usize length = mal_string_length(locale);
+    byte bytes[128];
+    for (usize i = 0; i < length; i++) bytes[i] = (byte) mal_string_code_unit_at(locale, i);
+    return intl_collator_locale_compare_prepared_range(vm, this_string, 0, mal_string_length(mal_value_to_string(this_string)), that, bytes, length, options);
+}
+
+const MalIntlServiceOperations mal_intl_collator_operations = {
+    .release = intl_collator_release,
+    .locale_compare_range = intl_collator_locale_compare_range,
+    .locale_compare_prepared_range = intl_collator_locale_compare_prepared_range,
+    .locale_compare_prepared_tag = intl_collator_locale_compare_prepared_tag,
+};
+
+const MalIntlServiceOperations mal_intl_plural_rules_operations = {
+    .release = intl_plural_rules_release,
+};
+
+const MalIntlServiceOperations mal_intl_number_format_operations = {
+    .release = mal_i18n_number_formatter_free,
+    .number_to_locale_string = intl_number_format_to_locale_string,
+};
+
+const MalIntlServiceOperations mal_intl_date_time_format_operations = {
+    .release = mal_i18n_datetime_formatter_free,
+    .date_to_locale_string = intl_date_time_format_to_locale_string,
+};
+
+const MalIntlServiceOperations mal_intl_list_format_operations = {
+    .release = intl_list_format_release,
+};
+
+const MalIntlServiceOperations mal_intl_relative_time_format_operations = {
+    .release = mal_i18n_relative_time_free,
+};
+
+const MalIntlServiceOperations mal_intl_duration_format_operations = {
+    .release = mal_i18n_duration_free,
+};

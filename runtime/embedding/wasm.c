@@ -7,7 +7,7 @@
 #if !defined(__wasi__) || defined(__wasm_atomics__)
 #error "This embedding requires a single-threaded WASI reactor"
 #endif
-#if MAL_EVAL || MAL_REALMS || MAL_INTL || MAL_TEMPORAL || MAL_PROFILE
+#if MAL_EVAL || MAL_REALMS || MAL_PROFILE
 #error "The Wasm reactor requires the engine-only feature profile"
 #endif
 
