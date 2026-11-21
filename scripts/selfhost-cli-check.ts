@@ -1424,7 +1424,8 @@ server.listen(0, "127.0.0.1", () => {
 				"WATCH_APPLICATION_PID",
 			);
 			writeFileSync(watchEntry, "export const =;\n");
-			await waitForOutput(() => watchOutput, "Rebuild failed:");
+			await waitForOutput(() => watchOutput, "watch.mts:1:14: Unexpected token");
+			await waitForOutput(() => watchOutput, "Rebuild failed.");
 			await waitForWatchRevision(() => watchOutput, 0);
 			writeFileSync(watchEntry, watchSource(1));
 			await waitForWatchRevision(() => watchOutput, 1);
