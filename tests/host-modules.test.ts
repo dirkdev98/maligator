@@ -7,7 +7,11 @@ import {
 	generateNodeBuiltinInstallersInclude,
 } from "../scripts/generate-node-builtin-modules.ts";
 import { resolveBuildConfig } from "../src/build-config.ts";
-import { HOST_MODULES } from "../src/compiler/frontend/host-modules.ts";
+import {
+	HOST_MODULES,
+	HOST_PERSONALITY_INSTALLERS,
+	NODE_ERROR_HOOKS_INSTALLER,
+} from "../src/compiler/frontend/host-modules.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
@@ -44,10 +48,26 @@ function compile(source: string, options: { node?: boolean } = {}): ProgramImage
 	writeFileSync(entry, source);
 	const buildConfig = options.node ? nodeOn : resolveBuildConfig({});
 	const program = loadEntrypointAndRunSemanticAnalysis(entry, { buildConfig });
-	return compileSemanticProgramToProgramImage(program, {
+	const image = compileSemanticProgramToProgramImage(program, {
 		facts: compilerProgramFactsFromConfig(buildConfig),
 	});
+	// Every surface program lists its personality and Node's Error hooks; these tests
+	// assert the installers a program's own module reads retain.
+	return {
+		...image,
+		runtime: {
+			...image.runtime,
+			hostInstalls: image.runtime.hostInstalls.filter(
+				(install) => !SURFACE_INSTALLERS.has(install.installer),
+			),
+		},
+	};
 }
+
+const SURFACE_INSTALLERS = new Set([
+	...HOST_PERSONALITY_INSTALLERS,
+	NODE_ERROR_HOOKS_INSTALLER,
+]);
 
 /** Every LOAD_GLOBAL slot index read anywhere in the program. */
 function loadGlobalSlots(def: ProgramImage): Set<number> {
@@ -373,7 +393,13 @@ describe("host-install manifest", () => {
 			`import util, { format, parseArgs } from "node:util";\nglobalThis.sink = [util, format, parseArgs];\n`,
 			{ node: true },
 		);
-		expect(def.runtime.hostInstalls).toEqual([
+		// node:util also retains components its natives use (RegExp for
+		// stripVTControlCharacters) and the host personality; only its own installer
+		// carries module exports.
+		const withExports = def.runtime.hostInstalls.filter(
+			(install) => install.exports.length > 0,
+		);
+		expect(withExports).toEqual([
 			expect.objectContaining({
 				installer: "mal_host_install_node_util",
 				exports: [

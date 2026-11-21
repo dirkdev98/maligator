@@ -2,6 +2,10 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config-values.ts";
 import { parseCliArgs } from "../src/cli.ts";
+import {
+	HOST_PERSONALITY_INSTALLERS,
+	NODE_ERROR_HOOKS_INSTALLER,
+} from "../src/compiler/frontend/host-modules.ts";
 import type { BuildModuleGraphOptions } from "../src/compiler/frontend/module-graph.ts";
 import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
@@ -26,7 +30,7 @@ function compile(
 	optimization: "development" | "full" = "development",
 	virtualModules?: BuildModuleGraphOptions["virtualModules"],
 ) {
-	return compileEntrypoint(entry, {
+	const runtime = compileEntrypoint(entry, {
 		entrySource: source,
 		entryGoal: "module",
 		buildConfig: config,
@@ -35,7 +39,20 @@ function compile(
 		optimization,
 		coreVerification: "per-pass",
 	}).runtime;
+	// Every Node-surface program lists its personality and Node's Error hooks; these
+	// tests assert what the platform module's own reads retain.
+	return {
+		...runtime,
+		hostInstalls: runtime.hostInstalls.filter(
+			(install) => !SURFACE_INSTALLERS.has(install.installer),
+		),
+	};
 }
+
+const SURFACE_INSTALLERS = new Set([
+	...HOST_PERSONALITY_INSTALLERS,
+	NODE_ERROR_HOOKS_INSTALLER,
+]);
 
 describe("catalog platform constants", () => {
 	it("resolves the module without enabling the Node surface", () => {
