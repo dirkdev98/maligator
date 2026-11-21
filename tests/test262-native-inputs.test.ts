@@ -48,6 +48,7 @@ describe("Test262 native build inputs", () => {
 					cxxLink: false,
 					stripArgs: [],
 					cxxLinkArgs: [],
+					sectionGcLinkArgs: [],
 				},
 				fingerprint: "selected-toolchain",
 				ccFingerprint: "selected-cc",

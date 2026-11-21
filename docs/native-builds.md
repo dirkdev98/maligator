@@ -27,8 +27,9 @@ Every native build performs the same discovery and capability checks used by
 `doctor`. `CC` and `CXX` override compiler selection; otherwise tools are resolved
 strictly from `PATH`. Runtime translation units are compiled directly with `CC` and
 collected into three static archives with `ar`. The Rust half is built with the
-`cargo`/`rustc` that Rustup selects for `runtime/rust/rust-toolchain.toml`. A C++
-compiler/runtime is required when `surface.webPlatform` or `surface.node` is enabled.
+`cargo`/`rustc` that Rustup selects for `runtime/rust/rust-toolchain.toml`. Building
+it needs a C++ compiler for the bundled Ada URL parser; linking the C++ runtime is
+required only when `surface.webPlatform` or `surface.node` is enabled.
 
 The runtime needs real C23: the `bool`/`true`/`false` keywords (no `<stdbool.h>`),
 `nullptr`, and `#embed`. gcc 14 and older accept `-std=c2x` but lack `#embed`, so the
@@ -89,6 +90,23 @@ option that GNU ld and gold use. Unsupported LTO or stripping emits a warning an
 continues with a valid `-O2` executable. Missing required C2x or C++ link capability
 is a hard error. Stripping does not remove Maligator's own JavaScript source-position
 tables.
+
+## Rust archive
+
+Native builds compile the Rust crate once with every Cargo feature and the release
+profile's fat LTO into one codegen unit. Every link passes the linker's
+unused-section flag (`-dead_strip` or `--gc-sections`), so a binary keeps only the
+Rust functions and data its C runtime references. Disabled Intl services, TLS and
+codecs never reach the binary, while one codegen unit keeps shared Rust code from
+being duplicated.
+
+Build-script libraries are the exception. A reference from unused Rust code still
+loads their archive members, and section removal cannot shed them afterwards: Ada
+runs static initializers that keep its C++ code and libc++ alive, and ring's assembly
+objects have no subsections. The build therefore republishes Ada's and ring's
+libraries beside the Rust archive and links each only when the configuration selects
+the Rust features that need it (`url`, and `tls` or `node-crypto`). Wasm builds still
+compile only the configured features.
 
 ## Cache layout
 
@@ -174,9 +192,10 @@ keys. Within those dimensions, each runtime C object is keyed by its actual
 preprocessed input, and compilation consumes that captured input. A runtime source
 change during preprocessing aborts the build before publishing objects, so concurrent
 edits cannot pair a cache key with different compiler input. Feature changes recompile
-only translation units whose code changed. Feature-specific Rust archives share a
-serialized Cargo target tree and therefore reuse unaffected dependency work. Final products
-stay statically linked and self-contained. Test/program verdicts and benchmark measurements are always executed
+only translation units whose code changed. The native Rust archive is keyed by its
+sources, target, tools and build environment, not by the feature configuration, so
+every configuration shares it. Final products stay statically linked and
+self-contained. Test/program verdicts and benchmark measurements are always executed
 and are never cache entries.
 
 Removing `.cache/mal-build` forces project output materialization without discarding

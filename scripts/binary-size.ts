@@ -40,9 +40,29 @@ const forbiddenComponents = {
 		/^rustls(?:_|$)/.test(crate ?? "") ||
 		/(?:^|[(-])node_tls\.o\)?$/.test(object) ||
 		symbol.startsWith("_mal_tls_"),
+	ring: ({ symbol }) => symbol.startsWith("_ring_core_"),
+	Ada: ({ object }) => /(?:^|[(-])ada\.o\)?$/.test(object),
 } satisfies Record<string, (entry: LinkedSymbol) => boolean>;
 
 type ForbiddenComponent = keyof typeof forbiddenComponents;
+
+const forbiddenLibraries = {
+	"C++ runtime": /(?:^|\/)lib(?:c\+\+(?:abi)?|stdc\+\+)\./,
+} satisfies Record<string, RegExp>;
+
+type ForbiddenLibrary = keyof typeof forbiddenLibraries;
+
+function dynamicLibraries(binaryPath: string, env: NodeJS.ProcessEnv): Array<string> {
+	if (process.platform === "darwin") {
+		return execFileSync("otool", ["-L", binaryPath], { encoding: "utf8", env })
+			.split("\n")
+			.slice(1)
+			.flatMap((line) => /^\s*(\S+)\s+\(/.exec(line)?.[1] ?? []);
+	}
+	return execFileSync("readelf", ["-d", binaryPath], { encoding: "utf8", env })
+		.split("\n")
+		.flatMap((line) => /\(NEEDED\).*\[(.+)\]/.exec(line)?.[1] ?? []);
+}
 
 const fixtures: Array<{
 	name: string;
@@ -50,13 +70,15 @@ const fixtures: Array<{
 	config: typeof lean;
 	bun: boolean;
 	forbidden?: ReadonlyArray<ForbiddenComponent>;
+	forbiddenLibraries?: ReadonlyArray<ForbiddenLibrary>;
 }> = [
 	{
 		name: "hello",
 		file: "bench/size/hello.mjs",
 		config: lean,
 		bun: true,
-		forbidden: ["HTTP client", "TLS"],
+		forbidden: ["HTTP client", "TLS", "ring", "Ada"],
+		forbiddenLibraries: ["C++ runtime"],
 	},
 	{
 		name: "serve",
@@ -122,6 +144,9 @@ function darwinAttribution(
 		[c.host, "libMalHost.a"],
 		[c.engine, "libLibMaligator.a"],
 		[rust.library, "libmal_rust.a"],
+		...rust.nativeComponents.map(
+			({ packageName, library }) => [library, `${packageName}.a`] as const,
+		),
 	]);
 	const originals = built.artifacts.linkArgs.filter(
 		(argument) => !argument.startsWith("-"),
@@ -267,6 +292,16 @@ try {
 				: undefined,
 		});
 		const binaryBytes = statSync(built.binaryPath).size;
+		const libraries = dynamicLibraries(built.binaryPath, env);
+		for (const library of fixture.forbiddenLibraries ?? []) {
+			const loaded = libraries.find((candidate) =>
+				forbiddenLibraries[library].test(candidate),
+			);
+			if (loaded !== undefined) {
+				console.error(`  ${name} loads forbidden library ${library} (${loaded})`);
+				process.exitCode = 1;
+			}
+		}
 		const attribution = collectMap
 			? darwinAttribution(mapFile, built, fixture.forbidden ?? [])
 			: undefined;
@@ -288,6 +323,8 @@ try {
 			binaryBytes,
 			bunBytes,
 			bunCompatible: fixture.bun,
+			libraries,
+			rustArchive: built.artifacts.rust.cacheKey,
 			attribution,
 			plan: built.context.plan,
 			toolchain: { cc: tools.cc, rustc: tools.rustc, platform, rustTarget },

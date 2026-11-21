@@ -17,7 +17,7 @@ import * as path from "node:path";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 
 const CACHE_SCHEMA = 2;
-const INSPECTION_SCHEMA = 1;
+const INSPECTION_SCHEMA = 2;
 /** The environment that selects tools or changes what they report. */
 const INSPECTION_ENVIRONMENT = [
 	"PATH",
@@ -35,6 +35,11 @@ const INSPECTION_ENVIRONMENT = [
 ];
 const C2X_FLAGS = ["-std=c2x"];
 const LTO_FLAG_CANDIDATES = [["-flto=thin"], ["-flto"]];
+const CXX_LINK_CANDIDATES = [["-lc++"], ["-lstdc++"]];
+
+function sectionGcLinkFlags(platform: NodeJS.Platform): Array<string> {
+	return platform === "darwin" ? ["-Wl,-dead_strip"] : ["-Wl,--gc-sections"];
+}
 
 export interface ToolExecutable {
 	path: string;
@@ -65,6 +70,11 @@ export interface ToolchainProbes {
 	cxxLink: boolean;
 	stripArgs: Array<string>;
 	cxxLinkArgs: Array<string>;
+	/**
+	 * Linker flags that drop unreferenced sections. The Rust archive carries every
+	 * feature, so each link relies on them to keep only what C code reaches.
+	 */
+	sectionGcLinkArgs: Array<string>;
 }
 
 export interface ToolchainIssue {
@@ -286,7 +296,9 @@ function isCachedProbes(value: unknown, fingerprint: string): value is CachedPro
 		Array.isArray(probes.stripArgs) &&
 		probes.stripArgs.every((item) => typeof item === "string") &&
 		Array.isArray(probes.cxxLinkArgs) &&
-		probes.cxxLinkArgs.every((item) => typeof item === "string")
+		probes.cxxLinkArgs.every((item) => typeof item === "string") &&
+		Array.isArray(probes.sectionGcLinkArgs) &&
+		probes.sectionGcLinkArgs.every((item) => typeof item === "string")
 	);
 }
 
@@ -461,7 +473,6 @@ function fingerprintFor(
 	rustTarget: string,
 	platform: NodeJS.Platform,
 	arch: string,
-	needsCxx: boolean,
 	cacheDirectory: string,
 ): string {
 	const testedFlags = {
@@ -473,7 +484,8 @@ function fingerprintFor(
 				: platform === "darwin"
 					? [["-x"], ["-S"]]
 					: [["--strip-all"], ["-s"]],
-		cxxLink: needsCxx ? [["-lc++"], ["-lstdc++"]] : [],
+		cxxLink: tools.cxx === undefined ? [] : CXX_LINK_CANDIDATES,
+		sectionGc: sectionGcLinkFlags(platform),
 	};
 	const identities = Object.fromEntries(
 		Object.entries(tools)
@@ -486,7 +498,6 @@ function fingerprintFor(
 			schema: CACHE_SCHEMA,
 			platform,
 			arch,
-			needsCxx,
 			target,
 			rustTarget,
 			testedFlags,
@@ -532,7 +543,6 @@ function probeCapabilities(
 	probeDir: string,
 	env: NodeJS.ProcessEnv,
 	platform: NodeJS.Platform,
-	needsCxx: boolean,
 ): ToolchainProbes {
 	// The runtime relies on real C23, not just the __STDC_VERSION__ stamp: the
 	// bool/true/false keywords with no <stdbool.h> (defaults.h), nullptr, and
@@ -662,9 +672,9 @@ function probeCapabilities(
 		}
 	}
 
-	let cxxLink = !needsCxx;
+	let cxxLink = false;
 	let cxxLinkArgs: Array<string> = [];
-	if (needsCxx && tools.cxx !== undefined) {
+	if (tools.cxx !== undefined) {
 		writeFileSync(
 			path.join(probeDir, "cxx.cc"),
 			'extern "C" int mal_cxx_probe(void) { int *p = new int(0); int n = *p; delete p; return n; }\n',
@@ -674,7 +684,7 @@ function probeCapabilities(
 			"int mal_cxx_probe(void); int main(void) { return mal_cxx_probe(); }\n",
 		);
 		const cxxObject = compile(tools.cxx, ["-c", "cxx.cc", "-o", "cxx.o"], probeDir, env);
-		for (const args of [["-lc++"], ["-lstdc++"]]) {
+		for (const args of CXX_LINK_CANDIDATES) {
 			if (
 				cxxObject &&
 				compile(
@@ -690,6 +700,16 @@ function probeCapabilities(
 			}
 		}
 	}
+
+	const sectionGcLinkArgs = sectionGcLinkFlags(platform);
+	const sectionGc =
+		c2x &&
+		compile(
+			tools.cc,
+			[...C2X_FLAGS, "main.c", ...sectionGcLinkArgs, "-o", "section-gc-probe"],
+			probeDir,
+			env,
+		);
 
 	let strip = false;
 	let stripArgs: Array<string> = [];
@@ -736,6 +756,7 @@ function probeCapabilities(
 		cxxLink,
 		stripArgs,
 		cxxLinkArgs,
+		sectionGcLinkArgs: sectionGc ? sectionGcLinkArgs : [],
 	};
 }
 
@@ -843,13 +864,11 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 				version: `zig cc ${zig.version}`,
 				args: ["cc", "-target", crossTarget.zigTarget],
 			};
-			if (needsCxx) {
-				tools.cxx = {
-					path: zig.path,
-					version: `zig c++ ${zig.version}`,
-					args: ["c++", "-target", crossTarget.zigTarget],
-				};
-			}
+			tools.cxx = {
+				path: zig.path,
+				version: `zig c++ ${zig.version}`,
+				args: ["c++", "-target", crossTarget.zigTarget],
+			};
 			tools.ar = { path: zig.path, version: `zig ar ${zig.version}`, args: ["ar"] };
 			tools.strip = {
 				path: zig.path,
@@ -870,18 +889,20 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 			);
 		} else tools.cc = cc;
 
-		if (needsCxx) {
-			const cxxName = env.CXX?.trim() || "c++";
-			const cxx = inspectExecutable(cxxName, searchPath, rootDir, env);
-			if (cxx === undefined) {
-				addMissingIssue(
-					issues,
-					"cxx",
-					env.CXX
-						? `CXX points to an unavailable compiler: ${env.CXX}`
-						: "a C++ compiler was not found on PATH (required by the URL runtime)",
-				);
-			} else tools.cxx = cxx;
+		// The Rust runtime archive always compiles the C++ URL parser. Builds that
+		// never link it may still lack a C++ compiler when that archive is cached.
+		const cxxName = env.CXX?.trim() || "c++";
+		const cxx = inspectExecutable(cxxName, searchPath, rootDir, env);
+		if (cxx !== undefined) tools.cxx = cxx;
+		else {
+			addMissingIssue(
+				issues,
+				"cxx",
+				env.CXX
+					? `CXX points to an unavailable compiler: ${env.CXX}`
+					: "a C++ compiler was not found on PATH (required by the URL runtime)",
+				needsCxx,
+			);
 		}
 
 		const clangMajor = clangMajorVersion(cc?.version ?? "");
@@ -1000,7 +1021,6 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 		rustTarget,
 		platform,
 		arch,
-		needsCxx,
 		cacheDirectory,
 	);
 	report.fingerprint = fingerprint;
@@ -1023,7 +1043,7 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 		mkdirSync(cacheDir, { recursive: true });
 		const probeDir = mkdtempSync(path.join(cacheDir, "probe-"));
 		try {
-			probes = probeCapabilities(completeTools, probeDir, env, platform, needsCxx);
+			probes = probeCapabilities(completeTools, probeDir, env, platform);
 			if (requiredProbesPass(probes, needsCxx)) {
 				writeFileSync(
 					cachePath,
@@ -1331,6 +1351,9 @@ export function formatToolchainReport(
 			}`,
 		);
 		lines.push(`[${report.probes.strip ? "ok" : "optional"}] symbol stripping`);
+		lines.push(
+			`[${report.probes.sectionGcLinkArgs.length > 0 ? "ok" : "optional"}] unused section removal`,
+		);
 		lines.push(
 			`Probe cache: ${report.cacheHit ? "hit" : "miss"} (${report.fingerprint})`,
 		);

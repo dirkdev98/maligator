@@ -20,9 +20,9 @@ crate-type = ["staticlib"]
 # /usr/share/zoneinfo). The system zone *identity* still comes from TZ / the
 # /etc/localtime symlink via TimeZone::system().
 jiff = { version = "0.2.42", features = ["tzdb-bundle-always"] }
-# Separate optional ICU4X components keep unselected Intl services and their
-# compiled locale data out of native binaries. Locale parsing, negotiation and
-# result stringification use icu_locale and writeable in every Intl build.
+# Separate optional ICU4X components let Wasm builds compile only the selected
+# Intl services. Locale parsing, negotiation and result stringification use
+# icu_locale and writeable in every Intl build.
 icu_locale = { version = "2.4.0", optional = true }
 icu_provider = { version = "2.4.0", optional = true }
 fixed_decimal = { version = "0.7.3", optional = true }
@@ -45,14 +45,13 @@ temporal_rs = { version = "0.2.6", default-features = false, optional = true }
 # regress: the ECMAScript RegExp engine (the one Boa uses). Lives in this crate
 # rather than its own because two Rust staticlibs can't co-link (duplicate std
 # panic-runtime symbols). The `utf16` feature matches over &[u16] with no UTF-8
-# conversion. Optional + gated behind the `regexp` feature (engine.regexp): off
-# drops the regex engine + its Unicode tables. See src/regexp.rs.
+# conversion. See src/regexp.rs.
 regress = { version = "0.12.0", path = "vendor/regress", features = [
 	"utf16",
 ], optional = true }
-# ada-url: the WHATWG URL parser (wraps the C++ `ada` library). Optional + gated
-# behind the `url` feature, selected by either the web or Node host surface. A build
-# with neither drops the parser and its C++ runtime link argument. See src/url.rs.
+# ada-url: the WHATWG URL parser (wraps the C++ `ada` library). Native links add
+# its C++ library and runtime only when the build selects `url` (src/rust-build.ts).
+# See src/url.rs.
 ada-url = { version = "4.0.0", optional = true }
 # Pure-Rust streaming codecs for the node:zlib backend. `zlib-rs` is selected
 # explicitly so enabling Node never introduces a system libz dependency.
@@ -105,27 +104,23 @@ pkcs8 = { version = "0.11.0", features = [
 zeroize = { version = "1.8", optional = true }
 
 [features]
-# On by default so dev/test262 builds carry the full Intl + URL + RegExp surface.
-# The build maps the resolved config to an explicit feature set (src/rust-build.ts):
-# Intl services via intl-*, the URL (ada) parser via url, the RegExp engine
-# via regexp. jiff (tz) is non-optional and always builds.
+# Native builds compile every feature into one archive that all build
+# configurations share; the final link keeps what the C runtime references.
+# Wasm builds select the features of their configuration
+# (normalizeNativeFeatures). jiff (tz) is non-optional and always builds.
 default = ["intl-full", "url", "regexp"]
 
-# The WHATWG URL surface: the ada-url (C++) parser. Selected by surface.webPlatform
-# or surface.node; off only when both are off, dropping ada + the `-lc++` link.
+# The WHATWG URL surface: the ada-url (C++) parser.
 url = ["dep:ada-url"]
 
-# The RegExp engine (regress). Off drops the regex engine + its Unicode tables.
-# Maps to engine.regexp (rust-build.ts) + C `-DMAL_REGEXP`.
+# The RegExp engine (regress) and its Unicode tables.
 regexp = ["dep:regress"]
 
 # ECMAScript Temporal through temporal_rs's generated stable C interface. Its
-# compiled_data provider embeds deterministic IANA time-zone data only when the
-# build config selects engine.temporal.
+# compiled_data provider embeds deterministic IANA time-zone data.
 temporal = ["dep:temporal_capi", "temporal_capi/compiled_data"]
 
-# node:zlib flat codec primitives (deflate, gzip and Brotli, both directions). The C/JS adapters remain
-# outside this feature; Node builds select it through normalizeNativeFeatures.
+# node:zlib flat codec primitives (deflate, gzip and Brotli, both directions).
 zlib = ["dep:flate2", "dep:brotli-decompressor", "dep:brotli"]
 tls = ["dep:rustls", "dep:ring"]
 node-argon2 = ["dep:rust-argon2"]
@@ -200,7 +195,7 @@ intl-duration-format = [
 	"icu_experimental/compiled_data",
 ]
 
-# Every service (the canonical dev/test262 build).
+# Every service.
 intl-full = [
 	"intl-collator",
 	"intl-number-format",
@@ -213,6 +208,10 @@ intl-full = [
 	"intl-duration-format",
 ]
 
+# One fat-LTO codegen unit is also what makes the all-features archive cheap:
+# linker section GC removes unreferenced functions and data from it at symbol
+# granularity, so each binary keeps the same Rust code a per-configuration
+# build would. ThinLTO over many codegen units links measurably larger binaries.
 [profile.release]
 opt-level = 3
 lto = true

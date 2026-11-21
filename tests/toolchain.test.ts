@@ -17,6 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeNativeFeatures, selectNativeBuildPlan } from "../src/build-flags.ts";
+import type { NativeFeatureInput } from "../src/build-flags.ts";
 import { cargoCacheDirectory, maligatorCacheDirectory } from "../src/cache-root.ts";
 import { ensureCompilerWire } from "../src/compiler-bake.ts";
 import { buildLocalBinary, prepareGeneratedSources } from "../src/local-build.ts";
@@ -452,7 +453,6 @@ exit 7
 		expect(artifacts.library).toContain(
 			`${path.sep}${rustTarget}${path.sep}release${path.sep}`,
 		);
-		expect(artifacts.linkArgs).toEqual([artifacts.library, "-lm", "-lunwind"]);
 		expect(artifacts.nativeToolEnvironment).toMatchObject({
 			AR: realpathSync(path.join(fake.bin, "zig")),
 			ARFLAGS: "ar",
@@ -474,7 +474,7 @@ exit 7
 		expect(invocations).toContain("zig cc -target x86_64-linux-gnu");
 		expect(invocations).toContain("zig ar rcs");
 		expect(invocations).toContain(
-			`cargo build --release --no-default-features --target ${rustTarget}`,
+			`cargo build --release --all-features --target ${rustTarget}`,
 		);
 		expect(invocations).toContain(
 			`cargo-cc ${realpathSync(path.join(fake.bin, "zig"))} cc -target x86_64-linux-gnu`,
@@ -484,7 +484,7 @@ exit 7
 		expect(invocations).toContain(
 			`cargo-cxx ${realpathSync(path.join(fake.bin, "zig"))} c++ -target x86_64-linux-gnu`,
 		);
-		expect(invocations).toContain(" -lm");
+		expect(invocations).toContain(" -Wl,--gc-sections -lm -lunwind");
 		expect(invocations).toContain(" -s -o ");
 		expect(invocations).not.toContain("zig objcopy");
 	});
@@ -671,7 +671,7 @@ printf '!<arch>\\n' > "$2"
 		expect(available.cacheHit).toBe(false);
 	});
 
-	it("requires CXX only for builds that include the C++ web runtime", () => {
+	it("reports a missing CXX as required only for builds that link the URL runtime", () => {
 		const fake = createFakeToolchain();
 		const env = { ...fake.env, CXX: "missing-cxx" };
 		const withoutWeb = inspectToolchain({
@@ -690,6 +690,9 @@ printf '!<arch>\\n' > "$2"
 		});
 
 		expect(withoutWeb.toolchain).toBeDefined();
+		expect(withoutWeb.issues).toContainEqual(
+			expect.objectContaining({ tool: "cxx", required: false }),
+		);
 		expect(withWeb.toolchain).toBeUndefined();
 		expect(withWeb.issues).toContainEqual(
 			expect.objectContaining({ tool: "cxx", required: true }),
@@ -1446,96 +1449,56 @@ printf '!<arch>\\n' > "$2"
 		);
 	});
 
-	it("keys Rust artifacts from normalized Cargo inputs", () => {
+	it("shares one Rust archive across native build configurations", () => {
 		const fake = createFakeToolchain();
 		const runtimeDirectory = createMinimalRuntime(fake);
-		const toolchain = inspectToolchain({
-			rootDir: fake.root,
-			rustDir: path.join(runtimeDirectory, "rust"),
-			env: fake.env,
-			needsCxx: false,
-			platform: "linux",
-		}).toolchain!;
-		const plan = selectNativeBuildPlan(toolchain, false);
+		const toolchain = (needsCxx: boolean) =>
+			inspectToolchain({
+				rootDir: fake.root,
+				rustDir: path.join(runtimeDirectory, "rust"),
+				env: fake.env,
+				needsCxx,
+				platform: "linux",
+			}).toolchain!;
 		const cacheDirectory = path.join(fake.root, "native-cache");
-		const first = resolveRustArtifacts(
-			resolveNativeBuildContext({
-				runtimeDirectory,
-				cacheDirectory,
-				toolchain,
-				plan,
-				features: {
-					intlFeatures: ["intl-segmenter", "intl-collator", "intl-segmenter"],
-					webPlatformEnabled: false,
-					regexpEnabled: true,
-				},
-			}),
-		);
-		const reordered = resolveRustArtifacts(
-			resolveNativeBuildContext({
-				runtimeDirectory,
-				cacheDirectory,
-				toolchain,
-				plan,
-				features: {
-					intlFeatures: ["intl-collator", "intl-segmenter"],
-					webPlatformEnabled: false,
-					regexpEnabled: true,
-				},
-			}),
-		);
-		const different = resolveRustArtifacts(
-			resolveNativeBuildContext({
-				runtimeDirectory,
-				cacheDirectory,
-				toolchain,
-				plan,
-				features: {
-					intlFeatures: ["intl-collator"],
-					webPlatformEnabled: false,
-					regexpEnabled: true,
-				},
-			}),
-		);
+		const build = (selected: Toolchain, features: NativeFeatureInput) =>
+			ensureRustArtifacts(
+				resolveNativeBuildContext({
+					runtimeDirectory,
+					cacheDirectory,
+					toolchain: selected,
+					plan: selectNativeBuildPlan(selected, false),
+					features,
+				}),
+			);
+		const cargoCompileCount = () =>
+			readFileSync(fake.logPath, "utf-8")
+				.split("\n")
+				.filter((line) => line === "cargo build --release --all-features").length;
+		writeFileSync(fake.logPath, "");
 
-		expect(first.cacheKey).toBe(reordered.cacheKey);
-		expect(first.cacheKey).not.toBe(different.cacheKey);
-		expect(first.targetDirectory).toBe(reordered.targetDirectory);
-		expect(first.targetDirectory).toBe(different.targetDirectory);
-		expect(first.library).toContain(cacheDirectory);
-		expect(first.cargoFeatures).toEqual([
-			"intl-collator",
-			"intl-segmenter",
-			"regexp",
-			"temporal",
-		]);
-		expect(first.cargoArguments).toEqual([
-			"build",
-			"--release",
-			"--no-default-features",
-			"--features",
-			"intl-collator,intl-segmenter,regexp,temporal",
-		]);
+		const lean = build(toolchain(false), {
+			intlFeatures: ["intl-collator"],
+			webPlatformEnabled: false,
+			regexpEnabled: false,
+		});
+		const hosted = build(toolchain(true), {
+			nodeEnabled: true,
+			webPlatformEnabled: true,
+		});
+
+		expect(hosted.cacheKey).toBe(lean.cacheKey);
+		expect(hosted.library).toBe(lean.library);
+		expect(cargoCompileCount()).toBe(1);
 
 		writeFileSync(
 			path.join(runtimeDirectory, "rust/src/lib.rs"),
 			"pub fn value() -> i32 { 2 }\n",
 		);
-		const changedSource = resolveRustArtifacts(
-			resolveNativeBuildContext({
-				runtimeDirectory,
-				cacheDirectory,
-				toolchain,
-				plan,
-				features: {
-					intlFeatures: ["intl-collator", "intl-segmenter"],
-					webPlatformEnabled: false,
-					regexpEnabled: true,
-				},
-			}),
-		);
-		expect(changedSource.cacheKey).not.toBe(first.cacheKey);
-		expect(changedSource.targetDirectory).not.toBe(first.targetDirectory);
+		const changedSource = build(toolchain(false), { webPlatformEnabled: false });
+		expect(changedSource.cacheKey).not.toBe(lean.cacheKey);
+		expect(changedSource.targetDirectory).not.toBe(lean.targetDirectory);
+		expect(cargoCompileCount()).toBe(2);
 	});
 
 	it("derives coherent C defines and Cargo features from one feature spec", () => {
@@ -1972,7 +1935,9 @@ ${compilerScript(`clang version ${major}.0.0`, fake.logPath)}`,
 		const cargoBuildCount = (): number =>
 			readFileSync(fake.logPath, "utf-8")
 				.split("\n")
-				.filter((line) => line.startsWith("cargo build ")).length;
+				.filter(
+					(line) => line.startsWith("cargo build ") && !line.includes("--message-format"),
+				).length;
 		const first = ensureRustArtifacts(context);
 		expect(cargoBuildCount()).toBe(1);
 		rmSync(first.library);

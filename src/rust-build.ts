@@ -1,5 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { hash } from "node:crypto";
-import { statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
@@ -11,7 +12,6 @@ import {
 	withArtifactActionLock,
 } from "./artifact-store.ts";
 import { platformLinkArgs } from "./build-flags.ts";
-import type { NativeFeatureSpec } from "./build-flags.ts";
 import { cargoCacheDirectory } from "./cache-root.ts";
 import {
 	hashDirectoryTrees,
@@ -66,20 +66,46 @@ export function rustArtifactKey(inputs: RustArtifactKeyInputs): string {
 	return artifactActionKey(RUST_PRODUCER, inputs);
 }
 
-const RUST_PRODUCER = artifactProducer("rust-library", 1, "cargo-build");
+const RUST_PRODUCER = artifactProducer("rust-library", 2, "cargo-build");
 const RUST_TARGET_PRODUCER = artifactProducer("rust-target", 1, "cargo-build");
+const RUST_LIBRARY_OUTPUT = "libmal_rust.a";
+const NATIVE_OUTPUT_PREFIX = "native.";
 
-export interface RustArtifacts {
+/**
+ * Build-script libraries that leave the Rust archive and link only when one of
+ * the listed Cargo features is selected. A reference from unused Rust code
+ * still loads an archive member, and section GC cannot shed these members
+ * afterwards: Ada's static initializers keep its C++ code and libc++ alive, and
+ * ring's assembly objects have no subsections. Unlisted packages stay bundled.
+ */
+const NATIVE_COMPONENT_FEATURES: Readonly<Record<string, ReadonlyArray<string>>> = {
+	"ada-url": ["url"],
+	ring: ["tls", "node-crypto"],
+};
+
+/** Cargo inputs and content-addressed paths shared by every native feature selection. */
+export interface RustBuildPlan {
 	cacheKey: string;
 	targetKey: string;
 	targetDirectory: string;
 	library: string;
-	linkArgs: Array<string>;
 	cargoArguments: Array<string>;
-	cargoFeatures: Array<string>;
 	nativeToolEnvironment: Readonly<Record<string, string>>;
-	features: Readonly<NativeFeatureSpec>;
 }
+
+/** A build-script static library published beside the Rust archive. */
+export interface RustNativeComponent {
+	packageName: string;
+	library: string;
+}
+
+export interface RustArtifacts extends RustBuildPlan {
+	nativeComponents: ReadonlyArray<RustNativeComponent>;
+	/** The Rust archive, the selected native components and their link flags. */
+	linkArgs: Array<string>;
+}
+
+type RustLibraryAction = ReturnType<typeof publishArtifactAction>;
 
 function cargoNativeToolEnvironment(context: NativeBuildContext): Record<string, string> {
 	const environment: Record<string, string> = {
@@ -115,39 +141,29 @@ function cargoNativeToolEnvironment(context: NativeBuildContext): Record<string,
 	return environment;
 }
 
-/** Resolve exact Cargo arguments and content-addressed paths from one native context. */
-export function resolveRustArtifacts(context: NativeBuildContext): RustArtifacts {
+/**
+ * Resolve exact Cargo arguments and content-addressed paths from one native
+ * context. Native builds compile every Cargo feature, so the archive is keyed by
+ * sources, target and tools only; each link keeps what its C references reach.
+ */
+export function resolveRustArtifacts(context: NativeBuildContext): RustBuildPlan {
 	const rustDirectory = path.join(context.runtimeDirectory, "rust");
-	const cargoFeatures = [...context.features.cargoFeatures];
-	const cargoBaseArguments = ["build", "--release", "--no-default-features"];
+	const cargoArguments = ["build", "--release", "--all-features"];
 	if (context.toolchain.cross === true) {
-		cargoBaseArguments.push("--target", context.toolchain.rustTarget);
-	}
-	const cargoArguments = [...cargoBaseArguments];
-	if (cargoFeatures.length > 0) {
-		cargoArguments.push("--features", cargoFeatures.join(","));
+		cargoArguments.push("--target", context.toolchain.rustTarget);
 	}
 	const nativeToolEnvironment = cargoNativeToolEnvironment(context);
-	const nativeToolEntries = Object.entries(nativeToolEnvironment).sort(([a], [b]) =>
-		a < b ? -1 : a > b ? 1 : 0,
-	);
-	const sourceDigest = cachedRustSourceDigest(rustDirectory, context.cacheDirectory);
-	const cacheKey = rustArtifactKey({
+	const inputs: RustArtifactKeyInputs = {
 		cargoArguments,
 		environmentFingerprint: context.environmentFingerprint,
-		nativeToolEnvironment: nativeToolEntries,
-		sourceDigest,
+		nativeToolEnvironment: Object.entries(nativeToolEnvironment).sort(([a], [b]) =>
+			a < b ? -1 : a > b ? 1 : 0,
+		),
+		sourceDigest: cachedRustSourceDigest(rustDirectory, context.cacheDirectory),
 		toolchainFingerprint: context.toolchain.fingerprint,
 		rustTarget: context.toolchain.rustTarget,
-	});
-	const targetKey = artifactActionKey(RUST_TARGET_PRODUCER, {
-		cargoArguments: cargoBaseArguments,
-		environmentFingerprint: context.environmentFingerprint,
-		nativeToolEnvironment: nativeToolEntries,
-		sourceDigest,
-		toolchainFingerprint: context.toolchain.fingerprint,
-		rustTarget: context.toolchain.rustTarget,
-	});
+	};
+	const targetKey = artifactActionKey(RUST_TARGET_PRODUCER, inputs);
 	const targetDirectory = path.join(
 		context.cacheDirectory,
 		"work",
@@ -155,40 +171,175 @@ export function resolveRustArtifacts(context: NativeBuildContext): RustArtifacts
 		targetKey,
 		"target",
 	);
-	const library = path.join(
-		targetDirectory,
-		...(context.toolchain.cross === true ? [context.toolchain.rustTarget] : []),
-		"release",
-		"libmal_rust.a",
-	);
 	return {
-		cacheKey,
+		cacheKey: rustArtifactKey(inputs),
 		targetKey,
 		targetDirectory,
+		library: path.join(
+			targetDirectory,
+			...(context.toolchain.cross === true ? [context.toolchain.rustTarget] : []),
+			"release",
+			RUST_LIBRARY_OUTPUT,
+		),
+		cargoArguments,
+		nativeToolEnvironment,
+	};
+}
+
+function resolvedRustArtifacts(
+	context: NativeBuildContext,
+	plan: RustBuildPlan,
+	action: RustLibraryAction,
+): RustArtifacts {
+	const library = artifactOutput(action, RUST_LIBRARY_OUTPUT).path;
+	const nativeComponents = action.outputs.flatMap((output) =>
+		output.name.startsWith(NATIVE_OUTPUT_PREFIX)
+			? [
+					{
+						packageName: output.name.slice(NATIVE_OUTPUT_PREFIX.length).split(".")[0]!,
+						library: output.path,
+					},
+				]
+			: [],
+	);
+	const features = new Set(context.features.cargoFeatures);
+	const { sectionGcLinkArgs, cxxLinkArgs } = context.toolchain.probes;
+	// Without section GC the linker keeps every loaded Rust function, and with
+	// them their references into each component.
+	const linkEveryComponent = sectionGcLinkArgs.length === 0;
+	const selected = ({ packageName }: RustNativeComponent) =>
+		linkEveryComponent ||
+		(NATIVE_COMPONENT_FEATURES[packageName]?.some((feature) => features.has(feature)) ??
+			false);
+	return {
+		...plan,
 		library,
+		nativeComponents,
 		linkArgs: [
 			library,
-			...(context.features.cargoFeatures.includes("url")
-				? context.toolchain.probes.cxxLinkArgs
-				: []),
+			...nativeComponents.filter(selected).map((component) => component.library),
+			...(linkEveryComponent || features.has("url") ? cxxLinkArgs : []),
+			...sectionGcLinkArgs,
 			...platformLinkArgs(
 				context.toolchain.platform ?? process.platform,
 				context.toolchain.cross === true,
 			),
 		],
-		cargoArguments,
-		cargoFeatures,
-		nativeToolEnvironment,
-		features: context.features,
 	};
 }
 
-function cachedRustArtifacts(artifacts: RustArtifacts, library: string): RustArtifacts {
-	return {
-		...artifacts,
-		library,
-		linkArgs: [library, ...artifacts.linkArgs.slice(1)],
-	};
+interface NativeComponentLibrary {
+	packageName: string;
+	archive: string;
+}
+
+/** The package name in either Cargo package-id format ("name 1.0 (source)" or "source#name@1.0"). */
+function cargoPackageName(packageId: string): string | undefined {
+	return /#([^@#]+)@/.exec(packageId)?.[1] ?? /^(\S+) \S+ \(/.exec(packageId)?.[1];
+}
+
+/**
+ * Locate the static libraries that the listed packages' build scripts link.
+ * Cargo replays the results of fresh build scripts, so this query runs after the
+ * build and costs no compilation.
+ */
+function nativeComponentLibraries(
+	plan: RustBuildPlan,
+	cargo: { path: string; args: ReadonlyArray<string> },
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+): Array<NativeComponentLibrary> {
+	const stdout = execFileSync(
+		cargo.path,
+		[...cargo.args, ...plan.cargoArguments, "--message-format=json"],
+		{
+			cwd,
+			env,
+			encoding: "utf8",
+			maxBuffer: 256 * 1024 * 1024,
+			stdio: ["ignore", "pipe", "ignore"],
+		},
+	);
+	const libraries: Array<NativeComponentLibrary> = [];
+	for (const line of stdout.split("\n")) {
+		if (!line.startsWith("{")) continue;
+		const message = JSON.parse(line) as {
+			reason?: string;
+			package_id?: string;
+			linked_libs?: Array<string>;
+			linked_paths?: Array<string>;
+		};
+		if (message.reason !== "build-script-executed") continue;
+		const packageName = cargoPackageName(message.package_id ?? "");
+		if (packageName === undefined || !(packageName in NATIVE_COMPONENT_FEATURES))
+			continue;
+		const directories = (message.linked_paths ?? []).map((entry) =>
+			entry.replace(/^(?:native|dependency|crate|framework|all)=/, ""),
+		);
+		for (const entry of message.linked_libs ?? []) {
+			const name = /^static(?::[^=]*)?=(.+)$/.exec(entry)?.[1];
+			if (name === undefined) continue;
+			const archive = directories
+				.map((directory) => path.join(directory, `lib${name}.a`))
+				.find((candidate) => existsSync(candidate));
+			if (archive === undefined) {
+				throw new Error(`cargo reported ${entry} for ${packageName} without an archive`);
+			}
+			libraries.push({ packageName, archive });
+		}
+	}
+	return libraries;
+}
+
+/**
+ * Copy the Rust archive without the members rustc bundled from `libraries`.
+ * Bundling keeps each member's bytes; the name stays or gains a hash prefix. So
+ * every library member must match exactly one bundled member byte for byte.
+ */
+function separateNativeComponents(
+	context: NativeBuildContext,
+	plan: RustBuildPlan,
+	libraries: ReadonlyArray<NativeComponentLibrary>,
+): string {
+	const directory = path.join(plan.targetDirectory, "maligator-native-components");
+	rmSync(directory, { recursive: true, force: true });
+	mkdirSync(directory, { recursive: true });
+	const trimmed = path.join(directory, RUST_LIBRARY_OUTPUT);
+	copyFileSync(plan.library, trimmed);
+	if (libraries.length === 0) return trimmed;
+	const ar = context.toolchain.tools.ar;
+	const runAr = (args: Array<string>): Buffer =>
+		execFileSync(ar.path, toolArguments(ar, args), {
+			env: context.environment,
+			maxBuffer: 256 * 1024 * 1024,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+	const members = (archive: string) =>
+		runAr(["t", archive])
+			.toString("utf8")
+			.split("\n")
+			.filter((name) => name !== "" && !name.startsWith("__.SYMDEF") && name !== "/");
+	const bundled = members(trimmed);
+	const removed: Array<string> = [];
+	for (const { packageName, archive } of libraries) {
+		for (const member of members(archive)) {
+			const content = runAr(["p", archive, member]);
+			const matches = bundled.filter(
+				(name) =>
+					(name === member || /^[0-9a-f]+-/.test(name.slice(0, -member.length))) &&
+					name.endsWith(member) &&
+					runAr(["p", trimmed, name]).equals(content),
+			);
+			if (matches.length !== 1) {
+				throw new Error(
+					`expected one bundled copy of ${packageName}'s ${member} in ${plan.library}, found ${matches.length}`,
+				);
+			}
+			removed.push(matches[0]!);
+		}
+	}
+	runAr(["ds", trimmed, ...removed]);
+	return trimmed;
 }
 
 /** Build the Rust FFI static library with reusable, serialized Cargo work products. */
@@ -196,95 +347,116 @@ export function ensureRustArtifacts(
 	context: NativeBuildContext,
 	verbose = false,
 ): RustArtifacts {
+	if (context.toolchain.tools.cxx === undefined) {
+		throw new Error(
+			"the native Rust runtime compiles the URL parser and needs a C++ compiler (run 'maligator doctor')",
+		);
+	}
 	const startedAt = performance.now();
-	const artifacts = resolveRustArtifacts(context);
+	const plan = resolveRustArtifacts(context);
 	const cached = readArtifactAction(
 		context.cacheDirectory,
 		"rust-library",
 		RUST_PRODUCER,
-		artifacts.cacheKey,
+		plan.cacheKey,
 	);
 	if (cached !== undefined) {
-		const library = artifactOutput(cached, "libmal_rust.a").path;
-		context.onCacheEvent?.({ artifact: "rust", hit: true, path: library });
+		const artifacts = resolvedRustArtifacts(context, plan, cached);
+		context.onCacheEvent?.({ artifact: "rust", hit: true, path: artifacts.library });
 		context.onBuildPhase?.({
 			phase: "rust",
 			durationMs: performance.now() - startedAt,
 			cache: "hit",
-			path: library,
+			path: artifacts.library,
 		});
-		return cachedRustArtifacts(artifacts, library);
+		return artifacts;
 	}
-	context.onCacheEvent?.({ artifact: "rust", hit: false, path: artifacts.library });
+	context.onCacheEvent?.({ artifact: "rust", hit: false, path: plan.library });
 	const published = withArtifactActionLock(
 		context.cacheDirectory,
 		"rust-library",
 		RUST_PRODUCER,
-		artifacts.cacheKey,
+		plan.cacheKey,
 		() => {
 			const raced = readArtifactAction(
 				context.cacheDirectory,
 				"rust-library",
 				RUST_PRODUCER,
-				artifacts.cacheKey,
+				plan.cacheKey,
 			);
 			if (raced !== undefined) return raced;
 			return withArtifactActionLock(
 				context.cacheDirectory,
 				"rust-target",
 				RUST_TARGET_PRODUCER,
-				artifacts.targetKey,
+				plan.targetKey,
 				() => {
 					const currentPath = context.environment.PATH ?? "";
-					const cargoPath = context.toolchain.tools.cargo.path;
-					const toolchainBin = path.dirname(cargoPath);
+					const cargo = context.toolchain.tools.cargo;
+					const cwd = path.join(context.runtimeDirectory, "rust");
+					const env = {
+						...context.environment,
+						...plan.nativeToolEnvironment,
+						PATH: `${path.dirname(cargo.path)}${path.delimiter}${currentPath}`,
+						CARGO_HOME: cargoCacheDirectory(context.environment),
+						CARGO_TARGET_DIR: plan.targetDirectory,
+						CARGO_BUILD_JOBS: String(
+							buildWorkerCount(context.environment, "CARGO_BUILD_JOBS", 8),
+						),
+						RUSTC: context.toolchain.tools.rustc.path,
+					};
 					runNativeCommand(
 						context,
-						cargoPath,
-						toolArguments(context.toolchain.tools.cargo, artifacts.cargoArguments),
+						cargo.path,
+						toolArguments(cargo, plan.cargoArguments),
 						{
-							cwd: path.join(context.runtimeDirectory, "rust"),
-							env: {
-								...context.environment,
-								...artifacts.nativeToolEnvironment,
-								PATH: `${toolchainBin}${path.delimiter}${currentPath}`,
-								CARGO_HOME: cargoCacheDirectory(context.environment),
-								CARGO_TARGET_DIR: artifacts.targetDirectory,
-								CARGO_BUILD_JOBS: String(
-									buildWorkerCount(context.environment, "CARGO_BUILD_JOBS", 8),
-								),
-								RUSTC: context.toolchain.tools.rustc.path,
-							},
+							cwd,
+							env,
 							verbose,
 						},
 					);
 					let librarySize = 0;
 					try {
-						const stats = statSync(artifacts.library);
+						const stats = statSync(plan.library);
 						if (stats.isFile()) librarySize = stats.size;
 					} catch {
 						// Report the common failure below.
 					}
 					if (librarySize === 0) {
-						throw new Error(`cargo completed without producing ${artifacts.library}`);
+						throw new Error(`cargo completed without producing ${plan.library}`);
 					}
+					const libraries = nativeComponentLibraries(
+						plan,
+						{ path: cargo.path, args: cargo.args ?? [] },
+						cwd,
+						env,
+					);
 					return publishArtifactAction(
 						context.cacheDirectory,
 						"rust-library",
 						RUST_PRODUCER,
-						artifacts.cacheKey,
-						[{ name: "libmal_rust.a", file: artifacts.library }],
+						plan.cacheKey,
+						[
+							{
+								name: RUST_LIBRARY_OUTPUT,
+								file: separateNativeComponents(context, plan, libraries),
+							},
+							...libraries.map(({ packageName, archive }) => ({
+								name: `${NATIVE_OUTPUT_PREFIX}${packageName}.${path.basename(archive)}`,
+								file: archive,
+							})),
+						],
 					);
 				},
 			);
 		},
 	);
-	const library = artifactOutput(published, "libmal_rust.a").path;
+	const artifacts = resolvedRustArtifacts(context, plan, published);
 	context.onBuildPhase?.({
 		phase: "rust",
 		durationMs: performance.now() - startedAt,
 		cache: "miss",
-		path: library,
+		path: artifacts.library,
 	});
-	return cachedRustArtifacts(artifacts, library);
+	return artifacts;
 }

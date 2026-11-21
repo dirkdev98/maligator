@@ -56,7 +56,7 @@ export interface NativeBuildPlan {
 	warnings: Array<string>;
 }
 
-/** One source of truth for each selectable Intl service's C and Cargo gates. */
+/** One source of truth for each selectable Intl service's C gate and Cargo feature. */
 export const INTL_SERVICE_FEATURES: Record<string, { cargo: string; define: string }> = {
 	collator: { cargo: "intl-collator", define: "MAL_INTL_HAS_COLLATOR" },
 	"number-format": { cargo: "intl-number-format", define: "MAL_INTL_HAS_NUMBER_FORMAT" },
@@ -101,9 +101,11 @@ export interface NativeFeatureInput {
 }
 
 /**
- * Normalized feature identity shared by C compilation and the Rust Cargo build.
- * `cDefines` and `cargoFeatures` are the exact, sorted arguments used by each
- * backend and are always derived together.
+ * Normalized feature identity shared by C compilation and the Rust link.
+ * `cDefines` are the exact, sorted C arguments. `cargoFeatures` name the Rust
+ * components the build selects: Wasm compiles exactly those, while native
+ * builds compile every feature and link the selected components' native
+ * libraries. Both are always derived together.
  */
 export interface NativeFeatureSpec {
 	primordialsLocked: boolean;
