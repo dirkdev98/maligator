@@ -65187,19 +65187,6 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_CRYPTO%\",\"crypto\"]",
-			"owner": "%MAL_INTRINSIC_WEB_GROUP_CRYPTO%",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_WEB_GROUP_CRYPTO%",
-				"MAL_INTRINSIC_WEB_GROUP_CRYPTO"
-			],
-			"key": "crypto",
-			"kind": "data",
-			"operations": [],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
 			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_ENCODING%\",\"TextEncoder\"]",
 			"owner": "%MAL_INTRINSIC_WEB_GROUP_ENCODING%",
 			"ownerPaths": [
@@ -65373,19 +65360,6 @@
 			"key": "fetch",
 			"kind": "data",
 			"operations": ["globalThis.fetch"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_PERFORMANCE%\",\"performance\"]",
-			"owner": "%MAL_INTRINSIC_WEB_GROUP_PERFORMANCE%",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_WEB_GROUP_PERFORMANCE%",
-				"MAL_INTRINSIC_WEB_GROUP_PERFORMANCE"
-			],
-			"key": "performance",
-			"kind": "data",
-			"operations": [],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -67634,32 +67608,6 @@
 			"ownerPaths": [
 				"%mal_host_install_maligator_internal_workers:createWorkerUrl%",
 				"mal_host_install_maligator_internal_workers:createWorkerUrl"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%mal_host_install_maligator_internal_workers:receiveMessageOnPort%\",\"length\"]",
-			"owner": "%mal_host_install_maligator_internal_workers:receiveMessageOnPort%",
-			"ownerPaths": [
-				"%mal_host_install_maligator_internal_workers:receiveMessageOnPort%",
-				"mal_host_install_maligator_internal_workers:receiveMessageOnPort"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%mal_host_install_maligator_internal_workers:receiveMessageOnPort%\",\"name\"]",
-			"owner": "%mal_host_install_maligator_internal_workers:receiveMessageOnPort%",
-			"ownerPaths": [
-				"%mal_host_install_maligator_internal_workers:receiveMessageOnPort%",
-				"mal_host_install_maligator_internal_workers:receiveMessageOnPort"
 			],
 			"key": "name",
 			"kind": "data",
@@ -141234,7 +141182,6 @@
 			"owner": "globalThis.crypto",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto",
-				"%MAL_INTRINSIC_WEB_GROUP_CRYPTO%.crypto",
 				"globalThis.crypto",
 				"mal_host_install_node_crypto:webcrypto"
 			],
@@ -141249,7 +141196,6 @@
 			"owner": "globalThis.crypto",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto",
-				"%MAL_INTRINSIC_WEB_GROUP_CRYPTO%.crypto",
 				"globalThis.crypto",
 				"mal_host_install_node_crypto:webcrypto"
 			],
@@ -141264,7 +141210,6 @@
 			"owner": "globalThis.crypto",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto",
-				"%MAL_INTRINSIC_WEB_GROUP_CRYPTO%.crypto",
 				"globalThis.crypto",
 				"mal_host_install_node_crypto:webcrypto"
 			],
@@ -141762,7 +141707,6 @@
 			"owner": "globalThis.performance",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_PERF_HOOKS_MODULE%.performance",
-				"%MAL_INTRINSIC_WEB_GROUP_PERFORMANCE%.performance",
 				"globalThis.performance",
 				"mal_host_install_node_perf_hooks:performance"
 			],
@@ -141777,7 +141721,6 @@
 			"owner": "globalThis.performance",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_PERF_HOOKS_MODULE%.performance",
-				"%MAL_INTRINSIC_WEB_GROUP_PERFORMANCE%.performance",
 				"globalThis.performance",
 				"mal_host_install_node_perf_hooks:performance"
 			],
@@ -176648,36 +176591,6 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%mal_host_install_maligator_internal_workers:createWorkerUrl%"],
-			"task": "N-05",
-			"decisions": []
-		},
-		{
-			"id": "[\"%mal_host_install_maligator_internal_workers:receiveMessageOnPort%\",\"<call>\"]",
-			"owner": "%mal_host_install_maligator_internal_workers:receiveMessageOnPort%",
-			"ownerPaths": [
-				"%mal_host_install_maligator_internal_workers:receiveMessageOnPort%",
-				"mal_host_install_maligator_internal_workers:receiveMessageOnPort"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%mal_host_install_maligator_internal_workers:receiveMessageOnPort%"
-			],
-			"task": "N-05",
-			"decisions": []
-		},
-		{
-			"id": "[\"%mal_host_install_maligator_internal_workers:receiveMessageOnPort%\",\"<construct>\"]",
-			"owner": "%mal_host_install_maligator_internal_workers:receiveMessageOnPort%",
-			"ownerPaths": [
-				"%mal_host_install_maligator_internal_workers:receiveMessageOnPort%",
-				"mal_host_install_maligator_internal_workers:receiveMessageOnPort"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%mal_host_install_maligator_internal_workers:receiveMessageOnPort%"
-			],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -310520,10 +310433,6 @@
 		{
 			"id": "%mal_host_install_maligator_internal_workers:createWorkerUrl%",
 			"identities": ["%mal_host_install_maligator_internal_workers:createWorkerUrl%"]
-		},
-		{
-			"id": "%mal_host_install_maligator_internal_workers:receiveMessageOnPort%",
-			"identities": ["%mal_host_install_maligator_internal_workers:receiveMessageOnPort%"]
 		},
 		{ "id": "AggregateError", "identities": ["AggregateError"] },
 		{ "id": "Array", "identities": ["Array"] },
