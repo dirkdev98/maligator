@@ -13065,6 +13065,32 @@
 		["mal_host_install_maligator_internal_fs:removeDirectory", ["runtime", "primitive"]],
 		["mal_host_install_maligator_internal_fs:stat", ["runtime", "primitive"]],
 		["mal_host_install_maligator_internal_fs:write", ["runtime", "primitive"]],
+		[
+			"mal_host_install_maligator_internal_fs_descriptor:closeDescriptor",
+			["runtime", "primitive"]
+		],
+		[
+			"mal_host_install_maligator_internal_fs_descriptor:flushDescriptor",
+			["runtime", "primitive"]
+		],
+		[
+			"mal_host_install_maligator_internal_fs_descriptor:openDescriptor",
+			["runtime", "primitive"]
+		],
+		[
+			"mal_host_install_maligator_internal_fs_descriptor:readChunk",
+			["runtime", "primitive"]
+		],
+		[
+			"mal_host_install_maligator_internal_fs_descriptor:writeChunk",
+			["runtime", "primitive"]
+		],
+		[
+			"mal_host_install_maligator_internal_fs_stream:readableStream",
+			["runtime", "primitive"]
+		],
+		["mal_host_install_maligator_internal_fs_watch:closeWatch", ["runtime", "primitive"]],
+		["mal_host_install_maligator_internal_fs_watch:openWatch", ["runtime", "primitive"]],
 		["mal_host_install_maligator_internal_http:assetProxy", ["runtime", "primitive"]],
 		["mal_host_install_maligator_internal_http:assetResponse", ["runtime", "primitive"]],
 		["mal_host_install_maligator_internal_http:listen", ["runtime", "primitive"]],

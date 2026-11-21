@@ -1,4 +1,7 @@
 #include "vm.h"
+MalValue mal_known_native_date_proto_to_temporal_instant(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
+    return date_proto_to_temporal_instant(vm, receiver, args, count, target, callee);
+}
 MalValue mal_known_native_duration_constructor(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
     return duration_constructor(vm, receiver, args, count, target, callee);
 }
@@ -673,7 +676,4 @@ MalValue mal_known_native_zoned_date_time_year(MalVm *vm, MalValue receiver, con
 }
 MalValue mal_known_native_zoned_date_time_year_of_week(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
     return zoned_date_time_year_of_week(vm, receiver, args, count, target, callee);
-}
-MalValue mal_known_native_date_proto_to_temporal_instant(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
-    return date_proto_to_temporal_instant(vm, receiver, args, count, target, callee);
 }
