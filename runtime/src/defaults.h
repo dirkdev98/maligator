@@ -123,6 +123,16 @@ typedef size_t usize;
 #define MAL_URL (MAL_WEB_PLATFORM || MAL_NODE)
 #endif
 
+// TLS clients and the deflate/gzip/brotli codecs serve fetch on either surface, and
+// Node's modules on top. Keep these in lockstep with the Rust crate's `tls` and
+// `zlib` features.
+#ifndef MAL_TLS
+#define MAL_TLS (MAL_WEB_PLATFORM || MAL_NODE)
+#endif
+#ifndef MAL_ZLIB
+#define MAL_ZLIB (MAL_WEB_PLATFORM || MAL_NODE)
+#endif
+
 /* Production-faithful source profiler. Profile builds opt in explicitly so
  * ordinary binaries retain identical generated/runtime code and cache identity. */
 #ifndef MAL_PROFILE

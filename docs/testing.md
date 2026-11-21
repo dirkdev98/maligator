@@ -617,7 +617,7 @@ and before deliberately revising the spine.
 
 "Complete native coverage" means every authored `tests/native/**/*.test.ts` file
 in its owning normal or sanitizer-primary dimension, the Rust runtime unit suite
-with `node-zlib` enabled, and the explicitly targeted collector and leak lanes. It
+with the `tls` and `zlib` features enabled, and the explicitly targeted collector and leak lanes. It
 does not mean a Cartesian product of every native file with every backend and GC
 build configuration; tests declare or drive their relevant dimensions.
 

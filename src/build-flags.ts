@@ -194,10 +194,12 @@ export function normalizeNativeFeatures(
 	];
 	const cargoFeatures = sortedUnique([
 		...(intlEnabled ? (intlFeatures.length > 0 ? intlFeatures : ["intl-full"]) : []),
-		...(webPlatformEnabled || nodeEnabled ? ["url"] : []),
+		// Either surface may fetch over TLS and decode compressed bodies; a program that
+		// never does links none of it.
+		...(webPlatformEnabled || nodeEnabled ? ["tls", "url", "zlib"] : []),
 		...(regexpEnabled ? ["regexp"] : []),
 		...(temporalEnabled ? ["temporal"] : []),
-		...(nodeEnabled ? ["node-argon2", "node-crypto", "node-tls", "node-zlib"] : []),
+		...(nodeEnabled ? ["node-argon2", "node-crypto"] : []),
 	]);
 	return {
 		primordialsLocked,

@@ -33,14 +33,14 @@ pub mod regexp;
 #[cfg(feature = "url")]
 pub mod url;
 
-// Portable decompression primitives for node:zlib. This module owns codec state
+// Portable compression primitives for node:zlib, compression streams and fetch. This module owns codec state
 // only; it never retains input/output pointers supplied by the C caller.
-#[cfg(feature = "node-zlib")]
+#[cfg(feature = "zlib")]
 pub mod zlib;
 
-#[cfg(feature = "node-tls")]
+#[cfg(feature = "tls")]
 pub mod tls;
-#[cfg(any(feature = "node-tls", feature = "node-crypto"))]
+#[cfg(any(feature = "tls", feature = "node-crypto"))]
 pub mod x509;
 #[cfg(feature = "node-crypto")]
 pub mod crypto_x509;
