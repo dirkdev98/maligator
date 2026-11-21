@@ -9,6 +9,8 @@
 #include "maligator_fs.h"
 #include "maligator_http.h"
 #include "mal_process.h"
+#include "regexp_engine.h"
+#include "unicode.h"
 #include "web_surface.h"
 #include "workers.h"
 
@@ -67,6 +69,10 @@ __attribute__((weak)) MalFfiInstaller mal_ffi_resolve_installer(const char *name
     if (length == sizeof(#symbol) - 1 && memcmp(name, #symbol, length) == 0) return symbol
 
 MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
+#if MAL_REGEXP
+    MATCH_INSTALLER(mal_host_install_regexp);
+#endif
+    MATCH_INSTALLER(mal_host_install_unicode_normalization);
     MATCH_INSTALLER(mal_host_install_maligator);
     MATCH_INSTALLER(mal_host_install_maligator_application);
     MATCH_INSTALLER(mal_host_install_maligator_assets);

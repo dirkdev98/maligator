@@ -1,5 +1,23 @@
 #include "./regexp_object.h"
 
+#if MAL_REGEXP
+#include <stdio.h>
+
+#include "regexp_engine.h"
+
+_Atomic(const MalRegExpEngine *) mal_regexp_engine;
+
+[[noreturn]] void mal_regexp_missing_engine(void) {
+    fputs("Maligator internal error: RegExp engine was not retained\n", stderr);
+    abort();
+}
+
+usize mal_regexp_release_matcher(void *matcher) {
+    if (matcher == nullptr) return 0;
+    return mal_regexp_require_engine()->release(matcher);
+}
+#endif
+
 void mal_regexp_object_init(MalHeap *heap, MalRegExpObject *regexp, MalObject *prototype) {
     mal_object_init(heap, &regexp->object, MAL_HEAP_REGEXP_OBJECT, prototype);
     regexp->matcher = nullptr;

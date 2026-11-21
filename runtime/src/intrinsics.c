@@ -33,6 +33,8 @@
 #include "builtin_promise.h"
 #include "builtin_proxy.h"
 #include "builtin_regexp.h"
+#include "regexp_engine.h"
+#include "unicode.h"
 #include "builtin_reflect.h"
 #include "builtin_finalization_registry.h"
 #include "builtin_set.h"
@@ -725,6 +727,14 @@ void mal_intrinsics_init(MalVm *vm) {
     vm->heap.profile_native_category = MAL_PROFILE_SITE_RUNTIME_REGEXP;
 #endif
     mal_builtin_regexp_install(vm);
+#if MAL_EVAL
+    // Eval splices code into this VM without host installs. Its compiler and
+    // any generated program can use these language components.
+#if MAL_REGEXP
+    mal_host_install_regexp(vm, nullptr, 0, nullptr);
+#endif
+    mal_host_install_unicode_normalization(vm, nullptr, 0, nullptr);
+#endif
 #if MAL_PROFILE && MAL_PERF_STATS
     vm->heap.profile_native_category = 0;
 #endif

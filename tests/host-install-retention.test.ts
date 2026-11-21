@@ -10,6 +10,8 @@ import {
 	NODE_BUILTIN_LOADER_INSTALLER,
 	NODE_INSTALLED_BUILTINS_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
+	REGEXP_INSTALLER,
+	UNICODE_NORMALIZATION_INSTALLER,
 } from "../src/compiler/frontend/host-modules.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import type { Execution } from "../src/platform/execution.ts";
@@ -20,6 +22,7 @@ const HTTP_INSTALLER = "mal_host_install_maligator_internal_http";
 
 const web = resolveBuildConfig({ surface: { webPlatform: true } });
 const node = resolveBuildConfig({ surface: { node: true } });
+const lean = resolveBuildConfig({});
 const roots: Array<string> = [];
 
 afterEach(() => {
@@ -62,6 +65,71 @@ function execution(args: Array<string>): Execution {
 		target: executionTarget("aarch64-apple-darwin"),
 	});
 }
+
+describe("language component retention", () => {
+	it("omits both engines for a program that only writes to the console", () => {
+		expect([...manifest(`console.log("hello");`, lean).keys()]).toEqual([]);
+	});
+
+	it.each([
+		`console.log(typeof RegExp);`,
+		`console.log(globalThis.RegExp.name);`,
+		`console.log(/x/);`,
+		`console.log("x".match("x"));`,
+		`console.log("x".matchAll("x"));`,
+		`console.log("x".search("x"));`,
+		`console.log("x".replace(separator, "y"));`,
+		`console.log("x".replaceAll(separator, "y"));`,
+		`console.log("x".split(separator));`,
+		`const replace = "x".replace; console.log(replace.call("x", separator, "y"));`,
+	])("retains only RegExp for %s", (source) => {
+		expect([...manifest(source, lean).keys()]).toEqual([REGEXP_INSTALLER]);
+	});
+
+	it.each([
+		`console.log("e\\u0301".normalize());`,
+		`console.log("e\\u0301"["normalize"]());`,
+		`const { normalize } = String.prototype; console.log(normalize.call("e\\u0301"));`,
+	])("retains only Unicode normalization for %s", (source) => {
+		expect([...manifest(source, lean).keys()]).toEqual([UNICODE_NORMALIZATION_INSTALLER]);
+	});
+
+	it.each([
+		`console.log("x"[method]());`,
+		`const method = "x"[name]; console.log(method.call("x"));`,
+		`console.log(globalThis[name]);`,
+		`console.log(Object.keys(globalThis));`,
+		`console.log(Object.getOwnPropertyDescriptor(String.prototype, name));`,
+		`console.log(Reflect.get(String.prototype, name));`,
+	])("retains both engines for %s", (source) => {
+		const installs = manifest(source, lean);
+		expect(installs.has(REGEXP_INSTALLER)).toBe(true);
+		expect(installs.has(UNICODE_NORMALIZATION_INSTALLER)).toBe(true);
+	});
+
+	it.each([
+		`console.log("x".replace("x", "y"));`,
+		`console.log("x".replaceAll("x", "y"));`,
+		`console.log("x".split("x"));`,
+		`console.log(("x"?.split)("x"));`,
+	])("omits both engines for %s", (source) => {
+		expect([...manifest(source, lean).keys()]).toEqual([]);
+	});
+
+	it("honors the RegExp opt-out during dynamic member retention", () => {
+		const config = resolveBuildConfig({ engine: { regexp: false } });
+		const installs = manifest(`console.log("x"[method]());`, config);
+		expect([...installs.keys()]).toEqual([UNICODE_NORMALIZATION_INSTALLER]);
+	});
+
+	it("retains the matcher for native terminal-control stripping", () => {
+		const installs = manifest(
+			`import { stripVTControlCharacters } from "node:util"; console.log(stripVTControlCharacters("text"));`,
+			node,
+		);
+		expect(installs.has(REGEXP_INSTALLER)).toBe(true);
+	});
+});
 
 const servedSite = (watch: string) => `import { embedDirectory } from "maligator:assets";
 import { serve, serveAsset } from "maligator:http";

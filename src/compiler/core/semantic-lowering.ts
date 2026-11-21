@@ -47,6 +47,8 @@ import {
 	NODE_BUILTIN_LOADER_INSTALLER,
 	NODE_INSTALLED_BUILTINS_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
+	REGEXP_INSTALLER,
+	UNICODE_NORMALIZATION_INSTALLER,
 } from "../frontend/host-modules.ts";
 import { isImportMeta, isImportMetaResolveCall } from "../frontend/import-meta.ts";
 import { linkModules } from "../frontend/linker.ts";
@@ -374,6 +376,8 @@ interface CoreFrontendContext {
 
 	/** Reads that hand the global object on; reaching one retains every unfollowed global. */
 	globalObjectEscapes: ReadonlySet<ESTree.Node>;
+	nonRegExpStringCallees: ReadonlySet<ESTree.Node>;
+	languageInstallers: Set<string>;
 
 	/** Retain Node's dynamic resolver when a public loader value escapes static lowering. */
 	nodeModuleInstaller: string | null;
@@ -1008,6 +1012,8 @@ export function constructSemanticProgramCore(
 		hostBuffer: null,
 		hostGlobals: [],
 		globalObjectEscapes: new Set(),
+		nonRegExpStringCallees: new Set(),
+		languageInstallers: new Set(),
 		nodeModuleInstaller: null,
 		builtinModuleLoads: { installers: new Set(), any: false },
 		processExports: new Map(),
@@ -1111,6 +1117,7 @@ export function constructSemanticProgramCore(
 				hostGlobalInstallerAvailable(host, surfaces)),
 	).map((host) => ({ ...host, retained: runtimeEval && host.computedMember }));
 	program.globalObjectEscapes = linkage.globalObjectEscapes;
+	program.nonRegExpStringCallees = linkage.nonRegExpStringCallees;
 	program.processExports = new Map(
 		program.hostModules.flatMap((host) =>
 			host.specifier === "node:process"
@@ -1369,6 +1376,8 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 					.flatMap((host) => (host?.retained === true ? [host.installer] : []))
 					.concat(program.nodeModuleInstaller ?? [])
 					.concat(builtinModuleInstallers(program, hostInstallCandidates))
+					// The embedded compiler uses the eval runtime's already installed intrinsics.
+					.concat(program.intrinsicGlobalReads ? [] : [...program.languageInstallers])
 					.filter(
 						(installer, index, installers) => installers.indexOf(installer) === index,
 					),
@@ -7051,6 +7060,14 @@ function compileObjectPatternTarget(
 			continue;
 		}
 
+		const name =
+			!property.computed && property.key.type === "Identifier"
+				? property.key.name
+				: property.key.type === "Literal" && typeof property.key.value === "string"
+					? property.key.value
+					: undefined;
+		if (name !== undefined || property.computed)
+			retainLanguageMember(program, name, false);
 		let key = compilePropertyKey(program, fn, cursor, property);
 		if (key === -1) {
 			continue;
@@ -10108,6 +10125,7 @@ function compileWithStatement(
 	block: CoreFrontendBlock,
 	statement: ESTree.WithStatement,
 ) {
+	retainUnfollowedLanguageMembers(program);
 	const cursor: CoreFrontendCursor = { block };
 	const object = compileExpression(program, fn, cursor, statement.object);
 	const scope = fn.semanticFile.scopes.find(
@@ -11713,6 +11731,7 @@ function compileExpression(
 				!fn.semanticFile.commonjs &&
 				!program.evalDirect
 			) {
+				retainUnfollowedLanguageMembers(program);
 				cursor.block.emitter.emit({
 					type: "loadIntrinsic",
 					registers: [destination],
@@ -17119,6 +17138,12 @@ function retainHostMember(
 	member: ESTree.MemberExpression,
 ): void {
 	const key = staticMemberKey(member);
+	if (
+		key !== undefined ||
+		(member.computed &&
+			(member.property.type !== "Literal" || "regex" in member.property))
+	)
+		retainLanguageMember(program, key, program.nonRegExpStringCallees.has(member));
 	if (key === GET_BUILTIN_MODULE) retainBuiltinModuleRead(program, fn, member);
 	if (member.object.type !== "Identifier") return;
 	const binding = fn.semanticFile.nodeToBinding.get(member.object);
@@ -17202,12 +17227,43 @@ function retainProcessIdentifier(
 
 /** Retain every global that code reading the global object by a computed key may observe. */
 function retainUnfollowedGlobals(program: CoreFrontendContext): void {
+	retainUnfollowedLanguageMembers(program);
 	program.builtinModuleLoads.any = true;
 	if (program.hostProcess) program.hostProcess.retained = true;
 	if (program.hostBuffer) program.hostBuffer.retained = true;
 	for (const host of program.hostGlobals) {
 		if (host.computedMember) host.retained = true;
 	}
+}
+
+function retainLanguageMember(
+	program: CoreFrontendContext,
+	key: string | undefined,
+	nonRegExpArgument: boolean,
+): void {
+	if (
+		key === undefined ||
+		key === "Reflect" ||
+		key === "getOwnPropertyDescriptor" ||
+		key === "getOwnPropertyDescriptors"
+	) {
+		retainUnfollowedLanguageMembers(program);
+	} else if (key === "normalize") {
+		program.languageInstallers.add(UNICODE_NORMALIZATION_INSTALLER);
+	} else if (
+		key === "RegExp" ||
+		key === "match" ||
+		key === "matchAll" ||
+		key === "search" ||
+		(!nonRegExpArgument && (key === "replace" || key === "replaceAll" || key === "split"))
+	) {
+		program.languageInstallers.add(REGEXP_INSTALLER);
+	}
+}
+
+function retainUnfollowedLanguageMembers(program: CoreFrontendContext): void {
+	program.languageInstallers.add(REGEXP_INSTALLER);
+	program.languageInstallers.add(UNICODE_NORMALIZATION_INSTALLER);
 }
 
 function retainCommonJsLoader(
@@ -17226,6 +17282,10 @@ function retainCommonJsLoader(
 
 /** Mark a reachable free Node global and keep it on globalThis storage. */
 function retainHostGlobal(program: CoreFrontendContext, binding: Binding): boolean {
+	if (binding.undeclared && binding.name === "RegExp")
+		program.languageInstallers.add(REGEXP_INSTALLER);
+	if (binding.undeclared && binding.name === "Reflect")
+		retainUnfollowedLanguageMembers(program);
 	if (
 		program.hostProcess &&
 		binding.undeclared &&
@@ -17694,6 +17754,7 @@ function compileLiteral(
 	// (The compiled matcher is rebuilt per evaluation; a per-site cache is a
 	// possible later optimization.)
 	if ("regex" in literal && literal.regex) {
+		program.languageInstallers.add(REGEXP_INSTALLER);
 		const constructor = nextCoreVariable(fn);
 		cursor.block.emitter.emit({
 			type: "loadIntrinsic",

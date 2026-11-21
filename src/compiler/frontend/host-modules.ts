@@ -257,6 +257,9 @@ export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 	},
 ];
 
+export const REGEXP_INSTALLER = "mal_host_install_regexp";
+export const UNICODE_NORMALIZATION_INSTALLER = "mal_host_install_unicode_normalization";
+
 /** Whether a HOST_GLOBAL_INSTALLERS row's installer exists on these surfaces. */
 export function hostGlobalInstallerAvailable(
 	row: (typeof HOST_GLOBAL_INSTALLERS)[number],

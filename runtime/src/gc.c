@@ -57,7 +57,6 @@
 #include "./vm.h"
 #include "./vm_ops.h"
 #include "mal_i18n.h"
-#include "mal_regexp.h"
 #if MAL_TEMPORAL
 #include "temporal_rs/Duration.h"
 #include "temporal_rs/Instant.h"
@@ -2576,11 +2575,9 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
         }
         case MAL_HEAP_REGEXP_OBJECT: {
 #if MAL_REGEXP
-            // No regexp objects are ever allocated under engine.regexp:false, so this
-            // finalizer is dead there — and mal_regexp_release (regress FFI) isn't linked.
             MalRegExpObject *re = (MalRegExpObject *) cell;
             if (re->matcher != nullptr && !re->matcher_borrowed) {
-                mal_gc_process_release(mal_regexp_release(re->matcher));
+                mal_gc_process_release(mal_regexp_release_matcher(re->matcher));
             }
             re->matcher = nullptr;
             mal_regexp_object_clear_group_layout(re);

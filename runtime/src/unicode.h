@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdatomic.h>
+
 #include "text_buffer.h"
 
 #include "defaults.h"
@@ -33,6 +35,16 @@ bool mal_unicode_case_fixed(
     const c16 *source, usize length, bool upper, c16 *output, bool *changed, c16 *aggregate);
 
 // Preserve lone surrogates and return malloc-owned UTF-16.
-MalUnicodeStatus mal_unicode_normalize(
+typedef MalUnicodeStatus MalUnicodeNormalizer(
     const c16 *source, usize length, bool compatibility, bool compose,
     c16 **output, usize *output_length);
+
+extern _Atomic(MalUnicodeNormalizer *) mal_unicode_normalizer;
+
+struct MalVm;
+struct MalHostInstallSlot;
+struct MalHostLaunchContext;
+
+void mal_host_install_unicode_normalization(struct MalVm *vm,
+    const struct MalHostInstallSlot *slots, i32 count,
+    const struct MalHostLaunchContext *launch);

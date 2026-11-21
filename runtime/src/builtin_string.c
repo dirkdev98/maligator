@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1923,9 +1924,16 @@ static MalValue mal_builtin_string_normalize_result(MalVm *vm, MalString *source
     return result;
 }
 
+_Atomic(MalUnicodeNormalizer *) mal_unicode_normalizer;
+
 static MalValue mal_builtin_string_normalize_range_impl(
     MalVm *vm, MalString *string, usize start, usize length, bool compatibility, bool compose
 ) {
+    MalUnicodeNormalizer *normalize = atomic_load_explicit(&mal_unicode_normalizer, memory_order_relaxed);
+    if (__builtin_expect(normalize == nullptr, 0)) {
+        fputs("Maligator internal error: Unicode normalization was not retained\n", stderr);
+        abort();
+    }
     // Latin-1 has no canonical decomposition that NFC retains.
     if (string->latin1 && compose && !compatibility)
         return mal_builtin_string_slice(vm, string, start, length);
@@ -1948,7 +1956,7 @@ static MalValue mal_builtin_string_normalize_range_impl(
     const c16 *source = mal_string_segment_utf16(&segment, stack, &wide_scratch);
     c16 *output = nullptr;
     usize output_length = 0;
-    MalUnicodeStatus status = mal_unicode_normalize(source, length, compatibility, compose, &output, &output_length);
+    MalUnicodeStatus status = normalize(source, length, compatibility, compose, &output, &output_length);
     MalValue result = mal_builtin_string_normalize_result(vm, string, start, &segment, status, output, output_length);
     free(wide_scratch);
     free(range_scratch);

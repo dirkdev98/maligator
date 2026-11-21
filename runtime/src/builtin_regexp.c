@@ -15,9 +15,9 @@
 #include "gc_process.h"
 #include "heap_string.h"
 #include "intrinsics.h"
-#include "mal_regexp.h"
 #include "object_ops.h"
 #include "profile.h"
+#include "regexp_engine.h"
 #include "regexp_object.h"
 #include "text_buffer.h"
 #include "utf16.h"
@@ -26,11 +26,8 @@
 #include "vm.h"
 #include "vm_ops.h"
 
-// The whole RegExp surface (constructor, prototype, exec, the Symbol.* protocol,
-// and mal_regexp_create) runs on the regress engine (mal_regexp_* FFI). An
-// engine.regexp:false build drops regress, so this TU must reference no regress
-// symbols — compile it away wholesale, leaving only a no-op install stub (below) so
-// intrinsics.c can still call mal_builtin_regexp_install unconditionally.
+// The build policy controls the JavaScript surface. The matcher is supplied
+// independently by the RegExp component in builds that expose it.
 #if MAL_REGEXP
 
 // The CreateDataPropertyOrThrow descriptor used for exec result-array members.
@@ -497,7 +494,7 @@ static void regexp_templates_free(MalVm *vm) {
     struct MalRegExpTemplates *templates = vm->regexp_templates;
     if (templates == nullptr) return;
     for (usize i = 0; i < templates->capacity; i++) {
-        mal_gc_process_release(mal_regexp_release(templates->entries[i].matcher));
+        mal_gc_process_release(mal_regexp_release_matcher(templates->entries[i].matcher));
         free(templates->entries[i].first_units);
     }
     free(templates->entries);
@@ -577,7 +574,7 @@ static void *regexp_compile_pattern(MalString *pattern, u32 bits) {
         ? stack_units : malloc(sizeof(c16) * pattern_length);
     if (pattern_units == nullptr) abort();
     mal_string_copy_range_to(pattern, 0, pattern_length, pattern_units);
-    void *matcher = mal_regexp_compile(
+    void *matcher = mal_regexp_require_engine()->compile(
         (const uint16_t *) pattern_units, pattern_length, regexp_regress_flags(bits)
     );
     if (pattern_units != stack_units) free(pattern_units);
@@ -871,7 +868,7 @@ static MalRegExpGroupLayout regexp_unnamed_layout;
 
 static MalRegExpGroupLayout *regexp_group_layout(MalVm *vm, MalRegExpObject *re) {
     if (re->group_layout != nullptr) return re->group_layout;
-    i32 count = mal_regexp_capture_name_count(re->matcher);
+    i32 count = mal_regexp_require_engine()->capture_name_count(re->matcher);
     if (count == 0) {
         re->group_layout = &regexp_unnamed_layout;
         return re->group_layout;
@@ -895,7 +892,7 @@ static MalRegExpGroupLayout *regexp_group_layout(MalVm *vm, MalRegExpObject *re)
     for (i32 i = 0; i < count; i++) {
         const uint8_t *name_bytes;
         i32 capture;
-        i32 name_length = mal_regexp_capture_name(re->matcher, i, &name_bytes, &capture);
+        i32 name_length = mal_regexp_require_engine()->capture_name(re->matcher, i, &name_bytes, &capture);
         assert(name_length > 0 && capture > 0);
         MalString *name = mal_property_atomize_string(
             vm, regexp_string_from_utf8(vm, name_bytes, (usize) name_length));
@@ -1075,15 +1072,16 @@ static inline __attribute__((always_inline)) int32_t regexp_matcher_exec(
     u32 execution_flags = 0;
     usize length = mal_string_length(s);
     MalStringSegment subject = mal_string_flat_segment(s);
+    const MalRegExpEngine *engine = mal_regexp_require_engine();
     int32_t ngroups = subject.latin1
-        ? mal_regexp_exec_latin1(
+        ? engine->exec_latin1(
             matcher, subject.latin1_units, length, start, s,
             vm->heap.identity, vm->heap.epoch, caps, caps_cap, &execution_flags)
-        : mal_regexp_exec(
+        : engine->exec_utf16(
             matcher, (const uint16_t *) subject.utf16_units, length, start, s,
             vm->heap.identity, vm->heap.epoch, caps, caps_cap, &execution_flags);
     if ((execution_flags & MAL_REGEXP_EXEC_FAST) == 0) {
-        i64 scratch_delta = mal_regexp_scratch_delta(matcher);
+        i64 scratch_delta = engine->scratch_delta(matcher);
         if (scratch_delta > 0) mal_heap_charge_external(&vm->heap, (usize) scratch_delta);
         else if (scratch_delta < 0) mal_gc_process_release((usize) -scratch_delta);
     }
@@ -1133,7 +1131,7 @@ static int regexp_match_only(
         regexp_throw_string_length(vm);
         return -1;
     }
-    mal_regexp_copy_captures(matcher, caps, (int32_t) capture_count);
+    mal_regexp_require_engine()->copy_captures(matcher, caps, (int32_t) capture_count);
     regexp_legacy_update(vm, s, caps, ngroups);
     free(caps);
     return 1;
@@ -1203,7 +1201,7 @@ static MalValue regexp_builtin_exec(
         }
         mal_profile_native_allocation(
             &vm->heap, capture_bytes, MAL_PROFILE_ALLOCATION_FAMILY_REGEXP);
-        mal_regexp_copy_captures(re->matcher, caps, (int32_t) capture_count);
+        mal_regexp_require_engine()->copy_captures(re->matcher, caps, (int32_t) capture_count);
         heap_caps = true;
     }
 
@@ -1616,7 +1614,7 @@ static MalValue regexp_proto_compile(MalVm *vm, MalValue this_value, const MalVa
     }
     // No exec keeps the old matcher across user code, so it can go right away.
     mal_regexp_object_clear_group_layout(re);
-    if (!re->matcher_borrowed) mal_gc_process_release(mal_regexp_release(re->matcher));
+    if (!re->matcher_borrowed) mal_gc_process_release(mal_regexp_release_matcher(re->matcher));
     re->matcher = matcher;
     re->matcher_borrowed = false;
     re->source = p_str;
@@ -2225,9 +2223,10 @@ static int regexp_collect_fast(
     if (!regexp_match_offsets_reserve(offsets, 0)) return -1;
     MalStringSegment subject = mal_string_flat_segment(s);
     usize position = 0;
+    const MalRegExpEngine *engine = mal_regexp_require_engine();
     for (;;) {
         usize slots, next, attempts;
-        int32_t groups = mal_regexp_collect_fast(
+        int32_t groups = engine->collect_fast(
             re->matcher, subject.latin1 ? (const void *) subject.latin1_units
                 : (const void *) subject.utf16_units,
             subject.length, subject.latin1, position,
@@ -2285,7 +2284,7 @@ static bool regexp_canonical_collect_global(
                 ok = false;
                 break;
             }
-            mal_regexp_copy_captures(re->matcher, wide_caps, 2 * ngroups);
+            mal_regexp_require_engine()->copy_captures(re->matcher, wide_caps, 2 * ngroups);
             caps = wide_caps;
         }
         if (sticky && (usize) caps[0] != position) break;
@@ -3321,7 +3320,7 @@ static MalValue regexp_proto_match_all(MalVm *vm, MalValue this_value, const Mal
         MalRegExpObject *clone = mal_regexp_object_new(&vm->heap, prototype);
         regexp_initialize_state(
             vm, clone,
-            canonical->matcher_borrowed ? canonical->matcher : mal_regexp_retain(canonical->matcher),
+            canonical->matcher_borrowed ? canonical->matcher : mal_regexp_require_engine()->retain(canonical->matcher),
             canonical->matcher_borrowed, canonical->source, flags, canonical->flag_bits);
         clone->group_layout = canonical->group_layout;
         if (clone->group_layout != nullptr && clone->group_layout->count != 0) {

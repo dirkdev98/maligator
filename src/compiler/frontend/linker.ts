@@ -1,6 +1,7 @@
 import type { ESTree } from "meriyah";
 import type { FfiDirectEntry } from "../../build-config-values.ts";
 import type { PlatformData } from "../../platform/catalog.ts";
+import { staticMemberKey } from "./builtin-module-loads.ts";
 import { detectCjsExports } from "./cjs-exports.ts";
 import type { CjsExportInfo } from "./cjs-exports.ts";
 import { traverseEstree } from "./estree-traversal.ts";
@@ -133,6 +134,9 @@ export interface ModuleLinkage {
 	 */
 	globalObjectEscapes: Set<ESTree.Node>;
 
+	/** Direct String API callees whose first argument cannot be a RegExp. */
+	nonRegExpStringCallees: Set<ESTree.Node>;
+
 	/** Statically detected `module.exports` names of a CommonJS module, sorted. */
 	commonJsExportNames: (modulePath: string) => ReadonlyArray<string>;
 
@@ -171,11 +175,13 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		hostModules: [],
 		hostGlobalInstallers: [],
 		globalObjectEscapes: new Set(),
+		nonRegExpStringCallees: new Set(),
 		commonJsExportNames: () => [],
 		failedModules: new Map(),
 	};
 
 	const graph = program.graph;
+	const members = collectGlobalAndStringMemberUses(program, linkage);
 	if (!graph) {
 		return linkage;
 	}
@@ -849,7 +855,6 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 	// identifier reads/writes must observe those same mutable properties.
 	const surfaces = { webPlatform: graph.webPlatformEnabled, node: graph.nodeEnabled };
 	if (surfaces.webPlatform || surfaces.node) {
-		const globalObjectNames = surfaces.node ? ["globalThis", "global"] : ["globalThis"];
 		const freeGlobalUsed = (name: string) =>
 			program.files.some((file) =>
 				file.scopes[0]?.bindings.some(
@@ -857,58 +862,25 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 						binding.name === name && binding.undeclared && binding.usageNodes.length > 0,
 				),
 			);
-		const members = new Set<string>();
-		let computedMember = false;
-		for (const file of program.files) {
-			const isGlobalObject = (node: ESTree.Node) => {
-				if (node.type !== "Identifier") return false;
-				const binding = file.nodeToBinding.get(node);
-				return binding?.undeclared === true && globalObjectNames.includes(binding.name);
-			};
-			// `globalThis.name` and `typeof globalThis` observe no other global.
-			const followed = new Set<ESTree.Node>();
-			traverseEstree(file.ast.body, (node) => {
-				if (node.type === "UnaryExpression" && node.operator === "typeof") {
-					if (isGlobalObject(node.argument)) followed.add(node.argument);
-					return;
-				}
-				if (node.type !== "MemberExpression" || !isGlobalObject(node.object)) return;
-				followed.add(node.object);
-				const key =
-					!node.computed && node.property.type === "Identifier"
-						? node.property.name
-						: node.property.type === "Literal" && typeof node.property.value === "string"
-							? node.property.value
-							: undefined;
-				if (key === undefined) computedMember = true;
-				else members.add(key);
-			});
-			for (const binding of file.scopes[0]?.bindings ?? []) {
-				if (!binding.undeclared || !globalObjectNames.includes(binding.name)) continue;
-				for (const usage of binding.usageNodes)
-					if (usage.type === "Identifier" && !followed.has(usage))
-						linkage.globalObjectEscapes.add(usage);
-			}
-		}
-		const unfollowed = computedMember || linkage.globalObjectEscapes.size > 0;
+		const unfollowed = members.computed || linkage.globalObjectEscapes.size > 0;
 		if (surfaces.node) {
 			if (
 				freeGlobalUsed("process") ||
 				freeGlobalUsed("global") ||
-				members.has("process") ||
-				members.has("global") ||
+				members.names.has("process") ||
+				members.names.has("global") ||
 				unfollowed
 			) {
 				linkage.hostProcess = { installer: PROCESS_INSTALLER_SYMBOL };
 			}
-			if (freeGlobalUsed("Buffer") || members.has("Buffer") || unfollowed) {
+			if (freeGlobalUsed("Buffer") || members.names.has("Buffer") || unfollowed) {
 				linkage.hostBuffer = { installer: BUFFER_INSTALLER_SYMBOL };
 			}
 		}
 		for (const host of HOST_GLOBAL_INSTALLERS) {
 			if (!hostGlobalInstallerAvailable(host, surfaces)) continue;
 			if (
-				host.globals.some((name) => freeGlobalUsed(name) || members.has(name)) ||
+				host.globals.some((name) => freeGlobalUsed(name) || members.names.has(name)) ||
 				(host.computedMember && unfollowed)
 			) {
 				linkage.hostGlobalInstallers.push(host.installer);
@@ -917,6 +889,59 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 	}
 
 	return linkage;
+}
+
+/** Track global escapes and direct calls whose argument cannot select the matcher. */
+function collectGlobalAndStringMemberUses(
+	program: SemanticProgram,
+	linkage: ModuleLinkage,
+) {
+	const globalNames =
+		program.graph?.nodeEnabled === true ? ["globalThis", "global"] : ["globalThis"];
+	const names = new Set<string>();
+	let computed = false;
+	for (const file of program.files) {
+		const isGlobalObject = (node: ESTree.Node) => {
+			if (node.type !== "Identifier") return false;
+			const binding = file.nodeToBinding.get(node);
+			return binding?.undeclared === true && globalNames.includes(binding.name);
+		};
+		// `globalThis.name` and `typeof globalThis` observe no other global.
+		const followed = new Set<ESTree.Node>();
+		traverseEstree(file.ast.body, (node) => {
+			if (node.type === "CallExpression") {
+				const callee = node.callee as ESTree.Node;
+				const direct = callee.type === "ChainExpression" ? callee.expression : callee;
+				if (direct.type === "MemberExpression") {
+					const key = staticMemberKey(direct);
+					const argument = node.arguments[0];
+					if (
+						(key === "replace" || key === "replaceAll" || key === "split") &&
+						(argument === undefined ||
+							argument.type === "TemplateLiteral" ||
+							(argument.type === "Literal" && !("regex" in argument)))
+					)
+						linkage.nonRegExpStringCallees.add(direct);
+				}
+			}
+			if (node.type === "UnaryExpression" && node.operator === "typeof") {
+				if (isGlobalObject(node.argument)) followed.add(node.argument);
+				return;
+			}
+			if (node.type !== "MemberExpression" || !isGlobalObject(node.object)) return;
+			followed.add(node.object);
+			const key = staticMemberKey(node);
+			if (key === undefined) computed = true;
+			else names.add(key);
+		});
+		for (const binding of file.scopes[0]?.bindings ?? []) {
+			if (!binding.undeclared || !globalNames.includes(binding.name)) continue;
+			for (const usage of binding.usageNodes)
+				if (usage.type === "Identifier" && !followed.has(usage))
+					linkage.globalObjectEscapes.add(usage);
+		}
+	}
+	return { names, computed };
 }
 
 /**

@@ -1,6 +1,12 @@
 import type { PlatformData } from "../../platform/catalog.ts";
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "../core/core-constructor-layout.ts";
+import {
+	hostInstallerSymbol,
+	NODE_BUILTIN_LOADER_INSTALLER,
+	REGEXP_INSTALLER,
+	UNICODE_NORMALIZATION_INSTALLER,
+} from "../frontend/host-modules.ts";
 import { directBuiltinOperationIds } from "../shared/builtin-registry.ts";
 import type { DirectBuiltinOperationId } from "../shared/builtin-registry.ts";
 import { knownBuiltinCallProves } from "../shared/compiler-facts.ts";
@@ -3930,7 +3936,33 @@ function buildHostInstalls(
 		}
 	}
 
-	for (const installer of context.data.retainedHostInstallers) installFor(installer);
+	const world = context.facts.world;
+	for (const installer of context.data.retainedHostInstallers) {
+		// An eval-enabled runtime supplies both engines even to spliced wire
+		// images, whose loaders don't run a host manifest.
+		if (
+			installer === REGEXP_INSTALLER &&
+			(!world.ecmaFeatures.regexp || world.eval === "runtime")
+		)
+			continue;
+		if (installer === UNICODE_NORMALIZATION_INSTALLER && world.eval === "runtime")
+			continue;
+		installFor(installer);
+	}
+	if (
+		world.ecmaFeatures.regexp &&
+		world.eval !== "runtime" &&
+		manifest.some(
+			({ installer }) =>
+				installer === NODE_BUILTIN_LOADER_INSTALLER ||
+				installer === hostInstallerSymbol("node:util") ||
+				installer === hostInstallerSymbol("node:util/types") ||
+				installer === hostInstallerSymbol("node:sys"),
+		)
+	) {
+		// node:util constructs a RegExp to strip terminal escape sequences.
+		installFor(REGEXP_INSTALLER);
+	}
 
 	return manifest;
 }

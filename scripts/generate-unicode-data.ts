@@ -87,6 +87,7 @@ const mappings = (map: Map<number, Array<number>>) =>
 const data: Record<string, Array<number>> = {};
 data.lower = mappings(lower);
 data.upper = mappings(upper);
+const casePoolLength = pool.length;
 data.decomposition = [...decomposition]
 	.sort(([a], [b]) => a - b)
 	.flatMap(([cp, entry]) => {
@@ -159,28 +160,52 @@ function cArray(
 	name: string,
 	type: "u8" | "u16" | "u32",
 	values: ReadonlyArray<number>,
+	storage = "static ",
 ): string {
-	return `static const ${type} mal_unicode_${name}[] = {\n${Array.from({ length: Math.ceil(values.length / 16) }, (_, i) => `    ${values.slice(i * 16, i * 16 + 16).join(", ")},`).join("\n")}\n};`;
+	return `${storage}const ${type} mal_unicode_${name}[] = {\n${Array.from({ length: Math.ceil(values.length / 16) }, (_, i) => `    ${values.slice(i * 16, i * 16 + 16).join(", ")},`).join("\n")}\n};`;
 }
 for (const [name, values] of Object.entries(data)) {
 	if (name === "classes") {
 		c.push(
-			cArray("class_pages", "u8", classPages),
-			cArray("class_values", "u8", classPageValues),
+			"#if defined(MAL_UNICODE_CASE_DATA)",
+			cArray("class_pages", "u8", classPages, ""),
+			cArray("class_values", "u8", classPageValues, ""),
+			"#else",
+			"extern const u8 mal_unicode_class_pages[];",
+			"extern const u8 mal_unicode_class_values[];",
+			"#endif",
 		);
-	} else
+	} else if (name === "pool") {
 		c.push(
+			"#if defined(MAL_UNICODE_CASE_DATA)",
+			cArray("pool", "u32", values.slice(0, casePoolLength)),
+			"#else",
+			`#define MAL_UNICODE_NORMALIZATION_POOL_OFFSET ${casePoolLength}`,
+			cArray("pool", "u32", values.slice(casePoolLength)),
+			"#endif",
+		);
+	} else {
+		const normalization = name === "decomposition" || name === "composition";
+		c.push(
+			normalization
+				? "#if !defined(MAL_UNICODE_CASE_DATA)"
+				: "#if defined(MAL_UNICODE_CASE_DATA)",
 			cArray(
 				name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`),
 				"u32",
 				values,
 			),
+			"#endif",
 		);
+	}
 }
 // Case mapping reads a two-stage index instead of binary-searching its table: each block
 // of code points names a deduplicated row of entries, each zero or its mapping row plus one.
 const caseBlockBits = 7;
-c.push(`#define MAL_UNICODE_CASE_BLOCK_BITS ${caseBlockBits}`);
+c.push(
+	"#if defined(MAL_UNICODE_CASE_DATA)",
+	`#define MAL_UNICODE_CASE_BLOCK_BITS ${caseBlockBits}`,
+);
 for (const name of ["lower", "upper"] as const) {
 	const table = data[name]!;
 	const blockSize = 1 << caseBlockBits;
@@ -211,6 +236,7 @@ for (const name of ["lower", "upper"] as const) {
 		cArray(`${name}_entries`, "u16", blockEntries),
 	);
 }
+c.push("#endif");
 ts.push(...unicodeTablesModule(data));
 mkdirSync(output, { recursive: true });
 const formatted = await format("unicode-data.ts", `${ts.join("\n")}\n`, {
