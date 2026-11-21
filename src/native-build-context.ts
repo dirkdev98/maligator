@@ -8,8 +8,10 @@ import type {
 } from "./build-flags.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
-import { requireToolchain } from "./toolchain.ts";
-import type { Toolchain, ToolExecutable } from "./toolchain.ts";
+import { RELEASE_MACOS_VERSION } from "./prebuilt-runtime.ts";
+import { packagedProductionRust } from "./rust-build.ts";
+import { nativeRustTarget, requireToolchain } from "./toolchain.ts";
+import type { InspectToolchainOptions, Toolchain, ToolExecutable } from "./toolchain.ts";
 
 export interface BuildCacheEvent {
 	artifact: "runtime" | "rust" | "binary";
@@ -189,8 +191,11 @@ export function nativeBuildEnvironmentFingerprint(env: NodeJS.ProcessEnv): strin
 function withMacosDeploymentTarget(
 	toolchain: Toolchain,
 	environment: NodeJS.ProcessEnv,
+	production: boolean,
 ): Toolchain {
-	const version = environment.MACOSX_DEPLOYMENT_TARGET;
+	const version =
+		environment.MACOSX_DEPLOYMENT_TARGET ||
+		(production ? RELEASE_MACOS_VERSION : undefined);
 	if (
 		toolchain.cross !== true ||
 		toolchain.platform !== "darwin" ||
@@ -220,13 +225,41 @@ function withMacosDeploymentTarget(
 	};
 }
 
+export function productionToolchainOptions(
+	runtimeDirectory: string,
+	features: Pick<NativeFeatureSpec, "primordialsLocked" | "realmsEnabled">,
+	options: InspectToolchainOptions = {},
+	mode: "install" | "report" = "install",
+): InspectToolchainOptions {
+	const environment = options.env ?? process.env;
+	const cacheDirectory = maligatorCacheDirectory(options.cacheDirectory, environment);
+	const target =
+		options.target ??
+		nativeRustTarget(options.platform ?? process.platform, options.arch ?? process.arch);
+	const bundle =
+		target === undefined
+			? undefined
+			: packagedProductionRust(
+					{ runtimeDirectory, features, environment, cacheDirectory },
+					target,
+				);
+	return {
+		...options,
+		cacheDirectory,
+		needsCxx: true,
+		rustDir: path.join(runtimeDirectory, "rust"),
+		prebuiltRustTarget: bundle === undefined ? undefined : target,
+		zigFallback: options.zigFallback ?? { mode },
+	};
+}
+
 /** Resolve native defaults once and freeze the values consumed by every backend stage. */
 export function resolveNativeBuildContext(
 	options: NativeBuildContextOptions = {},
 ): NativeBuildContext {
 	const runtimeDirectory = path.resolve(options.runtimeDirectory ?? "runtime");
-	const cacheDirectory = maligatorCacheDirectory(options.cacheDirectory);
 	const baseEnvironment = options.environment ?? process.env;
+	const cacheDirectory = maligatorCacheDirectory(options.cacheDirectory, baseEnvironment);
 	const normalizedFeatures =
 		options.features === undefined
 			? normalizeNativeFeatures()
@@ -237,21 +270,34 @@ export function resolveNativeBuildContext(
 		cDefines: Object.freeze([...normalizedFeatures.cDefines]),
 		cargoFeatures: Object.freeze([...normalizedFeatures.cargoFeatures]),
 	}) as Readonly<NativeFeatureSpec>;
+	const production =
+		options.plan === undefined
+			? options.production === true
+			: options.plan.mode === "production";
+	const inspection = {
+		cacheDirectory,
+		env: baseEnvironment,
+		needsCxx: features.cargoFeatures.includes("url"),
+		rustDir: path.join(runtimeDirectory, "rust"),
+		target: options.target,
+	};
 	const selectedToolchain =
 		options.toolchain ??
-		requireToolchain({
-			env: baseEnvironment,
-			needsCxx: features.cargoFeatures.includes("url"),
-			rustDir: path.join(runtimeDirectory, "rust"),
-			target: options.target,
-		});
-	const toolchain = withMacosDeploymentTarget(selectedToolchain, baseEnvironment);
+		requireToolchain(
+			production
+				? productionToolchainOptions(runtimeDirectory, features, inspection)
+				: inspection,
+		);
+	const toolchain = withMacosDeploymentTarget(
+		selectedToolchain,
+		baseEnvironment,
+		production,
+	);
 	const environment = Object.freeze({
 		...baseEnvironment,
 		...(toolchain.environmentOverrides ?? {}),
 	});
-	const selectedPlan =
-		options.plan ?? selectNativeBuildPlan(toolchain, options.production ?? false);
+	const selectedPlan = options.plan ?? selectNativeBuildPlan(toolchain, production);
 	const plan = Object.freeze({
 		...selectedPlan,
 		ltoFlags: Object.freeze([...selectedPlan.ltoFlags]),

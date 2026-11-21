@@ -22,11 +22,16 @@ import { ccExtraFlags, runtimeOptimizationFlags } from "./build-flags.ts";
 import type { NativeFeatureSpec } from "./build-flags.ts";
 import { hashDirectoryTreesCached, lexicalNameComparator } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
-import { resolveZigCrossTarget, SUPPORTED_ZIG_CROSS_TARGETS } from "./toolchain.ts";
+import { PINNED_ZIG_VERSION } from "./toolchain-fetch.ts";
+import {
+	compilerMatchesRustTarget,
+	nativeRustTarget,
+	resolveZigCrossTarget,
+	SUPPORTED_ZIG_CROSS_TARGETS,
+} from "./toolchain.ts";
 
 export const PREBUILT_RUNTIME_DIRECTORY = "runtime-libraries";
 export const PREBUILT_RUNTIME_MANIFEST = "manifest.json";
-export const PREBUILT_RUNTIME_ZIG_VERSION = "0.17.1";
 export const RELEASE_MACOS_VERSION = "15.0";
 export const PREBUILT_RUNTIME_OVERRIDE = "MALIGATOR_PREBUILT_RUNTIME_DIR";
 export const PREBUILT_RUNTIME_CC_FLAGS = ["-fPIC", "-fno-sanitize=undefined"];
@@ -53,7 +58,7 @@ export function prebuiltRuntimeCxxLibraries(target: string) {
 }
 
 const releaseFlavour = { primordialsLocked: true, realmsEnabled: false };
-const releaseProducer = `zig@${PREBUILT_RUNTIME_ZIG_VERSION}`;
+const releaseProducer = `zig@${PINNED_ZIG_VERSION}`;
 const customCodegenVariables = [
 	/^(?:AR|C|CPP|CXX)FLAGS(?:_|$)/,
 	/^(?:TARGET|HOST)_(?:AR|C|CXX)FLAGS$/,
@@ -96,13 +101,33 @@ interface RuntimeFlavour {
 }
 
 export interface PrebuiltRuntimeIdentity {
-	schema: 1;
+	schema: 2;
 	target: string;
 	abi: string;
 	flavour: RuntimeFlavour;
 	variant: "development";
 	producer: string;
 	key: string;
+	rustKey: string;
+}
+
+/** The machine-code archives can be linked independently of the C runtime. */
+export function prebuiltRustKey(
+	triple: string,
+	sourceDigest: string,
+	rustArchiveProducer: string,
+): string {
+	const { abi, zigTarget, zigCpu } = prebuiltRuntimeTarget(triple);
+	return artifactIdentity({
+		target: triple,
+		abi,
+		producer: releaseProducer,
+		zigTarget,
+		zigCpu,
+		zigFlags: PREBUILT_RUNTIME_CC_FLAGS,
+		sourceDigest,
+		rustArchiveProducer,
+	});
 }
 
 /** Key the release archive set by its inputs and the pinned producer contract. */
@@ -118,7 +143,7 @@ export function prebuiltRuntimeIdentity(inputs: {
 	const target = prebuiltRuntimeTarget(inputs.target);
 	const { primordialsLocked, realmsEnabled } = inputs.flavour;
 	const identity = {
-		schema: 1,
+		schema: 2,
 		target: inputs.target,
 		abi: target.abi,
 		flavour: { primordialsLocked, realmsEnabled },
@@ -127,6 +152,11 @@ export function prebuiltRuntimeIdentity(inputs: {
 	} as const;
 	return {
 		...identity,
+		rustKey: prebuiltRustKey(
+			inputs.target,
+			inputs.rustSourceDigest,
+			inputs.rustArchiveProducer,
+		),
 		key: artifactIdentity({
 			...identity,
 			zigTarget: target.zigTarget,
@@ -179,6 +209,21 @@ export function prebuiltRuntimeDirectory(
 	return packagedRuntimeDirectory(environment);
 }
 
+export function prebuiltProductionRustDirectory(
+	target: string,
+	features: RuntimeFlavour,
+	environment: NodeJS.ProcessEnv,
+	ccTarget = target,
+): string | undefined {
+	if (
+		features.primordialsLocked !== releaseFlavour.primordialsLocked ||
+		features.realmsEnabled !== releaseFlavour.realmsEnabled ||
+		!canUsePrebuiltRuntime(target, ccTarget, environment)
+	)
+		return undefined;
+	return packagedRuntimeDirectory(environment);
+}
+
 export function packagedRuntimeDirectory(
 	environment: NodeJS.ProcessEnv,
 ): string | undefined {
@@ -202,10 +247,7 @@ export function packagedRuntimeDirectory(
 export function prebuiltDevelopmentRunnerTarget(
 	environment: NodeJS.ProcessEnv,
 ): string | undefined {
-	const target = SUPPORTED_ZIG_CROSS_TARGETS.find((triple) => {
-		const { platform, arch } = prebuiltRuntimeTarget(triple);
-		return platform === process.platform && arch === process.arch;
-	});
+	const target = nativeRustTarget(process.platform, process.arch);
 	return target !== undefined && canUsePrebuiltRuntime(target, target, environment)
 		? target
 		: undefined;
@@ -218,22 +260,19 @@ function canUsePrebuiltRuntime(
 	environment: NodeJS.ProcessEnv,
 ): boolean {
 	if (!SUPPORTED_ZIG_CROSS_TARGETS.includes(target)) return false;
-	const { platform, arch } = prebuiltRuntimeTarget(target);
-	const ccArch = ccTarget.split("-")[0];
-	if (arch === "arm64" ? ccArch !== "arm64" && ccArch !== "aarch64" : ccArch !== "x86_64")
-		return false;
+	if (!compilerMatchesRustTarget(ccTarget, target)) return false;
+	const { platform } = prebuiltRuntimeTarget(target);
 	if (platform === "darwin") {
 		const deploymentTarget = environment.MACOSX_DEPLOYMENT_TARGET;
 		if (
-			!/-apple-(?:darwin|macos)/.test(ccTarget) ||
-			(deploymentTarget &&
-				!(
-					Number(deploymentTarget.split(".")[0]) >=
-					Number(RELEASE_MACOS_VERSION.split(".")[0])
-				))
+			deploymentTarget &&
+			!(
+				Number(deploymentTarget.split(".")[0]) >=
+				Number(RELEASE_MACOS_VERSION.split(".")[0])
+			)
 		)
 			return false;
-	} else if (!/-linux-gnu$/.test(ccTarget)) return false;
+	}
 
 	// These settings change the sources, code generation or ABI of a local library.
 	return !Object.entries(environment).some(
@@ -292,10 +331,14 @@ export function prebuiltDevelopmentRunnerKey(inputs: {
 	});
 }
 
-function validArchiveNames(names: ReadonlyArray<string>, target: string): boolean {
+function validArchiveNames(
+	names: ReadonlyArray<string>,
+	target: string,
+	includeC: boolean,
+): boolean {
 	const ringArchive = /^native\.ring\.libring_core_[a-z0-9_]+\.a$/;
 	const required = [
-		...runtimeArchiveNames,
+		...(includeC ? runtimeArchiveNames : []),
 		RUST_LIBRARY_OUTPUT,
 		"native.ada-url.libada.a",
 		...prebuiltRuntimeCxxLibraries(target).map(
@@ -334,7 +377,7 @@ function readRuntimeManifest(
 			readFileSync(path.join(directory, PREBUILT_RUNTIME_MANIFEST), "utf8"),
 		) as PrebuiltRuntimeManifest;
 		if (
-			manifest.schema !== 1 ||
+			manifest.schema !== 2 ||
 			manifest.target !== target ||
 			manifest.abi !== prebuiltRuntimeTarget(target).abi ||
 			manifest.variant !== "development" ||
@@ -343,6 +386,8 @@ function readRuntimeManifest(
 			manifest.flavour.realmsEnabled !== releaseFlavour.realmsEnabled ||
 			typeof manifest.key !== "string" ||
 			!/^[0-9a-f]{64}$/.test(manifest.key) ||
+			typeof manifest.rustKey !== "string" ||
+			!/^[0-9a-f]{64}$/.test(manifest.rustKey) ||
 			(key !== undefined && manifest.key !== key)
 		)
 			return undefined;
@@ -358,16 +403,39 @@ export function readPrebuiltRuntime(
 	target: string,
 	key?: string,
 ): PrebuiltRuntime | undefined {
-	const manifest = readRuntimeManifest(directory, target, key);
+	return readArchiveSet(directory, target, true, key);
+}
+
+/** Production imports machine-code Rust and component archives by their own key. */
+export function readPrebuiltRust(
+	directory: string,
+	target: string,
+	key: string,
+): PrebuiltRuntime | undefined {
+	return readArchiveSet(directory, target, false, key);
+}
+
+function readArchiveSet(
+	directory: string,
+	target: string,
+	includeC: boolean,
+	key?: string,
+): PrebuiltRuntime | undefined {
+	const manifest = readRuntimeManifest(directory, target, includeC ? key : undefined);
 	if (manifest === undefined) return undefined;
 	try {
+		if (!Array.isArray(manifest.files) || (!includeC && manifest.rustKey !== key))
+			return undefined;
+		const files = includeC
+			? manifest.files
+			: manifest.files.filter(({ name }) => !runtimeArchiveNames.includes(name));
 		if (
-			!Array.isArray(manifest.files) ||
 			!validArchiveNames(
-				manifest.files.map(({ name }) => name),
+				files.map(({ name }) => name),
 				target,
+				includeC,
 			) ||
-			!manifest.files.every(
+			!files.every(
 				(file) =>
 					Number.isSafeInteger(file.size) &&
 					file.size > 0 &&
@@ -375,7 +443,7 @@ export function readPrebuiltRuntime(
 			)
 		)
 			return undefined;
-		return { directory, manifest };
+		return { directory, manifest: { ...manifest, files } };
 	} catch {
 		return undefined;
 	}

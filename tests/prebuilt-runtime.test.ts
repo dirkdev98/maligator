@@ -192,13 +192,31 @@ describe("prebuilt runtime archives", () => {
 		).toThrow(localBuild);
 	});
 
-	it("builds production Rust locally even after importing a development Rust archive", () => {
-		const development = fixtureContext("consumer");
-		stageRelease(runtimeReleaseArchiveIdentity(development));
-		ensureNativeArtifacts(development);
-		expect(() =>
-			ensureRustArtifacts(fixtureContext("consumer", { production: true })),
-		).toThrow(localBuild);
+	it("uses packaged Rust and its native components when the packaged C archive is missing", () => {
+		const directory = stageRelease(
+			runtimeReleaseArchiveIdentity(fixtureContext("producer")),
+		);
+		rmSync(path.join(directory, "libMalRuntime.a"));
+		const production = fixtureContext("consumer", { production: true });
+		writeFileSync(
+			path.join(production.runtimeDirectory, "src/runtime.c"),
+			"int other(void);\n",
+		);
+		const artifacts = ensureRustArtifacts(production);
+		expect(readFileSync(artifacts.library, "utf8")).toBe("release fixture libmal_rust.a");
+		expect(artifacts.nativeComponents.map(({ packageName }) => packageName)).toEqual(
+			expect.arrayContaining(["ada-url", "ring"]),
+		);
+	});
+
+	it("builds production Rust locally when Rust sources change", () => {
+		stageRelease(runtimeReleaseArchiveIdentity(fixtureContext("producer")));
+		const production = fixtureContext("consumer", { production: true });
+		writeFileSync(
+			path.join(production.runtimeDirectory, "rust/src/lib.rs"),
+			"pub fn other() {}\n",
+		);
+		expect(() => ensureRustArtifacts(production)).toThrow(localBuild);
 	});
 });
 

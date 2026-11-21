@@ -126,7 +126,10 @@ import {
 	prepareGeneratedSources,
 	sharedDevelopmentRunnerFeatures,
 } from "./local-build.ts";
-import { resolveNativeBuildContext } from "./native-build-context.ts";
+import {
+	productionToolchainOptions,
+	resolveNativeBuildContext,
+} from "./native-build-context.ts";
 import { nativeBuildJobs } from "./native-command.ts";
 import { nativeSourcePath } from "./native-source-path.ts";
 import {
@@ -455,11 +458,21 @@ function selectToolchain(
 	const retained = context.developmentCache?.toolchains.get(selectionKey);
 	if (retained !== undefined) return retained;
 	try {
-		const toolchain = requireToolchain({
+		const runtimeDirectory = context.installation.runtimeDirectory;
+		const inspection = {
 			needsCxx,
-			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
+			rustDir: path.join(runtimeDirectory, "rust"),
 			target: command.kind === "build" ? command.target : undefined,
-		});
+		};
+		const toolchain = requireToolchain(
+			command.kind === "build" && command.production
+				? productionToolchainOptions(
+						runtimeDirectory,
+						buildDerivationFromConfig(config).features,
+						inspection,
+					)
+				: inspection,
+		);
 		const plan = selectNativeBuildPlan(
 			toolchain,
 			command.profile || (command.kind === "build" && command.production),
@@ -737,9 +750,12 @@ function prepareCommandState(
 				"C compiler",
 				`${formatToolCommand(toolchain.tools.cc)} (${toolchain.tools.cc.version})`,
 			);
+			const rustc = toolchain.tools.rustc;
 			reporter.detail(
 				"Rust compiler",
-				`${formatToolCommand(toolchain.tools.rustc)} (${toolchain.tools.rustc.version})`,
+				rustc === undefined
+					? "using packaged archives"
+					: `${formatToolCommand(rustc)} (${rustc.version})`,
 			);
 		}
 		for (const warning of plan?.warnings ?? []) reporter.warning(warning);
@@ -2804,10 +2820,15 @@ export async function runCli(
 			return;
 		}
 		if (command.kind === "doctor") {
-			const report = inspectToolchain({
-				rustDir: path.join(context.installation.runtimeDirectory, "rust"),
-				target: command.target,
-			});
+			const config = loadBuildConfig(undefined, process.cwd(), context.stripTypes);
+			const report = inspectToolchain(
+				productionToolchainOptions(
+					context.installation.runtimeDirectory,
+					buildDerivationFromConfig(config).features,
+					{ target: command.target },
+					"report",
+				),
+			);
 			log.info(
 				formatToolchainReport(
 					report,

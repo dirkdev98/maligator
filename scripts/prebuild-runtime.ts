@@ -28,11 +28,11 @@ import {
 	PREBUILT_RUNTIME_CC_FLAGS,
 	PREBUILT_RUNTIME_MANIFEST,
 	PREBUILT_RUNTIME_OVERRIDE,
-	PREBUILT_RUNTIME_ZIG_VERSION,
 	prebuiltRuntimeCxxLibraries,
 	prebuiltRuntimeTarget,
 	readPrebuiltDevelopmentRunner,
 	readPrebuiltRuntime,
+	readPrebuiltRust,
 	RELEASE_MACOS_VERSION,
 	RUNTIME_ARCHIVES,
 	RUST_LIBRARY_OUTPUT,
@@ -45,6 +45,7 @@ import {
 	ensureNativeArtifacts,
 	runtimeReleaseArchiveIdentity,
 } from "../src/runtime-build.ts";
+import { PINNED_ZIG_VERSION } from "../src/toolchain-fetch.ts";
 import { requireToolchain, toolArguments } from "../src/toolchain.ts";
 import type { Toolchain } from "../src/toolchain.ts";
 
@@ -116,6 +117,7 @@ export function prebuildRuntime(
 		MAL_BUILD_JOBS,
 		CARGO_BUILD_JOBS,
 		MALIGATOR_WORKERS,
+		MALIGATOR_CACHE_DIR,
 		ZIG_GLOBAL_CACHE_DIR,
 		ZIG_LOCAL_CACHE_DIR,
 	} = process.env;
@@ -130,6 +132,7 @@ export function prebuildRuntime(
 		MAL_BUILD_JOBS,
 		CARGO_BUILD_JOBS,
 		MALIGATOR_WORKERS,
+		MALIGATOR_CACHE_DIR,
 		ZIG_GLOBAL_CACHE_DIR: ZIG_GLOBAL_CACHE_DIR && path.resolve(ZIG_GLOBAL_CACHE_DIR),
 		ZIG_LOCAL_CACHE_DIR: ZIG_LOCAL_CACHE_DIR && path.resolve(ZIG_LOCAL_CACHE_DIR),
 		[PREBUILT_RUNTIME_OVERRIDE]: "",
@@ -142,9 +145,9 @@ export function prebuildRuntime(
 		env: environment,
 		rustDir: rustDirectory,
 	});
-	if (base.tools.zig?.version !== PREBUILT_RUNTIME_ZIG_VERSION) {
+	if (base.tools.zig?.version !== PINNED_ZIG_VERSION) {
 		throw new Error(
-			`development runtime prebuild requires Zig ${PREBUILT_RUNTIME_ZIG_VERSION}; set ZIG to its executable`,
+			`runtime prebuild requires Zig ${PINNED_ZIG_VERSION}; set ZIG to its executable`,
 		);
 	}
 	const cc = [
@@ -270,13 +273,15 @@ export function prebuildRuntime(
 		);
 		if (readPrebuiltRuntime(output, triple, manifest.key) === undefined)
 			throw new Error(`incomplete prebuilt runtime set in ${output}`);
+		if (readPrebuiltRust(output, triple, manifest.rustKey) === undefined)
+			throw new Error(`incomplete prebuilt Rust set in ${output}`);
 		for (const kind of runnerKinds) {
 			if (readPrebuiltDevelopmentRunner(output, triple, kind) === undefined)
 				throw new Error(
 					`incomplete prebuilt runner ${DEVELOPMENT_RUNNERS[kind]} in ${output}`,
 				);
 		}
-		onProgress?.(`development runtime ready at ${output}`);
+		onProgress?.(`runtime archives and development runners ready at ${output}`);
 		return manifest;
 	} finally {
 		rmSync(work, { recursive: true, force: true });

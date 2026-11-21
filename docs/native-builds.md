@@ -21,7 +21,7 @@ prebuilt eval compiler wire as its `runtime` and `compilerWire` assets
 startup, so the copied compiler can run the full native pipeline outside a Maligator
 checkout and without Node.js. `npm run selfhost:cli` exercises that transfer path.
 
-## Packaged development runtime
+## Packaged runtime
 
 Each npm platform package includes runtime archives and runners for the default
 development flavour, with locked primordials and realms disabled. The launcher
@@ -31,25 +31,28 @@ native flags, and pinned Zig producer.
 
 The CLI verifies SHA-256 digests before using packaged files. It executes a matching
 runner directly. A local development link can import matching archives under its
-local cache keys. Missing or mismatched files fall back to local builds. The eval
-component is not packaged: `engine.eval: true` builds it locally from the compiler
-wire. Production builds use the local runtime cache and the selected toolchain's LTO
-support. Use `MALIGATOR_PREBUILT_RUNTIME_DIR` to test a different runtime directory
-and `--verbose` to see which runner or archives a command uses.
+local cache keys. Production imports the machine-code Rust, Ada and ring archives
+using a separate key for the Rust sources and target ABI. Production C archives
+build locally with the selected C compiler's LTO settings. Missing or mismatched
+files fall back to local builds. `engine.eval: true` builds the eval component
+locally from the compiler wire. Use `MALIGATOR_PREBUILT_RUNTIME_DIR` to test a
+different runtime directory and `--verbose` to see which archives a command uses.
 
 ## Toolchain discovery
 
-Every native build performs the same discovery and capability checks used by
-`doctor`. `CC` and `CXX` override compiler selection; otherwise tools are resolved
-strictly from `PATH`. Local runtime builds compile translation units with `CC` and
-collect them into three static archives with `ar`. The Rust half is built with the
-`cargo`/`rustc` that Rustup selects for `runtime/rust/rust-toolchain.toml`. Building
-it needs a C++ compiler for the bundled Ada URL parser; linking the C++ runtime is
-required only when `surface.webPlatform` or `surface.node` is enabled.
+Native builds use the compiler and capability checks shown by `doctor`. `CC` and
+`CXX` override compiler selection. When the default C toolchain cannot build a
+production executable, the CLI tries Zig and then installs its pinned Zig release
+in the user cache. `doctor` reports whether the next build will download Zig.
+The installer verifies the archive's pinned SHA-256 before extraction.
 
-The runtime needs real C23: the `bool`/`true`/`false` keywords (no `<stdbool.h>`),
-`nullptr`, and `#embed`. gcc 14 and older accept `-std=c2x` but lack `#embed`, so the
-`doctor` C2x probe rejects them.
+Local runtime builds compile translation units with the selected C compiler and
+collect them into static archives with `ar`. A prebuilt Rust archive skips Rustup
+and Cargo discovery. A local Rust build uses the toolchain selected by
+`runtime/rust/rust-toolchain.toml` and compiles the Ada URL parser with C++.
+
+The C toolchain probe requires the C23 keywords, `#embed` and `__builtin_assume`
+used by the runtime.
 
 Discovery, normalized feature booleans, build plan, installation roots, environment
 snapshot, and cache root are frozen into one `NativeBuildContext`
@@ -65,8 +68,8 @@ product CLI itself uses `host_main.c` for its hosted command surface.
 
 ## Cross builds
 
-An explicit `build --target <rust-triple>` cross-builds through a detected Zig
-installation. Maligator maps the Rust triple to Zig's target syntax and consistently
+An explicit `build --target <rust-triple>` cross-builds through Zig. Maligator maps
+the Rust triple to Zig's target syntax and
 uses `zig cc`, `zig c++`, and `zig ar` for the C runtime, Cargo native dependencies,
 and final link; optional production stripping is applied by `zig cc` during that
 link. Cross-built outputs live under `.cache/mal-build/<mode>/<rust-triple>/`;
@@ -167,13 +170,12 @@ being duplicated. Where that flag works on ELF targets, runtime C objects compil
 `-ffunction-sections -fdata-sections` too, so section removal works per function
 there as Mach-O's per-symbol sections do.
 
-Build-script libraries are the exception. A reference from unused Rust code still
-loads their archive members, and section removal cannot shed them afterwards: Ada
-runs static initializers that keep its C++ code and libc++ alive, and ring's assembly
-objects have no subsections. The build therefore republishes Ada's and ring's
-libraries beside the Rust archive and links each only when the configuration selects
-the Rust features that need it (`url`, and `tls` or `node-crypto`). Wasm builds still
-compile only the configured features.
+Native builds publish Ada and ring beside the Rust archive so the linker can omit
+them by use. Ada has static initializers, and ring's assembly objects have no
+subsections. Linux prefers LLD when the compiler can use it. GNU ld can require
+both components before discarding unused sections, so its fallback links both
+and uses a static C++ runtime for lean programs when the capability probe succeeds.
+Wasm builds compile only the configured features.
 
 ## Cache layout
 

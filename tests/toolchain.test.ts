@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
 	chmodSync,
 	copyFileSync,
@@ -16,6 +16,7 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { artifactFileDigest } from "../src/artifact-store.ts";
 import { normalizeNativeFeatures, selectNativeBuildPlan } from "../src/build-flags.ts";
 import type { NativeFeatureInput } from "../src/build-flags.ts";
 import { cargoCacheDirectory, maligatorCacheDirectory } from "../src/cache-root.ts";
@@ -37,6 +38,7 @@ import {
 } from "../src/runtime-build.ts";
 import { ensureRustArtifacts, resolveRustArtifacts } from "../src/rust-build.ts";
 import { runToStdout } from "../src/test-harness.ts";
+import { pinnedZigDownload, PINNED_ZIG_VERSION } from "../src/toolchain-fetch.ts";
 import {
 	clangMajorVersion,
 	formatToolchainReport,
@@ -308,6 +310,153 @@ function compileInvocationCount(logPath: string): number {
 		.split("\n")
 		.filter((line) => line.includes(" -c ")).length;
 }
+
+function productionOptions(fake: FakeToolchain) {
+	return {
+		rootDir: fake.root,
+		cacheDirectory: path.join(fake.root, "production-cache"),
+		rustDir: fake.rustDir,
+		env: { PATH: fake.bin },
+		platform: "linux" as const,
+		arch: "x64",
+	};
+}
+
+function createZigDownload(fake: FakeToolchain, directory: string) {
+	const archive = path.join(fake.root, "zig.tar.xz");
+	const folder = path.basename(directory);
+	const staged = path.join(fake.root, folder);
+	mkdirSync(staged);
+	const original = path.join(fake.bin, "zig");
+	writeFileSync(
+		path.join(staged, "zig"),
+		readFileSync(original, "utf8").replace("0.15.2", PINNED_ZIG_VERSION),
+		{ mode: 0o755 },
+	);
+	rmSync(original);
+	execFileSync("/usr/bin/tar", ["-cJf", archive, "-C", fake.root, folder]);
+	return archive;
+}
+
+describe("production toolchain selection", () => {
+	it("builds with a fetched Zig when no C compiler is available", () => {
+		const fake = createFakeToolchain();
+		try {
+			const runtimeDirectory = createMinimalRuntime(fake);
+			const options = productionOptions(fake);
+			const pinned = pinnedZigDownload(
+				options.platform,
+				options.arch,
+				options.cacheDirectory,
+			)!;
+			const archive = createZigDownload(fake, pinned.directory);
+			const download = { ...pinned, sha256: artifactFileDigest(archive) };
+			const fetch = vi.fn((_: string, destination: string) =>
+				copyFileSync(archive, destination),
+			);
+			const toolchain = requireToolchain({
+				...options,
+				zigFallback: { mode: "install", download, fetch },
+			});
+			const result = buildLocalBinary({
+				context: resolveNativeBuildContext({
+					toolchain,
+					runtimeDirectory,
+					cacheDirectory: options.cacheDirectory,
+					environment: options.env,
+					features: { evalEnabled: false, webPlatformEnabled: false },
+					production: true,
+				}),
+				name: "pinned-zig-output",
+				cSource: "int value;",
+				verbose: false,
+				outDir: path.join(fake.root, "output"),
+			});
+			expect(readFileSync(result.binaryPath, "utf8")).toBe("x");
+			expect(readFileSync(fake.logPath, "utf8")).toContain(
+				"zig cc -target x86_64-linux-gnu",
+			);
+			expect(fetch).toHaveBeenCalledOnce();
+		} finally {
+			rmSync(fake.root, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects an unexpected download before publishing Zig", () => {
+		const fake = createFakeToolchain();
+		try {
+			const options = productionOptions(fake);
+			const download = pinnedZigDownload(
+				options.platform,
+				options.arch,
+				options.cacheDirectory,
+			)!;
+			rmSync(path.join(fake.bin, "zig"));
+			const fetch = (_: string, destination: string) =>
+				writeFileSync(destination, "bad archive");
+			expect(() =>
+				requireToolchain({
+					...options,
+					zigFallback: { mode: "install", download, fetch },
+				}),
+			).toThrow("SHA-256 checksum mismatch");
+			expect(existsSync(download.executable)).toBe(false);
+		} finally {
+			rmSync(fake.root, { recursive: true, force: true });
+		}
+	});
+
+	it("prefers an available system cc and skips Rust tools for a compatible archive", () => {
+		const fake = createFakeToolchain();
+		try {
+			const options = productionOptions(fake);
+			const cc = path.join(fake.bin, "cc");
+			writeFileSync(
+				cc,
+				readFileSync(path.join(fake.bin, "fake-cc"), "utf8").replace(
+					"fake-target",
+					"x86_64-linux-gnu",
+				),
+				{ mode: 0o755 },
+			);
+			for (const tool of ["rustup", "cargo", "rustc", "fake-cxx"])
+				rmSync(path.join(fake.bin, tool));
+			const fetch = vi.fn(() => {
+				throw new Error("unexpected toolchain download");
+			});
+			const toolchain = requireToolchain({
+				...options,
+				prebuiltRustTarget: "x86_64-unknown-linux-gnu",
+				zigFallback: { mode: "install", fetch },
+			});
+			expect(toolchain.tools.cc.path).toBe(realpathSync(cc));
+			expect(fetch).not.toHaveBeenCalled();
+		} finally {
+			rmSync(fake.root, { recursive: true, force: true });
+		}
+	});
+
+	it("reports a pending Zig download without fetching it", () => {
+		const fake = createFakeToolchain();
+		try {
+			const options = productionOptions(fake);
+			rmSync(path.join(fake.bin, "zig"));
+			const fetch = vi.fn(() => {
+				throw new Error("unexpected toolchain download");
+			});
+			const report = inspectToolchain({
+				...options,
+				zigFallback: { mode: "report", fetch },
+			});
+			expect(formatToolchainReport(report, "linux")).toContain(
+				`Production builds will download Zig ${PINNED_ZIG_VERSION}`,
+			);
+			expect(fetch).not.toHaveBeenCalled();
+		} finally {
+			rmSync(fake.root, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("native toolchain discovery", () => {
 	it("runs independent native commands with bounded concurrency", () => {
@@ -782,7 +931,7 @@ printf '!<arch>\\n' > "$2"
 		expect(
 			phases.find((phase) => phase.phase === "generated C objects")?.bytes,
 		).toBeGreaterThan(0);
-		expect(commands.some((command) => command.tool === toolchain.tools.cargo.path)).toBe(
+		expect(commands.some((command) => command.tool === toolchain.tools.cargo?.path)).toBe(
 			true,
 		);
 		expect(

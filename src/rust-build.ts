@@ -24,10 +24,13 @@ import { runNativeCommand } from "./native-command.ts";
 import {
 	importPrebuiltRuntimeAction,
 	NATIVE_OUTPUT_PREFIX,
+	prebuiltProductionRustDirectory,
+	prebuiltRustKey,
+	readPrebuiltRust,
 	RUST_LIBRARY_OUTPUT,
 } from "./prebuilt-runtime.ts";
 import type { PrebuiltRuntime } from "./prebuilt-runtime.ts";
-import { formatToolCommand, toolArguments } from "./toolchain.ts";
+import { formatToolCommand, requireToolchain, toolArguments } from "./toolchain.ts";
 import { buildWorkerCount } from "./worker-budget.ts";
 
 export { resolvePathExecutable } from "./toolchain.ts";
@@ -80,11 +83,39 @@ export function rustArtifactKey(inputs: RustArtifactKeyInputs): string {
 export const RUST_PRODUCER = artifactProducer("rust-library", 2, "cargo-build");
 const RUST_TARGET_PRODUCER = artifactProducer("rust-target", 1, "cargo-build");
 
-export function portableRustSourceDigest(context: NativeBuildContext): string {
+type RustArchiveInputs = Pick<
+	NativeBuildContext,
+	"runtimeDirectory" | "cacheDirectory" | "environment"
+> & {
+	features: Pick<NativeBuildContext["features"], "primordialsLocked" | "realmsEnabled">;
+};
+
+export function portableRustSourceDigest(
+	context: Pick<RustArchiveInputs, "runtimeDirectory" | "cacheDirectory">,
+): string {
 	return cachedRustSourceDigest(
 		path.join(context.runtimeDirectory, "rust"),
 		context.cacheDirectory,
 		lexicalNameComparator,
+	);
+}
+
+export function packagedProductionRust(
+	context: RustArchiveInputs,
+	target: string,
+	ccTarget?: string,
+): PrebuiltRuntime | undefined {
+	const directory = prebuiltProductionRustDirectory(
+		target,
+		context.features,
+		context.environment,
+		ccTarget,
+	);
+	if (directory === undefined) return undefined;
+	return readPrebuiltRust(
+		directory,
+		target,
+		prebuiltRustKey(target, portableRustSourceDigest(context), RUST_PRODUCER),
 	);
 }
 
@@ -117,7 +148,9 @@ export interface RustNativeComponent {
 	library: string;
 }
 
-export interface RustArtifacts extends RustBuildPlan {
+export interface RustArtifacts extends Partial<RustBuildPlan> {
+	cacheKey: string;
+	library: string;
 	nativeComponents: ReadonlyArray<RustNativeComponent>;
 	/** The Rust archive, the selected native components and their link flags. */
 	linkArgs: Array<string>;
@@ -206,9 +239,9 @@ export function resolveRustArtifacts(context: NativeBuildContext): RustBuildPlan
 
 function resolvedRustArtifacts(
 	context: NativeBuildContext,
-	plan: RustBuildPlan,
 	action: RustLibraryAction,
 	prebuilt = false,
+	plan?: RustBuildPlan,
 ): RustArtifacts {
 	const library = artifactOutput(action, RUST_LIBRARY_OUTPUT).path;
 	const nativeComponents = action.outputs.flatMap((output) =>
@@ -255,6 +288,7 @@ function resolvedRustArtifacts(
 		: cxxRuntime;
 	return {
 		...plan,
+		cacheKey: action.action,
 		library,
 		nativeComponents,
 		linkArgs: [
@@ -271,6 +305,32 @@ function resolvedRustArtifacts(
 			),
 		],
 	};
+}
+
+function cachedRustArtifacts(
+	context: NativeBuildContext,
+	action: RustLibraryAction,
+	startedAt: number,
+	prebuilt: boolean,
+	plan?: RustBuildPlan,
+): RustArtifacts {
+	const artifacts = resolvedRustArtifacts(context, action, prebuilt, plan);
+	context.onCacheEvent?.({ artifact: "rust", hit: true, path: artifacts.library });
+	if (prebuilt) {
+		context.onBuildPhase?.({
+			phase: "rust prebuilt",
+			durationMs: performance.now() - startedAt,
+			cache: "hit",
+			path: artifacts.library,
+		});
+	}
+	context.onBuildPhase?.({
+		phase: "rust",
+		durationMs: performance.now() - startedAt,
+		cache: "hit",
+		path: artifacts.library,
+	});
+	return artifacts;
 }
 
 interface NativeComponentLibrary {
@@ -389,16 +449,47 @@ function separateNativeComponents(
 
 /** Build the Rust FFI static library with reusable, serialized Cargo work products. */
 export function ensureRustArtifacts(
-	context: NativeBuildContext,
+	input: NativeBuildContext,
 	verbose = false,
 	bundle?: PrebuiltRuntime,
 ): RustArtifacts {
-	if (context.toolchain.tools.cxx === undefined) {
-		throw new Error(
-			"the native Rust runtime compiles the URL parser and needs a C++ compiler (run 'maligator doctor')",
-		);
-	}
 	const startedAt = performance.now();
+	const selected = input.toolchain;
+	if (input.plan.mode === "production") {
+		const packaged = packagedProductionRust(
+			input,
+			selected.rustTarget,
+			selected.cross === true ? selected.rustTarget : selected.target,
+		);
+		if (packaged !== undefined) {
+			const imported = importPrebuiltRuntimeAction(
+				input.cacheDirectory,
+				"rust-library",
+				RUST_PRODUCER,
+				packaged.manifest.rustKey,
+				packaged,
+			);
+			if (imported !== undefined)
+				return cachedRustArtifacts(input, imported, startedAt, true);
+		}
+	}
+	// A package can be replaced after toolchain selection. Use the selected
+	// C driver for a local build if the released archives are no longer intact.
+	const context =
+		selected.tools.cargo === undefined
+			? {
+					...input,
+					toolchain: requireToolchain({
+						cacheDirectory: input.cacheDirectory,
+						env: {
+							...input.environment,
+							ZIG: selected.tools.zig?.path ?? input.environment.ZIG,
+						},
+						rustDir: path.join(input.runtimeDirectory, "rust"),
+						target: selected.cross === true ? selected.rustTarget : undefined,
+					}),
+				}
+			: input;
 	const plan = resolveRustArtifacts(context);
 	const local = readArtifactAction(
 		context.cacheDirectory,
@@ -417,30 +508,13 @@ export function ensureRustArtifacts(
 				)
 			: undefined;
 	const cached = local ?? prebuilt;
-	if (cached !== undefined) {
-		const artifacts = resolvedRustArtifacts(
-			context,
-			plan,
-			cached,
-			prebuilt !== undefined,
+	if (cached !== undefined)
+		return cachedRustArtifacts(context, cached, startedAt, prebuilt !== undefined, plan);
+	const { cargo, rustc, cxx } = context.toolchain.tools;
+	if (cargo === undefined || rustc === undefined || cxx === undefined)
+		throw new Error(
+			"building the Rust runtime requires Cargo, rustc, and a C++ compiler (run 'maligator doctor')",
 		);
-		context.onCacheEvent?.({ artifact: "rust", hit: true, path: artifacts.library });
-		if (prebuilt !== undefined) {
-			context.onBuildPhase?.({
-				phase: "rust prebuilt",
-				durationMs: performance.now() - startedAt,
-				cache: "hit",
-				path: artifacts.library,
-			});
-		}
-		context.onBuildPhase?.({
-			phase: "rust",
-			durationMs: performance.now() - startedAt,
-			cache: "hit",
-			path: artifacts.library,
-		});
-		return artifacts;
-	}
 	context.onCacheEvent?.({ artifact: "rust", hit: false, path: plan.library });
 	const published = withArtifactActionLock(
 		context.cacheDirectory,
@@ -462,7 +536,6 @@ export function ensureRustArtifacts(
 				plan.targetKey,
 				() => {
 					const currentPath = context.environment.PATH ?? "";
-					const cargo = context.toolchain.tools.cargo;
 					const cwd = path.join(context.runtimeDirectory, "rust");
 					const env = {
 						...context.environment,
@@ -473,7 +546,7 @@ export function ensureRustArtifacts(
 						CARGO_BUILD_JOBS: String(
 							buildWorkerCount(context.environment, "CARGO_BUILD_JOBS", 8),
 						),
-						RUSTC: context.toolchain.tools.rustc.path,
+						RUSTC: rustc.path,
 					};
 					const buildStartedAt = performance.now();
 					runNativeCommand(
@@ -528,7 +601,7 @@ export function ensureRustArtifacts(
 			);
 		},
 	);
-	const artifacts = resolvedRustArtifacts(context, plan, published);
+	const artifacts = resolvedRustArtifacts(context, published, false, plan);
 	context.onBuildPhase?.({
 		phase: "rust",
 		durationMs: performance.now() - startedAt,

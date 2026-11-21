@@ -1,25 +1,7 @@
-`maligator build` compiles Maligator's C runtime and Rust crate together with your application, so it needs a native toolchain on the build host. `run`, `dev`, and `test` use the runtime embedded in the distributed CLI for supported profiles with Intl, profiling, and C libraries disabled. The executables you build do not need these tools.
-
-## Install the requirements
-
-- A C compiler and archive tool with C23 support: Apple clang, clang 19 or newer, or gcc 15 or newer. gcc 14 and older accept `-std=c2x` but lack `#embed`, so `doctor` rejects them.
-- Rustup. Maligator builds its runtime with the Rust toolchain pinned by that runtime.
-- A C++ compiler and runtime when `surface.webPlatform` or `surface.node` is enabled.
-
-On macOS, Apple's command-line tools provide the C and C++ compilers:
-
-```shell
-xcode-select --install
-```
-
-On Linux, install a C23-capable compiler from your distribution. When its default gcc is older than 15, install clang 19 or newer and select it for Maligator. For example, on Ubuntu 26.04:
-
-```shell
-sudo apt install clang-21
-export CC=clang-21 CXX=clang++-21
-```
-
-Install Rust through [Rustup](https://rustup.rs) on both platforms.
+`maligator build --production` uses a C compiler and archive tool on the build host.
+The platform package supplies the Rust runtime archives for the default flavour.
+`run`, `dev` and `test` can use a packaged development runner when the project
+configuration matches. The finished executable needs only its runtime libraries.
 
 ## Check the toolchain
 
@@ -27,23 +9,34 @@ Install Rust through [Rustup](https://rustup.rs) on both platforms.
 maligator doctor --verbose
 ```
 
-`doctor` reports resolved paths, versions, C and Rust targets, tested capabilities, and probe-cache status, plus suggested fixes for anything missing. Every native build runs the same checks, so running `doctor` first is optional. `CC` and `CXX` override compiler selection; otherwise tools are resolved strictly from `PATH`.
+`doctor` shows the C compiler that production builds will use, the target, the
+capabilities it tested and whether the Rust runtime comes from the platform package.
+Install a C++ compiler and [Rustup](https://rustup.rs) if the build needs to compile
+the Rust runtime locally.
+
+## Compiler selection
+
+The production build uses `cc` from `PATH` when it can compile and link the runtime.
+Set `CC` and `CXX` to select a specific compiler. On macOS, Apple's command-line
+tools provide both compilers. On Linux, install a recent Clang from your distribution.
+
+When the default C toolchain is unavailable or lacks the required compiler features,
+a production build uses an existing Zig installation. Set `ZIG` to select its
+executable. If Zig is absent, the build downloads the pinned host release, verifies
+its checksum and stores it in the Maligator cache. The download uses the system
+`curl` and `tar` with xz support. Use `doctor` to see the download destination before
+the first build.
 
 ## Cross-build for another target
 
-Pass a Rust target triple to `build` to cross-compile through [Zig](https://ziglang.org). Supported targets:
-
-- `aarch64-apple-darwin`
-- `x86_64-apple-darwin`
-- `aarch64-unknown-linux-gnu`
-- `x86_64-unknown-linux-gnu`
-
-Install Zig on `PATH` (or point `ZIG` at it), add the Rust standard library for the target, and validate both halves before building:
+Pass a Rust target triple to `build` to cross-compile through [Zig](https://ziglang.org).
+Maligator supports ARM64 and x86-64 targets on macOS and glibc Linux.
 
 ```shell
-rustup target add x86_64-unknown-linux-gnu
 maligator doctor --target x86_64-unknown-linux-gnu --verbose
 maligator build --production --target x86_64-unknown-linux-gnu
 ```
 
-Zig provides the C and C++ compilers, archive tool, and linker for the target. `maligator run` always targets the build host. Test a cross-built executable on its intended host; see [Build for production](/guides/production#build-for-another-target).
+Install the Rust standard library for the target if its runtime archive must build
+locally. Test the executable on the intended host. See
+[Build for production](/guides/production#build-for-another-target).
