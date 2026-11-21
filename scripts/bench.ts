@@ -40,6 +40,7 @@ import {
 	selfCompileStages,
 	performanceSourceIdentity,
 } from "./bench-compare.ts";
+import { waitForHttpPort } from "./bench-http-ordinary.ts";
 import {
 	formatOhaDuration,
 	parseOhaOutput,
@@ -1644,7 +1645,7 @@ function startMeasuredRuntimeProcess(
 			MAL_GC_CONTROL: "1",
 			MAL_GC_STATS: "1",
 		},
-		stdio: ["ignore", "ignore", "pipe"],
+		stdio: ["ignore", "pipe", "pipe"],
 	});
 	const stderr: Array<Buffer> = [];
 	child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
@@ -1664,7 +1665,8 @@ function processRssBytes(child: ReturnType<typeof spawn>): number {
 }
 
 async function terminateProcess(child: ReturnType<typeof spawn>): Promise<void> {
-	if (child.exitCode !== null || child.signalCode !== null) return;
+	if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null)
+		return;
 	child.kill("SIGTERM");
 	await once(child, "exit");
 }
@@ -1719,54 +1721,74 @@ async function benchHttp(
 	});
 	const bareMal = startMeasuredRuntimeProcess(bareBinary, [], process.env);
 	const bareNode = spawn(process.execPath, ["bench/http/server_node.js"], {
-		stdio: ["ignore", "ignore", "inherit"],
+		stdio: ["ignore", "pipe", "inherit"],
 	});
 	let bare: HttpComparisonMetrics;
 	let bareRuntime: NativeRuntimeMetrics;
 	try {
-		waitReachable("http://127.0.0.1:3111/");
-		waitReachable("http://127.0.0.1:3112/");
-		ohaRun("http://127.0.0.1:3111/", "2s", concurrency);
-		ohaRun("http://127.0.0.1:3112/", "2s", concurrency);
+		const startupDeadline = performance.now() + 10000;
+		const [malPort, nodePort] = await Promise.all([
+			waitForHttpPort(bareMal.process, startupDeadline, () =>
+				Buffer.concat(bareMal.stderr).toString(),
+			),
+			waitForHttpPort(bareNode, startupDeadline),
+		]);
+		const malUrl = `http://127.0.0.1:${malPort}/`;
+		const nodeUrl = `http://127.0.0.1:${nodePort}/`;
+		waitReachable(malUrl);
+		waitReachable(nodeUrl);
+		ohaRun(malUrl, "2s", concurrency);
+		ohaRun(nodeUrl, "2s", concurrency);
 		bare = compareHttpSamples(
-			"http://127.0.0.1:3111/",
-			"http://127.0.0.1:3112/",
+			malUrl,
+			nodeUrl,
 			formatOhaDuration(durationSeconds),
 			concurrency,
 			runs,
 		);
+		bareRuntime = await stopMeasuredRuntimeProcess(bareMal, malUrl);
 	} finally {
-		bareRuntime = await stopMeasuredRuntimeProcess(bareMal, "http://127.0.0.1:3111/");
-		await terminateProcess(bareNode);
+		await Promise.all([terminateProcess(bareMal.process), terminateProcess(bareNode)]);
 	}
 
+	const temporary = mkdtempSync(path.join(os.tmpdir(), "mal-bench-http-"));
 	const expressMal = startMeasuredRuntimeProcess(expressBinary, [], {
 		...process.env,
-		PORT: "3113",
+		PORT: "0",
 	});
 	const expressNode = spawn(process.execPath, ["bench/http/express-server.cjs"], {
-		env: { ...process.env, PORT: "3114" },
-		stdio: ["ignore", "ignore", "inherit"],
+		env: { ...process.env, PORT: "0" },
+		stdio: ["ignore", "pipe", "inherit"],
 	});
-	const temporary = mkdtempSync(path.join(os.tmpdir(), "mal-bench-http-"));
 	let workloads: Record<string, HttpComparisonMetrics>;
 	let expressRuntime: NativeRuntimeMetrics;
 	try {
-		waitReachable("http://127.0.0.1:3113/middleware");
-		waitReachable("http://127.0.0.1:3114/middleware");
-		ohaRun("http://127.0.0.1:3113/middleware", "2s", concurrency);
-		ohaRun("http://127.0.0.1:3114/middleware", "2s", concurrency);
+		const startupDeadline = performance.now() + 10000;
+		const [malPort, nodePort] = await Promise.all([
+			waitForHttpPort(expressMal.process, startupDeadline, () =>
+				Buffer.concat(expressMal.stderr).toString(),
+			),
+			waitForHttpPort(expressNode, startupDeadline),
+		]);
+		const malOrigin = `http://127.0.0.1:${malPort}`;
+		const nodeOrigin = `http://127.0.0.1:${nodePort}`;
+		const malUrl = `${malOrigin}/middleware`;
+		const nodeUrl = `${nodeOrigin}/middleware`;
+		waitReachable(malUrl);
+		waitReachable(nodeUrl);
+		ohaRun(malUrl, "2s", concurrency);
+		ohaRun(nodeUrl, "2s", concurrency);
 		workloads = {};
 		for (const workload of planExpressHttpWorkload(durationSeconds)) {
 			const malUrls = path.join(temporary, `${workload.name}-mal.txt`);
 			const nodeUrls = path.join(temporary, `${workload.name}-node.txt`);
 			writeFileSync(
 				malUrls,
-				`${workload.paths.map((value) => `http://127.0.0.1:3113${value}`).join("\n")}\n`,
+				`${workload.paths.map((value) => `${malOrigin}${value}`).join("\n")}\n`,
 			);
 			writeFileSync(
 				nodeUrls,
-				`${workload.paths.map((value) => `http://127.0.0.1:3114${value}`).join("\n")}\n`,
+				`${workload.paths.map((value) => `${nodeOrigin}${value}`).join("\n")}\n`,
 			);
 			workloads[workload.name] = compareHttpSamples(
 				malUrls,
@@ -1777,13 +1799,16 @@ async function benchHttp(
 				["--urls-from-file", ...workloadArgs(workload)],
 			);
 		}
+		expressRuntime = await stopMeasuredRuntimeProcess(expressMal, malUrl);
 	} finally {
-		expressRuntime = await stopMeasuredRuntimeProcess(
-			expressMal,
-			"http://127.0.0.1:3113/middleware",
-		);
-		await terminateProcess(expressNode);
-		rmSync(temporary, { recursive: true, force: true });
+		try {
+			await Promise.all([
+				terminateProcess(expressMal.process),
+				terminateProcess(expressNode),
+			]);
+		} finally {
+			rmSync(temporary, { recursive: true, force: true });
+		}
 	}
 	return {
 		world: "closed",

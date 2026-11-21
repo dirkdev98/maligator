@@ -238,12 +238,10 @@ function ordinaryEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 
 interface ServerProcess {
 	child: ReturnType<typeof spawn>;
-	stdout: string;
 	stderr: string;
 	rawStderr: string;
 	statsPending: string;
 	statsWaiters: Set<(line: string) => void>;
-	error?: Error;
 }
 
 function start(
@@ -253,21 +251,17 @@ function start(
 	captureStats = false,
 ): ServerProcess {
 	const child = spawn(command, args, {
-		env: ordinaryEnvironment(extra),
+		env: ordinaryEnvironment({ PORT: "0", ...extra }),
 		stdio: ["ignore", "pipe", "pipe"],
 		detached: true,
 	});
 	const server: ServerProcess = {
 		child,
-		stdout: "",
 		stderr: "",
 		rawStderr: "",
 		statsPending: "",
 		statsWaiters: new Set(),
 	};
-	child.stdout?.on("data", (chunk: Buffer) => {
-		server.stdout = (server.stdout + chunk.toString()).slice(-8192);
-	});
 	child.stderr?.on("data", (chunk: Buffer) => {
 		const text = chunk.toString();
 		server.stderr = (server.stderr + text).slice(-8192);
@@ -284,9 +278,6 @@ function start(
 			if (!line.startsWith("[gc-stats] ")) continue;
 			for (const waiter of server.statsWaiters) waiter(line);
 		}
-	});
-	child.on("error", (error) => {
-		server.error = error;
 	});
 	return server;
 }
@@ -461,27 +452,66 @@ async function stopBoth(
 	if (failed?.status === "rejected") throw failed.reason;
 }
 
-async function ready(
-	server: ServerProcess,
-	port: number,
+/** Read the bound port from the child before probing its HTTP listener. */
+export function waitForHttpPort(
+	child: ReturnType<typeof spawn>,
 	deadline: number,
-): Promise<void> {
+	stderr: () => string = () => "",
+): Promise<number> {
+	return new Promise((resolve, reject) => {
+		const stdout = child.stdout;
+		if (stdout === null) throw new Error("HTTP server stdout must be piped");
+		let pending = "";
+		const cleanup = () => {
+			clearTimeout(timer);
+			stdout.off("data", onData);
+			child.off("error", onError);
+			child.off("close", onClose);
+		};
+		const onError = (error: Error) => {
+			cleanup();
+			reject(
+				new Error(`HTTP server failed before startup: ${error.message}`, {
+					cause: error,
+				}),
+			);
+		};
+		const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+			cleanup();
+			reject(
+				new Error(`HTTP server failed before startup (${signal ?? code}): ${stderr()}`),
+			);
+		};
+		const onData = (chunk: Buffer) => {
+			pending += chunk.toString();
+			const match = /(?:^|\n)PORT ([1-9]\d{0,4})\r?\n/.exec(pending);
+			const port = Number(match?.[1]);
+			if (port > 0 && port <= 65535) {
+				cleanup();
+				resolve(port);
+				return;
+			}
+			pending = pending.slice(pending.lastIndexOf("\n") + 1);
+		};
+		const timer = setTimeout(
+			() => {
+				cleanup();
+				reject(new Error(`HTTP server did not report a port: ${stderr()}`));
+			},
+			Math.max(0, deadline - performance.now()),
+		);
+		child.once("error", onError);
+		child.once("close", onClose);
+		stdout.on("data", onData);
+	});
+}
+
+async function ready(server: ServerProcess, deadline: number): Promise<number> {
+	const port = await waitForHttpPort(server.child, deadline, () => server.stderr);
 	const url = `http://127.0.0.1:${port}/`;
 	while (performance.now() < deadline) {
-		if (
-			server.error !== undefined ||
-			server.child.exitCode !== null ||
-			server.child.signalCode !== null
-		) {
-			throw new Error(
-				`HTTP server failed before startup: ${server.error?.message ?? server.stderr}`,
-			);
-		}
-		if (!server.stdout.includes(`PORT ${port}`)) {
-			await new Promise((resolve) => {
-				setTimeout(resolve, 50);
-			});
-			continue;
+		if (server.child.exitCode !== null || server.child.signalCode !== null) {
+			throw new Error(`HTTP server failed before startup: ${server.stderr}`);
 		}
 		try {
 			const response = await fetch(url, {
@@ -490,7 +520,7 @@ async function ready(
 				redirect: "manual",
 			});
 			await response.arrayBuffer();
-			return;
+			return port;
 		} catch {
 			await new Promise((resolve) => {
 				setTimeout(resolve, 50);
@@ -731,30 +761,21 @@ export async function runHttpSnapshot(
 			interruption.assertActive();
 			if (performance.now() >= deadline)
 				throw new Error("HTTP comparison time budget exhausted");
-			const malPort = kind === "bare" ? 3111 : 3113;
-			const nodePort = kind === "bare" ? 3112 : 3114;
-			const mal = start(
-				binaries[kind],
-				[],
-				kind === "express" ? { PORT: String(malPort) } : {},
-			);
-			const node = start(
-				process.execPath,
-				[
-					path.join(
-						root,
-						kind === "bare"
-							? "bench/http/server_node.js"
-							: "bench/http/express-server.cjs",
-					),
-				],
-				kind === "express" ? { PORT: String(nodePort) } : {},
-			);
+			const mal = start(binaries[kind], []);
+			const node = start(process.execPath, [
+				path.join(
+					root,
+					kind === "bare" ? "bench/http/server_node.js" : "bench/http/express-server.cjs",
+				),
+			]);
 			active.add(mal.child);
 			active.add(node.child);
 			try {
-				await ready(mal, malPort, Math.min(deadline, performance.now() + 10000));
-				await ready(node, nodePort, Math.min(deadline, performance.now() + 10000));
+				const startupDeadline = Math.min(deadline, performance.now() + 10000);
+				const [malPort, nodePort] = await Promise.all([
+					ready(mal, startupDeadline),
+					ready(node, startupDeadline),
+				]);
 				const warmPath = kind === "bare" ? "/" : "/middleware";
 				for (const [index, port] of [malPort, nodePort].entries()) {
 					oha(
@@ -914,23 +935,17 @@ export async function runHttpGcDiagnostic(
 		return { status: "unsupported", reason: "SIGUSR1 is unavailable" };
 	mkdirSync(directory, { recursive: true });
 	const workload = planExpressHttpWorkload(seconds)[0]!;
-	const malPort = 3113;
-	const nodePort = 3114;
-	const mal = start(
-		expressBinary,
-		[],
-		{ PORT: String(malPort), MAL_GC_STATS: "1", MAL_GC_CONTROL: "1" },
-		true,
-	);
-	const node = start(
-		process.execPath,
-		[path.join(root, "bench/http/express-server.cjs")],
-		{ PORT: String(nodePort) },
-	);
+	const mal = start(expressBinary, [], { MAL_GC_STATS: "1", MAL_GC_CONTROL: "1" }, true);
+	const node = start(process.execPath, [
+		path.join(root, "bench/http/express-server.cjs"),
+	]);
 	const interruption = cleanupOnInterrupt(new Set([mal.child, node.child]));
 	try {
-		await ready(mal, malPort, Math.min(deadline, performance.now() + 10000));
-		await ready(node, nodePort, Math.min(deadline, performance.now() + 10000));
+		const startupDeadline = Math.min(deadline, performance.now() + 10000);
+		const [malPort, nodePort] = await Promise.all([
+			ready(mal, startupDeadline),
+			ready(node, startupDeadline),
+		]);
 		oha(
 			`http://127.0.0.1:${malPort}/middleware`,
 			2,
