@@ -65148,6 +65148,515 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_BASICS%\",\"navigator\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_BASICS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%",
+				"MAL_INTRINSIC_WEB_GROUP_BASICS"
+			],
+			"key": "navigator",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_BASICS%\",\"btoa\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_BASICS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%",
+				"MAL_INTRINSIC_WEB_GROUP_BASICS"
+			],
+			"key": "btoa",
+			"kind": "data",
+			"operations": ["globalThis.btoa"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_BASICS%\",\"atob\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_BASICS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%",
+				"MAL_INTRINSIC_WEB_GROUP_BASICS"
+			],
+			"key": "atob",
+			"kind": "data",
+			"operations": ["globalThis.atob"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_BASICS%\",\"queueMicrotask\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_BASICS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%",
+				"MAL_INTRINSIC_WEB_GROUP_BASICS"
+			],
+			"key": "queueMicrotask",
+			"kind": "data",
+			"operations": ["globalThis.queueMicrotask"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_BASICS%\",\"structuredClone\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_BASICS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%",
+				"MAL_INTRINSIC_WEB_GROUP_BASICS"
+			],
+			"key": "structuredClone",
+			"kind": "data",
+			"operations": ["globalThis.structuredClone"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_CRYPTO%\",\"crypto\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_CRYPTO%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_CRYPTO%",
+				"MAL_INTRINSIC_WEB_GROUP_CRYPTO"
+			],
+			"key": "crypto",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_ENCODING%\",\"TextEncoder\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_ENCODING%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_ENCODING%",
+				"MAL_INTRINSIC_WEB_GROUP_ENCODING"
+			],
+			"key": "TextEncoder",
+			"kind": "data",
+			"operations": ["globalThis.TextEncoder"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_ENCODING%\",\"TextDecoder\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_ENCODING%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_ENCODING%",
+				"MAL_INTRINSIC_WEB_GROUP_ENCODING"
+			],
+			"key": "TextDecoder",
+			"kind": "data",
+			"operations": ["globalThis.TextDecoder"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_EVENTS%\",\"DOMException\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_EVENTS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%",
+				"MAL_INTRINSIC_WEB_GROUP_EVENTS"
+			],
+			"key": "DOMException",
+			"kind": "data",
+			"operations": ["globalThis.DOMException"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_EVENTS%\",\"Event\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_EVENTS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%",
+				"MAL_INTRINSIC_WEB_GROUP_EVENTS"
+			],
+			"key": "Event",
+			"kind": "data",
+			"operations": ["globalThis.Event"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_EVENTS%\",\"CustomEvent\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_EVENTS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%",
+				"MAL_INTRINSIC_WEB_GROUP_EVENTS"
+			],
+			"key": "CustomEvent",
+			"kind": "data",
+			"operations": ["globalThis.CustomEvent"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_EVENTS%\",\"EventTarget\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_EVENTS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%",
+				"MAL_INTRINSIC_WEB_GROUP_EVENTS"
+			],
+			"key": "EventTarget",
+			"kind": "data",
+			"operations": ["globalThis.EventTarget"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_EVENTS%\",\"AbortSignal\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_EVENTS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%",
+				"MAL_INTRINSIC_WEB_GROUP_EVENTS"
+			],
+			"key": "AbortSignal",
+			"kind": "data",
+			"operations": ["globalThis.AbortSignal"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_EVENTS%\",\"AbortController\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_EVENTS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%",
+				"MAL_INTRINSIC_WEB_GROUP_EVENTS"
+			],
+			"key": "AbortController",
+			"kind": "data",
+			"operations": ["globalThis.AbortController"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_FETCH%\",\"Blob\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_FETCH%",
+			"ownerPaths": ["%MAL_INTRINSIC_WEB_GROUP_FETCH%", "MAL_INTRINSIC_WEB_GROUP_FETCH"],
+			"key": "Blob",
+			"kind": "data",
+			"operations": ["globalThis.Blob"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_FETCH%\",\"File\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_FETCH%",
+			"ownerPaths": ["%MAL_INTRINSIC_WEB_GROUP_FETCH%", "MAL_INTRINSIC_WEB_GROUP_FETCH"],
+			"key": "File",
+			"kind": "data",
+			"operations": ["globalThis.File"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_FETCH%\",\"FormData\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_FETCH%",
+			"ownerPaths": ["%MAL_INTRINSIC_WEB_GROUP_FETCH%", "MAL_INTRINSIC_WEB_GROUP_FETCH"],
+			"key": "FormData",
+			"kind": "data",
+			"operations": ["globalThis.FormData"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_FETCH%\",\"Response\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_FETCH%",
+			"ownerPaths": ["%MAL_INTRINSIC_WEB_GROUP_FETCH%", "MAL_INTRINSIC_WEB_GROUP_FETCH"],
+			"key": "Response",
+			"kind": "data",
+			"operations": ["globalThis.Response"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_FETCH%\",\"Request\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_FETCH%",
+			"ownerPaths": ["%MAL_INTRINSIC_WEB_GROUP_FETCH%", "MAL_INTRINSIC_WEB_GROUP_FETCH"],
+			"key": "Request",
+			"kind": "data",
+			"operations": ["globalThis.Request"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_FETCH%\",\"Headers\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_FETCH%",
+			"ownerPaths": ["%MAL_INTRINSIC_WEB_GROUP_FETCH%", "MAL_INTRINSIC_WEB_GROUP_FETCH"],
+			"key": "Headers",
+			"kind": "data",
+			"operations": ["globalThis.Headers"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_FETCH_CLIENT%\",\"fetch\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_FETCH_CLIENT%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH_CLIENT%",
+				"MAL_INTRINSIC_WEB_GROUP_FETCH_CLIENT"
+			],
+			"key": "fetch",
+			"kind": "data",
+			"operations": ["globalThis.fetch"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_PERFORMANCE%\",\"performance\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_PERFORMANCE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_PERFORMANCE%",
+				"MAL_INTRINSIC_WEB_GROUP_PERFORMANCE"
+			],
+			"key": "performance",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"ReadableStream\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "ReadableStream",
+			"kind": "data",
+			"operations": ["globalThis.ReadableStream"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"ReadableStreamDefaultController\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "ReadableStreamDefaultController",
+			"kind": "data",
+			"operations": ["globalThis.ReadableStreamDefaultController"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"ReadableByteStreamController\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "ReadableByteStreamController",
+			"kind": "data",
+			"operations": ["globalThis.ReadableByteStreamController"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"ReadableStreamDefaultReader\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "ReadableStreamDefaultReader",
+			"kind": "data",
+			"operations": ["globalThis.ReadableStreamDefaultReader"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"ReadableStreamBYOBReader\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "ReadableStreamBYOBReader",
+			"kind": "data",
+			"operations": ["globalThis.ReadableStreamBYOBReader"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"ReadableStreamBYOBRequest\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "ReadableStreamBYOBRequest",
+			"kind": "data",
+			"operations": ["globalThis.ReadableStreamBYOBRequest"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"CountQueuingStrategy\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "CountQueuingStrategy",
+			"kind": "data",
+			"operations": ["globalThis.CountQueuingStrategy"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"ByteLengthQueuingStrategy\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "ByteLengthQueuingStrategy",
+			"kind": "data",
+			"operations": ["globalThis.ByteLengthQueuingStrategy"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"WritableStream\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "WritableStream",
+			"kind": "data",
+			"operations": ["globalThis.WritableStream"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"WritableStreamDefaultController\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "WritableStreamDefaultController",
+			"kind": "data",
+			"operations": ["globalThis.WritableStreamDefaultController"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"WritableStreamDefaultWriter\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "WritableStreamDefaultWriter",
+			"kind": "data",
+			"operations": ["globalThis.WritableStreamDefaultWriter"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"TransformStreamDefaultController\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "TransformStreamDefaultController",
+			"kind": "data",
+			"operations": ["globalThis.TransformStreamDefaultController"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"TransformStream\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "TransformStream",
+			"kind": "data",
+			"operations": ["globalThis.TransformStream"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"TextEncoderStream\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "TextEncoderStream",
+			"kind": "data",
+			"operations": ["globalThis.TextEncoderStream"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"TextDecoderStream\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "TextDecoderStream",
+			"kind": "data",
+			"operations": ["globalThis.TextDecoderStream"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"CompressionStream\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "CompressionStream",
+			"kind": "data",
+			"operations": ["globalThis.CompressionStream"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_STREAMS%\",\"DecompressionStream\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%",
+				"MAL_INTRINSIC_WEB_GROUP_STREAMS"
+			],
+			"key": "DecompressionStream",
+			"kind": "data",
+			"operations": ["globalThis.DecompressionStream"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_URL%\",\"URL\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_URL%",
+			"ownerPaths": ["%MAL_INTRINSIC_WEB_GROUP_URL%", "MAL_INTRINSIC_WEB_GROUP_URL"],
+			"key": "URL",
+			"kind": "data",
+			"operations": ["globalThis.URL"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_WEB_GROUP_URL%\",\"URLSearchParams\"]",
+			"owner": "%MAL_INTRINSIC_WEB_GROUP_URL%",
+			"ownerPaths": ["%MAL_INTRINSIC_WEB_GROUP_URL%", "MAL_INTRINSIC_WEB_GROUP_URL"],
+			"key": "URLSearchParams",
+			"kind": "data",
+			"operations": ["globalThis.URLSearchParams"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%mal_host_install_maligator_application:ready%\",\"length\"]",
 			"owner": "%mal_host_install_maligator_application:ready%",
 			"ownerPaths": [
@@ -65166,6 +65675,407 @@
 			"ownerPaths": [
 				"%mal_host_install_maligator_application:ready%",
 				"mal_host_install_maligator_application:ready"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedDirectory%\",\"files\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedDirectory%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_assets:EmbeddedDirectory%",
+				"mal_host_install_maligator_assets:EmbeddedDirectory"
+			],
+			"key": "files",
+			"kind": "data",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.files"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedDirectory%\",\"get\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedDirectory%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_assets:EmbeddedDirectory%",
+				"mal_host_install_maligator_assets:EmbeddedDirectory"
+			],
+			"key": "get",
+			"kind": "data",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.get"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedDirectory%\",\"materialize\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedDirectory%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_assets:EmbeddedDirectory%",
+				"mal_host_install_maligator_assets:EmbeddedDirectory"
+			],
+			"key": "materialize",
+			"kind": "data",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedDirectory%.files\",\"length\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedDirectory%.files",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.files"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedDirectory%.files\",\"name\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedDirectory%.files",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.files"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedDirectory%.get\",\"length\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedDirectory%.get",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.get"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedDirectory%.get\",\"name\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedDirectory%.get",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.get"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize\",\"length\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize\",\"name\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%\",\"path\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_assets:EmbeddedFile%",
+				"mal_host_install_maligator_assets:EmbeddedFile"
+			],
+			"key": "path",
+			"kind": "data",
+			"operations": [],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%\",\"type\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_assets:EmbeddedFile%",
+				"mal_host_install_maligator_assets:EmbeddedFile"
+			],
+			"key": "type",
+			"kind": "data",
+			"operations": [],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%\",\"size\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_assets:EmbeddedFile%",
+				"mal_host_install_maligator_assets:EmbeddedFile"
+			],
+			"key": "size",
+			"kind": "accessor",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.size<get>"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%\",\"digest\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_assets:EmbeddedFile%",
+				"mal_host_install_maligator_assets:EmbeddedFile"
+			],
+			"key": "digest",
+			"kind": "accessor",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%\",\"bytes\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_assets:EmbeddedFile%",
+				"mal_host_install_maligator_assets:EmbeddedFile"
+			],
+			"key": "bytes",
+			"kind": "data",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.bytes"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%\",\"text\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_assets:EmbeddedFile%",
+				"mal_host_install_maligator_assets:EmbeddedFile"
+			],
+			"key": "text",
+			"kind": "data",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.text"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%\",\"json\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_assets:EmbeddedFile%",
+				"mal_host_install_maligator_assets:EmbeddedFile"
+			],
+			"key": "json",
+			"kind": "data",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.json"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%\",\"materialize\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_assets:EmbeddedFile%",
+				"mal_host_install_maligator_assets:EmbeddedFile"
+			],
+			"key": "materialize",
+			"kind": "data",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.materialize"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.bytes\",\"length\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.bytes",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.bytes"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.bytes\",\"name\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.bytes",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.bytes"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>\",\"length\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>\",\"name\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.json\",\"length\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.json",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.json"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.json\",\"name\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.json",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.json"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.materialize\",\"length\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.materialize",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.materialize"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.materialize\",\"name\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.materialize",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.materialize"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.size<get>\",\"length\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.size<get>",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.size<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.size<get>\",\"name\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.size<get>",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.size<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.text\",\"length\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.text",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.text"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.text\",\"name\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.text",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.text"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_http:assetProxy%\",\"length\"]",
+			"owner": "%mal_host_install_maligator_internal_http:assetProxy%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_http:assetProxy%",
+				"mal_host_install_maligator_internal_http:assetProxy"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_http:assetProxy%\",\"name\"]",
+			"owner": "%mal_host_install_maligator_internal_http:assetProxy%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_http:assetProxy%",
+				"mal_host_install_maligator_internal_http:assetProxy"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_http:assetResponse%\",\"length\"]",
+			"owner": "%mal_host_install_maligator_internal_http:assetResponse%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_http:assetResponse%",
+				"mal_host_install_maligator_internal_http:assetResponse"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_http:assetResponse%\",\"name\"]",
+			"owner": "%mal_host_install_maligator_internal_http:assetResponse%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_http:assetResponse%",
+				"mal_host_install_maligator_internal_http:assetResponse"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_http:listen%\",\"length\"]",
+			"owner": "%mal_host_install_maligator_internal_http:listen%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_http:listen%",
+				"mal_host_install_maligator_internal_http:listen"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_http:listen%\",\"name\"]",
+			"owner": "%mal_host_install_maligator_internal_http:listen%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_http:listen%",
+				"mal_host_install_maligator_internal_http:listen"
 			],
 			"key": "name",
 			"kind": "data",
@@ -120294,7 +121204,7 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"URL\"]",
+			"id": "[\"globalThis\",\"BroadcastChannel\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -120302,14 +121212,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "URL",
+			"key": "BroadcastChannel",
 			"kind": "data",
-			"operations": ["globalThis.URL"],
+			"operations": ["globalThis.BroadcastChannel"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"URLSearchParams\"]",
+			"id": "[\"globalThis\",\"MessageChannel\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -120317,14 +121227,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "URLSearchParams",
+			"key": "MessageChannel",
 			"kind": "data",
-			"operations": ["globalThis.URLSearchParams"],
+			"operations": ["globalThis.MessageChannel"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"Blob\"]",
+			"id": "[\"globalThis\",\"MessagePort\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -120332,14 +121242,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "Blob",
+			"key": "MessagePort",
 			"kind": "data",
-			"operations": ["globalThis.Blob"],
+			"operations": ["%mal_host_install_maligator_internal_workers:MessagePort%"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"File\"]",
+			"id": "[\"globalThis\",\"SubtleCrypto\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -120347,14 +121257,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "File",
+			"key": "SubtleCrypto",
 			"kind": "data",
-			"operations": ["globalThis.File"],
+			"operations": ["globalThis.Crypto"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"FormData\"]",
+			"id": "[\"globalThis\",\"Crypto\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -120362,14 +121272,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "FormData",
+			"key": "Crypto",
 			"kind": "data",
-			"operations": ["globalThis.FormData"],
+			"operations": ["globalThis.Crypto"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"Response\"]",
+			"id": "[\"globalThis\",\"CryptoKey\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -120377,14 +121287,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "Response",
+			"key": "CryptoKey",
 			"kind": "data",
-			"operations": ["globalThis.Response"],
+			"operations": ["globalThis.Crypto"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"Request\"]",
+			"id": "[\"globalThis\",\"crypto\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -120392,39 +121302,234 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "Request",
-			"kind": "data",
-			"operations": ["globalThis.Request"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis\",\"Headers\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "Headers",
-			"kind": "data",
-			"operations": ["globalThis.Headers"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis\",\"Mal\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "Mal",
+			"key": "crypto",
 			"kind": "data",
 			"operations": [],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"performance\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "performance",
+			"kind": "data",
+			"operations": [],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"Performance\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "Performance",
+			"kind": "data",
+			"operations": ["globalThis.Performance"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"PerformanceEntry\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "PerformanceEntry",
+			"kind": "data",
+			"operations": ["globalThis.Performance"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"PerformanceMark\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "PerformanceMark",
+			"kind": "data",
+			"operations": ["globalThis.Performance"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"PerformanceMeasure\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "PerformanceMeasure",
+			"kind": "data",
+			"operations": ["globalThis.Performance"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"PerformanceObserver\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "PerformanceObserver",
+			"kind": "data",
+			"operations": ["globalThis.PerformanceObserver"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"PerformanceObserverEntryList\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "PerformanceObserverEntryList",
+			"kind": "data",
+			"operations": ["globalThis.Performance"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"PerformanceResourceTiming\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "PerformanceResourceTiming",
+			"kind": "data",
+			"operations": ["globalThis.Performance"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"Buffer\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "Buffer",
+			"kind": "data",
+			"operations": ["globalThis.Buffer"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"process\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "process",
+			"kind": "data",
+			"operations": [],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"global\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "global",
+			"kind": "data",
+			"operations": [],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"MessageEvent\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "MessageEvent",
+			"kind": "data",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"CloseEvent\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "CloseEvent",
+			"kind": "data",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"ErrorEvent\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "ErrorEvent",
+			"kind": "data",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"WebSocket\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "WebSocket",
+			"kind": "data",
+			"operations": ["globalThis.WebSocket"],
 			"task": "C-01",
 			"decisions": []
 		},
@@ -120545,111 +121650,6 @@
 			"key": "TextDecoder",
 			"kind": "data",
 			"operations": ["globalThis.TextDecoder"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis\",\"navigator\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "navigator",
-			"kind": "data",
-			"operations": [],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis\",\"btoa\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "btoa",
-			"kind": "data",
-			"operations": ["globalThis.btoa"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis\",\"atob\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "atob",
-			"kind": "data",
-			"operations": ["globalThis.atob"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis\",\"queueMicrotask\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "queueMicrotask",
-			"kind": "data",
-			"operations": ["globalThis.queueMicrotask"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis\",\"structuredClone\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "structuredClone",
-			"kind": "data",
-			"operations": ["globalThis.structuredClone"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis\",\"performance\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "performance",
-			"kind": "data",
-			"operations": [],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis\",\"crypto\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "crypto",
-			"kind": "data",
-			"operations": [],
 			"task": "C-01",
 			"decisions": []
 		},
@@ -120909,7 +121909,7 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"BroadcastChannel\"]",
+			"id": "[\"globalThis\",\"URL\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -120917,14 +121917,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "BroadcastChannel",
+			"key": "URL",
 			"kind": "data",
-			"operations": ["globalThis.BroadcastChannel"],
+			"operations": ["globalThis.URL"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"MessageChannel\"]",
+			"id": "[\"globalThis\",\"URLSearchParams\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -120932,14 +121932,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "MessageChannel",
+			"key": "URLSearchParams",
 			"kind": "data",
-			"operations": ["globalThis.MessageChannel"],
+			"operations": ["globalThis.URLSearchParams"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"MessagePort\"]",
+			"id": "[\"globalThis\",\"Blob\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -120947,14 +121947,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "MessagePort",
+			"key": "Blob",
 			"kind": "data",
-			"operations": ["%mal_host_install_maligator_internal_workers:MessagePort%"],
+			"operations": ["globalThis.Blob"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"SubtleCrypto\"]",
+			"id": "[\"globalThis\",\"File\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -120962,14 +121962,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "SubtleCrypto",
+			"key": "File",
 			"kind": "data",
-			"operations": ["globalThis.Crypto"],
+			"operations": ["globalThis.File"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"Crypto\"]",
+			"id": "[\"globalThis\",\"FormData\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -120977,14 +121977,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "Crypto",
+			"key": "FormData",
 			"kind": "data",
-			"operations": ["globalThis.Crypto"],
+			"operations": ["globalThis.FormData"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"CryptoKey\"]",
+			"id": "[\"globalThis\",\"Response\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -120992,14 +121992,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "CryptoKey",
+			"key": "Response",
 			"kind": "data",
-			"operations": ["globalThis.Crypto"],
+			"operations": ["globalThis.Response"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"Performance\"]",
+			"id": "[\"globalThis\",\"Request\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -121007,14 +122007,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "Performance",
+			"key": "Request",
 			"kind": "data",
-			"operations": ["globalThis.Performance"],
+			"operations": ["globalThis.Request"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"PerformanceEntry\"]",
+			"id": "[\"globalThis\",\"Headers\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -121022,14 +122022,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "PerformanceEntry",
+			"key": "Headers",
 			"kind": "data",
-			"operations": ["globalThis.Performance"],
+			"operations": ["globalThis.Headers"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"PerformanceMark\"]",
+			"id": "[\"globalThis\",\"fetch\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -121037,14 +122037,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "PerformanceMark",
+			"key": "fetch",
 			"kind": "data",
-			"operations": ["globalThis.Performance"],
+			"operations": ["globalThis.fetch"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"PerformanceMeasure\"]",
+			"id": "[\"globalThis\",\"navigator\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -121052,89 +122052,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "PerformanceMeasure",
-			"kind": "data",
-			"operations": ["globalThis.Performance"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis\",\"PerformanceObserver\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "PerformanceObserver",
-			"kind": "data",
-			"operations": ["globalThis.PerformanceObserver"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis\",\"PerformanceObserverEntryList\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "PerformanceObserverEntryList",
-			"kind": "data",
-			"operations": ["globalThis.Performance"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis\",\"PerformanceResourceTiming\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "PerformanceResourceTiming",
-			"kind": "data",
-			"operations": ["globalThis.Performance"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis\",\"Buffer\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "Buffer",
-			"kind": "data",
-			"operations": ["globalThis.Buffer"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis\",\"process\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "process",
+			"key": "navigator",
 			"kind": "data",
 			"operations": [],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"global\"]",
+			"id": "[\"globalThis\",\"btoa\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -121142,14 +122067,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "global",
+			"key": "btoa",
 			"kind": "data",
-			"operations": [],
+			"operations": ["globalThis.btoa"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"MessageEvent\"]",
+			"id": "[\"globalThis\",\"atob\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -121157,14 +122082,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "MessageEvent",
+			"key": "atob",
 			"kind": "data",
-			"operations": ["globalThis.CloseEvent"],
+			"operations": ["globalThis.atob"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"CloseEvent\"]",
+			"id": "[\"globalThis\",\"queueMicrotask\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -121172,14 +122097,14 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "CloseEvent",
+			"key": "queueMicrotask",
 			"kind": "data",
-			"operations": ["globalThis.CloseEvent"],
+			"operations": ["globalThis.queueMicrotask"],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis\",\"ErrorEvent\"]",
+			"id": "[\"globalThis\",\"structuredClone\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
 				"MAL_INTRINSIC_GLOBAL_THIS",
@@ -121187,24 +122112,9 @@
 				"globalThis.global",
 				"globalThis.globalThis"
 			],
-			"key": "ErrorEvent",
+			"key": "structuredClone",
 			"kind": "data",
-			"operations": ["globalThis.CloseEvent"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis\",\"WebSocket\"]",
-			"owner": "globalThis",
-			"ownerPaths": [
-				"MAL_INTRINSIC_GLOBAL_THIS",
-				"globalThis",
-				"globalThis.global",
-				"globalThis.globalThis"
-			],
-			"key": "WebSocket",
-			"kind": "data",
-			"operations": ["globalThis.WebSocket"],
+			"operations": ["globalThis.structuredClone"],
 			"task": "C-01",
 			"decisions": []
 		},
@@ -121317,6 +122227,7 @@
 			"id": "[\"globalThis.AbortController\",\"length\"]",
 			"owner": "globalThis.AbortController",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.AbortController",
 				"MAL_INTRINSIC_ABORT_CONTROLLER_CONSTRUCTOR",
 				"globalThis.AbortController",
 				"globalThis.AbortController.prototype.constructor"
@@ -121331,6 +122242,7 @@
 			"id": "[\"globalThis.AbortController\",\"name\"]",
 			"owner": "globalThis.AbortController",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.AbortController",
 				"MAL_INTRINSIC_ABORT_CONTROLLER_CONSTRUCTOR",
 				"globalThis.AbortController",
 				"globalThis.AbortController.prototype.constructor"
@@ -121345,6 +122257,7 @@
 			"id": "[\"globalThis.AbortController\",\"prototype\"]",
 			"owner": "globalThis.AbortController",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.AbortController",
 				"MAL_INTRINSIC_ABORT_CONTROLLER_CONSTRUCTOR",
 				"globalThis.AbortController",
 				"globalThis.AbortController.prototype.constructor"
@@ -121405,6 +122318,7 @@
 			"id": "[\"globalThis.AbortSignal\",\"length\"]",
 			"owner": "globalThis.AbortSignal",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.AbortSignal",
 				"MAL_INTRINSIC_ABORT_SIGNAL_CONSTRUCTOR",
 				"globalThis.AbortSignal",
 				"globalThis.AbortSignal.prototype.constructor"
@@ -121419,6 +122333,7 @@
 			"id": "[\"globalThis.AbortSignal\",\"name\"]",
 			"owner": "globalThis.AbortSignal",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.AbortSignal",
 				"MAL_INTRINSIC_ABORT_SIGNAL_CONSTRUCTOR",
 				"globalThis.AbortSignal",
 				"globalThis.AbortSignal.prototype.constructor"
@@ -121433,6 +122348,7 @@
 			"id": "[\"globalThis.AbortSignal\",\"prototype\"]",
 			"owner": "globalThis.AbortSignal",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.AbortSignal",
 				"MAL_INTRINSIC_ABORT_SIGNAL_CONSTRUCTOR",
 				"globalThis.AbortSignal",
 				"globalThis.AbortSignal.prototype.constructor"
@@ -121447,6 +122363,7 @@
 			"id": "[\"globalThis.AbortSignal\",\"abort\"]",
 			"owner": "globalThis.AbortSignal",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.AbortSignal",
 				"MAL_INTRINSIC_ABORT_SIGNAL_CONSTRUCTOR",
 				"globalThis.AbortSignal",
 				"globalThis.AbortSignal.prototype.constructor"
@@ -121461,6 +122378,7 @@
 			"id": "[\"globalThis.AbortSignal\",\"timeout\"]",
 			"owner": "globalThis.AbortSignal",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.AbortSignal",
 				"MAL_INTRINSIC_ABORT_SIGNAL_CONSTRUCTOR",
 				"globalThis.AbortSignal",
 				"globalThis.AbortSignal.prototype.constructor"
@@ -121475,6 +122393,7 @@
 			"id": "[\"globalThis.AbortSignal\",\"any\"]",
 			"owner": "globalThis.AbortSignal",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.AbortSignal",
 				"MAL_INTRINSIC_ABORT_SIGNAL_CONSTRUCTOR",
 				"globalThis.AbortSignal",
 				"globalThis.AbortSignal.prototype.constructor"
@@ -121662,6 +122581,7 @@
 			"owner": "globalThis.Blob",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.Blob",
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Blob",
 				"MAL_INTRINSIC_BLOB_CONSTRUCTOR",
 				"globalThis.Blob",
 				"globalThis.Blob.prototype.constructor",
@@ -121678,6 +122598,7 @@
 			"owner": "globalThis.Blob",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.Blob",
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Blob",
 				"MAL_INTRINSIC_BLOB_CONSTRUCTOR",
 				"globalThis.Blob",
 				"globalThis.Blob.prototype.constructor",
@@ -121694,6 +122615,7 @@
 			"owner": "globalThis.Blob",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.Blob",
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Blob",
 				"MAL_INTRINSIC_BLOB_CONSTRUCTOR",
 				"globalThis.Blob",
 				"globalThis.Blob.prototype.constructor",
@@ -125640,6 +126562,7 @@
 			"owner": "globalThis.ByteLengthQueuingStrategy",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ByteLengthQueuingStrategy",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ByteLengthQueuingStrategy",
 				"MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_CONSTRUCTOR",
 				"globalThis.ByteLengthQueuingStrategy",
 				"globalThis.ByteLengthQueuingStrategy.prototype.constructor",
@@ -125656,6 +126579,7 @@
 			"owner": "globalThis.ByteLengthQueuingStrategy",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ByteLengthQueuingStrategy",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ByteLengthQueuingStrategy",
 				"MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_CONSTRUCTOR",
 				"globalThis.ByteLengthQueuingStrategy",
 				"globalThis.ByteLengthQueuingStrategy.prototype.constructor",
@@ -125672,6 +126596,7 @@
 			"owner": "globalThis.ByteLengthQueuingStrategy",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ByteLengthQueuingStrategy",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ByteLengthQueuingStrategy",
 				"MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_CONSTRUCTOR",
 				"globalThis.ByteLengthQueuingStrategy",
 				"globalThis.ByteLengthQueuingStrategy.prototype.constructor",
@@ -125925,6 +126850,7 @@
 			"owner": "globalThis.CompressionStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].CompressionStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.CompressionStream",
 				"globalThis.CompressionStream",
 				"globalThis.CompressionStream.prototype.constructor",
 				"mal_host_install_node_stream_web:CompressionStream"
@@ -125940,6 +126866,7 @@
 			"owner": "globalThis.CompressionStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].CompressionStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.CompressionStream",
 				"globalThis.CompressionStream",
 				"globalThis.CompressionStream.prototype.constructor",
 				"mal_host_install_node_stream_web:CompressionStream"
@@ -125955,6 +126882,7 @@
 			"owner": "globalThis.CompressionStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].CompressionStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.CompressionStream",
 				"globalThis.CompressionStream",
 				"globalThis.CompressionStream.prototype.constructor",
 				"mal_host_install_node_stream_web:CompressionStream"
@@ -126050,6 +126978,7 @@
 			"owner": "globalThis.CountQueuingStrategy",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].CountQueuingStrategy",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.CountQueuingStrategy",
 				"MAL_INTRINSIC_COUNT_QUEUING_STRATEGY_CONSTRUCTOR",
 				"globalThis.CountQueuingStrategy",
 				"globalThis.CountQueuingStrategy.prototype.constructor",
@@ -126066,6 +126995,7 @@
 			"owner": "globalThis.CountQueuingStrategy",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].CountQueuingStrategy",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.CountQueuingStrategy",
 				"MAL_INTRINSIC_COUNT_QUEUING_STRATEGY_CONSTRUCTOR",
 				"globalThis.CountQueuingStrategy",
 				"globalThis.CountQueuingStrategy.prototype.constructor",
@@ -126082,6 +127012,7 @@
 			"owner": "globalThis.CountQueuingStrategy",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].CountQueuingStrategy",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.CountQueuingStrategy",
 				"MAL_INTRINSIC_COUNT_QUEUING_STRATEGY_CONSTRUCTOR",
 				"globalThis.CountQueuingStrategy",
 				"globalThis.CountQueuingStrategy.prototype.constructor",
@@ -126288,6 +127219,7 @@
 			"id": "[\"globalThis.CustomEvent\",\"length\"]",
 			"owner": "globalThis.CustomEvent",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.CustomEvent",
 				"MAL_INTRINSIC_CUSTOM_EVENT_CONSTRUCTOR",
 				"globalThis.CustomEvent",
 				"globalThis.CustomEvent.prototype.constructor"
@@ -126302,6 +127234,7 @@
 			"id": "[\"globalThis.CustomEvent\",\"name\"]",
 			"owner": "globalThis.CustomEvent",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.CustomEvent",
 				"MAL_INTRINSIC_CUSTOM_EVENT_CONSTRUCTOR",
 				"globalThis.CustomEvent",
 				"globalThis.CustomEvent.prototype.constructor"
@@ -126316,6 +127249,7 @@
 			"id": "[\"globalThis.CustomEvent\",\"prototype\"]",
 			"owner": "globalThis.CustomEvent",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.CustomEvent",
 				"MAL_INTRINSIC_CUSTOM_EVENT_CONSTRUCTOR",
 				"globalThis.CustomEvent",
 				"globalThis.CustomEvent.prototype.constructor"
@@ -126343,6 +127277,7 @@
 			"id": "[\"globalThis.DOMException\",\"length\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126357,6 +127292,7 @@
 			"id": "[\"globalThis.DOMException\",\"name\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126371,6 +127307,7 @@
 			"id": "[\"globalThis.DOMException\",\"prototype\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126385,6 +127322,7 @@
 			"id": "[\"globalThis.DOMException\",\"INDEX_SIZE_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126399,6 +127337,7 @@
 			"id": "[\"globalThis.DOMException\",\"DOMSTRING_SIZE_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126413,6 +127352,7 @@
 			"id": "[\"globalThis.DOMException\",\"HIERARCHY_REQUEST_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126427,6 +127367,7 @@
 			"id": "[\"globalThis.DOMException\",\"WRONG_DOCUMENT_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126441,6 +127382,7 @@
 			"id": "[\"globalThis.DOMException\",\"INVALID_CHARACTER_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126455,6 +127397,7 @@
 			"id": "[\"globalThis.DOMException\",\"NO_DATA_ALLOWED_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126469,6 +127412,7 @@
 			"id": "[\"globalThis.DOMException\",\"NO_MODIFICATION_ALLOWED_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126483,6 +127427,7 @@
 			"id": "[\"globalThis.DOMException\",\"NOT_FOUND_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126497,6 +127442,7 @@
 			"id": "[\"globalThis.DOMException\",\"NOT_SUPPORTED_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126511,6 +127457,7 @@
 			"id": "[\"globalThis.DOMException\",\"INUSE_ATTRIBUTE_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126525,6 +127472,7 @@
 			"id": "[\"globalThis.DOMException\",\"INVALID_STATE_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126539,6 +127487,7 @@
 			"id": "[\"globalThis.DOMException\",\"SYNTAX_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126553,6 +127502,7 @@
 			"id": "[\"globalThis.DOMException\",\"INVALID_MODIFICATION_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126567,6 +127517,7 @@
 			"id": "[\"globalThis.DOMException\",\"NAMESPACE_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126581,6 +127532,7 @@
 			"id": "[\"globalThis.DOMException\",\"INVALID_ACCESS_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126595,6 +127547,7 @@
 			"id": "[\"globalThis.DOMException\",\"VALIDATION_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126609,6 +127562,7 @@
 			"id": "[\"globalThis.DOMException\",\"TYPE_MISMATCH_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126623,6 +127577,7 @@
 			"id": "[\"globalThis.DOMException\",\"SECURITY_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126637,6 +127592,7 @@
 			"id": "[\"globalThis.DOMException\",\"NETWORK_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126651,6 +127607,7 @@
 			"id": "[\"globalThis.DOMException\",\"ABORT_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126665,6 +127622,7 @@
 			"id": "[\"globalThis.DOMException\",\"URL_MISMATCH_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126679,6 +127637,7 @@
 			"id": "[\"globalThis.DOMException\",\"QUOTA_EXCEEDED_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126693,6 +127652,7 @@
 			"id": "[\"globalThis.DOMException\",\"TIMEOUT_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126707,6 +127667,7 @@
 			"id": "[\"globalThis.DOMException\",\"INVALID_NODE_TYPE_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -126721,6 +127682,7 @@
 			"id": "[\"globalThis.DOMException\",\"DATA_CLONE_ERR\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -127186,6 +128148,7 @@
 			"owner": "globalThis.DecompressionStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].DecompressionStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.DecompressionStream",
 				"globalThis.DecompressionStream",
 				"globalThis.DecompressionStream.prototype.constructor",
 				"mal_host_install_node_stream_web:DecompressionStream"
@@ -127201,6 +128164,7 @@
 			"owner": "globalThis.DecompressionStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].DecompressionStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.DecompressionStream",
 				"globalThis.DecompressionStream",
 				"globalThis.DecompressionStream.prototype.constructor",
 				"mal_host_install_node_stream_web:DecompressionStream"
@@ -127216,6 +128180,7 @@
 			"owner": "globalThis.DecompressionStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].DecompressionStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.DecompressionStream",
 				"globalThis.DecompressionStream",
 				"globalThis.DecompressionStream.prototype.constructor",
 				"mal_host_install_node_stream_web:DecompressionStream"
@@ -127509,6 +128474,7 @@
 			"id": "[\"globalThis.Event\",\"length\"]",
 			"owner": "globalThis.Event",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.Event",
 				"MAL_INTRINSIC_EVENT_CONSTRUCTOR",
 				"globalThis.Event",
 				"globalThis.Event.prototype.constructor"
@@ -127523,6 +128489,7 @@
 			"id": "[\"globalThis.Event\",\"name\"]",
 			"owner": "globalThis.Event",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.Event",
 				"MAL_INTRINSIC_EVENT_CONSTRUCTOR",
 				"globalThis.Event",
 				"globalThis.Event.prototype.constructor"
@@ -127537,6 +128504,7 @@
 			"id": "[\"globalThis.Event\",\"prototype\"]",
 			"owner": "globalThis.Event",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.Event",
 				"MAL_INTRINSIC_EVENT_CONSTRUCTOR",
 				"globalThis.Event",
 				"globalThis.Event.prototype.constructor"
@@ -127551,6 +128519,7 @@
 			"id": "[\"globalThis.Event\",\"NONE\"]",
 			"owner": "globalThis.Event",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.Event",
 				"MAL_INTRINSIC_EVENT_CONSTRUCTOR",
 				"globalThis.Event",
 				"globalThis.Event.prototype.constructor"
@@ -127565,6 +128534,7 @@
 			"id": "[\"globalThis.Event\",\"CAPTURING_PHASE\"]",
 			"owner": "globalThis.Event",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.Event",
 				"MAL_INTRINSIC_EVENT_CONSTRUCTOR",
 				"globalThis.Event",
 				"globalThis.Event.prototype.constructor"
@@ -127579,6 +128549,7 @@
 			"id": "[\"globalThis.Event\",\"AT_TARGET\"]",
 			"owner": "globalThis.Event",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.Event",
 				"MAL_INTRINSIC_EVENT_CONSTRUCTOR",
 				"globalThis.Event",
 				"globalThis.Event.prototype.constructor"
@@ -127593,6 +128564,7 @@
 			"id": "[\"globalThis.Event\",\"BUBBLING_PHASE\"]",
 			"owner": "globalThis.Event",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.Event",
 				"MAL_INTRINSIC_EVENT_CONSTRUCTOR",
 				"globalThis.Event",
 				"globalThis.Event.prototype.constructor"
@@ -127777,6 +128749,7 @@
 			"id": "[\"globalThis.EventTarget\",\"length\"]",
 			"owner": "globalThis.EventTarget",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.EventTarget",
 				"MAL_INTRINSIC_EVENT_TARGET_CONSTRUCTOR",
 				"globalThis.EventTarget",
 				"globalThis.EventTarget.prototype.constructor"
@@ -127791,6 +128764,7 @@
 			"id": "[\"globalThis.EventTarget\",\"name\"]",
 			"owner": "globalThis.EventTarget",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.EventTarget",
 				"MAL_INTRINSIC_EVENT_TARGET_CONSTRUCTOR",
 				"globalThis.EventTarget",
 				"globalThis.EventTarget.prototype.constructor"
@@ -127805,6 +128779,7 @@
 			"id": "[\"globalThis.EventTarget\",\"prototype\"]",
 			"owner": "globalThis.EventTarget",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.EventTarget",
 				"MAL_INTRINSIC_EVENT_TARGET_CONSTRUCTOR",
 				"globalThis.EventTarget",
 				"globalThis.EventTarget.prototype.constructor"
@@ -127932,6 +128907,7 @@
 			"owner": "globalThis.File",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.File",
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.File",
 				"MAL_INTRINSIC_FILE_CONSTRUCTOR",
 				"globalThis.File",
 				"globalThis.File.prototype.constructor",
@@ -127948,6 +128924,7 @@
 			"owner": "globalThis.File",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.File",
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.File",
 				"MAL_INTRINSIC_FILE_CONSTRUCTOR",
 				"globalThis.File",
 				"globalThis.File.prototype.constructor",
@@ -127964,6 +128941,7 @@
 			"owner": "globalThis.File",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.File",
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.File",
 				"MAL_INTRINSIC_FILE_CONSTRUCTOR",
 				"globalThis.File",
 				"globalThis.File.prototype.constructor",
@@ -128059,6 +129037,7 @@
 			"id": "[\"globalThis.FormData\",\"length\"]",
 			"owner": "globalThis.FormData",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.FormData",
 				"MAL_INTRINSIC_FORM_DATA_CONSTRUCTOR",
 				"globalThis.FormData",
 				"globalThis.FormData.prototype.constructor"
@@ -128073,6 +129052,7 @@
 			"id": "[\"globalThis.FormData\",\"name\"]",
 			"owner": "globalThis.FormData",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.FormData",
 				"MAL_INTRINSIC_FORM_DATA_CONSTRUCTOR",
 				"globalThis.FormData",
 				"globalThis.FormData.prototype.constructor"
@@ -128087,6 +129067,7 @@
 			"id": "[\"globalThis.FormData\",\"prototype\"]",
 			"owner": "globalThis.FormData",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.FormData",
 				"MAL_INTRINSIC_FORM_DATA_CONSTRUCTOR",
 				"globalThis.FormData",
 				"globalThis.FormData.prototype.constructor"
@@ -128476,6 +129457,7 @@
 			"id": "[\"globalThis.Headers\",\"length\"]",
 			"owner": "globalThis.Headers",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Headers",
 				"MAL_INTRINSIC_HEADERS_CONSTRUCTOR",
 				"globalThis.Headers",
 				"globalThis.Headers.prototype.constructor"
@@ -128490,6 +129472,7 @@
 			"id": "[\"globalThis.Headers\",\"name\"]",
 			"owner": "globalThis.Headers",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Headers",
 				"MAL_INTRINSIC_HEADERS_CONSTRUCTOR",
 				"globalThis.Headers",
 				"globalThis.Headers.prototype.constructor"
@@ -128504,6 +129487,7 @@
 			"id": "[\"globalThis.Headers\",\"prototype\"]",
 			"owner": "globalThis.Headers",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Headers",
 				"MAL_INTRINSIC_HEADERS_CONSTRUCTOR",
 				"globalThis.Headers",
 				"globalThis.Headers.prototype.constructor"
@@ -128834,36 +129818,6 @@
 			"id": "[\"globalThis.Headers.prototype.values\",\"name\"]",
 			"owner": "globalThis.Headers.prototype.values",
 			"ownerPaths": ["globalThis.Headers.prototype.values"],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis.Mal\",\"serve\"]",
-			"owner": "globalThis.Mal",
-			"ownerPaths": ["globalThis.Mal"],
-			"key": "serve",
-			"kind": "data",
-			"operations": ["globalThis.Mal.serve"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis.Mal.serve\",\"length\"]",
-			"owner": "globalThis.Mal.serve",
-			"ownerPaths": ["globalThis.Mal.serve"],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis.Mal.serve\",\"name\"]",
-			"owner": "globalThis.Mal.serve",
-			"ownerPaths": ["globalThis.Mal.serve"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -131188,6 +132142,7 @@
 			"owner": "globalThis.ReadableByteStreamController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableByteStreamController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableByteStreamController",
 				"MAL_INTRINSIC_READABLE_BYTE_STREAM_CONTROLLER_CONSTRUCTOR",
 				"globalThis.ReadableByteStreamController",
 				"globalThis.ReadableByteStreamController.prototype.constructor",
@@ -131204,6 +132159,7 @@
 			"owner": "globalThis.ReadableByteStreamController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableByteStreamController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableByteStreamController",
 				"MAL_INTRINSIC_READABLE_BYTE_STREAM_CONTROLLER_CONSTRUCTOR",
 				"globalThis.ReadableByteStreamController",
 				"globalThis.ReadableByteStreamController.prototype.constructor",
@@ -131220,6 +132176,7 @@
 			"owner": "globalThis.ReadableByteStreamController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableByteStreamController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableByteStreamController",
 				"MAL_INTRINSIC_READABLE_BYTE_STREAM_CONTROLLER_CONSTRUCTOR",
 				"globalThis.ReadableByteStreamController",
 				"globalThis.ReadableByteStreamController.prototype.constructor",
@@ -131439,6 +132396,7 @@
 			"owner": "globalThis.ReadableStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStream",
 				"MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR",
 				"globalThis.ReadableStream",
 				"globalThis.ReadableStream.prototype.constructor",
@@ -131455,6 +132413,7 @@
 			"owner": "globalThis.ReadableStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStream",
 				"MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR",
 				"globalThis.ReadableStream",
 				"globalThis.ReadableStream.prototype.constructor",
@@ -131471,6 +132430,7 @@
 			"owner": "globalThis.ReadableStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStream",
 				"MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR",
 				"globalThis.ReadableStream",
 				"globalThis.ReadableStream.prototype.constructor",
@@ -131487,6 +132447,7 @@
 			"owner": "globalThis.ReadableStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStream",
 				"MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR",
 				"globalThis.ReadableStream",
 				"globalThis.ReadableStream.prototype.constructor",
@@ -131799,6 +132760,7 @@
 			"owner": "globalThis.ReadableStreamBYOBReader",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamBYOBReader",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamBYOBReader",
 				"MAL_INTRINSIC_READABLE_STREAM_BYOB_READER_CONSTRUCTOR",
 				"globalThis.ReadableStreamBYOBReader",
 				"globalThis.ReadableStreamBYOBReader.prototype.constructor",
@@ -131815,6 +132777,7 @@
 			"owner": "globalThis.ReadableStreamBYOBReader",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamBYOBReader",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamBYOBReader",
 				"MAL_INTRINSIC_READABLE_STREAM_BYOB_READER_CONSTRUCTOR",
 				"globalThis.ReadableStreamBYOBReader",
 				"globalThis.ReadableStreamBYOBReader.prototype.constructor",
@@ -131831,6 +132794,7 @@
 			"owner": "globalThis.ReadableStreamBYOBReader",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamBYOBReader",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamBYOBReader",
 				"MAL_INTRINSIC_READABLE_STREAM_BYOB_READER_CONSTRUCTOR",
 				"globalThis.ReadableStreamBYOBReader",
 				"globalThis.ReadableStreamBYOBReader.prototype.constructor",
@@ -132005,6 +132969,7 @@
 			"owner": "globalThis.ReadableStreamBYOBRequest",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamBYOBRequest",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamBYOBRequest",
 				"MAL_INTRINSIC_READABLE_STREAM_BYOB_REQUEST_CONSTRUCTOR",
 				"globalThis.ReadableStreamBYOBRequest",
 				"globalThis.ReadableStreamBYOBRequest.prototype.constructor",
@@ -132021,6 +132986,7 @@
 			"owner": "globalThis.ReadableStreamBYOBRequest",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamBYOBRequest",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamBYOBRequest",
 				"MAL_INTRINSIC_READABLE_STREAM_BYOB_REQUEST_CONSTRUCTOR",
 				"globalThis.ReadableStreamBYOBRequest",
 				"globalThis.ReadableStreamBYOBRequest.prototype.constructor",
@@ -132037,6 +133003,7 @@
 			"owner": "globalThis.ReadableStreamBYOBRequest",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamBYOBRequest",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamBYOBRequest",
 				"MAL_INTRINSIC_READABLE_STREAM_BYOB_REQUEST_CONSTRUCTOR",
 				"globalThis.ReadableStreamBYOBRequest",
 				"globalThis.ReadableStreamBYOBRequest.prototype.constructor",
@@ -132178,6 +133145,7 @@
 			"owner": "globalThis.ReadableStreamDefaultController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamDefaultController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamDefaultController",
 				"MAL_INTRINSIC_READABLE_STREAM_DEFAULT_CONTROLLER_CONSTRUCTOR",
 				"globalThis.ReadableStreamDefaultController",
 				"globalThis.ReadableStreamDefaultController.prototype.constructor",
@@ -132194,6 +133162,7 @@
 			"owner": "globalThis.ReadableStreamDefaultController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamDefaultController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamDefaultController",
 				"MAL_INTRINSIC_READABLE_STREAM_DEFAULT_CONTROLLER_CONSTRUCTOR",
 				"globalThis.ReadableStreamDefaultController",
 				"globalThis.ReadableStreamDefaultController.prototype.constructor",
@@ -132210,6 +133179,7 @@
 			"owner": "globalThis.ReadableStreamDefaultController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamDefaultController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamDefaultController",
 				"MAL_INTRINSIC_READABLE_STREAM_DEFAULT_CONTROLLER_CONSTRUCTOR",
 				"globalThis.ReadableStreamDefaultController",
 				"globalThis.ReadableStreamDefaultController.prototype.constructor",
@@ -132390,6 +133360,7 @@
 			"owner": "globalThis.ReadableStreamDefaultReader",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamDefaultReader",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamDefaultReader",
 				"MAL_INTRINSIC_READABLE_STREAM_DEFAULT_READER_CONSTRUCTOR",
 				"globalThis.ReadableStreamDefaultReader",
 				"globalThis.ReadableStreamDefaultReader.prototype.constructor",
@@ -132406,6 +133377,7 @@
 			"owner": "globalThis.ReadableStreamDefaultReader",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamDefaultReader",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamDefaultReader",
 				"MAL_INTRINSIC_READABLE_STREAM_DEFAULT_READER_CONSTRUCTOR",
 				"globalThis.ReadableStreamDefaultReader",
 				"globalThis.ReadableStreamDefaultReader.prototype.constructor",
@@ -132422,6 +133394,7 @@
 			"owner": "globalThis.ReadableStreamDefaultReader",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamDefaultReader",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamDefaultReader",
 				"MAL_INTRINSIC_READABLE_STREAM_DEFAULT_READER_CONSTRUCTOR",
 				"globalThis.ReadableStreamDefaultReader",
 				"globalThis.ReadableStreamDefaultReader.prototype.constructor",
@@ -132594,7 +133567,11 @@
 		{
 			"id": "[\"globalThis.Request\",\"length\"]",
 			"owner": "globalThis.Request",
-			"ownerPaths": ["globalThis.Request", "globalThis.Request.prototype.constructor"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Request",
+				"globalThis.Request",
+				"globalThis.Request.prototype.constructor"
+			],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -132604,7 +133581,11 @@
 		{
 			"id": "[\"globalThis.Request\",\"name\"]",
 			"owner": "globalThis.Request",
-			"ownerPaths": ["globalThis.Request", "globalThis.Request.prototype.constructor"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Request",
+				"globalThis.Request",
+				"globalThis.Request.prototype.constructor"
+			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -132614,7 +133595,11 @@
 		{
 			"id": "[\"globalThis.Request\",\"prototype\"]",
 			"owner": "globalThis.Request",
-			"ownerPaths": ["globalThis.Request", "globalThis.Request.prototype.constructor"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Request",
+				"globalThis.Request",
+				"globalThis.Request.prototype.constructor"
+			],
 			"key": "prototype",
 			"kind": "data",
 			"operations": [],
@@ -133746,6 +134731,7 @@
 			"id": "[\"globalThis.Response\",\"length\"]",
 			"owner": "globalThis.Response",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Response",
 				"MAL_INTRINSIC_RESPONSE_CONSTRUCTOR",
 				"globalThis.Response",
 				"globalThis.Response.prototype.constructor"
@@ -133760,6 +134746,7 @@
 			"id": "[\"globalThis.Response\",\"name\"]",
 			"owner": "globalThis.Response",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Response",
 				"MAL_INTRINSIC_RESPONSE_CONSTRUCTOR",
 				"globalThis.Response",
 				"globalThis.Response.prototype.constructor"
@@ -133774,6 +134761,7 @@
 			"id": "[\"globalThis.Response\",\"prototype\"]",
 			"owner": "globalThis.Response",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Response",
 				"MAL_INTRINSIC_RESPONSE_CONSTRUCTOR",
 				"globalThis.Response",
 				"globalThis.Response.prototype.constructor"
@@ -133788,6 +134776,7 @@
 			"id": "[\"globalThis.Response\",\"json\"]",
 			"owner": "globalThis.Response",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Response",
 				"MAL_INTRINSIC_RESPONSE_CONSTRUCTOR",
 				"globalThis.Response",
 				"globalThis.Response.prototype.constructor"
@@ -133802,6 +134791,7 @@
 			"id": "[\"globalThis.Response\",\"redirect\"]",
 			"owner": "globalThis.Response",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Response",
 				"MAL_INTRINSIC_RESPONSE_CONSTRUCTOR",
 				"globalThis.Response",
 				"globalThis.Response.prototype.constructor"
@@ -133816,6 +134806,7 @@
 			"id": "[\"globalThis.Response\",\"error\"]",
 			"owner": "globalThis.Response",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Response",
 				"MAL_INTRINSIC_RESPONSE_CONSTRUCTOR",
 				"globalThis.Response",
 				"globalThis.Response.prototype.constructor"
@@ -134400,6 +135391,7 @@
 			"owner": "globalThis.TextDecoder",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:sys\"].TextDecoder",
+				"%MAL_INTRINSIC_WEB_GROUP_ENCODING%.TextDecoder",
 				"globalThis.TextDecoder",
 				"globalThis.TextDecoder.prototype.constructor",
 				"mal_host_install_node_sys:TextDecoder",
@@ -134416,6 +135408,7 @@
 			"owner": "globalThis.TextDecoder",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:sys\"].TextDecoder",
+				"%MAL_INTRINSIC_WEB_GROUP_ENCODING%.TextDecoder",
 				"globalThis.TextDecoder",
 				"globalThis.TextDecoder.prototype.constructor",
 				"mal_host_install_node_sys:TextDecoder",
@@ -134432,6 +135425,7 @@
 			"owner": "globalThis.TextDecoder",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:sys\"].TextDecoder",
+				"%MAL_INTRINSIC_WEB_GROUP_ENCODING%.TextDecoder",
 				"globalThis.TextDecoder",
 				"globalThis.TextDecoder.prototype.constructor",
 				"mal_host_install_node_sys:TextDecoder",
@@ -134578,6 +135572,7 @@
 			"owner": "globalThis.TextDecoderStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TextDecoderStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TextDecoderStream",
 				"globalThis.TextDecoderStream",
 				"globalThis.TextDecoderStream.prototype.constructor",
 				"mal_host_install_node_stream_web:TextDecoderStream"
@@ -134593,6 +135588,7 @@
 			"owner": "globalThis.TextDecoderStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TextDecoderStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TextDecoderStream",
 				"globalThis.TextDecoderStream",
 				"globalThis.TextDecoderStream.prototype.constructor",
 				"mal_host_install_node_stream_web:TextDecoderStream"
@@ -134608,6 +135604,7 @@
 			"owner": "globalThis.TextDecoderStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TextDecoderStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TextDecoderStream",
 				"globalThis.TextDecoderStream",
 				"globalThis.TextDecoderStream.prototype.constructor",
 				"mal_host_install_node_stream_web:TextDecoderStream"
@@ -134793,6 +135790,7 @@
 			"owner": "globalThis.TextEncoder",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:sys\"].TextEncoder",
+				"%MAL_INTRINSIC_WEB_GROUP_ENCODING%.TextEncoder",
 				"globalThis.TextEncoder",
 				"globalThis.TextEncoder.prototype.constructor",
 				"mal_host_install_node_sys:TextEncoder",
@@ -134809,6 +135807,7 @@
 			"owner": "globalThis.TextEncoder",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:sys\"].TextEncoder",
+				"%MAL_INTRINSIC_WEB_GROUP_ENCODING%.TextEncoder",
 				"globalThis.TextEncoder",
 				"globalThis.TextEncoder.prototype.constructor",
 				"mal_host_install_node_sys:TextEncoder",
@@ -134825,6 +135824,7 @@
 			"owner": "globalThis.TextEncoder",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:sys\"].TextEncoder",
+				"%MAL_INTRINSIC_WEB_GROUP_ENCODING%.TextEncoder",
 				"globalThis.TextEncoder",
 				"globalThis.TextEncoder.prototype.constructor",
 				"mal_host_install_node_sys:TextEncoder",
@@ -134921,6 +135921,7 @@
 			"owner": "globalThis.TextEncoderStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TextEncoderStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TextEncoderStream",
 				"globalThis.TextEncoderStream",
 				"globalThis.TextEncoderStream.prototype.constructor",
 				"mal_host_install_node_stream_web:TextEncoderStream"
@@ -134936,6 +135937,7 @@
 			"owner": "globalThis.TextEncoderStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TextEncoderStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TextEncoderStream",
 				"globalThis.TextEncoderStream",
 				"globalThis.TextEncoderStream.prototype.constructor",
 				"mal_host_install_node_stream_web:TextEncoderStream"
@@ -134951,6 +135953,7 @@
 			"owner": "globalThis.TextEncoderStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TextEncoderStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TextEncoderStream",
 				"globalThis.TextEncoderStream",
 				"globalThis.TextEncoderStream.prototype.constructor",
 				"mal_host_install_node_stream_web:TextEncoderStream"
@@ -135076,6 +136079,7 @@
 			"owner": "globalThis.TransformStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TransformStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TransformStream",
 				"globalThis.TransformStream",
 				"globalThis.TransformStream.prototype.constructor",
 				"mal_host_install_node_stream_web:TransformStream"
@@ -135091,6 +136095,7 @@
 			"owner": "globalThis.TransformStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TransformStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TransformStream",
 				"globalThis.TransformStream",
 				"globalThis.TransformStream.prototype.constructor",
 				"mal_host_install_node_stream_web:TransformStream"
@@ -135106,6 +136111,7 @@
 			"owner": "globalThis.TransformStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TransformStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TransformStream",
 				"globalThis.TransformStream",
 				"globalThis.TransformStream.prototype.constructor",
 				"mal_host_install_node_stream_web:TransformStream"
@@ -135201,6 +136207,7 @@
 			"owner": "globalThis.TransformStreamDefaultController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TransformStreamDefaultController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TransformStreamDefaultController",
 				"globalThis.TransformStreamDefaultController",
 				"globalThis.TransformStreamDefaultController.prototype.constructor",
 				"mal_host_install_node_stream_web:TransformStreamDefaultController"
@@ -135216,6 +136223,7 @@
 			"owner": "globalThis.TransformStreamDefaultController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TransformStreamDefaultController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TransformStreamDefaultController",
 				"globalThis.TransformStreamDefaultController",
 				"globalThis.TransformStreamDefaultController.prototype.constructor",
 				"mal_host_install_node_stream_web:TransformStreamDefaultController"
@@ -135231,6 +136239,7 @@
 			"owner": "globalThis.TransformStreamDefaultController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TransformStreamDefaultController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TransformStreamDefaultController",
 				"globalThis.TransformStreamDefaultController",
 				"globalThis.TransformStreamDefaultController.prototype.constructor",
 				"mal_host_install_node_stream_web:TransformStreamDefaultController"
@@ -135392,6 +136401,7 @@
 			"owner": "globalThis.URL",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.URL",
+				"%MAL_INTRINSIC_WEB_GROUP_URL%.URL",
 				"MAL_INTRINSIC_URL_CONSTRUCTOR",
 				"globalThis.URL",
 				"globalThis.URL.prototype.constructor",
@@ -135408,6 +136418,7 @@
 			"owner": "globalThis.URL",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.URL",
+				"%MAL_INTRINSIC_WEB_GROUP_URL%.URL",
 				"MAL_INTRINSIC_URL_CONSTRUCTOR",
 				"globalThis.URL",
 				"globalThis.URL.prototype.constructor",
@@ -135424,6 +136435,7 @@
 			"owner": "globalThis.URL",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.URL",
+				"%MAL_INTRINSIC_WEB_GROUP_URL%.URL",
 				"MAL_INTRINSIC_URL_CONSTRUCTOR",
 				"globalThis.URL",
 				"globalThis.URL.prototype.constructor",
@@ -135440,6 +136452,7 @@
 			"owner": "globalThis.URL",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.URL",
+				"%MAL_INTRINSIC_WEB_GROUP_URL%.URL",
 				"MAL_INTRINSIC_URL_CONSTRUCTOR",
 				"globalThis.URL",
 				"globalThis.URL.prototype.constructor",
@@ -135456,6 +136469,7 @@
 			"owner": "globalThis.URL",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.URL",
+				"%MAL_INTRINSIC_WEB_GROUP_URL%.URL",
 				"MAL_INTRINSIC_URL_CONSTRUCTOR",
 				"globalThis.URL",
 				"globalThis.URL.prototype.constructor",
@@ -136172,6 +137186,7 @@
 			"owner": "globalThis.URLSearchParams",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.URLSearchParams",
+				"%MAL_INTRINSIC_WEB_GROUP_URL%.URLSearchParams",
 				"MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR",
 				"globalThis.URLSearchParams",
 				"globalThis.URLSearchParams.prototype.constructor",
@@ -136188,6 +137203,7 @@
 			"owner": "globalThis.URLSearchParams",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.URLSearchParams",
+				"%MAL_INTRINSIC_WEB_GROUP_URL%.URLSearchParams",
 				"MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR",
 				"globalThis.URLSearchParams",
 				"globalThis.URLSearchParams.prototype.constructor",
@@ -136204,6 +137220,7 @@
 			"owner": "globalThis.URLSearchParams",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.URLSearchParams",
+				"%MAL_INTRINSIC_WEB_GROUP_URL%.URLSearchParams",
 				"MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR",
 				"globalThis.URLSearchParams",
 				"globalThis.URLSearchParams.prototype.constructor",
@@ -137324,6 +138341,7 @@
 			"owner": "globalThis.WritableStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].WritableStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.WritableStream",
 				"MAL_INTRINSIC_WRITABLE_STREAM_CONSTRUCTOR",
 				"globalThis.WritableStream",
 				"globalThis.WritableStream.prototype.constructor",
@@ -137340,6 +138358,7 @@
 			"owner": "globalThis.WritableStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].WritableStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.WritableStream",
 				"MAL_INTRINSIC_WRITABLE_STREAM_CONSTRUCTOR",
 				"globalThis.WritableStream",
 				"globalThis.WritableStream.prototype.constructor",
@@ -137356,6 +138375,7 @@
 			"owner": "globalThis.WritableStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].WritableStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.WritableStream",
 				"MAL_INTRINSIC_WRITABLE_STREAM_CONSTRUCTOR",
 				"globalThis.WritableStream",
 				"globalThis.WritableStream.prototype.constructor",
@@ -137530,6 +138550,7 @@
 			"owner": "globalThis.WritableStreamDefaultController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].WritableStreamDefaultController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.WritableStreamDefaultController",
 				"MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_CONTROLLER_CONSTRUCTOR",
 				"globalThis.WritableStreamDefaultController",
 				"globalThis.WritableStreamDefaultController.prototype.constructor",
@@ -137546,6 +138567,7 @@
 			"owner": "globalThis.WritableStreamDefaultController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].WritableStreamDefaultController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.WritableStreamDefaultController",
 				"MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_CONTROLLER_CONSTRUCTOR",
 				"globalThis.WritableStreamDefaultController",
 				"globalThis.WritableStreamDefaultController.prototype.constructor",
@@ -137562,6 +138584,7 @@
 			"owner": "globalThis.WritableStreamDefaultController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].WritableStreamDefaultController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.WritableStreamDefaultController",
 				"MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_CONTROLLER_CONSTRUCTOR",
 				"globalThis.WritableStreamDefaultController",
 				"globalThis.WritableStreamDefaultController.prototype.constructor",
@@ -137670,6 +138693,7 @@
 			"owner": "globalThis.WritableStreamDefaultWriter",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].WritableStreamDefaultWriter",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.WritableStreamDefaultWriter",
 				"MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_WRITER_CONSTRUCTOR",
 				"globalThis.WritableStreamDefaultWriter",
 				"globalThis.WritableStreamDefaultWriter.prototype.constructor",
@@ -137686,6 +138710,7 @@
 			"owner": "globalThis.WritableStreamDefaultWriter",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].WritableStreamDefaultWriter",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.WritableStreamDefaultWriter",
 				"MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_WRITER_CONSTRUCTOR",
 				"globalThis.WritableStreamDefaultWriter",
 				"globalThis.WritableStreamDefaultWriter.prototype.constructor",
@@ -137702,6 +138727,7 @@
 			"owner": "globalThis.WritableStreamDefaultWriter",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].WritableStreamDefaultWriter",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.WritableStreamDefaultWriter",
 				"MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_WRITER_CONSTRUCTOR",
 				"globalThis.WritableStreamDefaultWriter",
 				"globalThis.WritableStreamDefaultWriter.prototype.constructor",
@@ -138095,6 +139121,7 @@
 			"owner": "globalThis.atob",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.atob",
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.atob",
 				"globalThis.atob",
 				"mal_host_install_node_buffer:atob"
 			],
@@ -138109,6 +139136,7 @@
 			"owner": "globalThis.atob",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.atob",
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.atob",
 				"globalThis.atob",
 				"mal_host_install_node_buffer:atob"
 			],
@@ -138123,6 +139151,7 @@
 			"owner": "globalThis.btoa",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.btoa",
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.btoa",
 				"globalThis.btoa",
 				"mal_host_install_node_buffer:btoa"
 			],
@@ -138137,6 +139166,7 @@
 			"owner": "globalThis.btoa",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.btoa",
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.btoa",
 				"globalThis.btoa",
 				"mal_host_install_node_buffer:btoa"
 			],
@@ -139780,6 +140810,7 @@
 			"owner": "globalThis.crypto",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto",
+				"%MAL_INTRINSIC_WEB_GROUP_CRYPTO%.crypto",
 				"globalThis.crypto",
 				"mal_host_install_node_crypto:webcrypto"
 			],
@@ -139794,6 +140825,7 @@
 			"owner": "globalThis.crypto",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto",
+				"%MAL_INTRINSIC_WEB_GROUP_CRYPTO%.crypto",
 				"globalThis.crypto",
 				"mal_host_install_node_crypto:webcrypto"
 			],
@@ -139808,6 +140840,7 @@
 			"owner": "globalThis.crypto",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto",
+				"%MAL_INTRINSIC_WEB_GROUP_CRYPTO%.crypto",
 				"globalThis.crypto",
 				"mal_host_install_node_crypto:webcrypto"
 			],
@@ -140200,13 +141233,31 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis.mal\",\"assets\"]",
-			"owner": "globalThis.mal",
-			"ownerPaths": ["globalThis.mal"],
-			"key": "assets",
+			"id": "[\"globalThis.fetch\",\"length\"]",
+			"owner": "globalThis.fetch",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH_CLIENT%.fetch",
+				"globalThis.fetch",
+				"mal_host_install_maligator_internal_fetch:fetch"
+			],
+			"key": "length",
 			"kind": "data",
 			"operations": [],
-			"task": "C-01",
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.fetch\",\"name\"]",
+			"owner": "globalThis.fetch",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH_CLIENT%.fetch",
+				"globalThis.fetch",
+				"mal_host_install_maligator_internal_fetch:fetch"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
 			"decisions": []
 		},
 		{
@@ -140270,39 +141321,12 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis.mal.assets\",\"materialize\"]",
-			"owner": "globalThis.mal.assets",
-			"ownerPaths": ["globalThis.mal.assets"],
-			"key": "materialize",
-			"kind": "data",
-			"operations": ["globalThis.mal.assets.materialize"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis.mal.assets.materialize\",\"length\"]",
-			"owner": "globalThis.mal.assets.materialize",
-			"ownerPaths": ["globalThis.mal.assets.materialize"],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis.mal.assets.materialize\",\"name\"]",
-			"owner": "globalThis.mal.assets.materialize",
-			"ownerPaths": ["globalThis.mal.assets.materialize"],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
 			"id": "[\"globalThis.navigator\",\"hardwareConcurrency\"]",
 			"owner": "globalThis.navigator",
-			"ownerPaths": ["globalThis.navigator"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.navigator",
+				"globalThis.navigator"
+			],
 			"key": "hardwareConcurrency",
 			"kind": "data",
 			"operations": [],
@@ -140314,6 +141338,7 @@
 			"owner": "globalThis.performance",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_PERF_HOOKS_MODULE%.performance",
+				"%MAL_INTRINSIC_WEB_GROUP_PERFORMANCE%.performance",
 				"globalThis.performance",
 				"mal_host_install_node_perf_hooks:performance"
 			],
@@ -140328,6 +141353,7 @@
 			"owner": "globalThis.performance",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_PERF_HOOKS_MODULE%.performance",
+				"%MAL_INTRINSIC_WEB_GROUP_PERFORMANCE%.performance",
 				"globalThis.performance",
 				"mal_host_install_node_perf_hooks:performance"
 			],
@@ -144268,7 +145294,10 @@
 		{
 			"id": "[\"globalThis.queueMicrotask\",\"length\"]",
 			"owner": "globalThis.queueMicrotask",
-			"ownerPaths": ["globalThis.queueMicrotask"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.queueMicrotask",
+				"globalThis.queueMicrotask"
+			],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -144278,7 +145307,10 @@
 		{
 			"id": "[\"globalThis.queueMicrotask\",\"name\"]",
 			"owner": "globalThis.queueMicrotask",
-			"ownerPaths": ["globalThis.queueMicrotask"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.queueMicrotask",
+				"globalThis.queueMicrotask"
+			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -144372,7 +145404,10 @@
 		{
 			"id": "[\"globalThis.structuredClone\",\"length\"]",
 			"owner": "globalThis.structuredClone",
-			"ownerPaths": ["globalThis.structuredClone"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.structuredClone",
+				"globalThis.structuredClone"
+			],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -144382,7 +145417,10 @@
 		{
 			"id": "[\"globalThis.structuredClone\",\"name\"]",
 			"owner": "globalThis.structuredClone",
-			"ownerPaths": ["globalThis.structuredClone"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.structuredClone",
+				"globalThis.structuredClone"
+			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -173602,6 +174640,264 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%mal_host_install_maligator_application:ready%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedDirectory%.files\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedDirectory%.files",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.files"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.files"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedDirectory%.files\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedDirectory%.files",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.files"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.files"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedDirectory%.get\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedDirectory%.get",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.get"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.get"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedDirectory%.get\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedDirectory%.get",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.get"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.get"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.bytes\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.bytes",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.bytes"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.bytes"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.bytes\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.bytes",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.bytes"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.bytes"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.json\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.json",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.json"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.json"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.json\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.json",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.json"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.json"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.materialize\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.materialize",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.materialize"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.materialize"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.materialize\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.materialize",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.materialize"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.materialize"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.size<get>\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.size<get>",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.size<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.size<get>"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.size<get>\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.size<get>",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.size<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.size<get>"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.text\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.text",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.text"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.text"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_assets:EmbeddedFile%.text\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_assets:EmbeddedFile%.text",
+			"ownerPaths": ["%mal_host_install_maligator_assets:EmbeddedFile%.text"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_assets:EmbeddedFile%.text"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_http:assetProxy%\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_internal_http:assetProxy%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_http:assetProxy%",
+				"mal_host_install_maligator_internal_http:assetProxy"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_internal_http:assetProxy%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_http:assetProxy%\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_internal_http:assetProxy%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_http:assetProxy%",
+				"mal_host_install_maligator_internal_http:assetProxy"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_internal_http:assetProxy%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_http:assetResponse%\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_internal_http:assetResponse%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_http:assetResponse%",
+				"mal_host_install_maligator_internal_http:assetResponse"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_internal_http:assetResponse%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_http:assetResponse%\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_internal_http:assetResponse%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_http:assetResponse%",
+				"mal_host_install_maligator_internal_http:assetResponse"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_internal_http:assetResponse%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_http:listen%\",\"<call>\"]",
+			"owner": "%mal_host_install_maligator_internal_http:listen%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_http:listen%",
+				"mal_host_install_maligator_internal_http:listen"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_internal_http:listen%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"%mal_host_install_maligator_internal_http:listen%\",\"<construct>\"]",
+			"owner": "%mal_host_install_maligator_internal_http:listen%",
+			"ownerPaths": [
+				"%mal_host_install_maligator_internal_http:listen%",
+				"mal_host_install_maligator_internal_http:listen"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_internal_http:listen%"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -273447,6 +274743,7 @@
 			"id": "[\"globalThis.AbortController\",\"<call>\"]",
 			"owner": "globalThis.AbortController",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.AbortController",
 				"MAL_INTRINSIC_ABORT_CONTROLLER_CONSTRUCTOR",
 				"globalThis.AbortController",
 				"globalThis.AbortController.prototype.constructor"
@@ -273461,6 +274758,7 @@
 			"id": "[\"globalThis.AbortController\",\"<construct>\"]",
 			"owner": "globalThis.AbortController",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.AbortController",
 				"MAL_INTRINSIC_ABORT_CONTROLLER_CONSTRUCTOR",
 				"globalThis.AbortController",
 				"globalThis.AbortController.prototype.constructor"
@@ -273495,6 +274793,7 @@
 			"id": "[\"globalThis.AbortSignal\",\"<call>\"]",
 			"owner": "globalThis.AbortSignal",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.AbortSignal",
 				"MAL_INTRINSIC_ABORT_SIGNAL_CONSTRUCTOR",
 				"globalThis.AbortSignal",
 				"globalThis.AbortSignal.prototype.constructor"
@@ -273509,6 +274808,7 @@
 			"id": "[\"globalThis.AbortSignal\",\"<construct>\"]",
 			"owner": "globalThis.AbortSignal",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.AbortSignal",
 				"MAL_INTRINSIC_ABORT_SIGNAL_CONSTRUCTOR",
 				"globalThis.AbortSignal",
 				"globalThis.AbortSignal.prototype.constructor"
@@ -273644,6 +274944,7 @@
 			"owner": "globalThis.Blob",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.Blob",
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Blob",
 				"MAL_INTRINSIC_BLOB_CONSTRUCTOR",
 				"globalThis.Blob",
 				"globalThis.Blob.prototype.constructor",
@@ -273660,6 +274961,7 @@
 			"owner": "globalThis.Blob",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.Blob",
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Blob",
 				"MAL_INTRINSIC_BLOB_CONSTRUCTOR",
 				"globalThis.Blob",
 				"globalThis.Blob.prototype.constructor",
@@ -275910,6 +277212,7 @@
 			"owner": "globalThis.ByteLengthQueuingStrategy",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ByteLengthQueuingStrategy",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ByteLengthQueuingStrategy",
 				"MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_CONSTRUCTOR",
 				"globalThis.ByteLengthQueuingStrategy",
 				"globalThis.ByteLengthQueuingStrategy.prototype.constructor",
@@ -275926,6 +277229,7 @@
 			"owner": "globalThis.ByteLengthQueuingStrategy",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ByteLengthQueuingStrategy",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ByteLengthQueuingStrategy",
 				"MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_CONSTRUCTOR",
 				"globalThis.ByteLengthQueuingStrategy",
 				"globalThis.ByteLengthQueuingStrategy.prototype.constructor",
@@ -276072,6 +277376,7 @@
 			"owner": "globalThis.CompressionStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].CompressionStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.CompressionStream",
 				"globalThis.CompressionStream",
 				"globalThis.CompressionStream.prototype.constructor",
 				"mal_host_install_node_stream_web:CompressionStream"
@@ -276087,6 +277392,7 @@
 			"owner": "globalThis.CompressionStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].CompressionStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.CompressionStream",
 				"globalThis.CompressionStream",
 				"globalThis.CompressionStream.prototype.constructor",
 				"mal_host_install_node_stream_web:CompressionStream"
@@ -276142,6 +277448,7 @@
 			"owner": "globalThis.CountQueuingStrategy",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].CountQueuingStrategy",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.CountQueuingStrategy",
 				"MAL_INTRINSIC_COUNT_QUEUING_STRATEGY_CONSTRUCTOR",
 				"globalThis.CountQueuingStrategy",
 				"globalThis.CountQueuingStrategy.prototype.constructor",
@@ -276158,6 +277465,7 @@
 			"owner": "globalThis.CountQueuingStrategy",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].CountQueuingStrategy",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.CountQueuingStrategy",
 				"MAL_INTRINSIC_COUNT_QUEUING_STRATEGY_CONSTRUCTOR",
 				"globalThis.CountQueuingStrategy",
 				"globalThis.CountQueuingStrategy.prototype.constructor",
@@ -276259,6 +277567,7 @@
 			"id": "[\"globalThis.CustomEvent\",\"<call>\"]",
 			"owner": "globalThis.CustomEvent",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.CustomEvent",
 				"MAL_INTRINSIC_CUSTOM_EVENT_CONSTRUCTOR",
 				"globalThis.CustomEvent",
 				"globalThis.CustomEvent.prototype.constructor"
@@ -276273,6 +277582,7 @@
 			"id": "[\"globalThis.CustomEvent\",\"<construct>\"]",
 			"owner": "globalThis.CustomEvent",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.CustomEvent",
 				"MAL_INTRINSIC_CUSTOM_EVENT_CONSTRUCTOR",
 				"globalThis.CustomEvent",
 				"globalThis.CustomEvent.prototype.constructor"
@@ -276287,6 +277597,7 @@
 			"id": "[\"globalThis.DOMException\",\"<call>\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -276301,6 +277612,7 @@
 			"id": "[\"globalThis.DOMException\",\"<construct>\"]",
 			"owner": "globalThis.DOMException",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.DOMException",
 				"MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR",
 				"globalThis.DOMException",
 				"globalThis.DOMException.prototype.constructor"
@@ -276376,6 +277688,7 @@
 			"owner": "globalThis.DecompressionStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].DecompressionStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.DecompressionStream",
 				"globalThis.DecompressionStream",
 				"globalThis.DecompressionStream.prototype.constructor",
 				"mal_host_install_node_stream_web:DecompressionStream"
@@ -276391,6 +277704,7 @@
 			"owner": "globalThis.DecompressionStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].DecompressionStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.DecompressionStream",
 				"globalThis.DecompressionStream",
 				"globalThis.DecompressionStream.prototype.constructor",
 				"mal_host_install_node_stream_web:DecompressionStream"
@@ -276571,6 +277885,7 @@
 			"id": "[\"globalThis.Event\",\"<call>\"]",
 			"owner": "globalThis.Event",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.Event",
 				"MAL_INTRINSIC_EVENT_CONSTRUCTOR",
 				"globalThis.Event",
 				"globalThis.Event.prototype.constructor"
@@ -276585,6 +277900,7 @@
 			"id": "[\"globalThis.Event\",\"<construct>\"]",
 			"owner": "globalThis.Event",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.Event",
 				"MAL_INTRINSIC_EVENT_CONSTRUCTOR",
 				"globalThis.Event",
 				"globalThis.Event.prototype.constructor"
@@ -276679,6 +277995,7 @@
 			"id": "[\"globalThis.EventTarget\",\"<call>\"]",
 			"owner": "globalThis.EventTarget",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.EventTarget",
 				"MAL_INTRINSIC_EVENT_TARGET_CONSTRUCTOR",
 				"globalThis.EventTarget",
 				"globalThis.EventTarget.prototype.constructor"
@@ -276693,6 +278010,7 @@
 			"id": "[\"globalThis.EventTarget\",\"<construct>\"]",
 			"owner": "globalThis.EventTarget",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_EVENTS%.EventTarget",
 				"MAL_INTRINSIC_EVENT_TARGET_CONSTRUCTOR",
 				"globalThis.EventTarget",
 				"globalThis.EventTarget.prototype.constructor"
@@ -276768,6 +278086,7 @@
 			"owner": "globalThis.File",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.File",
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.File",
 				"MAL_INTRINSIC_FILE_CONSTRUCTOR",
 				"globalThis.File",
 				"globalThis.File.prototype.constructor",
@@ -276784,6 +278103,7 @@
 			"owner": "globalThis.File",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.File",
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.File",
 				"MAL_INTRINSIC_FILE_CONSTRUCTOR",
 				"globalThis.File",
 				"globalThis.File.prototype.constructor",
@@ -276839,6 +278159,7 @@
 			"id": "[\"globalThis.FormData\",\"<call>\"]",
 			"owner": "globalThis.FormData",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.FormData",
 				"MAL_INTRINSIC_FORM_DATA_CONSTRUCTOR",
 				"globalThis.FormData",
 				"globalThis.FormData.prototype.constructor"
@@ -276853,6 +278174,7 @@
 			"id": "[\"globalThis.FormData\",\"<construct>\"]",
 			"owner": "globalThis.FormData",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.FormData",
 				"MAL_INTRINSIC_FORM_DATA_CONSTRUCTOR",
 				"globalThis.FormData",
 				"globalThis.FormData.prototype.constructor"
@@ -277073,6 +278395,7 @@
 			"id": "[\"globalThis.Headers\",\"<call>\"]",
 			"owner": "globalThis.Headers",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Headers",
 				"MAL_INTRINSIC_HEADERS_CONSTRUCTOR",
 				"globalThis.Headers",
 				"globalThis.Headers.prototype.constructor"
@@ -277087,6 +278410,7 @@
 			"id": "[\"globalThis.Headers\",\"<construct>\"]",
 			"owner": "globalThis.Headers",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Headers",
 				"MAL_INTRINSIC_HEADERS_CONSTRUCTOR",
 				"globalThis.Headers",
 				"globalThis.Headers.prototype.constructor"
@@ -277301,26 +278625,6 @@
 			"kind": "construct",
 			"operations": ["globalThis.Headers.prototype.values"],
 			"task": "N-02",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis.Mal.serve\",\"<call>\"]",
-			"owner": "globalThis.Mal.serve",
-			"ownerPaths": ["globalThis.Mal.serve"],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["globalThis.Mal.serve"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis.Mal.serve\",\"<construct>\"]",
-			"owner": "globalThis.Mal.serve",
-			"ownerPaths": ["globalThis.Mal.serve"],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["globalThis.Mal.serve"],
-			"task": "C-01",
 			"decisions": []
 		},
 		{
@@ -278680,6 +279984,7 @@
 			"owner": "globalThis.ReadableByteStreamController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableByteStreamController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableByteStreamController",
 				"MAL_INTRINSIC_READABLE_BYTE_STREAM_CONTROLLER_CONSTRUCTOR",
 				"globalThis.ReadableByteStreamController",
 				"globalThis.ReadableByteStreamController.prototype.constructor",
@@ -278696,6 +280001,7 @@
 			"owner": "globalThis.ReadableByteStreamController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableByteStreamController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableByteStreamController",
 				"MAL_INTRINSIC_READABLE_BYTE_STREAM_CONTROLLER_CONSTRUCTOR",
 				"globalThis.ReadableByteStreamController",
 				"globalThis.ReadableByteStreamController.prototype.constructor",
@@ -278828,6 +280134,7 @@
 			"owner": "globalThis.ReadableStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStream",
 				"MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR",
 				"globalThis.ReadableStream",
 				"globalThis.ReadableStream.prototype.constructor",
@@ -278844,6 +280151,7 @@
 			"owner": "globalThis.ReadableStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStream",
 				"MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR",
 				"globalThis.ReadableStream",
 				"globalThis.ReadableStream.prototype.constructor",
@@ -279026,6 +280334,7 @@
 			"owner": "globalThis.ReadableStreamBYOBReader",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamBYOBReader",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamBYOBReader",
 				"MAL_INTRINSIC_READABLE_STREAM_BYOB_READER_CONSTRUCTOR",
 				"globalThis.ReadableStreamBYOBReader",
 				"globalThis.ReadableStreamBYOBReader.prototype.constructor",
@@ -279042,6 +280351,7 @@
 			"owner": "globalThis.ReadableStreamBYOBReader",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamBYOBReader",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamBYOBReader",
 				"MAL_INTRINSIC_READABLE_STREAM_BYOB_READER_CONSTRUCTOR",
 				"globalThis.ReadableStreamBYOBReader",
 				"globalThis.ReadableStreamBYOBReader.prototype.constructor",
@@ -279138,6 +280448,7 @@
 			"owner": "globalThis.ReadableStreamBYOBRequest",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamBYOBRequest",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamBYOBRequest",
 				"MAL_INTRINSIC_READABLE_STREAM_BYOB_REQUEST_CONSTRUCTOR",
 				"globalThis.ReadableStreamBYOBRequest",
 				"globalThis.ReadableStreamBYOBRequest.prototype.constructor",
@@ -279154,6 +280465,7 @@
 			"owner": "globalThis.ReadableStreamBYOBRequest",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamBYOBRequest",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamBYOBRequest",
 				"MAL_INTRINSIC_READABLE_STREAM_BYOB_REQUEST_CONSTRUCTOR",
 				"globalThis.ReadableStreamBYOBRequest",
 				"globalThis.ReadableStreamBYOBRequest.prototype.constructor",
@@ -279230,6 +280542,7 @@
 			"owner": "globalThis.ReadableStreamDefaultController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamDefaultController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamDefaultController",
 				"MAL_INTRINSIC_READABLE_STREAM_DEFAULT_CONTROLLER_CONSTRUCTOR",
 				"globalThis.ReadableStreamDefaultController",
 				"globalThis.ReadableStreamDefaultController.prototype.constructor",
@@ -279246,6 +280559,7 @@
 			"owner": "globalThis.ReadableStreamDefaultController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamDefaultController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamDefaultController",
 				"MAL_INTRINSIC_READABLE_STREAM_DEFAULT_CONTROLLER_CONSTRUCTOR",
 				"globalThis.ReadableStreamDefaultController",
 				"globalThis.ReadableStreamDefaultController.prototype.constructor",
@@ -279350,6 +280664,7 @@
 			"owner": "globalThis.ReadableStreamDefaultReader",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamDefaultReader",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamDefaultReader",
 				"MAL_INTRINSIC_READABLE_STREAM_DEFAULT_READER_CONSTRUCTOR",
 				"globalThis.ReadableStreamDefaultReader",
 				"globalThis.ReadableStreamDefaultReader.prototype.constructor",
@@ -279366,6 +280681,7 @@
 			"owner": "globalThis.ReadableStreamDefaultReader",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].ReadableStreamDefaultReader",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.ReadableStreamDefaultReader",
 				"MAL_INTRINSIC_READABLE_STREAM_DEFAULT_READER_CONSTRUCTOR",
 				"globalThis.ReadableStreamDefaultReader",
 				"globalThis.ReadableStreamDefaultReader.prototype.constructor",
@@ -279460,7 +280776,11 @@
 		{
 			"id": "[\"globalThis.Request\",\"<call>\"]",
 			"owner": "globalThis.Request",
-			"ownerPaths": ["globalThis.Request", "globalThis.Request.prototype.constructor"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Request",
+				"globalThis.Request",
+				"globalThis.Request.prototype.constructor"
+			],
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.Request"],
@@ -279470,7 +280790,11 @@
 		{
 			"id": "[\"globalThis.Request\",\"<construct>\"]",
 			"owner": "globalThis.Request",
-			"ownerPaths": ["globalThis.Request", "globalThis.Request.prototype.constructor"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Request",
+				"globalThis.Request",
+				"globalThis.Request.prototype.constructor"
+			],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Request"],
@@ -280301,6 +281625,7 @@
 			"id": "[\"globalThis.Response\",\"<call>\"]",
 			"owner": "globalThis.Response",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Response",
 				"MAL_INTRINSIC_RESPONSE_CONSTRUCTOR",
 				"globalThis.Response",
 				"globalThis.Response.prototype.constructor"
@@ -280315,6 +281640,7 @@
 			"id": "[\"globalThis.Response\",\"<construct>\"]",
 			"owner": "globalThis.Response",
 			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH%.Response",
 				"MAL_INTRINSIC_RESPONSE_CONSTRUCTOR",
 				"globalThis.Response",
 				"globalThis.Response.prototype.constructor"
@@ -280716,6 +282042,7 @@
 			"owner": "globalThis.TextDecoder",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:sys\"].TextDecoder",
+				"%MAL_INTRINSIC_WEB_GROUP_ENCODING%.TextDecoder",
 				"globalThis.TextDecoder",
 				"globalThis.TextDecoder.prototype.constructor",
 				"mal_host_install_node_sys:TextDecoder",
@@ -280732,6 +282059,7 @@
 			"owner": "globalThis.TextDecoder",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:sys\"].TextDecoder",
+				"%MAL_INTRINSIC_WEB_GROUP_ENCODING%.TextDecoder",
 				"globalThis.TextDecoder",
 				"globalThis.TextDecoder.prototype.constructor",
 				"mal_host_install_node_sys:TextDecoder",
@@ -280828,6 +282156,7 @@
 			"owner": "globalThis.TextDecoderStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TextDecoderStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TextDecoderStream",
 				"globalThis.TextDecoderStream",
 				"globalThis.TextDecoderStream.prototype.constructor",
 				"mal_host_install_node_stream_web:TextDecoderStream"
@@ -280843,6 +282172,7 @@
 			"owner": "globalThis.TextDecoderStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TextDecoderStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TextDecoderStream",
 				"globalThis.TextDecoderStream",
 				"globalThis.TextDecoderStream.prototype.constructor",
 				"mal_host_install_node_stream_web:TextDecoderStream"
@@ -280958,6 +282288,7 @@
 			"owner": "globalThis.TextEncoder",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:sys\"].TextEncoder",
+				"%MAL_INTRINSIC_WEB_GROUP_ENCODING%.TextEncoder",
 				"globalThis.TextEncoder",
 				"globalThis.TextEncoder.prototype.constructor",
 				"mal_host_install_node_sys:TextEncoder",
@@ -280974,6 +282305,7 @@
 			"owner": "globalThis.TextEncoder",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:sys\"].TextEncoder",
+				"%MAL_INTRINSIC_WEB_GROUP_ENCODING%.TextEncoder",
 				"globalThis.TextEncoder",
 				"globalThis.TextEncoder.prototype.constructor",
 				"mal_host_install_node_sys:TextEncoder",
@@ -281030,6 +282362,7 @@
 			"owner": "globalThis.TextEncoderStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TextEncoderStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TextEncoderStream",
 				"globalThis.TextEncoderStream",
 				"globalThis.TextEncoderStream.prototype.constructor",
 				"mal_host_install_node_stream_web:TextEncoderStream"
@@ -281045,6 +282378,7 @@
 			"owner": "globalThis.TextEncoderStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TextEncoderStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TextEncoderStream",
 				"globalThis.TextEncoderStream",
 				"globalThis.TextEncoderStream.prototype.constructor",
 				"mal_host_install_node_stream_web:TextEncoderStream"
@@ -281120,6 +282454,7 @@
 			"owner": "globalThis.TransformStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TransformStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TransformStream",
 				"globalThis.TransformStream",
 				"globalThis.TransformStream.prototype.constructor",
 				"mal_host_install_node_stream_web:TransformStream"
@@ -281135,6 +282470,7 @@
 			"owner": "globalThis.TransformStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TransformStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TransformStream",
 				"globalThis.TransformStream",
 				"globalThis.TransformStream.prototype.constructor",
 				"mal_host_install_node_stream_web:TransformStream"
@@ -281190,6 +282526,7 @@
 			"owner": "globalThis.TransformStreamDefaultController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TransformStreamDefaultController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TransformStreamDefaultController",
 				"globalThis.TransformStreamDefaultController",
 				"globalThis.TransformStreamDefaultController.prototype.constructor",
 				"mal_host_install_node_stream_web:TransformStreamDefaultController"
@@ -281205,6 +282542,7 @@
 			"owner": "globalThis.TransformStreamDefaultController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].TransformStreamDefaultController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.TransformStreamDefaultController",
 				"globalThis.TransformStreamDefaultController",
 				"globalThis.TransformStreamDefaultController.prototype.constructor",
 				"mal_host_install_node_stream_web:TransformStreamDefaultController"
@@ -281308,6 +282646,7 @@
 			"owner": "globalThis.URL",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.URL",
+				"%MAL_INTRINSIC_WEB_GROUP_URL%.URL",
 				"MAL_INTRINSIC_URL_CONSTRUCTOR",
 				"globalThis.URL",
 				"globalThis.URL.prototype.constructor",
@@ -281324,6 +282663,7 @@
 			"owner": "globalThis.URL",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.URL",
+				"%MAL_INTRINSIC_WEB_GROUP_URL%.URL",
 				"MAL_INTRINSIC_URL_CONSTRUCTOR",
 				"globalThis.URL",
 				"globalThis.URL.prototype.constructor",
@@ -281860,6 +283200,7 @@
 			"owner": "globalThis.URLSearchParams",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.URLSearchParams",
+				"%MAL_INTRINSIC_WEB_GROUP_URL%.URLSearchParams",
 				"MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR",
 				"globalThis.URLSearchParams",
 				"globalThis.URLSearchParams.prototype.constructor",
@@ -281876,6 +283217,7 @@
 			"owner": "globalThis.URLSearchParams",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_URL_MODULE%.URLSearchParams",
+				"%MAL_INTRINSIC_WEB_GROUP_URL%.URLSearchParams",
 				"MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR",
 				"globalThis.URLSearchParams",
 				"globalThis.URLSearchParams.prototype.constructor",
@@ -282528,6 +283870,7 @@
 			"owner": "globalThis.WritableStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].WritableStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.WritableStream",
 				"MAL_INTRINSIC_WRITABLE_STREAM_CONSTRUCTOR",
 				"globalThis.WritableStream",
 				"globalThis.WritableStream.prototype.constructor",
@@ -282544,6 +283887,7 @@
 			"owner": "globalThis.WritableStream",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].WritableStream",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.WritableStream",
 				"MAL_INTRINSIC_WRITABLE_STREAM_CONSTRUCTOR",
 				"globalThis.WritableStream",
 				"globalThis.WritableStream.prototype.constructor",
@@ -282640,6 +283984,7 @@
 			"owner": "globalThis.WritableStreamDefaultController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].WritableStreamDefaultController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.WritableStreamDefaultController",
 				"MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_CONTROLLER_CONSTRUCTOR",
 				"globalThis.WritableStreamDefaultController",
 				"globalThis.WritableStreamDefaultController.prototype.constructor",
@@ -282656,6 +284001,7 @@
 			"owner": "globalThis.WritableStreamDefaultController",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].WritableStreamDefaultController",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.WritableStreamDefaultController",
 				"MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_CONTROLLER_CONSTRUCTOR",
 				"globalThis.WritableStreamDefaultController",
 				"globalThis.WritableStreamDefaultController.prototype.constructor",
@@ -282712,6 +284058,7 @@
 			"owner": "globalThis.WritableStreamDefaultWriter",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].WritableStreamDefaultWriter",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.WritableStreamDefaultWriter",
 				"MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_WRITER_CONSTRUCTOR",
 				"globalThis.WritableStreamDefaultWriter",
 				"globalThis.WritableStreamDefaultWriter.prototype.constructor",
@@ -282728,6 +284075,7 @@
 			"owner": "globalThis.WritableStreamDefaultWriter",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:stream/web\"].WritableStreamDefaultWriter",
+				"%MAL_INTRINSIC_WEB_GROUP_STREAMS%.WritableStreamDefaultWriter",
 				"MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_WRITER_CONSTRUCTOR",
 				"globalThis.WritableStreamDefaultWriter",
 				"globalThis.WritableStreamDefaultWriter.prototype.constructor",
@@ -283004,6 +284352,7 @@
 			"owner": "globalThis.atob",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.atob",
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.atob",
 				"globalThis.atob",
 				"mal_host_install_node_buffer:atob"
 			],
@@ -283018,6 +284367,7 @@
 			"owner": "globalThis.atob",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.atob",
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.atob",
 				"globalThis.atob",
 				"mal_host_install_node_buffer:atob"
 			],
@@ -283032,6 +284382,7 @@
 			"owner": "globalThis.btoa",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.btoa",
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.btoa",
 				"globalThis.btoa",
 				"mal_host_install_node_buffer:btoa"
 			],
@@ -283046,6 +284397,7 @@
 			"owner": "globalThis.btoa",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUFFER_MODULE%.btoa",
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.btoa",
 				"globalThis.btoa",
 				"mal_host_install_node_buffer:btoa"
 			],
@@ -284856,6 +286208,34 @@
 			]
 		},
 		{
+			"id": "[\"globalThis.fetch\",\"<call>\"]",
+			"owner": "globalThis.fetch",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH_CLIENT%.fetch",
+				"globalThis.fetch",
+				"mal_host_install_maligator_internal_fetch:fetch"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.fetch"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.fetch\",\"<construct>\"]",
+			"owner": "globalThis.fetch",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_FETCH_CLIENT%.fetch",
+				"globalThis.fetch",
+				"mal_host_install_maligator_internal_fetch:fetch"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.fetch"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.mal._profilePhaseBegin\",\"<call>\"]",
 			"owner": "globalThis.mal._profilePhaseBegin",
 			"ownerPaths": ["globalThis.mal._profilePhaseBegin"],
@@ -284892,26 +286272,6 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.mal._profilePhaseEnd"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis.mal.assets.materialize\",\"<call>\"]",
-			"owner": "globalThis.mal.assets.materialize",
-			"ownerPaths": ["globalThis.mal.assets.materialize"],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["globalThis.mal.assets.materialize"],
-			"task": "C-01",
-			"decisions": []
-		},
-		{
-			"id": "[\"globalThis.mal.assets.materialize\",\"<construct>\"]",
-			"owner": "globalThis.mal.assets.materialize",
-			"ownerPaths": ["globalThis.mal.assets.materialize"],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["globalThis.mal.assets.materialize"],
 			"task": "C-01",
 			"decisions": []
 		},
@@ -286830,7 +288190,10 @@
 		{
 			"id": "[\"globalThis.queueMicrotask\",\"<call>\"]",
 			"owner": "globalThis.queueMicrotask",
-			"ownerPaths": ["globalThis.queueMicrotask"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.queueMicrotask",
+				"globalThis.queueMicrotask"
+			],
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.queueMicrotask"],
@@ -286840,7 +288203,10 @@
 		{
 			"id": "[\"globalThis.queueMicrotask\",\"<construct>\"]",
 			"owner": "globalThis.queueMicrotask",
-			"ownerPaths": ["globalThis.queueMicrotask"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.queueMicrotask",
+				"globalThis.queueMicrotask"
+			],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.queueMicrotask"],
@@ -286934,7 +288300,10 @@
 		{
 			"id": "[\"globalThis.structuredClone\",\"<call>\"]",
 			"owner": "globalThis.structuredClone",
-			"ownerPaths": ["globalThis.structuredClone"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.structuredClone",
+				"globalThis.structuredClone"
+			],
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.structuredClone"],
@@ -286944,7 +288313,10 @@
 		{
 			"id": "[\"globalThis.structuredClone\",\"<construct>\"]",
 			"owner": "globalThis.structuredClone",
-			"ownerPaths": ["globalThis.structuredClone"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_WEB_GROUP_BASICS%.structuredClone",
+				"globalThis.structuredClone"
+			],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.structuredClone"],
@@ -293241,6 +294613,96 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_WEB_GROUP_BASICS\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_WEB_GROUP_BASICS",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_WEB_GROUP_CRYPTO\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_WEB_GROUP_CRYPTO",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_WEB_GROUP_ENCODING\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_WEB_GROUP_ENCODING",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_WEB_GROUP_EVENTS\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_WEB_GROUP_EVENTS",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_WEB_GROUP_FETCH\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_WEB_GROUP_FETCH",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_WEB_GROUP_FETCH_CLIENT\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_WEB_GROUP_FETCH_CLIENT",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_WEB_GROUP_PERFORMANCE\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_WEB_GROUP_PERFORMANCE",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_WEB_GROUP_STREAMS\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_WEB_GROUP_STREAMS",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_WEB_GROUP_URL\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_WEB_GROUP_URL",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_WRITABLE_STREAM_CONSTRUCTOR\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -293307,6 +294769,76 @@
 			"key": "mal_host_install_maligator_application:ready",
 			"kind": "binding",
 			"operations": ["%mal_host_install_maligator_application:ready%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_assets:EmbeddedDirectory\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_assets:EmbeddedDirectory",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_assets:EmbeddedFile\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_assets:EmbeddedFile",
+			"kind": "binding",
+			"operations": [],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_internal_fetch:fetch\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_internal_fetch:fetch",
+			"kind": "binding",
+			"operations": ["globalThis.fetch"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_internal_http:assetProxy\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_internal_http:assetProxy",
+			"kind": "binding",
+			"operations": ["%mal_host_install_maligator_internal_http:assetProxy%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_internal_http:assetResponse\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_internal_http:assetResponse",
+			"kind": "binding",
+			"operations": ["%mal_host_install_maligator_internal_http:assetResponse%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_internal_http:listen\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_internal_http:listen",
+			"kind": "binding",
+			"operations": ["%mal_host_install_maligator_internal_http:listen%"],
+			"task": "N-05",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_maligator_internal_http:watching\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_maligator_internal_http:watching",
+			"kind": "binding",
+			"operations": [],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -307651,6 +309183,54 @@
 			"identities": ["%mal_host_install_maligator_application:ready%"]
 		},
 		{
+			"id": "%mal_host_install_maligator_assets:EmbeddedDirectory%.files",
+			"identities": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.files"]
+		},
+		{
+			"id": "%mal_host_install_maligator_assets:EmbeddedDirectory%.get",
+			"identities": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.get"]
+		},
+		{
+			"id": "%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize",
+			"identities": ["%mal_host_install_maligator_assets:EmbeddedDirectory%.materialize"]
+		},
+		{
+			"id": "%mal_host_install_maligator_assets:EmbeddedFile%.bytes",
+			"identities": ["%mal_host_install_maligator_assets:EmbeddedFile%.bytes"]
+		},
+		{
+			"id": "%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>",
+			"identities": ["%mal_host_install_maligator_assets:EmbeddedFile%.digest<get>"]
+		},
+		{
+			"id": "%mal_host_install_maligator_assets:EmbeddedFile%.json",
+			"identities": ["%mal_host_install_maligator_assets:EmbeddedFile%.json"]
+		},
+		{
+			"id": "%mal_host_install_maligator_assets:EmbeddedFile%.materialize",
+			"identities": ["%mal_host_install_maligator_assets:EmbeddedFile%.materialize"]
+		},
+		{
+			"id": "%mal_host_install_maligator_assets:EmbeddedFile%.size<get>",
+			"identities": ["%mal_host_install_maligator_assets:EmbeddedFile%.size<get>"]
+		},
+		{
+			"id": "%mal_host_install_maligator_assets:EmbeddedFile%.text",
+			"identities": ["%mal_host_install_maligator_assets:EmbeddedFile%.text"]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_http:assetProxy%",
+			"identities": ["%mal_host_install_maligator_internal_http:assetProxy%"]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_http:assetResponse%",
+			"identities": ["%mal_host_install_maligator_internal_http:assetResponse%"]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_http:listen%",
+			"identities": ["%mal_host_install_maligator_internal_http:listen%"]
+		},
+		{
 			"id": "%mal_host_install_maligator_internal_workers:MessageChannel%",
 			"identities": ["%mal_host_install_maligator_internal_workers:MessageChannel%"]
 		},
@@ -310435,7 +312015,6 @@
 			"id": "globalThis.Headers.prototype.values",
 			"identities": ["globalThis.Headers.prototype.values"]
 		},
-		{ "id": "globalThis.Mal.serve", "identities": ["globalThis.Mal.serve"] },
 		{ "id": "globalThis.MessageChannel", "identities": ["globalThis.MessageChannel"] },
 		{
 			"id": "globalThis.Performance",
@@ -311364,6 +312943,7 @@
 			"identities": ["globalThis.crypto.subtle.verify"]
 		},
 		{ "id": "globalThis.escape", "identities": ["globalThis.escape"] },
+		{ "id": "globalThis.fetch", "identities": ["globalThis.fetch"] },
 		{
 			"id": "globalThis.mal._profilePhaseBegin",
 			"identities": ["globalThis.mal._profilePhaseBegin"]
@@ -311371,10 +312951,6 @@
 		{
 			"id": "globalThis.mal._profilePhaseEnd",
 			"identities": ["globalThis.mal._profilePhaseEnd"]
-		},
-		{
-			"id": "globalThis.mal.assets.materialize",
-			"identities": ["globalThis.mal.assets.materialize"]
 		},
 		{ "id": "globalThis.performance.now", "identities": ["globalThis.performance.now"] },
 		{
