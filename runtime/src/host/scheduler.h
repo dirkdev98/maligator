@@ -6,8 +6,8 @@
 #include "vm.h"
 
 /*
- * Minimal cooperative + preemptive round-robin scheduler for one isolate
- * (see docs/decisions/03-wave-0-host-architecture.md). It runs on the main fiber: mal_sched_run drains a
+ * Minimal cooperative + preemptive round-robin scheduler for one isolate.
+ * It runs on the main fiber: mal_sched_run drains a
  * FIFO of runnable fibers, switching into each until it yields, blocks, or
  * finishes, then round-robins the runnable ones. Preemption is via the GC
  * safepoint hook: each fiber gets a reduction budget, and a safepoint (a

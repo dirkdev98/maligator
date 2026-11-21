@@ -1,8 +1,8 @@
 # Working on Maligator
 
 Maligator is an ahead-of-time JavaScript compiler and native runtime. Use current
-source, command help, and test manifests to establish behavior. Saved memories,
-design documents, and old reports provide context, not proof about the current tree.
+source, command help, and test manifests to establish behavior. Saved memories and
+old reports provide context, not proof about the current tree.
 [TODO.md](TODO.md) owns unfinished project work. Read topic references when needed:
 [contributing](CONTRIBUTING.md) for setup and the repository layout,
 [testing](docs/testing.md) for runner details and evidence,
@@ -112,8 +112,8 @@ the manifests and [CI coverage](docs/testing.md#github-actions) for exact covera
 
 Captures run on CI too. The Primordial catalog workflow commits a refreshed catalog
 after a push to `main` changes the descriptor graph. Dispatch it with `force` when
-authorized to for a change only the macOS runtime installs; see the
-[inventory workflow](docs/decisions/static-value-foundations.md#native-inventory-and-coverage).
+authorized to for a change only the macOS runtime installs; see
+[inventory captures](docs/testing.md#inventory-captures).
 
 Follow [test placement](docs/testing.md#test-placement) when adding tests. Ask if the
 acceptance boundary could reasonably belong in multiple lanes. Slow unit/subprocess
@@ -172,8 +172,9 @@ environment; changed source or incomplete coverage cannot establish acceptance.
   explicit action.
 - Do not commit experiment journals, rejected-candidate reports, slice snapshots,
   or one-off profiling scripts. Keep reusable tools in `scripts/`, regression
-  coverage in `tests/`, unfinished work in `TODO.md`, and lasting design decisions
-  in `docs/decisions/`. Remove scratch helpers when their investigation ends.
+  coverage in `tests/`, and unfinished work in `TODO.md`. Design rationale goes in
+  the commit message and in comments at the owning code, not in design documents.
+  Remove scratch helpers when their investigation ends.
 - Before finishing a task, remove its disposable builds and superseded outputs.
   Retain only evidence supporting the result or an unresolved failure, and report
   its location. Never force-add `.cache/` contents or delete another task's artifacts.

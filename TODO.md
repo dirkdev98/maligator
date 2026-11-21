@@ -74,9 +74,6 @@ bounded consumer follow-up and explicit cost evidence; it is not a runtime win.
 - [x] Preserve floating-point VM encodings when equal boxed constants merge at a
       control-flow join, including signed zero, fractions and out-of-range integers.
 
-The independent target boundary and current storage contract are recorded in
-[native SSA lowering](docs/decisions/native-ssa-lowering.md).
-
 Choose native specialization by repeated consumer benefit and total cost. Preserve
 mutable-callee fallback, coercion and exception order, publication, roots and polls.
 Compare additional compiler/build time with absolute runtime savings over plausible
@@ -188,9 +185,6 @@ Runtime eval may remove source closure without invalidating authority closure.
       criterion; do not require exhaustive diagnostics before independent work.
 
 ## Callback specialization
-
-Shared lifetime and fallback rules are recorded in
-[runtime region contracts](docs/decisions/runtime-region-contracts.md).
 
 - [ ] Test whether bounded loop cloning removes enough remaining exact-callback invocation
       cost from a fixed numeric TypedArray reduction. Numeric argument and accumulator
@@ -317,10 +311,8 @@ and rejected experiment history outside this roadmap.
 
 # Strings and text
 
-The [text algorithm audit](docs/text-algorithms.md) records the implemented cost,
-ownership, and bounded-resource contracts. Keep content parity, physical encoding,
-allocation traffic, and retained memory distinct. Remaining work below extends those
-contracts or investigates costs still visible after the string follow-ups.
+Keep content parity, physical encoding, allocation traffic, and retained memory
+distinct when measuring text work.
 
 ## Focused performance work
 
@@ -554,10 +546,9 @@ contracts or investigates costs still visible after the string follow-ups.
 
 # Host architecture and transport
 
-The accepted ownership, streaming, cancellation, and event-loop contract is
-docs/decisions/03-wave-0-host-architecture.md. Engine objects own language semantics,
-API adapters own their public surfaces, and the host owns DNS, sockets, TLS, clocks,
-entropy, cancellation, and reactor completions.
+Engine objects own language semantics, API adapters own their public surfaces, and
+the host owns DNS, sockets, TLS, clocks, entropy, cancellation, and reactor
+completions.
 
 ## Active host work
 

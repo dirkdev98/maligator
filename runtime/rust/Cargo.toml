@@ -46,8 +46,7 @@ temporal_rs = { version = "0.2.6", default-features = false, optional = true }
 # rather than its own because two Rust staticlibs can't co-link (duplicate std
 # panic-runtime symbols). The `utf16` feature matches over &[u16] with no UTF-8
 # conversion. Optional + gated behind the `regexp` feature (engine.regexp): off
-# drops the regex engine + its Unicode tables. See src/regexp.rs +
-# docs/decisions/03-regexp.md.
+# drops the regex engine + its Unicode tables. See src/regexp.rs.
 regress = { version = "0.12.0", path = "vendor/regress", features = [
 	"utf16",
 ], optional = true }

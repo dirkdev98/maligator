@@ -72,7 +72,6 @@ Unit commands run once by default; pass `-- --watch` for a watch loop.
 - `tests`: unit and native integration coverage.
 - `website`: the site at [maligator.ddv.tools](https://maligator.ddv.tools) and its
   documentation sources.
-- `docs/decisions`: architecture decisions.
 
 ## Further reading
 

@@ -174,7 +174,7 @@ void mal_gc_request_safepoint(MalGcPollTarget *target) {
 }
 
 
-/* Preemption hook (docs/decisions/03-wave-0-host-architecture.md). Null in a plain
+/* Preemption hook. Null in a plain
  * run; the scheduler installs one so a safepoint can yield the running fiber when its reduction
  * budget is exhausted. Called from mal_gc_safepoint, i.e. only where a context
  * switch is safe (roots precise, no un-rooted native frame). */

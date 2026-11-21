@@ -105,7 +105,7 @@ void mal_gc_satb_shade_frame(MalVmFrame *frame);
 /* A GC-consistent point where this mutator's roots are enumerable. */
 void mal_gc_safepoint(MalVm *vm);
 
-/* Preemption hook (docs/decisions/03-wave-0-host-architecture.md). Null in a plain
+/* Preemption hook. Null in a plain
  * run; the scheduler installs one so a safepoint can yield the running fiber (a context switch is
  * safe exactly where a collection is — same gate). Called at the end of
  * mal_gc_safepoint. */

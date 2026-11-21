@@ -316,9 +316,10 @@ four macOS shards and a job that regenerates the catalog and its generated files
 both captures, runs the catalog unit tests, commits the refresh to `main` and dispatches
 CI for it. Runs queue instead of cancelling each other. A refresh of an older revision
 is rebased onto `main`, and the queued run captures whatever changed since. Captures are
-retained for fourteen days. See the
-[inventory workflow](decisions/static-value-foundations.md#native-inventory-and-coverage)
-for local captures and imports.
+retained for fourteen days. Linux captures cannot see a change that only the macOS
+runtime installs, such as a platform-specific host constant, so such a change needs a
+`force` dispatch. [Inventory captures](#inventory-captures) covers the same steps
+locally.
 
 Linux jobs run on Ubuntu 26.04 with its Clang 21. The workflows use four workers per
 Linux job and three macOS workers
@@ -744,4 +745,33 @@ fixture, answer an exploratory question, or analyze an existing cache:
 node scripts/diff-compiled.ts tests/local/constant_fold.js --stress
 node scripts/diff-script.ts tests/local/constant_fold.js --strict --stress
 node scripts/test262-code-stats.ts --variant both --limit 30
+```
+
+## Inventory captures
+
+To see whether a local change alters the descriptor graph, capture every mode and
+compare it with the recorded audit for the host target:
+
+```sh
+node scripts/primordial-inventory.ts --all .cache/primordial-inventory
+node scripts/primordial-inventory-audit.ts --check .cache/primordial-inventory
+```
+
+A single mode or `--shard=INDEX/COUNT` replaces `--all` for a partial capture. A
+complete capture on the catalog target (macOS ARM) regenerates the catalog as the
+workflow does. Generation rejects captures whose source digest differs from the
+checkout, so capture and regenerate before any other edit:
+
+```sh
+node scripts/generate-primordial-catalog.ts .cache/primordial-inventory
+node scripts/generate-static-value-coverage.ts
+npm run test:unit -- --run tests/primordial-catalog.test.ts
+```
+
+`configurations.json` keeps a separate audit per platform and architecture. Importing
+a target's captures records its audit without regenerating the catalog, and keeps the
+audits of other targets:
+
+```sh
+node scripts/primordial-inventory-audit.ts .cache/primordial-inventory
 ```
