@@ -4,6 +4,7 @@ import type { MaligatorFfiEvidence, MaligatorFfiValueFacts } from "../public-api
 import type { JsValue } from "./binding-plan.ts";
 import type { CFunction } from "./c-model.ts";
 import type { CType } from "./c-type.ts";
+import type { DevelopmentShim } from "./development-shim.ts";
 import { FfiError } from "./ffi-error.ts";
 import { FfiJsonReader, ffiJsonChunks, ffiJsonEqual } from "./json.ts";
 import type { PreparedLibrary } from "./library.ts";
@@ -38,6 +39,7 @@ export interface FfiCheckReport {
 	readonly target: string;
 	readonly ok: boolean;
 	readonly libraries: ReadonlyArray<FfiLibraryCheck>;
+	readonly development?: ReadonlyArray<DevelopmentShim>;
 	readonly probe?: FfiProbeReport;
 }
 
@@ -569,6 +571,11 @@ export function formatFfiCheck(report: FfiCheckReport): string {
 					`  ${change.path}: ${display(change.before)} -> ${display(change.after)}`,
 			),
 		]),
+		...(report.development?.map((entry) =>
+			entry.kind === "shim"
+				? `${entry.library} development runtime: shared shim`
+				: `${entry.library} development runtime: linked runner (${entry.reason})`,
+		) ?? []),
 		...(report.probe === undefined
 			? []
 			: [

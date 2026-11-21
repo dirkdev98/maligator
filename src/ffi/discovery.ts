@@ -19,6 +19,21 @@ export type LinkInput =
 	/** A pkg-config linker flag passed through, such as `-pthread`. */
 	| { readonly kind: "flag"; readonly value: string };
 
+export function libraryLinkArguments(input: LinkInput): Array<string> {
+	switch (input.kind) {
+		case "archive":
+			return [input.path];
+		case "shared":
+			return [input.path, `-Wl,-rpath,${input.directory}`];
+		case "system":
+			return [`-l${input.name}`];
+		case "framework":
+			return ["-framework", input.name];
+		case "flag":
+			return [input.value];
+	}
+}
+
 export interface ResolvedLibrary {
 	readonly name: string;
 	readonly method: "pkg-config" | "paths" | "sources";

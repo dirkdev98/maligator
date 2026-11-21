@@ -44,6 +44,7 @@ import type {
 	GeneratedTranslationUnitKind,
 } from "./compiler/target/emit-program-image.ts";
 import { DEVELOPMENT_FRAGMENT_MAIN } from "./development-fragments.ts";
+import { libraryLinkArguments } from "./ffi/discovery.ts";
 import type { LinkInput } from "./ffi/discovery.ts";
 import { writeSourceChunks } from "./generated-source.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
@@ -722,7 +723,18 @@ export function buildDevelopmentRunner(
 	cacheSuffix?: string,
 	libraries?: Pick<LocalBuildOptions, "externalUnits" | "linkInputs">,
 ): LocalBuildResult {
-	return buildLocalBinary({
+	return buildLocalBinary(
+		developmentRunnerOptions(context, verbose, cacheSuffix, libraries),
+	);
+}
+
+function developmentRunnerOptions(
+	context: NativeBuildContext,
+	verbose: boolean,
+	cacheSuffix?: string,
+	libraries?: Pick<LocalBuildOptions, "externalUnits" | "linkInputs">,
+): LocalBuildOptions {
+	return {
 		context,
 		name: "MaligatorDev",
 		cSource: languageComponentAnchorSource(context.features),
@@ -731,7 +743,61 @@ export function buildDevelopmentRunner(
 		cacheSuffix,
 		outDir: runnerWorkDirectory(context),
 		...libraries,
+	};
+}
+
+function supportsDevelopmentShims(context: NativeBuildContext): boolean {
+	const platform = context.toolchain.platform ?? process.platform;
+	return platform === "darwin" || platform === "linux";
+}
+
+export function sharedDevelopmentRunnerFeatures(
+	features: NativeBuildContext["features"],
+): NativeBuildContext["features"] {
+	return normalizeNativeFeatures({
+		...features,
+		webPlatformEnabled: true,
+		nodeEnabled: true,
+		temporalEnabled: true,
+		intlEnabled: true,
+		intlFeatures: [],
 	});
+}
+
+export function buildSharedDevelopmentRunner(
+	context: NativeBuildContext,
+	verbose: boolean,
+): string {
+	context = { ...context, features: sharedDevelopmentRunnerFeatures(context.features) };
+	const platform = context.toolchain.platform ?? process.platform;
+	const libraries = supportsDevelopmentShims(context)
+		? {
+				externalUnits: [
+					{
+						id: "ffi-shim-loader",
+						source: {
+							path: path.join(context.runtimeDirectory, "src/ffi/mal_ffi_shim_loader.c"),
+						},
+						compileArguments: ["-std=c2x"],
+					},
+				],
+				linkInputs: platform === "linux" ? [{ kind: "system" as const, name: "dl" }] : [],
+			}
+		: undefined;
+	const workRoot = path.join(context.cacheDirectory, "work");
+	mkdirSync(workRoot, { recursive: true });
+	const work = mkdtempSync(path.join(workRoot, "shared-runner-"));
+	try {
+		return buildLocalBinary(
+			{
+				...developmentRunnerOptions(context, verbose, undefined, libraries),
+				outDir: work,
+			},
+			true,
+		).binaryPath;
+	} finally {
+		rmSync(work, { recursive: true, force: true });
+	}
 }
 
 /**
@@ -750,7 +816,10 @@ function resolvesInstallersByName(options: LocalBuildOptions): boolean {
 }
 
 /** Link emitted generated C into a standalone binary using one resolved context. */
-export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
+export function buildLocalBinary(
+	options: LocalBuildOptions,
+	sharedRunner = false,
+): LocalBuildResult {
 	const context = resolvesInstallersByName(options)
 		? Object.freeze({
 				...options.context,
@@ -828,6 +897,8 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		},
 	);
 	const compileArguments = generatedCCompileArguments(context);
+	if (sharedRunner && supportsDevelopmentShims(context))
+		compileArguments.push("-DMAL_FFI_SHIMS=1");
 	const thinLtoCache = thinLtoCacheArguments(context);
 	let phaseStartedAt = performance.now();
 	const mainFile =
@@ -925,6 +996,12 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 		toolchain: context.toolchain.fingerprint,
 		target: context.toolchain.target,
 	});
+	const executable = sharedRunner
+		? path.join(context.cacheDirectory, "work", "local-runner", linkKey, artifactName)
+		: binaryPath;
+	const restoreBinary = (binary: ReturnType<typeof artifactOutput>): void => {
+		if (!sharedRunner || !existsSync(executable)) materializeArtifact(binary, executable);
+	};
 	const cached = readArtifactAction(
 		context.cacheDirectory,
 		"linked-binary",
@@ -935,7 +1012,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 	if (cached !== undefined) {
 		const binary = artifactOutput(cached, "binary");
 		context.onCacheEvent?.({ artifact: "binary", hit: true, path: binary.path });
-		materializeArtifact(binary, binaryPath);
+		restoreBinary(binary);
 		const linkDurationMs = performance.now() - phaseStartedAt;
 		context.onBuildPhase?.({
 			phase: "link",
@@ -944,7 +1021,7 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 			path: binary.path,
 		});
 		return {
-			binaryPath,
+			binaryPath: executable,
 			artifacts,
 			context,
 			measurements: {
@@ -972,14 +1049,14 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 				linkKey,
 			);
 			if (raced !== undefined) {
-				materializeArtifact(artifactOutput(raced, "binary"), binaryPath);
+				restoreBinary(artifactOutput(raced, "binary"));
 				linkCache = "hit";
 				linkDurationMs = performance.now() - phaseStartedAt;
 				context.onBuildPhase?.({
 					phase: "link",
 					durationMs: linkDurationMs,
 					cache: "hit",
-					path: binaryPath,
+					path: executable,
 				});
 				return;
 			}
@@ -1007,21 +1084,11 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 					copyFileSync(archive, destination, constants.COPYFILE_FICLONE);
 					return destination;
 				};
-				const libraryArguments = (options.linkInputs ?? []).flatMap((input) => {
-					switch (input.kind) {
-						case "archive":
-							return [materializeArchive(input.path)];
-						case "shared":
-							// The binary loads it from where it was found, so keep that path.
-							return [input.path, `-Wl,-rpath,${input.directory}`];
-						case "system":
-							return [`-l${input.name}`];
-						case "framework":
-							return ["-framework", input.name];
-						case "flag":
-							return [input.value];
-					}
-				});
+				const libraryArguments = (options.linkInputs ?? []).flatMap((input) =>
+					input.kind === "archive"
+						? [materializeArchive(input.path)]
+						: libraryLinkArguments(input),
+				);
 				const materializedArtifacts = artifacts.linkArgs.map((argument) =>
 					argument.startsWith("-") ? argument : materializeArchive(argument),
 				);
@@ -1086,17 +1153,19 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 					linkKey,
 					[{ name: "binary", file: binaryPath }],
 				);
+				const binary = artifactOutput(published, "binary");
+				if (sharedRunner) restoreBinary(binary);
 				context.onBuildPhase?.({
 					phase: "publish binary",
 					durationMs: performance.now() - publishStartedAt,
-					path: artifactOutput(published, "binary").path,
+					path: binary.path,
 				});
 			}
 		},
 	);
 
 	return {
-		binaryPath,
+		binaryPath: executable,
 		artifacts,
 		context,
 		measurements: {

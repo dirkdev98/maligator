@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 import type { Socket } from "node:net";
 import type { ApplicationExit, ApplicationResources } from "../application-images.ts";
+import { developmentShimArguments } from "../ffi/development-shim.ts";
 import type { TestApplication, TestApplicationHost } from "./application-host.ts";
 import { restoreTestHostError } from "./host-protocol.mts";
 import type { TestHostMessage, TestHostOperation } from "./host-protocol.mts";
@@ -25,13 +26,17 @@ export interface LinkedTestHost extends TestApplicationHost {
 	close(): Promise<void>;
 }
 
-/** A persistent native host owns image references and joins every launched application. */
-export async function startLinkedTestHost(options: {
+export interface LinkedTestHostLaunch {
 	executable: string;
 	wires: Array<string>;
 	entry: string;
-	signal?: AbortSignal;
-}): Promise<LinkedTestHost> {
+	shims: Array<string>;
+}
+
+/** A persistent native host owns image references and joins every launched application. */
+export async function startLinkedTestHost(
+	options: LinkedTestHostLaunch & { signal?: AbortSignal },
+): Promise<LinkedTestHost> {
 	options.signal?.throwIfAborted();
 	const token = randomUUID();
 	const accepted = deferred<Socket>();
@@ -75,6 +80,7 @@ export async function startLinkedTestHost(options: {
 	const child = spawn(
 		options.executable,
 		[
+			...developmentShimArguments(options.shims),
 			"--maligator-internal-run-wires",
 			String(options.wires.length),
 			options.entry,

@@ -6,6 +6,10 @@
 
 static const char development_wires_command[] = "--maligator-internal-run-wires";
 
+#if defined(MAL_FFI_SHIMS)
+bool mal_ffi_load_shim(const char *path);
+#endif
+
 int main(int argc, char **argv) {
     const char *worker_manifest_path = nullptr;
     if (argc >= 3 && strcmp(argv[1], "--maligator-internal-workers") == 0) {
@@ -14,6 +18,20 @@ int main(int argc, char **argv) {
         argv += 2;
         argc -= 2;
     }
+#if defined(MAL_FFI_SHIMS)
+    if (argc >= 3 && strcmp(argv[1], "--maligator-internal-ffi-shims") == 0) {
+        char *end;
+        long count = strtol(argv[2], &end, 10);
+        if (*end != '\0' || count < 1 || count > argc - 4)
+            return 2;
+        for (int index = 0; index < count; index++) {
+            if (!mal_ffi_load_shim(argv[3 + index])) return 2;
+        }
+        argv[2 + count] = argv[0];
+        argv += 2 + count;
+        argc -= 2 + count;
+    }
+#endif
     if (argc < 2) {
         fprintf(stderr, "usage: %s <program.malw> [program arguments...]\n", argv[0]);
         return 2;

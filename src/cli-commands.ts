@@ -100,6 +100,10 @@ import {
 import { createDevelopmentSession } from "./development-session.ts";
 import { checkLibraries, formatFfiCheck } from "./ffi/check.ts";
 import { declarationsCurrent, generateDeclarations } from "./ffi/declarations.ts";
+import {
+	buildDevelopmentShims,
+	developmentShimArguments,
+} from "./ffi/development-shim.ts";
 import { FfiError, FfiSourceChangedError } from "./ffi/ffi-error.ts";
 import { formatInspection, inspectBindings } from "./ffi/inspect.ts";
 import { ffiJsonChunks } from "./ffi/json.ts";
@@ -116,9 +120,12 @@ import { writeSourceChunks } from "./generated-source.ts";
 import {
 	buildDevelopmentRunner,
 	buildLocalBinary,
+	buildSharedDevelopmentRunner,
 	prepareGeneratedSources,
+	sharedDevelopmentRunnerFeatures,
 } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
+import type { NativeBuildContext } from "./native-build-context.ts";
 import { nativeBuildJobs } from "./native-command.ts";
 import { nativeSourcePath } from "./native-source-path.ts";
 import {
@@ -443,8 +450,10 @@ function selectToolchain(
 	) {
 		return {};
 	}
+	const needsCxx =
+		(command.kind !== "build" && !command.profile) || configNeedsCxx(config);
 	const selectionKey = JSON.stringify({
-		needsCxx: configNeedsCxx(config),
+		needsCxx,
 		target: command.kind === "build" ? command.target : undefined,
 		production: command.profile || (command.kind === "build" && command.production),
 	});
@@ -452,7 +461,7 @@ function selectToolchain(
 	if (retained !== undefined) return retained;
 	try {
 		const toolchain = requireToolchain({
-			needsCxx: configNeedsCxx(config),
+			needsCxx,
 			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
 			target: command.kind === "build" ? command.target : undefined,
 		});
@@ -514,6 +523,20 @@ function compatibleDevelopmentRunner(
 			(!config.engine.temporal || runner.temporal) &&
 			(!config.engine.intl.enabled || runner.intl),
 	);
+}
+
+function prepareDevelopmentShims(
+	libraries: PreparedLibraries,
+	context: NativeBuildContext,
+) {
+	return buildDevelopmentShims(libraries.libraries, {
+		compiler: context.toolchain.tools.cc,
+		environment: context.environment,
+		platform: context.toolchain.platform ?? process.platform,
+		cross: context.toolchain.cross === true,
+		runtimeDirectory: context.runtimeDirectory,
+		cacheDirectory: context.cacheDirectory,
+	});
 }
 
 export function applicationDriverPath(
@@ -1059,14 +1082,6 @@ function prepareCommandState(
 				}
 			}
 		}
-		const nativeLibraries =
-			libraries === undefined
-				? undefined
-				: nativeLibraryInputs(
-						libraries,
-						context.installation.runtimeDirectory,
-						selectedFfiExports,
-					);
 		const nativeEnvironment = compilerProfileBuildEnvironment(command);
 		reporter.detail("Native compile jobs", nativeBuildJobs(nativeEnvironment));
 		const nativeCache = new Map<"runtime" | "rust" | "binary", boolean>();
@@ -1077,7 +1092,13 @@ function prepareCommandState(
 			toolchain,
 			plan,
 			runtimeDirectory: context.installation.runtimeDirectory,
-			features: derivation.features,
+			features: interpreted
+				? normalizeNativeFeatures({
+						...derivation.features,
+						webPlatformEnabled: true,
+						nodeEnabled: true,
+					})
+				: derivation.features,
 			compilerBake,
 			onCacheEvent: (event) => {
 				nativeCache.set(event.artifact, event.hit);
@@ -1119,7 +1140,32 @@ function prepareCommandState(
 			);
 			reporter.detail("Execution backend", "interpreted development image");
 			reporter.detail("Development images", wirePaths.join(", "));
-			const runnerKey = `${toolchain!.fingerprint}:${derivation.cacheSuffix}:${libraries?.identity ?? ""}`;
+			const shims =
+				libraries === undefined
+					? []
+					: reporter.phase("Prepare C library shims", () =>
+							prepareDevelopmentShims(libraries, nativeContext),
+						);
+			const linkedLibraries = shims.some((shim) => shim.kind === "linked")
+				? libraries
+				: undefined;
+			for (const shim of shims) {
+				reporter.detail(
+					`C library ${shim.library} development runtime`,
+					shim.kind === "shim"
+						? `shared shim (${shim.path})`
+						: `linked runner (${shim.reason})`,
+				);
+			}
+			const runnerKey = artifactIdentity({
+				toolchain: nativeContext.toolchain.fingerprint,
+				environment: nativeContext.environmentFingerprint,
+				features:
+					linkedLibraries === undefined
+						? sharedDevelopmentRunnerFeatures(nativeContext.features)
+						: nativeContext.features,
+				libraries: linkedLibraries?.identity,
+			});
 			const retainedRunner = context.developmentCache?.runners.get(runnerKey);
 			const useRetainedRunner =
 				retainedRunner !== undefined && existsSync(retainedRunner);
@@ -1127,12 +1173,18 @@ function prepareCommandState(
 				"Prepare development runtime",
 				() => {
 					if (useRetainedRunner) return retainedRunner;
-					const built = buildDevelopmentRunner(
-						nativeContext,
-						verbose,
-						derivation.cacheSuffix,
-						nativeLibraries,
-					).binaryPath;
+					const built =
+						linkedLibraries === undefined
+							? buildSharedDevelopmentRunner(nativeContext, verbose)
+							: buildDevelopmentRunner(
+									nativeContext,
+									verbose,
+									`ffi-${linkedLibraries.identity}`,
+									nativeLibraryInputs(
+										linkedLibraries,
+										context.installation.runtimeDirectory,
+									),
+								).binaryPath;
 					context.developmentCache?.runners.set(runnerKey, built);
 					return built;
 				},
@@ -1154,6 +1206,11 @@ function prepareCommandState(
 				binaryPath,
 				runArguments: [
 					...workerManifestArguments(workerManifest),
+					...developmentShimArguments(
+						linkedLibraries !== undefined
+							? []
+							: shims.flatMap((shim) => (shim.kind === "shim" ? [shim.path] : [])),
+					),
 					"--maligator-internal-run-wires",
 					String(wirePaths.length),
 					entrypointPath,
@@ -1166,6 +1223,14 @@ function prepareCommandState(
 			};
 		}
 
+		const nativeLibraries =
+			libraries === undefined
+				? undefined
+				: nativeLibraryInputs(
+						libraries,
+						context.installation.runtimeDirectory,
+						selectedFfiExports,
+					);
 		const programImage = frontend.programImage;
 		function* generatedUnits() {
 			if (developmentFragments) {
@@ -2103,11 +2168,12 @@ function testToolchain(
 	context: CommandContext,
 	config: ResolvedBuildConfig,
 	environment: NodeJS.ProcessEnv = process.env,
+	developmentRunner = false,
 ): Toolchain {
 	try {
 		return requireToolchain({
 			env: environment,
-			needsCxx: configNeedsCxx(config),
+			needsCxx: developmentRunner || configNeedsCxx(config),
 			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
 		});
 	} catch (error) {
@@ -2122,9 +2188,9 @@ function buildIsolatedTestRunner(
 	libraries: PreparedLibraries | undefined,
 	environment: NodeJS.ProcessEnv = process.env,
 	applicationHost = false,
-): string {
+): { binaryPath: string; shims: Array<string> } {
 	const derivation = buildDerivationFromConfig(config);
-	const toolchain = testToolchain(context, config, environment);
+	const toolchain = testToolchain(context, config, environment, true);
 	const evalCompiler = context.installation.evalCompiler;
 	const compilerBake =
 		evalCompiler.kind === "source"
@@ -2157,14 +2223,23 @@ function buildIsolatedTestRunner(
 			: derivation.features,
 		compilerBake,
 	});
-	return buildDevelopmentRunner(
-		nativeContext,
-		false,
-		`${derivation.cacheSuffix}${applicationHost ? "-test-host" : ""}`,
-		libraries === undefined
-			? undefined
-			: nativeLibraryInputs(libraries, context.installation.runtimeDirectory),
-	).binaryPath;
+	const shims =
+		libraries === undefined ? [] : prepareDevelopmentShims(libraries, nativeContext);
+	if (libraries === undefined || shims.every((shim) => shim.kind === "shim")) {
+		return {
+			binaryPath: buildSharedDevelopmentRunner(nativeContext, false),
+			shims: shims.flatMap((shim) => (shim.kind === "shim" ? [shim.path] : [])),
+		};
+	}
+	return {
+		binaryPath: buildDevelopmentRunner(
+			nativeContext,
+			false,
+			`${derivation.cacheSuffix}${applicationHost ? "-test-host" : ""}`,
+			nativeLibraryInputs(libraries, context.installation.runtimeDirectory),
+		).binaryPath,
+		shims: [],
+	};
 }
 
 function prepareLinkedTestHost(
@@ -2214,14 +2289,16 @@ function prepareLinkedTestHost(
 				optimization: "development",
 				interpreted: true,
 			});
+			const runner = buildIsolatedTestRunner(
+				context,
+				hostConfig,
+				libraries,
+				process.env,
+				true,
+			);
 			return {
-				executable: buildIsolatedTestRunner(
-					context,
-					hostConfig,
-					libraries,
-					process.env,
-					true,
-				),
+				executable: runner.binaryPath,
+				shims: runner.shims,
 				wires: frontend.runtimeArtifacts.map((artifact) => artifact.path),
 				entry,
 			};
@@ -2252,22 +2329,23 @@ async function executeIsolatedTests(
 		((text: string) => {
 			process.stdout.write(text);
 		});
-	// A packaged runner cannot contain C library bindings, so these tests build one.
+	// The packaged test host has no shim-loading protocol.
 	const libraries =
 		packagedRunner === undefined
 			? prepareConfiguredLibraries(
 					config,
 					context,
-					testToolchain(context, config, environment),
+					testToolchain(context, config, environment, true),
 					environment,
 				)
 			: undefined;
 	const testConfig =
 		libraries === undefined ? config : { ...config, ffiModules: libraries.modules };
 	const compiled = prepareIsolatedTestCommand(command, context, testConfig);
-	const runner =
-		packagedRunner?.executablePath ??
-		buildIsolatedTestRunner(context, testConfig, libraries, environment);
+	const { binaryPath: runner, shims } =
+		packagedRunner === undefined
+			? buildIsolatedTestRunner(context, testConfig, libraries, environment)
+			: { binaryPath: packagedRunner.executablePath, shims: [] };
 	const wirePaths =
 		"wires" in compiled
 			? compiled.wires.map((wire) => wire.path)
@@ -2278,6 +2356,7 @@ async function executeIsolatedTests(
 	);
 	const args = [
 		...workerManifestArguments(workerManifest),
+		...developmentShimArguments(shims),
 		"--maligator-internal-run-wires",
 		String(wirePaths.length),
 		entrypoint,
@@ -2801,6 +2880,10 @@ async function runFfiCommand(
 			const selected = libraries.filter((library) =>
 				names.includes(library.contract.name),
 			);
+			const development = buildDevelopmentShims(libraries, {
+				...preparation,
+				runtimeDirectory: context.installation.runtimeDirectory,
+			}).filter((entry) => names.includes(entry.library));
 			const checkOptions = {
 				file: path.resolve(projectRoot, command.outPath ?? "maligator-ffi.lock.json"),
 				target:
@@ -2840,6 +2923,7 @@ async function runFfiCommand(
 					checked = checkLibraries(selected, { ...checkOptions, update: true });
 				checked = { ...checked, ok: checked.ok && probe.ok, probe };
 			}
+			checked = { ...checked, development };
 			if (command.json) {
 				writeSourceChunks(1, ffiJsonChunks(checked, "\t"));
 				process.stdout.write("\n");

@@ -3,6 +3,7 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { FfiCheckReport } from "../../src/ffi/check.ts";
 import { preparedNativeEvalConfig } from "../helpers/native-eval-config.ts";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -77,11 +78,14 @@ function outputLines(stdout: string): Array<string> {
 describe("C library bindings", () => {
 	let project: string;
 	let runOutput: Array<string>;
+	let runDiagnostics: string;
 
 	beforeAll(() => {
 		project = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-bindings-"));
 		cpSync(fixture, project, { recursive: true });
-		runOutput = outputLines(cli(project, ["run"]).stdout);
+		const executed = cli(project, ["run", "--verbose"]);
+		runOutput = outputLines(executed.stdout);
+		runDiagnostics = executed.stderr;
 	}, 600_000);
 
 	afterAll(() => {
@@ -191,15 +195,75 @@ describe("C library bindings", () => {
 		expect(executed.stdout).toContain("2 passed");
 	}, 600_000);
 
-	it("links bindings into a production binary", () => {
+	it("returns the same results through the shim as in a production binary", () => {
+		expect(runDiagnostics).toContain("C library shapes development runtime: shared shim");
 		const built = cli(project, ["build", "--production"]);
 		const binary = outputLines(built.stdout).at(-1)!;
 		const executed = spawnSync(binary, [], { encoding: "utf-8", timeout: 60_000 });
 		expect(executed.status, executed.stderr).toBe(0);
-		expect(outputLines(executed.stdout).slice(0, EXPECTED_RESULTS.length)).toEqual(
-			EXPECTED_RESULTS,
-		);
+		expect(outputLines(executed.stdout)).toEqual(runOutput);
 	}, 600_000);
+
+	it("uses a linked runner for a static archive built without PIC", () => {
+		const directory = path.join(project, "static");
+		mkdirSync(directory);
+		const object = path.join(directory, "shapes.o");
+		const compiled = spawnSync(
+			process.env.CC ?? "cc",
+			[
+				// An ELF executable accepts PIE relocations that a shared object cannot use.
+				process.platform === "linux" ? "-fPIE" : "-fno-pic",
+				"-I",
+				"include",
+				"-c",
+				"src/shapes.c",
+				"-o",
+				object,
+			],
+			{ cwd: project, encoding: "utf-8" },
+		);
+		expect(compiled.status, compiled.stderr).toBe(0);
+		const archived = spawnSync(
+			process.env.AR ?? "ar",
+			["rcs", path.join(directory, "libshapes.a"), object],
+			{ encoding: "utf-8" },
+		);
+		expect(archived.status, archived.stderr).toBe(0);
+		writeFileSync(
+			path.join(project, "static.build.ts"),
+			`export default ${JSON.stringify({
+				entry: "main.ts",
+				ffi: {
+					shapes: {
+						contract: "shapes.ffi.ts",
+						find: {
+							includeDirs: ["include"],
+							libraryDirs: ["static"],
+							libraries: ["shapes"],
+						},
+					},
+				},
+			})};\n`,
+		);
+		const check = cli(project, [
+			"ffi",
+			"check",
+			"--config",
+			"static.build.ts",
+			"--update",
+			"--json",
+		]);
+		const { development } = JSON.parse(check.stdout) as FfiCheckReport;
+		const detected = development?.find((entry) => entry.library === "shapes");
+		expect(detected?.kind === "linked" ? detected.reason : undefined).toContain(
+			"the library links a static archive",
+		);
+		const executed = cli(project, ["run", "--config", "static.build.ts", "--verbose"]);
+		expect(executed.stderr).toContain(
+			"linked runner (the library links a static archive",
+		);
+		expect(outputLines(executed.stdout)).toEqual(runOutput);
+	}, 300_000);
 
 	it("links a shared library and loads it from where it was found", () => {
 		const libraryDirectory = path.join(project, "lib");

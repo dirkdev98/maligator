@@ -164,7 +164,12 @@ Generate declarations so the editor and `tsc` resolve the import, and include th
 maligator ffi types
 ```
 
-`maligator run`, `dev`, and `build` compile the binding and link the library. `run` and `dev` build a development runtime that contains the binding instead of using a packaged one, so they need the native toolchain.
+`maligator run` and `dev` use the native toolchain to build a shared shim for each
+library on macOS and Linux. The runtime loads the cached shim when the program starts.
+Maligator falls back to linking a project runner when a contract needs a static
+archive, executable-wide linker flags, or symbols from another contract's C sources.
+`maligator ffi check` reports the development link mode for each library.
+`maligator build` links the bindings directly into the executable.
 
 Production builds with a closed module graph generate wrappers for the exports the
 application and its workers use, and for the handle types, fields, views, and callable
@@ -415,8 +420,8 @@ target has its own snapshots, and `ffi check raylib --update` updates only rayli
 the selected target. Header snapshots and probes provide evidence for reviewing a
 contract; they do not establish the linked binary's ABI or every ownership rule.
 
-`maligator test` builds a test runtime with the bindings too. In `test --watch`,
-JavaScript edits start a fresh application in the linked runtime, preserving the C
+`maligator test` uses the same shims or linked runner as `run`. In `test --watch`,
+JavaScript edits start a fresh application in the test host, preserving the C
 library's process state. Changes to contracts, headers, sources, or resolved library
-files replace that runtime after its applications finish cleanup. Portable wire
-output rejects C libraries.
+files replace that runtime after its applications finish cleanup. Portable wire output
+rejects C libraries.

@@ -2,13 +2,13 @@ import type { ApplicationImageHost } from "../application-images.ts";
 import type { ResolvedBuildConfig } from "../build-config.ts";
 import type { NativeTestInputs, TestApplicationHost } from "./application-host.ts";
 import { startLinkedTestHost } from "./linked-host.ts";
-import type { LinkedTestHost } from "./linked-host.ts";
+import type { LinkedTestHost, LinkedTestHostLaunch } from "./linked-host.ts";
 import type { TestGenerationControls } from "./session.ts";
 
 export interface PreparedLinkedTestHost {
 	config: ResolvedBuildConfig;
 	native: NativeTestInputs;
-	build(): { executable: string; wires: Array<string>; entry: string };
+	build(): LinkedTestHostLaunch;
 	validate(): void;
 }
 

@@ -109,10 +109,11 @@ tables.
 
 ## Development runner
 
-`run`, `dev`, and isolated `test` use a packaged runner when one matches the
+`run`, `dev`, and `test` use a packaged runner when one matches the
 configuration. When they need a local runner, the linked-binary cache gives projects
-with the same runtime capabilities and toolchain one executable. The application and
-its workers supply their own runtime images.
+with the same runtime flavour and toolchain one executable. The application and its
+workers supply runtime images that select the host surface, Intl services and
+Temporal. Compiler defines that change native code enter the runner's cache key.
 
 On macOS and Linux, the local runner loads C bindings from cached shims before it
 loads any images. Each shim links its library and supplies an installer to the runner.
