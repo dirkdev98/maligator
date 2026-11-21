@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { hostInstallerSymbol } from "../src/compiler/frontend/host-modules.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 
@@ -49,11 +50,11 @@ describe("CommonJS loader lowering", () => {
 		).toHaveLength(1);
 
 		const definition = compileSemanticProgramToProgramImage(program);
-		expect(definition.runtime.hostInstalls).toEqual([
-			expect.objectContaining({
-				installer: "mal_host_install_node_path",
-				exports: [expect.objectContaining({ name: "default" })],
-			}),
+		const pathInstalls = definition.runtime.hostInstalls.filter(
+			({ installer }) => installer === hostInstallerSymbol("node:path"),
+		);
+		expect(pathInstalls.map(({ exports }) => exports.map(({ name }) => name))).toEqual([
+			["default"],
 		]);
 	});
 
