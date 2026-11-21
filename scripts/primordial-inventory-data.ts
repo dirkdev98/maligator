@@ -1,4 +1,7 @@
 import { primordialGlobalBindings } from "../src/compiler/shared/builtin-registry.ts";
+import { EMBED_INSTALLER } from "../src/compiler/shared/embedded-asset.ts";
+import type { EmbeddedAsset } from "../src/compiler/shared/embedded-asset.ts";
+import type { PlatformData } from "../src/platform/catalog.ts";
 
 type RawValue =
 	| { ref: number }
@@ -39,7 +42,11 @@ const ARRAY_INDEX = /^(?:0|[1-9]\d*)$/;
 
 export interface InventoryHostInstall {
 	readonly installer: string;
-	readonly exports: ReadonlyArray<{ readonly name: string; readonly slot: number }>;
+	readonly exports: ReadonlyArray<{
+		readonly name: string;
+		readonly slot: number;
+		readonly data?: PlatformData;
+	}>;
 }
 
 export function normalizePrimordialInventory(
@@ -96,15 +103,21 @@ function normalizePhase(
 			repeated.push(row.key);
 		} else list.push(row);
 	}
+	let assetIndex = 0;
 	const roots = rows
 		.filter((row) => row.type === "root" || row.type === "host-root")
-		.map((row) => ({
-			name:
-				row.type === "root"
-					? row.name
-					: `${hostInstalls[row.installer]!.installer}:${row.name}`,
-			value: row.value,
-		}));
+		.map((row) => {
+			if (row.type === "root") return { name: row.name, value: row.value };
+			const install = hostInstalls[row.installer]!;
+			let name = row.name;
+			if (install.installer === EMBED_INSTALLER) {
+				// The driver emits installer slots in manifest order. Both asset
+				// declarations export default, so identify each by its handle kind.
+				const asset = install.exports[assetIndex++]!.data as unknown as EmbeddedAsset;
+				name = asset.kind === "file" ? "EmbeddedFile" : "EmbeddedDirectory";
+			}
+			return { name: `${install.installer}:${name}`, value: row.value };
+		});
 	const publicNames = new Map<string, string>();
 	for (const binding of primordialGlobalBindings) {
 		if (binding.intrinsic === "MAL_INTRINSIC_COUNT") continue;

@@ -27,20 +27,51 @@ export function capturePrimordialInventory(mode: string, outDir: string) {
 	rmSync(metadataFile, { force: true });
 	const source = captureVerificationSource(process.cwd());
 	const modules = [
-		...(config.surface.node ? HOST_MODULES.keys() : []),
+		...(config.surface.node
+			? Array.from(HOST_MODULES.keys(), (id) => ({ id, exports: [] }))
+			: []),
 		// Public source namespaces retain their private native substrate without exposing reserved imports.
 		...PLATFORM_MODULES.filter(
-			(module) => !module.internal && module.id !== "maligator:test",
-		).map((module) => module.id),
+			(module) =>
+				!module.internal &&
+				module.id !== "maligator:test" &&
+				(config.surface.webPlatform || module.id !== "maligator:http"),
+		),
 	];
 	const fixture = path.join(outDir, `inventory-${mode}.mjs`);
 	writeFileSync(
 		fixture,
 		[
-			...modules.map(
-				(id, index) =>
-					`import * as module${index} from ${JSON.stringify(id)};\nglobalThis.module${index} = module${index};`,
-			),
+			...modules.flatMap(({ id, exports }, index) => {
+				const moduleName = `module${index}`;
+				const specifier = JSON.stringify(id);
+				// Embed declarations must be consumed at literal call sites. Worker
+				// entry declarations also have runtime implementations to inventory.
+				if (!exports.some((entry) => entry.contract.declaration === "embed"))
+					return `import * as ${moduleName} from ${specifier};\nglobalThis.${moduleName} = ${moduleName};`;
+
+				const directory = "inventory-assets";
+				const file = "sample.txt";
+				mkdirSync(path.join(outDir, directory), { recursive: true });
+				writeFileSync(path.join(outDir, directory, file), "inventory\n");
+				return exports.map(({ name, contract }, exportIndex) => {
+					const binding = `${moduleName}Export${exportIndex}`;
+					let value = binding;
+					if (contract.declaration === "embed") {
+						switch (name) {
+							case "embedFile":
+								value = `${binding}("./${directory}/${file}")`;
+								break;
+							case "embedDirectory":
+								value = `${binding}("./${directory}", { include: ["${file}"] })`;
+								break;
+							default:
+								throw new Error(`Missing inventory fixture for ${id} export ${name}`);
+						}
+					}
+					return `import { ${name} as ${binding} } from ${specifier};\nglobalThis.${binding} = ${value};`;
+				});
+			}),
 			// Web globals install by use; observing the global object installs all of them.
 			"Object.getOwnPropertyNames(globalThis);",
 		].join("\n"),

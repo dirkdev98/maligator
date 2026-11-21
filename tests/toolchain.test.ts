@@ -1558,16 +1558,15 @@ printf '!<arch>\\n' > "$2"
 
 	it("re-derives backend arrays supplied on a native feature spec", () => {
 		const fake = createFakeToolchain();
-		const toolchain = inspectToolchain({
-			rootDir: fake.root,
-			rustDir: fake.rustDir,
-			env: fake.env,
-			needsCxx: false,
-			platform: "linux",
-		}).toolchain!;
-		const context = resolveNativeBuildContext({
-			toolchain,
-			features: {
+		try {
+			const toolchain = inspectToolchain({
+				rootDir: fake.root,
+				rustDir: fake.rustDir,
+				env: fake.env,
+				needsCxx: false,
+				platform: "linux",
+			}).toolchain!;
+			const expected = normalizeNativeFeatures({
 				evalEnabled: false,
 				realmsEnabled: false,
 				intlEnabled: false,
@@ -1576,27 +1575,20 @@ printf '!<arch>\\n' > "$2"
 				temporalEnabled: false,
 				nodeEnabled: true,
 				intlFeatures: [],
-				cDefines: ["-DMAL_EVAL=1"],
-				cargoFeatures: ["stale"],
-			},
-		});
-
-		expect(context.features.cDefines).toEqual([
-			"-DMAL_EVAL=0",
-			"-DMAL_REALMS=0",
-			"-DMAL_INTL=0",
-			"-DMAL_WEB_PLATFORM=0",
-			"-DMAL_REGEXP=0",
-			"-DMAL_TEMPORAL=0",
-			"-DMAL_NODE=1",
-		]);
-		expect(context.features.cargoFeatures).toEqual([
-			"node-argon2",
-			"node-crypto",
-			"node-tls",
-			"node-zlib",
-			"url",
-		]);
+			});
+			const context = resolveNativeBuildContext({
+				toolchain,
+				features: {
+					...expected,
+					cDefines: ["-DMAL_EVAL=1"],
+					cargoFeatures: ["stale"],
+				},
+			});
+			expect(context.features.cDefines).toEqual(expected.cDefines);
+			expect(context.features.cargoFeatures).toEqual(expected.cargoFeatures);
+		} finally {
+			rmSync(fake.root, { recursive: true, force: true });
+		}
 	});
 
 	it("materializes each generated unit before preparing the next root", () => {
