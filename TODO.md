@@ -25,13 +25,6 @@ themselves commit the project to optimizing every API.
 
 ## Verification workflow
 
-- [x] Place the complete span-parser fixture compilation and image round trip in
-      the slow integration lane while retaining fast parser proof checks in the gate.
-
-- [x] Make async FFI close saturation checks independent of worker-start timing.
-      Observe rejected admissions, verify ownership and managed-pin recovery, and
-      release blocking work before awaiting admitted closes.
-
 - [ ] Extend runtime-gap coverage for a selected Intl, promise or weak-collection
       consumer, separating conversion, traversal and checksum cost. Preserve
       input-scaling coverage.
@@ -70,9 +63,6 @@ invalidation, retained memory and emitted-code costs. An analysis contract needs
 bounded consumer follow-up and explicit cost evidence; it is not a runtime win.
 
 ## Native SSA storage
-
-- [x] Preserve floating-point VM encodings when equal boxed constants merge at a
-      control-flow join, including signed zero, fractions and out-of-range integers.
 
 Choose native specialization by repeated consumer benefit and total cost. Preserve
 mutable-callee fallback, coercion and exception order, publication, roots and polls.
@@ -172,11 +162,6 @@ Runtime eval may remove source closure without invalidating authority closure.
       and error-realm proof. Keep existing captured-callee Math kernels unless shared
       guarding removes enough work to repay copied code.
 
-- [x] Complete non-constructing Boolean, Number and String primitive kernels with
-      replayable input proofs, selected-callee identity through argument reentry and
-      Boolean fallback checks. Keep object coercion, Symbol and BigInt conversion,
-      wrappers and projected String ownership on their existing paths.
-
 ## Performance diagnosis and admission
 
 - [ ] Use existing profiles and admission reports to trace leading sites in one selected
@@ -203,21 +188,6 @@ Runtime eval may remove source closure without invalidating authority closure.
 
 An existing iterator cursor is not, by itself, permission to delete its language
 object. Retained loop experiments preserve effects, authoritative state and fallback.
-
-- [x] Check the shared derived `this` binding after parent construction, including
-      arrow and eval reentry, before running instance fields.
-
-- [x] Carry a single trailing iterable directly to ordinary construction, with
-      guarded positional literal elements and dense Array marshalling. Preserve
-      iterator order and bound-Proxy construction through both backends.
-
-- [x] Defer private rest lists through ordinary construction, preserving iterator
-      effects, copied arguments, the loaded callee and `new.target`. Retain explicit
-      derived `super` fallbacks.
-
-- [x] Forward private mapped arguments from current owning-activation parameter
-      cells, incoming extras and duplicate-formal mappings. Preserve the owning
-      callee, aliasing, deletions and identity when fallback exposes the object.
 
 - [ ] Bound one typed-store side-exit experiment to core-to-execution or optimizer-queue
       and the corresponding compiler loop. First establish removable executed cost; then
@@ -336,24 +306,6 @@ distinct when measuring text work.
       template-string conversion and joining, escaping loop-capture owners, and
       generic `for...in` and entries-pair iteration. Use existing consumers and preserve
       protocol observation, identity and coercion order.
-
-- [x] Replace proven once-initialized closure self cells with active callee identity,
-      allowing other immutable values to copy without the self cycle. Preserve
-      open-source const facts, owner and sibling writes, TDZ and sloppy owning callee.
-      Keep call-only recursion on private entries and retain the executing callee
-      across interpreted ordinary, bound, Proxy and Reflect construction.
-
-- [x] Create `node:test` assertion wrappers in a synchronous immutable-input
-      factory, keeping the mutable assertion counter in one shared recorder.
-      Preserve detached method values, receiver, returns and assertion plans.
-
-- [x] Collect enumerable keys directly from small script function shapes for
-      `once` and `wrappy`. Preserve lazy constructor metadata, key ordering,
-      and fresh result arrays.
-
-- [x] Reduce empty `Object.entries` allocations in JSON Server list filtering.
-      Keep small appends in the array cell and preserve ordinary growth,
-      result identity, and realm prototypes.
 
 - [ ] Reduce remaining no-capture closure and per-iteration capture
       costs. Source-immutable leaf captures can copy values in open images; synthetic
