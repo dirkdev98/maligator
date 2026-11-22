@@ -4456,19 +4456,6 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%\",\"node:fs\"]",
-			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
-				"MAL_INTRINSIC_NODE_BUILTIN_MODULES"
-			],
-			"key": "node:fs",
-			"kind": "data",
-			"operations": [],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
 			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%\",\"node:fs/promises\"]",
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
 			"ownerPaths": [
@@ -4476,6 +4463,19 @@
 				"MAL_INTRINSIC_NODE_BUILTIN_MODULES"
 			],
 			"key": "node:fs/promises",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%\",\"node:fs\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
+				"MAL_INTRINSIC_NODE_BUILTIN_MODULES"
+			],
+			"key": "node:fs",
 			"kind": "data",
 			"operations": [],
 			"task": "N-06",
