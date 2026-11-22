@@ -52,6 +52,24 @@ const cases = {
 		const closed = Object.preventExtensions({ head: 1 });
 		check(!Reflect.defineProperty(closed, "hidden", { value: 1 }), "closed append");
 	},
+	symbolCompatibility() {
+		const record = { head: 1 };
+		const existing = Symbol("existing");
+		const missing = Symbol("missing");
+		record[existing] = 2;
+		Object.preventExtensions(record);
+		const replacement = { value: 3 };
+		check(
+			Reflect.defineProperty(record, existing, { value: replacement }),
+			"closed update",
+		);
+		check(!Reflect.defineProperty(record, missing, { value: 4 }), "closed append");
+		collect();
+		check(
+			record[existing] === replacement && !Object.hasOwn(record, missing),
+			"symbol values",
+		);
+	},
 	enumeration() {
 		const record = { head: 1 };
 		Object.defineProperty(record, "hidden", { value: 2 });

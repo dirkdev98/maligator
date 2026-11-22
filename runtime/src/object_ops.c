@@ -909,15 +909,17 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
         // Object already carries dictionary props: fall through to the table path.
     }
 
-    // An appended accessor need not migrate existing data fields. Once the tail
-    // contains public keys, all later string additions stay there so reflection
-    // still sees the shape's prefix followed by the table's insertion order.
+    // Symbols and appended accessors can keep the existing string slots in place.
+    // Later string additions follow the shape's prefix in the tail so reflection
+    // preserves insertion order.
     bool tail_property = object->header.type == MAL_HEAP_OBJECT && !object->is_arguments
-        && object->shape->inline_count != 0 && key.kind == MAL_KEY_STRING
-        && (mal_object_desc_is_accessor(*desc) || mal_object_has_public_overflow(object))
+        && object->shape->inline_count != 0
+        && (key.kind == MAL_KEY_SYMBOL ||
+            (key.kind == MAL_KEY_STRING
+                && (mal_object_desc_is_accessor(*desc) || mal_object_has_public_overflow(object))
+                && mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DEFINE_OWN) < 0))
         && (mal_object_overflow(object) == nullptr
-            || mal_table_size(mal_object_overflow(object)) < MAL_SHAPE_ORDINARY_SLOTS)
-        && mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DEFINE_OWN) < 0;
+            || mal_table_size(mal_object_overflow(object)) < MAL_SHAPE_ORDINARY_SLOTS);
     if (!tail_property) mal_object_dictionarize(object);
     else object->overflow_private_only = false;
     MalTable *table = mal_object_ensure_overflow(object);

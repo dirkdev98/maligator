@@ -33,6 +33,7 @@ describe.each(["compiled", "interpreted"] as const)(
 		it.each([
 			["descriptors", "preserves every data descriptor attribute combination"],
 			["compatibility", "rejects incompatible nonconfigurable updates"],
+			["symbolCompatibility", "updates an existing symbol on a non-extensible object"],
 			["enumeration", "filters nonenumerable fields across enumeration and copying"],
 			["caches", "rejects readonly writes after polymorphic loads"],
 			["prototype", "invalidates child append caches for inherited readonly properties"],

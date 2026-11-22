@@ -7,7 +7,8 @@ function check(name, condition) {
 }
 
 function dictionary(object) {
-	Object.defineProperty(object, Symbol("dictionary"), {
+	// An integer-index definition moves the existing shaped fields into the table.
+	Object.defineProperty(object, "0", {
 		value: 0,
 		configurable: true,
 	});
