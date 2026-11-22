@@ -142,7 +142,7 @@ export interface BuildOptions {
 	entryGoal?: ModuleGoal;
 	/** Initial script strictness; explicit source directives still take effect. */
 	entryStrict?: boolean;
-	/** C driver override; web, Node and worker programs default to the host event loop. */
+	/** C driver override. Images that need the event loop upgrade the standard Test262 driver. */
 	mainFile?: string;
 	/** Artifact directory; defaults to process-scoped shared-cache work space. */
 	outDir?: string;
@@ -430,6 +430,16 @@ function linkProgramImage(
 	const usesHost = [image, ...workerImages.map((worker) => worker.image)].some((entry) =>
 		imageUsesHost(entry.runtime.hostInstalls),
 	);
+	let mainFile = options.mainFile;
+	if (
+		(mainFile === undefined ||
+			path.resolve(mainFile) === path.resolve("runtime/test262_main.c")) &&
+		(usesHost ||
+			imageNeedsHostEventLoop(image.runtime.hostInstalls) ||
+			workerImages.length > 0)
+	) {
+		mainFile = HOST_MAIN;
+	}
 	// A custom C driver can call host components that the JavaScript image never names.
 	const customDriver =
 		options.mainFile !== undefined &&
@@ -445,13 +455,7 @@ function linkProgramImage(
 		name,
 		cSource,
 		verbose: false,
-		mainFile:
-			options.mainFile ??
-			(usesHost ||
-			imageNeedsHostEventLoop(image.runtime.hostInstalls) ||
-			workerImages.length > 0
-				? HOST_MAIN
-				: undefined),
+		mainFile,
 		outDir: options.outDir ?? defaultHarnessArtifactDirectory(),
 		cacheSuffix,
 		objectCacheVariant: options.nativeObjectCacheVariant,

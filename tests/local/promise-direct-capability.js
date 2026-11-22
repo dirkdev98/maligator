@@ -1,4 +1,11 @@
 let passed = 0;
+const unhandledMessages = [];
+
+function recordUnhandled(reason) {
+	unhandledMessages.push(reason.message);
+}
+
+process.on("unhandledRejection", recordUnhandled);
 
 function ok(name, condition) {
 	if (!condition) throw new Error("FAIL " + name);
@@ -988,5 +995,20 @@ if (typeof ShadowRealm === "function") {
 
 Promise.all(checks).then(() => {
 	ok("focused checks ran", passed >= 55);
-	console.log("promise-direct-capability PASS");
+	// The rejection checkpoint runs before the next immediate.
+	setImmediate(() => {
+		process.removeListener("unhandledRejection", recordUnhandled);
+		const expectedMessages = [
+			"combinator-handler-unhandled-marker",
+			"direct-async-unhandled-marker",
+			"direct-intrinsic-unhandled-marker",
+			"direct-unhandled-marker",
+		];
+		ok(
+			"reports each ignored rejection",
+			unhandledMessages.sort().join() === expectedMessages.join(),
+		);
+		console.log("promise-direct-capability PASS");
+		Promise.reject(new Error("direct-fatal-unhandled-marker"));
+	});
 });

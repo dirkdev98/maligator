@@ -19,25 +19,14 @@ function run(binary: string, env: NodeJS.ProcessEnv = {}, timeoutMs = 60_000) {
 		timeout: scaledNativeRunTimeoutMs(timeoutMs),
 	});
 	if (result.error !== undefined) throw result.error;
-	if (result.status !== 0) {
-		throw new Error(
-			`binary exited ${result.status ?? "without status"}\n${result.stdout}\n${result.stderr}`,
-		);
-	}
+	expect(result.status, result.stderr || result.stdout).toBe(1);
 	if (result.stdout.trim() !== expected) {
 		throw new Error(
 			`unexpected output\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
 		);
 	}
-	expect(result.stderr).toContain("Uncaught (in promise) Error: direct-unhandled-marker");
 	expect(result.stderr).toContain(
-		"Uncaught (in promise) Error: direct-intrinsic-unhandled-marker",
-	);
-	expect(result.stderr).toContain(
-		"Uncaught (in promise) Error: direct-async-unhandled-marker",
-	);
-	expect(result.stderr).toContain(
-		"Uncaught (in promise) Error: combinator-handler-unhandled-marker",
+		"Uncaught (in promise) Error: direct-fatal-unhandled-marker",
 	);
 	return result.stderr;
 }

@@ -22,7 +22,9 @@ function run(binary: string, env: NodeJS.ProcessEnv = {}, timeout = 120_000): st
 		timeout,
 	});
 	if (result.error !== undefined) throw result.error;
-	expect(result.status, result.stderr).toBe(0);
+	// ShadowRealm evaluation retains the Node globals, so the unhandled marker
+	// rejection exits 1 as it does in Node.
+	expect(result.status, result.stderr).toBe(1);
 	expect(result.stdout.trim()).toBe(expected);
 	expect(result.stderr).toContain(
 		"Uncaught (in promise) Error: async-generator-direct-unhandled-marker",
