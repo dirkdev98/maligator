@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdlib.h>
+
 #include "./defaults.h"
 #include "array_object.h"
 #include "bound_function_object.h"
@@ -27,6 +29,26 @@
 #else
 #define MAL_PRESERVE_MOST
 #endif
+
+static inline MalValue mal_op_value_operand(MalCallable *callable, i32 operand) {
+    if (operand >= 0) return callable->registers[operand];
+    switch (operand) {
+        case MAL_VALUE_OPERAND_UNDEFINED: return MAL_VALUE_UNDEFINED;
+        case MAL_VALUE_OPERAND_NULL: return MAL_VALUE_NULL;
+        case MAL_VALUE_OPERAND_FALSE: return MAL_VALUE_FALSE;
+        case MAL_VALUE_OPERAND_TRUE: return MAL_VALUE_TRUE;
+    }
+    if (operand <= MAL_VALUE_OPERAND_STRING_BASE && operand >= MAL_VALUE_OPERAND_STRING_MIN) {
+        i32 index = MAL_VALUE_OPERAND_STRING_BASE - operand;
+        return mal_value_from_string(mal_vm_string_constant(callable->vm, index));
+    }
+    if (operand <= MAL_VALUE_OPERAND_I28_BASE && operand >= MAL_VALUE_OPERAND_I28_MIN) {
+        i32 payload = MAL_VALUE_OPERAND_I28_BASE - operand;
+        i32 value = (payload & 1) == 0 ? payload / 2 : -(payload + 1) / 2;
+        return mal_value_from_i32(value);
+    }
+    abort();
+}
 
 static inline MalValue mal_vm_numeric_typed_array_load_at(
     const byte *at, MalTypedArrayKind kind
@@ -757,7 +779,10 @@ void mal_op_load_new_target(MalCallable *callable, const MalInstruction *instruc
 
 void mal_op_load_callee(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_call(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_call(
+    MalCallable *callable, const MalInstruction *instruction, const i32 *data,
+    MalValue callee, MalHeapType callee_type
+);
 bool mal_op_call_guarded_math(
     MalCallable *callable, const MalInstruction *instruction);
 bool mal_op_call_guarded_builtin(
@@ -767,7 +792,9 @@ bool mal_op_call_guarded_builtin(
  * operands need no conversion and the access fits a fixed view over an attached,
  * unshared buffer; false leaves the call, and every error it raises, to the builtin.
  */
-bool mal_op_call_data_view(MalCallable *callable, const MalInstruction *instruction);
+MAL_PRESERVE_MOST bool mal_op_call_data_view(
+    MalCallable *callable, const MalInstruction *instruction, const i32 *data, MalValue receiver
+);
 #include "generated/known_native_entries.inc"
 MalValue mal_vm_call_known_native(MalVm *vm, MalNativeFunctionCallback callback, i32 operation, MalValue receiver, const MalValue *args, i32 count, i32 flags);
 MalValue mal_vm_call_known(MalVm *vm, i32 operation, MalValue receiver, const MalValue *args, i32 count, i32 flags);

@@ -100,5 +100,49 @@ function compiledFallback(value) {
 holder.fn = compiledFallback;
 ok("compiled fallback", evalInvoke(holder, 37) === 42);
 
+const relayStack = eval("(function relayStack(fn, callback) { return fn(callback); })");
+const readStack = eval("(function readStack(callback) { return callback(); })");
+function captureCachedStack() {
+	throw new Error("cached call");
+}
+const boundRelayStack = relayStack.bind(undefined);
+const boundReadStack = readStack.bind(undefined);
+const traces = [];
+for (let i = 0; i < 3; i++) {
+	const relay = i === 0 ? boundRelayStack : relayStack;
+	const read = i === 0 ? boundReadStack : readStack;
+	try {
+		relay(read, captureCachedStack);
+	} catch (error) {
+		traces.push(error.stack);
+	}
+}
+ok(
+	"direct and bound calls capture identical stack positions",
+	traces.length === 3 && traces.every((trace) => trace === traces[0]),
+);
+ok(
+	"stack capture orders interpreted callers and their callback",
+	/\n    at captureCachedStack \([^\n]+\)\n    at readStack \([^\n]+\)\n    at relayStack \([^\n]+\)/.test(
+		traces[0],
+	),
+);
+
+const recurseCached = eval(
+	"(function recurseCached(recurse) { return recurse(recurse); })",
+);
+let overflow;
+try {
+	recurseCached(recurseCached);
+} catch (error) {
+	overflow = error;
+}
+ok(
+	"warmed recursion reports the call stack limit",
+	overflow instanceof RangeError &&
+		overflow.message === "Maximum call stack size exceeded",
+);
+ok("an overflow unwinds warmed call frames", relayStack(readStack, () => 42) === 42);
+
 ok("checks ran", passed > 1000);
 console.log("interpreter-call-cache-p1-item9 PASS");

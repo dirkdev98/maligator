@@ -1106,6 +1106,9 @@ typedef struct MalFunction {
      * excluded separately by kind.
      */
     bool has_prototype;
+
+    /** Loaded interpreter calls that can adopt a value-stack window without allocating. */
+    bool inline_interp_call;
 } MalFunction;
 
 static_assert(sizeof(MalFunction) <= (MAL_PROFILE ? 168 : 160),
@@ -2888,6 +2891,7 @@ typedef struct MalVmFrame {
     union {
         struct {
             i32 return_register;
+            /** An in-loop call uses the preceding frame as its caller. */
             i32 caller_frame_index;
         };
         struct {
@@ -2925,13 +2929,13 @@ static_assert(sizeof(MalVmFrame) <= (MAL_REALMS ? 144 : 136),
     ((usize) (capacity) * (sizeof(MalVmFrame) + sizeof(uptr)))
 #define mal_vm_frame_native_positions(vm) ((uptr *) ((vm)->frames + (vm)->frame_capacity))
 // Inlined into its caller this reads the next frame up, which still orders correctly.
-#define mal_vm_frame_mark_native_position(frame, vm) \
-    (mal_vm_frame_native_positions(vm)[(frame) - (vm)->frames] = \
+#define mal_vm_frame_mark_native_position(vm, index) \
+    (mal_vm_frame_native_positions(vm)[index] = \
         *(const uptr *) __builtin_frame_address(0))
 #else
 #define mal_vm_frame_storage_bytes(capacity) ((usize) (capacity) * sizeof(MalVmFrame))
-#define mal_vm_frame_mark_native_position(frame, vm) \
-    ((frame)->native_depth = (u16) (vm)->native_frame_count)
+#define mal_vm_frame_mark_native_position(vm, index) \
+    ((vm)->frames[index].native_depth = (u16) (vm)->native_frame_count)
 #endif
 
 typedef MalVmFrame MalCallable;

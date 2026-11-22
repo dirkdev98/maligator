@@ -1011,27 +1011,6 @@ void mal_op_create_bigint(MalCallable *callable, const MalInstruction *instructi
     callable->registers[instruction->as.create_bigint.dst] = mal_value_from_bigint(bigint);
 }
 
-static MalValue mal_op_value_operand(MalCallable *callable, i32 operand) {
-    if (operand >= 0) return callable->registers[operand];
-    switch (operand) {
-        case MAL_VALUE_OPERAND_UNDEFINED: return MAL_VALUE_UNDEFINED;
-        case MAL_VALUE_OPERAND_NULL: return MAL_VALUE_NULL;
-        case MAL_VALUE_OPERAND_FALSE: return MAL_VALUE_FALSE;
-        case MAL_VALUE_OPERAND_TRUE: return MAL_VALUE_TRUE;
-    }
-    if (operand <= MAL_VALUE_OPERAND_STRING_BASE
-        && operand >= MAL_VALUE_OPERAND_STRING_MIN) {
-        i32 index = MAL_VALUE_OPERAND_STRING_BASE - operand;
-        return mal_value_from_string(mal_vm_string_constant(callable->vm, index));
-    }
-    if (operand <= MAL_VALUE_OPERAND_I28_BASE && operand >= MAL_VALUE_OPERAND_I28_MIN) {
-        i32 payload = MAL_VALUE_OPERAND_I28_BASE - operand;
-        i32 value = (payload & 1) == 0 ? payload / 2 : -(payload + 1) / 2;
-        return mal_value_from_i32(value);
-    }
-    abort();
-}
-
 MalValue mal_vm_op_create_object(MalVm *vm) {
     MalObject *object = mal_object_try_new(
         &vm->heap,
@@ -2749,9 +2728,6 @@ static bool mal_vm_try_interp_call_targets(
     const i32 *guarded_function_indices, i32 guarded_function_count, MalValue callee,
     MalValue this_value, i32 base, i32 argument_count, i32 dst
 ) {
-    if (!mal_value_is_function_object(callee)) {
-        return false;
-    }
     MalFunctionObject *function_object = mal_value_to_function_object(callee);
     i32 actual_function_index = mal_function_object_function_index(function_object);
     i32 expected_function_index = -1;
@@ -3848,14 +3824,15 @@ static i32 mal_vm_marshal_spread_iterable(
     return count;
 }
 
-void mal_op_call(MalCallable *callable, const MalInstruction *instruction) {
+void mal_op_call(
+    MalCallable *callable, const MalInstruction *instruction, const i32 *data,
+    MalValue callee, MalHeapType callee_type
+) {
     MalVm *vm = callable->vm;
     i32 caller_function_index = callable->function_index;
     i32 call_ip = callable->instruction_pointer - 1;
-    MalValue callee = mal_op_value_operand(callable, instruction->as.call.callee);
     MalValue this_value = mal_op_value_operand(callable, instruction->as.call.this_value);
     i32 dst = instruction->as.call.dst;
-    const i32 *data = mal_op_instruction_data(callable, instruction->as.call.data_offset);
     i32 argument_count = data[0];
     i32 exact_function_index = data[1];
     i32 guarded_function_count = data[2];
@@ -3876,12 +3853,12 @@ void mal_op_call(MalCallable *callable, const MalInstruction *instruction) {
 
     // Builtin methods such as `view.setUint32` have no script target to probe
     // and need no bound resolution.
-    if (mal_value_is_native_function_object(callee)) {
+    if (callee_type == MAL_HEAP_NATIVE_FUNCTION_OBJECT) {
         mal_vm_call_native_into(
             vm, callee, this_value, &vm->value_stack[base], argument_count, base, dst);
         return;
     }
-    if (mal_vm_try_interp_call_targets(
+    if (callee_type == MAL_HEAP_FUNCTION_OBJECT && mal_vm_try_interp_call_targets(
             vm, exact_function_index,
             guarded_function_indices, guarded_function_count, callee, this_value,
             base, argument_count, dst)) {
@@ -3929,7 +3906,9 @@ bool mal_op_call_guarded_math(
     return true;
 }
 
-bool mal_op_call_data_view(MalCallable *callable, const MalInstruction *instruction) {
+MAL_PRESERVE_MOST bool mal_op_call_data_view(
+    MalCallable *callable, const MalInstruction *instruction, const i32 *data, MalValue receiver
+) {
     static const u8 sizes[MAL_DATA_VIEW_ACCESSOR_COUNT] = {
         [MAL_DATA_VIEW_GET_INT8] = 1, [MAL_DATA_VIEW_GET_UINT8] = 1,
         [MAL_DATA_VIEW_GET_INT16] = 2, [MAL_DATA_VIEW_GET_UINT16] = 2,
@@ -3959,9 +3938,22 @@ bool mal_op_call_data_view(MalCallable *callable, const MalInstruction *instruct
     }
     bool set = accessor >= MAL_DATA_VIEW_SET_INT8;
 
-    const i32 *data = mal_op_instruction_data(callable, instruction->as.call.data_offset);
     i32 argument_count = data[0];
     const i32 *arguments = &data[3 + data[2]];
+    if (argument_count >= 2 &&
+        (accessor == MAL_DATA_VIEW_SET_INT32 || accessor == MAL_DATA_VIEW_SET_UINT32)) {
+        MalValue offset = mal_op_value_operand(callable, arguments[0]);
+        MalValue value = mal_op_value_operand(callable, arguments[1]);
+        if (mal_value_is_int32(offset) && mal_value_is_int32(value)) {
+            byte *bytes = mal_data_view_try_bytes(receiver, mal_value_to_i32(offset), sizeof(u32), true);
+            if (bytes == nullptr) return false;
+            bool little_endian = argument_count >= 3 &&
+                mal_value_is_truthy(mal_op_value_operand(callable, arguments[2]));
+            mal_data_view_write_bits(bytes, accessor, (u32) mal_value_to_i32(value), little_endian);
+            callable->registers[instruction->as.call.dst] = MAL_VALUE_UNDEFINED;
+            return true;
+        }
+    }
     // ToIndex(undefined) is 0; any other non-Number offset may convert through user code.
     f64 index = 0.0;
     if (argument_count >= 1) {
@@ -3970,21 +3962,23 @@ bool mal_op_call_data_view(MalCallable *callable, const MalInstruction *instruct
         index = mal_ops_number_as_f64(offset);
     }
     // ToNumber(undefined) is NaN; any other non-Number value may convert through user code.
-    f64 number = NAN;
+    MalValue value = MAL_VALUE_UNDEFINED;
     if (set && argument_count >= 2) {
-        MalValue value = mal_op_value_operand(callable, arguments[1]);
+        value = mal_op_value_operand(callable, arguments[1]);
         if (!mal_ops_is_number(value)) return false;
-        number = mal_ops_number_as_f64(value);
     }
     i32 endian_argument = set ? 2 : 1;
     bool little_endian = argument_count > endian_argument &&
         mal_value_is_truthy(mal_op_value_operand(callable, arguments[endian_argument]));
-    byte *bytes = mal_data_view_try_bytes(
-        mal_op_value_operand(callable, instruction->as.call.this_value),
-        index, sizes[accessor], set);
+    byte *bytes = mal_data_view_try_bytes(receiver, index, sizes[accessor], set);
     if (bytes == nullptr) return false;
     if (set) {
-        mal_data_view_write(bytes, accessor, number, little_endian);
+        if (accessor <= MAL_DATA_VIEW_SET_UINT32 && mal_value_is_int32(value)) {
+            mal_data_view_write_bits(bytes, accessor, (u32) mal_value_to_i32(value), little_endian);
+        } else {
+            f64 number = argument_count < 2 ? NAN : mal_ops_number_as_f64(value);
+            mal_data_view_write(bytes, accessor, number, little_endian);
+        }
         callable->registers[instruction->as.call.dst] = MAL_VALUE_UNDEFINED;
     } else {
         callable->registers[instruction->as.call.dst] =

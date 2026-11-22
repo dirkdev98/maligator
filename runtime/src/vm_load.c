@@ -2188,6 +2188,9 @@ static void rd_function(MalLoadedRuntimeImage *L, Rd *r, MalFunction *fn, bool d
             r->ok = false;
         }
     }
+    fn->inline_interp_call = fn->kind == MAL_FUNCTION_KIND_NORMAL &&
+        !fn->is_class_constructor && !fn->needs_arguments &&
+        fn->argument_snapshot_count == 0 && fn->captured_count == 0;
 
     u32 gc_safepoint_count = rd_count(r, 2);
     I32Builder gc_safepoints = {0};

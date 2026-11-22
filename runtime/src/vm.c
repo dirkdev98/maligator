@@ -2271,6 +2271,37 @@ static void mal_vm_execute_argument_snapshot_plan(
     }
 }
 
+static inline void mal_vm_init_function_frame(
+    MalVmFrame *frame, MalVm *vm, const MalFunction *function, i32 function_index,
+    MalEnv *env, MalValue this_value, MalValue callee, MalValue *registers,
+    MalValue *arguments, i32 arg_count, i32 stack_base, i32 return_register,
+    i32 caller_frame_index, bool is_inline_interp_call
+) {
+    frame->vm = vm;
+    frame->function = function;
+    frame->function_index = function_index;
+    frame->env = env;
+    frame->registers = registers;
+    frame->arguments = arguments;
+    frame->argument_count = arg_count;
+    frame->stack_base = stack_base;
+    frame->this_value = is_inline_interp_call ? this_value : mal_vm_callee_this(vm, function, this_value);
+    frame->arguments_object = MAL_VALUE_UNDEFINED;
+    frame->callee = callee;
+    frame->generator = nullptr;
+    frame->is_construct = false;
+    frame->new_target = MAL_VALUE_UNDEFINED;
+    frame->is_compiled = false;
+    frame->instruction_pointer = function->argument_snapshot_count;
+    frame->gc_safepoint_ip = -1;
+    frame->return_register = return_register;
+    frame->caller_frame_index = caller_frame_index;
+    frame->enter_seq = vm->frame_seq++;
+#if MAL_REALMS
+    frame->realm = vm->current_realm;
+#endif
+}
+
 bool mal_vm_push_function_frame(
     MalVm *vm,
     i32 function_index,
@@ -2386,34 +2417,12 @@ bool mal_vm_push_function_frame(
 
     // Capacity was checked up front; the frame array never moves, so existing
     // frame pointers held by re-entrant op handlers stay valid.
-    MalVmFrame *frame = &vm->frames[vm->frame_count++];
-    frame->vm = vm;
-    frame->function = function;
-    frame->function_index = function_index;
-    frame->env = env;
-    frame->registers = registers;
-    frame->arguments = arguments;
-    frame->argument_count = arg_count;
-    frame->stack_base = stack_base;
-    frame->this_value = mal_vm_callee_this(vm, function, this_value);
-    frame->arguments_object = mal_value_new_undefined();
-    frame->callee = mal_value_new_undefined();
-    frame->generator = nullptr;
-    frame->is_construct = false;
-    frame->new_target = mal_value_new_undefined();
-    frame->is_compiled = false;
-    frame->instruction_pointer = argument_snapshot_count;
-    frame->gc_safepoint_ip = -1;
-    frame->return_register = return_register;
-    frame->caller_frame_index = caller_frame_index;
-    frame->enter_seq = vm->frame_seq++;
-    mal_vm_frame_mark_native_position(frame, vm);
-#if MAL_REALMS
-    // Default stamp: the realm current at push time. Call/construct seams that cross
-    // into a callee's realm switch to it BEFORE pushing (so this captures the callee
-    // realm); same-realm pushes capture the caller realm unchanged.
-    frame->realm = vm->current_realm;
-#endif
+    i32 frame_index = vm->frame_count++;
+    MalVmFrame *frame = &vm->frames[frame_index];
+    mal_vm_init_function_frame(
+        frame, vm, function, function_index, env, this_value, MAL_VALUE_UNDEFINED,
+        registers, arguments, arg_count, stack_base, return_register, caller_frame_index, false);
+    mal_vm_frame_mark_native_position(vm, frame_index);
 
     return true;
 }
@@ -2549,29 +2558,30 @@ static bool mal_vm_prepare_interpreter_safepoint(MalVmFrame *frame, i32 instruct
     MAL_PERF_COUNT(interpreter_direct_leaf_executions)
 
 #if MAL_PROFILE && MAL_PERF_STATS
-#define MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(ip) \
+#define MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(fused_instruction) \
     do { \
         i32 fused_profile_site_id = frame->function->profile_site_ids == nullptr \
             ? -1 \
-            : frame->function->profile_site_ids[(ip)]; \
+            : frame->function->profile_site_ids[(fused_instruction) - instructions]; \
         vm->profile_current_site_id = fused_profile_site_id; \
         MAL_PROFILE_SITE_EVENT( \
             vm, fused_profile_site_id, MAL_PROFILE_SITE_EXECUTION, 1); \
         MAL_VM_INTERPRETER_DIRECT_LEAF(); \
     } while (0)
 #else
-#define MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(ip) \
+#define MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(fused_instruction) \
     do { \
-        (void) (ip); \
+        (void) (fused_instruction); \
         MAL_VM_INTERPRETER_DIRECT_LEAF(); \
     } while (0)
 #endif
 
 #define MAL_VM_INTERPRETER_ACTIVATION_BOUNDARY(call) \
     do { \
-        mal_vm_prepare_interpreter_safepoint(frame, instruction_pointer - 1); \
-        frame->instruction_pointer = instruction_pointer; \
-        frame->gc_safepoint_ip = instruction_pointer - 1; \
+        i32 resume_ip = next_instruction - instructions; \
+        mal_vm_prepare_interpreter_safepoint(frame, resume_ip - 1); \
+        frame->instruction_pointer = resume_ip; \
+        frame->gc_safepoint_ip = resume_ip - 1; \
         MAL_PERF_COUNT(interpreter_state_syncs); \
         MAL_PERF_COUNT(interpreter_boundary_dispatches); \
         call; \
@@ -2582,7 +2592,7 @@ static bool mal_vm_prepare_interpreter_safepoint(MalVmFrame *frame, i32 instruct
         frame = &vm->frames[(activation).frame_index]; \
         instructions = frame->function->instructions; \
         registers = frame->registers; \
-        instruction_pointer = frame->instruction_pointer; \
+        next_instruction = instructions + frame->instruction_pointer; \
         MAL_PERF_COUNT(interpreter_normal_helper_continuations); \
         goto mal_vm_interpreter_dispatch; \
     } while (0)
@@ -2590,9 +2600,10 @@ static bool mal_vm_prepare_interpreter_safepoint(MalVmFrame *frame, i32 instruct
 #define MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(call) \
     do { \
         MalVmInterpreterActivation activation = mal_vm_interpreter_activation(vm, frame); \
-        mal_vm_prepare_interpreter_safepoint(frame, instruction_pointer - 1); \
-        frame->instruction_pointer = instruction_pointer; \
-        frame->gc_safepoint_ip = instruction_pointer - 1; \
+        i32 resume_ip = next_instruction - instructions; \
+        mal_vm_prepare_interpreter_safepoint(frame, resume_ip - 1); \
+        frame->instruction_pointer = resume_ip; \
+        frame->gc_safepoint_ip = resume_ip - 1; \
         MAL_PERF_COUNT(interpreter_state_syncs); \
         MAL_PERF_COUNT(interpreter_boundary_dispatches); \
         call; \
@@ -2606,9 +2617,10 @@ static bool mal_vm_prepare_interpreter_safepoint(MalVmFrame *frame, i32 instruct
 #define MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(call) \
     do { \
         MalVmInterpreterActivation activation = mal_vm_interpreter_activation(vm, frame); \
-        bool can_poll = mal_vm_prepare_interpreter_safepoint(frame, instruction_pointer - 1); \
-        frame->instruction_pointer = instruction_pointer; \
-        frame->gc_safepoint_ip = instruction_pointer - 1; \
+        i32 resume_ip = next_instruction - instructions; \
+        bool can_poll = mal_vm_prepare_interpreter_safepoint(frame, resume_ip - 1); \
+        frame->instruction_pointer = resume_ip; \
+        frame->gc_safepoint_ip = resume_ip - 1; \
         MAL_PERF_COUNT(interpreter_state_syncs); \
         MAL_PERF_COUNT(interpreter_boundary_dispatches); \
         call; \
@@ -2623,13 +2635,13 @@ static bool mal_vm_prepare_interpreter_safepoint(MalVmFrame *frame, i32 instruct
 #define MAL_VM_INTERPRETER_SYNC_AT(safepoint_ip) \
     do { \
         mal_vm_prepare_interpreter_safepoint(frame, (safepoint_ip)); \
-        frame->instruction_pointer = instruction_pointer; \
+        frame->instruction_pointer = next_instruction - instructions; \
         frame->gc_safepoint_ip = (safepoint_ip); \
         MAL_PERF_COUNT(interpreter_state_syncs); \
     } while (0)
 
 #define MAL_VM_INTERPRETER_SYNC() \
-    MAL_VM_INTERPRETER_SYNC_AT(instruction_pointer - 1)
+    MAL_VM_INTERPRETER_SYNC_AT(next_instruction - instructions - 1)
 
 static_assert(
     MAL_DIRECT_BUILTIN_SET_DELETE - MAL_DIRECT_BUILTIN_MAP_GET == 6,
@@ -2646,6 +2658,8 @@ static_assert(
 #define MAL_VM_THREADED_DISPATCH 0
 #endif
 #define MAL_VM_CASE(name) case MAL_OP_##name: mal_vm_op_##name:
+
+enum { MAL_INLINE_INTERPRETER_CALLER = -2 };
 
 static void mal_vm_run_until_frame_count(
     MalVm *vm,
@@ -2692,9 +2706,7 @@ static void mal_vm_run_until_frame_count(
         MalVmFrame *frame = &vm->frames[vm->frame_count - 1];
         const MalInstruction *instructions = frame->function->instructions;
         MalValue *registers = frame->registers;
-        // Pointer width, so no dispatch sign-extends it to index `instructions`;
-        // frames keep the i32 every instruction index fits in.
-        size instruction_pointer = frame->instruction_pointer;
+        const MalInstruction *next_instruction = instructions + frame->instruction_pointer;
         MAL_PERF_COUNT(interpreter_state_reloads);
 
         while (true) {
@@ -2702,12 +2714,12 @@ static void mal_vm_run_until_frame_count(
 #if MAL_PROFILE && MAL_PERF_STATS
             i32 profile_site_id = frame->function->profile_site_ids == nullptr
                 ? -1
-                : frame->function->profile_site_ids[instruction_pointer];
+                : frame->function->profile_site_ids[next_instruction - instructions];
             vm->profile_current_site_id = profile_site_id;
             MAL_PROFILE_SITE_EVENT(
                 vm, profile_site_id, MAL_PROFILE_SITE_EXECUTION, 1);
 #endif
-            const MalInstruction *instruction = &instructions[instruction_pointer++];
+            const MalInstruction *instruction = next_instruction++;
 #if MAL_VM_THREADED_DISPATCH
             goto *mal_vm_dispatch_table[instruction->opcode];
 #endif
@@ -2771,12 +2783,12 @@ static void mal_vm_run_until_frame_count(
                     MAL_VM_INTERPRETER_SYNC();
                     break;
                 }
-                if (instruction_pointer < frame->function->instruction_count) {
-                    const MalInstruction *jump = &instructions[instruction_pointer];
+                if (next_instruction < instructions + frame->function->instruction_count) {
+                    const MalInstruction *jump = next_instruction;
                     if (jump->opcode == MAL_OP_JUMP &&
-                        jump->as.jump.target_ip > instruction_pointer) {
-                        MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(instruction_pointer);
-                        instruction_pointer = jump->as.jump.target_ip;
+                        instructions + jump->as.jump.target_ip > next_instruction) {
+                        MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(next_instruction);
+                        next_instruction = instructions + jump->as.jump.target_ip;
                         MAL_PERF_COUNT(interpreter_create_object_shaped_jump_fusions);
                     }
                 }
@@ -2897,18 +2909,18 @@ static void mal_vm_run_until_frame_count(
                     goto mal_vm_interpreter_binary_slow;
                 }
                 registers[instruction->as.binary.dst] = result;
-                if (instruction_pointer < frame->function->instruction_count) {
-                    const MalInstruction *branch = &instructions[instruction_pointer];
+                if (next_instruction < instructions + frame->function->instruction_count) {
+                    const MalInstruction *branch = next_instruction;
                     if (branch->opcode == MAL_OP_JUMP_IF &&
                         branch->as.jump_if.cond == instruction->as.binary.dst &&
-                        branch->as.jump_if.target_ip > instruction_pointer) {
+                        instructions + branch->as.jump_if.target_ip > next_instruction) {
                         bool truthy = mal_value_is_boolean(result)
                             ? mal_value_to_boolean(result)
                             : mal_value_is_truthy(result);
-                        MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(instruction_pointer);
-                        instruction_pointer++;
+                        MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(next_instruction);
+                        next_instruction++;
                         if (truthy != (branch->as.jump_if.negate != 0)) {
-                            instruction_pointer = branch->as.jump_if.target_ip;
+                            next_instruction = instructions + branch->as.jump_if.target_ip;
                         }
                         MAL_PERF_COUNT(interpreter_binary_branch_fusions);
                     }
@@ -2957,13 +2969,13 @@ static void mal_vm_run_until_frame_count(
                     goto mal_vm_interpreter_binary_slow; \
                 } \
                 registers[instruction->as.binary.dst] = result; \
-                MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(instruction_pointer); \
+                MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(next_instruction); \
                 MAL_PERF_COUNT(interpreter_binary_branch_fusions); \
-                instruction_pointer = \
+                next_instruction = \
                     (result == MAL_VALUE_TRUE) != \
-                        (instructions[instruction_pointer].as.jump_if.negate != 0) \
-                    ? instructions[instruction_pointer].as.jump_if.target_ip \
-                    : instruction_pointer + 1; \
+                        (next_instruction->as.jump_if.negate != 0) \
+                    ? instructions + next_instruction->as.jump_if.target_ip \
+                    : next_instruction + 1; \
                 MAL_VM_INTERPRETER_DIRECT_LEAF(); \
                 continue; \
             }
@@ -3086,12 +3098,12 @@ static void mal_vm_run_until_frame_count(
                 MalValue value = vm->globals[instruction->as.load_global.index];
                 registers[dst] = value;
                 if (!mal_value_is_empty(value) &&
-                    instruction_pointer < frame->function->instruction_count) {
-                    const MalInstruction *tdz_check = &instructions[instruction_pointer];
+                    next_instruction < instructions + frame->function->instruction_count) {
+                    const MalInstruction *tdz_check = next_instruction;
                     if (tdz_check->opcode == MAL_OP_THROW_IF_TDZ &&
                         tdz_check->as.throw_if_tdz.src == dst) {
-                        MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(instruction_pointer);
-                        instruction_pointer++;
+                        MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(next_instruction);
+                        next_instruction++;
                         MAL_PERF_COUNT(interpreter_global_tdz_fusions);
                     }
                 }
@@ -3713,15 +3725,15 @@ static void mal_vm_run_until_frame_count(
                     instruction->as.guard_function_index.function_index);
                 registers[instruction->as.guard_function_index.dst] =
                     mal_value_new_boolean(matches);
-                if (instruction_pointer < frame->function->instruction_count) {
-                    const MalInstruction *branch = &instructions[instruction_pointer];
+                if (next_instruction < instructions + frame->function->instruction_count) {
+                    const MalInstruction *branch = next_instruction;
                     if (branch->opcode == MAL_OP_JUMP_IF &&
                         branch->as.jump_if.cond == instruction->as.guard_function_index.dst &&
-                        branch->as.jump_if.target_ip > instruction_pointer) {
-                        MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(instruction_pointer);
-                        instruction_pointer++;
+                        instructions + branch->as.jump_if.target_ip > next_instruction) {
+                        MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(next_instruction);
+                        next_instruction++;
                         if (matches != (branch->as.jump_if.negate != 0)) {
-                            instruction_pointer = branch->as.jump_if.target_ip;
+                            next_instruction = instructions + branch->as.jump_if.target_ip;
                         }
                         MAL_PERF_COUNT(interpreter_guard_branch_fusions);
                     }
@@ -3740,16 +3752,16 @@ static void mal_vm_run_until_frame_count(
                     mal_vm_property_ic_at(frame, data[1]));
                 registers[instruction->as.guard_base_constructor_layout.dst] =
                     mal_value_new_boolean(matches);
-                if (instruction_pointer < frame->function->instruction_count) {
-                    const MalInstruction *branch = &instructions[instruction_pointer];
+                if (next_instruction < instructions + frame->function->instruction_count) {
+                    const MalInstruction *branch = next_instruction;
                     if (branch->opcode == MAL_OP_JUMP_IF &&
                         branch->as.jump_if.cond ==
                             instruction->as.guard_base_constructor_layout.dst &&
-                        branch->as.jump_if.target_ip > instruction_pointer) {
-                        MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(instruction_pointer);
-                        instruction_pointer++;
+                        instructions + branch->as.jump_if.target_ip > next_instruction) {
+                        MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(next_instruction);
+                        next_instruction++;
                         if (matches != (branch->as.jump_if.negate != 0)) {
-                            instruction_pointer = branch->as.jump_if.target_ip;
+                            next_instruction = instructions + branch->as.jump_if.target_ip;
                         }
                         MAL_PERF_COUNT(interpreter_guard_branch_fusions);
                     }
@@ -3786,12 +3798,11 @@ static void mal_vm_run_until_frame_count(
                     if (!mal_vm_gc_poll_requested(vm)) continue;
                     MalVmInterpreterActivation activation =
                         mal_vm_interpreter_activation(vm, frame);
+                    i32 resume_ip = next_instruction - instructions;
                     if (!mal_vm_prepare_interpreter_safepoint_except(
-                        frame,
-                        instruction_pointer - 1,
-                        instruction->as.call.dst)) continue;
-                    frame->instruction_pointer = instruction_pointer;
-                    frame->gc_safepoint_ip = instruction_pointer - 1;
+                        frame, resume_ip - 1, instruction->as.call.dst)) continue;
+                    frame->instruction_pointer = resume_ip;
+                    frame->gc_safepoint_ip = resume_ip - 1;
                     MAL_PERF_COUNT(interpreter_state_syncs);
                     MAL_PERF_COUNT(interpreter_boundary_dispatches);
                     mal_gc_safepoint(vm);
@@ -3804,11 +3815,84 @@ static void mal_vm_run_until_frame_count(
                 i32 receiver = instruction->as.call.this_value;
                 if (receiver >= 0 &&
                     mal_value_is_heap_type(registers[receiver], MAL_HEAP_DATA_VIEW_OBJECT) &&
-                    mal_op_call_data_view(frame, instruction)) {
+                    mal_op_call_data_view(frame, instruction, call_data, registers[receiver])) {
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;
                 }
-                MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_call(frame, instruction));
+                MalValue callee = mal_op_value_operand(frame, instruction->as.call.callee);
+                MalHeapType callee_type = (callee & MAL_VALUE_CLASS_MASK) == MAL_VALUE_CALLABLE
+                    ? mal_value_heap_type(callee) : MAL_HEAP_TYPE_COUNT;
+#if !MAL_PROFILE
+                if (callee_type != MAL_HEAP_FUNCTION_OBJECT) {
+                    goto mal_vm_interpreter_call_slow;
+                }
+
+                MalFunctionObject *closure = mal_value_to_function_object(callee);
+                i32 function_index = mal_function_object_function_index(closure);
+                const MalFunction *function = &vm->runtime_image->functions[function_index];
+                i32 base = vm->value_stack_size;
+                i32 available = vm->value_stack_capacity - base;
+                i32 arg_count = call_data[0];
+                i32 frame_index = vm->frame_count;
+                if (!function->inline_interp_call || function->compiled != nullptr ||
+#if MAL_REALMS
+                    (closure->realm != nullptr && closure->realm != vm->current_realm) ||
+#endif
+                    frame_index >= vm->frame_capacity || arg_count > available ||
+                    function->register_count > available) {
+                    goto mal_vm_interpreter_call_slow;
+                }
+                MalValue this_value = mal_op_value_operand(frame, receiver);
+                if (!function->strict) {
+                    if (mal_value_is_undefined(this_value) || mal_value_is_null(this_value)) {
+                        this_value = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
+                    } else if (!mal_value_is_object(this_value)) {
+                        goto mal_vm_interpreter_call_slow;
+                    }
+                }
+
+                i32 resume_ip = next_instruction - instructions;
+                if (frame->function->gc_safepoints_trusted) {
+                    mal_vm_prepare_interpreter_safepoint(frame, resume_ip - 1);
+                }
+                frame->instruction_pointer = resume_ip;
+                frame->gc_safepoint_ip = resume_ip - 1;
+                MAL_PERF_COUNT(interpreter_state_syncs);
+                MAL_PERF_COUNT(interpreter_boundary_dispatches);
+                const i32 *operands = &call_data[3 + call_data[2]];
+                MalValue *callee_registers = &vm->value_stack[base];
+                i32 present = arg_count < function->parameter_count
+                    ? arg_count : function->parameter_count;
+                for (i32 arg = 0; arg < present; arg++) {
+                    callee_registers[arg] = mal_op_value_operand(frame, operands[arg]);
+                }
+                for (i32 reg = present; reg < function->register_count; reg++) {
+                    callee_registers[reg] = MAL_VALUE_UNDEFINED;
+                }
+                frame = &vm->frames[frame_index];
+                mal_vm_init_function_frame(
+                    frame, vm, function, function_index, closure->creation_env, this_value,
+                    callee, callee_registers, nullptr, arg_count, base,
+                    instruction->as.call.dst, MAL_INLINE_INTERPRETER_CALLER, true);
+#if MAL_NATIVE_FRAME_WALK
+                // Older compiled frames lie above this loop. Any compiled calls
+                // made by the new interpreted frame will lie below it.
+                mal_vm_frame_native_positions(vm)[frame_index] = (uptr) __builtin_frame_address(0);
+#else
+                mal_vm_frame_mark_native_position(vm, frame_index);
+#endif
+                vm->value_stack_size = base + function->register_count;
+                vm->frame_count = frame_index + 1;
+                instructions = function->instructions;
+                registers = callee_registers;
+                next_instruction = instructions;
+                MAL_PERF_COUNT(interpreter_state_reloads);
+                continue;
+
+            mal_vm_interpreter_call_slow:
+#endif
+                MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(
+                    mal_op_call(frame, instruction, call_data, callee, callee_type));
                 break;
             }
             MAL_VM_CASE(CALL_KNOWN)
@@ -3838,42 +3922,41 @@ static void mal_vm_run_until_frame_count(
                 continue;
 
             MAL_VM_CASE(JUMP) {
-                i32 safepoint_ip = instruction_pointer - 1;
-                bool backedge = instruction->as.jump.target_ip < instruction_pointer;
-                instruction_pointer = instruction->as.jump.target_ip;
+                const MalInstruction *target = instructions + instruction->as.jump.target_ip;
+                bool backedge = target < next_instruction;
+                next_instruction = target;
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 if (backedge && mal_vm_gc_poll_requested(vm)) {
-                    MAL_VM_INTERPRETER_SYNC_AT(safepoint_ip);
+                    MAL_VM_INTERPRETER_SYNC_AT(instruction - instructions);
                     mal_gc_safepoint(vm);
                     frame = &vm->frames[vm->frame_count - 1];
                     instructions = frame->function->instructions;
                     registers = frame->registers;
-                    instruction_pointer = frame->instruction_pointer;
+                    next_instruction = instructions + frame->instruction_pointer;
                     MAL_PERF_COUNT(interpreter_state_reloads);
                     if (mal_gc_poll_termination(vm)) break;
                 }
                 continue;
             }
             MAL_VM_CASE(JUMP_IF) {
-                i32 safepoint_ip = instruction_pointer - 1;
                 MalValue condition = registers[instruction->as.jump_if.cond];
                 bool truthy = mal_value_is_boolean(condition)
                     ? mal_value_to_boolean(condition)
                     : mal_value_is_truthy(condition);
                 bool taken = truthy != (instruction->as.jump_if.negate != 0);
                 bool backedge = taken &&
-                    instruction->as.jump_if.target_ip < instruction_pointer;
+                    instructions + instruction->as.jump_if.target_ip < next_instruction;
                 if (taken) {
-                    instruction_pointer = instruction->as.jump_if.target_ip;
+                    next_instruction = instructions + instruction->as.jump_if.target_ip;
                 }
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 if (backedge && mal_vm_gc_poll_requested(vm)) {
-                    MAL_VM_INTERPRETER_SYNC_AT(safepoint_ip);
+                    MAL_VM_INTERPRETER_SYNC_AT(instruction - instructions);
                     mal_gc_safepoint(vm);
                     frame = &vm->frames[vm->frame_count - 1];
                     instructions = frame->function->instructions;
                     registers = frame->registers;
-                    instruction_pointer = frame->instruction_pointer;
+                    next_instruction = instructions + frame->instruction_pointer;
                     MAL_PERF_COUNT(interpreter_state_reloads);
                     if (mal_gc_poll_termination(vm)) break;
                 }
@@ -3881,6 +3964,27 @@ static void mal_vm_run_until_frame_count(
             }
 
             MAL_VM_CASE(RETURN) {
+#if !MAL_PROFILE
+                if (frame->caller_frame_index == MAL_INLINE_INTERPRETER_CALLER) {
+                    MalValue return_value = registers[instruction->as.ret.value];
+                    i32 return_register = frame->return_register;
+                    vm->value_stack_size = frame->stack_base;
+                    vm->frame_count--;
+                    frame--;
+                    frame->registers[return_register] = return_value;
+                    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = return_value};
+                    MAL_PERF_COUNT(interpreter_boundary_dispatches);
+                    if (mal_vm_gc_poll_requested(vm)) {
+                        mal_gc_safepoint(vm);
+                        break;
+                    }
+                    instructions = frame->function->instructions;
+                    registers = frame->registers;
+                    next_instruction = instructions + frame->instruction_pointer;
+                    MAL_PERF_COUNT(interpreter_state_reloads);
+                    continue;
+                }
+#endif
                 MAL_VM_INTERPRETER_SYNC();
                 MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 MalValue return_value = frame->registers[instruction->as.ret.value];
@@ -4355,7 +4459,7 @@ void mal_vm_resume_coroutine(MalVm *vm, MalHeapHeader *owner, MalValue sent_valu
     // A resumption is a fresh entry on the logical call stack, so it sorts above
     // whatever drove the resume (a microtask, .next() caller) in a capture.
     frame->enter_seq = vm->frame_seq++;
-    mal_vm_frame_mark_native_position(frame, vm);
+    mal_vm_frame_mark_native_position(vm, target_frame_count);
 
     // Deliver the sent value and resume mode to the suspended yield expression,
     // which the compiler-emitted dispatch following the yield consults. (A
