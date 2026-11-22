@@ -53,6 +53,7 @@ import type {
 	NativeBuildCommandResourceEvent,
 	NativeBuildPhaseEvent,
 } from "./native-build-context.ts";
+import { imageUsesUrlParser } from "./native-host-components.ts";
 import type { MaligatorIntlFeature } from "./public-api.d.ts";
 import { recordTestTelemetry } from "./test-telemetry.ts";
 import {
@@ -427,9 +428,10 @@ function linkProgramImage(
 		...(typeof mainSource === "string" ? [mainSource] : mainSource),
 		...workerUnits,
 	];
-	const usesHost = [image, ...workerImages.map((worker) => worker.image)].some((entry) =>
-		imageUsesHost(entry.runtime.hostInstalls),
+	const hostInstalls = [image, ...workerImages.map((worker) => worker.image)].map(
+		({ runtime }) => runtime.hostInstalls,
 	);
+	const usesHost = hostInstalls.some(imageUsesHost);
 	let mainFile = options.mainFile;
 	if (
 		(mainFile === undefined ||
@@ -449,6 +451,7 @@ function linkProgramImage(
 		config,
 		name,
 		usesHost || customDriver,
+		customDriver || hostInstalls.some(imageUsesUrlParser),
 	);
 	return buildLocalBinary({
 		context,
@@ -493,8 +496,9 @@ function resolveHarnessNativeContext(
 	config: ResolvedBuildConfig,
 	subject: string,
 	usesHost = true,
+	usesUrlParser = usesHost,
 ): { context: NativeBuildContext; cacheSuffix: string } {
-	const baseDerivation = buildDerivationFromConfig(config, usesHost);
+	const baseDerivation = buildDerivationFromConfig(config, usesHost, usesUrlParser);
 	const derivation = options.profileEnabled
 		? {
 				features: normalizeNativeFeatures({

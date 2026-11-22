@@ -77,6 +77,8 @@ export interface NativeFeatureInput {
 	intlEnabled?: boolean;
 	/** Selects the native components shared by host installers. */
 	usesHost?: boolean;
+	/** Selects Ada for images that reach the URL parser. */
+	usesUrlParser?: boolean;
 	regexpEnabled?: boolean;
 	/** Selects the Temporal Cargo feature for Wasm; native archives always contain Temporal. */
 	temporalEnabled?: boolean;
@@ -101,6 +103,7 @@ export interface NativeFeatureSpec {
 	realmsEnabled: boolean;
 	intlEnabled: boolean;
 	usesHost: boolean;
+	usesUrlParser: boolean;
 	regexpEnabled: boolean;
 	temporalEnabled: boolean;
 	profileEnabled: boolean;
@@ -123,6 +126,7 @@ export function normalizeNativeFeatures(
 	const realmsEnabled = input.realmsEnabled ?? true;
 	const intlEnabled = input.intlEnabled ?? true;
 	const usesHost = input.usesHost ?? true;
+	const usesUrlParser = input.usesUrlParser ?? usesHost;
 	const regexpEnabled = input.regexpEnabled ?? true;
 	const temporalEnabled = input.temporalEnabled ?? true;
 	const profileEnabled = input.profileEnabled ?? false;
@@ -147,8 +151,9 @@ export function normalizeNativeFeatures(
 	];
 	const cargoFeatures = sortedUnique([
 		...(intlEnabled ? (intlFeatures.length > 0 ? intlFeatures : ["intl-full"]) : []),
-		// The host installers share transport, URL, compression and crypto components.
-		...(usesHost ? ["tls", "url", "zlib", "node-argon2", "node-crypto"] : []),
+		// The host installers share transport, compression and crypto components.
+		...(usesHost ? ["tls", "zlib", "node-argon2", "node-crypto"] : []),
+		...(usesUrlParser ? ["url"] : []),
 		...(regexpEnabled ? ["regexp"] : []),
 		...(temporalEnabled ? ["temporal"] : []),
 	]);
@@ -158,6 +163,7 @@ export function normalizeNativeFeatures(
 		realmsEnabled,
 		intlEnabled,
 		usesHost,
+		usesUrlParser,
 		regexpEnabled,
 		temporalEnabled,
 		profileEnabled,

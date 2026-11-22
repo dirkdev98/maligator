@@ -274,13 +274,17 @@ function resolvedRustArtifacts(
 	const componentLibraries = nativeComponents
 		.filter(selected)
 		.map((item) => item.library);
-	const linkCxx = linkEveryComponent || features.has("url");
+	const usesUrlParser = features.has("url");
+	const linkCxx = linkEveryComponent || usesUrlParser;
 	// Zig's Ada archive uses the bundled libc++ ABI even if the host links libstdc++.
 	const groupComponents = prebuilt && linkCxx && context.toolchain.platform === "linux";
 	// BFD may extract Ada for a reference from dead Rust code. Its static
 	// initializers then keep C++ symbols live even under --as-needed.
 	const cxxRuntime =
-		linkAllRustComponents && !features.has("url") && cxxStaticLinkArgs.length > 0
+		linkAllRustComponents &&
+		!context.features.usesHost &&
+		!usesUrlParser &&
+		cxxStaticLinkArgs.length > 0
 			? cxxStaticLinkArgs
 			: cxxLinkArgs;
 	const localCxx = linkAllRustComponents

@@ -764,6 +764,7 @@ function sharedDevelopmentRunnerFeatures(
 	return normalizeNativeFeatures({
 		...features,
 		usesHost: true,
+		usesUrlParser: true,
 		temporalEnabled: true,
 		intlEnabled: true,
 		intlFeatures: [],
@@ -900,6 +901,7 @@ export function buildLocalBinary(
 					normalizeNativeFeatures({
 						...options.context.features,
 						usesHost: true,
+						usesUrlParser: true,
 					}),
 				),
 			})

@@ -280,16 +280,13 @@ export interface BuildDerivation {
 }
 
 /**
- * Project a resolved config onto the {@link BuildDerivation} the build layer consumes.
- * `usesHost` says whether the program applies the host personality. Only then does its
- * link list the web and Node components (TLS, URL with its C++ runtime, zlib, Node
- * crypto): the Rust archive references them all, so a listed component library joins
- * the link even for a program that reaches none of it. A caller that links before it
- * knows the program keeps the default.
+ * Project the config and reached host components onto the native build inputs.
+ * Native drivers that load images at run time keep the full host selection.
  */
 export function buildDerivationFromConfig(
 	config: ResolvedBuildConfig,
 	usesHost = true,
+	usesUrlParser = usesHost,
 ): BuildDerivation {
 	const intlFeatures = intlCargoFeatures(config);
 	const features = normalizeNativeFeatures({
@@ -299,6 +296,7 @@ export function buildDerivationFromConfig(
 		intlEnabled: config.engine.intl.enabled,
 		intlFeatures,
 		usesHost,
+		usesUrlParser,
 		regexpEnabled: config.engine.regexp,
 		temporalEnabled: config.engine.temporal,
 	});

@@ -169,12 +169,16 @@ being duplicated. Where that flag works on ELF targets, runtime C objects compil
 `-ffunction-sections -fdata-sections` too, so section removal works per function
 there as Mach-O's per-symbol sections do.
 
-Native builds publish Ada and ring beside the Rust archive so the linker can omit
-them by use. Ada has static initializers, and ring's assembly objects have no
-subsections. Linux prefers LLD when the compiler can use it. GNU ld can require
-both components before discarding unused sections, so its fallback links both
-and uses a static C++ runtime for lean programs when the capability probe succeeds.
-Wasm builds compile only the configured features.
+Native builds publish Ada and ring beside the Rust archive. A standalone image
+links Ada and its C++ runtime when its application or worker installers need the
+URL parser. Supply both to runners that resolve installers by name, since they
+can load different images without relinking. Ada's static initializers and ring's
+assembly objects can stay live once their archives enter the link.
+
+Linux prefers LLD when the compiler can use it. GNU ld can require both
+components before discarding unused sections, so its fallback links both.
+Without the host personality, that fallback uses a static C++ runtime when the
+capability probe succeeds. Wasm builds compile only the configured features.
 
 ## Cache layout
 

@@ -115,13 +115,15 @@ const fixtures: Array<{
 		name: "node-hello",
 		file: "bench/size/node-hello.mjs",
 		bun: true,
-		forbidden: ["sqlite3.o", "node_fs", "argon2"],
+		forbidden: ["Ada", "sqlite3.o", "node_fs", "argon2"],
+		forbiddenLibraries: ["C++ runtime"],
 	},
 	{
 		name: "node-fs",
 		file: "bench/size/node-fs.mjs",
 		bun: true,
 		forbidden: [
+			"Ada",
 			"brotli",
 			"TLS",
 			"HTTP client",
@@ -129,6 +131,7 @@ const fixtures: Array<{
 			"Fetch objects",
 			"sqlite3.o",
 		],
+		forbiddenLibraries: ["C++ runtime"],
 	},
 	{
 		name: "http-bare",
@@ -328,7 +331,22 @@ try {
 		});
 		const binaryBytes = statSync(built.binaryPath).size;
 		const libraries = dynamicLibraries(built.binaryPath, env);
+		const { linkAllRustComponents, sectionGcLinkArgs } = built.context.toolchain.probes;
+		const selectiveLink = !linkAllRustComponents && sectionGcLinkArgs.length > 0;
+		const { rust } = built.artifacts;
+		if (
+			selectiveLink &&
+			fixture.forbidden?.includes("Ada") &&
+			rust.nativeComponents.some(
+				({ packageName, library }) =>
+					packageName === "ada-url" && rust.linkArgs.includes(library),
+			)
+		) {
+			console.error(`  ${name} links the Ada archive`);
+			process.exitCode = 1;
+		}
 		for (const library of fixture.forbiddenLibraries ?? []) {
+			if (!selectiveLink && built.context.features.usesHost) continue;
 			const loaded = libraries.find((candidate) =>
 				forbiddenLibraries[library].test(candidate),
 			);

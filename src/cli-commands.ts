@@ -134,6 +134,7 @@ import {
 	resolveNativeBuildContext,
 } from "./native-build-context.ts";
 import { nativeBuildJobs } from "./native-command.ts";
+import { imageUsesUrlParser } from "./native-host-components.ts";
 import { nativeSourcePath } from "./native-source-path.ts";
 import {
 	executionTarget,
@@ -1087,15 +1088,21 @@ function prepareCommandState(
 							}),
 					}
 				: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
-		// Interpreted runs use the shared development runner, which links every host
-		// component, and their split frontends carry wires rather than one program image.
-		const usesHost =
-			interpreted ||
-			[
-				frontend.programImage,
-				...frontend.workerImages.map((worker) => worker.image),
-			].some((image) => imageUsesHost(image.runtime.hostInstalls));
-		const linkDerivation = buildDerivationFromConfig(buildConfig, usesHost);
+		// Wire drivers resolve installers by name, so they link every component.
+		const resolvesInstallers = interpreted || developmentFragments;
+		const hostInstalls = resolvesInstallers
+			? []
+			: [
+					frontend.programImage,
+					...frontend.workerImages.map((worker) => worker.image),
+				].map(({ runtime }) => runtime.hostInstalls);
+		const usesHost = resolvesInstallers || hostInstalls.some(imageUsesHost);
+		const usesUrlParser = resolvesInstallers || hostInstalls.some(imageUsesUrlParser);
+		const linkDerivation = buildDerivationFromConfig(
+			buildConfig,
+			usesHost,
+			usesUrlParser,
+		);
 		const derivation = command.profile
 			? {
 					features: normalizeNativeFeatures({
@@ -1146,12 +1153,7 @@ function prepareCommandState(
 			toolchain,
 			plan,
 			runtimeDirectory: context.installation.runtimeDirectory,
-			features: interpreted
-				? normalizeNativeFeatures({
-						...derivation.features,
-						usesHost: true,
-					})
-				: derivation.features,
+			features: derivation.features,
 			compilerBake,
 			onCacheEvent: (event) => {
 				nativeCache.set(event.artifact, event.hit);
@@ -2531,11 +2533,16 @@ async function executeProfiledTests(
 	reporter.detail("Test files", compiled.files.length);
 	reporter.timing("Test discovery", compiled.discoveryMs);
 	reporter.timing("Test frontend", compiled.frontendMs);
-	const usesHost = [
+	const hostInstalls = [
 		compiled.programImage,
 		...compiled.workerImages.map(({ image }) => image),
-	].some((image) => imageUsesHost(image.runtime.hostInstalls));
-	const baseDerivation = buildDerivationFromConfig(config, usesHost);
+	].map(({ runtime }) => runtime.hostInstalls);
+	const usesHost = hostInstalls.some(imageUsesHost);
+	const baseDerivation = buildDerivationFromConfig(
+		config,
+		usesHost,
+		hostInstalls.some(imageUsesUrlParser),
+	);
 	const derivation = {
 		features: normalizeNativeFeatures({
 			...baseDerivation.features,
