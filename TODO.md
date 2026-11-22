@@ -136,7 +136,19 @@ compilation both contribute to developer-loop latency.
 - [ ] Hoist pure loop-invariant constants in interpreted development images using existing
       Core loop facts and valid intrinsic identities. Keep fewer dispatches only when
       interpreted JavaScript and development runs improve after compilation, frame size
-      and zero-trip/handler behavior are included.
+      and zero-trip/handler behavior are included. Hoisting memory-free values out of
+      for-of loops (non-canonical, with iterator-close control) is sound but slowed the
+      compiled javascript-v2 records phase five-fold; find the lost native specialization
+      before retrying.
+
+- [ ] Measure stable own-table hits and misses in the interpreter's static property-load
+      rows. `mal_vm_property_try_load_static_rows` and the property IC subset take 8-9%
+      of compiled Express routes and JSON samples; use property addition and deletion as
+      controls before changing the cache shape.
+
+- [ ] Count executions of the interpreter's Number, Math, DataView, typed-array length,
+      in-loop call and superinstruction fast paths in perf stats, so native tests can
+      prove each path ran instead of only comparing output.
 
 ## World-knowledge ladder
 
@@ -484,13 +496,17 @@ distinct when measuring text work.
 
 ## Realm correctness and runtime capabilities
 
-- [ ] Decouple the baked eval compiler from the application's RegExp capability.
-      Standalone builds with `engine.eval: true` and `engine.regexp: false` fail
-      during compiler initialization even for `eval("20 + 22")`, in both source
-      and packaged compiler paths. Remove the compiler cone's implicit RegExp
-      dependencies or separate private compiler capabilities from application
-      capabilities. Preserve the disabled public constructor, throwing regex
-      methods, and omitted engine; cover native and interpreted compiler images.
+- [ ] Decouple the baked eval compiler from the application's RegExp capability, so
+      config resolution can accept `engine.eval: true` with `engine.regexp: false`
+      (rejected today because the compiler shares the application's isolate). Remove
+      the compiler cone's implicit RegExp dependencies or separate private compiler
+      capabilities from application capabilities. Preserve the disabled public
+      constructor, throwing regex methods, and omitted engine; cover native and
+      interpreted compiler images.
+
+- [ ] Give a `Function`-only program a `node:test` source provider when the generated
+      source is its only reference to the module, as runtime eval already retains
+      `process` and `Buffer`.
 
 - [ ] Implement module loading for ShadowRealm.prototype.importValue. Preserve
       wrapping, rejection, module identity, and cross-Realm error semantics.
@@ -529,6 +545,14 @@ completions.
 
 - [ ] Confirm SNI context matching against CVE-2026-48928 once details are published,
       and SQLite 3.53.3 against CVE-2026-69867.
+
+- [ ] Derive which images need the Ada URL parser from installer metadata in the
+      platform catalog instead of the hand-kept installer list in
+      `src/native-host-components.ts`, so a new URL-parsing installer cannot link
+      without Ada.
+
+- [ ] Keep cache paths out of `ffi check` link diagnostics, so the report is identical
+      across hosts and between the Node and packaged CLIs for the same failure.
 
 - [ ] Compare persistent Linux epoll interests with the current one-shot registration on
       representative keep-alive HTTP traffic. Preserve cancellation, stale-token and
