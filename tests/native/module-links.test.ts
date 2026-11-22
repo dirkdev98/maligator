@@ -9,6 +9,7 @@ import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-stri
 import { buildModuleGraph } from "../../src/compiler/frontend/module-graph.ts";
 import type { ExternalModuleInterface } from "../../src/compiler/frontend/module-graph.ts";
 import { compileSemanticProgramToProgramImage } from "../../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../../src/compiler/shared/compiler-facts.ts";
 import { serializeRuntimeImage } from "../../src/compiler/target/program-image-codec.ts";
 import { buildDevelopmentRunner } from "../../src/local-build.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
@@ -42,6 +43,7 @@ function compileImage(
 		externalModules: external,
 	});
 	const image = compileSemanticProgramToProgramImage(runSemanticAnalysisForGraph(graph), {
+		facts: compilerProgramFactsFromConfig(config),
 		optimization: "development",
 		...(publish ? { semanticLowering: { moduleExports: "all" as const } } : {}),
 	});

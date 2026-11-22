@@ -811,14 +811,18 @@ function checkFfiLargeHeaders(): void {
 			`${unusedMacro}\n/* ${text} */\n#define LARGE_CODE 7\nint large_read(int value);\n`,
 		);
 	writeHeader(doc);
-	writeFileSync(path.join(directory, "large.c"), "");
+	writeFileSync(
+		path.join(directory, "large.c"),
+		"int large_read(int value) { return value; }\n",
+	);
 	writeFileSync(
 		path.join(directory, "large.ffi.ts"),
 		'export default {headers:["large.h"],find:[{includeDirs:["include"],sources:["large.c"]}],functions:{large_read:{evidence:[{kind:"macro",name:"LARGE_CODE"}]}}};\n',
 	);
+	// Static linking keeps cache-dependent shim paths out of the report comparison.
 	writeFileSync(
 		path.join(directory, "maligator.build.ts"),
-		'export default {ffi:{large:{contract:"large.ffi.ts"}}};\n',
+		'export default {ffi:{large:{contract:"large.ffi.ts",link:"static"}}};\n',
 	);
 	const compilerLog = path.join(directory, "compiler.log");
 	const compiler = path.join(directory, "cc");
@@ -903,12 +907,19 @@ function checkFfiLargeHeaders(): void {
 	run("native", ["ffi", "check", "--update", "--json"]);
 	const lock = path.join(directory, "maligator-ffi.lock.json");
 	const accepted = readFileSync(lock);
+	const acceptedStat = statSync(lock, { bigint: true });
 	const unchanged = run("native", ["ffi", "check", "--json"]);
+	if (!unchanged.equals(run("node", ["ffi", "check", "--json"])))
+		throw new Error(
+			"unchanged large FFI report differs between Node and the packaged CLI",
+		);
+	const checkedStat = statSync(lock, { bigint: true });
 	if (
-		!unchanged.equals(run("node", ["ffi", "check", "--json"])) ||
+		acceptedStat.ino !== checkedStat.ino ||
+		acceptedStat.mtimeNs !== checkedStat.mtimeNs ||
 		!accepted.equals(readFileSync(lock))
 	)
-		throw new Error("unchanged large FFI snapshot differs or was rewritten");
+		throw new Error("checking unchanged large FFI declarations rewrote the snapshot");
 	writeHeader(`Changed ${doc}`);
 	const changed = run("native", ["ffi", "check", "--json"], 1);
 	if (!changed.equals(run("node", ["ffi", "check", "--json"], 1)))

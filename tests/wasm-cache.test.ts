@@ -164,13 +164,20 @@ it("shares Wasm stages across paths and invalidates changed sources, includes, f
 		);
 		expect(changedInclude.stages["wasm-source"]?.reused).toBe(1);
 
-		const changedFlags = build(secondRoot, {
+		const changedCargoFeatures = build(secondRoot, {
 			...config,
 			engine: { ...config.engine, regexp: false },
 		});
-		expect(changedFlags.stages["wasm-object"]?.reused).toBe(0);
-		expect(changedFlags.stages["wasm-rust"]?.built).toBe(1);
+		expect(changedCargoFeatures.stages["wasm-archive"]?.reused).toBe(1);
+		expect(changedCargoFeatures.stages["wasm-rust"]?.built).toBe(1);
 		expect(readdirSync(path.join(cache, "work/wasm-rust"))).toHaveLength(1);
+
+		const changedFlags = build(secondRoot, {
+			...config,
+			engine: { ...config.engine, primordials: "mutable" },
+		});
+		expect(changedFlags.stages["wasm-object"]?.reused).toBe(0);
+		expect(changedFlags.stages["wasm-rust"]?.reused).toBe(1);
 		vi.stubEnv("CARGO_BUILD_JOBS", "1");
 		expect(build(firstRoot).counts.built).toBe(0);
 		vi.stubEnv("CARGO_BUILD_JOBS", "2");
