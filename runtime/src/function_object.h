@@ -64,17 +64,19 @@ typedef MalValue (*MalNativeFunctionCallback)(
 
 typedef struct MalNativeFunctionObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObject *property_storage;
+    MalValue metadata[3];
+
     MalString *name;
     MalNativeFunctionCallback callback;
 
     /**
-     * The arity exposed as the `length` own property. Spec built-in functions
-     * carry the count of required parameters; materialized as a real
-     * { writable: false, enumerable: false, configurable: true } own property
-     * at creation (so reflection/delete see it), defaulting to 0.
+     * Small closure slot sets borrow the trailing storage. Larger sets own a
+     * RAW vector so the cell stays in a small size class.
      */
-    i32 length;
+    MalValue *slots;
+    i32 slot_count;
+    bool slots_inline;
 
     /**
      * Whether this native function implements [[Construct]]. Most built-ins
@@ -99,17 +101,6 @@ typedef struct MalNativeFunctionObject {
     u8 profile_category;
 #endif
 
-    /**
-     * Internal slots (the spec's [[...]] closure state), nullptr when the function
-     * carries none. Created via mal_native_function_object_new_with_slots; a pair of
-     * functions can share one mutable cell by storing the same heap object in a slot.
-     * A small set lives in the function's own cell (`slots_inline`), so creating and
-     * sweeping such a function needs no separate allocation.
-     */
-    MalValue *slots;
-    i32 slot_count;
-    bool slots_inline;
-
 #if MAL_REALMS
     /**
      * The realm this native function was created in, stamped at init from
@@ -119,11 +110,7 @@ typedef struct MalNativeFunctionObject {
     MalRealm *realm;
 #endif
 
-    /**
-     * The `length`/`name` metadata values and any inline slots that share the cell. As
-     * the last member it also gives the object MalValue's alignment, which 32-bit
-     * targets would not otherwise round its size up to.
-     */
+    /** Keep the inline closure slots aligned on targets with narrower pointers. */
     MalValue trailing[];
 } MalNativeFunctionObject;
 
@@ -186,20 +173,6 @@ static inline MalFunctionObject *mal_function_object_new(
 static inline i32 mal_function_object_function_index(const MalFunctionObject *function) {
     return function->function_index;
 }
-
-/**
- * Initialize native function object state and metadata in caller-provided storage.
- * `length` is the arity exposed as the `length` own property; a null `name`
- * installs only `length`.
- */
-void mal_native_function_object_init(
-    MalHeap *heap,
-    MalNativeFunctionObject *function,
-    MalObject *prototype,
-    MalString *name,
-    i32 length,
-    MalNativeFunctionCallback callback
-);
 
 /**
  * Allocate and initialize a new native function object with arity 0.

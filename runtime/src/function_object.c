@@ -11,8 +11,10 @@ static_assert(sizeof(MalFunctionObject) % alignof(MalValue) == 0,
               "script function capture displays are misaligned");
 static_assert(offsetof(MalFunctionObject, metadata) == sizeof(MalObject) + sizeof(void *),
               "compact function fields must follow the prototype word");
-static_assert(sizeof(MalNativeFunctionObject) % alignof(MalValue) == 0,
-              "native function trailing metadata slots are misaligned");
+static_assert(offsetof(MalNativeFunctionObject, metadata) == sizeof(MalObject) + sizeof(void *),
+              "native function fields must follow the prototype word");
+static_assert(offsetof(MalNativeFunctionObject, trailing) % alignof(MalValue) == 0,
+              "native function inline closure slots are misaligned");
 
 static MalShape *mal_function_metadata_shape(
     MalHeap *heap, const MalShape *base, MalKey length_key, MalKey name_key, bool named
@@ -35,55 +37,42 @@ static MalShape *mal_function_metadata_shape(
     return shape;
 }
 
-/** Install the spec function metadata directly in a shared non-default shape. */
-static void mal_function_init_metadata(
+static MalNativeFunctionObject *mal_native_function_alloc(
     MalHeap *heap,
-    MalObject *object,
-    MalKey length_key,
-    MalValue length,
-    MalKey name_key,
-    MalString *name,
-    MalValue *coallocated_slots
-) {
-    assert(object->shape->inline_count == 0);
-    assert(mal_object_fields(object) == nullptr);
-    assert(mal_object_overflow(object) == nullptr);
-    assert(length_key.kind == MAL_KEY_STRING);
-    assert(name == nullptr || name_key.kind == MAL_KEY_STRING);
-
-    MalShape *shape = mal_function_metadata_shape(
-        heap, object->shape, length_key, name_key, name != nullptr);
-    MalValue values[2] = {length, mal_value_new_undefined()};
-    u32 count = 1;
-    if (name != nullptr) {
-        values[1] = mal_value_from_string(name);
-        count = 2;
-    }
-
-    if (coallocated_slots == nullptr) {
-        mal_object_set_shaped_values(object, shape, values, count);
-        return;
-    }
-    object->shape = shape;
-    mal_object_set_fields_pointer(object, coallocated_slots);
-    object->slot_capacity = (u8) count;
-    for (u32 i = 0; i < count; i++) {
-        mal_object_field_initialize(object, shape, i, values[i]);
-    }
-}
-
-static void mal_native_function_init_state(
-    MalHeap *heap,
-    MalNativeFunctionObject *function,
     MalObject *prototype,
     MalString *name,
     i32 length,
-    MalNativeFunctionCallback callback
+    MalNativeFunctionCallback callback,
+    MalKey length_key,
+    MalKey name_key,
+    u32 inline_slots
 ) {
-    mal_object_init(heap, &function->object, MAL_HEAP_NATIVE_FUNCTION_OBJECT, prototype);
+    assert(length_key.kind == MAL_KEY_STRING);
+    assert(name == nullptr || name_key.kind == MAL_KEY_STRING);
+    MalShape *shape = mal_function_object_metadata_shape(
+        heap, length_key, name_key, name != nullptr);
+    MalNativeFunctionObject *function = mal_heap_alloc_uninitialized(
+        heap, sizeof(MalNativeFunctionObject) + inline_slots * sizeof(MalValue),
+        MAL_HEAP_NATIVE_FUNCTION_OBJECT);
+    MalHeapHeader header = function->object.header;
+    function->object = (MalObject) {
+        .header = header,
+        .extensible = true,
+        .storage_kind = MAL_OBJECT_COMPACT,
+        .slot_capacity = name == nullptr ? 1 : 2,
+        // Property growth past the in-cell metadata must preserve the callable state.
+        .inline_payload_eights = countof(function->metadata),
+        .shape = shape,
+    };
+    function->property_storage = prototype;
+    mal_object_mark_as_prototype(prototype);
+    function->metadata[0] = mal_value_from_i32(length);
+    if (name != nullptr) {
+        function->metadata[1] = mal_value_from_string(name);
+        mal_gc_card(&function->object.header, function->metadata[1]);
+    }
     function->name = name;
     function->callback = callback;
-    function->length = length;
     function->is_constructor = false;
     function->handles_new_target_prototype = false;
     function->is_async = false;
@@ -96,39 +85,11 @@ static void mal_native_function_init_state(
 #if MAL_REALMS
     function->realm = heap->current_realm;
 #endif
+    return function;
 }
 
 // Larger slot sets keep the cell in the small size classes and use a RAW vector.
 #define MAL_NATIVE_FUNCTION_INLINE_SLOTS_MAX 16
-
-static MalNativeFunctionObject *mal_native_function_alloc(
-    MalHeap *heap, u32 metadata_count, i32 slot_count
-) {
-    u32 inline_slots = slot_count > 0 && slot_count <= MAL_NATIVE_FUNCTION_INLINE_SLOTS_MAX
-        ? (u32) slot_count : 0;
-    return mal_heap_alloc(
-        heap, sizeof(MalNativeFunctionObject) + (metadata_count + inline_slots) * sizeof(MalValue),
-        MAL_HEAP_NATIVE_FUNCTION_OBJECT);
-}
-
-static void mal_native_function_attach_slots(
-    MalHeap *heap, MalNativeFunctionObject *function, u32 metadata_count,
-    const MalValue *slots, i32 slot_count
-) {
-    if (slot_count <= 0) return;
-    if (slot_count <= MAL_NATIVE_FUNCTION_INLINE_SLOTS_MAX) {
-        function->slots = function->trailing + metadata_count;
-        function->slots_inline = true;
-    } else {
-        function->slots = mal_heap_alloc_raw_profiled(
-            heap, sizeof(MalValue) * slot_count, MAL_PROFILE_ALLOCATION_FAMILY_FUNCTION);
-        mal_heap_cell_needs_finalizer(&function->object.header);
-    }
-    function->slot_count = slot_count;
-    for (i32 i = 0; i < slot_count; i++) {
-        function->slots[i] = slots[i];
-    }
-}
 
 static void mal_native_function_metadata_keys(
     MalHeap *heap,
@@ -155,24 +116,6 @@ MalShape *mal_function_object_metadata_shape(
     return mal_function_metadata_shape(heap, mal_shape_root(heap), length_key, name_key, named);
 }
 
-void mal_native_function_object_init(
-    MalHeap *heap,
-    MalNativeFunctionObject *function,
-    MalObject *prototype,
-    MalString *name,
-    i32 length,
-    MalNativeFunctionCallback callback
-) {
-    mal_native_function_init_state(heap, function, prototype, name, length, callback);
-    // Per spec (CreateBuiltinFunction / SetFunctionLength then SetFunctionName),
-    // `length` is the earlier own property and `name` follows it.
-    MalKey length_key;
-    MalKey name_key;
-    mal_native_function_metadata_keys(heap, name != nullptr, &length_key, &name_key);
-    mal_function_init_metadata(
-        heap, &function->object, length_key, mal_value_from_i32(length), name_key, name, nullptr);
-}
-
 MalNativeFunctionObject *mal_native_function_object_new(
     MalHeap *heap,
     MalObject *prototype,
@@ -192,16 +135,7 @@ MalNativeFunctionObject *mal_native_function_object_new_arity(
     MalKey length_key;
     MalKey name_key;
     mal_native_function_metadata_keys(heap, name != nullptr, &length_key, &name_key);
-    u32 metadata_count = name == nullptr ? 1 : 2;
-    MalNativeFunctionObject *function = mal_heap_alloc(
-        heap, sizeof(MalNativeFunctionObject) + metadata_count * sizeof(MalValue),
-        MAL_HEAP_NATIVE_FUNCTION_OBJECT);
-    mal_native_function_init_state(heap, function, prototype, name, length, callback);
-    mal_function_init_metadata(
-        heap, &function->object, length_key, mal_value_from_i32(length), name_key, name,
-        function->trailing);
-
-    return function;
+    return mal_native_function_alloc(heap, prototype, name, length, callback, length_key, name_key, 0);
 }
 
 MalNativeFunctionObject *mal_native_function_object_new_with_slots(
@@ -243,13 +177,23 @@ MalNativeFunctionObject *mal_native_function_object_new_with_slots_arity_keys(
     MalKey length_key,
     MalKey name_key
 ) {
-    u32 metadata_count = name == nullptr ? 1 : 2;
-    MalNativeFunctionObject *function = mal_native_function_alloc(heap, metadata_count, slot_count);
-    mal_native_function_init_state(heap, function, prototype, name, length, callback);
-    mal_function_init_metadata(
-        heap, &function->object, length_key, mal_value_from_i32(length), name_key, name,
-        function->trailing);
-    mal_native_function_attach_slots(heap, function, metadata_count, slots, slot_count);
+    u32 inline_slots = slot_count > 0 && slot_count <= MAL_NATIVE_FUNCTION_INLINE_SLOTS_MAX
+        ? (u32) slot_count : 0;
+    MalNativeFunctionObject *function = mal_native_function_alloc(
+        heap, prototype, name, length, callback, length_key, name_key, inline_slots);
+    if (slot_count <= 0) return function;
+    if (inline_slots != 0) {
+        function->slots = function->trailing;
+        function->slots_inline = true;
+    } else {
+        function->slots = mal_heap_alloc_raw_profiled(
+            heap, sizeof(MalValue) * slot_count, MAL_PROFILE_ALLOCATION_FAMILY_FUNCTION);
+        mal_heap_cell_needs_finalizer(&function->object.header);
+    }
+    function->slot_count = slot_count;
+    for (i32 i = 0; i < slot_count; i++) {
+        function->slots[i] = slots[i];
+    }
     return function;
 }
 
