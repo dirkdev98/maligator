@@ -63,6 +63,9 @@ typedef enum MalOpcode {
     MAL_OP_BINARY_NEQ_BRANCH,
     MAL_OP_BINARY_STRICT_EQ_BRANCH,
     MAL_OP_BINARY_STRICT_NEQ_BRANCH,
+    // Superinstructions retain the operands and position of each original slot.
+    MAL_OP_BINARY_ADD_ADD,
+    MAL_OP_LOAD_PROPERTY_STATIC_OWN_TRIPLE,
 } MalOpcode;
 
 typedef enum MalBuiltinError {

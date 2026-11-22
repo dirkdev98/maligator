@@ -1402,6 +1402,7 @@ static void mal_vm_rebase_instruction(
             break;
         }
         case MAL_OP_LOAD_PROPERTY_STATIC:
+        case MAL_OP_LOAD_PROPERTY_STATIC_OWN_TRIPLE:
         case MAL_OP_LOAD_PROPERTY_STATIC_ARRAY_LENGTH:
             in->as.load_property_static.string_index += string_base;
             break;
@@ -2700,6 +2701,8 @@ static void mal_vm_run_until_frame_count(
         MAL_VM_QUICK_BINARY_TARGET(STRICT_EQ_BRANCH)
         MAL_VM_QUICK_BINARY_TARGET(STRICT_NEQ_BRANCH)
 #undef MAL_VM_QUICK_BINARY_TARGET
+        [MAL_OP_BINARY_ADD_ADD] = &&mal_vm_op_BINARY_ADD_ADD,
+        [MAL_OP_LOAD_PROPERTY_STATIC_OWN_TRIPLE] = &&mal_vm_op_LOAD_PROPERTY_STATIC_OWN_TRIPLE,
     };
 #endif
     while (vm->frame_count > target_frame_count) {
@@ -2900,6 +2903,26 @@ static void mal_vm_run_until_frame_count(
                 registers[instruction->as.load_new_target.dst] = frame->new_target;
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
+            MAL_VM_CASE(BINARY_ADD_ADD) {
+                MalValue result;
+                if (!mal_vm_try_binary_number_fast(
+                        MAL_BIN_ADD, registers[instruction->as.binary.left],
+                        registers[instruction->as.binary.right], &result)) {
+                    goto mal_vm_interpreter_binary_slow;
+                }
+                registers[instruction->as.binary.dst] = result;
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                // Coercion on the second ADD must use its ordinary safepoint.
+                const MalInstruction *second = next_instruction;
+                if (mal_vm_try_binary_number_fast(
+                        MAL_BIN_ADD, registers[second->as.binary.left],
+                        registers[second->as.binary.right], &result)) {
+                    MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(second);
+                    registers[second->as.binary.dst] = result;
+                    next_instruction++;
+                }
+                continue;
+            }
             MAL_VM_CASE(BINARY) {
                 MalValue left = registers[instruction->as.binary.left];
                 MalValue right = registers[instruction->as.binary.right];
@@ -3151,6 +3174,7 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_load_property(frame, instruction));
                 break;
             }
+            MAL_VM_CASE(LOAD_PROPERTY_STATIC_OWN_TRIPLE)
             MAL_VM_CASE(LOAD_PROPERTY_STATIC) {
                 MalValue object = registers[instruction->as.load_property_static.object];
                 MalValue result;
@@ -3167,6 +3191,33 @@ static void mal_vm_run_until_frame_count(
                         mal_object_field_load_shaped(plain_object, ic->slot);
                     MAL_PERF_COUNT(interpreter_local_load_ic_hits);
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    if (instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC_OWN_TRIPLE) {
+                        // The loader proved the first two writes leave the receiver register intact.
+                        const MalInstruction *second = next_instruction;
+                        const MalInstruction *third = next_instruction + 1;
+                        const MalInlineCache *sites =
+                            ic - instruction->as.load_property_static.ic_index;
+                        const MalInlineCache *second_site =
+                            &sites[second->as.load_property_static.ic_index];
+                        const MalInlineCache *third_site =
+                            &sites[third->as.load_property_static.ic_index];
+                        if (second_site->mode == MAL_IC_MODE_SHAPE &&
+                            second_site->shape == ic->shape &&
+                            third_site->mode == MAL_IC_MODE_SHAPE &&
+                            third_site->shape == ic->shape) {
+                            const MalValue *fields = mal_object_fields_nonempty(plain_object);
+                            MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(second);
+                            registers[second->as.load_property_static.dst] = fields[second_site->slot];
+                            mal_perf_ic_load_mono_hit();
+                            MAL_PERF_COUNT(interpreter_local_load_ic_hits);
+
+                            MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(third);
+                            registers[third->as.load_property_static.dst] = fields[third_site->slot];
+                            mal_perf_ic_load_mono_hit();
+                            MAL_PERF_COUNT(interpreter_local_load_ic_hits);
+                            next_instruction = third + 1;
+                        }
+                    }
                     continue;
                 }
                 bool cache_hit = (ic->mode == MAL_IC_MODE_INHERITED_VALUE &&

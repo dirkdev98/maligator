@@ -2793,23 +2793,41 @@ static MalOpcode mal_loaded_quick_binary_opcode(MalBinaryOp op, bool branch) {
     }
 }
 
-/**
- * Select the interpreter's operator-specific BINARY forms. This runs after every
- * validation pass, which therefore only sees wire opcodes. A _BRANCH form requires
- * the next instruction to be a forward JUMP_IF on its result, so the fused branch
- * never skips a back-edge poll; a jump that targets that JUMP_IF still runs it.
- */
+// Quicken after validation. Leave trailing instructions at their own IPs so
+// direct branches and exception handlers can still enter them.
 static void mal_loaded_quicken_instructions(MalFunction *fn) {
     MalInstruction *instructions = (MalInstruction *) fn->instructions;
-    for (i32 ip = 0; ip < fn->instruction_count; ip++) {
+    for (i32 ip = fn->argument_snapshot_count; ip < fn->instruction_count; ip++) {
         MalInstruction *instruction = &instructions[ip];
-        if (instruction->opcode != MAL_OP_BINARY) continue;
-        const MalInstruction *next =
+        MalInstruction *next =
             ip + 1 < fn->instruction_count ? &instructions[ip + 1] : nullptr;
-        bool branch = next != nullptr && next->opcode == MAL_OP_JUMP_IF &&
-            next->as.jump_if.cond == instruction->as.binary.dst &&
-            next->as.jump_if.target_ip > ip + 1;
-        instruction->opcode = mal_loaded_quick_binary_opcode(instruction->as.binary.op, branch);
+        if (instruction->opcode == MAL_OP_BINARY) {
+            MalBinaryOp op = instruction->as.binary.op;
+            if (op == MAL_BIN_ADD && next != nullptr &&
+                next->opcode == MAL_OP_BINARY && next->as.binary.op == MAL_BIN_ADD) {
+                instruction->opcode = MAL_OP_BINARY_ADD_ADD;
+                next->opcode = MAL_OP_BINARY_ADD;
+                ip++;
+                continue;
+            }
+            // Only the forward branch can be fused without skipping a backedge poll.
+            bool branch = next != nullptr && next->opcode == MAL_OP_JUMP_IF &&
+                next->as.jump_if.cond == instruction->as.binary.dst &&
+                next->as.jump_if.target_ip > ip + 1;
+            instruction->opcode = mal_loaded_quick_binary_opcode(op, branch);
+        } else if (instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
+                   ip < fn->instruction_count - 2 &&
+                   next->opcode == MAL_OP_LOAD_PROPERTY_STATIC &&
+                   next[1].opcode == MAL_OP_LOAD_PROPERTY_STATIC) {
+            i32 receiver = instruction->as.load_property_static.object;
+            if (next->as.load_property_static.object == receiver &&
+                next[1].as.load_property_static.object == receiver &&
+                instruction->as.load_property_static.dst != receiver &&
+                next->as.load_property_static.dst != receiver) {
+                instruction->opcode = MAL_OP_LOAD_PROPERTY_STATIC_OWN_TRIPLE;
+                ip += 2;
+            }
+        }
     }
 }
 
