@@ -3,12 +3,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { resolveBuildConfig } from "../../src/build-config.ts";
-import { buildDerivationFromConfig } from "../../src/build-config.ts";
+import { buildDerivationFromConfig, resolveBuildConfig } from "../../src/build-config.ts";
 import { compileBuildFrontend } from "../../src/build-frontend-cache.ts";
 import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
 import { buildDevelopmentRunner } from "../../src/local-build.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
+import { compileIsolatedTestImage } from "../../src/testing/cache.ts";
 import { compileLinkedTestImage } from "../../src/testing/test-images.ts";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -111,6 +111,58 @@ afterAll(() => {
 });
 
 describe("maligator:test runner startup regressions", () => {
+	it("runs a whole test image with Intl and Temporal disabled", () => {
+		const mutableConfig = resolveBuildConfig({
+			engine: { primordials: "mutable", intl: { enabled: false }, temporal: false },
+		});
+		const derivation = buildDerivationFromConfig(mutableConfig);
+		const executable = buildDevelopmentRunner(
+			resolveNativeBuildContext({
+				features: { ...derivation.features, developmentApiEnabled: true },
+			}),
+			false,
+			derivation.cacheSuffix,
+		).binaryPath;
+		const testFile = path.join(root, "language-components.test.mjs");
+		write(
+			testFile,
+			`import { expect, test } from "maligator:test";
+test("language components are disabled", () => {
+	expect([typeof Intl, typeof Temporal]).toEqual(["undefined", "undefined"]);
+});
+`,
+		);
+		const resultPrefix = "RUNNER_RESULT ";
+		const image = compileIsolatedTestImage(
+			{
+				files: [testFile],
+				config: mutableConfig,
+				stripTypes: stripCompactTypes,
+				stripperIdentity: "test-runner-regression-stripper",
+				testModuleSource: readFileSyncForFixture("src/testing/runtime.mjs"),
+				cacheDirectory,
+			},
+			{ repeat: 1, bail: false, timeoutMs: 5000 },
+			resultPrefix,
+		);
+		const wirePath = path.join(root, "language-components.malw");
+		write(wirePath, image.wire);
+		const result = spawnSync(
+			executable,
+			["--maligator-internal-run-wires", "1", testFile, wirePath],
+			{ encoding: "utf8", timeout: 30_000 },
+		);
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		const report = result.stdout
+			.split("\n")
+			.find((line) => line.startsWith(resultPrefix));
+		expect(report, result.stdout).toBeDefined();
+		expect(JSON.parse(report!.slice(resultPrefix.length))).toMatchObject({
+			passed: 1,
+			failed: 0,
+		});
+	});
+
 	it("observes an application module's reassigned exports through test imports", () => {
 		const directory = path.join(root, "live-bindings");
 		write(path.join(directory, "package.json"), `{"type":"module"}\n`);

@@ -529,6 +529,7 @@ export function compileTestImage(options: CompileTestImageOptions): CompiledTest
 		assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
 		assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
 		const programImage = compileSemanticProgramToProgramImage(semantic, {
+			facts: compilerProgramFactsFromConfig(options.config),
 			optimization: "development",
 		});
 		phases.compileMs = Date.now() - compileStartedAt;
