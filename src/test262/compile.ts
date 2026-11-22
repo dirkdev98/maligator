@@ -55,7 +55,9 @@ export function compileTest262ProgramImage(
 						dynamicImportCandidates,
 					})
 				: analyzeSourceAndRunSemanticAnalysis(source, file.path, parsed);
-		const image = compileSemanticProgramToProgramImage(semantic);
+		const image = compileSemanticProgramToProgramImage(semantic, {
+			semanticLowering: { nodeImportMeta: false },
+		});
 		// The Test262 shell installs its own host globals. Keep the language components
 		// that the VM uses to initialize the realm.
 		image.runtime.hostInstalls = image.runtime.hostInstalls.filter(

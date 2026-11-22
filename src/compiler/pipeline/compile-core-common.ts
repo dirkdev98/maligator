@@ -50,6 +50,7 @@ export interface CompileCoreOptions {
 		evalScript?: boolean;
 		directEvalContext?: DirectEvalContext;
 		moduleExports?: "all" | ReadonlySet<string>;
+		nodeImportMeta?: boolean;
 		packageRoot?: PackageRootLowering;
 	};
 	afterCoreOptimization?: (

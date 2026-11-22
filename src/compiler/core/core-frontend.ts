@@ -20,6 +20,7 @@ export interface CoreFrontendOptions {
 	readonly entryResultExport?: string;
 	/** Modules whose bindings a relocatable image publishes to later images. */
 	readonly moduleExports?: "all" | ReadonlySet<string>;
+	readonly nodeImportMeta?: boolean;
 	readonly packageRoot?: PackageRootLowering;
 	readonly runPhase?: <T>(phase: "construct core ir", run: () => T) => T;
 }
@@ -42,6 +43,7 @@ export function lowerSemanticProgramToCore(
 			intrinsicGlobalReads: options.intrinsicGlobalReads,
 			entryResultExport: options.entryResultExport,
 			moduleExports: options.moduleExports,
+			nodeImportMeta: options.nodeImportMeta,
 			packageRoot: options.packageRoot,
 		}),
 	);

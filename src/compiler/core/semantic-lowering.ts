@@ -145,6 +145,7 @@ interface CoreFrontendContext {
 	/** Shared immutable analysis seed and program summaries. */
 	facts: CompilerProgramFacts;
 	intrinsicGlobalReads: boolean;
+	nodeImportMeta: boolean;
 	entryResultExport?: string;
 
 	/**
@@ -915,6 +916,7 @@ export function constructSemanticProgramCore(
 		intrinsicGlobalReads?: boolean;
 		entryResultExport?: string;
 		moduleExports?: "all" | ReadonlySet<string>;
+		nodeImportMeta?: boolean;
 		packageRoot?: PackageRootLowering;
 	} = {},
 ): ConstructedCoreCompilation {
@@ -929,6 +931,7 @@ export function constructSemanticProgramCore(
 		core: new CoreProgram(coreOpcodeRegistry),
 		facts: options.facts ?? conservativeCompilerProgramFacts(),
 		intrinsicGlobalReads: options.intrinsicGlobalReads ?? false,
+		nodeImportMeta: options.nodeImportMeta ?? true,
 		entryResultExport: options.entryResultExport,
 		evalCompletion: options.evalCompletion ?? false,
 		evalDirect: options.evalDirect ?? false,
@@ -4028,41 +4031,49 @@ function emitImportMetaInit(
 	const cursor = { block };
 	const object = nextCoreVariable(fn);
 	block.emitter.emit({ type: "createObject", registers: [object] });
-	const url = compileModulePath(
-		program,
-		fn,
-		cursor,
-		program.semantic.graph?.modules.get(file.path)?.sourcePath ?? file.path,
-		"url",
-	);
-	const filename = compileModulePath(program, fn, cursor, file.path, "path");
-	emitStoreProperty(
-		program,
-		fn,
-		cursor,
-		object,
-		"dirname",
-		compileModulePath(program, fn, cursor, moduleDirname(file.path), "path"),
-	);
-	emitStoreProperty(program, fn, cursor, object, "filename", filename);
-	const main = nextCoreVariable(fn);
-	block.emitter.emit({
-		type: "createBoolean",
-		registers: [main],
-		value: file.path === program.semantic.entrypointPath,
-	});
-	emitStoreProperty(program, fn, cursor, object, "main", main);
-	if (importMetaResolveUse(program, file).observable) {
+	if (program.nodeImportMeta) {
+		const url = compileModulePath(
+			program,
+			fn,
+			cursor,
+			program.semantic.graph?.modules.get(file.path)?.sourcePath ?? file.path,
+			"url",
+		);
+		const filename = compileModulePath(program, fn, cursor, file.path, "path");
 		emitStoreProperty(
 			program,
 			fn,
 			cursor,
 			object,
-			"resolve",
-			emitImportMetaResolveFunction(program, fn, cursor, file, url, filename),
+			"dirname",
+			compileModulePath(program, fn, cursor, moduleDirname(file.path), "path"),
+		);
+		emitStoreProperty(program, fn, cursor, object, "filename", filename);
+		const main = nextCoreVariable(fn);
+		block.emitter.emit({
+			type: "createBoolean",
+			registers: [main],
+			value: file.path === program.semantic.entrypointPath,
+		});
+		emitStoreProperty(program, fn, cursor, object, "main", main);
+		if (importMetaResolveUse(program, file).observable) {
+			emitStoreProperty(
+				program,
+				fn,
+				cursor,
+				object,
+				"resolve",
+				emitImportMetaResolveFunction(program, fn, cursor, file, url, filename),
+			);
+		}
+		emitStoreProperty(program, fn, cursor, object, "url", url);
+	} else {
+		const prototype = nextCoreVariable(fn);
+		block.emitter.emit(
+			{ type: "createNull", registers: [prototype] },
+			{ type: "setPrototype", registers: [object, prototype], literal: false },
 		);
 	}
-	emitStoreProperty(program, fn, cursor, object, "url", url);
 	block.emitter.emit({
 		type: "storeGlobal",
 		registers: [object],
@@ -16096,7 +16107,7 @@ function compileCall(
 	if (!fn.semanticFile.commonjs) {
 		const required = tryCompileCreateRequireCall(program, fn, cursor, callExpression);
 		if (required !== undefined) return required;
-		if (isImportMetaResolveCall(callExpression)) {
+		if (program.nodeImportMeta && isImportMetaResolveCall(callExpression)) {
 			const resolved = tryCompileImportMetaResolveCall(
 				program,
 				fn,

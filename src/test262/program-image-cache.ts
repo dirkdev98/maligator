@@ -20,7 +20,7 @@ import { test262CompilerDigest } from "./artifact-cache.ts";
 import { TEST262_METADATA } from "./constants.ts";
 import type { Test262Frontmatter } from "./types.ts";
 
-const CACHE_PROTOCOL = 3;
+const CACHE_PROTOCOL = 4;
 
 interface ProgramImageManifest {
 	schemaVersion: 1;
