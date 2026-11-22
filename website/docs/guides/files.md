@@ -69,7 +69,11 @@ await file("photo-backup.jpg").delete();
 
 `type` is the media type the extension implies. `stat()` describes the target of a symbolic link; pass `followSymlinks: false` to describe the link itself, the only case where `isSymbolicLink` is true.
 
-`copyTo()` and `moveTo()` take a path, a URL or another handle. They reject with `EEXIST` when the destination exists, unless you pass `overwrite: true`. `moveTo()` renames the file, copying it when the destination is on another file system, and the handle keeps naming the old path. On a file system without exclusive rename support, a destination created during the move can be replaced. `delete()` removes a file and rejects for a missing file or a directory.
+`copyTo()` and `moveTo()` take a path, a URL or another handle. They reject with `EEXIST` when the destination exists, unless you pass `overwrite: true`.
+
+`moveTo()` renames the file and the handle keeps naming the old path. By default the rename is exclusive. If exclusive rename is unavailable, the move rejects with `ENOTSUP`. When the operating system reports that the paths are on different file systems, `moveTo()` copies the file under the same overwrite rule, then removes the source.
+
+`delete()` removes a file and rejects for a missing file or a directory.
 
 ## List a directory
 

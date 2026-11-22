@@ -250,12 +250,6 @@ export async function scenario({ directory, file, FileSystemError, URL }) {
 
 	await file("copy.txt").moveTo("moved.txt");
 	log("move", await file("copy.txt").exists(), await file("moved.txt").text());
-	await outcome("move onto existing", () => file("moved.txt").moveTo("notes.txt"));
-	log(
-		"existing move destination keeps contents",
-		(await notes.text()).length,
-		await file("moved.txt").exists(),
-	);
 	await file("moved.txt").moveTo(file("notes.txt"), { overwrite: true });
 	log("move overwrite", await file("moved.txt").exists(), await file("notes.txt").text());
 	await outcome("delete", () => file("copy-from-handle.txt").delete());

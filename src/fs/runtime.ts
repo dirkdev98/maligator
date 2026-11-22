@@ -99,7 +99,7 @@ function fileSystemFailure(failure: unknown): unknown {
 		code,
 		syscall,
 		path,
-		...(destination === undefined ? {} : { destination }),
+		destination,
 	});
 }
 

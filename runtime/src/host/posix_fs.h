@@ -235,8 +235,8 @@ int mal_posix_fs_mkdtemp(const char *prefix, char **out_path);
  * real directory, owned by the effective user, with no group/other access. */
 int mal_posix_fs_private_directory(const char *path, bool *out_private);
 int mal_posix_fs_rename(const char *source, const char *destination);
-/* Refuse an existing destination. On file systems without exclusive rename this
- * falls back to checking the destination before a regular rename. */
+/* Rename without replacing the destination. Returns ENOTSUP when the platform
+ * cannot perform an exclusive rename. */
 int mal_posix_fs_rename_exclusive(const char *source, const char *destination);
 int mal_posix_fs_rm(const char *path, bool recursive, bool force);
 

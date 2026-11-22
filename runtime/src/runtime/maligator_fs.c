@@ -335,8 +335,9 @@ static MalValue fs_string(MalVm *vm, const char *text) {
 MalValue mal_fs_failure(
     MalVm *vm, int error, const char *syscall, const char *path, const char *destination) {
     const char *names[] = {"code", "description", "syscall", "path", "destination"};
-    const char *texts[] = {mal_posix_fs_errno_name(error), mal_posix_errno_description(error),
-        syscall, path, destination};
+    const char *description = error == ENOTSUP ? "operation not supported" :
+        mal_posix_errno_description(error);
+    const char *texts[] = {mal_posix_fs_errno_name(error), description, syscall, path, destination};
     MalValue roots[2] = {mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));

@@ -1029,9 +1029,10 @@ int mal_posix_fs_rename_exclusive(const char *source, const char *destination) {
     if (error == ENOTEMPTY) return EEXIST;
     if (error != ENOSYS && error != EINVAL && error != ENOTSUP && error != EOPNOTSUPP)
         return error;
+    // An ordinary rename could replace an entry created after this lookup.
     struct stat st;
     if (lstat(destination, &st) == 0) return EEXIST;
-    return mal_posix_fs_rename(source, destination);
+    return ENOTSUP;
 }
 
 static int posix_rm_recursive_at(int parent, const char *path, bool directory_only) {
