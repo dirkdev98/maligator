@@ -1128,6 +1128,7 @@ describe("program-image-codec", () => {
 			"WITH_CAPTURE_OBJECT",
 			"CONSTRUCT_SPREAD_ITERABLE",
 			"CONSTRUCT_REST_ARGUMENTS",
+			"UNREACHABLE_METHOD",
 		];
 		expect(WIRE_OPCODES.slice(-appended.length)).toEqual(appended);
 	});

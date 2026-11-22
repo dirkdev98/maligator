@@ -301,8 +301,10 @@ export interface CoreTargetDirectEntry {
 export interface CoreTargetFunction {
 	readonly storageValues?: ReadonlyArray<number>;
 	readonly specializedOnly?: true;
-	/** No code of the closed program can create this function, so nothing calls it. */
+	/** No code of the closed program can call this function. */
 	readonly unreachable?: true;
+	/** Class evaluation still creates the method and installs its property. */
+	readonly omittedBody?: true;
 	readonly sourcePath: string;
 	readonly functionIndex: number;
 	readonly nameStringIndex: number;

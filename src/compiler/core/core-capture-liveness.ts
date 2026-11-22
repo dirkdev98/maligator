@@ -15,7 +15,8 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
-import { coreRunnableFunctions } from "./core-method-reachability.ts";
+import { analyzeCoreMethodReachability } from "./core-method-reachability.ts";
+import type { CoreMethodReachability } from "./core-method-reachability.ts";
 import {
 	coreEvaluatorGlobalWrites,
 	coreEvaluatorPrivateSlotMap,
@@ -637,7 +638,7 @@ export function pruneCoreCaptureLiveness(
 				continue;
 			if (emptyBody(edit(id), fn)) emptied.add(id);
 		}
-		const runnable = coreRunnableFunctions(program, roots, {
+		const { runnable } = analyzeCoreMethodReachability(program, roots, {
 			dynamicScope,
 			creations: (fn) => sites.get(fn.id)?.creations ?? [],
 		});
@@ -724,10 +725,11 @@ export function pruneCoreCaptureLiveness(
  * can read. Calling a function needs its identity, so a body nothing creates never
  * runs, even while it stays an inlining or guard source.
  */
-export function coreInstantiableFunctions(
+export function coreFunctionRunnability(
 	program: CoreProgram,
 	context: CoreCompilationContext,
-): ReadonlySet<CoreFunctionId> | undefined {
+	plannedCalls: ReadonlyMap<CoreFunctionId, ReadonlySet<CoreFunctionId>>,
+): CoreMethodReachability | undefined {
 	if (context.facts.closure.sourceClosure.kind !== "known") return undefined;
 	const roots = new Set(
 		[
@@ -741,8 +743,9 @@ export function coreInstantiableFunctions(
 		roots.add(entry);
 		break;
 	}
-	return coreRunnableFunctions(program, roots, {
+	return analyzeCoreMethodReachability(program, roots, {
 		dynamicScope: runtimeKeyReaders(context),
+		plannedCalls,
 	});
 }
 

@@ -1349,7 +1349,20 @@ export function verifyExecutionProgram(
 			: executionLoopBackedgeInstructions);
 	verifyProgramCardinality(program);
 	for (let index = 0; index < program.functions.length; index++) {
-		const model = buildFunctionModel(program.functions[index]!, index);
+		const fn = program.functions[index]!;
+		if (fn.omittedBody === true) {
+			if (
+				fn.unreachable !== true ||
+				fn.blocks.length !== 0 ||
+				fn.directEntries.length !== 0 ||
+				fn.gc.safepoints.length !== 0 ||
+				fn.registerCount !== fn.parameterCount
+			) {
+				fail("omitted method has a target body", { functionIndex: index });
+			}
+			continue;
+		}
+		const model = buildFunctionModel(fn, index);
 		verifyRegisterPlan(model);
 		verifyInstructionOperands(model);
 		verifyBlockStructure(model);

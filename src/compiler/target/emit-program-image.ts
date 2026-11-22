@@ -1311,6 +1311,7 @@ function prepareNativeFunctionEmission(
 	const shouldRender = image.native.functions.map(
 		(fn, index) =>
 			options.useCompiled &&
+			fn.body.instructions[0]?.opcode !== "UNREACHABLE_METHOD" &&
 			(fn.unreachable !== true || closureParticipation[index] !== undefined),
 	);
 	return (excludedSymbols) => {
@@ -3379,6 +3380,8 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 		return dataOffset;
 	};
 	switch (instruction.opcode) {
+		case "UNREACHABLE_METHOD":
+			return "{ .opcode = MAL_OP_UNREACHABLE_METHOD }";
 		case "MOVE":
 			return `{ .opcode = MAL_OP_MOVE, .as.move = { .dst = ${instruction.dst}, .src = ${instruction.src} } }`;
 		case "BASE_CONSTRUCT_RESULT":

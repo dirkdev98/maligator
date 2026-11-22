@@ -830,6 +830,7 @@ export function buildArgumentSnapshotPlan(
  * Keep inline with the C struct
  */
 export type BytecodeInstruction =
+	| { opcode: "UNREACHABLE_METHOD" }
 	| {
 			opcode: "MOVE";
 			dst: number;
@@ -4082,11 +4083,12 @@ function lowerExecutionFunctionToBytecode(
 		}
 	}
 
-	const instructions: Array<BytecodeInstruction> = [];
+	const instructions: Array<BytecodeInstruction> =
+		fn.omittedBody === true ? [{ opcode: "UNREACHABLE_METHOD" }] : [];
 	let physicalLiteralShapeCount = 0;
 	const handlers: Array<BytecodeExceptionHandler> = [];
 	const openExceptionRanges: Array<{ startIp: number; handlerIp: number }> = [];
-	const positions: Array<number> = [];
+	const positions: Array<number> = fn.omittedBody === true ? [-1] : [];
 	const instructionIndexByTargetInstruction = new Map<CompilerInstruction, number>();
 	// Only native plans and profiling need IPs for ordinary instructions.
 	if (!fullIndex) {

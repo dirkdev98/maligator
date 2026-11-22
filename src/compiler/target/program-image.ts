@@ -1710,7 +1710,7 @@ export interface NativeFunctionPlan {
 	readonly body: BytecodeFunction;
 	readonly storageValues?: ReadonlyArray<number>;
 	readonly specializedOnly?: true;
-	/** The closed program never creates this function; it keeps only its bytecode. */
+	/** The closed program never calls this function. */
 	readonly unreachable?: true;
 	readonly functionIndex: number;
 	readonly mode: "direct" | "resumable";

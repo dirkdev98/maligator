@@ -50,7 +50,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 107;
+export const WIRE_VERSION = 108;
 
 /** Host install slot payload kinds; runtime/src/vm_load.c reads the same tags. */
 const HOST_SLOT_EMPTY = 0;
@@ -848,6 +848,8 @@ function writeInstruction(w: Writer, i: BytecodeInstruction): void {
 function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 	w.u8(opcodeTag(i.opcode));
 	switch (i.opcode) {
+		case "UNREACHABLE_METHOD":
+			return;
 		case "PREPARED_STRING_COMPARE":
 			w.i32(i.dst);
 			w.i32(i.left);
@@ -1889,6 +1891,8 @@ function readInstruction(r: Reader): BytecodeInstruction {
 function readInstructionOperands(r: Reader): BytecodeInstruction {
 	const opcode = WIRE_OPCODES[r.u8()];
 	switch (opcode) {
+		case "UNREACHABLE_METHOD":
+			return { opcode };
 		case "MOVE":
 			return { opcode, dst: r.i32(), src: r.i32() };
 		case "BASE_CONSTRUCT_RESULT":

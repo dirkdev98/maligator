@@ -146,6 +146,7 @@ export const BYTECODE_OPERATIONS = [
 	"WITH_CAPTURE_OBJECT",
 	"CONSTRUCT_SPREAD_ITERABLE",
 	"CONSTRUCT_REST_ARGUMENTS",
+	"UNREACHABLE_METHOD",
 ] as const;
 
 export function generateBytecodeOperationInclude(): string {

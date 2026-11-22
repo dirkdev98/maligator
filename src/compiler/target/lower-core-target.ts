@@ -1,6 +1,6 @@
 import type { FfiDirectEntry } from "../../build-config-values.ts";
 import { coreCompilerSiteId } from "../core/compiler-site-facts.ts";
-import { coreInstantiableFunctions } from "../core/core-capture-liveness.ts";
+import { coreFunctionRunnability } from "../core/core-capture-liveness.ts";
 import type { CoreCompilation } from "../core/core-compilation.ts";
 import { coreConstructorSlotReserve } from "../core/core-constructor-layout.ts";
 import { coreForeignCalls, coreForeignSlots } from "../core/core-foreign-calls.ts";
@@ -14,6 +14,7 @@ import {
 	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
 	CORE_GENERATOR_FUSION_TWIN_ATTRIBUTE,
 	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
+	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 	CORE_PRIMORDIAL_BINDING_TWIN_ATTRIBUTE,
 } from "../core/core-internal-attributes.ts";
 import { coreInstructionEffects } from "../core/core-ir-opcodes.ts";
@@ -23,6 +24,10 @@ import type {
 	CorePlanRepresentation,
 	CoreRecordUses,
 } from "../core/core-ir-regions.ts";
+import {
+	coreKnownOwnSlotFromAttribute,
+	coreShapeCaseCandidatesFromAttribute,
+} from "../core/core-ir-shape-provenance.ts";
 import { coreBlockId, coreFunctionId, coreInstructionId } from "../core/core-ir.ts";
 import type {
 	CoreBlockId,
@@ -38,6 +43,7 @@ import { coreNativeEntryControlFlow } from "../core/core-native-entry-analysis.t
 import type { CoreInstructionFacts } from "../core/core-native-instruction-facts.ts";
 import type { CorePrivatePackedRestArrayElementPlan } from "../core/core-native-numeric-analysis.ts";
 import { assertCoreOptimizationPlanCertificate } from "../core/core-optimization-plan-certificate.ts";
+import { extractCoreProgramFlowLocalTransfers } from "../core/core-program-flow.ts";
 import type { CoreRecordStorageWidths } from "../core/core-record-storage-widths.ts";
 import {
 	coreSpecializationRecipeAdmissionAt,
@@ -295,18 +301,97 @@ export function physicalRegisterClass(
 	return representation === "string" ? "string" : "boxed";
 }
 
-function createCoreTargetFunctionMap(
-	compilation: CoreCompilation,
-): CoreTargetFunctionMap {
-	const executionToCore = [...compilation.plan.liveFunctions];
-	const coreToExecution = Array<number>(compilation.program.functionCapacity).fill(-1);
+function createCoreTargetFunctionMap(compilation: CoreCompilation) {
+	const { program, context, plan } = compilation;
+	const calls = plannedFunctionCalls(plan);
+	const reachability = coreFunctionRunnability(program, context, calls);
+	const omittedBodies = reachability?.omittableMethods ?? new Set<CoreFunctionId>();
+	const excluded = new Set<CoreFunctionId>();
+	if (omittedBodies.size !== 0) {
+		// A closure created by an omitted body needs no row unless another
+		// surviving body still references it (including guard and source uses).
+		const live = new Set(plan.liveFunctions);
+		const nested = [...omittedBodies];
+		for (const owner of nested) {
+			const fn = program.function(owner);
+			for (const instruction of fn.instructionIds()) {
+				if (
+					fn.instructionKind(instruction) !== "operation" ||
+					fn.instructionOpcodeName(instruction) !== "createFunction"
+				)
+					continue;
+				const target = coreFunctionId(
+					fn.instructionAttributes(instruction).functionIndex as number,
+				);
+				if (
+					live.has(target) &&
+					!reachability!.runnable.has(target) &&
+					!excluded.has(target)
+				) {
+					excluded.add(target);
+					if (!omittedBodies.has(target)) nested.push(target);
+				}
+			}
+		}
+		if (excluded.size !== 0) {
+			const bodies = plan.liveFunctions.filter((id) => !excluded.has(id));
+			const retain = (target: CoreFunctionId) => {
+				if (excluded.delete(target)) bodies.push(target);
+			};
+			for (const id of bodies) {
+				if (omittedBodies.has(id)) continue;
+				const transfers = extractCoreProgramFlowLocalTransfers(
+					program,
+					program.function(id),
+				);
+				for (let index = 0; index < transfers.structuralTargetCount; index++)
+					retain(transfers.structuralTargetAt(index));
+				for (const target of calls.get(id) ?? []) retain(target);
+			}
+		}
+	}
+	const executionToCore = plan.liveFunctions.filter((id) => !excluded.has(id));
+	const coreToExecution = Array<number>(program.functionCapacity).fill(-1);
 	for (const [execution, core] of executionToCore.entries()) {
 		coreToExecution[core] = execution;
 	}
-	return Object.freeze({
+	const functionMap: CoreTargetFunctionMap = Object.freeze({
 		coreToExecution: Object.freeze(coreToExecution),
 		executionToCore: Object.freeze(executionToCore),
 	});
+	return { functionMap, reachability, omittedBodies };
+}
+
+function plannedFunctionCalls(plan: CoreCompilation["plan"]) {
+	const calls = new Map<CoreFunctionId, Set<CoreFunctionId>>();
+	const add = (caller: CoreFunctionId, target: CoreFunctionId) => {
+		const targets = calls.get(caller) ?? new Set<CoreFunctionId>();
+		targets.add(target);
+		calls.set(caller, targets);
+	};
+	for (const entry of plan.directEntries) {
+		for (const site of entry.callSites) add(site.caller, entry.function);
+		for (const call of entry.callOverrides ?? []) add(entry.function, call.target);
+		for (const forward of entry.resultFields?.forwards ?? [])
+			add(entry.function, forward.target);
+	}
+	for (const callback of plan.directBuiltinCallbacks ?? [])
+		add(callback.caller, callback.target);
+	for (let row = 0; row < plan.recipes.count; row++) {
+		const caller = coreSpecializationRecipeFunctionAt(plan.recipes, row);
+		for (const target of coreSpecializationRecipeTargetFunctionsAt(plan.recipes, row))
+			add(caller, target);
+		if (coreSpecializationRecipeKindAt(plan.recipes, row) === "function-call-chain") {
+			const { targetFunction } = coreSpecializationRecipePayloadAt(
+				plan.recipes,
+				row,
+				"function-call-chain",
+				"functionCall",
+			);
+			if (targetFunction !== undefined) add(caller, targetFunction);
+		}
+	}
+	return calls;
 }
 
 function relocateFunctionReferences(
@@ -319,6 +404,33 @@ function relocateFunctionReferences(
 		const value = attributes[key];
 		if (typeof value !== "number" || value < 0) continue;
 		relocated[key] = coreTargetFunctionIndex(map, value);
+		changed = true;
+	}
+	const relocateShape = ({
+		shapeFunctionIndex,
+		shapeInstruction,
+	}: {
+		readonly shapeFunctionIndex: number;
+		readonly shapeInstruction: CoreInstructionId;
+	}) => ({
+		shapeFunctionIndex: coreTargetFunctionIndex(map, shapeFunctionIndex),
+		shapeInstruction,
+	});
+	const knownOwnSlot = coreKnownOwnSlotFromAttribute(
+		attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE],
+	);
+	if (knownOwnSlot !== undefined) {
+		relocated[CORE_KNOWN_OWN_SLOT_ATTRIBUTE] = {
+			candidates: knownOwnSlot.candidates.map((candidate) => ({
+				...relocateShape(candidate),
+				slot: candidate.slot,
+			})),
+		};
+		changed = true;
+	}
+	const shapeCases = coreShapeCaseCandidatesFromAttribute(attributes.shapeCaseCandidates);
+	if (shapeCases !== undefined) {
+		relocated.shapeCaseCandidates = shapeCases.map(relocateShape);
 		changed = true;
 	}
 	const guarded = attributes.guardedFunctionIndices;
@@ -1992,6 +2104,52 @@ function prepareFunctionForTargets(
 
 type CoreTargetFunctionPreparation = ReturnType<typeof prepareFunctionForTargets>;
 
+function coreTargetFunctionMetadata(fn: CoreFunctionStore, functionIndex: number) {
+	const metadata = fn.metadata;
+	return {
+		sourcePath: metadata.sourcePath,
+		functionIndex,
+		nameStringIndex: metadata.nameStringIndex,
+		isGenerator: fn.isGenerator,
+		isAsync: fn.isAsync,
+		parameterCount: fn.parameterCount,
+		mappedArgumentSlots: [...metadata.mappedArgumentSlots],
+		mappedArguments: metadata.mappedArguments,
+		length: metadata.length,
+		capturedCount: metadata.capturedCount,
+		strict: metadata.strict,
+		isClassConstructor: metadata.isClassConstructor,
+		isDerivedConstructor: metadata.isDerivedConstructor,
+		hasPrototype: metadata.hasPrototype,
+	};
+}
+
+function lowerOmittedMethod(
+	fn: CoreFunctionStore,
+	functionIndex: number,
+): CoreTargetFunction {
+	return {
+		...coreTargetFunctionMetadata(fn, functionIndex),
+		omittedBody: true,
+		unreachable: true,
+		blocks: [],
+		coreBlocks: [fn.entry],
+		propertyCacheOrigins: [],
+		specializations: [],
+		registerCount: fn.parameterCount,
+		allocatedRegisterCount: fn.parameterCount,
+		registerRepresentations: Array.from({ length: fn.parameterCount }, () => "boxed"),
+		storageValues: Array.from({ length: fn.parameterCount }, (_, parameter) =>
+			fn.kernel.functionParameter(parameter),
+		),
+		directEntries: [],
+		constructorSlotReserve: 0,
+		gc: { safepoints: [] },
+		parallelCopies: [],
+		temporaryRegisters: [],
+	};
+}
+
 function lowerFunctionToTarget(
 	prepared: CoreTargetFunctionPreparation,
 	options: LowerCoreToCoreTargetOptions,
@@ -2878,6 +3036,7 @@ function lowerFunctionToTarget(
 		registerForValue,
 	);
 	const fnWithoutGc: Omit<CoreTargetFunction, "gc"> = {
+		...coreTargetFunctionMetadata(coreFunction, executionFunction),
 		...(allocation.storageValues === undefined
 			? {}
 			: {
@@ -2889,33 +3048,19 @@ function lowerFunctionToTarget(
 						),
 					],
 				}),
-		sourcePath: coreFunction.metadata.sourcePath,
-		functionIndex: executionFunction,
-		nameStringIndex: coreFunction.metadata.nameStringIndex,
 		blocks,
 		coreBlocks: Object.freeze([...blockOrder]),
 		propertyCacheOrigins,
 		specializations,
-		isGenerator: coreFunction.isGenerator,
-		isAsync: coreFunction.isAsync,
-		parameterCount: coreFunction.parameterCount,
-		mappedArgumentSlots: [...coreFunction.metadata.mappedArgumentSlots],
-		mappedArguments: coreFunction.metadata.mappedArguments,
-		length: coreFunction.metadata.length,
 		registerCount: nextRegister.value,
 		allocatedRegisterCount,
 		registerRepresentations: physicalRepresentations,
 		directEntries: [],
 		...(literalSwitches.length === 0 ? {} : { literalSwitches }),
-		capturedCount: coreFunction.metadata.capturedCount,
-		strict: coreFunction.metadata.strict,
-		isClassConstructor: coreFunction.metadata.isClassConstructor,
-		isDerivedConstructor: coreFunction.metadata.isDerivedConstructor,
 		constructorSlotReserve: Math.max(
 			coreConstructorSlotReserve(coreFunction),
 			receiverReserve ?? 0,
 		),
-		hasPrototype: coreFunction.metadata.hasPrototype,
 		parallelCopies,
 		temporaryRegisters: [...new Set(temporaryRegisters)],
 	};
@@ -3297,7 +3442,10 @@ export function prepareCoreCompilationToTargets(
 	} = {},
 ) {
 	assertCoreOptimizationPlanCertificate(compilation.program, compilation.plan);
-	const functionMap = createCoreTargetFunctionMap(compilation);
+	const { functionMap, reachability, omittedBodies } =
+		createCoreTargetFunctionMap(compilation);
+	const hasBody = (id: CoreFunctionId) =>
+		(functionMap.coreToExecution[id] ?? -1) >= 0 && !omittedBodies.has(id);
 	const directEntryPlans = new Map<number, Array<CoreDirectEntryPlan>>();
 	const directEntryIds = new Map<number, Map<CoreInstructionId, number>>();
 	const numericSortCallbacks = new Map<
@@ -3335,15 +3483,18 @@ export function prepareCoreCompilationToTargets(
 		)
 			continue;
 		const functionId = coreSpecializationRecipeFunctionAt(compilation.plan.recipes, row);
+		if (!hasBody(functionId)) continue;
 		const rows = specializationRows.get(functionId) ?? [];
 		rows.push(row);
 		specializationRows.set(functionId, rows);
 	}
 	for (const entry of compilation.plan.directEntries) {
+		if (!hasBody(entry.function)) continue;
 		const entries = directEntryPlans.get(entry.function) ?? [];
 		entries.push(entry);
 		directEntryPlans.set(entry.function, entries);
 		for (const site of entry.callSites) {
+			if (!hasBody(site.caller)) continue;
 			if (site.builtinCallbackOperation !== undefined) continue;
 			if (site.numericSortCallback !== undefined) {
 				const calls =
@@ -3408,6 +3559,7 @@ export function prepareCoreCompilationToTargets(
 		}
 	}
 	for (const callback of compilation.plan.directBuiltinCallbacks ?? []) {
+		if (!hasBody(callback.caller)) continue;
 		const calls =
 			directBuiltinCallbacks.get(callback.caller) ??
 			new Map<CoreInstructionId, CoreFunctionId>();
@@ -3453,8 +3605,9 @@ export function prepareCoreCompilationToTargets(
 	const specializedOnly = new Set(compilation.plan.specializedOnlyFunctions ?? []);
 	const classLayouts = planCoreClassLayouts(compilation, functionMap);
 	const foreignSlots = coreForeignSlots(compilation.context.data.hostInstallCandidates);
-	const functions = functionMap.executionToCore.map((core, execution) =>
-		prepareFunctionForTargets(
+	const functions = functionMap.executionToCore.map((core, execution) => {
+		if (!hasBody(core)) return undefined;
+		return prepareFunctionForTargets(
 			compilation.program.function(core),
 			options.excludeGuardedDirectCalls === true ||
 				options.mappedFunctionArrayCallHints === undefined
@@ -3487,13 +3640,14 @@ export function prepareCoreCompilationToTargets(
 			classLayouts.receiverReserves.get(core),
 			planCoreExactArrayAccesses(compilation, core),
 			coreForeignCalls(compilation.program.function(core), foreignSlots),
-		),
-	);
+		);
+	});
 	return Object.freeze({
 		compilation,
 		excludeGuardedDirectCalls: options.excludeGuardedDirectCalls === true,
 		mappedFunctionArrayCallHints: options.mappedFunctionArrayCallHints,
 		functionMap,
+		reachability,
 		functions,
 		classLayouts,
 		specializedOnly,
@@ -3524,7 +3678,9 @@ export function lowerCoreCompilationToTargetProgram(
 			? planCoreDirectClosures(
 					compilation.program,
 					compilation.context,
-					functionMap.executionToCore,
+					functionMap.executionToCore.filter(
+						(_, index) => prepared.functions[index] !== undefined,
+					),
 					exactCoreCallTargets(
 						compilation,
 						prepared.specializationRows,
@@ -3532,19 +3688,23 @@ export function lowerCoreCompilationToTargetProgram(
 					),
 				)
 			: undefined;
-	const instantiable = coreInstantiableFunctions(
-		compilation.program,
-		compilation.context,
-	);
-	const functions = prepared.functions.map((fn) => ({
-		...(prepared.specializedOnly.has(fn.coreFunction.id)
-			? { specializedOnly: true as const }
-			: {}),
-		...(instantiable !== undefined && !instantiable.has(fn.coreFunction.id)
-			? { unreachable: true as const }
-			: {}),
-		...lowerFunctionToTarget(fn, options, directClosures?.get(fn.coreFunction.id)),
-	}));
+	const runnable = prepared.reachability?.runnable;
+	const functions = prepared.functions.map((fn, index) => {
+		if (fn === undefined)
+			return lowerOmittedMethod(
+				compilation.program.function(functionMap.executionToCore[index]!),
+				index,
+			);
+		return {
+			...(prepared.specializedOnly.has(fn.coreFunction.id)
+				? { specializedOnly: true as const }
+				: {}),
+			...(runnable !== undefined && !runnable.has(fn.coreFunction.id)
+				? { unreachable: true as const }
+				: {}),
+			...lowerFunctionToTarget(fn, options, directClosures?.get(fn.coreFunction.id)),
+		};
+	});
 	return Object.freeze({
 		core: compilation.program,
 		context: compilation.context,

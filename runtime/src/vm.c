@@ -2744,6 +2744,10 @@ static void mal_vm_run_until_frame_count(
 #endif
 
         switch (instruction->opcode) {
+            MAL_VM_CASE(UNREACHABLE_METHOD)
+                fputs("Maligator internal error: entered an unreachable class method\n", stderr);
+                abort();
+
             MAL_VM_CASE(MOVE)
                 registers[instruction->as.move.dst] = registers[instruction->as.move.src];
                 MAL_VM_INTERPRETER_DIRECT_LEAF();

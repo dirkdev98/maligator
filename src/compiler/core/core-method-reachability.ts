@@ -131,6 +131,11 @@ const NAMELESS_STRING_ATTRIBUTES: ReadonlySet<string> = new Set([
 	"throwIfTdz",
 ]);
 
+export interface CoreMethodReachability {
+	readonly runnable: ReadonlySet<CoreFunctionId>;
+	readonly omittableMethods: ReadonlySet<CoreFunctionId>;
+}
+
 /**
  * Functions whose bodies a closed program can run, starting from `roots`. Calling a
  * function needs its identity, so a body nothing creates never runs. A class method
@@ -143,15 +148,16 @@ const NAMELESS_STRING_ATTRIBUTES: ReadonlySet<string> = new Set([
  * keeps the rule sound for inheritance and duck typing; anything this scan cannot
  * follow releases every deferred method.
  */
-export function coreRunnableFunctions(
+export function analyzeCoreMethodReachability(
 	program: CoreProgram,
 	roots: Iterable<CoreFunctionId>,
 	options: {
 		readonly dynamicScope: boolean;
 		/** A function's `createFunction` sites, which may include removed instructions. */
 		readonly creations?: (fn: CoreFunctionStore) => Iterable<CoreInstructionId>;
+		readonly plannedCalls?: ReadonlyMap<CoreFunctionId, ReadonlySet<CoreFunctionId>>;
 	},
-): ReadonlySet<CoreFunctionId> {
+): CoreMethodReachability {
 	const live = new Set<CoreFunctionId>();
 	const pending: Array<CoreFunctionId> = [];
 	const names = new Set<string>();
@@ -195,9 +201,12 @@ export function coreRunnableFunctions(
 		if (deferredMethods.has(id)) run(id);
 	};
 	const createFunction = program.registry.get("createFunction")?.id;
+	for (const targets of options.plannedCalls?.values() ?? [])
+		for (const target of targets) reference(target);
 	for (const root of roots) run(root);
 	while (pending.length > 0) {
 		const fn = program.function(pending.pop()!);
+		for (const target of options.plannedCalls?.get(fn.id) ?? []) run(target);
 		for (const instruction of untraceable && options.creations !== undefined
 			? options.creations(fn)
 			: fn.instructionIds()) {
@@ -250,6 +259,9 @@ export function coreRunnableFunctions(
 				const value = attributes[attribute];
 				if (attribute === "functionIndex" || attribute.endsWith("FunctionIndex")) {
 					if (typeof value === "number" && value >= 0) reference(value);
+				} else if (attribute === "guardedFunctionIndices" && Array.isArray(value)) {
+					for (const target of value)
+						if (typeof target === "number" && target >= 0) reference(target);
 				} else if (nameless) continue;
 				else if (attribute === "stringIndex" || attribute.endsWith("StringIndex")) {
 					if (typeof value === "number" && value >= 0)
@@ -262,7 +274,13 @@ export function coreRunnableFunctions(
 			}
 		}
 	}
-	return live;
+	return {
+		runnable: live,
+		// A Proxy descriptor trap can expose a non-enumerable method to enumeration.
+		omittableMethods: new Set(
+			proxies ? [] : [...deferredMethods].filter((method) => !live.has(method)),
+		),
+	};
 }
 
 function result(fn: CoreFunctionStore, instruction: CoreInstructionId): CoreValueId {
