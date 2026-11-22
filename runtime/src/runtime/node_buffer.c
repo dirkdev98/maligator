@@ -1411,6 +1411,9 @@ static MalValue mal_buffer_from(
     return mal_buffer_from_impl(vm, mal_buffer_prototype_from_callee(callee), args, argc);
 }
 
+static MalValue mal_buffer_fill(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee);
+
 static MalValue mal_buffer_alloc_impl(
     MalVm *vm, const MalValue *args, i32 argc, MalValue callee, bool apply_fill
 ) {
@@ -1478,8 +1481,13 @@ static MalValue mal_buffer_alloc_impl(
         }
         return mal_buffer_adopt_bytes(vm, prototype, fill, length, false);
     }
+    if (mal_value_is_typed_array_object(args[1])) {
+        MalValue result = mal_buffer_new_uninitialized(vm, prototype, length);
+        if (mal_value_is_undefined(result)) return result;
+        return mal_buffer_fill(vm, result, args + 1, 1, mal_value_new_undefined(), callee);
+    }
     mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                       "The fill argument must be a number or string");
+                       "The fill argument must be a number, string, or typed array");
     return mal_value_new_undefined();
 }
 

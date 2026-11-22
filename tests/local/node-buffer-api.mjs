@@ -151,6 +151,20 @@ show("fill end range", () => Buffer.alloc(4).fill("a", 1, 10));
 show("fill offset past end", () => Buffer.alloc(4).fill("a", 5));
 show("fill encoding", () => Buffer.alloc(4).fill("a", "bogus"));
 
+show("alloc repeats the visible Buffer pattern", () =>
+	Buffer.alloc(5, Buffer.from([99, 1, 2, 99]).subarray(1, 3), "ignored").toString("hex"),
+);
+show("alloc repeats a Uint8Array pattern", () =>
+	Buffer.alloc(5, Uint8Array.of(3, 4)).toString("hex"),
+);
+show("alloc rejects an empty pattern for a nonempty buffer", () =>
+	Buffer.alloc(4, Buffer.alloc(0)),
+);
+show(
+	"alloc accepts an empty pattern for a zero-length buffer",
+	() => Buffer.alloc(0, Buffer.alloc(0)).length,
+);
+
 show("swap", () =>
 	[
 		Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]).swap16(),
