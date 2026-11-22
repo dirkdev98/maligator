@@ -551,13 +551,13 @@ static void stream_schedule_readable_end(MalVm *vm, MalValue receiver) {
 static void stream_schedule_pull(MalVm *vm, MalValue receiver) {
     MalValue state = stream_own(vm, receiver, "_readableState");
     // An outstanding producer read must not block delivery of already-buffered data.
-    if (!stream_is_readable(vm, receiver)
-        || (!stream_truthy_own(vm, receiver, "_malFlowing") && !stream_iterator_demand(vm, receiver))
-        || (stream_truthy_own(vm, receiver, "_malReading")
-            && stream_i32_own(vm, state, "length", 0) == 0)
+    if (!mal_value_is_object(state)
         || stream_truthy_own(vm, receiver, "_malReadScheduled")
         || stream_truthy_own(vm, receiver, "destroyed")
-        || stream_truthy_own(vm, state, "endEmitted")) {
+        || stream_truthy_own(vm, state, "endEmitted")
+        || (!stream_truthy_own(vm, receiver, "_malFlowing") && !stream_iterator_demand(vm, receiver))
+        || (stream_truthy_own(vm, receiver, "_malReading")
+            && stream_i32_own(vm, state, "length", 0) == 0)) {
         return;
     }
     stream_set(vm, receiver, "_malReadScheduled", mal_value_new_boolean(true));
@@ -1240,20 +1240,34 @@ static i32 stream_i32_own(
 }
 
 static void stream_start_pull(MalVm *vm, MalValue receiver) {
-    if (!stream_is_readable(vm, receiver)
-        || (!stream_truthy_own(vm, receiver, "_malFlowing") && !stream_iterator_demand(vm, receiver))
+    MalValue state = stream_own(vm, receiver, "_readableState");
+    bool flowing = stream_truthy_own(vm, receiver, "_malFlowing");
+    if (!mal_value_is_object(state)
+        || (!flowing && !stream_iterator_demand(vm, receiver))
         || stream_truthy_own(vm, receiver, "destroyed")) {
         return;
     }
     MalRootSpan root;
     mal_gc_root(&root, &receiver, 1);
-    // read(0) runs _read under its sync boundary before buffered data can flow.
-    stream_read_core(vm, receiver, mal_value_from_i32(0));
-    while (vm->completion.kind != MAL_COMPLETION_THROW
-           && stream_truthy_own(vm, receiver, "_malFlowing")
-           && !stream_truthy_own(vm, receiver, "destroyed")) {
-        MalValue chunk = stream_read_core(vm, receiver, mal_value_new_undefined());
-        if (mal_value_is_null(chunk)) break;
+    if (stream_truthy_own(vm, state, "ended")
+        && stream_i32_own(vm, state, "length", 0) == 0
+        && stream_i32_own(vm, state, "highWaterMark", 16384) >= 0) {
+        // Neither read can call the producer or deliver data after EOF with an
+        // empty buffer, but read() still resets the readable notification flag.
+        stream_schedule_readable_end(vm, receiver);
+        if (vm->completion.kind != MAL_COMPLETION_THROW && flowing) {
+            stream_set(vm, state, "emittedReadable", mal_value_new_boolean(false));
+            stream_schedule_readable_end(vm, receiver);
+        }
+    } else {
+        // read(0) runs _read under its sync boundary before buffered data can flow.
+        stream_read_core(vm, receiver, mal_value_from_i32(0));
+        while (vm->completion.kind != MAL_COMPLETION_THROW
+               && stream_truthy_own(vm, receiver, "_malFlowing")
+               && !stream_truthy_own(vm, receiver, "destroyed")) {
+            MalValue chunk = stream_read_core(vm, receiver, mal_value_new_undefined());
+            if (mal_value_is_null(chunk)) break;
+        }
     }
     if (vm->completion.kind != MAL_COMPLETION_THROW) stream_iterator_drain(vm, receiver);
     mal_gc_unroot(&root);
