@@ -18,25 +18,19 @@
 import { BuildConfigError } from "../../build-config-error.ts";
 import type { FfiCallbackReach, FfiDirectEntry } from "../../build-config-values.ts";
 import { PLATFORM_MODULES } from "../../platform/catalog.ts";
-import type { PlatformData, PlatformModule } from "../../platform/catalog.ts";
+import type {
+	NativeHostInstaller,
+	PlatformData,
+	PlatformModule,
+} from "../../platform/catalog.ts";
 
-export interface HostModuleSpec {
+export interface HostModuleSpec extends NativeHostInstaller {
 	/** Canonical specifier and virtual module identity, e.g. `"node:path"`. */
 	id: string;
 	/** Curated named exports the linker can bind. */
 	named: ReadonlyArray<string>;
 	/** Whether `import x from "<id>"` provides a default export. */
 	hasDefault: boolean;
-	/**
-	 * The C symbol of this module's native installer — the function the emitted
-	 * install manifest references to fill each declared export's global slot. The
-	 * engine-neutral installer ABI ({@link
-	 * ../runtime/src/vm.h#MalHostModuleInstall}) keeps Node names out of the
-	 * intrinsic table; the name only ever appears as a string here and as an
-	 * `extern` decl in emitted C. Derived from the specifier via
-	 * {@link hostInstallerSymbol}, so the mapping has one source of truth.
-	 */
-	installer: string;
 	platform?: PlatformModule;
 	/** Export values the compiler may fold: the installed value is exactly this data. */
 	constants?: Readonly<Record<string, PlatformData>>;
@@ -144,10 +138,9 @@ export const WEB_FETCH_INSTALLER = "mal_host_install_web_fetch";
  * The compiler also retains these installers when it cannot follow an access to
  * the global object, such as `globalThis[key]` or passing `globalThis` along.
  */
-export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
-	readonly installer: string;
-	readonly globals: ReadonlyArray<string>;
-}> = [
+export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<
+	NativeHostInstaller & { readonly globals: ReadonlyArray<string> }
+> = [
 	{
 		installer: HOST_PERSONALITY_INSTALLER,
 		globals: ["setTimeout", "setInterval", "clearTimeout", "clearInterval"],
@@ -197,14 +190,17 @@ export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 	},
 	{
 		installer: "mal_host_install_web_url",
+		requiresUrlParser: true,
 		globals: ["URL", "URLSearchParams"],
 	},
 	{
 		installer: WEB_FETCH_INSTALLER,
+		requiresUrlParser: true,
 		globals: ["Headers", "Request", "Response", "Blob", "File", "FormData"],
 	},
 	{
 		installer: "mal_host_install_web_fetch_client",
+		requiresUrlParser: true,
 		globals: ["fetch"],
 	},
 	{
@@ -465,6 +461,7 @@ const FS: HostModuleSpec = {
 	],
 	hasDefault: true,
 	installer: NODE_FS_INSTALLER,
+	requiresUrlParser: true,
 };
 
 const FS_PROMISES: HostModuleSpec = {
@@ -723,6 +720,7 @@ const MODULE: HostModuleSpec = {
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:module"),
+	requiresUrlParser: true,
 };
 
 const CHILD_PROCESS: HostModuleSpec = {
@@ -739,6 +737,7 @@ const CHILD_PROCESS: HostModuleSpec = {
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:child_process"),
+	requiresUrlParser: true,
 };
 
 const CONSOLE: HostModuleSpec = {
@@ -846,6 +845,7 @@ const CRYPTO: HostModuleSpec = {
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:crypto"),
+	requiresUrlParser: true,
 };
 
 const PERF_HOOKS: HostModuleSpec = {
@@ -892,6 +892,7 @@ const TLS: HostModuleSpec = {
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:tls"),
+	requiresUrlParser: true,
 };
 
 const EVENTS: HostModuleSpec = {
@@ -987,6 +988,7 @@ const CONSTANTS: HostModuleSpec = {
 	named: [],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:constants"),
+	requiresUrlParser: true,
 };
 
 const PUNYCODE: HostModuleSpec = {
@@ -1066,6 +1068,7 @@ const BUFFER: HostModuleSpec = {
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:buffer"),
+	requiresUrlParser: true,
 };
 
 const PROCESS: HostModuleSpec = {
@@ -1256,6 +1259,7 @@ const STREAM: HostModuleSpec = {
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:stream"),
+	requiresUrlParser: true,
 };
 
 const STREAM_CONSUMERS: HostModuleSpec = {
@@ -1263,6 +1267,7 @@ const STREAM_CONSUMERS: HostModuleSpec = {
 	named: ["arrayBuffer", "blob", "buffer", "bytes", "json", "text"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:stream/consumers"),
+	requiresUrlParser: true,
 };
 
 const STREAM_WEB: HostModuleSpec = {
@@ -1295,6 +1300,7 @@ const STREAM_PROMISES: HostModuleSpec = {
 	named: ["finished", "pipeline"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:stream/promises"),
+	requiresUrlParser: true,
 };
 
 const HTTP: HostModuleSpec = {
@@ -1324,6 +1330,7 @@ const HTTP: HostModuleSpec = {
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:http"),
+	requiresUrlParser: true,
 };
 
 const HTTPS: HostModuleSpec = {
@@ -1331,6 +1338,7 @@ const HTTPS: HostModuleSpec = {
 	named: ["Agent", "Server", "createServer", "get", "globalAgent", "request"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:https"),
+	requiresUrlParser: true,
 };
 
 const HTTP2: HostModuleSpec = {
@@ -1387,6 +1395,7 @@ const URL: HostModuleSpec = {
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:url"),
+	requiresUrlParser: true,
 };
 
 const QUERYSTRING: HostModuleSpec = {
@@ -1453,6 +1462,7 @@ const NET: HostModuleSpec = {
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:net"),
+	requiresUrlParser: true,
 };
 
 const OS: HostModuleSpec = {
@@ -1538,6 +1548,7 @@ const ZLIB: HostModuleSpec = {
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:zlib"),
+	requiresUrlParser: true,
 };
 
 const SQLITE: HostModuleSpec = {
@@ -1696,6 +1707,7 @@ export function lookupHostModule(specifier: string): HostModuleSpec | undefined 
 				named: platform.exports.map((entry) => entry.name),
 				hasDefault: false,
 				installer: platform.installer,
+				requiresUrlParser: platform.requiresUrlParser,
 				platform,
 			};
 }

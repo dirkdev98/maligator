@@ -546,11 +546,6 @@ completions.
 - [ ] Confirm SNI context matching against CVE-2026-48928 once details are published,
       and SQLite 3.53.3 against CVE-2026-69867.
 
-- [ ] Derive which images need the Ada URL parser from installer metadata in the
-      platform catalog instead of the hand-kept installer list in
-      `src/native-host-components.ts`, so a new URL-parsing installer cannot link
-      without Ada.
-
 - [ ] Keep cache paths out of `ffi check` link diagnostics, so the report is identical
       across hosts and between the Node and packaged CLIs for the same failure.
 

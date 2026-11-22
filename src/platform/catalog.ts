@@ -73,9 +73,14 @@ interface PlatformModuleDefinition extends PlatformDocumentation {
 	readonly exports: ReadonlyArray<PlatformExport>;
 }
 
+export interface NativeHostInstaller {
+	readonly installer: string;
+	readonly requiresUrlParser?: true;
+}
+
 export type PlatformModule = PlatformModuleDefinition &
 	(
-		| { readonly kind: "native"; readonly installer: string }
+		| ({ readonly kind: "native" } & NativeHostInstaller)
 		| { readonly kind: "source"; readonly sourceFile: string }
 	);
 
@@ -1220,6 +1225,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 		stability: "experimental",
 		evaluation: "side-effect-free",
 		installer: "mal_host_install_maligator_internal_fetch",
+		requiresUrlParser: true,
 		declarationFile: "fetch-host-api.d.ts",
 		description: "The native fetch behind `maligator:http`'s `fetch` export.",
 		types: [],
@@ -1238,6 +1244,7 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 		stability: "experimental",
 		evaluation: "side-effect-free",
 		installer: "mal_host_install_maligator_internal_http",
+		requiresUrlParser: true,
 		declarationFile: "http-host-api.d.ts",
 		typeImports: [
 			{ namespace: "Http", from: "maligator:http" },
