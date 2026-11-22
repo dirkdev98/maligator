@@ -43,6 +43,9 @@ it("initializes Latin-1 and UTF-16 literals across generated data chunks", () =>
 			fixture,
 			name: "generated-data-initializers",
 			outDir,
+			config: resolveBuildConfig({
+				engine: { eval: false, realms: false },
+			}),
 			translationUnitPolicy: {
 				targetCodeUnits: 16 * 1024,
 				maximumNativeFunctionCodeUnits: 16 * 1024,
