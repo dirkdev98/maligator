@@ -1265,20 +1265,29 @@ try {
 		] as const)
 			writeFileSync(
 				path.join(project, `production-root-${name}.mts`),
-				`import type {TaskContext} from "maligator:workers";\nexport function calculate(context: TaskContext, value: number) { context.throwIfCancelled(); return value + ${increment}; }\n`,
+				`import type {TaskContext} from "maligator:workers";
+export function calculate(context: TaskContext, value: number) { context.throwIfCancelled(); return value + ${increment}; }
+${
+	name === "first"
+		? `import {embedFile} from "maligator:assets";
+const asset = embedFile("./production-large-asset.bin");
+export function assetByte() {
+	if (asset.size !== 4 * 1024 * 1024) throw new Error("large asset");
+	return asset.bytes()[0];
+}
+`
+		: ""
+}`,
 			);
 		writeFileSync(
 			path.join(project, "production-roots.mts"),
-			`import {embedFile} from "maligator:assets";
-import {createPool,createWorkerUrl} from "maligator:workers";
-const asset = embedFile("./production-large-asset.bin");
-if (asset.size !== 4 * 1024 * 1024) throw new Error("large asset");
+			`import {createPool,createWorkerUrl} from "maligator:workers";
 const first = createPool<typeof import("./production-root-first.mts")>(createWorkerUrl("./production-root-first.mts",import.meta.url),{size:1});
 const second = createPool<typeof import("./production-root-second.mts")>(createWorkerUrl("./production-root-second.mts",import.meta.url),{size:1});
 try {
 	await first.ready;
 	await second.ready;
-	console.log(JSON.stringify([await first.run("calculate",[2]),await second.run("calculate",[3]),asset.bytes()[0]]));
+	console.log(JSON.stringify([await first.run("calculate",[2]),await second.run("calculate",[3]),await first.run("assetByte",[])]));
 } finally {
 	await first.close();
 	await second.close();

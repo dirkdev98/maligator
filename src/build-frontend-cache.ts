@@ -67,6 +67,7 @@ import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts"
 import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { programImageStats } from "./compiler/target/program-image.ts";
 import type { ProgramImageStats } from "./compiler/target/program-image.ts";
+import type { RuntimeImage } from "./compiler/target/runtime-image.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import {
 	frontendArtifactCacheRoot,
@@ -90,7 +91,7 @@ import {
 } from "./worker-image-cache.ts";
 import type { WorkerImageArtifact } from "./worker-image-cache.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 12;
+const BUILD_FRONTEND_CACHE_SCHEMA = 13;
 const BUILD_FRONTEND_PIPELINE_VERSION = 7;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
@@ -111,12 +112,13 @@ for (const platformModule of PLATFORM_MODULES) {
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 12;
+	schema: 13;
 	closure: Pick<ProgramClosureCertificate, "scope" | "roots" | "openings">;
 	/** The execution snapshot when a module reads it; other commands may reuse the images otherwise. */
 	execution: string | null;
 	resolutionInputs: Array<ModuleResolutionInput>;
 	workerArtifacts: Array<WorkerImageArtifact>;
+	nativeHostInstalls?: CompiledBuildFrontend["nativeHostInstalls"];
 	identity: string;
 	contentKey: string;
 	runtimeArtifacts: Array<BuildFrontendArtifactIdentity>;
@@ -158,6 +160,8 @@ export interface BuildFrontendPhases {
 export interface CompiledBuildFrontend {
 	workerImages: ReadonlyArray<CompiledWorkerImage>;
 	programImage: ProgramImage;
+	/** Installers for whole native images in entrypoint, then worker order. */
+	nativeHostInstalls?: ReadonlyArray<RuntimeImage["hostInstalls"]>;
 	nativeImageIdentity?: string;
 	wire: Uint8Array;
 	cache: "hit" | "miss";
@@ -409,6 +413,28 @@ function interpretedFrontendError(): Error {
 	return new Error("an interpreted development frontend has no native program image");
 }
 
+function validNativeHostInstalls(
+	installs: CompiledBuildFrontend["nativeHostInstalls"],
+	count: number,
+): boolean {
+	return (
+		Array.isArray(installs) &&
+		installs.length === count &&
+		installs.every(
+			(image: RuntimeImage["hostInstalls"]) =>
+				Array.isArray(image) &&
+				image.every(
+					(install: RuntimeImage["hostInstalls"][number]) =>
+						typeof install?.installer === "string" &&
+						Array.isArray(install.exports) &&
+						install.exports.every(
+							(entry: { name: string }) => typeof entry?.name === "string",
+						),
+				),
+		)
+	);
+}
+
 function loadCached(
 	root: string,
 	artifactRoot: string,
@@ -417,10 +443,12 @@ function loadCached(
 	execution: string,
 	session: FrontendCompilationSession,
 	platformSourceRoot: string,
+	relocatable: boolean,
 ):
 	| {
 			workerImages: ReadonlyArray<CompiledWorkerImage>;
 			programImage: ProgramImage;
+			nativeHostInstalls?: CompiledBuildFrontend["nativeHostInstalls"];
 			nativeImageIdentity?: string;
 			wire: Uint8Array;
 			wires: Array<Uint8Array>;
@@ -448,6 +476,13 @@ function loadCached(
 			(!validArtifactIdentity(manifest.compilerArtifact) ||
 				!compilerArtifactUnchanged(manifest.compilerArtifact, artifactRoot))) ||
 		!workerImageArtifactsUnchanged(manifest.workerArtifacts, artifactRoot) ||
+		(relocatable
+			? manifest.nativeHostInstalls !== undefined
+			: manifest.compilerArtifact === undefined ||
+				!validNativeHostInstalls(
+					manifest.nativeHostInstalls,
+					manifest.workerArtifacts.length + 1,
+				)) ||
 		!validImageStats(manifest.imageStats) ||
 		!Array.isArray(manifest.diagnostics) ||
 		!Array.isArray(manifest.dependencies) ||
@@ -493,6 +528,7 @@ function loadCached(
 				manifest.closure.openings,
 			),
 			workerImages: restoreWorkerImages(manifest.workerArtifacts, artifactRoot),
+			nativeHostInstalls: manifest.nativeHostInstalls,
 			nativeImageIdentity: nativeImageIdentity(
 				manifest.compilerArtifact,
 				manifest.workerArtifacts,
@@ -765,6 +801,7 @@ function prepareBuildFrontend(
 			executionIdentity(options.execution),
 			session,
 			platformSourceRoot,
+			options.relocatable === true,
 		);
 		phases.validationMs = Date.now() - validationStartedAt;
 		if (cached !== undefined) {
@@ -773,6 +810,7 @@ function prepareBuildFrontend(
 				kind: "cached",
 				value: {
 					workerImages: cached.workerImages,
+					nativeHostInstalls: cached.nativeHostInstalls,
 					nativeImageIdentity: cached.nativeImageIdentity,
 					get programImage() {
 						return cached.programImage;
@@ -1048,6 +1086,14 @@ function prepareBuildFrontend(
 		validateRootResolutionInputs(resolutionInputs);
 		diagnostics.push(...workerDiagnostics);
 		const workerArtifacts = cacheWorkerImages(workerImages, artifactRoot);
+		const nativeProgramImage = loadProgramImage;
+		const nativeHostInstalls =
+			options.relocatable || nativeProgramImage === undefined
+				? undefined
+				: [
+						nativeProgramImage().runtime.hostInstalls,
+						...workerImages.map(({ image }) => image.runtime.hostInstalls),
+					];
 		const dependenciesByPath = new Map(
 			snapshotDependencies(dependencyInputs, session).map((input) => [input.path, input]),
 		);
@@ -1111,6 +1157,7 @@ function prepareBuildFrontend(
 						? {}
 						: { fragmentCompilerArtifacts }),
 					workerArtifacts,
+					nativeHostInstalls,
 					...(compilerArtifact === undefined ? {} : { compilerArtifact }),
 					imageStats,
 					entrypoint,
@@ -1121,9 +1168,9 @@ function prepareBuildFrontend(
 			);
 
 		const materializeWires = () => (wires ??= loadFragmentWires!());
-		const nativeProgramImage = loadProgramImage;
 		return {
 			workerImages,
+			nativeHostInstalls,
 			nativeImageIdentity: nativeImageIdentity(compilerArtifact, workerArtifacts),
 			get programImage() {
 				if (nativeProgramImage === undefined) throw interpretedFrontendError();

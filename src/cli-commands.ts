@@ -906,15 +906,19 @@ function prepareCommandState(
 		}
 		const serializePath =
 			command.kind === "build" ? command.internal.serializePath : undefined;
-		const embedDeclarations = relocatable
-			? embedDeclarationsOfWires([
-					...(frontend.wires ?? [frontend.wire]),
-					...frontend.workerImages.map((worker) => worker.wire),
-				])
-			: embedDeclarationsOf([
-					frontend.programImage.runtime,
-					...frontend.workerImages.map((worker) => worker.image.runtime),
-				]);
+		const nativeHostInstalls = frontend.nativeHostInstalls;
+		if (!relocatable && nativeHostInstalls === undefined)
+			throw new Error("native frontend is missing host installers");
+		const hostInstalls = nativeHostInstalls ?? [];
+		const embedDeclarations =
+			nativeHostInstalls === undefined
+				? embedDeclarationsOfWires([
+						...(frontend.wires ?? [frontend.wire]),
+						...frontend.workerImages.map((worker) => worker.wire),
+					])
+				: embedDeclarationsOf(
+						hostInstalls.map((installers) => ({ hostInstalls: installers })),
+					);
 		const declared = embedDeclarations.length === 0 ? {} : { embedDeclarations };
 		if (serializePath !== undefined && embedDeclarations.length > 0)
 			commandError("error: embedded assets are not supported by portable wire output");
@@ -1068,12 +1072,6 @@ function prepareCommandState(
 				: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
 		// Wire drivers resolve installers by name, so they link every component.
 		const resolvesInstallers = interpreted || developmentFragments;
-		const hostInstalls = resolvesInstallers
-			? []
-			: [
-					frontend.programImage,
-					...frontend.workerImages.map((worker) => worker.image),
-				].map(({ runtime }) => runtime.hostInstalls);
 		const usesHost = resolvesInstallers || hostInstalls.some(imageUsesHost);
 		const usesUrlParser = resolvesInstallers || hostInstalls.some(imageUsesUrlParser);
 		const linkDerivation = buildDerivationFromConfig(
@@ -1107,11 +1105,8 @@ function prepareCommandState(
 				? new Map<string, Set<string>>()
 				: undefined;
 		if (selectedFfiExports !== undefined) {
-			for (const image of [
-				frontend.programImage,
-				...frontend.workerImages.map((worker) => worker.image),
-			]) {
-				for (const install of image.runtime.hostInstalls) {
+			for (const installers of hostInstalls) {
+				for (const install of installers) {
 					let names = selectedFfiExports.get(install.installer);
 					if (names === undefined) {
 						names = new Set();
@@ -1238,7 +1233,6 @@ function prepareCommandState(
 						context.installation.runtimeDirectory,
 						selectedFfiExports,
 					);
-		const programImage = frontend.programImage;
 		const warn = (warning: string) => reporter.warning(warning);
 		function* generatedUnits(onWarning = warn) {
 			if (developmentFragments) {
@@ -1250,7 +1244,7 @@ function prepareCommandState(
 					assets,
 				);
 			} else {
-				yield* emitProgramTranslationUnits(programImage, {
+				yield* emitProgramTranslationUnits(frontend.programImage, {
 					sourcePath: nativeSourcePath,
 					partitionRoot: process.cwd(),
 					compiled: compiledNativeOutput,
@@ -1353,7 +1347,7 @@ function prepareCommandState(
 						: applicationDriverPath(
 								context.installation,
 								usesHost ||
-									imageNeedsHostEventLoop(programImage.runtime.hostInstalls) ||
+									imageNeedsHostEventLoop(hostInstalls[0] ?? []) ||
 									nativeLibraries?.needsHostEventLoop === true,
 								frontend.workerImages.length > 0,
 							),
