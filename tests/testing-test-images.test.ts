@@ -274,6 +274,31 @@ describe("linked test images", () => {
 		expect(singleFile.artifactMisses).toBe(1);
 	});
 
+	test("reuses an updated suite when selecting one test file", () => {
+		const root = temporaryDirectory();
+		const first = path.join(root, "a.test.mts");
+		const second = path.join(root, "b.test.mts");
+		write(path.join(root, "package.json"), '{"type":"module"}\n');
+		write(path.join(root, "shared.ts"), "export const answer = 42;\n");
+		write(first, testSource("a"));
+		write(second, testSource("b"));
+		const options = {
+			files: [first, second],
+			config: resolveBuildConfig({}),
+			stripTypes: stripCompactTypes,
+			stripperIdentity: "suite-selection-test",
+			testModuleSource,
+			cacheDirectory: path.join(root, "cache"),
+		};
+		compileLinkedTestImage(options);
+		write(second, testSource("b-revised", 1));
+		compileLinkedTestImage(options);
+
+		const selected = compileLinkedTestImage({ ...options, files: [first] });
+		expect(selected.cache).toBe("hit");
+		expect(selected.wires.flatMap((wire) => wire.file ?? [])).toEqual([first]);
+	});
+
 	test("links namespace imports and re-exports of application modules", () => {
 		const root = temporaryDirectory();
 		const entry = path.join(root, "namespace.test.ts");

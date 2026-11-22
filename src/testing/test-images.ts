@@ -50,7 +50,7 @@ import {
 	wrapTestEntry,
 } from "./cache.ts";
 
-const MANIFEST_SCHEMA = 2;
+const MANIFEST_SCHEMA = 3;
 const TEST_IMAGE_FAMILY = "test";
 
 type TestImageKind = "runtime" | "dependency" | "application" | "entry" | "runner";
@@ -103,21 +103,46 @@ function emptyPhases(): TestFrontendPhases {
 	};
 }
 
-function manifestPath(root: string, entries: Array<string>, identity: string): string {
-	return path.join(
-		root,
-		"manifests",
-		digest(JSON.stringify(entries)),
-		`${identity}.json`,
-	);
+function manifestPath(
+	root: string,
+	selection: string,
+	identity: string,
+	extension: "json" | "suite" = "json",
+): string {
+	return path.join(root, "manifests", selection, `${identity}.${extension}`);
 }
 
 function readManifest(file: string): TestImageManifest | undefined {
 	try {
-		return JSON.parse(readFileSync(file, "utf-8")) as TestImageManifest;
+		const manifest = JSON.parse(readFileSync(file, "utf-8")) as TestImageManifest | null;
+		return manifest?.schema === MANIFEST_SCHEMA ? manifest : undefined;
 	} catch {
 		return undefined;
 	}
+}
+
+function readSuiteSelection(file: string): string | undefined {
+	try {
+		const selection = readFileSync(file, "utf-8");
+		return /^[0-9a-f]{64}$/.test(selection) ? selection : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function readSelectionManifest(
+	root: string,
+	entries: Array<string>,
+	identity: string,
+	allowSuperset: boolean,
+): TestImageManifest | undefined {
+	const selection = digest(JSON.stringify(entries));
+	const exact = readManifest(manifestPath(root, selection, identity));
+	if (exact !== undefined || entries.length !== 1 || !allowSuperset) return exact;
+	const suite = readSuiteSelection(manifestPath(root, selection, identity, "suite"));
+	return suite === undefined
+		? undefined
+		: readManifest(manifestPath(root, suite, identity));
 }
 
 function referencedWire(reference: ImageReference): LinkedTestWire {
@@ -153,7 +178,7 @@ function manifestHit(
 	session: TestCompilationSession,
 ): { wires: Array<LinkedTestWire>; dependencies: Array<string> } | undefined {
 	if (
-		manifest?.schema !== MANIFEST_SCHEMA ||
+		manifest === undefined ||
 		manifest.identity !== identity ||
 		(manifest.execution !== null && manifest.execution !== execution) ||
 		!requested.every((entry) => manifest.entries.includes(entry)) ||
@@ -175,13 +200,17 @@ function manifestHit(
 }
 
 function publishManifest(root: string, manifest: TestImageManifest): void {
-	const contents = `${JSON.stringify(manifest)}\n`;
-	writeFileAtomically(manifestPath(root, manifest.entries, manifest.identity), contents);
-	if (manifest.entries.length === 1) return;
-	for (const entry of manifest.entries) {
-		const alias = manifestPath(root, [entry], manifest.identity);
-		if (readManifest(alias)?.entries.length === 1) continue;
-		writeFileAtomically(alias, contents);
+	const { entries, identity } = manifest;
+	const selection = digest(JSON.stringify(entries));
+	writeFileAtomically(
+		manifestPath(root, selection, identity),
+		`${JSON.stringify(manifest)}\n`,
+	);
+	if (entries.length === 1) return;
+	// A suite update keeps its selection key, so the entry references need no rewrite.
+	for (const entry of entries) {
+		const alias = manifestPath(root, digest(JSON.stringify([entry])), identity, "suite");
+		if (readSuiteSelection(alias) !== selection) writeFileAtomically(alias, selection);
 	}
 }
 
@@ -387,13 +416,14 @@ export function compileLinkedTestImage(
 
 	const validationStartedAt = Date.now();
 	const execution = executionIdentity(options.execution);
+	const allowSuperset = options.allowSupersetCache !== false;
 	const hit = manifestHit(
 		artifactRoot,
 		identity,
 		execution,
 		entries,
-		options.allowSupersetCache !== false,
-		readManifest(manifestPath(environment.root, entries, identity)),
+		allowSuperset,
+		readSelectionManifest(environment.root, entries, identity, allowSuperset),
 		session,
 	);
 	phases.validationMs = Date.now() - validationStartedAt;
