@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { sanitizerTestEnvironment } from "../src/build-flags.ts";
 import type { FfiCheckReport } from "../src/ffi/check.ts";
 import type { FfiProbeReport } from "../src/ffi/probe.ts";
 
@@ -99,6 +100,23 @@ afterEach(() => {
 });
 
 describe("FFI sanitizer probes", { timeout: 300_000 }, () => {
+	beforeAll(() => {
+		// The first cold sanitizer build can exceed a probe's subprocess budget on CI.
+		// Prepare the same shared runner ahead of the deadline-sensitive cases.
+		const directory = project(
+			'test("runs with the sanitizer", () => { expect(probe_add(2, 3)).toBe(5); });',
+		);
+		const result = spawnSync(process.execPath, [cliEntry, "test", "probe.test.ts"], {
+			cwd: directory,
+			encoding: "utf8",
+			env: sanitizerTestEnvironment(process.platform),
+			timeout: 1_200_000,
+		});
+		expect(result.status, result.error?.message ?? (result.stderr || result.stdout)).toBe(
+			0,
+		);
+	}, 1_200_000);
+
 	it("accepts only after passing instrumented tests and retains their output as valid JSON", () => {
 		const directory = project(
 			'test("adds values", () => { console.log("probe note"); expect(probe_add(2, 3)).toBe(5); });',
