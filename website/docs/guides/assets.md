@@ -17,10 +17,11 @@ Create `message.txt` containing `hello` and `templates/home.html` next to `src`,
 
 ```shell
 maligator run src/index.ts
-maligator build --production src/index.ts
+application=$(maligator build --production src/index.ts)
+"$application"
 ```
 
-Both print the message, the template list and the home page. The built executable keeps working after you delete the source files: it carries the copies it embedded.
+The development run and the built executable print the message, the template list and the home page. The built executable keeps working after you delete the source files because it carries embedded copies.
 
 Specifiers resolve like imports from the declaring module. A relative or absolute specifier names a path; a package specifier such as `ui-kit/dist` names a path inside that package. [Module aliases](/api/build#MaligatorBuildConfig) apply too, which suits a file a build step writes to a location the config chooses.
 

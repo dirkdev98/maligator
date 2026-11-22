@@ -5,7 +5,7 @@
 An ahead-of-time JavaScript compiler and native runtime. Maligator compiles
 JavaScript and erasable TypeScript to C and links it with its runtime into a
 standalone executable. Configure language features such as eval and Intl.
-Maligator links supported Web APIs and Node.js modules by use.
+Production builds link supported Web APIs and Node.js modules by use.
 
 Maligator is an experimental alpha. Check
 [compatibility](https://maligator.ddv.tools/compatibility) before relying on a Web
@@ -39,34 +39,16 @@ walkthrough.
 
 ## Native toolchain
 
-`run` and `test` use the runtime embedded in the CLI for ordinary configurations.
-Native builds compile the runtime on your machine and need:
+The npm platform package includes runners for `run`, `dev`, and `test`. Projects
+with a matching configuration and no C bindings can use them without a local
+toolchain.
 
-- A C compiler and archive tool with C23 support: Apple clang, clang 19 or newer, or
-  gcc 15 or newer.
-- Rustup, for the Rust toolchain pinned by the runtime.
-- A C++ compiler for local native runtime builds.
-
-`maligator doctor --verbose` checks all of it.
-[Set up native builds](https://maligator.ddv.tools/guides/native-toolchain) covers
-installation per host and cross-builds through Zig.
-
-## Status
-
-What works today:
-
-- Standalone native executables, with optional embedded files and an HTTP server.
-- Configurable eval, Realms, RegExp, Temporal and Intl.
-- Isolated workers with shared memory, transferable ports, and task pools.
-- The [Compatibility page](https://maligator.ddv.tools/compatibility) reports Test262
-  coverage from the committed baseline.
-
-What does not, yet:
-
-- Application compatibility needs verification against representative workloads.
-- Some Node.js APIs are still missing.
-- Some paths are quick; ordinary constructs can still be much slower.
-- Windows is not supported, and the alpha binaries are unsigned and not notarized.
+`build --production` compiles C on the build host and uses the packaged Rust
+archives when they match the target and configuration. It downloads a pinned Zig
+release if it cannot use the host compiler or an existing Zig installation.
+`maligator doctor --verbose` reports the selected compiler or planned download.
+See [Set up native builds](https://maligator.ddv.tools/guides/native-toolchain)
+for local runtime builds and cross-builds.
 
 ## Documentation
 
@@ -79,6 +61,7 @@ reference with signatures, defaults, and failure behavior. Good places to start:
   [build for production](https://maligator.ddv.tools/guides/production).
 - [Run tasks in workers](https://maligator.ddv.tools/guides/workers) and
   [serve HTTP](https://maligator.ddv.tools/guides/http).
+- [Read and write files](https://maligator.ddv.tools/guides/files).
 - [Troubleshooting](https://maligator.ddv.tools/guides/troubleshooting) and the
   [CLI reference](https://maligator.ddv.tools/api/cli).
 

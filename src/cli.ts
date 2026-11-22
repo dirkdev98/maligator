@@ -270,7 +270,7 @@ function describeCommand<Command>(
 }
 
 const COMMAND_HELP = {
-	init: { usage: "init", description: "Create maligator.build.ts." },
+	init: { usage: "init", description: "Set up a Maligator project." },
 	doctor: describeCommand<DoctorCommand>(
 		"doctor [options]",
 		"Check the native build toolchain.",

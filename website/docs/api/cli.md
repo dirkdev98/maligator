@@ -1,4 +1,4 @@
-Run commands from your application project root. Relative entries, config paths, and assets resolve there. No ancestor search occurs. Unknown options, missing values, and unexpected positional arguments are errors.
+Run commands from your application project root. Relative entries and config paths resolve there. Maligator looks for the build config in that directory. [Embedded asset specifiers](/guides/assets) resolve from their declaring modules. Unknown options, missing values, and unexpected positional arguments are errors.
 
 Use `maligator --help` to list commands and `maligator --version` to see the installed version. Put `--help` after a command or subcommand to see its options and defaults, as in `maligator build --help` or `maligator ffi check --help`.
 
@@ -8,7 +8,7 @@ Use `maligator --help` to list commands and `maligator --version` to see the ins
 maligator init
 ```
 
-Creates `maligator.build.ts` without overwriting it. Chooses the first existing entry among `src/index.ts`, `src/main.ts`, `index.ts`, and `main.ts`; otherwise writes `src/index.ts`. See [Getting started](/guides/getting-started).
+Creates `maligator.build.ts` and uses an existing entry or writes a starter. Sets up missing package and TypeScript options, reports what it created, updated, or skipped, and prints commands to run, watch, and test the project. See [Getting started](/guides/getting-started).
 
 ## doctor {#doctor}
 
@@ -16,7 +16,7 @@ Creates `maligator.build.ts` without overwriting it. Chooses the first existing 
 maligator doctor [--verbose] [--target rust-triple]
 ```
 
-Checks native C/C++ and Rust toolchains. `--verbose` includes paths, versions, target capabilities, and probe-cache status. `--target` checks a cross-build target through Zig and Rust. Does not build the application.
+Reports the compiler, planned Zig download, and packaged Rust archive availability for a production build. `--verbose` adds tool paths, versions, target capabilities, and probe-cache status. `--target` selects a cross-build target. See [toolchain setup](/guides/native-toolchain).
 
 ## build {#build}
 
@@ -27,18 +27,18 @@ maligator build [entry] [--config path] [--name name]
   [--profile[=compiler]] [--verbose] [--core-report mode]
 ```
 
-Compiles a native executable and prints its path. An explicit entry overrides `config.entry`; `--name` overrides `outputName`. Without either name, uses the unscoped package name or project directory. Requires the native toolchain.
+Compiles a native executable. Stdout contains the executable path, or the artifact directory when you pass `--artifact`. Progress goes to stderr. An explicit entry overrides `config.entry`, and `--name` overrides `outputName`. Without either name, uses the unscoped package name or project directory. See [toolchain setup](/guides/native-toolchain) for how builds find their compiler and runtime archives.
 
 | Flag                    | Behavior                                                                                                           |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `--production`          | Enable production optimization and link-time optimization when supported.                                          |
 | `--compile-concurrency` | Production total job limit, integer 1..3. Default is at most 3, bounded by host CPU capacity. Profiling is serial. |
 | `--artifact`            | Write a deployable directory; requires production and an absent or empty destination.                              |
-| `--target`              | Select a Rust target triple; requires matching C/C++ and Rust tools.                                               |
+| `--target`              | Select a cross-build target in Rust triple syntax. Uses Zig for C compilation and linking.                         |
 | `--core-report`         | `phases`, `counters`, or `full` compiler diagnostics.                                                              |
 | `--verbose`             | Print build diagnostics.                                                                                           |
 
-Artifacts contain `artifact.json`, `LICENSE`, `SHA256SUMS`, and `bin/<name>`, plus `profile.json` when profiling. See [Build for production](/guides/production).
+Artifacts include the executable in `bin/`, a manifest, checksums, and license files. Profiling adds `profile.json`. See [Build for production](/guides/production).
 
 ## run {#run}
 
@@ -46,7 +46,7 @@ Artifacts contain `artifact.json`, `LICENSE`, `SHA256SUMS`, and `bin/<name>`, pl
 maligator run [entry] [--config path] [--profile[=compiler]] [--verbose] [-- args...]
 ```
 
-Compiles a portable development image and runs a fresh VM. For supported profiles with Intl disabled, the distributed CLI supplies the specialized runtime without a local native toolchain. Forwards arguments after `--` without parsing them and propagates the application's exit status or terminating signal. A config is optional when an explicit entry supplies the program.
+Compiles a development image and runs it in a fresh VM. The npm platform package supplies a toolchain-free runner for matching configurations without C bindings. `run` forwards arguments after `--` and propagates the application's exit status or terminating signal. It reports unsuccessful exits on stderr. A config is optional when you pass the entry explicitly.
 
 ## dev {#dev}
 
@@ -66,7 +66,7 @@ maligator test [path ...] [--config path] [--run name]
   [--watch] [--watch-failed] [--status] [--profile[=compiler]] [--verbose]
 ```
 
-Discovers `*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}`. Ordinary runs interpret a development image. Selected files share one application isolate by default; results are not cached. A failing test produces a nonzero exit status.
+Discovers `*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}`. Ordinary runs interpret a development image and can use the packaged runner. Selected files share one application isolate by default. Every selected test runs on each invocation. A failing test produces a nonzero exit status.
 
 | Flag                    | Default and behavior                                                                 |
 | ----------------------- | ------------------------------------------------------------------------------------ |
@@ -186,4 +186,4 @@ the application's tests; builds do not run them automatically.
 
 ## Diagnostic build options {#diagnostic-build-options}
 
-`build --serialize <file>` writes a portable program image for toolchain diagnostics. It cannot carry configured filesystem assets. Native builds use the compiled backend by default. `build --no-compiled` selects the interpreted native diagnostic backend. `--render-native-c` (alias `--print`) emits C for inspection, and `--dump-core` adds Core diagnostics. These diagnostics are separate from a deployable production artifact.
+`build --serialize <file>` writes a portable program image for toolchain diagnostics. Serialization rejects reachable embedded assets and configured C libraries. Native builds use the compiled backend by default. `build --no-compiled` selects the interpreted native diagnostic backend. `--render-native-c` and its alias `--print` emit C for inspection. `--dump-core` adds Core diagnostics.

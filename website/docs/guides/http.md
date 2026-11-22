@@ -10,10 +10,10 @@ export default defineBuild({ entry: "src/index.ts" });
 
 {{example:http.ts}}
 
-Save the example as `src/index.ts`, then run:
+Save the example as `src/index.ts` and run `maligator dev`. Once it prints the
+listening address, send requests from a second terminal.
 
 ```shell
-maligator dev
 curl http://127.0.0.1:3000/
 curl -i http://127.0.0.1:3000/missing
 ```
@@ -29,7 +29,7 @@ A handler that throws or rejects reaches the `error` handler. Without one, the s
 ```typescript src/index.ts
 import { serve } from "maligator:http";
 
-await using server = serve({
+serve({
 	port: 3000,
 	fetch: () => {
 		throw new Error("unavailable");
@@ -81,16 +81,13 @@ A declaration with a [watcher](/guides/assets#produce-files-with-a-build-step) s
 
 ## Make requests
 
-You can call the global `fetch` or import it from `maligator:http`. It streams request and response bodies, follows redirects, decodes gzip, deflate and Brotli bodies, and stops when its `AbortSignal` fires:
+You can call the global `fetch` or import it from `maligator:http`. It streams request and response bodies, follows redirects, decodes gzip, deflate and Brotli bodies, and stops when its `AbortSignal` fires. Run the listener above before trying this client.
 
 ```typescript
-const response = await fetch("https://api.example.com/items", {
-	method: "POST",
-	headers: { "content-type": "application/json" },
-	body: JSON.stringify({ name: "widget" }),
+const response = await fetch("http://127.0.0.1:3000/", {
 	signal: AbortSignal.timeout(5000),
 });
-console.log(response.status, await response.json());
+console.log(response.status, await response.text());
 ```
 
 As in Deno and Node, a server has no browser context: `fetch` enforces no CORS, keeps no cookies or HTTP cache, sends no referrer, and resolves `redirect: "manual"` with the 3xx response itself. A network failure rejects with a `TypeError` whose `cause` says what failed. Requests use HTTP/1.1, and `integrity` metadata is not verified yet, so a request that sets it rejects.

@@ -10,7 +10,7 @@ Run `maligator init` to create a config, or pass an existing entry explicitly: `
 maligator doctor --verbose
 ```
 
-Check resolved `CC`/`CXX`, `PATH`, Rust, and the requested target against [the requirements](/guides/native-toolchain). Ordinary development execution with Intl disabled can use the distributed embedded runtime; native builds and profiling still need the toolchain. For a cross-build, run `doctor --target <rust-triple> --verbose` before compiling.
+Check the selected compiler and target against the [toolchain guide](/guides/native-toolchain). A planned Zig download happens on the next production build. If `doctor` reports missing Rust tools, check whether a matching archive is available for the target and configuration. To diagnose a cross-build, pass `--target` to `doctor` too.
 
 ## Unknown import or missing global
 
@@ -18,7 +18,13 @@ If the editor cannot resolve `maligator:workers`, load [the package types](/guid
 
 ## Compile error locations
 
-Syntax errors, invalid JSON modules, and unresolved imports show `file:line:column` when the compiler has a source location. The next line shows the source, with a caret under the token or import specifier to check.
+Syntax errors, invalid JSON modules, and unresolved imports show `file:line:column` when the compiler has a source location. The code frame shows the source line with a caret marking where to look. Here the caret points to a semicolon where the parser expected an initializer.
+
+```text
+/projects/example/src/index.ts:1:16: Unexpected token: ';'
+  const answer = ;
+                 ^
+```
 
 ## Runtime stack traces
 

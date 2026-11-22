@@ -491,8 +491,8 @@ export interface MaligatorBuildConfig {
 	modules?: {
 		/** Exact specifier replacements applied before module resolution. Defaults to an empty map. */
 		aliases?: Record<string, string>;
-		/** Package `exports` conditions to resolve with. `import` or `require` follows each
-		 * dependency edge and `default` always matches, so neither belongs in the list.
+		/** Package `exports` conditions to resolve with. Omit `import`, `require`, and `default`.
+		 * The first two follow the dependency edge and `default` always matches.
 		 * @default ["maligator", "node"]
 		 */
 		conditions?: Array<string>;
@@ -502,17 +502,18 @@ export interface MaligatorBuildConfig {
 		 * @default "locked"
 		 */
 		primordials?: "locked" | "mutable";
-		/** Control dynamic compilation. false leaves eval/Function present but makes calls throw;
-		 * true embeds the compiler; compile-check also rejects statically visible calls at build time.
+		/** Control dynamic compilation in the application image. `false` makes eval and
+		 * function constructors throw at runtime. `true` embeds the compiler. `"compile-check"`
+		 * also rejects statically visible dynamic compilation calls during the build.
 		 * @default false
 		 * @see https://maligator.ddv.tools/api/build#engine.eval
 		 */
 		eval?: boolean | "compile-check";
-		/** Include Realm support.
+		/** Enable ShadowRealm. Evaluating source in a realm also requires `engine.eval: true`.
 		 * @default false
 		 */
 		realms?: boolean;
-		/** Include RegExp; disabling it trades compatibility for binary size.
+		/** Allow RegExp. Native executables link the matcher when the application can use it.
 		 * @default true
 		 */
 		regexp?: boolean;
@@ -529,7 +530,7 @@ export interface MaligatorBuildConfig {
 			 * @default []
 			 */
 			features?: Array<MaligatorIntlFeature>;
-			/** Locale-data filtering is not implemented; only an empty list is accepted.
+			/** Reserved for locale-data filtering. Leave empty when enabling Intl.
 			 * @default []
 			 */
 			languages?: Array<string>;

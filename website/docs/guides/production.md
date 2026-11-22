@@ -7,7 +7,7 @@ maligator doctor --verbose
 maligator build --production
 ```
 
-Production builds compile C locally and link the Rust runtime archives from the platform package when they match. If the default C toolchain is unavailable, the build can download a pinned Zig release. Run `maligator doctor --verbose` to check the selected compiler before building. See [Set up native builds](/guides/native-toolchain).
+Production builds compile C locally. Matching archives from the platform package let the build skip Rust compilation. When the default C toolchain cannot build the runtime, Maligator tries an existing Zig installation or downloads a pinned release. See [Set up native builds](/guides/native-toolchain).
 
 Development builds keep native symbols and skip link-time optimization for useful crash diagnostics. `--production` adds link-time optimization when the toolchain supports it and strips native symbols after linking. When either step is unavailable, the build prints a warning and still produces a valid executable. Stripping keeps Maligator's JavaScript source positions.
 
@@ -26,6 +26,7 @@ my-app/
   artifact.json
   LICENSE
   SHA256SUMS
+  THIRD_PARTY_NOTICES.md
   bin/
     <application>
 ```
@@ -41,7 +42,7 @@ maligator doctor --target x86_64-unknown-linux-gnu --verbose
 maligator build --production --target x86_64-unknown-linux-gnu
 ```
 
-Cross-builds use Zig for C and C++. A local Rust runtime build needs the matching Rust target installed. See [Cross-build for another target](/guides/native-toolchain#cross-build-for-another-target) and test the artifact on its intended host.
+Cross-builds use Zig. Follow the [cross-build setup](/guides/native-toolchain#cross-build-for-another-target) for the target's runtime archives or Rust standard library, then test the artifact on its intended host.
 
 ## Bound worker-image compilation
 

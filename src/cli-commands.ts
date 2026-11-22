@@ -2892,7 +2892,9 @@ export async function runCli(
 	} catch (error) {
 		if (error instanceof CliUsageError) {
 			writeStderr(`error: ${error.message}`);
-			writeStderr("Run 'maligator --help' for usage.");
+			writeStderr(
+				"Run 'maligator <command> --help' for command usage or 'maligator --help' to list commands.",
+			);
 			exitCode = 2;
 		} else if (error instanceof CommandError) {
 			writeStderr(error.message);

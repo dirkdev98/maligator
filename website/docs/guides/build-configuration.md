@@ -18,13 +18,19 @@ maligator run
 maligator build src/other.ts --config maligator.build.ts --production
 ```
 
-The working directory is the project root. An explicit entry overrides `config.entry`; `--config` resolves from that same directory. No parent-directory search occurs. Without a config, an explicit entry uses product defaults.
+Run these commands from the project root. Create `src/other.ts` to try the second command. An explicit entry overrides `config.entry`. `--config` resolves from the working directory. Without a config, an explicit entry uses product defaults.
 
 ## Select features and host APIs
 
-Supported Web globals, `node:` modules, and `maligator:` modules are available directly. Maligator links the native components your code uses. Code that reads the global object through reflection, such as `Object.keys(globalThis)` or `globalThis[name]`, retains all globals. Builds with `engine.eval: true` do the same so code evaluated later can read them.
+Use supported Web APIs and `node:` or `maligator:` modules directly. Maligator chooses the host behavior from the APIs the optimized program retains. Node API use selects Node and Web behavior. Web API use alone selects Web behavior. A program that needs neither runs without either host personality.
 
-Engine choices apply to the whole image, including workers. RegExp is enabled by default. Eval, Realm support, Temporal, and Intl are opt-in. `engine.eval: true` embeds the runtime compiler; `"compile-check"` rejects visible dynamic compilation and keeps it disabled at runtime.
+By default, an unhandled promise rejection is reported. It exits with status 1 under the Node personality. With the Web personality or no personality, the rejection alone leaves the exit status at 0.
+
+Engine choices apply to the application and its workers. Each image records its eval and RegExp policies. RegExp is enabled by default. Eval, Realm support, Temporal, and Intl are opt-in. `engine.eval: true` embeds the runtime compiler for eval, function constructors, and `ShadowRealm.evaluate` when `engine.realms` is enabled. `"compile-check"` rejects statically visible dynamic compilation calls and keeps runtime compilation disabled.
+
+Production builds link language and host components by use, including the RegExp matcher, Unicode normalization, Temporal, Intl services, TLS, and compression. They also link Ada and the C++ runtime when a retained API needs the URL parser. Shared runners and the GNU linker fallback include Ada so they can resolve additional references. See the [native build reference](https://github.com/dirkdev98/maligator/blob/main/docs/native-builds.md#rust-archive).
+
+Reflective access such as `Object.keys(globalThis)` or `globalThis[name]` keeps globals that the compiler cannot rule out. Enabling runtime compilation also retains global APIs such as `URL` and `Buffer`, and the allowed language components, even if the entry only calls `ShadowRealm.evaluate`. A ShadowRealm evaluates source against its own global object.
 
 Code from `new Function`, indirect eval such as `(0, eval)(source)`, and the other function constructors runs as global code, so with locked primordials and without realms the rest of the program keeps its whole-program optimizations. A direct `eval(source)` call can read and assign the bindings in scope at the call and call what they hold, which in a CommonJS module include `module`, `exports` and `require`; the build treats those values as reachable from unseen code and keeps optimizing everything else, such as other modules and functions the call cannot see. CommonJS modules compile as strict code, so a direct eval's `var` declarations stay inside the eval. A script entry that shares its top-level declarations with global code makes the build optimize the whole program as open to unseen code.
 

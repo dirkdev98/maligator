@@ -1,7 +1,8 @@
-`maligator build --production` uses a C compiler and archive tool on the build host.
-The platform package supplies the Rust runtime archives for the default flavour.
-`run`, `dev` and `test` can use a packaged development runner when the project
-configuration matches. The finished executable needs only its runtime libraries.
+The npm platform package includes prebuilt development runners and runtime archives.
+With locked primordials and realms disabled, `run`, `dev`, and `test` can use the
+packaged runner without a local toolchain if the project has no C bindings.
+`build --production` compiles C on the build host and uses matching Rust archives
+without Rustup, Cargo, or rustc.
 
 ## Check the toolchain
 
@@ -9,10 +10,9 @@ configuration matches. The finished executable needs only its runtime libraries.
 maligator doctor --verbose
 ```
 
-`doctor` shows the C compiler that production builds will use, the target, the
-capabilities it tested and whether the Rust runtime comes from the platform package.
-Install a C++ compiler and [Rustup](https://rustup.rs) if the build needs to compile
-the Rust runtime locally.
+`doctor` reports the selected C compiler or a planned Zig download. It reports
+whether it found matching Rust archives. `--verbose` adds tool paths, versions,
+target information, and probe results. `doctor` leaves installation to the build.
 
 ## Compiler selection
 
@@ -27,6 +27,15 @@ its checksum and stores it in the Maligator cache. The download uses the system
 `curl` and `tar` with xz support. Use `doctor` to see the download destination before
 the first build.
 
+## Local runtime builds
+
+Install a C23-capable C compiler and archiver, a C++ compiler, and
+[Rustup](https://rustup.rs) to build the runtime locally. The CLI needs these tools
+for a source checkout and when the packaged archives do not match the requested
+target or runtime configuration. A build with mutable primordials or realms enabled
+uses a local runtime. [C bindings](/guides/c-libraries) need a native compiler even
+when development uses a packaged runner.
+
 ## Cross-build for another target
 
 Pass a Rust target triple to `build` to cross-compile through [Zig](https://ziglang.org).
@@ -37,6 +46,7 @@ maligator doctor --target x86_64-unknown-linux-gnu --verbose
 maligator build --production --target x86_64-unknown-linux-gnu
 ```
 
-Install the Rust standard library for the target if its runtime archive must build
-locally. Test the executable on the intended host. See
-[Build for production](/guides/production#build-for-another-target).
+If the selected platform package matches the build host, a different target can
+require a local Rust build. Install the Rust standard library for that target in
+the toolchain used by Maligator, or set `MALIGATOR_PREBUILT_RUNTIME_DIR` to a
+matching runtime archive directory. Test the executable on the intended host.

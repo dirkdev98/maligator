@@ -1,4 +1,4 @@
-Use `maligator:fs` to read, write, and watch files and directories on disk. File reads and writes run on background threads.
+Use `maligator:fs` on native targets to read, write, and watch files and directories on disk. It works without Node APIs. File reads and writes run on background threads.
 
 ## Read a file
 
@@ -13,7 +13,7 @@ if (await settings.exists()) {
 console.log((await file("notes.txt").text()).length);
 ```
 
-`file()` returns a handle without touching the disk, so the file need not exist yet. A relative path resolves against the working directory when an operation runs. A `file:` URL works too.
+`file()` returns a handle without touching the disk. A relative path resolves against the working directory when an operation runs. A `file:` URL works too. Create `notes.txt` before running this example.
 
 `text()` decodes UTF-8 and drops a byte order mark, `bytes()` returns a fresh `Uint8Array` and `json()` parses the text. A handle reads like an [embedded file](/guides/assets), except that each method returns a promise, so code that awaits `bytes()`, `text()` or `json()` takes either.
 
@@ -48,11 +48,13 @@ for await (const chunk of file("input.bin").stream({ chunkSize: 64 * 1024 })) {
 await output.flush();
 ```
 
-`stream()` opens the file when a reader requests its first chunk. It reads up to `chunkSize` bytes at a time and closes at the end of the stream. Use `start` and `end` to select a byte range with inclusive offsets. Cancel the stream to stop early, or break from a `for await` loop to cancel automatically.
+Create `input.bin` before running the example. `stream()` opens the file when a reader requests its first chunk. It reads up to `chunkSize` bytes at a time and closes at the end of the stream. Use `start` and `end` to select a byte range with inclusive offsets. Cancel the stream to stop early, or break from a `for await` loop to cancel automatically.
 
 `writer()` opens the file on the first write, flush, or close. Use `append: true` to keep existing contents. Calls run in the order you make them. Await each write before reusing its input buffer. Use `flush()` to sync preceding writes to disk, then `close()`, `end()`, or `await using` to release the descriptor.
 
 ## Inspect, copy, move and delete
+
+Run this example in a scratch directory with a sample `photo.jpg`.
 
 ```typescript src/archive.ts
 import { file } from "maligator:fs";
@@ -108,7 +110,7 @@ for await (const { kind, path } of watch("inbox", { recursive: true })) {
 }
 ```
 
-Watch a file or a directory. A directory watch reports changes to its direct children by default. Set `recursive: true` to include subdirectories. Each event names the changed path, for example `inbox/new.txt` when watching `inbox`. The first iteration starts the watch. Break out of the loop to close it, or pass an abort signal to stop an iteration that is waiting for an event.
+Create `inbox` before starting the example, then create a file there while it runs. A directory watch reports changes to its direct children by default. Set `recursive: true` to include subdirectories. Each event names the changed path, such as `inbox/new.txt`. The first iteration starts the watch. Break out of the loop to close it, or pass an abort signal to stop an iteration that is waiting for an event.
 
 The OS can coalesce notifications. A move may appear as a deletion or creation when only one side is visible to the watcher.
 
@@ -123,7 +125,7 @@ try {
 	console.log(await file("notes.txt").text());
 } catch (error) {
 	if (!(error instanceof FileSystemError) || error.code !== "ENOENT") throw error;
-	console.log(error.message); // ENOENT: no such file or directory, open 'notes.txt'
+	console.log(error.code);
 }
 ```
 

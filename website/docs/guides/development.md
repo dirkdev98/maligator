@@ -9,7 +9,7 @@ maligator dev
 maligator dev src/index.ts -- first-argument "two words"
 ```
 
-Everything after `--` reaches the application unchanged. `dev` watches the dependency graph, checks project files frequently, and checks `node_modules` less often. A compile failure leaves the watcher running and preserves the last good application until a valid replacement is available. Fix the error and save again.
+Everything after `--` reaches the application unchanged. `dev` watches the dependency graph. It reports when the application starts, which files change, and how long a successful rebuild took. A compile failure leaves the last good application running. Fix the error and save again.
 
 Module instances and globals start fresh in each replacement. Store data that must survive a restart in an external resource such as a file or database.
 
@@ -44,6 +44,6 @@ A socket the next generation does not listen on by the end of its evaluation clo
 maligator dev --status
 ```
 
-The status stream shows generation and resource states. Compatible applications use supervised isolates; policies the embedded runtime cannot support use a process runner. A startup error is different from a compilation error: inspect the application's output before changing the build config.
+The status stream shows generation and resource states, including whether `dev` launched an isolate or a separate process. For a startup error, check the application's output. For a syntax error, use the [source location and code frame](/guides/troubleshooting#compile-error-locations).
 
 Press Ctrl+C to stop the watcher and join active work. For test reruns, use [application testing](/guides/testing); for a distributable binary, use [production builds](/guides/production).

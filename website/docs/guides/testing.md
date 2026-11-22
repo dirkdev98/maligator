@@ -1,6 +1,6 @@
 Write application tests with `maligator:test`. Ordinary `maligator test` interprets a
-compiled development image. Projects with [C libraries](/guides/c-libraries) also
-compile a runtime containing their native bindings.
+development image and can use the [packaged runner](/guides/native-toolchain).
+Projects with [C libraries](/guides/c-libraries) build native bindings for the runner.
 
 ## Write a test
 
@@ -14,7 +14,7 @@ Create these files in a project with `maligator.build.ts`:
 maligator test sum.test.ts
 ```
 
-The runner reports both tests as passed. It discovers `*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}` when given directories or no explicit files. Successful results are never cached: every selected test executes on each run. Compiled code is cached instead: an edit recompiles the edited test file, or the application modules the tests import, and leaves dependencies and the other test files alone.
+The runner lists each passing test. It discovers `*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}` when given directories or no explicit files. Every selected test executes on each run. Maligator caches compiled code so an edit can recompile the changed test or application module while reusing unchanged dependencies.
 
 ## Filter and repeat tests
 
@@ -50,9 +50,9 @@ maligator test --isolate --compile-concurrency 2 --concurrency 2
 
 Watch mode retains compiled images and starts a fresh application on each rerun. On POSIX, sending SIGHUP to the printed PID reruns unchanged inputs. Add `--watch-failed` to select previously failing files for those unchanged reruns.
 
-C libraries share a linked runtime across JavaScript reruns, so their process state
-persists. Native input changes replace the runtime after application cleanup. Each
-new application still has fresh JavaScript globals and module state.
+C libraries can keep process state across JavaScript reruns. Changing a native input
+replaces its bindings after application cleanup. Each new application has fresh
+JavaScript globals and module state.
 
 Selected files normally share one application isolate, including module singletons and globals. `--isolate` gives each file separate application state; `--compile-concurrency` and `--concurrency` bound compilation and execution separately. Isolation requires a compatible native runtime policy. The supervisor joins the application and its descendants after every run, including resources tests left open.
 

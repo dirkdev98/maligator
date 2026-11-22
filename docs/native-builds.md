@@ -11,9 +11,9 @@ The source-built CLI (`node ./src/index.ts`) resolves its runtime tree and eval
 compiler from its own module installation, not from the working directory. The
 distributed product CLI instead embeds and materializes those resources, so it is
 self-contained. In both cases the working directory remains the application project
-root for config, entries, assets, and output caches. Compiler installation roots are
-explicit absolute paths passed into the command layer; native stages do not infer
-runtime ownership from the application.
+root for config, entries, and output caches. Asset specifiers resolve from their
+declaring modules. The command layer passes absolute installation paths to native
+stages so they can find runtime files independently of the application.
 
 The distributed self-hosted CLI embeds the runtime C sources, Rust crate, and a
 prebuilt eval compiler wire as its `runtime` and `compilerWire` assets
@@ -61,9 +61,10 @@ that same context. The final linker returns a typed result containing the execut
 path, exact artifact bundle, and context, so callers such as size tracking cannot
 accidentally resolve and measure a different build.
 
-Applications that use host APIs or start workers link `host_main.c`. It applies the
-image’s host installers and drives the event loop. Synchronous applications can
-link the smaller `test262_main.c` driver.
+Applications that need the event loop link `host_main.c`. It applies the image's
+host installers and drives the loop. This includes applications with a Node or Web
+personality and applications that use workers or filesystem I/O without one.
+Synchronous applications can link the smaller `test262_main.c` driver.
 
 ## Cross builds
 
@@ -94,7 +95,7 @@ settled, top-level await included. A dependency edit that keeps its exported nam
 the application image cached. Note that `require` and `import()` across an image boundary
 still compile one whole program. Code does not optimize across images,
 so measure throughput separately from whole-program development builds.
-Configured assets and each image's bytes are embedded in units of their own, so
+Embedded assets and each image's bytes go in units of their own, so
 an asset edit and an application edit never recompile each other's objects. A build with
 `MALIGATOR_DEVELOPMENT_FRAGMENTS=0` links one whole program instead. Worker roots
 always link their whole-program images behind the compiled worker registry.
@@ -115,14 +116,15 @@ tables.
 the configuration and the project has no C bindings. The platform package includes
 a separate runner for the private application API used by `test --watch`. When a
 command needs a local runner, the linked-binary cache gives projects
-with the same runtime flavour and toolchain one executable. The application and its
-workers supply runtime images that select host installers, Intl services, Temporal,
-and the RegExp and eval policy. A runner for `engine.eval: true` also links the eval
-component. Compiler defines that change native code enter the runner's cache key.
+with the same runtime flavour and toolchain one executable. The runner resolves
+installers by name so it can use different host and language components in each
+image. It links Ada and the C++ runtime so it can load images that parse URLs. Each
+image records its own RegExp and eval policy. A runner for `engine.eval: true` also
+links the eval compiler. Compiler defines that change native code enter the cache key.
 
 The shared runner loads C bindings from cached shims before it loads any images.
-Install Clang and set `CC` to its executable if the CLI cannot find a compiler for
-your bindings. Each shim links its library and supplies an installer to the runner.
+Building a shim needs Clang. Set `CC` to its executable if the CLI cannot find it.
+Each shim links its library and supplies an installer to the runner.
 Its cache key covers the contract, headers, library sources and files, compiler, and
 FFI runtime interface. If a library needs the executable link, Maligator links the
 project's libraries together in a local runner. `maligator ffi check` reports the
@@ -169,11 +171,11 @@ being duplicated. Where that flag works on ELF targets, runtime C objects compil
 `-ffunction-sections -fdata-sections` too, so section removal works per function
 there as Mach-O's per-symbol sections do.
 
-Native builds publish Ada and ring beside the Rust archive. A standalone image
-links Ada and its C++ runtime when its application or worker installers need the
-URL parser. Supply both to runners that resolve installers by name, since they
-can load different images without relinking. Ada's static initializers and ring's
-assembly objects can stay live once their archives enter the link.
+Native builds publish Ada and ring beside the Rust archive. A link from fixed
+images selects Ada and its C++ runtime from the application and worker installer
+lists. Shared runners and linked development builds that resolve installers by name
+include Ada. Ada's static initializers and ring's assembly objects can stay live
+once their archives enter the link.
 
 Linux prefers LLD when the compiler can use it. GNU ld can require both
 components before discarding unused sections, so its fallback links both.

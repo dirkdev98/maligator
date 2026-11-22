@@ -74,7 +74,7 @@ export const guideGroups: ReadonlyArray<DocGroup> = [
 			[
 				"native-toolchain",
 				"Set up native builds",
-				"Install the C and Rust toolchains and cross-build for another target.",
+				"Check compiler selection and set up local runtime builds and cross-builds.",
 			],
 			[
 				"production",

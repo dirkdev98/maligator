@@ -17,7 +17,7 @@ maligator run
 - [Use TypeScript](/guides/typescript) to load runtime declarations and check your code.
 - [Write application tests](/guides/testing) and rerun a selected suite.
 - [Run tasks in a pool](/guides/workers) with bounded queues and explicit cleanup.
-- [Serve HTTP](/guides/http) or [embed files](/guides/assets).
+- [Serve HTTP](/guides/http), [read and write files](/guides/files), or [embed files](/guides/assets).
 - [Bind a library](/guides/c-libraries) through its C headers.
 - [Build for production](/guides/production) and [profile a workload](/guides/profiling).
 

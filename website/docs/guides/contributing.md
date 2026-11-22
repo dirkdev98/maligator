@@ -9,7 +9,7 @@ npm ci
 npm run env:check -- --json
 ```
 
-Source tooling needs Node.js 24 or newer, and native work needs the toolchain from [Set up native builds](/guides/native-toolchain). The environment probe checks workspace/cache writes and loopback access; resolve capability failures before diagnosing product code.
+Source tooling needs Node.js 24 or newer. Building the runtime from the checkout needs the [local build toolchain](/guides/native-toolchain#local-runtime-builds). The environment probe checks workspace and cache writes and loopback access. Resolve capability failures before diagnosing product code.
 
 ## Continue in the repository
 

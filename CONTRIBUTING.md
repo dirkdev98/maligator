@@ -10,9 +10,11 @@ Maligator version, your `maligator.build.ts`, and the host you ran it on.
 
 ## Set up the checkout
 
-Source tooling needs Node.js 24 or newer. Native work also needs the C and Rust
-toolchains from [Set up native builds](https://maligator.ddv.tools/guides/native-toolchain).
-Native FFI integration checks also need `pkg-config` and libuv headers and libraries.
+Source tooling needs Node.js 24 or newer. Building the runtime from this checkout
+needs a C23-capable C compiler and archiver, a C++ compiler, and Rustup. The
+[native build reference](docs/native-builds.md#toolchain-discovery) describes how
+these tools are selected. Native FFI integration checks also need `pkg-config`
+and libuv headers and libraries.
 Install them with `brew install pkgconf libuv` on macOS, or
 `sudo apt-get install pkg-config libuv1-dev` on Debian and Ubuntu.
 

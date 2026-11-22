@@ -164,8 +164,9 @@ Generate declarations so the editor and `tsc` resolve the import, and include th
 maligator ffi types
 ```
 
-`maligator run` and `dev` use the native toolchain to build a shared shim for each
-library on macOS and Linux. The runtime loads the cached shim when the program starts.
+`maligator run`, `dev`, and `test` use the native toolchain to build a shared shim
+for each library on macOS and Linux. The shared runner loads the cached shim when
+the program starts.
 Maligator falls back to linking a project runner when a contract needs a static
 archive, executable-wide linker flags, or symbols from another contract's C sources.
 `maligator ffi check` reports the development link mode for each library.

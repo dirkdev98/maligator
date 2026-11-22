@@ -139,7 +139,7 @@ is in the full-only unit lane and can be selected directly. Full Test262 and ful
 gates remain separate checks.
 
 The homepage's server size is the actual executable length minus every embedded
-asset payload listed by the build configuration, including the compressed Wasm,
+asset payload from the server's source declarations, including the compressed Wasm,
 HTML, scripts, styles, and license notices. Asset descriptors, alignment, and the
 serving implementation remain part of the server size. `website/site-meta.json`
 retains both the complete binary length and the excluded asset-byte total.

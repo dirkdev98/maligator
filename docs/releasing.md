@@ -42,9 +42,9 @@ The `Prepare release packages` GitHub Actions workflow is the preferred packagin
 path. Dispatch it on the exact release commit. It cross-builds each of the four
 targets in its own macOS ARM job, including the development runtime archives and
 runners for its platform package. It assembles and packs them in one workspace.
-On each host the smoke matrix exercises the installed launcher on a Node-only
-`PATH` and builds an application with the packaged archives. The workflow retains
-the validated tarballs and `packages.json` for seven days and deletes the
+On each host the smoke matrix checks `run` and `test` with Intl enabled on a
+Node-only `PATH`, then builds an application with the packaged archives. The workflow
+retains the validated tarballs and `packages.json` for seven days and deletes the
 intermediate builds and workspace after the smoke matrix passes.
 
 Build the development archives and runners with the Zig version pinned in the
