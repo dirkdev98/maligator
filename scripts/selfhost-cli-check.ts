@@ -1312,6 +1312,7 @@ try {
 `,
 		);
 		const rootBuilds = [];
+		// Both transports must compile even when the previous build filled the cache.
 		for (const concurrency of [1, 3]) {
 			const build = invokeCaptured(
 				[
@@ -1321,7 +1322,8 @@ try {
 					rootsConfig,
 					"--compile-concurrency",
 					String(concurrency),
-					"--verbose",
+					"--core-report",
+					"phases",
 				],
 				{ MALIGATOR_WORKERS: "3" },
 			);
@@ -1329,6 +1331,8 @@ try {
 				throw new Error(
 					`production roots build failed:\n${build.stdout}\n${build.stderr}`,
 				);
+			if (!build.stderr.includes("frontend cache miss"))
+				throw new Error(`production roots did not compile fresh:\n${build.stderr}`);
 			if (
 				concurrency === 3 &&
 				(!/Compile concurrency: [23] total jobs maximum \(parallel roots/.test(
@@ -1428,7 +1432,7 @@ ${execution.stdout}
 ${execution.stderr}`);
 		writeFileSync(
 			path.join(reports, "production-roots.json"),
-			`${JSON.stringify({ cacheCondition: "serial and parallel forced frontend compilation, ordinary rebuilds, asset-only edit", builds: rootBuilds, warm: rootWarm, cached: rootCached, updated, parity: "generated C and executable output" }, null, 2)}\n`,
+			`${JSON.stringify({ cacheCondition: "live serial and parallel Core reports, ordinary rebuilds, asset-only edit", builds: rootBuilds, warm: rootWarm, cached: rootCached, updated, parity: "generated C and executable output" }, null, 2)}\n`,
 		);
 		console.log(
 			"ok   production roots matched C and native output, reused cached sources, and rebuilt after a 4 MiB asset edit",
