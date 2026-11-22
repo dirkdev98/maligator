@@ -1,5 +1,6 @@
 import { hash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
+import type { Stats } from "node:fs";
 import * as path from "node:path";
 import { writeFileAtomically } from "./atomic-file.ts";
 import { lexicalCodeMask } from "./compiler/frontend/compact-type-strip.ts";
@@ -23,6 +24,10 @@ interface SourceToken {
 	kind: "word" | "string" | "punctuation";
 	text: string;
 }
+
+// A cold stage can reuse files already parsed for another stage in the same source tree.
+const scannedEntries = new Map<string, SourceConeEntry>();
+let scannedSourceRoot: string | undefined;
 
 function sourceTokens(source: string, filePath: string): Array<SourceToken> {
 	const code = lexicalCodeMask(source, filePath);
@@ -122,6 +127,20 @@ function readSourceConeManifest(file: string): SourceConeManifest | undefined {
 	}
 }
 
+function matchesSourceStats(
+	entry: SourceConeEntry | undefined,
+	stats: Stats,
+): entry is SourceConeEntry {
+	return (
+		entry !== undefined &&
+		entry.size === stats.size &&
+		entry.mtimeMs === stats.mtimeMs &&
+		entry.ctimeMs === stats.ctimeMs &&
+		entry.ino === stats.ino &&
+		entry.dev === stats.dev
+	);
+}
+
 function sourceEntry(
 	sourceRoot: string,
 	relativePath: string,
@@ -129,18 +148,11 @@ function sourceEntry(
 ): SourceConeEntry {
 	const file = path.join(sourceRoot, relativePath);
 	const stats = statSync(file);
-	if (
-		previous !== undefined &&
-		previous.size === stats.size &&
-		previous.mtimeMs === stats.mtimeMs &&
-		previous.ctimeMs === stats.ctimeMs &&
-		previous.ino === stats.ino &&
-		previous.dev === stats.dev
-	) {
-		return previous;
-	}
+	if (matchesSourceStats(previous, stats)) return previous;
+	const scanned = scannedEntries.get(relativePath);
+	if (matchesSourceStats(scanned, stats)) return scanned;
 	const source = readFileSync(file, "utf8");
-	return {
+	const entry: SourceConeEntry = {
 		size: stats.size,
 		mtimeMs: stats.mtimeMs,
 		ctimeMs: stats.ctimeMs,
@@ -149,6 +161,8 @@ function sourceEntry(
 		digest: hash("sha256", source, "hex"),
 		imports: relativeSourceImports(source, relativePath),
 	};
+	scannedEntries.set(relativePath, entry);
+	return entry;
 }
 
 function resolvedImport(sourceRoot: string, importer: string, specifier: string): string {
@@ -165,16 +179,20 @@ function resolvedImport(sourceRoot: string, importer: string, specifier: string)
 }
 
 /**
- * Content digests of the files reachable from `roots` through relative imports, sorted
- * by root-relative path. Type-only edges count, so the cone covers the module graph any
- * type stripper builds from the same roots. The manifest memoizes each file's digest
- * and imports under its stat identity.
+ * Content digests of the runtime module graph reachable through relative imports,
+ * sorted by root-relative path. The manifest caches digests and import edges under
+ * each file's stat identity.
  */
 export function relativeImportCone(
 	sourceRoot: string,
 	roots: ReadonlyArray<string>,
 	manifestPath: string,
 ): Array<[string, string]> {
+	const resolvedSourceRoot = path.resolve(sourceRoot);
+	if (scannedSourceRoot !== resolvedSourceRoot) {
+		scannedEntries.clear();
+		scannedSourceRoot = resolvedSourceRoot;
+	}
 	const previous = readSourceConeManifest(manifestPath);
 	const entries: Record<string, SourceConeEntry> = {};
 	const pending = [...roots];
@@ -183,11 +201,11 @@ export function relativeImportCone(
 		const relativePath = pending.pop()!;
 		if (entries[relativePath] !== undefined) continue;
 		const cached = previous?.entries[relativePath];
-		const entry = sourceEntry(sourceRoot, relativePath, cached);
+		const entry = sourceEntry(resolvedSourceRoot, relativePath, cached);
 		if (entry === cached) reused++;
 		entries[relativePath] = entry;
 		for (const specifier of entry.imports) {
-			pending.push(resolvedImport(sourceRoot, relativePath, specifier));
+			pending.push(resolvedImport(resolvedSourceRoot, relativePath, specifier));
 		}
 	}
 	const files = Object.keys(entries).length;

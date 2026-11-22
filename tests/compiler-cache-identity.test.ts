@@ -266,6 +266,37 @@ describe("compiler cache identity", () => {
 		).not.toBe(initial);
 	});
 
+	it("preserves the digest of a cold producer when another producer scanned its inputs", () => {
+		const { sourceRoot, cacheDirectory } = compilerFixture();
+		writeFileSync(
+			path.join(sourceRoot, "compiler", "compile.ts"),
+			'export { version as n } from "../platform/catalog.ts";\n',
+		);
+		writeFileSync(
+			path.join(sourceRoot, "testing", "cache.ts"),
+			'export { n } from "../compiler/compile.ts";\n',
+		);
+		compilerProducerImplementationDigestForRoot(
+			"build-frontend",
+			sourceRoot,
+			cacheDirectory,
+		);
+
+		const digest = (cache: string) =>
+			compilerProducerImplementationDigestForRoot("test-frontend", sourceRoot, cache);
+		expect(digest(cacheDirectory)).toBe(
+			"f33ca593a44d83dfa25a8c06f60173d44b28cfbed036cf2328166360573c3b2e",
+		);
+
+		writeFileSync(
+			path.join(sourceRoot, "platform", "catalog.ts"),
+			"export const version = 20;\n",
+		);
+		expect(digest(path.join(cacheDirectory, "cold"))).toBe(
+			"dda096efaa45d56525d8364113dc0bbc63694d5a76fe45a549a35f32c02ebb62",
+		);
+	});
+
 	it("tracks real imports through templates while ignoring type-only imports, documentation and stale manifests", () => {
 		const fixture = compilerFixture();
 		const source = [
