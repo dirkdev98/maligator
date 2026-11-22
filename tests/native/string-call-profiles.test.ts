@@ -242,9 +242,11 @@ if(Object.getOwnPropertyDescriptor(String.prototype,'includes').writable){
 ${methods.map((method) => `function search_${method}(x,y,p){const s=String(x),n=String(y),i=+p;return s.${method}(n,i);}globalThis.search_${method}=search_${method};`).join("\n")}
 for(const method of ${JSON.stringify(methods)}){
  const run=globalThis['search_'+method];
- for(const size of [0,1,64,1024])for(const position of [-Infinity,-1,0,0.5,1,64,Infinity,NaN]){
+ for(const size of [0,1,64,1024]){
   let source='',needle='';for(let i=0;i<size;i++){source+='a😀b';needle+='a😀b';}
-  console.log('rope',method,size,String(position),run(source,needle,position),run(source,'😀b',position));
+  for(const position of [-Infinity,-1,0,0.5,1,64,Infinity,NaN]){
+   console.log('rope',method,size,String(position),run(source,needle,position),run(source,'😀b',position));
+  }
  }
  const events=[];
  const input=value=>({[Symbol.toPrimitive](hint){events.push(hint);return value;}});
