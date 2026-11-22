@@ -1215,6 +1215,26 @@ static bool mal_vm_iterator_read_result(
         return false;
     }
 
+    const MalObject *object = mal_value_to_object(result);
+    if (object->header.type == MAL_HEAP_OBJECT && object->storage_kind == MAL_OBJECT_COMPACT &&
+        object->shape->inline_count == 2) {
+        // The shape's immutable keys prove both properties are own data slots.
+        const MalShapeProp *props = object->shape->props;
+        MalValue done_key = mal_value_from_string(vm->hot_intrinsic_keys[MAL_HOT_KEY_DONE]);
+        MalValue value_key = mal_value_from_string(vm->hot_intrinsic_keys[MAL_HOT_KEY_VALUE]);
+        u32 done = props[0].key == done_key ? 0 : 1;
+        u32 value = done ^ 1;
+        if (props[done].key == done_key && props[value].key == value_key) {
+            const MalValue *fields = mal_object_fields_nonempty(object);
+            if (mal_value_is_truthy(fields[props[done].slot])) {
+                *done_out = true;
+            } else {
+                *value_out = fields[props[value].slot];
+            }
+            return true;
+        }
+    }
+
     // Getting `done` can re-enter user code and collect. Keep the iterator result
     // alive until the subsequent `value` read has finished as well.
     MalRootSpan result_span;
