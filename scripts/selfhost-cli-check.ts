@@ -10,6 +10,7 @@ import {
 	mkdirSync,
 	readFileSync,
 	readdirSync,
+	realpathSync,
 	renameSync,
 	rmSync,
 	statSync,
@@ -262,6 +263,20 @@ function checkApplicationPids(
 		throw new Error(
 			`application did not use the expected ${sameProcess ? "supervisor" : "separate"} process: supervisor=${supervisorPid}, application=${JSON.stringify(pids)}\n${output}`,
 		);
+}
+
+function checkApplicationExecutablePaths(output: string): void {
+	const marker = "APPLICATION_EXEC_PATH ";
+	const executablePaths = output
+		.split("\n")
+		.filter((line) => line.startsWith(marker))
+		.map((line) => line.slice(marker.length));
+	const expected = realpathSync(distributedCli);
+	if (
+		executablePaths.length === 0 ||
+		executablePaths.some((file) => realpathSync(file) !== expected)
+	)
+		throw new Error(`application did not use the packaged executable:\n${output}`);
 }
 
 function checkProfile(directory: string, command: "run" | "test"): void {
@@ -1129,6 +1144,7 @@ const expected = process.argv.slice(2).join("|");
 setTimeout(() => {
 	console.log(\`toolchain-free \${basename("/one/two.ts")} \${new URL("https://example.test/path").hostname} \${expected}\`);
 	console.log("APPLICATION_PID " + process.pid);
+	console.log("APPLICATION_EXEC_PATH " + process.execPath);
 }, 0);
 `,
 	);
@@ -1151,6 +1167,7 @@ setTimeout(() => {
 		true,
 		"APPLICATION_PID",
 	);
+	checkApplicationExecutablePaths(developmentRun.stdout);
 	console.log("ok   packaged CLI ran Node and Web development code without a toolchain");
 	const mutableRun = invokeCaptured(
 		["run", "--config", mutableDevelopmentConfigPath, "--", "alpha", "two words"],
@@ -1425,6 +1442,7 @@ import { ready } from "maligator:application";
 const server = createServer((_request, response) => { response.end("${revision}"); });
 server.listen(0, "127.0.0.1", () => {
 	console.log("WATCH_APPLICATION_PID " + process.pid);
+	console.log("APPLICATION_EXEC_PATH " + process.execPath);
 	console.log("WATCH_HTTP_PORT " + server.address().port);
 	ready();
 });
@@ -1483,6 +1501,7 @@ server.listen(0, "127.0.0.1", () => {
 				mode.sameProcess,
 				"WATCH_APPLICATION_PID",
 			);
+			if (mode.sameProcess) checkApplicationExecutablePaths(watchOutput);
 		} finally {
 			watchExit = await stopDevelopmentChild(watcher, () => watchOutput);
 			writeFileSync(path.join(reports, `${mode.logName}.log`), watchOutput);

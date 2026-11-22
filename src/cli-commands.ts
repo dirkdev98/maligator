@@ -292,25 +292,53 @@ export function developmentCompilerInstallation(
 	};
 }
 
+type InstallationPath = string | (() => string);
+
+function deferredInstallationPath(source: InstallationPath): () => string {
+	if (typeof source === "string") {
+		const resolved = path.resolve(source);
+		return () => resolved;
+	}
+	let resolved: string | undefined;
+	return () => (resolved ??= path.resolve(source()));
+}
+
 export function productCompilerInstallation(
-	runtimeDirectory: string,
-	compilerWirePath: string,
-	testModulePath: string,
-	licensePaths?: Array<string>,
+	runtimeDirectory: InstallationPath,
+	compilerWirePath: InstallationPath,
+	testModulePath: InstallationPath,
+	licensePaths?: Array<InstallationPath>,
 	developmentRunnerPath?: string,
-	platformSourceRoot?: string,
-	testHostModulePath?: string,
+	platformSourceRoot?: InstallationPath,
+	testHostModulePath?: InstallationPath,
 ): CompilerInstallation {
+	const runtimePath = deferredInstallationPath(runtimeDirectory);
+	const compilerPath = deferredInstallationPath(compilerWirePath);
+	const testPath = deferredInstallationPath(testModulePath);
+	const testHostPath =
+		testHostModulePath === undefined
+			? undefined
+			: deferredInstallationPath(testHostModulePath);
+	const platformPath = deferredInstallationPath(
+		platformSourceRoot ?? (() => path.dirname(testPath())),
+	);
+	const licenses = licensePaths?.map(deferredInstallationPath);
 	return {
-		runtimeDirectory: path.resolve(runtimeDirectory),
-		platformSourceRoot: path.resolve(platformSourceRoot ?? path.dirname(testModulePath)),
-		...(licensePaths === undefined
-			? {}
-			: { licensePaths: licensePaths.map((file) => path.resolve(file)) }),
-		testModulePath: path.resolve(testModulePath),
-		...(testHostModulePath === undefined
-			? {}
-			: { testHostModulePath: path.resolve(testHostModulePath) }),
+		get runtimeDirectory() {
+			return runtimePath();
+		},
+		get platformSourceRoot() {
+			return platformPath();
+		},
+		get licensePaths() {
+			return licenses?.map((read) => read());
+		},
+		get testModulePath() {
+			return testPath();
+		},
+		get testHostModulePath() {
+			return testHostPath?.();
+		},
 		frontendIdentity: TYPE_STRIPPER_IDENTITY,
 		...(developmentRunnerPath === undefined
 			? {}
@@ -330,7 +358,9 @@ export function productCompilerInstallation(
 				}),
 		evalCompiler: {
 			kind: "prebuilt",
-			wirePath: path.resolve(compilerWirePath),
+			get wirePath() {
+				return compilerPath();
+			},
 		},
 	};
 }
@@ -689,10 +719,13 @@ function prepareCommandState(
 	const embeddedRunner = interpreted
 		? compatibleDevelopmentRunner(buildConfig, context)
 		: undefined;
-	const runtimeDirectory = context.installation.runtimeDirectory;
 	const packagedRunner =
 		interpreted && embeddedRunner === undefined
-			? packagedDevelopmentRunner(runtimeDirectory, baseDerivation.features, process.env)
+			? packagedDevelopmentRunner(
+					context.installation.runtimeDirectory,
+					baseDerivation.features,
+					process.env,
+				)
 			: undefined;
 	const resolveLocalTools = () => {
 		const selection = reporter.phase(
@@ -979,7 +1012,11 @@ function prepareCommandState(
 			!interpreted || libraries === undefined || libraryTools === undefined
 				? []
 				: reporter.phase("Prepare C library shims", () =>
-						prepareDevelopmentShims(libraries, libraryTools, runtimeDirectory),
+						prepareDevelopmentShims(
+							libraries,
+							libraryTools,
+							context.installation.runtimeDirectory,
+						),
 					);
 		const linkedLibraries = shims.some((shim) => shim.kind === "linked")
 			? libraries

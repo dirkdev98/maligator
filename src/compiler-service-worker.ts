@@ -18,6 +18,7 @@ let retained: { identity: string; context: CommandContext } | undefined;
 function compilationContext(
 	context: CompilationTaskContext,
 	request: CompilerRequestContext,
+	installationIdentity?: string,
 ): CommandContext {
 	const flag =
 		request.cancellation === undefined ? undefined : new Int32Array(request.cancellation);
@@ -28,7 +29,7 @@ function compilationContext(
 	};
 	checkpoint();
 	const identity = JSON.stringify({
-		installation: request.installation,
+		installation: installationIdentity ?? request.installation,
 		producerDigests: request.producerDigests,
 	});
 	if (retained?.identity !== identity) {
@@ -68,14 +69,18 @@ function compilationContext(
 	};
 }
 
-export function prepare(context: CompilationTaskContext, request: CompilationRequest) {
+export function prepare(
+	context: CompilationTaskContext,
+	request: CompilationRequest,
+	installationIdentity?: string,
+) {
 	try {
 		return {
 			ok: true as const,
 			value: publishCompilerResult(
 				prepareCommand(
 					request.command,
-					compilationContext(context, request),
+					compilationContext(context, request, installationIdentity),
 					request.compact,
 				),
 				request.profileDirectory,
@@ -91,11 +96,15 @@ export function prepare(context: CompilationTaskContext, request: CompilationReq
 export function prepareTests(
 	context: CompilationTaskContext,
 	request: TestCompilationRequest,
+	installationIdentity?: string,
 ) {
 	try {
 		return {
 			ok: true as const,
-			value: prepareTestApplication(request.input, compilationContext(context, request)),
+			value: prepareTestApplication(
+				request.input,
+				compilationContext(context, request, installationIdentity),
+			),
 		};
 	} catch (error) {
 		return { ok: false as const, failure: serializeRootFailure(error) };

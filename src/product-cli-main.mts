@@ -1,10 +1,11 @@
-import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, resolve } from "node:path";
 import { capabilities, createPool, createWorkerUrl } from "maligator:workers";
 import type { WorkerPool } from "maligator:workers";
 import { createApplicationImageHost } from "./application-images.ts";
 import type { NativeApplicationBridge } from "./application-images.ts";
 import { setCacheMaintenanceCommand } from "./cache-management.ts";
-import { productCompilerInstallation, runCli } from "./cli-commands.ts";
+import { runCli } from "./cli-commands.ts";
 import { installCompilerProducerDigests } from "./compiler-cache-identity.ts";
 import type { CompilerProducerStage } from "./compiler-cache-identity.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
@@ -14,16 +15,8 @@ import {
 	startNativeRootCompilation,
 	validateRootInputs,
 } from "./native-root-compiler.ts";
-import {
-	compilerProducerDigests,
-	compilerWire,
-	license,
-	platformSources,
-	runtime,
-	testHost,
-	testRuntime,
-	thirdPartyNotices,
-} from "./product-assets.mts";
+import { compilerProducerDigests } from "./product-assets.mts";
+import { createProductInstallation } from "./product-installation.mts";
 import { workerBudget } from "./worker-budget.ts";
 
 const mal = Reflect.get(globalThis, "mal") as unknown as NativeApplicationBridge & {
@@ -59,15 +52,11 @@ function updateDevelopmentDirectories(
 	];
 }
 
-const installation = productCompilerInstallation(
-	runtime.materialize(),
-	compilerWire.materialize(),
-	testRuntime.materialize(),
-	[license.materialize(), thirdPartyNotices.materialize()],
-	process.argv[0],
-	platformSources.materialize(),
-	join(testHost.materialize(), "host-driver.mts"),
-);
+const installationPaths = {
+	executablePath: resolve(process.argv[0]!),
+	temporaryDirectory: resolve(tmpdir()),
+};
+const installation = createProductInstallation(installationPaths);
 
 setCacheMaintenanceCommand([process.argv[0]!]);
 const dependencyWorker = { tool: process.argv[0]!, args: [] };
@@ -75,7 +64,11 @@ const dependencyWorker = { tool: process.argv[0]!, args: [] };
 await runCli(process.argv.slice(2), {
 	stripTypes: stripCompactTypes,
 	installation,
-	compiler: createNativeCompilerService(installation, producerDigests, dependencyWorker),
+	compiler: createNativeCompilerService(
+		installationPaths,
+		producerDigests,
+		dependencyWorker,
+	),
 	rootCompiler: {
 		start: startNativeRootCompilation,
 		validateInputs: validateRootInputs,

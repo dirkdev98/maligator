@@ -9,18 +9,18 @@ import {
 	receiveMessageOnPort,
 } from "maligator:workers";
 import type { WorkerPool } from "maligator:workers";
-import type { CompilerInstallation } from "./cli-commands.ts";
 import type { CompilerProducerStage } from "./compiler-cache-identity.ts";
 import { restoreCompilerResult } from "./compiler-profile-result.ts";
-import type { prepare, prepareTests } from "./compiler-service-worker.ts";
 import type { CompilationPhase, CompilerService } from "./compiler-service.ts";
 import { deserializeRootFailure } from "./compiler/root-compilation.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
+import type { prepare, prepareTests } from "./native-compiler-service-worker.mts";
+import type { ProductInstallationPaths } from "./product-installation.mts";
 
 type CompilerWorker = { prepare: typeof prepare; prepareTests: typeof prepareTests };
 
 const compilerEntry = createWorkerUrl<CompilerWorker>(
-	"./compiler-service-worker.ts",
+	"./native-compiler-service-worker.mts",
 	import.meta.url,
 );
 
@@ -73,7 +73,7 @@ function observePhases(onPhase: ((phase: CompilationPhase) => void) | undefined)
 }
 
 export function createNativeCompilerService(
-	installation: CompilerInstallation,
+	installationPaths: ProductInstallationPaths,
 	producerDigests: Record<CompilerProducerStage, string>,
 	dependencyWorker?: DependencyFragmentWorker,
 ): CompilerService {
@@ -115,7 +115,7 @@ export function createNativeCompilerService(
 						{
 							command,
 							profileDirectory,
-							installation,
+							installationPaths,
 							producerDigests,
 							dependencyWorker,
 							compact: options.compact ?? false,
@@ -157,7 +157,7 @@ export function createNativeCompilerService(
 					[
 						{
 							input,
-							installation,
+							installationPaths,
 							producerDigests,
 							dependencyWorker,
 							invalidatedPaths: options.invalidatedPaths ?? [],
