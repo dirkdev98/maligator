@@ -21,7 +21,11 @@ import { normalizeNativeFeatures, selectNativeBuildPlan } from "../src/build-fla
 import type { NativeFeatureInput } from "../src/build-flags.ts";
 import { cargoCacheDirectory, maligatorCacheDirectory } from "../src/cache-root.ts";
 import { ensureCompilerWire } from "../src/compiler-bake.ts";
-import { buildLocalBinary, prepareGeneratedSources } from "../src/local-build.ts";
+import {
+	buildLocalBinary,
+	buildSharedDevelopmentRunner,
+	prepareGeneratedSources,
+} from "../src/local-build.ts";
 import type { GeneratedObjectMeasurement } from "../src/local-build.ts";
 import {
 	nativeBuildEnvironmentFingerprint,
@@ -310,6 +314,47 @@ function compileInvocationCount(logPath: string): number {
 		.split("\n")
 		.filter((line) => line.includes(" -c ")).length;
 }
+
+it("restores an unchanged shared development runner without invoking native tools", () => {
+	const fake = createFakeToolchain();
+	try {
+		const runtimeDirectory = createMinimalRuntime(fake);
+		writeFileSync(
+			path.join(runtimeDirectory, "dev_main.c"),
+			"int main(void) { return 0; }\n",
+		);
+		mkdirSync(path.join(runtimeDirectory, "src/ffi"));
+		writeFileSync(
+			path.join(runtimeDirectory, "src/ffi/mal_ffi_shim_loader.c"),
+			"int load_shims(void) { return 0; }\n",
+		);
+		const toolchain = requireToolchain({
+			rootDir: fake.root,
+			rustDir: fake.rustDir,
+			env: fake.env,
+			platform: "linux",
+		});
+		const onCommand = vi.fn();
+		const context = resolveNativeBuildContext({
+			runtimeDirectory,
+			cacheDirectory: path.join(fake.root, "cache"),
+			environment: fake.env,
+			features: { evalEnabled: false },
+			toolchain,
+			onCommand,
+		});
+		const runner = buildSharedDevelopmentRunner(context, false);
+		expect(existsSync(runner)).toBe(true);
+
+		onCommand.mockClear();
+		rmSync(runner);
+		expect(buildSharedDevelopmentRunner(context, false)).toBe(runner);
+		expect(existsSync(runner)).toBe(true);
+		expect(onCommand).not.toHaveBeenCalled();
+	} finally {
+		rmSync(fake.root, { recursive: true, force: true });
+	}
+});
 
 function productionOptions(fake: FakeToolchain) {
 	return {

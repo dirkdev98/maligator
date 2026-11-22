@@ -740,7 +740,7 @@ function developmentRunnerOptions(
 	verbose: boolean,
 	cacheSuffix?: string,
 	libraries?: Pick<LocalBuildOptions, "externalUnits" | "linkInputs">,
-): LocalBuildOptions {
+): LocalBuildOptions & { cSource: string; mainFile: string } {
 	return {
 		context,
 		name: "MaligatorDev",
@@ -857,20 +857,90 @@ export function buildSharedDevelopmentRunner(
 				linkInputs: platform === "linux" ? [{ kind: "system" as const, name: "dl" }] : [],
 			}
 		: undefined;
+	const options = developmentRunnerOptions(context, verbose, undefined, libraries);
+	const artifacts = ensureNativeArtifacts(context, verbose);
+	const { artifactName } = localBuildOutput(options);
+	const normalizeArgument = (argument: string) =>
+		normalizeRuntimeBuildArgument(context.runtimeDirectory, argument);
+	const keyForInputs = () =>
+		artifactActionKey(LINKED_BINARY_PRODUCER, {
+			sharedDevelopmentRunner: {
+				objectProducer: GENERATED_OBJECT_PRODUCER,
+				projectionProducer: GENERATED_UNIT_SLICE_PRODUCER,
+				features: context.features,
+				toolchain: context.toolchain.fingerprint,
+				cc: context.toolchain.ccFingerprint,
+				target: context.toolchain.target,
+				environment: context.environmentFingerprint,
+				compileArguments: generatedCCompileArguments(context).map(normalizeArgument),
+				thinLtoCache: context.plan.thinLtoCache,
+				strip: context.plan.strip ? context.toolchain.probes.stripArgs : undefined,
+				anchor: options.cSource,
+				driver: artifactFileDigest(options.mainFile),
+				headers: runtimeHeaderHash(context.runtimeDirectory, context.cacheDirectory),
+				// The native actions already verified these content-addressed archive paths.
+				runtime: artifacts.linkArgs,
+				shim: libraries?.externalUnits.map((unit) => ({
+					id: unit.id,
+					source: artifactFileDigest(unit.source.path),
+					arguments: unit.compileArguments,
+				})),
+				libraries: libraries?.linkInputs,
+			},
+		});
+	// User-supplied search paths can introduce headers or libraries outside the
+	// runtime tree and the selected toolchain.
+	const key = [
+		"CPATH",
+		"C_INCLUDE_PATH",
+		"CPLUS_INCLUDE_PATH",
+		"OBJC_INCLUDE_PATH",
+		"SDKROOT",
+		"LIBRARY_PATH",
+		"COMPILER_PATH",
+		"GCC_EXEC_PREFIX",
+	].some((name) => context.environment[name])
+		? undefined
+		: keyForInputs();
+	if (key !== undefined) {
+		const startedAt = performance.now();
+		const action = readArtifactAction(
+			context.cacheDirectory,
+			"linked-binary",
+			LINKED_BINARY_PRODUCER,
+			key,
+		);
+		if (action !== undefined) {
+			const binary = artifactOutput(action, "binary");
+			const executable = sharedRunnerExecutable(context, key, artifactName);
+			if (!existsSync(executable)) materializeArtifact(binary, executable);
+			context.onCacheEvent?.({ artifact: "binary", hit: true, path: binary.path });
+			context.onBuildPhase?.({
+				phase: "link",
+				durationMs: performance.now() - startedAt,
+				cache: "hit",
+				path: binary.path,
+			});
+			return executable;
+		}
+	}
 	const workRoot = path.join(context.cacheDirectory, "work");
 	mkdirSync(workRoot, { recursive: true });
 	const work = mkdtempSync(path.join(workRoot, "shared-runner-"));
 	try {
-		return buildLocalBinary(
-			{
-				...developmentRunnerOptions(context, verbose, undefined, libraries),
-				outDir: work,
-			},
-			true,
-		).binaryPath;
+		return linkLocalBinary({ ...options, outDir: work }, { artifacts, key, keyForInputs })
+			.binaryPath;
 	} finally {
 		rmSync(work, { recursive: true, force: true });
 	}
+}
+
+function sharedRunnerExecutable(
+	context: NativeBuildContext,
+	key: string,
+	artifactName: string,
+): string {
+	return path.join(context.cacheDirectory, "work", "local-runner", key, artifactName);
 }
 
 /**
@@ -889,9 +959,17 @@ function resolvesInstallersByName(options: LocalBuildOptions): boolean {
 }
 
 /** Link emitted generated C into a standalone binary using one resolved context. */
-export function buildLocalBinary(
+export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
+	return linkLocalBinary(options);
+}
+
+function linkLocalBinary(
 	options: LocalBuildOptions,
-	sharedRunner = false,
+	sharedRunner?: {
+		artifacts: NativeArtifacts;
+		key: string | undefined;
+		keyForInputs: () => string;
+	},
 ): LocalBuildResult {
 	const resolvesByName = resolvesInstallersByName(options);
 	const context = resolvesByName
@@ -942,7 +1020,8 @@ export function buildLocalBinary(
 		units: sources.units.length,
 		bytes: sources.units.reduce((total, source) => total + source.sourceBytes, 0),
 	});
-	const artifacts = ensureNativeArtifacts(context, options.verbose);
+	const artifacts =
+		sharedRunner?.artifacts ?? ensureNativeArtifacts(context, options.verbose);
 	const externalArguments = ccExtraFlags(
 		context.plan,
 		context.environment,
@@ -1065,42 +1144,47 @@ export function buildLocalBinary(
 			0,
 		),
 	});
-	const linkKey = artifactActionKey(LINKED_BINARY_PRODUCER, {
-		cacheVariant: options.linkCacheVariant,
-		compileArguments: compileArguments.map((argument) =>
-			normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
-		),
-		objects: [...objects, mainObject].map((object) => object.digest),
-		artifacts: runtimeLinkArgs.map((argument) =>
-			argument.startsWith("-")
-				? argument
-				: artifactDigest(new Uint8Array(readFileSync(argument))),
-		),
-		linkInputs: (options.linkInputs ?? []).map((input) =>
-			input.kind === "archive"
-				? {
-						kind: input.kind,
-						digest: artifactDigest(new Uint8Array(readFileSync(input.path))),
-					}
-				: input.kind === "shared"
-					? { ...input, digest: artifactDigest(new Uint8Array(readFileSync(input.path))) }
-					: input,
-		),
-		zigStripArgs: zigLinkTimeStrip ? context.toolchain.probes.stripArgs : [],
-		thinLtoCache: thinLtoCache === undefined ? null : context.plan.thinLtoCache,
-		strip:
-			context.plan.strip && !zigLinkTimeStrip
-				? {
-						tool: context.toolchain.tools.strip,
-						args: context.toolchain.probes.stripArgs,
-					}
-				: undefined,
-		environment: context.environmentFingerprint,
-		toolchain: context.toolchain.fingerprint,
-		target: context.toolchain.target,
-	});
+	const linkKey =
+		sharedRunner?.key ??
+		artifactActionKey(LINKED_BINARY_PRODUCER, {
+			cacheVariant: options.linkCacheVariant,
+			compileArguments: compileArguments.map((argument) =>
+				normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
+			),
+			objects: [...objects, mainObject].map((object) => object.digest),
+			artifacts: runtimeLinkArgs.map((argument) =>
+				argument.startsWith("-")
+					? argument
+					: artifactDigest(new Uint8Array(readFileSync(argument))),
+			),
+			linkInputs: (options.linkInputs ?? []).map((input) =>
+				input.kind === "archive"
+					? {
+							kind: input.kind,
+							digest: artifactDigest(new Uint8Array(readFileSync(input.path))),
+						}
+					: input.kind === "shared"
+						? {
+								...input,
+								digest: artifactDigest(new Uint8Array(readFileSync(input.path))),
+							}
+						: input,
+			),
+			zigStripArgs: zigLinkTimeStrip ? context.toolchain.probes.stripArgs : [],
+			thinLtoCache: thinLtoCache === undefined ? null : context.plan.thinLtoCache,
+			strip:
+				context.plan.strip && !zigLinkTimeStrip
+					? {
+							tool: context.toolchain.tools.strip,
+							args: context.toolchain.probes.stripArgs,
+						}
+					: undefined,
+			environment: context.environmentFingerprint,
+			toolchain: context.toolchain.fingerprint,
+			target: context.toolchain.target,
+		});
 	const executable = sharedRunner
-		? path.join(context.cacheDirectory, "work", "local-runner", linkKey, artifactName)
+		? sharedRunnerExecutable(context, linkKey, artifactName)
 		: binaryPath;
 	const restoreBinary = (binary: ReturnType<typeof artifactOutput>): void => {
 		if (!sharedRunner || !existsSync(executable)) materializeArtifact(binary, executable);
@@ -1248,6 +1332,12 @@ export function buildLocalBinary(
 				}
 			}
 			if (cacheable) {
+				if (
+					sharedRunner?.key !== undefined &&
+					sharedRunner.keyForInputs() !== sharedRunner.key
+				) {
+					throw new Error("Development runner inputs changed during the build");
+				}
 				const publishStartedAt = performance.now();
 				const published = publishArtifactAction(
 					context.cacheDirectory,
