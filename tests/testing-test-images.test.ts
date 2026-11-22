@@ -120,7 +120,7 @@ describe("linked test images", () => {
 		const root = temporaryDirectory();
 		const lowering = vi.spyOn(
 			executionLowering,
-			"lowerCoreCompilationToRuntimeExecution",
+			"lowerCoreCompilationToExecutionProgram",
 		);
 		onTestFinished(() => lowering.mockRestore());
 		const compiled = compileLinkedTestImage({

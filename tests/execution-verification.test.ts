@@ -3,6 +3,7 @@ import type { CoreCompilation } from "../src/compiler/core/core-compilation.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileSemanticProgramToRuntimeImage } from "../src/compiler/pipeline/compile-runtime-core.ts";
 import type { CompilerInstruction } from "../src/compiler/shared/compiler-instruction.ts";
 import { executionSafepointRoots } from "../src/compiler/target/execution-liveness.ts";
 import { prepareCoreCompilationToTargets } from "../src/compiler/target/lower-core-target.ts";
@@ -564,6 +565,57 @@ describe("Core target construction", () => {
 		}
 	});
 });
+
+it.each([
+	{
+		defect: "a missing GC root",
+		source: HANDLER_SOURCE,
+		kind: "operation",
+		message: /GC safepoint roots do not match exact execution liveness/,
+	},
+	{
+		defect: "a missing loop poll",
+		source: LOOP_SOURCE,
+		kind: "loop-backedge",
+		message: /polling edge has no loop-backedge safepoint record/,
+	},
+] as const)(
+	"rejects $defect introduced by a runtime image phase hook",
+	({ source, kind, message }) => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"runtime-image-verification.js",
+		);
+
+		expect(() =>
+			compileSemanticProgramToRuntimeImage(semantic, {
+				runPhase(phase, run) {
+					const result = run();
+					if (phase !== "core to execution") return result;
+					for (const { gc } of (result as ExecutionProgram).functions) {
+						const index = gc.safepoints.findIndex(
+							(point) =>
+								point.kind === kind &&
+								(kind === "loop-backedge" || point.rootRegisters.length > 0),
+						);
+						if (index < 0) continue;
+						const point = gc.safepoints[index]!;
+						const safepoints =
+							kind === "loop-backedge"
+								? gc.safepoints.toSpliced(index, 1)
+								: gc.safepoints.with(index, {
+										...point,
+										rootRegisters: point.rootRegisters.slice(1),
+									});
+						Object.assign(gc, { safepoints });
+						return result;
+					}
+					throw new Error("missing test safepoint");
+				},
+			}),
+		).toThrow(message);
+	},
+);
 
 describe("Core target verification", () => {
 	it("rejects a function table that disagrees with the Core program", () => {

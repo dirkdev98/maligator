@@ -9,7 +9,6 @@ import type {
 	LowerCoreToCoreTargetOptions,
 } from "./lower-core-target.ts";
 import { lowerCoreCompilationToTargetProgram } from "./lower-core-target.ts";
-import { verifyExecutionProgram } from "./verify-execution.ts";
 
 export { coreSupportsDirectEntries, physicalRegisterClass } from "./lower-core-target.ts";
 export type {
@@ -40,14 +39,6 @@ export function lowerCoreCompilationToExecutionProgram(
 				variants,
 			),
 	});
-}
-export function lowerCoreCompilationToRuntimeExecution(
-	compilation: CoreCompilation,
-	options: LowerCoreToExecutionOptions = {},
-): ExecutionProgram {
-	const program = lowerCoreCompilationToExecutionProgram(compilation, options);
-	verifyExecutionProgram(program);
-	return program;
 }
 
 export function coreRegisterClasses(

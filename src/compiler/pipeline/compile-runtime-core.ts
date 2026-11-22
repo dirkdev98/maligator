@@ -1,7 +1,7 @@
 import type { CoreModuleInterface } from "../core/core-compilation.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import type { LowerCoreToCoreTargetOptions } from "../target/lower-core-target.ts";
-import { lowerCoreCompilationToRuntimeExecution } from "../target/lower-execution.ts";
+import { lowerCoreCompilationToExecutionProgram } from "../target/lower-execution.ts";
 import { lowerExecutionToRuntimeImage } from "../target/runtime-image.ts";
 import type { RuntimeImage } from "../target/runtime-image.ts";
 import type { CompileCoreOptions, CompileCorePhase } from "./compile-core-common.ts";
@@ -34,11 +34,12 @@ export function compileSemanticProgramToLinkedRuntimeImage(
 		options.runPhase ?? (<T>(_phase: CompileCorePhase, run: () => T): T => run());
 	const optimized = optimizeSemanticProgramToCore(semantic, options, runPhase);
 	const lowered = runPhase("core to execution", () =>
-		lowerCoreCompilationToRuntimeExecution(optimized, {
+		lowerCoreCompilationToExecutionProgram(optimized, {
 			reuseRegisters: options.optimization !== "development",
 			mappedFunctionArrayCallHints: options.mappedFunctionArrayCallHints,
 		}),
 	);
+	// Phase hooks can observe the lowered target, so verify it at the image boundary.
 	return {
 		runtime: runPhase("execution to image", () => lowerExecutionToRuntimeImage(lowered)),
 		interfaces: optimized.context.data.moduleLinks?.interfaces ?? [],
