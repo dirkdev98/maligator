@@ -1,6 +1,8 @@
+import os from "node:os";
+
 class Catalog {
 	lookupRecord() {
-		return "proxy method";
+		return os.hostname();
 	}
 }
 

@@ -90,26 +90,9 @@ export const IMPLICITLY_CALLED_METHOD_NAMES: ReadonlySet<string> = new Set([
 	"writeHead",
 ]);
 
-// A handler's traps run once the program can construct a Proxy.
-const PROXY_TRAP_NAMES: ReadonlySet<string> = new Set([
-	"apply",
-	"construct",
-	"defineProperty",
-	"deleteProperty",
-	"get",
-	"getOwnPropertyDescriptor",
-	"getPrototypeOf",
-	"has",
-	"isExtensible",
-	"ownKeys",
-	"preventExtensions",
-	"set",
-	"setPrototypeOf",
-]);
-const PROXY_OPERATION = /^%?Proxy(?:\.|%?$)/;
-
-// Descriptor writes can make a method enumerable under a key we cannot trace.
+// Descriptor writes and Proxy traps can expose a non-enumerable method to enumeration.
 const REFLECTIVE_NAMES: ReadonlySet<string> = new Set([
+	"Proxy",
 	"Reflect",
 	"defineProperty",
 	"defineProperties",
@@ -120,6 +103,7 @@ const REFLECTIVE_NAMES: ReadonlySet<string> = new Set([
 ]);
 const REFLECTIVE_OPERATION =
 	/^%?(?:Reflect(?:\.(?:get(?:OwnPropertyDescriptor)?|defineProperty))?|Object\.(?:getOwnPropertyDescriptors?|definePropert(?:y|ies))|Object\.prototype\.__lookup[GS]etter__)%?$/;
+const PROXY_OPERATION = /^%?Proxy(?:\.|%?$)/;
 
 // Operations that read a property under the key in their second operand.
 const READS_BY_KEY: ReadonlySet<string> = new Set(["loadProperty", "loadSuperProperty"]);
@@ -166,7 +150,6 @@ export function analyzeCoreMethodReachability(
 	const deferred = new Map<string, Array<CoreFunctionId>>();
 	const deferredMethods = new Set<CoreFunctionId>();
 	let untraceable = options.dynamicScope;
-	let proxies = false;
 	const run = (id: CoreFunctionId) => {
 		if (live.has(id)) return;
 		live.add(id);
@@ -187,13 +170,7 @@ export function analyzeCoreMethodReachability(
 		if (names.has(text)) return;
 		names.add(text);
 		if (REFLECTIVE_NAMES.has(text)) releaseAll();
-		else if (text === "Proxy") constructsProxies();
 		else release(text);
-	};
-	const constructsProxies = () => {
-		if (proxies) return;
-		proxies = true;
-		for (const trap of PROXY_TRAP_NAMES) release(trap);
 	};
 	const reference = (target: number) => {
 		const id = coreFunctionId(target);
@@ -221,8 +198,7 @@ export function analyzeCoreMethodReachability(
 					untraceable || live.has(id) || referenced.has(id)
 						? undefined
 						: methodKey(program, fn, instruction);
-				if (key === undefined || names.has(key) || (proxies && PROXY_TRAP_NAMES.has(key)))
-					run(id);
+				if (key === undefined || names.has(key)) run(id);
 				else {
 					deferredMethods.add(id);
 					const methods = deferred.get(key);
@@ -248,10 +224,11 @@ export function analyzeCoreMethodReachability(
 						: (attributes.operation ??
 							(attributes.worldAssumptions as { operation?: unknown } | undefined)
 								?.operation);
-				if (typeof operation === "string") {
-					if (REFLECTIVE_OPERATION.test(operation)) releaseAll();
-					else if (PROXY_OPERATION.test(operation)) constructsProxies();
-				}
+				if (
+					typeof operation === "string" &&
+					(REFLECTIVE_OPERATION.test(operation) || PROXY_OPERATION.test(operation))
+				)
+					releaseAll();
 			}
 			if (untraceable) continue;
 			const nameless = NAMELESS_STRING_ATTRIBUTES.has(opcode);
@@ -276,10 +253,7 @@ export function analyzeCoreMethodReachability(
 	}
 	return {
 		runnable: live,
-		// A Proxy descriptor trap can expose a non-enumerable method to enumeration.
-		omittableMethods: new Set(
-			proxies ? [] : [...deferredMethods].filter((method) => !live.has(method)),
-		),
+		omittableMethods: new Set([...deferredMethods].filter((method) => !live.has(method))),
 	};
 }
 

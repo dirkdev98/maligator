@@ -45,6 +45,6 @@ it("preserves the identities of class methods whose bodies cannot run", () => {
 	expect(strings).not.toContain("dormant body literal");
 });
 
-it("calls a method made enumerable by a Proxy descriptor trap", () => {
+it("keeps host reads of a method made enumerable by a Proxy descriptor trap", () => {
 	compileAndCompare("tests/local/proxy-method-descriptor.mjs");
 });
