@@ -180,6 +180,10 @@ describe("normal build frontend cache", () => {
 		expect(warm.phases.compileMs).toBe(0);
 		expect(warm.runtimeArtifacts).toEqual(cold.runtimeArtifacts);
 		expect(warm.imageStats).toEqual(cold.imageStats);
+		expect(cold.optimizationDetails).toContainEqual(
+			expect.objectContaining({ label: "Core optimizer output" }),
+		);
+		expect(warm.optimizationDetails).toEqual(cold.optimizationDetails);
 	});
 
 	it("keeps optimizer instrumentation off in the normal cached build", () => {

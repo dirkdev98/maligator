@@ -74,7 +74,6 @@ import type {
 import { CommandProgress, formatCommandDuration } from "./command-progress.ts";
 import type { CompilationPhase, CompilerService } from "./compiler-service.ts";
 import { formatCoreProgram } from "./compiler/core/core-ir.ts";
-import { formatCoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
 import {
 	TYPE_STRIPPER_IDENTITY,
 	stripCompactTypes,
@@ -837,10 +836,12 @@ function prepareCommandState(
 		enforcePolicies: !(
 			command.kind === "build" && command.internal.serializePath !== undefined
 		),
-		// Verbose output recompiles for the optimizer report, but a forced compile also
-		// replaces dependency fragments with one image, which would change what is built.
 		forceCompile:
-			debugEnabled || compilerDiagnostics || (reporter.verbose && !relocatable),
+			debugEnabled ||
+			compilerDiagnostics ||
+			(!relocatable &&
+				command.kind === "build" &&
+				command.internal.coreReport !== undefined),
 		relocatable,
 		interpreted,
 		onCompilePhase: (phase, durationMs) => {
@@ -930,12 +931,11 @@ function prepareCommandState(
 		for (const phase of compilerPhases) {
 			reporter.timing(`Compiler phase · ${phase.phase}`, phase.durationMs);
 		}
-		if (frontend.optimizationReport !== undefined) {
-			for (const { label, value } of formatCoreOptimizationReport(
-				frontend.optimizationReport,
-			)) {
+		if (frontend.optimizationDetails !== undefined) {
+			if (frontend.cache === "hit")
+				reporter.detail("Core diagnostics", "cached from the original compilation");
+			for (const { label, value } of frontend.optimizationDetails)
 				reporter.detail(label, value);
-			}
 		}
 		const serializePath =
 			command.kind === "build" ? command.internal.serializePath : undefined;

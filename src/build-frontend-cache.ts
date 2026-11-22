@@ -13,6 +13,7 @@ import type { CoreCompilationContext } from "./compiler/core/core-compilation.ts
 import type { CoreOptimizationPlan } from "./compiler/core/core-ir-regions.ts";
 import type { CoreVerificationProfile } from "./compiler/core/core-ir-verifier.ts";
 import type { SealedCoreProgram } from "./compiler/core/core-ir.ts";
+import { formatCoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
 import type { CoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
 import type { CoreInstrumentationMode } from "./compiler/core/core-optimization-report.ts";
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/analyze-module-graph.ts";
@@ -91,7 +92,7 @@ import {
 } from "./worker-image-cache.ts";
 import type { WorkerImageArtifact } from "./worker-image-cache.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 13;
+const BUILD_FRONTEND_CACHE_SCHEMA = 14;
 const BUILD_FRONTEND_PIPELINE_VERSION = 7;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
@@ -112,12 +113,13 @@ for (const platformModule of PLATFORM_MODULES) {
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 13;
+	schema: typeof BUILD_FRONTEND_CACHE_SCHEMA;
 	closure: Pick<ProgramClosureCertificate, "scope" | "roots" | "openings">;
 	/** The execution snapshot when a module reads it; other commands may reuse the images otherwise. */
 	execution: string | null;
 	resolutionInputs: Array<ModuleResolutionInput>;
 	workerArtifacts: Array<WorkerImageArtifact>;
+	optimizationDetails?: CompiledBuildFrontend["optimizationDetails"];
 	nativeHostInstalls?: CompiledBuildFrontend["nativeHostInstalls"];
 	identity: string;
 	contentKey: string;
@@ -177,6 +179,7 @@ export interface CompiledBuildFrontend {
 	imageStats: ProgramImageStats;
 	diagnostics: Array<CompilerDiagnostic>;
 	optimizationReport?: CoreOptimizationReport;
+	optimizationDetails?: ReturnType<typeof formatCoreOptimizationReport>;
 	optimizationPlan?: CoreOptimizationPlan;
 	/** Graph closure evidence, retained with the validated frontend inputs. */
 	closure: ProgramClosureCertificate;
@@ -457,6 +460,7 @@ function loadCached(
 			imageStats: ProgramImageStats;
 			dependencies: Array<BuildDependencyIdentity>;
 			diagnostics: Array<CompilerDiagnostic>;
+			optimizationDetails?: CompiledBuildFrontend["optimizationDetails"];
 			closure: ProgramClosureCertificate;
 	  }
 	| undefined {
@@ -485,6 +489,17 @@ function loadCached(
 				)) ||
 		!validImageStats(manifest.imageStats) ||
 		!Array.isArray(manifest.diagnostics) ||
+		(manifest.optimizationDetails !== undefined &&
+			(!Array.isArray(manifest.optimizationDetails) ||
+				!manifest.optimizationDetails.every(
+					(entry: unknown) =>
+						typeof entry === "object" &&
+						entry !== null &&
+						"label" in entry &&
+						typeof entry.label === "string" &&
+						"value" in entry &&
+						typeof entry.value === "string",
+				))) ||
 		!Array.isArray(manifest.dependencies) ||
 		!Array.isArray(manifest.resolutionInputs) ||
 		!manifest.resolutionInputs.every(moduleResolutionInputUnchanged) ||
@@ -561,6 +576,7 @@ function loadCached(
 			imageStats: manifest.imageStats,
 			dependencies: manifest.dependencies,
 			diagnostics: manifest.diagnostics,
+			optimizationDetails: manifest.optimizationDetails,
 		};
 	} catch {
 		return undefined;
@@ -834,6 +850,7 @@ function prepareBuildFrontend(
 						: { fragmentCompilerArtifacts: cached.fragmentCompilerArtifacts }),
 					imageStats: cached.imageStats,
 					diagnostics: cached.diagnostics,
+					optimizationDetails: cached.optimizationDetails,
 				},
 			};
 		}
@@ -1131,6 +1148,10 @@ function prepareBuildFrontend(
 						} = publishFrontendCompilerArtifact(compilerWire, artifactRoot);
 						return { digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev };
 					})());
+		const optimizationDetails =
+			optimizationReport === undefined
+				? undefined
+				: formatCoreOptimizationReport(optimizationReport);
 		// A whole-program fallback compiles one image, which its compiler artifact describes.
 		const fragmentCompilerArtifacts =
 			fragmentCompilerArtifactIdentities ??
@@ -1164,6 +1185,7 @@ function prepareBuildFrontend(
 					resolutionInputs,
 					dependencies,
 					diagnostics,
+					optimizationDetails,
 				} satisfies BuildFrontendManifest)}\n`,
 			);
 
@@ -1206,6 +1228,7 @@ function prepareBuildFrontend(
 			imageStats,
 			diagnostics,
 			...(optimizationReport === undefined ? {} : { optimizationReport }),
+			optimizationDetails,
 			...(optimizationPlan === undefined ? {} : { optimizationPlan }),
 			fragmentArtifacts,
 			fragmentFallback,
