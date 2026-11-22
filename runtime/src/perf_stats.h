@@ -456,6 +456,17 @@ typedef struct MalPerfStats {
     u64 interpreter_store_ic_sync_fallbacks;
     u64 interpreter_iterator_dense_hits;
     u64 interpreter_iterator_sync_fallbacks;
+#if MAL_PERF_STATS
+    u64 interpreter_number_unary_hits;
+    u64 interpreter_known_math_hits;
+    u64 interpreter_data_view_get_hits;
+    u64 interpreter_data_view_set_hits;
+    u64 interpreter_typed_array_length_hits;
+    u64 interpreter_inline_call_entries;
+    u64 interpreter_inline_call_returns;
+    u64 interpreter_add_add_fusions;
+    u64 interpreter_own_slot_triple_fusions;
+#endif
 
     u64 rest_array_allocations;
     u64 rest_array_values;

@@ -147,10 +147,6 @@ compilation both contribute to developer-loop latency.
       check lowered Express instructions but raised compiled javascript-v2 text and number
       phases by about 0.3%; find a layout or emission change that helps both.
 
-- [ ] Count executions of the interpreter's Number, Math, DataView, typed-array length,
-      in-loop call and superinstruction fast paths in perf stats, so native tests can
-      prove each path ran instead of only comparing output.
-
 ## World-knowledge ladder
 
 | Level             | Available knowledge                                                                   | Intended result                                                             |

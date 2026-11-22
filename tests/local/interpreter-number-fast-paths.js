@@ -1,6 +1,7 @@
 // Numbers take the interpreter's in-place unary, Math, DataView and typed-array
 // length paths; every other operand, receiver or buffer state must reach the
 // builtin with its conversions and errors intact.
+const fallbacksOnly = process.env.MAL_TEST_NUMBER_FALLBACKS === "1";
 const log = [];
 const show = (value) =>
 	Object.is(value, -0) ? "-0" : typeof value === "bigint" ? `${value}n` : String(value);
@@ -34,27 +35,26 @@ function unary(values) {
 	return out;
 }
 
+const coercibleUnaryValues = ["12", "", null, undefined, true, 10n, counted("unary", 7)];
+const numberUnaryValues = [
+	0,
+	-0,
+	1,
+	-1,
+	2147483647,
+	-2147483648,
+	0.5,
+	-1.5,
+	NaN,
+	Infinity,
+	4294967296.5,
+];
 console.log(
-	unary([
-		0,
-		-0,
-		1,
-		-1,
-		2147483647,
-		-2147483648,
-		0.5,
-		-1.5,
-		NaN,
-		Infinity,
-		4294967296.5,
-		"12",
-		"",
-		null,
-		undefined,
-		true,
-		10n,
-		counted("unary", 7),
-	]).join("\n"),
+	unary(
+		fallbacksOnly
+			? coercibleUnaryValues
+			: [...numberUnaryValues, ...coercibleUnaryValues],
+	).join("\n"),
 );
 
 function math(values) {
@@ -76,25 +76,24 @@ function math(values) {
 	return out;
 }
 
+const coercibleMathValues = ["4.5", counted("math", 2.5)];
+const numberMathValues = [0, -0, 1.5, -1.5, -0.5, 2147483648.5, NaN, -Infinity];
 console.log(
-	math([
-		0,
-		-0,
-		1.5,
-		-1.5,
-		-0.5,
-		2147483648.5,
-		NaN,
-		-Infinity,
-		"4.5",
-		counted("math", 2.5),
-	]).join("\n"),
+	math(
+		fallbacksOnly ? coercibleMathValues : [...numberMathValues, ...coercibleMathValues],
+	).join("\n"),
 );
-console.log(Math.trunc(), Math.min(), Math.max(1, 2, 3), Math.min(4, 5, -6));
+if (!fallbacksOnly) {
+	console.log(Math.trunc(), Math.min(), Math.max(1, 2, 3), Math.min(4, 5, -6));
+}
 
 function views() {
 	const out = [];
 	const view = new DataView(new ArrayBuffer(16));
+	if (fallbacksOnly) {
+		view.setUint8(counted("set offset", 2), counted("set value", 23));
+		return [view.getUint8(counted("get offset", 2))];
+	}
 	for (let index = 0; index < 4; index++) {
 		view.setUint32(index * 4, 0x01020304 * (index + 1), (index & 1) === 0);
 	}
@@ -170,13 +169,15 @@ function lengths() {
 	const subclass = new Sub(3);
 	const shadowed = new Int8Array(4);
 	Object.defineProperty(shadowed, "length", { value: 99 });
+	const arrays = fallbacksOnly
+		? [detaching, tracking, shadowed]
+		: [plain, detaching, tracking, subclass, shadowed];
 	for (let round = 0; round < 3; round++) {
-		if (round === 1) {
+		if (round === (fallbacksOnly ? 0 : 1)) {
 			buffer.transfer();
 			resizable.resize(8);
 		}
-		for (const array of [plain, detaching, tracking, subclass, shadowed])
-			out.push(array.length);
+		for (const array of arrays) out.push(array.length);
 	}
 	return out;
 }

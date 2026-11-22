@@ -1,11 +1,13 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
 	buildNativeProgramImage,
+	resolveHarnessExecutionInvocation,
 	runToStdout,
 } from "../../src/test-harness.ts";
 
@@ -14,6 +16,7 @@ const outDir = mkdtempSync(
 );
 const expected = ["interpreter-call-cache-p1-item9 PASS"];
 const compilerStressEnv = { MAL_GC_STRESS: "1000", MAL_GC_VERIFY: "1" };
+const perfEnvironment = { ...process.env, MAL_PERF_STATS: "1" };
 
 describe("bounded interpreter call-site cache", () => {
 	let interpreted: string;
@@ -25,6 +28,7 @@ describe("bounded interpreter call-site cache", () => {
 			fixture: "tests/local/interpreter-call-cache-p1-item9.js",
 			name: "interpreter-call-cache-p1-item9",
 			outDir,
+			environment: perfEnvironment,
 		});
 		interpreted = pair.interpreted;
 		mixed = pair.compiled;
@@ -75,6 +79,33 @@ describe("bounded interpreter call-site cache", () => {
 			expected,
 		);
 	});
+
+	it.each(["direct", "bound"] as const)(
+		"attributes in-loop calls and returns for a %s callee",
+		(kind) => {
+			const { executable, args } = resolveHarnessExecutionInvocation(interpreted);
+			const result = spawnSync(executable, args, {
+				encoding: "utf-8",
+				env: {
+					...perfEnvironment,
+					MAL_PERF_CONTROL: "1",
+					MAL_TEST_INLINE_CALL: kind,
+				},
+				timeout: 60_000,
+			});
+			if (result.error !== undefined) throw result.error;
+			expect(result.status, result.stderr).toBe(0);
+			assertExactLines(result.stdout, expected);
+			const line = result.stderr.match(/^\[perf-interpreter-stats\].*$/m)?.[0];
+			if (line === undefined)
+				throw new Error(`Missing interpreter stats:\n${result.stderr}`);
+			for (const name of ["inline_call_entries", "inline_call_returns"]) {
+				const count = Number(line.match(new RegExp(` ${name}=(\\d+)\\b`))?.[1]);
+				if (kind === "direct") expect(count, name).toBeGreaterThan(0);
+				else expect(count, name).toBe(0);
+			}
+		},
+	);
 
 	it("falls back from interpreted eval code to compiled callees", () => {
 		assertExactLines(

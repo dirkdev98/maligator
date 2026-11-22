@@ -145,4 +145,15 @@ ok(
 ok("an overflow unwinds warmed call frames", relayStack(readStack, () => 42) === 42);
 
 ok("checks ran", passed > 1000);
+
+const callKind = process.env.MAL_TEST_INLINE_CALL;
+if (callKind !== undefined) {
+	const increment = function (value) {
+		return value + 1;
+	};
+	const callee = callKind === "direct" ? increment : increment.bind(undefined);
+	globalThis.__mal_reset_perf_stats?.();
+	if (callee(41) !== 42) throw new Error("FAIL counted call result");
+}
+
 console.log("interpreter-call-cache-p1-item9 PASS");

@@ -1155,7 +1155,10 @@ static void mal_perf_stats_print(void) {
         "strict_direct_hits=%llu "
         "strict_string_fallbacks=%llu local_load_ic_hits=%llu local_store_ic_hits=%llu "
         "load_ic_sync_fallbacks=%llu store_ic_sync_fallbacks=%llu "
-        "iterator_dense_hits=%llu iterator_sync_fallbacks=%llu\n",
+        "iterator_dense_hits=%llu iterator_sync_fallbacks=%llu "
+        "number_unary_hits=%llu known_math_hits=%llu data_view_get_hits=%llu "
+        "data_view_set_hits=%llu typed_array_length_hits=%llu inline_call_entries=%llu "
+        "inline_call_returns=%llu add_add_fusions=%llu own_slot_triple_fusions=%llu\n",
         (unsigned long long) mal_perf_stats.interpreter_direct_leaf_executions,
         (unsigned long long) mal_perf_stats.interpreter_guard_branch_fusions,
         (unsigned long long) mal_perf_stats.interpreter_global_tdz_fusions,
@@ -1172,7 +1175,16 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.interpreter_load_ic_sync_fallbacks,
         (unsigned long long) mal_perf_stats.interpreter_store_ic_sync_fallbacks,
         (unsigned long long) mal_perf_stats.interpreter_iterator_dense_hits,
-        (unsigned long long) mal_perf_stats.interpreter_iterator_sync_fallbacks
+        (unsigned long long) mal_perf_stats.interpreter_iterator_sync_fallbacks,
+        (unsigned long long) mal_perf_stats.interpreter_number_unary_hits,
+        (unsigned long long) mal_perf_stats.interpreter_known_math_hits,
+        (unsigned long long) mal_perf_stats.interpreter_data_view_get_hits,
+        (unsigned long long) mal_perf_stats.interpreter_data_view_set_hits,
+        (unsigned long long) mal_perf_stats.interpreter_typed_array_length_hits,
+        (unsigned long long) mal_perf_stats.interpreter_inline_call_entries,
+        (unsigned long long) mal_perf_stats.interpreter_inline_call_returns,
+        (unsigned long long) mal_perf_stats.interpreter_add_add_fusions,
+        (unsigned long long) mal_perf_stats.interpreter_own_slot_triple_fusions
     );
     fprintf(
         stderr,

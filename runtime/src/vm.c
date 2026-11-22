@@ -2937,6 +2937,7 @@ static void mal_vm_run_until_frame_count(
                 if (mal_vm_try_binary_number_fast(
                         MAL_BIN_ADD, registers[second->as.binary.left],
                         registers[second->as.binary.right], &result)) {
+                    MAL_PERF_COUNT(interpreter_add_add_fusions);
                     MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(second);
                     registers[second->as.binary.dst] = result;
                     next_instruction++;
@@ -3092,6 +3093,7 @@ static void mal_vm_run_until_frame_count(
                             goto mal_vm_interpreter_unary_slow;
                     }
                     registers[instruction->as.unary.dst] = result;
+                    MAL_PERF_COUNT(interpreter_number_unary_hits);
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;
                 }
@@ -3225,6 +3227,7 @@ static void mal_vm_run_until_frame_count(
                             second_site->shape == ic->shape &&
                             third_site->mode == MAL_IC_MODE_SHAPE &&
                             third_site->shape == ic->shape) {
+                            MAL_PERF_COUNT(interpreter_own_slot_triple_fusions);
                             const MalValue *fields = mal_object_fields_nonempty(plain_object);
                             MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF(second);
                             registers[second->as.load_property_static.dst] = fields[second_site->slot];
@@ -3242,7 +3245,7 @@ static void mal_vm_run_until_frame_count(
                 }
                 bool cache_hit = (ic->mode == MAL_IC_MODE_INHERITED_VALUE &&
                         mal_vm_inherited_value_try_load(vm, object, ic, &result)) ||
-                    mal_vm_typed_array_length_try_load(vm, object, ic, &result) ||
+                    mal_vm_typed_array_length_try_load(vm, object, ic, &result, true) ||
                     (__builtin_expect(ic->mode == MAL_IC_MODE_FUNCTION_METADATA, 0) &&
                      mal_vm_function_metadata_try_load(object, ic, &result)) ||
                     mal_vm_property_try_load_length_static(vm, object, ic, &result);
@@ -3959,6 +3962,7 @@ static void mal_vm_run_until_frame_count(
                 instructions = function->instructions;
                 registers = callee_registers;
                 next_instruction = instructions;
+                MAL_PERF_COUNT(interpreter_inline_call_entries);
                 MAL_PERF_COUNT(interpreter_state_reloads);
                 continue;
 
@@ -3971,6 +3975,7 @@ static void mal_vm_run_until_frame_count(
             MAL_VM_CASE(CALL_KNOWN)
 #if !MAL_REALMS
                 if (mal_op_call_known_math(frame, instruction)) {
+                    MAL_PERF_COUNT(interpreter_known_math_hits);
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;
                 }
@@ -4046,6 +4051,7 @@ static void mal_vm_run_until_frame_count(
                     frame--;
                     frame->registers[return_register] = return_value;
                     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = return_value};
+                    MAL_PERF_COUNT(interpreter_inline_call_returns);
                     MAL_PERF_COUNT(interpreter_boundary_dispatches);
                     if (mal_vm_gc_poll_requested(vm)) {
                         mal_gc_safepoint(vm);

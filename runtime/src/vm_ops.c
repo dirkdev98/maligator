@@ -3084,7 +3084,7 @@ bool mal_vm_object_try_store_static_remaining(
 MAL_PRESERVE_MOST bool mal_vm_property_try_load_length_static_remaining(
     MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
 ) {
-    return mal_vm_typed_array_length_try_load(vm, receiver, ic, out) ||
+    return mal_vm_typed_array_length_try_load(vm, receiver, ic, out, false) ||
         mal_vm_property_try_load_static(vm, receiver, ic, out);
 }
 
@@ -4027,6 +4027,7 @@ MAL_PRESERVE_MOST bool mal_op_call_data_view(
                 mal_value_is_truthy(mal_op_value_operand(callable, arguments[2]));
             mal_data_view_write_bits(bytes, accessor, (u32) mal_value_to_i32(value), little_endian);
             callable->registers[instruction->as.call.dst] = MAL_VALUE_UNDEFINED;
+            MAL_PERF_COUNT(interpreter_data_view_set_hits);
             return true;
         }
     }
@@ -4056,9 +4057,11 @@ MAL_PRESERVE_MOST bool mal_op_call_data_view(
             mal_data_view_write(bytes, accessor, number, little_endian);
         }
         callable->registers[instruction->as.call.dst] = MAL_VALUE_UNDEFINED;
+        MAL_PERF_COUNT(interpreter_data_view_set_hits);
     } else {
         callable->registers[instruction->as.call.dst] =
             mal_ops_number_value(mal_data_view_read(bytes, accessor, little_endian));
+        MAL_PERF_COUNT(interpreter_data_view_get_hits);
     }
     return true;
 }

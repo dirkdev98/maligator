@@ -2441,7 +2441,8 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
  * Array row may grow every such site.
  */
 static inline __attribute__((always_inline)) bool mal_vm_typed_array_length_try_load(
-    MalVm *vm, MalValue receiver, const MalInlineCache *ic, MalValue *out
+    MalVm *vm, MalValue receiver, const MalInlineCache *ic, MalValue *out,
+    bool in_interpreter_loop
 ) {
     if (ic->mode != MAL_IC_MODE_TYPED_ARRAY_LENGTH || !mal_vm_watched_methods_intact(vm) ||
         !mal_value_is_typed_array_object(receiver)) {
@@ -2463,6 +2464,7 @@ static inline __attribute__((always_inline)) bool mal_vm_typed_array_length_try_
     }
     *out = mal_value_from_u32(array->length);
     mal_perf_ic_load_typed_array_length_hit();
+    if (in_interpreter_loop) MAL_PERF_COUNT(interpreter_typed_array_length_hits);
     return true;
 }
 

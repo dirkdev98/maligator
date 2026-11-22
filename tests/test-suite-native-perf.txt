@@ -43,8 +43,11 @@ tests/native/gc-raw-realloc.test.ts
 tests/native/grouped-hash-index.test.ts
 tests/native/inherited-builtin-receiver-cache.test.ts
 tests/native/inherited-method-cache.test.ts
+tests/native/interpreter-call-cache-p1-item9.test.ts
+tests/native/interpreter-number-fast-paths.test.ts
 tests/native/interpreter-property-ic.test.ts
 tests/native/interpreter-strict-equality.test.ts
+tests/native/interpreter-superinstructions.test.ts
 tests/native/json-late-fallback.test.ts
 tests/native/json-stringify-scratch.test.ts
 tests/native/known-own-slot-load.test.ts
