@@ -596,6 +596,7 @@ static void mal_vm_init_engine_state(MalVm *vm) {
     vm->error_stack_marker = mal_value_new_undefined();
     vm->error_callsite_marker = mal_value_new_undefined();
     vm->node_http_headers_marker = mal_value_new_undefined();
+    vm->node_net_timeout_marker = mal_value_new_undefined();
     vm->allocation_error = mal_value_new_undefined();
     vm->tiny_string_cache = nullptr;
     memset(vm->regexp_protocol_methods, 0, sizeof(vm->regexp_protocol_methods));

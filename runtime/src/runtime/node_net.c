@@ -67,6 +67,7 @@ typedef struct MalNodeNetSocketState {
 #endif
     MalHostHandle operation;
     MalValue destroy_error;
+    MalNativeFunctionObject *idle_timeout;
     /* The accepting net.Server for server-side sockets, else undefined. */
     MalValue server;
     MalNodeNetWrite *write_head;
@@ -180,6 +181,129 @@ static MalNodeNetSocketState *net_state(MalValue receiver) {
         if (mal_value_to_object(state->receiver) == object) return state;
     }
     return nullptr;
+}
+
+enum {
+    NET_TIMEOUT_SOCKET,
+    NET_TIMEOUT_DELAY,
+    NET_TIMEOUT_DEADLINE,
+    NET_TIMEOUT_ID,
+};
+
+static MalNativeFunctionObject *net_timeout_task_for(MalVm *vm, MalValue socket) {
+    if (mal_value_is_undefined(vm->node_net_timeout_marker)
+        || !mal_value_is_object(socket)) return nullptr;
+    MalPropertyLookup property = mal_object_get_own(mal_value_to_object(socket),
+        mal_key_from_value(vm->node_net_timeout_marker));
+    return property.present && mal_value_is_native_function_object(property.desc.value)
+        ? mal_value_to_native_function_object(property.desc.value) : nullptr;
+}
+
+static f64 net_timeout_now_ms(void) {
+    return (f64) mal_reactor_now_ns() / 1000000.0;
+}
+
+static void net_schedule_idle_timeout(MalVm *vm, MalNativeFunctionObject *task, i64 delay_ms) {
+    i64 id = mal_host_set_timeout(vm, mal_value_from_native_function_object(task), delay_ms, nullptr, 0);
+    if (id != 0) mal_host_timer_set_referenced(vm, id, false);
+    mal_native_function_object_set_slot(task, NET_TIMEOUT_ID, mal_value_from_f64((f64) id));
+}
+
+static void net_refresh_idle_timeout(MalVm *vm, MalNativeFunctionObject *task) {
+    if (task == nullptr) return;
+    f64 delay = mal_ops_number_as_f64(mal_native_function_object_get_slot(task, NET_TIMEOUT_DELAY));
+    mal_native_function_object_set_slot(task, NET_TIMEOUT_DEADLINE,
+        mal_value_from_f64(net_timeout_now_ms() + delay));
+    if (mal_ops_number_as_f64(mal_native_function_object_get_slot(task, NET_TIMEOUT_ID)) == 0)
+        net_schedule_idle_timeout(vm, task, (i64) delay);
+}
+
+static void net_clear_idle_timeout(
+    MalVm *vm, MalValue socket, MalNodeNetSocketState *state) {
+    MalNativeFunctionObject *task = state == nullptr
+        ? net_timeout_task_for(vm, socket) : state->idle_timeout;
+    if (task == nullptr) return;
+    if (state != nullptr) state->idle_timeout = nullptr;
+    i64 id = (i64) mal_ops_number_as_f64(mal_native_function_object_get_slot(task, NET_TIMEOUT_ID));
+    if (id != 0) mal_host_clear_timeout(vm, id);
+    mal_object_set(mal_value_to_object(socket), mal_key_from_value(vm->node_net_timeout_marker),
+        mal_value_new_undefined());
+}
+
+static MalValue net_idle_timeout_task(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target;
+    MalNativeFunctionObject *task = mal_value_to_native_function_object(callee);
+    mal_native_function_object_set_slot(task, NET_TIMEOUT_ID, mal_value_from_i32(0));
+    MalValue socket = mal_native_function_object_get_slot(task, NET_TIMEOUT_SOCKET);
+    MalValue destroyed;
+    if (!net_get(vm, socket, "destroyed", &destroyed)) return mal_value_new_undefined();
+    if (mal_value_is_truthy(destroyed) || net_timeout_task_for(vm, socket) != task)
+        return mal_value_new_undefined();
+    f64 remaining = mal_ops_number_as_f64(
+        mal_native_function_object_get_slot(task, NET_TIMEOUT_DEADLINE)) - net_timeout_now_ms();
+    if (remaining > 0) {
+        // Active sockets move the deadline without replacing a timer on each I/O event.
+        net_schedule_idle_timeout(vm, task, (i64) ceil(remaining));
+    } else {
+        net_emit(vm, socket, "timeout", nullptr, 0);
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue net_socket_set_timeout(
+    MalVm *vm, MalValue socket, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    if (!mal_value_is_object(socket)) {
+        mal_node_throw_invalid_arg_type(vm, "this", "a Socket", socket);
+        return mal_value_new_undefined();
+    }
+    MalValue destroyed;
+    if (!net_get(vm, socket, "destroyed", &destroyed)) return mal_value_new_undefined();
+    if (mal_value_is_truthy(destroyed)) return socket;
+    MalValue value = argc > 0 ? args[0] : mal_value_new_undefined();
+    net_set(vm, socket, "timeout", value);
+    if (!mal_node_validate_number(vm, value, "msecs")) return mal_value_new_undefined();
+    f64 delay = mal_ops_number_as_f64(value);
+    if (!isfinite(delay) || delay < 0) {
+        mal_node_throw_out_of_range(vm, "msecs", "a non-negative finite number", value);
+        return mal_value_new_undefined();
+    }
+    MalNodeNetSocketState *state = net_state(socket);
+    net_clear_idle_timeout(vm, socket, state);
+    if (delay > 0) {
+        if (mal_value_is_undefined(vm->node_net_timeout_marker))
+            vm->node_net_timeout_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+        // The timer roots the callback and receiver even before a transport exists.
+        if (delay < 1) delay = 1;
+        if (delay > INT32_MAX) delay = INT32_MAX;
+        MalValue slots[] = {socket, mal_value_from_i32((i32) delay),
+            mal_value_from_f64(0), mal_value_from_i32(0)};
+        MalNativeFunctionObject *task = mal_native_function_object_new_with_slots_arity(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) ""), 0, net_idle_timeout_task, slots, countof(slots));
+        MalValue timer = mal_value_from_native_function_object(task);
+        MalRootSpan root;
+        mal_gc_root(&root, &timer, 1);
+        mal_object_set(mal_value_to_object(socket), mal_key_from_value(vm->node_net_timeout_marker), timer);
+        if (state != nullptr) state->idle_timeout = task;
+        net_refresh_idle_timeout(vm, task);
+        mal_gc_unroot(&root);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    }
+    if (argc > 1 && !mal_value_is_undefined(args[1])) {
+        if (!mal_value_is_callable(args[1])) {
+            mal_node_throw_invalid_arg_type(vm, "callback", "of type function", args[1]);
+            return mal_value_new_undefined();
+        }
+        MalValue listener[] = {
+            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "timeout")), args[1],
+        };
+        MalCompletion result = net_call_method(vm, socket, delay == 0 ? "removeListener" : "once",
+            listener, countof(listener));
+        if (result.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    }
+    return socket;
 }
 
 static MalNodeNetSocketState **net_state_link(MalNodeNetSocketState *state) {
@@ -816,6 +940,7 @@ static MalValue net_socket_connect_config(
     }
     state->vm = vm;
     state->receiver = receiver;
+    state->idle_timeout = net_timeout_task_for(vm, receiver);
     state->async_context = mal_async_context_capture(vm);
     state->tls_config = config;
     state->tls_context = config == nullptr ? nullptr : state->async_context;
@@ -998,6 +1123,10 @@ static MalValue net_socket_write(
     bool below_high_water = state->queued_write_bytes < NET_WRITE_HIGH_WATER;
     if (!below_high_water) state->backpressured = true;
     if (!net_pump_writes(state)) return mal_value_new_boolean(false);
+    if (state->idle_timeout != nullptr) {
+        net_refresh_idle_timeout(vm, state->idle_timeout);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    }
     return mal_value_new_boolean(below_high_water);
 }
 
@@ -1051,6 +1180,7 @@ static MalValue net_socket_destroy(
     (void) new_target;
     (void) callee;
     MalNodeNetSocketState *state = net_state(receiver);
+    net_clear_idle_timeout(vm, receiver, state);
     if (state == nullptr) {
         // A socket that never connected has no transport, so the stream base destroys it.
         MalValue method;
@@ -1073,6 +1203,7 @@ static MalValue net_socket_destroy(
 }
 
 static void net_socket_reset(MalVm *vm, MalValue receiver, MalNodeNetSocketState *state) {
+    net_clear_idle_timeout(vm, receiver, state);
     state->destroyed = true;
     state->destroy_error = mal_value_new_undefined();
     net_set(vm, receiver, "destroyed", mal_value_new_boolean(true));
@@ -1249,6 +1380,10 @@ static void net_write_complete(MalVm *vm, MalNodeNetSocketState *state, u64 toke
     state->queued_write_bytes -= state->active_segment;
     state->active_segment = 0;
     state->write_in_flight = false;
+    if (state->idle_timeout != nullptr) {
+        net_refresh_idle_timeout(vm, state->idle_timeout);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+    }
     if (write->offset == write->length) {
         state->write_head = write->next;
         if (state->write_head == nullptr) state->write_tail = nullptr;
@@ -1576,6 +1711,10 @@ static void net_dispatch_progress_in_context(
         return;
     }
     if (progress->kind == MAL_TCP_SECURE_CONNECTED) {
+        if (state->idle_timeout != nullptr) {
+            net_refresh_idle_timeout(vm, state->idle_timeout);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+        }
         state->secure = true;
         net_set(vm, state->receiver, "encrypted", mal_value_new_boolean(true));
         net_tls_describe(vm, state);
@@ -1589,6 +1728,10 @@ static void net_dispatch_progress_in_context(
         return;
     }
     if (progress->kind == MAL_TCP_CONNECTED) {
+        if (state->idle_timeout != nullptr) {
+            net_refresh_idle_timeout(vm, state->idle_timeout);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+        }
         state->connected = true;
         net_set(vm, state->receiver, "connecting", mal_value_new_boolean(false));
         net_set(vm, state->receiver, "pending", mal_value_new_boolean(false));
@@ -1608,6 +1751,10 @@ static void net_dispatch_progress_in_context(
         return;
     }
     if (progress->kind == MAL_TCP_DATA) {
+        if (state->idle_timeout != nullptr) {
+            net_refresh_idle_timeout(vm, state->idle_timeout);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+        }
         byte *bytes = progress->bytes;
         usize length = progress->length;
         progress->bytes = nullptr;
@@ -1656,6 +1803,10 @@ bool mal_node_net_start_tls(
 static void net_dispatch_terminal(
     MalVm *vm, MalNodeNetSocketState *state, MalHostTask *task,
     MalTcpTerminal *terminal) {
+    MalValue socket = state->receiver;
+    MalRootSpan socket_root;
+    mal_gc_root(&socket_root, &socket, 1);
+    net_clear_idle_timeout(vm, socket, state);
     bool had_error = task->result == MAL_HOST_TERMINAL_ERROR
         || !mal_value_is_nil(state->destroy_error);
     MalValue error = state->destroy_error;
@@ -1711,6 +1862,7 @@ static void net_dispatch_terminal(
         net_emit(vm, state->receiver, "close", &close_arg, 1);
     }
     mal_gc_unroot(&root);
+    mal_gc_unroot(&socket_root);
 }
 
 static MAL_ISOLATE_LOCAL MalNodeNetServerState *net_servers;
@@ -2655,6 +2807,8 @@ void mal_host_install_node_net(
         (const byte *) "resume", 0, net_socket_resume);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]),
         (const byte *) "setKeepAlive", 2, net_socket_set_keep_alive);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]),
+        (const byte *) "setTimeout", 2, net_socket_set_timeout);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]),
         (const byte *) "setNoDelay", 1, net_socket_set_no_delay);
     roots[2] = net_constructor(vm, "Socket", net_socket_constructor, roots[1]);
