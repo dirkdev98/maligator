@@ -18,6 +18,7 @@ import {
 	STRESS_ENV,
 	resolveHarnessExecutionInvocation,
 } from "../../src/test-harness.ts";
+import { preparedNativeEvalConfig } from "../helpers/native-eval-config.ts";
 const fixture = "tests/local/node-source-builtin.mjs",
 	outDir = mkdtempSync(join(tmpdir(), "mal-source-builtin-")),
 	env = { MAL_BUILTIN_ID: "node:test" };
@@ -58,6 +59,27 @@ describe("computed source builtin loading", () => {
 					);
 		},
 	);
+});
+
+it("loads a source builtin named only by a Function body", () => {
+	const fixture = join(outDir, "function-source-builtin.mjs");
+	writeFileSync(
+		fixture,
+		`const result = Function(\`
+			const require = process.getBuiltinModule("node:module").createRequire("file:///example/main.cjs");
+			const test = require("node:test");
+			return [typeof test, test === process.getBuiltinModule("node:test")].join(" ");
+		\`)();
+		console.log(result);`,
+	);
+	const pair = buildBackendPairFromOneProgramImage({
+		fixture,
+		name: "function-source-builtin",
+		outDir,
+		config: preparedNativeEvalConfig(),
+	});
+	for (const binary of [pair.compiled, pair.interpreted])
+		expect(runToStdout(binary)).toBe("function true\n");
 });
 
 describe("source builtin image ownership", () => {

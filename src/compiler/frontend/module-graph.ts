@@ -1159,7 +1159,10 @@ export function buildModuleGraph(
 	const loadRuntimeSourceProviders = (): boolean => {
 		if (sourceBuiltinLookup || wasmTarget !== undefined) return false;
 		const count = modules.size;
+		// Runtime-generated source can load a builtin absent from every parsed module.
+		sourceBuiltinLookup = options.buildConfig?.engine.eval === true;
 		for (const record of modules.values()) {
+			if (sourceBuiltinLookup) break;
 			if (
 				record.host !== undefined ||
 				SOURCE_HOST_MODULES.has(record.path) ||
@@ -1207,7 +1210,6 @@ export function buildModuleGraph(
 						sourceBuiltinLookup = true;
 				}
 			});
-			if (sourceBuiltinLookup) break;
 		}
 		if (sourceBuiltinLookup)
 			for (const id of SOURCE_HOST_MODULES.keys()) {
