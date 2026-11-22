@@ -166,10 +166,16 @@ function memoryRun(binary: string, input: Buffer): { peak: number; output: unkno
 	return { peak, output: JSON.parse(result.stdout) };
 }
 
-it("streams a 16 MiB file with bounded peak resident memory", () => {
-	const input = Buffer.alloc(16 * 1024 * 1024, 7);
-	const controlInput = input.subarray(0, 1);
+it("bounds peak resident memory for 16 MiB of additional streamed data", () => {
+	const additionalLength = 16 * 1024 * 1024;
+	const input = Buffer.alloc(2 * additionalLength, 7);
+	// A streamed control includes allocator and collector warm-up in both peaks.
+	const controlInput = input.subarray(0, additionalLength);
 	const expected = { length: input.length, checksum: 7 * input.length };
+	const expectedControl = {
+		length: controlInput.length,
+		checksum: 7 * controlInput.length,
+	};
 	for (const binary of backends(pair)) {
 		if (process.env.MAL_ASAN === "1" || process.env.MAL_TSAN === "1") {
 			// Instrumented allocators retain freed stores and change the RSS baseline.
@@ -181,13 +187,14 @@ it("streams a 16 MiB file with bounded peak resident memory", () => {
 		const growth = Array.from({ length: 3 }, () => {
 			const control = memoryRun(binary, controlInput);
 			const streamed = memoryRun(binary, input);
+			expect(control.output).toEqual(expectedControl);
 			expect(streamed.output).toEqual(expected);
 			return streamed.peak - control.peak;
 		});
 		expect(
 			growth.toSorted((left, right) => left - right)[1],
 			`RSS grew by ${growth.join(", ")} bytes across the three control/stream pairs`,
-		).toBeLessThan(input.length / 2);
+		).toBeLessThan(additionalLength / 2);
 	}
 });
 
