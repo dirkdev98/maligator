@@ -1548,53 +1548,62 @@ export function headerSearchDirectories(input: CExtractionInput): Array<string> 
 	];
 }
 
-function directoryVersion(directory: string): string | undefined {
+function observeHeaderDirectory(directory: string) {
 	try {
 		const value = statSync(directory);
-		return [value.size, value.mtimeMs, value.ctimeMs, value.ino, value.dev].join(":");
+		return {
+			version: [value.size, value.mtimeMs, value.ctimeMs, value.ino, value.dev].join(":"),
+			isDirectory: value.isDirectory(),
+		};
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw error;
 	}
 }
 
+interface HeaderDirectorySnapshot {
+	readonly versions: Map<string, string | undefined>;
+	readonly visited: Set<string>;
+	readonly scratch: string;
+	entries: number;
+}
+
 function snapshotDirectoryTree(
 	directory: string,
-	versions: Map<string, string | undefined>,
-	visited: Set<string>,
-	scratch: string,
+	snapshot: HeaderDirectorySnapshot,
 ): boolean {
 	// A broad shared search tree can cost more to guard than parsing its selected headers.
-	if (visited.size >= 2048) return false;
+	if (snapshot.visited.size >= 4096) return false;
+	const { versions, visited, scratch } = snapshot;
 	try {
-		const before = directoryVersion(directory);
-		if (versions.has(directory) && versions.get(directory) !== before)
+		const before = observeHeaderDirectory(directory);
+		if (versions.has(directory) && versions.get(directory) !== before?.version)
 			throw new FfiSourceChangedError([directory]);
-		versions.set(directory, before);
+		versions.set(directory, before?.version);
 		if (before === undefined) {
 			const parent = path.dirname(directory);
-			if (!versions.has(parent)) versions.set(parent, directoryVersion(parent));
+			if (!versions.has(parent))
+				versions.set(parent, observeHeaderDirectory(parent)?.version);
 			return true;
 		}
+		if (!before.isDirectory) return true;
 		const real = realpathSync(directory);
 		if (real === scratch) {
 			versions.delete(directory);
 			return true;
 		}
-		if (visited.has(real) || !statSync(directory).isDirectory()) return true;
+		if (visited.has(real)) return true;
 		visited.add(real);
-		for (const entry of readdirSync(directory, { withFileTypes: true }))
+		const entries = readdirSync(directory, { withFileTypes: true });
+		snapshot.entries += entries.length;
+		if (snapshot.entries > 131_072) return false;
+		for (const entry of entries)
 			if (
 				(entry.isDirectory() || entry.isSymbolicLink()) &&
-				!snapshotDirectoryTree(
-					path.join(directory, entry.name),
-					versions,
-					visited,
-					scratch,
-				)
+				!snapshotDirectoryTree(path.join(directory, entry.name), snapshot)
 			)
 				return false;
-		if (directoryVersion(directory) !== before)
+		if (observeHeaderDirectory(directory)?.version !== before.version)
 			throw new FfiSourceChangedError([directory]);
 		return true;
 	} catch (error) {
@@ -1624,10 +1633,14 @@ export function withCHeaders<Result>(
 	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-ffi-"));
 	try {
 		const directories = new Map<string, string | undefined>();
-		const visited = new Set<string>();
-		const scratch = realpathSync(directory);
+		const snapshot: HeaderDirectorySnapshot = {
+			versions: directories,
+			visited: new Set(),
+			scratch: realpathSync(directory),
+			entries: 0,
+		};
 		const guarded = searchDirectories.every((root) =>
-			snapshotDirectoryTree(root, directories, visited, scratch),
+			snapshotDirectoryTree(root, snapshot),
 		);
 		const includes = input.headers.map((header) => `#include "${header}"`).join("\n");
 		const probePath = path.join(directory, "probe-headers.c");
@@ -1637,7 +1650,8 @@ export function withCHeaders<Result>(
 		const versions = [...preprocessed.files].sort().map(headerVersion);
 		for (const file of preprocessed.files) {
 			const parent = path.dirname(file);
-			if (!directories.has(parent)) directories.set(parent, directoryVersion(parent));
+			if (!directories.has(parent))
+				directories.set(parent, observeHeaderDirectory(parent)?.version);
 		}
 		const isLibraryFile = libraryFileFilter(input.headers, preprocessed.headerPaths);
 		const exported = [...preprocessed.macros.values()].filter(
@@ -1676,7 +1690,7 @@ export function withCHeaders<Result>(
 				.map((version) => version.file);
 			if (guarded)
 				for (const [root, before] of directories)
-					if (directoryVersion(root) !== before) changed.push(root);
+					if (observeHeaderDirectory(root)?.version !== before) changed.push(root);
 			if (changed.length > 0) throw new FfiSourceChangedError(changed);
 		};
 		const headers: CHeaders = {
