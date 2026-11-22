@@ -1,9 +1,20 @@
-import * as fs from "node:fs";
-import * as fsp from "node:fs/promises";
+import {
+	Stats,
+	appendFileSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	unwatchFile,
+	watch,
+	watchFile,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), "mal-fs-watch-"));
+const root = mkdtempSync(path.join(os.tmpdir(), "mal-fs-watch-"));
 
 function untilEvent(watcher, predicate, poke) {
 	return new Promise((resolve, reject) => {
@@ -25,8 +36,8 @@ function untilEvent(watcher, predicate, poke) {
 
 async function watchDirectory() {
 	const dir = path.join(root, "dir");
-	fs.mkdirSync(dir);
-	const watcher = fs.watch(dir);
+	mkdirSync(dir);
+	const watcher = watch(dir);
 	console.log(
 		"watcher",
 		typeof watcher.close,
@@ -38,7 +49,7 @@ async function watchDirectory() {
 	const [type, name] = await untilEvent(
 		watcher,
 		(eventType, filename) => eventType === "rename" && filename === "created.txt",
-		() => fs.writeFileSync(path.join(dir, "created.txt"), `v${created++}`),
+		() => writeFileSync(path.join(dir, "created.txt"), `v${created++}`),
 	);
 	console.log("dir event", type, name);
 	let appended = 0;
@@ -48,8 +59,8 @@ async function watchDirectory() {
 		(eventType, filename) =>
 			(eventType === "change" || eventType === "rename") &&
 			filename === "created.txt" &&
-			fs.readFileSync(path.join(dir, filename), "utf8").includes("+"),
-		() => fs.appendFileSync(path.join(dir, "created.txt"), `+${appended++}`),
+			readFileSync(path.join(dir, filename), "utf8").includes("+"),
+		() => appendFileSync(path.join(dir, "created.txt"), `+${appended++}`),
 	);
 	console.log("dir modification", changed);
 	const closed = new Promise((resolve) => watcher.on("close", () => resolve("closed")));
@@ -59,14 +70,14 @@ async function watchDirectory() {
 
 async function watchTree() {
 	const dir = path.join(root, "tree");
-	fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
-	const watcher = fs.watch(dir, { recursive: true });
+	mkdirSync(path.join(dir, "sub"), { recursive: true });
+	const watcher = watch(dir, { recursive: true });
 	let created = 0;
 	const [type, name] = await untilEvent(
 		watcher,
 		(eventType, filename) =>
 			eventType === "rename" && filename === path.join("sub", "created.txt"),
-		() => fs.writeFileSync(path.join(dir, "sub", "created.txt"), `v${created++}`),
+		() => writeFileSync(path.join(dir, "sub", "created.txt"), `v${created++}`),
 	);
 	console.log("tree event", type, name);
 	const later = path.join(dir, "sub", "later");
@@ -76,23 +87,23 @@ async function watchTree() {
 		(eventType, filename) =>
 			eventType === "rename" && filename === path.join("sub", "later", "deep.txt"),
 		() => {
-			fs.mkdirSync(later, { recursive: true });
-			fs.writeFileSync(path.join(later, "deep.txt"), `v${nested++}`);
+			mkdirSync(later, { recursive: true });
+			writeFileSync(path.join(later, "deep.txt"), `v${nested++}`);
 		},
 	);
 	console.log("tree event", nestedType, nestedName);
 	watcher.close();
 }
 
-async function watchFile() {
+async function watchSingleFile() {
 	const file = path.join(root, "single.txt");
-	fs.writeFileSync(file, "start");
-	const watcher = fs.watch(file, { encoding: "buffer" });
+	writeFileSync(file, "start");
+	const watcher = watch(file, { encoding: "buffer" });
 	let writes = 0;
 	const [type, name] = await untilEvent(
 		watcher,
 		(eventType) => eventType === "change",
-		() => fs.appendFileSync(file, `+${writes++}`),
+		() => appendFileSync(file, `+${writes++}`),
 	);
 	console.log("file event", type, Buffer.isBuffer(name), name.toString());
 	watcher.close();
@@ -100,28 +111,25 @@ async function watchFile() {
 
 async function watchLargeDirectory() {
 	const dir = path.join(root, "many");
-	fs.mkdirSync(dir);
+	mkdirSync(dir);
 	for (let index = 0; index < 300; index++)
-		fs.writeFileSync(
-			path.join(dir, `entry-${String(index).padStart(3, "0")}.txt`),
-			"start",
-		);
+		writeFileSync(path.join(dir, `entry-${String(index).padStart(3, "0")}.txt`), "start");
 	const nested = path.join(dir, "zz-nested");
-	fs.mkdirSync(nested);
-	fs.writeFileSync(path.join(nested, "target.txt"), "start");
-	const watcher = fs.watch(dir, { recursive: true });
+	mkdirSync(nested);
+	writeFileSync(path.join(nested, "target.txt"), "start");
+	const watcher = watch(dir, { recursive: true });
 	try {
 		const modified = (expected) => (type, name) =>
 			(type === "change" || type === "rename") &&
 			name === expected &&
-			fs.readFileSync(path.join(dir, name), "utf8").includes("+");
+			readFileSync(path.join(dir, name), "utf8").includes("+");
 		const target = "entry-299.txt";
 		await untilEvent(watcher, modified(target), () =>
-			fs.appendFileSync(path.join(dir, target), "+"),
+			appendFileSync(path.join(dir, target), "+"),
 		);
 		const deep = path.join("zz-nested", "target.txt");
 		await untilEvent(watcher, modified(deep), () =>
-			fs.appendFileSync(path.join(dir, deep), "+"),
+			appendFileSync(path.join(dir, deep), "+"),
 		);
 		console.log("large directory and nested changes");
 	} finally {
@@ -131,10 +139,10 @@ async function watchLargeDirectory() {
 
 async function watchAtomicReplacement() {
 	const dir = path.join(root, "atomic");
-	fs.mkdirSync(dir);
+	mkdirSync(dir);
 	const target = path.join(dir, "config.json");
-	fs.writeFileSync(target, "original");
-	const watcher = fs.watch(dir);
+	writeFileSync(target, "original");
+	const watcher = watch(dir);
 	const notification = (content, action) =>
 		new Promise((resolve, reject) => {
 			const cleanup = () => {
@@ -147,7 +155,7 @@ async function watchAtomicReplacement() {
 				reject(error);
 			};
 			const changed = (_type, name) => {
-				if (name !== "config.json" || fs.readFileSync(target, "utf8") !== content) return;
+				if (name !== "config.json" || readFileSync(target, "utf8") !== content) return;
 				cleanup();
 				resolve();
 			};
@@ -166,11 +174,11 @@ async function watchAtomicReplacement() {
 	try {
 		await notification("replacement", () => {
 			const next = path.join(dir, "next.json");
-			fs.writeFileSync(next, "replacement");
-			fs.renameSync(next, target);
+			writeFileSync(next, "replacement");
+			renameSync(next, target);
 		});
 		await notification("modified replacement", () =>
-			fs.writeFileSync(target, "modified replacement"),
+			writeFileSync(target, "modified replacement"),
 		);
 		console.log("atomic replacement and subsequent modification");
 	} finally {
@@ -180,7 +188,7 @@ async function watchAtomicReplacement() {
 
 async function watchErrors() {
 	try {
-		fs.watch(path.join(root, "missing"));
+		watch(path.join(root, "missing"));
 	} catch (error) {
 		console.log(
 			"missing",
@@ -190,7 +198,7 @@ async function watchErrors() {
 		);
 	}
 	try {
-		fs.watch(42);
+		watch(42);
 	} catch (error) {
 		console.log("bad path", error.code, error.name);
 	}
@@ -198,31 +206,31 @@ async function watchErrors() {
 
 async function statPolling() {
 	const file = path.join(root, "polled.txt");
-	fs.writeFileSync(file, "a");
+	writeFileSync(file, "a");
 	let calls = 0;
 	await new Promise((resolve) => {
 		const listener = (curr, prev) => {
 			calls++;
 			console.log(
 				"watchFile",
-				curr instanceof fs.Stats,
-				prev instanceof fs.Stats,
+				curr instanceof Stats,
+				prev instanceof Stats,
 				curr.size,
 				prev.size,
 			);
-			fs.unwatchFile(file, listener);
+			unwatchFile(file, listener);
 			resolve();
 		};
-		const watcher = fs.watchFile(file, { interval: 20 }, listener);
+		const watcher = watchFile(file, { interval: 20 }, listener);
 		console.log("stat watcher", typeof watcher.ref, typeof watcher.unref);
 		setTimeout(() => {
 			// A poll can sample writeFileSync's truncation; publish the completed file atomically.
 			const replacement = path.join(root, "polled-next.txt");
-			fs.writeFileSync(replacement, "abcd");
-			fs.renameSync(replacement, file);
+			writeFileSync(replacement, "abcd");
+			renameSync(replacement, file);
 		}, 60);
 	});
-	fs.writeFileSync(file, "abcdefgh");
+	writeFileSync(file, "abcdefgh");
 	await new Promise((resolve) => setTimeout(resolve, 120));
 	console.log("watchFile calls after unwatch", calls);
 
@@ -235,7 +243,7 @@ async function statPolling() {
 				10_000,
 			);
 			let reportedMissing = false;
-			fs.watchFile(missing, { interval: 20 }, (curr, prev) => {
+			watchFile(missing, { interval: 20 }, (curr, prev) => {
 				if (!reportedMissing) {
 					if (curr.nlink !== 0 || prev.nlink !== 0) {
 						reject(new Error("Expected the initial missing-file report"));
@@ -245,8 +253,8 @@ async function statPolling() {
 					console.log("watchFile missing", curr.size, prev.size);
 					// Publish only after the missing report, with no partially written file to sample.
 					const replacement = path.join(root, "appears-next.txt");
-					fs.writeFileSync(replacement, "xyz");
-					fs.renameSync(replacement, missing);
+					writeFileSync(replacement, "xyz");
+					renameSync(replacement, missing);
 					return;
 				}
 				if (curr.size !== 3 || prev.nlink !== 0) {
@@ -259,47 +267,24 @@ async function statPolling() {
 		});
 	} finally {
 		clearTimeout(deadline);
-		fs.unwatchFile(missing);
+		unwatchFile(missing);
 	}
 }
 
-async function promisesWatch() {
-	const dir = path.join(root, "iter");
-	fs.mkdirSync(dir);
-	const controller = new AbortController();
-	const iterator = fsp.watch(dir, { signal: controller.signal });
-	// Repeat the expected rename so losing the first event cannot strand the iterator.
-	const timer = setInterval(() => {
-		const replacement = path.join(dir, "next.txt");
-		fs.writeFileSync(replacement, "x");
-		fs.renameSync(replacement, path.join(dir, "f0.txt"));
-	}, 50);
-	try {
-		for await (const event of iterator) {
-			if (event.eventType === "rename" && event.filename === "f0.txt") {
-				console.log("promises event", event.eventType, event.filename);
-				controller.abort();
-			}
-		}
-	} catch (error) {
-		console.log("promises abort", error.name, error.code);
-	} finally {
-		clearInterval(timer);
-	}
+try {
+	await watchDirectory();
+	await watchTree();
+	await watchSingleFile();
+	await watchLargeDirectory();
+	await watchAtomicReplacement();
+	await watchErrors();
+	await statPolling();
+} finally {
+	rmSync(root, { recursive: true, force: true });
 }
 
-await watchDirectory();
-await watchTree();
-await watchFile();
-await watchLargeDirectory();
-await watchAtomicReplacement();
-await watchErrors();
-await statPolling();
-await promisesWatch();
-fs.rmSync(root, { recursive: true, force: true });
-
-fs.watch(os.tmpdir(), { persistent: false });
-fs.watchFile(
+watch(os.tmpdir(), { persistent: false });
+watchFile(
 	path.join(os.tmpdir(), "mal-never-there"),
 	{ persistent: false, interval: 10 },
 	() => {},

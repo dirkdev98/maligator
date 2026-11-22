@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
+	buildBackendPairFromOneProgramImage,
 	buildNativeBinary,
 	HOST_MAIN,
 	runToStdout,
@@ -15,43 +16,40 @@ import {
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-fs-watch-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
-const fixture = "tests/local/node-fs-watch.mjs";
-
-describe("node:fs watchers", () => {
+describe.each([
+	["node:fs", "node-fs-watch"],
+	["node:fs/promises", "node-fs-promises-watch"],
+])("%s watchers", (_module, name) => {
 	let expected: string;
-	let compiled: string;
-	let interpreted: string;
+	let pair: ReturnType<typeof buildBackendPairFromOneProgramImage>;
 
 	beforeAll(() => {
+		const fixture = `tests/local/${name}.mjs`;
 		expected = execFileSync(process.execPath, ["--no-deprecation", fixture], {
 			encoding: "utf8",
 			timeout: 60_000,
 		});
-		compiled = buildNativeBinary({
+		pair = buildBackendPairFromOneProgramImage({
 			fixture,
-			name: "node-fs-watch-compiled",
+			name,
 			mainFile: HOST_MAIN,
 			outDir,
-		});
-		interpreted = buildNativeBinary({
-			fixture,
-			name: "node-fs-watch-interpreted",
-			mainFile: HOST_MAIN,
-			outDir,
-			compiled: false,
+			evalEnabled: false,
 		});
 	});
 
 	it("matches Node compiled", () => {
-		expect(runToStdout(compiled, { timeoutMs: 30000 })).toBe(expected);
+		expect(runToStdout(pair.compiled, { timeoutMs: 30000 })).toBe(expected);
 	});
 
 	it("matches Node interpreted", () => {
-		expect(runToStdout(interpreted, { timeoutMs: 30000 })).toBe(expected);
+		expect(runToStdout(pair.interpreted, { timeoutMs: 30000 })).toBe(expected);
 	});
 
 	it("matches Node under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
-		expect(runToStdout(compiled, { env: STRESS_ENV, timeoutMs: 60000 })).toBe(expected);
+		expect(runToStdout(pair.compiled, { env: STRESS_ENV, timeoutMs: 60000 })).toBe(
+			expected,
+		);
 	});
 });
 

@@ -3980,6 +3980,13 @@ function buildHostInstalls(
 			usedExports.every(({ name }) => !NODE_FS_FULL_EXPORTS.has(name))
 				? NODE_FS_NAMED_INSTALLER
 				: hostModule.installer;
+		// The full fs installer initializes EventEmitter through node:stream.
+		if (
+			installer === NODE_FS_NAMED_INSTALLER &&
+			usedExports.some(({ name }) => name === "watch" || name === "watchFile")
+		) {
+			installFor(hostInstallerSymbol("node:events"));
+		}
 		installFor(installer).exports.push(...usedExports);
 	}
 

@@ -179,6 +179,18 @@ describe("node host installer link retention", () => {
 		expect(deadPathInstallers).toEqual(hostMainInstallers);
 	});
 
+	it.runIf(process.platform === "darwin")(
+		"links EventEmitter without Node streams for a named file watcher",
+		async () => {
+			const watchInstallers = await installers(
+				"tests/local/node-fs-watch-exhausted.mjs",
+				"node-link-fs-watch",
+			);
+			expect(watchInstallers).toContain("mal_host_install_node_events");
+			expect(watchInstallers).not.toContain("mal_host_install_node_stream");
+		},
+	);
+
 	it("links the Buffer global without installing the node:buffer module", () => {
 		expect(bufferInstallers).toContain(BUFFER_INSTALLER_SYMBOL);
 		if (process.platform === "linux") {

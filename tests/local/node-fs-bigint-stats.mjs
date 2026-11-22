@@ -5,7 +5,6 @@ import {
 	lstatSync,
 	mkdtempSync,
 	openSync,
-	promises,
 	rmSync,
 	stat,
 	statSync,
@@ -13,6 +12,7 @@ import {
 	watchFile,
 	writeFileSync,
 } from "node:fs";
+import * as promises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 

@@ -7013,9 +7013,15 @@ static MalValue node_fs_watcher_unref(
 
 static MalValue node_fs_watch_new_emitter(MalVm *vm, MalValue *proto_slot, const char *const *methods,
     const MalNativeFunctionCallback *callbacks, usize method_count) {
+    MalValue emitter_proto = vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE];
+    if (!mal_value_is_object(emitter_proto)) {
+        node_fs_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, (const byte *) "node:events is unavailable",
+            (const byte *) "ERR_INTERNAL_ASSERTION");
+        return mal_value_new_undefined();
+    }
     if (!mal_value_is_object(*proto_slot)) {
         *proto_slot = mal_value_from_object(mal_object_new(&vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE])));
+            mal_value_to_object(emitter_proto)));
         for (usize i = 0; i < method_count; i++) {
             mal_intrinsic_define_method_n(vm, mal_value_to_object(*proto_slot), (const byte *) methods[i],
                 0, callbacks[i]);
@@ -7030,11 +7036,6 @@ static MalValue node_fs_watch_new_emitter(MalVm *vm, MalValue *proto_slot, const
 }
 
 static bool node_fs_watch_install(MalVm *vm) {
-    if (!mal_value_is_object(vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE])) {
-        node_fs_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, (const byte *) "node:events is unavailable",
-            (const byte *) "ERR_INTERNAL_ASSERTION");
-        return false;
-    }
     if (!node_fs_watch_installed) {
         mal_gc_register_root_source(node_fs_watch_scan_roots, nullptr);
         node_fs_watch_installed = true;
