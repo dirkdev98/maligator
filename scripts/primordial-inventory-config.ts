@@ -35,7 +35,8 @@ export function primordialInventoryConfig(mode: string) {
 	return resolveBuildConfig({
 		engine: {
 			primordials: mode === "mutable" ? "mutable" : "locked",
-			eval: enabled && mode !== "no-eval",
+			// Runtime eval needs the RegExp engine, so the no-regexp inventory has no eval.
+			eval: enabled && mode !== "no-eval" && mode !== "no-regexp",
 			realms: enabled && mode !== "no-realms",
 			regexp: enabled && mode !== "no-regexp",
 			temporal: enabled && mode !== "no-temporal",
