@@ -57018,6 +57018,22 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]]\",\"setTimeout\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.[[Prototype]].prototype",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]]",
+				"MAL_INTRINSIC_NODE_NET_SOCKET_PROTOTYPE"
+			],
+			"key": "setTimeout",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]]\",\"setNoDelay\"]",
 			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]]",
 			"ownerPaths": [
@@ -57232,6 +57248,30 @@
 			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setNoDelay",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setNoDelay"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout"
 			],
 			"key": "name",
 			"kind": "data",
@@ -172080,6 +172120,34 @@
 			"kind": "construct",
 			"operations": [
 				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setNoDelay"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -310063,6 +310131,12 @@
 			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setNoDelay",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setNoDelay"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].setTimeout"
 			]
 		},
 		{
