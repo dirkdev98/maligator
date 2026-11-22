@@ -114,6 +114,26 @@ describe("node:tls socket wrapping", () => {
 		}
 	});
 	it.each([
+		["configured-host", "NODE TLS PASS"],
+		["reject-configured-host", "NODE TLS HOST REJECTED"],
+	])(
+		"uses the configured verification name on a wrapped socket (%s)",
+		async (mode, expected) => {
+			expect(
+				await run(
+					process.execPath,
+					false,
+					false,
+					["tests/local/node-tls-socket.cjs"],
+					mode,
+				),
+			).toContain(expected);
+			for (const binary of binaries) {
+				expect(await run(binary, false, false, [], mode)).toContain(expected);
+			}
+		},
+	);
+	it.each([
 		["queued", "encrypts writes queued before the handshake"],
 		["retry", "retries resolved addresses with a fresh TLS session"],
 		["early-end", "finishes the handshake before an empty early end"],

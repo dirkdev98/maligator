@@ -225,12 +225,13 @@ static MalValue node_tls_connect(
         mal_gc_unroot(&root);
         return mal_value_new_undefined();
     }
-    if (mal_value_is_undefined(roots[2])
-        && !node_tls_get(vm, direct ? roots[0] : roots[1], "host", &roots[2])) {
+    if ((!mal_value_is_truthy(roots[2]) && !node_tls_get(vm, roots[0], "host", &roots[2]))
+        || (!direct && !mal_value_is_truthy(roots[2])
+            && !node_tls_get(vm, roots[1], "host", &roots[2]))) {
         mal_gc_unroot(&root);
         return mal_value_new_undefined();
     }
-    if (direct && mal_value_is_undefined(roots[2]))
+    if (!mal_value_is_truthy(roots[2]))
         roots[2] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "localhost"));
     if (!mal_node_tls_private_key(vm, roots[0], &roots[9]) || !node_tls_reject_unsupported(vm, roots[0])
         || !node_tls_alpn_protocol(vm, roots[5], &roots[7])) {

@@ -4,10 +4,13 @@ const { AsyncLocalStorage } = require("node:async_hooks");
 
 const storage = new AsyncLocalStorage();
 const mode = process.env.TLS_MODE || "wrapped";
+const rejectsHost = mode === "reject-configured-host";
 
 function connect(raw) {
 	const options = {
-		servername: "localhost",
+		...(mode === "configured-host" || rejectsHost
+			? { host: rejectsHost ? "other.example.invalid" : "localhost" }
+			: { servername: "localhost" }),
 		rejectUnauthorized: process.env.TLS_INSECURE !== "1",
 	};
 	if (raw) options.socket = raw;
@@ -36,6 +39,7 @@ function connect(raw) {
 	const socket = storage.run("tls", () => tls.connect(options));
 	const chunks = [];
 	let secure = false;
+	let rejected = false;
 	socket.on("secureConnect", () => {
 		if (storage.getStore() !== "tls") {
 			throw new Error("TLS connect context was not restored");
@@ -51,9 +55,19 @@ function connect(raw) {
 		chunks.push(chunk);
 	});
 	socket.on("error", (error) => {
+		if (rejectsHost) {
+			rejected = true;
+			return;
+		}
 		throw error;
 	});
 	socket.on("close", (hadError) => {
+		if (rejectsHost) {
+			if (!hadError || !rejected || secure || chunks.length !== 0)
+				throw new Error("TLS accepted a certificate for a different hostname");
+			console.log("NODE TLS HOST REJECTED");
+			return;
+		}
 		if (storage.getStore() !== (raw ? "raw" : "tls")) {
 			throw new Error(`socket close context was not restored: ${storage.getStore()}`);
 		}
@@ -73,18 +87,20 @@ function connect(raw) {
 	if (mode === "cancel") socket.destroy();
 }
 
-if (mode !== "wrapped") connect();
+if (mode !== "wrapped" && mode !== "configured-host" && !rejectsHost) connect();
 else {
 	const raw = storage.run("raw", () =>
 		net.connect(Number(process.env.TLS_PORT), "127.0.0.1"),
 	);
-	raw.host = "localhost";
-	raw.on("error", (error) => {
+	raw.host = mode === "configured-host" ? "other.example.invalid" : "localhost";
+	const onRawError = (error) => {
 		throw error;
-	});
+	};
+	raw.on("error", onRawError);
 	raw.on("connect", () => {
 		if (storage.getStore() !== "raw")
 			throw new Error("raw socket context was not restored");
+		raw.off("error", onRawError);
 		connect(raw);
 	});
 }
