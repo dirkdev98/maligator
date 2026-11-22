@@ -18,8 +18,8 @@ import {
 	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 	CORE_KNOWN_OWN_DATA_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
+import type { CoreKnownOwnSlotCandidate } from "./core-internal-attributes.ts";
 import { coreAttributeValuesEqual } from "./core-ir-equality.ts";
-import type { CoreKnownOwnSlotCandidate } from "./core-ir-shape-provenance.ts";
 import { coreFactId } from "./core-ir.ts";
 import type {
 	AppendCoreInstructionOptions,

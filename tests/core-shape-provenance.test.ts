@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import {
+	coreKnownOwnSlotFromAttribute,
+	coreShapeCaseCandidatesFromAttribute,
+} from "../src/compiler/core/core-internal-attributes.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { analyzeCoreProvenance } from "../src/compiler/core/core-ir-provenance.ts";
 import {
 	CORE_SHAPE_CANDIDATES_OPAQUE,
 	analyzeCoreShapeProvenance,
 	coreExactShapeOwnSlotFromAttribute,
-	coreKnownOwnSlotFromAttribute,
-	coreShapeCaseCandidatesFromAttribute,
 } from "../src/compiler/core/core-ir-shape-provenance.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";

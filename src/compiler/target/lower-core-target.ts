@@ -16,6 +16,8 @@ import {
 	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
 	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 	CORE_PRIMORDIAL_BINDING_TWIN_ATTRIBUTE,
+	coreKnownOwnSlotFromAttribute,
+	coreShapeCaseCandidatesFromAttribute,
 } from "../core/core-internal-attributes.ts";
 import { coreInstructionEffects } from "../core/core-ir-opcodes.ts";
 import type {
@@ -24,10 +26,6 @@ import type {
 	CorePlanRepresentation,
 	CoreRecordUses,
 } from "../core/core-ir-regions.ts";
-import {
-	coreKnownOwnSlotFromAttribute,
-	coreShapeCaseCandidatesFromAttribute,
-} from "../core/core-ir-shape-provenance.ts";
 import { coreBlockId, coreFunctionId, coreInstructionId } from "../core/core-ir.ts";
 import type {
 	CoreBlockId,

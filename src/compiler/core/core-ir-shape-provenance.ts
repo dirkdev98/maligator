@@ -1,6 +1,11 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import {
+	CORE_SHAPE_ORIGIN_CAP,
+	coreShapeCaseCandidatesFromAttribute,
+} from "./core-internal-attributes.ts";
+import type { CoreShapeCaseCandidate } from "./core-internal-attributes.ts";
+import {
 	CORE_LOCAL_FACT_BUNDLE_ANALYSIS,
 	analyzeCoreProvenance,
 } from "./core-ir-provenance.ts";
@@ -18,24 +23,8 @@ import type {
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreProgram } from "./core-store.ts";
 
-export const CORE_SHAPE_ORIGIN_CAP = 4;
 export const CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT = "exact-shape-own-slot-effects";
 export const CORE_EXACT_OWN_SLOT_ATTRIBUTE = "exactOwnSlot";
-
-export interface CoreKnownOwnSlotCandidate {
-	readonly shapeFunctionIndex: number;
-	readonly shapeInstruction: CoreInstructionId;
-	readonly slot: number;
-}
-
-export interface CoreKnownOwnSlot {
-	readonly candidates: ReadonlyArray<CoreKnownOwnSlotCandidate>;
-}
-
-export interface CoreShapeCaseCandidate {
-	readonly shapeFunctionIndex: number;
-	readonly shapeInstruction: CoreInstructionId;
-}
 
 export interface CoreExactShapeOwnSlot {
 	readonly slot: number;
@@ -49,84 +38,6 @@ function nonnegativeInteger(value: unknown): value is number {
 		value >= 0 &&
 		!Object.is(value, -0)
 	);
-}
-
-export function coreShapeCaseCandidatesFromAttribute(
-	value: unknown,
-): ReadonlyArray<CoreShapeCaseCandidate> | undefined {
-	if (!Array.isArray(value) || value.length < 1 || value.length > CORE_SHAPE_ORIGIN_CAP)
-		return undefined;
-	const candidates: Array<CoreShapeCaseCandidate> = [];
-	for (const entry of value as ReadonlyArray<unknown>) {
-		if (entry === null || typeof entry !== "object" || Array.isArray(entry))
-			return undefined;
-		const candidate = entry as Record<string, unknown>;
-		if (
-			Object.keys(candidate).length !== 2 ||
-			!nonnegativeInteger(candidate.shapeFunctionIndex) ||
-			!nonnegativeInteger(candidate.shapeInstruction)
-		)
-			return undefined;
-		if (
-			candidates.some(
-				(existing) =>
-					existing.shapeFunctionIndex === candidate.shapeFunctionIndex &&
-					existing.shapeInstruction === candidate.shapeInstruction,
-			)
-		)
-			return undefined;
-		candidates.push(
-			Object.freeze({
-				shapeFunctionIndex: candidate.shapeFunctionIndex,
-				shapeInstruction: candidate.shapeInstruction as CoreInstructionId,
-			}),
-		);
-	}
-	return Object.freeze(candidates);
-}
-
-export function coreKnownOwnSlotFromAttribute(
-	value: unknown,
-): CoreKnownOwnSlot | undefined {
-	if (value === null || typeof value !== "object" || Array.isArray(value))
-		return undefined;
-	const record = value as Record<string, unknown>;
-	if (
-		Object.keys(record).length !== 1 ||
-		!Array.isArray(record.candidates) ||
-		record.candidates.length < 1 ||
-		record.candidates.length > CORE_SHAPE_ORIGIN_CAP
-	)
-		return undefined;
-	const candidates: Array<CoreKnownOwnSlotCandidate> = [];
-	for (const entry of record.candidates as ReadonlyArray<unknown>) {
-		if (entry === null || typeof entry !== "object" || Array.isArray(entry))
-			return undefined;
-		const candidate = entry as Record<string, unknown>;
-		if (
-			Object.keys(candidate).length !== 3 ||
-			!nonnegativeInteger(candidate.shapeFunctionIndex) ||
-			!nonnegativeInteger(candidate.shapeInstruction) ||
-			!nonnegativeInteger(candidate.slot)
-		)
-			return undefined;
-		if (
-			candidates.some(
-				(existing) =>
-					existing.shapeFunctionIndex === candidate.shapeFunctionIndex &&
-					existing.shapeInstruction === candidate.shapeInstruction,
-			)
-		)
-			return undefined;
-		candidates.push(
-			Object.freeze({
-				shapeFunctionIndex: candidate.shapeFunctionIndex,
-				shapeInstruction: candidate.shapeInstruction as CoreInstructionId,
-				slot: candidate.slot,
-			}),
-		);
-	}
-	return Object.freeze({ candidates: Object.freeze(candidates) });
 }
 
 export function coreExactShapeOwnSlotFromAttribute(
