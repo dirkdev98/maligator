@@ -2,6 +2,7 @@
 // Private transport lets initialization work with a hardened application global.
 // Compiled sources retain debug positions for dynamically created stack frames.
 
+import { canonicalNodeHostModuleId, HOST_MODULES } from "../frontend/host-modules.ts";
 import {
 	compilePreparedSourceToBuffer,
 	prepareSourceForCompilation,
@@ -110,7 +111,16 @@ export function __compile(
 	inFieldInitializer?: boolean,
 	directEvalContext?: string,
 	script?: boolean,
-): Uint8Array {
+	builtinNamespace?: boolean,
+): Uint8Array | [string, Array<string> | undefined] | undefined {
+	// The runtime uses the same export surface as the static linker.
+	if (builtinNamespace) {
+		const id = canonicalNodeHostModuleId(source);
+		if (id === undefined) return undefined;
+		const host = HOST_MODULES.get(id);
+		if (host === undefined) return [id, undefined];
+		return [id, [...host.named, ...(host.hasDefault ? ["default"] : [])].sort()];
+	}
 	try {
 		// Wire images are immutable compiler output; execution still creates fresh
 		// functions, bindings, environments, and completion state after every hit.

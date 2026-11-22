@@ -1,8 +1,15 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "ascii.h"
+#include "builtin_promise.h"
 #include "compiler_native.h"
 #include "eval_component.h"
+#include "microtask.h"
+#include "module_namespace_object.h"
+#include "runtime/node_module.h"
+#include "utf8.h"
 #include "vm_load.h"
 #include "vm_ops.h"
 
@@ -135,9 +142,215 @@ static i32 eval_compiler_splice(
     return entry;
 }
 
+static MalValue eval_intern_builtin_namespace(MalVm *vm, MalValue id, MalValue namespace) {
+    MalValue *builtins = &vm->intrinsics[MAL_INTRINSIC_NODE_BUILTIN_MODULES];
+    if (mal_value_is_undefined(*builtins)) {
+        if (mal_value_is_undefined(namespace)) return namespace;
+        *builtins = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    }
+    MalObject *modules = mal_value_to_object(*builtins);
+    const byte *registry_name = (const byte *) "builtinNamespaces";
+    MalPropertyLookup registry = mal_object_get_own_static(vm, modules, registry_name);
+    MalObject *cache;
+    if (registry.present) {
+        cache = mal_value_to_object(registry.desc.value);
+    } else {
+        if (mal_value_is_undefined(namespace)) return namespace;
+        cache = mal_object_new(&vm->heap, nullptr);
+        MalValue value = mal_value_from_object(cache);
+        MalRootSpan span;
+        mal_gc_root(&span, &value, 1);
+        mal_intrinsic_define_data(vm, modules, registry_name, value, MAL_PROPERTY_NONE);
+        mal_gc_unroot(&span);
+    }
+    MalKey key;
+    if (!mal_vm_value_to_property_key(vm, id, &key)) return mal_value_new_undefined();
+    MalPropertyLookup found = mal_object_get_own(cache, key);
+    if (found.present) return found.desc.value;
+    if (!mal_value_is_undefined(namespace)) {
+        MalPropertyDesc desc = {.value = namespace, .flags = MAL_PROPERTY_NONE};
+        mal_object_define_own(cache, key, &desc);
+    }
+    return namespace;
+}
+
+static MalValue eval_native_builtin_namespace(MalVm *vm, MalValue module, MalArrayObject *names) {
+    i32 base = vm->runtime_image->global_count;
+    u32 length = mal_array_object_length(names);
+    if (length > (u32) (INT32_MAX - base)) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    i32 count = (i32) length;
+    MalModuleNamespaceExport *exports = count > 0 ? malloc(sizeof(*exports) * (usize) count) : nullptr;
+    if (count > 0 && exports == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    for (i32 index = 0; index < count; index++) {
+        MalValue name;
+        if (!mal_array_object_dense_get(names, (u32) index, &name) || !mal_value_is_string(name)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid builtin export name");
+            free(exports);
+            return mal_value_new_undefined();
+        }
+        exports[index].name = mal_value_to_string(name);
+    }
+    // A namespace uses live global cells. Reserve them through the image splicer
+    // so every realm and the collector see the same global layout.
+    MalRuntimeImage cells = {.global_count = count};
+    if (mal_vm_splice_runtime_image(vm, &cells) < 0) {
+        free(exports);
+        return mal_value_new_undefined();
+    }
+    for (i32 index = 0; index < count; index++) {
+        MalString *name = exports[index].name;
+        i32 slot = base + index;
+        exports[index].slot = slot;
+        if (mal_string_equals_ascii(name, "default")) {
+            vm->globals[slot] = module;
+            continue;
+        }
+        MalKey key;
+        if (!mal_vm_value_to_property_key(vm, mal_value_from_string(name), &key)) {
+            free(exports);
+            return mal_value_new_undefined();
+        }
+        // Like the host installer, snapshot only data properties. Some exports
+        // such as process.on live on the builtin object's prototype.
+        for (MalObject *object = mal_value_to_object(module); object != nullptr;
+                object = mal_object_prototype(object)) {
+            MalPropertyLookup found = mal_object_get_own(object, key);
+            if (!found.present) continue;
+            if ((found.desc.flags & MAL_PROPERTY_ACCESSOR) == 0) vm->globals[slot] = found.desc.value;
+            break;
+        }
+    }
+    return mal_value_from_module_namespace_object(
+        mal_module_namespace_object_new(&vm->heap, exports, count));
+}
+
+static void eval_import_missing(MalVm *vm, MalValue specifier) {
+    usize length;
+    char *name = (char *) mal_string_to_utf8(mal_value_to_string(specifier), &length);
+    if (name == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return;
+    }
+    char message[1024];
+    const char *code = "ERR_MODULE_NOT_FOUND";
+    if (strncmp(name, "node:", 5) == 0) {
+        code = "ERR_UNKNOWN_BUILTIN_MODULE";
+        snprintf(message, sizeof message, "No such built-in module: %s", name);
+    } else {
+        const char *entry = vm->runtime_image->entry_path;
+        const bool path = name[0] == '/' || strncmp(name, "./", 2) == 0 ||
+            strncmp(name, "../", 3) == 0 || strncmp(name, "file:", 5) == 0;
+        const char *end = path ? nullptr : strchr(name, '/');
+        if (name[0] == '@' && end != nullptr) end = strchr(end + 1, '/');
+        snprintf(message, sizeof message, "Cannot find %s '%.*s' imported from %s",
+            path ? "module" : "package", (i32) (end == nullptr ? length : (usize) (end - name)),
+            name, entry == nullptr ? "runtime-compiled code" : entry);
+    }
+    free(name);
+    mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, message, code);
+}
+
+static MalValue eval_import_builtin_job(MalVm *vm, MalValue receiver, const MalValue *args,
+    i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target;
+    enum { SPECIFIER, TYPE, PROMISE, METADATA, NAMESPACE, MODULE, ROOT_COUNT };
+    MalNativeFunctionObject *job = mal_value_to_native_function_object(callee);
+    MalValue roots[ROOT_COUNT] = {
+        mal_native_function_object_get_slot(job, SPECIFIER),
+        mal_native_function_object_get_slot(job, TYPE),
+        mal_native_function_object_get_slot(job, PROMISE),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, ROOT_COUNT);
+    mal_gc_native_rooted_begin(vm);
+
+    MalValue undefined = mal_value_new_undefined();
+    // The eighth compiler argument queries builtin metadata instead of compiling source.
+    MalValue query[] = {roots[SPECIFIER], undefined, undefined, undefined,
+        undefined, undefined, undefined, mal_value_new_boolean(true)};
+    MalCompletion metadata = mal_vm_call_value(
+        vm, vm->compiler_fn, undefined, query, countof(query));
+    if (metadata.kind == MAL_COMPLETION_THROW) {
+        vm->completion = metadata;
+        goto done;
+    }
+    roots[METADATA] = metadata.value;
+    if (mal_value_is_undefined(roots[METADATA]) || vm->node_builtin_loader == nullptr) {
+        eval_import_missing(vm, roots[SPECIFIER]);
+        goto done;
+    }
+    MalValue id, names;
+    if (!mal_value_is_array_object(roots[METADATA]) ||
+        !mal_array_object_dense_pair(mal_value_to_array_object(roots[METADATA]), &id, &names) ||
+        !mal_value_is_string(id) ||
+        (!mal_value_is_undefined(names) && !mal_value_is_array_object(names))) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid builtin namespace metadata");
+        goto done;
+    }
+    if (!mal_value_is_undefined(roots[TYPE])) {
+        bool json = mal_string_equals_ascii(mal_value_to_string(roots[TYPE]), "json");
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            json ? "The builtin module is not of type \"json\"" : "Unsupported builtin import type",
+            json ? "ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE" : "ERR_IMPORT_ATTRIBUTE_UNSUPPORTED");
+        goto done;
+    }
+    roots[NAMESPACE] = eval_intern_builtin_namespace(vm, id, undefined);
+    if (vm->completion.kind == MAL_COMPLETION_THROW || !mal_value_is_undefined(roots[NAMESPACE]))
+        goto done;
+    // Builtin installers run with native GC suppression when called through getBuiltinModule.
+    mal_gc_native_rooted_end(vm);
+    roots[MODULE] = vm->node_builtin_loader(vm, mal_value_to_string(id));
+    mal_gc_native_rooted_begin(vm);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    if (mal_value_is_undefined(roots[MODULE])) {
+        eval_import_missing(vm, roots[SPECIFIER]);
+        goto done;
+    }
+    if (mal_value_is_undefined(names)) {
+        // A source provider publishes its ordinary ESM namespace during evaluation.
+        roots[NAMESPACE] = eval_intern_builtin_namespace(vm, id, undefined);
+        if (mal_value_is_undefined(roots[NAMESPACE])) eval_import_missing(vm, roots[SPECIFIER]);
+    } else {
+        roots[NAMESPACE] = eval_native_builtin_namespace(vm, roots[MODULE],
+            mal_value_to_array_object(names));
+        if (vm->completion.kind == MAL_COMPLETION_NORMAL)
+            roots[NAMESPACE] = eval_intern_builtin_namespace(vm, id, roots[NAMESPACE]);
+    }
+
+done:;
+    bool rejected = vm->completion.kind == MAL_COMPLETION_THROW;
+    if (rejected) {
+        roots[NAMESPACE] = vm->completion.value;
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = undefined};
+    }
+    mal_promise_settle_direct(vm, roots[PROMISE], vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR],
+        rejected, roots[NAMESPACE]);
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&span);
+    return undefined;
+}
+
+static void eval_import_builtin(MalVm *vm, MalValue specifier, MalValue type, MalValue promise) {
+    MalValue captured[] = {specifier, type, promise};
+    MalValue job = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, ""), eval_import_builtin_job, captured, countof(captured)));
+    mal_vm_enqueue_reaction_job(vm, job, false, mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined());
+}
+
 static const MalEvalCompiler eval_compiler = {
     .install = eval_compiler_install,
     .splice = eval_compiler_splice,
+    .intern_builtin_namespace = eval_intern_builtin_namespace,
+    .import_builtin = eval_import_builtin,
 };
 
 // Spliced images run no host manifest, so the link that adds this component also

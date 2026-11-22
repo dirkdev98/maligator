@@ -26,6 +26,10 @@ typedef struct MalEvalCompiler {
      */
     i32 (*splice)(MalVm *vm, const u8 *bytes, usize length, bool *splice_failed,
                   bool *stateless);
+    /** Return the realm's existing namespace or publish a compiled one. */
+    MalValue (*intern_builtin_namespace)(MalVm *vm, MalValue id, MalValue namespace);
+    /** Resolve and evaluate a runtime-compiled import in a promise job. */
+    void (*import_builtin)(MalVm *vm, MalValue specifier, MalValue type, MalValue promise);
 } MalEvalCompiler;
 
 /** The linked eval component, or null in an executable without one. */

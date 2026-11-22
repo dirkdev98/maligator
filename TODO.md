@@ -488,11 +488,6 @@ distinct when measuring text work.
 
 ## Eval correctness
 
-- [ ] Resolve dynamic `import()` of builtins inside runtime-compiled code. Eval-enabled
-      images retain source builtin providers, so `createRequire` and
-      `process.getBuiltinModule` load `node:test`, but `import()` from generated code has no
-      runtime namespace resolver.
-
 - [ ] A static `require("x")` ignores a reassigned `require` binding and loads the real
       module, where Node calls the replacement.
 

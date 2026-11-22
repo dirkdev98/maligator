@@ -567,13 +567,13 @@ static MalValue mal_dynamic_import_evaluate(MalVm *vm, MalValue receiver,
     i32 cells[4];
     for (i32 i = 0; i < 4; i++) cells[i] = mal_value_to_i32(mal_native_function_object_get_slot(function, i + 3));
     mal_gc_native_rooted_begin(vm);
-    mal_promise_create_resolving(vm, roots[0], &roots[3], &roots[4]);
     if (cells[0] < 0) {
-        MalCompletion completion = mal_vm_call_value(vm, roots[3], mal_value_new_undefined(), &roots[1], 1);
-        if (completion.kind != MAL_COMPLETION_NORMAL) vm->completion = completion;
+        mal_promise_settle_direct(vm, roots[0], vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR],
+            false, roots[1]);
     } else {
         roots[2] = mal_module_evaluate(vm, roots[6], cells[0], cells[1], cells[2], cells[3], -1);
         if (vm->completion.kind == MAL_COMPLETION_NORMAL) {
+            mal_promise_create_resolving(vm, roots[0], &roots[3], &roots[4]);
             roots[5] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
                 &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
                 mal_intrinsic_ascii(vm, ""), mal_dynamic_import_fulfill_module, &roots[1], 1));
@@ -592,7 +592,7 @@ static MalValue mal_dynamic_import_evaluate(MalVm *vm, MalValue receiver,
 
 /* EvaluateImportCall steps 7-9: options may carry only string-valued, supported
  * attributes; every failure rejects the import's promise. */
-static bool mal_dynamic_import_options(MalVm *vm, MalValue options) {
+static bool mal_dynamic_import_options(MalVm *vm, MalValue options, MalValue *type) {
     if (mal_value_is_undefined(options)) return true;
     if (!mal_value_is_object(options)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -630,7 +630,11 @@ static bool mal_dynamic_import_options(MalVm *vm, MalValue options) {
                 "Import attribute values must be strings");
             goto done;
         }
-        if (!mal_string_equals_ascii(mal_value_to_string(roots[4]), "type")) supported = false;
+        if (mal_string_equals_ascii(mal_value_to_string(roots[4]), "type")) {
+            *type = roots[3];
+        } else {
+            supported = false;
+        }
     }
     if (!supported) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
@@ -645,17 +649,27 @@ done:
 
 static MalValue mal_builtin_dynamic_import(MalVm *vm, MalValue this_value, const MalValue *args,
     i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) this_value; (void) new_target; (void) callee;
-    MalValue roots[6] = {mal_dynamic_import_promise(vm), mal_value_new_undefined(),
-        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
+    (void) new_target; (void) callee;
+    const MalEvalCompiler *compiler = mal_eval_compiler;
+    if (arg_count == 1 && mal_value_is_module_namespace_object(this_value)) {
+        return compiler == nullptr ? this_value
+            : compiler->intern_builtin_namespace(vm, args[0], this_value);
+    }
+    MalValue roots[3] = {mal_dynamic_import_promise(vm), mal_value_new_undefined(),
         mal_value_new_undefined()};
     MalRootSpan span;
-    mal_gc_root(&span, roots, 6);
+    mal_gc_root(&span, roots, countof(roots));
     MalString *specifier_string = nullptr;
     if (!mal_vm_to_string(vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &specifier_string))
         goto reject_completion;
-    if (!mal_dynamic_import_options(vm, arg_count > 1 ? args[1] : mal_value_new_undefined()))
+    roots[1] = mal_value_from_string(specifier_string);
+    if (!mal_dynamic_import_options(
+            vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &roots[2]))
         goto reject_completion;
+    if (arg_count == 2 && compiler != nullptr) {
+        compiler->import_builtin(vm, roots[1], roots[2], roots[0]);
+        goto done;
+    }
     /* After the specifier and options, each target has init, namespace, status, error,
      * record and evaluation-context cells. */
     i32 target = 2;
@@ -690,16 +704,14 @@ static MalValue mal_builtin_dynamic_import(MalVm *vm, MalValue this_value, const
     /* Evaluation starts after the current module's DFS and synchronous body have completed. */
     mal_vm_enqueue_reaction_job(vm, roots[2], false, mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined());
-    MalValue result = roots[0];
-    mal_gc_unroot(&span);
-    return result;
-reject_completion:;
+    goto done;
+reject_completion:
     roots[1] = vm->completion.value;
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
     mal_promise_reject(vm, mal_value_to_promise_object(roots[0]), roots[1]);
-    result = roots[0];
+done:
     mal_gc_unroot(&span);
-    return result;
+    return roots[0];
 }
 
 static MalValue mal_builtin_configure_deferred_namespace(

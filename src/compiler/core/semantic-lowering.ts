@@ -774,7 +774,6 @@ const compilerPrivateIntrinsics = new Set<string>([
 	"__attachRequireTable",
 	"__createImportMetaResolve",
 	"__directEval",
-	"__dynamicImport",
 	"__configureDeferredNamespace",
 	"__evaluateModuleSync",
 	"__newDisposeCapability",
@@ -1101,9 +1100,7 @@ export function constructSemanticProgramCore(
 	program.commonJsExportNames = linkage.commonJsExportNames;
 	// Eval-generated images use the application's realm without running installers.
 	// Install every native host global before executing an eval-enabled application.
-	const runtimeEval =
-		graph?.execution?.target.platform !== "wasi" &&
-		program.facts.world.eval === "runtime";
+	const runtimeEval = nativeRuntimeEval(program);
 	program.hostProcess =
 		runtimeEval || linkage.hostProcess !== undefined
 			? { installer: PROCESS_INSTALLER_SYMBOL, retained: runtimeEval }
@@ -1173,6 +1170,13 @@ export function constructSemanticProgramCore(
 	if (debugEnabled) log.debug(formatCoreProgram(compilation.program));
 	// Optimization verifies every constructed or cached program before its first pass.
 	return compilation;
+}
+
+function nativeRuntimeEval(program: CoreFrontendContext): boolean {
+	return (
+		program.semantic.graph?.execution?.target.platform !== "wasi" &&
+		program.facts.world.eval === "runtime"
+	);
 }
 
 /** Whether reachable code can call `process.getBuiltinModule`. */
@@ -15927,7 +15931,12 @@ function emitDynamicImportCall(
 		intrinsic: "__dynamicImport",
 	});
 	const thisRegister = compileUndefined(fn, cursor);
-	const targetArguments = emitTarget(target.path, target.failure);
+	// A runtime-compiled script inherits the isolate's builtin loader. It has
+	// no local module graph, so it sends only the specifier and options.
+	const targetArguments =
+		program.evalCompletion && target.failure === undefined
+			? []
+			: emitTarget(target.path, target.failure);
 	const candidateArguments = candidates.flatMap((candidate) => [
 		candidate.form === "source"
 			? compileStaticString(program, fn, cursor, candidate.specifier)
@@ -17524,13 +17533,17 @@ function emitRequiredEsmValue(
 ): number {
 	const exports = program.moduleNamespaces.get(modulePath) ?? [];
 	const override = exports.find((entry) => entry.name === "module.exports");
-	return override === undefined
-		? emitNamespaceObjectRegister(program, fn, block, exports, modulePath)
-		: loadRegisterFromLocation(
-				fn,
-				block,
-				getOrCreateBindingLocation(program, fn, override.exporter),
-			);
+	if (override === undefined)
+		return emitNamespaceObjectRegister(program, fn, block, exports, modulePath);
+	// A source builtin can publish a CommonJS override and still needs its
+	// live ESM namespace when the runtime loader first evaluates its provider.
+	if (nativeRuntimeEval(program) && canonicalNodeHostModuleId(modulePath) === modulePath)
+		emitNamespaceObjectRegister(program, fn, block, exports, modulePath);
+	return loadRegisterFromLocation(
+		fn,
+		block,
+		getOrCreateBindingLocation(program, fn, override.exporter),
+	);
 }
 
 function emitNamespaceObjectRegister(
@@ -17566,6 +17579,27 @@ function emitNamespaceObjectRegister(
 		exports: entries,
 	});
 
+	if (
+		modulePath !== undefined &&
+		nativeRuntimeEval(program) &&
+		canonicalNodeHostModuleId(modulePath) === modulePath
+	) {
+		const cursor = { block };
+		const callee = nextCoreVariable(fn);
+		block.emitter.emit({
+			type: "loadIntrinsic",
+			registers: [callee],
+			intrinsic: "__dynamicImport",
+		});
+		const specifier = compileStaticString(program, fn, cursor, modulePath);
+		const canonical = nextCoreVariable(fn);
+		// Supply a namespace receiver to intern the compiled instance synchronously.
+		block.emitter.emit({
+			type: "call",
+			registers: [canonical, callee, namespace, specifier],
+		});
+		return canonical;
+	}
 	return namespace;
 }
 
