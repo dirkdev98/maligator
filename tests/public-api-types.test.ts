@@ -318,5 +318,5 @@ console.log(assetPath, home?.text(), logoBytes, logoMeta, frontend, files, port)
 		} finally {
 			rmSync(project, { recursive: true, force: true });
 		}
-	});
+	}, 15_000);
 });

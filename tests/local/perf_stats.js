@@ -94,16 +94,17 @@ for (let i = 36; i < weakKeys.length; i++) {
 		throw new Error("broken weak demotion");
 }
 
+// The empty shape can already have an index by the time startup counters are reset.
 const fanoutKeys = [];
 for (let i = 0; i < 160; i++) {
 	const key = ["fanout", i].join("-");
 	fanoutKeys.push(key);
-	const object = {};
+	const object = { fanoutAnchor: true };
 	object[key] = i;
 }
 for (let i = 0; i < fanoutKeys.length; i++) {
 	const equalKey = ["fanout", i].join("-");
-	const object = {};
+	const object = { fanoutAnchor: true };
 	object[equalKey] = i;
 	if (object[fanoutKeys[i]] !== i) throw new Error("broken indexed shape transition");
 }

@@ -1,4 +1,5 @@
-import { appendFileSync, createReadStream } from "node:fs";
+import { on } from "node:events";
+import { appendFileSync, createReadStream, watch } from "node:fs";
 import * as fs from "node:fs/promises";
 
 async function bytes(stream) {
@@ -54,6 +55,16 @@ async function writerScenario() {
 	};
 }
 
+async function* watchEvents(recursive) {
+	const watcher = watch("watched", { recursive });
+	try {
+		// Recursive fs/promises.watch only listens while next() is pending on Linux.
+		yield* on(watcher, "change");
+	} finally {
+		watcher.close();
+	}
+}
+
 async function watchScenario(recursive) {
 	await fs.mkdir("watched/sub", { recursive: true });
 	const prefix = recursive ? "watched/sub/" : "watched/";
@@ -61,26 +72,26 @@ async function watchScenario(recursive) {
 	const destination = prefix + "renamed.txt";
 	const existing = prefix + "existing.txt";
 	await fs.writeFile(existing, "before");
-	const events = fs.watch("watched", { recursive, signal: AbortSignal.timeout(5000) });
+	const events = watchEvents(recursive);
 	async function observe(kind, expected, change) {
 		let next = events.next();
 		await change();
 		for (;;) {
 			const { done, value } = await next;
 			if (done) throw new Error(`Node watch closed before ${kind} ${expected}`);
-			const path = `watched/${value.filename}`;
+			const [eventType, filename] = value;
+			const path = `watched/${filename}`;
 			if (path === "watched/sub/ignored.txt")
 				throw new Error("Shallow Node watch visited a subdirectory");
 			const type = kind === "modify" ? "change" : "rename";
 			// FSEvents can coalesce a write into the rename notification for its file.
-			if (path === expected && (value.eventType === type || kind === "modify"))
+			if (path === expected && (eventType === type || kind === "modify"))
 				return { kind, path };
 			next = events.next();
 		}
 	}
 	try {
-		// Node can start its OS subscription after next() returns. Wait for a
-		// notification on a separate path before changing the files under test.
+		// FSEvents can begin delivering notifications after watch() returns.
 		const readiness = prefix + "ready.txt";
 		const poke = () => appendFileSync(readiness, "+");
 		const timer = setInterval(poke, 25);

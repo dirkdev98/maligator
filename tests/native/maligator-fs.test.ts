@@ -168,6 +168,7 @@ function memoryRun(binary: string, input: Buffer): { peak: number; output: unkno
 
 it("streams a 16 MiB file with bounded peak resident memory", () => {
 	const input = Buffer.alloc(16 * 1024 * 1024, 7);
+	const controlInput = input.subarray(0, 1);
 	const expected = { length: input.length, checksum: 7 * input.length };
 	for (const binary of backends(pair)) {
 		if (process.env.MAL_ASAN === "1" || process.env.MAL_TSAN === "1") {
@@ -176,12 +177,16 @@ it("streams a 16 MiB file with bounded peak resident memory", () => {
 			expect(JSON.parse(stdout)).toEqual(expected);
 			continue;
 		}
-		const control = memoryRun(binary, input.subarray(0, 1));
-		const streamed = memoryRun(binary, input);
-		expect(streamed.output).toEqual(expected);
+		// Process residency varies between runs, so use the median of paired measurements.
+		const growth = Array.from({ length: 3 }, () => {
+			const control = memoryRun(binary, controlInput);
+			const streamed = memoryRun(binary, input);
+			expect(streamed.output).toEqual(expected);
+			return streamed.peak - control.peak;
+		});
 		expect(
-			streamed.peak - control.peak,
-			`${streamed.peak} B streamed, ${control.peak} B control`,
+			growth.toSorted((left, right) => left - right)[1],
+			`RSS grew by ${growth.join(", ")} bytes across the three control/stream pairs`,
 		).toBeLessThan(input.length / 2);
 	}
 });
