@@ -663,8 +663,9 @@ Use `npm run selfhost:cli -- --cli /absolute/path/maligator --large-inputs-only`
 for the large-input matrix. It exercises source and UTF-8 data reads, development
 and production builds, toolchain-free run and test, dev and test-watch edits,
 cache restoration, profiles and streamed C output. The normal packaged-CLI check
-includes this matrix. Each subprocess and readiness observation has a deadline;
-temporary C dumps are reduced to size and digest evidence.
+includes this matrix and uses native tools for the Express scenario with mutable
+primordials. Subprocesses and readiness checks have deadlines. Reports record the
+size and digest of temporary C dumps.
 
 ## Diagnostic artifacts
 

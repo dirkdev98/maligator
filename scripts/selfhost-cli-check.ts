@@ -153,7 +153,7 @@ const isolatedEnv = {
 	CC: path.join(tools, "cc"),
 	CXX: path.join(tools, "c++"),
 };
-const testOnlyEnv = {
+const toolchainFreeEnv = {
 	PATH: noTools,
 	CC: path.join(noTools, "unavailable-cc"),
 	CXX: path.join(noTools, "unavailable-cxx"),
@@ -538,7 +538,7 @@ test("watch ${label}", async () => {
 		],
 		{
 			cwd: project,
-			env: { ...isolatedEnv, ...testOnlyEnv },
+			env: { ...isolatedEnv, ...toolchainFreeEnv },
 			detached: process.platform !== "win32",
 			stdio: ["ignore", "pipe", "pipe"],
 		},
@@ -1057,7 +1057,7 @@ if (largeInputsOnly) {
 			project,
 			reports,
 			environment: isolatedEnv,
-			toolchainFreeEnvironment: { ...isolatedEnv, ...testOnlyEnv },
+			toolchainFreeEnvironment: { ...isolatedEnv, ...toolchainFreeEnv },
 			invoke: invokeCaptured,
 			checkProfile,
 			checkProfileCommands,
@@ -1134,7 +1134,7 @@ setTimeout(() => {
 	);
 	const developmentRun = invokeCaptured(
 		["run", "--config", developmentConfigPath, "--", "alpha", "two words"],
-		testOnlyEnv,
+		toolchainFreeEnv,
 	);
 	if (
 		developmentRun.status !== 0 ||
@@ -1210,7 +1210,7 @@ try {
 }
 `,
 	);
-	const workerDevelopment = invoke(["run", "--config", workerConfig], testOnlyEnv);
+	const workerDevelopment = invoke(["run", "--config", workerConfig], toolchainFreeEnv);
 	if (workerDevelopment !== "selfhost-workers PASS\n") {
 		throw new Error(`packaged worker development failed:\n${workerDevelopment}`);
 	}
@@ -1225,7 +1225,7 @@ try {
 			try {
 				const workerRun = spawnSync(workerBinary, [], {
 					cwd: project,
-					env: testOnlyEnv,
+					env: toolchainFreeEnv,
 					encoding: "utf8",
 					timeout: 30_000,
 					killSignal: "SIGKILL",
@@ -1410,7 +1410,7 @@ server.listen(0, "127.0.0.1", () => {
 			{
 				cwd: project,
 				detached: process.platform !== "win32",
-				env: mode.sameProcess ? { ...isolatedEnv, ...testOnlyEnv } : isolatedEnv,
+				env: mode.sameProcess ? { ...isolatedEnv, ...toolchainFreeEnv } : isolatedEnv,
 				stdio: ["ignore", "pipe", "pipe"],
 			},
 		);
@@ -1699,7 +1699,7 @@ test("passes a pointer-valued constant through a macro alias", () => {
 			project,
 			reports,
 			environment: isolatedEnv,
-			toolchainFreeEnvironment: { ...isolatedEnv, ...testOnlyEnv },
+			toolchainFreeEnvironment: { ...isolatedEnv, ...toolchainFreeEnv },
 			invoke: invokeCaptured,
 			checkProfile,
 			checkProfileCommands,
@@ -1737,7 +1737,7 @@ ${readFileSync(path.join(project, fixture), "utf-8")}`,
 			["production", "two words", "--flag"],
 			{
 				cwd: project,
-				env: { ...isolatedEnv, ...testOnlyEnv },
+				env: { ...isolatedEnv, ...toolchainFreeEnv },
 				encoding: "utf-8",
 				timeout: 30_000,
 				killSignal: "SIGKILL",
@@ -1885,10 +1885,12 @@ ${readFileSync(path.join(project, fixture), "utf-8")}`,
 			"ok   build embedded the Express public tree in a standalone application",
 		);
 
-		const expressTestOutput = invoke(
-			["test", expressTestPath, "--config", expressConfigPath],
-			testOnlyEnv,
-		);
+		const expressTestOutput = invoke([
+			"test",
+			expressTestPath,
+			"--config",
+			expressConfigPath,
+		]);
 		if (
 			!expressTestOutput.includes("assets-app.test.mjs") ||
 			!expressTestOutput.includes("2 passed, 0 failed")
@@ -1911,7 +1913,10 @@ test("runs one assertion", () => {
 });
 `,
 	);
-	const minimalTest = invokeCaptured(["test", "minimal-runner.test.mts"], testOnlyEnv);
+	const minimalTest = invokeCaptured(
+		["test", "minimal-runner.test.mts"],
+		toolchainFreeEnv,
+	);
 	if (
 		minimalTest.signal !== null ||
 		minimalTest.status !== 0 ||
@@ -1934,7 +1939,7 @@ test("runs one assertion", () => {
 		path.join(project, "minimal-runner.test.mts"),
 		path.join(project, "minimal-runner.test.ts"),
 	);
-	const esmTest = invokeCaptured(["test", "minimal-runner.test.ts"], testOnlyEnv);
+	const esmTest = invokeCaptured(["test", "minimal-runner.test.ts"], toolchainFreeEnv);
 	if (
 		esmTest.signal !== null ||
 		esmTest.status !== 0 ||
@@ -1985,7 +1990,7 @@ test("interprets async tests with host dependencies", async () => {
 		"--repeat",
 		"2",
 	];
-	const coldTestOutput = invoke(repeatedTestArgs, testOnlyEnv);
+	const coldTestOutput = invoke(repeatedTestArgs, toolchainFreeEnv);
 	if (
 		!coldTestOutput.includes("Shuffle seed: 18492") ||
 		!coldTestOutput.includes("2 passed, 0 failed") ||
@@ -1993,7 +1998,7 @@ test("interprets async tests with host dependencies", async () => {
 	) {
 		throw new Error(`cold interpreted test run was not successful:\n${coldTestOutput}`);
 	}
-	const warmTestOutput = invoke(repeatedTestArgs, testOnlyEnv);
+	const warmTestOutput = invoke(repeatedTestArgs, toolchainFreeEnv);
 	if (
 		!warmTestOutput.includes("Shuffle seed: 18492") ||
 		!warmTestOutput.includes("2 passed, 0 failed") ||
@@ -2023,7 +2028,10 @@ test("CommonJS default exports remain callable", () => {
 });
 `,
 	);
-	const commonjsDefaultOutput = invoke(["test", "commonjs-default.test.ts"], testOnlyEnv);
+	const commonjsDefaultOutput = invoke(
+		["test", "commonjs-default.test.ts"],
+		toolchainFreeEnv,
+	);
 	if (!commonjsDefaultOutput.includes("1 passed, 0 failed")) {
 		throw new Error(`CommonJS default import test failed:\n${commonjsDefaultOutput}`);
 	}
@@ -2038,7 +2046,7 @@ test("preserves namespace import semantics through fallback", () => {
 });
 `,
 	);
-	const namespaceOutput = invoke(["test", "namespace.test.ts"], testOnlyEnv);
+	const namespaceOutput = invoke(["test", "namespace.test.ts"], toolchainFreeEnv);
 	if (!namespaceOutput.includes("1 passed, 0 failed")) {
 		throw new Error(`namespace-import whole-image fallback failed:\n${namespaceOutput}`);
 	}
@@ -2047,7 +2055,7 @@ test("preserves namespace import semantics through fallback", () => {
 		path.join(project, "syntax.test.ts"),
 		`import { test } from "maligator:test";\ntest("broken", () => {\n`,
 	);
-	const syntaxOutput = invokeFailure(["test", "syntax.test.ts"], testOnlyEnv);
+	const syntaxOutput = invokeFailure(["test", "syntax.test.ts"], toolchainFreeEnv);
 	if (!syntaxOutput.includes("SyntaxError")) {
 		throw new Error(`syntax failures were not categorized:\n${syntaxOutput}`);
 	}
@@ -2059,7 +2067,10 @@ throw new Error("module load sentinel");
 test("unreachable", () => {});
 `,
 	);
-	const moduleLoadOutput = invokeFailure(["test", "module-load.test.ts"], testOnlyEnv);
+	const moduleLoadOutput = invokeFailure(
+		["test", "module-load.test.ts"],
+		toolchainFreeEnv,
+	);
 	if (
 		!moduleLoadOutput.includes("ModuleLoadError") ||
 		!moduleLoadOutput.includes("module load sentinel")
@@ -2068,7 +2079,7 @@ test("unreachable", () => {});
 	}
 	const containedModuleLoadOutput = invokeFailure(
 		["test", "example.test.ts", "module-load.test.ts"],
-		testOnlyEnv,
+		toolchainFreeEnv,
 	);
 	if (
 		!containedModuleLoadOutput.includes("1 passed, 1 failed") ||
@@ -2097,7 +2108,7 @@ test("keeps root hooks inside the file", () => {
 	}
 	const hookBoundaryOutput = invoke(
 		["test", "hook-a.test.ts", "hook-b.test.ts"],
-		testOnlyEnv,
+		toolchainFreeEnv,
 	);
 	if (!hookBoundaryOutput.includes("2 passed, 0 failed")) {
 		throw new Error(`test-image hooks crossed file boundaries:\n${hookBoundaryOutput}`);
@@ -2112,7 +2123,7 @@ test("reports source positions", () => {
 });
 `,
 	);
-	const assertionOutput = invokeFailure(["test", "assertion.test.ts"], testOnlyEnv);
+	const assertionOutput = invokeFailure(["test", "assertion.test.ts"], toolchainFreeEnv);
 	if (
 		!assertionOutput.includes("AssertionError") ||
 		!assertionOutput.includes("assertion.test.ts:4")
