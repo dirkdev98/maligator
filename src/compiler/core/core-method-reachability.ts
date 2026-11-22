@@ -108,16 +108,18 @@ const PROXY_TRAP_NAMES: ReadonlySet<string> = new Set([
 ]);
 const PROXY_OPERATION = /^%?Proxy(?:\.|%?$)/;
 
-// Names that hand a program a property value under a key it computed at runtime.
+// Descriptor writes can make a method enumerable under a key we cannot trace.
 const REFLECTIVE_NAMES: ReadonlySet<string> = new Set([
 	"Reflect",
+	"defineProperty",
+	"defineProperties",
 	"getOwnPropertyDescriptor",
 	"getOwnPropertyDescriptors",
 	"__lookupGetter__",
 	"__lookupSetter__",
 ]);
 const REFLECTIVE_OPERATION =
-	/^%?(?:Reflect(?:\.get(?:OwnPropertyDescriptor)?)?|Object\.getOwnPropertyDescriptors?|Object\.prototype\.__lookup[GS]etter__)%?$/;
+	/^%?(?:Reflect(?:\.(?:get(?:OwnPropertyDescriptor)?|defineProperty))?|Object\.(?:getOwnPropertyDescriptors?|definePropert(?:y|ies))|Object\.prototype\.__lookup[GS]etter__)%?$/;
 
 // Operations that read a property under the key in their second operand.
 const READS_BY_KEY: ReadonlySet<string> = new Set(["loadProperty", "loadSuperProperty"]);
