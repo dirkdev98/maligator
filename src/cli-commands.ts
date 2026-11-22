@@ -2978,6 +2978,7 @@ async function runFfiCommand(
 			const development = buildDevelopmentShims(libraries, {
 				...preparation,
 				runtimeDirectory: context.installation.runtimeDirectory,
+				portableDiagnostics: true,
 			}).filter((entry) => names.includes(entry.library));
 			const checkOptions = {
 				file: path.resolve(projectRoot, command.outPath ?? "maligator-ffi.lock.json"),

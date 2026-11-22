@@ -811,18 +811,14 @@ function checkFfiLargeHeaders(): void {
 			`${unusedMacro}\n/* ${text} */\n#define LARGE_CODE 7\nint large_read(int value);\n`,
 		);
 	writeHeader(doc);
-	writeFileSync(
-		path.join(directory, "large.c"),
-		"int large_read(int value) { return value; }\n",
-	);
+	writeFileSync(path.join(directory, "large.c"), "");
 	writeFileSync(
 		path.join(directory, "large.ffi.ts"),
 		'export default {headers:["large.h"],find:[{includeDirs:["include"],sources:["large.c"]}],functions:{large_read:{evidence:[{kind:"macro",name:"LARGE_CODE"}]}}};\n',
 	);
-	// Static linking keeps cache-dependent shim paths out of the report comparison.
 	writeFileSync(
 		path.join(directory, "maligator.build.ts"),
-		'export default {ffi:{large:{contract:"large.ffi.ts",link:"static"}}};\n',
+		'export default {ffi:{large:{contract:"large.ffi.ts"}}};\n',
 	);
 	const compilerLog = path.join(directory, "compiler.log");
 	const compiler = path.join(directory, "cc");
@@ -925,6 +921,13 @@ function checkFfiLargeHeaders(): void {
 	if (!changed.equals(run("node", ["ffi", "check", "--json"], 1)))
 		throw new Error("large FFI drift differs between Node and the packaged CLI");
 	const report = JSON.parse(changed.toString("utf8")) as FfiCheckReport;
+	if (
+		!report.development?.some(
+			(entry) => entry.kind === "linked" && entry.reason.includes("large_read"),
+		)
+	) {
+		throw new Error("large FFI report omitted the unresolved C function");
+	}
 	if (
 		!report.libraries.some((library) =>
 			library.changes.some(

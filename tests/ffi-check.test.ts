@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import {
 	appendFileSync,
+	chmodSync,
 	cpSync,
 	existsSync,
 	mkdirSync,
@@ -57,9 +58,10 @@ function writeContract(directory: string, facts: Partial<LibraryFacts> = {}): vo
 	);
 }
 
-function cli(directory: string, args: ReadonlyArray<string>) {
+function cli(directory: string, args: ReadonlyArray<string>, env?: NodeJS.ProcessEnv) {
 	return spawnSync(process.execPath, [cliEntry, "ffi", ...args], {
 		cwd: directory,
+		env,
 		encoding: "utf8",
 		timeout: 30_000,
 	});
@@ -85,6 +87,40 @@ afterEach(() => {
 });
 
 describe("ffi check", () => {
+	it.runIf(process.platform === "darwin" || process.platform === "linux")(
+		"reports the same missing shim symbol from different caches",
+		() => {
+			const directory = project();
+			const compiler = path.join(directory, "cc");
+			writeFileSync(
+				compiler,
+				`#!/bin/sh
+for arg do
+	case "$arg" in
+		-bundle|-shared) set -- -v "$@"; break ;;
+	esac
+done
+exec "$MAL_TEST_FFI_CC" "$@"
+`,
+			);
+			chmodSync(compiler, 0o755);
+			const report = (cache: string): string => {
+				const result = cli(directory, ["check", "--update", "--json"], {
+					...process.env,
+					CC: compiler,
+					MAL_TEST_FFI_CC: process.env.CC?.trim() || "cc",
+					MALIGATOR_CACHE_DIR: path.join(directory, cache),
+				});
+				expect(result.status, result.stderr || result.stdout).toBe(0);
+				return result.stdout;
+			};
+			const first = report("cache-short");
+			const parsed = JSON.parse(first) as FfiCheckReport;
+			const diagnostic = parsed.development?.find((entry) => entry.kind === "linked");
+			expect(diagnostic?.reason).toMatch(/shared shim link failed[\s\S]*shapes_index/);
+			expect(report("a-different-and-longer-cache")).toBe(first);
+		},
+	);
 	it("tracks an unexported global carrying a retained pointer's byte count", () => {
 		const directory = project();
 		const file = path.join(directory, "include/shapes.h");

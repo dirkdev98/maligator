@@ -37,6 +37,7 @@ type ShimBuildOptions = Pick<
 > & {
 	readonly runtimeDirectory: string;
 	readonly cacheDirectory?: string;
+	readonly portableDiagnostics?: boolean;
 };
 
 export type DevelopmentShim =
@@ -98,7 +99,8 @@ function buildDevelopmentShim(
 	options: ShimBuildOptions,
 ): DevelopmentShim {
 	const library = entry.contract.name;
-	const root = options.cacheDirectory ?? maligatorCacheDirectory();
+	const root =
+		options.cacheDirectory ?? maligatorCacheDirectory(undefined, options.environment);
 	const bindingsDirectory = path.join(options.runtimeDirectory, "src/ffi");
 	const platform = options.platform;
 	const compileArguments = [
@@ -188,9 +190,23 @@ const MalFfiShimBinding *mal_ffi_shim_register(
 					if (result.error !== undefined) throw result.error;
 					if (result.signal !== null)
 						throw new Error(`C library shim compiler received ${result.signal}`);
-					return result.status === 0
-						? undefined
-						: result.stderr.trim().slice(-2048) || `exit ${result.status}`;
+					if (result.status === 0) return undefined;
+					let diagnostic = result.stderr.trim();
+					if (options.portableDiagnostics) {
+						// Normalize before truncating so path lengths cannot change which text survives.
+						for (const [directory, replacement] of [
+							[work, "<ffi-shim>"],
+							[bindingsDirectory, "<ffi-runtime>"],
+							[root, "<maligator-cache>"],
+						] as const) {
+							for (const prefix of new Set([realpathSync(directory), directory]))
+								diagnostic = diagnostic.replaceAll(
+									`${prefix}${path.sep}`,
+									`${replacement}/`,
+								);
+						}
+					}
+					return diagnostic.slice(-2048) || `exit ${result.status}`;
 				};
 				const objects: Array<string> = [];
 				for (const [index, source] of [
