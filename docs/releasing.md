@@ -8,12 +8,12 @@ Node.js launcher with exact-version optional dependencies on the native packages
 - `@maligator/cli-linux-arm64`
 - `@maligator/cli-linux-x64`
 
-There is no source-build fallback. An unsupported host or installation without its
-optional platform package fails with an actionable message. Windows is deferred
-because the native host/runtime currently depends on POSIX APIs. The alpha binaries
-are unsigned; macOS artifacts are not notarized. Zig cross-builds target macOS 15
-or newer. Linux builds target glibc 2.31 and kernel 5.10 or newer; clean-host
-compatibility checks still run in CI.
+The launcher requires a supported host and its optional platform package. The
+native CLI in that package embeds the runtime sources for local application
+builds. The native host and runtime use POSIX APIs. The alpha binaries are unsigned,
+and macOS artifacts are not notarized. Zig cross-builds target macOS 15 or newer.
+Linux builds target glibc 2.31 and kernel 5.10 or newer. CI checks compatibility on
+clean hosts.
 
 ## Versions and channels
 
@@ -42,6 +42,13 @@ The `Prepare release packages` GitHub Actions workflow is the preferred packagin
 path. Dispatch it on the exact release commit. It cross-builds each of the four
 targets in its own macOS ARM job, including the development runtime archives and
 runners for its platform package. It assembles and packs them in one workspace.
+
+Packing checks each compressed npm tarball against its package budget in
+[`scripts/release.ts`](../scripts/release.ts). To investigate growth, run
+`npm pack --dry-run --json` from the staged package under `dist/release/npm/`.
+Use [`npm run bench:size`](benchmarking.md#executable-size) to see what production
+applications link.
+
 On each host the smoke matrix checks `run` and `test` with Intl enabled on a
 Node-only `PATH`, then builds an application with the packaged archives. The workflow
 retains the validated tarballs and `packages.json` for seven days and deletes the

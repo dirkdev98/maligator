@@ -396,12 +396,9 @@ distinct when measuring text work.
       `node:test` provider is still copied into every image that reads `process` or
       `global`, and dependency images share that limitation.
 
-- [ ] Move the embedded runtime sources out of the CLI into an optional fallback package,
-      keeping the platform package to the default flavour's archives and runners, under a
-      package budget set from `npm run bench:size` and the packed package sizes. Production
-      builds compile the C runtime locally with LTO today, so first measure whether
-      prebuilt production C archives keep speed parity on javascript-v2 and HTTP; keep the
-      sources in the main package if they don't.
+- [ ] Move the embedded runtime implementation sources into an optional fallback package
+      once the default production build can use prebuilt C archives without losing
+      application-to-runtime LTO.
 
 - [ ] Link the program, the C runtime and the Rust components with cross-language LTO
       through one pinned LLVM, shipping bitcode next to the machine-code archives. On

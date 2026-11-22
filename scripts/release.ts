@@ -8,6 +8,7 @@ import {
 	mkdirSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -114,30 +115,37 @@ function npmEnvironment(): NodeJS.ProcessEnv {
 	};
 }
 
+const MEBIBYTE = 1024 ** 2;
+const LAUNCHER_PACKED_SIZE_BUDGET = 60 * 1024;
+
 const targets = [
 	{
 		rust: "aarch64-apple-darwin",
 		platform: "darwin",
 		arch: "arm64",
 		packageName: "@maligator/cli-darwin-arm64",
+		packedSizeBudget: 109 * MEBIBYTE,
 	},
 	{
 		rust: "x86_64-apple-darwin",
 		platform: "darwin",
 		arch: "x64",
 		packageName: "@maligator/cli-darwin-x64",
+		packedSizeBudget: 116 * MEBIBYTE,
 	},
 	{
 		rust: "aarch64-unknown-linux-gnu",
 		platform: "linux",
 		arch: "arm64",
 		packageName: "@maligator/cli-linux-arm64",
+		packedSizeBudget: 115 * MEBIBYTE,
 	},
 	{
 		rust: "x86_64-unknown-linux-gnu",
 		platform: "linux",
 		arch: "x64",
 		packageName: "@maligator/cli-linux-x64",
+		packedSizeBudget: 121 * MEBIBYTE,
 	},
 ];
 const defaultTargets = [targets[0]!];
@@ -282,7 +290,7 @@ function copyLicenses(directory: string): void {
 
 export function createPlatformPackageJson(
 	version: string,
-	target: (typeof targets)[number],
+	target: Omit<(typeof targets)[number], "packedSizeBudget">,
 ): PackageJson {
 	return {
 		...commonPackageFields(target.packageName, version),
@@ -637,6 +645,7 @@ function packDirectory(
 	directory: string,
 	destination: string,
 	expectedFiles: Array<string>,
+	packedSizeBudget: number,
 ): string {
 	const output = execFileSync(
 		"npm",
@@ -656,7 +665,15 @@ function packDirectory(
 			`unexpected npm pack contents for ${packed.name}: ${actualFiles.join(", ")}`,
 		);
 	}
-	return path.join(destination, filename);
+	const tarball = path.join(destination, filename);
+	const { size } = statSync(tarball);
+	if (size > packedSizeBudget) {
+		throw new Error(
+			`${packed.name} is ${size} packed bytes and exceeds its ${packedSizeBudget}-byte budget`,
+		);
+	}
+	releaseLog(`packed ${packed.name} at ${size} bytes (budget ${packedSizeBudget})`);
+	return tarball;
 }
 
 function smokePackedLauncher(
@@ -839,11 +856,12 @@ function packRelease(args: Array<string>): void {
 				({ license }) => `LICENSE.${license}`,
 			),
 		].map((file) => `${PREBUILT_RUNTIME_DIRECTORY}/${file}`);
-		const packed = packDirectory(directory, packs, [
-			...LICENSE_FILES,
-			"bin/maligator",
-			...runtimeFiles,
-		]);
+		const packed = packDirectory(
+			directory,
+			packs,
+			[...LICENSE_FILES, "bin/maligator", ...runtimeFiles],
+			target.packedSizeBudget,
+		);
 		platformTarballs.set(target.rust, packed);
 		packedPackages.push({
 			name: target.packageName,
@@ -854,7 +872,12 @@ function packRelease(args: Array<string>): void {
 	const launcher = path.join(npmRoot, "cli");
 	if (!existsSync(launcher)) throw new Error("launcher package is missing");
 	releaseLog(`[${selected.length + 1}/${selected.length + 1}] packing @maligator/cli`);
-	const packedLauncher = packDirectory(launcher, packs, launcherPackageFiles);
+	const packedLauncher = packDirectory(
+		launcher,
+		packs,
+		launcherPackageFiles,
+		LAUNCHER_PACKED_SIZE_BUDGET,
+	);
 	packedPackages.push({
 		name: "@maligator/cli",
 		file: path.basename(packedLauncher),

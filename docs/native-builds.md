@@ -32,11 +32,16 @@ native flags, and pinned Zig producer.
 The CLI verifies SHA-256 digests before using packaged files. It executes a matching
 runner directly. A local development link can import matching archives under its
 local cache keys. Production imports the machine-code Rust, Ada and ring archives
-using a separate key for the Rust sources and target ABI. Production C archives
-build locally with the selected C compiler's LTO settings. Missing or mismatched
-files fall back to local builds. `engine.eval: true` builds the eval component
-locally from the compiler wire. Use `MALIGATOR_PREBUILT_RUNTIME_DIR` to test a
-different runtime directory and `--verbose` to see which archives a command uses.
+using a separate key for the Rust sources and target ABI. The CLI embeds the C
+sources so production builds can compile the C archives with the selected
+compiler's LTO settings and optimize across the generated application and its
+runtime. Linking the packaged machine-code C archives increases the instruction
+count and reduces Express throughput.
+
+Missing or mismatched files fall back to local builds. A local build with
+`engine.eval: true` builds the eval component from the compiler wire. Use
+`MALIGATOR_PREBUILT_RUNTIME_DIR` to test a different runtime directory and
+`--verbose` to see which archives a command uses.
 
 ## Toolchain discovery
 
