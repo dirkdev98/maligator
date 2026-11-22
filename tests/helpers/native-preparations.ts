@@ -1,13 +1,14 @@
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 
-/** Eval runtimes that native global setup prepares only when a selected file needs them. */
+/** Runtime variants that native global setup prepares for selected tests. */
 export type NativePreparation =
 	| "realms-disabled"
 	| "perf-stats"
 	| "locked-perf-stats"
 	| "product-eval-defaults"
-	| "owning-argument-forwarding";
+	| "owning-argument-forwarding"
+	| "ffi-resource-arrays";
 
 const perfManifests = new Map<string, ReadonlySet<string>>();
 
@@ -31,6 +32,9 @@ export function nativePreparations(root: string, file: string): Array<NativePrep
 		.split(path.sep)
 		.join("/");
 	return [
+		...(relative === "tests/native/ffi-resource-arrays.test.ts"
+			? (["ffi-resource-arrays"] as const)
+			: []),
 		...(relative === "tests/native/realms-disabled.test.ts"
 			? (["realms-disabled"] as const)
 			: []),

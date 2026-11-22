@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import type { TestProject } from "vitest/node";
-import { buildDerivationFromConfig } from "../../src/build-config.ts";
+import { buildDerivationFromConfig, resolveBuildConfig } from "../../src/build-config.ts";
 import type { ResolvedBuildConfig } from "../../src/build-config.ts";
 import { perfStatsEnabled } from "../../src/build-flags.ts";
 import { CommandProgress } from "../../src/command-progress.ts";
@@ -12,6 +12,8 @@ import {
 import { embeddedCompilerOptions } from "../../src/compiler/pipeline/embedded-compiler-options.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 import { ensureNativeArtifacts } from "../../src/runtime-build.ts";
+import ffiResourceArrayBuild from "../fixtures/ffi-resource-arrays/maligator.build.ts";
+import { ffiResourceArrayCompilerEnvironment } from "../helpers/ffi-resource-array-compiler.ts";
 import {
 	defaultProductEvalConfig,
 	owningArgumentForwardingEvalConfig,
@@ -41,6 +43,8 @@ interface Preparation {
 	environment: NodeJS.ProcessEnv;
 	label: string;
 	config: ResolvedBuildConfig;
+	production?: boolean;
+	usesHost?: boolean;
 }
 
 export function setup(project: TestProject): void {
@@ -102,13 +106,27 @@ export function setup(project: TestProject): void {
 			});
 		}
 	}
+	if (required.has("ffi-resource-arrays")) {
+		const ffiEnvironment = ffiResourceArrayCompilerEnvironment(environment);
+		const config = resolveBuildConfig(ffiResourceArrayBuild);
+		for (const usesHost of [false, true]) {
+			variants.push({
+				environment: ffiEnvironment,
+				label: `FFI resource-array runtime (host ${usesHost ? "on" : "off"})`,
+				config,
+				production: true,
+				usesHost,
+			});
+		}
+	}
 	const progress = new CommandProgress("native-prepare", { cacheLease: false });
 	for (const [index, variant] of variants.entries()) {
 		progress.stage(index + 1, variants.length, variant.label);
 		try {
 			ensureNativeArtifacts(
 				resolveNativeBuildContext({
-					features: buildDerivationFromConfig(variant.config).features,
+					features: buildDerivationFromConfig(variant.config, variant.usesHost).features,
+					production: variant.production,
 					compilerBake,
 					environment: variant.environment,
 				}),
