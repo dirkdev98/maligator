@@ -262,8 +262,7 @@ static bool ee_emit_key(
     return true;
 }
 
-static bool ee_has_listeners(MalVm *vm, MalValue receiver, const char *name) {
-    MalObject *events = ee_events(vm, receiver, false);
+static bool ee_has_listeners(MalVm *vm, MalObject *events, const char *name) {
     if (events == nullptr) {
         return false;
     }
@@ -303,9 +302,8 @@ static MalValue ee_add(
     MalValue roots[] = {receiver, event.value, listener, mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    ee_events(vm, roots[0], true);
-
-    if (ee_has_listeners(vm, roots[0], "newListener")) {
+    MalObject *events = ee_events(vm, roots[0], true);
+    if (ee_has_listeners(vm, events, "newListener")) {
         MalValue meta_args[] = {ee_key_value(vm, event), roots[2]};
         MalRootSpan meta_root;
         mal_gc_root(&meta_root, meta_args, countof(meta_args));
@@ -315,9 +313,10 @@ static MalValue ee_add(
             mal_gc_unroot(&root);
             return mal_value_new_undefined();
         }
+        // The meta event may replace the receiver's listener table.
+        events = ee_events(vm, roots[0], true);
     }
 
-    MalObject *events = ee_events(vm, roots[0], true);
     MalValue old = ee_listener_value(events, event);
     u32 old_length = ee_listener_length(old);
     bool absent = old_length == 0;
@@ -394,7 +393,7 @@ static bool ee_remove_one(
     // the removal already produced, including any host registration it drives.
     ee_notify_changed(vm, receiver);
 
-    if (emit_meta && ee_has_listeners(vm, receiver, "removeListener")) {
+    if (emit_meta && ee_has_listeners(vm, ee_events(vm, receiver, false), "removeListener")) {
         MalValue meta_args[] = {ee_key_value(vm, event), roots[1]};
         MalRootSpan meta_root;
         mal_gc_root(&meta_root, meta_args, countof(meta_args));
@@ -521,6 +520,43 @@ static MalValue ee_emit(
     return mal_value_new_boolean(emitted);
 }
 
+MalCompletion mal_node_events_emit_named(
+    MalVm *vm, MalValue receiver, const char *name, const MalValue *argument
+) {
+    MalValue roots[] = {
+        receiver,
+        argument == nullptr ? mal_value_new_undefined() : *argument,
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalKey event = mal_intrinsic_static_string_key(vm, (const byte *) name);
+    roots[2] = event.value;
+    if (!mal_vm_get_static(vm, roots[0], (const byte *) "emit", &roots[3])
+        || vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_gc_unroot(&root);
+        return vm->completion;
+    }
+    MalCompletion completion;
+    if (mal_value_is_native_function_object(roots[3])
+        && mal_native_function_object_callback(mal_value_to_native_function_object(roots[3])) == ee_emit
+#if MAL_REALMS
+        && mal_vm_callee_realm(vm, roots[3]) == vm->current_realm
+#endif
+    ) {
+        bool emitted = ee_emit_key(vm, roots[0], event, roots + 1, argument == nullptr ? 0 : 1);
+        completion = vm->completion.kind == MAL_COMPLETION_THROW
+            ? vm->completion
+            : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_boolean(emitted)};
+    } else {
+        MalValue args[] = {roots[2], roots[1]};
+        completion = mal_vm_call_value(vm, roots[3], roots[0], args, argument == nullptr ? 1 : 2);
+    }
+    mal_gc_unroot(&root);
+    return completion;
+}
+
 static MalValue ee_remove_listener(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target,
     MalValue callee) {
@@ -617,7 +653,7 @@ static MalValue ee_remove_all_listeners(
         return receiver;
     }
 
-    if (!ee_has_listeners(vm, receiver, "removeListener")) {
+    if (!ee_has_listeners(vm, ee_events(vm, receiver, false), "removeListener")) {
         MalValue fresh = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
         MalRootSpan root;
         mal_gc_root(&root, &fresh, 1);

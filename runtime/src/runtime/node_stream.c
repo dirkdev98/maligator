@@ -147,28 +147,6 @@ static MalCompletion stream_call_method(
     return completion;
 }
 
-static bool stream_emit(
-    MalVm *vm, MalValue receiver, const char *name, const MalValue *args, i32 argc) {
-    MalValue roots[4] = {
-        receiver,
-        stream_static_key(vm, name).value,
-        mal_value_new_undefined(),
-        mal_value_new_undefined(),
-    };
-    MalRootSpan root;
-    mal_gc_root(&root, roots, countof(roots));
-    for (i32 i = 0; i < argc && i < 2; i++) {
-        roots[2 + i] = args[i];
-    }
-    MalCompletion completion =
-        stream_call_method(vm, roots[0], "emit", roots + 1, argc + 1);
-    bool emitted = completion.kind != MAL_COMPLETION_THROW
-        && mal_value_is_boolean(completion.value)
-        && mal_value_to_boolean(completion.value);
-    mal_gc_unroot(&root);
-    return emitted;
-}
-
 static void stream_init_events(MalVm *vm, MalValue receiver, i32 kind) {
     MalValue events = mal_value_from_object(mal_object_new_reserved(&vm->heap, nullptr, 4));
     MalRootSpan root;
@@ -586,13 +564,13 @@ static void stream_resume_core(MalVm *vm, MalValue receiver) {
     stream_set(vm, readable_state, "paused", mal_value_new_boolean(false));
     stream_set(vm, receiver, "_malPaused", mal_value_new_boolean(false));
     if (stream_update_readable_listening(vm, receiver)) {
-        if (was_paused) stream_emit(vm, receiver, "resume", nullptr, 0);
+        if (was_paused) mal_node_events_emit_named(vm, receiver, "resume", nullptr);
         return;
     }
     stream_set(vm, readable_state, "flowingFalse", mal_value_new_boolean(false));
     stream_set(vm, receiver, "_malFlowing", mal_value_new_boolean(true));
     if (was_paused) {
-        stream_emit(vm, receiver, "resume", nullptr, 0);
+        mal_node_events_emit_named(vm, receiver, "resume", nullptr);
     }
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         stream_schedule_pull(vm, receiver);
@@ -761,7 +739,7 @@ static bool stream_pipe_chunk(MalVm *vm, MalValue source, MalValue chunk) {
 static void stream_deliver_chunk(MalVm *vm, MalValue receiver, MalValue chunk) {
     stream_pipe_chunk(vm, receiver, chunk);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
-        stream_emit(vm, receiver, "data", &chunk, 1);
+        mal_node_events_emit_named(vm, receiver, "data", &chunk);
     }
 }
 
@@ -797,7 +775,7 @@ static void stream_end_readable(MalVm *vm, MalValue receiver) {
     stream_set(vm, receiver, "readableEnded", mal_value_new_boolean(true));
     MalValue state = stream_own(vm, receiver, "_readableState");
     stream_set(vm, state, "endEmitted", mal_value_new_boolean(true));
-    stream_emit(vm, receiver, "end", nullptr, 0);
+    mal_node_events_emit_named(vm, receiver, "end", nullptr);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         stream_end_pipes(vm, receiver);
     }
@@ -911,7 +889,7 @@ static MalValue stream_pause(
         return mal_value_new_undefined();
     }
     stream_mark_paused(vm, receiver);
-    stream_emit(vm, receiver, "pause", nullptr, 0);
+    mal_node_events_emit_named(vm, receiver, "pause", nullptr);
     return receiver;
 }
 
@@ -1085,7 +1063,7 @@ static MalValue stream_pipe(
     }
     mal_array_object_store(mal_value_to_array_object(roots[2]),
         mal_key_index(mal_array_object_length(mal_value_to_array_object(roots[2]))), roots[0]);
-    stream_emit(vm, roots[1], "pipe", roots, 1);
+    mal_node_events_emit_named(vm, roots[1], "pipe", roots);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         stream_resume_core(vm, roots[0]);
     }
@@ -1120,7 +1098,7 @@ static MalValue stream_unpipe(
                 || mal_ops_same_value(roots[1], roots[5]);
             if (remove) {
                 stream_remove_blocked_pipe(vm, roots[0], roots[5], true);
-                stream_emit(vm, roots[5], "unpipe", roots, 1);
+                mal_node_events_emit_named(vm, roots[5], "unpipe", roots);
             } else {
                 mal_array_object_store(
                     next, mal_key_index(mal_array_object_length(next)), roots[4]);
@@ -1164,9 +1142,9 @@ static MalValue stream_destroy_done(MalVm *vm, MalValue self, const MalValue *ar
     if (!mal_value_is_nil(roots[1])) {
         stream_set(vm, roots[0], "_malStreamError", roots[1]);
         stream_iterator_drain(vm, roots[0]);
-        stream_emit(vm, roots[0], "error", roots + 1, 1);
+        mal_node_events_emit_named(vm, roots[0], "error", roots + 1);
     }
-    if (vm->completion.kind != MAL_COMPLETION_THROW) stream_emit(vm, roots[0], "close", nullptr, 0);
+    if (vm->completion.kind != MAL_COMPLETION_THROW) mal_node_events_emit_named(vm, roots[0], "close", nullptr);
     stream_set(vm, roots[0], "closed", mal_value_new_boolean(true));
     roots[2] = stream_own(vm, roots[0], "_malClosePromise");
     if (mal_value_is_promise_object(roots[2])) {
@@ -1391,7 +1369,7 @@ static void stream_maybe_emit_drain(MalVm *vm, MalValue receiver) {
     stream_set(vm, receiver, "_malNeedDrain", mal_value_new_boolean(false));
     MalValue state = stream_own(vm, receiver, "_writableState");
     stream_set(vm, state, "needDrain", mal_value_new_boolean(false));
-    stream_emit(vm, receiver, "drain", nullptr, 0);
+    mal_node_events_emit_named(vm, receiver, "drain", nullptr);
 }
 
 static void stream_complete_write(
@@ -1716,7 +1694,7 @@ static void stream_emit_finish(MalVm *vm, MalValue receiver) {
     stream_clear_end_callbacks(
         vm, receiver, mal_value_new_undefined(), false);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
-        stream_emit(vm, receiver, "finish", nullptr, 0);
+        mal_node_events_emit_named(vm, receiver, "finish", nullptr);
     }
     if (vm->completion.kind != MAL_COMPLETION_THROW && !stream_truthy_own(vm, receiver, "destroyed")
         && stream_auto_destroy_after(vm, receiver, true)) {
@@ -1824,7 +1802,7 @@ static void stream_finish_if_ready(MalVm *vm, MalValue receiver) {
     // prefinish(): once _final (or a Transform's flush) has completed, before 'finish'.
     if (!stream_truthy_own(vm, receiver, "_malPrefinished")) {
         stream_set(vm, receiver, "_malPrefinished", mal_value_new_boolean(true));
-        stream_emit(vm, receiver, "prefinish", nullptr, 0);
+        mal_node_events_emit_named(vm, receiver, "prefinish", nullptr);
         if (vm->completion.kind == MAL_COMPLETION_THROW) return;
     }
     stream_schedule_finish(vm, receiver);
@@ -1969,7 +1947,7 @@ static void stream_emit_readable_now(MalVm *vm, MalValue receiver) {
     bool ended = stream_state_truthy(vm, receiver, "ended");
     if (!stream_truthy_own(vm, receiver, "destroyed") && !mal_value_is_object(stream_own(vm, receiver, "_malStreamError"))
         && (length > 0 || ended)) {
-        stream_emit(vm, receiver, "readable", nullptr, 0);
+        mal_node_events_emit_named(vm, receiver, "readable", nullptr);
         stream_state_flag(vm, receiver, "emittedReadable", false);
     }
     bool flowing = stream_truthy_own(vm, receiver, "_malFlowing");
@@ -2159,7 +2137,7 @@ static MalValue stream_read_core(MalVm *vm, MalValue receiver, MalValue n_value)
         roots[3] = result;
         stream_set(vm, roots[1], "dataEmitted", mal_value_new_boolean(true));
         stream_pipe_chunk(vm, roots[0], roots[3]);
-        if (vm->completion.kind != MAL_COMPLETION_THROW) stream_emit(vm, roots[0], "data", &roots[3], 1);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) mal_node_events_emit_named(vm, roots[0], "data", &roots[3]);
     }
 done:
     mal_gc_unroot(&root);

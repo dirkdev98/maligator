@@ -997,23 +997,11 @@ static bool http_call_method(
 }
 
 static bool http_emit(MalVm *vm, MalValue receiver, const char *event) {
-    MalValue name = mal_intrinsic_static_string_key(vm, (const byte *) event).value;
-    MalRootSpan root;
-    mal_gc_root(&root, &name, 1);
-    bool ok = http_call_method(vm, receiver, "emit", &name, 1);
-    mal_gc_unroot(&root);
-    return ok;
+    return mal_node_events_emit_named(vm, receiver, event, nullptr).kind != MAL_COMPLETION_THROW;
 }
 
 static bool http_emit_error(MalVm *vm, MalValue receiver, MalValue error) {
-    MalValue args[] = {
-        mal_value_from_string(mal_intrinsic_static_ascii(vm, (const byte *) "error")), error,
-    };
-    MalRootSpan root;
-    mal_gc_root(&root, args, countof(args));
-    bool ok = http_call_method(vm, receiver, "emit", args, 2);
-    mal_gc_unroot(&root);
-    return ok;
+    return mal_node_events_emit_named(vm, receiver, "error", &error).kind != MAL_COMPLETION_THROW;
 }
 
 // `event` is static storage: the atom cache trusts its address.

@@ -21,3 +21,7 @@ void mal_node_events_set_change_hook(MalNodeEventsChangeHook hook);
 
 /** Listener count for `event` on `receiver`; 0 when it holds no emitter state. */
 u32 mal_node_events_listener_count(MalVm *vm, MalValue receiver, const char *event);
+
+/* Host emission still observes the live `emit` method. The event name has static storage. */
+MalCompletion mal_node_events_emit_named(
+    MalVm *vm, MalValue receiver, const char *name, const MalValue *argument);
