@@ -13054,6 +13054,7 @@
 		["mal_host_install_maligator_assets:EmbeddedDirectory", ["runtime", "primitive"]],
 		["mal_host_install_maligator_assets:EmbeddedFile", ["runtime", "primitive"]],
 		["mal_host_install_maligator_internal_fetch:fetch", ["runtime", "primitive"]],
+		["mal_host_install_maligator_internal_fs:chmod", ["runtime", "primitive"]],
 		["mal_host_install_maligator_internal_fs:copy", ["runtime", "primitive"]],
 		["mal_host_install_maligator_internal_fs:createDirectory", ["runtime", "primitive"]],
 		["mal_host_install_maligator_internal_fs:exists", ["runtime", "primitive"]],
@@ -13061,9 +13062,16 @@
 		["mal_host_install_maligator_internal_fs:mediaType", ["runtime", "primitive"]],
 		["mal_host_install_maligator_internal_fs:move", ["runtime", "primitive"]],
 		["mal_host_install_maligator_internal_fs:read", ["runtime", "primitive"]],
+		["mal_host_install_maligator_internal_fs:readlink", ["runtime", "primitive"]],
+		["mal_host_install_maligator_internal_fs:realpath", ["runtime", "primitive"]],
 		["mal_host_install_maligator_internal_fs:remove", ["runtime", "primitive"]],
 		["mal_host_install_maligator_internal_fs:removeDirectory", ["runtime", "primitive"]],
 		["mal_host_install_maligator_internal_fs:stat", ["runtime", "primitive"]],
+		["mal_host_install_maligator_internal_fs:symlink", ["runtime", "primitive"]],
+		[
+			"mal_host_install_maligator_internal_fs:temporaryDirectory",
+			["runtime", "primitive"]
+		],
 		["mal_host_install_maligator_internal_fs:write", ["runtime", "primitive"]],
 		[
 			"mal_host_install_maligator_internal_fs_descriptor:closeDescriptor",
