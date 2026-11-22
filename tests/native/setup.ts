@@ -44,7 +44,6 @@ interface Preparation {
 	label: string;
 	config: ResolvedBuildConfig;
 	production?: boolean;
-	usesHost?: boolean;
 }
 
 export function setup(project: TestProject): void {
@@ -107,17 +106,12 @@ export function setup(project: TestProject): void {
 		}
 	}
 	if (required.has("ffi-resource-arrays")) {
-		const ffiEnvironment = ffiResourceArrayCompilerEnvironment(environment);
-		const config = resolveBuildConfig(ffiResourceArrayBuild);
-		for (const usesHost of [false, true]) {
-			variants.push({
-				environment: ffiEnvironment,
-				label: `FFI resource-array runtime (host ${usesHost ? "on" : "off"})`,
-				config,
-				production: true,
-				usesHost,
-			});
-		}
+		variants.push({
+			environment: ffiResourceArrayCompilerEnvironment(environment),
+			label: "FFI resource-array runtime",
+			config: resolveBuildConfig(ffiResourceArrayBuild),
+			production: true,
+		});
 	}
 	const progress = new CommandProgress("native-prepare", { cacheLease: false });
 	for (const [index, variant] of variants.entries()) {
@@ -125,7 +119,7 @@ export function setup(project: TestProject): void {
 		try {
 			ensureNativeArtifacts(
 				resolveNativeBuildContext({
-					features: buildDerivationFromConfig(variant.config, variant.usesHost).features,
+					features: buildDerivationFromConfig(variant.config).features,
 					production: variant.production,
 					compilerBake,
 					environment: variant.environment,
