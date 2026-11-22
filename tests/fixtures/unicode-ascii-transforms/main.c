@@ -31,7 +31,10 @@ static bool normalization_matches(const c16 *source, usize length,
     const c16 *expected, usize expected_length, bool compatibility, bool compose) {
     c16 *output = nullptr;
     usize output_length = 0;
-    MalUnicodeStatus status = mal_unicode_normalize(source, length,
+    MalUnicodeNormalizer *normalize =
+        atomic_load_explicit(&mal_unicode_normalizer, memory_order_relaxed);
+    if (normalize == nullptr) abort();
+    MalUnicodeStatus status = normalize(source, length,
         compatibility, compose, &output, &output_length);
     bool matches = status == MAL_UNICODE_OK && output_length == expected_length &&
         memcmp(output, expected, expected_length * sizeof(c16)) == 0;
