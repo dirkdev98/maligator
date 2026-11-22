@@ -503,8 +503,9 @@ export interface MaligatorBuildConfig {
 		 */
 		primordials?: "locked" | "mutable";
 		/** Control dynamic compilation in the application image. `false` makes eval and
-		 * function constructors throw at runtime. `true` embeds the compiler. `"compile-check"`
-		 * also rejects statically visible dynamic compilation calls during the build.
+		 * function constructors throw at runtime. `true` embeds the compiler, which requires
+		 * `engine.regexp` to be enabled. `"compile-check"` also rejects statically visible
+		 * dynamic compilation calls during the build.
 		 * @default false
 		 * @see https://maligator.ddv.tools/api/build#engine.eval
 		 */
@@ -513,7 +514,8 @@ export interface MaligatorBuildConfig {
 		 * @default false
 		 */
 		realms?: boolean;
-		/** Allow RegExp. Native executables link the matcher when the application can use it.
+		/** Allow RegExp. Disable it only when runtime eval is off. Native executables link
+		 * the matcher when the application or the embedded compiler can use it.
 		 * @default true
 		 */
 		regexp?: boolean;

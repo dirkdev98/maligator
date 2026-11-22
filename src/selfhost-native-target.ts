@@ -11,7 +11,7 @@ export function selfhostNativeTargetConfig(evalEnabled: boolean): ResolvedBuildC
 		engine: {
 			eval: evalEnabled,
 			realms: false,
-			regexp: false,
+			regexp: evalEnabled,
 			intl: { enabled: false },
 		},
 	});

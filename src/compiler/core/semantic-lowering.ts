@@ -40,6 +40,7 @@ import {
 } from "../frontend/estree-traversal.ts";
 import { importsForeignCallbacks } from "../frontend/foreign-callbacks.ts";
 import {
+	BUFFER_INSTALLER_SYMBOL,
 	canonicalNodeHostModuleId,
 	HOST_GLOBAL_INSTALLERS,
 	HOST_MODULES,
@@ -1098,17 +1099,19 @@ export function constructSemanticProgramCore(
 		}
 	}
 	program.commonJsExportNames = linkage.commonJsExportNames;
-	program.hostProcess = linkage.hostProcess
-		? { installer: linkage.hostProcess.installer, retained: false }
-		: null;
-	program.hostBuffer = linkage.hostBuffer
-		? { installer: linkage.hostBuffer.installer, retained: false }
-		: null;
-	// Runtime eval runs the embedded compiler and its output in this isolate without
-	// installing globals, so both find the global object as the program left it.
+	// Eval-generated images use the application's realm without running installers.
+	// Install every native host global before executing an eval-enabled application.
 	const runtimeEval =
 		graph?.execution?.target.platform !== "wasi" &&
 		program.facts.world.eval === "runtime";
+	program.hostProcess =
+		runtimeEval || linkage.hostProcess !== undefined
+			? { installer: PROCESS_INSTALLER_SYMBOL, retained: runtimeEval }
+			: null;
+	program.hostBuffer =
+		runtimeEval || linkage.hostBuffer !== undefined
+			? { installer: BUFFER_INSTALLER_SYMBOL, retained: runtimeEval }
+			: null;
 	program.hostGlobals = HOST_GLOBAL_INSTALLERS.filter(
 		(host) => runtimeEval || linkage.hostGlobalInstallers.includes(host.installer),
 	).map((host) => ({ ...host, retained: runtimeEval }));

@@ -1086,7 +1086,7 @@ try {
 
 	writeFileSync(
 		configPath,
-		`import { defineBuild } from "@maligator/cli";\nexport default defineBuild({\n\tentry: ${JSON.stringify(fixture)},\n\toutputName: "selfhost-cli-app",\n\tengine: { eval: true, regexp: false, intl: { enabled: false } },\n});\n`,
+		`import { defineBuild } from "@maligator/cli";\nexport default defineBuild({\n\tentry: ${JSON.stringify(fixture)},\n\toutputName: "selfhost-cli-app",\n\tengine: { eval: true, intl: { enabled: false } },\n});\n`,
 	);
 	writeFileSync(
 		path.join(project, "payload.bin"),

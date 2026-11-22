@@ -48,6 +48,12 @@ describe("resolveBuildConfig defaults", () => {
 		expect(resolveBuildConfig({ engine: { regexp: false } }).engine.regexp).toBe(false);
 	});
 
+	it("requires RegExp for the embedded eval compiler", () => {
+		expect(() => resolveBuildConfig({ engine: { eval: true, regexp: false } })).toThrow(
+			/embedded compiler .* needs the RegExp engine.*`engine\.regexp: false`/,
+		);
+	});
+
 	it("defaults Temporal OFF and honors an explicit opt-in", () => {
 		expect(resolveBuildConfig({}).engine.temporal).toBe(false);
 		expect(resolveBuildConfig({ engine: { temporal: true } }).engine.temporal).toBe(true);
@@ -446,12 +452,8 @@ describe("buildConfigCacheSuffix", () => {
 	});
 
 	it("regexp-off gets a distinct non-empty output suffix", () => {
-		const canonical = resolveBuildConfig({
-			engine: { eval: true, intl: { enabled: true } },
-		});
-		const noRegexp = resolveBuildConfig({
-			engine: { eval: true, regexp: false, intl: { enabled: true } },
-		});
+		const canonical = resolveBuildConfig({});
+		const noRegexp = resolveBuildConfig({ engine: { regexp: false } });
 		expect(buildConfigCacheSuffix(noRegexp)).toMatch(/^[0-9a-f]{8}$/);
 		expect(buildConfigCacheSuffix(noRegexp)).not.toBe(buildConfigCacheSuffix(canonical));
 	});
@@ -530,12 +532,11 @@ describe("build-cache suffix stability", () => {
 			"intl-subset + regexp-off",
 			resolveBuildConfig({
 				engine: {
-					eval: true,
 					regexp: false,
 					intl: { enabled: true, features: ["segmenter"] },
 				},
 			}),
-			"14dd91a8",
+			"c355d1b1",
 		],
 	];
 

@@ -55,21 +55,33 @@ describe("private compiler bootstrap", () => {
 					expect(runToStdout(binary, { env: { ...env, ...selection } })).toBe(expected);
 		},
 	);
-
-	it("compiles eval in an application without a process global", () => {
-		const leanFixture = join(outDir, "lean.mjs");
-		writeFileSync(
-			leanFixture,
-			`console.log(eval("const name = 'process'; [6 * 7, typeof globalThis[name]].join(' ')"));`,
-		);
-		const binaries = buildBackendPairFromOneProgramImage({
-			fixture: leanFixture,
-			name: "eval-lean",
-			outDir,
-			config: resolveBuildConfig({ engine: { eval: true } }),
-		});
-		for (const binary of [binaries.compiled, binaries.interpreted]) {
-			expect(runToStdout(binary)).toBe("42 undefined\n");
-		}
-	});
 });
+
+it.each(["run", "build"])(
+	"keeps language engines and host globals used only by eval under %s",
+	(command) => {
+		const cwd = mkdtempSync(join(tmpdir(), "mal-eval-retention-"));
+		const cli = join(import.meta.dirname, "../../src/index.ts");
+		const options = { cwd, encoding: "utf8" as const, timeout: 240_000 };
+		try {
+			writeFileSync(
+				join(cwd, "maligator.build.ts"),
+				`export default { entry: "entry.mjs", engine: { eval: true } };`,
+			);
+			const source = `const path = process.getBuiltinModule('node:path');
+const name = path.basename('/sample/demo');
+[/^demo$/.test(name), Buffer.from('é').length, 'e\\u0301'.normalize()].join(' ');`;
+			writeFileSync(
+				join(cwd, "entry.mjs"),
+				`console.log(eval(${JSON.stringify(source)}));`,
+			);
+			const output = execFileSync(process.execPath, [cli, command], options);
+			const result =
+				command === "build" ? execFileSync(output.trim(), [], options) : output;
+			expect(result).toBe("true 2 é\n");
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	},
+	300_000,
+);

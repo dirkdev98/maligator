@@ -1,3 +1,4 @@
+import { BuildConfigError } from "./build-config-error.ts";
 import type { MaligatorBuildConfig, MaligatorFfiLibrary } from "./public-api.d.ts";
 
 /**
@@ -234,6 +235,14 @@ export const DEFAULT_EXPORT_CONDITIONS: ReadonlyArray<string> = ["maligator", "n
 
 /** Apply defaults over a validated config. Absent fields take the product default. */
 export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildConfig {
+	const evalPolicy = config.engine?.eval ?? false;
+	const regexp = config.engine?.regexp ?? true;
+	if (evalPolicy === true && !regexp) {
+		throw new BuildConfigError(
+			"The embedded compiler runs in the application's isolate and needs the RegExp engine. " +
+				'With `engine.regexp: false`, set `engine.eval` to `false` or `"compile-check"`.',
+		);
+	}
 	return {
 		entry: config.entry,
 		outputName: config.outputName,
@@ -243,11 +252,9 @@ export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildC
 		},
 		engine: {
 			primordials: config.engine?.primordials ?? "locked",
-			eval: config.engine?.eval ?? false,
+			eval: evalPolicy,
 			realms: config.engine?.realms ?? false,
-			// RegExp is core ECMAScript, so it defaults ON (unlike eval/Intl/web) —
-			// power users disable it explicitly for size-critical builds.
-			regexp: config.engine?.regexp ?? true,
+			regexp,
 			// Temporal carries calendar and time-zone data, so product builds opt in.
 			temporal: config.engine?.temporal ?? false,
 			intl: {

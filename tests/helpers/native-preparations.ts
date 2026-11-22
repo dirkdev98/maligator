@@ -42,8 +42,9 @@ export function nativePreparations(root: string, file: string): Array<NativePrep
 		relative === "tests/native/exact-collection-capture.test.ts"
 			? (["locked-perf-stats"] as const)
 			: []),
-		// Its product build config must keep resolving to `defaultProductEvalConfig()`.
-		...(relative === "tests/native/express-valibot-build.test.ts"
+		// These CLI fixtures use `defaultProductEvalConfig()` for the application.
+		...(relative === "tests/native/eval-private-bootstrap.test.ts" ||
+		relative === "tests/native/express-valibot-build.test.ts"
 			? (["product-eval-defaults"] as const)
 			: []),
 		...(relative === "tests/native/owning-argument-forwarding.test.ts"

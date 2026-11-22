@@ -207,14 +207,11 @@ writeFileSync(
 		},
 	),
 );
-const evalConfig = resolveBuildConfig({
-	engine: { eval: true, regexp: false, intl: { enabled: false } },
-});
 const evalReference = buildNativeBinary({
 	fixture,
 	name: "node-reference-eval",
 	outDir: root,
-	config: evalConfig,
+	config: selfhostNativeTargetConfig(true),
 	compilerBake: { kind: "prebuilt", path: prebuiltWire },
 });
 const evalOutput = execFileSync(

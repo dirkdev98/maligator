@@ -45,6 +45,7 @@ describe("engine.regexp: false runtime gate", () => {
 			name: "regexp-disabled",
 			mainFile: HOST_MAIN,
 			outDir,
+			evalEnabled: false,
 			regexpEnabled: false,
 		});
 	});
@@ -63,6 +64,7 @@ describe("engine.regexp: false runtime gate", () => {
 			name: "regexp-enabled",
 			mainFile: HOST_MAIN,
 			outDir,
+			evalEnabled: false,
 		});
 		const offSize = statSync(regexpOffBin).size;
 		const onSize = statSync(regexpOnBin).size;

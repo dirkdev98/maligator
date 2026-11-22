@@ -8,6 +8,7 @@ import { runSemanticAnalysisForGraph } from "../../src/compiler/frontend/analyze
 import { buildModuleGraph } from "../../src/compiler/frontend/module-graph.ts";
 import type { ExternalModuleInterface } from "../../src/compiler/frontend/module-graph.ts";
 import { compileSemanticProgramToProgramImage } from "../../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../../src/compiler/shared/compiler-facts.ts";
 import { serializeRuntimeImage } from "../../src/compiler/target/program-image-codec.ts";
 import { buildDevelopmentRunner } from "../../src/local-build.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
@@ -93,7 +94,11 @@ describe("source builtin image ownership", () => {
 		});
 		const program = compileSemanticProgramToProgramImage(
 			runSemanticAnalysisForGraph(graph),
-			{ optimization: "development", semanticLowering: { moduleExports: "all" } },
+			{
+				facts: compilerProgramFactsFromConfig(config),
+				optimization: "development",
+				semanticLowering: { moduleExports: "all" },
+			},
 		);
 		const wire = join(outDir, `${name}.malw`);
 		writeFileSync(wire, serializeRuntimeImage(program.runtime));
