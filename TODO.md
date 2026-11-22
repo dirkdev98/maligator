@@ -396,12 +396,19 @@ distinct when measuring text work.
       `node:test` provider is still copied into every image that reads `process` or
       `global`, and dependency images share that limitation.
 
-- [ ] Prototype shipping one existing toolchain runtime image or common runtime-library
-      artifact with the matching platform package. Key it by full source, toolchain,
-      target and configuration identity, verify its digest and retain local compilation
-      fallback. Accept on cold end-to-end install/use savings after transfer, package size
-      and cache storage; do not add a universal dependency-image registry or build-setting
-      matrix as a prerequisite.
+- [ ] Move the embedded runtime sources out of the CLI into an optional fallback package,
+      keeping the platform package to the default flavour's archives and runners, under a
+      package budget set from `npm run bench:size` and the packed package sizes. Production
+      builds compile the C runtime locally with LTO today, so first measure whether
+      prebuilt production C archives keep speed parity on javascript-v2 and HTTP; keep the
+      sources in the main package if they don't.
+
+- [ ] Link the program, the C runtime and the Rust components with cross-language LTO
+      through one pinned LLVM, shipping bitcode next to the machine-code archives. On
+      macOS 27, LLD 23 cannot read the SDK's `libSystem.tbd`, Rust 1.99.1 bitcode aborts
+      LTO codegen ("Unsupported stack probing method") and Zig 0.15 refuses `-flto` for
+      macOS. Once it links, have `maligator doctor` report the speed difference when the
+      system compiler links without it.
 
 ## Active correctness clusters
 
