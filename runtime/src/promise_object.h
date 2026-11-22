@@ -22,7 +22,7 @@ typedef struct MalJob MalJob;
 
 typedef struct MalPromiseObject {
     MalObject object;
-    MalObjectStorage object_storage;
+    MalObjectDeferredStorage object_storage;
     MalPromiseState state;
 
     /**
@@ -45,6 +45,8 @@ typedef struct MalPromiseObject {
      */
     MalAsyncFunctionState *async_owner;
 } MalPromiseObject;
+
+static_assert(sizeof(MalPromiseObject) <= 64, "Promise object outgrew its allocation class");
 
 typedef enum MalPromiseCombinatorKind {
     MAL_PROMISE_COMBINATOR_ALL,

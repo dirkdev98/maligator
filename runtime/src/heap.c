@@ -349,6 +349,10 @@ static void mal_gc_clear_young_blocks(MalHeap *heap) {
 }
 
 static void mal_gc_cell_block_available(MalHeap *heap, MalGcBlock *block) {
+    if (heap->cell_blocks[block->size_class] == block) {
+        block->scan_word = 0;
+        return;
+    }
     if (block->on_partial) return;
     block->on_partial = 1;
     block->next_free = heap->cell_avail[block->size_class];
@@ -366,13 +370,6 @@ static void mal_gc_clear_cell_avail(MalHeap *heap) {
             block->next_free = nullptr;
             block = next;
         }
-    }
-}
-
-/* Freed cells reuse lowest addresses first, so each class rescans its current block. */
-static void mal_gc_rescan_current_blocks(MalHeap *heap) {
-    for (usize size_class = 0; size_class < MAL_GC_NUM_SIZE_CLASSES; size_class++) {
-        if (heap->cell_blocks[size_class] != nullptr) heap->cell_blocks[size_class]->scan_word = 0;
     }
 }
 
@@ -612,8 +609,13 @@ static bool mal_gc_refill_cells(MalHeap *heap, u32 size_class) {
             }
             block->scan_word = MAL_GC_BLOCK_WORDS;
         }
+        // A warm block of this class keeps young allocations together without
+        // repurposing storage that another size class can still use.
+        const MalGcBlock *recycled = heap->free_blocks;
+        bool warm_same_class = recycled != nullptr && recycled->recycled == MAL_GC_RECYCLED_WARM &&
+            recycled->kind == MAL_GC_BLOCK_CELL && recycled->size_class == size_class;
         block = heap->cell_avail[size_class];
-        if (block != nullptr) {
+        if (block != nullptr && !warm_same_class) {
             heap->cell_avail[size_class] = block->next_free;
             block->next_free = nullptr;
             block->on_partial = 0;
@@ -1344,7 +1346,6 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
     heap->live_bytes = live_bytes;
     mal_gc_trim_empty_raw_blocks(heap);
     mal_gc_return_free_block_pages(heap);
-    mal_gc_rescan_current_blocks(heap);
 }
 
 void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
@@ -1379,7 +1380,14 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
         usize survivors = young - dead_count;
         heap->live_bytes += survivors * block->cell_size;
         block->live += (u32) survivors;
-        if (dead_count != 0) mal_gc_cell_block_available(heap, block);
+        // A block linked on a partial list shares `next_free` with the free-block
+        // list, so it stays there until a refill unlinks it.
+        if (block->live == 0 && heap->cell_blocks[block->size_class] != block &&
+            !block->on_partial) {
+            mal_gc_recycle_block(heap, block);
+        } else if (dead_count != 0) {
+            mal_gc_cell_block_available(heap, block);
+        }
         block = next;
     }
     MalGcLarge *large = heap->young_large;
@@ -1396,7 +1404,6 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
         }
         large = next;
     }
-    mal_gc_rescan_current_blocks(heap);
 }
 
 void mal_heap_sweep_begin(MalHeap *heap) {
@@ -1474,7 +1481,6 @@ bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_bl
     heap->live_bytes = heap->sweep_live_bytes;
     mal_gc_trim_empty_raw_blocks(heap);
     mal_gc_return_free_block_pages(heap);
-    mal_gc_rescan_current_blocks(heap);
     heap->sweeping = false;
     return true;
 }

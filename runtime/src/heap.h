@@ -702,8 +702,8 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize);
 
 /** Reclaim the young cells a minor mark left unmarked. Marking must have reported
  * every young survivor through mal_heap_note_minor_survivor; the sweep reads only
- * cells that need their finalizer. Empty blocks await a major before page
- * reclamation. */
+ * cells that need their finalizer. An empty block outside the current allocation
+ * block can be reused by any size class. Its pages stay warm until a major. */
 void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize);
 
 /**

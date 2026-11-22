@@ -20,7 +20,7 @@ MalPromiseCombinatorState *mal_promise_combinator_state_new(
 
 MalPromiseObject *mal_promise_object_new(MalHeap *heap, MalObject *prototype) {
     MalPromiseObject *promise = mal_heap_alloc(heap, sizeof(MalPromiseObject), MAL_HEAP_PROMISE_OBJECT);
-    mal_object_init(heap, &promise->object, MAL_HEAP_PROMISE_OBJECT, prototype);
+    mal_object_init_deferred(heap, &promise->object, prototype);
     promise->state = MAL_PROMISE_PENDING;
     promise->is_handled = false;
     promise->result = mal_value_new_undefined();

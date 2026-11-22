@@ -228,6 +228,20 @@ static bool minor_reenrolls_a_reclaimed_cell_away_from_the_current_block(MalHeap
     return true;
 }
 
+static bool minor_reuses_an_empty_block_for_another_size_class(MalHeap *heap) {
+    const usize size = 512;
+    usize capacity = cells_per_block(size);
+    MalGcBlock *empty = mal_heap_cell_block(new_cell(heap, size));
+    for (usize i = 1; i < capacity; i++) new_cell(heap, size);
+    MalGcBlock *current = mal_heap_cell_block(new_cell(heap, size));
+    CHECK(current != empty);
+
+    mal_heap_sweep_minor(heap, finalize_cell);
+    CHECK(mal_heap_cell_block(new_cell(heap, 1024)) == empty);
+    CHECK(mal_heap_cell_block(new_cell(heap, size)) == current);
+    return true;
+}
+
 static bool major_resets_minor_tracking_before_block_reassignment(MalHeap *heap) {
     TestCell *old = new_cell(heap, 512);
     mal_heap_begin_major(heap);
@@ -795,6 +809,7 @@ int main(void) {
         minor_preserves_old_cells_and_free_list_members,
         minor_reenrolls_reused_cells_in_untouched_blocks,
         minor_reenrolls_a_reclaimed_cell_away_from_the_current_block,
+        minor_reuses_an_empty_block_for_another_size_class,
         major_resets_minor_tracking_before_block_reassignment,
         incremental_major_keeps_allocations_after_a_block_was_swept,
         incremental_major_accounts_a_new_block_in_a_completed_chunk,
