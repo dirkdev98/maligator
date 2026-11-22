@@ -291,7 +291,7 @@ describe("normal build frontend cache", () => {
 			}
 			console.log(sum(new Float64Array([1, 2, 3])));\n`,
 		);
-		compileBuildFrontend({
+		const profiled = compileBuildFrontend({
 			entrypoint,
 			config: resolveBuildConfig({}),
 			stripTypes: stripCompactTypes,
@@ -299,8 +299,10 @@ describe("normal build frontend cache", () => {
 			cacheDirectory,
 			profile: true,
 		});
+		expect(profiled.fragmentCompilerArtifacts).toBeUndefined();
 		const plain = compile(entrypoint, cacheDirectory);
 		expect(plain.cache).toBe("miss");
+		expect(plain.fragmentCompilerArtifacts).toHaveLength(1);
 		expect(
 			plain.programImage.native.functions.some(
 				(fn) => (fn.storage?.numericLoopRegions.length ?? 0) > 0,

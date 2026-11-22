@@ -60,7 +60,7 @@ import type {
 } from "./compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
-	serializeCompilerArtifact,
+	serializeProgramImageArtifacts,
 	COMPILER_ARTIFACT_VERSION,
 } from "./compiler/target/compiler-artifact-codec.ts";
 import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
@@ -968,8 +968,13 @@ function prepareBuildFrontend(
 		loadProgramImage = () => programImage;
 		imageStats = programImageStats(programImage);
 		const serializeStartedAt = Date.now();
-		if (!liveProfile) compilerWire = serializeCompilerArtifact(programImage);
-		wires = [serializeRuntimeImage(programImage.runtime)];
+		if (liveProfile) {
+			wires = [serializeRuntimeImage(programImage.runtime)];
+		} else {
+			const artifacts = serializeProgramImageArtifacts(programImage);
+			compilerWire = artifacts.compilerWire;
+			wires = [artifacts.runtimeWire];
+		}
 		phases.serializeMs += Date.now() - serializeStartedAt;
 	};
 	const workerOptions: CompileEntrypointOptions = {

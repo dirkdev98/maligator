@@ -38,7 +38,7 @@ import {
 } from "./compiler/shared/module-path-values.ts";
 import {
 	deserializeCompilerArtifact,
-	serializeCompilerArtifact,
+	serializeProgramImageArtifacts,
 	COMPILER_ARTIFACT_VERSION,
 } from "./compiler/target/compiler-artifact-codec.ts";
 import { mappedFunctionArrayCallHints } from "./compiler/target/mapped-function-array-hints.ts";
@@ -666,8 +666,8 @@ export function compileLinkedImage(
 		interfaces = programImage.moduleInterfaces ?? [];
 		stats = runtimeImageStats(programImage.runtime);
 		const serializeStartedAt = Date.now();
-		const compilerWire = serializeCompilerArtifact(programImage);
-		wire = serializeRuntimeImage(programImage.runtime);
+		const { compilerWire, runtimeWire } = serializeProgramImageArtifacts(programImage);
+		wire = runtimeWire;
 		phases.serializeMs += Date.now() - serializeStartedAt;
 		const compilerArtifact = publishFrontendCompilerArtifact(
 			compilerWire,

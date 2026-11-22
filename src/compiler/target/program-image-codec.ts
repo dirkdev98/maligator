@@ -563,6 +563,15 @@ export function serializeRuntimeImage(
 	return writer.finish();
 }
 
+/** Copy a completed runtime prefix before the writer appends any compiler data. */
+export function copyRuntimeImageWire(writer: Writer): Uint8Array {
+	const wire = writer.finish();
+	const header = new DataView(wire.buffer);
+	header.setUint32(0, WIRE_MAGIC, true);
+	header.setUint32(Uint32Array.BYTES_PER_ELEMENT, WIRE_VERSION, true);
+	return wire;
+}
+
 export function writeRuntimeImage(
 	w: Writer,
 	def: RuntimeImage,

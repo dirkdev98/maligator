@@ -76,6 +76,7 @@ import { validateNativeStringSpan } from "./native-string-span.ts";
 import { NATIVE_VALUE_CONVERSIONS } from "./native-value-transport.ts";
 import type { Reader } from "./program-image-codec.ts";
 import {
+	copyRuntimeImageWire,
 	readRuntimeImage,
 	readRuntimeFunction,
 	writeRuntimeFunction,
@@ -842,6 +843,26 @@ export function serializeCompilerArtifact(
 	image: ProgramImage,
 	options: { debugInfo?: boolean } = {},
 ): Uint8Array {
+	const writer = writeCompilerArtifactRuntime(image, options);
+	writeCompilerArtifactNative(writer, image, options);
+	return writer.finish();
+}
+
+/** Encode the compiler and runtime wires from one portable image body. */
+export function serializeProgramImageArtifacts(
+	image: ProgramImage,
+	options: { debugInfo?: boolean } = {},
+): { compilerWire: Uint8Array; runtimeWire: Uint8Array } {
+	const writer = writeCompilerArtifactRuntime(image, options);
+	const runtimeWire = copyRuntimeImageWire(writer);
+	writeCompilerArtifactNative(writer, image, options);
+	return { compilerWire: writer.finish(), runtimeWire };
+}
+
+function writeCompilerArtifactRuntime(
+	image: ProgramImage,
+	options: { debugInfo?: boolean },
+): Writer {
 	for (const [index, fn] of image.runtime.functions.entries()) {
 		if (fn.closureCaptureOwners !== undefined)
 			validateClosureCaptureOwners(
@@ -864,6 +885,14 @@ export function serializeCompilerArtifact(
 		COMPILER_ARTIFACT_VERSION,
 		options,
 	);
+	return writer;
+}
+
+function writeCompilerArtifactNative(
+	writer: Writer,
+	image: ProgramImage,
+	options: { debugInfo?: boolean },
+): void {
 	const bodies = image.native.functions.map((fn) => fn.body);
 	validateRuntimeImageMetadata({ ...image.runtime, functions: bodies });
 	validateNativeBodyAbis(image.runtime.functions, bodies);
@@ -872,7 +901,6 @@ export function serializeCompilerArtifact(
 		writeRuntimeFunction(writer, body, options.debugInfo !== false);
 	writeCompilerArtifact(writer, { ...image.runtime, functions: bodies }, image);
 	validateNativeProgramStorage(image.native, image.runtime.stringConstants);
-	return writer.finish();
 }
 function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): void {
 	if (storage === undefined)

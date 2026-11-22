@@ -6,6 +6,7 @@ import {
 	COMPILER_ARTIFACT_VERSION,
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
+	serializeProgramImageArtifacts,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import {
 	deserializeRuntimeImage,
@@ -855,6 +856,46 @@ function firstNativeSafepointReader(bytes: Uint8Array) {
 }
 
 describe("program-image-codec", () => {
+	it.each([true, false])(
+		"emits the standalone wire bytes with debug info %s",
+		(debugInfo) => {
+			const options = { debugInfo };
+			const { compilerWire, runtimeWire } = serializeProgramImageArtifacts(
+				definition,
+				options,
+			);
+			expect(compilerWire).toEqual(serializeCompilerArtifact(definition, options));
+			expect(runtimeWire).toEqual(serializeRuntimeImage(definition.runtime, options));
+		},
+	);
+
+	it("returns independently owned compiler and runtime wires", () => {
+		const { compilerWire, runtimeWire } = serializeProgramImageArtifacts(definition);
+		expect(runtimeWire.buffer).not.toBe(compilerWire.buffer);
+	});
+
+	it("rejects invalid runtime metadata when encoding both wires", () => {
+		const malformed = withBytecodeFunctions(definition, [
+			{
+				...mainFn,
+				gcSafepoints: [{ instructionIp: 0, rootRegisters: [3, 3] }],
+			},
+		]);
+		expect(() => serializeProgramImageArtifacts(malformed)).toThrow(
+			"invalid VM safepoint root register",
+		);
+	});
+
+	it("rejects a native body with an incompatible function ABI when encoding both wires", () => {
+		const malformed = withNativeFunctionPlan(definition, 0, (plan) => ({
+			...plan,
+			body: { ...plan.body, strict: !plan.body.strict },
+		}));
+		expect(() => serializeProgramImageArtifacts(malformed)).toThrow(
+			"Native body has an incompatible strict",
+		);
+	});
+
 	it("round-trips distinct incoming and outgoing roots in ordinary and direct entries", () => {
 		const image = phasedRootsDefinition();
 		const bytes = serializeCompilerArtifact(image);
