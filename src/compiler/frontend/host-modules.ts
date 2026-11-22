@@ -279,9 +279,8 @@ export const HOST_PERSONALITY_INSTALLERS: ReadonlyArray<string> = [
 ];
 
 /**
- * Selects Node's `Error.prepareStackTrace` and `Error.stackTraceLimit` hooks. The
- * runtime reads it from the image's install table while it builds the intrinsics,
- * even when the rest of the Node personality is absent.
+ * Selects Node's Error stack hooks during intrinsic initialization. Images can
+ * request the hooks independently of the Node personality.
  */
 export const NODE_ERROR_HOOKS_INSTALLER = "mal_host_install_node_error_hooks";
 

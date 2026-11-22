@@ -1099,15 +1099,27 @@ void mal_host_install_node_error_hooks(
     (void) launch;
 }
 
-#if MAL_PRIMORDIALS_LOCKED
-static bool mal_builtin_error_node_hooks_selected(const MalVm *vm) {
-    const MalRuntimeImage *image = vm->runtime_image;
+bool mal_runtime_image_selects_node_error_hooks(const MalRuntimeImage *image) {
     for (i32 i = 0; image != nullptr && i < image->host_install_count; i++) {
         if (image->host_installs[i].installer == mal_host_install_node_error_hooks) return true;
     }
     return false;
 }
 
+bool mal_runtime_image_include_node_error_hooks(MalRuntimeImage *root, MalHostInstall **owned_installs) {
+    if (mal_runtime_image_selects_node_error_hooks(root)) return true;
+    usize count = (usize) root->host_install_count;
+    MalHostInstall *installs = malloc((count + 1) * sizeof(*installs));
+    if (installs == nullptr) return false;
+    if (count > 0) memcpy(installs, root->host_installs, count * sizeof(*installs));
+    installs[count] = (MalHostInstall) {.installer = mal_host_install_node_error_hooks};
+    root->host_installs = installs;
+    root->host_install_count++;
+    *owned_installs = installs;
+    return true;
+}
+
+#if MAL_PRIMORDIALS_LOCKED
 static MalValue mal_builtin_error_node_hook_set(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalIntrinsic slot, const byte *name
@@ -1273,7 +1285,7 @@ static MalObject *mal_builtin_error_install_kind(
  */
 static bool mal_builtin_error_define_node_hooks(MalVm *vm, MalObject *error_constructor) {
 #if MAL_PRIMORDIALS_LOCKED
-    if (!mal_builtin_error_node_hooks_selected(vm)) return false;
+    if (!mal_runtime_image_selects_node_error_hooks(vm->runtime_image)) return false;
     vm->intrinsics[MAL_INTRINSIC_ERROR_PREPARE_STACK_TRACE_VALUE] =
         mal_value_new_undefined();
     vm->intrinsics[MAL_INTRINSIC_ERROR_STACK_TRACE_LIMIT_VALUE] =

@@ -13,6 +13,7 @@
 #include "map_object.h"
 #include "ascii.h"
 #include "builtin_atomics.h"
+#include "builtin_error.h"
 #include "builtin_promise.h"
 #include "builtin_weak_ref.h"
 #include "function_object.h"
@@ -623,6 +624,7 @@ static u32 workers_max(void) {
 typedef struct ApplicationWire {
     _Atomic(u32) refs;
     bool node_personality;
+    bool node_error_hooks;
     _Atomic(MalLoadedRuntimeImage *) first_load;
     MalHostInstaller personality;
     u32 engine_policy;
@@ -634,6 +636,7 @@ typedef struct ApplicationWire {
 typedef struct ApplicationWires {
     _Atomic(u32) refs;
     u32 count;
+    bool node_error_hooks;
     usize lookup_capacity;
     ApplicationWire **lookup;
     ApplicationWire **ordered;
@@ -2673,6 +2676,16 @@ static void *worker_thread_main(void *arg) {
         }
         image = loaded != nullptr ? mal_loaded_runtime_image_get(loaded) : nullptr;
     }
+#if MAL_DEVELOPMENT_API
+    MalRuntimeImage root_program;
+    MalHostInstall *root_installs = nullptr;
+    if (image != nullptr && thread->application != nullptr &&
+        thread->application->image->wires->node_error_hooks) {
+        root_program = *image;
+        image = mal_runtime_image_include_node_error_hooks(&root_program, &root_installs)
+            ? &root_program : nullptr;
+    }
+#endif
     MalVm *vm = cancelled || image == nullptr ? nullptr : calloc(1, sizeof(MalVm));
     g_self_thread = thread;
     if (vm != nullptr) {
@@ -2690,6 +2703,9 @@ static void *worker_thread_main(void *arg) {
     if (vm == nullptr) {
         g_self_thread = nullptr;
         worker_drop_child_endpoint(thread);
+#if MAL_DEVELOPMENT_API
+        free(root_installs);
+#endif
         if (loaded != nullptr) mal_loaded_runtime_image_free(loaded);
         thread->reason = cancelled ? REASON_TERMINATED : REASON_ERROR;
         thread->exit_code = 1;
@@ -2810,6 +2826,9 @@ static void *worker_thread_main(void *arg) {
     mal_host_detach(vm);
     mal_vm_free(vm);
     free(vm);
+#if MAL_DEVELOPMENT_API
+    free(root_installs);
+#endif
     if (loaded != nullptr) mal_loaded_runtime_image_free(loaded);
     mal_atomics_set_agent(false, nullptr);
     g_self_thread = nullptr;
@@ -4291,9 +4310,11 @@ static ApplicationWire *application_wire_read(
     if (loaded == nullptr) goto failed;
     atomic_init(&wire->refs, 1);
     atomic_init(&wire->first_load, loaded);
-    wire->personality = mal_runtime_image_personality(mal_loaded_runtime_image_get(loaded), nullptr);
+    const MalRuntimeImage *program = mal_loaded_runtime_image_get(loaded);
+    wire->personality = mal_runtime_image_personality(program, nullptr);
     wire->node_personality = wire->personality == mal_host_install_node_web_personality;
-    wire->engine_policy = mal_loaded_runtime_image_get(loaded)->engine_policy;
+    wire->node_error_hooks = mal_runtime_image_selects_node_error_hooks(program);
+    wire->engine_policy = program->engine_policy;
     wire->stamp = *stamp;
     memcpy(wire->digest, hex, sizeof(wire->digest));
     return wire;
@@ -4389,6 +4410,7 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
             goto failed;
         }
         image->wires->ordered[index] = wire;
+        image->wires->node_error_hooks = image->wires->node_error_hooks || wire->node_error_hooks;
     }
     if (!mal_workers_install(vm) || thrown(vm)) goto failed;
     urls_prune(g_isolate);

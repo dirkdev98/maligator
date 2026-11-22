@@ -1,6 +1,7 @@
 #include "dev_runner.h"
 
 #include "atomics_async.h"
+#include "builtin_error.h"
 #include "compiler_native.h"
 #include "vm.h"
 #include "perf_stats.h"
@@ -102,11 +103,14 @@ static int run_images(
     if (loaded_images == nullptr) return 2;
     int code = 2;
     MalHostInstaller personality = nullptr;
+    bool node_error_hooks = false;
+    MalHostInstall *root_installs = nullptr;
     for (int index = 0; index < wire_count; index++) {
         loaded_images[index] = load_runtime_image(images, owned_images, index);
         if (loaded_images[index] == nullptr) goto free_images;
-        personality = mal_runtime_image_personality(
-            mal_loaded_runtime_image_get(loaded_images[index]), personality);
+        const MalRuntimeImage *program = mal_loaded_runtime_image_get(loaded_images[index]);
+        personality = mal_runtime_image_personality(program, personality);
+        node_error_hooks = node_error_hooks || mal_runtime_image_selects_node_error_hooks(program);
     }
     MalRuntimeImage root_program = *mal_loaded_runtime_image_get(loaded_images[0]);
     if (root_program.module_import_count > 0) {
@@ -116,6 +120,11 @@ static int run_images(
     if (assets != nullptr) {
         root_program.assets = assets;
         root_program.asset_count = asset_count;
+    }
+    if (node_error_hooks &&
+        !mal_runtime_image_include_node_error_hooks(&root_program, &root_installs)) {
+        fprintf(stderr, "could not prepare development image host installs\n");
+        goto free_images;
     }
 
     MalVm vm;
@@ -202,6 +211,7 @@ static int run_images(
     mal_vm_free(&vm);
     free(callables);
 free_images:
+    free(root_installs);
     for (int index = 0; index < wire_count; index++) {
         if (loaded_images[index] != nullptr) mal_loaded_runtime_image_free(loaded_images[index]);
     }

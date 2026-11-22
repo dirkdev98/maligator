@@ -241,10 +241,14 @@ ${tail}`,
 		expect(installers).toContain(NODE_ERROR_HOOKS_INSTALLER);
 	});
 
-	it("selects Node's Error hooks for a program that reads them without a personality", () => {
-		expect([
-			...manifest(`globalThis.sink = Error.stackTraceLimit;\n`, defaultConfig).keys(),
-		]).toEqual([NODE_ERROR_HOOKS_INSTALLER]);
+	it.each([
+		"Error.captureStackTrace({});",
+		"Error.prepareStackTrace = () => 'custom';",
+		"globalThis.sink = Error.stackTraceLimit;",
+	])("selects Node's Error hooks without a personality for %s", (source) => {
+		expect([...manifest(source, defaultConfig).keys()]).toEqual([
+			NODE_ERROR_HOOKS_INSTALLER,
+		]);
 	});
 });
 

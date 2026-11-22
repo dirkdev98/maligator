@@ -17,8 +17,18 @@ void mal_builtin_error_install(MalVm *vm);
  */
 typedef struct MalHostInstallSlot MalHostInstallSlot;
 typedef struct MalHostLaunchContext MalHostLaunchContext;
+typedef struct MalHostInstall MalHostInstall;
+typedef struct MalRuntimeImage MalRuntimeImage;
 void mal_host_install_node_error_hooks(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);
+
+bool mal_runtime_image_selects_node_error_hooks(const MalRuntimeImage *image);
+
+/**
+ * Carry a fragment's hook requirement into the root image before VM initialization.
+ * If this replaces the root's install table, the caller owns it until VM teardown.
+ */
+bool mal_runtime_image_include_node_error_hooks(MalRuntimeImage *root, MalHostInstall **owned_installs);
 
 /**
  * Publish Promise.any's private ordered errors Array on an intrinsic AggregateError.

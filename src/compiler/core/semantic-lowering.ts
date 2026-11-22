@@ -17260,7 +17260,11 @@ function retainLanguageMember(
 		retainUnfollowedLanguageMembers(program);
 	} else if (key === "normalize") {
 		program.languageInstallers.add(UNICODE_NORMALIZATION_INSTALLER);
-	} else if (key === "stackTraceLimit" || key === "prepareStackTrace") {
+	} else if (
+		key === "captureStackTrace" ||
+		key === "prepareStackTrace" ||
+		key === "stackTraceLimit"
+	) {
 		retainNodeErrorHooks(program);
 	} else if (
 		key === "RegExp" ||
