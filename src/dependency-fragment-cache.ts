@@ -404,9 +404,16 @@ function islandPackageRoot(
 	graph: ModuleGraph,
 ): string | undefined {
 	if (target !== "runtime") return undefined;
+	const sourceBuiltins = new Set(graph.sourceBuiltinProviders);
 	let root: string | undefined;
 	for (const record of graph.modules.values()) {
-		if (record.host !== undefined) continue;
+		// Source built-ins have toolchain identities across package installations.
+		if (
+			record.host !== undefined ||
+			(record.virtual === true && sourceBuiltins.has(record.path))
+		) {
+			continue;
+		}
 		const segments = record.path.split(path.sep);
 		const index = segments.indexOf("node_modules");
 		if (index < 0) return undefined;
@@ -719,6 +726,9 @@ export function compileDependencyFragments(
 				});
 	const worker = missing.length + tasks.length > 1 ? options.worker : undefined;
 	if (worker !== undefined) {
+		// Workers still parse their own ASTs, but can reuse the coordinator's
+		// dependency extraction and resolution after checking their inputs.
+		options.session.publishModuleParses();
 		const sourceBytes = (unit: DependencyUnit) =>
 			[...unit.graph.modules.values()].reduce(
 				(sum, record) =>

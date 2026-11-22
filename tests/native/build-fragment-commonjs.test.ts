@@ -95,9 +95,10 @@ function locatedProject(directory: string): string {
 	write(
 		path.join(commonjs, "index.js"),
 		`const parts = __dirname.split("/");
+const sourceBuiltin = process.getBuiltinModule("node:test");
 let missing;
 try { require("./missing.js"); } catch (error) { missing = error.message.split("\\n").at(-1); }
-module.exports = { dirname: __dirname, filename: __filename, length: __dirname.length, depth: parts.length, missing };
+module.exports = { dirname: __dirname, filename: __filename, length: __dirname.length, depth: parts.length, missing, sourceBuiltin: typeof sourceBuiltin };
 `,
 	);
 	const esm = path.join(directory, "node_modules/located-esm");
@@ -165,6 +166,7 @@ describe("dependency images across project locations", () => {
 				length: commonjs.length,
 				depth: commonjs.split("/").length,
 				missing: `- ${path.join(commonjs, "index.js")}`,
+				sourceBuiltin: "function",
 				url,
 				urlLength: url.length,
 			};

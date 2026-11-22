@@ -393,9 +393,8 @@ export class FrontendCompilationSession {
 		});
 	}
 
-	/** Atomically publish file digests and parses learned during this compilation. */
-	flush(): void {
-		this.#invalidateAll = false;
+	/** Publish resolved loads for other compiler processes to validate and reuse. */
+	publishModuleParses(): void {
 		const learned = this.#moduleParses.takePersistedChanges();
 		if (learned !== undefined && this.#parseManifest?.producer !== undefined) {
 			const { path: file, producer, projectRoot } = this.#parseManifest;
@@ -409,6 +408,12 @@ export class FrontendCompilationSession {
 			} satisfies ModuleParseManifest;
 			writeFileAtomically(file, `${JSON.stringify(manifest)}\n`);
 		}
+	}
+
+	/** Atomically publish file digests and parses learned during this compilation. */
+	flush(): void {
+		this.#invalidateAll = false;
+		this.publishModuleParses();
 		if (
 			!this.#digestManifestDirty ||
 			this.#digestManifestPath === undefined ||
