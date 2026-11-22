@@ -155,7 +155,7 @@ interface ApplicationImageGroup {
 }
 
 /**
- * Project modules grouped into the images an interpreted program loads, in
+ * Project modules grouped into independently cached application images, in
  * evaluation order; the last group holds the entry. An edit recompiles only its own
  * group, and the groups that import it only when its exported names change.
  *
@@ -225,10 +225,7 @@ export function compileBuildFragments(
 	assertDependenciesPrecedeImporters(options.graph);
 	assertStaticImageBoundary(options.graph, (modulePath) => !isExternalModule(modulePath));
 	const targets = dependencyTargets(options.graph);
-	// Native development builds give every image its own overlay translation units,
-	// so they keep one application image until per-module units pay off cold.
-	const groups =
-		options.target === "runtime" ? applicationImageGroups(options.graph) : undefined;
+	const groups = applicationImageGroups(options.graph);
 	if (targets.length === 0 && (groups === undefined || groups.length < 2)) {
 		throw new UnsupportedLinkedImagesError("the graph has no image boundary");
 	}

@@ -37,9 +37,9 @@ function node(): string {
 	return result.stdout;
 }
 
-function run(): { stdout: string; stderr: string } {
-	const stderrPath = path.join(directory, "run.stderr.log");
-	// The verbose build can exceed the child process buffer on a cold runner build.
+function run(command: "run" | "build"): { stdout: string; stderr: string } {
+	const stderrPath = path.join(directory, "maligator.stderr.log");
+	// Verbose diagnostics can exceed the child process buffer when compiling a runtime.
 	const stderrFile = openSync(stderrPath, "w");
 	let result;
 	try {
@@ -47,7 +47,7 @@ function run(): { stdout: string; stderr: string } {
 			process.execPath,
 			[
 				path.join(repositoryRoot, "src/index.ts"),
-				"run",
+				command,
 				"entry.mjs",
 				"--config",
 				"maligator.build.mjs",
@@ -67,7 +67,15 @@ function run(): { stdout: string; stderr: string } {
 	const diagnostic = (stderr || result.stdout || "").slice(-8192);
 	expect(result.error, diagnostic).toBeUndefined();
 	expect(result.status, `${result.signal ?? ""}\n${diagnostic}`.trim()).toBe(0);
-	return { stdout: result.stdout, stderr };
+	if (command === "run") return { stdout: result.stdout, stderr };
+	const binary = spawnSync(result.stdout.trim(), {
+		cwd: directory,
+		encoding: "utf-8",
+		timeout: 60_000,
+	});
+	expect(binary.error, binary.stderr).toBeUndefined();
+	expect(binary.status, binary.stderr).toBe(0);
+	return { stdout: binary.stdout, stderr };
 }
 
 const { primordials, realms } = preparedNativeEvalConfig().engine;
@@ -98,25 +106,29 @@ function writeProject(): void {
 	for (const [name, source] of Object.entries(files)) write(name, source);
 }
 
-describe("per-module development images", () => {
-	it("evaluates split application images in the order Node evaluates the modules", () => {
-		writeProject();
+describe.each(["run", "build"] as const)(
+	"per-module images with maligator %s",
+	(command) => {
+		it("evaluates a cycle and its top-level-await siblings in Node's order", () => {
+			writeProject();
 
-		const { stdout, stderr } = run();
+			const { stdout, stderr } = run(command);
 
-		expect(stdout).toBe(node());
-		expect(stderr).toMatch(/Development fragments: \d+ reused, \d+ compiled/);
-	}, 300_000);
+			expect(stdout).toBe(node());
+			const fragments = /Development fragments: \d+ reused, (\d+) compiled/.exec(stderr);
+			expect(Number(fragments?.[1])).toBeGreaterThan(2);
+		}, 300_000);
 
-	it("reruns a leaf edit by recompiling only the leaf's image", () => {
-		writeProject();
-		run();
-		write("leaf.mjs", files["leaf.mjs"].replace("leaf revision 0", "leaf revision 1"));
+		it("recompiles only the edited leaf's image", () => {
+			writeProject();
+			run(command);
+			write("leaf.mjs", files["leaf.mjs"].replace("leaf revision 0", "leaf revision 1"));
 
-		const { stdout, stderr } = run();
+			const { stdout, stderr } = run(command);
 
-		expect(stdout).toContain("leaf revision 1");
-		expect(stdout).toBe(node());
-		expect(stderr).toMatch(/Development fragments: [1-9]\d* reused, 1 compiled/);
-	}, 300_000);
-});
+			expect(stdout).toBe(node());
+			const fragments = /Development fragments: (\d+) reused, 1 compiled/.exec(stderr);
+			expect(Number(fragments?.[1])).toBeGreaterThan(1);
+		}, 300_000);
+	},
+);

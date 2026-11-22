@@ -987,7 +987,7 @@ console.log(message, blob.length);
 		expect(changedAlpha.wires![2]).toEqual(combined.wires![2]);
 	}, 30_000);
 
-	it("recompiles the application only when a dependency's exported names change", () => {
+	it("recompiles a dependency importer when its exported names change", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");
 		const entrypoint = path.join(root, "entry.mjs");
@@ -1023,21 +1023,20 @@ console.log(message, blob.length);
 			return compileBuildFrontend(options).fragmentArtifacts;
 		};
 
-		expect(compileBuildFrontend(options).fragmentArtifacts).toEqual({
-			hits: 0,
-			misses: 2,
-		});
+		const cold = compileBuildFrontend(options);
+		const images = cold.runtimeArtifacts.length;
+		expect(cold.fragmentArtifacts).toEqual({ hits: 0, misses: images });
 		expect(rebuild(local, `export const revision = 1;\n`)).toEqual({
-			hits: 1,
+			hits: images - 1,
 			misses: 1,
 		});
 		expect(rebuild(dependency, `export const answer = 43;\n`)).toEqual({
-			hits: 1,
+			hits: images - 1,
 			misses: 1,
 		});
 		expect(
 			rebuild(dependency, `export const answer = 43;\nexport const added = true;\n`),
-		).toEqual({ hits: 0, misses: 2 });
+		).toEqual({ hits: images - 2, misses: 2 });
 	});
 
 	it("links namespace imports across the dependency boundary", () => {

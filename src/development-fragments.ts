@@ -58,6 +58,34 @@ function overlayImage(
 	return lowerNativeOverlayStorage(image);
 }
 
+function compactOverlayUnits(
+	units: Array<GeneratedTranslationUnit>,
+): Array<GeneratedTranslationUnit> {
+	const table = units[0]!;
+	const sourceCodeUnits = units.reduce(
+		(size, unit) => size + 1 + unit.sourceCodeUnits,
+		-1,
+	);
+	if (
+		units.length < 2 ||
+		sourceCodeUnits > DEFAULT_TRANSLATION_UNIT_POLICY.targetCodeUnits
+	)
+		return units;
+
+	// An image's wire digest names every unit, so their cache lifetimes already coincide.
+	return [
+		{
+			...table,
+			sourceChunks: units.flatMap((unit, index) =>
+				index === 0 ? unit.sourceChunks : ["\n", ...unit.sourceChunks],
+			),
+			sourceCodeUnits,
+			headerFiles: [...new Set(units.flatMap((unit) => unit.headerFiles))],
+			definitions: units.flatMap((unit) => unit.definitions),
+		},
+	];
+}
+
 /**
  * Translation units for a development binary built from the same ordered images that
  * `run` loads. Each image gets a relocatable overlay that depends only on that image,
@@ -102,12 +130,14 @@ export function developmentFragmentUnits(
 					const source = artifactOutput(cached, output.name.replace(/\.json$/, ".c"));
 					return { ...metadata, sourceChunks: [...readSourceChunks(source.path)] };
 				});
-		const units = emitRelocatableNativeOverlayTranslationUnits(
-			overlayImage(artifact, compilerArtifact),
-			artifact.digest,
-			DEFAULT_TRANSLATION_UNIT_POLICY.maximumNativeFunctionCodeUnits,
-			DEFAULT_TRANSLATION_UNIT_POLICY.targetCodeUnits,
-			{ kind: "fragment", name: names[index]! },
+		const units = compactOverlayUnits(
+			emitRelocatableNativeOverlayTranslationUnits(
+				overlayImage(artifact, compilerArtifact),
+				artifact.digest,
+				DEFAULT_TRANSLATION_UNIT_POLICY.maximumNativeFunctionCodeUnits,
+				DEFAULT_TRANSLATION_UNIT_POLICY.targetCodeUnits,
+				{ kind: "fragment", name: names[index]! },
+			),
 		);
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-fragment-units-"));
 		try {

@@ -385,9 +385,6 @@ distinct when measuring text work.
       The loader already aliases CommonJS registry entries and namespace slots;
       `import()` additionally needs the earlier image's module evaluation state.
 
-- [ ] Split native development builds into per-module application images. Measure
-      cold build time with per-image overlay translation units first.
-
 - [ ] Cut the fixed cost per linked image (optimizer setup per program, wire
       publication in `frontend-cache.ts`), so `run` and `dev` can use finer application
       images without slowing clean builds.
