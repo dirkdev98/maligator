@@ -141,10 +141,11 @@ compilation both contribute to developer-loop latency.
       compiled javascript-v2 records phase five-fold; find the lost native specialization
       before retrying.
 
-- [ ] Measure stable own-table hits and misses in the interpreter's static property-load
-      rows. `mal_vm_property_try_load_static_rows` and the property IC subset take 8-9%
-      of compiled Express routes and JSON samples; use property addition and deletion as
-      controls before changing the cache shape.
+- [ ] Make own-table property loads cheaper without taxing other code. In compiled
+      Express, `mal_vm_property_try_load_static_rows` and the property IC take 8-9% of
+      samples, dominated by own-table hits with no polymorphic rows walked. A fast own-slot
+      check lowered Express instructions but raised compiled javascript-v2 text and number
+      phases by about 0.3%; find a layout or emission change that helps both.
 
 - [ ] Count executions of the interpreter's Number, Math, DataView, typed-array length,
       in-loop call and superinstruction fast paths in perf stats, so native tests can
