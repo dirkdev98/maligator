@@ -17,9 +17,6 @@ void mal_host_install_maligator_assets(
  */
 int mal_asset_materialize(const MalAsset *asset, const char *base, char **out_path);
 
-/** The directory materializations go to when the caller names none. */
-const char *mal_asset_temporary_directory(void);
-
 /** One member file of an asset handle, embedded or read from disk. */
 typedef struct MalAssetMember {
     /** The embedded copy in a built executable, or null. */

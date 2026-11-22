@@ -2,6 +2,7 @@ import type {
 	AppendOptions,
 	CreateDirectoryOptions,
 	DeleteDirectoryOptions,
+	DeleteOptions,
 	DirectoryEntry,
 	DirectoryListOptions,
 	DiskDirectory,
@@ -14,11 +15,13 @@ import type {
 	FileWriter,
 	FileWriterOptions,
 	StatOptions,
+	TemporaryDirectoryOptions,
 	TransferOptions,
 	WatchOptions,
 	WriteOptions,
 } from "maligator:fs";
 import {
+	chmod,
 	copy,
 	createDirectory,
 	exists,
@@ -26,9 +29,13 @@ import {
 	mediaType,
 	move,
 	read,
+	readlink as readLink,
+	realpath as resolvePath,
 	remove,
 	removeDirectory,
 	stat,
+	symlink as createLink,
+	temporaryDirectory as createTemporaryDirectory,
 	write,
 } from "maligator:internal/fs";
 import {
@@ -47,6 +54,7 @@ import type { WatchListener } from "maligator:internal/fs-watch";
 const APPEND = 1;
 const ATOMIC = 2;
 const CREATE_DIRECTORIES = 4;
+const EXCLUSIVE = 8;
 
 // MalPosixFileType codes.
 const TYPE_FILE = 1;
@@ -155,6 +163,14 @@ function permissionMode(mode: unknown, method: string): number | undefined {
 	if (typeof mode !== "number" || !Number.isInteger(mode) || mode < 0 || mode > 0o7777)
 		throw new TypeError(`${method} option 'mode' must be an integer from 0 to 0o7777`);
 	return mode;
+}
+
+function changePermissions(path: string, mode: number): Promise<void> {
+	return settle(() => {
+		const permissions = permissionMode(mode, "chmod");
+		if (permissions === undefined) throw new TypeError("chmod requires a mode");
+		return chmod(path, permissions);
+	});
 }
 
 function fileStat(entry: {
@@ -340,10 +356,14 @@ class DiskFileHandle implements DiskFile {
 
 	write(data: FileData, options?: WriteOptions): Promise<number> {
 		return settle(() => {
-			const { atomic, createDirectories, mode } = optionsObject(options, "write");
+			const { atomic, createDirectories, exclusive, mode } = optionsObject(
+				options,
+				"write",
+			);
 			const flags =
 				(atomic === true ? ATOMIC : 0) |
-				(createDirectories === true ? CREATE_DIRECTORIES : 0);
+				(createDirectories === true ? CREATE_DIRECTORIES : 0) |
+				(exclusive === true ? EXCLUSIVE : 0);
 			return write(this.path, data, flags, permissionMode(mode, "write"));
 		});
 	}
@@ -356,8 +376,15 @@ class DiskFileHandle implements DiskFile {
 		});
 	}
 
-	delete(): Promise<void> {
-		return settle(() => remove(this.path));
+	chmod(mode: number): Promise<void> {
+		return changePermissions(this.path, mode);
+	}
+
+	delete(options?: DeleteOptions): Promise<void> {
+		return settle(() => {
+			const { missingOk } = optionsObject(options, "delete");
+			return remove(this.path, missingOk === true);
+		});
 	}
 
 	copyTo(destination: FilePath | DiskFile, options?: TransferOptions): Promise<void> {
@@ -370,7 +397,7 @@ class DiskFileHandle implements DiskFile {
 	moveTo(destination: FilePath | DiskFile, options?: TransferOptions): Promise<void> {
 		return settle(() => {
 			const { overwrite } = optionsObject(options, "moveTo");
-			return move(this.path, toPath(destination), overwrite === true);
+			return move(this.path, toPath(destination), overwrite === true, false);
 		});
 	}
 }
@@ -507,10 +534,28 @@ class DiskDirectoryHandle implements DiskDirectory {
 		});
 	}
 
+	chmod(mode: number): Promise<void> {
+		return changePermissions(this.path, mode);
+	}
+
 	delete(options?: DeleteDirectoryOptions): Promise<void> {
 		return settle(() => {
-			const { recursive } = optionsObject(options, "delete");
-			return removeDirectory(this.path, recursive === true);
+			const { recursive, missingOk } = optionsObject(options, "delete");
+			return removeDirectory(this.path, recursive === true, missingOk === true);
+		});
+	}
+
+	moveTo(
+		destination: FilePath | DiskDirectory,
+		options?: TransferOptions,
+	): Promise<void> {
+		return settle(() => {
+			const { overwrite } = optionsObject(options, "moveTo");
+			const target =
+				destination instanceof DiskDirectoryHandle
+					? destination.path
+					: toPath(destination);
+			return move(this.path, target, overwrite === true, true);
 		});
 	}
 }
@@ -521,6 +566,40 @@ export function file(path: FilePath): DiskFile {
 
 export function directory(path: FilePath): DiskDirectory {
 	return new DiskDirectoryHandle(toPath(path, "directory()"));
+}
+
+export function realpath(path: FilePath): Promise<string> {
+	return settle(() => resolvePath(toPath(path, "realpath()")));
+}
+
+export function readlink(path: FilePath): Promise<string> {
+	return settle(() => readLink(toPath(path, "readlink()")));
+}
+
+export function symlink(target: string, link: FilePath): Promise<void> {
+	return settle(() => {
+		if (typeof target !== "string")
+			throw new TypeError("symlink target must be a string");
+		return createLink(toPath(target), toPath(link, "symlink()"));
+	});
+}
+
+export function temporaryDirectory(
+	options?: TemporaryDirectoryOptions,
+): Promise<DiskDirectory> {
+	return settle(async () => {
+		const { parent, prefix = "maligator-" } = optionsObject(
+			options,
+			"temporaryDirectory",
+		);
+		if (typeof prefix !== "string" || prefix.includes("/") || prefix.includes("\0"))
+			throw new TypeError(
+				"temporaryDirectory prefix must be a string without slashes or null bytes",
+			);
+		const parentPath =
+			parent === undefined ? undefined : toPath(parent, "temporaryDirectory()");
+		return new DiskDirectoryHandle(await createTemporaryDirectory(parentPath, prefix));
+	});
 }
 
 type WatchResult = IteratorResult<FileChange, undefined>;

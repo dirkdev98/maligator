@@ -33,7 +33,8 @@ await file("out/events.log").append(`${new Date().toISOString()} report written\
 `write()` replaces the contents and `append()` adds to the end. Both create a missing file and fulfill with the number of bytes written. They take a string, which they write as UTF-8, an `ArrayBuffer` or a view over one.
 
 - `createDirectories` creates missing parent directories first.
-- `atomic` writes a temporary file in the same directory, flushes it and renames it over the target. Readers see the old or the new contents, never a partial file, and a failed write removes the temporary file. The replaced file keeps its permission bits unless you pass `mode`, and a symbolic link keeps pointing at its target.
+- `atomic` writes and flushes a temporary file in the same directory before publishing it. Readers see only complete contents. An atomic replacement keeps the file's permission bits unless you pass `mode` and follows a symbolic link to an existing target.
+- `exclusive` creates a new file and rejects with `EEXIST` if the path already names an entry, including a dangling link. Combine it with `atomic` to publish a complete new file in one step. The file system must support an exclusive rename.
 - `mode` sets the permission bits of a file the write creates, before the umask.
 
 ## Stream a file
@@ -73,7 +74,13 @@ await file("photo-backup.jpg").delete();
 
 `moveTo()` renames the file and the handle keeps naming the old path. By default the rename is exclusive. If exclusive rename is unavailable, the move rejects with `ENOTSUP`. When the operating system reports that the paths are on different file systems, `moveTo()` copies the file under the same overwrite rule, then removes the source.
 
-`delete()` removes a file and rejects for a missing file or a directory.
+`chmod(mode)` sets the permission bits of an existing file or directory and follows symbolic links. `delete()` unlinks a file or symbolic link. Pass `missingOk: true` to let a missing path succeed.
+
+## Resolve paths and create links
+
+Use `realpath(path)` to get the absolute path of an existing entry after resolving symbolic links. Use `readlink(path)` to get the target stored in a link.
+
+`symlink(target, path)` creates a link. A relative target resolves from the link's parent directory. The target can be missing.
 
 ## List a directory
 
@@ -99,7 +106,11 @@ Filter either listing with `include` and `exclude` patterns relative to the dire
 
 `create()` creates one directory. Pass `recursive: true` to create missing parents or use a directory that already exists. Set `mode` to choose permission bits before the umask.
 
-`delete()` removes an empty directory. Pass `recursive: true` to remove its whole tree. Symbolic links in the tree are removed as links and their targets stay in place.
+`temporaryDirectory({ prefix: "report-" })` creates a private directory and returns an absolute handle. Pass `parent` to use another existing directory. Delete the temporary directory when you finish with it.
+
+Use `moveTo()` to publish a staged directory in one rename. It rejects with `EXDEV` if the paths are on different file systems. To replace an existing empty directory, pass `overwrite: true`.
+
+`delete()` removes an empty directory. Pass `recursive: true` to remove its whole tree and `missingOk: true` to let a missing path succeed. Symbolic links in the tree are removed as links and their targets stay in place.
 
 ## Watch for changes
 
@@ -120,7 +131,7 @@ The OS can coalesce notifications. A move may appear as a deletion or creation w
 
 ## Handle failures
 
-A failed operation rejects with a `FileSystemError`. Its `code` is the system error name, such as `ENOENT` for a missing file, `EISDIR` for a directory, `EEXIST` for an existing destination or `EACCES` for missing permission. `syscall` names the failed call, `path` the path it failed on and `destination` the target of a copy or move. The message reads like Node's:
+A failed operation rejects with a `FileSystemError`. Its `code` is the system error name, such as `ENOENT` for a missing file, `EISDIR` for a directory, `EEXIST` for an existing destination or `EACCES` for missing permission. `syscall` names the failed call, `path` the path it failed on and `destination` the second path of a copy, move or symlink operation.
 
 ```typescript src/notes.ts
 import { file, FileSystemError } from "maligator:fs";

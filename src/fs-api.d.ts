@@ -28,7 +28,9 @@ declare module "maligator:fs" {
 		atomic?: boolean;
 		/** Create missing parent directories first. Defaults to false. */
 		createDirectories?: boolean;
-		/** Permission bits for a created file, before the umask. Defaults to 0o666; an atomic write keeps the bits of the file it replaces. */
+		/** Create the file exclusively. Rejects with EEXIST if the path names any entry, including a dangling link. Combines with atomic to publish the complete file in one step. Defaults to false. */
+		exclusive?: boolean;
+		/** Permission bits for a created file, before the umask. Defaults to 0o666. An atomic replacement uses existing permission bits when this option is omitted. */
 		mode?: number;
 	};
 
@@ -178,8 +180,10 @@ declare module "maligator:fs" {
 		write(data: FileData, options?: WriteOptions): Promise<number>;
 		/** Add to the end of the file, creating it when it is missing. Fulfills with the number of bytes written. */
 		append(data: FileData, options?: AppendOptions): Promise<number>;
-		/** Remove the file; rejects when it is missing or a directory. */
-		delete(): Promise<void>;
+		/** Set the permission bits of the entry, following symbolic links. */
+		chmod(mode: number): Promise<void>;
+		/** Unlink the file or symbolic link. */
+		delete(options?: DeleteOptions): Promise<void>;
 		/** Copy the contents and permission bits to another path. */
 		copyTo(destination: FilePath | DiskFile, options?: TransferOptions): Promise<void>;
 		/** Rename the file, copying across file systems. This handle keeps naming the old path. */
@@ -230,13 +234,35 @@ declare module "maligator:fs" {
 	};
 
 	/**
+	 * How a delete handles a missing entry.
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#DeleteOptions
+	 */
+	export type DeleteOptions = {
+		/** Succeed when the path is missing. Defaults to false. */
+		missingOk?: boolean;
+	};
+
+	/**
 	 * How `DiskDirectory.delete()` removes a directory.
 	 *
 	 * @see https://maligator.ddv.tools/api/fs#DeleteDirectoryOptions
 	 */
-	export type DeleteDirectoryOptions = {
+	export type DeleteDirectoryOptions = DeleteOptions & {
 		/** Remove the directory and its contents. Defaults to false. */
 		recursive?: boolean;
+	};
+
+	/**
+	 * Where to create a private temporary directory and how to name it.
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#TemporaryDirectoryOptions
+	 */
+	export type TemporaryDirectoryOptions = {
+		/** Existing parent directory. Defaults to the system temporary directory. */
+		parent?: FilePath;
+		/** Prefix for the unique directory name, without slashes or null bytes. Defaults to maligator-. */
+		prefix?: string;
 	};
 
 	/**
@@ -264,8 +290,15 @@ declare module "maligator:fs" {
 		entries(options?: DirectoryListOptions): Promise<Array<DirectoryEntry>>;
 		/** Create the directory. A non-recursive create rejects if the path already exists. */
 		create(options?: CreateDirectoryOptions): Promise<void>;
+		/** Set the permission bits of the entry, following symbolic links. */
+		chmod(mode: number): Promise<void>;
 		/** Remove the directory. A non-recursive delete requires an empty directory. */
 		delete(options?: DeleteDirectoryOptions): Promise<void>;
+		/** Rename the directory in one operation on the same file system. This handle keeps naming the old path. */
+		moveTo(
+			destination: FilePath | DiskDirectory,
+			options?: TransferOptions,
+		): Promise<void>;
 	}
 
 	/**
@@ -281,7 +314,7 @@ declare module "maligator:fs" {
 		readonly syscall: string;
 		/** The path the call failed on. */
 		readonly path: string;
-		/** The destination of a failed copy or move. */
+		/** The second path of a failed copy, move or symlink. */
 		readonly destination?: string;
 	}
 
@@ -316,6 +349,44 @@ declare module "maligator:fs" {
 	 * @see https://maligator.ddv.tools/api/fs#directory
 	 */
 	export const directory: (path: FilePath) => DiskDirectory;
+	/**
+	 * Return the absolute path of an existing entry after resolving symbolic links.
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#realpath
+	 */
+	export const realpath: (path: FilePath) => Promise<string>;
+	/**
+	 * Read the target stored in a symbolic link, keeping relative targets relative.
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#readlink
+	 */
+	export const readlink: (path: FilePath) => Promise<string>;
+	/**
+	 * Create a symbolic link to `target`. A relative target resolves from the link's
+	 * parent. The target can be missing.
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#symlink
+	 */
+	export const symlink: (target: string, link: FilePath) => Promise<void>;
+	/**
+	 * Create a directory accessible only by its owner and return its absolute handle.
+	 * Call `delete()` when done.
+	 *
+	 * @example
+	 * import { temporaryDirectory } from "maligator:fs";
+	 *
+	 * const scratch = await temporaryDirectory({ prefix: "report-" });
+	 * try {
+	 *   await scratch.file("report.txt").write("done");
+	 * } finally {
+	 *   await scratch.delete({ recursive: true, missingOk: true });
+	 * }
+	 *
+	 * @see https://maligator.ddv.tools/api/fs#temporaryDirectory
+	 */
+	export const temporaryDirectory: (
+		options?: TemporaryDirectoryOptions,
+	) => Promise<DiskDirectory>;
 	/**
 	 * Watch a file or directory using an async iterator. The first `next()` starts the
 	 * watch. Breaking out of the loop, calling `return()`, or aborting the signal closes

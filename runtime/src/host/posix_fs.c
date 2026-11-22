@@ -989,6 +989,15 @@ int mal_posix_fs_realpath(const char *path, char **out_path) {
     return 0;
 }
 
+const char *mal_posix_fs_temporary_directory(void) {
+    const char *names[] = {"TMPDIR", "TMP", "TEMP"};
+    for (usize i = 0; i < countof(names); i++) {
+        const char *directory = getenv(names[i]);
+        if (directory != nullptr && directory[0] != '\0') return directory;
+    }
+    return "/tmp";
+}
+
 int mal_posix_fs_mkdtemp(const char *prefix, char **out_path) {
     *out_path = nullptr;
     usize len = strlen(prefix);
@@ -1035,7 +1044,7 @@ int mal_posix_fs_rename_exclusive(const char *source, const char *destination) {
     return ENOTSUP;
 }
 
-static int posix_rm_recursive_at(int parent, const char *path, bool directory_only) {
+static int posix_rm_recursive_at(int parent, const char *path, bool directory_only, bool missing_ok) {
     struct stat st;
     if (fstatat(parent, path, &st, AT_SYMLINK_NOFOLLOW) != 0) return errno;
     if (!S_ISDIR(st.st_mode)) {
@@ -1053,15 +1062,17 @@ static int posix_rm_recursive_at(int parent, const char *path, bool directory_on
             result = errno;
             break;
         }
-        if (!posix_dot_dirent(entry->d_name))
-            result = posix_rm_recursive_at(dirfd(dir), entry->d_name, false);
+        if (!posix_dot_dirent(entry->d_name)) {
+            result = posix_rm_recursive_at(dirfd(dir), entry->d_name, false, missing_ok);
+            if (missing_ok && result == ENOENT) result = 0;
+        }
     }
     if (closedir(dir) != 0 && result == 0) result = errno;
     if (result == 0 && unlinkat(parent, path, AT_REMOVEDIR) != 0) result = errno;
     return result;
 }
 
-int mal_posix_fs_rmdir_recursive(const char *path) {
+int mal_posix_fs_rmdir_recursive(const char *path, bool missing_ok) {
     usize length = strlen(path);
     usize end = length;
     while (end > 1 && path[end - 1] == '/') end--;
@@ -1073,14 +1084,14 @@ int mal_posix_fs_rmdir_recursive(const char *path) {
     const char *name = slash == nullptr ? target : slash + 1;
     // The kernel refuses these names. Get that error before removing any children.
     int error = *name == '\0' || posix_dot_dirent(name) ? mal_posix_fs_rmdir(path)
-        : posix_rm_recursive_at(AT_FDCWD, target, true);
+        : posix_rm_recursive_at(AT_FDCWD, target, true, missing_ok);
     free(trimmed);
     return error;
 }
 
 int mal_posix_fs_rm(const char *path, bool recursive, bool force) {
     int result;
-    if (recursive) result = posix_rm_recursive_at(AT_FDCWD, path, false);
+    if (recursive) result = posix_rm_recursive_at(AT_FDCWD, path, false, false);
     else result = unlink(path) == 0 ? 0 : errno;
     return force && result == ENOENT ? 0 : result;
 }

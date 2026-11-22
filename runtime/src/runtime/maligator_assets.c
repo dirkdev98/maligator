@@ -567,7 +567,7 @@ static MalValue asset_file_json(
 static bool asset_materialize_base(
     MalVm *vm, const MalValue *args, i32 argc, char **owned, const char **base) {
     *owned = nullptr;
-    *base = mal_asset_temporary_directory();
+    *base = mal_posix_fs_temporary_directory();
     if (argc < 1 || mal_value_is_undefined(args[0])) return true;
     if (!mal_value_is_object(args[0])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -1046,15 +1046,6 @@ void mal_host_install_maligator_assets(
         if (vm->completion.kind == MAL_COMPLETION_THROW) return;
         vm->globals[slots[i].slot] = handle;
     }
-}
-
-const char *mal_asset_temporary_directory(void) {
-    const char *names[] = {"TMPDIR", "TMP", "TEMP"};
-    for (usize i = 0; i < countof(names); i++) {
-        const char *value = getenv(names[i]);
-        if (value != nullptr && value[0] != '\0') return value;
-    }
-    return "/tmp";
 }
 
 static char *asset_identity(const MalAsset *asset) {

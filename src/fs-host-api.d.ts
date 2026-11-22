@@ -33,7 +33,7 @@ declare module "maligator:internal/fs" {
 		(path: string, text: true): Promise<string>;
 	};
 	/**
-	 * Write `data`; flags: 1 append, 2 atomic, 4 create parent directories.
+	 * Write `data` with the requested flags and creation mode.
 	 */
 	export const write: (
 		path: string,
@@ -44,7 +44,7 @@ declare module "maligator:internal/fs" {
 	/**
 	 * Unlink a file.
 	 */
-	export const remove: (path: string) => Promise<void>;
+	export const remove: (path: string, missingOk: boolean) => Promise<void>;
 	/**
 	 * Copy a file with its permission bits.
 	 */
@@ -54,12 +54,14 @@ declare module "maligator:internal/fs" {
 		overwrite: boolean,
 	) => Promise<void>;
 	/**
-	 * Rename a file, copying it across file systems.
+	 * Rename an entry. A regular file can move across file systems unless
+	 * `directoryOnly` is set.
 	 */
 	export const move: (
 		source: string,
 		destination: string,
 		overwrite: boolean,
+		directoryOnly: boolean,
 	) => Promise<void>;
 	/**
 	 * Find matching entries and sort their relative paths by code point. With
@@ -94,5 +96,32 @@ declare module "maligator:internal/fs" {
 	/**
 	 * Remove a directory, with its contents when requested.
 	 */
-	export const removeDirectory: (path: string, recursive: boolean) => Promise<void>;
+	export const removeDirectory: (
+		path: string,
+		recursive: boolean,
+		missingOk: boolean,
+	) => Promise<void>;
+	/**
+	 * Set the permission bits of an existing entry.
+	 */
+	export const chmod: (path: string, mode: number) => Promise<void>;
+	/**
+	 * Resolve a path.
+	 */
+	export const realpath: (path: string) => Promise<string>;
+	/**
+	 * Read a symbolic link target.
+	 */
+	export const readlink: (path: string) => Promise<string>;
+	/**
+	 * Create a symbolic link.
+	 */
+	export const symlink: (target: string, path: string) => Promise<void>;
+	/**
+	 * Create a private temporary directory and return its absolute path.
+	 */
+	export const temporaryDirectory: (
+		parent: string | undefined,
+		prefix: string,
+	) => Promise<string>;
 }

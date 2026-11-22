@@ -428,7 +428,7 @@ const fsTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	),
 	workerType(
 		"WriteOptions",
-		"{\n /** Write a temporary file next to the target and rename it over the target, so readers see the old or the new contents and never a partial file. Defaults to false. */\n atomic?: boolean;\n /** Create missing parent directories first. Defaults to false. */\n createDirectories?: boolean;\n /** Permission bits for a created file, before the umask. Defaults to 0o666; an atomic write keeps the bits of the file it replaces. */\n mode?: number;\n}",
+		"{\n /** Write a temporary file next to the target and rename it over the target, so readers see the old or the new contents and never a partial file. Defaults to false. */\n atomic?: boolean;\n /** Create missing parent directories first. Defaults to false. */\n createDirectories?: boolean;\n /** Create the file exclusively. Rejects with EEXIST if the path names any entry, including a dangling link. Combines with atomic to publish the complete file in one step. Defaults to false. */\n exclusive?: boolean;\n /** Permission bits for a created file, before the umask. Defaults to 0o666. An atomic replacement uses existing permission bits when this option is omitted. */\n mode?: number;\n}",
 		"How `write` stores the contents.",
 	),
 	workerType(
@@ -482,7 +482,7 @@ const fsTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	{
 		...workerType(
 			"DiskFile",
-			"{\n /** The path as given, or the path of a `file:` URL. */\n readonly path: string;\n /** The media type implied by the file extension; text types carry `charset=utf-8`. */\n readonly type: string;\n /** Whether the path resolves, following symbolic links. Never rejects. */\n exists(): Promise<boolean>;\n /** Metadata of the entry; rejects when it is missing. */\n stat(options?: StatOptions): Promise<FileStat>;\n /** The contents as a Uint8Array over a fresh ArrayBuffer. */\n bytes(): Promise<Uint8Array<ArrayBuffer>>;\n /** The contents decoded as UTF-8, without a byte order mark. */\n text(): Promise<string>;\n /** The contents parsed as JSON. */\n json(): Promise<unknown>;\n /** Read a range incrementally. Cancellation closes the file. */\n stream(options?: FileStreamOptions): ReadableStream<Uint8Array<ArrayBuffer>>;\n /** Open a sink for incremental writes. */\n writer(options?: FileWriterOptions): FileWriter;\n /** Replace the contents, creating the file when it is missing. Fulfills with the number of bytes written. */\n write(data: FileData, options?: WriteOptions): Promise<number>;\n /** Add to the end of the file, creating it when it is missing. Fulfills with the number of bytes written. */\n append(data: FileData, options?: AppendOptions): Promise<number>;\n /** Remove the file; rejects when it is missing or a directory. */\n delete(): Promise<void>;\n /** Copy the contents and permission bits to another path. */\n copyTo(destination: FilePath | DiskFile, options?: TransferOptions): Promise<void>;\n /** Rename the file, copying across file systems. This handle keeps naming the old path. */\n moveTo(destination: FilePath | DiskFile, options?: TransferOptions): Promise<void>;\n}",
+			"{\n /** The path as given, or the path of a `file:` URL. */\n readonly path: string;\n /** The media type implied by the file extension; text types carry `charset=utf-8`. */\n readonly type: string;\n /** Whether the path resolves, following symbolic links. Never rejects. */\n exists(): Promise<boolean>;\n /** Metadata of the entry; rejects when it is missing. */\n stat(options?: StatOptions): Promise<FileStat>;\n /** The contents as a Uint8Array over a fresh ArrayBuffer. */\n bytes(): Promise<Uint8Array<ArrayBuffer>>;\n /** The contents decoded as UTF-8, without a byte order mark. */\n text(): Promise<string>;\n /** The contents parsed as JSON. */\n json(): Promise<unknown>;\n /** Read a range incrementally. Cancellation closes the file. */\n stream(options?: FileStreamOptions): ReadableStream<Uint8Array<ArrayBuffer>>;\n /** Open a sink for incremental writes. */\n writer(options?: FileWriterOptions): FileWriter;\n /** Replace the contents, creating the file when it is missing. Fulfills with the number of bytes written. */\n write(data: FileData, options?: WriteOptions): Promise<number>;\n /** Add to the end of the file, creating it when it is missing. Fulfills with the number of bytes written. */\n append(data: FileData, options?: AppendOptions): Promise<number>;\n /** Set the permission bits of the entry, following symbolic links. */\n chmod(mode: number): Promise<void>;\n /** Unlink the file or symbolic link. */\n delete(options?: DeleteOptions): Promise<void>;\n /** Copy the contents and permission bits to another path. */\n copyTo(destination: FilePath | DiskFile, options?: TransferOptions): Promise<void>;\n /** Rename the file, copying across file systems. This handle keeps naming the old path. */\n moveTo(destination: FilePath | DiskFile, options?: TransferOptions): Promise<void>;\n}",
 			"A file on disk. Creating a handle does no I/O; each method reads or changes the file when called. Failed operations reject with a `FileSystemError`.",
 		),
 		declaration: "interface",
@@ -503,14 +503,24 @@ const fsTypes: ReadonlyArray<PlatformTypeDefinition> = [
 		"How `DiskDirectory.create()` creates a directory.",
 	),
 	workerType(
+		"DeleteOptions",
+		"{\n /** Succeed when the path is missing. Defaults to false. */\n missingOk?: boolean;\n}",
+		"How a delete handles a missing entry.",
+	),
+	workerType(
 		"DeleteDirectoryOptions",
-		"{\n /** Remove the directory and its contents. Defaults to false. */\n recursive?: boolean;\n}",
+		"DeleteOptions & {\n /** Remove the directory and its contents. Defaults to false. */\n recursive?: boolean;\n}",
 		"How `DiskDirectory.delete()` removes a directory.",
+	),
+	workerType(
+		"TemporaryDirectoryOptions",
+		"{\n /** Existing parent directory. Defaults to the system temporary directory. */\n parent?: FilePath;\n /** Prefix for the unique directory name, without slashes or null bytes. Defaults to maligator-. */\n prefix?: string;\n}",
+		"Where to create a private temporary directory and how to name it.",
 	),
 	{
 		...workerType(
 			"DiskDirectory",
-			"{\n /** The path as given, or the path of a `file:` URL. */\n readonly path: string;\n /** Whether the path resolves, following symbolic links. */\n exists(): Promise<boolean>;\n /** Metadata of the entry at `path`. */\n stat(options?: StatOptions): Promise<FileStat>;\n /** A lazy file handle at a slash-separated path below the directory. */\n file(relative: string): DiskFile;\n /** A lazy directory handle at a slash-separated path below the directory. */\n directory(relative: string): DiskDirectory;\n /** A handle if the named entry is a regular file, or undefined if absent or another kind. */\n get(relative: string): Promise<DiskFile | undefined>;\n /** Regular files ordered by the code points of their relative paths. Visits subdirectories by default. */\n files(options?: DirectoryListOptions): Promise<Array<DiskFile>>;\n /** Entries ordered by the code points of their relative paths. Lists direct children by default. */\n entries(options?: DirectoryListOptions): Promise<Array<DirectoryEntry>>;\n /** Create the directory. A non-recursive create rejects if the path already exists. */\n create(options?: CreateDirectoryOptions): Promise<void>;\n /** Remove the directory. A non-recursive delete requires an empty directory. */\n delete(options?: DeleteDirectoryOptions): Promise<void>;\n}",
+			"{\n /** The path as given, or the path of a `file:` URL. */\n readonly path: string;\n /** Whether the path resolves, following symbolic links. */\n exists(): Promise<boolean>;\n /** Metadata of the entry at `path`. */\n stat(options?: StatOptions): Promise<FileStat>;\n /** A lazy file handle at a slash-separated path below the directory. */\n file(relative: string): DiskFile;\n /** A lazy directory handle at a slash-separated path below the directory. */\n directory(relative: string): DiskDirectory;\n /** A handle if the named entry is a regular file, or undefined if absent or another kind. */\n get(relative: string): Promise<DiskFile | undefined>;\n /** Regular files ordered by the code points of their relative paths. Visits subdirectories by default. */\n files(options?: DirectoryListOptions): Promise<Array<DiskFile>>;\n /** Entries ordered by the code points of their relative paths. Lists direct children by default. */\n entries(options?: DirectoryListOptions): Promise<Array<DirectoryEntry>>;\n /** Create the directory. A non-recursive create rejects if the path already exists. */\n create(options?: CreateDirectoryOptions): Promise<void>;\n /** Set the permission bits of the entry, following symbolic links. */\n chmod(mode: number): Promise<void>;\n /** Remove the directory. A non-recursive delete requires an empty directory. */\n delete(options?: DeleteDirectoryOptions): Promise<void>;\n /** Rename the directory in one operation on the same file system. This handle keeps naming the old path. */\n moveTo(destination: FilePath | DiskDirectory, options?: TransferOptions): Promise<void>;\n}",
 			"A directory on disk. Creating a handle does no I/O. Directory walks report symbolic links as entries and skip descending into them.",
 		),
 		declaration: "interface",
@@ -518,7 +528,7 @@ const fsTypes: ReadonlyArray<PlatformTypeDefinition> = [
 	{
 		...workerType(
 			"FileSystemError",
-			"{\n /** The error name, such as `ENOENT` or `EACCES`. */\n readonly code: string;\n /** The system call that failed, such as `open` or `rename`. */\n readonly syscall: string;\n /** The path the call failed on. */\n readonly path: string;\n /** The destination of a failed copy or move. */\n readonly destination?: string;\n}",
+			"{\n /** The error name, such as `ENOENT` or `EACCES`. */\n readonly code: string;\n /** The system call that failed, such as `open` or `rename`. */\n readonly syscall: string;\n /** The path the call failed on. */\n readonly path: string;\n /** The second path of a failed copy, move or symlink. */\n readonly destination?: string;\n}",
 			"A failed filesystem operation. The message reads like Node's: the code, a description, the system call and the paths.",
 		),
 		declaration: "interface",
@@ -1325,6 +1335,30 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 				},
 			},
 			workerExport(
+				"realpath",
+				"(path: FilePath) => Promise<string>",
+				"Return the absolute path of an existing entry after resolving symbolic links.",
+			),
+			workerExport(
+				"readlink",
+				"(path: FilePath) => Promise<string>",
+				"Read the target stored in a symbolic link, keeping relative targets relative.",
+			),
+			workerExport(
+				"symlink",
+				"(target: string, link: FilePath) => Promise<void>",
+				"Create a symbolic link to `target`. A relative target resolves from the link's parent. The target can be missing.",
+			),
+			workerExport(
+				"temporaryDirectory",
+				"(options?: TemporaryDirectoryOptions) => Promise<DiskDirectory>",
+				"Create a directory accessible only by its owner and return its absolute handle. Call `delete()` when done.",
+				false,
+				[
+					'import { temporaryDirectory } from "maligator:fs";\n\nconst scratch = await temporaryDirectory({ prefix: "report-" });\ntry {\n  await scratch.file("report.txt").write("done");\n} finally {\n  await scratch.delete({ recursive: true, missingOk: true });\n}',
+				],
+			),
+			workerExport(
 				"watch",
 				"(path: FilePath, options?: WatchOptions) => AsyncIterableIterator<FileChange>",
 				"Watch a file or directory using an async iterator. The first `next()` starts the watch. Breaking out of the loop, calling `return()`, or aborting the signal closes it.",
@@ -1388,9 +1422,13 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 			workerExport(
 				"write",
 				"(path: string, data: string | ArrayBufferView | ArrayBuffer, flags: number, mode: number | undefined) => Promise<number>",
-				"Write `data`; flags: 1 append, 2 atomic, 4 create parent directories.",
+				"Write `data` with the requested flags and creation mode.",
 			),
-			workerExport("remove", "(path: string) => Promise<void>", "Unlink a file."),
+			workerExport(
+				"remove",
+				"(path: string, missingOk: boolean) => Promise<void>",
+				"Unlink a file.",
+			),
 			workerExport(
 				"copy",
 				"(source: string, destination: string, overwrite: boolean) => Promise<void>",
@@ -1398,8 +1436,8 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 			),
 			workerExport(
 				"move",
-				"(source: string, destination: string, overwrite: boolean) => Promise<void>",
-				"Rename a file, copying it across file systems.",
+				"(source: string, destination: string, overwrite: boolean, directoryOnly: boolean) => Promise<void>",
+				"Rename an entry. A regular file can move across file systems unless `directoryOnly` is set.",
 			),
 			workerExport(
 				"list",
@@ -1413,8 +1451,29 @@ export const PLATFORM_MODULES: ReadonlyArray<PlatformModule> = [
 			),
 			workerExport(
 				"removeDirectory",
-				"(path: string, recursive: boolean) => Promise<void>",
+				"(path: string, recursive: boolean, missingOk: boolean) => Promise<void>",
 				"Remove a directory, with its contents when requested.",
+			),
+			workerExport(
+				"chmod",
+				"(path: string, mode: number) => Promise<void>",
+				"Set the permission bits of an existing entry.",
+			),
+			workerExport("realpath", "(path: string) => Promise<string>", "Resolve a path."),
+			workerExport(
+				"readlink",
+				"(path: string) => Promise<string>",
+				"Read a symbolic link target.",
+			),
+			workerExport(
+				"symlink",
+				"(target: string, path: string) => Promise<void>",
+				"Create a symbolic link.",
+			),
+			workerExport(
+				"temporaryDirectory",
+				"(parent: string | undefined, prefix: string) => Promise<string>",
+				"Create a private temporary directory and return its absolute path.",
 			),
 		],
 	},

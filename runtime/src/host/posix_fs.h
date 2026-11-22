@@ -220,7 +220,7 @@ int mal_posix_fs_mkdir(const char *path, bool recursive);
  * malloc-owned first created prefix in `*out_first_created` when it is non-null. */
 int mal_posix_fs_mkdir_mode(const char *path, bool recursive, u32 mode, char **out_first_created);
 int mal_posix_fs_rmdir(const char *path);
-int mal_posix_fs_rmdir_recursive(const char *path);
+int mal_posix_fs_rmdir_recursive(const char *path, bool missing_ok);
 int mal_posix_fs_sleep_milliseconds(i64 milliseconds);
 
 /* The additional synchronous operations used by native compiler caches. String
@@ -229,6 +229,9 @@ int mal_posix_fs_copy_file(const char *source, const char *destination);
 /* copyFile with Node's COPYFILE_EXCL (1), FICLONE (2) and FICLONE_FORCE (4) bits. */
 int mal_posix_fs_copy_file_mode(const char *source, const char *destination, u32 mode);
 int mal_posix_fs_realpath(const char *path, char **out_path);
+
+/* The first nonempty temporary directory override, or the system default. */
+const char *mal_posix_fs_temporary_directory(void);
 // Returns the owned attempted path on syscall failure too; allocation failure leaves it null.
 int mal_posix_fs_mkdtemp(const char *prefix, char **out_path);
 /* lstat-based ownership check for a materialized cache directory: it must be a

@@ -33,9 +33,15 @@ typedef enum FsOperation : u32 {
     FS_REMOVE,
     FS_COPY,
     FS_MOVE,
+    FS_MOVE_DIRECTORY,
     FS_LIST,
     FS_CREATE_DIRECTORY,
     FS_REMOVE_DIRECTORY,
+    FS_CHMOD,
+    FS_REALPATH,
+    FS_READLINK,
+    FS_SYMLINK,
+    FS_TEMPORARY_DIRECTORY,
 } FsOperation;
 
 /* Write flags; src/fs/runtime.ts passes the same bits. */
@@ -43,6 +49,7 @@ enum {
     FS_WRITE_APPEND = 1u << 0,
     FS_WRITE_ATOMIC = 1u << 1,
     FS_WRITE_CREATE_DIRECTORIES = 1u << 2,
+    FS_WRITE_EXCLUSIVE = 1u << 3,
 };
 
 /* node:fs's copyFile mode bits, which mal_posix_fs_copy_file_mode takes. */
@@ -57,8 +64,9 @@ typedef struct FsJob {
     FsOperation operation;
     char *path;
     char *destination;
-    /* A directory whose creation or listing failed, when different from `path`. */
+    /* Owns a returned path or a directory path reported on failure. */
     char *directory;
+    char *prefix;
     byte *bytes;
     usize length;
     MalPosixStat stat;
@@ -71,6 +79,7 @@ typedef struct FsJob {
     u32 mode;
     bool has_mode;
     bool overwrite;
+    bool missing_ok;
     bool exists;
     bool recursive;
     bool dot;
@@ -94,6 +103,7 @@ static void fs_job_free(void *data) {
     free(job->path);
     free(job->destination);
     free(job->directory);
+    free(job->prefix);
     free(job->bytes);
     mal_posix_fs_free_dirents(job->entries, job->entry_count);
     fs_patterns_free(&job->include);
@@ -111,10 +121,16 @@ static const char *fs_operation_syscall(FsOperation operation) {
         case FS_WRITE: return "open";
         case FS_REMOVE: return "unlink";
         case FS_COPY: return "copyfile";
-        case FS_MOVE: return "rename";
+        case FS_MOVE:
+        case FS_MOVE_DIRECTORY: return "rename";
         case FS_LIST: return "scandir";
         case FS_CREATE_DIRECTORY: return "mkdir";
         case FS_REMOVE_DIRECTORY: return "rmdir";
+        case FS_CHMOD: return "chmod";
+        case FS_REALPATH: return "realpath";
+        case FS_READLINK: return "readlink";
+        case FS_SYMLINK: return "symlink";
+        case FS_TEMPORARY_DIRECTORY: return "mkdtemp";
     }
     return "open";
 }
@@ -135,6 +151,7 @@ static usize fs_directory_length(const char *path) {
 static void fs_write_direct(FsJob *job) {
     u32 flags = MAL_POSIX_OPEN_WRITE | MAL_POSIX_OPEN_CREATE
         | ((job->flags & FS_WRITE_APPEND) != 0 ? MAL_POSIX_OPEN_APPEND : MAL_POSIX_OPEN_TRUNCATE);
+    if ((job->flags & FS_WRITE_EXCLUSIVE) != 0) flags |= MAL_POSIX_OPEN_EXCLUSIVE;
     int fd = -1;
     int error = mal_posix_fs_open(job->path, flags, false, job->has_mode ? job->mode : 0666, &fd);
     if (error != 0) {
@@ -159,13 +176,14 @@ static _Atomic u32 fs_temporary_counter;
 static void fs_write_atomic(FsJob *job) {
     char *resolved = nullptr;
     MalPosixStat status;
-    if (mal_posix_fs_lstat(job->path, &status) == 0 && status.type == MAL_POSIX_FT_SYMLINK
+    bool exclusive = (job->flags & FS_WRITE_EXCLUSIVE) != 0;
+    if (!exclusive && mal_posix_fs_lstat(job->path, &status) == 0 && status.type == MAL_POSIX_FT_SYMLINK
         && mal_posix_fs_realpath(job->path, &resolved) != 0) {
         free(resolved);
         resolved = nullptr;
     }
     const char *target = resolved != nullptr ? resolved : job->path;
-    bool keep_mode = !job->has_mode && mal_posix_fs_stat(target, &status) == 0
+    bool keep_mode = !exclusive && !job->has_mode && mal_posix_fs_stat(target, &status) == 0
         && status.type == MAL_POSIX_FT_FILE;
     u32 mode = job->has_mode ? job->mode : keep_mode ? status.mode & 07777 : 0666;
     const char *slash = strrchr(target, '/');
@@ -199,8 +217,11 @@ static void fs_write_atomic(FsJob *job) {
     else if ((error = mal_posix_fs_sync_fd(fd)) != 0) fs_fail(job, error, "fsync");
     int close_error = mal_posix_fs_close_fd(fd);
     if (job->error == 0 && close_error != 0) fs_fail(job, close_error, "close");
-    if (job->error == 0 && (error = mal_posix_fs_rename(temporary, target)) != 0)
-        fs_fail(job, error, "rename");
+    if (job->error == 0) {
+        error = exclusive ? mal_posix_fs_rename_exclusive(temporary, target)
+            : mal_posix_fs_rename(temporary, target);
+        if (error != 0) fs_fail(job, error, "rename");
+    }
     if (job->error != 0) (void) mal_posix_fs_unlink(temporary);
     free(temporary);
     free(resolved);
@@ -230,9 +251,16 @@ static void fs_write(FsJob *job) {
  * rule applies when creating the copy. */
 static void fs_move(FsJob *job) {
     MalPosixStat status;
+    if (job->operation == FS_MOVE_DIRECTORY) {
+        int error = mal_posix_fs_lstat(job->path, &status);
+        if (error != 0 || status.type != MAL_POSIX_FT_DIR) {
+            fs_fail(job, error != 0 ? error : ENOTDIR, "rename");
+            return;
+        }
+    }
     int error = job->overwrite ? mal_posix_fs_rename(job->path, job->destination)
         : mal_posix_fs_rename_exclusive(job->path, job->destination);
-    if (error == EXDEV && mal_posix_fs_lstat(job->path, &status) == 0
+    if (error == EXDEV && job->operation == FS_MOVE && mal_posix_fs_lstat(job->path, &status) == 0
         && status.type == MAL_POSIX_FT_FILE) {
         error = mal_posix_fs_copy_file_mode(job->path, job->destination,
             job->overwrite ? 0 : FS_COPY_EXCLUSIVE);
@@ -248,6 +276,25 @@ static void fs_move(FsJob *job) {
         return;
     }
     if (error != 0) fs_fail(job, error, "rename");
+}
+
+static void fs_make_temporary_directory(FsJob *job) {
+    char *parent = nullptr;
+    int error = mal_posix_fs_realpath(job->path, &parent);
+    if (error != 0) {
+        fs_fail(job, error, "realpath");
+        return;
+    }
+    usize length = strlen(parent) + strlen(job->prefix) + 2;
+    char *prefix = malloc(length);
+    if (prefix == nullptr) {
+        fs_fail(job, ENOMEM, "mkdtemp");
+    } else {
+        snprintf(prefix, length, "%s%s%s", parent, strcmp(parent, "/") == 0 ? "" : "/", job->prefix);
+        fs_fail(job, mal_posix_fs_mkdtemp(prefix, &job->directory), "mkdtemp");
+        free(prefix);
+    }
+    free(parent);
 }
 
 static bool fs_matches(const FsPatterns *patterns, const char *relative, bool dot) {
@@ -296,7 +343,7 @@ static void fs_job_run(void *data) {
                 && status.type == MAL_POSIX_FT_DIR) {
                 error = EISDIR;
             }
-            fs_fail(job, error, "unlink");
+            fs_fail(job, job->missing_ok && error == ENOENT ? 0 : error, "unlink");
             return;
         }
         case FS_COPY:
@@ -304,6 +351,7 @@ static void fs_job_run(void *data) {
                 (job->overwrite ? 0 : FS_COPY_EXCLUSIVE) | FS_COPY_CLONE), "copyfile");
             return;
         case FS_MOVE:
+        case FS_MOVE_DIRECTORY:
             fs_move(job);
             return;
         case FS_LIST:
@@ -314,9 +362,26 @@ static void fs_job_run(void *data) {
         case FS_CREATE_DIRECTORY:
             fs_fail(job, mal_posix_fs_mkdir_mode(job->path, job->recursive, job->mode, nullptr), "mkdir");
             return;
-        case FS_REMOVE_DIRECTORY:
-            fs_fail(job, job->recursive ? mal_posix_fs_rmdir_recursive(job->path)
-                : mal_posix_fs_rmdir(job->path), "rmdir");
+        case FS_REMOVE_DIRECTORY: {
+            int error = job->recursive ? mal_posix_fs_rmdir_recursive(job->path, job->missing_ok)
+                : mal_posix_fs_rmdir(job->path);
+            fs_fail(job, job->missing_ok && error == ENOENT ? 0 : error, "rmdir");
+            return;
+        }
+        case FS_CHMOD:
+            fs_fail(job, mal_posix_fs_chmod(job->path, job->mode), "chmod");
+            return;
+        case FS_REALPATH:
+            fs_fail(job, mal_posix_fs_realpath(job->path, &job->directory), "realpath");
+            return;
+        case FS_READLINK:
+            fs_fail(job, mal_posix_fs_readlink(job->path, &job->bytes, &job->length), "readlink");
+            return;
+        case FS_SYMLINK:
+            fs_fail(job, mal_posix_fs_symlink(job->path, job->destination), "symlink");
+            return;
+        case FS_TEMPORARY_DIRECTORY:
+            fs_make_temporary_directory(job);
             return;
     }
 }
@@ -397,7 +462,8 @@ static MalValue fs_text_result(MalVm *vm, const FsJob *job) {
     const byte *bytes = job->bytes;
     usize length = job->length;
     const u8 *raw = (const u8 *) bytes;
-    if (length >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) {
+    if (job->operation == FS_READ_TEXT && length >= 3
+        && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) {
         bytes += 3;
         length -= 3;
     }
@@ -456,13 +522,19 @@ static MalValue fs_job_result(MalVm *vm, FsJob *job) {
             job->bytes = nullptr;
             return mal_fs_take_bytes(vm, bytes, job->length);
         }
-        case FS_READ_TEXT: return fs_text_result(vm, job);
+        case FS_READ_TEXT:
+        case FS_READLINK: return fs_text_result(vm, job);
+        case FS_REALPATH:
+        case FS_TEMPORARY_DIRECTORY: return fs_string(vm, job->directory);
         case FS_WRITE: return mal_value_from_f64((f64) job->length);
         case FS_LIST: return fs_list_result(vm, job);
         case FS_REMOVE:
         case FS_COPY:
         case FS_CREATE_DIRECTORY:
         case FS_REMOVE_DIRECTORY:
+        case FS_CHMOD:
+        case FS_SYMLINK:
+        case FS_MOVE_DIRECTORY:
         case FS_MOVE: return mal_value_new_undefined();
     }
     return mal_value_new_undefined();
@@ -477,9 +549,7 @@ static void fs_job_settle(
     if (cancelled || job == nullptr) {
         result = mal_fs_failure(vm, ECANCELED, fs_operation_syscall((FsOperation) tag), nullptr, nullptr);
     } else if (job->error != 0) {
-        bool two_paths = job->operation == FS_COPY || job->operation == FS_MOVE;
-        result = mal_fs_failure(vm, job->error, job->syscall, job->error_path,
-            two_paths ? job->destination : nullptr);
+        result = mal_fs_failure(vm, job->error, job->syscall, job->error_path, job->destination);
     } else {
         result = fs_job_result(vm, job);
         failed = false;
@@ -505,6 +575,7 @@ static MalValue fs_start(MalVm *vm, FsJob *job) {
         .settle = fs_job_settle,
         .data = job,
         .footprint = sizeof(*job) + job->length + job->pattern_bytes + strlen(job->path) + 1
+            + (job->prefix == nullptr ? 0 : strlen(job->prefix) + 1)
             + (job->destination == nullptr ? 0 : strlen(job->destination) + 1),
         .tag = job->operation,
         .values = {promise},
@@ -559,7 +630,13 @@ static FsJob *fs_job_new(MalVm *vm, FsOperation operation, const MalValue *args,
         return nullptr;
     }
     job->operation = operation;
-    job->path = mal_fs_path(vm, argc > 0 ? args[0] : mal_value_new_undefined());
+    MalValue path = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (operation == FS_TEMPORARY_DIRECTORY && mal_value_is_undefined(path)) {
+        job->path = strdup(mal_posix_fs_temporary_directory());
+        if (job->path == nullptr) mal_vm_throw_allocation_error(vm);
+    } else {
+        job->path = mal_fs_path(vm, path);
+    }
     if (job->path == nullptr) {
         fs_job_free(job);
         return nullptr;
@@ -654,12 +731,13 @@ static MalValue fs_write_file(
     return fs_start(vm, job);
 }
 
-/* remove(path): unlink a file; a directory fails with EISDIR. */
 static MalValue fs_remove(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self; (void) nt; (void) callee;
     FsJob *job = fs_job_new(vm, FS_REMOVE, args, argc);
-    return job == nullptr ? mal_value_new_undefined() : fs_start(vm, job);
+    if (job == nullptr) return mal_value_new_undefined();
+    job->missing_ok = fs_argument_true(args, argc, 1);
+    return fs_start(vm, job);
 }
 
 static MalValue fs_transfer(
@@ -682,11 +760,52 @@ static MalValue fs_copy(
     return fs_transfer(vm, FS_COPY, args, argc);
 }
 
-/* move(source, destination, overwrite). */
-static MalValue fs_move_file(
+static MalValue fs_move_path(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self; (void) nt; (void) callee;
-    return fs_transfer(vm, FS_MOVE, args, argc);
+    return fs_transfer(vm, fs_argument_true(args, argc, 3) ? FS_MOVE_DIRECTORY : FS_MOVE, args, argc);
+}
+
+static MalValue fs_chmod(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    FsJob *job = fs_job_new(vm, FS_CHMOD, args, argc);
+    if (job == nullptr) return mal_value_new_undefined();
+    job->mode = (u32) mal_ops_number_as_f64(args[1]);
+    return fs_start(vm, job);
+}
+
+static MalValue fs_realpath(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    FsJob *job = fs_job_new(vm, FS_REALPATH, args, argc);
+    return job == nullptr ? mal_value_new_undefined() : fs_start(vm, job);
+}
+
+static MalValue fs_readlink(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    FsJob *job = fs_job_new(vm, FS_READLINK, args, argc);
+    return job == nullptr ? mal_value_new_undefined() : fs_start(vm, job);
+}
+
+static MalValue fs_symlink(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    return fs_transfer(vm, FS_SYMLINK, args, argc);
+}
+
+static MalValue fs_temporary_directory(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    FsJob *job = fs_job_new(vm, FS_TEMPORARY_DIRECTORY, args, argc);
+    if (job == nullptr) return mal_value_new_undefined();
+    job->prefix = mal_fs_path(vm, argc > 1 ? args[1] : mal_value_new_undefined());
+    if (job->prefix == nullptr) {
+        fs_job_free(job);
+        return mal_value_new_undefined();
+    }
+    return fs_start(vm, job);
 }
 
 static bool fs_read_patterns(MalVm *vm, MalValue list, FsPatterns *patterns, usize *footprint) {
@@ -748,6 +867,7 @@ static MalValue fs_remove_directory(
     FsJob *job = fs_job_new(vm, FS_REMOVE_DIRECTORY, args, argc);
     if (job == nullptr) return mal_value_new_undefined();
     job->recursive = fs_argument_true(args, argc, 1);
+    job->missing_ok = fs_argument_true(args, argc, 2);
     return fs_start(vm, job);
 }
 
@@ -769,12 +889,17 @@ void mal_host_install_maligator_internal_fs(
         {"stat", fs_stat, 2},
         {"read", fs_read, 2},
         {"write", fs_write_file, 4},
-        {"remove", fs_remove, 1},
+        {"remove", fs_remove, 2},
         {"copy", fs_copy, 3},
-        {"move", fs_move_file, 3},
+        {"move", fs_move_path, 4},
         {"list", fs_list, 6},
         {"createDirectory", fs_create_directory, 3},
-        {"removeDirectory", fs_remove_directory, 2},
+        {"removeDirectory", fs_remove_directory, 3},
+        {"chmod", fs_chmod, 2},
+        {"realpath", fs_realpath, 1},
+        {"readlink", fs_readlink, 1},
+        {"symlink", fs_symlink, 2},
+        {"temporaryDirectory", fs_temporary_directory, 2},
     };
     for (i32 i = 0; i < count; i++) {
         for (usize j = 0; j < countof(functions); j++) {
