@@ -116,8 +116,8 @@ import type { LibraryPreparation, PreparedLibraries } from "./ffi/library.ts";
 import { runFfiProbe } from "./ffi/probe.ts";
 import {
 	cacheFrontendWire,
-	frontendDependencyUnchanged,
 	FrontendCompilationSession,
+	revalidateFrontendDependency,
 } from "./frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
 import { writeSourceChunks } from "./generated-source.ts";
@@ -1826,6 +1826,7 @@ export async function devCommand(
 	let childGeneration = 0;
 	let activeBuild: BuildCommandResult | undefined;
 	let activeGeneration = 0;
+	let verifiedDependencies = new Map<string, FrontendDependencyIdentity>();
 	const applicationEvaluationFailed = new Error("Application evaluation failed");
 	const spawnApplication = (build: BuildCommandResult, generation: number) => {
 		activeProfile = nextProfile(build);
@@ -1957,14 +1958,18 @@ export async function devCommand(
 				states.map((state) => state.file),
 				directories,
 			);
-			const validate = () => [
-				...new Set([
-					...changedFiles(states, true),
-					...(build.dependencyIdentities ?? [])
-						.filter((identity) => !frontendDependencyUnchanged(identity))
-						.map((identity) => identity.path),
-				]),
-			];
+			const verified = new Map<string, FrontendDependencyIdentity>();
+			const validate = () => {
+				const changed = new Set(changedFiles(states, true));
+				for (const identity of build.dependencyIdentities ?? []) {
+					const previous =
+						verified.get(identity.path) ?? verifiedDependencies.get(identity.path);
+					if (revalidateFrontendDependency(identity, previous))
+						verified.set(identity.path, identity);
+					else changed.add(identity.path);
+				}
+				return [...changed];
+			};
 			let changed = validate();
 			if (changed.length > 0) {
 				queueChanges(changed);
@@ -2036,6 +2041,7 @@ export async function devCommand(
 			);
 			activeBuild = build;
 			activeGeneration = generation;
+			verifiedDependencies = verified;
 			// Sockets the new generation did not listen on during evaluation belong to
 			// servers the edit removed.
 			context.applications?.releaseUnclaimedListeners?.();

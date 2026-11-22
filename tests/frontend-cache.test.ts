@@ -17,6 +17,7 @@ import {
 	frontendDigest,
 	frontendWirePath,
 	FrontendCompilationSession,
+	revalidateFrontendDependency,
 } from "../src/frontend-cache.ts";
 
 describe("shared frontend artifact cache", () => {
@@ -45,11 +46,31 @@ describe("shared frontend artifact cache", () => {
 			const original = "export const value = 1;\n";
 			writeFileSync(file, "export const value = 2;\n");
 			const session = new FrontendCompilationSession();
+			const verified = session.snapshot(file);
+			expect(frontendDependencyUnchanged(verified)).toBe(true);
 			const compiled = session.snapshot(file, original);
 			expect(compiled.mtimeMs).toBe(statSync(file).mtimeMs);
-			expect(frontendDependencyUnchanged(compiled)).toBe(false);
+			expect(revalidateFrontendDependency(compiled, verified)).toBe(false);
 			rmSync(file);
 			expect(frontendDependencyUnchanged(compiled)).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rechecks a verified dependency after a same-size edit with its mtime restored", () => {
+		const root = mkdtempSync(path.join(tmpdir(), "mal-frontend-verified-revision-"));
+		try {
+			const file = path.join(root, "leaf.mts");
+			const time = new Date("2025-01-01T00:00:00.000Z");
+			writeFileSync(file, "export const value = 1;\n");
+			utimesSync(file, time, time);
+			const compiled = new FrontendCompilationSession().snapshot(file);
+			expect(frontendDependencyUnchanged(compiled)).toBe(true);
+
+			writeFileSync(file, "export const value = 2;\n");
+			utimesSync(file, time, time);
+			expect(revalidateFrontendDependency(compiled, compiled)).toBe(false);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

@@ -122,12 +122,26 @@ function sameFileIdentity(
 export function frontendDependencyUnchanged(
 	identity: FrontendDependencyIdentity,
 ): boolean {
+	return revalidateFrontendDependency(identity, undefined);
+}
+
+/** Verify the compiled bytes, reusing a prior match for the same filesystem revision. */
+export function revalidateFrontendDependency(
+	identity: FrontendDependencyIdentity,
+	previouslyVerified: FrontendDependencyIdentity | undefined,
+): boolean {
 	try {
 		const before = statSync(identity.path);
 		if (!before.isFile() || !sameFileIdentity(identity, before)) return false;
+		if (
+			previouslyVerified?.path === identity.path &&
+			previouslyVerified.digest === identity.digest &&
+			sameFileIdentity(previouslyVerified, before)
+		)
+			return true;
 		// Graph text can predate snapshot metadata, so matching stats do not prove the compiled revision.
 		return (
-			frontendDigest(new Uint8Array(readFileSync(identity.path))) === identity.digest &&
+			frontendDigest(readFileSync(identity.path)) === identity.digest &&
 			sameFileIdentity(identity, statSync(identity.path))
 		);
 	} catch {
@@ -229,10 +243,10 @@ export function frontendCompilerArtifactUnchanged(
  */
 export class FrontendCompilationSession {
 	readonly #snapshots = new Map<string, FrontendDependencyIdentity>();
-	readonly moduleParses = new ModuleParseCache();
+	readonly #moduleParses = new ModuleParseCache();
 	#digestManifestPath: string | undefined;
 	#digestManifest: FileDigestManifest | undefined;
-	#parseManifest: { path: string; producer: string; projectRoot: string } | undefined;
+	#parseManifest: { path: string; producer?: string; projectRoot: string } | undefined;
 	#digestManifestDirty = false;
 	#invalidated = new Set<string>();
 	#invalidateAll = false;
@@ -259,35 +273,42 @@ export class FrontendCompilationSession {
 			projectRoot,
 			files: {},
 		};
-		const parseManifest = {
+		this.#parseManifest = {
 			path: path.join(
 				root,
 				"module-parses",
 				`${frontendDigest(projectRoot).slice(0, 24)}.json`,
 			),
-			producer: compilerProducerIdentity("build-frontend", MODULE_PARSE_SCHEMA),
 			projectRoot,
 		};
-		this.#parseManifest = parseManifest;
-		const persisted = readModuleParseManifest(
-			parseManifest.path,
-			parseManifest.producer,
-			parseManifest.projectRoot,
-		);
-		this.moduleParses.usePersisted(persisted?.parses ?? {}, persisted?.loads ?? {});
+	}
+
+	get moduleParses(): ModuleParseCache {
+		const manifest = this.#parseManifest;
+		if (manifest !== undefined && manifest.producer === undefined) {
+			// Whole-image hits validate dependencies without constructing a module graph.
+			manifest.producer = compilerProducerIdentity("build-frontend", MODULE_PARSE_SCHEMA);
+			const persisted = readModuleParseManifest(
+				manifest.path,
+				manifest.producer,
+				manifest.projectRoot,
+			);
+			this.#moduleParses.usePersisted(persisted?.parses ?? {}, persisted?.loads ?? {});
+		}
+		return this.#moduleParses;
 	}
 
 	invalidate(file?: string): void {
 		if (file === undefined) {
 			this.#snapshots.clear();
-			this.moduleParses.invalidate();
+			this.#moduleParses.invalidate();
 			this.#invalidateAll = true;
 			this.#dependencyInputsInvalidated = true;
 			this.#invalidated.clear();
 		} else {
 			const resolved = path.resolve(file);
 			this.#snapshots.delete(resolved);
-			this.moduleParses.invalidate(resolved);
+			this.#moduleParses.invalidate(resolved);
 			this.#invalidated.add(resolved);
 			if (
 				resolved.split(path.sep).includes("node_modules") ||
@@ -375,8 +396,8 @@ export class FrontendCompilationSession {
 	/** Atomically publish file digests and parses learned during this compilation. */
 	flush(): void {
 		this.#invalidateAll = false;
-		const learned = this.moduleParses.takePersistedChanges();
-		if (learned !== undefined && this.#parseManifest !== undefined) {
+		const learned = this.#moduleParses.takePersistedChanges();
+		if (learned !== undefined && this.#parseManifest?.producer !== undefined) {
 			const { path: file, producer, projectRoot } = this.#parseManifest;
 			const current = readModuleParseManifest(file, producer, projectRoot);
 			const manifest = {

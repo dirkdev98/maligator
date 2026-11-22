@@ -722,15 +722,7 @@ function prepareBuildFrontend(
 	const forceCompile = options.forceCompile === true || liveProfile;
 	const session = options.session ?? new BuildCompilationSession();
 	session.useCacheDirectory(options.cacheDirectory);
-	const parseStatsBefore = session.moduleParses.statistics();
 	const digestStatsBefore = session.digestStatistics();
-	const moduleParseStats = () => {
-		const current = session.moduleParses.statistics();
-		return {
-			hits: current.hits - parseStatsBefore.hits,
-			misses: current.misses - parseStatsBefore.misses,
-		};
-	};
 	const fileDigestStats = () => {
 		const current = session.digestStatistics();
 		return {
@@ -771,7 +763,7 @@ function prepareBuildFrontend(
 					frontendMs: Date.now() - startedAt,
 					phases,
 					dependencies: cached.dependencies.map((dependency) => dependency.path),
-					moduleParses: moduleParseStats(),
+					moduleParses: { hits: 0, misses: 0 },
 					fileDigests: fileDigestStats(),
 					runtimeArtifacts: cached.runtimeArtifacts,
 					...(cached.fragmentCompilerArtifacts === undefined
@@ -784,6 +776,15 @@ function prepareBuildFrontend(
 		}
 	}
 
+	const parseCache = session.moduleParses;
+	const parseStatsBefore = parseCache.statistics();
+	const moduleParseStats = () => {
+		const current = parseCache.statistics();
+		return {
+			hits: current.hits - parseStatsBefore.hits,
+			misses: current.misses - parseStatsBefore.misses,
+		};
+	};
 	const fragmentsApply =
 		options.relocatable === true &&
 		options.optimization === "development" &&
@@ -793,7 +794,7 @@ function prepareBuildFrontend(
 		buildConfig: options.config,
 		execution: options.execution,
 		stripTypes: options.stripTypes,
-		parseCache: session.moduleParses,
+		parseCache,
 		platformSourceRoot,
 	});
 	phases.graphMs = Date.now() - graphStartedAt;
@@ -839,7 +840,7 @@ function prepareBuildFrontend(
 		const semantic = semanticForGraph();
 		sharedSemantic = undefined;
 		graph = undefined;
-		if (options.session === undefined) session.moduleParses.invalidate();
+		if (options.session === undefined) parseCache.invalidate();
 		return semantic;
 	};
 	const world = facts.world;
@@ -976,7 +977,7 @@ function prepareBuildFrontend(
 		buildConfig: options.config,
 		execution: options.execution,
 		stripTypes: options.stripTypes,
-		parseCache: session.moduleParses,
+		parseCache,
 		platformSourceRoot,
 		optimization: options.optimization,
 		coreVerification: options.coreVerification,
