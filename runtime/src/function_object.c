@@ -9,8 +9,11 @@
 
 static_assert(sizeof(MalFunctionObject) % alignof(MalValue) == 0,
               "script function capture displays are misaligned");
-static_assert(offsetof(MalFunctionObject, metadata) == sizeof(MalObject) + sizeof(void *),
-              "compact function fields must follow the prototype word");
+static_assert(sizeof(MalFunctionObject) <= 48, "closure exceeds the 48-byte size class");
+static_assert(offsetof(MalClosureMetadata, storage) == 0,
+              "borrowed storage must lead the definition's metadata");
+static_assert(offsetof(MalFunctionObject, property_storage) == sizeof(MalObject),
+              "external storage must follow the object prefix");
 static_assert(offsetof(MalNativeFunctionObject, metadata) == sizeof(MalObject) + sizeof(void *),
               "native function fields must follow the prototype word");
 static_assert(offsetof(MalNativeFunctionObject, trailing) % alignof(MalValue) == 0,

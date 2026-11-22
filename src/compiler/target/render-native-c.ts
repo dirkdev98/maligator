@@ -1407,6 +1407,16 @@ function isLengthPropertyName(units: ReadonlyArray<number> | undefined): boolean
 	);
 }
 
+const NAME_PROPERTY_UNITS = [..."name"].map((character) => character.charCodeAt(0));
+
+function isNamePropertyName(units: ReadonlyArray<number> | undefined): boolean {
+	return (
+		units !== undefined &&
+		units.length === NAME_PROPERTY_UNITS.length &&
+		units.every((unit, index) => unit === NAME_PROPERTY_UNITS[index])
+	);
+}
+
 function numberToInt32(value: string, range?: CompilerIntegerRange): string {
 	if (compilerIntegerRangeIsInt32(range)) return `((i32) ${value})`;
 	return range === undefined
@@ -12043,15 +12053,30 @@ class NativeInstructionEmission {
 				? ordinary(this.slowPathFramePosition())
 				: ordinary();
 		}
-		const probeHelper = isLengthPropertyName(
-			this.context.stringConstants[instruction.stringIndex],
-		)
+		const name = this.context.stringConstants[instruction.stringIndex];
+		const probeHelper = isLengthPropertyName(name)
 			? "mal_vm_property_try_load_length_static"
 			: this.context.polymorphicMethodLoad === true
 				? "mal_vm_property_try_load_static_polymorphic"
 				: "mal_vm_property_try_load_static";
-		const probe = (): string =>
-			`${this.context.watchedMathCallee === true ? `mal_vm_watched_own_value_try_load_static(vm, ${this.boxed(instruction.object)}, &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}], &__v_${this.ip}) || ` : ""}${probeHelper}(vm, ${this.boxed(instruction.object)}, &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}], &__v_${this.ip})`;
+		const probe = (): string => {
+			const receiver = this.boxed(instruction.object);
+			const cache = `&${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}]`;
+			const result = `&__v_${this.ip}`;
+			const probes: Array<string> = [];
+			if (isNamePropertyName(name)) {
+				probes.push(
+					`mal_vm_function_metadata_try_load(${receiver}, ${cache}, ${result})`,
+				);
+			}
+			if (this.context.watchedMathCallee === true) {
+				probes.push(
+					`mal_vm_watched_own_value_try_load_static(vm, ${receiver}, ${cache}, ${result})`,
+				);
+			}
+			probes.push(`${probeHelper}(vm, ${receiver}, ${cache}, ${result})`);
+			return probes.join(" || ");
+		};
 		const classLayout =
 			this.context.nativePlan?.kind === "class-layout" && this.classLayoutsEnabled
 				? this.context.nativePlan.site

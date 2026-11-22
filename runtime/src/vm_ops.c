@@ -627,6 +627,10 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
     }
 
 
+    if (mal_value_is_function_object(object_value)) {
+        MalObject *function = mal_value_to_object(object_value);
+        if (mal_object_storage_is_borrowed(function)) mal_object_materialize_borrowed_storage(function);
+    }
     mal_vm_prepare_script_function_own_keys(vm, object_value);
 
     MalArrayObject *keys = mal_intrinsic_new_array(vm, 0);
@@ -899,6 +903,7 @@ bool mal_vm_get_own_property(
     MalObject *object = mal_value_to_object(object_value);
     MalPropertyLookup lookup = mal_object_get_own(object, key);
     if (lookup.present) {
+        if (mal_object_storage_is_borrowed(object)) mal_object_materialize_borrowed_storage(object);
         *desc_out = lookup.desc;
         if (mal_object_is_mapped_arguments(object)) {
             MalArgumentsObject *arguments = (MalArgumentsObject *) object;
@@ -2212,11 +2217,29 @@ static bool mal_vm_capture_value(MalEnv *env, i32 owner_function_index, i32 inde
     return false;
 }
 
-// Allocates the closure cell with its own `length` and `name`; the caller fills
-// capture_bytes of tail storage and sets the creation environment.
-static MalFunctionObject *mal_vm_new_closure(
-    MalVm *vm, i32 function_index, const MalFunction *definition, usize capture_bytes
+static __attribute__((noinline)) MalClosureMetadata *mal_vm_init_closure_metadata(
+    MalVm *vm, MalClosureMetadataPool *pool, usize page_index, usize slot,
+    const MalFunction *definition
 ) {
+    if (page_index >= pool->page_count) {
+        usize count = ((usize) vm->function_capacity + MAL_CLOSURE_METADATA_PAGE_SIZE - 1)
+            / MAL_CLOSURE_METADATA_PAGE_SIZE;
+        MalClosureMetadata **pages = realloc(pool->pages, sizeof(*pages) * count);
+        if (pages == nullptr) abort();
+        memset(pages + pool->page_count, 0, sizeof(*pages) * (count - pool->page_count));
+        pool->pages = pages;
+        pool->page_count = count;
+    }
+    MalClosureMetadata *page = pool->pages[page_index];
+    if (page == nullptr) {
+        page = calloc(MAL_CLOSURE_METADATA_PAGE_SIZE, sizeof(*page));
+        if (page == nullptr) abort();
+        pool->pages[page_index] = page;
+    }
+    MalString *name = definition->name_string_index >= 0 &&
+            definition->name_string_index < vm->runtime_image->string_constant_count
+        ? mal_vm_string_constant(vm, definition->name_string_index)
+        : mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY);
     // Generator/async-generator function objects inherit their respective
     // %GeneratorFunction.prototype% / %AsyncGenerator%.
     MalIntrinsic prototype_slot;
@@ -2234,10 +2257,30 @@ static MalFunctionObject *mal_vm_new_closure(
             prototype_slot = MAL_INTRINSIC_FUNCTION_PROTOTYPE;
             break;
     }
-    MalString *name = definition->name_string_index >= 0 &&
-            definition->name_string_index < vm->runtime_image->string_constant_count
-        ? mal_vm_string_constant(vm, definition->name_string_index)
-        : mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY);
+    MalObject *prototype = mal_value_to_object(vm->intrinsics[prototype_slot]);
+    // Each realm installs the intrinsic once before its script closures can borrow it.
+    mal_object_mark_as_prototype(prototype);
+    page[slot] = (MalClosureMetadata) {
+        .values = {mal_value_from_i32(definition->length), mal_value_from_string(name)},
+        .storage = {.prototype = prototype, .fields = page[slot].values},
+    };
+    return &page[slot];
+}
+
+// The caller fills the capture tail and sets the creation environment.
+static MalFunctionObject *mal_vm_new_closure(
+    MalVm *vm, i32 function_index, const MalFunction *definition, usize capture_bytes
+) {
+    usize page_index = (u32) function_index / MAL_CLOSURE_METADATA_PAGE_SIZE;
+    usize slot = (u32) function_index % MAL_CLOSURE_METADATA_PAGE_SIZE;
+#if MAL_REALMS
+    MalClosureMetadataPool *pool = &vm->current_realm->closure_metadata;
+#else
+    MalClosureMetadataPool *pool = &vm->closure_metadata;
+#endif
+    MalClosureMetadata *page = page_index < pool->page_count ? pool->pages[page_index] : nullptr;
+    MalClosureMetadata *metadata = page != nullptr && page[slot].values[MAL_FUNCTION_NAME_SLOT] != 0
+        ? &page[slot] : mal_vm_init_closure_metadata(vm, pool, page_index, slot, definition);
     MalShape *shape = vm->closure_metadata_shape;
     if (__builtin_expect(shape == nullptr, 0)) {
         shape = mal_function_object_metadata_shape(
@@ -2250,10 +2293,8 @@ static MalFunctionObject *mal_vm_new_closure(
     return mal_function_object_new(
         &vm->heap,
         shape,
-        mal_value_to_object(vm->intrinsics[prototype_slot]),
         function_index,
-        definition->length,
-        name,
+        metadata,
         capture_bytes);
 }
 
@@ -2384,6 +2425,33 @@ void mal_op_create_function(MalCallable *callable, const MalInstruction *instruc
     );
 }
 
+// A repeated computed method name can use one immutable variant of the definition.
+static bool mal_vm_share_computed_function_name(MalFunctionObject *function, MalValue name) {
+    if (function->object.is_prototype || !mal_object_storage_is_borrowed(&function->object)) {
+        return false;
+    }
+    MalClosureMetadata *base = (MalClosureMetadata *) function->property_storage;
+    if (base->values[MAL_FUNCTION_NAME_SLOT] == name) return true;
+    const MalString *string = mal_value_to_string(name);
+    // A definition outlives its closures. Only retain names already rooted by the VM.
+    if (!string->property_atom && string->header.storage != MAL_HEAP_STORAGE_IMMORTAL) return false;
+    MalClosureMetadata *named = base->named;
+    if (named == nullptr) {
+        named = malloc(sizeof(*named));
+        if (named == nullptr) abort();
+        *named = *base;
+        named->values[MAL_FUNCTION_NAME_SLOT] = name;
+        named->storage.fields = named->values;
+        // SetFunctionName runs before publication. An already named row cannot grow variants.
+        named->named = named;
+        base->named = named;
+    } else if (named->values[MAL_FUNCTION_NAME_SLOT] != name) {
+        return false;
+    }
+    function->property_storage = &named->storage;
+    return true;
+}
+
 // Property-key coercion precedes naming, so only string construction can throw here.
 void mal_vm_op_set_function_name(MalVm *vm, MalValue func, MalValue key, u8 prefix) {
     if (!mal_value_is_object(func)) {
@@ -2428,6 +2496,10 @@ void mal_vm_op_set_function_name(MalVm *vm, MalValue func, MalValue key, u8 pref
         }
     }
 
+    if (mal_value_is_function_object(func) &&
+        mal_vm_share_computed_function_name(mal_value_to_function_object(func), name_value)) {
+        return;
+    }
     MalPropertyDesc name_desc = mal_intrinsic_data_desc(name_value, MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(mal_value_to_object(func), mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NAME), &name_desc);
 }
@@ -3128,15 +3200,19 @@ static __attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
 mal_vm_property_try_load_static_rows(
     MalVm *vm, MalValue receiver, const MalObject *object, MalInlineCache *ic
 ) {
-    // The inline probe admits only ordinary objects. Functions, classes and builtin
-    // receivers keep named own fields under the same shape proof.
-    if (object == nullptr && ic->mode == MAL_IC_MODE_SHAPE) {
-        const MalObject *own = mal_vm_as_own_slot_object(receiver);
+    // Only ordinary objects reach here with an object pointer from the inline probe.
+    if (object == nullptr) {
         MalValue value;
-        if (own != nullptr &&
-            (mal_vm_object_try_load_monomorphic(own, ic->key, ic, &value) ||
-             mal_vm_object_try_load_polymorphic(own, ic->key, ic, &value))) {
+        if (mal_vm_function_metadata_try_load(receiver, ic, &value)) {
             return (MalStaticPropertyProbeResult) {.hit = true, .value = value};
+        }
+        if (ic->mode == MAL_IC_MODE_SHAPE) {
+            const MalObject *own = mal_vm_as_own_slot_object(receiver);
+            if (own != nullptr &&
+                (mal_vm_object_try_load_monomorphic(own, ic->key, ic, &value) ||
+                 mal_vm_object_try_load_polymorphic(own, ic->key, ic, &value))) {
+                return (MalStaticPropertyProbeResult) {.hit = true, .value = value};
+            }
         }
     }
     if (ic->mode == MAL_IC_MODE_OWN_TABLE) {
@@ -5694,7 +5770,7 @@ static bool mal_vm_value_is_number(MalValue value) {
 
 /**
  * Resolve the synthetic properties that have no backing slot in the ordinary
- * property tables: array length, callable length/name, and the lazily
+ * property tables: array length and the lazily
  * materialized script function prototype. Shared by load, `in`, and delete so
  * the three operators agree on what exists.
  */
@@ -8032,6 +8108,13 @@ static MalValue mal_vm_op_load_property_ic_keyed(
                 // this VM-owned cache row, so pointer identity is ABA-safe even
                 // when the source expression produced a collectable string.
                 if (mal_ic_key_is_stable_string(key_value)) {
+                    if (mal_object_storage_is_borrowed(object)) {
+                        mal_ic_record_special(
+                            vm, ic, MAL_IC_MODE_FUNCTION_METADATA, 0, key_value,
+                            MAL_VALUE_UNDEFINED, nullptr);
+                        ic->slot = prop->slot;
+                        return mal_object_field_load_shaped(object, prop->slot);
+                    }
                     mal_vm_record_own_slot(ic, object->shape, key_value, prop->slot);
                     MAL_PERF_COUNT(ic_load_shape_fills);
                     // Warm the shared stub cache so a megamorphic site's next access to

@@ -1603,6 +1603,16 @@ typedef struct {
     u32 generation;
 } MalGlobalEnvironment;
 
+enum { MAL_CLOSURE_METADATA_PAGE_SIZE = 128 };
+
+/** Closures retain pointers into immutable rows, so directory growth leaves the pages in place. */
+typedef struct MalClosureMetadataPool {
+    MalClosureMetadata **pages;
+    usize page_count;
+} MalClosureMetadataPool;
+
+void mal_closure_metadata_pool_free(MalClosureMetadataPool *pool);
+
 #if MAL_REALMS
 /**
  * A realm: isolated global slots and intrinsics (%Object.prototype%, the error
@@ -1617,6 +1627,7 @@ typedef struct MalRealm {
     MalGlobalEnvironment global_environment;
     MalValue *globals;
     MalValue intrinsics[MAL_INTRINSIC_COUNT];
+    MalClosureMetadataPool closure_metadata;
     struct MalRealm *next;
 } MalRealm;
 
@@ -2427,6 +2438,9 @@ typedef struct MalVm {
      * can only miss.
      */
     MalHasCacheRow has_cache[MAL_HAS_CACHE_ROWS];
+#if !MAL_REALMS
+    MalClosureMetadataPool closure_metadata;
+#endif
 } MalVm;
 
 static inline __attribute__((always_inline)) bool mal_vm_gc_poll_requested(const MalVm *vm) {

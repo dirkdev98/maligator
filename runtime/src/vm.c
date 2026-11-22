@@ -744,12 +744,25 @@ static void mal_vm_adopt_program_image(MalVm *vm, const MalRuntimeImage *program
     for (i32 i = 0; i < function_count; i++) mal_vm_refresh_call_entry(vm, i);
 }
 
+void mal_closure_metadata_pool_free(MalClosureMetadataPool *pool) {
+    for (usize i = 0; i < pool->page_count; i++) {
+        MalClosureMetadata *page = pool->pages[i];
+        if (page == nullptr) continue;
+        for (usize j = 0; j < MAL_CLOSURE_METADATA_PAGE_SIZE; j++) free(page[j].named);
+        free(page);
+    }
+    free(pool->pages);
+}
+
 /** Phase 3: allocate execution stacks, caches, queues, and host-neutral state. */
 static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *program) {
 	vm->property_cache =
         calloc((usize) vm->function_capacity, sizeof(MalPropertyCachePool));
     vm->literal_shape_cache =
         calloc((usize) vm->function_capacity, sizeof(MalShape **));
+#if !MAL_REALMS
+    vm->closure_metadata = (MalClosureMetadataPool) {0};
+#endif
     mal_vm_class_cells_init(vm, program);
     vm->property_stub = nullptr;
     vm->inherited_property_stub = nullptr;
@@ -1231,6 +1244,9 @@ void mal_vm_free(MalVm *vm) {
     // so a teardown leaves no shutdown leak (mal_heap_free only munmaps the
     // chunks + frees LOS records; it does not run per-cell finalizers).
     mal_gc_finalize_all(vm);
+#if !MAL_REALMS
+    mal_closure_metadata_pool_free(&vm->closure_metadata);
+#endif
     // Other VMs on this thread may still own dependency rows; release only after all of ours are detached.
     mal_object_release_idle_prototype_dependencies();
     mal_vm_free_job_pool(vm);
@@ -3223,6 +3239,8 @@ static void mal_vm_run_until_frame_count(
                 bool cache_hit = (ic->mode == MAL_IC_MODE_INHERITED_VALUE &&
                         mal_vm_inherited_value_try_load(vm, object, ic, &result)) ||
                     mal_vm_typed_array_length_try_load(vm, object, ic, &result) ||
+                    (__builtin_expect(ic->mode == MAL_IC_MODE_FUNCTION_METADATA, 0) &&
+                     mal_vm_function_metadata_try_load(object, ic, &result)) ||
                     mal_vm_property_try_load_length_static(vm, object, ic, &result);
                 if (cache_hit) {
                     registers[instruction->as.load_property_static.dst] = result;

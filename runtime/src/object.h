@@ -191,10 +191,19 @@ static inline bool mal_object_has_public_overflow(const MalObject *object) {
     return mal_object_overflow(object) != nullptr && !object->overflow_private_only;
 }
 
+enum { MAL_OBJECT_BORROWED_FUNCTION_STORAGE = UINT8_MAX };
+
+/** The definition owns the original property slots until this function needs a writable copy. */
+static inline bool mal_object_storage_is_borrowed(const MalObject *object) {
+    return object->header.type == MAL_HEAP_FUNCTION_OBJECT &&
+        object->inline_payload_eights == MAL_OBJECT_BORROWED_FUNCTION_STORAGE;
+}
+
 /** Whether a dead object has finalizer work: outside storage to free or caches to invalidate. */
 static inline bool mal_object_finalizes(const MalObject *object) {
     return object->has_captured_stack || object->is_prototype || object->slots_owned ||
-        object->storage_kind == MAL_OBJECT_EXTERNAL || mal_object_overflow(object) != nullptr;
+        (object->storage_kind == MAL_OBJECT_EXTERNAL && !mal_object_storage_is_borrowed(object)) ||
+        mal_object_overflow(object) != nullptr;
 }
 
 static_assert(sizeof(MalObject) == 8 + sizeof(void *),
@@ -212,6 +221,8 @@ static_assert((sizeof(MalObject) + sizeof(void *)) % alignof(MalValue) == 0,
 
 /** Initialize an exotic cell whose payload follows its single prototype/storage word. */
 void mal_object_init_deferred(MalHeap *heap, MalObject *object, MalObject *prototype);
+
+void mal_object_materialize_borrowed_storage(MalObject *object);
 
 void mal_object_set_prototype_pointer(MalObject *object, MalObject *prototype);
 void mal_object_set_fields_pointer(MalObject *object, void *fields);

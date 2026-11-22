@@ -35,7 +35,7 @@ describe("function own-slot property cache", () => {
 		).toBe(expected);
 	});
 
-	it("serves script, native, and bound function properties through noncollecting shape hits", () => {
+	it("serves script, native, and bound function properties through noncollecting monomorphic hits", () => {
 		const result = spawnSync(compiled, [], {
 			env: { ...process.env, MAL_HOST_GC: "1", MAL_PERF_STATS: "1" },
 			encoding: "utf-8",

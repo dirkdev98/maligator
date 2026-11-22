@@ -18,10 +18,18 @@ typedef enum MalFunctionOwnKey {
     MAL_FUNCTION_OWN_PROTOTYPE = 1 << 4,
 } MalFunctionOwnKey;
 
+enum { MAL_FUNCTION_NAME_SLOT = 1 };
+
+typedef struct MalClosureMetadata {
+    MalObjectStorage storage;
+    MalValue values[2];
+    struct MalClosureMetadata *named;
+} MalClosureMetadata;
+
 typedef struct MalFunctionObject {
-    MalObject object;
-    MalObject *property_storage;
-    MalValue metadata[2];
+    // Capture displays start at function + 1, on a cell-aligned boundary.
+    alignas(MAL_GC_CELL_ALIGN) MalObject object;
+    MalObjectStorage *property_storage;
     i32 function_index;
     // Creation-time keys retain their order even when installed lazily or moved to a table.
     u8 initial_own_keys;
@@ -123,48 +131,51 @@ MalShape *mal_function_object_metadata_shape(
     MalHeap *heap, MalKey length_key, MalKey name_key, bool named);
 
 /**
- * Allocate a script function in one cell: the object, its `length` and `name`
- * fields in `metadata_shape` (named), then capture_bytes of tail storage. The caller
- * initializes the capture tail before any allocation, publication, or safepoint.
+ * A fresh closure borrows immutable property values from its definition. The caller
+ * initializes its capture tail before any allocation, publication, or safepoint.
  */
 static inline MalFunctionObject *mal_function_object_new(
     MalHeap *heap,
     MalShape *metadata_shape,
-    MalObject *prototype,
     i32 function_index,
-    i32 length,
-    MalString *name,
+    MalClosureMetadata *metadata,
     usize capture_bytes
 ) {
-    assert(name != nullptr && metadata_shape->inline_count == 2);
+    assert(metadata_shape->inline_count == 2);
     MalFunctionObject *function = mal_heap_alloc_uninitialized(
         heap, sizeof(MalFunctionObject) + capture_bytes,
         MAL_HEAP_FUNCTION_OBJECT);
     // Closures are created per call, so the fresh cell is initialized in place rather
     // than through the generic object and shaped-value constructors.
-    MalValue *fields = function->metadata;
     MalHeapHeader header = function->object.header;
     function->object = (MalObject) {
         .header = header,
         .extensible = true,
-        .storage_kind = MAL_OBJECT_COMPACT,
+        .storage_kind = MAL_OBJECT_EXTERNAL,
         .slot_capacity = 2,
-        // Function state follows these fields; property growth must move elsewhere.
-        .inline_payload_eights = 2,
+        .inline_payload_eights = MAL_OBJECT_BORROWED_FUNCTION_STORAGE,
         .shape = metadata_shape,
     };
-    function->property_storage = prototype;
-    mal_object_mark_as_prototype(prototype);
+    function->property_storage = &metadata->storage;
     function->function_index = function_index;
     function->initial_own_keys = MAL_FUNCTION_OWN_LENGTH | MAL_FUNCTION_OWN_NAME;
     function->creation_env = nullptr;
 #if MAL_REALMS
     function->realm = heap->current_realm;
 #endif
-    fields[0] = mal_value_from_i32(length);
-    fields[1] = mal_value_from_string(name);
-    mal_gc_card(&function->object.header, fields[1]);
     return function;
+}
+
+/** Load one of the two immutable definition properties without consulting its shape. */
+static inline __attribute__((always_inline)) bool mal_function_metadata_try_load(
+    MalValue receiver, u8 slot, MalValue *out
+) {
+    if (!mal_value_is_heap_type(receiver, MAL_HEAP_FUNCTION_OBJECT)) return false;
+    const MalFunctionObject *function = (const MalFunctionObject *) mal_value_to_heap(receiver);
+    if (function->object.inline_payload_eights != MAL_OBJECT_BORROWED_FUNCTION_STORAGE) return false;
+    const MalClosureMetadata *metadata = (const MalClosureMetadata *) function->property_storage;
+    *out = metadata->values[slot];
+    return true;
 }
 
 /**

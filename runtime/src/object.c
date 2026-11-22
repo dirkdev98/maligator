@@ -271,9 +271,14 @@ u64 mal_object_slot_dictionary_migration_count(void) {
     return mal_object_slot_dictionary_migrations;
 }
 
+static void mal_object_reserve_field_storage(MalObject *object, u32 capacity);
+
 static MalObjectStorage *mal_object_externalize(MalObject *object) {
     if (object->storage_kind == MAL_OBJECT_EMBEDDED ||
         object->storage_kind == MAL_OBJECT_EXTERNAL) {
+        if (mal_object_storage_is_borrowed(object)) {
+            mal_object_reserve_field_storage(object, object->slot_capacity);
+        }
         return mal_object_storage(object);
     }
     MalObjectStorage *storage = mal_heap_alloc_raw_profiled(
@@ -288,9 +293,10 @@ static MalObjectStorage *mal_object_externalize(MalObject *object) {
     return storage;
 }
 
-static void mal_object_reserve_deferred_fields(MalObject *object, u32 capacity) {
-    assert(object->storage_kind == MAL_OBJECT_DEFERRED);
-    assert(object->shape->inline_count == 0);
+static void mal_object_reserve_field_storage(MalObject *object, u32 capacity) {
+    assert(object->storage_kind == MAL_OBJECT_DEFERRED || mal_object_storage_is_borrowed(object));
+    u32 count = object->shape->inline_count;
+    assert(count <= capacity && count <= object->slot_capacity);
     MalObjectFieldStorage *storage = mal_heap_alloc_raw_profiled(
         mal_gc_current_heap(), sizeof(*storage) + sizeof(MalValue) * capacity,
         MAL_PROFILE_ALLOCATION_FAMILY_OBJECT);
@@ -298,13 +304,22 @@ static void mal_object_reserve_deferred_fields(MalObject *object, u32 capacity) 
         .prototype = mal_object_prototype(object),
         .fields = storage->fields,
     };
+    if (count != 0) {
+        memcpy(storage->fields, mal_object_fields(object), sizeof(MalValue) * count);
+    }
     MalObjectStorage *base = &storage->storage;
     memcpy(object + 1, &base, sizeof(base));
     object->storage_kind = MAL_OBJECT_EXTERNAL;
+    object->inline_payload_eights = 0;
     object->slot_capacity = (u8) capacity;
     // The sidecar owns its tail; growth can replace fields with an owned RAW buffer.
     object->slots_owned = false;
     mal_heap_cell_needs_finalizer(&object->header);
+}
+
+void mal_object_materialize_borrowed_storage(MalObject *object) {
+    assert(mal_object_storage_is_borrowed(object));
+    mal_object_reserve_field_storage(object, object->slot_capacity);
 }
 
 void mal_object_set_prototype_pointer(MalObject *object, MalObject *prototype) {
@@ -312,7 +327,7 @@ void mal_object_set_prototype_pointer(MalObject *object, MalObject *prototype) {
         object->storage_kind != MAL_OBJECT_EXTERNAL) {
         memcpy(object + 1, &prototype, sizeof(prototype));
     } else {
-        mal_object_storage(object)->prototype = prototype;
+        mal_object_externalize(object)->prototype = prototype;
     }
 }
 
@@ -326,7 +341,8 @@ void mal_object_set_fields_pointer(MalObject *object, void *fields) {
 
 void mal_object_set_overflow_pointer(MalObject *object, MalTable *overflow) {
     if (overflow == nullptr && (object->storage_kind == MAL_OBJECT_COMPACT ||
-                                object->storage_kind == MAL_OBJECT_DEFERRED)) return;
+                                object->storage_kind == MAL_OBJECT_DEFERRED ||
+                                mal_object_storage_is_borrowed(object))) return;
     mal_object_externalize(object)->overflow = overflow;
     if (overflow != nullptr) mal_heap_cell_needs_finalizer(&object->header);
 }
@@ -529,8 +545,8 @@ void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
             ? capacity * 2
             : MAL_SHAPE_MAX_INLINE_SLOTS;
     }
-    if (object->storage_kind == MAL_OBJECT_DEFERRED) {
-        mal_object_reserve_deferred_fields(object, capacity);
+    if (object->storage_kind == MAL_OBJECT_DEFERRED || mal_object_storage_is_borrowed(object)) {
+        mal_object_reserve_field_storage(object, capacity);
         return;
     }
     // Spare slots stay invisible until callers initialize them and publish the shape.
@@ -565,6 +581,7 @@ void mal_object_record_slot_dictionary_migration(MalObject *object) {
 }
 
 void mal_object_release_slots(MalObject *object) {
+    assert(!mal_object_storage_is_borrowed(object));
     if (object->slots_owned) {
         gc_free_raw(mal_gc_current_heap(), mal_object_fields(object));
     }

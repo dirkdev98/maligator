@@ -876,6 +876,9 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
                 if (!mal_object_define_is_compatible(current, *desc)) {
                     return MAL_DEFINE_OWN_REJECTED;
                 }
+                if (mal_object_storage_is_borrowed(object)) {
+                    mal_object_materialize_borrowed_storage(object);
+                }
                 mal_object_field_store(object, prop->slot, desc->value);
                 return MAL_DEFINE_OWN_APPLIED;
             }
@@ -1040,6 +1043,7 @@ static bool mal_object_remove_shaped(MalObject *object, u32 index) {
     MalShape *shape = object->shape;
     MalShape *next = mal_shape_remove_property(mal_gc_current_heap(), shape, index);
     if (next == nullptr) return false;
+    if (mal_object_storage_is_borrowed(object)) mal_object_materialize_borrowed_storage(object);
     u32 count = shape->inline_count;
     MalValue *fields = mal_object_fields_nonempty(object);
     // Every moved slot is overwritten, so shade each for the snapshot barrier.

@@ -1533,6 +1533,7 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 // read per hit.
 #define MAL_IC_MODE_TYPED_ARRAY_BYTE_LENGTH 19u
 #define MAL_IC_MODE_ARRAY_BUFFER_BYTE_LENGTH 20u
+#define MAL_IC_MODE_FUNCTION_METADATA 21u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
@@ -2208,6 +2209,17 @@ static inline bool mal_vm_admit_collection_size(MalVm *vm, MalValue receiver, us
         !mal_object_has_public_overflow(collection);
 }
 
+static inline __attribute__((always_inline)) bool mal_vm_function_metadata_try_load(
+    MalValue receiver, const MalInlineCache *ic, MalValue *out
+) {
+    if (ic->mode != MAL_IC_MODE_FUNCTION_METADATA ||
+        !mal_function_metadata_try_load(receiver, ic->slot, out)) {
+        return false;
+    }
+    mal_perf_ic_load_mono_hit();
+    return true;
+}
+
 /**
  * Protector/type-gated value and exotic-length entries. Fill sites admit only
  * VM-lifetime canonical string atoms, so identity is stable and a computed-key
@@ -2272,7 +2284,7 @@ static inline bool mal_vm_special_try_load(MalVm *vm, MalValue receiver, MalValu
             return true;
         }
     }
-    return false;
+    return mal_vm_function_metadata_try_load(receiver, ic, out);
 }
 
 static inline bool mal_vm_special_try_load_static(MalVm *vm, MalValue receiver,

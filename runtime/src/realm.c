@@ -11,6 +11,7 @@ MalRealm *mal_realm_new(MalVm *vm) {
     MalRealm *realm = malloc(sizeof(MalRealm));
     realm->global_environment = (MalGlobalEnvironment) {0};
     realm->globals = malloc(sizeof(MalValue) * (usize) vm->global_capacity);
+    realm->closure_metadata = (MalClosureMetadataPool) {0};
     // Pre-fill active slots before linking: the collector scans every realm in
     // vm->realms, so a realm must hold only scannable MalValues the instant it
     // becomes reachable, even if the caller has not populated it yet.
@@ -31,6 +32,7 @@ void mal_realm_free_all(MalVm *vm) {
         MalRealm *next = realm->next;
         free(realm->global_environment.bindings);
         free(realm->globals);
+        mal_closure_metadata_pool_free(&realm->closure_metadata);
         free(realm);
         realm = next;
     }

@@ -689,6 +689,42 @@ for (let index = 0; index < propertyClosures.length; index++) {
 	);
 }
 
+function freshHandler() {
+	return function handler(first, second) {
+		return first + second;
+	};
+}
+
+function readHandlerName(fn) {
+	return fn.name;
+}
+
+function readHandlerKey(fn, key) {
+	return fn[key];
+}
+
+const overriddenHandler = freshHandler();
+const untouchedHandler = freshHandler();
+for (let i = 0; i < 64; i++) {
+	assert(readHandlerName(overriddenHandler) === "handler", "initial handler name");
+	assert(readHandlerKey(overriddenHandler, "length") === 2, "initial handler length");
+}
+Object.defineProperty(overriddenHandler, "name", { value: "override" });
+delete overriddenHandler.length;
+assert(
+	readHandlerName(overriddenHandler) === "override",
+	"warmed name read sees replacement",
+);
+assert(
+	readHandlerKey(overriddenHandler, "length") === 0,
+	"warmed length read sees deletion",
+);
+assert(
+	readHandlerName(untouchedHandler) === "handler" &&
+		readHandlerKey(untouchedHandler, "length") === 2,
+	"metadata mutation is local to the closure",
+);
+
 const boundTarget = function boundTarget(a, b, c) {
 	return [this.tag, a, b, c].join("/");
 };
