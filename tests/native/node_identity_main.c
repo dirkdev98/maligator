@@ -4,11 +4,13 @@
 #include <string.h>
 
 #include "gc.h"
+#include "host.h"
 #include "intrinsics.h"
 #include "node_buffer.h"
 #include "object.h"
 #include "object_ops.h"
 #include "value.h"
+#include "web_host_timer.h"
 
 extern const MalRuntimeImage mal_runtime_image;
 
@@ -69,15 +71,19 @@ static bool identities_distinct(
     return true;
 }
 
-static bool buffer_graph_matches(MalVm *vm, const MalValue *identities) {
-    MalValue constructor = identities[0];
-    MalValue prototype = identities[1];
-    MalValue module = identities[2];
-    return !mal_value_is_undefined(constructor)
+static bool buffer_constructor_graph_matches(
+    MalVm *vm, MalValue constructor, MalValue prototype) {
+    return mal_value_is_object(constructor) && mal_value_is_object(prototype)
         && own_property(vm, constructor, "prototype") == prototype
-        && own_property(vm, module, "Buffer") == constructor
         && own_property(vm, vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS], "Buffer")
             == constructor;
+}
+
+static bool buffer_graph_matches(MalVm *vm, const MalValue *identities) {
+    MalValue module = identities[2];
+    return buffer_constructor_graph_matches(vm, identities[0], identities[1])
+        && mal_value_is_object(module)
+        && own_property(vm, module, "Buffer") == identities[0];
 }
 
 static bool direct_prototype_is(MalValue object, MalValue prototype) {
@@ -183,6 +189,10 @@ static void install_second_realm(MalVm *vm, void *data) {
 int main(int argc, char **argv) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
+    if (mal_host_attach(&vm) == nullptr) {
+        mal_vm_free(&vm);
+        return 10;
+    }
     MalHostLaunchContext launch = {.argc = argc, .argv = argv};
     bool reverse = getenv("MAL_NODE_INSTALL_REVERSE") != nullptr;
 
@@ -198,10 +208,12 @@ int main(int argc, char **argv) {
     MalRootSpan owned_root;
     mal_gc_root(&owned_root, &owned_buffer, 1);
 
-    MalValue preinstall_buffer[BUFFER_IDENTITY_COUNT];
-    read_identities(
-        &vm, buffer_identity_slots, BUFFER_IDENTITY_COUNT, preinstall_buffer);
-    if (!buffer_graph_matches(&vm, preinstall_buffer)) return 5;
+    MalValue preinstall_constructor = vm.intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR];
+    MalValue preinstall_prototype = vm.intrinsics[MAL_INTRINSIC_NODE_BUFFER_PROTOTYPE];
+    if (!buffer_constructor_graph_matches(&vm, preinstall_constructor, preinstall_prototype)
+        || !mal_value_is_undefined(vm.intrinsics[MAL_INTRINSIC_NODE_BUFFER_MODULE])) {
+        return 5;
+    }
 
     byte *unreachable_bytes = malloc(7);
     if (unreachable_bytes == nullptr) return 6;
@@ -211,12 +223,16 @@ int main(int argc, char **argv) {
     mal_gc_collect(&vm);
 
     install_fragmented(&vm, &launch, reverse);
-    install_fragmented(&vm, &launch, reverse);
     MalValue installed_buffer[BUFFER_IDENTITY_COUNT];
+    MalValue repeated_buffer[BUFFER_IDENTITY_COUNT];
     read_identities(
         &vm, buffer_identity_slots, BUFFER_IDENTITY_COUNT, installed_buffer);
-    if (!identities_equal(
-            preinstall_buffer, installed_buffer, BUFFER_IDENTITY_COUNT)
+    install_fragmented(&vm, &launch, reverse);
+    read_identities(
+        &vm, buffer_identity_slots, BUFFER_IDENTITY_COUNT, repeated_buffer);
+    if (installed_buffer[0] != preinstall_constructor
+        || installed_buffer[1] != preinstall_prototype
+        || !identities_equal(installed_buffer, repeated_buffer, BUFFER_IDENTITY_COUNT)
         || !buffer_graph_matches(&vm, installed_buffer)) {
         return 8;
     }
@@ -247,6 +263,8 @@ int main(int argc, char **argv) {
     if (getenv("MAL_GC_AT_EXIT") != nullptr) {
         mal_gc_collect(&vm);
         mal_vm_free_callable(callable);
+        mal_host_timers_free(&vm);
+        mal_host_detach(&vm);
         mal_vm_free(&vm);
     }
     return code;

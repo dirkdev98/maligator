@@ -2,8 +2,8 @@
 
 #include <stdlib.h>
 
-#include "intrinsics.h"
-#include "web_globals.h"
+#include "host.h"
+#include "web_host_timer.h"
 
 extern const MalRuntimeImage mal_runtime_image;
 
@@ -72,9 +72,10 @@ static void check_second_realm(MalVm *vm, void *data) {
 int main(int argc, char **argv) {
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
-    MalObject *global_this = mal_value_to_object(
-        vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
-    mal_text_encoding_globals_install(&vm, global_this);
+    if (mal_host_attach(&vm) == nullptr) {
+        mal_vm_free(&vm);
+        return 4;
+    }
     MalHostLaunchContext launch = {.argc = argc, .argv = argv};
     bool reverse = getenv("MAL_NODE_INSTALL_REVERSE") != nullptr;
     MalValue first[countof(companion_slots)];
@@ -94,5 +95,10 @@ int main(int argc, char **argv) {
 
     MalCallable *callable = mal_vm_create_callable(&vm, 0);
     mal_vm_run(&vm, callable);
-    return vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
+    int code = vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
+    mal_vm_free_callable(callable);
+    mal_host_timers_free(&vm);
+    mal_host_detach(&vm);
+    mal_vm_free(&vm);
+    return code;
 }
