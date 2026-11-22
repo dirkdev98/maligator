@@ -84,7 +84,11 @@ describe("explorer compilation", () => {
 	it("uses the ordinary build policies and closure facts for each eval mode", () => {
 		for (const evalMode of [true, false, "compile-check"] as const) {
 			const source = 'globalThis.answer = eval("40 + 2")';
-			const config = normalizeExplorerConfig({ eval: evalMode });
+			// Runtime eval needs the RegExp engine; the other modes keep the default.
+			const config = normalizeExplorerConfig({
+				eval: evalMode,
+				regexp: evalMode === true,
+			});
 			const ordinary = () =>
 				analyzeEntrypoint(
 					"output-explorer/snippet.ts",
