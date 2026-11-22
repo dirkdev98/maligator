@@ -57,12 +57,11 @@ maligator test [path ...] [--run name] [--shuffle [seed]] [--repeat count] [--ba
 Run commands from the project root. Maligator does not search parent directories
 for configuration.
 
-`run`, `dev`, and `test` use the runtimes shipped in the platform package when
-one matches your configuration. The default flavour includes Intl and Temporal
-support and runs without a native toolchain. `dev` retains compiler identities
-between edits and starts a fresh
-application VM after every successful rebuild. Build failures keep the watcher alive
-for recovery on the next edit.
+`run`, `dev`, and `test` use a packaged runtime when it matches your configuration.
+The default flavour includes Intl and Temporal and works without a native toolchain.
+Projects with mutable primordials build a local runner on first use. `dev` retains
+compiler identities between edits and starts a fresh application VM after every
+successful rebuild. Build failures keep the watcher alive for recovery on the next edit.
 
 ## Documentation
 

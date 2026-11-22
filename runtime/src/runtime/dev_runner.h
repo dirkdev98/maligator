@@ -28,11 +28,13 @@ int mal_dev_run_images(
     char **argv,
     const char *worker_manifest_path);
 
-/** Load and execute ordered development wire images in a fresh host VM. */
+/** Load and execute ordered development wire images in a fresh host VM. The
+ * application host may use the internal bridge to supervise other images. */
 int mal_dev_run_wires(
     const char *const *wire_paths,
     int wire_count,
     const char *entry_path,
     int argc,
     char **argv,
-    const char *worker_manifest_path);
+    const char *worker_manifest_path,
+    bool application_host);

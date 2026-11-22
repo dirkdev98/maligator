@@ -41,7 +41,7 @@ crate has no license text; a crate that publishes none gets its repository's
 The `Prepare release packages` GitHub Actions workflow is the preferred packaging
 path. Dispatch it on the exact release commit. It cross-builds each of the four
 targets in its own macOS ARM job, including the development runtime archives and
-runners for its platform package. It assembles and packs them in one workspace.
+runner for its platform package. It assembles and packs them in one workspace.
 
 Packing checks each compressed npm tarball against its package budget in
 [`scripts/release.ts`](../scripts/release.ts). To investigate growth, run
@@ -54,7 +54,7 @@ Node-only `PATH`, then builds an application with the packaged archives. The wor
 retains the validated tarballs and `packages.json` for seven days and deletes the
 intermediate builds and workspace after the smoke matrix passes.
 
-Build the development archives and runners with the Zig version pinned in the
+Build the development archives and runner with the Zig version pinned in the
 workflow. The Rust toolchain needs the target's standard library installed.
 
 ```shell

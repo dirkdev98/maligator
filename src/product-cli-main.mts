@@ -1,4 +1,3 @@
-import { chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { capabilities, createPool, createWorkerUrl } from "maligator:workers";
 import type { WorkerPool } from "maligator:workers";
@@ -19,7 +18,6 @@ import {
 	compilerProducerDigests,
 	compilerWire,
 	license,
-	mutableDevelopmentRunner as mutableDevelopmentRunnerFile,
 	platformSources,
 	runtime,
 	testHost,
@@ -45,8 +43,6 @@ const producerDigests = compilerProducerDigests.json() as Record<
 	string
 >;
 installCompilerProducerDigests(producerDigests);
-const mutableDevelopmentRunner = mutableDevelopmentRunnerFile.materialize();
-chmodSync(mutableDevelopmentRunner, 0o755);
 
 interface ProductDevelopmentWatcher {
 	directories: Array<string>;
@@ -69,7 +65,6 @@ const installation = productCompilerInstallation(
 	testRuntime.materialize(),
 	[license.materialize(), thirdPartyNotices.materialize()],
 	process.argv[0],
-	mutableDevelopmentRunner,
 	platformSources.materialize(),
 	join(testHost.materialize(), "host-driver.mts"),
 );

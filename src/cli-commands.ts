@@ -130,7 +130,7 @@ import {
 	prepareGeneratedSources,
 } from "./local-build.ts";
 import {
-	productionToolchainOptions,
+	nativeToolchainOptions,
 	resolveNativeBuildContext,
 } from "./native-build-context.ts";
 import { nativeBuildJobs } from "./native-command.ts";
@@ -297,7 +297,6 @@ export function productCompilerInstallation(
 	testModulePath: string,
 	licensePaths?: Array<string>,
 	developmentRunnerPath?: string,
-	mutableDevelopmentRunnerPath?: string,
 	platformSourceRoot?: string,
 	testHostModulePath?: string,
 ): CompilerInstallation {
@@ -326,20 +325,6 @@ export function productCompilerInstallation(
 							temporal: false,
 							intl: false,
 						},
-						...(mutableDevelopmentRunnerPath === undefined
-							? []
-							: [
-									{
-										executablePath: path.resolve(mutableDevelopmentRunnerPath),
-										inProcess: false,
-										primordials: "mutable" as const,
-										eval: true,
-										realms: true,
-										regexp: true,
-										temporal: false,
-										intl: false,
-									},
-								]),
 					],
 				}),
 		evalCompiler: {
@@ -435,7 +420,6 @@ function resolveEntrypoint(
 
 function selectToolchain(
 	command: BuildCommand | RunCommand | DevCommand,
-	config: ResolvedBuildConfig,
 	context: CommandContext,
 ): { toolchain?: Toolchain; plan?: NativeBuildPlan } {
 	if (command.kind === "build" && command.internal.serializePath !== undefined) return {};
@@ -447,19 +431,12 @@ function selectToolchain(
 	if (retained !== undefined) return retained;
 	try {
 		const runtimeDirectory = context.installation.runtimeDirectory;
-		const inspection = {
-			needsCxx: true,
-			rustDir: path.join(runtimeDirectory, "rust"),
-			target: command.kind === "build" ? command.target : undefined,
-		};
 		const toolchain = requireToolchain(
-			command.kind === "build" && command.production
-				? productionToolchainOptions(
-						runtimeDirectory,
-						buildDerivationFromConfig(config).features,
-						inspection,
-					)
-				: inspection,
+			nativeToolchainOptions(
+				runtimeDirectory,
+				{ target: command.kind === "build" ? command.target : undefined },
+				command.kind === "build" && command.production ? "install" : undefined,
+			),
 		);
 		const plan = selectNativeBuildPlan(
 			toolchain,
@@ -719,7 +696,7 @@ function prepareCommandState(
 	const resolveLocalTools = () => {
 		const selection = reporter.phase(
 			"Resolve toolchain",
-			() => selectToolchain(command, buildConfig, context),
+			() => selectToolchain(command, context),
 			({ toolchain }) =>
 				toolchain === undefined
 					? undefined
@@ -2205,11 +2182,9 @@ function testToolchain(
 	environment: NodeJS.ProcessEnv = process.env,
 ): Toolchain {
 	try {
-		return requireToolchain({
-			env: environment,
-			needsCxx: true,
-			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
-		});
+		return requireToolchain(
+			nativeToolchainOptions(context.installation.runtimeDirectory, { env: environment }),
+		);
 	} catch (error) {
 		if (error instanceof ToolchainError) commandError(error.message);
 		throw error;
@@ -2797,11 +2772,10 @@ export async function runCli(
 			return;
 		}
 		if (command.kind === "doctor") {
-			const config = loadBuildConfig(undefined, process.cwd(), context.stripTypes);
+			loadBuildConfig(undefined, process.cwd(), context.stripTypes);
 			const report = inspectToolchain(
-				productionToolchainOptions(
+				nativeToolchainOptions(
 					context.installation.runtimeDirectory,
-					buildDerivationFromConfig(config).features,
 					{ target: command.target },
 					"report",
 				),

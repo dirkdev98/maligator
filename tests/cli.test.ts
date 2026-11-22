@@ -415,7 +415,6 @@ describe("command shell", { timeout: 30_000 }, () => {
 			"test-runtime.mjs",
 			undefined,
 			"bin/maligator",
-			"bin/maligator-mutable",
 		);
 		expect(installation.runtimeDirectory).toBe(path.resolve("relative-runtime"));
 		expect(installation.testModulePath).toBe(path.resolve("test-runtime.mjs"));
@@ -433,16 +432,6 @@ describe("command shell", { timeout: 30_000 }, () => {
 				executablePath: path.resolve("bin/maligator"),
 				inProcess: true,
 				primordials: "locked",
-				eval: true,
-				realms: true,
-				regexp: true,
-				temporal: false,
-				intl: false,
-			},
-			{
-				executablePath: path.resolve("bin/maligator-mutable"),
-				inProcess: false,
-				primordials: "mutable",
 				eval: true,
 				realms: true,
 				regexp: true,
@@ -469,7 +458,6 @@ describe("command shell", { timeout: 30_000 }, () => {
 		const config = productCliConfig(
 			path.join(repoRoot, "compiler.malw"),
 			path.join(repoRoot, "compiler-producers.json"),
-			path.join(repoRoot, "maligator-mutable"),
 		);
 		expect(config.engine.realms).toBe(true);
 		const graph = buildModuleGraph(path.join(repoRoot, "src/product-assets.mts"), {
@@ -483,7 +471,6 @@ describe("command shell", { timeout: 30_000 }, () => {
 			expect.arrayContaining([
 				path.join(repoRoot, "compiler.malw"),
 				path.join(repoRoot, "compiler-producers.json"),
-				path.join(repoRoot, "maligator-mutable"),
 				path.join(repoRoot, "LICENSE"),
 				path.join(repoRoot, "THIRD_PARTY_NOTICES.md"),
 				path.join(repoRoot, "src/testing/runtime.mjs"),

@@ -11,7 +11,7 @@ import {
 } from "../src/local-build.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
 import {
-	DEVELOPMENT_RUNNERS,
+	DEVELOPMENT_RUNNER,
 	PREBUILT_RUNTIME_MANIFEST,
 	PREBUILT_RUNTIME_OVERRIDE,
 	prebuiltDevelopmentRunnerTarget,
@@ -126,26 +126,26 @@ function stageRelease(
 ) {
 	const directory = path.join(root, "package");
 	mkdirSync(directory);
-	const name = DEVELOPMENT_RUNNERS.standalone;
+	const name = DEVELOPMENT_RUNNER;
 	const bytes = "#!/bin/sh\nprintf 'ready\\n'\n";
 	if (runner !== undefined)
 		writeFileSync(path.join(directory, name), bytes, { mode: 0o755 });
-	const cxxArchives = prebuiltRuntimeCxxLibraries(identity.target).map(
-		({ license }) => `native.ada-url.${license}.a`,
+	const cxxArchives = prebuiltRuntimeCxxLibraries(identity.target).flatMap(
+		({ archive, license }) =>
+			archive === undefined ? [] : [`native.ada-url.${license}.a`],
 	);
 	const manifest: PrebuiltRuntimeManifest = {
 		...identity,
-		runners:
-			runner === undefined
-				? {}
-				: {
-						standalone: {
-							name,
-							...runner,
-							sha256: artifactDigest(bytes),
-							size: Buffer.byteLength(bytes),
-						},
+		...(runner === undefined
+			? {}
+			: {
+					runner: {
+						name,
+						...runner,
+						sha256: artifactDigest(bytes),
+						size: Buffer.byteLength(bytes),
 					},
+				}),
 		files: [...archiveNames, ...cxxArchives].map((name) => {
 			const bytes = `release fixture ${name}`;
 			writeFileSync(path.join(directory, name), bytes);
@@ -206,17 +206,20 @@ describe("prebuilt runtime archives", () => {
 		).toThrow(localBuild);
 	});
 
-	it("uses packaged Rust and its native components when the packaged C archive is missing", () => {
+	it.each([
+		{ mode: "production", production: true, realms: false },
+		{ mode: "development with realms", production: false, realms: true },
+	])("uses packaged Rust independently of the C archives in $mode", (options) => {
 		const directory = stageRelease(
 			runtimeReleaseArchiveIdentity(fixtureContext("producer")),
 		);
 		rmSync(path.join(directory, "libMalRuntime.a"));
-		const production = fixtureContext("consumer", { production: true });
+		const context = fixtureContext("consumer", options);
 		writeFileSync(
-			path.join(production.runtimeDirectory, "src/runtime.c"),
+			path.join(context.runtimeDirectory, "src/runtime.c"),
 			"int other(void);\n",
 		);
-		const artifacts = ensureRustArtifacts(production);
+		const artifacts = ensureRustArtifacts(context);
 		expect(readFileSync(artifacts.library, "utf8")).toBe("release fixture libmal_rust.a");
 		expect(artifacts.nativeComponents.map(({ packageName }) => packageName)).toEqual(
 			expect.arrayContaining(["ada-url", "ring"]),
@@ -291,7 +294,7 @@ describe.skipIf(hostTarget === undefined)("prebuilt development runners", () => 
 				consumer.features,
 				consumer.environment,
 			),
-		).toBe(selected ? path.join(directory, DEVELOPMENT_RUNNERS.standalone) : undefined);
+		).toBe(selected ? path.join(directory, DEVELOPMENT_RUNNER) : undefined);
 	});
 
 	it("rejects a runner built from a different driver source", () => {
@@ -313,7 +316,7 @@ describe.skipIf(hostTarget === undefined)("prebuilt development runners", () => 
 	it("rejects same-size runner tampering and leaves the archives available for a local link", () => {
 		const context = fixtureContext("consumer", { target });
 		const directory = stageRunner(context);
-		const executable = path.join(directory, DEVELOPMENT_RUNNERS.standalone);
+		const executable = path.join(directory, DEVELOPMENT_RUNNER);
 		writeFileSync(executable, readFileSync(executable, "utf8").replace("ready", "wrong"));
 		expect(
 			packagedDevelopmentRunner(

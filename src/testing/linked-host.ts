@@ -81,7 +81,7 @@ export async function startLinkedTestHost(
 		options.executable,
 		[
 			...developmentShimArguments(options.shims),
-			"--maligator-internal-run-wires",
+			"--maligator-internal-run-host-wires",
 			String(options.wires.length),
 			options.entry,
 			...options.wires,

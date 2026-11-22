@@ -24,7 +24,7 @@ import {
 } from "../src/local-build.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
 import {
-	DEVELOPMENT_RUNNERS,
+	DEVELOPMENT_RUNNER,
 	PREBUILT_RUNTIME_CC_FLAGS,
 	PREBUILT_RUNTIME_MANIFEST,
 	PREBUILT_RUNTIME_OVERRIDE,
@@ -37,10 +37,7 @@ import {
 	RUNTIME_ARCHIVES,
 	RUST_LIBRARY_OUTPUT,
 } from "../src/prebuilt-runtime.ts";
-import type {
-	DevelopmentRunnerKind,
-	PrebuiltRuntimeManifest,
-} from "../src/prebuilt-runtime.ts";
+import type { PrebuiltRuntimeManifest } from "../src/prebuilt-runtime.ts";
 import {
 	ensureNativeArtifacts,
 	runtimeReleaseArchiveIdentity,
@@ -51,12 +48,28 @@ import type { Toolchain } from "../src/toolchain.ts";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 
-function bundledCxxLibraries(
+function bundledCxxFiles(
 	toolchain: Toolchain,
 	environment: NodeJS.ProcessEnv,
 	cwd: string,
 ): Array<{ name: string; file: string }> {
+	const components = prebuiltRuntimeCxxLibraries(toolchain.rustTarget);
 	const zig = toolchain.tools.zig!;
+	const zigEnv = execFileSync(zig.path, ["env"], {
+		cwd,
+		env: environment,
+		encoding: "utf8",
+	});
+	const libDirectory = /^\s*\.lib_dir = ("(?:[^"\\]|\\.)*"),$/m.exec(zigEnv)?.[1];
+	if (libDirectory === undefined)
+		throw new Error("Zig did not report its library directory");
+	const lib = path.resolve(cwd, JSON.parse(libDirectory) as string);
+	// The release executables can contain Zig's static libc++ on every platform.
+	const files = components.map(({ license }) => ({
+		name: `LICENSE.${license}`,
+		file: path.join(lib, license, "LICENSE.TXT"),
+	}));
+	if (components.every(({ archive }) => archive === undefined)) return files;
 	const cxx = toolchain.tools.cxx!;
 	const cache = environment.ZIG_GLOBAL_CACHE_DIR!;
 	const input = path.join(cwd, "cxx.cc");
@@ -71,25 +84,13 @@ function bundledCxxLibraries(
 	const libraries = result.stderr
 		.split(`${cache}${path.sep}`)
 		.flatMap((entry) => /^o\/[0-9a-f]+\/([^\s"]+\.a)\b/.exec(entry)?.[0] ?? []);
-	const zigEnv = execFileSync(zig.path, ["env"], {
-		cwd,
-		env: environment,
-		encoding: "utf8",
-	});
-	const libDirectory = /^\s*\.lib_dir = ("(?:[^"\\]|\\.)*"),$/m.exec(zigEnv)?.[1];
-	if (libDirectory === undefined)
-		throw new Error("Zig did not report its library directory");
-	const lib = path.resolve(cwd, JSON.parse(libDirectory) as string);
-	return prebuiltRuntimeCxxLibraries(toolchain.rustTarget).flatMap(
-		({ archive, license }) => {
-			const library = libraries.find((file) => path.basename(file) === archive);
-			if (library === undefined) throw new Error(`Zig did not link ${archive}`);
-			return [
-				{ name: `native.ada-url.${license}.a`, file: path.join(cache, library) },
-				{ name: `LICENSE.${license}`, file: path.join(lib, license, "LICENSE.TXT") },
-			];
-		},
-	);
+	for (const { archive, license } of components) {
+		if (archive === undefined) continue;
+		const library = libraries.find((file) => path.basename(file) === archive);
+		if (library === undefined) throw new Error(`Zig did not link ${archive}`);
+		files.push({ name: `native.ada-url.${license}.a`, file: path.join(cache, library) });
+	}
+	return files;
 }
 
 /** Use the release target's baseline rather than Zig's host-dependent defaults. */
@@ -205,10 +206,8 @@ export function prebuildRuntime(
 				.sort((left, right) =>
 					left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
 				),
-			...bundledCxxLibraries(toolchain, context.environment, work),
+			...bundledCxxFiles(toolchain, context.environment, work),
 		];
-		const runnerKinds = Object.keys(DEVELOPMENT_RUNNERS) as Array<DevelopmentRunnerKind>;
-		const runners: PrebuiltRuntimeManifest["runners"] = {};
 		const compilerSourceDirectory = path.join(repositoryRoot, "src");
 		const compilerEntrypoint = path.join(
 			compilerSourceDirectory,
@@ -224,38 +223,30 @@ export function prebuildRuntime(
 					stripTypes: stripCompactTypes,
 				}),
 		};
-		for (const kind of runnerKinds) {
-			const runnerContext = {
-				...context,
-				compilerBake,
-				features: normalizeNativeFeatures({
-					...context.features,
-					evalEnabled: true,
-					developmentApiEnabled: kind === "testHost",
-				}),
-			};
-			const name = DEVELOPMENT_RUNNERS[kind];
-			const key = sharedDevelopmentRunnerKey(runnerContext, triple);
-			onProgress?.(`linking ${name}`);
-			const runner = buildSharedDevelopmentRunner(runnerContext, false);
-			if (sharedDevelopmentRunnerKey(runnerContext, triple) !== key)
-				throw new Error(`runtime sources changed during ${name} preparation`);
-			const file = path.join(work, name);
-			copyFileSync(runner, file);
-			chmodSync(file, 0o755);
-			runners[kind] = {
-				key,
-				evalComponent: runnerContext.features.evalEnabled,
-				name,
-				sha256: artifactFileDigest(file),
-				size: statSync(file).size,
-			};
-		}
+		const runnerContext = {
+			...context,
+			compilerBake,
+			features: normalizeNativeFeatures({ ...context.features, evalEnabled: true }),
+		};
+		const key = sharedDevelopmentRunnerKey(runnerContext, triple);
+		onProgress?.(`linking ${DEVELOPMENT_RUNNER}`);
+		const runner = buildSharedDevelopmentRunner(runnerContext, false);
+		if (sharedDevelopmentRunnerKey(runnerContext, triple) !== key)
+			throw new Error(`runtime sources changed during ${DEVELOPMENT_RUNNER} preparation`);
+		const runnerFile = path.join(work, DEVELOPMENT_RUNNER);
+		copyFileSync(runner, runnerFile);
+		chmodSync(runnerFile, 0o755);
 		if (runtimeReleaseArchiveIdentity(context).key !== identity.key)
 			throw new Error("runtime sources changed during archive preparation");
 		const manifest: PrebuiltRuntimeManifest = {
 			...identity,
-			runners,
+			runner: {
+				key,
+				evalComponent: runnerContext.features.evalEnabled,
+				name: DEVELOPMENT_RUNNER,
+				sha256: artifactFileDigest(runnerFile),
+				size: statSync(runnerFile).size,
+			},
 			files: files
 				.filter(({ name }) => name.endsWith(".a"))
 				.map(({ name, file }) => ({
@@ -265,10 +256,7 @@ export function prebuildRuntime(
 				})),
 		};
 		for (const { name, file } of files) copyFileSync(file, path.join(output, name));
-		for (const kind of runnerKinds) {
-			const name = DEVELOPMENT_RUNNERS[kind];
-			renameSync(path.join(work, name), path.join(output, name));
-		}
+		renameSync(runnerFile, path.join(output, DEVELOPMENT_RUNNER));
 		writeFileAtomically(
 			path.join(output, PREBUILT_RUNTIME_MANIFEST),
 			`${JSON.stringify(manifest, null, 2)}\n`,
@@ -277,13 +265,9 @@ export function prebuildRuntime(
 			throw new Error(`incomplete prebuilt runtime set in ${output}`);
 		if (readPrebuiltRust(output, triple, manifest.rustKey) === undefined)
 			throw new Error(`incomplete prebuilt Rust set in ${output}`);
-		for (const kind of runnerKinds) {
-			if (readPrebuiltDevelopmentRunner(output, triple, kind) === undefined)
-				throw new Error(
-					`incomplete prebuilt runner ${DEVELOPMENT_RUNNERS[kind]} in ${output}`,
-				);
-		}
-		onProgress?.(`runtime archives and development runners ready at ${output}`);
+		if (readPrebuiltDevelopmentRunner(output, triple) === undefined)
+			throw new Error(`incomplete prebuilt runner in ${output}`);
+		onProgress?.(`runtime archives and development runner ready at ${output}`);
 		return manifest;
 	} finally {
 		rmSync(work, { recursive: true, force: true });

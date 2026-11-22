@@ -24,7 +24,7 @@ import { runNativeCommand } from "./native-command.ts";
 import {
 	importPrebuiltRuntimeAction,
 	NATIVE_OUTPUT_PREFIX,
-	prebuiltProductionRustDirectory,
+	prebuiltRustDirectory,
 	prebuiltRustKey,
 	readPrebuiltRust,
 	RUST_LIBRARY_OUTPUT,
@@ -86,9 +86,7 @@ const RUST_TARGET_PRODUCER = artifactProducer("rust-target", 1, "cargo-build");
 type RustArchiveInputs = Pick<
 	NativeBuildContext,
 	"runtimeDirectory" | "cacheDirectory" | "environment"
-> & {
-	features: Pick<NativeBuildContext["features"], "primordialsLocked" | "realmsEnabled">;
-};
+>;
 
 export function portableRustSourceDigest(
 	context: Pick<RustArchiveInputs, "runtimeDirectory" | "cacheDirectory">,
@@ -100,17 +98,12 @@ export function portableRustSourceDigest(
 	);
 }
 
-export function packagedProductionRust(
+export function packagedRuntimeRust(
 	context: RustArchiveInputs,
 	target: string,
 	ccTarget?: string,
 ): PrebuiltRuntime | undefined {
-	const directory = prebuiltProductionRustDirectory(
-		target,
-		context.features,
-		context.environment,
-		ccTarget,
-	);
+	const directory = prebuiltRustDirectory(target, context.environment, ccTarget);
 	if (directory === undefined) return undefined;
 	return readPrebuiltRust(
 		directory,
@@ -276,8 +269,10 @@ function resolvedRustArtifacts(
 		.map((item) => item.library);
 	const usesUrlParser = features.has("url");
 	const linkCxx = linkEveryComponent || usesUrlParser;
-	// Zig's Ada archive uses the bundled libc++ ABI even if the host links libstdc++.
-	const groupComponents = prebuilt && linkCxx && context.toolchain.platform === "linux";
+	const platform = context.toolchain.platform ?? process.platform;
+	// The packaged Ada archive uses the libc++ ABI. ELF links its bundled
+	// archives together, while macOS resolves that ABI through the link driver.
+	const groupComponents = prebuilt && linkCxx && platform === "linux";
 	// BFD may extract Ada for a reference from dead Rust code. Its static
 	// initializers then keep C++ symbols live even under --as-needed.
 	const cxxRuntime =
@@ -290,6 +285,7 @@ function resolvedRustArtifacts(
 	const localCxx = linkAllRustComponents
 		? ["-Wl,--push-state,--as-needed", ...cxxRuntime, "-Wl,--pop-state"]
 		: cxxRuntime;
+	const cxx = prebuilt ? (platform === "darwin" ? ["-lc++"] : []) : localCxx;
 	return {
 		...plan,
 		cacheKey: action.action,
@@ -300,13 +296,10 @@ function resolvedRustArtifacts(
 			...(groupComponents ? ["-Wl,--start-group"] : []),
 			...componentLibraries,
 			...(groupComponents ? ["-Wl,--end-group"] : []),
-			...(linkCxx && !prebuilt ? localCxx : []),
+			...(linkCxx ? cxx : []),
 			...linkerArgs,
 			...sectionGcLinkArgs,
-			...platformLinkArgs(
-				context.toolchain.platform ?? process.platform,
-				context.toolchain.cross === true,
-			),
+			...platformLinkArgs(platform, context.toolchain.cross === true),
 		],
 	};
 }
@@ -459,23 +452,23 @@ export function ensureRustArtifacts(
 ): RustArtifacts {
 	const startedAt = performance.now();
 	const selected = input.toolchain;
-	if (input.plan.mode === "production") {
-		const packaged = packagedProductionRust(
+	const packaged =
+		bundle ??
+		packagedRuntimeRust(
 			input,
 			selected.rustTarget,
 			selected.cross === true ? selected.rustTarget : selected.target,
 		);
-		if (packaged !== undefined) {
-			const imported = importPrebuiltRuntimeAction(
-				input.cacheDirectory,
-				"rust-library",
-				RUST_PRODUCER,
-				packaged.manifest.rustKey,
-				packaged,
-			);
-			if (imported !== undefined)
-				return cachedRustArtifacts(input, imported, startedAt, true);
-		}
+	if (packaged !== undefined) {
+		const imported = importPrebuiltRuntimeAction(
+			input.cacheDirectory,
+			"rust-library",
+			RUST_PRODUCER,
+			packaged.manifest.rustKey,
+			packaged,
+		);
+		if (imported !== undefined)
+			return cachedRustArtifacts(input, imported, startedAt, true);
 	}
 	// A package can be replaced after toolchain selection. Use the selected
 	// C driver for a local build if the released archives are no longer intact.
@@ -495,25 +488,14 @@ export function ensureRustArtifacts(
 				}
 			: input;
 	const plan = resolveRustArtifacts(context);
-	const local = readArtifactAction(
+	const cached = readArtifactAction(
 		context.cacheDirectory,
 		"rust-library",
 		RUST_PRODUCER,
 		plan.cacheKey,
 	);
-	const prebuilt =
-		local === undefined && bundle !== undefined
-			? importPrebuiltRuntimeAction(
-					context.cacheDirectory,
-					"rust-library",
-					RUST_PRODUCER,
-					plan.cacheKey,
-					bundle,
-				)
-			: undefined;
-	const cached = local ?? prebuilt;
 	if (cached !== undefined)
-		return cachedRustArtifacts(context, cached, startedAt, prebuilt !== undefined, plan);
+		return cachedRustArtifacts(context, cached, startedAt, false, plan);
 	const { cargo, rustc, cxx } = context.toolchain.tools;
 	if (cargo === undefined || rustc === undefined || cxx === undefined)
 		throw new Error(

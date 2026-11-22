@@ -95,7 +95,8 @@ static int run_images(
     const char *entry_path,
     int argc,
     char **argv,
-    const char *worker_manifest_path) {
+    const char *worker_manifest_path,
+    bool application_host) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
     if (wire_count < 1) return 2;
     const MalDevelopmentImage *images = owned_images != nullptr ? owned_images : baked_images;
@@ -152,8 +153,9 @@ static int run_images(
     };
     if (personality != nullptr) personality(&vm, nullptr, 0, &launch);
 #if MAL_DEVELOPMENT_API
-    // Tool hosts reach their application bridge through the internal `mal` global.
-    mal_host_install_maligator(&vm, nullptr, 0, &launch);
+    if (application_host) mal_host_install_maligator(&vm, nullptr, 0, &launch);
+#else
+    (void) application_host;
 #endif
     mal_perf_stats_reset();
     MalCallable **callables = calloc((usize) wire_count, sizeof(MalCallable *));
@@ -225,7 +227,8 @@ int mal_dev_run_wires(
     const char *entry_path,
     int argc,
     char **argv,
-    const char *worker_manifest_path) {
+    const char *worker_manifest_path,
+    bool application_host) {
     if (wire_count < 1) return 2;
     MalDevelopmentImage *images = calloc((usize) wire_count, sizeof(MalDevelopmentImage));
     if (images == nullptr) return 2;
@@ -237,7 +240,7 @@ int mal_dev_run_wires(
         images[index].label = wire_paths[index];
     }
     code = run_images(nullptr, images, wire_count, nullptr, 0, entry_path, argc, argv,
-        worker_manifest_path);
+        worker_manifest_path, application_host);
 done:
     for (int index = 0; index < wire_count; index++) free((void *) images[index].bytes);
     free(images);
@@ -254,5 +257,5 @@ int mal_dev_run_images(
     char **argv,
     const char *worker_manifest_path) {
     return run_images(images, nullptr, wire_count, assets, asset_count, entry_path, argc, argv,
-        worker_manifest_path);
+        worker_manifest_path, false);
 }

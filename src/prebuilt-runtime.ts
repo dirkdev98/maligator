@@ -43,17 +43,13 @@ export const RUNTIME_ARCHIVES = {
 const runtimeArchiveNames: ReadonlyArray<string> = Object.values(RUNTIME_ARCHIVES);
 export const RUST_LIBRARY_OUTPUT = "libmal_rust.a";
 export const NATIVE_OUTPUT_PREFIX = "native.";
-export const DEVELOPMENT_RUNNERS = {
-	standalone: "maligator-dev",
-	testHost: "maligator-test-host",
-} as const;
-export type DevelopmentRunnerKind = keyof typeof DEVELOPMENT_RUNNERS;
+export const DEVELOPMENT_RUNNER = "maligator-dev";
 export function prebuiltRuntimeCxxLibraries(target: string) {
-	const platform = prebuiltRuntimeTarget(target).platform;
+	const shipsArchives = prebuiltRuntimeTarget(target).platform === "linux";
 	return [
-		{ archive: "libc++.a", license: "libcxx" },
-		{ archive: "libc++abi.a", license: "libcxxabi" },
-		...(platform === "linux" ? [{ archive: "libunwind.a", license: "libunwind" }] : []),
+		{ archive: shipsArchives ? "libc++.a" : undefined, license: "libcxx" },
+		{ archive: shipsArchives ? "libc++abi.a" : undefined, license: "libcxxabi" },
+		...(shipsArchives ? [{ archive: "libunwind.a", license: "libunwind" }] : []),
 	];
 }
 
@@ -101,7 +97,7 @@ interface RuntimeFlavour {
 }
 
 export interface PrebuiltRuntimeIdentity {
-	schema: 2;
+	schema: 3;
 	target: string;
 	abi: string;
 	flavour: RuntimeFlavour;
@@ -143,7 +139,7 @@ export function prebuiltRuntimeIdentity(inputs: {
 	const target = prebuiltRuntimeTarget(inputs.target);
 	const { primordialsLocked, realmsEnabled } = inputs.flavour;
 	const identity = {
-		schema: 2,
+		schema: 3,
 		target: inputs.target,
 		abi: target.abi,
 		flavour: { primordialsLocked, realmsEnabled },
@@ -181,7 +177,7 @@ export interface PrebuiltRuntimeFile {
 
 export interface PrebuiltRuntimeManifest extends PrebuiltRuntimeIdentity {
 	files: Array<PrebuiltRuntimeFile>;
-	runners: Partial<Record<DevelopmentRunnerKind, PrebuiltDevelopmentRunner>>;
+	runner?: PrebuiltDevelopmentRunner;
 }
 
 export interface PrebuiltDevelopmentRunner extends PrebuiltRuntimeFile {
@@ -210,18 +206,12 @@ export function prebuiltRuntimeDirectory(
 	return packagedRuntimeDirectory(environment);
 }
 
-export function prebuiltProductionRustDirectory(
+export function prebuiltRustDirectory(
 	target: string,
-	features: RuntimeFlavour,
 	environment: NodeJS.ProcessEnv,
 	ccTarget = target,
 ): string | undefined {
-	if (
-		features.primordialsLocked !== releaseFlavour.primordialsLocked ||
-		features.realmsEnabled !== releaseFlavour.realmsEnabled ||
-		!canUsePrebuiltRuntime(target, ccTarget, environment)
-	)
-		return undefined;
+	if (!canUsePrebuiltRuntime(target, ccTarget, environment)) return undefined;
 	return packagedRuntimeDirectory(environment);
 }
 
@@ -342,8 +332,8 @@ function validArchiveNames(
 		...(includeC ? runtimeArchiveNames : []),
 		RUST_LIBRARY_OUTPUT,
 		"native.ada-url.libada.a",
-		...prebuiltRuntimeCxxLibraries(target).map(
-			({ license }) => `native.ada-url.${license}.a`,
+		...prebuiltRuntimeCxxLibraries(target).flatMap(({ archive, license }) =>
+			archive === undefined ? [] : [`native.ada-url.${license}.a`],
 		),
 	];
 	return (
@@ -378,7 +368,7 @@ function readRuntimeManifest(
 			readFileSync(path.join(directory, PREBUILT_RUNTIME_MANIFEST), "utf8"),
 		) as PrebuiltRuntimeManifest;
 		if (
-			manifest.schema !== 2 ||
+			manifest.schema !== 3 ||
 			manifest.target !== target ||
 			manifest.abi !== prebuiltRuntimeTarget(target).abi ||
 			manifest.variant !== "development" ||
@@ -454,16 +444,14 @@ function readArchiveSet(
 export function readPrebuiltDevelopmentRunner(
 	directory: string,
 	target: string,
-	kind: DevelopmentRunnerKind,
 	selection?: {
 		requiresEval: boolean;
 		keyForEvalComponent: (evalComponent: boolean) => string;
 	},
 ): string | undefined {
-	const runner = readRuntimeManifest(directory, target)?.runners?.[kind];
-	const name = DEVELOPMENT_RUNNERS[kind];
+	const runner = readRuntimeManifest(directory, target)?.runner;
 	if (
-		runner?.name !== name ||
+		runner?.name !== DEVELOPMENT_RUNNER ||
 		typeof runner.key !== "string" ||
 		!/^[0-9a-f]{64}$/.test(runner.key) ||
 		typeof runner.evalComponent !== "boolean" ||
@@ -479,7 +467,7 @@ export function readPrebuiltDevelopmentRunner(
 		runner.key !== selection.keyForEvalComponent(runner.evalComponent)
 	)
 		return undefined;
-	const file = path.join(directory, name);
+	const file = path.join(directory, DEVELOPMENT_RUNNER);
 	try {
 		return matchesFile(file, runner, true) ? file : undefined;
 	} catch {

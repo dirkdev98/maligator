@@ -9,7 +9,7 @@ import type {
 import { maligatorCacheDirectory } from "./cache-root.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
 import { RELEASE_MACOS_VERSION } from "./prebuilt-runtime.ts";
-import { packagedProductionRust } from "./rust-build.ts";
+import { packagedRuntimeRust } from "./rust-build.ts";
 import { nativeRustTarget, requireToolchain } from "./toolchain.ts";
 import type { InspectToolchainOptions, Toolchain, ToolExecutable } from "./toolchain.ts";
 
@@ -225,11 +225,10 @@ function withMacosDeploymentTarget(
 	};
 }
 
-export function productionToolchainOptions(
+export function nativeToolchainOptions(
 	runtimeDirectory: string,
-	features: Pick<NativeFeatureSpec, "primordialsLocked" | "realmsEnabled">,
 	options: InspectToolchainOptions = {},
-	mode: "install" | "report" = "install",
+	zigFallbackMode?: "install" | "report",
 ): InspectToolchainOptions {
 	const environment = options.env ?? process.env;
 	const cacheDirectory = maligatorCacheDirectory(options.cacheDirectory, environment);
@@ -239,17 +238,15 @@ export function productionToolchainOptions(
 	const bundle =
 		target === undefined
 			? undefined
-			: packagedProductionRust(
-					{ runtimeDirectory, features, environment, cacheDirectory },
-					target,
-				);
+			: packagedRuntimeRust({ runtimeDirectory, environment, cacheDirectory }, target);
 	return {
 		...options,
 		cacheDirectory,
-		needsCxx: true,
 		rustDir: path.join(runtimeDirectory, "rust"),
 		prebuiltRustTarget: bundle === undefined ? undefined : target,
-		zigFallback: options.zigFallback ?? { mode },
+		...(zigFallbackMode === undefined
+			? {}
+			: { zigFallback: options.zigFallback ?? { mode: zigFallbackMode } }),
 	};
 }
 
@@ -277,16 +274,17 @@ export function resolveNativeBuildContext(
 	const inspection = {
 		cacheDirectory,
 		env: baseEnvironment,
-		needsCxx: features.cargoFeatures.includes("url"),
-		rustDir: path.join(runtimeDirectory, "rust"),
+		needsCxx: production || features.cargoFeatures.includes("url"),
 		target: options.target,
 	};
 	const selectedToolchain =
 		options.toolchain ??
 		requireToolchain(
-			production
-				? productionToolchainOptions(runtimeDirectory, features, inspection)
-				: inspection,
+			nativeToolchainOptions(
+				runtimeDirectory,
+				inspection,
+				production ? "install" : undefined,
+			),
 		);
 	const toolchain = withMacosDeploymentTarget(
 		selectedToolchain,

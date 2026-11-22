@@ -17,7 +17,7 @@ import { productCliConfig } from "../src/product-builder.ts";
 it("packages every source platform module the installed compiler reads", () => {
 	const sourceRoot = path.resolve(import.meta.dirname, "../src");
 	const graph = buildModuleGraph(path.join(sourceRoot, "product-assets.mts"), {
-		buildConfig: productCliConfig("compiler.malw", "producer-digests.json", "runner"),
+		buildConfig: productCliConfig("compiler.malw", "producer-digests.json"),
 		stripTypes: stripCompactTypes,
 	});
 	const declarations = [...graph.modules.keys()]

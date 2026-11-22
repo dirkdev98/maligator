@@ -206,6 +206,10 @@ object. Retained loop experiments preserve effects, authoritative state and fall
 
 ## Source closure and generated-code profitability
 
+- [ ] Attribute the packaged CLI's native text by compiler phase. Measure whether
+      interpreting cold compiler code reduces the npm tarball and installed size
+      while preserving common CLI and native self-compile performance.
+
 - [ ] Identify one residual bytecode or metadata payload removable by the existing closure
       certificate in closed compiled app-batch/JavaScript images. Stop if required
       fallback or loader entries account for it. Preserve generic, interpreted, callback
@@ -393,16 +397,13 @@ distinct when measuring text work.
       `node:test` provider is still copied into every image that reads `process` or
       `global`, and dependency images share that limitation.
 
-- [ ] Move the embedded runtime implementation sources into an optional fallback package
-      once the default production build can use prebuilt C archives without losing
-      application-to-runtime LTO.
+- [ ] Profile calls across the application and C runtime boundary that LTO inlines
+      on Express and JavaScript workloads. Measure whether header inlining improves
+      non-LTO builds while preserving production performance and generated size.
 
-- [ ] Link the program, the C runtime and the Rust components with cross-language LTO
-      through one pinned LLVM, shipping bitcode next to the machine-code archives. On
-      macOS 27, LLD 23 cannot read the SDK's `libSystem.tbd`, Rust 1.99.1 bitcode aborts
-      LTO codegen ("Unsupported stack probing method") and Zig 0.15 refuses `-flto` for
-      macOS. Once it links, have `maligator doctor` report the speed difference when the
-      system compiler links without it.
+- [ ] Measure whether the native CLI can also host standalone development images
+      without a separate shipped runner. Preserve toolchain-free `run`, `dev` and
+      `test` coverage and keep feature policy per image.
 
 ## Active correctness clusters
 

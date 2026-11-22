@@ -5,6 +5,9 @@
 #include <string.h>
 
 static const char development_wires_command[] = "--maligator-internal-run-wires";
+#if MAL_DEVELOPMENT_API
+static const char application_host_command[] = "--maligator-internal-run-host-wires";
+#endif
 
 #if defined(MAL_FFI_SHIMS)
 bool mal_ffi_load_shim(const char *path);
@@ -36,7 +39,12 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s <program.malw> [program arguments...]\n", argv[0]);
         return 2;
     }
-    if (argv[1][0] == '-' && strcmp(argv[1], development_wires_command) != 0) {
+    bool application_host = false;
+#if MAL_DEVELOPMENT_API
+    application_host = strcmp(argv[1], application_host_command) == 0;
+#endif
+    bool multiple_wires = application_host || strcmp(argv[1], development_wires_command) == 0;
+    if (argv[1][0] == '-' && !multiple_wires) {
         fprintf(stderr, "unsupported development runtime option: %s\n", argv[1]);
         return 2;
     }
@@ -44,7 +52,7 @@ int main(int argc, char **argv) {
     int wire_count = 1;
     int wire_offset = 1;
     int entry_offset = 0;
-    if (strcmp(argv[1], development_wires_command) == 0) {
+    if (multiple_wires) {
         if (argc < 4) return 2;
         wire_count = atoi(argv[2]);
         entry_offset = 3;
@@ -67,7 +75,7 @@ int main(int argc, char **argv) {
     int code = mal_dev_run_wires(
         (const char *const *) &argv[wire_offset], wire_count,
         entry_offset > 0 ? argv[entry_offset] : nullptr,
-        program_argc, program_argv, worker_manifest_path);
+        program_argc, program_argv, worker_manifest_path, application_host);
     free(program_argv);
     return code;
 }

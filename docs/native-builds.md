@@ -118,9 +118,10 @@ tables.
 ## Development runner
 
 `run`, `dev`, and `test` skip toolchain discovery when a packaged runner matches
-the configuration and the project has no C bindings. The platform package includes
-a separate runner for the private application API used by `test --watch`. When a
-command needs a local runner, the linked-binary cache gives projects
+the configuration and the project has no C bindings. `test --watch` can use the
+same runner to host test applications. Mutable primordials need a local runner.
+When shipped Rust archives match the host, the local build compiles only C.
+The linked-binary cache gives projects
 with the same runtime flavour and toolchain one executable. The runner resolves
 installers by name so it can use different host and language components in each
 image. It links Ada and the C++ runtime so it can load images that parse URLs. Each
@@ -181,6 +182,9 @@ images selects Ada and its C++ runtime from the application and worker installer
 lists. Shared runners and linked development builds that resolve installers by name
 include Ada. Ada's static initializers and ring's assembly objects can stay live
 once their archives enter the link.
+
+The macOS package uses the C++ runtime supplied by the link driver. Apple Clang
+links system libc++ and Zig supplies its own libc++.
 
 Linux prefers LLD when the compiler can use it. GNU ld can require both
 components before discarding unused sections, so its fallback links both.

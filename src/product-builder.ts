@@ -16,25 +16,13 @@ import { embeddedCompilerOptions } from "./compiler/pipeline/embedded-compiler-o
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { emitWorkerRegistryTranslationUnit } from "./compiler/target/emit-worker-images.ts";
-import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
+import { buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { nativeSourcePath } from "./native-source-path.ts";
 import { prepareProfile } from "./profile-artifact.ts";
 import type { PreparedProfile } from "./profile-artifact.ts";
 import { requireToolchain } from "./toolchain.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
-
-function productRuntimeConfig(primordials: "locked" | "mutable") {
-	return {
-		engine: {
-			primordials,
-			eval: true,
-			realms: true,
-			regexp: true,
-			intl: { enabled: false },
-		},
-	};
-}
 
 /**
  * The product CLI's own build. It embeds files the product builder writes, through
@@ -43,17 +31,21 @@ function productRuntimeConfig(primordials: "locked" | "mutable") {
 export function productCliConfig(
 	compilerWirePath: string,
 	compilerProducerDigestsPath: string,
-	mutableDevelopmentRunnerPath: string,
 ): ResolvedBuildConfig {
 	return resolveBuildConfig({
 		modules: {
 			aliases: {
 				"maligator-product:compiler-wire": path.resolve(compilerWirePath),
 				"maligator-product:compiler-producers": path.resolve(compilerProducerDigestsPath),
-				"maligator-product:mutable-runner": path.resolve(mutableDevelopmentRunnerPath),
 			},
 		},
-		...productRuntimeConfig("locked"),
+		engine: {
+			primordials: "locked",
+			eval: true,
+			realms: true,
+			regexp: true,
+			intl: { enabled: false },
+		},
 	});
 }
 
@@ -102,41 +94,16 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		)}\n`,
 	);
 	const production = options.production ?? true;
-	const mutableRunnerConfig = resolveBuildConfig(productRuntimeConfig("mutable"));
-	const mutableRunnerDerivation = buildDerivationFromConfig(mutableRunnerConfig);
+	const config = productCliConfig(compilerWirePath, compilerProducerDigestsPath);
+	const baseDerivation = buildDerivationFromConfig(config);
 	progress("selecting the native toolchain");
 	const toolchain = requireToolchain({
-		needsCxx: mutableRunnerDerivation.features.cargoFeatures.includes("url"),
+		needsCxx: baseDerivation.features.cargoFeatures.includes("url"),
 		rustDir: path.join(runtimeDirectory, "rust"),
 		target: options.target,
 	});
 	const plan = selectNativeBuildPlan(toolchain, production);
 	const compilerBake = { kind: "prebuilt" as const, path: compilerWirePath };
-	progress("building the mutable development runner");
-	const mutableDevelopmentRunnerPath = buildDevelopmentRunner(
-		resolveNativeBuildContext({
-			toolchain,
-			plan,
-			runtimeDirectory,
-			features: {
-				...mutableRunnerDerivation.features,
-				developmentApiEnabled: true,
-			},
-			compilerBake,
-			onCacheEvent: (event) =>
-				progress(
-					`mutable runner ${event.artifact} cache ${event.hit ? "hit" : "miss"}: ${event.path}`,
-				),
-		}),
-		false,
-		mutableRunnerDerivation.cacheSuffix,
-	).binaryPath;
-
-	const config = productCliConfig(
-		compilerWirePath,
-		compilerProducerDigestsPath,
-		mutableDevelopmentRunnerPath,
-	);
 	const { units: cSource, definition } = emitProductCliTranslationUnits(
 		repositoryRoot,
 		config,
@@ -145,7 +112,6 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		progress,
 	);
 	progress("product CLI translation units ready");
-	const baseDerivation = buildDerivationFromConfig(config);
 	const derivation =
 		options.profile === undefined
 			? baseDerivation

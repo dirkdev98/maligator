@@ -16,7 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
 import {
-	DEVELOPMENT_RUNNERS,
+	DEVELOPMENT_RUNNER,
 	PREBUILT_RUNTIME_DIRECTORY,
 	PREBUILT_RUNTIME_MANIFEST,
 	PREBUILT_RUNTIME_OVERRIDE,
@@ -25,7 +25,6 @@ import {
 	readPrebuiltRuntime,
 	RELEASE_MACOS_VERSION,
 } from "../src/prebuilt-runtime.ts";
-import type { DevelopmentRunnerKind } from "../src/prebuilt-runtime.ts";
 import { buildProductCli } from "../src/product-builder.ts";
 import { clangMajorVersion, resolvePathExecutable } from "../src/toolchain.ts";
 import { requireHeapLimit } from "./heap-limit.ts";
@@ -124,7 +123,7 @@ const targets = [
 		platform: "darwin",
 		arch: "arm64",
 		packageName: "@maligator/cli-darwin-arm64",
-		packedSizeBudget: 109 * MEBIBYTE,
+		packedSizeBudget: 84 * MEBIBYTE,
 	},
 	{
 		rust: "x86_64-apple-darwin",
@@ -698,7 +697,7 @@ function smokePackedLauncher(
 			"--no-audit",
 			"--no-fund",
 			"--omit=optional",
-			"--offline",
+			"--prefer-offline",
 		];
 		execFileSync("npm", [...installArguments, launcherTarball, platformTarball], {
 			cwd: project,
@@ -751,7 +750,7 @@ function smokePackedLauncher(
 		if (
 			run.status !== 0 ||
 			run.stdout.trim() !== "function localhost" ||
-			!run.stderr.includes(DEVELOPMENT_RUNNERS.standalone) ||
+			!run.stderr.includes(DEVELOPMENT_RUNNER) ||
 			run.stderr.includes("Native phase · link:")
 		) {
 			throw new Error(
@@ -761,7 +760,8 @@ function smokePackedLauncher(
 		writeFileSync(
 			path.join(project, "smoke.test.mts"),
 			'import { expect, test } from "maligator:test";\n' +
-				'test("formats numbers", () => expect(new Intl.NumberFormat("en").format(1000)).toBe("1,000"));\n',
+				'test("formats numbers", () => expect(new Intl.NumberFormat("en").format(1000)).toBe("1,000"));\n' +
+				'test("runs without the application supervisor bridge", () => expect(Reflect.get(globalThis, "mal")).toBe(undefined));\n',
 		);
 		const testOutput = execFileSync(
 			launcher,
@@ -773,7 +773,7 @@ function smokePackedLauncher(
 				timeout: 60_000,
 			},
 		);
-		if (!testOutput.includes("1 passed, 0 failed"))
+		if (!testOutput.includes("2 passed, 0 failed"))
 			throw new Error(
 				`packed launcher did not pass its toolchain-free test\n${testOutput}`,
 			);
@@ -838,20 +838,12 @@ function packRelease(args: Array<string>): void {
 		const bundle = readPrebuiltRuntime(runtimeDirectory, target.rust);
 		if (bundle === undefined)
 			throw new Error(`invalid prebuilt runtime for ${target.rust}`);
-		const runners = Object.keys(DEVELOPMENT_RUNNERS).map((kind) => {
-			const runner = readPrebuiltDevelopmentRunner(
-				runtimeDirectory,
-				target.rust,
-				kind as DevelopmentRunnerKind,
-			);
-			if (runner === undefined)
-				throw new Error(`invalid prebuilt ${kind} runner for ${target.rust}`);
-			return path.basename(runner);
-		});
+		if (readPrebuiltDevelopmentRunner(runtimeDirectory, target.rust) === undefined)
+			throw new Error(`invalid prebuilt runner for ${target.rust}`);
 		const runtimeFiles = [
 			PREBUILT_RUNTIME_MANIFEST,
 			...bundle.manifest.files.map(({ name }) => name),
-			...runners,
+			DEVELOPMENT_RUNNER,
 			...prebuiltRuntimeCxxLibraries(target.rust).map(
 				({ license }) => `LICENSE.${license}`,
 			),

@@ -763,6 +763,7 @@ function sharedDevelopmentRunnerFeatures(
 ): NativeBuildContext["features"] {
 	return normalizeNativeFeatures({
 		...features,
+		developmentApiEnabled: true,
 		usesHost: true,
 		usesUrlParser: true,
 		temporalEnabled: true,
@@ -817,24 +818,19 @@ export function packagedDevelopmentRunner(
 		!existsSync(path.join(directory, PREBUILT_RUNTIME_MANIFEST))
 	)
 		return undefined;
-	return readPrebuiltDevelopmentRunner(
-		directory,
-		target,
-		features.developmentApiEnabled ? "testHost" : "standalone",
-		{
-			requiresEval: features.evalEnabled,
-			keyForEvalComponent: (evalComponent) =>
-				sharedDevelopmentRunnerKey(
-					{
-						runtimeDirectory,
-						cacheDirectory: maligatorCacheDirectory(undefined, environment),
-						features: { ...features, evalEnabled: evalComponent },
-						environment,
-					},
-					target,
-				),
-		},
-	);
+	return readPrebuiltDevelopmentRunner(directory, target, {
+		requiresEval: features.evalEnabled,
+		keyForEvalComponent: (evalComponent) =>
+			sharedDevelopmentRunnerKey(
+				{
+					runtimeDirectory,
+					cacheDirectory: maligatorCacheDirectory(undefined, environment),
+					features: { ...features, evalEnabled: evalComponent },
+					environment,
+				},
+				target,
+			),
+	});
 }
 
 export function buildSharedDevelopmentRunner(

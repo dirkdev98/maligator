@@ -62,7 +62,8 @@ static int run_development_wire(int argc, char **argv, const char *worker_manife
         (const char *const *) &argv[wire_offset], wire_count,
         argv[entry_offset],
         program_argc, program_argv,
-        worker_manifest_path);
+        worker_manifest_path,
+        true);
     free(program_argv);
     return code;
 }

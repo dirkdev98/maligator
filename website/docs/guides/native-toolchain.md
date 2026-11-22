@@ -1,4 +1,4 @@
-The npm platform package includes prebuilt development runners and runtime archives.
+The npm platform package includes a prebuilt development runner and runtime archives.
 With locked primordials and realms disabled, `run`, `dev`, and `test` can use the
 packaged runner without a local toolchain if the project has no C bindings.
 `build --production` compiles C on the build host and uses matching Rust archives
@@ -32,8 +32,9 @@ the first build.
 Install a C23-capable C compiler and archiver, a C++ compiler, and
 [Rustup](https://rustup.rs) to build the runtime locally. The CLI needs these tools
 for a source checkout and when the packaged archives do not match the requested
-target or runtime configuration. A build with mutable primordials or realms enabled
-uses a local runtime. [C bindings](/guides/c-libraries) need a native compiler even
+target. Mutable primordials and realms can require a local C runtime. That build
+reuses matching Rust archives from the platform package.
+[C bindings](/guides/c-libraries) need a native compiler even
 when development uses a packaged runner.
 
 ## Cross-build for another target
