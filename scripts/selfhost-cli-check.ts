@@ -119,32 +119,30 @@ symlinkSync(
 );
 
 const toolLinks: Array<[string, string]> = [];
-if (!supervisorOnly) {
-	const selected = requireToolchain({ rootDir: repositoryRoot }).tools;
-	const requestedTools: Array<[string, string, boolean]> = [
-		["cc", selected.cc.path, true],
-		["c++", selected.cxx!.path, true],
-		["ar", selected.ar.path, true],
-		["ld", "ld", true],
-		["rustup", selected.rustup.path, true],
-		["cargo", selected.cargo.path, true],
-		["rustc", selected.rustc.path, true],
-		["strip", "strip", false],
-		["make", "make", false],
-		["ninja", "ninja", false],
-		["ranlib", "ranlib", false],
-	];
-	for (const [name, executable, required] of requestedTools) {
-		try {
-			toolLinks.push([
-				name,
-				executable.includes(path.sep)
-					? executable
-					: resolvePathExecutable(executable, originalPath),
-			]);
-		} catch (error) {
-			if (required) throw error;
-		}
+const selected = requireToolchain({ rootDir: repositoryRoot }).tools;
+const requestedTools: Array<[string, string, boolean]> = [
+	["cc", selected.cc.path, true],
+	["c++", selected.cxx!.path, true],
+	["ar", selected.ar.path, true],
+	["ld", "ld", true],
+	["rustup", selected.rustup.path, true],
+	["cargo", selected.cargo.path, true],
+	["rustc", selected.rustc.path, true],
+	["strip", "strip", false],
+	["make", "make", false],
+	["ninja", "ninja", false],
+	["ranlib", "ranlib", false],
+];
+for (const [name, executable, required] of requestedTools) {
+	try {
+		toolLinks.push([
+			name,
+			executable.includes(path.sep)
+				? executable
+				: resolvePathExecutable(executable, originalPath),
+		]);
+	} catch (error) {
+		if (required) throw error;
 	}
 }
 const tools = isolatedToolsDirectory(toolLinks);
@@ -1156,7 +1154,8 @@ setTimeout(() => {
 	console.log("ok   packaged CLI ran Node and Web development code without a toolchain");
 	const mutableRun = invokeCaptured(
 		["run", "--config", mutableDevelopmentConfigPath, "--", "alpha", "two words"],
-		testOnlyEnv,
+		{},
+		180_000,
 	);
 	if (
 		mutableRun.status !== 0 ||
@@ -1167,9 +1166,7 @@ setTimeout(() => {
 			`mutable process fallback failed:\n${mutableRun.stdout}\n${mutableRun.stderr}`,
 		);
 	checkApplicationPids(mutableRun.stdout, mutableRun.pid, false, "APPLICATION_PID");
-	console.log(
-		"ok   mutable primordial run used a separate embedded process without a toolchain",
-	);
+	console.log("ok   mutable primordial run used its locally built process runner");
 
 	const workerConfig = "workers.build.mts";
 	const workerEntry = path.join(project, "workers.mts");
@@ -1413,7 +1410,7 @@ server.listen(0, "127.0.0.1", () => {
 			{
 				cwd: project,
 				detached: process.platform !== "win32",
-				env: { ...isolatedEnv, ...testOnlyEnv },
+				env: mode.sameProcess ? { ...isolatedEnv, ...testOnlyEnv } : isolatedEnv,
 				stdio: ["ignore", "pipe", "pipe"],
 			},
 		);
@@ -1483,7 +1480,7 @@ server.listen(0, "127.0.0.1", () => {
 				`dev retained application resources after stop: ${JSON.stringify(developmentResources)}`,
 			);
 		console.log(
-			`ok   ${mode.sameProcess ? "thread" : "mutable process fallback"} development watcher served both revisions without a toolchain`,
+			`ok   ${mode.sameProcess ? "toolchain-free thread" : "locally built process"} development watcher served both revisions`,
 		);
 	}
 

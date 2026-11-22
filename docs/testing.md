@@ -652,9 +652,10 @@ checkout with Node absent from its PATH. It covers build/cache restoration, run,
 dev replacement, application tests and native worker packaging. For focused
 supervisor checks against an explicitly selected existing binary, use
 `npm run selfhost:cli -- --cli /absolute/path/maligator --supervisor-only`.
-This skips the bootstrap/native-build checks and exercises toolchain-free run,
-served dev revisions, last-good behavior, cached test-watch reruns, failed-file
-selection and concurrent isolated tests. It prints the selected binary's digest
+This skips the bootstrap and production build checks. It exercises toolchain-free
+run and dev with locked primordials, and uses the native tools for the mutable
+runner. It checks served dev revisions, last-good behavior, cached test-watch reruns,
+failed-file selection and concurrent isolated tests. It prints the selected binary's digest
 and saves command/watch evidence under `.cache/selfhost-cli/<pid>`; the caller
 must establish which source produced that binary.
 
