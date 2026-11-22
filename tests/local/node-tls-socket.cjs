@@ -26,7 +26,13 @@ function connect(raw) {
 				setTimeout(() => callback(null, [{ address: "127.0.0.1", family: 4 }]), 20);
 			};
 	}
-	if (process.env.TLS_CA) options.ca = process.env.TLS_CA;
+	if (process.env.TLS_CA) {
+		const ca = process.env.TLS_CA;
+		options.ca =
+			process.env.TLS_CA_BUFFER === "1"
+				? Buffer.from(`prefix\n${ca}suffix`).subarray(7, 7 + ca.length)
+				: ca;
+	}
 	const socket = storage.run("tls", () => tls.connect(options));
 	const chunks = [];
 	let secure = false;

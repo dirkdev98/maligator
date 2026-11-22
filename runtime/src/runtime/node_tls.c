@@ -10,6 +10,7 @@
 
 #include "array_object.h"
 #include "ascii.h"
+#include "builtin_data_view.h"
 #include "builtin_object.h"
 #include "function_object.h"
 #include "gc.h"
@@ -48,6 +49,27 @@ static bool node_tls_utf8(
         mal_vm_throw_allocation_error(vm);
         return false;
     }
+    return true;
+}
+
+static bool node_tls_ca_bytes(
+    MalVm *vm, MalValue value, byte **bytes, usize *length) {
+    if (mal_value_is_string(value)) return node_tls_utf8(vm, value, bytes, length);
+    MalBufferSourceSpan span;
+    if ((!mal_value_is_typed_array_object(value) && !mal_value_is_data_view_object(value))
+        || mal_buffer_source_span(value, &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The options.ca property must be a string or an ArrayBuffer view", "ERR_INVALID_ARG_TYPE");
+        return false;
+    }
+    // An explicit empty CA must still bypass the default trust store.
+    *bytes = malloc(span.length > 0 ? span.length : 1);
+    if (*bytes == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    mal_buffer_source_span_read(&span, 0, *bytes, span.length);
+    *length = span.length;
     return true;
 }
 
@@ -249,7 +271,7 @@ static MalValue node_tls_connect(
         return mal_value_new_undefined();
     }
     if (!mal_value_is_undefined(roots[3])
-        && !node_tls_utf8(vm, roots[3], &ca_pem, &ca_pem_length)) {
+        && !node_tls_ca_bytes(vm, roots[3], &ca_pem, &ca_pem_length)) {
         free(server_name);
         free(cert_pem);
         free(key_pem);

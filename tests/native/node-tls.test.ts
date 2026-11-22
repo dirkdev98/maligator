@@ -18,6 +18,7 @@ async function run(
 	stress: boolean,
 	args: Array<string> = [],
 	mode = "wrapped",
+	bufferCa = false,
 ): Promise<string> {
 	const server = createServer({ cert: certificate, key }, (socket: TLSSocket) => {
 		if (mode === "early-end") socket.once("end", () => socket.end());
@@ -45,6 +46,7 @@ async function run(
 						...process.env,
 						...(stress ? STRESS_ENV : {}),
 						TLS_CA: insecure ? "" : ca,
+						TLS_CA_BUFFER: bufferCa ? "1" : "0",
 						TLS_INSECURE: insecure ? "1" : "0",
 						TLS_PORT: String(address.port),
 						TLS_MODE: mode,
@@ -94,9 +96,21 @@ describe("node:tls socket wrapping", () => {
 		}
 	});
 
-	it("keeps TLS socket state rooted under GC stress", async () => {
+	it("verifies a wrapped socket with a CA Buffer view under GC stress", async () => {
+		expect(
+			await run(
+				process.execPath,
+				false,
+				false,
+				["tests/local/node-tls-socket.cjs"],
+				"wrapped",
+				true,
+			),
+		).toContain("NODE TLS PASS");
 		for (const binary of binaries) {
-			expect(await run(binary, false, true)).toContain("NODE TLS PASS");
+			expect(await run(binary, false, true, [], "wrapped", true)).toContain(
+				"NODE TLS PASS",
+			);
 		}
 	});
 	it.each([
