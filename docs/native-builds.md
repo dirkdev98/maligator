@@ -229,13 +229,14 @@ unchanged graph, semantic, optimization, allocation, and lowering work while
 preserving native-code metadata. Cache validation includes the resolver's file-kind
 and package-identity observations, so newly preferred paths invalidate a warm build
 without reparsing an unchanged graph. Owner and worker observations must still agree
-when compiled images are published. Generated translation units and the driver are then
-compiled to independently content-addressed objects; unchanged objects are relinked
-without invoking their C compilation again. The product CLI writes each root's generated
-units to its build directory before emitting the next root or preparing native runtime
-artifacts. Only file identities and unit metadata remain live during runtime preparation.
-Development overlays cache each
-unit's C source separately from its metadata. Total generated output can
+when compiled images are published. An ordinary production build can reuse emitted
+C for the same compiler images, worker entries, and asset snapshots. Build producers
+still run and assets are collected before source reuse, so an asset-only edit reaches
+the executable. Generated units and the driver use independently content-addressed
+objects, which avoid repeated C compilation. The product CLI writes each root's
+generated units before emitting the next root or preparing native runtime artifacts.
+Only file identities and unit metadata remain live during runtime preparation.
+Development overlays cache each unit's C source separately from its metadata. Total generated output can
 exceed the host engine's string limit without serializing one aggregate string
 or expanding C source through JSON escaping. A generated unit (including the eval
 compiler overlay) is keyed by its expanded body plus the expanded header

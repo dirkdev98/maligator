@@ -44,7 +44,7 @@ interface ArtifactActionManifest {
 	outputs: Array<Omit<ArtifactOutput, "path">>;
 }
 
-interface ArtifactAction {
+export interface ArtifactAction {
 	stage: string;
 	producer: string;
 	action: string;

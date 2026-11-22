@@ -127,6 +127,7 @@ import {
 	buildSharedDevelopmentRunner,
 	localDevelopmentRunnerKey,
 	packagedDevelopmentRunner,
+	prepareCachedGeneratedSources,
 	prepareGeneratedSources,
 } from "./local-build.ts";
 import {
@@ -1238,7 +1239,8 @@ function prepareCommandState(
 						selectedFfiExports,
 					);
 		const programImage = frontend.programImage;
-		function* generatedUnits() {
+		const warn = (warning: string) => reporter.warning(warning);
+		function* generatedUnits(onWarning = warn) {
 			if (developmentFragments) {
 				yield* developmentFragmentUnits(
 					frontend.runtimeArtifacts,
@@ -1254,7 +1256,7 @@ function prepareCommandState(
 					compiled: compiledNativeOutput,
 					assets,
 					onRendererBailout: ({ file, name }) =>
-						reporter.warning(
+						onWarning(
 							`${file}: ${name || "<anonymous>"} runs in the bytecode interpreter because native code generation declined it`,
 						),
 				});
@@ -1271,11 +1273,34 @@ function prepareCommandState(
 				writeSourceChunks(1, [...unit.sourceChunks, "\n"]);
 			return { dependencies, dependencyIdentities, ...declared };
 		}
-		const output = reporter.phase("Generate native code", () =>
-			prepareGeneratedSources(
-				{ context: nativeContext, name, cacheSuffix: derivation.cacheSuffix },
-				generatedUnits(),
-			),
+		const sourceOutput = {
+			context: nativeContext,
+			name,
+			cacheSuffix: derivation.cacheSuffix,
+		};
+		const cacheNativeSources =
+			command.kind === "build" &&
+			production &&
+			compiledNativeOutput &&
+			!frontendOptions.forceCompile &&
+			!command.profile &&
+			command.internal.coreReport === undefined;
+		const nativeImageIdentity = cacheNativeSources
+			? frontend.nativeImageIdentity
+			: undefined;
+		const output = reporter.phase(
+			"Generate native code",
+			() =>
+				nativeImageIdentity === undefined
+					? prepareGeneratedSources(sourceOutput, generatedUnits())
+					: prepareCachedGeneratedSources(
+							sourceOutput,
+							{ image: nativeImageIdentity, directory: process.cwd(), assets },
+							generatedUnits,
+							warn,
+						),
+			(result) =>
+				result.cache === undefined ? undefined : `source cache ${result.cache}`,
 		);
 		reporter.detail("Translation units", output.units.length);
 		reporter.detail("Generated C bytes", output.sourceCodeUnits);

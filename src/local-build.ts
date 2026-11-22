@@ -24,6 +24,8 @@ import {
 	readArtifactAction,
 	withArtifactActionLock,
 } from "./artifact-store.ts";
+import type { ArtifactAction } from "./artifact-store.ts";
+import type { IncludedAsset } from "./assets.ts";
 import {
 	buildSuffix,
 	ccExtraFlags,
@@ -37,6 +39,7 @@ import {
 import type { PreludeDeclarations } from "./c-declaration-slice.ts";
 import { maligatorBuildDirectory, maligatorCacheDirectory } from "./cache-root.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
+import { compilerProducerIdentity } from "./compiler-cache-identity.ts";
 import { languageComponentAnchorSource } from "./compiler/frontend/engine-components.ts";
 import type {
 	GeneratedTranslationUnit,
@@ -66,6 +69,7 @@ import { toolArguments } from "./toolchain.ts";
 
 const BUILD_DIRECTORY = maligatorBuildDirectory();
 const RUNNER_WORK_ID = randomUUID();
+const GENERATED_SOURCES_STAGE = "generated-sources";
 const GENERATED_OBJECT_PRODUCER = artifactProducer("generated-object", 5, "cc");
 const GENERATED_UNIT_SLICE_PRODUCER = artifactProducer(
 	"generated-unit-slice",
@@ -161,11 +165,15 @@ export interface GeneratedSourceFiles {
 	readonly units: ReadonlyArray<GeneratedObjectInput>;
 	readonly sourceCodeUnits: number;
 	readonly writeDurationMs: number;
+	readonly cache?: "hit" | "miss";
 }
 
-function localBuildOutput(
-	options: Pick<LocalBuildOptions, "context" | "name" | "cacheSuffix" | "outDir">,
-) {
+type LocalBuildOutputOptions = Pick<
+	LocalBuildOptions,
+	"context" | "name" | "cacheSuffix" | "outDir"
+>;
+
+function localBuildOutput(options: LocalBuildOutputOptions) {
 	const { context } = options;
 	const artifactName = `${options.name}${buildSuffix(options.cacheSuffix ?? "", context.environment)}`;
 	const directory =
@@ -178,9 +186,18 @@ function localBuildOutput(
 	return { directory, artifactName, binaryPath: path.join(directory, artifactName) };
 }
 
+function generatedSourcePath(
+	directory: string,
+	name: string,
+	index: number,
+	id: string,
+): string {
+	return path.join(directory, index === 0 ? `${name}.c` : `${name}.${id}.c`);
+}
+
 /** Materialize each unit before its producer prepares another root or runtime image. */
 export function prepareGeneratedSources(
-	options: Pick<LocalBuildOptions, "context" | "name" | "cacheSuffix" | "outDir">,
+	options: LocalBuildOutputOptions,
 	sources: Iterable<string | GeneratedTranslationUnit>,
 ): GeneratedSourceFiles {
 	const { directory, artifactName } = localBuildOutput(options);
@@ -199,10 +216,7 @@ export function prepareGeneratedSources(
 			throw new Error(`generated translation unit has unsafe id '${id}'`);
 		if (ids.has(id)) throw new Error(`duplicate generated translation unit id '${id}'`);
 		ids.add(id);
-		const sourcePath = path.join(
-			directory,
-			units.length === 0 ? `${artifactName}.c` : `${artifactName}.${id}.c`,
-		);
+		const sourcePath = generatedSourcePath(directory, artifactName, units.length, id);
 		const digest = createHash("sha256");
 		const sourceChunks = typeof input === "string" ? [input] : input.sourceChunks;
 		const sourceBytes = writeSourceChunks(sourcePath, sourceChunks, digest);
@@ -229,6 +243,165 @@ export function prepareGeneratedSources(
 	if (units.length === 0)
 		throw new Error("buildLocalBinary requires at least one C translation unit");
 	return { units, sourceCodeUnits, writeDurationMs };
+}
+
+type GeneratedSourceDescriptor = Pick<
+	GeneratedObjectInput,
+	"unitId" | "generatedKind" | "headerFiles" | "definitions" | "embeddedFileDigests"
+>;
+
+interface GeneratedSourceManifest {
+	readonly units: ReadonlyArray<GeneratedSourceDescriptor>;
+	readonly sourceCodeUnits: number;
+	readonly warnings: ReadonlyArray<string>;
+}
+
+function readGeneratedSourceManifest(
+	action: ArtifactAction,
+): GeneratedSourceManifest | undefined {
+	try {
+		const manifest = JSON.parse(
+			readFileSync(artifactOutput(action, "sources.json").path, "utf8"),
+		) as GeneratedSourceManifest;
+		if (
+			!Number.isSafeInteger(manifest.sourceCodeUnits) ||
+			manifest.sourceCodeUnits < 0 ||
+			!Array.isArray(manifest.warnings) ||
+			!manifest.warnings.every((message) => typeof message === "string") ||
+			!Array.isArray(manifest.units) ||
+			manifest.units.length === 0 ||
+			manifest.units.length !== action.outputs.length - 1
+		)
+			return undefined;
+		for (const [index, { unitId }] of manifest.units.entries()) {
+			if (
+				typeof unitId !== "string" ||
+				!/^[a-z0-9][a-z0-9._-]*$/.test(unitId) ||
+				action.outputs[index + 1]?.name !== `${unitId}.c`
+			)
+				return undefined;
+		}
+		return manifest;
+	} catch {
+		return undefined;
+	}
+}
+
+export function prepareCachedGeneratedSources(
+	options: LocalBuildOutputOptions,
+	emission: { image: string; directory: string; assets: ReadonlyArray<IncludedAsset> },
+	sources: (onWarning: (warning: string) => void) => Iterable<GeneratedTranslationUnit>,
+	onWarning: (warning: string) => void,
+): GeneratedSourceFiles {
+	const { cacheDirectory } = options.context;
+	const producer = compilerProducerIdentity(GENERATED_SOURCES_STAGE, 1);
+	const key = artifactActionKey(producer, emission);
+	const restore = (
+		manifest: GeneratedSourceManifest,
+		action: ArtifactAction,
+		cache: "hit" | "miss",
+	): GeneratedSourceFiles => {
+		const startedAt = performance.now();
+		const { directory, artifactName } = localBuildOutput(options);
+		const units = manifest.units.map(
+			(
+				{ unitId, generatedKind, headerFiles, definitions, embeddedFileDigests },
+				index,
+			): GeneratedObjectInput => {
+				const file = action.outputs[index + 1]!;
+				const sourcePath = generatedSourcePath(directory, artifactName, index, unitId);
+				materializeArtifact(file, sourcePath);
+				return {
+					unitId,
+					generatedKind,
+					headerFiles,
+					definitions,
+					embeddedFileDigests,
+					sourcePath,
+					sourceDigest: file.digest,
+					sourceBytes: file.size,
+					role: "generated",
+				};
+			},
+		);
+		for (const warning of manifest.warnings) onWarning(warning);
+		return {
+			units,
+			sourceCodeUnits: manifest.sourceCodeUnits,
+			writeDurationMs: performance.now() - startedAt,
+			cache,
+		};
+	};
+	const restoreCached = () => {
+		const action = readArtifactAction(
+			cacheDirectory,
+			GENERATED_SOURCES_STAGE,
+			producer,
+			key,
+		);
+		if (action === undefined) return undefined;
+		const manifest = readGeneratedSourceManifest(action);
+		return manifest === undefined ? undefined : restore(manifest, action, "hit");
+	};
+	return (
+		restoreCached() ??
+		withArtifactActionLock(cacheDirectory, GENERATED_SOURCES_STAGE, producer, key, () => {
+			const cached = restoreCached();
+			if (cached !== undefined) return cached;
+			const work = path.join(cacheDirectory, "work", GENERATED_SOURCES_STAGE);
+			mkdirSync(work, { recursive: true });
+			const outDir = mkdtempSync(path.join(work, "emit-"));
+			try {
+				// Shared output names can be replaced by another build while this action is published.
+				const warnings: Array<string> = [];
+				const generated = prepareGeneratedSources(
+					{ ...options, outDir },
+					sources((warning) => warnings.push(warning)),
+				);
+				const manifest: GeneratedSourceManifest = {
+					units: generated.units.map(
+						({
+							unitId,
+							generatedKind,
+							headerFiles,
+							definitions,
+							embeddedFileDigests,
+						}) => ({
+							unitId,
+							generatedKind,
+							headerFiles,
+							definitions,
+							embeddedFileDigests,
+						}),
+					),
+					sourceCodeUnits: generated.sourceCodeUnits,
+					warnings,
+				};
+				const metadataPath = path.join(outDir, "sources.json");
+				writeFileSync(metadataPath, JSON.stringify(manifest));
+				const action = publishArtifactAction(
+					cacheDirectory,
+					GENERATED_SOURCES_STAGE,
+					producer,
+					key,
+					[
+						{ name: "sources.json", file: metadataPath },
+						...generated.units.map(({ unitId, sourcePath }) => ({
+							name: `${unitId}.c`,
+							file: sourcePath,
+						})),
+					],
+				);
+				const output = restore(manifest, action, "miss");
+				return {
+					...output,
+					writeDurationMs: generated.writeDurationMs + output.writeDurationMs,
+				};
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		})
+	);
 }
 
 /** Exact inputs and output of one final native link. */

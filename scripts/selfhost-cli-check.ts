@@ -1253,10 +1253,8 @@ try {
 		const rootsConfig = "production-roots.build.mts";
 		// Spelled out as C integer literals, these bytes would exceed the engine's string
 		// limit, so the product CLI must never preprocess an embedded asset into text.
-		writeFileSync(
-			path.join(project, "production-large-asset.bin"),
-			"x".repeat(4 * 1024 * 1024),
-		);
+		const largeAsset = path.join(project, "production-large-asset.bin");
+		writeFileSync(largeAsset, "x".repeat(4 * 1024 * 1024));
 		writeFileSync(
 			path.join(project, rootsConfig),
 			'export default {entry:"production-roots.mts",outputName:"selfhost-production-roots",engine:{eval:false,regexp:false,intl:{enabled:false}}};\n',
@@ -1273,13 +1271,14 @@ try {
 			path.join(project, "production-roots.mts"),
 			`import {embedFile} from "maligator:assets";
 import {createPool,createWorkerUrl} from "maligator:workers";
-if (embedFile("./production-large-asset.bin").size !== 4 * 1024 * 1024) throw new Error("large asset");
+const asset = embedFile("./production-large-asset.bin");
+if (asset.size !== 4 * 1024 * 1024) throw new Error("large asset");
 const first = createPool<typeof import("./production-root-first.mts")>(createWorkerUrl("./production-root-first.mts",import.meta.url),{size:1});
 const second = createPool<typeof import("./production-root-second.mts")>(createWorkerUrl("./production-root-second.mts",import.meta.url),{size:1});
 try {
 	await first.ready;
 	await second.ready;
-	console.log(JSON.stringify([await first.run("calculate",[2]),await second.run("calculate",[3])]));
+	console.log(JSON.stringify([await first.run("calculate",[2]),await second.run("calculate",[3]),asset.bytes()[0]]));
 } finally {
 	await first.close();
 	await second.close();
@@ -1342,7 +1341,7 @@ try {
 				execution.status !== 0 ||
 				execution.signal !== null ||
 				execution.stderr !== "" ||
-				execution.stdout !== "[40,42]\n"
+				execution.stdout !== "[40,42,120]\n"
 			)
 				throw new Error(
 					`production root execution failed:\n${execution.stdout}\n${execution.stderr}`,
@@ -1359,24 +1358,54 @@ try {
 		}
 		if (JSON.stringify(rootBuilds[0]!.units) !== JSON.stringify(rootBuilds[1]!.units))
 			throw new Error("serial and parallel production roots emitted different C");
-		const rootWarm = invokeCaptured(
-			["build", "--production", "--config", rootsConfig, "--compile-concurrency", "3"],
-			{ MALIGATOR_WORKERS: "3" },
-		);
-		if (
-			rootWarm.status !== 0 ||
-			rootWarm.signal !== null ||
-			!/frontend cache hit/.test(rootWarm.stderr)
-		)
-			throw new Error(
-				`unchanged production roots did not reuse frontend cache:\n${rootWarm.stdout}\n${rootWarm.stderr}`,
+		const buildOrdinaryRoots = () =>
+			invokeCaptured(
+				["build", "--production", "--config", rootsConfig, "--compile-concurrency", "3"],
+				{ MALIGATOR_WORKERS: "3" },
 			);
+		const rootWarm = buildOrdinaryRoots();
+		const rootCached = buildOrdinaryRoots();
+		for (const build of [rootWarm, rootCached]) {
+			if (
+				build.status !== 0 ||
+				build.signal !== null ||
+				!build.stderr.includes("frontend cache hit")
+			)
+				throw new Error(
+					`unchanged production roots did not reuse the frontend:
+${build.stdout}
+${build.stderr}`,
+				);
+		}
+		if (
+			!rootCached.stderr.includes("source cache hit") ||
+			!rootCached.stderr.includes("binary cache hit")
+		)
+			throw new Error(`unchanged build did not reuse generated sources and binary:
+${rootCached.stderr}`);
+		writeFileSync(largeAsset, "y".repeat(4 * 1024 * 1024));
+		const updated = buildOrdinaryRoots();
+		if (updated.status !== 0 || !updated.stderr.includes("frontend cache hit"))
+			throw new Error(`asset-only edit did not build with the cached frontend:
+${updated.stdout}
+${updated.stderr}`);
+		const execution = spawnSync(path.resolve(project, updated.stdout.trim()), [], {
+			cwd: project,
+			encoding: "utf8",
+			timeout: 30_000,
+			killSignal: "SIGKILL",
+		});
+		if (execution.error !== undefined) throw execution.error;
+		if (execution.status !== 0 || execution.stdout !== "[40,42,121]\n")
+			throw new Error(`rebuilding after an asset edit retained stale content:
+${execution.stdout}
+${execution.stderr}`);
 		writeFileSync(
 			path.join(reports, "production-roots.json"),
-			`${JSON.stringify({ cacheCondition: "serial and parallel forced frontend compilation; unchanged warm rerun", builds: rootBuilds, warm: { pid: rootWarm.pid, status: rootWarm.status, stdout: rootWarm.stdout, stderr: rootWarm.stderr }, parity: "generated C and native output; binary byte identity not asserted" }, null, 2)}\n`,
+			`${JSON.stringify({ cacheCondition: "serial and parallel forced frontend compilation, ordinary rebuilds, asset-only edit", builds: rootBuilds, warm: rootWarm, cached: rootCached, updated, parity: "generated C and executable output" }, null, 2)}\n`,
 		);
 		console.log(
-			"ok   serial and parallel production roots matched C and native output with a 4 MiB asset, then reused frontend cache",
+			"ok   production roots matched C and native output, reused cached sources, and rebuilt after a 4 MiB asset edit",
 		);
 	}
 

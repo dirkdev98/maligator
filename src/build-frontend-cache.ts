@@ -158,6 +158,7 @@ export interface BuildFrontendPhases {
 export interface CompiledBuildFrontend {
 	workerImages: ReadonlyArray<CompiledWorkerImage>;
 	programImage: ProgramImage;
+	nativeImageIdentity?: string;
 	wire: Uint8Array;
 	cache: "hit" | "miss";
 	frontendMs: number;
@@ -386,6 +387,24 @@ function materializedArtifacts(
 	});
 }
 
+function nativeImageIdentity(
+	main: BuildFrontendArtifactIdentity | undefined,
+	workers: ReadonlyArray<WorkerImageArtifact>,
+): string | undefined {
+	if (main === undefined) return undefined;
+	return digest(
+		JSON.stringify([
+			main.digest,
+			workers.map(({ id, entry, compiler }) => [
+				id,
+				entry.href,
+				entry.workerSource !== undefined,
+				compiler.digest,
+			]),
+		]),
+	);
+}
+
 function interpretedFrontendError(): Error {
 	return new Error("an interpreted development frontend has no native program image");
 }
@@ -402,6 +421,7 @@ function loadCached(
 	| {
 			workerImages: ReadonlyArray<CompiledWorkerImage>;
 			programImage: ProgramImage;
+			nativeImageIdentity?: string;
 			wire: Uint8Array;
 			wires: Array<Uint8Array>;
 			runtimeArtifacts: Array<BuildFrontendArtifact>;
@@ -473,6 +493,10 @@ function loadCached(
 				manifest.closure.openings,
 			),
 			workerImages: restoreWorkerImages(manifest.workerArtifacts, artifactRoot),
+			nativeImageIdentity: nativeImageIdentity(
+				manifest.compilerArtifact,
+				manifest.workerArtifacts,
+			),
 			get programImage() {
 				return loadProgramImage();
 			},
@@ -749,6 +773,7 @@ function prepareBuildFrontend(
 				kind: "cached",
 				value: {
 					workerImages: cached.workerImages,
+					nativeImageIdentity: cached.nativeImageIdentity,
 					get programImage() {
 						return cached.programImage;
 					},
@@ -1099,6 +1124,7 @@ function prepareBuildFrontend(
 		const nativeProgramImage = loadProgramImage;
 		return {
 			workerImages,
+			nativeImageIdentity: nativeImageIdentity(compilerArtifact, workerArtifacts),
 			get programImage() {
 				if (nativeProgramImage === undefined) throw interpretedFrontendError();
 				return nativeProgramImage();
