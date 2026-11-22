@@ -6,10 +6,10 @@
 			"platform": "darwin",
 			"arch": "arm64",
 			"source": {
-				"revision": "a0c26854e2ef57fe0fabedc84d6e785c67140013",
-				"digest": "427bb5e108f5fdfa16297bab34f9ae3cbce430aa4ce43cab88673749534d00bc",
+				"revision": "c8f006e813bd39ac2241ea76e47ffd7d8f0131b6",
+				"digest": "d023b3fb37665d9846632dbdb6625e6802c3d63696cd5eb4522077e74c48bd66",
 				"dirty": false,
-				"files": 5202
+				"files": 5204
 			},
 			"modes": [
 				{
@@ -158,7 +158,7 @@
 				},
 				{
 					"mode": "no-regexp",
-					"sha256": "56378d01fdb9390ee0cf5befb385e87b4443363fd5241d8c6d528fa5c7e235ac",
+					"sha256": "8b8a863e0e5fc7e730efe65be9f24963b1aabd95ac35c28305470d8122a75024",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -168,8 +168,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 3065,
-							"descriptors": 10141,
+							"nodes": 3064,
+							"descriptors": 10139,
 							"repeatedOwnKeys": []
 						}
 					]
@@ -378,10 +378,10 @@
 			"platform": "linux",
 			"arch": "x64",
 			"source": {
-				"revision": "a0c26854e2ef57fe0fabedc84d6e785c67140013",
-				"digest": "427bb5e108f5fdfa16297bab34f9ae3cbce430aa4ce43cab88673749534d00bc",
+				"revision": "c8f006e813bd39ac2241ea76e47ffd7d8f0131b6",
+				"digest": "d023b3fb37665d9846632dbdb6625e6802c3d63696cd5eb4522077e74c48bd66",
 				"dirty": false,
-				"files": 5202
+				"files": 5204
 			},
 			"modes": [
 				{
@@ -530,7 +530,7 @@
 				},
 				{
 					"mode": "no-regexp",
-					"sha256": "f80ce1ef71ff7bf4287d2a405066f88584c0300c138a849a56a7410f4fb82e32",
+					"sha256": "de216284000983fd84df110ad49997069120b31b577fe3e2fd689cc239731098",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -540,8 +540,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 3065,
-							"descriptors": 10131,
+							"nodes": 3064,
+							"descriptors": 10129,
 							"repeatedOwnKeys": []
 						}
 					]
@@ -124376,7 +124376,6 @@
 				"full",
 				"mutable",
 				"diagnostic",
-				"no-regexp",
 				"no-temporal",
 				"no-intl",
 				"intl-collator",
@@ -124397,7 +124396,6 @@
 				"full",
 				"mutable",
 				"diagnostic",
-				"no-regexp",
 				"no-temporal",
 				"no-intl",
 				"intl-collator",
