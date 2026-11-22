@@ -4719,7 +4719,9 @@ void mal_compiled_frame_register(MalCompiledFrameDesc *desc, i32 frame_offset) {
             g_compiled_frames = frames;
             g_compiled_frame_capacity = capacity;
         }
-        if (g_compiled_text_end == 0) mal_compiled_text_bounds(desc->code);
+        // All generated descriptors belong to this executable. A linker may merge
+        // the compiled section into standard text, so missing bounds stay unknown.
+        if (g_compiled_frame_count == 0) mal_compiled_text_bounds(desc->code);
         g_compiled_frames[g_compiled_frame_count++] = desc;
         g_compiled_frames_sorted = false;
         atomic_store_explicit(&desc->frame_offset, frame_offset, memory_order_release);
