@@ -72,6 +72,7 @@ import type {
 	TestCommand,
 } from "./cli.ts";
 import { CommandProgress, formatCommandDuration } from "./command-progress.ts";
+import type { CompilerBakeInput } from "./compiler-bake.ts";
 import type { CompilationPhase, CompilerService } from "./compiler-service.ts";
 import { formatCoreProgram } from "./compiler/core/core-ir.ts";
 import {
@@ -533,6 +534,26 @@ function prepareConfiguredLibraries(
 		}
 		throw error;
 	}
+}
+
+function compilerBakeInput(context: CommandContext): CompilerBakeInput {
+	const compiler = context.installation.evalCompiler;
+	if (compiler.kind === "prebuilt") return { kind: "prebuilt", path: compiler.wirePath };
+	return {
+		kind: "source",
+		sourceDirectory: compiler.sourceDirectory,
+		entrypoint: compiler.entrypoint,
+		bake: () =>
+			compileEntrypointToBuffer(compiler.entrypoint, {
+				...embeddedCompilerOptions(compiler.sourceDirectory),
+				stripTypes: context.stripTypes,
+			}),
+		bakeProgram: () =>
+			compileEntrypoint(compiler.entrypoint, {
+				...embeddedCompilerOptions(compiler.sourceDirectory),
+				stripTypes: context.stripTypes,
+			}),
+	};
 }
 
 function compatibleDevelopmentRunner(
@@ -1088,25 +1109,6 @@ function prepareCommandState(
 		}
 		if (packagedRunner !== undefined) ({ toolchain, plan } = resolveLocalTools());
 
-		const evalCompiler = context.installation.evalCompiler;
-		const compilerBake =
-			evalCompiler.kind === "source"
-				? {
-						kind: "source" as const,
-						sourceDirectory: evalCompiler.sourceDirectory,
-						entrypoint: evalCompiler.entrypoint,
-						bake: () =>
-							compileEntrypointToBuffer(evalCompiler.entrypoint, {
-								...embeddedCompilerOptions(evalCompiler.sourceDirectory),
-								stripTypes: context.stripTypes,
-							}),
-						bakeProgram: () =>
-							compileEntrypoint(evalCompiler.entrypoint, {
-								...embeddedCompilerOptions(evalCompiler.sourceDirectory),
-								stripTypes: context.stripTypes,
-							}),
-					}
-				: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
 		// Wire drivers resolve installers by name, so they link every component.
 		const resolvesInstallers = interpreted || developmentFragments;
 		const usesHost = resolvesInstallers || hostInstalls.some(imageUsesHost);
@@ -1164,7 +1166,11 @@ function prepareCommandState(
 			plan,
 			runtimeDirectory: context.installation.runtimeDirectory,
 			features: derivation.features,
-			compilerBake,
+			compilerBake:
+				derivation.features.evalEnabled &&
+				!(command.kind === "build" && command.internal.emitC)
+					? compilerBakeInput(context)
+					: undefined,
 			onCacheEvent: (event) => {
 				nativeCache.set(event.artifact, event.hit);
 				reporter.detail(
@@ -2296,32 +2302,14 @@ function buildIsolatedTestRunner(
 
 	const derivation = buildDerivationFromConfig(config);
 	const toolchain = bindings?.toolchain ?? testToolchain(context, environment);
-	const evalCompiler = context.installation.evalCompiler;
-	const compilerBake =
-		evalCompiler.kind === "source"
-			? {
-					kind: "source" as const,
-					sourceDirectory: evalCompiler.sourceDirectory,
-					entrypoint: evalCompiler.entrypoint,
-					bake: () =>
-						compileEntrypointToBuffer(evalCompiler.entrypoint, {
-							...embeddedCompilerOptions(evalCompiler.sourceDirectory),
-							stripTypes: context.stripTypes,
-						}),
-					bakeProgram: () =>
-						compileEntrypoint(evalCompiler.entrypoint, {
-							...embeddedCompilerOptions(evalCompiler.sourceDirectory),
-							stripTypes: context.stripTypes,
-						}),
-				}
-			: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
+	const features = testRunnerFeatures(config, applicationHost);
 	const nativeContext = resolveNativeBuildContext({
 		toolchain,
 		environment,
 		plan: selectNativeBuildPlan(toolchain, false),
 		runtimeDirectory,
-		features: testRunnerFeatures(config, applicationHost),
-		compilerBake,
+		features,
+		compilerBake: features.evalEnabled ? compilerBakeInput(context) : undefined,
 	});
 	if (linkedLibraries === undefined) {
 		return {
@@ -2594,25 +2582,6 @@ async function executeProfiledTests(
 			.join("-"),
 	};
 	const toolchain = testToolchain(context);
-	const evalCompiler = context.installation.evalCompiler;
-	const compilerBake =
-		evalCompiler.kind === "source"
-			? {
-					kind: "source" as const,
-					sourceDirectory: evalCompiler.sourceDirectory,
-					entrypoint: evalCompiler.entrypoint,
-					bake: () =>
-						compileEntrypointToBuffer(evalCompiler.entrypoint, {
-							...embeddedCompilerOptions(evalCompiler.sourceDirectory),
-							stripTypes: context.stripTypes,
-						}),
-					bakeProgram: () =>
-						compileEntrypoint(evalCompiler.entrypoint, {
-							...embeddedCompilerOptions(evalCompiler.sourceDirectory),
-							stripTypes: context.stripTypes,
-						}),
-				}
-			: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
 	const nativeContext = reporter.phase("Prepare native build", () =>
 		resolveNativeBuildContext({
 			environment: compilerProfileBuildEnvironment(command),
@@ -2620,7 +2589,9 @@ async function executeProfiledTests(
 			plan: selectNativeBuildPlan(toolchain, true),
 			runtimeDirectory: context.installation.runtimeDirectory,
 			features: derivation.features,
-			compilerBake,
+			compilerBake: derivation.features.evalEnabled
+				? compilerBakeInput(context)
+				: undefined,
 			onCacheEvent: (event) =>
 				reporter.detail(
 					`${event.artifact} cache`,

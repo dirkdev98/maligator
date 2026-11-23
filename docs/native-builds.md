@@ -15,11 +15,11 @@ root for config, entries, and output caches. Asset specifiers resolve from their
 declaring modules. The command layer passes absolute installation paths to native
 stages so they can find runtime files independently of the application.
 
-The distributed self-hosted CLI embeds the runtime C sources, Rust crate, and a
-prebuilt eval compiler wire as its `runtime` and `compilerWire` assets
-(`src/product-builder.ts`). It materializes those content-addressed assets on
-startup, so the copied compiler can run the full native pipeline outside a Maligator
-checkout and without Node.js. `npm run selfhost:cli` exercises that transfer path.
+The self-hosted CLI embeds the runtime C sources and Rust crate in `runtime`, with a
+prebuilt eval compiler in `compilerWire` (`src/product-builder.ts`). It materializes
+these resources when the command needs them. A local native link requests the
+compiler wire when it enables eval. `npm run selfhost:cli` exercises a copied CLI
+outside the checkout without Node.js.
 
 ## Packaged runtime
 
