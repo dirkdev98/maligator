@@ -79,7 +79,7 @@ describe("GitHub Actions", () => {
 				string,
 				{
 					name: string;
-					needs?: string;
+					needs?: string | Array<string>;
 					if?: string;
 					strategy?: { "fail-fast": boolean };
 					steps: Array<{ run?: string; env?: Record<string, string> }>;
@@ -88,15 +88,21 @@ describe("GitHub Actions", () => {
 		};
 		const aggregate = workflow.jobs["linux-check"]!;
 		expect(aggregate.name).toBe("Linux check");
-		expect(aggregate.needs).toBe("linux-lanes");
-		expect(aggregate.if).toBe("always()");
+		expect(aggregate.needs).toEqual(["linux-quality", "linux-lanes"]);
+		expect(aggregate.if).toBe("!cancelled()");
+		expect(aggregate.steps[0]?.env?.QUALITY_RESULT).toBe(
+			"${{ needs.linux-quality.result }}",
+		);
 		expect(aggregate.steps[0]?.env?.LANE_RESULT).toBe("${{ needs.linux-lanes.result }}");
-		expect(aggregate.steps[0]?.run).toBe('test "$LANE_RESULT" = success');
+		expect(aggregate.steps[0]?.run).toBe(
+			'test "$QUALITY_RESULT" = success && test "$LANE_RESULT" = success',
+		);
 		expect(
 			aggregate.steps.some(
 				(step) => step.run === "node scripts/test-suite-ci.ts .cache/ci-lane-reports",
 			),
 		).toBe(true);
+		expect(workflow.jobs["linux-lanes"]?.needs).toBe("linux-quality");
 		expect(workflow.jobs["linux-lanes"]?.strategy?.["fail-fast"]).toBe(false);
 	});
 
@@ -119,6 +125,28 @@ describe("GitHub Actions", () => {
 			}
 		}
 		expect(violations).toEqual([]);
+	});
+
+	it("matches the Actions cache versions of native archives across readers and writers", () => {
+		type CacheStep = { uses?: string; with?: { path?: string } };
+		const steps = (action: string): Array<CacheStep> =>
+			(
+				parse(
+					readFileSync(path.join(githubRoot, "actions", action, "action.yml"), "utf8"),
+				) as {
+					runs: { steps: Array<CacheStep> };
+				}
+			).runs.steps;
+		const pathsFor = (action: string, mode: "restore" | "save") =>
+			steps(action)
+				.filter((step) => step.uses?.startsWith(`actions/cache/${mode}@`))
+				.map((step) => step.with?.path)
+				.sort();
+		const published = pathsFor("save-native-cache", "save");
+		expect(published).toHaveLength(2);
+		for (const platform of ["setup-linux", "setup-macos"]) {
+			expect(pathsFor(platform, "restore"), platform).toEqual(published);
+		}
 	});
 
 	it("selects the pinned Rust toolchain and prepares cacheable Test262 inputs", () => {

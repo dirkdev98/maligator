@@ -11,7 +11,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-remainder
+  # Keep the cold scheduled check and explicit requests out of the push queue.
+  group: native-remainder-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
@@ -72,10 +73,35 @@ jobs:
       - name: Check the runner environment
         run: npm run env:check -- --json
 
-      # The live postgres.js suites skip without a server; Linux runners can host one.
-      # The large-types suite runs in the sanitizer lane.
+      - name: Identify selected integration prerequisites
+        id: prerequisites
+        shell: bash
+        run: |
+          files=$(node scripts/test-suite.ts full --native-remainder --policy complete \
+            --workers "$REMAINDER_WORKERS" --lane ${{ matrix.lane }} \
+            --shard ${{ matrix.shard }}/${{ matrix.shards }} --plan=json |
+            jq -c '[.stages[].files[]?]')
+          {
+            jq -r '"libuv=\(index("tests/native/ffi-close-callback.test.ts") != null)"' <<< "$files"
+            jq -r '"postgres=\(any(.[]; test("^tests/native/postgres(-[^/]+)?-live[.]test[.]ts$")))"' <<< "$files"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up libuv for the FFI close suite
+        if: steps.prerequisites.outputs.libuv == 'true'
+        shell: bash
+        run: |
+          if ! command -v pkg-config >/dev/null || ! pkg-config --exists libuv; then
+            if [ "$RUNNER_OS" = Linux ]; then
+              sudo apt-get update
+              sudo apt-get install --yes pkg-config libuv1-dev
+            else
+              brew install pkgconf libuv
+            fi
+          fi
+          pkg-config --modversion libuv
+
       - name: Start PostgreSQL for the live suites
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.prerequisites.outputs.postgres == 'true'
         shell: bash
         run: |
           docker run --detach --name maligator-postgres --publish 127.0.0.1:5432:5432 \

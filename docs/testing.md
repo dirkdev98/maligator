@@ -238,9 +238,9 @@ deadline uses the same factors. Outer test and CI job budgets remain separate.
 Pull requests and pushes to `main` run the canonical check tier on Linux x64 and the
 smoke tier on macOS ARM. The macOS gate also verifies isolate ownership after Worker
 joins. The active `main` gate finishes while the newest push waits; newer pushes
-replace its pending successor. Pull request updates cancel superseded
-runs. Linux runs seven jobs in parallel using the runner's own four-worker budget,
-splitting the native dimensions into shards:
+replace its pending successor. Pull request updates cancel superseded runs. The
+Linux quality lane runs first. Standards and the native shards start once it
+passes, using each runner's four-worker budget:
 
 ```sh
 npm run test:check -- --workers 4 --lane quality
@@ -292,10 +292,10 @@ This derives the remaining native files from the same manifests as the full gate
 without repeating check's fixtures, quality, or standards. macOS also runs its leak
 audit in the normal dimension. The runner completes every selected stage to collect
 failures and retains source-bound reports for fourteen days. These reports remain
-partial full-tier evidence. Optional external-service tests retain their prerequisites:
-the Linux shards of both dimensions start a PostgreSQL 17 container and set the
-`MAL_POSTGRES_*LIVE` opt-ins, which canonical runners keep, so the live postgres.js
-suites run there (the large-types suite under the sanitizers); macOS shards skip them.
+partial full-tier evidence. The shard plan determines which jobs install libuv
+for the FFI close suite and which Linux jobs start PostgreSQL 17 and enable the
+live postgres.js suites. Scheduled and explicitly dispatched runs have their own
+queues so a push cannot replace them while they wait.
 
 Extended CI also runs on pushes to `main` and manual dispatch. Its slow-unit job
 prepares the compiled Test262 runtime before Vitest, keeping cold native compiler
@@ -354,7 +354,8 @@ snapshot of every line and lane has to fit the repository's cache allowance: whe
 it does not, GitHub evicts whole lines and their jobs start cold.
 After saving, a job deletes the snapshot it restored: GitHub evicts the least recently
 used entries, and that superseded snapshot counts as just used, so keeping it would
-evict the newest snapshot of a line that runs less often. Cancelled runs save nothing.
+evict the newest snapshot of a line that runs less often. The job checks that the
+replacement exists before removing the restored snapshot. Cancelled runs save nothing.
 A restored action that no longer matches is simply never read; the weekly
 native-remainder run stays cold so cache identity defects still surface. Native linked binaries, frontend artifacts, Zig outputs, and
 the managed cache are not stored: a test binary is tens of megabytes, and a developer
@@ -384,6 +385,7 @@ A run is named after the commit it tested, because a run started after CI record
 `main` of that moment as its head, and the report job annotates it with the regression
 and improvement counts. `npm run ci:status -- <sha>` uses both to report a pushed
 commit's CI, Native remainder, Extended CI and Test262 runs in one view.
+If a required run was cancelled or skipped, the commit's coverage is incomplete.
 
 ## Worker budgets
 

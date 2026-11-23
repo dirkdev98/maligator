@@ -206,6 +206,7 @@ test/built-ins/AsyncGeneratorPrototype/return/return-suspendedYield-promise.js
 test/built-ins/AsyncIteratorPrototype/Symbol.asyncIterator/prop-desc.js
 test/built-ins/Promise/any/ctx-non-object.js
 test/language/expressions/dynamic-import/eval-self-once-module.js
+test/language/expressions/import.meta/import-meta-is-an-ordinary-object.js
 test/language/statements/for-await-of/iterator-close-non-throw-get-method-abrupt.js
 test/language/statements/for-await-of/iterator-close-non-throw-get-method-non-callable.js
 test/language/statements/for-of/dstr/array-elem-target-yield-expr.js

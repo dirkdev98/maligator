@@ -6,9 +6,9 @@ Reports the CI, Native remainder, Extended CI and Test262 runs of one commit pus
 main, with the jobs that did not pass and the Test262 regression count. Pass the commit a
 push ended on: only the tip of a push gets runs.
 
-Exit code: 0 when every run passed, 1 when one failed, 2 while one is pending.`;
+Exit code: 0 when every run passed, 1 on failure, 2 while pending, 3 for incomplete coverage.`;
 
-type Verdict = "passed" | "failed" | "pending";
+type Verdict = "passed" | "failed" | "pending" | "incomplete";
 
 interface WorkflowRun {
 	readonly id: number;
@@ -39,9 +39,7 @@ const PUSH_WORKFLOWS = [
 	{ file: "extended-ci.yml", name: "Extended CI" },
 ] as const;
 
-// Superseded runs in a concurrency group end cancelled; that commit's coverage comes
-// from the later run, so a cancelled run neither fails nor holds the verdict.
-const NEUTRAL_CONCLUSIONS = new Set(["success", "skipped", "neutral", "cancelled"]);
+const INCOMPLETE_CONCLUSIONS = new Set(["skipped", "neutral", "cancelled"]);
 
 function gh<T>(endpoint: string): T {
 	return JSON.parse(
@@ -65,7 +63,8 @@ function runJobs(run: WorkflowRun): Array<WorkflowJob> {
 
 function runVerdict(run: WorkflowRun | undefined): Verdict {
 	if (run === undefined || run.status !== "completed") return "pending";
-	return NEUTRAL_CONCLUSIONS.has(run.conclusion ?? "") ? "passed" : "failed";
+	if (run.conclusion === "success") return "passed";
+	return INCOMPLETE_CONCLUSIONS.has(run.conclusion ?? "") ? "incomplete" : "failed";
 }
 
 function test262Regressions(jobs: ReadonlyArray<WorkflowJob>): string | undefined {
@@ -96,7 +95,10 @@ function describeRun(
 			: `${done.length}/${jobs.length} jobs done${attempt}`;
 	const lines = [`${name.padEnd(17)} ${state} (${progress}) ${run.html_url}`];
 	for (const job of done) {
-		if (!NEUTRAL_CONCLUSIONS.has(job.conclusion ?? "")) {
+		if (
+			job.conclusion !== "success" &&
+			!INCOMPLETE_CONCLUSIONS.has(job.conclusion ?? "")
+		) {
 			lines.push(`  ${job.conclusion}: ${job.name} ${job.html_url}`);
 		}
 	}
@@ -137,7 +139,7 @@ function main(args: ReadonlyArray<string>): number {
 	// Test262 starts from CI's completion on whatever main is then, so its head_sha can
 	// name a later commit. Its run name carries the commit it checked out.
 	const { workflow_runs: test262Runs } = gh<{ workflow_runs: Array<WorkflowRun> }>(
-		"repos/{owner}/{repo}/actions/workflows/test262.yml/runs?per_page=100",
+		"repos/{owner}/{repo}/actions/workflows/test262.yml/runs?event=workflow_run&per_page=100",
 	);
 	const test262Run = test262Runs.find(
 		({ display_title }) => display_title === `Test262 ${sha}`,
@@ -150,6 +152,7 @@ function main(args: ReadonlyArray<string>): number {
 			failed: "not run, CI failed",
 			pending: "waits for CI",
 			passed: "no run names this commit yet",
+			incomplete: "no completed CI gate",
 		}[ciVerdict],
 	);
 	if (test262Run !== undefined || ciVerdict !== "failed") verdicts.push(test262.verdict);
@@ -157,11 +160,13 @@ function main(args: ReadonlyArray<string>): number {
 
 	const overall: Verdict = verdicts.includes("failed")
 		? "failed"
-		: verdicts.includes("pending")
-			? "pending"
-			: "passed";
+		: verdicts.includes("incomplete")
+			? "incomplete"
+			: verdicts.includes("pending")
+				? "pending"
+				: "passed";
 	console.log(`Verdict: ${overall}`);
-	return { passed: 0, failed: 1, pending: 2 }[overall];
+	return { passed: 0, failed: 1, pending: 2, incomplete: 3 }[overall];
 }
 
 process.exitCode = main(process.argv.slice(2));

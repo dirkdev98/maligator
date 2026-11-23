@@ -20,18 +20,6 @@ runs:
         path: ${{ runner.temp }}/maligator-native-shared-export
         key: ${{ env.MALIGATOR_NATIVE_SHARED_PREFIX }}${{ steps.export-shared.outputs.digest }}
 
-    # Eviction is least-recently-used, and the snapshot this job restored counts as just
-    # used, so without this the repository allowance evicts other lines' newest snapshots.
-    - name: Drop the shared snapshot this job superseded
-      if: ${{ !cancelled() && steps.save-shared.outcome == 'success' && startsWith(env.MALIGATOR_NATIVE_SHARED_RESTORED_KEY, env.MALIGATOR_NATIVE_SHARED_PREFIX) }}
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        SUPERSEDED: ${{ env.MALIGATOR_NATIVE_SHARED_RESTORED_KEY }}
-      run: |
-        gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/caches?key=$SUPERSEDED" >/dev/null \
-          || echo "the superseded snapshot $SUPERSEDED was already gone"
-
     - name: Export the native library cache
       id: export
       if: ${{ !cancelled() && env.MALIGATOR_NATIVE_CACHE_PREFIX != '' && github.ref == 'refs/heads/main' }}
@@ -40,7 +28,7 @@ runs:
         if [ "$MALIGATOR_NATIVE_SHARED_OWNER" = true ]; then
           node scripts/ci-native-cache.ts export "$RUNNER_TEMP/maligator-native-cache" --without-shared
         else
-          node scripts/ci-native-cache.ts export "$RUNNER_TEMP/maligator-native-cache" --without "$RUNNER_TEMP/maligator-native-shared"
+          node scripts/ci-native-cache.ts export "$RUNNER_TEMP/maligator-native-cache" --without "$RUNNER_TEMP/maligator-native-shared-export"
         fi
 
     - name: Save the native library cache
@@ -51,12 +39,29 @@ runs:
         path: ${{ runner.temp }}/maligator-native-cache
         key: ${{ env.MALIGATOR_NATIVE_CACHE_PREFIX }}${{ steps.export.outputs.digest }}
 
-    - name: Drop the snapshot this job superseded
-      if: ${{ !cancelled() && steps.save.outcome == 'success' && startsWith(env.MALIGATOR_NATIVE_CACHE_RESTORED_KEY, env.MALIGATOR_NATIVE_CACHE_PREFIX) }}
+    # Actions reports an unsuccessful cache write as a warning. Confirm the replacement
+    # exists before removing the restored snapshot, which would otherwise keep its LRU slot.
+    - name: Drop superseded snapshots
+      if: ${{ !cancelled() && (steps.save-shared.outcome == 'success' || steps.save.outcome == 'success') }}
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-        SUPERSEDED: ${{ env.MALIGATOR_NATIVE_CACHE_RESTORED_KEY }}
+        SHARED_REPLACEMENT: ${{ steps.save-shared.outcome == 'success' && format('{0}{1}', env.MALIGATOR_NATIVE_SHARED_PREFIX, steps.export-shared.outputs.digest) || '' }}
+        LINE_REPLACEMENT: ${{ steps.save.outcome == 'success' && format('{0}{1}', env.MALIGATOR_NATIVE_CACHE_PREFIX, steps.export.outputs.digest) || '' }}
       run: |
-        gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/caches?key=$SUPERSEDED" >/dev/null \
-          || echo "the superseded snapshot $SUPERSEDED was already gone"
+        drop_superseded() {
+          local prefix="$1" restored="$2" replacement="$3"
+          if [[ -z "$prefix" || "$restored" != "$prefix"* || -z "$replacement" || "$restored" == "$replacement" ]]; then
+            return
+          fi
+          local published
+          if ! published=$(gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$replacement" --json key --jq '.[].key') ||
+            ! grep -Fxq -- "$replacement" <<< "$published"; then
+            echo "Keeping $restored until its replacement is published."
+            return
+          fi
+          gh cache delete "$restored" --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" ||
+            echo "Could not remove the superseded snapshot $restored."
+        }
+        drop_superseded "$MALIGATOR_NATIVE_SHARED_PREFIX" "$MALIGATOR_NATIVE_SHARED_RESTORED_KEY" "$SHARED_REPLACEMENT"
+        drop_superseded "$MALIGATOR_NATIVE_CACHE_PREFIX" "$MALIGATOR_NATIVE_CACHE_RESTORED_KEY" "$LINE_REPLACEMENT"

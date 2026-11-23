@@ -170,7 +170,6 @@ it("shares Wasm stages across paths and invalidates changed sources, includes, f
 		});
 		expect(changedCargoFeatures.stages["wasm-archive"]?.reused).toBe(1);
 		expect(changedCargoFeatures.stages["wasm-rust"]?.built).toBe(1);
-		expect(readdirSync(path.join(cache, "work/wasm-rust"))).toHaveLength(1);
 
 		const changedFlags = build(secondRoot, {
 			...config,

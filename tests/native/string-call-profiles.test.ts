@@ -174,11 +174,17 @@ describe("dynamic string call differential", () => {
 					fixture,
 					`${cases.map(({ entry, expression, profile, name }) => dynamicCallProfileSource(entry, profile, expression, name)).join("\n")}
 function encode(value){return typeof value+':'+JSON.stringify(value);}
-const cases=[${cases.map(({ name, expression, profile }) => `[globalThis.${name},${expression === "+x"},${profile === "suspension"}]`).join(",")}];
+const cases=[${cases.map(({ name, expression, profile }) => `[globalThis.${name},${expression === "+x"},${JSON.stringify(profile)}]`).join(",")}];
 for(let index=0;index<cases.length;index++){
- const [run,numeric,generator]=cases[index];
- const values=numeric?[-Infinity,-1,-0,0,0.5,1,2,65536,1114111,1114112,Infinity,NaN]:['','a','ab a','A😀Z',' IİΣ ','e\\u0301','\\ud800','%F0%9F%98%80','%GG'];
- for(const value of values)for(const count of [0,3]){
+ const [run,numeric,profile]=cases[index];
+ const generator=profile==='suspension';
+ const loop=profile==='loop'||profile==='repeatedLoop';
+ // Check each builtin's coercion boundaries through its direct result. Other profiles
+ // exercise how the result and its effects survive control flow and representation changes.
+ const values=profile==='typed'
+  ? numeric?[-Infinity,-1,-0,0,0.5,1,2,65536,1114111,1114112,Infinity,NaN]:['','a','ab a','A😀Z',' IİΣ ','e\\u0301','\\ud800','%F0%9F%98%80','%GG']
+  : numeric?[1,65536]:['ab a','A😀Z'];
+ for(const value of values)for(const count of loop?[0,3]:[3]){
   const events=[];const input={[Symbol.toPrimitive](hint){events.push(hint);return value;}};
   try {
    const result=run(input,v=>{events.push(encode(v));return v;},count);
