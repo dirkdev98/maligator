@@ -11,7 +11,7 @@ import {
 	readArtifactAction,
 	withArtifactActionLock,
 } from "./artifact-store.ts";
-import { platformLinkArgs } from "./build-flags.ts";
+import { platformLinkArgs, unwindTableCcFlags } from "./build-flags.ts";
 import { cargoCacheDirectory } from "./cache-root.ts";
 import {
 	hashDirectoryTrees,
@@ -80,7 +80,7 @@ export function rustArtifactKey(inputs: RustArtifactKeyInputs): string {
 	return artifactActionKey(RUST_PRODUCER, inputs);
 }
 
-export const RUST_PRODUCER = artifactProducer("rust-library", 3, "cargo-build");
+export const RUST_PRODUCER = artifactProducer("rust-library", 4, "cargo-build");
 const RUST_TARGET_PRODUCER = artifactProducer("rust-target", 1, "cargo-build");
 
 type RustArchiveInputs = Pick<
@@ -151,7 +151,10 @@ export interface RustArtifacts extends Partial<RustBuildPlan> {
 
 type RustLibraryAction = ReturnType<typeof publishArtifactAction>;
 
-function cargoNativeToolEnvironment(context: NativeBuildContext): Record<string, string> {
+function cargoNativeToolEnvironment(
+	context: NativeBuildContext,
+	unwindFlags: ReadonlyArray<string>,
+): Record<string, string> {
 	const environment: Record<string, string> = {
 		CC: formatToolCommand(context.toolchain.tools.cc),
 		AR: context.toolchain.tools.ar.path,
@@ -166,31 +169,35 @@ function cargoNativeToolEnvironment(context: NativeBuildContext): Record<string,
 	if (context.toolchain.tools.cxx !== undefined) {
 		environment.CXX = formatToolCommand(context.toolchain.tools.cxx);
 	}
-	if (context.toolchain.cross === true) {
+	const cross = context.toolchain.cross === true;
+	if (cross) {
 		// The Zig command supplies its target in Zig syntax. Disabling cc-rs's
 		// defaults avoids a second target flag, but also removes its release flags.
 		environment.CC_KNOWN_WRAPPER_CUSTOM = path.basename(context.toolchain.tools.cc.path);
 		environment.CRATE_CC_NO_DEFAULTS = "1";
-		const releaseFlags = [
-			`-O${context.environment.CARGO_PROFILE_RELEASE_OPT_LEVEL ?? "3"}`,
-			"-DNDEBUG",
-			"-ffunction-sections",
-			"-fdata-sections",
-		];
-		// The bundled Ada parser reports errors through its C API. Its exception
-		// handlers are confined to the disabled std::regex URLPattern provider.
-		environment.CFLAGS = [
-			...releaseFlags,
-			context.environment.CFLAGS,
-			"-fno-sanitize=undefined",
-		]
+	}
+	if (cross || unwindFlags.length > 0) {
+		const releaseFlags = cross
+			? [
+					`-O${context.environment.CARGO_PROFILE_RELEASE_OPT_LEVEL ?? "3"}`,
+					"-DNDEBUG",
+					"-ffunction-sections",
+					"-fdata-sections",
+				]
+			: [];
+		const flags = [...releaseFlags, ...unwindFlags];
+		// Zig otherwise emits calls into UBSan from ordinary C and C++ builds.
+		const zigFlags = cross ? ["-fno-sanitize=undefined"] : [];
+		environment.CFLAGS = [...flags, context.environment.CFLAGS, ...zigFlags]
 			.filter((value) => value !== undefined && value !== "")
 			.join(" ");
+		// The bundled Ada parser reports errors through its C API. Its exception
+		// handlers are confined to the disabled std::regex URLPattern provider.
 		environment.CXXFLAGS = [
-			...releaseFlags,
+			...flags,
 			"-fno-exceptions",
 			context.environment.CXXFLAGS,
-			"-fno-sanitize=undefined",
+			...zigFlags,
 		]
 			.filter((value) => value !== undefined && value !== "")
 			.join(" ");
@@ -209,7 +216,27 @@ export function resolveRustArtifacts(context: NativeBuildContext): RustBuildPlan
 	if (context.toolchain.cross === true) {
 		cargoArguments.push("--target", context.toolchain.rustTarget);
 	}
-	const nativeToolEnvironment = cargoNativeToolEnvironment(context);
+	const unwindFlags = unwindTableCcFlags(
+		context.toolchain.platform ?? process.platform,
+		context.environment,
+	);
+	const nativeToolEnvironment = cargoNativeToolEnvironment(context, unwindFlags);
+	if (unwindFlags.length > 0) {
+		const flag = "-Cforce-unwind-tables=no";
+		const { CARGO_ENCODED_RUSTFLAGS, RUSTFLAGS } = context.environment;
+		if (CARGO_ENCODED_RUSTFLAGS !== undefined) {
+			nativeToolEnvironment.CARGO_ENCODED_RUSTFLAGS = CARGO_ENCODED_RUSTFLAGS
+				? `${CARGO_ENCODED_RUSTFLAGS}\x1f${flag}`
+				: flag;
+		} else if (RUSTFLAGS !== undefined) {
+			nativeToolEnvironment.RUSTFLAGS = RUSTFLAGS ? `${RUSTFLAGS} ${flag}` : flag;
+		} else {
+			cargoArguments.push(
+				"--config",
+				`target.${context.toolchain.rustTarget}.rustflags=["${flag}"]`,
+			);
+		}
+	}
 	const inputs: RustArtifactKeyInputs = {
 		cargoArguments,
 		environmentFingerprint: context.environmentFingerprint,

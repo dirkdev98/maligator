@@ -644,6 +644,9 @@ exit 7
 		);
 		const artifacts = resolveRustArtifacts(context);
 		expect(artifacts.cargoArguments).toContain(rustTarget);
+		expect(artifacts.cargoArguments).toContain(
+			`target.${rustTarget}.rustflags=["-Cforce-unwind-tables=no"]`,
+		);
 		expect(artifacts.library).toContain(
 			`${path.sep}${rustTarget}${path.sep}release${path.sep}`,
 		);
@@ -652,10 +655,24 @@ exit 7
 			ARFLAGS: "ar",
 			CC_KNOWN_WRAPPER_CUSTOM: "zig",
 			CRATE_CC_NO_DEFAULTS: "1",
-			CFLAGS: "-O3 -DNDEBUG -ffunction-sections -fdata-sections -fno-sanitize=undefined",
+			CFLAGS:
+				"-O3 -DNDEBUG -ffunction-sections -fdata-sections -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-sanitize=undefined",
 			CXXFLAGS:
-				"-O3 -DNDEBUG -ffunction-sections -fdata-sections -fno-exceptions -fno-sanitize=undefined",
+				"-O3 -DNDEBUG -ffunction-sections -fdata-sections -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-exceptions -fno-sanitize=undefined",
 		});
+		const sanitized = resolveRustArtifacts({
+			...context,
+			environment: { ...context.environment, MAL_ASAN: "1" },
+		});
+		expect(sanitized.cargoArguments).toEqual([
+			"build",
+			"--release",
+			"--all-features",
+			"--target",
+			rustTarget,
+		]);
+		expect(sanitized.nativeToolEnvironment.CFLAGS).not.toContain("-fno-unwind-tables");
+		expect(sanitized.nativeToolEnvironment.CXXFLAGS).not.toContain("-fno-unwind-tables");
 		const result = buildLocalBinary({
 			context,
 			name: "cross-output",
@@ -667,6 +684,9 @@ exit 7
 
 		const invocations = readFileSync(fake.logPath, "utf-8");
 		expect(invocations).toContain("zig cc -target x86_64-linux-gnu");
+		expect(invocations).toContain(
+			"-fno-omit-frame-pointer -fno-asynchronous-unwind-tables -fno-unwind-tables",
+		);
 		expect(invocations).toContain("zig ar rcs");
 		expect(invocations).toContain(
 			`cargo build --release --all-features --target ${rustTarget}`,
@@ -1704,7 +1724,9 @@ printf '!<arch>\\n' > "$2"
 		const cargoCompileCount = () =>
 			readFileSync(fake.logPath, "utf-8")
 				.split("\n")
-				.filter((line) => line === "cargo build --release --all-features").length;
+				.filter(
+					(line) => line.startsWith("cargo build ") && !line.includes("--message-format"),
+				).length;
 		writeFileSync(fake.logPath, "");
 
 		const lean = build(toolchain(false), {

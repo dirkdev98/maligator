@@ -351,6 +351,15 @@ export function runtimeSectionFlags(
 		: [];
 }
 
+export function unwindTableCcFlags(
+	platform: NodeJS.Platform,
+	env: NodeJS.ProcessEnv,
+): Array<string> {
+	return platform === "linux" && sanitizerMode(env) === "none"
+		? ["-fno-asynchronous-unwind-tables", "-fno-unwind-tables"]
+		: [];
+}
+
 /** Shared compiler flags; callers append the normalized feature defines. */
 export function ccExtraFlags(
 	plan?: NativeBuildPlan,
@@ -363,6 +372,7 @@ export function ccExtraFlags(
 		...optFlags(plan, env),
 		// Stack-trace capture walks frame-pointer chains through runtime and generated frames.
 		"-fno-omit-frame-pointer",
+		...unwindTableCcFlags(platform, env),
 		...SANITIZER_FLAGS[sanitizerMode(env)],
 		...perfStatsDefines(env),
 	];
