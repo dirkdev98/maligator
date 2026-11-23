@@ -44,6 +44,8 @@ const forbiddenComponents = {
 	"sqlite3.o": ({ object }) => /(?:^|[(-])sqlite3\.o\)?$/.test(object),
 	node_fs: ({ object }) => /(?:^|[(-])node_fs\.o\)?$/.test(object),
 	"Node streams": ({ object }) => /(?:^|[(-])node_stream\.o\)?$/.test(object),
+	"Full Node process support": ({ object }) =>
+		/(?:^|[(-])node_(?:process|events|async_hooks|inspect)\.o\)?$/.test(object),
 	"Fetch objects": ({ object }) => /(?:^|[(-])web_fetch\.o\)?$/.test(object),
 	"HTTP client": ({ object, symbol }) =>
 		/(?:^|[(-])(?:web_fetch_client|http_client)\.o\)?$/.test(object) ||
@@ -131,6 +133,13 @@ const fixtures: Array<{
 		file: "bench/size/node-hello.mjs",
 		bun: true,
 		forbidden: ["Ada", "sqlite3.o", "node_fs", "argon2", "Date timezone data"],
+		forbiddenLibraries: ["C++ runtime"],
+	},
+	{
+		name: "process-env",
+		file: "bench/size/process-env.mjs",
+		bun: true,
+		forbidden: ["Full Node process support", "Ada", "TLS", "sqlite3.o"],
 		forbiddenLibraries: ["C++ runtime"],
 	},
 	{

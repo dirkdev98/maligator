@@ -6319,6 +6319,27 @@ static bool mal_vm_locked_primordial_allows_set(
         mal_value_is_callable(own.desc.setter);
 }
 
+bool mal_vm_set_process_env(MalVm *vm, MalValue env, MalKey key, MalValue value) {
+    if (key.kind == MAL_KEY_SYMBOL) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Environment keys must be strings");
+        return false;
+    }
+    MalValue roots[] = {env, key.value, value};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalString *string;
+    bool applied = false;
+    if (mal_vm_to_string(vm, value, &string)) {
+        roots[2] = mal_value_from_string(string);
+        MalPropertyDesc desc = mal_intrinsic_data_desc(
+            roots[2], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+        applied = mal_object_define_own(mal_value_to_object(env), key, &desc) ==
+            MAL_DEFINE_OWN_APPLIED;
+    }
+    mal_gc_unroot(&root);
+    return applied;
+}
+
 /**
  * Spec [[Set]] returning the boolean success (never throwing on a plain
  * rejection) used by Reflect.set: an accessor invokes its setter with the
@@ -6331,14 +6352,16 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
         return mal_proxy_set(vm, mal_value_to_proxy_object(target), key, value, receiver);
     }
     if (mal_value_is_module_namespace_object(target)) return false;
-
-    if (target == receiver && mal_value_is_object(target) &&
-        mal_object_is_locked_primordial(mal_value_to_object(target))) {
-        if (!mal_vm_locked_primordial_allows_set(target, key)) {
+    if (target == receiver && mal_value_is_object(target)) {
+        MalObject *object = mal_value_to_object(target);
+        if (mal_object_is_locked_primordial(object) &&
+            !mal_vm_locked_primordial_allows_set(target, key)) {
             mal_primordials_throw_property_mutation(
                 vm, "Cannot assign locked primordial property '", key);
             return false;
         }
+        if (mal_object_is_process_environment(object))
+            return mal_vm_set_process_env(vm, target, key, value);
     }
 
     // IntegerIndexedElementSet coerces the value before checking index validity.
@@ -6481,6 +6504,8 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
         }
         return ok;
     }
+    if (target != receiver && mal_object_is_process_environment(mal_value_to_object(receiver)))
+        return mal_vm_set_process_env(vm, receiver, key, value);
     bool receiver_present;
     MalPropertyDesc receiver_desc;
     if (!mal_vm_get_own_property(
@@ -8515,7 +8540,7 @@ static __attribute__((noinline)) MalValue mal_vm_op_load_property_ic_static_miss
  * generic path because their stores carry cache invalidation duties.
  */
 static bool mal_vm_dictionary_try_overwrite(
-    MalVm *vm, MalValue object_value, MalValue key_value, MalValue value
+    MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, MalInlineCache *ic
 ) {
     MalTable *table = mal_vm_dictionary_receiver_table(object_value, key_value);
     if (table == nullptr) return false;
@@ -8524,15 +8549,37 @@ static bool mal_vm_dictionary_try_overwrite(
         object_value == vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]) {
         return false;
     }
-    MalTableLookup lookup = mal_table_lookup(
-        table, (MalKey) {.kind = MAL_KEY_STRING, .value = key_value});
-    if (!lookup.present) return false;
-    u8 flags = mal_table_entry_property_flags(table, lookup.entry);
+    void *entry = nullptr;
+    u8 flags;
+    if (table->process_environment) {
+        if (!mal_value_is_string(value)) return false;
+        MalValue previous;
+        if (ic->mode == MAL_IC_MODE_OWN_TABLE && ic->key == key_value &&
+            mal_table_named_hint_read(table, ic->entry, key_value, &previous, &flags)) {
+            entry = ic->entry;
+        }
+    }
+    if (entry == nullptr) {
+        MalTableLookup lookup = mal_table_lookup(
+            table, (MalKey) {.kind = MAL_KEY_STRING, .value = key_value});
+        if (!lookup.present) return false;
+        entry = lookup.entry;
+        flags = mal_table_entry_property_flags(table, entry);
+        if (table->process_environment && mal_ic_key_is_stable_string(key_value)) {
+            mal_perf_ic_note_replacement(ic, MAL_IC_MODE_OWN_TABLE);
+            mal_ic_detach_prototype_cache(ic);
+            *ic = (MalInlineCache) {
+                .key = key_value,
+                .entry = entry,
+                .mode = MAL_IC_MODE_OWN_TABLE,
+            };
+        }
+    }
     if ((flags & (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_INTERNAL_FLAGS)) !=
         MAL_PROPERTY_WRITABLE) {
         return false;
     }
-    mal_table_entry_set_value(table, lookup.entry, value);
+    mal_table_entry_set_value(table, entry, value);
     mal_gc_card(&object->header, value);
     MAL_PERF_COUNT(ic_store_dictionary_direct_hits);
     return true;
@@ -8735,7 +8782,7 @@ void mal_vm_op_store_property_ic(
             return;
         }
     }
-    if (mal_vm_dictionary_try_overwrite(vm, object_value, key_value, value)) return;
+    if (mal_vm_dictionary_try_overwrite(vm, object_value, key_value, value, ic)) return;
     MAL_PERF_COUNT(ic_store_fallbacks);
     if (!mal_vm_store_ic_receiver(object_value)) {
         MAL_PERF_COUNT(ic_store_other_generic);

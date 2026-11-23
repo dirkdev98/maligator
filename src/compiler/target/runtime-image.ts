@@ -17,12 +17,15 @@ import {
 	installerUsesHostPersonality,
 	installerUsesNodePersonality,
 	NODE_BUILTIN_LOADER_INSTALLER,
+	NODE_CONSOLE_HOOKS_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
 	NODE_FS_FULL_EXPORTS,
 	NODE_FS_INSTALLER,
 	NODE_FS_NAMED_INSTALLER,
 	NODE_FS_READ_STREAM_INSTALLER,
 	NODE_PERSONALITY_INSTALLER,
+	PROCESS_ENV_INSTALLER,
+	PROCESS_INSTALLER_SYMBOL,
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
 	WEB_FETCH_INSTALLER,
@@ -4025,7 +4028,8 @@ function buildHostInstalls(
 			exports: [],
 		});
 	}
-	if (usesNode) installFor(NODE_ERROR_HOOKS_INSTALLER);
+	const usesProcessEnv = retained.includes(PROCESS_ENV_INSTALLER);
+	if (usesNode || usesProcessEnv) installFor(NODE_ERROR_HOOKS_INSTALLER);
 
 	const bufferModule = hostInstallerSymbol("node:buffer");
 	const hasBufferModule =
@@ -4034,6 +4038,11 @@ function buildHostInstalls(
 	const world = context.facts.world;
 	for (const installer of retained) {
 		if (HOST_PERSONALITY_INSTALLERS.includes(installer)) continue;
+		if (usesNode && installer === NODE_CONSOLE_HOOKS_INSTALLER) continue;
+		if (installer === PROCESS_ENV_INSTALLER && usesNode) {
+			installFor(PROCESS_INSTALLER_SYMBOL);
+			continue;
+		}
 		if (hasBufferModule && installer === BUFFER_INSTALLER_SYMBOL) continue;
 		// An eval-enabled runtime supplies both engines even to spliced wire
 		// images, whose loaders don't run a host manifest.
@@ -4048,7 +4057,7 @@ function buildHostInstalls(
 	}
 	if (usesDisposalCapability) installFor(DISPOSABLE_STACK_INSTALLER);
 	if (
-		usesNode &&
+		(usesNode || usesProcessEnv) &&
 		!hasBufferModule &&
 		manifest.some(({ installer }) => installer === WEB_FETCH_INSTALLER)
 	) {

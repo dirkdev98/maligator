@@ -3,6 +3,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	assertResultPass,
 	buildNativeBinary,
@@ -200,3 +201,19 @@ describe("process on an entry without a host reactor", () => {
 		expect(r.stdout).toContain("PROCESS HOSTLESS PASS");
 	});
 });
+
+it("coerces and enumerates mutations of the shared environment under GC stress", () => {
+	const fixture = "tests/local/node-process-env.mjs";
+	const binary = buildNativeBinary({
+		fixture,
+		name: "node-process-env",
+		outDir,
+		config: resolveBuildConfig({ engine: { eval: false, realms: false } }),
+		production: true,
+	});
+	const expected = run(process.execPath, [fixture]);
+	expect(expected.status, expected.stderr).toBe(0);
+	const result = run(binary, [], { env: STRESS_ENV });
+	expect(result.status, result.stderr).toBe(0);
+	expect(result.stdout).toBe(expected.stdout);
+}, 120_000);

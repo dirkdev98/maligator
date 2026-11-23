@@ -302,6 +302,7 @@ MalTable *mal_table_new(void) {
     table->entry_count = 0;
     table->entry_capacity = 0;
     table->iterator_pins = 0;
+    table->process_environment = false;
     table->slots = nullptr;
     table->entries = nullptr;
 

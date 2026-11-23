@@ -39,6 +39,7 @@
 #include "node_path.h"
 #include "node_perf_hooks.h"
 #include "node_process.h"
+#include "node_process_env.h"
 #include "node_querystring.h"
 #include "node_readline.h"
 #include "node_sqlite.h"
@@ -92,10 +93,12 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_web_crypto);
     MATCH_INSTALLER(mal_host_install_web_personality);
     MATCH_INSTALLER(mal_host_install_node_web_personality);
+    MATCH_INSTALLER(mal_host_install_node_console_hooks);
     MATCH_INSTALLER(mal_host_install_node_error_hooks);
     MATCH_INSTALLER(mal_host_install_web_compression);
     MATCH_INSTALLER(mal_host_install_web_node_events);
     MATCH_INSTALLER(mal_host_install_process);
+    MATCH_INSTALLER(mal_host_install_process_env);
     MATCH_INSTALLER(mal_host_install_node_assert);
     MATCH_INSTALLER(mal_host_install_node_assert_strict);
     MATCH_INSTALLER(mal_host_install_node_async_hooks);

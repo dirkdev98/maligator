@@ -343,6 +343,17 @@ MalDefineOwnStatus mal_builtin_object_try_define_parsed(
     MalVm *vm, MalObject *target, MalKey key,
     const MalPropertyDescriptorParse *parsed
 ) {
+    if (mal_object_is_process_environment(target)) {
+        MalPropertyFlags required =
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+        if (!parsed->has_value || (parsed->desc.flags & required) != required) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Environment properties must be writable, enumerable, and configurable");
+            return MAL_DEFINE_OWN_REJECTED;
+        }
+        return mal_vm_set_process_env(vm, mal_value_from_object(target), key, parsed->desc.value)
+            ? MAL_DEFINE_OWN_APPLIED : MAL_DEFINE_OWN_REJECTED;
+    }
     MalPropertyLookup before = mal_object_get_own(target, key);
     MalDefineOwnStatus status =
         mal_builtin_object_try_define_parsed_impl(vm, target, key, parsed);

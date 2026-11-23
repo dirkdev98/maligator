@@ -9,6 +9,7 @@ import {
 	BUFFER_INSTALLER_SYMBOL,
 	HOST_GLOBAL_INSTALLERS,
 	isHostGlobal,
+	PROCESS_ENV_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
 	unsupportedHostApi,
 } from "./host-modules.ts";
@@ -115,7 +116,7 @@ export interface ModuleLinkage {
 	 * semantics; this marker only statically retains the native installer.
 	 * Undefined when these globals are unused or shadowed by locals. See {@link PROCESS_INSTALLER_SYMBOL}.
 	 */
-	hostProcess?: { installer: string };
+	hostProcess?: { installer: string; consoleHooks: boolean };
 
 	/** The free global `Buffer`, backed by the `node:buffer` module installer. */
 	hostBuffer?: { installer: string };
@@ -873,14 +874,19 @@ export function linkModules(
 			),
 		);
 	const unfollowed = members.unfollowed;
-	if (
+	const observesGlobal =
 		unfollowed ||
-		freeGlobalUsed("process") ||
 		freeGlobalUsed("global") ||
 		members.names.has("process") ||
-		members.names.has("global")
-	) {
-		linkage.hostProcess = { installer: PROCESS_INSTALLER_SYMBOL };
+		members.names.has("global");
+	if (observesGlobal || freeGlobalUsed("process")) {
+		const envOnly = !observesGlobal && program.files.every(readsOnlyProcessEnv);
+		linkage.hostProcess = {
+			installer: envOnly ? PROCESS_ENV_INSTALLER : PROCESS_INSTALLER_SYMBOL,
+			consoleHooks:
+				envOnly &&
+				(members.names.has("console") || !program.files.every(logsOnlyStrings)),
+		};
 	}
 	if (unfollowed || freeGlobalUsed("Buffer") || members.names.has("Buffer")) {
 		linkage.hostBuffer = { installer: BUFFER_INSTALLER_SYMBOL };
@@ -895,6 +901,77 @@ export function linkModules(
 	}
 
 	return linkage;
+}
+
+function readsOnlyProcessEnv(file: SemanticFile): boolean {
+	// A sloppy activation can obtain the global receiver without naming it.
+	if (!file.strict) return false;
+	const binding = file.scopes[0]?.bindings.find(
+		(candidate) => candidate.undeclared && candidate.name === "process",
+	);
+	if (!binding?.usageNodes.length) return true;
+	const reads = new Set<ESTree.Node>();
+	traverseEstree(file.ast.body, (node, { parent, key }) => {
+		if (
+			node.type !== "MemberExpression" ||
+			node.object.type !== "Identifier" ||
+			file.nodeToBinding.get(node.object) !== binding ||
+			staticMemberKey(node) !== "env"
+		)
+			return;
+		// Calls and tags pass the receiver. Deletion opens the lookup to inherited getters.
+		if (
+			(parent?.type === "CallExpression" && key === "callee") ||
+			(parent?.type === "TaggedTemplateExpression" && key === "tag") ||
+			(parent?.type === "UnaryExpression" && parent.operator === "delete") ||
+			parent?.type === "ChainExpression"
+		)
+			return;
+		reads.add(node.object);
+	});
+	return binding.usageNodes.every((use) => reads.has(use));
+}
+
+function logsOnlyStrings(file: SemanticFile): boolean {
+	const binding = file.scopes[0]?.bindings.find(
+		(candidate) => candidate.undeclared && candidate.name === "console",
+	);
+	if (!binding?.usageNodes.length) return true;
+	const calls = new Set<ESTree.Node>();
+	traverseEstree(file.ast.body, (node) => {
+		// Node formatting passes through a lone string without inspecting it.
+		if (
+			node.type === "CallExpression" &&
+			node.callee.type === "MemberExpression" &&
+			node.callee.object.type === "Identifier" &&
+			file.nodeToBinding.get(node.callee.object) === binding &&
+			staticMemberKey(node.callee) === "log" &&
+			node.arguments.length === 1 &&
+			isStringExpression(node.arguments[0]!)
+		) {
+			calls.add(node.callee.object);
+		}
+	});
+	return binding.usageNodes.every((use) => calls.has(use));
+}
+
+function isStringExpression(node: ESTree.Expression | ESTree.SpreadElement): boolean {
+	if (node.type === "BinaryExpression" && node.operator === "+") {
+		return (
+			(node.left.type !== "PrivateIdentifier" && isLiteralStringExpression(node.left)) ||
+			isLiteralStringExpression(node.right)
+		);
+	}
+	return isLiteralStringExpression(node);
+}
+
+function isLiteralStringExpression(
+	node: ESTree.Expression | ESTree.SpreadElement,
+): boolean {
+	return (
+		node.type === "TemplateLiteral" ||
+		(node.type === "Literal" && typeof node.value === "string")
+	);
 }
 
 function namedGlobalReflectReads(

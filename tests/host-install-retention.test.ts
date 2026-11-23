@@ -14,8 +14,10 @@ import {
 	HOST_PERSONALITY_INSTALLERS,
 	hostInstallerSymbol,
 	NODE_BUILTIN_LOADER_INSTALLER,
+	NODE_CONSOLE_HOOKS_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
 	NODE_PERSONALITY_INSTALLER,
+	PROCESS_ENV_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
@@ -305,6 +307,40 @@ ${tail}`,
 		expect([...manifest(source, defaultConfig).keys()]).toEqual([
 			NODE_ERROR_HOOKS_INSTALLER,
 		]);
+	});
+});
+
+describe("process environment retention", () => {
+	it.each([
+		["a property read", "console.log(`${process.env.PORT}`)", PROCESS_ENV_INSTALLER],
+		["a receiver escape", "console.log(process)", PROCESS_INSTALLER_SYMBOL],
+		[
+			"an env call",
+			"process.env = function () { this.exit(); }; process.env()",
+			PROCESS_INSTALLER_SYMBOL,
+		],
+		[
+			"a computed member",
+			"console.log(process[globalThis.member])",
+			PROCESS_INSTALLER_SYMBOL,
+		],
+	])("selects the process surface for %s", (_description, source, installer) => {
+		const installs = manifest(source, defaultConfig);
+		expect(
+			[PROCESS_ENV_INSTALLER, PROCESS_INSTALLER_SYMBOL].filter((name) =>
+				installs.has(name),
+			),
+		).toEqual([installer]);
+	});
+
+	it("retains Node formatting independently of the process methods", () => {
+		const installs = manifest(
+			"console.log('%o', { port: process.env.PORT })",
+			defaultConfig,
+		);
+		expect(installs.has(PROCESS_ENV_INSTALLER)).toBe(true);
+		expect(installs.has(NODE_CONSOLE_HOOKS_INSTALLER)).toBe(true);
+		expect(installs.has(PROCESS_INSTALLER_SYMBOL)).toBe(false);
 	});
 });
 

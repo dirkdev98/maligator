@@ -49,6 +49,7 @@ import {
 	HTTP_WITHOUT_WEBSOCKET_INSTALLER,
 	hostInstallerSymbol,
 	NODE_BUILTIN_LOADER_INSTALLER,
+	NODE_CONSOLE_HOOKS_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
 	NODE_FS_INSTALLER,
 	NODE_FS_READ_FILE_INSTALLER,
@@ -376,7 +377,7 @@ interface CoreFrontendContext {
 	 * `retained` becomes true when reachable compilation encounters it; program-image
 	 * then emits its slot-free installer manifest. Null otherwise.
 	 */
-	hostProcess: { installer: string; retained: boolean } | null;
+	hostProcess: { installer: string; retained: boolean; consoleHooks: boolean } | null;
 
 	/** Free global `Buffer`, installed by the same installer as `node:buffer`. */
 	hostBuffer: { installer: string; retained: boolean } | null;
@@ -1113,9 +1114,22 @@ export function constructSemanticProgramCore(
 	// Eval-generated images use the application's realm without running installers.
 	// Install every native host global before executing an eval-enabled application.
 	const runtimeEval = nativeRuntimeEval(program);
+	const closedGlobals =
+		program.facts.closure.sourceClosure.kind === "known" &&
+		program.facts.world.primordialPolicy === "locked" &&
+		program.facts.world.eval === "disabled" &&
+		!program.facts.world.realms &&
+		options.moduleExports === undefined &&
+		options.packageRoot === undefined;
 	program.hostProcess =
 		runtimeEval || linkage.hostProcess !== undefined
-			? { installer: PROCESS_INSTALLER_SYMBOL, retained: runtimeEval }
+			? {
+					installer:
+						(closedGlobals ? linkage.hostProcess?.installer : undefined) ??
+						PROCESS_INSTALLER_SYMBOL,
+					retained: runtimeEval,
+					consoleHooks: closedGlobals && linkage.hostProcess?.consoleHooks === true,
+				}
 			: null;
 	program.hostBuffer =
 		runtimeEval || linkage.hostBuffer !== undefined
@@ -1502,9 +1516,13 @@ function selectHostExportInstallers(
 }
 
 function slotFreeHostInstallers(program: CoreFrontendContext): Array<string> {
+	const consoleHooks = program.hostProcess?.retained && program.hostProcess.consoleHooks;
 	return [program.hostProcess, program.hostBuffer, ...program.hostGlobals]
 		.flatMap((host) => (host?.retained === true ? [host.installer] : []))
-		.concat(program.nodeModuleInstaller ?? []);
+		.concat(
+			consoleHooks ? [NODE_CONSOLE_HOOKS_INSTALLER] : [],
+			program.nodeModuleInstaller ?? [],
+		);
 }
 
 /** Source-module cells can be supplied by an earlier image, including its private bindings. */

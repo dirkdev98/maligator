@@ -39,7 +39,7 @@ static void personality_web(MalVm *vm) {
 
 static void personality_node(MalVm *vm) {
     if (!personality_begin(vm, true)) return;
-    vm->console_node_hooks = &node_console_hooks;
+    mal_host_install_node_console_hooks(vm, nullptr, 0, nullptr);
     if (mal_host(vm) == nullptr) return;
     mal_host_timers_install(vm, personality_global(vm));
     mal_node_immediates_install(vm, personality_global(vm));
@@ -59,6 +59,14 @@ void mal_host_install_node_web_personality(
     (void) count;
     (void) launch;
     personality_node(vm);
+}
+
+void mal_host_install_node_console_hooks(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    (void) slots;
+    (void) count;
+    (void) launch;
+    vm->console_node_hooks = &node_console_hooks;
 }
 
 MalHostInstaller mal_runtime_image_personality(

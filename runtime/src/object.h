@@ -191,6 +191,11 @@ static inline bool mal_object_has_public_overflow(const MalObject *object) {
     return mal_object_overflow(object) != nullptr && !object->overflow_private_only;
 }
 
+static inline bool mal_object_is_process_environment(const MalObject *object) {
+    const MalTable *properties = mal_object_overflow(object);
+    return properties != nullptr && properties->process_environment;
+}
+
 enum { MAL_OBJECT_BORROWED_FUNCTION_STORAGE = UINT8_MAX };
 
 /** The definition owns the original property slots until this function needs a writable copy. */

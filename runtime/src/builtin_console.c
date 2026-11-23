@@ -123,7 +123,7 @@ static bool console_instance_stream(MalVm *vm, FILE *stream, MalValue *out) {
         stream == stderr ? "stderr" : "stdout", out);
 }
 
-// Only the Node personality registers hooks, so their presence selects Node's console.
+// Node formatting is installed independently of the other process services.
 static bool console_node(const MalVm *vm) {
     return vm->console_node_hooks != nullptr;
 }
@@ -172,6 +172,10 @@ bool mal_console_node_format(MalVm *vm, FILE *stream, MalTextBuffer *out, const 
 }
 
 static bool console_format(MalVm *vm, FILE *stream, MalTextBuffer *out, const MalValue *args, i32 argc) {
+    if (argc == 1 && mal_value_is_string(args[0]) && mal_value_is_undefined(console_receiver)) {
+        mal_text_buffer_append_string(out, mal_value_to_string(args[0]));
+        return console_buffer_ok(vm, out);
+    }
     if (console_node(vm)) return vm->console_node_hooks->format(vm, stream, out, args, argc);
     for (i32 i = 0; i < argc; i++) {
         if (i > 0) mal_text_buffer_push(out, ' ');

@@ -557,6 +557,7 @@ bool mal_vm_to_number(MalVm *vm, MalValue value, f64 *out);
  * writes the resulting string.
  */
 bool mal_vm_to_string(MalVm *vm, MalValue value, MalString **out);
+bool mal_vm_set_process_env(MalVm *vm, MalValue env, MalKey key, MalValue value);
 
 /**
  * Spec ToNumeric: ToPrimitive(number) then, if the primitive is a BigInt, keep

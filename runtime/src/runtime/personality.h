@@ -12,6 +12,8 @@ void mal_host_install_web_personality(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);
 void mal_host_install_node_web_personality(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);
+void mal_host_install_node_console_hooks(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);
 
 /** Combine an image's personality with the earlier images' selection. */
 MalHostInstaller mal_runtime_image_personality(

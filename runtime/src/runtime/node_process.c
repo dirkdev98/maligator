@@ -1,4 +1,5 @@
 #include "node_process.h"
+#include "node_process_env.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -49,21 +50,6 @@
 #include "vm.h"
 #include "vm_ops.h"
 #include "web_host_timer.h"
-
-// The process environment. On Darwin the real environ of an executable is reached
-// through _NSGetEnviron(); the bare `extern char **environ` only resolves in a
-// non-dylib main image, so the crt_externs form is the portable one here.
-#if defined(__APPLE__)
-#include <crt_externs.h>
-static char **mal_process_environ(void) {
-    return *_NSGetEnviron();
-}
-#else
-extern char **environ;
-static char **mal_process_environ(void) {
-    return environ;
-}
-#endif
 
 #define MAL_PROCESS_VISIBLE \
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
@@ -121,41 +107,6 @@ static MalValue mal_process_build_argv(MalVm *vm, const MalHostLaunchContext *la
 
     mal_gc_unroot(&rs);
     return argv_val;
-}
-
-// process.env: an enumerable own-property snapshot of the environment taken once at
-// install. A plain object (not Node's live proxy) — sufficient for reads,
-// Object.keys, and spread, which is all this slice promises.
-static MalValue mal_process_build_env(MalVm *vm) {
-    MalValue env_val = mal_value_from_object(mal_intrinsic_new_object(vm));
-    MalRootSpan rs;
-    mal_gc_root(&rs, &env_val, 1);
-    MalObject *env = mal_value_to_object(env_val);
-
-    char **entries = mal_process_environ();
-    for (usize i = 0; entries != nullptr && entries[i] != nullptr; i++) {
-        const char *entry = entries[i];
-        const char *eq = strchr(entry, '=');
-        // Skip a malformed entry with no '=' or an empty name ("=VALUE").
-        if (eq == nullptr || eq == entry) {
-            continue;
-        }
-        MalValue name = mal_process_utf8_string_n(vm, entry, (usize) (eq - entry));
-        MalRootSpan name_rs;
-        mal_gc_root(&name_rs, &name, 1);
-        MalValue value = mal_process_utf8_string(vm, eq + 1);
-        MalRootSpan value_rs;
-        mal_gc_root(&value_rs, &value, 1);
-        MalKey key;
-        if (mal_vm_value_to_property_key(vm, name, &key)) {
-            mal_object_set(env, key, value);
-        }
-        mal_gc_unroot(&value_rs);
-        mal_gc_unroot(&name_rs);
-    }
-
-    mal_gc_unroot(&rs);
-    return env_val;
 }
 
 static MalValue mal_process_cwd(
@@ -1722,11 +1673,7 @@ void mal_host_install_process(
         vm, process, (const byte *) "argv0", exec_path, data_flags);
     mal_gc_unroot(&exec_path_root);
 
-    MalValue env = mal_process_build_env(vm);
-    MalRootSpan env_root;
-    mal_gc_root(&env_root, &env, 1);
-    mal_intrinsic_define_data(vm, process, (const byte *) "env", env, data_flags);
-    mal_gc_unroot(&env_root);
+    mal_process_define_env(vm, process);
 
     MalValue stdout_value = mal_process_build_stdio(vm, STDOUT_FILENO);
     MalRootSpan stdout_root;

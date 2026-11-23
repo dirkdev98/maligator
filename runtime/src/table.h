@@ -37,6 +37,7 @@ struct MalTable {
     u32 entry_count;
     u32 entry_capacity;
     u32 iterator_pins;
+    bool process_environment;
     i32 *slots;
     MalTableEntry *entries;
 };

@@ -62,6 +62,7 @@ export function hostInstallerSymbol(specifier: string): string {
  * single global slot (see {@link ../runtime/src/vm.h#MalHostProcessInstaller}).
  */
 export const PROCESS_INSTALLER_SYMBOL = "mal_host_install_process";
+export const PROCESS_ENV_INSTALLER = "mal_host_install_process_env";
 
 /**
  * Lets runtime-generated code load any builtin by name. It links every `node:*`
@@ -279,13 +280,15 @@ export const HOST_PERSONALITY_INSTALLERS: ReadonlyArray<string> = [
  * request the hooks independently of the Node personality.
  */
 export const NODE_ERROR_HOOKS_INSTALLER = "mal_host_install_node_error_hooks";
+export const NODE_CONSOLE_HOOKS_INSTALLER = "mal_host_install_node_console_hooks";
 
 /** Whether an installer belongs to the Node host and builds on `NODE_PERSONALITY_INSTALLER`. */
 export function installerUsesNodePersonality(installer: string): boolean {
 	return (
 		installer === PROCESS_INSTALLER_SYMBOL ||
 		(installer.startsWith("mal_host_install_node_") &&
-			installer !== NODE_ERROR_HOOKS_INSTALLER)
+			installer !== NODE_ERROR_HOOKS_INSTALLER &&
+			installer !== NODE_CONSOLE_HOOKS_INSTALLER)
 	);
 }
 
