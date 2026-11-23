@@ -12,6 +12,7 @@ import {
 	HOST_GLOBAL_INSTALLERS,
 	HOST_MODULES,
 	HOST_PERSONALITY_INSTALLERS,
+	NODE_BUILTIN_LOADER_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
 } from "../src/compiler/frontend/host-modules.ts";
@@ -571,6 +572,16 @@ globalThis.sink = read({process: 1});`,
 });
 
 describe("lazy source builtin providers", () => {
+	it.each([
+		["global identity comparison", "globalThis.sink = global === globalThis;"],
+		["literal process membership test", 'globalThis.sink = "env" in process;'],
+	])("keeps the host object selective for a %s", (_use, source) => {
+		const image = compile(source);
+		const installers = image.runtime.hostInstalls.map(({ installer }) => installer);
+		expect(installers).toContain(PROCESS_INSTALLER_SYMBOL);
+		expect(installers).not.toContain(NODE_BUILTIN_LOADER_INSTALLER);
+	});
+
 	it("retains only the named host global for a locked Reflect.get read", () => {
 		const image = compile('globalThis.sink = Reflect.get(globalThis, "Buffer");');
 		const hostGlobals = new Set([

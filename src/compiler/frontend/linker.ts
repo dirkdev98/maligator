@@ -965,7 +965,7 @@ function collectGlobalAndStringMemberUses(
 			const binding = file.nodeToBinding.get(node);
 			return binding?.undeclared === true && globalNames.includes(binding.name);
 		};
-		// A read of one known property or a typeof test can keep the global object local.
+		// Named reads and identity tests let the linker retain globals individually.
 		const followed = new Set<ESTree.Node>();
 		if (
 			followEntryReflectGet &&
@@ -999,6 +999,14 @@ function collectGlobalAndStringMemberUses(
 			}
 			if (node.type === "UnaryExpression" && node.operator === "typeof") {
 				if (isGlobalObject(node.argument)) followed.add(node.argument);
+				return;
+			}
+			if (
+				node.type === "BinaryExpression" &&
+				(node.operator === "===" || node.operator === "!==")
+			) {
+				if (isGlobalObject(node.left)) followed.add(node.left);
+				if (isGlobalObject(node.right)) followed.add(node.right);
 				return;
 			}
 			if (node.type !== "MemberExpression" || !isGlobalObject(node.object)) return;

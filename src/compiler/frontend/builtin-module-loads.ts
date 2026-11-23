@@ -84,6 +84,13 @@ export function builtinModuleLoads(file: SemanticFile): BuiltinModuleLoads {
 			tested.add(node);
 			followed.add(node);
 		} else if (
+			(parent.type === "BinaryExpression" &&
+				(parent.operator === "===" ||
+					parent.operator === "!==" ||
+					(parent.operator === "in" &&
+						key === "right" &&
+						parent.left.type === "Literal" &&
+						typeof parent.left.value === "string"))) ||
 			(parent.type === "MemberExpression" &&
 				key === "object" &&
 				staticMemberKey(parent) !== undefined) ||

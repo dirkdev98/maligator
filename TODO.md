@@ -743,6 +743,10 @@ The target is the complete ECMA-429 server surface except WebAssembly.
 - [ ] modules: make dynamic CommonJS wrapper `require` opt-in. Enable the runtime
       lookup and retain the builtin loader together when the option is selected.
 
+- [ ] modules: prove which methods receive `process` across package calls before
+      pruning the builtin loader. Track aliases of the EventEmitter prototype
+      through descriptor reads and writes. Keep builtin loading through overrides.
+
 - [ ] modules: createRequire with a computed specifier, or a base other than
       `import.meta.url`, resolves only what the module graph bundled from literal
       specifiers. import.meta.resolve does not resolve `#` package imports, does not

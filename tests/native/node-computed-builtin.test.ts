@@ -16,6 +16,7 @@ const fixtures = {
 	selective: "tests/local/node-link-cjs-computed.cjs",
 	eval: "tests/local/node-computed-builtin-eval.cjs",
 	literal: "tests/local/node-literal-builtin.mjs",
+	receiverOverride: "tests/local/node-builtin-receiver-override.cjs",
 };
 const outDir = mkdtempSync(join(tmpdir(), "mal-node-computed-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
@@ -78,4 +79,6 @@ describe("native builtin loading", () => {
 		verify("eval", ["node:os"], "TypeError: dynamic require is not supported\n"));
 	it("loads literal getBuiltinModule names without the builtin loader", () =>
 		compare("literal", []));
+	it("loads a builtin from the process receiver of an overridden listener method", () =>
+		compare("receiverOverride", ["getBuiltinModule"]));
 });
