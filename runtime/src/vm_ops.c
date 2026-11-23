@@ -5471,6 +5471,28 @@ MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue rig
     return result;
 }
 
+__attribute__((noinline)) MalValue mal_vm_add_number_left(MalVm *vm, f64 left, MalValue right) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;
+    if (mal_ops_is_number(right)) {
+        return mal_ops_number_value(left + mal_ops_number_as_f64(right));
+    }
+    if (!mal_value_is_object(right)) {
+        return mal_vm_binary_op(vm, MAL_BIN_ADD, mal_ops_number_value(left), right);
+    }
+
+    // The primitive returned by user code can be a String or BigInt needed by the dispatcher.
+    MalRootSpan span;
+    mal_gc_root(&span, &right, 1);
+    MalValue result = MAL_VALUE_UNDEFINED;
+    if (mal_vm_to_primitive(vm, right, MAL_TO_PRIMITIVE_DEFAULT, &right)) {
+        result = mal_ops_is_number(right)
+            ? mal_ops_number_value(left + mal_ops_number_as_f64(right))
+            : mal_vm_binary_dispatch(vm, MAL_BIN_ADD, mal_ops_number_value(left), right);
+    }
+    mal_gc_unroot(&span);
+    return result;
+}
+
 void mal_op_binary(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.binary.dst] = mal_vm_binary_op(
         callable->vm,

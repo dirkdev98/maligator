@@ -143,6 +143,33 @@ dynamicRemainder(
 );
 record(remainderCoercions.join(","));
 
+function mixedAddition(left, right) {
+	try {
+		record(left * 0.5 + right);
+	} catch (error) {
+		record(error.name);
+	}
+}
+
+globalThis.mixedAddition = mixedAddition;
+mixedAddition(-0, -0);
+mixedAddition(NaN, 1);
+mixedAddition(4, " units");
+for (const value of [5, " units", 7n, Symbol("right"), {}]) {
+	mixedAddition(4, {
+		[Symbol.toPrimitive](hint) {
+			record(hint);
+			return value;
+		},
+	});
+}
+mixedAddition(4, {
+	valueOf() {
+		record("throwing valueOf");
+		throw new Error("addition coercion");
+	},
+});
+
 function general(x) {
 	try {
 		record(x + 2);

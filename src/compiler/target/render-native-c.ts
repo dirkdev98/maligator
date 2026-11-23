@@ -12327,6 +12327,12 @@ class NativeInstructionEmission {
 				? this.context.facts.inputKindMasks
 				: undefined;
 		const binaryValue = (): string => {
+			if (
+				operator === "+" &&
+				this.reps[left] === "number" &&
+				this.reps[right] === "boxed"
+			)
+				return `mal_vm_add_number_left(vm, ${this.inputValue(left)}, ${this.boxed(right)})`;
 			const comparison = BOXED_COMPARE[operator];
 			// Value helpers neither invoke object hooks nor report Symbol comparison errors.
 			return comparison !== undefined &&

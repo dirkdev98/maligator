@@ -1101,6 +1101,8 @@ static inline void mal_perf_binary_number_fallback(MalBinaryOp op) {
  */
 MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue right);
 
+MalValue mal_vm_add_number_left(MalVm *vm, f64 left, MalValue right);
+
 /**
  * Arithmetic, bitwise or shift operator over two BigInt operands, excluding `>>>`.
  * Compiled code calls it once both operand kinds are proven, so a constant operator
