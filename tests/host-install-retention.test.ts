@@ -6,6 +6,10 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { parseCliArgs } from "../src/cli.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import {
+	DATE_INSTALLER,
+	INTRINSIC_INSTALLERS,
+} from "../src/compiler/frontend/engine-components.ts";
+import {
 	HOST_PERSONALITY_INSTALLER,
 	HOST_PERSONALITY_INSTALLERS,
 	hostInstallerSymbol,
@@ -93,6 +97,7 @@ function reachedInstallers(installs: Map<string, Array<string>>): Array<string> 
 	return [...installs.keys()].filter(
 		(installer) =>
 			!HOST_PERSONALITY_INSTALLERS.includes(installer) &&
+			!INTRINSIC_INSTALLERS.includes(installer) &&
 			installer !== NODE_ERROR_HOOKS_INSTALLER,
 	);
 }
@@ -172,6 +177,27 @@ describe("language component retention", () => {
 			defaultConfig,
 		);
 		expect(installs.has(REGEXP_INSTALLER)).toBe(true);
+	});
+});
+
+describe("intrinsic family retention", () => {
+	it("selects Date for a named global read", () => {
+		const installs = manifest(`console.log(globalThis.Date.name);`, defaultConfig);
+		expect([...installs.keys()]).toEqual([DATE_INSTALLER]);
+	});
+
+	it("preserves every optional global when the global object escapes", () => {
+		const installs = manifest(
+			`console.log(Object.getOwnPropertyNames(globalThis));`,
+			defaultConfig,
+		);
+		expect([...installs.keys()]).toEqual(expect.arrayContaining(INTRINSIC_INSTALLERS));
+	});
+
+	it("preserves every optional global for mutable primordials", () => {
+		const config = resolveBuildConfig({ engine: { primordials: "mutable" } });
+		const installs = manifest(`console.log("hello");`, config);
+		expect([...installs.keys()]).toEqual(expect.arrayContaining(INTRINSIC_INSTALLERS));
 	});
 });
 
@@ -274,7 +300,7 @@ ${tail}`,
 	it.each([
 		"Error.captureStackTrace({});",
 		"Error.prepareStackTrace = () => 'custom';",
-		"globalThis.sink = Error.stackTraceLimit;",
+		"console.log(Error.stackTraceLimit);",
 	])("selects Node's Error hooks without a personality for %s", (source) => {
 		expect([...manifest(source, defaultConfig).keys()]).toEqual([
 			NODE_ERROR_HOOKS_INSTALLER,

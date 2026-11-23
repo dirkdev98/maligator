@@ -1,0 +1,4 @@
+#include "builtin_disposable_stack.h"
+#include "language_components.h"
+
+MAL_LANGUAGE_COMPONENT_UNIT(mal_host_install_intrinsic_disposable_stack, MAL_LANGUAGE_COMPONENT_DISPOSABLE_STACK, mal_builtin_disposable_stack_install, nullptr)

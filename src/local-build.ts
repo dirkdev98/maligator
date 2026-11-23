@@ -1239,11 +1239,10 @@ function linkLocalBinary(
 	const mainSource = readFileSync(mainFile);
 	const languageComponents: Array<GeneratedObjectInput> = [];
 	const componentLinkArgs: Array<string> = [];
-	if (context.features.intlEnabled || context.features.temporalEnabled) {
-		const main = path.basename(mainFile);
-		const hasComponentAnchor = ["dev_main.c", "load_main.c", "test262_wire.c"].includes(
-			main,
-		);
+	const hasComponentAnchor = ["dev_main.c", "load_main.c", "test262_wire.c"].includes(
+		path.basename(mainFile),
+	);
+	if (resolvesByName || hasComponentAnchor) {
 		if (resolvesByName && !hasComponentAnchor) {
 			// Wire manifests carry names without linker references.
 			const unitId = "wire-language-components";
@@ -1258,11 +1257,9 @@ function linkLocalBinary(
 				role: "driver",
 			});
 		}
-		if (resolvesByName || hasComponentAnchor) {
-			const prefix =
-				(context.toolchain.platform ?? process.platform) === "darwin" ? "_" : "";
-			componentLinkArgs.push(`-Wl,-u,${prefix}mal_wire_language_components`);
-		}
+		const prefix =
+			(context.toolchain.platform ?? process.platform) === "darwin" ? "_" : "";
+		componentLinkArgs.push(`-Wl,-u,${prefix}mal_wire_language_components`);
 	}
 	const runtimeLinkArgs = [...componentLinkArgs, ...artifacts.linkArgs];
 	const { objects: generatedObjects, projectionDurationMs } = ensureGeneratedObjects(

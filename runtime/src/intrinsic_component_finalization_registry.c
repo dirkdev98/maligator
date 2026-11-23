@@ -1,0 +1,4 @@
+#include "builtin_finalization_registry.h"
+#include "language_components.h"
+
+MAL_LANGUAGE_COMPONENT_UNIT(mal_host_install_intrinsic_finalization_registry, MAL_LANGUAGE_COMPONENT_FINALIZATION_REGISTRY, mal_builtin_finalization_registry_install, nullptr)

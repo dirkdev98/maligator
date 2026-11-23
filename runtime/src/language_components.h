@@ -19,6 +19,16 @@
  */
 
 typedef enum MalLanguageComponentId {
+    MAL_LANGUAGE_COMPONENT_MAP,
+    MAL_LANGUAGE_COMPONENT_SET,
+    MAL_LANGUAGE_COMPONENT_WEAK_REF,
+    MAL_LANGUAGE_COMPONENT_FINALIZATION_REGISTRY,
+    MAL_LANGUAGE_COMPONENT_DISPOSABLE_STACK,
+    MAL_LANGUAGE_COMPONENT_MATH,
+    MAL_LANGUAGE_COMPONENT_JSON,
+    MAL_LANGUAGE_COMPONENT_ATOMICS,
+    MAL_LANGUAGE_COMPONENT_PROXY,
+    MAL_LANGUAGE_COMPONENT_DATE,
     MAL_LANGUAGE_COMPONENT_TEMPORAL,
     // The namespace precedes its services, which install onto it.
     MAL_LANGUAGE_COMPONENT_INTL,
@@ -47,6 +57,16 @@ typedef struct MalLanguageComponent {
 
 #define MAL_LANGUAGE_COMPONENT_INSTALLER(name) \
     void name(MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch)
+MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intrinsic_map);
+MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intrinsic_set);
+MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intrinsic_weak_ref);
+MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intrinsic_finalization_registry);
+MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intrinsic_disposable_stack);
+MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intrinsic_math);
+MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intrinsic_json);
+MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intrinsic_atomics);
+MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intrinsic_proxy);
+MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intrinsic_date);
 MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_temporal);
 MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intl);
 MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intl_collator);

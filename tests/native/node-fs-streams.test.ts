@@ -50,3 +50,20 @@ it("keeps the named filesystem binding when getBuiltinModule loads the complete 
 		rmSync(outDir, { recursive: true, force: true });
 	}
 });
+
+it("gives filesystem timestamps local Date behavior without a global Date read", () => {
+	const outDir = mkdtempSync(path.join(tmpdir(), "mal-fs-stats-date-"));
+	try {
+		const binary = buildNativeBinary({
+			fixture: "tests/local/node-fs-stats-date.mjs",
+			name: "node-fs-stats-date",
+			mainFile: HOST_MAIN,
+			evalEnabled: false,
+			outDir,
+		});
+		const env = { ...STRESS_ENV, TZ: "America/New_York" };
+		expect(runToStdout(binary, { env }).trim()).toBe("300 240");
+	} finally {
+		rmSync(outDir, { recursive: true, force: true });
+	}
+});

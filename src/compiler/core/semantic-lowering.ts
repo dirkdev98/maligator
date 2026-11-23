@@ -1311,8 +1311,9 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 				...program.languageInstallers,
 				...engineComponentInstallers(
 					program.semantic,
-					program.facts.world,
+					program.facts,
 					moduleLinks !== undefined,
+					program.globalObjectReads,
 				),
 			];
 	CoreEditor.configureProgram(program.core, {

@@ -12,28 +12,18 @@
 #include "builtin_boolean.h"
 #include "builtin_console.h"
 #include "builtin_data_view.h"
-#include "builtin_date.h"
-#include "builtin_disposable_stack.h"
 #include "language_components.h"
 #include "builtin_typed_array.h"
-#include "builtin_atomics.h"
 #include "builtin_error.h"
 #include "builtin_function.h"
 #include "builtin_generator.h"
 #include "builtin_iterator.h"
 #include "builtin_iterator_helpers.h"
-#include "builtin_json.h"
-#include "builtin_map.h"
-#include "builtin_math.h"
 #include "builtin_number.h"
 #include "builtin_object.h"
 #include "builtin_promise.h"
-#include "builtin_proxy.h"
 #include "builtin_regexp.h"
 #include "builtin_reflect.h"
-#include "builtin_finalization_registry.h"
-#include "builtin_set.h"
-#include "builtin_weak_ref.h"
 #include "builtin_string.h"
 #include "builtin_symbol.h"
 #if MAL_REALMS
@@ -689,15 +679,14 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_builtin_generator_install(vm);
     mal_builtin_async_generator_install(vm);
     mal_builtin_array_install(vm);
-    mal_builtin_map_install(vm);
-    mal_builtin_set_install(vm);
-    mal_builtin_weak_ref_install(vm);
-    mal_builtin_finalization_registry_install(vm);
+    mal_language_components_install(
+        vm, MAL_LANGUAGE_COMPONENT_MAP, MAL_LANGUAGE_COMPONENT_FINALIZATION_REGISTRY);
     mal_builtin_array_buffer_install(vm);
     mal_builtin_typed_array_install(vm);
     mal_builtin_data_view_install(vm);
     mal_builtin_error_install(vm);
-    mal_builtin_disposable_stack_install(vm);
+    mal_language_components_install(
+        vm, MAL_LANGUAGE_COMPONENT_DISPOSABLE_STACK, MAL_LANGUAGE_COMPONENT_DISPOSABLE_STACK);
 #if MAL_PROFILE && MAL_PERF_STATS
     vm->heap.profile_native_category = MAL_PROFILE_SITE_RUNTIME_STRING;
 #endif
@@ -707,15 +696,15 @@ void mal_intrinsics_init(MalVm *vm) {
 #endif
     mal_builtin_number_install(vm);
     mal_builtin_boolean_install(vm);
-    mal_builtin_math_install(vm);
-    mal_builtin_json_install(vm);
-    mal_builtin_atomics_install(vm);
+    mal_language_components_install(
+        vm, MAL_LANGUAGE_COMPONENT_MATH, MAL_LANGUAGE_COMPONENT_ATOMICS);
     mal_builtin_reflect_install(vm);
-    mal_builtin_proxy_install(vm);
+    mal_language_components_install(
+        vm, MAL_LANGUAGE_COMPONENT_PROXY, MAL_LANGUAGE_COMPONENT_PROXY);
     mal_builtin_console_install(vm);
     mal_builtin_promise_install(vm);
-    mal_builtin_date_install(vm);
-    mal_language_components_install(vm, MAL_LANGUAGE_COMPONENT_TEMPORAL, MAL_LANGUAGE_COMPONENT_TEMPORAL);
+    mal_language_components_install(
+        vm, MAL_LANGUAGE_COMPONENT_DATE, MAL_LANGUAGE_COMPONENT_TEMPORAL);
 #if MAL_PROFILE && MAL_PERF_STATS
     vm->heap.profile_native_category = MAL_PROFILE_SITE_RUNTIME_REGEXP;
 #endif
@@ -1025,6 +1014,12 @@ static MalValue mal_intrinsic_perf_stats_reset(
 /**
  * Expose the intrinsics as properties of a globalThis namespace object.
  */
+static void mal_intrinsic_define_optional_global(
+    MalVm *vm, MalObject *global, const byte *name, MalIntrinsic intrinsic, MalPropertyFlags flags) {
+    MalValue value = vm->intrinsics[intrinsic];
+    if (!mal_value_is_undefined(value)) mal_intrinsic_define_data(vm, global, name, value, flags);
+}
+
 static void mal_intrinsics_init_global_this(MalVm *vm) {
     MalObject *global_this = mal_intrinsic_new_object(vm);
     vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS] = mal_value_from_object(global_this);
@@ -1046,12 +1041,12 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "Boolean", vm->intrinsics[MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Symbol", vm->intrinsics[MAL_INTRINSIC_SYMBOL_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "BigInt", vm->intrinsics[MAL_INTRINSIC_BIGINT_CONSTRUCTOR], flags);
-    mal_intrinsic_define_data(vm, global_this, "Map", vm->intrinsics[MAL_INTRINSIC_MAP_CONSTRUCTOR], flags);
-    mal_intrinsic_define_data(vm, global_this, "Set", vm->intrinsics[MAL_INTRINSIC_SET_CONSTRUCTOR], flags);
-    mal_intrinsic_define_data(vm, global_this, "WeakMap", vm->intrinsics[MAL_INTRINSIC_WEAK_MAP_CONSTRUCTOR], flags);
-    mal_intrinsic_define_data(vm, global_this, "WeakSet", vm->intrinsics[MAL_INTRINSIC_WEAK_SET_CONSTRUCTOR], flags);
-    mal_intrinsic_define_data(vm, global_this, "WeakRef", vm->intrinsics[MAL_INTRINSIC_WEAK_REF_CONSTRUCTOR], flags);
-    mal_intrinsic_define_data(vm, global_this, "FinalizationRegistry", vm->intrinsics[MAL_INTRINSIC_FINALIZATION_REGISTRY_CONSTRUCTOR], flags);
+    mal_intrinsic_define_optional_global(vm, global_this, "Map", MAL_INTRINSIC_MAP_CONSTRUCTOR, flags);
+    mal_intrinsic_define_optional_global(vm, global_this, "Set", MAL_INTRINSIC_SET_CONSTRUCTOR, flags);
+    mal_intrinsic_define_optional_global(vm, global_this, "WeakMap", MAL_INTRINSIC_WEAK_MAP_CONSTRUCTOR, flags);
+    mal_intrinsic_define_optional_global(vm, global_this, "WeakSet", MAL_INTRINSIC_WEAK_SET_CONSTRUCTOR, flags);
+    mal_intrinsic_define_optional_global(vm, global_this, "WeakRef", MAL_INTRINSIC_WEAK_REF_CONSTRUCTOR, flags);
+    mal_intrinsic_define_optional_global(vm, global_this, "FinalizationRegistry", MAL_INTRINSIC_FINALIZATION_REGISTRY_CONSTRUCTOR, flags);
     mal_intrinsic_define_data(vm, global_this, "ArrayBuffer", vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "SharedArrayBuffer", vm->intrinsics[MAL_INTRINSIC_SHARED_ARRAY_BUFFER_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Int8Array", vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_INT8_CONSTRUCTOR], flags);
@@ -1070,23 +1065,21 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "parseFloat", vm->intrinsics[MAL_INTRINSIC_PARSE_FLOAT], flags);
     mal_intrinsic_define_data(vm, global_this, "isNaN", vm->intrinsics[MAL_INTRINSIC_IS_NAN], flags);
     mal_intrinsic_define_data(vm, global_this, "isFinite", vm->intrinsics[MAL_INTRINSIC_IS_FINITE], flags);
-    mal_intrinsic_define_data(vm, global_this, "Math", vm->intrinsics[MAL_INTRINSIC_MATH], flags);
-    mal_intrinsic_define_data(vm, global_this, "JSON", vm->intrinsics[MAL_INTRINSIC_JSON], flags);
-    mal_intrinsic_define_data(vm, global_this, "Atomics", vm->intrinsics[MAL_INTRINSIC_ATOMICS], flags);
+    mal_intrinsic_define_optional_global(vm, global_this, "Math", MAL_INTRINSIC_MATH, flags);
+    mal_intrinsic_define_optional_global(vm, global_this, "JSON", MAL_INTRINSIC_JSON, flags);
+    mal_intrinsic_define_optional_global(vm, global_this, "Atomics", MAL_INTRINSIC_ATOMICS, flags);
     mal_intrinsic_define_data(vm, global_this, "Reflect", vm->intrinsics[MAL_INTRINSIC_REFLECT], flags);
-    mal_intrinsic_define_data(vm, global_this, "Proxy", vm->intrinsics[MAL_INTRINSIC_PROXY_CONSTRUCTOR], flags);
+    mal_intrinsic_define_optional_global(vm, global_this, "Proxy", MAL_INTRINSIC_PROXY_CONSTRUCTOR, flags);
     mal_intrinsic_define_data(vm, global_this, "console", vm->intrinsics[MAL_INTRINSIC_CONSOLE], flags);
     mal_intrinsic_define_data(vm, global_this, "Promise", vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], flags);
-    mal_intrinsic_define_data(vm, global_this, "Date", vm->intrinsics[MAL_INTRINSIC_DATE_CONSTRUCTOR], flags);
-    if (!mal_value_is_undefined(vm->intrinsics[MAL_INTRINSIC_TEMPORAL]))
-        mal_intrinsic_define_data(vm, global_this, "Temporal", vm->intrinsics[MAL_INTRINSIC_TEMPORAL], flags);
+    mal_intrinsic_define_optional_global(vm, global_this, "Date", MAL_INTRINSIC_DATE_CONSTRUCTOR, flags);
+    mal_intrinsic_define_optional_global(vm, global_this, "Temporal", MAL_INTRINSIC_TEMPORAL, flags);
     mal_intrinsic_define_data(vm, global_this, "RegExp", vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR], flags);
-    if (!mal_value_is_undefined(vm->intrinsics[MAL_INTRINSIC_INTL]))
-        mal_intrinsic_define_data(vm, global_this, "Intl", vm->intrinsics[MAL_INTRINSIC_INTL], flags);
+    mal_intrinsic_define_optional_global(vm, global_this, "Intl", MAL_INTRINSIC_INTL, flags);
     mal_intrinsic_define_data(vm, global_this, "AggregateError", vm->intrinsics[MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "SuppressedError", vm->intrinsics[MAL_INTRINSIC_SUPPRESSED_ERROR_CONSTRUCTOR], flags);
-    mal_intrinsic_define_data(vm, global_this, "DisposableStack", vm->intrinsics[MAL_INTRINSIC_DISPOSABLE_STACK_CONSTRUCTOR], flags);
-    mal_intrinsic_define_data(vm, global_this, "AsyncDisposableStack", vm->intrinsics[MAL_INTRINSIC_ASYNC_DISPOSABLE_STACK_CONSTRUCTOR], flags);
+    mal_intrinsic_define_optional_global(vm, global_this, "DisposableStack", MAL_INTRINSIC_DISPOSABLE_STACK_CONSTRUCTOR, flags);
+    mal_intrinsic_define_optional_global(vm, global_this, "AsyncDisposableStack", MAL_INTRINSIC_ASYNC_DISPOSABLE_STACK_CONSTRUCTOR, flags);
     mal_intrinsic_define_data(vm, global_this, "Iterator", vm->intrinsics[MAL_INTRINSIC_ITERATOR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "AsyncIterator", vm->intrinsics[MAL_INTRINSIC_ASYNC_ITERATOR_CONSTRUCTOR], flags);
 #if MAL_REALMS

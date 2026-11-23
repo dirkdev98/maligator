@@ -24,6 +24,7 @@ interface LinkedSymbol {
 	symbol: string;
 	crate: string | undefined;
 	instruction: boolean;
+	bytes: number;
 }
 
 const forbiddenComponents = {
@@ -32,6 +33,10 @@ const forbiddenComponents = {
 	"Brotli encoder": ({ crate, symbol, instruction }) =>
 		(instruction && crate === "brotli") || symbol === "_mal_zlib_create_brotli_encoder",
 	"fs.Stats": ({ symbol }) => /^_node_fs_get_(?:a|m|c|birth)time(?:$|\.)/.test(symbol),
+	"Date timezone data": ({ crate, symbol, bytes, object }) =>
+		/^jiff(?:_|$)/.test(crate ?? "") ||
+		symbol === "_mal_host_install_intrinsic_date" ||
+		(bytes === 206788 && object.startsWith("libmal_rust.a(")),
 	rustls: ({ crate }) => /^rustls(?:_|$)/.test(crate ?? ""),
 	"sqlite3.o": ({ object }) => /(?:^|[(-])sqlite3\.o\)?$/.test(object),
 	node_fs: ({ object }) => /(?:^|[(-])node_fs\.o\)?$/.test(object),
@@ -100,6 +105,7 @@ const fixtures: Array<{
 			"regress",
 			"unicode.o",
 			"Node runtime",
+			"Date timezone data",
 			"sqlite3.o",
 		],
 		forbiddenLibraries: ["C++ runtime"],
@@ -120,7 +126,7 @@ const fixtures: Array<{
 		name: "node-hello",
 		file: "bench/size/node-hello.mjs",
 		bun: true,
-		forbidden: ["Ada", "sqlite3.o", "node_fs", "argon2"],
+		forbidden: ["Ada", "sqlite3.o", "node_fs", "argon2", "Date timezone data"],
 		forbiddenLibraries: ["C++ runtime"],
 	},
 	{
@@ -135,6 +141,7 @@ const fixtures: Array<{
 			"Node streams",
 			"Fetch objects",
 			"fs.Stats",
+			"Date timezone data",
 			"sqlite3.o",
 		],
 		forbiddenLibraries: ["C++ runtime"],
@@ -243,17 +250,18 @@ function darwinAttribution(
 				throw new Error(`Unknown object for map symbol ${symbol}`);
 			const crate = rustCrate(symbol);
 			const address = Number(entry[1]);
+			const bytes = Number(entry[2]);
 			const linked = {
 				object,
 				symbol,
 				crate,
 				instruction: text.address <= address && address < text.end,
+				bytes,
 			};
 			for (const component of forbidden) {
 				if (!retainedForbidden.has(component) && forbiddenComponents[component](linked))
 					retainedForbidden.set(component, linked);
 			}
-			const bytes = Number(entry[2]);
 			if (
 				bytes === 0 ||
 				zeroFill.some((range) => range.address <= address && address < range.end)

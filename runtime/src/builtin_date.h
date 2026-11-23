@@ -5,6 +5,10 @@
 
 typedef struct MalVm MalVm;
 
+typedef struct MalDateOperations {
+    MalValue (*parse)(MalVm *vm, const MalValue *args, i32 arg_count);
+} MalDateOperations;
+
 /**
  * Install the Date constructor, its statics (now/parse/UTC), and
  * Date.prototype on the VM intrinsics + globalThis.

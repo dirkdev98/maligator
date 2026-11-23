@@ -18,6 +18,7 @@
 #include "builtin_async_iterator.h"
 #include "builtin_boolean.h"
 #include "builtin_date.h"
+#include "language_components.h"
 #include "builtin_function.h"
 #include "builtin_iterator.h"
 #include "builtin_map.h"
@@ -4522,7 +4523,9 @@ void mal_op_call_known(MalCallable *callable, const MalInstruction *instruction)
                 if (count < 1) break;
                 MalValue first = mal_op_value_operand(callable, data[1]);
                 if (!mal_value_is_string(first)) break;
-                callable->registers[instruction->as.call_known.dst] = mal_builtin_date_parse_known(vm, &first, 1);
+                const MalDateOperations *date = mal_language_component_operations(MAL_LANGUAGE_COMPONENT_DATE);
+                if (date == nullptr) break;
+                callable->registers[instruction->as.call_known.dst] = date->parse(vm, &first, 1);
                 return;
             }
             default: break;

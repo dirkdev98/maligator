@@ -2,6 +2,13 @@ import type { PlatformData } from "../../platform/catalog.ts";
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "../core/core-constructor-layout.ts";
 import {
+	DATE_INSTALLER,
+	INTRINSIC_INSTALLERS,
+	JSON_INSTALLER,
+	MAP_INSTALLER,
+	SET_INSTALLER,
+} from "../frontend/engine-components.ts";
+import {
 	BUFFER_INSTALLER_SYMBOL,
 	HOST_PERSONALITY_INSTALLER,
 	HOST_PERSONALITY_INSTALLERS,
@@ -13,10 +20,12 @@ import {
 	NODE_FS_FULL_EXPORTS,
 	NODE_FS_INSTALLER,
 	NODE_FS_NAMED_INSTALLER,
+	NODE_FS_READ_STREAM_INSTALLER,
 	NODE_PERSONALITY_INSTALLER,
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
 	WEB_FETCH_INSTALLER,
+	WORKER_THREADS_INSTALLER_SYMBOL,
 } from "../frontend/host-modules.ts";
 import { directBuiltinOperationIds } from "../shared/builtin-registry.ts";
 import type { DirectBuiltinOperationId } from "../shared/builtin-registry.ts";
@@ -4051,6 +4060,46 @@ function buildHostInstalls(
 	) {
 		// node:util constructs a RegExp to strip terminal escape sequences.
 		installFor(REGEXP_INSTALLER);
+	}
+
+	const selected = new Set(manifest.map(({ installer }) => installer));
+	if (
+		selected.has(NODE_BUILTIN_LOADER_INSTALLER) ||
+		selected.has(WORKER_THREADS_INSTALLER_SYMBOL) ||
+		selected.has(hostInstallerSymbol("node:cluster")) ||
+		[...selected].some((installer) => installer.startsWith("mal_ffi_install_"))
+	) {
+		for (const installer of INTRINSIC_INSTALLERS) installFor(installer);
+	} else {
+		// Stats and X509Certificate can construct Dates without a source read
+		// of the constructor. The v8 deserializer can get a Date from bytes.
+		if (
+			[
+				NODE_FS_INSTALLER,
+				NODE_FS_NAMED_INSTALLER,
+				NODE_FS_READ_STREAM_INSTALLER,
+				hostInstallerSymbol("node:fs/promises"),
+				hostInstallerSymbol("node:crypto"),
+				hostInstallerSymbol("node:constants"),
+				hostInstallerSymbol("node:v8"),
+			].some((installer) => selected.has(installer))
+		)
+			installFor(DATE_INSTALLER);
+		// Node uses collections for process flags and utility objects; clone
+		// needs Map for its traversal and can materialize either collection.
+		if (usesNode || selected.has("mal_host_install_web_basics")) {
+			installFor(MAP_INSTALLER);
+			installFor(SET_INSTALLER);
+		}
+		// Fetch bodies, Node inspectors, and Node streams call JSON methods.
+		if (
+			usesNode ||
+			selected.has(WEB_FETCH_INSTALLER) ||
+			selected.has("mal_host_install_web_fetch_client") ||
+			selected.has("mal_host_install_maligator_internal_fetch") ||
+			selected.has("mal_host_install_maligator_internal_http")
+		)
+			installFor(JSON_INSTALLER);
 	}
 
 	return manifest;

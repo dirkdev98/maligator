@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { parseCliArgs } from "../src/cli.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { INTRINSIC_FAMILIES } from "../src/compiler/frontend/engine-components.ts";
 import {
 	HOST_GLOBAL_INSTALLERS,
 	HOST_MODULES,
@@ -47,6 +48,7 @@ export function capturePrimordialInventory(mode: string, outDir: string) {
 	writeFileSync(
 		fixture,
 		[
+			...[...INTRINSIC_FAMILIES.keys()].map((name) => `${name};`),
 			...modules.flatMap(({ id, exports }, index) => {
 				const moduleName = `module${index}`;
 				const specifier = JSON.stringify(id);

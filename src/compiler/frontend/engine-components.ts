@@ -1,5 +1,6 @@
 import type { ESTree } from "meriyah";
-import type { WorldFacts } from "../shared/compiler-facts.ts";
+import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
+import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import { staticMemberKey } from "./builtin-module-loads.ts";
 import { traverseEstree } from "./estree-traversal.ts";
 import type { SemanticProgram } from "./semantic-analysis.ts";
@@ -15,6 +16,27 @@ import type { SemanticProgram } from "./semantic-analysis.ts";
 
 export const TEMPORAL_INSTALLER = "mal_host_install_temporal";
 export const INTL_INSTALLER = "mal_host_install_intl";
+export const DATE_INSTALLER = "mal_host_install_intrinsic_date";
+export const MAP_INSTALLER = "mal_host_install_intrinsic_map";
+export const SET_INSTALLER = "mal_host_install_intrinsic_set";
+export const JSON_INSTALLER = "mal_host_install_intrinsic_json";
+
+export const INTRINSIC_FAMILIES: ReadonlyMap<string, string> = new Map([
+	["Map", MAP_INSTALLER],
+	["WeakMap", MAP_INSTALLER],
+	["Set", SET_INSTALLER],
+	["WeakSet", SET_INSTALLER],
+	["WeakRef", "mal_host_install_intrinsic_weak_ref"],
+	["FinalizationRegistry", "mal_host_install_intrinsic_finalization_registry"],
+	["DisposableStack", "mal_host_install_intrinsic_disposable_stack"],
+	["AsyncDisposableStack", "mal_host_install_intrinsic_disposable_stack"],
+	["Math", "mal_host_install_intrinsic_math"],
+	["JSON", JSON_INSTALLER],
+	["Atomics", "mal_host_install_intrinsic_atomics"],
+	["Proxy", "mal_host_install_intrinsic_proxy"],
+	["Date", DATE_INSTALLER],
+]);
+export const INTRINSIC_INSTALLERS = [...new Set(INTRINSIC_FAMILIES.values())];
 
 /** Intl service constructors by their engine.intl.features names. */
 const INTL_SERVICES = new Map([
@@ -67,12 +89,12 @@ export function languageComponentAnchorSource(features: {
 			features.intlFeatures.includes(`intl-${service}`),
 	);
 	const installers = [
+		...INTRINSIC_INSTALLERS,
 		...(features.temporalEnabled ? [TEMPORAL_INSTALLER] : []),
 		...(features.intlEnabled
 			? [INTL_INSTALLER, ...services.map(intlServiceInstaller)]
 			: []),
 	];
-	if (installers.length === 0) return '#include "vm.h"\n';
 	return `#include "language_components.h"\n\nconst MalHostInstaller mal_wire_language_components[] = {${installers.join(", ")}};\n`;
 }
 
@@ -81,6 +103,8 @@ interface EngineComponentUses {
 	intl: boolean;
 	intlServices: Set<string>;
 	allIntlServices: boolean;
+	intrinsicInstallers: Set<string>;
+	allIntrinsicInstallers: boolean;
 }
 
 /**
@@ -90,14 +114,25 @@ interface EngineComponentUses {
  */
 export function engineComponentInstallers(
 	program: SemanticProgram,
-	world: WorldFacts,
+	facts: CompilerProgramFacts,
 	relocatable: boolean,
+	globalObjectReads: ReadonlyMap<ESTree.Identifier, string | null>,
 ): Array<string> {
+	const { world } = facts;
 	const uses: EngineComponentUses =
 		relocatable || world.eval === "runtime"
-			? { temporal: true, intl: true, intlServices: new Set(), allIntlServices: true }
-			: collectEngineComponentUses(program);
-	const installers: Array<string> = [];
+			? {
+					temporal: true,
+					intl: true,
+					intlServices: new Set(),
+					allIntlServices: true,
+					intrinsicInstallers: new Set(),
+					allIntrinsicInstallers: true,
+				}
+			: collectEngineComponentUses(program, facts, globalObjectReads);
+	const installers = [
+		...(uses.allIntrinsicInstallers ? INTRINSIC_INSTALLERS : uses.intrinsicInstallers),
+	];
 	if (world.ecmaFeatures.temporal && uses.temporal) installers.push(TEMPORAL_INSTALLER);
 	if (!world.ecmaFeatures.intl) return installers;
 	const selected = world.ecmaFeatures.intlServices ?? [];
@@ -111,12 +146,38 @@ export function engineComponentInstallers(
 	return installers;
 }
 
-function collectEngineComponentUses(program: SemanticProgram): EngineComponentUses {
+function collectEngineComponentUses(
+	program: SemanticProgram,
+	facts: CompilerProgramFacts,
+	globalObjectReads: ReadonlyMap<ESTree.Identifier, string | null>,
+): EngineComponentUses {
 	const uses: EngineComponentUses = {
 		temporal: false,
 		intl: false,
 		intlServices: new Set(),
 		allIntlServices: false,
+		intrinsicInstallers: new Set(),
+		allIntrinsicInstallers:
+			facts.world.primordialPolicy !== "locked" ||
+			facts.world.eval !== "disabled" ||
+			facts.world.realms ||
+			facts.closure.sourceClosure.kind !== "known",
+	};
+	const intrinsicGlobal = (name: string) => {
+		const installer = INTRINSIC_FAMILIES.get(name);
+		if (installer !== undefined) uses.intrinsicInstallers.add(installer);
+	};
+	const namedGlobalRead = (name: string | undefined) => {
+		// A read of an ambient property could dispatch an accessor with the global
+		// object as receiver. The locked language bindings have fixed descriptors.
+		if (
+			name === undefined ||
+			name === "globalThis" ||
+			name === "global" ||
+			!compilerFactIsWorldInvariant(facts.immutableGlobalBindings.get(name))
+		)
+			uses.allIntrinsicInstallers = true;
+		else intrinsicGlobal(name);
 	};
 	const unknownGlobal = () => {
 		uses.temporal = true;
@@ -154,12 +215,38 @@ function collectEngineComponentUses(program: SemanticProgram): EngineComponentUs
 		};
 		// Reads of `Intl` and the global object that observe one named property.
 		const followed = new Set<ESTree.Node>();
+		const followedOptional = new Set<ESTree.Node>();
 		traverseEstree(file.ast.body, (node, { parent }) => {
 			if (node.type === "WithStatement") {
 				unknownMember();
+				uses.allIntrinsicInstallers = true;
+			} else if (node.type === "ThisExpression" && !uses.allIntrinsicInstallers) {
+				let scope = file.nodeToScope.get(node);
+				while (
+					scope !== undefined &&
+					scope.node.type !== "Program" &&
+					scope.node.type !== "FunctionDeclaration" &&
+					scope.node.type !== "FunctionExpression" &&
+					scope.node.type !== "PropertyDefinition" &&
+					scope.node.type !== "StaticBlock"
+				)
+					scope = scope.parent ?? undefined;
+				if (scope?.node.type === "Program") {
+					if (file.type === "script" && !file.commonjs)
+						uses.allIntrinsicInstallers = true;
+				} else if (scope !== undefined && !scope.strict) {
+					uses.allIntrinsicInstallers = true;
+				}
 			} else if (node.type === "UnaryExpression" && node.operator === "typeof") {
 				if (undeclared(node.argument, ["Intl", ...globalNames]))
 					followed.add(node.argument);
+				if (undeclared(node.argument, globalNames)) followedOptional.add(node.argument);
+			} else if (
+				node.type === "BinaryExpression" &&
+				(node.operator === "===" || node.operator === "!==")
+			) {
+				if (undeclared(node.left, globalNames)) followedOptional.add(node.left);
+				if (undeclared(node.right, globalNames)) followedOptional.add(node.right);
 			} else if (node.type === "MemberExpression") {
 				const key = staticMemberKey(node);
 				if (key !== undefined) member(key);
@@ -172,6 +259,8 @@ function collectEngineComponentUses(program: SemanticProgram): EngineComponentUs
 					else if (service !== undefined) uses.intlServices.add(service);
 				} else if (undeclared(node.object, globalNames)) {
 					followed.add(node.object);
+					followedOptional.add(node.object);
+					namedGlobalRead(key);
 					if (key === undefined) unknownGlobal();
 				}
 			} else if (node.type === "Property" && parent?.type === "ObjectPattern") {
@@ -186,7 +275,21 @@ function collectEngineComponentUses(program: SemanticProgram): EngineComponentUs
 			}
 		});
 		for (const binding of file.scopes[0]?.bindings ?? []) {
+			// A declaration in the script global environment can observe an existing
+			// global descriptor even when there is no free read of that name.
+			if (file.type === "script" && !file.commonjs) intrinsicGlobal(binding.name);
 			if (!binding.undeclared || binding.usageNodes.length === 0) continue;
+			intrinsicGlobal(binding.name);
+			if (!uses.allIntrinsicInstallers && globalNames.includes(binding.name)) {
+				for (const use of binding.usageNodes) {
+					if (followedOptional.has(use)) continue;
+					namedGlobalRead(
+						use.type === "Identifier"
+							? (globalObjectReads.get(use) ?? undefined)
+							: undefined,
+					);
+				}
+			}
 			if (binding.name === "Temporal") uses.temporal = true;
 			else if (binding.name === "Reflect") unknownMember();
 			else if (binding.name === "Intl") {

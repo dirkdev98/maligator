@@ -163,6 +163,13 @@ use the locale-insensitive behaviour ECMA-402 allows. Drivers that load wire ima
 such as the development runner, link every component their engine policy allows,
 since those images name components only by installer name.
 
+The same manifest selects optional intrinsic families such as Date and Map. A
+closed program with locked primordials and runtime eval and realms disabled can
+omit families its source and host installers cannot reach. For example, filesystem
+Stats retains Date because it produces Date objects. A linked Date keeps the
+bundled timezone database. Code that can observe the global object by an unknown
+key keeps the complete intrinsic surface.
+
 ## Engine policy and eval
 
 `engine.regexp` and `engine.eval` leave the C runtime archive unchanged, so every
