@@ -164,29 +164,37 @@ describe("known-operation dispatch", () => {
 
 	it("keeps runtime primordial routes aligned with compiler catalog indices", () => {
 		const source = readFileSync("runtime/src/generated/known_primordials.inc", "utf8");
+		const keys = new Map<number, string>();
+		let offset = 0;
+		for (const [, literal] of source.matchAll(/^("(?:[^"\\]|\\.)*") "\\0"$/gm)) {
+			const key = JSON.parse(literal!) as string;
+			keys.set(offset, key);
+			offset += Buffer.byteLength(key) + 1;
+		}
 		const routes = new Map<number, PrimordialBinding>();
 		for (const match of source.matchAll(
-			/^MAL_KNOWN_PRIMORDIAL\((\d+), (\d+), (-?\d+), (\w+), (.*), (-?\d+)\)$/gm,
+			/^MAL_KNOWN_PRIMORDIAL\((\d+), (\d+), (\w+), (\d+), (true|false)\)$/gm,
 		)) {
-			const [, rawIndex, rawKind, rawParent, intrinsic, rawKey, rawSymbol] = match;
+			const [, rawIndex, rawKind, target, rawKey, symbol] = match;
 			const kind = Number(rawKind);
 			if (kind === 0) continue;
 			const routeKind = (
 				["intrinsic", "prototype", "value", "getter", "setter"] as const
 			)[kind - 1];
 			if (routeKind === undefined) throw new Error(`Unknown primordial route ${kind}`);
-			const key: unknown =
+			const key =
 				kind === 1
-					? intrinsic
-					: Number(rawSymbol) >= 0
-						? { symbol: Number(rawSymbol) }
-						: JSON.parse(rawKey!);
-			if (typeof key !== "string" && !(key && typeof key === "object" && "symbol" in key))
-				throw new Error(`Invalid primordial route key ${rawKey}`);
+					? target
+					: kind === 2
+						? ""
+						: symbol === "true"
+							? { symbol: Number(rawKey) }
+							: keys.get(Number(rawKey));
+			if (key === undefined) throw new Error(`Invalid primordial route key ${rawKey}`);
 			routes.set(Number(rawIndex), {
-				parent: Number(rawParent),
+				parent: kind === 1 ? -1 : Number(target),
 				kind: routeKind,
-				key: key as PrimordialBinding["key"],
+				key,
 			});
 		}
 		const bindings = primordialBindings();

@@ -25,6 +25,7 @@ interface LinkedSymbol {
 	crate: string | undefined;
 	instruction: boolean;
 	bytes: number;
+	relocatedConstant: boolean;
 }
 
 const forbiddenComponents = {
@@ -37,6 +38,8 @@ const forbiddenComponents = {
 		/^jiff(?:_|$)/.test(crate ?? "") ||
 		symbol === "_mal_host_install_intrinsic_date" ||
 		(bytes === 206788 && object.startsWith("libmal_rust.a(")),
+	"relocated primordial bindings": ({ symbol, relocatedConstant }) =>
+		relocatedConstant && /^_mal_vm_load_primordial\.bindings(?:$|\.)/.test(symbol),
 	rustls: ({ crate }) => /^rustls(?:_|$)/.test(crate ?? ""),
 	"sqlite3.o": ({ object }) => /(?:^|[(-])sqlite3\.o\)?$/.test(object),
 	node_fs: ({ object }) => /(?:^|[(-])node_fs\.o\)?$/.test(object),
@@ -106,6 +109,7 @@ const fixtures: Array<{
 			"unicode.o",
 			"Node runtime",
 			"Date timezone data",
+			"relocated primordial bindings",
 			"sqlite3.o",
 		],
 		forbiddenLibraries: ["C++ runtime"],
@@ -211,6 +215,7 @@ function darwinAttribution(
 	const names = new Map<number, string>();
 	const zeroFill: Array<{ address: number; end: number }> = [];
 	let text = { address: 0, end: 0 };
+	let dataConst = { address: 0, end: 0 };
 	let section = "";
 	for (const line of readFileSync(mapFile, "utf8").split("\n")) {
 		if (line.startsWith("#")) {
@@ -239,6 +244,7 @@ function darwinAttribution(
 			const address = Number(range[1]);
 			const extent = { address, end: address + Number(range[2]) };
 			if (range[3] === "__TEXT" && range[4] === "__text") text = extent;
+			if (range[3] === "__DATA_CONST" && range[4] === "__const") dataConst = extent;
 			if (/^__(?:bss|common|thread_bss)$/.test(range[4]!)) zeroFill.push(extent);
 		}
 		if (section === "# Symbols:") {
@@ -256,6 +262,7 @@ function darwinAttribution(
 				symbol,
 				crate,
 				instruction: text.address <= address && address < text.end,
+				relocatedConstant: dataConst.address <= address && address < dataConst.end,
 				bytes,
 			};
 			for (const component of forbidden) {

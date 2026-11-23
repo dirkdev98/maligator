@@ -12,17 +12,30 @@
 #include "vm_ops.h"
 
 MalValue mal_vm_load_primordial(MalVm *vm, i32 node) {
-    static const struct {
-        i32 kind, parent, intrinsic;
-        const byte *key;
-        i32 symbol;
-    } bindings[] = {
-#define MAL_KNOWN_PRIMORDIAL(index, kind, parent, intrinsic, key, symbol) \
-        [index] = {kind, parent, intrinsic, (const byte *) key, symbol},
+    enum {
+        KIND_MASK = 7,
+        SYMBOL_KEY = 8,
+        TARGET_SHIFT = 4,
+        TARGET_COUNT = 1 << MAL_KNOWN_PRIMORDIAL_TARGET_BITS,
+        KEY_SHIFT = TARGET_SHIFT + MAL_KNOWN_PRIMORDIAL_TARGET_BITS,
+    };
+    static_assert(KEY_SHIFT + MAL_KNOWN_PRIMORDIAL_KEY_BITS == 32);
+    static_assert(MAL_INTRINSIC_COUNT <= TARGET_COUNT);
+    // One naturally aligned load on a cached access, with no pointer relocations.
+    static const u32 bindings[] = {
+#define MAL_KNOWN_PRIMORDIAL(index, kind, parent_or_intrinsic, key, symbol_key) \
+        [index] = ((u32) (key) << KEY_SHIFT) | ((u32) (parent_or_intrinsic) << TARGET_SHIFT) | \
+            ((symbol_key) ? SYMBOL_KEY : 0) | (kind),
 #include "generated/known_primordials.inc"
 #undef MAL_KNOWN_PRIMORDIAL
     };
-    if (node < 0 || node >= MAL_KNOWN_PRIMORDIAL_COUNT || bindings[node].kind == 0) {
+    static const byte keys[] = ""
+#define MAL_KNOWN_PRIMORDIAL_KEYS
+#include "generated/known_primordials.inc"
+#undef MAL_KNOWN_PRIMORDIAL_KEYS
+        ;
+    u32 binding = (u32) node < MAL_KNOWN_PRIMORDIAL_COUNT ? bindings[node] : 0;
+    if (binding == 0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Unavailable primordial identity");
         return MAL_VALUE_UNDEFINED;
     }
@@ -30,27 +43,30 @@ MalValue mal_vm_load_primordial(MalVm *vm, i32 node) {
     // Locked graph edges retain these values; the cache does not own additional heap identities.
     if (vm->known_primordial_values[node] != 0) return vm->known_primordial_values[node];
 #endif
+    u32 kind = binding & KIND_MASK;
+    u32 target = (binding >> TARGET_SHIFT) & (TARGET_COUNT - 1);
     MalValue value;
-    if (bindings[node].kind == 1) {
-        value = vm->intrinsics[bindings[node].intrinsic];
+    if (kind == 1) {
+        value = vm->intrinsics[target];
     } else {
-        MalValue parent = mal_vm_load_primordial(vm, bindings[node].parent);
+        MalValue parent = mal_vm_load_primordial(vm, (i32) target);
         if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;
         if (!mal_value_is_object(parent)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Unavailable primordial parent");
             return MAL_VALUE_UNDEFINED;
         }
-        if (bindings[node].kind == 2) {
+        if (kind == 2) {
             MalObject *prototype = mal_object_get_prototype(mal_value_to_object(parent));
             value = prototype == nullptr ? MAL_VALUE_NULL : mal_value_from_object(prototype);
         } else {
             MalKey key;
-            if (bindings[node].symbol >= 0) {
-                MalValue symbol = mal_vm_load_primordial(vm, bindings[node].symbol);
+            u32 key_index = binding >> KEY_SHIFT;
+            if ((binding & SYMBOL_KEY) != 0) {
+                MalValue symbol = mal_vm_load_primordial(vm, (i32) key_index);
                 if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;
                 key = mal_key_from_value(symbol);
             } else {
-                key = mal_intrinsic_string_key(vm, bindings[node].key);
+                key = mal_intrinsic_string_key(vm, keys + key_index);
             }
             bool present;
             MalPropertyDesc descriptor;
@@ -59,8 +75,8 @@ MalValue mal_vm_load_primordial(MalVm *vm, i32 node) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Unavailable primordial descriptor");
                 return MAL_VALUE_UNDEFINED;
             }
-            value = bindings[node].kind == 4 ? descriptor.getter
-                : bindings[node].kind == 5 ? descriptor.setter : descriptor.value;
+            value = kind == 4 ? descriptor.getter
+                : kind == 5 ? descriptor.setter : descriptor.value;
         }
     }
 #if !MAL_REALMS
