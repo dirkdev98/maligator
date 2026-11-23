@@ -295,12 +295,12 @@ function inlineSourcePositions(
 	fn: CoreFunctionStore,
 ): ReadonlyMap<CoreInstructionId, number | undefined> {
 	const appended: Array<(typeof program.sourcePositions)[number]> = [];
-	const base = program.sourcePositions.length;
+	const base = program.sourcePositionCount;
 	const relocated = new Map<number, number>();
 	const relocate = (positionId: number): number => {
 		const known = relocated.get(positionId);
 		if (known !== undefined) return known;
-		const position = program.sourcePositions[positionId];
+		const position = program.sourcePositionAt(positionId);
 		if (position === undefined) {
 			throw new Error(`Inline source position ${positionId} does not exist`);
 		}

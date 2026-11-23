@@ -68,7 +68,7 @@ function logicalSourceSite(
 	kind: string,
 ): SourceSiteId | undefined {
 	if (positionId === undefined) return undefined;
-	const position = program.sourcePositions[positionId];
+	const position = program.sourcePositionAt(positionId);
 	if (position === undefined) return undefined;
 	const owner = sourceOwner(program, fn, position.inlinedFunctionIndex);
 	return owner === undefined

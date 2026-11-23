@@ -818,7 +818,7 @@ function builtinSourceSite(
 	operation: string,
 ): ReturnType<typeof sourceSiteId> | undefined {
 	if (positionId === undefined) return undefined;
-	const position = program.sourcePositions[positionId];
+	const position = program.sourcePositionAt(positionId);
 	if (position === undefined) return undefined;
 	const inlinedFunction =
 		position.inlinedFunctionIndex === undefined

@@ -385,7 +385,7 @@ function verifyInstructionRows(
 			fn.resultCapacity,
 		);
 		const sourcePosition = fn.kernel.instructionSourcePosition(instruction);
-		if (sourcePosition < -1 || sourcePosition >= program.sourcePositions.length) {
+		if (sourcePosition < -1 || sourcePosition >= program.sourcePositionCount) {
 			fail(`instruction @${instruction} has invalid source position ${sourcePosition}`);
 		}
 		if (fn.kernel.instructionLive(instruction) === 0) {
@@ -1467,8 +1467,10 @@ function verifyProgramTables(program: CoreProgram): void {
 			}
 		}
 	}
-	for (const [positionId, position] of program.sourcePositions.entries()) {
+	for (let positionId = 0; positionId < program.sourcePositionCount; positionId++) {
+		const position = program.sourcePositionAt(positionId);
 		if (
+			position === undefined ||
 			!Number.isSafeInteger(position.line) ||
 			position.line < 1 ||
 			!Number.isSafeInteger(position.column) ||
@@ -1480,7 +1482,7 @@ function verifyProgramTables(program: CoreProgram): void {
 			position.callerPosId !== undefined &&
 			(!Number.isSafeInteger(position.callerPosId) ||
 				position.callerPosId < 0 ||
-				position.callerPosId >= program.sourcePositions.length)
+				position.callerPosId >= program.sourcePositionCount)
 		) {
 			fail(`source position ${positionId} has invalid caller ${position.callerPosId}`);
 		}

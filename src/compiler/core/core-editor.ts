@@ -404,7 +404,7 @@ export class CoreEditor {
 
 	appendSourcePositions(positions: ReadonlyArray<CoreSourcePosition>): number {
 		this.#assertActive();
-		if (positions.length === 0) return this.program.sourcePositions.length;
+		if (positions.length === 0) return this.program.sourcePositionCount;
 		const start = this.program._appendSourcePositions(this.#mutation, positions);
 		this.#programDomains.add("sourcePositions");
 		this.#edits++;

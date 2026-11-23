@@ -2901,8 +2901,8 @@ export class CoreProgram {
 	#literalTemplateData: ReadonlyArray<number> = [];
 	#literalTemplates: Map<string, number> | undefined;
 	#literalPoolSlots = new Map<number, number>();
-	#sourcePositions: ReadonlyArray<CoreSourcePosition> = [];
-	#sourcePositionsDense = true;
+	#sourcePositions: ReadonlyArray<CoreSourcePosition> | undefined = [];
+	#appendedSourcePositions: Array<CoreSourcePosition> | undefined;
 	#dataEpoch = 0;
 	#globalCount = 0;
 	readonly #constructionStatistics = {
@@ -3017,7 +3017,17 @@ export class CoreProgram {
 	}
 
 	get sourcePositions(): ReadonlyArray<CoreSourcePosition> {
-		return this.#sourcePositions;
+		return (this.#sourcePositions ??= freezeCoreData(
+			this.#appendedSourcePositions!.slice(),
+		));
+	}
+
+	get sourcePositionCount(): number {
+		return (this.#appendedSourcePositions ?? this.#sourcePositions!).length;
+	}
+
+	sourcePositionAt(index: number): CoreSourcePosition | undefined {
+		return (this.#appendedSourcePositions ?? this.#sourcePositions!)[index];
 	}
 
 	// Appends preserve existing references. Replacing the tables can change their meaning.
@@ -3209,15 +3219,11 @@ export class CoreProgram {
 	): number {
 		this.#requireMutation(mutation);
 		if (this.#sealed) throw new Error("Core program is sealed");
-		const previous = this.#sourcePositions;
-		const start = previous.length;
-		// The first append turns any holes in the imported snapshot into indexed values.
-		this.#sourcePositions = freezeCoreData(
-			this.#sourcePositionsDense
-				? previous.concat([...positions.map(snapshotSourcePosition)])
-				: [...previous, ...positions.map(snapshotSourcePosition)],
-		);
-		this.#sourcePositionsDense = true;
+		// Own the mutable table without altering any published reader snapshots.
+		const table = (this.#appendedSourcePositions ??= [...this.#sourcePositions!]);
+		const start = table.length;
+		for (const position of positions.map(snapshotSourcePosition)) table.push(position);
+		this.#sourcePositions = undefined;
 		return start;
 	}
 
@@ -3275,7 +3281,7 @@ export class CoreProgram {
 			data.sourcePositions ?? [],
 			snapshotSourcePosition,
 		);
-		this.#sourcePositionsDense = false;
+		this.#appendedSourcePositions = undefined;
 		this.#globalCount = checkedCount(data.globalCount ?? 0, "Core global count");
 	}
 

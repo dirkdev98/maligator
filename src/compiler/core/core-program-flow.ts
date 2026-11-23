@@ -828,13 +828,9 @@ function addSourceTargets(
 ): void {
 	const seen = new Set<number>();
 	let position = initial;
-	while (
-		position >= 0 &&
-		position < program.sourcePositions.length &&
-		!seen.has(position)
-	) {
+	while (position >= 0 && position < program.sourcePositionCount && !seen.has(position)) {
 		seen.add(position);
-		const source = program.sourcePositions[position]!;
+		const source = program.sourcePositionAt(position)!;
 		addStructuralTarget(
 			targets,
 			program,
