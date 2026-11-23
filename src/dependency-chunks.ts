@@ -28,6 +28,33 @@ const CHUNK_COST = 96 * 1024;
 /** Each module costs at least this much; a JSON module compiles to little more. */
 const MODULE_COST = 2 * 1024;
 
+/** Lazy source providers register through the runtime and have no module evaluation edge. */
+export function implicitSourceBuiltinProviders(graph: ModuleGraph): ReadonlySet<string> {
+	const providers = new Set(graph.sourceBuiltinProviders);
+	if (providers.size === 0) return providers;
+	for (const file of graph.evaluationOrder) providers.delete(file);
+	for (const record of graph.modules.values()) {
+		if (providers.size === 0) break;
+		for (const { resolvedPath } of record.dependencies) {
+			if (resolvedPath !== null) providers.delete(resolvedPath);
+		}
+	}
+	for (const file of providers) {
+		const record = graph.modules.get(file);
+		if (
+			record?.virtual !== true ||
+			record.external !== undefined ||
+			record.loadError !== undefined ||
+			record.dependencies.some(
+				({ resolvedPath }) =>
+					resolvedPath === null || graph.modules.get(resolvedPath)?.host === undefined,
+			)
+		)
+			providers.delete(file);
+	}
+	return providers;
+}
+
 /**
  * Split an island into chunks that compile in parallel. Each chunk is a run of the
  * island's dependency post-order, so it only links to earlier chunks, and no
@@ -44,12 +71,18 @@ export function planDependencyChunks(
 		(module) => module !== graph.entry && graph.modules.get(module)?.host === undefined,
 	);
 	const memberSet = new Set(members);
+	const implicitProviders = implicitSourceBuiltinProviders(graph);
 	const position = new Map(members.map((module, index) => [module, index]));
 	const together: Array<ReadonlyArray<number>> = graph.cycles.map((cycle) =>
 		cycle.map((module) => position.get(module)!),
 	);
 	for (const record of graph.modules.values()) {
-		if (record.path === graph.entry || record.host !== undefined) continue;
+		if (
+			record.path === graph.entry ||
+			record.host !== undefined ||
+			implicitProviders.has(record.path)
+		)
+			continue;
 		if (
 			!memberSet.has(record.path) ||
 			record.external !== undefined ||

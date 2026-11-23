@@ -20,6 +20,7 @@ import type { CompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
 import {
 	chunkMatchesPlan,
 	earlierChunkInterfaces,
+	implicitSourceBuiltinProviders,
 	planDependencyChunks,
 	restoreDependencyChunkPlan,
 	storeDependencyChunkPlan,
@@ -56,7 +57,7 @@ const DEPENDENCY_FRAGMENT_FAMILY = "dependency-fragments";
 const ISLAND_KIND = "dependency-island";
 const CHUNK_KIND = "dependency-chunk";
 const PACKAGE_ROOT_KIND = "package-root";
-const CHUNK_PLAN_SCHEMA = 1;
+const CHUNK_PLAN_SCHEMA = 2;
 
 export interface DependencyFragmentPhases {
 	graphMs: number;
@@ -197,13 +198,14 @@ function dependencyLockfileIdentities(
 function dependencyImageSetPath(
 	environment: LinkedImageEnvironment,
 	options: CompileDependencyFragmentsOptions,
+	chunking: boolean,
 ): string | undefined {
 	try {
 		const identity = frontendDigest(
 			JSON.stringify({
 				environment: environment.identity,
 				targets: options.targets,
-				chunking: options.worker !== undefined,
+				chunking,
 				config: options.config,
 				execution: executionIdentity(options.execution),
 				locks: dependencyLockfileIdentities(options.graph.entry),
@@ -479,9 +481,14 @@ function chunkGraph(
 		parseCache: options.session.moduleParses,
 	});
 	const memberSet = new Set(members);
+	// Each image can retain a lazy provider. Wire loading shares its state by builtin ID.
+	const implicitProviders = implicitSourceBuiltinProviders(graph);
 	const own = [...graph.modules.values()].filter(
 		(record) =>
-			record.path !== entry && record.host === undefined && record.external === undefined,
+			record.path !== entry &&
+			record.host === undefined &&
+			record.external === undefined &&
+			!implicitProviders.has(record.path),
 	);
 	if (
 		own.length !== memberSet.size ||
@@ -557,6 +564,7 @@ function compileWithWorkers(
 	requests: Array<DependencyFragmentRequest>,
 	worker: DependencyFragmentWorker,
 	tasks: ReadonlyArray<ReadonlyArray<string>>,
+	jobs: number,
 ): number {
 	const startedAt = Date.now();
 	const commands = requests.map((request) => {
@@ -577,7 +585,7 @@ function compileWithWorkers(
 		cwd: process.cwd(),
 		env: process.env,
 		verbose: false,
-		jobs: nativeBuildJobs(process.env),
+		jobs,
 	});
 	return Date.now() - startedAt;
 }
@@ -647,9 +655,12 @@ export function compileDependencyFragments(
 	const environment = islandEnvironment(options);
 	const graphStartedAt = Date.now();
 	const tasks = options.parallelTasks ?? [];
+	const jobs = options.worker === undefined ? 1 : nativeBuildJobs(process.env);
+	// The additional chunk graphs only pay off when they can compile side by side.
+	const chunking = options.target === "runtime" && jobs > 1;
 	const setPath =
 		options.reuseOnRebuild && tasks.length === 0
-			? dependencyImageSetPath(environment, options)
+			? dependencyImageSetPath(environment, options, chunking)
 			: undefined;
 	if (setPath !== undefined && !options.session.dependencyInputsInvalidated) {
 		const images = readDependencyImageSet(setPath, environment, options.graph);
@@ -672,8 +683,6 @@ export function compileDependencyFragments(
 		targets: island.targets,
 		islandTargets: island.targets,
 	});
-	// Chunks only pay off when workers compile them side by side.
-	const chunking = options.target === "runtime" && options.worker !== undefined;
 	const islandUnits = islands.map((island): Array<DependencyUnit> => {
 		const plan = chunking
 			? islandChunkPlan(environment, island, options.phases)
@@ -759,6 +768,7 @@ export function compileDependencyFragments(
 			})),
 			worker,
 			tasks,
+			jobs,
 		);
 	}
 	const compiledByWorkers = new Set(worker === undefined ? [] : missing);

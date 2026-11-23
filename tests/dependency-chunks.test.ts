@@ -30,7 +30,7 @@ function padding(kib: number): string {
  * ES module that part 6 requires, imported by an island entry. Both pairs are large
  * enough that a chunk boundary would fall between them if the planner allowed it.
  */
-function packageIsland() {
+function packageIsland(prelude = "") {
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-dependency-chunks-"));
 	roots.push(root);
 	const modules = path.join(root, "node_modules");
@@ -38,7 +38,7 @@ function packageIsland() {
 	const parts = Array.from({ length: 10 }, (_, index) => `part${index}.js`);
 	write(
 		path.join(modules, "big/index.js"),
-		`${parts.map((part) => `require("./${part}");`).join("\n")}\n`,
+		`${prelude}${parts.map((part) => `require("./${part}");`).join("\n")}\n`,
 	);
 	for (const [index, part] of parts.entries()) {
 		const requires =
@@ -94,6 +94,14 @@ describe("dependency chunk planning", () => {
 			goal: "cjs",
 			exports: ["part"],
 		});
+	});
+
+	test("keeps a deferred import of a source builtin in one image", () => {
+		const { target, graph } = packageIsland(
+			'exports.loadTest = () => import("node:test");\n',
+		);
+
+		expect(planDependencyChunks(graph, new Set([target]))).toBeUndefined();
 	});
 
 	test("leaves small islands whole", () => {

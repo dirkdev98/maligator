@@ -10,6 +10,7 @@ import { compileBuildFrontend } from "../../src/build-frontend-cache.ts";
 import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
 import { buildDevelopmentRunner } from "../../src/local-build.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
+import { nativeBuildJobs } from "../../src/native-command.ts";
 
 const roots: Array<string> = [];
 
@@ -209,9 +210,13 @@ module.exports = { parts, data: require("./data.json"), later: () => require("./
 					: index === 8
 						? `exports.answer = require("./data.json").answer;\n`
 						: "";
+		const sourceBuiltin =
+			index === 0 || index === 9
+				? "exports.testBuiltin = process.getBuiltinModule(process.argv[2]);\n"
+				: "";
 		write(
 			path.join(packageRoot, `part${index}.js`),
-			`globalThis.order.push("part${index}");\n${body}exports.index = ${index};\n${padding(index === 3 || index === 4 ? 100 : 20)}`,
+			`globalThis.order.push("part${index}");\n${body}${sourceBuiltin}exports.index = ${index};\n${padding(index === 3 || index === 4 ? 100 : 20)}`,
 		);
 	}
 	write(
@@ -222,15 +227,17 @@ module.exports = { parts, data: require("./data.json"), later: () => require("./
 	write(
 		entrypoint,
 		`import chunked from "chunked";
+import test from "node:test";
+const sameBuiltin = chunked.parts[0].testBuiltin === test && chunked.parts[9].testBuiltin === test;
 const before = globalThis.order.join();
-console.log(JSON.stringify({ before, ...chunked, later: chunked.later(), after: globalThis.order.join() }));
+console.log(JSON.stringify({ before, ...chunked, sameBuiltin, later: chunked.later(), after: globalThis.order.join() }));
 `,
 	);
 	return entrypoint;
 }
 
 describe("dependency island chunks", () => {
-	it("runs an island compiled as chunks in parallel workers like Node runs it", () => {
+	it("preserves CommonJS evaluation order and source builtin identity across images", () => {
 		const root = mkdtempSync(path.join(os.tmpdir(), "mal-dependency-chunks-"));
 		roots.push(root);
 		const entrypoint = chunkedProject(root);
@@ -260,14 +267,20 @@ describe("dependency island chunks", () => {
 				String(wirePaths.length),
 				entrypoint,
 				...wirePaths,
+				"node:test",
 			],
 			{ encoding: "utf-8" },
 		);
-		const expected = spawnSync(process.execPath, [entrypoint], { encoding: "utf-8" });
+		const expected = spawnSync(process.execPath, [entrypoint, "node:test"], {
+			encoding: "utf-8",
+		});
 
 		expect(expected.status, expected.stderr).toBe(0);
-		expect(frontend.fragmentArtifacts!.misses).toBeGreaterThan(3);
+		if (nativeBuildJobs(process.env) > 1)
+			expect(frontend.fragmentArtifacts!.misses).toBeGreaterThan(3);
 		expect(result.status, result.stderr).toBe(0);
-		expect(JSON.parse(result.stdout)).toEqual(JSON.parse(expected.stdout));
+		const actual: unknown = JSON.parse(result.stdout);
+		expect(actual).toEqual(JSON.parse(expected.stdout));
+		expect(actual).toHaveProperty("sameBuiltin", true);
 	}, 120_000);
 });
