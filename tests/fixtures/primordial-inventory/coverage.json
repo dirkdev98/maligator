@@ -60244,7 +60244,7 @@
 			],
 			"key": "Inflate",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60259,7 +60259,7 @@
 			],
 			"key": "createInflate",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60274,7 +60274,7 @@
 			],
 			"key": "inflateSync",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60289,7 +60289,7 @@
 			],
 			"key": "inflate",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60364,7 +60364,7 @@
 			],
 			"key": "Gunzip",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60379,7 +60379,7 @@
 			],
 			"key": "createGunzip",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60394,7 +60394,7 @@
 			],
 			"key": "gunzipSync",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60409,7 +60409,7 @@
 			],
 			"key": "gunzip",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60484,7 +60484,7 @@
 			],
 			"key": "InflateRaw",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60499,7 +60499,7 @@
 			],
 			"key": "createInflateRaw",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60514,7 +60514,7 @@
 			],
 			"key": "inflateRawSync",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60529,7 +60529,7 @@
 			],
 			"key": "inflateRaw",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60544,7 +60544,7 @@
 			],
 			"key": "Unzip",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60559,7 +60559,7 @@
 			],
 			"key": "createUnzip",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60574,7 +60574,7 @@
 			],
 			"key": "unzipSync",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60589,7 +60589,7 @@
 			],
 			"key": "unzip",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60664,7 +60664,7 @@
 			],
 			"key": "BrotliDecompress",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60679,7 +60679,7 @@
 			],
 			"key": "createBrotliDecompress",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60694,7 +60694,7 @@
 			],
 			"key": "brotliDecompressSync",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -60709,7 +60709,7 @@
 			],
 			"key": "brotliDecompress",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -61086,7 +61086,7 @@
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress.prototype"],
 			"key": "constructor",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "H-10",
 			"decisions": []
 		},
@@ -61242,7 +61242,7 @@
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.Gunzip.prototype"],
 			"key": "constructor",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "H-10",
 			"decisions": []
 		},
@@ -61346,7 +61346,7 @@
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.Inflate.prototype"],
 			"key": "constructor",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "H-10",
 			"decisions": []
 		},
@@ -61398,7 +61398,7 @@
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.InflateRaw.prototype"],
 			"key": "constructor",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "H-10",
 			"decisions": []
 		},
@@ -61450,7 +61450,7 @@
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.Unzip.prototype"],
 			"key": "constructor",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "H-10",
 			"decisions": []
 		},
@@ -174130,7 +174130,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174144,7 +174144,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174214,7 +174214,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174228,7 +174228,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174270,7 +174270,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174284,7 +174284,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174298,7 +174298,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174312,7 +174312,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174326,7 +174326,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174340,7 +174340,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174405,7 +174405,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174418,7 +174418,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174431,7 +174431,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174444,7 +174444,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174509,7 +174509,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174522,7 +174522,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174587,7 +174587,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174600,7 +174600,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174639,7 +174639,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174652,7 +174652,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174665,7 +174665,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174678,7 +174678,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174691,7 +174691,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174704,7 +174704,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174821,7 +174821,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174834,7 +174834,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174847,7 +174847,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174860,7 +174860,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174925,7 +174925,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174938,7 +174938,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174951,7 +174951,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174964,7 +174964,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174977,7 +174977,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -174990,7 +174990,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -175003,7 +175003,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -175016,7 +175016,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -175029,7 +175029,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -175042,7 +175042,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -175055,7 +175055,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -175068,7 +175068,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305409,7 +305409,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:BrotliDecompress",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305439,7 +305439,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:Gunzip",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305459,7 +305459,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:Inflate",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305469,7 +305469,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:InflateRaw",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305479,7 +305479,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:Unzip",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305509,7 +305509,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:brotliDecompress",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305519,7 +305519,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:brotliDecompressSync",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305569,7 +305569,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:createBrotliDecompress",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305599,7 +305599,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:createGunzip",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305619,7 +305619,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:createInflate",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305629,7 +305629,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:createInflateRaw",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305639,7 +305639,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:createUnzip",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305699,7 +305699,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:gunzip",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305709,7 +305709,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:gunzipSync",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305739,7 +305739,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:inflate",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305749,7 +305749,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:inflateRaw",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305759,7 +305759,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:inflateRawSync",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305769,7 +305769,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:inflateSync",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305779,7 +305779,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:unzip",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -305789,7 +305789,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_zlib:unzipSync",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -310468,23 +310468,13 @@
 			"id": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.Deflate",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.DeflateRaw",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.Gunzip",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.Gzip",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.Inflate",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.InflateRaw",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.Unzip",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createBrotliCompress",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createBrotliDecompress",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createDeflate",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createDeflateRaw",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createGunzip",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createGzip",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createInflate",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createInflateRaw",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createUnzip"
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createGzip"
 			]
 		},
 		{
@@ -310524,28 +310514,53 @@
 			]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliDecompress",
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.Gunzip",
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.Inflate",
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.InflateRaw",
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.Unzip",
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createBrotliDecompress",
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createGunzip",
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createInflate",
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createInflateRaw",
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.createUnzip"
+			]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompress",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.deflate",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.deflateRaw",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.gunzip",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.gzip",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.inflate",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.inflateRaw",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.unzip"
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.gzip"
 			]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliCompressSync",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.deflateRawSync",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.deflateSync",
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.gzipSync"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompress",
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.gunzip",
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.inflate",
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.inflateRaw",
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.unzip"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.brotliDecompressSync",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.gunzipSync",
-				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.gzipSync",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.inflateRawSync",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.inflateSync",
 				"%MAL_INTRINSIC_NODE_ZLIB_MODULE%.unzipSync"
