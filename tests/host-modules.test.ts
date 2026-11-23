@@ -8,9 +8,12 @@ import {
 } from "../scripts/generate-node-builtin-modules.ts";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import {
+	BUFFER_INSTALLER_SYMBOL,
+	HOST_GLOBAL_INSTALLERS,
 	HOST_MODULES,
 	HOST_PERSONALITY_INSTALLERS,
 	NODE_ERROR_HOOKS_INSTALLER,
+	PROCESS_INSTALLER_SYMBOL,
 } from "../src/compiler/frontend/host-modules.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
@@ -41,12 +44,19 @@ afterEach(() => {
 });
 
 /** Run the full compile pipeline for one entry module and return its definition. */
-function compile(source: string, options: { node?: boolean } = {}): ProgramImage {
+function compile(
+	source: string,
+	options: { node?: boolean; mutablePrimordials?: boolean } = {},
+): ProgramImage {
 	const root = mkdtempSync(path.join(tmpdir(), "maligator-host-"));
 	roots.push(root);
 	const entry = path.join(root, "main.mjs");
 	writeFileSync(entry, source);
-	const buildConfig = options.node ? defaultConfig : resolveBuildConfig({});
+	const buildConfig = options.mutablePrimordials
+		? resolveBuildConfig({ engine: { primordials: "mutable" } })
+		: options.node
+			? defaultConfig
+			: resolveBuildConfig({});
 	const program = loadEntrypointAndRunSemanticAnalysis(entry, { buildConfig });
 	const image = compileSemanticProgramToProgramImage(program, {
 		facts: compilerProgramFactsFromConfig(buildConfig),
@@ -561,6 +571,66 @@ globalThis.sink = read({process: 1});`,
 });
 
 describe("lazy source builtin providers", () => {
+	it("retains only the named host global for a locked Reflect.get read", () => {
+		const image = compile('globalThis.sink = Reflect.get(globalThis, "Buffer");');
+		const hostGlobals = new Set([
+			BUFFER_INSTALLER_SYMBOL,
+			PROCESS_INSTALLER_SYMBOL,
+			...HOST_GLOBAL_INSTALLERS.map(({ installer }) => installer),
+		]);
+		expect(
+			image.runtime.hostInstalls
+				.map(({ installer }) => installer)
+				.filter((installer) => hostGlobals.has(installer)),
+		).toEqual([BUFFER_INSTALLER_SYMBOL]);
+		expect(image.runtime.sourceBuiltinProviders).toEqual([]);
+	});
+
+	it.each([
+		{
+			use: "a computed key",
+			source: `const target = Reflect.get(globalThis, process.argv[2]);
+globalThis.sink = target[process.argv[3]]("node:test");`,
+		},
+		{
+			use: "a shadowed Reflect binding",
+			source: `const Reflect = { get(target) { return target; } };
+const target = Reflect.get(globalThis, "Buffer");
+globalThis.sink = target.process[process.argv[2]]("node:test");`,
+		},
+		{
+			use: "the global object alias",
+			source: `const target = Reflect.get(globalThis, "globalThis");
+globalThis.sink = target.process[process.argv[2]]("node:test");`,
+		},
+		{
+			use: "an inherited getter that receives the global object",
+			source: `globalThis.__proto__ = {
+	get value() {
+		return this.process[["getBuiltin", "Module"].join("")]("node:test");
+	},
+};
+globalThis.sink = Reflect.get(globalThis, "value");`,
+		},
+	])("keeps dynamic builtin access through $use", ({ source }) => {
+		const image = compile(source);
+		expect(image.runtime.sourceBuiltinProviders.map(({ id }) => id)).toContain(
+			"node:test",
+		);
+	});
+
+	it("keeps dynamic builtin access when Reflect.get is mutable", () => {
+		const image = compile(
+			`Reflect.get = target => target;
+const target = Reflect.get(globalThis, "Buffer");
+globalThis.sink = target.process[process.argv[2]]("node:test");`,
+			{ mutablePrimordials: true },
+		);
+		expect(image.runtime.sourceBuiltinProviders.map(({ id }) => id)).toContain(
+			"node:test",
+		);
+	});
+
 	it("publishes canonical state for a statically evaluated source builtin", () => {
 		const image = compile('import test from "node:test"; globalThis.test = test;', {
 			node: true,

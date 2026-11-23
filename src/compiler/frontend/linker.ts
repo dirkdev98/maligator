@@ -133,6 +133,8 @@ export interface ModuleLinkage {
 	 * installer whose globals such code could observe.
 	 */
 	globalObjectEscapes: Set<ESTree.Node>;
+	/** Global object operands of proven Reflect.get calls, keyed by the property they read. */
+	globalObjectNamedReads: Map<ESTree.Identifier, string>;
 
 	/** Direct String API callees whose first argument cannot be a RegExp. */
 	nonRegExpStringCallees: Set<ESTree.Node>;
@@ -165,7 +167,10 @@ interface ModuleExports {
  * `nodeToBinding` to alias imported names to their exporter bindings. A
  * single-module program needs no linking.
  */
-export function linkModules(program: SemanticProgram): ModuleLinkage {
+export function linkModules(
+	program: SemanticProgram,
+	lockedGlobalReflectGet = false,
+): ModuleLinkage {
 	const linkage: ModuleLinkage = {
 		importBindingTargets: new Map(),
 		moduleDefaultBinding: new Map(),
@@ -175,6 +180,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		hostModules: [],
 		hostGlobalInstallers: [],
 		globalObjectEscapes: new Set(),
+		globalObjectNamedReads: new Map(),
 		nonRegExpStringCallees: new Set(),
 		commonJsExportNames: () => [],
 		failedModules: new Map(),
@@ -183,7 +189,18 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 	const graph = program.graph;
 	const target = graph?.execution?.target;
 	const wasmTarget = target?.platform === "wasi" ? target.triple : undefined;
-	const members = collectGlobalAndStringMemberUses(program, linkage, wasmTarget);
+	// Keep this size optimization to standalone modules. Changing which runtime
+	// components link can shift hot code and data in applications with dependencies.
+	const followReflectGet =
+		lockedGlobalReflectGet &&
+		wasmTarget === undefined &&
+		graph?.modules.get(graph.entry)?.dependencies.length === 0;
+	const members = collectGlobalAndStringMemberUses(
+		program,
+		linkage,
+		wasmTarget,
+		followReflectGet,
+	);
 	if (!graph) {
 		return linkage;
 	}
@@ -892,25 +909,57 @@ function collectGlobalAndStringMemberUses(
 	program: SemanticProgram,
 	linkage: ModuleLinkage,
 	wasmTarget: string | undefined,
+	followEntryReflectGet: boolean,
 ) {
 	const globalNames = ["globalThis", "global"];
 	const names = new Set<string>();
 	let computed = false;
 	for (const file of program.files) {
+		let followReflectGet =
+			followEntryReflectGet &&
+			file.path === program.entrypointPath &&
+			file.type === "module" &&
+			!file.commonjs;
+		let reflectReads: Map<ESTree.Identifier, string> | undefined;
 		const isGlobalObject = (node: ESTree.Node) => {
 			if (node.type !== "Identifier") return false;
 			const binding = file.nodeToBinding.get(node);
 			return binding?.undeclared === true && globalNames.includes(binding.name);
 		};
-		// `globalThis.name` and `typeof globalThis` observe no other global.
+		// A read of one known property or a typeof test can keep the global object local.
 		const followed = new Set<ESTree.Node>();
-		traverseEstree(file.ast.body, (node) => {
+		traverseEstree(file.ast.body, (node, { parent, key: edge }) => {
 			if (node.type === "CallExpression") {
 				const callee = node.callee as ESTree.Node;
 				const direct = callee.type === "ChainExpression" ? callee.expression : callee;
 				if (direct.type === "MemberExpression") {
 					const key = staticMemberKey(direct);
 					const argument = node.arguments[0];
+					const property = node.arguments[1];
+					if (
+						key === "get" &&
+						followReflectGet &&
+						!node.optional &&
+						callee === direct &&
+						!direct.optional &&
+						direct.object.type === "Identifier" &&
+						direct.object.name === "Reflect" &&
+						file.nodeToBinding.get(direct.object)?.undeclared === true &&
+						argument?.type === "Identifier" &&
+						argument.name === "globalThis" &&
+						isGlobalObject(argument) &&
+						node.arguments.length === 2 &&
+						property?.type === "Literal" &&
+						typeof property.value === "string" &&
+						property.value !== "globalThis" &&
+						property.value !== "global" &&
+						property.value !== "process"
+					) {
+						// The global aliases hand the object back to the caller. A process
+						// value can likewise expose the dynamic builtin loader.
+						reflectReads ??= new Map();
+						reflectReads.set(argument, property.value);
+					}
 					if (
 						(key === "replace" || key === "replaceAll" || key === "split") &&
 						(argument === undefined ||
@@ -927,6 +976,18 @@ function collectGlobalAndStringMemberUses(
 			if (node.type !== "MemberExpression" || !isGlobalObject(node.object)) return;
 			followed.add(node.object);
 			const key = staticMemberKey(node);
+			// A property read only confines the global receiver if the program cannot
+			// install a getter on its prototype or pass it as an implicit receiver.
+			if (
+				followReflectGet &&
+				(key === "__proto__" ||
+					key === "globalThis" ||
+					key === "global" ||
+					(parent?.type === "CallExpression" && edge === "callee") ||
+					(parent?.type === "TaggedTemplateExpression" && edge === "tag") ||
+					parent?.type === "ChainExpression")
+			)
+				followReflectGet = false;
 			if (key === undefined) computed = true;
 			else {
 				if (wasmTarget !== undefined && isHostGlobal(key))
@@ -934,6 +995,12 @@ function collectGlobalAndStringMemberUses(
 				names.add(key);
 			}
 		});
+		if (followReflectGet && reflectReads !== undefined)
+			for (const [receiver, key] of reflectReads) {
+				followed.add(receiver);
+				linkage.globalObjectNamedReads.set(receiver, key);
+				names.add(key);
+			}
 		for (const binding of file.scopes[0]?.bindings ?? []) {
 			if (!binding.undeclared) continue;
 			if (

@@ -380,6 +380,7 @@ interface CoreFrontendContext {
 
 	/** Reads that hand the global object on; reaching one retains every unfollowed global. */
 	globalObjectEscapes: ReadonlySet<ESTree.Node>;
+	globalObjectNamedReads: ReadonlyMap<ESTree.Identifier, string>;
 	nonRegExpStringCallees: ReadonlySet<ESTree.Node>;
 	languageInstallers: Set<string>;
 
@@ -1017,6 +1018,7 @@ export function constructSemanticProgramCore(
 		hostBuffer: null,
 		hostGlobals: [],
 		globalObjectEscapes: new Set(),
+		globalObjectNamedReads: new Map(),
 		nonRegExpStringCallees: new Set(),
 		languageInstallers: new Set(),
 		nodeModuleInstaller: null,
@@ -1028,7 +1030,16 @@ export function constructSemanticProgramCore(
 	// Cross-module linking: aliases imported names to their exporter bindings (a
 	// no-op for a single-module program). Must run before frontend lowering so
 	// identifier resolution sees the aliased bindings.
-	const linkage = linkModules(semantic);
+	const { world, immutableGlobalBindings } = program.facts;
+	// The lock freezes the Reflect method table as well as the global aliases.
+	const linkage = linkModules(
+		semantic,
+		world.primordialPolicy === "locked" &&
+			world.eval === "disabled" &&
+			!world.realms &&
+			compilerFactIsWorldInvariant(immutableGlobalBindings.get("globalThis")) &&
+			compilerFactIsWorldInvariant(immutableGlobalBindings.get("Reflect")),
+	);
 	program.importBindingTargets = linkage.importBindingTargets;
 	if (options.sourceOrigins !== undefined) {
 		program.sourceOrigins = collectSourceFunctionOrigins(semantic, options.sourceOrigins);
@@ -1116,6 +1127,7 @@ export function constructSemanticProgramCore(
 		(host) => runtimeEval || linkage.hostGlobalInstallers.includes(host.installer),
 	).map((host) => ({ ...host, retained: runtimeEval }));
 	program.globalObjectEscapes = linkage.globalObjectEscapes;
+	program.globalObjectNamedReads = linkage.globalObjectNamedReads;
 	program.nonRegExpStringCallees = linkage.nonRegExpStringCallees;
 	program.processExports = new Map(
 		program.hostModules.flatMap((host) =>
@@ -17081,6 +17093,10 @@ function compileStaticIdentifier(
 	}
 	retainHostGlobal(program, binding);
 	if (program.globalObjectEscapes.has(identifier)) retainUnfollowedGlobals(program);
+	if (binding.undeclared && binding.name === "globalThis") {
+		const key = program.globalObjectNamedReads.get(identifier);
+		if (key !== undefined) retainNamedHostGlobal(program, key);
+	}
 	retainProcessIdentifier(program, fn, identifier, binding);
 	retainCommonJsLoader(program, fn, binding);
 
@@ -17185,6 +17201,10 @@ function retainHostMember(
 		return;
 	}
 	if (key === "process") retainProcessReference(program, fn, member);
+	retainNamedHostGlobal(program, key);
+}
+
+function retainNamedHostGlobal(program: CoreFrontendContext, key: string): void {
 	if (program.hostProcess && (key === "process" || key === "global"))
 		program.hostProcess.retained = true;
 	if (program.hostBuffer && key === "Buffer") program.hostBuffer.retained = true;
