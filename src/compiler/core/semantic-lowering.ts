@@ -378,9 +378,7 @@ interface CoreFrontendContext {
 	/** Linked HOST_GLOBAL_INSTALLERS rows; a reachable read of one of their globals retains them. */
 	hostGlobals: Array<(typeof HOST_GLOBAL_INSTALLERS)[number] & { retained: boolean }>;
 
-	/** Reads that hand the global object on; reaching one retains every unfollowed global. */
-	globalObjectEscapes: ReadonlySet<ESTree.Node>;
-	globalObjectNamedReads: ReadonlyMap<ESTree.Identifier, string>;
+	globalObjectReads: ReadonlyMap<ESTree.Identifier, string | null>;
 	nonRegExpStringCallees: ReadonlySet<ESTree.Node>;
 	languageInstallers: Set<string>;
 
@@ -1017,8 +1015,7 @@ export function constructSemanticProgramCore(
 		hostProcess: null,
 		hostBuffer: null,
 		hostGlobals: [],
-		globalObjectEscapes: new Set(),
-		globalObjectNamedReads: new Map(),
+		globalObjectReads: new Map(),
 		nonRegExpStringCallees: new Set(),
 		languageInstallers: new Set(),
 		nodeModuleInstaller: null,
@@ -1126,8 +1123,7 @@ export function constructSemanticProgramCore(
 	program.hostGlobals = HOST_GLOBAL_INSTALLERS.filter(
 		(host) => runtimeEval || linkage.hostGlobalInstallers.includes(host.installer),
 	).map((host) => ({ ...host, retained: runtimeEval }));
-	program.globalObjectEscapes = linkage.globalObjectEscapes;
-	program.globalObjectNamedReads = linkage.globalObjectNamedReads;
+	program.globalObjectReads = linkage.globalObjectReads;
 	program.nonRegExpStringCallees = linkage.nonRegExpStringCallees;
 	program.processExports = new Map(
 		program.hostModules.flatMap((host) =>
@@ -17092,11 +17088,9 @@ function compileStaticIdentifier(
 		return -1;
 	}
 	retainHostGlobal(program, binding);
-	if (program.globalObjectEscapes.has(identifier)) retainUnfollowedGlobals(program);
-	if (binding.undeclared && binding.name === "globalThis") {
-		const key = program.globalObjectNamedReads.get(identifier);
-		if (key !== undefined) retainNamedHostGlobal(program, key);
-	}
+	const globalRead = program.globalObjectReads.get(identifier);
+	if (globalRead === null) retainUnfollowedGlobals(program);
+	else if (globalRead !== undefined) retainNamedHostGlobal(program, globalRead);
 	retainProcessIdentifier(program, fn, identifier, binding);
 	retainCommonJsLoader(program, fn, binding);
 
