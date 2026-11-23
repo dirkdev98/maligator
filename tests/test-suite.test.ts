@@ -255,13 +255,15 @@ describe("test suite planner", () => {
 	});
 
 	it("partitions check into disjoint CI lanes and shards with complete canonical coverage", () => {
+		type LaneSelection = { lane: string; shard?: number; shards?: number };
 		const workflow = parse(
 			readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8"),
 		) as {
 			jobs: {
+				"linux-quality": { steps: Array<{ run?: string }> };
 				"linux-lanes": {
 					strategy: {
-						matrix: { include: Array<{ lane: string; shard?: number; shards?: number }> };
+						matrix: { include: Array<LaneSelection> };
 					};
 				};
 			};
@@ -275,21 +277,27 @@ describe("test suite planner", () => {
 		const complete = JSON.parse(runSuite("check", "--plan=json")) as {
 			stages: Array<PlannedStage>;
 		};
-		const selected = workflow.jobs["linux-lanes"].strategy.matrix.include.flatMap(
-			({ lane, shard, shards }) => {
-				const plan = JSON.parse(
-					runSuite(
-						"check",
-						"--lane",
-						lane,
-						...(shards === undefined ? [] : ["--shard", `${shard}/${shards}`]),
-						"--plan=json",
-					),
-				) as { scope: { coversEntireTier: boolean }; stages: Array<PlannedStage> };
-				expect(plan.scope.coversEntireTier).toBe(false);
-				return plan.stages;
-			},
-		);
+		const qualityLane = workflow.jobs["linux-quality"].steps
+			.find(({ run }) => run?.startsWith("npm run test:check --"))
+			?.run?.match(/\s--lane (\w+)(?:\s|$)/)?.[1];
+		expect(qualityLane).toBe("quality");
+		const lanes: Array<LaneSelection> = [
+			{ lane: qualityLane! },
+			...workflow.jobs["linux-lanes"].strategy.matrix.include,
+		];
+		const selected = lanes.flatMap(({ lane, shard, shards }) => {
+			const plan = JSON.parse(
+				runSuite(
+					"check",
+					"--lane",
+					lane,
+					...(shards === undefined ? [] : ["--shard", `${shard}/${shards}`]),
+					"--plan=json",
+				),
+			) as { scope: { coversEntireTier: boolean }; stages: Array<PlannedStage> };
+			expect(plan.scope.coversEntireTier).toBe(false);
+			return plan.stages;
+		});
 		expect(new Set(selected.map((stage) => stage.name)).size).toBe(selected.length);
 		for (const stage of complete.stages) {
 			const parts = selected.filter((candidate) => candidate.parent === stage.name);
