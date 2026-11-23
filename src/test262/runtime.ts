@@ -111,6 +111,8 @@ const CC_COMPILE_FLAGS = [
 	...platformCcFlags(),
 	"-I",
 	"runtime/src",
+	"-I",
+	"runtime/rust/include",
 	...perfStatsDefines(),
 	...sanitizerCcFlags(),
 ];
