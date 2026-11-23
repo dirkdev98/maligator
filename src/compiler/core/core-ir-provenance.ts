@@ -231,70 +231,19 @@ function literalArrayIndex(
 		: undefined;
 }
 
-type CoreOwnCellResolve = (index: number) => CoreOwnCell | undefined;
-
-const ownCellResolvers = new WeakMap<
-	ReadonlyArray<ReadonlyArray<number>>,
-	{ readonly length: number; readonly resolve: CoreOwnCellResolve }
->();
-
-function codeUnitsEqual(
-	left: ReadonlyArray<number>,
-	right: ReadonlyArray<number>,
-): boolean {
-	if (left.length !== right.length) return false;
-	for (let index = 0; index < left.length; index++) {
-		if (left[index] !== right[index]) return false;
-	}
-	return true;
-}
-
-export function coreOwnCellResolver(
-	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
-): CoreOwnCellResolve {
-	const cached = ownCellResolvers.get(stringConstants);
-	if (cached?.length === stringConstants.length) return cached.resolve;
-	const canonicalByHash = new Map<number, number | Array<number>>();
-	const canonicalByIndex = new Int32Array(stringConstants.length);
-	canonicalByIndex.fill(-1);
-	for (const [index, units] of stringConstants.entries()) {
-		let hash = 2_166_136_261;
-		for (const unit of units) hash = Math.imul(hash ^ unit, 16_777_619) >>> 0;
-		hash = Math.imul(hash ^ units.length, 16_777_619) >>> 0;
-		const bucket = canonicalByHash.get(hash);
-		let canonical = index;
-		if (typeof bucket === "number" && codeUnitsEqual(stringConstants[bucket]!, units)) {
-			canonical = bucket;
-		} else if (Array.isArray(bucket)) {
-			for (const candidate of bucket) {
-				if (!codeUnitsEqual(stringConstants[candidate]!, units)) continue;
-				canonical = candidate;
-				break;
-			}
-		}
-		if (canonical === index) {
-			canonicalByHash.set(
-				hash,
-				bucket === undefined
-					? index
-					: Array.isArray(bucket)
-						? [...bucket, index]
-						: [bucket, index],
-			);
-		}
-		canonicalByIndex[index] = canonical;
-	}
-	const resolve = (index: number): CoreOwnCell | undefined => {
-		if (!Number.isSafeInteger(index) || index < 0) return undefined;
-		const canonical = canonicalByIndex[index] ?? -1;
-		const normalized = canonical < 0 ? index : canonical;
-		const element = canonicalArrayIndex(stringConstants[normalized]);
-		return element === undefined
-			? { kind: "object-slot", key: normalized }
-			: { kind: "element", index: element };
-	};
-	ownCellResolvers.set(stringConstants, { length: stringConstants.length, resolve });
-	return resolve;
+export function coreOwnCellForString(
+	program: CoreProgram,
+	index: number,
+): CoreOwnCell | undefined {
+	if (!Number.isSafeInteger(index) || index < 0) return undefined;
+	const units = program.stringConstants[index];
+	const element = canonicalArrayIndex(units);
+	if (element !== undefined) return { kind: "element", index: element };
+	const key =
+		units === undefined
+			? index
+			: (program.stringConstantSlot(program.stringConstantText(index), "first") ?? index);
+	return { kind: "object-slot", key };
 }
 
 function accessKey(
@@ -578,9 +527,8 @@ export function buildCoreProvenance(
 		valueQueries++;
 		return resolveLayout(root(value));
 	};
-	let stringResolver: ReturnType<typeof coreOwnCellResolver> | undefined;
 	const cellForString = (index: number): CoreOwnCell | undefined =>
-		(stringResolver ??= coreOwnCellResolver(program.stringConstants))(index);
+		coreOwnCellForString(program, index);
 	const keyCells = new Map<CoreValueId, CoreOwnCell | null>();
 	const cellForValue = (value: CoreValueId): CoreOwnCell | undefined => {
 		const valueRoot = root(value);

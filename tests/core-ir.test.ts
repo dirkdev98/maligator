@@ -19,7 +19,7 @@ import {
 } from "../src/compiler/core/core-ir-opcodes.ts";
 import {
 	buildCoreLocalFactIndex,
-	coreOwnCellResolver,
+	coreOwnCellForString,
 } from "../src/compiler/core/core-ir-provenance.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
 import type {
@@ -84,18 +84,15 @@ function registry(): CoreOpcodeRegistry {
 }
 
 describe("Core IR", () => {
-	it("reuses own-cell canonicalization until the string table grows", () => {
-		const constants = [[0x6b], [0x6b]];
-		const first = coreOwnCellResolver(constants);
+	it("canonicalizes equal strings and recognizes array indices", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: [[0x6b], [0x6b], [0x31], [0x30, 0x31]],
+		});
 
-		expect(first(0)).toEqual({ kind: "object-slot", key: 0 });
-		expect(first(1)).toEqual({ kind: "object-slot", key: 0 });
-		expect(coreOwnCellResolver(constants)).toBe(first);
-
-		constants.push([0x31]);
-		const grown = coreOwnCellResolver(constants);
-		expect(grown).not.toBe(first);
-		expect(grown(2)).toEqual({ kind: "element", index: 1 });
+		expect(coreOwnCellForString(program, 0)).toEqual({ kind: "object-slot", key: 0 });
+		expect(coreOwnCellForString(program, 1)).toEqual({ kind: "object-slot", key: 0 });
+		expect(coreOwnCellForString(program, 2)).toEqual({ kind: "element", index: 1 });
+		expect(coreOwnCellForString(program, 3)).toEqual({ kind: "object-slot", key: 3 });
 	});
 
 	it("keeps structural control out of opcodes and enforces exact arities", () => {
