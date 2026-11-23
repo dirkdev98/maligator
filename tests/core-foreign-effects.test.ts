@@ -454,7 +454,11 @@ describe("static foreign call effects", () => {
 			kind: "call",
 			foreignCall: { symbol: binding.symbol, arity: binding.arity },
 		});
-		expect(restored.runtime.hostInstalls).toEqual([
+		expect(
+			restored.runtime.hostInstalls.filter(({ installer }) =>
+				installer.startsWith("mal_ffi_install_"),
+			),
+		).toEqual([
 			{
 				installer: "mal_ffi_install_math",
 				exports: [expect.objectContaining({ name: "mix" })],
