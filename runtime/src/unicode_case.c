@@ -11,6 +11,14 @@
 
 #define UNICODE_COUNT(table) (sizeof(table) / sizeof((table)[0]))
 
+static_assert(
+    sizeof(mal_unicode_cased) + sizeof(mal_unicode_ignorable) + sizeof(mal_unicode_soft_dotted) +
+    sizeof(mal_unicode_case_class_blocks) + sizeof(mal_unicode_case_class_entries) +
+    sizeof(mal_unicode_lower_blocks) + sizeof(mal_unicode_lower_entries) + sizeof(mal_unicode_lower_mappings) +
+    sizeof(mal_unicode_upper_blocks) + sizeof(mal_unicode_upper_entries) + sizeof(mal_unicode_upper_mappings) +
+    sizeof(mal_unicode_case_expansions) <= 30000,
+    "Unicode case tables exceed their native size budget");
+
 static bool unicode_property(const u32 *table, usize length, u32 cp) {
     usize low = 0, high = length / 2;
     while (low < high) {
@@ -21,9 +29,14 @@ static bool unicode_property(const u32 *table, usize length, u32 cp) {
     return low * 2 < length && table[low * 2] <= cp;
 }
 
-static u32 unicode_class(u32 cp) {
-    if (cp < 0x80 || cp >= 0x110000) return 0;
-    return mal_unicode_class_values[((usize) mal_unicode_class_pages[cp >> 8] << 8) | (cp & 255)];
+enum { UNICODE_CASE_CLASS_ABOVE = 2 };
+
+static u32 unicode_case_class(u32 cp) {
+    usize block = cp >> MAL_UNICODE_CASE_BLOCK_BITS;
+    if (block >= UNICODE_COUNT(mal_unicode_case_class_blocks)) return 0;
+    usize offset = ((usize) mal_unicode_case_class_blocks[block] << MAL_UNICODE_CASE_BLOCK_BITS) |
+        (cp & ((1u << MAL_UNICODE_CASE_BLOCK_BITS) - 1));
+    return (mal_unicode_case_class_entries[offset >> 2] >> ((offset & 3) * 2)) & 3;
 }
 
 typedef enum UnicodeContext : u8 {
@@ -48,13 +61,13 @@ static bool unicode_case_context(const c16 *source, usize length, usize index, b
             if (!unicode_property(mal_unicode_ignorable, UNICODE_COUNT(mal_unicode_ignorable), cp))
                 return unicode_property(mal_unicode_cased, UNICODE_COUNT(mal_unicode_cased), cp);
         } else {
-            u32 ccc = unicode_class(cp);
+            u32 ccc = unicode_case_class(cp);
             if (context == UNICODE_CONTEXT_BEFORE_DOT && cp == 0x307) return true;
-            if (ccc == 0 || ccc == 230) {
+            if (ccc == 0 || ccc == UNICODE_CASE_CLASS_ABOVE) {
                 if (context == UNICODE_CONTEXT_AFTER_I) return cp == 0x49;
                 if (context == UNICODE_CONTEXT_SOFT_DOTTED)
                     return unicode_property(mal_unicode_soft_dotted, UNICODE_COUNT(mal_unicode_soft_dotted), cp);
-                return context == UNICODE_CONTEXT_MORE_ABOVE && ccc == 230;
+                return context == UNICODE_CONTEXT_MORE_ABOVE && ccc == UNICODE_CASE_CLASS_ABOVE;
             }
         }
         if (!backwards) cursor += width;
@@ -63,25 +76,24 @@ static bool unicode_case_context(const c16 *source, usize length, usize index, b
 }
 
 typedef struct UnicodeCaseTable {
-    /** Sorted rows of a code point, the pool offset of its mapping, and its scalar count. */
-    const u32 *rows;
+    const i32 *mappings;
     const u8 *blocks;
     usize block_count;
-    const u16 *entries;
+    const u8 *entries;
 } UnicodeCaseTable;
 
 static const UnicodeCaseTable unicode_case_tables[2] = {
-    {mal_unicode_lower, mal_unicode_lower_blocks, UNICODE_COUNT(mal_unicode_lower_blocks), mal_unicode_lower_entries},
-    {mal_unicode_upper, mal_unicode_upper_blocks, UNICODE_COUNT(mal_unicode_upper_blocks), mal_unicode_upper_entries},
+    {mal_unicode_lower_mappings, mal_unicode_lower_blocks, UNICODE_COUNT(mal_unicode_lower_blocks), mal_unicode_lower_entries},
+    {mal_unicode_upper_mappings, mal_unicode_upper_blocks, UNICODE_COUNT(mal_unicode_upper_blocks), mal_unicode_upper_entries},
 };
 
-// The mapping row of `cp`, or nullptr when it maps to itself.
-static inline const u32 *unicode_case_row(const UnicodeCaseTable *table, u32 cp) {
+// Deltas fit below the expansion range, whose low two bits store the scalar count.
+static inline i32 unicode_case_entry(const UnicodeCaseTable *table, u32 cp) {
     usize block = cp >> MAL_UNICODE_CASE_BLOCK_BITS;
-    if (block >= table->block_count) return nullptr;
-    u16 entry = table->entries[((usize) table->blocks[block] << MAL_UNICODE_CASE_BLOCK_BITS) |
+    if (block >= table->block_count) return 0;
+    u8 entry = table->entries[((usize) table->blocks[block] << MAL_UNICODE_CASE_BLOCK_BITS) |
         (cp & ((1u << MAL_UNICODE_CASE_BLOCK_BITS) - 1))];
-    return entry == 0 ? nullptr : table->rows + (usize) (entry - 1) * 3;
+    return table->mappings[entry];
 }
 
 typedef struct UnicodeCaseInput {
@@ -131,9 +143,16 @@ static inline __attribute__((always_inline)) const u32 *unicode_case_mapping(
         count = 1;
     }
     if (mapping == nullptr) {
-        const u32 *row = unicode_case_row(input->table, cp);
-        if (row == nullptr) { special[0] = cp; mapping = special; count = 1; }
-        else { mapping = mal_unicode_pool + row[1]; count = row[2]; }
+        i32 entry = unicode_case_entry(input->table, cp);
+        if (entry < MAL_UNICODE_CASE_EXPANSION_BASE) {
+            special[0] = (u32) ((i32) cp + entry);
+            mapping = special;
+            count = 1;
+        } else {
+            u32 expansion = (u32) (entry - MAL_UNICODE_CASE_EXPANSION_BASE);
+            mapping = mal_unicode_case_expansions + (expansion >> 2);
+            count = expansion & 3;
+        }
     }
     *output_count = count;
     return mapping;
@@ -210,9 +229,8 @@ static inline u32 unicode_latin1_case(c16 unit, bool upper) {
 
 // A single-scalar mapping never changes the UTF-16 width; longer ones report UINT32_MAX.
 static inline u32 unicode_simple_case(const UnicodeCaseTable *table, u32 cp) {
-    const u32 *row = unicode_case_row(table, cp);
-    if (row == nullptr) return cp;
-    return row[2] == 1 ? mal_unicode_pool[row[1]] : UINT32_MAX;
+    i32 entry = unicode_case_entry(table, cp);
+    return entry < MAL_UNICODE_CASE_EXPANSION_BASE ? (u32) ((i32) cp + entry) : UINT32_MAX;
 }
 
 bool mal_unicode_case_fixed(

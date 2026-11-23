@@ -97,26 +97,34 @@ data.decomposition = [...decomposition]
 	});
 data.classes = [...classes].sort(([a], [b]) => a - b).flat();
 const classValues = new Uint8Array(0x110000);
+const lastClass = Math.max(...classes.keys());
+const caseClassValues = new Uint8Array((lastClass >> 2) + 1);
 for (const [cp, value] of classes) {
 	if (!Number.isInteger(value) || value < 0 || value > 255)
 		throw new Error("Combining class exceeds u8");
 	classValues[cp] = value;
+	caseClassValues[cp >> 2]! |= (value === 230 ? 2 : 1) << ((cp & 3) * 2);
 }
-const classPages: Array<number> = [];
-const classPageValues: Array<number> = [];
-const classPageIds = new Map<string, number>();
-for (let offset = 0; offset < classValues.length; offset += 256) {
-	const page = [...classValues.subarray(offset, offset + 256)];
-	const key = page.join(",");
-	let id = classPageIds.get(key);
-	if (id === undefined) {
-		id = classPageIds.size;
-		if (id > 255) throw new Error("Combining class page index exceeds u8");
-		classPageIds.set(key, id);
-		classPageValues.push(...page);
+function deduplicateBlocks(values: Uint8Array, size: number, table: string) {
+	const indices: Array<number> = [];
+	const blocks: Array<number> = [];
+	const ids = new Map<string, number>();
+	for (let offset = 0; offset < values.length; offset += size) {
+		const block = new Uint8Array(size);
+		block.set(values.subarray(offset, offset + size));
+		const key = block.join(",");
+		let id = ids.get(key);
+		if (id === undefined) {
+			id = ids.size;
+			if (id > 255) throw new Error(`${table} block index exceeds u8`);
+			ids.set(key, id);
+			blocks.push(...block);
+		}
+		indices.push(id);
 	}
-	classPages.push(id);
+	return { indices, blocks };
 }
+const normalizationClasses = deduplicateBlocks(classValues, 256, "Combining class");
 const excluded = new Set(
 	rows("CompositionExclusions.txt").map((row) => Number.parseInt(row[0]!, 16)),
 );
@@ -158,33 +166,27 @@ const c = [
 ];
 function cArray(
 	name: string,
-	type: "u8" | "u16" | "u32",
+	type: "u8" | "i32" | "u32",
 	values: ReadonlyArray<number>,
-	storage = "static ",
 ): string {
-	return `${storage}const ${type} mal_unicode_${name}[] = {\n${Array.from({ length: Math.ceil(values.length / 16) }, (_, i) => `    ${values.slice(i * 16, i * 16 + 16).join(", ")},`).join("\n")}\n};`;
+	return `static const ${type} mal_unicode_${name}[] = {\n${Array.from({ length: Math.ceil(values.length / 16) }, (_, i) => `    ${values.slice(i * 16, i * 16 + 16).join(", ")},`).join("\n")}\n};`;
 }
 for (const [name, values] of Object.entries(data)) {
 	if (name === "classes") {
 		c.push(
-			"#if defined(MAL_UNICODE_CASE_DATA)",
-			cArray("class_pages", "u8", classPages, ""),
-			cArray("class_values", "u8", classPageValues, ""),
-			"#else",
-			"extern const u8 mal_unicode_class_pages[];",
-			"extern const u8 mal_unicode_class_values[];",
+			"#if !defined(MAL_UNICODE_CASE_DATA)",
+			cArray("class_pages", "u8", normalizationClasses.indices),
+			cArray("class_values", "u8", normalizationClasses.blocks),
 			"#endif",
 		);
 	} else if (name === "pool") {
 		c.push(
-			"#if defined(MAL_UNICODE_CASE_DATA)",
-			cArray("pool", "u32", values.slice(0, casePoolLength)),
-			"#else",
+			"#if !defined(MAL_UNICODE_CASE_DATA)",
 			`#define MAL_UNICODE_NORMALIZATION_POOL_OFFSET ${casePoolLength}`,
 			cArray("pool", "u32", values.slice(casePoolLength)),
 			"#endif",
 		);
-	} else {
+	} else if (name !== "lower" && name !== "upper") {
 		const normalization = name === "decomposition" || name === "composition";
 		c.push(
 			normalization
@@ -199,44 +201,64 @@ for (const [name, values] of Object.entries(data)) {
 		);
 	}
 }
-// Case mapping reads a two-stage index instead of binary-searching its table: each block
-// of code points names a deduplicated row of entries, each zero or its mapping row plus one.
-const caseBlockBits = 7;
+// The shared byte index names a delta or a short expansion. Identity uses delta zero.
+const caseBlockBits = 6;
+const caseBlockSize = 1 << caseBlockBits;
+const expansionBase = 0x110000;
+const expansionPool: Array<number> = [];
+const expansions = new Map<string, number>();
+const caseClasses = deduplicateBlocks(caseClassValues, caseBlockSize / 4, "Case class");
 c.push(
 	"#if defined(MAL_UNICODE_CASE_DATA)",
 	`#define MAL_UNICODE_CASE_BLOCK_BITS ${caseBlockBits}`,
+	`#define MAL_UNICODE_CASE_EXPANSION_BASE ${expansionBase}`,
+	cArray("case_class_blocks", "u8", caseClasses.indices),
+	cArray("case_class_entries", "u8", caseClasses.blocks),
 );
 for (const name of ["lower", "upper"] as const) {
 	const table = data[name]!;
-	const blockSize = 1 << caseBlockBits;
-	const entries = new Uint16Array(
-		(Math.floor(table.at(-3)! / blockSize) + 1) * blockSize,
-	);
-	for (let row = 0; row < table.length / 3; row++) {
-		if (row + 1 > 0xffff) throw new Error("Case mapping row exceeds u16");
-		entries[table[row * 3]!] = row + 1;
-	}
-	const blocks: Array<number> = [];
-	const blockEntries: Array<number> = [];
-	const blockIds = new Map<string, number>();
-	for (let offset = 0; offset < entries.length; offset += blockSize) {
-		const block = [...entries.subarray(offset, offset + blockSize)];
-		const key = block.join(",");
-		let id = blockIds.get(key);
-		if (id === undefined) {
-			id = blockIds.size;
-			if (id > 255) throw new Error("Case mapping block index exceeds u8");
-			blockIds.set(key, id);
-			blockEntries.push(...block);
+	const entries = new Uint8Array(table.at(-3)! + 1);
+	const mappings = [0];
+	const mappingIds = new Map([[0, 0]]);
+	for (let row = 0; row < table.length; row += 3) {
+		const cp = table[row]!;
+		const start = table[row + 1]!;
+		const count = table[row + 2]!;
+		let mapping: number;
+		if (count === 1) {
+			const target = pool[start]!;
+			if (cp <= 0xffff !== target <= 0xffff)
+				throw new Error("Simple case mapping changes UTF-16 width");
+			mapping = target - cp;
+		} else {
+			if (count < 2 || count > 3) throw new Error("Unsupported case expansion length");
+			const scalars = pool.slice(start, start + count);
+			const key = scalars.join(",");
+			let offset = expansions.get(key);
+			if (offset === undefined) {
+				offset = expansionPool.length;
+				expansions.set(key, offset);
+				expansionPool.push(...scalars);
+			}
+			mapping = expansionBase + offset * 4 + count;
 		}
-		blocks.push(id);
+		let index = mappingIds.get(mapping);
+		if (index === undefined) {
+			index = mappings.length;
+			if (index > 255) throw new Error(`${name} case mapping index exceeds u8`);
+			mappingIds.set(mapping, index);
+			mappings.push(mapping);
+		}
+		entries[cp] = index;
 	}
+	const encoded = deduplicateBlocks(entries, caseBlockSize, `${name} case`);
 	c.push(
-		cArray(`${name}_blocks`, "u8", blocks),
-		cArray(`${name}_entries`, "u16", blockEntries),
+		cArray(`${name}_blocks`, "u8", encoded.indices),
+		cArray(`${name}_entries`, "u8", encoded.blocks),
+		cArray(`${name}_mappings`, "i32", mappings),
 	);
 }
-c.push("#endif");
+c.push(cArray("case_expansions", "u32", expansionPool), "#endif");
 ts.push(...unicodeTablesModule(data));
 mkdirSync(output, { recursive: true });
 const formatted = await format("unicode-data.ts", `${ts.join("\n")}\n`, {
