@@ -538,9 +538,13 @@ describe("late Core specialization plan", () => {
 	it("selects deterministically and charges the shared code/work budgets", () => {
 		const { program, function: functionId } = numericProgram();
 		const first = planning(program, [functionId]);
-		const second = buildCoreOptimizationPlan(program, first.analyses, first.summaries, [
-			functionId,
-		]);
+		const second = buildCoreOptimizationPlan(
+			program,
+			first.analyses,
+			first.summaries,
+			[functionId],
+			{ context: first.context },
+		);
 		expect(second).toEqual(first.plan);
 		expect(planSpecializations(second)).toEqual(planSpecializations(first.plan));
 		const selected = planSpecializations(first.plan);
