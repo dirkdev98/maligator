@@ -1009,6 +1009,7 @@ export interface NativePlan {
 	/** Runtime-backed proof contracts consumed only while rendering native code. */
 	readonly semanticProtectors: ReadonlyArray<VmSemanticProtectorFact>;
 	readonly functions: ReadonlyArray<NativeFunctionPlan>;
+	readonly builtinMemberNames?: ReadonlyArray<string>;
 	/** Layouts admitted into per-VM cells; `class-layout` instruction plans name them by ordinal. */
 	readonly classLayouts?: ReadonlyArray<CoreTargetClassLayout>;
 }
@@ -3391,6 +3392,9 @@ export function lowerVerifiedExecutionToProgramImage(
 			{
 				semanticProtectors,
 				functions: nativeFunctions,
+				...(context.data.builtinMemberNames === undefined
+					? {}
+					: { builtinMemberNames: context.data.builtinMemberNames }),
 				...(nativeProgram.classLayouts.length === 0
 					? {}
 					: { classLayouts: nativeProgram.classLayouts }),

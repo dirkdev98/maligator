@@ -1284,6 +1284,9 @@ typedef struct MalRuntimeImage {
     /** MalEnginePolicy bits. Only the image an isolate starts from sets its policy. */
     u32 engine_policy;
 
+    /** Ordered builtin member lists selected by the image. */
+    const struct MalBuiltinMemberList *const *builtin_member_lists;
+
     /** Compiled functions keep live values in C locals, so collections scan native
      * stacks. Precise images (Wasm, bytecode wires) publish shadow-frame roots. */
     bool conservative_stack_roots;

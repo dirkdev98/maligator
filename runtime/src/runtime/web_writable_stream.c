@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "web_readable_stream_object.h"
 
 #include <math.h>
@@ -1024,47 +1025,50 @@ static MalObject *ws_install_class(MalVm *vm, MalObject *global_this,
     return prototype;
 }
 
+#define MAL_WRITABLE_STREAM_1(X) \
+    X(writable_stream_1_locked, "locked", ws_define_getter, (const byte *) "get locked", ws_get_locked) \
+    X(writable_stream_1_abort, "abort", mal_intrinsic_define_method_n, 1, ws_stream_abort) \
+    X(writable_stream_1_close, "close", mal_intrinsic_define_method_n, 0, ws_stream_close) \
+    X(writable_stream_1_getWriter, "getWriter", mal_intrinsic_define_method_n, 0, ws_get_writer)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(writable_stream_1, MAL_WRITABLE_STREAM_1)
+#undef MAL_WRITABLE_STREAM_1
+
+#define MAL_WRITABLE_STREAM_2(X) \
+    X(writable_stream_2_signal, "signal", ws_define_getter, (const byte *) "get signal", ws_controller_get_signal) \
+    X(writable_stream_2_error, "error", mal_intrinsic_define_method_n, 1, ws_controller_error)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(writable_stream_2, MAL_WRITABLE_STREAM_2)
+#undef MAL_WRITABLE_STREAM_2
+
+#define MAL_WRITABLE_STREAM_3(X) \
+    X(writable_stream_3_closed, "closed", ws_define_getter, (const byte *) "get closed", ws_writer_get_closed) \
+    X(writable_stream_3_desiredSize, "desiredSize", ws_define_getter, (const byte *) "get desiredSize", ws_writer_get_desired_size) \
+    X(writable_stream_3_ready, "ready", ws_define_getter, (const byte *) "get ready", ws_writer_get_ready) \
+    X(writable_stream_3_abort, "abort", mal_intrinsic_define_method_n, 1, ws_writer_abort) \
+    X(writable_stream_3_close, "close", mal_intrinsic_define_method_n, 0, ws_writer_close) \
+    X(writable_stream_3_releaseLock, "releaseLock", mal_intrinsic_define_method_n, 0, ws_writer_release)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(writable_stream_3, MAL_WRITABLE_STREAM_3)
+#undef MAL_WRITABLE_STREAM_3
+
 void mal_writable_stream_install(MalVm *vm, MalObject *global_this) {
     MalObject *stream_proto = ws_install_class(vm, global_this,
         (const byte *) "WritableStream", 0, ws_constructor,
         MAL_INTRINSIC_WRITABLE_STREAM_CONSTRUCTOR,
         MAL_INTRINSIC_WRITABLE_STREAM_PROTOTYPE);
-    ws_define_getter(vm, stream_proto, (const byte *) "locked",
-        (const byte *) "get locked", ws_get_locked);
-    mal_intrinsic_define_method_n(vm, stream_proto,
-        (const byte *) "abort", 1, ws_stream_abort);
-    mal_intrinsic_define_method_n(vm, stream_proto,
-        (const byte *) "close", 0, ws_stream_close);
-    mal_intrinsic_define_method_n(vm, stream_proto,
-        (const byte *) "getWriter", 0, ws_get_writer);
+    mal_builtin_members_define(vm, stream_proto, MAL_BUILTIN_MEMBER_writable_stream_1);
 
     MalObject *controller_proto = ws_install_class(vm, global_this,
         (const byte *) "WritableStreamDefaultController", 0,
         ws_controller_constructor,
         MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_CONTROLLER_CONSTRUCTOR,
         MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_CONTROLLER_PROTOTYPE);
-    ws_define_getter(vm, controller_proto, (const byte *) "signal",
-        (const byte *) "get signal", ws_controller_get_signal);
-    mal_intrinsic_define_method_n(vm, controller_proto,
-        (const byte *) "error", 1, ws_controller_error);
+    mal_builtin_members_define(vm, controller_proto, MAL_BUILTIN_MEMBER_writable_stream_2);
 
     MalObject *writer_proto = ws_install_class(vm, global_this,
         (const byte *) "WritableStreamDefaultWriter", 1,
         ws_writer_constructor,
         MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_WRITER_CONSTRUCTOR,
         MAL_INTRINSIC_WRITABLE_STREAM_DEFAULT_WRITER_PROTOTYPE);
-    ws_define_getter(vm, writer_proto, (const byte *) "closed",
-        (const byte *) "get closed", ws_writer_get_closed);
-    ws_define_getter(vm, writer_proto, (const byte *) "desiredSize",
-        (const byte *) "get desiredSize", ws_writer_get_desired_size);
-    ws_define_getter(vm, writer_proto, (const byte *) "ready",
-        (const byte *) "get ready", ws_writer_get_ready);
-    mal_intrinsic_define_method_n(vm, writer_proto,
-        (const byte *) "abort", 1, ws_writer_abort);
-    mal_intrinsic_define_method_n(vm, writer_proto,
-        (const byte *) "close", 0, ws_writer_close);
-    mal_intrinsic_define_method_n(vm, writer_proto,
-        (const byte *) "releaseLock", 0, ws_writer_release);
+    mal_builtin_members_define(vm, writer_proto, MAL_BUILTIN_MEMBER_writable_stream_3);
     mal_intrinsic_define_method_n(vm, writer_proto,
         (const byte *) "write", 1, ws_writer_write);
 }

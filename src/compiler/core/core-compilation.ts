@@ -143,6 +143,7 @@ export interface CoreProgramData {
 	/** Top-level lexical bindings that a function can only read after their initialization. */
 	readonly initializedModuleBindingReads?: ReadonlyArray<CoreInitializedModuleBindingReads>;
 	readonly retainedHostInstallers: ReadonlyArray<string>;
+	readonly builtinMemberNames?: ReadonlyArray<string>;
 	/** Present only for an image of a relocatable program. */
 	readonly moduleLinks?: CoreModuleLinks;
 }

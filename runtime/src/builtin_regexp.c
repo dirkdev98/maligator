@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "./builtin_regexp.h"
 
 #include <assert.h>
@@ -3779,6 +3780,24 @@ static void regexp_define_legacy_accessor(
     mal_gc_unroot(&root);
 }
 
+#define MAL_REGEXP_MEMBERS_1(X) \
+    X(regexp_members_1_escape, "escape", 1, regexp_escape)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(regexp_members_1, MAL_REGEXP_MEMBERS_1)
+#undef MAL_REGEXP_MEMBERS_1
+
+#define MAL_REGEXP_MEMBERS_2(X) \
+    X(regexp_members_2_compile, "compile", 2, regexp_proto_compile) \
+    X(regexp_members_2_exec, "exec", 1, regexp_proto_exec) \
+    X(regexp_members_2_test, "test", 1, regexp_proto_test) \
+    X(regexp_members_2_toString, "toString", 0, regexp_proto_to_string)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(regexp_members_2, MAL_REGEXP_MEMBERS_2)
+#undef MAL_REGEXP_MEMBERS_2
+
+#define MAL_REGEXP_MEMBERS_3(X) \
+    X(regexp_members_3_next, "next", 0, regexp_string_iterator_next)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(regexp_members_3, MAL_REGEXP_MEMBERS_3)
+#undef MAL_REGEXP_MEMBERS_3
+
 void mal_builtin_regexp_install(MalVm *vm) {
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
 
@@ -3808,7 +3827,7 @@ void mal_builtin_regexp_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, prototype, (const byte *) "constructor", vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
     mal_intrinsic_define_species(vm, constructor_object);
-    mal_intrinsic_define_method_n(vm, constructor_object, (const byte *) "escape", 1, regexp_escape);
+    mal_builtin_members_define(vm, constructor_object, MAL_BUILTIN_MEMBER_regexp_members_1);
 
     regexp_define_legacy_accessor(vm, constructor_object, "input", "get input", "set input", REGEXP_LEGACY_INPUT, true);
     regexp_define_legacy_accessor(vm, constructor_object, "$_", "get $_", "set $_", REGEXP_LEGACY_INPUT, true);
@@ -3829,10 +3848,7 @@ void mal_builtin_regexp_install(MalVm *vm) {
             false);
     }
 
-    mal_intrinsic_define_method_n(vm, prototype, (const byte *) "compile", 2, regexp_proto_compile);
-    mal_intrinsic_define_method_n(vm, prototype, (const byte *) "exec", 1, regexp_proto_exec);
-    mal_intrinsic_define_method_n(vm, prototype, (const byte *) "test", 1, regexp_proto_test);
-    mal_intrinsic_define_method_n(vm, prototype, (const byte *) "toString", 0, regexp_proto_to_string);
+    mal_builtin_members_define(vm, prototype, MAL_BUILTIN_MEMBER_regexp_members_2);
 
     regexp_define_symbol_method_n(vm, prototype, MAL_INTRINSIC_SYMBOL_MATCH, (const byte *) "[Symbol.match]", 1, regexp_proto_match);
     regexp_define_symbol_method_n(vm, prototype, MAL_INTRINSIC_SYMBOL_MATCH_ALL, (const byte *) "[Symbol.matchAll]", 1, regexp_proto_match_all);
@@ -3843,7 +3859,7 @@ void mal_builtin_regexp_install(MalVm *vm) {
     // %RegExpStringIteratorPrototype% inherits from %IteratorPrototype%.
     MalObject *iterator_prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ITERATOR_PROTOTYPE]));
     vm->intrinsics[MAL_INTRINSIC_REGEXP_STRING_ITERATOR_PROTOTYPE] = mal_value_from_object(iterator_prototype);
-    mal_intrinsic_define_method_n(vm, iterator_prototype, (const byte *) "next", 0, regexp_string_iterator_next);
+    mal_builtin_members_define(vm, iterator_prototype, MAL_BUILTIN_MEMBER_regexp_members_3);
     MalPropertyDesc tag_desc = mal_intrinsic_data_desc(
         mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "RegExp String Iterator")), MAL_PROPERTY_CONFIGURABLE
     );

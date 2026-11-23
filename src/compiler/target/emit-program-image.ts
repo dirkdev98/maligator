@@ -1,5 +1,28 @@
 import type { IncludedAsset } from "../../assets.ts";
 import type { PlatformData } from "../../platform/catalog.ts";
+import {
+	BUILTIN_MEMBER_GROUPS,
+	NATIVE_BUILTIN_MEMBER_NAMES,
+} from "../frontend/builtin-member-data.ts";
+import {
+	INTRINSIC_INSTALLERS,
+	JSON_INSTALLER,
+	MAP_INSTALLER,
+	SET_INSTALLER,
+} from "../frontend/engine-components.ts";
+import {
+	HTTP_WITHOUT_WEBSOCKET_INSTALLER,
+	hostInstallerSymbol,
+	BUFFER_INSTALLER_SYMBOL,
+	NODE_CONSOLE_HOOKS_INSTALLER,
+	NODE_BUILTIN_LOADER_INSTALLER,
+	NODE_ERROR_HOOKS_INSTALLER,
+	NODE_FS_READ_STREAM_INSTALLER,
+	PROCESS_ENV_INSTALLER,
+	REGEXP_INSTALLER,
+	UNICODE_NORMALIZATION_INSTALLER,
+	WEB_FETCH_INSTALLER,
+} from "../frontend/host-modules.ts";
 import { bigintLimbs } from "../shared/bigint-digits.ts";
 import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import {
@@ -11,6 +34,7 @@ import { EMBED_INSTALLER, embeddedAsset } from "../shared/embedded-asset.ts";
 import type { EmbeddedAsset } from "../shared/embedded-asset.ts";
 import { knownOperationFlags } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
+import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { staticDataQueryTag } from "../shared/static-data-query.ts";
 import type { CoreTargetClassLayout } from "./core-target-ir.ts";
 import {
@@ -180,6 +204,7 @@ export const NATIVE_C_HEADER_LINES = [
 	'#include "builtin_date.h"',
 	'#include "builtin_object.h"',
 	'#include "builtin_json.h"',
+	'#include "builtin_members.h"',
 	'#include "builtin_map.h"',
 	'#include "builtin_set.h"',
 	'#include "builtin_number.h"',
@@ -251,6 +276,7 @@ export const GENERATED_DATA_C_HEADER_LINES = [
 	'#include "vm.h"',
 	// Bytecode rows name Math operations by their runtime enum.
 	'#include "builtin_math.h"',
+	'#include "builtin_members.h"',
 	"#define MAL_STRING_ROW(code_units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = length_value, .code_units = code_units_value }",
 	"#define MAL_LATIN1_STRING_ROW(units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .latin1 = 1, .hash = 0, .length = length_value, .latin1_units = units_value }",
 	"#define MAL_LINE_ENTRY(start_ip_value, pos_id_value) { .start_ip = start_ip_value, .pos_id = pos_id_value }",
@@ -1408,7 +1434,7 @@ function externalizeDataArrays(
 		const match = /^(?:static )?(.+?) (mal_[A-Za-z0-9_]+)\[\] = (.*)$/.exec(line);
 		if (match === null) {
 			if (line.startsWith("extern ")) {
-				const declaration = /\b(mal_[A-Za-z0-9_]+)(?=\[\]|\()/.exec(line);
+				const declaration = /\b(mal_[A-Za-z0-9_]+)(?=\[\]|\(|;)/.exec(line);
 				if (declaration === null)
 					throw new Error(`cannot identify generated declaration '${line}'`);
 				declare(declaration[1]!, line);
@@ -1904,6 +1930,7 @@ function emitProgramImageParts(
 		options,
 		image.profiling?.sites.length,
 		useCompiled ? image.native.classLayouts : undefined,
+		builtinNamesForNativeImage(image),
 	)) {
 		lines.push(line);
 	}
@@ -2842,6 +2869,7 @@ function malRuntimeImageStruct(
 	options: Pick<EmitOptions, "assets" | "toolchainBridge" | "sourcePath"> = {},
 	profileSiteCount?: number,
 	classLayouts: ReadonlyArray<CoreTargetClassLayout> = [],
+	builtinMemberNames?: ReadonlyArray<string>,
 ): Array<string> {
 	const lines: Array<string> = [];
 	const assets = options.assets ?? [];
@@ -2965,6 +2993,13 @@ function malRuntimeImageStruct(
 		hostInstalls.push({ installer: "mal_host_install_maligator", exports: [] });
 	}
 	const hasHostInstalls = hostInstalls.length > 0;
+	const members = builtinMemberLists(
+		hostInstalls,
+		runtime.enginePolicy,
+		builtinMemberNames,
+		suffix,
+	);
+	lines.push(...members);
 	if (hasHostInstalls) {
 		const declared = new Set<string>();
 		for (const install of hostInstalls) {
@@ -3037,9 +3072,171 @@ function malRuntimeImageStruct(
 		`    .assets = ${assets.length > 0 ? `mal_assets${suffix}` : "nullptr"},`,
 		`    .host_install_count = ${hostInstalls.length},`,
 		`    .host_installs = ${hasHostInstalls ? `mal_host_installs${suffix}` : "nullptr"},`,
+		`    .builtin_member_lists = mal_builtin_member_lists${suffix},`,
 		"};",
 	);
 
+	return lines;
+}
+
+const MEMBER_SELECTION_HOSTS = new Set([
+	...INTRINSIC_INSTALLERS,
+	BUFFER_INSTALLER_SYMBOL,
+	NODE_CONSOLE_HOOKS_INSTALLER,
+	NODE_ERROR_HOOKS_INSTALLER,
+	PROCESS_ENV_INSTALLER,
+	REGEXP_INSTALLER,
+	UNICODE_NORMALIZATION_INSTALLER,
+	WEB_FETCH_INSTALLER,
+	"mal_host_install_web_personality",
+	"mal_host_install_web_basics",
+	"mal_host_install_web_encoding",
+	"mal_host_install_web_events",
+	"mal_host_install_web_fetch_client",
+	"mal_host_install_web_streams",
+	"mal_host_install_web_url",
+	"mal_host_install_maligator_assets",
+	"mal_host_install_maligator_internal_fetch",
+	"mal_host_install_maligator_internal_http",
+]);
+const FETCH_MEMBER_PROVIDERS = new Set([
+	WEB_FETCH_INSTALLER,
+	"mal_host_install_web_fetch_client",
+	"mal_host_install_maligator_internal_fetch",
+	"mal_host_install_maligator_internal_http",
+	HTTP_WITHOUT_WEBSOCKET_INSTALLER,
+	NODE_FS_READ_STREAM_INSTALLER,
+	NODE_BUILTIN_LOADER_INSTALLER,
+	...[
+		"node:buffer",
+		"node:child_process",
+		"node:cluster",
+		"node:crypto",
+		"node:fs",
+		"node:http",
+		"node:https",
+		"node:net",
+		"node:stream",
+		"node:stream/consumers",
+		"node:stream/promises",
+		"node:tls",
+		"node:zlib",
+	].map(hostInstallerSymbol),
+]);
+const NATIVE_BUILTIN_MEMBER_KEYS = [
+	"add",
+	"constructor",
+	"entries",
+	"exec",
+	"has",
+	"join",
+	"keys",
+	"next",
+	"resolve",
+	"return",
+	"set",
+	"then",
+	"toJSON",
+	"toString",
+	"valueOf",
+	"values",
+];
+
+function builtinNamesForNativeImage(image: ProgramImage): Array<string> | undefined {
+	if (image.native.builtinMemberNames === undefined) return undefined;
+	const names = new Set(image.native.builtinMemberNames);
+	const retainPath = (path: string) => {
+		for (const key of path.match(/[A-Za-z_$][A-Za-z_$0-9]*/g) ?? []) names.add(key);
+	};
+	for (const fn of [
+		...image.runtime.functions,
+		...image.native.functions.map(({ body }) => body),
+	]) {
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode === "CALL_KNOWN") retainPath(instruction.operation);
+			else if (instruction.opcode === "LOAD_PRIMORDIAL") {
+				const node = getPrimordialCatalog().nodes[instruction.nodeIndex]!;
+				retainPath(node[0]);
+				for (const alias of node[5]) retainPath(alias);
+			}
+		}
+	}
+	return [...names];
+}
+
+function builtinMemberLists(
+	hostInstalls: RuntimeImage["hostInstalls"],
+	policy: RuntimeImage["enginePolicy"],
+	names: ReadonlyArray<string> | undefined,
+	suffix: string,
+): Array<string> {
+	const kept =
+		names === undefined ||
+		hostInstalls.some(({ installer }) => !MEMBER_SELECTION_HOSTS.has(installer))
+			? undefined
+			: new Set([
+					...names,
+					...NATIVE_BUILTIN_MEMBER_KEYS,
+					...NATIVE_BUILTIN_MEMBER_NAMES,
+				]);
+	const installers = new Set(hostInstalls.map(({ installer }) => installer));
+	const fetch = hostInstalls.some(({ installer }) =>
+		FETCH_MEMBER_PROVIDERS.has(installer),
+	);
+	const families = new Set(["base"]);
+	if (policy?.regexp !== false) families.add("regexp");
+	if (installers.has(JSON_INSTALLER)) families.add("json");
+	if (installers.has(MAP_INSTALLER)) families.add("map");
+	if (installers.has(SET_INSTALLER)) families.add("set");
+	if (installers.has("mal_host_install_intrinsic_math")) families.add("math");
+	if (fetch) families.add("fetch");
+	if (
+		fetch ||
+		installers.has("mal_host_install_web_streams") ||
+		installers.has("mal_host_install_web_compression") ||
+		installers.has("mal_host_install_maligator_internal_fs_stream")
+	)
+		families.add("streams");
+	if (
+		fetch ||
+		installers.has("mal_host_install_web_url") ||
+		installers.has(hostInstallerSymbol("node:url"))
+	)
+		families.add("url");
+	const lists: Array<string> = [];
+	const lines: Array<string> = [];
+	for (const group of BUILTIN_MEMBER_GROUPS) {
+		if (!families.has(group.family)) continue;
+		const members =
+			kept === undefined
+				? group.members
+				: group.members.filter(([, key, enumerable]) => enumerable || kept.has(key));
+		if (members.length === 0) continue;
+		if (members.length === group.members.length) {
+			lists.push(
+				`    [MAL_BUILTIN_MEMBER_${group.name}] = &mal_builtin_member_list_${group.name},`,
+			);
+			continue;
+		}
+		const groupSymbol = `mal_selected_members_${group.name}${suffix}`;
+		for (const [symbol] of members)
+			lines.push(`extern const MalBuiltinMember mal_builtin_member_${symbol};`);
+		lines.push(
+			`static const MalBuiltinMember *const ${groupSymbol}[] = {`,
+			...members.map(([symbol]) => `    &mal_builtin_member_${symbol},`),
+			"};",
+		);
+		lines.push(
+			`static const MalBuiltinMemberList ${groupSymbol}_list = { ${groupSymbol}, ${members.length} };`,
+		);
+		lists.push(`    [MAL_BUILTIN_MEMBER_${group.name}] = &${groupSymbol}_list,`);
+	}
+	lines.push(
+		`static const MalBuiltinMemberList *const mal_builtin_member_lists${suffix}[MAL_BUILTIN_MEMBER_GROUP_COUNT] = {`,
+		...lists,
+		"};",
+		"",
+	);
 	return lines;
 }
 

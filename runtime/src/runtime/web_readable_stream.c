@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "web_readable_stream_object.h"
 
 #include <math.h>
@@ -4912,6 +4913,68 @@ static MalObject *rs_install_class(MalVm *vm, MalObject *global_this,
     return prototype;
 }
 
+#define MAL_READABLE_STREAM_1(X) \
+    X(readable_stream_1_locked, "locked", rs_define_getter, (const byte *) "get locked", rs_get_locked) \
+    X(readable_stream_1_cancel, "cancel", mal_intrinsic_define_method_n, 1, rs_cancel) \
+    X(readable_stream_1_getReader, "getReader", mal_intrinsic_define_method_n, 0, rs_get_reader) \
+    X(readable_stream_1_pipeThrough, "pipeThrough", mal_intrinsic_define_method_n, 1, rs_pipe_through) \
+    X(readable_stream_1_pipeTo, "pipeTo", mal_intrinsic_define_method_n, 1, rs_pipe_to) \
+    X(readable_stream_1_tee, "tee", mal_intrinsic_define_method_n, 0, rs_tee)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(readable_stream_1, MAL_READABLE_STREAM_1)
+#undef MAL_READABLE_STREAM_1
+
+#define MAL_READABLE_STREAM_2(X) \
+    X(readable_stream_2_desiredSize, "desiredSize", rs_define_getter, (const byte *) "get desiredSize", rs_controller_get_desired_size) \
+    X(readable_stream_2_close, "close", mal_intrinsic_define_method_n, 0, rs_controller_close) \
+    X(readable_stream_2_enqueue, "enqueue", mal_intrinsic_define_method_n, 1, rs_controller_enqueue) \
+    X(readable_stream_2_error, "error", mal_intrinsic_define_method_n, 1, rs_controller_error)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(readable_stream_2, MAL_READABLE_STREAM_2)
+#undef MAL_READABLE_STREAM_2
+
+#define MAL_READABLE_STREAM_3(X) \
+    X(readable_stream_3_byobRequest, "byobRequest", rs_define_getter, (const byte *) "get byobRequest", rs_byte_controller_get_byob_request) \
+    X(readable_stream_3_desiredSize, "desiredSize", rs_define_getter, (const byte *) "get desiredSize", rs_byte_controller_get_desired_size) \
+    X(readable_stream_3_close, "close", mal_intrinsic_define_method_n, 0, rs_byte_controller_close) \
+    X(readable_stream_3_enqueue, "enqueue", mal_intrinsic_define_method_n, 1, rs_byte_controller_enqueue) \
+    X(readable_stream_3_error, "error", mal_intrinsic_define_method_n, 1, rs_byte_controller_error)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(readable_stream_3, MAL_READABLE_STREAM_3)
+#undef MAL_READABLE_STREAM_3
+
+#define MAL_READABLE_STREAM_4(X) \
+    X(readable_stream_4_closed, "closed", rs_define_getter, (const byte *) "get closed", rs_reader_get_closed) \
+    X(readable_stream_4_cancel, "cancel", mal_intrinsic_define_method_n, 1, rs_reader_cancel) \
+    X(readable_stream_4_read, "read", mal_intrinsic_define_method_n, 0, rs_reader_read) \
+    X(readable_stream_4_releaseLock, "releaseLock", mal_intrinsic_define_method_n, 0, rs_reader_release_lock)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(readable_stream_4, MAL_READABLE_STREAM_4)
+#undef MAL_READABLE_STREAM_4
+
+#define MAL_READABLE_STREAM_5(X) \
+    X(readable_stream_5_closed, "closed", rs_define_getter, (const byte *) "get closed", rs_reader_get_closed) \
+    X(readable_stream_5_cancel, "cancel", mal_intrinsic_define_method_n, 1, rs_reader_cancel) \
+    X(readable_stream_5_read, "read", mal_intrinsic_define_method_n, 1, rs_reader_read) \
+    X(readable_stream_5_releaseLock, "releaseLock", mal_intrinsic_define_method_n, 0, rs_reader_release_lock)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(readable_stream_5, MAL_READABLE_STREAM_5)
+#undef MAL_READABLE_STREAM_5
+
+#define MAL_READABLE_STREAM_6(X) \
+    X(readable_stream_6_view, "view", rs_define_getter, (const byte *) "get view", rs_byob_request_get_view) \
+    X(readable_stream_6_respond, "respond", mal_intrinsic_define_method_n, 1, rs_byob_request_respond) \
+    X(readable_stream_6_respondWithNewView, "respondWithNewView", mal_intrinsic_define_method_n, 1, rs_byob_request_respond_with_new_view)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(readable_stream_6, MAL_READABLE_STREAM_6)
+#undef MAL_READABLE_STREAM_6
+
+#define MAL_READABLE_STREAM_7(X) \
+    X(readable_stream_7_highWaterMark, "highWaterMark", rs_define_getter, (const byte *) "get highWaterMark", rs_count_strategy_get_high_water_mark) \
+    X(readable_stream_7_size, "size", rs_define_getter, (const byte *) "get size", rs_count_strategy_get_size)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(readable_stream_7, MAL_READABLE_STREAM_7)
+#undef MAL_READABLE_STREAM_7
+
+#define MAL_READABLE_STREAM_8(X) \
+    X(readable_stream_8_highWaterMark, "highWaterMark", rs_define_getter, (const byte *) "get highWaterMark", rs_byte_length_strategy_get_high_water_mark) \
+    X(readable_stream_8_size, "size", rs_define_getter, (const byte *) "get size", rs_byte_length_strategy_get_size)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(readable_stream_8, MAL_READABLE_STREAM_8)
+#undef MAL_READABLE_STREAM_8
+
 void mal_readable_stream_install(MalVm *vm, MalObject *global_this) {
     MalObject *stream_proto = rs_install_class(vm, global_this,
         (const byte *) "ReadableStream", 0, rs_constructor,
@@ -4921,18 +4984,7 @@ void mal_readable_stream_install(MalVm *vm, MalObject *global_this) {
         mal_value_to_object(vm->intrinsics[
             MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR]),
         (const byte *) "from", 1, rs_from);
-    rs_define_getter(vm, stream_proto, (const byte *) "locked",
-        (const byte *) "get locked", rs_get_locked);
-    mal_intrinsic_define_method_n(
-        vm, stream_proto, (const byte *) "cancel", 1, rs_cancel);
-    mal_intrinsic_define_method_n(
-        vm, stream_proto, (const byte *) "getReader", 0, rs_get_reader);
-    mal_intrinsic_define_method_n(
-        vm, stream_proto, (const byte *) "pipeThrough", 1, rs_pipe_through);
-    mal_intrinsic_define_method_n(
-        vm, stream_proto, (const byte *) "pipeTo", 1, rs_pipe_to);
-    mal_intrinsic_define_method_n(
-        vm, stream_proto, (const byte *) "tee", 0, rs_tee);
+    mal_builtin_members_define(vm, stream_proto, MAL_BUILTIN_MEMBER_readable_stream_1);
 
     MalObject *iterator_proto = mal_object_new(&vm->heap,
         mal_value_to_object(vm->intrinsics[
@@ -4972,69 +5024,33 @@ void mal_readable_stream_install(MalVm *vm, MalObject *global_this) {
         (const byte *) "ReadableStreamDefaultController", 0, rs_controller_constructor,
         MAL_INTRINSIC_READABLE_STREAM_DEFAULT_CONTROLLER_CONSTRUCTOR,
         MAL_INTRINSIC_READABLE_STREAM_DEFAULT_CONTROLLER_PROTOTYPE);
-    rs_define_getter(vm, controller_proto, (const byte *) "desiredSize",
-        (const byte *) "get desiredSize", rs_controller_get_desired_size);
-    mal_intrinsic_define_method_n(
-        vm, controller_proto, (const byte *) "close", 0, rs_controller_close);
-    mal_intrinsic_define_method_n(
-        vm, controller_proto, (const byte *) "enqueue", 1, rs_controller_enqueue);
-    mal_intrinsic_define_method_n(
-        vm, controller_proto, (const byte *) "error", 1, rs_controller_error);
+    mal_builtin_members_define(vm, controller_proto, MAL_BUILTIN_MEMBER_readable_stream_2);
 
     MalObject *byte_controller_proto = rs_install_class(vm, global_this,
         (const byte *) "ReadableByteStreamController", 0,
         rs_byte_controller_constructor,
         MAL_INTRINSIC_READABLE_BYTE_STREAM_CONTROLLER_CONSTRUCTOR,
         MAL_INTRINSIC_READABLE_BYTE_STREAM_CONTROLLER_PROTOTYPE);
-    rs_define_getter(vm, byte_controller_proto, (const byte *) "byobRequest",
-        (const byte *) "get byobRequest", rs_byte_controller_get_byob_request);
-    rs_define_getter(vm, byte_controller_proto, (const byte *) "desiredSize",
-        (const byte *) "get desiredSize", rs_byte_controller_get_desired_size);
-    mal_intrinsic_define_method_n(vm, byte_controller_proto,
-        (const byte *) "close", 0, rs_byte_controller_close);
-    mal_intrinsic_define_method_n(vm, byte_controller_proto,
-        (const byte *) "enqueue", 1, rs_byte_controller_enqueue);
-    mal_intrinsic_define_method_n(vm, byte_controller_proto,
-        (const byte *) "error", 1, rs_byte_controller_error);
+    mal_builtin_members_define(vm, byte_controller_proto, MAL_BUILTIN_MEMBER_readable_stream_3);
 
     MalObject *reader_proto = rs_install_class(vm, global_this,
         (const byte *) "ReadableStreamDefaultReader", 1, rs_reader_constructor,
         MAL_INTRINSIC_READABLE_STREAM_DEFAULT_READER_CONSTRUCTOR,
         MAL_INTRINSIC_READABLE_STREAM_DEFAULT_READER_PROTOTYPE);
-    rs_define_getter(vm, reader_proto, (const byte *) "closed",
-        (const byte *) "get closed", rs_reader_get_closed);
-    mal_intrinsic_define_method_n(
-        vm, reader_proto, (const byte *) "cancel", 1, rs_reader_cancel);
-    mal_intrinsic_define_method_n(
-        vm, reader_proto, (const byte *) "read", 0, rs_reader_read);
-    mal_intrinsic_define_method_n(
-        vm, reader_proto, (const byte *) "releaseLock", 0, rs_reader_release_lock);
+    mal_builtin_members_define(vm, reader_proto, MAL_BUILTIN_MEMBER_readable_stream_4);
 
     MalObject *byob_reader_proto = rs_install_class(vm, global_this,
         (const byte *) "ReadableStreamBYOBReader", 1, rs_byob_reader_constructor,
         MAL_INTRINSIC_READABLE_STREAM_BYOB_READER_CONSTRUCTOR,
         MAL_INTRINSIC_READABLE_STREAM_BYOB_READER_PROTOTYPE);
-    rs_define_getter(vm, byob_reader_proto, (const byte *) "closed",
-        (const byte *) "get closed", rs_reader_get_closed);
-    mal_intrinsic_define_method_n(
-        vm, byob_reader_proto, (const byte *) "cancel", 1, rs_reader_cancel);
-    mal_intrinsic_define_method_n(
-        vm, byob_reader_proto, (const byte *) "read", 1, rs_reader_read);
-    mal_intrinsic_define_method_n(vm, byob_reader_proto,
-        (const byte *) "releaseLock", 0, rs_reader_release_lock);
+    mal_builtin_members_define(vm, byob_reader_proto, MAL_BUILTIN_MEMBER_readable_stream_5);
 
     MalObject *byob_request_proto = rs_install_class(vm, global_this,
         (const byte *) "ReadableStreamBYOBRequest", 2,
         rs_byob_request_constructor,
         MAL_INTRINSIC_READABLE_STREAM_BYOB_REQUEST_CONSTRUCTOR,
         MAL_INTRINSIC_READABLE_STREAM_BYOB_REQUEST_PROTOTYPE);
-    rs_define_getter(vm, byob_request_proto, (const byte *) "view",
-        (const byte *) "get view", rs_byob_request_get_view);
-    mal_intrinsic_define_method_n(vm, byob_request_proto,
-        (const byte *) "respond", 1, rs_byob_request_respond);
-    mal_intrinsic_define_method_n(vm, byob_request_proto,
-        (const byte *) "respondWithNewView", 1,
-        rs_byob_request_respond_with_new_view);
+    mal_builtin_members_define(vm, byob_request_proto, MAL_BUILTIN_MEMBER_readable_stream_6);
 
     MalObject *function_proto =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
@@ -5051,20 +5067,14 @@ void mal_readable_stream_install(MalVm *vm, MalObject *global_this) {
         (const byte *) "CountQueuingStrategy", 1, rs_count_strategy_constructor,
         MAL_INTRINSIC_COUNT_QUEUING_STRATEGY_CONSTRUCTOR,
         MAL_INTRINSIC_COUNT_QUEUING_STRATEGY_PROTOTYPE);
-    rs_define_getter(vm, count_strategy_proto, (const byte *) "highWaterMark",
-        (const byte *) "get highWaterMark", rs_count_strategy_get_high_water_mark);
-    rs_define_getter(vm, count_strategy_proto, (const byte *) "size",
-        (const byte *) "get size", rs_count_strategy_get_size);
+    mal_builtin_members_define(vm, count_strategy_proto, MAL_BUILTIN_MEMBER_readable_stream_7);
 
     MalObject *byte_strategy_proto = rs_install_class(vm, global_this,
         (const byte *) "ByteLengthQueuingStrategy", 1,
         rs_byte_length_strategy_constructor,
         MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_CONSTRUCTOR,
         MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_PROTOTYPE);
-    rs_define_getter(vm, byte_strategy_proto, (const byte *) "highWaterMark",
-        (const byte *) "get highWaterMark", rs_byte_length_strategy_get_high_water_mark);
-    rs_define_getter(vm, byte_strategy_proto, (const byte *) "size",
-        (const byte *) "get size", rs_byte_length_strategy_get_size);
+    mal_builtin_members_define(vm, byte_strategy_proto, MAL_BUILTIN_MEMBER_readable_stream_8);
 
     mal_gc_register_tracer(MAL_HEAP_READABLE_STREAM_OBJECT, rs_trace);
     mal_gc_register_finalizer(MAL_HEAP_READABLE_STREAM_OBJECT, rs_finalize);

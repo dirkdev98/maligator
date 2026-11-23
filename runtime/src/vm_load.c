@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "builtin_math.h"
+#include "builtin_members.h"
 #include "endian.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
@@ -18,6 +19,13 @@
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
 #define WIRE_VERSION 108u
 #define WIRE_FLAG_HAS_DEBUG 1u
+
+static const MalBuiltinMemberList *const wire_builtin_members[MAL_BUILTIN_MEMBER_GROUP_COUNT] = {
+#define MAL_BUILTIN_MEMBER_GROUP(group, family) \
+    [MAL_BUILTIN_MEMBER_##group] = &mal_builtin_member_list_##group,
+#include "builtin_member_groups.h"
+#undef MAL_BUILTIN_MEMBER_GROUP
+};
 
 typedef enum WireOp {
 #define BYTECODE_OPERATION(name) WIRE_##name,
@@ -2869,6 +2877,7 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
         goto fail;
     }
     def->engine_policy = engine_policy;
+    def->builtin_member_lists = wire_builtin_members;
     u32 global_count = rd_u32(&r);
     if (global_count > (u32) INT32_MAX) {
         r.ok = false;

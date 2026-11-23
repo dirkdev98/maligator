@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "builtin_number.h"
 
 #include <float.h>
@@ -842,6 +843,24 @@ MalValue mal_builtin_number_value_of_known(MalValue this_value) {
     return this_value;
 }
 
+#define MAL_NUMBER_MEMBERS_1(X) \
+    X(number_members_1_isNaN, "isNaN", 1, mal_builtin_number_is_nan) \
+    X(number_members_1_isFinite, "isFinite", 1, mal_builtin_number_is_finite) \
+    X(number_members_1_isInteger, "isInteger", 1, mal_builtin_number_is_integer) \
+    X(number_members_1_isSafeInteger, "isSafeInteger", 1, mal_builtin_number_is_safe_integer)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(number_members_1, MAL_NUMBER_MEMBERS_1)
+#undef MAL_NUMBER_MEMBERS_1
+
+#define MAL_NUMBER_MEMBERS_2(X) \
+    X(number_members_2_toString, "toString", 1, mal_builtin_number_prototype_to_string) \
+    X(number_members_2_toLocaleString, "toLocaleString", 0, mal_builtin_number_prototype_to_locale_string) \
+    X(number_members_2_toFixed, "toFixed", 1, mal_builtin_number_prototype_to_fixed) \
+    X(number_members_2_toExponential, "toExponential", 1, mal_builtin_number_prototype_to_exponential) \
+    X(number_members_2_toPrecision, "toPrecision", 1, mal_builtin_number_prototype_to_precision) \
+    X(number_members_2_valueOf, "valueOf", 0, mal_builtin_number_prototype_value_of)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(number_members_2, MAL_NUMBER_MEMBERS_2)
+#undef MAL_NUMBER_MEMBERS_2
+
 void mal_builtin_number_install(MalVm *vm) {
     // %Number.prototype% is itself a Number object with [[NumberData]] = +0, so
     // Number.prototype.valueOf()/toString() and friends work on the prototype.
@@ -875,19 +894,11 @@ void mal_builtin_number_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, constructor_object, "NEGATIVE_INFINITY", mal_value_from_f64_convert_nan(-INFINITY), MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, constructor_object, "NaN", mal_value_new_nan(), MAL_PROPERTY_NONE);
 
-    mal_intrinsic_define_method_n(vm, constructor_object, "isNaN", 1, mal_builtin_number_is_nan);
-    mal_intrinsic_define_method_n(vm, constructor_object, "isFinite", 1, mal_builtin_number_is_finite);
-    mal_intrinsic_define_method_n(vm, constructor_object, "isInteger", 1, mal_builtin_number_is_integer);
-    mal_intrinsic_define_method_n(vm, constructor_object, "isSafeInteger", 1, mal_builtin_number_is_safe_integer);
+    mal_builtin_members_define(vm, constructor_object, MAL_BUILTIN_MEMBER_number_members_1);
     vm->intrinsics[MAL_INTRINSIC_PARSE_INT] = mal_intrinsic_define_method_n(vm, constructor_object, "parseInt", 2, mal_builtin_parse_int);
     vm->intrinsics[MAL_INTRINSIC_PARSE_FLOAT] = mal_intrinsic_define_method_n(vm, constructor_object, "parseFloat", 1, mal_builtin_parse_float);
 
-    mal_intrinsic_define_method_n(vm, prototype, "toString", 1, mal_builtin_number_prototype_to_string);
-    mal_intrinsic_define_method_n(vm, prototype, "toLocaleString", 0, mal_builtin_number_prototype_to_locale_string);
-    mal_intrinsic_define_method_n(vm, prototype, "toFixed", 1, mal_builtin_number_prototype_to_fixed);
-    mal_intrinsic_define_method_n(vm, prototype, "toExponential", 1, mal_builtin_number_prototype_to_exponential);
-    mal_intrinsic_define_method_n(vm, prototype, "toPrecision", 1, mal_builtin_number_prototype_to_precision);
-    mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, mal_builtin_number_prototype_value_of);
+    mal_builtin_members_define(vm, prototype, MAL_BUILTIN_MEMBER_number_members_2);
 
     // The global function flavors coerce their argument, unlike the statics.
     MalNativeFunctionObject *global_is_nan = mal_native_function_object_new_arity(

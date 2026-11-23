@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "builtin_data_view.h"
 
 #include <stdio.h>
@@ -624,6 +625,32 @@ static void mal_dv_define_getter(MalVm *vm, MalObject *object, const byte *name,
         vm, object, name, getter_name, getter, MAL_PROPERTY_CONFIGURABLE);
 }
 
+#define MAL_DATA_VIEW_METHODS(X) \
+    X(data_view_methods_getInt8, "getInt8", 1, mal_dv_get_int8) \
+    X(data_view_methods_getUint8, "getUint8", 1, mal_dv_get_uint8) \
+    X(data_view_methods_getInt16, "getInt16", 1, mal_dv_get_int16) \
+    X(data_view_methods_getUint16, "getUint16", 1, mal_dv_get_uint16) \
+    X(data_view_methods_getInt32, "getInt32", 1, mal_dv_get_int32) \
+    X(data_view_methods_getUint32, "getUint32", 1, mal_dv_get_uint32) \
+    X(data_view_methods_getFloat16, "getFloat16", 1, mal_dv_get_float16) \
+    X(data_view_methods_getFloat32, "getFloat32", 1, mal_dv_get_float32) \
+    X(data_view_methods_getFloat64, "getFloat64", 1, mal_dv_get_float64) \
+    X(data_view_methods_getBigInt64, "getBigInt64", 1, mal_dv_get_bigint64) \
+    X(data_view_methods_getBigUint64, "getBigUint64", 1, mal_dv_get_biguint64) \
+    X(data_view_methods_setInt8, "setInt8", 2, mal_dv_set_int8) \
+    X(data_view_methods_setUint8, "setUint8", 2, mal_dv_set_uint8) \
+    X(data_view_methods_setInt16, "setInt16", 2, mal_dv_set_int16) \
+    X(data_view_methods_setUint16, "setUint16", 2, mal_dv_set_uint16) \
+    X(data_view_methods_setInt32, "setInt32", 2, mal_dv_set_int32) \
+    X(data_view_methods_setUint32, "setUint32", 2, mal_dv_set_uint32) \
+    X(data_view_methods_setFloat16, "setFloat16", 2, mal_dv_set_float16) \
+    X(data_view_methods_setFloat32, "setFloat32", 2, mal_dv_set_float32) \
+    X(data_view_methods_setFloat64, "setFloat64", 2, mal_dv_set_float64) \
+    X(data_view_methods_setBigInt64, "setBigInt64", 2, mal_dv_set_bigint64) \
+    X(data_view_methods_setBigUint64, "setBigUint64", 2, mal_dv_set_biguint64)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(data_view_methods, MAL_DATA_VIEW_METHODS)
+#undef MAL_DATA_VIEW_METHODS
+
 void mal_builtin_data_view_install(MalVm *vm) {
     MalObject *object_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
@@ -641,28 +668,7 @@ void mal_builtin_data_view_install(MalVm *vm) {
     mal_dv_define_getter(vm, prototype, "byteLength", mal_dv_get_byte_length);
     mal_dv_define_getter(vm, prototype, "byteOffset", mal_dv_get_byte_offset);
 
-    mal_intrinsic_define_method_n(vm, prototype, "getInt8", 1, mal_dv_get_int8);
-    mal_intrinsic_define_method_n(vm, prototype, "getUint8", 1, mal_dv_get_uint8);
-    mal_intrinsic_define_method_n(vm, prototype, "getInt16", 1, mal_dv_get_int16);
-    mal_intrinsic_define_method_n(vm, prototype, "getUint16", 1, mal_dv_get_uint16);
-    mal_intrinsic_define_method_n(vm, prototype, "getInt32", 1, mal_dv_get_int32);
-    mal_intrinsic_define_method_n(vm, prototype, "getUint32", 1, mal_dv_get_uint32);
-    mal_intrinsic_define_method_n(vm, prototype, "getFloat16", 1, mal_dv_get_float16);
-    mal_intrinsic_define_method_n(vm, prototype, "getFloat32", 1, mal_dv_get_float32);
-    mal_intrinsic_define_method_n(vm, prototype, "getFloat64", 1, mal_dv_get_float64);
-    mal_intrinsic_define_method_n(vm, prototype, "getBigInt64", 1, mal_dv_get_bigint64);
-    mal_intrinsic_define_method_n(vm, prototype, "getBigUint64", 1, mal_dv_get_biguint64);
-    mal_intrinsic_define_method_n(vm, prototype, "setInt8", 2, mal_dv_set_int8);
-    mal_intrinsic_define_method_n(vm, prototype, "setUint8", 2, mal_dv_set_uint8);
-    mal_intrinsic_define_method_n(vm, prototype, "setInt16", 2, mal_dv_set_int16);
-    mal_intrinsic_define_method_n(vm, prototype, "setUint16", 2, mal_dv_set_uint16);
-    mal_intrinsic_define_method_n(vm, prototype, "setInt32", 2, mal_dv_set_int32);
-    mal_intrinsic_define_method_n(vm, prototype, "setUint32", 2, mal_dv_set_uint32);
-    mal_intrinsic_define_method_n(vm, prototype, "setFloat16", 2, mal_dv_set_float16);
-    mal_intrinsic_define_method_n(vm, prototype, "setFloat32", 2, mal_dv_set_float32);
-    mal_intrinsic_define_method_n(vm, prototype, "setFloat64", 2, mal_dv_set_float64);
-    mal_intrinsic_define_method_n(vm, prototype, "setBigInt64", 2, mal_dv_set_bigint64);
-    mal_intrinsic_define_method_n(vm, prototype, "setBigUint64", 2, mal_dv_set_biguint64);
+    mal_builtin_members_define(vm, prototype, MAL_BUILTIN_MEMBER_data_view_methods);
 
     MalPropertyDesc tag = mal_intrinsic_data_desc(mal_value_from_string(mal_intrinsic_ascii(vm, "DataView")), MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag);

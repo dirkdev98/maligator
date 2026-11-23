@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "web_fetch.h"
 
 #include <errno.h>
@@ -4810,6 +4811,104 @@ static void mal_file_install(MalVm *vm, MalObject *global_this, MalObject *blob_
     mal_gc_unroot(&root);
 }
 
+#define MAL_FETCH_MEMBERS_1(X) \
+    X(fetch_members_1_text, "text", 0, mal_blob_text) \
+    X(fetch_members_1_arrayBuffer, "arrayBuffer", 0, mal_blob_array_buffer) \
+    X(fetch_members_1_bytes, "bytes", 0, mal_blob_bytes) \
+    X(fetch_members_1_stream, "stream", 0, mal_blob_stream)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(fetch_members_1, MAL_FETCH_MEMBERS_1)
+#undef MAL_FETCH_MEMBERS_1
+
+#define MAL_FETCH_MEMBERS_2(X) \
+    X(fetch_members_2_next, "next", 0, mal_form_data_iterator_next)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(fetch_members_2, MAL_FETCH_MEMBERS_2)
+#undef MAL_FETCH_MEMBERS_2
+
+#define MAL_FETCH_MEMBERS_3(X) \
+    X(fetch_members_3_append, "append", 2, mal_form_data_append) \
+    X(fetch_members_3_delete, "delete", 1, mal_form_data_delete) \
+    X(fetch_members_3_get, "get", 1, mal_form_data_get) \
+    X(fetch_members_3_getAll, "getAll", 1, mal_form_data_get_all) \
+    X(fetch_members_3_has, "has", 1, mal_form_data_has) \
+    X(fetch_members_3_set, "set", 2, mal_form_data_set)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(fetch_members_3, MAL_FETCH_MEMBERS_3)
+#undef MAL_FETCH_MEMBERS_3
+
+#define MAL_FETCH_MEMBERS_4(X) \
+    X(fetch_members_4_keys, "keys", 0, mal_form_data_keys) \
+    X(fetch_members_4_values, "values", 0, mal_form_data_values) \
+    X(fetch_members_4_forEach, "forEach", 1, mal_form_data_for_each)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(fetch_members_4, MAL_FETCH_MEMBERS_4)
+#undef MAL_FETCH_MEMBERS_4
+
+#define MAL_FETCH_MEMBERS_5(X) \
+    X(fetch_members_5_text, "text", 0, mal_response_body_text) \
+    X(fetch_members_5_json, "json", 0, mal_response_body_json) \
+    X(fetch_members_5_arrayBuffer, "arrayBuffer", 0, mal_response_body_array_buffer) \
+    X(fetch_members_5_bytes, "bytes", 0, mal_response_body_bytes) \
+    X(fetch_members_5_blob, "blob", 0, mal_response_body_blob) \
+    X(fetch_members_5_formData, "formData", 0, mal_response_body_form_data)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(fetch_members_5, MAL_FETCH_MEMBERS_5)
+#undef MAL_FETCH_MEMBERS_5
+
+#define MAL_FETCH_MEMBERS_6(X) \
+    X(fetch_members_6_json, "json", 1, mal_response_static_json) \
+    X(fetch_members_6_redirect, "redirect", 1, mal_response_static_redirect) \
+    X(fetch_members_6_error, "error", 0, mal_response_static_error)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(fetch_members_6, MAL_FETCH_MEMBERS_6)
+#undef MAL_FETCH_MEMBERS_6
+
+#define MAL_FETCH_MEMBERS_7(X) \
+    X(fetch_members_7_text, "text", 0, mal_request_body_text) \
+    X(fetch_members_7_json, "json", 0, mal_request_body_json) \
+    X(fetch_members_7_clone, "clone", 0, mal_request_clone) \
+    X(fetch_members_7_arrayBuffer, "arrayBuffer", 0, mal_request_body_array_buffer) \
+    X(fetch_members_7_bytes, "bytes", 0, mal_request_body_bytes) \
+    X(fetch_members_7_blob, "blob", 0, mal_request_body_blob) \
+    X(fetch_members_7_formData, "formData", 0, mal_request_body_form_data)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(fetch_members_7, MAL_FETCH_MEMBERS_7)
+#undef MAL_FETCH_MEMBERS_7
+
+#define MAL_FETCH_ACCESSORS_1(X) \
+    X(fetch_accessors_1_size, "size", mal_fetch_define_getter, mal_blob_get_size) \
+    X(fetch_accessors_1_type, "type", mal_fetch_define_getter, mal_blob_get_type)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(fetch_accessors_1, MAL_FETCH_ACCESSORS_1)
+#undef MAL_FETCH_ACCESSORS_1
+
+#define MAL_FETCH_ACCESSORS_2(X) \
+    X(fetch_accessors_2_body, "body", mal_fetch_define_getter, mal_response_body_get_body) \
+    X(fetch_accessors_2_bodyUsed, "bodyUsed", mal_fetch_define_getter, mal_response_body_get_used) \
+    X(fetch_accessors_2_status, "status", mal_fetch_define_getter, mal_response_get_status) \
+    X(fetch_accessors_2_ok, "ok", mal_fetch_define_getter, mal_response_get_ok) \
+    X(fetch_accessors_2_statusText, "statusText", mal_fetch_define_getter, mal_response_get_status_text) \
+    X(fetch_accessors_2_type, "type", mal_fetch_define_getter, mal_response_get_type) \
+    X(fetch_accessors_2_url, "url", mal_fetch_define_getter, mal_response_get_url) \
+    X(fetch_accessors_2_redirected, "redirected", mal_fetch_define_getter, mal_response_get_redirected) \
+    X(fetch_accessors_2_headers, "headers", mal_fetch_define_getter, mal_response_get_headers)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(fetch_accessors_2, MAL_FETCH_ACCESSORS_2)
+#undef MAL_FETCH_ACCESSORS_2
+
+#define MAL_FETCH_ACCESSORS_3(X) \
+    X(fetch_accessors_3_body, "body", mal_fetch_define_readonly_getter, mal_request_body_get_body) \
+    X(fetch_accessors_3_bodyUsed, "bodyUsed", mal_fetch_define_readonly_getter, mal_request_body_get_used) \
+    X(fetch_accessors_3_method, "method", mal_fetch_define_readonly_getter, mal_request_get_method) \
+    X(fetch_accessors_3_url, "url", mal_fetch_define_readonly_getter, mal_request_get_url) \
+    X(fetch_accessors_3_headers, "headers", mal_fetch_define_readonly_getter, mal_request_get_headers) \
+    X(fetch_accessors_3_signal, "signal", mal_fetch_define_readonly_getter, mal_request_get_signal) \
+    X(fetch_accessors_3_destination, "destination", mal_fetch_define_readonly_getter, mal_request_get_destination) \
+    X(fetch_accessors_3_referrer, "referrer", mal_fetch_define_readonly_getter, mal_request_get_referrer) \
+    X(fetch_accessors_3_referrerPolicy, "referrerPolicy", mal_fetch_define_readonly_getter, mal_request_get_referrer_policy) \
+    X(fetch_accessors_3_mode, "mode", mal_fetch_define_readonly_getter, mal_request_get_mode) \
+    X(fetch_accessors_3_credentials, "credentials", mal_fetch_define_readonly_getter, mal_request_get_credentials) \
+    X(fetch_accessors_3_cache, "cache", mal_fetch_define_readonly_getter, mal_request_get_cache) \
+    X(fetch_accessors_3_redirect, "redirect", mal_fetch_define_readonly_getter, mal_request_get_redirect) \
+    X(fetch_accessors_3_integrity, "integrity", mal_fetch_define_readonly_getter, mal_request_get_integrity) \
+    X(fetch_accessors_3_isReloadNavigation, "isReloadNavigation", mal_fetch_define_readonly_getter, mal_request_false_getter) \
+    X(fetch_accessors_3_isHistoryNavigation, "isHistoryNavigation", mal_fetch_define_readonly_getter, mal_request_false_getter) \
+    X(fetch_accessors_3_duplex, "duplex", mal_fetch_define_readonly_getter, mal_request_get_duplex)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(fetch_accessors_3, MAL_FETCH_ACCESSORS_3)
+#undef MAL_FETCH_ACCESSORS_3
+
 void mal_fetch_types_install(MalVm *vm, MalObject *global_this) {
     MalObject *function_prototype =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
@@ -4830,13 +4929,8 @@ void mal_fetch_types_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_data(vm, blob_proto, (const byte *) "constructor",
         vm->intrinsics[MAL_INTRINSIC_BLOB_CONSTRUCTOR],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_fetch_define_getter(vm, blob_proto, (const byte *) "size", mal_blob_get_size);
-    mal_fetch_define_getter(vm, blob_proto, (const byte *) "type", mal_blob_get_type);
-    mal_intrinsic_define_method_n(vm, blob_proto, (const byte *) "text", 0, mal_blob_text);
-    mal_intrinsic_define_method_n(
-        vm, blob_proto, (const byte *) "arrayBuffer", 0, mal_blob_array_buffer);
-    mal_intrinsic_define_method_n(vm, blob_proto, (const byte *) "bytes", 0, mal_blob_bytes);
-    mal_intrinsic_define_method_n(vm, blob_proto, (const byte *) "stream", 0, mal_blob_stream);
+    mal_builtin_members_define(vm, blob_proto, MAL_BUILTIN_MEMBER_fetch_accessors_1);
+    mal_builtin_members_define(vm, blob_proto, MAL_BUILTIN_MEMBER_fetch_members_1);
     MalPropertyDesc blob_tag_desc = mal_intrinsic_data_desc(
         mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "Blob")),
         MAL_PROPERTY_CONFIGURABLE);
@@ -4852,8 +4946,7 @@ void mal_fetch_types_install(MalVm *vm, MalObject *global_this) {
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ITERATOR_PROTOTYPE]));
     vm->intrinsics[MAL_INTRINSIC_FORM_DATA_ITERATOR_PROTOTYPE] =
         mal_value_from_object(form_data_iterator_proto);
-    mal_intrinsic_define_method_n(vm, form_data_iterator_proto,
-        (const byte *) "next", 0, mal_form_data_iterator_next);
+    mal_builtin_members_define(vm, form_data_iterator_proto, MAL_BUILTIN_MEMBER_fetch_members_2);
     MalPropertyDesc form_data_iterator_tag = mal_intrinsic_data_desc(
         mal_value_from_string(mal_intrinsic_ascii(
             vm, (const byte *) "FormData Iterator")),
@@ -4884,26 +4977,10 @@ void mal_fetch_types_install(MalVm *vm, MalObject *global_this) {
     mal_object_define_own(form_data_proto,
         mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG),
         &form_data_tag);
-    mal_intrinsic_define_method_n(
-        vm, form_data_proto, (const byte *) "append", 2, mal_form_data_append);
-    mal_intrinsic_define_method_n(
-        vm, form_data_proto, (const byte *) "delete", 1, mal_form_data_delete);
-    mal_intrinsic_define_method_n(
-        vm, form_data_proto, (const byte *) "get", 1, mal_form_data_get);
-    mal_intrinsic_define_method_n(
-        vm, form_data_proto, (const byte *) "getAll", 1, mal_form_data_get_all);
-    mal_intrinsic_define_method_n(
-        vm, form_data_proto, (const byte *) "has", 1, mal_form_data_has);
-    mal_intrinsic_define_method_n(
-        vm, form_data_proto, (const byte *) "set", 2, mal_form_data_set);
+    mal_builtin_members_define(vm, form_data_proto, MAL_BUILTIN_MEMBER_fetch_members_3);
     MalValue form_data_entries_fn = mal_intrinsic_define_method_n(
         vm, form_data_proto, (const byte *) "entries", 0, mal_form_data_entries);
-    mal_intrinsic_define_method_n(
-        vm, form_data_proto, (const byte *) "keys", 0, mal_form_data_keys);
-    mal_intrinsic_define_method_n(
-        vm, form_data_proto, (const byte *) "values", 0, mal_form_data_values);
-    mal_intrinsic_define_method_n(
-        vm, form_data_proto, (const byte *) "forEach", 1, mal_form_data_for_each);
+    mal_builtin_members_define(vm, form_data_proto, MAL_BUILTIN_MEMBER_fetch_members_4);
     MalPropertyDesc form_data_iterator_desc = mal_intrinsic_data_desc(
         form_data_entries_fn, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(form_data_proto,
@@ -4931,31 +5008,10 @@ void mal_fetch_types_install(MalVm *vm, MalObject *global_this) {
         vm->intrinsics[MAL_INTRINSIC_RESPONSE_CONSTRUCTOR],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     // Response read side + getters.
-    mal_intrinsic_define_method_n(vm, resp_proto, (const byte *) "text", 0, mal_response_body_text);
-    mal_intrinsic_define_method_n(vm, resp_proto, (const byte *) "json", 0, mal_response_body_json);
-    mal_intrinsic_define_method_n(
-        vm, resp_proto, (const byte *) "arrayBuffer", 0, mal_response_body_array_buffer);
-    mal_intrinsic_define_method_n(vm, resp_proto, (const byte *) "bytes", 0, mal_response_body_bytes);
-    mal_intrinsic_define_method_n(vm, resp_proto, (const byte *) "blob", 0, mal_response_body_blob);
-    mal_intrinsic_define_method_n(
-        vm, resp_proto, (const byte *) "formData", 0, mal_response_body_form_data);
-    mal_fetch_define_getter(vm, resp_proto, (const byte *) "body", mal_response_body_get_body);
-    mal_fetch_define_getter(vm, resp_proto, (const byte *) "bodyUsed", mal_response_body_get_used);
-    mal_fetch_define_getter(vm, resp_proto, (const byte *) "status", mal_response_get_status);
-    mal_fetch_define_getter(vm, resp_proto, (const byte *) "ok", mal_response_get_ok);
-    mal_fetch_define_getter(vm, resp_proto, (const byte *) "statusText", mal_response_get_status_text);
-    mal_fetch_define_getter(vm, resp_proto, (const byte *) "type", mal_response_get_type);
-    mal_fetch_define_getter(vm, resp_proto, (const byte *) "url", mal_response_get_url);
-    mal_fetch_define_getter(
-        vm, resp_proto, (const byte *) "redirected", mal_response_get_redirected);
-    mal_fetch_define_getter(vm, resp_proto, (const byte *) "headers", mal_response_get_headers);
+    mal_builtin_members_define(vm, resp_proto, MAL_BUILTIN_MEMBER_fetch_members_5);
+    mal_builtin_members_define(vm, resp_proto, MAL_BUILTIN_MEMBER_fetch_accessors_2);
     // Static Response.json / redirect / error.
-    mal_intrinsic_define_method_n(
-        vm, (MalObject *) resp_ctor, (const byte *) "json", 1, mal_response_static_json);
-    mal_intrinsic_define_method_n(
-        vm, (MalObject *) resp_ctor, (const byte *) "redirect", 1, mal_response_static_redirect);
-    mal_intrinsic_define_method_n(
-        vm, (MalObject *) resp_ctor, (const byte *) "error", 0, mal_response_static_error);
+    mal_builtin_members_define(vm, (MalObject *) resp_ctor, MAL_BUILTIN_MEMBER_fetch_members_6);
 
     // Request constructor + prototype (also built by the server via make_request).
     MalObject *req_proto = mal_object_new(&vm->heap, object_prototype);
@@ -4974,47 +5030,8 @@ void mal_fetch_types_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_data(vm, global_this, (const byte *) "Request",
         mal_value_from_native_function_object(req_ctor),
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "text", 0, mal_request_body_text);
-    mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "json", 0, mal_request_body_json);
-    mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "clone", 0, mal_request_clone);
-    mal_intrinsic_define_method_n(
-        vm, req_proto, (const byte *) "arrayBuffer", 0, mal_request_body_array_buffer);
-    mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "bytes", 0, mal_request_body_bytes);
-    mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "blob", 0, mal_request_body_blob);
-    mal_intrinsic_define_method_n(
-        vm, req_proto, (const byte *) "formData", 0, mal_request_body_form_data);
-    mal_fetch_define_readonly_getter(
-        vm, req_proto, (const byte *) "body", mal_request_body_get_body);
-    mal_fetch_define_readonly_getter(
-        vm, req_proto, (const byte *) "bodyUsed", mal_request_body_get_used);
-    mal_fetch_define_readonly_getter(
-        vm, req_proto, (const byte *) "method", mal_request_get_method);
-    mal_fetch_define_readonly_getter(vm, req_proto, (const byte *) "url", mal_request_get_url);
-    mal_fetch_define_readonly_getter(
-        vm, req_proto, (const byte *) "headers", mal_request_get_headers);
-    mal_fetch_define_readonly_getter(
-        vm, req_proto, (const byte *) "signal", mal_request_get_signal);
-    mal_fetch_define_readonly_getter(
-        vm, req_proto, (const byte *) "destination", mal_request_get_destination);
-    mal_fetch_define_readonly_getter(
-        vm, req_proto, (const byte *) "referrer", mal_request_get_referrer);
-    mal_fetch_define_readonly_getter(
-        vm, req_proto, (const byte *) "referrerPolicy", mal_request_get_referrer_policy);
-    mal_fetch_define_readonly_getter(vm, req_proto, (const byte *) "mode", mal_request_get_mode);
-    mal_fetch_define_readonly_getter(
-        vm, req_proto, (const byte *) "credentials", mal_request_get_credentials);
-    mal_fetch_define_readonly_getter(
-        vm, req_proto, (const byte *) "cache", mal_request_get_cache);
-    mal_fetch_define_readonly_getter(
-        vm, req_proto, (const byte *) "redirect", mal_request_get_redirect);
-    mal_fetch_define_readonly_getter(
-        vm, req_proto, (const byte *) "integrity", mal_request_get_integrity);
-    mal_fetch_define_readonly_getter(
-        vm, req_proto, (const byte *) "isReloadNavigation", mal_request_false_getter);
-    mal_fetch_define_readonly_getter(
-        vm, req_proto, (const byte *) "isHistoryNavigation", mal_request_false_getter);
-    mal_fetch_define_readonly_getter(
-        vm, req_proto, (const byte *) "duplex", mal_request_get_duplex);
+    mal_builtin_members_define(vm, req_proto, MAL_BUILTIN_MEMBER_fetch_members_7);
+    mal_builtin_members_define(vm, req_proto, MAL_BUILTIN_MEMBER_fetch_accessors_3);
 
     // Headers (constructor + prototype; registers its own GC tracer/finalizer).
     mal_headers_install(vm, global_this);

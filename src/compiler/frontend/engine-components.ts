@@ -1,8 +1,9 @@
 import type { ESTree } from "meriyah";
 import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
+import { BUILTIN_MEMBER_GROUPS } from "./builtin-member-data.ts";
 import { staticMemberKey } from "./builtin-module-loads.ts";
-import { traverseEstree } from "./estree-traversal.ts";
+import { ESTREE_STOP, traverseEstree } from "./estree-traversal.ts";
 import type { SemanticProgram } from "./semantic-analysis.ts";
 
 /*
@@ -68,6 +69,165 @@ const REFLECTIVE_MEMBERS = new Set([
 	"Reflect",
 	"getOwnPropertyDescriptor",
 	"getOwnPropertyDescriptors",
+]);
+
+const BUILTIN_MEMBER_OBSERVERS = new Set([
+	...REFLECTIVE_MEMBERS,
+	"Proxy",
+	"assign",
+	"defineProperties",
+	"defineProperty",
+	"entries",
+	"getOwnPropertyNames",
+	"getOwnPropertySymbols",
+	"hasOwn",
+	"hasOwnProperty",
+	"keys",
+	"ownKeys",
+	"propertyIsEnumerable",
+	"values",
+	"__defineGetter__",
+	"__defineSetter__",
+	"__lookupGetter__",
+	"__lookupSetter__",
+]);
+
+const INSTALLED_MEMBER_NAMES = new Set<string>(
+	BUILTIN_MEMBER_GROUPS.flatMap(({ members }) => members.map(([, key]) => key)),
+);
+const SIMPLE_CONSOLE_METHODS = new Set(["debug", "error", "info", "log", "warn"]);
+
+/** A closed source can ask for named builtin properties. Reflective reads keep the descriptor graph. */
+export function builtinMemberNames(
+	program: SemanticProgram,
+	facts: CompilerProgramFacts,
+	relocatable: boolean,
+): Array<string> | undefined {
+	if (
+		relocatable ||
+		facts.world.primordialPolicy !== "locked" ||
+		facts.world.eval !== "disabled" ||
+		facts.world.realms ||
+		facts.closure.sourceClosure.kind !== "known"
+	) {
+		return undefined;
+	}
+	const names = new Set<string>();
+	for (const file of program.files) {
+		if (
+			!file.strict ||
+			file.scopes[0]?.bindings.some(
+				(binding) =>
+					binding.undeclared &&
+					binding.usageNodes.length > 0 &&
+					["global", "globalThis", "Reflect", "Proxy"].includes(binding.name),
+			)
+		) {
+			return undefined;
+		}
+		const knownKey = (node: ESTree.Node) =>
+			(node.type === "Literal" && !("regex" in node)) ||
+			(node.type === "MemberExpression" &&
+				node.object.type === "Identifier" &&
+				node.object.name === "Symbol" &&
+				file.nodeToBinding.get(node.object)?.undeclared === true &&
+				staticMemberKey(node) !== undefined &&
+				WELL_KNOWN_SYMBOLS.has(staticMemberKey(node)!));
+		const consoleBinding = file.scopes[0]?.bindings.find(
+			(binding) => binding.undeclared && binding.name === "console",
+		);
+		const consoleCalls = new Set<ESTree.Node>();
+		const opaque = traverseEstree(file.ast.body, (node, { parent }) => {
+			if (
+				consoleBinding !== undefined &&
+				node.type === "CallExpression" &&
+				node.arguments.length === 1 &&
+				node.arguments[0]!.type !== "SpreadElement" &&
+				node.callee.type === "MemberExpression" &&
+				node.callee.object.type === "Identifier" &&
+				file.nodeToBinding.get(node.callee.object) === consoleBinding &&
+				SIMPLE_CONSOLE_METHODS.has(staticMemberKey(node.callee) ?? "")
+			) {
+				consoleCalls.add(node.callee.object);
+			}
+			if (
+				node.type === "ForInStatement" ||
+				node.type === "WithStatement" ||
+				(node.type === "RestElement" && parent?.type === "ObjectPattern") ||
+				(node.type === "SpreadElement" &&
+					parent?.type === "ObjectExpression" &&
+					node.argument.type !== "ObjectExpression" &&
+					!(
+						node.argument.type === "ConditionalExpression" &&
+						node.argument.consequent.type === "ObjectExpression" &&
+						node.argument.alternate.type === "ObjectExpression"
+					)) ||
+				(node.type === "BinaryExpression" &&
+					node.operator === "in" &&
+					!knownKey(node.left))
+			) {
+				return ESTREE_STOP;
+			}
+			if (node.type === "Literal" && typeof node.value === "string")
+				names.add(node.value);
+			if (node.type === "MemberExpression") {
+				const key = staticMemberKey(node);
+				if (key === undefined) {
+					if (node.computed && !knownKey(node.property)) return ESTREE_STOP;
+				} else {
+					if (BUILTIN_MEMBER_OBSERVERS.has(key)) return ESTREE_STOP;
+					// A replacer list can read properties outside enumerable own keys.
+					if (
+						key === "stringify" &&
+						(parent?.type !== "CallExpression" ||
+							parent.callee !== node ||
+							parent.arguments.length > 1 ||
+							parent.arguments[0]?.type === "SpreadElement")
+					)
+						return ESTREE_STOP;
+					names.add(key);
+				}
+			}
+			if (node.type === "Property" && parent?.type === "ObjectPattern") {
+				if (node.computed && !knownKey(node.key)) return ESTREE_STOP;
+				const key =
+					!node.computed && node.key.type === "Identifier"
+						? node.key.name
+						: node.key.type === "Literal" && typeof node.key.value === "string"
+							? node.key.value
+							: undefined;
+				if (key !== undefined) {
+					if (BUILTIN_MEMBER_OBSERVERS.has(key) || key === "stringify")
+						return ESTREE_STOP;
+					names.add(key);
+				}
+			}
+		});
+		if (
+			opaque === ESTREE_STOP ||
+			consoleBinding?.usageNodes.some((use) => !consoleCalls.has(use))
+		)
+			return undefined;
+	}
+	return [...names].filter((name) => INSTALLED_MEMBER_NAMES.has(name)).sort();
+}
+
+const WELL_KNOWN_SYMBOLS = new Set([
+	"asyncDispose",
+	"asyncIterator",
+	"dispose",
+	"hasInstance",
+	"isConcatSpreadable",
+	"iterator",
+	"match",
+	"matchAll",
+	"replace",
+	"search",
+	"species",
+	"split",
+	"toPrimitive",
+	"toStringTag",
+	"unscopables",
 ]);
 
 export function intlServiceInstaller(service: string): string {

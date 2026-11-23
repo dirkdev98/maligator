@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "builtin_json.h"
 
 #include <math.h>
@@ -4420,6 +4421,14 @@ static MalValue mal_builtin_json_raw_json(MalVm *vm, MalValue this_value, const 
     return mal_value_from_object(object);
 }
 
+#define MAL_JSON_MEMBERS(X) \
+    X(json_stringify, "stringify", 3, mal_builtin_json_stringify) \
+    X(json_parse, "parse", 2, mal_builtin_json_parse) \
+    X(json_rawJSON, "rawJSON", 1, mal_builtin_json_raw_json) \
+    X(json_isRawJSON, "isRawJSON", 1, mal_builtin_json_is_raw_json)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(json, MAL_JSON_MEMBERS)
+#undef MAL_JSON_MEMBERS
+
 void mal_builtin_json_install(MalVm *vm) {
     MalObject *json = mal_intrinsic_new_object(vm);
     vm->intrinsics[MAL_INTRINSIC_JSON] = mal_value_from_object(json);
@@ -4430,10 +4439,7 @@ void mal_builtin_json_install(MalVm *vm) {
     );
     mal_object_define_own(json, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag_desc);
 
-    mal_intrinsic_define_method_n(vm, json, "stringify", 3, mal_builtin_json_stringify);
-    mal_intrinsic_define_method_n(vm, json, "parse", 2, mal_builtin_json_parse);
-    mal_intrinsic_define_method_n(vm, json, "rawJSON", 1, mal_builtin_json_raw_json);
-    mal_intrinsic_define_method_n(vm, json, "isRawJSON", 1, mal_builtin_json_is_raw_json);
+    mal_builtin_members_define(vm, json, MAL_BUILTIN_MEMBER_json);
 }
 
 #include "generated/known_native_builtin_json_c.inc"

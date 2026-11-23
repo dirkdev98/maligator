@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "builtin_string.h"
 #include "builtin_symbol.h"
 
@@ -5090,6 +5091,71 @@ bool mal_builtin_string_trim_span_length_direct(
         mal_builtin_string_trim_span_length_locked(subject_value, start, end, out);
 }
 
+#define MAL_STRING_MEMBERS_1(X) \
+    X(string_members_1_fromCharCode, "fromCharCode", 1, mal_builtin_string_from_char_code) \
+    X(string_members_1_fromCodePoint, "fromCodePoint", 1, mal_builtin_string_from_code_point) \
+    X(string_members_1_raw, "raw", 1, mal_builtin_string_raw)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(string_members_1, MAL_STRING_MEMBERS_1)
+#undef MAL_STRING_MEMBERS_1
+
+#define MAL_STRING_MEMBERS_2(X) \
+    X(string_members_2_charAt, "charAt", 1, mal_builtin_string_prototype_char_at) \
+    X(string_members_2_charCodeAt, "charCodeAt", 1, mal_builtin_string_prototype_char_code_at) \
+    X(string_members_2_codePointAt, "codePointAt", 1, mal_builtin_string_prototype_code_point_at) \
+    X(string_members_2_at, "at", 1, mal_builtin_string_prototype_at) \
+    X(string_members_2_indexOf, "indexOf", 1, mal_builtin_string_prototype_index_of) \
+    X(string_members_2_lastIndexOf, "lastIndexOf", 1, mal_builtin_string_prototype_last_index_of) \
+    X(string_members_2_includes, "includes", 1, mal_builtin_string_prototype_includes) \
+    X(string_members_2_startsWith, "startsWith", 1, mal_builtin_string_prototype_starts_with) \
+    X(string_members_2_endsWith, "endsWith", 1, mal_builtin_string_prototype_ends_with) \
+    X(string_members_2_slice, "slice", 2, mal_builtin_string_prototype_slice) \
+    X(string_members_2_substring, "substring", 2, mal_builtin_string_prototype_substring) \
+    X(string_members_2_substr, "substr", 2, mal_builtin_string_prototype_substr) \
+    X(string_members_2_anchor, "anchor", 1, mal_builtin_string_prototype_anchor) \
+    X(string_members_2_big, "big", 0, mal_builtin_string_prototype_big) \
+    X(string_members_2_blink, "blink", 0, mal_builtin_string_prototype_blink) \
+    X(string_members_2_bold, "bold", 0, mal_builtin_string_prototype_bold) \
+    X(string_members_2_fixed, "fixed", 0, mal_builtin_string_prototype_fixed) \
+    X(string_members_2_fontcolor, "fontcolor", 1, mal_builtin_string_prototype_fontcolor) \
+    X(string_members_2_fontsize, "fontsize", 1, mal_builtin_string_prototype_fontsize) \
+    X(string_members_2_italics, "italics", 0, mal_builtin_string_prototype_italics) \
+    X(string_members_2_link, "link", 1, mal_builtin_string_prototype_link) \
+    X(string_members_2_small, "small", 0, mal_builtin_string_prototype_small) \
+    X(string_members_2_strike, "strike", 0, mal_builtin_string_prototype_strike) \
+    X(string_members_2_sub, "sub", 0, mal_builtin_string_prototype_sub) \
+    X(string_members_2_sup, "sup", 0, mal_builtin_string_prototype_sup) \
+    X(string_members_2_concat, "concat", 1, mal_builtin_string_prototype_concat) \
+    X(string_members_2_localeCompare, "localeCompare", 1, mal_builtin_string_prototype_locale_compare) \
+    X(string_members_2_normalize, "normalize", 0, mal_builtin_string_prototype_normalize) \
+    X(string_members_2_repeat, "repeat", 1, mal_builtin_string_prototype_repeat) \
+    X(string_members_2_trim, "trim", 0, mal_builtin_string_prototype_trim)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(string_members_2, MAL_STRING_MEMBERS_2)
+#undef MAL_STRING_MEMBERS_2
+
+#define MAL_STRING_MEMBERS_3(X) \
+    X(string_members_3_toUpperCase, "toUpperCase", 0, mal_builtin_string_prototype_to_upper_case) \
+    X(string_members_3_toLowerCase, "toLowerCase", 0, mal_builtin_string_prototype_to_lower_case)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(string_members_3, MAL_STRING_MEMBERS_3)
+#undef MAL_STRING_MEMBERS_3
+
+#define MAL_STRING_MEMBERS_4(X) \
+    X(string_members_4_toLocaleUpperCase, "toLocaleUpperCase", 0, mal_builtin_string_prototype_to_locale_upper_case) \
+    X(string_members_4_toLocaleLowerCase, "toLocaleLowerCase", 0, mal_builtin_string_prototype_to_locale_lower_case) \
+    X(string_members_4_isWellFormed, "isWellFormed", 0, mal_builtin_string_prototype_is_well_formed) \
+    X(string_members_4_toWellFormed, "toWellFormed", 0, mal_builtin_string_prototype_to_well_formed) \
+    X(string_members_4_match, "match", 1, mal_builtin_string_prototype_match) \
+    X(string_members_4_matchAll, "matchAll", 1, mal_builtin_string_prototype_match_all) \
+    X(string_members_4_search, "search", 1, mal_builtin_string_prototype_search) \
+    X(string_members_4_split, "split", 2, mal_builtin_string_prototype_split) \
+    X(string_members_4_replace, "replace", 2, mal_builtin_string_prototype_replace) \
+    X(string_members_4_replaceAll, "replaceAll", 2, mal_builtin_string_prototype_replace_all) \
+    X(string_members_4_padStart, "padStart", 1, mal_builtin_string_prototype_pad_start) \
+    X(string_members_4_padEnd, "padEnd", 1, mal_builtin_string_prototype_pad_end) \
+    X(string_members_4_toString, "toString", 0, mal_builtin_string_prototype_to_string) \
+    X(string_members_4_valueOf, "valueOf", 0, mal_builtin_string_prototype_to_string)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(string_members_4, MAL_STRING_MEMBERS_4)
+#undef MAL_STRING_MEMBERS_4
+
 void mal_builtin_string_install(MalVm *vm) {
     // %String.prototype% is itself a String object with [[StringData]] = "", so
     // String.prototype.valueOf()/toString() work on the prototype and its
@@ -5116,40 +5182,9 @@ void mal_builtin_string_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_STRING_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_STRING_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "fromCharCode", 1, mal_builtin_string_from_char_code);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "fromCodePoint", 1, mal_builtin_string_from_code_point);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "raw", 1, mal_builtin_string_raw);
+    mal_builtin_members_define(vm, (MalObject *) constructor, MAL_BUILTIN_MEMBER_string_members_1);
 
-    mal_intrinsic_define_method_n(vm, prototype, "charAt", 1, mal_builtin_string_prototype_char_at);
-    mal_intrinsic_define_method_n(vm, prototype, "charCodeAt", 1, mal_builtin_string_prototype_char_code_at);
-    mal_intrinsic_define_method_n(vm, prototype, "codePointAt", 1, mal_builtin_string_prototype_code_point_at);
-    mal_intrinsic_define_method_n(vm, prototype, "at", 1, mal_builtin_string_prototype_at);
-    mal_intrinsic_define_method_n(vm, prototype, "indexOf", 1, mal_builtin_string_prototype_index_of);
-    mal_intrinsic_define_method_n(vm, prototype, "lastIndexOf", 1, mal_builtin_string_prototype_last_index_of);
-    mal_intrinsic_define_method_n(vm, prototype, "includes", 1, mal_builtin_string_prototype_includes);
-    mal_intrinsic_define_method_n(vm, prototype, "startsWith", 1, mal_builtin_string_prototype_starts_with);
-    mal_intrinsic_define_method_n(vm, prototype, "endsWith", 1, mal_builtin_string_prototype_ends_with);
-    mal_intrinsic_define_method_n(vm, prototype, "slice", 2, mal_builtin_string_prototype_slice);
-    mal_intrinsic_define_method_n(vm, prototype, "substring", 2, mal_builtin_string_prototype_substring);
-    mal_intrinsic_define_method_n(vm, prototype, "substr", 2, mal_builtin_string_prototype_substr);
-    mal_intrinsic_define_method_n(vm, prototype, "anchor", 1, mal_builtin_string_prototype_anchor);
-    mal_intrinsic_define_method_n(vm, prototype, "big", 0, mal_builtin_string_prototype_big);
-    mal_intrinsic_define_method_n(vm, prototype, "blink", 0, mal_builtin_string_prototype_blink);
-    mal_intrinsic_define_method_n(vm, prototype, "bold", 0, mal_builtin_string_prototype_bold);
-    mal_intrinsic_define_method_n(vm, prototype, "fixed", 0, mal_builtin_string_prototype_fixed);
-    mal_intrinsic_define_method_n(vm, prototype, "fontcolor", 1, mal_builtin_string_prototype_fontcolor);
-    mal_intrinsic_define_method_n(vm, prototype, "fontsize", 1, mal_builtin_string_prototype_fontsize);
-    mal_intrinsic_define_method_n(vm, prototype, "italics", 0, mal_builtin_string_prototype_italics);
-    mal_intrinsic_define_method_n(vm, prototype, "link", 1, mal_builtin_string_prototype_link);
-    mal_intrinsic_define_method_n(vm, prototype, "small", 0, mal_builtin_string_prototype_small);
-    mal_intrinsic_define_method_n(vm, prototype, "strike", 0, mal_builtin_string_prototype_strike);
-    mal_intrinsic_define_method_n(vm, prototype, "sub", 0, mal_builtin_string_prototype_sub);
-    mal_intrinsic_define_method_n(vm, prototype, "sup", 0, mal_builtin_string_prototype_sup);
-    mal_intrinsic_define_method_n(vm, prototype, "concat", 1, mal_builtin_string_prototype_concat);
-    mal_intrinsic_define_method_n(vm, prototype, "localeCompare", 1, mal_builtin_string_prototype_locale_compare);
-    mal_intrinsic_define_method_n(vm, prototype, "normalize", 0, mal_builtin_string_prototype_normalize);
-    mal_intrinsic_define_method_n(vm, prototype, "repeat", 1, mal_builtin_string_prototype_repeat);
-    mal_intrinsic_define_method_n(vm, prototype, "trim", 0, mal_builtin_string_prototype_trim);
+    mal_builtin_members_define(vm, prototype, MAL_BUILTIN_MEMBER_string_members_2);
     MalValue trim_start = mal_intrinsic_define_method_n(
         vm, prototype, "trimStart", 0, mal_builtin_string_prototype_trim_start);
     MalValue trim_end = mal_intrinsic_define_method_n(
@@ -5160,24 +5195,10 @@ void mal_builtin_string_install(MalVm *vm) {
     mal_intrinsic_define_data(
         vm, prototype, "trimRight", trim_end,
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_intrinsic_define_method_n(vm, prototype, "toUpperCase", 0, mal_builtin_string_prototype_to_upper_case);
-    mal_intrinsic_define_method_n(vm, prototype, "toLowerCase", 0, mal_builtin_string_prototype_to_lower_case);
+    mal_builtin_members_define(vm, prototype, MAL_BUILTIN_MEMBER_string_members_3);
     // Without ICU the locale-aware case methods behave as the default-locale ones
     // (extra locale arguments are ignored); each gets its own name.
-    mal_intrinsic_define_method_n(vm, prototype, "toLocaleUpperCase", 0, mal_builtin_string_prototype_to_locale_upper_case);
-    mal_intrinsic_define_method_n(vm, prototype, "toLocaleLowerCase", 0, mal_builtin_string_prototype_to_locale_lower_case);
-    mal_intrinsic_define_method_n(vm, prototype, "isWellFormed", 0, mal_builtin_string_prototype_is_well_formed);
-    mal_intrinsic_define_method_n(vm, prototype, "toWellFormed", 0, mal_builtin_string_prototype_to_well_formed);
-    mal_intrinsic_define_method_n(vm, prototype, "match", 1, mal_builtin_string_prototype_match);
-    mal_intrinsic_define_method_n(vm, prototype, "matchAll", 1, mal_builtin_string_prototype_match_all);
-    mal_intrinsic_define_method_n(vm, prototype, "search", 1, mal_builtin_string_prototype_search);
-    mal_intrinsic_define_method_n(vm, prototype, "split", 2, mal_builtin_string_prototype_split);
-    mal_intrinsic_define_method_n(vm, prototype, "replace", 2, mal_builtin_string_prototype_replace);
-    mal_intrinsic_define_method_n(vm, prototype, "replaceAll", 2, mal_builtin_string_prototype_replace_all);
-    mal_intrinsic_define_method_n(vm, prototype, "padStart", 1, mal_builtin_string_prototype_pad_start);
-    mal_intrinsic_define_method_n(vm, prototype, "padEnd", 1, mal_builtin_string_prototype_pad_end);
-    mal_intrinsic_define_method_n(vm, prototype, "toString", 0, mal_builtin_string_prototype_to_string);
-    mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, mal_builtin_string_prototype_to_string);
+    mal_builtin_members_define(vm, prototype, MAL_BUILTIN_MEMBER_string_members_4);
     mal_intrinsic_define_symbol_method(vm, prototype, MAL_INTRINSIC_SYMBOL_ITERATOR, "[Symbol.iterator]", mal_builtin_string_prototype_iterator);
 }
 

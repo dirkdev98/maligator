@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "web_transform_stream.h"
 
 #include <stdio.h>
@@ -1106,6 +1107,36 @@ static void ts_define_method(MalVm *vm, MalObject *prototype, const char *name, 
         TS_VISIBLE);
 }
 
+#define MAL_TRANSFORM_STREAM_1(X) \
+    X(transform_stream_1_desiredSize, "desiredSize", ts_define_getter, ts_controller_desired_size) \
+    X(transform_stream_1_enqueue, "enqueue", ts_define_method, 0, ts_controller_enqueue) \
+    X(transform_stream_1_error, "error", ts_define_method, 0, ts_controller_error) \
+    X(transform_stream_1_terminate, "terminate", ts_define_method, 0, ts_controller_terminate)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(transform_stream_1, MAL_TRANSFORM_STREAM_1)
+#undef MAL_TRANSFORM_STREAM_1
+
+#define MAL_TRANSFORM_STREAM_2(X) \
+    X(transform_stream_2_readable, "readable", ts_define_getter, ts_get_readable) \
+    X(transform_stream_2_writable, "writable", ts_define_getter, ts_get_writable)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(transform_stream_2, MAL_TRANSFORM_STREAM_2)
+#undef MAL_TRANSFORM_STREAM_2
+
+#define MAL_TRANSFORM_STREAM_3(X) \
+    X(transform_stream_3_encoding, "encoding", ts_define_getter, ts_encoder_stream_encoding) \
+    X(transform_stream_3_readable, "readable", ts_define_getter, ts_wrapper_readable) \
+    X(transform_stream_3_writable, "writable", ts_define_getter, ts_wrapper_writable)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(transform_stream_3, MAL_TRANSFORM_STREAM_3)
+#undef MAL_TRANSFORM_STREAM_3
+
+#define MAL_TRANSFORM_STREAM_4(X) \
+    X(transform_stream_4_encoding, "encoding", ts_define_getter, ts_decoder_stream_encoding) \
+    X(transform_stream_4_fatal, "fatal", ts_define_getter, ts_decoder_stream_fatal) \
+    X(transform_stream_4_ignoreBOM, "ignoreBOM", ts_define_getter, ts_decoder_stream_ignore_bom) \
+    X(transform_stream_4_readable, "readable", ts_define_getter, ts_wrapper_readable) \
+    X(transform_stream_4_writable, "writable", ts_define_getter, ts_wrapper_writable)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(transform_stream_4, MAL_TRANSFORM_STREAM_4)
+#undef MAL_TRANSFORM_STREAM_4
+
 void mal_transform_stream_install(MalVm *vm, MalObject *global_this) {
     MalValue roots[3] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
     MalRootSpan root;
@@ -1114,25 +1145,15 @@ void mal_transform_stream_install(MalVm *vm, MalObject *global_this) {
     MalObject *controller = ts_install_class(vm, global_this, "TransformStreamDefaultController", 0,
         ts_illegal_constructor, roots, undefined);
     roots[2] = mal_value_from_object(controller);
-    ts_define_getter(vm, controller, "desiredSize", ts_controller_desired_size);
-    ts_define_method(vm, controller, "enqueue", 0, ts_controller_enqueue);
-    ts_define_method(vm, controller, "error", 0, ts_controller_error);
-    ts_define_method(vm, controller, "terminate", 0, ts_controller_terminate);
+    mal_builtin_members_define(vm, controller, MAL_BUILTIN_MEMBER_transform_stream_1);
     MalObject *stream = ts_install_class(vm, global_this, "TransformStream", 0, ts_constructor, roots, roots[2]);
-    ts_define_getter(vm, stream, "readable", ts_get_readable);
-    ts_define_getter(vm, stream, "writable", ts_get_writable);
+    mal_builtin_members_define(vm, stream, MAL_BUILTIN_MEMBER_transform_stream_2);
     MalObject *encoder = ts_install_class(vm, global_this, "TextEncoderStream", 0,
         ts_text_encoder_stream_constructor, roots, roots[2]);
-    ts_define_getter(vm, encoder, "encoding", ts_encoder_stream_encoding);
-    ts_define_getter(vm, encoder, "readable", ts_wrapper_readable);
-    ts_define_getter(vm, encoder, "writable", ts_wrapper_writable);
+    mal_builtin_members_define(vm, encoder, MAL_BUILTIN_MEMBER_transform_stream_3);
     MalObject *decoder = ts_install_class(vm, global_this, "TextDecoderStream", 0,
         ts_text_decoder_stream_constructor, roots, roots[2]);
-    ts_define_getter(vm, decoder, "encoding", ts_decoder_stream_encoding);
-    ts_define_getter(vm, decoder, "fatal", ts_decoder_stream_fatal);
-    ts_define_getter(vm, decoder, "ignoreBOM", ts_decoder_stream_ignore_bom);
-    ts_define_getter(vm, decoder, "readable", ts_wrapper_readable);
-    ts_define_getter(vm, decoder, "writable", ts_wrapper_writable);
+    mal_builtin_members_define(vm, decoder, MAL_BUILTIN_MEMBER_transform_stream_4);
     mal_gc_unroot(&root);
 }
 

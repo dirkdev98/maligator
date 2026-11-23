@@ -182,6 +182,8 @@ export interface BuildOptions {
 	profileEnabled?: boolean;
 	/** Use the probed production native plan (LTO and stripping where supported). */
 	production?: boolean;
+	/** Include the compiler bridge exposed to the internal test drivers. */
+	toolchainBridge?: boolean;
 	/**
 	 * Native root mode. Fixtures that check shadow-frame publication build with the
 	 * precise roots that Wasm emission keeps, and opt out of stack scanning.
@@ -405,7 +407,7 @@ function linkProgramImage(
 			undefined,
 			true,
 		),
-		toolchainBridge: true,
+		toolchainBridge: options.toolchainBridge ?? true,
 		nativeFunctionSplit: options.nativeFunctionSplit,
 		onRendererBailout: ({
 			file,

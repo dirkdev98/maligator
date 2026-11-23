@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "web_url_object.h"
 
 #include <stdlib.h>
@@ -1322,6 +1323,54 @@ static void url_define_accessor(MalVm *vm, MalObject *proto, const byte *name,
     mal_object_define_own(proto, mal_intrinsic_string_key(vm, name), &desc);
 }
 
+#define MAL_URL_MEMBERS_1(X) \
+    X(url_members_1_toString, "toString", 0, url_to_string) \
+    X(url_members_1_toJSON, "toJSON", 0, url_to_string)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(url_members_1, MAL_URL_MEMBERS_1)
+#undef MAL_URL_MEMBERS_1
+
+#define MAL_URL_MEMBERS_2(X) \
+    X(url_members_2_canParse, "canParse", 1, url_can_parse) \
+    X(url_members_2_parse, "parse", 1, url_parse)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(url_members_2, MAL_URL_MEMBERS_2)
+#undef MAL_URL_MEMBERS_2
+
+#define MAL_URL_MEMBERS_3(X) \
+    X(url_members_3_get, "get", 1, usp_get) \
+    X(url_members_3_getAll, "getAll", 1, usp_get_all) \
+    X(url_members_3_has, "has", 1, usp_has) \
+    X(url_members_3_set, "set", 2, usp_set) \
+    X(url_members_3_append, "append", 2, usp_append_method) \
+    X(url_members_3_delete, "delete", 1, usp_delete) \
+    X(url_members_3_sort, "sort", 0, usp_sort) \
+    X(url_members_3_toString, "toString", 0, usp_to_string) \
+    X(url_members_3_forEach, "forEach", 1, usp_for_each) \
+    X(url_members_3_entries, "entries", 0, usp_entries) \
+    X(url_members_3_keys, "keys", 0, usp_keys)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(url_members_3, MAL_URL_MEMBERS_3)
+#undef MAL_URL_MEMBERS_3
+
+#define MAL_URL_ACCESSORS_1(X) \
+    X(url_accessors_1_href, "href", url_define_accessor, url_get_href, url_set_href) \
+    X(url_accessors_1_protocol, "protocol", url_define_accessor, url_get_protocol, url_set_protocol) \
+    X(url_accessors_1_username, "username", url_define_accessor, url_get_username, url_set_username) \
+    X(url_accessors_1_password, "password", url_define_accessor, url_get_password, url_set_password) \
+    X(url_accessors_1_host, "host", url_define_accessor, url_get_host, url_set_host) \
+    X(url_accessors_1_hostname, "hostname", url_define_accessor, url_get_hostname, url_set_hostname) \
+    X(url_accessors_1_port, "port", url_define_accessor, url_get_port, url_set_port) \
+    X(url_accessors_1_pathname, "pathname", url_define_accessor, url_get_pathname, url_set_pathname) \
+    X(url_accessors_1_search, "search", url_define_accessor, url_get_search, url_set_search) \
+    X(url_accessors_1_hash, "hash", url_define_accessor, url_get_hash, url_set_hash) \
+    X(url_accessors_1_origin, "origin", url_define_accessor, url_get_origin, nullptr) \
+    X(url_accessors_1_searchParams, "searchParams", url_define_accessor, url_get_search_params, nullptr)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(url_accessors_1, MAL_URL_ACCESSORS_1)
+#undef MAL_URL_ACCESSORS_1
+
+#define MAL_URL_ACCESSORS_2(X) \
+    X(url_accessors_2_size, "size", url_define_accessor, usp_get_size, nullptr)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(url_accessors_2, MAL_URL_ACCESSORS_2)
+#undef MAL_URL_ACCESSORS_2
+
 void mal_url_install(MalVm *vm, MalObject *global_this) {
     MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *obj_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
@@ -1339,22 +1388,9 @@ void mal_url_install(MalVm *vm, MalObject *global_this) {
         vm->intrinsics[MAL_INTRINSIC_URL_CONSTRUCTOR],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
-    url_define_accessor(vm, url_proto, (const byte *) "href", url_get_href, url_set_href);
-    url_define_accessor(vm, url_proto, (const byte *) "protocol", url_get_protocol, url_set_protocol);
-    url_define_accessor(vm, url_proto, (const byte *) "username", url_get_username, url_set_username);
-    url_define_accessor(vm, url_proto, (const byte *) "password", url_get_password, url_set_password);
-    url_define_accessor(vm, url_proto, (const byte *) "host", url_get_host, url_set_host);
-    url_define_accessor(vm, url_proto, (const byte *) "hostname", url_get_hostname, url_set_hostname);
-    url_define_accessor(vm, url_proto, (const byte *) "port", url_get_port, url_set_port);
-    url_define_accessor(vm, url_proto, (const byte *) "pathname", url_get_pathname, url_set_pathname);
-    url_define_accessor(vm, url_proto, (const byte *) "search", url_get_search, url_set_search);
-    url_define_accessor(vm, url_proto, (const byte *) "hash", url_get_hash, url_set_hash);
-    url_define_accessor(vm, url_proto, (const byte *) "origin", url_get_origin, nullptr);
-    url_define_accessor(vm, url_proto, (const byte *) "searchParams", url_get_search_params, nullptr);
-    mal_intrinsic_define_method_n(vm, url_proto, (const byte *) "toString", 0, url_to_string);
-    mal_intrinsic_define_method_n(vm, url_proto, (const byte *) "toJSON", 0, url_to_string);
-    mal_intrinsic_define_method_n(vm, (MalObject *) url_ctor, (const byte *) "canParse", 1, url_can_parse);
-    mal_intrinsic_define_method_n(vm, (MalObject *) url_ctor, (const byte *) "parse", 1, url_parse);
+    mal_builtin_members_define(vm, url_proto, MAL_BUILTIN_MEMBER_url_accessors_1);
+    mal_builtin_members_define(vm, url_proto, MAL_BUILTIN_MEMBER_url_members_1);
+    mal_builtin_members_define(vm, (MalObject *) url_ctor, MAL_BUILTIN_MEMBER_url_members_2);
     mal_intrinsic_define_data(vm, global_this, (const byte *) "URL",
         vm->intrinsics[MAL_INTRINSIC_URL_CONSTRUCTOR],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
@@ -1402,20 +1438,10 @@ void mal_url_install(MalVm *vm, MalObject *global_this) {
         mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG),
         &usp_tag_desc);
 
-    mal_intrinsic_define_method_n(vm, usp_proto, (const byte *) "get", 1, usp_get);
-    mal_intrinsic_define_method_n(vm, usp_proto, (const byte *) "getAll", 1, usp_get_all);
-    mal_intrinsic_define_method_n(vm, usp_proto, (const byte *) "has", 1, usp_has);
-    mal_intrinsic_define_method_n(vm, usp_proto, (const byte *) "set", 2, usp_set);
-    mal_intrinsic_define_method_n(vm, usp_proto, (const byte *) "append", 2, usp_append_method);
-    mal_intrinsic_define_method_n(vm, usp_proto, (const byte *) "delete", 1, usp_delete);
-    mal_intrinsic_define_method_n(vm, usp_proto, (const byte *) "sort", 0, usp_sort);
-    mal_intrinsic_define_method_n(vm, usp_proto, (const byte *) "toString", 0, usp_to_string);
-    mal_intrinsic_define_method_n(vm, usp_proto, (const byte *) "forEach", 1, usp_for_each);
-    mal_intrinsic_define_method_n(vm, usp_proto, (const byte *) "entries", 0, usp_entries);
-    mal_intrinsic_define_method_n(vm, usp_proto, (const byte *) "keys", 0, usp_keys);
+    mal_builtin_members_define(vm, usp_proto, MAL_BUILTIN_MEMBER_url_members_3);
     MalValue values_fn =
         mal_intrinsic_define_method_n(vm, usp_proto, (const byte *) "values", 0, usp_values);
-    url_define_accessor(vm, usp_proto, (const byte *) "size", usp_get_size, nullptr);
+    mal_builtin_members_define(vm, usp_proto, MAL_BUILTIN_MEMBER_url_accessors_2);
 
     // [Symbol.iterator] === entries.
     MalValue entries_fn;

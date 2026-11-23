@@ -23,6 +23,11 @@ const stages: Record<
 			tool: process.execPath,
 			args: ["./scripts/generate-platform-api.ts", "--check"],
 		},
+		{
+			label: "check builtin member catalog",
+			tool: process.execPath,
+			args: ["./scripts/generate-builtin-members.ts", "--check"],
+		},
 		{ label: "lint", tool: "oxlint", args: ["."] },
 		{ label: "check formatting", tool: "oxfmt", args: ["--check"] },
 	],

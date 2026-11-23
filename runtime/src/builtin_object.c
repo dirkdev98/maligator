@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "builtin_object.h"
 
 #include "array_object.h"
@@ -2801,6 +2802,46 @@ static MalValue mal_builtin_object_prototype_lookup_setter(MalVm *vm, MalValue t
     return mal_builtin_object_prototype_lookup_accessor(vm, this_value, args, arg_count, true);
 }
 
+#define MAL_OBJECT_MEMBERS_1(X) \
+    X(object_members_1_defineProperties, "defineProperties", 2, mal_builtin_object_define_properties) \
+    X(object_members_1_getOwnPropertyDescriptor, "getOwnPropertyDescriptor", 2, mal_builtin_object_get_own_property_descriptor) \
+    X(object_members_1_getOwnPropertyDescriptors, "getOwnPropertyDescriptors", 1, mal_builtin_object_get_own_property_descriptors) \
+    X(object_members_1_getOwnPropertyNames, "getOwnPropertyNames", 1, mal_builtin_object_get_own_property_names) \
+    X(object_members_1_getOwnPropertySymbols, "getOwnPropertySymbols", 1, mal_builtin_object_get_own_property_symbols) \
+    X(object_members_1_keys, "keys", 1, mal_builtin_object_keys) \
+    X(object_members_1_values, "values", 1, mal_builtin_object_values) \
+    X(object_members_1_entries, "entries", 1, mal_builtin_object_entries) \
+    X(object_members_1_assign, "assign", 2, mal_builtin_object_assign) \
+    X(object_members_1_create, "create", 2, mal_builtin_object_create) \
+    X(object_members_1_getPrototypeOf, "getPrototypeOf", 1, mal_builtin_object_get_prototype_of) \
+    X(object_members_1_setPrototypeOf, "setPrototypeOf", 2, mal_builtin_object_set_prototype_of) \
+    X(object_members_1_preventExtensions, "preventExtensions", 1, mal_builtin_object_prevent_extensions) \
+    X(object_members_1_isExtensible, "isExtensible", 1, mal_builtin_object_is_extensible) \
+    X(object_members_1_freeze, "freeze", 1, mal_builtin_object_freeze) \
+    X(object_members_1_isFrozen, "isFrozen", 1, mal_builtin_object_is_frozen) \
+    X(object_members_1_seal, "seal", 1, mal_builtin_object_seal) \
+    X(object_members_1_isSealed, "isSealed", 1, mal_builtin_object_is_sealed) \
+    X(object_members_1_is, "is", 2, mal_builtin_object_is) \
+    X(object_members_1_hasOwn, "hasOwn", 2, mal_builtin_object_has_own) \
+    X(object_members_1_fromEntries, "fromEntries", 1, mal_builtin_object_from_entries) \
+    X(object_members_1_groupBy, "groupBy", 2, mal_builtin_object_group_by)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(object_members_1, MAL_OBJECT_MEMBERS_1)
+#undef MAL_OBJECT_MEMBERS_1
+
+#define MAL_OBJECT_MEMBERS_2(X) \
+    X(object_members_2_hasOwnProperty, "hasOwnProperty", 1, mal_builtin_object_prototype_has_own_property) \
+    X(object_members_2_isPrototypeOf, "isPrototypeOf", 1, mal_builtin_object_prototype_is_prototype_of) \
+    X(object_members_2_propertyIsEnumerable, "propertyIsEnumerable", 1, mal_builtin_object_prototype_property_is_enumerable) \
+    X(object_members_2_valueOf, "valueOf", 0, mal_builtin_object_prototype_value_of) \
+    X(object_members_2_toString, "toString", 0, mal_builtin_object_prototype_to_string) \
+    X(object_members_2_toLocaleString, "toLocaleString", 0, mal_builtin_object_prototype_to_locale_string) \
+    X(object_members_2___defineGetter__, "__defineGetter__", 2, mal_builtin_object_prototype_define_getter) \
+    X(object_members_2___defineSetter__, "__defineSetter__", 2, mal_builtin_object_prototype_define_setter) \
+    X(object_members_2___lookupGetter__, "__lookupGetter__", 1, mal_builtin_object_prototype_lookup_getter) \
+    X(object_members_2___lookupSetter__, "__lookupSetter__", 1, mal_builtin_object_prototype_lookup_setter)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(object_members_2, MAL_OBJECT_MEMBERS_2)
+#undef MAL_OBJECT_MEMBERS_2
+
 void mal_builtin_object_install(MalVm *vm) {
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
     // %Object.prototype% is an immutable-prototype exotic object: its [[Prototype]]
@@ -2821,39 +2862,9 @@ void mal_builtin_object_install(MalVm *vm) {
 
     vm->intrinsics[MAL_INTRINSIC_OBJECT_DEFINE_PROPERTY] =
         mal_intrinsic_define_method_n(vm, constructor_object, "defineProperty", 3, mal_builtin_object_define_property);
-    mal_intrinsic_define_method_n(vm, constructor_object, "defineProperties", 2, mal_builtin_object_define_properties);
-    mal_intrinsic_define_method_n(vm, constructor_object, "getOwnPropertyDescriptor", 2, mal_builtin_object_get_own_property_descriptor);
-    mal_intrinsic_define_method_n(vm, constructor_object, "getOwnPropertyDescriptors", 1, mal_builtin_object_get_own_property_descriptors);
-    mal_intrinsic_define_method_n(vm, constructor_object, "getOwnPropertyNames", 1, mal_builtin_object_get_own_property_names);
-    mal_intrinsic_define_method_n(vm, constructor_object, "getOwnPropertySymbols", 1, mal_builtin_object_get_own_property_symbols);
-    mal_intrinsic_define_method_n(vm, constructor_object, "keys", 1, mal_builtin_object_keys);
-    mal_intrinsic_define_method_n(vm, constructor_object, "values", 1, mal_builtin_object_values);
-    mal_intrinsic_define_method_n(vm, constructor_object, "entries", 1, mal_builtin_object_entries);
-    mal_intrinsic_define_method_n(vm, constructor_object, "assign", 2, mal_builtin_object_assign);
-    mal_intrinsic_define_method_n(vm, constructor_object, "create", 2, mal_builtin_object_create);
-    mal_intrinsic_define_method_n(vm, constructor_object, "getPrototypeOf", 1, mal_builtin_object_get_prototype_of);
-    mal_intrinsic_define_method_n(vm, constructor_object, "setPrototypeOf", 2, mal_builtin_object_set_prototype_of);
-    mal_intrinsic_define_method_n(vm, constructor_object, "preventExtensions", 1, mal_builtin_object_prevent_extensions);
-    mal_intrinsic_define_method_n(vm, constructor_object, "isExtensible", 1, mal_builtin_object_is_extensible);
-    mal_intrinsic_define_method_n(vm, constructor_object, "freeze", 1, mal_builtin_object_freeze);
-    mal_intrinsic_define_method_n(vm, constructor_object, "isFrozen", 1, mal_builtin_object_is_frozen);
-    mal_intrinsic_define_method_n(vm, constructor_object, "seal", 1, mal_builtin_object_seal);
-    mal_intrinsic_define_method_n(vm, constructor_object, "isSealed", 1, mal_builtin_object_is_sealed);
-    mal_intrinsic_define_method_n(vm, constructor_object, "is", 2, mal_builtin_object_is);
-    mal_intrinsic_define_method_n(vm, constructor_object, "hasOwn", 2, mal_builtin_object_has_own);
-    mal_intrinsic_define_method_n(vm, constructor_object, "fromEntries", 1, mal_builtin_object_from_entries);
-    mal_intrinsic_define_method_n(vm, constructor_object, "groupBy", 2, mal_builtin_object_group_by);
+    mal_builtin_members_define(vm, constructor_object, MAL_BUILTIN_MEMBER_object_members_1);
 
-    mal_intrinsic_define_method_n(vm, prototype, "hasOwnProperty", 1, mal_builtin_object_prototype_has_own_property);
-    mal_intrinsic_define_method_n(vm, prototype, "isPrototypeOf", 1, mal_builtin_object_prototype_is_prototype_of);
-    mal_intrinsic_define_method_n(vm, prototype, "propertyIsEnumerable", 1, mal_builtin_object_prototype_property_is_enumerable);
-    mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, mal_builtin_object_prototype_value_of);
-    mal_intrinsic_define_method_n(vm, prototype, "toString", 0, mal_builtin_object_prototype_to_string);
-    mal_intrinsic_define_method_n(vm, prototype, "toLocaleString", 0, mal_builtin_object_prototype_to_locale_string);
-    mal_intrinsic_define_method_n(vm, prototype, "__defineGetter__", 2, mal_builtin_object_prototype_define_getter);
-    mal_intrinsic_define_method_n(vm, prototype, "__defineSetter__", 2, mal_builtin_object_prototype_define_setter);
-    mal_intrinsic_define_method_n(vm, prototype, "__lookupGetter__", 1, mal_builtin_object_prototype_lookup_getter);
-    mal_intrinsic_define_method_n(vm, prototype, "__lookupSetter__", 1, mal_builtin_object_prototype_lookup_setter);
+    mal_builtin_members_define(vm, prototype, MAL_BUILTIN_MEMBER_object_members_2);
 
     // Annex B __proto__ is an accessor pair on Object.prototype.
     mal_intrinsic_define_accessor_n(

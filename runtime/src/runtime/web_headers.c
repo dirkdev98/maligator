@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "web_headers_object.h"
 
 #include <stdlib.h>
@@ -1164,6 +1165,20 @@ static MalValue mal_headers_method_get_set_cookie(
     return result;
 }
 
+#define MAL_HEADERS(X) \
+    X(headers_get, "get", mal_intrinsic_define_method_n, 1, mal_headers_method_get) \
+    X(headers_set, "set", mal_intrinsic_define_method_n, 2, mal_headers_method_set) \
+    X(headers_append, "append", mal_intrinsic_define_method_n, 2, mal_headers_method_append) \
+    X(headers_has, "has", mal_intrinsic_define_method_n, 1, mal_headers_method_has) \
+    X(headers_delete, "delete", mal_intrinsic_define_method_n, 1, mal_headers_method_delete) \
+    X(headers_entries, "entries", mal_intrinsic_define_method_n, 0, mal_headers_method_entries) \
+    X(headers_keys, "keys", mal_intrinsic_define_method_n, 0, mal_headers_method_keys) \
+    X(headers_values, "values", mal_intrinsic_define_method_n, 0, mal_headers_method_values) \
+    X(headers_forEach, "forEach", mal_intrinsic_define_method_n, 1, mal_headers_method_for_each) \
+    X(headers_getSetCookie, "getSetCookie", mal_intrinsic_define_method_n, 0, mal_headers_method_get_set_cookie)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(headers, MAL_HEADERS)
+#undef MAL_HEADERS
+
 void mal_headers_install(MalVm *vm, MalObject *global_this) {
     MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *obj_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
@@ -1202,17 +1217,7 @@ void mal_headers_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_data(vm, proto, (const byte *) "constructor",
         vm->intrinsics[MAL_INTRINSIC_HEADERS_CONSTRUCTOR],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_intrinsic_define_method_n(vm, proto, (const byte *) "get", 1, mal_headers_method_get);
-    mal_intrinsic_define_method_n(vm, proto, (const byte *) "set", 2, mal_headers_method_set);
-    mal_intrinsic_define_method_n(vm, proto, (const byte *) "append", 2, mal_headers_method_append);
-    mal_intrinsic_define_method_n(vm, proto, (const byte *) "has", 1, mal_headers_method_has);
-    mal_intrinsic_define_method_n(vm, proto, (const byte *) "delete", 1, mal_headers_method_delete);
-    mal_intrinsic_define_method_n(vm, proto, (const byte *) "entries", 0, mal_headers_method_entries);
-    mal_intrinsic_define_method_n(vm, proto, (const byte *) "keys", 0, mal_headers_method_keys);
-    mal_intrinsic_define_method_n(vm, proto, (const byte *) "values", 0, mal_headers_method_values);
-    mal_intrinsic_define_method_n(vm, proto, (const byte *) "forEach", 1, mal_headers_method_for_each);
-    mal_intrinsic_define_method_n(
-        vm, proto, (const byte *) "getSetCookie", 0, mal_headers_method_get_set_cookie);
+    mal_builtin_members_define(vm, proto, MAL_BUILTIN_MEMBER_headers);
     // [Symbol.iterator] === entries.
     MalValue entries_fn;
     if (mal_vm_get_property(vm, vm->intrinsics[MAL_INTRINSIC_HEADERS_PROTOTYPE],

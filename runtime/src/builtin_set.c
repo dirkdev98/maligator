@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "builtin_set.h"
 
 #include <math.h>
@@ -1309,6 +1310,20 @@ static void mal_builtin_set_define_size(MalVm *vm, MalObject *prototype, MalNati
         vm, prototype, "size", "get size", getter, MAL_PROPERTY_CONFIGURABLE);
 }
 
+#define MAL_SET_METHODS(X) \
+    X(set_methods_clear, "clear", 0, mal_builtin_set_prototype_clear) \
+    X(set_methods_forEach, "forEach", 1, mal_builtin_set_prototype_for_each) \
+    X(set_methods_union, "union", 1, mal_builtin_set_prototype_union) \
+    X(set_methods_intersection, "intersection", 1, mal_builtin_set_prototype_intersection) \
+    X(set_methods_difference, "difference", 1, mal_builtin_set_prototype_difference) \
+    X(set_methods_symmetricDifference, "symmetricDifference", 1, mal_builtin_set_prototype_symmetric_difference) \
+    X(set_methods_isSubsetOf, "isSubsetOf", 1, mal_builtin_set_prototype_is_subset_of) \
+    X(set_methods_isSupersetOf, "isSupersetOf", 1, mal_builtin_set_prototype_is_superset_of) \
+    X(set_methods_isDisjointFrom, "isDisjointFrom", 1, mal_builtin_set_prototype_is_disjoint_from) \
+    X(set_methods_entries, "entries", 0, mal_builtin_set_prototype_entries)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(set_methods, MAL_SET_METHODS)
+#undef MAL_SET_METHODS
+
 void mal_builtin_set_install(MalVm *vm) {
     MalObject *prototype = mal_builtin_set_scaffold(
         vm,
@@ -1325,16 +1340,7 @@ void mal_builtin_set_install(MalVm *vm) {
         mal_intrinsic_define_method_n(vm, prototype, "has", 1, mal_builtin_set_prototype_has);
     vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_DELETE] =
         mal_intrinsic_define_method_n(vm, prototype, "delete", 1, mal_builtin_set_prototype_delete);
-    mal_intrinsic_define_method_n(vm, prototype, "clear", 0, mal_builtin_set_prototype_clear);
-    mal_intrinsic_define_method_n(vm, prototype, "forEach", 1, mal_builtin_set_prototype_for_each);
-    mal_intrinsic_define_method_n(vm, prototype, "union", 1, mal_builtin_set_prototype_union);
-    mal_intrinsic_define_method_n(vm, prototype, "intersection", 1, mal_builtin_set_prototype_intersection);
-    mal_intrinsic_define_method_n(vm, prototype, "difference", 1, mal_builtin_set_prototype_difference);
-    mal_intrinsic_define_method_n(vm, prototype, "symmetricDifference", 1, mal_builtin_set_prototype_symmetric_difference);
-    mal_intrinsic_define_method_n(vm, prototype, "isSubsetOf", 1, mal_builtin_set_prototype_is_subset_of);
-    mal_intrinsic_define_method_n(vm, prototype, "isSupersetOf", 1, mal_builtin_set_prototype_is_superset_of);
-    mal_intrinsic_define_method_n(vm, prototype, "isDisjointFrom", 1, mal_builtin_set_prototype_is_disjoint_from);
-    mal_intrinsic_define_method_n(vm, prototype, "entries", 0, mal_builtin_set_prototype_entries);
+    mal_builtin_members_define(vm, prototype, MAL_BUILTIN_MEMBER_set_methods);
     MalValue values = mal_intrinsic_define_method_n(
         vm, prototype, "values", 0, mal_builtin_set_prototype_values);
     vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_VALUES] = values;

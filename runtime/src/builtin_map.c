@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "builtin_map.h"
 
 #include "array_object.h"
@@ -1105,6 +1106,31 @@ static void mal_builtin_map_define_size(MalVm *vm, MalObject *prototype, MalNati
         vm, prototype, "size", "get size", getter, MAL_PROPERTY_CONFIGURABLE);
 }
 
+#define MAL_MAP_MEMBERS_1(X) \
+    X(map_members_1_groupBy, "groupBy", 2, mal_builtin_map_group_by)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(map_members_1, MAL_MAP_MEMBERS_1)
+#undef MAL_MAP_MEMBERS_1
+
+#define MAL_MAP_MEMBERS_2(X) \
+    X(map_members_2_getOrInsert, "getOrInsert", 2, mal_builtin_map_prototype_get_or_insert) \
+    X(map_members_2_getOrInsertComputed, "getOrInsertComputed", 2, mal_builtin_map_prototype_get_or_insert_computed)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(map_members_2, MAL_MAP_MEMBERS_2)
+#undef MAL_MAP_MEMBERS_2
+
+#define MAL_MAP_MEMBERS_3(X) \
+    X(map_members_3_clear, "clear", 0, mal_builtin_map_prototype_clear) \
+    X(map_members_3_forEach, "forEach", 1, mal_builtin_map_prototype_for_each) \
+    X(map_members_3_keys, "keys", 0, mal_builtin_map_prototype_keys) \
+    X(map_members_3_values, "values", 0, mal_builtin_map_prototype_values)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(map_members_3, MAL_MAP_MEMBERS_3)
+#undef MAL_MAP_MEMBERS_3
+
+#define MAL_MAP_MEMBERS_4(X) \
+    X(map_members_4_getOrInsert, "getOrInsert", 2, mal_builtin_weak_map_prototype_get_or_insert) \
+    X(map_members_4_getOrInsertComputed, "getOrInsertComputed", 2, mal_builtin_weak_map_prototype_get_or_insert_computed)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(map_members_4, MAL_MAP_MEMBERS_4)
+#undef MAL_MAP_MEMBERS_4
+
 void mal_builtin_map_install(MalVm *vm) {
     MalObject *prototype = mal_builtin_map_scaffold(
         vm,
@@ -1115,22 +1141,18 @@ void mal_builtin_map_install(MalVm *vm) {
         "Map"
     );
 
-    mal_intrinsic_define_method_n(vm, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_CONSTRUCTOR]), "groupBy", 2, mal_builtin_map_group_by);
+    mal_builtin_members_define(vm, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_CONSTRUCTOR]), MAL_BUILTIN_MEMBER_map_members_1);
 
     vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_GET] =
         mal_intrinsic_define_method_n(vm, prototype, "get", 1, mal_builtin_map_prototype_get);
-    mal_intrinsic_define_method_n(vm, prototype, "getOrInsert", 2, mal_builtin_map_prototype_get_or_insert);
-    mal_intrinsic_define_method_n(vm, prototype, "getOrInsertComputed", 2, mal_builtin_map_prototype_get_or_insert_computed);
+    mal_builtin_members_define(vm, prototype, MAL_BUILTIN_MEMBER_map_members_2);
     vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_SET] =
         mal_intrinsic_define_method_n(vm, prototype, "set", 2, mal_builtin_map_prototype_set);
     vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_HAS] =
         mal_intrinsic_define_method_n(vm, prototype, "has", 1, mal_builtin_map_prototype_has);
     vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE_DELETE] =
         mal_intrinsic_define_method_n(vm, prototype, "delete", 1, mal_builtin_map_prototype_delete);
-    mal_intrinsic_define_method_n(vm, prototype, "clear", 0, mal_builtin_map_prototype_clear);
-    mal_intrinsic_define_method_n(vm, prototype, "forEach", 1, mal_builtin_map_prototype_for_each);
-    mal_intrinsic_define_method_n(vm, prototype, "keys", 0, mal_builtin_map_prototype_keys);
-    mal_intrinsic_define_method_n(vm, prototype, "values", 0, mal_builtin_map_prototype_values);
+    mal_builtin_members_define(vm, prototype, MAL_BUILTIN_MEMBER_map_members_3);
     MalValue entries = mal_intrinsic_define_method_n(vm, prototype, "entries", 0, mal_builtin_map_prototype_entries);
 
     // Map.prototype[Symbol.iterator] === Map.prototype.entries
@@ -1151,8 +1173,7 @@ void mal_builtin_map_install(MalVm *vm) {
 
     vm->intrinsics[MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_GET] =
         mal_intrinsic_define_method_n(vm, weak_prototype, "get", 1, mal_builtin_weak_map_prototype_get);
-    mal_intrinsic_define_method_n(vm, weak_prototype, "getOrInsert", 2, mal_builtin_weak_map_prototype_get_or_insert);
-    mal_intrinsic_define_method_n(vm, weak_prototype, "getOrInsertComputed", 2, mal_builtin_weak_map_prototype_get_or_insert_computed);
+    mal_builtin_members_define(vm, weak_prototype, MAL_BUILTIN_MEMBER_map_members_4);
     vm->intrinsics[MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_SET] =
         mal_intrinsic_define_method_n(vm, weak_prototype, "set", 2, mal_builtin_weak_map_prototype_set);
     vm->intrinsics[MAL_INTRINSIC_WEAK_MAP_PROTOTYPE_HAS] =

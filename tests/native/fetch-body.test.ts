@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	assertResultPass,
 	buildNativeBinary,
@@ -49,3 +50,15 @@ describe("Request and Response Body streams", () => {
 		assertResultPass(runToStdout(interpreted, { env: STRESS_ENV }));
 	});
 });
+
+it("serves a streamed response through the retained native body methods", () => {
+	const binary = buildNativeBinary({
+		fixture: "tests/local/builtin-member-stream-response.mjs",
+		name: "builtin-member-stream-response",
+		outDir,
+		config: resolveBuildConfig({ engine: { eval: false, realms: false } }),
+		production: true,
+		toolchainBridge: false,
+	});
+	expect(runToStdout(binary, { env: STRESS_ENV })).toBe("200 ok\n");
+}, 120_000);

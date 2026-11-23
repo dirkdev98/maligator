@@ -129,7 +129,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 474;
+export const COMPILER_ARTIFACT_VERSION = 475;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -2391,6 +2391,12 @@ function writeCompilerArtifact(
 	compiler: ProgramImage,
 ): void {
 	writeCompilerProfiling(w, compiler);
+	const memberNames = compiler.native.builtinMemberNames;
+	w.u32(memberNames === undefined ? 0 : memberNames.length + 1);
+	for (const name of memberNames ?? []) {
+		w.u32(name.length);
+		for (let unit = 0; unit < name.length; unit++) w.u16(name.charCodeAt(unit));
+	}
 	const semanticProtectors = [...compiler.native.semanticProtectors];
 	if (
 		semanticProtectors.length > 3 ||
@@ -5038,6 +5044,14 @@ function readCompilerArtifact(
 ): ProgramImage {
 	const { functions, stringConstants } = nativeImage;
 	const profiling = readCompilerProfiling(r, runtimeImage.functions, functions);
+	const memberNameCount = r.u32();
+	const builtinMemberNames = memberNameCount === 0 ? undefined : ([] as Array<string>);
+	for (let index = 1; index < memberNameCount; index++) {
+		const name = Array.from({ length: r.count(2) }, () =>
+			String.fromCharCode(r.u16()),
+		).join("");
+		builtinMemberNames!.push(name);
+	}
 	const semanticProtectorCount = r.count(3);
 	if (semanticProtectorCount > 3) {
 		throw new RangeError("program-image-codec: too many semantic protector facts");
@@ -7028,6 +7042,7 @@ function readCompilerArtifact(
 		native: {
 			semanticProtectors,
 			functions: nativeFunctions,
+			...(builtinMemberNames === undefined ? {} : { builtinMemberNames }),
 			...(classLayouts.length === 0 ? {} : { classLayouts }),
 		},
 		diagnostics: {},

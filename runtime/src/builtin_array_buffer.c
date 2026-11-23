@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "builtin_array_buffer.h"
 
 #include <math.h>
@@ -754,6 +755,22 @@ static MalValue mal_shared_array_buffer_slice(MalVm *vm, MalValue this_value, co
     return result_value;
 }
 
+#define MAL_ARRAY_BUFFER_MEMBERS_1(X) \
+    X(array_buffer_members_1_slice, "slice", 2, mal_builtin_array_buffer_slice) \
+    X(array_buffer_members_1_sliceToImmutable, "sliceToImmutable", 2, mal_builtin_array_buffer_slice_to_immutable) \
+    X(array_buffer_members_1_resize, "resize", 1, mal_builtin_array_buffer_resize) \
+    X(array_buffer_members_1_transfer, "transfer", 0, mal_builtin_array_buffer_transfer) \
+    X(array_buffer_members_1_transferToFixedLength, "transferToFixedLength", 0, mal_builtin_array_buffer_transfer_to_fixed) \
+    X(array_buffer_members_1_transferToImmutable, "transferToImmutable", 0, mal_builtin_array_buffer_transfer_to_immutable)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(array_buffer_members_1, MAL_ARRAY_BUFFER_MEMBERS_1)
+#undef MAL_ARRAY_BUFFER_MEMBERS_1
+
+#define MAL_ARRAY_BUFFER_MEMBERS_2(X) \
+    X(array_buffer_members_2_grow, "grow", 1, mal_shared_array_buffer_grow) \
+    X(array_buffer_members_2_slice, "slice", 2, mal_shared_array_buffer_slice)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(array_buffer_members_2, MAL_ARRAY_BUFFER_MEMBERS_2)
+#undef MAL_ARRAY_BUFFER_MEMBERS_2
+
 void mal_builtin_array_buffer_install(MalVm *vm) {
     MalObject *object_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
@@ -776,12 +793,7 @@ void mal_builtin_array_buffer_install(MalVm *vm) {
     mal_builtin_array_buffer_define_getter(vm, prototype, "resizable", mal_builtin_array_buffer_resizable_getter);
     mal_builtin_array_buffer_define_getter(vm, prototype, "detached", mal_builtin_array_buffer_detached_getter);
     mal_builtin_array_buffer_define_getter(vm, prototype, "immutable", mal_builtin_array_buffer_immutable_getter);
-    mal_intrinsic_define_method_n(vm, prototype, "slice", 2, mal_builtin_array_buffer_slice);
-    mal_intrinsic_define_method_n(vm, prototype, "sliceToImmutable", 2, mal_builtin_array_buffer_slice_to_immutable);
-    mal_intrinsic_define_method_n(vm, prototype, "resize", 1, mal_builtin_array_buffer_resize);
-    mal_intrinsic_define_method_n(vm, prototype, "transfer", 0, mal_builtin_array_buffer_transfer);
-    mal_intrinsic_define_method_n(vm, prototype, "transferToFixedLength", 0, mal_builtin_array_buffer_transfer_to_fixed);
-    mal_intrinsic_define_method_n(vm, prototype, "transferToImmutable", 0, mal_builtin_array_buffer_transfer_to_immutable);
+    mal_builtin_members_define(vm, prototype, MAL_BUILTIN_MEMBER_array_buffer_members_1);
 
     MalPropertyDesc tag = mal_intrinsic_data_desc(mal_value_from_string(mal_intrinsic_ascii(vm, "ArrayBuffer")), MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag);
@@ -800,8 +812,7 @@ void mal_builtin_array_buffer_install(MalVm *vm) {
     mal_builtin_array_buffer_define_getter(vm, shared_prototype, "byteLength", mal_shared_array_buffer_byte_length_getter);
     mal_builtin_array_buffer_define_getter(vm, shared_prototype, "maxByteLength", mal_shared_array_buffer_max_byte_length_getter);
     mal_builtin_array_buffer_define_getter(vm, shared_prototype, "growable", mal_shared_array_buffer_growable_getter);
-    mal_intrinsic_define_method_n(vm, shared_prototype, "grow", 1, mal_shared_array_buffer_grow);
-    mal_intrinsic_define_method_n(vm, shared_prototype, "slice", 2, mal_shared_array_buffer_slice);
+    mal_builtin_members_define(vm, shared_prototype, MAL_BUILTIN_MEMBER_array_buffer_members_2);
 
     MalPropertyDesc shared_tag = mal_intrinsic_data_desc(mal_value_from_string(mal_intrinsic_ascii(vm, "SharedArrayBuffer")), MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(shared_prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &shared_tag);

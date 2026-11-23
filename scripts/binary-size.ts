@@ -46,6 +46,9 @@ const forbiddenComponents = {
 	"Node streams": ({ object }) => /(?:^|[(-])node_stream\.o\)?$/.test(object),
 	"Full Node process support": ({ object }) =>
 		/(?:^|[(-])node_(?:process|events|async_hooks|inspect)\.o\)?$/.test(object),
+	"Array.fromAsync": ({ symbol }) =>
+		/^_mal_builtin_array_from_async(?:$|\.)/.test(symbol),
+	"URL.canParse": ({ symbol }) => /^_url_can_parse(?:$|\.)/.test(symbol),
 	"Fetch objects": ({ object }) => /(?:^|[(-])web_fetch\.o\)?$/.test(object),
 	"HTTP client": ({ object, symbol }) =>
 		/(?:^|[(-])(?:web_fetch_client|http_client)\.o\)?$/.test(object) ||
@@ -111,6 +114,7 @@ const fixtures: Array<{
 			"unicode.o",
 			"Node runtime",
 			"Date timezone data",
+			"Array.fromAsync",
 			"relocated primordial bindings",
 			"sqlite3.o",
 		],
@@ -126,7 +130,7 @@ const fixtures: Array<{
 		name: "fetch",
 		file: "bench/size/fetch.mjs",
 		bun: true,
-		forbidden: ["Node runtime", "sqlite3.o", "argon2", "Brotli encoder"],
+		forbidden: ["Node runtime", "sqlite3.o", "argon2", "Brotli encoder", "URL.canParse"],
 	},
 	{
 		name: "node-hello",
@@ -368,6 +372,7 @@ try {
 			name,
 			config,
 			production: true,
+			toolchainBridge: false,
 			outDir: scratch,
 			environment: env,
 			nativeLinkCacheVariant: collectMap ? randomUUID() : undefined,

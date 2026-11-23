@@ -32,7 +32,10 @@ import type {
 	DirectEvalPrivateNameContext,
 	DirectEvalPrivateSlot,
 } from "../frontend/direct-eval-context.ts";
-import { engineComponentInstallers } from "../frontend/engine-components.ts";
+import {
+	builtinMemberNames,
+	engineComponentInstallers,
+} from "../frontend/engine-components.ts";
 import {
 	ESTREE_SKIP,
 	ESTREE_STOP,
@@ -1330,6 +1333,11 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 					program.globalObjectReads,
 				),
 			];
+	const builtinMembers = builtinMemberNames(
+		program.semantic,
+		program.facts,
+		moduleLinks !== undefined || inheritsHostComponents,
+	);
 	CoreEditor.configureProgram(program.core, {
 		stringConstants: program.stringConstants,
 		bigintConstants: program.bigintConstants,
@@ -1409,6 +1417,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 				),
 				...coreInitializedLexicalReads(program),
 				retainedHostInstallers: [...new Set(reachedHostInstallers)],
+				...(builtinMembers === undefined ? {} : { builtinMemberNames: builtinMembers }),
 				...(moduleLinks === undefined ? {} : { moduleLinks }),
 			}),
 		},

@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "builtin_math.h"
 
 #include <math.h>
@@ -951,6 +952,46 @@ f64 mal_builtin_math_random_number(void) {
     return (f64) ((x * 0x2545F4914F6CDD1DULL) >> 11) / (f64) (1ULL << 53);
 }
 
+#define MAL_MATH_METHODS(X) \
+    X(math_methods_abs, "abs", 1, mal_builtin_math_abs) \
+    X(math_methods_floor, "floor", 1, mal_builtin_math_floor) \
+    X(math_methods_ceil, "ceil", 1, mal_builtin_math_ceil) \
+    X(math_methods_round, "round", 1, mal_builtin_math_round) \
+    X(math_methods_trunc, "trunc", 1, mal_builtin_math_trunc) \
+    X(math_methods_sqrt, "sqrt", 1, mal_builtin_math_sqrt) \
+    X(math_methods_cbrt, "cbrt", 1, mal_builtin_math_cbrt) \
+    X(math_methods_sign, "sign", 1, mal_builtin_math_sign) \
+    X(math_methods_log, "log", 1, mal_builtin_math_log) \
+    X(math_methods_log2, "log2", 1, mal_builtin_math_log2) \
+    X(math_methods_log10, "log10", 1, mal_builtin_math_log10) \
+    X(math_methods_exp, "exp", 1, mal_builtin_math_exp) \
+    X(math_methods_sin, "sin", 1, mal_builtin_math_sin) \
+    X(math_methods_cos, "cos", 1, mal_builtin_math_cos) \
+    X(math_methods_tan, "tan", 1, mal_builtin_math_tan) \
+    X(math_methods_asin, "asin", 1, mal_builtin_math_asin) \
+    X(math_methods_acos, "acos", 1, mal_builtin_math_acos) \
+    X(math_methods_atan, "atan", 1, mal_builtin_math_atan) \
+    X(math_methods_sinh, "sinh", 1, mal_builtin_math_sinh) \
+    X(math_methods_cosh, "cosh", 1, mal_builtin_math_cosh) \
+    X(math_methods_tanh, "tanh", 1, mal_builtin_math_tanh) \
+    X(math_methods_asinh, "asinh", 1, mal_builtin_math_asinh) \
+    X(math_methods_acosh, "acosh", 1, mal_builtin_math_acosh) \
+    X(math_methods_atanh, "atanh", 1, mal_builtin_math_atanh) \
+    X(math_methods_log1p, "log1p", 1, mal_builtin_math_log1p) \
+    X(math_methods_expm1, "expm1", 1, mal_builtin_math_expm1) \
+    X(math_methods_fround, "fround", 1, mal_builtin_math_fround) \
+    X(math_methods_f16round, "f16round", 1, mal_builtin_math_f16round) \
+    X(math_methods_clz32, "clz32", 1, mal_builtin_math_clz32) \
+    X(math_methods_imul, "imul", 2, mal_builtin_math_imul) \
+    X(math_methods_atan2, "atan2", 2, mal_builtin_math_atan2) \
+    X(math_methods_pow, "pow", 2, mal_builtin_math_pow) \
+    X(math_methods_hypot, "hypot", 2, mal_builtin_math_hypot) \
+    X(math_methods_min, "min", 2, mal_builtin_math_min) \
+    X(math_methods_max, "max", 2, mal_builtin_math_max) \
+    X(math_methods_sumPrecise, "sumPrecise", 1, mal_builtin_math_sum_precise)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(math_methods, MAL_MATH_METHODS)
+#undef MAL_MATH_METHODS
+
 void mal_builtin_math_install(MalVm *vm) {
     // Seeded here so the generator is never usable in an unseeded state. A host
     // that later registers a CSPRNG re-seeds over this; a program that links
@@ -975,42 +1016,7 @@ void mal_builtin_math_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, math, "SQRT2", mal_value_from_f64(M_SQRT2), MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, math, "SQRT1_2", mal_value_from_f64(M_SQRT1_2), MAL_PROPERTY_NONE);
 
-    mal_intrinsic_define_method_n(vm, math, "abs", 1, mal_builtin_math_abs);
-    mal_intrinsic_define_method_n(vm, math, "floor", 1, mal_builtin_math_floor);
-    mal_intrinsic_define_method_n(vm, math, "ceil", 1, mal_builtin_math_ceil);
-    mal_intrinsic_define_method_n(vm, math, "round", 1, mal_builtin_math_round);
-    mal_intrinsic_define_method_n(vm, math, "trunc", 1, mal_builtin_math_trunc);
-    mal_intrinsic_define_method_n(vm, math, "sqrt", 1, mal_builtin_math_sqrt);
-    mal_intrinsic_define_method_n(vm, math, "cbrt", 1, mal_builtin_math_cbrt);
-    mal_intrinsic_define_method_n(vm, math, "sign", 1, mal_builtin_math_sign);
-    mal_intrinsic_define_method_n(vm, math, "log", 1, mal_builtin_math_log);
-    mal_intrinsic_define_method_n(vm, math, "log2", 1, mal_builtin_math_log2);
-    mal_intrinsic_define_method_n(vm, math, "log10", 1, mal_builtin_math_log10);
-    mal_intrinsic_define_method_n(vm, math, "exp", 1, mal_builtin_math_exp);
-    mal_intrinsic_define_method_n(vm, math, "sin", 1, mal_builtin_math_sin);
-    mal_intrinsic_define_method_n(vm, math, "cos", 1, mal_builtin_math_cos);
-    mal_intrinsic_define_method_n(vm, math, "tan", 1, mal_builtin_math_tan);
-    mal_intrinsic_define_method_n(vm, math, "asin", 1, mal_builtin_math_asin);
-    mal_intrinsic_define_method_n(vm, math, "acos", 1, mal_builtin_math_acos);
-    mal_intrinsic_define_method_n(vm, math, "atan", 1, mal_builtin_math_atan);
-    mal_intrinsic_define_method_n(vm, math, "sinh", 1, mal_builtin_math_sinh);
-    mal_intrinsic_define_method_n(vm, math, "cosh", 1, mal_builtin_math_cosh);
-    mal_intrinsic_define_method_n(vm, math, "tanh", 1, mal_builtin_math_tanh);
-    mal_intrinsic_define_method_n(vm, math, "asinh", 1, mal_builtin_math_asinh);
-    mal_intrinsic_define_method_n(vm, math, "acosh", 1, mal_builtin_math_acosh);
-    mal_intrinsic_define_method_n(vm, math, "atanh", 1, mal_builtin_math_atanh);
-    mal_intrinsic_define_method_n(vm, math, "log1p", 1, mal_builtin_math_log1p);
-    mal_intrinsic_define_method_n(vm, math, "expm1", 1, mal_builtin_math_expm1);
-    mal_intrinsic_define_method_n(vm, math, "fround", 1, mal_builtin_math_fround);
-    mal_intrinsic_define_method_n(vm, math, "f16round", 1, mal_builtin_math_f16round);
-    mal_intrinsic_define_method_n(vm, math, "clz32", 1, mal_builtin_math_clz32);
-    mal_intrinsic_define_method_n(vm, math, "imul", 2, mal_builtin_math_imul);
-    mal_intrinsic_define_method_n(vm, math, "atan2", 2, mal_builtin_math_atan2);
-    mal_intrinsic_define_method_n(vm, math, "pow", 2, mal_builtin_math_pow);
-    mal_intrinsic_define_method_n(vm, math, "hypot", 2, mal_builtin_math_hypot);
-    mal_intrinsic_define_method_n(vm, math, "min", 2, mal_builtin_math_min);
-    mal_intrinsic_define_method_n(vm, math, "max", 2, mal_builtin_math_max);
-    mal_intrinsic_define_method_n(vm, math, "sumPrecise", 1, mal_builtin_math_sum_precise);
+    mal_builtin_members_define(vm, math, MAL_BUILTIN_MEMBER_math_methods);
     mal_intrinsic_define_method_n(vm, math, "random", 0, mal_builtin_math_random);
 }
 

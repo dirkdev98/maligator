@@ -1,3 +1,4 @@
+#include "builtin_members.h"
 #include "builtin_promise.h"
 
 #include <stdlib.h>
@@ -2128,6 +2129,27 @@ static MalValue mal_promise_all_settled_keyed(MalVm *vm, MalValue this_value, co
 
 // --- Install -----------------------------------------------------------------
 
+#define MAL_PROMISE_MEMBERS_1(X) \
+    X(promise_members_1_then, "then", 2, mal_promise_prototype_then) \
+    X(promise_members_1_catch, "catch", 1, mal_promise_prototype_catch) \
+    X(promise_members_1_finally, "finally", 1, mal_promise_prototype_finally)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(promise_members_1, MAL_PROMISE_MEMBERS_1)
+#undef MAL_PROMISE_MEMBERS_1
+
+#define MAL_PROMISE_MEMBERS_2(X) \
+    X(promise_members_2_resolve, "resolve", 1, mal_promise_resolve_static) \
+    X(promise_members_2_reject, "reject", 1, mal_promise_reject_static) \
+    X(promise_members_2_all, "all", 1, mal_promise_all) \
+    X(promise_members_2_race, "race", 1, mal_promise_race) \
+    X(promise_members_2_allSettled, "allSettled", 1, mal_promise_all_settled) \
+    X(promise_members_2_allKeyed, "allKeyed", 1, mal_promise_all_keyed) \
+    X(promise_members_2_allSettledKeyed, "allSettledKeyed", 1, mal_promise_all_settled_keyed) \
+    X(promise_members_2_any, "any", 1, mal_promise_any) \
+    X(promise_members_2_withResolvers, "withResolvers", 0, mal_promise_with_resolvers) \
+    X(promise_members_2_try, "try", 1, mal_promise_try)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(promise_members_2, MAL_PROMISE_MEMBERS_2)
+#undef MAL_PROMISE_MEMBERS_2
+
 void mal_builtin_promise_install(MalVm *vm) {
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
@@ -2150,20 +2172,9 @@ void mal_builtin_promise_install(MalVm *vm) {
     );
     mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag_desc);
 
-    mal_intrinsic_define_method_n(vm, prototype, "then", 2, mal_promise_prototype_then);
-    mal_intrinsic_define_method_n(vm, prototype, "catch", 1, mal_promise_prototype_catch);
-    mal_intrinsic_define_method_n(vm, prototype, "finally", 1, mal_promise_prototype_finally);
+    mal_builtin_members_define(vm, prototype, MAL_BUILTIN_MEMBER_promise_members_1);
 
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "resolve", 1, mal_promise_resolve_static);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "reject", 1, mal_promise_reject_static);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "all", 1, mal_promise_all);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "race", 1, mal_promise_race);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "allSettled", 1, mal_promise_all_settled);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "allKeyed", 1, mal_promise_all_keyed);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "allSettledKeyed", 1, mal_promise_all_settled_keyed);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "any", 1, mal_promise_any);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "withResolvers", 0, mal_promise_with_resolvers);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "try", 1, mal_promise_try);
+    mal_builtin_members_define(vm, (MalObject *) constructor, MAL_BUILTIN_MEMBER_promise_members_2);
     mal_intrinsic_define_species(vm, (MalObject *) constructor);
 }
 
