@@ -16,6 +16,7 @@ import {
 	NODE_BUILTIN_LOADER_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
+	REGEXP_INSTALLER,
 } from "../src/compiler/frontend/host-modules.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
@@ -63,8 +64,7 @@ function compile(
 	const image = compileSemanticProgramToProgramImage(program, {
 		facts: compilerProgramFactsFromConfig(buildConfig),
 	});
-	// Compare module exports separately from host personality installers; these tests
-	// assert the installers a program's own module reads retain.
+	// Isolate module-export bindings from installers for the realm's global surface.
 	return {
 		...image,
 		runtime: {
@@ -80,6 +80,7 @@ const SURFACE_INSTALLERS = new Set([
 	...INTRINSIC_INSTALLERS,
 	...HOST_PERSONALITY_INSTALLERS,
 	NODE_ERROR_HOOKS_INSTALLER,
+	REGEXP_INSTALLER,
 ]);
 
 /** Every LOAD_GLOBAL slot index read anywhere in the program. */
