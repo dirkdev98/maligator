@@ -246,52 +246,76 @@ function forwardCellLoads(
 	accesses: Iterable<CellAccesses>,
 	edit: () => CoreEditor,
 ): void {
-	const cells = [...accesses].filter(
-		(cell) => cell.loads.length > 0 && cell.stores.length > 0,
-	);
+	const storesByInstruction = new Map<
+		CoreInstructionId,
+		Map<CoreBlockId, CoreInstructionId>
+	>();
+	const loadsByInstruction = new Map<
+		CoreInstructionId,
+		Map<CoreBlockId, CoreInstructionId>
+	>();
+	const cells = [];
+	for (const { loads, stores } of accesses) {
+		if (loads.length === 0 || stores.length === 0) continue;
+		const lastStores = new Map<CoreBlockId, CoreInstructionId>();
+		cells.push({ loads, lastStores });
+		for (const store of stores) storesByInstruction.set(store, lastStores);
+		for (const load of loads) loadsByInstruction.set(load, lastStores);
+	}
 	if (cells.length === 0) return;
 	const control = buildCoreControlFlow(program, fn.id);
 	const kernel = fn.kernel;
+	// Earlier cells can rewrite the operands of later stores, so index instruction IDs.
+	const storesBeforeLoad = new Map<CoreInstructionId, CoreInstructionId>();
+	for (const block of control.reversePostorder) {
+		for (
+			let row = fn.blockFirstInstruction(block);
+			row >= 0;
+			row = kernel.instructionNext(row as CoreInstructionId)
+		) {
+			const instruction = row as CoreInstructionId;
+			const stores = storesByInstruction.get(instruction);
+			if (stores !== undefined) stores.set(block, instruction);
+			else {
+				const preceding = loadsByInstruction.get(instruction)?.get(block);
+				if (preceding !== undefined) storesBeforeLoad.set(instruction, preceding);
+			}
+		}
+	}
+	// Only ordinary edges carry a block parameter; handlers and the entry keep the slot.
+	const joinable = new Set(
+		control.reversePostorder.filter(
+			(block) =>
+				block !== fn.entry &&
+				(control.predecessors[block] ?? []).every(
+					(edge, position, edges) =>
+						control.edges.kind(edge) === "ordinary" &&
+						edges.findIndex(
+							(other) => control.edges.from(other) === control.edges.from(edge),
+						) === position,
+				),
+		),
+	);
 	const definition = (value: CoreValueId): string | undefined =>
 		fn.kernel.valueDefinitionKind(value) === 1
 			? fn.instructionOpcodeName(coreInstructionId(fn.kernel.valueDefinitionOwner(value)))
 			: undefined;
 	const stored = (store: CoreInstructionId): CoreValueId =>
 		kernel.operandAt(kernel.instructionOperandStart(store));
-	for (const { loads, stores } of cells) {
-		const storeSet = new Set(stores);
+	for (const { loads, lastStores } of cells) {
 		const lastStore = new Map<CoreBlockId, CoreValueId>();
-		for (const block of control.reversePostorder) {
-			for (
-				let instructionRow = fn.blockFirstInstruction(block);
-				instructionRow >= 0;
-				instructionRow = kernel.instructionNext(instructionRow as CoreInstructionId)
-			) {
-				const instruction = instructionRow as CoreInstructionId;
-				if (storeSet.has(instruction)) lastStore.set(block, stored(instruction));
-			}
-		}
+		for (const [block, store] of lastStores) lastStore.set(block, stored(store));
 		const entry = new Map<CoreBlockId, SlotValue>();
 		const exit = (block: CoreBlockId): SlotValue | undefined => {
 			const value = lastStore.get(block);
 			return value === undefined ? entry.get(block) : { kind: "value", value };
 		};
-		// Only ordinary edges carry a block parameter; handlers and the entry keep the slot.
-		const joinable = (block: CoreBlockId): boolean =>
-			block !== fn.entry &&
-			(control.predecessors[block] ?? []).every(
-				(edge, position, edges) =>
-					control.edges.kind(edge) === "ordinary" &&
-					edges.findIndex(
-						(other) => control.edges.from(other) === control.edges.from(edge),
-					) === position,
-			);
 		let rounds = 0;
 		for (let changed = true; changed; rounds++) {
 			changed = false;
 			for (const block of control.reversePostorder) {
 				let value: SlotValue | undefined;
-				if (!joinable(block)) value = UNKNOWN_SLOT;
+				if (!joinable.has(block)) value = UNKNOWN_SLOT;
 				else
 					for (const edge of control.predecessors[block] ?? []) {
 						const incoming = exit(control.edges.from(edge));
@@ -393,12 +417,11 @@ function forwardCellLoads(
 		for (const load of loads) {
 			const block = fn.instructionBlock(load);
 			if (!control.reachable.has(block)) continue;
-			let reaching = entry.get(block);
-			for (const instruction of fn.instructionIds(block)) {
-				if (instruction === load) break;
-				if (storeSet.has(instruction))
-					reaching = { kind: "value", value: stored(instruction) };
-			}
+			const preceding = storesBeforeLoad.get(load);
+			const reaching: SlotValue | undefined =
+				preceding === undefined
+					? entry.get(block)
+					: { kind: "value", value: stored(preceding) };
 			let value: CoreValueId | undefined;
 			const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(load));
 			if (reaching?.kind === "value") {
