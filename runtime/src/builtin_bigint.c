@@ -223,3 +223,33 @@ void mal_builtin_bigint_install(MalVm *vm) {
 }
 
 #include "generated/known_native_builtin_bigint_c.inc"
+
+static MalValue mal_vm_bigint_unary(MalVm *vm, MalUnaryOp op, MalValue value) {
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    const MalBigInt *operand = mal_value_to_bigint(value);
+    MalBigInt *result;
+    if (op == MAL_UNARY_NEGATE) result = mal_bigint_negate(&vm->heap, operand);
+    else if (op == MAL_UNARY_BIT_NOT) result = mal_bigint_not(&vm->heap, operand);
+    else {
+        MalBigInt unit = {.sign = op == MAL_UNARY_INCREMENT ? 1 : -1,
+            .digit_count = 1, .data.inline_digits = {1}};
+        result = mal_bigint_add(&vm->heap, operand, &unit);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_from_bigint(result);
+}
+
+static const MalBigIntOperations bigint_operations = {
+    .create = mal_bigint_new,
+    .from_digits = mal_bigint_from_digits,
+    .parse = mal_bigint_parse,
+    .coerce = mal_bigint_to_bigint,
+    .to_string = mal_bigint_to_string,
+    .to_number = mal_bigint_to_number,
+    .compare_number = mal_bigint_compare_number,
+    .binary = mal_vm_bigint_binary,
+    .unary = mal_vm_bigint_unary,
+};
+
+MAL_LANGUAGE_COMPONENT_UNIT(mal_host_install_intrinsic_bigint, MAL_LANGUAGE_COMPONENT_BIGINT, mal_builtin_bigint_install, &bigint_operations)

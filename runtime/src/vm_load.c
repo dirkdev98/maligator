@@ -1,4 +1,4 @@
-#include "vm_load.h"
+#include "vm_loaded_image.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -237,18 +237,6 @@ static const i32 wire_intrinsics[] = {
 // ---- owned arena (chained calloc'd blocks; pointers stay stable, one free) ----
 
 #define MAL_LOAD_ARENA_BLOCK ((usize) 64 * 1024)
-
-typedef struct MalLoadArenaBlock {
-    struct MalLoadArenaBlock *next;
-    usize size;
-    usize used;
-    _Alignas(16) u8 data[];
-} MalLoadArenaBlock;
-
-struct MalLoadedRuntimeImage {
-    MalLoadArenaBlock *arena;
-    MalRuntimeImage runtime_image;
-};
 
 static usize align_up(usize value, usize align) {
     return (value + (align - 1)) & ~(align - 1);
@@ -3496,21 +3484,4 @@ fail:
 
 MalLoadedRuntimeImage *mal_runtime_image_load(const u8 *buf, usize len, const char **out_err) {
     return mal_runtime_image_load_with_host_resolver(buf, len, out_err, nullptr);
-}
-
-const MalRuntimeImage *mal_loaded_runtime_image_get(const MalLoadedRuntimeImage *loaded) {
-    return &loaded->runtime_image;
-}
-
-void mal_loaded_runtime_image_free(MalLoadedRuntimeImage *loaded) {
-    if (loaded == nullptr) {
-        return;
-    }
-    MalLoadArenaBlock *block = loaded->arena;
-    while (block != nullptr) {
-        MalLoadArenaBlock *next = block->next;
-        free(block);
-        block = next;
-    }
-    free(loaded);
 }

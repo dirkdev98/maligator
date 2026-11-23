@@ -415,12 +415,12 @@ static MalValue mal_data_view_get(MalVm *vm, MalValue this_value, const MalValue
             return mal_value_from_f64_convert_nan(mal_scalar_f64_from_bits(
                 mal_data_view_load_u64(at, little_endian)));
         case DV_BIGINT64:
-            return mal_value_from_bigint(mal_bigint_new(
+            return mal_value_from_bigint(mal_bigint_operations()->create(
                 &vm->heap,
                 (i128) mal_scalar_i64_from_bits(
                     mal_data_view_load_u64(at, little_endian))));
         case DV_BIGUINT64:
-            return mal_value_from_bigint(mal_bigint_new(
+            return mal_value_from_bigint(mal_bigint_operations()->create(
                 &vm->heap,
                 (i128) (u128) mal_data_view_load_u64(at, little_endian)));
     }
@@ -450,7 +450,7 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
     u64 bits = 0;
     if (type == DV_BIGINT64 || type == DV_BIGUINT64) {
         MalBigInt *big;
-        if (!mal_bigint_to_bigint(vm, value, &big)) {
+        if (!mal_bigint_operations()->coerce(vm, value, &big)) {
             return mal_value_new_undefined();
         }
         bits = mal_bigint_low_u64(big);

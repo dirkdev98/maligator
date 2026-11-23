@@ -3184,7 +3184,11 @@ function builtinMemberLists(
 		FETCH_MEMBER_PROVIDERS.has(installer),
 	);
 	const families = new Set(["base"]);
-	if (policy?.regexp !== false) families.add("regexp");
+	if (
+		policy?.regexp !== false &&
+		(policy?.eval !== false || installers.has(REGEXP_INSTALLER))
+	)
+		families.add("regexp");
 	if (installers.has(JSON_INSTALLER)) families.add("json");
 	if (installers.has(MAP_INSTALLER)) families.add("map");
 	if (installers.has(SET_INSTALLER)) families.add("set");

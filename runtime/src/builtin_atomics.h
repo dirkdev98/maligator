@@ -30,3 +30,7 @@ typedef bool (*MalAtomicsWaitAsyncHook)(
     MalVm *vm, MalSharedMemory *memory, u32 offset, u32 width, u64 expected,
     f64 timeout_ms, MalSharedWaitResult *out_result, MalValue *out_promise);
 void mal_atomics_set_wait_async_hook(MalAtomicsWaitAsyncHook hook);
+
+extern MAL_ISOLATE_LOCAL bool mal_atomics_can_block;
+extern MAL_ISOLATE_LOCAL MalSharedWaitInterrupt *mal_atomics_interrupt;
+extern MAL_ISOLATE_LOCAL MalAtomicsWaitAsyncHook mal_atomics_wait_async_hook;

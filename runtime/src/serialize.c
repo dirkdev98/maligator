@@ -7,11 +7,11 @@
 #include "array_object.h"
 #include "ascii.h"
 #include "builtin_data_view.h"
-#include "builtin_regexp.h"
 #include "date_object.h"
 #include "gc.h"
 #include "gc_process.h"
 #include "heap.h"
+#include "builtin_bigint.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "intrinsics.h"
@@ -22,6 +22,7 @@
 #include "primitive_wrapper_object.h"
 #include "property_iter.h"
 #include "regexp_object.h"
+#include "regexp_engine.h"
 #include "rooted_collection.h"
 #include "secure_scrub.h"
 #include "set_object.h"
@@ -1013,7 +1014,7 @@ static bool dec_value(SerDecoder *dec, MalValue *out) {
         }
         bool valid = dec_get(dec, digits, (usize) count * sizeof(u64))
             && (count == 0 || digits[count - 1] != 0);
-        MalBigInt *big = valid ? mal_bigint_from_digits(&vm->heap, negative != 0 ? -1 : 1, digits, count) : nullptr;
+        MalBigInt *big = valid ? mal_bigint_operations()->from_digits(&vm->heap, negative != 0 ? -1 : 1, digits, count) : nullptr;
         if (digits != small) free(digits);
         if (big == nullptr) return false;
         *out = mal_value_from_bigint(big);
@@ -1171,14 +1172,13 @@ static bool dec_value(SerDecoder *dec, MalValue *out) {
         return ok;
     }
     case SER_REGEXP: {
-        // engine.regexp:false makes mal_regexp_create refuse the clone.
         MalValue strings[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
         MalRootSpan span;
         mal_gc_root(&span, strings, 2);
         bool ok = dec_value(dec, &strings[0]) && dec_value(dec, &strings[1]) &&
             mal_value_is_string(strings[0]) && mal_value_is_string(strings[1]);
         if (ok) {
-            *out = mal_regexp_create(vm, mal_value_to_string(strings[0]), mal_value_to_string(strings[1]));
+            *out = mal_regexp_create_optional(vm, mal_value_to_string(strings[0]), mal_value_to_string(strings[1]));
             ok = vm->completion.kind != MAL_COMPLETION_THROW;
         }
         mal_gc_unroot(&span);

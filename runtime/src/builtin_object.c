@@ -403,7 +403,7 @@ bool mal_builtin_object_define_own_property_parsed(
     const MalPropertyDescriptorParse *parsed
 ) {
     if (mal_value_is_proxy_object(target)) {
-        return mal_proxy_define_own_property_parsed(
+        return mal_proxy_traps.define_own_property_parsed(
             vm, mal_value_to_proxy_object(target), key, parsed);
     }
 
@@ -467,7 +467,7 @@ static bool mal_builtin_object_define_value(
     MalVm *vm, MalValue target, MalKey key, MalValue descriptor
 ) {
     if (mal_value_is_proxy_object(target)) {
-        bool ok = mal_proxy_define_own_property(
+        bool ok = mal_proxy_traps.define_own_property(
             vm, mal_value_to_proxy_object(target), key, descriptor);
         if (!ok && vm->completion.kind != MAL_COMPLETION_THROW) {
             mal_vm_throw_error(
@@ -615,7 +615,7 @@ static MalValue mal_builtin_object_define_property(MalVm *vm, MalValue this_valu
     }
 
     if (mal_value_is_proxy_object(args[0])) {
-        bool ok = mal_proxy_define_own_property(vm, mal_value_to_proxy_object(args[0]), key, mal_builtin_object_arg(args, arg_count, 2));
+        bool ok = mal_proxy_traps.define_own_property(vm, mal_value_to_proxy_object(args[0]), key, mal_builtin_object_arg(args, arg_count, 2));
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             return mal_value_new_undefined();
         }
@@ -1773,7 +1773,7 @@ static MalValue mal_builtin_object_get_prototype_of(MalVm *vm, MalValue this_val
 
     if (mal_value_is_proxy_object(target)) {
         MalValue proto;
-        if (!mal_proxy_get_prototype_of(vm, mal_value_to_proxy_object(target), &proto)) {
+        if (!mal_proxy_traps.get_prototype_of(vm, mal_value_to_proxy_object(target), &proto)) {
             return mal_value_new_undefined();
         }
         return proto;
@@ -1811,7 +1811,7 @@ static MalValue mal_builtin_object_set_prototype_of(MalVm *vm, MalValue this_val
 
     if (mal_value_is_proxy_object(target)) {
         bool success;
-        if (!mal_proxy_set_prototype_of(vm, mal_value_to_proxy_object(target), proto_value, &success)) {
+        if (!mal_proxy_traps.set_prototype_of(vm, mal_value_to_proxy_object(target), proto_value, &success)) {
             return mal_value_new_undefined();
         }
         if (!success) {
@@ -1853,7 +1853,7 @@ static MalValue mal_builtin_object_is_extensible(MalVm *vm, MalValue this_value,
 
     if (mal_value_is_proxy_object(args[0])) {
         bool extensible;
-        if (!mal_proxy_is_extensible(vm, mal_value_to_proxy_object(args[0]), &extensible)) {
+        if (!mal_proxy_traps.is_extensible(vm, mal_value_to_proxy_object(args[0]), &extensible)) {
             return mal_value_new_undefined();
         }
         return mal_value_new_boolean(extensible);
@@ -2140,7 +2140,7 @@ static MalValue mal_builtin_object_prototype_is_prototype_of(MalVm *vm, MalValue
     while (true) {
         MalValue prototype;
         if (mal_value_is_proxy_object(v)) {
-            if (!mal_proxy_get_prototype_of(vm, mal_value_to_proxy_object(v), &prototype)) {
+            if (!mal_proxy_traps.get_prototype_of(vm, mal_value_to_proxy_object(v), &prototype)) {
                 return mal_value_new_undefined();
             }
         } else {
@@ -2616,7 +2616,7 @@ static MalValue mal_builtin_object_proto_getter(MalVm *vm, MalValue this_value, 
         // may throw — propagate it).
         if (mal_value_is_proxy_object(this_value)) {
             MalValue prototype;
-            if (!mal_proxy_get_prototype_of(vm, mal_value_to_proxy_object(this_value), &prototype)) {
+            if (!mal_proxy_traps.get_prototype_of(vm, mal_value_to_proxy_object(this_value), &prototype)) {
                 return mal_value_new_undefined();
             }
             return prototype;
@@ -2649,7 +2649,7 @@ static MalValue mal_builtin_object_proto_setter(MalVm *vm, MalValue this_value, 
     // or a refusing trap) throws.
     if (mal_value_is_proxy_object(this_value)) {
         bool success;
-        if (!mal_proxy_set_prototype_of(vm, mal_value_to_proxy_object(this_value), args[0], &success)) {
+        if (!mal_proxy_traps.set_prototype_of(vm, mal_value_to_proxy_object(this_value), args[0], &success)) {
             return mal_value_new_undefined();
         }
         if (!success) {
@@ -2697,7 +2697,7 @@ static MalValue mal_builtin_object_prototype_define_accessor(MalVm *vm, MalValue
         mal_intrinsic_define_data(vm, descriptor, is_setter ? "set" : "get", args[1], flags);
         mal_intrinsic_define_data(vm, descriptor, "enumerable", mal_value_new_boolean(true), flags);
         mal_intrinsic_define_data(vm, descriptor, "configurable", mal_value_new_boolean(true), flags);
-        mal_proxy_define_own_property(vm, mal_value_to_proxy_object(object_value), key, mal_value_from_object(descriptor));
+        mal_proxy_traps.define_own_property(vm, mal_value_to_proxy_object(object_value), key, mal_value_from_object(descriptor));
         return mal_value_new_undefined();
     }
 
@@ -2777,7 +2777,7 @@ static MalValue mal_builtin_object_prototype_lookup_accessor(MalVm *vm, MalValue
 
         MalValue prototype;
         if (mal_value_is_proxy_object(object)) {
-            if (!mal_proxy_get_prototype_of(vm, mal_value_to_proxy_object(object), &prototype)) {
+            if (!mal_proxy_traps.get_prototype_of(vm, mal_value_to_proxy_object(object), &prototype)) {
                 mal_gc_unroot(&span);
                 return mal_value_new_undefined();
             }

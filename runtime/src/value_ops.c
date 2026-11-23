@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "ecma_whitespace.h"
+#include "builtin_bigint.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "mal_number_format.h"
@@ -367,7 +368,7 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
 
 
     if (mal_value_is_bigint(value)) {
-        return mal_bigint_to_string(heap, mal_value_to_bigint(value), 10);
+        return mal_bigint_operations()->to_string(heap, mal_value_to_bigint(value), 10);
     }
 
     if (mal_value_is_f64(value)) {
@@ -406,7 +407,7 @@ f64 mal_ops_to_number(MalValue value) {
     // operators rely on the numeric value; arithmetic/unary-plus paths that must
     // throw intercept BigInt before reaching here.
     if (mal_value_is_bigint(value)) {
-        return mal_bigint_to_number(mal_value_to_bigint(value));
+        return mal_bigint_operations()->to_number(mal_value_to_bigint(value));
     }
 
     if (mal_value_is_null(value)) {
@@ -534,10 +535,10 @@ static bool mal_ops_equal_bool(MalValue left, MalValue right) {
     }
 
     if (mal_value_is_bigint(left) && mal_ops_is_number(right)) {
-        return mal_bigint_compare_number(mal_value_to_bigint(left), mal_ops_to_f64(right)) == 0;
+        return mal_bigint_operations()->compare_number(mal_value_to_bigint(left), mal_ops_to_f64(right)) == 0;
     }
     if (mal_ops_is_number(left) && mal_value_is_bigint(right)) {
-        return mal_bigint_compare_number(mal_value_to_bigint(right), mal_ops_to_f64(left)) == 0;
+        return mal_bigint_operations()->compare_number(mal_value_to_bigint(right), mal_ops_to_f64(left)) == 0;
     }
     assert(!((mal_value_is_bigint(left) && mal_value_is_string(right)) ||
         (mal_value_is_string(left) && mal_value_is_bigint(right))));
@@ -563,7 +564,7 @@ static bool mal_ops_relational_bool(MalValue left, MalValue right, i32 compariso
         else {
             assert(!mal_value_is_string(left) && !mal_value_is_string(right));
             bool bigint_left = mal_value_is_bigint(left);
-            order = mal_bigint_compare_number(
+            order = mal_bigint_operations()->compare_number(
                 mal_value_to_bigint(bigint_left ? left : right),
                 mal_ops_to_number(bigint_left ? right : left));
             if (order == 2) return false;

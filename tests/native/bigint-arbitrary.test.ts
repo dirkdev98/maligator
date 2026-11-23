@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
 	buildBackendPairFromOneProgramImage,
+	buildNativeBinary,
 	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
@@ -15,6 +16,28 @@ const outDir = mkdtempSync(join(tmpdir(), "mal-bigint-arbitrary-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 let pair: ReturnType<typeof buildBackendPairFromOneProgramImage>;
 let expected: string;
+
+it("constructs BigInts through a DataView accessor in a closed application", () => {
+	const entry = join(outDir, "data-view-bigint.mjs");
+	writeFileSync(
+		entry,
+		`const view = new DataView(new ArrayBuffer(8));
+		view.setInt32(4, -1);
+		const value = view.getBigInt64(0);
+		console.log(typeof value, (value + value).toString());`,
+	);
+	const binary = buildNativeBinary({
+		fixture: entry,
+		name: "data-view-bigint",
+		outDir,
+		production: true,
+		toolchainBridge: false,
+		evalEnabled: false,
+		realmsEnabled: false,
+	});
+	expect(runToStdout(binary)).toBe("bigint 8589934590\n");
+});
+
 beforeAll(() => {
 	expected = execFileSync(process.execPath, ["--expose-gc", fixture], {
 		encoding: "utf8",

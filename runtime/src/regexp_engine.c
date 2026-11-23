@@ -11,6 +11,11 @@ static const MalRegExpEngine regexp_engine = {
     .copy_captures = mal_regexp_copy_captures,
     .capture_name_count = mal_regexp_capture_name_count,
     .capture_name = mal_regexp_capture_name,
+    .install_intrinsics = mal_builtin_regexp_install,
+    .create = mal_regexp_create,
+    .exact_string_dispatch = mal_regexp_try_exact_string_dispatch,
+    .canonical_match_all = mal_regexp_try_canonical_match_all,
+    .exact_iterator_step = mal_regexp_try_exact_iterator_step,
 };
 
 // The installer reference pulls in this archive member. Static embedders can

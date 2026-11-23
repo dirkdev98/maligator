@@ -2,6 +2,7 @@
 
 #include <stdatomic.h>
 
+#include "builtin_regexp.h"
 #include "defaults.h"
 #include "mal_regexp.h"
 
@@ -16,10 +17,16 @@ typedef struct MalRegExpEngine {
     typeof(&mal_regexp_copy_captures) copy_captures;
     typeof(&mal_regexp_capture_name_count) capture_name_count;
     typeof(&mal_regexp_capture_name) capture_name;
+    typeof(&mal_builtin_regexp_install) install_intrinsics;
+    typeof(&mal_regexp_create) create;
+    typeof(&mal_regexp_try_exact_string_dispatch) exact_string_dispatch;
+    typeof(&mal_regexp_try_canonical_match_all) canonical_match_all;
+    typeof(&mal_regexp_try_exact_iterator_step) exact_iterator_step;
 } MalRegExpEngine;
 
 extern _Atomic(const MalRegExpEngine *) mal_regexp_engine;
 [[noreturn]] void mal_regexp_missing_engine(void);
+MalValue mal_regexp_create_optional(MalVm *vm, MalString *pattern, MalString *flags);
 
 static inline const MalRegExpEngine *mal_regexp_require_engine(void) {
     const MalRegExpEngine *engine = atomic_load_explicit(&mal_regexp_engine, memory_order_relaxed);

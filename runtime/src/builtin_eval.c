@@ -9,7 +9,7 @@
 #include "ascii.h"
 #include "builtin_object.h"
 #include "builtin_eval.h"
-#include "builtin_regexp.h"
+#include "regexp_engine.h"
 #include "eval_component.h"
 #include "function_object.h"
 #include "heap_string.h"
@@ -73,7 +73,7 @@ static bool eval_try_regexp_literal(MalVm *vm, MalValue source, MalValue *result
     roots[0] = mal_value_from_string(
         mal_string_new_slice(&vm->heap, text, 1, length - 2));
     roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ""));
-    *result = mal_regexp_create(
+    *result = mal_regexp_require_engine()->create(
         vm, mal_value_to_string(roots[0]), mal_value_to_string(roots[1]));
     mal_gc_unroot(&root_span);
     return true;

@@ -2,8 +2,10 @@ import {
 	HOST_GLOBAL_INSTALLERS,
 	HOST_MODULES,
 	HTTP_WITHOUT_WEBSOCKET_INSTALLER,
+	hostInstallerSymbol,
 	NODE_BUILTIN_LOADER_INSTALLER,
 	NODE_FS_NAMED_INSTALLER,
+	WORKER_THREADS_INSTALLER_SYMBOL,
 } from "./compiler/frontend/host-modules.ts";
 import type { RuntimeImage } from "./compiler/target/runtime-image.ts";
 import { PLATFORM_MODULES } from "./platform/catalog.ts";
@@ -20,6 +22,10 @@ const URL_PARSER_INSTALLERS = new Set(
 );
 URL_PARSER_INSTALLERS.add(HTTP_WITHOUT_WEBSOCKET_INSTALLER);
 URL_PARSER_INSTALLERS.add(NODE_FS_NAMED_INSTALLER);
+// Worker wire programs install the full URL member lists.
+URL_PARSER_INSTALLERS.add(WORKER_THREADS_INSTALLER_SYMBOL);
+URL_PARSER_INSTALLERS.add(hostInstallerSymbol("node:cluster"));
+URL_PARSER_INSTALLERS.add(hostInstallerSymbol("maligator:internal/workers"));
 if (nodeInstallers.some(({ requiresUrlParser }) => requiresUrlParser)) {
 	URL_PARSER_INSTALLERS.add(NODE_BUILTIN_LOADER_INSTALLER);
 }

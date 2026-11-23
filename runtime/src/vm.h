@@ -2071,6 +2071,7 @@ typedef struct MalVm {
 
     /** C library binding state, owned by runtime/mal_ffi.c; null until first used. */
     struct MalFfiState *ffi;
+    void (*ffi_callbacks_shutdown)(MalVm *vm);
     /** Library callbacks that entered this VM; bindings compare it around a C call. */
     u64 ffi_reentries;
 

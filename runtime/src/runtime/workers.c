@@ -1,5 +1,4 @@
 #include "workers.h"
-#include "../ffi/mal_ffi.h"
 
 #include <pthread.h>
 #include <signal.h>
@@ -1384,7 +1383,7 @@ static const MalSerializeHooks g_hooks = {
 };
 
 const MalSerializeHooks *mal_workers_get_serialize_hooks(MalVm *vm) {
-    return mal_workers_install(vm) ? &g_hooks : nullptr;
+    return g_isolate != nullptr && g_isolate->vm == vm ? &g_hooks : nullptr;
 }
 
 // event.ports: every transferred port in transfer-list order, right after
@@ -4100,7 +4099,8 @@ MalValue mal_workers_receive_message_function(MalVm *vm) {
 }
 
 void mal_workers_shutdown(MalVm *vm) {
-    mal_ffi_callbacks_shutdown(vm);
+    // A worker can be waiting for a native callback to finish on this isolate.
+    if (vm->ffi_callbacks_shutdown != nullptr) vm->ffi_callbacks_shutdown(vm);
     Isolate *iso = g_isolate;
     if (iso == nullptr || iso->vm != vm) return;
     // Children first: terminate, then join each (their final posts may race the

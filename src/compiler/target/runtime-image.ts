@@ -2,12 +2,14 @@ import type { PlatformData } from "../../platform/catalog.ts";
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "../core/core-constructor-layout.ts";
 import {
+	BIGINT_INSTALLER,
 	DATE_INSTALLER,
 	DISPOSABLE_STACK_INSTALLER,
 	INTRINSIC_INSTALLERS,
 	JSON_INSTALLER,
 	MAP_INSTALLER,
 	SET_INSTALLER,
+	TEMPORAL_INSTALLER,
 } from "../frontend/engine-components.ts";
 import {
 	BUFFER_INSTALLER_SYMBOL,
@@ -4064,26 +4066,39 @@ function buildHostInstalls(
 		// Node Request and Response bodies convert async-iterable chunks with Buffer.from.
 		installFor(BUFFER_INSTALLER_SYMBOL);
 	}
+	const selected = new Set(manifest.map(({ installer }) => installer));
+	const usesWorkerImages = [
+		WORKER_THREADS_INSTALLER_SYMBOL,
+		hostInstallerSymbol("node:cluster"),
+		hostInstallerSymbol("maligator:internal/workers"),
+	].some((installer) => selected.has(installer));
 	if (
 		world.ecmaFeatures.regexp &&
 		world.eval !== "runtime" &&
-		manifest.some(
-			({ installer }) =>
-				installer === NODE_BUILTIN_LOADER_INSTALLER ||
-				installer === hostInstallerSymbol("node:util") ||
-				installer === hostInstallerSymbol("node:util/types") ||
-				installer === hostInstallerSymbol("node:sys"),
-		)
+		(usesWorkerImages ||
+			[
+				NODE_BUILTIN_LOADER_INSTALLER,
+				hostInstallerSymbol("node:util"),
+				hostInstallerSymbol("node:util/types"),
+				hostInstallerSymbol("node:sys"),
+				hostInstallerSymbol("node:v8"),
+			].some((installer) => selected.has(installer)))
 	) {
-		// node:util constructs a RegExp to strip terminal escape sequences.
+		// Util compiles a matcher for terminal escapes; deserialization can rebuild a RegExp.
 		installFor(REGEXP_INSTALLER);
 	}
 
-	const selected = new Set(manifest.map(({ installer }) => installer));
+	// Native producers include Temporal epoch values and Node's clocks, Buffer,
+	// stat results, crypto and deserializers. These can create BigInt without a source literal.
+	if (
+		usesNode ||
+		selected.has(TEMPORAL_INSTALLER) ||
+		retained.includes(BUFFER_INSTALLER_SYMBOL)
+	)
+		installFor(BIGINT_INSTALLER);
 	if (
 		selected.has(NODE_BUILTIN_LOADER_INSTALLER) ||
-		selected.has(WORKER_THREADS_INSTALLER_SYMBOL) ||
-		selected.has(hostInstallerSymbol("node:cluster")) ||
+		usesWorkerImages ||
 		[...selected].some((installer) => installer.startsWith("mal_ffi_install_"))
 	) {
 		for (const installer of INTRINSIC_INSTALLERS) installFor(installer);

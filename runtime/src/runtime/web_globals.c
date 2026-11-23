@@ -1045,7 +1045,7 @@ static MalValue mal_web_structured_clone(
     }
     if (!mal_deserialize_take(vm, snapshot, hooks, &roots[2])) {
         roots[2] = mal_value_new_undefined();
-    } else {
+    } else if (hooks != nullptr) {
         mal_workers_adopt_transferred(vm, snapshot);
     }
     mal_serialized_value_release(snapshot);

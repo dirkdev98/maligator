@@ -414,29 +414,6 @@ static MalValue atomics_wait_result(MalVm *vm, bool async, MalValue value) {
     return mal_value_from_object(result);
 }
 
-// Per-isolate agent record. Each isolate runs on one mutator thread, so
-// isolate-local storage is the agent's [[CanBlock]] and termination point.
-// Native workers and the Test262 shell host opt in: a program's main agent keeps
-// its event loop responsive, and threadless WASI has no agent that could notify.
-static MAL_ISOLATE_LOCAL bool g_atomics_can_block = false;
-static MAL_ISOLATE_LOCAL MalSharedWaitInterrupt *g_atomics_interrupt;
-// Per isolate: only an isolate whose event loop installed the hook can settle
-// its own waitAsync promises, and teardown clears it before the loop is freed.
-static MAL_ISOLATE_LOCAL MalAtomicsWaitAsyncHook g_atomics_wait_async_hook;
-
-void mal_atomics_set_agent(bool can_block, MalSharedWaitInterrupt *interrupt) {
-#if defined(__wasi__)
-    (void) can_block;
-#else
-    g_atomics_can_block = can_block;
-#endif
-    g_atomics_interrupt = interrupt;
-}
-
-void mal_atomics_set_wait_async_hook(MalAtomicsWaitAsyncHook hook) {
-    g_atomics_wait_async_hook = hook;
-}
-
 // Byte offset of element `index` inside the shared backing (not the view).
 static u32 atomics_backing_offset(const MalTypedArrayObject *array, u32 index) {
     return array->byte_offset + index * mal_typed_array_element_size(array->kind);
@@ -536,7 +513,7 @@ static MalValue mal_atomics_wait(MalVm *vm, MalValue this_value, const MalValue 
     if (!atomics_wait_timeout(vm, args, arg_count, &timeout)) {
         return mal_value_new_undefined();
     }
-    if (!g_atomics_can_block) {
+    if (!mal_atomics_can_block) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                            "Atomics.wait: agent cannot be suspended");
         return mal_value_new_undefined();
@@ -546,7 +523,7 @@ static MalValue mal_atomics_wait(MalVm *vm, MalValue this_value, const MalValue 
     mal_gc_set_mutator_busy(vm, false);
     MalSharedWaitResult result = mal_shared_memory_wait_sync(
         array->buffer->shared_memory, atomics_backing_offset(array, index),
-        mal_typed_array_element_size(array->kind), expected, timeout, g_atomics_interrupt);
+        mal_typed_array_element_size(array->kind), expected, timeout, mal_atomics_interrupt);
     mal_gc_set_mutator_busy(vm, true);
     switch (result) {
     case MAL_SHARED_WAIT_OK:
@@ -602,10 +579,10 @@ static MalValue mal_atomics_wait_async(MalVm *vm, MalValue this_value, const Mal
         u64 mask = width == 8 ? ~0ull : 0xFFFFFFFFull;
         u64 current = mal_shared_atomic_load(mal_shared_memory_data(memory) + offset, width);
         result = (current & mask) == (expected & mask) ? MAL_SHARED_WAIT_TIMED_OUT : MAL_SHARED_WAIT_NOT_EQUAL;
-    } else if (g_atomics_wait_async_hook != nullptr) {
+    } else if (mal_atomics_wait_async_hook != nullptr) {
         // The hook compares and enqueues inside one critical section and owns
         // the promise's settlement on this isolate's event loop.
-        if (!g_atomics_wait_async_hook(vm, memory, offset, width, expected, timeout, &result, &promise)) {
+        if (!mal_atomics_wait_async_hook(vm, memory, offset, width, expected, timeout, &result, &promise)) {
             return mal_value_new_undefined();
         }
     } else {

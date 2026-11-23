@@ -8,7 +8,6 @@
 #include "builtin_array_buffer.h"
 #include "builtin_async_generator.h"
 #include "builtin_eval.h"
-#include "builtin_bigint.h"
 #include "builtin_boolean.h"
 #include "builtin_console.h"
 #include "builtin_data_view.h"
@@ -22,7 +21,6 @@
 #include "builtin_number.h"
 #include "builtin_object.h"
 #include "builtin_promise.h"
-#include "builtin_regexp.h"
 #include "builtin_reflect.h"
 #include "builtin_string.h"
 #include "builtin_symbol.h"
@@ -665,7 +663,8 @@ void mal_intrinsics_init(MalVm *vm) {
     // toStringTag); the iterator prototypes install before the passes that
     // expose iteration methods over them.
     mal_builtin_symbol_install(vm);
-    mal_builtin_bigint_install(vm);
+    mal_language_components_install(
+        vm, MAL_LANGUAGE_COMPONENT_BIGINT, MAL_LANGUAGE_COMPONENT_BIGINT);
     mal_builtin_function_install(vm);
 #if MAL_REALMS
     mal_builtin_shadow_realm_install(
@@ -708,7 +707,10 @@ void mal_intrinsics_init(MalVm *vm) {
 #if MAL_PROFILE && MAL_PERF_STATS
     vm->heap.profile_native_category = MAL_PROFILE_SITE_RUNTIME_REGEXP;
 #endif
-    if ((vm->engine_policy & MAL_ENGINE_POLICY_NO_REGEXP) == 0) mal_builtin_regexp_install(vm);
+    if ((vm->engine_policy & MAL_ENGINE_POLICY_NO_REGEXP) == 0) {
+        const MalRegExpEngine *engine = atomic_load_explicit(&mal_regexp_engine, memory_order_relaxed);
+        if (engine != nullptr) engine->install_intrinsics(vm);
+    }
 #if MAL_PROFILE && MAL_PERF_STATS
     vm->heap.profile_native_category = 0;
 #endif

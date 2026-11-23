@@ -4,6 +4,7 @@ import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import { BUILTIN_MEMBER_GROUPS } from "./builtin-member-data.ts";
 import { staticMemberKey } from "./builtin-module-loads.ts";
 import { ESTREE_STOP, traverseEstree } from "./estree-traversal.ts";
+import { REGEXP_INSTALLER } from "./host-modules.ts";
 import type { SemanticProgram } from "./semantic-analysis.ts";
 
 /*
@@ -18,12 +19,16 @@ import type { SemanticProgram } from "./semantic-analysis.ts";
 export const TEMPORAL_INSTALLER = "mal_host_install_temporal";
 export const INTL_INSTALLER = "mal_host_install_intl";
 export const DATE_INSTALLER = "mal_host_install_intrinsic_date";
+export const BIGINT_INSTALLER = "mal_host_install_intrinsic_bigint";
 export const MAP_INSTALLER = "mal_host_install_intrinsic_map";
 export const SET_INSTALLER = "mal_host_install_intrinsic_set";
 export const JSON_INSTALLER = "mal_host_install_intrinsic_json";
 export const DISPOSABLE_STACK_INSTALLER = "mal_host_install_intrinsic_disposable_stack";
 
 export const INTRINSIC_FAMILIES: ReadonlyMap<string, string> = new Map([
+	["BigInt", BIGINT_INSTALLER],
+	["BigInt64Array", BIGINT_INSTALLER],
+	["BigUint64Array", BIGINT_INSTALLER],
 	["Map", MAP_INSTALLER],
 	["WeakMap", MAP_INSTALLER],
 	["Set", SET_INSTALLER],
@@ -39,6 +44,19 @@ export const INTRINSIC_FAMILIES: ReadonlyMap<string, string> = new Map([
 	["Date", DATE_INSTALLER],
 ]);
 export const INTRINSIC_INSTALLERS = [...new Set(INTRINSIC_FAMILIES.values())];
+
+const BIGINT_MEMORY_MEMBERS = new Set([
+	"getBigInt64",
+	"getBigUint64",
+	"setBigInt64",
+	"setBigUint64",
+	...["read", "write"].flatMap((op) =>
+		["BigInt64", "BigUInt64", "BigUint64"].flatMap((kind) => [
+			`${op}${kind}LE`,
+			`${op}${kind}BE`,
+		]),
+	),
+]);
 
 /** Intl service constructors by their engine.intl.features names. */
 const INTL_SERVICES = new Map([
@@ -294,6 +312,8 @@ export function engineComponentInstallers(
 	const installers = [
 		...(uses.allIntrinsicInstallers ? INTRINSIC_INSTALLERS : uses.intrinsicInstallers),
 	];
+	if (uses.allIntrinsicInstallers && world.ecmaFeatures.regexp)
+		installers.push(REGEXP_INSTALLER);
 	if (world.ecmaFeatures.temporal && uses.temporal) installers.push(TEMPORAL_INSTALLER);
 	if (!world.ecmaFeatures.intl) return installers;
 	const selected = world.ecmaFeatures.intlServices ?? [];
@@ -346,12 +366,14 @@ function collectEngineComponentUses(
 		uses.allIntlServices = true;
 	};
 	const unknownMember = () => {
+		uses.intrinsicInstallers.add(BIGINT_INSTALLER);
 		uses.temporal = true;
 		uses.intl = true;
 		for (const services of LOCALE_METHODS.values())
 			for (const service of services) uses.intlServices.add(service);
 	};
 	const member = (key: string) => {
+		if (BIGINT_MEMORY_MEMBERS.has(key)) uses.intrinsicInstallers.add(BIGINT_INSTALLER);
 		if (key === "Intl") {
 			uses.intl = true;
 			uses.allIntlServices = true;

@@ -16,6 +16,7 @@
 #include "builtin_typed_array.h"
 #include "builtin_async_generator.h"
 #include "builtin_async_iterator.h"
+#include "builtin_bigint.h"
 #include "builtin_boolean.h"
 #include "builtin_date.h"
 #include "language_components.h"
@@ -623,7 +624,7 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
         return false;
     }
     if (mal_value_is_proxy_object(object_value)) {
-        return mal_proxy_own_property_keys(
+        return mal_proxy_traps.own_property_keys(
             vm, mal_value_to_proxy_object(object_value), keys_out);
     }
 
@@ -805,7 +806,7 @@ bool mal_vm_get_own_property(
         return false;
     }
     if (mal_value_is_proxy_object(object_value)) {
-        return mal_proxy_get_own_property_descriptor(
+        return mal_proxy_traps.get_own_property_descriptor(
             vm, mal_value_to_proxy_object(object_value), key, present_out, desc_out);
     }
 
@@ -924,7 +925,7 @@ bool mal_vm_is_extensible_object(
         return false;
     }
     if (mal_value_is_proxy_object(object_value)) {
-        return mal_proxy_is_extensible(
+        return mal_proxy_traps.is_extensible(
             vm, mal_value_to_proxy_object(object_value), extensible_out);
     }
     *extensible_out = mal_object_is_extensible(mal_value_to_object(object_value));
@@ -950,7 +951,7 @@ bool mal_vm_prevent_extensions(MalVm *vm, MalValue object_value, bool *prevented
     mal_gc_root(&root, &object_value, 1);
     bool ok;
     if (mal_value_is_proxy_object(object_value)) {
-        ok = mal_proxy_prevent_extensions(
+        ok = mal_proxy_traps.prevent_extensions(
             vm, mal_value_to_proxy_object(object_value), prevented_out);
     } else if (mal_value_heap_type(object_value) == MAL_HEAP_TYPED_ARRAY_OBJECT &&
                !mal_vm_typed_array_is_fixed_length(
@@ -3475,7 +3476,7 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
     // caller frame by index — the trap may relocate the frame array.
     if (mal_value_is_proxy_object(callee)) {
         i32 caller_frame_index = vm->frame_count - 1;
-        MalCompletion completion = mal_proxy_apply(vm, mal_value_to_proxy_object(callee), this_value, &vm->value_stack[base], argument_count);
+        MalCompletion completion = mal_proxy_traps.apply(vm, mal_value_to_proxy_object(callee), this_value, &vm->value_stack[base], argument_count);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             vm->completion = completion;
         } else {
@@ -3493,7 +3494,7 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
     // A bound function's target can be a callable proxy, which only its apply trap calls.
     if (mal_value_is_proxy_object(resolution.callee)) {
         i32 caller_frame_index = vm->frame_count - 1;
-        MalCompletion completion = mal_proxy_apply(
+        MalCompletion completion = mal_proxy_traps.apply(
             vm, mal_value_to_proxy_object(resolution.callee), resolution.this_value,
             resolution.args, resolution.arg_count);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
@@ -3566,7 +3567,7 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
     // newTarget = the proxy itself (the spec forwards the proxy as new.target).
     if (mal_value_is_proxy_object(callee)) {
         i32 caller_frame_index = vm->frame_count - 1;
-        MalCompletion completion = mal_proxy_construct(vm, mal_value_to_proxy_object(callee), &vm->value_stack[base], argument_count, callee);
+        MalCompletion completion = mal_proxy_traps.construct(vm, mal_value_to_proxy_object(callee), &vm->value_stack[base], argument_count, callee);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             vm->completion = completion;
         } else {
@@ -3587,7 +3588,7 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
         MalCalleeRoots roots;
         mal_gc_callee_roots_begin(&roots, MAL_VALUE_UNDEFINED, resolution.callee,
             resolution.callee, resolution.args, resolution.arg_count);
-        MalCompletion completion = mal_proxy_construct(vm,
+        MalCompletion completion = mal_proxy_traps.construct(vm,
             mal_value_to_proxy_object(resolution.callee), resolution.args,
             resolution.arg_count, resolution.callee);
         mal_gc_callee_roots_end(&roots);
@@ -5194,7 +5195,7 @@ static MalValue mal_vm_bigint_arith(MalVm *vm, MalBinaryOp op, MalValue left, Ma
         case MAL_BIN_BIT_XOR:
         case MAL_BIN_SHL:
         case MAL_BIN_SHR:
-            return mal_vm_bigint_binary(vm, op, left, right);
+            return mal_bigint_operations()->binary(vm, op, left, right);
         case MAL_BIN_USHR:
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                 "BigInts have no unsigned right shift, use >> instead");
@@ -5280,7 +5281,7 @@ static MalValue mal_vm_binary_dispatch(MalVm *vm, MalBinaryOp op, MalValue left,
     if (mixed_bigint_string && (mal_vm_op_is_relational(op) || op == MAL_BIN_EQ || op == MAL_BIN_NEQ)) {
         bool bigint_left = mal_value_is_bigint(left), valid;
         MalString *text = mal_value_to_string(bigint_left ? right : left);
-        MalBigInt *parsed = mal_bigint_parse(&vm->heap,
+        MalBigInt *parsed = mal_bigint_operations()->parse(&vm->heap,
             mal_string_code_units(text), mal_string_length(text), &valid);
         if (!valid) return mal_value_new_boolean(op == MAL_BIN_NEQ);
         if (parsed == nullptr) return mal_value_new_undefined();
@@ -5554,22 +5555,6 @@ static const byte *mal_vm_typeof_tag(MalTypeofResult result) {
 // numeric unary ops (`-`/`+`/`~`) run their operand through ToNumeric (so an
 // object's valueOf/toString and a Symbol's TypeError are honored) before the
 // per-type arithmetic.
-static MalValue mal_vm_bigint_unary(MalVm *vm, MalUnaryOp op, MalValue value) {
-    MalRootSpan root;
-    mal_gc_root(&root, &value, 1);
-    const MalBigInt *operand = mal_value_to_bigint(value);
-    MalBigInt *result;
-    if (op == MAL_UNARY_NEGATE) result = mal_bigint_negate(&vm->heap, operand);
-    else if (op == MAL_UNARY_BIT_NOT) result = mal_bigint_not(&vm->heap, operand);
-    else {
-        MalBigInt unit = {.sign = op == MAL_UNARY_INCREMENT ? 1 : -1,
-            .digit_count = 1, .data.inline_digits = {1}};
-        result = mal_bigint_add(&vm->heap, operand, &unit);
-    }
-    mal_gc_unroot(&root);
-    return mal_value_from_bigint(result);
-}
-
 MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
     // UpdateExpression coercion: ToNumeric keeps a BigInt as a BigInt (unlike
     // unary `+`), running an object's valueOf and throwing on a Symbol exactly
@@ -5583,7 +5568,7 @@ MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
     }
     if (op == MAL_UNARY_INCREMENT || op == MAL_UNARY_DECREMENT) {
         if (mal_value_is_bigint(value)) {
-            return mal_vm_bigint_unary(vm, op, value);
+            return mal_bigint_operations()->unary(vm, op, value);
         }
         f64 unit = op == MAL_UNARY_INCREMENT ? 1.0 : -1.0;
         return mal_value_from_f64_convert_nan(mal_ops_to_number(value) + unit);
@@ -5604,7 +5589,7 @@ MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
             return mal_value_new_boolean(!mal_value_is_truthy(value));
         case MAL_UNARY_NEGATE:
             if (mal_value_is_bigint(value)) {
-                return mal_vm_bigint_unary(vm, op, value);
+                return mal_bigint_operations()->unary(vm, op, value);
             }
             if (mal_value_is_int32(value) && mal_value_to_i32(value) != 0 && mal_value_to_i32(value) != INT32_MIN) {
                 return mal_value_from_i32(-mal_value_to_i32(value));
@@ -5624,7 +5609,7 @@ MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
             return mal_ops_number_value(mal_ops_to_number(value));
         case MAL_UNARY_BIT_NOT:
             if (mal_value_is_bigint(value)) {
-                return mal_vm_bigint_unary(vm, op, value);
+                return mal_bigint_operations()->unary(vm, op, value);
             }
             return mal_ops_bit_xor(value, mal_value_from_i32(-1));
         case MAL_UNARY_TO_STRING: {
@@ -6115,7 +6100,7 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
 
     // A proxy routes [[Get]] through its handler trap (or its target).
     if (mal_value_is_proxy_object(object_value)) {
-        return mal_proxy_get(vm, mal_value_to_proxy_object(object_value), key, receiver, out);
+        return mal_proxy_traps.get(vm, mal_value_to_proxy_object(object_value), key, receiver, out);
     }
 
     if (mal_value_is_nil(object_value)) {
@@ -6237,7 +6222,7 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
 bool mal_vm_has_property(MalVm *vm, MalValue object_value, MalKey key) {
     // A proxy routes [[HasProperty]] through its handler trap (or its target).
     if (mal_value_is_proxy_object(object_value)) {
-        return mal_proxy_has(vm, mal_value_to_proxy_object(object_value), key);
+        return mal_proxy_traps.has(vm, mal_value_to_proxy_object(object_value), key);
     }
 
     MalValue synthetic;
@@ -6349,7 +6334,7 @@ bool mal_vm_set_process_env(MalVm *vm, MalValue env, MalKey key, MalValue value)
 bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value, MalValue receiver) {
     // A proxy routes [[Set]] through its handler trap (or its target).
     if (mal_value_is_proxy_object(target)) {
-        return mal_proxy_set(vm, mal_value_to_proxy_object(target), key, value, receiver);
+        return mal_proxy_traps.set(vm, mal_value_to_proxy_object(target), key, value, receiver);
     }
     if (mal_value_is_module_namespace_object(target)) return false;
     if (target == receiver && mal_value_is_object(target)) {
@@ -6480,7 +6465,7 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
     if (mal_value_is_proxy_object(receiver)) {
         bool present;
         MalPropertyDesc rdesc;
-        if (!mal_proxy_get_own_property_descriptor(vm, mal_value_to_proxy_object(receiver), key, &present, &rdesc)) {
+        if (!mal_proxy_traps.get_own_property_descriptor(vm, mal_value_to_proxy_object(receiver), key, &present, &rdesc)) {
             return false;
         }
         MalObject *descriptor;
@@ -6498,7 +6483,7 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
             mal_intrinsic_define_data(vm, descriptor, "enumerable", mal_value_new_boolean(true), df);
             mal_intrinsic_define_data(vm, descriptor, "configurable", mal_value_new_boolean(true), df);
         }
-        bool ok = mal_proxy_define_own_property(vm, mal_value_to_proxy_object(receiver), key, mal_value_from_object(descriptor));
+        bool ok = mal_proxy_traps.define_own_property(vm, mal_value_to_proxy_object(receiver), key, mal_value_from_object(descriptor));
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             return false;
         }
@@ -6586,7 +6571,7 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
 bool mal_vm_delete_property(MalVm *vm, MalValue object_value, MalKey key) {
     // A proxy routes [[Delete]] through its handler trap (or its target).
     if (mal_value_is_proxy_object(object_value)) {
-        return mal_proxy_delete(vm, mal_value_to_proxy_object(object_value), key);
+        return mal_proxy_traps.delete(vm, mal_value_to_proxy_object(object_value), key);
     }
 
     MalObject *object = mal_value_to_object(object_value);
@@ -6680,7 +6665,7 @@ bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value) {
     while (true) {
         MalValue proto;
         if (mal_value_is_proxy_object(walk)) {
-            if (!mal_proxy_get_prototype_of(vm, mal_value_to_proxy_object(walk), &proto)) {
+            if (!mal_proxy_traps.get_prototype_of(vm, mal_value_to_proxy_object(walk), &proto)) {
                 return false; // trap threw — leave the throw pending
             }
         } else {
@@ -8931,7 +8916,7 @@ static void mal_vm_op_store_property_keyed(
     // A proxy routes the assignment through its [[Set]] (handler trap → target),
     // with the proxy itself as the receiver.
     if (mal_value_is_proxy_object(object_value)) {
-        bool ok = mal_proxy_set(vm, mal_value_to_proxy_object(object_value), key, value, object_value);
+        bool ok = mal_proxy_traps.set(vm, mal_value_to_proxy_object(object_value), key, value, object_value);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             return;
         }
@@ -9420,7 +9405,7 @@ static MalValue mal_for_in_collect_keys(MalVm *vm, MalValue source, const MalSha
     if (mal_value_is_proxy_object(source)) {
         MalProxyObject *proxy = mal_value_to_proxy_object(source);
         MalValue keys_value;
-        if (!mal_proxy_own_property_keys(vm, proxy, &keys_value)) {
+        if (!mal_proxy_traps.own_property_keys(vm, proxy, &keys_value)) {
             return mal_value_from_array_object(result);
         }
         MalArrayObject *keys = mal_value_to_array_object(keys_value);
@@ -9443,7 +9428,7 @@ static MalValue mal_for_in_collect_keys(MalVm *vm, MalValue source, const MalSha
             mal_object_define_own(seen, key, &marker);
             bool present;
             MalPropertyDesc desc;
-            if (!mal_proxy_get_own_property_descriptor(vm, proxy, key, &present, &desc)) {
+            if (!mal_proxy_traps.get_own_property_descriptor(vm, proxy, key, &present, &desc)) {
                 return mal_value_from_array_object(result);
             }
             if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
@@ -9453,7 +9438,7 @@ static MalValue mal_for_in_collect_keys(MalVm *vm, MalValue source, const MalSha
             count++;
         }
         MalValue proto;
-        if (!mal_proxy_get_prototype_of(vm, proxy, &proto)) {
+        if (!mal_proxy_traps.get_prototype_of(vm, proxy, &proto)) {
             return mal_value_from_array_object(result);
         }
         if (!mal_value_is_object(proto) || mal_value_is_proxy_object(proto)) {
@@ -10689,7 +10674,7 @@ static void mal_vm_define_property_key(MalVm *vm, MalValue object_value, MalKey 
         mal_intrinsic_define_data(vm, descriptor, "writable", mal_value_new_boolean(true), df);
         mal_intrinsic_define_data(vm, descriptor, "enumerable", mal_value_new_boolean(enumerable), df);
         mal_intrinsic_define_data(vm, descriptor, "configurable", mal_value_new_boolean(true), df);
-        bool ok = mal_proxy_define_own_property(vm, mal_value_to_proxy_object(object_value), key, mal_value_from_object(descriptor));
+        bool ok = mal_proxy_traps.define_own_property(vm, mal_value_to_proxy_object(object_value), key, mal_value_from_object(descriptor));
         // CreateDataPropertyOrThrow: a trap that rejects (returns false) without
         // itself throwing still surfaces a TypeError.
         if (!ok && vm->completion.kind != MAL_COMPLETION_THROW) {

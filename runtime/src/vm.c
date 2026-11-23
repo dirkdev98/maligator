@@ -799,6 +799,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->node_string_decoder_shape = nullptr;
     vm->node_sqlite_run_result_shape = nullptr;
     vm->ffi = nullptr;
+    vm->ffi_callbacks_shutdown = nullptr;
     vm->interp_call_cache = nullptr;
     vm->global_property_cache = nullptr;
     vm->exact_script_call = nullptr;
@@ -5411,7 +5412,7 @@ static __attribute__((noinline)) MalCompletion mal_vm_call_value_general(
     // A callable proxy routes [[Call]] through its apply trap.
     if (mal_value_is_proxy_object(callee)) {
         MalCompletion proxy_completion =
-            mal_proxy_apply(vm, mal_value_to_proxy_object(callee), this_value, args, arg_count);
+            mal_proxy_traps.apply(vm, mal_value_to_proxy_object(callee), this_value, args, arg_count);
 #if MAL_PROFILE && MAL_PERF_STATS
         vm->profile_current_site_id = saved_profile_site;
 #endif
@@ -5424,7 +5425,7 @@ static __attribute__((noinline)) MalCompletion mal_vm_call_value_general(
         inline_args, countof(inline_args));
     // A bound function's target can be a callable proxy, which only its apply trap calls.
     if (mal_value_is_proxy_object(resolution.callee)) {
-        MalCompletion proxy_completion = mal_proxy_apply(
+        MalCompletion proxy_completion = mal_proxy_traps.apply(
             vm, mal_value_to_proxy_object(resolution.callee), resolution.this_value,
             resolution.args, resolution.arg_count);
         free(resolution.owned_args);
@@ -6134,7 +6135,7 @@ static MalCompletion mal_vm_construct_with_native_target(MalVm *vm, MalValue cal
     // A constructable proxy routes [[Construct]] through its construct trap.
     if (mal_value_is_proxy_object(callee)) {
         MalCompletion proxy_completion =
-            mal_proxy_construct(vm, mal_value_to_proxy_object(callee), args, arg_count, new_target);
+            mal_proxy_traps.construct(vm, mal_value_to_proxy_object(callee), args, arg_count, new_target);
 #if MAL_PROFILE && MAL_PERF_STATS
         vm->profile_current_site_id = saved_profile_site;
 #endif
@@ -6154,7 +6155,7 @@ static MalCompletion mal_vm_construct_with_native_target(MalVm *vm, MalValue cal
         MalCalleeRoots roots;
         mal_gc_callee_roots_begin(&roots, MAL_VALUE_UNDEFINED, effective_new_target,
             resolution.callee, resolution.args, resolution.arg_count);
-        completion = mal_proxy_construct(vm, mal_value_to_proxy_object(resolution.callee),
+        completion = mal_proxy_traps.construct(vm, mal_value_to_proxy_object(resolution.callee),
             resolution.args, resolution.arg_count, effective_new_target);
         mal_gc_callee_roots_end(&roots);
         free(resolution.owned_args);

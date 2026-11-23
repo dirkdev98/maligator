@@ -40,7 +40,7 @@ static bool mal_shadow_realm_get_own_property(
     MalPropertyDesc *desc_out
 ) {
     if (mal_value_is_proxy_object(object)) {
-        return mal_proxy_get_own_property_descriptor(
+        return mal_proxy_traps.get_own_property_descriptor(
             vm,
             mal_value_to_proxy_object(object),
             key,

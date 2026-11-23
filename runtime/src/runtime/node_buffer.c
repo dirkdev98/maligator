@@ -16,6 +16,7 @@
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
+#include "builtin_bigint.h"
 #include "heap_bigint.h"
 #include "hex.h"
 #include "intrinsics.h"
@@ -2050,9 +2051,9 @@ static MalValue mal_buffer_read_number(
             return mal_value_from_f64(width == 4
                 ? (f64) mal_scalar_f32_from_bits((u32) bits) : mal_scalar_f64_from_bits(bits));
         case MAL_BUFFER_NUMBER_BIG_UINT:
-            return mal_value_from_bigint(mal_bigint_new(&vm->heap, (i128) bits));
+            return mal_value_from_bigint(mal_bigint_operations()->create(&vm->heap, (i128) bits));
         case MAL_BUFFER_NUMBER_BIG_INT:
-            return mal_value_from_bigint(mal_bigint_new(&vm->heap, (i128) (i64) bits));
+            return mal_value_from_bigint(mal_bigint_operations()->create(&vm->heap, (i128) (i64) bits));
     }
     return mal_value_new_undefined();
 }

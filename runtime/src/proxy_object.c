@@ -11,13 +11,8 @@
 #include "vm.h"
 #include "vm_ops.h"
 
-MalProxyObject *mal_value_to_proxy_object(MalValue value) {
-    return (MalProxyObject *) mal_value_to_heap(value);
-}
-
-MalValue mal_value_from_proxy_object(MalProxyObject *proxy) {
-    return mal_value_from_heap((MalHeapHeader *) proxy);
-}
+static bool mal_proxy_set_prototype_of(MalVm *vm, MalProxyObject *proxy, MalValue proto, bool *success_out);
+static bool mal_proxy_is_extensible(MalVm *vm, MalProxyObject *proxy, bool *out);
 
 MalProxyObject *mal_proxy_object_new(MalVm *vm, MalValue target, MalValue handler) {
     MalProxyObject *proxy = mal_heap_alloc(&vm->heap, sizeof(MalProxyObject), MAL_HEAP_PROXY_OBJECT);
@@ -32,24 +27,6 @@ MalProxyObject *mal_proxy_object_new(MalVm *vm, MalValue target, MalValue handle
     proxy->constructor = mal_vm_is_constructor(vm, target);
     proxy->revoked = false;
     return proxy;
-}
-
-MalValue mal_proxy_unwrap_target(MalValue value) {
-    while (mal_value_is_proxy_object(value)) {
-        MalProxyObject *proxy = mal_value_to_proxy_object(value);
-        if (proxy->revoked) {
-            return value;
-        }
-        value = proxy->target;
-    }
-    return value;
-}
-
-bool mal_proxy_target_is_callable(MalValue value) {
-    if (mal_value_is_proxy_object(value)) {
-        return mal_value_to_proxy_object(value)->callable;
-    }
-    return mal_value_is_callable(value);
 }
 
 // ---- shared helpers -------------------------------------------------------
@@ -257,7 +234,7 @@ static bool mal_proxy_get_snapshot(
     return true;
 }
 
-bool mal_proxy_get(MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue receiver, MalValue *out) {
+static bool mal_proxy_get(MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue receiver, MalValue *out) {
     *out = mal_value_new_undefined();
     if (mal_proxy_check_revoked(vm, proxy)) {
         return false;
@@ -329,7 +306,7 @@ static bool mal_proxy_set_snapshot(
     return true;
 }
 
-bool mal_proxy_set(MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue value, MalValue receiver) {
+static bool mal_proxy_set(MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue value, MalValue receiver) {
     if (mal_proxy_check_revoked(vm, proxy)) {
         return false;
     }
@@ -400,7 +377,7 @@ static bool mal_proxy_has_snapshot(
     return result;
 }
 
-bool mal_proxy_has(MalVm *vm, MalProxyObject *proxy, MalKey key) {
+static bool mal_proxy_has(MalVm *vm, MalProxyObject *proxy, MalKey key) {
     if (mal_proxy_check_revoked(vm, proxy)) {
         return false;
     }
@@ -470,7 +447,7 @@ static bool mal_proxy_delete_snapshot(
     return true;
 }
 
-bool mal_proxy_delete(MalVm *vm, MalProxyObject *proxy, MalKey key) {
+static bool mal_proxy_delete(MalVm *vm, MalProxyObject *proxy, MalKey key) {
     if (mal_proxy_check_revoked(vm, proxy)) {
         return false;
     }
@@ -492,7 +469,7 @@ bool mal_proxy_delete(MalVm *vm, MalProxyObject *proxy, MalKey key) {
 
 // ---- getOwnPropertyDescriptor ---------------------------------------------
 
-bool mal_proxy_get_own_property_descriptor(MalVm *vm, MalProxyObject *proxy, MalKey key, bool *present_out, MalPropertyDesc *desc_out) {
+static bool mal_proxy_get_own_property_descriptor(MalVm *vm, MalProxyObject *proxy, MalKey key, bool *present_out, MalPropertyDesc *desc_out) {
     *present_out = false;
     if (mal_proxy_check_revoked(vm, proxy)) {
         return false;
@@ -711,7 +688,7 @@ done:
     return ok;
 }
 
-bool mal_proxy_define_own_property_parsed(
+static bool mal_proxy_define_own_property_parsed(
     MalVm *vm, MalProxyObject *proxy, MalKey key,
     const MalPropertyDescriptorParse *parsed) {
     MalValue roots[8] = {
@@ -745,7 +722,7 @@ bool mal_proxy_define_own_property_parsed(
     return ok;
 }
 
-bool mal_proxy_define_own_property(
+static bool mal_proxy_define_own_property(
     MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue descriptor_value) {
     MalValue roots[2] = {descriptor_value, key.value};
     MalRootSpan roots_span;
@@ -767,7 +744,7 @@ static bool mal_proxy_own_keys_build(
     MalPropertyDesc marker, MalArrayObject *keys
 );
 
-bool mal_proxy_own_property_keys(MalVm *vm, MalProxyObject *proxy, MalValue *out_array) {
+static bool mal_proxy_own_property_keys(MalVm *vm, MalProxyObject *proxy, MalValue *out_array) {
     *out_array = mal_value_new_undefined();
     if (mal_proxy_check_revoked(vm, proxy)) {
         return false;
@@ -887,8 +864,11 @@ static bool mal_proxy_own_keys_build(
     if (!mal_vm_is_extensible_object(vm, target, &extensible)) {
         goto invariant_done;
     }
-    MalObject *target_seen = mal_intrinsic_new_object(vm);
-    invariant_roots[1] = mal_value_from_object(target_seen);
+    MalObject *target_seen = nullptr;
+    if (!extensible) {
+        target_seen = mal_intrinsic_new_object(vm);
+        invariant_roots[1] = mal_value_from_object(target_seen);
+    }
     MalArrayObject *target_keys = mal_value_to_array_object(invariant_roots[0]);
     u32 target_key_count = mal_array_object_length(target_keys);
     for (u32 i = 0; i < target_key_count; i++) {
@@ -898,7 +878,7 @@ static bool mal_proxy_own_keys_build(
         if (!mal_vm_value_to_property_key(vm, target_key_value, &target_key)) {
             goto invariant_done;
         }
-        mal_object_define_own(target_seen, target_key, &marker);
+        if (target_seen != nullptr) mal_object_define_own(target_seen, target_key, &marker);
 
         bool target_present;
         MalPropertyDesc target_desc;
@@ -906,16 +886,11 @@ static bool mal_proxy_own_keys_build(
                 vm, target, target_key, &target_present, &target_desc)) {
             goto invariant_done;
         }
-        bool in_result = mal_object_get_own(seen, target_key).present;
-        if (target_present && !(target_desc.flags & MAL_PROPERTY_CONFIGURABLE) &&
-            !in_result) {
+        bool non_configurable = target_present && !(target_desc.flags & MAL_PROPERTY_CONFIGURABLE);
+        if ((non_configurable || !extensible) && !mal_object_get_own(seen, target_key).present) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "proxy ownKeys trap omitted a non-configurable target key");
-            goto invariant_done;
-        }
-        if (!extensible && !in_result) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "proxy ownKeys trap omitted a key of a non-extensible target");
+                non_configurable ? "proxy ownKeys trap omitted a non-configurable target key"
+                    : "proxy ownKeys trap omitted a key of a non-extensible target");
             goto invariant_done;
         }
     }
@@ -943,7 +918,7 @@ invariant_done:
     return ok;
 }
 
-bool mal_proxy_get_prototype_of(MalVm *vm, MalProxyObject *proxy, MalValue *out) {
+static bool mal_proxy_get_prototype_of(MalVm *vm, MalProxyObject *proxy, MalValue *out) {
     *out = mal_value_new_null();
     if (mal_proxy_check_revoked(vm, proxy)) {
         return false;
@@ -1083,7 +1058,7 @@ static bool mal_proxy_set_prototype_of_snapshot(
     return true;
 }
 
-bool mal_proxy_set_prototype_of(MalVm *vm, MalProxyObject *proxy, MalValue proto, bool *success_out) {
+static bool mal_proxy_set_prototype_of(MalVm *vm, MalProxyObject *proxy, MalValue proto, bool *success_out) {
     *success_out = false;
     if (mal_proxy_check_revoked(vm, proxy)) {
         return false;
@@ -1144,7 +1119,7 @@ static bool mal_proxy_is_extensible_snapshot(
     return true;
 }
 
-bool mal_proxy_is_extensible(MalVm *vm, MalProxyObject *proxy, bool *out) {
+static bool mal_proxy_is_extensible(MalVm *vm, MalProxyObject *proxy, bool *out) {
     *out = false;
     if (mal_proxy_check_revoked(vm, proxy)) {
         return false;
@@ -1163,7 +1138,7 @@ bool mal_proxy_is_extensible(MalVm *vm, MalProxyObject *proxy, bool *out) {
 
 // ---- preventExtensions ----------------------------------------------------
 
-bool mal_proxy_prevent_extensions(MalVm *vm, MalProxyObject *proxy, bool *out) {
+static bool mal_proxy_prevent_extensions(MalVm *vm, MalProxyObject *proxy, bool *out) {
     *out = false;
     if (mal_proxy_check_revoked(vm, proxy)) {
         return false;
@@ -1229,7 +1204,7 @@ static MalValue mal_proxy_args_array(MalVm *vm, const MalValue *args, i32 arg_co
     return mal_value_from_array_object(array);
 }
 
-MalCompletion mal_proxy_apply(MalVm *vm, MalProxyObject *proxy, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalCompletion mal_proxy_apply(MalVm *vm, MalProxyObject *proxy, MalValue this_value, const MalValue *args, i32 arg_count) {
     if (!proxy->callable) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not callable");
         return vm->completion;
@@ -1267,7 +1242,7 @@ done:
     return completion;
 }
 
-MalCompletion mal_proxy_construct(MalVm *vm, MalProxyObject *proxy, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalCompletion mal_proxy_construct(MalVm *vm, MalProxyObject *proxy, const MalValue *args, i32 arg_count, MalValue new_target) {
     if (!proxy->constructor) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
         return vm->completion;
@@ -1306,4 +1281,23 @@ done:
     mal_gc_unroot(&argument_roots);
     mal_gc_unroot(&root);
     return completion;
+}
+
+__attribute__((constructor)) static void proxy_register_traps(void) {
+    mal_proxy_traps = (MalProxyOperations) {
+        .get = mal_proxy_get,
+        .set = mal_proxy_set,
+        .has = mal_proxy_has,
+        .delete = mal_proxy_delete,
+        .get_own_property_descriptor = mal_proxy_get_own_property_descriptor,
+        .define_own_property = mal_proxy_define_own_property,
+        .define_own_property_parsed = mal_proxy_define_own_property_parsed,
+        .own_property_keys = mal_proxy_own_property_keys,
+        .get_prototype_of = mal_proxy_get_prototype_of,
+        .set_prototype_of = mal_proxy_set_prototype_of,
+        .is_extensible = mal_proxy_is_extensible,
+        .prevent_extensions = mal_proxy_prevent_extensions,
+        .apply = mal_proxy_apply,
+        .construct = mal_proxy_construct,
+    };
 }

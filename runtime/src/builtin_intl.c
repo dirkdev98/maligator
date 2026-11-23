@@ -13,6 +13,7 @@
 #include "builtin_object.h"
 #include "checked_size.h"
 #include "ecma_whitespace.h"
+#include "builtin_bigint.h"
 #include "heap_bigint.h"
 #include "mal_number_format.h"
 #include "number_text.h"
@@ -1712,7 +1713,7 @@ static bool intl_numeric_input(MalVm *vm, MalValue *value, byte *stack, usize ca
     if (mal_value_is_object(primitive) && !mal_vm_to_primitive(vm, primitive, MAL_TO_PRIMITIVE_NUMBER, &primitive)) return false;
     *value = primitive;
     if (mal_value_is_bigint(primitive)) {
-        MalString *text = mal_bigint_to_string(&vm->heap, mal_value_to_bigint(primitive), 10);
+        MalString *text = mal_bigint_operations()->to_string(&vm->heap, mal_value_to_bigint(primitive), 10);
         if (text == nullptr) return false;
         *value = mal_value_from_string(text);
     }

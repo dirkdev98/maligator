@@ -19,6 +19,7 @@
  */
 
 typedef enum MalLanguageComponentId {
+    MAL_LANGUAGE_COMPONENT_BIGINT,
     MAL_LANGUAGE_COMPONENT_MAP,
     MAL_LANGUAGE_COMPONENT_SET,
     MAL_LANGUAGE_COMPONENT_WEAK_REF,
@@ -57,6 +58,7 @@ typedef struct MalLanguageComponent {
 
 #define MAL_LANGUAGE_COMPONENT_INSTALLER(name) \
     void name(MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch)
+MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intrinsic_bigint);
 MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intrinsic_map);
 MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intrinsic_set);
 MAL_LANGUAGE_COMPONENT_INSTALLER(mal_host_install_intrinsic_weak_ref);

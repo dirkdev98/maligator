@@ -1,6 +1,8 @@
 #include "language_components.h"
+#include "proxy_object.h"
 
 const MalLanguageComponent *mal_language_components[MAL_LANGUAGE_COMPONENT_COUNT];
+MalProxyOperations mal_proxy_traps;
 
 static bool image_selects(const MalRuntimeImage *image, MalHostInstaller installer) {
     for (i32 i = 0; image != nullptr && i < image->host_install_count; i++) {

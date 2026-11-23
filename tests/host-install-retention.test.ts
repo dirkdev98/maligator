@@ -94,12 +94,13 @@ function manifest(
 	);
 }
 
-/** The installers a program reaches, apart from the personality and Error hooks. */
-function reachedInstallers(installs: Map<string, Array<string>>): Array<string> {
+/** Module and process installers, separate from runtime personality and language features. */
+function reachedModuleInstallers(installs: Map<string, Array<string>>): Array<string> {
 	return [...installs.keys()].filter(
 		(installer) =>
 			!HOST_PERSONALITY_INSTALLERS.includes(installer) &&
 			!INTRINSIC_INSTALLERS.includes(installer) &&
+			installer !== REGEXP_INSTALLER &&
 			installer !== NODE_ERROR_HOOKS_INSTALLER,
 	);
 }
@@ -349,7 +350,7 @@ describe("process.getBuiltinModule retention", () => {
 
 	it("installs only process for a program that reads static process members", () => {
 		const installs = manifest(`process.stdout.write("hello\\n");\n`, defaultConfig);
-		expect(reachedInstallers(installs)).toEqual([PROCESS_INSTALLER_SYMBOL]);
+		expect(reachedModuleInstallers(installs)).toEqual([PROCESS_INSTALLER_SYMBOL]);
 	});
 
 	it.each([
@@ -377,7 +378,7 @@ describe("process.getBuiltinModule retention", () => {
 			`globalThis.sink = typeof process.getBuiltinModule === "function";\n`,
 			defaultConfig,
 		);
-		expect(reachedInstallers(installs)).toEqual([PROCESS_INSTALLER_SYMBOL]);
+		expect(reachedModuleInstallers(installs)).toEqual([PROCESS_INSTALLER_SYMBOL]);
 	});
 
 	it("installs nothing for a literal name Node does not load", () => {
@@ -385,7 +386,7 @@ describe("process.getBuiltinModule retention", () => {
 			`globalThis.sink = process.getBuiltinModule("node:missing");\n`,
 			defaultConfig,
 		);
-		expect(reachedInstallers(installs)).toEqual([PROCESS_INSTALLER_SYMBOL]);
+		expect(reachedModuleInstallers(installs)).toEqual([PROCESS_INSTALLER_SYMBOL]);
 	});
 
 	it("keeps static destructuring of process selective", () => {

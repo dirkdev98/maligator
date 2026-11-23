@@ -124,7 +124,7 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
     MalObject *bound_prototype;
     if (mal_value_is_proxy_object(this_value)) {
         MalValue prototype_value;
-        if (!mal_proxy_get_prototype_of(
+        if (!mal_proxy_traps.get_prototype_of(
                 vm, mal_value_to_proxy_object(this_value), &prototype_value)) {
             return mal_value_new_undefined();
         }
@@ -158,7 +158,7 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
     if (mal_value_is_proxy_object(this_value)) {
         bool present;
         MalPropertyDesc desc;
-        if (!mal_proxy_get_own_property_descriptor(vm, mal_value_to_proxy_object(this_value), length_key, &present, &desc)) {
+        if (!mal_proxy_traps.get_own_property_descriptor(vm, mal_value_to_proxy_object(this_value), length_key, &present, &desc)) {
             mal_gc_unroot(&bound_root);
             return mal_value_new_undefined();
         }

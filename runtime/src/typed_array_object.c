@@ -255,10 +255,10 @@ MalValue mal_typed_array_object_get(MalVm *vm, MalTypedArrayObject *array, u32 i
         case MAL_TA_FLOAT64:
             return mal_value_from_f64_convert_nan(mal_scalar_f64_from_bits(bits));
         case MAL_TA_BIGINT64:
-            return mal_value_from_bigint(mal_bigint_new(
+            return mal_value_from_bigint(mal_bigint_operations()->create(
                 &vm->heap, (i128) mal_scalar_i64_from_bits(bits)));
         case MAL_TA_BIGUINT64:
-            return mal_value_from_bigint(mal_bigint_new(
+            return mal_value_from_bigint(mal_bigint_operations()->create(
                 &vm->heap, (i128) (u128) bits));
         default:
             return mal_value_new_undefined();
@@ -270,7 +270,7 @@ bool mal_typed_array_coerce_element_bits(
     u64 bits = 0;
     if (mal_typed_array_is_bigint(kind)) {
         MalBigInt *big;
-        if (!mal_bigint_to_bigint(vm, value, &big)) {
+        if (!mal_bigint_operations()->coerce(vm, value, &big)) {
             return false;
         }
         bits = mal_bigint_low_u64(big);

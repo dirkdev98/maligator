@@ -1946,7 +1946,7 @@ static bool mal_promise_keyed_own_keys(
 ) {
     if (mal_value_is_proxy_object(promises)) {
         MalValue keys_array;
-        if (!mal_proxy_own_property_keys(vm, mal_value_to_proxy_object(promises), &keys_array)) {
+        if (!mal_proxy_traps.own_property_keys(vm, mal_value_to_proxy_object(promises), &keys_array)) {
             return false;
         }
         u32 length = mal_array_object_length(mal_value_to_array_object(keys_array));
@@ -1974,7 +1974,7 @@ static bool mal_promise_keyed_own_keys(
 static bool mal_promise_keyed_enumerable(MalVm *vm, MalValue promises, MalKey key, bool *present, bool *enumerable) {
     if (mal_value_is_proxy_object(promises)) {
         MalPropertyDesc desc;
-        if (!mal_proxy_get_own_property_descriptor(vm, mal_value_to_proxy_object(promises), key, present, &desc)) {
+        if (!mal_proxy_traps.get_own_property_descriptor(vm, mal_value_to_proxy_object(promises), key, present, &desc)) {
             return false;
         }
         *enumerable = *present && (desc.flags & MAL_PROPERTY_ENUMERABLE) != 0;

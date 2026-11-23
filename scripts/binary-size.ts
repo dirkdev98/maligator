@@ -61,6 +61,10 @@ const forbiddenComponents = {
 	Ada: ({ object }) => /(?:^|[(-])ada\.o\)?$/.test(object),
 	regress: ({ crate, symbol }) =>
 		crate === "regress" || /^_mal_regexp_(?:compile|release)(?:$|\.)/.test(symbol),
+	"RegExp builtins": ({ object }) => /(?:^|[(-])builtin_regexp\.o\)?$/.test(object),
+	"Proxy traps": ({ object }) => /(?:^|[(-])proxy_object\.o\)?$/.test(object),
+	"BigInt arithmetic": ({ object }) =>
+		/(?:^|[(-])(?:heap|builtin)_bigint\.o\)?$/.test(object),
 	"unicode.o": ({ object, symbol }) =>
 		/(?:^|[(-])unicode\.o\)?$/.test(object) ||
 		/^_mal_unicode_(?:decomposition|composition)(?:$|\.)/.test(symbol),
@@ -111,6 +115,9 @@ const fixtures: Array<{
 			"ring",
 			"Ada",
 			"regress",
+			"RegExp builtins",
+			"Proxy traps",
+			"BigInt arithmetic",
 			"unicode.o",
 			"Node runtime",
 			"Date timezone data",

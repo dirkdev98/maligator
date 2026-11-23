@@ -29,6 +29,27 @@ static inline const u64 *mal_bigint_digits(const MalBigInt *value) {
         ? value->data.inline_digits : value->data.digits;
 }
 
+static inline i128 mal_bigint_signed_bits(u128 bits) {
+    i128 result;
+    memcpy(&result, &bits, sizeof result);
+    return result;
+}
+
+// Valid for at most two limbs; inline limbs beyond the count are zero.
+static inline u128 mal_bigint_inline_magnitude(const MalBigInt *value) {
+    return (u128) value->data.inline_digits[1] << 64 | value->data.inline_digits[0];
+}
+
+static inline i32 mal_bigint_compare_magnitude(const MalBigInt *left, const MalBigInt *right) {
+    if (left->digit_count != right->digit_count)
+        return left->digit_count < right->digit_count ? -1 : 1;
+    const u64 *a = mal_bigint_digits(left), *b = mal_bigint_digits(right);
+    for (u32 i = left->digit_count; i != 0; i--) {
+        if (a[i - 1] != b[i - 1]) return a[i - 1] < b[i - 1] ? -1 : 1;
+    }
+    return 0;
+}
+
 /** Factories return null with the owning VM's pending allocation or size exception.
  * Managed input storage must remain rooted until publication. */
 MalBigInt *mal_bigint_new(MalHeap *heap, i128 value);

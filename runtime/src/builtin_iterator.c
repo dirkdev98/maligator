@@ -6,7 +6,7 @@
 #include "builtin_array.h"
 #include "builtin_generator.h"
 #include "builtin_iterator_helpers.h"
-#include "builtin_regexp.h"
+#include "regexp_engine.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
@@ -1292,7 +1292,7 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
             return helper_step > 0;
         }
     } else if (mal_value_is_heap_type(record->iterator, MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT)) {
-        int regexp_step = mal_regexp_try_exact_iterator_step(
+        int regexp_step = mal_regexp_require_engine()->exact_iterator_step(
             vm, record->iterator, record->next_method, value_out, done_out);
         if (regexp_step != 0) {
             return regexp_step > 0;

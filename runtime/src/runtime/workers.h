@@ -81,8 +81,8 @@ u32 mal_workers_thread_id(void);
  * pending throw so the current JS unwinds. False on the main isolate. */
 bool mal_workers_exit_current(MalVm *vm, int code);
 
-/* MessagePort/WorkerUrl serializer hooks for structuredClone; installs the calling
- * isolate's worker state and returns null if that fails. The table is process-static
+/* MessagePort/WorkerUrl serializer hooks for structuredClone. These values and
+ * clone marks can exist only after the isolate installs workers. The table is process-static
  * and sets `validate` (closed/moved listed ports) and `reject` (markAsUncloneable).
  * mal_workers_prepare_commit is mal_serialized_value_validate; mal_serialize_commit
  * revalidates on its own, so callers only need it when user code ran in between. */

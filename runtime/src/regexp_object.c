@@ -3,12 +3,23 @@
 #include <stdio.h>
 
 #include "regexp_engine.h"
+#include "intrinsics.h"
+#include "vm.h"
 
 _Atomic(const MalRegExpEngine *) mal_regexp_engine;
 
 [[noreturn]] void mal_regexp_missing_engine(void) {
     fputs("Maligator internal error: RegExp engine was not retained\n", stderr);
     abort();
+}
+
+MalValue mal_regexp_create_optional(MalVm *vm, MalString *pattern, MalString *flags) {
+    if ((vm->engine_policy & MAL_ENGINE_POLICY_NO_REGEXP) != 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "RegExp is disabled (engine.regexp is false)");
+        return mal_value_new_undefined();
+    }
+    return mal_regexp_require_engine()->create(vm, pattern, flags);
 }
 
 usize mal_regexp_release_matcher(void *matcher) {

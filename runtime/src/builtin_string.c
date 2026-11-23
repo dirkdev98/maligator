@@ -10,7 +10,7 @@
 
 #include "builtin_intl.h"
 #include "builtin_iterator.h"
-#include "builtin_regexp.h"
+#include "regexp_engine.h"
 #include "ascii.h"
 #include "checked_size.h"
 #include "ecma_whitespace.h"
@@ -3310,7 +3310,7 @@ static int mal_builtin_string_regex_dispatch(
     if (!mal_value_is_object(arg)) {
         return 0;
     }
-    if (mal_regexp_try_exact_string_dispatch(
+    if (mal_value_is_regexp_object(arg) && mal_regexp_require_engine()->exact_string_dispatch(
             vm, arg, symbol_slot, this_value, extra, extra_count, out)) {
         return 1;
     }
@@ -3425,14 +3425,15 @@ static MalValue mal_builtin_string_match_like(MalVm *vm, MalValue this_value, Ma
     roots[1] = mal_value_from_string(pattern);
     MalString *flags = mal_intrinsic_ascii(vm, "");
     pattern = mal_value_to_string(roots[1]);
-    MalValue rx = mal_regexp_create(vm, pattern, flags);
+    const MalRegExpEngine *engine = mal_regexp_require_engine();
+    MalValue rx = engine->create(vm, pattern, flags);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         goto match_like_done;
     }
     roots[2] = rx;
     MalValue s_value = roots[0];
     rx = roots[2];
-    if (mal_regexp_try_exact_string_dispatch(
+    if (engine->exact_string_dispatch(
             vm, rx, symbol_slot, s_value, nullptr, 0, &out)) {
         result = out;
         goto match_like_done;
@@ -3473,7 +3474,8 @@ static MalValue mal_builtin_string_prototype_match_all(MalVm *vm, MalValue this_
     MalValue regexp = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     if (mal_value_is_object(regexp)) {
         MalValue out;
-        if (mal_regexp_try_canonical_match_all(vm, regexp, this_value, &out)) {
+        if (mal_value_is_regexp_object(regexp) &&
+            mal_regexp_require_engine()->canonical_match_all(vm, regexp, this_value, &out)) {
             return out;
         }
         // A non-global RegExp argument is a TypeError (matchAll iterates globally).
@@ -3532,7 +3534,8 @@ static MalValue mal_builtin_string_prototype_match_all(MalVm *vm, MalValue this_
     roots[1] = mal_value_from_string(pattern);
     MalString *flags = mal_intrinsic_ascii(vm, "g");
     pattern = mal_value_to_string(roots[1]);
-    MalValue rx = mal_regexp_create(vm, pattern, flags);
+    const MalRegExpEngine *engine = mal_regexp_require_engine();
+    MalValue rx = engine->create(vm, pattern, flags);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         goto match_all_done;
     }
@@ -3540,7 +3543,7 @@ static MalValue mal_builtin_string_prototype_match_all(MalVm *vm, MalValue this_
     MalValue s_value = roots[0];
     rx = roots[2];
     MalValue out;
-    if (mal_regexp_try_exact_string_dispatch(
+    if (engine->exact_string_dispatch(
             vm, rx, MAL_INTRINSIC_SYMBOL_MATCH_ALL, s_value, nullptr, 0, &out)) {
         result = out;
         goto match_all_done;

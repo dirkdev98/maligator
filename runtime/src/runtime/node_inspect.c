@@ -403,9 +403,9 @@ static void util_fmt_number(MalTextBuffer *out, MalValue value) {
 }
 
 static bool util_fmt_bigint(MalVm *vm, MalTextBuffer *out, MalValue value) {
-    MalValue text = mal_builtin_bigint_to_string_radix(vm, value, 10);
-    if (!mal_value_is_string(text)) return false;
-    mal_text_buffer_append_string(out, mal_value_to_string(text));
+    MalString *text = mal_bigint_operations()->to_string(&vm->heap, mal_value_to_bigint(value), 10);
+    if (text == nullptr) return false;
+    mal_text_buffer_append_string(out, text);
     mal_text_buffer_push(out, 'n');
     return true;
 }

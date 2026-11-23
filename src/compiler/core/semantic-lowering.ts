@@ -33,6 +33,7 @@ import type {
 	DirectEvalPrivateSlot,
 } from "../frontend/direct-eval-context.ts";
 import {
+	BIGINT_INSTALLER,
 	builtinMemberNames,
 	engineComponentInstallers,
 } from "../frontend/engine-components.ts";
@@ -1320,6 +1321,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 		? []
 		: [
 				...slotFreeHostInstallers(program),
+				...(program.bigintConstants.length > 0 ? [BIGINT_INSTALLER] : []),
 				...(runtimeEvalLoader ? [NODE_BUILTIN_LOADER_INSTALLER] : []),
 				...[...linkedBuiltinIds].sort().flatMap((id) => {
 					const module = HOST_MODULES.get(id);

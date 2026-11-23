@@ -1347,6 +1347,7 @@ static void ffi_state_free(MalVm *vm) {
     free(state->scratch_data);
     free(state);
     vm->ffi = nullptr;
+    vm->ffi_callbacks_shutdown = nullptr;
 }
 
 static MalFfiState *ffi_state(MalVm *vm) {
@@ -1357,6 +1358,7 @@ static MalFfiState *ffi_state(MalVm *vm) {
         return nullptr;
     }
     vm->ffi = state;
+    vm->ffi_callbacks_shutdown = mal_ffi_callbacks_shutdown;
     state->accepting_waits = true;
     return state;
 }
