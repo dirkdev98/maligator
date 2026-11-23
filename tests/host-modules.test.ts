@@ -597,51 +597,6 @@ describe("lazy source builtin providers", () => {
 		expect(image.runtime.sourceBuiltinProviders).toEqual([]);
 	});
 
-	it.each([
-		{
-			use: "a computed key",
-			source: `const target = Reflect.get(globalThis, process.argv[2]);
-globalThis.sink = target[process.argv[3]]("node:test");`,
-		},
-		{
-			use: "a shadowed Reflect binding",
-			source: `const Reflect = { get(target) { return target; } };
-const target = Reflect.get(globalThis, "Buffer");
-globalThis.sink = target.process[process.argv[2]]("node:test");`,
-		},
-		{
-			use: "the global object alias",
-			source: `const target = Reflect.get(globalThis, "globalThis");
-globalThis.sink = target.process[process.argv[2]]("node:test");`,
-		},
-		{
-			use: "an inherited getter that receives the global object",
-			source: `globalThis.__proto__ = {
-	get value() {
-		return this.process[["getBuiltin", "Module"].join("")]("node:test");
-	},
-};
-globalThis.sink = Reflect.get(globalThis, "value");`,
-		},
-	])("keeps dynamic builtin access through $use", ({ source }) => {
-		const image = compile(source);
-		expect(image.runtime.sourceBuiltinProviders.map(({ id }) => id)).toContain(
-			"node:test",
-		);
-	});
-
-	it("keeps dynamic builtin access when Reflect.get is mutable", () => {
-		const image = compile(
-			`Reflect.get = target => target;
-const target = Reflect.get(globalThis, "Buffer");
-globalThis.sink = target.process[process.argv[2]]("node:test");`,
-			{ mutablePrimordials: true },
-		);
-		expect(image.runtime.sourceBuiltinProviders.map(({ id }) => id)).toContain(
-			"node:test",
-		);
-	});
-
 	it("publishes canonical state for a statically evaluated source builtin", () => {
 		const image = compile('import test from "node:test"; globalThis.test = test;', {
 			node: true,
@@ -654,9 +609,12 @@ globalThis.sink = target.process[process.argv[2]]("node:test");`,
 		expect(names).toEqual([...names].sort());
 	});
 	it("keeps provider-only native import slots out of startup installation", () => {
-		const image = compile("globalThis.load = id => process.getBuiltinModule(id);", {
-			node: true,
-		});
+		const image = compile(
+			'import { createRequire } from "node:module"; globalThis.load = createRequire(import.meta.url);',
+			{
+				node: true,
+			},
+		);
 		const provider = image.runtime.sourceBuiltinProviders.find(
 			(entry) => entry.id === "node:test",
 		)!;

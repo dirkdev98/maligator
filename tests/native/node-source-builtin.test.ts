@@ -65,11 +65,12 @@ it("loads a source builtin named only by a Function body", () => {
 	const fixture = join(outDir, "function-source-builtin.mjs");
 	writeFileSync(
 		fixture,
-		`const result = Function(\`
-			const require = process.getBuiltinModule("node:module").createRequire("file:///example/main.cjs");
+		`import { createRequire } from "node:module";
+		const require = createRequire("file:///example/main.cjs");
+		const result = Function("require", \`
 			const test = require("node:test");
 			return [typeof test, test === process.getBuiltinModule("node:test")].join(" ");
-		\`)();
+		\`)(require);
 		console.log(result);`,
 	);
 	const pair = buildBackendPairFromOneProgramImage({

@@ -519,10 +519,7 @@ static MalValue mal_process_get_builtin_module(
             "Builtin module id must be a string");
         return mal_value_new_undefined();
     }
-    // The compiler retains a loader by use: the full one links every builtin, so only
-    // a name it cannot see retains it. No loader means no reachable code calls this.
-    if (vm->node_builtin_loader == nullptr) return mal_value_new_undefined();
-    return vm->node_builtin_loader(vm, mal_value_to_string(args[0]));
+    return mal_node_module_get_linked(vm, mal_value_to_string(args[0]));
 }
 
 static MalValue mal_process_umask(

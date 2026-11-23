@@ -69,11 +69,11 @@ it.each(["run", "build"])(
 				`export default { entry: "entry.mjs", engine: { eval: true } };`,
 			);
 			const source = `const path = process.getBuiltinModule('node:path');
-const name = path.basename('/sample/demo');
+const name = path === linkedPath ? path.basename('/sample/demo') : '';
 [/^demo$/.test(name), Buffer.from('é').length, 'e\\u0301'.normalize()].join(' ');`;
 			writeFileSync(
 				join(cwd, "entry.mjs"),
-				`console.log(eval(${JSON.stringify(source)}));`,
+				`import path from "node:path"; const linkedPath = path; console.log(eval(${JSON.stringify(source)}));`,
 			);
 			const output = execFileSync(process.execPath, [cli, command], options);
 			const result =

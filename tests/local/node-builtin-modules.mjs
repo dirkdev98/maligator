@@ -1,4 +1,6 @@
-import Module, { builtinModules, isBuiltin } from "node:module";
+import Module, { builtinModules, createRequire, isBuiltin } from "node:module";
+
+const require = createRequire(import.meta.url);
 
 let coerced = false;
 const invalid = {
@@ -17,7 +19,7 @@ console.log(
 	JSON.stringify({
 		names: builtinModules,
 		loadable: builtinModules.every(
-			(name) => process.getBuiltinModule(name) !== undefined,
+			(name) => require(name) === process.getBuiltinModule(name),
 		),
 		prefixOnly: process.getBuiltinModule("sqlite") === undefined,
 		identity: Module.builtinModules === builtinModules && Module.isBuiltin === isBuiltin,

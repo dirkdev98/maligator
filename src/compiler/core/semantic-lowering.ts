@@ -3,8 +3,8 @@ import type { FfiDirectEntry } from "../../build-config-values.ts";
 import type { PlatformData } from "../../platform/catalog.ts";
 import { debugEnabled, log } from "../../utils.ts";
 import {
-	builtinModuleLoads,
 	GET_BUILTIN_MODULE,
+	literalBuiltinModuleSpecifier,
 	staticMemberKey,
 } from "../frontend/builtin-module-loads.ts";
 import { isPureDataCjsModule } from "../frontend/cjs-exports.ts";
@@ -47,7 +47,6 @@ import {
 	hostInstallerSymbol,
 	NODE_BUILTIN_LOADER_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
-	NODE_INSTALLED_BUILTINS_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
@@ -385,15 +384,8 @@ interface CoreFrontendContext {
 	/** Retain Node's dynamic resolver when a public loader value escapes static lowering. */
 	nodeModuleInstaller: string | null;
 
-	/**
-	 * What reachable code can load through `process.getBuiltinModule`: the installers
-	 * of the literal module names lowering saw, or any module once another use of it,
-	 * or of the process object, is reachable.
-	 */
-	builtinModuleLoads: { readonly installers: Set<string>; any: boolean };
-
-	/** The `node:process` export each of its host bindings stands for. */
-	processExports: ReadonlyMap<Binding, string>;
+	linkedBuiltinIds: Set<string>;
+	getBuiltinModuleBindings: ReadonlySet<Binding>;
 
 	/** Modules whose bindings this image publishes to later images of its program. */
 	moduleExports?: "all" | ReadonlySet<string>;
@@ -1019,8 +1011,8 @@ export function constructSemanticProgramCore(
 		nonRegExpStringCallees: new Set(),
 		languageInstallers: new Set(),
 		nodeModuleInstaller: null,
-		builtinModuleLoads: { installers: new Set(), any: false },
-		processExports: new Map(),
+		linkedBuiltinIds: new Set(),
+		getBuiltinModuleBindings: new Set(),
 		commonJsExportNames: () => [],
 	};
 
@@ -1125,10 +1117,12 @@ export function constructSemanticProgramCore(
 	).map((host) => ({ ...host, retained: runtimeEval }));
 	program.globalObjectReads = linkage.globalObjectReads;
 	program.nonRegExpStringCallees = linkage.nonRegExpStringCallees;
-	program.processExports = new Map(
+	program.getBuiltinModuleBindings = new Set(
 		program.hostModules.flatMap((host) =>
 			host.specifier === "node:process"
-				? host.exports.map((entry) => [entry.binding, entry.name] as const)
+				? host.exports
+						.filter(({ name }) => name === GET_BUILTIN_MODULE)
+						.map(({ binding }) => binding)
 				: [],
 		),
 	);
@@ -1201,36 +1195,6 @@ function processReachable(
 	);
 }
 
-/** Whether `process.getBuiltinModule` may load a module no literal name retained. */
-function builtinModuleLoaderRetained(
-	program: CoreFrontendContext,
-	candidates: ReadonlyArray<CoreHostInstallCandidate>,
-): boolean {
-	return (
-		processReachable(program, candidates) &&
-		(program.builtinModuleLoads.any || program.facts.world.eval === "runtime")
-	);
-}
-
-/**
- * Installers `process.getBuiltinModule` needs. A literal name retains its module's
- * installer, which registers the module with the isolate at startup, and the lookup
- * over registered modules. The full loader links every builtin, so only a name
- * lowering could not see retains it; the node:module installer sets the same loader.
- */
-function builtinModuleInstallers(
-	program: CoreFrontendContext,
-	candidates: ReadonlyArray<CoreHostInstallCandidate>,
-): Array<string> {
-	if (!processReachable(program, candidates)) return [];
-	if (builtinModuleLoaderRetained(program, candidates))
-		return program.nodeModuleInstaller === null ? [NODE_BUILTIN_LOADER_INSTALLER] : [];
-	const installers = [...program.builtinModuleLoads.installers].sort();
-	return installers.length === 0
-		? []
-		: [NODE_INSTALLED_BUILTINS_INSTALLER, ...installers];
-}
-
 /** The internal module whose `watching` export gates forwarding to asset watchers. */
 const ASSET_WATCH_MODULE = "maligator:internal/http";
 
@@ -1263,10 +1227,15 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 			candidate.exports.map((entry) => entry.slot),
 		),
 	);
+	const runtimeEvalLoader = !inheritsHostComponents && nativeRuntimeEval(program);
+	const linkedBuiltinIds = processReachable(program, initialHostCandidates)
+		? program.linkedBuiltinIds
+		: new Set<string>();
 	const runtimeBuiltinLoader =
 		!inheritsHostComponents &&
-		(program.nodeModuleInstaller !== null ||
-			builtinModuleLoaderRetained(program, initialHostCandidates) ||
+		(runtimeEvalLoader ||
+			program.nodeModuleInstaller !== null ||
+			linkedBuiltinIds.has("node:module") ||
 			initialHostCandidates.some(
 				(candidate) =>
 					candidate.installer === hostInstallerSymbol("node:module") &&
@@ -1276,7 +1245,9 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 		.filter(
 			(id) =>
 				program.semantic.graph?.modules.get(id)?.external === undefined &&
-				(runtimeBuiltinLoader || program.compiledModuleInitForPaths.has(id)),
+				(runtimeBuiltinLoader ||
+					linkedBuiltinIds.has(id) ||
+					program.compiledModuleInitForPaths.has(id)),
 		)
 		.map((id) => {
 			const functionIndex = requiredEsmThunk(program, id);
@@ -1292,7 +1263,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 					?.dependencies ?? [])
 					if (dependency.resolvedPath !== null) pending.push(dependency.resolvedPath);
 			}
-			const imports = program.hostModules
+			const imports = (runtimeBuiltinLoader ? program.hostModules : [])
 				.filter((host) => modules.has(host.specifier))
 				.flatMap((host) =>
 					host.exports.flatMap((entry) => {
@@ -1311,7 +1282,12 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 	const reachedHostInstallers = inheritsHostComponents
 		? []
 		: [
-				...slotFreeHostInstallers(program, hostInstallCandidates),
+				...slotFreeHostInstallers(program),
+				...(runtimeEvalLoader ? [NODE_BUILTIN_LOADER_INSTALLER] : []),
+				...[...linkedBuiltinIds].sort().flatMap((id) => {
+					const module = HOST_MODULES.get(id);
+					return module === undefined ? [] : [module.installer];
+				}),
 				...program.languageInstallers,
 				...engineComponentInstallers(
 					program.semantic,
@@ -1403,14 +1379,10 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 	};
 }
 
-function slotFreeHostInstallers(
-	program: CoreFrontendContext,
-	candidates: ReadonlyArray<CoreHostInstallCandidate>,
-): Array<string> {
+function slotFreeHostInstallers(program: CoreFrontendContext): Array<string> {
 	return [program.hostProcess, program.hostBuffer, ...program.hostGlobals]
 		.flatMap((host) => (host?.retained === true ? [host.installer] : []))
-		.concat(program.nodeModuleInstaller ?? [])
-		.concat(builtinModuleInstallers(program, candidates));
+		.concat(program.nodeModuleInstaller ?? []);
 }
 
 /** Source-module cells can be supplied by an earlier image, including its private bindings. */
@@ -3348,8 +3320,6 @@ function emitCjsModuleExports(
 		return destination;
 	}
 	const hostSlot = program.cjsHostSlot.get(cjsPath);
-	// The required process object can be reflected on wherever it flows.
-	if (cjsPath === "node:process") program.builtinModuleLoads.any = true;
 	if (hostSlot !== undefined) {
 		const destination = nextCoreVariable(fn);
 		cursor.block.emitter.emit({
@@ -12659,7 +12629,6 @@ function compileLogicalAssignment(
 
 		identifierBinding = binding;
 		nameHint = assignmentTargetName(assignmentExpression, binding.name);
-		retainProcessIdentifier(program, fn, left, binding);
 		if (identifierUsesDynamicEnvironment(program, fn, left)) {
 			const nameStringIndex = getOrCreateStringConstant(program, left.name);
 			const base = nextCoreVariable(fn);
@@ -17090,7 +17059,8 @@ function compileStaticIdentifier(
 	const globalRead = program.globalObjectReads.get(identifier);
 	if (globalRead === null) retainUnfollowedGlobals(program);
 	else if (globalRead !== undefined) retainNamedHostGlobal(program, globalRead);
-	retainProcessIdentifier(program, fn, identifier, binding);
+	if (program.getBuiltinModuleBindings.has(binding))
+		retainLiteralBuiltinModule(program, fn, identifier);
 
 	if (binding.undeclared && identifierLoadsIntrinsic(program, identifier.name)) {
 		const destination = nextCoreVariable(fn);
@@ -17184,7 +17154,7 @@ function retainHostMember(
 			(member.property.type !== "Literal" || "regex" in member.property))
 	)
 		retainLanguageMember(program, key, program.nonRegExpStringCallees.has(member));
-	if (key === GET_BUILTIN_MODULE) retainBuiltinModuleRead(program, fn, member);
+	if (key === GET_BUILTIN_MODULE) retainLiteralBuiltinModule(program, fn, member);
 	if (member.object.type !== "Identifier") return;
 	const binding = fn.semanticFile.nodeToBinding.get(member.object);
 	if (!binding?.undeclared || !["globalThis", "global"].includes(binding.name)) return;
@@ -17192,7 +17162,6 @@ function retainHostMember(
 		retainUnfollowedGlobals(program);
 		return;
 	}
-	if (key === "process") retainProcessReference(program, fn, member);
 	retainNamedHostGlobal(program, key);
 }
 
@@ -17205,74 +17174,20 @@ function retainNamedHostGlobal(program: CoreFrontendContext, key: string): void 
 	}
 }
 
-/**
- * Retain what a `getBuiltinModule` call can load: the module a literal name
- * canonicalizes to, or any module.
- */
-function retainBuiltinModuleLoad(
-	program: CoreFrontendContext,
-	specifier: string | undefined,
-): void {
-	if (specifier === undefined) {
-		program.builtinModuleLoads.any = true;
-		return;
-	}
-	const id = canonicalNodeHostModuleId(specifier);
-	// Node answers undefined for a name it does not load.
-	if (id === undefined) return;
-	const host = HOST_MODULES.get(id);
-	// A source builtin's provider resolves its own imports through the loader.
-	if (host === undefined) program.builtinModuleLoads.any = true;
-	else program.builtinModuleLoads.installers.add(host.installer);
-}
-
-/** A read of `getBuiltinModule` that a call, a test or any other use observes. */
-function retainBuiltinModuleRead(
+function retainLiteralBuiltinModule(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	read: ESTree.Node,
 ): void {
-	const loads = builtinModuleLoads(fn.semanticFile);
-	if (!loads.tested.has(read))
-		retainBuiltinModuleLoad(program, loads.literalCallees.get(read));
-}
-
-/** Code that can reflect on the process object can call `getBuiltinModule` with any name. */
-function retainProcessReference(
-	program: CoreFrontendContext,
-	fn: CoreFrontendFunction,
-	node: ESTree.Node,
-): void {
-	if (!builtinModuleLoads(fn.semanticFile).followed.has(node))
-		program.builtinModuleLoads.any = true;
-}
-
-/** Classify a read of `process`, `node:process` or one of its namespaces. */
-function retainProcessIdentifier(
-	program: CoreFrontendContext,
-	fn: CoreFrontendFunction,
-	identifier: ESTree.Identifier,
-	binding: Binding,
-): void {
-	const member = program.namespaceMembers.get(binding)?.get(GET_BUILTIN_MODULE);
-	const exported =
-		program.processExports.get(binding) ??
-		(member !== undefined && program.processExports.get(member) === GET_BUILTIN_MODULE
-			? "*"
-			: undefined);
-	if (exported === GET_BUILTIN_MODULE) retainBuiltinModuleRead(program, fn, identifier);
-	else if (
-		exported === "default" ||
-		exported === "*" ||
-		(binding.undeclared === true && binding.name === "process")
-	)
-		retainProcessReference(program, fn, identifier);
+	const specifier = literalBuiltinModuleSpecifier(fn.semanticFile, read);
+	if (specifier === undefined) return;
+	const id = canonicalNodeHostModuleId(specifier);
+	if (id !== undefined) program.linkedBuiltinIds.add(id);
 }
 
 /** Retain every global that code reading the global object by a computed key may observe. */
 function retainUnfollowedGlobals(program: CoreFrontendContext): void {
 	retainUnfollowedLanguageMembers(program);
-	program.builtinModuleLoads.any = true;
 	if (program.hostProcess) program.hostProcess.retained = true;
 	if (program.hostBuffer) program.hostBuffer.retained = true;
 	for (const host of program.hostGlobals) host.retained = true;

@@ -11,7 +11,6 @@ import {
 	hostInstallerSymbol,
 	NODE_BUILTIN_LOADER_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
-	NODE_INSTALLED_BUILTINS_INSTALLER,
 	NODE_PERSONALITY_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
 	REGEXP_INSTALLER,
@@ -274,10 +273,9 @@ describe("process.getBuiltinModule retention", () => {
 			"a call of the named export",
 			`import { getBuiltinModule } from "node:process";\nglobalThis.sink = getBuiltinModule("os");`,
 		],
-	])("installs the module %s names and the lookup, not the loader", (_name, source) => {
+	])("installs only the builtin %s names", (_name, source) => {
 		const installs = manifest(`${source}\n`, defaultConfig);
 		expect(installs.has(os)).toBe(true);
-		expect(installs.has(NODE_INSTALLED_BUILTINS_INSTALLER)).toBe(true);
 		expect(installs.has(NODE_BUILTIN_LOADER_INSTALLER)).toBe(false);
 	});
 
@@ -315,9 +313,10 @@ describe("process.getBuiltinModule retention", () => {
 			`(() => { const { getBuiltinModule } = process; return getBuiltinModule("os"); })()`,
 		],
 		["a computed global object read", `globalThis[process.argv[2]]`],
-	])("installs the loader for %s", (_name, load) => {
+	])("does not add builtin modules for %s", (_name, load) => {
 		const installs = manifest(`globalThis.sink = ${load};\n`, defaultConfig);
-		expect(installs.has(NODE_BUILTIN_LOADER_INSTALLER)).toBe(true);
+		expect(installs.has(os)).toBe(false);
+		expect(installs.has(NODE_BUILTIN_LOADER_INSTALLER)).toBe(false);
 	});
 
 	it("installs the loader when runtime eval can name any module", () => {

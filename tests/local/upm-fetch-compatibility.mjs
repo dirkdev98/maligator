@@ -1,5 +1,7 @@
 import http from "node:http";
+import { createRequire } from "node:module";
 
+const require = createRequire(import.meta.url);
 for (const id of [
 	"assert",
 	"assert/strict",
@@ -39,8 +41,9 @@ for (const id of [
 	"worker_threads",
 	"zlib",
 ]) {
+	const expected = require(id);
 	const module = globalThis.process.getBuiltinModule(id);
-	if (!module || module !== globalThis.process.getBuiltinModule("node:" + id))
+	if (module !== expected || module !== globalThis.process.getBuiltinModule("node:" + id))
 		throw new Error("Builtin alias identity: " + id);
 }
 if (

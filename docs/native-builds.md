@@ -115,6 +115,14 @@ continues with a valid `-O2` executable. Missing required C2x or C++ link capabi
 is a hard error. Stripping does not remove Maligator's own JavaScript source-position
 tables.
 
+## Builtin lookup
+
+Use a literal specifier in a `process.getBuiltinModule` call in your application
+source to link that builtin. A computed name can find a builtin already available
+in the program. It returns `undefined` when the module is unavailable. Import
+the module's default export or add a literal call when a computed name needs it.
+The `node:module` API can load fresh builtins through `createRequire`.
+
 ## Development runner
 
 `run`, `dev`, and `test` skip toolchain discovery when a packaged runner matches

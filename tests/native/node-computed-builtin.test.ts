@@ -16,6 +16,7 @@ const fixtures = {
 	selective: "tests/local/node-link-cjs-computed.cjs",
 	eval: "tests/local/node-computed-builtin-eval.cjs",
 	literal: "tests/local/node-literal-builtin.mjs",
+	unlinked: "tests/local/node-link-builtin-computed.mjs",
 	receiverOverride: "tests/local/node-builtin-receiver-override.cjs",
 };
 const outDir = mkdtempSync(join(tmpdir(), "mal-node-computed-"));
@@ -67,7 +68,7 @@ describe("native builtin loading", () => {
 				}),
 			);
 	});
-	it("rejects computed wrapper require even with the builtin loader installed", () =>
+	it("rejects computed wrapper require for a linked builtin", () =>
 		verify("commonjs", ["node:os"], "TypeError: dynamic require is not supported\n"));
 	it.each(["os", "node:os", "node:assert/strict", "node:sqlite"])(
 		"loads a fresh %s through createRequire and shares the builtin cache",
@@ -79,6 +80,9 @@ describe("native builtin loading", () => {
 		verify("eval", ["node:os"], "TypeError: dynamic require is not supported\n"));
 	it("loads literal getBuiltinModule names without the builtin loader", () =>
 		compare("literal", []));
-	it("loads a builtin from the process receiver of an overridden listener method", () =>
-		compare("receiverOverride", ["getBuiltinModule"]));
+	it.each(["node:os", "node:test"])("does not load an unlinked %s", (id) =>
+		verify("unlinked", ["getBuiltinModule", id], "undefined\n"),
+	);
+	it("loads a linked builtin from an overridden listener method's receiver", () =>
+		compare("receiverOverride", ["getBuiltinModule", "node:os"]));
 });

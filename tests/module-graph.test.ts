@@ -54,11 +54,11 @@ test("keeps the bare test package separate from the prefix-only builtin", () => 
 	expect(graph.modules.has("node:test")).toBe(false);
 });
 
-test("retains runtime source providers without adding eager evaluation edges", () => {
+test("retains a literal source builtin without adding an eager evaluation edge", () => {
 	const entry = path.join(root, "lazy-source-provider.mjs");
 	write(
 		"lazy-source-provider.mjs",
-		"globalThis.load = id => process.getBuiltinModule(id);",
+		'globalThis.load = () => process.getBuiltinModule("node:test");',
 	);
 	const graph = buildModuleGraph(entry, { buildConfig: defaultConfig });
 	expect(graph.sourceBuiltinProviders).toContain("node:test");
@@ -74,7 +74,10 @@ test.each([
 	["identity-static.mjs", 'import { test } from "node:test"; globalThis.test = test;'],
 	["identity-dynamic.mjs", 'globalThis.test = import("node:test");'],
 	["identity-required.cjs", 'module.exports = require("node:test");'],
-	["identity-computed.mjs", "globalThis.load = id => process.getBuiltinModule(id);"],
+	[
+		"identity-builtin-call.mjs",
+		'globalThis.load = () => process.getBuiltinModule("node:test");',
+	],
 ])(
 	"parses bundled TypeScript with an identity application stripper through %s",
 	(file, source) => {
@@ -97,7 +100,10 @@ test.each(["worker", "dynamic", "required"] as const)(
 			root,
 			`provider-${kind}-child.${kind === "required" ? "cjs" : "mjs"}`,
 		);
-		write(path.basename(child), "globalThis.load = id => process.getBuiltinModule(id);");
+		write(
+			path.basename(child),
+			'globalThis.load = () => process.getBuiltinModule("node:test");',
+		);
 		write(
 			path.basename(entry),
 			kind === "worker"

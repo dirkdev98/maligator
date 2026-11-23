@@ -211,9 +211,11 @@ module.exports = { parts, data: require("./data.json"), later: () => require("./
 						? `exports.answer = require("./data.json").answer;\n`
 						: "";
 		const sourceBuiltin =
-			index === 0 || index === 9
-				? "exports.testBuiltin = process.getBuiltinModule(process.argv[2]);\n"
-				: "";
+			index === 0
+				? 'exports.testBuiltin = process.getBuiltinModule("node:test");\n'
+				: index === 9
+					? "exports.testBuiltin = process.getBuiltinModule(process.argv[2]);\n"
+					: "";
 		write(
 			path.join(packageRoot, `part${index}.js`),
 			`globalThis.order.push("part${index}");\n${body}${sourceBuiltin}exports.index = ${index};\n${padding(index === 3 || index === 4 ? 100 : 20)}`,

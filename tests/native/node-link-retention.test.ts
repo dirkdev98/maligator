@@ -8,7 +8,6 @@ import {
 	HOST_MODULES,
 	NODE_BUILTIN_LOADER_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
-	NODE_INSTALLED_BUILTINS_INSTALLER,
 	NODE_PERSONALITY_INSTALLER,
 } from "../../src/compiler/frontend/host-modules.ts";
 import { buildNativeBinary, HOST_MAIN } from "../../src/test-harness.ts";
@@ -106,7 +105,6 @@ describe("node host installer link retention", () => {
 			BUFFER_INSTALLER_SYMBOL,
 			...HOST_GLOBAL_INSTALLERS.map(({ installer }) => installer),
 			NODE_BUILTIN_LOADER_INSTALLER,
-			NODE_INSTALLED_BUILTINS_INSTALLER,
 			BUILTIN_REGISTRY_LOOKUP,
 			"mal_host_install_maligator_internal_workers",
 		]);
@@ -143,28 +141,26 @@ describe("node host installer link retention", () => {
 		expect(processInstallers).not.toContain("mal_host_install_node_os");
 		expect(processInstallers).not.toContain("mal_host_install_node_sqlite");
 		expect(processInstallers).not.toContain(NODE_BUILTIN_LOADER_INSTALLER);
-		expect(processInstallers).not.toContain(NODE_INSTALLED_BUILTINS_INSTALLER);
 		expect(processInstallers).not.toContain(BUILTIN_REGISTRY_LOOKUP);
 	});
 
 	it("links only the module a literal getBuiltinModule call names", () => {
 		expect(literalBuiltinInstallers).toEqual(
-			withInstallers(
-				processInstallers,
-				NODE_INSTALLED_BUILTINS_INSTALLER,
-				"mal_host_install_node_os",
-			),
+			withInstallers(processInstallers, "mal_host_install_node_os"),
 		);
 	});
 
-	it("retains every builtin installer for a computed getBuiltinModule name", () => {
-		expect(computedBuiltinInstallers).toEqual(
-			expect.arrayContaining([
-				NODE_BUILTIN_LOADER_INSTALLER,
-				BUILTIN_REGISTRY_LOOKUP,
-				...MODULE_INSTALLERS,
-			]),
-		);
+	it("omits the registry when getBuiltinModule receives a computed name", () => {
+		const builtinInstallers = new Set([
+			...MODULE_INSTALLERS,
+			NODE_BUILTIN_LOADER_INSTALLER,
+			BUILTIN_REGISTRY_LOOKUP,
+		]);
+		expect(
+			computedBuiltinInstallers.filter(
+				(name) => builtinInstallers.has(name) && !processInstallers.includes(name),
+			),
+		).toEqual([]);
 	});
 
 	it("keeps literal CommonJS builtin loading selective", () => {
@@ -175,7 +171,6 @@ describe("node host installer link retention", () => {
 		const builtinInstallers = new Set([
 			...MODULE_INSTALLERS,
 			NODE_BUILTIN_LOADER_INSTALLER,
-			NODE_INSTALLED_BUILTINS_INSTALLER,
 			BUILTIN_REGISTRY_LOOKUP,
 		]);
 		expect(computedCjsInstallers.filter((name) => builtinInstallers.has(name))).toEqual(

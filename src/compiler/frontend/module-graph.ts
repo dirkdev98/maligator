@@ -11,6 +11,7 @@ import { PLATFORM_MODULES, lookupPlatformModule } from "../../platform/catalog.t
 import type { Execution } from "../../platform/execution.ts";
 import { executionData } from "../../platform/execution.ts";
 import { EMBED_INSTALLER } from "../shared/embedded-asset.ts";
+import { literalBuiltinModuleCall } from "./builtin-module-loads.ts";
 import { stripCompactTypes } from "./compact-type-strip.ts";
 import { moduleCreateRequireDeclarators } from "./create-require.ts";
 import {
@@ -1154,15 +1155,14 @@ export function buildModuleGraph(
 		options.goalOverride ?? options.entryGoal ?? detectDependencyGoal(entry, ctx),
 		options.entrySource,
 	);
-	let sourceBuiltinLookup = false;
+	let loadAllSourceBuiltins = options.buildConfig?.engine.eval === true;
 	const scannedSourceModules = new Set<string>();
 	const loadRuntimeSourceProviders = (): boolean => {
-		if (sourceBuiltinLookup || wasmTarget !== undefined) return false;
+		if (wasmTarget !== undefined) return false;
 		const count = modules.size;
-		// Runtime-generated source can load a builtin absent from every parsed module.
-		sourceBuiltinLookup = options.buildConfig?.engine.eval === true;
+		const needed = new Set<string>();
 		for (const record of modules.values()) {
-			if (sourceBuiltinLookup) break;
+			if (loadAllSourceBuiltins) break;
 			if (
 				record.host !== undefined ||
 				SOURCE_HOST_MODULES.has(record.path) ||
@@ -1174,49 +1174,26 @@ export function buildModuleGraph(
 				record.dependencies.some(
 					(dependency) =>
 						dependency.resolvedPath === "node:module" ||
-						dependency.resolvedPath === "node:process" ||
-						(dependency.specifier === null &&
-							(dependency.kind === "require" || dependency.kind === "dynamic")),
+						(dependency.specifier === null && dependency.kind === "dynamic"),
 				)
 			) {
-				sourceBuiltinLookup = true;
+				loadAllSourceBuiltins = true;
 				break;
 			}
-			traverseEstree([record.parsed.ast], (node, { parent, key }) => {
-				if (sourceBuiltinLookup || node.type !== "Identifier") return;
-				if (parent?.type === "MemberExpression" && key === "property" && !parent.computed)
-					return;
-				if (node.name === "process" || node.name === "global" || node.name === "eval") {
-					sourceBuiltinLookup = true;
-				} else if (node.name === "require") {
-					const argument =
-						parent?.type === "CallExpression" && key === "callee"
-							? parent.arguments[0]
-							: undefined;
-					if (argument?.type !== "Literal" || typeof argument.value !== "string")
-						sourceBuiltinLookup = true;
-				} else if (node.name === "globalThis") {
-					if (parent?.type !== "MemberExpression" || key !== "object")
-						sourceBuiltinLookup = true;
-					else if (!parent.computed && parent.property.type === "Identifier") {
-						if (parent.property.name === "process" || parent.property.name === "global")
-							sourceBuiltinLookup = true;
-					} else if (
-						parent.property.type !== "Literal" ||
-						typeof parent.property.value !== "string" ||
-						parent.property.value === "process" ||
-						parent.property.value === "global"
-					)
-						sourceBuiltinLookup = true;
-				}
+			traverseEstree(record.parsed.ast, (node) => {
+				if (node.type !== "CallExpression") return;
+				const specifier = literalBuiltinModuleCall(node);
+				if (specifier === "module" || specifier === "node:module")
+					loadAllSourceBuiltins = true;
+				else if (specifier !== undefined && SOURCE_HOST_MODULES.has(specifier))
+					needed.add(specifier);
 			});
 		}
-		if (sourceBuiltinLookup)
-			for (const id of SOURCE_HOST_MODULES.keys()) {
-				if (modules.has(id)) continue;
-				const source = virtualModule(id)!;
-				load(id, source.goal ?? "module", source.source, true);
-			}
+		for (const id of loadAllSourceBuiltins ? SOURCE_HOST_MODULES.keys() : needed) {
+			if (modules.has(id)) continue;
+			const source = virtualModule(id)!;
+			load(id, source.goal ?? "module", source.source, true);
+		}
 		return modules.size !== count;
 	};
 	for (const root of options.requiredRoots ?? []) {

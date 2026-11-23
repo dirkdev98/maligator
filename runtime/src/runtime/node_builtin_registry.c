@@ -63,38 +63,7 @@ MalValue mal_node_module_get_builtin(MalVm *vm, MalString *name) {
         if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
         return mal_node_module_get_cached(vm, id);
     }
-    const MalRuntimeImage *image = vm->runtime_image;
-    for (i32 i = 0; i < image->source_builtin_provider_count; i++) {
-        const MalSourceBuiltinProvider provider = image->source_builtin_providers[i];
-        if (!mal_string_equals_ascii(name, provider.id)) continue;
-        MalValue cached = mal_node_module_get_cached(vm, provider.id);
-        if (!mal_value_is_undefined(cached)) return cached;
-        for (i32 entry = 0; entry < provider.import_count; entry++) {
-            const MalSourceBuiltinImport *import = &provider.imports[entry];
-            MalValue dependency = mal_node_module_get_builtin(vm, mal_intrinsic_ascii(vm, (const byte *) import->module_id));
-            if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
-            if (mal_value_is_undefined(dependency)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "source builtin dependency is unavailable");
-                return mal_value_new_undefined();
-            }
-            MalHostInstallSlot slot = {.name = import->name, .slot = import->slot};
-            mal_node_module_publish(vm, import->module_id, &slot, 1, dependency);
-        }
-        // Function creation stamps the active realm; module state lives in that realm's globals.
-        MalValue factory = mal_vm_op_create_function(vm, provider.function_index, nullptr);
-        if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
-        MalRootSpan root;
-        mal_gc_root(&root, &factory, 1);
-        MalCompletion result = mal_vm_call_value(vm, factory, mal_value_new_undefined(), nullptr, 0);
-        mal_gc_unroot(&root);
-        if (result.kind == MAL_COMPLETION_THROW) {
-            vm->completion = result;
-            return mal_value_new_undefined();
-        }
-        mal_node_module_publish(vm, provider.id, nullptr, 0, result.value);
-        return result.value;
-    }
-    return mal_value_new_undefined();
+    return mal_node_module_get_source_builtin(vm, name);
 }
 
 void mal_host_install_node_builtin_loader(
