@@ -3,6 +3,7 @@ import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "../core/core-constructor-layout.ts";
 import {
 	DATE_INSTALLER,
+	DISPOSABLE_STACK_INSTALLER,
 	INTRINSIC_INSTALLERS,
 	JSON_INSTALLER,
 	MAP_INSTALLER,
@@ -3947,6 +3948,7 @@ function buildHostInstalls(
 			link.kind === "binding" ? [link.slot] : [],
 		),
 	);
+	let usesDisposalCapability = false;
 	for (const fn of functions) {
 		for (const instruction of fn.instructions) {
 			if (instruction.opcode === "LOAD_GLOBAL") {
@@ -3957,6 +3959,11 @@ function buildHostInstalls(
 				}
 			} else if (instruction.opcode === "CREATE_TEMPLATE_OBJECT") {
 				readGlobalSlots.add(instruction.cacheSlot);
+			} else if (
+				instruction.opcode === "LOAD_INTRINSIC" &&
+				instruction.intrinsic === "__newDisposeCapability"
+			) {
+				usesDisposalCapability = true;
 			}
 		}
 	}
@@ -4039,6 +4046,7 @@ function buildHostInstalls(
 			continue;
 		installFor(installer);
 	}
+	if (usesDisposalCapability) installFor(DISPOSABLE_STACK_INSTALLER);
 	if (
 		usesNode &&
 		!hasBufferModule &&

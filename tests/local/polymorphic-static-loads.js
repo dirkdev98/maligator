@@ -35,15 +35,19 @@ function read(row) {
 }
 
 const results = [];
+// Each width sees every shape repeatedly even when GC collects at every safepoint.
+const rowCount = 128;
 for (const width of [2, 3, 4, 8]) {
-	const rows = Array.from({ length: 4096 }, (_, index) => makers[index % width](index));
+	const rows = Array.from({ length: rowCount }, (_, index) =>
+		makers[index % width](index),
+	);
 	let matches = 0;
 	for (let round = 0; round < 4; round++) {
 		for (let index = 0; index < rows.length; index++) {
 			if (expectations[index % width](read(rows[index]), index)) matches++;
 		}
 	}
-	results.push([`${width} alternating shapes`, matches === 4 * 4096]);
+	results.push([`${width} alternating shapes`, matches === 4 * rowCount]);
 }
 
 const mutable = [

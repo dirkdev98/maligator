@@ -841,7 +841,10 @@ function prepareCommandState(
 				: hostExecutionTarget(process.platform, process.arch),
 	});
 	const compilerDiagnostics = command.kind === "build" && command.internal.dumpCore;
-	const relocatable = interpreted || developmentFragments;
+	const relocatable =
+		interpreted ||
+		developmentFragments ||
+		(command.kind === "build" && command.internal.serializePath !== undefined);
 	const compilerPhases: Array<{ phase: string; durationMs: number }> = [];
 	const frontendOptions: CompileBuildFrontendOptions = {
 		platformSourceRoot: context.installation.platformSourceRoot,

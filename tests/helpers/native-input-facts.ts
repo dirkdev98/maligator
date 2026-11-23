@@ -1,3 +1,7 @@
+import {
+	MAP_INSTALLER,
+	SET_INSTALLER,
+} from "../../src/compiler/frontend/engine-components.ts";
 import type {
 	NativeFunctionPlan,
 	ProgramImage,
@@ -409,7 +413,10 @@ export function inputFactsFixture(): { image: ProgramImage; expected: Array<stri
 		sourcePositions: [],
 		cjsModuleFunctionIndices: [],
 		sourceBuiltinProviders: [],
-		hostInstalls: [],
+		hostInstalls: [
+			{ installer: MAP_INSTALLER, exports: [] },
+			{ installer: SET_INSTALLER, exports: [] },
+		],
 	});
 	image = withNativeFunctionPlan(image, 0, (plan) => {
 		const nativeInstructions = [...plan.instructions];

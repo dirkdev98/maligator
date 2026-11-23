@@ -20,6 +20,7 @@ export const DATE_INSTALLER = "mal_host_install_intrinsic_date";
 export const MAP_INSTALLER = "mal_host_install_intrinsic_map";
 export const SET_INSTALLER = "mal_host_install_intrinsic_set";
 export const JSON_INSTALLER = "mal_host_install_intrinsic_json";
+export const DISPOSABLE_STACK_INSTALLER = "mal_host_install_intrinsic_disposable_stack";
 
 export const INTRINSIC_FAMILIES: ReadonlyMap<string, string> = new Map([
 	["Map", MAP_INSTALLER],
@@ -28,8 +29,8 @@ export const INTRINSIC_FAMILIES: ReadonlyMap<string, string> = new Map([
 	["WeakSet", SET_INSTALLER],
 	["WeakRef", "mal_host_install_intrinsic_weak_ref"],
 	["FinalizationRegistry", "mal_host_install_intrinsic_finalization_registry"],
-	["DisposableStack", "mal_host_install_intrinsic_disposable_stack"],
-	["AsyncDisposableStack", "mal_host_install_intrinsic_disposable_stack"],
+	["DisposableStack", DISPOSABLE_STACK_INSTALLER],
+	["AsyncDisposableStack", DISPOSABLE_STACK_INSTALLER],
 	["Math", "mal_host_install_intrinsic_math"],
 	["JSON", JSON_INSTALLER],
 	["Atomics", "mal_host_install_intrinsic_atomics"],
