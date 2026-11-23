@@ -968,15 +968,7 @@ function prepareCommandState(
 		if (!relocatable && nativeHostInstalls === undefined)
 			throw new Error("native frontend is missing host installers");
 		const hostInstalls = nativeHostInstalls ?? [];
-		const embedDeclarations =
-			nativeHostInstalls === undefined
-				? embedDeclarationsOfWires([
-						...(frontend.wires ?? [frontend.wire]),
-						...frontend.workerImages.map((worker) => worker.wire),
-					])
-				: embedDeclarationsOf(
-						hostInstalls.map((installers) => ({ hostInstalls: installers })),
-					);
+		const { embedDeclarations } = frontend;
 		const declared = embedDeclarations.length === 0 ? {} : { embedDeclarations };
 		if (serializePath !== undefined && embedDeclarations.length > 0)
 			commandError("error: embedded assets are not supported by portable wire output");

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
+import { embedDeclarationsOf, embedDeclarationsOfWires } from "./assets.ts";
 import { writeFileAtomically } from "./atomic-file.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
@@ -19,6 +20,7 @@ import type { CoreInstrumentationMode } from "./compiler/core/core-optimization-
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/analyze-module-graph.ts";
 import { certifyProgramClosure } from "./compiler/frontend/certify-closure.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
+import type { EmbedDeclaration } from "./compiler/frontend/embed-declarations.ts";
 import { SOURCE_HOST_MODULES } from "./compiler/frontend/host-modules.ts";
 import type {
 	BuildModuleGraphOptions,
@@ -59,6 +61,7 @@ import type {
 	CompilerProgramFacts,
 	ProgramClosureCertificate,
 } from "./compiler/shared/compiler-facts.ts";
+import { EMBED_INSTALLER } from "./compiler/shared/embedded-asset.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeProgramImageArtifacts,
@@ -96,7 +99,7 @@ import {
 } from "./worker-image-cache.ts";
 import type { WorkerImageArtifact } from "./worker-image-cache.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 15;
+const BUILD_FRONTEND_CACHE_SCHEMA = 16;
 const BUILD_FRONTEND_PIPELINE_VERSION = 7;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
@@ -124,6 +127,7 @@ interface BuildFrontendManifest {
 	watchProxyCommand?: Execution["command"] | null;
 	resolutionInputs: Array<ModuleResolutionInput>;
 	workerArtifacts: Array<WorkerImageArtifact>;
+	embedDeclarations: Array<EmbedDeclaration>;
 	optimizationDetails?: CompiledBuildFrontend["optimizationDetails"];
 	nativeHostInstalls?: CompiledBuildFrontend["nativeHostInstalls"];
 	identity: string;
@@ -166,6 +170,7 @@ export interface BuildFrontendPhases {
 
 export interface CompiledBuildFrontend {
 	workerImages: ReadonlyArray<CompiledWorkerImage>;
+	embedDeclarations: Array<EmbedDeclaration>;
 	programImage: ProgramImage;
 	/** Installers for whole native images in entrypoint, then worker order. */
 	nativeHostInstalls?: ReadonlyArray<RuntimeImage["hostInstalls"]>;
@@ -456,6 +461,7 @@ function loadCached(
 ):
 	| {
 			workerImages: ReadonlyArray<CompiledWorkerImage>;
+			embedDeclarations: Array<EmbedDeclaration>;
 			programImage: ProgramImage;
 			nativeHostInstalls?: CompiledBuildFrontend["nativeHostInstalls"];
 			nativeImageIdentity?: string;
@@ -488,6 +494,14 @@ function loadCached(
 			(!validArtifactIdentity(manifest.compilerArtifact) ||
 				!compilerArtifactUnchanged(manifest.compilerArtifact, artifactRoot))) ||
 		!workerImageArtifactsUnchanged(manifest.workerArtifacts, artifactRoot) ||
+		!Array.isArray(manifest.embedDeclarations) ||
+		!manifest.embedDeclarations.every(
+			(declaration) =>
+				(declaration?.kind === "file" || declaration?.kind === "directory") &&
+				typeof declaration.name === "string" &&
+				typeof declaration.path === "string" &&
+				path.isAbsolute(declaration.path),
+		) ||
 		(relocatable
 			? manifest.nativeHostInstalls !== undefined
 			: manifest.compilerArtifact === undefined ||
@@ -551,6 +565,7 @@ function loadCached(
 				manifest.closure.openings,
 			),
 			workerImages: restoreWorkerImages(manifest.workerArtifacts, artifactRoot),
+			embedDeclarations: manifest.embedDeclarations,
 			nativeHostInstalls: manifest.nativeHostInstalls,
 			nativeImageIdentity: nativeImageIdentity(
 				manifest.compilerArtifact,
@@ -835,6 +850,7 @@ function prepareBuildFrontend(
 				kind: "cached",
 				value: {
 					workerImages: cached.workerImages,
+					embedDeclarations: cached.embedDeclarations,
 					nativeHostInstalls: cached.nativeHostInstalls,
 					nativeImageIdentity: cached.nativeImageIdentity,
 					get programImage() {
@@ -892,6 +908,12 @@ function prepareBuildFrontend(
 	const readsExecution =
 		graphReadsExecution(builtGraph) || (builtGraph.workerEntries?.length ?? 0) > 0;
 	const proxyCommand = watchProxyCommand(builtGraph, options.execution);
+	// A worker root can install assets which its owner's graph never traverses.
+	const mayEmbedAssets =
+		(builtGraph.workerEntries?.length ?? 0) > 0 ||
+		[...builtGraph.modules.values()].some(
+			({ host }) => host?.installer === EMBED_INSTALLER,
+		);
 	const workerRoots = {
 		entry: builtGraph.entry,
 		workerEntries: builtGraph.workerEntries,
@@ -1168,6 +1190,18 @@ function prepareBuildFrontend(
 			(runtimeArtifacts.length === 1 && compilerArtifact !== undefined
 				? [compilerArtifact]
 				: undefined);
+		const materializeWires = () => (wires ??= loadFragmentWires!());
+		const embedDeclarations =
+			nativeHostInstalls !== undefined
+				? embedDeclarationsOf(
+						nativeHostInstalls.map((hostInstalls) => ({ hostInstalls })),
+					)
+				: mayEmbedAssets
+					? embedDeclarationsOfWires([
+							...materializeWires(),
+							...workerImages.map((worker) => worker.wire),
+						])
+					: [];
 		// A forced compile builds one image where fragments apply; publishing it would
 		// hand later unforced builds a different program shape under the same identity.
 		if (!liveProfile && (!forceCompile || !fragmentsApply))
@@ -1189,6 +1223,7 @@ function prepareBuildFrontend(
 						? {}
 						: { fragmentCompilerArtifacts }),
 					workerArtifacts,
+					embedDeclarations,
 					nativeHostInstalls,
 					...(compilerArtifact === undefined ? {} : { compilerArtifact }),
 					imageStats,
@@ -1200,9 +1235,9 @@ function prepareBuildFrontend(
 				} satisfies BuildFrontendManifest)}\n`,
 			);
 
-		const materializeWires = () => (wires ??= loadFragmentWires!());
 		return {
 			workerImages,
+			embedDeclarations,
 			nativeHostInstalls,
 			nativeImageIdentity: nativeImageIdentity(compilerArtifact, workerArtifacts),
 			get programImage() {

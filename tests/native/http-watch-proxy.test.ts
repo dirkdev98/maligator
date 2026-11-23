@@ -74,25 +74,29 @@ await server.close();
 			'export default { entry: "main.mjs" };\n',
 		);
 
-		const result = spawnSync(
-			process.execPath,
-			[
-				path.join(repositoryRoot, "src/index.ts"),
-				"run",
-				"--config",
-				path.join(project, "maligator.build.ts"),
-			],
-			{ cwd: project, env: process.env, encoding: "utf-8", timeout: 240_000 },
-		);
+		for (const phase of ["cold", "warm"]) {
+			const result = spawnSync(
+				process.execPath,
+				[
+					path.join(repositoryRoot, "src/index.ts"),
+					"run",
+					"--verbose",
+					"--config",
+					path.join(project, "maligator.build.ts"),
+				],
+				{ cwd: project, env: process.env, encoding: "utf-8", timeout: 240_000 },
+			);
 
-		expect(result.status, result.stderr || result.stdout).toBe(0);
-		const output = result.stdout.trim().split("\n").at(-1)!;
-		expect(JSON.parse(output)).toEqual({
-			page: "GET /page?x=1 ",
-			header: "watch",
-			missing: 404,
-			posted: "POST /echo hello",
-		});
+			expect(result.status, result.stderr || result.stdout).toBe(0);
+			if (phase === "warm") expect(result.stderr).toContain("Frontend cache: hit");
+			const output = result.stdout.trim().split("\n").at(-1)!;
+			expect(JSON.parse(output)).toEqual({
+				page: "GET /page?x=1 ",
+				header: "watch",
+				missing: 404,
+				posted: "POST /echo hello",
+			});
+		}
 	}, 300_000);
 
 	it("uses the watcher only for the command that starts it when switching a warm cache", async () => {
