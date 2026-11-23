@@ -640,8 +640,8 @@ MalSerializedValue *mal_serialize(
         return nullptr;
     }
     snap->hooks = hooks;
-    MalValue memo = mal_value_from_map_object(mal_map_object_new(
-        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE])));
+    // This identity table never escapes to JavaScript, including in realms without Map.
+    MalValue memo = mal_value_from_map_object(mal_map_object_new(&vm->heap, nullptr));
     MalValue roots[3] = {value, transfer_list, memo};
     MalRootSpan span;
     mal_gc_root(&span, roots, 3);
