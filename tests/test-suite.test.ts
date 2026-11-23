@@ -343,6 +343,43 @@ describe("test suite planner", () => {
 		expect(plan("--lane", "sanitizer", "--shard", "2/3")).toEqual(shards[1]);
 	});
 
+	it("allocates sanitizer files and nested builds within the requested worker budget", () => {
+		const plan = JSON.parse(
+			runSuite(
+				"full",
+				"--native-remainder",
+				"--lane",
+				"sanitizer",
+				"--workers",
+				"3",
+				"--sanitizer-workers",
+				"2",
+				"--plan=json",
+			),
+		) as {
+			workers: number;
+			stages: Array<{
+				files: Array<string>;
+				workers: unknown;
+				environment: Record<string, string>;
+			}>;
+		};
+		const [stage] = plan.stages;
+		expect(stage!.files.length).toBeGreaterThan(1);
+		const testWorkers = Math.min(plan.workers, 2);
+		const childBuildJobs = Math.floor(plan.workers / testWorkers);
+		expect(stage!.workers).toEqual({
+			testWorkers,
+			childBuildJobs,
+			preparationBuildJobs: plan.workers,
+		});
+		expect(stage!.environment).toMatchObject({
+			MAL_SANITIZER_WORKERS: String(testWorkers),
+			MAL_BUILD_JOBS: String(childBuildJobs),
+			CARGO_BUILD_JOBS: String(childBuildJobs),
+		});
+	});
+
 	it("selects the complete native remainder without repeating check or standards coverage", () => {
 		const filesIn = (...args: Array<string>) => {
 			const plan = JSON.parse(runSuite(...args, "--plan=json")) as {

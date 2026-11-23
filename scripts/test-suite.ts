@@ -127,6 +127,7 @@ Options:
   --shard INDEX/COUNT     run one duration-balanced part of the selected --lane
   --test262-baseline PATH  explicit Test262 comparison input for every standards stage
   --workers N             total worker budget (default: half the available CPUs)
+  --sanitizer-workers N   concurrent sanitizer test files within that budget
   --list                  print the exact commands without running them
   --plan=json             print commands and environment requirements as JSON
   -h, --help              show this help
@@ -150,6 +151,7 @@ function parseArguments(): {
 	shard?: ShardRequest;
 	test262Baseline?: string;
 	workers: number;
+	sanitizerWorkers?: number;
 } {
 	let tier: Tier = "check";
 	let tierSeen = false;
@@ -163,6 +165,7 @@ function parseArguments(): {
 	let shard: ShardRequest | undefined;
 	let test262Baseline: string | undefined;
 	let workers: number | undefined;
+	let sanitizerWorkers: number | undefined;
 	for (let index = 2; index < process.argv.length; index++) {
 		const argument = process.argv[index];
 		if (argument === "-h" || argument === "--help") exitWithUsage();
@@ -228,6 +231,19 @@ function parseArguments(): {
 			}
 			continue;
 		}
+		if (argument === "--sanitizer-workers") {
+			if (sanitizerWorkers !== undefined)
+				exitWithUsage("--sanitizer-workers may only be specified once");
+			const value = process.argv[++index];
+			if (value === undefined)
+				exitWithUsage("--sanitizer-workers requires a positive integer");
+			try {
+				sanitizerWorkers = workerCount(value, "--sanitizer-workers", 1);
+			} catch (error) {
+				exitWithUsage(error instanceof Error ? error.message : String(error));
+			}
+			continue;
+		}
 		if (argument === "--list") {
 			if (list) exitWithUsage("--list may only be specified once");
 			list = true;
@@ -256,6 +272,7 @@ function parseArguments(): {
 		shard,
 		test262Baseline,
 		workers: workers ?? workerBudget(process.env.MALIGATOR_WORKERS),
+		sanitizerWorkers,
 	};
 }
 
@@ -377,6 +394,7 @@ function stageWorkers(command: Command): StageWorkers {
 		workers,
 		selectedTestFiles,
 		command.kind === "native",
+		command.args.includes("test:sanitize") ? sanitizerWorkers : undefined,
 	);
 	const testWorkers = pooled ? allocation.testWorkers : 1;
 	return {
@@ -461,6 +479,7 @@ const {
 	shard,
 	test262Baseline,
 	workers,
+	sanitizerWorkers,
 } = parseArguments();
 const fullOnlyUnit = readManifest("tests/test-suite-unit-full-only.txt");
 const unitSmoke = readManifest("tests/test-suite-unit-smoke.txt");
@@ -860,6 +879,7 @@ if (jsonPlan) {
 				scope,
 				test262Baseline,
 				workers,
+				sanitizerWorkers,
 				smokeBudget: {
 					nominalWorkers: NOMINAL_SMOKE_WORKERS,
 					...smokeBudgetForWorkers(workers),

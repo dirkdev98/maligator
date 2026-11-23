@@ -42,6 +42,9 @@ export function sanitizerEnvironment(
 		// Standalone runners otherwise leave VM reclamation to process exit.
 		MAL_GC_AT_EXIT: "1",
 		MAL_BUILD_JOBS: String(buildJobs),
+		CARGO_BUILD_JOBS: String(
+			workerCount(environment.CARGO_BUILD_JOBS, "CARGO_BUILD_JOBS", buildJobs, budget),
+		),
 		MAL_SANITIZER_WORKERS: String(workers),
 		MAL_TEST_WORKERS: String(workers),
 		MAL_PREPARATION_BUILD_JOBS: String(preparationBuildJobs),

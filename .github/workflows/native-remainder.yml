@@ -122,6 +122,8 @@ jobs:
         run: >-
           npm run test:native:remainder -- --workers "$REMAINDER_WORKERS" --lane ${{ matrix.lane }}
           --shard ${{ matrix.shard }}/${{ matrix.shards }}
+          ${{ runner.os == 'macOS' && matrix.lane == 'sanitizer' &&
+          env.MALIGATOR_NATIVE_CACHE_RESTORED != '' && '--sanitizer-workers 2' || '' }}
 
       # A Linux shard without /mnt filled 87 GB of free root disk; record where it goes.
       - name: Report disk usage

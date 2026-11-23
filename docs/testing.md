@@ -401,8 +401,11 @@ reserve at least two build jobs for each concurrent test process when the budget
 allows it: a four-worker selection runs two test processes with two build jobs each,
 while one selected file can use all four build jobs. This prevents the process that
 owns a shared runtime build from compiling on one core while every other core waits
-on its artifact lock. Native global setup and Test262 runtime preparation can use
-the full budget. Serial WPT and self-hosted checks can also use the full build
+on its artifact lock. The macOS sanitizer remainder uses `--sanitizer-workers 2`
+after restoring a native job cache. Each test process gets one child build job and
+global preparation uses the full budget. Cold jobs use the default allocation.
+Native global setup and Test262 runtime preparation can use the full budget.
+Serial WPT and self-hosted checks can also use the full build
 allocation. Cargo compiles Rust tests before running the Rust test pool.
 Native global setup prepares the shared eval compiler and Rust dependencies before
 timed fixture builds. It also prepares the instrumented runtime when a selected file

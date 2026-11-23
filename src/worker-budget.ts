@@ -32,8 +32,12 @@ export function nestedTestWorkerAllocation(
 	workers: number,
 	selectedTestFiles: number,
 	buildHeavy: boolean,
+	requestedTestWorkers?: number,
 ): { testWorkers: number; childBuildJobs: number } {
-	const concurrencyLimit = buildHeavy ? Math.max(1, Math.floor(workers / 2)) : workers;
+	const concurrencyLimit = Math.min(
+		workers,
+		requestedTestWorkers ?? (buildHeavy ? Math.max(1, Math.floor(workers / 2)) : workers),
+	);
 	const testWorkers = Math.max(
 		1,
 		selectedTestFiles > 0
