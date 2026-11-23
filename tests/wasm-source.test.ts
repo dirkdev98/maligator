@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { artifactDigest } from "../src/artifact-store.ts";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { INTRINSIC_INSTALLERS } from "../src/compiler/frontend/engine-components.ts";
 import { prepareWasmSource } from "../src/wasm-source.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -117,9 +118,12 @@ describe("Wasm reactor capabilities", () => {
 				(match) => match[1],
 			),
 		);
-		expect(installers.sort()).toEqual([
-			"mal_host_install_regexp",
-			"mal_host_install_unicode_normalization",
-		]);
+		expect(installers.sort()).toEqual(
+			[
+				...INTRINSIC_INSTALLERS,
+				"mal_host_install_regexp",
+				"mal_host_install_unicode_normalization",
+			].sort(),
+		);
 	});
 });
