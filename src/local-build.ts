@@ -60,8 +60,10 @@ import {
 	PREBUILT_RUNTIME_MANIFEST,
 	prebuiltDevelopmentRunnerKey,
 	prebuiltDevelopmentRunnerTarget,
+	readDevelopmentRunnerSourceDigests,
 	readPrebuiltDevelopmentRunner,
 } from "./prebuilt-runtime.ts";
+import type { DevelopmentRunnerSourceDigests } from "./prebuilt-runtime.ts";
 import { ensureNativeArtifacts } from "./runtime-build.ts";
 import type { NativeArtifacts } from "./runtime-build.ts";
 import { generatedHeaderDependencyHash, runtimeHeaderHash } from "./runtime-build.ts";
@@ -960,24 +962,30 @@ export function localDevelopmentRunnerKey(
 	});
 }
 
+interface DevelopmentRunnerRuntime {
+	runtimeDirectory: string;
+	runnerSourceDigests?: () => DevelopmentRunnerSourceDigests;
+}
+
 export function sharedDevelopmentRunnerKey(
-	inputs: Pick<
-		NativeBuildContext,
-		"runtimeDirectory" | "cacheDirectory" | "features" | "environment"
-	>,
+	inputs: DevelopmentRunnerRuntime &
+		Pick<NativeBuildContext, "cacheDirectory" | "features" | "environment">,
 	target: string,
 ): string {
 	const features = sharedDevelopmentRunnerFeatures(inputs.features);
 	return prebuiltDevelopmentRunnerKey({
-		...inputs,
 		target,
 		features,
+		environment: inputs.environment,
+		sources:
+			inputs.runnerSourceDigests?.() ??
+			readDevelopmentRunnerSourceDigests(inputs.runtimeDirectory, inputs.cacheDirectory),
 		anchorSource: languageComponentAnchorSource(features),
 	});
 }
 
 export function packagedDevelopmentRunner(
-	runtimeDirectory: string,
+	runtime: DevelopmentRunnerRuntime,
 	features: NativeBuildContext["features"],
 	environment: NodeJS.ProcessEnv,
 ): string | undefined {
@@ -996,7 +1004,10 @@ export function packagedDevelopmentRunner(
 		keyForEvalComponent: (evalComponent) =>
 			sharedDevelopmentRunnerKey(
 				{
-					runtimeDirectory,
+					get runtimeDirectory() {
+						return runtime.runtimeDirectory;
+					},
+					runnerSourceDigests: runtime.runnerSourceDigests,
 					cacheDirectory: maligatorCacheDirectory(undefined, environment),
 					features: { ...features, evalEnabled: evalComponent },
 					environment,

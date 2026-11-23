@@ -6,6 +6,7 @@ import {
 	existsSync,
 	mkdtempSync,
 	mkdirSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	statSync,
@@ -729,8 +730,11 @@ function smokePackedLauncher(
 		symlinkSync(process.execPath, path.join(tools, "node"));
 		const runConfig = path.join(project, "run.build.ts");
 		writeFileSync(runConfig, "export default { engine: { intl: { enabled: true } } };\n");
+		const toolchainFreeTemporary = path.join(project, "toolchain-free-tmp");
+		mkdirSync(toolchainFreeTemporary);
 		const toolchainFreeEnvironment = {
 			...env,
+			TMPDIR: toolchainFreeTemporary,
 			PATH: tools,
 			CC: path.join(tools, "unavailable-cc"),
 			CXX: path.join(tools, "unavailable-cxx"),
@@ -776,6 +780,14 @@ function smokePackedLauncher(
 		if (!testOutput.includes("2 passed, 0 failed"))
 			throw new Error(
 				`packed launcher did not pass its toolchain-free test\n${testOutput}`,
+			);
+		if (
+			readdirSync(toolchainFreeTemporary, { recursive: true, withFileTypes: true }).some(
+				(entry) => entry.name === "dev_main.c",
+			)
+		)
+			throw new Error(
+				"toolchain-free packaged run or test extracted the runtime sources",
 			);
 		const build = spawnSync(launcher, ["build", "--verbose", "main.mts"], {
 			cwd: project,

@@ -142,6 +142,7 @@ import {
 	hostExecutionTarget,
 	resolveExecution,
 } from "./platform/execution.ts";
+import type { DevelopmentRunnerSourceDigests } from "./prebuilt-runtime.ts";
 import {
 	createProfileCapture,
 	finalizeProfileCapture,
@@ -241,6 +242,7 @@ export interface DevelopmentProcessHost {
 }
 
 export interface CompilerInstallation {
+	runnerSourceDigests?: () => DevelopmentRunnerSourceDigests;
 	/** Installed source-module root used by the platform catalog. */
 	platformSourceRoot?: string;
 	/** Absolute runtime source tree owned by this compiler installation. */
@@ -311,6 +313,7 @@ export function productCompilerInstallation(
 	developmentRunnerPath?: string,
 	platformSourceRoot?: InstallationPath,
 	testHostModulePath?: InstallationPath,
+	runnerSourceDigests?: () => DevelopmentRunnerSourceDigests,
 ): CompilerInstallation {
 	const runtimePath = deferredInstallationPath(runtimeDirectory);
 	const compilerPath = deferredInstallationPath(compilerWirePath);
@@ -324,6 +327,7 @@ export function productCompilerInstallation(
 	);
 	const licenses = licensePaths?.map(deferredInstallationPath);
 	return {
+		runnerSourceDigests,
 		get runtimeDirectory() {
 			return runtimePath();
 		},
@@ -742,7 +746,7 @@ function prepareCommandState(
 	const packagedRunner =
 		interpreted && embeddedRunner === undefined
 			? packagedDevelopmentRunner(
-					context.installation.runtimeDirectory,
+					context.installation,
 					baseDerivation.features,
 					process.env,
 				)
@@ -2288,11 +2292,14 @@ function buildIsolatedTestRunner(
 	},
 ): { binaryPath: string; shims: Array<string> } {
 	const { bindings, packagedRunner, environment, applicationHost } = options;
-	const runtimeDirectory = context.installation.runtimeDirectory;
 	const shims =
 		bindings === undefined
 			? []
-			: prepareDevelopmentShims(bindings.libraries, bindings.tools, runtimeDirectory);
+			: prepareDevelopmentShims(
+					bindings.libraries,
+					bindings.tools,
+					context.installation.runtimeDirectory,
+				);
 	const linkedLibraries = shims.some((shim) => shim.kind === "linked")
 		? bindings?.libraries
 		: undefined;
@@ -2302,6 +2309,7 @@ function buildIsolatedTestRunner(
 
 	const derivation = buildDerivationFromConfig(config);
 	const toolchain = bindings?.toolchain ?? testToolchain(context, environment);
+	const runtimeDirectory = context.installation.runtimeDirectory;
 	const features = testRunnerFeatures(config, applicationHost);
 	const nativeContext = resolveNativeBuildContext({
 		toolchain,
@@ -2337,7 +2345,7 @@ function prepareLinkedTestHost(
 		throw new Error("this installation does not include the linked test host driver");
 	const environment = process.env;
 	const packagedRunner = packagedDevelopmentRunner(
-		context.installation.runtimeDirectory,
+		context.installation,
 		testRunnerFeatures(config, true),
 		environment,
 	);
@@ -2427,7 +2435,7 @@ async function executeIsolatedTests(
 	const packagedRunner =
 		embeddedRunner === undefined
 			? packagedDevelopmentRunner(
-					context.installation.runtimeDirectory,
+					context.installation,
 					testRunnerFeatures(config, false),
 					environment,
 				)

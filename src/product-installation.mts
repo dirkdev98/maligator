@@ -1,5 +1,7 @@
 import { join } from "node:path";
 import { productCompilerInstallation } from "./cli-commands.ts";
+import { embeddedDevelopmentRunnerSourceDigests } from "./prebuilt-runtime.ts";
+import type { DevelopmentRunnerSourceDigests } from "./prebuilt-runtime.ts";
 import {
 	compilerWire,
 	license,
@@ -17,6 +19,7 @@ export interface ProductInstallationPaths {
 
 export function createProductInstallation(paths: ProductInstallationPaths) {
 	const options = { baseDirectory: paths.temporaryDirectory };
+	let sourceDigests: DevelopmentRunnerSourceDigests | undefined;
 	return productCompilerInstallation(
 		() => runtime.materialize(options),
 		() => compilerWire.materialize(options),
@@ -25,5 +28,6 @@ export function createProductInstallation(paths: ProductInstallationPaths) {
 		paths.executablePath,
 		() => platformSources.materialize(options),
 		() => join(testHost.materialize(options), "host-driver.mts"),
+		() => (sourceDigests ??= embeddedDevelopmentRunnerSourceDigests(runtime.files())),
 	);
 }

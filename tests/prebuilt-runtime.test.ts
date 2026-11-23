@@ -12,6 +12,7 @@ import {
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
 import {
 	DEVELOPMENT_RUNNER,
+	embeddedDevelopmentRunnerSourceDigests,
 	PREBUILT_RUNTIME_MANIFEST,
 	PREBUILT_RUNTIME_OVERRIDE,
 	prebuiltDevelopmentRunnerTarget,
@@ -289,12 +290,42 @@ describe.skipIf(hostTarget === undefined)("prebuilt development runners", () => 
 		const consumer = fixtureContext("consumer", { target, eval: evalEnabled });
 		const directory = stageRunner(producer);
 		expect(
-			packagedDevelopmentRunner(
-				consumer.runtimeDirectory,
-				consumer.features,
-				consumer.environment,
-			),
+			packagedDevelopmentRunner(consumer, consumer.features, consumer.environment),
 		).toBe(selected ? path.join(directory, DEVELOPMENT_RUNNER) : undefined);
+	});
+
+	it("selects the same packed runner from embedded source digests", () => {
+		const producer = fixtureContext("producer", { target });
+		const source = producer.runtimeDirectory;
+		mkdirSync(path.join(source, "src", "nested"));
+		mkdirSync(path.join(source, "rust", "target"));
+		writeFileSync(path.join(source, "src/nested/a.c"), "int a;\n");
+		writeFileSync(path.join(source, "src/nested-a.c"), "int b;\n");
+		writeFileSync(path.join(source, "rust/target/object.rs"), "pub fn unused() {}\n");
+		const directory = stageRunner(producer);
+		const files = [
+			"dev_main.c",
+			"rust/src/lib.rs",
+			"rust/target/object.rs",
+			"src/nested-a.c",
+			"src/nested/a.c",
+			"src/runtime.c",
+			"src/runtime.h",
+		].map((file) => ({
+			path: file,
+			digest: artifactDigest(readFileSync(path.join(source, file))),
+		}));
+
+		expect(
+			packagedDevelopmentRunner(
+				{
+					runtimeDirectory: path.join(root, "unavailable"),
+					runnerSourceDigests: () => embeddedDevelopmentRunnerSourceDigests(files),
+				},
+				producer.features,
+				producer.environment,
+			),
+		).toBe(path.join(directory, DEVELOPMENT_RUNNER));
 	});
 
 	it("rejects a runner built from a different driver source", () => {
@@ -305,11 +336,7 @@ describe.skipIf(hostTarget === undefined)("prebuilt development runners", () => 
 			"int main(void) { return 1; }\n",
 		);
 		expect(
-			packagedDevelopmentRunner(
-				context.runtimeDirectory,
-				context.features,
-				context.environment,
-			),
+			packagedDevelopmentRunner(context, context.features, context.environment),
 		).toBeUndefined();
 	});
 
@@ -319,11 +346,7 @@ describe.skipIf(hostTarget === undefined)("prebuilt development runners", () => 
 		const executable = path.join(directory, DEVELOPMENT_RUNNER);
 		writeFileSync(executable, readFileSync(executable, "utf8").replace("ready", "wrong"));
 		expect(
-			packagedDevelopmentRunner(
-				context.runtimeDirectory,
-				context.features,
-				context.environment,
-			),
+			packagedDevelopmentRunner(context, context.features, context.environment),
 		).toBeUndefined();
 		expect(readFileSync(ensureNativeArtifacts(context).c.runtime, "utf8")).toBe(
 			"release fixture libMalRuntime.a",

@@ -1,3 +1,4 @@
+import { hash } from "node:crypto";
 import {
 	copyFileSync,
 	existsSync,
@@ -272,42 +273,89 @@ function canUsePrebuiltRuntime(
 	);
 }
 
-/** Portable link identity for an executable that embeds the release runtime. */
-export function prebuiltDevelopmentRunnerKey(inputs: {
-	target: string;
-	runtimeDirectory: string;
-	cacheDirectory: string;
-	features: Readonly<NativeFeatureSpec>;
-	environment: NodeJS.ProcessEnv;
-	anchorSource: string;
-}): string {
-	const target = prebuiltRuntimeTarget(inputs.target);
-	const root = inputs.runtimeDirectory;
+const runnerSourceDirectories = [
+	"src",
+	"rust",
+	"vendor/llhttp/include",
+	"vendor/llhttp/src",
+	"vendor/sqlite",
+];
+const runnerSourceExtension = /\.(?:c|h|inc|rs|toml|lock)$/;
+const runnerMainSource = "dev_main.c";
+const ignoredRunnerDirectories = ["rust/target", "rust/.cache"];
+
+export interface DevelopmentRunnerSourceDigests {
+	runtimeSourceDigest: string;
+	mainSourceDigest: string;
+}
+
+export function readDevelopmentRunnerSourceDigests(
+	root: string,
+	cacheDirectory: string,
+): DevelopmentRunnerSourceDigests {
+	const ignored = ignoredRunnerDirectories.map((directory) => path.join(root, directory));
 	const source = hashDirectoryTreesCached(
 		{
 			root,
-			directories: [
-				"src",
-				"rust",
-				"vendor/llhttp/include",
-				"vendor/llhttp/src",
-				"vendor/sqlite",
-			]
+			directories: runnerSourceDirectories
 				.map((directory) => path.join(root, directory))
 				.filter(existsSync),
-			include: (entry) => /\.(?:c|h|inc|rs|toml|lock)$/.test(entry.name),
-			descend: ({ fullPath }) =>
-				fullPath !== path.join(root, "rust", "target") &&
-				fullPath !== path.join(root, "rust", ".cache"),
+			include: (entry) => runnerSourceExtension.test(entry.name),
+			descend: ({ fullPath }) => !ignored.includes(fullPath),
 			compareNames: lexicalNameComparator,
 		},
 		path.join(
-			inputs.cacheDirectory,
+			cacheDirectory,
 			"source-digests",
 			`development-runner-${artifactDigest(root).slice(0, 16)}.json`,
 		),
 		"release-development-runner-v1",
 	).digest;
+	return {
+		runtimeSourceDigest: source,
+		mainSourceDigest: artifactFileDigest(path.join(root, runnerMainSource)),
+	};
+}
+
+/** Hash the embedded files in the same root and depth-first order as the source tree. */
+export function embeddedDevelopmentRunnerSourceDigests(
+	files: ReadonlyArray<{ readonly path: string; readonly digest: string }>,
+): DevelopmentRunnerSourceDigests {
+	const mainSourceDigest = files.find((file) => file.path === runnerMainSource)?.digest;
+	if (mainSourceDigest === undefined)
+		throw new Error("embedded runtime is missing its development runner driver");
+	const sources = files.filter(
+		(file) =>
+			runnerSourceExtension.test(file.path) &&
+			!ignoredRunnerDirectories.some((directory) =>
+				file.path.startsWith(`${directory}/`),
+			),
+	);
+	const parts: Array<string> = [];
+	for (const directory of runnerSourceDirectories) {
+		// A whole directory segment sorts before any longer segment with that prefix.
+		const entries = sources
+			.filter((file) => file.path.startsWith(`${directory}/`))
+			.map((file) => ({
+				path: file.path,
+				digest: file.digest,
+				order: file.path.replaceAll("/", "\0"),
+			}))
+			.sort((left, right) => lexicalNameComparator(left.order, right.order));
+		for (const file of entries) parts.push(file.path, "\0", file.digest, "\0");
+	}
+	return { runtimeSourceDigest: hash("sha256", parts.join(""), "hex"), mainSourceDigest };
+}
+
+/** Portable link identity for an executable that embeds the release runtime. */
+export function prebuiltDevelopmentRunnerKey(inputs: {
+	target: string;
+	sources: DevelopmentRunnerSourceDigests;
+	features: Readonly<NativeFeatureSpec>;
+	environment: NodeJS.ProcessEnv;
+	anchorSource: string;
+}): string {
+	const target = prebuiltRuntimeTarget(inputs.target);
 	return artifactIdentity({
 		schema: 1,
 		target,
@@ -316,8 +364,7 @@ export function prebuiltDevelopmentRunnerKey(inputs: {
 		features: inputs.features,
 		compileArguments: ccExtraFlags(undefined, inputs.environment, target.platform),
 		runtimeOptimization: runtimeOptimizationFlags(inputs.environment),
-		runtimeSourceDigest: source,
-		mainSourceDigest: artifactFileDigest(path.join(root, "dev_main.c")),
+		...inputs.sources,
 		anchorSource: inputs.anchorSource,
 	});
 }
