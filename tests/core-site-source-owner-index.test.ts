@@ -5,6 +5,7 @@ import type { CoreCompilation } from "../src/compiler/core/core-compilation.ts";
 import { sourceSiteId } from "../src/compiler/shared/compiler-facts.ts";
 
 function siteFor(inlinedFunctionIndex?: number) {
+	const sourcePositions = [{ line: 7, column: 2, inlinedFunctionIndex }];
 	const caller = {
 		id: 0,
 		metadata: { sourcePath: "/caller.js" },
@@ -29,7 +30,7 @@ function siteFor(inlinedFunctionIndex?: number) {
 			functionIds: () => functions.keys(),
 			function: (id: number) => functions.get(id),
 			hasFunction: (id: number) => functions.has(id),
-			sourcePositions: [{ line: 7, column: 2, inlinedFunctionIndex }],
+			sourcePositionAt: (index: number) => sourcePositions[index],
 			stringConstants: [],
 		},
 		context: { facts: { immutableGlobalBindings: new Map() } },

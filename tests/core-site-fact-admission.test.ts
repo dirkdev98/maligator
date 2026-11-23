@@ -5,6 +5,7 @@ import type { CoreCompilation } from "../src/compiler/core/core-compilation.ts";
 
 function fixture() {
 	const immutable = { marker: "immutable-binding" };
+	const sourcePositions = [{ line: 2, column: 4 }];
 	const rows = [
 		{ opcode: "move", attributes: {} },
 		{ opcode: "binary", attributes: { operator: "+" } },
@@ -34,7 +35,7 @@ function fixture() {
 			functionIds: () => [0],
 			function: () => fn,
 			hasFunction: (id: number) => id === 0,
-			sourcePositions: [{ line: 2, column: 4 }],
+			sourcePositionAt: (index: number) => sourcePositions[index],
 			stringConstants: [[77, 97, 116, 104]],
 		},
 		context: { facts: { immutableGlobalBindings: new Map([["Math", immutable]]) } },
