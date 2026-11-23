@@ -69,9 +69,9 @@ of these capabilities. Network access and Git writes are separate permissions.
 If the probe confirms an `EPERM` or `EACCES` capability failure, correct the sandbox
 and rerun the exact command before diagnosing product code. Before heavy work,
 inspect CPU activity and `node ./src/index.ts cache status`. Defer conflicting builds,
-tests, and benchmarks; never kill another session's task or introduce a global
-performance lock. A process from before today that no running session owns is stale,
-and stopping it is fine.
+tests, and benchmarks, except between workers of one crew; never kill another
+session's task or introduce a global performance lock. A process from before today
+that no running session owns is stale, and stopping it is fine.
 
 ## Verification
 
@@ -102,13 +102,15 @@ CI owns acceptance. Every pull request and push runs the canonical check gate; e
 push to `main` also runs the native remainder, Extended CI (self-hosted checks, Wasm,
 slow unit tests, the primordial inventory) and, once CI passes, the full Test262
 corpus. Continue independent work while checks run. Acceptance stays pending until
-the required coverage succeeds, and a red run gets fixed before more work lands on
-top of it. Check acceptance of a pushed commit with `npm run ci:status -- <sha>`. Open
-logs or artifacts only for a failure; don't download, hash or re-verify artifacts of
-green runs. Without push authority, report what ran locally and what remains for CI
-instead of substituting a local gate. Check is a curated gate, not every native
-fixture or the full standards corpus; use `test:help`, tier `--list`/`--plan=json`,
-the manifests and [CI coverage](docs/testing.md#github-actions) for exact coverage.
+the required coverage succeeds. A red run doesn't hold back a push: keep watching
+CI and make the failure the next fix. A push to `main` replaces only a waiting run,
+never a running one. Check acceptance of a pushed commit with
+`npm run ci:status -- <sha>`. Open logs or artifacts only for a failure; don't
+download, hash or re-verify artifacts of green runs. Without push authority, report
+what ran locally and what remains for CI instead of substituting a local gate. Check
+is a curated gate, not every native fixture or the full standards corpus; use
+`test:help`, tier `--list`/`--plan=json`, the manifests and
+[CI coverage](docs/testing.md#github-actions) for exact coverage.
 
 Captures run on CI too. The Primordial catalog workflow commits a refreshed catalog
 after a push to `main` changes the descriptor graph. Dispatch it with `force` when
