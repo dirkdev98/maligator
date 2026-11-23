@@ -7,6 +7,7 @@ import {
 	generateNodeBuiltinInstallersInclude,
 } from "../scripts/generate-node-builtin-modules.ts";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { INTRINSIC_INSTALLERS } from "../src/compiler/frontend/engine-components.ts";
 import {
 	BUFFER_INSTALLER_SYMBOL,
 	HOST_GLOBAL_INSTALLERS,
@@ -76,6 +77,7 @@ function compile(
 }
 
 const SURFACE_INSTALLERS = new Set([
+	...INTRINSIC_INSTALLERS,
 	...HOST_PERSONALITY_INSTALLERS,
 	NODE_ERROR_HOOKS_INSTALLER,
 ]);

@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config-values.ts";
 import { parseCliArgs } from "../src/cli.ts";
+import { INTRINSIC_INSTALLERS } from "../src/compiler/frontend/engine-components.ts";
 import {
 	HOST_PERSONALITY_INSTALLERS,
 	NODE_ERROR_HOOKS_INSTALLER,
@@ -43,13 +44,14 @@ function compile(
 	return {
 		...runtime,
 		hostInstalls: runtime.hostInstalls.filter(
-			(install) => !PERSONALITY_INSTALLERS.has(install.installer),
+			(install) => !NON_PLATFORM_INSTALLERS.has(install.installer),
 		),
 	};
 }
 
-const PERSONALITY_INSTALLERS = new Set([
+const NON_PLATFORM_INSTALLERS = new Set([
 	...HOST_PERSONALITY_INSTALLERS,
+	...INTRINSIC_INSTALLERS,
 	NODE_ERROR_HOOKS_INSTALLER,
 ]);
 
