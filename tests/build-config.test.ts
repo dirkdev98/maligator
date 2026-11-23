@@ -478,7 +478,8 @@ describe("host component derivation", () => {
 		const config = resolveBuildConfig({});
 		const host = buildDerivationFromConfig(config).features.cargoFeatures;
 		expect(host).toEqual(expect.arrayContaining(["node-crypto", "tls", "url", "zlib"]));
-		const lean = buildDerivationFromConfig(config, false).features.cargoFeatures;
+		const lean = buildDerivationFromConfig(config, { usesHost: false }).features
+			.cargoFeatures;
 		expect(
 			lean.filter((feature) => host.includes(feature) && feature !== "regexp"),
 		).toEqual([]);

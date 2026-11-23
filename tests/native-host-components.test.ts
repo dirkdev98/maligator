@@ -1,7 +1,37 @@
 import { readFileSync, readdirSync } from "node:fs";
 import * as path from "node:path";
 import { expect, it } from "vitest";
-import { imageUsesUrlParser } from "../src/native-host-components.ts";
+import {
+	HOST_PERSONALITY_INSTALLER,
+	hostInstallerSymbol,
+	WEB_FETCH_INSTALLER,
+} from "../src/compiler/frontend/host-modules.ts";
+import {
+	imageUsesUrlParser,
+	resolveNativeHostFeatures,
+} from "../src/native-host-components.ts";
+
+const plainServer = [
+	HOST_PERSONALITY_INSTALLER,
+	hostInstallerSymbol("maligator:internal/http"),
+	WEB_FETCH_INSTALLER,
+].map((installer) => ({ installer, exports: [] }));
+
+it("omits ring for a plaintext server with fetch data classes", () => {
+	expect(resolveNativeHostFeatures([plainServer]).usesTlsOrCrypto).toBe(false);
+});
+
+it.each(["node:tls", "node:constants", "maligator:internal/fetch"])(
+	"retains ring for a worker that uses %s",
+	(specifier) => {
+		const worker = [{ installer: hostInstallerSymbol(specifier), exports: [] }];
+		expect(resolveNativeHostFeatures([plainServer, worker]).usesTlsOrCrypto).toBe(true);
+	},
+);
+
+it("retains ring for drivers that resolve installers by name", () => {
+	expect(resolveNativeHostFeatures([], true).usesTlsOrCrypto).toBe(true);
+});
 
 function withoutCommentsAndLiterals(source: string): string {
 	return source.replaceAll(

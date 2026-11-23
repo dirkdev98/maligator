@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { BuildConfigError } from "./build-config-error.ts";
 import { INTL_SERVICE_FEATURES, normalizeNativeFeatures } from "./build-flags.ts";
-import type { NativeFeatureSpec } from "./build-flags.ts";
+import type { NativeFeatureSpec, NativeHostFeatures } from "./build-flags.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import type { BuildConfigTypeStripper, Leaf, ObjectSchema } from "./definition-module.ts";
 import {
@@ -285,8 +285,7 @@ export interface BuildDerivation {
  */
 export function buildDerivationFromConfig(
 	config: ResolvedBuildConfig,
-	usesHost = true,
-	usesUrlParser = usesHost,
+	hostFeatures: NativeHostFeatures = {},
 ): BuildDerivation {
 	const intlFeatures = intlCargoFeatures(config);
 	const features = normalizeNativeFeatures({
@@ -295,8 +294,7 @@ export function buildDerivationFromConfig(
 		realmsEnabled: config.engine.realms,
 		intlEnabled: config.engine.intl.enabled,
 		intlFeatures,
-		usesHost,
-		usesUrlParser,
+		...hostFeatures,
 		regexpEnabled: config.engine.regexp,
 		temporalEnabled: config.engine.temporal,
 	});

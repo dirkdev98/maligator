@@ -7,6 +7,7 @@ import { collectEmbeddedAssets, embedDeclarationsOf } from "./assets.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { normalizeNativeFeatures } from "./build-flags.ts";
+import type { NativeHostFeatures } from "./build-flags.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 import { ensureCompilerWire } from "./compiler-bake.ts";
@@ -53,7 +54,7 @@ import type {
 	NativeBuildCommandResourceEvent,
 	NativeBuildPhaseEvent,
 } from "./native-build-context.ts";
-import { imageUsesUrlParser } from "./native-host-components.ts";
+import { resolveNativeHostFeatures } from "./native-host-components.ts";
 import type { MaligatorIntlFeature } from "./public-api.d.ts";
 import { recordTestTelemetry } from "./test-telemetry.ts";
 import {
@@ -452,8 +453,7 @@ function linkProgramImage(
 		options,
 		config,
 		name,
-		usesHost || customDriver,
-		customDriver || hostInstalls.some(imageUsesUrlParser),
+		resolveNativeHostFeatures(hostInstalls, customDriver),
 	);
 	return buildLocalBinary({
 		context,
@@ -497,10 +497,9 @@ function resolveHarnessNativeContext(
 	options: BuildOptions,
 	config: ResolvedBuildConfig,
 	subject: string,
-	usesHost = true,
-	usesUrlParser = usesHost,
+	hostFeatures: NativeHostFeatures = {},
 ): { context: NativeBuildContext; cacheSuffix: string } {
-	const baseDerivation = buildDerivationFromConfig(config, usesHost, usesUrlParser);
+	const baseDerivation = buildDerivationFromConfig(config, hostFeatures);
 	const derivation = options.profileEnabled
 		? {
 				features: normalizeNativeFeatures({

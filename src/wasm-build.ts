@@ -136,7 +136,9 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 			RUSTC: toolchain.tools.rustc.path,
 		};
 		// The reactor has no host, so it compiles none of the host components.
-		const features = buildDerivationFromConfig(options.config, false).features;
+		const features = buildDerivationFromConfig(options.config, {
+			usesHost: false,
+		}).features;
 		const runtime = path.join(root, "runtime");
 		const includes = ["src", "src/host", "src/runtime", "rust/include"].flatMap(
 			(directory) => ["-I", path.join(runtime, directory)],

@@ -80,10 +80,7 @@ import {
 	stripCompactTypes,
 } from "./compiler/frontend/compact-type-strip.ts";
 import type { EmbedDeclaration } from "./compiler/frontend/embed-declarations.ts";
-import {
-	imageNeedsHostEventLoop,
-	imageUsesHost,
-} from "./compiler/frontend/host-modules.ts";
+import { imageNeedsHostEventLoop } from "./compiler/frontend/host-modules.ts";
 import {
 	formatSyntaxDiagnostic,
 	SyntaxDiagnostic,
@@ -135,7 +132,7 @@ import {
 	resolveNativeBuildContext,
 } from "./native-build-context.ts";
 import { nativeBuildJobs } from "./native-command.ts";
-import { imageUsesUrlParser } from "./native-host-components.ts";
+import { resolveNativeHostFeatures } from "./native-host-components.ts";
 import { nativeSourcePath } from "./native-source-path.ts";
 import {
 	executionTarget,
@@ -1110,13 +1107,9 @@ function prepareCommandState(
 
 		// Wire drivers resolve installers by name, so they link every component.
 		const resolvesInstallers = interpreted || developmentFragments;
-		const usesHost = resolvesInstallers || hostInstalls.some(imageUsesHost);
-		const usesUrlParser = resolvesInstallers || hostInstalls.some(imageUsesUrlParser);
-		const linkDerivation = buildDerivationFromConfig(
-			buildConfig,
-			usesHost,
-			usesUrlParser,
-		);
+		const hostFeatures = resolveNativeHostFeatures(hostInstalls, resolvesInstallers);
+		const { usesHost } = hostFeatures;
+		const linkDerivation = buildDerivationFromConfig(buildConfig, hostFeatures);
 		const derivation = command.profile
 			? {
 					features: normalizeNativeFeatures({
@@ -2565,12 +2558,9 @@ async function executeProfiledTests(
 		compiled.programImage,
 		...compiled.workerImages.map(({ image }) => image),
 	].map(({ runtime }) => runtime.hostInstalls);
-	const usesHost = hostInstalls.some(imageUsesHost);
-	const baseDerivation = buildDerivationFromConfig(
-		config,
-		usesHost,
-		hostInstalls.some(imageUsesUrlParser),
-	);
+	const hostFeatures = resolveNativeHostFeatures(hostInstalls);
+	const { usesHost } = hostFeatures;
+	const baseDerivation = buildDerivationFromConfig(config, hostFeatures);
 	const derivation = {
 		features: normalizeNativeFeatures({
 			...baseDerivation.features,

@@ -79,6 +79,8 @@ export interface NativeFeatureInput {
 	usesHost?: boolean;
 	/** Selects Ada for images that reach the URL parser. */
 	usesUrlParser?: boolean;
+	/** Selects the shared native assembly provider for TLS and Node crypto. */
+	usesTlsOrCrypto?: boolean;
 	regexpEnabled?: boolean;
 	/** Selects the Temporal Cargo feature for Wasm; native archives always contain Temporal. */
 	temporalEnabled?: boolean;
@@ -89,6 +91,11 @@ export interface NativeFeatureInput {
 	/** Selected per-service Intl Cargo features; empty means the full Intl surface. */
 	intlFeatures?: Array<string>;
 }
+
+export type NativeHostFeatures = Pick<
+	NativeFeatureInput,
+	"usesHost" | "usesUrlParser" | "usesTlsOrCrypto"
+>;
 
 /**
  * Normalized feature identity shared by C compilation and the Rust link.
@@ -104,6 +111,7 @@ export interface NativeFeatureSpec {
 	intlEnabled: boolean;
 	usesHost: boolean;
 	usesUrlParser: boolean;
+	usesTlsOrCrypto: boolean;
 	regexpEnabled: boolean;
 	temporalEnabled: boolean;
 	profileEnabled: boolean;
@@ -127,6 +135,7 @@ export function normalizeNativeFeatures(
 	const intlEnabled = input.intlEnabled ?? true;
 	const usesHost = input.usesHost ?? true;
 	const usesUrlParser = input.usesUrlParser ?? usesHost;
+	const usesTlsOrCrypto = input.usesTlsOrCrypto ?? usesHost;
 	const regexpEnabled = input.regexpEnabled ?? true;
 	const temporalEnabled = input.temporalEnabled ?? true;
 	const profileEnabled = input.profileEnabled ?? false;
@@ -151,8 +160,8 @@ export function normalizeNativeFeatures(
 	];
 	const cargoFeatures = sortedUnique([
 		...(intlEnabled ? (intlFeatures.length > 0 ? intlFeatures : ["intl-full"]) : []),
-		// The host installers share transport, compression and crypto components.
-		...(usesHost ? ["tls", "zlib", "node-argon2", "node-crypto"] : []),
+		...(usesHost ? ["zlib", "node-argon2"] : []),
+		...(usesTlsOrCrypto ? ["tls", "node-crypto"] : []),
 		...(usesUrlParser ? ["url"] : []),
 		...(regexpEnabled ? ["regexp"] : []),
 		...(temporalEnabled ? ["temporal"] : []),
@@ -164,6 +173,7 @@ export function normalizeNativeFeatures(
 		intlEnabled,
 		usesHost,
 		usesUrlParser,
+		usesTlsOrCrypto,
 		regexpEnabled,
 		temporalEnabled,
 		profileEnabled,

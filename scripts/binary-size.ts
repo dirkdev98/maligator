@@ -131,7 +131,7 @@ const fixtures: Array<{
 		name: "serve",
 		file: "bench/size/serve.mjs",
 		bun: false,
-		forbidden: ["brotli", "rustls", "Node runtime", "sqlite3.o", "argon2"],
+		forbidden: ["brotli", "rustls", "ring", "Node runtime", "sqlite3.o", "argon2"],
 	},
 	{
 		name: "fetch",
@@ -174,7 +174,7 @@ const fixtures: Array<{
 		name: "http-bare",
 		file: "bench/http/server_mal.js",
 		bun: false,
-		forbidden: ["brotli", "rustls", "Node runtime", "sqlite3.o", "argon2"],
+		forbidden: ["brotli", "rustls", "ring", "Node runtime", "sqlite3.o", "argon2"],
 	},
 	{
 		name: "node-net",
@@ -393,16 +393,22 @@ try {
 		const { linkAllRustComponents, sectionGcLinkArgs } = built.context.toolchain.probes;
 		const selectiveLink = !linkAllRustComponents && sectionGcLinkArgs.length > 0;
 		const { rust } = built.artifacts;
-		if (
-			selectiveLink &&
-			fixture.forbidden?.includes("Ada") &&
-			rust.nativeComponents.some(
-				({ packageName, library }) =>
-					packageName === "ada-url" && rust.linkArgs.includes(library),
-			)
-		) {
-			console.error(`  ${name} links the Ada archive`);
-			process.exitCode = 1;
+		if (selectiveLink) {
+			for (const [component, archive] of [
+				["Ada", "ada-url"],
+				["ring", "ring"],
+			] as const) {
+				if (
+					fixture.forbidden?.includes(component) &&
+					rust.nativeComponents.some(
+						({ packageName, library }) =>
+							packageName === archive && rust.linkArgs.includes(library),
+					)
+				) {
+					console.error(`  ${name} links the ${component} archive`);
+					process.exitCode = 1;
+				}
+			}
 		}
 		for (const library of fixture.forbiddenLibraries ?? []) {
 			if (!selectiveLink && built.context.features.usesHost) continue;
