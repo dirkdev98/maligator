@@ -1235,6 +1235,7 @@ static void node_tls_publish_lazy(MalVm *vm, const MalHostInstallSlot *slots, i3
 void mal_host_install_node_tls(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
+    mal_node_net_install_tls(vm);
     if (mal_node_module_install_cached(vm, "node:tls", slots, count)) {
         node_tls_publish_lazy(vm, slots, count, mal_node_module_get_cached(vm, "node:tls"));
         return;

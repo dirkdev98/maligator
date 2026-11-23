@@ -123,6 +123,28 @@ typedef struct MalNodeNetServerState {
     struct MalNodeNetServerState *next;
 } MalNodeNetServerState;
 
+typedef struct MalNodeNetTls {
+    typeof(mal_tls_client_config_free) *free_client_config;
+    typeof(mal_tcp_connect_tls_address_start) *connect;
+    typeof(mal_tls_server_config_free) *free_server_config;
+    typeof(mal_node_net_tls_config) *server_config;
+    bool (*accept)(MalVm *, MalValue, MalNodeNetSocketState *, MalTlsServerConfig *);
+    void (*hello)(MalVm *, MalNodeNetSocketState *, MalTcpProgress *);
+    void (*describe)(MalVm *, MalNodeNetSocketState *);
+} MalNodeNetTls;
+
+static void net_release_client_config(MalVm *vm, MalTlsClientConfig **config) {
+    if (*config != nullptr) mal_host(vm)->node_net_tls->free_client_config(config);
+}
+
+static void net_release_server_config(MalNodeNetServerState *server) {
+    if (server->tls_config == nullptr) return;
+    const MalNodeNetTls *tls = mal_host(server->vm)->node_net_tls;
+    tls->free_server_config(&server->tls_config);
+    for (usize i = 0; i < countof(server->sni_cache); i++)
+        tls->free_server_config(&server->sni_cache[i].config);
+}
+
 // Sockets and their root registration belong to this mutator's isolate.
 static MAL_ISOLATE_LOCAL MalNodeNetSocketState *net_sockets;
 static MAL_ISOLATE_LOCAL bool net_roots_installed;
@@ -322,7 +344,7 @@ static void net_state_free(MalNodeNetSocketState *state) {
     }
     free(state->addresses);
     free(state->address_lengths);
-    mal_tls_client_config_free(&state->tls_config);
+    net_release_client_config(state->vm, &state->tls_config);
     free(state->path);
     free(state);
 }
@@ -682,12 +704,19 @@ static bool net_ascii_string(
     return true;
 }
 
+static bool net_start_address(
+    MalNodeNetSocketState *state, const struct sockaddr *address, socklen_t length) {
+    MalHost *host = mal_host(state->vm);
+    if (state->tls_config == nullptr)
+        return mal_tcp_connect_address_start(host, address, length, &state->operation);
+    return host->node_net_tls->connect(host, address, length, state->tls_config, &state->operation);
+}
+
 static bool net_start_next_address(MalNodeNetSocketState *state) {
     while (state->address_index < state->address_count) {
         usize index = state->address_index++;
-        if (mal_tcp_connect_tls_address_start(mal_host(state->vm),
-                (const struct sockaddr *) &state->addresses[index],
-                state->address_lengths[index], state->tls_config, &state->operation)) {
+        if (net_start_address(state, (const struct sockaddr *) &state->addresses[index],
+                state->address_lengths[index])) {
             state->resolving = false;
             return true;
         }
@@ -880,7 +909,7 @@ static MalValue net_socket_connect_config(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalTlsClientConfig *config) {
     if (net_state(receiver) != nullptr || argc < 1) {
-        mal_tls_client_config_free(&config);
+        net_release_client_config(vm, &config);
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
                            "Socket is already connecting or connected");
         return mal_value_new_undefined();
@@ -956,8 +985,7 @@ static MalValue net_socket_connect_config(
     if (path != nullptr) {
         state->path = path;
         path = nullptr;
-        started = mal_tcp_connect_tls_address_start(mal_host(vm),
-            (const struct sockaddr *) &pipe_address, pipe_length, state->tls_config, &state->operation);
+        started = net_start_address(state, (const struct sockaddr *) &pipe_address, pipe_length);
     } else {
         state->port = (u16) port_number;
         struct sockaddr_storage numeric;
@@ -995,7 +1023,7 @@ static MalValue net_socket_connect_config(
     if (lookup && !net_socket_lookup(vm, receiver, roots[2], roots[4], roots[5], roots[6])) goto done;
     result = receiver;
 done:
-    mal_tls_client_config_free(&config);
+    net_release_client_config(vm, &config);
     free(host);
     free(path);
     mal_gc_unroot(&root);
@@ -1707,7 +1735,7 @@ static void net_set_endpoints(MalVm *vm, MalValue socket, MalHostHandle operatio
 static void net_dispatch_progress_in_context(
     MalVm *vm, MalNodeNetSocketState *state, MalTcpProgress *progress) {
     if (progress->kind == MAL_TCP_TLS_CLIENT_HELLO) {
-        net_sni_hello(vm, state, progress);
+        mal_host(vm)->node_net_tls->hello(vm, state, progress);
         return;
     }
     if (progress->kind == MAL_TCP_SECURE_CONNECTED) {
@@ -1717,7 +1745,7 @@ static void net_dispatch_progress_in_context(
         }
         state->secure = true;
         net_set(vm, state->receiver, "encrypted", mal_value_new_boolean(true));
-        net_tls_describe(vm, state);
+        mal_host(vm)->node_net_tls->describe(vm, state);
         if (vm->completion.kind == MAL_COMPLETION_THROW) return;
         if (state->tls_server) {
             MalValue socket = state->receiver;
@@ -1988,8 +2016,7 @@ static void net_server_maybe_close(MalVm *vm, MalNodeNetServerState *state) {
     MalRootSpan root;
     mal_gc_root(&root, &server, 1);
     net_server_unlink(state);
-    mal_tls_server_config_free(&state->tls_config);
-    for (usize i = 0; i < countof(state->sni_cache); i++) mal_tls_server_config_free(&state->sni_cache[i].config);
+    net_release_server_config(state);
     free(state->path);
     free(state);
     net_server_emit_later(vm, server, "close", mal_value_new_undefined());
@@ -2096,16 +2123,10 @@ static void net_server_accept(MalVm *vm, MalNodeNetServerState *server, MalHostH
     net_set(vm, roots[1], "readyState", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "open")));
     net_set(vm, roots[1], "server", roots[0]);
     net_set_endpoints(vm, roots[1], accepted);
-    if (server->tls_config != nullptr) {
-        if (!(net_server_uses_sni(vm, roots[0])
-                ? mal_tcp_start_tls_server_sni(mal_host(vm), accepted)
-                : mal_tcp_start_tls_server(mal_host(vm), accepted, server->tls_config))) {
-            (void) mal_tcp_cancel(mal_host(vm), accepted);
-            mal_gc_unroot(&root);
-            return;
-        }
-        state->tls_server = true;
-        state->tls_context = mal_async_context_capture(vm);
+    if (server->tls_config != nullptr
+        && !mal_host(vm)->node_net_tls->accept(vm, roots[0], state, server->tls_config)) {
+        mal_gc_unroot(&root);
+        return;
     }
     MalValue pause_on_connect;
     bool paused = net_get(vm, roots[0], "pauseOnConnect", &pause_on_connect) && mal_value_is_truthy(pause_on_connect);
@@ -2281,8 +2302,38 @@ bool mal_node_net_server_refresh_tls(MalVm *vm, MalValue server) {
     return true;
 }
 
+static bool net_accept_tls(
+    MalVm *vm, MalValue server, MalNodeNetSocketState *socket, MalTlsServerConfig *config) {
+    MalHost *host = mal_host(vm);
+    if (!(net_server_uses_sni(vm, server)
+            ? mal_tcp_start_tls_server_sni(host, socket->operation)
+            : mal_tcp_start_tls_server(host, socket->operation, config))) {
+        (void) mal_tcp_cancel(host, socket->operation);
+        return false;
+    }
+    socket->tls_server = true;
+    socket->tls_context = mal_async_context_capture(vm);
+    return true;
+}
+
+void mal_node_net_install_tls(MalVm *vm) {
+    static const MalNodeNetTls tls = {
+        .free_client_config = mal_tls_client_config_free,
+        .connect = mal_tcp_connect_tls_address_start,
+        .free_server_config = mal_tls_server_config_free,
+        .server_config = mal_node_net_tls_config,
+        .accept = net_accept_tls,
+        .hello = net_sni_hello,
+        .describe = net_tls_describe,
+    };
+    MalHost *host = mal_host(vm);
+    if (host != nullptr) host->node_net_tls = &tls;
+}
+
 static bool net_server_tls_config(MalVm *vm, MalValue server, MalNodeNetServerState *state) {
-    return mal_node_net_tls_config(vm, server, &state->tls_config, &state->tls_without_cert);
+    MalHost *host = mal_host(vm);
+    const MalNodeNetTls *tls = host == nullptr ? nullptr : host->node_net_tls;
+    return tls == nullptr || tls->server_config(vm, server, &state->tls_config, &state->tls_without_cert);
 }
 
 static bool net_listen_port(MalVm *vm, MalValue value, u16 *port) {

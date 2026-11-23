@@ -136,6 +136,7 @@ typedef struct MalNodeHttpServerState {
     MalAsyncContext *async_context;
     MalHttpServer *native;
     MalValue pending_lookup;
+    const struct MalNodeHttpServerTls *tls_operations;
     MalTlsServerConfig *pending_tls;
     u16 port;
     int backlog;
@@ -167,6 +168,16 @@ typedef struct MalNodeHttpServerState {
     struct MalNodeHttpSocketState *timeout_tail;
     struct MalNodeHttpServerState *next;
 } MalNodeHttpServerState;
+
+typedef struct MalNodeHttpServerTls {
+    bool (*attach)(MalNodeHttpServerState *, MalHttpServer *);
+    bool (*drain)(MalVm *, MalNodeHttpServerState *);
+    typeof(mal_tls_server_config_free) *free_config;
+} MalNodeHttpServerTls;
+
+static void http_server_free_pending_tls(MalNodeHttpServerState *state) {
+    if (state->pending_tls != nullptr) state->tls_operations->free_config(&state->pending_tls);
+}
 
 typedef struct MalNodeHttpTlsError {
     int error;
@@ -320,6 +331,7 @@ typedef struct MalNodeHttpClientState {
     char *host;
     u16 port;
     bool secure;
+    MalHttpClientStart *start;
     bool keep_alive;
     /* https `ca`; null trusts the host roots. */
     char *ca;
@@ -2851,7 +2863,7 @@ static void http_cleanup(MalVm *vm) {
             }
         }
         *server_link = state->next;
-        mal_tls_server_config_free(&state->pending_tls);
+        http_server_free_pending_tls(state);
         free(state);
     }
     if (host != nullptr) {
@@ -3105,8 +3117,8 @@ static bool http_client_start_request(
         (const byte *) state->cert, state->cert_len, (const byte *) state->key, state->key_len,
     };
     bool reused;
-    if (!mal_http_client_start(
-            mal_host(vm), state->host, state->port, state->secure,
+    if (!state->start(
+            mal_host(vm), state->host, state->port,
             (const byte *) state->ca, state->ca_len, &identity, keep_alive,
             request, request_length, content_length,
             state->method_len == 4 && memcmp(state->method, "HEAD", 4) == 0,
@@ -4988,7 +5000,6 @@ static bool http_client_drain(MalVm *vm) {
     return true;
 }
 
-static bool http_server_drain_tls(MalVm *vm, MalNodeHttpServerState *state);
 static bool http_server_drain_timeout(MalVm *vm, MalNodeHttpServerState *state);
 static void http_server_free_tls_errors(MalNodeHttpServerState *server);
 
@@ -5011,7 +5022,7 @@ bool mal_node_http_drain(MalVm *vm) {
             mal_async_context_scope_exit(vm, &scope);
             return true;
         }
-        if (http_server_drain_tls(vm, state)) return true;
+        if (state->tls_operations != nullptr && state->tls_operations->drain(vm, state)) return true;
         if (http_server_drain_timeout(vm, state)) return true;
         if (state->close_ready) {
             MAL_PERF_COUNT(http_close_scans);
@@ -5025,7 +5036,7 @@ bool mal_node_http_drain(MalVm *vm) {
             mal_gc_root(&root, &receiver, 1);
             *link = state->next;
             http_server_free_tls_errors(state);
-            mal_tls_server_config_free(&state->pending_tls);
+            http_server_free_pending_tls(state);
             free(state);
             MalAsyncContextScope scope;
             mal_async_context_scope_enter(vm, &scope, async_context);
@@ -5717,11 +5728,27 @@ static bool http_server_drain_tls(MalVm *vm, MalNodeHttpServerState *state) {
     return true;
 }
 
+static bool http_server_attach_tls(MalNodeHttpServerState *state, MalHttpServer *native) {
+    if (state->pending_tls != nullptr
+        && !mal_http_server_set_tls(native, state->pending_tls, http_server_tls_event, state))
+        return false;
+    state->pending_tls = nullptr;
+    if (state->sni_enabled) mal_http_server_set_tls_hello(native, http_server_tls_hello);
+    return true;
+}
+
+static const MalNodeHttpServerTls http_server_tls_operations = {
+    .attach = http_server_attach_tls,
+    .drain = http_server_drain_tls,
+    .free_config = mal_tls_server_config_free,
+};
+
 bool mal_node_http_server_replace_tls(MalValue server, MalTlsServerConfig *config) {
     MalNodeHttpServerState *state = http_server_state(server);
     if (state == nullptr || state->closing) return false;
+    state->tls_operations = &http_server_tls_operations;
     if (state->native != nullptr) return mal_http_server_replace_tls(state->native, config);
-    mal_tls_server_config_free(&state->pending_tls);
+    http_server_free_pending_tls(state);
     state->pending_tls = config;
     return true;
 }
@@ -5729,8 +5756,9 @@ bool mal_node_http_server_replace_tls(MalValue server, MalTlsServerConfig *confi
 bool mal_node_http_server_set_tls(MalValue server, MalTlsServerConfig *config) {
     MalNodeHttpServerState *state = http_server_state(server);
     if (state == nullptr || state->closing) return false;
+    state->tls_operations = &http_server_tls_operations;
     if (state->native != nullptr) return mal_http_server_set_tls(state->native, config, http_server_tls_event, state);
-    mal_tls_server_config_free(&state->pending_tls);
+    http_server_free_pending_tls(state);
     state->pending_tls = config;
     return true;
 }
@@ -5740,7 +5768,7 @@ static void http_server_remove_start(MalNodeHttpServerState *state) {
     while (*link != nullptr && *link != state) link = &(*link)->next;
     if (*link == state) *link = state->next;
     mal_gc_write_barrier(state->pending_lookup);
-    mal_tls_server_config_free(&state->pending_tls);
+    http_server_free_pending_tls(state);
     http_server_free_tls_errors(state);
     free(state);
 }
@@ -5800,8 +5828,7 @@ static bool http_server_bind(MalVm *vm, MalNodeHttpServerState *state, const cha
     }
     if (!http_server_push_limits(state)
         || !http_server_push_inactivity_timeout(vm, state)
-        || (state->pending_tls != nullptr && !mal_http_server_set_tls(
-            native, state->pending_tls, http_server_tls_event, state))) {
+        || (state->tls_operations != nullptr && !state->tls_operations->attach(state, native))) {
         // No accept can run before this native call yields, so close completes synchronously.
         mal_http_server_close(native, http_native_close_complete, state);
         state->close_ready = false;
@@ -5813,8 +5840,6 @@ static bool http_server_bind(MalVm *vm, MalNodeHttpServerState *state, const cha
         http_server_fail_start(vm, state, error);
         return false;
     }
-    state->pending_tls = nullptr;
-    if (state->sni_enabled) mal_http_server_set_tls_hello(native, http_server_tls_hello);
     state->listening_pending = true;
     return true;
 }
@@ -6435,7 +6460,7 @@ static bool http_client_validate_endpoint(
 
 static MalValue http_request_common(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
-    MalValue new_target, MalValue callee, bool secure) {
+    MalValue new_target, MalValue callee, MalHttpClientStart *start, bool secure) {
     (void) receiver;
     (void) new_target;
     (void) callee;
@@ -6534,6 +6559,7 @@ static MalValue http_request_common(
         }
     }
     state->secure = strcmp(protocol, "https:") == 0;
+    state->start = start;
     if (options_only) state->port = state->secure ? 443 : 80;
     if (!http_client_option(vm, roots[0], "port", &roots[4])) goto fail_endpoint;
     if (!mal_value_is_undefined(roots[4])
@@ -6698,12 +6724,14 @@ fail:
 
 static MalValue http_request(MalVm *vm, MalValue receiver, const MalValue *args,
     i32 argc, MalValue new_target, MalValue callee) {
-    return http_request_common(vm, receiver, args, argc, new_target, callee, false);
+    return http_request_common(vm, receiver, args, argc, new_target, callee,
+        mal_http_client_start, false);
 }
 
 MalValue mal_node_https_request(MalVm *vm, MalValue receiver, const MalValue *args,
     i32 argc, MalValue new_target, MalValue callee) {
-    return http_request_common(vm, receiver, args, argc, new_target, callee, true);
+    return http_request_common(vm, receiver, args, argc, new_target, callee,
+        mal_http_client_start_tls, true);
 }
 
 static MalValue http_get(

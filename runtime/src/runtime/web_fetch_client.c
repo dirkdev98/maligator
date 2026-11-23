@@ -555,7 +555,8 @@ static bool fetch_start(MalVm *vm, FetchClient *client) {
     client->upload_complete = false;
     client->write_in_flight = false;
     client->body_offset = 0;
-    if (!mal_http_client_start(mal_host(vm), hostname, port, secure, nullptr, 0, nullptr, true,
+    MalHttpClientStart *start = secure ? mal_http_client_start_tls : mal_http_client_start;
+    if (!start(mal_host(vm), hostname, port, nullptr, 0, nullptr, true,
             head.data, head.length, content_length, strcmp(client->method, "HEAD") == 0, 0, 0,
             &client->operation, &reused)) {
         client->operation = 0;

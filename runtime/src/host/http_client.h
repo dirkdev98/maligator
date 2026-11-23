@@ -73,11 +73,10 @@ typedef enum MalHttpClientWriteResult {
  * between reads; zero disables the inactivity deadline.
  * max_header_size bounds response header bytes as Node's maxHeaderSize; zero
  * selects 16 KiB. */
-bool mal_http_client_start(
+typedef bool MalHttpClientStart(
     MalHost *host,
     const char *host_name,
     u16 port,
-    bool secure,
     const byte *ca_pem,
     usize ca_pem_length,
     const MalTlsClientIdentity *identity,
@@ -90,6 +89,9 @@ bool mal_http_client_start(
     usize max_header_size,
     MalHostHandle *operation,
     bool *reused);
+
+MalHttpClientStart mal_http_client_start;
+MalHttpClientStart mal_http_client_start_tls;
 
 /* Retune the inactivity deadline of a running request (zero disables it).
  * The new window starts now. False means the operation is no longer active. */

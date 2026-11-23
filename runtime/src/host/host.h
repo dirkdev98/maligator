@@ -29,6 +29,7 @@ typedef struct MalHost {
     struct MalHttpClient *http_clients;
     struct MalHttpClientIdle *http_idle_clients;
     struct MalTcpConnection *tcp_connections;
+    const struct MalNodeNetTls *node_net_tls;
     // Optional services attach their teardown when they acquire host resources.
     void (*tcp_shutdown)(struct MalHost *);
     void (*http_client_shutdown)(struct MalHost *);

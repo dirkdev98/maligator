@@ -143,6 +143,12 @@ const fixtures: Array<{
 		bun: false,
 		forbidden: ["brotli", "rustls", "Node runtime", "sqlite3.o", "argon2"],
 	},
+	{
+		name: "node-net",
+		file: "bench/size/node-net.mjs",
+		bun: true,
+		forbidden: ["TLS", "sqlite3.o"],
+	},
 	{ name: "express", file: "bench/http/express-server.cjs", bun: true },
 ];
 
@@ -371,10 +377,15 @@ try {
 		let bunBytes: number | undefined;
 		if (fixture.bun && bunVersion !== undefined) {
 			const outfile = path.join(scratch, `${name}-bun`);
-			execFileSync("bun", ["build", "--compile", file, "--outfile", outfile], {
-				env,
-				stdio: ["ignore", "ignore", "pipe"],
-			});
+			execFileSync(
+				"bun",
+				["build", "--compile", path.resolve(file), "--outfile", outfile],
+				{
+					cwd: scratch,
+					env,
+					stdio: ["ignore", "ignore", "pipe"],
+				},
+			);
 			bunBytes = statSync(outfile).size;
 			rmSync(outfile);
 		}

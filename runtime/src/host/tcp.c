@@ -34,6 +34,7 @@ typedef struct MalTcpConnection {
     MalOp write_op;
     MalTcpWrite *write_head;
     MalTcpWrite *write_tail;
+    const struct MalTcpTls *tls_operations;
     MalTlsClient *tls;
     MalTlsAcceptor *tls_acceptor;
     byte *tls_ciphertext;
@@ -46,6 +47,15 @@ typedef struct MalTcpConnection {
     bool shutdown_requested;
     struct MalTcpConnection *next;
 } MalTcpConnection;
+
+typedef struct MalTcpTls {
+    typeof(mal_tls_client_from_config) *from_config;
+    void (*read)(MalTcpConnection *, byte *, usize);
+    bool (*flush)(MalTcpConnection *);
+    void (*destroy)(MalTcpConnection *);
+    typeof(mal_tls_session_info) *session_info;
+    typeof(mal_tls_client_is_handshaking) *is_handshaking;
+} MalTcpTls;
 
 void mal_tcp_progress_free(void *data) {
     MalTcpProgress *progress = data;
@@ -72,9 +82,7 @@ static void tcp_destroy(MalTcpConnection *connection) {
     (void) mal_reactor_cancel_op(&connection->host->reactor, &connection->read_op);
     (void) mal_reactor_cancel_op(&connection->host->reactor, &connection->write_op);
     mal_net_close(connection->fd);
-    mal_tls_client_free(&connection->tls);
-    mal_tls_acceptor_free(&connection->tls_acceptor);
-    free(connection->tls_ciphertext);
+    if (connection->tls_operations != nullptr) connection->tls_operations->destroy(connection);
     MalTcpWrite *write = connection->write_head;
     while (write != nullptr) {
         MalTcpWrite *next = write->next;
@@ -92,7 +100,7 @@ static void tcp_complete(
         terminal->error = error;
         terminal->tls_failure[0] = '\0';
         if (error == EPROTO && connection->tls != nullptr) {
-            intptr_t length = mal_tls_session_info(connection->tls, MAL_TLS_INFO_FAILURE,
+            intptr_t length = connection->tls_operations->session_info(connection->tls, MAL_TLS_INFO_FAILURE,
                 (uint8_t *) terminal->tls_failure, sizeof(terminal->tls_failure) - 1);
             terminal->tls_failure[length > 0 && (usize) length < sizeof(terminal->tls_failure) ? length : 0] = '\0';
         }
@@ -130,6 +138,105 @@ static void tcp_tls_send_alert(MalTcpConnection *connection) {
     if (produced > 0) (void) mal_net_write(connection->fd, alert, produced);
 }
 
+static void tcp_read_tls(MalTcpConnection *connection, byte *bytes, usize count) {
+    if (connection->tls_acceptor != nullptr) {
+        int status = mal_tls_acceptor_read(connection->tls_acceptor, bytes, count);
+        free(bytes);
+        if (status != MAL_TLS_STATUS_OK) {
+            tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, EPROTO);
+            return;
+        }
+        byte name[256];
+        intptr_t length = mal_tls_acceptor_server_name(connection->tls_acceptor, name, sizeof(name));
+        if (length == -2) {
+            if (!connection->read_paused && !tcp_arm_read(connection)) {
+                tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, errno);
+            }
+            return;
+        }
+        MalTcpProgress *hello = calloc(1, sizeof(MalTcpProgress));
+        if (hello != nullptr && length >= 0) {
+            usize copied = (usize) length < sizeof(name) ? (usize) length : sizeof(name);
+            hello->bytes = malloc(copied + 1);
+            if (hello->bytes != nullptr) {
+                memcpy(hello->bytes, name, copied);
+                hello->length = copied;
+            }
+        }
+        if (hello == nullptr || (length >= 0 && hello->bytes == nullptr)) {
+            mal_tcp_progress_free(hello);
+            tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
+            return;
+        }
+        hello->kind = MAL_TCP_TLS_CLIENT_HELLO;
+        // Reads stay off until mal_tcp_tls_select installs the session.
+        if (!tcp_progress(connection, hello)) {
+            tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
+        }
+        return;
+    }
+    usize consumed = 0;
+    int status = mal_tls_client_read_ciphertext(
+        connection->tls, bytes, count, &consumed);
+    free(bytes);
+    if (status != MAL_TLS_STATUS_OK || consumed != count) {
+        tcp_tls_send_alert(connection);
+        tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, EPROTO);
+        return;
+    }
+    if (!connection->tls_connected_reported
+        && mal_tls_client_is_handshaking(connection->tls) == 0) {
+        MalTcpProgress *secure = calloc(1, sizeof(MalTcpProgress));
+        if (secure == nullptr) {
+            tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
+            return;
+        }
+        secure->kind = MAL_TCP_SECURE_CONNECTED;
+        connection->tls_connected_reported = true;
+        if (!tcp_progress(connection, secure)) {
+            tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
+            return;
+        }
+    }
+    for (;;) {
+        byte *plain = malloc(MAL_TCP_IO_TURN);
+        if (plain == nullptr) {
+            tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
+            return;
+        }
+        usize produced = 0;
+        status = mal_tls_client_read_plaintext(
+            connection->tls, plain, MAL_TCP_IO_TURN, &produced);
+        if (status != MAL_TLS_STATUS_OK) {
+            free(plain);
+            tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, EPROTO);
+            return;
+        }
+        if (produced == 0) {
+            free(plain);
+            break;
+        }
+        MalTcpProgress *progress = calloc(1, sizeof(MalTcpProgress));
+        if (progress == nullptr) {
+            free(plain);
+            tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
+            return;
+        }
+        progress->kind = MAL_TCP_DATA;
+        progress->bytes = plain;
+        progress->length = produced;
+        if (!tcp_progress(connection, progress)) {
+            tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
+            return;
+        }
+    }
+    if (!tcp_flush(connection)
+        || (!connection->read_paused && !tcp_arm_read(connection))) {
+        tcp_complete(connection, MAL_HOST_TERMINAL_ERROR,
+            errno == 0 ? EPROTO : errno);
+    }
+}
+
 static void tcp_read_ready(void *data) {
     MalTcpConnection *connection = data;
     byte *bytes = malloc(MAL_TCP_IO_TURN);
@@ -142,103 +249,8 @@ static void tcp_read_ready(void *data) {
         count = read(connection->fd, bytes, MAL_TCP_IO_TURN);
     } while (count < 0 && errno == EINTR);
     if (count > 0) {
-        if (connection->tls_acceptor != nullptr) {
-            int status = mal_tls_acceptor_read(connection->tls_acceptor, bytes, (usize) count);
-            free(bytes);
-            if (status != MAL_TLS_STATUS_OK) {
-                tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, EPROTO);
-                return;
-            }
-            byte name[256];
-            intptr_t length = mal_tls_acceptor_server_name(connection->tls_acceptor, name, sizeof(name));
-            if (length == -2) {
-                if (!connection->read_paused && !tcp_arm_read(connection)) {
-                    tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, errno);
-                }
-                return;
-            }
-            MalTcpProgress *hello = calloc(1, sizeof(MalTcpProgress));
-            if (hello != nullptr && length >= 0) {
-                usize copied = (usize) length < sizeof(name) ? (usize) length : sizeof(name);
-                hello->bytes = malloc(copied + 1);
-                if (hello->bytes != nullptr) {
-                    memcpy(hello->bytes, name, copied);
-                    hello->length = copied;
-                }
-            }
-            if (hello == nullptr || (length >= 0 && hello->bytes == nullptr)) {
-                mal_tcp_progress_free(hello);
-                tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
-                return;
-            }
-            hello->kind = MAL_TCP_TLS_CLIENT_HELLO;
-            // Reads stay off until mal_tcp_tls_select installs the session.
-            if (!tcp_progress(connection, hello)) {
-                tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
-            }
-            return;
-        }
-        if (connection->tls != nullptr) {
-            usize consumed = 0;
-            int status = mal_tls_client_read_ciphertext(
-                connection->tls, bytes, (usize) count, &consumed);
-            free(bytes);
-            if (status != MAL_TLS_STATUS_OK || consumed != (usize) count) {
-                tcp_tls_send_alert(connection);
-                tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, EPROTO);
-                return;
-            }
-            if (!connection->tls_connected_reported
-                && mal_tls_client_is_handshaking(connection->tls) == 0) {
-                MalTcpProgress *secure = calloc(1, sizeof(MalTcpProgress));
-                if (secure == nullptr) {
-                    tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
-                    return;
-                }
-                secure->kind = MAL_TCP_SECURE_CONNECTED;
-                connection->tls_connected_reported = true;
-                if (!tcp_progress(connection, secure)) {
-                    tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
-                    return;
-                }
-            }
-            for (;;) {
-                byte *plain = malloc(MAL_TCP_IO_TURN);
-                if (plain == nullptr) {
-                    tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
-                    return;
-                }
-                usize produced = 0;
-                status = mal_tls_client_read_plaintext(
-                    connection->tls, plain, MAL_TCP_IO_TURN, &produced);
-                if (status != MAL_TLS_STATUS_OK) {
-                    free(plain);
-                    tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, EPROTO);
-                    return;
-                }
-                if (produced == 0) {
-                    free(plain);
-                    break;
-                }
-                MalTcpProgress *progress = calloc(1, sizeof(MalTcpProgress));
-                if (progress == nullptr) {
-                    free(plain);
-                    tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
-                    return;
-                }
-                progress->kind = MAL_TCP_DATA;
-                progress->bytes = plain;
-                progress->length = produced;
-                if (!tcp_progress(connection, progress)) {
-                    tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
-                    return;
-                }
-            }
-            if (!tcp_flush(connection)
-                || (!connection->read_paused && !tcp_arm_read(connection))) {
-                tcp_complete(connection, MAL_HOST_TERMINAL_ERROR,
-                    errno == 0 ? EPROTO : errno);
-            }
+        if (connection->tls_operations != nullptr) {
+            connection->tls_operations->read(connection, bytes, (usize) count);
             return;
         }
         MalTcpProgress *progress = calloc(1, sizeof(MalTcpProgress));
@@ -463,17 +475,35 @@ static bool tcp_flush_tls(MalTcpConnection *connection) {
 
 static bool tcp_flush(MalTcpConnection *connection) {
     if (connection->connecting) return true;
-    // Writes queued while a ClientHello awaits its config must wait for the session.
-    if (connection->tls_acceptor != nullptr) return true;
-    return connection->tls == nullptr
-        ? tcp_flush_raw(connection) : tcp_flush_tls(connection);
+    return connection->tls_operations == nullptr
+        ? tcp_flush_raw(connection) : connection->tls_operations->flush(connection);
 }
+
+static bool tcp_flush_secure(MalTcpConnection *connection) {
+    // Writes queued while a ClientHello awaits its config must wait for the session.
+    return connection->tls_acceptor != nullptr || tcp_flush_tls(connection);
+}
+
+static void tcp_destroy_tls(MalTcpConnection *connection) {
+    mal_tls_client_free(&connection->tls);
+    mal_tls_acceptor_free(&connection->tls_acceptor);
+    free(connection->tls_ciphertext);
+}
+
+static const MalTcpTls tcp_tls_operations = {
+    .from_config = mal_tls_client_from_config,
+    .read = tcp_read_tls,
+    .flush = tcp_flush_secure,
+    .destroy = tcp_destroy_tls,
+    .session_info = mal_tls_session_info,
+    .is_handshaking = mal_tls_client_is_handshaking,
+};
 
 static void tcp_shutdown(MalHost *host);
 
-bool mal_tcp_connect_tls_address_start(
+static bool tcp_connect_address_start(
     MalHost *host, const struct sockaddr *address, socklen_t length,
-    const MalTlsClientConfig *config, MalHostHandle *operation) {
+    const MalTcpTls *tls, const MalTlsClientConfig *config, MalHostHandle *operation) {
     if (host == nullptr || address == nullptr || operation == nullptr
         || !mal_host_operation_start(&host->tasks, operation)) {
         return false;
@@ -483,7 +513,8 @@ bool mal_tcp_connect_tls_address_start(
     connection->host = host;
     connection->operation = *operation;
     connection->fd = -1;
-    if (config != nullptr && mal_tls_client_from_config(config, &connection->tls) != MAL_TLS_STATUS_OK)
+    connection->tls_operations = tls;
+    if (tls != nullptr && tls->from_config(config, &connection->tls) != MAL_TLS_STATUS_OK)
         goto fail_connection;
     connection->fd = mal_net_connect_address(address, length);
     int connect_error = connection->fd < 0 ? errno : 0;
@@ -517,7 +548,14 @@ fail:
 bool mal_tcp_connect_address_start(
     MalHost *host, const struct sockaddr *address, socklen_t length,
     MalHostHandle *operation) {
-    return mal_tcp_connect_tls_address_start(host, address, length, nullptr, operation);
+    return tcp_connect_address_start(host, address, length, nullptr, nullptr, operation);
+}
+
+bool mal_tcp_connect_tls_address_start(
+    MalHost *host, const struct sockaddr *address, socklen_t length,
+    const MalTlsClientConfig *config, MalHostHandle *operation) {
+    const MalTcpTls *tls = config == nullptr ? nullptr : &tcp_tls_operations;
+    return tcp_connect_address_start(host, address, length, tls, config, operation);
 }
 
 bool mal_tcp_connect_start(
@@ -559,8 +597,8 @@ bool mal_tcp_shutdown_write(MalHost *host, MalHostHandle operation) {
     MalTcpConnection *connection = host == nullptr ? nullptr : tcp_find(host, operation);
     if (connection == nullptr) return false;
     connection->shutdown_requested = true;
-    bool handshaking = false;
-    handshaking = connection->tls != nullptr && mal_tls_client_is_handshaking(connection->tls) != 0;
+    bool handshaking = connection->tls != nullptr
+        && connection->tls_operations->is_handshaking(connection->tls) != 0;
     return connection->connecting || connection->write_head != nullptr || handshaking
         || shutdown(connection->fd, SHUT_WR) == 0 || errno == ENOTCONN;
 }
@@ -693,6 +731,7 @@ static bool tcp_start_tls_session(
             ca_pem, ca_pem_length, alpn, alpn_length, identity, insecure, &connection->tls)
         : mal_tls_server_create(server_config, &connection->tls);
     if (status != MAL_TLS_STATUS_OK) return false;
+    connection->tls_operations = &tcp_tls_operations;
     if (!tcp_flush(connection)) {
         tcp_complete(connection, MAL_HOST_TERMINAL_ERROR,
             errno == 0 ? EPROTO : errno);
@@ -729,7 +768,9 @@ bool mal_tcp_start_tls_server_sni(MalHost *host, MalHostHandle operation) {
         || connection->tls_acceptor != nullptr) {
         return false;
     }
-    return mal_tls_acceptor_create(&connection->tls_acceptor) == MAL_TLS_STATUS_OK;
+    if (mal_tls_acceptor_create(&connection->tls_acceptor) != MAL_TLS_STATUS_OK) return false;
+    connection->tls_operations = &tcp_tls_operations;
+    return true;
 }
 
 bool mal_tcp_tls_select(MalHost *host, MalHostHandle operation, const MalTlsServerConfig *config) {
