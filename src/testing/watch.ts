@@ -200,11 +200,11 @@ function collectDirectories(
 		if (visited.has(real)) return;
 		visited.add(real);
 		result.add(target);
-		for (const name of readdirSync(target)) {
-			if (omitInternals && [".git", "node_modules", ".cache"].includes(name)) continue;
-			const child = path.join(target, name);
-			if (statSync(child).isDirectory())
-				collectDirectories(child, result, omitInternals, visited);
+		for (const entry of readdirSync(target, { withFileTypes: true })) {
+			if (omitInternals && [".git", "node_modules", ".cache"].includes(entry.name))
+				continue;
+			if (entry.isDirectory() || entry.isSymbolicLink())
+				collectDirectories(path.join(target, entry.name), result, omitInternals, visited);
 		}
 	} catch {
 		return;

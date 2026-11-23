@@ -46,9 +46,18 @@ export function discoverTestFiles(
 		const realDirectory = realpathSync(absolute);
 		if (visitedDirectories.has(realDirectory)) return;
 		visitedDirectories.add(realDirectory);
-		for (const name of readdirSync(realDirectory).sort(compareNames)) {
+		const entries = readdirSync(realDirectory, { withFileTypes: true }).sort(
+			(left, right) => compareNames(left.name, right.name),
+		);
+		for (const entry of entries) {
+			const name = entry.name;
 			if (name === ".git" || name === "node_modules" || name === ".cache") continue;
-			visit(path.join(realDirectory, name), false);
+			if (
+				entry.isDirectory() ||
+				entry.isSymbolicLink() ||
+				(entry.isFile() && isConventionalTest(name))
+			)
+				visit(path.join(realDirectory, name), false);
 		}
 	};
 
