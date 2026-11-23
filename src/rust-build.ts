@@ -80,7 +80,7 @@ export function rustArtifactKey(inputs: RustArtifactKeyInputs): string {
 	return artifactActionKey(RUST_PRODUCER, inputs);
 }
 
-export const RUST_PRODUCER = artifactProducer("rust-library", 2, "cargo-build");
+export const RUST_PRODUCER = artifactProducer("rust-library", 3, "cargo-build");
 const RUST_TARGET_PRODUCER = artifactProducer("rust-target", 1, "cargo-build");
 
 type RustArchiveInputs = Pick<
@@ -167,18 +167,31 @@ function cargoNativeToolEnvironment(context: NativeBuildContext): Record<string,
 		environment.CXX = formatToolCommand(context.toolchain.tools.cxx);
 	}
 	if (context.toolchain.cross === true) {
-		// cc-rs recognizes Zig as a compiler wrapper only when told its basename.
-		// Its Rust-triple defaults would otherwise append a second,
-		// Zig-incompatible `--target`; the tool command already carries the
-		// canonical Zig target. Zig C and C++ also enable undefined-behavior checks
-		// for some optimized constructs by default, so turn them off for ordinary
-		// production dependencies rather than leaving unresolved UBSan calls.
+		// The Zig command supplies its target in Zig syntax. Disabling cc-rs's
+		// defaults avoids a second target flag, but also removes its release flags.
 		environment.CC_KNOWN_WRAPPER_CUSTOM = path.basename(context.toolchain.tools.cc.path);
 		environment.CRATE_CC_NO_DEFAULTS = "1";
-		environment.CFLAGS = [context.environment.CFLAGS, "-fno-sanitize=undefined"]
+		const releaseFlags = [
+			`-O${context.environment.CARGO_PROFILE_RELEASE_OPT_LEVEL ?? "3"}`,
+			"-DNDEBUG",
+			"-ffunction-sections",
+			"-fdata-sections",
+		];
+		// The bundled Ada parser reports errors through its C API. Its exception
+		// handlers are confined to the disabled std::regex URLPattern provider.
+		environment.CFLAGS = [
+			...releaseFlags,
+			context.environment.CFLAGS,
+			"-fno-sanitize=undefined",
+		]
 			.filter((value) => value !== undefined && value !== "")
 			.join(" ");
-		environment.CXXFLAGS = [context.environment.CXXFLAGS, "-fno-sanitize=undefined"]
+		environment.CXXFLAGS = [
+			...releaseFlags,
+			"-fno-exceptions",
+			context.environment.CXXFLAGS,
+			"-fno-sanitize=undefined",
+		]
 			.filter((value) => value !== undefined && value !== "")
 			.join(" ");
 	}

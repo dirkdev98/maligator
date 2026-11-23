@@ -20,6 +20,7 @@ import { formatSiteFiles, updateSite } from "./site-data.ts";
 import { writeSiteDeployment } from "./site-deployment.ts";
 
 const META_FILE = "website/site-meta.json";
+const LINUX_X64_SERVER_BYTE_LIMIT = 3_550_000;
 const container = process.argv.includes("--container");
 const targetIndex = process.argv.indexOf("--target");
 const target =
@@ -92,6 +93,15 @@ for (let attempt = 0; attempt < 4; attempt++) {
 	);
 	if (embeddedAssetBytes > bytes)
 		throw new Error("Embedded assets exceed the website binary size");
+	const serverBytes = bytes - embeddedAssetBytes;
+	if (
+		container &&
+		binaryPlatform === "x86_64-unknown-linux-gnu" &&
+		serverBytes > LINUX_X64_SERVER_BYTE_LIMIT
+	)
+		throw new Error(
+			`Linux website server is ${serverBytes} bytes. The budget is ${LINUX_X64_SERVER_BYTE_LIMIT} bytes.`,
+		);
 	const meta = JSON.parse(readFileSync(META_FILE, "utf8")) as {
 		binaryBytes: number | null;
 		binaryPlatform: string;
@@ -106,7 +116,7 @@ for (let attempt = 0; attempt < 4; attempt++) {
 			attempt + 1,
 			4,
 			"stabilize site metadata",
-			`${bytes - embeddedAssetBytes} server bytes + ${embeddedAssetBytes} asset bytes`,
+			`${serverBytes} server bytes + ${embeddedAssetBytes} asset bytes`,
 		);
 		stabilized = true;
 		break;
@@ -115,7 +125,7 @@ for (let attempt = 0; attempt < 4; attempt++) {
 		attempt + 1,
 		4,
 		"stabilize site metadata",
-		`refresh size to ${bytes - embeddedAssetBytes} server bytes + ${embeddedAssetBytes} asset bytes`,
+		`refresh size to ${serverBytes} server bytes + ${embeddedAssetBytes} asset bytes`,
 	);
 	writeFileSync(
 		META_FILE,

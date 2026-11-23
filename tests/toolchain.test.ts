@@ -652,8 +652,9 @@ exit 7
 			ARFLAGS: "ar",
 			CC_KNOWN_WRAPPER_CUSTOM: "zig",
 			CRATE_CC_NO_DEFAULTS: "1",
-			CFLAGS: "-fno-sanitize=undefined",
-			CXXFLAGS: "-fno-sanitize=undefined",
+			CFLAGS: "-O3 -DNDEBUG -ffunction-sections -fdata-sections -fno-sanitize=undefined",
+			CXXFLAGS:
+				"-O3 -DNDEBUG -ffunction-sections -fdata-sections -fno-exceptions -fno-sanitize=undefined",
 		});
 		const result = buildLocalBinary({
 			context,
