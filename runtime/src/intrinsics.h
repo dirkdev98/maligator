@@ -339,10 +339,8 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_ADD_DISPOSABLE_RESOURCE,
     MAL_INTRINSIC_DISPOSE_RESOURCES,
     /**
-     * The CommonJS `require` native handed to module wrappers. Called with a
-     * numeric module id (the compiler resolves `require("lit")` to its id) and
-     * runs/caches that module via mal_vm_cjs_require; a non-numeric argument is a
-     * "dynamic require is not supported" TypeError. Not exposed on globalThis.
+     * The CommonJS `require` handed to module wrappers. It loads bundled
+     * modules by id and throws a TypeError for runtime string specifiers.
      */
     MAL_INTRINSIC_CJS_REQUIRE,
     /**

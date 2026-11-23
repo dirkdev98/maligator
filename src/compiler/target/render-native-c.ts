@@ -4110,6 +4110,7 @@ function emitCompiledVariant(
 	fastTryTargets: ReadonlyMap<number, NativeFastTryAbi> = new Map(),
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 	onFastTryLookup?: (target: number, resultKind?: "undefined") => void,
+	moduleWrapper = false,
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -4135,6 +4136,16 @@ function emitCompiledVariant(
 	}
 	if (directEntry !== undefined) validateNativeDirectEntry(fn, directEntry);
 	validateNativeLiteralSwitches(fn, native);
+	// A backward edge can repeatedly execute its surrounding emission. Keep the
+	// entire wrapper on the usual path in that case, including any prefix.
+	const compactModuleInit =
+		moduleWrapper &&
+		fn.handlers.every(({ endIp, handlerIp }) => handlerIp >= endIp) &&
+		!fn.instructions.some(
+			(instruction, ip) =>
+				(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+				instruction.targetIp <= ip,
+		);
 	const variant =
 		directEntry === undefined ? native : nativeVariantContract(native, directEntry);
 	const variantContract = nativeControlFlowContract(
@@ -4848,7 +4859,7 @@ function emitCompiledVariant(
 		directEntry === undefined ? "MalValue" : cTypeOf(directEntry.resultRepresentation);
 	// Keep native entries on 64-byte boundaries as neighboring generated code changes.
 	const signature = `${linkage === "static" ? "static " : ""}${NATIVE_ENTRY_ATTRIBUTES}__attribute__((aligned(64))) ${resultType} ${symbol}(${parameterList}) {`;
-	const frameSignature = `${linkage === "static" ? "static " : ""}${NATIVE_ENTRY_ATTRIBUTES}MAL_COMPILED_FRAME __attribute__((aligned(64))) ${resultType} ${symbol}(${parameterList}) {`;
+	const frameSignature = `${linkage === "static" ? "static " : ""}${compactModuleInit ? "__attribute__((minsize)) " : ""}${NATIVE_ENTRY_ATTRIBUTES}MAL_COMPILED_FRAME __attribute__((aligned(64))) ${resultType} ${symbol}(${parameterList}) {`;
 	lines.push(`    (void) this_value;`);
 	if (directEntry === undefined) lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
@@ -5907,6 +5918,7 @@ export function emitCompiledFunction(
 // Lookups include missing callees that can block fast admission.
 export function createNativeFunctionRenderer(
 	onFastTryLookup?: (caller: number, target: number, resultKind?: "undefined") => void,
+	moduleWrappers: ReadonlySet<number> = new Set(),
 ): typeof emitCompiledFunction {
 	const analyses = new Map<
 		number,
@@ -5972,6 +5984,7 @@ export function createNativeFunctionRenderer(
 			onFastTryLookup === undefined
 				? undefined
 				: (target, resultKind) => onFastTryLookup(index, target, resultKind),
+			moduleWrappers.has(index),
 		);
 	};
 }
@@ -5997,6 +6010,7 @@ function renderCompiledFunction(
 	fastTryTargets: ReadonlyMap<number, NativeFastTryAbi> = new Map(),
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 	onFastTryLookup?: (target: number, resultKind?: "undefined") => void,
+	moduleWrapper = false,
 ): CompiledFunction | null {
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
@@ -6019,6 +6033,7 @@ function renderCompiledFunction(
 		fastTryTargets,
 		directClosures,
 		onFastTryLookup,
+		moduleWrapper,
 	);
 	if (canonical === null) return null;
 	const name = relocatable === false ? index : relocatable.symbolStem;

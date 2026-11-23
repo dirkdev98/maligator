@@ -15289,7 +15289,6 @@ function directEvalBindingAccessor(
 	location: BindingLocation,
 	kind: "get" | "set",
 ): number {
-	retainCommonJsLoader(program, caller, binding);
 	let accessors = program.directEvalBindingAccessors.get(binding);
 	const cached = accessors?.[kind];
 	if (cached !== undefined) return cached;
@@ -17092,7 +17091,6 @@ function compileStaticIdentifier(
 	if (globalRead === null) retainUnfollowedGlobals(program);
 	else if (globalRead !== undefined) retainNamedHostGlobal(program, globalRead);
 	retainProcessIdentifier(program, fn, identifier, binding);
-	retainCommonJsLoader(program, fn, binding);
 
 	if (binding.undeclared && identifierLoadsIntrinsic(program, identifier.name)) {
 		const destination = nextCoreVariable(fn);
@@ -17324,23 +17322,6 @@ function retainUnfollowedLanguageMembers(program: CoreFrontendContext): void {
 function retainNodeErrorHooks(program: CoreFrontendContext): void {
 	if (program.semantic.graph?.execution?.target.platform !== "wasi")
 		program.languageInstallers.add(NODE_ERROR_HOOKS_INSTALLER);
-}
-
-function retainCommonJsLoader(
-	program: CoreFrontendContext,
-	fn: CoreFrontendFunction,
-	binding: Binding,
-): void {
-	if (
-		fn.semanticFile.commonjs &&
-		binding.name === "require" &&
-		binding.declarationNode === fn.semanticFile.ast
-	) {
-		const target = program.semantic.graph?.execution?.target;
-		if (target?.platform === "wasi")
-			throw unsupportedHostApi("require", target.triple, fn.semanticFile.path);
-		program.nodeModuleInstaller = hostInstallerSymbol("node:module");
-	}
 }
 
 /** Mark a reachable free Node global and keep it on globalThis storage. */

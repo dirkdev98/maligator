@@ -171,8 +171,16 @@ describe("node host installer link retention", () => {
 		expect(literalCjsInstallers).toEqual(pathInstallers);
 	});
 
-	it("retains the builtin registry for a materialized CommonJS require", () => {
-		expect(computedCjsInstallers).toEqual(expect.arrayContaining([...MODULE_INSTALLERS]));
+	it("omits builtin installers for a computed CommonJS require", () => {
+		const builtinInstallers = new Set([
+			...MODULE_INSTALLERS,
+			NODE_BUILTIN_LOADER_INSTALLER,
+			NODE_INSTALLED_BUILTINS_INSTALLER,
+			BUILTIN_REGISTRY_LOOKUP,
+		]);
+		expect(computedCjsInstallers.filter((name) => builtinInstallers.has(name))).toEqual(
+			[],
+		);
 	});
 
 	it("links no Node host when the path import's only read is optimized away", () => {

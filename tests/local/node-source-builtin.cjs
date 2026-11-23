@@ -1,10 +1,9 @@
-const id = process.env.MAL_BUILTIN_ID;
-const value = require(id);
+const value = require("node:test");
 console.log(
 	JSON.stringify([
 		typeof value,
-		value === require(id),
-		value === process.getBuiltinModule(id),
+		value === require("node:test"),
+		value === process.getBuiltinModule("node:test"),
 		value.test === value,
 	]),
 );

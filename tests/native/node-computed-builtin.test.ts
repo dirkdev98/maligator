@@ -28,14 +28,7 @@ function run(binary: string, args: Array<string>, env: NodeJS.ProcessEnv): strin
 		timeout: 30000,
 	});
 }
-function compare(name: keyof typeof fixtures, args: Array<string>) {
-	const expected = execFileSync(
-		process.execPath,
-		["--no-warnings", fixtures[name], ...args],
-		{
-			encoding: "utf8",
-		},
-	);
+function verify(name: keyof typeof fixtures, args: Array<string>, expected: string) {
 	const pair = binaries.get(name)!;
 	const sanitized = ["MAL_ASAN", "MAL_UBSAN", "MAL_TSAN"].some(
 		(key) => process.env[key] === "1",
@@ -44,7 +37,17 @@ function compare(name: keyof typeof fixtures, args: Array<string>) {
 		for (const env of sanitized ? [{}] : [{}, STRESS_ENV])
 			expect(run(binary, args, env)).toBe(expected);
 }
-describe("computed native builtin require", () => {
+function compare(name: keyof typeof fixtures, args: Array<string>) {
+	const expected = execFileSync(
+		process.execPath,
+		["--no-warnings", fixtures[name], ...args],
+		{
+			encoding: "utf8",
+		},
+	);
+	verify(name, args, expected);
+}
+describe("native builtin loading", () => {
 	beforeAll(() => {
 		for (const [name, fixture] of Object.entries(fixtures))
 			binaries.set(
@@ -63,17 +66,16 @@ describe("computed native builtin require", () => {
 				}),
 			);
 	});
-	it.each(["os", "node:os", "node:assert/strict", "node:sqlite"])(
-		"loads a fresh %s through CommonJS and shares the builtin cache",
-		(id) => compare("commonjs", [id]),
-	);
+	it("rejects computed wrapper require even with the builtin loader installed", () =>
+		verify("commonjs", ["node:os"], "TypeError: dynamic require is not supported\n"));
 	it.each(["os", "node:os", "node:assert/strict", "node:sqlite"])(
 		"loads a fresh %s through createRequire and shares the builtin cache",
 		(id) => compare("created", [id]),
 	);
-	it("loads a computed builtin without a process global", () => compare("selective", []));
-	it("keeps the loader when eval exposes the wrapper require", () =>
-		compare("eval", ["node:os"]));
+	it("rejects computed wrapper require without the builtin loader installed", () =>
+		verify("selective", [], "TypeError: dynamic require is not supported\n"));
+	it("rejects a runtime specifier through a wrapper require obtained from eval", () =>
+		verify("eval", ["node:os"], "TypeError: dynamic require is not supported\n"));
 	it("loads literal getBuiltinModule names without the builtin loader", () =>
 		compare("literal", []));
 });

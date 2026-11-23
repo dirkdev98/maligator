@@ -126,10 +126,9 @@ function enumerateOpenings(
  * In a CommonJS module those bindings include the wrapper's `module`, `exports`,
  * `require`, `__filename` and `__dirname`. `module` and `exports` are objects the
  * loader created and keeps in its registry, so what a module stores on them is
- * already published to host code. `require` is the loader's intrinsic, which a
- * computed `require(expression)` already reaches: it rejects a specifier and
- * otherwise returns some module's published `module.exports`, running its wrapper
- * once through the registry like any first require.
+ * already published to host code. The injected `require` loads bundled modules
+ * by internal id. A runtime string specifier throws, including through a
+ * reference to `require` obtained from eval.
  *
  * A script shares its top-level declarations with the global scope, and a sloppy
  * direct eval adds `var`s to its caller's variable environment and hands over a

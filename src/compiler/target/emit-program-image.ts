@@ -1193,7 +1193,7 @@ function prepareNativeFunctionEmission(
 		const lookups = (fastTryLookups[caller] ??= new Map());
 		if (resultKind === undefined || !lookups.has(target))
 			lookups.set(target, resultKind ?? "all");
-	});
+	}, new Set(image.runtime.cjsModuleFunctionIndices));
 	const strictCompiledTargets = new Set(
 		image.runtime.functions.flatMap((fn, index) => (fn.strict ? [index] : [])),
 	);

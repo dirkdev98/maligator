@@ -614,20 +614,20 @@ static MalValue mal_intrinsic_function_prototype_callback(MalVm *vm, MalValue th
 }
 
 /**
- * The CommonJS `require` handed to module wrappers. The compiler resolves a
- * static `require("specifier")` to its module id. A materialized require retains
- * the Node loader, which can resolve supported builtin strings independently of
- * the compiled dependency graph.
+ * The CommonJS `require` handed to module wrappers. The compiler resolves
+ * literal specifiers to their bundled targets before execution.
  */
 static MalValue mal_intrinsic_cjs_require_callback(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
     (void) callee;
 
+#if defined(MAL_DYNAMIC_COMMONJS_REQUIRE)
     if (arg_count > 0 && mal_value_is_string(args[0]) && vm->node_builtin_loader != nullptr) {
         MalValue module = vm->node_builtin_loader(vm, mal_value_to_string(args[0]));
         if (vm->completion.kind == MAL_COMPLETION_THROW || !mal_value_is_undefined(module)) return module;
     }
+#endif
     if (arg_count < 1 || !mal_value_is_int32(args[0])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "dynamic require is not supported");
         return mal_value_new_undefined();

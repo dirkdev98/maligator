@@ -223,11 +223,10 @@ describe("source builtin loader realm", () => {
 });
 
 describe("CommonJS source builtin loading", () => {
-	it("shares a computed wrapper require with the builtin registry", () => {
+	it("shares a literal wrapper require with the builtin registry", () => {
 		const fixture = "tests/local/node-source-builtin.cjs";
 		const expected = execFileSync(process.execPath, [fixture], {
 			encoding: "utf8",
-			env: { ...process.env, ...env },
 		});
 		const pair = buildBackendPairFromOneProgramImage({
 			fixture,
@@ -248,6 +247,6 @@ describe("CommonJS source builtin loading", () => {
 		);
 		for (const binary of [pair.compiled, pair.interpreted])
 			for (const stress of sanitized ? [{}] : [{}, STRESS_ENV])
-				expect(runToStdout(binary, { env: { ...env, ...stress } })).toBe(expected);
+				expect(runToStdout(binary, { env: stress })).toBe(expected);
 	});
 });

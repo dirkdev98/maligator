@@ -1,27 +1,9 @@
 const request = process.argv[2];
-const first = require(request);
+const builtin = process.getBuiltinModule(request);
+if (builtin !== require("node:os")) throw new Error("builtin identity");
 const load = require;
-const canonical = request.startsWith("node:") ? request : "node:" + request;
-const alias =
-	request === "node:sqlite"
-		? request
-		: request.startsWith("node:")
-			? request.slice(5)
-			: canonical;
-const rejected = ["sqlite", "test", "node:fixture-missing-builtin"].map((id) => {
-	try {
-		load(id);
-		return false;
-	} catch {
-		return true;
-	}
-});
-console.log(
-	JSON.stringify([
-		typeof first,
-		first === load(request),
-		first === load(alias),
-		first === process.getBuiltinModule(canonical),
-		rejected,
-	]),
-);
+try {
+	load(request);
+} catch (error) {
+	console.log(String(error));
+}

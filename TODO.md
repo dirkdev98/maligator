@@ -740,6 +740,9 @@ The target is the complete ECMA-429 server surface except WebAssembly.
       OutgoingMessage.prototype so overriding them there reaches ServerResponse and
       ClientRequest.
 
+- [ ] modules: make dynamic CommonJS wrapper `require` opt-in. Enable the runtime
+      lookup and retain the builtin loader together when the option is selected.
+
 - [ ] modules: createRequire with a computed specifier, or a base other than
       `import.meta.url`, resolves only what the module graph bundled from literal
       specifiers. import.meta.resolve does not resolve `#` package imports, does not

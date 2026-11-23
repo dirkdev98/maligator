@@ -61,7 +61,7 @@ describe("CommonJS loader lowering", () => {
 	it.each([
 		["escaped require", "globalThis.load = require;"],
 		["eval-exposed require", "globalThis.load = eval('require');"],
-	] as const)("retains the dynamic Node loader for %s", (_name, source) => {
+	] as const)("omits the Node module installer for %s", (_name, source) => {
 		const root = fixture({ "main.cjs": source });
 		const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.cjs"), {
 			buildConfig: resolveBuildConfig({}),
@@ -69,9 +69,9 @@ describe("CommonJS loader lowering", () => {
 		const image = compileSemanticProgramToProgramImage(program);
 		expect(
 			image.runtime.hostInstalls.some(
-				(install) => install.installer === "mal_host_install_node_module",
+				({ installer }) => installer === hostInstallerSymbol("node:module"),
 			),
-		).toBe(true);
+		).toBe(false);
 	});
 
 	it("assigns one wrapper per file across JSON and CommonJS cycles", () => {
