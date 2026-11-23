@@ -80,7 +80,10 @@ import {
 import { INSTRUCTION_MAY_THROW } from "../shared/instruction-facts.ts";
 import { encodeInstructionEffects } from "../shared/instruction-facts.ts";
 import type { InstructionFacts } from "../shared/instruction-facts.ts";
-import { compilerIntegerRangesEqual } from "../shared/integer-range.ts";
+import {
+	compilerIntegerRangeIsInt32,
+	compilerIntegerRangesEqual,
+} from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import { knownOperationIndex, knownOperations } from "../shared/known-operations.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
@@ -3173,31 +3176,70 @@ function lowerFunctionToTarget(
 				right !== undefined &&
 				left.length === right.length &&
 				left.every((range, index) => compilerIntegerRangesEqual(range, right[index])));
-		const entryFacts = entry.instructionFacts?.filter(
-			({
-				instruction,
-				masks,
-				results,
-				inputIntegerRanges,
-				resultIntegerRanges,
-				effectMask,
-			}) => {
-				if (
-					!loweredInstructions.has(instruction) &&
-					!loweredSwitchComparisons.has(instruction)
-				)
-					return false;
-				const canonical = instructionFacts[instruction];
-				return (
-					canonical === undefined ||
-					!sameMasks(canonical.masks, masks) ||
-					!sameMasks(canonical.results, results) ||
-					!sameRanges(canonical.inputIntegerRanges, inputIntegerRanges) ||
-					!sameRanges(canonical.resultIntegerRanges, resultIntegerRanges) ||
-					canonical.effectMask !== effectMask
+		const entryFacts: Array<
+			NonNullable<CoreTargetDirectEntry["instructionFacts"]>[number]
+		> = [];
+		for (const fact of entry.instructionFacts ?? []) {
+			const lowered = loweredInstructions.get(fact.instruction);
+			const comparisons = loweredSwitchComparisons.get(fact.instruction);
+			if (lowered === undefined && comparisons === undefined) continue;
+			const canonical = instructionFacts[fact.instruction];
+			if (
+				canonical !== undefined &&
+				sameMasks(canonical.masks, fact.masks) &&
+				sameMasks(canonical.results, fact.results) &&
+				sameRanges(canonical.inputIntegerRanges, fact.inputIntegerRanges) &&
+				sameRanges(canonical.resultIntegerRanges, fact.resultIntegerRanges) &&
+				canonical.effectMask === fact.effectMask
+			)
+				continue;
+			if (comparisons === undefined) {
+				entryFacts.push({ ...fact, instruction: lowered! });
+			} else {
+				entryFacts.push(
+					...lowerSwitchEntryFacts(
+						comparisons,
+						fact.masks[0] ?? COMPILER_VALUE_KIND_TOP,
+						fact.inputIntegerRanges?.[0],
+					),
 				);
-			},
-		);
+			}
+		}
+		if (entry.instructionFacts !== undefined) {
+			let factsByDefinition: Map<CoreInstructionId, CoreInstructionFacts> | undefined;
+			for (const { edge, copy } of edgeCopies) {
+				// A single assignment reads its SSA source directly, including on
+				// the normal edge of a call whose exceptional edge has no result.
+				if (copy.assignments.length !== 1 || copy.moves.length !== 1) continue;
+				const move = copy.moves[0]!;
+				const [destination, source] = move.registers;
+				if (
+					unreachableMoves.has(move) ||
+					representations[destination] !== "boxed" ||
+					representations[source] !== "number"
+				)
+					continue;
+				const value = kernel.operandAt(kernel.terminatorEdgeArgumentStart(edge));
+				if (kernel.valueDefinitionKind(value) !== 1) continue;
+				factsByDefinition ??= new Map(
+					entry.instructionFacts.map((fact) => [fact.instruction, fact]),
+				);
+				const definition = coreInstructionId(kernel.valueDefinitionOwner(value));
+				const range =
+					factsByDefinition.get(definition)?.resultIntegerRanges?.[
+						kernel.valueDefinitionIndex(value)
+					];
+				if (!compilerIntegerRangeIsInt32(range)) continue;
+				entryFacts.push({
+					instruction: move,
+					masks: [COMPILER_VALUE_KIND_NUMBER],
+					results: [COMPILER_VALUE_KIND_NUMBER],
+					inputIntegerRanges: [range],
+					resultIntegerRanges: [range],
+					effectMask: 0,
+				});
+			}
+		}
 		return {
 			id: entry.id,
 			...(unreachableCopies.length === 0
@@ -3214,40 +3256,7 @@ function lowerFunctionToTarget(
 							}),
 						),
 					}),
-			...(entryFacts === undefined || entryFacts.length === 0
-				? {}
-				: {
-						instructionFacts: entryFacts.flatMap(
-							({
-								instruction,
-								masks,
-								results,
-								inputIntegerRanges,
-								resultIntegerRanges,
-								effectMask,
-							}): Array<
-								NonNullable<CoreTargetDirectEntry["instructionFacts"]>[number]
-							> => {
-								const comparisons = loweredSwitchComparisons.get(instruction);
-								if (comparisons !== undefined)
-									return lowerSwitchEntryFacts(
-										comparisons,
-										masks[0] ?? COMPILER_VALUE_KIND_TOP,
-										inputIntegerRanges?.[0],
-									);
-								return [
-									{
-										instruction: loweredInstructions.get(instruction)!,
-										masks,
-										results,
-										...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
-										...(resultIntegerRanges === undefined ? {} : { resultIntegerRanges }),
-										effectMask,
-									},
-								];
-							},
-						),
-					}),
+			...(entryFacts.length === 0 ? {} : { instructionFacts: entryFacts }),
 			...(entry.fieldParameters === undefined
 				? {}
 				: {

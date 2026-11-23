@@ -18918,7 +18918,15 @@ function emitInstruction(
 		context.staticPropertyNumericAction?.role !== "skip"
 	) {
 		// A move is also the explicit representation-conversion seam.
-		const dst = instruction.dst;
+		const { dst, src } = instruction;
+		const exactInt32Box =
+			reps[dst] === "boxed" &&
+			reps[src] === "number" &&
+			compilerIntegerRangeIsInt32(context.facts?.inputIntegerRanges?.[0]);
+		if (exactInt32Box)
+			return [
+				`r${dst} = ${emission.convert("box-int32", `(i32) ${emission.inputValue(src)}`)};`,
+			];
 		const read =
 			reps[dst] === "int32"
 				? reps[instruction.src] === "int32"
