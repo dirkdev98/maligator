@@ -28,12 +28,14 @@ import {
 	externalModulesOf,
 	findLinkedImage,
 	graphReadsExecution,
+	watchProxyCommand,
 	linkedImageEnvironment,
 	moduleImageComponents,
 	UnsupportedLinkedImagesError,
 } from "../linked-images.ts";
 import type { LinkedImageArtifact, LinkedImageEnvironment } from "../linked-images.ts";
 import { executionIdentity } from "../platform/execution.ts";
+import type { Execution } from "../platform/execution.ts";
 import type {
 	CompileTestImageOptions,
 	DependencyIdentity,
@@ -50,7 +52,7 @@ import {
 	wrapTestEntry,
 } from "./cache.ts";
 
-const MANIFEST_SCHEMA = 3;
+const MANIFEST_SCHEMA = 4;
 const TEST_IMAGE_FAMILY = "test";
 
 type TestImageKind = "runtime" | "dependency" | "application" | "entry" | "runner";
@@ -89,6 +91,7 @@ interface TestImageManifest {
 	dependencies: Array<DependencyIdentity>;
 	/** The execution snapshot when a module reads it; test options are otherwise runtime data. */
 	execution: string | null;
+	watchProxyCommand?: Execution["command"] | null;
 	images: Array<ImageReference>;
 }
 
@@ -172,6 +175,7 @@ function manifestHit(
 	artifactRoot: string,
 	identity: string,
 	execution: string,
+	command: Execution["command"] | null,
 	requested: Array<string>,
 	allowSuperset: boolean,
 	manifest: TestImageManifest | undefined,
@@ -181,6 +185,8 @@ function manifestHit(
 		manifest === undefined ||
 		manifest.identity !== identity ||
 		(manifest.execution !== null && manifest.execution !== execution) ||
+		(manifest.watchProxyCommand !== undefined &&
+			manifest.watchProxyCommand !== command) ||
 		!requested.every((entry) => manifest.entries.includes(entry)) ||
 		(!allowSuperset && manifest.entries.length !== requested.length) ||
 		!dependenciesUnchanged(manifest.dependencies, session)
@@ -421,6 +427,7 @@ export function compileLinkedTestImage(
 		artifactRoot,
 		identity,
 		execution,
+		options.execution?.command ?? null,
 		entries,
 		allowSuperset,
 		readSelectionManifest(environment.root, entries, identity, allowSuperset),
@@ -566,6 +573,7 @@ export function compileLinkedTestImage(
 		entries,
 		dependencies: fileDependencies,
 		execution: graphReadsExecution(planning) ? execution : null,
+		watchProxyCommand: watchProxyCommand(planning, options.execution),
 		images: linked.map(({ kind, artifact, file }) => ({
 			kind,
 			...(file === undefined ? {} : { file }),

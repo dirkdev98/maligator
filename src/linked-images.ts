@@ -12,6 +12,10 @@ import type { CompilerProducerStage } from "./compiler-cache-identity.ts";
 import type { CoreModuleInterface } from "./compiler/core/core-compilation.ts";
 import { lowerPrivateRestIteration } from "./compiler/core/core-rest-iteration.ts";
 import { runSemanticAnalysisForGraph } from "./compiler/frontend/analyze-module-graph.ts";
+import {
+	embedModuleDeclaration,
+	isEmbedModule,
+} from "./compiler/frontend/embed-declarations.ts";
 import { SOURCE_HOST_MODULES } from "./compiler/frontend/host-modules.ts";
 import type {
 	ExternalModuleInterface,
@@ -59,6 +63,7 @@ import {
 	publishFrontendWire,
 } from "./frontend-cache.ts";
 import type { FrontendArtifactIdentity } from "./frontend-cache.ts";
+import type { Execution } from "./platform/execution.ts";
 
 const LINKED_IMAGE_SCHEMA = 3;
 
@@ -185,6 +190,17 @@ export function graphReadsExecution(graph: ModuleGraph): boolean {
 		if (constants !== undefined && Object.keys(constants).length > 0) return true;
 	}
 	return false;
+}
+
+/** Watch URLs depend on the command even when the current image serves from disk. */
+export function watchProxyCommand(
+	graph: ModuleGraph,
+	execution: Execution | undefined,
+): Execution["command"] | null | undefined {
+	for (const file of graph.modules.keys())
+		if (isEmbedModule(file) && embedModuleDeclaration(file).watch?.url !== undefined)
+			return execution?.command ?? null;
+	return undefined;
 }
 
 /** The interfaces later images import from, keyed by module identity. */
@@ -346,11 +362,14 @@ export function linkedImageIdentity(
 							? { ...resolution, path: located(resolution.path) }
 							: resolution,
 					),
-					// The execution snapshot reaches an image only through these constants.
 					host:
 						record.host === undefined
 							? undefined
-							: { id: record.host.id, constants: record.host.constants },
+							: {
+									id: record.host.id,
+									constants: record.host.constants,
+									installData: record.host.installData,
+								},
 					virtual: record.virtual === true,
 					external: record.external,
 				}))

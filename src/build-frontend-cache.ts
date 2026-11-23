@@ -81,7 +81,11 @@ import {
 	publishFrontendWire,
 } from "./frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
-import { graphReadsExecution, UnsupportedLinkedImagesError } from "./linked-images.ts";
+import {
+	graphReadsExecution,
+	UnsupportedLinkedImagesError,
+	watchProxyCommand,
+} from "./linked-images.ts";
 import { PLATFORM_MODULES } from "./platform/catalog.ts";
 import { executionIdentity } from "./platform/execution.ts";
 import type { Execution } from "./platform/execution.ts";
@@ -92,7 +96,7 @@ import {
 } from "./worker-image-cache.ts";
 import type { WorkerImageArtifact } from "./worker-image-cache.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 14;
+const BUILD_FRONTEND_CACHE_SCHEMA = 15;
 const BUILD_FRONTEND_PIPELINE_VERSION = 7;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
@@ -115,8 +119,9 @@ export type BuildDependencyIdentity = FrontendDependencyIdentity;
 interface BuildFrontendManifest {
 	schema: typeof BUILD_FRONTEND_CACHE_SCHEMA;
 	closure: Pick<ProgramClosureCertificate, "scope" | "roots" | "openings">;
-	/** The execution snapshot when a module reads it; other commands may reuse the images otherwise. */
+	/** The full execution snapshot when a module reads it as a value. */
 	execution: string | null;
+	watchProxyCommand?: Execution["command"] | null;
 	resolutionInputs: Array<ModuleResolutionInput>;
 	workerArtifacts: Array<WorkerImageArtifact>;
 	optimizationDetails?: CompiledBuildFrontend["optimizationDetails"];
@@ -444,6 +449,7 @@ function loadCached(
 	entrypoint: string,
 	identity: string,
 	execution: string,
+	command: Execution["command"] | null,
 	session: FrontendCompilationSession,
 	platformSourceRoot: string,
 	relocatable: boolean,
@@ -473,6 +479,8 @@ function loadCached(
 		manifest.entrypoint !== entrypoint ||
 		manifest.identity !== identity ||
 		(manifest.execution !== null && manifest.execution !== execution) ||
+		(manifest.watchProxyCommand !== undefined &&
+			manifest.watchProxyCommand !== command) ||
 		!Array.isArray(manifest.runtimeArtifacts) ||
 		manifest.runtimeArtifacts.length === 0 ||
 		!manifest.runtimeArtifacts.every(validArtifactIdentity) ||
@@ -815,6 +823,7 @@ function prepareBuildFrontend(
 			entrypoint,
 			identity,
 			executionIdentity(options.execution),
+			options.execution?.command ?? null,
 			session,
 			platformSourceRoot,
 			options.relocatable === true,
@@ -882,6 +891,7 @@ function prepareBuildFrontend(
 	// Worker roots compile from their own graphs, so assume they read the snapshot.
 	const readsExecution =
 		graphReadsExecution(builtGraph) || (builtGraph.workerEntries?.length ?? 0) > 0;
+	const proxyCommand = watchProxyCommand(builtGraph, options.execution);
 	const workerRoots = {
 		entry: builtGraph.entry,
 		workerEntries: builtGraph.workerEntries,
@@ -1171,6 +1181,7 @@ function prepareBuildFrontend(
 						openings: facts.closure.openings,
 					},
 					execution: readsExecution ? executionIdentity(options.execution) : null,
+					watchProxyCommand: proxyCommand,
 					identity,
 					contentKey: key,
 					runtimeArtifacts,
