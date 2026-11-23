@@ -733,7 +733,6 @@ export async function compileBuildFrontendAsync(
 	if (
 		controls.concurrency <= 1 ||
 		options.stripTypes !== stripCompactTypes ||
-		options.relocatable ||
 		options.optimization !== "full"
 	)
 		return compileBuildFrontend(options);
