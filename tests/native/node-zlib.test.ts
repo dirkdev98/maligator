@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	assertResultPass,
 	buildNativeBinary,
@@ -55,4 +55,15 @@ describe("node:zlib decompression adapter", () => {
 		assertResultPass(runToStdout(compiled, { env: STRESS_ENV }));
 		assertResultPass(runToStdout(interpreted, { env: STRESS_ENV }));
 	});
+});
+
+it("decodes gzip through a statically used CommonJS export", () => {
+	const binary = buildNativeBinary({
+		...nativeFeatures,
+		fixture: "tests/local/node-zlib-static-decoder.cjs",
+		name: "node-zlib-static-decoder",
+		mainFile: HOST_MAIN,
+		outDir,
+	});
+	expect(runToStdout(binary, { env: STRESS_ENV })).toBe("alpha\n");
 });

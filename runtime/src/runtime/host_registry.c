@@ -106,6 +106,7 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_console);
     MATCH_INSTALLER(mal_host_install_node_constants);
     MATCH_INSTALLER(mal_host_install_node_crypto);
+    MATCH_INSTALLER(mal_host_install_node_crypto_digests);
     MATCH_INSTALLER(mal_host_install_node_diagnostics_channel);
     MATCH_INSTALLER(mal_host_install_node_dns);
     MATCH_INSTALLER(mal_host_install_node_dns_promises);
@@ -113,8 +114,11 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_events);
     MATCH_INSTALLER(mal_host_install_node_fs);
     MATCH_INSTALLER(mal_host_install_node_fs_named);
+    MATCH_INSTALLER(mal_host_install_node_fs_read_stream);
+    MATCH_INSTALLER(mal_host_install_node_fs_read_file);
     MATCH_INSTALLER(mal_host_install_node_fs_promises);
     MATCH_INSTALLER(mal_host_install_node_http);
+    MATCH_INSTALLER(mal_host_install_node_http_without_websocket);
     MATCH_INSTALLER(mal_host_install_node_https);
     MATCH_INSTALLER(mal_host_install_node_http2);
     MATCH_INSTALLER(mal_host_install_node_inspector);
@@ -149,5 +153,6 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_vm);
     MATCH_INSTALLER(mal_host_install_node_worker_threads);
     MATCH_INSTALLER(mal_host_install_node_zlib);
+    MATCH_INSTALLER(mal_host_install_node_zlib_decoders);
     return mal_ffi_resolve_installer(name, length);
 }

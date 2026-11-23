@@ -15,6 +15,7 @@ import {
 	PROCESS_INSTALLER_SYMBOL,
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
+	ZLIB_DECODERS_INSTALLER,
 } from "../src/compiler/frontend/host-modules.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import type { Execution } from "../src/platform/execution.ts";
@@ -28,6 +29,36 @@ const roots: Array<string> = [];
 
 afterEach(() => {
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("selective host exports", () => {
+	it("links decoder support for a static access on the default import", () => {
+		const installs = manifest(
+			`import zlib from "node:zlib"; globalThis.decode = zlib.gunzipSync;`,
+			defaultConfig,
+		);
+		expect(installs.has(ZLIB_DECODERS_INSTALLER)).toBe(true);
+		expect(installs.has(hostInstallerSymbol("node:zlib"))).toBe(false);
+	});
+
+	it.each([
+		["an escaping namespace", "globalThis.zlib = zlib;"],
+		["a computed property", "globalThis.decode = zlib[process.argv[2]];"],
+		[
+			"a replaced method",
+			"zlib.gunzipSync = function () { return this; }; globalThis.zlib = zlib.gunzipSync();",
+		],
+		[
+			"a computed builtin lookup",
+			"globalThis.decode = zlib.gunzipSync; globalThis.module = process.getBuiltinModule(process.argv[2]);",
+		],
+	])("links the complete module for %s", (_name, statement) => {
+		const installs = manifest(
+			`import zlib from "node:zlib"; ${statement}`,
+			defaultConfig,
+		);
+		expect(installs.has(hostInstallerSymbol("node:zlib"))).toBe(true);
+	});
 });
 
 /** The install manifest of a whole-program build, as a production executable links it. */

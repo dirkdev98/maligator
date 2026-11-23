@@ -119,9 +119,13 @@ tables.
 
 Use a literal specifier in a `process.getBuiltinModule` call in your application
 source to link that builtin. A computed name can find a builtin already available
-in the program. It returns `undefined` when the module is unavailable. Import
-the module's default export or add a literal call when a computed name needs it.
-The `node:module` API can load fresh builtins through `createRequire`.
+in the program. It returns `undefined` when the module is unavailable. Use a
+literal call to make the complete builtin available to computed names.
+
+The compiler can link a smaller installer when every use of a host module is a
+static export read. Passing the module object to other code, enumerating it, or
+reading computed members keeps its complete surface. The `node:module` API can
+load fresh builtins through `createRequire`.
 
 ## Development runner
 

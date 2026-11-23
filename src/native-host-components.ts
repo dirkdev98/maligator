@@ -1,6 +1,7 @@
 import {
 	HOST_GLOBAL_INSTALLERS,
 	HOST_MODULES,
+	HTTP_WITHOUT_WEBSOCKET_INSTALLER,
 	NODE_BUILTIN_LOADER_INSTALLER,
 } from "./compiler/frontend/host-modules.ts";
 import type { RuntimeImage } from "./compiler/target/runtime-image.ts";
@@ -16,6 +17,7 @@ const URL_PARSER_INSTALLERS = new Set(
 		.filter(({ requiresUrlParser }) => requiresUrlParser)
 		.map(({ installer }) => installer),
 );
+URL_PARSER_INSTALLERS.add(HTTP_WITHOUT_WEBSOCKET_INSTALLER);
 if (nodeInstallers.some(({ requiresUrlParser }) => requiresUrlParser)) {
 	URL_PARSER_INSTALLERS.add(NODE_BUILTIN_LOADER_INSTALLER);
 }

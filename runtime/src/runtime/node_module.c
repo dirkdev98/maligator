@@ -53,6 +53,11 @@ void mal_node_module_publish(
     mal_intrinsic_define_data(vm,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_BUILTIN_MODULES]),
         (const byte *) id, module, MAL_PROPERTY_NONE);
+    mal_node_module_export(vm, slots, count, module);
+    mal_gc_unroot(&root);
+}
+
+void mal_node_module_export(MalVm *vm, const MalHostInstallSlot *slots, i32 count, MalValue module) {
     for (i32 i = 0; i < count; i++) {
         if (strcmp(slots[i].name, "default") == 0) {
             vm->globals[slots[i].slot] = module;
@@ -65,7 +70,6 @@ void mal_node_module_publish(
             vm->globals[slots[i].slot] = found;
         }
     }
-    mal_gc_unroot(&root);
 }
 
 bool mal_node_module_install_cached(

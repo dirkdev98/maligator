@@ -103,6 +103,10 @@ export const WORKER_THREADS_INSTALLER_SYMBOL = hostInstallerSymbol("node:worker_
 
 /** The node:http installer, which also defines Node's WebSocket globals. */
 export const HTTP_INSTALLER_SYMBOL = hostInstallerSymbol("node:http");
+export const HTTP_WITHOUT_WEBSOCKET_INSTALLER =
+	"mal_host_install_node_http_without_websocket";
+export const ZLIB_DECODERS_INSTALLER = "mal_host_install_node_zlib_decoders";
+export const CRYPTO_DIGESTS_INSTALLER = "mal_host_install_node_crypto_digests";
 
 /** Free messaging globals that node:worker_threads defines. */
 export const WORKER_GLOBALS: ReadonlyArray<string> = [
@@ -339,6 +343,8 @@ const PATH_WIN32: HostModuleSpec = {
 
 export const NODE_FS_INSTALLER = hostInstallerSymbol("node:fs");
 export const NODE_FS_NAMED_INSTALLER = "mal_host_install_node_fs_named";
+export const NODE_FS_READ_STREAM_INSTALLER = "mal_host_install_node_fs_read_stream";
+export const NODE_FS_READ_FILE_INSTALLER = "mal_host_install_node_fs_read_file";
 
 /** These exports need the complete fs module or its stream prototypes. */
 export const NODE_FS_FULL_EXPORTS: ReadonlySet<string> = new Set([

@@ -48,6 +48,8 @@ typedef struct MalHostLaunchContext MalHostLaunchContext;
 void mal_host_install_node_crypto(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch
 );
+void mal_host_install_node_crypto_digests(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);
 
 /**
  * Macrotask source for the asynchronous crypto callbacks (`argon2`, the

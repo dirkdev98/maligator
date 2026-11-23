@@ -47,28 +47,27 @@ typedef struct ZlibKind {
     const char *async;
     u32 format;
     bool encode;
-    MalZlibCreate *open;
 } ZlibKind;
 
 static const ZlibKind zlib_kinds[] = {
     {"Deflate", "createDeflate", "deflateSync", "deflate",
-        MAL_ZLIB_FORMAT_ZLIB, true, mal_zlib_create_deflate_encoder},
+        MAL_ZLIB_FORMAT_ZLIB, true},
     {"Inflate", "createInflate", "inflateSync", "inflate",
-        MAL_ZLIB_FORMAT_ZLIB, false, mal_zlib_create_deflate_decoder},
+        MAL_ZLIB_FORMAT_ZLIB, false},
     {"Gzip", "createGzip", "gzipSync", "gzip",
-        MAL_ZLIB_FORMAT_GZIP, true, mal_zlib_create_deflate_encoder},
+        MAL_ZLIB_FORMAT_GZIP, true},
     {"Gunzip", "createGunzip", "gunzipSync", "gunzip",
-        MAL_ZLIB_FORMAT_GZIP, false, mal_zlib_create_deflate_decoder},
+        MAL_ZLIB_FORMAT_GZIP, false},
     {"DeflateRaw", "createDeflateRaw", "deflateRawSync", "deflateRaw",
-        MAL_ZLIB_FORMAT_RAW, true, mal_zlib_create_deflate_encoder},
+        MAL_ZLIB_FORMAT_RAW, true},
     {"InflateRaw", "createInflateRaw", "inflateRawSync", "inflateRaw",
-        MAL_ZLIB_FORMAT_RAW, false, mal_zlib_create_deflate_decoder},
+        MAL_ZLIB_FORMAT_RAW, false},
     {"Unzip", "createUnzip", "unzipSync", "unzip",
-        MAL_ZLIB_FORMAT_UNZIP, false, mal_zlib_create_deflate_decoder},
+        MAL_ZLIB_FORMAT_UNZIP, false},
     {"BrotliCompress", "createBrotliCompress", "brotliCompressSync", "brotliCompress",
-        MAL_ZLIB_FORMAT_BROTLI, true, mal_zlib_create_brotli_encoder},
+        MAL_ZLIB_FORMAT_BROTLI, true},
     {"BrotliDecompress", "createBrotliDecompress", "brotliDecompressSync", "brotliDecompress",
-        MAL_ZLIB_FORMAT_BROTLI, false, mal_zlib_create_brotli_decoder},
+        MAL_ZLIB_FORMAT_BROTLI, false},
 };
 
 typedef struct ZlibOptions {
@@ -301,8 +300,21 @@ static bool zlib_parse_options(MalVm *vm, const ZlibKind *kind, MalValue options
     return vm->completion.kind != MAL_COMPLETION_THROW;
 }
 
-static i32 zlib_open(const ZlibKind *kind, const ZlibOptions *options, MalZlibStream **out) {
-    i32 status = kind->open(kind->format, options->level, options->window_bits, out);
+static i32 zlib_decoder(u32 format, i32 level, i32 window_bits, MalZlibStream **out) {
+    return format == MAL_ZLIB_FORMAT_BROTLI
+        ? mal_zlib_create_brotli_decoder(format, level, window_bits, out)
+        : mal_zlib_create_deflate_decoder(format, level, window_bits, out);
+}
+
+static i32 zlib_encoder(u32 format, i32 level, i32 window_bits, MalZlibStream **out) {
+    return format == MAL_ZLIB_FORMAT_BROTLI
+        ? mal_zlib_create_brotli_encoder(format, level, window_bits, out)
+        : mal_zlib_create_deflate_encoder(format, level, window_bits, out);
+}
+
+static i32 zlib_open(
+    const ZlibKind *kind, MalZlibCreate *create, const ZlibOptions *options, MalZlibStream **out) {
+    i32 status = create(kind->format, options->level, options->window_bits, out);
     if (status < 0 || !kind->encode || kind->format != MAL_ZLIB_FORMAT_BROTLI) return status;
     for (u32 id = 0; id < ZLIB_BROTLI_PARAMS; id++) {
         if (options->has_param[id]
@@ -395,12 +407,11 @@ static bool zlib_input(MalVm *vm, MalValue value, const byte **bytes, usize *len
     return true;
 }
 
-static MalValue zlib_create_transform(MalVm *vm, const ZlibKind *kind, MalValue options,
+static MalValue zlib_create_transform(MalVm *vm, const ZlibKind *kind, MalZlibCreate *create, MalValue options,
     MalValue prototype);
 
-static MalValue zlib_sync(MalVm *vm, MalValue receiver, const MalValue *args,
-    i32 argc, MalValue nt, MalValue callee) {
-    (void) receiver; (void) nt;
+static MalValue zlib_sync(
+    MalVm *vm, const MalValue *args, i32 argc, MalValue callee, MalZlibCreate *create) {
     const ZlibKind *kind = zlib_kind_from_callee(callee);
     MalValue input = argc > 0 ? args[0] : mal_value_new_undefined();
     MalValue option_value = argc > 1 ? args[1] : mal_value_new_undefined();
@@ -411,7 +422,7 @@ static MalValue zlib_sync(MalVm *vm, MalValue receiver, const MalValue *args,
     byte *owned = nullptr;
     if (!zlib_input(vm, input, &bytes, &length, &owned)) return mal_value_new_undefined();
     MalZlibStream *codec = nullptr;
-    if (zlib_open(kind, &options, &codec) < 0) {
+    if (zlib_open(kind, create, &options, &codec) < 0) {
         free(owned);
         zlib_throw_init(vm);
         return mal_value_new_undefined();
@@ -430,7 +441,7 @@ static MalValue zlib_sync(MalVm *vm, MalValue receiver, const MalValue *args,
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     zlib_set(vm, roots[1], "buffer", roots[0]);
-    roots[2] = zlib_create_transform(vm, kind, option_value, zlib_slot(callee, 1));
+    roots[2] = zlib_create_transform(vm, kind, create, option_value, zlib_slot(callee, 1));
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         zlib_set(vm, roots[2], "bytesWritten", mal_value_from_f64((f64) length));
         zlib_set(vm, roots[1], "engine", roots[2]);
@@ -441,6 +452,7 @@ static MalValue zlib_sync(MalVm *vm, MalValue receiver, const MalValue *args,
 
 typedef struct ZlibJob {
     const ZlibKind *kind;
+    MalZlibCreate *create;
     ZlibOptions options;
     byte *input;
     usize length;
@@ -475,7 +487,7 @@ static void zlib_job_free(void *data) {
 static void zlib_job_run(void *data) {
     ZlibJob *job = data;
     MalZlibStream *codec = nullptr;
-    if (zlib_open(job->kind, &job->options, &codec) < 0) {
+    if (zlib_open(job->kind, job->create, &job->options, &codec) < 0) {
         job->status = MAL_ZLIB_STATUS_INVALID_ARGUMENT;
         return;
     }
@@ -553,9 +565,8 @@ static bool zlib_async_drain(MalVm *vm) {
     return true;
 }
 
-static MalValue zlib_async(MalVm *vm, MalValue receiver, const MalValue *args,
-    i32 argc, MalValue nt, MalValue callee) {
-    (void) receiver; (void) nt;
+static MalValue zlib_async(
+    MalVm *vm, const MalValue *args, i32 argc, MalValue callee, MalZlibCreate *create) {
     const ZlibKind *kind = zlib_kind_from_callee(callee);
     MalValue input = argc > 0 ? args[0] : mal_value_new_undefined();
     MalValue option_value = argc > 2 ? args[1] : mal_value_new_undefined();
@@ -568,6 +579,7 @@ static MalValue zlib_async(MalVm *vm, MalValue receiver, const MalValue *args,
     ZlibJob *job = calloc(1, sizeof *job);
     if (job == nullptr) { mal_vm_throw_allocation_error(vm); return mal_value_new_undefined(); }
     job->kind = kind;
+    job->create = create;
     if (!zlib_parse_options(vm, kind, option_value, &job->options)) { free(job); return mal_value_new_undefined(); }
     const byte *bytes = nullptr;
     byte *owned = nullptr;
@@ -798,7 +810,7 @@ static MalValue zlib_native(MalVm *vm, const char *name, MalNativeFunctionCallba
         mal_intrinsic_ascii(vm, (const byte *) name), callback, slots, count));
 }
 
-static MalValue zlib_create_transform(MalVm *vm, const ZlibKind *kind, MalValue option_value,
+static MalValue zlib_create_transform(MalVm *vm, const ZlibKind *kind, MalZlibCreate *create, MalValue option_value,
     MalValue prototype) {
     mal_host_install_node_stream(vm, nullptr, 0, nullptr);
     if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
@@ -810,7 +822,7 @@ static MalValue zlib_create_transform(MalVm *vm, const ZlibKind *kind, MalValue 
             1, INT32_MAX, options.chunk_size, &mark)) return mal_value_new_undefined();
     high_water_mark = (usize) mark;
     MalZlibStream *handle = nullptr;
-    if (zlib_open(kind, &options, &handle) < 0) { zlib_throw_init(vm); return mal_value_new_undefined(); }
+    if (zlib_open(kind, create, &options, &handle) < 0) { zlib_throw_init(vm); return mal_value_new_undefined(); }
 
     MalValue roots[5] = {
         mal_value_new_undefined(), mal_value_new_undefined(),
@@ -1028,10 +1040,9 @@ static MalValue zlib_get_closed(MalVm *vm, MalValue receiver, const MalValue *ar
     return mal_value_new_boolean(!mal_value_is_truthy(zlib_get(vm, receiver, "_handle")));
 }
 
-static MalValue zlib_create(MalVm *vm, MalValue receiver, const MalValue *args,
-    i32 argc, MalValue nt, MalValue callee) {
-    (void) receiver; (void) nt;
-    return zlib_create_transform(vm, zlib_kind_from_callee(callee),
+static MalValue zlib_create(
+    MalVm *vm, const MalValue *args, i32 argc, MalValue callee, MalZlibCreate *create) {
+    return zlib_create_transform(vm, zlib_kind_from_callee(callee), create,
         argc > 0 ? args[0] : mal_value_new_undefined(), zlib_slot(callee, 1));
 }
 
@@ -1203,18 +1214,33 @@ static void zlib_define_function(MalVm *vm, MalValue module, const char *name,
     mal_gc_unroot(&root);
 }
 
-static void zlib_install_exports(
-    MalVm *vm, const MalHostInstallSlot *slots, i32 count, MalValue module) {
-    mal_node_module_publish(vm, "node:zlib", slots, count, module);
-}
+typedef struct ZlibCallbacks {
+    MalNativeFunctionCallback create;
+    MalNativeFunctionCallback sync;
+    MalNativeFunctionCallback async;
+} ZlibCallbacks;
 
-void mal_host_install_node_zlib(
+#define ZLIB_CALLBACK(mode, method) \
+    static MalValue zlib_##mode##_##method(MalVm *vm, MalValue receiver, \
+        const MalValue *args, i32 argc, MalValue nt, MalValue callee) { \
+        (void) receiver; (void) nt; \
+        return zlib_##method(vm, args, argc, callee, zlib_##mode); \
+    }
+
+ZLIB_CALLBACK(decoder, create)
+ZLIB_CALLBACK(decoder, sync)
+ZLIB_CALLBACK(decoder, async)
+ZLIB_CALLBACK(encoder, create)
+ZLIB_CALLBACK(encoder, sync)
+ZLIB_CALLBACK(encoder, async)
+
+static void zlib_install(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
-    const MalHostLaunchContext *launch) {
+    const MalHostLaunchContext *launch, const ZlibCallbacks *encoders) {
     (void) launch;
     MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_ZLIB_MODULE];
     if (!mal_value_is_undefined(cached)) {
-        zlib_install_exports(vm, slots, count, cached);
+        mal_node_module_export(vm, slots, count, cached);
         return;
     }
     mal_host_install_node_stream(vm, nullptr, 0, nullptr);
@@ -1263,17 +1289,23 @@ void mal_host_install_node_zlib(
     MalPropertyDesc closed = mal_intrinsic_accessor_desc(roots[TEMP], mal_value_new_undefined(),
         MAL_PROPERTY_CONFIGURABLE);
     (void) mal_object_define_own(mal_value_to_object(roots[BASE]), zlib_key(vm, "_closed"), &closed);
+    static const ZlibCallbacks decoders = {
+        zlib_decoder_create, zlib_decoder_sync, zlib_decoder_async,
+    };
     for (usize i = 0; i < countof(zlib_kinds); i++) {
+        const ZlibKind *kind = &zlib_kinds[i];
+        const ZlibCallbacks *callbacks = kind->encode ? encoders : &decoders;
+        if (callbacks == nullptr) continue;
         roots[SLOT_KIND] = mal_value_from_i32((i32) i);
         roots[SLOT_PROTO] = mal_value_from_object(mal_intrinsic_new_object(vm));
         mal_object_set_prototype_pointer(mal_value_to_object(roots[SLOT_PROTO]), mal_value_to_object(roots[BASE]));
-        zlib_define_function(vm, roots[MODULE], zlib_kinds[i].class_name, zlib_create,
+        zlib_define_function(vm, roots[MODULE], kind->class_name, callbacks->create,
             roots + SLOT_KIND, 2, 1, true);
-        zlib_define_function(vm, roots[MODULE], zlib_kinds[i].create, zlib_create,
+        zlib_define_function(vm, roots[MODULE], kind->create, callbacks->create,
             roots + SLOT_KIND, 2, 1, false);
-        zlib_define_function(vm, roots[MODULE], zlib_kinds[i].sync, zlib_sync,
+        zlib_define_function(vm, roots[MODULE], kind->sync, callbacks->sync,
             roots + SLOT_KIND, 2, 2, false);
-        zlib_define_function(vm, roots[MODULE], zlib_kinds[i].async, zlib_async,
+        zlib_define_function(vm, roots[MODULE], kind->async, callbacks->async,
             roots + SLOT_KIND, 1, 3, false);
     }
     zlib_define_function(vm, roots[MODULE], "crc32", zlib_crc32, nullptr, 0, 2, false);
@@ -1487,7 +1519,23 @@ void mal_host_install_node_zlib(
     }
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[MODULE]), (const byte *) "codes",
         roots[CONSTANTS], ZLIB_VISIBLE);
-    vm->intrinsics[MAL_INTRINSIC_NODE_ZLIB_MODULE] = roots[MODULE];
-    zlib_install_exports(vm, slots, count, roots[MODULE]);
+    if (encoders == nullptr) {
+        mal_node_module_export(vm, slots, count, roots[MODULE]);
+    } else {
+        vm->intrinsics[MAL_INTRINSIC_NODE_ZLIB_MODULE] = roots[MODULE];
+        mal_node_module_publish(vm, "node:zlib", slots, count, roots[MODULE]);
+    }
     mal_gc_unroot(&root);
+}
+
+
+void mal_host_install_node_zlib(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    static const ZlibCallbacks encoders = {zlib_encoder_create, zlib_encoder_sync, zlib_encoder_async};
+    zlib_install(vm, slots, count, launch, &encoders);
+}
+
+void mal_host_install_node_zlib_decoders(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    zlib_install(vm, slots, count, launch, nullptr);
 }

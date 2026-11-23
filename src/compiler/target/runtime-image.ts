@@ -3975,12 +3975,16 @@ function buildHostInstalls(
 			}
 		}
 		if (usedExports.length === 0) continue;
-		const installer =
-			hostModule.installer === NODE_FS_INSTALLER &&
-			!retained.includes(NODE_FS_INSTALLER) &&
-			usedExports.every(({ name }) => !NODE_FS_FULL_EXPORTS.has(name))
-				? NODE_FS_NAMED_INSTALLER
-				: hostModule.installer;
+		let installer = hostModule.installer;
+		if (!hostModule.requiresCompleteModule && !retained.includes(installer)) {
+			if (hostModule.selectiveInstaller !== undefined)
+				installer = hostModule.selectiveInstaller;
+			else if (
+				installer === NODE_FS_INSTALLER &&
+				usedExports.every(({ name }) => !NODE_FS_FULL_EXPORTS.has(name))
+			)
+				installer = NODE_FS_NAMED_INSTALLER;
+		}
 		// The full fs installer initializes EventEmitter through node:stream.
 		if (
 			installer === NODE_FS_NAMED_INSTALLER &&

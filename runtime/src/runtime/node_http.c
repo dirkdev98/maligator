@@ -6946,11 +6946,6 @@ static MalValue http_status_codes(MalVm *vm) {
     return value;
 }
 
-static void http_install_exports(
-    MalVm *vm, const MalHostInstallSlot *slots, i32 count, MalValue module) {
-    mal_node_module_publish(vm, "node:http", slots, count, module);
-}
-
 /* The parser pool is per connection here, so only Node's validation is observable. */
 static MalValue http_set_max_idle_parsers(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
@@ -6961,9 +6956,9 @@ static MalValue http_set_max_idle_parsers(
     return mal_value_new_undefined();
 }
 
-void mal_host_install_node_http(
+static void http_install(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
-    const MalHostLaunchContext *launch) {
+    const MalHostLaunchContext *launch, typeof(mal_web_websocket_install) *websocket) {
     if (!mal_vm_register_runtime_cleanup(vm, http_cleanup)) {
         mal_vm_throw_allocation_error(vm);
         return;
@@ -6972,7 +6967,13 @@ void mal_host_install_node_http(
         vm->node_http_headers_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
     MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_MODULE];
     if (!mal_value_is_undefined(cached)) {
-        http_install_exports(vm, slots, count, cached);
+        if (websocket == nullptr) {
+            mal_node_module_export(vm, slots, count, cached);
+        } else if (!mal_node_module_install_cached(vm, "node:http", slots, count)) {
+            websocket(vm, mal_value_to_object(cached));
+            if (vm->completion.kind != MAL_COMPLETION_THROW)
+                mal_node_module_publish(vm, "node:http", slots, count, cached);
+        }
         return;
     }
 
@@ -7184,7 +7185,7 @@ void mal_host_install_node_http(
 
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "setMaxIdleHTTPParsers", 1,
         http_set_max_idle_parsers);
-    mal_web_websocket_install(vm, mal_value_to_object(roots[0]));
+    if (websocket != nullptr) websocket(vm, mal_value_to_object(roots[0]));
     // Node's default --max-http-header-size.
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "maxHeaderSize",
         mal_value_from_i32(16384), HTTP_VISIBLE);
@@ -7237,6 +7238,18 @@ void mal_host_install_node_http(
         mal_host_register_macrotask_drain(mal_node_http_drain, false);
         http_roots_installed = true;
     }
-    http_install_exports(vm, slots, count, roots[0]);
+    if (websocket == nullptr) mal_node_module_export(vm, slots, count, roots[0]);
+    else mal_node_module_publish(vm, "node:http", slots, count, roots[0]);
     mal_gc_unroot(&root);
+}
+
+
+void mal_host_install_node_http(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    http_install(vm, slots, count, launch, mal_web_websocket_install);
+}
+
+void mal_host_install_node_http_without_websocket(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    http_install(vm, slots, count, launch, nullptr);
 }

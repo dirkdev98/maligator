@@ -39,18 +39,25 @@ import {
 	traverseEstree,
 } from "../frontend/estree-traversal.ts";
 import { importsForeignCallbacks } from "../frontend/foreign-callbacks.ts";
+import { hostExportUses } from "../frontend/host-export-uses.ts";
 import {
 	BUFFER_INSTALLER_SYMBOL,
 	canonicalNodeHostModuleId,
+	CRYPTO_DIGESTS_INSTALLER,
 	HOST_GLOBAL_INSTALLERS,
 	HOST_MODULES,
+	HTTP_WITHOUT_WEBSOCKET_INSTALLER,
 	hostInstallerSymbol,
 	NODE_BUILTIN_LOADER_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
+	NODE_FS_INSTALLER,
+	NODE_FS_READ_FILE_INSTALLER,
+	NODE_FS_READ_STREAM_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
 	unsupportedHostApi,
+	ZLIB_DECODERS_INSTALLER,
 } from "../frontend/host-modules.ts";
 import { isImportMeta, isImportMetaResolveCall } from "../frontend/import-meta.ts";
 import { linkModules } from "../frontend/linker.ts";
@@ -385,6 +392,7 @@ interface CoreFrontendContext {
 	nodeModuleInstaller: string | null;
 
 	linkedBuiltinIds: Set<string>;
+	opaqueBuiltinLookup: boolean;
 	getBuiltinModuleBindings: ReadonlySet<Binding>;
 
 	/** Modules whose bindings this image publishes to later images of its program. */
@@ -1012,6 +1020,7 @@ export function constructSemanticProgramCore(
 		languageInstallers: new Set(),
 		nodeModuleInstaller: null,
 		linkedBuiltinIds: new Set(),
+		opaqueBuiltinLookup: false,
 		getBuiltinModuleBindings: new Set(),
 		commonJsExportNames: () => [],
 	};
@@ -1276,9 +1285,20 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 			const state = sourceBuiltinState(program, modules);
 			return { id, functionIndex, state, imports };
 		});
+	const selectiveInstallers =
+		runtimeBuiltinLoader || inheritsHostComponents
+			? new Map<string, string>()
+			: selectHostExportInstallers(program);
 	// Exports first: publishing a re-exported import or host export allocates its slot.
 	const moduleLinks = coreModuleLinks(program);
-	const hostInstallCandidates = coreHostInstallCandidates(program);
+	const hostInstallCandidates = coreHostInstallCandidates(program).map((candidate) => {
+		if (program.opaqueBuiltinLookup && candidate.installer === NODE_FS_INSTALLER)
+			return { ...candidate, requiresCompleteModule: true as const };
+		const selectiveInstaller = selectiveInstallers.get(candidate.installer);
+		return selectiveInstaller === undefined
+			? candidate
+			: { ...candidate, selectiveInstaller };
+	});
 	const reachedHostInstallers = inheritsHostComponents
 		? []
 		: [
@@ -1377,6 +1397,106 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 			}),
 		},
 	};
+}
+
+const HTTP_WEBSOCKET_EXPORTS = new Set(["WebSocket", "CloseEvent", "MessageEvent"]);
+const ZLIB_DECODER_EXPORTS = new Set([
+	"BrotliDecompress",
+	"Gunzip",
+	"Inflate",
+	"InflateRaw",
+	"Unzip",
+	"brotliDecompress",
+	"gunzip",
+	"inflate",
+	"inflateRaw",
+	"unzip",
+	"brotliDecompressSync",
+	"gunzipSync",
+	"inflateSync",
+	"inflateRawSync",
+	"unzipSync",
+	"createBrotliDecompress",
+	"createGunzip",
+	"createInflate",
+	"createInflateRaw",
+	"createUnzip",
+	"constants",
+	"crc32",
+]);
+const CRYPTO_DIGEST_EXPORTS = new Set([
+	"createHash",
+	"createHmac",
+	"Hash",
+	"Hmac",
+	"KeyObject",
+	"timingSafeEqual",
+]);
+const FS_READ_STREAM_EXPORTS = new Set([
+	"ReadStream",
+	"FileReadStream",
+	"createReadStream",
+]);
+const FS_OTHER_EXPORTS = new Set([
+	"WriteStream",
+	"FileWriteStream",
+	"createWriteStream",
+	"promises",
+]);
+
+function selectHostExportInstallers(
+	program: CoreFrontendContext,
+): ReadonlyMap<string, string> {
+	const { closure, world } = program.facts;
+	const graph = program.semantic.graph;
+	const installers = new Map<string, string>();
+	if (
+		graph === undefined ||
+		graph.modules.has("node:module") ||
+		program.opaqueBuiltinLookup ||
+		closure.sourceClosure.kind !== "known" ||
+		world.eval === "runtime" ||
+		world.realms ||
+		world.primordialPolicy !== "locked"
+	)
+		return installers;
+	for (const [id, names] of hostExportUses(
+		program.semantic,
+		new Set(["node:http", "node:zlib", "node:crypto", "node:fs"]),
+	)) {
+		if (names === null || names.size === 0) continue;
+		const exports = [...names];
+		if (
+			id === "node:http" &&
+			exports.every(
+				(name) =>
+					HOST_MODULES.get(id)!.named.includes(name) && !HTTP_WEBSOCKET_EXPORTS.has(name),
+			)
+		)
+			installers.set(hostInstallerSymbol(id), HTTP_WITHOUT_WEBSOCKET_INSTALLER);
+		else if (
+			id === "node:zlib" &&
+			exports.every((name) => ZLIB_DECODER_EXPORTS.has(name))
+		)
+			installers.set(hostInstallerSymbol(id), ZLIB_DECODERS_INSTALLER);
+		else if (
+			id === "node:crypto" &&
+			exports.every((name) => CRYPTO_DIGEST_EXPORTS.has(name))
+		)
+			installers.set(hostInstallerSymbol(id), CRYPTO_DIGESTS_INSTALLER);
+		else if (id === "node:fs" && exports.every((name) => name === "readFileSync"))
+			installers.set(hostInstallerSymbol(id), NODE_FS_READ_FILE_INSTALLER);
+		else if (
+			id === "node:fs" &&
+			exports.some((name) => FS_READ_STREAM_EXPORTS.has(name)) &&
+			exports.every(
+				(name) =>
+					HOST_MODULES.get(id)!.named.includes(name) && !FS_OTHER_EXPORTS.has(name),
+			)
+		)
+			installers.set(hostInstallerSymbol(id), NODE_FS_READ_STREAM_INSTALLER);
+	}
+	return installers;
 }
 
 function slotFreeHostInstallers(program: CoreFrontendContext): Array<string> {
@@ -17180,7 +17300,10 @@ function retainLiteralBuiltinModule(
 	read: ESTree.Node,
 ): void {
 	const specifier = literalBuiltinModuleSpecifier(fn.semanticFile, read);
-	if (specifier === undefined) return;
+	if (specifier === undefined) {
+		program.opaqueBuiltinLookup = true;
+		return;
+	}
 	const id = canonicalNodeHostModuleId(specifier);
 	if (id !== undefined) program.linkedBuiltinIds.add(id);
 }

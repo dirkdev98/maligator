@@ -6,3 +6,5 @@
 void mal_host_install_node_zlib(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch);
+void mal_host_install_node_zlib_decoders(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);

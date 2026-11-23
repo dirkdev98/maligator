@@ -7287,8 +7287,73 @@ static const CryptoExport CRYPTO_EXPORTS[] = {
 	{"publicEncrypt", 2, mal_node_crypto_asymmetric_unavailable},
 };
 
-void mal_host_install_node_crypto(
-    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+static void crypto_define_flat_export(MalVm *vm, MalObject *module, const CryptoExport *export_entry) {
+    MalNativeFunctionObject *native = mal_native_function_object_new_arity(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) export_entry->name),
+        export_entry->length, export_entry->callback);
+    MalValue function = mal_value_from_native_function_object(native);
+            MalRootSpan function_root;
+            mal_gc_root(&function_root, &function, 1);
+            mal_intrinsic_define_data(
+                vm, module, (const byte *) export_entry->name, function,
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+            mal_gc_unroot(&function_root);
+}
+
+static void crypto_install_flat_exports(MalVm *vm, MalObject *module) {
+    for (usize i = 0; i < countof(CRYPTO_EXPORTS); i++)
+        crypto_define_flat_export(vm, module, &CRYPTO_EXPORTS[i]);
+}
+
+static void crypto_install_advanced_objects(MalVm *vm, MalObject *module) {
+    crypto_install_asymmetric(vm, module);
+    crypto_install_x509(vm, module);
+    mal_node_crypto_key_brand = crypto_crypto_key_brand;
+    crypto_install_webcrypto(vm, module);
+    crypto_install_web_globals(vm, module);
+    crypto_install_ciphers(vm, module);
+}
+
+static bool crypto_finish_full_install(MalVm *vm, MalObject *module) {
+    crypto_lazy_transform_prototype(vm, crypto_cipheriv_prototype, "update", "final",
+        mal_node_crypto_cipher_transform, mal_node_crypto_cipher_flush);
+    crypto_lazy_transform_prototype(vm, crypto_decipheriv_prototype, "update", "final",
+        mal_node_crypto_cipher_transform, mal_node_crypto_cipher_flush);
+    MalValue constants = crypto_constants_object(vm);
+    MalRootSpan root;
+    mal_gc_root(&root, &constants, 1);
+    mal_intrinsic_define_data(vm, module, (const byte *) "constants", constants,
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_gc_unroot(&root);
+
+    if (!crypto_roots_installed) {
+        mal_gc_register_root_source(crypto_scan_roots, nullptr);
+        mal_host_register_macrotask_drain(mal_node_crypto_drain, false);
+        // This program already links the entropy boundary, so Math.random's
+        // generator can be seeded from it rather than from process divergence.
+        // Math.random remains non-cryptographic; see builtin_math.h.
+        mal_builtin_math_set_seed_source(mal_host_entropy);
+        crypto_roots_installed = true;
+    }
+    if (!mal_vm_register_runtime_cleanup(vm, mal_node_crypto_free)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                           "Could not register node:crypto runtime cleanup");
+        return false;
+    }
+    return true;
+}
+
+typedef struct CryptoModuleExtras {
+    void (*flat)(MalVm *, MalObject *);
+    void (*objects)(MalVm *, MalObject *);
+    bool (*finish)(MalVm *, MalObject *);
+} CryptoModuleExtras;
+
+static void crypto_install(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch,
+    const CryptoModuleExtras *extras) {
     if (mal_node_module_install_cached(vm, "node:crypto", slots, count)) return;
     MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_CRYPTO_MODULE];
     if (!mal_value_is_undefined(cached)) {
@@ -7339,58 +7404,47 @@ void mal_host_install_node_crypto(
     mal_intrinsic_define_data(vm, module, (const byte *) "createHmac", roots[5], method_flags);
     roots[8] = crypto_digest_class(vm, module, "Hash", 2, mal_node_crypto_hash_constructor, factory_slots);
     roots[8] = crypto_digest_class(vm, module, "Hmac", 3, mal_node_crypto_hmac_constructor, hmac_slots);
-    for (usize i = 0; i < countof(CRYPTO_EXPORTS); i++) {
-        const CryptoExport *export_entry = &CRYPTO_EXPORTS[i];
-		MalNativeFunctionObject *native = mal_native_function_object_new_arity(
-			&vm->heap,
-			mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-			mal_intrinsic_ascii(vm, (const byte *) export_entry->name),
-			export_entry->length, export_entry->callback);
-		MalValue function = mal_value_from_native_function_object(native);
-        MalRootSpan function_root;
-        mal_gc_root(&function_root, &function, 1);
-        mal_intrinsic_define_data(
-            vm, module, (const byte *) export_entry->name, function, method_flags);
-        mal_gc_unroot(&function_root);
-    }
+    if (extras == nullptr) {
+        const CryptoExport timing = {"timingSafeEqual", 0, mal_node_crypto_timing_safe_equal};
+        crypto_define_flat_export(vm, module, &timing);
+    } else extras->flat(vm, module);
 
     crypto_install_key_objects(vm, module);
     mal_host_install_node_stream(vm, nullptr, 0, launch);
     if (vm->completion.kind == MAL_COMPLETION_THROW) { mal_gc_unroot(&root); return; }
-    crypto_install_asymmetric(vm, module);
-    crypto_install_x509(vm, module);
     mal_node_key_object_brand = crypto_key_object_brand;
-    mal_node_crypto_key_brand = crypto_crypto_key_brand;
-    crypto_install_webcrypto(vm, module);
-    crypto_install_web_globals(vm, module);
-    crypto_install_ciphers(vm, module);
+    if (extras != nullptr) extras->objects(vm, module);
     crypto_lazy_transform_prototype(vm, roots[1], "update", "digest",
         mal_node_crypto_digest_transform, mal_node_crypto_digest_flush);
     crypto_lazy_transform_prototype(vm, roots[7], "update", "digest",
         mal_node_crypto_digest_transform, mal_node_crypto_digest_flush);
-    crypto_lazy_transform_prototype(vm, crypto_cipheriv_prototype, "update", "final",
-        mal_node_crypto_cipher_transform, mal_node_crypto_cipher_flush);
-    crypto_lazy_transform_prototype(vm, crypto_decipheriv_prototype, "update", "final",
-        mal_node_crypto_cipher_transform, mal_node_crypto_cipher_flush);
-    roots[2] = crypto_constants_object(vm);
-    mal_intrinsic_define_data(vm, module, (const byte *) "constants", roots[2], method_flags);
-
-    if (!crypto_roots_installed) {
-        mal_gc_register_root_source(crypto_scan_roots, nullptr);
-        mal_host_register_macrotask_drain(mal_node_crypto_drain, false);
-        // This program already links the entropy boundary, so Math.random's
-        // generator can be seeded from it rather than from process divergence.
-        // Math.random remains non-cryptographic; see builtin_math.h.
+    if (extras == nullptr) {
         mal_builtin_math_set_seed_source(mal_host_entropy);
-        crypto_roots_installed = true;
-    }
-    if (!mal_vm_register_runtime_cleanup(vm, mal_node_crypto_free)) {
+        mal_node_module_export(vm, slots, count, roots[6]);
         mal_gc_unroot(&root);
-        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-                           "Could not register node:crypto runtime cleanup");
+        return;
+    }
+    if (!extras->finish(vm, module)) {
+        mal_gc_unroot(&root);
         return;
     }
     vm->intrinsics[MAL_INTRINSIC_NODE_CRYPTO_MODULE] = roots[6];
     mal_node_module_publish(vm, "node:crypto", slots, count, roots[6]);
     mal_gc_unroot(&root);
+}
+
+
+void mal_host_install_node_crypto(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    static const CryptoModuleExtras extras = {
+        .flat = crypto_install_flat_exports,
+        .objects = crypto_install_advanced_objects,
+        .finish = crypto_finish_full_install,
+    };
+    crypto_install(vm, slots, count, launch, &extras);
+}
+
+void mal_host_install_node_crypto_digests(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    crypto_install(vm, slots, count, launch, nullptr);
 }

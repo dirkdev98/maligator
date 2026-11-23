@@ -34,6 +34,8 @@ export interface CoreSourceBuiltinCell {
 
 export interface CoreHostInstallCandidate {
 	readonly installer: string;
+	readonly selectiveInstaller?: string;
+	readonly requiresCompleteModule?: true;
 	readonly exports: ReadonlyArray<{
 		readonly name: string;
 		readonly slot: number;

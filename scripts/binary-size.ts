@@ -31,6 +31,7 @@ const forbiddenComponents = {
 	// Rust can merge identical codec tables under either crate's constant name.
 	"Brotli encoder": ({ crate, symbol, instruction }) =>
 		(instruction && crate === "brotli") || symbol === "_mal_zlib_create_brotli_encoder",
+	"fs.Stats": ({ symbol }) => /^_node_fs_get_(?:a|m|c|birth)time(?:$|\.)/.test(symbol),
 	rustls: ({ crate }) => /^rustls(?:_|$)/.test(crate ?? ""),
 	"sqlite3.o": ({ object }) => /(?:^|[(-])sqlite3\.o\)?$/.test(object),
 	node_fs: ({ object }) => /(?:^|[(-])node_fs\.o\)?$/.test(object),
@@ -133,6 +134,7 @@ const fixtures: Array<{
 			"HTTP client",
 			"Node streams",
 			"Fetch objects",
+			"fs.Stats",
 			"sqlite3.o",
 		],
 		forbiddenLibraries: ["C++ runtime"],
@@ -149,7 +151,12 @@ const fixtures: Array<{
 		bun: true,
 		forbidden: ["TLS", "sqlite3.o"],
 	},
-	{ name: "express", file: "bench/http/express-server.cjs", bun: true },
+	{
+		name: "express",
+		file: "bench/http/express-server.cjs",
+		bun: true,
+		forbidden: ["Brotli encoder", "rustls", "argon2"],
+	},
 ];
 
 function rankedBytes(groups: Map<string, number>) {

@@ -6,6 +6,8 @@
 void mal_host_install_node_http(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch);
+void mal_host_install_node_http_without_websocket(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);
 
 /* Run at most one queued server lifecycle event as a runtime macrotask. */
 bool mal_node_http_drain(MalVm *vm);
