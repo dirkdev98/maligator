@@ -15,14 +15,12 @@ import { artifactFileDigest, artifactIdentity } from "../src/artifact-store.ts";
 import { writeFileAtomically } from "../src/atomic-file.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../src/build-config.ts";
 import { normalizeNativeFeatures } from "../src/build-flags.ts";
-import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
-import { compileEntrypointToBuffer } from "../src/compiler/pipeline/compile-program.ts";
-import { embeddedCompilerOptions } from "../src/compiler/pipeline/embedded-compiler-options.ts";
 import {
 	buildSharedDevelopmentRunner,
 	sharedDevelopmentRunnerKey,
 } from "../src/local-build.ts";
 import { resolveNativeBuildContext } from "../src/native-build-context.ts";
+import { portableEvalCompilerBake } from "../src/portable-compiler-bake.ts";
 import {
 	DEVELOPMENT_RUNNER,
 	PREBUILT_RUNTIME_CC_FLAGS,
@@ -208,24 +206,9 @@ export function prebuildRuntime(
 				),
 			...bundledCxxFiles(toolchain, context.environment, work),
 		];
-		const compilerSourceDirectory = path.join(repositoryRoot, "src");
-		const compilerEntrypoint = path.join(
-			compilerSourceDirectory,
-			"compiler/pipeline/eval-compiler-entry.mts",
-		);
-		const compilerBake = {
-			kind: "source" as const,
-			sourceDirectory: compilerSourceDirectory,
-			entrypoint: compilerEntrypoint,
-			bake: () =>
-				compileEntrypointToBuffer(compilerEntrypoint, {
-					...embeddedCompilerOptions(compilerSourceDirectory),
-					stripTypes: stripCompactTypes,
-				}),
-		};
 		const runnerContext = {
 			...context,
-			compilerBake,
+			compilerBake: portableEvalCompilerBake(path.join(repositoryRoot, "src")),
 			features: normalizeNativeFeatures({ ...context.features, evalEnabled: true }),
 		};
 		const key = sharedDevelopmentRunnerKey(runnerContext, triple);

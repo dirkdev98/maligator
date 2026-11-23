@@ -329,11 +329,11 @@ the platform compiler before running `env:check`.
 CI caches npm downloads, the pinned Test262 corpus, and the content-addressed native
 actions a job built: Rust runtime libraries, eval-compiler overlay objects, runtime C
 objects and the archives linked from them, generated C objects, the Wasm runtime's Rust library, objects, archive
-and link, and the Test262 input index. Eval-compiler bakes travel with them: a bake
-is keyed by its compiler sources, so a commit that leaves the compiler alone reuses
-it. The ThinLTO cache rides along after them, newest entries first, because a
-production link otherwise recompiles every
-module. The Rust sources rarely change
+and link, and the Test262 input index. Eval-compiler bakes travel with them. The
+packaged CLI and native self-host check reuse a portable wire keyed by the eval
+compiler sources and the bootstrap compiler that produces it. The ThinLTO cache
+rides along after the bakes, newest entries first, because a production link
+otherwise recompiles every module. The Rust sources rarely change
 while every native job otherwise rebuilds each Cargo feature set with fat LTO. The
 overlay partitions functions into translation units: image indices live in separate
 link-table units, so a compiler edit recompiles the units it touches. Test fixtures

@@ -1,16 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress } from "../src/command-progress.ts";
-import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
-import {
-	compileEntrypoint,
-	compileEntrypointToBuffer,
-} from "../src/compiler/pipeline/compile-program.ts";
-import { embeddedCompilerOptions } from "../src/compiler/pipeline/embedded-compiler-options.ts";
+import { ensureCompilerWire } from "../src/compiler-bake.ts";
+import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program-image.ts";
+import { portableEvalCompilerBake } from "../src/portable-compiler-bake.ts";
 import { resolvePathExecutable } from "../src/rust-build.ts";
 import {
 	SELFHOST_NATIVE_EMISSION,
@@ -196,17 +193,7 @@ for (const input of [fixture, storageFixture]) {
 	);
 }
 
-const prebuiltWire = path.join(root, "compiler.malw");
-writeFileSync(
-	prebuiltWire,
-	compileEntrypointToBuffer(
-		path.resolve("src/compiler/pipeline/eval-compiler-entry.mts"),
-		{
-			...embeddedCompilerOptions(path.resolve("src")),
-			stripTypes: stripCompactTypes,
-		},
-	),
-);
+const prebuiltWire = ensureCompilerWire(portableEvalCompilerBake(path.resolve("src")));
 const evalReference = buildNativeBinary({
 	fixture,
 	name: "node-reference-eval",

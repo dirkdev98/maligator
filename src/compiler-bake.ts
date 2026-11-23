@@ -50,6 +50,8 @@ export type CompilerBakeInput =
 			sourceDirectory: string;
 			/** Absolute source entrypoint compiled by bake. */
 			entrypoint: string;
+			/** Absolute source of the bootstrap recipe that produces the wire. */
+			producer?: string;
 			/** Called only when this source identity has no valid cached wire. */
 			bake: () => Uint8Array;
 			/** Produces the wire and its reusable relocation-aware native companion together. */
@@ -115,12 +117,21 @@ function compilerSourceHash(
 	root: string,
 	sourceDirectory: string,
 	entrypoint: string,
+	producer: string | undefined,
 ): string {
 	if (!isWithin(sourceDirectory, entrypoint)) {
 		throw new Error(`compiler entrypoint is outside source directory: ${entrypoint}`);
 	}
 	const relativeEntrypoint = path.relative(sourceDirectory, entrypoint);
-	const checkoutKey = hash("sha256", `${sourceDirectory}\0${relativeEntrypoint}`, "hex");
+	const relativeProducer =
+		producer === undefined ? undefined : path.relative(sourceDirectory, producer);
+	const producerIdentity =
+		relativeProducer === undefined ? [] : ["producer\0", relativeProducer, "\0"];
+	const checkoutKey = hash(
+		"sha256",
+		[sourceDirectory, "\0", relativeEntrypoint, ...producerIdentity].join(""),
+		"hex",
+	);
 	const cone = relativeImportCone(
 		sourceDirectory,
 		[
@@ -128,10 +139,28 @@ function compilerSourceHash(
 			TYPE_STRIPPER_MODULE,
 			COMPILER_HOST_OPTIONS_MODULE,
 			COMPILER_PARSER_CLONE_MODULE,
+			...(relativeProducer === undefined ? [] : [relativeProducer]),
 		],
 		// Hidden so cache pruning, which keeps only the newest wires, never counts it as one.
 		path.join(root, ".source-cones", `${checkoutKey.slice(0, 20)}.json`),
 	);
+	// Package scopes choose how the bootstrap interprets the compiler's .ts files.
+	const packageScopes =
+		producer === undefined
+			? ""
+			: hashDirectoryTrees({
+					root: sourceDirectory,
+					directories: [sourceDirectory],
+					include: (entry) => entry.name === "package.json",
+					prefix: [
+						"compiler-package-scopes\0",
+						hash(
+							"sha256",
+							readFileSync(path.join(sourceDirectory, "../package.json")),
+							"hex",
+						),
+					],
+				});
 	return hash(
 		"sha256",
 		[
@@ -140,6 +169,8 @@ function compilerSourceHash(
 			"entrypoint\0",
 			relativeEntrypoint,
 			"\0",
+			...producerIdentity,
+			packageScopes,
 			...cone.flatMap(([file, digest]) => [file, "\0", digest, "\0"]),
 		].join(""),
 		"hex",
@@ -436,7 +467,14 @@ export function ensureCompilerArtifacts(input: CompilerBakeInput): CompilerArtif
 		input.sourceDirectory,
 	);
 	const entrypoint = requireAbsolute("compiler source entrypoint", input.entrypoint);
-	const sourceIdentity = compilerSourceHash(root, sourceDirectory, entrypoint);
+	const producer =
+		input.producer === undefined
+			? undefined
+			: requireAbsolute("compiler wire producer", input.producer);
+	if (producer !== undefined && !isWithin(sourceDirectory, producer)) {
+		throw new Error(`compiler wire producer is outside source directory: ${producer}`);
+	}
+	const sourceIdentity = compilerSourceHash(root, sourceDirectory, entrypoint, producer);
 	const nativeKey =
 		input.bakeProgram === undefined
 			? undefined

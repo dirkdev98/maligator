@@ -122,6 +122,33 @@ describe("compiler wire provisioning", () => {
 			rmSync(fixture.root, { recursive: true, force: true });
 		}
 	});
+	it("rebuilds a portable wire when only the bootstrap producer's dependency changes", () => {
+		const fixture = compilerFixture();
+		try {
+			const producer = path.join(fixture.sourceDirectory, "bootstrap.ts");
+			const dependency = path.join(fixture.sourceDirectory, "encoder.ts");
+			writeFileSync(producer, 'export * from "./encoder.ts";\n');
+			writeFileSync(dependency, "export const encoder = 1;\n");
+			const input = {
+				kind: "source" as const,
+				sourceDirectory: fixture.sourceDirectory,
+				entrypoint: fixture.entrypoint,
+				cacheRoot: path.join(fixture.root, "cache"),
+				producer,
+				bake: () => readFileSync(dependency),
+			};
+			expect(readFileSync(ensureCompilerWire(input), "utf8")).toBe(
+				"export const encoder = 1;\n",
+			);
+			writeFileSync(dependency, "export const encoder = 2;\n");
+			expect(readFileSync(ensureCompilerWire(input), "utf8")).toBe(
+				"export const encoder = 2;\n",
+			);
+		} finally {
+			rmSync(fixture.root, { recursive: true, force: true });
+		}
+	});
+
 	it("uses the configured user cache for source bakes without an explicit cache root", () => {
 		const fixture = compilerFixture();
 		const cacheDirectory = path.join(fixture.root, "user-cache");

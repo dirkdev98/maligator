@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { collectEmbeddedAssets, embedDeclarationsOf } from "./assets.ts";
 import { createBuildArtifact } from "./build-artifact.ts";
@@ -6,19 +6,19 @@ import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { normalizeNativeFeatures, selectNativeBuildPlan } from "./build-flags.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
+import { ensureCompilerWire } from "./compiler-bake.ts";
 import { compilerProducerDigestsForRoot } from "./compiler-cache-identity.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
-import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
 import { workerRootEntries } from "./compiler/pipeline/compile-worker-images.ts";
-import { embeddedCompilerOptions } from "./compiler/pipeline/embedded-compiler-options.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { emitWorkerRegistryTranslationUnit } from "./compiler/target/emit-worker-images.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { nativeSourcePath } from "./native-source-path.ts";
+import { portableEvalCompilerBake } from "./portable-compiler-bake.ts";
 import { prepareProfile } from "./profile-artifact.ts";
 import type { PreparedProfile } from "./profile-artifact.ts";
 import { requireToolchain } from "./toolchain.ts";
@@ -68,29 +68,21 @@ export interface BuildProductCliOptions {
 export function buildProductCli(options: BuildProductCliOptions): string {
 	const progress = options.onProgress ?? (() => {});
 	const repositoryRoot = path.resolve(options.repositoryRoot);
+	const sourceDirectory = path.join(repositoryRoot, "src");
 	const outDir = path.resolve(options.outDir);
 	const runtimeDirectory = path.join(repositoryRoot, "runtime");
 	const compilerWirePath = path.join(outDir, "compiler.malw");
 	mkdirSync(outDir, { recursive: true });
-	progress("compiling the embedded eval compiler");
-	writeFileSync(
+	progress("preparing the embedded eval compiler");
+	copyFileSync(
+		ensureCompilerWire(portableEvalCompilerBake(sourceDirectory)),
 		compilerWirePath,
-		compileEntrypointToBuffer(
-			path.join(repositoryRoot, "src/compiler/pipeline/eval-compiler-entry.mts"),
-			{
-				stripTypes: stripCompactTypes,
-				...embeddedCompilerOptions(path.join(repositoryRoot, "src")),
-			},
-		),
 	);
 	const compilerProducerDigestsPath = path.join(outDir, "compiler-producers.json");
 	writeFileSync(
 		compilerProducerDigestsPath,
 		`${JSON.stringify(
-			compilerProducerDigestsForRoot(
-				path.join(repositoryRoot, "src"),
-				maligatorCacheDirectory(),
-			),
+			compilerProducerDigestsForRoot(sourceDirectory, maligatorCacheDirectory()),
 		)}\n`,
 	);
 	const production = options.production ?? true;
