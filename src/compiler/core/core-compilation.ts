@@ -107,6 +107,8 @@ export interface CoreProgramData {
 		readonly contents: string;
 	}>;
 	readonly cjsModuleFunctionIndices: ReadonlyArray<number>;
+	/** The module evaluator invokes each body only while its record is evaluating. */
+	readonly esmEvaluationFunctionIndices?: ReadonlyArray<number>;
 	readonly sourceBuiltinProviders?: ReadonlyArray<{
 		readonly id: string;
 		readonly functionIndex: number;

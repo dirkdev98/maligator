@@ -140,6 +140,7 @@ export interface CoreCallGraphIndex {
 	targets(functionId: CoreFunctionId, value: CoreValueId): CoreCalleeTargets;
 	returnTargets(functionId: CoreFunctionId): CoreCalleeTargets;
 	publishedFunctions(functionId: CoreFunctionId): ReadonlyArray<CoreFunctionId>;
+	builtinInvocationTargets(functionId: CoreFunctionId): ReadonlyArray<CoreCalleeTargets>;
 	globalStoreTargets(slot: number): CoreCalleeTargets;
 	site(
 		functionId: CoreFunctionId,

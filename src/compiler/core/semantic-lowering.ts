@@ -1347,6 +1347,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 				modulePrivateNames: program.modulePrivateNames,
 				sourceCallSites: program.sourceOrigins?.callSites(),
 				cjsModuleFunctionIndices: [...program.cjsWrapperFunctionIndex],
+				esmEvaluationFunctionIndices: [...program.moduleEvaluationBodies.values()],
 				sourceBuiltinProviders,
 				hostInstallCandidates,
 				pureModuleInitializers: [...program.compiledModuleInitForPaths].flatMap(

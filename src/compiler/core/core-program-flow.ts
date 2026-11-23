@@ -456,6 +456,7 @@ export interface CoreProgramFlowCallTargetState<
 	readonly returnTopology: CoreProgramFlowTopology;
 	targets(functionId: CoreFunctionId, value: CoreValueId): Targets;
 	returnTargets(functionId: CoreFunctionId): Targets;
+	builtinInvocationTargets(functionId: CoreFunctionId): ReadonlyArray<Targets>;
 	globalStoreTargets(slot: number): Targets;
 	site(functionId: CoreFunctionId, instruction: CoreInstructionId): Site | undefined;
 	outgoing(functionId: CoreFunctionId): ReadonlyArray<Site>;
@@ -2196,6 +2197,9 @@ export class CoreProgramFlowEngine {
 			},
 			publishedFunctions(functionId: CoreFunctionId) {
 				return local.get(functionId)?.publishedFunctions ?? [];
+			},
+			builtinInvocationTargets(functionId: CoreFunctionId) {
+				return local.get(functionId)?.invocationDependencies ?? [];
 			},
 			globalStoreTargets(slot: number) {
 				return globalStores.get(slot) ?? semantics.bottom;

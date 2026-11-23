@@ -1,3 +1,5 @@
+import { controlFlowCycles } from "../shared/control-flow-cycles.ts";
+
 /**
  * Outlines dominator regions of an oversized native C function into noinline parts,
  * because Clang's backend time grows superlinearly with function size. The pass runs
@@ -51,21 +53,53 @@ export interface NativeSplitSource {
 export function splitNativeFunction(
 	source: NativeSplitSource,
 	policy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
+	compactInitializationBudget?: number,
 ): Array<string> | undefined {
 	let bodyCodeUnits = 0;
 	for (const line of source.body) bodyCodeUnits += line.length + 1;
-	if (bodyCodeUnits <= policy.thresholdCodeUnits || source.unitStarts.length === 0)
+	if (
+		(compactInitializationBudget === undefined &&
+			bodyCodeUnits <= policy.thresholdCodeUnits) ||
+		source.unitStarts.length === 0
+	)
 		return undefined;
 	try {
 		const frame = buildFrame(source);
+		const render = (graph: Graph, partition: Partition, compact: boolean) => {
+			if (partition.functions.length === 1) return undefined;
+			verifyPartition(graph, partition);
+			const interfaces = planInterfaces(graph, partition, frame);
+			// Transferred scalars hide constants from Clang at loop entry, which can
+			// restore guards even when the loop's emitted statements are identical.
+			if (
+				compact &&
+				interfaces.functions[1]!.outputs.some((exit) => exit.some((word) => word !== 0))
+			)
+				return undefined;
+			return renderSplit(source, frame, graph, partition, interfaces, compact);
+		};
+		if (compactInitializationBudget !== undefined) {
+			try {
+				const graph = scanBlocks(source, frame, policy, true);
+				const partition = partitionInitialization(graph);
+				if (partition !== undefined) {
+					const split = render(graph, partition, true);
+					if (
+						split !== undefined &&
+						split.reduce((units, line) => units + line.length + 1, 0) <=
+							compactInitializationBudget
+					)
+						return split;
+				}
+			} catch (error) {
+				if (!(error instanceof SplitDeclined)) throw error;
+			}
+		}
+		if (bodyCodeUnits <= policy.thresholdCodeUnits) return undefined;
 		const graph = scanBlocks(source, frame, policy);
 		let prologueCodeUnits = 0;
 		for (const line of source.prologue) prologueCodeUnits += line.length + 1;
-		const partition = partitionBlocks(graph, policy, prologueCodeUnits);
-		if (partition.functions.length === 1) return undefined;
-		verifyPartition(graph, partition);
-		const interfaces = planInterfaces(graph, partition, frame);
-		return renderSplit(source, frame, graph, partition, interfaces);
+		return render(graph, partitionBlocks(graph, policy, prologueCodeUnits), false);
 	} catch (error) {
 		if (error instanceof SplitDeclined) return undefined;
 		throw error;
@@ -1210,6 +1244,7 @@ function scanBlocks(
 	source: NativeSplitSource,
 	frame: Frame,
 	policy: NativeSplitPolicy,
+	separateEntry = false,
 ): Graph {
 	const { body, unitStarts } = source;
 	// Straight-line code longer than a part, such as a module's run of binding
@@ -1243,20 +1278,26 @@ function scanBlocks(
 	}
 	if (body.length > blockStart) close(body.length);
 	if (ranges.length === 0) decline("empty body");
+	if (separateEntry) {
+		const entry = ranges[0]!;
+		if (!isLabelLine(entry[0]!)) ranges[0] = [`L${nextLabel++}:;`, ...entry];
+		ranges.unshift([]);
+	}
 	ranges.push([`${source.fallOffLabel}:;`, ...source.fallOff]);
 	const labels = new Map<string, number>();
 	ranges.forEach((lines, index) => {
-		if (!isLabelLine(lines[0]!)) {
+		if (lines[0] === undefined || !isLabelLine(lines[0])) {
 			if (index !== 0) decline("unlabeled block");
 			return;
 		}
-		const label = lines[0]!.slice(0, -2);
+		const label = lines[0].slice(0, -2);
 		if (labels.has(label)) decline(`duplicate label ${label}`);
 		labels.set(label, index);
 	});
 	const parser = new BlockParser(frame, labels, new Map());
 	const blocks = ranges.map((lines, index): Block => {
-		const label = isLabelLine(lines[0]!) ? lines[0]!.slice(0, -2) : undefined;
+		const label =
+			lines[0] !== undefined && isLabelLine(lines[0]) ? lines[0].slice(0, -2) : undefined;
 		let size = 0;
 		for (const line of lines) size += line.length + 1;
 		return {
@@ -1302,6 +1343,47 @@ interface Partition {
 }
 
 const STUB_CODE_UNITS = 256;
+
+// Only move code that can run before the first loop. Retaining the continuation
+// avoids a second transfer frame crossing on every exit from the hot region.
+function partitionInitialization(graph: Graph): Partition | undefined {
+	const { reachable, repeating } = controlFlowCycles(graph.successors, 0);
+	if (!repeating.includes(1)) return undefined;
+	const normal = repeating.slice();
+	const work: Array<number> = [];
+	for (let block = 0; block < normal.length; block++) {
+		if (normal[block] !== 0) work.push(block);
+	}
+	while (work.length > 0) {
+		for (const successor of graph.successors[work.pop()!]!) {
+			if (normal[successor] !== 0) continue;
+			normal[successor] = 1;
+			work.push(successor);
+		}
+	}
+	const owner = new Int32Array(graph.blocks.length).fill(-1);
+	const entryOf = new Int32Array(graph.blocks.length).fill(-1);
+	const loops: PartFunction = { caller: -1, entries: [], blocks: [], depth: 0 };
+	const once: PartFunction = { caller: 0, entries: [], blocks: [], depth: 1 };
+	for (const [block, successors] of graph.successors.entries()) {
+		if (reachable[block] === 0) continue;
+		if (block !== 0 && normal[block] === 0) {
+			owner[block] = 1;
+			once.blocks.push(block);
+			continue;
+		}
+		owner[block] = 0;
+		loops.blocks.push(block);
+		for (const successor of successors) {
+			if (normal[successor] !== 0 || entryOf[successor] === 1) continue;
+			entryOf[successor] = 1;
+			once.entries.push(successor);
+		}
+	}
+	if (once.entries.length === 0) return undefined;
+	once.entries.sort((left, right) => left - right);
+	return { owner, reachable, functions: [loops, once], entryOf };
+}
 
 function partitionBlocks(
 	graph: Graph,
@@ -1888,6 +1970,7 @@ function renderSplit(
 	graph: Graph,
 	partition: Partition,
 	interfaces: Interfaces,
+	compactInitialization: boolean,
 ): Array<string> {
 	const { blocks } = graph;
 	const { functions, reachable } = partition;
@@ -1932,7 +2015,7 @@ function renderSplit(
 	});
 	output.push(`    ${source.resultType} ret;`, `} ${structName};`);
 	const signatureOf = (id: number) =>
-		`static __attribute__((noinline)) u32 ${partSymbol(id)}(MalVm *vm, ${structName} *__split_state${functions[id]!.entries.length > 1 ? ", u32 __split_entry" : ""})`;
+		`static __attribute__((noinline${compactInitialization ? ", minsize" : ""})) u32 ${partSymbol(id)}(MalVm *vm, ${structName} *__split_state${functions[id]!.entries.length > 1 ? ", u32 __split_entry" : ""})`;
 	for (let id = 1; id < functions.length; id++) output.push(`${signatureOf(id)};`);
 	if (source.inactiveRows.length > 0) {
 		const rowsName = `${symbol}_gc_inactive_rows`;

@@ -12,6 +12,7 @@ import {
 } from "../shared/fact-implication.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import { coreRunOnceFunctions } from "./core-function-activations.ts";
 import {
 	CORE_FUNCTION_HAS_ALLOCATIONS,
 	CORE_FUNCTION_HAS_CANDIDATE_OPCODES,
@@ -3118,6 +3119,9 @@ export function buildCoreOptimizationPlan(
 	const plan = Object.freeze({
 		version: corePlanVersionStamp(program),
 		liveFunctions: Object.freeze([...liveFunctions]),
+		runOnceFunctions: Object.freeze(
+			coreRunOnceFunctions(program, options.context, summaries, liveFunctions),
+		),
 		blockOrders: Object.freeze(
 			resolvedLocalInputs.map((input) =>
 				Object.freeze({

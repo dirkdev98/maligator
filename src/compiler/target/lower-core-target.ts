@@ -3696,6 +3696,7 @@ export function lowerCoreCompilationToTargetProgram(
 				)
 			: undefined;
 	const runnable = prepared.reachability?.runnable;
+	const runOnce = new Set(compilation.plan.runOnceFunctions);
 	const functions = prepared.functions.map((fn, index) => {
 		if (fn === undefined)
 			return lowerOmittedMethod(
@@ -3703,6 +3704,7 @@ export function lowerCoreCompilationToTargetProgram(
 				index,
 			);
 		return {
+			...(runOnce.has(fn.coreFunction.id) ? { runOnce: true as const } : {}),
 			...(prepared.specializedOnly.has(fn.coreFunction.id)
 				? { specializedOnly: true as const }
 				: {}),

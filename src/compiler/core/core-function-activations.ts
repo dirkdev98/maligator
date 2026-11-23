@@ -1,9 +1,83 @@
+import { controlFlowCycles } from "../shared/control-flow-cycles.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import type { CoreIndexedCallSite } from "./core-ir-call-targets.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { coreFunctionId, coreInstructionId } from "./core-ir.ts";
 import type { CoreBlockId, CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
+
+function onceEntryFunctions(
+	program: CoreProgram,
+	context: CoreCompilationContext,
+): Set<CoreFunctionId> {
+	const once = new Set<CoreFunctionId>();
+	if (context.facts.closure.sourceClosure.kind !== "known") return once;
+	const [entry] = program.functionIds();
+	if (entry !== undefined) once.add(entry);
+	for (const index of context.data.cjsModuleFunctionIndices)
+		once.add(coreFunctionId(index));
+	return once;
+}
+
+export function coreRunOnceFunctions(
+	program: CoreProgram,
+	context: CoreCompilationContext | undefined,
+	summaries: CoreProgramSummaries,
+	liveFunctions: ReadonlyArray<CoreFunctionId>,
+): ReadonlyArray<CoreFunctionId> {
+	if (context === undefined || !summaries.targets.sourceClosed) return [];
+	const once = onceEntryFunctions(program, context);
+	if (once.size === 0) return [];
+	for (const index of context.data.esmEvaluationFunctionIndices ?? [])
+		once.add(coreFunctionId(index));
+	const sites = new Map<CoreFunctionId, CoreIndexedCallSite | null>();
+	for (const caller of liveFunctions) {
+		for (const invocation of summaries.targets.builtinInvocationTargets(caller)) {
+			if (invocation.anyScript) return [...once];
+			for (const target of invocation.functions) sites.set(target, null);
+		}
+		for (const site of summaries.targets.outgoing(caller)) {
+			for (const target of site.targets.functions) {
+				sites.set(
+					target,
+					!sites.has(target) &&
+						!site.open &&
+						site.targets.functions.length === 1 &&
+						site.transfer.invocation === "call"
+						? site
+						: null,
+				);
+			}
+		}
+	}
+	for (const caller of once) {
+		const fn = program.function(caller);
+		let cycles: ReturnType<typeof controlFlowCycles> | undefined;
+		for (const site of summaries.targets.outgoing(caller)) {
+			const [target] = site.targets.functions;
+			if (
+				target === undefined ||
+				once.has(target) ||
+				sites.get(target) !== site ||
+				summaries.summary(target)?.externallyReachable !== false
+			)
+				continue;
+			if (cycles === undefined) {
+				const cfg = buildCoreControlFlow(program, caller, { exceptions: true });
+				cycles = controlFlowCycles(
+					cfg.successors.map((edges) => edges.map((edge) => cfg.edges.to(edge))),
+					fn.entry,
+				);
+			}
+			const block = fn.instructionBlock(site.instruction);
+			if (cycles.reachable[block] === 1 && cycles.repeating[block] === 0)
+				once.add(target);
+		}
+	}
+	return [...once];
+}
 
 /**
  * Functions whose body runs at most once per program run. Every closure that
@@ -14,13 +88,8 @@ export function coreSingleActivationFunctions(
 	program: CoreProgram,
 	context: CoreCompilationContext,
 ): ReadonlySet<CoreFunctionId> {
-	const once = new Set<CoreFunctionId>();
-	if (context.facts.closure.sourceClosure.kind !== "known") return once;
-	const [entry] = program.functionIds();
-	if (entry !== undefined) once.add(entry);
-	// The loader evaluates each CommonJS module function once and never re-runs it.
-	for (const index of context.data.cjsModuleFunctionIndices)
-		once.add(coreFunctionId(index));
+	const once = onceEntryFunctions(program, context);
+	if (once.size === 0) return once;
 	const creations = new Map<
 		CoreFunctionId,
 		Array<{ readonly creator: CoreFunctionId; readonly instruction: CoreInstructionId }>

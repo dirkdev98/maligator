@@ -129,7 +129,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 471;
+export const COMPILER_ARTIFACT_VERSION = 472;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -2526,7 +2526,10 @@ function writeCompilerArtifact(
 			writeNativeRecordStorage(w, site.storage);
 			writeNativeRecordUses(w, site);
 		}
-		w.u8(native.specializedOnly ? 1 : native.unreachable ? 2 : 0);
+		w.u8(
+			(native.specializedOnly ? 1 : native.unreachable ? 2 : 0) |
+				(native.runOnce ? 4 : 0),
+		);
 		w.u32(native.directEntries.length);
 		for (const [entryIndex, entry] of native.directEntries.entries()) {
 			if (
@@ -5226,8 +5229,10 @@ function readCompilerArtifact(
 			storage: readNativeRecordStorage(r),
 			...readNativeRecordUses(r),
 		}));
-		const bodyReachability = r.u8();
-		if (bodyReachability > 2) throw new RangeError("invalid native body reachability");
+		const bodyFlags = r.u8();
+		const bodyReachability = bodyFlags & 3;
+		if (bodyFlags > 7 || bodyReachability === 3)
+			throw new RangeError("invalid native body flags");
 		const directEntryCount = r.count(1);
 		if (directEntryCount > 4) {
 			throw new RangeError("program-image-codec: too many native direct entries");
@@ -6967,6 +6972,7 @@ function readCompilerArtifact(
 			...(storageValues.length === 0 ? {} : { storageValues }),
 			...(bodyReachability === 1 ? { specializedOnly: true as const } : {}),
 			...(bodyReachability === 2 ? { unreachable: true as const } : {}),
+			...((bodyFlags & 4) !== 0 ? { runOnce: true as const } : {}),
 			functionIndex,
 			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 			registerRepresentations,

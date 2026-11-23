@@ -4136,16 +4136,15 @@ function emitCompiledVariant(
 	}
 	if (directEntry !== undefined) validateNativeDirectEntry(fn, directEntry);
 	validateNativeLiteralSwitches(fn, native);
-	// A backward edge can repeatedly execute its surrounding emission. Keep the
-	// entire wrapper on the usual path in that case, including any prefix.
-	const compactModuleInit =
-		moduleWrapper &&
-		fn.handlers.every(({ endIp, handlerIp }) => handlerIp >= endIp) &&
-		!fn.instructions.some(
+	const sizeOptimize = moduleWrapper || native.runOnce === true;
+	const hasBackwardEdge =
+		fn.handlers.some(({ endIp, handlerIp }) => handlerIp < endIp) ||
+		fn.instructions.some(
 			(instruction, ip) =>
 				(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
 				instruction.targetIp <= ip,
 		);
+	const compactModuleInit = moduleWrapper && !hasBackwardEdge;
 	const variant =
 		directEntry === undefined ? native : nativeVariantContract(native, directEntry);
 	const variantContract = nativeControlFlowContract(
@@ -5103,6 +5102,13 @@ function emitCompiledVariant(
 			]
 		: [];
 	const trailer = definedRegisters.map((register) => `#undef r${register}`);
+	const linkDeclarations =
+		relocation.link.length === 0 ? [] : [`extern const i32 ${symbol}_link[];`];
+	const frameDescriptor = compiledFrameDescriptor(
+		symbol,
+		symbol,
+		`${linkage === "static" ? "static " : ""}${resultType} ${symbol}(${parameterList})`,
+	);
 	const split = splitNativeFunction(
 		{
 			symbol,
@@ -5118,6 +5124,9 @@ function emitCompiledVariant(
 			trailer,
 		},
 		splitPolicy,
+		sizeOptimize && hasBackwardEdge && directEntry === undefined
+			? maxCodeUnits - joinedCodeUnits([...linkDeclarations, ...frameDescriptor])
+			: undefined,
 	);
 	const fullSymbol = `${symbol}_full`;
 	let fastSourceMap: ReadonlyArray<NativeSourceRange> = [];
@@ -5304,13 +5313,9 @@ function emitCompiledVariant(
 		...(fastEntry ?? []),
 	];
 	const source = [
-		...(relocation.link.length === 0 ? [] : [`extern const i32 ${symbol}_link[];`]),
+		...linkDeclarations,
 		...(fastEntry === undefined
-			? compiledFrameDescriptor(
-					symbol,
-					symbol,
-					`${linkage === "static" ? "static " : ""}${resultType} ${symbol}(${parameterList})`,
-				)
+			? frameDescriptor
 			: compiledFrameDescriptor(
 					symbol,
 					fullSymbol,
@@ -5319,6 +5324,21 @@ function emitCompiledVariant(
 		...definition,
 	];
 	if (joinedCodeUnits(source) > maxCodeUnits) return null;
+	const sizeAttribute = "__attribute__((minsize)) ";
+	let sizeAttributeUnits = 0;
+	if (
+		sizeOptimize &&
+		!hasBackwardEdge &&
+		!compactModuleInit &&
+		fastEntry === undefined &&
+		joinedCodeUnits(source) + sizeAttribute.length <= maxCodeUnits
+	) {
+		const definitionLine = source.indexOf(frameSignature);
+		if (definitionLine >= 0) {
+			source[definitionLine] = sizeAttribute + frameSignature;
+			sizeAttributeUnits = sizeAttribute.length;
+		}
+	}
 	const definitionOffset =
 		joinedCodeUnits(source.slice(0, source.length - definition.length)) + 1;
 	const sourceMap =
@@ -5326,7 +5346,10 @@ function emitCompiledVariant(
 			? undefined
 			: split === undefined
 				? [
-						...shiftNativeSourceRanges(body.sourceMap, definitionOffset + bodyOffset),
+						...shiftNativeSourceRanges(
+							body.sourceMap,
+							definitionOffset + bodyOffset + sizeAttributeUnits,
+						),
 						...shiftNativeSourceRanges(
 							fastSourceMap,
 							definitionOffset +
