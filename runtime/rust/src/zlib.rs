@@ -3,14 +3,13 @@
 //! Input and output are borrowed only for one `mal_zlib_pump` call. Persistent
 //! state contains codec state and scalar counters, never pointers into JS or C.
 
-use brotli::enc::encode::{
-    BrotliEncoderDestroyInstance, BrotliEncoderOperation, BrotliEncoderParameter,
-    BrotliEncoderStateStruct,
-};
-use brotli_decompressor::{BrotliDecompressStream, BrotliResult, BrotliState, StandardAlloc};
-use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress, Status};
+mod brotli;
+mod deflate;
 
-pub const MAL_ZLIB_ABI_VERSION: u32 = 2;
+use self::brotli::{BrotliDecoder, BrotliEncoder};
+use deflate::{DeflateDecoder, DeflateEncoder};
+
+pub const MAL_ZLIB_ABI_VERSION: u32 = 3;
 
 pub const MAL_ZLIB_FORMAT_ZLIB: u32 = 1;
 pub const MAL_ZLIB_FORMAT_GZIP: u32 = 2;
@@ -25,477 +24,129 @@ pub const MAL_ZLIB_STATUS_DATA_ERROR: i32 = -1;
 pub const MAL_ZLIB_STATUS_TRUNCATED: i32 = -2;
 pub const MAL_ZLIB_STATUS_INVALID_ARGUMENT: i32 = -3;
 
-type BrotliDecoder = BrotliState<StandardAlloc, StandardAlloc, StandardAlloc>;
-type BrotliEncoder = BrotliEncoderStateStruct<StandardAlloc>;
+type PumpResult = (usize, usize, i32);
+type Pump = unsafe fn(*mut MalZlibStream, &[u8], &mut [u8], i32) -> PumpResult;
 
-// MalZlibStream itself is boxed at the ABI boundary; boxing BrotliState again
-// would add an allocation and indirection without reducing per-handle memory.
-#[allow(clippy::large_enum_variant)]
-enum Decoder {
-    Zlib {
-        decoder: Decompress,
-        complete: bool,
-    },
-    Gzip {
-        decoder: Decompress,
-        members: usize,
-        at_member_boundary: bool,
-        finished: bool,
-    },
-    Brotli {
-        decoder: BrotliDecoder,
-        total_out: usize,
-        complete: bool,
-    },
-    Unzip,
-    Deflate {
-        encoder: Compress,
-        complete: bool,
-    },
-    BrotliEncode {
-        encoder: BrotliEncoder,
-        complete: bool,
-    },
+trait Codec {
+    fn pump(&mut self, input: &[u8], output: &mut [u8], flush: i32) -> PumpResult;
+    fn is_finished(&mut self) -> bool;
+    fn reset(&mut self);
+
+    fn set_level(&mut self, _level: i32) -> i32 {
+        MAL_ZLIB_STATUS_NEED_INPUT
+    }
+
+    // Decoder parameters only tune memory reuse.
+    fn set_brotli_parameter(&mut self, _id: u32, _value: u32) -> i32 {
+        MAL_ZLIB_STATUS_NEED_INPUT
+    }
 }
 
-#[derive(Clone, Copy)]
-struct Config {
-    format: u32,
-    encode: bool,
-    level: i32,
-    window_bits: i32,
+struct StreamOperations {
+    pump: Pump,
+    is_finished: unsafe fn(*mut MalZlibStream) -> bool,
+    reset: unsafe fn(*mut MalZlibStream),
+    set_level: unsafe fn(*mut MalZlibStream, i32) -> i32,
+    set_brotli_parameter: unsafe fn(*mut MalZlibStream, u32, u32) -> i32,
+    free: unsafe fn(*mut MalZlibStream),
 }
 
-/// Opaque to C. The sticky error makes calls after malformed input deterministic.
+#[repr(C)]
 pub struct MalZlibStream {
-    config: Config,
-    decoder: Decoder,
+    operations: &'static StreamOperations,
     error: Option<i32>,
 }
 
-impl Drop for MalZlibStream {
-    fn drop(&mut self) {
-        if let Decoder::BrotliEncode { encoder, .. } = &mut self.decoder {
-            BrotliEncoderDestroyInstance(encoder);
-        }
+// The header and concrete codec share one allocation. Only the constructor for
+// a codec references its operations, so a decoder does not link encoder code.
+#[repr(C)]
+struct CodecStream<C> {
+    header: MalZlibStream,
+    codec: C,
+}
+
+impl<C: Codec> CodecStream<C> {
+    const OPERATIONS: StreamOperations = StreamOperations {
+        pump: Self::pump,
+        is_finished: Self::is_finished,
+        reset: Self::reset,
+        set_level: Self::set_level,
+        set_brotli_parameter: Self::set_brotli_parameter,
+        free: Self::free,
+    };
+
+    fn into_raw(codec: C) -> *mut MalZlibStream {
+        Box::into_raw(Box::new(Self {
+            header: MalZlibStream {
+                operations: &Self::OPERATIONS,
+                error: None,
+            },
+            codec,
+        }))
+        .cast()
+    }
+
+    // Every operation receives the original allocation pointer, with the table
+    // selected by the same concrete type that allocated it.
+    unsafe fn pump(
+        handle: *mut MalZlibStream,
+        input: &[u8],
+        output: &mut [u8],
+        flush: i32,
+    ) -> PumpResult {
+        unsafe { &mut (*handle.cast::<Self>()).codec }.pump(input, output, flush)
+    }
+
+    unsafe fn is_finished(handle: *mut MalZlibStream) -> bool {
+        unsafe { &mut (*handle.cast::<Self>()).codec }.is_finished()
+    }
+
+    unsafe fn reset(handle: *mut MalZlibStream) {
+        unsafe { &mut (*handle.cast::<Self>()).codec }.reset();
+    }
+
+    unsafe fn set_level(handle: *mut MalZlibStream, level: i32) -> i32 {
+        unsafe { &mut (*handle.cast::<Self>()).codec }.set_level(level)
+    }
+
+    unsafe fn set_brotli_parameter(handle: *mut MalZlibStream, id: u32, value: u32) -> i32 {
+        unsafe { &mut (*handle.cast::<Self>()).codec }.set_brotli_parameter(id, value)
+    }
+
+    unsafe fn free(handle: *mut MalZlibStream) {
+        drop(unsafe { Box::from_raw(handle.cast::<Self>()) });
     }
 }
 
-fn deflate_level(level: i32) -> Compression {
-    if (0..=9).contains(&level) {
-        Compression::new(level as u32)
-    } else {
-        Compression::default()
-    }
-}
-
-fn new_codec(config: Config) -> Option<Decoder> {
-    // zlib silently raises an 8-bit deflate window to 9; flate2 panics instead.
-    let bits = config.window_bits.clamp(9, 15) as u8;
-    if config.encode {
-        let level = deflate_level(config.level);
-        return Some(match config.format {
-            MAL_ZLIB_FORMAT_ZLIB => Decoder::Deflate {
-                encoder: Compress::new_with_window_bits(level, true, bits),
-                complete: false,
-            },
-            MAL_ZLIB_FORMAT_RAW => Decoder::Deflate {
-                encoder: Compress::new_with_window_bits(level, false, bits),
-                complete: false,
-            },
-            MAL_ZLIB_FORMAT_GZIP => Decoder::Deflate {
-                encoder: Compress::new_gzip(level, bits),
-                complete: false,
-            },
-            MAL_ZLIB_FORMAT_BROTLI => Decoder::BrotliEncode {
-                encoder: BrotliEncoder::new(StandardAlloc::default()),
-                complete: false,
-            },
-            _ => return None,
-        });
-    }
-    Some(match config.format {
-        MAL_ZLIB_FORMAT_ZLIB => Decoder::Zlib {
-            decoder: Decompress::new(true),
-            complete: false,
-        },
-        MAL_ZLIB_FORMAT_RAW => Decoder::Zlib {
-            decoder: Decompress::new(false),
-            complete: false,
-        },
-        MAL_ZLIB_FORMAT_GZIP => Decoder::Gzip {
-            decoder: Decompress::new_gzip(15),
-            members: 0,
-            at_member_boundary: false,
-            finished: false,
-        },
-        MAL_ZLIB_FORMAT_UNZIP => Decoder::Unzip,
-        MAL_ZLIB_FORMAT_BROTLI => Decoder::Brotli {
-            decoder: BrotliState::new(
-                StandardAlloc::default(),
-                StandardAlloc::default(),
-                StandardAlloc::default(),
-            ),
-            total_out: 0,
-            complete: false,
-        },
-        _ => return None,
-    })
-}
-
-fn brotli_parameter(id: u32) -> Option<BrotliEncoderParameter> {
-    Some(match id {
-        0 => BrotliEncoderParameter::BROTLI_PARAM_MODE,
-        1 => BrotliEncoderParameter::BROTLI_PARAM_QUALITY,
-        2 => BrotliEncoderParameter::BROTLI_PARAM_LGWIN,
-        3 => BrotliEncoderParameter::BROTLI_PARAM_LGBLOCK,
-        4 => BrotliEncoderParameter::BROTLI_PARAM_DISABLE_LITERAL_CONTEXT_MODELING,
-        5 => BrotliEncoderParameter::BROTLI_PARAM_SIZE_HINT,
-        6 => BrotliEncoderParameter::BROTLI_PARAM_LARGE_WINDOW,
-        _ => return None,
-    })
-}
-
-impl MalZlibStream {
-    #[cfg(test)]
-    fn new(format: u32) -> Option<Self> {
-        Self::with_config(Config {
-            format,
-            encode: false,
-            level: -1,
-            window_bits: 15,
-        })
-    }
-
-    fn with_config(config: Config) -> Option<Self> {
-        Some(Self {
-            config,
-            decoder: new_codec(config)?,
-            error: None,
-        })
-    }
-
-    fn fail(&mut self, status: i32) -> i32 {
-        self.error = Some(status);
-        status
-    }
-
-    #[cfg(test)]
-    fn pump(&mut self, input: &[u8], output: &mut [u8]) -> (usize, usize, i32) {
-        self.pump_flush(input, output, 0)
-    }
-
-    fn pump_flush(&mut self, input: &[u8], output: &mut [u8], flush: i32) -> (usize, usize, i32) {
-        if let Some(error) = self.error {
-            return (0, 0, error);
-        }
-        if matches!(self.decoder, Decoder::Unzip) {
-            let Some(&first) = input.first() else {
-                return (0, 0, MAL_ZLIB_STATUS_NEED_INPUT);
-            };
-            // 0x1f can only start a gzip member: as a zlib CMF it names compression method 15.
-            let format = if first == 0x1f {
-                MAL_ZLIB_FORMAT_GZIP
-            } else {
-                MAL_ZLIB_FORMAT_ZLIB
-            };
-            self.decoder = new_codec(Config {
-                format,
-                ..self.config
-            })
-            .expect("unzip resolves to a supported decoder");
-        }
-
-        let result = match &mut self.decoder {
-            Decoder::Unzip => unreachable!(),
-            Decoder::Zlib { decoder, complete } => {
-                if *complete {
-                    (0, 0, MAL_ZLIB_STATUS_STREAM_END)
-                } else {
-                    let before_in = decoder.total_in();
-                    let before_out = decoder.total_out();
-                    match decoder.decompress(input, output, FlushDecompress::None) {
-                        Ok(status) => {
-                            let consumed = (decoder.total_in() - before_in) as usize;
-                            let produced = (decoder.total_out() - before_out) as usize;
-                            if status == Status::StreamEnd {
-                                *complete = true;
-                            }
-                            (
-                                consumed,
-                                produced,
-                                stream_status(status, input, output, consumed, produced),
-                            )
-                        }
-                        Err(_) => (
-                            (decoder.total_in() - before_in) as usize,
-                            (decoder.total_out() - before_out) as usize,
-                            MAL_ZLIB_STATUS_DATA_ERROR,
-                        ),
-                    }
-                }
-            }
-            Decoder::Gzip {
-                decoder,
-                members,
-                at_member_boundary,
-                finished,
-            } => {
-                if *finished {
-                    (0, 0, MAL_ZLIB_STATUS_STREAM_END)
-                } else {
-                    pump_gzip(decoder, members, at_member_boundary, input, output)
-                }
-            }
-            Decoder::Brotli {
-                decoder,
-                total_out,
-                complete,
-            } => {
-                if *complete {
-                    (0, 0, MAL_ZLIB_STATUS_STREAM_END)
-                } else {
-                    let mut available_in = input.len();
-                    let mut input_offset = 0;
-                    let mut available_out = output.len();
-                    let mut output_offset = 0;
-                    let status = BrotliDecompressStream(
-                        &mut available_in,
-                        &mut input_offset,
-                        input,
-                        &mut available_out,
-                        &mut output_offset,
-                        output,
-                        total_out,
-                        decoder,
-                    );
-                    let abi_status = match status {
-                        BrotliResult::ResultSuccess => {
-                            *complete = true;
-                            MAL_ZLIB_STATUS_STREAM_END
-                        }
-                        BrotliResult::NeedsMoreInput => MAL_ZLIB_STATUS_NEED_INPUT,
-                        BrotliResult::NeedsMoreOutput => MAL_ZLIB_STATUS_NEED_OUTPUT,
-                        BrotliResult::ResultFailure => MAL_ZLIB_STATUS_DATA_ERROR,
-                    };
-                    (input_offset, output_offset, abi_status)
-                }
-            }
-            Decoder::Deflate { encoder, complete } => {
-                if *complete {
-                    (0, 0, MAL_ZLIB_STATUS_STREAM_END)
-                } else {
-                    let mode = match flush {
-                        0 => FlushCompress::None,
-                        2 => FlushCompress::Sync,
-                        3 => FlushCompress::Full,
-                        4 => FlushCompress::Finish,
-                        _ => FlushCompress::Partial,
-                    };
-                    let before_in = encoder.total_in();
-                    let before_out = encoder.total_out();
-                    let status = encoder.compress(input, output, mode);
-                    let consumed = (encoder.total_in() - before_in) as usize;
-                    let produced = (encoder.total_out() - before_out) as usize;
-                    match status {
-                        Ok(Status::StreamEnd) => {
-                            *complete = true;
-                            (consumed, produced, MAL_ZLIB_STATUS_STREAM_END)
-                        }
-                        Ok(_) if produced == output.len() || consumed < input.len() => {
-                            (consumed, produced, MAL_ZLIB_STATUS_NEED_OUTPUT)
-                        }
-                        Ok(_) => (consumed, produced, MAL_ZLIB_STATUS_NEED_INPUT),
-                        Err(_) => (consumed, produced, MAL_ZLIB_STATUS_INVALID_ARGUMENT),
-                    }
-                }
-            }
-            Decoder::BrotliEncode { encoder, complete } => {
-                if *complete {
-                    (0, 0, MAL_ZLIB_STATUS_STREAM_END)
-                } else {
-                    let op = match flush {
-                        1 => BrotliEncoderOperation::BROTLI_OPERATION_FLUSH,
-                        2 => BrotliEncoderOperation::BROTLI_OPERATION_FINISH,
-                        _ => BrotliEncoderOperation::BROTLI_OPERATION_PROCESS,
-                    };
-                    let mut available_in = input.len();
-                    let mut input_offset = 0;
-                    let mut available_out = output.len();
-                    let mut output_offset = 0;
-                    let mut total_out = None;
-                    let ok = encoder.compress_stream(
-                        op,
-                        &mut available_in,
-                        input,
-                        &mut input_offset,
-                        &mut available_out,
-                        output,
-                        &mut output_offset,
-                        &mut total_out,
-                        &mut |_, _, _, _| (),
-                    );
-                    let status = if !ok {
-                        MAL_ZLIB_STATUS_INVALID_ARGUMENT
-                    } else if encoder.is_finished() {
-                        *complete = true;
-                        MAL_ZLIB_STATUS_STREAM_END
-                    } else if encoder.has_more_output()
-                        || available_out == 0
-                        || input_offset < input.len()
-                    {
-                        MAL_ZLIB_STATUS_NEED_OUTPUT
-                    } else {
-                        MAL_ZLIB_STATUS_NEED_INPUT
-                    };
-                    (input_offset, output_offset, status)
-                }
-            }
-        };
-
-        if result.2 == MAL_ZLIB_STATUS_DATA_ERROR {
-            self.fail(result.2);
-        }
-        result
-    }
-
-    fn finish(&mut self) -> i32 {
-        if let Some(error) = self.error {
-            return error;
-        }
-        let complete = match &mut self.decoder {
-            Decoder::Unzip => false,
-            Decoder::Zlib { complete, .. }
-            | Decoder::Brotli { complete, .. }
-            | Decoder::Deflate { complete, .. }
-            | Decoder::BrotliEncode { complete, .. } => *complete,
-            Decoder::Gzip {
-                members,
-                at_member_boundary,
-                finished,
-                ..
-            } => {
-                if *members > 0 && *at_member_boundary {
-                    *finished = true;
-                }
-                *finished
-            }
-        };
-        if complete {
-            MAL_ZLIB_STATUS_STREAM_END
-        } else {
-            self.fail(MAL_ZLIB_STATUS_TRUNCATED)
-        }
-    }
-
-    fn reset(&mut self) -> i32 {
-        match new_codec(self.config) {
-            Some(codec) => {
-                if let Decoder::BrotliEncode { encoder, .. } = &mut self.decoder {
-                    BrotliEncoderDestroyInstance(encoder);
-                }
-                self.decoder = codec;
-                self.error = None;
-                MAL_ZLIB_STATUS_NEED_INPUT
-            }
-            None => MAL_ZLIB_STATUS_INVALID_ARGUMENT,
-        }
-    }
-
-    fn set_level(&mut self, level: i32) -> i32 {
-        self.config.level = level;
-        match &mut self.decoder {
-            Decoder::Deflate { encoder, .. } => match encoder.set_level(deflate_level(level)) {
-                Ok(()) => MAL_ZLIB_STATUS_NEED_INPUT,
-                Err(_) => MAL_ZLIB_STATUS_NEED_OUTPUT,
-            },
-            _ => MAL_ZLIB_STATUS_NEED_INPUT,
-        }
-    }
-
-    fn set_brotli_parameter(&mut self, id: u32, value: u32) -> i32 {
-        match &mut self.decoder {
-            Decoder::BrotliEncode { encoder, .. } => match brotli_parameter(id) {
-                Some(parameter) if encoder.set_parameter(parameter, value) => {
-                    MAL_ZLIB_STATUS_NEED_INPUT
-                }
-                _ => MAL_ZLIB_STATUS_INVALID_ARGUMENT,
-            },
-            // Decoder parameters only tune memory reuse; every stream still decodes.
-            _ => MAL_ZLIB_STATUS_NEED_INPUT,
-        }
-    }
-}
-
-fn stream_status(
-    status: Status,
-    input: &[u8],
-    output: &[u8],
-    consumed: usize,
-    produced: usize,
-) -> i32 {
-    if status == Status::StreamEnd {
-        MAL_ZLIB_STATUS_STREAM_END
-    } else if output.is_empty() || produced == output.len() {
-        MAL_ZLIB_STATUS_NEED_OUTPUT
-    } else if input.is_empty() || consumed == input.len() {
-        MAL_ZLIB_STATUS_NEED_INPUT
-    } else {
-        // A non-terminal codec call can stop only at one of its bounded buffers.
-        MAL_ZLIB_STATUS_NEED_INPUT
-    }
-}
-
-fn pump_gzip(
-    decoder: &mut Decompress,
-    members: &mut usize,
-    at_member_boundary: &mut bool,
+unsafe fn pump_stream(
+    handle: *mut MalZlibStream,
     input: &[u8],
     output: &mut [u8],
-) -> (usize, usize, i32) {
-    let mut consumed = 0;
-    let mut produced = 0;
-
-    loop {
-        if *at_member_boundary {
-            if consumed == input.len() {
-                return (consumed, produced, MAL_ZLIB_STATUS_NEED_INPUT);
-            }
-            *decoder = Decompress::new_gzip(15);
-            *at_member_boundary = false;
-        }
-
-        let before_in = decoder.total_in();
-        let before_out = decoder.total_out();
-        let status = match decoder.decompress(
-            &input[consumed..],
-            &mut output[produced..],
-            FlushDecompress::None,
-        ) {
-            Ok(status) => status,
-            Err(_) => {
-                consumed += (decoder.total_in() - before_in) as usize;
-                produced += (decoder.total_out() - before_out) as usize;
-                return (consumed, produced, MAL_ZLIB_STATUS_DATA_ERROR);
-            }
-        };
-        consumed += (decoder.total_in() - before_in) as usize;
-        produced += (decoder.total_out() - before_out) as usize;
-
-        if status == Status::StreamEnd {
-            *members += 1;
-            *at_member_boundary = true;
-            if produced == output.len() && consumed < input.len() {
-                return (consumed, produced, MAL_ZLIB_STATUS_NEED_OUTPUT);
-            }
-            continue;
-        }
-        return (
-            consumed,
-            produced,
-            stream_status(status, input, output, consumed, produced),
-        );
+    flush: i32,
+) -> PumpResult {
+    if let Some(error) = unsafe { (*handle).error } {
+        return (0, 0, error);
     }
+    let result = unsafe { ((*handle).operations.pump)(handle, input, output, flush) };
+    if result.2 == MAL_ZLIB_STATUS_DATA_ERROR {
+        unsafe { (*handle).error = Some(result.2) };
+    }
+    result
+}
+
+unsafe fn create_stream<C: Codec>(
+    out: *mut *mut MalZlibStream,
+    create: impl FnOnce() -> Option<C>,
+) -> i32 {
+    if out.is_null() {
+        return MAL_ZLIB_STATUS_INVALID_ARGUMENT;
+    }
+    unsafe { out.write(core::ptr::null_mut()) };
+    let Some(codec) = create() else {
+        return MAL_ZLIB_STATUS_INVALID_ARGUMENT;
+    };
+    unsafe { out.write(CodecStream::into_raw(codec)) };
+    MAL_ZLIB_STATUS_NEED_INPUT
 }
 
 /// Returns the ABI version compiled into the archive.
@@ -504,43 +155,64 @@ pub extern "C" fn mal_zlib_abi_version() -> u32 {
     MAL_ZLIB_ABI_VERSION
 }
 
-/// Allocate a decoder handle into `out_handle`. Unsupported formats leave it null.
-///
 /// # Safety
-///
 /// `out_handle` must be null or point to aligned, writable storage for one pointer.
 #[no_mangle]
-pub unsafe extern "C" fn mal_zlib_create(format: u32, out_handle: *mut *mut MalZlibStream) -> i32 {
-    unsafe { mal_zlib_create_codec(format, 0, -1, 15, out_handle) }
+pub unsafe extern "C" fn mal_zlib_create_deflate_decoder(
+    format: u32,
+    _level: i32,
+    _window_bits: i32,
+    out_handle: *mut *mut MalZlibStream,
+) -> i32 {
+    unsafe { create_stream(out_handle, || DeflateDecoder::new(format)) }
 }
 
-/// Allocate an encoder (`encode != 0`) or decoder handle into `out_handle`.
-///
 /// # Safety
-///
 /// `out_handle` must be null or point to aligned, writable storage for one pointer.
 #[no_mangle]
-pub unsafe extern "C" fn mal_zlib_create_codec(
+pub unsafe extern "C" fn mal_zlib_create_deflate_encoder(
     format: u32,
-    encode: u32,
     level: i32,
     window_bits: i32,
     out_handle: *mut *mut MalZlibStream,
 ) -> i32 {
-    if out_handle.is_null() {
-        return MAL_ZLIB_STATUS_INVALID_ARGUMENT;
+    unsafe {
+        create_stream(out_handle, || {
+            DeflateEncoder::new(format, level, window_bits)
+        })
     }
-    unsafe { out_handle.write(core::ptr::null_mut()) };
-    let Some(stream) = MalZlibStream::with_config(Config {
-        format,
-        encode: encode != 0,
-        level,
-        window_bits,
-    }) else {
-        return MAL_ZLIB_STATUS_INVALID_ARGUMENT;
-    };
-    unsafe { out_handle.write(Box::into_raw(Box::new(stream))) };
-    MAL_ZLIB_STATUS_NEED_INPUT
+}
+
+/// # Safety
+/// `out_handle` must be null or point to aligned, writable storage for one pointer.
+#[no_mangle]
+pub unsafe extern "C" fn mal_zlib_create_brotli_decoder(
+    format: u32,
+    _level: i32,
+    _window_bits: i32,
+    out_handle: *mut *mut MalZlibStream,
+) -> i32 {
+    unsafe {
+        create_stream(out_handle, || {
+            (format == MAL_ZLIB_FORMAT_BROTLI).then(BrotliDecoder::new)
+        })
+    }
+}
+
+/// # Safety
+/// `out_handle` must be null or point to aligned, writable storage for one pointer.
+#[no_mangle]
+pub unsafe extern "C" fn mal_zlib_create_brotli_encoder(
+    format: u32,
+    _level: i32,
+    _window_bits: i32,
+    out_handle: *mut *mut MalZlibStream,
+) -> i32 {
+    unsafe {
+        create_stream(out_handle, || {
+            (format == MAL_ZLIB_FORMAT_BROTLI).then(BrotliEncoder::new)
+        })
+    }
 }
 
 /// Consume and produce within caller-owned bounded buffers.
@@ -591,7 +263,7 @@ pub unsafe extern "C" fn mal_zlib_pump(
     } else {
         unsafe { core::slice::from_raw_parts_mut(output, output_len) }
     };
-    let (used, written, status) = unsafe { &mut *handle }.pump_flush(input, output, flush);
+    let (used, written, status) = unsafe { pump_stream(handle, input, output, flush) };
     unsafe {
         consumed.write(used);
         produced.write(written);
@@ -609,7 +281,17 @@ pub unsafe extern "C" fn mal_zlib_finish(handle: *mut MalZlibStream) -> i32 {
     if handle.is_null() {
         return MAL_ZLIB_STATUS_INVALID_ARGUMENT;
     }
-    unsafe { &mut *handle }.finish()
+    unsafe {
+        if let Some(error) = (*handle).error {
+            return error;
+        }
+        if ((*handle).operations.is_finished)(handle) {
+            MAL_ZLIB_STATUS_STREAM_END
+        } else {
+            (*handle).error = Some(MAL_ZLIB_STATUS_TRUNCATED);
+            MAL_ZLIB_STATUS_TRUNCATED
+        }
+    }
 }
 
 /// Restart the codec with its creation parameters and the latest level.
@@ -622,7 +304,11 @@ pub unsafe extern "C" fn mal_zlib_reset(handle: *mut MalZlibStream) -> i32 {
     if handle.is_null() {
         return MAL_ZLIB_STATUS_INVALID_ARGUMENT;
     }
-    unsafe { &mut *handle }.reset()
+    unsafe {
+        ((*handle).operations.reset)(handle);
+        (*handle).error = None;
+    }
+    MAL_ZLIB_STATUS_NEED_INPUT
 }
 
 /// Change a deflate encoder's level. NEED_OUTPUT means pending output must be flushed first.
@@ -635,7 +321,7 @@ pub unsafe extern "C" fn mal_zlib_set_level(handle: *mut MalZlibStream, level: i
     if handle.is_null() {
         return MAL_ZLIB_STATUS_INVALID_ARGUMENT;
     }
-    unsafe { &mut *handle }.set_level(level)
+    unsafe { ((*handle).operations.set_level)(handle, level) }
 }
 
 /// Set one Node `BROTLI_PARAM_*` encoder parameter before any input is pumped.
@@ -652,7 +338,7 @@ pub unsafe extern "C" fn mal_zlib_set_brotli_param(
     if handle.is_null() {
         return MAL_ZLIB_STATUS_INVALID_ARGUMENT;
     }
-    unsafe { &mut *handle }.set_brotli_parameter(param, value)
+    unsafe { ((*handle).operations.set_brotli_parameter)(handle, param, value) }
 }
 
 const fn crc32_table() -> [[u32; 256]; 8] {
@@ -726,7 +412,7 @@ pub unsafe extern "C" fn mal_zlib_crc32(value: u32, bytes: *const u8, length: us
 /// # Safety
 ///
 /// `handle` must be null or point to an aligned, writable slot containing null or
-/// a live handle returned by `mal_zlib_create`. The slot must be exclusively held.
+/// a live codec handle. The slot must be exclusively held.
 #[no_mangle]
 pub unsafe extern "C" fn mal_zlib_free(handle: *mut *mut MalZlibStream) {
     if handle.is_null() {
@@ -735,13 +421,54 @@ pub unsafe extern "C" fn mal_zlib_free(handle: *mut *mut MalZlibStream) {
     let owned = unsafe { handle.read() };
     unsafe { handle.write(core::ptr::null_mut()) };
     if !owned.is_null() {
-        drop(unsafe { Box::from_raw(owned) });
+        unsafe { ((*owned).operations.free)(owned) };
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct TestStream(*mut MalZlibStream);
+
+    impl TestStream {
+        fn new(format: u32) -> Option<Self> {
+            let create = if format == MAL_ZLIB_FORMAT_BROTLI {
+                mal_zlib_create_brotli_decoder
+            } else {
+                mal_zlib_create_deflate_decoder
+            };
+            Self::create(create, format, -1)
+        }
+
+        fn create(
+            create: unsafe extern "C" fn(u32, i32, i32, *mut *mut MalZlibStream) -> i32,
+            format: u32,
+            level: i32,
+        ) -> Option<Self> {
+            let mut handle = core::ptr::null_mut();
+            (unsafe { create(format, level, 15, &mut handle) } == MAL_ZLIB_STATUS_NEED_INPUT)
+                .then_some(Self(handle))
+        }
+
+        fn pump(&mut self, input: &[u8], output: &mut [u8]) -> PumpResult {
+            self.pump_flush(input, output, 0)
+        }
+
+        fn pump_flush(&mut self, input: &[u8], output: &mut [u8], flush: i32) -> PumpResult {
+            unsafe { pump_stream(self.0, input, output, flush) }
+        }
+
+        fn finish(&mut self) -> i32 {
+            unsafe { mal_zlib_finish(self.0) }
+        }
+    }
+
+    impl Drop for TestStream {
+        fn drop(&mut self) {
+            unsafe { mal_zlib_free(&mut self.0) };
+        }
+    }
 
     // Generated with Node's zlibSync/gzipSync/brotliCompressSync. Keeping fixed
     // wire fixtures means backend tests do not rely on another codec implementation.
@@ -764,7 +491,7 @@ mod tests {
     ];
 
     fn decode(format: u32, encoded: &[u8], input_chunk: usize, output_chunk: usize) -> Vec<u8> {
-        let mut stream = MalZlibStream::new(format).unwrap();
+        let mut stream = TestStream::new(format).unwrap();
         let mut decoded = Vec::new();
         for chunk in encoded.chunks(input_chunk) {
             let mut offset = 0;
@@ -794,13 +521,12 @@ mod tests {
     }
 
     fn encode(format: u32, level: i32, input: &[u8], output_chunk: usize) -> Vec<u8> {
-        let mut stream = MalZlibStream::with_config(Config {
-            format,
-            encode: true,
-            level,
-            window_bits: 15,
-        })
-        .unwrap();
+        let create = if format == MAL_ZLIB_FORMAT_BROTLI {
+            mal_zlib_create_brotli_encoder
+        } else {
+            mal_zlib_create_deflate_encoder
+        };
+        let mut stream = TestStream::create(create, format, level).unwrap();
         let finish = if format == MAL_ZLIB_FORMAT_BROTLI {
             2
         } else {
@@ -849,7 +575,7 @@ mod tests {
     }
 
     fn pump_to_quiescence(
-        stream: &mut MalZlibStream,
+        stream: &mut TestStream,
         input: &[u8],
         output_chunk: usize,
     ) -> (Vec<u8>, i32) {
@@ -889,7 +615,7 @@ mod tests {
 
     #[test]
     fn successful_gzip_finish_is_terminal() {
-        let mut stream = MalZlibStream::new(MAL_ZLIB_FORMAT_GZIP).unwrap();
+        let mut stream = TestStream::new(MAL_ZLIB_FORMAT_GZIP).unwrap();
         let (decoded, status) = pump_to_quiescence(&mut stream, GZIP_A, 2);
         assert_eq!(decoded, b"alpha");
         assert_eq!(status, MAL_ZLIB_STATUS_NEED_INPUT);
@@ -913,7 +639,7 @@ mod tests {
             (MAL_ZLIB_FORMAT_GZIP, bad_gzip.as_slice()),
             (MAL_ZLIB_FORMAT_BROTLI, [0xff; 32].as_slice()),
         ] {
-            let mut malformed = MalZlibStream::new(format).unwrap();
+            let mut malformed = TestStream::new(format).unwrap();
             assert_eq!(
                 malformed.pump(malformed_input, &mut out).2,
                 MAL_ZLIB_STATUS_DATA_ERROR
@@ -925,7 +651,7 @@ mod tests {
             (MAL_ZLIB_FORMAT_ZLIB, ZLIB),
             (MAL_ZLIB_FORMAT_BROTLI, BROTLI),
         ] {
-            let mut truncated = MalZlibStream::new(format).unwrap();
+            let mut truncated = TestStream::new(format).unwrap();
             let (_, status) = pump_to_quiescence(&mut truncated, &encoded[..encoded.len() - 2], 2);
             assert_ne!(status, MAL_ZLIB_STATUS_NEED_OUTPUT);
             assert_eq!(truncated.finish(), MAL_ZLIB_STATUS_TRUNCATED);
@@ -942,7 +668,7 @@ mod tests {
             ),
         ];
         for (case, encoded) in truncated_gzip {
-            let mut truncated = MalZlibStream::new(MAL_ZLIB_FORMAT_GZIP).unwrap();
+            let mut truncated = TestStream::new(MAL_ZLIB_FORMAT_GZIP).unwrap();
             let (_, status) = pump_to_quiescence(&mut truncated, &encoded, 2);
             assert_ne!(status, MAL_ZLIB_STATUS_NEED_OUTPUT, "{case}");
             assert_eq!(truncated.finish(), MAL_ZLIB_STATUS_TRUNCATED, "{case}");
@@ -954,7 +680,7 @@ mod tests {
         let mut handle = core::ptr::null_mut();
         unsafe {
             assert_eq!(
-                mal_zlib_create(MAL_ZLIB_FORMAT_ZLIB, &mut handle),
+                mal_zlib_create_deflate_decoder(MAL_ZLIB_FORMAT_ZLIB, -1, 15, &mut handle),
                 MAL_ZLIB_STATUS_NEED_INPUT
             );
 
@@ -1034,7 +760,7 @@ mod tests {
         let mut handle = core::ptr::null_mut();
         unsafe {
             assert_eq!(
-                mal_zlib_create(MAL_ZLIB_FORMAT_ZLIB, &mut handle),
+                mal_zlib_create_deflate_decoder(MAL_ZLIB_FORMAT_ZLIB, -1, 15, &mut handle),
                 MAL_ZLIB_STATUS_NEED_INPUT
             );
             assert!(!handle.is_null());

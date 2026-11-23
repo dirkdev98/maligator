@@ -768,7 +768,10 @@ static void fetch_head(MalVm *vm, FetchClient *client, const MalHttpCodecHead *h
             else if (value_is(head, encoding, "deflate")) format = MAL_ZLIB_FORMAT_UNZIP;
             else if (value_is(head, encoding, "br")) format = MAL_ZLIB_FORMAT_BROTLI;
         }
-        if (format != 0) (void) mal_zlib_create(format, &client->decoder);
+        if (format == MAL_ZLIB_FORMAT_BROTLI)
+            (void) mal_zlib_create_brotli_decoder(format, -1, 15, &client->decoder);
+        else if (format != 0)
+            (void) mal_zlib_create_deflate_decoder(format, -1, 15, &client->decoder);
         MalObject *streams = mal_web_streams_ensure(vm);
         if (streams != nullptr) {
             MalObject *source = mal_intrinsic_new_object(vm);

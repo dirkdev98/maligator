@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define MAL_ZLIB_ABI_VERSION 2u
+#define MAL_ZLIB_ABI_VERSION 3u
 
 typedef struct MalZlibStream MalZlibStream;
 
@@ -33,13 +33,14 @@ typedef struct MalZlibStream MalZlibStream;
 uint32_t mal_zlib_abi_version(void);
 
 /* On success, stores a new handle and returns NEED_INPUT. On failure, stores
- * NULL and returns INVALID_ARGUMENT. */
-int32_t mal_zlib_create(uint32_t format, MalZlibStream **out_handle);
-
-/* Like mal_zlib_create, choosing an encoder when `encode` is non-zero. Level -1
- * selects the default; window bits are clamped to 9..15. */
-int32_t mal_zlib_create_codec(uint32_t format, uint32_t encode, int32_t level,
-                              int32_t window_bits, MalZlibStream **out_handle);
+ * NULL and returns INVALID_ARGUMENT. For deflate-family encoders, level -1
+ * selects the default and window bits are clamped to 9..15. */
+typedef int32_t MalZlibCreate(uint32_t format, int32_t level, int32_t window_bits,
+                              MalZlibStream **out_handle);
+MalZlibCreate mal_zlib_create_deflate_decoder;
+MalZlibCreate mal_zlib_create_deflate_encoder;
+MalZlibCreate mal_zlib_create_brotli_decoder;
+MalZlibCreate mal_zlib_create_brotli_encoder;
 
 /* Borrows the two bounded buffers for this call only. Always initializes
  * consumed/produced when those pointers are valid. Unconsumed input remains the

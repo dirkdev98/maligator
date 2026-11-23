@@ -47,20 +47,28 @@ typedef struct ZlibKind {
     const char *async;
     u32 format;
     bool encode;
+    MalZlibCreate *open;
 } ZlibKind;
 
 static const ZlibKind zlib_kinds[] = {
-    {"Deflate", "createDeflate", "deflateSync", "deflate", MAL_ZLIB_FORMAT_ZLIB, true},
-    {"Inflate", "createInflate", "inflateSync", "inflate", MAL_ZLIB_FORMAT_ZLIB, false},
-    {"Gzip", "createGzip", "gzipSync", "gzip", MAL_ZLIB_FORMAT_GZIP, true},
-    {"Gunzip", "createGunzip", "gunzipSync", "gunzip", MAL_ZLIB_FORMAT_GZIP, false},
-    {"DeflateRaw", "createDeflateRaw", "deflateRawSync", "deflateRaw", MAL_ZLIB_FORMAT_RAW, true},
-    {"InflateRaw", "createInflateRaw", "inflateRawSync", "inflateRaw", MAL_ZLIB_FORMAT_RAW, false},
-    {"Unzip", "createUnzip", "unzipSync", "unzip", MAL_ZLIB_FORMAT_UNZIP, false},
+    {"Deflate", "createDeflate", "deflateSync", "deflate",
+        MAL_ZLIB_FORMAT_ZLIB, true, mal_zlib_create_deflate_encoder},
+    {"Inflate", "createInflate", "inflateSync", "inflate",
+        MAL_ZLIB_FORMAT_ZLIB, false, mal_zlib_create_deflate_decoder},
+    {"Gzip", "createGzip", "gzipSync", "gzip",
+        MAL_ZLIB_FORMAT_GZIP, true, mal_zlib_create_deflate_encoder},
+    {"Gunzip", "createGunzip", "gunzipSync", "gunzip",
+        MAL_ZLIB_FORMAT_GZIP, false, mal_zlib_create_deflate_decoder},
+    {"DeflateRaw", "createDeflateRaw", "deflateRawSync", "deflateRaw",
+        MAL_ZLIB_FORMAT_RAW, true, mal_zlib_create_deflate_encoder},
+    {"InflateRaw", "createInflateRaw", "inflateRawSync", "inflateRaw",
+        MAL_ZLIB_FORMAT_RAW, false, mal_zlib_create_deflate_decoder},
+    {"Unzip", "createUnzip", "unzipSync", "unzip",
+        MAL_ZLIB_FORMAT_UNZIP, false, mal_zlib_create_deflate_decoder},
     {"BrotliCompress", "createBrotliCompress", "brotliCompressSync", "brotliCompress",
-        MAL_ZLIB_FORMAT_BROTLI, true},
+        MAL_ZLIB_FORMAT_BROTLI, true, mal_zlib_create_brotli_encoder},
     {"BrotliDecompress", "createBrotliDecompress", "brotliDecompressSync", "brotliDecompress",
-        MAL_ZLIB_FORMAT_BROTLI, false},
+        MAL_ZLIB_FORMAT_BROTLI, false, mal_zlib_create_brotli_decoder},
 };
 
 typedef struct ZlibOptions {
@@ -294,8 +302,7 @@ static bool zlib_parse_options(MalVm *vm, const ZlibKind *kind, MalValue options
 }
 
 static i32 zlib_open(const ZlibKind *kind, const ZlibOptions *options, MalZlibStream **out) {
-    i32 status = mal_zlib_create_codec(kind->format, kind->encode ? 1 : 0, options->level,
-        options->window_bits, out);
+    i32 status = kind->open(kind->format, options->level, options->window_bits, out);
     if (status < 0 || !kind->encode || kind->format != MAL_ZLIB_FORMAT_BROTLI) return status;
     for (u32 id = 0; id < ZLIB_BROTLI_PARAMS; id++) {
         if (options->has_param[id]

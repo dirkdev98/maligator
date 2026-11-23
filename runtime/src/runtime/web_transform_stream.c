@@ -955,7 +955,7 @@ static bool ts_zlib_chunk(MalVm *vm, MalReadableStreamObject *controller, MalVal
 }
 
 static MalValue ts_zlib_constructor(MalVm *vm, const MalValue *args, i32 argc, MalValue new_target,
-    MalValue callee, bool encode) {
+    MalValue callee, bool encode, MalZlibCreate *create) {
     const char *name = encode ? "CompressionStream" : "DecompressionStream";
     if (mal_value_is_undefined(new_target)) {
         char message[96];
@@ -987,7 +987,7 @@ static MalValue ts_zlib_constructor(MalVm *vm, const MalValue *args, i32 argc, M
         return mal_value_new_undefined();
     }
     *codec = (TsZlibCodec) {.base = {.chunk = ts_zlib_chunk}, .encode = encode};
-    if (mal_zlib_create_codec(kind, encode ? 1 : 0, -1, 15, &codec->stream) < 0 || codec->stream == nullptr) {
+    if (create(kind, -1, 15, &codec->stream) < 0 || codec->stream == nullptr) {
         ts_zlib_free(codec);
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
@@ -999,13 +999,13 @@ static MalValue ts_zlib_constructor(MalVm *vm, const MalValue *args, i32 argc, M
 static MalValue ts_compression_constructor(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
     (void) self;
-    return ts_zlib_constructor(vm, args, argc, new_target, callee, true);
+    return ts_zlib_constructor(vm, args, argc, new_target, callee, true, mal_zlib_create_deflate_encoder);
 }
 
 static MalValue ts_decompression_constructor(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
     (void) self;
-    return ts_zlib_constructor(vm, args, argc, new_target, callee, false);
+    return ts_zlib_constructor(vm, args, argc, new_target, callee, false, mal_zlib_create_deflate_decoder);
 }
 
 static MalValue ts_text_encoder_stream_constructor(MalVm *vm, MalValue self, const MalValue *args, i32 argc,

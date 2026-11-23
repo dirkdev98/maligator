@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { brotliCompressSync, gzipSync } from "node:zlib";
+import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
@@ -42,6 +42,11 @@ const server = createServer((request, response) => {
 				response
 					.writeHead(200, { "content-encoding": "br" })
 					.end(brotliCompressSync("brotli body"));
+				return;
+			case "/deflate":
+				response
+					.writeHead(200, { "content-encoding": "deflate" })
+					.end(deflateSync("deflate body"));
 				return;
 			case "/slow":
 				response.writeHead(200).write("partial");
@@ -92,6 +97,7 @@ results.redirectError = await settle(fetch(base + "/redirect", { redirect: "erro
 results.loop = await settle(fetch(base + "/loop"));
 results.gzip = (await (await fetch(base + "/gzip")).text()).length;
 results.br = await (await fetch(base + "/br")).text();
+results.deflate = await (await fetch(base + "/deflate")).text();
 r = await fetch(base + "/missing");
 results.missing = { status: r.status, statusText: r.statusText, ok: r.ok, body: await r.text() };
 r = await fetch(base + "/text", { method: "HEAD" });
@@ -203,9 +209,12 @@ describe("fetch over the native HTTP client", () => {
 		});
 	});
 
-	it("decodes gzip and brotli bodies", () => {
-		expect(results.gzip).toBe("compressed ".repeat(1000).length);
-		expect(results.br).toBe("brotli body");
+	it.each([
+		["gzip", "compressed ".repeat(1000).length],
+		["br", "brotli body"],
+		["deflate", "deflate body"],
+	])("decodes %s response bodies", (encoding, expected) => {
+		expect(results[encoding]).toBe(expected);
 	});
 
 	it("resolves error statuses and gives HEAD a null body", () => {

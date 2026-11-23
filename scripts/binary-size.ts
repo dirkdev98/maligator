@@ -23,10 +23,14 @@ interface LinkedSymbol {
 	object: string;
 	symbol: string;
 	crate: string | undefined;
+	instruction: boolean;
 }
 
 const forbiddenComponents = {
 	brotli: ({ crate }) => crate === "brotli" || crate === "brotli_decompressor",
+	// Rust can merge identical codec tables under either crate's constant name.
+	"Brotli encoder": ({ crate, symbol, instruction }) =>
+		(instruction && crate === "brotli") || symbol === "_mal_zlib_create_brotli_encoder",
 	rustls: ({ crate }) => /^rustls(?:_|$)/.test(crate ?? ""),
 	"sqlite3.o": ({ object }) => /(?:^|[(-])sqlite3\.o\)?$/.test(object),
 	node_fs: ({ object }) => /(?:^|[(-])node_fs\.o\)?$/.test(object),
@@ -109,7 +113,7 @@ const fixtures: Array<{
 		name: "fetch",
 		file: "bench/size/fetch.mjs",
 		bun: true,
-		forbidden: ["Node runtime", "sqlite3.o", "argon2"],
+		forbidden: ["Node runtime", "sqlite3.o", "argon2", "Brotli encoder"],
 	},
 	{
 		name: "node-hello",
@@ -186,6 +190,7 @@ function darwinAttribution(
 	const retainedForbidden = new Map<ForbiddenComponent, LinkedSymbol>();
 	const names = new Map<number, string>();
 	const zeroFill: Array<{ address: number; end: number }> = [];
+	let text = { address: 0, end: 0 };
 	let section = "";
 	for (const line of readFileSync(mapFile, "utf8").split("\n")) {
 		if (line.startsWith("#")) {
@@ -209,12 +214,12 @@ function darwinAttribution(
 			);
 		}
 		if (section === "# Sections:") {
-			const range = /^(0x\w+)\s+(0x\w+)\s+\S+\s+__(?:bss|common|thread_bss)\s*$/.exec(
-				line,
-			);
+			const range = /^(0x\w+)\s+(0x\w+)\s+(\S+)\s+(\S+)\s*$/.exec(line);
 			if (range === null) continue;
 			const address = Number(range[1]);
-			zeroFill.push({ address, end: address + Number(range[2]) });
+			const extent = { address, end: address + Number(range[2]) };
+			if (range[3] === "__TEXT" && range[4] === "__text") text = extent;
+			if (/^__(?:bss|common|thread_bss)$/.test(range[4]!)) zeroFill.push(extent);
 		}
 		if (section === "# Symbols:") {
 			const entry = /^(0x\w+)\s+(0x\w+)\s+\[\s*(\d+)\]\s+(.+)$/.exec(line);
@@ -224,12 +229,17 @@ function darwinAttribution(
 			if (object === undefined)
 				throw new Error(`Unknown object for map symbol ${symbol}`);
 			const crate = rustCrate(symbol);
-			const linked = { object, symbol, crate };
+			const address = Number(entry[1]);
+			const linked = {
+				object,
+				symbol,
+				crate,
+				instruction: text.address <= address && address < text.end,
+			};
 			for (const component of forbidden) {
 				if (!retainedForbidden.has(component) && forbiddenComponents[component](linked))
 					retainedForbidden.set(component, linked);
 			}
-			const address = Number(entry[1]);
 			const bytes = Number(entry[2]);
 			if (
 				bytes === 0 ||
