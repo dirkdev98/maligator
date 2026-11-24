@@ -31,12 +31,7 @@ import {
 } from "./c-declaration-slice.ts";
 import type { PreludeDeclarations } from "./c-declaration-slice.ts";
 import { ensureCompilerArtifacts } from "./compiler-bake.ts";
-import {
-	hashDirectoryTrees,
-	hashDirectoryTreesCached,
-	legacyLocaleNameComparator,
-	lexicalNameComparator,
-} from "./file-tree.ts";
+import { hashDirectoryTrees, hashDirectoryTreesCached } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
 import { normalizeRuntimeBuildArgument } from "./native-cache-identity.ts";
 import { runNativeCommand, runNativeCommands } from "./native-command.ts";
@@ -62,7 +57,6 @@ const EVAL_COMPONENT_PRODUCER = artifactProducer("eval-component", 1, "ar");
 function runtimeSourceSnapshot(
 	runtimeDirectory: string,
 	cacheDirectory: string,
-	compareNames = legacyLocaleNameComparator,
 ): { digest: string; version: string } {
 	const root = path.resolve(runtimeDirectory);
 	const llhttp = path.join(root, "vendor/llhttp");
@@ -84,7 +78,6 @@ function runtimeSourceSnapshot(
 				...(existsSync(sqlite) ? [sqlite] : []),
 			],
 			include: (entry) => /\.(?:c|h|inc)$/.test(entry.name),
-			compareNames,
 		},
 		manifestPath,
 		"runtime-source-v2",
@@ -110,7 +103,6 @@ export function runtimeHeaderHash(
 			...(existsSync(sqlite) ? [sqlite] : []),
 		],
 		include: (entry: { name: string }) => /\.(?:h|inc)$/.test(entry.name),
-		compareNames: legacyLocaleNameComparator,
 	};
 	if (cacheDirectory === undefined) return hashDirectoryTrees(options);
 	return hashDirectoryTreesCached(
@@ -204,6 +196,7 @@ export interface NativeArtifacts {
 }
 
 interface RuntimeLayout {
+	sourceDigest: string;
 	flags: Array<string>;
 	includeArguments: Array<string>;
 	sqliteIncludeArguments: Array<string>;
@@ -288,6 +281,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		sqliteIncludeArguments,
 		cacheKey,
 		compileArguments,
+		sourceDigest: source.digest,
 		sourceVersion: source.version,
 	};
 }
@@ -367,13 +361,7 @@ export function runtimeReleaseArchiveIdentity(
 		target: context.toolchain.rustTarget,
 		flavour: context.features,
 		compileArguments: layout.compileArguments,
-		// Local keys retain their historical collation. Release keys must also agree
-		// between Node and the installed CLI, whose locale capabilities can differ.
-		cSourceDigest: runtimeSourceSnapshot(
-			context.runtimeDirectory,
-			context.cacheDirectory,
-			lexicalNameComparator,
-		).digest,
+		cSourceDigest: layout.sourceDigest,
 		rustSourceDigest: portableRustSourceDigest(context),
 		cArchiveProducer: RUNTIME_ARCHIVE_PRODUCER,
 		rustArchiveProducer: RUST_PRODUCER,

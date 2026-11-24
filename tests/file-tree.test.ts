@@ -14,7 +14,6 @@ import { describe, expect, it } from "vitest";
 import {
 	hashDirectoryTrees,
 	hashDirectoryTreesCached,
-	legacyLocaleNameComparator,
 	walkDirectoryTree,
 } from "../src/file-tree.ts";
 
@@ -114,23 +113,6 @@ describe("deterministic file trees", () => {
 			identity: "test-v1",
 			root,
 		});
-	});
-
-	it("keeps old locale cross-name order with deterministic lexical ties", () => {
-		const names = ["!.ts", ",.ts"];
-		const localeOrder = names[0]!.localeCompare(names[1]!);
-		expect(localeOrder).not.toBe(0);
-		expect(Math.sign(legacyLocaleNameComparator(names[0]!, names[1]!))).toBe(
-			Math.sign(localeOrder),
-		);
-
-		const composed = "\u00e9.ts";
-		const decomposed = "e\u0301.ts";
-		expect(composed.localeCompare(decomposed)).toBe(0);
-		expect([composed, decomposed].sort(legacyLocaleNameComparator)).toEqual([
-			decomposed,
-			composed,
-		]);
 	});
 
 	it.skipIf(process.platform === "win32")(

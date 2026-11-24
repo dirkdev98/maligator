@@ -23,10 +23,6 @@ export type NameComparator = (left: string, right: string) => number;
 export const lexicalNameComparator: NameComparator = (left, right) =>
 	left < right ? -1 : left > right ? 1 : 0;
 
-/** Preserve pre-refactor locale ordering while making collation ties deterministic. */
-export const legacyLocaleNameComparator: NameComparator = (left, right) =>
-	left.localeCompare(right) || lexicalNameComparator(left, right);
-
 /** Visit non-directory entries in deterministic depth-first order; observers see each directory enumeration, including empty ones. */
 export function walkDirectoryTree(
 	directory: string,

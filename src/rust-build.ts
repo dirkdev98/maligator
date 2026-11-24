@@ -13,12 +13,7 @@ import {
 } from "./artifact-store.ts";
 import { platformLinkArgs, sanitizerMode, unwindTableCcFlags } from "./build-flags.ts";
 import { cargoCacheDirectory } from "./cache-root.ts";
-import {
-	hashDirectoryTrees,
-	hashDirectoryTreesCached,
-	legacyLocaleNameComparator,
-	lexicalNameComparator,
-} from "./file-tree.ts";
+import { hashDirectoryTrees, hashDirectoryTreesCached } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
 import { runNativeCommand } from "./native-command.ts";
 import {
@@ -47,7 +42,6 @@ function rustSourceHashOptions(rustRoot: string) {
 		root: rustRoot,
 		directories: [rustRoot],
 		include: (entry: { name: string }) => /\.(?:rs|toml|lock|cpp)$/.test(entry.name),
-		compareNames: legacyLocaleNameComparator,
 		descend: (entry: { dirent: { name: string }; relativeSegments: Array<string> }) =>
 			entry.relativeSegments.length !== 1 ||
 			(entry.dirent.name !== ".cache" && entry.dirent.name !== "target"),
@@ -60,15 +54,11 @@ export function rustSourceDigest(rustDirectory: string): string {
 	return hashDirectoryTrees(rustSourceHashOptions(rustRoot));
 }
 
-function cachedRustSourceDigest(
-	rustDirectory: string,
-	cacheDirectory: string,
-	compareNames = legacyLocaleNameComparator,
-): string {
+function cachedRustSourceDigest(rustDirectory: string, cacheDirectory: string): string {
 	const rustRoot = path.resolve(rustDirectory);
 	const rootKey = hash("sha256", rustRoot, "hex").slice(0, 16);
 	return hashDirectoryTreesCached(
-		{ ...rustSourceHashOptions(rustRoot), compareNames },
+		rustSourceHashOptions(rustRoot),
 		path.join(cacheDirectory, "source-digests", `rust-${rootKey}.json`),
 		"rust-source-v1",
 	).digest;
@@ -101,7 +91,6 @@ export function portableRustSourceDigest(
 	return cachedRustSourceDigest(
 		path.join(context.runtimeDirectory, "rust"),
 		context.cacheDirectory,
-		lexicalNameComparator,
 	);
 }
 

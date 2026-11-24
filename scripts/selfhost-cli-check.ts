@@ -21,13 +21,20 @@ import {
 import { createServer } from "node:http";
 import * as path from "node:path";
 import type { ApplicationResources } from "../src/application-images.ts";
+import { buildDerivationFromConfig, loadBuildConfig } from "../src/build-config.ts";
 import type { MaligatorBuildConfig } from "../src/build-config.ts";
+import { sanitizerTestEnvironment } from "../src/build-flags.ts";
 import { maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 import type { FfiCheckReport } from "../src/ffi/check.ts";
+import {
+	nativeToolchainOptions,
+	resolveNativeBuildContext,
+} from "../src/native-build-context.ts";
 import { buildProductCli } from "../src/product-builder.ts";
 import { parseProfileCapture, profileCaptureIdentity } from "../src/profile-artifact.ts";
 import type { ProfileMetadata, ProfileManifest } from "../src/profile-artifact.ts";
+import { ensureNativeArtifacts } from "../src/runtime-build.ts";
 import { requireToolchain, resolvePathExecutable } from "../src/toolchain.ts";
 import { requireHeapLimit } from "./heap-limit.ts";
 import { isolatedToolsDirectory } from "./isolated-tools.ts";
@@ -1639,6 +1646,30 @@ test("passes a pointer-valued constant through a macro alias", () => {
 			path.join(ffiDirectory, "wait.test.mts"),
 			'import { test } from "maligator:test";\nimport { probe_pause } from "maligator:ffi/probe";\ntest("waits in C", () => { probe_pause(); });\n',
 		);
+		if (providedCli === undefined) {
+			// The probe's bounded CLI invocation should exercise the tests and
+			// lockfile, even when CI starts with no sanitized runtime archives.
+			console.log("step preparing native archives for the FFI probe");
+			const environment = sanitizerTestEnvironment(process.platform, isolatedEnv);
+			const runtimeDirectory = path.join(repositoryRoot, "runtime");
+			const config = loadBuildConfig("ffi.build.mts", project);
+			const startedAt = performance.now();
+			ensureNativeArtifacts(
+				resolveNativeBuildContext({
+					runtimeDirectory,
+					environment,
+					toolchain: requireToolchain(
+						nativeToolchainOptions(runtimeDirectory, { env: environment }),
+					),
+					features: buildDerivationFromConfig(config).features,
+					onCacheEvent: ({ artifact, hit }) =>
+						console.log(`step FFI probe ${artifact} cache ${hit ? "hit" : "miss"}`),
+				}),
+			);
+			console.log(
+				`step FFI probe archives ready in ${Math.round(performance.now() - startedAt)}ms`,
+			);
+		}
 		const ffiArguments = [
 			"ffi",
 			"check",

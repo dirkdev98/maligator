@@ -40,7 +40,11 @@ import {
 	runtimeArtifactKey,
 	runtimeHeaderHash,
 } from "../src/runtime-build.ts";
-import { ensureRustArtifacts, resolveRustArtifacts } from "../src/rust-build.ts";
+import {
+	ensureRustArtifacts,
+	resolveRustArtifacts,
+	rustSourceDigest,
+} from "../src/rust-build.ts";
 import { runToStdout } from "../src/test-harness.ts";
 import { pinnedZigDownload, PINNED_ZIG_VERSION } from "../src/toolchain-fetch.ts";
 import {
@@ -1532,6 +1536,31 @@ printf '!<arch>\\n' > "$2"
 		expect(afterInclude).not.toBe(afterHeader);
 		writeFileSync(include, "ENTRY(other)\n");
 		expect(runtimeHeaderHash(runtimeDirectory)).not.toBe(afterInclude);
+	});
+
+	it("uses the same native source identities across host collations", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		const rustDirectory = path.join(runtimeDirectory, "rust");
+		for (const name of ["part", "part_child"]) {
+			writeFileSync(path.join(runtimeDirectory, "src", `${name}.h`), name);
+			writeFileSync(path.join(rustDirectory, "src", `${name}.rs`), name);
+		}
+		const identities = () => [
+			runtimeHeaderHash(runtimeDirectory),
+			rustSourceDigest(rustDirectory),
+		];
+		const expected = identities();
+		const collator = vi
+			.spyOn(String.prototype, "localeCompare")
+			.mockImplementation(function (this: string, other: string) {
+				return this === other ? 0 : this < other ? 1 : -1;
+			});
+		try {
+			expect(identities()).toEqual(expected);
+		} finally {
+			collator.mockRestore();
+		}
 	});
 
 	it("narrows generated header identity to each transitive include closure", () => {
