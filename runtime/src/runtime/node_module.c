@@ -19,12 +19,22 @@
 #include "value_ops.h"
 #include "vm_ops.h"
 
-MalValue mal_node_module_get_cached(MalVm *vm, const char *id) {
+static MalPropertyLookup node_module_cache_entry(MalVm *vm, const char *id) {
     MalValue registry = vm->intrinsics[MAL_INTRINSIC_NODE_BUILTIN_MODULES];
-    if (mal_value_is_undefined(registry)) return mal_value_new_undefined();
-    MalPropertyLookup found = mal_object_get_own(mal_value_to_object(registry),
+    if (mal_value_is_undefined(registry)) return (MalPropertyLookup) {0};
+    return mal_object_get_own(mal_value_to_object(registry),
         mal_intrinsic_string_key(vm, (const byte *) id));
+}
+
+MalValue mal_node_module_get_cached(MalVm *vm, const char *id) {
+    MalPropertyLookup found = node_module_cache_entry(vm, id);
     return found.present ? found.desc.value : mal_value_new_undefined();
+}
+
+MalValue mal_node_module_get_complete(MalVm *vm, const char *id) {
+    MalPropertyLookup found = node_module_cache_entry(vm, id);
+    return (found.desc.flags & MAL_PROPERTY_ENUMERABLE) != 0
+        ? found.desc.value : mal_value_new_undefined();
 }
 
 /* Process exports inherit EventEmitter data properties; installation must not invoke accessors. */
@@ -42,19 +52,26 @@ static bool mal_node_module_lookup(MalObject *object, MalKey key, MalValue *out)
     return false;
 }
 
-void mal_node_module_publish(
-    MalVm *vm, const char *id, const MalHostInstallSlot *slots, i32 count, MalValue module) {
+static void node_module_publish(
+    MalVm *vm, const char *id, const MalHostInstallSlot *slots, i32 count, MalValue module,
+    bool complete) {
     MalRootSpan root;
     mal_gc_root(&root, &module, 1);
     if (mal_value_is_undefined(vm->intrinsics[MAL_INTRINSIC_NODE_BUILTIN_MODULES])) {
         vm->intrinsics[MAL_INTRINSIC_NODE_BUILTIN_MODULES] = mal_value_from_object(
             mal_object_new(&vm->heap, nullptr));
     }
+    // Enumerable entries of this private object are visible to the builtin resolver.
     mal_intrinsic_define_data(vm,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_BUILTIN_MODULES]),
-        (const byte *) id, module, MAL_PROPERTY_NONE);
+        (const byte *) id, module, complete ? MAL_PROPERTY_ENUMERABLE : MAL_PROPERTY_NONE);
     mal_node_module_export(vm, slots, count, module);
     mal_gc_unroot(&root);
+}
+
+void mal_node_module_publish(
+    MalVm *vm, const char *id, const MalHostInstallSlot *slots, i32 count, MalValue module) {
+    node_module_publish(vm, id, slots, count, module, true);
 }
 
 void mal_node_module_export(MalVm *vm, const MalHostInstallSlot *slots, i32 count, MalValue module) {
@@ -76,7 +93,7 @@ bool mal_node_module_install_cached(
     MalVm *vm, const char *id, const MalHostInstallSlot *slots, i32 count) {
     MalValue module = mal_node_module_get_cached(vm, id);
     if (mal_value_is_undefined(module)) return false;
-    mal_node_module_publish(vm, id, slots, count, module);
+    mal_node_module_export(vm, slots, count, module);
     return true;
 }
 
@@ -95,7 +112,7 @@ void mal_node_module_install_selected(
             return;
         }
     }
-    mal_node_module_publish(vm, id, slots, count, module);
+    node_module_publish(vm, id, slots, count, module, false);
     mal_gc_unroot(&root);
 }
 

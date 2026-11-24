@@ -13,6 +13,7 @@ bool mal_node_module_install_cached(
     MalVm *vm, const char *id, const MalHostInstallSlot *slots, i32 count);
 
 MalValue mal_node_module_get_cached(MalVm *vm, const char *id);
+MalValue mal_node_module_get_complete(MalVm *vm, const char *id);
 void mal_node_module_export(MalVm *vm, const MalHostInstallSlot *slots, i32 count, MalValue module);
 
 typedef void (*MalNodeExportInstaller)(MalVm *vm, MalObject *module);
@@ -28,6 +29,9 @@ void mal_node_module_install_selected(
         MAL_NODE_EXPORT_INSTALL(symbol, key, define, __VA_ARGS__) \
     }
 #define MAL_DEFINE_NODE_EXPORTS(id, exports) exports(MAL_NODE_EXPORT_DECLARE)
+
+/* Formatting and other native consumers can observe a module's public exports. */
+#define MAL_NODE_MODULE_EXPORT_KEY(id, key) key
 
 /* Brand checks node:crypto registers when installed, so util.types can recognize its
  * objects without linking it; before that no KeyObject or CryptoKey can exist. */

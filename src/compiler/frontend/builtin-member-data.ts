@@ -1042,23 +1042,6 @@ export const NODE_EXPORT_GROUPS: ReadonlyMap<
 		],
 	],
 	[
-		"node:url",
-		[
-			["parse", "mal_node_export_url_parse"],
-			["format", "mal_node_export_url_format"],
-			["pathToFileURL", "mal_node_export_url_path_to_file_url"],
-			["fileURLToPath", "mal_node_export_url_file_url_to_path"],
-			["urlToHttpOptions", "mal_node_export_url_to_http_options"],
-			["Url", "mal_node_export_url_legacy_constructor"],
-			["URL", "mal_node_export_url_constructor"],
-			["URLSearchParams", "mal_node_export_url_search_params_constructor"],
-			["domainToASCII", "mal_node_export_url_domain_to_ascii"],
-			["resolve", "mal_node_export_url_resolve"],
-			["resolveObject", "mal_node_export_url_resolve_object"],
-			["domainToUnicode", "mal_node_export_url_domain_to_unicode"],
-		],
-	],
-	[
 		"node:util",
 		[
 			["_extend", "mal_node_export_util_extend"],
@@ -1107,3 +1090,7 @@ export const NODE_EXPORT_GROUPS: ReadonlyMap<
 		],
 	],
 ]);
+export const NATIVE_NODE_EXPORT_KEYS: ReadonlyMap<
+	string,
+	ReadonlyArray<string>
+> = new Map([["node:util", ["inspect"]]]);

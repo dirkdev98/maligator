@@ -7264,6 +7264,7 @@ function compileObjectPatternTarget(
 					: undefined;
 		if (name !== undefined || property.computed)
 			retainLanguageMember(program, name, false);
+		if (name === GET_BUILTIN_MODULE) program.opaqueBuiltinLookup = true;
 		let key = compilePropertyKey(program, fn, cursor, property);
 		if (key === -1) {
 			continue;

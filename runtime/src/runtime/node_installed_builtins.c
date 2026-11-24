@@ -6,7 +6,7 @@
 #include "vm_ops.h"
 
 /*
- * A module this isolate installed, named by its `node:` id or the bare spelling Node
+ * A complete module this isolate installed, named by its `node:` id or the bare spelling Node
  * also accepts. Node loads its newer modules only by their `node:` id; the compiler's
  * NODE_PREFIX_ONLY_BUILTIN_IDS names the same ones.
  */
@@ -22,14 +22,14 @@ MalValue mal_node_module_get_linked(MalVm *vm, MalString *name) {
     }
     spelled[length] = '\0';
     if (strncmp(spelled, "node:", 5) == 0) {
-        MalValue cached = mal_node_module_get_cached(vm, spelled);
+        MalValue cached = mal_node_module_get_complete(vm, spelled);
         if (!mal_value_is_undefined(cached)) return cached;
         return mal_node_module_get_source_builtin(vm, name);
     }
     if (strcmp(spelled, "sea") == 0 || strcmp(spelled, "sqlite") == 0
         || strcmp(spelled, "test") == 0 || strncmp(spelled, "test/", 5) == 0)
         return mal_value_new_undefined();
-    return mal_node_module_get_cached(vm, id);
+    return mal_node_module_get_complete(vm, id);
 }
 
 MalValue mal_node_module_get_source_builtin(MalVm *vm, MalString *name) {

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	BUFFER_INSTALLER_SYMBOL,
 	HOST_GLOBAL_INSTALLERS,
@@ -27,10 +28,7 @@ const BUILTIN_REGISTRY_LOOKUP = "mal_node_module_get_builtin";
 // They follow the reads lowering sees, so they stay when optimization drops the read.
 const NODE_HOST = [NODE_PERSONALITY_INSTALLER, NODE_ERROR_HOOKS_INSTALLER];
 
-it.each([
-	["selected exports", "node-selected-host-exports.cjs"],
-	["alias identity and reflected exports", "node-selected-host-alias.mjs"],
-])("preserves %s under native host installation", (_label, file) => {
+function runSelectedHostFixture(file: string, env: NodeJS.ProcessEnv = {}): string {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-node-selected-exports-"));
 	const fixture = `tests/local/${file}`;
 	try {
@@ -40,16 +38,33 @@ it.each([
 			outDir: directory,
 			mainFile: HOST_MAIN,
 			toolchainBridge: false,
-			evalEnabled: false,
+			config: resolveBuildConfig({}),
 		});
-		const stdout = execFileSync(process.execPath, [fixture], {
-			encoding: "utf8",
-			env: { ...process.env, NODE_NO_WARNINGS: "1" },
-		});
-		expect(runToStdout(binary, { env: STRESS_ENV })).toBe(stdout);
+		return runToStdout(binary, { env: { ...STRESS_ENV, ...env } });
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
+}
+
+it.each([
+	["selected exports", "node-selected-host-exports.cjs"],
+	["alias identity and reflected exports", "node-selected-host-alias.mjs"],
+	["the complete module for a destructured loader", "node-selected-host-loader.cjs"],
+	["the public URL export order", "node-selected-host-url-order.cjs"],
+])("preserves %s under native host installation", (_label, file) => {
+	const stdout = execFileSync(process.execPath, [`tests/local/${file}`], {
+		encoding: "utf8",
+		env: { ...process.env, NODE_NO_WARNINGS: "1" },
+	});
+	expect(runSelectedHostFixture(file)).toBe(stdout);
+});
+
+it("exposes complete builtins to opaque runtime lookup", () => {
+	expect(
+		runSelectedHostFixture("node-selected-host-runtime-lookup.cjs", {
+			MAL_HOST_LOADER_KEY: "getBuiltinModule",
+		}),
+	).toBe("string undefined undefined true\n");
 });
 
 function withInstallers(base: ReadonlyArray<string>, ...added: Array<string>) {

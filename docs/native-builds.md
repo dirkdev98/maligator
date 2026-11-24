@@ -118,9 +118,8 @@ tables.
 ## Builtin lookup
 
 Use a literal specifier in a `process.getBuiltinModule` call in your application
-source to link that builtin. A computed name can find a builtin already available
-in the program. It returns `undefined` when the module is unavailable. Use a
-literal call to make the complete builtin available to computed names.
+source to link the complete builtin. Runtime lookup returns the complete linked
+module, or `undefined` when the module is unavailable.
 
 The compiler can link a smaller installer when every use of a host module is a
 static export read. Passing the module object to other code, enumerating it, or

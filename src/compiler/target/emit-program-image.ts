@@ -2,6 +2,7 @@ import type { IncludedAsset } from "../../assets.ts";
 import type { PlatformData } from "../../platform/catalog.ts";
 import {
 	BUILTIN_MEMBER_GROUPS,
+	NATIVE_NODE_EXPORT_KEYS,
 	NODE_EXPORT_GROUPS,
 	NATIVE_BUILTIN_MEMBER_DEPENDENCIES,
 	NATIVE_BUILTIN_MEMBER_NAMES,
@@ -3192,8 +3193,9 @@ function malRuntimeImageStruct(
 				selection !== undefined &&
 				!completeNodeModuleRequired(selection.id, selectedInstallers)
 			) {
-				const members = NODE_EXPORT_GROUPS.get(selection.id)!.filter(([name]) =>
-					selection.names.includes(name),
+				const nativeReads = NATIVE_NODE_EXPORT_KEYS.get(selection.id) ?? [];
+				const members = NODE_EXPORT_GROUPS.get(selection.id)!.filter(
+					([name]) => selection.names.includes(name) || nativeReads.includes(name),
 				);
 				const name = `mal_selected_host_${index}${suffix}`;
 				for (const [, symbol] of members)

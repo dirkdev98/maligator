@@ -16,6 +16,7 @@ const entries = new Map<
 const nativeKeys = new Set<string>();
 const nativeDependencies: Array<readonly [owner: string, key: string]> = [];
 const nodeExports = new Map<string, Array<readonly [name: string, symbol: string]>>();
+const nativeNodeExportKeys = new Map<string, Set<string>>();
 for (const directory of [
 	runtime,
 	path.join(runtime, "runtime"),
@@ -37,6 +38,15 @@ for (const directory of [
 			);
 			nativeCode = nativeCode.replace(body, "");
 		}
+		nativeCode = nativeCode.replaceAll(
+			/MAL_NODE_MODULE_EXPORT_KEY\((\w+),\s*"([^"\n]+)"\)/g,
+			(_, id: string, key: string) => {
+				let reads = nativeNodeExportKeys.get(id);
+				if (reads === undefined) nativeNodeExportKeys.set(id, (reads = new Set()));
+				reads.add(key);
+				return "";
+			},
+		);
 		for (const list of source.matchAll(
 			/^MAL_DEFINE_(?:BUILTIN|CUSTOM)_MEMBER_GROUP\((\w+), (\w+)\)$/gm,
 		)) {
@@ -93,6 +103,12 @@ for (const [owner, key] of nativeDependencies) {
 	if (!keys.has(key) || (!symbols.has(owner) && !owner.startsWith("mal_host_install_")))
 		throw new Error(`Unknown builtin member dependency ${owner}: ${key}`);
 }
+for (const [id, keys] of nativeNodeExportKeys) {
+	for (const key of keys) {
+		if (!nodeExports.get(id)?.some(([name]) => name === key))
+			throw new Error(`Unknown native Node export node:${id}.${key}`);
+	}
+}
 const nativeMemberNames = [...nativeKeys].filter((name) => keys.has(name)).sort();
 const result = await format(
 	output,
@@ -105,6 +121,11 @@ const result = await format(
 		`export const NATIVE_BUILTIN_MEMBER_DEPENDENCIES: ReadonlyArray<readonly [owner: string, key: string]> = ${JSON.stringify(nativeDependencies.sort())};`,
 		`export const NODE_EXPORT_GROUPS: ReadonlyMap<string, ReadonlyArray<readonly [name: string, symbol: string]>> = new Map(${JSON.stringify(
 			[...nodeExports].sort().map(([id, exports]) => [`node:${id}`, exports]),
+		)});`,
+		`export const NATIVE_NODE_EXPORT_KEYS: ReadonlyMap<string, ReadonlyArray<string>> = new Map(${JSON.stringify(
+			[...nativeNodeExportKeys]
+				.sort()
+				.map(([id, keys]) => [`node:${id}`, [...keys].sort()]),
 		)});`,
 	].join("\n"),
 	formatOptions,

@@ -80,7 +80,7 @@ const forbiddenComponents = {
 			symbol,
 		),
 	"complete Node module exports": ({ symbol }) =>
-		/^_mal_host_install_node_(?:net|os|path|url|util)(?:$|\.)/.test(symbol),
+		/^_mal_host_install_node_(?:net|os|path|util)(?:$|\.)/.test(symbol),
 	"asymmetric keys": ({ symbol }) => /^_mal_pkey_/.test(symbol),
 	TLS: ({ crate, object, symbol }) =>
 		/^rustls(?:_|$)/.test(crate ?? "") ||

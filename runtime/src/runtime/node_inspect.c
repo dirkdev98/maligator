@@ -1842,7 +1842,8 @@ static void util_ctx_init(UtilCtx *ctx, MalVm *vm, MalTextBuffer *out) {
     mal_gc_root(&ctx->root, ctx->roots, UTIL_ROOT_COUNT);
     MalValue module = mal_node_module_get_cached(vm, "node:util");
     MalValue inspect;
-    if (!util_own_data(module, util_key(vm, "inspect"), &inspect) || !mal_value_is_callable(inspect)) return;
+    if (!util_own_data(module, util_key(vm, MAL_NODE_MODULE_EXPORT_KEY(util, "inspect")), &inspect)
+        || !mal_value_is_callable(inspect)) return;
     ctx->roots[UTIL_ROOT_INSPECT] = inspect;
     MalValue defaults;
     if (util_own_data(inspect, util_key(vm, "defaultOptions"), &defaults)) util_ctx_apply(ctx, defaults);

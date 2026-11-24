@@ -1797,20 +1797,18 @@ static void url_install_http_options(MalVm *vm, MalObject *module, const byte *k
 }
 
 #define URL_EXPORTS(X) \
+    X(url_legacy_constructor, "Url", url_install_legacy_constructor) \
     X(url_parse, "parse", url_install_legacy_method, 3, url_parse, true) \
     X(url_format, "format", url_install_legacy_method, 1, url_format, true) \
     X(url_path_to_file_url, "pathToFileURL", url_install_web_method, 1, url_path_to_file_url) \
     X(url_file_url_to_path, "fileURLToPath", url_install_web_method, 1, url_file_url_to_path) \
-    X(url_to_http_options, "urlToHttpOptions", url_install_http_options) \
-    X(url_legacy_constructor, "Url", url_install_legacy_constructor) \
     X(url_constructor, "URL", url_install_web_constructor, MAL_INTRINSIC_URL_CONSTRUCTOR) \
+    X(url_to_http_options, "urlToHttpOptions", url_install_http_options) \
     X(url_search_params_constructor, "URLSearchParams", url_install_web_constructor, MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR) \
     X(url_domain_to_ascii, "domainToASCII", mal_intrinsic_define_method_n, 1, url_domain_to_ascii) \
     X(url_resolve, "resolve", url_install_legacy_method, 2, url_module_resolve, false) \
     X(url_resolve_object, "resolveObject", url_install_legacy_method, 2, url_module_resolve_object, false) \
     X(url_domain_to_unicode, "domainToUnicode", mal_intrinsic_define_method_n, 1, url_domain_to_unicode)
-MAL_DEFINE_NODE_EXPORTS(url, URL_EXPORTS)
-
 void mal_host_install_node_url(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
