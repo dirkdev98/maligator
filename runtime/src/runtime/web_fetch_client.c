@@ -436,7 +436,10 @@ static void fetch_pump_buffered(MalVm *vm, FetchClient *client) {
     usize remaining = client->body_len - client->body_offset;
     usize segment = remaining > FETCH_SEGMENT ? FETCH_SEGMENT : remaining;
     bool end = segment == remaining;
-    if (!fetch_write(vm, client, client->body + client->body_offset, segment, end)) {
+    // An empty upload has no buffer and still sends a final segment.
+    const byte *bytes = client->body;
+    if (client->body_offset != 0) bytes += client->body_offset;
+    if (!fetch_write(vm, client, bytes, segment, end)) {
         fetch_fail(vm, client, fetch_failure(vm, "the request body could not be sent"));
         fetch_abandon(vm, client);
         return;
