@@ -907,6 +907,14 @@ typedef struct MalSourcePos {
     i32 caller_pos_id;
 } MalSourcePos;
 
+typedef struct MalCompactSourcePos {
+    u16 line;
+    u16 column;
+    u16 inlined_function;
+    u16 caller_position;
+} MalCompactSourcePos;
+static_assert(sizeof(MalCompactSourcePos) == 8, "compact source position width");
+
 /**
  * Calling a generator function runs its parameter prologue eagerly, then the
  * MAL_OP_GENERATOR_START prologue instruction suspends and returns a generator
@@ -1029,7 +1037,10 @@ typedef struct MalFunction {
     const i32 *gc_safepoints;
     const MalExceptionHandler *handlers;
     MalCompiledFunction compiled;
-    const MalLineEntry *positions;
+    union {
+        const MalLineEntry *positions;
+        const u16 *native_positions;
+    };
 #if MAL_PROFILE
     /** Profile-only dense site id parallel to instructions. */
     const i32 *profile_site_ids;
@@ -1076,8 +1087,8 @@ typedef struct MalFunction {
     /**
      * Debug-info (stack traces). file_index points into MalRuntimeImage.files;
      * positions is a run-length position table (position_count entries) mapping
-     * instruction pointers to source positions. position_count is 0 / positions
-     * is nullptr for stripped builds.
+     * instruction pointers to source positions. Native-only rows use a negative
+     * count and store only the position IDs, indexed by the published entry.
      */
     i32 file_index;
     i32 position_count;
@@ -1120,6 +1131,37 @@ typedef struct MalFunction {
 
 static_assert(sizeof(MalFunction) <= (MAL_PROFILE ? 168 : 160),
               "function metadata outgrew its packed layout");
+
+/* Static native rows omit bytecode fields. The VM expands them before execution. */
+typedef struct MalNativeFunction {
+    const i32 *mapped_argument_slots;
+    const MalClosureCaptureLayout *closure_captures;
+    const i32 *instruction_data;
+    MalCompiledFunction compiled;
+    const u16 *positions;
+    i32 name_string_index;
+    MalFunctionKind kind;
+    i32 parameter_count;
+    i32 mapped_argument_count;
+    i32 length;
+    i32 register_count;
+    i32 captured_count;
+    i32 closure_capture_owner_count;
+    i32 argument_retention_limit;
+    i32 property_ic_count;
+    i32 literal_shape_count;
+    i32 instruction_data_count;
+    i32 file_index;
+    i32 position_count;
+    bool strict;
+    bool needs_arguments;
+    bool mapped_arguments;
+    bool is_derived_constructor;
+    bool is_class_constructor;
+    u8 constructor_slot_reserve;
+    bool has_prototype;
+} MalNativeFunction;
+static_assert(sizeof(MalNativeFunction) <= 104, "native function metadata outgrew its layout");
 
 typedef struct MalPreparedValue {
     struct MalPreparedValue *next;
@@ -1283,7 +1325,10 @@ typedef enum MalEnginePolicy {
 
 typedef struct MalRuntimeImage {
     i32 function_count;
-    const MalFunction *functions;
+    union {
+        const MalFunction *functions;
+        const MalNativeFunction *native_functions;
+    };
 
     /** MalEnginePolicy bits. Only the image an isolate starts from sets its policy. */
     u32 engine_policy;
@@ -1294,6 +1339,10 @@ typedef struct MalRuntimeImage {
     /** Compiled functions keep live values in C locals, so collections scan native
      * stacks. Precise images (Wasm, bytecode wires) publish shadow-frame roots. */
     bool conservative_stack_roots;
+    /** Fixed native rows are widened once when the VM adopts the image. */
+    bool native_function_rows;
+    /** The stack reader decodes these positions, and splicing widens the table. */
+    bool compact_source_position_rows;
 
     /** Populate split generated tables before their first use. */
     void (*initialize_generated_data)(void);
@@ -1353,7 +1402,10 @@ typedef struct MalRuntimeImage {
     i32 file_count;
     const char *const *files;
     i32 source_position_count;
-    const MalSourcePos *source_positions;
+    union {
+        const MalSourcePos *source_positions;
+        const MalCompactSourcePos *compact_source_positions;
+    };
 #if MAL_PROFILE
     /** Number of dense operation sites in this exact generated program. */
     i32 profile_site_count;
@@ -1389,6 +1441,23 @@ typedef struct MalRuntimeImage {
 #endif
     );
 } MalRuntimeImage;
+
+static inline bool mal_image_source_position(
+    const MalRuntimeImage *image, i32 id, MalSourcePos *out) {
+    if (id < 0 || id >= image->source_position_count) return false;
+    if (image->compact_source_position_rows) {
+        MalCompactSourcePos compact = image->compact_source_positions[id];
+        *out = (MalSourcePos) {
+            .line = compact.line,
+            .column = compact.column,
+            .inlined_function_index = (i32) compact.inlined_function - 1,
+            .caller_pos_id = (i32) compact.caller_position - 1,
+        };
+    } else {
+        *out = image->source_positions[id];
+    }
+    return true;
+}
 
 /**
  * A CommonJS module's registry slot. `module_object` is its `module` object
@@ -2782,7 +2851,14 @@ i32 mal_vm_innermost_function(MalVm *vm);
 
 /** Source position id of entry `entry` in a function's position table, or -1 outside it. */
 static inline i32 mal_function_position_entry_id(const MalFunction *function, i32 entry) {
-    return entry >= 0 && entry < function->position_count ? function->positions[entry].pos_id : -1;
+    if (entry < 0) return -1;
+    i32 count = function->position_count;
+    if (count < 0) {
+        if (entry >= -count) return -1;
+        u16 id = function->native_positions[entry];
+        return id == UINT16_MAX ? -1 : (i32) id;
+    }
+    return entry < count ? function->positions[entry].pos_id : -1;
 }
 
 static inline i32 mal_vm_native_frame_pos_id(const MalVm *vm, const MalNativeFrame *frame) {

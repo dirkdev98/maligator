@@ -200,6 +200,12 @@ const MAL_FUNCTION_ROW_MACRO = [
 	".name_string_index = name_string_index_value, .kind = kind_value, .parameter_count = parameter_count_value, .argument_snapshot_count = argument_snapshot_count_value, .argument_snapshot_plan_count = argument_snapshot_plan_count_value, .mapped_argument_count = mapped_argument_count_value, .length = length_value, .register_count = register_count_value, .captured_count = captured_count_value, .argument_retention_limit = argument_retention_limit_value, .property_ic_count = property_ic_count_value, .literal_shape_count = literal_shape_count_value, .instruction_count = instruction_count_value, .instruction_data_count = instruction_data_count_value, .gc_safepoint_count = gc_safepoint_count_value, .handler_count = handler_count_value, .file_index = file_index_value, .position_count = position_count_value, .strict = strict_value, .needs_arguments = needs_arguments_value, .mapped_arguments = mapped_arguments_value, .gc_safepoints_trusted = gc_safepoints_trusted_value, .is_derived_constructor = is_derived_constructor_value, .is_class_constructor = is_class_constructor_value, .constructor_slot_reserve = constructor_slot_reserve_value, .has_prototype = has_prototype_value }",
 ].join("");
 
+const MAL_NATIVE_FUNCTION_ROW_MACRO =
+	"#define MAL_NATIVE_FUNCTION_ROW(mapped_slots, captures, data, entry, position_ids, name_index, fn_kind, parameters, mapped_count, fn_length, registers, captured, owners, retention, ics, shapes, data_count, file, positions_count, is_strict, arguments_value, mapped, derived, class_ctor, reserve, prototype_value) { " +
+	".mapped_argument_slots = mapped_slots, .closure_captures = captures, .instruction_data = data, .compiled = entry, .positions = position_ids, " +
+	".name_string_index = name_index, .kind = fn_kind, .parameter_count = parameters, .mapped_argument_count = mapped_count, .length = fn_length, .register_count = registers, .captured_count = captured, .closure_capture_owner_count = owners, .argument_retention_limit = retention, .property_ic_count = ics, .literal_shape_count = shapes, .instruction_data_count = data_count, .file_index = file, .position_count = positions_count, " +
+	".strict = is_strict, .needs_arguments = arguments_value, .mapped_arguments = mapped, .is_derived_constructor = derived, .is_class_constructor = class_ctor, .constructor_slot_reserve = reserve, .has_prototype = prototype_value }";
+
 export const NATIVE_C_HEADER_LINES = [
 	"#include <stdatomic.h>",
 	"#include <string.h>",
@@ -276,6 +282,7 @@ export const NATIVE_C_HEADER_LINES = [
 	"#define MAL_FUNCTION_PROFILE_SITE(value)",
 	"#endif",
 	MAL_FUNCTION_ROW_MACRO,
+	MAL_NATIVE_FUNCTION_ROW_MACRO,
 	"",
 	GENERATED_PRELUDE_END,
 ];
@@ -297,6 +304,7 @@ export const GENERATED_DATA_C_HEADER_LINES = [
 	"#define MAL_FUNCTION_PROFILE_SITE(value)",
 	"#endif",
 	MAL_FUNCTION_ROW_MACRO,
+	MAL_NATIVE_FUNCTION_ROW_MACRO,
 	"",
 	GENERATED_PRELUDE_END,
 ];
@@ -488,6 +496,47 @@ function malFunctionRow(
 		fn.hasPrototype,
 	];
 	return [`    MAL_FUNCTION_ROW(${values.join(", ")}),`];
+}
+
+function malNativeFunctionRow(
+	fn: RuntimeImage["functions"][number],
+	mappedArgumentSlots: string,
+	closureCaptures: string,
+	instructionData: string,
+	instructionDataCount: number,
+	compiled: string,
+	positions: { symbol: string; count: number },
+	fileIndex: number,
+): string {
+	const values = [
+		mappedArgumentSlots,
+		closureCaptures,
+		instructionData,
+		compiled,
+		positions.symbol,
+		fn.nameStringIndex,
+		malFunctionKind(fn),
+		fn.parameterCount,
+		mappedArgumentSlots === "nullptr" ? 0 : fn.mappedArgumentSlots.length,
+		fn.length,
+		fn.registerCount,
+		fn.capturedCount,
+		fn.closureCaptureOwners?.length ?? -1,
+		computeArgumentRetentionLimit(fn),
+		fn.propertyIcCount,
+		fn.literalShapeCount,
+		instructionDataCount,
+		fileIndex,
+		positions.count,
+		fn.strict,
+		fn.needsArguments,
+		fn.mappedArguments,
+		fn.isDerivedConstructor,
+		fn.isClassConstructor,
+		fn.constructorSlotReserve,
+		fn.hasPrototype,
+	];
+	return `    MAL_NATIVE_FUNCTION_ROW(${values.join(", ")}),`;
 }
 
 // Trust in root maps never survives serialization, so a function that never runs
@@ -1785,6 +1834,11 @@ function emitProgramImageParts(
 		compiled,
 		useCompiled,
 	);
+	const compactFunctions =
+		!needsInterpreter &&
+		options.fullBuiltinMembers !== true &&
+		options.toolchainBridge !== true &&
+		(!debug || runtime.sourcePositions.length <= 0xffff);
 	const retainMappedSlots = runtime.functions.map(
 		(fn, index) => !omitBytecode[index] || nativeNeedsMappedArgumentSlots(fn),
 	);
@@ -1910,8 +1964,13 @@ function emitProgramImageParts(
 
 		const runs = debug ? compressPositions(fn.positions) : [];
 		if (runs.length > 0) {
-			lines.push(`static const MalLineEntry mal_function_${i}_positions${suffix}[] = {`);
-			lines.push(positionArrayRows(runs));
+			const type = compactFunctions ? "u16" : "MalLineEntry";
+			lines.push(`static const ${type} mal_function_${i}_positions${suffix}[] = {`);
+			lines.push(
+				compactFunctions
+					? numericArrayRows(runs.map(({ posId }) => (posId < 0 ? 0xffff : posId)))
+					: positionArrayRows(runs),
+			);
 			lines.push("};", "");
 			positionInfo.push({
 				symbol: `mal_function_${i}_positions${suffix}`,
@@ -1920,7 +1979,7 @@ function emitProgramImageParts(
 		} else {
 			positionInfo.push({ symbol: "nullptr", count: 0 });
 		}
-		if (fn.profileSiteIds !== undefined) {
+		if (!compactFunctions && fn.profileSiteIds !== undefined) {
 			const symbol = `mal_function_${i}_profile_site_ids${suffix}`;
 			lines.push(
 				`static const i32 ${symbol}[] = { ${fn.profileSiteIds.join(", ")} };`,
@@ -1932,17 +1991,38 @@ function emitProgramImageParts(
 		}
 	}
 
-	lines.push(`static const MalFunction mal_functions${suffix}[] = {`);
+	const functionType = compactFunctions ? "MalNativeFunction" : "MalFunction";
+	lines.push(`static const ${functionType} mal_functions${suffix}[] = {`);
 	for (let i = 0; i < runtime.functions.length; ++i) {
 		const fn = runtime.functions[i]!;
+		const dataCount = instructionDataByFunction[i]!.data.length;
+		const dataSymbol =
+			dataCount > 0 ? `mal_function_${i}_instruction_data${suffix}` : "nullptr";
+		const mappedArgumentSlots =
+			retainMappedSlots[i] && fn.mappedArgumentSlots.length > 0
+				? `mal_function_${i}_mapped_argument_slots${suffix}`
+				: "nullptr";
+		if (compactFunctions) {
+			lines.push(
+				malNativeFunctionRow(
+					fn,
+					mappedArgumentSlots,
+					closureCaptureSymbols[i]!,
+					dataSymbol,
+					dataCount,
+					entrySymbols[i]!,
+					positionInfo[i]!,
+					debug ? fn.fileIndex : 0,
+				),
+			);
+			continue;
+		}
 		lines.push(
 			...malFunctionRow(
 				fn,
 				`mal_function_${i}_instructions${suffix}`,
-				instructionDataByFunction[i]!.data.length > 0
-					? `mal_function_${i}_instruction_data${suffix}`
-					: "nullptr",
-				instructionDataByFunction[i]!.data.length,
+				dataSymbol,
+				dataCount,
 				trustedSafepoints[i] && (fn.gcSafepoints?.length ?? 0) > 0
 					? `mal_function_${i}_gc_safepoints${suffix}`
 					: "nullptr",
@@ -1952,9 +2032,7 @@ function emitProgramImageParts(
 					? `mal_function_${i}_argument_snapshot_plan${suffix}`
 					: "nullptr",
 				omitBytecode[i] ? 0 : fn.argumentSnapshotPlan.length,
-				retainMappedSlots[i] && fn.mappedArgumentSlots.length > 0
-					? `mal_function_${i}_mapped_argument_slots${suffix}`
-					: "nullptr",
+				mappedArgumentSlots,
 				closureCaptureSymbols[i]!,
 				fn.handlers.length > 0 ? `mal_function_${i}_handlers${suffix}` : "nullptr",
 				entrySymbols[i]!,
@@ -1986,6 +2064,7 @@ function emitProgramImageParts(
 			options.toolchainBridge === true
 			? "observable"
 			: fetchStreamDemand(image, compiled),
+		compactFunctions,
 	)) {
 		lines.push(line);
 	}
@@ -2930,6 +3009,7 @@ function malRuntimeImageStruct(
 	classLayouts: ReadonlyArray<CoreTargetClassLayout> = [],
 	builtinMemberNames?: ReadonlyArray<string>,
 	fetchStreams: FetchStreamDemand = "observable",
+	compactFunctions = false,
 ): Array<string> {
 	const lines: Array<string> = [];
 	const assets = options.assets ?? [];
@@ -3029,11 +3109,25 @@ function malRuntimeImageStruct(
 	}
 
 	const hasPositions = debug && runtime.sourcePositions.length > 0;
+	const fitsCompact = (value: number) => value >= 0 && value <= 0xffff;
+	const compactPositions =
+		hasPositions &&
+		compactFunctions &&
+		runtime.sourcePositions.every(
+			(pos) =>
+				fitsCompact(pos.line) &&
+				fitsCompact(pos.column) &&
+				fitsCompact((pos.inlinedFunctionIndex ?? -1) + 1) &&
+				fitsCompact((pos.callerPosId ?? -1) + 1),
+		);
 	if (hasPositions) {
-		lines.push(`static const MalSourcePos mal_source_positions${suffix}[] = {`);
+		const type = compactPositions ? "MalCompactSourcePos" : "MalSourcePos";
+		lines.push(`static const ${type} mal_source_positions${suffix}[] = {`);
 		for (const pos of runtime.sourcePositions) {
 			lines.push(
-				`    MAL_SOURCE_POS(${pos.line}, ${pos.column}, ${pos.inlinedFunctionIndex ?? -1}, ${pos.callerPosId ?? -1}),`,
+				compactPositions
+					? `    { ${pos.line}, ${pos.column}, ${(pos.inlinedFunctionIndex ?? -1) + 1}, ${(pos.callerPosId ?? -1) + 1} },`
+					: `    MAL_SOURCE_POS(${pos.line}, ${pos.column}, ${pos.inlinedFunctionIndex ?? -1}, ${pos.callerPosId ?? -1}),`,
 			);
 		}
 		lines.push("};", "");
@@ -3119,7 +3213,8 @@ function malRuntimeImageStruct(
 	lines.push(
 		`const MalRuntimeImage mal_runtime_image${suffix} = {`,
 		`    .function_count = ${runtime.functionCount},`,
-		`    .functions = mal_functions${suffix},`,
+		`    .${compactFunctions ? "native_functions" : "functions"} = mal_functions${suffix},`,
+		...(compactFunctions ? ["    .native_function_rows = true,"] : []),
 		`    .engine_policy = ${enginePolicyBits(runtime)},`,
 		`    .interpret = ${needsInterpreter ? "mal_vm_interpret" : "nullptr"},`,
 		`    .conservative_stack_roots = ${conservativeStackRoots},`,
@@ -3143,7 +3238,14 @@ function malRuntimeImageStruct(
 		`    .file_count = ${hasFiles ? runtime.files.length : 0},`,
 		`    .files = ${hasFiles ? `mal_files${suffix}` : "nullptr"},`,
 		`    .source_position_count = ${hasPositions ? runtime.sourcePositions.length : 0},`,
-		`    .source_positions = ${hasPositions ? `mal_source_positions${suffix}` : "nullptr"},`,
+		...(compactPositions
+			? [
+					`    .compact_source_positions = mal_source_positions${suffix},`,
+					"    .compact_source_position_rows = true,",
+				]
+			: [
+					`    .source_positions = ${hasPositions ? `mal_source_positions${suffix}` : "nullptr"},`,
+				]),
 		...(profileSiteCount === undefined
 			? []
 			: [`    .profile_site_count = ${profileSiteCount},`]),

@@ -727,8 +727,9 @@ static MalString *mal_error_file_string(MalVm *vm, i32 file_index) {
 
 static MalObject *mal_error_new_callsite(MalVm *vm, i32 function_index, i32 pos_id) {
     const MalFunction *function = &vm->runtime_image->functions[function_index];
-    bool have_pos = pos_id >= 0 && pos_id < vm->runtime_image->source_position_count;
-    const MalSourcePos *pos = have_pos ? &vm->runtime_image->source_positions[pos_id] : nullptr;
+    MalSourcePos position;
+    bool have_pos = mal_image_source_position(vm->runtime_image, pos_id, &position);
+    const MalSourcePos *pos = have_pos ? &position : nullptr;
     bool have_file = function->file_index >= 0 && function->file_index < vm->runtime_image->file_count;
     MalValue function_name = mal_value_new_null();
     if (function->name_string_index >= 0
@@ -777,8 +778,9 @@ static MalArrayObject *mal_error_callsite_array(MalVm *vm, const MalStackTrace *
             i32 pos_id = record->pos_id;
             i32 guard = 0;
             while (guard++ < 100000) {
-                bool have_pos = pos_id >= 0 && pos_id < vm->runtime_image->source_position_count;
-                const MalSourcePos *pos = have_pos ? &vm->runtime_image->source_positions[pos_id] : nullptr;
+                MalSourcePos position;
+                bool have_pos = mal_image_source_position(vm->runtime_image, pos_id, &position);
+                const MalSourcePos *pos = have_pos ? &position : nullptr;
                 bool inlined = pos != nullptr && pos->inlined_function_index >= 0 &&
                     pos->inlined_function_index < vm->runtime_image->function_count;
                 i32 function_index = inlined ? pos->inlined_function_index : record->function_index;
@@ -809,8 +811,9 @@ static i32 mal_error_trace_constructor_skip(MalVm *vm, const MalStackTrace *trac
             i32 pos_id = record->pos_id;
             i32 guard = 0;
             while (guard++ < 100000) {
-                bool have_pos = pos_id >= 0 && pos_id < vm->runtime_image->source_position_count;
-                const MalSourcePos *pos = have_pos ? &vm->runtime_image->source_positions[pos_id] : nullptr;
+                MalSourcePos position;
+                bool have_pos = mal_image_source_position(vm->runtime_image, pos_id, &position);
+                const MalSourcePos *pos = have_pos ? &position : nullptr;
                 bool inlined = pos != nullptr && pos->inlined_function_index >= 0 &&
                     pos->inlined_function_index < vm->runtime_image->function_count;
                 i32 function_index = inlined ? pos->inlined_function_index : record->function_index;

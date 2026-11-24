@@ -628,6 +628,37 @@ static void mal_vm_init_engine_state(MalVm *vm) {
 	mal_gc_init(vm);
 }
 
+static MalFunction mal_vm_expand_native_function(const MalNativeFunction *row) {
+    return (MalFunction) {
+        .mapped_argument_slots = row->mapped_argument_slots,
+        .closure_captures = row->closure_captures,
+        .instruction_data = row->instruction_data,
+        .compiled = row->compiled,
+        .native_positions = row->positions,
+        .name_string_index = row->name_string_index,
+        .kind = row->kind,
+        .parameter_count = row->parameter_count,
+        .mapped_argument_count = row->mapped_argument_count,
+        .length = row->length,
+        .register_count = row->register_count,
+        .captured_count = row->captured_count,
+        .closure_capture_owner_count = row->closure_capture_owner_count,
+        .argument_retention_limit = row->argument_retention_limit,
+        .property_ic_count = row->property_ic_count,
+        .literal_shape_count = row->literal_shape_count,
+        .instruction_data_count = row->instruction_data_count,
+        .file_index = row->file_index,
+        .position_count = -row->position_count,
+        .strict = row->strict,
+        .needs_arguments = row->needs_arguments,
+        .mapped_arguments = row->mapped_arguments,
+        .is_derived_constructor = row->is_derived_constructor,
+        .is_class_constructor = row->is_class_constructor,
+        .constructor_slot_reserve = row->constructor_slot_reserve,
+        .has_prototype = row->has_prototype,
+    };
+}
+
 /** Phase 2: adopt immutable input tables into VM-owned, spliceable storage. */
 static void mal_vm_adopt_program_image(MalVm *vm, const MalRuntimeImage *program) {
 	if (program->initialize_generated_data != nullptr) {
@@ -642,20 +673,24 @@ static void mal_vm_adopt_program_image(MalVm *vm, const MalRuntimeImage *program
     vm->live_runtime_image.module_imports = nullptr;
     vm->live_runtime_image.module_export_count = 0;
     vm->live_runtime_image.module_exports = nullptr;
-    for (i32 i = 0; i < program->function_count; i++) {
-        g_loaded_instruction_count += (u64) program->functions[i].instruction_count;
-        g_loaded_instruction_data_count +=
-            (u64) program->functions[i].instruction_data_count;
-    }
     vm->runtime_image = &vm->live_runtime_image;
 
     i32 function_count = program->function_count;
     vm->function_capacity = function_count > 0 ? function_count : 1;
     MalFunction *functions = malloc(sizeof(MalFunction) * (usize) vm->function_capacity);
-    if (function_count > 0) {
+    if (program->native_function_rows) {
+        for (i32 i = 0; i < function_count; i++) {
+            functions[i] = mal_vm_expand_native_function(&program->native_functions[i]);
+        }
+    } else if (function_count > 0) {
         memcpy(functions, program->functions, sizeof(MalFunction) * (usize) function_count);
     }
     vm->live_runtime_image.functions = functions;
+    vm->live_runtime_image.native_function_rows = false;
+    for (i32 i = 0; i < function_count; i++) {
+        g_loaded_instruction_count += (u64) functions[i].instruction_count;
+        g_loaded_instruction_data_count += (u64) functions[i].instruction_data_count;
+    }
 
     i32 string_count = program->string_constant_count;
     vm->initial_string_constants = program->string_constants;
@@ -729,16 +764,18 @@ static void mal_vm_adopt_program_image(MalVm *vm, const MalRuntimeImage *program
     vm->file_string_atoms = calloc(
         (usize) vm->file_capacity, sizeof(MalString *));
 
-    i32 source_position_count = program->source_position_count;
-    vm->source_position_capacity =
-        source_position_count > 0 ? source_position_count : 1;
-    MalSourcePos *source_positions = malloc(
-        sizeof(MalSourcePos) * (usize) vm->source_position_capacity);
-    if (source_position_count > 0) {
-        memcpy(source_positions, program->source_positions,
-               sizeof(MalSourcePos) * (usize) source_position_count);
+    vm->source_position_capacity = 0;
+    if (!program->compact_source_position_rows) {
+        i32 source_position_count = program->source_position_count;
+        vm->source_position_capacity = source_position_count > 0 ? source_position_count : 1;
+        MalSourcePos *source_positions = malloc(
+            sizeof(MalSourcePos) * (usize) vm->source_position_capacity);
+        if (source_position_count > 0) {
+            memcpy(source_positions, program->source_positions,
+                   sizeof(MalSourcePos) * (usize) source_position_count);
+        }
+        vm->live_runtime_image.source_positions = source_positions;
     }
-    vm->live_runtime_image.source_positions = source_positions;
 	vm->function_cjs_module_bases =
 		calloc((usize) vm->function_capacity, sizeof(i32));
     vm->cjs_module_bases_vary = false;
@@ -1208,7 +1245,8 @@ void mal_vm_free(MalVm *vm) {
     free((MalSourceBuiltinProvider *) vm->live_runtime_image.source_builtin_providers);
     free(vm->file_string_atoms);
     free((char **) vm->live_runtime_image.files);
-    free((MalSourcePos *) vm->live_runtime_image.source_positions);
+    if (!vm->live_runtime_image.compact_source_position_rows)
+        free((MalSourcePos *) vm->live_runtime_image.source_positions);
 
     // Free any microtasks left queued (e.g. the program exited with pending
     // jobs). The MalValues they hold live in the heap, freed below.
@@ -1659,7 +1697,30 @@ static bool mal_vm_reserve_constant_pages(
     return true;
 }
 
+static bool mal_vm_materialize_source_positions(MalVm *vm) {
+    MalRuntimeImage *image = &vm->live_runtime_image;
+    if (!image->compact_source_position_rows) return true;
+    i32 count = image->source_position_count;
+    MalSourcePos *positions = malloc(sizeof(*positions) * (usize) count);
+    if (positions == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    for (i32 i = 0; i < count; i++) {
+        (void) mal_image_source_position(image, i, &positions[i]);
+    }
+    image->source_positions = positions;
+    image->compact_source_position_rows = false;
+    vm->source_position_capacity = count;
+    return true;
+}
+
 i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
+    if (loaded->native_function_rows) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Cannot splice a native-only runtime image");
+        return -1;
+    }
     MalRuntimeImage *live = &vm->live_runtime_image;
     i32 fn_base = live->function_count;
     i32 global_base = live->global_count;
@@ -1679,6 +1740,7 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
                            "runtime image constant indices exceed their representation");
         return -1;
     }
+    if (!mal_vm_materialize_source_positions(vm)) return -1;
     i32 new_strings = (i32) strings;
     i32 new_bigints = (i32) bigints;
     if (!mal_vm_reserve_constant_pages(&vm->string_constant_pages,
@@ -1874,7 +1936,8 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
     }
     MalSourcePos *source_positions = (MalSourcePos *) live->source_positions;
     for (i32 i = 0; i < loaded->source_position_count; i++) {
-        MalSourcePos position = loaded->source_positions[i];
+        MalSourcePos position;
+        (void) mal_image_source_position(loaded, i, &position);
         if (position.inlined_function_index >= 0) {
             position.inlined_function_index += fn_base;
         }
@@ -5142,8 +5205,9 @@ MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace) {
             i32 pos_id = record->pos_id;
             i32 guard = 0;
             while (guard++ < 100000) {
-                bool have_pos = pos_id >= 0 && pos_id < vm->runtime_image->source_position_count;
-                const MalSourcePos *pos = have_pos ? &vm->runtime_image->source_positions[pos_id] : nullptr;
+                MalSourcePos position;
+                bool have_pos = mal_image_source_position(vm->runtime_image, pos_id, &position);
+                const MalSourcePos *pos = have_pos ? &position : nullptr;
                 bool inlined = pos != nullptr && pos->inlined_function_index >= 0 &&
                     pos->inlined_function_index < vm->runtime_image->function_count;
                 i32 function_index = inlined ? pos->inlined_function_index : record->function_index;
