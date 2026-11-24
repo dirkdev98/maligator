@@ -284,6 +284,8 @@ export const HOST_PERSONALITY_INSTALLERS: ReadonlyArray<string> = [
  */
 export const NODE_ERROR_HOOKS_INSTALLER = "mal_host_install_node_error_hooks";
 export const NODE_CONSOLE_HOOKS_INSTALLER = "mal_host_install_node_console_hooks";
+export const NODE_CONSOLE_SINGLE_HOOKS_INSTALLER =
+	"mal_host_install_node_console_single_hooks";
 
 /** Whether an installer belongs to the Node host and builds on `NODE_PERSONALITY_INSTALLER`. */
 export function installerUsesNodePersonality(installer: string): boolean {

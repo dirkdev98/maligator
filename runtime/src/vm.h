@@ -923,6 +923,7 @@ typedef struct MalVm MalVm;
 typedef struct MalEnv MalEnv;
 
 struct MalGeneratorObject;
+struct MalIteratorRecord;
 
 /**
  * A function lowered directly to C by the native backend. When set on a
@@ -2458,6 +2459,8 @@ typedef struct MalVm {
 #endif
     /** Node Fetch bodies use the realm's selected byte conversion. */
     MalValue (*node_body_chunk_converter)(MalVm *vm, MalValue chunk, MalValue encoding);
+    int (*iterator_helper_step)(
+        MalVm *vm, const struct MalIteratorRecord *record, MalValue *value, bool *done);
 } MalVm;
 
 static inline __attribute__((always_inline)) bool mal_vm_gc_poll_requested(const MalVm *vm) {

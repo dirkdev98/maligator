@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "array_object.h"
+#include "builtin_members.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
@@ -645,7 +646,7 @@ void mal_host_install_node_querystring(
         QS_FUNCTION(1, "unescapeBuffer", 2, qs_unescape_buffer);
         QS_FUNCTION(2, "unescape", 2, qs_unescape);
         QS_FUNCTION(3, "escape", 1, qs_escape);
-        QS_FUNCTION(4, "stringify", 4, qs_stringify);
+        QS_FUNCTION(4, MAL_LOCAL_MEMBER_KEY("stringify"), 4, qs_stringify);
         QS_FUNCTION(5, "parse", 4, qs_parse);
 #undef QS_FUNCTION
         MalObject *object = mal_value_to_object(roots[0]);
@@ -656,7 +657,7 @@ void mal_host_install_node_querystring(
         mal_intrinsic_define_data(vm, object,
             (const byte *) "escape", roots[3], QS_VISIBLE);
         mal_intrinsic_define_data(vm, object,
-            (const byte *) "stringify", roots[4], QS_VISIBLE);
+            MAL_LOCAL_MEMBER_KEY("stringify"), roots[4], QS_VISIBLE);
         mal_intrinsic_define_data(vm, object,
             (const byte *) "encode", roots[4], QS_VISIBLE);
         mal_intrinsic_define_data(vm, object,

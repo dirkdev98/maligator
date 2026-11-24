@@ -4128,9 +4128,10 @@ function buildHostInstalls(
 			installFor(MAP_INSTALLER);
 			installFor(SET_INSTALLER);
 		}
-		// Fetch bodies, Node inspectors, and Node streams call JSON methods.
+		// Fetch bodies and Node's formatting and stream methods call JSON.
 		if (
 			usesNode ||
+			selected.has(NODE_CONSOLE_HOOKS_INSTALLER) ||
 			selected.has(WEB_FETCH_INSTALLER) ||
 			selected.has("mal_host_install_web_fetch_client") ||
 			selected.has("mal_host_install_maligator_internal_fetch") ||

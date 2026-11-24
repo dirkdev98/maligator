@@ -4243,7 +4243,8 @@ done:
 #undef MAL_JSON_UNIT
 #undef MAL_JSON_CURSOR
 
-static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+// Member selection changes the preceding linked text. Keep the decoder's entry aligned.
+static __attribute__((aligned(32))) MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
     (void) callee;

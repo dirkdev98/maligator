@@ -64,6 +64,12 @@ const forbiddenComponents = {
 		/(?:^|[(-])node_(?:process|events|async_hooks|inspect)\.o\)?$/.test(object),
 	"Array.fromAsync": ({ symbol }) =>
 		/^_mal_builtin_array_from_async(?:$|\.)/.test(symbol),
+	"Iterator helpers": ({ symbol }) =>
+		/^_?mal_(?:ih_(?:method_|proto_|advance|try_step)|iterator_(?:from|concat|zip))/.test(
+			symbol,
+		),
+	"JSON serialization": ({ symbol }) =>
+		/^_?mal_(?:known_native_mal_)?(?:builtin_json_stringify|json_serialize)/.test(symbol),
 	"URL.canParse": ({ symbol }) => /^_url_can_parse(?:$|\.)/.test(symbol),
 	"Fetch objects": ({ object }) => /(?:^|[(-])web_fetch\.o\)?$/.test(object),
 	"HTTP client": ({ object, symbol }) =>
@@ -140,6 +146,7 @@ const fixtures: Array<{
 			"Node runtime",
 			"Date timezone data",
 			"Array.fromAsync",
+			"Iterator helpers",
 			"relocated primordial bindings",
 			"sqlite3.o",
 		],
@@ -202,7 +209,14 @@ const fixtures: Array<{
 		name: "process-env-fetch",
 		file: "bench/size/process-env-fetch.mjs",
 		bun: true,
-		forbidden: ["Node Buffer", "Web Streams", "bytecode interpreter", "Rust backtrace"],
+		forbidden: [
+			"Node Buffer",
+			"Web Streams",
+			"Iterator helpers",
+			"JSON serialization",
+			"bytecode interpreter",
+			"Rust backtrace",
+		],
 	},
 	{
 		name: "http-bare",

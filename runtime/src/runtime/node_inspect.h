@@ -25,6 +25,8 @@ bool mal_node_util_inspect_into(
 /** Append util.formatWithOptions(options, ...args); `colors` forces colored inspection. */
 bool mal_node_util_format_into(
     MalVm *vm, MalTextBuffer *out, MalValue options, bool colors, const MalValue *args, i32 argc);
+bool mal_node_util_format_single_into(
+    MalVm *vm, MalTextBuffer *out, MalValue options, bool colors, const MalValue *args, i32 argc);
 
 MalValue mal_node_util_inspect(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee);

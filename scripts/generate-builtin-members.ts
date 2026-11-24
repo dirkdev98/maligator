@@ -14,6 +14,7 @@ const entries = new Map<
 	Array<readonly [symbol: string, key: string, enumerable: boolean]>
 >();
 const nativeKeys = new Set<string>();
+const nativeDependencies: Array<readonly [owner: string, key: string]> = [];
 for (const directory of [
 	runtime,
 	path.join(runtime, "runtime"),
@@ -38,7 +39,7 @@ for (const directory of [
 						[
 							symbol!,
 							key!,
-							!/^\d+$|^(?:mal_intrinsic_define_method_n|url_define_accessor)$/.test(
+							!/^\d+$|^(?:mal_intrinsic_define_method_n|mal_iterator_helper_define_next|url_define_accessor)$/.test(
 								define!,
 							),
 						] as const,
@@ -47,6 +48,14 @@ for (const directory of [
 			nativeCode = nativeCode.replace(body, "");
 		}
 		// Names passed through native lookup tables and helpers are not source member reads.
+		nativeCode = nativeCode.replaceAll(
+			/MAL_BUILTIN_MEMBER_DEPENDENCY\((\w+),\s*"([^"\n]+)"\)/g,
+			(_, owner: string, key: string) => {
+				nativeDependencies.push([owner, key]);
+				return "";
+			},
+		);
+		nativeCode = nativeCode.replaceAll(/MAL_LOCAL_MEMBER_KEY\("[^"\n]+"\)/g, "");
 		for (const [, name] of nativeCode.matchAll(/"([A-Za-z_$][A-Za-z_$0-9]*)"/g))
 			nativeKeys.add(name!);
 	}
@@ -63,6 +72,13 @@ if (entries.size > 0)
 const output = "src/compiler/frontend/builtin-member-data.ts";
 const formatOptions = JSON.parse(readFileSync(".oxfmtrc.json", "utf8")) as FormatConfig;
 const keys = new Set(catalog.flatMap(({ members }) => members.map(([, key]) => key)));
+const symbols = new Set(
+	catalog.flatMap(({ members }) => members.map(([symbol]) => symbol)),
+);
+for (const [owner, key] of nativeDependencies) {
+	if (!keys.has(key) || (!symbols.has(owner) && !owner.startsWith("mal_host_install_")))
+		throw new Error(`Unknown builtin member dependency ${owner}: ${key}`);
+}
 const nativeMemberNames = [...nativeKeys].filter((name) => keys.has(name)).sort();
 const result = await format(
 	output,
@@ -72,6 +88,7 @@ const result = await format(
 		"  name: string; family: string; members: ReadonlyArray<readonly [symbol: string, key: string, enumerable: boolean]>;",
 		`}> = ${JSON.stringify(catalog, null, "\t")};`,
 		`export const NATIVE_BUILTIN_MEMBER_NAMES: ReadonlyArray<string> = ${JSON.stringify(nativeMemberNames)};`,
+		`export const NATIVE_BUILTIN_MEMBER_DEPENDENCIES: ReadonlyArray<readonly [owner: string, key: string]> = ${JSON.stringify(nativeDependencies.sort())};`,
 	].join("\n"),
 	formatOptions,
 );

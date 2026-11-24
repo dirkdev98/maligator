@@ -1,4 +1,5 @@
 #include "builtin_iterator_helpers.h"
+#include "builtin_members.h"
 
 #include <assert.h>
 #include <math.h>
@@ -713,12 +714,11 @@ static MalValue mal_ih_proto_next(MalVm *vm, MalValue this_value, const MalValue
     return result;
 }
 
-int mal_builtin_iterator_helper_try_step(
+static int mal_ih_try_step(
     MalVm *vm, const MalIteratorRecord *record,
     MalValue *value_out, bool *done_out
 ) {
-    if (!mal_value_is_iterator_helper_object(record->iterator) ||
-        !mal_value_is_native_function_object(record->next_method) ||
+    if (!mal_value_is_native_function_object(record->next_method) ||
         mal_native_function_object_callback(
             mal_value_to_native_function_object(record->next_method)) !=
             mal_ih_proto_next) {
@@ -828,6 +828,8 @@ static MalValue mal_ih_proto_return(MalVm *vm, MalValue this_value, const MalVal
 }
 
 static MalValue mal_ih_new(MalVm *vm, MalIteratorHelperKind kind, const MalIteratorRecord *record, MalValue callback, f64 counter) {
+    // Every image that can create a helper installs its next protocol.
+    assert(vm->iterator_helper_step != nullptr);
     MalIteratorHelperObject *helper = mal_heap_alloc(&vm->heap, sizeof(MalIteratorHelperObject), MAL_HEAP_ITERATOR_HELPER_OBJECT);
     mal_object_init_deferred(&vm->heap, &helper->object, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ITERATOR_HELPER_PROTOTYPE]));
     helper->kind = kind;
@@ -1941,24 +1943,46 @@ static void mal_iterator_define_accessor(MalVm *vm, MalObject *object, MalKey ke
         MAL_PROPERTY_CONFIGURABLE);
 }
 
+#define MAL_ITERATOR_METHODS(X) \
+    X(iterator_methods_map, "map", 1, mal_ih_method_map) \
+    X(iterator_methods_filter, "filter", 1, mal_ih_method_filter) \
+    X(iterator_methods_take, "take", 1, mal_ih_method_take) \
+    X(iterator_methods_drop, "drop", 1, mal_ih_method_drop) \
+    X(iterator_methods_flatMap, "flatMap", 1, mal_ih_method_flatmap) \
+    X(iterator_methods_reduce, "reduce", 1, mal_ih_method_reduce) \
+    X(iterator_methods_toArray, "toArray", 0, mal_ih_method_to_array) \
+    X(iterator_methods_forEach, "forEach", 1, mal_ih_method_for_each) \
+    X(iterator_methods_some, "some", 1, mal_ih_method_some) \
+    X(iterator_methods_every, "every", 1, mal_ih_method_every) \
+    X(iterator_methods_find, "find", 1, mal_ih_method_find) \
+    X(iterator_methods_includes, "includes", 1, mal_ih_method_includes) \
+    X(iterator_methods_join, "join", 1, mal_ih_method_join) \
+    X(iterator_methods_chunks, "chunks", 1, mal_ih_method_chunks) \
+    X(iterator_methods_windows, "windows", 1, mal_ih_method_windows)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(iterator_methods, MAL_ITERATOR_METHODS)
+
+#define MAL_ITERATOR_CONSTRUCTOR(X) \
+    X(iterator_constructor_from, "from", 1, mal_iterator_from) \
+    X(iterator_constructor_concat, "concat", 0, mal_iterator_concat) \
+    X(iterator_constructor_zip, "zip", 1, mal_iterator_zip) \
+    X(iterator_constructor_zipKeyed, "zipKeyed", 1, mal_iterator_zip_keyed)
+MAL_DEFINE_BUILTIN_MEMBER_GROUP(iterator_constructor, MAL_ITERATOR_CONSTRUCTOR)
+
+static void mal_iterator_helper_define_next(
+    MalVm *vm, MalObject *object, const byte *name, i32 length, MalNativeFunctionCallback next) {
+    mal_intrinsic_define_method_n(vm, object, name, length, next);
+    vm->iterator_helper_step = mal_ih_try_step;
+}
+
+#define MAL_ITERATOR_HELPER_PROTOCOL(X) \
+    X(iterator_helper_protocol_next, "next", mal_iterator_helper_define_next, 0, mal_ih_proto_next) \
+    X(iterator_helper_protocol_return, "return", mal_intrinsic_define_method_n, 0, mal_ih_proto_return)
+MAL_DEFINE_CUSTOM_MEMBER_GROUP(iterator_helper_protocol, MAL_ITERATOR_HELPER_PROTOCOL)
+
 void mal_builtin_iterator_helpers_install(MalVm *vm) {
     MalObject *iterator_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ITERATOR_PROTOTYPE]);
 
-    mal_intrinsic_define_method_n(vm, iterator_prototype, "map", 1, mal_ih_method_map);
-    mal_intrinsic_define_method_n(vm, iterator_prototype, "filter", 1, mal_ih_method_filter);
-    mal_intrinsic_define_method_n(vm, iterator_prototype, "take", 1, mal_ih_method_take);
-    mal_intrinsic_define_method_n(vm, iterator_prototype, "drop", 1, mal_ih_method_drop);
-    mal_intrinsic_define_method_n(vm, iterator_prototype, "flatMap", 1, mal_ih_method_flatmap);
-    mal_intrinsic_define_method_n(vm, iterator_prototype, "reduce", 1, mal_ih_method_reduce);
-    mal_intrinsic_define_method_n(vm, iterator_prototype, "toArray", 0, mal_ih_method_to_array);
-    mal_intrinsic_define_method_n(vm, iterator_prototype, "forEach", 1, mal_ih_method_for_each);
-    mal_intrinsic_define_method_n(vm, iterator_prototype, "some", 1, mal_ih_method_some);
-    mal_intrinsic_define_method_n(vm, iterator_prototype, "every", 1, mal_ih_method_every);
-    mal_intrinsic_define_method_n(vm, iterator_prototype, "find", 1, mal_ih_method_find);
-    mal_intrinsic_define_method_n(vm, iterator_prototype, "includes", 1, mal_ih_method_includes);
-    mal_intrinsic_define_method_n(vm, iterator_prototype, "join", 1, mal_ih_method_join);
-    mal_intrinsic_define_method_n(vm, iterator_prototype, "chunks", 1, mal_ih_method_chunks);
-    mal_intrinsic_define_method_n(vm, iterator_prototype, "windows", 1, mal_ih_method_windows);
+    mal_builtin_members_define(vm, iterator_prototype, MAL_BUILTIN_MEMBER_iterator_methods);
 
     mal_iterator_define_accessor(vm, iterator_prototype, mal_intrinsic_string_key(vm, "constructor"), mal_iterator_ctor_get, mal_iterator_ctor_set, "get constructor", "set constructor");
     mal_iterator_define_accessor(vm, iterator_prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), mal_iterator_tag_get, mal_iterator_tag_set, "get [Symbol.toStringTag]", "set [Symbol.toStringTag]");
@@ -1966,8 +1990,7 @@ void mal_builtin_iterator_helpers_install(MalVm *vm) {
     // %IteratorHelperPrototype%: shared next/return, inherits %IteratorPrototype%.
     MalObject *helper_prototype = mal_object_new(&vm->heap, iterator_prototype);
     vm->intrinsics[MAL_INTRINSIC_ITERATOR_HELPER_PROTOTYPE] = mal_value_from_object(helper_prototype);
-    mal_intrinsic_define_method_n(vm, helper_prototype, "next", 0, mal_ih_proto_next);
-    mal_intrinsic_define_method_n(vm, helper_prototype, "return", 0, mal_ih_proto_return);
+    mal_builtin_members_define(vm, helper_prototype, MAL_BUILTIN_MEMBER_iterator_helper_protocol);
     MalPropertyDesc tag_desc = mal_intrinsic_data_desc(
         mal_value_from_string(mal_intrinsic_ascii(vm, "Iterator Helper")),
         MAL_PROPERTY_CONFIGURABLE
@@ -1983,10 +2006,7 @@ void mal_builtin_iterator_helpers_install(MalVm *vm) {
     );
     vm->intrinsics[MAL_INTRINSIC_ITERATOR_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
     mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_ITERATOR_PROTOTYPE], MAL_PROPERTY_NONE);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "from", 1, mal_iterator_from);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "concat", 0, mal_iterator_concat);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "zip", 1, mal_iterator_zip);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "zipKeyed", 1, mal_iterator_zip_keyed);
+    mal_builtin_members_define(vm, (MalObject *) constructor, MAL_BUILTIN_MEMBER_iterator_constructor);
 }
 
 #include "generated/known_native_builtin_iterator_helpers_c.inc"

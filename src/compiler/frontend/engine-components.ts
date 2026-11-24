@@ -114,6 +114,13 @@ const INSTALLED_MEMBER_NAMES = new Set<string>(
 	BUILTIN_MEMBER_GROUPS.flatMap(({ members }) => members.map(([, key]) => key)),
 );
 const SIMPLE_CONSOLE_METHODS = new Set(["debug", "error", "info", "log", "warn"]);
+export const OBSERVABLE_ITERATOR_MEMBERS = "Iterator.*";
+export const OBSERVABLE_RESPONSE_STATICS = "Response.*";
+const responseStaticNames = new Set(
+	BUILTIN_MEMBER_GROUPS.find(({ name }) => name === "fetch_members_6")!.members.map(
+		([, key]) => key,
+	),
+);
 
 /** A closed source can ask for named builtin properties. Reflective reads keep the descriptor graph. */
 export function builtinMemberNames(
@@ -138,7 +145,9 @@ export function builtinMemberNames(
 				(binding) =>
 					binding.undeclared &&
 					binding.usageNodes.length > 0 &&
-					["global", "globalThis", "Reflect", "Proxy"].includes(binding.name),
+					["global", "globalThis", "self", "window", "Reflect", "Proxy"].includes(
+						binding.name,
+					),
 			)
 		) {
 			return undefined;
@@ -156,6 +165,28 @@ export function builtinMemberNames(
 		);
 		const consoleCalls = new Set<ESTree.Node>();
 		const opaque = traverseEstree(file.ast.body, (node, { parent }) => {
+			if (node.type === "Identifier" && file.nodeToBinding.get(node)?.undeclared) {
+				if (
+					node.name === "Iterator" ||
+					(node.name === "Symbol" &&
+						(parent?.type !== "MemberExpression" ||
+							parent.object !== node ||
+							staticMemberKey(parent) === undefined ||
+							staticMemberKey(parent) === "iterator"))
+				)
+					names.add(OBSERVABLE_ITERATOR_MEMBERS);
+				if (
+					node.name === "Response" &&
+					!(parent?.type === "NewExpression" && parent.callee === node)
+				) {
+					const key =
+						parent?.type === "MemberExpression" && parent.object === node
+							? staticMemberKey(parent)
+							: undefined;
+					if (key === undefined) names.add(OBSERVABLE_RESPONSE_STATICS);
+					else if (responseStaticNames.has(key)) names.add(`Response.${key}`);
+				}
+			}
 			if (
 				consoleBinding !== undefined &&
 				node.type === "CallExpression" &&
@@ -227,7 +258,17 @@ export function builtinMemberNames(
 		)
 			return undefined;
 	}
-	return [...names].filter((name) => INSTALLED_MEMBER_NAMES.has(name)).sort();
+	if (names.has("constructor")) names.add(OBSERVABLE_RESPONSE_STATICS);
+	if (names.has("matchAll")) names.add(OBSERVABLE_ITERATOR_MEMBERS);
+	return [...names]
+		.filter(
+			(name) =>
+				INSTALLED_MEMBER_NAMES.has(name) ||
+				name === OBSERVABLE_ITERATOR_MEMBERS ||
+				name === OBSERVABLE_RESPONSE_STATICS ||
+				(name.startsWith("Response.") && responseStaticNames.has(name.slice(9))),
+		)
+		.sort();
 }
 
 const WELL_KNOWN_SYMBOLS = new Set([

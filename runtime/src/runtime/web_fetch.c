@@ -2342,7 +2342,7 @@ static MalValue mal_response_static_json(
     MalValue json_ns = vm->intrinsics[MAL_INTRINSIC_JSON];
     MalValue stringify;
     if (!mal_vm_get_property(vm, json_ns,
-            mal_intrinsic_string_key(vm, (const byte *) "stringify"), &stringify)
+            mal_intrinsic_string_key(vm, MAL_BUILTIN_MEMBER_DEPENDENCY(fetch_members_6_json, "stringify")), &stringify)
         || !mal_value_is_callable(stringify)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "JSON.stringify unavailable");
         goto json_error;

@@ -2,12 +2,15 @@ import type { IncludedAsset } from "../../assets.ts";
 import type { PlatformData } from "../../platform/catalog.ts";
 import {
 	BUILTIN_MEMBER_GROUPS,
+	NATIVE_BUILTIN_MEMBER_DEPENDENCIES,
 	NATIVE_BUILTIN_MEMBER_NAMES,
 } from "../frontend/builtin-member-data.ts";
 import {
 	INTRINSIC_INSTALLERS,
 	JSON_INSTALLER,
 	MAP_INSTALLER,
+	OBSERVABLE_ITERATOR_MEMBERS,
+	OBSERVABLE_RESPONSE_STATICS,
 	SET_INSTALLER,
 } from "../frontend/engine-components.ts";
 import {
@@ -15,6 +18,7 @@ import {
 	BUFFER_INSTALLER_SYMBOL,
 	FETCH_MEMBER_PROVIDERS,
 	NODE_CONSOLE_HOOKS_INSTALLER,
+	NODE_CONSOLE_SINGLE_HOOKS_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
 	NODE_FETCH_BODY_BUFFER_INSTALLER,
 	NODE_FETCH_BODY_BYTES_INSTALLER,
@@ -1962,7 +1966,7 @@ function emitProgramImageParts(
 		options,
 		image.profiling?.sites.length,
 		useCompiled ? image.native.classLayouts : undefined,
-		builtinNamesForNativeImage(image),
+		needsInterpreter ? undefined : builtinNamesForNativeImage(image, compiled),
 		needsInterpreter ||
 			options.fullBuiltinMembers === true ||
 			options.toolchainBridge === true
@@ -3028,6 +3032,14 @@ function malRuntimeImageStruct(
 	// ones are emitted, so an ordinary program references no host symbol and the
 	// extern decls / arrays below are absent — nothing to resolve at link.
 	const hostInstalls = runtime.hostInstalls.flatMap((install) => {
+		if (
+			install.installer === NODE_CONSOLE_HOOKS_INSTALLER &&
+			builtinMemberNames !== undefined &&
+			options.fullBuiltinMembers !== true &&
+			options.toolchainBridge !== true &&
+			runtime.hostInstalls.every(({ installer }) => MEMBER_SELECTION_HOSTS.has(installer))
+		)
+			return [{ ...install, installer: NODE_CONSOLE_SINGLE_HOOKS_INSTALLER }];
 		if (install.installer === NODE_FETCH_BODY_BUFFER_INSTALLER) {
 			if (fetchStreams === "none") return [];
 			if (fetchStreams === "internal")
@@ -3136,6 +3148,7 @@ const MEMBER_SELECTION_HOSTS = new Set([
 	...INTRINSIC_INSTALLERS,
 	BUFFER_INSTALLER_SYMBOL,
 	NODE_CONSOLE_HOOKS_INSTALLER,
+	NODE_CONSOLE_SINGLE_HOOKS_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
 	NODE_FETCH_BODY_BUFFER_INSTALLER,
 	NODE_FETCH_BODY_BYTES_INSTALLER,
@@ -3261,22 +3274,32 @@ function fetchStreamDemand(
 	return usesAsyncIterable ? "internal" : "none";
 }
 
-function builtinNamesForNativeImage(image: ProgramImage): Array<string> | undefined {
+function builtinNamesForNativeImage(
+	image: ProgramImage,
+	compiled: ReadonlyArray<CompiledFunction | null>,
+): Array<string> | undefined {
 	if (image.native.builtinMemberNames === undefined) return undefined;
 	const names = new Set(image.native.builtinMemberNames);
 	const retainPath = (path: string) => {
 		for (const key of path.match(/[A-Za-z_$][A-Za-z_$0-9]*/g) ?? []) names.add(key);
+		if (path.includes("%Symbol.iterator%") || path.startsWith("%Iterator"))
+			names.add(OBSERVABLE_ITERATOR_MEMBERS);
+		const responseStatic = /^%?Response\.(\w+)%?$/.exec(path);
+		if (responseStatic !== null && responseStatic[1] !== "prototype")
+			names.add(`Response.${responseStatic[1]}`);
 	};
-	for (const fn of [
-		...image.runtime.functions,
-		...image.native.functions.map(({ body }) => body),
-	]) {
-		for (const instruction of fn.instructions) {
-			if (instruction.opcode === "CALL_KNOWN") retainPath(instruction.operation);
-			else if (instruction.opcode === "LOAD_PRIMORDIAL") {
-				const node = getPrimordialCatalog().nodes[instruction.nodeIndex]!;
-				retainPath(node[0]);
-				for (const alias of node[5]) retainPath(alias);
+	for (const [index, fn] of image.native.functions.entries()) {
+		if (fn.unreachable === true && compiled[index] === null) continue;
+		const body = image.runtime.functions[index]!;
+		if (body.isGenerator && !body.isAsync) names.add(OBSERVABLE_ITERATOR_MEMBERS);
+		for (const instructions of [fn.body.instructions, body.instructions]) {
+			for (const instruction of instructions) {
+				if (instruction.opcode === "CALL_KNOWN") retainPath(instruction.operation);
+				else if (instruction.opcode === "LOAD_PRIMORDIAL") {
+					const node = getPrimordialCatalog().nodes[instruction.nodeIndex]!;
+					retainPath(node[0]);
+					for (const alias of node[5]) retainPath(alias);
+				}
 			}
 		}
 	}
@@ -3301,10 +3324,32 @@ function builtinMemberLists(
 					...NATIVE_BUILTIN_MEMBER_NAMES,
 				]);
 	const installers = new Set(hostInstalls.map(({ installer }) => installer));
+	const keepsMember = (group: string, key: string, enumerable: boolean): boolean => {
+		if (kept === undefined || enumerable) return true;
+		if (group === "fetch_members_6")
+			return kept.has(OBSERVABLE_RESPONSE_STATICS) || kept.has(`Response.${key}`);
+		return kept.has(key);
+	};
+	if (kept !== undefined) {
+		const fetchStatics = BUILTIN_MEMBER_GROUPS.find(
+			({ name }) => name === "fetch_members_6",
+		)!;
+		const selected = new Set(installers);
+		if ([...installers].some((installer) => FETCH_MEMBER_PROVIDERS.has(installer))) {
+			for (const [symbol, key, enumerable] of fetchStatics.members) {
+				if (keepsMember(fetchStatics.name, key, enumerable)) selected.add(symbol);
+			}
+		}
+		for (const [owner, key] of NATIVE_BUILTIN_MEMBER_DEPENDENCIES) {
+			if (selected.has(owner)) kept.add(key);
+		}
+	}
 	const fetch = hostInstalls.some(({ installer }) =>
 		FETCH_MEMBER_PROVIDERS.has(installer),
 	);
 	const families = new Set(["base"]);
+	if (kept === undefined || kept.has(OBSERVABLE_ITERATOR_MEMBERS))
+		families.add("iterator");
 	if (
 		policy?.regexp !== false &&
 		(policy?.eval !== false || installers.has(REGEXP_INSTALLER))
@@ -3333,10 +3378,9 @@ function builtinMemberLists(
 	for (const group of BUILTIN_MEMBER_GROUPS) {
 		if (group.family === "regexp" && policy?.regexp === false) continue;
 		if (!fullBuiltinMembers && !families.has(group.family)) continue;
-		const members =
-			kept === undefined
-				? group.members
-				: group.members.filter(([, key, enumerable]) => enumerable || kept.has(key));
+		const members = group.members.filter(([, key, enumerable]) =>
+			keepsMember(group.name, key, enumerable),
+		);
 		if (members.length === 0) continue;
 		if (members.length === group.members.length) {
 			lists.push(

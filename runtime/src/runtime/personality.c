@@ -17,6 +17,15 @@ static const MalConsoleNodeHooks node_console_hooks = {
     .table = mal_console_node_table,
 };
 
+static const MalConsoleNodeHooks node_console_single_hooks = {
+    .format_into = mal_node_util_format_single_into,
+    .inspect_into = mal_node_util_inspect_into,
+    .throw_code = mal_node_throw_code,
+    .format = mal_console_node_format,
+    .dir = mal_console_node_dir,
+    .table = mal_console_node_table,
+};
+
 static MalObject *personality_global(MalVm *vm) {
     return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
 }
@@ -67,6 +76,14 @@ void mal_host_install_node_console_hooks(
     (void) count;
     (void) launch;
     vm->console_node_hooks = &node_console_hooks;
+}
+
+void mal_host_install_node_console_single_hooks(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
+    (void) slots;
+    (void) count;
+    (void) launch;
+    vm->console_node_hooks = &node_console_single_hooks;
 }
 
 MalHostInstaller mal_runtime_image_personality(

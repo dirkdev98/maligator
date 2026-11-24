@@ -93,3 +93,15 @@ it("a body getter materializes a consumed byte stream in the locked state", () =
 	});
 	expect(runToStdout(binary, { env: STRESS_ENV })).toBe("AB,true\n");
 }, 120_000);
+
+it("serializes JSON through a statically selected Response factory", () => {
+	const binary = buildNativeBinary({
+		fixture: "tests/local/fetch-response-static-json.mjs",
+		name: "fetch-response-static-json",
+		outDir,
+		config: resolveBuildConfig({ engine: { eval: false, realms: false } }),
+		production: true,
+		toolchainBridge: false,
+	});
+	expect(runToStdout(binary, { env: STRESS_ENV })).toBe('{"value":"é"}\n');
+}, 120_000);

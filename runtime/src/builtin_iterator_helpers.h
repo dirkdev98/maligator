@@ -81,15 +81,6 @@ typedef struct MalIteratorHelperObject {
 static_assert(sizeof(MalIteratorHelperObject) <= 112, "MalIteratorHelperObject outgrew its 112-byte size class");
 
 /**
- * Consume an exact built-in Iterator Helper step without materializing its
- * public {value, done} result object. Returns 1 when handled, 0 when the record
- * is not eligible, and -1 when the helper step threw.
- */
-int mal_builtin_iterator_helper_try_step(
-    MalVm *vm, const MalIteratorRecord *record,
-    MalValue *value_out, bool *done_out);
-
-/**
  * Install the Iterator Helpers surface: the %Iterator% global (abstract
  * constructor) + Iterator.from, the %IteratorPrototype% accessors (constructor,
  * @@toStringTag) and helper methods (map/filter/take/drop/flatMap +

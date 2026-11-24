@@ -17,6 +17,7 @@ import {
 	NODE_ERROR_HOOKS_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
 	REGEXP_INSTALLER,
+	WEB_FETCH_STREAMS_INSTALLER,
 } from "../src/compiler/frontend/host-modules.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
@@ -81,6 +82,7 @@ const SURFACE_INSTALLERS = new Set([
 	...HOST_PERSONALITY_INSTALLERS,
 	NODE_ERROR_HOOKS_INSTALLER,
 	REGEXP_INSTALLER,
+	WEB_FETCH_STREAMS_INSTALLER,
 ]);
 
 /** Every LOAD_GLOBAL slot index read anywhere in the program. */

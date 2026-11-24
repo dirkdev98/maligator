@@ -11,6 +11,7 @@
 #include "ascii.h"
 #include "builtin_bigint.h"
 #include "builtin_error.h"
+#include "builtin_members.h"
 #include "date_object.h"
 #include "function_object.h"
 #include "gc.h"
@@ -2028,7 +2029,9 @@ static bool util_call_intrinsic(MalVm *vm, MalIntrinsic intrinsic, MalValue argu
 static bool util_format_json(UtilCtx *ctx, MalValue value) {
     MalVm *vm = ctx->vm;
     MalValue stringify;
-    if (!util_get(ctx, vm->intrinsics[MAL_INTRINSIC_JSON], "stringify", &stringify)) return false;
+    if (!util_get(ctx, vm->intrinsics[MAL_INTRINSIC_JSON],
+            MAL_BUILTIN_MEMBER_DEPENDENCY(mal_host_install_node_console_hooks, "stringify"),
+            &stringify)) return false;
     MalCompletion completion = mal_vm_call_value(
         vm, stringify, vm->intrinsics[MAL_INTRINSIC_JSON], &value, 1);
     if (completion.kind == MAL_COMPLETION_THROW) {
@@ -2167,6 +2170,19 @@ bool mal_node_util_format_into(
     util_ctx_apply(&ctx, options);
     util_ctx_finish_options(&ctx);
     bool ok = !util_throwing(&ctx) && util_format_into(&ctx, args, argc);
+    util_ctx_dispose(&ctx);
+    return ok;
+}
+
+bool mal_node_util_format_single_into(
+    MalVm *vm, MalTextBuffer *out, MalValue options, bool colors, const MalValue *args, i32 argc) {
+    assert(argc <= 1);
+    UtilCtx ctx;
+    util_ctx_init(&ctx, vm, out);
+    if (colors) ctx.colors = true;
+    util_ctx_apply(&ctx, options);
+    util_ctx_finish_options(&ctx);
+    bool ok = !util_throwing(&ctx) && (argc == 0 || util_format_arg(&ctx, args[0]));
     util_ctx_dispose(&ctx);
     return ok;
 }

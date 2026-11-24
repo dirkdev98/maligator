@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../../src/build-config.ts";
 import { buildNativeBinary, HOST_MAIN, runToStdout } from "../../src/test-harness.ts";
 
 const fixture = "tests/local/node-console.mjs";
@@ -30,3 +31,17 @@ describe("node:console Console class", () => {
 		expect(runToStdout(binaries[variant]!)).toBe(expected);
 	});
 });
+
+it("formats multiple console arguments with Node's JSON substitution", () => {
+	const binary = buildNativeBinary({
+		fixture: "tests/local/node-console-json.mjs",
+		name: "node-console-json",
+		outDir,
+		config: resolveBuildConfig({ engine: { eval: false, realms: false } }),
+		production: true,
+		toolchainBridge: false,
+	});
+	expect(runToStdout(binary, { env: { MAL_TEST_CONSOLE_VALUE: "ok" } })).toBe(
+		'value: {"value":"ok"}\n',
+	);
+}, 120_000);

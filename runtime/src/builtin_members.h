@@ -63,3 +63,7 @@ typedef enum MalBuiltinMemberGroup {
     };
 
 void mal_builtin_members_define(MalVm *vm, MalObject *object, MalBuiltinMemberGroup group);
+
+/* Native lookups can narrow a key to a linked member or installer. */
+#define MAL_BUILTIN_MEMBER_DEPENDENCY(owner, key) key
+#define MAL_LOCAL_MEMBER_KEY(key) key
