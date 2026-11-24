@@ -6020,13 +6020,13 @@ MalCompletion mal_vm_call_direct(
     if (!mal_value_is_function_object(callee) ||
         expected_function_index < 0 ||
         expected_function_index >= vm->runtime_image->function_count) {
-        return mal_vm_call_cached(
+        return mal_vm_call_cached_checked(
             vm, callee, this_value, args, arg_count);
     }
 
     MalFunctionObject *function_object = mal_value_to_function_object(callee);
     if (mal_function_object_function_index(function_object) != expected_function_index) {
-        return mal_vm_call_cached(
+        return mal_vm_call_cached_checked(
             vm, callee, this_value, args, arg_count);
     }
     return mal_vm_call_exact_script(
@@ -6046,7 +6046,7 @@ MalCompletion mal_vm_call_function_call_direct(
     }
     if (call_method != vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL] ||
         !mal_value_is_native_function_object(call_method)) {
-        return mal_vm_call_cached(
+        return mal_vm_call_cached_checked(
             vm, call_method, target, args, arg_count);
     }
 
@@ -6058,7 +6058,7 @@ MalCompletion mal_vm_call_function_call_direct(
             vm, expected_function_index, target, this_value,
             target_args, target_arg_count);
     }
-    return mal_vm_call_cached(
+    return mal_vm_call_cached_checked(
         vm, target, this_value, target_args, target_arg_count);
 }
 

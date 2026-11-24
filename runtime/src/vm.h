@@ -3271,26 +3271,23 @@ MalValue mal_vm_call_cached_value(
     i32 arg_count
 );
 
-/**
- * A compiled site's [[Call]]. The strict compiled-callee row is dispatched at the site:
- * one shared indirect branch for every site predicted its targets poorly, while each
- * site's own branch mostly sees one callee.
- */
-static inline __attribute__((always_inline)) MalCompletion mal_vm_call_cached(
+static inline __attribute__((always_inline)) MalCompletion mal_vm_call_cached_dispatch(
     MalVm *vm,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
-    i32 arg_count
+    i32 arg_count,
+    bool check_completion
 ) {
+    (void) check_completion;
     MalValue value;
 #if !MAL_REALMS && !(MAL_PROFILE && MAL_PERF_STATS)
     MalCompiledFunction entry = nullptr;
     MalFunctionObject *function = nullptr;
-    if (mal_value_is_function_object(callee) && vm->completion.kind != MAL_COMPLETION_THROW) {
+    if (mal_value_is_function_object(callee) &&
+        (!check_completion || vm->completion.kind != MAL_COMPLETION_THROW)) {
         function = mal_value_to_function_object(callee);
         i32 function_index = mal_function_object_function_index(function);
-        // Rows past the image's function count stay null.
         if ((u32) function_index < (u32) vm->function_capacity) {
             entry = vm->call_entries[function_index];
         }
@@ -3309,6 +3306,31 @@ static inline __attribute__((always_inline)) MalCompletion mal_vm_call_cached(
     return vm->completion.kind == MAL_COMPLETION_THROW
         ? vm->completion
         : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+}
+
+/**
+ * Generated call sites have already handled any pending throw.
+ * The indirect branch stays at each site so it can predict that site's callee.
+ */
+static inline __attribute__((always_inline)) MalCompletion mal_vm_call_cached(
+    MalVm *vm,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    return mal_vm_call_cached_dispatch(vm, callee, this_value, args, arg_count, false);
+}
+
+/** For runtime callers outside the generated dispatch contract. */
+static inline __attribute__((always_inline)) MalCompletion mal_vm_call_cached_checked(
+    MalVm *vm,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    return mal_vm_call_cached_dispatch(vm, callee, this_value, args, arg_count, true);
 }
 
 /**

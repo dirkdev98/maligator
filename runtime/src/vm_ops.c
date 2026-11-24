@@ -8497,7 +8497,7 @@ __attribute__((noinline)) MalValue mal_vm_op_load_property_ic_static_miss(
     if (ic->mode == MAL_IC_MODE_INHERITED_GETTER && mal_value_is_function_object(ic->value) &&
         mal_vm_inherited_accessor_row_holds(object_value, key_value, ic)) {
         MAL_PERF_COUNT(ic_load_inherited_getter_hits);
-        MalCompletion completion = mal_vm_call_cached(vm, ic->value, object_value, nullptr, 0);
+        MalCompletion completion = mal_vm_call_cached_checked(vm, ic->value, object_value, nullptr, 0);
         return completion.kind == MAL_COMPLETION_NORMAL ? completion.value : MAL_VALUE_UNDEFINED;
     }
     MalValue result;
@@ -11434,7 +11434,7 @@ MalCompletion mal_builtin_sort_numeric(
     MalNativeFunctionCallback expected = mal_value_is_native_function_object(callee)
         ? mal_native_function_object_callback(mal_value_to_native_function_object(callee)) : nullptr;
     if (arg_count != (via_call ? 2 : 1))
-        return mal_vm_call_cached(vm, callee, receiver, args, arg_count);
+        return mal_vm_call_cached_checked(vm, callee, receiver, args, arg_count);
     MalValue sort_callee = via_call ? receiver : callee;
     MalValue sort_receiver = via_call ? args[0] : receiver;
     MalValue callback = args[via_call ? 1 : 0];
@@ -11456,7 +11456,7 @@ MalCompletion mal_builtin_sort_numeric(
     admitted = admitted && mal_vm_callee_realm(vm, callee) == vm->current_realm &&
         mal_vm_callee_realm(vm, sort_callee) == vm->current_realm;
 #endif
-    if (!admitted) return mal_vm_call_cached(vm, callee, receiver, args, arg_count);
+    if (!admitted) return mal_vm_call_cached_checked(vm, callee, receiver, args, arg_count);
     MalExactScriptCall exact = {
         .previous = vm->exact_script_call,
         .callee = callback,

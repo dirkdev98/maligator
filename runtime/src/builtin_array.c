@@ -912,7 +912,7 @@ static bool mal_builtin_array_from_map(
     MalCompletion completion = vm->exact_script_call != nullptr &&
         vm->exact_script_call->callee == map_fn
         ? mal_vm_call_builtin_callback(vm, map_fn, this_arg, mapped_args, 2)
-        : mal_vm_call_cached(vm, map_fn, this_arg, mapped_args, 2);
+        : mal_vm_call_cached_checked(vm, map_fn, this_arg, mapped_args, 2);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
         return false;
@@ -2384,7 +2384,7 @@ MalCompletion mal_builtin_array_push_direct(
     }
 
     MAL_PERF_COUNT(array_push_direct_fallbacks);
-    return mal_vm_call_cached(
+    return mal_vm_call_cached_checked(
         vm, callee, this_value, args, arg_count);
 }
 
@@ -2660,7 +2660,7 @@ MalCompletion mal_builtin_array_deque_direct(
         return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = result};
     }
     MAL_PERF_COUNT(array_deque_direct_fallbacks);
-    return mal_vm_call_cached(vm, callee, this_value, args, arg_count);
+    return mal_vm_call_cached_checked(vm, callee, this_value, args, arg_count);
 }
 
 static i64 mal_builtin_array_slice_bound(i32 relative, i64 length) {
@@ -3534,7 +3534,7 @@ MalCompletion mal_builtin_array_at_direct(
             .value = result,
         };
     }
-    return mal_vm_call_cached(
+    return mal_vm_call_cached_checked(
         vm, callee, this_value, args, arg_count);
 }
 
@@ -3946,7 +3946,7 @@ static bool mal_builtin_array_sort_order(
         MalExactScriptCall *exact = vm->exact_script_call;
         MalCompletion completion = exact != nullptr && exact->callee == comparator
             ? mal_vm_call_builtin_callback(vm, comparator, mal_value_new_undefined(), args, 2)
-            : mal_vm_call_cached(
+            : mal_vm_call_cached_checked(
                 vm, comparator, mal_value_new_undefined(), args, 2);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             mal_gc_unroot(&args_span);
@@ -5966,7 +5966,7 @@ static MalCompletion mal_builtin_array_iteration_direct_impl(
     }
 
     MAL_PERF_COUNT(array_iteration_direct_fallbacks);
-    return mal_vm_call_cached(
+    return mal_vm_call_cached_checked(
         vm, callee, this_value, args, arg_count);
 }
 

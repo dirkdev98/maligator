@@ -1258,7 +1258,7 @@ MalCompletion mal_builtin_string_char_code_at_direct(
         return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = result};
     }
     MAL_PERF_COUNT(string_char_code_at_direct_fallbacks);
-    return mal_vm_call_cached(vm, callee, this_value, args, arg_count);
+    return mal_vm_call_cached_checked(vm, callee, this_value, args, arg_count);
 }
 
 MalCompletion mal_builtin_string_char_code_at_direct_in_bounds(
@@ -1286,7 +1286,7 @@ MalCompletion mal_builtin_string_char_code_at_direct_in_bounds(
     }
 
     MAL_PERF_COUNT(string_char_code_at_direct_fallbacks);
-    return mal_vm_call_cached(
+    return mal_vm_call_cached_checked(
         vm, callee, this_value, args, arg_count);
 }
 
