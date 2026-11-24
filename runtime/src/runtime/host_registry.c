@@ -18,6 +18,7 @@
 #include "node_assert_strict.h"
 #include "node_async_hooks.h"
 #include "node_buffer.h"
+#include "node_byte_array.h"
 #include "node_child_process.h"
 #include "node_cluster.h"
 #include "node_console.h"
@@ -106,6 +107,8 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_async_hooks);
     MATCH_INSTALLER(mal_host_install_node_buffer);
     MATCH_INSTALLER(mal_host_install_node_buffer_global);
+    MATCH_INSTALLER(mal_host_install_node_fetch_body_buffer);
+    MATCH_INSTALLER(mal_host_install_node_fetch_body_bytes);
     MATCH_INSTALLER(mal_host_install_node_child_process);
     MATCH_INSTALLER(mal_host_install_node_cluster);
     MATCH_INSTALLER(mal_host_install_node_console);

@@ -133,6 +133,8 @@ export const NODE_PERSONALITY_INSTALLER = "mal_host_install_node_web_personality
 
 export const WEB_FETCH_INSTALLER = "mal_host_install_web_fetch";
 export const WEB_FETCH_STREAMS_INSTALLER = "mal_host_install_web_fetch_streams";
+export const NODE_FETCH_BODY_BUFFER_INSTALLER = "mal_host_install_node_fetch_body_buffer";
+export const NODE_FETCH_BODY_BYTES_INSTALLER = "mal_host_install_node_fetch_body_bytes";
 
 /**
  * Installers that define free globals, retained at startup when a program names one

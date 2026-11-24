@@ -22,6 +22,7 @@ import {
 	NODE_BUILTIN_LOADER_INSTALLER,
 	NODE_CONSOLE_HOOKS_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
+	NODE_FETCH_BODY_BUFFER_INSTALLER,
 	NODE_FS_FULL_EXPORTS,
 	NODE_FS_INSTALLER,
 	NODE_FS_NAMED_INSTALLER,
@@ -4063,10 +4064,10 @@ function buildHostInstalls(
 	if (
 		(usesNode || usesProcessEnv) &&
 		!hasBufferModule &&
+		!retained.includes(BUFFER_INSTALLER_SYMBOL) &&
 		manifest.some(({ installer }) => installer === WEB_FETCH_INSTALLER)
 	) {
-		// Node Request and Response bodies convert async-iterable chunks with Buffer.from.
-		installFor(BUFFER_INSTALLER_SYMBOL);
+		installFor(NODE_FETCH_BODY_BUFFER_INSTALLER);
 	}
 	const selected = new Set(manifest.map(({ installer }) => installer));
 	if ([...selected].some((installer) => FETCH_MEMBER_PROVIDERS.has(installer)))

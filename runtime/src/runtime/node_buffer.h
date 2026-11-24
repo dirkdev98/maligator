@@ -9,6 +9,10 @@ void mal_host_install_node_buffer_global(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch
 );
+/** Fetch's public body reader can expose the Buffer identity without reading the global. */
+void mal_host_install_node_fetch_body_buffer(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch
+);
 
 /** Install the global Buffer constructor and the node:buffer module exports. */
 void mal_host_install_node_buffer(

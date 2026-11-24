@@ -51,6 +51,11 @@ const forbiddenComponents = {
 	"sqlite3.o": ({ object }) => /(?:^|[(-])sqlite3\.o\)?$/.test(object),
 	node_fs: ({ object }) => /(?:^|[(-])node_fs\.o\)?$/.test(object),
 	"Node streams": ({ object }) => /(?:^|[(-])node_stream\.o\)?$/.test(object),
+	"Node Buffer": ({ object, symbol }) =>
+		/(?:^|[(-])node_buffer\.o\)?$/.test(object) ||
+		/^_?mal_(?:node_buffer_ensure|host_install_node_buffer_global|host_install_node_fetch_body_buffer)(?:$|\.)/.test(
+			symbol,
+		),
 	"Web Streams": ({ symbol }) =>
 		/^_?mal_(?:host_install_web_fetch_streams|web_streams_ensure|readable_stream_install)(?:$|\.)/.test(
 			symbol,
@@ -192,6 +197,12 @@ const fixtures: Array<{
 			"sqlite3.o",
 		],
 		forbiddenLibraries: ["C++ runtime"],
+	},
+	{
+		name: "process-env-fetch",
+		file: "bench/size/process-env-fetch.mjs",
+		bun: true,
+		forbidden: ["Node Buffer", "Web Streams", "bytecode interpreter", "Rust backtrace"],
 	},
 	{
 		name: "http-bare",

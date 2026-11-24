@@ -16,6 +16,8 @@ import {
 	FETCH_MEMBER_PROVIDERS,
 	NODE_CONSOLE_HOOKS_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
+	NODE_FETCH_BODY_BUFFER_INSTALLER,
+	NODE_FETCH_BODY_BYTES_INSTALLER,
 	PROCESS_ENV_INSTALLER,
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
@@ -1961,7 +1963,11 @@ function emitProgramImageParts(
 		image.profiling?.sites.length,
 		useCompiled ? image.native.classLayouts : undefined,
 		builtinNamesForNativeImage(image),
-		needsInterpreter || fetchStreamSupportIsReachable(image, compiled),
+		needsInterpreter ||
+			options.fullBuiltinMembers === true ||
+			options.toolchainBridge === true
+			? "observable"
+			: fetchStreamDemand(image, compiled),
 	)) {
 		lines.push(line);
 	}
@@ -2905,7 +2911,7 @@ function malRuntimeImageStruct(
 	profileSiteCount?: number,
 	classLayouts: ReadonlyArray<CoreTargetClassLayout> = [],
 	builtinMemberNames?: ReadonlyArray<string>,
-	keepFetchStreams = true,
+	fetchStreams: FetchStreamDemand = "observable",
 ): Array<string> {
 	const lines: Array<string> = [];
 	const assets = options.assets ?? [];
@@ -3021,13 +3027,16 @@ function malRuntimeImageStruct(
 	// host built-ins (and `process`) the program actually reached. Only reachable
 	// ones are emitted, so an ordinary program references no host symbol and the
 	// extern decls / arrays below are absent — nothing to resolve at link.
-	const hostInstalls = runtime.hostInstalls.filter(
-		({ installer }) =>
-			keepFetchStreams ||
-			options.fullBuiltinMembers === true ||
-			options.toolchainBridge === true ||
-			installer !== WEB_FETCH_STREAMS_INSTALLER,
-	);
+	const hostInstalls = runtime.hostInstalls.flatMap((install) => {
+		if (install.installer === NODE_FETCH_BODY_BUFFER_INSTALLER) {
+			if (fetchStreams === "none") return [];
+			if (fetchStreams === "internal")
+				return [{ ...install, installer: NODE_FETCH_BODY_BYTES_INSTALLER }];
+		}
+		if (install.installer === WEB_FETCH_STREAMS_INSTALLER && fetchStreams === "none")
+			return [];
+		return [install];
+	});
 	if (
 		options.toolchainBridge === true &&
 		!hostInstalls.some((install) => install.installer === "mal_host_install_maligator")
@@ -3128,6 +3137,8 @@ const MEMBER_SELECTION_HOSTS = new Set([
 	BUFFER_INSTALLER_SYMBOL,
 	NODE_CONSOLE_HOOKS_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
+	NODE_FETCH_BODY_BUFFER_INSTALLER,
+	NODE_FETCH_BODY_BYTES_INSTALLER,
 	PROCESS_ENV_INSTALLER,
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
@@ -3163,11 +3174,10 @@ const NATIVE_BUILTIN_MEMBER_KEYS = [
 	"values",
 ];
 
-const FETCH_STREAM_OBSERVATIONS = new Set([
-	"AsyncIterator",
+type FetchStreamDemand = "none" | "internal" | "observable";
+
+const FETCH_STREAM_MEMBERS = new Set([
 	"Request",
-	"Symbol",
-	"asyncIterator",
 	"body",
 	"constructor",
 	"pipeThrough",
@@ -3176,18 +3186,19 @@ const FETCH_STREAM_OBSERVATIONS = new Set([
 	"stream",
 	"writable",
 ]);
+const FETCH_ASYNC_ITERABLE_NAMES = new Set(["AsyncIterator", "Symbol", "asyncIterator"]);
 
-function fetchStreamSupportIsReachable(
+function fetchStreamDemand(
 	image: ProgramImage,
 	compiled: ReadonlyArray<CompiledFunction | null>,
-): boolean {
+): FetchStreamDemand {
 	const { native, runtime } = image;
 	if (
 		!runtime.hostInstalls.some(
 			({ installer }) => installer === WEB_FETCH_STREAMS_INSTALLER,
 		)
 	)
-		return false;
+		return "none";
 	if (
 		native.builtinMemberNames === undefined ||
 		runtime.hostInstalls.some(
@@ -3198,29 +3209,31 @@ function fetchStreamSupportIsReachable(
 				installer === "mal_host_install_maligator_internal_fetch",
 		)
 	)
-		return true;
+		return "observable";
 	// The closed-source member proof has already rejected unknown keys and
 	// reflection. The lowered instructions distinguish dead library exports
 	// from observations that can still run. Request construction can itself
 	// read a RequestInit object's body, and Node accepts async iterable bodies.
-	const observed = new Set(
-		runtime.stringConstants.flatMap((units, index) =>
-			units.length <= 16 && FETCH_STREAM_OBSERVATIONS.has(String.fromCharCode(...units))
-				? [index]
-				: [],
-		),
+	const names = runtime.stringConstants.map((units) =>
+		units.length <= 16 ? String.fromCharCode(...units) : "",
 	);
-	return native.functions.some((fn, index) => {
-		if (fn.unreachable === true && compiled[index] === null) return false;
+	let usesAsyncIterable = false;
+	const observesStream = (name: string): boolean => {
+		if (FETCH_STREAM_MEMBERS.has(name)) return true;
+		if (FETCH_ASYNC_ITERABLE_NAMES.has(name)) usesAsyncIterable = true;
+		return false;
+	};
+	for (const [index, fn] of native.functions.entries()) {
+		if (fn.unreachable === true && compiled[index] === null) continue;
 		const body = runtime.functions[index]!;
-		if (body.isAsync && body.isGenerator) return true;
+		if (body.isAsync && body.isGenerator) usesAsyncIterable = true;
 		for (const instructions of [fn.body.instructions, body.instructions]) {
 			for (const instruction of instructions) {
 				if (
 					instruction.opcode === "LOAD_INTRINSIC" &&
-					FETCH_STREAM_OBSERVATIONS.has(instruction.intrinsic)
+					observesStream(instruction.intrinsic)
 				)
-					return true;
+					return "observable";
 				if (
 					instruction.opcode === "LOAD_PRIMORDIAL" ||
 					instruction.opcode === "CALL_KNOWN"
@@ -3229,23 +3242,23 @@ function fetchStreamSupportIsReachable(
 						instruction.opcode === "LOAD_PRIMORDIAL"
 							? getPrimordialCatalog().nodes[instruction.nodeIndex]?.[0]
 							: instruction.operation;
-					if (
-						path === "%Symbol%" ||
+					if (path === "%Symbol%") usesAsyncIterable = true;
+					else if (
 						path
 							?.match(/[A-Za-z_$][A-Za-z_$0-9]*/g)
-							?.some((key) => key !== "Symbol" && FETCH_STREAM_OBSERVATIONS.has(key))
+							?.some((key) => key !== "Symbol" && observesStream(key))
 					)
-						return true;
+						return "observable";
 				}
 				let matched = false;
 				visitRuntimeInstructionConstantIndices(instruction, (kind, index) => {
-					if (kind === "string" && observed.has(index)) matched = true;
+					if (kind === "string" && observesStream(names[index] ?? "")) matched = true;
 				});
-				if (matched) return true;
+				if (matched) return "observable";
 			}
 		}
-		return false;
-	});
+	}
+	return usesAsyncIterable ? "internal" : "none";
 }
 
 function builtinNamesForNativeImage(image: ProgramImage): Array<string> | undefined {

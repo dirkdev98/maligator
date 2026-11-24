@@ -2456,6 +2456,8 @@ typedef struct MalVm {
 #if !MAL_REALMS
     MalClosureMetadataPool closure_metadata;
 #endif
+    /** Node Fetch bodies use the realm's selected byte conversion. */
+    MalValue (*node_body_chunk_converter)(MalVm *vm, MalValue chunk, MalValue encoding);
 } MalVm;
 
 static inline __attribute__((always_inline)) bool mal_vm_gc_poll_requested(const MalVm *vm) {

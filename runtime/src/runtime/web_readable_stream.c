@@ -4508,12 +4508,6 @@ static MalValue rs_from_pull(MalVm *vm, MalValue self,
 static MalValue rs_from_cancel(MalVm *vm, MalValue self,
     const MalValue *args, i32 argc, MalValue nt, MalValue callee);
 
-static MAL_ISOLATE_LOCAL MalNodeBodyChunkConverter rs_node_chunk_converter;
-
-void mal_readable_stream_set_node_chunk_converter(MalNodeBodyChunkConverter converter) {
-    rs_node_chunk_converter = converter;
-}
-
 static MalValue rs_from_pull_fulfilled(MalVm *vm, MalValue self,
     const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self; (void) nt;
@@ -4540,8 +4534,8 @@ static MalValue rs_from_pull_fulfilled(MalVm *vm, MalValue self,
     if (bytes) {
         if (!mal_value_is_typed_array_object(roots[2])
             || mal_value_to_typed_array_object(roots[2])->kind != MAL_TA_UINT8) {
-            if (rs_node_chunk_converter != nullptr) {
-                roots[2] = rs_node_chunk_converter(vm, roots[2], mal_value_new_undefined());
+            if (vm->node_body_chunk_converter != nullptr) {
+                roots[2] = vm->node_body_chunk_converter(vm, roots[2], mal_value_new_undefined());
             } else {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                     "Cannot convert a non-Uint8Array body chunk without Buffer");
