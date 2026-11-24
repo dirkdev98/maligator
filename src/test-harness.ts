@@ -392,6 +392,10 @@ function linkProgramImage(
 	workerImages: ReadonlyArray<CompiledWorkerImage> = [],
 ): LocalBuildResult {
 	const fixtureDirectory = path.dirname(path.resolve(options.fixture));
+	// A custom C driver can use host components that the JavaScript image never names.
+	const customDriver =
+		options.mainFile !== undefined &&
+		path.resolve(options.mainFile) !== path.resolve(HOST_MAIN);
 	const emitOptions = {
 		// Fixtures usually live in fresh temporary directories; naming files from there
 		// keeps the source-file table, and so its object, identical between runs.
@@ -399,6 +403,7 @@ function linkProgramImage(
 			path.isAbsolute(file) ? path.relative(fixtureDirectory, file) : file,
 		partitionRoot: fixtureDirectory,
 		compiled,
+		fullBuiltinMembers: customDriver,
 		// Internal fixtures exercise the production asset path, compressed copies included.
 		assets: collectEmbeddedAssets(
 			embedDeclarationsOf([
@@ -445,10 +450,6 @@ function linkProgramImage(
 	) {
 		mainFile = HOST_MAIN;
 	}
-	// A custom C driver can call host components that the JavaScript image never names.
-	const customDriver =
-		options.mainFile !== undefined &&
-		path.resolve(options.mainFile) !== path.resolve(HOST_MAIN);
 	const { context, cacheSuffix } = resolveHarnessNativeContext(
 		options,
 		config,

@@ -132,6 +132,9 @@ export interface EmitOptions {
 	/** The embedded copies of the `maligator:assets` declarations this executable reaches. */
 	assets?: Array<IncludedAsset>;
 
+	/** A native driver can initialize builtins beyond the JavaScript image's manifest. */
+	fullBuiltinMembers?: boolean;
+
 	/** Install the internal `mal` global that toolchain programs reach their host through. */
 	toolchainBridge?: boolean;
 
@@ -2864,7 +2867,10 @@ function malRuntimeImageStruct(
 	debug: boolean,
 	conservativeStackRoots: boolean,
 	sharedLiteralTemplates?: string,
-	options: Pick<EmitOptions, "assets" | "toolchainBridge" | "sourcePath"> = {},
+	options: Pick<
+		EmitOptions,
+		"assets" | "fullBuiltinMembers" | "toolchainBridge" | "sourcePath"
+	> = {},
 	profileSiteCount?: number,
 	classLayouts: ReadonlyArray<CoreTargetClassLayout> = [],
 	builtinMemberNames?: ReadonlyArray<string>,
@@ -2996,6 +3002,7 @@ function malRuntimeImageStruct(
 		runtime.enginePolicy,
 		builtinMemberNames,
 		suffix,
+		options.fullBuiltinMembers === true,
 	);
 	lines.push(...members);
 	if (hasHostInstalls) {
@@ -3143,8 +3150,10 @@ function builtinMemberLists(
 	policy: RuntimeImage["enginePolicy"],
 	names: ReadonlyArray<string> | undefined,
 	suffix: string,
+	fullBuiltinMembers: boolean,
 ): Array<string> {
 	const kept =
+		fullBuiltinMembers ||
 		names === undefined ||
 		hostInstalls.some(({ installer }) => !MEMBER_SELECTION_HOSTS.has(installer))
 			? undefined
@@ -3184,7 +3193,8 @@ function builtinMemberLists(
 	const lists: Array<string> = [];
 	const lines: Array<string> = [];
 	for (const group of BUILTIN_MEMBER_GROUPS) {
-		if (!families.has(group.family)) continue;
+		if (group.family === "regexp" && policy?.regexp === false) continue;
+		if (!fullBuiltinMembers && !families.has(group.family)) continue;
 		const members =
 			kept === undefined
 				? group.members
