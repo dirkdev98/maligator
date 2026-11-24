@@ -349,6 +349,33 @@ export const NODE_FS_NAMED_INSTALLER = "mal_host_install_node_fs_named";
 export const NODE_FS_READ_STREAM_INSTALLER = "mal_host_install_node_fs_read_stream";
 export const NODE_FS_READ_FILE_INSTALLER = "mal_host_install_node_fs_read_file";
 
+// These installers can initialize Fetch internally. Its emitted member tables
+// reference both Streams and URL callbacks, including the native URL parser.
+export const FETCH_MEMBER_PROVIDERS: ReadonlySet<string> = new Set([
+	WEB_FETCH_INSTALLER,
+	"mal_host_install_web_fetch_client",
+	hostInstallerSymbol("maligator:internal/fetch"),
+	hostInstallerSymbol("maligator:internal/http"),
+	HTTP_WITHOUT_WEBSOCKET_INSTALLER,
+	NODE_FS_READ_STREAM_INSTALLER,
+	NODE_BUILTIN_LOADER_INSTALLER,
+	...[
+		"node:buffer",
+		"node:child_process",
+		"node:cluster",
+		"node:crypto",
+		"node:fs",
+		"node:http",
+		"node:https",
+		"node:net",
+		"node:stream",
+		"node:stream/consumers",
+		"node:stream/promises",
+		"node:tls",
+		"node:zlib",
+	].map(hostInstallerSymbol),
+]);
+
 /** These exports need the complete fs module or its stream prototypes. */
 export const NODE_FS_FULL_EXPORTS: ReadonlySet<string> = new Set([
 	"default",

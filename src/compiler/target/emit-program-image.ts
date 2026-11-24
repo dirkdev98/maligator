@@ -11,13 +11,11 @@ import {
 	SET_INSTALLER,
 } from "../frontend/engine-components.ts";
 import {
-	HTTP_WITHOUT_WEBSOCKET_INSTALLER,
 	hostInstallerSymbol,
 	BUFFER_INSTALLER_SYMBOL,
+	FETCH_MEMBER_PROVIDERS,
 	NODE_CONSOLE_HOOKS_INSTALLER,
-	NODE_BUILTIN_LOADER_INSTALLER,
 	NODE_ERROR_HOOKS_INSTALLER,
-	NODE_FS_READ_STREAM_INSTALLER,
 	PROCESS_ENV_INSTALLER,
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
@@ -3098,30 +3096,6 @@ const MEMBER_SELECTION_HOSTS = new Set([
 	"mal_host_install_maligator_assets",
 	"mal_host_install_maligator_internal_fetch",
 	"mal_host_install_maligator_internal_http",
-]);
-const FETCH_MEMBER_PROVIDERS = new Set([
-	WEB_FETCH_INSTALLER,
-	"mal_host_install_web_fetch_client",
-	"mal_host_install_maligator_internal_fetch",
-	"mal_host_install_maligator_internal_http",
-	HTTP_WITHOUT_WEBSOCKET_INSTALLER,
-	NODE_FS_READ_STREAM_INSTALLER,
-	NODE_BUILTIN_LOADER_INSTALLER,
-	...[
-		"node:buffer",
-		"node:child_process",
-		"node:cluster",
-		"node:crypto",
-		"node:fs",
-		"node:http",
-		"node:https",
-		"node:net",
-		"node:stream",
-		"node:stream/consumers",
-		"node:stream/promises",
-		"node:tls",
-		"node:zlib",
-	].map(hostInstallerSymbol),
 ]);
 const NATIVE_BUILTIN_MEMBER_KEYS = [
 	"add",

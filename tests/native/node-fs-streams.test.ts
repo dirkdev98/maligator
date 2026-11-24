@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { expect, it } from "vitest";
@@ -10,6 +10,24 @@ import {
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
+
+it("reads a file with only the named createReadStream import", () => {
+	const outDir = mkdtempSync(path.join(tmpdir(), "mal-fs-read-stream-"));
+	try {
+		const binary = buildNativeBinary({
+			fixture: "tests/local/node-fs-read-stream.mjs",
+			name: "node-fs-read-stream",
+			mainFile: HOST_MAIN,
+			production: true,
+			outDir,
+		});
+		expect(runToStdout(binary).trim()).toBe(
+			readFileSync("bench/size/hello.txt", "utf8").trim(),
+		);
+	} finally {
+		rmSync(outDir, { recursive: true, force: true });
+	}
+});
 
 it("matches Node for fs vector IO, directory handles, file write streams, and the remaining fs/promises operations", () => {
 	const directory = mkdtempSync(path.join(tmpdir(), "mal-fs-streams-test-"));
