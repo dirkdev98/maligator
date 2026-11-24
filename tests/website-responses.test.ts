@@ -3,17 +3,17 @@ import { acceptsBrotli, siteResponse } from "../website/responses.ts";
 import type { SiteResource } from "../website/responses.ts";
 
 const resources = new Map<string, SiteResource>([
-	["/", { body: "<h1>Overview</h1>", type: "text/html" }],
-	["/explorer", { body: "<h1>Explorer</h1>", type: "text/html", explorer: true }],
-	["/api/application", { body: "ready()", type: "text/html", documentation: true }],
+	["/", { content: "<h1>Overview</h1>", type: "text/html" }],
+	["/explorer", { content: "<h1>Explorer</h1>", type: "text/html", explorer: true }],
+	["/api/application", { content: "ready()", type: "text/html", documentation: true }],
 	[
 		"/api/application.md",
-		{ body: "# ready", type: "text/markdown", documentation: true },
+		{ content: "# ready", type: "text/markdown", documentation: true },
 	],
 	[
 		"/explorer/assets/compiler.abc.wasm",
 		{
-			body: new Uint8Array([1, 2, 3]),
+			content: new Uint8Array([1, 2, 3]),
 			type: "application/wasm",
 			encoding: "br",
 			etag: '"abc"',

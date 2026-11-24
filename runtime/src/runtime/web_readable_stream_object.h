@@ -189,8 +189,18 @@ typedef MalValue (*MalNodeBodyChunkConverter)(MalVm *vm, MalValue chunk, MalValu
 void mal_readable_stream_set_node_chunk_converter(MalNodeBodyChunkConverter converter);
 
 /** Internal Body-state hooks shared with the Fetch runtime. */
-bool mal_readable_stream_is_locked(MalValue value);
-bool mal_readable_stream_is_disturbed(MalValue value);
+static inline bool mal_readable_stream_is_locked(MalValue value) {
+    return mal_value_is_readable_stream_object(value) &&
+        mal_value_to_readable_stream_object(value)->kind == MAL_READABLE_STREAM &&
+        !mal_value_is_undefined(mal_value_to_readable_stream_object(value)->as.stream.reader);
+}
+
+static inline bool mal_readable_stream_is_disturbed(MalValue value) {
+    return mal_value_is_readable_stream_object(value) &&
+        mal_value_to_readable_stream_object(value)->kind == MAL_READABLE_STREAM &&
+        mal_value_to_readable_stream_object(value)->as.stream.disturbed;
+}
+
 bool mal_readable_stream_consume(MalVm *vm, MalValue value);
 
 /** Internal reader algorithms used by Fetch Body consumption. */

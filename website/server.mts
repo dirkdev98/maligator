@@ -17,31 +17,34 @@ const pages = new Map<string, SiteResource>([
 	[
 		"/.well-known/maligator-site.json",
 		{
-			body: embedFile("../.cache/website-build/deployment.json").text(),
+			content: embedFile("../.cache/website-build/deployment.json").text(),
 			type: "application/json",
 		},
 	],
 	[
 		"/favicon.ico",
-		{ body: embedFile("./favicon.ico").bytes(), type: "image/vnd.microsoft.icon" },
+		{ content: embedFile("./favicon.ico").bytes(), type: "image/vnd.microsoft.icon" },
 	],
 	[
 		"/favicon-32x32.png",
-		{ body: embedFile("./favicon-32x32.png").bytes(), type: "image/png" },
+		{ content: embedFile("./favicon-32x32.png").bytes(), type: "image/png" },
 	],
 	[
 		"/apple-touch-icon.png",
-		{ body: embedFile("./apple-touch-icon.png").bytes(), type: "image/png" },
+		{ content: embedFile("./apple-touch-icon.png").bytes(), type: "image/png" },
 	],
-	["/", { body: embedFile("./index.html").text(), type: "text/html; charset=utf-8" }],
+	["/", { content: embedFile("./index.html").text(), type: "text/html; charset=utf-8" }],
 	[
 		"/compatibility",
-		{ body: embedFile("./compatibility.html").text(), type: "text/html; charset=utf-8" },
+		{
+			content: embedFile("./compatibility.html").text(),
+			type: "text/html; charset=utf-8",
+		},
 	],
 	[
 		"/explorer",
 		{
-			body: member(explorer, "index.html").text(),
+			content: member(explorer, "index.html").text(),
 			type: "text/html; charset=utf-8",
 			explorer: true,
 		},
@@ -49,7 +52,7 @@ const pages = new Map<string, SiteResource>([
 ]);
 for (const asset of member(explorer, "manifest.json").json() as Array<ExplorerAsset>) {
 	pages.set(asset.url, {
-		body: member(explorer, asset.file).bytes(),
+		content: member(explorer, asset.file).bytes(),
 		type: asset.type,
 		bytes: asset.bytes,
 		etag: `"${asset.digest}"`,
@@ -63,7 +66,7 @@ for (const asset of member(
 	"manifest.json",
 ).json() as Array<ExplorerAsset>) {
 	pages.set(asset.url, {
-		body: member(documentation, asset.file).bytes(),
+		content: member(documentation, asset.file).bytes(),
 		type: asset.type,
 		bytes: asset.bytes,
 		etag: `"${asset.digest}"`,

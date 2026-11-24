@@ -8,7 +8,7 @@ export interface ExplorerAsset {
 }
 
 export interface SiteResource {
-	body: string | Uint8Array<ArrayBuffer>;
+	content: string | Uint8Array<ArrayBuffer>;
 	type: string;
 	etag?: string;
 	encoding?: "br";
@@ -98,5 +98,5 @@ export function siteResponse(
 	}
 	if (resource.bytes !== undefined) headers.set("Content-Length", String(resource.bytes));
 	// The server suppresses HEAD bodies while deriving their GET-equivalent length.
-	return new Response(resource.body, { headers });
+	return new Response(resource.content, { headers });
 }

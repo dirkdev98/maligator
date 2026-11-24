@@ -13,6 +13,7 @@ import {
 } from "../frontend/engine-components.ts";
 import {
 	BUFFER_INSTALLER_SYMBOL,
+	FETCH_MEMBER_PROVIDERS,
 	HOST_PERSONALITY_INSTALLER,
 	HOST_PERSONALITY_INSTALLERS,
 	hostInstallerSymbol,
@@ -31,6 +32,7 @@ import {
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
 	WEB_FETCH_INSTALLER,
+	WEB_FETCH_STREAMS_INSTALLER,
 	WORKER_THREADS_INSTALLER_SYMBOL,
 } from "../frontend/host-modules.ts";
 import { directBuiltinOperationIds } from "../shared/builtin-registry.ts";
@@ -3209,7 +3211,7 @@ for (const [opcode, fields] of Object.entries(RUNTIME_INSTRUCTION_COPY_SCHEMA)) 
 	]);
 }
 
-function visitRuntimeInstructionConstantIndices(
+export function visitRuntimeInstructionConstantIndices(
 	instruction: BytecodeInstruction,
 	note: (kind: "string" | "bigint" | "template", index: number) => void,
 ): void {
@@ -4067,6 +4069,8 @@ function buildHostInstalls(
 		installFor(BUFFER_INSTALLER_SYMBOL);
 	}
 	const selected = new Set(manifest.map(({ installer }) => installer));
+	if ([...selected].some((installer) => FETCH_MEMBER_PROVIDERS.has(installer)))
+		installFor(WEB_FETCH_STREAMS_INSTALLER);
 	const usesWorkerImages = [
 		WORKER_THREADS_INSTALLER_SYMBOL,
 		hostInstallerSymbol("node:cluster"),

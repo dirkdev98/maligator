@@ -32,6 +32,7 @@ typedef struct MalRequestObject {
     MalValue integrity;
     MalValue signal;
     struct MalFetchHead *source; // raw heap buffer, freed by the finalizer
+    bool body_used;
 } MalRequestObject;
 
 MalRequestObject *mal_request_object_new(MalHeap *heap, MalObject *prototype);

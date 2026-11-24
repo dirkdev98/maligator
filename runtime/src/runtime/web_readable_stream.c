@@ -467,17 +467,6 @@ MalValue mal_readable_stream_from_bytes(
     return result;
 }
 
-bool mal_readable_stream_is_locked(MalValue value) {
-    return rs_is_kind(value, MAL_READABLE_STREAM) &&
-        !mal_value_is_undefined(
-            mal_value_to_readable_stream_object(value)->as.stream.reader);
-}
-
-bool mal_readable_stream_is_disturbed(MalValue value) {
-    return rs_is_kind(value, MAL_READABLE_STREAM) &&
-        mal_value_to_readable_stream_object(value)->as.stream.disturbed;
-}
-
 bool mal_readable_stream_consume(MalVm *vm, MalValue value) {
     if (!rs_is_kind(value, MAL_READABLE_STREAM)) {
         return false;

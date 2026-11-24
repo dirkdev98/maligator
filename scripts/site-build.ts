@@ -20,7 +20,7 @@ import { formatSiteFiles, updateSite } from "./site-data.ts";
 import { writeSiteDeployment } from "./site-deployment.ts";
 
 const META_FILE = "website/site-meta.json";
-const LINUX_X64_SERVER_BYTE_LIMIT = 2_130_000;
+const LINUX_X64_SERVER_BYTE_LIMIT = 1_990_000;
 const container = process.argv.includes("--container");
 const targetIndex = process.argv.indexOf("--target");
 const target =

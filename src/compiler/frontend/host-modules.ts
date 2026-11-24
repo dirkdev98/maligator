@@ -132,6 +132,7 @@ export const HOST_PERSONALITY_INSTALLER = "mal_host_install_web_personality";
 export const NODE_PERSONALITY_INSTALLER = "mal_host_install_node_web_personality";
 
 export const WEB_FETCH_INSTALLER = "mal_host_install_web_fetch";
+export const WEB_FETCH_STREAMS_INSTALLER = "mal_host_install_web_fetch_streams";
 
 /**
  * Installers that define free globals, retained at startup when a program names one
@@ -349,8 +350,7 @@ export const NODE_FS_NAMED_INSTALLER = "mal_host_install_node_fs_named";
 export const NODE_FS_READ_STREAM_INSTALLER = "mal_host_install_node_fs_read_stream";
 export const NODE_FS_READ_FILE_INSTALLER = "mal_host_install_node_fs_read_file";
 
-// These installers can initialize Fetch internally. Its emitted member tables
-// reference both Streams and URL callbacks, including the native URL parser.
+// These installers can initialize Fetch internally, including its URL parser.
 export const FETCH_MEMBER_PROVIDERS: ReadonlySet<string> = new Set([
 	WEB_FETCH_INSTALLER,
 	"mal_host_install_web_fetch_client",

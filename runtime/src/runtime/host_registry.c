@@ -11,6 +11,7 @@
 #include "maligator_http.h"
 #include "mal_process.h"
 #include "language_components.h"
+#include "web_fetch_body.h"
 #include "web_surface.h"
 #include "workers.h"
 
@@ -85,6 +86,7 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_web_encoding);
     MATCH_INSTALLER(mal_host_install_web_streams);
     MATCH_INSTALLER(mal_host_install_web_fetch);
+    MATCH_INSTALLER(mal_host_install_web_fetch_streams);
     MATCH_INSTALLER(mal_host_install_web_basics);
     MATCH_INSTALLER(mal_host_install_web_fetch_client);
     MATCH_INSTALLER(mal_host_install_maligator_internal_fetch);

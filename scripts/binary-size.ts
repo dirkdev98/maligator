@@ -51,6 +51,10 @@ const forbiddenComponents = {
 	"sqlite3.o": ({ object }) => /(?:^|[(-])sqlite3\.o\)?$/.test(object),
 	node_fs: ({ object }) => /(?:^|[(-])node_fs\.o\)?$/.test(object),
 	"Node streams": ({ object }) => /(?:^|[(-])node_stream\.o\)?$/.test(object),
+	"Web Streams": ({ symbol }) =>
+		/^_?mal_(?:host_install_web_fetch_streams|web_streams_ensure|readable_stream_install)(?:$|\.)/.test(
+			symbol,
+		),
 	"Full Node process support": ({ object }) =>
 		/(?:^|[(-])node_(?:process|events|async_hooks|inspect)\.o\)?$/.test(object),
 	"Array.fromAsync": ({ symbol }) =>
@@ -149,6 +153,7 @@ const fixtures: Array<{
 			"argon2",
 			"Rust backtrace",
 			"bytecode interpreter",
+			"Web Streams",
 		],
 	},
 	{

@@ -20,6 +20,7 @@ import {
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
 	WEB_FETCH_INSTALLER,
+	WEB_FETCH_STREAMS_INSTALLER,
 } from "../frontend/host-modules.ts";
 import { bigintLimbs } from "../shared/bigint-digits.ts";
 import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
@@ -76,6 +77,7 @@ import {
 	positionTableEntries,
 	restForwardFlags,
 	validateRuntimeImageMetadata,
+	visitRuntimeInstructionConstantIndices,
 	vmGuardedCallSideTag,
 	vmSafepointRootMapsAreTrusted,
 	VM_MATH_BINARY_NUMBER_OPERATIONS,
@@ -1959,6 +1961,7 @@ function emitProgramImageParts(
 		image.profiling?.sites.length,
 		useCompiled ? image.native.classLayouts : undefined,
 		builtinNamesForNativeImage(image),
+		needsInterpreter || fetchStreamSupportIsReachable(image, compiled),
 	)) {
 		lines.push(line);
 	}
@@ -2902,6 +2905,7 @@ function malRuntimeImageStruct(
 	profileSiteCount?: number,
 	classLayouts: ReadonlyArray<CoreTargetClassLayout> = [],
 	builtinMemberNames?: ReadonlyArray<string>,
+	keepFetchStreams = true,
 ): Array<string> {
 	const lines: Array<string> = [];
 	const assets = options.assets ?? [];
@@ -3017,7 +3021,13 @@ function malRuntimeImageStruct(
 	// host built-ins (and `process`) the program actually reached. Only reachable
 	// ones are emitted, so an ordinary program references no host symbol and the
 	// extern decls / arrays below are absent — nothing to resolve at link.
-	const hostInstalls = [...runtime.hostInstalls];
+	const hostInstalls = runtime.hostInstalls.filter(
+		({ installer }) =>
+			keepFetchStreams ||
+			options.fullBuiltinMembers === true ||
+			options.toolchainBridge === true ||
+			installer !== WEB_FETCH_STREAMS_INSTALLER,
+	);
 	if (
 		options.toolchainBridge === true &&
 		!hostInstalls.some((install) => install.installer === "mal_host_install_maligator")
@@ -3122,6 +3132,7 @@ const MEMBER_SELECTION_HOSTS = new Set([
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
 	WEB_FETCH_INSTALLER,
+	WEB_FETCH_STREAMS_INSTALLER,
 	"mal_host_install_web_personality",
 	"mal_host_install_web_basics",
 	"mal_host_install_web_encoding",
@@ -3151,6 +3162,91 @@ const NATIVE_BUILTIN_MEMBER_KEYS = [
 	"valueOf",
 	"values",
 ];
+
+const FETCH_STREAM_OBSERVATIONS = new Set([
+	"AsyncIterator",
+	"Request",
+	"Symbol",
+	"asyncIterator",
+	"body",
+	"constructor",
+	"pipeThrough",
+	"pipeTo",
+	"readable",
+	"stream",
+	"writable",
+]);
+
+function fetchStreamSupportIsReachable(
+	image: ProgramImage,
+	compiled: ReadonlyArray<CompiledFunction | null>,
+): boolean {
+	const { native, runtime } = image;
+	if (
+		!runtime.hostInstalls.some(
+			({ installer }) => installer === WEB_FETCH_STREAMS_INSTALLER,
+		)
+	)
+		return false;
+	if (
+		native.builtinMemberNames === undefined ||
+		runtime.hostInstalls.some(
+			({ installer }) =>
+				!MEMBER_SELECTION_HOSTS.has(installer) ||
+				installer === "mal_host_install_web_streams" ||
+				installer === "mal_host_install_web_fetch_client" ||
+				installer === "mal_host_install_maligator_internal_fetch",
+		)
+	)
+		return true;
+	// The closed-source member proof has already rejected unknown keys and
+	// reflection. The lowered instructions distinguish dead library exports
+	// from observations that can still run. Request construction can itself
+	// read a RequestInit object's body, and Node accepts async iterable bodies.
+	const observed = new Set(
+		runtime.stringConstants.flatMap((units, index) =>
+			units.length <= 16 && FETCH_STREAM_OBSERVATIONS.has(String.fromCharCode(...units))
+				? [index]
+				: [],
+		),
+	);
+	return native.functions.some((fn, index) => {
+		if (fn.unreachable === true && compiled[index] === null) return false;
+		const body = runtime.functions[index]!;
+		if (body.isAsync && body.isGenerator) return true;
+		for (const instructions of [fn.body.instructions, body.instructions]) {
+			for (const instruction of instructions) {
+				if (
+					instruction.opcode === "LOAD_INTRINSIC" &&
+					FETCH_STREAM_OBSERVATIONS.has(instruction.intrinsic)
+				)
+					return true;
+				if (
+					instruction.opcode === "LOAD_PRIMORDIAL" ||
+					instruction.opcode === "CALL_KNOWN"
+				) {
+					const path =
+						instruction.opcode === "LOAD_PRIMORDIAL"
+							? getPrimordialCatalog().nodes[instruction.nodeIndex]?.[0]
+							: instruction.operation;
+					if (
+						path === "%Symbol%" ||
+						path
+							?.match(/[A-Za-z_$][A-Za-z_$0-9]*/g)
+							?.some((key) => key !== "Symbol" && FETCH_STREAM_OBSERVATIONS.has(key))
+					)
+						return true;
+				}
+				let matched = false;
+				visitRuntimeInstructionConstantIndices(instruction, (kind, index) => {
+					if (kind === "string" && observed.has(index)) matched = true;
+				});
+				if (matched) return true;
+			}
+		}
+		return false;
+	});
+}
 
 function builtinNamesForNativeImage(image: ProgramImage): Array<string> | undefined {
 	if (image.native.builtinMemberNames === undefined) return undefined;
@@ -3207,7 +3303,7 @@ function builtinMemberLists(
 	if (installers.has("mal_host_install_intrinsic_math")) families.add("math");
 	if (fetch) families.add("fetch");
 	if (
-		fetch ||
+		installers.has(WEB_FETCH_STREAMS_INSTALLER) ||
 		installers.has("mal_host_install_web_streams") ||
 		installers.has("mal_host_install_web_compression") ||
 		installers.has("mal_host_install_maligator_internal_fs_stream")

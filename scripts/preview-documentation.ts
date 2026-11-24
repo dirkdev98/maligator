@@ -13,7 +13,7 @@ const resources = new Map<string, SiteResource>(
 	assets.map((asset) => [
 		asset.url,
 		{
-			body: readFileSync(path.join(directory, asset.file)),
+			content: readFileSync(path.join(directory, asset.file)),
 			type: asset.type,
 			bytes: asset.bytes,
 			etag: `"${asset.digest}"`,
@@ -28,7 +28,7 @@ for (const [url, file, type] of [
 	["/favicon-32x32.png", "favicon-32x32.png", "image/png"],
 	["/apple-touch-icon.png", "apple-touch-icon.png", "image/png"],
 ]) {
-	resources.set(url!, { body: readFileSync(`website/${file}`), type: type! });
+	resources.set(url!, { content: readFileSync(`website/${file}`), type: type! });
 }
 const server = createServer((request, response) => {
 	void (async () => {

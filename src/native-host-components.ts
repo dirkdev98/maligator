@@ -27,6 +27,7 @@ import {
 	REGEXP_INSTALLER,
 	UNICODE_NORMALIZATION_INSTALLER,
 	WEB_FETCH_INSTALLER,
+	WEB_FETCH_STREAMS_INSTALLER,
 	WORKER_THREADS_INSTALLER_SYMBOL,
 	ZLIB_DECODERS_INSTALLER,
 } from "./compiler/frontend/host-modules.ts";
@@ -66,6 +67,7 @@ const RING_FREE_INSTALLERS = new Set([
 	PROCESS_ENV_INSTALLER,
 	BUFFER_INSTALLER_SYMBOL,
 	WEB_FETCH_INSTALLER,
+	WEB_FETCH_STREAMS_INSTALLER,
 	"mal_host_install_web_events",
 	"mal_host_install_web_url",
 	"mal_host_install_maligator_assets",
