@@ -16,6 +16,7 @@ export const runtime = embedDirectory("../runtime", {
 		"rust/Cargo.lock",
 		"rust/rust-toolchain.toml",
 		"rust/src/**",
+		"rust/cxx/**",
 		"rust/include/**",
 		"rust/vendor/regress/**",
 		"vendor/llhttp/include/**",

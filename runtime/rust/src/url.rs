@@ -1,48 +1,66 @@
-//! WHATWG URL primitives over the `ada-url` crate (which wraps the C++ `ada`
-//! library). Lives in the single `mal_rust` staticlib like the regexp/i18n halves
-//! (two Rust staticlibs cannot co-link). Because `ada-url` pulls in a C++ library,
-//! the final link of every binary needs the C++ stdlib (`-lc++`/`-lstdc++`); that
-//! flag is added by `src/rust-build.ts` artifact resolution. C ABI is `mal_url.h`.
-//!
-//! Design contract (same as the other halves): the C runtime owns all JS-spec glue
-//! (the URL/URLSearchParams objects, the Symbol protocol, error shaping). This
-//! module exposes only a parsed-URL handle + flat component accessors.
-//!
-//! Strings cross as UTF-16 IN (MalString's native storage → `String::from_utf16_
-//! lossy`, since WHATWG operates on scalar values) and UTF-8 OUT (the shared
-//! probe-then-fill convention; the C side decodes to a MalString). URLSearchParams
-//! is implemented entirely C-side (form-urlencoded), so it needs nothing here.
+//! WHATWG URL primitives over Ada's C ABI. The Rust crate builds the C++
+//! archive. The runtime owns JS coercion and errors, and URLSearchParams is
+//! implemented on the C side. Buffer ownership stays with the producer.
 
-use ada_url::{Idna, Url};
+extern crate ada_url as _;
 
-use crate::ffi::{nullable_u16_slice, write_utf8};
+use alloc::string::String;
+use core::ffi::c_void;
+
+use crate::ffi::{nullable_slice, nullable_u16_slice, write_utf8};
 
 /// ABI version, mirrored by MAL_URL_ABI_VERSION in mal_url.h.
 pub const MAL_URL_ABI_VERSION: u32 = 1;
 
-/// Returns the ABI version baked into this archive.
 #[no_mangle]
 pub extern "C" fn mal_url_abi_version() -> u32 {
     MAL_URL_ABI_VERSION
 }
 
-/// UTF-16 (ptr, len) → owned String, lossily (lone surrogates → U+FFFD), matching
-/// WHATWG URL's scalar-value handling of input.
+#[repr(C)]
+struct AdaString {
+    data: *const u8,
+    length: usize,
+}
+
+impl AdaString {
+    unsafe fn write(&self, output: *mut u8, capacity: i32) -> i32 {
+        let bytes = unsafe { nullable_slice(self.data, self.length) };
+        let text = unsafe { core::str::from_utf8_unchecked(bytes) };
+        unsafe { write_utf8(text, output, capacity) }
+    }
+}
+
+extern "C" {
+    fn ada_parse(input: *const u8, length: usize) -> *mut c_void;
+    fn ada_parse_with_base(
+        input: *const u8,
+        length: usize,
+        base: *const u8,
+        base_length: usize,
+    ) -> *mut c_void;
+    fn ada_is_valid(url: *mut c_void) -> bool;
+    fn ada_can_parse(input: *const u8, length: usize) -> bool;
+    fn ada_can_parse_with_base(
+        input: *const u8,
+        length: usize,
+        base: *const u8,
+        base_length: usize,
+    ) -> bool;
+    fn ada_free(url: *mut c_void);
+    fn ada_free_owned_string(value: AdaString);
+    fn ada_get_origin(url: *mut c_void) -> AdaString;
+    fn ada_idna_to_unicode(input: *const u8, length: usize) -> AdaString;
+    fn ada_clear_port(url: *mut c_void);
+    fn ada_set_port(url: *mut c_void, input: *const u8, length: usize) -> bool;
+    fn ada_set_hostname(url: *mut c_void, input: *const u8, length: usize) -> bool;
+    fn ada_get_hostname(url: *mut c_void) -> AdaString;
+}
+
 unsafe fn utf16_to_string(ptr: *const u16, len: usize) -> String {
     String::from_utf16_lossy(unsafe { nullable_u16_slice(ptr, len) })
 }
 
-unsafe fn url_ref<'a>(handle: *mut core::ffi::c_void) -> &'a Url {
-    unsafe { &*(handle as *const Url) }
-}
-
-unsafe fn url_mut<'a>(handle: *mut core::ffi::c_void) -> &'a mut Url {
-    unsafe { &mut *(handle as *mut Url) }
-}
-
-/// Parse `input` (UTF-16), optionally against `base` (UTF-16, used only when
-/// `has_base` is nonzero). Returns an opaque boxed `Url` handle, or NULL on a parse
-/// failure (the C side throws TypeError). Free with `mal_url_free`.
 #[no_mangle]
 pub unsafe extern "C" fn mal_url_parse(
     input: *const u16,
@@ -50,21 +68,22 @@ pub unsafe extern "C" fn mal_url_parse(
     base: *const u16,
     base_len: usize,
     has_base: bool,
-) -> *mut core::ffi::c_void {
-    let input_str = unsafe { utf16_to_string(input, input_len) };
-    let base_str = if has_base {
-        Some(unsafe { utf16_to_string(base, base_len) })
+) -> *mut c_void {
+    let input = unsafe { utf16_to_string(input, input_len) };
+    let url = if has_base {
+        let base = unsafe { utf16_to_string(base, base_len) };
+        unsafe { ada_parse_with_base(input.as_ptr(), input.len(), base.as_ptr(), base.len()) }
     } else {
-        None
+        unsafe { ada_parse(input.as_ptr(), input.len()) }
     };
-    match Url::parse(input_str, base_str.as_deref()) {
-        Ok(url) => Box::into_raw(Box::new(url)) as *mut core::ffi::c_void,
-        Err(_) => core::ptr::null_mut(),
+    if unsafe { ada_is_valid(url) } {
+        url
+    } else {
+        unsafe { ada_free(url) };
+        core::ptr::null_mut()
     }
 }
 
-/// URL.canParse(input, base?): whether parsing would succeed, without allocating a
-/// handle.
 #[no_mangle]
 pub unsafe extern "C" fn mal_url_can_parse(
     input: *const u16,
@@ -73,164 +92,147 @@ pub unsafe extern "C" fn mal_url_can_parse(
     base_len: usize,
     has_base: bool,
 ) -> bool {
-    let input_str = unsafe { utf16_to_string(input, input_len) };
-    let base_str = if has_base {
-        Some(unsafe { utf16_to_string(base, base_len) })
+    let input = unsafe { utf16_to_string(input, input_len) };
+    if has_base {
+        let base = unsafe { utf16_to_string(base, base_len) };
+        unsafe { ada_can_parse_with_base(input.as_ptr(), input.len(), base.as_ptr(), base.len()) }
     } else {
-        None
-    };
-    Url::can_parse(&input_str, base_str.as_deref())
-}
-
-/// Free a handle from `mal_url_parse` (null-tolerant, so the GC finalizer is
-/// idempotent after nulling the field).
-#[no_mangle]
-pub unsafe extern "C" fn mal_url_free(handle: *mut core::ffi::c_void) {
-    if handle.is_null() {
-        return;
+        unsafe { ada_can_parse(input.as_ptr(), input.len()) }
     }
-    drop(unsafe { Box::from_raw(handle as *mut Url) });
 }
 
-/// Define a `&str` component getter: writes UTF-8 into `out` (probe with cap 0),
-/// returns the full byte length.
+#[no_mangle]
+pub unsafe extern "C" fn mal_url_free(handle: *mut c_void) {
+    if !handle.is_null() {
+        unsafe { ada_free(handle) };
+    }
+}
+
 macro_rules! url_getter {
     ($name:ident, $method:ident) => {
         #[no_mangle]
-        pub unsafe extern "C" fn $name(
-            handle: *mut core::ffi::c_void,
-            out: *mut u8,
-            out_cap: i32,
-        ) -> i32 {
-            unsafe { write_utf8(url_ref(handle).$method(), out, out_cap) }
+        pub unsafe extern "C" fn $name(handle: *mut c_void, out: *mut u8, capacity: i32) -> i32 {
+            extern "C" {
+                fn $method(url: *mut c_void) -> AdaString;
+            }
+            unsafe { $method(handle).write(out, capacity) }
         }
     };
 }
 
-url_getter!(mal_url_href, href);
-url_getter!(mal_url_protocol, protocol);
-url_getter!(mal_url_username, username);
-url_getter!(mal_url_password, password);
-url_getter!(mal_url_host, host);
-url_getter!(mal_url_hostname, hostname);
-url_getter!(mal_url_port, port);
-url_getter!(mal_url_pathname, pathname);
-url_getter!(mal_url_search, search);
-url_getter!(mal_url_hash, hash);
+url_getter!(mal_url_href, ada_get_href);
+url_getter!(mal_url_protocol, ada_get_protocol);
+url_getter!(mal_url_username, ada_get_username);
+url_getter!(mal_url_password, ada_get_password);
+url_getter!(mal_url_host, ada_get_host);
+url_getter!(mal_url_hostname, ada_get_hostname);
+url_getter!(mal_url_port, ada_get_port);
+url_getter!(mal_url_pathname, ada_get_pathname);
+url_getter!(mal_url_search, ada_get_search);
+url_getter!(mal_url_hash, ada_get_hash);
 
-/// origin is computed (returns an owned String), so it needs its own body.
 #[no_mangle]
-pub unsafe extern "C" fn mal_url_origin(
-    handle: *mut core::ffi::c_void,
-    out: *mut u8,
-    out_cap: i32,
-) -> i32 {
-    unsafe { write_utf8(&url_ref(handle).origin(), out, out_cap) }
+pub unsafe extern "C" fn mal_url_origin(handle: *mut c_void, out: *mut u8, capacity: i32) -> i32 {
+    let origin = unsafe { ada_get_origin(handle) };
+    let length = unsafe { origin.write(out, capacity) };
+    unsafe { ada_free_owned_string(origin) };
+    length
 }
 
-/// Define a setter taking a plain string (`set_href`/`set_protocol`). Returns
-/// whether ada accepted it.
-macro_rules! url_setter_str {
-    ($name:ident, $method:ident) => {
+macro_rules! url_setter {
+    ($name:ident, $method:ident $(, $is_null:ident)?) => {
         #[no_mangle]
         pub unsafe extern "C" fn $name(
-            handle: *mut core::ffi::c_void,
-            value: *const u16,
-            value_len: usize,
+            handle: *mut c_void,
+            input: *const u16,
+            length: usize,
+            $($is_null: bool,)?
         ) -> bool {
-            let v = unsafe { utf16_to_string(value, value_len) };
-            unsafe { url_mut(handle) }.$method(&v).is_ok()
+            extern "C" {
+                fn $method(url: *mut c_void, input: *const u8, length: usize) -> bool;
+            }
+            $(if $is_null { return unsafe { $method(handle, b"".as_ptr(), 0) }; })?
+            let value = unsafe { utf16_to_string(input, length) };
+            unsafe { $method(handle, value.as_ptr(), value.len()) }
         }
     };
 }
 
-url_setter_str!(mal_url_set_href, set_href);
-url_setter_str!(mal_url_set_protocol, set_protocol);
+url_setter!(mal_url_set_href, ada_set_href);
+url_setter!(mal_url_set_protocol, ada_set_protocol);
+url_setter!(mal_url_set_username, ada_set_username, is_null);
+url_setter!(mal_url_set_password, ada_set_password, is_null);
+url_setter!(mal_url_set_host, ada_set_host, is_null);
+url_setter!(mal_url_set_hostname, ada_set_hostname, is_null);
+url_setter!(mal_url_set_pathname, ada_set_pathname, is_null);
 
-/// Define a setter taking `Option<&str>` (an empty value clears the component when
-/// `is_null` is set). Returns whether ada accepted it.
-macro_rules! url_setter_opt {
-    ($name:ident, $method:ident) => {
+#[no_mangle]
+pub unsafe extern "C" fn mal_url_set_port(
+    handle: *mut c_void,
+    input: *const u16,
+    length: usize,
+    is_null: bool,
+) -> bool {
+    if is_null {
+        unsafe { ada_clear_port(handle) };
+        true
+    } else {
+        let value = unsafe { utf16_to_string(input, length) };
+        unsafe { ada_set_port(handle, value.as_ptr(), value.len()) }
+    }
+}
+
+macro_rules! url_set_suffix {
+    ($name:ident, $set:ident, $clear:ident) => {
         #[no_mangle]
         pub unsafe extern "C" fn $name(
-            handle: *mut core::ffi::c_void,
-            value: *const u16,
-            value_len: usize,
-            is_null: bool,
-        ) -> bool {
-            let v = if is_null {
-                None
+            handle: *mut c_void, input: *const u16, length: usize, is_null: bool,
+        ) {
+            extern "C" {
+                fn $set(url: *mut c_void, input: *const u8, length: usize);
+                fn $clear(url: *mut c_void);
+            }
+            if is_null {
+                unsafe { $clear(handle) };
             } else {
-                Some(unsafe { utf16_to_string(value, value_len) })
-            };
-            unsafe { url_mut(handle) }.$method(v.as_deref()).is_ok()
+                let value = unsafe { utf16_to_string(input, length) };
+                unsafe { $set(handle, value.as_ptr(), value.len()) };
+            }
         }
     };
 }
 
-url_setter_opt!(mal_url_set_username, set_username);
-url_setter_opt!(mal_url_set_password, set_password);
-url_setter_opt!(mal_url_set_host, set_host);
-url_setter_opt!(mal_url_set_hostname, set_hostname);
-url_setter_opt!(mal_url_set_port, set_port);
-url_setter_opt!(mal_url_set_pathname, set_pathname);
+url_set_suffix!(mal_url_set_search, ada_set_search, ada_clear_search);
+url_set_suffix!(mal_url_set_hash, ada_set_hash, ada_clear_hash);
 
-/// set_search / set_hash return () in ada (they always accept); expose as void.
-#[no_mangle]
-pub unsafe extern "C" fn mal_url_set_search(
-    handle: *mut core::ffi::c_void,
-    value: *const u16,
-    value_len: usize,
-    is_null: bool,
-) {
-    let v = if is_null {
-        None
-    } else {
-        Some(unsafe { utf16_to_string(value, value_len) })
-    };
-    unsafe { url_mut(handle) }.set_search(v.as_deref());
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mal_url_set_hash(
-    handle: *mut core::ffi::c_void,
-    value: *const u16,
-    value_len: usize,
-    is_null: bool,
-) {
-    let v = if is_null {
-        None
-    } else {
-        Some(unsafe { utf16_to_string(value, value_len) })
-    };
-    unsafe { url_mut(handle) }.set_hash(v.as_deref());
-}
-
-/// Node's url.domainToASCII / domainToUnicode: the hostname a special `ws://x` URL takes
-/// after `set_hostname(domain)`, or "" when that fails (src/node_url.cc). `unicode`
-/// then applies UTS #46 ToUnicode. Writes UTF-8 (probe with cap 0) and returns its length.
+/// The ASCII hostname a special URL takes after assignment. The Unicode
+/// form additionally applies Ada's UTS #46 conversion.
 #[no_mangle]
 pub unsafe extern "C" fn mal_url_domain_convert(
     input: *const u16,
     input_len: usize,
     unicode: bool,
     out: *mut u8,
-    out_cap: i32,
+    capacity: i32,
 ) -> i32 {
     let domain = unsafe { utf16_to_string(input, input_len) };
     if domain.is_empty() {
         return 0;
     }
-    let Ok(mut url) = Url::parse("ws://x", None) else {
-        return 0;
-    };
-    if url.set_hostname(Some(&domain)).is_err() {
-        return 0;
-    }
-    let host = url.hostname();
-    if unicode {
-        unsafe { write_utf8(&Idna::unicode(host), out, out_cap) }
+    let url = unsafe { ada_parse(b"ws://x".as_ptr(), b"ws://x".len()) };
+    let length = if unsafe { ada_set_hostname(url, domain.as_ptr(), domain.len()) } {
+        let host = unsafe { ada_get_hostname(url) };
+        if unicode {
+            let owned = unsafe { ada_idna_to_unicode(host.data, host.length) };
+            let length = unsafe { owned.write(out, capacity) };
+            unsafe { ada_free_owned_string(owned) };
+            length
+        } else {
+            unsafe { host.write(out, capacity) }
+        }
     } else {
-        unsafe { write_utf8(host, out, out_cap) }
-    }
+        0
+    };
+    unsafe { ada_free(url) };
+    length
 }

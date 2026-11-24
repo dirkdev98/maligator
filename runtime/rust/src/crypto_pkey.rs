@@ -6,6 +6,7 @@
 //! neither exports keys nor exposes RSA's CRT components. Handles are released with
 //! `mal_pkey_free`; no Rust panic or message string crosses the ABI.
 
+use alloc::{boxed::Box, format, vec, vec::Vec};
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{self, EcdsaKeyPair, Ed25519KeyPair, KeyPair, RsaKeyPair, UnparsedPublicKey};
 use rsa::pkcs1::{DecodeRsaPrivateKey, EncodeRsaPrivateKey, EncodeRsaPublicKey};
@@ -683,8 +684,19 @@ pub unsafe extern "C" fn mal_pkey_import_jwk(
 
 struct RsaRandom(SystemRandom);
 
+#[derive(Debug)]
+struct SystemEntropyUnavailable;
+
+impl core::fmt::Display for SystemEntropyUnavailable {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("System entropy unavailable")
+    }
+}
+
+impl core::error::Error for SystemEntropyUnavailable {}
+
 impl TryRng for RsaRandom {
-    type Error = std::io::Error;
+    type Error = SystemEntropyUnavailable;
 
     fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
         let mut bytes = [0; 4];
@@ -701,7 +713,7 @@ impl TryRng for RsaRandom {
     fn try_fill_bytes(&mut self, bytes: &mut [u8]) -> Result<(), Self::Error> {
         self.0
             .fill(bytes)
-            .map_err(|_| std::io::Error::other("System entropy unavailable"))
+            .map_err(|_| SystemEntropyUnavailable)
     }
 }
 

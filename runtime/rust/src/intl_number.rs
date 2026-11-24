@@ -1,3 +1,4 @@
+use alloc::{boxed::Box, string::{String, ToString}, vec};
 use crate::intl::parse_locale;
 use crate::intl_decimal::{supports_digits, DecimalProvider};
 use crate::intl_unit::{UnitFormat, UnitLocale, UnitSpec};
@@ -5,7 +6,7 @@ use core::fmt;
 use fixed_decimal::{Decimal, RoundingIncrement, Sign, SignedRoundingMode, UnsignedRoundingMode};
 use icu_decimal::provider::{DecimalDigitsV1, DecimalSymbolsV1};
 use icu_provider::prelude::*;
-use std::cell::RefCell;
+use core::cell::RefCell;
 use writeable::Writeable;
 
 struct NumberProvider {

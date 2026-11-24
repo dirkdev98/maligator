@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import * as path from "node:path";
 import { expect, it } from "vitest";
+import { TEMPORAL_INSTALLER } from "../src/compiler/frontend/engine-components.ts";
 import {
 	HOST_PERSONALITY_INSTALLER,
 	hostInstallerSymbol,
@@ -31,6 +32,16 @@ it.each(["node:tls", "node:constants", "maligator:internal/fetch"])(
 
 it("retains ring for drivers that resolve installers by name", () => {
 	expect(resolveNativeHostFeatures([], true).usesTlsOrCrypto).toBe(true);
+});
+
+it.each([
+	hostInstallerSymbol("node:tls"),
+	hostInstallerSymbol("node:crypto"),
+	TEMPORAL_INSTALLER,
+])("retains the full Rust archive for %s", (installer) => {
+	expect(resolveNativeHostFeatures([[{ installer, exports: [] }]]).usesRustStd).toBe(
+		true,
+	);
 });
 
 function withoutCommentsAndLiterals(source: string): string {

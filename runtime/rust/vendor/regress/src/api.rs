@@ -22,7 +22,6 @@ use crate::util::to_char_sat;
 
 #[cfg(not(feature = "std"))]
 use alloc::{
-    boxed::Box,
     string::{String, ToString},
     vec::Vec,
 };

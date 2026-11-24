@@ -19,13 +19,20 @@ crate-type = ["staticlib"]
 # Bundled IANA tzdb for Date's LocalTZA (deterministic offsets, not the host's
 # /usr/share/zoneinfo). The system zone *identity* still comes from TZ / the
 # /etc/localtime symlink via TimeZone::system().
-jiff = { version = "0.2.42", features = ["tzdb-bundle-always"] }
+jiff = { version = "0.2.42", default-features = false, features = [
+	"tzdb-bundle-always",
+	"tz-fat",
+	"perf-inline",
+] }
+libc = { version = "0.2", default-features = false }
+once_cell = { version = "1", default-features = false, features = ["alloc", "race"] }
 # Separate optional ICU4X components let Wasm builds compile only the selected
 # Intl services. Locale parsing, negotiation and result stringification use
 # icu_locale and writeable in every Intl build.
 icu_locale = { version = "2.4.0", optional = true }
 icu_provider = { version = "2.4.0", optional = true }
 fixed_decimal = { version = "0.7.3", optional = true }
+core_maths = { version = "0.1", optional = true }
 icu_collator = { version = "2.4.0", optional = true }
 icu_decimal = { version = "2.4.0", optional = true, features = ["alloc"] }
 icu_datetime = { version = "2.4.0", optional = true }
@@ -34,6 +41,7 @@ icu_time = { version = "2.4.0", optional = true, features = ["alloc"] }
 icu_plurals = { version = "2.4.0", optional = true }
 icu_list = { version = "2.4.0", optional = true, features = ["alloc"] }
 icu_segmenter = { version = "2.4.0", optional = true }
+hashbrown = { version = "0.17", optional = true }
 # Experimental ICU services (one crate for all three): DisplayNames,
 # RelativeTimeFormat, Duration. Their CLDR data is all-or-nothing at the crate level.
 icu_experimental = { version = "0.7.0", optional = true }
@@ -46,23 +54,25 @@ temporal_rs = { version = "0.2.6", default-features = false, optional = true }
 # rather than its own because two Rust staticlibs can't co-link (duplicate std
 # panic-runtime symbols). The `utf16` feature matches over &[u16] with no UTF-8
 # conversion. See src/regexp.rs.
-regress = { version = "0.12.0", path = "vendor/regress", features = [
+regress = { version = "0.12.0", path = "vendor/regress", default-features = false, features = [
+	"alloc",
+	"backend-pikevm",
 	"utf16",
 ], optional = true }
 # ada-url: the WHATWG URL parser (wraps the C++ `ada` library). Native links add
 # its C++ library and runtime only when the build selects `url` (src/rust-build.ts).
 # See src/url.rs.
-ada-url = { version = "4.0.0", optional = true }
-# Pure-Rust streaming codecs for the node:zlib backend. `zlib-rs` is selected
-# explicitly so enabling Node never introduces a system libz dependency.
-flate2 = { version = "1.1.11", default-features = false, features = [
-	"zlib-rs",
+ada-url = { version = "4.0.0", default-features = false, features = [
+	"bundled",
 ], optional = true }
-brotli-decompressor = { version = "6.3.1", optional = true }
+# Pure-Rust streaming codecs for the node:zlib backend. zlib-rs allocates
+# through libc on these targets without linking Rust's standard library.
+zlib-rs = { version = "0.6.8", default-features = false, features = [
+	"c-allocator",
+], optional = true }
+brotli-decompressor = { version = "6.3.1", default-features = false, optional = true }
 # Pure-Rust Brotli encoder (no C library); it shares brotli-decompressor above.
-brotli = { version = "9.1.1", default-features = false, features = [
-	"std",
-], optional = true }
+brotli = { version = "9.1.1", default-features = false, optional = true }
 # 0.23.46 or later: RUSTSEC-2026-0285.
 rustls = { version = "0.23.46", default-features = false, features = [
 	"ring",
@@ -91,14 +101,12 @@ poly1305 = { version = "0.9.1", default-features = false, optional = true }
 # Asymmetric signing for node:crypto; already in the tree through rustls.
 ring = { version = "0.17", optional = true }
 rsa = { version = "0.10.0", default-features = false, features = [
-	"std",
 	"encoding",
 ], optional = true }
 
-pkcs8 = { version = "0.11.0", features = [
+pkcs8 = { version = "0.11.0", default-features = false, features = [
 	"encryption",
 	"sha1-insecure",
-	"std",
 ], optional = true }
 
 zeroize = { version = "1.8", optional = true }
@@ -108,7 +116,15 @@ zeroize = { version = "1.8", optional = true }
 # configurations share; the final link keeps what the C runtime references.
 # Wasm builds select the features of their configuration
 # (normalizeNativeFeatures). jiff (tz) is non-optional and always builds.
-default = ["intl-full", "url", "regexp"]
+default = ["std", "intl-full", "url", "regexp"]
+
+std = [
+	"jiff/std",
+	"jiff/tz-system",
+	"jiff/tzdb-zoneinfo",
+	"jiff/tzdb-concatenated",
+	"regress?/std",
+]
 
 # The WHATWG URL surface: the ada-url (C++) parser.
 url = ["dep:ada-url"]
@@ -118,12 +134,12 @@ regexp = ["dep:regress"]
 
 # ECMAScript Temporal through temporal_rs's generated stable C interface. Its
 # compiled_data provider embeds deterministic IANA time-zone data.
-temporal = ["dep:temporal_capi", "temporal_capi/compiled_data"]
+temporal = ["std", "dep:temporal_capi", "temporal_capi/compiled_data"]
 
 # node:zlib flat codec primitives (deflate, gzip and Brotli, both directions).
-zlib = ["dep:flate2", "dep:brotli-decompressor", "dep:brotli"]
-tls = ["dep:rustls", "dep:ring"]
-node-argon2 = ["dep:rust-argon2"]
+zlib = ["dep:zlib-rs", "dep:brotli-decompressor", "dep:brotli"]
+tls = ["std", "dep:rustls", "dep:ring"]
+node-argon2 = ["std", "dep:rust-argon2"]
 node-crypto = [
 	"dep:aes",
 	"dep:ctr",
@@ -168,7 +184,12 @@ intl-date-time-format = [
 ]
 intl-plural-rules = ["intl", "dep:icu_plurals", "icu_plurals/compiled_data"]
 intl-list-format = ["intl", "dep:icu_list", "icu_list/compiled_data"]
-intl-segmenter = ["intl", "dep:icu_segmenter", "icu_segmenter/compiled_data"]
+intl-segmenter = [
+	"intl",
+	"dep:hashbrown",
+	"dep:icu_segmenter",
+	"icu_segmenter/compiled_data",
+]
 intl-display-names = ["intl", "dep:icu_experimental", "icu_experimental/compiled_data"]
 intl-relative-time-format = [
 	"intl",
@@ -182,6 +203,7 @@ intl-relative-time-format = [
 ]
 intl-duration-format = [
 	"intl",
+	"dep:core_maths",
 	"dep:temporal_rs",
 	"dep:fixed_decimal",
 	"dep:icu_decimal",

@@ -1,4 +1,4 @@
-use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress, Status};
+use zlib_rs::{Deflate, DeflateConfig, DeflateFlush, Inflate, InflateFlush, Status};
 
 use super::{
     Codec, PumpResult, MAL_ZLIB_FORMAT_GZIP, MAL_ZLIB_FORMAT_RAW, MAL_ZLIB_FORMAT_UNZIP,
@@ -8,11 +8,11 @@ use super::{
 
 enum DecodeState {
     Zlib {
-        decoder: Decompress,
+        decoder: Inflate,
         complete: bool,
     },
     Gzip {
-        decoder: Decompress,
+        decoder: Inflate,
         members: usize,
         at_member_boundary: bool,
         finished: bool,
@@ -23,14 +23,14 @@ enum DecodeState {
 impl DecodeState {
     fn zlib(header: bool) -> Self {
         Self::Zlib {
-            decoder: Decompress::new(header),
+            decoder: Inflate::new(header, 15),
             complete: false,
         }
     }
 
     fn gzip() -> Self {
         Self::Gzip {
-            decoder: Decompress::new_gzip(15),
+            decoder: Inflate::new(true, 16 + 15),
             members: 0,
             at_member_boundary: false,
             finished: false,
@@ -78,7 +78,7 @@ impl Codec for DeflateDecoder {
                 } else {
                     let before_in = decoder.total_in();
                     let before_out = decoder.total_out();
-                    match decoder.decompress(input, output, FlushDecompress::None) {
+                    match decoder.decompress(input, output, InflateFlush::NoFlush) {
                         Ok(status) => {
                             let consumed = (decoder.total_in() - before_in) as usize;
                             let produced = (decoder.total_out() - before_out) as usize;
@@ -141,19 +141,23 @@ pub(super) struct DeflateEncoder {
     format: u32,
     level: i32,
     bits: u8,
-    encoder: Compress,
+    encoder: Deflate,
     complete: bool,
 }
 
 impl DeflateEncoder {
     pub(super) fn new(format: u32, level: i32, window_bits: i32) -> Option<Self> {
-        // zlib raises an 8-bit deflate window to 9; flate2 panics instead.
+        // zlib raises an 8-bit deflate window to 9.
         let bits = window_bits.clamp(9, 15) as u8;
         let compression = deflate_level(level);
         let encoder = match format {
-            MAL_ZLIB_FORMAT_ZLIB => Compress::new_with_window_bits(compression, true, bits),
-            MAL_ZLIB_FORMAT_RAW => Compress::new_with_window_bits(compression, false, bits),
-            MAL_ZLIB_FORMAT_GZIP => Compress::new_gzip(compression, bits),
+            MAL_ZLIB_FORMAT_ZLIB => Deflate::new(compression, true, bits),
+            MAL_ZLIB_FORMAT_RAW => Deflate::new(compression, false, bits),
+            MAL_ZLIB_FORMAT_GZIP => Deflate::new_with_config(DeflateConfig {
+                window_bits: 16 + i32::from(bits),
+                level: compression,
+                ..DeflateConfig::default()
+            }),
             _ => return None,
         };
         Some(Self {
@@ -175,11 +179,11 @@ impl Codec for DeflateEncoder {
             (0, 0, MAL_ZLIB_STATUS_STREAM_END)
         } else {
             let mode = match flush {
-                0 => FlushCompress::None,
-                2 => FlushCompress::Sync,
-                3 => FlushCompress::Full,
-                4 => FlushCompress::Finish,
-                _ => FlushCompress::Partial,
+                0 => DeflateFlush::NoFlush,
+                2 => DeflateFlush::SyncFlush,
+                3 => DeflateFlush::FullFlush,
+                4 => DeflateFlush::Finish,
+                _ => DeflateFlush::PartialFlush,
             };
             let before_in = encoder.total_in();
             let before_out = encoder.total_out();
@@ -212,17 +216,17 @@ impl Codec for DeflateEncoder {
     fn set_level(&mut self, level: i32) -> i32 {
         self.level = level;
         match self.encoder.set_level(deflate_level(level)) {
-            Ok(()) => MAL_ZLIB_STATUS_NEED_INPUT,
-            Err(_) => MAL_ZLIB_STATUS_NEED_OUTPUT,
+            Ok(Status::Ok) => MAL_ZLIB_STATUS_NEED_INPUT,
+            _ => MAL_ZLIB_STATUS_NEED_OUTPUT,
         }
     }
 }
 
-fn deflate_level(level: i32) -> Compression {
+fn deflate_level(level: i32) -> i32 {
     if (0..=9).contains(&level) {
-        Compression::new(level as u32)
+        level
     } else {
-        Compression::default()
+        6
     }
 }
 
@@ -246,7 +250,7 @@ fn stream_status(
 }
 
 fn pump_gzip(
-    decoder: &mut Decompress,
+    decoder: &mut Inflate,
     members: &mut usize,
     at_member_boundary: &mut bool,
     input: &[u8],
@@ -260,7 +264,7 @@ fn pump_gzip(
             if consumed == input.len() {
                 return (consumed, produced, MAL_ZLIB_STATUS_NEED_INPUT);
             }
-            *decoder = Decompress::new_gzip(15);
+            *decoder = Inflate::new(true, 16 + 15);
             *at_member_boundary = false;
         }
 
@@ -269,7 +273,7 @@ fn pump_gzip(
         let status = match decoder.decompress(
             &input[consumed..],
             &mut output[produced..],
-            FlushDecompress::None,
+            InflateFlush::NoFlush,
         ) {
             Ok(status) => status,
             Err(_) => {

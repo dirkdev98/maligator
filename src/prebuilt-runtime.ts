@@ -43,6 +43,7 @@ export const RUNTIME_ARCHIVES = {
 } as const;
 const runtimeArchiveNames: ReadonlyArray<string> = Object.values(RUNTIME_ARCHIVES);
 export const RUST_LIBRARY_OUTPUT = "libmal_rust.a";
+export const RUST_NO_STD_OUTPUT = "libmal_rust_no_std.a";
 export const NATIVE_OUTPUT_PREFIX = "native.";
 export const ADA_NO_EXCEPTIONS_OUTPUT = `${NATIVE_OUTPUT_PREFIX}ada-url.libcxx-noexceptions.a`;
 export const DEVELOPMENT_RUNNER = "maligator-dev";
@@ -281,7 +282,7 @@ const runnerSourceDirectories = [
 	"vendor/llhttp/src",
 	"vendor/sqlite",
 ];
-const runnerSourceExtension = /\.(?:c|h|inc|rs|toml|lock)$/;
+const runnerSourceExtension = /\.(?:c|h|inc|cpp|rs|toml|lock)$/;
 const runnerMainSource = "dev_main.c";
 const ignoredRunnerDirectories = ["rust/target", "rust/.cache"];
 
@@ -384,8 +385,12 @@ function validArchiveNames(
 			archive === undefined ? [] : [`native.ada-url.${license}.a`],
 		),
 	];
-	const optional =
-		prebuiltRuntimeTarget(target).platform === "linux" ? [ADA_NO_EXCEPTIONS_OUTPUT] : [];
+	const optional = [
+		RUST_NO_STD_OUTPUT,
+		...(prebuiltRuntimeTarget(target).platform === "linux"
+			? [ADA_NO_EXCEPTIONS_OUTPUT]
+			: []),
+	];
 	return (
 		new Set(names).size === names.length &&
 		required.every((name) => names.includes(name)) &&

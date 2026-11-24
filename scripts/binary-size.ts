@@ -30,6 +30,11 @@ interface LinkedSymbol {
 
 const forbiddenComponents = {
 	brotli: ({ crate }) => crate === "brotli" || crate === "brotli_decompressor",
+	"Rust backtrace": ({ crate, symbol }) =>
+		crate === "gimli" ||
+		crate === "addr2line" ||
+		crate === "rustc_demangle" ||
+		(crate === "std" && symbol.includes("backtrace_rs")),
 	// Rust can merge identical codec tables under either crate's constant name.
 	"Brotli encoder": ({ crate, symbol, instruction }) =>
 		(instruction && crate === "brotli") || symbol === "_mal_zlib_create_brotli_encoder",
@@ -111,6 +116,7 @@ const fixtures: Array<{
 		bun: true,
 		forbidden: [
 			"HTTP client",
+			"Rust backtrace",
 			"TLS",
 			"ring",
 			"Ada",
@@ -131,7 +137,15 @@ const fixtures: Array<{
 		name: "serve",
 		file: "bench/size/serve.mjs",
 		bun: false,
-		forbidden: ["brotli", "rustls", "ring", "Node runtime", "sqlite3.o", "argon2"],
+		forbidden: [
+			"brotli",
+			"rustls",
+			"ring",
+			"Node runtime",
+			"sqlite3.o",
+			"argon2",
+			"Rust backtrace",
+		],
 	},
 	{
 		name: "fetch",
@@ -186,7 +200,7 @@ const fixtures: Array<{
 		name: "express",
 		file: "bench/http/express-server.cjs",
 		bun: true,
-		forbidden: ["Brotli encoder", "rustls", "argon2"],
+		forbidden: ["Brotli encoder", "rustls", "argon2", "Rust backtrace"],
 	},
 ];
 

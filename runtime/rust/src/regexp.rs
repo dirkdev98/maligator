@@ -18,9 +18,10 @@
 //! or global execution and owns lastIndex; allocation-free code-unit plans can
 //! fill a batch of nonoverlapping matches. Sticky matches start at the supplied position.
 
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::sync::Arc;
+use alloc::{boxed::Box, string::String, vec, vec::Vec};
+use core::cell::RefCell;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
 
 use regress::{AsciiMatches, AsciiScratch, Flags, Match, Regex, WideScratch};
 
@@ -1271,7 +1272,7 @@ struct PatternCacheEntry {
     fast: Option<Arc<FastPattern>>,
 }
 
-thread_local! {
+crate::thread_local! {
     /// RegExp construction is thread-confined by the runtime, so a small local
     /// cache avoids synchronization while bounding retained patterns.
     static PATTERN_CACHE: RefCell<VecDeque<PatternCacheEntry>> =

@@ -11,7 +11,7 @@ import {
 	readArtifactAction,
 	withArtifactActionLock,
 } from "./artifact-store.ts";
-import { platformLinkArgs, unwindTableCcFlags } from "./build-flags.ts";
+import { platformLinkArgs, sanitizerMode, unwindTableCcFlags } from "./build-flags.ts";
 import { cargoCacheDirectory } from "./cache-root.ts";
 import {
 	hashDirectoryTrees,
@@ -29,6 +29,7 @@ import {
 	prebuiltRustKey,
 	readPrebuiltRust,
 	RUST_LIBRARY_OUTPUT,
+	RUST_NO_STD_OUTPUT,
 } from "./prebuilt-runtime.ts";
 import type { PrebuiltRuntime } from "./prebuilt-runtime.ts";
 import {
@@ -86,7 +87,7 @@ export function rustArtifactKey(inputs: RustArtifactKeyInputs): string {
 	return artifactActionKey(RUST_PRODUCER, inputs);
 }
 
-export const RUST_PRODUCER = artifactProducer("rust-library", 6, "cargo-build");
+export const RUST_PRODUCER = artifactProducer("rust-library", 7, "cargo-build");
 const RUST_TARGET_PRODUCER = artifactProducer("rust-target", 1, "cargo-build");
 
 type RustArchiveInputs = Pick<
@@ -283,14 +284,43 @@ function cargoNativeToolEnvironment(
 	return environment;
 }
 
+function usesNoStdRust(context: NativeBuildContext): boolean {
+	const { sectionGcLinkArgs, linkAllRustComponents } = context.toolchain.probes;
+	const platform = context.toolchain.platform ?? process.platform;
+	return (
+		(platform === "linux" || platform === "darwin") &&
+		!context.features.usesRustStd &&
+		!context.features.evalEnabled &&
+		!context.features.realmsEnabled &&
+		sectionGcLinkArgs.length > 0 &&
+		linkAllRustComponents !== true &&
+		sanitizerMode(context.environment) === "none"
+	);
+}
+
 /**
- * Resolve exact Cargo arguments and content-addressed paths from one native
- * context. Native builds compile every Cargo feature, so the archive is keyed by
- * sources, target and tools only; each link keeps what its C references reach.
+ * Resolve the shared Rust archive for this link. The compact archive keeps the
+ * feature providers that can run without std. Section GC handles finer selection.
  */
 export function resolveRustArtifacts(context: NativeBuildContext): RustBuildPlan {
 	const rustDirectory = path.join(context.runtimeDirectory, "rust");
-	const cargoArguments = ["build", "--release", "--all-features"];
+	const cargoArguments = [
+		"build",
+		"--release",
+		...(usesNoStdRust(context)
+			? [
+					"--no-default-features",
+					"--features",
+					[
+						"url",
+						"regexp",
+						"zlib",
+						"node-crypto",
+						...(context.features.usesRustIntl ? ["intl-full"] : []),
+					].join(","),
+				]
+			: ["--all-features"]),
+	];
 	if (context.toolchain.cross === true) {
 		cargoArguments.push("--target", context.toolchain.rustTarget);
 	}
@@ -354,7 +384,11 @@ function resolvedRustArtifacts(
 	prebuilt = false,
 	plan?: RustBuildPlan,
 ): RustArtifacts {
-	const library = artifactOutput(action, RUST_LIBRARY_OUTPUT).path;
+	const library =
+		(!context.features.usesRustIntl &&
+			usesNoStdRust(context) &&
+			action.outputs.find(({ name }) => name === RUST_NO_STD_OUTPUT)?.path) ||
+		artifactOutput(action, RUST_LIBRARY_OUTPUT).path;
 	const nativeComponents = action.outputs.flatMap((output) =>
 		output.name.startsWith(NATIVE_OUTPUT_PREFIX)
 			? [

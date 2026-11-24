@@ -500,7 +500,7 @@ unsafe fn slice<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
     if len == 0 || ptr.is_null() {
         &[]
     } else {
-        unsafe { std::slice::from_raw_parts(ptr, len) }
+        unsafe { core::slice::from_raw_parts(ptr, len) }
     }
 }
 
@@ -508,14 +508,14 @@ unsafe fn slice_mut<'a>(ptr: *mut u8, len: usize) -> &'a mut [u8] {
     if len == 0 || ptr.is_null() {
         &mut []
     } else {
-        unsafe { std::slice::from_raw_parts_mut(ptr, len) }
+        unsafe { core::slice::from_raw_parts_mut(ptr, len) }
     }
 }
 
 /// Bytes the caller must provide for one cipher state.
 #[unsafe(no_mangle)]
 pub extern "C" fn mal_cipher_state_size() -> usize {
-    std::mem::size_of::<MalCipher>()
+    core::mem::size_of::<MalCipher>()
 }
 
 /// Builds a cipher in caller-owned storage. The state owns no heap memory, so
@@ -535,14 +535,14 @@ pub unsafe extern "C" fn mal_cipher_init(
     iv_len: usize,
 ) -> i32 {
     if storage.is_null()
-        || size < std::mem::size_of::<MalCipher>()
-        || !(storage as usize).is_multiple_of(std::mem::align_of::<MalCipher>())
+        || size < core::mem::size_of::<MalCipher>()
+        || !(storage as usize).is_multiple_of(core::mem::align_of::<MalCipher>())
     {
         return MAL_CIPHER_INVALID_STATE;
     }
     match unsafe { MalCipher::new(kind, encrypt, slice(key, key_len), slice(iv, iv_len)) } {
         Ok(cipher) => {
-            unsafe { std::ptr::write(storage as *mut MalCipher, cipher) };
+            unsafe { core::ptr::write(storage as *mut MalCipher, cipher) };
             MAL_CIPHER_OK
         }
         Err(code) => code,

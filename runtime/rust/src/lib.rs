@@ -13,6 +13,20 @@
 //!     Regexp patterns/subjects cross as UTF-16 (see src/regexp.rs).
 
 #![deny(unsafe_op_in_unsafe_fn)]
+#![cfg_attr(not(any(feature = "std", test)), no_std)]
+
+extern crate alloc;
+
+#[cfg(not(any(feature = "std", test)))]
+mod native_alloc;
+#[cfg(not(any(feature = "std", test)))]
+mod native_thread_local;
+#[cfg(not(any(feature = "std", test)))]
+mod native_timezone;
+#[cfg(not(any(feature = "std", test)))]
+pub(crate) use native_thread_local::tls_slot as thread_local;
+#[cfg(any(feature = "std", test))]
+pub(crate) use std::thread_local;
 
 mod ffi;
 mod number_format;
@@ -90,6 +104,10 @@ mod intl_decimal;
 
 #[cfg(feature = "intl")]
 mod intl {
+use alloc::boxed::Box;
+use alloc::string::{String, ToString};
+#[cfg(feature = "intl-segmenter")]
+use alloc::vec::Vec;
 use crate::ffi::{nullable_slice, nullable_u16_slice, write_utf8};
 
 /// Parse a BCP-47 tag from a UTF-8 buffer into an ICU4X Locale.
@@ -260,12 +278,12 @@ fn new_default_collator() -> Option<icu_collator::CollatorBorrowed<'static>> {
 }
 
 #[cfg(feature = "intl-collator")]
-thread_local! {
+crate::thread_local! {
     /// String#localeCompare with omitted locales/options uses this exact immutable
     /// default plan. ICU4X's borrowed collator is not Sync, while each VM mutator
     /// stays on one thread, so TLS avoids both synchronization and per-call setup.
-    static DEFAULT_COLLATOR: std::cell::OnceCell<Option<icu_collator::CollatorBorrowed<'static>>> =
-        const { std::cell::OnceCell::new() };
+    static DEFAULT_COLLATOR: core::cell::OnceCell<Option<icu_collator::CollatorBorrowed<'static>>> =
+        const { core::cell::OnceCell::new() };
 }
 
 /// Build a Collator for `locale` with ECMA-402-mapped options. Returns an opaque
@@ -326,10 +344,10 @@ fn new_collator(locale: icu_locale::Locale, strength: i32, case_level: i32, nume
 type CachedCollation = (Vec<u8>, i32, icu_collator::CollatorBorrowed<'static>);
 
 #[cfg(feature = "intl-collator")]
-thread_local! {
+crate::thread_local! {
     // Borrowed ICU plans are not Sync; bounded TLS owns no VM or JavaScript references.
-    static PREPARED_COLLATORS: std::cell::RefCell<std::collections::VecDeque<CachedCollation>> =
-        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+    static PREPARED_COLLATORS: core::cell::RefCell<alloc::collections::VecDeque<CachedCollation>> =
+        const { core::cell::RefCell::new(alloc::collections::VecDeque::new()) };
 }
 
 #[cfg(feature = "intl-collator")]
@@ -517,9 +535,9 @@ pub(super) fn sign_display_from_code(code: i32) -> icu_decimal::input::SignDispl
 }
 
 #[cfg(feature = "intl-number-format")]
-std::thread_local! {
-    static DEFAULT_EN_US_NUMBER_FORMATTER: std::cell::OnceCell<icu_decimal::DecimalFormatter> =
-        const { std::cell::OnceCell::new() };
+crate::thread_local! {
+    static DEFAULT_EN_US_NUMBER_FORMATTER: core::cell::OnceCell<icu_decimal::DecimalFormatter> =
+        const { core::cell::OnceCell::new() };
 }
 
 #[cfg(feature = "intl-number-format")]
@@ -571,16 +589,16 @@ pub unsafe extern "C" fn mal_i18n_number_format_default_en_us(
 
 
 #[cfg(feature = "intl-date-time-format")]
-std::thread_local! {
-    static DEFAULT_EN_US_DATE_TIME_FORMATTER: std::cell::OnceCell<
+crate::thread_local! {
+    static DEFAULT_EN_US_DATE_TIME_FORMATTER: core::cell::OnceCell<
         Option<icu_datetime::DateTimeFormatter<icu_datetime::fieldsets::YMDT>>,
-    > = const { std::cell::OnceCell::new() };
-    static DEFAULT_EN_US_DATE_FORMATTER: std::cell::OnceCell<
+    > = const { core::cell::OnceCell::new() };
+    static DEFAULT_EN_US_DATE_FORMATTER: core::cell::OnceCell<
         Option<icu_datetime::DateTimeFormatter<icu_datetime::fieldsets::YMD>>,
-    > = const { std::cell::OnceCell::new() };
-    static DEFAULT_EN_US_TIME_FORMATTER: std::cell::OnceCell<
+    > = const { core::cell::OnceCell::new() };
+    static DEFAULT_EN_US_TIME_FORMATTER: core::cell::OnceCell<
         Option<icu_datetime::DateTimeFormatter<icu_datetime::fieldsets::T>>,
-    > = const { std::cell::OnceCell::new() };
+    > = const { core::cell::OnceCell::new() };
 }
 
 #[cfg(feature = "intl-date-time-format")]
@@ -1253,7 +1271,11 @@ pub unsafe extern "C" fn mal_i18n_segment(
     let s = String::from_utf16_lossy(u);
 
     // Map each UTF-8 byte offset (on a char boundary) to a UTF-16 index in `s`.
-    let mut byte_to_utf16: std::collections::HashMap<usize, i32> = std::collections::HashMap::new();
+    #[cfg(any(feature = "std", test))]
+    use std::collections::HashMap;
+    #[cfg(not(any(feature = "std", test)))]
+    use hashbrown::HashMap;
+    let mut byte_to_utf16: HashMap<usize, i32> = HashMap::new();
     let mut utf16: i32 = 0;
     for (b, c) in s.char_indices() {
         byte_to_utf16.insert(b, utf16);
@@ -1413,8 +1435,16 @@ pub extern "C" fn mal_i18n_spike_roundtrip(x: u32) -> u32 {
 // ---------------------------------------------------------------------------
 
 fn system_time_zone() -> &'static jiff::tz::TimeZone {
-    static TZ: std::sync::OnceLock<jiff::tz::TimeZone> = std::sync::OnceLock::new();
-    TZ.get_or_init(jiff::tz::TimeZone::system)
+    #[cfg(any(feature = "std", test))]
+    {
+        static TZ: std::sync::OnceLock<jiff::tz::TimeZone> = std::sync::OnceLock::new();
+        TZ.get_or_init(jiff::tz::TimeZone::system)
+    }
+    #[cfg(not(any(feature = "std", test)))]
+    {
+        static TZ: once_cell::race::OnceBox<jiff::tz::TimeZone> = once_cell::race::OnceBox::new();
+        TZ.get_or_init(|| alloc::boxed::Box::new(native_timezone::system()))
+    }
 }
 
 /// Project an ECMAScript Date instant into Jiff's supported span. Gregorian
@@ -1451,37 +1481,11 @@ fn offset_ms_at(tz: &jiff::tz::TimeZone, epoch_ms: i64) -> i64 {
     tz.to_offset(date_offset_timestamp(epoch_ms)).seconds() as i64 * 1000
 }
 
-thread_local! {
-    /// Date getter/render loops commonly project the same [[DateValue]] several
-    /// times. The system zone is process-immutable after `system_time_zone()` is
-    /// initialized, so an exact instant cache avoids repeating Jiff's transition
-    /// lookup without broadening the result across a DST boundary.
-    static DATE_OFFSET_CACHE: std::cell::Cell<(i64, i64)> =
-        const { std::cell::Cell::new((i64::MIN, 0)) };
-}
-
-fn cached_offset_ms_at(tz: &jiff::tz::TimeZone, epoch_ms: i64) -> i64 {
-    // i64::MIN is the empty-key sentinel. It is outside ECMAScript's Date range,
-    // but keep the flat FFI helper correct for that input by bypassing the cache.
-    if epoch_ms == i64::MIN {
-        return offset_ms_at(tz, epoch_ms);
-    }
-    DATE_OFFSET_CACHE.with(|cache| {
-        let (cached_epoch_ms, cached_offset_ms) = cache.get();
-        if cached_epoch_ms == epoch_ms {
-            return cached_offset_ms;
-        }
-        let offset_ms = offset_ms_at(tz, epoch_ms);
-        cache.set((epoch_ms, offset_ms));
-        offset_ms
-    })
-}
-
 /// LocalTZA(epoch_ms): the system zone's offset (ms east of UTC) at that UTC
 /// instant. The C side computes LocalTime(t) = t + this.
 #[no_mangle]
 pub extern "C" fn mal_i18n_local_offset_ms(epoch_ms: i64) -> i64 {
-    cached_offset_ms_at(system_time_zone(), epoch_ms)
+    offset_ms_at(system_time_zone(), epoch_ms)
 }
 
 fn compatible_offset_ms_from_local(
@@ -1519,7 +1523,7 @@ pub extern "C" fn mal_i18n_utc_from_local_ms(local_ms: i64) -> i64 {
 /// as UTF-8, up to `cap` bytes. Returns the full byte length (probe with cap=0).
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_local_tz_name(buf: *mut u8, cap: i32) -> i32 {
-    let name = system_time_zone().iana_name().unwrap_or("UTC");
+    let name = system_time_zone().iana_name().filter(|name| !name.is_empty()).unwrap_or("UTC");
     unsafe { ffi::write_utf8(name, buf, cap) }
 }
 

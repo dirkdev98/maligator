@@ -423,6 +423,8 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 			"--release",
 			"--locked",
 			"--no-default-features",
+			"--features",
+			"std",
 		];
 		const rustFlags = [`--remap-path-prefix=${runtime}=<runtime>`];
 		const rustInputs = {

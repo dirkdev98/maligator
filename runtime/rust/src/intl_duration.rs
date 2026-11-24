@@ -1,3 +1,6 @@
+use alloc::{boxed::Box, string::String, vec::Vec};
+#[cfg(not(any(feature = "std", test)))]
+use core_maths::CoreFloat;
 use crate::intl_decimal::{supports_digits, DecimalProvider};
 use core::fmt;
 use icu_decimal::input::Decimal;

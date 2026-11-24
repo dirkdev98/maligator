@@ -2,7 +2,8 @@
 //! X.509 DER reading shared by node:tls peer certificates and node:crypto's X509Certificate.
 //! Every function borrows its input; nothing is retained.
 
-use std::borrow::Cow;
+use alloc::{format, string::{String, ToString}, vec::Vec};
+use alloc::borrow::Cow;
 
 pub(crate) fn der(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
     let (&tag, rest) = input.split_first()?;
@@ -543,6 +544,7 @@ pub(crate) fn signature_algorithm_name(oid: &[u8]) -> Option<&'static str> {
 
 /// OpenSSL's self-signed test without the signature check: the issuer is the subject, and the
 /// authority key identifier, when both identifiers are present, names the certificate's own key.
+#[cfg(feature = "tls")]
 pub(crate) fn self_issued(certificate: &[u8]) -> bool {
     let Some(parsed) = parse(certificate) else {
         return false;

@@ -1,6 +1,7 @@
 //! node:crypto X509Certificate primitives over the shared DER reader. Inputs are borrowed for
 //! one call; outputs are written to caller buffers and report their full length.
 
+use alloc::{string::ToString, vec::Vec};
 use crate::crypto_pkey::{base64_decode, base64_encode_lines};
 use crate::x509::{
     der, hex, info_access_text, name_lines, oid_text, parse, push_record, signature_algorithm_name,

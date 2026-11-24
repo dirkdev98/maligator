@@ -6,6 +6,7 @@
 mod brotli;
 mod deflate;
 
+use alloc::boxed::Box;
 use self::brotli::{BrotliDecoder, BrotliEncoder};
 use deflate::{DeflateDecoder, DeflateEncoder};
 

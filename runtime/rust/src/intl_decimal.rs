@@ -1,6 +1,7 @@
+use alloc::{borrow::ToOwned, boxed::Box};
 use icu_decimal::provider::{DecimalDigitsV1, DecimalSymbolsV1};
 use icu_provider::prelude::*;
-use std::cell::RefCell;
+use core::cell::RefCell;
 
 #[path = "intl_decimal_digits.rs"]
 mod data;

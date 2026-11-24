@@ -346,7 +346,18 @@ static f64 date_local_time(f64 t) {
     if (!isfinite(t) || fabs(t) > MAX_TIME) {
         return t;
     }
-    return t + (f64) mal_i18n_local_offset_ms((i64) t);
+    // The selected zone is process-immutable. Exact instants keep repeated
+    // getters out of the timezone provider without broadening across DST.
+    static MAL_ISOLATE_LOCAL struct {
+        i64 epoch_ms;
+        i64 offset_ms;
+    } cache = {.epoch_ms = INT64_MIN};
+    i64 epoch_ms = (i64) t;
+    if (cache.epoch_ms != epoch_ms) {
+        cache.offset_ms = mal_i18n_local_offset_ms(epoch_ms);
+        cache.epoch_ms = epoch_ms;
+    }
+    return t + (f64) cache.offset_ms;
 }
 
 /** UTC(t): local -> UTC. The shim resolves DST gap/overlap disambiguation. */

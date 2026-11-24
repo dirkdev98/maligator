@@ -1,3 +1,4 @@
+use alloc::{boxed::Box, format, string::String};
 use crate::intl_decimal::{supports_digits, DecimalProvider};
 use core::fmt;
 use icu_decimal::input::Decimal;
@@ -352,7 +353,7 @@ pub unsafe extern "C" fn mal_i18n_relative_time_format(
 
     // Auto lookup uses the unrounded value: 1.0004 formats numerically even
     // though the number formatter rounds it to 1. Both zeros look up "0".
-    let literal = if plan.auto && value.fract() == 0.0 && (-128.0..=127.0).contains(&value) {
+    let literal = if plan.auto && (-128.0..=127.0).contains(&value) && value == f64::from(value as i8) {
         data.get_relative(value as i8)
     } else {
         None

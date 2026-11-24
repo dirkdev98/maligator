@@ -187,14 +187,17 @@ normalization engine and, when the policy allows it, the RegExp engine.
 
 ## Rust archive
 
-Native builds compile the Rust crate once with every Cargo feature and the release
-profile's fat LTO into one codegen unit. Every link passes the linker's
-unused-section flag (`-dead_strip` or `--gc-sections`), so a binary keeps only the
-Rust functions and data its C runtime references. Disabled Intl services, TLS and
-codecs never reach the binary, while one codegen unit keeps shared Rust code from
-being duplicated. Where that flag works on ELF targets, runtime C objects compile with
-`-ffunction-sections -fdata-sections` too, so section removal works per function
-there as Mach-O's per-symbol sections do.
+Native builds select one Rust archive. Fixed images whose providers can run
+without Rust's standard library use the `no_std` archive. Rustls I/O, Argon2 and
+Temporal's TZif provider use the full archive. Drivers that resolve installers
+by name, eval and realms also use the full archive. Release packages keep ICU
+data in the full archive. A source build can include ICU in the `no_std` archive.
+
+The Rust release profile uses fat LTO with one codegen unit to share code across
+providers. The linker's unused-section flag (`-dead_strip` or `--gc-sections`)
+then keeps the Rust functions and data the C runtime references. Where that
+flag works on ELF targets, runtime C builds use `-ffunction-sections
+-fdata-sections` for per-function removal.
 
 Native builds publish Ada and ring beside the Rust archive. A link from fixed
 images selects Ada and its C++ runtime from the application and worker installer

@@ -1,16 +1,53 @@
+use alloc::{boxed::Box, vec};
 use brotli::enc::encode::{
     BrotliEncoderDestroyInstance, BrotliEncoderOperation, BrotliEncoderParameter,
     BrotliEncoderStateStruct,
 };
-use brotli_decompressor::{BrotliDecompressStream, BrotliResult, BrotliState, StandardAlloc};
+use brotli::enc::BrotliAlloc;
+use brotli::{Allocator, SliceWrapper, SliceWrapperMut};
+use brotli_decompressor::{BrotliDecompressStream, BrotliResult, BrotliState};
 
 use super::{
     Codec, PumpResult, MAL_ZLIB_STATUS_DATA_ERROR, MAL_ZLIB_STATUS_INVALID_ARGUMENT,
     MAL_ZLIB_STATUS_NEED_INPUT, MAL_ZLIB_STATUS_NEED_OUTPUT, MAL_ZLIB_STATUS_STREAM_END,
 };
 
+struct Block<T>(Box<[T]>);
+
+impl<T> Default for Block<T> {
+    fn default() -> Self {
+        Self(Box::default())
+    }
+}
+
+impl<T> SliceWrapper<T> for Block<T> {
+    fn slice(&self) -> &[T] {
+        &self.0
+    }
+}
+
+impl<T> SliceWrapperMut<T> for Block<T> {
+    fn slice_mut(&mut self) -> &mut [T] {
+        &mut self.0
+    }
+}
+
+struct BrotliAllocator;
+
+impl BrotliAlloc for BrotliAllocator {}
+
+impl<T: Clone + Default> Allocator<T> for BrotliAllocator {
+    type AllocatedMemory = Block<T>;
+
+    fn alloc_cell(&mut self, len: usize) -> Block<T> {
+        Block(vec![T::default(); len].into_boxed_slice())
+    }
+
+    fn free_cell(&mut self, _data: Block<T>) {}
+}
+
 pub(super) struct BrotliDecoder {
-    decoder: BrotliState<StandardAlloc, StandardAlloc, StandardAlloc>,
+    decoder: BrotliState<BrotliAllocator, BrotliAllocator, BrotliAllocator>,
     total_out: usize,
     complete: bool,
 }
@@ -19,9 +56,9 @@ impl BrotliDecoder {
     pub(super) fn new() -> Self {
         Self {
             decoder: BrotliState::new(
-                StandardAlloc::default(),
-                StandardAlloc::default(),
-                StandardAlloc::default(),
+                BrotliAllocator,
+                BrotliAllocator,
+                BrotliAllocator,
             ),
             total_out: 0,
             complete: false,
@@ -76,14 +113,14 @@ impl Codec for BrotliDecoder {
 }
 
 pub(super) struct BrotliEncoder {
-    encoder: BrotliEncoderStateStruct<StandardAlloc>,
+    encoder: BrotliEncoderStateStruct<BrotliAllocator>,
     complete: bool,
 }
 
 impl BrotliEncoder {
     pub(super) fn new() -> Self {
         Self {
-            encoder: BrotliEncoderStateStruct::new(StandardAlloc::default()),
+            encoder: BrotliEncoderStateStruct::new(BrotliAllocator),
             complete: false,
         }
     }

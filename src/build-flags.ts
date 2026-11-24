@@ -81,8 +81,12 @@ export interface NativeFeatureInput {
 	usesUrlParser?: boolean;
 	/** Selects the shared native assembly provider for TLS and Node crypto. */
 	usesTlsOrCrypto?: boolean;
+	/** An image can reach a native provider that needs Rust's standard library. */
+	usesRustStd?: boolean;
+	/** An image installs an ICU provider. */
+	usesRustIntl?: boolean;
 	regexpEnabled?: boolean;
-	/** Selects the Temporal Cargo feature for Wasm; native archives always contain Temporal. */
+	/** Selects the Temporal Cargo feature for Wasm and permits its native installer. */
 	temporalEnabled?: boolean;
 	/** `-DMAL_PROFILE=1` for the production-faithful profiling runtime. */
 	profileEnabled?: boolean;
@@ -94,15 +98,15 @@ export interface NativeFeatureInput {
 
 export type NativeHostFeatures = Pick<
 	NativeFeatureInput,
-	"usesHost" | "usesUrlParser" | "usesTlsOrCrypto"
+	"usesHost" | "usesUrlParser" | "usesTlsOrCrypto" | "usesRustStd" | "usesRustIntl"
 >;
 
 /**
  * Normalized feature identity shared by C compilation and the Rust link.
  * `cDefines` are the exact, sorted C arguments. `cargoFeatures` name the Rust
- * components the build selects: Wasm compiles exactly those, while native
- * builds compile every feature and link the selected components' native
- * libraries. Both are always derived together.
+ * components the build selects. Wasm compiles the selected Cargo features.
+ * Native links use the installer requirements to choose an archive and
+ * the selected components' native libraries.
  */
 export interface NativeFeatureSpec {
 	primordialsLocked: boolean;
@@ -112,6 +116,8 @@ export interface NativeFeatureSpec {
 	usesHost: boolean;
 	usesUrlParser: boolean;
 	usesTlsOrCrypto: boolean;
+	usesRustStd: boolean;
+	usesRustIntl: boolean;
 	regexpEnabled: boolean;
 	temporalEnabled: boolean;
 	profileEnabled: boolean;
@@ -136,6 +142,8 @@ export function normalizeNativeFeatures(
 	const usesHost = input.usesHost ?? true;
 	const usesUrlParser = input.usesUrlParser ?? usesHost;
 	const usesTlsOrCrypto = input.usesTlsOrCrypto ?? usesHost;
+	const usesRustStd = input.usesRustStd ?? true;
+	const usesRustIntl = input.usesRustIntl ?? true;
 	const regexpEnabled = input.regexpEnabled ?? true;
 	const temporalEnabled = input.temporalEnabled ?? true;
 	const profileEnabled = input.profileEnabled ?? false;
@@ -174,6 +182,8 @@ export function normalizeNativeFeatures(
 		usesHost,
 		usesUrlParser,
 		usesTlsOrCrypto,
+		usesRustStd,
+		usesRustIntl,
 		regexpEnabled,
 		temporalEnabled,
 		profileEnabled,

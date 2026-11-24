@@ -739,7 +739,17 @@ fn format_radix(value: f64, radix: i32) -> Option<ByteWriter<RADIX_BYTES>> {
 
     // The logarithm only selects a near starting scale. Exact bigint
     // comparisons below correct either adjacent-power rounding direction.
-    let mut exponent = magnitude.log(radix as f64).floor() as i32 + 1;
+    #[cfg(any(feature = "std", test))]
+    let scale = magnitude.log(radix as f64).floor();
+    #[cfg(not(any(feature = "std", test)))]
+    let scale = {
+        extern "C" {
+            fn log(value: f64) -> f64;
+            fn floor(value: f64) -> f64;
+        }
+        unsafe { floor(log(magnitude) / log(radix as f64)) }
+    };
+    let mut exponent = scale as i32 + 1;
     if exponent > 1 {
         interval
             .denominator

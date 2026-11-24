@@ -34,12 +34,14 @@ import {
 	RELEASE_MACOS_VERSION,
 	RUNTIME_ARCHIVES,
 	RUST_LIBRARY_OUTPUT,
+	RUST_NO_STD_OUTPUT,
 } from "../src/prebuilt-runtime.ts";
 import type { PrebuiltRuntimeManifest } from "../src/prebuilt-runtime.ts";
 import {
 	ensureNativeArtifacts,
 	runtimeReleaseArchiveIdentity,
 } from "../src/runtime-build.ts";
+import { ensureRustArtifacts } from "../src/rust-build.ts";
 import { PINNED_ZIG_VERSION } from "../src/toolchain-fetch.ts";
 import {
 	requireToolchain,
@@ -189,12 +191,23 @@ export function prebuildRuntime(
 	try {
 		const identity = runtimeReleaseArchiveIdentity(context);
 		const archives = ensureNativeArtifacts(context);
+		const noStd = ensureRustArtifacts({
+			...context,
+			features: normalizeNativeFeatures({
+				...context.features,
+				usesRustStd: false,
+				usesRustIntl: false,
+				evalEnabled: false,
+				realmsEnabled: false,
+			}),
+		});
 		const files = [
 			...Object.entries(RUNTIME_ARCHIVES).map(([layer, name]) => ({
 				name,
 				file: archives.c[layer as keyof typeof RUNTIME_ARCHIVES],
 			})),
 			{ name: RUST_LIBRARY_OUTPUT, file: archives.rust.library },
+			{ name: RUST_NO_STD_OUTPUT, file: noStd.library },
 			...archives.rust.nativeComponents
 				.map(({ name, library }) => ({ name, file: library }))
 				.sort((left, right) =>

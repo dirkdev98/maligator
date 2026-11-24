@@ -1,3 +1,4 @@
+use alloc::{boxed::Box, string::String};
 use crate::intl_parts::UNIT_LABEL;
 use core::fmt::{self, Write};
 use icu_locale::Locale;
