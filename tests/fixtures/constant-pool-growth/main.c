@@ -67,6 +67,7 @@ static bool initialize(LoadedConstants *loaded, i32 strings, i32 bigints,
     loaded->functions[3].register_count = 2;
     loaded->image.function_count = 4;
     loaded->image.functions = loaded->functions;
+    loaded->image.interpret = mal_vm_interpret;
     return true;
 }
 
