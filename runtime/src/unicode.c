@@ -18,19 +18,33 @@ typedef struct MalUnicodePoints {
     MalUnicodeStatus status;
 } MalUnicodePoints;
 
-static size unicode_row(const u32 *table, usize length, usize stride, u32 cp) {
-    usize low = 0, high = length / stride;
-    while (low < high) {
-        usize middle = low + (high - low) / 2;
-        if (table[middle * stride] < cp) low = middle + 1;
-        else high = middle;
-    }
-    return low * stride < length && table[low * stride] == cp ? (size) (low * stride) : -1;
+static u32 unicode_class(u32 cp) {
+    usize block = cp >> MAL_UNICODE_CLASS_BLOCK_BITS;
+    if (cp < 0x80 || block >= UNICODE_COUNT(mal_unicode_class_blocks)) return 0;
+    usize offset = cp & ((1u << MAL_UNICODE_CLASS_BLOCK_BITS) - 1);
+    return mal_unicode_class_values[
+        ((usize) mal_unicode_class_blocks[block] << MAL_UNICODE_CLASS_BLOCK_BITS) | offset];
 }
 
-static u32 unicode_class(u32 cp) {
-    if (cp < 0x80 || cp >= 0x110000) return 0;
-    return mal_unicode_class_values[((usize) mal_unicode_class_pages[cp >> 8] << 8) | (cp & 255)];
+static u32 unicode_normalization_scalar(u16 encoded) {
+    u32 index = (u32) encoded - 0xd800u;
+    return index < 0x800u ? mal_unicode_supplementary[index] : encoded;
+}
+
+static u32 unicode_decomposition_row(u32 cp) {
+    usize page = cp >> 8;
+    if (page >= UNICODE_COUNT(mal_unicode_decomposition_pages) - 1) return 0;
+    usize low = mal_unicode_decomposition_pages[page];
+    usize end = mal_unicode_decomposition_pages[page + 1], high = end;
+    u32 key = cp & 255;
+    while (low < high) {
+        usize middle = low + (high - low) / 2;
+        if ((mal_unicode_decomposition[middle] >> 24) < key) low = middle + 1;
+        else high = middle;
+    }
+    if (low == end) return 0;
+    u32 row = mal_unicode_decomposition[low];
+    return (row >> 24) == key ? row : 0;
 }
 
 static bool unicode_push(MalUnicodePoints *points, u32 cp) {
@@ -87,12 +101,14 @@ static bool unicode_decompose(MalUnicodePoints *points, u32 cp, bool compatibili
             unicode_push(points, 0x1161 + (syllable % 588) / 28) &&
             (syllable % 28 == 0 || unicode_push(points, 0x11a7 + syllable % 28));
     }
-    size row = unicode_row(mal_unicode_decomposition, UNICODE_COUNT(mal_unicode_decomposition), 4, cp);
-    if (row < 0 || (!compatibility && mal_unicode_decomposition[row + 3] != 0)) return unicode_push(points, cp);
-    usize start = mal_unicode_decomposition[row + 1] - MAL_UNICODE_NORMALIZATION_POOL_OFFSET;
-    usize end = start + mal_unicode_decomposition[row + 2];
+    u32 row = unicode_decomposition_row(cp);
+    if (row == 0 || (!compatibility && (row & (32u << 16)) != 0)) return unicode_push(points, cp);
+    usize length = (row >> 16) & 31;
+    u16 payload = (u16) row;
+    if (length == 1) return unicode_decompose(points, unicode_normalization_scalar(payload), compatibility);
+    usize start = payload, end = start + length;
     for (usize index = start; index < end; index++)
-        if (!unicode_decompose(points, mal_unicode_pool[index], compatibility)) return false;
+        if (!unicode_decompose(points, unicode_normalization_scalar(mal_unicode_pool[index]), compatibility)) return false;
     return true;
 }
 
@@ -101,16 +117,18 @@ static u32 unicode_composite(u32 first, u32 second) {
         return 0xac00 + ((first - 0x1100) * 21 + second - 0x1161) * 28;
     if (first >= 0xac00 && first < 0xd7a4 && (first - 0xac00) % 28 == 0 && second > 0x11a7 && second < 0x11c3)
         return first + second - 0x11a7;
-    usize low = 0, high = UNICODE_COUNT(mal_unicode_composition) / 3;
+    usize page = first >> 8;
+    if (page >= UNICODE_COUNT(mal_unicode_composition_pages) - 1) return 0;
+    usize low = mal_unicode_composition_pages[page];
+    usize end = mal_unicode_composition_pages[page + 1], high = end;
+    u32 key = ((first & 255) << 21) | second;
     while (low < high) {
-        usize middle = low + (high - low) / 2, index = middle * 3;
-        if (mal_unicode_composition[index] < first ||
-            (mal_unicode_composition[index] == first && mal_unicode_composition[index + 1] < second)) low = middle + 1;
+        usize middle = low + (high - low) / 2;
+        if (mal_unicode_composition_keys[middle] < key) low = middle + 1;
         else high = middle;
     }
-    usize index = low * 3;
-    return index < UNICODE_COUNT(mal_unicode_composition) &&
-        mal_unicode_composition[index] == first && mal_unicode_composition[index + 1] == second ? mal_unicode_composition[index + 2] : 0;
+    return low < end && mal_unicode_composition_keys[low] == key
+        ? unicode_normalization_scalar(mal_unicode_composition_values[low]) : 0;
 }
 
 static bool unicode_order(MalUnicodePoints *points) {

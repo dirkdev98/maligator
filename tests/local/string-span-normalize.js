@@ -71,6 +71,7 @@ if (["range", "split", "regexp", "nested"].includes(mode)) {
 		"A",
 		"\ud800A\u030a\udfff",
 		"\ud834\udd5e",
+		"\u{2fa1d}",
 		" \té\ufeff ",
 	])
 		for (const form of [undefined, "NFC", "NFD", "NFKC", "NFKD"])

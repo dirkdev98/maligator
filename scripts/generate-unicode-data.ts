@@ -87,7 +87,6 @@ const mappings = (map: Map<number, Array<number>>) =>
 const data: Record<string, Array<number>> = {};
 data.lower = mappings(lower);
 data.upper = mappings(upper);
-const casePoolLength = pool.length;
 data.decomposition = [...decomposition]
 	.sort(([a], [b]) => a - b)
 	.flatMap(([cp, entry]) => {
@@ -124,7 +123,12 @@ function deduplicateBlocks(values: Uint8Array, size: number, table: string) {
 	}
 	return { indices, blocks };
 }
-const normalizationClasses = deduplicateBlocks(classValues, 256, "Combining class");
+const normalizationClassBits = 5;
+const normalizationClasses = deduplicateBlocks(
+	classValues.subarray(0, lastClass + 1),
+	1 << normalizationClassBits,
+	"Combining class",
+);
 const excluded = new Set(
 	rows("CompositionExclusions.txt").map((row) => Number.parseInt(row[0]!, 16)),
 );
@@ -166,41 +170,102 @@ const c = [
 ];
 function cArray(
 	name: string,
-	type: "u8" | "i32" | "u32",
+	type: "u8" | "u16" | "i32" | "u32",
 	values: ReadonlyArray<number>,
 ): string {
 	return `static const ${type} mal_unicode_${name}[] = {\n${Array.from({ length: Math.ceil(values.length / 16) }, (_, i) => `    ${values.slice(i * 16, i * 16 + 16).join(", ")},`).join("\n")}\n};`;
 }
-for (const [name, values] of Object.entries(data)) {
-	if (name === "classes") {
-		c.push(
-			"#if !defined(MAL_UNICODE_CASE_DATA)",
-			cArray("class_pages", "u8", normalizationClasses.indices),
-			cArray("class_values", "u8", normalizationClasses.blocks),
-			"#endif",
-		);
-	} else if (name === "pool") {
-		c.push(
-			"#if !defined(MAL_UNICODE_CASE_DATA)",
-			`#define MAL_UNICODE_NORMALIZATION_POOL_OFFSET ${casePoolLength}`,
-			cArray("pool", "u32", values.slice(casePoolLength)),
-			"#endif",
-		);
-	} else if (name !== "lower" && name !== "upper") {
-		const normalization = name === "decomposition" || name === "composition";
-		c.push(
-			normalization
-				? "#if !defined(MAL_UNICODE_CASE_DATA)"
-				: "#if defined(MAL_UNICODE_CASE_DATA)",
-			cArray(
-				name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`),
-				"u32",
-				values,
-			),
-			"#endif",
-		);
-	}
+function pageOffsets(points: ReadonlyArray<number>): Array<number> {
+	if (points.length > 0xffff) throw new Error("Normalization row index exceeds u16");
+	const ends = new Array<number>(((points.at(-1) ?? 0) >> 8) + 2).fill(0);
+	for (const point of points) ends[(point >> 8) + 1]!++;
+	for (let page = 1; page < ends.length; page++) ends[page]! += ends[page - 1]!;
+	return ends;
 }
+
+// Unicode mappings contain only scalars, leaving the surrogate range available
+// as indices into the supplementary-scalar table.
+const supplementary: Array<number> = [];
+const supplementaryIds = new Map<number, number>();
+function encodeScalar(point: number): number {
+	if (point >= 0xd800 && point <= 0xdfff)
+		throw new Error("Non-scalar normalization payload");
+	if (point <= 0xffff) return point;
+	let id = supplementaryIds.get(point);
+	if (id === undefined) {
+		id = supplementary.length;
+		if (id >= 0x800)
+			throw new Error("Supplementary normalization index exceeds surrogate range");
+		supplementaryIds.set(point, id);
+		supplementary.push(point);
+	}
+	return 0xd800 + id;
+}
+
+const normalizationPool: Array<number> = [];
+const normalizationPoolOffsets = new Map<string, number>();
+const decompositionPoints: Array<number> = [];
+const decompositionRows: Array<number> = [];
+for (const [point, { values, compatibility }] of [...decomposition].sort(
+	([a], [b]) => a - b,
+)) {
+	const length = values.length;
+	if (length === 0 || length > 31)
+		throw new Error("Normalization mapping length exceeds five bits");
+	let payload: number;
+	if (length === 1) {
+		payload = encodeScalar(values[0]!);
+	} else {
+		const key = values.join(",");
+		let offset = normalizationPoolOffsets.get(key);
+		if (offset === undefined) {
+			offset = normalizationPool.length;
+			if (offset > 0xffff) throw new Error("Normalization pool offset exceeds u16");
+			normalizationPoolOffsets.set(key, offset);
+			normalizationPool.push(...values.map(encodeScalar));
+		}
+		payload = offset;
+	}
+	decompositionPoints.push(point);
+	const metadata = length | (compatibility ? 32 : 0);
+	decompositionRows.push((((point & 255) << 24) | (metadata << 16) | payload) >>> 0);
+}
+
+const compositionPoints: Array<number> = [];
+const compositionKeys: Array<number> = [];
+const compositionValues: Array<number> = [];
+for (let i = 0; i < data.composition.length; i += 3) {
+	const first = data.composition[i]!;
+	compositionPoints.push(first);
+	compositionKeys.push(((first & 255) << 21) | data.composition[i + 1]!);
+	compositionValues.push(encodeScalar(data.composition[i + 2]!));
+}
+
+c.push(
+	"#if !defined(MAL_UNICODE_CASE_DATA)",
+	`#define MAL_UNICODE_CLASS_BLOCK_BITS ${normalizationClassBits}`,
+	cArray("class_blocks", "u8", normalizationClasses.indices),
+	cArray("class_values", "u8", normalizationClasses.blocks),
+	cArray("decomposition_pages", "u16", pageOffsets(decompositionPoints)),
+	cArray("decomposition", "u32", decompositionRows),
+	cArray("pool", "u16", normalizationPool),
+	cArray("supplementary", "u32", supplementary),
+	cArray("composition_pages", "u16", pageOffsets(compositionPoints)),
+	cArray("composition_keys", "u32", compositionKeys),
+	cArray("composition_values", "u16", compositionValues),
+	"#endif",
+	"#if defined(MAL_UNICODE_CASE_DATA)",
+);
+for (const name of ["cased", "ignorable", "softDotted"]) {
+	c.push(
+		cArray(
+			name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`),
+			"u32",
+			data[name]!,
+		),
+	);
+}
+c.push("#endif");
 // The shared byte index names a delta or a short expansion. Identity uses delta zero.
 const caseBlockBits = 6;
 const caseBlockSize = 1 << caseBlockBits;
