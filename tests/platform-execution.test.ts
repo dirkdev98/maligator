@@ -106,6 +106,7 @@ describe("catalog platform constants", () => {
 		);
 		expect(result.hostInstalls.map((install) => install.installer)).toEqual([
 			"mal_host_install_node_child_process",
+			"mal_host_install_web_fetch_streams",
 		]);
 	});
 
