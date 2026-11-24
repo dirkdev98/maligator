@@ -57699,6 +57699,21 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_URL_MODULE%\",\"Url\"]",
+			"owner": "%MAL_INTRINSIC_NODE_URL_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:url\"]",
+				"%MAL_INTRINSIC_NODE_URL_MODULE%",
+				"MAL_INTRINSIC_NODE_URL_MODULE",
+				"mal_host_install_node_url:default"
+			],
+			"key": "Url",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_URL_CONSTRUCTOR%"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_URL_MODULE%\",\"parse\"]",
 			"owner": "%MAL_INTRINSIC_NODE_URL_MODULE%",
 			"ownerPaths": [
@@ -57759,36 +57774,6 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_URL_MODULE%\",\"urlToHttpOptions\"]",
-			"owner": "%MAL_INTRINSIC_NODE_URL_MODULE%",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:url\"]",
-				"%MAL_INTRINSIC_NODE_URL_MODULE%",
-				"MAL_INTRINSIC_NODE_URL_MODULE",
-				"mal_host_install_node_url:default"
-			],
-			"key": "urlToHttpOptions",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_URL_MODULE%\",\"Url\"]",
-			"owner": "%MAL_INTRINSIC_NODE_URL_MODULE%",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:url\"]",
-				"%MAL_INTRINSIC_NODE_URL_MODULE%",
-				"MAL_INTRINSIC_NODE_URL_MODULE",
-				"mal_host_install_node_url:default"
-			],
-			"key": "Url",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_URL_CONSTRUCTOR%"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
 			"id": "[\"%MAL_INTRINSIC_NODE_URL_MODULE%\",\"URL\"]",
 			"owner": "%MAL_INTRINSIC_NODE_URL_MODULE%",
 			"ownerPaths": [
@@ -57800,6 +57785,21 @@
 			"key": "URL",
 			"kind": "data",
 			"operations": ["globalThis.URL"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_URL_MODULE%\",\"urlToHttpOptions\"]",
+			"owner": "%MAL_INTRINSIC_NODE_URL_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:url\"]",
+				"%MAL_INTRINSIC_NODE_URL_MODULE%",
+				"MAL_INTRINSIC_NODE_URL_MODULE",
+				"mal_host_install_node_url:default"
+			],
+			"key": "urlToHttpOptions",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_URL_MODULE%.urlToHttpOptions"],
 			"task": "N-06",
 			"decisions": []
 		},
