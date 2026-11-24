@@ -125,6 +125,7 @@ MalWorkerDomain *mal_worker_manifest_load(MalVm *vm, const char *path) {
         manifest->entries[index].wire = wire;
         manifest->entries[index].wire_size = wire_size;
         manifest->entries[index].resolve_installer = mal_host_resolve_installer;
+        manifest->entries[index].load_wire = mal_runtime_image_load_with_host_resolver;
         MalSha256 hash;
         u8 actual[32];
         byte hex[64];

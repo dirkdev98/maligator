@@ -21,6 +21,8 @@ typedef struct MalWorkerEntry {
     usize wire_size;
     // Wire hosts supply their registry; baked images retain only reached installers.
     MalHostInstallerResolver resolve_installer;
+    MalLoadedRuntimeImage *(*load_wire)(
+        const u8 *bytes, usize size, const char **error, MalHostInstallerResolver resolver);
 } MalWorkerEntry;
 
 typedef struct MalWorkerDomain MalWorkerDomain;

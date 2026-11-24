@@ -38,7 +38,7 @@ export function emitWorkerRegistryTranslationUnit(
 		lines.push("static const MalWorkerEntry mal_compiled_worker_entries[] = {");
 		for (const worker of workers)
 			lines.push(
-				`    { .href = "${cEscapeString(worker.entry.href)}", .image = &${worker.imageSymbol}, .wire = nullptr, .wire_size = 0, .resolve_installer = nullptr },`,
+				`    { .href = "${cEscapeString(worker.entry.href)}", .image = &${worker.imageSymbol} },`,
 			);
 		lines.push("};");
 	}

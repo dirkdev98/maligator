@@ -523,7 +523,8 @@ MalWorkerDomain *mal_worker_domain_adopt(
     for (usize index = 0; index < count; index++) {
         const MalWorkerEntry *entry = &entries[index];
         if (entry->href == nullptr
-            || (entry->image == nullptr && (entry->wire == nullptr || entry->wire_size == 0))
+            || (entry->image == nullptr
+                && (entry->wire == nullptr || entry->wire_size == 0 || entry->load_wire == nullptr))
             || (entry->image != nullptr && entry->wire != nullptr)) goto failed;
         if (entry->wire != nullptr) {
             if (entry->wire_size > UINT64_MAX - domain->wire_bytes) goto failed;
@@ -673,13 +674,13 @@ static void application_wires_release(ApplicationWires *wires) {
 }
 
 static MalLoadedRuntimeImage *application_wire_decode(
-    ApplicationWire *wire, const char **error, MalHostInstallerResolver resolver) {
+    ApplicationWire *wire, const char **error, const MalWorkerEntry *entry) {
     // The initial decode validates the wire. Splicing needs exclusive ownership
     // of that arena, so only one launch can use it.
     MalLoadedRuntimeImage *loaded = atomic_exchange_explicit(&wire->first_load, nullptr, memory_order_acq_rel);
     if (loaded != nullptr) return loaded;
-    return mal_runtime_image_load_with_host_resolver(
-        (const u8 *) wire->bytes, (usize) wire->stamp.st_size, error, resolver);
+    return entry->load_wire(
+        (const u8 *) wire->bytes, (usize) wire->stamp.st_size, error, entry->resolve_installer);
 }
 
 #if MAL_DEVELOPMENT_API
@@ -2668,9 +2669,9 @@ static void *worker_thread_main(void *arg) {
         const char *error = "ok";
         if (thread->application != nullptr) {
             loaded = application_wire_decode(
-                thread->application->image->wires->ordered[0], &error, thread->entry->resolve_installer);
+                thread->application->image->wires->ordered[0], &error, thread->entry);
         } else if (thread->entry->wire != nullptr) {
-            loaded = mal_runtime_image_load_with_host_resolver(
+            loaded = thread->entry->load_wire(
                 (const u8 *) thread->entry->wire, thread->entry->wire_size, &error, thread->entry->resolve_installer);
         }
         image = loaded != nullptr ? mal_loaded_runtime_image_get(loaded) : nullptr;
@@ -2757,7 +2758,7 @@ static void *worker_thread_main(void *arg) {
                 if (!application_entry_fulfilled(vm) || index + 1 == wires->count) break;
                 const char *error = "invalid application fragment";
                 MalLoadedRuntimeImage *next = application_wire_decode(
-                    wires->ordered[index + 1], &error, thread->entry->resolve_installer);
+                    wires->ordered[index + 1], &error, thread->entry);
                 if (next == nullptr) { mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, error); break; }
                 const MalRuntimeImage *program = mal_loaded_runtime_image_get(next);
                 i32 entry_index = mal_vm_splice_runtime_image(vm, program);
@@ -4387,6 +4388,7 @@ static MalValue application_load(MalVm *vm, MalValue self, const MalValue *args,
     if (count == 0) goto failed;
     image->entry.href = image->entry_path;
     image->entry.resolve_installer = mal_host_resolve_installer;
+    image->entry.load_wire = mal_runtime_image_load_with_host_resolver;
     image->wires = application_wires_new(count);
     if (image->wires == nullptr) { mal_vm_throw_allocation_error(vm); goto failed; }
     pthread_mutex_lock(&g_application_wires_mutex);

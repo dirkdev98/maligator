@@ -926,8 +926,7 @@ struct MalGeneratorObject;
 
 /**
  * A function lowered directly to C by the native backend. When set on a
- * MalFunction, an ordinary call invokes this instead of interpreting the
- * bytecode (the bytecode is still emitted as a fallback and for `new`). The
+ * MalFunction, ordinary calls and construction invoke this entry. The
  * shape mirrors a native callback plus the creation environment for captures;
  * args point at the caller-marshaled region, and a throw is signalled through
  * vm->completion (the returned value is then ignored).
@@ -949,6 +948,10 @@ typedef MalValue (*MalCompiledFunction)(
     // entry pass null.
     void *entry_state
 );
+
+MalValue mal_vm_unreachable_native_entry(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalEnv *env, MalValue callee, void *entry_state);
 
 typedef f64 (*MalNumericSortComparator)(
     MalVm *vm, MalValue this_value, f64 left, f64 right, MalEnv *env, MalValue callee);
@@ -1377,6 +1380,13 @@ typedef struct MalRuntimeImage {
     MalModuleLink *module_imports;
     i32 module_export_count;
     const MalModuleLink *module_exports;
+
+    /** Entry point for images that execute bytecode or admit runtime eval. */
+    void (*interpret)(MalVm *vm, i32 target_frame_count
+#if MAL_REALMS
+        , MalRealm *outer_realm
+#endif
+    );
 } MalRuntimeImage;
 
 /**
@@ -3120,6 +3130,11 @@ bool mal_vm_push_function_frame(
 );
 
 void mal_vm_run(MalVm *vm, MalCallable *callable);
+void mal_vm_interpret(MalVm *vm, i32 target_frame_count
+#if MAL_REALMS
+    , MalRealm *outer_realm
+#endif
+);
 bool mal_vm_check_entry_evaluation(MalVm *vm);
 
 /**

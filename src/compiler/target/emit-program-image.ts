@@ -71,6 +71,7 @@ import {
 import {
 	compressPositions,
 	computeArgumentRetentionLimit,
+	ENGINE_POLICY_NO_EVAL,
 	enginePolicyBits,
 	positionTableEntries,
 	restForwardFlags,
@@ -485,6 +486,33 @@ function malFunctionRow(
 // claims none: a restored image must emit what the compiling process emitted.
 function emissionUnreachable(image: ProgramImage, functionIndex: number): boolean {
 	return image.native.functions[functionIndex]?.unreachable === true;
+}
+
+function selectFunctionRows(
+	image: ProgramImage,
+	compiled: ReadonlyArray<CompiledFunction | null>,
+	useCompiled: boolean,
+) {
+	// Keep the bytecode of dead native rows if another row can still run bytecode:
+	// the interpreter projection need not make the same call substitutions.
+	const needsInterpreter =
+		!useCompiled ||
+		(enginePolicyBits(image.runtime) & ENGINE_POLICY_NO_EVAL) === 0 ||
+		compiled.some((fn, index) => fn === null && !emissionUnreachable(image, index));
+	const deadNativeRows = compiled.map(
+		(fn, index) => !needsInterpreter && fn === null && emissionUnreachable(image, index),
+	);
+	return {
+		needsInterpreter,
+		omitBytecode: compiled.map((fn, index) => fn !== null || deadNativeRows[index]),
+		entrySymbols: compiled.map((fn, index) =>
+			fn !== null && fn.source.length > 0
+				? fn.symbol
+				: deadNativeRows[index]
+					? "mal_vm_unreachable_native_entry"
+					: "nullptr",
+		),
+	};
 }
 
 function safepointRootData(fn: BytecodeFunction): Array<number> {
@@ -1730,11 +1758,11 @@ function emitProgramImageParts(
 		}
 	}
 
-	// A compiled function never re-enters the interpreter — a speculative param
-	// guard falls back to a boxed compiled variant, not the bytecode — so its
-	// bytecode and handler tables are dead weight. Only uncompiled functions
-	// (generators/async) keep their overlay.
-	const omitBytecode = compiled.map((c) => c !== null);
+	const { needsInterpreter, omitBytecode, entrySymbols } = selectFunctionRows(
+		image,
+		compiled,
+		useCompiled,
+	);
 	const retainMappedSlots = runtime.functions.map(
 		(fn, index) => !omitBytecode[index] || nativeNeedsMappedArgumentSlots(fn),
 	);
@@ -1907,9 +1935,7 @@ function emitProgramImageParts(
 					: "nullptr",
 				closureCaptureSymbols[i]!,
 				fn.handlers.length > 0 ? `mal_function_${i}_handlers${suffix}` : "nullptr",
-				compiled[i] !== null && compiled[i]!.source.length > 0
-					? compiled[i]!.symbol
-					: "nullptr",
+				entrySymbols[i]!,
 				profileSiteSymbols[i]!,
 				{
 					positionsSymbol: positionInfo[i]!.symbol,
@@ -1927,6 +1953,7 @@ function emitProgramImageParts(
 		suffix,
 		debug,
 		nativeStackRootsAreConservative(image, useCompiled),
+		needsInterpreter,
 		undefined,
 		options,
 		image.profiling?.sites.length,
@@ -2866,6 +2893,7 @@ function malRuntimeImageStruct(
 	suffix: string,
 	debug: boolean,
 	conservativeStackRoots: boolean,
+	needsInterpreter: boolean,
 	sharedLiteralTemplates?: string,
 	options: Pick<
 		EmitOptions,
@@ -3048,6 +3076,7 @@ function malRuntimeImageStruct(
 		`    .function_count = ${runtime.functionCount},`,
 		`    .functions = mal_functions${suffix},`,
 		`    .engine_policy = ${enginePolicyBits(runtime)},`,
+		`    .interpret = ${needsInterpreter ? "mal_vm_interpret" : "nullptr"},`,
 		`    .conservative_stack_roots = ${conservativeStackRoots},`,
 		"    .initialize_generated_data = nullptr,",
 		`    .string_constant_count = ${runtime.stringConstants.length},`,
@@ -3386,9 +3415,11 @@ function emitBatchUnits(
 			}
 		}
 
-		// Successfully compiled functions never re-enter the interpreter, so they
-		// need no bytecode tables.
-		const omitBytecode = compiled.map((c) => c !== null);
+		const { needsInterpreter, omitBytecode, entrySymbols } = selectFunctionRows(
+			image,
+			compiled,
+			useCompiled,
+		);
 		const trustedSafepoints = runtime.functions.map(
 			(fn, index) =>
 				!omitBytecode[index] &&
@@ -3529,9 +3560,7 @@ function emitBatchUnits(
 					mappedArgumentSlotsSymbols[i]!,
 					closureCaptureSymbols[i]!,
 					handlerSymbols[i]!,
-					compiled[i] !== null && compiled[i]!.source.length > 0
-						? compiled[i]!.symbol
-						: "nullptr",
+					entrySymbols[i]!,
 					"nullptr",
 					// The batch path strips debug info (test262 does not use it).
 					{ positionsSymbol: "nullptr", positionCount: 0, fileIndex: 0 },
@@ -3547,6 +3576,7 @@ function emitBatchUnits(
 				suffix,
 				false,
 				nativeStackRootsAreConservative(image, useCompiled),
+				needsInterpreter,
 				literalTemplatesSymbol,
 				{},
 				undefined,

@@ -92,7 +92,7 @@ describe("native body reachability", () => {
 			`mal_compiled_${index}(`,
 		);
 	});
-	it("emits no C body for a function only its inlined copies use", () => {
+	it("omits the body and bytecode when only inlined copies can run in a native image", () => {
 		const original = compile(
 			"function scale(v) { return v * 2; } console.log(scale(Number(globalThis.seed ?? 3)));",
 		);
@@ -109,7 +109,12 @@ describe("native body reachability", () => {
 			expect(image.native.functions[scale]?.unreachable).toBe(true);
 			const source = emitProgramImage(image);
 			expect(source).not.toContain(`mal_compiled_${scale}(`);
-			expect(source).toContain(`mal_function_${scale}_instructions`);
+			expect(source).not.toContain(`mal_function_${scale}_instructions`);
+			expect(source).toContain("mal_vm_unreachable_native_entry");
+			expect(source).not.toContain("mal_vm_interpret");
+			expect(emitProgramImage(image, { compiled: false })).toContain(
+				`mal_function_${scale}_instructions`,
+			);
 		}
 	});
 

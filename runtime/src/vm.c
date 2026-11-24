@@ -1917,6 +1917,7 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
         functions[fn_base + f] = fn;
     }
     live->function_count = new_functions;
+    if (loaded->interpret != nullptr) live->interpret = loaded->interpret;
     for (i32 provider = 0; provider < loaded->source_builtin_provider_count; provider++) {
         const MalSourceBuiltinProvider *candidate = &loaded->source_builtin_providers[provider];
         bool existing = false;
@@ -2680,7 +2681,7 @@ static_assert(
 
 enum { MAL_INLINE_INTERPRETER_CALLER = -2 };
 
-static void mal_vm_run_until_frame_count(
+void mal_vm_interpret(
     MalVm *vm,
     i32 target_frame_count
 #if MAL_REALMS
@@ -4228,6 +4229,42 @@ static void mal_vm_run_until_frame_count(
 #undef MAL_VM_INTERPRETER_ATTRIBUTE_FUSED_LEAF
 #undef MAL_VM_INTERPRETER_DIRECT_LEAF
 
+static inline void mal_vm_dispatch_bytecode(
+    MalVm *vm,
+    i32 target_frame_count
+#if MAL_REALMS
+    , MalRealm *outer_realm
+#endif
+) {
+    if (vm->runtime_image->interpret == nullptr) {
+        fputs("Maligator internal error: bytecode entered without an interpreter\n", stderr);
+        abort();
+    }
+    vm->runtime_image->interpret(
+        vm,
+        target_frame_count
+#if MAL_REALMS
+        , outer_realm
+#endif
+    );
+}
+
+MalValue mal_vm_unreachable_native_entry(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalEnv *env, MalValue callee, void *entry_state
+) {
+    (void) vm;
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) env;
+    (void) callee;
+    (void) entry_state;
+    fputs("Maligator internal error: entered an unreachable native function\n", stderr);
+    abort();
+}
+
 /**
  * Print strings as display text instead of the quoted debug representation.
  */
@@ -4422,7 +4459,7 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
     } else {
         // The entry function takes no arguments, so the marshaling region is empty.
         mal_vm_push_function_frame(vm, entry_index, nullptr, mal_value_new_undefined(), 0, -1, -1);
-        mal_vm_run_until_frame_count(
+        mal_vm_dispatch_bytecode(
             vm,
             0
 #if MAL_REALMS
@@ -4555,7 +4592,7 @@ void mal_vm_resume_coroutine(MalVm *vm, MalHeapHeader *owner, MalValue sent_valu
     activation->state = MAL_GENERATOR_EXECUTING;
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
-    mal_vm_run_until_frame_count(
+    mal_vm_dispatch_bytecode(
         vm,
         target_frame_count
 #if MAL_REALMS
@@ -5224,7 +5261,7 @@ MalValue mal_vm_interpret_function(
             frame->is_construct = true;
             frame->new_target = new_target;
         }
-        mal_vm_run_until_frame_count(
+        mal_vm_dispatch_bytecode(
             vm,
             target_frame_count
 #if MAL_REALMS
@@ -5289,7 +5326,7 @@ MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue con
         } else if (record_kind != MAL_RECORD_VAR || !mal_value_is_undefined(object)) goto invalid;
         records = next;
     }
-    mal_vm_run_until_frame_count(vm, baseline
+    mal_vm_dispatch_bytecode(vm, baseline
 #if MAL_REALMS
         , vm->current_realm
 #endif
@@ -6062,7 +6099,7 @@ MalCompletion mal_vm_construct_direct_with_target(
             vm->frames[vm->frame_count - 1].is_construct = true;
             vm->frames[vm->frame_count - 1].callee = callee;
             vm->frames[vm->frame_count - 1].new_target = new_target;
-            mal_vm_run_until_frame_count(
+            mal_vm_dispatch_bytecode(
                 vm,
                 target_frame_count
 #if MAL_REALMS
@@ -6353,7 +6390,7 @@ static MalCompletion mal_vm_construct_with_native_target(MalVm *vm, MalValue cal
                     vm->frames[vm->frame_count - 1].is_construct = true;
                     vm->frames[vm->frame_count - 1].callee = resolution.callee;
                     vm->frames[vm->frame_count - 1].new_target = effective_new_target;
-                    mal_vm_run_until_frame_count(
+                    mal_vm_dispatch_bytecode(
                         vm,
                         target_frame_count
 #if MAL_REALMS

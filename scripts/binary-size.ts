@@ -29,6 +29,8 @@ interface LinkedSymbol {
 }
 
 const forbiddenComponents = {
+	"bytecode interpreter": ({ symbol }) =>
+		/^_?mal_vm_(?:interpret|run_until_frame_count)(?:$|\.)/.test(symbol),
 	brotli: ({ crate }) => crate === "brotli" || crate === "brotli_decompressor",
 	"Rust backtrace": ({ crate, symbol }) =>
 		crate === "gimli" ||
@@ -116,6 +118,7 @@ const fixtures: Array<{
 		bun: true,
 		forbidden: [
 			"HTTP client",
+			"bytecode interpreter",
 			"Rust backtrace",
 			"TLS",
 			"ring",
@@ -145,6 +148,7 @@ const fixtures: Array<{
 			"sqlite3.o",
 			"argon2",
 			"Rust backtrace",
+			"bytecode interpreter",
 		],
 	},
 	{
@@ -200,7 +204,13 @@ const fixtures: Array<{
 		name: "express",
 		file: "bench/http/express-server.cjs",
 		bun: true,
-		forbidden: ["Brotli encoder", "rustls", "argon2", "Rust backtrace"],
+		forbidden: [
+			"Brotli encoder",
+			"rustls",
+			"argon2",
+			"Rust backtrace",
+			"bytecode interpreter",
+		],
 	},
 ];
 

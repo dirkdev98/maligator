@@ -2865,6 +2865,7 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
         goto fail;
     }
     def->engine_policy = engine_policy;
+    def->interpret = mal_vm_interpret;
     def->builtin_member_lists = wire_builtin_members;
     u32 global_count = rd_u32(&r);
     if (global_count > (u32) INT32_MAX) {
