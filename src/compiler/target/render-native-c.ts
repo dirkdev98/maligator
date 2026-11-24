@@ -4099,6 +4099,17 @@ function cPrivateRootPublication(
 	return stores ?? EMPTY_ROOT_PUBLICATION;
 }
 
+function nativeHasBackwardEdge(fn: BytecodeFunction): boolean {
+	return (
+		fn.handlers.some(({ endIp, handlerIp }) => handlerIp < endIp) ||
+		fn.instructions.some(
+			(instruction, ip) =>
+				(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+				instruction.targetIp <= ip,
+		)
+	);
+}
+
 /**
  * Emit a compiled C function for `fn`, or null when it uses a construct the
  * backend doesn't lower yet (the caller then leaves it to the interpreter).
@@ -4152,13 +4163,7 @@ function emitCompiledVariant(
 	validateNativeLiteralSwitches(fn, native);
 	const sizeOptimize =
 		moduleWrapper || native.runOnce === true || native.commonJsInitializer === true;
-	const hasBackwardEdge =
-		fn.handlers.some(({ endIp, handlerIp }) => handlerIp < endIp) ||
-		fn.instructions.some(
-			(instruction, ip) =>
-				(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
-				instruction.targetIp <= ip,
-		);
+	const hasBackwardEdge = nativeHasBackwardEdge(fn);
 	const compactModuleInit = moduleWrapper && !hasBackwardEdge;
 	const variant =
 		directEntry === undefined ? native : nativeVariantContract(native, directEntry);
@@ -9358,6 +9363,9 @@ function emitBody(
 		privateFieldReserveCount: undefined,
 		slowPathFramePosition: undefined,
 		polymorphicMethodLoad: false,
+		// In a run-once initializer, changing setup can alter register allocation in its loops.
+		compactStaticLoads:
+			!relocation.relative && (!compactRunOnce || !nativeHasBackwardEdge(fn)),
 		stringComparisons: stringComparisonsByIp,
 		relocation,
 		closureChainTests: nativeClosureChainTests(
@@ -10768,6 +10776,7 @@ interface NativeInstructionActions {
 
 interface NativeInstructionContext extends NativeInstructionActions {
 	readonly compactRunOnce?: boolean;
+	readonly compactStaticLoads?: boolean;
 	readonly scalarInputValues?: ReadonlyMap<number, string>;
 	readonly inactiveRootMaskStatements?: ReadonlyMap<NativeInactiveRootMask, string>;
 	readonly ownedCaptureFunctionIndex?: number;
@@ -12169,7 +12178,9 @@ class NativeInstructionEmission {
 			? "mal_vm_property_try_load_length_static"
 			: this.context.polymorphicMethodLoad === true
 				? "mal_vm_property_try_load_static_polymorphic"
-				: "mal_vm_property_try_load_static";
+				: this.context.compactStaticLoads === true
+					? "mal_vm_property_try_load_static_compact"
+					: "mal_vm_property_try_load_static";
 		const probe = (): string => {
 			const receiver = this.boxed(instruction.object);
 			const cache = `&${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}]`;

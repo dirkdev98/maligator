@@ -3182,6 +3182,18 @@ static inline bool mal_vm_native_getter_row_try_read(
 #define MAL_STATIC_PROBE_TAIL return
 #endif
 
+__attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
+mal_vm_property_try_load_static_after_own_slot(
+    MalVm *vm, MalValue receiver, const MalObject *object, MalInlineCache *ic
+) {
+    MalValue value;
+    if (ic->mode == MAL_IC_MODE_INHERITED_VALUE &&
+        mal_vm_inherited_value_row_try_load(vm, receiver, ic, &value)) {
+        return (MalStaticPropertyProbeResult) {.hit = true, .value = value};
+    }
+    MAL_STATIC_PROBE_TAIL mal_vm_property_try_load_static_remaining(vm, receiver, object, ic);
+}
+
 // Keep all non-monomorphic static cache hits noncollecting: callers may hold private roots.
 // The hottest outcomes return before the row search saves the registers it uses.
 __attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult

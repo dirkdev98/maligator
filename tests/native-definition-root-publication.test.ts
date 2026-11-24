@@ -65,7 +65,7 @@ describe("native cached-definition root publication", () => {
 		const root = native.storage!.rootRegisters.indexOf(3);
 		const publication = `__gc_slots[${native.storage!.rootSlots[root]}] = r3;`;
 		const emitted = emitCompiledFunction(native, 0, "", false)!.source;
-		const load = emitted.indexOf("mal_vm_property_try_load_static(");
+		const load = emitted.search(/mal_vm_property_try_load_static(?:_compact)?\(/);
 		const key = emitted.indexOf("r4 = mal_value_from_string(", load);
 		const probe = emitted.indexOf("mal_vm_try_define_property_static_cached(", load);
 		const fallback = emitted.indexOf("mal_vm_op_define_property_static_cached(", probe);

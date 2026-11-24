@@ -2040,8 +2040,9 @@ static inline bool mal_vm_local_watched_primitive_value_try_load_static(
 
 
 /** An INHERITED_VALUE row's hit: a prototype data value proven by shape and chain identity. */
-static inline MAL_PRESERVE_MOST bool mal_vm_inherited_value_try_load(const MalVm *vm, MalValue receiver,
-                                                   const MalInlineCache *ic, MalValue *out) {
+static inline __attribute__((always_inline)) bool mal_vm_inherited_value_row_try_load(
+    const MalVm *vm, MalValue receiver, const MalInlineCache *ic, MalValue *out
+) {
     if (ic->poly_count > 0) {
         bool dictionary_receiver =
             ic->receiver_type == MAL_IC_RECEIVER_DICTIONARY;
@@ -2074,6 +2075,12 @@ static inline MAL_PRESERVE_MOST bool mal_vm_inherited_value_try_load(const MalVm
     *out = ic->value;
     mal_perf_ic_load_inherited_hit();
     return true;
+}
+
+static inline MAL_PRESERVE_MOST bool mal_vm_inherited_value_try_load(
+    const MalVm *vm, MalValue receiver, const MalInlineCache *ic, MalValue *out
+) {
+    return mal_vm_inherited_value_row_try_load(vm, receiver, ic, out);
 }
 
 bool mal_vm_inherited_missing_try_load(
@@ -2344,7 +2351,14 @@ typedef struct MalStaticPropertyProbeResult {
 } MalStaticPropertyProbeResult;
 
 
-/** Noncollecting cache probes after the inline own-slot and inherited-value probes miss. */
+/** The noncollecting tiers after the inline own-field checks miss. */
+__attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
+mal_vm_property_try_load_static_after_own_slot(
+    MalVm *vm, MalValue receiver, const MalObject *object,
+    MalInlineCache *ic
+);
+
+/** The shared row search after the own-slot and inherited-value tiers miss. */
 __attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
 mal_vm_property_try_load_static_remaining(
     MalVm *vm, MalValue receiver, const MalObject *object,
@@ -2373,8 +2387,6 @@ static inline __attribute__((always_inline)) bool mal_vm_watched_own_value_try_l
 static inline __attribute__((always_inline)) bool mal_vm_property_try_load_static(
     MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
 ) {
-    // Every static load site expands this probe; also inlining the remaining polymorphic,
-    // watched, and string-length rows made each site about 2.5 times larger.
     const MalObject *object = mal_vm_as_object(receiver);
     if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE) {
         if (object->shape == ic->shape) {
@@ -2382,17 +2394,36 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
             *out = mal_object_field_load_shaped(object, ic->slot);
             return true;
         }
-        // Objects from one constructor branch into many shapes that keep its leading
-        // fields at the same slots; the polymorphic rows stay out of line.
         if (mal_vm_object_try_load_slot_key(object, ic, out)) return true;
     }
-    // Prototype methods (`array.pop`, class methods) would otherwise pay the out-of-line probe.
     if (ic->mode == MAL_IC_MODE_INHERITED_VALUE &&
         mal_vm_inherited_value_try_load(vm, receiver, ic, out)) {
         return true;
     }
     MalStaticPropertyProbeResult result =
         mal_vm_property_try_load_static_remaining(vm, receiver, object, ic);
+    if (!result.hit) return false;
+    *out = result.value;
+    return true;
+}
+
+/** Share the field read between both own-slot hits in size-optimized code. */
+static inline __attribute__((always_inline)) bool mal_vm_property_try_load_static_compact(
+    MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
+) {
+    const MalObject *object = mal_vm_as_object(receiver);
+    if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE) {
+        bool primary = object->shape == ic->shape;
+        if (primary || (ic->prim_kind == 0 &&
+            mal_shape_slot_holds_data_key(object->shape, ic->slot, ic->key))) {
+            if (primary) mal_perf_ic_load_mono_hit();
+            else MAL_PERF_COUNT(ic_load_slot_key_hits);
+            *out = mal_object_field_load_shaped(object, ic->slot);
+            return true;
+        }
+    }
+    MalStaticPropertyProbeResult result =
+        mal_vm_property_try_load_static_after_own_slot(vm, receiver, object, ic);
     if (!result.hit) return false;
     *out = result.value;
     return true;
