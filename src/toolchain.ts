@@ -224,6 +224,23 @@ export function toolArguments(tool: ToolExecutable, args: Array<string>): Array<
 	return [...(tool.args ?? []), ...args];
 }
 
+/** Resolve the sources and headers distributed with the selected Zig toolchain. */
+export function zigLibraryDirectory(
+	zig: ToolExecutable,
+	environment: NodeJS.ProcessEnv,
+	cwd: string,
+): string {
+	const output = execFileSync(zig.path, toolArguments(zig, ["env"]), {
+		cwd,
+		env: environment,
+		encoding: "utf8",
+	});
+	const directory = /^\s*\.lib_dir = ("(?:[^"\\]|\\.)*"),$/m.exec(output)?.[1];
+	if (directory === undefined)
+		throw new Error("Zig did not report its library directory");
+	return path.resolve(cwd, JSON.parse(directory) as string);
+}
+
 /** Human-readable executable plus its fixed subcommand/target arguments. */
 export function formatToolCommand(tool: ToolExecutable): string {
 	return [tool.path, ...(tool.args ?? [])].join(" ");

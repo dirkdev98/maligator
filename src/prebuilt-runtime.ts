@@ -44,6 +44,7 @@ export const RUNTIME_ARCHIVES = {
 const runtimeArchiveNames: ReadonlyArray<string> = Object.values(RUNTIME_ARCHIVES);
 export const RUST_LIBRARY_OUTPUT = "libmal_rust.a";
 export const NATIVE_OUTPUT_PREFIX = "native.";
+export const ADA_NO_EXCEPTIONS_OUTPUT = `${NATIVE_OUTPUT_PREFIX}ada-url.libcxx-noexceptions.a`;
 export const DEVELOPMENT_RUNNER = "maligator-dev";
 export function prebuiltRuntimeCxxLibraries(target: string) {
 	const shipsArchives = prebuiltRuntimeTarget(target).platform === "linux";
@@ -383,11 +384,16 @@ function validArchiveNames(
 			archive === undefined ? [] : [`native.ada-url.${license}.a`],
 		),
 	];
+	const optional =
+		prebuiltRuntimeTarget(target).platform === "linux" ? [ADA_NO_EXCEPTIONS_OUTPUT] : [];
 	return (
 		new Set(names).size === names.length &&
 		required.every((name) => names.includes(name)) &&
 		names.some((name) => ringArchive.test(name) && !name.endsWith("__test.a")) &&
-		names.every((name) => required.includes(name) || ringArchive.test(name))
+		names.every(
+			(name) =>
+				required.includes(name) || optional.includes(name) || ringArchive.test(name),
+		)
 	);
 }
 

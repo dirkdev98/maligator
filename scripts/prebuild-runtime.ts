@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
 	copyFileSync,
@@ -41,7 +41,11 @@ import {
 	runtimeReleaseArchiveIdentity,
 } from "../src/runtime-build.ts";
 import { PINNED_ZIG_VERSION } from "../src/toolchain-fetch.ts";
-import { requireToolchain, toolArguments } from "../src/toolchain.ts";
+import {
+	requireToolchain,
+	toolArguments,
+	zigLibraryDirectory,
+} from "../src/toolchain.ts";
 import type { Toolchain } from "../src/toolchain.ts";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
@@ -53,15 +57,7 @@ function bundledCxxFiles(
 ): Array<{ name: string; file: string }> {
 	const components = prebuiltRuntimeCxxLibraries(toolchain.rustTarget);
 	const zig = toolchain.tools.zig!;
-	const zigEnv = execFileSync(zig.path, ["env"], {
-		cwd,
-		env: environment,
-		encoding: "utf8",
-	});
-	const libDirectory = /^\s*\.lib_dir = ("(?:[^"\\]|\\.)*"),$/m.exec(zigEnv)?.[1];
-	if (libDirectory === undefined)
-		throw new Error("Zig did not report its library directory");
-	const lib = path.resolve(cwd, JSON.parse(libDirectory) as string);
+	const lib = zigLibraryDirectory(zig, environment, cwd);
 	// The release executables can contain Zig's static libc++ on every platform.
 	const files = components.map(({ license }) => ({
 		name: `LICENSE.${license}`,

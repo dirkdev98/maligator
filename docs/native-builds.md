@@ -208,7 +208,10 @@ links system libc++ and Zig supplies its own libc++.
 Linux prefers LLD when the compiler can use it. GNU ld can require both
 components before discarding unused sections, so its fallback links both.
 Without the host personality, that fallback uses a static C++ runtime when the
-capability probe succeeds. Wasm builds compile only the configured features.
+capability probe succeeds. For ordinary Zig Linux builds, Ada uses libc++ and
+libc++abi code compiled without exceptions. This keeps the parser's allocation
+and thread-safe initialization support without linking the exception runtime.
+Wasm builds compile only the configured features.
 
 ## Cache layout
 

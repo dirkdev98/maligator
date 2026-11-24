@@ -22,6 +22,7 @@ import {
 import type { NativeBuildContext } from "./native-build-context.ts";
 import { runNativeCommand } from "./native-command.ts";
 import {
+	ADA_NO_EXCEPTIONS_OUTPUT,
 	importPrebuiltRuntimeAction,
 	NATIVE_OUTPUT_PREFIX,
 	prebuiltRustDirectory,
@@ -30,7 +31,12 @@ import {
 	RUST_LIBRARY_OUTPUT,
 } from "./prebuilt-runtime.ts";
 import type { PrebuiltRuntime } from "./prebuilt-runtime.ts";
-import { formatToolCommand, requireToolchain, toolArguments } from "./toolchain.ts";
+import {
+	formatToolCommand,
+	requireToolchain,
+	toolArguments,
+	zigLibraryDirectory,
+} from "./toolchain.ts";
 import { buildWorkerCount } from "./worker-budget.ts";
 
 export { resolvePathExecutable } from "./toolchain.ts";
@@ -39,7 +45,7 @@ function rustSourceHashOptions(rustRoot: string) {
 	return {
 		root: rustRoot,
 		directories: [rustRoot],
-		include: (entry: { name: string }) => /\.(?:rs|toml|lock)$/.test(entry.name),
+		include: (entry: { name: string }) => /\.(?:rs|toml|lock|cpp)$/.test(entry.name),
 		compareNames: legacyLocaleNameComparator,
 		descend: (entry: { dirent: { name: string }; relativeSegments: Array<string> }) =>
 			entry.relativeSegments.length !== 1 ||
@@ -80,7 +86,7 @@ export function rustArtifactKey(inputs: RustArtifactKeyInputs): string {
 	return artifactActionKey(RUST_PRODUCER, inputs);
 }
 
-export const RUST_PRODUCER = artifactProducer("rust-library", 4, "cargo-build");
+export const RUST_PRODUCER = artifactProducer("rust-library", 6, "cargo-build");
 const RUST_TARGET_PRODUCER = artifactProducer("rust-target", 1, "cargo-build");
 
 type RustArchiveInputs = Pick<
@@ -123,6 +129,78 @@ const NATIVE_COMPONENT_FEATURES: Readonly<Record<string, ReadonlyArray<string>>>
 	"ada-url": ["url"],
 	ring: ["tls", "node-crypto"],
 };
+
+function adaNoExceptionsArchive(
+	context: NativeBuildContext,
+	directory: string,
+	env: NodeJS.ProcessEnv,
+	verbose: boolean,
+): string | undefined {
+	const {
+		tools: { zig, cxx, ar },
+		cross,
+		platform,
+	} = context.toolchain;
+	const unwind = unwindTableCcFlags(platform ?? process.platform, env);
+	if (!cross || zig === undefined || cxx === undefined || unwind.length === 0)
+		return undefined;
+	mkdirSync(directory, { recursive: true });
+	const lib = zigLibraryDirectory(zig, env, directory);
+	// Match Ada's exception mode in the library code reached through extern
+	// templates, replaceable allocation operators and thread-safe statics.
+	const sources = [
+		"libcxx/src/string.cpp",
+		"libcxx/src/new_helpers.cpp",
+		"libcxxabi/src/abort_message.cpp",
+		"libcxxabi/src/cxa_default_handlers.cpp",
+		"libcxxabi/src/cxa_guard.cpp",
+		"libcxxabi/src/cxa_handlers.cpp",
+		"libcxxabi/src/cxa_virtual.cpp",
+		"libcxxabi/src/private_typeinfo.cpp",
+		"libcxxabi/src/stdlib_exception.cpp",
+		"libcxxabi/src/stdlib_typeinfo.cpp",
+	].map((file) => path.join(lib, file));
+	if (sources.some((file) => !existsSync(file))) return undefined;
+	sources.push(path.join(context.runtimeDirectory, "rust/cxx/ada_allocation.cpp"));
+	const objects = sources.map((file) => {
+		const object = path.join(directory, `${path.basename(file, ".cpp")}.o`);
+		runNativeCommand(
+			context,
+			cxx.path,
+			toolArguments(cxx, [
+				"-std=c++20",
+				"-O3",
+				"-g0",
+				"-DNDEBUG",
+				"-ffunction-sections",
+				"-fdata-sections",
+				"-fno-exceptions",
+				"-fno-sanitize=undefined",
+				...unwind,
+				"-D_LIBCPP_BUILDING_LIBRARY",
+				"-D_LIBCXXABI_BUILDING_LIBRARY",
+				"-D_LIBCXXABI_NO_EXCEPTIONS",
+				"-I",
+				path.join(lib, "libcxxabi/include"),
+				"-I",
+				path.join(lib, "libcxx/src"),
+				"-c",
+				file,
+				"-o",
+				object,
+			]),
+			{ cwd: directory, env, verbose },
+		);
+		return object;
+	});
+	const archive = path.join(directory, "libcxx-noexceptions.a");
+	runNativeCommand(context, ar.path, toolArguments(ar, ["rcs", archive, ...objects]), {
+		cwd: directory,
+		env,
+		verbose,
+	});
+	return archive;
+}
 
 /** Cargo inputs and content-addressed paths shared by every native feature selection. */
 export interface RustBuildPlan {
@@ -304,12 +382,16 @@ function resolvedRustArtifacts(
 		linkEveryComponent ||
 		(NATIVE_COMPONENT_FEATURES[packageName]?.some((feature) => features.has(feature)) ??
 			false);
+	const platform = context.toolchain.platform ?? process.platform;
+	const adaNoExceptions = nativeComponents.find(
+		({ name }) => name === ADA_NO_EXCEPTIONS_OUTPUT,
+	);
 	const componentLibraries = nativeComponents
 		.filter(selected)
+		.filter(({ name }) => name !== ADA_NO_EXCEPTIONS_OUTPUT)
 		.map((item) => item.library);
 	const usesUrlParser = features.has("url");
 	const linkCxx = linkEveryComponent || usesUrlParser;
-	const platform = context.toolchain.platform ?? process.platform;
 	// The packaged Ada archive uses the libc++ ABI. ELF links its bundled
 	// archives together, while macOS resolves that ABI through the link driver.
 	const groupComponents = prebuilt && linkCxx && platform === "linux";
@@ -334,6 +416,11 @@ function resolvedRustArtifacts(
 		linkArgs: [
 			library,
 			...(groupComponents ? ["-Wl,--start-group"] : []),
+			...(linkCxx &&
+			adaNoExceptions !== undefined &&
+			unwindTableCcFlags(platform, context.environment).length > 0
+				? [adaNoExceptions.library]
+				: []),
 			...componentLibraries,
 			...(groupComponents ? ["-Wl,--end-group"] : []),
 			...(linkCxx ? cxx : []),
@@ -601,6 +688,16 @@ export function ensureRustArtifacts(
 						cwd,
 						env,
 					);
+					const adaNoExceptions = libraries.some(
+						({ packageName }) => packageName === "ada-url",
+					)
+						? adaNoExceptionsArchive(
+								context,
+								path.join(plan.targetDirectory, "libcxx-noexceptions"),
+								env,
+								verbose,
+							)
+						: undefined;
 					const built = publishArtifactAction(
 						context.cacheDirectory,
 						"rust-library",
@@ -615,6 +712,9 @@ export function ensureRustArtifacts(
 								name: `${NATIVE_OUTPUT_PREFIX}${packageName}.${path.basename(archive)}`,
 								file: archive,
 							})),
+							...(adaNoExceptions === undefined
+								? []
+								: [{ name: ADA_NO_EXCEPTIONS_OUTPUT, file: adaNoExceptions }]),
 						],
 					);
 					context.onBuildPhase?.({
