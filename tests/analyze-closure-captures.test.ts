@@ -15,6 +15,7 @@ import {
 import {
 	emitBatch,
 	emitProgramImage,
+	NATIVE_C_HEADER_LINES,
 } from "../src/compiler/target/emit-program-image.ts";
 import {
 	deserializeRuntimeImage,
@@ -227,21 +228,30 @@ describe("external closure scope requirements", () => {
 		expect(portable.functions.every((fn) => fn.closureCaptureOwners === undefined)).toBe(
 			true,
 		);
-		const emitted = emitProgramImage(decoded);
-		expect(emitted).toContain(".closure_captures = closure_captures_value");
-		expect(emitted).toContain(
-			".closure_capture_owner_count = closure_capture_owner_count_value",
-		);
-		for (const source of [emitted, emitBatch([decoded])]) {
+		for (const [source, macro] of [
+			[emitProgramImage(decoded), "MAL_NATIVE_FUNCTION_ROW"],
+			[emitBatch([decoded]), "MAL_FUNCTION_ROW"],
+		] as const) {
 			expect(source).toMatch(
 				/static const i32 mal_\w*closure_capture_owners\w*\[\] = \{/,
 			);
-			expect(source).toMatch(
-				/MAL_FUNCTION_ROW\(nullptr, nullptr, mal_\w*closure_captures\w*, 0,/,
-			);
-			expect(source).toMatch(
-				/MAL_FUNCTION_ROW\(nullptr, nullptr, mal_\w*closure_captures\w*, 1,/,
-			);
+			const definition = NATIVE_C_HEADER_LINES.find((line) =>
+				line.startsWith(`#define ${macro}(`),
+			)!;
+			const parameters = /\(([^)]+)\)/.exec(definition)![1]!.split(", ");
+			const captureParameter = /\.closure_captures = (\w+)/.exec(definition)![1]!;
+			const countParameter = /\.closure_capture_owner_count = (\w+)/.exec(
+				definition,
+			)![1]!;
+			const rows = [...source.matchAll(new RegExp(`^\\s+${macro}\\((.*)\\),$`, "gm"))];
+			const ownerCounts = rows.map((row) => {
+				const values = row[1]!.split(", ");
+				expect(values[parameters.indexOf(captureParameter)]).toMatch(
+					/^mal_\w*closure_captures\w*$/,
+				);
+				return Number(values[parameters.indexOf(countParameter)]);
+			});
+			expect(ownerCounts).toEqual([0, 0, 1, 1]);
 		}
 	});
 });
