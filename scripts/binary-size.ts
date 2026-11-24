@@ -45,6 +45,7 @@ const forbiddenComponents = {
 		/^jiff(?:_|$)/.test(crate ?? "") ||
 		symbol === "_mal_host_install_intrinsic_date" ||
 		(bytes === 206788 && object.startsWith("libmal_rust.a(")),
+	"Jiff timezone wrapper": ({ crate }) => crate === "jiff",
 	"relocated primordial bindings": ({ symbol, relocatedConstant }) =>
 		relocatedConstant && /^_mal_vm_load_primordial\.bindings(?:$|\.)/.test(symbol),
 	rustls: ({ crate }) => /^rustls(?:_|$)/.test(crate ?? ""),
@@ -242,6 +243,7 @@ const fixtures: Array<{
 			"Brotli encoder",
 			"HTTP client",
 			"asymmetric keys",
+			"Jiff timezone wrapper",
 			"ring",
 			"rustls",
 			"argon2",

@@ -21,7 +21,6 @@ extern crate alloc;
 mod native_alloc;
 #[cfg(not(any(feature = "std", test)))]
 mod native_thread_local;
-#[cfg(not(any(feature = "std", test)))]
 mod native_timezone;
 #[cfg(not(any(feature = "std", test)))]
 pub(crate) use native_thread_local::tls_slot as thread_local;
@@ -83,7 +82,7 @@ pub extern "C" fn mal_i18n_abi_version() -> u32 {
 
 // The Intl (ICU4X) surface. Gated behind the `intl` Cargo feature so an
 // `engine.intl: false` build compiles the ICU crates away entirely — dropping the
-// ~9 MB of baked CLDR data. tz (jiff) stays unconditional; regexp is gated by
+// ~9 MB of baked CLDR data. The Date timezone reader is always built; regexp is gated by
 // `regexp` and URL by `url` (above). The
 // `#[no_mangle]` symbols export from inside this module regardless of Rust
 // visibility, so the C side links them exactly as before when the feature is on.
@@ -1434,17 +1433,9 @@ pub extern "C" fn mal_i18n_spike_roundtrip(x: u32) -> u32 {
 // host's (TZ env, then the /etc/localtime symlink). Cached once per process.
 // ---------------------------------------------------------------------------
 
-fn system_time_zone() -> &'static jiff::tz::TimeZone {
-    #[cfg(any(feature = "std", test))]
-    {
-        static TZ: std::sync::OnceLock<jiff::tz::TimeZone> = std::sync::OnceLock::new();
-        TZ.get_or_init(jiff::tz::TimeZone::system)
-    }
-    #[cfg(not(any(feature = "std", test)))]
-    {
-        static TZ: once_cell::race::OnceBox<jiff::tz::TimeZone> = once_cell::race::OnceBox::new();
-        TZ.get_or_init(|| alloc::boxed::Box::new(native_timezone::system()))
-    }
+fn system_time_zone() -> &'static native_timezone::TimeZone {
+    static TZ: once_cell::race::OnceBox<native_timezone::TimeZone> = once_cell::race::OnceBox::new();
+    TZ.get_or_init(|| alloc::boxed::Box::new(native_timezone::system()))
 }
 
 /// Project an ECMAScript Date instant into Jiff's supported span. Gregorian
@@ -1452,17 +1443,19 @@ fn system_time_zone() -> &'static jiff::tz::TimeZone {
 /// this preserves recurring TZif/POSIX rules outside Jiff's year range.
 const DATE_GREGORIAN_CYCLE_MS: i64 = 146_097 * 86_400_000;
 
-fn date_offset_timestamp(epoch_ms: i64) -> jiff::Timestamp {
-    if let Ok(timestamp) = jiff::Timestamp::from_millisecond(epoch_ms) {
+fn date_offset_timestamp(epoch_ms: i64) -> jiff_core::Timestamp {
+    use jiff_core::Timestamp;
+
+    if let Ok(timestamp) = Timestamp::from_millisecond(epoch_ms) {
         return timestamp;
     }
 
     const GREGORIAN_CYCLE_MS: i128 = DATE_GREGORIAN_CYCLE_MS as i128;
     let epoch_ms = epoch_ms as i128;
     let boundary_ms = if epoch_ms < 0 {
-        jiff::Timestamp::MIN.as_millisecond() as i128
+        Timestamp::MIN.as_millisecond() as i128
     } else {
-        jiff::Timestamp::MAX.as_millisecond() as i128
+        Timestamp::MAX.as_millisecond() as i128
     };
     let distance = (epoch_ms - boundary_ms).abs();
     let cycles = (distance + GREGORIAN_CYCLE_MS - 1) / GREGORIAN_CYCLE_MS;
@@ -1471,13 +1464,15 @@ fn date_offset_timestamp(epoch_ms: i64) -> jiff::Timestamp {
     } else {
         epoch_ms - cycles * GREGORIAN_CYCLE_MS
     };
-    jiff::Timestamp::from_millisecond(mapped_ms as i64)
-        .expect("400-year projection must fit Jiff's timestamp range")
+    let Ok(mapped) = Timestamp::from_millisecond(mapped_ms as i64) else {
+        unreachable!("400-year projection must fit the timezone reader's timestamp range")
+    };
+    mapped
 }
 
 /// Offset east-of-UTC, in milliseconds, of the system zone at the UTC instant
 /// `epoch_ms` across the full ECMAScript Date range.
-fn offset_ms_at(tz: &jiff::tz::TimeZone, epoch_ms: i64) -> i64 {
+fn offset_ms_at(tz: &native_timezone::TimeZone, epoch_ms: i64) -> i64 {
     tz.to_offset(date_offset_timestamp(epoch_ms)).seconds() as i64 * 1000
 }
 
@@ -1488,31 +1483,16 @@ pub extern "C" fn mal_i18n_local_offset_ms(epoch_ms: i64) -> i64 {
     offset_ms_at(system_time_zone(), epoch_ms)
 }
 
-fn compatible_offset_ms_from_local(
-    tz: &jiff::tz::TimeZone,
-    projected: jiff::Timestamp,
-) -> i64 {
-    use jiff::tz::AmbiguousOffset;
-
-    let local = jiff::tz::Offset::UTC.to_datetime(projected);
-    let offset = match tz.to_ambiguous_timestamp(local).offset() {
-        AmbiguousOffset::Unambiguous { offset } => offset,
-        AmbiguousOffset::Gap { before, .. } => before,
-        AmbiguousOffset::Fold { before, .. } => before,
-    };
-    offset.seconds() as i64 * 1000
-}
-
-fn utc_from_local_ms_at(tz: &jiff::tz::TimeZone, local_ms: i64) -> i64 {
-    let projected = date_offset_timestamp(local_ms);
-    let offset_ms = compatible_offset_ms_from_local(tz, projected);
+fn utc_from_local_ms_at(tz: &native_timezone::TimeZone, local_ms: i64) -> i64 {
+    let local = date_offset_timestamp(local_ms).to_datetime(jiff_core::tz::Offset::UTC);
+    let offset_ms = tz.local_offset(local).seconds() as i64 * 1000;
     // ECMAScript Date's local intermediates are at most one day beyond TimeClip
     // and cannot overflow. Keep the flat FFI total for arbitrary i64 callers too.
     local_ms.saturating_sub(offset_ms)
 }
 
 /// UTC(local_ms): map a local wall-clock (expressed as ms-since-epoch as if it
-/// were UTC) back to the UTC instant. Jiff's Compatible disambiguation selects
+/// were UTC) back to the UTC instant. Compatible disambiguation selects
 /// the earlier instant in a fold and advances by the gap for a nonexistent time.
 #[no_mangle]
 pub extern "C" fn mal_i18n_utc_from_local_ms(local_ms: i64) -> i64 {
@@ -1523,13 +1503,17 @@ pub extern "C" fn mal_i18n_utc_from_local_ms(local_ms: i64) -> i64 {
 /// as UTF-8, up to `cap` bytes. Returns the full byte length (probe with cap=0).
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_local_tz_name(buf: *mut u8, cap: i32) -> i32 {
-    let name = system_time_zone().iana_name().filter(|name| !name.is_empty()).unwrap_or("UTC");
-    unsafe { ffi::write_utf8(name, buf, cap) }
+    unsafe { ffi::write_utf8(system_time_zone().name(), buf, cap) }
 }
 
 #[cfg(test)]
 mod date_timezone_tests {
-    use super::{offset_ms_at, utc_from_local_ms_at};
+    use super::{date_offset_timestamp, native_timezone::TimeZone, offset_ms_at, utc_from_local_ms_at};
+
+    fn bundled(name: &str) -> TimeZone {
+        let (name, bytes) = jiff_tzdb::get(name).unwrap();
+        TimeZone::from_tzif(Some(name), bytes).unwrap()
+    }
 
     fn utc_ms(dt: jiff::civil::DateTime) -> i64 {
         jiff::tz::TimeZone::UTC
@@ -1540,7 +1524,7 @@ mod date_timezone_tests {
 
     #[test]
     fn named_zone_offsets_cover_ecmascript_date_extremes() {
-        let tz = jiff::tz::TimeZone::get("Europe/Amsterdam").unwrap();
+        let tz = bundled("Europe/Amsterdam");
 
         assert_ne!(offset_ms_at(&tz, -8_640_000_000_000_000), 0);
         assert_ne!(offset_ms_at(&tz, 8_640_000_000_000_000), 0);
@@ -1550,7 +1534,7 @@ mod date_timezone_tests {
     fn local_to_utc_uses_compatible_dst_disambiguation() {
         use jiff::civil::date;
 
-        let tz = jiff::tz::TimeZone::get("Europe/Amsterdam").unwrap();
+        let tz = bundled("Europe/Amsterdam");
 
         let fold = utc_ms(date(2024, 10, 27).at(2, 30, 0, 0));
         let fold_expected = utc_ms(date(2024, 10, 27).at(0, 30, 0, 0));
@@ -1559,5 +1543,48 @@ mod date_timezone_tests {
         let gap = utc_ms(date(2024, 3, 31).at(2, 30, 0, 0));
         let gap_expected = utc_ms(date(2024, 3, 31).at(1, 30, 0, 0));
         assert_eq!(utc_from_local_ms_at(&tz, gap), gap_expected);
+    }
+
+    #[test]
+    fn date_offsets_and_local_conversion_match_jiff_across_bundled_zones() {
+        use jiff::{civil::date, tz, Timestamp};
+
+        for name in jiff_tzdb::available() {
+            let zone = bundled(name);
+            let (_, bytes) = jiff_tzdb::get(name).unwrap();
+            let oracle = tz::TimeZone::tzif(name, bytes).unwrap();
+            let compare = |milliseconds: i64| {
+                let projected_ms = date_offset_timestamp(milliseconds).as_millisecond();
+                let instant = Timestamp::from_millisecond(projected_ms).unwrap();
+                let local = tz::Offset::UTC.to_datetime(instant);
+                let offset = oracle.to_offset(instant).seconds() as i64 * 1000;
+                let utc = oracle.to_ambiguous_timestamp(local).compatible().unwrap().as_millisecond();
+                assert_eq!(offset_ms_at(&zone, milliseconds), offset, "{name} UTC at {milliseconds}");
+                assert_eq!(
+                    utc_from_local_ms_at(&zone, milliseconds),
+                    milliseconds.saturating_sub(projected_ms - utc),
+                    "{name} local at {milliseconds}",
+                );
+            };
+            for ms in [i64::MIN, -8_640_000_000_000_000, 0, 8_640_000_000_000_000, i64::MAX] {
+                compare(ms);
+            }
+            let start = Timestamp::from_millisecond(utc_ms(date(1800, 1, 1).at(0, 0, 0, 0))).unwrap();
+            let end = utc_ms(date(2100, 1, 1).at(0, 0, 0, 0));
+            for transition in oracle.following(start) {
+                let instant = transition.timestamp().as_millisecond();
+                if instant >= end {
+                    break;
+                }
+                let prior = Timestamp::from_millisecond(instant - 1).unwrap();
+                let before = instant + oracle.to_offset(prior).seconds() as i64 * 1000;
+                let after = instant + transition.offset().seconds() as i64 * 1000;
+                for edge in [instant, before, after] {
+                    for delta in [-1, 0, 1] {
+                        compare(edge + delta);
+                    }
+                }
+            }
+        }
     }
 }

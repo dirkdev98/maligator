@@ -903,11 +903,9 @@ dependencies = [
  "jiff-core",
  "jiff-static",
  "jiff-tzdb",
- "log",
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-link",
 ]
 
 [[package]]
@@ -1003,6 +1001,8 @@ dependencies = [
  "icu_segmenter",
  "icu_time",
  "jiff",
+ "jiff-core",
+ "jiff-tzdb",
  "libc",
  "once_cell",
  "pkcs8",
@@ -1617,12 +1617,6 @@ name = "wasi"
 version = "0.11.1+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
-
-[[package]]
-name = "windows-link"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
 name = "windows-sys"

@@ -16,14 +16,13 @@ name = "mal_rust"
 crate-type = ["staticlib"]
 
 [dependencies]
-# Bundled IANA tzdb for Date's LocalTZA (deterministic offsets, not the host's
-# /usr/share/zoneinfo). The system zone *identity* still comes from TZ / the
-# /etc/localtime symlink via TimeZone::system().
-jiff = { version = "0.2.42", default-features = false, features = [
-	"tzdb-bundle-always",
+# Date uses the TZif reader directly, with bundled IANA data when there is no
+# matching system zoneinfo file.
+jiff-core = { version = "=0.1.4", default-features = false, features = [
+	"alloc",
 	"tz-fat",
-	"perf-inline",
 ] }
+jiff-tzdb = "0.1.9"
 libc = { version = "0.2", default-features = false }
 once_cell = { version = "1", default-features = false, features = ["alloc", "race"] }
 # Separate optional ICU4X components let Wasm builds compile only the selected
@@ -111,20 +110,20 @@ pkcs8 = { version = "0.11.0", default-features = false, features = [
 
 zeroize = { version = "1.8", optional = true }
 
+[dev-dependencies]
+jiff = { version = "0.2.42", default-features = false, features = [
+	"tzdb-bundle-always",
+	"tz-fat",
+] }
+
 [features]
 # Native builds compile every feature into one archive that all build
 # configurations share; the final link keeps what the C runtime references.
 # Wasm builds select the features of their configuration
-# (normalizeNativeFeatures). jiff (tz) is non-optional and always builds.
+# (normalizeNativeFeatures).
 default = ["std", "intl-full", "url", "regexp"]
 
-std = [
-	"jiff/std",
-	"jiff/tz-system",
-	"jiff/tzdb-zoneinfo",
-	"jiff/tzdb-concatenated",
-	"regress?/std",
-]
+std = ["regress?/std"]
 
 # The WHATWG URL surface: the ada-url (C++) parser.
 url = ["dep:ada-url"]
