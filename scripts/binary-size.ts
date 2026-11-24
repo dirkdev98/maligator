@@ -74,7 +74,11 @@ const forbiddenComponents = {
 	"Fetch objects": ({ object }) => /(?:^|[(-])web_fetch\.o\)?$/.test(object),
 	"HTTP client": ({ object, symbol }) =>
 		/(?:^|[(-])(?:web_fetch_client|http_client)\.o\)?$/.test(object) ||
-		/^_mal_(?:web_fetch_client|http_client)_/.test(symbol),
+		/^_mal_(?:web_fetch_client|http_client)_/.test(symbol) ||
+		/^_http_(?:client_(?:dispatch|request_constructor)|request_common)(?:$|\.)/.test(
+			symbol,
+		),
+	"asymmetric keys": ({ symbol }) => /^_mal_pkey_/.test(symbol),
 	TLS: ({ crate, object, symbol }) =>
 		/^rustls(?:_|$)/.test(crate ?? "") ||
 		/(?:^|[(-])node_tls\.o\)?$/.test(object) ||
@@ -236,6 +240,9 @@ const fixtures: Array<{
 		bun: true,
 		forbidden: [
 			"Brotli encoder",
+			"HTTP client",
+			"asymmetric keys",
+			"ring",
 			"rustls",
 			"argon2",
 			"Rust backtrace",

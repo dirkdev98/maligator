@@ -106,6 +106,7 @@ export const WORKER_THREADS_INSTALLER_SYMBOL = hostInstallerSymbol("node:worker_
 export const HTTP_INSTALLER_SYMBOL = hostInstallerSymbol("node:http");
 export const HTTP_WITHOUT_WEBSOCKET_INSTALLER =
 	"mal_host_install_node_http_without_websocket";
+export const HTTP_SERVER_INSTALLER = "mal_host_install_node_http_server";
 export const ZLIB_DECODERS_INSTALLER = "mal_host_install_node_zlib_decoders";
 export const CRYPTO_DIGESTS_INSTALLER = "mal_host_install_node_crypto_digests";
 
@@ -361,6 +362,7 @@ export const FETCH_MEMBER_PROVIDERS: ReadonlySet<string> = new Set([
 	hostInstallerSymbol("maligator:internal/fetch"),
 	hostInstallerSymbol("maligator:internal/http"),
 	HTTP_WITHOUT_WEBSOCKET_INSTALLER,
+	HTTP_SERVER_INSTALLER,
 	NODE_FS_READ_STREAM_INSTALLER,
 	NODE_BUILTIN_LOADER_INSTALLER,
 	...[

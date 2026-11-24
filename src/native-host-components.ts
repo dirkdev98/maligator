@@ -13,6 +13,7 @@ import {
 	HOST_MODULES,
 	HOST_PERSONALITY_INSTALLER,
 	hostInstallerSymbol,
+	HTTP_SERVER_INSTALLER,
 	HTTP_WITHOUT_WEBSOCKET_INSTALLER,
 	imageUsesHost,
 	NODE_CONSOLE_HOOKS_INSTALLER,
@@ -72,28 +73,16 @@ const RING_FREE_INSTALLERS = new Set([
 	BUFFER_INSTALLER_SYMBOL,
 	WEB_FETCH_INSTALLER,
 	WEB_FETCH_STREAMS_INSTALLER,
+	HTTP_SERVER_INSTALLER,
+	HTTP_WITHOUT_WEBSOCKET_INSTALLER,
 	"mal_host_install_web_events",
 	"mal_host_install_web_url",
 	"mal_host_install_maligator_assets",
 	hostInstallerSymbol("maligator:internal/http"),
-]);
-
-const RUST_INTL_INSTALLERS = new Set([
-	INTL_INSTALLER,
-	...Object.keys(INTL_SERVICE_FEATURES).map(intlServiceInstaller),
-]);
-
-// These installers stay within the archive that omits rustls I/O, Argon2 and
-// Temporal's upstream TZif provider. Unknown and name-resolved installers use
-// the full archive.
-const RUST_STD_FREE_INSTALLERS = new Set([
-	...RING_FREE_INSTALLERS,
-	...RUST_INTL_INSTALLERS,
 	NODE_PERSONALITY_INSTALLER,
 	PROCESS_INSTALLER_SYMBOL,
 	PERFORMANCE_INSTALLER_SYMBOL,
 	CRYPTO_DIGESTS_INSTALLER,
-	HTTP_WITHOUT_WEBSOCKET_INSTALLER,
 	ZLIB_DECODERS_INSTALLER,
 	NODE_FS_READ_FILE_INSTALLER,
 	NODE_FS_READ_STREAM_INSTALLER,
@@ -116,6 +105,19 @@ const RUST_STD_FREE_INSTALLERS = new Set([
 		"util",
 		"zlib",
 	].map((id) => hostInstallerSymbol(`node:${id}`)),
+]);
+
+const RUST_INTL_INSTALLERS = new Set([
+	INTL_INSTALLER,
+	...Object.keys(INTL_SERVICE_FEATURES).map(intlServiceInstaller),
+]);
+
+// These installers stay within the archive that omits rustls I/O, Argon2 and
+// Temporal's upstream TZif provider. Unknown and name-resolved installers use
+// the full archive.
+const RUST_STD_FREE_INSTALLERS = new Set([
+	...RING_FREE_INSTALLERS,
+	...RUST_INTL_INSTALLERS,
 ]);
 
 export function resolveNativeHostFeatures(

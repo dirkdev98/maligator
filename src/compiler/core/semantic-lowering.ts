@@ -50,6 +50,7 @@ import {
 	CRYPTO_DIGESTS_INSTALLER,
 	HOST_GLOBAL_INSTALLERS,
 	HOST_MODULES,
+	HTTP_SERVER_INSTALLER,
 	HTTP_WITHOUT_WEBSOCKET_INSTALLER,
 	hostInstallerSymbol,
 	NODE_BUILTIN_LOADER_INSTALLER,
@@ -1427,6 +1428,13 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 }
 
 const HTTP_WEBSOCKET_EXPORTS = new Set(["WebSocket", "CloseEvent", "MessageEvent"]);
+const HTTP_CLIENT_EXPORTS = new Set([
+	"request",
+	"get",
+	"ClientRequest",
+	"Agent",
+	"globalAgent",
+]);
 const ZLIB_DECODER_EXPORTS = new Set([
 	"BrotliDecompress",
 	"Gunzip",
@@ -1500,7 +1508,12 @@ function selectHostExportInstallers(
 					HOST_MODULES.get(id)!.named.includes(name) && !HTTP_WEBSOCKET_EXPORTS.has(name),
 			)
 		)
-			installers.set(hostInstallerSymbol(id), HTTP_WITHOUT_WEBSOCKET_INSTALLER);
+			installers.set(
+				hostInstallerSymbol(id),
+				exports.some((name) => HTTP_CLIENT_EXPORTS.has(name))
+					? HTTP_WITHOUT_WEBSOCKET_INSTALLER
+					: HTTP_SERVER_INSTALLER,
+			);
 		else if (
 			id === "node:zlib" &&
 			exports.every((name) => ZLIB_DECODER_EXPORTS.has(name))

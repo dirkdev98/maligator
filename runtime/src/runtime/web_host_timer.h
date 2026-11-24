@@ -72,6 +72,9 @@ void mal_host_run_event_loop_until(MalVm *vm, bool (*stop)(MalVm *, void *), voi
  * A `priority` source is polled before the ordinary ones, so a host interrupt
  * (a delivered POSIX signal) cannot be starved by a setImmediate chain. */
 void mal_host_register_macrotask_drain(MalHostMacrotaskDrain drain, bool priority);
+/* Upgrade a source in place so its position in checkpoint order is preserved. */
+void mal_host_replace_macrotask_drain(
+    MalHostMacrotaskDrain previous, MalHostMacrotaskDrain replacement);
 
 /* Register the runtime's "the loop just went idle" notification (node:process's
  * `beforeExit`). It runs only when nothing else can make progress, and returns

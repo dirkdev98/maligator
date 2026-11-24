@@ -127,6 +127,7 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_fs_promises);
     MATCH_INSTALLER(mal_host_install_node_http);
     MATCH_INSTALLER(mal_host_install_node_http_without_websocket);
+    MATCH_INSTALLER(mal_host_install_node_http_server);
     MATCH_INSTALLER(mal_host_install_node_https);
     MATCH_INSTALLER(mal_host_install_node_http2);
     MATCH_INSTALLER(mal_host_install_node_inspector);

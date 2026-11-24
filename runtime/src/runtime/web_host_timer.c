@@ -57,6 +57,16 @@ void mal_host_register_macrotask_drain(MalHostMacrotaskDrain drain, bool priorit
     mal_host_macrotask_drains[mal_host_macrotask_drain_count++] = drain;
 }
 
+void mal_host_replace_macrotask_drain(
+    MalHostMacrotaskDrain previous, MalHostMacrotaskDrain replacement) {
+    for (i32 i = 0; i < mal_host_macrotask_drain_count; i++) {
+        if (mal_host_macrotask_drains[i] != previous) continue;
+        mal_host_macrotask_drains[i] = replacement;
+        return;
+    }
+    abort();
+}
+
 void mal_host_register_idle_notify(MalHostIdleNotify notify) {
     mal_host_idle_notify = notify;
 }

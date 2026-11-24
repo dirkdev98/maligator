@@ -80,6 +80,19 @@ const cases = {
 			assert.throws(() => request(url), { code: "ERR_INVALID_URL" });
 		}
 	},
+	async protocol() {
+		for (const input of [
+			"https://example.test/",
+			new URL("https://example.test/"),
+			{ protocol: "https:" },
+		]) {
+			assert.throws(() => request(input), {
+				name: "TypeError",
+				code: "ERR_INVALID_PROTOCOL",
+				message: 'Protocol "https:" not supported. Expected "http:"',
+			});
+		}
+	},
 };
 const selected = process.env.MAL_TEST_HTTP_URL_CASE;
 if (selected) await cases[selected]();
