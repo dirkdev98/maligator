@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -46,7 +46,7 @@ describe("a host program that names no web global", () => {
 		).toEqual([]);
 	});
 
-	it("drops the ada URL parser (smaller than the same program parsing a URL)", () => {
+	it("links Ada only for the program that parses a URL", async () => {
 		const webOnFixture = path.join(outDir, "web-enabled.js");
 		writeFileSync(
 			webOnFixture,
@@ -59,9 +59,9 @@ describe("a host program that names no web global", () => {
 			outDir,
 			config,
 		});
-		const offSize = statSync(webOffBin).size;
-		const onSize = statSync(webOnBin).size;
-		// ada (C++ URL parser) + web_url.c measure ~0.5 MB; allow generous slack.
-		expect(onSize - offSize).toBeGreaterThan(300_000);
+		const isAdaSymbol = (symbol: string) => symbol.startsWith("ada_");
+		expect(await matchingNativeSymbols(webOffBin, isAdaSymbol)).toEqual([]);
+		expect(await matchingNativeSymbols(webOnBin, isAdaSymbol)).toContain("ada_parse");
+		expect(runToStdout(webOnBin)).toContain("example.com\n");
 	});
 });
