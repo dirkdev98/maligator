@@ -50,7 +50,9 @@ describe("emitted C source mapping", () => {
 			lines.slice(range.startLine - 1, range.endLine).join("\n"),
 		);
 		expect(
-			bodies.filter((body) => /mal_vm_property_(?:leaf_)?try_load_static\(/.test(body)),
+			bodies.filter((body) =>
+				/mal_vm_property_(?:leaf_)?try_load_static(?:_compact)?\(/.test(body),
+			),
 		).toHaveLength(2);
 		for (const body of bodies) {
 			expect(body).not.toContain("#pragma");
