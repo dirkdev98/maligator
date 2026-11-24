@@ -42,7 +42,8 @@ static bool boundary(MalVm *vm, const byte *method, f64 start, const f64 expecte
         MalValue value;
         bool finished;
         if (step == 1) {
-            if (mal_builtin_iterator_helper_try_step(vm, &record, &value, &finished) != 1 || finished) goto done;
+            if (vm->iterator_helper_step == nullptr ||
+                vm->iterator_helper_step(vm, &record, &value, &finished) != 1 || finished) goto done;
         } else {
             MalCompletion result = mal_vm_call_value(vm, roots[3], roots[2], nullptr, 0);
             if (result.kind != MAL_COMPLETION_NORMAL) goto done;
