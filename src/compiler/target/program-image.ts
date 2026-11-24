@@ -7,6 +7,7 @@ import type {
 	CoreStringSpanRangeOperation,
 	CoreRegExpProjectionSelector,
 } from "../core/core-ir-regions.ts";
+import type { HostExportSelection } from "../frontend/host-export-uses.ts";
 import type {
 	SourceFunctionOrigin,
 	SourceCallSite,
@@ -1010,6 +1011,7 @@ export interface NativePlan {
 	readonly semanticProtectors: ReadonlyArray<VmSemanticProtectorFact>;
 	readonly functions: ReadonlyArray<NativeFunctionPlan>;
 	readonly builtinMemberNames?: ReadonlyArray<string>;
+	readonly hostExportSelections?: ReadonlyArray<HostExportSelection>;
 	/** Layouts admitted into per-VM cells; `class-layout` instruction plans name them by ordinal. */
 	readonly classLayouts?: ReadonlyArray<CoreTargetClassLayout>;
 }
@@ -3396,6 +3398,9 @@ export function lowerVerifiedExecutionToProgramImage(
 				...(context.data.builtinMemberNames === undefined
 					? {}
 					: { builtinMemberNames: context.data.builtinMemberNames }),
+				...(context.data.hostExportSelections === undefined
+					? {}
+					: { hostExportSelections: context.data.hostExportSelections }),
 				...(nativeProgram.classLayouts.length === 0
 					? {}
 					: { classLayouts: nativeProgram.classLayouts }),

@@ -24,6 +24,10 @@ import {
 	ZLIB_DECODERS_INSTALLER,
 } from "../src/compiler/frontend/host-modules.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
+import {
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
+} from "../src/compiler/target/compiler-artifact-codec.ts";
 import type { Execution } from "../src/platform/execution.ts";
 import { executionTarget, resolveExecution } from "../src/platform/execution.ts";
 
@@ -38,6 +42,20 @@ afterEach(() => {
 });
 
 describe("selective host exports", () => {
+	it("preserves named host export selection through the compiler cache", () => {
+		const image = compileHostSource(
+			`import * as net from "node:net";
+			import { release } from "node:os";
+			console.log(net.isIP("127.0.0.1"), release());`,
+			defaultConfig,
+		);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		expect(restored.native.hostExportSelections).toEqual([
+			{ id: "node:net", names: ["isIP"] },
+			{ id: "node:os", names: ["release"] },
+		]);
+	});
+
 	it("links decoder support for a static access on the default import", () => {
 		const installs = manifest(
 			`import zlib from "node:zlib"; globalThis.decode = zlib.gunzipSync;`,
@@ -73,6 +91,19 @@ function manifest(
 	config: typeof defaultConfig,
 	options: { execution?: Execution; files?: Record<string, string> } = {},
 ): Map<string, Array<string>> {
+	return new Map(
+		compileHostSource(source, config, options).runtime.hostInstalls.map((install) => [
+			install.installer,
+			install.exports.map((entry) => entry.name),
+		]),
+	);
+}
+
+function compileHostSource(
+	source: string,
+	config: typeof defaultConfig,
+	options: { execution?: Execution; files?: Record<string, string> } = {},
+) {
 	const root = mkdtempSync(path.join(tmpdir(), "maligator-install-retention-"));
 	roots.push(root);
 	for (const [file, contents] of Object.entries(options.files ?? {})) {
@@ -81,17 +112,11 @@ function manifest(
 	}
 	const entry = path.join(root, "main.mjs");
 	writeFileSync(entry, source);
-	const image = compileEntrypoint(entry, {
+	return compileEntrypoint(entry, {
 		buildConfig: config,
 		stripTypes: stripCompactTypes,
 		...(options.execution === undefined ? {} : { execution: options.execution }),
 	});
-	return new Map(
-		image.runtime.hostInstalls.map((install) => [
-			install.installer,
-			install.exports.map((entry) => entry.name),
-		]),
-	);
 }
 
 /** Module and process installers, separate from runtime personality and language features. */

@@ -5,6 +5,11 @@ import type { SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
 
 type Uses = Set<string> | null;
 
+export interface HostExportSelection {
+	readonly id: string;
+	readonly names: ReadonlyArray<string>;
+}
+
 function readMember(
 	value: ESTree.Node,
 	parents: ReadonlyMap<ESTree.Node, ESTree.Node>,

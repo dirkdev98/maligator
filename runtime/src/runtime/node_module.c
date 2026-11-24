@@ -80,6 +80,25 @@ bool mal_node_module_install_cached(
     return true;
 }
 
+void mal_node_module_install_selected(
+    MalVm *vm, const char *id, const MalHostInstallSlot *slots, i32 count,
+    const MalNodeExportInstaller *exports, usize export_count) {
+    if (mal_node_module_install_cached(vm, id, slots, count)) return;
+    MalObject *object = mal_intrinsic_new_object(vm);
+    MalValue module = mal_value_from_object(object);
+    MalRootSpan root;
+    mal_gc_root(&root, &module, 1);
+    for (usize index = 0; index < export_count; index++) {
+        exports[index](vm, object);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            mal_gc_unroot(&root);
+            return;
+        }
+    }
+    mal_node_module_publish(vm, id, slots, count, module);
+    mal_gc_unroot(&root);
+}
+
 MalNodeBrandCheck mal_node_key_object_brand;
 MalNodeBrandCheck mal_node_crypto_key_brand;
 

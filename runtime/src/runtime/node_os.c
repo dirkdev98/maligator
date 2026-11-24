@@ -655,93 +655,74 @@ static void os_install_priority(MalVm *vm, MalObject *constants) {
         os_constant_table(vm, names, values, countof(names)), MAL_PROPERTY_ENUMERABLE);
 }
 
+static void os_install_string(MalVm *vm, MalObject *module, const byte *key, const byte *value) {
+    mal_intrinsic_define_data(vm, module, key,
+        mal_value_from_string(mal_string_new_ascii(&vm->heap, value, strlen(value))),
+        MAL_PROPERTY_ENUMERABLE);
+}
+
+static void os_install_constants_export(MalVm *vm, MalObject *module, const byte *key) {
+    MalValue constants = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    MalRootSpan constants_root;
+    mal_gc_root(&constants_root, &constants, 1);
+    os_install_constants(vm, mal_value_to_object(constants));
+    MalValue signals = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    MalRootSpan signals_root;
+    mal_gc_root(&signals_root, &signals, 1);
+    for (i32 i = 0; mal_host_signal_constant_name(i) != nullptr; i++) {
+        mal_intrinsic_define_data(vm, mal_value_to_object(signals),
+            (const byte *) mal_host_signal_constant_name(i),
+            mal_value_from_i32(mal_host_signal_constant_number(i)),
+            MAL_PROPERTY_ENUMERABLE);
+    }
+    mal_intrinsic_define_data(vm, mal_value_to_object(constants),
+        (const byte *) "signals", signals, MAL_PROPERTY_ENUMERABLE);
+    os_install_priority(vm, mal_value_to_object(constants));
+    mal_intrinsic_define_data(vm, module, key, constants, MAL_PROPERTY_ENUMERABLE);
+    mal_gc_unroot(&signals_root);
+    mal_gc_unroot(&constants_root);
+}
+
+#define OS_EXPORTS(X) \
+    X(os_hostname, "hostname", mal_intrinsic_define_method_n, 0, os_hostname) \
+    X(os_homedir, "homedir", mal_intrinsic_define_method_n, 0, os_homedir) \
+    X(os_type, "type", mal_intrinsic_define_method_n, 0, os_type) \
+    X(os_endianness, "endianness", mal_intrinsic_define_method_n, 0, os_endianness) \
+    X(os_arch, "arch", mal_intrinsic_define_method_n, 0, os_arch) \
+    X(os_release, "release", mal_intrinsic_define_method_n, 0, os_release) \
+    X(os_platform, "platform", mal_intrinsic_define_method_n, 0, os_platform) \
+    X(os_tmpdir, "tmpdir", mal_intrinsic_define_method_n, 0, os_tmpdir) \
+    X(os_available_parallelism, "availableParallelism", mal_intrinsic_define_method_n, 0, os_available_parallelism) \
+    X(os_cpus, "cpus", mal_intrinsic_define_method_n, 0, os_cpus) \
+    X(os_machine, "machine", mal_intrinsic_define_method_n, 0, os_machine) \
+    X(os_version, "version", mal_intrinsic_define_method_n, 0, os_version) \
+    X(os_freemem, "freemem", mal_intrinsic_define_method_n, 0, os_freemem) \
+    X(os_totalmem, "totalmem", mal_intrinsic_define_method_n, 0, os_totalmem) \
+    X(os_uptime, "uptime", mal_intrinsic_define_method_n, 0, os_uptime) \
+    X(os_loadavg, "loadavg", mal_intrinsic_define_method_n, 0, os_loadavg) \
+    X(os_user_info, "userInfo", mal_intrinsic_define_method_n, 0, os_user_info) \
+    X(os_eol, "EOL", os_install_string, "\n") \
+    X(os_dev_null, "devNull", os_install_string, "/dev/null") \
+    X(os_network_interfaces, "networkInterfaces", mal_intrinsic_define_method_n, 0, os_network_interfaces) \
+    X(os_get_priority, "getPriority", mal_intrinsic_define_method_n, 1, os_get_priority) \
+    X(os_set_priority, "setPriority", mal_intrinsic_define_method_n, 2, os_set_priority) \
+    X(os_constants, "constants", os_install_constants_export)
+MAL_DEFINE_NODE_EXPORTS(os, OS_EXPORTS)
+
 void mal_host_install_node_os(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
     if (mal_node_module_install_cached(vm, "node:os", slots, count)) return;
-    MalValue module = vm->intrinsics[MAL_INTRINSIC_NODE_OS_MODULE];
-    if (mal_value_is_undefined(module)) {
-        module = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalValue value = vm->intrinsics[MAL_INTRINSIC_NODE_OS_MODULE];
+    if (mal_value_is_undefined(value)) {
+        MalObject *module = mal_intrinsic_new_object(vm);
+        value = mal_value_from_object(module);
         MalRootSpan root;
-        mal_gc_root(&root, &module, 1);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "hostname", 0,
-            os_hostname);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "homedir", 0,
-            os_homedir);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "type", 0, os_type);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "endianness", 0,
-            os_endianness);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "arch", 0, os_arch);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "release", 0, os_release);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "platform", 0,
-            os_platform);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "tmpdir", 0, os_tmpdir);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "availableParallelism", 0,
-            os_available_parallelism);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "cpus", 0, os_cpus);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "machine", 0, os_machine);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "version", 0, os_version);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "freemem", 0, os_freemem);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "totalmem", 0, os_totalmem);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "uptime", 0, os_uptime);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "loadavg", 0, os_loadavg);
-        mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(module), (const byte *) "userInfo", 0, os_user_info);
-        mal_intrinsic_define_data(
-            vm, mal_value_to_object(module), (const byte *) "EOL",
-            mal_value_from_string(mal_string_new_ascii(
-                &vm->heap, (const byte *) "\n", 1)),
-            MAL_PROPERTY_ENUMERABLE);
-        mal_intrinsic_define_data(
-            vm, mal_value_to_object(module), (const byte *) "devNull",
-            mal_value_from_string(mal_string_new_ascii(
-                &vm->heap, (const byte *) "/dev/null", 9)),
-            MAL_PROPERTY_ENUMERABLE);
-        mal_intrinsic_define_method_n(vm, mal_value_to_object(module), (const byte *) "networkInterfaces", 0,
-            os_network_interfaces);
-        mal_intrinsic_define_method_n(vm, mal_value_to_object(module), (const byte *) "getPriority", 1,
-            os_get_priority);
-        mal_intrinsic_define_method_n(vm, mal_value_to_object(module), (const byte *) "setPriority", 2,
-            os_set_priority);
-        MalValue constants = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
-        MalRootSpan constants_root;
-        mal_gc_root(&constants_root, &constants, 1);
-        os_install_constants(vm, mal_value_to_object(constants));
-        MalValue signals = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
-        MalRootSpan signals_root;
-        mal_gc_root(&signals_root, &signals, 1);
-        for (i32 i = 0; mal_host_signal_constant_name(i) != nullptr; i++) {
-            mal_intrinsic_define_data(vm, mal_value_to_object(signals),
-                (const byte *) mal_host_signal_constant_name(i),
-                mal_value_from_i32(mal_host_signal_constant_number(i)),
-                MAL_PROPERTY_ENUMERABLE);
-        }
-        mal_intrinsic_define_data(vm, mal_value_to_object(constants),
-            (const byte *) "signals", signals, MAL_PROPERTY_ENUMERABLE);
-        os_install_priority(vm, mal_value_to_object(constants));
-        mal_intrinsic_define_data(vm, mal_value_to_object(module),
-            (const byte *) "constants", constants, MAL_PROPERTY_ENUMERABLE);
-        mal_gc_unroot(&signals_root);
-        mal_gc_unroot(&constants_root);
-        vm->intrinsics[MAL_INTRINSIC_NODE_OS_MODULE] = module;
+        mal_gc_root(&root, &value, 1);
+        OS_EXPORTS(MAL_NODE_EXPORT_INSTALL)
+        vm->intrinsics[MAL_INTRINSIC_NODE_OS_MODULE] = value;
         mal_gc_unroot(&root);
     }
-    mal_node_module_publish(vm, "node:os", slots, count, module);
+    mal_node_module_publish(vm, "node:os", slots, count, value);
 }

@@ -2666,45 +2666,93 @@ typedef struct MalNodeUtilExport {
     MalNativeFunctionCallback callback;
 } MalNodeUtilExport;
 
+static MalValue util_make_export(
+    MalVm *vm, const byte *name, i32 length, MalNativeFunctionCallback callback) {
+    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalValue value = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(&vm->heap, function_prototype,
+            mal_intrinsic_ascii(vm, name), length, callback));
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    if (callback == mal_node_util_inspect) {
+        mal_node_inspect_install_tables(vm, mal_value_to_object(value));
+    } else if (callback == util_extend) {
+        // Node wraps _extend in deprecate(..., 'DEP0060').
+        MalValue slots[] = {value,
+            mal_value_from_string(mal_intrinsic_ascii(vm,
+                "The `util._extend` API is deprecated. Please use Object.assign() instead.")),
+            mal_value_new_boolean(false)};
+        MalRootSpan slot_root;
+        mal_gc_root(&slot_root, slots, countof(slots));
+        value = mal_value_from_native_function_object(
+            mal_native_function_object_new_with_slots_arity(&vm->heap, function_prototype,
+                mal_intrinsic_ascii(vm, "deprecated"), 2, util_deprecated_call,
+                slots, countof(slots)));
+        mal_gc_unroot(&slot_root);
+    } else if (callback == util_promisify) {
+        mal_intrinsic_define_data(vm, mal_value_to_object(value), "custom",
+            mal_node_registered_symbol(vm, "nodejs.util.promisify.custom"), UTIL_VISIBLE);
+    }
+    mal_gc_unroot(&root);
+    return value;
+}
+
+static void util_install_export(
+    MalVm *vm, MalObject *module, const byte *name, i32 length, MalNativeFunctionCallback callback) {
+    mal_intrinsic_define_data(vm, module, name, util_make_export(vm, name, length, callback), UTIL_VISIBLE);
+}
+
+static void util_install_abort_controller(
+    MalVm *vm, MalObject *module, const byte *name, i32 length, MalNativeFunctionCallback callback) {
+    if (mal_web_events_ensure(vm) == nullptr) return;
+    util_install_export(vm, module, name, length, callback);
+}
+
+#define UTIL_FUNCTION_EXPORTS(X) \
+    X(util_extend, "_extend", util_install_export, 2, util_extend) \
+    X(util_aborted, "aborted", util_install_export, 2, util_aborted) \
+    X(util_callbackify, "callbackify", util_install_export, 1, util_callbackify) \
+    X(util_convert_signal_to_exit_code, "convertProcessSignalToExitCode", util_install_export, 1, util_convert_signal_to_exit_code) \
+    X(util_deprecate, "deprecate", util_install_export, 3, util_deprecate) \
+    X(util_diff, "diff", util_install_export, 2, util_diff) \
+    X(util_get_call_sites, "getCallSites", util_install_export, 0, util_get_call_sites) \
+    X(util_get_system_error_map, "getSystemErrorMap", util_install_export, 0, util_get_system_error_map) \
+    X(util_get_system_error_message, "getSystemErrorMessage", util_install_export, 1, util_get_system_error_message) \
+    X(util_get_system_error_name, "getSystemErrorName", util_install_export, 1, util_get_system_error_name) \
+    X(util_is_deep_strict_equal, "isDeepStrictEqual", util_install_export, 2, util_is_deep_strict_equal) \
+    X(util_mark_promise_as_handled, "markPromiseAsHandled", util_install_export, 1, util_mark_promise_as_handled) \
+    X(util_strip_vt_control_characters, "stripVTControlCharacters", util_install_export, 1, util_strip_vt_control_characters) \
+    X(util_transferable_abort_controller, "transferableAbortController", util_install_abort_controller, 0, util_transferable_abort_controller) \
+    X(util_transferable_abort_signal, "transferableAbortSignal", util_install_export, 1, util_transferable_abort_signal) \
+    X(util_debounce, "debounce", util_install_export, 2, util_debounce) \
+    X(util_debuglog, "debuglog", util_install_export, 2, util_debuglog) \
+    X(mal_node_util_format, "format", util_install_export, 1, mal_node_util_format) \
+    X(mal_node_util_format_with_options, "formatWithOptions", util_install_export, 2, mal_node_util_format_with_options) \
+    X(util_inherits, "inherits", util_install_export, 2, util_inherits) \
+    X(mal_node_util_inspect, "inspect", util_install_export, 2, mal_node_util_inspect) \
+    X(util_is_array, "isArray", util_install_export, 1, util_is_array) \
+    X(util_is_boolean, "isBoolean", util_install_export, 1, util_is_boolean) \
+    X(util_is_buffer, "isBuffer", util_install_export, 1, util_is_buffer) \
+    X(util_is_function, "isFunction", util_install_export, 1, util_is_function) \
+    X(util_is_null, "isNull", util_install_export, 1, util_is_null) \
+    X(util_is_null_or_undefined, "isNullOrUndefined", util_install_export, 1, util_is_null_or_undefined) \
+    X(util_is_number, "isNumber", util_install_export, 1, util_is_number) \
+    X(util_is_object, "isObject", util_install_export, 1, util_is_object) \
+    X(util_is_string, "isString", util_install_export, 1, util_is_string) \
+    X(util_is_symbol, "isSymbol", util_install_export, 1, util_is_symbol) \
+    X(util_is_undefined, "isUndefined", util_install_export, 1, util_is_undefined) \
+    X(util_parse_args, "parseArgs", util_install_export, 0, util_parse_args) \
+    X(util_parse_env, "parseEnv", util_install_export, 1, util_parse_env) \
+    X(util_promisify, "promisify", util_install_export, 1, util_promisify) \
+    X(util_style_text, "styleText", util_install_export, 2, util_style_text) \
+    X(util_to_usv_string, "toUSVString", util_install_export, 1, util_to_usv_string)
+MAL_DEFINE_NODE_EXPORTS(util, UTIL_FUNCTION_EXPORTS)
+
+#define UTIL_EXPORT_ROW(symbol, key, define, arity, callback) {key, arity, callback},
 static const MalNodeUtilExport util_exports[] = {
-    {"_extend", 2, util_extend},
-    {"aborted", 2, util_aborted},
-    {"callbackify", 1, util_callbackify},
-    {"convertProcessSignalToExitCode", 1, util_convert_signal_to_exit_code},
-    {"deprecate", 3, util_deprecate},
-    {"diff", 2, util_diff},
-    {"getCallSites", 0, util_get_call_sites},
-    {"getSystemErrorMap", 0, util_get_system_error_map},
-    {"getSystemErrorMessage", 1, util_get_system_error_message},
-    {"getSystemErrorName", 1, util_get_system_error_name},
-    {"isDeepStrictEqual", 2, util_is_deep_strict_equal},
-    {"markPromiseAsHandled", 1, util_mark_promise_as_handled},
-    {"stripVTControlCharacters", 1, util_strip_vt_control_characters},
-    {"transferableAbortController", 0, util_transferable_abort_controller},
-    {"transferableAbortSignal", 1, util_transferable_abort_signal},
-    {"debounce", 2, util_debounce},
-    {"debuglog", 2, util_debuglog},
-    {"format", 1, mal_node_util_format},
-    {"formatWithOptions", 2, mal_node_util_format_with_options},
-    {"inherits", 2, util_inherits},
-    {"inspect", 2, mal_node_util_inspect},
-    {"isArray", 1, util_is_array},
-    {"isBoolean", 1, util_is_boolean},
-    {"isBuffer", 1, util_is_buffer},
-    {"isFunction", 1, util_is_function},
-    {"isNull", 1, util_is_null},
-    {"isNullOrUndefined", 1, util_is_null_or_undefined},
-    {"isNumber", 1, util_is_number},
-    {"isObject", 1, util_is_object},
-    {"isString", 1, util_is_string},
-    {"isSymbol", 1, util_is_symbol},
-    {"isUndefined", 1, util_is_undefined},
-    {"parseArgs", 0, util_parse_args},
-    {"parseEnv", 1, util_parse_env},
-    {"promisify", 1, util_promisify},
-    {"styleText", 2, util_style_text},
-    {"toUSVString", 1, util_to_usv_string},
+    UTIL_FUNCTION_EXPORTS(UTIL_EXPORT_ROW)
 };
+#undef UTIL_EXPORT_ROW
 
 void mal_host_install_node_util(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
@@ -2726,31 +2774,7 @@ void mal_host_install_node_util(
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     for (usize i = 0; i < countof(util_exports); i++) {
         const MalNodeUtilExport *export = &util_exports[i];
-        values[i] = mal_value_from_native_function_object(
-            mal_native_function_object_new_arity(&vm->heap, function_prototype,
-                mal_intrinsic_ascii(vm, (const byte *) export->name),
-                export->length, export->callback));
-    }
-    for (usize i = 0; i < countof(util_exports); i++) {
-        if (strcmp(util_exports[i].name, "inspect") == 0) {
-            mal_node_inspect_install_tables(vm, mal_value_to_object(values[i]));
-        } else if (strcmp(util_exports[i].name, "_extend") == 0) {
-            // Node wraps _extend in deprecate(..., 'DEP0060'): named "deprecated", length 2.
-            MalValue slots[] = {values[i],
-                mal_value_from_string(mal_intrinsic_ascii(vm,
-                    (const byte *) "The `util._extend` API is deprecated. Please use Object.assign() instead.")),
-                mal_value_new_boolean(false)};
-            MalRootSpan slot_root;
-            mal_gc_root(&slot_root, slots, countof(slots));
-            values[i] = mal_value_from_native_function_object(
-                mal_native_function_object_new_with_slots_arity(&vm->heap, function_prototype,
-                    mal_intrinsic_ascii(vm, (const byte *) "deprecated"), 2, util_deprecated_call,
-                    slots, countof(slots)));
-            mal_gc_unroot(&slot_root);
-        } else if (strcmp(util_exports[i].name, "promisify") == 0) {
-            mal_intrinsic_define_data(vm, mal_value_to_object(values[i]), (const byte *) "custom",
-                mal_node_registered_symbol(vm, "nodejs.util.promisify.custom"), UTIL_VISIBLE);
-        }
+        values[i] = util_make_export(vm, export->name, export->length, export->callback);
     }
 	values[types_index] = mal_value_from_object(mal_intrinsic_new_object(vm));
 	values[namespace_index] = mal_value_from_native_function_object(

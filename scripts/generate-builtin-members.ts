@@ -15,6 +15,7 @@ const entries = new Map<
 >();
 const nativeKeys = new Set<string>();
 const nativeDependencies: Array<readonly [owner: string, key: string]> = [];
+const nodeExports = new Map<string, Array<readonly [name: string, symbol: string]>>();
 for (const directory of [
 	runtime,
 	path.join(runtime, "runtime"),
@@ -23,6 +24,19 @@ for (const directory of [
 	for (const file of readdirSync(directory).filter((name) => /\.[ch]$/.test(name))) {
 		const source = readFileSync(path.join(directory, file), "utf8");
 		let nativeCode = source;
+		for (const list of source.matchAll(/^MAL_DEFINE_NODE_EXPORTS\((\w+), (\w+)\)$/gm)) {
+			const [, id, macro] = list;
+			const start = source.indexOf(`#define ${macro}(X)`);
+			const body = start === -1 ? "" : source.slice(start, list.index);
+			const rows = [...body.matchAll(/^ +X\((\w+), "([^"\n]+)", (\w+)[,)]/gm)];
+			if (rows.length === 0 || nodeExports.has(id!))
+				throw new Error(`Invalid Node export list ${id} in ${file}`);
+			nodeExports.set(
+				id!,
+				rows.map(([, symbol, name]) => [name!, `mal_node_export_${symbol}`]),
+			);
+			nativeCode = nativeCode.replace(body, "");
+		}
 		for (const list of source.matchAll(
 			/^MAL_DEFINE_(?:BUILTIN|CUSTOM)_MEMBER_GROUP\((\w+), (\w+)\)$/gm,
 		)) {
@@ -89,6 +103,9 @@ const result = await format(
 		`}> = ${JSON.stringify(catalog, null, "\t")};`,
 		`export const NATIVE_BUILTIN_MEMBER_NAMES: ReadonlyArray<string> = ${JSON.stringify(nativeMemberNames)};`,
 		`export const NATIVE_BUILTIN_MEMBER_DEPENDENCIES: ReadonlyArray<readonly [owner: string, key: string]> = ${JSON.stringify(nativeDependencies.sort())};`,
+		`export const NODE_EXPORT_GROUPS: ReadonlyMap<string, ReadonlyArray<readonly [name: string, symbol: string]>> = new Map(${JSON.stringify(
+			[...nodeExports].sort().map(([id, exports]) => [`node:${id}`, exports]),
+		)});`,
 	].join("\n"),
 	formatOptions,
 );

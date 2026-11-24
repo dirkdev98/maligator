@@ -1724,91 +1724,108 @@ static MalValue url_proto_parse(
         argc > 1 && mal_value_is_truthy(args[1]), argc > 2 && mal_value_is_truthy(args[2]));
 }
 
+static MalValue url_ensure_legacy_constructor(MalVm *vm) {
+    MalValue existing = vm->intrinsics[MAL_INTRINSIC_NODE_URL_CONSTRUCTOR];
+    if (!mal_value_is_undefined(existing)) return existing;
+    MalValue roots[] = {
+        mal_value_from_object(mal_intrinsic_new_object(vm)),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, "Url"), 0, url_constructor);
+    mal_native_function_object_set_constructor(constructor);
+    mal_native_function_object_set_handles_new_target_prototype(constructor);
+    roots[1] = mal_value_from_native_function_object(constructor);
+    MalObject *prototype = mal_value_to_object(roots[0]);
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", roots[0], MAL_PROPERTY_WRITABLE);
+    mal_intrinsic_define_data(vm, prototype, "constructor", roots[1], URL_METHOD);
+    mal_intrinsic_define_method_n(vm, prototype, "resolve", 1, url_proto_resolve);
+    mal_intrinsic_define_method_n(vm, prototype, "resolveObject", 1, url_proto_resolve_object);
+    mal_intrinsic_define_method_n(vm, prototype, "format", 0, url_proto_format);
+    mal_intrinsic_define_method_n(vm, prototype, "parse", 3, url_proto_parse);
+    vm->intrinsics[MAL_INTRINSIC_NODE_URL_PROTOTYPE] = roots[0];
+    vm->intrinsics[MAL_INTRINSIC_NODE_URL_CONSTRUCTOR] = roots[1];
+    mal_gc_unroot(&root);
+    return roots[1];
+}
+
+static void url_install_legacy_constructor(MalVm *vm, MalObject *module, const byte *key) {
+    mal_intrinsic_define_data(vm, module, key, url_ensure_legacy_constructor(vm), URL_VISIBLE);
+}
+
+static void url_install_visible_method(
+    MalVm *vm, MalObject *module, const byte *key, i32 length, MalNativeFunctionCallback callback) {
+    MalValue method = mal_intrinsic_define_method_n(vm, module, key, length, callback);
+    mal_intrinsic_define_data(vm, module, key, method, URL_VISIBLE);
+}
+
+static void url_install_legacy_method(
+    MalVm *vm, MalObject *module, const byte *key, i32 length, MalNativeFunctionCallback callback,
+    bool visible) {
+    url_ensure_legacy_constructor(vm);
+    if (visible) url_install_visible_method(vm, module, key, length, callback);
+    else mal_intrinsic_define_method_n(vm, module, key, length, callback);
+}
+
+static void url_install_web_method(
+    MalVm *vm, MalObject *module, const byte *key, i32 length, MalNativeFunctionCallback callback) {
+    if (mal_web_url_ensure(vm) == nullptr) return;
+    url_install_visible_method(vm, module, key, length, callback);
+}
+
+static void url_install_web_constructor(
+    MalVm *vm, MalObject *module, const byte *key, MalIntrinsic intrinsic) {
+    if (mal_web_url_ensure(vm) == nullptr) return;
+    mal_intrinsic_define_data(vm, module, key, vm->intrinsics[intrinsic], URL_VISIBLE);
+}
+
+static void url_install_http_options(MalVm *vm, MalObject *module, const byte *key) {
+    MalValue method = mal_intrinsic_define_method_n(vm, module, key, 1, url_to_http_options);
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(method);
+    mal_native_function_object_set_constructor(function);
+    mal_native_function_object_set_handles_new_target_prototype(function);
+    MalValue prototype = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalRootSpan root;
+    mal_gc_root(&root, &prototype, 1);
+    mal_intrinsic_define_data(vm, (MalObject *) function, "prototype", prototype, MAL_PROPERTY_WRITABLE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(prototype), "constructor", method, URL_METHOD);
+    mal_intrinsic_define_data(vm, module, key, method, URL_VISIBLE);
+    mal_gc_unroot(&root);
+}
+
+#define URL_EXPORTS(X) \
+    X(url_parse, "parse", url_install_legacy_method, 3, url_parse, true) \
+    X(url_format, "format", url_install_legacy_method, 1, url_format, true) \
+    X(url_path_to_file_url, "pathToFileURL", url_install_web_method, 1, url_path_to_file_url) \
+    X(url_file_url_to_path, "fileURLToPath", url_install_web_method, 1, url_file_url_to_path) \
+    X(url_to_http_options, "urlToHttpOptions", url_install_http_options) \
+    X(url_legacy_constructor, "Url", url_install_legacy_constructor) \
+    X(url_constructor, "URL", url_install_web_constructor, MAL_INTRINSIC_URL_CONSTRUCTOR) \
+    X(url_search_params_constructor, "URLSearchParams", url_install_web_constructor, MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR) \
+    X(url_domain_to_ascii, "domainToASCII", mal_intrinsic_define_method_n, 1, url_domain_to_ascii) \
+    X(url_resolve, "resolve", url_install_legacy_method, 2, url_module_resolve, false) \
+    X(url_resolve_object, "resolveObject", url_install_legacy_method, 2, url_module_resolve_object, false) \
+    X(url_domain_to_unicode, "domainToUnicode", mal_intrinsic_define_method_n, 1, url_domain_to_unicode)
+MAL_DEFINE_NODE_EXPORTS(url, URL_EXPORTS)
+
 void mal_host_install_node_url(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
-    if (mal_node_module_install_cached(vm, "node:url", slots, count)) return;
     (void) launch;
+    if (mal_node_module_install_cached(vm, "node:url", slots, count)) return;
     if (mal_web_url_ensure(vm) == nullptr) return;
-    MalValue module = vm->intrinsics[MAL_INTRINSIC_NODE_URL_MODULE];
-    if (mal_value_is_undefined(module)) {
-        MalValue roots[] = {
-            mal_value_from_object(mal_intrinsic_new_object(vm)),
-            mal_value_from_object(mal_object_new(
-                &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]))),
-            mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
-            mal_value_new_undefined(),
-            mal_value_new_undefined(),
-            mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
-            mal_value_new_undefined(),
-        };
+    MalValue value = vm->intrinsics[MAL_INTRINSIC_NODE_URL_MODULE];
+    if (mal_value_is_undefined(value)) {
+        MalObject *module = mal_intrinsic_new_object(vm);
+        value = mal_value_from_object(module);
         MalRootSpan root;
-        mal_gc_root(&root, roots, countof(roots));
-        MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
-            &vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "Url"), 0, url_constructor);
-        mal_native_function_object_set_constructor(constructor);
-        mal_native_function_object_set_handles_new_target_prototype(constructor);
-        roots[2] = mal_value_from_native_function_object(constructor);
-        mal_intrinsic_define_data(vm, (MalObject *) constructor,
-                                  (const byte *) "prototype", roots[1], MAL_PROPERTY_WRITABLE);
-        mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]),
-                                  (const byte *) "constructor", roots[2], URL_METHOD);
-        roots[3] = mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(roots[0]), (const byte *) "parse", 3, url_parse);
-        roots[4] = mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(roots[0]), (const byte *) "format", 1, url_format);
-        roots[5] = mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(roots[0]), (const byte *) "pathToFileURL", 1,
-            url_path_to_file_url);
-        roots[6] = mal_intrinsic_define_method_n(
-            vm, mal_value_to_object(roots[0]), (const byte *) "fileURLToPath", 1,
-            url_file_url_to_path);
-		roots[7] = vm->intrinsics[MAL_INTRINSIC_URL_CONSTRUCTOR];
-		roots[8] = mal_intrinsic_define_method_n(
-			vm, mal_value_to_object(roots[0]), (const byte *) "urlToHttpOptions", 1,
-			url_to_http_options);
-        MalNativeFunctionObject *http_options = mal_value_to_native_function_object(roots[8]);
-        mal_native_function_object_set_constructor(http_options);
-        mal_native_function_object_set_handles_new_target_prototype(http_options);
-        roots[9] = mal_value_from_object(mal_intrinsic_new_object(vm));
-        mal_intrinsic_define_data(vm, (MalObject *) http_options, "prototype", roots[9], MAL_PROPERTY_WRITABLE);
-        mal_intrinsic_define_data(vm, mal_value_to_object(roots[9]), "constructor", roots[8],
-            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-        roots[10] = vm->intrinsics[MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR];
-        static const char *names[] = {
-            "Url", "parse", "format", "pathToFileURL", "fileURLToPath", "URL",
-            "urlToHttpOptions", "URLSearchParams",
-        };
-		MalValue values[] = {
-			roots[2], roots[3], roots[4], roots[5], roots[6], roots[7], roots[8], roots[10],
-		};
-        for (usize i = 0; i < countof(names); i++) {
-            mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
-                                      (const byte *) names[i], values[i], URL_VISIBLE);
-        }
-        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "domainToASCII", 1,
-            url_domain_to_ascii);
-        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "resolve", 2,
-            url_module_resolve);
-        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "resolveObject", 2,
-            url_module_resolve_object);
-        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]), (const byte *) "resolve", 1,
-            url_proto_resolve);
-        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]), (const byte *) "resolveObject", 1,
-            url_proto_resolve_object);
-        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]), (const byte *) "format", 0,
-            url_proto_format);
-        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]), (const byte *) "parse", 3,
-            url_proto_parse);
-        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "domainToUnicode", 1,
-            url_domain_to_unicode);
-        vm->intrinsics[MAL_INTRINSIC_NODE_URL_CONSTRUCTOR] = roots[2];
-        vm->intrinsics[MAL_INTRINSIC_NODE_URL_PROTOTYPE] = roots[1];
-        vm->intrinsics[MAL_INTRINSIC_NODE_URL_MODULE] = roots[0];
-        module = roots[0];
+        mal_gc_root(&root, &value, 1);
+        URL_EXPORTS(MAL_NODE_EXPORT_INSTALL)
+        vm->intrinsics[MAL_INTRINSIC_NODE_URL_MODULE] = value;
         mal_gc_unroot(&root);
     }
-    mal_node_module_publish(vm, "node:url", slots, count, module);
+    mal_node_module_publish(vm, "node:url", slots, count, value);
 }

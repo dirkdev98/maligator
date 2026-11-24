@@ -15,6 +15,20 @@ bool mal_node_module_install_cached(
 MalValue mal_node_module_get_cached(MalVm *vm, const char *id);
 void mal_node_module_export(MalVm *vm, const MalHostInstallSlot *slots, i32 count, MalValue module);
 
+typedef void (*MalNodeExportInstaller)(MalVm *vm, MalObject *module);
+
+void mal_node_module_install_selected(
+    MalVm *vm, const char *id, const MalHostInstallSlot *slots, i32 count,
+    const MalNodeExportInstaller *exports, usize export_count);
+
+#define MAL_NODE_EXPORT_INSTALL(symbol, key, define, ...) \
+    define(vm, module, key __VA_OPT__(,) __VA_ARGS__);
+#define MAL_NODE_EXPORT_DECLARE(symbol, key, define, ...) \
+    void mal_node_export_##symbol(MalVm *vm, MalObject *module) { \
+        MAL_NODE_EXPORT_INSTALL(symbol, key, define, __VA_ARGS__) \
+    }
+#define MAL_DEFINE_NODE_EXPORTS(id, exports) exports(MAL_NODE_EXPORT_DECLARE)
+
 /* Brand checks node:crypto registers when installed, so util.types can recognize its
  * objects without linking it; before that no KeyObject or CryptoKey can exist. */
 typedef bool (*MalNodeBrandCheck)(MalValue value);

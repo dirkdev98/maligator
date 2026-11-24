@@ -808,6 +808,7 @@ function firstNativeSafepointReader(bytes: Uint8Array) {
 	for (let index = 0; index < bodyCount; index++) readRuntimeFunction(reader);
 	expect(reader.u8(), "compiler profiling flags").toBe(0);
 	expect(reader.u32(), "builtin member selection").toBe(0);
+	expect(reader.u32(), "Node export selection").toBe(0);
 	expect(reader.u32()).toBe(0); // Semantic protectors.
 	expect(reader.u32()).toBe(0); // Class layouts.
 	expect(reader.u32()).toBe(1); // Native functions.

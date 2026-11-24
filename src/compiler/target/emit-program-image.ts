@@ -2,6 +2,7 @@ import type { IncludedAsset } from "../../assets.ts";
 import type { PlatformData } from "../../platform/catalog.ts";
 import {
 	BUILTIN_MEMBER_GROUPS,
+	NODE_EXPORT_GROUPS,
 	NATIVE_BUILTIN_MEMBER_DEPENDENCIES,
 	NATIVE_BUILTIN_MEMBER_NAMES,
 } from "../frontend/builtin-member-data.ts";
@@ -13,6 +14,7 @@ import {
 	OBSERVABLE_RESPONSE_STATICS,
 	SET_INSTALLER,
 } from "../frontend/engine-components.ts";
+import type { HostExportSelection } from "../frontend/host-export-uses.ts";
 import {
 	hostInstallerSymbol,
 	BUFFER_INSTALLER_SYMBOL,
@@ -221,6 +223,7 @@ export const NATIVE_C_HEADER_LINES = [
 	'#include "builtin_object.h"',
 	'#include "builtin_json.h"',
 	'#include "builtin_members.h"',
+	'#include "runtime/node_module.h"',
 	'#include "builtin_map.h"',
 	'#include "builtin_set.h"',
 	'#include "builtin_number.h"',
@@ -294,6 +297,7 @@ export const GENERATED_DATA_C_HEADER_LINES = [
 	// Bytecode rows name Math operations by their runtime enum.
 	'#include "builtin_math.h"',
 	'#include "builtin_members.h"',
+	'#include "runtime/node_module.h"',
 	"#define MAL_STRING_ROW(code_units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = length_value, .code_units = code_units_value }",
 	"#define MAL_LATIN1_STRING_ROW(units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .latin1 = 1, .hash = 0, .length = length_value, .latin1_units = units_value }",
 	"#define MAL_LINE_ENTRY(start_ip_value, pos_id_value) { .start_ip = start_ip_value, .pos_id = pos_id_value }",
@@ -2065,6 +2069,7 @@ function emitProgramImageParts(
 			? "observable"
 			: fetchStreamDemand(image, compiled),
 		compactFunctions,
+		useCompiled ? image.native.hostExportSelections : undefined,
 	)) {
 		lines.push(line);
 	}
@@ -3010,6 +3015,7 @@ function malRuntimeImageStruct(
 	builtinMemberNames?: ReadonlyArray<string>,
 	fetchStreams: FetchStreamDemand = "observable",
 	compactFunctions = false,
+	hostExportSelections: ReadonlyArray<HostExportSelection> = [],
 ): Array<string> {
 	const lines: Array<string> = [];
 	const assets = options.assets ?? [];
@@ -3173,15 +3179,46 @@ function malRuntimeImageStruct(
 	);
 	lines.push(...members);
 	if (hasHostInstalls) {
+		const projections =
+			options.fullBuiltinMembers || options.toolchainBridge ? [] : hostExportSelections;
+		const selections = new Map(
+			projections.map((selection) => [hostInstallerSymbol(selection.id), selection]),
+		);
+		const selectedInstallers = new Set(hostInstalls.map(({ installer }) => installer));
 		const declared = new Set<string>();
-		for (const install of hostInstalls) {
-			if (!declared.has(install.installer)) {
-				declared.add(install.installer);
+		const installerSymbols = hostInstalls.map(({ installer }, index) => {
+			const selection = selections.get(installer);
+			if (
+				selection !== undefined &&
+				!completeNodeModuleRequired(selection.id, selectedInstallers)
+			) {
+				const members = NODE_EXPORT_GROUPS.get(selection.id)!.filter(([name]) =>
+					selection.names.includes(name),
+				);
+				const name = `mal_selected_host_${index}${suffix}`;
+				for (const [, symbol] of members)
+					lines.push(`extern void ${symbol}(MalVm *vm, MalObject *module);`);
+				const install = `void ${name}(MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch)`;
 				lines.push(
-					`extern void ${install.installer}(MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);`,
+					`extern ${install};`,
+					`${install} {`,
+					"    (void) launch;",
+					"    static const MalNodeExportInstaller exports[] = {",
+					...members.map(([, symbol]) => `        ${symbol},`),
+					"    };",
+					`    mal_node_module_install_selected(vm, "${selection.id}", slots, count, exports, countof(exports));`,
+					"}",
+				);
+				return name;
+			}
+			if (!declared.has(installer)) {
+				declared.add(installer);
+				lines.push(
+					`extern void ${installer}(MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);`,
 				);
 			}
-		}
+			return installer;
+		});
 		lines.push("");
 		hostInstalls.forEach((install, i) => {
 			lines.push(
@@ -3204,7 +3241,7 @@ function malRuntimeImageStruct(
 		lines.push(`static const MalHostInstall mal_host_installs${suffix}[] = {`);
 		hostInstalls.forEach((install, i) => {
 			lines.push(
-				`    { .installer = ${install.installer}, .slots = mal_host_install_${i}_slots${suffix}, .slot_count = ${install.exports.length} },`,
+				`    { .installer = ${installerSymbols[i]}, .slots = mal_host_install_${i}_slots${suffix}, .slot_count = ${install.exports.length} },`,
 			);
 		});
 		lines.push("};", "");
@@ -3304,6 +3341,23 @@ const NATIVE_BUILTIN_MEMBER_KEYS = [
 ];
 
 type FetchStreamDemand = "none" | "internal" | "observable";
+
+// Native aliases publish an existing module object or consume its class graph.
+const NODE_FULL_EXPORT_DEPENDENCIES = new Map([
+	["node:net", ["node:https", "node:tls"]],
+	["node:os", ["node:constants"]],
+	["node:path", ["node:path/posix", "node:path/win32"]],
+	["node:util", ["node:sys", "node:util/types"]],
+]);
+
+function completeNodeModuleRequired(
+	id: string,
+	installers: ReadonlySet<string>,
+): boolean {
+	return (NODE_FULL_EXPORT_DEPENDENCIES.get(id) ?? []).some((module) =>
+		installers.has(hostInstallerSymbol(module)),
+	);
+}
 
 const FETCH_STREAM_MEMBERS = new Set([
 	"Request",

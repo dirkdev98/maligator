@@ -1,5 +1,6 @@
 import type { FfiDirectEntry } from "../../build-config-values.ts";
 import type { PlatformData } from "../../platform/catalog.ts";
+import type { HostExportSelection } from "../frontend/host-export-uses.ts";
 import type { ExternalModuleInterface } from "../frontend/module-graph.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import type { SourceCallSite } from "../frontend/source-function-origins.ts";
@@ -144,6 +145,7 @@ export interface CoreProgramData {
 	readonly initializedModuleBindingReads?: ReadonlyArray<CoreInitializedModuleBindingReads>;
 	readonly retainedHostInstallers: ReadonlyArray<string>;
 	readonly builtinMemberNames?: ReadonlyArray<string>;
+	readonly hostExportSelections?: ReadonlyArray<HostExportSelection>;
 	/** Present only for an image of a relocatable program. */
 	readonly moduleLinks?: CoreModuleLinks;
 }

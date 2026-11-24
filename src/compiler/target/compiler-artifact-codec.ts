@@ -11,6 +11,8 @@ import type {
 	CoreCollectionBuiltinOperation,
 	CorePropertyPlacement,
 } from "../core/core-ir-regions.ts";
+import { NODE_EXPORT_GROUPS } from "../frontend/builtin-member-data.ts";
+import type { HostExportSelection } from "../frontend/host-export-uses.ts";
 import { DATA_VIEW_ACCESSOR_TYPES } from "../shared/builtin-registry.ts";
 import type {
 	CompilerClassLayoutSite,
@@ -129,7 +131,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 479;
+export const COMPILER_ARTIFACT_VERSION = 480;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -2396,6 +2398,15 @@ function writeCompilerArtifact(
 	for (const name of memberNames ?? []) {
 		w.u32(name.length);
 		for (let unit = 0; unit < name.length; unit++) w.u16(name.charCodeAt(unit));
+	}
+	const hostExports = compiler.native.hostExportSelections ?? [];
+	w.u32(hostExports.length);
+	for (const { id, names } of hostExports) {
+		w.u32(names.length + 1);
+		for (const name of [id, ...names]) {
+			w.u32(name.length);
+			for (let unit = 0; unit < name.length; unit++) w.u16(name.charCodeAt(unit));
+		}
 	}
 	const semanticProtectors = [...compiler.native.semanticProtectors];
 	if (
@@ -5052,6 +5063,24 @@ function readCompilerArtifact(
 		).join("");
 		builtinMemberNames!.push(name);
 	}
+	const hostExports: Array<HostExportSelection> = [];
+	const hostExportCount = r.count(2);
+	for (let index = 0; index < hostExportCount; index++) {
+		const [id, ...names] = Array.from({ length: r.count(1) }, () =>
+			Array.from({ length: r.count(2) }, () => String.fromCharCode(r.u16())).join(""),
+		);
+		const group = id === undefined ? undefined : NODE_EXPORT_GROUPS.get(id);
+		if (
+			id === undefined ||
+			group === undefined ||
+			names.length === 0 ||
+			new Set(names).size !== names.length ||
+			names.some((name) => !group.some(([key]) => key === name)) ||
+			hostExports.some((selection) => selection.id === id)
+		)
+			throw new RangeError("program-image-codec: invalid Node export selection");
+		hostExports.push({ id, names });
+	}
 	const semanticProtectorCount = r.count(3);
 	if (semanticProtectorCount > 3) {
 		throw new RangeError("program-image-codec: too many semantic protector facts");
@@ -7044,6 +7073,7 @@ function readCompilerArtifact(
 			semanticProtectors,
 			functions: nativeFunctions,
 			...(builtinMemberNames === undefined ? {} : { builtinMemberNames }),
+			...(hostExports.length === 0 ? {} : { hostExportSelections: hostExports }),
 			...(classLayouts.length === 0 ? {} : { classLayouts }),
 		},
 		diagnostics: {},

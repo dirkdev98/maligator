@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -10,7 +11,12 @@ import {
 	NODE_ERROR_HOOKS_INSTALLER,
 	NODE_PERSONALITY_INSTALLER,
 } from "../../src/compiler/frontend/host-modules.ts";
-import { buildNativeBinary, HOST_MAIN } from "../../src/test-harness.ts";
+import {
+	buildNativeBinary,
+	HOST_MAIN,
+	runToStdout,
+	STRESS_ENV,
+} from "../../src/test-harness.ts";
 import { matchingNativeSymbols } from "../helpers/native-symbols.ts";
 
 const MODULE_INSTALLERS = new Set(
@@ -20,6 +26,31 @@ const BUILTIN_REGISTRY_LOOKUP = "mal_node_module_get_builtin";
 // A program that reads a Node module or global lists the Node personality and hooks.
 // They follow the reads lowering sees, so they stay when optimization drops the read.
 const NODE_HOST = [NODE_PERSONALITY_INSTALLER, NODE_ERROR_HOOKS_INSTALLER];
+
+it.each([
+	["selected exports", "node-selected-host-exports.cjs"],
+	["alias identity and reflected exports", "node-selected-host-alias.mjs"],
+])("preserves %s under native host installation", (_label, file) => {
+	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-node-selected-exports-"));
+	const fixture = `tests/local/${file}`;
+	try {
+		const binary = buildNativeBinary({
+			fixture,
+			name: path.parse(file).name,
+			outDir: directory,
+			mainFile: HOST_MAIN,
+			toolchainBridge: false,
+			evalEnabled: false,
+		});
+		const stdout = execFileSync(process.execPath, [fixture], {
+			encoding: "utf8",
+			env: { ...process.env, NODE_NO_WARNINGS: "1" },
+		});
+		expect(runToStdout(binary, { env: STRESS_ENV })).toBe(stdout);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
 
 function withInstallers(base: ReadonlyArray<string>, ...added: Array<string>) {
 	return [...new Set([...base, ...added])].sort();

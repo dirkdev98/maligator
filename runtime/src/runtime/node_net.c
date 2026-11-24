@@ -643,6 +643,17 @@ static MalValue net_ip_function(
     return result;
 }
 
+static void net_install_ip_export(
+    MalVm *vm, MalObject *module, const byte *name, MalNativeFunctionCallback callback) {
+    mal_intrinsic_define_data(vm, module, name, net_ip_function(vm, name, callback), NET_VISIBLE);
+}
+
+#define NET_IP_EXPORTS(X) \
+    X(net_is_ip, "isIP", net_install_ip_export, net_is_ip) \
+    X(net_is_ipv4, "isIPv4", net_install_ip_export, net_is_ipv4) \
+    X(net_is_ipv6, "isIPv6", net_install_ip_export, net_is_ipv6)
+MAL_DEFINE_NODE_EXPORTS(net, NET_IP_EXPORTS)
+
 static MalValue net_socket_constructor(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {

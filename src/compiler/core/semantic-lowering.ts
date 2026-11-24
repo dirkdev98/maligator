@@ -2,6 +2,7 @@ import type { ESTree } from "meriyah";
 import type { FfiDirectEntry } from "../../build-config-values.ts";
 import type { PlatformData } from "../../platform/catalog.ts";
 import { debugEnabled, log } from "../../utils.ts";
+import { NODE_EXPORT_GROUPS } from "../frontend/builtin-member-data.ts";
 import {
 	GET_BUILTIN_MODULE,
 	literalBuiltinModuleSpecifier,
@@ -44,6 +45,7 @@ import {
 } from "../frontend/estree-traversal.ts";
 import { importsForeignCallbacks } from "../frontend/foreign-callbacks.ts";
 import { hostExportUses } from "../frontend/host-export-uses.ts";
+import type { HostExportSelection } from "../frontend/host-export-uses.ts";
 import {
 	BUFFER_INSTALLER_SYMBOL,
 	canonicalNodeHostModuleId,
@@ -1304,12 +1306,12 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 			const state = sourceBuiltinState(program, modules);
 			return { id, functionIndex, state, imports };
 		});
-	const selectiveInstallers =
-		runtimeBuiltinLoader || inheritsHostComponents
-			? new Map<string, string>()
-			: selectHostExportInstallers(program);
 	// Exports first: publishing a re-exported import or host export allocates its slot.
 	const moduleLinks = coreModuleLinks(program);
+	const { installers: selectiveInstallers, selections } = selectHostExportInstallers(
+		program,
+		runtimeBuiltinLoader || inheritsHostComponents,
+	);
 	const hostInstallCandidates = coreHostInstallCandidates(program).map((candidate) => {
 		if (program.opaqueBuiltinLookup && candidate.installer === NODE_FS_INSTALLER)
 			return { ...candidate, requiresCompleteModule: true as const };
@@ -1341,6 +1343,12 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 		program.facts,
 		moduleLinks !== undefined || inheritsHostComponents,
 	);
+	const hostExportSelections =
+		moduleLinks === undefined
+			? selections.filter(
+					({ id }) => !reachedHostInstallers.includes(hostInstallerSymbol(id)),
+				)
+			: [];
 	CoreEditor.configureProgram(program.core, {
 		stringConstants: program.stringConstants,
 		bigintConstants: program.bigintConstants,
@@ -1421,6 +1429,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 				...coreInitializedLexicalReads(program),
 				retainedHostInstallers: [...new Set(reachedHostInstallers)],
 				...(builtinMembers === undefined ? {} : { builtinMemberNames: builtinMembers }),
+				...(hostExportSelections.length === 0 ? {} : { hostExportSelections }),
 				...(moduleLinks === undefined ? {} : { moduleLinks }),
 			}),
 		},
@@ -1481,11 +1490,17 @@ const FS_OTHER_EXPORTS = new Set([
 
 function selectHostExportInstallers(
 	program: CoreFrontendContext,
-): ReadonlyMap<string, string> {
+	opaque: boolean,
+): {
+	installers: ReadonlyMap<string, string>;
+	selections: ReadonlyArray<HostExportSelection>;
+} {
 	const { closure, world } = program.facts;
 	const graph = program.semantic.graph;
 	const installers = new Map<string, string>();
+	const selections: Array<HostExportSelection> = [];
 	if (
+		opaque ||
 		graph === undefined ||
 		graph.modules.has("node:module") ||
 		program.opaqueBuiltinLookup ||
@@ -1494,13 +1509,25 @@ function selectHostExportInstallers(
 		world.realms ||
 		world.primordialPolicy !== "locked"
 	)
-		return installers;
+		return { installers, selections };
 	for (const [id, names] of hostExportUses(
 		program.semantic,
-		new Set(["node:http", "node:zlib", "node:crypto", "node:fs"]),
+		new Set([
+			"node:http",
+			"node:zlib",
+			"node:crypto",
+			"node:fs",
+			...NODE_EXPORT_GROUPS.keys(),
+		]),
 	)) {
 		if (names === null || names.size === 0) continue;
 		const exports = [...names];
+		const members = NODE_EXPORT_GROUPS.get(id);
+		if (
+			members !== undefined &&
+			exports.every((name) => members.some(([key]) => key === name))
+		)
+			selections.push({ id, names: exports.sort() });
 		if (
 			id === "node:http" &&
 			exports.every(
@@ -1536,7 +1563,7 @@ function selectHostExportInstallers(
 		)
 			installers.set(hostInstallerSymbol(id), NODE_FS_READ_STREAM_INSTALLER);
 	}
-	return installers;
+	return { installers, selections };
 }
 
 function slotFreeHostInstallers(program: CoreFrontendContext): Array<string> {

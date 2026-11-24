@@ -2222,20 +2222,37 @@ typedef struct {
 
 #define MAL_NODE_PATH_FUNCTION_COUNT 12
 
-static const MalNodePathExport mal_node_path_exports[MAL_NODE_PATH_FUNCTION_COUNT] = {
-    {"basename", 2, mal_node_path_basename},
-    {"dirname", 1, mal_node_path_dirname},
-    {"extname", 1, mal_node_path_extname},
-    {"format", 1, mal_node_path_format},
-    {"isAbsolute", 1, mal_node_path_is_absolute},
-    {"join", 0, mal_node_path_join},
-    {"matchesGlob", 2, mal_node_path_matches_glob},
-    {"normalize", 1, mal_node_path_normalize},
-    {"parse", 1, mal_node_path_parse},
-    {"relative", 2, mal_node_path_relative},
-    {"resolve", 0, mal_node_path_resolve},
-    {"toNamespacedPath", 1, mal_node_path_to_namespaced_path},
-};
+static void path_install_method(
+    MalVm *vm, MalObject *module, const byte *name, i32 length, MalNativeFunctionCallback callback) {
+    const byte *function_name = strcmp(name, "format") == 0 ? "bound _format" : name;
+    MalValue value = mal_value_from_native_function_object(mal_native_function_object_new_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, function_name), length, callback));
+    mal_intrinsic_define_data(vm, module, name, value,
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+}
+
+static void path_install_string(MalVm *vm, MalObject *module, const byte *key, const char *value) {
+    mal_intrinsic_define_data(vm, module, key, path_ascii(vm, value),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+}
+
+#define PATH_POSIX_EXPORTS(X) \
+    X(path_basename, "basename", path_install_method, 2, mal_node_path_basename) \
+    X(path_dirname, "dirname", path_install_method, 1, mal_node_path_dirname) \
+    X(path_extname, "extname", path_install_method, 1, mal_node_path_extname) \
+    X(path_format, "format", path_install_method, 1, mal_node_path_format) \
+    X(path_isAbsolute, "isAbsolute", path_install_method, 1, mal_node_path_is_absolute) \
+    X(path_join, "join", path_install_method, 0, mal_node_path_join) \
+    X(path_matchesGlob, "matchesGlob", path_install_method, 2, mal_node_path_matches_glob) \
+    X(path_normalize, "normalize", path_install_method, 1, mal_node_path_normalize) \
+    X(path_parse, "parse", path_install_method, 1, mal_node_path_parse) \
+    X(path_relative, "relative", path_install_method, 2, mal_node_path_relative) \
+    X(path_resolve, "resolve", path_install_method, 0, mal_node_path_resolve) \
+    X(path_toNamespacedPath, "toNamespacedPath", path_install_method, 1, mal_node_path_to_namespaced_path) \
+    X(path_delimiter, "delimiter", path_install_string, ":") \
+    X(path_sep, "sep", path_install_string, "/")
+MAL_DEFINE_NODE_EXPORTS(path, PATH_POSIX_EXPORTS)
 
 static const MalNodePathExport mal_node_path_win32_exports[MAL_NODE_PATH_FUNCTION_COUNT] = {
     {"basename", 2, mal_node_path_win32_basename},
@@ -2252,26 +2269,23 @@ static const MalNodePathExport mal_node_path_win32_exports[MAL_NODE_PATH_FUNCTIO
     {"toNamespacedPath", 1, mal_node_path_win32_to_namespaced_path},
 };
 
-static MalObject *path_namespace(MalVm *vm, const MalNodePathExport *exports, const char *delimiter, const char *sep) {
-    MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
-    MalValue roots[] = {mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined()};
+static MalValue path_namespace(MalVm *vm, bool win32) {
+    MalObject *module = mal_intrinsic_new_object(vm);
+    MalValue value = mal_value_from_object(module);
     MalRootSpan root;
-    mal_gc_root(&root, roots, countof(roots));
-    MalObject *object = mal_value_to_object(roots[0]);
-    MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
-    for (usize i = 0; i < MAL_NODE_PATH_FUNCTION_COUNT; ++i) {
-        const MalNodePathExport *e = &exports[i];
-        const char *function_name = strcmp(e->name, "format") == 0 ? "bound _format" : e->name;
-        roots[1] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
-            &vm->heap, fn_proto, mal_intrinsic_ascii(vm, (const byte *) function_name), e->length, e->callback));
-        mal_intrinsic_define_data(vm, object, (const byte *) e->name, roots[1], flags);
+    mal_gc_root(&root, &value, 1);
+    if (win32) {
+        for (usize index = 0; index < countof(mal_node_path_win32_exports); index++) {
+            const MalNodePathExport *method = &mal_node_path_win32_exports[index];
+            path_install_method(vm, module, method->name, method->length, method->callback);
+        }
+        path_install_string(vm, module, "delimiter", ";");
+        path_install_string(vm, module, "sep", "\\");
+    } else {
+        PATH_POSIX_EXPORTS(MAL_NODE_EXPORT_INSTALL)
     }
-    roots[1] = path_ascii(vm, delimiter);
-    mal_intrinsic_define_data(vm, object, (const byte *) "delimiter", roots[1], flags);
-    roots[1] = path_ascii(vm, sep);
-    mal_intrinsic_define_data(vm, object, (const byte *) "sep", roots[1], flags);
     mal_gc_unroot(&root);
-    return object;
+    return value;
 }
 
 void mal_host_install_node_path(
@@ -2281,8 +2295,8 @@ void mal_host_install_node_path(
     MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    roots[0] = mal_value_from_object(path_namespace(vm, mal_node_path_exports, ":", "/"));
-    roots[1] = mal_value_from_object(path_namespace(vm, mal_node_path_win32_exports, ";", "\\"));
+    roots[0] = path_namespace(vm, false);
+    roots[1] = path_namespace(vm, true);
     MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
     // Node's posix and win32 objects reference each other and themselves.
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "win32", roots[1], flags);
