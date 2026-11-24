@@ -1145,6 +1145,7 @@ interface NativeRelocationExpressions {
 	ownerFunctionIndex(index: number): string;
 	globalIndex(index: number): string;
 	stringIndex(index: number): string;
+	stringIndexVector(indices: ReadonlyArray<number>): string;
 	bigintIndex(index: number): string;
 	templateOffset(index: number): string;
 	stringValue(index: number): string;
@@ -1205,6 +1206,18 @@ function nativeRelocationExpressions(
 				: indexed("global_imports", ordinal);
 		},
 		stringIndex: (index) => indexed("string_base", index),
+		stringIndexVector: (indices) => {
+			if (!enabled || relative)
+				return `(const i32[]){ ${indices.map((index) => indexed("string_base", index)).join(", ")} }`;
+			const key = `string-vector:${indices.join(",")}`;
+			let slot = slots.get(key);
+			if (slot === undefined) {
+				slot = link.length;
+				for (const index of indices) link.push({ base: "string_base", index });
+				slots.set(key, slot);
+			}
+			return `&${linkSymbol}[${slot}]`;
+		},
 		bigintIndex: (index) => indexed("bigint_base", index),
 		templateOffset: (index) => indexed("literal_template_base", index),
 		// Widening rewrites a row in place, so literals use the current VM's copy. Only
@@ -4111,6 +4124,7 @@ function emitCompiledVariant(
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 	onFastTryLookup?: (target: number, resultKind?: "undefined") => void,
 	moduleWrapper = false,
+	seededPropertySites?: ReadonlySet<number>,
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -4136,7 +4150,8 @@ function emitCompiledVariant(
 	}
 	if (directEntry !== undefined) validateNativeDirectEntry(fn, directEntry);
 	validateNativeLiteralSwitches(fn, native);
-	const sizeOptimize = moduleWrapper || native.runOnce === true;
+	const sizeOptimize =
+		moduleWrapper || native.runOnce === true || native.commonJsInitializer === true;
 	const hasBackwardEdge =
 		fn.handlers.some(({ endIp, handlerIp }) => handlerIp < endIp) ||
 		fn.instructions.some(
@@ -4797,6 +4812,8 @@ function emitCompiledVariant(
 		onFastTryLookup,
 		virtualRestRootCounts,
 		conservativeRoots,
+		native.runOnce === true && !relocation.relative,
+		seededPropertySites,
 	);
 	if (body === null) {
 		return null;
@@ -5942,6 +5959,7 @@ export function emitCompiledFunction(
 export function createNativeFunctionRenderer(
 	onFastTryLookup?: (caller: number, target: number, resultKind?: "undefined") => void,
 	moduleWrappers: ReadonlySet<number> = new Set(),
+	seededPropertySites: ReadonlyMap<number, ReadonlySet<number>> = new Map(),
 ): typeof emitCompiledFunction {
 	const analyses = new Map<
 		number,
@@ -6008,6 +6026,7 @@ export function createNativeFunctionRenderer(
 				? undefined
 				: (target, resultKind) => onFastTryLookup(index, target, resultKind),
 			moduleWrappers.has(index),
+			seededPropertySites.get(index),
 		);
 	};
 }
@@ -6034,6 +6053,7 @@ function renderCompiledFunction(
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 	onFastTryLookup?: (target: number, resultKind?: "undefined") => void,
 	moduleWrapper = false,
+	seededPropertySites?: ReadonlySet<number>,
 ): CompiledFunction | null {
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
@@ -6057,6 +6077,7 @@ function renderCompiledFunction(
 		directClosures,
 		onFastTryLookup,
 		moduleWrapper,
+		seededPropertySites,
 	);
 	if (canonical === null) return null;
 	const name = relocatable === false ? index : relocatable.symbolStem;
@@ -6086,6 +6107,8 @@ function renderCompiledFunction(
 			fastTryTargets,
 			directClosures,
 			onFastTryLookup,
+			false,
+			seededPropertySites,
 		);
 		if (emitted === null) return [];
 		let leafSourceMap: ReadonlyArray<NativeSourceRange> = [];
@@ -8200,6 +8223,47 @@ function analyzeNativeRegionTopology(
 	};
 }
 
+function runOnceInstructionMask(
+	fn: BytecodeFunction,
+	projectedBranches: ReadonlyMap<number, number>,
+	stackObjectSites: ReadonlyMap<number, StackObjectSite>,
+): Uint8Array | undefined {
+	const span = new Int32Array(fn.instructions.length + 1);
+	const markBackEdge = (from: number, to: number) => {
+		if (to > from) return;
+		span[to]!++;
+		span[from + 1]!--;
+	};
+	// A cycle through an instruction has an edge crossing back over its index.
+	for (const [ip, instruction] of fn.instructions.entries()) {
+		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF")
+			markBackEdge(ip, instruction.targetIp);
+		const target = projectedBranches.get(ip);
+		if (target !== undefined) markBackEdge(ip, target);
+	}
+	for (const { endIp, handlerIp } of fn.handlers) markBackEdge(endIp - 1, handlerIp);
+	const mask = new Uint8Array(fn.instructions.length);
+	let open = 0;
+	let hasLoop = false;
+	let shapedLiterals = 0;
+	for (let ip = 0; ip < mask.length; ip++) {
+		open += span[ip]!;
+		if (open !== 0) {
+			hasLoop = true;
+			continue;
+		}
+		mask[ip] = 1;
+		if (
+			fn.instructions[ip]!.opcode === "CREATE_OBJECT_SHAPED" &&
+			!stackObjectSites.has(ip)
+		)
+			shapedLiterals++;
+	}
+	// A small prologue cannot justify changing register allocation around a hot loop.
+	if (hasLoop && shapedLiterals < 2) return undefined;
+	return mask;
+}
+
 function emitBody(
 	fn: BytecodeFunction,
 	analysis: NativeBodyAnalysis,
@@ -8287,6 +8351,8 @@ function emitBody(
 	virtualRestRootCounts: NativeVirtualRestRootCounts = new Map(),
 	// Stack scanning keeps a materialized accumulator rooted in whichever register holds it.
 	stringBuilders = false,
+	compactRunOnce = false,
+	seededPropertySites?: ReadonlySet<number>,
 ): EmittedBody | null {
 	const elided = new Set(elidedPureIps);
 	const copiedClosures = new Set(analysis.captures.copiedClosureIps);
@@ -8294,6 +8360,9 @@ function emitBody(
 	const branchTargets = new Map(
 		controlFlow?.branches.map(({ instructionIp, targetIp }) => [instructionIp, targetIp]),
 	);
+	const compactInstructions = compactRunOnce
+		? runOnceInstructionMask(fn, branchTargets, stackObjectSites)
+		: undefined;
 	const callTransportByIp = new Map(
 		callTransports.map((plan) => [plan.instructionIp, plan]),
 	);
@@ -10157,13 +10226,16 @@ function emitBody(
 				for (const { field, value } of activeActions) setAction(field, value);
 			instructionContext.fieldThrowSlots =
 				activeFieldSlots.size === 0 ? EMPTY_ROOTED_OUTPUTS : [...activeFieldSlots];
-			const contextInstruction = fn.instructions[ip]!;
+			const instruction = fn.instructions[ip]!;
+			instructionContext.compactRunOnce =
+				compactInstructions?.[ip] === 1 &&
+				(instruction.opcode !== "LOAD_PROPERTY_STATIC" ||
+					seededPropertySites?.has(instruction.icIndex) !== true);
 			instructionContext.watchedMathCallee =
-				contextInstruction.opcode === "LOAD_PROPERTY_STATIC" &&
-				mathCalleeRegisters.has(contextInstruction.dst);
+				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				mathCalleeRegisters.has(instruction.dst);
 			const scalarInputDeclarations: Array<string> = [];
 			let scalarInputValues: Map<number, string> | undefined;
-			const instruction = fn.instructions[ip]!;
 			if (instruction.opcode === "CALL_KNOWN") {
 				for (const operand of instruction.arguments) {
 					const value = decodeVmValueOperand(operand);
@@ -10695,6 +10767,7 @@ interface NativeInstructionActions {
 }
 
 interface NativeInstructionContext extends NativeInstructionActions {
+	readonly compactRunOnce?: boolean;
 	readonly scalarInputValues?: ReadonlyMap<number, string>;
 	readonly inactiveRootMaskStatements?: ReadonlyMap<NativeInactiveRootMask, string>;
 	readonly ownedCaptureFunctionIndex?: number;
@@ -12140,17 +12213,12 @@ class NativeInstructionEmission {
 						),
 						"}",
 					];
-		const inlineCacheLoad = (position: ReadonlyArray<string> = []): Array<string> => [
-			`MalValue __v_${this.ip};`,
-			`if (${probe()}) {`,
-			`  r${instruction.dst} = ${this.callValue(instruction.dst, `__v_${this.ip}`)};`,
-			`} else {`,
-			...position,
-			...(this.context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+		const miss = (): Array<string> => [
+			...(this.context.incomingRootPublication ?? []),
 			...(this.context.staticPropertyLoadInactiveRootMask === undefined
 				? []
 				: [
-						`  ${cInactiveRootMaskPublication(this.context.staticPropertyLoadInactiveRootMask, this.context.inactiveRootMaskStatements)};`,
+						`${cInactiveRootMaskPublication(this.context.staticPropertyLoadInactiveRootMask, this.context.inactiveRootMaskStatements)};`,
 					]),
 			...this.boxedLoad(
 				instruction.dst,
@@ -12158,9 +12226,20 @@ class NativeInstructionEmission {
 					"property",
 					`mal_vm_op_load_property_ic_static_miss(vm, ${this.boxed(instruction.object)}, ${this.context.relocation.stringIndex(instruction.stringIndex)}, &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`,
 				),
-			).map((line) => `  ${line}`),
-			`}`,
+			),
 		];
+		const inlineCacheLoad = (position: ReadonlyArray<string> = []): Array<string> =>
+			this.context.compactRunOnce
+				? [...position, ...miss()]
+				: [
+						`MalValue __v_${this.ip};`,
+						`if (${probe()}) {`,
+						`  r${instruction.dst} = ${this.callValue(instruction.dst, `__v_${this.ip}`)};`,
+						`} else {`,
+						...position,
+						...miss().map((line) => `  ${line}`),
+						`}`,
+					];
 		if (this.context.nativeStringSplitCursorAction?.role === "length") {
 			const { site } = this.context.nativeStringSplitCursorAction;
 			const id = site.callIp;
@@ -18569,6 +18648,17 @@ class NativeInstructionEmission {
 		if (stackObjectSite?.elided === true) {
 			return [`r${instruction.dst} = MAL_VALUE_UNDEFINED;`];
 		}
+		const values = instruction.valueRegisters.map((r) => this.boxed(r)).join(", ");
+		if (stackObjectSite === undefined && this.context.compactRunOnce) {
+			const site = `&${nativeBodyReference(this.context.resources, "literalShapes")}[${instruction.shapeCacheIndex}]`;
+			const keys = this.context.relocation.stringIndexVector(
+				instruction.keyStringIndices,
+			);
+			return [
+				`r${instruction.dst} = ${this.profileCall("allocation", `mal_vm_create_object_shaped_compact(vm, ${site}, ${keys}, (MalValue[]){ ${values} }, ${instruction.count})`)};`,
+				this.throwCheck(),
+			];
+		}
 		// Build the literal's shape once in the VM-owned dense site row and
 		// create the object directly in it — no per-property defines.
 		const keys = instruction.keyStringIndices
@@ -18576,7 +18666,6 @@ class NativeInstructionEmission {
 				(ki) => `vm->string_constant_atoms[${this.context.relocation.stringIndex(ki)}]`,
 			)
 			.join(", ");
-		const values = instruction.valueRegisters.map((r) => this.boxed(r)).join(", ");
 		const shape = [
 			`MalShape *__oshape_${this.ip} = ${nativeBodyReference(this.context.resources, "literalShapes")}[${instruction.shapeCacheIndex}];`,
 			`if (__oshape_${this.ip} == nullptr) { __oshape_${this.ip} = mal_shape_from_string_keys(&vm->heap, (MalString *[]){ ${keys} }, ${instruction.count}); ${nativeBodyReference(this.context.resources, "literalShapes")}[${instruction.shapeCacheIndex}] = __oshape_${this.ip}; }`,

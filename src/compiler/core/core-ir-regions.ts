@@ -707,6 +707,7 @@ export interface CoreOptimizationPlan {
 	readonly liveFunctions: ReadonlyArray<CoreFunctionId>;
 	readonly specializedOnlyFunctions?: ReadonlyArray<CoreFunctionId>;
 	readonly runOnceFunctions?: ReadonlyArray<CoreFunctionId>;
+	readonly commonJsInitializers?: ReadonlyArray<CoreFunctionId>;
 	readonly blockOrders: ReadonlyArray<{
 		readonly function: CoreFunctionId;
 		readonly blocks: ReadonlyArray<CoreBlockId>;

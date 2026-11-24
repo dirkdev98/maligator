@@ -10,7 +10,7 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-it("executes the outlined setup once whether the module loop runs or skips", () => {
+it("executes setup once whether the module loop runs or skips", () => {
 	const fixture = "tests/local/native-run-once-loop.mjs";
 	const outDir = mkdtempSync(join(tmpdir(), "mal-run-once-init-"));
 	try {
@@ -33,6 +33,29 @@ it("executes the outlined setup once whether the module loop runs or skips", () 
 				}),
 			).toBe(expected);
 		}
+	} finally {
+		rmSync(outDir, { recursive: true, force: true });
+	}
+});
+
+it("preserves getter order and throws in one-time literal initialization", () => {
+	const fixture = "tests/local/native-run-once-literals.mjs";
+	const outDir = mkdtempSync(join(tmpdir(), "mal-run-once-literals-"));
+	try {
+		const binary = buildNativeBinary({
+			fixture,
+			name: "run-once-literals",
+			outDir,
+			mainFile: HOST_MAIN,
+			production: true,
+		});
+		const invocation = resolveHarnessExecutionInvocation(binary);
+		expect(
+			execFileSync(invocation.executable, invocation.args, {
+				encoding: "utf8",
+				env: { ...process.env, ...STRESS_ENV },
+			}),
+		).toBe(execFileSync(process.execPath, [fixture], { encoding: "utf8" }));
 	} finally {
 		rmSync(outDir, { recursive: true, force: true });
 	}

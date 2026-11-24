@@ -36,7 +36,7 @@ function command(
 }
 
 /** The diagnostic lane is explicitly Linux ELF64, matching its hosted runner. */
-export function readElfText(file: string) {
+export function readElfText(file: string, sectionName = ".text") {
 	const binary = readFileSync(file);
 	if (!binary.subarray(0, 6).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1])))
 		throw new Error("native micro diagnostics require little-endian ELF64");
@@ -62,17 +62,20 @@ export function readElfText(file: string) {
 		const header = table + index * stride;
 		const nameStart = namesOffset + binary.readUInt32LE(header);
 		const nameEnd = binary.indexOf(0, nameStart);
-		if (nameEnd < nameStart || binary.toString("utf8", nameStart, nameEnd) !== ".text")
+		if (
+			nameEnd < nameStart ||
+			binary.toString("utf8", nameStart, nameEnd) !== sectionName
+		)
 			continue;
 		const address = integer(header + 16);
 		const offset = integer(header + 24);
 		const size = integer(header + 32);
 		if (offset + size > binary.length || size === 0)
-			throw new Error("invalid ELF .text range");
+			throw new Error(`invalid ELF ${sectionName} range`);
 		const bytes = binary.subarray(offset, offset + size);
 		return { address, offset, size, sha256: digest(bytes), bytes };
 	}
-	throw new Error("ELF has no .text section");
+	throw new Error(`ELF has no ${sectionName} section`);
 }
 
 export function copyBeforeNativeStrip(

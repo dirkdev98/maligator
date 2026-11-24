@@ -15,12 +15,14 @@ import { FrontendCompilationSession } from "../src/frontend-cache.ts";
 import { requireToolchain } from "../src/toolchain.ts";
 import { buildExplorerSite } from "./build-explorer-site.ts";
 import { generateSite } from "./generate-site.ts";
+import { readElfText } from "./native-micro-diagnostics.ts";
 import { prepareContainerDocumentation } from "./prepare-site-container.ts";
 import { formatSiteFiles, updateSite } from "./site-data.ts";
 import { writeSiteDeployment } from "./site-deployment.ts";
 
 const META_FILE = "website/site-meta.json";
-const LINUX_X64_SERVER_BYTE_LIMIT = 1_925_000;
+const LINUX_X64_SERVER_BYTE_LIMIT = 1_810_000;
+const LINUX_X64_GENERATED_TEXT_BYTE_LIMIT = 116_000;
 const container = process.argv.includes("--container");
 const targetIndex = process.argv.indexOf("--target");
 const target =
@@ -94,14 +96,17 @@ for (let attempt = 0; attempt < 4; attempt++) {
 	if (embeddedAssetBytes > bytes)
 		throw new Error("Embedded assets exceed the website binary size");
 	const serverBytes = bytes - embeddedAssetBytes;
-	if (
-		container &&
-		binaryPlatform === "x86_64-unknown-linux-gnu" &&
-		serverBytes > LINUX_X64_SERVER_BYTE_LIMIT
-	)
-		throw new Error(
-			`Linux website server is ${serverBytes} bytes. The budget is ${LINUX_X64_SERVER_BYTE_LIMIT} bytes.`,
-		);
+	if (container && binaryPlatform === "x86_64-unknown-linux-gnu") {
+		if (serverBytes > LINUX_X64_SERVER_BYTE_LIMIT)
+			throw new Error(
+				`Linux website server is ${serverBytes} bytes. The budget is ${LINUX_X64_SERVER_BYTE_LIMIT} bytes.`,
+			);
+		const generatedTextBytes = readElfText(binary, "mal_js_text").size;
+		if (generatedTextBytes > LINUX_X64_GENERATED_TEXT_BYTE_LIMIT)
+			throw new Error(
+				`Linux website generated code is ${generatedTextBytes} bytes. The budget is ${LINUX_X64_GENERATED_TEXT_BYTE_LIMIT} bytes.`,
+			);
+	}
 	const meta = JSON.parse(readFileSync(META_FILE, "utf8")) as {
 		binaryBytes: number | null;
 		binaryPlatform: string;

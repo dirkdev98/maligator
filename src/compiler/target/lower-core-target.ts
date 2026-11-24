@@ -3697,6 +3697,7 @@ export function lowerCoreCompilationToTargetProgram(
 			: undefined;
 	const runnable = prepared.reachability?.runnable;
 	const runOnce = new Set(compilation.plan.runOnceFunctions);
+	const commonJsInitializers = new Set(compilation.plan.commonJsInitializers);
 	const functions = prepared.functions.map((fn, index) => {
 		if (fn === undefined)
 			return lowerOmittedMethod(
@@ -3705,6 +3706,9 @@ export function lowerCoreCompilationToTargetProgram(
 			);
 		return {
 			...(runOnce.has(fn.coreFunction.id) ? { runOnce: true as const } : {}),
+			...(commonJsInitializers.has(fn.coreFunction.id)
+				? { commonJsInitializer: true as const }
+				: {}),
 			...(prepared.specializedOnly.has(fn.coreFunction.id)
 				? { specializedOnly: true as const }
 				: {}),

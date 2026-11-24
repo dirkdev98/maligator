@@ -21,21 +21,26 @@ function onceEntryFunctions(
 	return once;
 }
 
-export function coreRunOnceFunctions(
+export function coreInitializationFunctions(
 	program: CoreProgram,
 	context: CoreCompilationContext | undefined,
 	summaries: CoreProgramSummaries,
 	liveFunctions: ReadonlyArray<CoreFunctionId>,
-): ReadonlyArray<CoreFunctionId> {
-	if (context === undefined || !summaries.targets.sourceClosed) return [];
-	const once = onceEntryFunctions(program, context);
-	if (once.size === 0) return [];
+): ReadonlyMap<CoreFunctionId, "once" | "commonjs"> {
+	const initializers = new Map<CoreFunctionId, "once" | "commonjs">();
+	if (context === undefined || !summaries.targets.sourceClosed) return initializers;
+	const roots = onceEntryFunctions(program, context);
+	if (roots.size === 0) return initializers;
+	for (const root of roots) initializers.set(root, "once");
+	// A failed CommonJS evaluation clears the loaded flag and can run again.
+	for (const index of context.data.cjsModuleFunctionIndices)
+		initializers.set(coreFunctionId(index), "commonjs");
 	for (const index of context.data.esmEvaluationFunctionIndices ?? [])
-		once.add(coreFunctionId(index));
+		initializers.set(coreFunctionId(index), "once");
 	const sites = new Map<CoreFunctionId, CoreIndexedCallSite | null>();
 	for (const caller of liveFunctions) {
 		for (const invocation of summaries.targets.builtinInvocationTargets(caller)) {
-			if (invocation.anyScript) return [...once];
+			if (invocation.anyScript) return initializers;
 			for (const target of invocation.functions) sites.set(target, null);
 		}
 		for (const site of summaries.targets.outgoing(caller)) {
@@ -52,14 +57,14 @@ export function coreRunOnceFunctions(
 			}
 		}
 	}
-	for (const caller of once) {
+	for (const [caller, kind] of initializers) {
 		const fn = program.function(caller);
 		let cycles: ReturnType<typeof controlFlowCycles> | undefined;
 		for (const site of summaries.targets.outgoing(caller)) {
 			const [target] = site.targets.functions;
 			if (
 				target === undefined ||
-				once.has(target) ||
+				initializers.has(target) ||
 				sites.get(target) !== site ||
 				summaries.summary(target)?.externallyReachable !== false
 			)
@@ -73,10 +78,10 @@ export function coreRunOnceFunctions(
 			}
 			const block = fn.instructionBlock(site.instruction);
 			if (cycles.reachable[block] === 1 && cycles.repeating[block] === 0)
-				once.add(target);
+				initializers.set(target, kind);
 		}
 	}
-	return [...once];
+	return initializers;
 }
 
 /**

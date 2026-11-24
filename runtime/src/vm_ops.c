@@ -1173,6 +1173,28 @@ void mal_op_create_base_construct_receiver(
             (u8) instruction->as.create_base_construct_receiver.constructor_slot_reserve);
 }
 
+static inline MalShape *mal_vm_literal_shape_from_indices(
+    MalVm *vm, MalShape **cache, const i32 *key_indices, u32 count
+) {
+    MalShape *shape = *cache;
+    if (shape == nullptr) {
+        MalString *keys[MAL_SHAPE_MAX_INLINE_SLOTS];
+        for (u32 i = 0; i < count; ++i) {
+            keys[i] = vm->string_constant_atoms[key_indices[i]];
+        }
+        shape = mal_shape_from_string_keys(&vm->heap, keys, count);
+        *cache = shape;
+    }
+    return shape;
+}
+
+__attribute__((minsize, noinline)) MalValue mal_vm_create_object_shaped_compact(
+    MalVm *vm, MalShape **cache, const i32 *key_indices, const MalValue *values, u32 count
+) {
+    MalShape *shape = mal_vm_literal_shape_from_indices(vm, cache, key_indices, count);
+    return mal_vm_create_object_shaped(vm, shape, values, count);
+}
+
 void mal_op_create_object_shaped(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_ensure_function_caches(
         callable->vm, callable->function_index);
@@ -1181,23 +1203,13 @@ void mal_op_create_object_shaped(MalCallable *callable, const MalInstruction *in
     u32 count = (u32) data[0];
     const i32 *key_indices = &data[1];
     const i32 *value_registers = &data[1 + count];
-    MalString *keys[MAL_SHAPE_MAX_INLINE_SLOTS];
     MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
     MalShape **cache = &callable->vm->literal_shape_cache[callable->function_index][
         instruction->as.create_object_shaped.shape_cache_index];
-    MalShape *shape = *cache;
     for (u32 i = 0; i < count; ++i) {
         values[i] = callable->registers[value_registers[i]];
     }
-    // Shape transitions are immutable and interned. Reuse this bytecode site's
-    // dense literal row instead of walking the same key sequence per allocation.
-    if (shape == nullptr) {
-        for (u32 i = 0; i < count; ++i) {
-            keys[i] = callable->vm->string_constant_atoms[key_indices[i]];
-        }
-        shape = mal_shape_from_string_keys(&callable->vm->heap, keys, count);
-        *cache = shape;
-    }
+    MalShape *shape = mal_vm_literal_shape_from_indices(callable->vm, cache, key_indices, count);
     callable->registers[instruction->as.create_object_shaped.dst] =
         mal_vm_create_object_shaped(callable->vm, shape, values, count);
 }

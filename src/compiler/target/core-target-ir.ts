@@ -302,6 +302,7 @@ export interface CoreTargetFunction {
 	readonly storageValues?: ReadonlyArray<number>;
 	readonly specializedOnly?: true;
 	readonly runOnce?: true;
+	readonly commonJsInitializer?: true;
 	/** No code of the closed program can call this function. */
 	readonly unreachable?: true;
 	/** Class evaluation still creates the method and installs its property. */

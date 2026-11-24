@@ -129,7 +129,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 477;
+export const COMPILER_ARTIFACT_VERSION = 479;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -2534,7 +2534,7 @@ function writeCompilerArtifact(
 		}
 		w.u8(
 			(native.specializedOnly ? 1 : native.unreachable ? 2 : 0) |
-				(native.runOnce ? 4 : 0),
+				(native.runOnce ? 4 : native.commonJsInitializer ? 8 : 0),
 		);
 		w.u32(native.directEntries.length);
 		for (const [entryIndex, entry] of native.directEntries.entries()) {
@@ -5245,7 +5245,7 @@ function readCompilerArtifact(
 		}));
 		const bodyFlags = r.u8();
 		const bodyReachability = bodyFlags & 3;
-		if (bodyFlags > 7 || bodyReachability === 3)
+		if (bodyFlags > 11 || bodyReachability === 3)
 			throw new RangeError("invalid native body flags");
 		const directEntryCount = r.count(1);
 		if (directEntryCount > 4) {
@@ -6987,6 +6987,7 @@ function readCompilerArtifact(
 			...(bodyReachability === 1 ? { specializedOnly: true as const } : {}),
 			...(bodyReachability === 2 ? { unreachable: true as const } : {}),
 			...((bodyFlags & 4) !== 0 ? { runOnce: true as const } : {}),
+			...((bodyFlags & 8) !== 0 ? { commonJsInitializer: true as const } : {}),
 			functionIndex,
 			mode: fn.isGenerator || fn.isAsync ? "resumable" : "direct",
 			registerRepresentations,

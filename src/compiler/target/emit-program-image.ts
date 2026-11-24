@@ -733,17 +733,19 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 	return { data, offsets };
 }
 
+function knownOwnSlotInstruction(instruction: BytecodeInstruction) {
+	return (
+		instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+		instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+	);
+}
+
 function compiledKnownOwnSlotSeedData(
 	fn: RuntimeImage["functions"][number],
 ): Array<number> {
 	const data: Array<number> = [0];
 	for (const instruction of fn.instructions) {
-		if (
-			instruction.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" &&
-			instruction.opcode !== "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
-		) {
-			continue;
-		}
+		if (!knownOwnSlotInstruction(instruction)) continue;
 		data[0] = data[0]! + 1;
 		data.push(
 			instruction.icIndex,
@@ -1252,11 +1254,23 @@ function prepareNativeFunctionEmission(
 		| undefined
 	> = [];
 	const fastTryLookups: Array<Map<number, "all" | "undefined"> | undefined> = [];
-	const renderFunction = createNativeFunctionRenderer((caller, target, resultKind) => {
-		const lookups = (fastTryLookups[caller] ??= new Map());
-		if (resultKind === undefined || !lookups.has(target))
-			lookups.set(target, resultKind ?? "all");
-	}, new Set(image.runtime.cjsModuleFunctionIndices));
+	const seededPropertySites = new Map<number, ReadonlySet<number>>();
+	for (const [index, fn] of image.native.functions.entries()) {
+		if (fn.runOnce !== true) continue;
+		const sites = image.runtime.functions[index]!.instructions.filter(
+			knownOwnSlotInstruction,
+		).map(({ icIndex }) => icIndex);
+		if (sites.length > 0) seededPropertySites.set(index, new Set(sites));
+	}
+	const renderFunction = createNativeFunctionRenderer(
+		(caller, target, resultKind) => {
+			const lookups = (fastTryLookups[caller] ??= new Map());
+			if (resultKind === undefined || !lookups.has(target))
+				lookups.set(target, resultKind ?? "all");
+		},
+		new Set(image.runtime.cjsModuleFunctionIndices),
+		seededPropertySites,
+	);
 	const strictCompiledTargets = new Set(
 		image.runtime.functions.flatMap((fn, index) => (fn.strict ? [index] : [])),
 	);

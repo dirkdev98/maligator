@@ -4433,6 +4433,9 @@ MalValue mal_vm_materialize_record(
 MalValue mal_vm_create_object_shaped_slow(
     MalVm *vm, struct MalShape *shape, const MalValue *values, u32 count);
 
+MalValue mal_vm_create_object_shaped_compact(
+    MalVm *vm, struct MalShape **cache, const i32 *key_indices, const MalValue *values, u32 count);
+
 /**
  * Create a plain object directly in `shape` (built from the literal's static keys)
  * with `count` inline slots filled from `values` in key order; both backends cache

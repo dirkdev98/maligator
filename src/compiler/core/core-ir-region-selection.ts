@@ -12,7 +12,7 @@ import {
 } from "../shared/fact-implication.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { coreRunOnceFunctions } from "./core-function-activations.ts";
+import { coreInitializationFunctions } from "./core-function-activations.ts";
 import {
 	CORE_FUNCTION_HAS_ALLOCATIONS,
 	CORE_FUNCTION_HAS_CANDIDATE_OPCODES,
@@ -3116,11 +3116,20 @@ export function buildCoreOptimizationPlan(
 			left.anchors[0]! - right.anchors[0]! ||
 			left.id.localeCompare(right.id),
 	);
+	const initialization = coreInitializationFunctions(
+		program,
+		options.context,
+		summaries,
+		liveFunctions,
+	);
 	const plan = Object.freeze({
 		version: corePlanVersionStamp(program),
 		liveFunctions: Object.freeze([...liveFunctions]),
 		runOnceFunctions: Object.freeze(
-			coreRunOnceFunctions(program, options.context, summaries, liveFunctions),
+			[...initialization].flatMap(([fn, kind]) => (kind === "once" ? [fn] : [])),
+		),
+		commonJsInitializers: Object.freeze(
+			[...initialization].flatMap(([fn, kind]) => (kind === "commonjs" ? [fn] : [])),
 		),
 		blockOrders: Object.freeze(
 			resolvedLocalInputs.map((input) =>

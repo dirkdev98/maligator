@@ -26,3 +26,15 @@ it("marks module evaluation and confined initialization calls eligible for size 
 		),
 	).toBe(true);
 });
+
+it("keeps retryable CommonJS wrappers out of the run-once certificate", () => {
+	const image = compileEntrypoint("tests/local/commonjs-failure.cjs", {
+		buildConfig: resolveBuildConfig({ engine: { eval: false, realms: false } }),
+	});
+	const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+	const initializers = restored.runtime.cjsModuleFunctionIndices.map((index) => ({
+		runOnce: restored.native.functions[index]?.runOnce,
+		commonJsInitializer: restored.native.functions[index]?.commonJsInitializer,
+	}));
+	expect(initializers).toEqual([{ runOnce: undefined, commonJsInitializer: true }]);
+});
