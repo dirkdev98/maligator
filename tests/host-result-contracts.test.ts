@@ -67,6 +67,7 @@ import {
 	GLOBAL_HOST_CONSTRUCTORS,
 	GLOBAL_HOST_ABSTRACT_CONSTRUCTORS,
 	HOST_OBJECT_RESULTS,
+	hostNamedRecordContents,
 } from "../src/compiler/shared/host-result-contracts.ts";
 import type {
 	HostObjectKind,
@@ -114,6 +115,319 @@ function hostInputAccesses(source: string) {
 		rmSync(directory, { recursive: true, force: true });
 	}
 }
+
+it("reads primitive string lengths in a private URLSearchParams result loop", () => {
+	const accesses = hostInputAccesses(`
+		function tags(query, steps) {
+			for (let index = 0; index < steps; index++) globalThis.visited = index;
+			return new URLSearchParams(query).getAll("tag");
+		}
+		globalThis.inspect = function inspect(query, steps) {
+			const values = tags(query, steps);
+			let sum = 0;
+			for (let index = 0; index < values.length; index++) sum += values[index].length;
+			return sum;
+		};
+	`);
+	expect(accesses.get("inspect")).toContain("primitive-string-length");
+});
+
+it("keeps a wrapper result generic when the wrapper publishes its array", () => {
+	const accesses = hostInputAccesses(`
+		function tags(query, steps) {
+			for (let index = 0; index < steps; index++) globalThis.visited = index;
+			const values = new URLSearchParams(query).getAll("tag");
+			globalThis.published = values;
+			return values;
+		}
+		globalThis.inspect = function inspect(query, steps) {
+			const values = tags(query, steps);
+			let sum = 0;
+			for (let index = 0; index < values.length; index++) sum += values[index].length;
+			return sum;
+		};
+	`);
+	expect(accesses.get("inspect")).not.toContain("primitive-string-length");
+});
+
+it.each([
+	["Object.keys(input)", "values[index]"],
+	["Object.entries(input)", "values[index][0]"],
+	['String(input).split(",")', "values[index]"],
+])("specializes a private loop over %s", (expression, element) => {
+	const accesses = hostInputAccesses(`
+			globalThis.inspect = function inspect(input) {
+				const values = ${expression};
+				let sum = 0;
+				for (let index = 0; index < values.length; index++) sum += ${element}.length;
+				return sum;
+			};
+		`);
+	expect(accesses.get("inspect")).toContain("primitive-string-length");
+});
+
+it("uses installed Headers cookie strings in a private loop", () => {
+	const accesses = hostInputAccesses(`
+		globalThis.inspect = function inspect(input) {
+			const values = new Headers(input).getSetCookie();
+			let sum = 0;
+			for (let index = 0; index < values.length; index++) sum += values[index].length;
+			return sum;
+		};
+	`);
+	expect(accesses.get("inspect")).toContain("primitive-string-length");
+});
+
+it("eliminates a Number test inside a private FormData result loop", () => {
+	const operations = inspectHostCall(
+		"count",
+		"",
+		`
+		const form = new FormData();
+		form.append("tag", path);
+		const values = form.getAll("tag");
+		let count = 0;
+		for (let i = 0; i < values.length; i++) {
+			if (typeof values[i] === "number") count++;
+		}
+	`,
+		"",
+		undefined,
+		"inspect",
+		"result",
+	);
+	expect(operations).toContain("call");
+	expect(operations).not.toContain("typeofCompare");
+});
+
+it("uses own path.parse fields after a source wrapper returns", () => {
+	const accesses = hostInputAccesses(`
+		import { parse } from "node:path/posix";
+		function parts(path) { return parse(path); }
+		globalThis.inspect = function inspect(path) {
+			const record = parts(path);
+			return record.base.length + record.dir.length;
+		};
+	`);
+	expect(
+		accesses.get("inspect")?.filter((access) => access === "primitive-string-length"),
+	).toHaveLength(2);
+});
+
+it("uses DNS lookup address fields only for the proven all overload", () => {
+	const accesses = hostInputAccesses(`
+		import { lookup } from "node:dns/promises";
+		globalThis.inspect = async function inspect(host) {
+			const values = await lookup(host, { all: true });
+			let sum = 0;
+			for (let i = 0; i < values.length; i++) sum += values[i].address.length;
+			return sum;
+		};
+		globalThis.inspectUnknown = async function inspectUnknown(host, options) {
+			const values = await lookup(host, options);
+			let sum = 0;
+			for (let i = 0; i < values.length; i++) sum += values[i].address.length;
+			return sum;
+		};
+	`);
+	expect(accesses.get("inspect")).toContain("primitive-string-length");
+	expect(accesses.get("inspectUnknown")).not.toContain("primitive-string-length");
+});
+
+it("keeps values from Object.values generic inside a private loop", () => {
+	const accesses = hostInputAccesses(`
+		globalThis.inspect = function inspect(input) {
+			const values = Object.values(input);
+			let sum = 0;
+			for (let index = 0; index < values.length; index++) sum += values[index].length;
+			return sum;
+		};
+	`);
+	expect(accesses.get("inspect")).not.toContain("primitive-string-length");
+});
+
+it.each([
+	["values[0] = { length: 37 };", "<"],
+	["change(values);", "<"],
+	["", "<="],
+])(
+	"keeps generic element consumption for a widened array or bound (%s %s)",
+	(after, op) => {
+		const accesses = hostInputAccesses(`
+		globalThis.inspect = function inspect(query, change) {
+			const values = new URLSearchParams(query).getAll("tag");
+			${after}
+			let sum = 0;
+			for (let index = 0; index ${op} values.length; index++) sum += values[index].length;
+			return sum;
+		};
+	`);
+		expect(accesses.get("inspect")).not.toContain("primitive-string-length");
+	},
+);
+
+it("uses the nonnegative counters of a native encodeInto record", () => {
+	const operations = inspectHostCall(
+		"new TextEncoder().encodeInto(path, new Uint8Array())",
+		"",
+		"",
+		"",
+		undefined,
+		"inspect",
+		"result.read < 0 || result.written < 0",
+	);
+	expect(operations).toContain("call");
+	expect(operations).not.toContain("binary:<");
+});
+
+it("preserves the write and its catch path for frozen worker capabilities", () => {
+	const operations = inspectHostCall(
+		"tag",
+		"",
+		`const record = capabilities();
+		let tag = false;
+		try { record.parallelism = 'wrong'; tag = typeof record.parallelism === 'string'; }
+		catch {}`,
+		'import { capabilities } from "maligator:workers";',
+		undefined,
+		"inspect",
+		"result",
+	);
+	expect(operations.some((operation) => operation.startsWith("storeProperty"))).toBe(
+		true,
+	);
+	expect(operations).toContain("typeofCompare");
+});
+
+it("recognizes the native stream brand on an in-bounds tee element", () => {
+	const operations = inspectHostCall(
+		"new ReadableStream().tee()",
+		"",
+		"",
+		"",
+		undefined,
+		"inspect",
+		'typeof result[0].locked === "boolean"',
+	);
+	expect(operations).toContain("call");
+	expect(operations).not.toContain("typeofCompare");
+});
+
+it.each([
+	"readdir(path)",
+	"readdir(path).then(values => values)",
+	"Promise.resolve(readdir(path))",
+])(
+	"specializes private directory element consumption after fulfillment %s",
+	(expression) => {
+		const accesses = hostInputAccesses(`
+			import { readdir } from "node:fs/promises";
+			globalThis.inspect = async function inspect(path) {
+				const values = await ${expression};
+				let sum = 0;
+				for (let index = 0; index < values.length; index++) sum += values[index].length;
+				return sum;
+			};
+		`);
+		expect(accesses.get("inspect")).toContain("primitive-string-length");
+	},
+);
+
+it("keeps directory elements generic when a second Promise continuation can mutate them", () => {
+	const accesses = hostInputAccesses(`
+		import { readdir } from "node:fs/promises";
+		globalThis.inspect = async function inspect(path) {
+			const pending = readdir(path);
+			pending.then(values => { values[0] = { length: 37 }; });
+			const values = await pending;
+			let sum = 0;
+			for (let index = 0; index < values.length; index++) sum += values[index].length;
+			return sum;
+		};
+	`);
+	expect(accesses.get("inspect")).not.toContain("primitive-string-length");
+});
+
+it.each([
+	["globalThis.saved = arguments;", "globalThis.saved[0][0] = { length: 37 };"],
+	["const alias = globalThis.choose ? entries : []; alias[0] = { length: 37 };", ""],
+])(
+	"keeps directory elements generic when the continuation can publish or write them (%s)",
+	(callback, after) => {
+		const accesses = hostInputAccesses(`
+		import { readdir } from "node:fs/promises";
+		function keep(entries) { ${callback} return entries; }
+		globalThis.inspect = async function inspect(path) {
+			const values = await readdir(path).then(keep);
+			${after}
+			let sum = 0;
+			for (let index = 0; index < values.length; index++) sum += values[index].length;
+			return sum;
+		};
+	`);
+		expect(accesses.get("inspect")).not.toContain("primitive-string-length");
+	},
+);
+
+it("uses the own name field of each private Dirent in a fulfilled directory listing", () => {
+	const accesses = hostInputAccesses(`
+		import { readdir } from "node:fs/promises";
+		globalThis.inspect = async function inspect(path) {
+			const values = await readdir(path, { withFileTypes: true });
+			let sum = 0;
+			for (let index = 0; index < values.length; index++) {
+				const entry = values[index];
+				sum += entry.name.length + entry.parentPath.length;
+			}
+			return sum;
+		};
+	`);
+	expect(
+		accesses.get("inspect")?.filter((access) => access === "primitive-string-length"),
+	).toHaveLength(2);
+});
+
+it("drops element field facts when a different read of the same record can mutate it", () => {
+	const accesses = hostInputAccesses(`
+		import { readdir } from "node:fs/promises";
+		globalThis.inspect = async function inspect(path) {
+			const values = await readdir(path, { withFileTypes: true });
+			let sum = 0;
+			for (let index = 0; index < values.length; index++) {
+				values[index].name = { length: 37 };
+				sum += values[index].name.length;
+			}
+			return sum;
+		};
+	`);
+	expect(accesses.get("inspect")).not.toContain("primitive-string-length");
+});
+
+it("uses the native byte count from a successful FileHandle read", () => {
+	const operations = inspectHostCall(
+		"await (await open(path, 'r')).read(new Uint8Array())",
+		"",
+		"",
+		'import { open } from "node:fs/promises";',
+		undefined,
+		"inspect",
+		"result.bytesRead < 0",
+	);
+	expect(operations).toContain("await");
+	expect(operations).not.toContain("binary:<");
+});
+
+it("carries the input view brand through a fulfilled FileHandle record", () => {
+	const accesses = hostInputAccesses(`
+		import { open } from "node:fs/promises";
+		globalThis.inspect = async function inspect(path) {
+			const handle = await open(path, "r");
+			const result = await handle.read(new Uint8Array());
+			return result.buffer[0];
+		};
+	`);
+	expect(accesses.get("inspect")).toContain("exact-typed-array-element");
+});
 
 it("uses the original native predicate brand through a negated alias", () => {
 	const accesses = hostInputAccesses(`
@@ -1086,7 +1400,7 @@ it("accounts for all installed callable module exports", () => {
 		return installers.has(installer) &&
 			typeof node === "number" &&
 			(catalog.nodes[node]![2] & 2) !== 0 &&
-			!numericContractAudited(contracts?.get(name))
+			!installedResultContractAudited(contracts?.get(name))
 			? [root]
 			: [];
 	});
@@ -1095,7 +1409,7 @@ it("accounts for all installed callable module exports", () => {
 		for (const member of definition.exports) {
 			if (
 				member.contract.value === "callable" &&
-				!numericContractAudited(
+				!installedResultContractAudited(
 					HOST_RESULT_CONTRACTS.get(definition.installer)?.get(member.name),
 				)
 			)
@@ -1118,6 +1432,55 @@ function numericContractAudited(contract: HostResultContract | undefined): boole
 		selector?.kind === "resolve-value"
 	);
 }
+
+function installedResultContractAudited(
+	contract: HostResultContract | undefined,
+): boolean {
+	if (!numericContractAudited(contract)) return false;
+	if (contract === undefined || !("value" in contract)) return true;
+	const { brand, initialContents, contentsUnavailable } = contract.value;
+	if (brand === "Array")
+		return initialContents?.kind === "dense-array" || !!contentsUnavailable;
+	return initialContents?.kind !== "dense-array";
+}
+
+it("keeps content dispositions on installed collection and record producers", () => {
+	const expected = new Map<string, "dense-array" | "record" | "selected" | "dynamic">([
+		["mal_host_install_node_dns_promises:lookup", "selected"],
+		["mal_host_install_node_fs:readdirSync", "selected"],
+		["mal_host_install_node_fs_promises:readdir", "selected"],
+		["mal_host_install_node_fs:statfsSync", "record"],
+		["mal_host_install_node_os:cpus", "dense-array"],
+		["mal_host_install_node_os:networkInterfaces", "dynamic"],
+		["mal_host_install_node_path:parse", "record"],
+		["mal_host_install_node_querystring:parse", "dynamic"],
+		["mal_host_install_process:getActiveResourcesInfo", "dense-array"],
+		["mal_host_install_maligator_internal_fs:list", "selected"],
+	]);
+	const { roots, nodes } = getPrimordialCatalog();
+	for (const [root, shape] of expected) {
+		const installed = roots.find(([name]) => name === root)?.[1];
+		expect(typeof installed === "number" && (nodes[installed]![2] & 2) !== 0, root).toBe(
+			true,
+		);
+		const colon = root.indexOf(":");
+		const contract = HOST_RESULT_CONTRACTS.get(root.slice(0, colon))?.get(
+			root.slice(colon + 1),
+		);
+		const value =
+			contract !== undefined && "value" in contract ? contract.value : undefined;
+		const initial = value?.initialContents ?? hostNamedRecordContents(value?.hostObject);
+		expect(
+			initial?.kind ??
+				(value?.selector !== undefined
+					? "selected"
+					: value?.contentsUnavailable
+						? "dynamic"
+						: undefined),
+			root,
+		).toBe(shape);
+	}
+});
 
 it("accounts for numeric completions of installed ECMAScript operations", () => {
 	const missing = getPrimordialCatalog().nodes.flatMap(([identity, , flags]) => {
@@ -1469,7 +1832,7 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 		if (
 			callable === undefined ||
 			(callable[2] & 2) === 0 ||
-			!numericContractAudited(contract)
+			!installedResultContractAudited(contract)
 		)
 			missing.push(identity);
 	}
@@ -1536,7 +1899,9 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 						`[${nodes[key[0]]![0].replaceAll("%", "")}]`);
 			if (
 				getter >= 0 &&
-				!numericContractAudited(properties?.get(member) ?? installedContract(getter))
+				!installedResultContractAudited(
+					properties?.get(member) ?? installedContract(getter),
+				)
 			)
 				missing.push(`${owner}.${member} getter`);
 			if (
@@ -1548,7 +1913,7 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 				missingInvocations.push(`${brand}.${member} getter`);
 			if (typeof value !== "number" || (nodes[value]![2] & 2) === 0) continue;
 			const contract = methods?.get(member) ?? installedContract(value);
-			if (!numericContractAudited(contract)) missing.push(`${owner}.${member}`);
+			if (!installedResultContractAudited(contract)) missing.push(`${owner}.${member}`);
 			if (
 				brand !== undefined &&
 				methods?.has(member) &&

@@ -25,6 +25,7 @@ export interface CoreRecordFieldKind {
 	readonly calleeTargets?: CoreCalleeTargets;
 	readonly key: number;
 	readonly mask: number;
+	readonly writeMayFail?: true;
 }
 
 // Field arrays describe fresh private records; null has no normal result, undefined admits escapes and non-records.
@@ -69,6 +70,7 @@ export function sameCoreRecordValueKind(
 				(field, index) =>
 					field.key === right[index]!.key &&
 					field.mask === right[index]!.mask &&
+					field.writeMayFail === right[index]!.writeMayFail &&
 					field.heapBrand === right[index]!.heapBrand &&
 					(field.calleeTargets === right[index]!.calleeTargets ||
 						(field.calleeTargets !== undefined &&
@@ -124,6 +126,9 @@ export function joinCoreRecordValueKinds(
 			Object.freeze({
 				key: field.key,
 				mask,
+				...(field.writeMayFail || other.writeMayFail
+					? { writeMayFail: true as const }
+					: {}),
 				...(integerRange === undefined ? {} : { integerRange }),
 				...(heapBrand === undefined ? {} : { heapBrand }),
 				...(calleeTargets === undefined ? {} : { calleeTargets }),
@@ -360,7 +365,11 @@ function recordReturnIndex(
 					continue;
 				const completion = fn.registry.byId(fn.instructionOpcode(instruction))
 					.callTransfer?.result;
-				if (completion !== "call-completion" && completion !== "construct-completion")
+				if (
+					completion !== "call-completion" &&
+					completion !== "construct-completion" &&
+					fn.instructionOpcodeName(instruction) !== "awaitFulfilled"
+				)
 					continue;
 			}
 			const requiredKeys = new Set<number>();
@@ -626,86 +635,88 @@ export function coreReturnedRecordKinds(
 		const writesByKey = initial.writes;
 		if (fields !== undefined && fields !== null && writesByKey !== undefined)
 			fields = Object.freeze(
-				fields.map((field) => {
-					const writes = writesByKey.get(field.key);
-					// An own write cannot create a normal return before its initial value completes.
-					if (writes === undefined || field.mask === 0) return field;
-					const alternatives = recordReturnWrites(
-						fn,
-						cfg,
-						returnedFields,
-						definition,
-						field.key,
-					);
-					let kind = 0;
-					let integerRange: CompilerIntegerRange | null | undefined = null;
-					let heapBrand: CoreHeapBrandState = null;
-					let calleeTargets: CoreCalleeTargets | undefined =
-						queries.calleeTargets === undefined && field.calleeTargets === undefined
-							? undefined
-							: CORE_CALLEE_TARGETS_BOTTOM;
-					for (const alternative of alternatives ?? [undefined]) {
-						const initialSurvives =
-							alternative?.initialProducers === undefined ||
-							alternative.initialProducers.includes(definition);
-						let partKind = initialSurvives ? field.mask : 0;
-						let partRange = initialSurvives ? field.integerRange : null;
-						let partBrand = initialSurvives ? field.heapBrand : null;
-						let partTargets = initialSurvives
-							? field.calleeTargets
-							: CORE_CALLEE_TARGETS_BOTTOM;
-						for (const write of alternative === undefined
-							? writes
-							: (alternative.writes ?? [])) {
-							if (!cfg.reachable.has(fn.instructionBlock(write.instruction))) continue;
-							const written = queries.mask(write.value, write.instruction, write.edge);
-							partKind |= written;
-							if (written !== 0) {
-								partTargets = joinFieldCalleeTargets(
-									partTargets,
-									queries.calleeTargets?.(write.value, write.instruction, write.edge),
-								);
-								partRange =
-									partKind === COMPILER_VALUE_KIND_NUMBER
-										? joinFieldIntegerRanges(
-												partRange,
-												queries.integerRange?.(
-													write.value,
-													write.instruction,
-													write.edge,
-												),
-											)
+				fields
+					.filter((field) => !field.writeMayFail || !writesByKey.has(field.key))
+					.map((field) => {
+						const writes = writesByKey.get(field.key);
+						// An own write cannot create a normal return before its initial value completes.
+						if (writes === undefined || field.mask === 0) return field;
+						const alternatives = recordReturnWrites(
+							fn,
+							cfg,
+							returnedFields,
+							definition,
+							field.key,
+						);
+						let kind = 0;
+						let integerRange: CompilerIntegerRange | null | undefined = null;
+						let heapBrand: CoreHeapBrandState = null;
+						let calleeTargets: CoreCalleeTargets | undefined =
+							queries.calleeTargets === undefined && field.calleeTargets === undefined
+								? undefined
+								: CORE_CALLEE_TARGETS_BOTTOM;
+						for (const alternative of alternatives ?? [undefined]) {
+							const initialSurvives =
+								alternative?.initialProducers === undefined ||
+								alternative.initialProducers.includes(definition);
+							let partKind = initialSurvives ? field.mask : 0;
+							let partRange = initialSurvives ? field.integerRange : null;
+							let partBrand = initialSurvives ? field.heapBrand : null;
+							let partTargets = initialSurvives
+								? field.calleeTargets
+								: CORE_CALLEE_TARGETS_BOTTOM;
+							for (const write of alternative === undefined
+								? writes
+								: (alternative.writes ?? [])) {
+								if (!cfg.reachable.has(fn.instructionBlock(write.instruction))) continue;
+								const written = queries.mask(write.value, write.instruction, write.edge);
+								partKind |= written;
+								if (written !== 0) {
+									partTargets = joinFieldCalleeTargets(
+										partTargets,
+										queries.calleeTargets?.(write.value, write.instruction, write.edge),
+									);
+									partRange =
+										partKind === COMPILER_VALUE_KIND_NUMBER
+											? joinFieldIntegerRanges(
+													partRange,
+													queries.integerRange?.(
+														write.value,
+														write.instruction,
+														write.edge,
+													),
+												)
+											: undefined;
+									partBrand =
+										partKind === COMPILER_VALUE_KIND_OBJECT
+											? joinCoreHeapBrands(
+													partBrand,
+													queries.heapBrand?.(write.value, write.instruction, write.edge),
+												)
+											: undefined;
+								}
+							}
+							if (partKind !== 0) {
+								calleeTargets = joinFieldCalleeTargets(calleeTargets, partTargets);
+								kind |= partKind;
+								integerRange =
+									kind === COMPILER_VALUE_KIND_NUMBER
+										? joinFieldIntegerRanges(integerRange, partRange)
 										: undefined;
-								partBrand =
-									partKind === COMPILER_VALUE_KIND_OBJECT
-										? joinCoreHeapBrands(
-												partBrand,
-												queries.heapBrand?.(write.value, write.instruction, write.edge),
-											)
+								heapBrand =
+									kind === COMPILER_VALUE_KIND_OBJECT
+										? joinCoreHeapBrands(heapBrand, partBrand)
 										: undefined;
 							}
 						}
-						if (partKind !== 0) {
-							calleeTargets = joinFieldCalleeTargets(calleeTargets, partTargets);
-							kind |= partKind;
-							integerRange =
-								kind === COMPILER_VALUE_KIND_NUMBER
-									? joinFieldIntegerRanges(integerRange, partRange)
-									: undefined;
-							heapBrand =
-								kind === COMPILER_VALUE_KIND_OBJECT
-									? joinCoreHeapBrands(heapBrand, partBrand)
-									: undefined;
-						}
-					}
-					return Object.freeze({
-						key: field.key,
-						mask: kind,
-						...(integerRange === undefined ? {} : { integerRange }),
-						...(heapBrand === undefined ? {} : { heapBrand }),
-						...(calleeTargets === undefined ? {} : { calleeTargets }),
-					});
-				}),
+						return Object.freeze({
+							key: field.key,
+							mask: kind,
+							...(integerRange === undefined ? {} : { integerRange }),
+							...(heapBrand === undefined ? {} : { heapBrand }),
+							...(calleeTargets === undefined ? {} : { calleeTargets }),
+						});
+					}),
 			);
 		result = joinCoreRecordValueKinds(result, fields);
 		if (result === undefined) return undefined;
@@ -779,11 +790,14 @@ export function coreRecordFieldInitialHeapBrand(
 export function coreRecordFieldIsOwnData(
 	read: CoreRecordFieldAccess,
 	record: CoreRecordValueKind,
+	forStore = false,
 ): boolean {
 	return (
 		record !== undefined &&
 		record !== null &&
-		read.requiredKeys.every((key) => record.some((field) => field.key === key))
+		read.requiredKeys.every((key) => record.some((field) => field.key === key)) &&
+		(!(forStore || read.writes?.length) ||
+			record.some((field) => field.key === read.key && !field.writeMayFail))
 	);
 }
 
@@ -1443,7 +1457,9 @@ function mergedRecordFieldAccesses(
 					const completion = fn.registry.byId(fn.instructionOpcode(instruction))
 						.callTransfer?.result;
 					if (
-						(completion !== "call-completion" && completion !== "construct-completion") ||
+						(completion !== "call-completion" &&
+							completion !== "construct-completion" &&
+							fn.instructionOpcodeName(instruction) !== "awaitFulfilled") ||
 						fn.kernel.instructionResultCount(instruction) !== 1
 					) {
 						valid = false;
@@ -1579,7 +1595,11 @@ function recordFieldAccesses(
 			continue;
 		const completion = fn.registry.byId(fn.instructionOpcode(producer)).callTransfer
 			?.result;
-		if (completion !== "call-completion" && completion !== "construct-completion")
+		if (
+			completion !== "call-completion" &&
+			completion !== "construct-completion" &&
+			fn.instructionOpcodeName(producer) !== "awaitFulfilled"
+		)
 			continue;
 		const pending = [fn.kernel.resultAt(fn.kernel.instructionResultStart(producer))];
 		const seen = new Set<CoreValueId>();

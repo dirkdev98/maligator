@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { readdir } from "node:fs/promises";
 import { isAbsolute } from "node:path/posix";
 import { types } from "node:util";
 
@@ -25,6 +26,28 @@ function borrowAndWrite(value) {
 	return [same === bytes, encoded.read, encoded.written, ...bytes];
 }
 
+function tagLengths(query) {
+	const tags = new URLSearchParams(query).getAll("tag");
+	let total = 0;
+	for (let i = 0; i < tags.length; i++) total += tags[i].length;
+	return total;
+}
+
+function consumeChangedTags(query, change) {
+	const tags = new URLSearchParams(query).getAll("tag");
+	change(tags);
+	let total = 0;
+	for (let i = 0; i < tags.length; i++) total += tags[i].length;
+	return total;
+}
+
+async function countEntryNames(path) {
+	const entries = await readdir(path, { withFileTypes: true }).then((values) => values);
+	let total = 0;
+	for (let i = 0; i < entries.length; i++) total += entries[i].name.length;
+	return total;
+}
+
 globalThis.hostRead = read;
 globalThis.hostLength = length;
 console.log(
@@ -35,5 +58,11 @@ console.log(
 		length("/example"),
 		length({ length: 9 }),
 		borrowAndWrite("é"),
+		tagLengths("tag=one&tag=three&ignored=unused"),
+		tagLengths(""),
+		consumeChangedTags("tag=abc", (tags) => {
+			tags[0] = { length: 37 };
+		}),
+		await countEntryNames("tests/fixtures"),
 	]),
 );

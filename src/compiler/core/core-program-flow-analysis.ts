@@ -1,3 +1,4 @@
+import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { CORE_PROGRAM_FLOW_CALL_TARGET_SEMANTICS } from "./core-ir-call-targets.ts";
 import type { CoreCallGraphIndexState } from "./core-ir-call-targets.ts";
@@ -5,7 +6,10 @@ import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import type { CoreFunctionReachabilityState } from "./core-ir-reachability.ts";
 import { CORE_PROGRAM_FLOW_SUMMARY_SEMANTICS } from "./core-ir-summaries.ts";
 import type { CoreProgramSummaryState } from "./core-ir-summaries.ts";
-import { CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS } from "./core-ir-value-kinds.ts";
+import {
+	CORE_LOCAL_VALUE_KIND_ANALYSIS,
+	CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS,
+} from "./core-ir-value-kinds.ts";
 import type { CoreProgramValueKindState } from "./core-ir-value-kinds.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
@@ -211,6 +215,11 @@ export const CORE_PROGRAM_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreProgra
 							unjournaledInvalidation ? undefined : [...dirty],
 							externallyChanged,
 							context,
+							(functionId, value) =>
+								get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
+									scope: "function",
+									function: functionId,
+								}).kindMask(value) === COMPILER_VALUE_KIND_NUMBER,
 						);
 			return Object.freeze({ flowRevision, kinds });
 		},

@@ -14,6 +14,12 @@ import {
 import {
 	BUFFER_STRING_ENCODINGS,
 	builtinInputContract,
+	diskDirectoryEntryContent,
+	dnsAddressContent,
+	dnsTtlAddressContent,
+	DNS_RESOLUTION_RESULTS,
+	hostNamedRecordContents,
+	nodeDirectoryEntryContent,
 	CAPTURED_HOST_RESULTS,
 	PLATFORM_SOURCE_EXPORTS,
 	PLATFORM_SOURCE_STATICS,
@@ -631,7 +637,7 @@ export function coreHostArrayIndex(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
-): boolean {
+): number | undefined {
 	const key = coreHostPropertyName(program, fn, instruction);
 	const value =
 		key !== undefined
@@ -646,13 +652,13 @@ export function coreHostArrayIndex(
 						),
 					)
 				: undefined;
-	return (
-		typeof value === "number" &&
+	return typeof value === "number" &&
 		Number.isInteger(value) &&
 		value >= 0 &&
 		value < 0xffff_ffff &&
 		(key === undefined || String(value) === key)
-	);
+		? value
+		: undefined;
 }
 
 const UNKNOWN_LITERAL = Symbol("unknown host argument");
@@ -739,6 +745,7 @@ const CAPTURED_GETTERS = new Set(
 
 interface CoreHostValueFacts extends CoreNormalResultFacts {
 	readonly hostObject?: HostObjectKind;
+	readonly initialContents?: HostValueContract["initialContents"];
 }
 
 interface CoreHostCompletion {
@@ -747,6 +754,26 @@ interface CoreHostCompletion {
 }
 
 const numericHostMembers = new Set<string>();
+const hostContentsMembers = new Set<string>();
+const contentsSelectors = new Set<NonNullable<HostValueContract["selector"]>["kind"]>([
+	"compression-info",
+	"directory-entries",
+	"dns-lookup",
+	"dns-resolve",
+	"dns-ttl",
+	"exec-file-fulfillment",
+	"exec-fulfillment",
+	"fstat-options",
+	"maligator-directory-list",
+	"stat-options",
+]);
+function hasHostContents(value: HostValueContract): boolean {
+	return (
+		value.initialContents !== undefined ||
+		hostNamedRecordContents(value.hostObject) !== undefined ||
+		(value.selector !== undefined && contentsSelectors.has(value.selector.kind))
+	);
+}
 for (const definitions of [
 	...HOST_RESULT_CONTRACTS.values(),
 	...Object.values(HOST_OBJECT_RESULTS.methods),
@@ -761,7 +788,9 @@ for (const definitions of [
 		methods,
 	]),
 ]) {
-	for (const [name, contract] of definitions)
+	for (const [name, contract] of definitions) {
+		if ("value" in contract && hasHostContents(contract.value))
+			hostContentsMembers.add(name);
 		if (
 			contract.kind === "return" &&
 			((contract.value.mask === COMPILER_VALUE_KIND_NUMBER &&
@@ -769,10 +798,13 @@ for (const definitions of [
 				contract.value.selector?.kind === "random-int")
 		)
 			numericHostMembers.add(name);
+	}
 }
 for (const [path, contract] of CAPTURED_HOST_RESULTS) {
-	if (contract.kind !== "return" || contract.value.integerRange === undefined) continue;
 	const name = path.slice(path.lastIndexOf(".") + 1).replace(/<get>$/, "");
+	if ("value" in contract && hasHostContents(contract.value))
+		hostContentsMembers.add(name);
+	if (contract.kind !== "return" || contract.value.integerRange === undefined) continue;
 	numericHostMembers.add(name);
 }
 
@@ -796,6 +828,10 @@ export function coreHostImmediateRangeCandidate(
 	return name !== undefined && numericHostMembers.has(name);
 }
 
+export function coreHostContentsCandidate(name: string): boolean {
+	return hostContentsMembers.has(name);
+}
+
 export function coreHostCompletion(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
@@ -811,7 +847,13 @@ export function coreHostCompletion(
 		return undefined;
 	const start = fn.kernel.instructionOperandStart(instruction);
 	const returnsImmediately = contract.kind === "return";
-	const result = valueFacts(contract.value);
+	const facts = valueFacts(contract.value);
+	const initialContents =
+		locked && facts.mask === COMPILER_VALUE_KIND_OBJECT
+			? (facts.initialContents ?? hostNamedRecordContents(facts.hostObject))
+			: undefined;
+	const result =
+		initialContents === facts.initialContents ? facts : { ...facts, initialContents };
 	let immediate =
 		contract.kind === "fulfill"
 			? (contract.immediateMask ?? COMPILER_VALUE_KIND_OBJECT)
@@ -857,6 +899,7 @@ export function coreHostCompletion(
 				mask: value.mask,
 				heapBrand: value.brand,
 				hostObject: value.hostObject,
+				initialContents: locked ? value.initialContents : undefined,
 				integerRange,
 			};
 		if (fn.instructionAttributes(instruction).argumentMode !== undefined)
@@ -957,15 +1000,86 @@ export function coreHostCompletion(
 			}
 			case "directory-entries": {
 				const flag = option("withFileTypes");
+				const hostObject =
+					flag === UNKNOWN_LITERAL
+						? "DirectoryEntries"
+						: flag
+							? "DirectoryDirents"
+							: "DirectoryNames";
 				return {
 					mask: COMPILER_VALUE_KIND_OBJECT,
 					heapBrand: "Array",
-					hostObject:
-						flag === UNKNOWN_LITERAL
-							? "DirectoryEntries"
-							: flag
-								? "DirectoryDirents"
-								: "DirectoryNames",
+					hostObject,
+					initialContents: locked
+						? {
+								kind: "dense-array",
+								element:
+									flag === UNKNOWN_LITERAL
+										? { mask: COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_STRING }
+										: flag
+											? nodeDirectoryEntryContent
+											: { mask: COMPILER_VALUE_KIND_STRING },
+							}
+						: undefined,
+				};
+			}
+			case "dns-lookup": {
+				const all = option("all");
+				if (all === UNKNOWN_LITERAL) break;
+				return all
+					? {
+							mask: COMPILER_VALUE_KIND_OBJECT,
+							heapBrand: "Array",
+							initialContents: { kind: "dense-array", element: dnsAddressContent },
+						}
+					: {
+							mask: COMPILER_VALUE_KIND_OBJECT,
+							initialContents: { kind: "record", fields: dnsAddressContent.fields! },
+						};
+			}
+			case "dns-resolve": {
+				const type = primitive();
+				const resolved = DNS_RESOLUTION_RESULTS.get(
+					type === undefined ? "A" : String(type),
+				);
+				if (resolved?.kind === "fulfill") return valueFacts(resolved.value);
+				break;
+			}
+			case "dns-ttl": {
+				const ttl = option("ttl");
+				return {
+					mask: COMPILER_VALUE_KIND_OBJECT,
+					heapBrand: "Array",
+					initialContents: {
+						kind: "dense-array",
+						element:
+							ttl === true
+								? dnsTtlAddressContent
+								: {
+										mask:
+											ttl === UNKNOWN_LITERAL
+												? COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_OBJECT
+												: COMPILER_VALUE_KIND_STRING,
+									},
+					},
+				};
+			}
+			case "maligator-directory-list": {
+				const filesOnly = primitive();
+				return {
+					mask: COMPILER_VALUE_KIND_OBJECT,
+					heapBrand: "Array",
+					initialContents: locked
+						? {
+								kind: "dense-array",
+								element:
+									filesOnly === UNKNOWN_LITERAL
+										? { mask: COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_STRING }
+										: filesOnly
+											? { mask: COMPILER_VALUE_KIND_STRING }
+											: diskDirectoryEntryContent,
+							}
+						: undefined,
 				};
 			}
 			case "temporary-directory": {

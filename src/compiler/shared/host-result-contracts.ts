@@ -24,7 +24,9 @@ export interface HostValueContract {
 	readonly mask: CompilerValueKindMask;
 	readonly integerRange?: CompilerIntegerRange;
 	readonly numericRangeUnavailable?: string;
-	readonly brand?: "Array" | "Uint8Array";
+	readonly brand?: "Array" | CompilerNumericTypedArrayKind;
+	readonly initialContents?: HostInitialContents;
+	readonly contentsUnavailable?: string;
 	readonly hostObject?: HostObjectKind;
 	readonly installedObject?: true;
 	readonly hostConstructor?: HostObjectKind;
@@ -57,6 +59,10 @@ export interface HostValueContract {
 			| "stat-options"
 			| "fstat-options"
 			| "directory-entries"
+			| "dns-lookup"
+			| "dns-resolve"
+			| "dns-ttl"
+			| "maligator-directory-list"
 			| "temporary-directory"
 			| "mkdir-options"
 			| "compression-info"
@@ -71,6 +77,25 @@ export interface HostValueContract {
 			| "resolve-value";
 	};
 }
+
+export type HostContentValue = Pick<
+	HostValueContract,
+	"mask" | "brand" | "integerRange" | "hostObject"
+> & {
+	readonly fields?: Readonly<Record<string, HostContentValue>>;
+	readonly argument?: number;
+};
+
+export type HostInitialContents =
+	| {
+			readonly kind: "dense-array";
+			readonly element: HostContentValue;
+			readonly length?: number;
+	  }
+	| {
+			readonly kind: "record";
+			readonly fields: Readonly<Record<string, HostContentValue>>;
+	  };
 
 export type HostInputBrand =
 	| CompilerNumericTypedArrayKind
@@ -123,6 +148,76 @@ const returned = (
 	mask: CompilerValueKindMask,
 	brand?: HostValueContract["brand"],
 ): HostResultContract => ({ kind: "return", value: { mask, brand } });
+
+function denseArray(
+	element: HostContentValue,
+	length?: number,
+	kind: "return" | "fulfill" = "return",
+): HostResultContract {
+	return {
+		kind,
+		value: {
+			mask: OBJECT,
+			brand: "Array",
+			initialContents: { kind: "dense-array", element, length },
+		},
+	};
+}
+
+const dynamicArrayContents = (reason: string): HostResultContract => ({
+	kind: "return",
+	value: { mask: OBJECT, brand: "Array", contentsUnavailable: reason },
+});
+
+const dynamicRecordContents = (reason: string): HostResultContract => ({
+	kind: "return",
+	value: { mask: OBJECT, contentsUnavailable: reason },
+});
+
+function ownRecord(
+	fields: Readonly<Record<string, HostContentValue>>,
+	kind: "return" | "fulfill" = "return",
+	hostObject?: HostObjectKind,
+): HostResultContract {
+	return {
+		kind,
+		value: { mask: OBJECT, hostObject, initialContents: { kind: "record", fields } },
+	};
+}
+
+const stringField = { mask: STRING };
+const numberField = { mask: NUMBER };
+const ownIteratorResult = (
+	value: HostContentValue,
+	kind: "return" | "fulfill" = "return",
+): HostResultContract => ownRecord({ done: { mask: BOOLEAN }, value }, kind);
+const strings = denseArray(stringField);
+const objects = denseArray({ mask: OBJECT });
+const arbitraryElements = denseArray({ mask: TOP });
+const eventNames = denseArray({ mask: STRING | SYMBOL });
+const performanceEntries = denseArray({ mask: OBJECT, hostObject: "PerformanceEntry" });
+export const nodeDirectoryEntryContent: HostContentValue = {
+	mask: OBJECT,
+	hostObject: "Dirent",
+	fields: { name: stringField, parentPath: stringField },
+};
+export const diskDirectoryEntryContent: HostContentValue = {
+	mask: OBJECT,
+	fields: {
+		path: stringField,
+		type: { ...numberField, integerRange: COMPILER_INT32_RANGE },
+	},
+};
+const numberFields = (
+	...names: Array<string>
+): Readonly<Record<string, HostContentValue>> =>
+	Object.fromEntries(names.map((name) => [name, numberField]));
+const cpuUsageRecord = ownRecord({ user: numberField, system: numberField });
+const eventLoopUtilizationRecord = ownRecord(
+	numberFields("idle", "active", "utilization"),
+	"return",
+	"EventLoopUtilization",
+);
 const fulfilled = (
 	mask: CompilerValueKindMask,
 	brand?: HostValueContract["brand"],
@@ -746,7 +841,10 @@ const maligatorFs = exportsWithContracts(
 	[fulfilled(BOOLEAN), "exists"],
 	[integerResult(byteCount, "fulfill"), "write"],
 	[fulfilledHostObject("MaligatorStat"), "stat"],
-	[fulfilled(OBJECT, "Array"), "list"],
+	[
+		selected("fulfill", { kind: "maligator-directory-list", argument: 2 }, OBJECT),
+		"list",
+	],
 	[fulfilled(STRING), "readlink", "realpath", "temporaryDirectory"],
 	[
 		fulfilled(UNDEFINED),
@@ -794,8 +892,28 @@ export const NODE_FILE_HANDLE_RESULTS = {
 	]),
 	methods: exportsWithContracts(
 		[selected("fulfill", { kind: "encoding", argument: 0 }), "readFile"],
-		[fulfilledHostObject("FileHandleRead"), "read"],
-		[fulfilledHostObject("FileHandleWrite"), "write"],
+		[
+			ownRecord(
+				{
+					bytesRead: { ...numberField, integerRange: COMPILER_UINT32_RANGE },
+					buffer: { mask: TOP, argument: 0 },
+				},
+				"fulfill",
+				"FileHandleRead",
+			),
+			"read",
+		],
+		[
+			ownRecord(
+				{
+					bytesWritten: { ...numberField, integerRange: byteCount },
+					buffer: { mask: TOP, argument: 0 },
+				},
+				"fulfill",
+				"FileHandleWrite",
+			),
+			"write",
+		],
 		[selected("fulfill", { kind: "fstat-options", argument: 0 }, OBJECT), "stat"],
 		[
 			fulfilled(UNDEFINED),
@@ -821,7 +939,16 @@ const path = exportsWithContracts(
 		"resolve",
 	],
 	[returned(BOOLEAN), "isAbsolute", "matchesGlob"],
-	[returned(OBJECT), "parse"],
+	[
+		ownRecord({
+			root: stringField,
+			dir: stringField,
+			base: stringField,
+			ext: stringField,
+			name: stringField,
+		}),
+		"parse",
+	],
 	[
 		dynamic(
 			"Can return the supplied base property unchanged when the directory is empty.",
@@ -869,8 +996,37 @@ const os = exportsWithContracts(
 		"totalmem",
 	],
 	[numericResult("Elapsed seconds may be fractional."), "uptime"],
-	[returned(OBJECT, "Array"), "cpus", "loadavg"],
-	[returned(OBJECT), "networkInterfaces", "userInfo"],
+	[
+		denseArray({
+			mask: OBJECT,
+			fields: {
+				model: stringField,
+				speed: { ...numberField, integerRange: compilerIntegerRange(0, 0) },
+				times: {
+					mask: OBJECT,
+					fields: numberFields("user", "nice", "sys", "idle", "irq"),
+				},
+			},
+		}),
+		"cpus",
+	],
+	[denseArray(numberField, 3), "loadavg"],
+	[
+		dynamicRecordContents(
+			"Own keys are host interface names. Their address lists vary by interface.",
+		),
+		"networkInterfaces",
+	],
+	[
+		ownRecord({
+			username: stringField,
+			homedir: stringField,
+			shell: stringField,
+			uid: { ...numberField, integerRange: COMPILER_INT32_RANGE },
+			gid: { ...numberField, integerRange: COMPILER_INT32_RANGE },
+		}),
+		"userInfo",
+	],
 	[returned(UNDEFINED), "setPriority"],
 );
 
@@ -902,21 +1058,41 @@ const process = exportsWithContracts(
 	[int32, "listenerCount", "umask"],
 	[numericResult("Elapsed seconds may be fractional."), "uptime"],
 	[returned(BOOLEAN), "emit", "hasUncaughtExceptionCaptureCallback", "kill"],
+	[strings, "getActiveResourcesInfo"],
+	[denseArray(numberField), "getgroups"],
+	[denseArray(numberField, 2), "hrtime"],
+	[eventNames, "eventNames"],
+	[arbitraryElements, "listeners", "rawListeners"],
+	[cpuUsageRecord, "cpuUsage", "threadCpuUsage"],
 	[
-		returned(OBJECT, "Array"),
-		"eventNames",
-		"getActiveResourcesInfo",
-		"getgroups",
-		"hrtime",
-		"listeners",
-		"rawListeners",
+		ownRecord(numberFields("rss", "heapTotal", "heapUsed", "external", "arrayBuffers")),
+		"memoryUsage",
+	],
+	[
+		ownRecord(
+			numberFields(
+				"userCPUTime",
+				"systemCPUTime",
+				"maxRSS",
+				"sharedMemorySize",
+				"unsharedDataSize",
+				"unsharedStackSize",
+				"minorPageFault",
+				"majorPageFault",
+				"swappedOut",
+				"fsRead",
+				"fsWrite",
+				"ipcSent",
+				"ipcReceived",
+				"signalsCount",
+				"voluntaryContextSwitches",
+				"involuntaryContextSwitches",
+			),
+		),
+		"resourceUsage",
 	],
 	[
 		returned(OBJECT),
-		"cpuUsage",
-		"memoryUsage",
-		"resourceUsage",
-		"threadCpuUsage",
 		"addListener",
 		"off",
 		"on",
@@ -980,7 +1156,7 @@ const url = exportsWithContracts(
 		"format",
 		"resolve",
 	],
-	[returned(OBJECT), "urlToHttpOptions"],
+	[ownRecord({ path: stringField }), "urlToHttpOptions"],
 	[
 		{ kind: "dynamic", reason: "An absent base returns the second argument unchanged." },
 		"resolveObject",
@@ -1018,7 +1194,25 @@ const util = exportsWithContracts(
 		"isSymbol",
 		"isUndefined",
 	],
-	[returned(OBJECT, "Array"), "diff", "getCallSites"],
+	[
+		denseArray({
+			mask: OBJECT,
+			brand: "Array",
+			fields: {
+				"0": { mask: NUMBER, integerRange: compilerIntegerRange(-1, 1) },
+				"1": { mask: TOP },
+			},
+		}),
+		"diff",
+	],
+	[denseArray({ mask: OBJECT }, 0), "getCallSites"],
+	[
+		ownRecord({
+			values: { mask: OBJECT },
+			positionals: { mask: OBJECT, brand: "Array" },
+		}),
+		"parseArgs",
+	],
 	[
 		returned(OBJECT),
 		"callbackify",
@@ -1027,7 +1221,6 @@ const util = exportsWithContracts(
 		"debuglog",
 		"deprecate",
 		"getSystemErrorMap",
-		"parseArgs",
 		"parseEnv",
 		"promisify",
 		"transferableAbortController",
@@ -1171,8 +1364,57 @@ withInputs(
 const v8 = exportsWithContracts(
 	[uint32, "cachedDataVersionTag"],
 	[returned(BOOLEAN), "isStringOneByteRepresentation"],
-	[returned(OBJECT), "getHeapStatistics", "getHeapCodeStatistics"],
-	[returned(OBJECT, "Array"), "getHeapSpaceStatistics"],
+	[
+		ownRecord(
+			numberFields(
+				"total_heap_size",
+				"total_heap_size_executable",
+				"total_physical_size",
+				"total_available_size",
+				"used_heap_size",
+				"heap_size_limit",
+				"malloced_memory",
+				"peak_malloced_memory",
+				"does_zap_garbage",
+				"number_of_native_contexts",
+				"number_of_detached_contexts",
+				"total_global_handles_size",
+				"used_global_handles_size",
+				"external_memory",
+				"total_allocated_bytes",
+			),
+		),
+		"getHeapStatistics",
+	],
+	[
+		ownRecord(
+			numberFields(
+				"code_and_metadata_size",
+				"bytecode_and_metadata_size",
+				"external_script_source_size",
+				"cpu_profiler_metadata_size",
+			),
+		),
+		"getHeapCodeStatistics",
+	],
+	[
+		denseArray(
+			{
+				mask: OBJECT,
+				fields: {
+					space_name: stringField,
+					...numberFields(
+						"space_size",
+						"space_used_size",
+						"space_available_size",
+						"physical_space_size",
+					),
+				},
+			},
+			1,
+		),
+		"getHeapSpaceStatistics",
+	],
 	[
 		returned(UNDEFINED),
 		"setFlagsFromString",
@@ -1187,7 +1429,7 @@ const perfHooks = exportsWithContracts(
 	[nativeConstructor("PerformanceObserver"), "PerformanceObserver"],
 	[installedObject("Performance"), "performance"],
 	[hostObject("Histogram"), "createHistogram", "monitorEventLoopDelay"],
-	[hostObject("EventLoopUtilization"), "eventLoopUtilization"],
+	[eventLoopUtilizationRecord, "eventLoopUtilization"],
 	[returned(OBJECT), "timerify"],
 	[
 		{
@@ -1204,7 +1446,13 @@ const perfHooks = exportsWithContracts(
 );
 
 const querystring = exportsWithContracts(
-	[returned(OBJECT), "parse", "decode"],
+	[
+		dynamicRecordContents(
+			"The input supplies keys and repeated keys become arrays of strings.",
+		),
+		"parse",
+		"decode",
+	],
 	[returned(STRING), "stringify", "encode", "escape", "unescape"],
 	[returned(OBJECT, "Uint8Array"), "unescapeBuffer"],
 );
@@ -1336,7 +1584,7 @@ const module = exportsWithContracts(
 		neverReturns("The runtime graph cannot resolve unprepared module requests."),
 		"_resolveFilename",
 	],
-	[returned(OBJECT, "Array"), "_nodeModulePaths"],
+	[strings, "_nodeModulePaths"],
 	[returned(BOOLEAN), "isBuiltin"],
 	[returned(STRING | UNDEFINED), "findPackageJSON"],
 	[
@@ -1358,7 +1606,7 @@ withInputs(
 
 export const CAPTURED_HOST_RESULTS = exportsWithContracts(
 	[hostObject("AnyKeyObject"), "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from"],
-	[returned(OBJECT, "Array"), "%MAL_INTRINSIC_NODE_MODULE_API_MODULE%._nodeModulePaths"],
+	[strings, "%MAL_INTRINSIC_NODE_MODULE_API_MODULE%._nodeModulePaths"],
 	[
 		neverReturns("The runtime graph cannot resolve unprepared module requests."),
 		"%MAL_INTRINSIC_NODE_MODULE_API_MODULE%._resolveFilename",
@@ -1368,7 +1616,7 @@ export const CAPTURED_HOST_RESULTS = exportsWithContracts(
 		numericResult("The host returns a byte count without a safe-integer limit."),
 		"globalThis.process.memoryUsage.rss",
 	],
-	[returned(OBJECT), "globalThis.process.report.getReport"],
+	[ownRecord({ header: { mask: OBJECT } }), "globalThis.process.report.getReport"],
 	[
 		returned(BOOLEAN),
 		"globalThis.process.stdout.write",
@@ -1388,7 +1636,7 @@ export const CAPTURED_HOST_RESULTS = exportsWithContracts(
 	],
 	[returned(BOOLEAN), "globalThis.process.sourceMapsEnabled<get>"],
 	[returned(OBJECT), "%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>"],
-	[returned(OBJECT, "Array"), "%MAL_INTRINSIC_NODE_TLS_MODULE%.rootCertificates<get>"],
+	[strings, "%MAL_INTRINSIC_NODE_TLS_MODULE%.rootCertificates<get>"],
 	[
 		selected("return", { kind: "buffer-encoding", argument: 1 }),
 		"%MAL_INTRINSIC_NODE_FS_MODULE%.realpathSync.native",
@@ -1396,7 +1644,7 @@ export const CAPTURED_HOST_RESULTS = exportsWithContracts(
 	[callback, "%MAL_INTRINSIC_NODE_FS_MODULE%.realpath.native"],
 	[returned(STRING), '%MAL_INTRINSIC_NODE_BUILTIN_MODULES%["node:punycode"].ucs2.encode'],
 	[
-		returned(OBJECT, "Array"),
+		denseArray({ mask: NUMBER, integerRange: compilerIntegerRange(0, 0x10ffff) }),
 		'%MAL_INTRINSIC_NODE_BUILTIN_MODULES%["node:punycode"].ucs2.decode',
 	],
 	[
@@ -1525,7 +1773,7 @@ withInputs(zlib, [
 	"crc32",
 ]);
 const dnsShared = [
-	[returned(OBJECT, "Array"), "getServers"],
+	[strings, "getServers"],
 	[returned(STRING), "getDefaultResultOrder"],
 	[returned(UNDEFINED), "setDefaultResultOrder", "setServers"],
 ] as const;
@@ -1547,6 +1795,127 @@ const dnsQueries = [
 	"resolveTxt",
 	"reverse",
 ];
+const dnsUInt8 = { mask: NUMBER, integerRange: compilerIntegerRange(0, 0xff) };
+const dnsUInt16 = { mask: NUMBER, integerRange: compilerIntegerRange(0, 0xffff) };
+const dnsUInt32 = { mask: NUMBER, integerRange: COMPILER_UINT32_RANGE };
+export const dnsAddressContent: HostContentValue = {
+	mask: OBJECT,
+	fields: {
+		address: stringField,
+		family: { mask: NUMBER, integerRange: compilerIntegerRange(4, 6) },
+	},
+};
+export const dnsTtlAddressContent: HostContentValue = {
+	mask: OBJECT,
+	fields: {
+		address: stringField,
+		ttl: { mask: NUMBER, integerRange: compilerIntegerRange(0, 0) },
+	},
+};
+const dnsStringResults = denseArray(stringField, undefined, "fulfill");
+export const DNS_RESOLUTION_RESULTS: ReadonlyMap<string, HostResultContract> = new Map([
+	["A", dnsStringResults],
+	["AAAA", dnsStringResults],
+	["NS", dnsStringResults],
+	["CNAME", dnsStringResults],
+	["PTR", dnsStringResults],
+	[
+		"MX",
+		denseArray(
+			{ mask: OBJECT, fields: { exchange: stringField, priority: dnsUInt16 } },
+			undefined,
+			"fulfill",
+		),
+	],
+	[
+		"SRV",
+		denseArray(
+			{
+				mask: OBJECT,
+				fields: {
+					name: stringField,
+					port: dnsUInt16,
+					priority: dnsUInt16,
+					weight: dnsUInt16,
+				},
+			},
+			undefined,
+			"fulfill",
+		),
+	],
+	["TXT", denseArray({ mask: OBJECT, brand: "Array" }, undefined, "fulfill")],
+	[
+		"SOA",
+		ownRecord(
+			{
+				nsname: stringField,
+				hostmaster: stringField,
+				serial: dnsUInt32,
+				refresh: dnsUInt32,
+				retry: dnsUInt32,
+				expire: dnsUInt32,
+				minttl: dnsUInt32,
+			},
+			"fulfill",
+		),
+	],
+	[
+		"NAPTR",
+		denseArray(
+			{
+				mask: OBJECT,
+				fields: {
+					flags: stringField,
+					service: stringField,
+					regexp: stringField,
+					replacement: stringField,
+					order: dnsUInt16,
+					preference: dnsUInt16,
+				},
+			},
+			undefined,
+			"fulfill",
+		),
+	],
+	// The reply supplies the tag key and can overwrite critical or type.
+	[
+		"CAA",
+		denseArray(
+			{
+				mask: OBJECT,
+				fields: { critical: { mask: STRING | NUMBER }, type: stringField },
+			},
+			undefined,
+			"fulfill",
+		),
+	],
+	[
+		"TLSA",
+		denseArray(
+			{
+				mask: OBJECT,
+				fields: {
+					certUsage: dnsUInt8,
+					selector: dnsUInt8,
+					match: dnsUInt8,
+					data: { mask: OBJECT },
+				},
+			},
+			undefined,
+			"fulfill",
+		),
+	],
+]);
+const dnsPromiseQueries = exportsWithContracts(
+	[selected("fulfill", { kind: "dns-resolve", argument: 1 }, OBJECT), "resolve"],
+	[selected("fulfill", { kind: "dns-ttl", argument: 1 }, OBJECT), "resolve4", "resolve6"],
+	[fulfilled(0), "resolveAny"],
+	[dnsStringResults, "reverse"],
+);
+for (const [type, contract] of DNS_RESOLUTION_RESULTS) {
+	if (type === "A" || type === "AAAA") continue;
+	dnsPromiseQueries.set(`resolve${type[0]}${type.slice(1).toLowerCase()}`, contract);
+}
 const dns = exportsWithContracts(
 	...dnsShared,
 	[nativeConstructor("DnsResolver"), "Resolver"],
@@ -1556,13 +1925,13 @@ const dns = exportsWithContracts(
 const dnsPromises = exportsWithContracts(
 	...dnsShared,
 	[nativeConstructor("DnsPromiseResolver"), "Resolver"],
+	[selected("fulfill", { kind: "dns-lookup", argument: 1 }, OBJECT), "lookup"],
 	[
-		{ kind: "resolve", value: { mask: OBJECT } },
-		"lookup",
-		...dnsQueries.filter((name) => name !== "resolveAny"),
+		ownRecord({ hostname: stringField, service: stringField }, "fulfill"),
+		"lookupService",
 	],
-	[fulfilled(0), "resolveAny"],
 );
+for (const [name, contract] of dnsPromiseQueries) dnsPromises.set(name, contract);
 const tty = exportsWithContracts(
 	[returned(BOOLEAN), "isatty"],
 	[nativeConstructor("TtyReadStream"), "ReadStream"],
@@ -1619,12 +1988,8 @@ const tls = exportsWithContracts(
 	[nativeConstructor("TlsServer"), "Server"],
 	[hostObject("TlsServer"), "createServer"],
 	[returned(OBJECT), "createSecureContext", "SecureContext"],
-	[
-		returned(OBJECT, "Array"),
-		"getCACertificates",
-		"getCiphers",
-		"getCertificateCompressionAlgorithms",
-	],
+	[strings, "getCACertificates", "getCiphers"],
+	[denseArray(stringField, 0), "getCertificateCompressionAlgorithms"],
 	[returned(OBJECT | UNDEFINED), "checkServerIdentity"],
 	[neverReturns("The installed TLSSocket adapter is unsupported."), "TLSSocket"],
 );
@@ -1709,7 +2074,7 @@ const crypto = exportsWithContracts(
 	).map((name) => [nativeConstructor(name), name] as const),
 	[returned(STRING), "randomUUID", "randomUUIDv7"],
 	[returned(BOOLEAN), "timingSafeEqual", "verify"],
-	[returned(OBJECT, "Array"), "getCiphers", "getCurves", "getHashes"],
+	[strings, "getCiphers", "getCurves", "getHashes"],
 	[returned(OBJECT | UNDEFINED), "getCipherInfo", "randomBytes"],
 	[
 		selected("return", { kind: "random-int", argument: 0 }, NUMBER | UNDEFINED),
@@ -1775,7 +2140,7 @@ const stream = exportsWithContracts(
 	],
 	[returned(UNDEFINED), "destroy", "setDefaultHighWaterMark"],
 	[returned(OBJECT), "addAbortSignal", "compose", "finished", "pipeline"],
-	[returned(OBJECT, "Array"), "duplexPair"],
+	[denseArray({ mask: OBJECT, hostObject: "NodeDuplex" }, 2), "duplexPair"],
 );
 withInputs(
 	stream,
@@ -1848,7 +2213,18 @@ const events = exportsWithContracts(
 	[hostObject("AbortListener"), "addAbortListener"],
 	[hostObject("EventIterator"), "on"],
 	[int32, "listenerCount"],
-	[{ kind: "resolve", value: { mask: OBJECT, brand: "Array" } }, "once"],
+	[
+		{
+			kind: "resolve",
+			value: {
+				mask: OBJECT,
+				brand: "Array",
+				contentsUnavailable:
+					"Emitted arguments are arbitrary JavaScript values and resolution observes then.",
+			},
+		},
+		"once",
+	],
 	[
 		dynamic("A custom emitter can return an arbitrary result from its method."),
 		"getEventListeners",
@@ -2019,7 +2395,7 @@ export const EMBEDDED_ASSET_RESULTS = {
 	directory: {
 		properties: exportsWithContracts(),
 		methods: exportsWithContracts(
-			[returned(OBJECT, "Array"), "files"],
+			[objects, "files"],
 			[
 				{ kind: "return", value: { mask: OBJECT | UNDEFINED, assetHandle: "file" } },
 				"get",
@@ -2282,7 +2658,12 @@ export const PLATFORM_OBJECT_RESULTS = {
 	},
 	transferEnvelope: {
 		properties: exportsWithContracts(
-			[returned(OBJECT, "Array"), "transferList"],
+			[
+				dynamicArrayContents(
+					"The envelope retains the caller's array, including holes and later mutations.",
+				),
+				"transferList",
+			],
 			[dynamic("The transfer envelope carries the caller's original value."), "value"],
 		),
 		methods: exportsWithContracts(),
@@ -2316,7 +2697,18 @@ export const PLATFORM_OBJECT_RESULTS = {
 		methods: exportsWithContracts(
 			[fulfilled(BOOLEAN), "exists"],
 			[{ kind: "fulfill", value: { mask: OBJECT, platformObject: "fileStat" } }, "stat"],
-			[fulfilled(OBJECT, "Array"), "entries", "files"],
+			[
+				denseArray(
+					{
+						mask: OBJECT,
+						fields: { name: stringField, path: stringField, kind: stringField },
+					},
+					undefined,
+					"fulfill",
+				),
+				"entries",
+			],
+			[denseArray({ mask: OBJECT }, undefined, "fulfill"), "files"],
 			[fulfilled(UNDEFINED), "chmod", "create", "delete", "moveTo"],
 			[{ kind: "return", value: { mask: OBJECT, platformObject: "file" } }, "file"],
 			[
@@ -2574,7 +2966,14 @@ const bodyProperties = exportsWithContracts(
 const readableReaderMethods = exportsWithContracts(
 	[fulfilled(UNDEFINED), "cancel"],
 	[returned(UNDEFINED), "releaseLock"],
-	[{ kind: "fulfill", value: { mask: OBJECT, hostObject: "StreamReadResult" } }, "read"],
+	[
+		ownRecord(
+			{ done: { mask: BOOLEAN }, value: { mask: TOP } },
+			"fulfill",
+			"StreamReadResult",
+		),
+		"read",
+	],
 );
 const readableReaderProperties = exportsWithContracts([fulfilled(UNDEFINED), "closed"]);
 const readableControllerMethods = exportsWithContracts([
@@ -2686,7 +3085,8 @@ function emitterMethods(kind: HostObjectKind) {
 				numericResult("Uses the supplied Number or the writable listener limit."),
 				"getMaxListeners",
 			],
-			[returned(OBJECT, "Array"), "eventNames", "listeners", "rawListeners"],
+			[eventNames, "eventNames"],
+			[arbitraryElements, "listeners", "rawListeners"],
 			[hostObject(kind), "setMaxListeners"],
 		),
 	]);
@@ -2813,8 +3213,13 @@ function outgoingMethods(
 			[hostObject(kind), "setHeader", "destroy"],
 			[returned(BOOLEAN), "hasHeader"],
 			[returned(UNDEFINED), "removeHeader"],
-			[returned(OBJECT), "getHeaders"],
-			[returned(OBJECT, "Array"), "getHeaderNames"],
+			[
+				dynamicRecordContents(
+					"Header names and values come from caller mutations on the outgoing message.",
+				),
+				"getHeaders",
+			],
+			[strings, "getHeaderNames"],
 			[dynamic("A header contains the value originally set by the caller."), "getHeader"],
 		),
 	]);
@@ -2920,9 +3325,9 @@ const vmCompletion = dynamic("Returns the evaluated script's completion value.")
 const performanceMethods = exportsWithContracts(
 	[numericResult("The performance clock returns fractional milliseconds."), "now"],
 	[hostObject("PerformanceEntry"), "mark", "measure"],
-	[hostObject("EventLoopUtilization"), "eventLoopUtilization"],
+	[eventLoopUtilizationRecord, "eventLoopUtilization"],
 	[returned(OBJECT), "timerify", "toJSON"],
-	[returned(OBJECT, "Array"), "getEntries", "getEntriesByName", "getEntriesByType"],
+	[performanceEntries, "getEntries", "getEntriesByName", "getEntriesByType"],
 	[returned(UNDEFINED), "clearMarks", "clearMeasures"],
 );
 
@@ -2950,15 +3355,15 @@ const assertionInstanceMethods = exportsWithContracts(
 );
 
 function dnsResolverMethods(promises: boolean) {
-	return exportsWithContracts(
-		[returned(OBJECT, "Array"), "getServers"],
+	const methods = exportsWithContracts(
+		[strings, "getServers"],
 		[returned(UNDEFINED), "setServers", "cancel"],
-		[
-			promises ? resolved(OBJECT) : callback,
-			...dnsQueries.filter((name) => name !== "lookupService" && name !== "resolveAny"),
-		],
-		[promises ? fulfilled(0) : callback, "resolveAny"],
 	);
+	for (const name of dnsQueries) {
+		if (name === "lookupService") continue;
+		methods.set(name, promises ? dnsPromiseQueries.get(name)! : callback);
+	}
+	return methods;
 }
 
 function cipherMethods(kind: "Cipheriv" | "Decipheriv") {
@@ -3319,17 +3724,17 @@ export const HOST_OBJECT_RESULTS: {
 					"getColorDepth",
 				],
 				[returned(BOOLEAN), "hasColors"],
-				[returned(OBJECT, "Array"), "getWindowSize"],
+				[denseArray({ mask: NUMBER | UNDEFINED }, 2), "getWindowSize"],
 			),
 		]),
 		Performance: performanceMethods,
 		PerformanceEntry: exportsWithContracts([returned(OBJECT), "toJSON"]),
 		PerformanceObserver: exportsWithContracts(
 			[returned(UNDEFINED), "observe", "disconnect"],
-			[returned(OBJECT, "Array"), "takeRecords"],
+			[performanceEntries, "takeRecords"],
 		),
 		PerformanceObserverEntryList: exportsWithContracts([
-			returned(OBJECT, "Array"),
+			performanceEntries,
 			"getEntries",
 			"getEntriesByName",
 			"getEntriesByType",
@@ -3691,7 +4096,10 @@ export const HOST_OBJECT_RESULTS: {
 		),
 		Dirent: fileTypePredicates,
 		ConstructedDirent: fileTypePredicates,
-		DirIterator: exportsWithContracts([fulfilled(OBJECT), "next", "return"]),
+		DirIterator: exportsWithContracts(
+			[ownIteratorResult({ mask: OBJECT | UNDEFINED }, "fulfill"), "next"],
+			[ownIteratorResult({ mask: UNDEFINED }, "fulfill"), "return"],
+		),
 		FileHandle: NODE_FILE_HANDLE_RESULTS.methods,
 		Stats: fileTypePredicates,
 		NumberStats: fileTypePredicates,
@@ -3986,14 +4394,14 @@ export const HOST_OBJECT_RESULTS: {
 			[returned(UNDEFINED), "append", "delete", "set", "forEach"],
 			[returned(BOOLEAN), "has"],
 			[returned(STRING | OBJECT | NULL), "get"],
-			[returned(OBJECT, "Array"), "getAll"],
+			[denseArray({ mask: STRING | OBJECT, hostObject: "File" }), "getAll"],
 			[hostObject("FormDataIterator"), "entries", "keys", "values", "[Symbol.iterator]"],
 		),
 		Headers: exportsWithContracts(
 			[returned(UNDEFINED), "append", "delete", "set", "forEach"],
 			[returned(BOOLEAN), "has"],
 			[returned(STRING | NULL), "get"],
-			[returned(OBJECT, "Array"), "getSetCookie"],
+			[strings, "getSetCookie"],
 			[hostObject("HeadersIterator"), "entries", "keys", "values", "[Symbol.iterator]"],
 		),
 		Request: new Map([...body, ["clone", hostObject("Request")]]),
@@ -4002,7 +4410,7 @@ export const HOST_OBJECT_RESULTS: {
 			[fulfilled(UNDEFINED), "cancel", "pipeTo"],
 			[hostObject("ReadableStreamReader"), "getReader"],
 			[returned(OBJECT), "pipeThrough"],
-			[returned(OBJECT, "Array"), "tee"],
+			[denseArray({ mask: OBJECT, hostObject: "ReadableStream" }, 2), "tee"],
 			[hostObject("ReadableStreamIterator"), "values", "[Symbol.asyncIterator]"],
 		),
 		ReadableStreamDefaultReader: readableReaderMethods,
@@ -4012,9 +4420,15 @@ export const HOST_OBJECT_RESULTS: {
 		StreamReadResult: exportsWithContracts(),
 		StatementSync: withInputs(
 			exportsWithContracts(
-				[returned(OBJECT, "Array"), "all"],
+				[denseArray({ mask: OBJECT }), "all"],
 				[returned(OBJECT | UNDEFINED), "get"],
-				[returned(OBJECT), "run"],
+				[
+					ownRecord({
+						changes: { mask: NUMBER | BIGINT },
+						lastInsertRowid: { mask: NUMBER | BIGINT },
+					}),
+					"run",
+				],
 				[returned(UNDEFINED), "setReturnArrays", "setReadBigInts"],
 			),
 			[validates(input(0, BOOLEAN)), "setReturnArrays", "setReadBigInts"],
@@ -4028,7 +4442,13 @@ export const HOST_OBJECT_RESULTS: {
 		TextEncoder: withInputs(
 			exportsWithContracts(
 				[returned(OBJECT, "Uint8Array"), "encode"],
-				[returned(OBJECT), "encodeInto"],
+				[
+					ownRecord({
+						read: { ...numberField, integerRange: compilerIntegerRange(0, 0x7fff_ffff) },
+						written: { ...numberField, integerRange: COMPILER_UINT32_RANGE },
+					}),
+					"encodeInto",
+				],
 			),
 			[validates(input(1, OBJECT)), "encodeInto"],
 			[noInputFact("Converts the input to a string."), "encode"],
@@ -4038,7 +4458,7 @@ export const HOST_OBJECT_RESULTS: {
 		URL: exportsWithContracts([returned(STRING), "toString", "toJSON"]),
 		URLSearchParams: exportsWithContracts(
 			[returned(STRING | NULL), "get"],
-			[returned(OBJECT, "Array"), "getAll"],
+			[strings, "getAll"],
 			[returned(BOOLEAN), "has"],
 			[returned(UNDEFINED), "set", "append", "delete", "sort", "forEach"],
 			[returned(STRING), "toString"],
@@ -4050,7 +4470,10 @@ export const HOST_OBJECT_RESULTS: {
 				"[Symbol.iterator]",
 			],
 		),
-		URLSearchParamsIterator: exportsWithContracts([returned(OBJECT), "next"]),
+		URLSearchParamsIterator: exportsWithContracts([
+			ownIteratorResult({ mask: OBJECT | STRING | UNDEFINED }),
+			"next",
+		]),
 		WritableStream: exportsWithContracts(
 			[abortSink, "abort"],
 			[fulfilled(UNDEFINED), "close"],
@@ -4074,8 +4497,14 @@ export const HOST_OBJECT_RESULTS: {
 			[returned(BOOLEAN), "hasRef"],
 			[returned(UNDEFINED), "[Symbol.dispose]"],
 		),
-		FormDataIterator: exportsWithContracts([returned(OBJECT), "next"]),
-		HeadersIterator: exportsWithContracts([returned(OBJECT), "next"]),
+		FormDataIterator: exportsWithContracts([
+			ownIteratorResult({ mask: OBJECT | STRING | UNDEFINED }),
+			"next",
+		]),
+		HeadersIterator: exportsWithContracts([
+			ownIteratorResult({ mask: OBJECT | STRING | UNDEFINED }),
+			"next",
+		]),
 	},
 	properties: {
 		ReadableStreamDefaultController: exportsWithContracts([
@@ -4176,7 +4605,7 @@ export const HOST_OBJECT_RESULTS: {
 				],
 			),
 		]),
-		NetBlockList: exportsWithContracts([returned(OBJECT, "Array"), "rules"]),
+		NetBlockList: exportsWithContracts([strings, "rules"]),
 		NetServer: exportsWithContracts([returned(BOOLEAN), "listening"]),
 		TlsServer: exportsWithContracts([returned(BOOLEAN), "listening"]),
 		NetSocket: socketProperties,
@@ -4209,7 +4638,13 @@ export const HOST_OBJECT_RESULTS: {
 			...childProcessProperties,
 			...exportsWithContracts(
 				[returned(STRING), "spawnfile"],
-				[returned(OBJECT, "Array"), "spawnargs", "stdio"],
+				[
+					dynamicArrayContents(
+						"These mutable arrays are published on the live child process.",
+					),
+					"spawnargs",
+					"stdio",
+				],
 				[hostObject("NodeWritable", undefined, OBJECT | NULL), "stdin"],
 				[hostObject("NodeReadable", undefined, OBJECT | NULL), "stdout", "stderr"],
 			),
@@ -4625,3 +5060,51 @@ export const HOST_OBJECT_RESULTS: {
 		),
 	},
 } as const;
+
+const statsDataFields = [
+	"mode",
+	"uid",
+	"gid",
+	"dev",
+	"nlink",
+	"rdev",
+	"blksize",
+	"ino",
+	"size",
+	"blocks",
+	"atimeMs",
+	"mtimeMs",
+	"ctimeMs",
+	"birthtimeMs",
+] as const;
+const namedRecordFields: Partial<Record<HostObjectKind, ReadonlyArray<string>>> = {
+	BigIntStats: [...statsDataFields, "atimeNs", "mtimeNs", "ctimeNs", "birthtimeNs"],
+	CompileCacheResult: ["status", "message"],
+	CompressionInfo: ["buffer", "engine"],
+	ExecBufferOutput: ["stdout", "stderr"],
+	ExecOutput: ["stdout", "stderr"],
+	ExecTextOutput: ["stdout", "stderr"],
+	FilesystemStats: ["type", "bsize", "blocks", "bfree", "bavail", "files", "ffree"],
+	MaligatorStat: ["type", "mode", "size", "mtimeMs"],
+	NumberStats: statsDataFields,
+	SourceMapSupport: ["enabled", "nodeModules", "generatedCode"],
+	SpawnSyncResult: ["pid", "status", "signal", "output", "stdout", "stderr"],
+	StreamReadResult: ["done", "value"],
+	WorkerCapabilities: ["threads", "sharedMemory", "parallelism", "maxWorkers"],
+};
+
+export function hostNamedRecordContents(
+	kind: HostObjectKind | undefined,
+): HostInitialContents | undefined {
+	return kind === undefined ? undefined : namedRecords.get(kind);
+}
+
+const namedRecords = new Map<HostObjectKind, HostInitialContents>();
+for (const kind of Object.keys(namedRecordFields) as Array<HostObjectKind>) {
+	const fields: Record<string, HostContentValue> = {};
+	for (const key of namedRecordFields[kind]!) {
+		const property = HOST_OBJECT_RESULTS.properties[kind]?.get(key);
+		fields[key] = property?.kind === "return" ? property.value : { mask: TOP };
+	}
+	namedRecords.set(kind, { kind: "record", fields });
+}

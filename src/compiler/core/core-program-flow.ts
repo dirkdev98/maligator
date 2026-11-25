@@ -8,6 +8,7 @@ import type { CoreCallGraph, CoreCallGraphNode } from "./core-call-graph.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { joinCoreHeapBrands } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState } from "./core-heap-brands.ts";
+import { coreHostRecordFields } from "./core-host-container-facts.ts";
 import {
 	coreHostCallbackReceivers,
 	coreHostMemberIdentitiesAreStable,
@@ -18,7 +19,9 @@ import type { CoreHostCallbackReceivers } from "./core-host-object-results.ts";
 import {
 	corePlatformSourceResult,
 	coreHostCompletion,
+	coreHostContentsCandidate,
 	coreHostDirectCallContract,
+	coreHostMemberCallName,
 	coreHostResult,
 	coreHostResultSlots,
 } from "./core-host-results.ts";
@@ -320,6 +323,7 @@ function coreValueKindResultReaders(
 	anyScriptAggregate: CoreProgramFlowValueKindAggregate | undefined,
 	sourceClosed: boolean,
 	semantics: { readonly top: number; readonly object: number },
+	nativeRecord?: (instruction: CoreInstructionId) => CoreRecordValueKind,
 ): Pick<
 	CoreProgramFlowValueKindInputs,
 	| "operationResultHeapBrand"
@@ -330,6 +334,11 @@ function coreValueKindResultReaders(
 	const returnedRecords = new Map<CoreInstructionId, CoreRecordValueKind>();
 	const recordResult = (instruction: CoreInstructionId): CoreRecordValueKind => {
 		if (returnedRecords.has(instruction)) return returnedRecords.get(instruction);
+		const installed = nativeRecord?.(instruction);
+		if (installed !== undefined) {
+			returnedRecords.set(instruction, installed);
+			return installed;
+		}
 		const site = byInstruction.get(instruction);
 		if (
 			site === undefined ||
@@ -2654,6 +2663,7 @@ export class CoreProgramFlowEngine {
 		dirtyFunctions?: ReadonlyArray<CoreFunctionId>,
 		externallyChangedFunctions?: ReadonlySet<CoreFunctionId>,
 		context?: CoreCompilationContext,
+		numericKey?: (functionId: CoreFunctionId, value: CoreValueId) => boolean,
 	): CoreProgramFlowValueKindState<Analysis, Targets> {
 		const dataEpoch = this.#program.dataEpoch;
 		if (previous?.dataEpoch !== dataEpoch) previous = undefined;
@@ -2672,6 +2682,7 @@ export class CoreProgramFlowEngine {
 				context,
 				targets,
 				candidateReceivers,
+				numericKey,
 			);
 		if (previous?.hostMembersStable !== hostMembersStable) previous = undefined;
 		const hostCallbackReceivers =
@@ -3185,6 +3196,27 @@ export class CoreProgramFlowEngine {
 					anyScriptAggregate,
 					targets.sourceClosed,
 					semantics,
+					locked
+						? (producer) => {
+								if (fn.instructionOpcodeName(producer) !== "call") return undefined;
+								const name = coreHostMemberCallName(
+									this.#program,
+									fn,
+									producer,
+									hostSlots,
+									hostMembersStable,
+								);
+								if (name === undefined || !coreHostContentsCandidate(name))
+									return undefined;
+								const completion =
+									(hostMembersStable ? memberReader(fn)(producer) : undefined) ??
+									nativeCompletion(fn, producer);
+								return coreHostRecordFields(
+									this.#program,
+									completion?.immediate.initialContents,
+								);
+							}
+						: undefined,
 				);
 				const { recordResult } = resultReaders;
 				for (const [instruction, values] of alternatives ?? []) {

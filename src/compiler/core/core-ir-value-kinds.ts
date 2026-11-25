@@ -66,6 +66,7 @@ import {
 import {
 	corePlatformSourceResult,
 	coreHostResult,
+	coreHostArrayIndex,
 	coreHostResultSlots,
 } from "./core-host-results.ts";
 import {
@@ -590,6 +591,8 @@ function privateArrayUses(
 	options: {
 		readonly numberValue?: (value: CoreValueId) => boolean;
 		readonly contents?: "numeric" | "unknown";
+		readonly staticElementReads?: boolean;
+		readonly allowReturn?: boolean;
 	} = {},
 ): ReadonlyArray<CorePrivateArrayUseSummary> {
 	if (seeds.length === 0) return [];
@@ -640,6 +643,7 @@ function privateArrayUses(
 	}
 	for (const block of fn.blockIds()) {
 		const input = coreTerminatorInput(fn, fn.blockTerminator(block));
+		if (input.kind === "return" && options.allowReturn) continue;
 		const observed =
 			input.kind === "branch" || input.kind === "guard"
 				? input.condition
@@ -673,6 +677,15 @@ function privateArrayUses(
 				isLengthProperty(program, fn, instruction)
 			) {
 				candidate.lengthLoads.push(instruction);
+				continue;
+			}
+			if (
+				position === 0 &&
+				options.staticElementReads &&
+				opcode === "loadPropertyStatic" &&
+				coreHostArrayIndex(program, fn, instruction) !== undefined
+			) {
+				candidate.elementLoads.push(instruction);
 				continue;
 			}
 			if (
@@ -811,6 +824,24 @@ export function corePrivateArrayLengthCandidates(
 		],
 		{ contents: "unknown" },
 	);
+}
+
+export function corePrivateHostArrayUses(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	context: CoreCompilationContext,
+	seeds: ReadonlyArray<CorePrivateArraySeed>,
+	numberValue: (value: CoreValueId) => boolean,
+	allowReturn = false,
+): ReadonlyArray<CorePrivateArrayUseSummary> {
+	if (!privateArrayPolicyIsLocked(context)) return [];
+	return privateArrayUses(program, fn, cfg, seeds, {
+		numberValue,
+		contents: "unknown",
+		staticElementReads: true,
+		allowReturn,
+	}).filter((candidate) => candidate.elementStores.length === 0);
 }
 
 export function corePrivateNumericArrayLoads(

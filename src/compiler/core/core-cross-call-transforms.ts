@@ -22,6 +22,10 @@ import {
 	hostHasInputContractMember,
 	PLATFORM_SOURCE_EXPORTS,
 } from "../shared/host-result-contracts.ts";
+import type {
+	HostInitialContents,
+	HostObjectKind,
+} from "../shared/host-result-contracts.ts";
 import {
 	compilerIntegerRangesEqual,
 	compilerIntegerRangeIsValid,
@@ -100,6 +104,17 @@ import {
 import { joinCoreHeapBrands } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState } from "./core-heap-brands.ts";
 import {
+	coreAwaitedHostContents,
+	coreBuiltinInitialContents,
+	coreHostArrayReads,
+	coreHostRecordFields,
+	coreProjectHostContentInputs,
+	propagateCoreHostArrayReturns,
+} from "./core-host-container-facts.ts";
+import { coreHostObjectResult } from "./core-host-object-results.ts";
+import {
+	coreHostCompletion,
+	coreHostContentsCandidate,
 	coreHostImmediateRangeCandidate,
 	coreHostMemberCallName,
 	coreHostPropertyName,
@@ -204,6 +219,7 @@ import {
 	coreRecordAccessInitialFields,
 	coreRecordAccessProducerFields,
 	coreRecordFieldInitialKind,
+	coreRecordFieldInitialHeapBrand,
 	coreRecordFieldIsOwnData,
 	coreRecordFieldReadIntegerRange,
 	coreReturnedRecordKinds,
@@ -5198,10 +5214,57 @@ function discoverProgramNormalResultFacts(
 	const loadStaticOpcode = program.registry.get("loadPropertyStatic")?.id;
 	const loadOpcode = program.registry.get("loadProperty")?.id;
 	const hostSlots = context === undefined ? undefined : coreHostResultSlots(context);
+	const hostContents = new Map<
+		CoreFunctionId,
+		Map<CoreInstructionId, HostInitialContents>
+	>();
+	const locked = context?.facts.world.primordialPolicy === "locked";
+	const projectHostInputs = (
+		fn: CoreFunctionStore,
+		call: CoreInstructionId,
+		contents: HostInitialContents | undefined,
+	) =>
+		coreProjectHostContentInputs(fn, call, contents, (value) => {
+			const heapBrand = analyses
+				.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, {
+					scope: "function",
+					function: fn.id,
+				})
+				.valueClasses.exactHeapBrand(value, call);
+			return {
+				mask:
+					heapBrand === undefined
+						? (inputKind(fn.id, value) ?? COMPILER_VALUE_KIND_TOP)
+						: COMPILER_VALUE_KIND_OBJECT,
+				heapBrand,
+			};
+		});
+	const addHostContents = (
+		functionId: CoreFunctionId,
+		instruction: CoreInstructionId,
+		contents: HostInitialContents | undefined,
+	) => {
+		if (contents === undefined) return;
+		let row = hostContents.get(functionId);
+		if (row === undefined)
+			hostContents.set(
+				functionId,
+				(row = new Map<CoreInstructionId, HostInitialContents>()),
+			);
+		row.set(instruction, contents);
+	};
 	for (const functionId of flow.reachability.liveFunctions) {
 		const fn = program.function(functionId);
 		for (const instruction of fn.instructionIds()) {
 			const opcode = fn.kernel.instructionOpcode(instruction);
+			if (locked && opcode === knownCallOpcode)
+				addHostContents(
+					functionId,
+					instruction,
+					coreBuiltinInitialContents(fn, instruction, (value) =>
+						inputKind(functionId, value),
+					),
+				);
 			if (
 				(opcode === callOpcode ||
 					opcode === knownCallOpcode ||
@@ -5222,7 +5285,7 @@ function discoverProgramNormalResultFacts(
 				const wantsEffects = coreNativeInvocation(fn, instruction) === undefined;
 				const name = getter
 					? coreHostPropertyName(program, fn, instruction)
-					: wantsInputs || wantsEffects
+					: wantsInputs || wantsEffects || locked
 						? coreHostMemberCallName(
 								program,
 								fn,
@@ -5241,6 +5304,16 @@ function discoverProgramNormalResultFacts(
 					wantsEffects &&
 					name !== undefined &&
 					(getter ? hostGetterInvocationName(name) : hostInvocationName(name));
+				if (locked && name !== undefined && coreHostContentsCandidate(name))
+					addHostContents(
+						functionId,
+						instruction,
+						projectHostInputs(
+							fn,
+							instruction,
+							readValueKinds().hostCompletion(fn, instruction)?.immediate.initialContents,
+						),
+					);
 				if (inputs || effects) {
 					const kinds = readValueKinds();
 					const host = kinds.hostCallContract(fn, instruction);
@@ -5285,6 +5358,69 @@ function discoverProgramNormalResultFacts(
 				}
 			}
 			if (opcode === awaitOpcode) {
+				if (locked && !context.facts.world.realms) {
+					const contents = coreAwaitedHostContents(
+						program,
+						fn,
+						instruction,
+						(producer) => {
+							const name = coreHostMemberCallName(
+								program,
+								fn,
+								producer,
+								hostSlots,
+								hostMembersMayBeStable,
+							);
+							if (name === undefined || !coreHostContentsCandidate(name))
+								return undefined;
+							const completion = readValueKinds().hostCompletion(fn, producer);
+							if (completion?.immediate.mask !== COMPILER_VALUE_KIND_OBJECT)
+								return undefined;
+							return {
+								immediate: projectHostInputs(
+									fn,
+									producer,
+									completion.immediate.initialContents,
+								),
+								fulfilled: projectHostInputs(
+									fn,
+									producer,
+									completion.fulfilled?.initialContents,
+								),
+							};
+						},
+						() => readValueKinds().hostMembersStable,
+						(value) => {
+							const kind = inputKind(functionId, value);
+							return kind !== undefined && (kind & COMPILER_VALUE_KIND_OBJECT) === 0;
+						},
+						(value) => {
+							const target = coreCalleeTargetsSingleFunction(
+								flow.targets.targets(functionId, value),
+							);
+							if (
+								target === undefined ||
+								program.function(target).isAsync ||
+								program.function(target).isGenerator
+							)
+								return false;
+							const summary = flow.summaries.summary(target);
+							const origin = summary?.returnProvenance;
+							return (
+								origin?.kind === "parameter" &&
+								origin.index === 0 &&
+								(origin.identityKinds === undefined ||
+									(origin.identityKinds & COMPILER_VALUE_KIND_OBJECT) !== 0) &&
+								summary?.parameterEscape[0] === "returned" &&
+								summary.parameterContainment[0] === "preserved" &&
+								summary.effects.writes.length === 0 &&
+								!summary.effects.callsUserCode &&
+								!summary.effects.maySuspend
+							);
+						},
+					);
+					addHostContents(functionId, instruction, contents);
+				}
 				const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
 				const mask = readValueKinds().values(functionId).latticeMask(value);
 				if ((mask & COMPILER_VALUE_KIND_NUMBER) === 0 || !hostMembersMayBeStable)
@@ -5339,6 +5475,20 @@ function discoverProgramNormalResultFacts(
 			}
 		}
 	}
+	if (context !== undefined && hostContents.size > 0)
+		propagateCoreHostArrayReturns(
+			program,
+			flow.targets,
+			context,
+			hostContents,
+			(functionId) =>
+				analyses
+					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+						scope: "function",
+						function: functionId,
+					})
+					.exceptional(),
+		);
 	const readsFor = (functionId: CoreFunctionId) => {
 		let reads = recordReads.get(functionId);
 		if (reads === undefined) {
@@ -5355,6 +5505,8 @@ function discoverProgramNormalResultFacts(
 		return reads;
 	};
 	let kinds: CoreProgramValueKindState | undefined;
+	const nativeRecord = (functionId: CoreFunctionId, producer: CoreInstructionId) =>
+		coreHostRecordFields(program, hostContents.get(functionId)?.get(producer));
 	const recordRanges = new Map<CoreFunctionId, CoreRecordValueKind>();
 	const demandedRecords: Array<CoreFunctionId> = [];
 	const demandRecord = (target: CoreFunctionId) => {
@@ -5429,7 +5581,7 @@ function discoverProgramNormalResultFacts(
 				const site = flow.targets.site(functionId, instruction);
 				if (site !== undefined && !site.targets.opaque && !site.targets.anyScript)
 					for (const target of site.targets.functions) demandRecord(target);
-				return recordResult(site);
+				return nativeRecord(functionId, instruction) ?? recordResult(site);
 			},
 		);
 	}
@@ -5534,6 +5686,7 @@ function discoverProgramNormalResultFacts(
 			const read = reads.get(instruction);
 			if (read === undefined) return coreInstructionResultIntegerRange(fn, instruction);
 			const source = (producer: CoreInstructionId) =>
+				nativeRecord(functionId, producer) ??
 				recordResult(flow.targets.site(functionId, producer));
 			const record = coreRecordAccessProducerFields(read, source);
 			return coreRecordFieldReadIntegerRange(
@@ -5815,7 +5968,9 @@ function discoverProgramNormalResultFacts(
 								query!(value, edge ?? fn.instructionBlock(consumer)),
 							heapBrand: (value) => kinds!.values(functionId).heapBrand(value),
 						},
-						(instruction) => recordResult(flow.targets.site(functionId, instruction)),
+						(instruction) =>
+							nativeRecord(functionId, instruction) ??
+							recordResult(flow.targets.site(functionId, instruction)),
 					),
 				);
 				if (!sameCoreRecordValueKind(prior, next)) {
@@ -5899,12 +6054,74 @@ function discoverProgramNormalResultFacts(
 	for (const functionId of flow.reachability.liveFunctions) {
 		const fn = program.function(functionId);
 		const records = new Map<CoreInstructionId, CoreRecordValueKind>();
+		const contents = hostContents.get(functionId);
 		const initialFields = (producer: CoreInstructionId): CoreRecordValueKind => {
 			if (!records.has(producer))
-				records.set(producer, recordResult(flow.targets.site(functionId, producer)));
+				records.set(
+					producer,
+					nativeRecord(functionId, producer) ??
+						recordResult(flow.targets.site(functionId, producer)),
+				);
 			return records.get(producer);
 		};
 		const discovered = new Map<CoreInstructionId, CoreRecordAccessFact>();
+		if (contents !== undefined && context !== undefined) {
+			const request = { scope: "function", function: functionId } as const;
+			const arrayReads = coreHostArrayReads(
+				program,
+				fn,
+				context,
+				contents,
+				() => analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional(),
+				() => analyses.get(CORE_LOOP_INDUCTION_ANALYSIS, request),
+				(value) =>
+					analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request).kindMask(value) ===
+					COMPILER_VALUE_KIND_NUMBER,
+			);
+			const receivers = new Map<CoreValueId, HostObjectKind>();
+			for (const [instruction, result] of arrayReads) {
+				discovered.set(instruction, { instruction, result, ownDataKey: undefined });
+				if (result.hostObject !== undefined)
+					receivers.set(
+						fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+						result.hostObject,
+					);
+			}
+			if (receivers.size > 0 && readValueKinds().hostMembersStable) {
+				for (const value of receivers.keys()) {
+					for (
+						let use = fn.kernel.valueFirstUse(value);
+						use >= 0;
+						use = fn.kernel.useNext(use)
+					) {
+						if (!fn.kernel.useLive(use) || fn.kernel.useOperand(use) !== 0) continue;
+						const instruction = fn.kernel.useInstruction(use);
+						const opcode = fn.kernel.instructionOpcode(instruction);
+						if (
+							(opcode !== loadStaticOpcode && opcode !== loadOpcode) ||
+							discovered.has(instruction)
+						)
+							continue;
+						const contract = coreHostObjectResult(
+							program,
+							fn,
+							instruction,
+							hostSlots,
+							receivers,
+						);
+						const result = coreHostCompletion(
+							program,
+							fn,
+							instruction,
+							contract,
+							true,
+						)?.immediate;
+						if (result !== undefined && compilerValueKindMaskIsValid(result.mask))
+							discovered.set(instruction, { instruction, result, ownDataKey: undefined });
+					}
+				}
+			}
+		}
 		let query: CoreIntegerRangeQuery | undefined;
 		for (const [instruction, read] of readsFor(functionId)) {
 			const record = coreRecordAccessProducerFields(read, initialFields);
@@ -5946,11 +6163,18 @@ function discoverProgramNormalResultFacts(
 						) ?? undefined);
 			const heapBrand =
 				mask === COMPILER_VALUE_KIND_OBJECT
-					? ((kinds ??= readValueKinds())
-							.values(functionId)
-							.heapBrand(
-								fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
-							) ?? undefined)
+					? ((read.writes === undefined
+							? (coreRecordFieldInitialHeapBrand(read, initial) ??
+								(kinds ??= readValueKinds())
+									.values(functionId)
+									.heapBrand(
+										fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+									))
+							: (kinds ??= readValueKinds())
+									.values(functionId)
+									.heapBrand(
+										fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+									)) ?? undefined)
 					: undefined;
 			discovered.set(instruction, {
 				instruction,
@@ -5973,7 +6197,7 @@ function discoverProgramNormalResultFacts(
 				.exceptional(),
 		)) {
 			const record = coreRecordAccessProducerFields(store, initialFields);
-			if (coreRecordFieldIsOwnData(store, record))
+			if (coreRecordFieldIsOwnData(store, record, true))
 				discovered.set(instruction, {
 					instruction,
 					ownDataKey: store.key,

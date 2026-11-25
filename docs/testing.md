@@ -204,6 +204,22 @@ The compiler keeps the generic call bridge's exception, collection, and scheduli
 effects. A borrowing call can preserve a private allocation's fields across the
 bridge because other fibers cannot access the allocation.
 
+Use `initialContents` for packed arrays and guaranteed own record fields. Trace
+every successful allocation and store, including option-selected overloads.
+Declare a fixed array length only when every successful result has that length.
+An array brand alone requires a `contentsUnavailable` reason when elements or
+density depend on the caller, mutable host state, or user code. Use an argument
+projection for a returned field that holds the original input object.
+
+The compiler consumes these facts while the result stays private. Element
+specialization needs an independent bounds proof, such as the taken edge of a
+counted loop over the same array's length. Writes and escapes widen the facts.
+An own native field can be read-only, so a recorded initial value does not
+license a specialized store or a post-write value.
+A fulfilled result also needs proof that another observer cannot receive and
+modify its payload before the access. Test an ordinary loop or field consumer
+alongside an access that loses the proof through an escape, write, or wider bound.
+
 Connect the contract to an installer-backed binding or a proved member lookup.
 Use the captured installer identity for nested exports and aliases. For an object
 created after startup, verify the allocator and its method registration. Source

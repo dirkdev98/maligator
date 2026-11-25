@@ -51,6 +51,7 @@ import type { CoreProgramFlowTargetIndex } from "./core-program-flow.ts";
 import {
 	coreIntrinsicPromiseStaticCall,
 	corePromiseContinuation,
+	corePromiseValueIsPrivate,
 	coreSuccessfulAwaitInput,
 } from "./core-promise-facts.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -437,7 +438,7 @@ export function coreHostObjectResult(
 			element !== undefined &&
 			fn.valueUseCount(receiver) === 1 &&
 			fn.kernel.valueHandlerUseCount(receiver) === 0 &&
-			coreHostArrayIndex(program, fn, instruction)
+			coreHostArrayIndex(program, fn, instruction) !== undefined
 		)
 			return element;
 		if (name === undefined) return undefined;
@@ -705,6 +706,7 @@ export function coreHostMemberIdentitiesAreStable(
 	context: CoreCompilationContext,
 	targets: CoreProgramFlowTargetIndex,
 	parameters: CoreHostCallbackReceivers,
+	numericKey?: (functionId: CoreFunctionId, value: CoreValueId) => boolean,
 ): boolean {
 	const { data, facts } = context;
 	if (
@@ -839,19 +841,19 @@ export function coreHostMemberIdentitiesAreStable(
 			if (opcode === "loadProperty" || opcode === "loadPropertyStatic") {
 				const key = coreHostPropertyName(program, fn, instruction);
 				if (key === undefined) {
-					const keyProducer =
+					const computed =
 						opcode === "loadProperty"
-							? definition(
-									fn,
-									fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
-								)
+							? fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1)
 							: undefined;
+					const keyProducer =
+						computed === undefined ? undefined : definition(fn, computed);
 					const keyOpcode =
 						keyProducer === undefined ? undefined : fn.instructionOpcodeName(keyProducer);
 					if (
 						keyOpcode !== "createNumber" &&
 						keyOpcode !== "createF64" &&
-						coreHostCapturedSymbolKey(program, fn, instruction, slots) === undefined
+						coreHostCapturedSymbolKey(program, fn, instruction, slots) === undefined &&
+						(computed === undefined || numericKey?.(id, computed) !== true)
 					)
 						return false;
 				} else if (NATIVE_OBJECT_WRITERS.has(key)) return false;
@@ -1012,7 +1014,8 @@ export function coreHostMemberIdentitiesAreStable(
 				if (
 					value === undefined ||
 					(source !== undefined &&
-						PRIMITIVE_PRODUCERS.has(fn.instructionOpcodeName(source)))
+						PRIMITIVE_PRODUCERS.has(fn.instructionOpcodeName(source))) ||
+					(isIntrinsicPromise(value, 8) && corePromiseValueIsPrivate(program, fn, value))
 				)
 					continue;
 			}
