@@ -66,31 +66,29 @@ type VirtualPhiId = number & { readonly __virtualPhiId: unique symbol };
 type ConstructionValue = CoreValueId | VirtualPhiId;
 
 class DefinitionTable {
-	readonly #latest = new Map<number, number>();
-	readonly #versions: Array<number> = [];
+	#latest: Map<number, number> | undefined;
 	readonly #values: Array<ConstructionValue> = [];
 	readonly #previous: Array<number> = [];
-	#version = 0;
 
 	get version(): number {
-		return this.#version;
+		return this.#values.length;
 	}
 
-	get(variable: number, version = this.#version): ConstructionValue | undefined {
-		let revision = this.#latest.get(variable) ?? -1;
-		while (revision >= 0 && this.#versions[revision]! > version) {
+	get(variable: number, version = this.#values.length): ConstructionValue | undefined {
+		let revision = this.#latest?.get(variable) ?? -1;
+		// An environment records the prefix length at its control-flow edge.
+		while (revision >= version) {
 			revision = this.#previous[revision]!;
 		}
 		return revision < 0 ? undefined : this.#values[revision];
 	}
 
 	set(variable: number, value: ConstructionValue): void {
-		this.#version++;
+		const latest = (this.#latest ??= new Map<number, number>());
 		const revision = this.#values.length;
-		this.#versions.push(this.#version);
 		this.#values.push(value);
-		this.#previous.push(this.#latest.get(variable) ?? -1);
-		this.#latest.set(variable, revision);
+		this.#previous.push(latest.get(variable) ?? -1);
+		latest.set(variable, revision);
 	}
 }
 
@@ -846,7 +844,7 @@ export class DirectCoreFunctionConstruction {
 	#resolveIncomingEnvironment(
 		environment: ValueEnvironment,
 		variable: number,
-		incoming: ReadonlyMap<ConstructionState, ReadonlyArray<ValueEnvironment>>,
+		incoming: ReadonlyArray<ReadonlyArray<ValueEnvironment> | undefined>,
 		path: Array<ConstructionState>,
 	): ConstructionValue {
 		const defined = environment.state.definitions.get(variable, environment.version);
@@ -866,7 +864,7 @@ export class DirectCoreFunctionConstruction {
 				value = cached;
 				break;
 			}
-			const predecessors = incoming.get(state);
+			const predecessors = incoming[state.core];
 			// A closed single-predecessor cycle still needs one anchor for the SCC resolver.
 			if (state.isEntry || predecessors?.length !== 1 || state.entryReadEpoch === epoch) {
 				value = this.#readEntry(state, variable);
@@ -888,66 +886,47 @@ export class DirectCoreFunctionConstruction {
 		return value;
 	}
 
-	#allEdgeDrafts(): Array<{
-		readonly target: ConstructionState;
-		readonly environment: ValueEnvironment;
-	}> {
-		const edges: Array<{
-			readonly target: ConstructionState;
-			readonly environment: ValueEnvironment;
-		}> = [];
+	#incomingEnvironments(): ReadonlyArray<ReadonlyArray<ValueEnvironment> | undefined> {
+		const incoming = new Array<Array<ValueEnvironment> | undefined>(this.#states.length);
+		const add = (target: ConstructionState, environment: ValueEnvironment): void => {
+			(incoming[target.core] ??= []).push(environment);
+		};
 		for (const state of this.#states) {
 			const terminator = state.terminator;
-			if (terminator?.kind === "jump") {
-				edges.push({
-					target: this.#resolveTarget(terminator.target),
-					environment: terminator.environment,
-				});
-			} else if (terminator?.kind === "branch") {
-				edges.push(
-					{
-						target: this.#resolveTarget(terminator.consequent),
-						environment: terminator.environment,
-					},
-					{
-						target: this.#resolveTarget(terminator.alternate),
-						environment: terminator.environment,
-					},
-				);
-			}
-			if (terminator?.kind === "switch") {
-				for (const target of [
-					...terminator.cases.map((label) => label.target),
-					terminator.defaultTarget,
-				])
-					edges.push({
-						target: this.#resolveTarget(target),
-						environment: terminator.environment,
-					});
+			if (terminator?.kind === "jump")
+				add(this.#resolveTarget(terminator.target), terminator.environment);
+			else if (terminator?.kind === "branch") {
+				add(this.#resolveTarget(terminator.consequent), terminator.environment);
+				add(this.#resolveTarget(terminator.alternate), terminator.environment);
+			} else if (terminator?.kind === "switch") {
+				for (const label of terminator.cases)
+					add(this.#resolveTarget(label.target), terminator.environment);
+				add(this.#resolveTarget(terminator.defaultTarget), terminator.environment);
 			}
 			if (state.handler !== undefined) {
 				const target = this.#resolveTarget(state.handler.target);
 				this.#ensureExceptionParameter(target);
-				edges.push({ target, environment: state.handler.environment });
+				add(target, state.handler.environment);
 			}
 		}
-		return edges;
+		return incoming;
 	}
 
 	#resolveVirtualPhis(): void {
-		const incoming = new Map<ConstructionState, Array<ValueEnvironment>>();
-		for (const edge of this.#allEdgeDrafts()) {
-			const environments = incoming.get(edge.target) ?? [];
-			environments.push(edge.environment);
-			incoming.set(edge.target, environments);
+		if (this.#virtualPhis.length === 0) {
+			for (const state of this.#states)
+				if (state.handler !== undefined)
+					this.#ensureExceptionParameter(this.#resolveTarget(state.handler.target));
+			return;
 		}
+		const incoming = this.#incomingEnvironments();
 		const mutableIncomingStarts: Array<number> = [];
 		const incomingValues: Array<ConstructionValue> = [];
 		const entryPath: Array<ConstructionState> = [];
 		for (let index = 0; index < this.#virtualPhis.length; index++) {
 			const phi = this.#virtualPhis[index]!;
 			mutableIncomingStarts[index] = incomingValues.length;
-			for (const environment of incoming.get(phi.state) ?? []) {
+			for (const environment of incoming[phi.state.core] ?? []) {
 				incomingValues.push(
 					this.#resolveIncomingEnvironment(
 						environment,
