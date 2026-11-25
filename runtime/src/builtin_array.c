@@ -1823,32 +1823,33 @@ static MalValue mal_builtin_array_find_index(MalVm *vm, MalValue this_value, con
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
     }
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
-        return mal_value_new_undefined();
-    }
     MalRootSpan this_span;
     mal_gc_root(&this_span, &this_value, 1);
-    mal_gc_native_rooted_begin(vm);
     MalValue ret = mal_value_new_undefined();
-    for (u32 index = 0; index < length; index++) {
-        MalValue element = mal_builtin_array_get(vm, this_value, index);
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
+        goto done;
+    }
+    mal_gc_native_rooted_begin(vm);
+    for (f64 index = 0; index < length; index++) {
+        MalValue element = mal_builtin_array_get_wide(vm, this_value, index);
 
         MalValue matched;
-        if (!mal_builtin_array_invoke(vm, args[0], mal_builtin_array_this_arg(args, arg_count), element, index, this_value, &matched)) {
-            goto done;
+        if (!mal_builtin_array_invoke_wide(vm, args[0], mal_builtin_array_this_arg(args, arg_count), element, index, this_value, &matched)) {
+            goto loop_done;
         }
 
         if (mal_value_is_truthy(matched)) {
-            ret = mal_value_from_i32((i32) index);
-            goto done;
+            ret = mal_ops_number_value(index);
+            goto loop_done;
         }
     }
 
     ret = mal_value_from_i32(-1);
 
-done:
+loop_done:
     mal_gc_native_rooted_end(vm);
+done:
     mal_gc_unroot(&this_span);
     return ret;
 }

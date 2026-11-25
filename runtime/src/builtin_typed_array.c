@@ -1299,7 +1299,7 @@ static MalValue mal_ta_index_of(MalVm *vm, MalValue this_value, const MalValue *
         if (span.shared) {
             for (u32 i = from; i < search_end; i++) {
                 if ((u8) mal_typed_array_span_load_bits(&span, i) == needle) {
-                    return mal_value_from_i32((i32) i);
+                    return mal_ops_number_value((f64) i);
                 }
             }
             return mal_value_from_i32(-1);
@@ -1308,11 +1308,11 @@ static MalValue mal_ta_index_of(MalVm *vm, MalValue this_value, const MalValue *
             span.data + from, needle, search_end - from);
         return found == nullptr
             ? mal_value_from_i32(-1)
-            : mal_value_from_i32((i32) (found - span.data));
+            : mal_ops_number_value((f64) (found - span.data));
     }
     for (u32 i = from; i < length && i < current; i++) {
         if (mal_ta_span_matches(&span, i, target, false)) {
-            return mal_value_from_i32((i32) i);
+            return mal_ops_number_value((f64) i);
         }
     }
     return mal_value_from_i32(-1);
@@ -1368,14 +1368,14 @@ static MalValue mal_ta_last_index_of(MalVm *vm, MalValue this_value, const MalVa
         }
         for (i64 i = from; i >= 0; i--) {
             if ((u8) mal_typed_array_span_load_bits(&span, (u32) i) == needle) {
-                return mal_value_from_i32((i32) i);
+                return mal_ops_number_value((f64) i);
             }
         }
         return mal_value_from_i32(-1);
     }
     for (i64 i = from; i >= 0; i--) {
         if (mal_ta_span_matches(&span, (u32) i, target, false)) {
-            return mal_value_from_i32((i32) i);
+            return mal_ops_number_value((f64) i);
         }
     }
     return mal_value_from_i32(-1);
@@ -1567,7 +1567,7 @@ static MalValue mal_ta_iterate(MalVm *vm, MalValue this_value, const MalValue *a
             case MAL_TA_FIND_INDEX:
             case MAL_TA_FIND_LAST_INDEX:
                 if (truthy) {
-                    ret = mal_value_from_i32((i32) i);
+                    ret = mal_ops_number_value((f64) i);
                     goto done;
                 }
                 break;
