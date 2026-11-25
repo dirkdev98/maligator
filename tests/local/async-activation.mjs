@@ -235,3 +235,16 @@ for (let index = 0; index < 80; index++) {
 	mixedChecksum += first.value.value + second.value.value;
 }
 console.log("mixed await", mixedChecksum);
+
+async function collectArguments(...values) {
+	return values;
+}
+
+async function observeAliasedPromise() {
+	const promise = Promise.resolve(1);
+	const alias = (await collectArguments(promise))[0];
+	Object.defineProperty(alias, "then", { value: () => "changed" });
+	return typeof (await promise.then()) === "string";
+}
+
+console.log("aliased promise", await observeAliasedPromise());

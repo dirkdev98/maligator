@@ -1383,6 +1383,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 				esmEvaluationFunctionIndices: [...program.moduleEvaluationBodies.values()],
 				sourceBuiltinProviders,
 				hostInstallCandidates,
+				inheritsHostComponents,
 				pureModuleInitializers: [...program.compiledModuleInitForPaths].flatMap(
 					([modulePath, functionIndex]) => {
 						if (
@@ -11747,22 +11748,12 @@ function emitResumeDispatch(
 	// return() resumption value before unwinding (only yield, not await, and not
 	// sync generators). yield* handles its inner yield's resumption separately.
 	awaitReturnValue = false,
+	isAwait = false,
 ): number {
 	// throw() resumption: throw the sent value at the suspend point.
 	const throwBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const throwIdx = fn.blocks.push(throwBlock) - 1;
 	throwBlock.emitter.emit({ type: "throw", registers: [valueDst] });
-
-	// return() resumption: return the sent value, through enclosing finalizers.
-	const returnBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
-	const returnIdx = fn.blocks.push(returnBlock) - 1;
-	if (awaitReturnValue) {
-		const returnCursor: CoreFrontendCursor = { block: returnBlock };
-		const awaited = compileAwaitRegister(program, fn, returnCursor, valueDst);
-		emitReturn(program, fn, returnCursor.block, awaited);
-	} else {
-		emitReturn(program, fn, returnBlock, valueDst);
-	}
 
 	const continuation: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const continuationIdx = fn.blocks.push(continuation) - 1;
@@ -11785,23 +11776,36 @@ function emitResumeDispatch(
 		blocks: [throwIdx],
 	});
 
-	const returnConst = nextCoreVariable(fn);
-	const isReturn = nextCoreVariable(fn);
-	cursor.block.emitter.emit({
-		type: "createNumber",
-		registers: [returnConst],
-		value: RESUME_MODE_RETURN,
-	});
-	cursor.block.emitter.emit({
-		type: "binary",
-		registers: [isReturn, modeDst, returnConst],
-		operator: "===",
-	});
-	cursor.block.emitter.emit({
-		type: "jumpIf",
-		registers: [isReturn],
-		blocks: [returnIdx],
-	});
+	// Await jobs only resume with NEXT or THROW. A queued generator return
+	// drives a later request after the outstanding await has settled.
+	if (!isAwait) {
+		const returnBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+		const returnIdx = fn.blocks.push(returnBlock) - 1;
+		if (awaitReturnValue) {
+			const returnCursor: CoreFrontendCursor = { block: returnBlock };
+			const awaited = compileAwaitRegister(program, fn, returnCursor, valueDst);
+			emitReturn(program, fn, returnCursor.block, awaited);
+		} else {
+			emitReturn(program, fn, returnBlock, valueDst);
+		}
+		const returnConst = nextCoreVariable(fn);
+		const isReturn = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
+			type: "createNumber",
+			registers: [returnConst],
+			value: RESUME_MODE_RETURN,
+		});
+		cursor.block.emitter.emit({
+			type: "binary",
+			registers: [isReturn, modeDst, returnConst],
+			operator: "===",
+		});
+		cursor.block.emitter.emit({
+			type: "jumpIf",
+			registers: [isReturn],
+			blocks: [returnIdx],
+		});
+	}
 
 	cursor.block.emitter.emit({ type: "jump", blocks: [continuationIdx] });
 
@@ -11834,7 +11838,10 @@ function compileAwaitRegister(
 		registers: [valueDst, modeDst, awaitedSrc],
 	});
 
-	return emitResumeDispatch(program, fn, cursor, valueDst, modeDst);
+	emitResumeDispatch(program, fn, cursor, valueDst, modeDst, false, true);
+	const fulfilled = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "awaitFulfilled", registers: [fulfilled, valueDst] });
+	return fulfilled;
 }
 
 /**

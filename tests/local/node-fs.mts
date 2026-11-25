@@ -293,6 +293,10 @@ eq(
 );
 const textBuffer = readFileSync(textFile);
 check("readFileSync returns Buffer without encoding", Buffer.isBuffer(textBuffer));
+check(
+	"readFileSync returns Buffer for null encoding",
+	Buffer.isBuffer(readFileSync(textFile, null)),
+);
 eq(
 	"readFileSync Buffer decodes UTF-8 by default",
 	textBuffer.toString(),
@@ -579,6 +583,29 @@ eq(
 	await readFilePromise(textFile, "utf8"),
 	"héllo 😀 + sync + promise",
 );
+check(
+	"promise readFile returns Buffer without encoding",
+	Buffer.isBuffer(await readFilePromise(textFile)),
+);
+const scheduledEncoding: { encoding: "utf8" | null } = { encoding: "utf8" };
+const scheduledRead = readFilePromise(textFile, scheduledEncoding);
+scheduledEncoding.encoding = null;
+check(
+	"promise readFile observes the queued encoding lookup",
+	Buffer.isBuffer(await scheduledRead),
+);
+
+async function hasEncodedFile(path: string) {
+	return typeof (await readFilePromise(path, "utf8")) === "string";
+}
+check("promise readFile has an encoded result", await hasEncodedFile(textFile));
+let observationReadRejected = false;
+try {
+	await hasEncodedFile(`${root}/observation-missing`);
+} catch (error) {
+	observationReadRejected = (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+check("observing the result preserves read rejection", observationReadRejected);
 const promiseOrder = ["before"];
 const promisedEntries = readdir(nested, { withFileTypes: true }).then((value) => {
 	promiseOrder.push("fulfilled");

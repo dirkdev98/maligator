@@ -28,6 +28,7 @@ export const CORE_OPCODES = [
 	"arrayRest",
 	"asyncStart",
 	"await",
+	"awaitFulfilled",
 	"baseConstructResult",
 	"binary",
 	"builtinError",
@@ -203,6 +204,7 @@ const TWO_OUTPUTS = new Set<CoreOpcode>([
 ]);
 
 const GC_FREE = new Set<CoreOpcode>([
+	"awaitFulfilled",
 	"loadDynamicArgument",
 	"createRestArgumentsState",
 	"guardSemanticEpoch",
@@ -326,6 +328,7 @@ const CALLS_USER_CODE = new Set<CoreOpcode>([
 ]);
 
 const DISCARDABLE = new Set<CoreOpcode>([
+	"awaitFulfilled",
 	"guardSemanticEpoch",
 	"guardServiceEpoch",
 	"readServiceEpoch",
@@ -703,6 +706,7 @@ const INPUT_ARITIES = {
 	arrayRest: [1, 1],
 	asyncStart: [0, 0],
 	await: [1, 1],
+	awaitFulfilled: [1, 1],
 	baseConstructResult: [2, 2],
 	binary: [2, 2],
 	builtinError: [0, 0],

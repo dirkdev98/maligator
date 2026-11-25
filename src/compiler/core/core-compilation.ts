@@ -125,6 +125,7 @@ export interface CoreProgramData {
 		readonly bindingSlots: ReadonlyArray<number>;
 	}>;
 	readonly hostInstallCandidates: ReadonlyArray<CoreHostInstallCandidate>;
+	readonly inheritsHostComponents?: boolean;
 	/** Source-immutable cells, plus graph-proven activation-private cells. */
 	readonly singleAssignmentGlobalSlots: ReadonlyArray<number>;
 	/** Captured const and named self bindings whose immutability survives runtime code. */
@@ -171,6 +172,14 @@ export interface CoreImportedModuleBindings {
 export interface CoreCompilationContext {
 	readonly facts: CompilerProgramFacts;
 	readonly data: CoreProgramData;
+}
+
+export function coreDeferredHostSlots(data: CoreProgramData): ReadonlySet<number> {
+	return new Set(
+		(data.sourceBuiltinProviders ?? []).flatMap((provider) =>
+			provider.imports.map((entry) => entry.slot),
+		),
+	);
 }
 
 const closedGlobalSlotMembershipBySource = new WeakMap<

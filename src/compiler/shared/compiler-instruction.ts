@@ -894,6 +894,10 @@ type CompilerOperation =
 			registers: [number, number, number];
 	  }
 	| {
+			type: "awaitFulfilled";
+			registers: [destination: number, resumedValue: number];
+	  }
+	| {
 			type: "callSpread";
 
 			// [destination, callee, this, arguments_array]

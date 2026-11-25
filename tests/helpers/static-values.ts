@@ -4,7 +4,11 @@ import { parseScript } from "../../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../../src/compiler/pipeline/compile-core.ts";
 import { literalPrototypeMethods } from "../../src/compiler/shared/builtin-registry.ts";
-import { compilerProgramFactsFromConfig } from "../../src/compiler/shared/compiler-facts.ts";
+import {
+	compilerProgramFactsFromConfig,
+	programClosureCertificate,
+	withProgramClosure,
+} from "../../src/compiler/shared/compiler-facts.ts";
 import type { ExecutionProgram } from "../../src/compiler/target/execution-ir.ts";
 import { lowerNativeStorage } from "../../src/compiler/target/lower-native-storage.ts";
 import type { NativeStackRoots } from "../../src/compiler/target/lower-native-storage.ts";
@@ -14,6 +18,7 @@ import type { CoreOperationInspection } from "./core-inspection.ts";
 
 export interface StaticValueOptions {
 	locked?: boolean;
+	closed?: boolean;
 	realms?: boolean;
 	intl?: boolean;
 	profile?: boolean;
@@ -41,22 +46,33 @@ export function inspectStaticValueFunctions(
 	let coreReport: CoreOptimizationReport | undefined;
 	const phases: Record<string, number> = {};
 	const started = performance.now();
+	const path = options.script ? "static-values.js" : "static-values.mjs";
+	const facts = compilerProgramFactsFromConfig(
+		resolveBuildConfig({
+			engine: {
+				primordials: options.locked === false ? "mutable" : "locked",
+				...(options.realms === undefined ? {} : { realms: options.realms }),
+				...(options.intl === undefined ? {} : { intl: { enabled: options.intl } }),
+			},
+		}),
+	);
 	const compiled = compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			source,
-			options.script ? "static-values.js" : "static-values.mjs",
+			path,
 			options.script ? parseScript(source, { strict: false }) : undefined,
 		),
 		{
-			facts: compilerProgramFactsFromConfig(
-				resolveBuildConfig({
-					engine: {
-						primordials: options.locked === false ? "mutable" : "locked",
-						...(options.realms === undefined ? {} : { realms: options.realms }),
-						...(options.intl === undefined ? {} : { intl: { enabled: options.intl } }),
-					},
-				}),
-			),
+			facts: options.closed
+				? withProgramClosure(
+						facts,
+						programClosureCertificate(
+							{ kind: "whole-program", entry: path },
+							[{ kind: "entry-module", module: path }],
+							[],
+						),
+					)
+				: facts,
 			profile: options.profile,
 			coreInstrumentation: options.counters ? "counters" : "off",
 			afterCoreOptimization(program, _context, report) {

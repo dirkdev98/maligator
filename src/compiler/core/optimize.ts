@@ -21,6 +21,7 @@ import {
 import type { CoreFunctionOptimizationPhaseRunner } from "./core-function-optimization-session.ts";
 import { analyzeCoreGlobalSlotBrands } from "./core-global-slot-analysis.ts";
 import { installCoreGlobalSlotBrands } from "./core-global-slot-facts.ts";
+import { specializeCoreHostResults } from "./core-host-results.ts";
 import { buildCoreOptimizationPlan } from "./core-ir-region-selection.ts";
 import { verifyCoreOptimizationPlan } from "./core-ir-region-validity.ts";
 import { verifyCoreProgram } from "./core-ir-verifier.ts";
@@ -106,6 +107,7 @@ export function optimizeCore(
 ): OptimizedCoreResult {
 	specializeCorePlatformConstants(compilation);
 	specializeCoreForeignCalls(compilation);
+	specializeCoreHostResults(compilation);
 	const instrumentation = options.instrumentation ?? "off";
 	const ablatedFamily = options.benchmarkAblation?.family;
 	const ablatedPassFamily =

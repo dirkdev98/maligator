@@ -59,8 +59,10 @@ import { analyzeCoreConditionalValueKinds } from "./core-conditional-value-kinds
 import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import { coreNumericTypedArrayKind } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState, CoreExactHeapBrand } from "./core-heap-brands.ts";
+import { coreWebFetchResult } from "./core-host-web-results.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_AWAIT_RESULT_KIND_ATTRIBUTE,
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
 	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
@@ -100,7 +102,17 @@ import type {
 	CoreProgramFlowValueKindSemantics,
 	CoreProgramFlowValueKindInputs,
 	CoreProgramFlowValueKindState,
+	CorePromiseCallbackResult,
 } from "./core-program-flow.ts";
+import {
+	CORE_UNKNOWN_PROMISE,
+	coreIntrinsicPromiseStaticCall,
+	corePromiseAdoptedKinds,
+	corePromiseContinuation,
+	corePromiseIsProven,
+	corePromiseValueIsPrivate,
+	coreSuccessfulAwaitInput,
+} from "./core-promise-facts.ts";
 import type { CoreRecordValueKind } from "./core-record-value-kinds.ts";
 import {
 	coreReturnedValueDefinition,
@@ -142,6 +154,18 @@ export interface CoreValueKindInputs {
 	readonly onIntegerWork?: (values: number) => void;
 	readonly parameterMasks?: ReadonlyArray<CompilerValueKindMask>;
 	readonly receiverMask?: CompilerValueKindMask;
+	readonly parameterFulfillmentKinds?: ReadonlyArray<number>;
+	readonly operationFulfillmentKind?: (
+		instruction: CoreInstructionId,
+	) => number | undefined;
+	readonly recomputeAwaitKinds?: boolean;
+	readonly promiseArgumentIsPrivate?: (
+		instruction: CoreInstructionId,
+		operand: number,
+	) => boolean;
+	readonly promiseCallback?: (
+		value: CoreValueId,
+	) => CorePromiseCallbackResult | undefined;
 	readonly controlEdges?: ReadonlySet<CoreControlEdge>;
 	readonly operationResultValue?: (
 		instruction: CoreInstructionId,
@@ -399,6 +423,9 @@ const KIND_TRANSFER_WEAK_PREDICATE = 12;
 const KIND_TRANSFER_WEAK_MUTATOR = 13;
 const KIND_TRANSFER_NORMAL_PROJECTION = 14;
 const KIND_TRANSFER_SYMBOL_KEY_FOR = 15;
+const KIND_TRANSFER_AWAIT = 16;
+const KIND_TRANSFER_PROMISE_RESOLVE = 17;
+const KIND_TRANSFER_PROMISE_CONTINUATION = 18;
 
 // A non-number key on an Array whose holders are all known reads its length, a
 // prototype member or nothing, since no one gave it other named properties.
@@ -855,6 +882,18 @@ function addOperationTransfer(
 		return;
 	}
 	const opcode = fn.instructionOpcodeName(instruction);
+	if (opcode === "awaitFulfilled") {
+		const published =
+			fn.instructionAttributes(instruction)[CORE_AWAIT_RESULT_KIND_ATTRIBUTE];
+		if (inputs?.recomputeAwaitKinds !== true && compilerValueKindMaskIsValid(published)) {
+			masks[output] = published;
+			return;
+		}
+		const awaited = coreSuccessfulAwaitInput(fn, instruction);
+		if (awaited === undefined) masks[output] = COMPILER_VALUE_KIND_TOP;
+		else addKindTransfer(buffer, KIND_TRANSFER_AWAIT, output, 0, [awaited]);
+		return;
+	}
 	const staticKind = staticOpcodeKind(opcode);
 	if (staticKind !== undefined) {
 		masks[output] = masks[output]! | staticKind;
@@ -1182,6 +1221,13 @@ function solveCoreValueKinds(
 	demandedValues?: ReadonlyArray<CoreValueId>,
 ) {
 	const masks = new Uint16Array(fn.valueCapacity);
+	const fulfillmentKinds =
+		inputs?.operationFulfillmentKind === undefined
+			? undefined
+			: new Uint16Array(fn.valueCapacity);
+	let promiseContinuations:
+		| Map<number, NonNullable<ReturnType<typeof corePromiseContinuation>>>
+		| undefined;
 	const integerRecipes = new Int32Array(
 		demandedValues === undefined ? fn.valueCapacity : 0,
 	);
@@ -1259,11 +1305,98 @@ function solveCoreValueKinds(
 					? COMPILER_VALUE_KIND_TOP
 					: (inputs?.parameterMasks?.[formalIndex] ?? COMPILER_VALUE_KIND_TOP));
 			masks[parameter] = masks[parameter]! | kind;
+			if (fulfillmentKinds !== undefined) {
+				const fulfillment = inputs?.parameterFulfillmentKinds?.[formalIndex];
+				fulfillmentKinds[parameter] =
+					fulfillment !== undefined &&
+					corePromiseValueIsPrivate(
+						program,
+						fn,
+						parameter,
+						inputs?.promiseArgumentIsPrivate,
+					)
+						? fulfillment
+						: CORE_UNKNOWN_PROMISE;
+			}
 			return;
 		}
 		addKindTransfer(transfers, KIND_TRANSFER_JOIN, parameter, 0, incomingValues);
 	};
 	const addOutput = (instruction: CoreInstructionId, output: CoreValueId): void => {
+		if (
+			fulfillmentKinds !== undefined &&
+			fn.instructionOpcodeName(instruction) !== "move"
+		) {
+			const promise = coreIntrinsicPromiseStaticCall(fn, instruction);
+			const continuation = corePromiseContinuation(program, fn, instruction);
+			const returned = inputs!.operationFulfillmentKind!(instruction);
+			const privateResult =
+				(promise !== undefined ||
+					continuation !== undefined ||
+					(returned !== undefined && corePromiseIsProven(returned))) &&
+				corePromiseValueIsPrivate(program, fn, output, inputs?.promiseArgumentIsPrivate);
+			fulfillmentKinds[output] = privateResult
+				? (returned ?? CORE_UNKNOWN_PROMISE)
+				: CORE_UNKNOWN_PROMISE;
+			if (privateResult && promise?.operation === "Promise.reject") {
+				fulfillmentKinds[output] = 0;
+				masks[output] = COMPILER_VALUE_KIND_OBJECT;
+				return;
+			}
+			if (
+				privateResult &&
+				(promise?.operation === "Promise.all" ||
+					promise?.operation === "Promise.allSettled" ||
+					promise?.operation === "Promise.allSettledKeyed")
+			) {
+				masks[output] = COMPILER_VALUE_KIND_OBJECT;
+				fulfillmentKinds[output] = COMPILER_VALUE_KIND_OBJECT;
+				return;
+			}
+			if (
+				privateResult &&
+				(promise?.operation === "Promise.allKeyed" ||
+					promise?.operation === "Promise.any" ||
+					promise?.operation === "Promise.race" ||
+					promise?.operation === "Promise.try")
+			) {
+				masks[output] = COMPILER_VALUE_KIND_OBJECT;
+				fulfillmentKinds[output] =
+					promise.operation !== "Promise.try"
+						? COMPILER_VALUE_KIND_TOP
+						: promise.firstArgument === undefined
+							? 0
+							: (inputs?.promiseCallback?.(promise.firstArgument)?.resolvedKind ??
+								CORE_UNKNOWN_PROMISE);
+				return;
+			}
+			if (privateResult && continuation !== undefined) {
+				const { receiver, first, second } = continuation;
+				(promiseContinuations ??= new Map()).set(transfers.kinds.length, continuation);
+				fulfillmentKinds[output] = 0;
+				const operands = [receiver];
+				if (first !== undefined) operands.push(first);
+				if (second !== undefined) operands.push(second);
+				addKindTransfer(
+					transfers,
+					KIND_TRANSFER_PROMISE_CONTINUATION,
+					output,
+					0,
+					operands,
+				);
+				return;
+			}
+			if (privateResult && promise?.operation === "Promise.resolve") {
+				masks[output] = COMPILER_VALUE_KIND_OBJECT;
+				fulfillmentKinds[output] =
+					promise.firstArgument === undefined ? COMPILER_VALUE_KIND_UNDEFINED : 0;
+				if (promise.firstArgument !== undefined)
+					addKindTransfer(transfers, KIND_TRANSFER_PROMISE_RESOLVE, output, 0, [
+						promise.firstArgument,
+					]);
+				return;
+			}
+		}
 		addOperationTransfer(program, transfers, masks, fn, instruction, output, inputs);
 		if (demandedValues !== undefined) return;
 		const opcode = fn.instructionOpcodeName(instruction);
@@ -1395,18 +1528,55 @@ function solveCoreValueKinds(
 		const index = queue[cursor++]!;
 		queued[index] = 0;
 		const output = transferOutputs[index]!;
-		if (masks[output] === COMPILER_VALUE_KIND_TOP) continue;
-		const incoming = transferredKind(
-			transferKinds[index]!,
-			transferConstants[index]!,
-			transferInputs,
-			transferInputStarts[index]!,
-			transferInputCounts[index]!,
-			mask,
-			transfers.inputPoints,
-		);
+		const transfer = transferKinds[index]!;
+		const start = transferInputStarts[index]!;
+		const count = transferInputCounts[index]!;
+		const previousFulfillment = fulfillmentKinds?.[output];
+		if (fulfillmentKinds !== undefined && previousFulfillment !== CORE_UNKNOWN_PROMISE) {
+			if (
+				transfer === KIND_TRANSFER_JOIN ||
+				(transfer === KIND_TRANSFER_COPY &&
+					fn.instructionOpcodeName(
+						coreInstructionId(fn.kernel.valueDefinitionOwner(output)),
+					) === "move")
+			) {
+				for (let offset = 0; offset < count; offset++) {
+					const input = transferInputs[start + offset]!;
+					if ((masks[input]! & COMPILER_VALUE_KIND_OBJECT) !== 0)
+						fulfillmentKinds[output] =
+							fulfillmentKinds[output]! | fulfillmentKinds[input]!;
+				}
+			} else if (transfer === KIND_TRANSFER_PROMISE_RESOLVE) {
+				const input = transferInputs[start]!;
+				const source = fulfillmentKinds[input]!;
+				fulfillmentKinds[output] =
+					(masks[input]! & COMPILER_VALUE_KIND_OBJECT) !== 0 &&
+					!corePromiseIsProven(source)
+						? CORE_UNKNOWN_PROMISE
+						: awaitMask(input);
+			}
+		}
+		const continuation = promiseContinuations?.get(index);
+		const incoming =
+			continuation !== undefined
+				? continuationKind(continuation, output)
+				: transfer === KIND_TRANSFER_PROMISE_RESOLVE ||
+					  masks[output] === COMPILER_VALUE_KIND_TOP
+					? 0
+					: transfer === KIND_TRANSFER_AWAIT
+						? awaitMask(transferInputs[start]!)
+						: transferredKind(
+								transfer,
+								transferConstants[index]!,
+								transferInputs,
+								start,
+								count,
+								mask,
+								transfers.inputPoints,
+							);
 		const next = masks[output]! | incoming;
-		if (next === masks[output]) continue;
+		if (next === masks[output] && previousFulfillment === fulfillmentKinds?.[output])
+			continue;
 		masks[output] = next;
 		wakeDependents(output, queued, queue);
 	}
@@ -1447,10 +1617,59 @@ function solveCoreValueKinds(
 	}
 	return {
 		masks,
+		fulfillmentKinds,
 		integerRecipes,
 		joinInputs: Uint32Array.from(joinInputs),
 		computed,
 	};
+
+	function awaitMask(value: CoreValueId): number {
+		const immediate = masks[value]!;
+		const primitives = immediate & ~COMPILER_VALUE_KIND_OBJECT;
+		return (immediate & COMPILER_VALUE_KIND_OBJECT) === 0
+			? primitives
+			: primitives |
+					((fulfillmentKinds?.[value] ?? COMPILER_VALUE_KIND_TOP) &
+						COMPILER_VALUE_KIND_TOP);
+	}
+
+	function continuationKind(
+		{
+			method,
+			receiver,
+			first,
+			second,
+		}: NonNullable<ReturnType<typeof corePromiseContinuation>>,
+		output: CoreValueId,
+	): number {
+		const immediate = masks[receiver]!;
+		if (immediate === 0) return 0;
+		const source = fulfillmentKinds![receiver]!;
+		if (immediate !== COMPILER_VALUE_KIND_OBJECT || !corePromiseIsProven(source)) {
+			fulfillmentKinds![output] = CORE_UNKNOWN_PROMISE;
+			return COMPILER_VALUE_KIND_TOP;
+		}
+		const handler = (value: CoreValueId | undefined, passthrough: number): number => {
+			if (value === undefined) return passthrough;
+			const kind = masks[value]!;
+			if (kind === 0) return 0;
+			if ((kind & COMPILER_VALUE_KIND_OBJECT) === 0) return passthrough;
+			const callback = inputs?.promiseCallback?.(value);
+			if (callback === undefined) return COMPILER_VALUE_KIND_TOP;
+			if (method === "finally")
+				return callback.returnsQuiescentValue ? passthrough : COMPILER_VALUE_KIND_TOP;
+			return callback.settledKind | (callback.maySkip ? passthrough : 0);
+		};
+		const passthrough = corePromiseAdoptedKinds(source, CORE_UNKNOWN_PROMISE);
+		const result =
+			method === "catch"
+				? passthrough | handler(first, 0)
+				: method === "finally"
+					? handler(first, passthrough)
+					: (source === 0 ? 0 : handler(first, passthrough)) | handler(second, 0);
+		fulfillmentKinds![output] = fulfillmentKinds![output]! | result;
+		return COMPILER_VALUE_KIND_OBJECT;
+	}
 }
 
 export function analyzeCoreValueKinds(
@@ -1658,6 +1877,7 @@ export interface CoreProgramFunctionValueKinds extends Pick<
 	"kindMask"
 > {
 	heapBrand(value: CoreValueId): CoreHeapBrandState;
+	fulfillmentKind(value: CoreValueId): number;
 	latticeMask(
 		this: void,
 		value: CoreValueId,
@@ -1707,7 +1927,12 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 		observationValues(program: CoreProgram, fn: CoreFunctionStore) {
 			const values = new Set<CoreValueId>(coreRecordReturnKindInputs(fn));
 			const observationOpcodes = coreValueKindObservationOpcodes(fn.registry);
+			const awaitOpcode = fn.registry.get("awaitFulfilled")?.id;
 			for (const instruction of fn.instructionIds()) {
+				if (fn.kernel.instructionOpcode(instruction) === awaitOpcode) {
+					values.add(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
+					continue;
+				}
 				const opcode = observationOpcodes[fn.kernel.instructionOpcode(instruction)];
 				if (opcode === undefined) continue;
 				if (opcode === "callKnown") {
@@ -1728,14 +1953,15 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 			inputs: CoreProgramFlowValueKindInputs,
 		) {
 			const fields = corePrivateFieldFacts(program);
-			const { masks, computed } = solveCoreValueKinds(
+			const { masks, computed, fulfillmentKinds } = solveCoreValueKinds(
 				program,
 				fn,
 				cfg,
 				fields === undefined
-					? inputs
+					? { ...inputs, recomputeAwaitKinds: true }
 					: {
 							...inputs,
+							recomputeAwaitKinds: true,
 							operationResultMask: (instruction, result) =>
 								inputs.operationResultMask?.(instruction, result) ??
 								fields.readMask(fn, instruction),
@@ -1774,6 +2000,11 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 					)).heapBrandState(value);
 				},
 				kindMask: (value: CoreValueId) => mask(value) || COMPILER_VALUE_KIND_TOP,
+				fulfillmentKind(value: CoreValueId) {
+					return (mask(value) & COMPILER_VALUE_KIND_OBJECT) === 0
+						? 0
+						: (fulfillmentKinds?.[value] ?? CORE_UNKNOWN_PROMISE);
+				},
 				latticeMask(value: CoreValueId, point?: CoreControlPoint) {
 					const kind = mask(value);
 					// An unsolved value cannot acquire a normal result from a branch restriction.
@@ -1789,6 +2020,15 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 		},
 		latticeMask(analysis: CoreProgramFunctionValueKinds, value: CoreValueId) {
 			return analysis.latticeMask(value);
+		},
+		fulfillmentKind(analysis: CoreProgramFunctionValueKinds, value: CoreValueId) {
+			return analysis.fulfillmentKind(value);
+		},
+		adoptedKind(analysis: CoreProgramFunctionValueKinds, value: CoreValueId) {
+			return corePromiseAdoptedKinds(
+				analysis.latticeMask(value),
+				analysis.fulfillmentKind(value),
+			);
 		},
 		heapBrand(analysis: CoreProgramFunctionValueKinds, value: CoreValueId) {
 			return analysis.heapBrand(value);
@@ -1886,6 +2126,13 @@ export function coreValueKindDemand(
 			addKindTransfer(transfers, KIND_TRANSFER_JOIN, value, 0, values);
 		} else if (definitionKind === 1) {
 			const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+			if (
+				fn.instructionOpcodeName(instruction) === "awaitFulfilled" ||
+				coreWebFetchResult(program, fn, instruction) !== undefined
+			) {
+				fixed.set(value, undefined);
+				return;
+			}
 			let demand = false;
 			addOperationTransfer(program, transfers, masks, fn, instruction, value, {
 				operationResultMask(instruction) {

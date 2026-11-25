@@ -27,6 +27,7 @@ import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.t
 import { coreExactHeapBrand } from "./core-heap-brands.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_AWAIT_RESULT_KIND_ATTRIBUTE,
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
 	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE,
@@ -454,15 +455,22 @@ function verifyInstructionRows(
 				fail("Invalid record field kind proof");
 			const resultRange = attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
 			const resultBrand = attributes[CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE];
+			const awaitKind = attributes[CORE_AWAIT_RESULT_KIND_ATTRIBUTE];
+			if (
+				awaitKind !== undefined &&
+				(descriptor.opcode !== "awaitFulfilled" ||
+					!compilerValueKindMaskIsValid(awaitKind))
+			)
+				fail("Invalid successful await kind proof");
 			if (
 				resultBrand !== undefined &&
-				((callKind ?? fieldKind) !== COMPILER_VALUE_KIND_OBJECT ||
+				((callKind ?? fieldKind ?? awaitKind) !== COMPILER_VALUE_KIND_OBJECT ||
 					coreExactHeapBrand(resultBrand) !== resultBrand)
 			)
 				fail("Invalid normal result heap brand proof");
 			if (
 				resultRange !== undefined &&
-				((callKind ?? fieldKind) !== COMPILER_VALUE_KIND_NUMBER ||
+				((callKind ?? fieldKind ?? awaitKind) !== COMPILER_VALUE_KIND_NUMBER ||
 					!compilerIntegerRangeIsValid(resultRange))
 			)
 				fail("Invalid normal result integer range proof");

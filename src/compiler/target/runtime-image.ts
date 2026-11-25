@@ -1,4 +1,5 @@
 import type { PlatformData } from "../../platform/catalog.ts";
+import { coreDeferredHostSlots } from "../core/core-compilation.ts";
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "../core/core-constructor-layout.ts";
 import {
@@ -3976,11 +3977,7 @@ function buildHostInstalls(
 		}
 	}
 
-	const deferredSlots = new Set(
-		(context.data.sourceBuiltinProviders ?? []).flatMap((provider) =>
-			provider.imports.map((entry) => entry.slot),
-		),
-	);
+	const deferredSlots = coreDeferredHostSlots(context.data);
 	const manifest: RuntimeImage["hostInstalls"] = [];
 	const installFor = (installer: string) => {
 		let install = manifest.find((entry) => entry.installer === installer);
@@ -4881,6 +4878,8 @@ function lowerInstructionToBytecodeInstruction(
 				modeDst: instruction.registers[1],
 				awaitedSrc: instruction.registers[2],
 			};
+		case "awaitFulfilled":
+			throw new Error("Successful await projection must lower to a move");
 		case "loadPrimordial":
 			return {
 				opcode: "LOAD_PRIMORDIAL",

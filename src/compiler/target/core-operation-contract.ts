@@ -63,7 +63,7 @@ const compilerRepresentationCarrierIsComplete: MissingRepresentationCarrier exte
 
 export interface CoreTargetOperationContract {
 	readonly opcode: CoreOpcode;
-	/** Ordinary operations preserve their Core identity through target lowering. */
+	/** A successful await projection lowers to a copy of the boxed resume value. */
 	readonly targetType: CoreOpcode;
 	readonly outputCount: number;
 	/** Output representations are carried by the corresponding physical registers. */
@@ -104,7 +104,7 @@ function createCoreTargetOperationContracts(
 				opcode,
 				Object.freeze({
 					opcode,
-					targetType: opcode,
+					targetType: opcode === "awaitFulfilled" ? "move" : opcode,
 					outputCount: descriptor.outputs.minimum,
 					representation:
 						descriptor.outputs.minimum === 0 ? "none" : "core-value-register",

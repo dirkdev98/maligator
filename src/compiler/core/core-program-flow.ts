@@ -8,11 +8,24 @@ import type { CoreCallGraph, CoreCallGraphNode } from "./core-call-graph.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { joinCoreHeapBrands } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState } from "./core-heap-brands.ts";
+import { coreHostResult, coreHostResultSlots } from "./core-host-results.ts";
+import {
+	coreWebFetchIdentityIsStable,
+	coreWebFetchResult,
+} from "./core-host-web-results.ts";
 import type { CoreControlEdge, CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
+import {
+	CORE_UNKNOWN_PROMISE,
+	coreIntrinsicPromiseStaticCall,
+	corePromiseAdoptedKinds,
+	corePromiseContinuation,
+	corePromiseIsProven,
+	corePromiseValueIsPrivate,
+} from "./core-promise-facts.ts";
 import {
 	sameCoreRecordValueKind,
 	joinCoreRecordValueKinds,
@@ -85,6 +98,7 @@ export interface CoreProgramFlowTargetIndex {
 	readonly changedCallers: ReadonlySet<CoreFunctionId>;
 	readonly changedEdgeCallers: ReadonlySet<CoreFunctionId>;
 	publishedFunctions(functionId: CoreFunctionId): ReadonlyArray<CoreFunctionId>;
+	targets?(functionId: CoreFunctionId, value: CoreValueId): CoreProgramFlowCallTargets;
 	globalStoreTargets(slot: number): {
 		readonly functions: ReadonlyArray<CoreFunctionId>;
 		readonly anyScript: boolean;
@@ -104,11 +118,13 @@ export interface CoreProgramFlowTargetIndex {
 
 interface CoreProgramFlowKindInputs {
 	readonly parameterKinds: ReadonlyArray<number>;
+	readonly parameterFulfillmentKinds?: ReadonlyArray<number>;
 	readonly receiverKind: number;
 }
 
 export interface CoreProgramFlowValueKindSummary extends CoreProgramFlowKindInputs {
 	readonly returnKind: number;
+	readonly returnFulfillmentKind: number;
 	readonly returnRecord?: CoreRecordValueKind;
 	readonly returnHeapBrand?: CoreHeapBrandState;
 }
@@ -149,6 +165,7 @@ export interface CoreProgramFlowValueKindState<
 	Targets extends CoreProgramFlowTargetIndex = CoreProgramFlowTargetIndex,
 > extends CoreProgramFlowValueKinds<Analysis> {
 	readonly sourceClosed: boolean;
+	readonly webFetchStable: boolean;
 	readonly dataEpoch: number;
 	readonly targets: Targets;
 	readonly external: ReadonlyMap<CoreFunctionId, boolean>;
@@ -209,6 +226,17 @@ export interface CoreProgramFlowValueKindInputs {
 	) => CoreHeapBrandState;
 	readonly demandedValues: ReadonlyArray<CoreValueId>;
 	readonly parameterMasks?: ReadonlyArray<number>;
+	readonly parameterFulfillmentKinds?: ReadonlyArray<number>;
+	readonly operationFulfillmentKind?: (
+		instruction: CoreInstructionId,
+	) => number | undefined;
+	readonly promiseArgumentIsPrivate?: (
+		instruction: CoreInstructionId,
+		operand: number,
+	) => boolean;
+	readonly promiseCallback?: (
+		value: CoreValueId,
+	) => CorePromiseCallbackResult | undefined;
 	readonly receiverMask?: number;
 	readonly operationResultMask?: (
 		instruction: CoreInstructionId,
@@ -219,6 +247,13 @@ export interface CoreProgramFlowValueKindInputs {
 		result: CoreValueId,
 	) => CoreValueAlternatives | undefined;
 	readonly elementLoadMask?: (instruction: CoreInstructionId) => number | undefined;
+}
+
+export interface CorePromiseCallbackResult {
+	readonly maySkip: boolean;
+	readonly settledKind: number;
+	readonly resolvedKind: number;
+	readonly returnsQuiescentValue: boolean;
 }
 
 export interface CoreProgramFlowValueKindSemantics<Analysis> {
@@ -233,6 +268,8 @@ export interface CoreProgramFlowValueKindSemantics<Analysis> {
 		inputs: CoreProgramFlowValueKindInputs,
 	): Analysis;
 	latticeMask(analysis: Analysis, value: CoreValueId): number;
+	fulfillmentKind(analysis: Analysis, value: CoreValueId): number;
+	adoptedKind(analysis: Analysis, value: CoreValueId): number;
 	heapBrand(analysis: Analysis, value: CoreValueId): CoreHeapBrandState;
 	recordReads(
 		fn: CoreFunctionStore,
@@ -263,7 +300,10 @@ function coreValueKindResultReaders(
 	semantics: { readonly top: number; readonly object: number },
 ): Pick<
 	CoreProgramFlowValueKindInputs,
-	"operationResultHeapBrand" | "operationResultAlternatives" | "operationResultMask"
+	| "operationResultHeapBrand"
+	| "operationResultAlternatives"
+	| "operationResultMask"
+	| "operationFulfillmentKind"
 > & { readonly recordResult: (instruction: CoreInstructionId) => CoreRecordValueKind } {
 	const returnedRecords = new Map<CoreInstructionId, CoreRecordValueKind>();
 	const recordResult = (instruction: CoreInstructionId): CoreRecordValueKind => {
@@ -290,6 +330,25 @@ function coreValueKindResultReaders(
 	};
 	return {
 		recordResult,
+		operationFulfillmentKind(instruction) {
+			if (
+				fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result !==
+				"call-completion"
+			)
+				return undefined;
+			const site = byInstruction.get(instruction);
+			if (
+				site === undefined ||
+				site.targets.opaque ||
+				site.targets.anyScript ||
+				site.targets.functions.length === 0
+			)
+				return undefined;
+			let mask = 0;
+			for (const callee of site.targets.functions)
+				mask |= summaries!.get(callee)!.returnFulfillmentKind;
+			return mask;
+		},
 		operationResultHeapBrand(instruction) {
 			const construct =
 				fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ===
@@ -372,6 +431,7 @@ function coreValueKindResultReaders(
 }
 
 export interface CoreProgramFlowCallTargets {
+	readonly nonCallable?: boolean;
 	readonly functions: ReadonlyArray<CoreFunctionId>;
 	readonly anyScript: boolean;
 	readonly opaque: boolean;
@@ -2575,18 +2635,30 @@ export class CoreProgramFlowEngine {
 	): CoreProgramFlowValueKindState<Analysis, Targets> {
 		const dataEpoch = this.#program.dataEpoch;
 		if (previous?.dataEpoch !== dataEpoch) previous = undefined;
+		const promiseFacts =
+			context?.facts.world.primordialPolicy === "locked" && !context.facts.world.realms;
+		const hostSlots = context === undefined ? undefined : coreHostResultSlots(context);
+		const webFetchStable =
+			context !== undefined &&
+			coreWebFetchIdentityIsStable(this.#program, context, targets);
+		if (previous?.webFetchStable !== webFetchStable) previous = undefined;
 		const sameInputs = (
 			left: CoreProgramFlowKindInputs | undefined,
 			right: CoreProgramFlowKindInputs,
 		): boolean =>
 			left?.receiverKind === right.receiverKind &&
 			left.parameterKinds.length === right.parameterKinds.length &&
-			left.parameterKinds.every((mask, index) => mask === right.parameterKinds[index]);
+			left.parameterKinds.every((mask, index) => mask === right.parameterKinds[index]) &&
+			(left.parameterFulfillmentKinds === right.parameterFulfillmentKinds ||
+				left.parameterFulfillmentKinds?.every(
+					(mask, index) => mask === right.parameterFulfillmentKinds?.[index],
+				) === true);
 		const sameReturn = (
 			left: CoreProgramFlowValueKindSummary | undefined,
 			right: CoreProgramFlowValueKindSummary,
 		): boolean =>
 			left?.returnKind === right.returnKind &&
+			left.returnFulfillmentKind === right.returnFulfillmentKind &&
 			left.returnHeapBrand === right.returnHeapBrand &&
 			sameCoreRecordValueKind(left.returnRecord, right.returnRecord);
 		const functionIds = targets.graph.functions;
@@ -2602,6 +2674,16 @@ export class CoreProgramFlowEngine {
 		>();
 		const argumentTargets = new Map<CoreFunctionId, Set<CoreFunctionId>>();
 		const wildcardReaders = new Set<CoreFunctionId>();
+		const promiseCallbacks = new Map<
+			CoreFunctionId,
+			ReadonlyMap<CoreValueId, CoreProgramFlowCallTargets>
+		>();
+		const addReturnReader = (caller: CoreFunctionId, callee: CoreFunctionId) => {
+			let readers = returnReaders.get(callee);
+			if (readers === undefined) returnReaders.set(callee, (readers = new Set()));
+			if (!readers.has(caller)) dependencies.get(caller)!.push(callee);
+			readers.add(caller);
+		};
 		for (const functionId of functionIds) dependencies.set(functionId, []);
 		for (const caller of functionIds) {
 			for (const site of targets.outgoing(caller)) {
@@ -2609,12 +2691,8 @@ export class CoreProgramFlowEngine {
 					wildcardReaders.add(caller);
 				for (const callee of site.targets.functions) {
 					if (!external.has(callee)) continue;
-					if (!site.targets.opaque && !site.targets.anyScript) {
-						let readers = returnReaders.get(callee);
-						if (readers === undefined) returnReaders.set(callee, (readers = new Set()));
-						if (!readers.has(caller)) dependencies.get(caller)!.push(callee);
-						readers.add(caller);
-					}
+					if (!site.targets.opaque && !site.targets.anyScript)
+						addReturnReader(caller, callee);
 					if (external.get(callee) === true) continue;
 					let sites = incoming.get(callee);
 					if (sites === undefined) incoming.set(callee, (sites = []));
@@ -2625,6 +2703,30 @@ export class CoreProgramFlowEngine {
 					if (!recipients.has(callee)) dependencies.get(callee)!.push(caller);
 					recipients.add(callee);
 				}
+			}
+			if (promiseFacts && targets.targets !== undefined) {
+				const fn = this.#program.function(caller);
+				let callbacks: Map<CoreValueId, CoreProgramFlowCallTargets> | undefined;
+				for (const site of targets.outgoing(caller)) {
+					const method = corePromiseContinuation(this.#program, fn, site.instruction);
+					const builtin =
+						method === undefined
+							? coreIntrinsicPromiseStaticCall(fn, site.instruction)
+							: undefined;
+					const first =
+						method?.first ??
+						(builtin?.operation === "Promise.try" ? builtin.firstArgument : undefined);
+					for (const callback of [first, method?.second]) {
+						if (callback === undefined || callbacks?.has(callback)) continue;
+						const possible = targets.targets(caller, callback);
+						if (possible.anyScript || possible.opaque) continue;
+						(callbacks ??= new Map()).set(callback, possible);
+						for (const callee of possible.functions) {
+							if (external.has(callee)) addReturnReader(caller, callee);
+						}
+					}
+				}
+				if (callbacks !== undefined) promiseCallbacks.set(caller, callbacks);
 			}
 		}
 		const dirty = new Set<CoreFunctionId>();
@@ -2637,6 +2739,8 @@ export class CoreProgramFlowEngine {
 					dirty.add(functionId);
 			}
 			for (const functionId of functionIds) {
+				if (targets !== previous.targets && targets.changedCallers.has(functionId))
+					dirty.add(functionId);
 				const before = previous.targets.outgoing(functionId);
 				const after = targets.outgoing(functionId);
 				if (before === after || (before.length === 0 && after.length === 0)) continue;
@@ -2659,6 +2763,47 @@ export class CoreProgramFlowEngine {
 				}
 			}
 		}
+		const changedBodies = new Set(dirty);
+		if (promiseFacts && changedBodies.size !== 0) {
+			for (const target of changedBodies)
+				for (const caller of returnReaders.get(target) ?? []) dirty.add(caller);
+		}
+		const privateParameters = new Map<CoreFunctionId, Map<number, boolean>>();
+		const parameterIsPrivate = (target: CoreFunctionId, index: number): boolean => {
+			let known = privateParameters.get(target);
+			if (known === undefined)
+				privateParameters.set(target, (known = new Map<number, boolean>()));
+			const prior = known.get(index);
+			if (prior !== undefined) return prior;
+			const fn = this.#program.function(target);
+			const result =
+				index < fn.parameterCount &&
+				!fn.metadata.mappedArguments &&
+				![...fn.instructionIds()].some((instruction) => {
+					if (fn.instructionKind(instruction) !== "operation") return false;
+					const opcode = fn.instructionOpcodeName(instruction);
+					return (
+						opcode === "createArgumentsObject" ||
+						opcode === "loadDynamicArgument" ||
+						opcode === "loadStaticArgument" ||
+						opcode === "loadArgument" ||
+						opcode === "createRestArguments" ||
+						opcode === "createRestArgumentsState" ||
+						opcode === "callRestArguments" ||
+						opcode === "constructRestArguments" ||
+						opcode === "constructSuperForward"
+					);
+				}) &&
+				corePromiseValueIsPrivate(
+					this.#program,
+					fn,
+					fn.kernel.functionParameter(index),
+					undefined,
+					fn.isAsync && !fn.isGenerator,
+				);
+			known.set(index, result);
+			return result;
+		};
 		// A clean function that reads no interprocedural inputs can witness a saturated
 		// aggregate even while other functions are being retracted and solved again.
 		const fixedAggregate =
@@ -2743,6 +2888,7 @@ export class CoreProgramFlowEngine {
 			inputs: CoreProgramFlowKindInputs,
 		): CoreProgramFlowKindInputs => {
 			let parameters: Array<number> | undefined;
+			let fulfillment: Array<number> | undefined;
 			for (let index = 0; index < fn.parameterCount; index++) {
 				const argument = site.arguments?.[index];
 				const mask =
@@ -2754,6 +2900,20 @@ export class CoreProgramFlowEngine {
 				const old = inputs.parameterKinds[index]!;
 				if ((old | mask) !== old)
 					(parameters ??= [...inputs.parameterKinds])[index] = old | mask;
+				const oldFulfillment = inputs.parameterFulfillmentKinds?.[index];
+				if (
+					oldFulfillment !== undefined &&
+					oldFulfillment !== CORE_UNKNOWN_PROMISE &&
+					(mask & semantics.object) !== 0
+				) {
+					const incoming =
+						argument === undefined
+							? CORE_UNKNOWN_PROMISE
+							: semantics.fulfillmentKind(values, argument);
+					if ((oldFulfillment | incoming) !== oldFulfillment)
+						(fulfillment ??= [...inputs.parameterFulfillmentKinds!])[index] =
+							oldFulfillment | incoming;
+				}
 			}
 			const receiverKind =
 				inputs.receiverKind |
@@ -2762,9 +2922,15 @@ export class CoreProgramFlowEngine {
 					: site.receiver === undefined
 						? semantics.top
 						: semantics.latticeMask(values, site.receiver));
-			return parameters === undefined && receiverKind === inputs.receiverKind
+			return parameters === undefined &&
+				fulfillment === undefined &&
+				receiverKind === inputs.receiverKind
 				? inputs
-				: { parameterKinds: parameters ?? inputs.parameterKinds, receiverKind };
+				: {
+						parameterKinds: parameters ?? inputs.parameterKinds,
+						parameterFulfillmentKinds: fulfillment ?? inputs.parameterFulfillmentKinds,
+						receiverKind,
+					};
 		};
 		let callerWakeups = 0;
 		let calleeWakeups = 0;
@@ -2800,6 +2966,9 @@ export class CoreProgramFlowEngine {
 				const seed = external.get(functionId) ? semantics.top : 0;
 				let inputs: CoreProgramFlowKindInputs = {
 					parameterKinds: Array<number>(fn.parameterCount).fill(seed),
+					parameterFulfillmentKinds: promiseFacts
+						? Array<number>(fn.parameterCount).fill(seed === 0 ? 0 : CORE_UNKNOWN_PROMISE)
+						: undefined,
 					receiverKind: seed,
 				};
 				for (const { caller, site } of incoming.get(functionId) ?? []) {
@@ -2809,6 +2978,7 @@ export class CoreProgramFlowEngine {
 				const previousInputs = boundaryInputs.get(functionId);
 				if (sameInputs(previousInputs, inputs)) continue;
 				Object.freeze(inputs.parameterKinds);
+				Object.freeze(inputs.parameterFulfillmentKinds);
 				boundaryInputs.set(functionId, Object.freeze(inputs));
 				reset = true;
 			}
@@ -2820,6 +2990,7 @@ export class CoreProgramFlowEngine {
 				summaries.set(id, {
 					...boundaryInputs.get(id)!,
 					returnKind: 0,
+					returnFulfillmentKind: 0,
 					returnHeapBrand: null,
 				});
 			}
@@ -2899,6 +3070,13 @@ export class CoreProgramFlowEngine {
 						(calleeSummaries ??= new Map()).set(callee, summaries.get(callee)!);
 					}
 				}
+				const callbacks = promiseCallbacks.get(functionId);
+				for (const possible of callbacks?.values() ?? [])
+					for (const callee of possible.functions) {
+						const current = summaries.get(callee);
+						if (current !== undefined)
+							(calleeSummaries ??= new Map()).set(callee, current);
+					}
 				const alternatives = recordAlternativeIndices.get(functionId);
 				// A reused value snapshot can outlive this solve. Its lazy queries own only the
 				// summaries of the functions it calls and the aggregate visible to this transfer.
@@ -2957,11 +3135,13 @@ export class CoreProgramFlowEngine {
 				const saved = reusable ? previous!.valueAnalyses.get(functionId) : undefined;
 				let values: Analysis;
 				let returnKind = 0;
+				let returnFulfillmentKind = 0;
 				let returnHeapBrand: CoreHeapBrandState = null;
 				let returnRecord: CoreRecordValueKind;
 				if (saved !== undefined) {
 					values = saved;
 					returnKind = prior!.returnKind;
+					returnFulfillmentKind = prior!.returnFulfillmentKind;
 					returnHeapBrand = prior!.returnHeapBrand;
 					returnRecord = prior!.returnRecord;
 					evaluationsReused++;
@@ -2998,11 +3178,91 @@ export class CoreProgramFlowEngine {
 						demandedValues = [...roots];
 						demands.set(functionId, demandedValues);
 					}
+					const webResult = webFetchStable
+						? (instruction: CoreInstructionId) =>
+								coreWebFetchResult(this.#program, fn, instruction)
+						: undefined;
 					values = semantics.analyze(this.#program, fn, cfg, {
 						context,
 						...resultReaders,
+						operationResultMask(instruction, result) {
+							const contract = webResult?.(instruction);
+							if (contract?.kind === "return") return contract.value.mask;
+							if (contract?.kind === "resolve" || contract?.kind === "fulfill")
+								return semantics.object;
+							return resultReaders.operationResultMask?.(instruction, result);
+						},
+						operationFulfillmentKind: promiseFacts
+							? (instruction) => {
+									const contract = webResult?.(instruction);
+									if (contract?.kind === "resolve" || contract?.kind === "fulfill")
+										return contract.value.mask;
+									return (
+										(hostSlots === undefined
+											? undefined
+											: coreHostResult(this.#program, fn, instruction, hostSlots, true)
+													?.fulfilled?.mask) ??
+										resultReaders.operationFulfillmentKind?.(instruction)
+									);
+								}
+							: undefined,
+						promiseArgumentIsPrivate: promiseFacts
+							? (instruction, operand) => {
+									if (operand < 2 || fn.instructionOpcodeName(instruction) !== "call")
+										return false;
+									const site = byInstruction.get(instruction);
+									return (
+										site?.arguments !== undefined &&
+										!site.targets.opaque &&
+										!site.targets.anyScript &&
+										site.targets.functions.length !== 0 &&
+										site.arguments[operand - 2] ===
+											fn.kernel.operandAt(
+												fn.kernel.instructionOperandStart(instruction) + operand,
+											) &&
+										site.targets.functions.every((callee) =>
+											parameterIsPrivate(callee, operand - 2),
+										)
+									);
+								}
+							: undefined,
+						promiseCallback:
+							callbacks === undefined
+								? undefined
+								: (value) => {
+										const possible = callbacks.get(value);
+										if (possible === undefined) return undefined;
+										let settledKind = 0;
+										let resolvedKind = 0;
+										let returnsQuiescentValue = true;
+										for (const callee of possible.functions) {
+											const summary = calleeSummaries?.get(callee);
+											if (summary === undefined) return undefined;
+											const primitive = summary.returnKind & ~semantics.object;
+											settledKind |= corePromiseAdoptedKinds(
+												summary.returnKind,
+												summary.returnFulfillmentKind,
+											);
+											resolvedKind |= primitive;
+											if ((summary.returnKind & semantics.object) !== 0) {
+												if (corePromiseIsProven(summary.returnFulfillmentKind)) {
+													resolvedKind |= summary.returnFulfillmentKind;
+												} else {
+													resolvedKind |= CORE_UNKNOWN_PROMISE;
+													returnsQuiescentValue = false;
+												}
+											}
+										}
+										return {
+											maySkip: possible.nonCallable !== false,
+											settledKind,
+											resolvedKind,
+											returnsQuiescentValue,
+										};
+									},
 						demandedValues,
 						parameterMasks: summary.parameterKinds,
+						parameterFulfillmentKinds: summary.parameterFulfillmentKinds,
 						receiverMask: summary.receiverKind,
 					});
 					functionsEvaluated++;
@@ -3028,6 +3288,21 @@ export class CoreProgramFlowEngine {
 							}
 						}
 					if (fn.isAsync || fn.isGenerator) returnHeapBrand = undefined;
+					if (returnKind & semantics.object) {
+						if (!promiseFacts || fn.isGenerator)
+							returnFulfillmentKind = CORE_UNKNOWN_PROMISE;
+						else
+							for (const block of cfg.reachable) {
+								const terminator = fn.blockTerminator(block);
+								if (fn.instructionKind(terminator) !== "return") continue;
+								const returned = fn.kernel.operandAt(
+									fn.kernel.instructionOperandStart(terminator),
+								);
+								returnFulfillmentKind |= fn.isAsync
+									? semantics.adoptedKind(values, returned)
+									: semantics.fulfillmentKind(values, returned);
+							}
+					}
 					returnRecord =
 						returnKind === 0
 							? undefined
@@ -3036,12 +3311,14 @@ export class CoreProgramFlowEngine {
 				valueAnalyses.set(functionId, values);
 				if (
 					returnKind !== summary.returnKind ||
+					returnFulfillmentKind !== summary.returnFulfillmentKind ||
 					returnHeapBrand !== summary.returnHeapBrand ||
 					!sameCoreRecordValueKind(returnRecord, summary.returnRecord)
 				) {
 					summaries.set(functionId, {
 						...summary,
 						returnKind,
+						returnFulfillmentKind,
 						returnRecord,
 						returnHeapBrand,
 					});
@@ -3078,6 +3355,7 @@ export class CoreProgramFlowEngine {
 				if (returnChanged || !sameInputs(prior, next)) {
 					changedFunctions.add(functionId);
 					Object.freeze(next.parameterKinds);
+					Object.freeze(next.parameterFulfillmentKinds);
 					Object.freeze(next);
 				} else summaries.set(functionId, prior!);
 				if (returnChanged) {
@@ -3126,6 +3404,7 @@ export class CoreProgramFlowEngine {
 			sourceClosed: targets.sourceClosed,
 			targets,
 			dataEpoch,
+			webFetchStable,
 			external,
 			boundaryInputs,
 			valueAnalyses,

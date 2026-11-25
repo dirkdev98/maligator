@@ -163,6 +163,26 @@ reproduce it through `scripts/test262.ts --filter <path> --variant strict --poli
 instead of assuming it can be built as a standalone program. Select the intended
 dimensions with explicit `--backend` and `--mode` arguments.
 
+## Host result contracts
+
+Add results in [host-result-contracts.ts](../src/compiler/shared/host-result-contracts.ts).
+Trace the installed callable through the native implementation and check every
+normal exit. If the API returns a Promise, check how the runtime settles it.
+Direct fulfillment stores the payload. Resolution can read and invoke its
+`then` method.
+
+Give each supported overload its successful result kinds. Use a selector for
+argument-dependent results and leave the union in place when the caller cannot
+prove the selector. Options read by queued work need a stability proof through
+that read.
+
+Connect the contract to an installer-backed binding or a proved member lookup.
+Check the installed inventory and add an optimized-output test for the ordinary
+call path in [host-result-contracts.test.ts](../tests/host-result-contracts.test.ts).
+Pair it with an executable case that preserves the relevant call, suspension,
+or failure. Include a replacement or uncertain receiver when member identity
+is part of the proof.
+
 ## Tiers
 
 | Tier  | Command              | Policy                                 | Intended use                                                                                     |

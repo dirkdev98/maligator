@@ -5,6 +5,7 @@ import type { CoreCompilation } from "../core/core-compilation.ts";
 import { coreConstructorSlotReserve } from "../core/core-constructor-layout.ts";
 import { coreForeignCalls, coreForeignSlots } from "../core/core-foreign-calls.ts";
 import {
+	CORE_AWAIT_RESULT_KIND_ATTRIBUTE,
 	CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE,
 	CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE,
 	CORE_EXACT_CALL_ARGUMENT_REPRESENTATIONS_ATTRIBUTE,
@@ -231,6 +232,7 @@ const FUNCTION_INDEX_ATTRIBUTES: ReadonlySet<string> = new Set([
 
 const CORE_INTERNAL_ATTRIBUTES: ReadonlySet<string> = new Set([
 	"sourceCall",
+	CORE_AWAIT_RESULT_KIND_ATTRIBUTE,
 	CORE_GENERATOR_FUSION_TWIN_ATTRIBUTE,
 	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
 	CORE_PRIMORDIAL_BINDING_TWIN_ATTRIBUTE,

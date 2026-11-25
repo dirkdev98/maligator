@@ -12,6 +12,7 @@ import { coreExactHeapBrand } from "./core-heap-brands.ts";
 import type { CoreExactHeapBrand } from "./core-heap-brands.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_AWAIT_RESULT_KIND_ATTRIBUTE,
 	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE,
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
@@ -663,6 +664,7 @@ export class CoreEditor {
 		let key: string | undefined;
 		if (opcode === "loadProperty" || opcode === "loadPropertyStatic")
 			key = CORE_RECORD_FIELD_KIND_ATTRIBUTE;
+		else if (opcode === "awaitFulfilled") key = CORE_AWAIT_RESULT_KIND_ATTRIBUTE;
 		else if (
 			opcode === "callForeign" ||
 			["call-completion", "construct-completion"].includes(
@@ -672,7 +674,9 @@ export class CoreEditor {
 		)
 			key = CORE_CALL_RESULT_KIND_ATTRIBUTE;
 		if (key === undefined)
-			throw new Error("Normal-result facts require a call or property read");
+			throw new Error(
+				"Normal-result facts require a call, property read, or successful await",
+			);
 		if (
 			facts !== undefined &&
 			(!compilerValueKindMaskIsValid(facts.mask) ||

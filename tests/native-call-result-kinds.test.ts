@@ -28,6 +28,74 @@ import {
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import { inspectStaticValueFunctions } from "./helpers/static-values.ts";
 
+describe("successful await result facts", () => {
+	it.each([
+		["await 42", "number"],
+		["await Promise.resolve('text')", "string"],
+		["await forward()", "string"],
+		["await readLater(leaf())", "string"],
+		["await Promise.resolve(leaf())", "string"],
+		["await Promise.resolve('text').then().catch().finally()", "string"],
+		["await Promise.all([1, 2])", "number"],
+		["await Promise.reject(42).catch(() => 'recovered')", "string"],
+		["await Promise.resolve(42).then(() => 'changed').finally(() => false)", "string"],
+	])("folds the type observation of %s and keeps the suspension", (expression, type) => {
+		const result = inspectStaticValueFunctions(
+			`const leaf = async () => "text";
+			const forward = async () => leaf();
+			const readLater = async (promise) => await promise;
+			async function compute() { const value = ${expression}; return typeof value === "${type}"; }
+			globalThis.compute = compute;`,
+			["compute"],
+			{ closed: true },
+		).get("compute")!;
+		expect(result.native.body.instructions.some((op) => op.opcode === "AWAIT")).toBe(
+			true,
+		);
+		expect(
+			result.native.body.instructions.some((op) => op.opcode === "TYPEOF_COMPARE"),
+		).toBe(false);
+	});
+
+	it.each([
+		"Object.defineProperty(promise, 'constructor', { value: undefined }); Object.defineProperty(promise, 'then', { value(resolve) { resolve(4); } });",
+		"globalThis.promise = promise;",
+	])("keeps the type observation when a producer can be altered", (escape) => {
+		const result = inspectStaticValueFunctions(
+			`async function compute() {
+				const promise = Promise.resolve('text');
+				${escape}
+				const value = await promise;
+				return typeof value === "string";
+			}
+			globalThis.compute = compute;`,
+			["compute"],
+			{ closed: true },
+		).get("compute")!;
+		expect(
+			result.native.body.instructions.some((op) => op.opcode === "TYPEOF_COMPARE"),
+		).toBe(true);
+	});
+
+	it("keeps the type observation when a rest parameter can expose the Promise", () => {
+		const result = inspectStaticValueFunctions(
+			`async function collect(...values) { return values; }
+			async function compute() {
+				const promise = Promise.resolve(1);
+				const alias = (await collect(promise))[0];
+				Object.defineProperty(alias, "then", { value: () => "changed" });
+				return typeof (await promise.then()) === "string";
+			}
+			globalThis.compute = compute;`,
+			["compute"],
+			{ closed: true },
+		).get("compute")!;
+		expect(
+			result.native.body.instructions.some((op) => op.opcode === "TYPEOF_COMPARE"),
+		).toBe(true);
+	});
+});
+
 function inspectCall(body: string, caller: string, kind = "function") {
 	const out = inspectStaticValueFunctions(
 		`const leaf=${kind} leaf(value,hook){try{hook();${body}}catch(error){hook(error);throw error;}};

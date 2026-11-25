@@ -855,7 +855,7 @@ const recordFieldAccessIndices = new WeakMap<
 const MAXIMUM_RECORD_PREFIX_WORK = 256;
 const COMPLETE_RECORD_PREFIX = [Infinity] as const;
 
-function recordAliasParameter(
+export function coreTerminatorAliasParameter(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 	operand: number,
@@ -1361,7 +1361,11 @@ function mergedRecordFieldAccesses(
 				if (--remaining < 0) break;
 				const instruction = fn.kernel.useInstruction(use);
 				if (fn.instructionKind(instruction) !== "operation") {
-					const target = recordAliasParameter(fn, instruction, fn.kernel.useOperand(use));
+					const target = coreTerminatorAliasParameter(
+						fn,
+						instruction,
+						fn.kernel.useOperand(use),
+					);
 					if (target !== undefined && target !== null) pending.push(target);
 					continue;
 				}
@@ -1465,7 +1469,11 @@ function mergedRecordFieldAccesses(
 				const kind = fn.instructionKind(instruction);
 				if (kind !== "operation") {
 					if (kind === "return") continue;
-					const target = recordAliasParameter(fn, instruction, fn.kernel.useOperand(use));
+					const target = coreTerminatorAliasParameter(
+						fn,
+						instruction,
+						fn.kernel.useOperand(use),
+					);
 					if (target !== undefined && target !== null) pending.push(target);
 					else if (target === null || !["branch", "guard", "switch"].includes(kind)) {
 						barriers.add(instruction);
@@ -1595,7 +1603,7 @@ function recordFieldAccesses(
 				if (fn.kernel.useLive(use) === 0) continue;
 				const instruction = fn.kernel.useInstruction(use);
 				if (fn.instructionKind(instruction) !== "operation") {
-					const parameter = recordAliasParameter(
+					const parameter = coreTerminatorAliasParameter(
 						fn,
 						instruction,
 						fn.kernel.useOperand(use),

@@ -83,6 +83,7 @@ import {
 import type { CoreInstanceMethodHints } from "./core-instance-method-hints.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_AWAIT_RESULT_KIND_ATTRIBUTE,
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
 	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE,
@@ -6108,6 +6109,34 @@ export function runCoreCrossCallTransforms(
 		refreshFlow();
 	const { calls: callKindsByCaller, fields: recordKindsByCaller } =
 		discoverProgramNormalResultFacts(program, analyses, flow, readValueKinds);
+	const awaitKindsByCaller = new Map<
+		CoreFunctionId,
+		Array<{
+			instruction: CoreInstructionId;
+			facts: CoreNormalResultFacts | undefined;
+		}>
+	>();
+	const awaitOpcode = program.registry.get("awaitFulfilled")?.id;
+	let awaitResults: CoreProgramValueKindState | undefined;
+	for (const functionId of flow.reachability.liveFunctions) {
+		const fn = program.function(functionId);
+		for (const instruction of fn.instructionIds()) {
+			if (fn.kernel.instructionOpcode(instruction) !== awaitOpcode) continue;
+			const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+			const mask = (awaitResults ??= readValueKinds())
+				.values(functionId)
+				.latticeMask(value);
+			const facts = compilerValueKindMaskIsValid(mask) ? { mask } : undefined;
+			if (
+				fn.instructionAttributes(instruction)[CORE_AWAIT_RESULT_KIND_ATTRIBUTE] ===
+				facts?.mask
+			)
+				continue;
+			let edits = awaitKindsByCaller.get(functionId);
+			if (edits === undefined) awaitKindsByCaller.set(functionId, (edits = []));
+			edits.push({ instruction, facts });
+		}
+	}
 	const callIdentitiesByCaller = discoverProgramCallResultIdentities(
 		program,
 		analyses,
@@ -6117,16 +6146,20 @@ export function runCoreCrossCallTransforms(
 	if (
 		callKindsByCaller.size > 0 ||
 		callIdentitiesByCaller.size > 0 ||
+		awaitKindsByCaller.size > 0 ||
 		recordKindsByCaller.size > 0
 	) {
 		const finishCallers: Array<() => CoreCrossCallFunctionOptimizationResult> = [];
 		for (const functionId of new Set([
 			...callKindsByCaller.keys(),
 			...callIdentitiesByCaller.keys(),
+			...awaitKindsByCaller.keys(),
 			...recordKindsByCaller.keys(),
 		])) {
 			const fn = program.function(functionId);
 			const editor = CoreEditor.open(program, functionId);
+			for (const { instruction, facts } of awaitKindsByCaller.get(functionId) ?? [])
+				editor.setNormalResultFacts(instruction, facts);
 			for (const fact of callKindsByCaller.get(functionId) ?? []) {
 				const { instruction } = fact;
 				if (!fn.isInstructionLive(instruction)) continue;

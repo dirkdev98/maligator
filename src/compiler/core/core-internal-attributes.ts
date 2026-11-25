@@ -23,6 +23,7 @@ export const CORE_EXACT_BINARY_INPUT_KIND_MASKS_ATTRIBUTE = "exactBinaryInputKin
 export const CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE = "exactScalarAfterTdz";
 export const CORE_STATIC_SELECTION_FALLBACK_ATTRIBUTE = "staticSelectionFallback";
 export const CORE_CALL_RESULT_KIND_ATTRIBUTE = "callResultKindMask";
+export const CORE_AWAIT_RESULT_KIND_ATTRIBUTE = "awaitResultKindMask";
 export const CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE = "normalResultIntegerRange";
 export const CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE = "normalResultHeapBrand";
 export const CORE_RECORD_FIELD_KIND_ATTRIBUTE = "recordFieldKindMask";
@@ -33,9 +34,14 @@ export const CORE_KNOWN_OWN_SLOT_ATTRIBUTE = "knownOwnSlot";
 export function coreUnscopedInstructionAttributes(
 	attributes: CoreInstructionAttributes,
 ): CoreInstructionAttributes {
-	if (attributes[CORE_KNOWN_OWN_DATA_ATTRIBUTE] === undefined) return attributes;
+	if (
+		attributes[CORE_KNOWN_OWN_DATA_ATTRIBUTE] === undefined &&
+		attributes[CORE_AWAIT_RESULT_KIND_ATTRIBUTE] === undefined
+	)
+		return attributes;
 	const result = { ...attributes };
 	delete result[CORE_KNOWN_OWN_DATA_ATTRIBUTE];
+	delete result[CORE_AWAIT_RESULT_KIND_ATTRIBUTE];
 	return result;
 }
 

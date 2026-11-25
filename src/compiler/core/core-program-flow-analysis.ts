@@ -153,7 +153,10 @@ export const CORE_PROGRAM_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreProgra
 		owner: CORE_OPTIMIZATION_OWNER.programFlowConvergence,
 		functionDependencies: CORE_PROGRAM_FLOW_ANALYSIS.functionDependencies,
 		programDependencies: CORE_PROGRAM_FLOW_ANALYSIS.programDependencies,
-		contextIdentity: CORE_PROGRAM_FLOW_ANALYSIS.contextIdentity,
+		contextIdentity(context) {
+			const { primordialPolicy, realms } = context.facts.world;
+			return `${context.facts.closure.sourceClosure.kind}:${primordialPolicy}:${realms}`;
+		},
 		compute({ program, context, request, previous, get, getProgramFlow }) {
 			const prior = previous as CoreProgramValueKindAnalysis | undefined;
 			const { targets, summaries, flowRevision } = get(
