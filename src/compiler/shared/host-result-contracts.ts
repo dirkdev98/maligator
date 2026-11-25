@@ -117,8 +117,8 @@ function nativeConstructor(
 	};
 }
 
-function installedObject(hostObject: HostObjectKind): HostResultContract {
-	return { kind: "return", value: { mask: OBJECT, hostObject, installedObject: true } };
+function installedObject(hostObject: HostObjectKind, mask = OBJECT): HostResultContract {
+	return { kind: "return", value: { mask, hostObject, installedObject: true } };
 }
 
 function streamConstructor(hostConstructor: HostObjectKind): HostResultContract {
@@ -652,6 +652,12 @@ const maligatorWorkers = exportsWithContracts(
 	[hostObject("WorkerCapabilities"), "capabilities"],
 	[hostObject("WorkerUrl"), "createWorkerUrl"],
 	[hostObject("WorkerMessage", undefined, OBJECT | UNDEFINED), "receiveMessageOnPort"],
+	[installedObject("MaligatorMessagePort", OBJECT | NULL), "parentPort"],
+	[installedObject("WorkerUrl", OBJECT | NULL), "poolEntry"],
+	[
+		dynamic("The isolate receives an application-supplied worker data value."),
+		"workerData",
+	],
 	[
 		{ kind: "never", reason: "Ports are created by the channel and worker factories." },
 		"MessagePort",
@@ -1335,6 +1341,15 @@ export const DISK_HANDLE_EXPORTS = exportsWithContracts(
 	[{ kind: "return", value: { mask: OBJECT, platformObject: "watcher" } }, "watch"],
 	[returned(OBJECT), "FileSystemError"],
 );
+
+export const NODE_TEST_EXPORT_TARGETS: ReadonlyMap<string, string> = new Map([
+	["test", "registerTest"],
+	["it", "registerTest"],
+	["default", "registerTest"],
+	["module.exports", "registerTest"],
+	["describe", "registerSuite"],
+	["suite", "registerSuite"],
+]);
 
 export const PLATFORM_SOURCE_EXPORTS = new Map([
 	[

@@ -15,6 +15,7 @@ import {
 	PLATFORM_OBJECT_RESULTS,
 	EMBEDDED_ASSET_RESULTS,
 	HOST_RESULT_CONTRACTS,
+	NODE_TEST_EXPORT_TARGETS,
 } from "../shared/host-result-contracts.ts";
 import type {
 	HostObjectKind,
@@ -532,10 +533,15 @@ function nodeTestSourceBindings(program: CoreProgram, context: CoreCompilationCo
 	) {
 		for (const { module, kind, name, slot } of provider.state) {
 			if (module !== provider.id) continue;
-			if (kind === "default" || (kind === "binding" && ["0:test", "0:it"].includes(name)))
-				slots.set(slot, "registerTest");
-			if (kind === "binding" && ["0:describe", "0:suite"].includes(name))
-				slots.set(slot, "registerSuite");
+			const exported =
+				kind === "default"
+					? "default"
+					: kind === "binding" && name.startsWith("0:")
+						? name.slice(2)
+						: undefined;
+			const target =
+				exported === undefined ? undefined : NODE_TEST_EXPORT_TARGETS.get(exported);
+			if (target !== undefined) slots.set(slot, target);
 		}
 	}
 	nodeTestSlots.set(data, slots);
@@ -655,6 +661,12 @@ export function coreHostResult(
 	membersStable = false,
 ): CoreHostCompletion | undefined {
 	const opcode = fn.instructionOpcodeName(instruction);
+	if (opcode === "loadGlobal") {
+		const installed = hostSlotContract(fn, instruction, slots);
+		return installed?.kind === "return" && installed.value.installedObject
+			? coreHostCompletion(program, fn, instruction, installed, locked)
+			: undefined;
+	}
 	const contract =
 		opcode === "loadPropertyStatic" || opcode === "loadProperty"
 			? (assetMember(program, fn, instruction, slots, "properties", 4) ??
@@ -950,7 +962,11 @@ export function specializeCoreHostResults(compilation: ConstructedCoreCompilatio
 		const fn = program.function(functionId);
 		let editor: CoreEditor | undefined;
 		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
+			if (
+				fn.instructionKind(instruction) !== "operation" ||
+				fn.instructionOpcodeName(instruction) === "loadGlobal"
+			)
+				continue;
 			const facts = coreHostResult(program, fn, instruction, slots, locked)?.immediate;
 			if (facts === undefined) continue;
 			(editor ??= CoreEditor.open(program, functionId)).setNormalResultFacts(

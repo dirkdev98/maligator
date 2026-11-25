@@ -9,6 +9,8 @@ import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.t
 import {
 	HOST_GLOBAL_INSTALLERS,
 	HOST_MODULES,
+	lookupHostModule,
+	SOURCE_HOST_MODULES,
 } from "../src/compiler/frontend/host-modules.ts";
 import {
 	buildModuleGraph,
@@ -33,6 +35,8 @@ import {
 	PLATFORM_OBJECT_RESULTS,
 	HOST_RESULT_CONTRACTS,
 	NODE_FILE_HANDLE_RESULTS,
+	NODE_TEST_EXPORT_TARGETS,
+	PLATFORM_SOURCE_EXPORTS,
 	TEST_MATCHER_NAMES,
 	GLOBAL_HOST_CONSTRUCTORS,
 	GLOBAL_HOST_ABSTRACT_CONSTRUCTORS,
@@ -268,6 +272,7 @@ it.each([
 	["os.uptime()", "number", 'import os from "os";'],
 	["querystring.escape(path)", "string", 'import querystring from "node:querystring";'],
 	["types.isPromise(path)", "boolean", 'import types from "node:util/types";'],
+	["parentPort", "number", 'import { parentPort } from "maligator:workers";'],
 ])(
 	"uses the contract through the installer selected for %s",
 	(expression, type, imports) => {
@@ -548,6 +553,81 @@ it("accounts for all installed callable module exports", () => {
 			? [root]
 			: [];
 	});
+	for (const definition of PLATFORM_MODULES) {
+		if (definition.kind !== "native") continue;
+		for (const member of definition.exports) {
+			if (
+				member.contract.value === "callable" &&
+				!HOST_RESULT_CONTRACTS.get(definition.installer)?.has(member.name)
+			)
+				missing.push(`${definition.id}.${member.name}`);
+		}
+	}
+	expect(missing).toEqual([]);
+});
+
+it("accounts for runtime exports of all packaged source modules", () => {
+	const modules = new Map([
+		...SOURCE_HOST_MODULES,
+		...PLATFORM_MODULES.flatMap((module) =>
+			module.kind === "source" ? [[module.id, module.sourceFile] as const] : [],
+		),
+	]);
+	const missing: Array<string> = [];
+	for (const [id, file] of modules) {
+		const url = new URL(`../src/${file}`, import.meta.url);
+		const source = readFileSync(url, "utf8");
+		const { ast } = parseModule(
+			file.endsWith(".ts") ? stripCompactTypes(source, url.pathname) : source,
+		);
+		const nativeImports = new Set<string>();
+		for (const node of ast.body) {
+			if (node.type !== "ImportDeclaration") continue;
+			const installer = lookupHostModule(node.source.value)?.installer;
+			if (installer === undefined) continue;
+			for (const specifier of node.specifiers) {
+				if (
+					specifier.type === "ImportSpecifier" &&
+					specifier.imported.type === "Identifier" &&
+					HOST_RESULT_CONTRACTS.get(installer)?.has(specifier.imported.name)
+				)
+					nativeImports.add(specifier.local.name);
+			}
+		}
+		const contracts = PLATFORM_SOURCE_EXPORTS.get(id);
+		const check = (name: string, native = false) => {
+			const target =
+				id === "node:test" ? (NODE_TEST_EXPORT_TARGETS.get(name) ?? name) : name;
+			if (!native && !contracts?.has(target)) missing.push(`${id}.${name}`);
+		};
+		for (const node of ast.body) {
+			if (node.type === "ExportAllDeclaration")
+				missing.push(`${id} export from ${node.source.value}`);
+			if (node.type === "ExportDefaultDeclaration") check("default");
+			if (node.type !== "ExportNamedDeclaration") continue;
+			const declaration = node.declaration;
+			if (
+				declaration?.type === "FunctionDeclaration" ||
+				declaration?.type === "ClassDeclaration"
+			)
+				check(declaration.id!.name);
+			if (declaration?.type === "VariableDeclaration") {
+				for (const binding of declaration.declarations)
+					check(binding.id.type === "Identifier" ? binding.id.name : binding.id.type);
+			}
+			for (const specifier of node.specifiers) {
+				const name =
+					specifier.exported.type === "Identifier"
+						? specifier.exported.name
+						: String(specifier.exported.value);
+				const native =
+					(node.source === null || node.source === undefined) &&
+					specifier.local.type === "Identifier" &&
+					nativeImports.has(specifier.local.name);
+				check(name, native);
+			}
+		}
+	}
 	expect(missing).toEqual([]);
 });
 
