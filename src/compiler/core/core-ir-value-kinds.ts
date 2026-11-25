@@ -1264,6 +1264,40 @@ function valueKindSnapshot(
 	});
 }
 
+function valueKindRevisits(transfers: KindTransferBuffer, valueCapacity: number) {
+	if (transfers.inputs.length === 0) return undefined;
+	const heads = new Int32Array(valueCapacity);
+	for (let index = 0; index < transfers.outputs.length; index++)
+		heads[transfers.outputs[index]!] = index + 1;
+	let needsRevisits = false;
+	for (let index = 0; index < transfers.outputs.length && !needsRevisits; index++) {
+		const start = transfers.inputStarts[index]!;
+		const end = start + transfers.inputCounts[index]!;
+		for (let cursor = start; cursor < end; cursor++) {
+			if (heads[transfers.inputs[cursor]!]! <= index) continue;
+			needsRevisits = true;
+			break;
+		}
+	}
+	if (!needsRevisits) return undefined;
+	// A row with a later or cyclic producer must wake when its inputs change.
+	// Reuse the producer-order scratch for the heads of the reverse edges.
+	heads.fill(-1);
+	const consumers = new Uint32Array(transfers.inputs.length);
+	const next = new Int32Array(transfers.inputs.length);
+	for (let index = 0; index < transfers.outputs.length; index++) {
+		const start = transfers.inputStarts[index]!;
+		const end = start + transfers.inputCounts[index]!;
+		for (let cursor = start; cursor < end; cursor++) {
+			const input = transfers.inputs[cursor]!;
+			consumers[cursor] = index;
+			next[cursor] = heads[input]!;
+			heads[input] = cursor;
+		}
+	}
+	return { heads, consumers, next, queued: new Uint8Array(transfers.outputs.length) };
+}
+
 function solveCoreValueKinds(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
@@ -1543,21 +1577,7 @@ function solveCoreValueKinds(
 				}
 			}
 		}
-	const dependentHeads = new Int32Array(fn.valueCapacity);
-	dependentHeads.fill(-1);
-	const dependentTransfers = new Uint32Array(transfers.inputs.length);
-	const dependentNext = new Int32Array(transfers.inputs.length);
-	let dependentCount = 0;
-	for (let index = 0; index < transfers.outputs.length; index++) {
-		const inputStart = transfers.inputStarts[index]!;
-		const inputCount = transfers.inputCounts[index]!;
-		for (let offset = 0; offset < inputCount; offset++) {
-			const input = transfers.inputs[inputStart + offset]!;
-			dependentTransfers[dependentCount] = index;
-			dependentNext[dependentCount] = dependentHeads[input]!;
-			dependentHeads[input] = dependentCount++;
-		}
-	}
+	const revisits = valueKindRevisits(transfers, fn.valueCapacity);
 	const transferKinds = transfers.kinds;
 	const transferOutputs = transfers.outputs;
 	const transferConstants = transfers.constants;
@@ -1579,27 +1599,11 @@ function solveCoreValueKinds(
 			)).kindMask(value, point)
 		);
 	};
-	const wakeDependents = (
-		value: CoreValueId,
-		queued: Uint8Array,
-		queue: Array<number>,
-	): void => {
-		for (let dependency = dependentHeads[value]!; dependency >= 0;) {
-			const transfer = dependentTransfers[dependency]!;
-			dependency = dependentNext[dependency]!;
-			if (queued[transfer] !== 0) continue;
-			queued[transfer] = 1;
-			queue.push(transfer);
-		}
-	};
-	const queue = new Array<number>(transferOutputs.length);
-	for (let index = 0; index < queue.length; index++) queue[index] = index;
-	const queued = new Uint8Array(transferOutputs.length);
-	queued.fill(1);
-	let cursor = 0;
-	while (cursor < queue.length) {
-		const index = queue[cursor++]!;
-		queued[index] = 0;
+	const deferred: Array<number> = [];
+	const initialCount = transferOutputs.length;
+	for (let cursor = 0; cursor < initialCount + deferred.length; cursor++) {
+		const index = cursor < initialCount ? cursor : deferred[cursor - initialCount]!;
+		if (cursor >= initialCount) revisits!.queued[index] = 0;
 		const output = transferOutputs[index]!;
 		const transfer = transferKinds[index]!;
 		const start = transferInputStarts[index]!;
@@ -1659,7 +1663,14 @@ function solveCoreValueKinds(
 		if (next === masks[output] && previousFulfillment === fulfillmentKinds?.[output])
 			continue;
 		masks[output] = next;
-		wakeDependents(output, queued, queue);
+		if (revisits === undefined) continue;
+		for (let use = revisits.heads[output]!; use >= 0; use = revisits.next[use]!) {
+			const consumer = revisits.consumers[use]!;
+			// The rest of the original sweep is already pending in row order.
+			if (consumer > cursor || revisits.queued[consumer] !== 0) continue;
+			revisits.queued[consumer] = 1;
+			deferred.push(consumer);
+		}
 	}
 	for (const value of numericIntegerSeeds)
 		if (masks[value] === COMPILER_VALUE_KIND_NUMBER)
