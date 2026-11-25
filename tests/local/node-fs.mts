@@ -1,4 +1,5 @@
 import fsDefault, {
+	Dirent,
 	Stats,
 	accessSync,
 	appendFileSync,
@@ -58,6 +59,17 @@ function check(name: string, ok: boolean): void {
 function eq(name: string, got: unknown, want: unknown): void {
 	check(name, got === want);
 }
+
+const suppliedDirent = new Dirent(42, 1, false);
+check(
+	"Dirent construction preserves the supplied name",
+	typeof suppliedDirent.name === "number",
+);
+check(
+	"Dirent construction preserves the supplied parent path",
+	typeof suppliedDirent.parentPath === "boolean",
+);
+
 function rejectsNul(name: string, operation: () => unknown): void {
 	let rejected = false;
 	try {

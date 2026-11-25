@@ -127,7 +127,7 @@ function streamConstructor(hostConstructor: HostObjectKind): HostResultContract 
 
 const fs = exportsWithContracts(
 	[nativeConstructor("Stats"), "Stats"],
-	[nativeConstructor("Dirent"), "Dirent"],
+	[nativeConstructor("ConstructedDirent"), "Dirent"],
 	[neverReturns("Directory handles are allocated by opendir."), "Dir"],
 	[hostObject("Dir"), "opendirSync"],
 	[selected("return", { kind: "encoding", argument: 1 }), "readFileSync"],
@@ -1739,6 +1739,7 @@ export type HostObjectKind =
 	| "DOMException"
 	| "Dir"
 	| "Dirent"
+	| "ConstructedDirent"
 	| "DirIterator"
 	| "FileHandle"
 	| "Stats"
@@ -2844,6 +2845,7 @@ export const HOST_OBJECT_RESULTS: {
 			[hostObject("DirIterator"), "[Symbol.asyncIterator]"],
 		),
 		Dirent: fileTypePredicates,
+		ConstructedDirent: fileTypePredicates,
 		DirIterator: exportsWithContracts([fulfilled(OBJECT), "next", "return"]),
 		FileHandle: NODE_FILE_HANDLE_RESULTS.methods,
 		Stats: fileTypePredicates,
@@ -3410,11 +3412,13 @@ export const HOST_OBJECT_RESULTS: {
 		),
 		TemporaryDirectory: exportsWithContracts([returned(STRING), "path"]),
 		TemporaryDirectorySync: exportsWithContracts([returned(STRING), "path"]),
-		Dirent: exportsWithContracts([
-			returned(STRING | UNDEFINED),
+		Dirent: exportsWithContracts([returned(STRING | UNDEFINED), "name", "parentPath"]),
+		ConstructedDirent: exportsWithContracts([
+			dynamic(
+				"The constructor stores the supplied name and parent path without conversion.",
+			),
 			"name",
 			"parentPath",
-			"path",
 		]),
 		Navigator: exportsWithContracts([returned(NUMBER), "hardwareConcurrency"]),
 		ByteLengthQueuingStrategy: exportsWithContracts(

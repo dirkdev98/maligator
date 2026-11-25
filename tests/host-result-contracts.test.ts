@@ -254,6 +254,19 @@ it("retains member observations when TLS can dispatch a native connection listen
 });
 
 it.each([
+	["name", "number"],
+	["parentPath", "boolean"],
+])("keeps an observation of the caller-supplied Dirent %s", (field, type) => {
+	const operations = inspectHostCall(
+		`new Dirent(42, 1, false).${field}`,
+		type,
+		"",
+		'import { Dirent } from "node:fs";',
+	);
+	expect(operations).toContain("typeofCompare");
+});
+
+it.each([
 	[
 		"readFileSync(path).readUInt8(0)",
 		"number",
