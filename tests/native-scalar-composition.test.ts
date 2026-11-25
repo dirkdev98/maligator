@@ -1373,8 +1373,8 @@ describe("known builtin scalar result storage", () => {
 		["Number.parseInt(left, right)", "parseInt", "number"],
 		["'text'.charCodeAt(left)", "String.prototype.charCodeAt", "number"],
 		["String(left).charCodeAt(+right)", "String.prototype.charCodeAt", "number"],
-		["String(left).indexOf(right)", "String.prototype.indexOf", "number"],
-		["String(left).lastIndexOf(right)", "String.prototype.lastIndexOf", "number"],
+		["String(left).indexOf(right)", "String.prototype.indexOf", "int32"],
+		["String(left).lastIndexOf(right)", "String.prototype.lastIndexOf", "int32"],
 		["isNaN(left)", "isNaN", "boolean"],
 		["isFinite(left)", "isFinite", "boolean"],
 		["Number.isFinite(left)", "Number.isFinite", "boolean"],
@@ -1388,7 +1388,7 @@ describe("known builtin scalar result storage", () => {
 		"keeps %s native across its scalar consumer",
 		(call, operation, representation) => {
 			const out = inspectStaticValueFunction(
-				`function probe(left,right){const value=${call}; return ${representation === "number" ? "value+1.5" : "!value"};}globalThis.probe=probe;`,
+				`function probe(left,right){const value=${call}; return ${representation === "boolean" ? "!value" : "value+1.5"};}globalThis.probe=probe;`,
 				"probe",
 			);
 			const ip = out.native.body.instructions.findIndex(
