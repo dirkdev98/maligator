@@ -15,6 +15,7 @@ export interface HostValueContract {
 	readonly mask: CompilerValueKindMask;
 	readonly brand?: "Array" | "Uint8Array";
 	readonly hostObject?: HostObjectKind;
+	readonly installedObject?: true;
 	readonly hostConstructor?: HostObjectKind;
 	readonly assetHandle?: "file" | "directory";
 	readonly diskHandle?: "file" | "directory" | "writer" | "watcher";
@@ -24,6 +25,8 @@ export interface HostValueContract {
 			| "encoding"
 			| "buffer-encoding"
 			| "output-encoding"
+			| "digest-encoding"
+			| "signature-argument"
 			| "text-flag"
 			| "stat-options"
 			| "mkdir-options"
@@ -90,6 +93,10 @@ function nativeConstructor(
 		kind: "return",
 		value: { mask: OBJECT, hostObject: hostConstructor, hostConstructor, brand },
 	};
+}
+
+function installedObject(hostObject: HostObjectKind): HostResultContract {
+	return { kind: "return", value: { mask: OBJECT, hostObject, installedObject: true } };
 }
 
 const fs = exportsWithContracts(
@@ -436,6 +443,8 @@ const process = exportsWithContracts(
 const url = exportsWithContracts(
 	[nativeConstructor("URL"), "URL"],
 	[nativeConstructor("URLSearchParams"), "URLSearchParams"],
+	[{ kind: "return", value: { mask: OBJECT, hostConstructor: "LegacyUrl" } }, "Url"],
+	[hostObject("LegacyUrl"), "parse"],
 	[hostObject("URL"), "pathToFileURL"],
 	[
 		returned(STRING),
@@ -445,7 +454,7 @@ const url = exportsWithContracts(
 		"format",
 		"resolve",
 	],
-	[returned(OBJECT), "Url", "parse", "urlToHttpOptions"],
+	[returned(OBJECT), "urlToHttpOptions"],
 	[
 		{ kind: "dynamic", reason: "An absent base returns the second argument unchanged." },
 		"resolveObject",
@@ -455,6 +464,8 @@ const url = exportsWithContracts(
 const util = exportsWithContracts(
 	[nativeConstructor("TextEncoder"), "TextEncoder"],
 	[nativeConstructor("TextDecoder"), "TextDecoder"],
+	[nativeConstructor("MIMEType"), "MIMEType"],
+	[nativeConstructor("MIMEParams"), "MIMEParams"],
 	[
 		returned(STRING),
 		"format",
@@ -484,8 +495,6 @@ const util = exportsWithContracts(
 	[returned(OBJECT, "Array"), "diff", "getCallSites"],
 	[
 		returned(OBJECT),
-		"MIMEParams",
-		"MIMEType",
 		"callbackify",
 		"debounce",
 		"debug",
@@ -653,13 +662,10 @@ const inspector = exportsWithContracts(
 	[neverReturns("The native inspector is unsupported."), "Session", "open"],
 );
 const asyncHooks = exportsWithContracts(
-	[
-		returned(OBJECT),
-		"AsyncLocalStorage",
-		"AsyncResource",
-		"createHook",
-		"executionAsyncResource",
-	],
+	[nativeConstructor("AsyncLocalStorage"), "AsyncLocalStorage"],
+	[nativeConstructor("AsyncResource"), "AsyncResource"],
+	[hostObject("AsyncHook"), "createHook"],
+	[returned(OBJECT), "executionAsyncResource"],
 	[returned(NUMBER), "executionAsyncId", "triggerAsyncId"],
 );
 const console = exportsWithContracts(
@@ -933,6 +939,27 @@ const readline = exportsWithContracts(
 	],
 );
 const crypto = exportsWithContracts(
+	[hostObject("Hash"), "createHash"],
+	[hostObject("Hmac"), "createHmac"],
+	[hostObject("Cipheriv"), "createCipheriv"],
+	[hostObject("Decipheriv"), "createDecipheriv"],
+	[hostObject("Sign"), "createSign"],
+	[hostObject("Verify"), "createVerify"],
+	[hostObject("SecretKeyObject"), "createSecretKey"],
+	[hostObject("AsymmetricKeyObject"), "createPrivateKey", "createPublicKey"],
+	[installedObject("Crypto"), "webcrypto"],
+	[installedObject("SubtleCrypto"), "subtle"],
+	...(
+		[
+			"Hash",
+			"Hmac",
+			"Cipheriv",
+			"Decipheriv",
+			"Sign",
+			"Verify",
+			"X509Certificate",
+		] as const
+	).map((name) => [nativeConstructor(name), name] as const),
 	[returned(STRING), "randomUUID", "randomUUIDv7"],
 	[returned(BOOLEAN), "timingSafeEqual", "verify"],
 	[returned(OBJECT, "Array"), "getCiphers", "getCurves", "getHashes"],
@@ -944,23 +971,7 @@ const crypto = exportsWithContracts(
 		"hkdfSync",
 		"randomFillSync",
 		"getRandomValues",
-		"createCipheriv",
-		"createDecipheriv",
-		"createHash",
-		"createHmac",
-		"createSign",
-		"createVerify",
-		"createPrivateKey",
-		"createPublicKey",
-		"createSecretKey",
 		"generateKeySync",
-		"Cipheriv",
-		"Decipheriv",
-		"Hash",
-		"Hmac",
-		"Sign",
-		"Verify",
-		"X509Certificate",
 		"generateKeyPairSync",
 	],
 	[selected("return", { kind: "output-encoding", argument: 2 }), "hash"],
@@ -1047,8 +1058,15 @@ const streamWeb = exportsWithContracts(
 	],
 );
 const events = exportsWithContracts(
-	[returned(UNDEFINED), "default", "EventEmitter", "init", "setMaxListeners"],
-	[returned(OBJECT), "EventEmitterAsyncResource", "addAbortListener", "on"],
+	[
+		{ kind: "return", value: { mask: UNDEFINED, hostConstructor: "EventEmitter" } },
+		"default",
+		"EventEmitter",
+	],
+	[returned(UNDEFINED), "init", "setMaxListeners"],
+	[nativeConstructor("EventEmitterAsyncResource"), "EventEmitterAsyncResource"],
+	[hostObject("AbortListener"), "addAbortListener"],
+	[hostObject("EventIterator"), "on"],
 	[returned(NUMBER), "listenerCount"],
 	[{ kind: "resolve", value: { mask: OBJECT, brand: "Array" } }, "once"],
 	[
@@ -1063,7 +1081,8 @@ const timers = exportsWithContracts(
 	[returned(UNDEFINED), "clearTimeout", "clearInterval", "clearImmediate"],
 );
 const timersPromises = exportsWithContracts(
-	[returned(OBJECT), "setInterval"],
+	[hostObject("TimerIntervalIterator"), "setInterval"],
+	[installedObject("TimerScheduler"), "scheduler"],
 	[selected("resolve", { kind: "resolve-value", argument: 1 }, TOP), "setTimeout"],
 	[selected("resolve", { kind: "resolve-value", argument: 0 }, TOP), "setImmediate"],
 );
@@ -1149,7 +1168,10 @@ export const HOST_RESULT_CONTRACTS: ReadonlyMap<
 	],
 	[
 		"mal_host_install_maligator_internal_fetch",
-		exportsWithContracts([fulfilled(OBJECT), "fetch"]),
+		exportsWithContracts([
+			{ kind: "fulfill", value: { mask: OBJECT, hostObject: "Response" } },
+			"fetch",
+		]),
 	],
 	["mal_host_install_maligator_internal_workers", maligatorWorkers],
 	["mal_host_install_node_path", path],
@@ -1270,10 +1292,32 @@ export const DISK_HANDLE_RESULTS = {
 } as const;
 
 export type HostObjectKind =
+	| "AbortListener"
+	| "AsyncHook"
+	| "AsyncLocalStorage"
+	| "AsyncLocalScope"
+	| "AsyncResource"
+	| "EventEmitter"
+	| "EventEmitterAsyncResource"
+	| "EventIterator"
+	| "LegacyUrl"
+	| "TimerScheduler"
+	| "TimerIntervalIterator"
 	| "AbortController"
 	| "AbortSignal"
 	| "Blob"
 	| "Buffer"
+	| "Cipheriv"
+	| "Decipheriv"
+	| "Hash"
+	| "Hmac"
+	| "Sign"
+	| "Verify"
+	| "X509Certificate"
+	| "SecretKeyObject"
+	| "AsymmetricKeyObject"
+	| "Crypto"
+	| "SubtleCrypto"
 	| "ByteLengthQueuingStrategy"
 	| "CompressionStream"
 	| "CountQueuingStrategy"
@@ -1290,6 +1334,8 @@ export type HostObjectKind =
 	| "CloseEvent"
 	| "ErrorEvent"
 	| "MessageEvent"
+	| "MIMEType"
+	| "MIMEParams"
 	| "EventTarget"
 	| "WebSocket"
 	| "File"
@@ -1412,6 +1458,73 @@ const fileTypePredicates = exportsWithContracts([
 	"isSymbolicLink",
 ]);
 
+export const BUFFER_STRING_ENCODINGS = new Set([
+	"utf8",
+	"utf-8",
+	"latin1",
+	"binary",
+	"ascii",
+	"hex",
+	"base64",
+	"base64url",
+	"ucs2",
+	"ucs-2",
+	"utf16le",
+	"utf-16le",
+]);
+
+function digestMethods(kind: "Hash" | "Hmac") {
+	return exportsWithContracts(
+		[hostObject(kind), "update"],
+		[selected("return", { kind: "digest-encoding", argument: 0 }), "digest"],
+		[callback, "_transform", "_flush"],
+	);
+}
+
+function emitterMethods(kind: "EventEmitter" | "EventEmitterAsyncResource") {
+	return exportsWithContracts(
+		[returned(BOOLEAN), "emit"],
+		[returned(NUMBER), "getMaxListeners", "listenerCount"],
+		[returned(OBJECT, "Array"), "eventNames", "listeners", "rawListeners"],
+		[
+			hostObject(kind),
+			"on",
+			"addListener",
+			"once",
+			"prependListener",
+			"prependOnceListener",
+			"off",
+			"removeListener",
+			"removeAllListeners",
+			"setMaxListeners",
+		],
+	);
+}
+
+const iteratorResult = {
+	kind: "resolve",
+	value: { mask: OBJECT, hostObject: "StreamReadResult" },
+} as const;
+const forwardsCallbackResult = dynamic(
+	"Returns any value produced by the caller's callback.",
+);
+
+function cipherMethods(kind: "Cipheriv" | "Decipheriv") {
+	return exportsWithContracts(
+		[hostObject(kind), "setAutoPadding", "setAAD"],
+		[selected("return", { kind: "digest-encoding", argument: 0 }), "final"],
+		[selected("return", { kind: "digest-encoding", argument: 2 }), "update"],
+		kind === "Cipheriv"
+			? [hostObject("Buffer", "Uint8Array"), "getAuthTag"]
+			: [hostObject(kind), "setAuthTag"],
+		[callback, "_transform", "_flush"],
+	);
+}
+
+export const GLOBAL_HOST_OBJECT_BRANDS: ReadonlyMap<string, HostObjectKind> = new Map([
+	["crypto", "Crypto"],
+]);
+
 function directoryCompletion(value: HostValueContract): HostResultContract {
 	return {
 		kind: "fulfill",
@@ -1511,6 +1624,12 @@ export const HOST_OBJECT_RESULTS: {
 } = {
 	fetch: { kind: "fulfill", value: { mask: OBJECT, hostObject: "Response" } },
 	statics: {
+		AsyncLocalStorage: exportsWithContracts([returned(OBJECT), "bind", "snapshot"]),
+		AsyncResource: exportsWithContracts([returned(OBJECT), "bind"]),
+		MIMEType: exportsWithContracts([
+			hostObject("MIMEType", undefined, OBJECT | NULL),
+			"parse",
+		]),
 		ReadableStream: exportsWithContracts([hostObject("ReadableStream"), "from"]),
 		AbortSignal: exportsWithContracts([
 			hostObject("AbortSignal"),
@@ -1539,6 +1658,111 @@ export const HOST_OBJECT_RESULTS: {
 		Response: exportsWithContracts([hostObject("Response"), "error", "json", "redirect"]),
 	},
 	methods: {
+		AbortListener: exportsWithContracts([returned(UNDEFINED), "[Symbol.dispose]"]),
+		AsyncHook: exportsWithContracts([hostObject("AsyncHook"), "enable", "disable"]),
+		AsyncLocalStorage: exportsWithContracts(
+			[returned(UNDEFINED), "disable", "enterWith"],
+			[forwardsCallbackResult, "run", "exit"],
+			[dynamic("The stored or default value can be any JavaScript value."), "getStore"],
+			[hostObject("AsyncLocalScope"), "withScope"],
+		),
+		AsyncLocalScope: exportsWithContracts([
+			returned(UNDEFINED),
+			"dispose",
+			"[Symbol.dispose]",
+		]),
+		AsyncResource: exportsWithContracts(
+			[returned(NUMBER), "asyncId", "triggerAsyncId"],
+			[returned(OBJECT), "bind"],
+			[hostObject("AsyncResource"), "emitDestroy"],
+			[forwardsCallbackResult, "runInAsyncScope"],
+		),
+		EventEmitter: emitterMethods("EventEmitter"),
+		EventEmitterAsyncResource: new Map([
+			...emitterMethods("EventEmitterAsyncResource"),
+			...exportsWithContracts([
+				dynamic("Forwards through the nested resource's mutable method lookup."),
+				"emit",
+				"emitDestroy",
+			]),
+		]),
+		EventIterator: exportsWithContracts(
+			[iteratorResult, "next", "return"],
+			[returned(UNDEFINED), "throw"],
+			[hostObject("EventIterator"), "[Symbol.asyncIterator]"],
+		),
+		LegacyUrl: exportsWithContracts(
+			[hostObject("LegacyUrl"), "parse"],
+			[returned(STRING), "resolve", "format"],
+			[returned(OBJECT), "resolveObject"],
+		),
+		TimerScheduler: exportsWithContracts([resolved(UNDEFINED), "wait", "yield"]),
+		TimerIntervalIterator: exportsWithContracts(
+			[iteratorResult, "next", "return"],
+			[hostObject("TimerIntervalIterator"), "[Symbol.asyncIterator]"],
+		),
+		Cipheriv: cipherMethods("Cipheriv"),
+		Decipheriv: cipherMethods("Decipheriv"),
+		Hash: digestMethods("Hash"),
+		Hmac: digestMethods("Hmac"),
+		Sign: exportsWithContracts(
+			[hostObject("Sign"), "update"],
+			[selected("return", { kind: "digest-encoding", argument: 1 }), "sign"],
+			[callback, "_write"],
+		),
+		Verify: exportsWithContracts(
+			[hostObject("Verify"), "update"],
+			[returned(BOOLEAN), "verify"],
+			[callback, "_write"],
+		),
+		X509Certificate: exportsWithContracts(
+			[returned(STRING), "toString", "toJSON"],
+			[returned(STRING | UNDEFINED), "checkHost", "checkEmail", "checkIP"],
+			[returned(BOOLEAN), "checkIssued", "checkPrivateKey", "verify"],
+			[returned(OBJECT), "toLegacyObject"],
+		),
+		SecretKeyObject: exportsWithContracts(
+			[returned(BOOLEAN), "equals"],
+			[returned(OBJECT), "export"],
+		),
+		AsymmetricKeyObject: exportsWithContracts(
+			[returned(BOOLEAN), "equals"],
+			[returned(STRING | OBJECT), "export"],
+			[returned(OBJECT), "toCryptoKey"],
+		),
+		Crypto: exportsWithContracts(
+			[returned(OBJECT), "getRandomValues"],
+			[returned(STRING), "randomUUID"],
+		),
+		SubtleCrypto: exportsWithContracts(
+			[
+				fulfilled(OBJECT),
+				"digest",
+				"deriveBits",
+				"encrypt",
+				"decrypt",
+				"sign",
+				"importKey",
+				"exportKey",
+				"generateKey",
+			],
+			[
+				selected(
+					"fulfill",
+					{ kind: "signature-argument", argument: 2 },
+					BOOLEAN | OBJECT,
+				),
+				"verify",
+			],
+		),
+		MIMEType: exportsWithContracts([returned(STRING), "toString", "toJSON"]),
+		MIMEParams: exportsWithContracts(
+			[returned(STRING | NULL), "get"],
+			[returned(BOOLEAN), "has"],
+			[returned(UNDEFINED), "set", "delete"],
+			[returned(STRING), "toString", "toJSON"],
+			[returned(OBJECT), "keys", "values", "entries", "[Symbol.iterator]"],
+		),
 		Dir: exportsWithContracts(
 			[directoryCompletion({ mask: OBJECT | NULL, hostObject: "Dirent" }), "read"],
 			[hostObject("Dirent", undefined, OBJECT | NULL), "readSync"],
@@ -1769,6 +1993,50 @@ export const HOST_OBJECT_RESULTS: {
 		HeadersIterator: exportsWithContracts([returned(OBJECT), "next"]),
 	},
 	properties: {
+		AsyncLocalStorage: exportsWithContracts([returned(STRING), "name"]),
+		EventEmitterAsyncResource: exportsWithContracts(
+			[hostObject("AsyncResource"), "asyncResource"],
+			[
+				dynamic("Forwards through the nested resource's mutable method lookup."),
+				"asyncId",
+				"triggerAsyncId",
+			],
+		),
+		Crypto: exportsWithContracts([hostObject("SubtleCrypto"), "subtle"]),
+		MIMEType: exportsWithContracts(
+			[returned(STRING), "type", "subtype", "essence"],
+			[hostObject("MIMEParams"), "params"],
+		),
+		SecretKeyObject: exportsWithContracts(
+			[returned(STRING), "type"],
+			[returned(NUMBER), "symmetricKeySize"],
+		),
+		AsymmetricKeyObject: exportsWithContracts(
+			[returned(STRING), "type", "asymmetricKeyType"],
+			[returned(OBJECT), "asymmetricKeyDetails"],
+		),
+		X509Certificate: exportsWithContracts(
+			[
+				returned(STRING | UNDEFINED),
+				"subject",
+				"subjectAltName",
+				"issuer",
+				"infoAccess",
+				"validFrom",
+				"validTo",
+				"fingerprint",
+				"fingerprint256",
+				"fingerprint512",
+				"serialNumber",
+				"signatureAlgorithm",
+				"signatureAlgorithmOid",
+			],
+			[returned(OBJECT | UNDEFINED), "validFromDate", "validToDate", "keyUsage"],
+			[returned(UNDEFINED), "issuerCertificate"],
+			[hostObject("AsymmetricKeyObject"), "publicKey"],
+			[hostObject("Buffer", "Uint8Array"), "raw"],
+			[returned(BOOLEAN), "ca"],
+		),
 		Dir: exportsWithContracts([returned(STRING), "path"]),
 		FileHandle: NODE_FILE_HANDLE_RESULTS.properties,
 		Stats: exportsWithContracts([

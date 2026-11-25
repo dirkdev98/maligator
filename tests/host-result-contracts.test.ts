@@ -19,6 +19,7 @@ import {
 	withProgramClosure,
 } from "../src/compiler/shared/compiler-facts.ts";
 import {
+	BUFFER_STRING_ENCODINGS,
 	DISK_HANDLE_EXPORTS,
 	DISK_HANDLE_RESULTS,
 	HOST_RESULT_CONTRACTS,
@@ -237,6 +238,18 @@ it("keeps the result observation after a Web prototype override", () => {
 	expect(operations).toContain("typeofCompare");
 });
 
+it("keeps the result observation when a host callback can replace the receiver's prototype", () => {
+	const operations = inspectHostCall(
+		"await response.text()",
+		"number",
+		`const response = new Response("body");
+		setTimeout(Object.setPrototypeOf, 0, response, { text: () => 42 });
+		await pause(10);`,
+		'import { setTimeout as pause } from "node:timers/promises";',
+	);
+	expect(operations).toContain("typeofCompare");
+});
+
 it.each([
 	["new Response().status", "number"],
 	["new Response().ok", "boolean"],
@@ -278,6 +291,19 @@ it("accounts for all installed callable module exports", () => {
 			: [];
 	});
 	expect(missing).toEqual([]);
+});
+
+it("selects the string digest encodings implemented by Buffer", () => {
+	const source = readFileSync(
+		new URL("../runtime/src/runtime/node_buffer.c", import.meta.url),
+		"utf8",
+	);
+	const native = source.match(/static bool mal_buffer_encoding_named\([\s\S]*?\n\}/)?.[0];
+	expect(native).toBeDefined();
+	const encodings = [
+		...native!.matchAll(/mal_buffer_ascii_equal_ci\(string, "([^"]+)"\)/g),
+	];
+	expect(BUFFER_STRING_ENCODINGS).toEqual(new Set(encodings.map((match) => match[1])));
 });
 
 it("accounts for methods and getters installed on Node FileHandle objects", () => {
@@ -464,6 +490,57 @@ it.each([
 		"new StringDecoder('utf8').end()",
 		"string",
 		'import { StringDecoder } from "node:string_decoder";',
+	],
+	[
+		"createHash('sha256').update('input').digest('hex')",
+		"string",
+		'import { createHash } from "node:crypto";',
+	],
+	[
+		"createHash('sha256').digest('unrecognized')",
+		"string",
+		'import { createHash } from "node:crypto";',
+	],
+	["await crypto.subtle.digest('SHA-256', new Uint8Array())", "string", ""],
+	[
+		"await subtle.verify('HMAC', options, new Uint8Array(), new Uint8Array())",
+		"boolean",
+		'import { subtle } from "node:crypto";',
+	],
+	[
+		"MIMEType.parse('text/plain;charset=utf-8').params.has('charset')",
+		"boolean",
+		'import { MIMEType } from "node:util";',
+	],
+	[
+		"await scheduler.yield()",
+		"undefined",
+		'import { scheduler } from "node:timers/promises";',
+	],
+	[
+		"(await setInterval(1).return()).done",
+		"boolean",
+		'import { setInterval } from "node:timers/promises";',
+	],
+	[
+		"new EventEmitter().listenerCount('data')",
+		"number",
+		'import { EventEmitter } from "node:events";',
+	],
+	[
+		"new AsyncLocalStorage().withScope('value').dispose()",
+		"undefined",
+		'import { AsyncLocalStorage } from "node:async_hooks";',
+	],
+	[
+		"new AsyncResource('example').asyncId()",
+		"number",
+		'import { AsyncResource } from "node:async_hooks";',
+	],
+	[
+		"parse('https://example.test').resolve('/path')",
+		"string",
+		'import { parse } from "node:url";',
 	],
 	["statSync(path).isFile()", "boolean", 'import { statSync } from "node:fs";'],
 	[

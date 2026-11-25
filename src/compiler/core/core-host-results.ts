@@ -8,6 +8,7 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import { EMBED_INSTALLER } from "../shared/embedded-asset.ts";
 import {
+	BUFFER_STRING_ENCODINGS,
 	DISK_HANDLE_EXPORTS,
 	DISK_HANDLE_RESULTS,
 	EMBEDDED_ASSET_RESULTS,
@@ -113,7 +114,7 @@ export function coreHostSlotValue(
 		producer === undefined
 			? undefined
 			: (hostSlotContract(fn, producer, slots) ??
-				catalogCallableContract(program, fn, producer, slots));
+				catalogCallableContract(program, fn, producer, slots, true));
 	return contract?.kind === "return" ? contract.value : undefined;
 }
 
@@ -122,9 +123,10 @@ function catalogCallableContract(
 	fn: CoreFunctionStore,
 	producer: CoreInstructionId,
 	slots: CoreHostSlots,
+	allowData = false,
 ): HostResultContract | undefined {
 	const node = capturedValue(producer, 5);
-	if (node === undefined || (node[2] & 2) === 0) return undefined;
+	if (node === undefined || (!allowData && (node[2] & 2) === 0)) return undefined;
 	for (const alias of node[5]) {
 		const separator = alias.indexOf(":");
 		if (!alias.startsWith("mal_host_install_")) continue;
@@ -228,10 +230,19 @@ export function coreHostDirectCallContract(
 	const fromSlot =
 		hostSlotContract(fn, callee, slots) ??
 		(membersStable ? catalogCallableContract(program, fn, callee, slots) : undefined);
-	return opcode === "construct" &&
-		(fromSlot?.kind !== "return" || fromSlot.value.hostConstructor === undefined)
-		? undefined
-		: (fromSlot ?? assetMember(program, fn, callee, slots, "methods", budget));
+	if (opcode === "construct") {
+		if (fromSlot?.kind !== "return" || fromSlot.value.hostConstructor === undefined)
+			return undefined;
+		return {
+			kind: "return",
+			value: {
+				mask: COMPILER_VALUE_KIND_OBJECT,
+				hostObject: fromSlot.value.hostConstructor,
+				brand: fromSlot.value.brand,
+			},
+		};
+	}
+	return fromSlot ?? assetMember(program, fn, callee, slots, "methods", budget);
 }
 
 export function coreDiskHandleResult(
@@ -531,6 +542,34 @@ export function coreHostCompletion(
 				const flag = option("throwIfNoEntry");
 				if (flag !== UNKNOWN_LITERAL && flag !== false)
 					return { mask: COMPILER_VALUE_KIND_OBJECT };
+				break;
+			}
+			case "digest-encoding": {
+				const encoding = primitive();
+				if (encoding !== UNKNOWN_LITERAL)
+					return typeof encoding === "string" &&
+						BUFFER_STRING_ENCODINGS.has(encoding.toLowerCase())
+						? string
+						: buffer;
+				break;
+			}
+			case "signature-argument": {
+				const specified = primitive();
+				if (specified !== UNKNOWN_LITERAL)
+					return {
+						mask:
+							operand !== undefined && specified === undefined
+								? COMPILER_VALUE_KIND_OBJECT
+								: COMPILER_VALUE_KIND_BOOLEAN,
+					};
+				const source = definition(fn, operand);
+				if (
+					source !== undefined &&
+					(fn.instructionOpcodeName(source) === "construct" ||
+						(fn.instructionOpcodeName(source) === "callKnown" &&
+							fn.instructionAttributes(source).construct === true))
+				)
+					return { mask: COMPILER_VALUE_KIND_BOOLEAN };
 				break;
 			}
 			case "mkdir-options": {

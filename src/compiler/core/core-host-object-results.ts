@@ -5,6 +5,7 @@ import {
 	GLOBAL_HOST_CONSTRUCTORS,
 	GLOBAL_HOST_FUNCTION_RESULTS,
 	GLOBAL_HOST_NAMESPACE_RESULTS,
+	GLOBAL_HOST_OBJECT_BRANDS,
 	HOST_OBJECT_RESULTS,
 	HOST_RESULT_CONTRACTS,
 } from "../shared/host-result-contracts.ts";
@@ -12,7 +13,9 @@ import type {
 	HostResultContract,
 	HostObjectKind,
 } from "../shared/host-result-contracts.ts";
+import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import { coreNumericTypedArrayKind } from "./core-heap-brands.ts";
 import {
 	coreDiskHandleResult,
 	coreHostDirectCallContract,
@@ -34,12 +37,13 @@ const PROTECTED_GLOBALS = new Set<string>([
 	...GLOBAL_HOST_CONSTRUCTORS,
 	...GLOBAL_HOST_FUNCTION_RESULTS.keys(),
 	...GLOBAL_HOST_NAMESPACE_RESULTS.keys(),
+	...GLOBAL_HOST_OBJECT_BRANDS.keys(),
 	"fetch",
 	"globalThis",
 	"__proto__",
 ]);
 const HOST_OBJECT_SOURCE_NAMES = new RegExp(
-	`\\b(?:${[...PROTECTED_GLOBALS].filter((name) => name !== "globalThis" && name !== "console" && name !== "__proto__").join("|")}|fs|node:sqlite|node:stream/web|pathToFileURL|basename|StringDecoder)\\b`,
+	`\\b(?:${[...PROTECTED_GLOBALS].filter((name) => name !== "globalThis" && name !== "console" && name !== "__proto__").join("|")}|fs|node:sqlite|(?:node:)?(?:stream/web|async_hooks|events|timers/promises|url)|basename|StringDecoder|MIMEType|MIMEParams)\\b`,
 );
 const PROTECTED_PROPERTIES = new Set([
 	...PROTECTED_GLOBALS,
@@ -70,6 +74,17 @@ const MODULE_EVALUATORS = new Set([
 	"__evaluateModuleAsync",
 	"__evaluateModuleSync",
 ]);
+const REFLECTIVE_WRITERS = new Set([
+	"assign",
+	"defineProperty",
+	"defineProperties",
+	"setPrototypeOf",
+	"deleteProperty",
+	"set",
+	"__defineGetter__",
+	"__defineSetter__",
+	"__lookupSetter__",
+]);
 const SCANNED_HOST_INSTALLERS = new Set([
 	"mal_host_install_node_fs",
 	"mal_host_install_node_fs_promises",
@@ -78,6 +93,7 @@ const SCANNED_HOST_INSTALLERS = new Set([
 	"mal_host_install_node_path_win32",
 	"mal_host_install_node_os",
 	"mal_host_install_node_buffer",
+	"mal_host_install_node_crypto",
 	"mal_host_install_node_url",
 	"mal_host_install_node_util",
 	"mal_host_install_node_sys",
@@ -87,6 +103,7 @@ const SCANNED_HOST_INSTALLERS = new Set([
 	"mal_host_install_node_timers",
 	"mal_host_install_node_timers_promises",
 	"mal_host_install_node_events",
+	"mal_host_install_node_async_hooks",
 	"mal_host_install_maligator_internal_fetch",
 	"mal_host_install_maligator_internal_fs",
 	"mal_host_install_maligator_internal_fs_descriptor",
@@ -149,6 +166,13 @@ function hostReceiver(
 	if (budget === 0) return undefined;
 	const producer = definition(fn, value);
 	if (producer === undefined) return undefined;
+	const global = globalName(program, fn, value);
+	const globalBrand =
+		global === undefined ? undefined : GLOBAL_HOST_OBJECT_BRANDS.get(global);
+	if (globalBrand !== undefined) return globalBrand;
+	const installed =
+		slots === undefined ? undefined : coreHostSlotValue(program, fn, value, slots);
+	if (installed?.installedObject === true) return installed.hostObject;
 	if (fn.instructionOpcodeName(producer) !== "awaitFulfilled") {
 		const result = producerContract(producer);
 		return result?.kind === "return" ? result.value.hostObject : undefined;
@@ -287,6 +311,51 @@ export function coreHostMemberIdentitiesAreStable(
 			}
 			const opcode = fn.instructionOpcodeName(instruction);
 			const attrs = fn.instructionAttributes(instruction);
+			if (opcode === "loadPrimordial" && typeof attrs.nodeIndex === "number") {
+				const name = getPrimordialCatalog().nodes[attrs.nodeIndex]?.[0];
+				if (
+					name !== undefined &&
+					(name.startsWith("Object.") || name.startsWith("Reflect.")) &&
+					REFLECTIVE_WRITERS.has(name.slice(name.lastIndexOf(".") + 1))
+				)
+					return false;
+			}
+			if (opcode === "loadProperty" || opcode === "loadPropertyStatic") {
+				const key = coreHostPropertyName(program, fn, instruction);
+				if (key === undefined) {
+					const keyProducer =
+						opcode === "loadProperty"
+							? definition(
+									fn,
+									fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
+								)
+							: undefined;
+					if (
+						keyProducer === undefined ||
+						(fn.instructionOpcodeName(keyProducer) !== "createNumber" &&
+							fn.instructionOpcodeName(keyProducer) !== "createF64")
+					)
+						return false;
+				} else if (REFLECTIVE_WRITERS.has(key)) {
+					// Host callbacks can invoke a native writer without a source call site.
+					const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+					if (fn.kernel.valueHandlerUseCount(value) !== 0) return false;
+					for (
+						let use = fn.kernel.valueFirstUse(value);
+						use >= 0;
+						use = fn.kernel.useNext(use)
+					) {
+						if (fn.kernel.useLive(use) === 0) continue;
+						const consumer = fn.kernel.useInstruction(use);
+						if (
+							fn.kernel.useOperand(use) !== 0 ||
+							fn.instructionKind(consumer) !== "operation" ||
+							fn.instructionOpcodeName(consumer) !== "call"
+						)
+							return false;
+					}
+				}
+			}
 			const protectedKey = (index: unknown, implicitGlobal = false) => {
 				if (typeof index !== "number") return true;
 				const start = fn.kernel.instructionOperandStart(instruction);
@@ -366,6 +435,36 @@ export function coreHostMemberIdentitiesAreStable(
 					if (typeof name === "string" && MODULE_EVALUATORS.has(name)) continue;
 				}
 			}
+			if (
+				opcode === "construct" &&
+				fn.kernel.instructionOperandCount(instruction) === 1
+			) {
+				const producer = definition(
+					fn,
+					fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
+				);
+				if (
+					producer !== undefined &&
+					fn.instructionOpcodeName(producer) === "loadPrimordial"
+				) {
+					const { nodeIndex } = fn.instructionAttributes(producer);
+					const name =
+						typeof nodeIndex === "number"
+							? getPrimordialCatalog().nodes[nodeIndex]?.[0]
+							: undefined;
+					if (coreNumericTypedArrayKind(name) !== undefined || name === "ArrayBuffer")
+						continue;
+				}
+			}
+			if (
+				opcode === "callKnown" &&
+				attrs.construct === true &&
+				attrs.knownBuiltinCall !== undefined &&
+				fn.kernel.instructionOperandCount(instruction) === 1 &&
+				(coreNumericTypedArrayKind(attrs.operation) !== undefined ||
+					attrs.operation === "ArrayBuffer")
+			)
+				continue;
 			if (
 				coreHostObjectResult(program, fn, instruction, slots) === undefined &&
 				coreDiskHandleResult(program, fn, instruction, targets, context) === undefined &&
