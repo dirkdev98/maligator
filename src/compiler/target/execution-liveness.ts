@@ -64,7 +64,7 @@ function blockSuccessors(fn: ExecutionFunction): ReadonlyArray<ReadonlyArray<num
  */
 export function executionSafepointRoots(
 	fn: ExecutionFunction,
-	safepoints: ReadonlySet<CompilerInstruction>,
+	safepoints: SafepointSelection,
 ): ReadonlyMap<CompilerInstruction, ExecutionSafepointRoots> {
 	const roots = new Map<CompilerInstruction, ExecutionSafepointRoots>();
 	solveSafepointRoots(fn, safepoints, roots);

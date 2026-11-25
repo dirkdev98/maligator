@@ -3092,26 +3092,29 @@ function lowerFunctionToTarget(
 			instruction,
 		})),
 	];
-	const roots = executionSafepointRoots(
-		analysisFunction,
-		new Set(pendingSafepoints.map(({ instruction }) => instruction)),
-	);
-	const instructionOrder = new Map<CompilerInstruction, number>();
-	let order = 0;
-	for (const block of blocks) {
-		for (const instruction of block.instructions)
-			instructionOrder.set(instruction, order++);
+	const pendingByInstruction = new Map<
+		CompilerInstruction,
+		(typeof pendingSafepoints)[number]
+	>();
+	for (const pending of pendingSafepoints) {
+		if (pendingByInstruction.has(pending.instruction)) {
+			throw new Error("Instruction has two target safepoint records");
+		}
+		pendingByInstruction.set(pending.instruction, pending);
 	}
-	const safepoints: Array<CoreTargetSafepoint> = pendingSafepoints
-		.map((safepoint) => ({
-			...safepoint,
-			...roots.get(safepoint.instruction)!,
-		}))
-		.sort(
-			(left, right) =>
-				instructionOrder.get(left.instruction)! -
-				instructionOrder.get(right.instruction)!,
-		);
+	const roots = executionSafepointRoots(analysisFunction, pendingByInstruction);
+	const safepoints: Array<CoreTargetSafepoint> = [];
+	if (pendingByInstruction.size > 0) {
+		for (const block of blocks) {
+			for (const instruction of block.instructions) {
+				const pending = pendingByInstruction.get(instruction);
+				if (pending !== undefined)
+					safepoints.push({ ...pending, ...roots.get(instruction)! });
+			}
+		}
+	}
+	if (safepoints.length !== pendingByInstruction.size)
+		throw new Error("Recorded safepoint does not belong to this function");
 	const directEntries = directEntryPlans.map((entry, entryIndex) => {
 		const control =
 			allocation.storageValues === undefined

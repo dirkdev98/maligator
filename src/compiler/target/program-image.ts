@@ -3622,17 +3622,18 @@ function lowerExecutionFunctionToNativePlan(
 		nativeInstructions[ip] = plan;
 		nativePlanByRuntimeInstruction.set(instructions[ip]!, plan);
 	};
-	const compilerSiteIds = new Array<string | undefined>(instructions.length);
-	for (const block of fn.blocks) {
-		for (const instruction of block.instructions) {
-			const ip = instructionIndexByTargetInstruction.get(instruction);
-			if (ip === undefined) continue;
-			facts[ip] = instruction.facts;
-			const nativePlan = nativeInstructionPlanFromExecution(instruction, fn);
-			if (nativePlan !== undefined) setNativeInstructionPlan(ip, nativePlan);
-			compilerSiteIds[ip] = instructionSites?.get(instruction)?.id;
-		}
-	}
+	const compilerSiteIds =
+		instructionSites === undefined
+			? undefined
+			: new Array<string | undefined>(instructions.length);
+	// Native lowering receives the full index of emitted instructions in IP order.
+	instructionIndexByTargetInstruction.forEach((ip, instruction) => {
+		facts[ip] = instruction.facts;
+		const nativePlan = nativeInstructionPlanFromExecution(instruction, fn);
+		if (nativePlan !== undefined) setNativeInstructionPlan(ip, nativePlan);
+		if (compilerSiteIds !== undefined)
+			compilerSiteIds[ip] = instructionSites!.get(instruction)?.id;
+	});
 	const nativePlanOf = (
 		instruction: BytecodeInstruction | undefined,
 	): NativeInstructionPlan | undefined =>
@@ -6105,7 +6106,7 @@ function lowerExecutionFunctionToNativePlan(
 		facts,
 		specializations: regions,
 		regionActions: vmRegionActions(regions),
-		...(compilerSiteIds.some((site) => site !== undefined) ? { compilerSiteIds } : {}),
+		...(compilerSiteIds?.some((site) => site !== undefined) ? { compilerSiteIds } : {}),
 	};
 }
 

@@ -4372,11 +4372,11 @@ function lowerExecutionFunctionToBytecode(
 				throw new Error("Execution safepoint has no portable instruction");
 			}
 			const instruction = instructions[instructionIp]!;
-			const roots = new Set(rootRegisters);
 			const clearRegisters = vmInstructionWriteRegisters(instruction)
 				.filter(
 					(register) =>
-						roots.has(register) && !vmInstructionUsesRegister(instruction, register),
+						rootRegisters.includes(register) &&
+						!vmInstructionUsesRegister(instruction, register),
 				)
 				.sort((left, right) => left - right);
 			return {
