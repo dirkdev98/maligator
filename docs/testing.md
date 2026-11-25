@@ -349,8 +349,8 @@ as `linux-diagnostic-<run>-<attempt>`. The entry point receives its directory th
 `DIAGNOSTIC_DIR`; keep generated evidence beneath `.cache/linux-diagnostic`.
 
 The native-remainder workflow runs on pushes to `main`, Saturdays at 02:43 UTC,
-and manual dispatch. Its nine independent jobs cover Linux x64 (three normal and two
-sanitizer shards) and macOS ARM (two of each), with a three-hour limit per job:
+and manual dispatch. Linux x64 and macOS ARM each run separate native and
+sanitizer shards with a three-hour limit per job.
 
 ```sh
 npm run test:native:remainder -- --workers 4 --lane native --shard 1/3
