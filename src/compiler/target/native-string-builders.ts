@@ -383,6 +383,23 @@ function planClaimedIps(plan: unknown): ReadonlyArray<number> {
 	return Array.isArray(claimedIps) ? (claimedIps as ReadonlyArray<number>) : [];
 }
 
+// Both plans require a consuming operation on the ordinary loop mask.
+export function hasNativeStringPlanningCandidate(
+	fn: BytecodeFunction,
+	loopInstructions: Uint8Array,
+): boolean {
+	const allowEnums = fn.profileSiteIds === undefined;
+	return loopInstructions.some((inLoop, ip) => {
+		if (inLoop !== 1) return false;
+		const op = fn.instructions[ip]!;
+		return (
+			op.opcode === "BINARY" &&
+			((op.operator === "+" && op.left >= 0) ||
+				(allowEnums && (op.operator === "===" || op.operator === "!==")))
+		);
+	});
+}
+
 export function planNativeStringBuilders(
 	fn: BytecodeFunction,
 	representations: ReadonlyArray<VmRegisterRepresentation>,

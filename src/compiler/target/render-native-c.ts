@@ -183,6 +183,7 @@ import type { NativeSourceRange } from "./native-source-map.ts";
 import type { NativeSpanConsumer } from "./native-span-continuation.ts";
 import {
 	nativeStringBuilderDeclarations,
+	hasNativeStringPlanningCandidate,
 	planNativeStringBuilders,
 	renderNativeStringBuilderOperation,
 } from "./native-string-builders.ts";
@@ -9152,7 +9153,9 @@ function emitBody(
 		stringComparisons.map((plan) => [plan.instructionIp, plan]),
 	);
 	const stringBuilderPlan =
-		stringBuilders && coro === null
+		stringBuilders &&
+		coro === null &&
+		hasNativeStringPlanningCandidate(fn, loopInstructions)
 			? planNativeStringBuilders(fn, reps, nativeFacts, stringConstants, {
 					handlerTargets: analysis.handlerTargets,
 					loopInstructions,
@@ -9648,9 +9651,10 @@ function emitBody(
 				if (slot !== undefined) activeFieldSlots.add(slot);
 			if (unreachable.has(ip)) continue;
 			// Backedges enter at the label; only fallthrough entry attempts a whole-copy scan.
-			if (!elided.has(ip))
+			const stringScan = stringBuilderPlan?.scans?.get(ip);
+			if (stringScan !== undefined && !elided.has(ip))
 				for (const line of renderNativeStringScan(
-					stringBuilderPlan?.scans?.get(ip),
+					stringScan,
 					{ representations: reps },
 					stringBuilderPlan?.enums,
 					(index) => relocation.stringValue(index),

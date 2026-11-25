@@ -55,7 +55,7 @@ export function selectNativeStringComparisons(
 	if (comparisons.length === 0) return [];
 	const unreachable =
 		body.projection?.unreachable ?? new Set(options.controlFlow?.unreachableIps);
-	const hasLiterals = fn.instructions.some((op) => op.opcode === "CREATE_STRING");
+	const hasLiterals = body.hasStringLiteral;
 	let literalAt: ReturnType<typeof createNativeStringLiteralQuery> | undefined;
 	let literalIdentityAt: ReturnType<typeof createNativeStringLiteralQuery> | undefined;
 	const literalIdentity = (ip: number, register: number): boolean => {

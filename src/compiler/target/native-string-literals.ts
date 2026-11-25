@@ -17,6 +17,7 @@ export function createNativeStringLiteralQuery(
 	},
 ): (use: number, register: number) => number | undefined {
 	const fn = native.body;
+	const count = fn.instructions.length;
 	const unreachable =
 		body.projection?.unreachable ?? new Set(options.controlFlow?.unreachableIps);
 	const branches =
@@ -29,10 +30,13 @@ export function createNativeStringLiteralQuery(
 		);
 	const roots =
 		body.projection?.entries ?? nativeControlFlowEntries(native, body, options).roots;
-	const predecessors = new Array<Array<number> | undefined>(fn.instructions.length);
+	const predecessors = new Array<number | Array<number> | undefined>(count);
 	const add = (from: number, to: number): void => {
-		if (to < 0 || to >= fn.instructions.length || unreachable.has(to)) return;
-		(predecessors[to] ??= []).push(from);
+		if (to < 0 || to >= count || unreachable.has(to)) return;
+		const prior = predecessors[to];
+		if (prior === undefined) predecessors[to] = from;
+		else if (typeof prior === "number") predecessors[to] = [prior, from];
+		else prior.push(from);
 	};
 	const written = new Set<number>();
 	for (const [ip, op] of fn.instructions.entries()) {
@@ -50,40 +54,51 @@ export function createNativeStringLiteralQuery(
 				add(ip, ip + 1);
 		}
 	}
-	let remaining = options.workLimit ?? Math.max(4096, fn.instructions.length * 8);
-	const cache = new Map<string, number | undefined>();
+	let remaining = options.workLimit ?? Math.max(4096, count * 8);
+	const registerCount = fn.registerCount;
+	const canPack = Number.isSafeInteger(count * registerCount);
+	const keyFor = (ip: number, register: number): number | string =>
+		canPack && ip >= 0 && ip < count && register >= 0 && register < registerCount
+			? ip * registerCount + register
+			: `${ip}:${register}`;
+	const cache = new Map<number | string, number | null>();
 	return (use, register) => {
 		if (!written.has(register)) return undefined;
-		const key = `${use}:${register}`;
-		if (cache.has(key)) return cache.get(key);
-		const pending = [{ ip: use, register }];
-		const visited = new Set<string>();
+		const key = keyFor(use, register);
+		const cached = cache.get(key);
+		if (cached !== undefined) return cached ?? undefined;
+		const pending = [use, register];
+		const visited = new Set<number | string>();
 		let fact: number | undefined;
 		let valid = true;
 		// Revisited aliases add no definitions; every entry path must still reach a literal.
 		while (pending.length > 0 && valid) {
-			const state = pending.pop()!;
-			const key = `${state.ip}:${state.register}`;
+			const register = pending.pop()!;
+			const use = pending.pop()!;
+			const key = keyFor(use, register);
 			if (visited.has(key)) continue;
 			visited.add(key);
-			if (roots.has(state.ip) || remaining-- <= 0) {
+			if (roots.has(use) || remaining-- <= 0) {
 				valid = false;
 				break;
 			}
-			const incoming = predecessors[state.ip];
+			const incoming = predecessors[use];
 			if (incoming === undefined) {
 				valid = false;
 				break;
 			}
-			for (const ip of incoming) {
+			const single = typeof incoming === "number";
+			const length = single ? 1 : incoming.length;
+			for (let index = 0; index < length; index++) {
+				const ip = single ? incoming : incoming[index]!;
 				const op = fn.instructions[ip]!;
-				if (!body.writes[ip]!.includes(state.register)) {
-					pending.push({ ip, register: state.register });
+				if (!body.writes[ip]!.includes(register)) {
+					pending.push(ip, register);
 					continue;
 				}
 				if (op.opcode === "MOVE" || op.opcode === "TO_PROPERTY_KEY") {
 					// A successful ToPropertyKey preserves a String; its nil check stays at the source site.
-					pending.push({ ip, register: op.opcode === "MOVE" ? op.src : op.key });
+					pending.push(ip, op.opcode === "MOVE" ? op.src : op.key);
 					continue;
 				}
 				const candidate =
@@ -96,7 +111,7 @@ export function createNativeStringLiteralQuery(
 			}
 		}
 		const result = valid ? fact : undefined;
-		cache.set(key, result);
+		cache.set(key, result ?? null);
 		return result;
 	};
 }

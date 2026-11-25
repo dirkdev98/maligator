@@ -267,12 +267,11 @@ export function selectNativeStringScans(
 }
 
 export function renderNativeStringScan(
-	plan: NativeStringScanPlan | undefined,
+	plan: NativeStringScanPlan,
 	inputs: Pick<NativeStringBuilderInputs, "representations">,
 	enums: NativeStringEnumPlan | undefined,
 	stringValue: (index: number) => string,
 ): ReadonlyArray<string> {
-	if (plan === undefined) return [];
 	const cursor = `__iter_deferred_${plan.site.initializeIp}`;
 	const name = `__string_scan_${plan.site.stepIp}`;
 	const numberText = (value: number) => (Object.is(value, -0) ? "-0.0" : String(value));
