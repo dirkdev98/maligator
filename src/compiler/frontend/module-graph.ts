@@ -414,6 +414,7 @@ export interface BuildModuleGraphOptions {
 	 * host supplies the finite candidate set that is bundled but not eagerly run.
 	 */
 	dynamicImportCandidates?: ReadonlyArray<string>;
+	/** Installation directory containing the toolchain's matching platform sources. */
 	platformSourceRoot?: string;
 
 	/**

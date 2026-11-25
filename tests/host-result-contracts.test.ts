@@ -373,13 +373,25 @@ it("accounts for the installed constructors, methods, and getters of audited hos
 			constructorPath: `%MAL_INTRINSIC_NODE_SQLITE_MODULE%.${name}`,
 			prototype: `%MAL_INTRINSIC_NODE_SQLITE_MODULE%.${name}.prototype`,
 		})),
+		...(["Dir", "Dirent", "Stats"] as const).map((name) => ({
+			name,
+			constructorPath: `%MAL_INTRINSIC_NODE_FS_MODULE%.${name}`,
+			prototype: `%MAL_INTRINSIC_NODE_FS_MODULE%.${name}.prototype`,
+		})),
+		{
+			name: "StringDecoder",
+			constructorPath:
+				'%MAL_INTRINSIC_NODE_BUILTIN_MODULES%["node:string_decoder"].StringDecoder',
+			prototype:
+				'%MAL_INTRINSIC_NODE_BUILTIN_MODULES%["node:string_decoder"].StringDecoder.prototype',
+		} as const,
 	];
 	const missing: Array<string> = [];
 	for (const owner of inventory) {
 		const lookup = (identity: string) =>
 			catalog.nodes.find(([name]) => name === identity)!;
 		const group =
-			"constructorPath" in owner
+			"constructorPath" in owner && owner.constructorPath !== undefined
 				? [lookup(owner.constructorPath), lookup(owner.prototype)]
 				: [lookup(owner.prototype)];
 		for (const [name, , , , properties] of group) {
@@ -433,6 +445,47 @@ it.each([
 		'import { DatabaseSync } from "node:sqlite";',
 	],
 	["AbortSignal.timeout(0).aborted", "boolean", ""],
+	["new TextEncoderStream().encoding", "string", ""],
+	["(await new Blob(['hi']).stream().getReader().read()).done", "boolean", ""],
+	["await new WritableStream().getWriter().close()", "undefined", ""],
+	["new ReadableStream().locked", "boolean", ""],
+	[
+		"new Readable().locked",
+		"boolean",
+		'import { ReadableStream as Readable } from "node:stream/web";',
+	],
+	["new CountQueuingStrategy({ highWaterMark: 1 }).size('chunk')", "number", ""],
+	["new CloseEvent('close').code", "number", ""],
+	["new EventTarget().dispatchEvent(new Event('test'))", "boolean", ""],
+	["performance.now()", "number", ""],
+	["setTimeout(() => {}, 0).hasRef()", "boolean", ""],
+	["atob('YWJj')", "string", ""],
+	[
+		"new StringDecoder('utf8').end()",
+		"string",
+		'import { StringDecoder } from "node:string_decoder";',
+	],
+	["statSync(path).isFile()", "boolean", 'import { statSync } from "node:fs";'],
+	[
+		"(await stat(path, { bigint: true })).isFile()",
+		"boolean",
+		'import { stat } from "node:fs/promises";',
+	],
+	[
+		"(await (await open(path)).stat()).isFile()",
+		"boolean",
+		'import { open } from "node:fs/promises";',
+	],
+	[
+		"await (await opendir(path)).read()",
+		"number",
+		'import { opendir } from "node:fs/promises";',
+	],
+	[
+		"opendirSync(path).read(() => {})",
+		"undefined",
+		'import { opendirSync } from "node:fs";',
+	],
 ])("uses the installed host object contract for %s", (expression, type, imports) => {
 	expect(inspectHostCall(expression, type, "", imports)).not.toContain("typeofCompare");
 });

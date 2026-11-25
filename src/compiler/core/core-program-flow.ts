@@ -9,14 +9,15 @@ import type { CoreCompilationContext } from "./core-compilation.ts";
 import { joinCoreHeapBrands } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState } from "./core-heap-brands.ts";
 import {
+	coreHostMemberIdentitiesAreStable,
+	coreHostObjectResult,
+} from "./core-host-object-results.ts";
+import {
 	coreDiskHandleResult,
+	coreHostCompletion,
 	coreHostResult,
 	coreHostResultSlots,
 } from "./core-host-results.ts";
-import {
-	coreHostMemberIdentitiesAreStable,
-	coreHostObjectResult,
-} from "./core-host-web-results.ts";
 import type { CoreControlEdge, CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
@@ -30,6 +31,7 @@ import {
 	corePromiseContinuation,
 	corePromiseIsProven,
 	corePromiseValueIsPrivate,
+	coreSuccessfulAwaitInput,
 } from "./core-promise-facts.ts";
 import type { CorePromiseArgumentUse } from "./core-promise-facts.ts";
 import {
@@ -3206,8 +3208,20 @@ export class CoreProgramFlowEngine {
 					}
 					const memberResult = hostMembersStable
 						? (instruction: CoreInstructionId) =>
-								coreHostObjectResult(this.#program, fn, instruction, hostSlots) ??
-								coreDiskHandleResult(this.#program, fn, instruction, targets, context)
+								coreHostCompletion(
+									this.#program,
+									fn,
+									instruction,
+									coreHostObjectResult(this.#program, fn, instruction, hostSlots) ??
+										coreDiskHandleResult(
+											this.#program,
+											fn,
+											instruction,
+											targets,
+											context,
+										),
+									true,
+								)
 						: undefined;
 					const nativeResult =
 						hostSlots === undefined || hostSlots.size === 0
@@ -3295,21 +3309,43 @@ export class CoreProgramFlowEngine {
 						context,
 						...resultReaders,
 						operationResultMask(instruction, result) {
-							const contract = memberResult?.(instruction);
-							if (contract?.kind === "return") return contract.value.mask;
-							if (contract?.kind === "resolve" || contract?.kind === "fulfill")
-								return semantics.object;
 							return (
+								memberResult?.(instruction)?.immediate.mask ??
 								nativeResult?.(instruction)?.immediate.mask ??
 								resultReaders.operationResultMask?.(instruction, result)
 							);
 						},
+						operationResultHeapBrand(instruction) {
+							const member = memberResult?.(instruction)?.immediate.heapBrand;
+							if (member !== undefined) return member;
+							const native = nativeResult?.(instruction)?.immediate.heapBrand;
+							if (native !== undefined) return native;
+							if (
+								promiseFacts &&
+								fn.instructionOpcodeName(instruction) === "awaitFulfilled"
+							) {
+								const awaited = coreSuccessfulAwaitInput(fn, instruction);
+								if (
+									awaited !== undefined &&
+									fn.kernel.valueDefinitionKind(awaited) === 1 &&
+									fn.valueUseCount(awaited) === 1 &&
+									fn.kernel.valueHandlerUseCount(awaited) === 0
+								) {
+									const producer = coreInstructionId(
+										fn.kernel.valueDefinitionOwner(awaited),
+									);
+									const brand =
+										memberResult?.(producer)?.fulfilled?.heapBrand ??
+										nativeResult?.(producer)?.fulfilled?.heapBrand;
+									if (brand !== undefined) return brand;
+								}
+							}
+							return resultReaders.operationResultHeapBrand?.(instruction);
+						},
 						operationFulfillmentKind: promiseFacts
 							? (instruction) => {
-									const contract = memberResult?.(instruction);
-									if (contract?.kind === "resolve" || contract?.kind === "fulfill")
-										return contract.value.mask;
 									return (
+										memberResult?.(instruction)?.fulfilled?.mask ??
 										nativeResult?.(instruction)?.fulfilled?.mask ??
 										awaitedCallbackResult(instruction) ??
 										resultReaders.operationFulfillmentKind?.(instruction)

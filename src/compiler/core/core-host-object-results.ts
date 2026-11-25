@@ -1,11 +1,10 @@
-import {
-	COMPILER_VALUE_KIND_OBJECT,
-	COMPILER_VALUE_KIND_UNDEFINED,
-} from "../shared/compiler-value-kinds.ts";
+import { COMPILER_VALUE_KIND_OBJECT } from "../shared/compiler-value-kinds.ts";
 import {
 	DISK_HANDLE_RESULTS,
 	NODE_FILE_HANDLE_RESULTS,
 	GLOBAL_HOST_CONSTRUCTORS,
+	GLOBAL_HOST_FUNCTION_RESULTS,
+	GLOBAL_HOST_NAMESPACE_RESULTS,
 	HOST_OBJECT_RESULTS,
 	HOST_RESULT_CONTRACTS,
 } from "../shared/host-result-contracts.ts";
@@ -13,17 +12,17 @@ import type {
 	HostResultContract,
 	HostObjectKind,
 } from "../shared/host-result-contracts.ts";
-import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	coreDiskHandleResult,
 	coreHostDirectCallContract,
+	coreHostPropertyName,
 	coreHostResult,
 	coreHostResultSlots,
 	coreHostSlotValue,
 } from "./core-host-results.ts";
 import type { CoreHostSlots } from "./core-host-results.ts";
-import { coreInstructionId } from "./core-ir.ts";
+import { coreFunctionId, coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreProgramFlowTargetIndex } from "./core-program-flow.ts";
 import { coreSuccessfulAwaitInput } from "./core-promise-facts.ts";
@@ -31,24 +30,27 @@ import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 type GlobalHostConstructor = (typeof GLOBAL_HOST_CONSTRUCTORS)[number];
 const GLOBAL_HOST_CONSTRUCTOR_NAMES = new Set<string>(GLOBAL_HOST_CONSTRUCTORS);
-const HOST_OBJECT_SOURCE_NAMES = new RegExp(
-	`\\b(?:${GLOBAL_HOST_CONSTRUCTORS.join("|")}|fetch|open|maligator:fs|node:sqlite|pathToFileURL|readFile(?:Sync)?|basename)\\b`,
-);
 const PROTECTED_GLOBALS = new Set<string>([
 	...GLOBAL_HOST_CONSTRUCTORS,
+	...GLOBAL_HOST_FUNCTION_RESULTS.keys(),
+	...GLOBAL_HOST_NAMESPACE_RESULTS.keys(),
 	"fetch",
-	"console",
 	"globalThis",
 	"__proto__",
 ]);
+const HOST_OBJECT_SOURCE_NAMES = new RegExp(
+	`\\b(?:${[...PROTECTED_GLOBALS].filter((name) => name !== "globalThis" && name !== "console" && name !== "__proto__").join("|")}|fs|node:sqlite|node:stream/web|pathToFileURL|basename|StringDecoder)\\b`,
+);
 const PROTECTED_PROPERTIES = new Set([
 	...PROTECTED_GLOBALS,
-	"log",
 	"prototype",
 	"promises",
 	"posix",
 	"win32",
 	...[...HOST_RESULT_CONTRACTS.values()].flatMap((exports) => [...exports.keys()]),
+	...[...GLOBAL_HOST_NAMESPACE_RESULTS.values()].flatMap((exports) => [
+		...exports.keys(),
+	]),
 	"then",
 	"constructor",
 	...Object.values(HOST_OBJECT_RESULTS.methods).flatMap((members) => [...members.keys()]),
@@ -63,10 +65,6 @@ const PROTECTED_PROPERTIES = new Set([
 		...properties.keys(),
 	]),
 ]);
-const LOGGED: HostResultContract = {
-	kind: "return",
-	value: { mask: COMPILER_VALUE_KIND_UNDEFINED },
-};
 const MODULE_EVALUATORS = new Set([
 	"__evaluateModule",
 	"__evaluateModuleAsync",
@@ -84,6 +82,11 @@ const SCANNED_HOST_INSTALLERS = new Set([
 	"mal_host_install_node_util",
 	"mal_host_install_node_sys",
 	"mal_host_install_node_sqlite",
+	"mal_host_install_node_stream_web",
+	"mal_host_install_node_string_decoder",
+	"mal_host_install_node_timers",
+	"mal_host_install_node_timers_promises",
+	"mal_host_install_node_events",
 	"mal_host_install_maligator_internal_fetch",
 	"mal_host_install_maligator_internal_fs",
 	"mal_host_install_maligator_internal_fs_descriptor",
@@ -174,33 +177,6 @@ function hostReceiver(
 	}
 }
 
-function propertyName(
-	program: CoreProgram,
-	fn: CoreFunctionStore,
-	instruction: CoreInstructionId,
-) {
-	const opcode = fn.instructionOpcodeName(instruction);
-	if (opcode === "loadPropertyStatic") {
-		const index = fn.instructionAttributes(instruction).stringIndex;
-		return typeof index === "number" ? program.stringConstantText(index) : undefined;
-	}
-	if (opcode === "loadProperty") {
-		const key = definition(
-			fn,
-			fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
-		);
-		if (key !== undefined && fn.instructionOpcodeName(key) === "loadPrimordial") {
-			const index = fn.instructionAttributes(key).nodeIndex;
-			if (
-				typeof index === "number" &&
-				getPrimordialCatalog().nodes[index]?.[0] === "%Symbol.iterator%"
-			)
-				return "[Symbol.iterator]";
-		}
-	}
-	return undefined;
-}
-
 export function coreHostObjectResult(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
@@ -228,7 +204,7 @@ export function coreHostObjectResult(
 				};
 	}
 	if (opcode === "loadPropertyStatic" || opcode === "loadProperty") {
-		const name = propertyName(program, fn, instruction);
+		const name = coreHostPropertyName(program, fn, instruction);
 		if (name === undefined) return undefined;
 		const brand = hostReceiver(
 			program,
@@ -242,15 +218,22 @@ export function coreHostObjectResult(
 			: HOST_OBJECT_RESULTS.properties[brand]?.get(name);
 	}
 	const callee = fn.kernel.operandAt(start);
-	if (globalName(program, fn, callee) === "fetch") return HOST_OBJECT_RESULTS.fetch;
+	const global = globalName(program, fn, callee);
+	if (global === "fetch") return HOST_OBJECT_RESULTS.fetch;
+	if (global !== undefined) return GLOBAL_HOST_FUNCTION_RESULTS.get(global);
 	const load = definition(fn, callee);
 	if (load === undefined) return undefined;
-	const method = propertyName(program, fn, load);
+	const method = coreHostPropertyName(program, fn, load);
 	if (method === undefined) return undefined;
 	const receiver = fn.kernel.operandAt(start + 1);
 	if (receiver !== fn.kernel.operandAt(fn.kernel.instructionOperandStart(load)))
 		return undefined;
-	if (method === "log" && globalName(program, fn, receiver) === "console") return LOGGED;
+	const globalReceiver = globalName(program, fn, receiver);
+	const namespace =
+		globalReceiver === undefined
+			? undefined
+			: GLOBAL_HOST_NAMESPACE_RESULTS.get(globalReceiver);
+	if (namespace !== undefined) return namespace.get(method);
 	const constructor = hostConstructor(program, fn, receiver, slots);
 	if (constructor !== undefined)
 		return HOST_OBJECT_RESULTS.statics[constructor]?.get(method);
@@ -283,12 +266,25 @@ export function coreHostMemberIdentitiesAreStable(
 	const slots = coreHostResultSlots(context);
 	for (const id of targets.graph.functions) {
 		const fn = program.function(id);
-		// The source filesystem module initializes its private class prototypes.
-		// Its later operations use frozen handles and the captured native entries.
-		if (fn.metadata.canonicalPlatformSource === "maligator:fs") continue;
 		const sites = new Map(targets.outgoing(id).map((site) => [site.instruction, site]));
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
+			// Packaged filesystem code initializes private prototypes. An inlined
+			// application's operation still needs its own mutation proof.
+			if (fn.metadata.canonicalPlatformSource === "maligator:fs") {
+				const position = fn.instructionSourcePosition(instruction);
+				const inlined =
+					position === undefined
+						? undefined
+						: program.sourcePositionAt(position)?.inlinedFunctionIndex;
+				if (inlined === undefined) continue;
+				const origin = coreFunctionId(inlined);
+				if (
+					program.hasFunction(origin) &&
+					program.function(origin).metadata.canonicalPlatformSource === "maligator:fs"
+				)
+					continue;
+			}
 			const opcode = fn.instructionOpcodeName(instruction);
 			const attrs = fn.instructionAttributes(instruction);
 			const protectedKey = (index: unknown, implicitGlobal = false) => {

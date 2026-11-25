@@ -12,7 +12,6 @@ import {
 	DISK_HANDLE_RESULTS,
 	EMBEDDED_ASSET_RESULTS,
 	HOST_RESULT_CONTRACTS,
-	NODE_FILE_HANDLE_RESULTS,
 } from "../shared/host-result-contracts.ts";
 import type {
 	HostResultContract,
@@ -108,6 +107,7 @@ export function coreHostSlotValue(
 	value: CoreValueId,
 	slots: CoreHostSlots,
 ): HostValueContract | undefined {
+	if (slots.size === 0) return undefined;
 	const producer = definition(fn, value);
 	const contract =
 		producer === undefined
@@ -145,7 +145,7 @@ function catalogCallableContract(
 			const root = typeof slot === "number" ? slots.get(slot)?.root : undefined;
 			return root === undefined ? undefined : primordialNode(root);
 		}
-		const key = propertyString(program, fn, id);
+		const key = coreHostPropertyName(program, fn, id);
 		if (key === undefined) return undefined;
 		const receiver = definition(
 			fn,
@@ -161,7 +161,7 @@ function catalogCallableContract(
 	}
 }
 
-function propertyString(
+export function coreHostPropertyName(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
@@ -196,7 +196,7 @@ function assetMember(
 	budget: number,
 ): HostResultContract | undefined {
 	if (budget === 0) return undefined;
-	const key = propertyString(program, fn, load);
+	const key = coreHostPropertyName(program, fn, load);
 	if (key === undefined) return undefined;
 	const receiver = definition(
 		fn,
@@ -232,42 +232,6 @@ export function coreHostDirectCallContract(
 		(fromSlot?.kind !== "return" || fromSlot.value.hostConstructor === undefined)
 		? undefined
 		: (fromSlot ?? assetMember(program, fn, callee, slots, "methods", budget));
-}
-
-function nodeFileHandleMember(
-	program: CoreProgram,
-	fn: CoreFunctionStore,
-	load: CoreInstructionId,
-	slots: CoreHostSlots,
-	kind: "methods" | "properties",
-) {
-	if (fn.instructionOpcodeName(load) !== "loadPropertyStatic") return undefined;
-	const index = fn.instructionAttributes(load).stringIndex;
-	const receiver = definition(
-		fn,
-		fn.kernel.operandAt(fn.kernel.instructionOperandStart(load)),
-	);
-	if (
-		receiver === undefined ||
-		fn.instructionOpcodeName(receiver) !== "awaitFulfilled" ||
-		typeof index !== "number"
-	)
-		return undefined;
-	const awaited = coreSuccessfulAwaitInput(fn, receiver);
-	if (
-		awaited === undefined ||
-		fn.valueUseCount(awaited) !== 1 ||
-		fn.kernel.valueHandlerUseCount(awaited) !== 0
-	)
-		return undefined;
-	const call = definition(fn, awaited);
-	const producer =
-		call === undefined
-			? undefined
-			: coreHostDirectCallContract(program, fn, call, slots, 0);
-	return producer?.kind === "fulfill" && producer.value.nodeFileHandle === true
-		? NODE_FILE_HANDLE_RESULTS[kind].get(program.stringConstantText(index))
-		: undefined;
 }
 
 export function coreDiskHandleResult(
@@ -336,7 +300,7 @@ export function coreDiskHandleResult(
 	const load = definition(fn, callee);
 	if (
 		load === undefined ||
-		propertyString(program, fn, load) === undefined ||
+		coreHostPropertyName(program, fn, load) === undefined ||
 		fn.kernel.operandAt(fn.kernel.instructionOperandStart(load)) !==
 			fn.kernel.operandAt(start + 1)
 	)
@@ -344,7 +308,7 @@ export function coreDiskHandleResult(
 	return member(load, "methods");
 
 	function member(load: CoreInstructionId, kind: "properties" | "methods") {
-		const key = propertyString(program, fn, load);
+		const key = coreHostPropertyName(program, fn, load);
 		if (key === undefined) return undefined;
 		const receiver = definition(
 			fn,
@@ -460,36 +424,64 @@ export function coreHostResult(
 	slots: CoreHostSlots,
 	locked: boolean,
 	membersStable = false,
-):
-	| {
-			readonly immediate: CoreNormalResultFacts;
-			readonly fulfilled?: CoreNormalResultFacts;
-	  }
-	| undefined {
+): CoreHostCompletion | undefined {
 	if (slots.size === 0) return undefined;
-	const start = fn.kernel.instructionOperandStart(instruction);
 	const opcode = fn.instructionOpcodeName(instruction);
 	const contract =
-		(opcode === "loadPropertyStatic" || opcode === "loadProperty"
+		opcode === "loadPropertyStatic" || opcode === "loadProperty"
 			? assetMember(program, fn, instruction, slots, "properties", 4)
-			: coreHostDirectCallContract(program, fn, instruction, slots, 4, membersStable)) ??
-		(membersStable ? nodeFileHandleContract() : undefined);
+			: coreHostDirectCallContract(program, fn, instruction, slots, 4, membersStable);
+	return coreHostCompletion(program, fn, instruction, contract, locked);
+}
+
+interface CoreHostCompletion {
+	readonly immediate: CoreNormalResultFacts;
+	readonly fulfilled?: CoreNormalResultFacts;
+}
+
+export function coreHostCompletion(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	contract: HostResultContract | undefined,
+	locked: boolean,
+): CoreHostCompletion | undefined {
 	if (
 		contract?.kind !== "return" &&
 		contract?.kind !== "fulfill" &&
 		contract?.kind !== "resolve"
 	)
 		return undefined;
+	const start = fn.kernel.instructionOperandStart(instruction);
 	const result = valueFacts(contract.value);
+	let immediate =
+		contract.kind === "fulfill"
+			? (contract.immediateMask ?? COMPILER_VALUE_KIND_OBJECT)
+			: COMPILER_VALUE_KIND_OBJECT;
+	if (
+		contract.kind === "fulfill" &&
+		contract.optionalCallback !== undefined &&
+		fn.instructionAttributes(instruction).argumentMode === undefined
+	) {
+		const index = contract.optionalCallback + 2;
+		const argument =
+			index < fn.kernel.instructionOperandCount(instruction)
+				? definition(fn, fn.kernel.operandAt(start + index))
+				: undefined;
+		const opcode =
+			argument === undefined ? undefined : fn.instructionOpcodeName(argument);
+		if (
+			index >= fn.kernel.instructionOperandCount(instruction) ||
+			opcode === "createUndefined"
+		)
+			immediate = COMPILER_VALUE_KIND_OBJECT;
+		else if (opcode === "createFunction")
+			return { immediate: { mask: COMPILER_VALUE_KIND_UNDEFINED } };
+	}
 	return contract.kind === "return"
 		? { immediate: result }
 		: {
-				immediate: {
-					mask:
-						contract.kind === "fulfill"
-							? (contract.immediateMask ?? COMPILER_VALUE_KIND_OBJECT)
-							: COMPILER_VALUE_KIND_OBJECT,
-				},
+				immediate: { mask: immediate },
 				fulfilled:
 					contract.kind === "fulfill" ||
 					locked ||
@@ -497,16 +489,6 @@ export function coreHostResult(
 						? result
 						: undefined,
 			};
-
-	function nodeFileHandleContract() {
-		if (opcode === "loadPropertyStatic")
-			return nodeFileHandleMember(program, fn, instruction, slots, "properties");
-		if (opcode !== "call") return undefined;
-		const load = definition(fn, fn.kernel.operandAt(start));
-		return load === undefined
-			? undefined
-			: nodeFileHandleMember(program, fn, load, slots, "methods");
-	}
 
 	function valueFacts(value: HostValueContract): CoreNormalResultFacts {
 		const selector = value.selector;

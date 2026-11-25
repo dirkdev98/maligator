@@ -6147,13 +6147,18 @@ export function runCoreCrossCallTransforms(
 		for (const instruction of fn.instructionIds()) {
 			if (fn.kernel.instructionOpcode(instruction) !== awaitOpcode) continue;
 			const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
-			const mask = (awaitResults ??= readValueKinds())
-				.values(functionId)
-				.latticeMask(value);
-			const facts = compilerValueKindMaskIsValid(mask) ? { mask } : undefined;
+			const result = (awaitResults ??= readValueKinds()).values(functionId);
+			const mask = result.latticeMask(value);
+			const heapBrand =
+				mask === COMPILER_VALUE_KIND_OBJECT
+					? (result.heapBrand(value) ?? undefined)
+					: undefined;
+			const facts = compilerValueKindMaskIsValid(mask) ? { mask, heapBrand } : undefined;
 			if (
 				fn.instructionAttributes(instruction)[CORE_AWAIT_RESULT_KIND_ATTRIBUTE] ===
-				facts?.mask
+					facts?.mask &&
+				fn.instructionAttributes(instruction)[CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE] ===
+					facts?.heapBrand
 			)
 				continue;
 			let edits = awaitKindsByCaller.get(functionId);

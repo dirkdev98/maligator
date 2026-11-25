@@ -59,12 +59,12 @@ import { analyzeCoreConditionalValueKinds } from "./core-conditional-value-kinds
 import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import { coreNumericTypedArrayKind } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState, CoreExactHeapBrand } from "./core-heap-brands.ts";
+import { coreHostObjectResult } from "./core-host-object-results.ts";
 import {
 	coreDiskHandleResult,
 	coreHostResult,
 	coreHostResultSlots,
 } from "./core-host-results.ts";
-import { coreHostObjectResult } from "./core-host-web-results.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
 	CORE_AWAIT_RESULT_KIND_ATTRIBUTE,

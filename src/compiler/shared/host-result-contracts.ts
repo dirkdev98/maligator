@@ -5,6 +5,7 @@ import {
 	COMPILER_VALUE_KIND_NUMBER as NUMBER,
 	COMPILER_VALUE_KIND_OBJECT as OBJECT,
 	COMPILER_VALUE_KIND_STRING as STRING,
+	COMPILER_VALUE_KIND_SYMBOL as SYMBOL,
 	COMPILER_VALUE_KIND_TOP as TOP,
 	COMPILER_VALUE_KIND_UNDEFINED as UNDEFINED,
 } from "./compiler-value-kinds.ts";
@@ -16,7 +17,6 @@ export interface HostValueContract {
 	readonly hostObject?: HostObjectKind;
 	readonly hostConstructor?: HostObjectKind;
 	readonly assetHandle?: "file" | "directory";
-	readonly nodeFileHandle?: true;
 	readonly diskHandle?: "file" | "directory" | "writer" | "watcher";
 	readonly selector?: {
 		readonly argument: number;
@@ -40,6 +40,7 @@ export type HostResultContract =
 			readonly kind: "fulfill";
 			readonly value: HostValueContract;
 			readonly immediateMask?: CompilerValueKindMask;
+			readonly optionalCallback?: number;
 			readonly reason?: string;
 	  }
 	| {
@@ -92,6 +93,10 @@ function nativeConstructor(
 }
 
 const fs = exportsWithContracts(
+	[nativeConstructor("Stats"), "Stats"],
+	[nativeConstructor("Dirent"), "Dirent"],
+	[neverReturns("Directory handles are allocated by opendir."), "Dir"],
+	[hostObject("Dir"), "opendirSync"],
 	[selected("return", { kind: "encoding", argument: 1 }), "readFileSync"],
 	[
 		selected("return", { kind: "buffer-encoding", argument: 1 }),
@@ -106,25 +111,28 @@ const fs = exportsWithContracts(
 		"mkdirSync",
 	],
 	[
-		selected("return", { kind: "stat-options", argument: 1 }, OBJECT | UNDEFINED),
+		{
+			kind: "return",
+			value: {
+				hostObject: "Stats",
+				mask: OBJECT | UNDEFINED,
+				selector: { kind: "stat-options", argument: 1 },
+			},
+		},
 		"lstatSync",
 		"statSync",
 	],
-	[returned(OBJECT), "fstatSync"],
+	[hostObject("Stats"), "fstatSync"],
 	[returned(OBJECT, "Array"), "readdirSync", "globSync"],
 	[
 		returned(OBJECT),
-		"Dir",
-		"Dirent",
 		"FileReadStream",
 		"FileWriteStream",
 		"ReadStream",
-		"Stats",
 		"WriteStream",
 		"createReadStream",
 		"createWriteStream",
 		"mkdtempDisposableSync",
-		"opendirSync",
 		"statfsSync",
 		"watch",
 		"watchFile",
@@ -212,10 +220,18 @@ const fsPromises = exportsWithContracts(
 		"readlink",
 		"realpath",
 	],
-	[{ kind: "fulfill", value: { mask: OBJECT, nodeFileHandle: true } }, "open"],
-	[fulfilled(OBJECT), "opendir", "statfs"],
+	[{ kind: "fulfill", value: { mask: OBJECT, hostObject: "FileHandle" } }, "open"],
+	[{ kind: "fulfill", value: { mask: OBJECT, hostObject: "Dir" } }, "opendir"],
+	[fulfilled(OBJECT), "statfs"],
 	[
-		selected("fulfill", { kind: "stat-options", argument: 1 }, OBJECT | UNDEFINED),
+		{
+			kind: "fulfill",
+			value: {
+				hostObject: "Stats",
+				mask: OBJECT | UNDEFINED,
+				selector: { kind: "stat-options", argument: 1 },
+			},
+		},
 		"lstat",
 		"stat",
 	],
@@ -272,7 +288,8 @@ export const NODE_FILE_HANDLE_RESULTS = {
 	properties: exportsWithContracts([returned(NUMBER), "fd"]),
 	methods: exportsWithContracts(
 		[selected("fulfill", { kind: "encoding", argument: 0 }), "readFile"],
-		[fulfilled(OBJECT), "read", "stat", "write"],
+		[fulfilled(OBJECT), "read", "write"],
+		[{ kind: "fulfill", value: { mask: OBJECT, hostObject: "Stats" } }, "stat"],
 		[
 			fulfilled(UNDEFINED),
 			"appendFile",
@@ -1006,19 +1023,20 @@ const streamConsumers = exportsWithContracts(
 	],
 );
 const streamWeb = exportsWithContracts(
-	[
-		returned(OBJECT),
-		"ReadableStream",
-		"ReadableStreamDefaultReader",
-		"ReadableStreamBYOBReader",
-		"WritableStream",
-		"WritableStreamDefaultWriter",
-		"TransformStream",
-		"TextEncoderStream",
-		"TextDecoderStream",
-		"ByteLengthQueuingStrategy",
-		"CountQueuingStrategy",
-	],
+	...(
+		[
+			"ReadableStream",
+			"ReadableStreamDefaultReader",
+			"ReadableStreamBYOBReader",
+			"WritableStream",
+			"WritableStreamDefaultWriter",
+			"TransformStream",
+			"TextEncoderStream",
+			"TextDecoderStream",
+			"ByteLengthQueuingStrategy",
+			"CountQueuingStrategy",
+		] as const
+	).map((name) => [nativeConstructor(name), name] as const),
 	[
 		neverReturns("The controller or request is only created by a stream."),
 		"ReadableStreamDefaultController",
@@ -1040,7 +1058,8 @@ const events = exportsWithContracts(
 	],
 );
 const timers = exportsWithContracts(
-	[returned(OBJECT), "setTimeout", "setInterval", "setImmediate"],
+	[hostObject("Timeout"), "setTimeout", "setInterval"],
+	[hostObject("Immediate"), "setImmediate"],
 	[returned(UNDEFINED), "clearTimeout", "clearInterval", "clearImmediate"],
 );
 const timersPromises = exportsWithContracts(
@@ -1147,7 +1166,7 @@ export const HOST_RESULT_CONTRACTS: ReadonlyMap<
 	["mal_host_install_node_buffer", buffer],
 	[
 		"mal_host_install_node_string_decoder",
-		exportsWithContracts([returned(OBJECT), "StringDecoder"]),
+		exportsWithContracts([nativeConstructor("StringDecoder"), "StringDecoder"]),
 	],
 ]);
 
@@ -1255,25 +1274,56 @@ export type HostObjectKind =
 	| "AbortSignal"
 	| "Blob"
 	| "Buffer"
+	| "ByteLengthQueuingStrategy"
+	| "CompressionStream"
+	| "CountQueuingStrategy"
 	| "DatabaseSync"
+	| "DecompressionStream"
 	| "DOMException"
+	| "Dir"
+	| "Dirent"
+	| "DirIterator"
+	| "FileHandle"
+	| "Stats"
+	| "Event"
+	| "CustomEvent"
+	| "CloseEvent"
+	| "ErrorEvent"
+	| "MessageEvent"
+	| "EventTarget"
+	| "WebSocket"
 	| "File"
 	| "FormData"
 	| "Headers"
 	| "Request"
 	| "Response"
+	| "ReadableStream"
+	| "ReadableStreamDefaultReader"
+	| "ReadableStreamBYOBReader"
+	| "ReadableStreamReader"
+	| "ReadableStreamIterator"
+	| "StreamReadResult"
 	| "StatementSync"
+	| "StringDecoder"
 	| "TextDecoder"
+	| "TextDecoderStream"
 	| "TextEncoder"
+	| "TextEncoderStream"
+	| "TransformStream"
 	| "URL"
 	| "URLSearchParams"
 	| "URLSearchParamsIterator"
+	| "WritableStream"
+	| "WritableStreamDefaultWriter"
+	| "Timeout"
+	| "Immediate"
 	| "FormDataIterator"
 	| "HeadersIterator";
 
 const body = exportsWithContracts(
 	[resolved(STRING), "text"],
-	[resolved(OBJECT), "arrayBuffer", "bytes"],
+	[resolved(OBJECT), "arrayBuffer"],
+	[{ kind: "resolve", value: { mask: OBJECT, brand: "Uint8Array" } }, "bytes"],
 	[{ kind: "resolve", value: { mask: OBJECT, hostObject: "Blob" } }, "blob"],
 	[{ kind: "resolve", value: { mask: OBJECT, hostObject: "FormData" } }, "formData"],
 	[
@@ -1296,8 +1346,9 @@ function hostObject(
 
 const blob = exportsWithContracts(
 	[resolved(STRING), "text"],
-	[resolved(OBJECT), "arrayBuffer", "bytes"],
-	[returned(OBJECT), "stream"],
+	[resolved(OBJECT), "arrayBuffer"],
+	[{ kind: "resolve", value: { mask: OBJECT, brand: "Uint8Array" } }, "bytes"],
+	[hostObject("ReadableStream"), "stream"],
 );
 const blobProperties = exportsWithContracts(
 	[returned(NUMBER), "size"],
@@ -1307,6 +1358,109 @@ const bodyProperties = exportsWithContracts(
 	[returned(OBJECT | NULL), "body"],
 	[returned(BOOLEAN), "bodyUsed"],
 );
+
+const readableReaderMethods = exportsWithContracts(
+	[fulfilled(UNDEFINED), "cancel"],
+	[returned(UNDEFINED), "releaseLock"],
+	[{ kind: "fulfill", value: { mask: OBJECT, hostObject: "StreamReadResult" } }, "read"],
+);
+const readableReaderProperties = exportsWithContracts([fulfilled(UNDEFINED), "closed"]);
+const transformStreamProperties = exportsWithContracts(
+	[hostObject("ReadableStream"), "readable"],
+	[hostObject("WritableStream"), "writable"],
+);
+const abortSink: HostResultContract = {
+	kind: "resolve",
+	value: { mask: TOP },
+	reason: "The runtime adopts the underlying sink's abort callback result.",
+};
+
+const eventMethods = exportsWithContracts([
+	returned(UNDEFINED),
+	"preventDefault",
+	"stopPropagation",
+	"stopImmediatePropagation",
+	"initEvent",
+]);
+const eventTargetMethods = exportsWithContracts(
+	[returned(UNDEFINED), "addEventListener", "removeEventListener"],
+	[returned(BOOLEAN), "dispatchEvent"],
+);
+const eventProperties = exportsWithContracts(
+	[returned(STRING), "type"],
+	[returned(NUMBER), "eventPhase", "timeStamp"],
+	[
+		returned(BOOLEAN),
+		"bubbles",
+		"cancelable",
+		"defaultPrevented",
+		"returnValue",
+		"cancelBubble",
+		"composed",
+		"isTrusted",
+	],
+	[returned(OBJECT | NULL), "target", "srcElement", "currentTarget"],
+);
+const fileTypePredicates = exportsWithContracts([
+	returned(BOOLEAN),
+	"isFile",
+	"isDirectory",
+	"isBlockDevice",
+	"isCharacterDevice",
+	"isFIFO",
+	"isSocket",
+	"isSymbolicLink",
+]);
+
+function directoryCompletion(value: HostValueContract): HostResultContract {
+	return {
+		kind: "fulfill",
+		value,
+		immediateMask: OBJECT | UNDEFINED,
+		optionalCallback: 0,
+	};
+}
+
+export const GLOBAL_HOST_FUNCTION_RESULTS = exportsWithContracts(
+	[returned(STRING), "atob", "btoa"],
+	[
+		returned(UNDEFINED),
+		"queueMicrotask",
+		"clearTimeout",
+		"clearInterval",
+		"clearImmediate",
+		"__mal_collect_garbage",
+		"__mal_fail_next_cell_allocation",
+		"__mal_reset_perf_stats",
+	],
+	[
+		returned(NUMBER),
+		"__mal_gc_live_bytes",
+		"__mal_gc_allocated_bytes",
+		"__mal_gc_collections",
+	],
+	[hostObject("Timeout"), "setTimeout", "setInterval"],
+	[hostObject("Immediate"), "setImmediate"],
+	[returned(TOP & ~SYMBOL), "structuredClone"],
+);
+
+export const GLOBAL_HOST_NAMESPACE_RESULTS = new Map([
+	["console", console],
+	["process", process],
+	[
+		"performance",
+		exportsWithContracts(
+			[returned(NUMBER), "now"],
+			[returned(OBJECT), "mark", "measure", "eventLoopUtilization", "timerify", "toJSON"],
+			[returned(OBJECT, "Array"), "getEntries", "getEntriesByName", "getEntriesByType"],
+			[returned(UNDEFINED), "clearMarks", "clearMeasures"],
+		),
+	],
+	[
+		"mal",
+		exportsWithContracts([returned(UNDEFINED), "_profilePhaseBegin", "_profilePhaseEnd"]),
+	],
+]);
 
 export const GLOBAL_HOST_CONSTRUCTORS = [
 	"Response",
@@ -1319,10 +1473,29 @@ export const GLOBAL_HOST_CONSTRUCTORS = [
 	"AbortSignal",
 	"Buffer",
 	"DOMException",
+	"Event",
+	"CustomEvent",
+	"CloseEvent",
+	"ErrorEvent",
+	"MessageEvent",
+	"EventTarget",
+	"WebSocket",
 	"TextDecoder",
 	"TextEncoder",
 	"URL",
 	"URLSearchParams",
+	"ByteLengthQueuingStrategy",
+	"CompressionStream",
+	"CountQueuingStrategy",
+	"DecompressionStream",
+	"ReadableStream",
+	"ReadableStreamDefaultReader",
+	"ReadableStreamBYOBReader",
+	"TextDecoderStream",
+	"TextEncoderStream",
+	"TransformStream",
+	"WritableStream",
+	"WritableStreamDefaultWriter",
 ] as const;
 
 // Object-valued resolutions require stable prototypes through settlement.
@@ -1338,6 +1511,7 @@ export const HOST_OBJECT_RESULTS: {
 } = {
 	fetch: { kind: "fulfill", value: { mask: OBJECT, hostObject: "Response" } },
 	statics: {
+		ReadableStream: exportsWithContracts([hostObject("ReadableStream"), "from"]),
 		AbortSignal: exportsWithContracts([
 			hostObject("AbortSignal"),
 			"abort",
@@ -1365,8 +1539,29 @@ export const HOST_OBJECT_RESULTS: {
 		Response: exportsWithContracts([hostObject("Response"), "error", "json", "redirect"]),
 	},
 	methods: {
+		Dir: exportsWithContracts(
+			[directoryCompletion({ mask: OBJECT | NULL, hostObject: "Dirent" }), "read"],
+			[hostObject("Dirent", undefined, OBJECT | NULL), "readSync"],
+			[directoryCompletion({ mask: UNDEFINED }), "close"],
+			[returned(UNDEFINED), "closeSync"],
+			[hostObject("DirIterator"), "[Symbol.asyncIterator]"],
+		),
+		Dirent: fileTypePredicates,
+		DirIterator: exportsWithContracts([fulfilled(OBJECT), "next", "return"]),
+		FileHandle: NODE_FILE_HANDLE_RESULTS.methods,
+		Stats: fileTypePredicates,
+		ByteLengthQueuingStrategy: exportsWithContracts([
+			dynamic("Returns the supplied chunk's byteLength property without converting it."),
+			"size",
+		]),
+		CompressionStream: exportsWithContracts(),
+		CountQueuingStrategy: exportsWithContracts([returned(NUMBER), "size"]),
+		DecompressionStream: exportsWithContracts(),
 		AbortController: exportsWithContracts([returned(UNDEFINED), "abort"]),
-		AbortSignal: exportsWithContracts([returned(UNDEFINED), "throwIfAborted"]),
+		AbortSignal: new Map([
+			...eventTargetMethods,
+			["throwIfAborted", returned(UNDEFINED)],
+		]),
 		Blob: blob,
 		Buffer: exportsWithContracts(
 			[
@@ -1480,6 +1675,16 @@ export const HOST_OBJECT_RESULTS: {
 			[hostObject("StatementSync"), "prepare"],
 		),
 		DOMException: exportsWithContracts(),
+		Event: eventMethods,
+		CustomEvent: eventMethods,
+		CloseEvent: eventMethods,
+		ErrorEvent: eventMethods,
+		MessageEvent: eventMethods,
+		EventTarget: eventTargetMethods,
+		WebSocket: new Map([
+			...eventTargetMethods,
+			...exportsWithContracts([returned(UNDEFINED), "close", "send"]),
+		]),
 		File: blob,
 		FormData: exportsWithContracts(
 			[returned(UNDEFINED), "append", "delete", "set", "forEach"],
@@ -1497,17 +1702,33 @@ export const HOST_OBJECT_RESULTS: {
 		),
 		Request: new Map([...body, ["clone", hostObject("Request")]]),
 		Response: body,
+		ReadableStream: exportsWithContracts(
+			[fulfilled(UNDEFINED), "cancel", "pipeTo"],
+			[hostObject("ReadableStreamReader"), "getReader"],
+			[returned(OBJECT), "pipeThrough"],
+			[returned(OBJECT, "Array"), "tee"],
+			[hostObject("ReadableStreamIterator"), "values", "[Symbol.asyncIterator]"],
+		),
+		ReadableStreamDefaultReader: readableReaderMethods,
+		ReadableStreamBYOBReader: readableReaderMethods,
+		ReadableStreamReader: readableReaderMethods,
+		ReadableStreamIterator: exportsWithContracts([fulfilled(OBJECT), "next", "return"]),
+		StreamReadResult: exportsWithContracts(),
 		StatementSync: exportsWithContracts(
 			[returned(OBJECT, "Array"), "all"],
 			[returned(OBJECT | UNDEFINED), "get"],
 			[returned(OBJECT), "run"],
 			[returned(UNDEFINED), "setReturnArrays", "setReadBigInts"],
 		),
+		StringDecoder: exportsWithContracts([returned(STRING), "write", "end"]),
 		TextDecoder: exportsWithContracts([returned(STRING), "decode"]),
+		TextDecoderStream: exportsWithContracts(),
 		TextEncoder: exportsWithContracts(
 			[returned(OBJECT, "Uint8Array"), "encode"],
 			[returned(OBJECT), "encodeInto"],
 		),
+		TextEncoderStream: exportsWithContracts(),
+		TransformStream: exportsWithContracts(),
 		URL: exportsWithContracts([returned(STRING), "toString", "toJSON"]),
 		URLSearchParams: exportsWithContracts(
 			[returned(STRING | NULL), "get"],
@@ -1524,10 +1745,49 @@ export const HOST_OBJECT_RESULTS: {
 			],
 		),
 		URLSearchParamsIterator: exportsWithContracts([returned(OBJECT), "next"]),
+		WritableStream: exportsWithContracts(
+			[abortSink, "abort"],
+			[fulfilled(UNDEFINED), "close"],
+			[hostObject("WritableStreamDefaultWriter"), "getWriter"],
+		),
+		WritableStreamDefaultWriter: exportsWithContracts(
+			[abortSink, "abort"],
+			[fulfilled(UNDEFINED), "close", "write"],
+			[returned(UNDEFINED), "releaseLock"],
+		),
+		Timeout: exportsWithContracts(
+			[hostObject("Timeout"), "ref", "unref", "refresh", "close"],
+			[returned(BOOLEAN), "hasRef"],
+			[returned(NUMBER), "[Symbol.toPrimitive]"],
+		),
+		Immediate: exportsWithContracts(
+			[hostObject("Immediate"), "ref", "unref"],
+			[returned(BOOLEAN), "hasRef"],
+			[returned(UNDEFINED), "[Symbol.dispose]"],
+		),
 		FormDataIterator: exportsWithContracts([returned(OBJECT), "next"]),
 		HeadersIterator: exportsWithContracts([returned(OBJECT), "next"]),
 	},
 	properties: {
+		Dir: exportsWithContracts([returned(STRING), "path"]),
+		FileHandle: NODE_FILE_HANDLE_RESULTS.properties,
+		Stats: exportsWithContracts([
+			returned(OBJECT),
+			"atime",
+			"mtime",
+			"ctime",
+			"birthtime",
+		]),
+		ByteLengthQueuingStrategy: exportsWithContracts(
+			[returned(NUMBER), "highWaterMark"],
+			[returned(OBJECT), "size"],
+		),
+		CompressionStream: transformStreamProperties,
+		CountQueuingStrategy: exportsWithContracts(
+			[returned(NUMBER), "highWaterMark"],
+			[returned(OBJECT), "size"],
+		),
+		DecompressionStream: transformStreamProperties,
 		AbortController: exportsWithContracts([hostObject("AbortSignal"), "signal"]),
 		AbortSignal: exportsWithContracts(
 			[returned(BOOLEAN), "aborted"],
@@ -1542,6 +1802,46 @@ export const HOST_OBJECT_RESULTS: {
 		DOMException: exportsWithContracts(
 			[returned(STRING), "name", "message"],
 			[returned(NUMBER), "code"],
+		),
+		Event: eventProperties,
+		CustomEvent: new Map([
+			...eventProperties,
+			["detail", dynamic("Carries the detail supplied by the caller.")],
+		]),
+		CloseEvent: new Map([
+			...eventProperties,
+			...exportsWithContracts(
+				[returned(BOOLEAN), "wasClean"],
+				[returned(NUMBER), "code"],
+				[returned(STRING), "reason"],
+			),
+		]),
+		ErrorEvent: new Map([
+			...eventProperties,
+			...exportsWithContracts(
+				[returned(STRING), "message", "filename"],
+				[returned(NUMBER), "lineno", "colno"],
+				[dynamic("Carries the error value supplied by the caller."), "error"],
+			),
+		]),
+		MessageEvent: new Map([
+			...eventProperties,
+			...exportsWithContracts(
+				[returned(STRING), "origin", "lastEventId"],
+				[
+					dynamic(
+						"Carries the corresponding value supplied by the caller, without conversion.",
+					),
+					"data",
+					"source",
+					"ports",
+				],
+			),
+		]),
+		WebSocket: exportsWithContracts(
+			[returned(NUMBER), "readyState", "bufferedAmount"],
+			[returned(STRING), "url", "extensions", "protocol", "binaryType"],
+			[returned(OBJECT | NULL), "onopen", "onerror", "onclose", "onmessage"],
 		),
 		File: new Map([
 			...blobProperties,
@@ -1580,11 +1880,31 @@ export const HOST_OBJECT_RESULTS: {
 				[returned(OBJECT | UNDEFINED), "headers"],
 			),
 		]),
+		ReadableStream: exportsWithContracts([returned(BOOLEAN), "locked"]),
+		ReadableStreamDefaultReader: readableReaderProperties,
+		ReadableStreamBYOBReader: readableReaderProperties,
+		ReadableStreamReader: readableReaderProperties,
+		StreamReadResult: exportsWithContracts(
+			[returned(BOOLEAN), "done"],
+			[dynamic("The stream can enqueue any JavaScript value."), "value"],
+		),
 		TextDecoder: exportsWithContracts(
 			[returned(STRING), "encoding"],
 			[returned(BOOLEAN), "fatal", "ignoreBOM"],
 		),
 		TextEncoder: exportsWithContracts([returned(STRING), "encoding"]),
+		TextDecoderStream: new Map([
+			...transformStreamProperties,
+			...exportsWithContracts(
+				[returned(STRING), "encoding"],
+				[returned(BOOLEAN), "fatal", "ignoreBOM"],
+			),
+		]),
+		TextEncoderStream: new Map([
+			...transformStreamProperties,
+			["encoding", returned(STRING)],
+		]),
+		TransformStream: transformStreamProperties,
 		URL: exportsWithContracts(
 			[
 				returned(STRING),
@@ -1603,5 +1923,10 @@ export const HOST_OBJECT_RESULTS: {
 			[hostObject("URLSearchParams"), "searchParams"],
 		),
 		URLSearchParams: exportsWithContracts([returned(NUMBER), "size"]),
+		WritableStream: exportsWithContracts([returned(BOOLEAN), "locked"]),
+		WritableStreamDefaultWriter: exportsWithContracts(
+			[fulfilled(UNDEFINED), "closed", "ready"],
+			[returned(NUMBER | NULL), "desiredSize"],
+		),
 	},
 } as const;
