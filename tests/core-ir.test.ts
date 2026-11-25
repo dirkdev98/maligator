@@ -1382,6 +1382,31 @@ describe("Core IR", () => {
 		expect(formatCoreFunction(program, functionId)).toContain("b3(%1: f64)");
 	});
 
+	it("keeps alias roots current when operands change on the same graph", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [left] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		});
+		const [right] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 2 },
+		});
+		const [copy] = builder.appendInstruction(entry, "move", [left!]);
+		const move = builder.bodyInstructionIds(entry).at(-1)!;
+		builder.setTerminator(entry, { kind: "return", value: copy! });
+		const { function: functionId } = builder.finish(entry);
+		const fn = program.function(functionId);
+		const control = buildCoreControlFlow(program, functionId);
+		expect(coreCanonicalValueRoots(fn, control).get(copy!)).toBe(left);
+
+		const editor = CoreEditor.open(program, functionId);
+		editor.replaceOperands(move, [right!]);
+		expect(coreCanonicalValueRoots(fn, control).get(copy!)).toBe(right);
+		editor.commit();
+		expect(coreCanonicalValueRoots(fn, control).get(copy!)).toBe(right);
+	});
+
 	it("canonicalizes moves and loop-carried copies to their external producer", () => {
 		const opcodes = registry();
 		const program = new CoreProgram(opcodes);

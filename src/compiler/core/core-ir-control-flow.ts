@@ -405,28 +405,45 @@ function traversal(
 	return { reachable, reversePostorder: postorder.reverse() };
 }
 
+function structuralControlFlow(
+	fn: CoreFunctionStore,
+	graph: Pick<CoreStructuralControlFlow, "successors" | "predecessors" | "edges">,
+	exceptionFlowVersion: number,
+	runOwner: CoreOptimizationOwnerRunner,
+): CoreStructuralControlFlow {
+	const entry = fn.entry;
+	let reached: ReturnType<typeof traversal> | undefined;
+	const reachability = () =>
+		(reached ??= runOwner(CORE_OPTIMIZATION_OWNER.controlFlowTraversal, () => {
+			const result = traversal(
+				entry,
+				new CoreBlockTopology(graph.successors, graph.predecessors, graph.edges),
+			);
+			Object.freeze(result.reachable);
+			return result;
+		}));
+	return Object.freeze({
+		function: fn.id,
+		cfgVersion: fn.version("cfg"),
+		exceptionFlowVersion,
+		...graph,
+		get reachable() {
+			return reachability().reachable;
+		},
+		get reversePostorder() {
+			return reachability().reversePostorder;
+		},
+	});
+}
+
 function buildStructural(
 	fn: CoreFunctionStore,
 	runOwner: CoreOptimizationOwnerRunner,
 ): CoreStructuralControlFlow {
-	const { successors, predecessors, edges } = runOwner(
-		CORE_OPTIMIZATION_OWNER.cfgEdgeConstruction,
-		() => buildEdges(fn),
+	const graph = runOwner(CORE_OPTIMIZATION_OWNER.cfgEdgeConstruction, () =>
+		buildEdges(fn),
 	);
-	const { reachable, reversePostorder } = runOwner(
-		CORE_OPTIMIZATION_OWNER.controlFlowTraversal,
-		() => traversal(fn.entry, new CoreBlockTopology(successors, predecessors, edges)),
-	);
-	return Object.freeze({
-		function: fn.id,
-		cfgVersion: fn.version("cfg"),
-		exceptionFlowVersion: 0,
-		successors,
-		predecessors,
-		edges,
-		reachable: Object.freeze(reachable),
-		reversePostorder,
-	});
+	return structuralControlFlow(fn, graph, 0, runOwner);
 }
 
 function buildExceptionalStructural(
@@ -434,49 +451,33 @@ function buildExceptionalStructural(
 	ordinary: CoreStructuralControlFlow,
 	runOwner: CoreOptimizationOwnerRunner,
 ): CoreStructuralControlFlow {
-	const { successors, predecessors, edges } = runOwner(
-		CORE_OPTIMIZATION_OWNER.cfgEdgeConstruction,
-		() => {
-			const successors = ordinary.successors.slice() as Array<Array<CoreControlEdge>>;
-			const predecessors = ordinary.predecessors.slice() as Array<Array<CoreControlEdge>>;
-			const rows = new Int32Array(fn.blockCapacity * 3);
-			const mutablePredecessors = new Set<CoreBlockId>();
-			const handlerBlocks = Array.from({ length: fn.handlerBlockCount }, (_, index) =>
-				fn.handlerBlockAt(index),
-			).sort((left, right) => left - right);
-			for (const block of handlerBlocks) {
-				const handler = fn.kernel.blockHandlerBlock(block);
-				if (handler === undefined || !blockHasExceptionalExit(fn, block)) continue;
-				const start = fn.kernel.blockHandlerArgumentStart(block);
-				const count = fn.kernel.blockHandlerArgumentCount(block);
-				const edge = exceptionalEdge(block);
-				rows[block * 3] = handler;
-				rows[block * 3 + 1] = start;
-				rows[block * 3 + 2] = count;
-				successors[block] = [...(successors[block] ?? []), edge];
-				if (!mutablePredecessors.has(handler)) {
-					predecessors[handler] = [...(predecessors[handler] ?? [])];
-					mutablePredecessors.add(handler);
-				}
-				predecessors[handler]!.push(edge);
+	const graph = runOwner(CORE_OPTIMIZATION_OWNER.cfgEdgeConstruction, () => {
+		const successors = ordinary.successors.slice() as Array<Array<CoreControlEdge>>;
+		const predecessors = ordinary.predecessors.slice() as Array<Array<CoreControlEdge>>;
+		const rows = new Int32Array(fn.blockCapacity * 3);
+		const mutablePredecessors = new Set<CoreBlockId>();
+		const handlerBlocks = Array.from({ length: fn.handlerBlockCount }, (_, index) =>
+			fn.handlerBlockAt(index),
+		).sort((left, right) => left - right);
+		for (const block of handlerBlocks) {
+			const handler = fn.kernel.blockHandlerBlock(block);
+			if (handler === undefined || !blockHasExceptionalExit(fn, block)) continue;
+			const start = fn.kernel.blockHandlerArgumentStart(block);
+			const count = fn.kernel.blockHandlerArgumentCount(block);
+			const edge = exceptionalEdge(block);
+			rows[block * 3] = handler;
+			rows[block * 3 + 1] = start;
+			rows[block * 3 + 2] = count;
+			successors[block] = [...(successors[block] ?? []), edge];
+			if (!mutablePredecessors.has(handler)) {
+				predecessors[handler] = [...(predecessors[handler] ?? [])];
+				mutablePredecessors.add(handler);
 			}
-			return { successors, predecessors, edges: ordinary.edges.withExceptional(rows) };
-		},
-	);
-	const { reachable, reversePostorder } = runOwner(
-		CORE_OPTIMIZATION_OWNER.controlFlowTraversal,
-		() => traversal(fn.entry, new CoreBlockTopology(successors, predecessors, edges)),
-	);
-	return Object.freeze({
-		function: fn.id,
-		cfgVersion: fn.version("cfg"),
-		exceptionFlowVersion: fn.version("exceptionFlow"),
-		successors,
-		predecessors,
-		edges,
-		reachable: Object.freeze(reachable),
-		reversePostorder,
+			predecessors[handler]!.push(edge);
+		}
+		return { successors, predecessors, edges: ordinary.edges.withExceptional(rows) };
 	});
+	return structuralControlFlow(fn, graph, fn.version("exceptionFlow"), runOwner);
 }
 
 function immediateDominators(
@@ -1113,11 +1114,60 @@ class SparseCanonicalValueRoots extends Map<CoreValueId, CoreValueId> {
 	}
 }
 
+const structuralValueRoots = new WeakMap<
+	CoreControlFlow,
+	{
+		readonly fn: CoreFunctionStore;
+		readonly body: number;
+		readonly cfg: number;
+		readonly exceptionFlow: number;
+		readonly memoryEffects: number;
+		readonly roots: ReadonlyMap<CoreValueId, CoreValueId>;
+	}
+>();
+
 export function coreCanonicalValueRoots(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	controlEdges?: ReadonlySet<CoreControlEdge>,
 	// Every normal result must equal one of these alternatives before their roots can join.
+	identityInputs?: (
+		instruction: CoreInstructionId,
+	) => ReadonlyArray<CoreValueId> | undefined,
+): ReadonlyMap<CoreValueId, CoreValueId> {
+	if (controlEdges !== undefined || identityInputs !== undefined || fn.hasActiveEditor)
+		return computeCanonicalValueRoots(fn, cfg, controlEdges, identityInputs);
+	fn.assertCurrentGeneration();
+	const body = fn.version("body");
+	const cfgVersion = fn.version("cfg");
+	const exceptionFlow = fn.version("exceptionFlow");
+	const memoryEffects = fn.version("memoryEffects");
+	const cached = structuralValueRoots.get(cfg);
+	// A CFG snapshot can survive changes to the values and operands in its blocks.
+	if (
+		cached?.fn === fn &&
+		cached.body === body &&
+		cached.cfg === cfgVersion &&
+		cached.exceptionFlow === exceptionFlow &&
+		cached.memoryEffects === memoryEffects
+	)
+		return cached.roots;
+	const roots = computeCanonicalValueRoots(fn, cfg);
+	structuralValueRoots.set(cfg, {
+		fn,
+		body,
+		cfg: cfgVersion,
+		exceptionFlow,
+		memoryEffects,
+		roots,
+	});
+	return roots;
+}
+
+function computeCanonicalValueRoots(
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	controlEdges?: ReadonlySet<CoreControlEdge>,
 	identityInputs?: (
 		instruction: CoreInstructionId,
 	) => ReadonlyArray<CoreValueId> | undefined,
@@ -1167,7 +1217,13 @@ export function coreCanonicalValueRoots(
 		}
 	}
 	const moveOpcode = fn.registry.get("move")?.id;
-	for (const instruction of fn.instructionIds()) {
+	const instructions =
+		identityInputs === undefined && !fn.hasActiveEditor
+			? moveOpcode === undefined
+				? []
+				: fn.opcodeSites().instructions([moveOpcode])
+			: fn.instructionIds();
+	for (const instruction of instructions) {
 		const move = kernel.instructionOpcode(instruction) === moveOpcode;
 		if (
 			(!move && identityInputs === undefined) ||
