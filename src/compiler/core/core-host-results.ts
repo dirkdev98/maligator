@@ -566,6 +566,11 @@ export function coreHostCompletion(
 					return { mask: COMPILER_VALUE_KIND_OBJECT, hostObject: value.hostObject };
 				break;
 			}
+			case "tls-socket": {
+				if (option("socket") === undefined)
+					return { mask: COMPILER_VALUE_KIND_OBJECT, hostObject: "TlsSocket" };
+				break;
+			}
 			case "digest-encoding": {
 				const encoding = primitive();
 				if (encoding !== UNKNOWN_LITERAL)

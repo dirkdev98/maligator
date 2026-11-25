@@ -20,6 +20,7 @@ import {
 } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	BUFFER_STRING_ENCODINGS,
+	CRYPTO_STREAM_DELEGATES,
 	DISK_HANDLE_EXPORTS,
 	EMBEDDED_ASSET_RESULTS,
 	PLATFORM_OBJECT_RESULTS,
@@ -346,6 +347,20 @@ it("selects the string digest encodings implemented by Buffer", () => {
 	expect(BUFFER_STRING_ENCODINGS).toEqual(new Set(encodings.map((match) => match[1])));
 });
 
+it("accounts for the installed crypto stream delegation methods", () => {
+	const source = readFileSync(
+		new URL("../runtime/src/runtime/node_crypto.c", import.meta.url),
+		"utf8",
+	);
+	const delegates = source.match(
+		/CRYPTO_LAZY_STREAM_METHODS\[\] = \{([\s\S]*?)\n\};/,
+	)?.[1];
+	expect(delegates).toBeDefined();
+	expect(
+		new Set([...delegates!.matchAll(/"([^"]+)"/g)].map((match) => match[1])),
+	).toEqual(new Set(CRYPTO_STREAM_DELEGATES));
+});
+
 it("accounts for methods and getters installed on Node FileHandle objects", () => {
 	const source = readFileSync(
 		new URL("../runtime/src/runtime/node_fs.c", import.meta.url),
@@ -555,6 +570,47 @@ it.each([
 	["new CloseEvent('close').code", "number", ""],
 	["new EventTarget().dispatchEvent(new Event('test'))", "boolean", ""],
 	["performance.now()", "number", ""],
+	[
+		"new BlockList().check('127.0.0.1')",
+		"boolean",
+		'import { BlockList } from "node:net";',
+	],
+	["new Server().listening", "boolean", 'import { Server } from "node:net";'],
+	[
+		"createServer().headersTimeout",
+		"number",
+		'import { createServer } from "node:http";',
+	],
+	[
+		"createServer().keepAliveTimeout",
+		"number",
+		'import { createServer } from "node:https";',
+	],
+	[
+		"connect({ port: 443 }).getProtocol()",
+		"number",
+		'import { connect } from "node:tls";',
+	],
+	[
+		"createSocket('udp4').getSendQueueCount()",
+		"number",
+		'import { createSocket } from "node:dgram";',
+	],
+	[
+		"new ChildProcess().kill()",
+		"boolean",
+		'import { ChildProcess } from "node:child_process";',
+	],
+	[
+		"EventEmitter.defaultMaxListeners",
+		"number",
+		'import { EventEmitter } from "node:events";',
+	],
+	[
+		"createHash('sha256').isPaused()",
+		"boolean",
+		'import { createHash } from "node:crypto";',
+	],
 	["new Readable().read(0)", "string", 'import { Readable } from "node:stream";'],
 	[
 		"Readable.from(['chunk']).isPaused()",

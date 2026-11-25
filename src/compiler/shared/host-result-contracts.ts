@@ -37,6 +37,7 @@ export interface HostValueContract {
 			| "signature-argument"
 			| "read-size"
 			| "callback-chunk"
+			| "tls-socket"
 			| "text-flag"
 			| "stat-options"
 			| "mkdir-options"
@@ -598,14 +599,10 @@ const v8 = exportsWithContracts(
 );
 
 const perfHooks = exportsWithContracts(
-	[
-		returned(OBJECT),
-		"createHistogram",
-		"eventLoopUtilization",
-		"monitorEventLoopDelay",
-		"timerify",
-		"PerformanceObserver",
-	],
+	[nativeConstructor("PerformanceObserver"), "PerformanceObserver"],
+	[installedObject("Performance"), "performance"],
+	[hostObject("Histogram"), "createHistogram", "monitorEventLoopDelay"],
+	[returned(OBJECT), "eventLoopUtilization", "timerify"],
 	[
 		{
 			kind: "never",
@@ -656,7 +653,9 @@ const maligatorWorkers = exportsWithContracts(
 );
 
 const vm = exportsWithContracts(
-	[returned(OBJECT), "Script", "compileFunction", "createContext", "createScript"],
+	[nativeConstructor("VmScript"), "Script"],
+	[hostObject("VmScript"), "createScript"],
+	[returned(OBJECT), "compileFunction", "createContext"],
 	[returned(BOOLEAN), "isContext"],
 	[
 		dynamic("Returns the evaluated script's completion value."),
@@ -666,7 +665,9 @@ const vm = exportsWithContracts(
 	],
 );
 const diagnostics = exportsWithContracts(
-	[returned(OBJECT), "Channel", "channel", "tracingChannel"],
+	[nativeConstructor("DiagnosticsChannel"), "Channel"],
+	[hostObject("DiagnosticsChannel"), "channel"],
+	[hostObject("TracingChannel"), "tracingChannel"],
 	[returned(BOOLEAN), "hasSubscribers", "unsubscribe"],
 	[returned(UNDEFINED), "subscribe"],
 );
@@ -686,7 +687,7 @@ const asyncHooks = exportsWithContracts(
 	[returned(NUMBER), "executionAsyncId", "triggerAsyncId"],
 );
 const console = exportsWithContracts(
-	[returned(OBJECT), "Console"],
+	[nativeConstructor("NodeConsole"), "Console"],
 	[
 		returned(UNDEFINED),
 		"assert",
@@ -754,7 +755,8 @@ const nodeWorkers = exportsWithContracts(
 	[neverReturns("Ports are created by the channel and worker factories."), "MessagePort"],
 );
 const assertions = exportsWithContracts(
-	[returned(OBJECT), "Assert", "AssertionError"],
+	[nativeConstructor("Assert"), "Assert"],
+	[returned(OBJECT), "AssertionError"],
 	[fulfilled(UNDEFINED), "rejects", "doesNotReject"],
 	[neverReturns("Always throws the assertion failure."), "fail"],
 	[
@@ -830,7 +832,6 @@ const zlib = exportsWithContracts(
 	],
 );
 const dnsShared = [
-	[returned(OBJECT), "Resolver"],
 	[returned(OBJECT, "Array"), "getServers"],
 	[returned(STRING), "getDefaultResultOrder"],
 	[returned(UNDEFINED), "setDefaultResultOrder", "setServers"],
@@ -855,11 +856,13 @@ const dnsQueries = [
 ];
 const dns = exportsWithContracts(
 	...dnsShared,
+	[nativeConstructor("DnsResolver"), "Resolver"],
 	[returned(OBJECT), "lookup"],
 	[callback, ...dnsQueries],
 );
 const dnsPromises = exportsWithContracts(
 	...dnsShared,
+	[nativeConstructor("DnsPromiseResolver"), "Resolver"],
 	[
 		{ kind: "resolve", value: { mask: OBJECT } },
 		"lookup",
@@ -869,7 +872,8 @@ const dnsPromises = exportsWithContracts(
 );
 const tty = exportsWithContracts(
 	[returned(BOOLEAN), "isatty"],
-	[returned(OBJECT), "ReadStream", "WriteStream"],
+	[nativeConstructor("TtyReadStream"), "ReadStream"],
+	[nativeConstructor("TtyWriteStream"), "WriteStream"],
 );
 const sqlite = exportsWithContracts(
 	[nativeConstructor("DatabaseSync"), "DatabaseSync"],
@@ -877,6 +881,18 @@ const sqlite = exportsWithContracts(
 );
 
 const http = exportsWithContracts(
+	[nativeConstructor("HttpAgent"), "Agent"],
+	[installedObject("HttpAgent"), "globalAgent"],
+	[nativeConstructor("CloseEvent"), "CloseEvent"],
+	[nativeConstructor("MessageEvent"), "MessageEvent"],
+	[nativeConstructor("WebSocket"), "WebSocket"],
+	[nativeConstructor("HttpIncomingMessage"), "IncomingMessage"],
+	[nativeConstructor("HttpOutgoingMessage"), "OutgoingMessage"],
+	[nativeConstructor("HttpServerResponse"), "ServerResponse"],
+	[nativeConstructor("HttpClientRequest"), "ClientRequest"],
+	[nativeConstructor("HttpServer"), "Server"],
+	[hostObject("HttpServer"), "createServer"],
+	[hostObject("HttpClientRequest"), "get", "request"],
 	[returned(BOOLEAN), "isValidHeaderName", "isValidHeaderValue"],
 	[
 		returned(UNDEFINED),
@@ -884,39 +900,19 @@ const http = exportsWithContracts(
 		"validateHeaderValue",
 		"setMaxIdleHTTPParsers",
 	],
-	[
-		returned(OBJECT),
-		"Agent",
-		"CloseEvent",
-		"MessageEvent",
-		"IncomingMessage",
-		"OutgoingMessage",
-		"ServerResponse",
-		"Server",
-		"ClientRequest",
-		"createServer",
-		"request",
-		"get",
-		"WebSocket",
-	],
 );
-const https = exportsWithContracts([
-	returned(OBJECT),
-	"Agent",
-	"Server",
-	"createServer",
-	"request",
-	"get",
-]);
+const https = exportsWithContracts(
+	[nativeConstructor("HttpsAgent"), "Agent"],
+	[installedObject("HttpsAgent"), "globalAgent"],
+	[nativeConstructor("HttpsServer"), "Server"],
+	[hostObject("HttpsServer"), "createServer"],
+	[hostObject("HttpClientRequest"), "request", "get"],
+);
 const tls = exportsWithContracts(
-	[
-		returned(OBJECT),
-		"connect",
-		"createSecureContext",
-		"SecureContext",
-		"createServer",
-		"Server",
-	],
+	[selected("return", { kind: "tls-socket", argument: 0 }, OBJECT), "connect"],
+	[nativeConstructor("TlsServer"), "Server"],
+	[hostObject("TlsServer"), "createServer"],
+	[returned(OBJECT), "createSecureContext", "SecureContext"],
 	[
 		returned(OBJECT, "Array"),
 		"getCACertificates",
@@ -927,6 +923,11 @@ const tls = exportsWithContracts(
 	[neverReturns("The installed TLSSocket adapter is unsupported."), "TLSSocket"],
 );
 const net = exportsWithContracts(
+	[nativeConstructor("NetBlockList"), "BlockList"],
+	[nativeConstructor("NetServer"), "Server"],
+	[hostObject("NetServer"), "createServer"],
+	[hostObject("NetSocket"), "connect", "createConnection"],
+	[streamConstructor("NetSocket"), "Socket"],
 	[returned(BOOLEAN), "isIPv4", "isIPv6", "getDefaultAutoSelectFamily"],
 	[returned(NUMBER), "isIP", "getDefaultAutoSelectFamilyAttemptTimeout"],
 	[
@@ -934,23 +935,17 @@ const net = exportsWithContracts(
 		"setDefaultAutoSelectFamily",
 		"setDefaultAutoSelectFamilyAttemptTimeout",
 	],
-	[
-		returned(OBJECT),
-		"BlockList",
-		"Server",
-		"connect",
-		"createConnection",
-		"createServer",
-	],
-	[returned(OBJECT | UNDEFINED), "Socket"],
 );
 const childProcess = exportsWithContracts(
-	[returned(OBJECT), "ChildProcess", "exec", "execFile", "spawn", "spawnSync"],
+	[nativeConstructor("ChildProcess"), "ChildProcess"],
+	[hostObject("SpawnedChildProcess"), "exec", "execFile", "spawn"],
+	[hostObject("SpawnSyncResult"), "spawnSync"],
 	[returned(STRING | OBJECT | NULL), "execSync", "execFileSync"],
 	[neverReturns("The native runtime does not support fork IPC."), "fork"],
 );
 const readline = exportsWithContracts(
-	[returned(OBJECT), "Interface", "createInterface"],
+	[nativeConstructor("ReadlineInterface"), "Interface"],
+	[hostObject("ReadlineInterface"), "createInterface"],
 	[returned(UNDEFINED), "emitKeypressEvents"],
 	[
 		dynamic("The output stream's write method supplies the return value."),
@@ -960,6 +955,13 @@ const readline = exportsWithContracts(
 		"moveCursor",
 	],
 );
+const readlinePromises = new Map([
+	...readline,
+	...exportsWithContracts(
+		[nativeConstructor("ReadlinePromiseInterface"), "Interface"],
+		[hostObject("ReadlinePromiseInterface"), "createInterface"],
+	),
+]);
 const crypto = exportsWithContracts(
 	[hostObject("Hash"), "createHash"],
 	[hostObject("Hmac"), "createHmac"],
@@ -1117,10 +1119,13 @@ export const HOST_RESULT_CONTRACTS: ReadonlyMap<
 	["mal_host_install_node_child_process", childProcess],
 	[
 		"mal_host_install_node_dgram",
-		exportsWithContracts([returned(OBJECT), "Socket", "createSocket"]),
+		exportsWithContracts(
+			[nativeConstructor("DgramSocket"), "Socket"],
+			[hostObject("DgramSocket"), "createSocket"],
+		),
 	],
 	["mal_host_install_node_readline", readline],
-	["mal_host_install_node_readline_promises", readline],
+	["mal_host_install_node_readline_promises", readlinePromises],
 	["mal_host_install_node_crypto", crypto],
 	["mal_host_install_node_stream", stream],
 	["mal_host_install_node_stream_promises", streamPromises],
@@ -1402,6 +1407,42 @@ export const PLATFORM_OBJECT_RESULTS = {
 } as const;
 
 export type HostObjectKind =
+	| "Assert"
+	| "NodeConsole"
+	| "VmScript"
+	| "DiagnosticsChannel"
+	| "TracingChannel"
+	| "DnsResolver"
+	| "DnsPromiseResolver"
+	| "TtyReadStream"
+	| "TtyWriteStream"
+	| "Performance"
+	| "PerformanceEntry"
+	| "PerformanceObserver"
+	| "PerformanceNodeTiming"
+	| "Histogram"
+	| "NetBlockList"
+	| "NetServer"
+	| "NetSocket"
+	| "DgramSocket"
+	| "SocketAddress"
+	| "TlsServer"
+	| "TlsSocket"
+	| "HttpAgent"
+	| "HttpIncomingMessage"
+	| "HttpOutgoingMessage"
+	| "HttpServerResponse"
+	| "HttpClientRequest"
+	| "HttpServer"
+	| "HttpsServer"
+	| "HttpsAgent"
+	| "ChildProcess"
+	| "SpawnedChildProcess"
+	| "SpawnSyncResult"
+	| "ReadlineInterface"
+	| "ReadlinePromiseInterface"
+	| "ReadlineCursor"
+	| "ReadlineIterator"
 	| "BroadcastChannel"
 	| "MaligatorMessageChannel"
 	| "MaligatorMessagePort"
@@ -1606,11 +1647,14 @@ export const BUFFER_STRING_ENCODINGS = new Set([
 ]);
 
 function digestMethods(kind: "Hash" | "Hmac") {
-	return exportsWithContracts(
-		[hostObject(kind), "update"],
-		[selected("return", { kind: "digest-encoding", argument: 0 }), "digest"],
-		[callback, "_transform", "_flush"],
-	);
+	return new Map([
+		...cryptoStreamDelegates(kind),
+		...exportsWithContracts(
+			[hostObject(kind), "update"],
+			[selected("return", { kind: "digest-encoding", argument: 0 }), "digest"],
+			[callback, "_transform", "_flush"],
+		),
+	]);
 }
 
 function listenerMethods(kind: HostObjectKind) {
@@ -1685,6 +1729,160 @@ const writableStateFields = exportsWithContracts([
 ]);
 const duplexStateFields = new Map([...readableStateFields, ...writableStateFields]);
 
+const mutableDispatch = dynamic("Forwards the result of a mutable method lookup.");
+
+export const CRYPTO_STREAM_DELEGATES = [
+	"write",
+	"end",
+	"pipe",
+	"unpipe",
+	"on",
+	"addListener",
+	"once",
+	"prependListener",
+	"prependOnceListener",
+	"removeListener",
+	"off",
+	"removeAllListeners",
+	"setEncoding",
+	"read",
+	"resume",
+	"pause",
+	"isPaused",
+	"unshift",
+	"cork",
+	"uncork",
+	"destroy",
+	"setDefaultEncoding",
+	"push",
+] as const;
+
+function cryptoStreamDelegates(kind: HostObjectKind) {
+	const stream = nodeStreamMethods(kind, true, true);
+	return CRYPTO_STREAM_DELEGATES.map(
+		(name) => [name, stream.get(name) ?? mutableDispatch] as const,
+	);
+}
+
+function netServerMethods(kind: "NetServer" | "TlsServer") {
+	return new Map([
+		...emitterMethods(kind),
+		...exportsWithContracts(
+			[hostObject(kind), "listen", "close", "ref", "unref", "getConnections"],
+			[returned(OBJECT | STRING | NULL), "address"],
+			[fulfilled(UNDEFINED), "[Symbol.asyncDispose]"],
+		),
+	]);
+}
+
+function netSocketMethods(kind: "NetSocket" | "TlsSocket") {
+	return new Map([
+		...nodeStreamMethods(kind, true, true),
+		...exportsWithContracts(
+			[
+				hostObject(kind),
+				"connect",
+				"end",
+				"resetAndDestroy",
+				"setTimeout",
+				"setNoDelay",
+				"setKeepAlive",
+			],
+			[returned(BOOLEAN), "write"],
+			[mutableDispatch, "destroy", "pause", "resume"],
+		),
+	]);
+}
+
+function outgoingMethods(
+	kind: "HttpOutgoingMessage" | "HttpServerResponse" | "HttpClientRequest",
+) {
+	return new Map([
+		...emitterMethods(kind),
+		...exportsWithContracts(
+			[hostObject(kind), "setHeader", "destroy"],
+			[returned(BOOLEAN), "hasHeader"],
+			[returned(UNDEFINED), "removeHeader"],
+			[returned(OBJECT), "getHeaders"],
+			[returned(OBJECT, "Array"), "getHeaderNames"],
+			[dynamic("A header contains the value originally set by the caller."), "getHeader"],
+		),
+	]);
+}
+
+function httpServerMethods(kind: "HttpServer" | "HttpsServer") {
+	return new Map([
+		...emitterMethods(kind),
+		...exportsWithContracts(
+			[hostObject(kind, undefined, OBJECT | UNDEFINED), "listen", "close", "setTimeout"],
+			[hostObject("SocketAddress", undefined, OBJECT | NULL), "address"],
+			[returned(UNDEFINED), "closeAllConnections", "closeIdleConnections"],
+		),
+	]);
+}
+
+const socketProperties = exportsWithContracts(
+	[returned(BOOLEAN), "connecting", "pending"],
+	[returned(STRING), "readyState"],
+	[returned(NUMBER | UNDEFINED), "remotePort", "localPort"],
+	[
+		returned(STRING | UNDEFINED),
+		"remoteAddress",
+		"localAddress",
+		"remoteFamily",
+		"localFamily",
+	],
+);
+const outgoingProperties = exportsWithContracts(
+	[returned(BOOLEAN), "headersSent"],
+	[dynamic("Stores an arbitrary error supplied by the caller."), "errored"],
+);
+const httpServerProperties = exportsWithContracts(
+	[
+		returned(NUMBER),
+		"headersTimeout",
+		"requestTimeout",
+		"keepAliveTimeout",
+		"maxConnections",
+		"timeout",
+	],
+	[returned(NUMBER | UNDEFINED), "maxHeaderSize"],
+	[returned(NUMBER | NULL), "maxHeadersCount"],
+);
+const childProcessProperties = exportsWithContracts(
+	[returned(BOOLEAN), "killed", "connected"],
+	[returned(NUMBER | UNDEFINED), "pid"],
+	[returned(NUMBER | NULL), "exitCode"],
+	[returned(STRING | NULL), "signalCode"],
+);
+
+function childProcessMethods(kind: "ChildProcess" | "SpawnedChildProcess") {
+	return new Map([
+		...emitterMethods(kind),
+		...exportsWithContracts(
+			[returned(BOOLEAN), "kill"],
+			[returned(UNDEFINED), "ref", "unref"],
+		),
+	]);
+}
+
+function readlineMethods(kind: "ReadlineInterface" | "ReadlinePromiseInterface") {
+	return new Map([
+		...emitterMethods(kind),
+		...exportsWithContracts(
+			[hostObject(kind), "pause", "resume"],
+			[returned(UNDEFINED), "prompt", "setPrompt", "close", "write"],
+			[
+				dynamic("setPrompt and constructor options store the prompt value unchanged."),
+				"getPrompt",
+			],
+			[hostObject("ReadlineCursor"), "getCursorPos"],
+			[hostObject("ReadlineIterator"), "[Symbol.asyncIterator]"],
+			[kind === "ReadlinePromiseInterface" ? resolved(STRING) : callback, "question"],
+		),
+	]);
+}
+
 const iteratorResult = {
 	kind: "resolve",
 	value: { mask: OBJECT, hostObject: "StreamReadResult" },
@@ -1692,21 +1890,68 @@ const iteratorResult = {
 const forwardsCallbackResult = dynamic(
 	"Returns any value produced by the caller's callback.",
 );
+const vmCompletion = dynamic("Returns the evaluated script's completion value.");
+const performanceMethods = exportsWithContracts(
+	[returned(NUMBER), "now"],
+	[hostObject("PerformanceEntry"), "mark", "measure"],
+	[returned(OBJECT), "eventLoopUtilization", "timerify", "toJSON"],
+	[returned(OBJECT, "Array"), "getEntries", "getEntriesByName", "getEntriesByType"],
+	[returned(UNDEFINED), "clearMarks", "clearMeasures"],
+);
+
+const assertionInstanceMethods = exportsWithContracts(
+	[fulfilled(UNDEFINED), "rejects", "doesNotReject"],
+	[neverReturns("Always throws the assertion failure."), "fail"],
+	[
+		returned(UNDEFINED),
+		"ok",
+		"equal",
+		"notEqual",
+		"deepEqual",
+		"notDeepEqual",
+		"deepStrictEqual",
+		"notDeepStrictEqual",
+		"strictEqual",
+		"notStrictEqual",
+		"partialDeepStrictEqual",
+		"throws",
+		"doesNotThrow",
+		"match",
+		"doesNotMatch",
+		"ifError",
+	],
+);
+
+function dnsResolverMethods(promises: boolean) {
+	return exportsWithContracts(
+		[returned(OBJECT, "Array"), "getServers"],
+		[returned(UNDEFINED), "setServers", "cancel"],
+		[
+			promises ? resolved(OBJECT) : callback,
+			...dnsQueries.filter((name) => name !== "lookupService" && name !== "resolveAny"),
+		],
+		[promises ? fulfilled(0) : callback, "resolveAny"],
+	);
+}
 
 function cipherMethods(kind: "Cipheriv" | "Decipheriv") {
-	return exportsWithContracts(
-		[hostObject(kind), "setAutoPadding", "setAAD"],
-		[selected("return", { kind: "digest-encoding", argument: 0 }), "final"],
-		[selected("return", { kind: "digest-encoding", argument: 2 }), "update"],
-		kind === "Cipheriv"
-			? [hostObject("Buffer", "Uint8Array"), "getAuthTag"]
-			: [hostObject(kind), "setAuthTag"],
-		[callback, "_transform", "_flush"],
-	);
+	return new Map([
+		...cryptoStreamDelegates(kind),
+		...exportsWithContracts(
+			[hostObject(kind), "setAutoPadding", "setAAD"],
+			[selected("return", { kind: "digest-encoding", argument: 0 }), "final"],
+			[selected("return", { kind: "digest-encoding", argument: 2 }), "update"],
+			kind === "Cipheriv"
+				? [hostObject("Buffer", "Uint8Array"), "getAuthTag"]
+				: [hostObject(kind), "setAuthTag"],
+			[callback, "_transform", "_flush"],
+		),
+	]);
 }
 
 export const GLOBAL_HOST_OBJECT_BRANDS: ReadonlyMap<string, HostObjectKind> = new Map([
 	["crypto", "Crypto"],
+	["performance", "Performance"],
 ]);
 
 function directoryCompletion(value: HostValueContract): HostResultContract {
@@ -1761,6 +2006,7 @@ export const GLOBAL_HOST_NAMESPACE_RESULTS = new Map([
 
 export const GLOBAL_HOST_CONSTRUCTORS = [
 	"BroadcastChannel",
+	"PerformanceObserver",
 	"MessageChannel",
 	"Response",
 	"Request",
@@ -1803,13 +2049,20 @@ export const HOST_OBJECT_RESULTS: {
 	readonly statics: Partial<
 		Record<HostObjectKind, ReadonlyMap<string, HostResultContract>>
 	>;
+	readonly staticProperties: Partial<
+		Record<HostObjectKind, ReadonlyMap<string, HostResultContract>>
+	>;
 	readonly methods: Record<HostObjectKind, ReadonlyMap<string, HostResultContract>>;
 	readonly properties: Partial<
 		Record<HostObjectKind, ReadonlyMap<string, HostResultContract>>
 	>;
 } = {
 	fetch: { kind: "fulfill", value: { mask: OBJECT, hostObject: "Response" } },
+	staticProperties: {
+		EventEmitter: exportsWithContracts([returned(NUMBER), "defaultMaxListeners"]),
+	},
 	statics: {
+		NetBlockList: exportsWithContracts([returned(BOOLEAN), "isBlockList"]),
 		NodeReadable: exportsWithContracts(
 			[hostObject("NodeReadable"), "from", "fromWeb", "wrap"],
 			[hostObject("ReadableStream"), "toWeb"],
@@ -1857,6 +2110,171 @@ export const HOST_OBJECT_RESULTS: {
 		Response: exportsWithContracts([hostObject("Response"), "error", "json", "redirect"]),
 	},
 	methods: {
+		Assert: assertionInstanceMethods,
+		NodeConsole: exportsWithContracts([
+			returned(UNDEFINED),
+			"log",
+			"info",
+			"debug",
+			"warn",
+			"error",
+			"dir",
+			"dirxml",
+			"table",
+			"trace",
+			"group",
+			"groupCollapsed",
+			"groupEnd",
+			"count",
+			"countReset",
+			"time",
+			"timeEnd",
+			"timeLog",
+			"assert",
+			"clear",
+			"profile",
+			"profileEnd",
+			"timeStamp",
+		]),
+		VmScript: exportsWithContracts(
+			[vmCompletion, "runInContext", "runInNewContext", "runInThisContext"],
+			[hostObject("Buffer", "Uint8Array"), "createCachedData"],
+		),
+		DiagnosticsChannel: exportsWithContracts(
+			[returned(UNDEFINED), "subscribe", "publish", "bindStore"],
+			[returned(BOOLEAN), "unsubscribe", "unbindStore"],
+			[forwardsCallbackResult, "runStores"],
+		),
+		TracingChannel: exportsWithContracts(
+			[returned(UNDEFINED), "subscribe"],
+			[returned(BOOLEAN), "unsubscribe"],
+			[forwardsCallbackResult, "traceSync", "tracePromise"],
+		),
+		DnsResolver: dnsResolverMethods(false),
+		DnsPromiseResolver: dnsResolverMethods(true),
+		TtyReadStream: new Map([
+			...netSocketMethods("NetSocket"),
+			["setRawMode", hostObject("TtyReadStream")],
+		]),
+		TtyWriteStream: new Map([
+			...netSocketMethods("NetSocket"),
+			...exportsWithContracts(
+				[returned(NUMBER), "getColorDepth"],
+				[returned(BOOLEAN), "hasColors"],
+				[returned(OBJECT, "Array"), "getWindowSize"],
+			),
+		]),
+		Performance: performanceMethods,
+		PerformanceEntry: exportsWithContracts([returned(OBJECT), "toJSON"]),
+		PerformanceObserver: exportsWithContracts(
+			[returned(UNDEFINED), "observe", "disconnect"],
+			[returned(OBJECT, "Array"), "takeRecords"],
+		),
+		PerformanceNodeTiming: exportsWithContracts([returned(OBJECT), "toJSON"]),
+		Histogram: exportsWithContracts(
+			[returned(UNDEFINED), "reset", "record", "recordDelta"],
+			[returned(NUMBER), "percentile"],
+			[returned(BOOLEAN), "enable", "disable"],
+		),
+		NetBlockList: exportsWithContracts(
+			[returned(UNDEFINED), "addAddress", "addRange", "addSubnet"],
+			[returned(BOOLEAN), "check"],
+		),
+		NetServer: netServerMethods("NetServer"),
+		NetSocket: netSocketMethods("NetSocket"),
+		DgramSocket: new Map([
+			...emitterMethods("DgramSocket"),
+			...exportsWithContracts(
+				[hostObject("DgramSocket"), "bind", "close", "ref", "unref"],
+				[
+					returned(UNDEFINED),
+					"connect",
+					"send",
+					"disconnect",
+					"setBroadcast",
+					"setMulticastLoopback",
+					"setMulticastInterface",
+					"addMembership",
+					"dropMembership",
+				],
+				[
+					returned(NUMBER),
+					"setTTL",
+					"setMulticastTTL",
+					"setRecvBufferSize",
+					"setSendBufferSize",
+					"getRecvBufferSize",
+					"getSendBufferSize",
+					"getSendQueueSize",
+					"getSendQueueCount",
+				],
+				[hostObject("SocketAddress"), "address", "remoteAddress"],
+				[fulfilled(UNDEFINED), "[Symbol.asyncDispose]"],
+			),
+		]),
+		SocketAddress: exportsWithContracts(),
+		TlsServer: new Map([
+			...netServerMethods("TlsServer"),
+			...exportsWithContracts([returned(UNDEFINED), "setSecureContext", "addContext"]),
+		]),
+		TlsSocket: new Map([
+			...netSocketMethods("TlsSocket"),
+			...exportsWithContracts(
+				[returned(STRING | NULL), "getProtocol"],
+				[returned(OBJECT | UNDEFINED), "getCipher"],
+				[returned(OBJECT), "getPeerCertificate"],
+			),
+		]),
+		HttpAgent: exportsWithContracts([hostObject("HttpAgent"), "destroy"]),
+		HttpsAgent: exportsWithContracts([hostObject("HttpsAgent"), "destroy"]),
+		HttpIncomingMessage: new Map([
+			...nodeStreamMethods("HttpIncomingMessage", true, false),
+			["destroy", mutableDispatch],
+			["_read", returned(UNDEFINED)],
+		]),
+		HttpOutgoingMessage: outgoingMethods("HttpOutgoingMessage"),
+		HttpServerResponse: new Map([
+			...outgoingMethods("HttpServerResponse"),
+			...exportsWithContracts(
+				[
+					hostObject("HttpServerResponse", undefined, OBJECT | UNDEFINED),
+					"writeHead",
+					"end",
+				],
+				[returned(BOOLEAN | UNDEFINED), "write"],
+				[returned(UNDEFINED), "_implicitHeader"],
+			),
+		]),
+		HttpClientRequest: new Map([
+			...outgoingMethods("HttpClientRequest"),
+			...exportsWithContracts(
+				[
+					hostObject("HttpClientRequest", undefined, OBJECT | UNDEFINED),
+					"end",
+					"setTimeout",
+				],
+				[returned(BOOLEAN), "write"],
+				[returned(UNDEFINED), "abort"],
+			),
+		]),
+		HttpServer: httpServerMethods("HttpServer"),
+		HttpsServer: new Map([
+			...httpServerMethods("HttpsServer"),
+			...exportsWithContracts(
+				[returned(UNDEFINED), "setSecureContext", "addContext"],
+				[mutableDispatch, "listen"],
+			),
+		]),
+		ChildProcess: childProcessMethods("ChildProcess"),
+		SpawnedChildProcess: childProcessMethods("SpawnedChildProcess"),
+		SpawnSyncResult: exportsWithContracts(),
+		ReadlineInterface: readlineMethods("ReadlineInterface"),
+		ReadlinePromiseInterface: readlineMethods("ReadlinePromiseInterface"),
+		ReadlineCursor: exportsWithContracts(),
+		ReadlineIterator: exportsWithContracts(
+			[iteratorResult, "next", "return"],
+			[hostObject("ReadlineIterator"), "[Symbol.asyncIterator]"],
+		),
 		CompressionInfo: exportsWithContracts(),
 		NodeStream: nodeStreamMethods("NodeStream", false, false),
 		NodeReadable: nodeStreamMethods("NodeReadable", true, false),
@@ -1988,16 +2406,22 @@ export const HOST_OBJECT_RESULTS: {
 		Decipheriv: cipherMethods("Decipheriv"),
 		Hash: digestMethods("Hash"),
 		Hmac: digestMethods("Hmac"),
-		Sign: exportsWithContracts(
-			[hostObject("Sign"), "update"],
-			[selected("return", { kind: "digest-encoding", argument: 1 }), "sign"],
-			[callback, "_write"],
-		),
-		Verify: exportsWithContracts(
-			[hostObject("Verify"), "update"],
-			[returned(BOOLEAN), "verify"],
-			[callback, "_write"],
-		),
+		Sign: new Map([
+			...nodeStreamMethods("Sign", false, true),
+			...exportsWithContracts(
+				[hostObject("Sign"), "update"],
+				[selected("return", { kind: "digest-encoding", argument: 1 }), "sign"],
+				[callback, "_write"],
+			),
+		]),
+		Verify: new Map([
+			...nodeStreamMethods("Verify", false, true),
+			...exportsWithContracts(
+				[hostObject("Verify"), "update"],
+				[returned(BOOLEAN), "verify"],
+				[callback, "_write"],
+			),
+		]),
 		X509Certificate: exportsWithContracts(
 			[returned(STRING), "toString", "toJSON"],
 			[returned(STRING | UNDEFINED), "checkHost", "checkEmail", "checkIP"],
@@ -2276,6 +2700,95 @@ export const HOST_OBJECT_RESULTS: {
 		HeadersIterator: exportsWithContracts([returned(OBJECT), "next"]),
 	},
 	properties: {
+		DiagnosticsChannel: exportsWithContracts(
+			[returned(BOOLEAN), "hasSubscribers"],
+			[returned(STRING | SYMBOL), "name"],
+		),
+		TracingChannel: exportsWithContracts(
+			[returned(BOOLEAN), "hasSubscribers"],
+			[
+				hostObject("DiagnosticsChannel"),
+				"start",
+				"end",
+				"asyncStart",
+				"asyncEnd",
+				"error",
+			],
+		),
+		Performance: exportsWithContracts(
+			[returned(NUMBER), "timeOrigin"],
+			[hostObject("PerformanceNodeTiming", undefined, OBJECT | UNDEFINED), "nodeTiming"],
+		),
+		PerformanceEntry: exportsWithContracts(
+			[returned(STRING), "name", "entryType"],
+			[returned(NUMBER), "startTime", "duration"],
+			[dynamic("Contains a structured clone of the caller's detail value."), "detail"],
+		),
+		PerformanceNodeTiming: exportsWithContracts([returned(NUMBER), "duration"]),
+		Histogram: exportsWithContracts([
+			returned(NUMBER),
+			"min",
+			"max",
+			"mean",
+			"stddev",
+			"exceeds",
+			"count",
+		]),
+		TtyReadStream: new Map([
+			...socketProperties,
+			...exportsWithContracts([returned(BOOLEAN), "isTTY", "isRaw"]),
+		]),
+		TtyWriteStream: new Map([
+			...socketProperties,
+			...exportsWithContracts(
+				[returned(BOOLEAN), "isTTY"],
+				[returned(NUMBER | UNDEFINED), "columns", "rows"],
+			),
+		]),
+		NetBlockList: exportsWithContracts([returned(OBJECT, "Array"), "rules"]),
+		NetServer: exportsWithContracts([returned(BOOLEAN), "listening"]),
+		TlsServer: exportsWithContracts([returned(BOOLEAN), "listening"]),
+		NetSocket: socketProperties,
+		TlsSocket: new Map([...socketProperties, ["encrypted", returned(BOOLEAN)]]),
+		SocketAddress: exportsWithContracts(
+			[returned(STRING), "address", "family"],
+			[returned(NUMBER), "port"],
+		),
+		HttpAgent: exportsWithContracts(
+			[returned(NUMBER), "maxTotalSockets", "agentKeepAliveTimeoutBuffer"],
+			[returned(STRING), "scheduling"],
+		),
+		HttpIncomingMessage: new Map([
+			...readableStateFields,
+			["connection", dynamic("Reads the caller-writable socket field.")],
+		]),
+		HttpOutgoingMessage: outgoingProperties,
+		HttpServerResponse: outgoingProperties,
+		HttpClientRequest: outgoingProperties,
+		HttpServer: httpServerProperties,
+		HttpsServer: httpServerProperties,
+		ChildProcess: childProcessProperties,
+		SpawnedChildProcess: new Map([
+			...childProcessProperties,
+			...exportsWithContracts(
+				[returned(STRING), "spawnfile"],
+				[returned(OBJECT, "Array"), "spawnargs", "stdio"],
+				[hostObject("NodeWritable", undefined, OBJECT | NULL), "stdin"],
+				[hostObject("NodeReadable", undefined, OBJECT | NULL), "stdout", "stderr"],
+			),
+		]),
+		SpawnSyncResult: exportsWithContracts(
+			[returned(NUMBER), "pid"],
+			[returned(NUMBER | NULL), "status"],
+			[returned(STRING | NUMBER | NULL), "signal"],
+			[returned(OBJECT | NULL), "output"],
+			[returned(OBJECT | UNDEFINED), "error"],
+			[returned(STRING | OBJECT | NULL | UNDEFINED), "stdout", "stderr"],
+		),
+		ReadlineCursor: exportsWithContracts(
+			[returned(NUMBER), "rows"],
+			[dynamic("Returns the public cursor value unchanged."), "cols"],
+		),
 		CompressionInfo: exportsWithContracts(
 			[hostObject("Buffer", "Uint8Array"), "buffer"],
 			[hostObject("ZlibStream"), "engine"],

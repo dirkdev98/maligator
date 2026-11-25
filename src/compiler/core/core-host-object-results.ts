@@ -47,7 +47,7 @@ const PROTECTED_GLOBALS = new Set<string>([
 	"__proto__",
 ]);
 const HOST_OBJECT_SOURCE_NAMES = new RegExp(
-	`\\b(?:${[...PROTECTED_GLOBALS].filter((name) => name !== "globalThis" && name !== "console" && name !== "__proto__").join("|")}|fs|maligator:(?:http|workers)|node:sqlite|(?:node:)?(?:stream|zlib|async_hooks|events|timers/promises|url)|basename|StringDecoder|MIMEType|MIMEParams)\\b`,
+	`\\b(?:${[...PROTECTED_GLOBALS].filter((name) => name !== "globalThis" && name !== "console" && name !== "__proto__").join("|")}|fs|maligator:(?:http|workers)|node:sqlite|(?:node:)?(?:stream|zlib|async_hooks|events|timers/promises|url|net|http|https|tls|dgram|child_process|readline|perf_hooks|diagnostics_channel|dns|tty|assert|vm|console)|basename|StringDecoder|MIMEType|MIMEParams)\\b`,
 );
 for (const name of [
 	"Object",
@@ -80,6 +80,9 @@ const PROTECTED_PROPERTIES = new Set([
 		...members.keys(),
 	]),
 	...Object.values(HOST_OBJECT_RESULTS.statics).flatMap((members) => [...members.keys()]),
+	...Object.values(HOST_OBJECT_RESULTS.staticProperties).flatMap((members) => [
+		...members.keys(),
+	]),
 	...NODE_FILE_HANDLE_RESULTS.methods.keys(),
 	...NODE_FILE_HANDLE_RESULTS.properties.keys(),
 	...Object.values(PLATFORM_OBJECT_RESULTS).flatMap(({ methods, properties }) => [
@@ -103,7 +106,15 @@ const REFLECTIVE_WRITERS = new Set([
 	"__defineSetter__",
 	"__lookupSetter__",
 ]);
-const NATIVE_OBJECT_WRITERS = new Set(["_extend", "inherits"]);
+const NATIVE_OBJECT_WRITERS = new Set([
+	"_extend",
+	"inherits",
+	"compileFunction",
+	"createContext",
+	"runInContext",
+	"runInNewContext",
+	"runInThisContext",
+]);
 const HOST_CALLBACK_ARGUMENTS = new Map([
 	["setTimeout", 0],
 	["setInterval", 0],
@@ -138,6 +149,24 @@ const SCANNED_HOST_INSTALLERS = new Set([
 	"mal_host_install_node_stream_consumers",
 	"mal_host_install_node_zlib",
 	"mal_host_install_node_zlib_decoders",
+	"mal_host_install_node_net",
+	"mal_host_install_node_http",
+	"mal_host_install_node_http_without_websocket",
+	"mal_host_install_node_https",
+	"mal_host_install_node_tls",
+	"mal_host_install_node_dgram",
+	"mal_host_install_node_child_process",
+	"mal_host_install_node_readline",
+	"mal_host_install_node_readline_promises",
+	"mal_host_install_node_perf_hooks",
+	"mal_host_install_node_diagnostics_channel",
+	"mal_host_install_node_dns",
+	"mal_host_install_node_dns_promises",
+	"mal_host_install_node_tty",
+	"mal_host_install_node_assert",
+	"mal_host_install_node_assert_strict",
+	"mal_host_install_node_vm",
+	"mal_host_install_node_console",
 	"mal_host_install_node_string_decoder",
 	"mal_host_install_node_timers",
 	"mal_host_install_node_timers_promises",
@@ -272,13 +301,11 @@ export function coreHostObjectResult(
 	if (opcode === "loadPropertyStatic" || opcode === "loadProperty") {
 		const name = coreHostPropertyName(program, fn, instruction);
 		if (name === undefined) return undefined;
-		const brand = hostReceiver(
-			program,
-			fn,
-			fn.kernel.operandAt(start),
-			slots,
-			budget - 1,
-		);
+		const receiver = fn.kernel.operandAt(start);
+		const constructor = hostConstructor(program, fn, receiver, slots);
+		if (constructor !== undefined)
+			return HOST_OBJECT_RESULTS.staticProperties[constructor]?.get(name);
+		const brand = hostReceiver(program, fn, receiver, slots, budget - 1);
 		return brand === undefined
 			? undefined
 			: HOST_OBJECT_RESULTS.properties[brand]?.get(name);
@@ -330,6 +357,9 @@ export function coreHostMemberIdentitiesAreStable(
 	)
 		return false;
 	const slots = coreHostResultSlots(context);
+	const hasTls = data.hostInstallCandidates.some(
+		({ installer }) => installer === "mal_host_install_node_tls",
+	);
 	for (const id of targets.graph.functions) {
 		const fn = program.function(id);
 		const sites = new Map(targets.outgoing(id).map((site) => [site.instruction, site]));
@@ -359,6 +389,13 @@ export function coreHostMemberIdentitiesAreStable(
 				NATIVE_OBJECT_WRITERS.has(coreHostSlotName(fn, instruction, slots) ?? "")
 			)
 				return false;
+			if (
+				hasTls &&
+				opcode === "loadGlobal" &&
+				coreHostSlotName(fn, instruction, slots) === "connect" &&
+				!usedOnlyAsCallee(fn, instruction)
+			)
+				return false;
 			if (opcode === "loadPrimordial" && typeof attrs.nodeIndex === "number") {
 				const name = getPrimordialCatalog().nodes[attrs.nodeIndex]?.[0];
 				if (
@@ -385,24 +422,9 @@ export function coreHostMemberIdentitiesAreStable(
 					)
 						return false;
 				} else if (NATIVE_OBJECT_WRITERS.has(key)) return false;
-				else if (REFLECTIVE_WRITERS.has(key)) {
+				else if (REFLECTIVE_WRITERS.has(key) || (hasTls && key === "connect")) {
 					// Host callbacks can invoke a native writer without a source call site.
-					const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
-					if (fn.kernel.valueHandlerUseCount(value) !== 0) return false;
-					for (
-						let use = fn.kernel.valueFirstUse(value);
-						use >= 0;
-						use = fn.kernel.useNext(use)
-					) {
-						if (fn.kernel.useLive(use) === 0) continue;
-						const consumer = fn.kernel.useInstruction(use);
-						if (
-							fn.kernel.useOperand(use) !== 0 ||
-							fn.instructionKind(consumer) !== "operation" ||
-							fn.instructionOpcodeName(consumer) !== "call"
-						)
-							return false;
-					}
+					if (!usedOnlyAsCallee(fn, instruction)) return false;
 				}
 			}
 			const protectedKey = (index: unknown, implicitGlobal = false) => {
@@ -498,6 +520,13 @@ export function coreHostMemberIdentitiesAreStable(
 							return false;
 					} else if (site?.arguments === undefined) return false;
 				}
+				if (
+					hasTls &&
+					name === "connect" &&
+					coreHostResult(program, fn, instruction, slots, true, true)?.immediate
+						.hostObject !== "TlsSocket"
+				)
+					return false;
 			}
 			if (
 				opcode === "construct" &&
@@ -537,6 +566,25 @@ export function coreHostMemberIdentitiesAreStable(
 			)
 				return false;
 		}
+	}
+	return true;
+}
+
+function usedOnlyAsCallee(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): boolean {
+	const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+	if (fn.kernel.valueHandlerUseCount(value) !== 0) return false;
+	for (let use = fn.kernel.valueFirstUse(value); use >= 0; use = fn.kernel.useNext(use)) {
+		if (fn.kernel.useLive(use) === 0) continue;
+		const consumer = fn.kernel.useInstruction(use);
+		if (
+			fn.kernel.useOperand(use) !== 0 ||
+			fn.instructionKind(consumer) !== "operation" ||
+			fn.instructionOpcodeName(consumer) !== "call"
+		)
+			return false;
 	}
 	return true;
 }
