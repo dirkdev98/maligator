@@ -46,6 +46,7 @@ export interface HostValueContract {
 			| "stat-options"
 			| "fstat-options"
 			| "directory-entries"
+			| "temporary-directory"
 			| "mkdir-options"
 			| "compression-info"
 			| "exec-output"
@@ -162,7 +163,10 @@ const fs = exportsWithContracts(
 		"globSync",
 	],
 	[hostObject("FilesystemStats"), "statfsSync"],
-	[hostObject("TemporaryDirectorySync"), "mkdtempDisposableSync"],
+	[
+		selected("return", { kind: "temporary-directory", argument: 1 }, OBJECT),
+		"mkdtempDisposableSync",
+	],
 	[hostObject("FsWatcher", undefined, OBJECT | UNDEFINED), "watch"],
 	[hostObject("FsStatWatcher", undefined, OBJECT | UNDEFINED), "watchFile"],
 	[nativeConstructor("NodeFsReadStream"), "ReadStream", "FileReadStream"],
@@ -294,7 +298,10 @@ const fsPromises = exportsWithContracts(
 	],
 	[hostObject("FsGlobIterator"), "glob"],
 	[hostObject("FsWatchIterator", undefined, OBJECT | UNDEFINED), "watch"],
-	[fulfilledHostObject("TemporaryDirectory"), "mkdtempDisposable"],
+	[
+		selected("fulfill", { kind: "temporary-directory", argument: 1 }, OBJECT),
+		"mkdtempDisposable",
+	],
 );
 
 const maligatorFs = exportsWithContracts(
@@ -1753,7 +1760,11 @@ export type HostObjectKind =
 	| "DirectoryNames"
 	| "DirectoryDirents"
 	| "TemporaryDirectory"
+	| "TemporaryDirectoryBuffer"
+	| "TemporaryDirectoryText"
 	| "TemporaryDirectorySync"
+	| "TemporaryDirectorySyncBuffer"
+	| "TemporaryDirectorySyncText"
 	| "FsWatcher"
 	| "FsStatWatcher"
 	| "FsGlobIterator"
@@ -2362,6 +2373,23 @@ export const GLOBAL_HOST_ABSTRACT_CONSTRUCTORS = exportsWithContracts([
 	"WritableStreamDefaultController",
 ]);
 
+const temporaryDirectoryMethods = exportsWithContracts([
+	fulfilled(UNDEFINED),
+	"remove",
+	"[Symbol.asyncDispose]",
+]);
+const temporaryDirectorySyncMethods = exportsWithContracts([
+	returned(UNDEFINED),
+	"remove",
+	"[Symbol.dispose]",
+]);
+const temporaryDirectoryPath = exportsWithContracts([returned(STRING | OBJECT), "path"]);
+const temporaryDirectoryTextPath = exportsWithContracts([returned(STRING), "path"]);
+const temporaryDirectoryBufferPath = exportsWithContracts([
+	hostObject("Buffer", "Uint8Array"),
+	"path",
+]);
+
 // Object-valued resolutions require stable prototypes through settlement.
 export const HOST_OBJECT_RESULTS: {
 	readonly fetch: HostResultContract;
@@ -2858,16 +2886,12 @@ export const HOST_OBJECT_RESULTS: {
 		DirectoryEntries: exportsWithContracts(),
 		DirectoryNames: exportsWithContracts(),
 		DirectoryDirents: exportsWithContracts(),
-		TemporaryDirectory: exportsWithContracts([
-			fulfilled(UNDEFINED),
-			"remove",
-			"[Symbol.asyncDispose]",
-		]),
-		TemporaryDirectorySync: exportsWithContracts([
-			returned(UNDEFINED),
-			"remove",
-			"[Symbol.dispose]",
-		]),
+		TemporaryDirectory: temporaryDirectoryMethods,
+		TemporaryDirectoryBuffer: temporaryDirectoryMethods,
+		TemporaryDirectoryText: temporaryDirectoryMethods,
+		TemporaryDirectorySync: temporaryDirectorySyncMethods,
+		TemporaryDirectorySyncBuffer: temporaryDirectorySyncMethods,
+		TemporaryDirectorySyncText: temporaryDirectorySyncMethods,
 		FsWatcher: new Map([
 			...emitterMethods("FsWatcher"),
 			...exportsWithContracts(
@@ -3410,8 +3434,12 @@ export const HOST_OBJECT_RESULTS: {
 			[returned(NUMBER), "bytesWritten"],
 			[returned(STRING | OBJECT), "buffer"],
 		),
-		TemporaryDirectory: exportsWithContracts([returned(STRING), "path"]),
-		TemporaryDirectorySync: exportsWithContracts([returned(STRING), "path"]),
+		TemporaryDirectory: temporaryDirectoryPath,
+		TemporaryDirectoryBuffer: temporaryDirectoryBufferPath,
+		TemporaryDirectoryText: temporaryDirectoryTextPath,
+		TemporaryDirectorySync: temporaryDirectoryPath,
+		TemporaryDirectorySyncBuffer: temporaryDirectoryBufferPath,
+		TemporaryDirectorySyncText: temporaryDirectoryTextPath,
 		Dirent: exportsWithContracts([returned(STRING | UNDEFINED), "name", "parentPath"]),
 		ConstructedDirent: exportsWithContracts([
 			dynamic(

@@ -15,6 +15,7 @@ import fsDefault, {
 	linkSync,
 	lstatSync,
 	mkdirSync,
+	mkdtempDisposableSync,
 	mkdtempSync,
 	openSync,
 	readFile,
@@ -39,6 +40,7 @@ import fsPromises, {
 	link,
 	lstat,
 	mkdir,
+	mkdtempDisposable,
 	open,
 	readFile as readFilePromise,
 	readlink,
@@ -741,6 +743,30 @@ check(
 );
 const temporary = mkdtempSync(`${root}/temporary-`);
 check("mkdtempSync creates a unique directory", statSync(temporary).isDirectory());
+const textDisposable = mkdtempDisposableSync(`${root}/disposable-`);
+check(
+	"mkdtempDisposableSync defaults to a text path",
+	typeof textDisposable.path === "string",
+);
+textDisposable.remove();
+const disposable = mkdtempDisposableSync(`${root}/disposable-`, "buffer");
+check(
+	"mkdtempDisposableSync preserves a Buffer path",
+	typeof disposable.path === "object",
+);
+check("mkdtempDisposableSync creates the directory", existsSync(disposable.path));
+disposable.remove();
+check("mkdtempDisposableSync removes the directory", !existsSync(disposable.path));
+const promisedDisposable = await mkdtempDisposable(`${root}/disposable-`, {
+	encoding: "buffer",
+});
+check(
+	"mkdtempDisposable preserves a Buffer path",
+	typeof promisedDisposable.path === "object",
+);
+check("mkdtempDisposable creates the directory", existsSync(promisedDisposable.path));
+await promisedDisposable.remove();
+check("mkdtempDisposable removes the directory", !existsSync(promisedDisposable.path));
 
 writeFileSync(renameSource, "replacement");
 writeFileSync(renameDestination, "old");

@@ -717,6 +717,7 @@ export function coreHostCompletion(
 	)
 		return undefined;
 	const start = fn.kernel.instructionOperandStart(instruction);
+	const returnsImmediately = contract.kind === "return";
 	const result = valueFacts(contract.value);
 	let immediate =
 		contract.kind === "fulfill"
@@ -742,7 +743,7 @@ export function coreHostCompletion(
 		else if (opcode === "createFunction")
 			return { immediate: { mask: COMPILER_VALUE_KIND_UNDEFINED } };
 	}
-	return contract.kind === "return"
+	return returnsImmediately
 		? { immediate: result }
 		: {
 				immediate: { mask: immediate },
@@ -817,6 +818,29 @@ export function coreHostCompletion(
 							: flag
 								? "DirectoryDirents"
 								: "DirectoryNames",
+				};
+			}
+			case "temporary-directory": {
+				const encoding = option("encoding", true);
+				const [unknownPath, textPath, bufferPath] = returnsImmediately
+					? ([
+							"TemporaryDirectorySync",
+							"TemporaryDirectorySyncText",
+							"TemporaryDirectorySyncBuffer",
+						] as const)
+					: ([
+							"TemporaryDirectory",
+							"TemporaryDirectoryText",
+							"TemporaryDirectoryBuffer",
+						] as const);
+				return {
+					mask: COMPILER_VALUE_KIND_OBJECT,
+					hostObject:
+						encoding === UNKNOWN_LITERAL
+							? unknownPath
+							: typeof encoding === "string" && encoding.toLowerCase() === "buffer"
+								? bufferPath
+								: textPath,
 				};
 			}
 			case "tls-socket": {

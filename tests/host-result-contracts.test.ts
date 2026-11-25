@@ -236,12 +236,43 @@ it.each([
 		"undefined",
 		'import { mkdtempDisposable } from "node:fs/promises";',
 	],
+	[
+		"mkdtempDisposableSync(path).path",
+		"string",
+		'import { mkdtempDisposableSync } from "node:fs";',
+	],
+	[
+		"mkdtempDisposableSync(path, 'buffer').path.readUInt8(0)",
+		"number",
+		'import { mkdtempDisposableSync } from "node:fs";',
+	],
+	[
+		"(await mkdtempDisposable(path, { encoding: 'buffer' })).path.readUInt8(0)",
+		"number",
+		'import { mkdtempDisposable } from "node:fs/promises";',
+	],
 	["(await file(path).stat()).isFile", "boolean", 'import { file } from "maligator:fs";'],
 	["file(path).stream().locked", "boolean", 'import { file } from "maligator:fs";'],
 	["navigator.hardwareConcurrency", "number", ""],
 ])("uses the record or element contract of %s", (expression, type, imports) => {
 	expect(inspectHostCall(expression, type, "", imports)).not.toContain("typeofCompare");
 });
+
+it.each([
+	[
+		"mkdtempDisposableSync(path, options).path",
+		'import { mkdtempDisposableSync } from "node:fs";',
+	],
+	[
+		"(await mkdtempDisposable(path, options)).path",
+		'import { mkdtempDisposable } from "node:fs/promises";',
+	],
+])(
+	"keeps the path type observation when the encoding is unknown in %s",
+	(expression, imports) => {
+		expect(inspectHostCall(expression, "string", "", imports)).toContain("typeofCompare");
+	},
+);
 
 it("retains member observations when TLS can dispatch a native connection listener", () => {
 	const operations = inspectHostCall(
@@ -701,6 +732,38 @@ it("accounts for methods and getters installed on Node FileHandle objects", () =
 	expect(new Set(getters.map((match) => match[1]!))).toEqual(
 		new Set(NODE_FILE_HANDLE_RESULTS.properties.keys()),
 	);
+});
+
+it("accounts for members installed on disposable temporary directories", () => {
+	const source = readFileSync(
+		new URL("../runtime/src/runtime/node_fs.c", import.meta.url),
+		"utf8",
+	);
+	const allocation = source.match(
+		/static MalValue node_fs_mkdtemp_disposable\([\s\S]*?\n\}/,
+	)?.[0];
+	expect(allocation).toBeDefined();
+	const fields = [
+		...allocation!.matchAll(
+			/mal_intrinsic_define_(?:data|getter)\(vm, object, "([^"]+)"/g,
+		),
+	].map((match) => match[1]);
+	const symbols = allocation!.match(/async \? "(\[Symbol\.[^"]+)" : "(\[Symbol\.[^"]+)"/);
+	expect(symbols).toBeDefined();
+	for (const [kind, index] of [
+		["TemporaryDirectory", 1],
+		["TemporaryDirectoryBuffer", 1],
+		["TemporaryDirectoryText", 1],
+		["TemporaryDirectorySync", 2],
+		["TemporaryDirectorySyncBuffer", 2],
+		["TemporaryDirectorySyncText", 2],
+	] as const)
+		expect(
+			new Set([
+				...HOST_OBJECT_RESULTS.methods[kind].keys(),
+				...HOST_OBJECT_RESULTS.properties[kind]!.keys(),
+			]),
+		).toEqual(new Set([...fields, symbols![index]]));
 });
 
 it("accounts for members installed on embedded asset handles", () => {
