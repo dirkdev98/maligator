@@ -48,6 +48,24 @@ async function countEntryNames(path) {
 	return total;
 }
 
+function matchSubjectLength(value) {
+	try {
+		return /example/.exec(value).input.length;
+	} catch (error) {
+		return error.name;
+	}
+}
+
+function Match(text, steps) {
+	for (let i = 0; i < steps; i++) globalThis.visited = i;
+	this.input = 42;
+	return /example/.exec(text);
+}
+
+function matchConstructorInput(text, steps) {
+	return typeof new Match(text, steps).input;
+}
+
 globalThis.hostRead = read;
 globalThis.hostLength = length;
 console.log(
@@ -64,5 +82,10 @@ console.log(
 			tags[0] = { length: 37 };
 		}),
 		await countEntryNames("tests/fixtures"),
+		matchSubjectLength({ toString: () => "an example" }),
+		matchSubjectLength("unmatched"),
+		matchConstructorInput("an example", 2),
+		matchConstructorInput("unmatched", 1),
+		[""[Symbol.iterator]().next().done, "é"[Symbol.iterator]().next().value],
 	]),
 );

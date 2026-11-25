@@ -8,6 +8,7 @@ import {
 	compilerValueKindMaskIsSubset,
 	compilerValueKindMaskIsValid,
 } from "../shared/compiler-value-kinds.ts";
+import { builtinRecordInitialContents } from "../shared/host-result-contracts.ts";
 import type {
 	HostContentValue,
 	HostInitialContents,
@@ -66,7 +67,6 @@ const ownNamesAndSymbols: HostInitialContents = {
 	kind: "dense-array",
 	element: { mask: COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_SYMBOL },
 };
-
 export function coreBuiltinInitialContents(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
@@ -103,7 +103,9 @@ export function coreBuiltinInitialContents(
 				: undefined;
 		}
 		default:
-			return undefined;
+			return typeof attributes.operation === "string"
+				? builtinRecordInitialContents(attributes.operation)
+				: undefined;
 	}
 }
 
@@ -200,6 +202,7 @@ export function coreHostRecordFields(
 						key,
 						mask: field.mask,
 						writeMayFail: true as const,
+						receiverMayBeNull: contents.receiverMayBeNull,
 						heapBrand: field.brand,
 						integerRange: field.integerRange,
 					},

@@ -95,6 +95,7 @@ export type HostInitialContents =
 	| {
 			readonly kind: "record";
 			readonly fields: Readonly<Record<string, HostContentValue>>;
+			readonly receiverMayBeNull?: true;
 	  };
 
 export type HostInputBrand =
@@ -187,6 +188,42 @@ function ownRecord(
 
 const stringField = { mask: STRING };
 const numberField = { mask: NUMBER };
+const booleanField = { mask: BOOLEAN };
+const intrinsicIteratorContents: HostInitialContents = {
+	kind: "record",
+	fields: { done: booleanField, value: { mask: TOP } },
+};
+const stringIteratorContents: HostInitialContents = {
+	kind: "record",
+	fields: { done: booleanField, value: { mask: STRING | UNDEFINED } },
+};
+const regexpMatchContents: HostInitialContents = {
+	kind: "record",
+	receiverMayBeNull: true,
+	fields: {
+		input: stringField,
+		index: { mask: NUMBER, integerRange: compilerIntegerRange(0, 0x7fff_ffff) },
+		length: { mask: NUMBER, integerRange: COMPILER_UINT32_RANGE },
+		groups: { mask: OBJECT | UNDEFINED },
+	},
+};
+
+export function builtinRecordInitialContents(
+	operation: string,
+): HostInitialContents | undefined {
+	switch (operation) {
+		case "%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%.next":
+		case "%MAL_INTRINSIC_MAP_ITERATOR_PROTOTYPE%.next":
+		case "%MAL_INTRINSIC_SET_ITERATOR_PROTOTYPE%.next":
+		case "%MAL_INTRINSIC_REGEXP_STRING_ITERATOR_PROTOTYPE%.next":
+			return intrinsicIteratorContents;
+		case "%MAL_INTRINSIC_STRING_ITERATOR_PROTOTYPE%.next":
+			return stringIteratorContents;
+		case "RegExp.prototype.exec":
+			return regexpMatchContents;
+	}
+	return undefined;
+}
 const ownIteratorResult = (
 	value: HostContentValue,
 	kind: "return" | "fulfill" = "return",

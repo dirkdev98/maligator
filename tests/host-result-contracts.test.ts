@@ -300,6 +300,67 @@ it("uses the nonnegative counters of a native encodeInto record", () => {
 	expect(operations).not.toContain("binary:<");
 });
 
+it.each([
+	"[1].values()",
+	"new Uint16Array(1).entries()",
+	"new Map([[1, 2]]).keys()",
+	"new Set([1]).values()",
+	"String(path)[Symbol.iterator]()",
+])("uses the native Boolean done field from %s", (iterator) => {
+	const operations = inspectHostCall(
+		`${iterator}.next()`,
+		"",
+		"",
+		"",
+		undefined,
+		"inspect",
+		'typeof result.done === "boolean"',
+	);
+	expect(operations).not.toContain("typeofCompare");
+});
+
+it("keeps done generic after installing a custom next on the iterator", () => {
+	const operations = inspectHostCall(
+		"iterator.next()",
+		"",
+		`const iterator = [1].values();
+		Object.defineProperty(iterator, 'next', {value: options});`,
+		"",
+		undefined,
+		"inspect",
+		'typeof result.done === "boolean"',
+	);
+	expect(operations).toContain("typeofCompare");
+});
+
+it("specializes a successful RegExp result's input length", () => {
+	const accesses = hostInputAccesses(`
+		globalThis.inspect = function inspect(value) {
+			const match = /example/.exec(value);
+			if (match === null) return -1;
+			return match.input.length;
+		};
+	`);
+	expect(accesses.get("inspect")).toContain("primitive-string-length");
+});
+
+it("keeps the instance alternative when a constructor returns a nullable match", () => {
+	const operations = inspectHostCall(
+		"new Match(path, options)",
+		"",
+		`function Match(text, steps) {
+			for (let i = 0; i < steps; i++) globalThis.visited = i;
+			this.input = 42;
+			return /example/.exec(text);
+		}`,
+		"",
+		undefined,
+		"inspect",
+		'typeof result.input === "string"',
+	);
+	expect(operations).toContain("typeofCompare");
+});
+
 it("preserves the write and its catch path for frozen worker capabilities", () => {
 	const operations = inspectHostCall(
 		"tag",

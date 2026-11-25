@@ -5531,9 +5531,19 @@ function discoverProgramNormalResultFacts(
 		)
 			return undefined;
 		kinds ??= readValueKinds();
+		const caller = program.function(site.caller);
+		const construct =
+			caller.registry.byId(caller.instructionOpcode(site.instruction)).callTransfer
+				?.result === "construct-completion";
 		let record: CoreRecordValueKind = null;
 		for (const target of site.targets.functions) {
 			const summary = kinds.summary(target);
+			if (
+				construct &&
+				summary.returnKind !== 0 &&
+				summary.returnKind !== COMPILER_VALUE_KIND_OBJECT
+			)
+				return undefined;
 			record = joinCoreRecordValueKinds(
 				record,
 				summary.returnKind === 0
@@ -6178,7 +6188,11 @@ function discoverProgramNormalResultFacts(
 					: undefined;
 			discovered.set(instruction, {
 				instruction,
-				ownDataKey: read.key,
+				ownDataKey: record?.some(
+					(field) => field.key === read.key && field.receiverMayBeNull,
+				)
+					? undefined
+					: read.key,
 				result: compilerValueKindMaskIsValid(mask)
 					? {
 							mask,

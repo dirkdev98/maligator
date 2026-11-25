@@ -216,6 +216,8 @@ specialization needs an independent bounds proof, such as the taken edge of a
 counted loop over the same array's length. Writes and escapes widen the facts.
 An own native field can be read-only, so a recorded initial value does not
 license a specialized store or a post-write value.
+For a nullable producer such as `RegExp.prototype.exec`, normal-result facts
+keep the property access's original exception path.
 A fulfilled result also needs proof that another observer cannot receive and
 modify its payload before the access. Test an ordinary loop or field consumer
 alongside an access that loses the proof through an escape, write, or wider bound.

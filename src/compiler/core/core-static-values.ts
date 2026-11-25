@@ -184,6 +184,31 @@ export function coreExactArrayFromCallResult(
 	return fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
 }
 
+const iteratorFactoryPrototypes = new Map<string, string>([
+	["Array.prototype.entries", "%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%"],
+	["Array.prototype.keys", "%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%"],
+	["Array.prototype.values", "%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%"],
+	[
+		"Int8Array.prototype.[[Prototype]].entries",
+		"%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%",
+	],
+	["Int8Array.prototype.[[Prototype]].keys", "%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%"],
+	[
+		"Int8Array.prototype.[[Prototype]].values",
+		"%MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE%",
+	],
+	["Map.prototype.entries", "%MAL_INTRINSIC_MAP_ITERATOR_PROTOTYPE%"],
+	["Map.prototype.keys", "%MAL_INTRINSIC_MAP_ITERATOR_PROTOTYPE%"],
+	["Map.prototype.values", "%MAL_INTRINSIC_MAP_ITERATOR_PROTOTYPE%"],
+	["Set.prototype.entries", "%MAL_INTRINSIC_SET_ITERATOR_PROTOTYPE%"],
+	["Set.prototype.keys", "%MAL_INTRINSIC_SET_ITERATOR_PROTOTYPE%"],
+	["String.prototype[%Symbol.iterator%]", "%MAL_INTRINSIC_STRING_ITERATOR_PROTOTYPE%"],
+	[
+		"RegExp.prototype[%Symbol.matchAll%]",
+		"%MAL_INTRINSIC_REGEXP_STRING_ITERATOR_PROTOTYPE%",
+	],
+]);
+
 const STATIC_CONSTRUCTORS = new Set([
 	"Array",
 	"Object",
@@ -2361,17 +2386,24 @@ export class CoreStaticValueAnalysis {
 					(canonical === "Array.from" || canonical === "Array.of") &&
 					receiver?.kind === "known" &&
 					receiver.canonical === "Array";
+				const iterator = this.#context.facts.world.realms
+					? undefined
+					: iteratorFactoryPrototypes.get(canonical);
 				if (
 					factory !== undefined ||
+					iterator !== undefined ||
 					arrayFactory ||
 					canonical === "Intl.getCanonicalLocales" ||
 					canonical === "Object.create"
 				) {
 					let prototype: StaticPrototype = {
 						kind: "intrinsic",
-						id: `${factory ?? (arrayFactory || canonical === "Intl.getCanonicalLocales" ? "Array" : "Object")}.prototype`,
+						id:
+							iterator ??
+							`${factory ?? (arrayFactory || canonical === "Intl.getCanonicalLocales" ? "Array" : "Object")}.prototype`,
 					};
-					let complete = factory !== undefined || canonical === "Array.of";
+					let complete =
+						factory !== undefined || iterator !== undefined || canonical === "Array.of";
 					if (canonical === "Object.create") {
 						const input = operands[2] === undefined ? undefined : this.query(operands[2]);
 						if (input?.kind === "known" && input.brand === "null")
@@ -2410,7 +2442,10 @@ export class CoreStaticValueAnalysis {
 						value,
 						description,
 						brand: array ? "array" : "object",
-						exactBrand: factory ?? (array ? "Array" : "Object"),
+						exactBrand:
+							iterator === undefined
+								? (factory ?? (array ? "Array" : "Object"))
+								: undefined,
 						construction: {
 							kind: "call",
 							callee: canonical,

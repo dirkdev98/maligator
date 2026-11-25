@@ -2,6 +2,7 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_OBJECT,
 } from "../shared/compiler-value-kinds.ts";
+import { builtinRecordInitialContents } from "../shared/host-result-contracts.ts";
 import { compilerIntegerRangesEqual } from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import {
@@ -26,6 +27,7 @@ export interface CoreRecordFieldKind {
 	readonly key: number;
 	readonly mask: number;
 	readonly writeMayFail?: true;
+	readonly receiverMayBeNull?: true;
 }
 
 // Field arrays describe fresh private records; null has no normal result, undefined admits escapes and non-records.
@@ -71,6 +73,7 @@ export function sameCoreRecordValueKind(
 					field.key === right[index]!.key &&
 					field.mask === right[index]!.mask &&
 					field.writeMayFail === right[index]!.writeMayFail &&
+					field.receiverMayBeNull === right[index]!.receiverMayBeNull &&
 					field.heapBrand === right[index]!.heapBrand &&
 					(field.calleeTargets === right[index]!.calleeTargets ||
 						(field.calleeTargets !== undefined &&
@@ -129,6 +132,9 @@ export function joinCoreRecordValueKinds(
 				...(field.writeMayFail || other.writeMayFail
 					? { writeMayFail: true as const }
 					: {}),
+				...(field.receiverMayBeNull || other.receiverMayBeNull
+					? { receiverMayBeNull: true as const }
+					: {}),
 				...(integerRange === undefined ? {} : { integerRange }),
 				...(heapBrand === undefined ? {} : { heapBrand }),
 				...(calleeTargets === undefined ? {} : { calleeTargets }),
@@ -139,6 +145,26 @@ export function joinCoreRecordValueKinds(
 }
 
 const MAXIMUM_RECORD_RETURN_ALIAS_WORK = 256;
+
+function coreRecordProducer(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): boolean {
+	const opcode = fn.instructionOpcodeName(instruction);
+	if (opcode === "awaitFulfilled") return true;
+	if (opcode === "callKnown") {
+		const { operation, construct, argumentMode } = fn.instructionAttributes(instruction);
+		return (
+			!construct &&
+			argumentMode === undefined &&
+			typeof operation === "string" &&
+			builtinRecordInitialContents(operation) !== undefined
+		);
+	}
+	const completion = fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer
+		?.result;
+	return completion === "call-completion" || completion === "construct-completion";
+}
 
 interface CoreRecordFieldWrite {
 	readonly instruction: CoreInstructionId;
@@ -363,14 +389,7 @@ function recordReturnIndex(
 					fn.kernel.instructionResultCount(instruction) !== 1
 				)
 					continue;
-				const completion = fn.registry.byId(fn.instructionOpcode(instruction))
-					.callTransfer?.result;
-				if (
-					completion !== "call-completion" &&
-					completion !== "construct-completion" &&
-					fn.instructionOpcodeName(instruction) !== "awaitFulfilled"
-				)
-					continue;
+				if (!coreRecordProducer(fn, instruction)) continue;
 			}
 			const requiredKeys = new Set<number>();
 			let writes: Map<number, Array<CoreRecordFieldWrite>> | undefined;
@@ -1454,12 +1473,8 @@ function mergedRecordFieldAccesses(
 						fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
 					);
 				else {
-					const completion = fn.registry.byId(fn.instructionOpcode(instruction))
-						.callTransfer?.result;
 					if (
-						(completion !== "call-completion" &&
-							completion !== "construct-completion" &&
-							fn.instructionOpcodeName(instruction) !== "awaitFulfilled") ||
+						!coreRecordProducer(fn, instruction) ||
 						fn.kernel.instructionResultCount(instruction) !== 1
 					) {
 						valid = false;
@@ -1593,14 +1608,7 @@ function recordFieldAccesses(
 			fn.kernel.instructionResultCount(producer) !== 1
 		)
 			continue;
-		const completion = fn.registry.byId(fn.instructionOpcode(producer)).callTransfer
-			?.result;
-		if (
-			completion !== "call-completion" &&
-			completion !== "construct-completion" &&
-			fn.instructionOpcodeName(producer) !== "awaitFulfilled"
-		)
-			continue;
+		if (!coreRecordProducer(fn, producer)) continue;
 		const pending = [fn.kernel.resultAt(fn.kernel.instructionResultStart(producer))];
 		const seen = new Set<CoreValueId>();
 		const reads = new Map<CoreInstructionId, number>();

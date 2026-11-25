@@ -8,7 +8,10 @@ import type { CoreCallGraph, CoreCallGraphNode } from "./core-call-graph.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { joinCoreHeapBrands } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState } from "./core-heap-brands.ts";
-import { coreHostRecordFields } from "./core-host-container-facts.ts";
+import {
+	coreBuiltinInitialContents,
+	coreHostRecordFields,
+} from "./core-host-container-facts.ts";
 import {
 	coreHostCallbackReceivers,
 	coreHostMemberIdentitiesAreStable,
@@ -347,9 +350,20 @@ function coreValueKindResultReaders(
 			site.targets.functions.length === 0
 		)
 			return undefined;
+		const construct =
+			fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ===
+			"construct-completion";
 		let record: CoreRecordValueKind = null;
 		for (const callee of site.targets.functions) {
 			const returned = summaries!.get(callee)!;
+			if (
+				construct &&
+				returned.returnKind !== 0 &&
+				returned.returnKind !== semantics.object
+			) {
+				record = undefined;
+				break;
+			}
 			record = joinCoreRecordValueKinds(
 				record,
 				returned.returnKind === 0 ? null : returned.returnRecord,
@@ -3198,7 +3212,13 @@ export class CoreProgramFlowEngine {
 					semantics,
 					locked
 						? (producer) => {
-								if (fn.instructionOpcodeName(producer) !== "call") return undefined;
+								const opcode = fn.instructionOpcodeName(producer);
+								if (opcode === "callKnown")
+									return coreHostRecordFields(
+										this.#program,
+										coreBuiltinInitialContents(fn, producer, () => undefined),
+									);
+								if (opcode !== "call") return undefined;
 								const name = coreHostMemberCallName(
 									this.#program,
 									fn,
