@@ -12,6 +12,7 @@ import {
 	COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL as UNREGISTERED_SYMBOL,
 } from "./compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
+import type { HostInvocationContract } from "./host-invocation-contracts.ts";
 import {
 	COMPILER_INT32_RANGE,
 	COMPILER_UINT32_RANGE,
@@ -113,7 +114,10 @@ export type HostResultContract = (
 	| { readonly kind: "callback"; readonly reason: string }
 	| { readonly kind: "never"; readonly reason: string }
 	| { readonly kind: "dynamic"; readonly reason: string }
-) & { readonly inputs?: HostInputContract };
+) & {
+	readonly inputs?: HostInputContract;
+	readonly invocation?: HostInvocationContract;
+};
 
 const returned = (
 	mask: CompilerValueKindMask,

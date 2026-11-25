@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { isAbsolute } from "node:path/posix";
 import { types } from "node:util";
 
@@ -15,6 +16,15 @@ function length(value) {
 	}
 }
 
+function borrowAndWrite(value) {
+	const state = { value };
+	const bytes = Buffer.alloc(3);
+	const same = bytes.fill(42);
+	types.isUint8Array(state);
+	const encoded = new TextEncoder(state).encodeInto(state.value, bytes);
+	return [same === bytes, encoded.read, encoded.written, ...bytes];
+}
+
 globalThis.hostRead = read;
 globalThis.hostLength = length;
 console.log(
@@ -24,5 +34,6 @@ console.log(
 		read({ 0: 12 }),
 		length("/example"),
 		length({ length: 9 }),
+		borrowAndWrite("é"),
 	]),
 );

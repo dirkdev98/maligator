@@ -30,6 +30,7 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
+import { coreNativeInvocationPreservesOperand } from "./core-native-invocations.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreOptimizationOwnerRunner } from "./core-optimization-owners.ts";
 import { corePrivateFieldFacts } from "./core-private-field-facts.ts";
@@ -403,6 +404,11 @@ export function analyzeCoreValueClasses(
 		if (typeof header === "string") return false;
 		const opcode = header.opcode;
 		if (opcode === "move" || opcode === "rootUse" || opcode === "requireCoercible")
+			return true;
+		if (
+			opcode === "call" &&
+			coreNativeInvocationPreservesOperand(fn, instruction, operand)
+		)
 			return true;
 		if (
 			coreNumericTypedArrayKind(brand) !== undefined &&

@@ -3,6 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
+import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
+import type { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { runSemanticAnalysisForGraph } from "../src/compiler/frontend/analyze-module-graph.ts";
 import { certifyProgramClosure } from "../src/compiler/frontend/certify-closure.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
@@ -32,6 +36,20 @@ import {
 } from "../src/compiler/shared/compiler-facts.ts";
 import { COMPILER_VALUE_KIND_NUMBER } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
+	hostConstructorInvocation,
+	hostGetterInvocation,
+	hostGlobalInvocation,
+	hostMemberInvocation,
+	hostModuleInvocation,
+} from "../src/compiler/shared/host-invocation-contracts.ts";
+import {
+	hostConstructorInvocationUnavailable,
+	hostGetterInvocationUnavailable,
+	hostMemberInvocationUnavailable,
+	hostModuleInvocationUnavailable,
+	hostStaticInvocationUnavailable,
+} from "../src/compiler/shared/host-invocation-dispositions.ts";
+import {
 	BUFFER_STRING_ENCODINGS,
 	CAPTURED_HOST_RESULTS,
 	GLOBAL_HOST_FUNCTION_RESULTS,
@@ -59,6 +77,7 @@ import { getPrimordialCatalog } from "../src/compiler/shared/primordial-catalog-
 import { primordialNode } from "../src/compiler/shared/primordial-catalog.ts";
 import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
 import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
+import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
 const namedImports = `
 	import { readFileSync as readSync } from "node:fs";
@@ -290,6 +309,113 @@ it("accounts for installed named predicates, validators and the path family", ()
 	expect(missing).toEqual([]);
 });
 
+it("forwards a private field across a borrowing native predicate", () => {
+	const setup = "const state = { value: path };";
+	const borrowed = inspectHostCall(
+		"isUint8Array(state)",
+		"",
+		setup,
+		'import { isUint8Array } from "node:util/types";',
+		undefined,
+		"inspect",
+		"state.value",
+	);
+	const opaque = inspectHostCall(
+		"options(state)",
+		"",
+		setup,
+		"",
+		undefined,
+		"inspect",
+		"state.value",
+	);
+	expect(borrowed).toContain("call");
+	expect(borrowed).not.toContain("loadPropertyStatic");
+	expect(opaque).toContain("loadPropertyStatic");
+});
+
+it("forwards a private field across an unused native constructor argument", () => {
+	const operations = inspectHostCall(
+		"new TextEncoder(state)",
+		"",
+		"const state = { value: path };",
+		"",
+		undefined,
+		"inspect",
+		"state.value",
+	);
+	expect(operations).toContain("construct");
+	expect(operations).not.toContain("loadPropertyStatic");
+});
+
+it("publishes a native identity argument when the enclosing function stores the result", () => {
+	inspectHostCall(
+		"publish(path)",
+		"",
+		"",
+		`import { getRandomValues } from "node:crypto";
+		function publish(value) { globalThis.samples = getRandomValues(value); }
+		globalThis.publishSamples = publish;`,
+		undefined,
+		"publish",
+		"result",
+		(program) => {
+			const fn = coreFunctionNamed(program, "publish")!;
+			const analyses = new CoreAnalysisManager(
+				program,
+				programAnalysisContext(),
+				new CoreOptimizationReportBuilder(program),
+			);
+			const summary = analyses
+				.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, { scope: "program" })
+				.summary(fn.id)!;
+			expect(summary.parameterEscape).toEqual(["retained"]);
+			expect(summary.effects.writes).toContain("array-element");
+		},
+	);
+});
+
+it("records invocation dispositions for installed native module exports", () => {
+	const catalog = getPrimordialCatalog();
+	const installers = new Set([
+		...[...HOST_MODULES.values()].map(({ installer }) => installer),
+		...PLATFORM_MODULES.flatMap((module) =>
+			module.kind === "native" ? [module.installer] : [],
+		),
+	]);
+	const audited = (installer: string, name: string) => {
+		const result = HOST_RESULT_CONTRACTS.get(installer)?.get(name);
+		return (
+			result?.kind === "callback" ||
+			result?.kind === "never" ||
+			(result?.kind === "return" && result.value.hostConstructor !== undefined) ||
+			hostModuleInvocation(installer, name) !== undefined ||
+			hostModuleInvocationUnavailable(installer, name) !== undefined
+		);
+	};
+	const missing = catalog.roots.flatMap(([root, value]) => {
+		const separator = root.indexOf(":");
+		const installer = root.slice(0, separator);
+		return typeof value === "number" &&
+			(catalog.nodes[value]![2] & 2) !== 0 &&
+			installers.has(installer) &&
+			!audited(installer, root.slice(separator + 1))
+			? [root]
+			: [];
+	});
+	for (const definition of PLATFORM_MODULES) {
+		if (definition.kind !== "native") continue;
+		for (const member of definition.exports) {
+			if (
+				member.contract.value === "callable" &&
+				!audited(definition.installer, member.name)
+			)
+				missing.push(`${definition.id}.${member.name}`);
+		}
+	}
+	expect(missing).toEqual([]);
+});
+
 function inspectHostCall(
 	expression: string,
 	type: string,
@@ -298,6 +424,7 @@ function inspectHostCall(
 	virtualModules?: BuildModuleGraphOptions["virtualModules"],
 	inspected = "inspect",
 	observation = `typeof result === ${JSON.stringify(type)}`,
+	check?: (program: CoreProgram) => void,
 ) {
 	const directory = mkdtempSync(join(tmpdir(), "mal-host-result-"));
 	try {
@@ -331,6 +458,7 @@ function inspectHostCall(
 			),
 			afterCoreOptimization(program) {
 				operations = coreOperations(coreFunctionNamed(program, inspected)!);
+				check?.(program);
 			},
 		});
 		return operations!.map(({ opcode, attributes }) =>
@@ -1247,6 +1375,7 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 	]);
 	const missing: Array<string> = [];
 	const checked = new Set<string>();
+	const missingInvocations: Array<string> = [];
 	const fromRoot = (root: string) => {
 		const colon = root.indexOf(":");
 		return HOST_RESULT_CONTRACTS.get(root.slice(0, colon))?.get(root.slice(colon + 1));
@@ -1278,22 +1407,36 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 			) {
 				missing.push(identity);
 			}
+			if (
+				(name === "fetch" || GLOBAL_HOST_FUNCTION_RESULTS.has(name)) &&
+				hostGlobalInvocation(name) === undefined
+			)
+				missingInvocations.push(`${identity} call`);
 		}
 	}
 	for (const [owner, kind] of inventory) {
 		const constructor = primordialNode(owner);
 		expect(constructor, owner).toBeDefined();
+		if (
+			owner.startsWith("globalThis.") &&
+			hostConstructorInvocation(kind) === undefined &&
+			hostConstructorInvocationUnavailable(kind) === undefined
+		)
+			missingInvocations.push(`${owner} constructor`);
 		const prototype = constructor![4].find(([name]) => name === "prototype")?.[2];
 		check(
 			constructor!,
 			HOST_OBJECT_RESULTS.statics[kind],
 			HOST_OBJECT_RESULTS.staticProperties[kind],
+			kind,
+			true,
 		);
 		if (typeof prototype === "number")
 			check(
 				nodes[prototype]!,
 				HOST_OBJECT_RESULTS.methods[kind],
 				HOST_OBJECT_RESULTS.properties[kind],
+				kind,
 			);
 	}
 	for (const [owner, kind] of [
@@ -1305,6 +1448,7 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 			primordialNode(owner)!,
 			HOST_OBJECT_RESULTS.methods[kind],
 			HOST_OBJECT_RESULTS.properties[kind],
+			kind,
 		);
 	const traversed = new Set<number>();
 	for (const [name, brand] of GLOBAL_HOST_OBJECT_BRANDS) {
@@ -1330,6 +1474,7 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 			missing.push(identity);
 	}
 	expect(missing.sort()).toEqual([]);
+	expect(missingInvocations.sort()).toEqual([]);
 
 	function visit(index: number, brand: HostObjectKind | undefined) {
 		if (traversed.has(index)) return;
@@ -1363,7 +1508,7 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 								node[0].slice("globalThis.".length),
 							) ?? []),
 						]);
-		check(node, methods, properties);
+		check(node, methods, properties, constructor ?? brand, constructor !== undefined);
 		for (const [key, , value] of node[4]) {
 			if (key === "constructor" || key === "prototype" || typeof value !== "number")
 				continue;
@@ -1376,6 +1521,8 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 		node: (typeof nodes)[number],
 		methods: ReadonlyMap<string, HostResultContract> | undefined,
 		properties: ReadonlyMap<string, HostResultContract> | undefined,
+		brand?: HostObjectKind,
+		isStatic = false,
 	) {
 		const [owner, , , , members] = node;
 		if (checked.has(owner)) return;
@@ -1392,9 +1539,28 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 				!numericContractAudited(properties?.get(member) ?? installedContract(getter))
 			)
 				missing.push(`${owner}.${member} getter`);
+			if (
+				getter >= 0 &&
+				brand !== undefined &&
+				hostGetterInvocation(brand, member) === undefined &&
+				hostGetterInvocationUnavailable(brand, member) === undefined
+			)
+				missingInvocations.push(`${brand}.${member} getter`);
 			if (typeof value !== "number" || (nodes[value]![2] & 2) === 0) continue;
-			if (!numericContractAudited(methods?.get(member) ?? installedContract(value)))
-				missing.push(`${owner}.${member}`);
+			const contract = methods?.get(member) ?? installedContract(value);
+			if (!numericContractAudited(contract)) missing.push(`${owner}.${member}`);
+			if (
+				brand !== undefined &&
+				methods?.has(member) &&
+				contract?.kind !== "callback" &&
+				contract?.kind !== "never" &&
+				hostMemberInvocation(brand, member, isStatic) === undefined &&
+				(isStatic ? hostStaticInvocationUnavailable : hostMemberInvocationUnavailable)(
+					brand,
+					member,
+				) === undefined
+			)
+				missingInvocations.push(`${brand}.${member} ${isStatic ? "static" : "method"}`);
 		}
 	}
 });

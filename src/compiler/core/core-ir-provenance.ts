@@ -62,6 +62,7 @@ import type {
 	CoreOpcodeAccess,
 	CoreValueId,
 } from "./core-ir.ts";
+import { coreNativeInvocationPreservesOperand } from "./core-native-invocations.ts";
 import type { CoreOptimizationOwnerRunner } from "./core-optimization-owners.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -595,6 +596,7 @@ export function buildCoreProvenance(
 					opcode === "throwIfTdz" ||
 					opcode === "rootUse" ||
 					observesWithoutRetention(fn, instruction) ||
+					coreNativeInvocationPreservesOperand(fn, instruction, operand) ||
 					options.nonRetainingCallOperands?.get(instruction)?.has(operand) === true
 				) {
 					continue;

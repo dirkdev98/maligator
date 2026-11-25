@@ -13,7 +13,7 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_OBJECT,
 } from "../shared/compiler-value-kinds.ts";
-import { effectSummaryCovers } from "../shared/effect-summary.ts";
+import { EFFECT_DOMAINS, effectSummaryCovers } from "../shared/effect-summary.ts";
 import { compilerIntegerRangeIsValid } from "../shared/integer-range.ts";
 import { isKnownBuiltinError } from "../shared/known-builtin-errors.ts";
 import { knownArgumentModes } from "../shared/known-operations.ts";
@@ -34,6 +34,7 @@ import {
 	CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE,
 	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
 	CORE_KNOWN_OWN_DATA_ATTRIBUTE,
+	CORE_NATIVE_INVOCATION_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
@@ -62,6 +63,7 @@ import {
 	coreRepresentationCanWiden,
 	coreValueId,
 } from "./core-ir.ts";
+import type { CoreNativeInvocation } from "./core-native-invocations.ts";
 import type { CoreOptimizationStage } from "./core-pass.ts";
 import { coreModulePrivateNames } from "./core-private-names.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -424,6 +426,50 @@ function verifyInstructionRows(
 				fail(`instruction @${instruction} ${descriptor.opcode} has invalid output arity`);
 			}
 			const attributes = fn.instructionAttributes(instruction);
+			const invocation = attributes[CORE_NATIVE_INVOCATION_ATTRIBUTE] as
+				| CoreNativeInvocation
+				| null
+				| undefined;
+			if (invocation !== undefined) {
+				const getter =
+					descriptor.opcode === "loadPropertyStatic" ||
+					descriptor.opcode === "loadProperty";
+				const firstInput = getter ? 0 : 1;
+				const position = (index: number) =>
+					Number.isSafeInteger(index) && index >= firstInput && index < operandCount;
+				const positions = (indices: ReadonlyArray<number> | undefined) =>
+					indices === undefined || (Array.isArray(indices) && indices.every(position));
+				const domains = (values: unknown) =>
+					Array.isArray(values) &&
+					(values as ReadonlyArray<unknown>).every((value) =>
+						EFFECT_DOMAINS.some((domain) => domain === value),
+					);
+				if (
+					invocation === null ||
+					typeof invocation !== "object" ||
+					(!getter &&
+						descriptor.opcode !== "call" &&
+						descriptor.opcode !== "construct") ||
+					invocation.firstInput !== firstInput ||
+					attributes.argumentMode !== undefined ||
+					typeof invocation.allocatesOnSuccess !== "boolean" ||
+					!positions(invocation.retains) ||
+					!positions(invocation.mutates) ||
+					(invocation.returns !== undefined &&
+						invocation.returns !== "primitive" &&
+						invocation.returns !== "fresh" &&
+						!position(invocation.returns)) ||
+					invocation.body === null ||
+					typeof invocation.body !== "object" ||
+					!domains(invocation.body.reads) ||
+					!domains(invocation.body.writes) ||
+					typeof invocation.body.mayThrow !== "boolean" ||
+					typeof invocation.body.mayGc !== "boolean" ||
+					typeof invocation.body.maySuspend !== "boolean" ||
+					invocation.body.callsUserCode !== false
+				)
+					fail(`Invalid exact native invocation on @${instruction} ${descriptor.opcode}`);
+			}
 			const callInputs = attributes[CORE_CALL_INPUT_FACTS_ATTRIBUTE];
 			if (callInputs !== undefined) {
 				const limit = operandCount - Number(attributes.argumentMode !== undefined);

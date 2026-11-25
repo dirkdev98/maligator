@@ -55,6 +55,7 @@ import type {
 } from "./core-ir.ts";
 import type { CoreAttributeValue } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
+import { coreNativeInvocation } from "./core-native-invocations.ts";
 import type {
 	CoreProgramFlowLocalTransfers,
 	CoreProgramFlowPublishedFunctionSummary,
@@ -294,6 +295,16 @@ function projectedReturnOrigin(
 	const origin = (value: CoreValueId) =>
 		values.get(value) ?? local.origins[value] ?? ORIGIN_UNKNOWN;
 	const callOrigin = (instruction: CoreInstructionId): ValueOrigin => {
+		const caller = program.function(local.function);
+		const native = coreNativeInvocation(caller, instruction)?.returns;
+		if (native === "primitive") return ORIGIN_PRIMITIVE;
+		if (native === "fresh") return ORIGIN_FRESH;
+		if (typeof native === "number")
+			return origin(
+				caller.kernel.operandAt(
+					caller.kernel.instructionOperandStart(instruction) + native,
+				),
+			);
 		const site = targets.site(local.function, instruction);
 		if (site === undefined || site.targets.opaque || site.targets.anyScript)
 			return ORIGIN_UNKNOWN;
@@ -649,18 +660,24 @@ function analyzeLocalSummary(
 		if (reachableBlocks[fn.instructionBlock(instruction)] === 0) continue;
 		const opcode = fn.instructionOpcodeName(instruction);
 		const projection = coreBuiltinResultProjection(fn, instruction);
+		const native = coreNativeInvocation(fn, instruction)?.returns;
 		const operand =
-			opcode === "move" && fn.kernel.instructionOperandCount(instruction) > 0
-				? fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))
+			typeof native === "number" ||
+			(opcode === "move" && fn.kernel.instructionOperandCount(instruction) > 0)
+				? fn.kernel.operandAt(
+						fn.kernel.instructionOperandStart(instruction) +
+							(typeof native === "number" ? native : 0),
+					)
 				: projection?.input;
 		const kind =
 			operand !== undefined
 				? ORIGIN_TRANSFER_COPY
 				: opcode === "loadThis"
 					? ORIGIN_TRANSFER_RECEIVER
-					: FRESH_RESULTS.has(opcode)
+					: native === "fresh" || FRESH_RESULTS.has(opcode)
 						? ORIGIN_TRANSFER_FRESH
-						: PRIMITIVE_RESULTS.has(opcode) ||
+						: native === "primitive" ||
+							  PRIMITIVE_RESULTS.has(opcode) ||
 							  (projection !== undefined && projection.identityKinds === undefined)
 							? ORIGIN_TRANSFER_PRIMITIVE
 							: ORIGIN_TRANSFER_UNKNOWN;
@@ -742,6 +759,7 @@ function analyzeLocalSummary(
 		const instruction = localTransfers.operationAt(transfer);
 		if (reachableBlocks[fn.instructionBlock(instruction)] === 0) continue;
 		const descriptor = fn.registry.byId(fn.instructionOpcode(instruction));
+		const native = coreNativeInvocation(fn, instruction);
 		const instructionEffects = coreInstructionEffects(fn, instruction);
 		const callback =
 			descriptor.opcode === "callKnown"
@@ -752,7 +770,7 @@ function analyzeLocalSummary(
 			effects,
 			callback !== undefined
 				? callback.residualEffects
-				: descriptor.callTransfer === undefined
+				: descriptor.callTransfer === undefined || native !== undefined
 					? instructionEffects
 					: {
 							...instructionEffects,
@@ -771,6 +789,19 @@ function analyzeLocalSummary(
 		for (let operandIndex = 0; operandIndex < operandCount; operandIndex++) {
 			const value = fn.kernel.operandAt(operandStart + operandIndex);
 			const origin = origins[value]!;
+			if (native !== undefined && operandIndex >= native.firstInput) {
+				const retained = native.retains?.includes(operandIndex) === true;
+				if (retained || native.mutates?.includes(operandIndex))
+					noteEscape(
+						origin,
+						retained ? "retained" : "none",
+						"unknown",
+						parameterEscape,
+						parameterContainment,
+						receiver,
+					);
+				continue;
+			}
 			if (observesOperands) continue;
 			if (descriptor.callTransfer?.calleeOperand === operandIndex) {
 				noteEscape(
@@ -1147,6 +1178,7 @@ function prepareSummary(
 	rootReasons: ReadonlyArray<SummaryRootReason>,
 ): CoreProgramFlowSummaryTransfer<CoreAnyScriptCallSummary> {
 	const sites = targets.outgoing(functionId);
+	const fn = program.function(functionId);
 	const callees = new Set<string>();
 	const dynamicCalls: Array<CoreIndexedCallSite> = [];
 	let openCallEdge = false;
@@ -1170,6 +1202,7 @@ function prepareSummary(
 		);
 	};
 	for (const site of sites) {
+		if (coreNativeInvocation(fn, site.instruction) !== undefined) continue;
 		for (const callee of site.targets.functions) {
 			const id = summaryIds.get(callee);
 			if (id !== undefined) callees.add(id);

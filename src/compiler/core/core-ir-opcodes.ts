@@ -18,6 +18,10 @@ import type {
 	CoreOpcodeAllocation,
 	CoreOpcodeCallTransfer,
 } from "./core-ir.ts";
+import {
+	coreNativeInvocation,
+	coreNativeInvocationEffects,
+} from "./core-native-invocations.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
 /**
@@ -929,10 +933,13 @@ export function coreInstructionEffects(
 	instruction: CoreInstructionId,
 	registry: CoreOpcodeRegistry = fn.registry,
 ): CoreInstructionEffects {
-	return (
-		fn.instructionEffectRefinement(instruction)?.effects ??
-		registry.byId(fn.instructionOpcode(instruction)).effects
-	);
+	const refinement = fn.instructionEffectRefinement(instruction);
+	if (refinement !== undefined) return refinement.effects;
+	const descriptor = registry.byId(fn.instructionOpcode(instruction));
+	const invocation = coreNativeInvocation(fn, instruction);
+	return invocation === undefined
+		? descriptor.effects
+		: coreNativeInvocationEffects(invocation, descriptor.effects);
 }
 
 const CORE_OPCODE_SET: ReadonlySet<string> = new Set(CORE_OPCODES);

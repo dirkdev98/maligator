@@ -8,6 +8,10 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import { EMBED_INSTALLER } from "../shared/embedded-asset.ts";
 import {
+	hostConstructorInvocation,
+	hostModuleInvocation,
+} from "../shared/host-invocation-contracts.ts";
+import {
 	BUFFER_STRING_ENCODINGS,
 	builtinInputContract,
 	CAPTURED_HOST_RESULTS,
@@ -19,7 +23,6 @@ import {
 	GLOBAL_HOST_NAMESPACE_RESULTS,
 	HOST_OBJECT_RESULTS,
 	HOST_RESULT_CONTRACTS,
-	hostHasInputContractMember,
 	NODE_TEST_EXPORT_TARGETS,
 } from "../shared/host-result-contracts.ts";
 import type {
@@ -46,6 +49,7 @@ import { CoreEditor } from "./core-editor.ts";
 import type { CoreNormalResultFacts } from "./core-editor.ts";
 import { coreFunctionId, coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import { instantiateNativeInvocation } from "./core-native-invocations.ts";
 import type { CoreProgramFlowTargetIndex } from "./core-program-flow.ts";
 import { coreSuccessfulAwaitInput } from "./core-promise-facts.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -95,13 +99,18 @@ export function coreHostResultSlots(context: CoreCompilationContext): CoreHostSl
 				typeof asset === "object" && asset !== null && "kind" in asset
 					? asset.kind
 					: undefined;
-			const contract =
+			const result =
 				assetKind === "file" || assetKind === "directory"
 					? ({
 							kind: "return",
 							value: { mask: COMPILER_VALUE_KIND_OBJECT, assetHandle: assetKind },
 						} as const)
 					: contracts?.get(installed.name);
+			const invocation = hostModuleInvocation(candidate.installer, installed.name);
+			const contract =
+				result !== undefined && invocation !== undefined && "body" in invocation
+					? { ...result, invocation }
+					: result;
 			slots.set(installed.slot, {
 				root: `${candidate.installer}:${installed.name}`,
 				contract,
@@ -158,17 +167,22 @@ function catalogCallableContract(
 ): HostResultContract | undefined {
 	const node = coreHostCapturedValue(program, fn, producer, slots, 5);
 	if (node === undefined || (!allowData && (node[2] & 2) === 0)) return undefined;
-	const result = CAPTURED_HOST_RESULTS.get(node[0]);
-	if (result !== undefined) return result;
+	const captured = CAPTURED_HOST_RESULTS.get(node[0]);
 	for (const alias of node[5]) {
 		const separator = alias.indexOf(":");
 		if (!alias.startsWith("mal_host_install_")) continue;
-		const contract = HOST_RESULT_CONTRACTS.get(alias.slice(0, separator))?.get(
-			alias.slice(separator + 1),
-		);
-		if (contract !== undefined) return contract;
+		const installer = alias.slice(0, separator);
+		const name = alias.slice(separator + 1);
+		const installed = HOST_RESULT_CONTRACTS.get(installer)?.get(name);
+		if (installed === undefined) continue;
+		const result = captured ?? installed;
+		const invocation = hostModuleInvocation(installer, name);
+		const inputs = result.inputs ?? installed.inputs;
+		return invocation === undefined && inputs === result.inputs
+			? result
+			: { ...result, inputs, invocation };
 	}
-	return undefined;
+	return captured;
 }
 
 function coreHostCapturedValue(
@@ -372,6 +386,7 @@ export function coreHostDirectCallContract(
 		return {
 			kind: "return",
 			inputs: builtinInputContract(fromSlot.value.hostConstructor, true),
+			invocation: hostConstructorInvocation(fromSlot.value.hostConstructor),
 			value: {
 				mask: COMPILER_VALUE_KIND_OBJECT,
 				hostObject: fromSlot.value.hostConstructor,
@@ -382,22 +397,20 @@ export function coreHostDirectCallContract(
 	return fromSlot ?? assetMember(program, fn, callee, slots, "methods", budget);
 }
 
-export function coreHostCallInputCandidate(
+export function coreHostMemberCallName(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
-): boolean {
+	slots: CoreHostSlots | undefined,
+	members: boolean,
+): string | undefined {
 	const callee = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
 	const producer = definition(fn, callee);
-	if (producer === undefined) return false;
-	const name =
-		coreHostPropertyName(program, fn, producer) ??
-		coreHostGlobalName(program, fn, callee);
+	if (producer === undefined) return undefined;
+	const named = slots === undefined ? undefined : coreHostSlotName(fn, producer, slots);
+	if (named !== undefined || !members) return named;
 	return (
-		name !== undefined &&
-		(fn.instructionOpcodeName(instruction) === "construct"
-			? builtinInputContract(name, true) !== undefined
-			: hostHasInputContractMember(name))
+		coreHostPropertyName(program, fn, producer) ?? coreHostGlobalName(program, fn, callee)
 	);
 }
 
@@ -1129,6 +1142,26 @@ export function specializeCoreHostResults(compilation: ConstructedCoreCompilatio
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (opcode === "call" || opcode === "construct") {
 				const contract = coreHostDirectCallContract(program, fn, instruction, slots, 4);
+				const invocation = instantiateNativeInvocation(
+					fn,
+					instruction,
+					contract?.invocation,
+					locked,
+					(value) => {
+						const constant = literal(program, fn, definition(fn, value));
+						if (constant === undefined) return COMPILER_VALUE_KIND_UNDEFINED;
+						if (constant === null) return COMPILER_VALUE_KIND_NULL;
+						if (typeof constant === "string") return COMPILER_VALUE_KIND_STRING;
+						if (typeof constant === "boolean") return COMPILER_VALUE_KIND_BOOLEAN;
+						if (typeof constant === "number") return COMPILER_VALUE_KIND_NUMBER;
+						return undefined;
+					},
+				);
+				if (invocation !== undefined)
+					(editor ??= CoreEditor.open(program, functionId)).setNativeInvocation(
+						instruction,
+						invocation,
+					);
 				const inputs = instantiateCoreCallInputFacts(
 					fn,
 					instruction,

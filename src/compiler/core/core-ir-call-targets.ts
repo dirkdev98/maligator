@@ -49,6 +49,7 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
+import { coreNativeInvocation } from "./core-native-invocations.ts";
 import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
 	CoreProgramFlowCallTargetSemantics,
@@ -1306,6 +1307,7 @@ function analyzeFunctionTargets(
 			key !== undefined &&
 			cells.get(key)?.anyScript !== true;
 		if (!observesIdentity && !privateStore) {
+			const native = coreNativeInvocation(fn, instruction);
 			const start = fn.kernel.instructionOperandStart(instruction);
 			for (
 				let operand = 0;
@@ -1313,6 +1315,13 @@ function analyzeFunctionTargets(
 				operand++
 			) {
 				if (descriptor.callTransfer?.calleeOperand === operand) continue;
+				if (
+					native !== undefined &&
+					operand >= native.firstInput &&
+					native.returns !== operand &&
+					native.retains?.includes(operand) !== true
+				)
+					continue;
 				publish(fn.kernel.operandAt(start + operand));
 			}
 		}
@@ -1370,6 +1379,7 @@ function analyzeFunctionTargets(
 	for (const site of sites)
 		if (
 			site.targets.anyScript &&
+			coreNativeInvocation(fn, site.instruction) === undefined &&
 			cfg.reachable.has(fn.instructionBlock(site.instruction))
 		)
 			publish(site.callee);

@@ -1,6 +1,13 @@
 import { COMPILER_VALUE_KIND_OBJECT } from "../shared/compiler-value-kinds.ts";
 import { EMBED_INSTALLER } from "../shared/embedded-asset.ts";
 import {
+	hostConstructorInvocation,
+	hostGetterInvocation,
+	hostGlobalInvocation,
+	hostMemberInvocation,
+	hostModuleInvocation,
+} from "../shared/host-invocation-contracts.ts";
+import {
 	PLATFORM_OBJECT_RESULTS,
 	PLATFORM_SOURCE_EXPORTS,
 	PLATFORM_SOURCE_STATICS,
@@ -403,6 +410,7 @@ export function coreHostObjectResult(
 			: {
 					kind: "return",
 					inputs: builtinInputContract(brand, true),
+					invocation: hostConstructorInvocation(brand),
 					value: { mask: COMPILER_VALUE_KIND_OBJECT, hostObject: brand },
 				};
 	}
@@ -432,18 +440,25 @@ export function coreHostObjectResult(
 			coreHostArrayIndex(program, fn, instruction)
 		)
 			return element;
-		return name === undefined
-			? undefined
-			: HOST_OBJECT_RESULTS.properties[brand]?.get(name);
+		if (name === undefined) return undefined;
+		const result = HOST_OBJECT_RESULTS.properties[brand]?.get(name);
+		const invocation = hostGetterInvocation(brand, name);
+		return result === undefined || invocation === undefined
+			? result
+			: { ...result, invocation };
 	}
 	const callee = fn.kernel.operandAt(start);
 	const global = coreHostGlobalName(program, fn, callee);
 	if (global === "fetch") return HOST_OBJECT_RESULTS.fetch;
-	if (global !== undefined)
-		return (
+	if (global !== undefined) {
+		const result =
 			GLOBAL_HOST_FUNCTION_RESULTS.get(global) ??
-			GLOBAL_HOST_ABSTRACT_CONSTRUCTORS.get(global)
-		);
+			GLOBAL_HOST_ABSTRACT_CONSTRUCTORS.get(global);
+		const invocation = hostGlobalInvocation(global);
+		return result === undefined || invocation === undefined
+			? result
+			: { ...result, invocation };
+	}
 	const load = definition(fn, callee);
 	if (load === undefined) return undefined;
 	const method = coreHostPropertyName(program, fn, load);
@@ -456,20 +471,28 @@ export function coreHostObjectResult(
 		globalReceiver === undefined
 			? undefined
 			: GLOBAL_HOST_NAMESPACE_RESULTS.get(globalReceiver);
-	if (namespace !== undefined) return namespace.get(method);
+	if (namespace !== undefined) {
+		const result = namespace.get(method);
+		const invocation =
+			globalReceiver === "process"
+				? hostModuleInvocation("mal_host_install_process", method)
+				: undefined;
+		return result === undefined || invocation === undefined
+			? result
+			: { ...result, invocation };
+	}
 	const constructor = hostConstructor(program, fn, receiver, slots);
-	if (constructor !== undefined)
-		return HOST_OBJECT_RESULTS.statics[constructor]?.get(method);
-	const brand = hostReceiver(
-		program,
-		fn,
-		receiver,
-		slots,
-		budget - 1,
-		parameters,
-		platformResult,
-	);
-	return brand === undefined ? undefined : HOST_OBJECT_RESULTS.methods[brand].get(method);
+	const brand =
+		constructor ??
+		hostReceiver(program, fn, receiver, slots, budget - 1, parameters, platformResult);
+	if (brand === undefined) return undefined;
+	const members =
+		constructor === undefined ? HOST_OBJECT_RESULTS.methods : HOST_OBJECT_RESULTS.statics;
+	const result = members[brand]?.get(method);
+	const invocation = hostMemberInvocation(brand, method, constructor !== undefined);
+	return result === undefined || invocation === undefined
+		? result
+		: { ...result, invocation };
 }
 
 export function coreHostCallbackMemberCandidate(

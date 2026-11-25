@@ -20,6 +20,7 @@ import {
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
 	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 	CORE_KNOWN_OWN_DATA_ATTRIBUTE,
+	CORE_NATIVE_INVOCATION_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
 import type { CoreKnownOwnSlotCandidate } from "./core-internal-attributes.ts";
 import { coreAttributeValuesEqual } from "./core-ir-equality.ts";
@@ -44,6 +45,7 @@ import type {
 	CoreValueId,
 	SetCoreGuardTerminatorInput,
 } from "./core-ir.ts";
+import type { CoreNativeInvocation } from "./core-native-invocations.ts";
 import type {
 	CoreChangeDomain,
 	CoreChangeSet,
@@ -539,6 +541,11 @@ export class CoreEditor {
 		const previousRefinement = this.function.instructionEffectRefinement(instruction);
 		const outputCount = this.function.kernel.instructionResultCount(instruction);
 		const descriptor = this.#operation(opcode, inputs.length, outputCount);
+		const attributes = options.attributes ?? {};
+		const replacementAttributes =
+			attributes[CORE_NATIVE_INVOCATION_ATTRIBUTE] === undefined
+				? attributes
+				: { ...attributes, [CORE_NATIVE_INVOCATION_ATTRIBUTE]: undefined };
 		this.#touchInstructionOperands(instruction);
 		this.#touchInstructionResults(instruction);
 		this.function._replaceOperation(
@@ -546,7 +553,7 @@ export class CoreEditor {
 			instruction,
 			descriptor.id,
 			inputs,
-			options.attributes ?? {},
+			replacementAttributes,
 			options.sourcePosition,
 			options.effectRefinement,
 		);
@@ -576,6 +583,7 @@ export class CoreEditor {
 		this.#touchInstructionOperands(instruction);
 		this.#touchInstructionResults(instruction);
 		this.function._replaceOperands(this.#mutation, instruction, inputs);
+		this.#clearNativeInvocation(instruction);
 		this.#instructions.add(instruction);
 		this.#touchBlock(this.function.instructionBlock(instruction));
 		this.#touchValues(inputs);
@@ -746,6 +754,54 @@ export class CoreEditor {
 		this.#domains.add("normalResults");
 		this.#domains.add("specializationInputs");
 		this.#edits++;
+	}
+
+	setNativeInvocation(
+		instruction: CoreInstructionId,
+		invocation: CoreNativeInvocation,
+	): void {
+		this.#assertActive();
+		const fn = this.function;
+		const opcode = fn.instructionOpcodeName(instruction);
+		const getter = opcode === "loadProperty" || opcode === "loadPropertyStatic";
+		if (
+			(!getter && opcode !== "call" && opcode !== "construct") ||
+			invocation.firstInput !== (getter ? 0 : 1) ||
+			fn.instructionAttributes(instruction).argumentMode !== undefined
+		)
+			throw new Error(
+				"Native invocation facts require a positional call or exact getter",
+			);
+		const current = fn.instructionAttributes(instruction);
+		const encoded = {
+			...invocation,
+			body: { ...invocation.body },
+		};
+		if (
+			coreAttributeValuesEqual(current[CORE_NATIVE_INVOCATION_ATTRIBUTE] ?? null, encoded)
+		)
+			return;
+		fn._setInstructionAttributes(this.#mutation, instruction, {
+			...current,
+			[CORE_NATIVE_INVOCATION_ATTRIBUTE]: encoded,
+		});
+		this.#instructions.add(instruction);
+		this.#touchBlock(fn.instructionBlock(instruction));
+		this.#domains.add("calls");
+		this.#domains.add("memoryEffects");
+		this.#domains.add("specializationInputs");
+		this.#edits++;
+	}
+
+	#clearNativeInvocation(instruction: CoreInstructionId): void {
+		const current = this.function.instructionAttributes(instruction);
+		if (current[CORE_NATIVE_INVOCATION_ATTRIBUTE] === undefined) return;
+		const attributes = { ...current };
+		delete attributes[CORE_NATIVE_INVOCATION_ATTRIBUTE];
+		this.function._setInstructionAttributes(this.#mutation, instruction, attributes);
+		this.#domains.add("calls");
+		this.#domains.add("memoryEffects");
+		this.#domains.add("specializationInputs");
 	}
 
 	setInstructionEffectRefinement(
@@ -1383,6 +1439,7 @@ export class CoreEditor {
 				const descriptor = this.program.registry.byId(
 					this.function.instructionOpcode(instruction),
 				);
+				this.#clearNativeInvocation(instruction);
 				const refinement = this.function.instructionEffectRefinement(instruction);
 				this.#touchInstructionOperands(instruction);
 				this.#markForOperation(instruction, descriptor, refinement);

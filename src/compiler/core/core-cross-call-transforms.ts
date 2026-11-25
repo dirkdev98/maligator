@@ -13,7 +13,15 @@ import {
 	compilerValueKindMaskIsSubset,
 } from "../shared/compiler-value-kinds.ts";
 import { effectSummariesEqual } from "../shared/effect-summary.ts";
-import { PLATFORM_SOURCE_EXPORTS } from "../shared/host-result-contracts.ts";
+import {
+	hostGetterInvocationName,
+	hostInvocationName,
+} from "../shared/host-invocation-contracts.ts";
+import {
+	builtinInputContract,
+	hostHasInputContractMember,
+	PLATFORM_SOURCE_EXPORTS,
+} from "../shared/host-result-contracts.ts";
 import {
 	compilerIntegerRangesEqual,
 	compilerIntegerRangeIsValid,
@@ -54,6 +62,7 @@ import {
 	coreCalleeTargetsSingleFunction,
 } from "./core-callee-targets.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import { CORE_CONDITIONAL_VALUE_KIND_ANALYSIS } from "./core-conditional-value-kinds.ts";
 import { coreConstructorSlotReserve } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreNormalResultFacts } from "./core-editor.ts";
@@ -91,8 +100,10 @@ import {
 import { joinCoreHeapBrands } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState } from "./core-heap-brands.ts";
 import {
-	coreHostCallInputCandidate,
 	coreHostImmediateRangeCandidate,
+	coreHostMemberCallName,
+	coreHostPropertyName,
+	coreHostResultSlots,
 } from "./core-host-results.ts";
 import {
 	coreInstanceMethodHint,
@@ -160,6 +171,11 @@ import {
 	coreFieldArgument,
 	coreReadOnlyParameterFields,
 } from "./core-native-field-analysis.ts";
+import {
+	coreNativeInvocation,
+	instantiateNativeInvocation,
+} from "./core-native-invocations.ts";
+import type { CoreNativeInvocation } from "./core-native-invocations.ts";
 import { coreModulePrivateNames } from "./core-private-names.ts";
 import type { CoreModulePrivateNameIndex } from "./core-private-names.ts";
 import {
@@ -5011,6 +5027,10 @@ function discoverProgramNormalResultFacts(
 		CoreFunctionId,
 		ReadonlyMap<CoreInstructionId, CoreCallInputFacts>
 	>;
+	readonly invocations: ReadonlyMap<
+		CoreFunctionId,
+		ReadonlyMap<CoreInstructionId, CoreNativeInvocation>
+	>;
 } {
 	const results = new Map<CoreFunctionId, Array<CoreNormalResultFact>>();
 	const hostRanges = new Map<
@@ -5023,6 +5043,10 @@ function discoverProgramNormalResultFacts(
 		Map<CoreInstructionId, CoreCallInputFacts>
 	>();
 	const inputWrappers = new Set<CoreFunctionId>();
+	const invocations = new Map<
+		CoreFunctionId,
+		Map<CoreInstructionId, CoreNativeInvocation>
+	>();
 	const localReturns = new Map<CoreFunctionId, number | undefined>();
 	const inputKindQueries = new Map<
 		CoreFunctionId,
@@ -5171,6 +5195,9 @@ function discoverProgramNormalResultFacts(
 	const knownCallOpcode = program.registry.get("callKnown")?.id;
 	const callOpcode = program.registry.get("call")?.id;
 	const constructOpcode = program.registry.get("construct")?.id;
+	const loadStaticOpcode = program.registry.get("loadPropertyStatic")?.id;
+	const loadOpcode = program.registry.get("loadProperty")?.id;
+	const hostSlots = context === undefined ? undefined : coreHostResultSlots(context);
 	for (const functionId of flow.reachability.liveFunctions) {
 		const fn = program.function(functionId);
 		for (const instruction of fn.instructionIds()) {
@@ -5183,28 +5210,78 @@ function discoverProgramNormalResultFacts(
 				coreCallInputFacts(fn, instruction) !== undefined
 			)
 				inputWrappers.add(functionId);
-			if (
-				(opcode === callOpcode || opcode === constructOpcode) &&
-				hostMembersMayBeStable &&
-				fn.instructionAttributes(instruction)[CORE_CALL_INPUT_FACTS_ATTRIBUTE] ===
-					undefined &&
-				coreHostCallInputCandidate(program, fn, instruction) &&
-				readValueKinds().hostMembersStable
-			) {
-				const host = readValueKinds().hostCallContract(fn, instruction);
-				const facts = instantiateCoreCallInputFacts(
-					fn,
-					instruction,
-					host?.inputs,
-					host?.kind === "fulfill",
-				);
-				if (facts !== undefined) {
-					const group =
-						callInputs.get(functionId) ??
-						new Map<CoreInstructionId, CoreCallInputFacts>();
-					group.set(instruction, facts);
-					callInputs.set(functionId, group);
-					inputWrappers.add(functionId);
+			const call = opcode === callOpcode || opcode === constructOpcode;
+			const getter =
+				hostMembersMayBeStable && (opcode === loadStaticOpcode || opcode === loadOpcode);
+			if (call || getter) {
+				const attributes = fn.instructionAttributes(instruction);
+				const wantsInputs =
+					call &&
+					hostMembersMayBeStable &&
+					attributes[CORE_CALL_INPUT_FACTS_ATTRIBUTE] === undefined;
+				const wantsEffects = coreNativeInvocation(fn, instruction) === undefined;
+				const name = getter
+					? coreHostPropertyName(program, fn, instruction)
+					: wantsInputs || wantsEffects
+						? coreHostMemberCallName(
+								program,
+								fn,
+								instruction,
+								hostSlots,
+								hostMembersMayBeStable,
+							)
+						: undefined;
+				const inputs =
+					wantsInputs &&
+					name !== undefined &&
+					(opcode === constructOpcode
+						? builtinInputContract(name, true) !== undefined
+						: hostHasInputContractMember(name));
+				const effects =
+					wantsEffects &&
+					name !== undefined &&
+					(getter ? hostGetterInvocationName(name) : hostInvocationName(name));
+				if (inputs || effects) {
+					const kinds = readValueKinds();
+					const host = kinds.hostCallContract(fn, instruction);
+					if (inputs && kinds.hostMembersStable) {
+						const facts = instantiateCoreCallInputFacts(
+							fn,
+							instruction,
+							host?.inputs,
+							host?.kind === "fulfill",
+						);
+						if (facts !== undefined) {
+							const group =
+								callInputs.get(functionId) ??
+								new Map<CoreInstructionId, CoreCallInputFacts>();
+							group.set(instruction, facts);
+							callInputs.set(functionId, group);
+							inputWrappers.add(functionId);
+						}
+					}
+					if (effects) {
+						const invocation = instantiateNativeInvocation(
+							fn,
+							instruction,
+							host?.invocation,
+							context?.facts.world.primordialPolicy === "locked",
+							(value) =>
+								analyses
+									.get(CORE_CONDITIONAL_VALUE_KIND_ANALYSIS, {
+										scope: "function",
+										function: functionId,
+									})
+									.kindMask(value, fn.instructionBlock(instruction), instruction),
+						);
+						if (invocation !== undefined) {
+							const group =
+								invocations.get(functionId) ??
+								new Map<CoreInstructionId, CoreNativeInvocation>();
+							group.set(instruction, invocation);
+							invocations.set(functionId, group);
+						}
+					}
 				}
 			}
 			if (opcode === awaitOpcode) {
@@ -5960,7 +6037,7 @@ function discoverProgramNormalResultFacts(
 		inputWrappers,
 		callInputs,
 	);
-	return { calls: results, fields: fieldResults, awaits, callInputs };
+	return { calls: results, fields: fieldResults, awaits, callInputs, invocations };
 }
 
 function discoverProgramCallResultIdentities(
@@ -6499,6 +6576,7 @@ export function runCoreCrossCallTransforms(
 		fields: recordKindsByCaller,
 		awaits: awaitRangesByCaller,
 		callInputs: callInputsByCaller,
+		invocations: invocationsByCaller,
 	} = discoverProgramNormalResultFacts(program, analyses, flow, readValueKinds);
 	const awaitKindsByCaller = new Map<
 		CoreFunctionId,
@@ -6557,6 +6635,7 @@ export function runCoreCrossCallTransforms(
 	if (
 		callKindsByCaller.size > 0 ||
 		callInputsByCaller.size > 0 ||
+		invocationsByCaller.size > 0 ||
 		callIdentitiesByCaller.size > 0 ||
 		awaitKindsByCaller.size > 0 ||
 		recordKindsByCaller.size > 0
@@ -6565,12 +6644,15 @@ export function runCoreCrossCallTransforms(
 		for (const functionId of new Set([
 			...callKindsByCaller.keys(),
 			...callInputsByCaller.keys(),
+			...invocationsByCaller.keys(),
 			...callIdentitiesByCaller.keys(),
 			...awaitKindsByCaller.keys(),
 			...recordKindsByCaller.keys(),
 		])) {
 			const fn = program.function(functionId);
 			const editor = CoreEditor.open(program, functionId);
+			for (const [instruction, invocation] of invocationsByCaller.get(functionId) ?? [])
+				editor.setNativeInvocation(instruction, invocation);
 			for (const [instruction, facts] of callInputsByCaller.get(functionId) ?? [])
 				editor.setCallInputFacts(instruction, facts);
 			for (const { instruction, facts } of awaitKindsByCaller.get(functionId) ?? [])

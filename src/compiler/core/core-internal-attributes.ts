@@ -29,6 +29,7 @@ export const CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE = "normalResultHeapBrand";
 export const CORE_RECORD_FIELD_KIND_ATTRIBUTE = "recordFieldKindMask";
 export const CORE_KNOWN_OWN_DATA_ATTRIBUTE = "knownOwnData";
 export const CORE_KNOWN_OWN_SLOT_ATTRIBUTE = "knownOwnSlot";
+export const CORE_NATIVE_INVOCATION_ATTRIBUTE = "nativeInvocation";
 
 // Function-scoped effect proofs must be re-established after cloning or inlining.
 export function coreUnscopedInstructionAttributes(
@@ -36,12 +37,14 @@ export function coreUnscopedInstructionAttributes(
 ): CoreInstructionAttributes {
 	if (
 		attributes[CORE_KNOWN_OWN_DATA_ATTRIBUTE] === undefined &&
-		attributes[CORE_AWAIT_RESULT_KIND_ATTRIBUTE] === undefined
+		attributes[CORE_AWAIT_RESULT_KIND_ATTRIBUTE] === undefined &&
+		attributes[CORE_NATIVE_INVOCATION_ATTRIBUTE] === undefined
 	)
 		return attributes;
 	const result = { ...attributes };
 	delete result[CORE_KNOWN_OWN_DATA_ATTRIBUTE];
 	delete result[CORE_AWAIT_RESULT_KIND_ATTRIBUTE];
+	delete result[CORE_NATIVE_INVOCATION_ATTRIBUTE];
 	return result;
 }
 

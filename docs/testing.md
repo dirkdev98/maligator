@@ -191,6 +191,19 @@ reason when an otherwise applicable API supplies no input implication.
 A brand fact describes the object's native kind. Property identity, storage
 ownership and bounds require separate proofs.
 
+Describe invocation behavior in
+[host-invocation-contracts.ts](../src/compiler/shared/host-invocation-contracts.ts).
+Trace the native body, including validation failures, property access, argument
+conversion, and callbacks. List argument requirements for a narrower overload and
+give a reason for the remaining cases. Record retention and mutation separately.
+A concrete reason for an entirely broad installer or member belongs in
+[host-invocation-dispositions.ts](../src/compiler/shared/host-invocation-dispositions.ts).
+The installed API checks read that inventory without loading it in the compiler.
+A return identity needs its own proof, especially for views over existing storage.
+The compiler keeps the generic call bridge's exception, collection, and scheduling
+effects. A borrowing call can preserve a private allocation's fields across the
+bridge because other fibers cannot access the allocation.
+
 Connect the contract to an installer-backed binding or a proved member lookup.
 Use the captured installer identity for nested exports and aliases. For an object
 created after startup, verify the allocator and its method registration. Source
