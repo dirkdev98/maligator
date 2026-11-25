@@ -3224,6 +3224,17 @@ export class CoreProgramFlowEngine {
 						demandedValues = [...roots];
 						demands.set(functionId, demandedValues);
 					}
+					const platformResult =
+						context !== undefined && hostMembersStable
+							? (instruction: CoreInstructionId) =>
+									corePlatformSourceResult(
+										this.#program,
+										fn,
+										instruction,
+										targets,
+										context,
+									)
+							: undefined;
 					const memberResult = hostMembersStable
 						? (instruction: CoreInstructionId) =>
 								coreHostCompletion(
@@ -3236,14 +3247,8 @@ export class CoreProgramFlowEngine {
 										instruction,
 										hostSlots,
 										hostCallbackReceivers?.get(functionId),
-									) ??
-										corePlatformSourceResult(
-											this.#program,
-											fn,
-											instruction,
-											targets,
-											context,
-										),
+										platformResult,
+									) ?? platformResult?.(instruction),
 									true,
 								)
 						: undefined;

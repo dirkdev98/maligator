@@ -60,7 +60,7 @@ import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.t
 import { coreNumericTypedArrayKind } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState, CoreExactHeapBrand } from "./core-heap-brands.ts";
 import {
-	coreHostControllerMemberCandidate,
+	coreHostCallbackMemberCandidate,
 	coreHostObjectResult,
 } from "./core-host-object-results.ts";
 import {
@@ -2148,6 +2148,11 @@ export function coreValueKindDemand(
 		inputs: [],
 	};
 	let recordReads: ReturnType<typeof coreRecordFieldReads> | undefined;
+	const platformResult =
+		context === undefined
+			? undefined
+			: (instruction: CoreInstructionId) =>
+					corePlatformSourceResult(program, fn, instruction, targets, context);
 	const parameters = new Set<CoreValueId>();
 	for (let index = 0; index < fn.parameterCount; index++)
 		parameters.add(fn.kernel.functionParameter(index));
@@ -2193,15 +2198,20 @@ export function coreValueKindDemand(
 			const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
 			if (
 				fn.instructionOpcodeName(instruction) === "awaitFulfilled" ||
-				coreHostObjectResult(program, fn, instruction, hostSlots) !== undefined ||
+				coreHostObjectResult(
+					program,
+					fn,
+					instruction,
+					hostSlots,
+					undefined,
+					platformResult,
+				) !== undefined ||
 				(context?.facts.world.primordialPolicy === "locked" &&
-					coreHostControllerMemberCandidate(program, fn, instruction)) ||
+					coreHostCallbackMemberCandidate(program, fn, instruction)) ||
 				(hostSlots !== undefined &&
-					(coreHostResult(program, fn, instruction, hostSlots, true, true) !==
-						undefined ||
-						(context !== undefined &&
-							corePlatformSourceResult(program, fn, instruction, targets, context) !==
-								undefined)))
+					coreHostResult(program, fn, instruction, hostSlots, true, true) !==
+						undefined) ||
+				platformResult?.(instruction) !== undefined
 			) {
 				fixed.set(value, undefined);
 				return;

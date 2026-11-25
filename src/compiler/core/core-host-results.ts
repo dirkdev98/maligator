@@ -11,6 +11,7 @@ import {
 	BUFFER_STRING_ENCODINGS,
 	CAPTURED_HOST_RESULTS,
 	PLATFORM_SOURCE_EXPORTS,
+	PLATFORM_SOURCE_STATICS,
 	PLATFORM_OBJECT_RESULTS,
 	EMBEDDED_ASSET_RESULTS,
 	HOST_RESULT_CONTRACTS,
@@ -386,36 +387,13 @@ export function corePlatformSourceResult(
 	if (opcode === "loadProperty" || opcode === "loadPropertyStatic")
 		return member(instruction, "properties");
 	const callee = fn.kernel.operandAt(start);
-	let possible = targets.targets?.(fn.id, callee);
-	if (possible?.opaque) {
-		const load = definition(fn, callee);
-		if (load !== undefined && fn.instructionOpcodeName(load) === "loadGlobal") {
-			const index = fn.instructionAttributes(load).index;
-			if (
-				typeof index === "number" &&
-				targets.sourceClosed &&
-				context.data.moduleBindingSlots?.includes(index)
-			) {
-				// Initialization may leave a slot uncallable, but only the
-				// closed module's stores can supply a successful target.
-				const stored = targets.globalStoreTargets(index);
-				if (stored.opaque === false) possible = { ...stored, opaque: false };
-			}
-		}
-	}
-	if (
-		possible !== undefined &&
-		!possible.opaque &&
-		!possible.anyScript &&
-		possible.functions.length === 1
-	) {
-		const target = program.function(possible.functions[0]!);
-		const platform = target.metadata.canonicalPlatformSource;
-		if (platform !== undefined) {
-			const name = program.stringConstantText(target.metadata.nameStringIndex);
-			const contracts = PLATFORM_SOURCE_EXPORTS.get(platform);
-			if (opcode === "call" || name === "FileSystemError") return contracts?.get(name);
-			if (platform !== "maligator:fs") return undefined;
+	const owner = sourceFunction(callee);
+	if (owner !== undefined) {
+		const { platform, name } = owner;
+		const contract = PLATFORM_SOURCE_EXPORTS.get(platform)?.get(name);
+		if (contract !== undefined && (opcode === "call" || name === "FileSystemError"))
+			return contract;
+		if (opcode === "construct" && platform === "maligator:fs") {
 			const platformObject =
 				name === "DiskFileHandle"
 					? "file"
@@ -431,8 +409,20 @@ export function corePlatformSourceResult(
 	}
 	if (opcode !== "call") return undefined;
 	const load = definition(fn, callee);
+	if (load === undefined) return undefined;
+	if (fn.instructionOpcodeName(load) === "call") {
+		const produced = corePlatformSourceResult(
+			program,
+			fn,
+			load,
+			targets,
+			context,
+			budget - 1,
+		);
+		if (produced?.kind === "return" && produced.value.platformCallable === "testEach")
+			return { kind: "return", value: { mask: COMPILER_VALUE_KIND_UNDEFINED } };
+	}
 	if (
-		load === undefined ||
 		coreHostPropertyName(program, fn, load) === undefined ||
 		fn.kernel.operandAt(fn.kernel.instructionOperandStart(load)) !==
 			fn.kernel.operandAt(start + 1)
@@ -440,14 +430,55 @@ export function corePlatformSourceResult(
 		return undefined;
 	return member(load, "methods");
 
+	function sourceFunction(value: CoreValueId) {
+		let possible = targets.targets?.(fn.id, value);
+		if (possible?.opaque) {
+			const load = definition(fn, value);
+			if (load !== undefined && fn.instructionOpcodeName(load) === "loadGlobal") {
+				const index = fn.instructionAttributes(load).index;
+				if (
+					typeof index === "number" &&
+					targets.sourceClosed &&
+					context.data.moduleBindingSlots?.includes(index)
+				) {
+					// Initialization may leave a slot uncallable, but only the
+					// closed module's stores can supply a successful target.
+					const stored = targets.globalStoreTargets(index);
+					if (stored.opaque === false) possible = { ...stored, opaque: false };
+				}
+			}
+		}
+		if (
+			possible === undefined ||
+			possible.opaque ||
+			possible.anyScript ||
+			possible.functions.length !== 1
+		)
+			return undefined;
+		const target = program.function(possible.functions[0]!);
+		const platform = target.metadata.canonicalPlatformSource;
+		return platform === undefined
+			? undefined
+			: {
+					platform,
+					name: program.stringConstantText(target.metadata.nameStringIndex),
+				};
+	}
+
 	function member(load: CoreInstructionId, kind: "properties" | "methods") {
 		const key = coreHostPropertyName(program, fn, load);
 		if (key === undefined) return undefined;
-		const receiver = definition(
-			fn,
-			fn.kernel.operandAt(fn.kernel.instructionOperandStart(load)),
-		);
+		const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(load));
+		const receiver = definition(fn, value);
 		if (receiver === undefined) return undefined;
+		if (kind === "methods") {
+			const owner = sourceFunction(value);
+			const result =
+				owner === undefined
+					? undefined
+					: PLATFORM_SOURCE_STATICS.get(owner.platform)?.get(owner.name)?.get(key);
+			if (result !== undefined) return result;
+		}
 		const awaited =
 			fn.instructionOpcodeName(receiver) === "awaitFulfilled"
 				? coreSuccessfulAwaitInput(fn, receiver)
@@ -510,6 +541,34 @@ function literal(
 		}
 	}
 	return UNKNOWN_LITERAL;
+}
+
+export function coreHostArrayIndex(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): boolean {
+	const key = coreHostPropertyName(program, fn, instruction);
+	const value =
+		key !== undefined
+			? Number(key)
+			: fn.instructionOpcodeName(instruction) === "loadProperty"
+				? literal(
+						program,
+						fn,
+						definition(
+							fn,
+							fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
+						),
+					)
+				: undefined;
+	return (
+		typeof value === "number" &&
+		Number.isInteger(value) &&
+		value >= 0 &&
+		value < 0xffff_ffff &&
+		(key === undefined || String(value) === key)
+	);
 }
 
 const UNKNOWN_LITERAL = Symbol("unknown host argument");
@@ -687,11 +746,31 @@ export function coreHostCompletion(
 					return selector.kind === "encoding" ? buffer : string;
 				break;
 			}
-			case "stat-options": {
-				const flag = option("throwIfNoEntry");
-				if (flag !== UNKNOWN_LITERAL && flag !== false)
-					return { mask: COMPILER_VALUE_KIND_OBJECT, hostObject: value.hostObject };
-				break;
+			case "stat-options":
+			case "fstat-options": {
+				const flag = selector.kind === "fstat-options" ? true : option("throwIfNoEntry");
+				const bigint = option("bigint");
+				return {
+					mask:
+						flag === UNKNOWN_LITERAL || flag === false
+							? value.mask
+							: COMPILER_VALUE_KIND_OBJECT,
+					hostObject:
+						bigint === UNKNOWN_LITERAL ? "Stats" : bigint ? "BigIntStats" : "NumberStats",
+				};
+			}
+			case "directory-entries": {
+				const flag = option("withFileTypes");
+				return {
+					mask: COMPILER_VALUE_KIND_OBJECT,
+					heapBrand: "Array",
+					hostObject:
+						flag === UNKNOWN_LITERAL
+							? "DirectoryEntries"
+							: flag
+								? "DirectoryDirents"
+								: "DirectoryNames",
+				};
 			}
 			case "tls-socket": {
 				if (option("socket") === undefined)

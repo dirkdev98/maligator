@@ -25,13 +25,17 @@ import {
 	BUFFER_STRING_ENCODINGS,
 	CAPTURED_HOST_RESULTS,
 	GLOBAL_HOST_FUNCTION_RESULTS,
+	GLOBAL_HOST_OBJECT_BRANDS,
+	GLOBAL_HOST_NAMESPACE_RESULTS,
 	CRYPTO_STREAM_DELEGATES,
 	DISK_HANDLE_EXPORTS,
 	EMBEDDED_ASSET_RESULTS,
 	PLATFORM_OBJECT_RESULTS,
 	HOST_RESULT_CONTRACTS,
 	NODE_FILE_HANDLE_RESULTS,
+	TEST_MATCHER_NAMES,
 	GLOBAL_HOST_CONSTRUCTORS,
+	GLOBAL_HOST_ABSTRACT_CONSTRUCTORS,
 	HOST_OBJECT_RESULTS,
 } from "../src/compiler/shared/host-result-contracts.ts";
 import type { HostObjectKind } from "../src/compiler/shared/host-result-contracts.ts";
@@ -122,6 +126,110 @@ it("keeps the controller observation when another hook can retrieve the callback
 		"",
 		undefined,
 		"start",
+	);
+	expect(operations).toContain("typeofCompare");
+});
+
+it("uses the entry list supplied to a private performance observer callback", () => {
+	const operations = inspectHostCall(
+		`new PerformanceObserver(function observed(list) {
+			globalThis.output = typeof list.getEntries() === 'number';
+		})`,
+		"object",
+		"",
+		"",
+		undefined,
+		"observed",
+	);
+	expect(operations).toContain("call");
+	expect(operations).not.toContain("typeofCompare");
+});
+
+it.each([
+	"expect(1).not.toBe(2)",
+	"await expect(Promise.resolve(1)).resolves.toBe(1)",
+	"test.each([[1]])('fixture', () => {})",
+])("uses the successful result of the packaged test API %s", (expression) => {
+	const runtime = readFileSync(
+		new URL("../src/testing/runtime.mjs", import.meta.url),
+		"utf8",
+	);
+	const modules = new Map([["maligator:test", { source: runtime, platform: true }]]);
+	const operations = inspectHostCall(
+		expression,
+		"undefined",
+		"",
+		'import { expect, test } from "maligator:test";',
+		modules,
+	);
+	expect(operations).not.toContain("typeofCompare");
+});
+
+it("accounts for matchers installed by the packaged test runtime", () => {
+	const source = readFileSync(
+		new URL("../src/testing/runtime.mjs", import.meta.url),
+		"utf8",
+	);
+	const { ast } = parseModule(source);
+	const matchers = ast.body
+		.flatMap((node) => (node.type === "VariableDeclaration" ? node.declarations : []))
+		.find(({ id }) => id.type === "Identifier" && id.name === "MATCHERS")?.init;
+	expect(matchers?.type).toBe("ArrayExpression");
+	if (matchers?.type !== "ArrayExpression") return;
+	expect(
+		new Set(
+			matchers.elements.map((node) =>
+				node?.type === "Literal" ? node.value : undefined,
+			),
+		),
+	).toEqual(new Set(TEST_MATCHER_NAMES));
+});
+
+it.each([
+	[
+		"statSync(path, { bigint: true }).size",
+		"bigint",
+		'import { statSync } from "node:fs";',
+	],
+	["statSync(path).size", "number", 'import { statSync } from "node:fs";'],
+	[
+		"(await stat(path, { bigint: true })).size",
+		"bigint",
+		'import { stat } from "node:fs/promises";',
+	],
+	[
+		"(await (await open(path)).read()).bytesRead",
+		"number",
+		'import { open } from "node:fs/promises";',
+	],
+	[
+		"readdirSync(path, {withFileTypes: true})[0].isFile()",
+		"boolean",
+		'import { readdirSync } from "node:fs";',
+	],
+	[
+		"(await readdir(path, {withFileTypes: true}))[0].isFile()",
+		"boolean",
+		'import { readdir } from "node:fs/promises";',
+	],
+	[
+		"await (await mkdtempDisposable(path)).remove()",
+		"undefined",
+		'import { mkdtempDisposable } from "node:fs/promises";',
+	],
+	["(await file(path).stat()).isFile", "boolean", 'import { file } from "maligator:fs";'],
+	["file(path).stream().locked", "boolean", 'import { file } from "maligator:fs";'],
+	["navigator.hardwareConcurrency", "number", ""],
+])("uses the record or element contract of %s", (expression, type, imports) => {
+	expect(inspectHostCall(expression, type, "", imports)).not.toContain("typeofCompare");
+});
+
+it("retains member observations when TLS can dispatch a native connection listener", () => {
+	const operations = inspectHostCall(
+		"new Response('').ok",
+		"boolean",
+		"createServer().emit('connection');",
+		'import { createServer } from "node:tls";',
 	);
 	expect(operations).toContain("typeofCompare");
 });
@@ -528,6 +636,7 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 				"SubtleCrypto",
 				"Performance",
 				"PerformanceEntry",
+				"PerformanceObserverEntryList",
 				"MessagePort",
 				"ReadableByteStreamController",
 				"ReadableStreamDefaultController",
@@ -569,13 +678,7 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 				name !== "fetch" &&
 				!GLOBAL_HOST_FUNCTION_RESULTS.has(name) &&
 				!inventory.has(identity) &&
-				![
-					"CryptoKey",
-					"PerformanceMark",
-					"PerformanceMeasure",
-					"PerformanceObserverEntryList",
-					"PerformanceResourceTiming",
-				].includes(name)
+				!GLOBAL_HOST_ABSTRACT_CONSTRUCTORS.has(name)
 			) {
 				missing.push(identity);
 			}
@@ -607,7 +710,66 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 			HOST_OBJECT_RESULTS.methods[kind],
 			HOST_OBJECT_RESULTS.properties[kind],
 		);
+	const traversed = new Set<number>();
+	for (const [name, brand] of GLOBAL_HOST_OBJECT_BRANDS) {
+		const node = primordialNode(`globalThis.${name}`);
+		if (node !== undefined) visit(nodes.indexOf(node), brand);
+	}
+	for (const [root, index] of roots) {
+		if (typeof index !== "number" || !root.startsWith("mal_host_install_")) continue;
+		const contract = fromRoot(root);
+		const brand =
+			contract?.kind === "return" && contract.value.installedObject
+				? contract.value.hostObject
+				: undefined;
+		visit(index, brand);
+	}
+	for (const identity of CAPTURED_HOST_RESULTS.keys()) {
+		const callable = primordialNode(identity);
+		if (callable === undefined || (callable[2] & 2) === 0) missing.push(identity);
+	}
 	expect(missing.sort()).toEqual([]);
+
+	function visit(index: number, brand: HostObjectKind | undefined) {
+		if (traversed.has(index)) return;
+		traversed.add(index);
+		const node = nodes[index]!;
+		for (const kind of ["file", "directory"] as const) {
+			if (
+				node[0] ===
+				`%mal_host_install_maligator_assets:Embedded${kind === "file" ? "File" : "Directory"}%`
+			) {
+				const { methods, properties } = EMBEDDED_ASSET_RESULTS[kind];
+				check(node, methods, properties);
+				return;
+			}
+		}
+		const constructor = inventory.get(node[0]);
+		const properties =
+			constructor !== undefined
+				? HOST_OBJECT_RESULTS.staticProperties[constructor]
+				: brand === undefined
+					? undefined
+					: HOST_OBJECT_RESULTS.properties[brand];
+		const methods =
+			constructor !== undefined
+				? HOST_OBJECT_RESULTS.statics[constructor]
+				: brand === undefined
+					? undefined
+					: new Map([
+							...HOST_OBJECT_RESULTS.methods[brand],
+							...(GLOBAL_HOST_NAMESPACE_RESULTS.get(
+								node[0].slice("globalThis.".length),
+							) ?? []),
+						]);
+		check(node, methods, properties);
+		for (const [key, , value] of node[4]) {
+			if (key === "constructor" || key === "prototype" || typeof value !== "number")
+				continue;
+			const field = typeof key === "string" ? properties?.get(key) : undefined;
+			visit(value, field?.kind === "return" ? field.value.hostObject : undefined);
+		}
+	}
 
 	function check(
 		node: (typeof nodes)[number],

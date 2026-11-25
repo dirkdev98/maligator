@@ -177,6 +177,9 @@ prove the selector. Options read by queued work need a stability proof through
 that read.
 
 Connect the contract to an installer-backed binding or a proved member lookup.
+Use the captured installer identity for nested exports and aliases. For an object
+created after startup, verify the allocator and its method registration. Source
+wrappers need provenance from the module resolver before they can supply facts.
 Check the installed inventory and add an optimized-output test for the ordinary
 call path in [host-result-contracts.test.ts](../tests/host-result-contracts.test.ts).
 Pair it with an executable case that preserves the relevant call, suspension,

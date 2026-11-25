@@ -18,11 +18,15 @@ export interface HostValueContract {
 	readonly installedObject?: true;
 	readonly hostConstructor?: HostObjectKind;
 	readonly assetHandle?: "file" | "directory";
+	readonly platformCallable?: "testEach";
 	readonly platformObject?:
 		| "file"
 		| "directory"
 		| "writer"
 		| "watcher"
+		| "fileStat"
+		| "assertion"
+		| "pendingAssertion"
 		| "server"
 		| "workerPool"
 		| "workerPoolStats"
@@ -40,6 +44,8 @@ export interface HostValueContract {
 			| "tls-socket"
 			| "text-flag"
 			| "stat-options"
+			| "fstat-options"
+			| "directory-entries"
 			| "mkdir-options"
 			| "compression-info"
 			| "exec-output"
@@ -148,8 +154,16 @@ const fs = exportsWithContracts(
 		"lstatSync",
 		"statSync",
 	],
-	[hostObject("Stats"), "fstatSync"],
-	[returned(OBJECT, "Array"), "readdirSync", "globSync"],
+	[selected("return", { kind: "fstat-options", argument: 1 }, OBJECT), "fstatSync"],
+	[
+		selected("return", { kind: "directory-entries", argument: 1 }, OBJECT),
+		"readdirSync",
+		"globSync",
+	],
+	[hostObject("FilesystemStats"), "statfsSync"],
+	[hostObject("TemporaryDirectorySync"), "mkdtempDisposableSync"],
+	[hostObject("FsWatcher", undefined, OBJECT | UNDEFINED), "watch"],
+	[hostObject("FsStatWatcher", undefined, OBJECT | UNDEFINED), "watchFile"],
 	[
 		returned(OBJECT),
 		"FileReadStream",
@@ -158,10 +172,6 @@ const fs = exportsWithContracts(
 		"WriteStream",
 		"createReadStream",
 		"createWriteStream",
-		"mkdtempDisposableSync",
-		"statfsSync",
-		"watch",
-		"watchFile",
 	],
 	[
 		returned(UNDEFINED),
@@ -248,7 +258,7 @@ const fsPromises = exportsWithContracts(
 	],
 	[{ kind: "fulfill", value: { mask: OBJECT, hostObject: "FileHandle" } }, "open"],
 	[{ kind: "fulfill", value: { mask: OBJECT, hostObject: "Dir" } }, "opendir"],
-	[fulfilled(OBJECT), "statfs"],
+	[fulfilledHostObject("FilesystemStats"), "statfs"],
 	[
 		{
 			kind: "fulfill",
@@ -261,7 +271,7 @@ const fsPromises = exportsWithContracts(
 		"lstat",
 		"stat",
 	],
-	[fulfilled(OBJECT, "Array"), "readdir"],
+	[selected("fulfill", { kind: "directory-entries", argument: 1 }, OBJECT), "readdir"],
 	[
 		selected("fulfill", { kind: "mkdir-options", argument: 1 }, STRING | UNDEFINED),
 		"mkdir",
@@ -286,8 +296,9 @@ const fsPromises = exportsWithContracts(
 		"utimes",
 		"writeFile",
 	],
-	[returned(OBJECT), "glob", "watch"],
-	[fulfilled(OBJECT), "mkdtempDisposable"],
+	[hostObject("FsGlobIterator"), "glob"],
+	[hostObject("FsWatchIterator", undefined, OBJECT | UNDEFINED), "watch"],
+	[fulfilledHostObject("TemporaryDirectory"), "mkdtempDisposable"],
 );
 
 const maligatorFs = exportsWithContracts(
@@ -295,7 +306,7 @@ const maligatorFs = exportsWithContracts(
 	[selected("fulfill", { kind: "text-flag", argument: 1 }), "read"],
 	[fulfilled(BOOLEAN), "exists"],
 	[fulfilled(NUMBER), "write"],
-	[fulfilled(OBJECT), "stat"],
+	[fulfilledHostObject("MaligatorStat"), "stat"],
 	[fulfilled(OBJECT, "Array"), "list"],
 	[fulfilled(STRING), "readlink", "realpath", "temporaryDirectory"],
 	[
@@ -314,8 +325,9 @@ export const NODE_FILE_HANDLE_RESULTS = {
 	properties: exportsWithContracts([returned(NUMBER), "fd"]),
 	methods: exportsWithContracts(
 		[selected("fulfill", { kind: "encoding", argument: 0 }), "readFile"],
-		[fulfilled(OBJECT), "read", "write"],
-		[{ kind: "fulfill", value: { mask: OBJECT, hostObject: "Stats" } }, "stat"],
+		[fulfilledHostObject("FileHandleRead"), "read"],
+		[fulfilledHostObject("FileHandleWrite"), "write"],
+		[selected("fulfill", { kind: "fstat-options", argument: 0 }, OBJECT), "stat"],
 		[
 			fulfilled(UNDEFINED),
 			"appendFile",
@@ -606,7 +618,8 @@ const perfHooks = exportsWithContracts(
 	[nativeConstructor("PerformanceObserver"), "PerformanceObserver"],
 	[installedObject("Performance"), "performance"],
 	[hostObject("Histogram"), "createHistogram", "monitorEventLoopDelay"],
-	[returned(OBJECT), "eventLoopUtilization", "timerify"],
+	[hostObject("EventLoopUtilization"), "eventLoopUtilization"],
+	[returned(OBJECT), "timerify"],
 	[
 		{
 			kind: "never",
@@ -1237,7 +1250,7 @@ export const HOST_RESULT_CONTRACTS: ReadonlyMap<
 	["mal_host_install_maligator_internal_fs_descriptor", fsDescriptor],
 	[
 		"mal_host_install_maligator_internal_fs_stream",
-		exportsWithContracts([returned(OBJECT), "readableStream"]),
+		exportsWithContracts([hostObject("ReadableStream"), "readableStream"]),
 	],
 	[
 		"mal_host_install_maligator_internal_fs_watch",
@@ -1335,7 +1348,10 @@ export const PLATFORM_SOURCE_EXPORTS = new Map([
 	[
 		"maligator:test",
 		exportsWithContracts(
-			[returned(OBJECT), "expect"],
+			[
+				{ kind: "return", value: { mask: OBJECT, platformObject: "assertion" } },
+				"expect",
+			],
 			[resolved(OBJECT), "__run"],
 			[
 				returned(UNDEFINED),
@@ -1385,7 +1401,100 @@ export const PLATFORM_SOURCE_EXPORTS = new Map([
 	],
 ]);
 
+export const TEST_MATCHER_NAMES = [
+	"toBe",
+	"toEqual",
+	"toStrictEqual",
+	"toBeDefined",
+	"toBeUndefined",
+	"toBeNull",
+	"toBeTruthy",
+	"toBeFalsy",
+	"toContain",
+	"toHaveLength",
+	"toMatch",
+	"toMatchObject",
+	"toThrow",
+] as const;
+
+const nodeTestStatics = exportsWithContracts(
+	[resolved(UNDEFINED), "skip", "todo"],
+	[neverReturns("Exclusive test selection is unsupported."), "only"],
+);
+export const PLATFORM_SOURCE_STATICS = new Map([
+	[
+		"node:test",
+		new Map([
+			["registerTest", nodeTestStatics],
+			["registerSuite", nodeTestStatics],
+		]),
+	],
+	[
+		"maligator:test",
+		new Map([
+			[
+				"test",
+				exportsWithContracts(
+					[returned(UNDEFINED), "skip", "todo", "only"],
+					[
+						{ kind: "return", value: { mask: OBJECT, platformCallable: "testEach" } },
+						"each",
+					],
+				),
+			],
+			["describe", exportsWithContracts([returned(UNDEFINED), "skip", "only"])],
+			[
+				"expect",
+				exportsWithContracts([
+					returned(OBJECT),
+					"any",
+					"anything",
+					"stringMatching",
+					"objectContaining",
+					"arrayContaining",
+				]),
+			],
+		]),
+	],
+]);
+
+function testAssertionProperties(pending: boolean) {
+	return exportsWithContracts(
+		[
+			{
+				kind: "return",
+				value: {
+					mask: OBJECT,
+					platformObject: pending ? "pendingAssertion" : "assertion",
+				},
+			},
+			"not",
+		],
+		[
+			{ kind: "return", value: { mask: OBJECT, platformObject: "pendingAssertion" } },
+			"resolves",
+			"rejects",
+		],
+	);
+}
+
 export const PLATFORM_OBJECT_RESULTS = {
+	assertion: {
+		properties: testAssertionProperties(false),
+		methods: exportsWithContracts([returned(UNDEFINED), ...TEST_MATCHER_NAMES]),
+	},
+	pendingAssertion: {
+		properties: testAssertionProperties(true),
+		methods: exportsWithContracts([resolved(UNDEFINED), ...TEST_MATCHER_NAMES]),
+	},
+	fileStat: {
+		properties: exportsWithContracts(
+			[returned(NUMBER), "size", "mode"],
+			[returned(BOOLEAN), "isFile", "isDirectory", "isSymbolicLink"],
+			[returned(OBJECT), "mtime"],
+		),
+		methods: exportsWithContracts(),
+	},
 	server: {
 		properties: exportsWithContracts(
 			[returned(NUMBER), "port"],
@@ -1448,9 +1557,9 @@ export const PLATFORM_OBJECT_RESULTS = {
 			[fulfilled(OBJECT, "Uint8Array"), "bytes"],
 			[fulfilled(BOOLEAN), "exists"],
 			[fulfilled(NUMBER), "write", "append"],
-			[fulfilled(OBJECT), "stat"],
+			[{ kind: "fulfill", value: { mask: OBJECT, platformObject: "fileStat" } }, "stat"],
 			[fulfilled(UNDEFINED), "chmod", "delete", "copyTo", "moveTo"],
-			[returned(OBJECT), "stream"],
+			[hostObject("ReadableStream"), "stream"],
 			[{ kind: "return", value: { mask: OBJECT, platformObject: "writer" } }, "writer"],
 			[
 				{
@@ -1466,7 +1575,7 @@ export const PLATFORM_OBJECT_RESULTS = {
 		properties: exportsWithContracts([returned(STRING), "path"]),
 		methods: exportsWithContracts(
 			[fulfilled(BOOLEAN), "exists"],
-			[fulfilled(OBJECT), "stat"],
+			[{ kind: "fulfill", value: { mask: OBJECT, platformObject: "fileStat" } }, "stat"],
 			[fulfilled(OBJECT, "Array"), "entries", "files"],
 			[fulfilled(UNDEFINED), "chmod", "create", "delete", "moveTo"],
 			[{ kind: "return", value: { mask: OBJECT, platformObject: "file" } }, "file"],
@@ -1517,6 +1626,8 @@ export type HostObjectKind =
 	| "Performance"
 	| "PerformanceEntry"
 	| "PerformanceObserver"
+	| "PerformanceObserverEntryList"
+	| "EventLoopUtilization"
 	| "PerformanceNodeTiming"
 	| "Histogram"
 	| "NetBlockList"
@@ -1609,6 +1720,22 @@ export type HostObjectKind =
 	| "DirIterator"
 	| "FileHandle"
 	| "Stats"
+	| "NumberStats"
+	| "BigIntStats"
+	| "FilesystemStats"
+	| "MaligatorStat"
+	| "FileHandleRead"
+	| "FileHandleWrite"
+	| "DirectoryEntries"
+	| "DirectoryNames"
+	| "DirectoryDirents"
+	| "TemporaryDirectory"
+	| "TemporaryDirectorySync"
+	| "FsWatcher"
+	| "FsStatWatcher"
+	| "FsGlobIterator"
+	| "FsWatchIterator"
+	| "Navigator"
 	| "Event"
 	| "CustomEvent"
 	| "CloseEvent"
@@ -1668,6 +1795,10 @@ function hostObject(
 	mask = OBJECT,
 ): HostResultContract {
 	return { kind: "return", value: { mask, hostObject: instance, brand } };
+}
+
+function fulfilledHostObject(hostObject: HostObjectKind): HostResultContract {
+	return { kind: "fulfill", value: { mask: OBJECT, hostObject } };
 }
 
 const blob = exportsWithContracts(
@@ -2007,7 +2138,8 @@ const vmCompletion = dynamic("Returns the evaluated script's completion value.")
 const performanceMethods = exportsWithContracts(
 	[returned(NUMBER), "now"],
 	[hostObject("PerformanceEntry"), "mark", "measure"],
-	[returned(OBJECT), "eventLoopUtilization", "timerify", "toJSON"],
+	[hostObject("EventLoopUtilization"), "eventLoopUtilization"],
+	[returned(OBJECT), "timerify", "toJSON"],
 	[returned(OBJECT, "Array"), "getEntries", "getEntriesByName", "getEntriesByType"],
 	[returned(UNDEFINED), "clearMarks", "clearMeasures"],
 );
@@ -2065,7 +2197,45 @@ function cipherMethods(kind: "Cipheriv" | "Decipheriv") {
 export const GLOBAL_HOST_OBJECT_BRANDS: ReadonlyMap<string, HostObjectKind> = new Map([
 	["crypto", "Crypto"],
 	["performance", "Performance"],
+	["navigator", "Navigator"],
 ]);
+
+const statsDates = exportsWithContracts([
+	returned(OBJECT),
+	"atime",
+	"mtime",
+	"ctime",
+	"birthtime",
+]);
+function statsFields(mask: number): ReadonlyMap<string, HostResultContract> {
+	return new Map([
+		...statsDates,
+		...exportsWithContracts([
+			returned(mask),
+			"dev",
+			"mode",
+			"nlink",
+			"uid",
+			"gid",
+			"rdev",
+			"blksize",
+			"ino",
+			"size",
+			"blocks",
+			"atimeMs",
+			"mtimeMs",
+			"ctimeMs",
+			"birthtimeMs",
+		]),
+	]);
+}
+
+export const HOST_INDEXED_RESULTS: ReadonlyMap<HostObjectKind, HostResultContract> =
+	new Map([
+		["DirectoryEntries", returned(STRING | OBJECT | UNDEFINED)],
+		["DirectoryNames", returned(STRING | UNDEFINED)],
+		["DirectoryDirents", hostObject("Dirent", undefined, OBJECT | UNDEFINED)],
+	]);
 
 function directoryCompletion(value: HostValueContract): HostResultContract {
 	return {
@@ -2102,15 +2272,7 @@ export const GLOBAL_HOST_FUNCTION_RESULTS = exportsWithContracts(
 export const GLOBAL_HOST_NAMESPACE_RESULTS = new Map([
 	["console", console],
 	["process", process],
-	[
-		"performance",
-		exportsWithContracts(
-			[returned(NUMBER), "now"],
-			[returned(OBJECT), "mark", "measure", "eventLoopUtilization", "timerify", "toJSON"],
-			[returned(OBJECT, "Array"), "getEntries", "getEntriesByName", "getEntriesByType"],
-			[returned(UNDEFINED), "clearMarks", "clearMeasures"],
-		),
-	],
+	["performance", performanceMethods],
 	[
 		"mal",
 		exportsWithContracts([returned(UNDEFINED), "_profilePhaseBegin", "_profilePhaseEnd"]),
@@ -2155,6 +2317,27 @@ export const GLOBAL_HOST_CONSTRUCTORS = [
 	"WritableStream",
 	"WritableStreamDefaultWriter",
 ] as const;
+
+export const GLOBAL_HOST_ABSTRACT_CONSTRUCTORS = exportsWithContracts([
+	neverReturns(
+		"The host allocates these instances internally and the public constructor rejects direct calls and construction.",
+	),
+	"Crypto",
+	"CryptoKey",
+	"SubtleCrypto",
+	"MessagePort",
+	"Performance",
+	"PerformanceEntry",
+	"PerformanceMark",
+	"PerformanceMeasure",
+	"PerformanceObserverEntryList",
+	"PerformanceResourceTiming",
+	"ReadableByteStreamController",
+	"ReadableStreamDefaultController",
+	"ReadableStreamBYOBRequest",
+	"TransformStreamDefaultController",
+	"WritableStreamDefaultController",
+]);
 
 // Object-valued resolutions require stable prototypes through settlement.
 export const HOST_OBJECT_RESULTS: {
@@ -2297,6 +2480,13 @@ export const HOST_OBJECT_RESULTS: {
 			[returned(UNDEFINED), "observe", "disconnect"],
 			[returned(OBJECT, "Array"), "takeRecords"],
 		),
+		PerformanceObserverEntryList: exportsWithContracts([
+			returned(OBJECT, "Array"),
+			"getEntries",
+			"getEntriesByName",
+			"getEntriesByType",
+		]),
+		EventLoopUtilization: exportsWithContracts(),
 		PerformanceNodeTiming: exportsWithContracts([returned(OBJECT), "toJSON"]),
 		Histogram: exportsWithContracts(
 			[returned(UNDEFINED), "reset", "record", "recordDelta"],
@@ -2622,6 +2812,45 @@ export const HOST_OBJECT_RESULTS: {
 		DirIterator: exportsWithContracts([fulfilled(OBJECT), "next", "return"]),
 		FileHandle: NODE_FILE_HANDLE_RESULTS.methods,
 		Stats: fileTypePredicates,
+		NumberStats: fileTypePredicates,
+		BigIntStats: fileTypePredicates,
+		FilesystemStats: exportsWithContracts(),
+		MaligatorStat: exportsWithContracts(),
+		FileHandleRead: exportsWithContracts(),
+		FileHandleWrite: exportsWithContracts(),
+		DirectoryEntries: exportsWithContracts(),
+		DirectoryNames: exportsWithContracts(),
+		DirectoryDirents: exportsWithContracts(),
+		TemporaryDirectory: exportsWithContracts([
+			fulfilled(UNDEFINED),
+			"remove",
+			"[Symbol.asyncDispose]",
+		]),
+		TemporaryDirectorySync: exportsWithContracts([
+			returned(UNDEFINED),
+			"remove",
+			"[Symbol.dispose]",
+		]),
+		FsWatcher: new Map([
+			...emitterMethods("FsWatcher"),
+			...exportsWithContracts(
+				[returned(UNDEFINED), "close"],
+				[hostObject("FsWatcher"), "ref", "unref"],
+			),
+		]),
+		FsStatWatcher: new Map([
+			...emitterMethods("FsStatWatcher"),
+			...exportsWithContracts([hostObject("FsStatWatcher"), "ref", "unref"]),
+		]),
+		FsGlobIterator: exportsWithContracts(
+			[fulfilledHostObject("StreamReadResult"), "next", "return"],
+			[hostObject("FsGlobIterator"), "[Symbol.asyncIterator]"],
+		),
+		FsWatchIterator: exportsWithContracts(
+			[fulfilledHostObject("StreamReadResult"), "next", "return"],
+			[hostObject("FsWatchIterator"), "[Symbol.asyncIterator]"],
+		),
+		Navigator: exportsWithContracts(),
 		ByteLengthQueuingStrategy: exportsWithContracts([
 			dynamic("Returns the supplied chunk's byteLength property without converting it."),
 			"size",
@@ -2883,6 +3112,12 @@ export const HOST_OBJECT_RESULTS: {
 			[dynamic("Contains a structured clone of the caller's detail value."), "detail"],
 		),
 		PerformanceNodeTiming: exportsWithContracts([returned(NUMBER), "duration"]),
+		EventLoopUtilization: exportsWithContracts([
+			returned(NUMBER),
+			"idle",
+			"active",
+			"utilization",
+		]),
 		Histogram: exportsWithContracts([
 			returned(NUMBER),
 			"min",
@@ -3078,13 +3313,52 @@ export const HOST_OBJECT_RESULTS: {
 		),
 		Dir: exportsWithContracts([returned(STRING), "path"]),
 		FileHandle: NODE_FILE_HANDLE_RESULTS.properties,
-		Stats: exportsWithContracts([
-			returned(OBJECT),
-			"atime",
-			"mtime",
-			"ctime",
-			"birthtime",
+		Stats: statsFields(NUMBER | BIGINT | UNDEFINED),
+		NumberStats: statsFields(NUMBER),
+		BigIntStats: new Map([
+			...statsFields(BIGINT),
+			...exportsWithContracts([
+				returned(BIGINT),
+				"atimeNs",
+				"mtimeNs",
+				"ctimeNs",
+				"birthtimeNs",
+			]),
 		]),
+		FilesystemStats: exportsWithContracts([
+			returned(NUMBER),
+			"type",
+			"bsize",
+			"blocks",
+			"bfree",
+			"bavail",
+			"files",
+			"ffree",
+		]),
+		MaligatorStat: exportsWithContracts([
+			returned(NUMBER),
+			"type",
+			"size",
+			"mtimeMs",
+			"mode",
+		]),
+		FileHandleRead: exportsWithContracts(
+			[returned(NUMBER), "bytesRead"],
+			[returned(OBJECT), "buffer"],
+		),
+		FileHandleWrite: exportsWithContracts(
+			[returned(NUMBER), "bytesWritten"],
+			[returned(STRING | OBJECT), "buffer"],
+		),
+		TemporaryDirectory: exportsWithContracts([returned(STRING), "path"]),
+		TemporaryDirectorySync: exportsWithContracts([returned(STRING), "path"]),
+		Dirent: exportsWithContracts([
+			returned(STRING | UNDEFINED),
+			"name",
+			"parentPath",
+			"path",
+		]),
+		Navigator: exportsWithContracts([returned(NUMBER), "hardwareConcurrency"]),
 		ByteLengthQueuingStrategy: exportsWithContracts(
 			[returned(NUMBER), "highWaterMark"],
 			[returned(OBJECT), "size"],

@@ -3,12 +3,15 @@ import { EMBED_INSTALLER } from "../shared/embedded-asset.ts";
 import {
 	PLATFORM_OBJECT_RESULTS,
 	PLATFORM_SOURCE_EXPORTS,
+	PLATFORM_SOURCE_STATICS,
 	CAPTURED_HOST_RESULTS,
 	NODE_FILE_HANDLE_RESULTS,
 	GLOBAL_HOST_CONSTRUCTORS,
+	GLOBAL_HOST_ABSTRACT_CONSTRUCTORS,
 	GLOBAL_HOST_FUNCTION_RESULTS,
 	GLOBAL_HOST_NAMESPACE_RESULTS,
 	GLOBAL_HOST_OBJECT_BRANDS,
+	HOST_INDEXED_RESULTS,
 	HOST_OBJECT_RESULTS,
 	HOST_RESULT_CONTRACTS,
 } from "../shared/host-result-contracts.ts";
@@ -25,6 +28,7 @@ import {
 	coreHostCapturedSymbolKey,
 	coreHostCapturedPromisifiedValue,
 	coreHostGlobalName,
+	coreHostArrayIndex,
 	coreHostCompletion,
 	coreHostPropertyName,
 	coreHostResult,
@@ -36,13 +40,17 @@ import type { CoreHostSlots } from "./core-host-results.ts";
 import { coreFunctionId, coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreProgramFlowTargetIndex } from "./core-program-flow.ts";
-import { coreSuccessfulAwaitInput } from "./core-promise-facts.ts";
+import {
+	coreIntrinsicPromiseStaticCall,
+	coreSuccessfulAwaitInput,
+} from "./core-promise-facts.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 type GlobalHostConstructor = (typeof GLOBAL_HOST_CONSTRUCTORS)[number];
 const GLOBAL_HOST_CONSTRUCTOR_NAMES = new Set<string>(GLOBAL_HOST_CONSTRUCTORS);
 const PROTECTED_GLOBALS = new Set<string>([
 	...GLOBAL_HOST_CONSTRUCTORS,
+	...GLOBAL_HOST_ABSTRACT_CONSTRUCTORS.keys(),
 	...GLOBAL_HOST_FUNCTION_RESULTS.keys(),
 	...GLOBAL_HOST_NAMESPACE_RESULTS.keys(),
 	...GLOBAL_HOST_OBJECT_BRANDS.keys(),
@@ -51,7 +59,7 @@ const PROTECTED_GLOBALS = new Set<string>([
 	"__proto__",
 ]);
 const HOST_OBJECT_SOURCE_NAMES = new RegExp(
-	`\\b(?:${[...PROTECTED_GLOBALS].filter((name) => name !== "globalThis" && name !== "console" && name !== "__proto__").join("|")}|fs|maligator:(?:http|workers)|node:sqlite|(?:node:)?(?:stream|zlib|async_hooks|events|timers/promises|url|net|http|https|tls|dgram|child_process|readline|perf_hooks|diagnostics_channel|dns|tty|assert|vm|console|module|punycode|v8)|basename|StringDecoder|MIMEType|MIMEParams)\\b`,
+	`\\b(?:${[...PROTECTED_GLOBALS].filter((name) => name !== "globalThis" && name !== "console" && name !== "__proto__").join("|")}|fs|maligator:(?:http|workers|test)|node:sqlite|(?:node:)?(?:stream|zlib|async_hooks|events|timers/promises|url|net|http|https|tls|dgram|child_process|readline|perf_hooks|diagnostics_channel|dns|tty|assert|vm|console|module|punycode|v8|test)|basename|StringDecoder|MIMEType|MIMEParams)\\b`,
 );
 for (const name of [
 	"Object",
@@ -102,6 +110,9 @@ const PROTECTED_PROPERTIES = new Set([
 		...methods.keys(),
 		...properties.keys(),
 	]),
+	...[...PLATFORM_SOURCE_STATICS.values()].flatMap((functions) =>
+		[...functions.values()].flatMap((methods) => [...methods.keys()]),
+	),
 ]);
 const MODULE_EVALUATORS = new Set([
 	"__evaluateModule",
@@ -127,6 +138,22 @@ const NATIVE_OBJECT_WRITERS = new Set([
 	"runInContext",
 	"runInNewContext",
 	"runInThisContext",
+]);
+const TLS_MUTATOR_ROUTES = new Set([
+	"connect",
+	"emit",
+	"listeners",
+	"rawListeners",
+	"getEventListeners",
+]);
+const PRIMITIVE_PRODUCERS = new Set([
+	"createBoolean",
+	"createNumber",
+	"createF64",
+	"createString",
+	"createBigInt",
+	"createNull",
+	"createUndefined",
 ]);
 const HOST_CALLBACK_ARGUMENTS = new Map([
 	["setTimeout", 0],
@@ -157,14 +184,15 @@ const STREAM_CALLBACK_KEYS = new Set([
 	"transform",
 	"flush",
 ]);
-const STREAM_CONTROLLERS = [
+const CALLBACK_RECEIVERS = [
 	"ReadableStreamDefaultController",
 	"ReadableByteStreamController",
 	"WritableStreamDefaultController",
 	"TransformStreamDefaultController",
+	"PerformanceObserverEntryList",
 ] as const;
-const STREAM_CONTROLLER_MEMBERS = new Set(
-	STREAM_CONTROLLERS.flatMap((kind) => [
+const CALLBACK_RECEIVER_MEMBERS = new Set(
+	CALLBACK_RECEIVERS.flatMap((kind) => [
 		...HOST_OBJECT_RESULTS.methods[kind].keys(),
 		...(HOST_OBJECT_RESULTS.properties[kind]?.keys() ?? []),
 	]),
@@ -173,6 +201,7 @@ export type CoreHostCallbackReceivers = ReadonlyMap<
 	CoreFunctionId,
 	ReadonlyMap<CoreValueId, HostObjectKind>
 >;
+type PlatformResult = (instruction: CoreInstructionId) => HostResultContract | undefined;
 export function sameCallbackReceivers(
 	left: CoreHostCallbackReceivers | undefined,
 	right: CoreHostCallbackReceivers | undefined,
@@ -275,6 +304,7 @@ function hostReceiver(
 	slots: CoreHostSlots | undefined,
 	budget: number,
 	parameters: ReadonlyMap<CoreValueId, HostObjectKind> | undefined,
+	platformResult: PlatformResult | undefined,
 ): HostObjectKind | undefined {
 	if (budget === 0) return undefined;
 	const parameter = parameters?.get(value);
@@ -308,10 +338,19 @@ function hostReceiver(
 
 	function producerContract(producer: CoreInstructionId) {
 		return (
-			coreHostObjectResult(program, fn, producer, slots, parameters, budget) ??
+			coreHostObjectResult(
+				program,
+				fn,
+				producer,
+				slots,
+				parameters,
+				platformResult,
+				budget,
+			) ??
 			(slots === undefined
 				? undefined
-				: coreHostDirectCallContract(program, fn, producer, slots, 0, true))
+				: coreHostDirectCallContract(program, fn, producer, slots, 0, true)) ??
+			platformResult?.(producer)
 		);
 	}
 }
@@ -322,6 +361,7 @@ export function coreHostObjectResult(
 	instruction: CoreInstructionId,
 	slots?: CoreHostSlots,
 	parameters?: ReadonlyMap<CoreValueId, HostObjectKind>,
+	platformResult?: PlatformResult,
 	budget = 8,
 ): HostResultContract | undefined {
 	if (budget === 0) return undefined;
@@ -335,9 +375,12 @@ export function coreHostObjectResult(
 		return undefined;
 	const start = fn.kernel.instructionOperandStart(instruction);
 	if (opcode === "construct") {
-		const brand = hostConstructor(program, fn, fn.kernel.operandAt(start), slots);
+		const callee = fn.kernel.operandAt(start);
+		const brand = hostConstructor(program, fn, callee, slots);
 		return brand === undefined
-			? undefined
+			? GLOBAL_HOST_ABSTRACT_CONSTRUCTORS.get(
+					coreHostGlobalName(program, fn, callee) ?? "",
+				)
 			: {
 					kind: "return",
 					value: { mask: COMPILER_VALUE_KIND_OBJECT, hostObject: brand },
@@ -345,20 +388,42 @@ export function coreHostObjectResult(
 	}
 	if (opcode === "loadPropertyStatic" || opcode === "loadProperty") {
 		const name = coreHostPropertyName(program, fn, instruction);
-		if (name === undefined) return undefined;
 		const receiver = fn.kernel.operandAt(start);
-		const constructor = hostConstructor(program, fn, receiver, slots);
-		if (constructor !== undefined)
-			return HOST_OBJECT_RESULTS.staticProperties[constructor]?.get(name);
-		const brand = hostReceiver(program, fn, receiver, slots, budget - 1, parameters);
-		return brand === undefined
+		if (name !== undefined) {
+			const constructor = hostConstructor(program, fn, receiver, slots);
+			if (constructor !== undefined)
+				return HOST_OBJECT_RESULTS.staticProperties[constructor]?.get(name);
+		}
+		const brand = hostReceiver(
+			program,
+			fn,
+			receiver,
+			slots,
+			budget - 1,
+			parameters,
+			platformResult,
+		);
+		if (brand === undefined) return undefined;
+		const element = HOST_INDEXED_RESULTS.get(brand);
+		if (
+			element !== undefined &&
+			fn.valueUseCount(receiver) === 1 &&
+			fn.kernel.valueHandlerUseCount(receiver) === 0 &&
+			coreHostArrayIndex(program, fn, instruction)
+		)
+			return element;
+		return name === undefined
 			? undefined
 			: HOST_OBJECT_RESULTS.properties[brand]?.get(name);
 	}
 	const callee = fn.kernel.operandAt(start);
 	const global = coreHostGlobalName(program, fn, callee);
 	if (global === "fetch") return HOST_OBJECT_RESULTS.fetch;
-	if (global !== undefined) return GLOBAL_HOST_FUNCTION_RESULTS.get(global);
+	if (global !== undefined)
+		return (
+			GLOBAL_HOST_FUNCTION_RESULTS.get(global) ??
+			GLOBAL_HOST_ABSTRACT_CONSTRUCTORS.get(global)
+		);
 	const load = definition(fn, callee);
 	if (load === undefined) return undefined;
 	const method = coreHostPropertyName(program, fn, load);
@@ -375,11 +440,19 @@ export function coreHostObjectResult(
 	const constructor = hostConstructor(program, fn, receiver, slots);
 	if (constructor !== undefined)
 		return HOST_OBJECT_RESULTS.statics[constructor]?.get(method);
-	const brand = hostReceiver(program, fn, receiver, slots, budget - 1, parameters);
+	const brand = hostReceiver(
+		program,
+		fn,
+		receiver,
+		slots,
+		budget - 1,
+		parameters,
+		platformResult,
+	);
 	return brand === undefined ? undefined : HOST_OBJECT_RESULTS.methods[brand].get(method);
 }
 
-export function coreHostControllerMemberCandidate(
+export function coreHostCallbackMemberCandidate(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
@@ -394,7 +467,7 @@ export function coreHostControllerMemberCandidate(
 				: undefined;
 	if (load === undefined) return false;
 	const name = coreHostPropertyName(program, fn, load);
-	if (name === undefined || !STREAM_CONTROLLER_MEMBERS.has(name)) return false;
+	if (name === undefined || !CALLBACK_RECEIVER_MEMBERS.has(name)) return false;
 	const receiver = fn.kernel.operandAt(fn.kernel.instructionOperandStart(load));
 	for (let index = 0; index < fn.parameterCount; index++) {
 		if (receiver === fn.kernel.functionParameter(index)) return true;
@@ -411,7 +484,9 @@ export function coreHostCallbackReceivers(
 	const receivers = new Map<CoreFunctionId, ReadonlyMap<CoreValueId, HostObjectKind>>();
 	if (
 		!context.data.sourceFiles.some(({ contents }) =>
-			/\b(?:ReadableStream|WritableStream|TransformStream|stream\/web)\b/.test(contents),
+			/\b(?:ReadableStream|WritableStream|TransformStream|stream\/web|PerformanceObserver|perf_hooks)\b/.test(
+				contents,
+			),
 		)
 	)
 		return receivers;
@@ -436,6 +511,17 @@ export function coreHostCallbackReceivers(
 				continue;
 			const start = fn.kernel.instructionOperandStart(instruction);
 			const kind = hostConstructor(program, fn, fn.kernel.operandAt(start), slots);
+			if (kind === "PerformanceObserver") {
+				const callback = privateCallback(fn, fn.kernel.operandAt(start + 1));
+				if (callback !== undefined && callback.parameterCount > 0)
+					receivers.set(
+						callback.id,
+						new Map([
+							[callback.kernel.functionParameter(0), "PerformanceObserverEntryList"],
+						]),
+					);
+				continue;
+			}
 			if (
 				kind !== "ReadableStream" &&
 				kind !== "WritableStream" &&
@@ -461,12 +547,8 @@ export function coreHostCallbackReceivers(
 			const callbacks = new Map<string, CoreFunctionStore>();
 			for (const [key, value] of opts) {
 				if (key === "type") continue;
-				const closure = privateDefinition(fn, value, "createFunction");
-				if (!STREAM_CALLBACK_KEYS.has(key) || closure === undefined) break;
-				const index = fn.instructionAttributes(closure).functionIndex;
-				if (typeof index !== "number" || !program.hasFunction(coreFunctionId(index)))
-					break;
-				const callback = program.function(coreFunctionId(index));
+				const callback = privateCallback(fn, value);
+				if (!STREAM_CALLBACK_KEYS.has(key) || callback === undefined) break;
 				// The host passes the literal as `this`. A hook that can recover
 				// that object can retrieve and invoke its own or another hook.
 				if (
@@ -513,6 +595,15 @@ export function coreHostCallbackReceivers(
 		if (created.get(target) !== 1 || called.has(target)) receivers.delete(target);
 	}
 	return receivers;
+
+	function privateCallback(fn: CoreFunctionStore, value: CoreValueId) {
+		const closure = privateDefinition(fn, value, "createFunction");
+		if (closure === undefined) return undefined;
+		const index = fn.instructionAttributes(closure).functionIndex;
+		return typeof index === "number" && program.hasFunction(coreFunctionId(index))
+			? program.function(coreFunctionId(index))
+			: undefined;
+	}
 }
 
 function privateDefinition(fn: CoreFunctionStore, value: CoreValueId, opcode: string) {
@@ -560,6 +651,8 @@ export function coreHostMemberIdentitiesAreStable(
 	for (const id of targets.graph.functions) {
 		const fn = program.function(id);
 		const sites = new Map(targets.outgoing(id).map((site) => [site.instruction, site]));
+		const platformResult = (instruction: CoreInstructionId) =>
+			corePlatformSourceResult(program, fn, instruction, targets, context);
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			// Packaged platform routines initialize private state. A copy of an
@@ -589,7 +682,7 @@ export function coreHostMemberIdentitiesAreStable(
 			if (
 				hasTls &&
 				opcode === "loadGlobal" &&
-				coreHostSlotName(fn, instruction, slots) === "connect" &&
+				TLS_MUTATOR_ROUTES.has(coreHostSlotName(fn, instruction, slots) ?? "") &&
 				!usedOnlyAsCallee(fn, instruction)
 			)
 				return false;
@@ -630,7 +723,7 @@ export function coreHostMemberIdentitiesAreStable(
 				else if (
 					REFLECTIVE_WRITERS.has(key) ||
 					key === "promisify" ||
-					(hasTls && key === "connect")
+					(hasTls && TLS_MUTATOR_ROUTES.has(key))
 				) {
 					// Host callbacks can invoke a native writer without a source call site.
 					if (
@@ -737,13 +830,14 @@ export function coreHostMemberIdentitiesAreStable(
 					coreHostCapturedPromisifiedValue(program, fn, instruction, slots) === undefined
 				)
 					return false;
-				if (
-					hasTls &&
-					name === "connect" &&
-					coreHostResult(program, fn, instruction, slots, true, true)?.immediate
-						.hostObject !== "TlsSocket"
-				)
-					return false;
+				if (hasTls && name !== undefined && TLS_MUTATOR_ROUTES.has(name)) {
+					if (
+						name !== "connect" ||
+						coreHostResult(program, fn, instruction, slots, true, true)?.immediate
+							.hostObject !== "TlsSocket"
+					)
+						return false;
+				}
 			}
 			if (
 				opcode === "construct" &&
@@ -775,11 +869,28 @@ export function coreHostMemberIdentitiesAreStable(
 					attrs.operation === "ArrayBuffer")
 			)
 				continue;
+			const promise = coreIntrinsicPromiseStaticCall(fn, instruction);
+			if (promise?.operation === "Promise.reject") continue;
+			if (promise?.operation === "Promise.resolve") {
+				const value = promise.firstArgument;
+				const source = value === undefined ? undefined : definition(fn, value);
+				if (
+					value === undefined ||
+					(source !== undefined &&
+						PRIMITIVE_PRODUCERS.has(fn.instructionOpcodeName(source)))
+				)
+					continue;
+			}
 			if (
-				coreHostObjectResult(program, fn, instruction, slots, parameters.get(id)) ===
-					undefined &&
-				corePlatformSourceResult(program, fn, instruction, targets, context) ===
-					undefined &&
+				coreHostObjectResult(
+					program,
+					fn,
+					instruction,
+					slots,
+					parameters.get(id),
+					platformResult,
+				) === undefined &&
+				platformResult(instruction) === undefined &&
 				coreHostResult(program, fn, instruction, slots, true, true) === undefined
 			)
 				return false;
