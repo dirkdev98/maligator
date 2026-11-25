@@ -1377,12 +1377,16 @@ const foldValueKindObservations: CoreFunctionPass = {
 		let kinds: CoreValueKindAnalysis | undefined;
 		const valueKinds = () => (kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS));
 		let conditional: CoreConditionalValueKinds | undefined;
-		const kindMask = (value: CoreValueId, block: CoreBlockId) => {
+		const kindMask = (
+			value: CoreValueId,
+			block: CoreBlockId,
+			before?: CoreInstructionId,
+		) => {
 			const mask = valueKinds().kindMask(value);
 			if ((mask & (mask - 1)) === 0) return mask;
 			return (conditional ??= context.analysis(
 				CORE_CONDITIONAL_VALUE_KIND_ANALYSIS,
-			)).kindMask(value, block);
+			)).kindMask(value, block, before);
 		};
 		let replayableKinds: CoreValueKindAnalysis | undefined;
 		let replayableConditional: CoreConditionalValueKinds | undefined;
@@ -1418,7 +1422,7 @@ const foldValueKindObservations: CoreFunctionPass = {
 					fn.valueUseCount(output) + fn.kernel.valueHandlerUseCount(output) === 0
 						? undefined
 						: coreWeakCollectionNormalConstant(fn, instruction, (value) =>
-								kindMask(value, fn.instructionBlock(instruction)),
+								kindMask(value, fn.instructionBlock(instruction), instruction),
 							);
 				if (normal !== undefined) {
 					replacements.push({ instruction, normal });
@@ -1429,7 +1433,7 @@ const foldValueKindObservations: CoreFunctionPass = {
 				program,
 				fn,
 				instruction,
-				(value) => kindMask(value, fn.instructionBlock(instruction)),
+				(value) => kindMask(value, fn.instructionBlock(instruction), instruction),
 				integerRange,
 				undefined,
 				(value) =>

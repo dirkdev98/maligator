@@ -18,6 +18,7 @@ import type { CoreHostCallbackReceivers } from "./core-host-object-results.ts";
 import {
 	corePlatformSourceResult,
 	coreHostCompletion,
+	coreHostDirectCallContract,
 	coreHostResult,
 	coreHostResultSlots,
 } from "./core-host-results.ts";
@@ -183,6 +184,10 @@ export interface CoreProgramFlowValueKindState<
 		fn: CoreFunctionStore,
 		instruction: CoreInstructionId,
 	): ReturnType<typeof coreHostCompletion>;
+	hostCallContract(
+		fn: CoreFunctionStore,
+		instruction: CoreInstructionId,
+	): ReturnType<typeof coreHostDirectCallContract>;
 	readonly dataEpoch: number;
 	readonly targets: Targets;
 	readonly external: ReadonlyMap<CoreFunctionId, boolean>;
@@ -2672,24 +2677,23 @@ export class CoreProgramFlowEngine {
 		const hostCallbackReceivers =
 			hostMembersStable && candidateReceivers?.size ? candidateReceivers : undefined;
 		const locked = context?.facts.world.primordialPolicy === "locked";
-		const memberReader = (fn: CoreFunctionStore) => {
+		const memberContract = (fn: CoreFunctionStore) => {
 			const platformResult = (instruction: CoreInstructionId) =>
 				corePlatformSourceResult(this.#program, fn, instruction, targets, context!);
 			return (instruction: CoreInstructionId) =>
-				coreHostCompletion(
+				coreHostObjectResult(
 					this.#program,
 					fn,
 					instruction,
-					coreHostObjectResult(
-						this.#program,
-						fn,
-						instruction,
-						hostSlots,
-						hostCallbackReceivers?.get(fn.id),
-						platformResult,
-					) ?? platformResult(instruction),
-					true,
-				);
+					hostSlots,
+					hostCallbackReceivers?.get(fn.id),
+					platformResult,
+				) ?? platformResult(instruction);
+		};
+		const memberReader = (fn: CoreFunctionStore) => {
+			const contract = memberContract(fn);
+			return (instruction: CoreInstructionId) =>
+				coreHostCompletion(this.#program, fn, instruction, contract(instruction), true);
 		};
 		const nativeCompletion = (fn: CoreFunctionStore, instruction: CoreInstructionId) =>
 			hostSlots === undefined || (hostSlots.size === 0 && !hostMembersStable)
@@ -2700,6 +2704,17 @@ export class CoreProgramFlowEngine {
 						instruction,
 						hostSlots,
 						locked,
+						hostMembersStable,
+					);
+		const nativeCallContract = (fn: CoreFunctionStore, instruction: CoreInstructionId) =>
+			hostSlots === undefined
+				? undefined
+				: coreHostDirectCallContract(
+						this.#program,
+						fn,
+						instruction,
+						hostSlots,
+						4,
 						hostMembersStable,
 					);
 		if (!sameCallbackReceivers(previous?.hostCallbackReceivers, hostCallbackReceivers))
@@ -3553,6 +3568,12 @@ export class CoreProgramFlowEngine {
 			dataEpoch,
 			hostMembersStable,
 			hostCallbackReceivers,
+			hostCallContract(fn: CoreFunctionStore, instruction: CoreInstructionId) {
+				return (
+					(hostMembersStable ? memberContract(fn)(instruction) : undefined) ??
+					nativeCallContract(fn, instruction)
+				);
+			},
 			hostCompletion(fn: CoreFunctionStore, instruction: CoreInstructionId) {
 				return (
 					(hostMembersStable ? memberReader(fn)(instruction) : undefined) ??

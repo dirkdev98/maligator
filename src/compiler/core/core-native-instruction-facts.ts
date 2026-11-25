@@ -2,7 +2,9 @@ import { builtinPreservesIntegerInput } from "../shared/builtin-registry.ts";
 import {
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_STRING,
 } from "../shared/compiler-value-kinds.ts";
+import type { HostInputBrand } from "../shared/host-result-contracts.ts";
 import {
 	encodeInstructionEffects,
 	INSTRUCTION_MAY_THROW,
@@ -47,6 +49,8 @@ export interface CoreInstructionFacts {
 	readonly inputIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
 	readonly resultIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
 	readonly effectMask: number;
+	readonly inputHeapBrand?: HostInputBrand;
+	readonly exactStringLength?: true;
 }
 
 export interface CoreInstructionFactPlan {
@@ -95,14 +99,19 @@ export function coreInstructionFactPlans(
 			dataVersion: program.versions.data,
 		};
 		let conditional: CoreConditionalValueKinds | undefined;
+		const conditionalKinds = () =>
+			(conditional ??= analyses.get(CORE_CONDITIONAL_VALUE_KIND_ANALYSIS, {
+				scope: "function",
+				function: functionId,
+			}));
 		const inputKinds: CoreConditionalValueKinds = {
-			kindMask(value, block) {
+			kindMask(value, block, before) {
 				const mask = kinds.kindMask(value);
 				if ((mask & (mask - 1)) === 0) return mask;
-				return (conditional ??= analyses.get(CORE_CONDITIONAL_VALUE_KIND_ANALYSIS, {
-					scope: "function",
-					function: functionId,
-				})).kindMask(value, block);
+				return conditionalKinds().kindMask(value, block, before);
+			},
+			heapBrand(value, block, before) {
+				return conditionalKinds().heapBrand?.(value, block, before);
 			},
 		};
 		let ranges: CoreLoopInductionAnalysis | undefined;
@@ -281,12 +290,16 @@ function instructionMasks(
 	start: number,
 	count: number,
 	result: boolean,
+	before?: CoreInstructionId,
 ): ReadonlyArray<number> {
 	if (count === 0) return emptyMasks;
 	const kernel = fn.kernel;
 	const first =
-		kinds.kindMask(result ? kernel.resultAt(start) : kernel.operandAt(start), block) ||
-		COMPILER_VALUE_KIND_TOP;
+		kinds.kindMask(
+			result ? kernel.resultAt(start) : kernel.operandAt(start),
+			block,
+			before,
+		) || COMPILER_VALUE_KIND_TOP;
 	if (count === 1) {
 		let masks = singleMasks.get(first);
 		if (masks === undefined) {
@@ -299,9 +312,10 @@ function instructionMasks(
 		kinds.kindMask(
 			result ? kernel.resultAt(start + 1) : kernel.operandAt(start + 1),
 			block,
+			before,
 		) || COMPILER_VALUE_KIND_TOP;
 	if (count === 2) {
-		const key = first * 256 + second;
+		const key = first * (COMPILER_VALUE_KIND_TOP + 1) + second;
 		let masks = pairMasks.get(key);
 		if (masks === undefined) {
 			masks = Object.freeze([first, second]);
@@ -315,6 +329,7 @@ function instructionMasks(
 			kinds.kindMask(
 				result ? kernel.resultAt(start + index) : kernel.operandAt(start + index),
 				block,
+				before,
 			) || COMPILER_VALUE_KIND_TOP,
 		);
 	return Object.freeze(values);
@@ -340,6 +355,7 @@ export function coreInstructionFacts(
 		input,
 		kernel.instructionOperandCount(instruction),
 		false,
+		instruction,
 	);
 	const inputIntegerRanges = instructionIntegerRanges(
 		fn,
@@ -374,8 +390,26 @@ export function coreInstructionFacts(
 			: resultRange === COMPILER_INT32_RANGE
 				? singleInt32Input
 				: Object.freeze([resultRange]);
+	const opcode =
+		fn.instructionKind(instruction) === "operation"
+			? fn.instructionOpcodeName(instruction)
+			: undefined;
+	const inputHeapBrand =
+		(opcode === "loadProperty" || opcode === "storeProperty") &&
+		conditional.heapBrand !== undefined
+			? conditional.heapBrand(kernel.operandAt(input), block, instruction)
+			: undefined;
+	const key =
+		opcode === "loadPropertyStatic" && masks[0] === COMPILER_VALUE_KIND_STRING
+			? fn.instructionAttributes(instruction).stringIndex
+			: undefined;
+	const units = typeof key === "number" ? program.stringConstants[key] : undefined;
+	const exactStringLength =
+		units?.length === 6 && String.fromCharCode(...units) === "length";
 	return {
 		masks,
+		...(inputHeapBrand === undefined ? {} : { inputHeapBrand }),
+		...(exactStringLength ? { exactStringLength: true } : {}),
 		...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
 		...(resultIntegerRanges === undefined ? {} : { resultIntegerRanges }),
 		effectMask:

@@ -1,3 +1,4 @@
+import type { CompilerNumericTypedArrayKind } from "./compiler-instruction.ts";
 import {
 	COMPILER_VALUE_KIND_BOOLEAN as BOOLEAN,
 	COMPILER_VALUE_KIND_BIGINT as BIGINT,
@@ -69,7 +70,29 @@ export interface HostValueContract {
 	};
 }
 
-export type HostResultContract =
+export type HostInputBrand =
+	| CompilerNumericTypedArrayKind
+	| "Array"
+	| "Map"
+	| "Set"
+	| "WeakMap"
+	| "WeakSet";
+
+export interface HostInputFact {
+	readonly argument: number | "receiver" | "all" | "last";
+	readonly mask: CompilerValueKindMask;
+	readonly brand?: HostInputBrand;
+}
+
+export interface HostInputContract {
+	readonly onTrue?: ReadonlyArray<HostInputFact>;
+	readonly onFalse?: ReadonlyArray<HostInputFact>;
+	readonly onReturn?: ReadonlyArray<HostInputFact>;
+	readonly onFulfill?: ReadonlyArray<HostInputFact>;
+	readonly unavailable?: string;
+}
+
+export type HostResultContract = (
 	| { readonly kind: "return"; readonly value: HostValueContract }
 	| {
 			// Only native direct fulfillment can guarantee object payloads without
@@ -88,7 +111,8 @@ export type HostResultContract =
 	  }
 	| { readonly kind: "callback"; readonly reason: string }
 	| { readonly kind: "never"; readonly reason: string }
-	| { readonly kind: "dynamic"; readonly reason: string };
+	| { readonly kind: "dynamic"; readonly reason: string }
+) & { readonly inputs?: HostInputContract };
 
 const returned = (
 	mask: CompilerValueKindMask,
@@ -143,12 +167,229 @@ const neverReturns = (reason: string): HostResultContract => ({ kind: "never", r
 
 function exportsWithContracts(
 	...groups: ReadonlyArray<readonly [HostResultContract, ...Array<string>]>
-): ReadonlyMap<string, HostResultContract> {
+): Map<string, HostResultContract> {
 	return new Map(
 		groups.flatMap(([contract, ...names]) =>
 			names.map((name) => [name, contract] as const),
 		),
 	);
+}
+
+const input = (
+	argument: HostInputFact["argument"],
+	mask: number,
+	brand?: HostInputBrand,
+): HostInputFact => ({ argument, mask, brand });
+const validates = (...onReturn: ReadonlyArray<HostInputFact>): HostInputContract => ({
+	onReturn,
+});
+const validatesBeforeFulfillment = (
+	...onFulfill: ReadonlyArray<HostInputFact>
+): HostInputContract => ({ onFulfill });
+const predicate = (
+	mask: number,
+	complementary = false,
+	brand?: HostInputBrand,
+): HostInputContract => ({
+	onTrue: [input(0, mask, brand)],
+	...(complementary ? { onFalse: [input(0, TOP & ~mask)] } : {}),
+});
+const noInputFact = (unavailable: string): HostInputContract => ({ unavailable });
+const stringInput = validates(input(0, STRING));
+const objectInput = validates(input(0, OBJECT));
+const numberInput = validates(input(0, NUMBER));
+const stringPair = validates(input(0, STRING), input(1, STRING));
+const bufferPredicate = predicate(OBJECT, false, "Uint8Array");
+const bufferReceiver = input("receiver", OBJECT, "Uint8Array");
+const bufferFixedRead = validates(bufferReceiver, input(0, NUMBER | UNDEFINED));
+const bufferVariableRead = validates(bufferReceiver, input(0, NUMBER), input(1, NUMBER));
+const bufferFixedWrite = validates(bufferReceiver, input(1, NUMBER | UNDEFINED));
+const bufferVariableWrite = validates(bufferReceiver, input(1, NUMBER), input(2, NUMBER));
+
+const builtinInputs = new Map<string, HostInputContract>([
+	["Array.isArray", predicate(OBJECT)],
+	["ArrayBuffer.isView", predicate(OBJECT)],
+	["Error.isError", predicate(OBJECT)],
+	["JSON.isRawJSON", predicate(OBJECT)],
+	["Object.prototype.isPrototypeOf", predicate(OBJECT)],
+	[
+		"Atomics.isLockFree",
+		noInputFact("Converts the byte size using ToIntegerOrInfinity."),
+	],
+	[
+		"String.prototype.isWellFormed",
+		validates(input("receiver", TOP & ~(NULL | UNDEFINED))),
+	],
+	["Number.prototype.valueOf", validates(input("receiver", NUMBER | OBJECT))],
+	["Boolean.prototype.valueOf", validates(input("receiver", BOOLEAN | OBJECT))],
+	["Boolean.prototype.toString", validates(input("receiver", BOOLEAN | OBJECT))],
+	["String.prototype.valueOf", validates(input("receiver", STRING | OBJECT))],
+	["String.prototype.toString", validates(input("receiver", STRING | OBJECT))],
+	["RegExp.prototype.exec", validates(input("receiver", OBJECT))],
+	["RegExp.prototype.test", validates(input("receiver", OBJECT))],
+	...["toFixed", "toExponential", "toPrecision"].map(
+		(name) =>
+			[
+				`Number.prototype.${name}`,
+				validates(input("receiver", NUMBER | OBJECT)),
+			] as const,
+	),
+	...[
+		"charCodeAt",
+		"slice",
+		"substring",
+		"substr",
+		"trim",
+		"trimStart",
+		"trimEnd",
+		"trimLeft",
+		"trimRight",
+		"split",
+	].map(
+		(name) =>
+			[
+				`String.prototype.${name}`,
+				validates(input("receiver", TOP & ~(NULL | UNDEFINED))),
+			] as const,
+	),
+	...[
+		"Int8",
+		"Uint8",
+		"Int16",
+		"Uint16",
+		"Int32",
+		"Uint32",
+		"Float16",
+		"Float32",
+		"Float64",
+		"BigInt64",
+		"BigUint64",
+	].flatMap((type) =>
+		["get", "set"].map(
+			(action) =>
+				[
+					`DataView.prototype.${action}${type}`,
+					validates(input("receiver", OBJECT)),
+				] as const,
+		),
+	),
+	...["Map", "Set", "WeakMap", "WeakSet"].flatMap((kind) =>
+		(kind === "Map" || kind === "WeakMap"
+			? ["get", "set", "has", "delete"]
+			: ["add", "has", "delete"]
+		).map(
+			(name) =>
+				[
+					`${kind}.prototype.${name}`,
+					validates(input("receiver", OBJECT, kind as HostInputBrand)),
+				] as const,
+		),
+	),
+	[
+		"Map.prototype.forEach",
+		validates(input("receiver", OBJECT, "Map"), input(0, OBJECT)),
+	],
+	[
+		"Set.prototype.forEach",
+		validates(input("receiver", OBJECT, "Set"), input(0, OBJECT)),
+	],
+	...[
+		"isDisjointFrom",
+		"isSubsetOf",
+		"isSupersetOf",
+		"difference",
+		"intersection",
+		"symmetricDifference",
+		"union",
+	].map(
+		(name) =>
+			[
+				`Set.prototype.${name}`,
+				validates(input("receiver", OBJECT, "Set"), input(0, OBJECT)),
+			] as const,
+	),
+	...[
+		"every",
+		"some",
+		"forEach",
+		"find",
+		"findIndex",
+		"findLast",
+		"findLastIndex",
+		"map",
+		"filter",
+		"reduce",
+		"reduceRight",
+	].map(
+		(name) =>
+			[
+				`TypedArray.prototype.${name}`,
+				validates(input("receiver", OBJECT), input(0, OBJECT)),
+			] as const,
+	),
+	["Number.isFinite", predicate(NUMBER)],
+	["Number.isInteger", predicate(NUMBER)],
+	["Number.isNaN", predicate(NUMBER)],
+	["Number.isSafeInteger", predicate(NUMBER)],
+	["Object.isExtensible", predicate(OBJECT)],
+	["Object.isFrozen", { onFalse: [input(0, OBJECT)] }],
+	["Object.isSealed", { onFalse: [input(0, OBJECT)] }],
+	[
+		"Object.setPrototypeOf",
+		validates(input(0, TOP & ~(NULL | UNDEFINED)), input(1, OBJECT | NULL)),
+	],
+	["Object.defineProperty", validates(input(0, OBJECT), input(2, OBJECT))],
+	["Object.defineProperties", objectInput],
+	["Object.create", validates(input(0, OBJECT | NULL))],
+	["Object.getOwnPropertyDescriptor", validates(input(0, TOP & ~(NULL | UNDEFINED)))],
+	["Object.getOwnPropertyDescriptors", validates(input(0, TOP & ~(NULL | UNDEFINED)))],
+	["Object.getPrototypeOf", validates(input(0, TOP & ~(NULL | UNDEFINED)))],
+	["Object.getOwnPropertyNames", validates(input(0, TOP & ~(NULL | UNDEFINED)))],
+	["Object.getOwnPropertySymbols", validates(input(0, TOP & ~(NULL | UNDEFINED)))],
+	["Object.keys", validates(input(0, TOP & ~(NULL | UNDEFINED)))],
+	["Object.values", validates(input(0, TOP & ~(NULL | UNDEFINED)))],
+	["Object.entries", validates(input(0, TOP & ~(NULL | UNDEFINED)))],
+	["Object.hasOwn", validates(input(0, TOP & ~(NULL | UNDEFINED)))],
+	["Reflect.defineProperty", validates(input(0, OBJECT), input(2, OBJECT))],
+	["Reflect.setPrototypeOf", validates(input(0, OBJECT), input(1, OBJECT | NULL))],
+	...[
+		"apply",
+		"construct",
+		"deleteProperty",
+		"get",
+		"getOwnPropertyDescriptor",
+		"getPrototypeOf",
+		"has",
+		"isExtensible",
+		"ownKeys",
+		"preventExtensions",
+		"set",
+	].map((name) => [`Reflect.${name}`, objectInput] as const),
+]);
+
+export function builtinInputContract(operation: string): HostInputContract | undefined {
+	return builtinInputs.get(operation);
+}
+
+const hostInputMemberNames = new Set<string>();
+
+export function hostHasInputContractMember(name: string): boolean {
+	return hostInputMemberNames.has(name);
+}
+
+function withInputs(
+	results: Map<string, HostResultContract>,
+	...groups: ReadonlyArray<readonly [HostInputContract, ...Array<string>]>
+): ReadonlyMap<string, HostResultContract> {
+	for (const [inputs, ...names] of groups)
+		for (const name of names) {
+			const result = results.get(name);
+			if (result === undefined)
+				throw new Error(`Missing result contract for input facts of ${name}`);
+			results.set(name, { ...result, inputs });
+			if (inputs.unavailable === undefined) hostInputMemberNames.add(name);
+		}
+	return results;
 }
 
 function nativeConstructor(
@@ -297,6 +538,65 @@ const fs = exportsWithContracts(
 		"writev",
 	],
 );
+withInputs(
+	fs,
+	[validates(input(0, NUMBER), input(1, OBJECT)), "readSync", "readvSync", "writevSync"],
+	[validates(input(0, NUMBER), input(1, STRING | OBJECT)), "writeSync"],
+	[validates(input(0, NUMBER), input(1, NUMBER | UNDEFINED)), "ftruncateSync"],
+	[
+		numberInput,
+		"closeSync",
+		"fstatSync",
+		"fsyncSync",
+		"fdatasyncSync",
+		"fchmodSync",
+		"fchownSync",
+		"futimesSync",
+	],
+	[
+		validates(input(0, NUMBER | STRING | OBJECT)),
+		"readFileSync",
+		"writeFileSync",
+		"appendFileSync",
+	],
+	[
+		validates(input(0, NUMBER | STRING | OBJECT), input(1, NUMBER | UNDEFINED)),
+		"truncateSync",
+	],
+	[
+		validates(input(0, STRING | OBJECT)),
+		"accessSync",
+		"chmodSync",
+		"chownSync",
+		"lchownSync",
+		"lstatSync",
+		"statSync",
+		"mkdirSync",
+		"openSync",
+		"opendirSync",
+		"readdirSync",
+		"readlinkSync",
+		"realpathSync",
+		"rmSync",
+		"rmdirSync",
+		"unlinkSync",
+		"utimesSync",
+		"lutimesSync",
+		"statfsSync",
+	],
+	[
+		validates(input(0, STRING | OBJECT), input(1, STRING | OBJECT)),
+		"copyFileSync",
+		"cpSync",
+		"linkSync",
+		"renameSync",
+		"symlinkSync",
+	],
+	[
+		noInputFact("Invalid path types can return false without an exception."),
+		"existsSync",
+	],
+);
 
 const fsPromises = exportsWithContracts(
 	[selected("fulfill", { kind: "encoding", argument: 1 }), "readFile"],
@@ -354,6 +654,52 @@ const fsPromises = exportsWithContracts(
 	],
 );
 
+withInputs(
+	fsPromises,
+	[
+		validatesBeforeFulfillment(input(0, STRING | OBJECT)),
+		"access",
+		"chmod",
+		"chown",
+		"lchown",
+		"lutimes",
+		"open",
+		"opendir",
+		"stat",
+		"lstat",
+		"statfs",
+		"readdir",
+		"mkdir",
+		"readlink",
+		"realpath",
+		"rmdir",
+		"rm",
+		"unlink",
+		"utimes",
+	],
+	[
+		validatesBeforeFulfillment(input(0, STRING | NUMBER | OBJECT)),
+		"readFile",
+		"writeFile",
+		"appendFile",
+	],
+	[
+		validatesBeforeFulfillment(
+			input(0, NUMBER | STRING | OBJECT),
+			input(1, NUMBER | UNDEFINED),
+		),
+		"truncate",
+	],
+	[
+		validatesBeforeFulfillment(input(0, STRING | OBJECT), input(1, STRING | OBJECT)),
+		"copyFile",
+		"cp",
+		"link",
+		"rename",
+		"symlink",
+	],
+);
+
 const maligatorFs = exportsWithContracts(
 	[returned(STRING), "mediaType"],
 	[selected("fulfill", { kind: "text-flag", argument: 1 }), "read"],
@@ -371,6 +717,33 @@ const maligatorFs = exportsWithContracts(
 		"remove",
 		"removeDirectory",
 		"symlink",
+	],
+);
+withInputs(
+	maligatorFs,
+	[
+		stringInput,
+		"mediaType",
+		"exists",
+		"stat",
+		"read",
+		"remove",
+		"chmod",
+		"realpath",
+		"readlink",
+		"createDirectory",
+		"removeDirectory",
+	],
+	[validates(input(0, STRING | UNDEFINED)), "temporaryDirectory"],
+	[stringPair, "copy", "move", "symlink"],
+	[validates(input(0, STRING), input(1, STRING | OBJECT)), "write"],
+	[
+		validates(
+			input(0, STRING),
+			input(4, OBJECT | UNDEFINED),
+			input(5, OBJECT | UNDEFINED),
+		),
+		"list",
 	],
 );
 
@@ -417,6 +790,19 @@ const path = exportsWithContracts(
 	],
 	[
 		{ kind: "dynamic", reason: "Returns non-string inputs unchanged." },
+		"toNamespacedPath",
+	],
+);
+withInputs(
+	path,
+	[stringInput, "dirname", "extname", "isAbsolute", "normalize", "parse"],
+	[validates(input(0, STRING), input(1, STRING | UNDEFINED)), "basename"],
+	[stringPair, "relative", "matchesGlob"],
+	[validates(input("all", STRING)), "join"],
+	[validates(input("last", STRING)), "resolve"],
+	[objectInput, "format"],
+	[
+		noInputFact("POSIX and non-string Windows inputs pass through unchanged."),
 		"toNamespacedPath",
 	],
 );
@@ -532,6 +918,13 @@ const process = exportsWithContracts(
 		"execve",
 	],
 );
+withInputs(
+	process,
+	[stringInput, "chdir", "getBuiltinModule"],
+	[objectInput, "nextTick"],
+	[validates(input(0, BOOLEAN)), "setSourceMapsEnabled"],
+	[validates(input(0, NUMBER | STRING | UNDEFINED)), "umask"],
+);
 
 const url = exportsWithContracts(
 	[nativeConstructor("URL"), "URL"],
@@ -614,6 +1007,27 @@ const util = exportsWithContracts(
 		"stripVTControlCharacters",
 	],
 );
+withInputs(
+	util,
+	[predicate(BOOLEAN, true), "isBoolean"],
+	[predicate(NULL, true), "isNull"],
+	[predicate(NULL | UNDEFINED, true), "isNullOrUndefined"],
+	[predicate(NUMBER, true), "isNumber"],
+	[predicate(STRING, true), "isString"],
+	[predicate(SYMBOL, true), "isSymbol"],
+	[predicate(UNDEFINED, true), "isUndefined"],
+	[predicate(OBJECT), "isFunction", "isObject"],
+	[predicate(OBJECT, false, "Array"), "isArray"],
+	[bufferPredicate, "isBuffer"],
+	[noInputFact("Both outcomes are possible for all operand kinds."), "isDeepStrictEqual"],
+	[stringInput, "parseEnv", "stripVTControlCharacters", "convertProcessSignalToExitCode"],
+	[numberInput, "getSystemErrorName", "getSystemErrorMessage"],
+	[objectInput, "promisify", "callbackify"],
+	[validates(input(0, OBJECT), input(1, OBJECT)), "inherits", "aborted"],
+	[validates(input(0, OBJECT), input(1, NUMBER)), "debounce"],
+	[validates(input(0, STRING | OBJECT), input(1, STRING)), "styleText"],
+	[noInputFact("Converts arbitrary input to a well-formed string."), "toUSVString"],
+);
 
 const utilTypes = exportsWithContracts([
 	returned(BOOLEAN),
@@ -661,6 +1075,58 @@ const utilTypes = exportsWithContracts([
 	"isBigUint64Array",
 	"isFloat16Array",
 ]);
+withInputs(
+	utilTypes,
+	[predicate(OBJECT, false, "Int8Array"), "isInt8Array"],
+	[predicate(OBJECT, false, "Uint8Array"), "isUint8Array"],
+	[predicate(OBJECT, false, "Uint8ClampedArray"), "isUint8ClampedArray"],
+	[predicate(OBJECT, false, "Int16Array"), "isInt16Array"],
+	[predicate(OBJECT, false, "Uint16Array"), "isUint16Array"],
+	[predicate(OBJECT, false, "Int32Array"), "isInt32Array"],
+	[predicate(OBJECT, false, "Uint32Array"), "isUint32Array"],
+	[predicate(OBJECT, false, "Float32Array"), "isFloat32Array"],
+	[predicate(OBJECT, false, "Float64Array"), "isFloat64Array"],
+	[predicate(OBJECT, false, "Map"), "isMap"],
+	[predicate(OBJECT, false, "Set"), "isSet"],
+	[predicate(OBJECT, false, "WeakMap"), "isWeakMap"],
+	[predicate(OBJECT, false, "WeakSet"), "isWeakSet"],
+	[
+		predicate(OBJECT),
+		"isArgumentsObject",
+		"isNativeError",
+		"isPromise",
+		"isAnyArrayBuffer",
+		"isArrayBuffer",
+		"isSharedArrayBuffer",
+		"isDataView",
+		"isDate",
+		"isRegExp",
+		"isTypedArray",
+		"isBoxedPrimitive",
+		"isBigIntObject",
+		"isBooleanObject",
+		"isNumberObject",
+		"isStringObject",
+		"isSymbolObject",
+		"isArrayBufferView",
+		"isAsyncFunction",
+		"isGeneratorFunction",
+		"isGeneratorObject",
+		"isModuleNamespaceObject",
+		"isProxy",
+		"isKeyObject",
+		"isCryptoKey",
+		"isMapIterator",
+		"isSetIterator",
+		"isBigInt64Array",
+		"isBigUint64Array",
+	],
+	[
+		noInputFact("The runtime always returns false for this unsupported brand."),
+		"isExternal",
+		"isFloat16Array",
+	],
+);
 
 const v8 = exportsWithContracts(
 	[uint32, "cachedDataVersionTag"],
@@ -675,6 +1141,7 @@ const v8 = exportsWithContracts(
 		"takeCoverage",
 	],
 );
+withInputs(v8, [stringInput, "isStringOneByteRepresentation"]);
 
 const perfHooks = exportsWithContracts(
 	[nativeConstructor("PerformanceObserver"), "PerformanceObserver"],
@@ -710,6 +1177,12 @@ const buffer = exportsWithContracts(
 	[returned(STRING), "atob", "btoa"],
 	[returned(BOOLEAN), "isAscii", "isUtf8"],
 	[returned(UNDEFINED), "resolveObjectURL"],
+);
+withInputs(
+	buffer,
+	[validates(input(0, OBJECT, "Uint8Array")), "transcode"],
+	[objectInput, "isAscii", "isUtf8"],
+	[noInputFact("Converts the input to a string."), "resolveObjectURL"],
 );
 
 const maligatorWorkers = exportsWithContracts(
@@ -749,12 +1222,22 @@ const vm = exportsWithContracts(
 		"runInThisContext",
 	],
 );
+withInputs(
+	vm,
+	[objectInput, "isContext"],
+	[validates(input(0, STRING), input(1, OBJECT | UNDEFINED)), "compileFunction"],
+);
 const diagnostics = exportsWithContracts(
 	[nativeConstructor("DiagnosticsChannel"), "Channel"],
 	[hostObject("DiagnosticsChannel"), "channel"],
 	[hostObject("TracingChannel"), "tracingChannel"],
 	[returned(BOOLEAN), "hasSubscribers", "unsubscribe"],
 	[returned(UNDEFINED), "subscribe"],
+);
+withInputs(
+	diagnostics,
+	[validates(input(0, STRING | SYMBOL)), "channel", "hasSubscribers", "unsubscribe"],
+	[validates(input(0, STRING | SYMBOL), input(1, OBJECT)), "subscribe"],
 );
 const cluster = exportsWithContracts(
 	[neverReturns("Process clustering is unsupported."), "fork"],
@@ -825,6 +1308,12 @@ const module = exportsWithContracts(
 		"setSourceMapsSupport",
 		"syncBuiltinESMExports",
 	],
+);
+withInputs(
+	module,
+	[predicate(STRING), "isBuiltin"],
+	[stringInput, "_nodeModulePaths", "createRequire"],
+	[validates(input(0, STRING | OBJECT), input(1, STRING | UNDEFINED)), "findPackageJSON"],
 );
 
 export const CAPTURED_HOST_RESULTS = exportsWithContracts(
@@ -907,6 +1396,8 @@ const nodeWorkers = exportsWithContracts(
 	],
 	[neverReturns("Ports are created by the channel and worker factories."), "MessagePort"],
 );
+withInputs(nodeWorkers, [predicate(OBJECT), "isMarkedAsUntransferable"]);
+
 const assertions = exportsWithContracts(
 	[nativeConstructor("Assert"), "Assert"],
 	[returned(OBJECT), "AssertionError"],
@@ -932,6 +1423,11 @@ const assertions = exportsWithContracts(
 		"strictEqual",
 		"throws",
 	],
+);
+withInputs(
+	assertions,
+	[validates(input(0, STRING), input(1, OBJECT)), "match", "doesNotMatch"],
+	[objectInput, "throws", "doesNotThrow"],
 );
 const zlib = exportsWithContracts(
 	[
@@ -984,6 +1480,10 @@ const zlib = exportsWithContracts(
 		"unzip",
 	],
 );
+withInputs(zlib, [
+	validates(input(0, STRING | OBJECT), input(1, NUMBER | UNDEFINED)),
+	"crc32",
+]);
 const dnsShared = [
 	[returned(OBJECT, "Array"), "getServers"],
 	[returned(STRING), "getDefaultResultOrder"],
@@ -1054,6 +1554,19 @@ const http = exportsWithContracts(
 		"setMaxIdleHTTPParsers",
 	],
 );
+withInputs(
+	http,
+	[predicate(STRING), "isValidHeaderName"],
+	[stringInput, "validateHeaderName"],
+	[
+		{
+			onTrue: [input(0, TOP & ~(SYMBOL | UNDEFINED))],
+			onReturn: [input(1, OBJECT | UNDEFINED)],
+		},
+		"isValidHeaderValue",
+	],
+	[noInputFact("Converts the header value to a string."), "validateHeaderValue"],
+);
 const https = exportsWithContracts(
 	[nativeConstructor("HttpsAgent"), "Agent"],
 	[installedObject("HttpsAgent"), "globalAgent"],
@@ -1093,6 +1606,12 @@ const net = exportsWithContracts(
 		"setDefaultAutoSelectFamilyAttemptTimeout",
 	],
 );
+withInputs(net, [
+	noInputFact("Converts the address to a string."),
+	"isIP",
+	"isIPv4",
+	"isIPv6",
+]);
 const childProcess = exportsWithContracts(
 	[nativeConstructor("ChildProcess"), "ChildProcess"],
 	[hostObject("SpawnedChildProcess"), "exec", "execFile", "spawn"],
@@ -1182,6 +1701,25 @@ const crypto = exportsWithContracts(
 		"generateKey",
 	],
 );
+withInputs(
+	crypto,
+	[
+		stringInput,
+		"createHash",
+		"createHmac",
+		"createSign",
+		"createVerify",
+		"createCipheriv",
+		"createDecipheriv",
+	],
+	[
+		validates(input(0, STRING), input(1, STRING | OBJECT), input(2, STRING | UNDEFINED)),
+		"hash",
+	],
+	[numberInput, "randomBytes", "randomInt"],
+	[objectInput, "getRandomValues", "randomFillSync"],
+	[validates(input(0, OBJECT), input(1, OBJECT)), "timingSafeEqual"],
+);
 const stream = exportsWithContracts(
 	[streamConstructor("NodeStream"), "default", "Stream"],
 	[streamConstructor("NodeReadable"), "Readable"],
@@ -1198,6 +1736,18 @@ const stream = exportsWithContracts(
 	[returned(UNDEFINED), "destroy", "setDefaultHighWaterMark"],
 	[returned(OBJECT), "addAbortSignal", "compose", "finished", "pipeline"],
 	[returned(OBJECT, "Array"), "duplexPair"],
+);
+withInputs(
+	stream,
+	[
+		predicate(OBJECT),
+		"isReadable",
+		"isWritable",
+		"isDestroyed",
+		"isErrored",
+		"isDisturbed",
+	],
+	[validates(input(1, NUMBER)), "setDefaultHighWaterMark"],
 );
 const streamPromises = exportsWithContracts(
 	[fulfilled(UNDEFINED), "finished"],
@@ -1269,6 +1819,16 @@ const timers = exportsWithContracts(
 	[hostObject("Timeout"), "setTimeout", "setInterval"],
 	[hostObject("Immediate"), "setImmediate"],
 	[returned(UNDEFINED), "clearTimeout", "clearInterval", "clearImmediate"],
+);
+withInputs(
+	timers,
+	[objectInput, "setTimeout", "setInterval", "setImmediate"],
+	[
+		noInputFact("Ignores values that do not identify a live timer."),
+		"clearTimeout",
+		"clearInterval",
+		"clearImmediate",
+	],
 );
 const timersPromises = exportsWithContracts(
 	[hostObject("TimerIntervalIterator"), "setInterval"],
@@ -1441,6 +2001,11 @@ export const DISK_HANDLE_EXPORTS = exportsWithContracts(
 	[{ kind: "return", value: { mask: OBJECT, platformObject: "watcher" } }, "watch"],
 	[returned(OBJECT), "FileSystemError"],
 );
+withInputs(
+	DISK_HANDLE_EXPORTS,
+	[validates(input(0, STRING | OBJECT)), "file", "directory"],
+	[noInputFact("The iterator validates the path on its first next() request."), "watch"],
+);
 
 export const NODE_TEST_EXPORT_TARGETS: ReadonlyMap<string, string> = new Map([
 	["test", "registerTest"],
@@ -1489,9 +2054,14 @@ export const PLATFORM_SOURCE_EXPORTS = new Map([
 	["maligator:fs", DISK_HANDLE_EXPORTS],
 	[
 		"maligator:http",
-		exportsWithContracts(
-			[{ kind: "return", value: { mask: OBJECT, platformObject: "server" } }, "serve"],
-			[returned(OBJECT), "serveAsset", "proxy"],
+		withInputs(
+			exportsWithContracts(
+				[{ kind: "return", value: { mask: OBJECT, platformObject: "server" } }, "serve"],
+				[returned(OBJECT), "serveAsset", "proxy"],
+			),
+			[objectInput, "serve"],
+			[validates(input(1, OBJECT | UNDEFINED)), "serveAsset"],
+			[noInputFact("The URL constructor converts the target to a string."), "proxy"],
 		),
 	],
 	[
@@ -1630,27 +2200,30 @@ export const PLATFORM_OBJECT_RESULTS = {
 	},
 	workerPool: {
 		properties: exportsWithContracts([resolved(UNDEFINED), "ready"]),
-		methods: exportsWithContracts(
-			[
-				{
-					kind: "resolve",
-					value: { mask: TOP },
-					reason: "The worker task serializes and transports its own result.",
-				},
-				"run",
-			],
-			[returned(OBJECT), "map"],
-			[
-				{ kind: "return", value: { mask: OBJECT, platformObject: "workerPoolStats" } },
-				"stats",
-			],
-			[
-				{ kind: "return", value: { mask: OBJECT, platformObject: "workerPool" } },
-				"ref",
-				"unref",
-			],
-			[returned(BOOLEAN), "hasRef"],
-			[fulfilled(UNDEFINED), "close", "terminate"],
+		methods: withInputs(
+			exportsWithContracts(
+				[
+					{
+						kind: "resolve",
+						value: { mask: TOP },
+						reason: "The worker task serializes and transports its own result.",
+					},
+					"run",
+				],
+				[returned(OBJECT), "map"],
+				[
+					{ kind: "return", value: { mask: OBJECT, platformObject: "workerPoolStats" } },
+					"stats",
+				],
+				[
+					{ kind: "return", value: { mask: OBJECT, platformObject: "workerPool" } },
+					"ref",
+					"unref",
+				],
+				[returned(BOOLEAN), "hasRef"],
+				[fulfilled(UNDEFINED), "close", "terminate"],
+			),
+			[validates(input(0, STRING), input(1, OBJECT | UNDEFINED)), "run"],
 		),
 	},
 	workerPoolStats: {
@@ -2421,7 +2994,7 @@ function directoryCompletion(value: HostValueContract): HostResultContract {
 	};
 }
 
-export const GLOBAL_HOST_FUNCTION_RESULTS = exportsWithContracts(
+const globalHostFunctions = exportsWithContracts(
 	[returned(STRING), "atob", "btoa"],
 	[
 		returned(UNDEFINED),
@@ -2447,6 +3020,17 @@ export const GLOBAL_HOST_FUNCTION_RESULTS = exportsWithContracts(
 			TOP & ~SYMBOL,
 		),
 		"structuredClone",
+	],
+);
+export const GLOBAL_HOST_FUNCTION_RESULTS = withInputs(
+	globalHostFunctions,
+	[objectInput, "queueMicrotask", "setTimeout", "setInterval", "setImmediate"],
+	[noInputFact("Converts the value to a string."), "atob", "btoa"],
+	[
+		noInputFact("Ignores values that do not identify a live timer."),
+		"clearTimeout",
+		"clearInterval",
+		"clearImmediate",
 	],
 );
 
@@ -2559,7 +3143,10 @@ export const HOST_OBJECT_RESULTS: {
 		]),
 	},
 	statics: {
-		NetBlockList: exportsWithContracts([returned(BOOLEAN), "isBlockList"]),
+		NetBlockList: withInputs(exportsWithContracts([returned(BOOLEAN), "isBlockList"]), [
+			predicate(OBJECT),
+			"isBlockList",
+		]),
 		NodeReadable: exportsWithContracts(
 			[hostObject("NodeReadable"), "from", "fromWeb", "wrap"],
 			[hostObject("ReadableStream"), "toWeb"],
@@ -2586,24 +3173,40 @@ export const HOST_OBJECT_RESULTS: {
 			"any",
 			"timeout",
 		]),
-		Buffer: exportsWithContracts(
+		Buffer: withInputs(
+			exportsWithContracts(
+				[
+					hostObject("Buffer", "Uint8Array"),
+					"from",
+					"alloc",
+					"allocUnsafe",
+					"allocUnsafeSlow",
+					"copyBytesFrom",
+					"concat",
+					"of",
+				],
+				[returned(BOOLEAN), "isBuffer", "isEncoding"],
+				[integerResult(byteCount), "byteLength"],
+				[integerResult(compilerIntegerRange(-1, 1)), "compare"],
+			),
+			[bufferPredicate, "isBuffer"],
+			[predicate(STRING), "isEncoding"],
+			[validates(input(0, STRING | OBJECT)), "byteLength"],
 			[
-				hostObject("Buffer", "Uint8Array"),
-				"from",
-				"alloc",
-				"allocUnsafe",
-				"allocUnsafeSlow",
-				"copyBytesFrom",
-				"concat",
-				"of",
+				validates(input(0, OBJECT, "Uint8Array"), input(1, OBJECT, "Uint8Array")),
+				"compare",
 			],
-			[returned(BOOLEAN), "isBuffer", "isEncoding"],
-			[integerResult(byteCount), "byteLength"],
-			[integerResult(compilerIntegerRange(-1, 1)), "compare"],
 		),
-		URL: exportsWithContracts(
-			[returned(BOOLEAN), "canParse"],
-			[hostObject("URL", undefined, OBJECT | NULL), "parse"],
+		URL: withInputs(
+			exportsWithContracts(
+				[returned(BOOLEAN), "canParse"],
+				[hostObject("URL", undefined, OBJECT | NULL), "parse"],
+			),
+			[
+				noInputFact("Converts the URL and base through Web IDL string conversion."),
+				"canParse",
+				"parse",
+			],
 		),
 		Response: exportsWithContracts([hostObject("Response"), "error", "json", "redirect"]),
 	},
@@ -3102,34 +3705,162 @@ export const HOST_OBJECT_RESULTS: {
 			["throwIfAborted", returned(UNDEFINED)],
 		]),
 		Blob: blob,
-		Buffer: exportsWithContracts(
+		Buffer: withInputs(
+			exportsWithContracts(
+				[
+					hostObject("Buffer", "Uint8Array"),
+					"slice",
+					"subarray",
+					"fill",
+					"swap16",
+					"swap32",
+					"swap64",
+				],
+				[returned(BOOLEAN), "equals", "includes"],
+				[returned(OBJECT), "toJSON"],
+				[
+					returned(STRING),
+					"toString",
+					"toLocaleString",
+					"inspect",
+					"[[SymbolKey:nodejs.util.inspect.custom]]",
+					"utf8Slice",
+					"latin1Slice",
+					"asciiSlice",
+					"hexSlice",
+					"base64Slice",
+					"base64urlSlice",
+					"ucs2Slice",
+				],
+				[
+					returned(BIGINT),
+					"readBigUInt64LE",
+					"readBigUint64LE",
+					"readBigUInt64BE",
+					"readBigUint64BE",
+					"readBigInt64LE",
+					"readBigInt64BE",
+				],
+				[integerResult(compilerIntegerRange(-1, 1)), "compare"],
+				[integerResult(compilerIntegerRange(-1, 0xffff_ffff)), "indexOf", "lastIndexOf"],
+				[
+					uint32,
+					"write",
+					"copy",
+					"utf8Write",
+					"latin1Write",
+					"asciiWrite",
+					"hexWrite",
+					"base64Write",
+					"base64urlWrite",
+					"ucs2Write",
+				],
+				[integerResult(compilerIntegerRange(0, 0xff)), "readUInt8", "readUint8"],
+				[integerResult(compilerIntegerRange(-0x80, 0x7f)), "readInt8"],
+				[
+					integerResult(compilerIntegerRange(0, 0xffff)),
+					"readUInt16LE",
+					"readUint16LE",
+					"readUInt16BE",
+					"readUint16BE",
+				],
+				[
+					integerResult(compilerIntegerRange(-0x8000, 0x7fff)),
+					"readInt16LE",
+					"readInt16BE",
+				],
+				[uint32, "readUInt32LE", "readUint32LE", "readUInt32BE", "readUint32BE"],
+				[int32, "readInt32LE", "readInt32BE"],
+				[
+					bufferWidth("buffer-unsigned-width", compilerIntegerRange(0, 2 ** 48 - 1)),
+					"readUIntLE",
+					"readUintLE",
+					"readUIntBE",
+					"readUintBE",
+				],
+				[
+					bufferWidth(
+						"buffer-signed-width",
+						compilerIntegerRange(-(2 ** 47), 2 ** 47 - 1),
+					),
+					"readIntLE",
+					"readIntBE",
+				],
+				[
+					numericResult("Decodes floating-point bytes, including NaN and negative zero."),
+					"readFloatLE",
+					"readFloatBE",
+					"readDoubleLE",
+					"readDoubleBE",
+				],
+				[
+					integerResult(compilerIntegerRange(1, 0xffff_ffff)),
+					"writeUInt8",
+					"writeUint8",
+					"writeInt8",
+				],
+				[
+					integerResult(compilerIntegerRange(2, 0xffff_ffff)),
+					"writeUInt16LE",
+					"writeUint16LE",
+					"writeUInt16BE",
+					"writeUint16BE",
+					"writeInt16LE",
+					"writeInt16BE",
+				],
+				[
+					integerResult(compilerIntegerRange(4, 0xffff_ffff)),
+					"writeUInt32LE",
+					"writeUint32LE",
+					"writeUInt32BE",
+					"writeUint32BE",
+					"writeInt32LE",
+					"writeInt32BE",
+					"writeFloatLE",
+					"writeFloatBE",
+				],
+				[
+					integerResult(compilerIntegerRange(8, 0xffff_ffff)),
+					"writeDoubleLE",
+					"writeDoubleBE",
+					"writeBigUInt64LE",
+					"writeBigUint64LE",
+					"writeBigUInt64BE",
+					"writeBigUint64BE",
+					"writeBigInt64LE",
+					"writeBigInt64BE",
+				],
+				[
+					bufferWidth("buffer-write-width", compilerIntegerRange(1, 0xffff_ffff)),
+					"writeUIntLE",
+					"writeUintLE",
+					"writeUIntBE",
+					"writeUintBE",
+					"writeIntLE",
+					"writeIntBE",
+				],
+			),
 			[
-				hostObject("Buffer", "Uint8Array"),
-				"slice",
-				"subarray",
-				"fill",
-				"swap16",
-				"swap32",
-				"swap64",
-			],
-			[returned(BOOLEAN), "equals", "includes"],
-			[returned(OBJECT), "toJSON"],
-			[
-				returned(STRING),
-				"toString",
-				"toLocaleString",
-				"inspect",
-				"[[SymbolKey:nodejs.util.inspect.custom]]",
-				"utf8Slice",
-				"latin1Slice",
-				"asciiSlice",
-				"hexSlice",
-				"base64Slice",
-				"base64urlSlice",
-				"ucs2Slice",
-			],
-			[
-				returned(BIGINT),
+				bufferFixedRead,
+				"readUInt8",
+				"readUint8",
+				"readInt8",
+				"readUInt16LE",
+				"readUint16LE",
+				"readUInt16BE",
+				"readUint16BE",
+				"readInt16LE",
+				"readInt16BE",
+				"readUInt32LE",
+				"readUint32LE",
+				"readUInt32BE",
+				"readUint32BE",
+				"readInt32LE",
+				"readInt32BE",
+				"readFloatLE",
+				"readFloatBE",
+				"readDoubleLE",
+				"readDoubleBE",
 				"readBigUInt64LE",
 				"readBigUint64LE",
 				"readBigUInt64BE",
@@ -3137,72 +3868,26 @@ export const HOST_OBJECT_RESULTS: {
 				"readBigInt64LE",
 				"readBigInt64BE",
 			],
-			[integerResult(compilerIntegerRange(-1, 1)), "compare"],
-			[integerResult(compilerIntegerRange(-1, 0xffff_ffff)), "indexOf", "lastIndexOf"],
 			[
-				uint32,
-				"write",
-				"copy",
-				"utf8Write",
-				"latin1Write",
-				"asciiWrite",
-				"hexWrite",
-				"base64Write",
-				"base64urlWrite",
-				"ucs2Write",
-			],
-			[integerResult(compilerIntegerRange(0, 0xff)), "readUInt8", "readUint8"],
-			[integerResult(compilerIntegerRange(-0x80, 0x7f)), "readInt8"],
-			[
-				integerResult(compilerIntegerRange(0, 0xffff)),
-				"readUInt16LE",
-				"readUint16LE",
-				"readUInt16BE",
-				"readUint16BE",
-			],
-			[
-				integerResult(compilerIntegerRange(-0x8000, 0x7fff)),
-				"readInt16LE",
-				"readInt16BE",
-			],
-			[uint32, "readUInt32LE", "readUint32LE", "readUInt32BE", "readUint32BE"],
-			[int32, "readInt32LE", "readInt32BE"],
-			[
-				bufferWidth("buffer-unsigned-width", compilerIntegerRange(0, 2 ** 48 - 1)),
+				bufferVariableRead,
 				"readUIntLE",
 				"readUintLE",
 				"readUIntBE",
 				"readUintBE",
-			],
-			[
-				bufferWidth("buffer-signed-width", compilerIntegerRange(-(2 ** 47), 2 ** 47 - 1)),
 				"readIntLE",
 				"readIntBE",
 			],
 			[
-				numericResult("Decodes floating-point bytes, including NaN and negative zero."),
-				"readFloatLE",
-				"readFloatBE",
-				"readDoubleLE",
-				"readDoubleBE",
-			],
-			[
-				integerResult(compilerIntegerRange(1, 0xffff_ffff)),
+				bufferFixedWrite,
 				"writeUInt8",
 				"writeUint8",
 				"writeInt8",
-			],
-			[
-				integerResult(compilerIntegerRange(2, 0xffff_ffff)),
 				"writeUInt16LE",
 				"writeUint16LE",
 				"writeUInt16BE",
 				"writeUint16BE",
 				"writeInt16LE",
 				"writeInt16BE",
-			],
-			[
-				integerResult(compilerIntegerRange(4, 0xffff_ffff)),
 				"writeUInt32LE",
 				"writeUint32LE",
 				"writeUInt32BE",
@@ -3211,9 +3896,6 @@ export const HOST_OBJECT_RESULTS: {
 				"writeInt32BE",
 				"writeFloatLE",
 				"writeFloatBE",
-			],
-			[
-				integerResult(compilerIntegerRange(8, 0xffff_ffff)),
 				"writeDoubleLE",
 				"writeDoubleBE",
 				"writeBigUInt64LE",
@@ -3224,13 +3906,24 @@ export const HOST_OBJECT_RESULTS: {
 				"writeBigInt64BE",
 			],
 			[
-				bufferWidth("buffer-write-width", compilerIntegerRange(1, 0xffff_ffff)),
+				bufferVariableWrite,
 				"writeUIntLE",
 				"writeUintLE",
 				"writeUIntBE",
 				"writeUintBE",
 				"writeIntLE",
 				"writeIntBE",
+			],
+			[
+				validates(bufferReceiver),
+				"toString",
+				"toLocaleString",
+				"toJSON",
+				"swap16",
+				"swap32",
+				"swap64",
+				"slice",
+				"subarray",
 			],
 		),
 		DatabaseSync: exportsWithContracts(
@@ -3277,18 +3970,28 @@ export const HOST_OBJECT_RESULTS: {
 		ReadableStreamReader: readableReaderMethods,
 		ReadableStreamIterator: exportsWithContracts([fulfilled(OBJECT), "next", "return"]),
 		StreamReadResult: exportsWithContracts(),
-		StatementSync: exportsWithContracts(
-			[returned(OBJECT, "Array"), "all"],
-			[returned(OBJECT | UNDEFINED), "get"],
-			[returned(OBJECT), "run"],
-			[returned(UNDEFINED), "setReturnArrays", "setReadBigInts"],
+		StatementSync: withInputs(
+			exportsWithContracts(
+				[returned(OBJECT, "Array"), "all"],
+				[returned(OBJECT | UNDEFINED), "get"],
+				[returned(OBJECT), "run"],
+				[returned(UNDEFINED), "setReturnArrays", "setReadBigInts"],
+			),
+			[validates(input(0, BOOLEAN)), "setReturnArrays", "setReadBigInts"],
 		),
 		StringDecoder: exportsWithContracts([returned(STRING), "write", "end"]),
-		TextDecoder: exportsWithContracts([returned(STRING), "decode"]),
+		TextDecoder: withInputs(exportsWithContracts([returned(STRING), "decode"]), [
+			validates(input(0, OBJECT | UNDEFINED), input(1, OBJECT | NULL | UNDEFINED)),
+			"decode",
+		]),
 		TextDecoderStream: exportsWithContracts(),
-		TextEncoder: exportsWithContracts(
-			[returned(OBJECT, "Uint8Array"), "encode"],
-			[returned(OBJECT), "encodeInto"],
+		TextEncoder: withInputs(
+			exportsWithContracts(
+				[returned(OBJECT, "Uint8Array"), "encode"],
+				[returned(OBJECT), "encodeInto"],
+			),
+			[validates(input(1, OBJECT)), "encodeInto"],
+			[noInputFact("Converts the input to a string."), "encode"],
 		),
 		TextEncoderStream: exportsWithContracts(),
 		TransformStream: exportsWithContracts(),

@@ -1143,7 +1143,12 @@ export function coreCanonicalValueRoots(
 		const parameterCount = kernel.blockParameterCount(block);
 		for (let index = 0; index < parameterCount; index++) {
 			const row = parameterStart + index;
-			if (kernel.blockParameterRole(row) === 1) continue;
+			// The initial call supplies an additional incoming value at entry.
+			if (
+				(block === fn.entry && index < fn.parameterCount) ||
+				kernel.blockParameterRole(row) === 1
+			)
+				continue;
 			const start = inputs.length;
 			for (let offset = 0; offset < predecessors.length; offset++) {
 				const edge = predecessors[offset]!;

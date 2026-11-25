@@ -19,6 +19,7 @@ import {
 import type { BuildModuleGraphOptions } from "../src/compiler/frontend/module-graph.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import {
 	ATOMIC_ELEMENT_RESULT_OPERATIONS,
 	builtinNormalResultKinds,
@@ -66,6 +67,204 @@ const namedImports = `
 	import { basename } from "node:path/posix";
 	import { uptime } from "node:os";
 `;
+
+function hostInputAccesses(source: string) {
+	const directory = mkdtempSync(join(tmpdir(), "mal-host-input-"));
+	try {
+		const entry = join(directory, "entry.mjs");
+		writeFileSync(entry, source);
+		const image = compileEntrypoint(entry, {
+			buildConfig: resolveBuildConfig({
+				engine: { primordials: "locked", eval: false, realms: false },
+			}),
+		});
+		return new Map(
+			image.native.functions.map((fn) => [
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				),
+				fn.body.instructions.flatMap((instruction, ip) =>
+					instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "LOAD_PROPERTY_STATIC"
+						? [fn.instructions[ip]?.kind ?? "generic"]
+						: [],
+				),
+			]),
+		);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+}
+
+it("uses the original native predicate brand through a negated alias", () => {
+	const accesses = hostInputAccesses(`
+		import { types } from "node:util";
+		import { Buffer } from "node:buffer";
+		globalThis.inspect = function inspect(value) {
+			const alias = value;
+			const accepted = types.isUint8Array(value);
+			if (!accepted) return;
+			return alias[0];
+		};
+		globalThis.inspectBuffer = function inspectBuffer(value) {
+			if (Buffer.isBuffer(value)) return value[0];
+		};
+	`);
+	expect(accesses.get("inspect")).toContain("exact-typed-array-element");
+	expect(accesses.get("inspectBuffer")).toContain("exact-typed-array-element");
+});
+
+it("keeps generic element access after a conflicting join or an overridden predicate", () => {
+	const joined = hostInputAccesses(`
+		import { types } from "node:util";
+		globalThis.inspect = function inspect(value, alternate) {
+			if (!types.isUint8Array(value) && !alternate) return;
+			return value[0];
+		};
+	`);
+	const overridden = hostInputAccesses(`
+		import { types } from "node:util";
+		types.isUint8Array = () => true;
+		globalThis.inspect = function inspect(value) {
+			if (types.isUint8Array(value)) return value[0];
+		};
+	`);
+	expect(joined.get("inspect")).not.toContain("exact-typed-array-element");
+	expect(overridden.get("inspect")).not.toContain("exact-typed-array-element");
+});
+
+it("uses strict path validation only after successful completion", () => {
+	const accesses = hostInputAccesses(`
+		import { isAbsolute } from "node:path/posix";
+		globalThis.inspect = function inspect(value) {
+			const length = value.length;
+			try {
+				isAbsolute(value);
+				return length + value.length;
+			} catch {
+				return value.length;
+			}
+		};
+	`);
+	expect(accesses.get("inspect")).toEqual([
+		"generic",
+		"primitive-string-length",
+		"generic",
+	]);
+});
+
+it("retains a generic length access for an uncertain or coercing call", () => {
+	const accesses = hostInputAccesses(`
+		import { isIP } from "node:net";
+		globalThis.inspect = function inspect(value) {
+			isIP(value);
+			return value.length;
+		};
+		globalThis.inspectIndirect = function inspectIndirect(predicate, value) {
+			if (predicate(value)) return value.length;
+		};
+	`);
+	expect(accesses.get("inspect")).toContain("generic");
+	expect(accesses.get("inspectIndirect")).toContain("generic");
+});
+
+it("carries input proofs through exact synchronous wrappers", () => {
+	const accesses = hostInputAccesses(`
+		import { isAbsolute } from "node:path/win32";
+		import { types } from "node:util";
+		function validate(value, steps) {
+			for (let i = 0; i < steps; i++) globalThis.visited = i;
+			return isAbsolute(value);
+		}
+		function reject(value, steps) {
+			for (let i = 0; i < steps; i++) globalThis.visited = i;
+			return !types.isUint8Array(value);
+		}
+		globalThis.inspect = function inspect(value, steps) {
+			validate(value, steps);
+			return value.length;
+		};
+		globalThis.inspectBytes = function inspectBytes(value, steps) {
+			if (reject(value, steps)) return;
+			return value[0];
+		};
+	`);
+	expect(accesses.get("inspect")).toContain("primitive-string-length");
+	expect(accesses.get("inspectBytes")).toContain("exact-typed-array-element");
+});
+
+it("uses asynchronous validation after fulfillment while preserving the await", () => {
+	const imports = 'import { readlink } from "node:fs/promises";';
+	const observe = 'typeof path === "number"';
+	const before = inspectHostCall(
+		"readlink(path)",
+		"",
+		"",
+		imports,
+		undefined,
+		"inspect",
+		observe,
+	);
+	const after = inspectHostCall(
+		"await readlink(path)",
+		"",
+		"",
+		imports,
+		undefined,
+		"inspect",
+		observe,
+	);
+	expect(before).toContain("typeofCompare");
+	expect(after).toContain("await");
+	expect(after).not.toContain("typeofCompare");
+	const continued = inspectHostCall(
+		"await readlink(path).then((name) => name)",
+		"",
+		"",
+		imports,
+		undefined,
+		"inspect",
+		observe,
+	);
+	const recovered = inspectHostCall(
+		"await readlink(path).catch(() => 'missing')",
+		"",
+		"",
+		imports,
+		undefined,
+		"inspect",
+		observe,
+	);
+	expect(continued).not.toContain("typeofCompare");
+	expect(recovered).toContain("typeofCompare");
+});
+
+it("accounts for installed named predicates, validators and the path family", () => {
+	const prefixes = [
+		"mal_host_install_node_util_types:",
+		"mal_host_install_node_path:",
+		"mal_host_install_node_path_posix:",
+		"mal_host_install_node_path_win32:",
+	];
+	const catalog = getPrimordialCatalog();
+	const missing = catalog.roots.flatMap(([root, value]) => {
+		if (
+			typeof value !== "number" ||
+			(!prefixes.some((prefix) => root.startsWith(prefix)) &&
+				!/^mal_host_install_\w+:(is[A-Z]|validate[A-Z]|hasSubscribers)/.test(root)) ||
+			(catalog.nodes[value]![2] & 2) === 0
+		)
+			return [];
+		const separator = root.indexOf(":");
+		const name = root.slice(separator + 1);
+		if (name === "default") return [];
+		return HOST_RESULT_CONTRACTS.get(root.slice(0, separator))?.get(name)?.inputs ===
+			undefined
+			? [root]
+			: [];
+	});
+	expect(missing).toEqual([]);
+});
 
 function inspectHostCall(
 	expression: string,

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	assertResultPass,
 	buildNativeBinary,
@@ -14,6 +15,22 @@ import {
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-buffer-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
+
+it("keeps native input refinements scoped to successful guarded operations", () => {
+	const fixture = "tests/local/native-host-inputs.mjs";
+	const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+	const pair = buildBackendPairFromOneProgramImage({
+		fixture,
+		name: "native-host-inputs",
+		mainFile: HOST_MAIN,
+		outDir,
+		config: resolveBuildConfig({
+			engine: { primordials: "locked", eval: false, realms: false },
+		}),
+	});
+	expect(runToStdout(pair.compiled, { env: STRESS_ENV })).toBe(expected);
+	expect(runToStdout(pair.interpreted)).toBe(expected);
+});
 
 describe("global Buffer and node:buffer", () => {
 	let esmCompiled: string;

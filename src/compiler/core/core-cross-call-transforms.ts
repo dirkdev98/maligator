@@ -42,6 +42,13 @@ import {
 	coreBuiltinCallInput,
 } from "./core-builtin-result-projections.ts";
 import {
+	CORE_CALL_INPUT_FACTS_ATTRIBUTE,
+	coreCallInputFacts,
+	instantiateCoreCallInputFacts,
+} from "./core-call-input-facts.ts";
+import type { CoreCallInputFacts } from "./core-call-input-facts.ts";
+import { projectCoreCallInputFactsThroughWrappers } from "./core-call-input-wrappers.ts";
+import {
 	coreCalleeTargetsAreOpen,
 	coreCalleeTargetsCallability,
 	coreCalleeTargetsSingleFunction,
@@ -83,7 +90,10 @@ import {
 } from "./core-generator-fusion.ts";
 import { joinCoreHeapBrands } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState } from "./core-heap-brands.ts";
-import { coreHostImmediateRangeCandidate } from "./core-host-results.ts";
+import {
+	coreHostCallInputCandidate,
+	coreHostImmediateRangeCandidate,
+} from "./core-host-results.ts";
 import {
 	coreInstanceMethodHint,
 	coreInstanceMethodHints,
@@ -4997,6 +5007,10 @@ function discoverProgramNormalResultFacts(
 	readonly calls: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreNormalResultFact>>;
 	readonly fields: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreRecordAccessFact>>;
 	readonly awaits: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreNormalResultFact>>;
+	readonly callInputs: ReadonlyMap<
+		CoreFunctionId,
+		ReadonlyMap<CoreInstructionId, CoreCallInputFacts>
+	>;
 } {
 	const results = new Map<CoreFunctionId, Array<CoreNormalResultFact>>();
 	const hostRanges = new Map<
@@ -5004,6 +5018,11 @@ function discoverProgramNormalResultFacts(
 		Map<CoreInstructionId, CoreNormalResultFact>
 	>();
 	const awaits = new Map<CoreFunctionId, Array<CoreNormalResultFact>>();
+	const callInputs = new Map<
+		CoreFunctionId,
+		Map<CoreInstructionId, CoreCallInputFacts>
+	>();
+	const inputWrappers = new Set<CoreFunctionId>();
 	const localReturns = new Map<CoreFunctionId, number | undefined>();
 	const inputKindQueries = new Map<
 		CoreFunctionId,
@@ -5150,10 +5169,41 @@ function discoverProgramNormalResultFacts(
 		!context.facts.world.realms;
 	const awaitOpcode = program.registry.get("awaitFulfilled")?.id;
 	const knownCallOpcode = program.registry.get("callKnown")?.id;
+	const callOpcode = program.registry.get("call")?.id;
 	for (const functionId of flow.reachability.liveFunctions) {
 		const fn = program.function(functionId);
 		for (const instruction of fn.instructionIds()) {
 			const opcode = fn.kernel.instructionOpcode(instruction);
+			if (
+				(opcode === callOpcode || opcode === knownCallOpcode) &&
+				flow.targets.graph.exactCallers(functionId).length !== 0 &&
+				coreCallInputFacts(fn, instruction) !== undefined
+			)
+				inputWrappers.add(functionId);
+			if (
+				opcode === callOpcode &&
+				hostMembersMayBeStable &&
+				fn.instructionAttributes(instruction)[CORE_CALL_INPUT_FACTS_ATTRIBUTE] ===
+					undefined &&
+				coreHostCallInputCandidate(program, fn, instruction) &&
+				readValueKinds().hostMembersStable
+			) {
+				const host = readValueKinds().hostCallContract(fn, instruction);
+				const facts = instantiateCoreCallInputFacts(
+					fn,
+					instruction,
+					host?.inputs,
+					host?.kind === "fulfill",
+				);
+				if (facts !== undefined) {
+					const group =
+						callInputs.get(functionId) ??
+						new Map<CoreInstructionId, CoreCallInputFacts>();
+					group.set(instruction, facts);
+					callInputs.set(functionId, group);
+					inputWrappers.add(functionId);
+				}
+			}
 			if (opcode === awaitOpcode) {
 				const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
 				const mask = readValueKinds().values(functionId).latticeMask(value);
@@ -5900,7 +5950,14 @@ function discoverProgramNormalResultFacts(
 			facts.push(fact ?? { instruction, result: undefined, ownDataKey: undefined });
 		}
 	}
-	return { calls: results, fields: fieldResults, awaits };
+	projectCoreCallInputFactsThroughWrappers(
+		program,
+		analyses,
+		flow,
+		inputWrappers,
+		callInputs,
+	);
+	return { calls: results, fields: fieldResults, awaits, callInputs };
 }
 
 function discoverProgramCallResultIdentities(
@@ -6438,6 +6495,7 @@ export function runCoreCrossCallTransforms(
 		calls: callKindsByCaller,
 		fields: recordKindsByCaller,
 		awaits: awaitRangesByCaller,
+		callInputs: callInputsByCaller,
 	} = discoverProgramNormalResultFacts(program, analyses, flow, readValueKinds);
 	const awaitKindsByCaller = new Map<
 		CoreFunctionId,
@@ -6495,6 +6553,7 @@ export function runCoreCrossCallTransforms(
 	);
 	if (
 		callKindsByCaller.size > 0 ||
+		callInputsByCaller.size > 0 ||
 		callIdentitiesByCaller.size > 0 ||
 		awaitKindsByCaller.size > 0 ||
 		recordKindsByCaller.size > 0
@@ -6502,12 +6561,15 @@ export function runCoreCrossCallTransforms(
 		const finishCallers: Array<() => CoreCrossCallFunctionOptimizationResult> = [];
 		for (const functionId of new Set([
 			...callKindsByCaller.keys(),
+			...callInputsByCaller.keys(),
 			...callIdentitiesByCaller.keys(),
 			...awaitKindsByCaller.keys(),
 			...recordKindsByCaller.keys(),
 		])) {
 			const fn = program.function(functionId);
 			const editor = CoreEditor.open(program, functionId);
+			for (const [instruction, facts] of callInputsByCaller.get(functionId) ?? [])
+				editor.setCallInputFacts(instruction, facts);
 			for (const { instruction, facts } of awaitKindsByCaller.get(functionId) ?? [])
 				editor.setNormalResultFacts(instruction, facts);
 			for (const fact of callKindsByCaller.get(functionId) ?? []) {

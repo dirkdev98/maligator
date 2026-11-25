@@ -8,6 +8,8 @@ import {
 	compilerIntegerRangesEqual,
 } from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
+import { CORE_CALL_INPUT_FACTS_ATTRIBUTE } from "./core-call-input-facts.ts";
+import type { CoreCallInputFacts } from "./core-call-input-facts.ts";
 import { coreExactHeapBrand } from "./core-heap-brands.ts";
 import type { CoreExactHeapBrand } from "./core-heap-brands.ts";
 import {
@@ -712,6 +714,35 @@ export class CoreEditor {
 		this.#instructions.add(instruction);
 		this.#touchBlock(fn.instructionBlock(instruction));
 		this.#touchInstructionResults(instruction);
+		this.#domains.add("normalResults");
+		this.#domains.add("specializationInputs");
+		this.#edits++;
+	}
+
+	setCallInputFacts(instruction: CoreInstructionId, facts: CoreCallInputFacts): void {
+		this.#assertActive();
+		const fn = this.function;
+		if (fn.instructionOpcodeName(instruction) !== "call")
+			throw new Error("Host input facts require a native call");
+		const current = fn.instructionAttributes(instruction);
+		const encode = (input: CoreCallInputFacts["onReturn"]) =>
+			input?.map((fact) => ({ ...fact }));
+		const encoded = {
+			onTrue: encode(facts.onTrue),
+			onFalse: encode(facts.onFalse),
+			onReturn: encode(facts.onReturn),
+			onFulfill: encode(facts.onFulfill),
+		};
+		if (
+			coreAttributeValuesEqual(current[CORE_CALL_INPUT_FACTS_ATTRIBUTE] ?? null, encoded)
+		)
+			return;
+		fn._setInstructionAttributes(this.#mutation, instruction, {
+			...current,
+			[CORE_CALL_INPUT_FACTS_ATTRIBUTE]: encoded,
+		});
+		this.#instructions.add(instruction);
+		this.#touchBlock(fn.instructionBlock(instruction));
 		this.#domains.add("normalResults");
 		this.#domains.add("specializationInputs");
 		this.#edits++;

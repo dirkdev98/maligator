@@ -18,6 +18,7 @@ import {
 	GLOBAL_HOST_NAMESPACE_RESULTS,
 	HOST_OBJECT_RESULTS,
 	HOST_RESULT_CONTRACTS,
+	hostHasInputContractMember,
 	NODE_TEST_EXPORT_TARGETS,
 } from "../shared/host-result-contracts.ts";
 import type {
@@ -34,6 +35,7 @@ import {
 	primordialNode,
 	resolvePrimordialProperty,
 } from "../shared/primordial-catalog.ts";
+import { instantiateCoreCallInputFacts } from "./core-call-input-facts.ts";
 import { coreDeferredHostSlots } from "./core-compilation.ts";
 import type {
 	ConstructedCoreCompilation,
@@ -376,6 +378,20 @@ export function coreHostDirectCallContract(
 		};
 	}
 	return fromSlot ?? assetMember(program, fn, callee, slots, "methods", budget);
+}
+
+export function coreHostCallInputCandidate(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): boolean {
+	const callee = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+	const producer = definition(fn, callee);
+	if (producer === undefined) return false;
+	const name =
+		coreHostPropertyName(program, fn, producer) ??
+		coreHostGlobalName(program, fn, callee);
+	return name !== undefined && hostHasInputContractMember(name);
 }
 
 export function corePlatformSourceResult(
@@ -1103,6 +1119,34 @@ export function specializeCoreHostResults(compilation: ConstructedCoreCompilatio
 				fn.instructionOpcodeName(instruction) === "loadGlobal"
 			)
 				continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode === "call") {
+				const contract = coreHostDirectCallContract(program, fn, instruction, slots, 4);
+				const inputs = instantiateCoreCallInputFacts(
+					fn,
+					instruction,
+					contract?.inputs,
+					locked && !context.facts.world.realms && contract?.kind === "fulfill",
+				);
+				if (inputs !== undefined)
+					(editor ??= CoreEditor.open(program, functionId)).setCallInputFacts(
+						instruction,
+						inputs,
+					);
+				const result = coreHostCompletion(
+					program,
+					fn,
+					instruction,
+					contract,
+					locked,
+				)?.immediate;
+				if (result !== undefined)
+					(editor ??= CoreEditor.open(program, functionId)).setNormalResultFacts(
+						instruction,
+						result,
+					);
+				continue;
+			}
 			const facts = coreHostResult(program, fn, instruction, slots, locked)?.immediate;
 			if (facts === undefined) continue;
 			(editor ??= CoreEditor.open(program, functionId)).setNormalResultFacts(

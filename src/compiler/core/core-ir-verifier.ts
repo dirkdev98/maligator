@@ -21,6 +21,7 @@ import { knownOperationIndex } from "../shared/known-operations.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { primordialNodeAvailable } from "../shared/primordial-catalog.ts";
 import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
+import { CORE_CALL_INPUT_FACTS_ATTRIBUTE } from "./core-call-input-facts.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { analyzeCoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
@@ -423,6 +424,37 @@ function verifyInstructionRows(
 				fail(`instruction @${instruction} ${descriptor.opcode} has invalid output arity`);
 			}
 			const attributes = fn.instructionAttributes(instruction);
+			const callInputs = attributes[CORE_CALL_INPUT_FACTS_ATTRIBUTE];
+			if (callInputs !== undefined) {
+				const limit = operandCount - Number(attributes.argumentMode !== undefined);
+				if (
+					descriptor.opcode !== "call" ||
+					callInputs === null ||
+					typeof callInputs !== "object" ||
+					Array.isArray(callInputs)
+				)
+					fail("Invalid call input facts");
+				for (const group of Object.values(callInputs)) {
+					if (group === undefined) continue;
+					if (!Array.isArray(group)) fail("Invalid call input fact group");
+					for (const candidate of group as ReadonlyArray<unknown>) {
+						if (candidate === null || typeof candidate !== "object")
+							fail("Invalid call input fact");
+						const fact = candidate as Record<string, unknown>;
+						if (
+							typeof fact.index !== "number" ||
+							!Number.isSafeInteger(fact.index) ||
+							fact.index < 1 ||
+							fact.index >= limit ||
+							!compilerValueKindMaskIsValid(fact.mask) ||
+							(fact.brand !== undefined &&
+								(fact.mask !== COMPILER_VALUE_KIND_OBJECT ||
+									coreExactHeapBrand(fact.brand) !== fact.brand))
+						)
+							fail("Invalid call input fact");
+					}
+				}
+			}
 			if (
 				descriptor.opcode === "callForeign" &&
 				(typeof attributes.foreignSlot !== "number" ||

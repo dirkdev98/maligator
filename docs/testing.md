@@ -182,6 +182,15 @@ underlying C value. For argument-selected widths, use the widest successful
 width when the caller supplies an unknown value. Record why a numeric outcome
 can fall outside this domain when it has no range.
 
+Use `onTrue` and `onFalse` for implications of a predicate's Boolean result.
+Use `onReturn` for validation before normal return and `onFulfill` when the
+runtime can return a Promise that rejects invalid inputs. Check the original
+operand in the implementation. A coercion may accept values of many different
+kinds even when its converted value has a single kind. Use an unavailable
+reason when an otherwise applicable API supplies no input implication.
+A brand fact describes the object's native kind. Property identity, storage
+ownership and bounds require separate proofs.
+
 Connect the contract to an installer-backed binding or a proved member lookup.
 Use the captured installer identity for nested exports and aliases. For an object
 created after startup, verify the allocator and its method registration. Source

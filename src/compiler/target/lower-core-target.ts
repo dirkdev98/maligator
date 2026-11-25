@@ -1,9 +1,11 @@
 import type { FfiDirectEntry } from "../../build-config-values.ts";
 import { coreCompilerSiteId } from "../core/compiler-site-facts.ts";
+import { CORE_CALL_INPUT_FACTS_ATTRIBUTE } from "../core/core-call-input-facts.ts";
 import { coreFunctionRunnability } from "../core/core-capture-liveness.ts";
 import type { CoreCompilation } from "../core/core-compilation.ts";
 import { coreConstructorSlotReserve } from "../core/core-constructor-layout.ts";
 import { coreForeignCalls, coreForeignSlots } from "../core/core-foreign-calls.ts";
+import { coreNumericTypedArrayKind } from "../core/core-heap-brands.ts";
 import {
 	CORE_AWAIT_RESULT_KIND_ATTRIBUTE,
 	CORE_CONTAINED_DENSE_ARRAY_ELEMENT_ATTRIBUTE,
@@ -232,6 +234,7 @@ const FUNCTION_INDEX_ATTRIBUTES: ReadonlySet<string> = new Set([
 
 const CORE_INTERNAL_ATTRIBUTES: ReadonlySet<string> = new Set([
 	"sourceCall",
+	CORE_CALL_INPUT_FACTS_ATTRIBUTE,
 	CORE_AWAIT_RESULT_KIND_ATTRIBUTE,
 	CORE_GENERATOR_FUSION_TWIN_ATTRIBUTE,
 	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
@@ -2653,6 +2656,14 @@ function lowerFunctionToTarget(
 				lowered = { ...lowered, virtualPackedRest: true };
 			}
 			const kinds = instructionFacts[instruction];
+			const typedArrayKind = coreNumericTypedArrayKind(kinds?.inputHeapBrand);
+			if (
+				typedArrayKind !== undefined &&
+				(lowered.type === "loadProperty" || lowered.type === "storeProperty")
+			)
+				lowered = { ...lowered, exactTypedArrayKind: typedArrayKind };
+			if (kinds?.exactStringLength && lowered.type === "loadPropertyStatic")
+				lowered = { ...lowered, primitiveStringLength: true };
 			const loweredRegisters =
 				"registers" in lowered ? lowered.registers : EMPTY_FACT_REGISTERS;
 			const inputCount = kernel.instructionOperandCount(instruction);
