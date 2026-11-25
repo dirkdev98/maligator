@@ -190,6 +190,7 @@ const CALLBACK_RECEIVERS = [
 	"WritableStreamDefaultController",
 	"TransformStreamDefaultController",
 	"PerformanceObserverEntryList",
+	"NodeTestContext",
 ] as const;
 const CALLBACK_RECEIVER_MEMBERS = new Set(
 	CALLBACK_RECEIVERS.flatMap((kind) => [
@@ -220,6 +221,9 @@ export function sameCallbackReceivers(
 const SCANNED_HOST_INSTALLERS = new Set([
 	EMBED_INSTALLER,
 	"mal_host_install_node_fs",
+	"mal_host_install_node_fs_read_file",
+	"mal_host_install_node_fs_read_stream",
+	"mal_host_install_node_fs_named",
 	"mal_host_install_node_fs_promises",
 	"mal_host_install_node_path",
 	"mal_host_install_node_path_posix",
@@ -227,8 +231,10 @@ const SCANNED_HOST_INSTALLERS = new Set([
 	"mal_host_install_node_os",
 	"mal_host_install_node_buffer",
 	"mal_host_install_node_crypto",
+	"mal_host_install_node_crypto_digests",
 	"mal_host_install_node_url",
 	"mal_host_install_node_util",
+	"mal_host_install_node_util_types",
 	"mal_host_install_node_sys",
 	"mal_host_install_node_sqlite",
 	"mal_host_install_node_stream_web",
@@ -240,6 +246,7 @@ const SCANNED_HOST_INSTALLERS = new Set([
 	"mal_host_install_node_net",
 	"mal_host_install_node_http",
 	"mal_host_install_node_http_without_websocket",
+	"mal_host_install_node_http_server",
 	"mal_host_install_node_https",
 	"mal_host_install_node_tls",
 	"mal_host_install_node_dgram",
@@ -258,6 +265,14 @@ const SCANNED_HOST_INSTALLERS = new Set([
 	"mal_host_install_node_module",
 	"mal_host_install_node_punycode",
 	"mal_host_install_node_v8",
+	"mal_host_install_node_constants",
+	"mal_host_install_node_domain",
+	"mal_host_install_node_cluster",
+	"mal_host_install_node_http2",
+	"mal_host_install_node_inspector",
+	"mal_host_install_node_querystring",
+	"mal_host_install_maligator_application",
+	"mal_host_install_maligator_process",
 	"mal_host_install_process",
 	"mal_host_install_node_string_decoder",
 	"mal_host_install_node_timers",
@@ -482,7 +497,11 @@ export function coreHostCallbackReceivers(
 	slots: CoreHostSlots | undefined,
 ): CoreHostCallbackReceivers {
 	const receivers = new Map<CoreFunctionId, ReadonlyMap<CoreValueId, HostObjectKind>>();
+	const nodeTest = context.data.sourceBuiltinProviders?.some(
+		({ id }) => id === "node:test",
+	);
 	if (
+		!nodeTest &&
 		!context.data.sourceFiles.some(({ contents }) =>
 			/\b(?:ReadableStream|WritableStream|TransformStream|stream\/web|PerformanceObserver|perf_hooks)\b/.test(
 				contents,
@@ -492,10 +511,15 @@ export function coreHostCallbackReceivers(
 		return receivers;
 	const created = new Map<CoreFunctionId, number>();
 	const called = new Set<CoreFunctionId>();
+	const calledOutsideNodeTest = new Set<CoreFunctionId>();
 	for (const id of targets.graph.functions) {
 		const fn = program.function(id);
 		for (const site of targets.outgoing(id)) {
-			for (const target of site.targets.functions) called.add(target);
+			for (const target of site.targets.functions) {
+				called.add(target);
+				if (nodeTest && fn.metadata.canonicalPlatformSource !== "node:test")
+					calledOutsideNodeTest.add(target);
+			}
 		}
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
@@ -505,6 +529,32 @@ export function coreHostCallbackReceivers(
 				if (typeof index === "number") {
 					const target = coreFunctionId(index);
 					created.set(target, (created.get(target) ?? 0) + 1);
+				}
+			}
+			if (
+				nodeTest &&
+				opcode === "call" &&
+				fn.instructionAttributes(instruction).argumentMode === undefined
+			) {
+				const contract = corePlatformSourceResult(
+					program,
+					fn,
+					instruction,
+					targets,
+					context,
+				);
+				if (contract?.kind === "resolve" && contract.testContextArguments !== undefined) {
+					const start = fn.kernel.instructionOperandStart(instruction) + 2;
+					const count = fn.kernel.instructionOperandCount(instruction) - 2;
+					for (const index of contract.testContextArguments) {
+						if (index >= count) break;
+						const callback = privateCallback(fn, fn.kernel.operandAt(start + index));
+						if (callback !== undefined && callback.parameterCount !== 0)
+							receivers.set(
+								callback.id,
+								new Map([[callback.kernel.functionParameter(0), "NodeTestContext"]]),
+							);
+					}
 				}
 			}
 			if (opcode !== "construct" || fn.kernel.instructionOperandCount(instruction) < 2)
@@ -592,7 +642,12 @@ export function coreHostCallbackReceivers(
 		}
 	}
 	for (const target of receivers.keys()) {
-		if (created.get(target) !== 1 || called.has(target)) receivers.delete(target);
+		const brand = receivers.get(target)?.values().next().value;
+		if (
+			created.get(target) !== 1 ||
+			(brand === "NodeTestContext" ? calledOutsideNodeTest : called).has(target)
+		)
+			receivers.delete(target);
 	}
 	return receivers;
 
@@ -641,7 +696,8 @@ export function coreHostMemberIdentitiesAreStable(
 					.canonicalPlatformSource !== id ||
 				!PLATFORM_SOURCE_EXPORTS.has(id),
 		) ||
-		!data.sourceFiles.some(({ contents }) => HOST_OBJECT_SOURCE_NAMES.test(contents))
+		(!data.hostInstallCandidates.some(({ exports }) => exports.length !== 0) &&
+			!data.sourceFiles.some(({ contents }) => HOST_OBJECT_SOURCE_NAMES.test(contents)))
 	)
 		return false;
 	const slots = coreHostResultSlots(context);

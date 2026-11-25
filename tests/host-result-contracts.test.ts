@@ -145,6 +145,21 @@ it("uses the entry list supplied to a private performance observer callback", ()
 	expect(operations).not.toContain("typeofCompare");
 });
 
+it("uses the context supplied to an ordinary node:test body", () => {
+	const operations = inspectHostCall(
+		`test('fixture', function checked(context) {
+			globalThis.output = typeof context.plan(0) === 'undefined';
+		})`,
+		"object",
+		"",
+		'import { test } from "node:test";',
+		undefined,
+		"checked",
+	);
+	expect(operations).toContain("call");
+	expect(operations).not.toContain("typeofCompare");
+});
+
 it.each([
 	"expect(1).not.toBe(2)",
 	"await expect(Promise.resolve(1)).resolves.toBe(1)",
@@ -233,6 +248,32 @@ it("retains member observations when TLS can dispatch a native connection listen
 	);
 	expect(operations).toContain("typeofCompare");
 });
+
+it.each([
+	[
+		"readFileSync(path).readUInt8(0)",
+		"number",
+		'import { readFileSync } from "node:fs";',
+	],
+	[
+		"createReadStream(path).path",
+		"string",
+		'import { createReadStream } from "node:fs";',
+	],
+	[
+		"createWriteStream(path).bytesWritten",
+		"number",
+		'import { createWriteStream } from "node:fs";',
+	],
+	["os.uptime()", "number", 'import os from "os";'],
+	["querystring.escape(path)", "string", 'import querystring from "node:querystring";'],
+	["types.isPromise(path)", "boolean", 'import types from "node:util/types";'],
+])(
+	"uses the contract through the installer selected for %s",
+	(expression, type, imports) => {
+		expect(inspectHostCall(expression, type, "", imports)).not.toContain("typeofCompare");
+	},
+);
 
 it.each([
 	["process.hrtime.bigint()", "bigint", ""],

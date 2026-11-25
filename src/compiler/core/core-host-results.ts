@@ -33,7 +33,7 @@ import type {
 } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
 import type { CoreNormalResultFacts } from "./core-editor.ts";
-import { coreInstructionId } from "./core-ir.ts";
+import { coreFunctionId, coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreProgramFlowTargetIndex } from "./core-program-flow.ts";
 import { coreSuccessfulAwaitInput } from "./core-promise-facts.ts";
@@ -47,6 +47,10 @@ interface CoreHostSlot {
 export type CoreHostSlots = ReadonlyMap<number, CoreHostSlot>;
 const hostSlots = new WeakMap<CoreCompilationContext["data"], CoreHostSlots>();
 const noHostSlots: CoreHostSlots = new Map();
+const nodeTestSlots = new WeakMap<
+	CoreCompilationContext["data"],
+	ReadonlyMap<number, string>
+>();
 const PROMISIFY_CUSTOM =
 	'%MAL_INTRINSIC_NODE_BUILTIN_MODULES%["node:child_process"].exec.[[SymbolKey:nodejs.util.promisify.custom]]';
 
@@ -431,9 +435,16 @@ export function corePlatformSourceResult(
 	return member(load, "methods");
 
 	function sourceFunction(value: CoreValueId) {
+		const load = definition(fn, value);
+		if (load !== undefined && fn.instructionOpcodeName(load) === "loadGlobal") {
+			const index = fn.instructionAttributes(load).index;
+			if (typeof index === "number" && targets.sourceClosed) {
+				const name = nodeTestSourceBindings(program, context).get(index);
+				if (name !== undefined) return { platform: "node:test", name };
+			}
+		}
 		let possible = targets.targets?.(fn.id, value);
 		if (possible?.opaque) {
-			const load = definition(fn, value);
 			if (load !== undefined && fn.instructionOpcodeName(load) === "loadGlobal") {
 				const index = fn.instructionAttributes(load).index;
 				if (
@@ -505,6 +516,30 @@ export function corePlatformSourceResult(
 			? undefined
 			: PLATFORM_OBJECT_RESULTS[brand][kind].get(key);
 	}
+}
+
+function nodeTestSourceBindings(program: CoreProgram, context: CoreCompilationContext) {
+	const data = context.data;
+	const prior = nodeTestSlots.get(data);
+	if (prior !== undefined) return prior;
+	const slots = new Map<number, string>();
+	const provider = data.sourceBuiltinProviders?.find(({ id }) => id === "node:test");
+	if (
+		provider !== undefined &&
+		program.hasFunction(coreFunctionId(provider.functionIndex)) &&
+		program.function(coreFunctionId(provider.functionIndex)).metadata
+			.canonicalPlatformSource === provider.id
+	) {
+		for (const { module, kind, name, slot } of provider.state) {
+			if (module !== provider.id) continue;
+			if (kind === "default" || (kind === "binding" && ["0:test", "0:it"].includes(name)))
+				slots.set(slot, "registerTest");
+			if (kind === "binding" && ["0:describe", "0:suite"].includes(name))
+				slots.set(slot, "registerSuite");
+		}
+	}
+	nodeTestSlots.set(data, slots);
+	return slots;
 }
 
 function definition(

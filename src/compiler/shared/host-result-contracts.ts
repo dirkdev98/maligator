@@ -71,6 +71,7 @@ export type HostResultContract =
 			readonly kind: "resolve";
 			readonly value: HostValueContract;
 			readonly reason?: string;
+			readonly testContextArguments?: ReadonlyArray<number>;
 	  }
 	| { readonly kind: "callback"; readonly reason: string }
 	| { readonly kind: "never"; readonly reason: string }
@@ -164,15 +165,10 @@ const fs = exportsWithContracts(
 	[hostObject("TemporaryDirectorySync"), "mkdtempDisposableSync"],
 	[hostObject("FsWatcher", undefined, OBJECT | UNDEFINED), "watch"],
 	[hostObject("FsStatWatcher", undefined, OBJECT | UNDEFINED), "watchFile"],
-	[
-		returned(OBJECT),
-		"FileReadStream",
-		"FileWriteStream",
-		"ReadStream",
-		"WriteStream",
-		"createReadStream",
-		"createWriteStream",
-	],
+	[nativeConstructor("NodeFsReadStream"), "ReadStream", "FileReadStream"],
+	[nativeConstructor("NodeFsWriteStream"), "WriteStream", "FileWriteStream"],
+	[hostObject("NodeFsReadStream"), "createReadStream"],
+	[hostObject("NodeFsWriteStream"), "createWriteStream"],
 	[
 		returned(UNDEFINED),
 		"accessSync",
@@ -1192,6 +1188,7 @@ export const HOST_RESULT_CONTRACTS: ReadonlyMap<
 > = new Map([
 	["mal_host_install_node_http", http],
 	["mal_host_install_node_http_without_websocket", http],
+	["mal_host_install_node_http_server", http],
 	["mal_host_install_node_https", https],
 	["mal_host_install_node_tls", tls],
 	["mal_host_install_node_net", net],
@@ -1206,6 +1203,7 @@ export const HOST_RESULT_CONTRACTS: ReadonlyMap<
 	["mal_host_install_node_readline", readline],
 	["mal_host_install_node_readline_promises", readlinePromises],
 	["mal_host_install_node_crypto", crypto],
+	["mal_host_install_node_crypto_digests", crypto],
 	["mal_host_install_node_stream", stream],
 	["mal_host_install_node_stream_promises", streamPromises],
 	["mal_host_install_node_stream_consumers", streamConsumers],
@@ -1245,6 +1243,7 @@ export const HOST_RESULT_CONTRACTS: ReadonlyMap<
 	["mal_host_install_node_fs", fs],
 	["mal_host_install_node_fs_named", fs],
 	["mal_host_install_node_fs_read_file", fs],
+	["mal_host_install_node_fs_read_stream", fs],
 	["mal_host_install_node_fs_promises", fsPromises],
 	["mal_host_install_maligator_internal_fs", maligatorFs],
 	["mal_host_install_maligator_internal_fs_descriptor", fsDescriptor],
@@ -1341,7 +1340,11 @@ export const PLATFORM_SOURCE_EXPORTS = new Map([
 	[
 		"node:test",
 		exportsWithContracts(
-			[resolved(UNDEFINED), "registerTest", "registerSuite"],
+			[
+				{ kind: "resolve", value: { mask: UNDEFINED }, testContextArguments: [0, 1, 2] },
+				"registerTest",
+			],
+			[resolved(UNDEFINED), "registerSuite"],
 			[returned(UNDEFINED), "before", "after", "beforeEach", "afterEach"],
 		),
 	],
@@ -1628,6 +1631,8 @@ export type HostObjectKind =
 	| "PerformanceObserver"
 	| "PerformanceObserverEntryList"
 	| "EventLoopUtilization"
+	| "NodeTestContext"
+	| "NodeTestAssertions"
 	| "PerformanceNodeTiming"
 	| "Histogram"
 	| "NetBlockList"
@@ -1673,6 +1678,8 @@ export type HostObjectKind =
 	| "WorkerUrl"
 	| "NodeStream"
 	| "NodeReadable"
+	| "NodeFsReadStream"
+	| "NodeFsWriteStream"
 	| "NodeWritable"
 	| "NodeDuplex"
 	| "NodeTransform"
@@ -2487,6 +2494,11 @@ export const HOST_OBJECT_RESULTS: {
 			"getEntriesByType",
 		]),
 		EventLoopUtilization: exportsWithContracts(),
+		NodeTestContext: exportsWithContracts(
+			[returned(UNDEFINED), "plan", "after", "diagnostic"],
+			[neverReturns("The test runtime rejects nested tests."), "test"],
+		),
+		NodeTestAssertions: assertionInstanceMethods,
 		PerformanceNodeTiming: exportsWithContracts([returned(OBJECT), "toJSON"]),
 		Histogram: exportsWithContracts(
 			[returned(UNDEFINED), "reset", "record", "recordDelta"],
@@ -2609,6 +2621,14 @@ export const HOST_OBJECT_RESULTS: {
 		NodeStream: nodeStreamMethods("NodeStream", false, false),
 		NodeReadable: nodeStreamMethods("NodeReadable", true, false),
 		NodeWritable: nodeStreamMethods("NodeWritable", false, true),
+		NodeFsReadStream: new Map([
+			...nodeStreamMethods("NodeFsReadStream", true, false),
+			...exportsWithContracts([returned(UNDEFINED), "_read"], [callback, "_destroy"]),
+		]),
+		NodeFsWriteStream: new Map([
+			...nodeStreamMethods("NodeFsWriteStream", false, true),
+			...exportsWithContracts([callback, "_write", "_final", "_destroy"]),
+		]),
 		NodeDuplex: nodeStreamMethods("NodeDuplex", true, true),
 		NodeTransform: nodeStreamMethods("NodeTransform", true, true),
 		NodePassThrough: new Map([
@@ -3118,6 +3138,11 @@ export const HOST_OBJECT_RESULTS: {
 			"active",
 			"utilization",
 		]),
+		NodeTestContext: exportsWithContracts(
+			[returned(STRING), "name"],
+			[hostObject("AbortSignal"), "signal"],
+			[hostObject("NodeTestAssertions"), "assert"],
+		),
 		Histogram: exportsWithContracts([
 			returned(NUMBER),
 			"min",
@@ -3205,6 +3230,24 @@ export const HOST_OBJECT_RESULTS: {
 		),
 		NodeReadable: readableStateFields,
 		NodeWritable: writableStateFields,
+		NodeFsReadStream: new Map([
+			...readableStateFields,
+			...exportsWithContracts(
+				[returned(STRING), "path"],
+				[returned(NUMBER | NULL), "fd"],
+			),
+		]),
+		NodeFsWriteStream: new Map([
+			...writableStateFields,
+			...exportsWithContracts(
+				[returned(STRING | UNDEFINED), "path"],
+				[returned(NUMBER | NULL), "fd"],
+				[returned(BOOLEAN), "autoClose"],
+				[returned(NUMBER), "bytesWritten", "mode"],
+				[returned(NUMBER | UNDEFINED), "start"],
+				[returned(STRING | NUMBER), "flags"],
+			),
+		]),
 		NodeDuplex: duplexStateFields,
 		NodeTransform: duplexStateFields,
 		NodePassThrough: duplexStateFields,
