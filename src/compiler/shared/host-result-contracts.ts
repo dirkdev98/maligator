@@ -196,6 +196,10 @@ const objects = denseArray({ mask: OBJECT });
 const arbitraryElements = denseArray({ mask: TOP });
 const eventNames = denseArray({ mask: STRING | SYMBOL });
 const performanceEntries = denseArray({ mask: OBJECT, hostObject: "PerformanceEntry" });
+const observedPerformanceEntries = denseArray({
+	mask: OBJECT,
+	hostObject: "ObservedPerformanceEntry",
+});
 export const nodeDirectoryEntryContent: HostContentValue = {
 	mask: OBJECT,
 	hostObject: "Dirent",
@@ -2757,6 +2761,7 @@ export type HostObjectKind =
 	| "TtyWriteStream"
 	| "Performance"
 	| "PerformanceEntry"
+	| "ObservedPerformanceEntry"
 	| "PerformanceObserver"
 	| "PerformanceObserverEntryList"
 	| "EventLoopUtilization"
@@ -3330,6 +3335,21 @@ const performanceMethods = exportsWithContracts(
 	[performanceEntries, "getEntries", "getEntriesByName", "getEntriesByType"],
 	[returned(UNDEFINED), "clearMarks", "clearMeasures"],
 );
+const performanceEntryJSON = {
+	entryType: stringField,
+	startTime: numberField,
+	duration: numberField,
+	detail: { mask: TOP },
+};
+const performanceEntryProperties = exportsWithContracts(
+	[returned(STRING), "entryType"],
+	[
+		numericResult("Timing fields allow fractional milliseconds."),
+		"startTime",
+		"duration",
+	],
+	[dynamic("Contains the detail value captured when this entry was recorded."), "detail"],
+);
 
 const assertionInstanceMethods = exportsWithContracts(
 	[fulfilled(UNDEFINED), "rejects", "doesNotReject"],
@@ -3728,13 +3748,20 @@ export const HOST_OBJECT_RESULTS: {
 			),
 		]),
 		Performance: performanceMethods,
-		PerformanceEntry: exportsWithContracts([returned(OBJECT), "toJSON"]),
+		PerformanceEntry: exportsWithContracts([
+			ownRecord({ ...performanceEntryJSON, name: stringField }),
+			"toJSON",
+		]),
+		ObservedPerformanceEntry: exportsWithContracts([
+			ownRecord({ ...performanceEntryJSON, name: { mask: TOP } }),
+			"toJSON",
+		]),
 		PerformanceObserver: exportsWithContracts(
 			[returned(UNDEFINED), "observe", "disconnect"],
-			[performanceEntries, "takeRecords"],
+			[observedPerformanceEntries, "takeRecords"],
 		),
 		PerformanceObserverEntryList: exportsWithContracts([
-			performanceEntries,
+			observedPerformanceEntries,
 			"getEntries",
 			"getEntriesByName",
 			"getEntriesByType",
@@ -4555,15 +4582,19 @@ export const HOST_OBJECT_RESULTS: {
 			[numericResult("The origin is recorded in fractional milliseconds."), "timeOrigin"],
 			[hostObject("PerformanceNodeTiming", undefined, OBJECT | UNDEFINED), "nodeTiming"],
 		),
-		PerformanceEntry: exportsWithContracts(
-			[returned(STRING), "name", "entryType"],
+		PerformanceEntry: new Map([
+			...performanceEntryProperties,
+			["name", returned(STRING)],
+		]),
+		ObservedPerformanceEntry: new Map([
+			...performanceEntryProperties,
 			[
-				numericResult("Timing fields allow fractional milliseconds."),
-				"startTime",
-				"duration",
+				"name",
+				dynamic(
+					"Function entries copy the callable's name property without converting it.",
+				),
 			],
-			[dynamic("Contains a structured clone of the caller's detail value."), "detail"],
-		),
+		]),
 		PerformanceNodeTiming: exportsWithContracts([
 			numericResult("Timing fields allow fractional milliseconds."),
 			"duration",

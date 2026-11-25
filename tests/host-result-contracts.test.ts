@@ -200,6 +200,26 @@ it("eliminates a Number test inside a private FormData result loop", () => {
 	expect(operations).not.toContain("typeofCompare");
 });
 
+it("keeps an observed function entry name generic while specializing its timing", () => {
+	const operations = inspectHostCall(
+		"count",
+		"",
+		`
+		const values = new PerformanceObserver(() => {}).takeRecords();
+		let count = 0;
+		for (let i = 0; i < values.length; i++) {
+			if (typeof values[i].duration === "number") count++;
+			if (typeof values[i].name === "string") count++;
+		}
+	`,
+		'import { PerformanceObserver } from "node:perf_hooks";',
+		undefined,
+		"inspect",
+		"result",
+	);
+	expect(operations.filter((operation) => operation === "typeofCompare")).toHaveLength(1);
+});
+
 it("uses own path.parse fields after a source wrapper returns", () => {
 	const accesses = hostInputAccesses(`
 		import { parse } from "node:path/posix";
