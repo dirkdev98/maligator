@@ -13,6 +13,15 @@ function throwsTypeError(fn) {
 	return false;
 }
 
+check(
+	"RegExp replacement deletes matches for an empty template",
+	"a1b23c".replace(/\d+/g, "") === "abc",
+);
+check(
+	"RegExp replacement can insert text into an empty subject",
+	"".replace(/(?:)/g, "x") === "x",
+);
+
 function fixedLiteralSearch(value) {
 	return value.search(/needle=/);
 }

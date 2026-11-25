@@ -2565,7 +2565,7 @@ static bool regexp_get_substitution(
 static bool regexp_template_has_dollar(MalString *replacement, bool named_only) {
     if (!named_only && replacement->storage < MAL_STRING_STORAGE_DEPENDENT && replacement->latin1) {
         MalStringSegment segment = mal_string_flat_segment(replacement);
-        return memchr(segment.latin1_units, '$', segment.length) != nullptr;
+        return segment.length != 0 && memchr(segment.latin1_units, '$', segment.length) != nullptr;
     }
     usize length = mal_string_length(replacement);
     for (usize i = 0; i < length; i++) {
@@ -2613,14 +2613,14 @@ static bool regexp_replace_literal_small(
         if (position < next_source_position) continue;
         usize kept = position - next_source_position;
         if (kept + piece.length > sizeof(units) - length) return false;
-        memcpy(units + length, subject.latin1_units + next_source_position, kept);
-        memcpy(units + length + kept, piece.latin1_units, piece.length);
+        if (kept != 0) memcpy(units + length, subject.latin1_units + next_source_position, kept);
+        if (piece.length != 0) memcpy(units + length + kept, piece.latin1_units, piece.length);
         length += kept + piece.length;
         next_source_position = (usize) offsets->pairs[at + 1];
     }
     usize tail = subject.length - next_source_position;
     if (tail > sizeof(units) - length) return false;
-    memcpy(units + length, subject.latin1_units + next_source_position, tail);
+    if (tail != 0) memcpy(units + length, subject.latin1_units + next_source_position, tail);
     *out = mal_value_from_string(mal_string_new_latin1_copy(&vm->heap, units, length + tail));
     return true;
 }
