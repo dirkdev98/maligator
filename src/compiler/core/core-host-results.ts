@@ -9,6 +9,7 @@ import {
 import { EMBED_INSTALLER } from "../shared/embedded-asset.ts";
 import {
 	BUFFER_STRING_ENCODINGS,
+	builtinInputContract,
 	CAPTURED_HOST_RESULTS,
 	PLATFORM_SOURCE_EXPORTS,
 	PLATFORM_SOURCE_STATICS,
@@ -370,6 +371,7 @@ export function coreHostDirectCallContract(
 			return undefined;
 		return {
 			kind: "return",
+			inputs: builtinInputContract(fromSlot.value.hostConstructor, true),
 			value: {
 				mask: COMPILER_VALUE_KIND_OBJECT,
 				hostObject: fromSlot.value.hostConstructor,
@@ -391,7 +393,12 @@ export function coreHostCallInputCandidate(
 	const name =
 		coreHostPropertyName(program, fn, producer) ??
 		coreHostGlobalName(program, fn, callee);
-	return name !== undefined && hostHasInputContractMember(name);
+	return (
+		name !== undefined &&
+		(fn.instructionOpcodeName(instruction) === "construct"
+			? builtinInputContract(name, true) !== undefined
+			: hostHasInputContractMember(name))
+	);
 }
 
 export function corePlatformSourceResult(
@@ -1120,7 +1127,7 @@ export function specializeCoreHostResults(compilation: ConstructedCoreCompilatio
 			)
 				continue;
 			const opcode = fn.instructionOpcodeName(instruction);
-			if (opcode === "call") {
+			if (opcode === "call" || opcode === "construct") {
 				const contract = coreHostDirectCallContract(program, fn, instruction, slots, 4);
 				const inputs = instantiateCoreCallInputFacts(
 					fn,

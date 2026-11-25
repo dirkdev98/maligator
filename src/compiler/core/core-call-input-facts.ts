@@ -32,7 +32,7 @@ export function instantiateCoreCallInputFacts(
 	if (contract === undefined || contract.unavailable !== undefined) return undefined;
 	const opcode = fn.instructionOpcodeName(instruction);
 	const attributes = fn.instructionAttributes(instruction);
-	if (opcode !== "call" && (opcode !== "callKnown" || attributes.construct))
+	if (opcode !== "call" && opcode !== "construct" && opcode !== "callKnown")
 		return undefined;
 	const argumentStart = opcode === "call" ? 2 : 1;
 	const spread = attributes.argumentMode !== undefined;
@@ -72,10 +72,12 @@ export function coreCallInputFacts(
 	instruction: CoreInstructionId,
 ): CoreCallInputFacts | undefined {
 	const opcode = fn.instructionOpcodeName(instruction);
-	if (opcode !== "call" && opcode !== "callKnown") return undefined;
+	if (opcode !== "call" && opcode !== "construct" && opcode !== "callKnown")
+		return undefined;
 	const attributes = fn.instructionAttributes(instruction);
+	const construct = opcode === "construct" || attributes.construct === true;
 	let operation = attributes.operation;
-	if (opcode === "call") {
+	if (opcode !== "callKnown") {
 		const recorded = attributes[CORE_CALL_INPUT_FACTS_ATTRIBUTE] as
 			| CoreCallInputFacts
 			| undefined;
@@ -83,14 +85,22 @@ export function coreCallInputFacts(
 		const callee = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
 		if (fn.kernel.valueDefinitionKind(callee) !== 1) return undefined;
 		const load = coreInstructionId(fn.kernel.valueDefinitionOwner(callee));
-		if (fn.instructionOpcodeName(load) !== "loadPrimordial") return undefined;
-		const nodeIndex = fn.instructionAttributes(load).nodeIndex;
-		operation =
-			typeof nodeIndex === "number"
-				? getPrimordialCatalog().nodes[nodeIndex]?.[0]
-				: undefined;
+		const loadAttributes = fn.instructionAttributes(load);
+		if (fn.instructionOpcodeName(load) === "loadPrimordial") {
+			const nodeIndex = loadAttributes.nodeIndex;
+			operation =
+				typeof nodeIndex === "number"
+					? getPrimordialCatalog().nodes[nodeIndex]?.[0]
+					: undefined;
+		} else if (fn.instructionOpcodeName(load) === "loadIntrinsic")
+			operation = loadAttributes.intrinsic;
+		else return undefined;
 	}
 	return typeof operation === "string"
-		? instantiateCoreCallInputFacts(fn, instruction, builtinInputContract(operation))
+		? instantiateCoreCallInputFacts(
+				fn,
+				instruction,
+				builtinInputContract(operation, construct),
+			)
 		: undefined;
 }

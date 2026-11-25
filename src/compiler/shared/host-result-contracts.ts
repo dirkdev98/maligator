@@ -9,6 +9,7 @@ import {
 	COMPILER_VALUE_KIND_SYMBOL as SYMBOL,
 	COMPILER_VALUE_KIND_TOP as TOP,
 	COMPILER_VALUE_KIND_UNDEFINED as UNDEFINED,
+	COMPILER_VALUE_KIND_UNREGISTERED_SYMBOL as UNREGISTERED_SYMBOL,
 } from "./compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
 import {
@@ -367,8 +368,43 @@ const builtinInputs = new Map<string, HostInputContract>([
 	].map((name) => [`Reflect.${name}`, objectInput] as const),
 ]);
 
-export function builtinInputContract(operation: string): HostInputContract | undefined {
-	return builtinInputs.get(operation);
+const constructionInputs = new Map<string, HostInputContract>([
+	...[
+		"DataView",
+		"Promise",
+		"FinalizationRegistry",
+		"ByteLengthQueuingStrategy",
+		"CountQueuingStrategy",
+		"ReadableStreamDefaultReader",
+		"ReadableStreamBYOBReader",
+		"WritableStreamDefaultWriter",
+	].map((name) => [name, objectInput] as const),
+	["WeakRef", validates(input(0, OBJECT | UNREGISTERED_SYMBOL))],
+	["Proxy", validates(input(0, OBJECT), input(1, OBJECT))],
+	[
+		"ReadableStream",
+		validates(input(0, OBJECT | UNDEFINED), input(1, OBJECT | NULL | UNDEFINED)),
+	],
+	["WritableStream", validates(input(1, OBJECT | NULL | UNDEFINED))],
+	["TransformStream", validates(input(0, OBJECT | NULL | UNDEFINED))],
+	["URL", noInputFact("Converts the URL and base arguments to strings.")],
+	[
+		"TextDecoder",
+		noInputFact("Converts the label to a string and ignores non-object options."),
+	],
+	[
+		"DatabaseSync",
+		noInputFact("Converts the path to a string and ignores non-object options."),
+	],
+]);
+
+export function builtinInputContract(
+	operation: string,
+	construct = false,
+): HostInputContract | undefined {
+	return construct
+		? constructionInputs.get(operation.replace(/^globalThis\./, ""))
+		: builtinInputs.get(operation);
 }
 
 const hostInputMemberNames = new Set<string>();

@@ -168,6 +168,30 @@ it("retains a generic length access for an uncertain or coercing call", () => {
 	expect(accesses.get("inspectIndirect")).toContain("generic");
 });
 
+it("uses native constructor validation after the constructor completes", () => {
+	const observe = 'typeof path === "number"';
+	const strict = inspectHostCall(
+		"new DataView(path)",
+		"",
+		"",
+		"",
+		undefined,
+		"inspect",
+		observe,
+	);
+	const coercing = inspectHostCall(
+		"new ArrayBuffer(path)",
+		"",
+		"",
+		"",
+		undefined,
+		"inspect",
+		observe,
+	);
+	expect(strict).not.toContain("typeofCompare");
+	expect(coercing).toContain("typeofCompare");
+});
+
 it("carries input proofs through exact synchronous wrappers", () => {
 	const accesses = hostInputAccesses(`
 		import { isAbsolute } from "node:path/win32";

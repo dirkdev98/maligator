@@ -428,7 +428,7 @@ function verifyInstructionRows(
 			if (callInputs !== undefined) {
 				const limit = operandCount - Number(attributes.argumentMode !== undefined);
 				if (
-					descriptor.opcode !== "call" ||
+					(descriptor.opcode !== "call" && descriptor.opcode !== "construct") ||
 					callInputs === null ||
 					typeof callInputs !== "object" ||
 					Array.isArray(callInputs)

@@ -5170,18 +5170,21 @@ function discoverProgramNormalResultFacts(
 	const awaitOpcode = program.registry.get("awaitFulfilled")?.id;
 	const knownCallOpcode = program.registry.get("callKnown")?.id;
 	const callOpcode = program.registry.get("call")?.id;
+	const constructOpcode = program.registry.get("construct")?.id;
 	for (const functionId of flow.reachability.liveFunctions) {
 		const fn = program.function(functionId);
 		for (const instruction of fn.instructionIds()) {
 			const opcode = fn.kernel.instructionOpcode(instruction);
 			if (
-				(opcode === callOpcode || opcode === knownCallOpcode) &&
+				(opcode === callOpcode ||
+					opcode === knownCallOpcode ||
+					opcode === constructOpcode) &&
 				flow.targets.graph.exactCallers(functionId).length !== 0 &&
 				coreCallInputFacts(fn, instruction) !== undefined
 			)
 				inputWrappers.add(functionId);
 			if (
-				opcode === callOpcode &&
+				(opcode === callOpcode || opcode === constructOpcode) &&
 				hostMembersMayBeStable &&
 				fn.instructionAttributes(instruction)[CORE_CALL_INPUT_FACTS_ATTRIBUTE] ===
 					undefined &&

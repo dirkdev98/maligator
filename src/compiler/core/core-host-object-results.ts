@@ -14,6 +14,7 @@ import {
 	HOST_INDEXED_RESULTS,
 	HOST_OBJECT_RESULTS,
 	HOST_RESULT_CONTRACTS,
+	builtinInputContract,
 } from "../shared/host-result-contracts.ts";
 import type {
 	HostResultContract,
@@ -401,6 +402,7 @@ export function coreHostObjectResult(
 				)
 			: {
 					kind: "return",
+					inputs: builtinInputContract(brand, true),
 					value: { mask: COMPILER_VALUE_KIND_OBJECT, hostObject: brand },
 				};
 	}

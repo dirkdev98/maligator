@@ -314,9 +314,11 @@ export function analyzeCoreConditionalValueKinds(
 		(roots ??= coreCanonicalValueRoots(fn, cfg)).get(value) ?? value;
 	const callOpcode = fn.registry.get("call")?.id;
 	const builtinOpcode = fn.registry.get("callKnown")?.id;
+	const constructOpcode = fn.registry.get("construct")?.id;
 	for (const instruction of fn.instructionIds()) {
 		const opcode = fn.kernel.instructionOpcode(instruction);
-		if (opcode !== callOpcode && opcode !== builtinOpcode) continue;
+		if (opcode !== callOpcode && opcode !== builtinOpcode && opcode !== constructOpcode)
+			continue;
 		const facts = callFacts(instruction)?.onReturn;
 		if (facts === undefined) continue;
 		const start = fn.kernel.instructionOperandStart(instruction);

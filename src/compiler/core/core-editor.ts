@@ -722,7 +722,7 @@ export class CoreEditor {
 	setCallInputFacts(instruction: CoreInstructionId, facts: CoreCallInputFacts): void {
 		this.#assertActive();
 		const fn = this.function;
-		if (fn.instructionOpcodeName(instruction) !== "call")
+		if (!["call", "construct"].includes(fn.instructionOpcodeName(instruction)))
 			throw new Error("Host input facts require a native call");
 		const current = fn.instructionAttributes(instruction);
 		const encode = (input: CoreCallInputFacts["onReturn"]) =>
