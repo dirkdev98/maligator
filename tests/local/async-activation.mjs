@@ -248,3 +248,16 @@ async function observeAliasedPromise() {
 }
 
 console.log("aliased promise", await observeAliasedPromise());
+
+async function settleAfterReplacingThen(operation) {
+	const promise = operation();
+	Object.defineProperty(promise, "constructor", { value: undefined });
+	Object.defineProperty(promise, "then", { value: (resolve) => resolve(4) });
+	return await promise;
+}
+
+async function observeReplacedThen() {
+	return typeof (await settleAfterReplacingThen(async () => "text")) === "number";
+}
+
+console.log("replaced then", await observeReplacedThen());

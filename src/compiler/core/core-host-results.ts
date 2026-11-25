@@ -19,6 +19,10 @@ import type {
 	HostValueContract,
 } from "../shared/host-result-contracts.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import {
+	primordialNode,
+	resolvePrimordialProperty,
+} from "../shared/primordial-catalog.ts";
 import { coreDeferredHostSlots } from "./core-compilation.ts";
 import type {
 	ConstructedCoreCompilation,
@@ -32,15 +36,16 @@ import type { CoreProgramFlowTargetIndex } from "./core-program-flow.ts";
 import { coreSuccessfulAwaitInput } from "./core-promise-facts.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
-const hostSlots = new WeakMap<
-	CoreCompilationContext["data"],
-	ReadonlyMap<number, HostResultContract>
->();
-const noHostSlots = new Map<number, HostResultContract>();
+interface CoreHostSlot {
+	readonly root: string;
+	readonly contract?: HostResultContract;
+}
 
-export function coreHostResultSlots(
-	context: CoreCompilationContext,
-): ReadonlyMap<number, HostResultContract> {
+export type CoreHostSlots = ReadonlyMap<number, CoreHostSlot>;
+const hostSlots = new WeakMap<CoreCompilationContext["data"], CoreHostSlots>();
+const noHostSlots: CoreHostSlots = new Map();
+
+export function coreHostResultSlots(context: CoreCompilationContext): CoreHostSlots {
 	const { data, facts } = context;
 	// Host installers may reuse mutated module objects on later images or
 	// when the runtime first loads a source builtin.
@@ -55,7 +60,7 @@ export function coreHostResultSlots(
 		return noHostSlots;
 	const prior = hostSlots.get(context.data);
 	if (prior !== undefined) return prior;
-	const slots = new Map<number, HostResultContract>();
+	const slots = new Map<number, CoreHostSlot>();
 	const deferred = coreDeferredHostSlots(data);
 	for (const candidate of context.data.hostInstallCandidates) {
 		const contracts = HOST_RESULT_CONTRACTS.get(candidate.installer);
@@ -77,7 +82,10 @@ export function coreHostResultSlots(
 							value: { mask: COMPILER_VALUE_KIND_OBJECT, assetHandle: assetKind },
 						} as const)
 					: contracts?.get(installed.name);
-			if (contract !== undefined) slots.set(installed.slot, contract);
+			slots.set(installed.slot, {
+				root: `${candidate.installer}:${installed.name}`,
+				contract,
+			});
 		}
 	}
 	hostSlots.set(context.data, slots);
@@ -87,11 +95,70 @@ export function coreHostResultSlots(
 function hostSlotContract(
 	fn: CoreFunctionStore,
 	producer: CoreInstructionId,
-	slots: ReadonlyMap<number, HostResultContract>,
+	slots: CoreHostSlots,
 ) {
 	if (fn.instructionOpcodeName(producer) !== "loadGlobal") return undefined;
 	const slot = fn.instructionAttributes(producer).index;
-	return typeof slot === "number" ? slots.get(slot) : undefined;
+	return typeof slot === "number" ? slots.get(slot)?.contract : undefined;
+}
+
+export function coreHostSlotValue(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	slots: CoreHostSlots,
+): HostValueContract | undefined {
+	const producer = definition(fn, value);
+	const contract =
+		producer === undefined
+			? undefined
+			: (hostSlotContract(fn, producer, slots) ??
+				catalogCallableContract(program, fn, producer, slots));
+	return contract?.kind === "return" ? contract.value : undefined;
+}
+
+function catalogCallableContract(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	producer: CoreInstructionId,
+	slots: CoreHostSlots,
+): HostResultContract | undefined {
+	const node = capturedValue(producer, 5);
+	if (node === undefined || (node[2] & 2) === 0) return undefined;
+	for (const alias of node[5]) {
+		const separator = alias.indexOf(":");
+		if (!alias.startsWith("mal_host_install_")) continue;
+		const contract = HOST_RESULT_CONTRACTS.get(alias.slice(0, separator))?.get(
+			alias.slice(separator + 1),
+		);
+		if (contract !== undefined) return contract;
+	}
+	return undefined;
+
+	function capturedValue(
+		id: CoreInstructionId,
+		depth: number,
+	): ReturnType<typeof primordialNode> {
+		if (depth === 0) return undefined;
+		if (fn.instructionOpcodeName(id) === "loadGlobal") {
+			const slot = fn.instructionAttributes(id).index;
+			const root = typeof slot === "number" ? slots.get(slot)?.root : undefined;
+			return root === undefined ? undefined : primordialNode(root);
+		}
+		const key = propertyString(program, fn, id);
+		if (key === undefined) return undefined;
+		const receiver = definition(
+			fn,
+			fn.kernel.operandAt(fn.kernel.instructionOperandStart(id)),
+		);
+		const parent =
+			receiver === undefined ? undefined : capturedValue(receiver, depth - 1);
+		if (parent === undefined) return undefined;
+		const property = resolvePrimordialProperty(parent[0], key);
+		return property?.getter?.[0] === "%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>"
+			? primordialNode("mal_host_install_node_fs:promises")
+			: property?.value;
+	}
 }
 
 function propertyString(
@@ -124,7 +191,7 @@ function assetMember(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	load: CoreInstructionId,
-	slots: ReadonlyMap<number, HostResultContract>,
+	slots: CoreHostSlots,
 	kind: "methods" | "properties",
 	budget: number,
 ): HostResultContract | undefined {
@@ -138,33 +205,40 @@ function assetMember(
 	if (receiver === undefined) return undefined;
 	const contract =
 		hostSlotContract(fn, receiver, slots) ??
-		callContract(program, fn, receiver, slots, budget - 1);
+		coreHostDirectCallContract(program, fn, receiver, slots, budget - 1);
 	const asset = contract?.kind === "return" ? contract.value.assetHandle : undefined;
 	return asset === undefined ? undefined : EMBEDDED_ASSET_RESULTS[asset][kind].get(key);
 }
 
-function callContract(
+export function coreHostDirectCallContract(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
-	slots: ReadonlyMap<number, HostResultContract>,
+	slots: CoreHostSlots,
 	budget: number,
+	membersStable = false,
 ): HostResultContract | undefined {
-	if (fn.instructionOpcodeName(instruction) !== "call") return undefined;
+	const opcode = fn.instructionOpcodeName(instruction);
+	if (opcode !== "call" && opcode !== "construct") return undefined;
 	const callee = definition(
 		fn,
 		fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
 	);
 	if (callee === undefined) return undefined;
-	const fromSlot = hostSlotContract(fn, callee, slots);
-	return fromSlot ?? assetMember(program, fn, callee, slots, "methods", budget);
+	const fromSlot =
+		hostSlotContract(fn, callee, slots) ??
+		(membersStable ? catalogCallableContract(program, fn, callee, slots) : undefined);
+	return opcode === "construct" &&
+		(fromSlot?.kind !== "return" || fromSlot.value.hostConstructor === undefined)
+		? undefined
+		: (fromSlot ?? assetMember(program, fn, callee, slots, "methods", budget));
 }
 
 function nodeFileHandleMember(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	load: CoreInstructionId,
-	slots: ReadonlyMap<number, HostResultContract>,
+	slots: CoreHostSlots,
 	kind: "methods" | "properties",
 ) {
 	if (fn.instructionOpcodeName(load) !== "loadPropertyStatic") return undefined;
@@ -188,7 +262,9 @@ function nodeFileHandleMember(
 		return undefined;
 	const call = definition(fn, awaited);
 	const producer =
-		call === undefined ? undefined : callContract(program, fn, call, slots, 0);
+		call === undefined
+			? undefined
+			: coreHostDirectCallContract(program, fn, call, slots, 0);
 	return producer?.kind === "fulfill" && producer.value.nodeFileHandle === true
 		? NODE_FILE_HANDLE_RESULTS[kind].get(program.stringConstantText(index))
 		: undefined;
@@ -381,7 +457,7 @@ export function coreHostResult(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
-	slots: ReadonlyMap<number, HostResultContract>,
+	slots: CoreHostSlots,
 	locked: boolean,
 	membersStable = false,
 ):
@@ -396,7 +472,7 @@ export function coreHostResult(
 	const contract =
 		(opcode === "loadPropertyStatic" || opcode === "loadProperty"
 			? assetMember(program, fn, instruction, slots, "properties", 4)
-			: callContract(program, fn, instruction, slots, 4)) ??
+			: coreHostDirectCallContract(program, fn, instruction, slots, 4, membersStable)) ??
 		(membersStable ? nodeFileHandleContract() : undefined);
 	if (
 		contract?.kind !== "return" &&

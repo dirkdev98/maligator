@@ -1,5 +1,6 @@
 import {
 	COMPILER_VALUE_KIND_BOOLEAN as BOOLEAN,
+	COMPILER_VALUE_KIND_BIGINT as BIGINT,
 	COMPILER_VALUE_KIND_NULL as NULL,
 	COMPILER_VALUE_KIND_NUMBER as NUMBER,
 	COMPILER_VALUE_KIND_OBJECT as OBJECT,
@@ -12,7 +13,8 @@ import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
 export interface HostValueContract {
 	readonly mask: CompilerValueKindMask;
 	readonly brand?: "Array" | "Uint8Array";
-	readonly webInstance?: WebFetchInstance;
+	readonly hostObject?: HostObjectKind;
+	readonly hostConstructor?: HostObjectKind;
 	readonly assetHandle?: "file" | "directory";
 	readonly nodeFileHandle?: true;
 	readonly diskHandle?: "file" | "directory" | "writer" | "watcher";
@@ -77,6 +79,16 @@ function exportsWithContracts(
 			names.map((name) => [name, contract] as const),
 		),
 	);
+}
+
+function nativeConstructor(
+	hostConstructor: HostObjectKind,
+	brand?: HostValueContract["brand"],
+): HostResultContract {
+	return {
+		kind: "return",
+		value: { mask: OBJECT, hostObject: hostConstructor, hostConstructor, brand },
+	};
 }
 
 const fs = exportsWithContracts(
@@ -405,6 +417,9 @@ const process = exportsWithContracts(
 );
 
 const url = exportsWithContracts(
+	[nativeConstructor("URL"), "URL"],
+	[nativeConstructor("URLSearchParams"), "URLSearchParams"],
+	[hostObject("URL"), "pathToFileURL"],
 	[
 		returned(STRING),
 		"domainToASCII",
@@ -413,15 +428,7 @@ const url = exportsWithContracts(
 		"format",
 		"resolve",
 	],
-	[
-		returned(OBJECT),
-		"URL",
-		"URLSearchParams",
-		"Url",
-		"parse",
-		"pathToFileURL",
-		"urlToHttpOptions",
-	],
+	[returned(OBJECT), "Url", "parse", "urlToHttpOptions"],
 	[
 		{ kind: "dynamic", reason: "An absent base returns the second argument unchanged." },
 		"resolveObject",
@@ -429,6 +436,8 @@ const url = exportsWithContracts(
 );
 
 const util = exportsWithContracts(
+	[nativeConstructor("TextEncoder"), "TextEncoder"],
+	[nativeConstructor("TextDecoder"), "TextDecoder"],
 	[
 		returned(STRING),
 		"format",
@@ -460,8 +469,6 @@ const util = exportsWithContracts(
 		returned(OBJECT),
 		"MIMEParams",
 		"MIMEType",
-		"TextDecoder",
-		"TextEncoder",
 		"callbackify",
 		"debounce",
 		"debug",
@@ -580,8 +587,10 @@ const querystring = exportsWithContracts(
 );
 
 const buffer = exportsWithContracts(
-	[returned(OBJECT, "Uint8Array"), "Buffer", "SlowBuffer", "transcode"],
-	[returned(OBJECT), "Blob", "File"],
+	[nativeConstructor("Buffer", "Uint8Array"), "Buffer"],
+	[hostObject("Buffer", "Uint8Array"), "SlowBuffer", "transcode"],
+	[nativeConstructor("Blob"), "Blob"],
+	[nativeConstructor("File"), "File"],
 	[returned(STRING), "atob", "btoa"],
 	[returned(BOOLEAN), "isAscii", "isUtf8"],
 	[returned(UNDEFINED), "resolveObjectURL"],
@@ -818,7 +827,7 @@ const tty = exportsWithContracts(
 	[returned(OBJECT), "ReadStream", "WriteStream"],
 );
 const sqlite = exportsWithContracts(
-	[returned(OBJECT), "DatabaseSync"],
+	[nativeConstructor("DatabaseSync"), "DatabaseSync"],
 	[neverReturns("Statements are created by DatabaseSync.prepare."), "StatementSync"],
 );
 
@@ -1241,21 +1250,32 @@ export const DISK_HANDLE_RESULTS = {
 	},
 } as const;
 
-export type WebFetchInstance =
+export type HostObjectKind =
+	| "AbortController"
+	| "AbortSignal"
 	| "Blob"
+	| "Buffer"
+	| "DatabaseSync"
+	| "DOMException"
 	| "File"
 	| "FormData"
 	| "Headers"
 	| "Request"
 	| "Response"
+	| "StatementSync"
+	| "TextDecoder"
+	| "TextEncoder"
+	| "URL"
+	| "URLSearchParams"
+	| "URLSearchParamsIterator"
 	| "FormDataIterator"
 	| "HeadersIterator";
 
 const body = exportsWithContracts(
 	[resolved(STRING), "text"],
 	[resolved(OBJECT), "arrayBuffer", "bytes"],
-	[{ kind: "resolve", value: { mask: OBJECT, webInstance: "Blob" } }, "blob"],
-	[{ kind: "resolve", value: { mask: OBJECT, webInstance: "FormData" } }, "formData"],
+	[{ kind: "resolve", value: { mask: OBJECT, hostObject: "Blob" } }, "blob"],
+	[{ kind: "resolve", value: { mask: OBJECT, hostObject: "FormData" } }, "formData"],
 	[
 		{
 			kind: "resolve",
@@ -1266,8 +1286,12 @@ const body = exportsWithContracts(
 	],
 );
 
-function webInstance(instance: WebFetchInstance): HostResultContract {
-	return { kind: "return", value: { mask: OBJECT, webInstance: instance } };
+function hostObject(
+	instance: HostObjectKind,
+	brand?: HostValueContract["brand"],
+	mask = OBJECT,
+): HostResultContract {
+	return { kind: "return", value: { mask, hostObject: instance, brand } };
 }
 
 const blob = exportsWithContracts(
@@ -1284,60 +1308,241 @@ const bodyProperties = exportsWithContracts(
 	[returned(BOOLEAN), "bodyUsed"],
 );
 
-export const WEB_FETCH_CONSTRUCTORS = [
+export const GLOBAL_HOST_CONSTRUCTORS = [
 	"Response",
 	"Request",
 	"Blob",
 	"File",
 	"FormData",
 	"Headers",
+	"AbortController",
+	"AbortSignal",
+	"Buffer",
+	"DOMException",
+	"TextDecoder",
+	"TextEncoder",
+	"URL",
+	"URLSearchParams",
 ] as const;
 
-// These identities are attached to the fetch installer. Object-valued
-// resolutions require stable prototypes through settlement.
-export const WEB_FETCH_RESULTS: {
+// Object-valued resolutions require stable prototypes through settlement.
+export const HOST_OBJECT_RESULTS: {
 	readonly fetch: HostResultContract;
 	readonly statics: Partial<
-		Record<WebFetchInstance, ReadonlyMap<string, HostResultContract>>
+		Record<HostObjectKind, ReadonlyMap<string, HostResultContract>>
 	>;
-	readonly methods: Record<WebFetchInstance, ReadonlyMap<string, HostResultContract>>;
+	readonly methods: Record<HostObjectKind, ReadonlyMap<string, HostResultContract>>;
 	readonly properties: Partial<
-		Record<WebFetchInstance, ReadonlyMap<string, HostResultContract>>
+		Record<HostObjectKind, ReadonlyMap<string, HostResultContract>>
 	>;
 } = {
-	fetch: { kind: "fulfill", value: { mask: OBJECT, webInstance: "Response" } },
+	fetch: { kind: "fulfill", value: { mask: OBJECT, hostObject: "Response" } },
 	statics: {
-		Response: exportsWithContracts([
-			webInstance("Response"),
-			"error",
-			"json",
-			"redirect",
+		AbortSignal: exportsWithContracts([
+			hostObject("AbortSignal"),
+			"abort",
+			"any",
+			"timeout",
 		]),
+		Buffer: exportsWithContracts(
+			[
+				hostObject("Buffer", "Uint8Array"),
+				"from",
+				"alloc",
+				"allocUnsafe",
+				"allocUnsafeSlow",
+				"copyBytesFrom",
+				"concat",
+				"of",
+			],
+			[returned(BOOLEAN), "isBuffer", "isEncoding"],
+			[returned(NUMBER), "byteLength", "compare"],
+		),
+		URL: exportsWithContracts(
+			[returned(BOOLEAN), "canParse"],
+			[hostObject("URL", undefined, OBJECT | NULL), "parse"],
+		),
+		Response: exportsWithContracts([hostObject("Response"), "error", "json", "redirect"]),
 	},
 	methods: {
+		AbortController: exportsWithContracts([returned(UNDEFINED), "abort"]),
+		AbortSignal: exportsWithContracts([returned(UNDEFINED), "throwIfAborted"]),
 		Blob: blob,
+		Buffer: exportsWithContracts(
+			[
+				hostObject("Buffer", "Uint8Array"),
+				"slice",
+				"subarray",
+				"fill",
+				"swap16",
+				"swap32",
+				"swap64",
+			],
+			[returned(BOOLEAN), "equals", "includes"],
+			[returned(OBJECT), "toJSON"],
+			[
+				returned(STRING),
+				"toString",
+				"toLocaleString",
+				"inspect",
+				"[[SymbolKey:nodejs.util.inspect.custom]]",
+				"utf8Slice",
+				"latin1Slice",
+				"asciiSlice",
+				"hexSlice",
+				"base64Slice",
+				"base64urlSlice",
+				"ucs2Slice",
+			],
+			[
+				returned(BIGINT),
+				"readBigUInt64LE",
+				"readBigUint64LE",
+				"readBigUInt64BE",
+				"readBigUint64BE",
+				"readBigInt64LE",
+				"readBigInt64BE",
+			],
+			[
+				returned(NUMBER),
+				"compare",
+				"write",
+				"copy",
+				"indexOf",
+				"lastIndexOf",
+				"utf8Write",
+				"latin1Write",
+				"asciiWrite",
+				"hexWrite",
+				"base64Write",
+				"base64urlWrite",
+				"ucs2Write",
+				"readUInt8",
+				"readUint8",
+				"writeUInt8",
+				"writeUint8",
+				"readInt8",
+				"writeInt8",
+				"readUInt16LE",
+				"readUint16LE",
+				"writeUInt16LE",
+				"writeUint16LE",
+				"readUInt16BE",
+				"readUint16BE",
+				"writeUInt16BE",
+				"writeUint16BE",
+				"readInt16LE",
+				"writeInt16LE",
+				"readInt16BE",
+				"writeInt16BE",
+				"readUInt32LE",
+				"readUint32LE",
+				"writeUInt32LE",
+				"writeUint32LE",
+				"readUInt32BE",
+				"readUint32BE",
+				"writeUInt32BE",
+				"writeUint32BE",
+				"readInt32LE",
+				"writeInt32LE",
+				"readInt32BE",
+				"writeInt32BE",
+				"readFloatLE",
+				"writeFloatLE",
+				"readFloatBE",
+				"writeFloatBE",
+				"readDoubleLE",
+				"writeDoubleLE",
+				"readDoubleBE",
+				"writeDoubleBE",
+				"writeBigUInt64LE",
+				"writeBigUint64LE",
+				"writeBigUInt64BE",
+				"writeBigUint64BE",
+				"writeBigInt64LE",
+				"writeBigInt64BE",
+				"readUIntLE",
+				"readUintLE",
+				"writeUIntLE",
+				"writeUintLE",
+				"readUIntBE",
+				"readUintBE",
+				"writeUIntBE",
+				"writeUintBE",
+				"readIntLE",
+				"writeIntLE",
+				"readIntBE",
+				"writeIntBE",
+			],
+		),
+		DatabaseSync: exportsWithContracts(
+			[returned(UNDEFINED), "close", "exec"],
+			[hostObject("StatementSync"), "prepare"],
+		),
+		DOMException: exportsWithContracts(),
 		File: blob,
 		FormData: exportsWithContracts(
 			[returned(UNDEFINED), "append", "delete", "set", "forEach"],
 			[returned(BOOLEAN), "has"],
 			[returned(STRING | OBJECT | NULL), "get"],
 			[returned(OBJECT, "Array"), "getAll"],
-			[webInstance("FormDataIterator"), "entries", "keys", "values", "[Symbol.iterator]"],
+			[hostObject("FormDataIterator"), "entries", "keys", "values", "[Symbol.iterator]"],
 		),
 		Headers: exportsWithContracts(
 			[returned(UNDEFINED), "append", "delete", "set", "forEach"],
 			[returned(BOOLEAN), "has"],
 			[returned(STRING | NULL), "get"],
 			[returned(OBJECT, "Array"), "getSetCookie"],
-			[webInstance("HeadersIterator"), "entries", "keys", "values", "[Symbol.iterator]"],
+			[hostObject("HeadersIterator"), "entries", "keys", "values", "[Symbol.iterator]"],
 		),
-		Request: new Map([...body, ["clone", webInstance("Request")]]),
+		Request: new Map([...body, ["clone", hostObject("Request")]]),
 		Response: body,
+		StatementSync: exportsWithContracts(
+			[returned(OBJECT, "Array"), "all"],
+			[returned(OBJECT | UNDEFINED), "get"],
+			[returned(OBJECT), "run"],
+			[returned(UNDEFINED), "setReturnArrays", "setReadBigInts"],
+		),
+		TextDecoder: exportsWithContracts([returned(STRING), "decode"]),
+		TextEncoder: exportsWithContracts(
+			[returned(OBJECT, "Uint8Array"), "encode"],
+			[returned(OBJECT), "encodeInto"],
+		),
+		URL: exportsWithContracts([returned(STRING), "toString", "toJSON"]),
+		URLSearchParams: exportsWithContracts(
+			[returned(STRING | NULL), "get"],
+			[returned(OBJECT, "Array"), "getAll"],
+			[returned(BOOLEAN), "has"],
+			[returned(UNDEFINED), "set", "append", "delete", "sort", "forEach"],
+			[returned(STRING), "toString"],
+			[
+				hostObject("URLSearchParamsIterator"),
+				"entries",
+				"keys",
+				"values",
+				"[Symbol.iterator]",
+			],
+		),
+		URLSearchParamsIterator: exportsWithContracts([returned(OBJECT), "next"]),
 		FormDataIterator: exportsWithContracts([returned(OBJECT), "next"]),
 		HeadersIterator: exportsWithContracts([returned(OBJECT), "next"]),
 	},
 	properties: {
+		AbortController: exportsWithContracts([hostObject("AbortSignal"), "signal"]),
+		AbortSignal: exportsWithContracts(
+			[returned(BOOLEAN), "aborted"],
+			[dynamic("The abort reason can be any supplied JavaScript value."), "reason"],
+		),
 		Blob: blobProperties,
+		Buffer: exportsWithContracts(
+			[returned(OBJECT), "parent"],
+			[returned(NUMBER), "offset"],
+		),
+		DatabaseSync: exportsWithContracts([returned(BOOLEAN), "isOpen", "isTransaction"]),
+		DOMException: exportsWithContracts(
+			[returned(STRING), "name", "message"],
+			[returned(NUMBER), "code"],
+		),
 		File: new Map([
 			...blobProperties,
 			...exportsWithContracts(
@@ -1375,5 +1580,28 @@ export const WEB_FETCH_RESULTS: {
 				[returned(OBJECT | UNDEFINED), "headers"],
 			),
 		]),
+		TextDecoder: exportsWithContracts(
+			[returned(STRING), "encoding"],
+			[returned(BOOLEAN), "fatal", "ignoreBOM"],
+		),
+		TextEncoder: exportsWithContracts([returned(STRING), "encoding"]),
+		URL: exportsWithContracts(
+			[
+				returned(STRING),
+				"href",
+				"protocol",
+				"username",
+				"password",
+				"host",
+				"hostname",
+				"port",
+				"pathname",
+				"search",
+				"hash",
+				"origin",
+			],
+			[hostObject("URLSearchParams"), "searchParams"],
+		),
+		URLSearchParams: exportsWithContracts([returned(NUMBER), "size"]),
 	},
 } as const;

@@ -99,6 +99,26 @@ describe("successful await result facts", () => {
 			result.native.body.instructions.some((op) => op.opcode === "TYPEOF_COMPARE"),
 		).toBe(true);
 	});
+
+	it("keeps the type observation when an async wrapper alters its callback's Promise", () => {
+		const result = inspectStaticValueFunctions(
+			`async function settle(operation) {
+				const promise = operation();
+				Object.defineProperty(promise, 'constructor', { value: undefined });
+				Object.defineProperty(promise, 'then', { value(resolve) { resolve(4); } });
+				return await promise;
+			}
+			async function compute() {
+				return typeof (await settle(async () => 'text')) === 'number';
+			}
+			globalThis.compute = compute;`,
+			["compute"],
+			{ closed: true },
+		).get("compute")!;
+		expect(
+			result.native.body.instructions.some((op) => op.opcode === "TYPEOF_COMPARE"),
+		).toBe(true);
+	});
 });
 
 function inspectCall(body: string, caller: string, kind = "function") {

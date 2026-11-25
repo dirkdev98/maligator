@@ -4725,14 +4725,28 @@ function createProgramValueIdentityQuery(
 					.exceptional();
 			let kind: ReturnType<typeof coreValueKindDemand> | undefined;
 			const inputKind = (value: CoreValueId) =>
-				(kind ??= coreValueKindDemand(program, fn, cfg, flow.targets, true))(value);
+				(kind ??= coreValueKindDemand(
+					program,
+					fn,
+					cfg,
+					flow.targets,
+					true,
+					analyses.compilationContext,
+				))(value);
 			for (const [instruction, projection] of analyses.get(
 				CORE_BUILTIN_RESULT_PROJECTIONS_ANALYSIS,
 				{ scope: "function", function: functionId },
 			)) {
 				if (projection.input === undefined) continue;
 				if (projection.identityKinds !== undefined) {
-					kind ??= coreValueKindDemand(program, fn, cfg, flow.targets, true);
+					kind ??= coreValueKindDemand(
+						program,
+						fn,
+						cfg,
+						flow.targets,
+						true,
+						analyses.compilationContext,
+					);
 					if (
 						!compilerValueKindMaskIsSubset(
 							kind(projection.input) ?? COMPILER_VALUE_KIND_TOP,
@@ -4811,6 +4825,7 @@ function discoverProgramValueKindObservations(
 						.exceptional(),
 				flow.targets,
 				flow.summaries.summary(functionId)?.externallyReachable === true,
+				analyses.compilationContext,
 			);
 			const kind = fixedKind(value);
 			if (kind === undefined) demand = true;
@@ -4978,6 +4993,7 @@ function discoverProgramNormalResultFacts(
 						.exceptional(),
 				flow.targets,
 				true,
+				analyses.compilationContext,
 			);
 			inputKindQueries.set(functionId, query);
 		}
@@ -5010,7 +5026,14 @@ function discoverProgramNormalResultFacts(
 						function: target,
 					})
 					.exceptional();
-			const fixed = coreValueKindDemand(program, fn, control, flow.targets, true);
+			const fixed = coreValueKindDemand(
+				program,
+				fn,
+				control,
+				flow.targets,
+				true,
+				analyses.compilationContext,
+			);
 			let mask: number | undefined = 0;
 			if (fn.isAsync || fn.isGenerator) mask = COMPILER_VALUE_KIND_OBJECT;
 			else
@@ -5605,6 +5628,7 @@ function discoverProgramCallResultIdentities(
 						.exceptional(),
 				flow.targets,
 				true,
+				analyses.compilationContext,
 			);
 			return kind(value) ?? COMPILER_VALUE_KIND_TOP;
 		};

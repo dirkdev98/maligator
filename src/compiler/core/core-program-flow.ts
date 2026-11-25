@@ -15,7 +15,7 @@ import {
 } from "./core-host-results.ts";
 import {
 	coreHostMemberIdentitiesAreStable,
-	coreWebFetchResult,
+	coreHostObjectResult,
 } from "./core-host-web-results.ts";
 import type { CoreControlEdge, CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
@@ -3206,7 +3206,7 @@ export class CoreProgramFlowEngine {
 					}
 					const memberResult = hostMembersStable
 						? (instruction: CoreInstructionId) =>
-								coreWebFetchResult(this.#program, fn, instruction) ??
+								coreHostObjectResult(this.#program, fn, instruction, hostSlots) ??
 								coreDiskHandleResult(this.#program, fn, instruction, targets, context)
 						: undefined;
 					const nativeResult =

@@ -588,7 +588,12 @@ export function buildModuleGraph(
 						goalOverride: options.goalOverride,
 						dependencyGoalOverride: options.dependencyGoalOverride,
 						wasmTarget,
-						stripTypes: options.stripTypes !== undefined,
+						stripTypes:
+							options.stripTypes === stripCompactTypes
+								? "catalog"
+								: options.stripTypes === undefined
+									? "absent"
+									: "custom",
 						virtualModules: [...(options.virtualModules ?? [])],
 					}),
 					"hex",

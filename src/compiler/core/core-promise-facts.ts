@@ -248,7 +248,12 @@ export function coreAwaitedCallbackParameter(
 		const projection = coreInstructionId(fn.kernel.valueDefinitionOwner(returned));
 		if (fn.instructionOpcodeName(projection) !== "awaitFulfilled") return undefined;
 		const awaited = coreSuccessfulAwaitInput(fn, projection);
-		if (awaited === undefined || fn.kernel.valueDefinitionKind(awaited) !== 1)
+		if (
+			awaited === undefined ||
+			fn.kernel.valueDefinitionKind(awaited) !== 1 ||
+			fn.valueUseCount(awaited) !== 1 ||
+			fn.kernel.valueHandlerUseCount(awaited) !== 0
+		)
 			return undefined;
 		const call = coreInstructionId(fn.kernel.valueDefinitionOwner(awaited));
 		if (

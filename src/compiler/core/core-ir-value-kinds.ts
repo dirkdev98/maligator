@@ -59,7 +59,12 @@ import { analyzeCoreConditionalValueKinds } from "./core-conditional-value-kinds
 import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import { coreNumericTypedArrayKind } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState, CoreExactHeapBrand } from "./core-heap-brands.ts";
-import { coreWebFetchResult } from "./core-host-web-results.ts";
+import {
+	coreDiskHandleResult,
+	coreHostResult,
+	coreHostResultSlots,
+} from "./core-host-results.ts";
+import { coreHostObjectResult } from "./core-host-web-results.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
 	CORE_AWAIT_RESULT_KIND_ATTRIBUTE,
@@ -2125,7 +2130,9 @@ export function coreValueKindDemand(
 	control: () => CoreControlFlow,
 	targets: CoreCallGraphIndex,
 	externallyReachable: boolean,
+	context?: CoreCompilationContext,
 ): (value: CoreValueId) => CompilerValueKindMask | undefined {
+	const hostSlots = context === undefined ? undefined : coreHostResultSlots(context);
 	const fixed = new Map<CoreValueId, CompilerValueKindMask | undefined>();
 	const visiting = new Set<CoreValueId>();
 	const masks = new Uint16Array(fn.valueCapacity);
@@ -2183,7 +2190,14 @@ export function coreValueKindDemand(
 			const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
 			if (
 				fn.instructionOpcodeName(instruction) === "awaitFulfilled" ||
-				coreWebFetchResult(program, fn, instruction) !== undefined
+				coreHostObjectResult(program, fn, instruction, hostSlots) !== undefined ||
+				(hostSlots !== undefined &&
+					hostSlots.size !== 0 &&
+					(coreHostResult(program, fn, instruction, hostSlots, true, true) !==
+						undefined ||
+						(context !== undefined &&
+							coreDiskHandleResult(program, fn, instruction, targets, context) !==
+								undefined)))
 			) {
 				fixed.set(value, undefined);
 				return;

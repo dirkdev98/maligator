@@ -5,42 +5,57 @@ import {
 import {
 	DISK_HANDLE_RESULTS,
 	NODE_FILE_HANDLE_RESULTS,
-	WEB_FETCH_CONSTRUCTORS,
-	WEB_FETCH_RESULTS,
+	GLOBAL_HOST_CONSTRUCTORS,
+	HOST_OBJECT_RESULTS,
+	HOST_RESULT_CONTRACTS,
 } from "../shared/host-result-contracts.ts";
 import type {
 	HostResultContract,
-	WebFetchInstance,
+	HostObjectKind,
 } from "../shared/host-result-contracts.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	coreDiskHandleResult,
+	coreHostDirectCallContract,
 	coreHostResult,
 	coreHostResultSlots,
+	coreHostSlotValue,
 } from "./core-host-results.ts";
+import type { CoreHostSlots } from "./core-host-results.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreProgramFlowTargetIndex } from "./core-program-flow.ts";
 import { coreSuccessfulAwaitInput } from "./core-promise-facts.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
-type FetchConstructor = (typeof WEB_FETCH_CONSTRUCTORS)[number];
-const FETCH_CONSTRUCTOR_NAMES = new Set<string>(WEB_FETCH_CONSTRUCTORS);
-const PROTECTED_PROPERTIES = new Set([
-	...WEB_FETCH_CONSTRUCTORS,
+type GlobalHostConstructor = (typeof GLOBAL_HOST_CONSTRUCTORS)[number];
+const GLOBAL_HOST_CONSTRUCTOR_NAMES = new Set<string>(GLOBAL_HOST_CONSTRUCTORS);
+const HOST_OBJECT_SOURCE_NAMES = new RegExp(
+	`\\b(?:${GLOBAL_HOST_CONSTRUCTORS.join("|")}|fetch|open|maligator:fs|node:sqlite|pathToFileURL|readFile(?:Sync)?|basename)\\b`,
+);
+const PROTECTED_GLOBALS = new Set<string>([
+	...GLOBAL_HOST_CONSTRUCTORS,
 	"fetch",
 	"console",
+	"globalThis",
+	"__proto__",
+]);
+const PROTECTED_PROPERTIES = new Set([
+	...PROTECTED_GLOBALS,
 	"log",
 	"prototype",
-	"__proto__",
+	"promises",
+	"posix",
+	"win32",
+	...[...HOST_RESULT_CONTRACTS.values()].flatMap((exports) => [...exports.keys()]),
 	"then",
 	"constructor",
-	...Object.values(WEB_FETCH_RESULTS.methods).flatMap((members) => [...members.keys()]),
-	...Object.values(WEB_FETCH_RESULTS.properties).flatMap((members) => [
+	...Object.values(HOST_OBJECT_RESULTS.methods).flatMap((members) => [...members.keys()]),
+	...Object.values(HOST_OBJECT_RESULTS.properties).flatMap((members) => [
 		...members.keys(),
 	]),
-	...Object.values(WEB_FETCH_RESULTS.statics).flatMap((members) => [...members.keys()]),
+	...Object.values(HOST_OBJECT_RESULTS.statics).flatMap((members) => [...members.keys()]),
 	...NODE_FILE_HANDLE_RESULTS.methods.keys(),
 	...NODE_FILE_HANDLE_RESULTS.properties.keys(),
 	...Object.values(DISK_HANDLE_RESULTS).flatMap(({ methods, properties }) => [
@@ -64,6 +79,11 @@ const SCANNED_HOST_INSTALLERS = new Set([
 	"mal_host_install_node_path_posix",
 	"mal_host_install_node_path_win32",
 	"mal_host_install_node_os",
+	"mal_host_install_node_buffer",
+	"mal_host_install_node_url",
+	"mal_host_install_node_util",
+	"mal_host_install_node_sys",
+	"mal_host_install_node_sqlite",
 	"mal_host_install_maligator_internal_fetch",
 	"mal_host_install_maligator_internal_fs",
 	"mal_host_install_maligator_internal_fs_descriptor",
@@ -99,29 +119,36 @@ function globalName(program: CoreProgram, fn: CoreFunctionStore, value: CoreValu
 		: undefined;
 }
 
-function fetchConstructor(
+function hostConstructor(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	value: CoreValueId,
-) {
+	slots: CoreHostSlots | undefined,
+): HostObjectKind | undefined {
+	const captured =
+		slots === undefined
+			? undefined
+			: coreHostSlotValue(program, fn, value, slots)?.hostConstructor;
+	if (captured !== undefined) return captured;
 	const name = globalName(program, fn, value);
-	return name !== undefined && FETCH_CONSTRUCTOR_NAMES.has(name)
-		? (name as FetchConstructor)
+	return name !== undefined && GLOBAL_HOST_CONSTRUCTOR_NAMES.has(name)
+		? (name as GlobalHostConstructor)
 		: undefined;
 }
 
-function fetchReceiver(
+function hostReceiver(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	value: CoreValueId,
+	slots: CoreHostSlots | undefined,
 	budget: number,
-): WebFetchInstance | undefined {
+): HostObjectKind | undefined {
 	if (budget === 0) return undefined;
 	const producer = definition(fn, value);
 	if (producer === undefined) return undefined;
 	if (fn.instructionOpcodeName(producer) !== "awaitFulfilled") {
-		const result = coreWebFetchResult(program, fn, producer, budget);
-		return result?.kind === "return" ? result.value.webInstance : undefined;
+		const result = producerContract(producer);
+		return result?.kind === "return" ? result.value.hostObject : undefined;
 	}
 	const promise = coreSuccessfulAwaitInput(fn, producer);
 	if (
@@ -132,10 +159,19 @@ function fetchReceiver(
 		return undefined;
 	const call = definition(fn, promise);
 	if (call === undefined) return undefined;
-	const result = coreWebFetchResult(program, fn, call, budget);
+	const result = producerContract(call);
 	return result?.kind === "resolve" || result?.kind === "fulfill"
-		? result.value.webInstance
+		? result.value.hostObject
 		: undefined;
+
+	function producerContract(producer: CoreInstructionId) {
+		return (
+			coreHostObjectResult(program, fn, producer, slots, budget) ??
+			(slots === undefined
+				? undefined
+				: coreHostDirectCallContract(program, fn, producer, slots, 0, true))
+		);
+	}
 }
 
 function propertyName(
@@ -165,10 +201,11 @@ function propertyName(
 	return undefined;
 }
 
-export function coreWebFetchResult(
+export function coreHostObjectResult(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
+	slots?: CoreHostSlots,
 	budget = 8,
 ): HostResultContract | undefined {
 	if (budget === 0) return undefined;
@@ -182,24 +219,30 @@ export function coreWebFetchResult(
 		return undefined;
 	const start = fn.kernel.instructionOperandStart(instruction);
 	if (opcode === "construct") {
-		const brand = fetchConstructor(program, fn, fn.kernel.operandAt(start));
+		const brand = hostConstructor(program, fn, fn.kernel.operandAt(start), slots);
 		return brand === undefined
 			? undefined
 			: {
 					kind: "return",
-					value: { mask: COMPILER_VALUE_KIND_OBJECT, webInstance: brand },
+					value: { mask: COMPILER_VALUE_KIND_OBJECT, hostObject: brand },
 				};
 	}
 	if (opcode === "loadPropertyStatic" || opcode === "loadProperty") {
 		const name = propertyName(program, fn, instruction);
 		if (name === undefined) return undefined;
-		const brand = fetchReceiver(program, fn, fn.kernel.operandAt(start), budget - 1);
+		const brand = hostReceiver(
+			program,
+			fn,
+			fn.kernel.operandAt(start),
+			slots,
+			budget - 1,
+		);
 		return brand === undefined
 			? undefined
-			: WEB_FETCH_RESULTS.properties[brand]?.get(name);
+			: HOST_OBJECT_RESULTS.properties[brand]?.get(name);
 	}
 	const callee = fn.kernel.operandAt(start);
-	if (globalName(program, fn, callee) === "fetch") return WEB_FETCH_RESULTS.fetch;
+	if (globalName(program, fn, callee) === "fetch") return HOST_OBJECT_RESULTS.fetch;
 	const load = definition(fn, callee);
 	if (load === undefined) return undefined;
 	const method = propertyName(program, fn, load);
@@ -208,11 +251,11 @@ export function coreWebFetchResult(
 	if (receiver !== fn.kernel.operandAt(fn.kernel.instructionOperandStart(load)))
 		return undefined;
 	if (method === "log" && globalName(program, fn, receiver) === "console") return LOGGED;
-	const constructor = fetchConstructor(program, fn, receiver);
+	const constructor = hostConstructor(program, fn, receiver, slots);
 	if (constructor !== undefined)
-		return WEB_FETCH_RESULTS.statics[constructor]?.get(method);
-	const brand = fetchReceiver(program, fn, receiver, budget - 1);
-	return brand === undefined ? undefined : WEB_FETCH_RESULTS.methods[brand].get(method);
+		return HOST_OBJECT_RESULTS.statics[constructor]?.get(method);
+	const brand = hostReceiver(program, fn, receiver, slots, budget - 1);
+	return brand === undefined ? undefined : HOST_OBJECT_RESULTS.methods[brand].get(method);
 }
 
 /** Installed Web bindings are mutable. A closed source can establish that no
@@ -234,11 +277,7 @@ export function coreHostMemberIdentitiesAreStable(
 			({ installer }) => !SCANNED_HOST_INSTALLERS.has(installer),
 		) ||
 		(data.sourceBuiltinProviders?.length ?? 0) !== 0 ||
-		!data.sourceFiles.some(({ contents }) =>
-			/\b(?:fetch|Response|Request|Blob|File|FormData|Headers|open|maligator:fs)\b/.test(
-				contents,
-			),
-		)
+		!data.sourceFiles.some(({ contents }) => HOST_OBJECT_SOURCE_NAMES.test(contents))
 	)
 		return false;
 	const slots = coreHostResultSlots(context);
@@ -252,6 +291,21 @@ export function coreHostMemberIdentitiesAreStable(
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(instruction);
 			const attrs = fn.instructionAttributes(instruction);
+			const protectedKey = (index: unknown, implicitGlobal = false) => {
+				if (typeof index !== "number") return true;
+				const start = fn.kernel.instructionOperandStart(instruction);
+				const receiver = implicitGlobal
+					? undefined
+					: definition(fn, fn.kernel.operandAt(start));
+				const global =
+					implicitGlobal ||
+					(receiver !== undefined &&
+						fn.instructionOpcodeName(receiver) === "loadIntrinsic" &&
+						fn.instructionAttributes(receiver).intrinsic === "globalThis");
+				return (global ? PROTECTED_GLOBALS : PROTECTED_PROPERTIES).has(
+					program.stringConstantText(index),
+				);
+			};
 			if (
 				opcode === "storeGlobalProperty" ||
 				opcode === "declareGlobalLexical" ||
@@ -260,11 +314,7 @@ export function coreHostMemberIdentitiesAreStable(
 			) {
 				const key =
 					opcode === "storePropertyStatic" ? attrs.stringIndex : attrs.nameStringIndex;
-				if (
-					typeof key !== "number" ||
-					PROTECTED_PROPERTIES.has(program.stringConstantText(key))
-				)
-					return false;
+				if (protectedKey(key, opcode !== "storePropertyStatic")) return false;
 			} else if (opcode === "storeProperty" || opcode === "defineProperty") {
 				const key = definition(
 					fn,
@@ -278,11 +328,7 @@ export function coreHostMemberIdentitiesAreStable(
 						break;
 					case "createString": {
 						const index = fn.instructionAttributes(key).stringIndex;
-						if (
-							typeof index !== "number" ||
-							PROTECTED_PROPERTIES.has(program.stringConstantText(index))
-						)
-							return false;
+						if (protectedKey(index)) return false;
 						break;
 					}
 					default:
@@ -325,7 +371,7 @@ export function coreHostMemberIdentitiesAreStable(
 				}
 			}
 			if (
-				coreWebFetchResult(program, fn, instruction) === undefined &&
+				coreHostObjectResult(program, fn, instruction, slots) === undefined &&
 				coreDiskHandleResult(program, fn, instruction, targets, context) === undefined &&
 				coreHostResult(program, fn, instruction, slots, true, true) === undefined
 			)

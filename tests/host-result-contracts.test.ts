@@ -7,7 +7,10 @@ import { runSemanticAnalysisForGraph } from "../src/compiler/frontend/analyze-mo
 import { certifyProgramClosure } from "../src/compiler/frontend/certify-closure.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { HOST_MODULES } from "../src/compiler/frontend/host-modules.ts";
-import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
+import {
+	buildModuleGraph,
+	ModuleParseCache,
+} from "../src/compiler/frontend/module-graph.ts";
 import type { BuildModuleGraphOptions } from "../src/compiler/frontend/module-graph.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
@@ -20,8 +23,8 @@ import {
 	DISK_HANDLE_RESULTS,
 	HOST_RESULT_CONTRACTS,
 	NODE_FILE_HANDLE_RESULTS,
-	WEB_FETCH_CONSTRUCTORS,
-	WEB_FETCH_RESULTS,
+	GLOBAL_HOST_CONSTRUCTORS,
+	HOST_OBJECT_RESULTS,
 } from "../src/compiler/shared/host-result-contracts.ts";
 import { getPrimordialCatalog } from "../src/compiler/shared/primordial-catalog-data.ts";
 import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
@@ -174,6 +177,31 @@ it("does not apply the filesystem result contract to a virtual module override",
 	expect(operations).toContain("typeofCompare");
 });
 
+it("does not reuse an embedding's replacement filesystem parse for the canonical module", () => {
+	const parseCache = new ModuleParseCache();
+	const entry = join(tmpdir(), "mal-canonical-filesystem-entry.mjs");
+	const options = {
+		entrySource: `import { file } from "maligator:fs"; file("example.txt");`,
+		parseCache,
+	};
+	const replacement = buildModuleGraph(entry, {
+		...options,
+		stripTypes: () => "export function file(value) { return value; }",
+	});
+	expect(
+		replacement.modules.get("maligator:fs")?.canonicalPlatformSource,
+	).toBeUndefined();
+	const canonical = buildModuleGraph(entry, {
+		...options,
+		stripTypes: stripCompactTypes,
+	});
+	const filesystem = canonical.modules.get("maligator:fs")!;
+	expect(filesystem.canonicalPlatformSource).toBe("maligator:fs");
+	expect(filesystem.dependencies.map(({ specifier }) => specifier)).toContain(
+		"maligator:internal/fs",
+	);
+});
+
 it.each([
 	["await file(path).text()", "string"],
 	["await file(path).bytes()", "string"],
@@ -320,10 +348,10 @@ it("accounts for the exported filesystem wrappers and their handle classes", () 
 	}
 });
 
-it("accounts for the installed Fetch constructors, methods, and getters", () => {
+it("accounts for the installed constructors, methods, and getters of audited host objects", () => {
 	const catalog = getPrimordialCatalog();
 	const inventory = [
-		...WEB_FETCH_CONSTRUCTORS.map((name) => ({
+		...GLOBAL_HOST_CONSTRUCTORS.map((name) => ({
 			name,
 			constructorPath: `globalThis.${name}`,
 			prototype: `globalThis.${name}.prototype`,
@@ -336,6 +364,15 @@ it("accounts for the installed Fetch constructors, methods, and getters", () => 
 			name: "FormDataIterator",
 			prototype: "%MAL_INTRINSIC_FORM_DATA_ITERATOR_PROTOTYPE%",
 		} as const,
+		{
+			name: "URLSearchParamsIterator",
+			prototype: "%MAL_INTRINSIC_URL_SEARCH_PARAMS_ITERATOR_PROTOTYPE%",
+		} as const,
+		...(["DatabaseSync", "StatementSync"] as const).map((name) => ({
+			name,
+			constructorPath: `%MAL_INTRINSIC_NODE_SQLITE_MODULE%.${name}`,
+			prototype: `%MAL_INTRINSIC_NODE_SQLITE_MODULE%.${name}.prototype`,
+		})),
 	];
 	const missing: Array<string> = [];
 	for (const owner of inventory) {
@@ -351,17 +388,75 @@ it("accounts for the installed Fetch constructors, methods, and getters", () => 
 				const member =
 					typeof key === "string"
 						? key
-						: `[${catalog.nodes[key[0]]![0].replaceAll("%", "")}]`;
-				if (getter >= 0 && !WEB_FETCH_RESULTS.properties[owner.name]?.has(member))
+						: (catalog.nodes[key[0]]![0].match(/\[\[SymbolKey:[^\]]+\]\]$/)?.[0] ??
+							`[${catalog.nodes[key[0]]![0].replaceAll("%", "")}]`);
+				if (getter >= 0 && !HOST_OBJECT_RESULTS.properties[owner.name]?.has(member))
 					missing.push(`${name}.${member} getter`);
 				if (typeof value !== "number" || (catalog.nodes[value]![2] & 2) === 0) continue;
 				const methods =
 					name === owner.prototype
-						? WEB_FETCH_RESULTS.methods[owner.name]
-						: WEB_FETCH_RESULTS.statics[owner.name];
+						? HOST_OBJECT_RESULTS.methods[owner.name]
+						: HOST_OBJECT_RESULTS.statics[owner.name];
 				if (!methods?.has(member)) missing.push(`${name}.${member}`);
 			}
 		}
 	}
 	expect(missing).toEqual([]);
+});
+
+it.each([
+	["new TextDecoder().decode()", "string", ""],
+	[
+		"new Decoder().decode()",
+		"string",
+		'import { TextDecoder as Decoder } from "node:util";',
+	],
+	["new URL('https://example.test/?q=value').searchParams.has('q')", "boolean", ""],
+	[
+		"Ctor.parse('https://example.test').hostname",
+		"string",
+		'import { URL as Ctor } from "url";',
+	],
+	[
+		"Bytes.from('abc').readUInt8()",
+		"number",
+		'import { Buffer as Bytes } from "node:buffer";',
+	],
+	[
+		"Bytes.alloc(8).readBigUInt64LE()",
+		"bigint",
+		'import { Buffer as Bytes } from "buffer";',
+	],
+	[
+		"new DatabaseSync(':memory:').prepare('select 1').all()",
+		"string",
+		'import { DatabaseSync } from "node:sqlite";',
+	],
+	["AbortSignal.timeout(0).aborted", "boolean", ""],
+])("uses the installed host object contract for %s", (expression, type, imports) => {
+	expect(inspectHostCall(expression, type, "", imports)).not.toContain("typeofCompare");
+});
+
+it.each([
+	[
+		"filesystem.readFileSync(path, 'utf8')",
+		"string",
+		'import filesystem from "node:fs";',
+	],
+	["await filesystem.promises.readFile(path)", "string", 'import filesystem from "fs";'],
+	["paths.posix.basename(path)", "string", 'import paths from "node:path";'],
+])("follows the installed default export for %s", (expression, type, imports) => {
+	const operations = inspectHostCall(expression, type, "", imports);
+	expect(operations).toContain("call");
+	expect(operations).not.toContain("typeofCompare");
+});
+
+it("does not apply the native contract when a default export member changes", () => {
+	const operations = inspectHostCall(
+		"filesystem.readFileSync(path, 'utf8')",
+		"number",
+		"filesystem.readFileSync = () => options;",
+		'import filesystem from "node:fs";',
+	);
+	expect(operations).toContain("typeofCompare");
 });
