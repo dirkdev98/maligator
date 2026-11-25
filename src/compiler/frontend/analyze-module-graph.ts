@@ -53,6 +53,9 @@ function analyzeModuleRecord(record: ModuleRecord): SemanticFile {
 		ast: record.parsed.ast,
 		commonjs: record.goal === "cjs",
 		...(record.virtual === true ? { toolchain: true as const } : {}),
+		...(record.canonicalPlatformSource === undefined
+			? {}
+			: { canonicalPlatformSource: record.canonicalPlatformSource }),
 
 		scopes: [],
 		nodeToScope: new Map(),

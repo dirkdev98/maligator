@@ -34,9 +34,13 @@ describe("successful await result facts", () => {
 		["await Promise.resolve('text')", "string"],
 		["await forward()", "string"],
 		["await readLater(leaf())", "string"],
+		["await forwardSync(leaf())", "string"],
 		["await Promise.resolve(leaf())", "string"],
 		["await Promise.resolve('text').then().catch().finally()", "string"],
 		["await Promise.all([1, 2])", "number"],
+		["await Promise.race([1, 2])", "number"],
+		["await Promise.any([Promise.reject(42), Promise.resolve('text')])", "string"],
+		["await Promise.allKeyed({ answer: 42 })", "number"],
 		["await Promise.reject(42).catch(() => 'recovered')", "string"],
 		["await Promise.resolve(42).then(() => 'changed').finally(() => false)", "string"],
 	])("folds the type observation of %s and keeps the suspension", (expression, type) => {
@@ -44,6 +48,7 @@ describe("successful await result facts", () => {
 			`const leaf = async () => "text";
 			const forward = async () => leaf();
 			const readLater = async (promise) => await promise;
+			const forwardSync = (promise) => promise;
 			async function compute() { const value = ${expression}; return typeof value === "${type}"; }
 			globalThis.compute = compute;`,
 			["compute"],

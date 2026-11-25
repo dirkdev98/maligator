@@ -8,9 +8,13 @@ import type { CoreCallGraph, CoreCallGraphNode } from "./core-call-graph.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { joinCoreHeapBrands } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState } from "./core-heap-brands.ts";
-import { coreHostResult, coreHostResultSlots } from "./core-host-results.ts";
 import {
-	coreWebFetchIdentityIsStable,
+	coreDiskHandleResult,
+	coreHostResult,
+	coreHostResultSlots,
+} from "./core-host-results.ts";
+import {
+	coreHostMemberIdentitiesAreStable,
 	coreWebFetchResult,
 } from "./core-host-web-results.ts";
 import type { CoreControlEdge, CoreControlFlow } from "./core-ir-control-flow.ts";
@@ -20,12 +24,14 @@ import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import {
 	CORE_UNKNOWN_PROMISE,
+	coreAwaitedCallbackParameter,
 	coreIntrinsicPromiseStaticCall,
 	corePromiseAdoptedKinds,
 	corePromiseContinuation,
 	corePromiseIsProven,
 	corePromiseValueIsPrivate,
 } from "./core-promise-facts.ts";
+import type { CorePromiseArgumentUse } from "./core-promise-facts.ts";
 import {
 	sameCoreRecordValueKind,
 	joinCoreRecordValueKinds,
@@ -102,6 +108,7 @@ export interface CoreProgramFlowTargetIndex {
 	globalStoreTargets(slot: number): {
 		readonly functions: ReadonlyArray<CoreFunctionId>;
 		readonly anyScript: boolean;
+		readonly opaque?: boolean;
 	};
 	outgoing(functionId: CoreFunctionId): ReadonlyArray<{
 		readonly instruction: CoreInstructionId;
@@ -165,7 +172,7 @@ export interface CoreProgramFlowValueKindState<
 	Targets extends CoreProgramFlowTargetIndex = CoreProgramFlowTargetIndex,
 > extends CoreProgramFlowValueKinds<Analysis> {
 	readonly sourceClosed: boolean;
-	readonly webFetchStable: boolean;
+	readonly hostMembersStable: boolean;
 	readonly dataEpoch: number;
 	readonly targets: Targets;
 	readonly external: ReadonlyMap<CoreFunctionId, boolean>;
@@ -233,7 +240,7 @@ export interface CoreProgramFlowValueKindInputs {
 	readonly promiseArgumentIsPrivate?: (
 		instruction: CoreInstructionId,
 		operand: number,
-	) => boolean;
+	) => CorePromiseArgumentUse | undefined;
 	readonly promiseCallback?: (
 		value: CoreValueId,
 	) => CorePromiseCallbackResult | undefined;
@@ -2638,10 +2645,10 @@ export class CoreProgramFlowEngine {
 		const promiseFacts =
 			context?.facts.world.primordialPolicy === "locked" && !context.facts.world.realms;
 		const hostSlots = context === undefined ? undefined : coreHostResultSlots(context);
-		const webFetchStable =
+		const hostMembersStable =
 			context !== undefined &&
-			coreWebFetchIdentityIsStable(this.#program, context, targets);
-		if (previous?.webFetchStable !== webFetchStable) previous = undefined;
+			coreHostMemberIdentitiesAreStable(this.#program, context, targets);
+		if (previous?.hostMembersStable !== hostMembersStable) previous = undefined;
 		const sameInputs = (
 			left: CoreProgramFlowKindInputs | undefined,
 			right: CoreProgramFlowKindInputs,
@@ -2678,6 +2685,19 @@ export class CoreProgramFlowEngine {
 			CoreFunctionId,
 			ReadonlyMap<CoreValueId, CoreProgramFlowCallTargets>
 		>();
+		const awaitedCallbackParameters = new Map<CoreFunctionId, number | undefined>();
+		const awaitedCallbackParameter = (functionId: CoreFunctionId): number | undefined => {
+			if (!awaitedCallbackParameters.has(functionId)) {
+				const fn = this.#program.function(functionId);
+				awaitedCallbackParameters.set(
+					functionId,
+					fn.isAsync && fn.parameterCount > 0
+						? coreAwaitedCallbackParameter(fn, controlFlow(functionId))
+						: undefined,
+				);
+			}
+			return awaitedCallbackParameters.get(functionId);
+		};
 		const addReturnReader = (caller: CoreFunctionId, callee: CoreFunctionId) => {
 			let readers = returnReaders.get(callee);
 			if (readers === undefined) returnReaders.set(callee, (readers = new Set()));
@@ -2716,7 +2736,18 @@ export class CoreProgramFlowEngine {
 					const first =
 						method?.first ??
 						(builtin?.operation === "Promise.try" ? builtin.firstArgument : undefined);
-					for (const callback of [first, method?.second]) {
+					const callbackValues = [first, method?.second];
+					if (
+						site.arguments !== undefined &&
+						!site.targets.anyScript &&
+						!site.targets.opaque
+					)
+						for (const callee of site.targets.functions) {
+							if (!external.has(callee)) continue;
+							const parameter = awaitedCallbackParameter(callee);
+							if (parameter !== undefined) callbackValues.push(site.arguments[parameter]);
+						}
+					for (const callback of callbackValues) {
 						if (callback === undefined || callbacks?.has(callback)) continue;
 						const possible = targets.targets(caller, callback);
 						if (possible.anyScript || possible.opaque) continue;
@@ -2778,6 +2809,7 @@ export class CoreProgramFlowEngine {
 			const fn = this.#program.function(target);
 			const result =
 				index < fn.parameterCount &&
+				!fn.isGenerator &&
 				!fn.metadata.mappedArguments &&
 				![...fn.instructionIds()].some((instruction) => {
 					if (fn.instructionKind(instruction) !== "operation") return false;
@@ -2794,13 +2826,7 @@ export class CoreProgramFlowEngine {
 						opcode === "constructSuperForward"
 					);
 				}) &&
-				corePromiseValueIsPrivate(
-					this.#program,
-					fn,
-					fn.kernel.functionParameter(index),
-					undefined,
-					fn.isAsync && !fn.isGenerator,
-				);
+				corePromiseValueIsPrivate(this.#program, fn, fn.kernel.functionParameter(index));
 			known.set(index, result);
 			return result;
 		};
@@ -3178,30 +3204,114 @@ export class CoreProgramFlowEngine {
 						demandedValues = [...roots];
 						demands.set(functionId, demandedValues);
 					}
-					const webResult = webFetchStable
+					const memberResult = hostMembersStable
 						? (instruction: CoreInstructionId) =>
-								coreWebFetchResult(this.#program, fn, instruction)
+								coreWebFetchResult(this.#program, fn, instruction) ??
+								coreDiskHandleResult(this.#program, fn, instruction, targets, context)
 						: undefined;
+					const nativeResult =
+						hostSlots === undefined || hostSlots.size === 0
+							? undefined
+							: (instruction: CoreInstructionId) =>
+									coreHostResult(
+										this.#program,
+										fn,
+										instruction,
+										hostSlots,
+										context?.facts.world.primordialPolicy === "locked",
+										hostMembersStable,
+									);
+					const promiseCallback =
+						callbacks === undefined
+							? undefined
+							: (value: CoreValueId): CorePromiseCallbackResult | undefined => {
+									const possible = callbacks.get(value);
+									if (possible === undefined) return undefined;
+									let settledKind = 0;
+									let resolvedKind = 0;
+									let returnsQuiescentValue = true;
+									for (const callee of possible.functions) {
+										const summary = calleeSummaries?.get(callee);
+										if (summary === undefined) return undefined;
+										const primitive = summary.returnKind & ~semantics.object;
+										settledKind |= corePromiseAdoptedKinds(
+											summary.returnKind,
+											summary.returnFulfillmentKind,
+										);
+										resolvedKind |= primitive;
+										if ((summary.returnKind & semantics.object) !== 0) {
+											if (corePromiseIsProven(summary.returnFulfillmentKind)) {
+												resolvedKind |= summary.returnFulfillmentKind;
+											} else {
+												resolvedKind |= CORE_UNKNOWN_PROMISE;
+												returnsQuiescentValue = false;
+											}
+										}
+									}
+									return {
+										maySkip: possible.nonCallable !== false,
+										settledKind,
+										resolvedKind,
+										returnsQuiescentValue,
+									};
+								};
+					const awaitedCallbackResult = (
+						instruction: CoreInstructionId,
+					): number | undefined => {
+						const site = byInstruction.get(instruction);
+						if (
+							site?.arguments === undefined ||
+							site.targets.opaque ||
+							site.targets.anyScript ||
+							site.targets.functions.length === 0 ||
+							fn.instructionOpcodeName(instruction) !== "call"
+						)
+							return undefined;
+						let result = 0;
+						for (const callee of site.targets.functions) {
+							const parameter = awaitedCallbackParameters.get(callee);
+							if (parameter === undefined) return undefined;
+							const value = site.arguments[parameter];
+							if (value === undefined) continue;
+							const possible = callbacks?.get(value);
+							if (
+								possible === undefined ||
+								!possible.functions.every((target) => {
+									const callback = this.#program.function(target);
+									return callback.parameterCount === 0 && callback.metadata.lexicalThis;
+								})
+							)
+								return undefined;
+							const callback = promiseCallback?.(value);
+							if (callback === undefined) return undefined;
+							result |= corePromiseAdoptedKinds(
+								callback.resolvedKind & semantics.top,
+								CORE_UNKNOWN_PROMISE,
+							);
+						}
+						return result;
+					};
 					values = semantics.analyze(this.#program, fn, cfg, {
 						context,
 						...resultReaders,
 						operationResultMask(instruction, result) {
-							const contract = webResult?.(instruction);
+							const contract = memberResult?.(instruction);
 							if (contract?.kind === "return") return contract.value.mask;
 							if (contract?.kind === "resolve" || contract?.kind === "fulfill")
 								return semantics.object;
-							return resultReaders.operationResultMask?.(instruction, result);
+							return (
+								nativeResult?.(instruction)?.immediate.mask ??
+								resultReaders.operationResultMask?.(instruction, result)
+							);
 						},
 						operationFulfillmentKind: promiseFacts
 							? (instruction) => {
-									const contract = webResult?.(instruction);
+									const contract = memberResult?.(instruction);
 									if (contract?.kind === "resolve" || contract?.kind === "fulfill")
 										return contract.value.mask;
 									return (
-										(hostSlots === undefined
-											? undefined
-											: coreHostResult(this.#program, fn, instruction, hostSlots, true)
-													?.fulfilled?.mask) ??
+										nativeResult?.(instruction)?.fulfilled?.mask ??
+										awaitedCallbackResult(instruction) ??
 										resultReaders.operationFulfillmentKind?.(instruction)
 									);
 								}
@@ -3209,9 +3319,9 @@ export class CoreProgramFlowEngine {
 						promiseArgumentIsPrivate: promiseFacts
 							? (instruction, operand) => {
 									if (operand < 2 || fn.instructionOpcodeName(instruction) !== "call")
-										return false;
+										return undefined;
 									const site = byInstruction.get(instruction);
-									return (
+									const safe =
 										site?.arguments !== undefined &&
 										!site.targets.opaque &&
 										!site.targets.anyScript &&
@@ -3222,44 +3332,16 @@ export class CoreProgramFlowEngine {
 											) &&
 										site.targets.functions.every((callee) =>
 											parameterIsPrivate(callee, operand - 2),
-										)
-									);
+										);
+									if (!safe) return undefined;
+									return site.targets.functions.every(
+										(callee) => this.#program.function(callee).isAsync,
+									)
+										? "borrowed"
+										: "possibly-returned";
 								}
 							: undefined,
-						promiseCallback:
-							callbacks === undefined
-								? undefined
-								: (value) => {
-										const possible = callbacks.get(value);
-										if (possible === undefined) return undefined;
-										let settledKind = 0;
-										let resolvedKind = 0;
-										let returnsQuiescentValue = true;
-										for (const callee of possible.functions) {
-											const summary = calleeSummaries?.get(callee);
-											if (summary === undefined) return undefined;
-											const primitive = summary.returnKind & ~semantics.object;
-											settledKind |= corePromiseAdoptedKinds(
-												summary.returnKind,
-												summary.returnFulfillmentKind,
-											);
-											resolvedKind |= primitive;
-											if ((summary.returnKind & semantics.object) !== 0) {
-												if (corePromiseIsProven(summary.returnFulfillmentKind)) {
-													resolvedKind |= summary.returnFulfillmentKind;
-												} else {
-													resolvedKind |= CORE_UNKNOWN_PROMISE;
-													returnsQuiescentValue = false;
-												}
-											}
-										}
-										return {
-											maySkip: possible.nonCallable !== false,
-											settledKind,
-											resolvedKind,
-											returnsQuiescentValue,
-										};
-									},
+						promiseCallback,
 						demandedValues,
 						parameterMasks: summary.parameterKinds,
 						parameterFulfillmentKinds: summary.parameterFulfillmentKinds,
@@ -3404,7 +3486,7 @@ export class CoreProgramFlowEngine {
 			sourceClosed: targets.sourceClosed,
 			targets,
 			dataEpoch,
-			webFetchStable,
+			hostMembersStable,
 			external,
 			boundaryInputs,
 			valueAnalyses,

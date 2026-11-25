@@ -573,6 +573,9 @@ export class DirectCoreFunctionConstruction {
 		return {
 			sourcePath: this.#fn.semanticFile.path,
 			...(this.#fn.semanticFile.toolchain === true ? { toolchain: true as const } : {}),
+			...(this.#fn.semanticFile.canonicalPlatformSource === undefined
+				? {}
+				: { canonicalPlatformSource: this.#fn.semanticFile.canonicalPlatformSource }),
 			...(this.#fn.sourceOrigin === undefined
 				? {}
 				: { sourceOrigin: this.#fn.sourceOrigin }),

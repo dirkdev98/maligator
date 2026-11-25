@@ -4,6 +4,7 @@ import {
 	COMPILER_VALUE_KIND_NUMBER as NUMBER,
 	COMPILER_VALUE_KIND_OBJECT as OBJECT,
 	COMPILER_VALUE_KIND_STRING as STRING,
+	COMPILER_VALUE_KIND_TOP as TOP,
 	COMPILER_VALUE_KIND_UNDEFINED as UNDEFINED,
 } from "./compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
@@ -12,9 +13,20 @@ export interface HostValueContract {
 	readonly mask: CompilerValueKindMask;
 	readonly brand?: "Array" | "Uint8Array";
 	readonly webInstance?: WebFetchInstance;
+	readonly assetHandle?: "file" | "directory";
+	readonly nodeFileHandle?: true;
+	readonly diskHandle?: "file" | "directory" | "writer" | "watcher";
 	readonly selector?: {
 		readonly argument: number;
-		readonly kind: "encoding" | "buffer-encoding" | "text-flag";
+		readonly kind:
+			| "encoding"
+			| "buffer-encoding"
+			| "output-encoding"
+			| "text-flag"
+			| "stat-options"
+			| "mkdir-options"
+			| "compression-info"
+			| "resolve-value";
 	};
 }
 
@@ -26,6 +38,7 @@ export type HostResultContract =
 			readonly kind: "fulfill";
 			readonly value: HostValueContract;
 			readonly immediateMask?: CompilerValueKindMask;
+			readonly reason?: string;
 	  }
 	| {
 			readonly kind: "resolve";
@@ -45,13 +58,16 @@ const fulfilled = (
 	brand?: HostValueContract["brand"],
 ): HostResultContract => ({ kind: "fulfill", value: { mask, brand } });
 const selected = (
-	kind: "return" | "fulfill",
+	kind: "return" | "fulfill" | "resolve",
 	selector: NonNullable<HostValueContract["selector"]>,
-): HostResultContract => ({ kind, value: { mask: STRING | OBJECT, selector } });
+	mask = STRING | OBJECT,
+): HostResultContract => ({ kind, value: { mask, selector } });
 const callback: HostResultContract = {
 	kind: "callback",
 	reason: "The asynchronous operation reports completion to a Node-style callback.",
 };
+const dynamic = (reason: string): HostResultContract => ({ kind: "dynamic", reason });
+const neverReturns = (reason: string): HostResultContract => ({ kind: "never", reason });
 
 function exportsWithContracts(
 	...groups: ReadonlyArray<readonly [HostResultContract, ...Array<string>]>
@@ -73,8 +89,16 @@ const fs = exportsWithContracts(
 	],
 	[returned(BOOLEAN), "existsSync"],
 	[returned(NUMBER), "openSync", "readSync", "readvSync", "writeSync", "writevSync"],
-	[returned(STRING | UNDEFINED), "mkdirSync"],
-	[returned(OBJECT | UNDEFINED), "fstatSync", "lstatSync", "statSync"],
+	[
+		selected("return", { kind: "mkdir-options", argument: 1 }, STRING | UNDEFINED),
+		"mkdirSync",
+	],
+	[
+		selected("return", { kind: "stat-options", argument: 1 }, OBJECT | UNDEFINED),
+		"lstatSync",
+		"statSync",
+	],
+	[returned(OBJECT), "fstatSync"],
 	[returned(OBJECT, "Array"), "readdirSync", "globSync"],
 	[
 		returned(OBJECT),
@@ -176,10 +200,18 @@ const fsPromises = exportsWithContracts(
 		"readlink",
 		"realpath",
 	],
-	[fulfilled(OBJECT), "open", "opendir", "statfs"],
-	[fulfilled(OBJECT | UNDEFINED), "lstat", "stat"],
+	[{ kind: "fulfill", value: { mask: OBJECT, nodeFileHandle: true } }, "open"],
+	[fulfilled(OBJECT), "opendir", "statfs"],
+	[
+		selected("fulfill", { kind: "stat-options", argument: 1 }, OBJECT | UNDEFINED),
+		"lstat",
+		"stat",
+	],
 	[fulfilled(OBJECT, "Array"), "readdir"],
-	[fulfilled(STRING | UNDEFINED), "mkdir"],
+	[
+		selected("fulfill", { kind: "mkdir-options", argument: 1 }, STRING | UNDEFINED),
+		"mkdir",
+	],
 	[
 		fulfilled(UNDEFINED),
 		"access",
@@ -223,6 +255,23 @@ const maligatorFs = exportsWithContracts(
 		"symlink",
 	],
 );
+
+export const NODE_FILE_HANDLE_RESULTS = {
+	properties: exportsWithContracts([returned(NUMBER), "fd"]),
+	methods: exportsWithContracts(
+		[selected("fulfill", { kind: "encoding", argument: 0 }), "readFile"],
+		[fulfilled(OBJECT), "read", "stat", "write"],
+		[
+			fulfilled(UNDEFINED),
+			"appendFile",
+			"close",
+			"datasync",
+			"sync",
+			"truncate",
+			"writeFile",
+		],
+	),
+} as const;
 
 const path = exportsWithContracts(
 	[
@@ -554,10 +603,496 @@ const maligatorWorkers = exportsWithContracts(
 	],
 );
 
+const vm = exportsWithContracts(
+	[returned(OBJECT), "Script", "compileFunction", "createContext", "createScript"],
+	[returned(BOOLEAN), "isContext"],
+	[
+		dynamic("Returns the evaluated script's completion value."),
+		"runInContext",
+		"runInNewContext",
+		"runInThisContext",
+	],
+);
+const diagnostics = exportsWithContracts(
+	[returned(OBJECT), "Channel", "channel", "tracingChannel"],
+	[returned(BOOLEAN), "hasSubscribers", "unsubscribe"],
+	[returned(UNDEFINED), "subscribe"],
+);
+const cluster = exportsWithContracts(
+	[neverReturns("Process clustering is unsupported."), "fork"],
+	[dynamic("Returns the supplied receiver unchanged."), "on", "once", "setMaxListeners"],
+);
+const inspector = exportsWithContracts(
+	[returned(UNDEFINED), "close", "url"],
+	[neverReturns("The native inspector is unsupported."), "Session", "open"],
+);
+const asyncHooks = exportsWithContracts(
+	[
+		returned(OBJECT),
+		"AsyncLocalStorage",
+		"AsyncResource",
+		"createHook",
+		"executionAsyncResource",
+	],
+	[returned(NUMBER), "executionAsyncId", "triggerAsyncId"],
+);
+const console = exportsWithContracts(
+	[returned(OBJECT), "Console"],
+	[
+		returned(UNDEFINED),
+		"assert",
+		"clear",
+		"count",
+		"countReset",
+		"debug",
+		"dir",
+		"dirxml",
+		"error",
+		"group",
+		"groupCollapsed",
+		"groupEnd",
+		"info",
+		"log",
+		"profile",
+		"profileEnd",
+		"table",
+		"time",
+		"timeEnd",
+		"timeLog",
+		"timeStamp",
+		"trace",
+		"warn",
+	],
+);
+const module = exportsWithContracts(
+	[
+		returned(OBJECT),
+		"default",
+		"Module",
+		"createRequire",
+		"enableCompileCache",
+		"getSourceMapsSupport",
+		"registerHooks",
+	],
+	[returned(BOOLEAN), "isBuiltin"],
+	[returned(STRING | UNDEFINED), "findPackageJSON"],
+	[
+		returned(UNDEFINED),
+		"findSourceMap",
+		"flushCompileCache",
+		"getCompileCacheDir",
+		"register",
+		"setSourceMapsSupport",
+		"syncBuiltinESMExports",
+	],
+);
+const nodeWorkers = exportsWithContracts(
+	[returned(OBJECT), "BroadcastChannel", "MessageChannel", "Worker"],
+	[returned(BOOLEAN), "isMarkedAsUntransferable"],
+	[
+		returned(UNDEFINED),
+		"markAsUncloneable",
+		"markAsUntransferable",
+		"setEnvironmentData",
+	],
+	[returned(OBJECT | UNDEFINED), "receiveMessageOnPort"],
+	[
+		dynamic("Reads an application-defined value from the environment data map."),
+		"getEnvironmentData",
+	],
+	[neverReturns("Ports are created by the channel and worker factories."), "MessagePort"],
+);
+const assertions = exportsWithContracts(
+	[returned(OBJECT), "Assert", "AssertionError"],
+	[fulfilled(UNDEFINED), "rejects", "doesNotReject"],
+	[neverReturns("Always throws the assertion failure."), "fail"],
+	[
+		returned(UNDEFINED),
+		"default",
+		"strict",
+		"deepEqual",
+		"deepStrictEqual",
+		"doesNotMatch",
+		"doesNotThrow",
+		"equal",
+		"ifError",
+		"match",
+		"notDeepEqual",
+		"notDeepStrictEqual",
+		"notEqual",
+		"notStrictEqual",
+		"ok",
+		"partialDeepStrictEqual",
+		"strictEqual",
+		"throws",
+	],
+);
+const zlib = exportsWithContracts(
+	[
+		returned(OBJECT),
+		"BrotliCompress",
+		"BrotliDecompress",
+		"Deflate",
+		"DeflateRaw",
+		"Gunzip",
+		"Gzip",
+		"Inflate",
+		"InflateRaw",
+		"Unzip",
+		"createBrotliCompress",
+		"createBrotliDecompress",
+		"createDeflate",
+		"createDeflateRaw",
+		"createGunzip",
+		"createGzip",
+		"createInflate",
+		"createInflateRaw",
+		"createUnzip",
+	],
+	[
+		selected("return", { kind: "compression-info", argument: 1 }, OBJECT),
+		"brotliCompressSync",
+		"brotliDecompressSync",
+		"deflateSync",
+		"deflateRawSync",
+		"gunzipSync",
+		"gzipSync",
+		"inflateSync",
+		"inflateRawSync",
+		"unzipSync",
+	],
+	[returned(NUMBER), "crc32"],
+	[
+		callback,
+		"brotliCompress",
+		"brotliDecompress",
+		"deflate",
+		"deflateRaw",
+		"gunzip",
+		"gzip",
+		"inflate",
+		"inflateRaw",
+		"unzip",
+	],
+);
+const dnsShared = [
+	[returned(OBJECT), "Resolver"],
+	[returned(OBJECT, "Array"), "getServers"],
+	[returned(STRING), "getDefaultResultOrder"],
+	[returned(UNDEFINED), "setDefaultResultOrder", "setServers"],
+] as const;
+const dnsQueries = [
+	"lookupService",
+	"resolve",
+	"resolve4",
+	"resolve6",
+	"resolveAny",
+	"resolveCaa",
+	"resolveCname",
+	"resolveMx",
+	"resolveNaptr",
+	"resolveNs",
+	"resolvePtr",
+	"resolveSoa",
+	"resolveSrv",
+	"resolveTlsa",
+	"resolveTxt",
+	"reverse",
+];
+const dns = exportsWithContracts(
+	...dnsShared,
+	[returned(OBJECT), "lookup"],
+	[callback, ...dnsQueries],
+);
+const dnsPromises = exportsWithContracts(
+	...dnsShared,
+	[
+		{ kind: "resolve", value: { mask: OBJECT } },
+		"lookup",
+		...dnsQueries.filter((name) => name !== "resolveAny"),
+	],
+	[fulfilled(0), "resolveAny"],
+);
+const tty = exportsWithContracts(
+	[returned(BOOLEAN), "isatty"],
+	[returned(OBJECT), "ReadStream", "WriteStream"],
+);
+const sqlite = exportsWithContracts(
+	[returned(OBJECT), "DatabaseSync"],
+	[neverReturns("Statements are created by DatabaseSync.prepare."), "StatementSync"],
+);
+
+const http = exportsWithContracts(
+	[returned(BOOLEAN), "isValidHeaderName", "isValidHeaderValue"],
+	[
+		returned(UNDEFINED),
+		"validateHeaderName",
+		"validateHeaderValue",
+		"setMaxIdleHTTPParsers",
+	],
+	[
+		returned(OBJECT),
+		"Agent",
+		"CloseEvent",
+		"MessageEvent",
+		"IncomingMessage",
+		"OutgoingMessage",
+		"ServerResponse",
+		"Server",
+		"ClientRequest",
+		"createServer",
+		"request",
+		"get",
+		"WebSocket",
+	],
+);
+const https = exportsWithContracts([
+	returned(OBJECT),
+	"Agent",
+	"Server",
+	"createServer",
+	"request",
+	"get",
+]);
+const tls = exportsWithContracts(
+	[
+		returned(OBJECT),
+		"connect",
+		"createSecureContext",
+		"SecureContext",
+		"createServer",
+		"Server",
+	],
+	[
+		returned(OBJECT, "Array"),
+		"getCACertificates",
+		"getCiphers",
+		"getCertificateCompressionAlgorithms",
+	],
+	[returned(OBJECT | UNDEFINED), "checkServerIdentity"],
+	[neverReturns("The installed TLSSocket adapter is unsupported."), "TLSSocket"],
+);
+const net = exportsWithContracts(
+	[returned(BOOLEAN), "isIPv4", "isIPv6", "getDefaultAutoSelectFamily"],
+	[returned(NUMBER), "isIP", "getDefaultAutoSelectFamilyAttemptTimeout"],
+	[
+		returned(UNDEFINED),
+		"setDefaultAutoSelectFamily",
+		"setDefaultAutoSelectFamilyAttemptTimeout",
+	],
+	[
+		returned(OBJECT),
+		"BlockList",
+		"Server",
+		"connect",
+		"createConnection",
+		"createServer",
+	],
+	[returned(OBJECT | UNDEFINED), "Socket"],
+);
+const childProcess = exportsWithContracts(
+	[returned(OBJECT), "ChildProcess", "exec", "execFile", "spawn", "spawnSync"],
+	[returned(STRING | OBJECT | NULL), "execSync", "execFileSync"],
+	[neverReturns("The native runtime does not support fork IPC."), "fork"],
+);
+const readline = exportsWithContracts(
+	[returned(OBJECT), "Interface", "createInterface"],
+	[returned(UNDEFINED), "emitKeypressEvents"],
+	[
+		dynamic("The output stream's write method supplies the return value."),
+		"clearLine",
+		"clearScreenDown",
+		"cursorTo",
+		"moveCursor",
+	],
+);
+const crypto = exportsWithContracts(
+	[returned(STRING), "randomUUID", "randomUUIDv7"],
+	[returned(BOOLEAN), "timingSafeEqual", "verify"],
+	[returned(OBJECT, "Array"), "getCiphers", "getCurves", "getHashes"],
+	[returned(OBJECT | UNDEFINED), "getCipherInfo", "randomBytes"],
+	[returned(NUMBER | UNDEFINED), "randomInt"],
+	[returned(OBJECT, "Uint8Array"), "argon2Sync", "pbkdf2Sync", "scryptSync", "sign"],
+	[
+		returned(OBJECT),
+		"hkdfSync",
+		"randomFillSync",
+		"getRandomValues",
+		"createCipheriv",
+		"createDecipheriv",
+		"createHash",
+		"createHmac",
+		"createSign",
+		"createVerify",
+		"createPrivateKey",
+		"createPublicKey",
+		"createSecretKey",
+		"generateKeySync",
+		"Cipheriv",
+		"Decipheriv",
+		"Hash",
+		"Hmac",
+		"Sign",
+		"Verify",
+		"X509Certificate",
+		"generateKeyPairSync",
+	],
+	[selected("return", { kind: "output-encoding", argument: 2 }), "hash"],
+	[
+		neverReturns("The native entry is a compatibility stub or an abstract constructor."),
+		"KeyObject",
+		"publicEncrypt",
+	],
+	[
+		callback,
+		"argon2",
+		"pbkdf2",
+		"scrypt",
+		"hkdf",
+		"randomFill",
+		"generateKeyPair",
+		"generateKey",
+	],
+);
+const stream = exportsWithContracts(
+	[
+		returned(OBJECT | UNDEFINED),
+		"default",
+		"Stream",
+		"Readable",
+		"Writable",
+		"Duplex",
+		"Transform",
+		"PassThrough",
+	],
+	[returned(BOOLEAN | NULL), "isReadable", "isWritable", "isDestroyed"],
+	[returned(BOOLEAN), "isErrored", "isDisturbed"],
+	[returned(NUMBER), "getDefaultHighWaterMark"],
+	[returned(UNDEFINED), "destroy", "setDefaultHighWaterMark"],
+	[returned(OBJECT), "addAbortSignal", "compose", "finished", "pipeline"],
+	[returned(OBJECT, "Array"), "duplexPair"],
+);
+const streamPromises = exportsWithContracts(
+	[fulfilled(UNDEFINED), "finished"],
+	[
+		{
+			kind: "fulfill",
+			value: { mask: TOP },
+			reason: "An async destination function can produce any result.",
+		},
+		"pipeline",
+	],
+);
+const streamConsumers = exportsWithContracts(
+	[fulfilled(OBJECT | UNDEFINED), "blob", "buffer", "bytes"],
+	[
+		{
+			kind: "fulfill",
+			value: { mask: TOP },
+			reason: "The consumer invokes a mutable conversion method or reads a JSON value.",
+		},
+		"arrayBuffer",
+		"json",
+		"text",
+	],
+);
+const streamWeb = exportsWithContracts(
+	[
+		returned(OBJECT),
+		"ReadableStream",
+		"ReadableStreamDefaultReader",
+		"ReadableStreamBYOBReader",
+		"WritableStream",
+		"WritableStreamDefaultWriter",
+		"TransformStream",
+		"TextEncoderStream",
+		"TextDecoderStream",
+		"ByteLengthQueuingStrategy",
+		"CountQueuingStrategy",
+	],
+	[
+		neverReturns("The controller or request is only created by a stream."),
+		"ReadableStreamDefaultController",
+		"ReadableByteStreamController",
+		"ReadableStreamBYOBRequest",
+		"WritableStreamDefaultController",
+		"TransformStreamDefaultController",
+	],
+);
+const events = exportsWithContracts(
+	[returned(UNDEFINED), "default", "EventEmitter", "init", "setMaxListeners"],
+	[returned(OBJECT), "EventEmitterAsyncResource", "addAbortListener", "on"],
+	[returned(NUMBER), "listenerCount"],
+	[{ kind: "resolve", value: { mask: OBJECT, brand: "Array" } }, "once"],
+	[
+		dynamic("A custom emitter can return an arbitrary result from its method."),
+		"getEventListeners",
+		"getMaxListeners",
+	],
+);
+const timers = exportsWithContracts(
+	[returned(OBJECT), "setTimeout", "setInterval", "setImmediate"],
+	[returned(UNDEFINED), "clearTimeout", "clearInterval", "clearImmediate"],
+);
+const timersPromises = exportsWithContracts(
+	[returned(OBJECT), "setInterval"],
+	[selected("resolve", { kind: "resolve-value", argument: 1 }, TOP), "setTimeout"],
+	[selected("resolve", { kind: "resolve-value", argument: 0 }, TOP), "setImmediate"],
+);
+
 export const HOST_RESULT_CONTRACTS: ReadonlyMap<
 	string,
 	ReadonlyMap<string, HostResultContract>
 > = new Map([
+	["mal_host_install_node_http", http],
+	["mal_host_install_node_http_without_websocket", http],
+	["mal_host_install_node_https", https],
+	["mal_host_install_node_tls", tls],
+	["mal_host_install_node_net", net],
+	["mal_host_install_node_child_process", childProcess],
+	[
+		"mal_host_install_node_dgram",
+		exportsWithContracts([returned(OBJECT), "Socket", "createSocket"]),
+	],
+	["mal_host_install_node_readline", readline],
+	["mal_host_install_node_readline_promises", readline],
+	["mal_host_install_node_crypto", crypto],
+	["mal_host_install_node_stream", stream],
+	["mal_host_install_node_stream_promises", streamPromises],
+	["mal_host_install_node_stream_consumers", streamConsumers],
+	["mal_host_install_node_stream_web", streamWeb],
+	["mal_host_install_node_events", events],
+	["mal_host_install_node_timers", timers],
+	["mal_host_install_node_timers_promises", timersPromises],
+	[
+		"mal_host_install_node_punycode",
+		exportsWithContracts([returned(STRING), "decode", "encode", "toASCII", "toUnicode"]),
+	],
+	["mal_host_install_node_sys", util],
+	["mal_host_install_node_vm", vm],
+	["mal_host_install_node_diagnostics_channel", diagnostics],
+	[
+		"mal_host_install_node_domain",
+		exportsWithContracts([neverReturns("Domains are unsupported."), "create"]),
+	],
+	["mal_host_install_node_cluster", cluster],
+	["mal_host_install_node_inspector", inspector],
+	["mal_host_install_node_async_hooks", asyncHooks],
+	["mal_host_install_node_console", console],
+	["mal_host_install_node_module", module],
+	["mal_host_install_node_worker_threads", nodeWorkers],
+	["mal_host_install_node_assert", assertions],
+	["mal_host_install_node_assert_strict", assertions],
+	["mal_host_install_node_zlib", zlib],
+	["mal_host_install_node_zlib_decoders", zlib],
+	["mal_host_install_node_dns", dns],
+	["mal_host_install_node_dns_promises", dnsPromises],
+	["mal_host_install_node_tty", tty],
+	["mal_host_install_node_sqlite", sqlite],
+	[
+		"mal_host_install_node_http2",
+		exportsWithContracts([neverReturns("HTTP/2 is unsupported."), "connect"]),
+	],
 	["mal_host_install_node_fs", fs],
 	["mal_host_install_node_fs_named", fs],
 	["mal_host_install_node_fs_read_file", fs],
@@ -611,6 +1146,100 @@ const resolved = (mask: CompilerValueKindMask): HostResultContract => ({
 	kind: "resolve",
 	value: { mask },
 });
+
+export const EMBEDDED_ASSET_RESULTS = {
+	file: {
+		properties: exportsWithContracts(
+			[returned(STRING), "path", "type", "digest"],
+			[returned(NUMBER), "size"],
+		),
+		methods: exportsWithContracts(
+			[returned(OBJECT, "Uint8Array"), "bytes"],
+			[returned(STRING), "text", "materialize"],
+			[returned(STRING | NUMBER | BOOLEAN | NULL | OBJECT), "json"],
+		),
+	},
+	directory: {
+		properties: exportsWithContracts(),
+		methods: exportsWithContracts(
+			[returned(OBJECT, "Array"), "files"],
+			[
+				{ kind: "return", value: { mask: OBJECT | UNDEFINED, assetHandle: "file" } },
+				"get",
+			],
+			[returned(STRING), "materialize"],
+		),
+	},
+} as const;
+
+export const DISK_HANDLE_EXPORTS = exportsWithContracts(
+	[{ kind: "return", value: { mask: OBJECT, diskHandle: "file" } }, "file"],
+	[{ kind: "return", value: { mask: OBJECT, diskHandle: "directory" } }, "directory"],
+	[fulfilled(STRING), "realpath", "readlink"],
+	[fulfilled(UNDEFINED), "symlink"],
+	[
+		{ kind: "fulfill", value: { mask: OBJECT, diskHandle: "directory" } },
+		"temporaryDirectory",
+	],
+	[{ kind: "return", value: { mask: OBJECT, diskHandle: "watcher" } }, "watch"],
+	[returned(OBJECT), "FileSystemError"],
+);
+
+export const DISK_HANDLE_RESULTS = {
+	file: {
+		properties: exportsWithContracts([returned(STRING), "path", "type"]),
+		methods: exportsWithContracts(
+			[fulfilled(STRING), "text"],
+			[fulfilled(OBJECT, "Uint8Array"), "bytes"],
+			[fulfilled(BOOLEAN), "exists"],
+			[fulfilled(NUMBER), "write", "append"],
+			[fulfilled(OBJECT), "stat"],
+			[fulfilled(UNDEFINED), "chmod", "delete", "copyTo", "moveTo"],
+			[returned(OBJECT), "stream"],
+			[{ kind: "return", value: { mask: OBJECT, diskHandle: "writer" } }, "writer"],
+			[
+				{
+					kind: "fulfill",
+					value: { mask: STRING | NUMBER | BOOLEAN | NULL | OBJECT },
+					reason: "Parses the bytes returned by the file read as JSON.",
+				},
+				"json",
+			],
+		),
+	},
+	directory: {
+		properties: exportsWithContracts([returned(STRING), "path"]),
+		methods: exportsWithContracts(
+			[fulfilled(BOOLEAN), "exists"],
+			[fulfilled(OBJECT), "stat"],
+			[fulfilled(OBJECT, "Array"), "entries", "files"],
+			[fulfilled(UNDEFINED), "chmod", "create", "delete", "moveTo"],
+			[{ kind: "return", value: { mask: OBJECT, diskHandle: "file" } }, "file"],
+			[{ kind: "return", value: { mask: OBJECT, diskHandle: "directory" } }, "directory"],
+			[
+				{ kind: "fulfill", value: { mask: OBJECT | UNDEFINED, diskHandle: "file" } },
+				"get",
+			],
+		),
+	},
+	writer: {
+		properties: exportsWithContracts(),
+		methods: exportsWithContracts(
+			[fulfilled(NUMBER), "write"],
+			[fulfilled(UNDEFINED), "flush", "close", "end", "[Symbol.asyncDispose]"],
+		),
+	},
+	watcher: {
+		properties: exportsWithContracts(),
+		methods: exportsWithContracts(
+			[fulfilled(OBJECT), "next", "return"],
+			[
+				{ kind: "return", value: { mask: OBJECT, diskHandle: "watcher" } },
+				"[Symbol.asyncIterator]",
+			],
+		),
+	},
+} as const;
 
 export type WebFetchInstance =
 	| "Blob"

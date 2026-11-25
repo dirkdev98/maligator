@@ -786,6 +786,7 @@ export interface CoreFunctionMetadata {
 	readonly sourcePath: string;
 	/** Compiled from a toolchain-owned module rather than the application. */
 	readonly toolchain?: true;
+	readonly canonicalPlatformSource?: string;
 	readonly sourceStrict: boolean;
 	readonly nameStringIndex: number;
 	readonly length: number;

@@ -108,11 +108,13 @@ import {
 	CORE_UNKNOWN_PROMISE,
 	coreIntrinsicPromiseStaticCall,
 	corePromiseAdoptedKinds,
+	corePromiseArrayInputs,
 	corePromiseContinuation,
 	corePromiseIsProven,
 	corePromiseValueIsPrivate,
 	coreSuccessfulAwaitInput,
 } from "./core-promise-facts.ts";
+import type { CorePromiseArgumentUse } from "./core-promise-facts.ts";
 import type { CoreRecordValueKind } from "./core-record-value-kinds.ts";
 import {
 	coreReturnedValueDefinition,
@@ -162,7 +164,7 @@ export interface CoreValueKindInputs {
 	readonly promiseArgumentIsPrivate?: (
 		instruction: CoreInstructionId,
 		operand: number,
-	) => boolean;
+	) => CorePromiseArgumentUse | undefined;
 	readonly promiseCallback?: (
 		value: CoreValueId,
 	) => CorePromiseCallbackResult | undefined;
@@ -426,6 +428,7 @@ const KIND_TRANSFER_SYMBOL_KEY_FOR = 15;
 const KIND_TRANSFER_AWAIT = 16;
 const KIND_TRANSFER_PROMISE_RESOLVE = 17;
 const KIND_TRANSFER_PROMISE_CONTINUATION = 18;
+const KIND_TRANSFER_PROMISE_AGGREGATE = 19;
 
 // A non-number key on an Array whose holders are all known reads its length, a
 // prototype member or nothing, since no one gave it other named properties.
@@ -1361,6 +1364,32 @@ function solveCoreValueKinds(
 					promise?.operation === "Promise.try")
 			) {
 				masks[output] = COMPILER_VALUE_KIND_OBJECT;
+				if (
+					promise.operation === "Promise.allKeyed" &&
+					promise.firstArgument !== undefined &&
+					knownKeyedInputHasNoThen(promise.firstArgument)
+				) {
+					fulfillmentKinds[output] = COMPILER_VALUE_KIND_OBJECT;
+					return;
+				}
+				if (promise.operation === "Promise.any" || promise.operation === "Promise.race") {
+					const array =
+						promise.firstArgument === undefined
+							? undefined
+							: corePromiseArrayInputs(fn, promise.firstArgument);
+					if (array?.call === instruction) {
+						fulfillmentKinds[output] = array.holes ? COMPILER_VALUE_KIND_UNDEFINED : 0;
+						if (array.elements.length !== 0)
+							addKindTransfer(
+								transfers,
+								KIND_TRANSFER_PROMISE_AGGREGATE,
+								output,
+								0,
+								array.elements,
+							);
+						return;
+					}
+				}
 				fulfillmentKinds[output] =
 					promise.operation !== "Promise.try"
 						? COMPILER_VALUE_KIND_TOP
@@ -1554,6 +1583,13 @@ function solveCoreValueKinds(
 					!corePromiseIsProven(source)
 						? CORE_UNKNOWN_PROMISE
 						: awaitMask(input);
+			} else if (transfer === KIND_TRANSFER_PROMISE_AGGREGATE) {
+				for (let offset = 0; offset < count; offset++) {
+					const input = transferInputs[start + offset]!;
+					fulfillmentKinds[output] =
+						fulfillmentKinds[output]! |
+						corePromiseAdoptedKinds(awaitMask(input), CORE_UNKNOWN_PROMISE);
+				}
 			}
 		}
 		const continuation = promiseContinuations?.get(index);
@@ -1561,6 +1597,7 @@ function solveCoreValueKinds(
 			continuation !== undefined
 				? continuationKind(continuation, output)
 				: transfer === KIND_TRANSFER_PROMISE_RESOLVE ||
+					  transfer === KIND_TRANSFER_PROMISE_AGGREGATE ||
 					  masks[output] === COMPILER_VALUE_KIND_TOP
 					? 0
 					: transfer === KIND_TRANSFER_AWAIT
@@ -1631,6 +1668,24 @@ function solveCoreValueKinds(
 			: primitives |
 					((fulfillmentKinds?.[value] ?? COMPILER_VALUE_KIND_TOP) &
 						COMPILER_VALUE_KIND_TOP);
+	}
+
+	function knownKeyedInputHasNoThen(value: CoreValueId): boolean {
+		if (
+			fn.kernel.valueDefinitionKind(value) !== 1 ||
+			fn.valueUseCount(value) !== 1 ||
+			fn.kernel.valueHandlerUseCount(value) !== 0
+		)
+			return false;
+		const producer = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+		if (fn.instructionOpcodeName(producer) !== "createObjectShaped") return false;
+		const keys = fn.instructionAttributes(producer).keyStringIndices;
+		return (
+			Array.isArray(keys) &&
+			keys.every(
+				(key) => typeof key === "number" && program.stringConstantText(key) !== "then",
+			)
+		);
 	}
 
 	function continuationKind(

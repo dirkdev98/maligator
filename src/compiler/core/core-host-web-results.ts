@@ -3,6 +3,8 @@ import {
 	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../shared/compiler-value-kinds.ts";
 import {
+	DISK_HANDLE_RESULTS,
+	NODE_FILE_HANDLE_RESULTS,
 	WEB_FETCH_CONSTRUCTORS,
 	WEB_FETCH_RESULTS,
 } from "../shared/host-result-contracts.ts";
@@ -12,6 +14,11 @@ import type {
 } from "../shared/host-result-contracts.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import {
+	coreDiskHandleResult,
+	coreHostResult,
+	coreHostResultSlots,
+} from "./core-host-results.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreProgramFlowTargetIndex } from "./core-program-flow.ts";
@@ -34,6 +41,12 @@ const PROTECTED_PROPERTIES = new Set([
 		...members.keys(),
 	]),
 	...Object.values(WEB_FETCH_RESULTS.statics).flatMap((members) => [...members.keys()]),
+	...NODE_FILE_HANDLE_RESULTS.methods.keys(),
+	...NODE_FILE_HANDLE_RESULTS.properties.keys(),
+	...Object.values(DISK_HANDLE_RESULTS).flatMap(({ methods, properties }) => [
+		...methods.keys(),
+		...properties.keys(),
+	]),
 ]);
 const LOGGED: HostResultContract = {
 	kind: "return",
@@ -43,6 +56,19 @@ const MODULE_EVALUATORS = new Set([
 	"__evaluateModule",
 	"__evaluateModuleAsync",
 	"__evaluateModuleSync",
+]);
+const SCANNED_HOST_INSTALLERS = new Set([
+	"mal_host_install_node_fs",
+	"mal_host_install_node_fs_promises",
+	"mal_host_install_node_path",
+	"mal_host_install_node_path_posix",
+	"mal_host_install_node_path_win32",
+	"mal_host_install_node_os",
+	"mal_host_install_maligator_internal_fetch",
+	"mal_host_install_maligator_internal_fs",
+	"mal_host_install_maligator_internal_fs_descriptor",
+	"mal_host_install_maligator_internal_fs_stream",
+	"mal_host_install_maligator_internal_fs_watch",
 ]);
 
 function definition(fn: CoreFunctionStore, value: CoreValueId) {
@@ -191,7 +217,7 @@ export function coreWebFetchResult(
 
 /** Installed Web bindings are mutable. A closed source can establish that no
  * operation in the image changes the bindings or member lookups used here. */
-export function coreWebFetchIdentityIsStable(
+export function coreHostMemberIdentitiesAreStable(
 	program: CoreProgram,
 	context: CoreCompilationContext,
 	targets: CoreProgramFlowTargetIndex,
@@ -204,15 +230,23 @@ export function coreWebFetchIdentityIsStable(
 		facts.world.realms ||
 		data.inheritsHostComponents ||
 		data.moduleLinks !== undefined ||
-		data.hostInstallCandidates.length !== 0 ||
+		data.hostInstallCandidates.some(
+			({ installer }) => !SCANNED_HOST_INSTALLERS.has(installer),
+		) ||
 		(data.sourceBuiltinProviders?.length ?? 0) !== 0 ||
 		!data.sourceFiles.some(({ contents }) =>
-			/\b(?:fetch|Response|Request|Blob|File|FormData|Headers)\b/.test(contents),
+			/\b(?:fetch|Response|Request|Blob|File|FormData|Headers|open|maligator:fs)\b/.test(
+				contents,
+			),
 		)
 	)
 		return false;
+	const slots = coreHostResultSlots(context);
 	for (const id of targets.graph.functions) {
 		const fn = program.function(id);
+		// The source filesystem module initializes its private class prototypes.
+		// Its later operations use frozen handles and the captured native entries.
+		if (fn.metadata.canonicalPlatformSource === "maligator:fs") continue;
 		const sites = new Map(targets.outgoing(id).map((site) => [site.instruction, site]));
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
@@ -290,7 +324,12 @@ export function coreWebFetchIdentityIsStable(
 					if (typeof name === "string" && MODULE_EVALUATORS.has(name)) continue;
 				}
 			}
-			if (coreWebFetchResult(program, fn, instruction) === undefined) return false;
+			if (
+				coreWebFetchResult(program, fn, instruction) === undefined &&
+				coreDiskHandleResult(program, fn, instruction, targets, context) === undefined &&
+				coreHostResult(program, fn, instruction, slots, true, true) === undefined
+			)
+				return false;
 		}
 	}
 	return true;

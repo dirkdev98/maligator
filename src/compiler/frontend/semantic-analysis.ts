@@ -27,6 +27,7 @@ export interface SemanticFile {
 
 	/** Owned by the toolchain, like the Node globals prelude, rather than the application. */
 	toolchain?: true;
+	canonicalPlatformSource?: string;
 
 	/**
 	 * A CommonJS module. Its top level is the body of a wrapper function

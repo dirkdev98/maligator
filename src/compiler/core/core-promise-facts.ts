@@ -3,6 +3,7 @@ import {
 	COMPILER_VALUE_KIND_TOP,
 } from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreTerminatorAliasParameter } from "./core-record-value-kinds.ts";
@@ -12,6 +13,7 @@ import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 // bit admits other objects, whose constructor and then behavior is unknown.
 const UNPROVEN_PROMISE = 1 << 9;
 export const CORE_UNKNOWN_PROMISE = COMPILER_VALUE_KIND_TOP | UNPROVEN_PROMISE;
+export type CorePromiseArgumentUse = "borrowed" | "possibly-returned";
 
 function primordialName(fn: CoreFunctionStore, value: CoreValueId): unknown {
 	if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
@@ -52,6 +54,95 @@ export function coreIntrinsicPromiseStaticCall(
 			? fn.kernel.operandAt(start + receiverIndex + 1)
 			: undefined;
 	return { operation, firstArgument };
+}
+
+const ARRAY_AGGREGATES = new Set([
+	"Promise.all",
+	"Promise.allSettled",
+	"Promise.any",
+	"Promise.race",
+]);
+
+export function corePromiseArrayInputs(
+	fn: CoreFunctionStore,
+	array: CoreValueId,
+):
+	| {
+			readonly call: CoreInstructionId;
+			readonly elements: ReadonlyArray<CoreValueId>;
+			readonly holes: boolean;
+	  }
+	| undefined {
+	if (
+		fn.kernel.valueDefinitionKind(array) !== 1 ||
+		fn.kernel.valueHandlerUseCount(array) !== 0
+	)
+		return undefined;
+	const allocation = coreInstructionId(fn.kernel.valueDefinitionOwner(array));
+	if (fn.instructionOpcodeName(allocation) !== "createArray") return undefined;
+	const length = fn.instructionAttributes(allocation).length;
+	if (typeof length !== "number" || length < 0 || length > 32) return undefined;
+	const block = fn.instructionBlock(allocation);
+	const writes = new Map<CoreInstructionId, { key: number; value: CoreValueId }>();
+	let call: CoreInstructionId | undefined;
+	for (let use = fn.kernel.valueFirstUse(array); use >= 0; use = fn.kernel.useNext(use)) {
+		if (fn.kernel.useLive(use) === 0) continue;
+		const instruction = fn.kernel.useInstruction(use);
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionBlock(instruction) !== block
+		)
+			return undefined;
+		const aggregate = coreIntrinsicPromiseStaticCall(fn, instruction);
+		if (
+			aggregate !== undefined &&
+			ARRAY_AGGREGATES.has(aggregate.operation) &&
+			aggregate.firstArgument === array
+		) {
+			if (call !== undefined) return undefined;
+			call = instruction;
+			continue;
+		}
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (
+			(opcode !== "defineProperty" && opcode !== "storeProperty") ||
+			fn.kernel.useOperand(use) !== 0
+		)
+			return undefined;
+		const start = fn.kernel.instructionOperandStart(instruction);
+		const key = fn.kernel.operandAt(start + 1);
+		if (fn.kernel.valueDefinitionKind(key) !== 1) return undefined;
+		const keyDefinition = coreInstructionId(fn.kernel.valueDefinitionOwner(key));
+		const index = fn.instructionAttributes(keyDefinition).value;
+		if (
+			fn.instructionOpcodeName(keyDefinition) !== "createNumber" ||
+			typeof index !== "number" ||
+			!Number.isInteger(index) ||
+			index < 0 ||
+			index >= length
+		)
+			return undefined;
+		writes.set(instruction, { key: index, value: fn.kernel.operandAt(start + 2) });
+	}
+	if (call === undefined) return undefined;
+	const elements = new Map<number, CoreValueId>();
+	let budget = 256;
+	for (
+		let next = fn.instructionNext(allocation);
+		next !== undefined;
+		next = fn.instructionNext(next)
+	) {
+		if (--budget < 0) return undefined;
+		if (next === call)
+			return writes.size === 0
+				? { call, elements: [...elements.values()], holes: elements.size < length }
+				: undefined;
+		const write = writes.get(next);
+		if (write === undefined) continue;
+		elements.set(write.key, write.value);
+		writes.delete(next);
+	}
+	return undefined;
 }
 
 type PromiseMethod = "then" | "catch" | "finally";
@@ -135,13 +226,56 @@ export function coreSuccessfulAwaitInput(
 		: undefined;
 }
 
+/** A wrapper can rethrow an awaited callback error without merging its
+ * successful results with the callbacks passed by other callers. */
+export function coreAwaitedCallbackParameter(
+	fn: CoreFunctionStore,
+	control: CoreControlFlow,
+): number | undefined {
+	if (
+		!fn.isAsync ||
+		fn.isGenerator ||
+		fn.metadata.mappedArguments ||
+		fn.parameterCount === 0
+	)
+		return undefined;
+	let parameter: CoreValueId | undefined;
+	for (const block of control.reachable) {
+		const terminator = fn.blockTerminator(block);
+		if (fn.instructionKind(terminator) !== "return") continue;
+		const returned = fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator));
+		if (fn.kernel.valueDefinitionKind(returned) !== 1) return undefined;
+		const projection = coreInstructionId(fn.kernel.valueDefinitionOwner(returned));
+		if (fn.instructionOpcodeName(projection) !== "awaitFulfilled") return undefined;
+		const awaited = coreSuccessfulAwaitInput(fn, projection);
+		if (awaited === undefined || fn.kernel.valueDefinitionKind(awaited) !== 1)
+			return undefined;
+		const call = coreInstructionId(fn.kernel.valueDefinitionOwner(awaited));
+		if (
+			fn.instructionOpcodeName(call) !== "call" ||
+			fn.kernel.instructionOperandCount(call) !== 2 ||
+			fn.instructionAttributes(call).argumentMode !== undefined
+		)
+			return undefined;
+		const callee = fn.kernel.operandAt(fn.kernel.instructionOperandStart(call));
+		if (parameter !== undefined && parameter !== callee) return undefined;
+		parameter = callee;
+	}
+	if (parameter === undefined) return undefined;
+	for (let index = 0; index < fn.parameterCount; index++)
+		if (fn.kernel.functionParameter(index) === parameter) return index;
+	return undefined;
+}
+
 /** The object's constructor and then lookup must stay on the locked intrinsic chain. */
 export function corePromiseValueIsPrivate(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	value: CoreValueId,
-	allowArgument?: (instruction: CoreInstructionId, operand: number) => boolean,
-	allowReturn = true,
+	allowArgument?: (
+		instruction: CoreInstructionId,
+		operand: number,
+	) => CorePromiseArgumentUse | undefined,
 ): boolean {
 	const pending = [value];
 	const seen = new Set<CoreValueId>();
@@ -161,7 +295,7 @@ export function corePromiseValueIsPrivate(
 			const instruction = fn.kernel.useInstruction(use);
 			const operand = fn.kernel.useOperand(use);
 			const kind = fn.instructionKind(instruction);
-			if (kind === "return" && allowReturn) continue;
+			if (kind === "return") continue;
 			if (kind !== "operation") {
 				const parameter = coreTerminatorAliasParameter(fn, instruction, operand);
 				if (parameter === null || parameter === undefined) return false;
@@ -179,6 +313,15 @@ export function corePromiseValueIsPrivate(
 				pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
 				continue;
 			}
+			if (
+				(opcode === "defineProperty" || opcode === "storeProperty") &&
+				operand === 2 &&
+				corePromiseArrayInputs(
+					fn,
+					fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
+				) !== undefined
+			)
+				continue;
 			if (opcode === "call" || opcode === "callKnown") {
 				const receiverOffset = opcode === "call" ? 1 : 0;
 				if (
@@ -195,7 +338,10 @@ export function corePromiseValueIsPrivate(
 					continue;
 				}
 			}
-			if (!allowArgument?.(instruction, operand)) return false;
+			const argumentUse = allowArgument?.(instruction, operand);
+			if (argumentUse === undefined) return false;
+			if (argumentUse === "possibly-returned")
+				pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
 		}
 	}
 	return true;

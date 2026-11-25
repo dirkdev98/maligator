@@ -131,6 +131,8 @@ export interface ModuleRecord {
 	host?: HostModuleSpec;
 	/** In-memory source supplied by the embedding toolchain (for example maligator:test). */
 	virtual?: true;
+	/** Catalog source parsed without caller substitutions to its source or imports. */
+	canonicalPlatformSource?: string;
 	/**
 	 * A data module synthesized from `sourcePath`'s bytes. Its `source` is the generated
 	 * module, so build inputs digest the file itself rather than `source`.
@@ -1031,6 +1033,23 @@ export function buildModuleGraph(
 			return;
 		}
 		const { sourcePath, parsed, dependencies, importMetaResolutions } = analyzed;
+		const canonicalPlatformSource =
+			virtual &&
+			!options.virtualModules?.has(filePath) &&
+			!options.transformSource?.files.has(filePath) &&
+			options.stripTypes === stripCompactTypes &&
+			catalogSources.get(filePath)?.platform === true &&
+			dependencies.every(
+				({ specifier, resolvedPath }) =>
+					specifier !== null &&
+					specifier === resolvedPath &&
+					!options.virtualModules?.has(specifier) &&
+					!options.externalModules?.has(specifier) &&
+					!ctx.ffiModules.has(specifier) &&
+					lookupPlatformModule(specifier)?.kind === "native",
+			)
+				? lookupPlatformModule(filePath)?.id
+				: undefined;
 		if (
 			memoKey !== undefined &&
 			!reusable &&
@@ -1077,6 +1096,7 @@ export function buildModuleGraph(
 			dependencies,
 			...(importMetaResolutions.length === 0 ? {} : { importMetaResolutions }),
 			...(virtual ? { virtual: true as const } : {}),
+			...(canonicalPlatformSource === undefined ? {} : { canonicalPlatformSource }),
 			...(virtual && virtualModule(filePath)?.platform
 				? { platform: lookupPlatformModule(filePath) }
 				: {}),
