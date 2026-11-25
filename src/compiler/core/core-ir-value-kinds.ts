@@ -61,7 +61,7 @@ import { coreNumericTypedArrayKind } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState, CoreExactHeapBrand } from "./core-heap-brands.ts";
 import { coreHostObjectResult } from "./core-host-object-results.ts";
 import {
-	coreDiskHandleResult,
+	corePlatformSourceResult,
 	coreHostResult,
 	coreHostResultSlots,
 } from "./core-host-results.ts";
@@ -2196,7 +2196,7 @@ export function coreValueKindDemand(
 					(coreHostResult(program, fn, instruction, hostSlots, true, true) !==
 						undefined ||
 						(context !== undefined &&
-							coreDiskHandleResult(program, fn, instruction, targets, context) !==
+							corePlatformSourceResult(program, fn, instruction, targets, context) !==
 								undefined)))
 			) {
 				fixed.set(value, undefined);

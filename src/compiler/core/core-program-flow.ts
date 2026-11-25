@@ -13,7 +13,7 @@ import {
 	coreHostObjectResult,
 } from "./core-host-object-results.ts";
 import {
-	coreDiskHandleResult,
+	corePlatformSourceResult,
 	coreHostCompletion,
 	coreHostResult,
 	coreHostResultSlots,
@@ -3213,7 +3213,7 @@ export class CoreProgramFlowEngine {
 									fn,
 									instruction,
 									coreHostObjectResult(this.#program, fn, instruction, hostSlots) ??
-										coreDiskHandleResult(
+										corePlatformSourceResult(
 											this.#program,
 											fn,
 											instruction,

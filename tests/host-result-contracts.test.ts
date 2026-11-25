@@ -21,7 +21,8 @@ import {
 import {
 	BUFFER_STRING_ENCODINGS,
 	DISK_HANDLE_EXPORTS,
-	DISK_HANDLE_RESULTS,
+	EMBEDDED_ASSET_RESULTS,
+	PLATFORM_OBJECT_RESULTS,
 	HOST_RESULT_CONTRACTS,
 	NODE_FILE_HANDLE_RESULTS,
 	GLOBAL_HOST_CONSTRUCTORS,
@@ -94,6 +95,8 @@ it.each([
 	["readSync(path, { encoding: 'utf8' })", "string"],
 	["await readAsync(path, 'utf8')", "string"],
 	["await readAsync(path)", "string"],
+	["readSync(path).readUInt8(0)", "number"],
+	["(await readAsync(path)).readUInt8(0)", "number"],
 	["await readAsync(path, options)", "number"],
 	["await (await open(path)).readFile('utf8')", "string"],
 	["await (await open(path)).readFile()", "string"],
@@ -206,6 +209,7 @@ it("does not reuse an embedding's replacement filesystem parse for the canonical
 it.each([
 	["await file(path).text()", "string"],
 	["await file(path).bytes()", "string"],
+	["await file(path).writer().write('text')", "number"],
 ])("uses the successful result of %s through the source module", (expression, type) => {
 	const operations = inspectHostCall(
 		expression,
@@ -215,6 +219,36 @@ it.each([
 	);
 	expect(operations).toContain("await");
 	expect(operations).not.toContain("typeofCompare");
+});
+
+it.each([
+	[
+		"serve({ fetch: () => new Response('hello') }).port",
+		"number",
+		'import { serve } from "maligator:http";',
+	],
+	[
+		"await serve({ fetch: () => new Response('hello') }).close()",
+		"undefined",
+		'import { serve } from "maligator:http";',
+	],
+	[
+		"await (await fetch('data:text/plain,hello')).text()",
+		"string",
+		'import { fetch } from "maligator:http";',
+	],
+	[
+		"createPool(options).stats().active",
+		"number",
+		'import { createPool } from "maligator:workers";',
+	],
+	[
+		"transfer(options, []).transferList",
+		"string",
+		'import { transfer } from "maligator:workers";',
+	],
+])("propagates %s through the packaged source module", (expression, type, imports) => {
+	expect(inspectHostCall(expression, type, "", imports)).not.toContain("typeofCompare");
 });
 
 it.each([
@@ -238,17 +272,23 @@ it("keeps the result observation after a Web prototype override", () => {
 	expect(operations).toContain("typeofCompare");
 });
 
-it("keeps the result observation when a host callback can replace the receiver's prototype", () => {
-	const operations = inspectHostCall(
-		"await response.text()",
-		"number",
-		`const response = new Response("body");
-		setTimeout(Object.setPrototypeOf, 0, response, { text: () => 42 });
+it.each([
+	["Object.setPrototypeOf", ""],
+	["_extend", 'import { _extend } from "node:util";'],
+])(
+	"keeps the result observation when a host callback can modify the receiver through %s",
+	(callback, imports) => {
+		const operations = inspectHostCall(
+			"await response.text()",
+			"number",
+			`const response = new Response("body");
+		setTimeout(${callback}, 0, response, { text: () => 42 });
 		await pause(10);`,
-		'import { setTimeout as pause } from "node:timers/promises";',
-	);
-	expect(operations).toContain("typeofCompare");
-});
+			`${imports}\nimport { setTimeout as pause } from "node:timers/promises";`,
+		);
+		expect(operations).toContain("typeofCompare");
+	},
+);
 
 it.each([
 	["new Response().status", "number"],
@@ -338,6 +378,27 @@ it("accounts for methods and getters installed on Node FileHandle objects", () =
 	);
 });
 
+it("accounts for members installed on embedded asset handles", () => {
+	const source = readFileSync(
+		new URL("../runtime/src/runtime/maligator_assets.c", import.meta.url),
+		"utf8",
+	);
+	for (const kind of ["file", "directory"] as const) {
+		const functionStart = source.indexOf(`static MalValue asset_${kind}_handle(`);
+		expect(functionStart).toBeGreaterThanOrEqual(0);
+		const build = source.slice(functionStart, source.indexOf("\n}", functionStart));
+		const installed = [
+			...build.matchAll(
+				/(?:asset_define_(?:method|getter)|mal_intrinsic_define_data)\(vm, handle, (?:\(const byte \*\) )?"([^"]+)"/g,
+			),
+		];
+		const { properties, methods } = EMBEDDED_ASSET_RESULTS[kind];
+		expect(new Set(installed.map((match) => match[1]))).toEqual(
+			new Set([...properties.keys(), ...methods.keys()]),
+		);
+	}
+});
+
 it("accounts for the exported filesystem wrappers and their handle classes", () => {
 	const url = new URL("../src/fs/runtime.ts", import.meta.url);
 	const { ast } = parseModule(stripCompactTypes(readFileSync(url, "utf8"), url.pathname));
@@ -367,7 +428,7 @@ it("accounts for the exported filesystem wrappers and their handle classes", () 
 	}
 	expect(exports).toEqual(new Set(DISK_HANDLE_EXPORTS.keys()));
 	for (const kind of ["file", "directory"] as const) {
-		const members = DISK_HANDLE_RESULTS[kind];
+		const members = PLATFORM_OBJECT_RESULTS[kind];
 		expect(
 			handles.get(kind === "file" ? "DiskFileHandle" : "DiskDirectoryHandle"),
 		).toEqual(new Set([...members.methods.keys(), ...members.properties.keys()]));
@@ -404,6 +465,16 @@ it("accounts for the installed constructors, methods, and getters of audited hos
 			constructorPath: `%MAL_INTRINSIC_NODE_FS_MODULE%.${name}`,
 			prototype: `%MAL_INTRINSIC_NODE_FS_MODULE%.${name}.prototype`,
 		})),
+		{
+			name: "MessagePort",
+			constructorPath: "globalThis.MessagePort",
+			prototype: "globalThis.MessagePort.prototype",
+		} as const,
+		{
+			name: "NodeWorker",
+			constructorPath: "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker",
+			prototype: "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype",
+		} as const,
 		{
 			name: "StringDecoder",
 			constructorPath:
@@ -484,6 +555,24 @@ it.each([
 	["new CloseEvent('close').code", "number", ""],
 	["new EventTarget().dispatchEvent(new Event('test'))", "boolean", ""],
 	["performance.now()", "number", ""],
+	["new Readable().read(0)", "string", 'import { Readable } from "node:stream";'],
+	[
+		"Readable.from(['chunk']).isPaused()",
+		"boolean",
+		'import { Readable } from "node:stream";',
+	],
+	[
+		"Readable.toWeb(new Readable()).locked",
+		"boolean",
+		'import { Readable } from "stream";',
+	],
+	["createGzip()._closed", "boolean", 'import { createGzip } from "node:zlib";'],
+	["createGzip().reset()", "undefined", 'import { createGzip } from "node:zlib";'],
+	[
+		"gzipSync('chunk', { info: true }).buffer.readUInt8(0)",
+		"number",
+		'import { gzipSync } from "node:zlib";',
+	],
 	["setTimeout(() => {}, 0).hasRef()", "boolean", ""],
 	["atob('YWJj')", "string", ""],
 	[
@@ -541,6 +630,26 @@ it.each([
 		"parse('https://example.test').resolve('/path')",
 		"string",
 		'import { parse } from "node:url";',
+	],
+	[
+		"new MessageChannel().port1.hasRef()",
+		"boolean",
+		'import { MessageChannel } from "node:worker_threads";',
+	],
+	[
+		"new MessageChannel().port1.postMessage('value')",
+		"undefined",
+		'import { MessageChannel } from "node:worker_threads";',
+	],
+	[
+		"capabilities().sharedMemory",
+		"boolean",
+		'import { capabilities } from "maligator:workers";',
+	],
+	[
+		"new MessageChannel().port1.hasRef()",
+		"boolean",
+		'import { MessageChannel } from "maligator:workers";',
 	],
 	["statSync(path).isFile()", "boolean", 'import { statSync } from "node:fs";'],
 	[

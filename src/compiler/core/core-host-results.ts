@@ -9,12 +9,13 @@ import {
 import { EMBED_INSTALLER } from "../shared/embedded-asset.ts";
 import {
 	BUFFER_STRING_ENCODINGS,
-	DISK_HANDLE_EXPORTS,
-	DISK_HANDLE_RESULTS,
+	PLATFORM_SOURCE_EXPORTS,
+	PLATFORM_OBJECT_RESULTS,
 	EMBEDDED_ASSET_RESULTS,
 	HOST_RESULT_CONTRACTS,
 } from "../shared/host-result-contracts.ts";
 import type {
+	HostObjectKind,
 	HostResultContract,
 	HostValueContract,
 } from "../shared/host-result-contracts.ts";
@@ -100,6 +101,17 @@ function hostSlotContract(
 	if (fn.instructionOpcodeName(producer) !== "loadGlobal") return undefined;
 	const slot = fn.instructionAttributes(producer).index;
 	return typeof slot === "number" ? slots.get(slot)?.contract : undefined;
+}
+
+export function coreHostSlotName(
+	fn: CoreFunctionStore,
+	producer: CoreInstructionId,
+	slots: CoreHostSlots,
+): string | undefined {
+	if (fn.instructionOpcodeName(producer) !== "loadGlobal") return undefined;
+	const index = fn.instructionAttributes(producer).index;
+	const root = typeof index === "number" ? slots.get(index)?.root : undefined;
+	return root?.slice(root.indexOf(":") + 1);
 }
 
 export function coreHostSlotValue(
@@ -245,7 +257,7 @@ export function coreHostDirectCallContract(
 	return fromSlot ?? assetMember(program, fn, callee, slots, "methods", budget);
 }
 
-export function coreDiskHandleResult(
+export function corePlatformSourceResult(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
@@ -290,20 +302,22 @@ export function coreDiskHandleResult(
 		possible.functions.length === 1
 	) {
 		const target = program.function(possible.functions[0]!);
-		if (target.metadata.canonicalPlatformSource === "maligator:fs") {
+		const platform = target.metadata.canonicalPlatformSource;
+		if (platform !== undefined) {
 			const name = program.stringConstantText(target.metadata.nameStringIndex);
-			if (opcode === "call") return DISK_HANDLE_EXPORTS.get(name);
-			if (name === "FileSystemError") return DISK_HANDLE_EXPORTS.get(name);
-			const diskHandle =
+			const contracts = PLATFORM_SOURCE_EXPORTS.get(platform);
+			if (opcode === "call" || name === "FileSystemError") return contracts?.get(name);
+			if (platform !== "maligator:fs") return undefined;
+			const platformObject =
 				name === "DiskFileHandle"
 					? "file"
 					: name === "DiskDirectoryHandle"
 						? "directory"
 						: undefined;
-			if (diskHandle !== undefined)
+			if (platformObject !== undefined)
 				return {
 					kind: "return",
-					value: { mask: COMPILER_VALUE_KIND_OBJECT, diskHandle },
+					value: { mask: COMPILER_VALUE_KIND_OBJECT, platformObject },
 				};
 		}
 	}
@@ -338,7 +352,7 @@ export function coreDiskHandleResult(
 					fn.kernel.valueHandlerUseCount(awaited) !== 0))
 		)
 			return undefined;
-		const result = coreDiskHandleResult(
+		const result = corePlatformSourceResult(
 			program,
 			fn,
 			producer,
@@ -347,8 +361,10 @@ export function coreDiskHandleResult(
 			budget - 1,
 		);
 		const expected = awaited === undefined ? "return" : "fulfill";
-		const brand = result?.kind === expected ? result.value.diskHandle : undefined;
-		return brand === undefined ? undefined : DISK_HANDLE_RESULTS[brand][kind].get(key);
+		const brand = result?.kind === expected ? result.value.platformObject : undefined;
+		return brand === undefined
+			? undefined
+			: PLATFORM_OBJECT_RESULTS[brand][kind].get(key);
 	}
 }
 
@@ -445,9 +461,13 @@ export function coreHostResult(
 	return coreHostCompletion(program, fn, instruction, contract, locked);
 }
 
+interface CoreHostValueFacts extends CoreNormalResultFacts {
+	readonly hostObject?: HostObjectKind;
+}
+
 interface CoreHostCompletion {
-	readonly immediate: CoreNormalResultFacts;
-	readonly fulfilled?: CoreNormalResultFacts;
+	readonly immediate: CoreHostValueFacts;
+	readonly fulfilled?: CoreHostValueFacts;
 }
 
 export function coreHostCompletion(
@@ -501,9 +521,10 @@ export function coreHostCompletion(
 						: undefined,
 			};
 
-	function valueFacts(value: HostValueContract): CoreNormalResultFacts {
+	function valueFacts(value: HostValueContract): CoreHostValueFacts {
 		const selector = value.selector;
-		if (selector === undefined) return { mask: value.mask, heapBrand: value.brand };
+		if (selector === undefined)
+			return { mask: value.mask, heapBrand: value.brand, hostObject: value.hostObject };
 		if (fn.instructionAttributes(instruction).argumentMode !== undefined)
 			return { mask: value.mask };
 		const argument = selector.argument + 2;
@@ -517,12 +538,13 @@ export function coreHostCompletion(
 			operand === undefined
 				? undefined
 				: stableOptionValue(program, fn, operand, locked, key, acceptPrimitive);
-		const buffer = { mask: COMPILER_VALUE_KIND_OBJECT, heapBrand: "Uint8Array" } as const;
+		const bytes = { mask: COMPILER_VALUE_KIND_OBJECT, heapBrand: "Uint8Array" } as const;
+		const buffer = { ...bytes, hostObject: "Buffer" } as const;
 		const string = { mask: COMPILER_VALUE_KIND_STRING };
 		switch (selector.kind) {
 			case "text-flag": {
 				const flag = primitive();
-				if (flag !== UNKNOWN_LITERAL) return flag ? string : buffer;
+				if (flag !== UNKNOWN_LITERAL) return flag ? string : bytes;
 				break;
 			}
 			case "encoding":
@@ -541,7 +563,7 @@ export function coreHostCompletion(
 			case "stat-options": {
 				const flag = option("throwIfNoEntry");
 				if (flag !== UNKNOWN_LITERAL && flag !== false)
-					return { mask: COMPILER_VALUE_KIND_OBJECT };
+					return { mask: COMPILER_VALUE_KIND_OBJECT, hostObject: value.hostObject };
 				break;
 			}
 			case "digest-encoding": {
@@ -572,6 +594,17 @@ export function coreHostCompletion(
 					return { mask: COMPILER_VALUE_KIND_BOOLEAN };
 				break;
 			}
+			case "read-size": {
+				if (primitive() === 0) return { mask: COMPILER_VALUE_KIND_NULL };
+				break;
+			}
+			case "callback-chunk": {
+				if (primitive() !== UNKNOWN_LITERAL) return buffer;
+				const source = definition(fn, operand);
+				if (source !== undefined && fn.instructionOpcodeName(source) === "createFunction")
+					return { mask: COMPILER_VALUE_KIND_UNDEFINED };
+				break;
+			}
 			case "mkdir-options": {
 				const flag = option("recursive");
 				if (flag === false || flag === undefined)
@@ -580,7 +613,10 @@ export function coreHostCompletion(
 			}
 			case "compression-info": {
 				const flag = option("info");
-				if (flag !== UNKNOWN_LITERAL && !flag) return buffer;
+				if (flag !== UNKNOWN_LITERAL)
+					return flag
+						? { mask: COMPILER_VALUE_KIND_OBJECT, hostObject: "CompressionInfo" }
+						: buffer;
 				break;
 			}
 			case "resolve-value": {
@@ -599,7 +635,7 @@ export function coreHostCompletion(
 				break;
 			}
 		}
-		return { mask: value.mask };
+		return { mask: value.mask, hostObject: value.hostObject };
 	}
 }
 

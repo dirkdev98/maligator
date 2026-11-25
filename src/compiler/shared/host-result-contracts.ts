@@ -18,7 +18,15 @@ export interface HostValueContract {
 	readonly installedObject?: true;
 	readonly hostConstructor?: HostObjectKind;
 	readonly assetHandle?: "file" | "directory";
-	readonly diskHandle?: "file" | "directory" | "writer" | "watcher";
+	readonly platformObject?:
+		| "file"
+		| "directory"
+		| "writer"
+		| "watcher"
+		| "server"
+		| "workerPool"
+		| "workerPoolStats"
+		| "transferEnvelope";
 	readonly selector?: {
 		readonly argument: number;
 		readonly kind:
@@ -27,6 +35,8 @@ export interface HostValueContract {
 			| "output-encoding"
 			| "digest-encoding"
 			| "signature-argument"
+			| "read-size"
+			| "callback-chunk"
 			| "text-flag"
 			| "stat-options"
 			| "mkdir-options"
@@ -97,6 +107,10 @@ function nativeConstructor(
 
 function installedObject(hostObject: HostObjectKind): HostResultContract {
 	return { kind: "return", value: { mask: OBJECT, hostObject, installedObject: true } };
+}
+
+function streamConstructor(hostConstructor: HostObjectKind): HostResultContract {
+	return { kind: "return", value: { mask: OBJECT | UNDEFINED, hostConstructor } };
 }
 
 const fs = exportsWithContracts(
@@ -623,8 +637,11 @@ const buffer = exportsWithContracts(
 );
 
 const maligatorWorkers = exportsWithContracts(
-	[returned(OBJECT), "Worker", "MessageChannel", "capabilities", "createWorkerUrl"],
-	[returned(OBJECT | UNDEFINED), "receiveMessageOnPort"],
+	[nativeConstructor("MaligatorWorker"), "Worker"],
+	[nativeConstructor("MaligatorMessageChannel"), "MessageChannel"],
+	[hostObject("WorkerCapabilities"), "capabilities"],
+	[hostObject("WorkerUrl"), "createWorkerUrl"],
+	[hostObject("WorkerMessage", undefined, OBJECT | UNDEFINED), "receiveMessageOnPort"],
 	[
 		{ kind: "never", reason: "Ports are created by the channel and worker factories." },
 		"MessagePort",
@@ -719,7 +736,9 @@ const module = exportsWithContracts(
 	],
 );
 const nodeWorkers = exportsWithContracts(
-	[returned(OBJECT), "BroadcastChannel", "MessageChannel", "Worker"],
+	[nativeConstructor("BroadcastChannel"), "BroadcastChannel"],
+	[nativeConstructor("MessageChannel"), "MessageChannel"],
+	[nativeConstructor("NodeWorker"), "Worker"],
 	[returned(BOOLEAN), "isMarkedAsUntransferable"],
 	[
 		returned(UNDEFINED),
@@ -727,7 +746,7 @@ const nodeWorkers = exportsWithContracts(
 		"markAsUntransferable",
 		"setEnvironmentData",
 	],
-	[returned(OBJECT | UNDEFINED), "receiveMessageOnPort"],
+	[hostObject("WorkerMessage", undefined, OBJECT | UNDEFINED), "receiveMessageOnPort"],
 	[
 		dynamic("Reads an application-defined value from the environment data map."),
 		"getEnvironmentData",
@@ -761,7 +780,7 @@ const assertions = exportsWithContracts(
 );
 const zlib = exportsWithContracts(
 	[
-		returned(OBJECT),
+		nativeConstructor("ZlibStream"),
 		"BrotliCompress",
 		"BrotliDecompress",
 		"Deflate",
@@ -771,6 +790,9 @@ const zlib = exportsWithContracts(
 		"Inflate",
 		"InflateRaw",
 		"Unzip",
+	],
+	[
+		hostObject("ZlibStream"),
 		"createBrotliCompress",
 		"createBrotliDecompress",
 		"createDeflate",
@@ -992,16 +1014,12 @@ const crypto = exportsWithContracts(
 	],
 );
 const stream = exportsWithContracts(
-	[
-		returned(OBJECT | UNDEFINED),
-		"default",
-		"Stream",
-		"Readable",
-		"Writable",
-		"Duplex",
-		"Transform",
-		"PassThrough",
-	],
+	[streamConstructor("NodeStream"), "default", "Stream"],
+	[streamConstructor("NodeReadable"), "Readable"],
+	[streamConstructor("NodeWritable"), "Writable"],
+	[streamConstructor("NodeDuplex"), "Duplex"],
+	[streamConstructor("NodeTransform"), "Transform"],
+	[streamConstructor("NodePassThrough"), "PassThrough"],
 	[returned(BOOLEAN | NULL), "isReadable", "isWritable", "isDestroyed"],
 	[returned(BOOLEAN), "isErrored", "isDisturbed"],
 	[returned(NUMBER), "getDefaultHighWaterMark"],
@@ -1161,8 +1179,8 @@ export const HOST_RESULT_CONTRACTS: ReadonlyMap<
 	[
 		"mal_host_install_maligator_internal_http",
 		exportsWithContracts(
-			[returned(OBJECT), "listen"],
-			[returned(OBJECT | UNDEFINED), "assetResponse"],
+			[hostObject("NativeHttpServer"), "listen"],
+			[hostObject("Response", undefined, OBJECT | UNDEFINED), "assetResponse"],
 			[returned(STRING | UNDEFINED), "assetProxy"],
 		),
 	],
@@ -1223,19 +1241,108 @@ export const EMBEDDED_ASSET_RESULTS = {
 } as const;
 
 export const DISK_HANDLE_EXPORTS = exportsWithContracts(
-	[{ kind: "return", value: { mask: OBJECT, diskHandle: "file" } }, "file"],
-	[{ kind: "return", value: { mask: OBJECT, diskHandle: "directory" } }, "directory"],
+	[{ kind: "return", value: { mask: OBJECT, platformObject: "file" } }, "file"],
+	[{ kind: "return", value: { mask: OBJECT, platformObject: "directory" } }, "directory"],
 	[fulfilled(STRING), "realpath", "readlink"],
 	[fulfilled(UNDEFINED), "symlink"],
 	[
-		{ kind: "fulfill", value: { mask: OBJECT, diskHandle: "directory" } },
+		{ kind: "fulfill", value: { mask: OBJECT, platformObject: "directory" } },
 		"temporaryDirectory",
 	],
-	[{ kind: "return", value: { mask: OBJECT, diskHandle: "watcher" } }, "watch"],
+	[{ kind: "return", value: { mask: OBJECT, platformObject: "watcher" } }, "watch"],
 	[returned(OBJECT), "FileSystemError"],
 );
 
-export const DISK_HANDLE_RESULTS = {
+export const PLATFORM_SOURCE_EXPORTS = new Map([
+	["maligator:fs", DISK_HANDLE_EXPORTS],
+	[
+		"maligator:http",
+		exportsWithContracts(
+			[{ kind: "return", value: { mask: OBJECT, platformObject: "server" } }, "serve"],
+			[returned(OBJECT), "serveAsset", "proxy"],
+		),
+	],
+	[
+		"maligator:workers",
+		exportsWithContracts(
+			[
+				{ kind: "return", value: { mask: OBJECT, platformObject: "workerPool" } },
+				"createPool",
+			],
+			[
+				{ kind: "return", value: { mask: OBJECT, platformObject: "transferEnvelope" } },
+				"transfer",
+			],
+		),
+	],
+	[
+		"maligator:assets",
+		exportsWithContracts([
+			neverReturns(
+				"The compiler replaces calls with declaration-specific handles before lowering.",
+			),
+			"embedFile",
+			"embedDirectory",
+		]),
+	],
+]);
+
+export const PLATFORM_OBJECT_RESULTS = {
+	server: {
+		properties: exportsWithContracts(
+			[returned(NUMBER), "port"],
+			[returned(STRING), "url", "hostname"],
+		),
+		methods: exportsWithContracts([
+			fulfilled(UNDEFINED),
+			"close",
+			"[Symbol.asyncDispose]",
+		]),
+	},
+	workerPool: {
+		properties: exportsWithContracts([resolved(UNDEFINED), "ready"]),
+		methods: exportsWithContracts(
+			[
+				{
+					kind: "resolve",
+					value: { mask: TOP },
+					reason: "The worker task serializes and transports its own result.",
+				},
+				"run",
+			],
+			[returned(OBJECT), "map"],
+			[
+				{ kind: "return", value: { mask: OBJECT, platformObject: "workerPoolStats" } },
+				"stats",
+			],
+			[
+				{ kind: "return", value: { mask: OBJECT, platformObject: "workerPool" } },
+				"ref",
+				"unref",
+			],
+			[returned(BOOLEAN), "hasRef"],
+			[fulfilled(UNDEFINED), "close", "terminate"],
+		),
+	},
+	workerPoolStats: {
+		properties: exportsWithContracts([
+			returned(NUMBER),
+			"size",
+			"active",
+			"queued",
+			"completed",
+			"failed",
+			"cancelled",
+		]),
+		methods: exportsWithContracts(),
+	},
+	transferEnvelope: {
+		properties: exportsWithContracts(
+			[returned(OBJECT, "Array"), "transferList"],
+			[dynamic("The transfer envelope carries the caller's original value."), "value"],
+		),
+		methods: exportsWithContracts(),
+	},
 	file: {
 		properties: exportsWithContracts([returned(STRING), "path", "type"]),
 		methods: exportsWithContracts(
@@ -1246,7 +1353,7 @@ export const DISK_HANDLE_RESULTS = {
 			[fulfilled(OBJECT), "stat"],
 			[fulfilled(UNDEFINED), "chmod", "delete", "copyTo", "moveTo"],
 			[returned(OBJECT), "stream"],
-			[{ kind: "return", value: { mask: OBJECT, diskHandle: "writer" } }, "writer"],
+			[{ kind: "return", value: { mask: OBJECT, platformObject: "writer" } }, "writer"],
 			[
 				{
 					kind: "fulfill",
@@ -1264,10 +1371,13 @@ export const DISK_HANDLE_RESULTS = {
 			[fulfilled(OBJECT), "stat"],
 			[fulfilled(OBJECT, "Array"), "entries", "files"],
 			[fulfilled(UNDEFINED), "chmod", "create", "delete", "moveTo"],
-			[{ kind: "return", value: { mask: OBJECT, diskHandle: "file" } }, "file"],
-			[{ kind: "return", value: { mask: OBJECT, diskHandle: "directory" } }, "directory"],
+			[{ kind: "return", value: { mask: OBJECT, platformObject: "file" } }, "file"],
 			[
-				{ kind: "fulfill", value: { mask: OBJECT | UNDEFINED, diskHandle: "file" } },
+				{ kind: "return", value: { mask: OBJECT, platformObject: "directory" } },
+				"directory",
+			],
+			[
+				{ kind: "fulfill", value: { mask: OBJECT | UNDEFINED, platformObject: "file" } },
 				"get",
 			],
 		),
@@ -1284,7 +1394,7 @@ export const DISK_HANDLE_RESULTS = {
 		methods: exportsWithContracts(
 			[fulfilled(OBJECT), "next", "return"],
 			[
-				{ kind: "return", value: { mask: OBJECT, diskHandle: "watcher" } },
+				{ kind: "return", value: { mask: OBJECT, platformObject: "watcher" } },
 				"[Symbol.asyncIterator]",
 			],
 		),
@@ -1292,6 +1402,27 @@ export const DISK_HANDLE_RESULTS = {
 } as const;
 
 export type HostObjectKind =
+	| "BroadcastChannel"
+	| "MaligatorMessageChannel"
+	| "MaligatorMessagePort"
+	| "MaligatorWorker"
+	| "MessageChannel"
+	| "MessagePort"
+	| "NodeWorker"
+	| "WorkerCapabilities"
+	| "WorkerExit"
+	| "WorkerMessage"
+	| "WorkerUrl"
+	| "NodeStream"
+	| "NodeReadable"
+	| "NodeWritable"
+	| "NodeDuplex"
+	| "NodeTransform"
+	| "NodePassThrough"
+	| "NodeStreamIterator"
+	| "WebStreamPair"
+	| "ZlibStream"
+	| "CompressionInfo"
 	| "AbortListener"
 	| "AsyncHook"
 	| "AsyncLocalStorage"
@@ -1301,6 +1432,7 @@ export type HostObjectKind =
 	| "EventEmitterAsyncResource"
 	| "EventIterator"
 	| "LegacyUrl"
+	| "NativeHttpServer"
 	| "TimerScheduler"
 	| "TimerIntervalIterator"
 	| "AbortController"
@@ -1481,11 +1613,10 @@ function digestMethods(kind: "Hash" | "Hmac") {
 	);
 }
 
-function emitterMethods(kind: "EventEmitter" | "EventEmitterAsyncResource") {
+function listenerMethods(kind: HostObjectKind) {
 	return exportsWithContracts(
 		[returned(BOOLEAN), "emit"],
-		[returned(NUMBER), "getMaxListeners", "listenerCount"],
-		[returned(OBJECT, "Array"), "eventNames", "listeners", "rawListeners"],
+		[returned(NUMBER), "listenerCount"],
 		[
 			hostObject(kind),
 			"on",
@@ -1496,10 +1627,63 @@ function emitterMethods(kind: "EventEmitter" | "EventEmitterAsyncResource") {
 			"off",
 			"removeListener",
 			"removeAllListeners",
-			"setMaxListeners",
 		],
 	);
 }
+
+function emitterMethods(kind: HostObjectKind) {
+	return new Map([
+		...listenerMethods(kind),
+		...exportsWithContracts(
+			[returned(NUMBER), "getMaxListeners"],
+			[returned(OBJECT, "Array"), "eventNames", "listeners", "rawListeners"],
+			[hostObject(kind), "setMaxListeners"],
+		),
+	]);
+}
+
+function nodeStreamMethods(kind: HostObjectKind, readable: boolean, writable: boolean) {
+	return new Map([
+		...emitterMethods(kind),
+		...exportsWithContracts([hostObject(kind), "destroy"]),
+		...(readable
+			? exportsWithContracts(
+					[hostObject(kind), "pause", "resume", "setEncoding", "unpipe", "wrap"],
+					[returned(BOOLEAN), "isPaused", "push"],
+					[returned(OBJECT), "pipe"],
+					[
+						{
+							kind: "return",
+							value: { mask: TOP, selector: { kind: "read-size", argument: 0 } },
+						},
+						"read",
+					],
+					[hostObject("NodeStreamIterator"), "[Symbol.asyncIterator]"],
+				)
+			: []),
+		...(writable
+			? exportsWithContracts([returned(BOOLEAN), "write"], [hostObject(kind), "end"])
+			: []),
+	]);
+}
+
+const readableStateFields = exportsWithContracts(
+	[returned(BOOLEAN), "readableDidRead", "readableAborted"],
+	[
+		dynamic("Returns a public _readableState field without converting it."),
+		"readableLength",
+		"readableHighWaterMark",
+		"readableEncoding",
+		"readableObjectMode",
+	],
+);
+const writableStateFields = exportsWithContracts([
+	dynamic("Returns a public _writableState field without converting it."),
+	"writableLength",
+	"writableHighWaterMark",
+	"writableObjectMode",
+]);
+const duplexStateFields = new Map([...readableStateFields, ...writableStateFields]);
 
 const iteratorResult = {
 	kind: "resolve",
@@ -1576,6 +1760,8 @@ export const GLOBAL_HOST_NAMESPACE_RESULTS = new Map([
 ]);
 
 export const GLOBAL_HOST_CONSTRUCTORS = [
+	"BroadcastChannel",
+	"MessageChannel",
 	"Response",
 	"Request",
 	"Blob",
@@ -1624,6 +1810,19 @@ export const HOST_OBJECT_RESULTS: {
 } = {
 	fetch: { kind: "fulfill", value: { mask: OBJECT, hostObject: "Response" } },
 	statics: {
+		NodeReadable: exportsWithContracts(
+			[hostObject("NodeReadable"), "from", "fromWeb", "wrap"],
+			[hostObject("ReadableStream"), "toWeb"],
+		),
+		NodeWritable: exportsWithContracts(
+			[hostObject("NodeWritable"), "fromWeb"],
+			[hostObject("WritableStream"), "toWeb"],
+		),
+		NodeDuplex: exportsWithContracts(
+			[hostObject("NodeDuplex"), "fromWeb"],
+			[hostObject("WebStreamPair"), "toWeb"],
+			[returned(OBJECT), "from"],
+		),
 		AsyncLocalStorage: exportsWithContracts([returned(OBJECT), "bind", "snapshot"]),
 		AsyncResource: exportsWithContracts([returned(OBJECT), "bind"]),
 		MIMEType: exportsWithContracts([
@@ -1658,6 +1857,90 @@ export const HOST_OBJECT_RESULTS: {
 		Response: exportsWithContracts([hostObject("Response"), "error", "json", "redirect"]),
 	},
 	methods: {
+		CompressionInfo: exportsWithContracts(),
+		NodeStream: nodeStreamMethods("NodeStream", false, false),
+		NodeReadable: nodeStreamMethods("NodeReadable", true, false),
+		NodeWritable: nodeStreamMethods("NodeWritable", false, true),
+		NodeDuplex: nodeStreamMethods("NodeDuplex", true, true),
+		NodeTransform: nodeStreamMethods("NodeTransform", true, true),
+		NodePassThrough: new Map([
+			...nodeStreamMethods("NodePassThrough", true, true),
+			["_transform", callback],
+		]),
+		NodeStreamIterator: exportsWithContracts(
+			[
+				{ kind: "fulfill", value: { mask: OBJECT, hostObject: "StreamReadResult" } },
+				"next",
+			],
+			[
+				dynamic(
+					"The close path forwards the mutable close Promise's then method result.",
+				),
+				"return",
+			],
+			[hostObject("NodeStreamIterator"), "[Symbol.asyncIterator]"],
+		),
+		WebStreamPair: exportsWithContracts(),
+		ZlibStream: new Map([
+			...nodeStreamMethods("ZlibStream", true, true),
+			...exportsWithContracts(
+				[returned(UNDEFINED), "flush", "params", "reset", "close", "_read"],
+				[callback, "_transform", "_flush", "_destroy"],
+				[
+					selected("return", { kind: "callback-chunk", argument: 2 }, OBJECT | UNDEFINED),
+					"_processChunk",
+				],
+			),
+		]),
+		BroadcastChannel: new Map([
+			...eventTargetMethods,
+			...exportsWithContracts(
+				[returned(UNDEFINED), "close", "postMessage"],
+				[hostObject("BroadcastChannel"), "ref", "unref"],
+			),
+		]),
+		MessageChannel: exportsWithContracts(),
+		MaligatorMessageChannel: exportsWithContracts(),
+		MessagePort: new Map([
+			...eventTargetMethods,
+			...listenerMethods("MessagePort"),
+			...exportsWithContracts(
+				[returned(UNDEFINED), "postMessage", "start", "close", "ref", "unref"],
+				[returned(BOOLEAN), "hasRef"],
+			),
+		]),
+		MaligatorMessagePort: new Map([
+			...eventTargetMethods,
+			...listenerMethods("MaligatorMessagePort"),
+			...exportsWithContracts(
+				[returned(NUMBER | UNDEFINED), "postMessage"],
+				[returned(UNDEFINED), "start", "close"],
+				[returned(BOOLEAN), "hasRef", "_discard"],
+				[hostObject("MaligatorMessagePort"), "ref", "unref"],
+			),
+		]),
+		NodeWorker: new Map([
+			...listenerMethods("NodeWorker"),
+			...exportsWithContracts(
+				[returned(UNDEFINED), "postMessage"],
+				[returned(BOOLEAN), "hasRef"],
+				[hostObject("NodeWorker"), "ref", "unref"],
+				[fulfilled(NUMBER | UNDEFINED), "terminate"],
+			),
+		]),
+		MaligatorWorker: exportsWithContracts(
+			[returned(BOOLEAN), "hasRef"],
+			[hostObject("MaligatorWorker"), "ref", "unref"],
+			[
+				{ kind: "fulfill", value: { mask: OBJECT, hostObject: "WorkerExit" } },
+				"terminate",
+			],
+		),
+		WorkerCapabilities: exportsWithContracts(),
+		WorkerExit: exportsWithContracts(),
+		WorkerMessage: exportsWithContracts(),
+		WorkerUrl: exportsWithContracts(),
+		NativeHttpServer: exportsWithContracts([fulfilled(UNDEFINED), "close"]),
 		AbortListener: exportsWithContracts([returned(UNDEFINED), "[Symbol.dispose]"]),
 		AsyncHook: exportsWithContracts([hostObject("AsyncHook"), "enable", "disable"]),
 		AsyncLocalStorage: exportsWithContracts(
@@ -1993,6 +2276,73 @@ export const HOST_OBJECT_RESULTS: {
 		HeadersIterator: exportsWithContracts([returned(OBJECT), "next"]),
 	},
 	properties: {
+		CompressionInfo: exportsWithContracts(
+			[hostObject("Buffer", "Uint8Array"), "buffer"],
+			[hostObject("ZlibStream"), "engine"],
+		),
+		NodeReadable: readableStateFields,
+		NodeWritable: writableStateFields,
+		NodeDuplex: duplexStateFields,
+		NodeTransform: duplexStateFields,
+		NodePassThrough: duplexStateFields,
+		ZlibStream: new Map([
+			...duplexStateFields,
+			...exportsWithContracts(
+				[returned(BOOLEAN), "_closed"],
+				[returned(NUMBER), "bytesWritten"],
+			),
+		]),
+		WebStreamPair: transformStreamProperties,
+		BroadcastChannel: exportsWithContracts(
+			[returned(STRING), "name"],
+			[returned(OBJECT | NULL), "onmessage", "onmessageerror"],
+		),
+		MessageChannel: exportsWithContracts([hostObject("MessagePort"), "port1", "port2"]),
+		MaligatorMessageChannel: exportsWithContracts([
+			hostObject("MaligatorMessagePort"),
+			"port1",
+			"port2",
+		]),
+		MessagePort: exportsWithContracts([
+			returned(OBJECT | NULL),
+			"onmessage",
+			"onmessageerror",
+		]),
+		MaligatorMessagePort: exportsWithContracts([
+			returned(OBJECT | NULL),
+			"onmessage",
+			"onmessageerror",
+		]),
+		NodeWorker: exportsWithContracts([returned(NUMBER), "threadId"]),
+		MaligatorWorker: exportsWithContracts(
+			[returned(NUMBER), "id"],
+			[fulfilled(UNDEFINED), "ready"],
+			[
+				{
+					kind: "fulfill",
+					immediateMask: OBJECT | UNDEFINED,
+					value: { mask: UNDEFINED },
+				},
+				"applicationReady",
+			],
+			[{ kind: "fulfill", value: { mask: OBJECT, hostObject: "WorkerExit" } }, "closed"],
+			[hostObject("MaligatorMessagePort"), "port"],
+		),
+		WorkerCapabilities: exportsWithContracts(
+			[returned(BOOLEAN), "threads", "sharedMemory"],
+			[returned(NUMBER), "parallelism", "maxWorkers"],
+		),
+		WorkerExit: exportsWithContracts(
+			[returned(NUMBER), "id", "code"],
+			[returned(STRING), "reason"],
+			[dynamic("Contains a worker-defined failure value when available."), "error"],
+		),
+		WorkerMessage: exportsWithContracts([
+			dynamic("The queued message can be any supported cloneable value."),
+			"message",
+		]),
+		WorkerUrl: exportsWithContracts([returned(STRING), "href"]),
+		NativeHttpServer: exportsWithContracts([returned(NUMBER), "port"]),
 		AsyncLocalStorage: exportsWithContracts([returned(STRING), "name"]),
 		EventEmitterAsyncResource: exportsWithContracts(
 			[hostObject("AsyncResource"), "asyncResource"],

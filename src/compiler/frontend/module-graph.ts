@@ -575,6 +575,7 @@ export function buildModuleGraph(
 	const sourceRoot =
 		options.platformSourceRoot ?? fileURLToPath(new URL("../../", import.meta.url));
 	const catalogFiles = platformCatalogFiles(sourceRoot);
+	const workerTransfer = path.resolve(sourceRoot, "workers/transfer.ts");
 	// A transform may change any module's parse input, so its walks memoize nothing.
 	const memoIdentity =
 		options.parseCache === undefined
@@ -1039,23 +1040,35 @@ export function buildModuleGraph(
 			return;
 		}
 		const { sourcePath, parsed, dependencies, importMetaResolutions } = analyzed;
-		const canonicalPlatformSource =
-			virtual &&
-			!options.virtualModules?.has(filePath) &&
-			!options.transformSource?.files.has(filePath) &&
+		const canonicalSyntax =
 			options.stripTypes === stripCompactTypes &&
-			catalogSources.get(filePath)?.platform === true &&
-			dependencies.every(
-				({ specifier, resolvedPath }) =>
-					specifier !== null &&
-					specifier === resolvedPath &&
-					!options.virtualModules?.has(specifier) &&
-					!options.externalModules?.has(specifier) &&
-					!ctx.ffiModules.has(specifier) &&
-					lookupPlatformModule(specifier)?.kind === "native",
-			)
-				? lookupPlatformModule(filePath)?.id
-				: undefined;
+			!options.transformSource?.files.has(filePath);
+		const canonicalPlatformSource =
+			canonicalSyntax &&
+			!virtual &&
+			sourceOverride === undefined &&
+			filePath === workerTransfer
+				? "maligator:workers"
+				: virtual &&
+					  !options.virtualModules?.has(filePath) &&
+					  canonicalSyntax &&
+					  catalogSources.get(filePath)?.platform === true &&
+					  dependencies.every(
+							({ specifier, resolvedPath }) =>
+								(filePath === "maligator:workers" &&
+									specifier === "./transfer.ts" &&
+									resolvedPath === workerTransfer &&
+									!options.transformSource?.files.has(workerTransfer) &&
+									!options.externalModules?.has(specifier)) ||
+								(specifier !== null &&
+									specifier === resolvedPath &&
+									!options.virtualModules?.has(specifier) &&
+									!options.externalModules?.has(specifier) &&
+									!ctx.ffiModules.has(specifier) &&
+									lookupPlatformModule(specifier)?.kind === "native"),
+					  )
+					? lookupPlatformModule(filePath)?.id
+					: undefined;
 		if (
 			memoKey !== undefined &&
 			!reusable &&

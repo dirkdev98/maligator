@@ -105,3 +105,17 @@ it("serializes JSON through a statically selected Response factory", () => {
 	});
 	expect(runToStdout(binary, { env: STRESS_ENV })).toBe('{"value":"é"}\n');
 }, 120_000);
+
+it("observes a body method replaced by a native timer callback", () => {
+	const binary = buildNativeBinary({
+		fixture: "tests/local/fetch-body-reentry.mjs",
+		name: "fetch-body-reentry",
+		outDir,
+		config: resolveBuildConfig({
+			engine: { eval: false, realms: false, primordials: "locked" },
+		}),
+		production: true,
+		toolchainBridge: false,
+	});
+	expect(runToStdout(binary, { env: STRESS_ENV })).toBe("true\n");
+}, 120_000);

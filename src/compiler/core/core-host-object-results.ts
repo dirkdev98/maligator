@@ -1,6 +1,8 @@
 import { COMPILER_VALUE_KIND_OBJECT } from "../shared/compiler-value-kinds.ts";
+import { EMBED_INSTALLER } from "../shared/embedded-asset.ts";
 import {
-	DISK_HANDLE_RESULTS,
+	PLATFORM_OBJECT_RESULTS,
+	PLATFORM_SOURCE_EXPORTS,
 	NODE_FILE_HANDLE_RESULTS,
 	GLOBAL_HOST_CONSTRUCTORS,
 	GLOBAL_HOST_FUNCTION_RESULTS,
@@ -17,11 +19,13 @@ import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { coreNumericTypedArrayKind } from "./core-heap-brands.ts";
 import {
-	coreDiskHandleResult,
+	corePlatformSourceResult,
 	coreHostDirectCallContract,
+	coreHostCompletion,
 	coreHostPropertyName,
 	coreHostResult,
 	coreHostResultSlots,
+	coreHostSlotName,
 	coreHostSlotValue,
 } from "./core-host-results.ts";
 import type { CoreHostSlots } from "./core-host-results.ts";
@@ -43,8 +47,22 @@ const PROTECTED_GLOBALS = new Set<string>([
 	"__proto__",
 ]);
 const HOST_OBJECT_SOURCE_NAMES = new RegExp(
-	`\\b(?:${[...PROTECTED_GLOBALS].filter((name) => name !== "globalThis" && name !== "console" && name !== "__proto__").join("|")}|fs|node:sqlite|(?:node:)?(?:stream/web|async_hooks|events|timers/promises|url)|basename|StringDecoder|MIMEType|MIMEParams)\\b`,
+	`\\b(?:${[...PROTECTED_GLOBALS].filter((name) => name !== "globalThis" && name !== "console" && name !== "__proto__").join("|")}|fs|maligator:(?:http|workers)|node:sqlite|(?:node:)?(?:stream|zlib|async_hooks|events|timers/promises|url)|basename|StringDecoder|MIMEType|MIMEParams)\\b`,
 );
+for (const name of [
+	"Object",
+	"Reflect",
+	"JSON",
+	"Promise",
+	"Array",
+	"Symbol",
+	"WeakMap",
+	"Map",
+	"Set",
+	"Number",
+	"Atomics",
+])
+	PROTECTED_GLOBALS.add(name);
 const PROTECTED_PROPERTIES = new Set([
 	...PROTECTED_GLOBALS,
 	"prototype",
@@ -64,7 +82,7 @@ const PROTECTED_PROPERTIES = new Set([
 	...Object.values(HOST_OBJECT_RESULTS.statics).flatMap((members) => [...members.keys()]),
 	...NODE_FILE_HANDLE_RESULTS.methods.keys(),
 	...NODE_FILE_HANDLE_RESULTS.properties.keys(),
-	...Object.values(DISK_HANDLE_RESULTS).flatMap(({ methods, properties }) => [
+	...Object.values(PLATFORM_OBJECT_RESULTS).flatMap(({ methods, properties }) => [
 		...methods.keys(),
 		...properties.keys(),
 	]),
@@ -85,7 +103,23 @@ const REFLECTIVE_WRITERS = new Set([
 	"__defineSetter__",
 	"__lookupSetter__",
 ]);
+const NATIVE_OBJECT_WRITERS = new Set(["_extend", "inherits"]);
+const HOST_CALLBACK_ARGUMENTS = new Map([
+	["setTimeout", 0],
+	["setInterval", 0],
+	["setImmediate", 0],
+	["queueMicrotask", 0],
+	["nextTick", 0],
+	["forEach", 0],
+	["addEventListener", 1],
+	["addListener", 1],
+	["prependListener", 1],
+	["prependOnceListener", 1],
+	["on", 1],
+	["once", 1],
+]);
 const SCANNED_HOST_INSTALLERS = new Set([
+	EMBED_INSTALLER,
 	"mal_host_install_node_fs",
 	"mal_host_install_node_fs_promises",
 	"mal_host_install_node_path",
@@ -99,12 +133,20 @@ const SCANNED_HOST_INSTALLERS = new Set([
 	"mal_host_install_node_sys",
 	"mal_host_install_node_sqlite",
 	"mal_host_install_node_stream_web",
+	"mal_host_install_node_stream",
+	"mal_host_install_node_stream_promises",
+	"mal_host_install_node_stream_consumers",
+	"mal_host_install_node_zlib",
+	"mal_host_install_node_zlib_decoders",
 	"mal_host_install_node_string_decoder",
 	"mal_host_install_node_timers",
 	"mal_host_install_node_timers_promises",
 	"mal_host_install_node_events",
 	"mal_host_install_node_async_hooks",
+	"mal_host_install_node_worker_threads",
 	"mal_host_install_maligator_internal_fetch",
+	"mal_host_install_maligator_internal_http",
+	"mal_host_install_maligator_internal_workers",
 	"mal_host_install_maligator_internal_fs",
 	"mal_host_install_maligator_internal_fs_descriptor",
 	"mal_host_install_maligator_internal_fs_stream",
@@ -175,7 +217,9 @@ function hostReceiver(
 	if (installed?.installedObject === true) return installed.hostObject;
 	if (fn.instructionOpcodeName(producer) !== "awaitFulfilled") {
 		const result = producerContract(producer);
-		return result?.kind === "return" ? result.value.hostObject : undefined;
+		return result?.kind === "return"
+			? coreHostCompletion(program, fn, producer, result, true)?.immediate.hostObject
+			: undefined;
 	}
 	const promise = coreSuccessfulAwaitInput(fn, producer);
 	if (
@@ -187,9 +231,7 @@ function hostReceiver(
 	const call = definition(fn, promise);
 	if (call === undefined) return undefined;
 	const result = producerContract(call);
-	return result?.kind === "resolve" || result?.kind === "fulfill"
-		? result.value.hostObject
-		: undefined;
+	return coreHostCompletion(program, fn, call, result, true)?.fulfilled?.hostObject;
 
 	function producerContract(producer: CoreInstructionId) {
 		return (
@@ -293,9 +335,10 @@ export function coreHostMemberIdentitiesAreStable(
 		const sites = new Map(targets.outgoing(id).map((site) => [site.instruction, site]));
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
-			// Packaged filesystem code initializes private prototypes. An inlined
-			// application's operation still needs its own mutation proof.
-			if (fn.metadata.canonicalPlatformSource === "maligator:fs") {
+			// Packaged platform routines initialize private state. A copy of an
+			// application operation still needs its own mutation proof.
+			const platform = fn.metadata.canonicalPlatformSource;
+			if (platform !== undefined && PLATFORM_SOURCE_EXPORTS.has(platform)) {
 				const position = fn.instructionSourcePosition(instruction);
 				const inlined =
 					position === undefined
@@ -305,12 +348,17 @@ export function coreHostMemberIdentitiesAreStable(
 				const origin = coreFunctionId(inlined);
 				if (
 					program.hasFunction(origin) &&
-					program.function(origin).metadata.canonicalPlatformSource === "maligator:fs"
+					program.function(origin).metadata.canonicalPlatformSource === platform
 				)
 					continue;
 			}
 			const opcode = fn.instructionOpcodeName(instruction);
 			const attrs = fn.instructionAttributes(instruction);
+			if (
+				opcode === "loadGlobal" &&
+				NATIVE_OBJECT_WRITERS.has(coreHostSlotName(fn, instruction, slots) ?? "")
+			)
+				return false;
 			if (opcode === "loadPrimordial" && typeof attrs.nodeIndex === "number") {
 				const name = getPrimordialCatalog().nodes[attrs.nodeIndex]?.[0];
 				if (
@@ -336,7 +384,8 @@ export function coreHostMemberIdentitiesAreStable(
 							fn.instructionOpcodeName(keyProducer) !== "createF64")
 					)
 						return false;
-				} else if (REFLECTIVE_WRITERS.has(key)) {
+				} else if (NATIVE_OBJECT_WRITERS.has(key)) return false;
+				else if (REFLECTIVE_WRITERS.has(key)) {
 					// Host callbacks can invoke a native writer without a source call site.
 					const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
 					if (fn.kernel.valueHandlerUseCount(value) !== 0) return false;
@@ -414,7 +463,8 @@ export function coreHostMemberIdentitiesAreStable(
 				fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer === undefined
 			)
 				continue;
-			const callee = sites.get(instruction)?.targets;
+			const site = sites.get(instruction);
+			const callee = site?.targets;
 			if (
 				callee !== undefined &&
 				!callee.opaque &&
@@ -423,16 +473,30 @@ export function coreHostMemberIdentitiesAreStable(
 			)
 				continue;
 			if (opcode === "call") {
-				const producer = definition(
-					fn,
-					fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
-				);
+				const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+				const producer = definition(fn, value);
 				if (
 					producer !== undefined &&
 					fn.instructionOpcodeName(producer) === "loadIntrinsic"
 				) {
 					const name = fn.instructionAttributes(producer).intrinsic;
 					if (typeof name === "string" && MODULE_EVALUATORS.has(name)) continue;
+				}
+				const name =
+					globalName(program, fn, value) ??
+					(producer === undefined
+						? undefined
+						: (coreHostSlotName(fn, producer, slots) ??
+							coreHostPropertyName(program, fn, producer)));
+				const callbackIndex =
+					name === undefined ? undefined : HOST_CALLBACK_ARGUMENTS.get(name);
+				if (callbackIndex !== undefined) {
+					const argument = (site?.arguments ?? site?.argumentPrefix)?.[callbackIndex];
+					if (argument !== undefined) {
+						const callback = targets.targets?.(id, argument);
+						if (callback === undefined || callback.opaque || callback.anyScript)
+							return false;
+					} else if (site?.arguments === undefined) return false;
 				}
 			}
 			if (
@@ -467,7 +531,8 @@ export function coreHostMemberIdentitiesAreStable(
 				continue;
 			if (
 				coreHostObjectResult(program, fn, instruction, slots) === undefined &&
-				coreDiskHandleResult(program, fn, instruction, targets, context) === undefined &&
+				corePlatformSourceResult(program, fn, instruction, targets, context) ===
+					undefined &&
 				coreHostResult(program, fn, instruction, slots, true, true) === undefined
 			)
 				return false;
