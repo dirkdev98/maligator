@@ -24,6 +24,8 @@ function rejectsAccess(view, label) {
 }
 
 const buffer = new ArrayBuffer(16, { maxByteLength: 32 });
+const wideCapacity = new ArrayBuffer(0, { maxByteLength: 0x8000_0000 });
+equal(wideCapacity.maxByteLength, 0x8000_0000, "unsigned maximum capacity");
 const fixed = new DataView(buffer, 4, 8);
 const tracking = new DataView(buffer, 4);
 const empty = new DataView(buffer, 4, 0);

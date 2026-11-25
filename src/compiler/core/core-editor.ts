@@ -667,6 +667,7 @@ export class CoreEditor {
 		else if (opcode === "awaitFulfilled") key = CORE_AWAIT_RESULT_KIND_ATTRIBUTE;
 		else if (
 			opcode === "callForeign" ||
+			opcode === "callKnown" ||
 			["call-completion", "construct-completion"].includes(
 				this.program.registry.byId(fn.instructionOpcode(instruction)).callTransfer
 					?.result ?? "",

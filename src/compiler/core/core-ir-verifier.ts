@@ -435,6 +435,7 @@ function verifyInstructionRows(
 			if (
 				callKind !== undefined &&
 				((descriptor.opcode !== "callForeign" &&
+					descriptor.opcode !== "callKnown" &&
 					!["call-completion", "construct-completion"].includes(
 						descriptor.callTransfer?.result ?? "",
 					)) ||

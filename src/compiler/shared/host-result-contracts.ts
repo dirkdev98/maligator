@@ -10,9 +10,17 @@ import {
 	COMPILER_VALUE_KIND_UNDEFINED as UNDEFINED,
 } from "./compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
+import {
+	COMPILER_INT32_RANGE,
+	COMPILER_UINT32_RANGE,
+	compilerIntegerRange,
+} from "./integer-range.ts";
+import type { CompilerIntegerRange } from "./integer-range.ts";
 
 export interface HostValueContract {
 	readonly mask: CompilerValueKindMask;
+	readonly integerRange?: CompilerIntegerRange;
+	readonly numericRangeUnavailable?: string;
 	readonly brand?: "Array" | "Uint8Array";
 	readonly hostObject?: HostObjectKind;
 	readonly installedObject?: true;
@@ -53,6 +61,10 @@ export interface HostValueContract {
 			| "exec-file-output"
 			| "exec-fulfillment"
 			| "exec-file-fulfillment"
+			| "buffer-signed-width"
+			| "buffer-unsigned-width"
+			| "buffer-write-width"
+			| "random-int"
 			| "resolve-value";
 	};
 }
@@ -91,6 +103,37 @@ const selected = (
 	selector: NonNullable<HostValueContract["selector"]>,
 	mask = STRING | OBJECT,
 ): HostResultContract => ({ kind, value: { mask, selector } });
+const integerResult = (
+	range: CompilerIntegerRange,
+	kind: "return" | "fulfill" = "return",
+	mask: CompilerValueKindMask = NUMBER,
+): HostResultContract => ({ kind, value: { mask, integerRange: range } });
+const numericResult = (
+	reason: string,
+	mask: CompilerValueKindMask = NUMBER,
+): HostResultContract => ({
+	kind: "return",
+	value: { mask, numericRangeUnavailable: reason },
+});
+const int32 = integerResult(COMPILER_INT32_RANGE);
+const uint32 = integerResult(COMPILER_UINT32_RANGE);
+const nonnegativeInt32 = integerResult(compilerIntegerRange(0, 0x7fff_ffff));
+const byteCount = compilerIntegerRange(0, 3 * 0x7fff_ffff);
+
+function bufferWidth(
+	kind: "buffer-signed-width" | "buffer-unsigned-width" | "buffer-write-width",
+	range: CompilerIntegerRange,
+): HostResultContract {
+	return {
+		kind: "return",
+		value: {
+			mask: NUMBER,
+			integerRange: range,
+			selector: { kind, argument: kind === "buffer-write-width" ? 2 : 1 },
+		},
+	};
+}
+
 const callback: HostResultContract = {
 	kind: "callback",
 	reason: "The asynchronous operation reports completion to a Node-style callback.",
@@ -139,7 +182,14 @@ const fs = exportsWithContracts(
 		"realpathSync",
 	],
 	[returned(BOOLEAN), "existsSync"],
-	[returned(NUMBER), "openSync", "readSync", "readvSync", "writeSync", "writevSync"],
+	[nonnegativeInt32, "openSync"],
+	[uint32, "readSync"],
+	[integerResult(byteCount), "writeSync"],
+	[
+		numericResult("Native vectored I/O sums byte counts without a safe-integer limit."),
+		"readvSync",
+		"writevSync",
+	],
 	[
 		selected("return", { kind: "mkdir-options", argument: 1 }, STRING | UNDEFINED),
 		"mkdirSync",
@@ -308,7 +358,7 @@ const maligatorFs = exportsWithContracts(
 	[returned(STRING), "mediaType"],
 	[selected("fulfill", { kind: "text-flag", argument: 1 }), "read"],
 	[fulfilled(BOOLEAN), "exists"],
-	[fulfilled(NUMBER), "write"],
+	[integerResult(byteCount, "fulfill"), "write"],
 	[fulfilledHostObject("MaligatorStat"), "stat"],
 	[fulfilled(OBJECT, "Array"), "list"],
 	[fulfilled(STRING), "readlink", "realpath", "temporaryDirectory"],
@@ -325,7 +375,10 @@ const maligatorFs = exportsWithContracts(
 );
 
 export const NODE_FILE_HANDLE_RESULTS = {
-	properties: exportsWithContracts([returned(NUMBER), "fd"]),
+	properties: exportsWithContracts([
+		integerResult(compilerIntegerRange(-1, 0x7fff_ffff)),
+		"fd",
+	]),
 	methods: exportsWithContracts(
 		[selected("fulfill", { kind: "encoding", argument: 0 }), "readFile"],
 		[fulfilledHostObject("FileHandleRead"), "read"],
@@ -349,7 +402,6 @@ const path = exportsWithContracts(
 		"basename",
 		"dirname",
 		"extname",
-		"format",
 		"join",
 		"normalize",
 		"relative",
@@ -357,6 +409,12 @@ const path = exportsWithContracts(
 	],
 	[returned(BOOLEAN), "isAbsolute", "matchesGlob"],
 	[returned(OBJECT), "parse"],
+	[
+		dynamic(
+			"Can return the supplied base property unchanged when the directory is empty.",
+		),
+		"format",
+	],
 	[
 		{ kind: "dynamic", reason: "Returns non-string inputs unchanged." },
 		"toNamespacedPath",
@@ -377,14 +435,14 @@ const os = exportsWithContracts(
 		"type",
 		"version",
 	],
+	[integerResult(compilerIntegerRange(1, 0x7fff_ffff)), "availableParallelism"],
+	[int32, "getPriority"],
 	[
-		returned(NUMBER),
-		"availableParallelism",
+		numericResult("Native memory sizes may exceed JavaScript's safe-integer limit."),
 		"freemem",
-		"getPriority",
 		"totalmem",
-		"uptime",
 	],
+	[numericResult("Elapsed seconds may be fractional."), "uptime"],
 	[returned(OBJECT, "Array"), "cpus", "loadavg"],
 	[returned(OBJECT), "networkInterfaces", "userInfo"],
 	[returned(UNDEFINED), "setPriority"],
@@ -393,7 +451,7 @@ const os = exportsWithContracts(
 const fsDescriptor = exportsWithContracts(
 	[fulfilled(OBJECT), "openDescriptor"],
 	[fulfilled(OBJECT | UNDEFINED), "readChunk"],
-	[fulfilled(NUMBER), "writeChunk"],
+	[integerResult(byteCount, "fulfill"), "writeChunk"],
 	[fulfilled(UNDEFINED), "flushDescriptor"],
 	[
 		{ kind: "fulfill", value: { mask: UNDEFINED }, immediateMask: OBJECT | UNDEFINED },
@@ -404,18 +462,19 @@ const fsDescriptor = exportsWithContracts(
 const process = exportsWithContracts(
 	[returned(STRING), "cwd"],
 	[
-		returned(NUMBER),
+		numericResult("Native memory sizes may exceed JavaScript's safe-integer limit."),
 		"availableMemory",
-		"constrainedMemory",
-		"getegid",
-		"geteuid",
-		"getgid",
-		"getuid",
-		"getMaxListeners",
-		"listenerCount",
-		"umask",
-		"uptime",
 	],
+	[integerResult(compilerIntegerRange(0, 0)), "constrainedMemory"],
+	[uint32, "getegid", "geteuid", "getgid", "getuid"],
+	[
+		numericResult(
+			"Preserves the Number supplied to setMaxListeners, or the mutable default.",
+		),
+		"getMaxListeners",
+	],
+	[int32, "listenerCount", "umask"],
+	[numericResult("Elapsed seconds may be fractional."), "uptime"],
 	[returned(BOOLEAN), "emit", "hasUncaughtExceptionCaptureCallback", "kill"],
 	[
 		returned(OBJECT, "Array"),
@@ -510,7 +569,7 @@ const util = exportsWithContracts(
 		"styleText",
 		"toUSVString",
 	],
-	[returned(NUMBER), "convertProcessSignalToExitCode"],
+	[int32, "convertProcessSignalToExitCode"],
 	[
 		returned(BOOLEAN),
 		"isArray",
@@ -604,7 +663,7 @@ const utilTypes = exportsWithContracts([
 ]);
 
 const v8 = exportsWithContracts(
-	[returned(NUMBER), "cachedDataVersionTag"],
+	[uint32, "cachedDataVersionTag"],
 	[returned(BOOLEAN), "isStringOneByteRepresentation"],
 	[returned(OBJECT), "getHeapStatistics", "getHeapCodeStatistics"],
 	[returned(OBJECT, "Array"), "getHeapSpaceStatistics"],
@@ -710,7 +769,11 @@ const asyncHooks = exportsWithContracts(
 	[nativeConstructor("AsyncResource"), "AsyncResource"],
 	[hostObject("AsyncHook"), "createHook"],
 	[returned(OBJECT), "executionAsyncResource"],
-	[returned(NUMBER), "executionAsyncId", "triggerAsyncId"],
+	[
+		numericResult("Async resource IDs are uncapped or supplied by the caller."),
+		"executionAsyncId",
+		"triggerAsyncId",
+	],
 );
 const console = exportsWithContracts(
 	[nativeConstructor("NodeConsole"), "Console"],
@@ -772,7 +835,10 @@ export const CAPTURED_HOST_RESULTS = exportsWithContracts(
 		"%MAL_INTRINSIC_NODE_MODULE_API_MODULE%._resolveFilename",
 	],
 	[returned(BIGINT), "globalThis.process.hrtime.bigint"],
-	[returned(NUMBER), "globalThis.process.memoryUsage.rss"],
+	[
+		numericResult("The host returns a byte count without a safe-integer limit."),
+		"globalThis.process.memoryUsage.rss",
+	],
 	[returned(OBJECT), "globalThis.process.report.getReport"],
 	[
 		returned(BOOLEAN),
@@ -780,9 +846,15 @@ export const CAPTURED_HOST_RESULTS = exportsWithContracts(
 		"globalThis.process.stderr.write",
 	],
 	[
-		returned(NUMBER | UNDEFINED),
+		integerResult(compilerIntegerRange(0, 0xffff), "return", NUMBER | UNDEFINED),
 		"globalThis.process.stdout.columns<get>",
 		"globalThis.process.stderr.columns<get>",
+	],
+	[
+		numericResult(
+			"The exit code may be unset or contain a caller-supplied Number.",
+			NUMBER | UNDEFINED,
+		),
 		"globalThis.process.exitCode<get>",
 	],
 	[returned(BOOLEAN), "globalThis.process.sourceMapsEnabled<get>"],
@@ -898,7 +970,7 @@ const zlib = exportsWithContracts(
 		"inflateRawSync",
 		"unzipSync",
 	],
-	[returned(NUMBER), "crc32"],
+	[uint32, "crc32"],
 	[
 		callback,
 		"brotliCompress",
@@ -1010,7 +1082,11 @@ const net = exportsWithContracts(
 	[hostObject("NetSocket"), "connect", "createConnection"],
 	[streamConstructor("NetSocket"), "Socket"],
 	[returned(BOOLEAN), "isIPv4", "isIPv6", "getDefaultAutoSelectFamily"],
-	[returned(NUMBER), "isIP", "getDefaultAutoSelectFamilyAttemptTimeout"],
+	[integerResult(compilerIntegerRange(0, 6)), "isIP"],
+	[
+		integerResult(compilerIntegerRange(10, 0x7fff_ffff)),
+		"getDefaultAutoSelectFamilyAttemptTimeout",
+	],
 	[
 		returned(UNDEFINED),
 		"setDefaultAutoSelectFamily",
@@ -1076,7 +1152,10 @@ const crypto = exportsWithContracts(
 	[returned(BOOLEAN), "timingSafeEqual", "verify"],
 	[returned(OBJECT, "Array"), "getCiphers", "getCurves", "getHashes"],
 	[returned(OBJECT | UNDEFINED), "getCipherInfo", "randomBytes"],
-	[returned(NUMBER | UNDEFINED), "randomInt"],
+	[
+		selected("return", { kind: "random-int", argument: 0 }, NUMBER | UNDEFINED),
+		"randomInt",
+	],
 	[returned(OBJECT, "Uint8Array"), "argon2Sync", "pbkdf2Sync", "scryptSync", "sign"],
 	[
 		returned(OBJECT),
@@ -1112,7 +1191,10 @@ const stream = exportsWithContracts(
 	[streamConstructor("NodePassThrough"), "PassThrough"],
 	[returned(BOOLEAN | NULL), "isReadable", "isWritable", "isDestroyed"],
 	[returned(BOOLEAN), "isErrored", "isDisturbed"],
-	[returned(NUMBER), "getDefaultHighWaterMark"],
+	[
+		numericResult("Reads mutable defaults that may contain arbitrary Numbers."),
+		"getDefaultHighWaterMark",
+	],
 	[returned(UNDEFINED), "destroy", "setDefaultHighWaterMark"],
 	[returned(OBJECT), "addAbortSignal", "compose", "finished", "pipeline"],
 	[returned(OBJECT, "Array"), "duplexPair"],
@@ -1175,7 +1257,7 @@ const events = exportsWithContracts(
 	[nativeConstructor("EventEmitterAsyncResource"), "EventEmitterAsyncResource"],
 	[hostObject("AbortListener"), "addAbortListener"],
 	[hostObject("EventIterator"), "on"],
-	[returned(NUMBER), "listenerCount"],
+	[int32, "listenerCount"],
 	[{ kind: "resolve", value: { mask: OBJECT, brand: "Array" } }, "once"],
 	[
 		dynamic("A custom emitter can return an arbitrary result from its method."),
@@ -1315,12 +1397,23 @@ export const EMBEDDED_ASSET_RESULTS = {
 	file: {
 		properties: exportsWithContracts(
 			[returned(STRING), "path", "type", "digest"],
-			[returned(NUMBER), "size"],
+			[
+				numericResult(
+					"Native storage reports a byte count without a safe-integer limit.",
+				),
+				"size",
+			],
 		),
 		methods: exportsWithContracts(
 			[returned(OBJECT, "Uint8Array"), "bytes"],
 			[returned(STRING), "text", "materialize"],
-			[returned(STRING | NUMBER | BOOLEAN | NULL | OBJECT), "json"],
+			[
+				numericResult(
+					"Parses JSON, whose numbers can be fractional or negative zero.",
+					STRING | NUMBER | BOOLEAN | NULL | OBJECT,
+				),
+				"json",
+			],
 		),
 	},
 	directory: {
@@ -1514,7 +1607,11 @@ export const PLATFORM_OBJECT_RESULTS = {
 	},
 	fileStat: {
 		properties: exportsWithContracts(
-			[returned(NUMBER), "size", "mode"],
+			[
+				numericResult("The filesystem byte count may exceed the safe-integer limit."),
+				"size",
+			],
+			[int32, "mode"],
 			[returned(BOOLEAN), "isFile", "isDirectory", "isSymbolicLink"],
 			[returned(OBJECT), "mtime"],
 		),
@@ -1522,7 +1619,7 @@ export const PLATFORM_OBJECT_RESULTS = {
 	},
 	server: {
 		properties: exportsWithContracts(
-			[returned(NUMBER), "port"],
+			[integerResult(compilerIntegerRange(0, 0xffff)), "port"],
 			[returned(STRING), "url", "hostname"],
 		),
 		methods: exportsWithContracts([
@@ -1558,7 +1655,9 @@ export const PLATFORM_OBJECT_RESULTS = {
 	},
 	workerPoolStats: {
 		properties: exportsWithContracts([
-			returned(NUMBER),
+			numericResult(
+				"Pool counters and configured sizes have no common safe-integer bound.",
+			),
 			"size",
 			"active",
 			"queued",
@@ -1581,7 +1680,7 @@ export const PLATFORM_OBJECT_RESULTS = {
 			[fulfilled(STRING), "text"],
 			[fulfilled(OBJECT, "Uint8Array"), "bytes"],
 			[fulfilled(BOOLEAN), "exists"],
-			[fulfilled(NUMBER), "write", "append"],
+			[integerResult(byteCount, "fulfill"), "write", "append"],
 			[{ kind: "fulfill", value: { mask: OBJECT, platformObject: "fileStat" } }, "stat"],
 			[fulfilled(UNDEFINED), "chmod", "delete", "copyTo", "moveTo"],
 			[hostObject("ReadableStream"), "stream"],
@@ -1589,7 +1688,10 @@ export const PLATFORM_OBJECT_RESULTS = {
 			[
 				{
 					kind: "fulfill",
-					value: { mask: STRING | NUMBER | BOOLEAN | NULL | OBJECT },
+					value: {
+						mask: STRING | NUMBER | BOOLEAN | NULL | OBJECT,
+						numericRangeUnavailable: "JSON numbers can be fractional or negative zero.",
+					},
 					reason: "Parses the bytes returned by the file read as JSON.",
 				},
 				"json",
@@ -1617,7 +1719,7 @@ export const PLATFORM_OBJECT_RESULTS = {
 	writer: {
 		properties: exportsWithContracts(),
 		methods: exportsWithContracts(
-			[fulfilled(NUMBER), "write"],
+			[integerResult(byteCount, "fulfill"), "write"],
 			[fulfilled(UNDEFINED), "flush", "close", "end", "[Symbol.asyncDispose]"],
 		),
 	},
@@ -1816,7 +1918,10 @@ const body = exportsWithContracts(
 	[
 		{
 			kind: "resolve",
-			value: { mask: NUMBER | STRING | BOOLEAN | OBJECT | NULL },
+			value: {
+				mask: NUMBER | STRING | BOOLEAN | OBJECT | NULL,
+				numericRangeUnavailable: "JSON numbers can be fractional or negative zero.",
+			},
 			reason: "The body can contain any valid JSON value.",
 		},
 		"json",
@@ -1842,7 +1947,10 @@ const blob = exportsWithContracts(
 	[hostObject("ReadableStream"), "stream"],
 );
 const blobProperties = exportsWithContracts(
-	[returned(NUMBER), "size"],
+	[
+		numericResult("Native storage reports a byte count without a safe-integer limit."),
+		"size",
+	],
 	[returned(STRING), "type"],
 );
 const bodyProperties = exportsWithContracts(
@@ -1885,7 +1993,11 @@ const eventTargetMethods = exportsWithContracts(
 );
 const eventProperties = exportsWithContracts(
 	[returned(STRING), "type"],
-	[returned(NUMBER), "eventPhase", "timeStamp"],
+	[integerResult(compilerIntegerRange(0, 3)), "eventPhase"],
+	[
+		numericResult("The event clock returns milliseconds with fractional precision."),
+		"timeStamp",
+	],
 	[
 		returned(BOOLEAN),
 		"bubbles",
@@ -1938,7 +2050,7 @@ function digestMethods(kind: "Hash" | "Hmac") {
 function listenerMethods(kind: HostObjectKind) {
 	return exportsWithContracts(
 		[returned(BOOLEAN), "emit"],
-		[returned(NUMBER), "listenerCount"],
+		[int32, "listenerCount"],
 		[
 			hostObject(kind),
 			"on",
@@ -1957,7 +2069,10 @@ function emitterMethods(kind: HostObjectKind) {
 	return new Map([
 		...listenerMethods(kind),
 		...exportsWithContracts(
-			[returned(NUMBER), "getMaxListeners"],
+			[
+				numericResult("Uses the supplied Number or the writable listener limit."),
+				"getMaxListeners",
+			],
 			[returned(OBJECT, "Array"), "eventNames", "listeners", "rawListeners"],
 			[hostObject(kind), "setMaxListeners"],
 		),
@@ -1976,7 +2091,11 @@ function nodeStreamMethods(kind: HostObjectKind, readable: boolean, writable: bo
 					[
 						{
 							kind: "return",
-							value: { mask: TOP, selector: { kind: "read-size", argument: 0 } },
+							value: {
+								mask: TOP,
+								selector: { kind: "read-size", argument: 0 },
+								numericRangeUnavailable: "Object-mode streams can contain any Number.",
+							},
 						},
 						"read",
 					],
@@ -2102,7 +2221,11 @@ function httpServerMethods(kind: "HttpServer" | "HttpsServer") {
 const socketProperties = exportsWithContracts(
 	[returned(BOOLEAN), "connecting", "pending"],
 	[returned(STRING), "readyState"],
-	[returned(NUMBER | UNDEFINED), "remotePort", "localPort"],
+	[
+		integerResult(compilerIntegerRange(0, 0xffff), "return", NUMBER | UNDEFINED),
+		"remotePort",
+		"localPort",
+	],
 	[
 		returned(STRING | UNDEFINED),
 		"remoteAddress",
@@ -2117,20 +2240,32 @@ const outgoingProperties = exportsWithContracts(
 );
 const httpServerProperties = exportsWithContracts(
 	[
-		returned(NUMBER),
+		nonnegativeInt32,
 		"headersTimeout",
 		"requestTimeout",
 		"keepAliveTimeout",
 		"maxConnections",
+	],
+	[
+		numericResult("The timeout setter accepts fractional and negative-zero numbers."),
 		"timeout",
 	],
-	[returned(NUMBER | UNDEFINED), "maxHeaderSize"],
-	[returned(NUMBER | NULL), "maxHeadersCount"],
+	[
+		numericResult(
+			"May be unset and follows the server option value.",
+			NUMBER | UNDEFINED,
+		),
+		"maxHeaderSize",
+	],
+	[
+		numericResult("May be null or contain an option value.", NUMBER | NULL),
+		"maxHeadersCount",
+	],
 );
 const childProcessProperties = exportsWithContracts(
 	[returned(BOOLEAN), "killed", "connected"],
-	[returned(NUMBER | UNDEFINED), "pid"],
-	[returned(NUMBER | NULL), "exitCode"],
+	[integerResult(COMPILER_INT32_RANGE, "return", NUMBER | UNDEFINED), "pid"],
+	[integerResult(COMPILER_INT32_RANGE, "return", NUMBER | NULL), "exitCode"],
 	[returned(STRING | NULL), "signalCode"],
 );
 
@@ -2170,7 +2305,7 @@ const forwardsCallbackResult = dynamic(
 );
 const vmCompletion = dynamic("Returns the evaluated script's completion value.");
 const performanceMethods = exportsWithContracts(
-	[returned(NUMBER), "now"],
+	[numericResult("The performance clock returns fractional milliseconds."), "now"],
 	[hostObject("PerformanceEntry"), "mark", "measure"],
 	[hostObject("EventLoopUtilization"), "eventLoopUtilization"],
 	[returned(OBJECT), "timerify", "toJSON"],
@@ -2242,25 +2377,31 @@ const statsDates = exportsWithContracts([
 	"birthtime",
 ]);
 function statsFields(mask: number): ReadonlyMap<string, HostResultContract> {
+	const integer =
+		(mask & NUMBER) === 0
+			? returned(mask)
+			: integerResult(COMPILER_UINT32_RANGE, "return", mask);
+	const size =
+		(mask & NUMBER) === 0
+			? returned(mask)
+			: numericResult(
+					"The filesystem can return integers beyond the safe-integer limit.",
+					mask,
+				);
+	const timestamp =
+		(mask & NUMBER) === 0
+			? returned(mask)
+			: numericResult(
+					"Filesystem timestamps can be fractional or NaN for constructed Stats.",
+					mask,
+				);
 	return new Map([
 		...statsDates,
-		...exportsWithContracts([
-			returned(mask),
-			"dev",
-			"mode",
-			"nlink",
-			"uid",
-			"gid",
-			"rdev",
-			"blksize",
-			"ino",
-			"size",
-			"blocks",
-			"atimeMs",
-			"mtimeMs",
-			"ctimeMs",
-			"birthtimeMs",
-		]),
+		...exportsWithContracts([integer, "mode", "uid", "gid"]),
+		...exportsWithContracts(
+			[size, "dev", "nlink", "rdev", "blksize", "ino", "size", "blocks"],
+			[timestamp, "atimeMs", "mtimeMs", "ctimeMs", "birthtimeMs"],
+		),
 	]);
 }
 
@@ -2293,14 +2434,20 @@ export const GLOBAL_HOST_FUNCTION_RESULTS = exportsWithContracts(
 		"__mal_reset_perf_stats",
 	],
 	[
-		returned(NUMBER),
+		numericResult("Runtime counters have no safe-integer limit."),
 		"__mal_gc_live_bytes",
 		"__mal_gc_allocated_bytes",
 		"__mal_gc_collections",
 	],
 	[hostObject("Timeout"), "setTimeout", "setInterval"],
 	[hostObject("Immediate"), "setImmediate"],
-	[returned(TOP & ~SYMBOL), "structuredClone"],
+	[
+		numericResult(
+			"Clones arbitrary supported input, including any Number.",
+			TOP & ~SYMBOL,
+		),
+		"structuredClone",
+	],
 );
 
 export const GLOBAL_HOST_NAMESPACE_RESULTS = new Map([
@@ -2406,7 +2553,10 @@ export const HOST_OBJECT_RESULTS: {
 } = {
 	fetch: { kind: "fulfill", value: { mask: OBJECT, hostObject: "Response" } },
 	staticProperties: {
-		EventEmitter: exportsWithContracts([returned(NUMBER), "defaultMaxListeners"]),
+		EventEmitter: exportsWithContracts([
+			numericResult("The property accepts caller-supplied numbers."),
+			"defaultMaxListeners",
+		]),
 	},
 	statics: {
 		NetBlockList: exportsWithContracts([returned(BOOLEAN), "isBlockList"]),
@@ -2448,7 +2598,8 @@ export const HOST_OBJECT_RESULTS: {
 				"of",
 			],
 			[returned(BOOLEAN), "isBuffer", "isEncoding"],
-			[returned(NUMBER), "byteLength", "compare"],
+			[integerResult(byteCount), "byteLength"],
+			[integerResult(compilerIntegerRange(-1, 1)), "compare"],
 		),
 		URL: exportsWithContracts(
 			[returned(BOOLEAN), "canParse"],
@@ -2520,7 +2671,10 @@ export const HOST_OBJECT_RESULTS: {
 		TtyWriteStream: new Map([
 			...netSocketMethods("NetSocket"),
 			...exportsWithContracts(
-				[returned(NUMBER), "getColorDepth"],
+				[
+					integerResult(compilerIntegerRange(1, 24), "return", NUMBER | UNDEFINED),
+					"getColorDepth",
+				],
 				[returned(BOOLEAN), "hasColors"],
 				[returned(OBJECT, "Array"), "getWindowSize"],
 			),
@@ -2546,7 +2700,10 @@ export const HOST_OBJECT_RESULTS: {
 		PerformanceNodeTiming: exportsWithContracts([returned(OBJECT), "toJSON"]),
 		Histogram: exportsWithContracts(
 			[returned(UNDEFINED), "reset", "record", "recordDelta"],
-			[returned(NUMBER), "percentile"],
+			[
+				numericResult("The histogram may expose floating-point or missing observations."),
+				"percentile",
+			],
 			[returned(BOOLEAN), "enable", "disable"],
 		),
 		NetBlockList: exportsWithContracts(
@@ -2571,15 +2728,20 @@ export const HOST_OBJECT_RESULTS: {
 					"dropMembership",
 				],
 				[
-					returned(NUMBER),
-					"setTTL",
-					"setMulticastTTL",
-					"setRecvBufferSize",
-					"setSendBufferSize",
+					int32,
 					"getRecvBufferSize",
 					"getSendBufferSize",
 					"getSendQueueSize",
 					"getSendQueueCount",
+				],
+				[
+					numericResult(
+						"Returns the original Number passed to the socket option setter.",
+					),
+					"setTTL",
+					"setMulticastTTL",
+					"setRecvBufferSize",
+					"setSendBufferSize",
 				],
 				[hostObject("SocketAddress"), "address", "remoteAddress"],
 				[fulfilled(UNDEFINED), "[Symbol.asyncDispose]"],
@@ -2725,7 +2887,13 @@ export const HOST_OBJECT_RESULTS: {
 			...eventTargetMethods,
 			...listenerMethods("MaligatorMessagePort"),
 			...exportsWithContracts(
-				[returned(NUMBER | UNDEFINED), "postMessage"],
+				[
+					numericResult(
+						"Returns an uncapped native message ticket when one is available.",
+						NUMBER | UNDEFINED,
+					),
+					"postMessage",
+				],
 				[returned(UNDEFINED), "start", "close"],
 				[returned(BOOLEAN), "hasRef", "_discard"],
 				[hostObject("MaligatorMessagePort"), "ref", "unref"],
@@ -2737,7 +2905,7 @@ export const HOST_OBJECT_RESULTS: {
 				[returned(UNDEFINED), "postMessage"],
 				[returned(BOOLEAN), "hasRef"],
 				[hostObject("NodeWorker"), "ref", "unref"],
-				[fulfilled(NUMBER | UNDEFINED), "terminate"],
+				[integerResult(COMPILER_INT32_RANGE, "fulfill", NUMBER | UNDEFINED), "terminate"],
 			),
 		]),
 		MaligatorWorker: exportsWithContracts(
@@ -2767,7 +2935,13 @@ export const HOST_OBJECT_RESULTS: {
 			"[Symbol.dispose]",
 		]),
 		AsyncResource: exportsWithContracts(
-			[returned(NUMBER), "asyncId", "triggerAsyncId"],
+			[
+				numericResult(
+					"The async IDs are uncapped or supplied through constructor options.",
+				),
+				"asyncId",
+				"triggerAsyncId",
+			],
 			[returned(OBJECT), "bind"],
 			[hostObject("AsyncResource"), "emitDestroy"],
 			[forwardsCallbackResult, "runInAsyncScope"],
@@ -2917,7 +3091,10 @@ export const HOST_OBJECT_RESULTS: {
 			"size",
 		]),
 		CompressionStream: exportsWithContracts(),
-		CountQueuingStrategy: exportsWithContracts([returned(NUMBER), "size"]),
+		CountQueuingStrategy: exportsWithContracts([
+			integerResult(compilerIntegerRange(1, 1)),
+			"size",
+		]),
 		DecompressionStream: exportsWithContracts(),
 		AbortController: exportsWithContracts([returned(UNDEFINED), "abort"]),
 		AbortSignal: new Map([
@@ -2960,13 +3137,12 @@ export const HOST_OBJECT_RESULTS: {
 				"readBigInt64LE",
 				"readBigInt64BE",
 			],
+			[integerResult(compilerIntegerRange(-1, 1)), "compare"],
+			[integerResult(compilerIntegerRange(-1, 0xffff_ffff)), "indexOf", "lastIndexOf"],
 			[
-				returned(NUMBER),
-				"compare",
+				uint32,
 				"write",
 				"copy",
-				"indexOf",
-				"lastIndexOf",
 				"utf8Write",
 				"latin1Write",
 				"asciiWrite",
@@ -2974,43 +3150,71 @@ export const HOST_OBJECT_RESULTS: {
 				"base64Write",
 				"base64urlWrite",
 				"ucs2Write",
-				"readUInt8",
-				"readUint8",
-				"writeUInt8",
-				"writeUint8",
-				"readInt8",
-				"writeInt8",
+			],
+			[integerResult(compilerIntegerRange(0, 0xff)), "readUInt8", "readUint8"],
+			[integerResult(compilerIntegerRange(-0x80, 0x7f)), "readInt8"],
+			[
+				integerResult(compilerIntegerRange(0, 0xffff)),
 				"readUInt16LE",
 				"readUint16LE",
-				"writeUInt16LE",
-				"writeUint16LE",
 				"readUInt16BE",
 				"readUint16BE",
+			],
+			[
+				integerResult(compilerIntegerRange(-0x8000, 0x7fff)),
+				"readInt16LE",
+				"readInt16BE",
+			],
+			[uint32, "readUInt32LE", "readUint32LE", "readUInt32BE", "readUint32BE"],
+			[int32, "readInt32LE", "readInt32BE"],
+			[
+				bufferWidth("buffer-unsigned-width", compilerIntegerRange(0, 2 ** 48 - 1)),
+				"readUIntLE",
+				"readUintLE",
+				"readUIntBE",
+				"readUintBE",
+			],
+			[
+				bufferWidth("buffer-signed-width", compilerIntegerRange(-(2 ** 47), 2 ** 47 - 1)),
+				"readIntLE",
+				"readIntBE",
+			],
+			[
+				numericResult("Decodes floating-point bytes, including NaN and negative zero."),
+				"readFloatLE",
+				"readFloatBE",
+				"readDoubleLE",
+				"readDoubleBE",
+			],
+			[
+				integerResult(compilerIntegerRange(1, 0xffff_ffff)),
+				"writeUInt8",
+				"writeUint8",
+				"writeInt8",
+			],
+			[
+				integerResult(compilerIntegerRange(2, 0xffff_ffff)),
+				"writeUInt16LE",
+				"writeUint16LE",
 				"writeUInt16BE",
 				"writeUint16BE",
-				"readInt16LE",
 				"writeInt16LE",
-				"readInt16BE",
 				"writeInt16BE",
-				"readUInt32LE",
-				"readUint32LE",
+			],
+			[
+				integerResult(compilerIntegerRange(4, 0xffff_ffff)),
 				"writeUInt32LE",
 				"writeUint32LE",
-				"readUInt32BE",
-				"readUint32BE",
 				"writeUInt32BE",
 				"writeUint32BE",
-				"readInt32LE",
 				"writeInt32LE",
-				"readInt32BE",
 				"writeInt32BE",
-				"readFloatLE",
 				"writeFloatLE",
-				"readFloatBE",
 				"writeFloatBE",
-				"readDoubleLE",
+			],
+			[
+				integerResult(compilerIntegerRange(8, 0xffff_ffff)),
 				"writeDoubleLE",
-				"readDoubleBE",
 				"writeDoubleBE",
 				"writeBigUInt64LE",
 				"writeBigUint64LE",
@@ -3018,17 +3222,14 @@ export const HOST_OBJECT_RESULTS: {
 				"writeBigUint64BE",
 				"writeBigInt64LE",
 				"writeBigInt64BE",
-				"readUIntLE",
-				"readUintLE",
+			],
+			[
+				bufferWidth("buffer-write-width", compilerIntegerRange(1, 0xffff_ffff)),
 				"writeUIntLE",
 				"writeUintLE",
-				"readUIntBE",
-				"readUintBE",
 				"writeUIntBE",
 				"writeUintBE",
-				"readIntLE",
 				"writeIntLE",
-				"readIntBE",
 				"writeIntBE",
 			],
 		),
@@ -3120,7 +3321,10 @@ export const HOST_OBJECT_RESULTS: {
 		Timeout: exportsWithContracts(
 			[hostObject("Timeout"), "ref", "unref", "refresh", "close"],
 			[returned(BOOLEAN), "hasRef"],
-			[returned(NUMBER), "[Symbol.toPrimitive]"],
+			[
+				numericResult("Timer handles use an uncapped native identifier."),
+				"[Symbol.toPrimitive]",
+			],
 		),
 		Immediate: exportsWithContracts(
 			[hostObject("Immediate"), "ref", "unref"],
@@ -3132,11 +3336,20 @@ export const HOST_OBJECT_RESULTS: {
 	},
 	properties: {
 		ReadableStreamDefaultController: exportsWithContracts([
-			returned(NUMBER | NULL),
+			numericResult(
+				"Subtracts a possibly fractional queue size from the high-water mark.",
+				NUMBER | NULL,
+			),
 			"desiredSize",
 		]),
 		ReadableByteStreamController: exportsWithContracts(
-			[returned(NUMBER | NULL), "desiredSize"],
+			[
+				numericResult(
+					"Subtracts a possibly fractional queue size from the high-water mark.",
+					NUMBER | NULL,
+				),
+				"desiredSize",
+			],
 			[hostObject("ReadableStreamBYOBRequest", undefined, OBJECT | NULL), "byobRequest"],
 		),
 		ReadableStreamBYOBRequest: exportsWithContracts([returned(OBJECT | NULL), "view"]),
@@ -3145,7 +3358,10 @@ export const HOST_OBJECT_RESULTS: {
 			"signal",
 		]),
 		TransformStreamDefaultController: exportsWithContracts([
-			returned(NUMBER | NULL),
+			numericResult(
+				"Subtracts a possibly fractional queue size from the high-water mark.",
+				NUMBER | NULL,
+			),
 			"desiredSize",
 		]),
 		DiagnosticsChannel: exportsWithContracts(
@@ -3164,17 +3380,24 @@ export const HOST_OBJECT_RESULTS: {
 			],
 		),
 		Performance: exportsWithContracts(
-			[returned(NUMBER), "timeOrigin"],
+			[numericResult("The origin is recorded in fractional milliseconds."), "timeOrigin"],
 			[hostObject("PerformanceNodeTiming", undefined, OBJECT | UNDEFINED), "nodeTiming"],
 		),
 		PerformanceEntry: exportsWithContracts(
 			[returned(STRING), "name", "entryType"],
-			[returned(NUMBER), "startTime", "duration"],
+			[
+				numericResult("Timing fields allow fractional milliseconds."),
+				"startTime",
+				"duration",
+			],
 			[dynamic("Contains a structured clone of the caller's detail value."), "detail"],
 		),
-		PerformanceNodeTiming: exportsWithContracts([returned(NUMBER), "duration"]),
+		PerformanceNodeTiming: exportsWithContracts([
+			numericResult("Timing fields allow fractional milliseconds."),
+			"duration",
+		]),
 		EventLoopUtilization: exportsWithContracts([
-			returned(NUMBER),
+			numericResult("Time measurements and their utilization ratio may be fractional."),
 			"idle",
 			"active",
 			"utilization",
@@ -3185,7 +3408,9 @@ export const HOST_OBJECT_RESULTS: {
 			[hostObject("NodeTestAssertions"), "assert"],
 		),
 		Histogram: exportsWithContracts([
-			returned(NUMBER),
+			numericResult(
+				"Histogram statistics can be fractional, nonfinite, or derived from uncapped counters.",
+			),
 			"min",
 			"max",
 			"mean",
@@ -3201,7 +3426,11 @@ export const HOST_OBJECT_RESULTS: {
 			...socketProperties,
 			...exportsWithContracts(
 				[returned(BOOLEAN), "isTTY"],
-				[returned(NUMBER | UNDEFINED), "columns", "rows"],
+				[
+					integerResult(compilerIntegerRange(0, 0xffff), "return", NUMBER | UNDEFINED),
+					"columns",
+					"rows",
+				],
 			),
 		]),
 		NetBlockList: exportsWithContracts([returned(OBJECT, "Array"), "rules"]),
@@ -3211,10 +3440,16 @@ export const HOST_OBJECT_RESULTS: {
 		TlsSocket: new Map([...socketProperties, ["encrypted", returned(BOOLEAN)]]),
 		SocketAddress: exportsWithContracts(
 			[returned(STRING), "address", "family"],
-			[returned(NUMBER), "port"],
+			[integerResult(compilerIntegerRange(0, 0xffff)), "port"],
 		),
 		HttpAgent: exportsWithContracts(
-			[returned(NUMBER), "maxTotalSockets", "agentKeepAliveTimeoutBuffer"],
+			[
+				numericResult(
+					"These are caller-configurable limits and may be nonfinite or fractional.",
+				),
+				"maxTotalSockets",
+				"agentKeepAliveTimeoutBuffer",
+			],
 			[returned(STRING), "scheduling"],
 		),
 		HttpIncomingMessage: new Map([
@@ -3237,9 +3472,9 @@ export const HOST_OBJECT_RESULTS: {
 			),
 		]),
 		SpawnSyncResult: exportsWithContracts(
-			[returned(NUMBER), "pid"],
-			[returned(NUMBER | NULL), "status"],
-			[returned(STRING | NUMBER | NULL), "signal"],
+			[int32, "pid"],
+			[integerResult(COMPILER_INT32_RANGE, "return", NUMBER | NULL), "status"],
+			[integerResult(COMPILER_INT32_RANGE, "return", STRING | NUMBER | NULL), "signal"],
 			[returned(OBJECT | NULL), "output"],
 			[returned(OBJECT | UNDEFINED), "error"],
 			[returned(STRING | OBJECT | NULL | UNDEFINED), "stdout", "stderr"],
@@ -3251,7 +3486,7 @@ export const HOST_OBJECT_RESULTS: {
 			"generatedCode",
 		]),
 		CompileCacheResult: exportsWithContracts(
-			[returned(NUMBER), "status"],
+			[int32, "status"],
 			[returned(STRING), "message"],
 		),
 		ExecTextOutput: exportsWithContracts([returned(STRING), "stdout", "stderr"]),
@@ -3262,7 +3497,7 @@ export const HOST_OBJECT_RESULTS: {
 		]),
 		ExecOutput: exportsWithContracts([returned(STRING | OBJECT), "stdout", "stderr"]),
 		ReadlineCursor: exportsWithContracts(
-			[returned(NUMBER), "rows"],
+			[numericResult("The cursor may reflect a caller-provided terminal width."), "rows"],
 			[dynamic("Returns the public cursor value unchanged."), "cols"],
 		),
 		CompressionInfo: exportsWithContracts(
@@ -3275,18 +3510,25 @@ export const HOST_OBJECT_RESULTS: {
 			...readableStateFields,
 			...exportsWithContracts(
 				[returned(STRING), "path"],
-				[returned(NUMBER | NULL), "fd"],
+				[integerResult(COMPILER_INT32_RANGE, "return", NUMBER | NULL), "fd"],
 			),
 		]),
 		NodeFsWriteStream: new Map([
 			...writableStateFields,
 			...exportsWithContracts(
 				[returned(STRING | UNDEFINED), "path"],
-				[returned(NUMBER | NULL), "fd"],
+				[integerResult(COMPILER_INT32_RANGE, "return", NUMBER | NULL), "fd"],
 				[returned(BOOLEAN), "autoClose"],
-				[returned(NUMBER), "bytesWritten", "mode"],
-				[returned(NUMBER | UNDEFINED), "start"],
-				[returned(STRING | NUMBER), "flags"],
+				[numericResult("Total bytes written can exceed a safe integer."), "bytesWritten"],
+				[numericResult("Preserves the provided stream mode."), "mode"],
+				[
+					numericResult(
+						"The stream start offset can be missing or originate in options.",
+						NUMBER | UNDEFINED,
+					),
+					"start",
+				],
+				[numericResult("The flags are caller supplied.", STRING | NUMBER), "flags"],
 			),
 		]),
 		NodeDuplex: duplexStateFields,
@@ -3296,7 +3538,7 @@ export const HOST_OBJECT_RESULTS: {
 			...duplexStateFields,
 			...exportsWithContracts(
 				[returned(BOOLEAN), "_closed"],
-				[returned(NUMBER), "bytesWritten"],
+				[numericResult("Total bytes written can exceed a safe integer."), "bytesWritten"],
 			),
 		]),
 		WebStreamPair: transformStreamProperties,
@@ -3320,9 +3562,9 @@ export const HOST_OBJECT_RESULTS: {
 			"onmessage",
 			"onmessageerror",
 		]),
-		NodeWorker: exportsWithContracts([returned(NUMBER), "threadId"]),
+		NodeWorker: exportsWithContracts([int32, "threadId"]),
 		MaligatorWorker: exportsWithContracts(
-			[returned(NUMBER), "id"],
+			[int32, "id"],
 			[fulfilled(UNDEFINED), "ready"],
 			[
 				{
@@ -3337,10 +3579,11 @@ export const HOST_OBJECT_RESULTS: {
 		),
 		WorkerCapabilities: exportsWithContracts(
 			[returned(BOOLEAN), "threads", "sharedMemory"],
-			[returned(NUMBER), "parallelism", "maxWorkers"],
+			[integerResult(compilerIntegerRange(1, 4096)), "parallelism"],
+			[integerResult(compilerIntegerRange(16, 256)), "maxWorkers"],
 		),
 		WorkerExit: exportsWithContracts(
-			[returned(NUMBER), "id", "code"],
+			[int32, "id", "code"],
 			[returned(STRING), "reason"],
 			[dynamic("Contains a worker-defined failure value when available."), "error"],
 		),
@@ -3349,7 +3592,10 @@ export const HOST_OBJECT_RESULTS: {
 			"message",
 		]),
 		WorkerUrl: exportsWithContracts([returned(STRING), "href"]),
-		NativeHttpServer: exportsWithContracts([returned(NUMBER), "port"]),
+		NativeHttpServer: exportsWithContracts([
+			integerResult(compilerIntegerRange(0, 0xffff)),
+			"port",
+		]),
 		AsyncLocalStorage: exportsWithContracts([returned(STRING), "name"]),
 		EventEmitterAsyncResource: exportsWithContracts(
 			[hostObject("AsyncResource"), "asyncResource"],
@@ -3366,7 +3612,10 @@ export const HOST_OBJECT_RESULTS: {
 		),
 		SecretKeyObject: exportsWithContracts(
 			[returned(STRING), "type"],
-			[returned(NUMBER), "symmetricKeySize"],
+			[
+				numericResult("The native byte count has no safe-integer check."),
+				"symmetricKeySize",
+			],
 		),
 		AnyKeyObject: exportsWithContracts([returned(STRING), "type"]),
 		AsymmetricKeyObject: exportsWithContracts(
@@ -3410,7 +3659,9 @@ export const HOST_OBJECT_RESULTS: {
 			]),
 		]),
 		FilesystemStats: exportsWithContracts([
-			returned(NUMBER),
+			numericResult(
+				"The filesystem returns platform-sized counters with no safe-integer limit.",
+			),
 			"type",
 			"bsize",
 			"blocks",
@@ -3419,19 +3670,18 @@ export const HOST_OBJECT_RESULTS: {
 			"files",
 			"ffree",
 		]),
-		MaligatorStat: exportsWithContracts([
-			returned(NUMBER),
-			"type",
-			"size",
-			"mtimeMs",
-			"mode",
-		]),
+		MaligatorStat: exportsWithContracts(
+			[integerResult(compilerIntegerRange(0, 7)), "type"],
+			[int32, "mode"],
+			[numericResult("Native file sizes have no safe-integer limit."), "size"],
+			[numericResult("Native file times retain fractional milliseconds."), "mtimeMs"],
+		),
 		FileHandleRead: exportsWithContracts(
-			[returned(NUMBER), "bytesRead"],
+			[uint32, "bytesRead"],
 			[returned(OBJECT), "buffer"],
 		),
 		FileHandleWrite: exportsWithContracts(
-			[returned(NUMBER), "bytesWritten"],
+			[integerResult(byteCount), "bytesWritten"],
 			[returned(STRING | OBJECT), "buffer"],
 		),
 		TemporaryDirectory: temporaryDirectoryPath,
@@ -3448,14 +3698,25 @@ export const HOST_OBJECT_RESULTS: {
 			"name",
 			"parentPath",
 		]),
-		Navigator: exportsWithContracts([returned(NUMBER), "hardwareConcurrency"]),
+		Navigator: exportsWithContracts([
+			numericResult(
+				"The platform reports the processor count as a long without a JavaScript safe-integer check.",
+			),
+			"hardwareConcurrency",
+		]),
 		ByteLengthQueuingStrategy: exportsWithContracts(
-			[returned(NUMBER), "highWaterMark"],
+			[
+				numericResult("The supplied high-water mark may be fractional or infinite."),
+				"highWaterMark",
+			],
 			[returned(OBJECT), "size"],
 		),
 		CompressionStream: transformStreamProperties,
 		CountQueuingStrategy: exportsWithContracts(
-			[returned(NUMBER), "highWaterMark"],
+			[
+				numericResult("The supplied high-water mark may be fractional or infinite."),
+				"highWaterMark",
+			],
 			[returned(OBJECT), "size"],
 		),
 		DecompressionStream: transformStreamProperties,
@@ -3465,14 +3726,11 @@ export const HOST_OBJECT_RESULTS: {
 			[dynamic("The abort reason can be any supplied JavaScript value."), "reason"],
 		),
 		Blob: blobProperties,
-		Buffer: exportsWithContracts(
-			[returned(OBJECT), "parent"],
-			[returned(NUMBER), "offset"],
-		),
+		Buffer: exportsWithContracts([returned(OBJECT), "parent"], [uint32, "offset"]),
 		DatabaseSync: exportsWithContracts([returned(BOOLEAN), "isOpen", "isTransaction"]),
 		DOMException: exportsWithContracts(
 			[returned(STRING), "name", "message"],
-			[returned(NUMBER), "code"],
+			[integerResult(compilerIntegerRange(0, 25)), "code"],
 		),
 		Event: eventProperties,
 		CustomEvent: new Map([
@@ -3483,7 +3741,7 @@ export const HOST_OBJECT_RESULTS: {
 			...eventProperties,
 			...exportsWithContracts(
 				[returned(BOOLEAN), "wasClean"],
-				[returned(NUMBER), "code"],
+				[numericResult("The event constructor preserves the supplied Number."), "code"],
 				[returned(STRING), "reason"],
 			),
 		]),
@@ -3491,7 +3749,13 @@ export const HOST_OBJECT_RESULTS: {
 			...eventProperties,
 			...exportsWithContracts(
 				[returned(STRING), "message", "filename"],
-				[returned(NUMBER), "lineno", "colno"],
+				[
+					numericResult(
+						"The event constructor stores the supplied numbers without integer conversion.",
+					),
+					"lineno",
+					"colno",
+				],
 				[dynamic("Carries the error value supplied by the caller."), "error"],
 			),
 		]),
@@ -3510,7 +3774,13 @@ export const HOST_OBJECT_RESULTS: {
 			),
 		]),
 		WebSocket: exportsWithContracts(
-			[returned(NUMBER), "readyState", "bufferedAmount"],
+			[integerResult(compilerIntegerRange(0, 3)), "readyState"],
+			[
+				numericResult(
+					"The send queue accumulates an uncapped double-precision byte count.",
+				),
+				"bufferedAmount",
+			],
 			[returned(STRING), "url", "extensions", "protocol", "binaryType"],
 			[returned(OBJECT | NULL), "onopen", "onerror", "onclose", "onmessage"],
 		),
@@ -3518,7 +3788,12 @@ export const HOST_OBJECT_RESULTS: {
 			...blobProperties,
 			...exportsWithContracts(
 				[returned(STRING), "name"],
-				[returned(NUMBER), "lastModified"],
+				[
+					numericResult(
+						"Truncating the supplied modification time can preserve negative zero or infinity.",
+					),
+					"lastModified",
+				],
 			),
 		]),
 		Request: new Map([
@@ -3545,7 +3820,7 @@ export const HOST_OBJECT_RESULTS: {
 		Response: new Map([
 			...bodyProperties,
 			...exportsWithContracts(
-				[returned(NUMBER), "status"],
+				[int32, "status"],
 				[returned(BOOLEAN), "ok", "redirected"],
 				[returned(STRING), "statusText", "type", "url"],
 				[returned(OBJECT | UNDEFINED), "headers"],
@@ -3593,11 +3868,17 @@ export const HOST_OBJECT_RESULTS: {
 			],
 			[hostObject("URLSearchParams"), "searchParams"],
 		),
-		URLSearchParams: exportsWithContracts([returned(NUMBER), "size"]),
+		URLSearchParams: exportsWithContracts([nonnegativeInt32, "size"]),
 		WritableStream: exportsWithContracts([returned(BOOLEAN), "locked"]),
 		WritableStreamDefaultWriter: exportsWithContracts(
 			[fulfilled(UNDEFINED), "closed", "ready"],
-			[returned(NUMBER | NULL), "desiredSize"],
+			[
+				numericResult(
+					"Subtracts a possibly fractional queue size from the high-water mark.",
+					NUMBER | NULL,
+				),
+				"desiredSize",
+			],
 		),
 	},
 } as const;

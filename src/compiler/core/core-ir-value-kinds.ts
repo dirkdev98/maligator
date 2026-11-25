@@ -1,6 +1,6 @@
 import {
 	builtinNormalResultKinds,
-	builtinResultIsInt32,
+	builtinResultIntegerRange,
 	builtinPreservesIntegerInput,
 } from "../shared/builtin-registry.ts";
 import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
@@ -251,8 +251,10 @@ function callResultKind(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 ): CompilerValueKindMask | undefined {
+	const opcode = fn.instructionOpcodeName(instruction);
 	if (
-		fn.instructionOpcodeName(instruction) !== "callForeign" &&
+		opcode !== "callForeign" &&
+		opcode !== "callKnown" &&
 		fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result !==
 			"call-completion"
 	)
@@ -313,12 +315,19 @@ export function coreInstructionResultIntegerRange(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 ): CompilerIntegerRange | undefined {
-	const range =
-		fn.instructionAttributes(instruction)[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
-	return compilerIntegerRangeIsValid(range) &&
-		(callResultKind(fn, instruction) ?? recordFieldKind(fn, instruction)) ===
-			COMPILER_VALUE_KIND_NUMBER
-		? range
+	const attributes = fn.instructionAttributes(instruction);
+	const range = attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
+	if (range !== undefined && compilerIntegerRangeIsValid(range)) {
+		const kind =
+			attributes[CORE_AWAIT_RESULT_KIND_ATTRIBUTE] ??
+			callResultKind(fn, instruction) ??
+			recordFieldKind(fn, instruction);
+		if (kind === COMPILER_VALUE_KIND_NUMBER) return range;
+	}
+	if (typeof attributes.operation !== "string" || attributes.construct) return undefined;
+	const opcode = fn.instructionOpcodeName(instruction);
+	return opcode === "callKnown" || opcode === "mathUnaryNumber"
+		? builtinResultIntegerRange(attributes.operation)
 		: undefined;
 }
 
@@ -1447,11 +1456,7 @@ function solveCoreValueKinds(
 			fn.valueRepresentation(output) === "i32" ||
 			compilerIntegerRangeIsInt32(coreInstructionResultIntegerRange(fn, instruction)) ||
 			((opcode === "createNumber" || opcode === "createF64") &&
-				numberIsExactInt32(attributes.value)) ||
-			(opcode === "callKnown" &&
-				!attributes.construct &&
-				typeof attributes.operation === "string" &&
-				builtinResultIsInt32(attributes.operation))
+				numberIsExactInt32(attributes.value))
 		) {
 			integerRecipes[output] = INTEGER_PROOF_EXACT;
 		} else if (preservedInput !== undefined) {
@@ -2541,6 +2546,18 @@ export function coreValueKindObservation(
 	const operator = fn.instructionAttributes(instruction).operator;
 	const left = operand(0)!;
 	const right = operand(1)!;
+	if (
+		integerRange !== undefined &&
+		(operator === "<" || operator === "<=" || operator === ">" || operator === ">=")
+	) {
+		const range = integerRange(left, instruction);
+		if (range !== undefined)
+			return compilerIntegerRangeComparison(
+				operator,
+				range,
+				integerRange(right, instruction),
+			);
+	}
 	if (
 		operator === "==" ||
 		operator === "!=" ||

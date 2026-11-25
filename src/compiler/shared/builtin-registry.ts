@@ -15,6 +15,14 @@ import {
 import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
 import { NO_EFFECT_SUMMARY } from "./effect-summary.ts";
 import type { EffectSummary } from "./effect-summary.ts";
+import {
+	COMPILER_INT32_RANGE,
+	COMPILER_STRING_LENGTH_RANGE,
+	COMPILER_UINT32_RANGE,
+	compilerIntegerRange,
+	compilerIntegerRangeIsInt32,
+} from "./integer-range.ts";
+import type { CompilerIntegerRange } from "./integer-range.ts";
 import { literalPrimordialBindings } from "./primordial-catalog-data.ts";
 
 export { builtinInvocationSummary } from "./builtin-semantics.ts";
@@ -1723,8 +1731,117 @@ export function builtinPreservesIntegerInput(operation: string): boolean {
 	);
 }
 
+const searchStringIndexRange = compilerIntegerRange(-1, 0x7fff_ffff);
+const nonnegativeInt32Range = compilerIntegerRange(0, 0x7fff_ffff);
+const builtinIntegerRanges = new Map<string, CompilerIntegerRange>([
+	["Math.imul", COMPILER_INT32_RANGE],
+	["Math.clz32", compilerIntegerRange(0, 32)],
+	["String.prototype.indexOf", searchStringIndexRange],
+	["String.prototype.lastIndexOf", searchStringIndexRange],
+	["String.prototype.localeCompare", compilerIntegerRange(-1, 1)],
+	["Array.prototype.push", COMPILER_STRING_LENGTH_RANGE],
+	["Array.prototype.unshift", COMPILER_STRING_LENGTH_RANGE],
+	["Array.prototype.findIndex", COMPILER_INT32_RANGE],
+	[
+		"Array.prototype.findLastIndex",
+		compilerIntegerRange(-1, Number.MAX_SAFE_INTEGER - 1),
+	],
+	["Int8Array.prototype.[[Prototype]].indexOf", COMPILER_INT32_RANGE],
+	["Int8Array.prototype.[[Prototype]].lastIndexOf", COMPILER_INT32_RANGE],
+	["Int8Array.prototype.[[Prototype]].findIndex", COMPILER_INT32_RANGE],
+	["Int8Array.prototype.[[Prototype]].findLastIndex", COMPILER_INT32_RANGE],
+	["Int8Array.prototype.[[Prototype]].length<get>", COMPILER_UINT32_RANGE],
+	["Int8Array.prototype.[[Prototype]].byteLength<get>", COMPILER_UINT32_RANGE],
+	["Int8Array.prototype.[[Prototype]].byteOffset<get>", COMPILER_UINT32_RANGE],
+	["DataView.prototype.getInt8", compilerIntegerRange(-0x80, 0x7f)],
+	["DataView.prototype.getUint8", compilerIntegerRange(0, 0xff)],
+	["DataView.prototype.getInt16", compilerIntegerRange(-0x8000, 0x7fff)],
+	["DataView.prototype.getUint16", compilerIntegerRange(0, 0xffff)],
+	["DataView.prototype.getInt32", COMPILER_INT32_RANGE],
+	["DataView.prototype.getUint32", COMPILER_UINT32_RANGE],
+	["DataView.prototype.byteLength<get>", COMPILER_UINT32_RANGE],
+	["DataView.prototype.byteOffset<get>", COMPILER_UINT32_RANGE],
+	["ArrayBuffer.prototype.byteLength<get>", COMPILER_UINT32_RANGE],
+	["ArrayBuffer.prototype.maxByteLength<get>", COMPILER_UINT32_RANGE],
+	["SharedArrayBuffer.prototype.byteLength<get>", COMPILER_UINT32_RANGE],
+	["SharedArrayBuffer.prototype.maxByteLength<get>", COMPILER_UINT32_RANGE],
+	["Map.prototype.size<get>", nonnegativeInt32Range],
+	["Set.prototype.size<get>", nonnegativeInt32Range],
+	["Atomics.notify", COMPILER_UINT32_RANGE],
+]);
+
+export function builtinResultIntegerRange(
+	operation: string,
+): CompilerIntegerRange | undefined {
+	return builtinIntegerRanges.get(operation);
+}
+
+export function builtinNumericRangeUnavailable(operation: string): string | undefined {
+	if (
+		operation.startsWith("Date.prototype.") ||
+		operation === "Date.parse" ||
+		operation === "Date.UTC"
+	)
+		return "Invalid dates and invalid time components can produce NaN.";
+	if (operation.startsWith("Math."))
+		return "The numeric operation admits nonintegral, nonfinite, or negative-zero results.";
+	switch (operation) {
+		case "Array.prototype.indexOf":
+		case "Array.prototype.lastIndexOf":
+			return "The generic wide search can return negative zero after truncating fromIndex.";
+		case "Atomics.store":
+			return "Returns the coerced input before narrowing to the element width, including infinity.";
+		case "DataView.prototype.getFloat16":
+		case "DataView.prototype.getFloat32":
+		case "DataView.prototype.getFloat64":
+			return "Decodes floating-point bytes, including NaN and negative zero.";
+		case "Date.now":
+			return "The host clock is converted without a safe-integer limit.";
+		case "Number":
+		case "Number.prototype.valueOf":
+			return "Conversion or unboxing can yield any Number.";
+		case "String.prototype.charCodeAt":
+			return "An out-of-bounds code-unit index returns NaN.";
+		case "String.prototype.codePointAt":
+			return "An out-of-bounds index returns undefined. Numeric results are Unicode code points.";
+		case "parseInt":
+		case "Number.parseInt":
+			return "Parsing can produce NaN, negative zero, or an integer outside the safe range.";
+		case "parseFloat":
+		case "Number.parseFloat":
+			return "Parsing can produce any Number.";
+		default:
+			return undefined;
+	}
+}
+
+export const ATOMIC_ELEMENT_RESULT_OPERATIONS: ReadonlySet<string> = new Set([
+	"Atomics.add",
+	"Atomics.and",
+	"Atomics.compareExchange",
+	"Atomics.exchange",
+	"Atomics.load",
+	"Atomics.or",
+	"Atomics.sub",
+	"Atomics.xor",
+]);
+const atomicElementRanges: ReadonlyMap<string, CompilerIntegerRange> = new Map([
+	["Int8Array", compilerIntegerRange(-0x80, 0x7f)],
+	["Uint8Array", compilerIntegerRange(0, 0xff)],
+	["Int16Array", compilerIntegerRange(-0x8000, 0x7fff)],
+	["Uint16Array", compilerIntegerRange(0, 0xffff)],
+	["Int32Array", COMPILER_INT32_RANGE],
+	["Uint32Array", COMPILER_UINT32_RANGE],
+]);
+
+export function builtinAtomicElementRange(
+	brand: string | undefined,
+): CompilerIntegerRange | undefined {
+	return brand === undefined ? undefined : atomicElementRanges.get(brand);
+}
+
 export function builtinResultIsInt32(operation: string): boolean {
-	return operation === "Math.imul" || operation === "Math.clz32";
+	return compilerIntegerRangeIsInt32(builtinResultIntegerRange(operation));
 }
 
 export function builtinOperationDescriptor(

@@ -176,6 +176,12 @@ argument-dependent results and leave the union in place when the caller cannot
 prove the selector. Options read by queued work need a stability proof through
 that read.
 
+Set `integerRange` when every numeric completion in an overload is an exact safe
+integer and excludes negative zero. Trace the final boxing as well as the
+underlying C value. For argument-selected widths, use the widest successful
+width when the caller supplies an unknown value. Record why a numeric outcome
+can fall outside this domain when it has no range.
+
 Connect the contract to an installer-backed binding or a proved member lookup.
 Use the captured installer identity for nested exports and aliases. For an object
 created after startup, verify the allocator and its method registration. Source

@@ -48,6 +48,14 @@ show("aliases are the same functions", () => [
 	Buffer.prototype.writeBigUint64LE === Buffer.prototype.writeBigUInt64LE,
 ]);
 
+const unsigned = Buffer.from([0xff, 0xff, 0xff, 0xff]);
+function unsignedRead(offset) {
+	const value = unsigned.readUInt32LE(offset);
+	return [value, value < 0, value > 0x7fff_ffff];
+}
+show("unsigned read stays wider than signed int32", () => unsignedRead(0));
+show("unsigned read still checks its offset", () => unsignedRead(1));
+
 const out = Buffer.alloc(16);
 show("writes return the next offset", () => [
 	out.writeUInt8(255),

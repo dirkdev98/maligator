@@ -184,7 +184,7 @@ static MalValue mal_builtin_array_buffer_max_byte_length_getter(MalVm *vm, MalVa
     if (buffer->detached) {
         return mal_value_from_i32(0);
     }
-    return mal_value_from_i32((i32) buffer->max_byte_length);
+    return mal_value_from_u32(buffer->max_byte_length);
 }
 
 static MalValue mal_builtin_array_buffer_resizable_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -622,7 +622,7 @@ static MalValue mal_shared_array_buffer_byte_length_getter(MalVm *vm, MalValue t
     if (buffer == nullptr) {
         return mal_value_new_undefined();
     }
-    return mal_value_from_i32((i32) mal_array_buffer_object_refresh_shared_length(buffer));
+    return mal_value_from_u32(mal_array_buffer_object_refresh_shared_length(buffer));
 }
 
 static MalValue mal_shared_array_buffer_max_byte_length_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -634,7 +634,7 @@ static MalValue mal_shared_array_buffer_max_byte_length_getter(MalVm *vm, MalVal
     if (buffer == nullptr) {
         return mal_value_new_undefined();
     }
-    return mal_value_from_i32((i32) buffer->max_byte_length);
+    return mal_value_from_u32(buffer->max_byte_length);
 }
 
 static MalValue mal_shared_array_buffer_growable_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

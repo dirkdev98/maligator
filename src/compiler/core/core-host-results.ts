@@ -14,6 +14,9 @@ import {
 	PLATFORM_SOURCE_STATICS,
 	PLATFORM_OBJECT_RESULTS,
 	EMBEDDED_ASSET_RESULTS,
+	GLOBAL_HOST_FUNCTION_RESULTS,
+	GLOBAL_HOST_NAMESPACE_RESULTS,
+	HOST_OBJECT_RESULTS,
 	HOST_RESULT_CONTRACTS,
 	NODE_TEST_EXPORT_TARGETS,
 } from "../shared/host-result-contracts.ts";
@@ -22,6 +25,10 @@ import type {
 	HostResultContract,
 	HostValueContract,
 } from "../shared/host-result-contracts.ts";
+import {
+	compilerIntegerRange,
+	compilerIntegerRangeIsValid,
+} from "../shared/integer-range.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import {
 	primordialNode,
@@ -703,6 +710,56 @@ interface CoreHostCompletion {
 	readonly fulfilled?: CoreHostValueFacts;
 }
 
+const numericHostMembers = new Set<string>();
+for (const definitions of [
+	...HOST_RESULT_CONTRACTS.values(),
+	...Object.values(HOST_OBJECT_RESULTS.methods),
+	...Object.values(HOST_OBJECT_RESULTS.properties),
+	...Object.values(HOST_OBJECT_RESULTS.statics),
+	...Object.values(HOST_OBJECT_RESULTS.staticProperties),
+	...GLOBAL_HOST_NAMESPACE_RESULTS.values(),
+	GLOBAL_HOST_FUNCTION_RESULTS,
+	...Object.values(EMBEDDED_ASSET_RESULTS).map(({ properties }) => properties),
+	...Object.values(PLATFORM_OBJECT_RESULTS).flatMap(({ properties, methods }) => [
+		properties,
+		methods,
+	]),
+]) {
+	for (const [name, contract] of definitions)
+		if (
+			contract.kind === "return" &&
+			((contract.value.mask === COMPILER_VALUE_KIND_NUMBER &&
+				contract.value.integerRange !== undefined) ||
+				contract.value.selector?.kind === "random-int")
+		)
+			numericHostMembers.add(name);
+}
+for (const [path, contract] of CAPTURED_HOST_RESULTS) {
+	if (contract.kind !== "return" || contract.value.integerRange === undefined) continue;
+	const name = path.slice(path.lastIndexOf(".") + 1).replace(/<get>$/, "");
+	numericHostMembers.add(name);
+}
+
+export function coreHostImmediateRangeCandidate(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): boolean {
+	if (fn.instructionKind(instruction) !== "operation") return false;
+	const opcode = fn.instructionOpcodeName(instruction);
+	if (opcode === "call") {
+		const callee = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+		const producer = definition(fn, callee);
+		if (producer === undefined) return false;
+		const global = coreHostGlobalName(program, fn, callee);
+		const name = global ?? coreHostPropertyName(program, fn, producer);
+		return name !== undefined && numericHostMembers.has(name);
+	}
+	if (opcode !== "loadProperty" && opcode !== "loadPropertyStatic") return false;
+	const name = coreHostPropertyName(program, fn, instruction);
+	return name !== undefined && numericHostMembers.has(name);
+}
+
 export function coreHostCompletion(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
@@ -756,11 +813,18 @@ export function coreHostCompletion(
 			};
 
 	function valueFacts(value: HostValueContract): CoreHostValueFacts {
+		const integerRange =
+			value.mask === COMPILER_VALUE_KIND_NUMBER ? value.integerRange : undefined;
 		const selector = value.selector;
 		if (selector === undefined)
-			return { mask: value.mask, heapBrand: value.brand, hostObject: value.hostObject };
+			return {
+				mask: value.mask,
+				heapBrand: value.brand,
+				hostObject: value.hostObject,
+				integerRange,
+			};
 		if (fn.instructionAttributes(instruction).argumentMode !== undefined)
-			return { mask: value.mask };
+			return { mask: value.mask, integerRange };
 		const argument = selector.argument + 2;
 		const operand =
 			argument < fn.kernel.instructionOperandCount(instruction)
@@ -776,6 +840,54 @@ export function coreHostCompletion(
 		const buffer = { ...bytes, hostObject: "Buffer" } as const;
 		const string = { mask: COMPILER_VALUE_KIND_STRING };
 		switch (selector.kind) {
+			case "random-int": {
+				const argumentAt = (index: number) =>
+					index + 2 < fn.kernel.instructionOperandCount(instruction)
+						? literal(program, fn, definition(fn, fn.kernel.operandAt(start + index + 2)))
+						: undefined;
+				const first = primitive();
+				const second = argumentAt(1);
+				const third = argumentAt(2);
+				if (second !== undefined && (typeof second !== "number" || third !== undefined))
+					break;
+				const minimum = second === undefined ? 0 : first;
+				const maximum = second === undefined ? first : second;
+				const range = compilerIntegerRange(
+					typeof minimum === "number" && Number.isSafeInteger(minimum)
+						? minimum + 0
+						: Number.MIN_SAFE_INTEGER,
+					typeof maximum === "number" && Number.isSafeInteger(maximum)
+						? maximum - 1
+						: Number.MAX_SAFE_INTEGER - 1,
+				);
+				return {
+					mask: COMPILER_VALUE_KIND_NUMBER,
+					integerRange: compilerIntegerRangeIsValid(range) ? range : undefined,
+				};
+			}
+			case "buffer-signed-width":
+			case "buffer-unsigned-width":
+			case "buffer-write-width": {
+				const width = primitive();
+				if (
+					typeof width !== "number" ||
+					!Number.isInteger(width) ||
+					width < 1 ||
+					width > 6
+				)
+					break;
+				if (selector.kind === "buffer-write-width")
+					return {
+						mask: value.mask,
+						integerRange: compilerIntegerRange(width, 0xffff_ffff),
+					};
+				const signed = selector.kind === "buffer-signed-width";
+				const limit = 2 ** (width * 8 - Number(signed));
+				return {
+					mask: value.mask,
+					integerRange: compilerIntegerRange(signed ? -limit : 0, limit - 1),
+				};
+			}
 			case "text-flag": {
 				const flag = primitive();
 				if (flag !== UNKNOWN_LITERAL) return flag ? string : bytes;
@@ -972,7 +1084,7 @@ export function coreHostCompletion(
 				break;
 			}
 		}
-		return { mask: value.mask, hostObject: value.hostObject };
+		return { mask: value.mask, hostObject: value.hostObject, integerRange };
 	}
 }
 

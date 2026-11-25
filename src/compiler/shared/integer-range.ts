@@ -5,6 +5,13 @@ export interface CompilerIntegerRange {
 	readonly excludesNegativeZero: true;
 }
 
+export function compilerIntegerRange(
+	minimum: number,
+	maximum: number,
+): CompilerIntegerRange {
+	return { minimum, maximum, exactSafeIntegers: true, excludesNegativeZero: true };
+}
+
 export const COMPILER_INT32_RANGE: CompilerIntegerRange = Object.freeze({
 	minimum: -0x8000_0000,
 	maximum: 0x7fff_ffff,

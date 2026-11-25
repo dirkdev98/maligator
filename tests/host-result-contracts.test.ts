@@ -20,9 +20,16 @@ import type { BuildModuleGraphOptions } from "../src/compiler/frontend/module-gr
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import {
+	ATOMIC_ELEMENT_RESULT_OPERATIONS,
+	builtinNormalResultKinds,
+	builtinNumericRangeUnavailable,
+	builtinResultIntegerRange,
+} from "../src/compiler/shared/builtin-registry.ts";
+import {
 	compilerProgramFactsFromConfig,
 	withProgramClosure,
 } from "../src/compiler/shared/compiler-facts.ts";
+import { COMPILER_VALUE_KIND_NUMBER } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
 	BUFFER_STRING_ENCODINGS,
 	CAPTURED_HOST_RESULTS,
@@ -42,7 +49,11 @@ import {
 	GLOBAL_HOST_ABSTRACT_CONSTRUCTORS,
 	HOST_OBJECT_RESULTS,
 } from "../src/compiler/shared/host-result-contracts.ts";
-import type { HostObjectKind } from "../src/compiler/shared/host-result-contracts.ts";
+import type {
+	HostObjectKind,
+	HostResultContract,
+} from "../src/compiler/shared/host-result-contracts.ts";
+import { compilerIntegerRangeIsValid } from "../src/compiler/shared/integer-range.ts";
 import { getPrimordialCatalog } from "../src/compiler/shared/primordial-catalog-data.ts";
 import { primordialNode } from "../src/compiler/shared/primordial-catalog.ts";
 import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
@@ -63,6 +74,7 @@ function inspectHostCall(
 	imports = namedImports,
 	virtualModules?: BuildModuleGraphOptions["virtualModules"],
 	inspected = "inspect",
+	observation = `typeof result === ${JSON.stringify(type)}`,
 ) {
 	const directory = mkdtempSync(join(tmpdir(), "mal-host-result-"));
 	try {
@@ -75,7 +87,7 @@ function inspectHostCall(
 			async function inspect(path, options) {
 				${setup}
 				const result = ${expression};
-				return typeof result === ${JSON.stringify(type)};
+				return ${observation};
 			}
 			globalThis.inspect = inspect;
 		`,
@@ -98,11 +110,141 @@ function inspectHostCall(
 				operations = coreOperations(coreFunctionNamed(program, inspected)!);
 			},
 		});
-		return operations!.map(({ opcode }) => opcode);
+		return operations!.map(({ opcode, attributes }) =>
+			opcode === "binary" ? `binary:${attributes.operator as string}` : opcode,
+		);
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
 }
+
+it.each([
+	["readUInt8(0)", "result > 255"],
+	["readInt8(0)", "result < -128"],
+	["readUInt16LE(0)", "result > 65535"],
+	["readUint16BE(0)", "result < 0"],
+	["readInt16BE(0)", "result > 32767"],
+	["readUInt32LE(0)", "result > 4294967295"],
+	["readInt32BE(0)", "result < -2147483648"],
+	["readUIntLE(0, 3)", "result > 16777215"],
+	["readIntBE(0, 5)", "result < -549755813888"],
+	["readUIntBE(0, options)", "result > 281474976710655"],
+])(
+	"folds the integer bound of Buffer.%s while keeping the access",
+	(method, comparison) => {
+		const operations = inspectHostCall(
+			`bytes.${method}`,
+			"number",
+			"const bytes = Buffer.alloc(6);",
+			'import { Buffer } from "node:buffer";',
+			undefined,
+			undefined,
+			comparison,
+		);
+		expect(operations).toContain("call");
+		expect(operations).not.toContain(`binary:${comparison.split(" ")[1]}`);
+	},
+);
+
+it("keeps the comparison for a floating-point reader", () => {
+	const operations = inspectHostCall(
+		"bytes.readFloatLE(0)",
+		"number",
+		"const bytes = Buffer.alloc(4);",
+		'import { Buffer } from "node:buffer";',
+		undefined,
+		undefined,
+		"result < 0",
+	);
+	expect(operations).toContain("binary:<");
+});
+
+it("uses the native unsigned bound through an ordinary wrapper", () => {
+	const operations = inspectHostCall(
+		"checksum(path)",
+		"number",
+		"function checksum(value) { return crc32(value); }",
+		'import { crc32 } from "node:zlib";',
+		undefined,
+		undefined,
+		"result < 0",
+	);
+	expect(operations).not.toContain("binary:<");
+});
+
+it("uses the response status range without removing the getter", () => {
+	const operations = inspectHostCall(
+		"new Response().status",
+		"number",
+		"",
+		"",
+		undefined,
+		undefined,
+		"result > 2147483647",
+	);
+	expect(operations).toContain("loadPropertyStatic");
+	expect(operations).not.toContain("binary:>");
+});
+
+it("joins native ranges returned by a wrapper", () => {
+	const operations = inspectHostCall(
+		"read(options)",
+		"number",
+		`function read(flag) {
+			const bytes = Buffer.alloc(2);
+			return flag ? bytes.readUInt8(0) : bytes.readUint16LE(0);
+		}`,
+		'import { Buffer } from "node:buffer";',
+		undefined,
+		undefined,
+		"result > 65535",
+	);
+	expect(operations).not.toContain("binary:>");
+});
+
+it("keeps the comparison when the reader identity can be replaced", () => {
+	const operations = inspectHostCall(
+		"bytes.readUInt8(0)",
+		"number",
+		`const bytes = Buffer.alloc(1); bytes.readUInt8 = options;`,
+		'import { Buffer } from "node:buffer";',
+		undefined,
+		undefined,
+		"result > 255",
+	);
+	expect(operations).toContain("binary:>");
+});
+
+it("uses a native byte count after fulfillment and a Promise continuation", () => {
+	const operations = inspectHostCall(
+		"await file(path).write('content').then((written) => written)",
+		"number",
+		"",
+		'import { file } from "maligator:fs";',
+		undefined,
+		undefined,
+		"result < 0",
+	);
+	expect(operations).toContain("await");
+	expect(operations).not.toContain("binary:<");
+});
+
+it.each([
+	["new DataView(new ArrayBuffer(2)).getUint16(path)", "result > 65535", "binary:>"],
+	["Math.clz32(path)", "result > 32", "binary:>"],
+	["Atomics.load(new Uint32Array(1), path)", "result < 0", "binary:<"],
+])("uses the numeric result range of %s", (expression, comparison, opcode) => {
+	const operations = inspectHostCall(
+		expression,
+		"number",
+		"",
+		"",
+		undefined,
+		undefined,
+		comparison,
+	);
+	expect(operations).not.toContain(opcode);
+});
 
 it("uses the controller supplied to a private Web Stream start hook", () => {
 	const operations = inspectHostCall(
@@ -593,7 +735,7 @@ it("accounts for all installed callable module exports", () => {
 		return installers.has(installer) &&
 			typeof node === "number" &&
 			(catalog.nodes[node]![2] & 2) !== 0 &&
-			!contracts?.has(name)
+			!numericContractAudited(contracts?.get(name))
 			? [root]
 			: [];
 	});
@@ -602,11 +744,44 @@ it("accounts for all installed callable module exports", () => {
 		for (const member of definition.exports) {
 			if (
 				member.contract.value === "callable" &&
-				!HOST_RESULT_CONTRACTS.get(definition.installer)?.has(member.name)
+				!numericContractAudited(
+					HOST_RESULT_CONTRACTS.get(definition.installer)?.get(member.name),
+				)
 			)
 				missing.push(`${definition.id}.${member.name}`);
 		}
 	}
+	expect(missing).toEqual([]);
+});
+
+function numericContractAudited(contract: HostResultContract | undefined): boolean {
+	if (contract === undefined) return false;
+	if (!("value" in contract)) return true;
+	const { mask, integerRange, numericRangeUnavailable, selector } = contract.value;
+	if ((mask & COMPILER_VALUE_KIND_NUMBER) === 0) return integerRange === undefined;
+	if (integerRange !== undefined) return compilerIntegerRangeIsValid(integerRange);
+	return (
+		numericRangeUnavailable !== undefined ||
+		("reason" in contract && contract.reason !== undefined) ||
+		selector?.kind === "random-int" ||
+		selector?.kind === "resolve-value"
+	);
+}
+
+it("accounts for numeric completions of installed ECMAScript operations", () => {
+	const missing = getPrimordialCatalog().nodes.flatMap(([identity, , flags]) => {
+		if (
+			(flags & 2) === 0 ||
+			((builtinNormalResultKinds(identity) ?? 0) & COMPILER_VALUE_KIND_NUMBER) === 0
+		)
+			return [];
+		const range = builtinResultIntegerRange(identity);
+		return compilerIntegerRangeIsValid(range) ||
+			ATOMIC_ELEMENT_RESULT_OPERATIONS.has(identity) ||
+			builtinNumericRangeUnavailable(identity) !== undefined
+			? []
+			: [identity];
+	});
 	expect(missing).toEqual([]);
 });
 
@@ -642,7 +817,8 @@ it("accounts for runtime exports of all packaged source modules", () => {
 		const check = (name: string, native = false) => {
 			const target =
 				id === "node:test" ? (NODE_TEST_EXPORT_TARGETS.get(name) ?? name) : name;
-			if (!native && !contracts?.has(target)) missing.push(`${id}.${name}`);
+			if (!native && !numericContractAudited(contracts?.get(target)))
+				missing.push(`${id}.${name}`);
 		};
 		for (const node of ast.body) {
 			if (node.type === "ExportAllDeclaration")
@@ -921,9 +1097,14 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 				: undefined;
 		visit(index, brand);
 	}
-	for (const identity of CAPTURED_HOST_RESULTS.keys()) {
+	for (const [identity, contract] of CAPTURED_HOST_RESULTS) {
 		const callable = primordialNode(identity);
-		if (callable === undefined || (callable[2] & 2) === 0) missing.push(identity);
+		if (
+			callable === undefined ||
+			(callable[2] & 2) === 0 ||
+			!numericContractAudited(contract)
+		)
+			missing.push(identity);
 	}
 	expect(missing.sort()).toEqual([]);
 
@@ -970,8 +1151,8 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 
 	function check(
 		node: (typeof nodes)[number],
-		methods: ReadonlyMap<string, unknown> | undefined,
-		properties: ReadonlyMap<string, unknown> | undefined,
+		methods: ReadonlyMap<string, HostResultContract> | undefined,
+		properties: ReadonlyMap<string, HostResultContract> | undefined,
 	) {
 		const [owner, , , , members] = node;
 		if (checked.has(owner)) return;
@@ -983,10 +1164,13 @@ it("accounts for the installed host constructors, methods, and accessors", () =>
 					? key
 					: (nodes[key[0]]![0].match(/\[\[SymbolKey:[^\]]+\]\]$/)?.[0] ??
 						`[${nodes[key[0]]![0].replaceAll("%", "")}]`);
-			if (getter >= 0 && !properties?.has(member) && !installedContract(getter))
+			if (
+				getter >= 0 &&
+				!numericContractAudited(properties?.get(member) ?? installedContract(getter))
+			)
 				missing.push(`${owner}.${member} getter`);
 			if (typeof value !== "number" || (nodes[value]![2] & 2) === 0) continue;
-			if (!methods?.has(member) && !installedContract(value))
+			if (!numericContractAudited(methods?.get(member) ?? installedContract(value)))
 				missing.push(`${owner}.${member}`);
 		}
 	}

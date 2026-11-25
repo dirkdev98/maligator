@@ -179,6 +179,10 @@ export interface CoreProgramFlowValueKindState<
 	readonly sourceClosed: boolean;
 	readonly hostMembersStable: boolean;
 	readonly hostCallbackReceivers: CoreHostCallbackReceivers | undefined;
+	hostCompletion(
+		fn: CoreFunctionStore,
+		instruction: CoreInstructionId,
+	): ReturnType<typeof coreHostCompletion>;
 	readonly dataEpoch: number;
 	readonly targets: Targets;
 	readonly external: ReadonlyMap<CoreFunctionId, boolean>;
@@ -2667,6 +2671,37 @@ export class CoreProgramFlowEngine {
 		if (previous?.hostMembersStable !== hostMembersStable) previous = undefined;
 		const hostCallbackReceivers =
 			hostMembersStable && candidateReceivers?.size ? candidateReceivers : undefined;
+		const locked = context?.facts.world.primordialPolicy === "locked";
+		const memberReader = (fn: CoreFunctionStore) => {
+			const platformResult = (instruction: CoreInstructionId) =>
+				corePlatformSourceResult(this.#program, fn, instruction, targets, context!);
+			return (instruction: CoreInstructionId) =>
+				coreHostCompletion(
+					this.#program,
+					fn,
+					instruction,
+					coreHostObjectResult(
+						this.#program,
+						fn,
+						instruction,
+						hostSlots,
+						hostCallbackReceivers?.get(fn.id),
+						platformResult,
+					) ?? platformResult(instruction),
+					true,
+				);
+		};
+		const nativeCompletion = (fn: CoreFunctionStore, instruction: CoreInstructionId) =>
+			hostSlots === undefined || (hostSlots.size === 0 && !hostMembersStable)
+				? undefined
+				: coreHostResult(
+						this.#program,
+						fn,
+						instruction,
+						hostSlots,
+						locked,
+						hostMembersStable,
+					);
 		if (!sameCallbackReceivers(previous?.hostCallbackReceivers, hostCallbackReceivers))
 			previous = undefined;
 		const sameInputs = (
@@ -3224,46 +3259,11 @@ export class CoreProgramFlowEngine {
 						demandedValues = [...roots];
 						demands.set(functionId, demandedValues);
 					}
-					const platformResult =
-						context !== undefined && hostMembersStable
-							? (instruction: CoreInstructionId) =>
-									corePlatformSourceResult(
-										this.#program,
-										fn,
-										instruction,
-										targets,
-										context,
-									)
-							: undefined;
-					const memberResult = hostMembersStable
-						? (instruction: CoreInstructionId) =>
-								coreHostCompletion(
-									this.#program,
-									fn,
-									instruction,
-									coreHostObjectResult(
-										this.#program,
-										fn,
-										instruction,
-										hostSlots,
-										hostCallbackReceivers?.get(functionId),
-										platformResult,
-									) ?? platformResult?.(instruction),
-									true,
-								)
-						: undefined;
+					const memberResult = hostMembersStable ? memberReader(fn) : undefined;
 					const nativeResult =
 						hostSlots === undefined || (hostSlots.size === 0 && !hostMembersStable)
 							? undefined
-							: (instruction: CoreInstructionId) =>
-									coreHostResult(
-										this.#program,
-										fn,
-										instruction,
-										hostSlots,
-										context?.facts.world.primordialPolicy === "locked",
-										hostMembersStable,
-									);
+							: (instruction: CoreInstructionId) => nativeCompletion(fn, instruction);
 					const promiseCallback =
 						callbacks === undefined
 							? undefined
@@ -3553,6 +3553,12 @@ export class CoreProgramFlowEngine {
 			dataEpoch,
 			hostMembersStable,
 			hostCallbackReceivers,
+			hostCompletion(fn: CoreFunctionStore, instruction: CoreInstructionId) {
+				return (
+					(hostMembersStable ? memberReader(fn)(instruction) : undefined) ??
+					nativeCompletion(fn, instruction)
+				);
+			},
 			external,
 			boundaryInputs,
 			valueAnalyses,

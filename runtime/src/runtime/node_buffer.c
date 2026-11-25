@@ -1697,7 +1697,7 @@ static MalValue mal_buffer_write(
     if (output == nullptr || !mal_buffer_view_shared(array)) {
         usize written = mal_buffer_write_string(
             mal_value_to_string(args[0]), encoding, output, max_length);
-        return mal_value_from_i32((i32) written);
+        return mal_value_from_u32((u32) written);
     }
     byte *staged = malloc(max_length == 0 ? 1 : max_length);
     if (staged == nullptr) {
@@ -1708,7 +1708,7 @@ static MalValue mal_buffer_write(
         mal_value_to_string(args[0]), encoding, staged, max_length);
     mal_buffer_view_write(array, offset, staged, written);
     free(staged);
-    return mal_value_from_i32((i32) written);
+    return mal_value_from_u32((u32) written);
 }
 
 static MalValue mal_buffer_copy(

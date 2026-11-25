@@ -600,7 +600,7 @@ static MalValue mal_dv_get_byte_length(MalVm *vm, MalValue this_value, const Mal
     }
     u32 byte_length;
     mal_data_view_extent(view, &byte_length);
-    return mal_value_from_i32((i32) byte_length);
+    return mal_value_from_u32(byte_length);
 }
 
 static MalValue mal_dv_get_byte_offset(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -614,7 +614,7 @@ static MalValue mal_dv_get_byte_offset(MalVm *vm, MalValue this_value, const Mal
     if (mal_data_view_is_out_of_bounds(view)) {
         return mal_value_from_i32(0);
     }
-    return mal_value_from_i32((i32) view->byte_offset);
+    return mal_value_from_u32(view->byte_offset);
 }
 
 static void mal_dv_define_getter(MalVm *vm, MalObject *object, const byte *name, MalNativeFunctionCallback getter) {

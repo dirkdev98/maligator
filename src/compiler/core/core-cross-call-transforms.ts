@@ -1,4 +1,8 @@
-import { builtinNormalResultKinds } from "../shared/builtin-registry.ts";
+import {
+	ATOMIC_ELEMENT_RESULT_OPERATIONS,
+	builtinAtomicElementRange,
+	builtinNormalResultKinds,
+} from "../shared/builtin-registry.ts";
 import { unconfinedDynamicCode } from "../shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_TOP,
@@ -9,6 +13,7 @@ import {
 	compilerValueKindMaskIsSubset,
 } from "../shared/compiler-value-kinds.ts";
 import { effectSummariesEqual } from "../shared/effect-summary.ts";
+import { PLATFORM_SOURCE_EXPORTS } from "../shared/host-result-contracts.ts";
 import {
 	compilerIntegerRangesEqual,
 	compilerIntegerRangeIsValid,
@@ -32,7 +37,10 @@ import {
 	coreBuiltinCallbackInvocation,
 	coreKnownBuiltinInvocationEffects,
 } from "./core-builtin-effects.ts";
-import { CORE_BUILTIN_RESULT_PROJECTIONS_ANALYSIS } from "./core-builtin-result-projections.ts";
+import {
+	CORE_BUILTIN_RESULT_PROJECTIONS_ANALYSIS,
+	coreBuiltinCallInput,
+} from "./core-builtin-result-projections.ts";
 import {
 	coreCalleeTargetsAreOpen,
 	coreCalleeTargetsCallability,
@@ -75,6 +83,7 @@ import {
 } from "./core-generator-fusion.ts";
 import { joinCoreHeapBrands } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState } from "./core-heap-brands.ts";
+import { coreHostImmediateRangeCandidate } from "./core-host-results.ts";
 import {
 	coreInstanceMethodHint,
 	coreInstanceMethodHints,
@@ -102,6 +111,7 @@ import {
 	coreCanonicalValueRoots,
 	coreTerminatorInput,
 } from "./core-ir-control-flow.ts";
+import type { CoreControlPoint } from "./core-ir-control-flow.ts";
 import {
 	CORE_GENERATED_CODE_COST_WEIGHTS,
 	coreBlockLoopFrequency,
@@ -148,6 +158,13 @@ import {
 } from "./core-program-flow-analysis.ts";
 import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
 import { CoreProgramFlowEngine } from "./core-program-flow.ts";
+import {
+	coreIntrinsicPromiseStaticCall,
+	corePromiseContinuation,
+	corePromiseIsProven,
+	corePromiseValueIsPrivate,
+	coreSuccessfulAwaitInput,
+} from "./core-promise-facts.ts";
 import {
 	expandCoreReadAccessorRegion,
 	coreReadAccessorRegionCost,
@@ -862,6 +879,14 @@ function inlineTarget(
 	expansion: "call" | "array-iteration" = "call",
 ): InlineTarget | undefined {
 	const fn = program.function(target);
+	const platform = fn.metadata.canonicalPlatformSource;
+	if (platform !== undefined) {
+		const name = program.stringConstantText(fn.metadata.nameStringIndex);
+		const contract = PLATFORM_SOURCE_EXPORTS.get(platform)?.get(name);
+		// The installer-backed result identifies its receiver across internal branches.
+		if (contract?.kind === "return" && contract.value.platformObject !== undefined)
+			return undefined;
+	}
 	const callbackConsumer =
 		synchronousCallback?.function === fn &&
 		synchronousCallback.bodyVersion === fn.version("body");
@@ -4971,8 +4996,14 @@ function discoverProgramNormalResultFacts(
 ): {
 	readonly calls: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreNormalResultFact>>;
 	readonly fields: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreRecordAccessFact>>;
+	readonly awaits: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreNormalResultFact>>;
 } {
 	const results = new Map<CoreFunctionId, Array<CoreNormalResultFact>>();
+	const hostRanges = new Map<
+		CoreFunctionId,
+		Map<CoreInstructionId, CoreNormalResultFact>
+	>();
+	const awaits = new Map<CoreFunctionId, Array<CoreNormalResultFact>>();
 	const localReturns = new Map<CoreFunctionId, number | undefined>();
 	const inputKindQueries = new Map<
 		CoreFunctionId,
@@ -5112,6 +5143,72 @@ function discoverProgramNormalResultFacts(
 		CoreFunctionId,
 		ReadonlyMap<CoreInstructionId, CoreRecordFieldAccess>
 	>();
+	const context = analyses.compilationContext;
+	const hostMembersMayBeStable =
+		flow.targets.sourceClosed &&
+		context?.facts.world.primordialPolicy === "locked" &&
+		!context.facts.world.realms;
+	const awaitOpcode = program.registry.get("awaitFulfilled")?.id;
+	const knownCallOpcode = program.registry.get("callKnown")?.id;
+	for (const functionId of flow.reachability.liveFunctions) {
+		const fn = program.function(functionId);
+		for (const instruction of fn.instructionIds()) {
+			const opcode = fn.kernel.instructionOpcode(instruction);
+			if (opcode === awaitOpcode) {
+				const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+				const mask = readValueKinds().values(functionId).latticeMask(value);
+				if ((mask & COMPILER_VALUE_KIND_NUMBER) === 0 || !hostMembersMayBeStable)
+					continue;
+				const candidates = awaits.get(functionId);
+				const fact = { instruction, mask: COMPILER_VALUE_KIND_NUMBER };
+				if (candidates === undefined) awaits.set(functionId, [fact]);
+				else candidates.push(fact);
+			} else {
+				let integerRange: CompilerIntegerRange | undefined;
+				if (
+					hostMembersMayBeStable &&
+					coreHostImmediateRangeCandidate(program, fn, instruction) &&
+					readValueKinds().hostMembersStable
+				)
+					integerRange = readValueKinds().hostCompletion(fn, instruction)?.immediate
+						.integerRange;
+				if (integerRange === undefined && opcode === knownCallOpcode) {
+					const attributes = fn.instructionAttributes(instruction);
+					if (
+						!attributes.construct &&
+						typeof attributes.operation === "string" &&
+						ATOMIC_ELEMENT_RESULT_OPERATIONS.has(attributes.operation)
+					) {
+						const array = coreBuiltinCallInput(fn, instruction, 1)?.input;
+						if (array !== undefined) {
+							const classes = analyses.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, {
+								scope: "function",
+								function: functionId,
+							}).valueClasses;
+							integerRange = builtinAtomicElementRange(
+								classes.exactNumericTypedArray(array, instruction),
+							);
+						}
+					}
+				}
+				if (integerRange === undefined) continue;
+				let facts = hostRanges.get(functionId);
+				if (facts === undefined)
+					hostRanges.set(
+						functionId,
+						(facts = new Map<CoreInstructionId, CoreNormalResultFact>()),
+					);
+				const fact = { instruction, mask: COMPILER_VALUE_KIND_NUMBER, integerRange };
+				facts.set(instruction, fact);
+				const name = fn.instructionOpcodeName(instruction);
+				if (name === "call" || name === "callKnown") {
+					let calls = results.get(functionId);
+					if (calls === undefined) results.set(functionId, (calls = []));
+					calls.push(fact);
+				}
+			}
+		}
+	}
 	const readsFor = (functionId: CoreFunctionId) => {
 		let reads = recordReads.get(functionId);
 		if (reads === undefined) {
@@ -5265,17 +5362,43 @@ function discoverProgramNormalResultFacts(
 		}
 		return joined;
 	};
-	const queryFunction = (functionId: CoreFunctionId): CoreIntegerRangeQuery => {
+	const queryFunction = (
+		functionId: CoreFunctionId,
+		adoptionBudget?: { remaining: number },
+	): CoreIntegerRangeQuery => {
 		const ranges = analyses.get(CORE_LOOP_INDUCTION_ANALYSIS, {
 			scope: "function",
 			function: functionId,
 		});
 		const sites = rangedSites.get(functionId);
 		const reads = readsFor(functionId);
-		if (sites === undefined && reads.size === 0)
+		const host = hostRanges.get(functionId);
+		const awaited = awaits.get(functionId);
+		if (
+			sites === undefined &&
+			reads.size === 0 &&
+			host === undefined &&
+			awaited === undefined
+		)
 			return (value, block) => ranges.range(value, block);
 		const fn = program.function(functionId);
 		const query = ranges.rangeQuery((instruction) => {
+			const range = host?.get(instruction)?.integerRange;
+			if (range !== undefined) return range;
+			if (
+				awaited !== undefined &&
+				fn.kernel.instructionOpcode(instruction) === awaitOpcode
+			) {
+				const value = coreSuccessfulAwaitInput(fn, instruction);
+				if (value !== undefined)
+					return adoptedRange(
+						fn,
+						value,
+						query,
+						fn.instructionBlock(instruction),
+						adoptionBudget ?? { remaining: 32 },
+					);
+			}
 			const site = sites?.get(instruction);
 			if (site !== undefined) return callRange(site, query);
 			const read = reads.get(instruction);
@@ -5291,6 +5414,168 @@ function discoverProgramNormalResultFacts(
 			);
 		});
 		return query;
+	};
+	const adoptedRange = (
+		fn: CoreFunctionStore,
+		value: CoreValueId,
+		query: CoreIntegerRangeQuery,
+		point: CoreControlPoint,
+		budget: { remaining: number },
+	): CoreIntegerRangeState => {
+		if (budget.remaining-- <= 0) return undefined;
+		const direct = query(value, point);
+		if (direct !== undefined) return direct;
+		if (fn.kernel.valueDefinitionKind(value) === 0) {
+			const cfg = controlFor(fn.id);
+			const block = fn.kernel.valueDefinitionOwner(value) as CoreBlockId;
+			const index = fn.kernel.valueDefinitionIndex(value);
+			let joined: CoreIntegerRangeState = null;
+			let incoming = false;
+			for (const edge of cfg.predecessors[block] ?? []) {
+				if (!cfg.reachable.has(cfg.edges.from(edge))) continue;
+				incoming = true;
+				const argument = cfg.edges.argument(
+					edge,
+					cfg.edges.kind(edge) === "exceptional" ? index - 1 : index,
+				);
+				if (argument === undefined) return undefined;
+				joined = joinState(joined, adoptedRange(fn, argument, query, edge, budget));
+				if (joined === undefined) return undefined;
+			}
+			return incoming ? joined : undefined;
+		}
+		if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+		const producer = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+		const opcode = fn.instructionOpcodeName(producer);
+		if (opcode === "move")
+			return adoptedRange(
+				fn,
+				fn.kernel.operandAt(fn.kernel.instructionOperandStart(producer)),
+				query,
+				point,
+				budget,
+			);
+		if (opcode === "call" || opcode === "callKnown") {
+			if (!corePromiseValueIsPrivate(program, fn, value)) return undefined;
+			const producerBlock = fn.instructionBlock(producer);
+			const native = readValueKinds().hostCompletion(fn, producer)?.fulfilled
+				?.integerRange;
+			if (native !== undefined) return native;
+			const promise = coreIntrinsicPromiseStaticCall(fn, producer);
+			if (promise?.operation === "Promise.reject") return null;
+			if (promise?.operation === "Promise.resolve" && promise.firstArgument !== undefined)
+				return adoptedRange(fn, promise.firstArgument, query, producerBlock, budget);
+
+			const continuation = corePromiseContinuation(program, fn, producer);
+			if (continuation !== undefined && readValueKinds().hostMembersStable) {
+				const values = readValueKinds().values(fn.id);
+				if (
+					values.latticeMask(continuation.receiver) !== COMPILER_VALUE_KIND_OBJECT ||
+					!corePromiseIsProven(values.fulfillmentKind(continuation.receiver))
+				)
+					return undefined;
+				const receiver = adoptedRange(
+					fn,
+					continuation.receiver,
+					query,
+					producerBlock,
+					budget,
+				);
+				if (continuation.method === "finally") {
+					const callback = continuation.first;
+					if (callback === undefined) return receiver;
+					const kind = inputKind(fn.id, callback);
+					if (kind !== undefined && (kind & COMPILER_VALUE_KIND_OBJECT) === 0)
+						return receiver;
+					const targets = flow.targets.targets(fn.id, callback);
+					if (targets.opaque || targets.anyScript) return undefined;
+					return targets.functions.every((target) => {
+						if (program.function(target).isGenerator) return false;
+						const returned = readValueKinds().summary(target);
+						return (
+							(returned.returnKind & COMPILER_VALUE_KIND_OBJECT) === 0 ||
+							corePromiseIsProven(returned.returnFulfillmentKind)
+						);
+					})
+						? receiver
+						: undefined;
+				}
+				const handler = (
+					callback: CoreValueId | undefined,
+					passthrough: CoreIntegerRangeState,
+					parameter: CoreIntegerRangeState,
+				): CoreIntegerRangeState => {
+					if (callback === undefined) return passthrough;
+					const kind = inputKind(fn.id, callback);
+					if (kind !== undefined && (kind & COMPILER_VALUE_KIND_OBJECT) === 0)
+						return passthrough;
+					const targets = flow.targets.targets(fn.id, callback);
+					if (targets.opaque || targets.anyScript) return undefined;
+					let joined = targets.nonCallable === false ? null : passthrough;
+					for (const target of targets.functions) {
+						if (program.function(target).isGenerator) return undefined;
+						const provenance = flow.summaries.summary(target)?.returnProvenance;
+						const targetRange =
+							provenance?.kind === "parameter" &&
+							provenance.index === 0 &&
+							(provenance.identityKinds === undefined ||
+								(provenance.identityKinds & COMPILER_VALUE_KIND_NUMBER) !== 0)
+								? parameter
+								: adoptedReturns(target, budget);
+						joined = joinState(joined, targetRange);
+						if (joined === undefined) break;
+					}
+					return joined;
+				};
+				return continuation.method === "catch"
+					? joinState(receiver, handler(continuation.first, null, undefined))
+					: joinState(
+							receiver === null ? null : handler(continuation.first, receiver, receiver),
+							handler(continuation.second, null, undefined),
+						);
+			}
+			const site = flow.targets.site(fn.id, producer);
+			if (site === undefined || site.targets.opaque || site.targets.anyScript)
+				return undefined;
+			let joined: CoreIntegerRangeState = null;
+			for (const target of site.targets.functions) {
+				joined = joinState(joined, adoptedReturns(target, budget));
+				if (joined === undefined) break;
+			}
+			return joined;
+		}
+		return undefined;
+	};
+	const controlFor = (functionId: CoreFunctionId) =>
+		analyses
+			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: functionId })
+			.exceptional();
+	const adoptedReturns = (
+		functionId: CoreFunctionId,
+		budget: { remaining: number },
+	): CoreIntegerRangeState => {
+		if (budget.remaining-- <= 0) return undefined;
+		const fn = program.function(functionId);
+		if (fn.isGenerator) return undefined;
+		const cfg = controlFor(functionId);
+		const query = queryFunction(functionId, budget);
+		let joined: CoreIntegerRangeState = null;
+		for (const block of cfg.reachable) {
+			const terminator = fn.blockTerminator(block);
+			if (fn.instructionKind(terminator) !== "return") continue;
+			joined = joinState(
+				joined,
+				adoptedRange(
+					fn,
+					fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+					query,
+					block,
+					budget,
+				),
+			);
+			if (joined === undefined) break;
+		}
+		return joined;
 	};
 	const expansions = new Map<CoreFunctionId, number>();
 	const fieldExpansions = new Map<CoreFunctionId, Map<number, number>>();
@@ -5422,6 +5707,7 @@ function discoverProgramNormalResultFacts(
 		let query: CoreIntegerRangeQuery | undefined;
 		for (const { site, mask } of calls) {
 			const instruction = site.instruction;
+			if (hostRanges.get(functionId)?.has(instruction)) continue;
 			let heapBrand: CoreHeapBrandState = null;
 			if (mask === COMPILER_VALUE_KIND_OBJECT && site.targets.anyScript)
 				heapBrand = readValueKinds().anyScriptAggregate?.returnHeapBrand;
@@ -5466,6 +5752,18 @@ function discoverProgramNormalResultFacts(
 					: { integerRange: Object.freeze(integerRange) }),
 			});
 		}
+	}
+	for (const [functionId, candidates] of awaits) {
+		const fn = program.function(functionId);
+		const query = queryFunction(functionId);
+		const facts: Array<CoreNormalResultFact> = [];
+		for (const { instruction, mask } of candidates) {
+			const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+			const integerRange = query(value, fn.instructionBlock(instruction));
+			if (integerRange !== undefined && integerRange !== null)
+				facts.push({ instruction, mask, integerRange });
+		}
+		awaits.set(functionId, facts);
 	}
 	const fieldResults = new Map<CoreFunctionId, Array<CoreRecordAccessFact>>();
 	for (const functionId of flow.reachability.liveFunctions) {
@@ -5564,7 +5862,12 @@ function discoverProgramNormalResultFacts(
 			)
 				continue;
 			const attributes = fn.instructionAttributes(instruction);
-			const fact = discovered.get(instruction);
+			const normal = hostRanges.get(functionId)?.get(instruction);
+			const fact =
+				discovered.get(instruction) ??
+				(normal === undefined
+					? undefined
+					: { instruction, result: normal, ownDataKey: undefined });
 			if (
 				fact === undefined &&
 				attributes[CORE_RECORD_FIELD_KIND_ATTRIBUTE] === undefined &&
@@ -5597,7 +5900,7 @@ function discoverProgramNormalResultFacts(
 			facts.push(fact ?? { instruction, result: undefined, ownDataKey: undefined });
 		}
 	}
-	return { calls: results, fields: fieldResults };
+	return { calls: results, fields: fieldResults, awaits };
 }
 
 function discoverProgramCallResultIdentities(
@@ -6131,8 +6434,11 @@ export function runCoreCrossCallTransforms(
 	}
 	if (analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }) !== flow)
 		refreshFlow();
-	const { calls: callKindsByCaller, fields: recordKindsByCaller } =
-		discoverProgramNormalResultFacts(program, analyses, flow, readValueKinds);
+	const {
+		calls: callKindsByCaller,
+		fields: recordKindsByCaller,
+		awaits: awaitRangesByCaller,
+	} = discoverProgramNormalResultFacts(program, analyses, flow, readValueKinds);
 	const awaitKindsByCaller = new Map<
 		CoreFunctionId,
 		Array<{
@@ -6144,21 +6450,36 @@ export function runCoreCrossCallTransforms(
 	let awaitResults: CoreProgramValueKindState | undefined;
 	for (const functionId of flow.reachability.liveFunctions) {
 		const fn = program.function(functionId);
+		const ranges = awaitRangesByCaller.get(functionId);
 		for (const instruction of fn.instructionIds()) {
 			if (fn.kernel.instructionOpcode(instruction) !== awaitOpcode) continue;
 			const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
 			const result = (awaitResults ??= readValueKinds()).values(functionId);
-			const mask = result.latticeMask(value);
+			const integerRange = ranges?.find(
+				(fact) => fact.instruction === instruction,
+			)?.integerRange;
+			const mask =
+				integerRange === undefined
+					? result.latticeMask(value)
+					: COMPILER_VALUE_KIND_NUMBER;
 			const heapBrand =
 				mask === COMPILER_VALUE_KIND_OBJECT
 					? (result.heapBrand(value) ?? undefined)
 					: undefined;
-			const facts = compilerValueKindMaskIsValid(mask) ? { mask, heapBrand } : undefined;
+			const facts = compilerValueKindMaskIsValid(mask)
+				? { mask, heapBrand, integerRange }
+				: undefined;
+			const currentRange =
+				fn.instructionAttributes(instruction)[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
 			if (
 				fn.instructionAttributes(instruction)[CORE_AWAIT_RESULT_KIND_ATTRIBUTE] ===
 					facts?.mask &&
 				fn.instructionAttributes(instruction)[CORE_NORMAL_RESULT_HEAP_BRAND_ATTRIBUTE] ===
-					facts?.heapBrand
+					facts?.heapBrand &&
+				compilerIntegerRangesEqual(
+					compilerIntegerRangeIsValid(currentRange) ? currentRange : undefined,
+					integerRange,
+				)
 			)
 				continue;
 			let edits = awaitKindsByCaller.get(functionId);
@@ -6193,6 +6514,7 @@ export function runCoreCrossCallTransforms(
 				const { instruction } = fact;
 				if (!fn.isInstructionLive(instruction)) continue;
 				if (
+					fn.instructionOpcodeName(instruction) !== "callKnown" &&
 					!["call-completion", "construct-completion"].includes(
 						fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ??
 							"",

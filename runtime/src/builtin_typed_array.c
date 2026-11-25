@@ -739,7 +739,7 @@ static MalValue mal_ta_get_byte_offset(MalVm *vm, MalValue this_value, const Mal
     }
     // An out-of-bounds view reports a 0 offset.
     u32 offset = mal_typed_array_object_is_out_of_bounds(array) ? 0 : array->byte_offset;
-    return mal_value_from_i32((i32) offset);
+    return mal_value_from_u32(offset);
 }
 
 static MalValue mal_ta_get_buffer(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

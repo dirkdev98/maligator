@@ -42,6 +42,7 @@ import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.t
 import type { CoreProgramFlowTargetIndex } from "./core-program-flow.ts";
 import {
 	coreIntrinsicPromiseStaticCall,
+	corePromiseContinuation,
 	coreSuccessfulAwaitInput,
 } from "./core-promise-facts.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -95,6 +96,8 @@ const PROTECTED_PROPERTIES = new Set([
 		...exports.keys(),
 	]),
 	"then",
+	"catch",
+	"finally",
 	"constructor",
 	...Object.values(HOST_OBJECT_RESULTS.methods).flatMap((members) => [...members.keys()]),
 	...Object.values(HOST_OBJECT_RESULTS.properties).flatMap((members) => [
@@ -709,6 +712,57 @@ export function coreHostMemberIdentitiesAreStable(
 		const sites = new Map(targets.outgoing(id).map((site) => [site.instruction, site]));
 		const platformResult = (instruction: CoreInstructionId) =>
 			corePlatformSourceResult(program, fn, instruction, targets, context);
+		const isIntrinsicPromise = (value: CoreValueId, budget: number): boolean => {
+			if (budget === 0) return false;
+			const producer = definition(fn, value);
+			if (producer === undefined) return false;
+			const continuation = corePromiseContinuation(program, fn, producer);
+			if (continuation !== undefined)
+				return isIntrinsicPromise(continuation.receiver, budget - 1);
+			const promise = coreIntrinsicPromiseStaticCall(fn, producer);
+			if (promise?.operation === "Promise.reject") return true;
+			if (promise?.operation === "Promise.resolve") {
+				const argument = promise.firstArgument;
+				if (argument === undefined) return true;
+				const source = definition(fn, argument);
+				return (
+					(source !== undefined &&
+						PRIMITIVE_PRODUCERS.has(fn.instructionOpcodeName(source))) ||
+					isIntrinsicPromise(argument, budget - 1)
+				);
+			}
+			const site = sites.get(producer);
+			if (
+				site !== undefined &&
+				!site.targets.opaque &&
+				!site.targets.anyScript &&
+				site.targets.functions.length > 0 &&
+				site.targets.functions.every(
+					(target) =>
+						program.function(target).isAsync && !program.function(target).isGenerator,
+				)
+			)
+				return true;
+			const native =
+				coreHostCompletion(
+					program,
+					fn,
+					producer,
+					coreHostObjectResult(
+						program,
+						fn,
+						producer,
+						slots,
+						parameters.get(id),
+						platformResult,
+					) ?? platformResult(producer),
+					true,
+				) ?? coreHostResult(program, fn, producer, slots, true, true);
+			return (
+				native?.immediate.mask === COMPILER_VALUE_KIND_OBJECT &&
+				native.fulfilled !== undefined
+			);
+		};
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			// Packaged platform routines initialize private state. A copy of an
@@ -937,6 +991,23 @@ export function coreHostMemberIdentitiesAreStable(
 				)
 					continue;
 			}
+			const continuation = corePromiseContinuation(program, fn, instruction);
+			if (
+				continuation !== undefined &&
+				isIntrinsicPromise(continuation.receiver, 8) &&
+				[continuation.first, continuation.second].every((callback) => {
+					if (callback === undefined) return true;
+					const producer = definition(fn, callback);
+					if (
+						producer !== undefined &&
+						PRIMITIVE_PRODUCERS.has(fn.instructionOpcodeName(producer))
+					)
+						return true;
+					const target = targets.targets?.(id, callback);
+					return target !== undefined && !target.opaque && !target.anyScript;
+				})
+			)
+				continue;
 			if (
 				coreHostObjectResult(
 					program,
