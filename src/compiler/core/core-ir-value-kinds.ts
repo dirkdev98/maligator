@@ -59,7 +59,10 @@ import { analyzeCoreConditionalValueKinds } from "./core-conditional-value-kinds
 import type { CoreConditionalValueKinds } from "./core-conditional-value-kinds.ts";
 import { coreNumericTypedArrayKind } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState, CoreExactHeapBrand } from "./core-heap-brands.ts";
-import { coreHostObjectResult } from "./core-host-object-results.ts";
+import {
+	coreHostControllerMemberCandidate,
+	coreHostObjectResult,
+} from "./core-host-object-results.ts";
 import {
 	corePlatformSourceResult,
 	coreHostResult,
@@ -2191,8 +2194,9 @@ export function coreValueKindDemand(
 			if (
 				fn.instructionOpcodeName(instruction) === "awaitFulfilled" ||
 				coreHostObjectResult(program, fn, instruction, hostSlots) !== undefined ||
+				(context?.facts.world.primordialPolicy === "locked" &&
+					coreHostControllerMemberCandidate(program, fn, instruction)) ||
 				(hostSlots !== undefined &&
-					hostSlots.size !== 0 &&
 					(coreHostResult(program, fn, instruction, hostSlots, true, true) !==
 						undefined ||
 						(context !== undefined &&

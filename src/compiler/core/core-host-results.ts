@@ -9,6 +9,7 @@ import {
 import { EMBED_INSTALLER } from "../shared/embedded-asset.ts";
 import {
 	BUFFER_STRING_ENCODINGS,
+	CAPTURED_HOST_RESULTS,
 	PLATFORM_SOURCE_EXPORTS,
 	PLATFORM_OBJECT_RESULTS,
 	EMBEDDED_ASSET_RESULTS,
@@ -45,6 +46,8 @@ interface CoreHostSlot {
 export type CoreHostSlots = ReadonlyMap<number, CoreHostSlot>;
 const hostSlots = new WeakMap<CoreCompilationContext["data"], CoreHostSlots>();
 const noHostSlots: CoreHostSlots = new Map();
+const PROMISIFY_CUSTOM =
+	'%MAL_INTRINSIC_NODE_BUILTIN_MODULES%["node:child_process"].exec.[[SymbolKey:nodejs.util.promisify.custom]]';
 
 export function coreHostResultSlots(context: CoreCompilationContext): CoreHostSlots {
 	const { data, facts } = context;
@@ -137,8 +140,10 @@ function catalogCallableContract(
 	slots: CoreHostSlots,
 	allowData = false,
 ): HostResultContract | undefined {
-	const node = capturedValue(producer, 5);
+	const node = coreHostCapturedValue(program, fn, producer, slots, 5);
 	if (node === undefined || (!allowData && (node[2] & 2) === 0)) return undefined;
+	const result = CAPTURED_HOST_RESULTS.get(node[0]);
+	if (result !== undefined) return result;
 	for (const alias of node[5]) {
 		const separator = alias.indexOf(":");
 		if (!alias.startsWith("mal_host_install_")) continue;
@@ -148,31 +153,134 @@ function catalogCallableContract(
 		if (contract !== undefined) return contract;
 	}
 	return undefined;
+}
 
-	function capturedValue(
-		id: CoreInstructionId,
-		depth: number,
-	): ReturnType<typeof primordialNode> {
-		if (depth === 0) return undefined;
-		if (fn.instructionOpcodeName(id) === "loadGlobal") {
-			const slot = fn.instructionAttributes(id).index;
-			const root = typeof slot === "number" ? slots.get(slot)?.root : undefined;
-			return root === undefined ? undefined : primordialNode(root);
-		}
-		const key = coreHostPropertyName(program, fn, id);
-		if (key === undefined) return undefined;
-		const receiver = definition(
-			fn,
-			fn.kernel.operandAt(fn.kernel.instructionOperandStart(id)),
-		);
-		const parent =
-			receiver === undefined ? undefined : capturedValue(receiver, depth - 1);
-		if (parent === undefined) return undefined;
-		const property = resolvePrimordialProperty(parent[0], key);
-		return property?.getter?.[0] === "%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>"
-			? primordialNode("mal_host_install_node_fs:promises")
-			: property?.value;
+function coreHostCapturedValue(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	id: CoreInstructionId,
+	slots: CoreHostSlots,
+	depth: number,
+): ReturnType<typeof primordialNode> {
+	if (depth === 0) return undefined;
+	if (fn.instructionOpcodeName(id) === "loadGlobal") {
+		const slot = fn.instructionAttributes(id).index;
+		const root = typeof slot === "number" ? slots.get(slot)?.root : undefined;
+		return root === undefined ? undefined : primordialNode(root);
 	}
+	const global = coreHostGlobalName(
+		program,
+		fn,
+		fn.kernel.resultAt(fn.kernel.instructionResultStart(id)),
+	);
+	if (global === "process") return primordialNode("globalThis.process");
+	const custom = coreHostCapturedPromisifiedValue(program, fn, id, slots, depth);
+	if (custom !== undefined) return custom;
+	const property = coreHostCapturedProperty(program, fn, id, slots, depth);
+	return property?.getter?.[0] === "%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>"
+		? primordialNode("mal_host_install_node_fs:promises")
+		: property?.value;
+}
+
+export function coreHostCapturedPromisifiedValue(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	slots: CoreHostSlots,
+	depth = 5,
+) {
+	if (
+		depth < 2 ||
+		fn.instructionOpcodeName(instruction) !== "call" ||
+		fn.kernel.instructionOperandCount(instruction) !== 3 ||
+		fn.instructionAttributes(instruction).argumentMode !== undefined
+	)
+		return undefined;
+	const start = fn.kernel.instructionOperandStart(instruction);
+	const callee = definition(fn, fn.kernel.operandAt(start));
+	if (
+		callee === undefined ||
+		!coreHostCapturedValue(program, fn, callee, slots, depth - 1)?.[5].includes(
+			"mal_host_install_node_util:promisify",
+		)
+	)
+		return undefined;
+	const original = definition(fn, fn.kernel.operandAt(start + 2));
+	if (original === undefined) return undefined;
+	const target = coreHostCapturedValue(program, fn, original, slots, depth - 1);
+	if (target === undefined) return undefined;
+	const custom = resolvePrimordialProperty(target[0], {
+		symbol: PROMISIFY_CUSTOM,
+	})?.value;
+	return custom !== undefined && CAPTURED_HOST_RESULTS.has(custom[0])
+		? custom
+		: undefined;
+}
+
+function coreHostCapturedProperty(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	id: CoreInstructionId,
+	slots: CoreHostSlots,
+	depth: number,
+) {
+	const key =
+		coreHostPropertyName(program, fn, id) ??
+		coreHostCapturedSymbolKey(program, fn, id, slots, depth);
+	if (key === undefined) return undefined;
+	const receiver = definition(
+		fn,
+		fn.kernel.operandAt(fn.kernel.instructionOperandStart(id)),
+	);
+	const parent =
+		receiver === undefined
+			? undefined
+			: coreHostCapturedValue(program, fn, receiver, slots, depth - 1);
+	return parent === undefined ? undefined : resolvePrimordialProperty(parent[0], key);
+}
+
+export function coreHostCapturedSymbolKey(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	slots: CoreHostSlots,
+	depth = 5,
+) {
+	if (depth < 2 || fn.instructionOpcodeName(instruction) !== "loadProperty")
+		return undefined;
+	const operand = definition(
+		fn,
+		fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
+	);
+	if (operand === undefined) return undefined;
+	const symbol = coreHostCapturedValue(program, fn, operand, slots, depth - 1);
+	return symbol?.[0] === PROMISIFY_CUSTOM ? { symbol: PROMISIFY_CUSTOM } : undefined;
+}
+
+export function coreHostGlobalName(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+) {
+	const load = definition(fn, value);
+	if (load === undefined) return undefined;
+	const opcode = fn.instructionOpcodeName(load);
+	const attributes = fn.instructionAttributes(load);
+	if (opcode === "loadGlobalProperty")
+		return typeof attributes.nameStringIndex === "number"
+			? program.stringConstantText(attributes.nameStringIndex)
+			: undefined;
+	if (opcode !== "loadPropertyStatic" || typeof attributes.stringIndex !== "number")
+		return undefined;
+	const parent = definition(
+		fn,
+		fn.kernel.operandAt(fn.kernel.instructionOperandStart(load)),
+	);
+	return parent !== undefined &&
+		fn.instructionOpcodeName(parent) === "loadIntrinsic" &&
+		fn.instructionAttributes(parent).intrinsic === "globalThis"
+		? program.stringConstantText(attributes.stringIndex)
+		: undefined;
 }
 
 export function coreHostPropertyName(
@@ -452,14 +560,33 @@ export function coreHostResult(
 	locked: boolean,
 	membersStable = false,
 ): CoreHostCompletion | undefined {
-	if (slots.size === 0) return undefined;
 	const opcode = fn.instructionOpcodeName(instruction);
 	const contract =
 		opcode === "loadPropertyStatic" || opcode === "loadProperty"
-			? assetMember(program, fn, instruction, slots, "properties", 4)
+			? (assetMember(program, fn, instruction, slots, "properties", 4) ??
+				(membersStable ? capturedGetter(program, fn, instruction, slots) : undefined))
 			: coreHostDirectCallContract(program, fn, instruction, slots, 4, membersStable);
 	return coreHostCompletion(program, fn, instruction, contract, locked);
 }
+
+function capturedGetter(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	slots: CoreHostSlots,
+) {
+	const key = coreHostPropertyName(program, fn, instruction);
+	if (key === undefined || !CAPTURED_GETTERS.has(key)) return undefined;
+	const getter = coreHostCapturedProperty(program, fn, instruction, slots, 5)?.getter;
+	return getter === undefined ? undefined : CAPTURED_HOST_RESULTS.get(getter[0]);
+}
+
+const CAPTURED_GETTERS = new Set(
+	[...CAPTURED_HOST_RESULTS.keys()].flatMap((path) => {
+		const suffix = path.match(/\.([^.]+)<get>$/);
+		return suffix?.[1] ? [suffix[1]] : [];
+	}),
+);
 
 interface CoreHostValueFacts extends CoreNormalResultFacts {
 	readonly hostObject?: HostObjectKind;
@@ -623,6 +750,61 @@ export function coreHostCompletion(
 						? { mask: COMPILER_VALUE_KIND_OBJECT, hostObject: "CompressionInfo" }
 						: buffer;
 				break;
+			}
+			case "exec-output":
+			case "exec-file-output":
+			case "exec-fulfillment":
+			case "exec-file-fulfillment": {
+				const async = selector.kind.endsWith("-fulfillment");
+				let opts = operand;
+				if (selector.kind.startsWith("exec-file")) {
+					const producer = definition(fn, operand);
+					const supplied = primitive();
+					if (
+						supplied !== UNKNOWN_LITERAL ||
+						(producer !== undefined &&
+							fn.instructionOpcodeName(producer) === "createArray")
+					) {
+						opts =
+							argument + 1 < fn.kernel.instructionOperandCount(instruction)
+								? fn.kernel.operandAt(start + argument + 1)
+								: undefined;
+					} else if (
+						producer === undefined ||
+						fn.instructionOpcodeName(producer) !== "createObjectShaped"
+					) {
+						return { mask: value.mask, hostObject: async ? "ExecOutput" : undefined };
+					}
+				}
+				const encoding =
+					opts === undefined
+						? undefined
+						: stableOptionValue(program, fn, opts, locked, "encoding", false);
+				const stdio =
+					opts === undefined
+						? undefined
+						: stableOptionValue(program, fn, opts, locked, "stdio", false);
+				const text =
+					(typeof encoding === "string" &&
+						BUFFER_STRING_ENCODINGS.has(encoding.toLowerCase())) ||
+					(async && (encoding === undefined || encoding === null));
+				if (async)
+					return {
+						mask: COMPILER_VALUE_KIND_OBJECT,
+						hostObject:
+							encoding === UNKNOWN_LITERAL
+								? "ExecOutput"
+								: text
+									? "ExecTextOutput"
+									: "ExecBufferOutput",
+					};
+				if (encoding === UNKNOWN_LITERAL) break;
+				if (stdio === undefined) return text ? string : buffer;
+				return {
+					mask:
+						(text ? COMPILER_VALUE_KIND_STRING : COMPILER_VALUE_KIND_OBJECT) |
+						COMPILER_VALUE_KIND_NULL,
+				};
 			}
 			case "resolve-value": {
 				const resolved = primitive();

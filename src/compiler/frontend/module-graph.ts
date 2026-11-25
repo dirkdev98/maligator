@@ -572,8 +572,10 @@ export function buildModuleGraph(
 		recording: undefined,
 		retainedPackageJsons: options.parseCache?.packageJsons,
 	};
-	const sourceRoot =
-		options.platformSourceRoot ?? fileURLToPath(new URL("../../", import.meta.url));
+	const toolchainSourceRoot = fileURLToPath(new URL("../../", import.meta.url));
+	const sourceRoot = options.platformSourceRoot ?? toolchainSourceRoot;
+	const canonicalSourceRoot =
+		path.resolve(sourceRoot) === path.resolve(toolchainSourceRoot);
 	const catalogFiles = platformCatalogFiles(sourceRoot);
 	const workerTransfer = path.resolve(sourceRoot, "workers/transfer.ts");
 	// A transform may change any module's parse input, so its walks memoize nothing.
@@ -1041,18 +1043,27 @@ export function buildModuleGraph(
 		}
 		const { sourcePath, parsed, dependencies, importMetaResolutions } = analyzed;
 		const canonicalSyntax =
-			options.stripTypes === stripCompactTypes &&
+			canonicalSourceRoot &&
+			(options.stripTypes === stripCompactTypes ||
+				SOURCE_HOST_MODULES.has(filePath) ||
+				filePath === "maligator:test") &&
 			!options.transformSource?.files.has(filePath);
-		const canonicalPlatformSource =
+		const canonicalTestRuntime =
 			canonicalSyntax &&
-			!virtual &&
-			sourceOverride === undefined &&
-			filePath === workerTransfer
+			filePath === "maligator:test" &&
+			virtual &&
+			source === readFileSync(path.resolve(sourceRoot, "testing/runtime.mjs"), "utf8");
+		const canonicalPlatformSource = canonicalTestRuntime
+			? filePath
+			: canonicalSyntax &&
+				  !virtual &&
+				  sourceOverride === undefined &&
+				  filePath === workerTransfer
 				? "maligator:workers"
 				: virtual &&
 					  !options.virtualModules?.has(filePath) &&
 					  canonicalSyntax &&
-					  catalogSources.get(filePath)?.platform === true &&
+					  catalogSources.has(filePath) &&
 					  dependencies.every(
 							({ specifier, resolvedPath }) =>
 								(filePath === "maligator:workers" &&
@@ -1065,9 +1076,9 @@ export function buildModuleGraph(
 									!options.virtualModules?.has(specifier) &&
 									!options.externalModules?.has(specifier) &&
 									!ctx.ffiModules.has(specifier) &&
-									lookupPlatformModule(specifier)?.kind === "native"),
+									lookupHostModule(specifier) !== undefined),
 					  )
-					? lookupPlatformModule(filePath)?.id
+					? (lookupPlatformModule(filePath)?.id ?? filePath)
 					: undefined;
 		if (
 			memoKey !== undefined &&

@@ -6,7 +6,10 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { runSemanticAnalysisForGraph } from "../src/compiler/frontend/analyze-module-graph.ts";
 import { certifyProgramClosure } from "../src/compiler/frontend/certify-closure.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
-import { HOST_MODULES } from "../src/compiler/frontend/host-modules.ts";
+import {
+	HOST_GLOBAL_INSTALLERS,
+	HOST_MODULES,
+} from "../src/compiler/frontend/host-modules.ts";
 import {
 	buildModuleGraph,
 	ModuleParseCache,
@@ -20,6 +23,8 @@ import {
 } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	BUFFER_STRING_ENCODINGS,
+	CAPTURED_HOST_RESULTS,
+	GLOBAL_HOST_FUNCTION_RESULTS,
 	CRYPTO_STREAM_DELEGATES,
 	DISK_HANDLE_EXPORTS,
 	EMBEDDED_ASSET_RESULTS,
@@ -29,7 +34,9 @@ import {
 	GLOBAL_HOST_CONSTRUCTORS,
 	HOST_OBJECT_RESULTS,
 } from "../src/compiler/shared/host-result-contracts.ts";
+import type { HostObjectKind } from "../src/compiler/shared/host-result-contracts.ts";
 import { getPrimordialCatalog } from "../src/compiler/shared/primordial-catalog-data.ts";
+import { primordialNode } from "../src/compiler/shared/primordial-catalog.ts";
 import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
 import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
 
@@ -47,6 +54,7 @@ function inspectHostCall(
 	setup = "",
 	imports = namedImports,
 	virtualModules?: BuildModuleGraphOptions["virtualModules"],
+	inspected = "inspect",
 ) {
 	const directory = mkdtempSync(join(tmpdir(), "mal-host-result-"));
 	try {
@@ -79,7 +87,7 @@ function inspectHostCall(
 				}),
 			),
 			afterCoreOptimization(program) {
-				operations = coreOperations(coreFunctionNamed(program, "inspect")!);
+				operations = coreOperations(coreFunctionNamed(program, inspected)!);
 			},
 		});
 		return operations!.map(({ opcode }) => opcode);
@@ -87,6 +95,66 @@ function inspectHostCall(
 		rmSync(directory, { recursive: true, force: true });
 	}
 }
+
+it("uses the controller supplied to a private Web Stream start hook", () => {
+	const operations = inspectHostCall(
+		`new ReadableStream({ start(controller) {
+			globalThis.output = typeof controller.enqueue('chunk') === 'undefined';
+		} })`,
+		"object",
+		"",
+		"",
+		undefined,
+		"start",
+	);
+	expect(operations).toContain("call");
+	expect(operations).not.toContain("typeofCompare");
+});
+
+it("keeps the controller observation when another hook can retrieve the callback", () => {
+	const operations = inspectHostCall(
+		`new ReadableStream({
+			start(controller) { return typeof controller.enqueue('chunk') === 'undefined'; },
+			cancel() { globalThis.observer = this.start; }
+		})`,
+		"object",
+		"",
+		"",
+		undefined,
+		"start",
+	);
+	expect(operations).toContain("typeofCompare");
+});
+
+it.each([
+	["process.hrtime.bigint()", "bigint", ""],
+	["process.memoryUsage.rss()", "number", ""],
+	["process.sourceMapsEnabled", "boolean", ""],
+	["punycode.ucs2.encode([65])", "string", 'import punycode from "node:punycode";'],
+	["v8.startupSnapshot.isBuildingSnapshot()", "boolean", 'import v8 from "node:v8";'],
+	[
+		"moduleApi.registerHooks({}).deregister()",
+		"undefined",
+		'import moduleApi from "node:module";',
+	],
+	[
+		"execSync('echo example', {encoding: 'utf8'})",
+		"string",
+		'import { execSync } from "node:child_process";',
+	],
+	[
+		"(await exec[promisify.custom]('echo example')).stdout",
+		"string",
+		'import { exec } from "node:child_process"; import { promisify } from "node:util";',
+	],
+	[
+		"(await promisify(exec)('echo example', { encoding: 'buffer' })).stdout.readUInt8(0)",
+		"number",
+		'import { exec } from "node:child_process"; import { promisify } from "node:util";',
+	],
+])("uses the captured callable or getter reached by %s", (expression, type, imports) => {
+	expect(inspectHostCall(expression, type, "", imports)).not.toContain("typeofCompare");
+});
 
 it.each([
 	["readSync(path, 'utf8')", "string"],
@@ -450,82 +518,119 @@ it("accounts for the exported filesystem wrappers and their handle classes", () 
 	}
 });
 
-it("accounts for the installed constructors, methods, and getters of audited host objects", () => {
-	const catalog = getPrimordialCatalog();
-	const inventory = [
-		...GLOBAL_HOST_CONSTRUCTORS.map((name) => ({
-			name,
-			constructorPath: `globalThis.${name}`,
-			prototype: `globalThis.${name}.prototype`,
-		})),
-		{
-			name: "HeadersIterator",
-			prototype: "%MAL_INTRINSIC_HEADERS_ITERATOR_PROTOTYPE%",
-		} as const,
-		{
-			name: "FormDataIterator",
-			prototype: "%MAL_INTRINSIC_FORM_DATA_ITERATOR_PROTOTYPE%",
-		} as const,
-		{
-			name: "URLSearchParamsIterator",
-			prototype: "%MAL_INTRINSIC_URL_SEARCH_PARAMS_ITERATOR_PROTOTYPE%",
-		} as const,
-		...(["DatabaseSync", "StatementSync"] as const).map((name) => ({
-			name,
-			constructorPath: `%MAL_INTRINSIC_NODE_SQLITE_MODULE%.${name}`,
-			prototype: `%MAL_INTRINSIC_NODE_SQLITE_MODULE%.${name}.prototype`,
-		})),
-		...(["Dir", "Dirent", "Stats"] as const).map((name) => ({
-			name,
-			constructorPath: `%MAL_INTRINSIC_NODE_FS_MODULE%.${name}`,
-			prototype: `%MAL_INTRINSIC_NODE_FS_MODULE%.${name}.prototype`,
-		})),
-		{
-			name: "MessagePort",
-			constructorPath: "globalThis.MessagePort",
-			prototype: "globalThis.MessagePort.prototype",
-		} as const,
-		{
-			name: "NodeWorker",
-			constructorPath: "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker",
-			prototype: "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype",
-		} as const,
-		{
-			name: "StringDecoder",
-			constructorPath:
-				'%MAL_INTRINSIC_NODE_BUILTIN_MODULES%["node:string_decoder"].StringDecoder',
-			prototype:
-				'%MAL_INTRINSIC_NODE_BUILTIN_MODULES%["node:string_decoder"].StringDecoder.prototype',
-		} as const,
-	];
+it("accounts for the installed host constructors, methods, and accessors", () => {
+	const { nodes, roots } = getPrimordialCatalog();
+	const inventory = new Map<string, HostObjectKind>([
+		...GLOBAL_HOST_CONSTRUCTORS.map((name) => [`globalThis.${name}`, name] as const),
+		...(
+			[
+				"Crypto",
+				"SubtleCrypto",
+				"Performance",
+				"PerformanceEntry",
+				"MessagePort",
+				"ReadableByteStreamController",
+				"ReadableStreamDefaultController",
+				"ReadableStreamBYOBRequest",
+				"TransformStreamDefaultController",
+				"WritableStreamDefaultController",
+			] as const
+		).map((name) => [`globalThis.${name}`, name] as const),
+		["%MAL_INTRINSIC_NODE_FS_MODULE%.Dir", "Dir"],
+		["%MAL_INTRINSIC_NODE_SQLITE_MODULE%.StatementSync", "StatementSync"],
+		["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject", "AsymmetricKeyObject"],
+	]);
 	const missing: Array<string> = [];
-	for (const owner of inventory) {
-		const lookup = (identity: string) =>
-			catalog.nodes.find(([name]) => name === identity)!;
-		const group =
-			"constructorPath" in owner && owner.constructorPath !== undefined
-				? [lookup(owner.constructorPath), lookup(owner.prototype)]
-				: [lookup(owner.prototype)];
-		for (const [name, , , , properties] of group) {
-			for (const [key, , value, getter] of properties) {
-				if (key === "constructor") continue;
-				const member =
-					typeof key === "string"
-						? key
-						: (catalog.nodes[key[0]]![0].match(/\[\[SymbolKey:[^\]]+\]\]$/)?.[0] ??
-							`[${catalog.nodes[key[0]]![0].replaceAll("%", "")}]`);
-				if (getter >= 0 && !HOST_OBJECT_RESULTS.properties[owner.name]?.has(member))
-					missing.push(`${name}.${member} getter`);
-				if (typeof value !== "number" || (catalog.nodes[value]![2] & 2) === 0) continue;
-				const methods =
-					name === owner.prototype
-						? HOST_OBJECT_RESULTS.methods[owner.name]
-						: HOST_OBJECT_RESULTS.statics[owner.name];
-				if (!methods?.has(member)) missing.push(`${name}.${member}`);
+	const checked = new Set<string>();
+	const fromRoot = (root: string) => {
+		const colon = root.indexOf(":");
+		return HOST_RESULT_CONTRACTS.get(root.slice(0, colon))?.get(root.slice(colon + 1));
+	};
+	const installedContract = (nodeIndex: number) => {
+		const node = nodes[nodeIndex]!;
+		return (
+			CAPTURED_HOST_RESULTS.get(node[0]) ??
+			node[5].map(fromRoot).find((value) => value !== undefined)
+		);
+	};
+	for (const [root, index] of roots) {
+		if (typeof index !== "number" || (nodes[index]![2] & 2) === 0) continue;
+		const contract = fromRoot(root);
+		if (contract?.kind === "return" && contract.value.hostConstructor !== undefined) {
+			inventory.set(nodes[index]![0], contract.value.hostConstructor);
+		}
+	}
+	for (const { globals } of HOST_GLOBAL_INSTALLERS) {
+		for (const name of globals) {
+			const identity = `globalThis.${name}`;
+			const node = primordialNode(identity);
+			if (node === undefined || (node[2] & 2) === 0) continue;
+			if (
+				name !== "fetch" &&
+				!GLOBAL_HOST_FUNCTION_RESULTS.has(name) &&
+				!inventory.has(identity) &&
+				![
+					"CryptoKey",
+					"PerformanceMark",
+					"PerformanceMeasure",
+					"PerformanceObserverEntryList",
+					"PerformanceResourceTiming",
+				].includes(name)
+			) {
+				missing.push(identity);
 			}
 		}
 	}
-	expect(missing).toEqual([]);
+	for (const [owner, kind] of inventory) {
+		const constructor = primordialNode(owner);
+		expect(constructor, owner).toBeDefined();
+		const prototype = constructor![4].find(([name]) => name === "prototype")?.[2];
+		check(
+			constructor!,
+			HOST_OBJECT_RESULTS.statics[kind],
+			HOST_OBJECT_RESULTS.staticProperties[kind],
+		);
+		if (typeof prototype === "number")
+			check(
+				nodes[prototype]!,
+				HOST_OBJECT_RESULTS.methods[kind],
+				HOST_OBJECT_RESULTS.properties[kind],
+			);
+	}
+	for (const [owner, kind] of [
+		["%MAL_INTRINSIC_HEADERS_ITERATOR_PROTOTYPE%", "HeadersIterator"],
+		["%MAL_INTRINSIC_FORM_DATA_ITERATOR_PROTOTYPE%", "FormDataIterator"],
+		["%MAL_INTRINSIC_URL_SEARCH_PARAMS_ITERATOR_PROTOTYPE%", "URLSearchParamsIterator"],
+	] as const)
+		check(
+			primordialNode(owner)!,
+			HOST_OBJECT_RESULTS.methods[kind],
+			HOST_OBJECT_RESULTS.properties[kind],
+		);
+	expect(missing.sort()).toEqual([]);
+
+	function check(
+		node: (typeof nodes)[number],
+		methods: ReadonlyMap<string, unknown> | undefined,
+		properties: ReadonlyMap<string, unknown> | undefined,
+	) {
+		const [owner, , , , members] = node;
+		if (checked.has(owner)) return;
+		checked.add(owner);
+		for (const [key, , value, getter] of members) {
+			if (key === "constructor") continue;
+			const member =
+				typeof key === "string"
+					? key
+					: (nodes[key[0]]![0].match(/\[\[SymbolKey:[^\]]+\]\]$/)?.[0] ??
+						`[${nodes[key[0]]![0].replaceAll("%", "")}]`);
+			if (getter >= 0 && !properties?.has(member) && !installedContract(getter))
+				missing.push(`${owner}.${member} getter`);
+			if (typeof value !== "number" || (nodes[value]![2] & 2) === 0) continue;
+			if (!methods?.has(member) && !installedContract(value))
+				missing.push(`${owner}.${member}`);
+		}
+	}
 });
 
 it.each([

@@ -42,6 +42,10 @@ export interface HostValueContract {
 			| "stat-options"
 			| "mkdir-options"
 			| "compression-info"
+			| "exec-output"
+			| "exec-file-output"
+			| "exec-fulfillment"
+			| "exec-file-fulfillment"
 			| "resolve-value";
 	};
 }
@@ -715,15 +719,16 @@ const console = exportsWithContracts(
 	],
 );
 const module = exportsWithContracts(
+	[nativeConstructor("NodeModule"), "default", "Module"],
+	[hostObject("NodeRequire"), "createRequire"],
+	[hostObject("ModuleHookRegistration"), "registerHooks"],
+	[hostObject("SourceMapSupport"), "getSourceMapsSupport"],
+	[hostObject("CompileCacheResult"), "enableCompileCache"],
 	[
-		returned(OBJECT),
-		"default",
-		"Module",
-		"createRequire",
-		"enableCompileCache",
-		"getSourceMapsSupport",
-		"registerHooks",
+		neverReturns("The runtime graph cannot resolve unprepared module requests."),
+		"_resolveFilename",
 	],
+	[returned(OBJECT, "Array"), "_nodeModulePaths"],
 	[returned(BOOLEAN), "isBuiltin"],
 	[returned(STRING | UNDEFINED), "findPackageJSON"],
 	[
@@ -734,6 +739,60 @@ const module = exportsWithContracts(
 		"register",
 		"setSourceMapsSupport",
 		"syncBuiltinESMExports",
+	],
+);
+
+export const CAPTURED_HOST_RESULTS = exportsWithContracts(
+	[hostObject("AnyKeyObject"), "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from"],
+	[returned(OBJECT, "Array"), "%MAL_INTRINSIC_NODE_MODULE_API_MODULE%._nodeModulePaths"],
+	[
+		neverReturns("The runtime graph cannot resolve unprepared module requests."),
+		"%MAL_INTRINSIC_NODE_MODULE_API_MODULE%._resolveFilename",
+	],
+	[returned(BIGINT), "globalThis.process.hrtime.bigint"],
+	[returned(NUMBER), "globalThis.process.memoryUsage.rss"],
+	[returned(OBJECT), "globalThis.process.report.getReport"],
+	[
+		returned(BOOLEAN),
+		"globalThis.process.stdout.write",
+		"globalThis.process.stderr.write",
+	],
+	[
+		returned(NUMBER | UNDEFINED),
+		"globalThis.process.stdout.columns<get>",
+		"globalThis.process.stderr.columns<get>",
+		"globalThis.process.exitCode<get>",
+	],
+	[returned(BOOLEAN), "globalThis.process.sourceMapsEnabled<get>"],
+	[returned(OBJECT), "%MAL_INTRINSIC_NODE_FS_MODULE%.promises<get>"],
+	[returned(OBJECT, "Array"), "%MAL_INTRINSIC_NODE_TLS_MODULE%.rootCertificates<get>"],
+	[
+		selected("return", { kind: "buffer-encoding", argument: 1 }),
+		"%MAL_INTRINSIC_NODE_FS_MODULE%.realpathSync.native",
+	],
+	[callback, "%MAL_INTRINSIC_NODE_FS_MODULE%.realpath.native"],
+	[returned(STRING), '%MAL_INTRINSIC_NODE_BUILTIN_MODULES%["node:punycode"].ucs2.encode'],
+	[
+		returned(OBJECT, "Array"),
+		'%MAL_INTRINSIC_NODE_BUILTIN_MODULES%["node:punycode"].ucs2.decode',
+	],
+	[
+		selected("fulfill", { kind: "exec-fulfillment", argument: 1 }, OBJECT),
+		'%MAL_INTRINSIC_NODE_BUILTIN_MODULES%["node:child_process"].exec[%MAL_INTRINSIC_NODE_BUILTIN_MODULES%["node:child_process"].exec.[[SymbolKey:nodejs.util.promisify.custom]]]',
+	],
+	[
+		selected("fulfill", { kind: "exec-file-fulfillment", argument: 1 }, OBJECT),
+		'%MAL_INTRINSIC_NODE_BUILTIN_MODULES%["node:child_process"].execFile[%MAL_INTRINSIC_NODE_BUILTIN_MODULES%["node:child_process"].exec.[[SymbolKey:nodejs.util.promisify.custom]]]',
+	],
+	[
+		returned(BOOLEAN),
+		"%MAL_INTRINSIC_NODE_V8_MODULE%.startupSnapshot.isBuildingSnapshot",
+	],
+	[
+		neverReturns("The runtime does not build startup snapshots."),
+		"%MAL_INTRINSIC_NODE_V8_MODULE%.startupSnapshot.addDeserializeCallback",
+		"%MAL_INTRINSIC_NODE_V8_MODULE%.startupSnapshot.addSerializeCallback",
+		"%MAL_INTRINSIC_NODE_V8_MODULE%.startupSnapshot.setDeserializeMainFunction",
 	],
 );
 const nodeWorkers = exportsWithContracts(
@@ -940,7 +999,14 @@ const childProcess = exportsWithContracts(
 	[nativeConstructor("ChildProcess"), "ChildProcess"],
 	[hostObject("SpawnedChildProcess"), "exec", "execFile", "spawn"],
 	[hostObject("SpawnSyncResult"), "spawnSync"],
-	[returned(STRING | OBJECT | NULL), "execSync", "execFileSync"],
+	[
+		selected("return", { kind: "exec-output", argument: 1 }, STRING | OBJECT | NULL),
+		"execSync",
+	],
+	[
+		selected("return", { kind: "exec-file-output", argument: 1 }, STRING | OBJECT | NULL),
+		"execFileSync",
+	],
 	[neverReturns("The native runtime does not support fork IPC."), "fork"],
 );
 const readline = exportsWithContracts(
@@ -1259,6 +1325,33 @@ export const DISK_HANDLE_EXPORTS = exportsWithContracts(
 );
 
 export const PLATFORM_SOURCE_EXPORTS = new Map([
+	[
+		"node:test",
+		exportsWithContracts(
+			[resolved(UNDEFINED), "registerTest", "registerSuite"],
+			[returned(UNDEFINED), "before", "after", "beforeEach", "afterEach"],
+		),
+	],
+	[
+		"maligator:test",
+		exportsWithContracts(
+			[returned(OBJECT), "expect"],
+			[resolved(OBJECT), "__run"],
+			[
+				returned(UNDEFINED),
+				"test",
+				"describe",
+				"beforeAll",
+				"afterAll",
+				"beforeEach",
+				"afterEach",
+				"__beginFile",
+				"__endFile",
+				"__reset",
+				"__initializeRunner",
+			],
+		),
+	],
 	["maligator:fs", DISK_HANDLE_EXPORTS],
 	[
 		"maligator:http",
@@ -1407,6 +1500,11 @@ export const PLATFORM_OBJECT_RESULTS = {
 } as const;
 
 export type HostObjectKind =
+	| "ReadableStreamDefaultController"
+	| "ReadableByteStreamController"
+	| "ReadableStreamBYOBRequest"
+	| "WritableStreamDefaultController"
+	| "TransformStreamDefaultController"
 	| "Assert"
 	| "NodeConsole"
 	| "VmScript"
@@ -1439,6 +1537,14 @@ export type HostObjectKind =
 	| "ChildProcess"
 	| "SpawnedChildProcess"
 	| "SpawnSyncResult"
+	| "ExecTextOutput"
+	| "ExecBufferOutput"
+	| "ExecOutput"
+	| "NodeModule"
+	| "NodeRequire"
+	| "ModuleHookRegistration"
+	| "SourceMapSupport"
+	| "CompileCacheResult"
 	| "ReadlineInterface"
 	| "ReadlinePromiseInterface"
 	| "ReadlineCursor"
@@ -1489,6 +1595,7 @@ export type HostObjectKind =
 	| "X509Certificate"
 	| "SecretKeyObject"
 	| "AsymmetricKeyObject"
+	| "AnyKeyObject"
 	| "Crypto"
 	| "SubtleCrypto"
 	| "ByteLengthQueuingStrategy"
@@ -1584,6 +1691,12 @@ const readableReaderMethods = exportsWithContracts(
 	[{ kind: "fulfill", value: { mask: OBJECT, hostObject: "StreamReadResult" } }, "read"],
 );
 const readableReaderProperties = exportsWithContracts([fulfilled(UNDEFINED), "closed"]);
+const readableControllerMethods = exportsWithContracts([
+	returned(UNDEFINED),
+	"enqueue",
+	"close",
+	"error",
+]);
 const transformStreamProperties = exportsWithContracts(
 	[hostObject("ReadableStream"), "readable"],
 	[hostObject("WritableStream"), "writable"],
@@ -2110,6 +2223,20 @@ export const HOST_OBJECT_RESULTS: {
 		Response: exportsWithContracts([hostObject("Response"), "error", "json", "redirect"]),
 	},
 	methods: {
+		ReadableStreamDefaultController: readableControllerMethods,
+		ReadableByteStreamController: readableControllerMethods,
+		ReadableStreamBYOBRequest: exportsWithContracts([
+			returned(UNDEFINED),
+			"respond",
+			"respondWithNewView",
+		]),
+		WritableStreamDefaultController: exportsWithContracts([returned(UNDEFINED), "error"]),
+		TransformStreamDefaultController: exportsWithContracts([
+			returned(UNDEFINED),
+			"enqueue",
+			"error",
+			"terminate",
+		]),
 		Assert: assertionInstanceMethods,
 		NodeConsole: exportsWithContracts([
 			returned(UNDEFINED),
@@ -2268,6 +2395,19 @@ export const HOST_OBJECT_RESULTS: {
 		ChildProcess: childProcessMethods("ChildProcess"),
 		SpawnedChildProcess: childProcessMethods("SpawnedChildProcess"),
 		SpawnSyncResult: exportsWithContracts(),
+		ExecTextOutput: exportsWithContracts(),
+		ExecBufferOutput: exportsWithContracts(),
+		ExecOutput: exportsWithContracts(),
+		NodeModule: exportsWithContracts([
+			neverReturns(
+				"Runtime Module.prototype.require rejects requests outside the prepared module graph.",
+			),
+			"require",
+		]),
+		NodeRequire: exportsWithContracts([returned(STRING), "resolve"]),
+		ModuleHookRegistration: exportsWithContracts([returned(UNDEFINED), "deregister"]),
+		SourceMapSupport: exportsWithContracts(),
+		CompileCacheResult: exportsWithContracts(),
 		ReadlineInterface: readlineMethods("ReadlineInterface"),
 		ReadlinePromiseInterface: readlineMethods("ReadlinePromiseInterface"),
 		ReadlineCursor: exportsWithContracts(),
@@ -2432,6 +2572,7 @@ export const HOST_OBJECT_RESULTS: {
 			[returned(BOOLEAN), "equals"],
 			[returned(OBJECT), "export"],
 		),
+		AnyKeyObject: exportsWithContracts([returned(BOOLEAN), "equals"]),
 		AsymmetricKeyObject: exportsWithContracts(
 			[returned(BOOLEAN), "equals"],
 			[returned(STRING | OBJECT), "export"],
@@ -2700,6 +2841,23 @@ export const HOST_OBJECT_RESULTS: {
 		HeadersIterator: exportsWithContracts([returned(OBJECT), "next"]),
 	},
 	properties: {
+		ReadableStreamDefaultController: exportsWithContracts([
+			returned(NUMBER | NULL),
+			"desiredSize",
+		]),
+		ReadableByteStreamController: exportsWithContracts(
+			[returned(NUMBER | NULL), "desiredSize"],
+			[hostObject("ReadableStreamBYOBRequest", undefined, OBJECT | NULL), "byobRequest"],
+		),
+		ReadableStreamBYOBRequest: exportsWithContracts([returned(OBJECT | NULL), "view"]),
+		WritableStreamDefaultController: exportsWithContracts([
+			returned(UNDEFINED),
+			"signal",
+		]),
+		TransformStreamDefaultController: exportsWithContracts([
+			returned(NUMBER | NULL),
+			"desiredSize",
+		]),
 		DiagnosticsChannel: exportsWithContracts(
 			[returned(BOOLEAN), "hasSubscribers"],
 			[returned(STRING | SYMBOL), "name"],
@@ -2785,6 +2943,23 @@ export const HOST_OBJECT_RESULTS: {
 			[returned(OBJECT | UNDEFINED), "error"],
 			[returned(STRING | OBJECT | NULL | UNDEFINED), "stdout", "stderr"],
 		),
+		SourceMapSupport: exportsWithContracts([
+			returned(BOOLEAN),
+			"enabled",
+			"nodeModules",
+			"generatedCode",
+		]),
+		CompileCacheResult: exportsWithContracts(
+			[returned(NUMBER), "status"],
+			[returned(STRING), "message"],
+		),
+		ExecTextOutput: exportsWithContracts([returned(STRING), "stdout", "stderr"]),
+		ExecBufferOutput: exportsWithContracts([
+			hostObject("Buffer", "Uint8Array"),
+			"stdout",
+			"stderr",
+		]),
+		ExecOutput: exportsWithContracts([returned(STRING | OBJECT), "stdout", "stderr"]),
 		ReadlineCursor: exportsWithContracts(
 			[returned(NUMBER), "rows"],
 			[dynamic("Returns the public cursor value unchanged."), "cols"],
@@ -2874,6 +3049,7 @@ export const HOST_OBJECT_RESULTS: {
 			[returned(STRING), "type"],
 			[returned(NUMBER), "symmetricKeySize"],
 		),
+		AnyKeyObject: exportsWithContracts([returned(STRING), "type"]),
 		AsymmetricKeyObject: exportsWithContracts(
 			[returned(STRING), "type", "asymmetricKeyType"],
 			[returned(OBJECT), "asymmetricKeyDetails"],

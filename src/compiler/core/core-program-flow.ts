@@ -9,9 +9,12 @@ import type { CoreCompilationContext } from "./core-compilation.ts";
 import { joinCoreHeapBrands } from "./core-heap-brands.ts";
 import type { CoreHeapBrandState } from "./core-heap-brands.ts";
 import {
+	coreHostCallbackReceivers,
 	coreHostMemberIdentitiesAreStable,
 	coreHostObjectResult,
+	sameCallbackReceivers,
 } from "./core-host-object-results.ts";
+import type { CoreHostCallbackReceivers } from "./core-host-object-results.ts";
 import {
 	corePlatformSourceResult,
 	coreHostCompletion,
@@ -175,6 +178,7 @@ export interface CoreProgramFlowValueKindState<
 > extends CoreProgramFlowValueKinds<Analysis> {
 	readonly sourceClosed: boolean;
 	readonly hostMembersStable: boolean;
+	readonly hostCallbackReceivers: CoreHostCallbackReceivers | undefined;
 	readonly dataEpoch: number;
 	readonly targets: Targets;
 	readonly external: ReadonlyMap<CoreFunctionId, boolean>;
@@ -2647,10 +2651,24 @@ export class CoreProgramFlowEngine {
 		const promiseFacts =
 			context?.facts.world.primordialPolicy === "locked" && !context.facts.world.realms;
 		const hostSlots = context === undefined ? undefined : coreHostResultSlots(context);
+		const candidateReceivers =
+			context !== undefined && targets.sourceClosed && promiseFacts
+				? coreHostCallbackReceivers(this.#program, context, targets, hostSlots)
+				: undefined;
 		const hostMembersStable =
 			context !== undefined &&
-			coreHostMemberIdentitiesAreStable(this.#program, context, targets);
+			candidateReceivers !== undefined &&
+			coreHostMemberIdentitiesAreStable(
+				this.#program,
+				context,
+				targets,
+				candidateReceivers,
+			);
 		if (previous?.hostMembersStable !== hostMembersStable) previous = undefined;
+		const hostCallbackReceivers =
+			hostMembersStable && candidateReceivers?.size ? candidateReceivers : undefined;
+		if (!sameCallbackReceivers(previous?.hostCallbackReceivers, hostCallbackReceivers))
+			previous = undefined;
 		const sameInputs = (
 			left: CoreProgramFlowKindInputs | undefined,
 			right: CoreProgramFlowKindInputs,
@@ -3212,7 +3230,13 @@ export class CoreProgramFlowEngine {
 									this.#program,
 									fn,
 									instruction,
-									coreHostObjectResult(this.#program, fn, instruction, hostSlots) ??
+									coreHostObjectResult(
+										this.#program,
+										fn,
+										instruction,
+										hostSlots,
+										hostCallbackReceivers?.get(functionId),
+									) ??
 										corePlatformSourceResult(
 											this.#program,
 											fn,
@@ -3224,7 +3248,7 @@ export class CoreProgramFlowEngine {
 								)
 						: undefined;
 					const nativeResult =
-						hostSlots === undefined || hostSlots.size === 0
+						hostSlots === undefined || (hostSlots.size === 0 && !hostMembersStable)
 							? undefined
 							: (instruction: CoreInstructionId) =>
 									coreHostResult(
@@ -3523,6 +3547,7 @@ export class CoreProgramFlowEngine {
 			targets,
 			dataEpoch,
 			hostMembersStable,
+			hostCallbackReceivers,
 			external,
 			boundaryInputs,
 			valueAnalyses,

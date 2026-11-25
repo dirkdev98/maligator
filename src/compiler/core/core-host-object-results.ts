@@ -3,6 +3,7 @@ import { EMBED_INSTALLER } from "../shared/embedded-asset.ts";
 import {
 	PLATFORM_OBJECT_RESULTS,
 	PLATFORM_SOURCE_EXPORTS,
+	CAPTURED_HOST_RESULTS,
 	NODE_FILE_HANDLE_RESULTS,
 	GLOBAL_HOST_CONSTRUCTORS,
 	GLOBAL_HOST_FUNCTION_RESULTS,
@@ -21,6 +22,9 @@ import { coreNumericTypedArrayKind } from "./core-heap-brands.ts";
 import {
 	corePlatformSourceResult,
 	coreHostDirectCallContract,
+	coreHostCapturedSymbolKey,
+	coreHostCapturedPromisifiedValue,
+	coreHostGlobalName,
 	coreHostCompletion,
 	coreHostPropertyName,
 	coreHostResult,
@@ -30,7 +34,7 @@ import {
 } from "./core-host-results.ts";
 import type { CoreHostSlots } from "./core-host-results.ts";
 import { coreFunctionId, coreInstructionId } from "./core-ir.ts";
-import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreProgramFlowTargetIndex } from "./core-program-flow.ts";
 import { coreSuccessfulAwaitInput } from "./core-promise-facts.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -47,7 +51,7 @@ const PROTECTED_GLOBALS = new Set<string>([
 	"__proto__",
 ]);
 const HOST_OBJECT_SOURCE_NAMES = new RegExp(
-	`\\b(?:${[...PROTECTED_GLOBALS].filter((name) => name !== "globalThis" && name !== "console" && name !== "__proto__").join("|")}|fs|maligator:(?:http|workers)|node:sqlite|(?:node:)?(?:stream|zlib|async_hooks|events|timers/promises|url|net|http|https|tls|dgram|child_process|readline|perf_hooks|diagnostics_channel|dns|tty|assert|vm|console)|basename|StringDecoder|MIMEType|MIMEParams)\\b`,
+	`\\b(?:${[...PROTECTED_GLOBALS].filter((name) => name !== "globalThis" && name !== "console" && name !== "__proto__").join("|")}|fs|maligator:(?:http|workers)|node:sqlite|(?:node:)?(?:stream|zlib|async_hooks|events|timers/promises|url|net|http|https|tls|dgram|child_process|readline|perf_hooks|diagnostics_channel|dns|tty|assert|vm|console|module|punycode|v8)|basename|StringDecoder|MIMEType|MIMEParams)\\b`,
 );
 for (const name of [
 	"Object",
@@ -69,6 +73,15 @@ const PROTECTED_PROPERTIES = new Set([
 	"promises",
 	"posix",
 	"win32",
+	"ucs2",
+	"startupSnapshot",
+	"custom",
+	"report",
+	"stdout",
+	"stderr",
+	...[...CAPTURED_HOST_RESULTS.keys()].map((path) =>
+		path.slice(path.lastIndexOf(".") + 1).replace(/<get>$/, ""),
+	),
 	...[...HOST_RESULT_CONTRACTS.values()].flatMap((exports) => [...exports.keys()]),
 	...[...GLOBAL_HOST_NAMESPACE_RESULTS.values()].flatMap((exports) => [
 		...exports.keys(),
@@ -129,6 +142,52 @@ const HOST_CALLBACK_ARGUMENTS = new Map([
 	["on", 1],
 	["once", 1],
 ]);
+const STREAM_CALLBACKS = {
+	ReadableStream: { start: 0, pull: 0 },
+	WritableStream: { start: 0, write: 1 },
+	TransformStream: { start: 0, transform: 1, flush: 0 },
+};
+const STREAM_CALLBACK_KEYS = new Set([
+	"start",
+	"pull",
+	"cancel",
+	"write",
+	"close",
+	"abort",
+	"transform",
+	"flush",
+]);
+const STREAM_CONTROLLERS = [
+	"ReadableStreamDefaultController",
+	"ReadableByteStreamController",
+	"WritableStreamDefaultController",
+	"TransformStreamDefaultController",
+] as const;
+const STREAM_CONTROLLER_MEMBERS = new Set(
+	STREAM_CONTROLLERS.flatMap((kind) => [
+		...HOST_OBJECT_RESULTS.methods[kind].keys(),
+		...(HOST_OBJECT_RESULTS.properties[kind]?.keys() ?? []),
+	]),
+);
+export type CoreHostCallbackReceivers = ReadonlyMap<
+	CoreFunctionId,
+	ReadonlyMap<CoreValueId, HostObjectKind>
+>;
+export function sameCallbackReceivers(
+	left: CoreHostCallbackReceivers | undefined,
+	right: CoreHostCallbackReceivers | undefined,
+): boolean {
+	if (left === right) return true;
+	if (left === undefined || right === undefined || left.size !== right.size) return false;
+	for (const [id, parameters] of left) {
+		const update = right.get(id);
+		if (update?.size !== parameters.size) return false;
+		for (const [value, kind] of parameters) {
+			if (update.get(value) !== kind) return false;
+		}
+	}
+	return true;
+}
 const SCANNED_HOST_INSTALLERS = new Set([
 	EMBED_INSTALLER,
 	"mal_host_install_node_fs",
@@ -167,6 +226,10 @@ const SCANNED_HOST_INSTALLERS = new Set([
 	"mal_host_install_node_assert_strict",
 	"mal_host_install_node_vm",
 	"mal_host_install_node_console",
+	"mal_host_install_node_module",
+	"mal_host_install_node_punycode",
+	"mal_host_install_node_v8",
+	"mal_host_install_process",
 	"mal_host_install_node_string_decoder",
 	"mal_host_install_node_timers",
 	"mal_host_install_node_timers_promises",
@@ -188,28 +251,6 @@ function definition(fn: CoreFunctionStore, value: CoreValueId) {
 		: undefined;
 }
 
-function globalName(program: CoreProgram, fn: CoreFunctionStore, value: CoreValueId) {
-	const load = definition(fn, value);
-	if (load === undefined) return undefined;
-	const opcode = fn.instructionOpcodeName(load);
-	const attributes = fn.instructionAttributes(load);
-	if (opcode === "loadGlobalProperty")
-		return typeof attributes.nameStringIndex === "number"
-			? program.stringConstantText(attributes.nameStringIndex)
-			: undefined;
-	if (opcode !== "loadPropertyStatic" || typeof attributes.stringIndex !== "number")
-		return undefined;
-	const parent = definition(
-		fn,
-		fn.kernel.operandAt(fn.kernel.instructionOperandStart(load)),
-	);
-	return parent !== undefined &&
-		fn.instructionOpcodeName(parent) === "loadIntrinsic" &&
-		fn.instructionAttributes(parent).intrinsic === "globalThis"
-		? program.stringConstantText(attributes.stringIndex)
-		: undefined;
-}
-
 function hostConstructor(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
@@ -221,7 +262,7 @@ function hostConstructor(
 			? undefined
 			: coreHostSlotValue(program, fn, value, slots)?.hostConstructor;
 	if (captured !== undefined) return captured;
-	const name = globalName(program, fn, value);
+	const name = coreHostGlobalName(program, fn, value);
 	return name !== undefined && GLOBAL_HOST_CONSTRUCTOR_NAMES.has(name)
 		? (name as GlobalHostConstructor)
 		: undefined;
@@ -233,11 +274,14 @@ function hostReceiver(
 	value: CoreValueId,
 	slots: CoreHostSlots | undefined,
 	budget: number,
+	parameters: ReadonlyMap<CoreValueId, HostObjectKind> | undefined,
 ): HostObjectKind | undefined {
 	if (budget === 0) return undefined;
+	const parameter = parameters?.get(value);
+	if (parameter !== undefined) return parameter;
 	const producer = definition(fn, value);
 	if (producer === undefined) return undefined;
-	const global = globalName(program, fn, value);
+	const global = coreHostGlobalName(program, fn, value);
 	const globalBrand =
 		global === undefined ? undefined : GLOBAL_HOST_OBJECT_BRANDS.get(global);
 	if (globalBrand !== undefined) return globalBrand;
@@ -264,7 +308,7 @@ function hostReceiver(
 
 	function producerContract(producer: CoreInstructionId) {
 		return (
-			coreHostObjectResult(program, fn, producer, slots, budget) ??
+			coreHostObjectResult(program, fn, producer, slots, parameters, budget) ??
 			(slots === undefined
 				? undefined
 				: coreHostDirectCallContract(program, fn, producer, slots, 0, true))
@@ -277,6 +321,7 @@ export function coreHostObjectResult(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 	slots?: CoreHostSlots,
+	parameters?: ReadonlyMap<CoreValueId, HostObjectKind>,
 	budget = 8,
 ): HostResultContract | undefined {
 	if (budget === 0) return undefined;
@@ -305,13 +350,13 @@ export function coreHostObjectResult(
 		const constructor = hostConstructor(program, fn, receiver, slots);
 		if (constructor !== undefined)
 			return HOST_OBJECT_RESULTS.staticProperties[constructor]?.get(name);
-		const brand = hostReceiver(program, fn, receiver, slots, budget - 1);
+		const brand = hostReceiver(program, fn, receiver, slots, budget - 1, parameters);
 		return brand === undefined
 			? undefined
 			: HOST_OBJECT_RESULTS.properties[brand]?.get(name);
 	}
 	const callee = fn.kernel.operandAt(start);
-	const global = globalName(program, fn, callee);
+	const global = coreHostGlobalName(program, fn, callee);
 	if (global === "fetch") return HOST_OBJECT_RESULTS.fetch;
 	if (global !== undefined) return GLOBAL_HOST_FUNCTION_RESULTS.get(global);
 	const load = definition(fn, callee);
@@ -321,7 +366,7 @@ export function coreHostObjectResult(
 	const receiver = fn.kernel.operandAt(start + 1);
 	if (receiver !== fn.kernel.operandAt(fn.kernel.instructionOperandStart(load)))
 		return undefined;
-	const globalReceiver = globalName(program, fn, receiver);
+	const globalReceiver = coreHostGlobalName(program, fn, receiver);
 	const namespace =
 		globalReceiver === undefined
 			? undefined
@@ -330,8 +375,153 @@ export function coreHostObjectResult(
 	const constructor = hostConstructor(program, fn, receiver, slots);
 	if (constructor !== undefined)
 		return HOST_OBJECT_RESULTS.statics[constructor]?.get(method);
-	const brand = hostReceiver(program, fn, receiver, slots, budget - 1);
+	const brand = hostReceiver(program, fn, receiver, slots, budget - 1, parameters);
 	return brand === undefined ? undefined : HOST_OBJECT_RESULTS.methods[brand].get(method);
+}
+
+export function coreHostControllerMemberCandidate(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): boolean {
+	const opcode = fn.instructionOpcodeName(instruction);
+	const start = fn.kernel.instructionOperandStart(instruction);
+	const load =
+		opcode === "call"
+			? definition(fn, fn.kernel.operandAt(start))
+			: opcode === "loadProperty" || opcode === "loadPropertyStatic"
+				? instruction
+				: undefined;
+	if (load === undefined) return false;
+	const name = coreHostPropertyName(program, fn, load);
+	if (name === undefined || !STREAM_CONTROLLER_MEMBERS.has(name)) return false;
+	const receiver = fn.kernel.operandAt(fn.kernel.instructionOperandStart(load));
+	for (let index = 0; index < fn.parameterCount; index++) {
+		if (receiver === fn.kernel.functionParameter(index)) return true;
+	}
+	return false;
+}
+
+export function coreHostCallbackReceivers(
+	program: CoreProgram,
+	context: CoreCompilationContext,
+	targets: CoreProgramFlowTargetIndex,
+	slots: CoreHostSlots | undefined,
+): CoreHostCallbackReceivers {
+	const receivers = new Map<CoreFunctionId, ReadonlyMap<CoreValueId, HostObjectKind>>();
+	if (
+		!context.data.sourceFiles.some(({ contents }) =>
+			/\b(?:ReadableStream|WritableStream|TransformStream|stream\/web)\b/.test(contents),
+		)
+	)
+		return receivers;
+	const created = new Map<CoreFunctionId, number>();
+	const called = new Set<CoreFunctionId>();
+	for (const id of targets.graph.functions) {
+		const fn = program.function(id);
+		for (const site of targets.outgoing(id)) {
+			for (const target of site.targets.functions) called.add(target);
+		}
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode === "createFunction") {
+				const index = fn.instructionAttributes(instruction).functionIndex;
+				if (typeof index === "number") {
+					const target = coreFunctionId(index);
+					created.set(target, (created.get(target) ?? 0) + 1);
+				}
+			}
+			if (opcode !== "construct" || fn.kernel.instructionOperandCount(instruction) < 2)
+				continue;
+			const start = fn.kernel.instructionOperandStart(instruction);
+			const kind = hostConstructor(program, fn, fn.kernel.operandAt(start), slots);
+			if (
+				kind !== "ReadableStream" &&
+				kind !== "WritableStream" &&
+				kind !== "TransformStream"
+			)
+				continue;
+			// The callback can only run with a native controller if the runtime is
+			// the only observer of the options and of the original callable.
+			const options = privateDefinition(
+				fn,
+				fn.kernel.operandAt(start + 1),
+				"createObjectShaped",
+			);
+			if (options === undefined) continue;
+			const keys = fn.instructionAttributes(options).keyStringIndices;
+			if (!Array.isArray(keys) || new Set(keys).size !== keys.length) continue;
+			const opts = new Map(
+				keys.map((key: number, i) => [
+					program.stringConstantText(key),
+					fn.kernel.operandAt(fn.kernel.instructionOperandStart(options) + i),
+				]),
+			);
+			const callbacks = new Map<string, CoreFunctionStore>();
+			for (const [key, value] of opts) {
+				if (key === "type") continue;
+				const closure = privateDefinition(fn, value, "createFunction");
+				if (!STREAM_CALLBACK_KEYS.has(key) || closure === undefined) break;
+				const index = fn.instructionAttributes(closure).functionIndex;
+				if (typeof index !== "number" || !program.hasFunction(coreFunctionId(index)))
+					break;
+				const callback = program.function(coreFunctionId(index));
+				// The host passes the literal as `this`. A hook that can recover
+				// that object can retrieve and invoke its own or another hook.
+				if (
+					[...callback.instructionIds()].some((id) => {
+						if (callback.instructionKind(id) !== "operation") return false;
+						const op = callback.instructionOpcodeName(id);
+						return op === "loadThis" || op === "loadCallee";
+					})
+				)
+					break;
+				callbacks.set(key, callback);
+			}
+			if (callbacks.size !== opts.size - Number(opts.has("type"))) continue;
+			let controller: HostObjectKind;
+			if (kind === "ReadableStream") {
+				const type = opts.get("type");
+				if (type === undefined) controller = "ReadableStreamDefaultController";
+				else {
+					const constant = definition(fn, type);
+					if (
+						constant === undefined ||
+						fn.instructionOpcodeName(constant) !== "createString"
+					)
+						continue;
+					const index = fn.instructionAttributes(constant).stringIndex;
+					if (typeof index !== "number" || program.stringConstantText(index) !== "bytes")
+						continue;
+					controller = "ReadableByteStreamController";
+				}
+			} else if (kind === "WritableStream")
+				controller = "WritableStreamDefaultController";
+			else controller = "TransformStreamDefaultController";
+			for (const [key, index] of Object.entries(STREAM_CALLBACKS[kind])) {
+				const callback = callbacks.get(key);
+				if (callback !== undefined && callback.parameterCount > index)
+					receivers.set(
+						callback.id,
+						new Map([[callback.kernel.functionParameter(index), controller]]),
+					);
+			}
+		}
+	}
+	for (const target of receivers.keys()) {
+		if (created.get(target) !== 1 || called.has(target)) receivers.delete(target);
+	}
+	return receivers;
+}
+
+function privateDefinition(fn: CoreFunctionStore, value: CoreValueId, opcode: string) {
+	if (fn.valueUseCount(value) !== 1 || fn.kernel.valueHandlerUseCount(value) !== 0)
+		return undefined;
+	const instruction = definition(fn, value);
+	return instruction !== undefined && fn.instructionOpcodeName(instruction) === opcode
+		? instruction
+		: undefined;
 }
 
 /** Installed Web bindings are mutable. A closed source can establish that no
@@ -340,6 +530,7 @@ export function coreHostMemberIdentitiesAreStable(
 	program: CoreProgram,
 	context: CoreCompilationContext,
 	targets: CoreProgramFlowTargetIndex,
+	parameters: CoreHostCallbackReceivers,
 ): boolean {
 	const { data, facts } = context;
 	if (
@@ -352,7 +543,13 @@ export function coreHostMemberIdentitiesAreStable(
 		data.hostInstallCandidates.some(
 			({ installer }) => !SCANNED_HOST_INSTALLERS.has(installer),
 		) ||
-		(data.sourceBuiltinProviders?.length ?? 0) !== 0 ||
+		data.sourceBuiltinProviders?.some(
+			({ functionIndex, id }) =>
+				!program.hasFunction(coreFunctionId(functionIndex)) ||
+				program.function(coreFunctionId(functionIndex)).metadata
+					.canonicalPlatformSource !== id ||
+				!PLATFORM_SOURCE_EXPORTS.has(id),
+		) ||
 		!data.sourceFiles.some(({ contents }) => HOST_OBJECT_SOURCE_NAMES.test(contents))
 	)
 		return false;
@@ -396,6 +593,12 @@ export function coreHostMemberIdentitiesAreStable(
 				!usedOnlyAsCallee(fn, instruction)
 			)
 				return false;
+			if (
+				opcode === "loadGlobal" &&
+				coreHostSlotName(fn, instruction, slots) === "promisify" &&
+				!usedOnlyAsCallee(fn, instruction, program)
+			)
+				return false;
 			if (opcode === "loadPrimordial" && typeof attrs.nodeIndex === "number") {
 				const name = getPrimordialCatalog().nodes[attrs.nodeIndex]?.[0];
 				if (
@@ -415,16 +618,25 @@ export function coreHostMemberIdentitiesAreStable(
 									fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
 								)
 							: undefined;
+					const keyOpcode =
+						keyProducer === undefined ? undefined : fn.instructionOpcodeName(keyProducer);
 					if (
-						keyProducer === undefined ||
-						(fn.instructionOpcodeName(keyProducer) !== "createNumber" &&
-							fn.instructionOpcodeName(keyProducer) !== "createF64")
+						keyOpcode !== "createNumber" &&
+						keyOpcode !== "createF64" &&
+						coreHostCapturedSymbolKey(program, fn, instruction, slots) === undefined
 					)
 						return false;
 				} else if (NATIVE_OBJECT_WRITERS.has(key)) return false;
-				else if (REFLECTIVE_WRITERS.has(key) || (hasTls && key === "connect")) {
+				else if (
+					REFLECTIVE_WRITERS.has(key) ||
+					key === "promisify" ||
+					(hasTls && key === "connect")
+				) {
 					// Host callbacks can invoke a native writer without a source call site.
-					if (!usedOnlyAsCallee(fn, instruction)) return false;
+					if (
+						!usedOnlyAsCallee(fn, instruction, key === "promisify" ? program : undefined)
+					)
+						return false;
 				}
 			}
 			const protectedKey = (index: unknown, implicitGlobal = false) => {
@@ -505,7 +717,7 @@ export function coreHostMemberIdentitiesAreStable(
 					if (typeof name === "string" && MODULE_EVALUATORS.has(name)) continue;
 				}
 				const name =
-					globalName(program, fn, value) ??
+					coreHostGlobalName(program, fn, value) ??
 					(producer === undefined
 						? undefined
 						: (coreHostSlotName(fn, producer, slots) ??
@@ -520,6 +732,11 @@ export function coreHostMemberIdentitiesAreStable(
 							return false;
 					} else if (site?.arguments === undefined) return false;
 				}
+				if (
+					name === "promisify" &&
+					coreHostCapturedPromisifiedValue(program, fn, instruction, slots) === undefined
+				)
+					return false;
 				if (
 					hasTls &&
 					name === "connect" &&
@@ -559,7 +776,8 @@ export function coreHostMemberIdentitiesAreStable(
 			)
 				continue;
 			if (
-				coreHostObjectResult(program, fn, instruction, slots) === undefined &&
+				coreHostObjectResult(program, fn, instruction, slots, parameters.get(id)) ===
+					undefined &&
 				corePlatformSourceResult(program, fn, instruction, targets, context) ===
 					undefined &&
 				coreHostResult(program, fn, instruction, slots, true, true) === undefined
@@ -569,16 +787,23 @@ export function coreHostMemberIdentitiesAreStable(
 	}
 	return true;
 }
-
 function usedOnlyAsCallee(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
+	symbolOwner?: CoreProgram,
 ): boolean {
 	const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
 	if (fn.kernel.valueHandlerUseCount(value) !== 0) return false;
 	for (let use = fn.kernel.valueFirstUse(value); use >= 0; use = fn.kernel.useNext(use)) {
 		if (fn.kernel.useLive(use) === 0) continue;
 		const consumer = fn.kernel.useInstruction(use);
+		if (
+			symbolOwner !== undefined &&
+			fn.kernel.useOperand(use) === 0 &&
+			fn.instructionKind(consumer) === "operation" &&
+			coreHostPropertyName(symbolOwner, fn, consumer) === "custom"
+		)
+			continue;
 		if (
 			fn.kernel.useOperand(use) !== 0 ||
 			fn.instructionKind(consumer) !== "operation" ||
