@@ -15,6 +15,7 @@ import {
 	CORE_PROGRAM_FLOW_ANALYSIS,
 } from "../src/compiler/core/core-program-flow-analysis.ts";
 import type { CoreFunctionStore, CoreProgram } from "../src/compiler/core/core-store.ts";
+import { constructSemanticProgramCore } from "../src/compiler/core/semantic-lowering.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
@@ -192,6 +193,53 @@ it("revisits callers when a return brand changes without changing the Object kin
 	expect(after.summary(caller.function).returnKind).toBe(COMPILER_VALUE_KIND_OBJECT);
 	expect(after.summary(caller.function).returnHeapBrand).toBeUndefined();
 	expect(before.summary(caller.function).returnHeapBrand).toBe("Array");
+});
+
+it("withdraws the former await result kind when an async producer changes", () => {
+	const entry = "/await-result.mjs";
+	const source = `async function produce() { return 'text'; }
+		async function observe() { return await produce(); }
+		globalThis.observe = observe;`;
+	const { program, context } = constructSemanticProgramCore(
+		analyzeSourceAndRunSemanticAnalysis(source, entry, parseModule(source)),
+		{
+			facts: withProgramClosure(
+				compilerProgramFactsFromConfig(
+					resolveBuildConfig({ engine: { eval: false, primordials: "locked" } }),
+				),
+				programClosureCertificate(
+					{ kind: "whole-program", entry },
+					[{ kind: "entry-module", module: entry }],
+					[],
+				),
+			),
+		},
+	);
+	const producer = coreFunctionNamed(program, "produce")!;
+	const observer = coreFunctionNamed(program, "observe")!;
+	const string = coreOperations(producer).find(
+		({ opcode }) => opcode === "createString",
+	)!;
+	const resumed = coreOperations(observer).find(
+		({ opcode }) => opcode === "awaitFulfilled",
+	)!.outputs[0]!;
+	const manager = new CoreAnalysisManager(
+		program,
+		context,
+		new CoreOptimizationReportBuilder(program),
+	);
+	const kinds = () =>
+		manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds;
+	const before = kinds();
+	expect(before.values(observer.id).kindMask(resumed)).toBe(COMPILER_VALUE_KIND_STRING);
+
+	const editor = CoreEditor.open(program, producer.id);
+	editor.replaceInstruction(string.id, "createNumber", [], { attributes: { value: 42 } });
+	editor.commit();
+	const after = kinds();
+	expect(after.summary(producer.id).returnKind).toBe(COMPILER_VALUE_KIND_OBJECT);
+	expect(after.values(observer.id).kindMask(resumed)).toBe(COMPILER_VALUE_KIND_NUMBER);
+	expect(before.values(observer.id).kindMask(resumed)).toBe(COMPILER_VALUE_KIND_STRING);
 });
 
 it("retains heap-brand proofs across unrelated constant appends", () => {
