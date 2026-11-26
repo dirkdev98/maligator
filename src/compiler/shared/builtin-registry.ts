@@ -1626,7 +1626,9 @@ normalResultKinds.set(
 	COMPILER_VALUE_KIND_SYMBOL,
 );
 
+const builtinOperationsById = new Map<string, BuiltinOperationDescriptor>();
 for (const descriptor of builtinOperations) {
+	builtinOperationsById.set(descriptor.id, descriptor);
 	const result = descriptor.result;
 	if (
 		result === "number" ||
@@ -1858,7 +1860,7 @@ export function builtinResultIsInt32(operation: string): boolean {
 export function builtinOperationDescriptor(
 	id: string,
 ): BuiltinOperationDescriptor | undefined {
-	return builtinOperations.find((operation) => operation.id === id);
+	return builtinOperationsById.get(id);
 }
 
 export function builtinCallbackInvocation(

@@ -1,5 +1,9 @@
 import type { ResolvedBuildConfig } from "../../build-config.ts";
-import { builtinOperations, primordialGlobalBindings } from "./builtin-registry.ts";
+import {
+	builtinOperationDescriptor,
+	builtinOperations,
+	primordialGlobalBindings,
+} from "./builtin-registry.ts";
 import type {
 	FunctionEffectSummary,
 	ModuleEffectSummary,
@@ -413,7 +417,7 @@ export function knownBuiltinCallProves(
 	call: KnownBuiltinCall | undefined,
 	operation: string,
 ): boolean {
-	const descriptor = builtinOperations.find((candidate) => candidate.id === operation);
+	const descriptor = builtinOperationDescriptor(operation);
 	return (
 		descriptor !== undefined &&
 		call?.operation === operation &&

@@ -881,6 +881,7 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 	name: "rewrite-exact-builtin-calls",
 	stage: "canonicalize",
 	requiredFunctionOpcodesAny: ["call", "callKnown"],
+	candidates: { dependencies: ["body"], opcodes: ["call", "callKnown"] },
 	requiredAnalyses: [CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "facts", "normalResults", "representations"],
 	changes: { ...LOCAL_CHANGES, representations: true },
@@ -888,14 +889,9 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 	run(context) {
 		const { program, compilationContext, item } = context;
 		const fn = program.function(item.function);
-		const calls = [...fn.instructionIds()].filter(
-			(instruction) =>
-				fn.instructionKind(instruction) === "operation" &&
-				(fn.instructionOpcodeName(instruction) === "call" ||
-					fn.instructionOpcodeName(instruction) === "callKnown"),
-		);
-		if (calls.length === 0) return undefined;
+		const calls = context.instructions();
 		const roots = context.analysis(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS);
+		const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 		const edgeUses = coreValueControlFlowUseMask(fn);
 		let kinds: CoreValueKindAnalysis | undefined;
 		let editor: CoreEditor | undefined;
@@ -1048,13 +1044,14 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 						}
 					}
 				}
-				const descriptor = builtinOperations.find(({ id }) => id === operation);
 				const numericOpcode = MATH_UNARY_OPERATIONS.has(operation)
 					? "mathUnaryNumber"
 					: operation === "Math.min" || operation === "Math.max"
 						? "mathBinaryNumber"
 						: undefined;
-				if (descriptor === undefined || numericOpcode === undefined) continue;
+				if (numericOpcode === undefined) continue;
+				const descriptor = builtinOperationDescriptor(operation);
+				if (descriptor === undefined) continue;
 				const arguments_ = copyInstructionOperands(fn, instruction).slice(1);
 				if (
 					descriptor.nativeNumberArity !== arguments_.length ||
@@ -1080,10 +1077,10 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 			const previousBuiltinOperation = (
 				existingKnownBuiltinCall as { readonly operation?: unknown } | undefined
 			)?.operation;
-			const inputs = copyInstructionOperands(fn, instruction);
-			const [callee, receiver] = inputs;
+			const callee = instructionOperand(fn, instruction, 0);
+			const receiver = instructionOperand(fn, instruction, 1);
 			if (callee === undefined || receiver === undefined) continue;
-			const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
+			let inputs: ReadonlyArray<CoreValueId> | undefined;
 			const receiverRoot = root(receiver);
 			const property = definingInstruction(fn, root(callee));
 			if (property === undefined) continue;
@@ -1103,12 +1100,14 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				];
 			if (typeof stringIndex !== "number") continue;
 			const key = decodeString(program, stringIndex);
+			const registered =
+				key === undefined ? undefined : BUILTIN_OPERATIONS_BY_KEY.get(key);
 			const namedCandidates =
-				key === undefined
+				registered === undefined
 					? []
-					: (BUILTIN_OPERATIONS_BY_KEY.get(key) ?? []).filter(
-							(candidate) => !globalCall || candidate.owner === "globalThis",
-						);
+					: globalCall
+						? registered.filter((candidate) => candidate.owner === "globalThis")
+						: registered;
 			const namespace =
 				!globalCall && namedCandidates.some((candidate) => candidate.receiver === "none")
 					? builtinNamespaceHint(program, fn, receiverRoot, root)
@@ -1117,7 +1116,10 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				namespace === undefined ||
 				candidate.receiver !== "none" ||
 				candidate.owner === namespace;
-			const candidates = namedCandidates.filter(namespaceCompatible);
+			const candidates =
+				namespace === undefined
+					? namedCandidates
+					: namedCandidates.filter(namespaceCompatible);
 			const previousDescriptor =
 				typeof previousBuiltinOperation === "string"
 					? builtinOperationDescriptor(previousBuiltinOperation)
@@ -1128,6 +1130,7 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 			) {
 				const attributes = { ...fn.instructionAttributes(instruction) };
 				delete attributes.knownBuiltinCall;
+				inputs = copyInstructionOperands(fn, instruction);
 				editor ??= CoreEditor.open(program, item.function);
 				editor.replaceInstruction(instruction, "call", inputs, {
 					attributes,
@@ -1179,6 +1182,7 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				descriptor.id,
 			);
 			const propertyResult = instructionResult(fn, property, 0);
+			inputs ??= copyInstructionOperands(fn, instruction);
 			const arguments_ = inputs.slice(2);
 			const receiverInstruction = definingInstruction(fn, receiverRoot);
 			const exactIntrinsicReceiver =
