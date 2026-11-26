@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "./heap_string.h"
+#include "./isolate.h"
 #include "./value.h"
 #include "./perf_stats.h"
 
@@ -232,6 +233,8 @@ static void mal_shape_free_children(MalShape *shape) {
 
 void mal_shape_heap_free(MalHeap *heap) {
     if (heap->shape_root == nullptr) return;
+    // A later heap can reuse the addresses in this thread's set sites.
+    mal_isolate.object_set_sites = nullptr;
     mal_shape_free_children(heap->shape_root);
     free(heap->shape_root->transition_index);
     free(heap->shape_root);

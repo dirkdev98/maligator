@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "array_object.h"
 #include "ascii.h"
@@ -1148,7 +1149,10 @@ static MAL_ISOLATE_LOCAL MalObjectSetSite g_object_set_sites[MAL_OBJECT_SET_SITE
 static MalObjectSetSite *mal_object_set_site(const MalShape *shape, MalValue key) {
     MalIsolateLocals *isolate = mal_isolate_locals();
     MalObjectSetSite *sites = isolate->object_set_sites;
-    if (__builtin_expect(sites == nullptr, 0)) sites = isolate->object_set_sites = g_object_set_sites;
+    if (__builtin_expect(sites == nullptr, 0)) {
+        memset(g_object_set_sites, 0, sizeof(g_object_set_sites));
+        sites = isolate->object_set_sites = g_object_set_sites;
+    }
     uptr hash = ((uptr) shape >> 4) ^ ((uptr) key >> 3) * 0x9e3779b1u;
     return &sites[(hash ^ hash >> 9) % MAL_OBJECT_SET_SITES];
 }

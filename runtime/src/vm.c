@@ -972,6 +972,7 @@ static void mal_vm_init_language_state(MalVm *vm, const MalRuntimeImage *program
     for (u32 i = 0; i < MAL_ASCII_ATOM_CACHE_CAPACITY; i++) {
         vm->ascii_atom_cache[i] = (MalAsciiAtomCacheEntry) {0};
     }
+    memset(vm->string_case_cache, 0, sizeof(vm->string_case_cache));
     for (u32 i = 0; i < MAL_STATIC_SLOT_CACHE_CAPACITY; i++) {
         vm->static_slot_cache[i] = (MalStaticSlotCacheEntry) {0};
     }
