@@ -1406,6 +1406,21 @@ describe("program-image-codec", () => {
 		);
 	});
 
+	it("rejects shape-case loads in a function without a selector", () => {
+		const image = shapeCaseDefinition();
+		const orphan = withRuntime(image, {
+			functions: image.runtime.functions.map((fn) => ({
+				...fn,
+				instructions: fn.instructions.filter(
+					(instruction) => instruction.opcode !== "SELECT_SHAPE_CASE",
+				),
+			})),
+		});
+		expect(() => serializeCompilerArtifact(orphan)).toThrow(
+			/shape-case load has no selector/,
+		);
+	});
+
 	it("round-trips and validates shared shape-case loads", () => {
 		const valid = shapeCaseDefinition();
 		const restored = deserializeCompilerArtifact(

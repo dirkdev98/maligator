@@ -1939,8 +1939,19 @@ function vmNamedShapeKeyIdentity(units: ReadonlyArray<number>): string | undefin
 	return units.join(",");
 }
 
-/** Reject malformed VM-level guarded slot references at every output boundary. */
-export function validateVmKnownOwnSlots(definition: RuntimeImage): void {
+type VmKnownOwnSlotAccess = Extract<
+	BytecodeInstruction,
+	{
+		readonly opcode:
+			| "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+			| "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT";
+	}
+>;
+
+function validateVmShapeTable(
+	definition: RuntimeImage,
+	shapeCaseFunctions?: Array<number>,
+): ReadonlyMap<string, VmPrecompiledLiteralShape> {
 	const descriptors = new Map<string, VmPrecompiledLiteralShape>();
 	for (const descriptor of definition.precompiledLiteralShapes) {
 		const { functionIndex, shapeCacheIndex, keyStringIndices } = descriptor;
@@ -1973,15 +1984,30 @@ export function validateVmKnownOwnSlots(definition: RuntimeImage): void {
 		}
 		descriptors.set(identity, descriptor);
 	}
+	const guardedAccesses: Array<VmKnownOwnSlotAccess> = [];
 	for (const [functionIndex, fn] of definition.functions.entries()) {
 		validateVmPropertyCacheLayout(fn);
-		const shapeIndices = new Set<number>();
+		let shapeIndices: Set<number> | undefined;
+		let hasShapeCases = false;
 		for (const instruction of fn.instructions) {
-			if (instruction.opcode !== "CREATE_OBJECT_SHAPED") continue;
+			const opcode = instruction.opcode;
+			if (opcode !== "CREATE_OBJECT_SHAPED") {
+				if (
+					opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+					opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+				)
+					guardedAccesses.push(instruction);
+				else if (
+					opcode === "SELECT_SHAPE_CASE" ||
+					opcode === "LOAD_PROPERTY_STATIC_SHAPE_CASE"
+				)
+					hasShapeCases = true;
+				continue;
+			}
 			if (
 				!isNonnegativeSafeInteger(instruction.shapeCacheIndex) ||
 				instruction.shapeCacheIndex >= fn.literalShapeCount ||
-				shapeIndices.has(instruction.shapeCacheIndex)
+				shapeIndices?.has(instruction.shapeCacheIndex)
 			) {
 				throw new RangeError(
 					`invalid literal shape index ${instruction.shapeCacheIndex}`,
@@ -2004,63 +2030,62 @@ export function validateVmKnownOwnSlots(definition: RuntimeImage): void {
 					))
 			)
 				throw new RangeError("literal shape descriptor disagrees with allocation");
-			shapeIndices.add(instruction.shapeCacheIndex);
+			(shapeIndices ??= new Set()).add(instruction.shapeCacheIndex);
 		}
 		if (
 			!isNonnegativeSafeInteger(fn.literalShapeCount) ||
-			shapeIndices.size > fn.literalShapeCount
+			(shapeIndices?.size ?? 0) > fn.literalShapeCount
 		) {
 			throw new RangeError("invalid literal shape cache layout");
 		}
+		if (hasShapeCases) shapeCaseFunctions?.push(functionIndex);
 	}
-	for (const fn of definition.functions) {
-		for (const instruction of fn.instructions) {
-			if (
-				instruction.opcode !== "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" &&
-				instruction.opcode !== "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
-			) {
-				continue;
+	for (const instruction of guardedAccesses) {
+		const rawCandidates: unknown = instruction.candidates;
+		if (
+			!isNonnegativeSafeInteger(instruction.stringIndex) ||
+			instruction.stringIndex >= definition.stringConstants.length ||
+			!Array.isArray(rawCandidates) ||
+			rawCandidates.length < 1 ||
+			rawCandidates.length > 4
+		) {
+			throw new RangeError("invalid known-own-slot access");
+		}
+		const candidates = rawCandidates as ReadonlyArray<unknown>;
+		const identities = new Set<string>();
+		for (const value of candidates) {
+			if (typeof value !== "object" || value === null || Array.isArray(value)) {
+				throw new RangeError("invalid known-own-slot access");
 			}
-			const rawCandidates: unknown = instruction.candidates;
+			const candidate = value as Partial<VmKnownOwnSlotCandidate>;
+			const { shapeFunctionIndex, shapeCacheIndex, slot } = candidate;
 			if (
-				!isNonnegativeSafeInteger(instruction.stringIndex) ||
-				instruction.stringIndex >= definition.stringConstants.length ||
-				!Array.isArray(rawCandidates) ||
-				rawCandidates.length < 1 ||
-				rawCandidates.length > 4
+				Object.keys(value).length !== 3 ||
+				!isNonnegativeSafeInteger(shapeFunctionIndex) ||
+				!isNonnegativeSafeInteger(shapeCacheIndex) ||
+				!isNonnegativeSafeInteger(slot)
 			) {
 				throw new RangeError("invalid known-own-slot access");
 			}
-			const candidates = rawCandidates as ReadonlyArray<unknown>;
-			const identities = new Set<string>();
-			for (const value of candidates) {
-				if (typeof value !== "object" || value === null || Array.isArray(value)) {
-					throw new RangeError("invalid known-own-slot access");
-				}
-				const candidate = value as Partial<VmKnownOwnSlotCandidate>;
-				const { shapeFunctionIndex, shapeCacheIndex, slot } = candidate;
-				if (
-					Object.keys(value).length !== 3 ||
-					!isNonnegativeSafeInteger(shapeFunctionIndex) ||
-					!isNonnegativeSafeInteger(shapeCacheIndex) ||
-					!isNonnegativeSafeInteger(slot)
-				) {
-					throw new RangeError("invalid known-own-slot access");
-				}
-				const identity = `${shapeFunctionIndex}\0${shapeCacheIndex}`;
-				const descriptor = descriptors.get(identity);
-				if (
-					identities.has(identity) ||
-					descriptor === undefined ||
-					slot >= descriptor.keyStringIndices.length ||
-					descriptor.keyStringIndices[slot] !== instruction.stringIndex
-				) {
-					throw new RangeError("invalid known-own-slot access");
-				}
-				identities.add(identity);
+			const identity = `${shapeFunctionIndex}\0${shapeCacheIndex}`;
+			const descriptor = descriptors.get(identity);
+			if (
+				identities.has(identity) ||
+				descriptor === undefined ||
+				slot >= descriptor.keyStringIndices.length ||
+				descriptor.keyStringIndices[slot] !== instruction.stringIndex
+			) {
+				throw new RangeError("invalid known-own-slot access");
 			}
+			identities.add(identity);
 		}
 	}
+	return descriptors;
+}
+
+/** Reject malformed VM-level guarded slot references at every output boundary. */
+export function validateVmKnownOwnSlots(definition: RuntimeImage): void {
+	validateVmShapeTable(definition);
 }
 
 const VM_SHAPE_CASE_MIN_LOADS = 2;
@@ -2236,24 +2261,10 @@ function vmShapeCaseUses(fn: BytecodeFunction): {
 }
 
 export function validateVmShapeCases(definition: RuntimeImage): void {
-	// Also validates the shared precompiled-shape table and physical cache layout.
-	validateVmKnownOwnSlots(definition);
-	const descriptors = new Map<string, VmPrecompiledLiteralShape>();
-	for (const descriptor of definition.precompiledLiteralShapes) {
-		descriptors.set(
-			`${descriptor.functionIndex}\0${descriptor.shapeCacheIndex}`,
-			descriptor,
-		);
-	}
-	for (const [functionIndex, fn] of definition.functions.entries()) {
-		if (
-			!fn.instructions.some(
-				(instruction) =>
-					instruction.opcode === "SELECT_SHAPE_CASE" ||
-					instruction.opcode === "LOAD_PROPERTY_STATIC_SHAPE_CASE",
-			)
-		)
-			continue;
+	const shapeCaseFunctions: Array<number> = [];
+	const descriptors = validateVmShapeTable(definition, shapeCaseFunctions);
+	for (const functionIndex of shapeCaseFunctions) {
+		const fn = definition.functions[functionIndex]!;
 		const { selectorUses, ownedLoads } = vmShapeCaseUses(fn);
 		for (const [selectorIp, rawSelector] of fn.instructions.entries()) {
 			if (rawSelector.opcode !== "SELECT_SHAPE_CASE") continue;
