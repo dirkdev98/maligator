@@ -308,9 +308,13 @@ object. Retained loop experiments preserve effects, authoritative state and fall
       handler, so keep this for a workload whose nested loops gain from canonical
       analysis beyond what the dense region gives.
 
-- [ ] Recognize induction variables that several back edges advance, as in a `while`
-      loop with `continue`, and normalize reverse loops that start at `length - 1` with
-      `>= 0`. Both forms miss the int32 counter and the indexed-loop plan.
+- [ ] Give reverse loops (`length - 1` down to `>= 0`, `while (i--)`) a guarded int32
+      counter and proven indexed reads once a profile shows their checks cost
+      something. Loops advanced on several back edges and bounded by `length` already
+      get the indexed-loop plan, and simple reverse numeric loops an `i64` counted
+      region. The hottest reverse loop in native self-compile makes 14 million checked
+      reads, about 0.02% of its instructions at best, and Express runs about 0.4 such
+      iterations per request.
 
 - [ ] Iterate a Map or Set held in a field or parameter with its cursor. The compiler
       picks the Map or Set cursor only for collections built in the same function and
