@@ -128,6 +128,15 @@ static generated-code size and helper counts do not establish runtime cost.
       element's number check: 15 ARM64 instructions per element in a summing loop, where
       the f64-counter path keeps them in registers and needs 14.
 
+- [ ] Serve call sites with a different argument signature without boxing. Region
+      selection gives each function one scalar entry, chosen by call weight, and counts
+      a missing argument as boxed. For `function scale(values, k = 1)`, `scale(values, 2)`
+      takes the unboxed entry while `scale(values)` boxes its arguments and result, and
+      so does `f("1")` next to `f(1)`. Loops inside the callee stay unboxed on both
+      entries, so the cost is per call. Count competing signatures in a self-compile
+      and in Express before choosing between a second entry and passing a missing
+      argument as `undefined`.
+
 - [ ] Dispatch callbacks stored in fields or passed on over the functions that reach
       them. Publishing a function makes its parameters opaque, so middleware calls such
       as `fn(req, res, next)`, `this.matchers[i](path)` and `next()` take runtime
@@ -294,6 +303,13 @@ object. Retained loop experiments preserve effects, authoritative state and fall
       and debug paths, and require lower binary/build cost without new whole-program
       analysis or disproportionate compilation.
 
+- [ ] Keep the env-only `process` installer when code checks `typeof process`.
+      `readsOnlyProcessEnv` in the linker accepts only `process.env` reads, so a guard
+      such as `typeof process !== "undefined" && process.env.X` installs the full
+      `process` object. The env-only installer saves 133 KB on the website server. No
+      current workload has only this guard; Express needs the full object anyway. Fix
+      it when a program hits it.
+
 ## Compiler infrastructure
 
 - [ ] Remove aggregate transport-size ceilings from root-compiler requests,
@@ -384,6 +400,13 @@ distinct when measuring text work.
 - [ ] Cache compiled RegExp matchers for runtime-created patterns. The template cache
       only keys interned pattern strings, so `new RegExp(source)` with a computed
       `source` recompiles on every call, even when the same text repeats.
+
+- [ ] Reuse one-unit strings above 0xFF. `mal_intrinsic_code_unit` caches units up to
+      0xFF only, so `str[i]`, `charAt`, `for...of` and the String iterator allocate a
+      new string for every other BMP character, and a surrogate pair always allocates.
+      No current workload reads non-Latin-1 text by character; the mixed-text pipeline
+      uses `charCodeAt`. Take this up with one that does, and compare a small
+      direct-mapped cache with interning.
 
 - [ ] Resolve the record-route regressions before accepting pure String scan lowering.
       The current same-source ordering experiment rejects moving subject admission ahead
