@@ -164,6 +164,19 @@ static generated-code size and helper counts do not establish runtime cost.
       for about 15 of the 28.6 shape-guard misses per request, all of them missing on
       every execution.
 
+- [ ] Inline strict callees into sloppy callers when their body can call user code.
+      `inlineTarget` rejects a mode mismatch at any instruction that may call user
+      code, to keep a strict frame boundary visible to legacy `caller`/`arguments`
+      reflection. Maligator's `caller` and `arguments` are always `null` and
+      `CallSite#getThis` returns `undefined`, so only stores and deletes, which take
+      the frame's mode, need the check. A class method called in a sloppy loop, such as
+      `points[i].weight()` with `weight() { return this.x * 2 }`, keeps the guarded leaf
+      call at about 127 retired instructions per element; strict callers inline it at
+      86, and a hand-inlined control reaches 34 because its direct field read enables
+      the numeric loop region. With the method inlined, a loop with an early `return`
+      still keeps a boxed accumulator, since guarded loop versioning needs a single
+      exit. Express gains nothing here: its router and response modules are strict.
+
 - [ ] Give methods stored as `F.prototype.name = function` guarded dispatch. In the
       in-process Express census, 211 calls per request stay on runtime dispatch, led by
       `layer.match` and `layer.handleRequest`. Method-name hints cover class methods
