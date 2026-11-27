@@ -130,6 +130,18 @@ more often than a default rule should.
 - **Fine when** the keys come from a fixed set in the code, such as option names or
   statistics categories.
 
+### `oxc/no-accumulating-spread`
+
+An Oxlint rule; enable it in your own configuration.
+
+- **Reports** spreading an accumulator into a new object or array on every step of a
+  `reduce` or loop, such as `({ ...acc, [x.id]: x })`.
+- **Why:** each step copies everything accumulated so far and creates a new object, so
+  the work grows with the square of the input, and each copy gets a new shape.
+- **Instead,** mutate one accumulator created before the loop, or use a `Map`.
+- **Fine when** the loop updates a record with a fixed set of keys, which copies a
+  bounded number of keys per step.
+
 ## Writing rules
 
 Write rules with `createOnce`, which Oxlint calls once per run instead of once per

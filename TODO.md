@@ -122,6 +122,26 @@ static generated-code size and helper counts do not establish runtime cost.
       performs. Scalar replacement only materializes at a `return`, so such a record
       is now allocated with its stores intact, and a returned field read stays boxed.
 
+- [ ] Dispatch callbacks stored in fields or passed on over the functions that reach
+      them. Publishing a function makes its parameters opaque, so middleware calls such
+      as `fn(req, res, next)`, `this.matchers[i](path)` and `next()` take runtime
+      dispatch: about 18 calls per request in the in-process Express census.
+
+- [ ] Inline functions that own captured variables, or the part that runs before they
+      create closures. `capturedCount !== 0` rejects the callee, so Express's
+      `processParams` continuation is allocated on every call: the top allocation site,
+      258k allocations and 20 MiB for 30k requests.
+
+- [ ] Choose the collection guess for `get`, `set` and `has` calls from the receiver.
+      When the name matches a collection method the compiler takes the first candidate,
+      so script methods with those names, such as in qs, fail the guess on every call
+      and box their results: about 17 calls per Express request.
+
+- [ ] Recognize built-ins read through an alias, such as `var isArray = Array.isArray`.
+      Built-in call lowering needs `X.name(` on the call itself, and cell proofs cover
+      `const` bindings only, although built-ins are locked and every write to the slot
+      is visible.
+
 - [ ] Test bounded method target sets for one repeated Core-store receiver using existing
       provenance, target caps and incremental summaries. Track relevant property/prototype
       writes and retain open fallbacks. Stop if exactness needs whole-heap flow; require
@@ -231,6 +251,23 @@ Runtime eval may remove source closure without invalidating authority closure.
 
 An existing iterator cursor is not, by itself, permission to delete its language
 object. Retained loop experiments preserve effects, authoritative state and fallback.
+
+- [ ] Keep loops nested in `for...of`, `for...in` and `try` canonical. A loop with a
+      handler block or exceptional edge is not canonical, so it loses simplification,
+      induction variables, int32 counters, hoisting and the indexed-loop plan, and a
+      `for...of` body sits inside the iterator-close handler. That covers about 370
+      indexed and `while` loops nested in `for...of` bodies in `src`. Built-in Array,
+      String, Map and Set iterators are unobservable under locked primordials, so their
+      close handler can go; elsewhere, treat handler edges as loop exits.
+
+- [ ] Recognize induction variables that several back edges advance, as in a `while`
+      loop with `continue`, and normalize reverse loops that start at `length - 1` with
+      `>= 0`. Both forms miss the int32 counter and the indexed-loop plan.
+
+- [ ] Iterate a Map or Set held in a field or parameter with its cursor. The compiler
+      picks the Map or Set cursor only for collections built in the same function and
+      guesses an array otherwise; when the guess fails every step calls the runtime.
+      Retry with the collection cursor once, as the String cursor already does.
 
 - [ ] Bound one typed-store side-exit experiment to core-to-execution or optimizer-queue
       and the corresponding compiler loop. First establish removable executed cost; then
