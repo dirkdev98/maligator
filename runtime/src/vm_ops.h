@@ -1619,6 +1619,10 @@ static inline u32 mal_inherited_stub_hash(
  * and cache refill. Stores remain limited to plain shaped data slots.
  */
 MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic);
+#if MAL_PROFILE && MAL_PERF_STATS
+MalValue mal_vm_op_load_property_ic_profiled(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic, i32 profile_site_id);
+#endif
 /**
  * [[Get]] of the C string literal `name` through a per-VM inline cache keyed by
  * the literal's address, for runtime code that reads the same names, such as a
@@ -1633,6 +1637,10 @@ bool mal_vm_get_static(MalVm *vm, MalValue receiver, const byte *name, MalValue 
  */
 MalValue mal_vm_op_load_property_ic_static_miss(
     MalVm *vm, MalValue object_value, i32 atom, MalInlineCache *ic);
+#if MAL_PROFILE && MAL_PERF_STATS
+MalValue mal_vm_op_load_property_ic_static_miss_profiled(
+    MalVm *vm, MalValue object_value, i32 atom, MalInlineCache *ic, i32 profile_site_id);
+#endif
 
 void mal_vm_op_store_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic);
 

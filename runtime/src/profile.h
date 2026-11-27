@@ -153,3 +153,26 @@ static inline void mal_profile_mark_worker_cpu_possible(void) {}
 #define MAL_PROFILE_SITE(vm, site) \
     (MAL_PROFILE_CURRENT_SITE((vm), (site)), \
      MAL_PROFILE_SITE_EVENT((vm), (site), MAL_PROFILE_SITE_EXECUTION, 1))
+
+#if MAL_PROFILE && MAL_PERF_STATS
+#define MAL_PROFILE_PROPERTY_LOAD_HELPER(helper) helper##_profiled
+#define MAL_PROFILE_PROPERTY_LOAD_SITE , i32 profile_site_id
+#define MAL_PROFILE_PROPERTY_LOAD_ARG(site_id) , (site_id)
+
+static inline void mal_profile_property_lookup(MalVm *vm, i32 *site_id) {
+    // A lookup can try a specialized resolution before the general one.
+    if (*site_id < 0) return;
+    mal_profile_site_event(vm, *site_id, MAL_PROFILE_SITE_FALLBACK, 1);
+    *site_id = -1;
+}
+
+#define MAL_PROFILE_PROPERTY_LOOKUP(vm, site_id) mal_profile_property_lookup((vm), &(site_id))
+#else
+#define MAL_PROFILE_PROPERTY_LOAD_HELPER(helper) helper
+#define MAL_PROFILE_PROPERTY_LOAD_SITE
+#define MAL_PROFILE_PROPERTY_LOAD_ARG(site_id)
+#define MAL_PROFILE_PROPERTY_LOOKUP(vm, site_id) ((void) 0)
+#endif
+
+#define MAL_PROFILE_PROPERTY_LOAD(helper, site_id, ...) \
+    MAL_PROFILE_PROPERTY_LOAD_HELPER(helper)(__VA_ARGS__ MAL_PROFILE_PROPERTY_LOAD_ARG(site_id))

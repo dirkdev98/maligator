@@ -10579,6 +10579,7 @@ function profileDecisionsForInstruction(
 				),
 			);
 		} else if (
+			source.includes("MAL_PROFILE_PROPERTY_LOAD(") ||
 			/mal_vm_op_(?:load_property_ic(?:_static_miss)?|store_property_ic)\(/.test(source)
 		) {
 			decisions.push(
@@ -10970,6 +10971,20 @@ class NativeInstructionEmission {
 		return this.profileOperation === undefined
 			? expression
 			: nativeProfileCall(kind, expression, this.profileSiteId, this.profileOperation);
+	}
+
+	propertyLoadCall(
+		receiver: string,
+		key: string,
+		icIndex: number,
+		helper:
+			| "mal_vm_op_load_property_ic"
+			| "mal_vm_op_load_property_ic_static_miss" = "mal_vm_op_load_property_ic",
+	): string {
+		const args = `vm, ${receiver}, ${key}, &${nativeBodyReference(this.context.resources, "propertyCache")}[${icIndex}]`;
+		return this.profileOperation === "property"
+			? `MAL_PROFILE_PROPERTY_LOAD(${helper}, ${this.profileSiteId}, ${args})`
+			: `${helper}(${args})`;
 	}
 
 	inputValue(r: number): string {
@@ -11861,7 +11876,7 @@ class NativeInstructionEmission {
 					? [`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`]
 					: []),
 				`} else {`,
-				`  r${instruction.dst} = ${this.profileCall("property", `mal_vm_op_load_property_ic(vm, ${receiver}, mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+				`  r${instruction.dst} = ${this.propertyLoadCall(receiver, `mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}])`, instruction.icIndex)};`,
 				`  ${this.throwCheck()}`,
 				`}`,
 			];
@@ -11901,7 +11916,7 @@ class NativeInstructionEmission {
 					`    __gc_slots[${site.slotsOffset + slot}] = ${this.profileCall("regexp", `mal_regexp_materialize_capture_span(vm, __gc_slots[${site.subjectSlot}], ${start}, ${end})`)};`,
 					`    r${instruction.object} = __gc_slots[${site.slotsOffset + slot}];`,
 					`  }`,
-					`  r${instruction.dst} = ${this.profileCall("property", `mal_vm_op_load_property_ic(vm, ${this.boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+					`  r${instruction.dst} = ${this.propertyLoadCall(this.boxedOperand(instruction.object), `mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}])`, instruction.icIndex)};`,
 					`  ${this.throwCheck()}`,
 					`}`,
 				];
@@ -11918,7 +11933,7 @@ class NativeInstructionEmission {
 					`if (${fast}) {`,
 					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 					`} else {`,
-					`  r${instruction.dst} = ${this.profileCall("property", `mal_vm_op_load_property_ic(vm, ${this.boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+					`  r${instruction.dst} = ${this.propertyLoadCall(this.boxedOperand(instruction.object), `mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}])`, instruction.icIndex)};`,
 					`  ${this.throwCheck()}`,
 					`}`,
 				];
@@ -11940,7 +11955,7 @@ class NativeInstructionEmission {
 					`if (${fast}) {`,
 					`  r${instruction.dst} = ${direct};`,
 					`} else {`,
-					`  r${instruction.dst} = ${this.profileCall("property", `mal_vm_op_load_property_ic(vm, ${this.boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+					`  r${instruction.dst} = ${this.propertyLoadCall(this.boxedOperand(instruction.object), `mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}])`, instruction.icIndex)};`,
 					`  ${this.throwCheck()}`,
 					`}`,
 				];
@@ -11957,7 +11972,7 @@ class NativeInstructionEmission {
 					`if (__regexp_iter_${site.projection.stepIp}_projected) {`,
 					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 					`} else {`,
-					`  r${instruction.dst} = ${this.profileCall("property", `mal_vm_op_load_property_ic(vm, ${this.boxedOperand(instruction.object)}, ${this.boxedOperand(instruction.key)}, &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+					`  r${instruction.dst} = ${this.propertyLoadCall(this.boxedOperand(instruction.object), this.boxedOperand(instruction.key), instruction.icIndex)};`,
 					`  ${this.throwCheck()}`,
 					`}`,
 				];
@@ -11980,7 +11995,7 @@ class NativeInstructionEmission {
 					`if (__regexp_exec_${site.projection.callIp}_projected && ${start} >= 0) {`,
 					`  r${instruction.dst} = ${direct};`,
 					`} else {`,
-					`  r${instruction.dst} = ${this.profileCall("property", `mal_vm_op_load_property_ic(vm, ${this.boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+					`  r${instruction.dst} = ${this.propertyLoadCall(this.boxedOperand(instruction.object), `mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}])`, instruction.icIndex)};`,
 					`  ${this.throwCheck()}`,
 					`}`,
 				];
@@ -12008,7 +12023,7 @@ class NativeInstructionEmission {
 					`    __gc_slots[${site.slotsOffset + slot}] = ${this.profileCall("regexp", `mal_regexp_materialize_capture_span(vm, __gc_slots[${site.subjectSlot}], ${start}, __regexp_exec_${site.projection.callIp}_ends[${slot}])`)};`,
 					`    r${instruction.object} = __gc_slots[${site.slotsOffset + slot}];`,
 					`  }`,
-					`  r${instruction.dst} = ${this.profileCall("property", `mal_vm_op_load_property_ic(vm, ${this.boxedOperand(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+					`  r${instruction.dst} = ${this.propertyLoadCall(this.boxedOperand(instruction.object), `mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}])`, instruction.icIndex)};`,
 					`  ${this.throwCheck()}`,
 					`}`,
 				];
@@ -12026,7 +12041,7 @@ class NativeInstructionEmission {
 					`if (__regexp_exec_${site.projection.callIp}_projected${load?.selector.kind === "named-capture" ? ` && !mal_value_is_undefined(${this.boxedOperand(instruction.object)})` : ""}) {`,
 					`  r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`,
 					`} else {`,
-					`  r${instruction.dst} = ${this.profileCall("property", `mal_vm_op_load_property_ic(vm, ${this.boxedOperand(instruction.object)}, ${instruction.opcode === "LOAD_PROPERTY" ? this.boxedOperand(instruction.key) : `mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}])`}, &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+					`  r${instruction.dst} = ${this.propertyLoadCall(this.boxedOperand(instruction.object), instruction.opcode === "LOAD_PROPERTY" ? this.boxedOperand(instruction.key) : `mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}])`, instruction.icIndex)};`,
 					`  ${this.throwCheck()}`,
 					`}`,
 				];
@@ -12298,9 +12313,11 @@ class NativeInstructionEmission {
 					]),
 			...this.boxedLoad(
 				instruction.dst,
-				this.profileCall(
-					"property",
-					`mal_vm_op_load_property_ic_static_miss(vm, ${this.boxed(instruction.object)}, ${this.context.relocation.stringIndex(instruction.stringIndex)}, &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`,
+				this.propertyLoadCall(
+					this.boxed(instruction.object),
+					this.context.relocation.stringIndex(instruction.stringIndex),
+					instruction.icIndex,
+					"mal_vm_op_load_property_ic_static_miss",
 				),
 			),
 		];
@@ -15031,7 +15048,7 @@ class NativeInstructionEmission {
 				...(propertyLoad === undefined
 					? []
 					: [
-							`  r${propertyLoad.dst} = ${this.profileCall("property", `mal_vm_op_load_property_ic(vm, ${this.boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(propertyLoad.stringIndex)}]), &${nativeBodyReference(this.context.resources, "propertyCache")}[${propertyLoad.icIndex}])`)};`,
+							`  r${propertyLoad.dst} = ${this.propertyLoadCall(this.boxedOperand(propertyLoad.object), `mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(propertyLoad.stringIndex)}])`, propertyLoad.icIndex)};`,
 							`  ${this.throwCheck()}`,
 						]),
 				`  MalCompletion ${tmp} = ${this.profileCall("call", `mal_vm_call_cached(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
@@ -15246,7 +15263,7 @@ class NativeInstructionEmission {
 				...(propertyLoad === undefined
 					? []
 					: [
-							`  r${propertyLoad.dst} = ${this.profileCall("property", `mal_vm_op_load_property_ic(vm, ${this.boxedOperand(propertyLoad.object)}, mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(propertyLoad.stringIndex)}]), &${nativeBodyReference(this.context.resources, "propertyCache")}[${propertyLoad.icIndex}])`)};`,
+							`  r${propertyLoad.dst} = ${this.propertyLoadCall(this.boxedOperand(propertyLoad.object), `mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(propertyLoad.stringIndex)}])`, propertyLoad.icIndex)};`,
 							`  ${this.throwCheck()}`,
 						]),
 				`  MalCompletion ${tmp} = ${this.profileCall("call", `mal_vm_call_cached(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
@@ -17304,9 +17321,10 @@ class NativeInstructionEmission {
 							]),
 					...this.boxedLoad(
 						instruction.dst,
-						this.profileCall(
-							"property",
-							`mal_vm_op_load_property_ic(vm, ${this.boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`,
+						this.propertyLoadCall(
+							this.boxed(instruction.object),
+							`mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}])`,
+							instruction.icIndex,
 						),
 					).map((line) => `  ${line}`),
 					`}`,
@@ -17338,9 +17356,10 @@ class NativeInstructionEmission {
 					`} else {`,
 					...this.boxedLoad(
 						instruction.dst,
-						this.profileCall(
-							"property",
-							`mal_vm_op_load_property_ic(vm, ${this.boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`,
+						this.propertyLoadCall(
+							this.boxed(instruction.object),
+							`mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}])`,
+							instruction.icIndex,
 						),
 					).map((line) => `  ${line}`),
 					`}`,
@@ -17387,9 +17406,10 @@ class NativeInstructionEmission {
 							]),
 					...this.boxedLoad(
 						instruction.dst,
-						this.profileCall(
-							"property",
-							`mal_vm_op_load_property_ic(vm, ${this.boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}])`,
+						this.propertyLoadCall(
+							this.boxed(instruction.object),
+							`mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}])`,
+							instruction.icIndex,
 						),
 					).map((line) => `  ${line}`),
 					`}`,
@@ -19690,7 +19710,7 @@ function emitInstruction(
 				0
 			)
 				return [
-					`r${instruction.dst} = ${emission.profileCall("property", `mal_vm_op_load_property_ic(vm, ${emission.boxed(instruction.object)}, ${emission.boxed(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+					`r${instruction.dst} = ${emission.propertyLoadCall(emission.boxed(instruction.object), emission.boxed(instruction.key), instruction.icIndex)};`,
 					emission.throwCheck(),
 				];
 			return [
@@ -19698,7 +19718,7 @@ function emitInstruction(
 				"  MAL_PERF_COUNT(exact_typed_array_loads);",
 				`  r${instruction.dst} = ${emission.callValue(instruction.dst, exactLoad)};`,
 				"} else {",
-				`  r${instruction.dst} = ${emission.profileCall("property", `mal_vm_op_load_property_ic(vm, ${emission.boxed(instruction.object)}, ${emission.boxed(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+				`  r${instruction.dst} = ${emission.propertyLoadCall(emission.boxed(instruction.object), emission.boxed(instruction.key), instruction.icIndex)};`,
 				`  ${emission.throwCheck()}`,
 				"}",
 			];

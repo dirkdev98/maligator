@@ -8008,7 +8008,7 @@ static __attribute__((noinline)) bool mal_vm_getter_row_try_load(
 
 static MalValue mal_vm_op_load_property_ic_keyed(
     MalVm *vm, MalValue object_value, MalKey key, MalInlineCache *ic,
-    bool static_probe_missed
+    bool static_probe_missed MAL_PROFILE_PROPERTY_LOAD_SITE
 ) {
     MAL_PERF_COUNT(ic_load_fallbacks);
     MalValue key_value = key.value;
@@ -8069,7 +8069,13 @@ static MalValue mal_vm_op_load_property_ic_keyed(
         MalTypedArrayObject *array;
         u32 length;
         if (mal_ic_key_is_stable_string(key_value) &&
+#if MAL_PROFILE && MAL_PERF_STATS
+            (mal_vm_try_typed_array_length(object_value, ic, &array, &length) ||
+             (MAL_PROFILE_PROPERTY_LOOKUP(vm, profile_site_id),
+              mal_vm_resolve_typed_array_length(vm, object_value, ic, &array, &length)))) {
+#else
             mal_vm_admit_typed_array_length(vm, object_value, ic, &array, &length)) {
+#endif
             return mal_value_from_u32(length);
         }
     }
@@ -8085,9 +8091,10 @@ static MalValue mal_vm_op_load_property_ic_keyed(
         i64 byte_length =
             key_value == ic->key ? mal_vm_byte_length_row_read(object_value, ic) : -1;
         if (byte_length < 0 &&
-            mal_vm_record_builtin_extent(
-                mal_value_to_object(object_value),
-                (MalKey) {.kind = MAL_KEY_STRING, .value = key_value}, byte_length_mode, ic)) {
+            (MAL_PROFILE_PROPERTY_LOOKUP(vm, profile_site_id),
+             mal_vm_record_builtin_extent(
+                 mal_value_to_object(object_value),
+                 (MalKey) {.kind = MAL_KEY_STRING, .value = key_value}, byte_length_mode, ic))) {
             byte_length = mal_vm_byte_length_row_read(object_value, ic);
         }
         if (byte_length >= 0) return mal_value_from_u32((u32) byte_length);
@@ -8160,6 +8167,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
         if (mal_vm_load_stub_try(vm, object, key_value, ic, &stub_value)) {
             return stub_value;
         }
+        MAL_PROFILE_PROPERTY_LOOKUP(vm, profile_site_id);
         if (ic->megamorphic || key_value != ic->key) MAL_PERF_COUNT(ic_load_mega_misses);
         if (key.kind == MAL_KEY_STRING) {
             i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_LOAD_IC);
@@ -8266,6 +8274,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             }
             return mal_value_from_i32((i32) mal_value_to_string(object_value)->length);
         }
+        MAL_PROFILE_PROPERTY_LOOKUP(vm, profile_site_id);
         MalValue result = mal_vm_op_load_property_keyed(vm, object_value, key);
         // Cache only a plain DATA method resolved on the watched prototype chain:
         // an immortal string key that is not a string-receiver exotic own (length /
@@ -8327,6 +8336,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
                 return ic->value;
             }
             if (mal_ic_key_is_stable_string(key_value)) {
+                MAL_PROFILE_PROPERTY_LOOKUP(vm, profile_site_id);
                 MalKey key = {.kind = MAL_KEY_STRING, .value = key_value};
                 MalPropertyLookup own = mal_object_get_own(object, key);
                 if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
@@ -8337,6 +8347,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             }
         }
     }
+    MAL_PROFILE_PROPERTY_LOOKUP(vm, profile_site_id);
     MAL_PERF_COUNT(ic_load_other_generic);
     MalValue result = mal_vm_op_load_property_keyed(vm, object_value, key);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
@@ -8347,9 +8358,10 @@ static MalValue mal_vm_op_load_property_ic_keyed(
 
 static MalValue mal_vm_op_load_property_ic_impl(
     MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic,
-    bool static_probe_missed
+    bool static_probe_missed MAL_PROFILE_PROPERTY_LOAD_SITE
 ) {
     if (mal_value_is_nil(object_value)) {
+        MAL_PROFILE_PROPERTY_LOOKUP(vm, profile_site_id);
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "Cannot read properties of null or undefined");
         return MAL_VALUE_UNDEFINED;
@@ -8371,8 +8383,12 @@ static MalValue mal_vm_op_load_property_ic_impl(
             mal_value_to_string(key_value)->header.storage == MAL_HEAP_STORAGE_IMMORTAL;
         if (retarget && ic->key == key_value) ic->key = key.value;
         result = mal_vm_op_load_property_ic_keyed(
-            vm, object_value, key, ic, static_probe_missed);
+            vm, object_value, key, ic, static_probe_missed MAL_PROFILE_PROPERTY_LOAD_ARG(profile_site_id));
         if (retarget && ic->key == key.value) ic->key = key_value;
+#if MAL_PROFILE && MAL_PERF_STATS
+    } else {
+        MAL_PROFILE_PROPERTY_LOOKUP(vm, profile_site_id);
+#endif
     }
     mal_gc_unroot(&span);
     return result;
@@ -8394,8 +8410,9 @@ static MalTable *mal_vm_dictionary_receiver_table(MalValue object_value, MalValu
         ? mal_object_overflow(object) : nullptr;
 }
 
-MalValue mal_vm_op_load_property_ic(
+MalValue MAL_PROFILE_PROPERTY_LOAD_HELPER(mal_vm_op_load_property_ic)(
     MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
+    MAL_PROFILE_PROPERTY_LOAD_SITE
 ) {
     // Index strings such as for-in keys over an array name the same elements as numbers.
     u32 index;
@@ -8430,8 +8447,16 @@ MalValue mal_vm_op_load_property_ic(
         }
     }
     return mal_vm_op_load_property_ic_impl(
-        vm, object_value, key_value, ic, false);
+        vm, object_value, key_value, ic, false MAL_PROFILE_PROPERTY_LOAD_ARG(profile_site_id));
 }
+
+#if MAL_PROFILE && MAL_PERF_STATS
+MalValue mal_vm_op_load_property_ic(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
+) {
+    return mal_vm_op_load_property_ic_profiled(vm, object_value, key_value, ic, -1);
+}
+#endif
 
 #define MAL_STATIC_LOAD_SITE_COUNT 64
 
@@ -8479,12 +8504,12 @@ bool mal_vm_get_static(MalVm *vm, MalValue receiver, const byte *name, MalValue 
 }
 
 static __attribute__((noinline)) MalValue mal_vm_op_load_property_ic_static_miss_general(
-    MalVm *vm, MalValue object_value, i32 atom, MalInlineCache *ic
+    MalVm *vm, MalValue object_value, i32 atom, MalInlineCache *ic MAL_PROFILE_PROPERTY_LOAD_SITE
 );
 
 // Out of line so link-time inlining does not copy the front into every generated miss site.
-__attribute__((noinline)) MalValue mal_vm_op_load_property_ic_static_miss(
-    MalVm *vm, MalValue object_value, i32 atom, MalInlineCache *ic
+__attribute__((noinline)) MalValue MAL_PROFILE_PROPERTY_LOAD_HELPER(mal_vm_op_load_property_ic_static_miss)(
+    MalVm *vm, MalValue object_value, i32 atom, MalInlineCache *ic MAL_PROFILE_PROPERTY_LOAD_SITE
 ) {
     // Accessor sites such as `debug.enabled` hit here on every read, so their row skips
     // the general path's frame and its rooted operand buffer. A getter row never holds
@@ -8507,13 +8532,23 @@ __attribute__((noinline)) MalValue mal_vm_op_load_property_ic_static_miss(
         mal_vm_getter_row_try_load(vm, object_value, key_value, ic, &result)) {
         return result;
     }
-    return mal_vm_op_load_property_ic_static_miss_general(vm, object_value, atom, ic);
+    return mal_vm_op_load_property_ic_static_miss_general(
+        vm, object_value, atom, ic MAL_PROFILE_PROPERTY_LOAD_ARG(profile_site_id));
 }
 
-static __attribute__((noinline)) MalValue mal_vm_op_load_property_ic_static_miss_general(
+#if MAL_PROFILE && MAL_PERF_STATS
+MalValue mal_vm_op_load_property_ic_static_miss(
     MalVm *vm, MalValue object_value, i32 atom, MalInlineCache *ic
 ) {
+    return mal_vm_op_load_property_ic_static_miss_profiled(vm, object_value, atom, ic, -1);
+}
+#endif
+
+static __attribute__((noinline)) MalValue mal_vm_op_load_property_ic_static_miss_general(
+    MalVm *vm, MalValue object_value, i32 atom, MalInlineCache *ic MAL_PROFILE_PROPERTY_LOAD_SITE
+) {
     if (mal_value_is_nil(object_value)) {
+        MAL_PROFILE_PROPERTY_LOOKUP(vm, profile_site_id);
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "Cannot read properties of null or undefined");
         return MAL_VALUE_UNDEFINED;
@@ -8534,7 +8569,8 @@ static __attribute__((noinline)) MalValue mal_vm_op_load_property_ic_static_miss
     MalKey key = mal_vm_string_to_array_index(name, &index)
         ? mal_key_index(index)
         : (MalKey) {.kind = MAL_KEY_STRING, .value = name_value};
-    result = mal_vm_op_load_property_ic_keyed(vm, object_value, key, ic, true);
+    result = mal_vm_op_load_property_ic_keyed(
+        vm, object_value, key, ic, true MAL_PROFILE_PROPERTY_LOAD_ARG(profile_site_id));
     if (key.kind == MAL_KEY_STRING && mal_value_is_undefined(result) &&
         vm->completion.kind != MAL_COMPLETION_THROW) {
         mal_vm_builtin_chain_note_missing(vm, object_value, name_value);
