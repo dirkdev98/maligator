@@ -1,31 +1,12 @@
-import type { AnyNode, AstNode, Context, Rule } from "./types.ts";
+import { isTypeSyntax, readsGlobal, staticPropertyName } from "./syntax.ts";
+import type { AnyNode, Rule } from "./types.ts";
 
 const GLOBAL_OBJECTS = new Set(["globalThis", "global"]);
-// Type stripping removes these before the compiler sees the program.
-const TRANSPARENT = new Set([
-	"ParenthesizedExpression",
-	"TSAsExpression",
-	"TSNonNullExpression",
-	"TSSatisfiesExpression",
-	"TSTypeAssertion",
-]);
-
-/** Whether `identifier` reads the global object: undeclared, or a global without a declaration. */
-function readsGlobalObject(context: Context, identifier: AstNode<"Identifier">): boolean {
-	const reference = context.sourceCode
-		.getScope(identifier)
-		.references.find((candidate) => candidate.identifier === identifier);
-	if (reference === undefined) return false;
-	const variable = reference.resolved;
-	return (
-		variable === null || (variable.scope.type === "global" && variable.defs.length === 0)
-	);
-}
 
 /** Whether `node` sits in a type, which type stripping erases. */
 function inType(node: AnyNode): boolean {
 	for (let parent = node.parent; parent !== null; parent = parent.parent) {
-		if (parent.type.startsWith("TS") && !TRANSPARENT.has(parent.type)) return true;
+		if (parent.type.startsWith("TS") && !isTypeSyntax(parent)) return true;
 	}
 	return false;
 }
@@ -34,7 +15,7 @@ function inType(node: AnyNode): boolean {
 function use(node: AnyNode): { node: AnyNode; parent: AnyNode | null } {
 	let current = node;
 	let parent = node.parent;
-	while (parent !== null && TRANSPARENT.has(parent.type)) {
+	while (parent !== null && isTypeSyntax(parent)) {
 		current = parent;
 		parent = parent.parent;
 	}
@@ -54,12 +35,7 @@ function isNamedUse(node: AnyNode, parent: AnyNode | null): boolean {
 		case "BinaryExpression":
 			return parent.operator === "===" || parent.operator === "!==";
 		case "MemberExpression":
-			return (
-				parent.object === node &&
-				((!parent.computed && parent.property.type === "Identifier") ||
-					(parent.property.type === "Literal" &&
-						typeof parent.property.value === "string"))
-			);
+			return parent.object === node && staticPropertyName(parent) !== undefined;
 		default:
 			return false;
 	}
@@ -88,7 +64,7 @@ export const noDynamicGlobalAccess: Rule = {
 				if (
 					!GLOBAL_OBJECTS.has(identifier.name) ||
 					inType(identifier) ||
-					!readsGlobalObject(context, identifier)
+					!readsGlobal(context, identifier)
 				)
 					return;
 				const { node, parent } = use(identifier);

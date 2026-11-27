@@ -1,12 +1,37 @@
 {
+	"plugins": ["eslint", "typescript", "unicorn", "oxc", "import"],
 	"jsPlugins": ["./src/index.ts"],
 	"rules": {
+		"import/no-dynamic-require": [
+			"error",
+			{
+				"esmodule": true
+			}
+		],
 		"maligator/monomorphic-objects": "error",
 		"maligator/no-delete-property": "error",
 		"maligator/no-dynamic-global-access": "error",
+		"maligator/no-function-source": "error",
+		"maligator/no-primordial-mutation": "error",
+		"maligator/strict-commonjs": "error",
 		"no-eval": "error",
 		"no-extend-native": "error",
 		"no-new-func": "error",
+		"no-restricted-imports": [
+			"error",
+			{
+				"paths": [
+					{
+						"name": "vm",
+						"message": "The default build cannot compile code at runtime, and vm contexts need engine.realms."
+					},
+					{
+						"name": "node:vm",
+						"message": "The default build cannot compile code at runtime, and vm contexts need engine.realms."
+					}
+				]
+			}
+		],
 		"prefer-rest-params": "error",
 		"unicorn/prefer-global-this": "error"
 	}

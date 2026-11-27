@@ -149,6 +149,12 @@ static generated-code size and helper counts do not establish runtime cost.
       plan rejects the whole function today, so a request handler's loops all take the
       generic iterator path.
 
+- [ ] Reserve class layout slots past a constructor's first branch and in derived
+      constructors. The predicted layout stops at the constructor's first branch, so
+      keys stored unconditionally after an `if` are missing from it, and derived
+      constructors reserve no slots, so their own fields grow storage one transition at
+      a time.
+
 - [ ] Keep keys that straight-line code adds after an object literal in the literal's
       allocation layout. Provenance marks any access to a key outside the literal
       as an escape, which drops the object's exact-slot and scalar-replacement proofs,
@@ -300,6 +306,10 @@ and rejected experiment history outside this roadmap.
 
 # Runtime safety and allocation
 
+- [ ] Make `Array.prototype.shift` constant-time on dense arrays. It moves every
+      remaining element down, so a queue drained with `shift()` costs quadratic time; a
+      head offset in dense storage would keep the observable array unchanged.
+
 - [ ] Complete recoverable allocation failure for CELL, RAW, LOS, GC-internal,
       runtime-helper, and direct-native allocations. OOM must remain catchable without
       corruption, lost roots, recursive failure, or partial observable objects.
@@ -326,6 +336,10 @@ Keep content parity, physical encoding, allocation traffic, and retained memory
 distinct when measuring text work.
 
 ## Focused performance work
+
+- [ ] Cache compiled RegExp matchers for runtime-created patterns. The template cache
+      only keys interned pattern strings, so `new RegExp(source)` with a computed
+      `source` recompiles on every call, even when the same text repeats.
 
 - [ ] Resolve the record-route regressions before accepting pure String scan lowering.
       The current same-source ordering experiment rejects moving subject admission ahead
@@ -398,6 +412,12 @@ distinct when measuring text work.
 # ECMAScript correctness
 
 ## Modules and agents
+
+- [ ] Give the CommonJS `module` and wrapper `require` their entry identity. `module`
+      is only `{ exports }` and `require` has no `main`, so `require.main === module` is
+      never true and an entry guard such as the one in
+      `tests/fixtures/express-5/app.js` never runs. The compiler knows the entry, so
+      `require.main`, `module.filename` and `module.id` can be supplied.
 
 - [ ] Finish dynamic-import resolution, import attributes and evaluation order across
       compiled, interpreted and runtime-loading paths. `text` and `bytes` imports

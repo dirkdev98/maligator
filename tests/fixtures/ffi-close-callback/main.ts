@@ -87,7 +87,8 @@ c.close_flush();
 check(lentDone, "callback close extends the loan until completion");
 
 const poisoned = c.CloseState();
-// oxlint-disable-next-line no-extend-native -- Proves the binding never reads through the prototype.
+// This fixture builds with mutable primordials to prove the binding never reads through the prototype.
+// oxlint-disable-next-line no-extend-native, maligator/no-primordial-mutation
 Object.defineProperty(Array.prototype, "0", {
 	configurable: true,
 	get() {
@@ -97,6 +98,7 @@ Object.defineProperty(Array.prototype, "0", {
 try {
 	c.close_now(poisoned, () => {});
 } finally {
+	// oxlint-disable-next-line maligator/no-primordial-mutation -- Restores the patched prototype.
 	delete (Array.prototype as unknown as Record<string, unknown>)["0"];
 }
 refuses(() => c.close_read(poisoned));

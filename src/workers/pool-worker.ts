@@ -7,6 +7,7 @@ import { unwrapTransfer } from "./transfer.ts";
 // Only createPool launches this bootstrap and supplies its private request protocol.
 const data = workerData as { readonly entry: WorkerUrl };
 const port = parentPort as MessagePort<TaskResponse, TaskRequest>;
+// oxlint-disable-next-line import/no-dynamic-require -- Node runs this worker; the pool names the task module.
 const taskModule = (await import(data.entry.href)) as Record<string, unknown>;
 let active = false;
 let activeId: number | undefined;

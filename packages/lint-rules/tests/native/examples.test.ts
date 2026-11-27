@@ -15,22 +15,29 @@ afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 // is per-round work; the runtime's own startup takes it only a few times.
 const ROUNDS = 10_000;
 
-interface Evidence {
+interface Run {
+	status: number | null;
 	stdout: string;
+	stderr: string;
+	/** What Node prints for the same file. */
+	nodeStdout: string;
 	/** Property loads whose site met a shape other than its cached one. */
 	shapeMisses: number;
+	/** Shapes created after startup: one per new key path. */
+	shapeCreates: number;
 	/** Host installers the compiled image links. */
 	installers: Array<string>;
 }
 
-function counter(line: string, name: string): number {
-	return Number(line.match(new RegExp(`(?:^|\\s)${name}=(\\d+)`))?.[1] ?? 0);
+function counter(stderr: string, line: string, name: string): number {
+	const found = stderr.split("\n").find((entry) => entry.startsWith(line)) ?? "";
+	return Number(found.match(new RegExp(`(?:^|\\s)${name}=(\\d+)`))?.[1] ?? 0);
 }
 
-function run(file: string): Evidence {
+function run(file: string): Run {
 	const built = buildNativeBinaryResult({
 		fixture: path.relative(process.cwd(), file),
-		name: path.basename(file, ".js"),
+		name: path.basename(file).replace(/\.[a-z]+$/u, ""),
 		mainFile: HOST_MAIN,
 		outDir,
 		// The rules describe the default closed-world build, not the harness's eval-enabled one.
@@ -41,67 +48,94 @@ function run(file: string): Evidence {
 		env: { ...process.env, MAL_PERF_STATS: "1" },
 		encoding: "utf8",
 	});
-	expect(result.status, result.stderr).toBe(0);
-	const line = result.stderr
-		.split("\n")
-		.find((entry) => entry.startsWith("[perf-ic-stats]"));
-	expect(line, result.stderr).toBeDefined();
+	const ic = (name: string) => counter(result.stderr, "[perf-ic-stats]", name);
 	return {
+		status: result.status,
 		stdout: result.stdout,
+		stderr: result.stderr,
+		nodeStdout: execFileSync(process.execPath, [file], { encoding: "utf8" }),
 		shapeMisses: [
 			"load_slot_key_hits",
 			"load_poly_hits",
 			"load_mega_hits",
 			"load_mega_misses",
 		]
-			.map((name) => counter(line!, name))
+			.map(ic)
 			.reduce((total, count) => total + count, 0),
+		shapeCreates: counter(result.stderr, "[perf-shape-transition-stats]", "creates"),
 		installers: built.programImage.runtime.hostInstalls.map(({ installer }) => installer),
 	};
 }
 
-function shapeCost(bad: Evidence, good: Evidence): void {
+function behavesLikeNode(example: Run): void {
+	expect(example.status, example.stderr).toBe(0);
+	expect(example.stdout).toBe(example.nodeStdout);
+}
+
+/** Readers of the bad form miss their shape cache on a quarter of the rounds or more. */
+function shapeMisses(bad: Run, good: Run): void {
+	behavesLikeNode(bad);
 	expect(bad.shapeMisses).toBeGreaterThanOrEqual(ROUNDS / 4);
 	expect(good.shapeMisses).toBeLessThan(ROUNDS / 100);
 }
 
-/** An untraced global object keeps the process installer, which no example reads. */
-function installerCost(bad: Evidence, good: Evidence): void {
+/** The bad form creates shapes as its data grows, and the heap keeps them. */
+function shapeGrowth(bad: Run, good: Run): void {
+	behavesLikeNode(bad);
+	expect(bad.shapeCreates).toBeGreaterThanOrEqual(ROUNDS / 4);
+	expect(good.shapeCreates).toBeLessThan(ROUNDS / 100);
+}
+
+/** The bad form links the complete process installer, which neither form needs. */
+function extraInstallers(bad: Run, good: Run): void {
+	behavesLikeNode(bad);
 	expect(bad.installers).toContain(PROCESS_INSTALLER_SYMBOL);
 	expect(good.installers).not.toContain(PROCESS_INSTALLER_SYMBOL);
 	expect(bad.installers.length).toBeGreaterThan(good.installers.length);
 }
 
-/** The cost each rule's bad examples pay and its good examples avoid. */
-const costs: Record<string, (bad: Evidence, good: Evidence) => void> = {
-	"monomorphic-objects": shapeCost,
-	"no-delete-property": shapeCost,
-	"no-dynamic-global-access": installerCost,
+/** The default build locks built-ins, so the bad form throws where Node does not. */
+function rejectedAtRuntime(bad: Run): void {
+	expect(bad.status).not.toBe(0);
+	expect(bad.stderr).toContain("Cannot assign locked primordial property");
+}
+
+/** The bad form runs, but prints something other than Node does. */
+function differsFromNode(bad: Run): void {
+	expect(bad.status, bad.stderr).toBe(0);
+	expect(bad.stdout).not.toBe(bad.nodeStdout);
+}
+
+/** What each rule's bad examples cost and its good examples avoid. */
+const costs: Record<string, (bad: Run, good: Run) => void> = {
+	"monomorphic-objects": shapeMisses,
+	"no-delete-property": shapeMisses,
+	"no-dynamic-global-access": extraInstallers,
+	"no-function-source": differsFromNode,
+	"no-primordial-mutation": rejectedAtRuntime,
+	"prefer-map": shapeGrowth,
+	"strict-commonjs": extraInstallers,
 };
 
 const pairs = readdirSync(examples).flatMap((rule) =>
-	readdirSync(path.join(examples, rule))
-		.filter((file) => file.endsWith(".bad.js"))
-		.map((file) => ({ rule, example: file.replace(/\.bad\.js$/u, "") })),
+	readdirSync(path.join(examples, rule)).flatMap((file) => {
+		const bad = /^(?<example>.+)\.bad(?<extension>\.[a-z]+)$/u.exec(file)?.groups;
+		return bad === undefined
+			? []
+			: [{ rule, example: bad.example!, extension: bad.extension! }];
+	}),
 );
 
 describe("documented examples compiled by Maligator", () => {
 	it.each(pairs)(
 		"$rule $example: the bad form pays the cost the good form avoids",
-		({ rule, example }) => {
+		({ rule, example, extension }) => {
 			const cost = costs[rule];
 			expect(cost, `no cost check for ${rule}`).toBeDefined();
 			const directory = path.join(examples, rule);
-			const expected = execFileSync(
-				process.execPath,
-				[path.join(directory, `${example}.good.js`)],
-				{ encoding: "utf8" },
-			);
-			const bad = run(path.join(directory, `${example}.bad.js`));
-			const good = run(path.join(directory, `${example}.good.js`));
-			expect(bad.stdout).toBe(expected);
-			expect(good.stdout).toBe(expected);
-			cost!(bad, good);
+			const good = run(path.join(directory, `${example}.good${extension}`));
+			behavesLikeNode(good);
+			cost!(run(path.join(directory, `${example}.bad${extension}`)), good);
 		},
 	);
 });

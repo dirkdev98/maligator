@@ -287,7 +287,9 @@
 		{
 			"files": ["scripts/**", "tests/**", "website/**"],
 			"rules": {
-				"maligator/no-dynamic-global-access": "off"
+				"import/no-dynamic-require": "off",
+				"maligator/no-dynamic-global-access": "off",
+				"no-restricted-imports": "off"
 			}
 		},
 		{
