@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
+import { reserveZigLocalCache } from "./cache-management.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 import {
 	installPinnedZig,
@@ -1063,6 +1064,7 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 					: "Zig was not found on PATH (required for cross-builds)",
 			);
 		} else if (zig !== undefined) {
+			reserveZigLocalCache(cacheDirectory, environmentOverrides.ZIG_LOCAL_CACHE_DIR);
 			tools.cc = {
 				path: zig.path,
 				version: `zig cc ${zig.version}`,
@@ -1380,23 +1382,26 @@ export function requireToolchain(options: InspectToolchainOptions = {}): Toolcha
 		]),
 		"hex",
 	);
-	const memoPath = path.join(
-		toolchainCacheDirectory(options, rootDir),
-		"toolchains",
-		"inspections",
-		`${key}.json`,
-	);
+	const cacheDirectory = toolchainCacheDirectory(options, rootDir);
+	const memoPath = path.join(cacheDirectory, "toolchains", "inspections", `${key}.json`);
+	let memo: InspectionMemo | undefined;
 	try {
-		const memo = JSON.parse(readFileSync(memoPath, "utf-8")) as InspectionMemo;
+		const cached = JSON.parse(readFileSync(memoPath, "utf-8")) as InspectionMemo;
 		if (
-			memo.schema === INSPECTION_SCHEMA &&
-			memo.key === key &&
-			memo.inputs.every(([file, identity]) => fileIdentity(file) === identity)
-		) {
-			return { ...memo.toolchain, cacheHit: true };
-		}
+			cached.schema === INSPECTION_SCHEMA &&
+			cached.key === key &&
+			cached.inputs.every(([file, identity]) => fileIdentity(file) === identity)
+		)
+			memo = cached;
 	} catch {
 		// A missing or damaged memo only costs a fresh inspection.
+	}
+	if (memo !== undefined) {
+		reserveZigLocalCache(
+			cacheDirectory,
+			memo.toolchain.environmentOverrides?.ZIG_LOCAL_CACHE_DIR,
+		);
+		return { ...memo.toolchain, cacheHit: true };
 	}
 	const report = inspectToolchain(options);
 	if (report.toolchain === undefined) {

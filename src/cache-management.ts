@@ -14,6 +14,7 @@ import {
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
+import type { Stats } from "node:fs";
 import * as path from "node:path";
 import { writeFileAtomically } from "./atomic-file.ts";
 import {
@@ -29,6 +30,8 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const LEASE_DIRECTORY = ".leases";
 const PRUNE_LOCK = ".prune-lock";
+const ZIG_LOCAL = "zig/local";
+const ZIG_LOCAL_PRUNE = "zig-local";
 const TEST_SUITE_SMOKE_FILE = "test-suite-smoke.json";
 const GLOBAL_CLEAR_LOCK = ".clear-lock";
 const LEASE_HEARTBEAT_MS = 30_000;
@@ -68,7 +71,6 @@ const CACHE_FAMILIES: Array<CacheFamilyPolicy> = [
 	{ path: "test262-wires", keep: 512, entryKind: "grandchildren" },
 	{ path: "toolchains", keep: 8 },
 	{ path: "source-digests", keep: 8 },
-	{ path: "zig", keep: 2 },
 	// The linker's ThinLTO cache; its files are independent and safe to remove between links.
 	{ path: "thinlto", keep: 0, entryKind: "grandchildren" },
 	{ path: "work", keep: 2, entryKind: "grandchildren" },
@@ -152,16 +154,18 @@ function globalClearLock(root: string): string | undefined {
 		: undefined;
 }
 
-function treeSize(target: string): number {
+function treeSize(target: string, visit?: (stats: Stats) => void): number {
 	let stats;
 	try {
 		stats = lstatSync(target);
 	} catch {
 		return 0;
 	}
+	visit?.(stats);
 	if (!stats.isDirectory()) return stats.size;
 	let total = 0;
-	for (const child of readdirSync(target)) total += treeSize(path.join(target, child));
+	for (const child of readdirSync(target))
+		total += treeSize(path.join(target, child), visit);
 	return total;
 }
 
@@ -226,6 +230,37 @@ function blobEntries(root: string): Array<CacheEntry> {
 	return entries;
 }
 
+function zigOutputEntry(target: string): CacheEntry {
+	let lastUsedMs = 0;
+	const bytes = treeSize(target, (stats) => {
+		// Scanning an output directory updates its access time. Zig's hits read
+		// the object files, so use their access times to distinguish those reads.
+		lastUsedMs = Math.max(
+			lastUsedMs,
+			stats.mtimeMs,
+			stats.birthtimeMs,
+			stats.isFile() ? stats.atimeMs : 0,
+		);
+	});
+	return { path: target, family: ZIG_LOCAL, bytes, lastUsedMs };
+}
+
+function zigEntries(root: string): Array<CacheEntry> {
+	const directory = path.join(root, "zig");
+	if (!existsSync(directory)) return [];
+	if (!lstatSync(directory).isDirectory()) return [entry(directory, "zig")];
+	return visibleChildren(directory).flatMap((cache) => {
+		const family = `zig/${path.basename(cache)}`;
+		if (family !== ZIG_LOCAL || !lstatSync(cache).isDirectory())
+			return [entry(cache, family)];
+		return visibleChildren(cache).flatMap((item) =>
+			path.basename(item) === "o" && lstatSync(item).isDirectory()
+				? visibleChildren(item).map(zigOutputEntry)
+				: [entry(item, family)],
+		);
+	});
+}
+
 type CacheLeaseRecord = ActiveCacheCommand;
 
 function activeCacheCommands(
@@ -236,6 +271,7 @@ function activeCacheCommands(
 	if (!existsSync(directory)) return [];
 	const active: Array<ActiveCacheCommand> = [];
 	for (const name of readdirSync(directory)) {
+		if (name.startsWith(".")) continue;
 		const leasePath = path.join(directory, name);
 		try {
 			const record = JSON.parse(readFileSync(leasePath, "utf8")) as CacheLeaseRecord;
@@ -245,7 +281,8 @@ function activeCacheCommands(
 				Number.isInteger(record.pid) &&
 				typeof record.startedAt === "number" &&
 				typeof record.command === "string" &&
-				heartbeatIsRecent &&
+				// A blocking Zig invocation can outlive the heartbeat window.
+				(heartbeatIsRecent || record.command === ZIG_LOCAL) &&
 				processIsAlive(record.pid)
 			) {
 				active.push(record);
@@ -260,6 +297,7 @@ function activeCacheCommands(
 function managedEntries(root: string): Array<CacheEntry> {
 	return [
 		...CACHE_FAMILIES.flatMap((policy) => familyEntries(root, policy)),
+		...zigEntries(root),
 		...actionEntries(root),
 		...blobEntries(root),
 	];
@@ -269,6 +307,7 @@ const MANAGED_ROOTS = new Set([
 	...CACHE_FAMILIES.map((policy) => policy.path.split("/")[0]!),
 	"actions",
 	"blobs",
+	"zig",
 ]);
 
 function unmanagedBytes(root: string): number {
@@ -306,11 +345,9 @@ export function createCacheLease(
 		throw new Error("Maligator cache clear is active; retry the command shortly");
 	}
 	try {
-		mkdirSync(directory, { recursive: true });
-		writeFileSync(
+		writeFileAtomically(
 			leasePath,
 			`${JSON.stringify({ pid: process.pid, startedAt: Date.now(), command } satisfies CacheLeaseRecord)}\n`,
-			{ flag: "wx" },
 		);
 	} catch (error) {
 		const code = (error as NodeJS.ErrnoException).code;
@@ -349,6 +386,49 @@ export function createCacheLease(
 			startCacheMaintenanceIfDue(root);
 		},
 	};
+}
+
+const zigLocalLeases = new Map<string, CacheLease>();
+
+/** Reserve the shared local cache through the final compiler or linker invocation. */
+export function reserveZigLocalCache(root: string, directory: string | undefined): void {
+	if (
+		directory === undefined ||
+		path.resolve(directory) !== path.join(root, ZIG_LOCAL) ||
+		zigLocalLeases.has(root)
+	)
+		return;
+	const lease = createCacheLease(ZIG_LOCAL, root);
+	if (lease.path === undefined) {
+		throw new Error(
+			"Unable to reserve the shared Zig cache. Set ZIG_LOCAL_CACHE_DIR to a writable directory outside the Maligator cache.",
+		);
+	}
+	const lock = path.join(root, PRUNE_LOCK, ZIG_LOCAL_PRUNE);
+	try {
+		// Publish the lease first so a prune that starts after this check sees it.
+		const wait = new Int32Array(new SharedArrayBuffer(4));
+		for (;;) {
+			let owner: number;
+			try {
+				owner = Number(readFileSync(lock, "utf8"));
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") break;
+				throw error;
+			}
+			if (!Number.isInteger(owner) || owner <= 0 || !processIsAlive(owner)) break;
+			Atomics.wait(wait, 0, 0, 50);
+		}
+	} catch (error) {
+		lease.release();
+		throw error;
+	}
+	if (zigLocalLeases.size === 0) {
+		process.once("exit", () => {
+			for (const active of zigLocalLeases.values()) active.release();
+		});
+	}
+	zigLocalLeases.set(root, lease);
 }
 
 function acquirePruneLock(root: string): string {
@@ -433,15 +513,18 @@ function pruneLocked(
 	const emergency = before.totalBytes > maxBytes * 2;
 	const removed: Array<CacheEntry> = [];
 	const removedPaths = new Set<string>();
+	const recordRemoval = (candidate: CacheEntry): void => {
+		removedPaths.add(candidate.path);
+		removed.push(candidate);
+		projectedBytes -= candidate.bytes;
+	};
 	// Commands keep running while maintenance does, so a candidate that a command used
 	// after the scan stays; any read that still races a removal sees an ordinary miss.
 	const remove = (candidate: CacheEntry): boolean => {
 		if (removedPaths.has(candidate.path)) return false;
 		if (!dryRun && nowMs - lastUsedMs(candidate.path) < protectMs) return false;
-		removedPaths.add(candidate.path);
-		removed.push(candidate);
-		projectedBytes -= candidate.bytes;
 		if (!dryRun) rmSync(candidate.path, { recursive: true, force: true });
+		recordRemoval(candidate);
 		return true;
 	};
 	const eligible = (candidate: CacheEntry) => {
@@ -513,6 +596,53 @@ function pruneLocked(
 			),
 			policy.keep,
 		);
+	}
+
+	const zigOutputs = path.join(root, ZIG_LOCAL, "o");
+	const zigCandidates = ordinary
+		.filter((item) => path.dirname(item.path) === zigOutputs && eligible(item))
+		.sort((left, right) => left.lastUsedMs - right.lastUsedMs);
+	if (projectedBytes > maxBytes && zigCandidates.length > 0) {
+		const lock = path.join(root, PRUNE_LOCK, ZIG_LOCAL_PRUNE);
+		const trash = path.join(root, PRUNE_LOCK, "zig-local-trash");
+		if (!dryRun) writeFileAtomically(lock, String(process.pid));
+		try {
+			if (
+				!activeCacheCommands(root, false).some((lease) => lease.command === ZIG_LOCAL)
+			) {
+				// Zig can report a cache hit even when the output is missing. Its
+				// private manifest format varies by version, so detach the manifest
+				// store before evicting outputs. Delete the detached data after Zig
+				// can open the cache again.
+				const manifestPath = path.join(root, ZIG_LOCAL, "h");
+				let first = true;
+				for (const candidate of zigCandidates) {
+					if (!dryRun) {
+						const { lastUsedMs } = zigOutputEntry(candidate.path);
+						if (lastUsedMs === 0 || nowMs - lastUsedMs < protectMs) continue;
+					}
+					if (first) {
+						if (!dryRun) {
+							mkdirSync(path.join(trash, "o"), { recursive: true });
+							if (existsSync(manifestPath))
+								renameSync(manifestPath, path.join(trash, "h"));
+						}
+						const manifests = ordinary.find((item) => item.path === manifestPath);
+						if (manifests !== undefined) recordRemoval(manifests);
+						first = false;
+					}
+					if (!dryRun)
+						renameSync(
+							candidate.path,
+							path.join(trash, "o", path.basename(candidate.path)),
+						);
+					recordRemoval(candidate);
+					if (projectedBytes <= maxBytes) break;
+				}
+			}
+		} finally {
+			if (!dryRun) rmSync(lock, { force: true });
+		}
 	}
 
 	const actionFamilies = new Set(actions.map((candidate) => candidate.family));
@@ -593,7 +723,7 @@ export function pruneMaligatorCache(options: CachePruneOptions = {}): CachePrune
 	const dryRun = options.dryRun ?? false;
 	const lockPath = acquirePruneLock(root);
 	try {
-		activeCacheCommands(root, true);
+		if (!dryRun) activeCacheCommands(root, true);
 		let result: CachePruneResult | undefined;
 		const prune = () => {
 			const before = inspectMaligatorCache(root);

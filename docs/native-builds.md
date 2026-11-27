@@ -226,6 +226,8 @@ Maligator keeps reusable inputs separate from project outputs:
 <user-cache>/maligator/v1/thinlto/       the linker's ThinLTO code generation cache
 <user-cache>/maligator/v1/toolchains/    tool identity and capability probes
 <user-cache>/maligator/v1/work/          disposable compiler/Cargo scratch
+<user-cache>/maligator/v1/zig/local/     Zig cross-build objects and manifests
+<user-cache>/maligator/v1/zig/global/    Zig's shared runtime and libraries
 <project>/.cache/mal-build/development/  generated C and development executables
 <project>/.cache/mal-build/production/   generated C and production executables
 ```
@@ -310,3 +312,9 @@ Removing `.cache/mal-build` forces project output materialization without discar
 reusable artifacts. `maligator cache status` and `maligator cache prune --dry-run`
 inspect the user cache; `maligator cache clear --all` is an intentional full reset.
 Normal identity changes invalidate affected actions automatically.
+
+Cross builds lease the shared Zig local cache while using it. Pruning evicts
+the oldest eligible entries in `zig/local/o` first and invalidates the local
+manifests together, since Zig can otherwise treat a missing object as a cache
+hit. Zig regenerates the manifests during subsequent builds. The global cache
+keeps the libraries that cross targets reuse.

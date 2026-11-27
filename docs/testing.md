@@ -786,8 +786,9 @@ Maintenance runs beside other commands, including long-running `dev` and `run`
 processes in other projects. It never removes an entry used in the last hour (ten
 minutes on a nearly full volume) or scratch that belongs to a running process, and a
 read that races a removal sees an ordinary cache miss. Scratch left behind by a
-finished process is removed regardless of the budget. The linker's ThinLTO cache is a
-managed family like the others.
+finished process is removed regardless of the budget. The linker's ThinLTO cache
+and [Zig's local cross-build cache](native-builds.md#cache-layout) are managed
+families. Zig's local outputs are eligible when no cross build holds their lease.
 
 Inspect usage, the budget and the last maintenance with `maligator cache status`;
 preview or apply reclamation with `maligator cache prune --dry-run` and

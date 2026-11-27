@@ -178,6 +178,67 @@ describe("Maligator cache management", () => {
 		expect(existsSync(recent)).toBe(true);
 	});
 
+	it("evicts old Zig local outputs and invalidates their manifests", () => {
+		const root = cacheRoot();
+		try {
+			const oldest = artifact(root, "zig/local/o", "oldest", 500, 10);
+			const newer = artifact(root, "zig/local/o", "newer", 500, 9);
+			const recent = artifact(root, "zig/local/o", "recent", 500, 0);
+			const manifests = artifact(root, "zig/local", "h", 100, 0);
+			const global = artifact(root, "zig/global/o", "library", 100, 20);
+
+			const result = pruneMaligatorCache({
+				cacheRoot: root,
+				maxBytes: 1200,
+				minAgeMs: DAY,
+				nowMs: pruneNowMs,
+			});
+
+			expect(result.removedBytes).toBe(600);
+			expect(existsSync(oldest)).toBe(false);
+			expect(existsSync(manifests)).toBe(false);
+			for (const directory of [newer, recent, global])
+				expect(existsSync(directory)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps Zig local outputs and manifests while a build holds their lease", () => {
+		const root = cacheRoot();
+		const old = artifact(root, "zig/local/o", "old", 500, 10);
+		const manifests = artifact(root, "zig/local", "h", 100, 10);
+		const lease = createCacheLease("zig/local", root);
+		try {
+			if (lease.path === undefined) throw new Error("expected cache lease path");
+			const stale = new Date(Date.now() - 11 * 60 * 1000);
+			utimesSync(lease.path, stale, stale);
+			pruneMaligatorCache({ cacheRoot: root, maxBytes: 1, nowMs: pruneNowMs });
+			expect(existsSync(old)).toBe(true);
+			expect(existsSync(manifests)).toBe(true);
+		} finally {
+			lease.release();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("protects recently read Zig objects in otherwise stale output directories", () => {
+		const root = cacheRoot();
+		try {
+			const old = artifact(root, "zig/local/o", "old", 500, 10);
+			const used = artifact(root, "zig/local/o", "used", 500, 10);
+			const recent = new Date(pruneNowMs - 10 * 60 * 1000);
+			utimesSync(path.join(used, "artifact"), recent, new Date(pruneNowMs - 10 * DAY));
+
+			pruneMaligatorCache({ cacheRoot: root, maxBytes: 1, nowMs: pruneNowMs });
+
+			expect(existsSync(old)).toBe(false);
+			expect(existsSync(used)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("lets a volume with room to spare hold more before pruning", () => {
 		expect(cacheBudget(500 * GIB, {})).toEqual({
 			maxBytes: 100 * GIB,
