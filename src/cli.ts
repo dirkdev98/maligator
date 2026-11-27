@@ -678,6 +678,7 @@ function parseBuild(args: Array<string>): CliCommand {
 			compiled: true,
 			dumpCore: false,
 		},
+		entry: undefined,
 	};
 
 	for (let index = 1; index < args.length; index++) {
@@ -717,6 +718,7 @@ function parseBuild(args: Array<string>): CliCommand {
 function parseRun(args: Array<string>, kind: "run" | "dev"): CliCommand {
 	const command: RunCommand | DevCommand = {
 		kind,
+		entry: undefined,
 		verbose: false,
 		profile: false,
 		programArgs: [],

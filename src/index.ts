@@ -24,6 +24,9 @@ const context: CommandContext = {
 	developmentProcesses: nodeDevelopmentProcessHost,
 	developmentWatcher: nodeDevelopmentWatchHost,
 	dependencyWorker,
+	compiler: undefined,
+	rootCompiler: undefined,
+	availableCompileConcurrency: undefined,
 };
 
 if (process.argv[2] === "build") {

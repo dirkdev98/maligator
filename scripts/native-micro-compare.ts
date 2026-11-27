@@ -597,6 +597,8 @@ async function compare(options: Options): Promise<void> {
 				builds: {},
 				samples: [],
 				pairs: [],
+				perfSamples: undefined,
+				perfError: undefined,
 			};
 			cases.push(entry);
 			save();

@@ -71,6 +71,8 @@ Unit commands run once by default; pass `-- --watch` for a watch loop.
 - `src/platform/catalog.ts` and `src/public-api.d.ts`: public modules, build
   configuration, and globals. The website reference is generated from them.
 - `runtime`: the C runtime and its Rust crate.
+- `packages`: packages that can be published on their own, such as the Oxlint plugin
+  in `packages/lint-rules`. Each keeps its tests in its own `tests` directory.
 - `tests`: unit and native integration coverage.
 - `website`: the site at [maligator.ddv.tools](https://maligator.ddv.tools) and its
   documentation sources.

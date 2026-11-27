@@ -1218,6 +1218,7 @@ export async function test262RunBatch(
 
 	const manifest: BatchManifest = {
 		schemaVersion: 3,
+		sharedObjectKey: undefined,
 		hasBinary: entries.length > 0,
 		generatedCBytes: null,
 		entries: entries.map((entry) => ({

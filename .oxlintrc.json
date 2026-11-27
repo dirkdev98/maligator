@@ -1,6 +1,7 @@
 {
 	"$schema": "./node_modules/oxlint/configuration_schema.json",
 	"plugins": ["eslint", "typescript", "import", "unicorn", "jsdoc"],
+	"jsPlugins": ["./packages/lint-rules/src/index.ts"],
 	"options": {
 		"typeAware": true,
 		"reportUnusedDisableDirectives": "error"
@@ -10,6 +11,7 @@
 		"tests/wpt/fixtures",
 		"bench",
 		"src/testing/runtime.mjs",
+		"packages/lint-rules/tests/examples",
 		"**/package-lock.json"
 	],
 	"rules": {
@@ -249,7 +251,8 @@
 				}
 			}
 		],
-		"unicorn/prefer-node-protocol": "error"
+		"unicorn/prefer-node-protocol": "error",
+		"maligator/monomorphic-objects": "error"
 	},
 	"overrides": [
 		{
@@ -277,7 +280,7 @@
 			}
 		},
 		{
-			"files": ["vitest.config.ts"],
+			"files": ["vitest.config.ts", "packages/lint-rules/src/index.ts"],
 			"rules": {
 				"import/no-default-export": "off"
 			}

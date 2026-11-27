@@ -101,7 +101,9 @@ snapshots and reporter APIs are outside this runner's supported surface.
 | Slow milestone differential                                                        | Add or extend a focused `scripts/eval-*-check.ts` leaf command                                                                              |
 
 Pure tests belong under `tests/`, not beside `src/`; unit and native discovery are
-recursive and non-overlapping. A new native test enters the full tier by default.
+recursive and non-overlapping. A package under `packages/` keeps its tests in
+`packages/<name>/tests/` and its native tests in `packages/<name>/tests/native/`, so
+the package can be published on its own. A new native test enters the full tier by default.
 Add it to a smoke or check manifest only when its signal and runtime fit that
 tier's fixed budget. Add an unusually slow unit or subprocess integration test to
 `tests/test-suite-unit-full-only.txt`; ordinary unit tests run in smoke/check.

@@ -92,6 +92,15 @@ function parseArguments(): Test262Arguments {
 		excludeManifests: [],
 		manifests: [],
 		random: false,
+		backend: undefined,
+		corpus: undefined,
+		mode: undefined,
+		filter: undefined,
+		variant: undefined,
+		shard: undefined,
+		policy: undefined,
+		baseline: undefined,
+		fromReport: undefined,
 	};
 	const seen = new Set<string>();
 	for (let index = 2; index < process.argv.length; index++) {

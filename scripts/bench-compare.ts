@@ -780,6 +780,7 @@ export async function runBenchmarkComparison(options: ComparisonOptions): Promis
 	} = {
 		status: identity.httpGcDiagnostics ? "pending" : "not-requested",
 		results: {},
+		error: undefined,
 	};
 	let resumeAllowed = previous !== undefined;
 	const persist = (

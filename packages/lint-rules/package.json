@@ -1,0 +1,14 @@
+{
+	"name": "@maligator/lint-rules",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Oxlint rules for code that Maligator compiles well",
+	"license": "MIT",
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"peerDependencies": {
+		"oxlint": ">=1.93.0"
+	}
+}

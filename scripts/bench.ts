@@ -1987,6 +1987,16 @@ function parseOptions(args: Array<string>): Options | undefined {
 		full: false,
 		runs: 5,
 		httpSeconds: 5,
+		compareRef: undefined,
+		maxPairs: undefined,
+		budgetSeconds: undefined,
+		resumeDirectory: undefined,
+		plan: undefined,
+		jsonOut: undefined,
+		nativeCacheDirectory: undefined,
+		checkpointPath: undefined,
+		coreOptimizationAblation: undefined,
+		mode: undefined,
 		lanes: [],
 	};
 	for (let index = 0; index < args.length; index++) {

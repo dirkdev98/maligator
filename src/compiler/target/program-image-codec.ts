@@ -1691,14 +1691,13 @@ export function readRuntimeImage(
 		const column = r.i32();
 		const inlinedFunctionIndex = r.i32();
 		const callerPosId = r.i32();
-		const pos: RuntimeImage["sourcePositions"][number] = { line, column };
-		if (inlinedFunctionIndex !== -1) {
-			pos.inlinedFunctionIndex = inlinedFunctionIndex;
-		}
-		if (callerPosId !== -1) {
-			pos.callerPosId = callerPosId;
-		}
-		sourcePositions.push(pos);
+		sourcePositions.push({
+			line,
+			column,
+			inlinedFunctionIndex:
+				inlinedFunctionIndex === -1 ? undefined : inlinedFunctionIndex,
+			callerPosId: callerPosId === -1 ? undefined : callerPosId,
+		});
 	}
 	void debug;
 

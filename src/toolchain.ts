@@ -983,7 +983,16 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 			? nativeRustTarget(hostPlatform, hostArch)
 			: undefined;
 	const issues: Array<ToolchainIssue> = [];
-	const tools: Partial<ToolchainTools> = {};
+	const tools: Partial<ToolchainTools> = {
+		cc: undefined,
+		cxx: undefined,
+		ar: undefined,
+		rustup: undefined,
+		cargo: undefined,
+		rustc: undefined,
+		strip: undefined,
+		zig: undefined,
+	};
 	let crossTarget: ZigCrossTarget | undefined;
 	if (options.target !== undefined) {
 		try {
@@ -999,15 +1008,17 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 	}
 	const platform = crossTarget?.platform ?? hostPlatform;
 	const arch = crossTarget?.arch ?? hostArch;
-	const environmentOverrides: NodeJS.ProcessEnv = {};
-	if (crossTarget !== undefined) {
-		const zigCacheRoot = path.join(cacheDirectory, "zig");
-		environmentOverrides.ZIG_GLOBAL_CACHE_DIR =
-			env.ZIG_GLOBAL_CACHE_DIR ?? path.join(zigCacheRoot, "global");
-		environmentOverrides.ZIG_LOCAL_CACHE_DIR =
-			env.ZIG_LOCAL_CACHE_DIR ?? path.join(zigCacheRoot, "local");
-		env = { ...env, ...environmentOverrides };
-	}
+	const zigCacheRoot = path.join(cacheDirectory, "zig");
+	const environmentOverrides: NodeJS.ProcessEnv =
+		crossTarget === undefined
+			? {}
+			: {
+					ZIG_GLOBAL_CACHE_DIR:
+						env.ZIG_GLOBAL_CACHE_DIR ?? path.join(zigCacheRoot, "global"),
+					ZIG_LOCAL_CACHE_DIR:
+						env.ZIG_LOCAL_CACHE_DIR ?? path.join(zigCacheRoot, "local"),
+				};
+	if (crossTarget !== undefined) env = { ...env, ...environmentOverrides };
 
 	const explicitZig = env.ZIG?.trim();
 	let zig = inspectExecutable(explicitZig || "zig", searchPath, rootDir, env, [

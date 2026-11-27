@@ -97,6 +97,7 @@ export function coreInstructionFactPlans(
 			fn,
 			versions: fn.versions,
 			dataVersion: program.versions.data,
+			programFlowRevision: undefined,
 		};
 		let conditional: CoreConditionalValueKinds | undefined;
 		const conditionalKinds = () =>

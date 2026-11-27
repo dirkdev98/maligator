@@ -178,6 +178,8 @@ export function linkModules(
 		nonRegExpStringCallees: new Set(),
 		commonJsExportNames: () => [],
 		failedModules: new Map(),
+		hostProcess: undefined,
+		hostBuffer: undefined,
 	};
 
 	const graph = program.graph;

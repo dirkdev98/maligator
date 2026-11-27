@@ -119,6 +119,7 @@ function options(args: Array<string>): Options | undefined {
 		budgetSeconds: 300,
 		output: path.join(root, ".cache/bench-quick", `${Date.now()}-${process.pid}`),
 		prepareOnly: false,
+		prepared: undefined,
 		plan: false,
 	};
 	while (args.length > 0) {

@@ -313,6 +313,24 @@ function assertCompleteSelection(
 	}
 }
 
+// Packages keep their tests beside their sources so each can be published on its own;
+// `packages/<name>/tests/native/` holds their native tests.
+const packageTestDirectories = readdirSync(path.join(root, "packages"), {
+	withFileTypes: true,
+})
+	.filter(
+		(entry) =>
+			entry.isDirectory() && existsSync(path.join(root, "packages", entry.name, "tests")),
+	)
+	.map((entry) => `packages/${entry.name}/tests`);
+
+function isNativeTest(file: string): boolean {
+	return (
+		file.startsWith("tests/native/") ||
+		packageTestDirectories.some((directory) => file.startsWith(`${directory}/native/`))
+	);
+}
+
 function listFilesRecursively(
 	directory: string,
 	include: (file: string) => boolean,
@@ -503,13 +521,17 @@ const curatedWpt = JSON.parse(
 const curatedWptPaths = curatedWpt.tests.map((entry) => entry.path);
 assertCompleteSelection("WPT smoke/check", curatedWptPaths, [...wptSmoke, ...wptCheck]);
 
-const allUnit = listFilesRecursively(
-	"tests",
-	(file) =>
-		file.endsWith(".test.ts") &&
-		!file.startsWith("tests/fixtures/") &&
-		!file.startsWith("tests/native/"),
-).sort();
+const allUnit = ["tests", ...packageTestDirectories]
+	.flatMap((directory) =>
+		listFilesRecursively(
+			directory,
+			(file) =>
+				file.endsWith(".test.ts") &&
+				!file.startsWith("tests/fixtures/") &&
+				!isNativeTest(file),
+		),
+	)
+	.sort();
 for (const entry of fullOnlyUnit) {
 	if (!allUnit.includes(entry)) throw new Error(`unknown full-only unit test: ${entry}`);
 }
@@ -522,9 +544,15 @@ for (const entry of unitSmoke) {
 const unitSmokeSet = new Set(unitSmoke);
 const unitCheck = regularUnit.filter((entry) => !unitSmokeSet.has(entry));
 assertCompleteSelection("unit smoke/check", regularUnit, [...unitSmoke, ...unitCheck]);
-const allNative = listFilesRecursively("tests/native", (file) =>
-	file.endsWith(".test.ts"),
-).sort();
+const allNative = [
+	"tests/native",
+	...packageTestDirectories.map((directory) => `${directory}/native`),
+]
+	.filter((directory) => existsSync(path.join(root, directory)))
+	.flatMap((directory) =>
+		listFilesRecursively(directory, (file) => file.endsWith(".test.ts")),
+	)
+	.sort();
 const leakNative = "tests/native/leak.test.ts";
 const reservedNative = new Set([...nativeSmoke, ...nativeCheck, leakNative]);
 for (const entry of reservedNative) {
@@ -790,9 +818,7 @@ function shardCommands(commands: Array<Command>, request: ShardRequest): Array<C
 		return files.map((file) => ({
 			id: `${stage}:${file}`,
 			seconds: durations.files.get(file) ?? fallbackSeconds,
-			preparations: file.startsWith("tests/native/")
-				? nativePreparations(root, file)
-				: [],
+			preparations: isNativeTest(file) ? nativePreparations(root, file) : [],
 		}));
 	});
 	const selected = new Set(

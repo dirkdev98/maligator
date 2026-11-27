@@ -191,6 +191,8 @@ export function serializeRootFailure(
 		message: value.message,
 		stack: value.stack,
 		properties,
+		cause: undefined,
+		errors: undefined,
 	};
 	seen.set(value, failure);
 	if (Object.hasOwn(value, "cause"))

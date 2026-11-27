@@ -2686,6 +2686,8 @@ function compileFileInit(program: CoreFrontendContext, initFile: SemanticFile) {
 		nextCoreVariable: program.evalDirect ? 1 : 0,
 		nextLocalIndex: 0,
 		nextCapturedIndex: 0,
+		completionRegister: undefined,
+		moduleInstantiated: undefined,
 	};
 
 	registerCoreFunction(program, fn);
@@ -3284,20 +3286,16 @@ function prepareDirectEvalClassContext(
 			bindings.push({ key: directEvalPrivateScopeKey(index, slot), binding });
 			return binding;
 		};
-		const entry: SemanticPrivateName = {
-			static: (inheritedName.flags & DIRECT_EVAL_PRIVATE_STATIC) !== 0,
+		const flags = inheritedName.flags;
+		privateNames.set(inheritedName.name, {
+			static: (flags & DIRECT_EVAL_PRIVATE_STATIC) !== 0,
 			brandBinding: makeBinding("brand"),
-		};
-		if (inheritedName.flags & DIRECT_EVAL_PRIVATE_FIELD)
-			entry.fieldBinding = makeBinding("field");
-		if (inheritedName.flags & DIRECT_EVAL_PRIVATE_METHOD) {
-			entry.methodBinding = makeBinding("method");
-		}
-		if (inheritedName.flags & DIRECT_EVAL_PRIVATE_GETTER)
-			entry.getBinding = makeBinding("get");
-		if (inheritedName.flags & DIRECT_EVAL_PRIVATE_SETTER)
-			entry.setBinding = makeBinding("set");
-		privateNames.set(inheritedName.name, entry);
+			fieldBinding: flags & DIRECT_EVAL_PRIVATE_FIELD ? makeBinding("field") : undefined,
+			methodBinding:
+				flags & DIRECT_EVAL_PRIVATE_METHOD ? makeBinding("method") : undefined,
+			getBinding: flags & DIRECT_EVAL_PRIVATE_GETTER ? makeBinding("get") : undefined,
+			setBinding: flags & DIRECT_EVAL_PRIVATE_SETTER ? makeBinding("set") : undefined,
+		});
 	}
 
 	if (homeObjectBinding || superBinding || privateNames.size > 0) {
@@ -5342,7 +5340,14 @@ function compileClassBody(
 
 		let entry = ownNames.get(name);
 		if (!entry) {
-			entry = { static: isStatic, brandBinding };
+			entry = {
+				static: isStatic,
+				brandBinding,
+				fieldBinding: undefined,
+				methodBinding: undefined,
+				getBinding: undefined,
+				setBinding: undefined,
+			};
 			ownNames.set(name, entry);
 		}
 

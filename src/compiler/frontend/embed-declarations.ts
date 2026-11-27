@@ -447,11 +447,13 @@ function literalOptions(
 		} else if (name === "dot") {
 			if (value.type !== "Literal" || typeof value.value !== "boolean")
 				fail(value, `${kind} option 'dot' must be a boolean literal`);
+			// oxlint-disable-next-line maligator/monomorphic-objects -- Callers spread these options, so an absent option must stay absent.
 			if (value.value === true) options.dot = true;
 		} else if (name === "build" || name === "watch") {
 			options[name] = producerOptions(value, `${kind} option '${name}'`, name, fail);
 		} else {
 			useNode = value;
+			// oxlint-disable-next-line maligator/monomorphic-objects -- Callers spread these options, so an absent option must stay absent.
 			options.use = useOptions(value, kind, fail);
 		}
 	}

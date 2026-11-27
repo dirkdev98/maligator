@@ -1767,15 +1767,11 @@ function extractBindingsAndRegister(
 
 		const binding: Binding = {
 			kind,
-
 			name,
 			declarationNode: node,
 			usageNodes: [],
+			immutableSelfReference,
 		};
-
-		if (immutableSelfReference) {
-			binding.immutableSelfReference = true;
-		}
 
 		const immutableSelfIndex = bindingScope.bindings.findIndex(
 			(candidate) =>

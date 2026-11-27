@@ -73,7 +73,12 @@ function parseOptions(args: Array<string>): Options | undefined {
 		console.log(HELP);
 		return undefined;
 	}
-	const options: Options = { runs: 5, httpSeconds: 3, thresholdPercent: 3 };
+	const options: Options = {
+		runs: 5,
+		httpSeconds: 3,
+		thresholdPercent: 3,
+		jsonOut: undefined,
+	};
 	for (let index = 0; index < args.length; index++) {
 		const option = args[index];
 		if (option === "--runs") {

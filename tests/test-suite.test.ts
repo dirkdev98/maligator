@@ -42,7 +42,7 @@ function simulateSuiteStages(
 ) {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "maligator-smoke-budget-"));
 	try {
-		for (const entry of ["scripts", "tests", "package-lock.json"]) {
+		for (const entry of ["scripts", "tests", "packages", "package-lock.json"]) {
 			symlinkSync(path.join(root, entry), path.join(directory, entry));
 		}
 		mkdirSync(path.join(directory, "src", "test262"), { recursive: true });
@@ -391,7 +391,9 @@ describe("test suite planner", () => {
 				plan,
 				files: plan.stages.flatMap((stage) =>
 					stage.kind === "native"
-						? (stage.invocation.match(/tests\/native\/[^\s]+\.test\.ts/g) ?? [])
+						? (stage.invocation.match(
+								/(?:packages\/[^\s/]+\/)?tests\/native\/[^\s]+\.test\.ts/g,
+							) ?? [])
 						: [],
 				),
 			};
@@ -407,12 +409,19 @@ describe("test suite planner", () => {
 		const selected = [...check, ...remaining.files];
 		expect(new Set(selected).size).toBe(selected.length);
 		expect(selected.sort()).toEqual(full.sort());
-		const allNative = readdirSync(path.join(root, "tests/native"), {
-			recursive: true,
-			encoding: "utf8",
-		})
-			.filter((file) => file.endsWith(".test.ts") && file !== "leak.test.ts")
-			.map((file) => `tests/native/${file}`);
+		const nativeDirectories = [
+			"tests/native",
+			...readdirSync(path.join(root, "packages"))
+				.map((name) => `packages/${name}/tests/native`)
+				.filter((directory) => existsSync(path.join(root, directory))),
+		];
+		const allNative = nativeDirectories
+			.flatMap((directory) =>
+				readdirSync(path.join(root, directory), { recursive: true, encoding: "utf8" })
+					.filter((file) => file.endsWith(".test.ts"))
+					.map((file) => `${directory}/${file.split(path.sep).join("/")}`),
+			)
+			.filter((file) => file !== "tests/native/leak.test.ts");
 		expect([...selected, ...leak].sort()).toEqual([...allNative, ...leak].sort());
 	});
 

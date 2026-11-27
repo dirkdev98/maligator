@@ -807,6 +807,7 @@ function prepareBuildFrontend(
 		compileMs: 0,
 		serializeMs: 0,
 		workerMs: 0,
+		workerOverlap: false,
 	};
 	const entrypoint = path.resolve(options.entrypoint);
 	const root = cacheRoot(options.cacheDirectory);

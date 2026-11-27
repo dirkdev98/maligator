@@ -128,6 +128,13 @@ static generated-code size and helper counts do not establish runtime cost.
       changed downstream scalar/effect decisions and runtime savings that repay
       Node/native analysis and generated-C cost.
 
+- [ ] Keep keys that straight-line code adds after an object literal in the literal's
+      allocation layout. Provenance marks any access to a key outside the literal
+      as an escape, which drops the object's exact-slot and scalar-replacement proofs,
+      and the object then grows one shape transition at a time.
+      `maligator/monomorphic-objects` leaves this case to the compiler and only reports
+      keys added on some paths.
+
 ## Interpreted development images
 
 `run`, `test` and `dev` interpret development images, so interpreter dispatch and

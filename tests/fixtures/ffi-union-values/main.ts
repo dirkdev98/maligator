@@ -64,7 +64,7 @@ function closed(read: () => unknown): void {
 	}
 	throw new Error("A callback resource escaped its loan");
 }
-const saved: { resource?: c.Resource } = {};
+const saved: { resource?: c.Resource } = { resource: undefined };
 function take(resource: c.Resource, expected: number): void {
 	check(resource.value, expected);
 	check(c.resource_read(resource), expected);

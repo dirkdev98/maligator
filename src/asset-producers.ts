@@ -122,10 +122,12 @@ export class WatchProducers {
 				resolve(signal === null ? `exit code ${code}` : signal),
 			);
 		});
-		const watcher: RunningWatcher = { child, exited };
 		const url = task.producer.url;
-		if (url !== undefined) watcher.ready = this.#awaitUrl(task.producer, url, exited);
-		return watcher;
+		return {
+			child,
+			exited,
+			ready: url === undefined ? undefined : this.#awaitUrl(task.producer, url, exited),
+		};
 	}
 
 	async #awaitUrl(producer: EmbedProducer, url: string, exited: Promise<string>) {

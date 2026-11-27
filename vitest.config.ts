@@ -81,10 +81,13 @@ export default defineConfig({
 			{
 				test: {
 					name: "unit",
-					include: runningFullOnlyUnitTests ? fullOnlyUnitTests : ["tests/**/*.test.ts"],
+					include: runningFullOnlyUnitTests
+						? fullOnlyUnitTests
+						: ["tests/**/*.test.ts", "packages/*/tests/**/*.test.ts"],
 					exclude: [
 						"tests/native/**",
 						"tests/fixtures/**",
+						"packages/*/tests/native/**",
 						...(runningFullOnlyUnitTests ? [] : fullOnlyUnitTests),
 					],
 					pool: "threads",
@@ -104,7 +107,7 @@ export default defineConfig({
 			{
 				test: {
 					name: "native",
-					include: ["tests/native/**/*.test.ts"],
+					include: ["tests/native/**/*.test.ts", "packages/*/tests/native/**/*.test.ts"],
 					globalSetup: ["tests/native/setup.ts"],
 					setupFiles: ["tests/setup-workers.ts", "tests/native/scratch.ts"],
 					pool: "forks",
