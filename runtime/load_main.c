@@ -1,5 +1,6 @@
 #include "vm.h"
 #include "builtin_error.h"
+#include "runtime/personality.h"
 #include "language_components.h"
 #include "perf_stats.h"
 #include "vm_load.h"
@@ -46,10 +47,18 @@ static u8 *read_file(const char *path, usize *len_out) {
 }
 
 static MalHostInstaller resolve_installer(const char *name, usize length) {
-    // Error hooks are selected during intrinsic initialization without host state.
-    static const char node_error_hooks[] = "mal_host_install_node_error_hooks";
-    if (length == sizeof(node_error_hooks) - 1 && memcmp(name, node_error_hooks, length) == 0) {
-        return mal_host_install_node_error_hooks;
+    // Error and console hooks only select formatting tables, so they need no host state.
+    static const struct {
+        const char *name;
+        MalHostInstaller installer;
+    } hooks[] = {
+        {"mal_host_install_node_error_hooks", mal_host_install_node_error_hooks},
+        {"mal_host_install_node_console_hooks", mal_host_install_node_console_hooks},
+    };
+    for (usize i = 0; i < sizeof hooks / sizeof hooks[0]; i++) {
+        if (strlen(hooks[i].name) == length && memcmp(name, hooks[i].name, length) == 0) {
+            return hooks[i].installer;
+        }
     }
     return mal_language_component_resolve_installer(name, length);
 }
