@@ -147,10 +147,13 @@ static generated-code size and helper counts do not establish runtime cost.
       so script methods with those names, such as in qs, fail the guess on every call
       and box their results: about 17 calls per Express request.
 
-- [ ] Recognize built-ins read through an alias, such as `var isArray = Array.isArray`.
-      Built-in call lowering needs `X.name(` on the call itself, and cell proofs cover
-      `const` bindings only, although built-ins are locked and every write to the slot
-      is visible.
+- [ ] Recognize built-ins read through an alias, such as `var isArray = Array.isArray`,
+      once a workload calls them in a hot path. A static cell proof that requires an
+      initialized read and the same built-in at every visible write lets the existing
+      lowering handle direct calls and `.call` receivers, but Express calls aliased
+      built-ins only about 2 times per request (`Array.isArray` 1.6,
+      `hasOwnProperty` 0.4), `src` has none, and the change showed no measurable win
+      while growing the native self-compiler's `__TEXT` by 48 KiB.
 
 - [ ] Test bounded method target sets for one repeated Core-store receiver using existing
       provenance, target caps and incremental summaries. Track relevant property/prototype
