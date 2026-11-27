@@ -75,6 +75,7 @@ describe("compileEntrypoint build policy", () => {
 				for (let index = 0; index < 10; index++) total += scale * index;
 				return String(left) + String(right) + total;
 			}
+			module.exports = format;
 			console.log(format({}, {}, 3));
 		`);
 		const options = { buildConfig: resolveBuildConfig({}) };

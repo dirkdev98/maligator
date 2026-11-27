@@ -63,19 +63,29 @@ describe("Object enumeration snapshot storage", () => {
 		},
 	);
 	it.each(["keys", "values", "entries"] as const)(
-		"declines %s snapshots whose aliases or producer reach exception boundaries",
+		"declines %s snapshots with a protected producer or an array used across exception boundaries",
 		(kind) => {
 			for (const body of [
 				`try{const result=Object.${kind}(record);return result.length;}catch(error){return error;}`,
 				`const result=Object.${kind}(record);try{hook();}catch(error){return result[0];}return result.length;`,
 				`const result=Object.${kind}(record);try{hook();}finally{hook(result[0]);}return result.length;`,
-				`const result=Object.${kind}(record);const size=result.length;try{hook();}catch(error){}return size;`,
 				`let previous;for(let i=0;i<3;i++){try{hook();}catch(error){}const result=Object.${kind}(record);if(previous)hook(previous[0]);previous=result;}return previous.length;`,
 				`let result=Object.${kind}(record);try{hook();}catch(error){result=[];}return result[0];`,
 			])
 				expect(inspect(compile(body)).storage!.objectEnumerationSnapshots, body).toEqual(
 					[],
 				);
+		},
+	);
+	it.each(["keys", "values", "entries"] as const)(
+		"admits %s counts whose array is dead before a later exception boundary",
+		(kind) => {
+			const image = compile(
+				`const result=Object.${kind}(record);const size=result.length;try{hook();}catch(error){}return size;`,
+			);
+			expect(inspect(image).storage!.objectEnumerationSnapshots).toContainEqual(
+				expect.objectContaining({ kind, elementIps: [] }),
+			);
 		},
 	);
 	it("revalidates transported snapshot lifetimes against changed exception edges", () => {

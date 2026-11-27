@@ -152,10 +152,12 @@ export function selectNativeObjectEnumerationSnapshots(
 		return plans;
 	const named = (index: number, name: string): boolean =>
 		stringConstantEquals(strings[index], name);
+	const maximumPlans = 8;
+	const countsBeforeHandlers: Array<NativeObjectEnumerationSnapshotPlan> = [];
 	let candidates = 0;
 	for (const ip of body.callIps) {
 		const call = fn.instructions[ip]!;
-		if (plans.length === 8) break;
+		if (plans.length === maximumPlans) break;
 		if (
 			(call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN") ||
 			call.arguments.length === 0 ||
@@ -229,20 +231,27 @@ export function selectNativeObjectEnumerationSnapshots(
 		const lengthIps: Array<number> = [],
 			elementIps: Array<number> = [];
 		let safe = true;
+		let reachesExceptionBoundary = false;
+		let hasOtherReads = false;
 		for (const [consumerIp, aliases] of flow) {
-			if (
+			const atExceptionBoundary =
 				aliases.may.size > 0 &&
 				(body.handlerTargets[consumerIp] !== undefined ||
-					body.handlerEntries.has(consumerIp))
-			) {
-				safe = false;
-				break;
-			}
-			if (consumerIp === ip) continue;
+					body.handlerEntries.has(consumerIp));
+			reachesExceptionBoundary ||= atExceptionBoundary;
 			const op = fn.instructions[consumerIp]!;
 			const reads = body.reads[consumerIp]!.filter((r) => aliases.may.has(r));
-			if (!reads.length || op.opcode === "MOVE" || op.opcode === "THROW_IF_TDZ") continue;
-			if (reads.length !== 1 || !aliases.must.has(reads[0]!) || unavailable(consumerIp)) {
+			if (reads.length === 0) continue;
+			if (consumerIp === ip || op.opcode === "MOVE" || op.opcode === "THROW_IF_TDZ") {
+				hasOtherReads = true;
+				continue;
+			}
+			if (
+				atExceptionBoundary ||
+				reads.length !== 1 ||
+				!aliases.must.has(reads[0]!) ||
+				unavailable(consumerIp)
+			) {
 				safe = false;
 				break;
 			}
@@ -261,6 +270,13 @@ export function selectNativeObjectEnumerationSnapshots(
 			consumers.set(consumerIp, reads);
 		}
 		if (!safe || !consumers.size || consumers.size > 16) continue;
+		// The placeholder may remain in its register at a later handler. An immediate,
+		// sole length read has consumed it before then, with no alias read on any edge.
+		if (
+			reachesExceptionBoundary &&
+			(hasOtherReads || consumers.size !== 1 || lengthIps[0] !== ip + 1)
+		)
+			continue;
 		try {
 			validateNativeVirtualValue(
 				fn.instructions,
@@ -287,7 +303,7 @@ export function selectNativeObjectEnumerationSnapshots(
 			kind === "entries" && elementIps.length === 1
 				? entryProjection(native, body, ip, elementIps[0]!, strings, unavailable)
 				: undefined;
-		plans.push({
+		(reachesExceptionBoundary ? countsBeforeHandlers : plans).push({
 			callIp: ip,
 			kind,
 			lengthIps,
@@ -301,6 +317,11 @@ export function selectNativeObjectEnumerationSnapshots(
 			borrowedRegisters: [],
 			fallback: "original-instructions",
 		});
+	}
+	// Previously eligible regions retain first claim on the per-function budget.
+	if (countsBeforeHandlers.length > 0) {
+		plans.push(...countsBeforeHandlers.slice(0, maximumPlans - plans.length));
+		plans.sort((left, right) => left.callIp - right.callIp);
 	}
 	return plans;
 }
