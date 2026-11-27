@@ -360,10 +360,11 @@ object. Retained loop experiments preserve effects, authoritative state and fall
       where necessary. Keep remarks consistent with emission and distinguish static
       opportunities from executed or sampled counts.
 
-- [ ] Count a property-load fallback in the compiler profile only after the shared
-      load helper's getter probe misses. The counter increments before that helper,
-      so the census reported getter-cache hits on `debug.enabled` and `app.router` as
-      misses on every execution, which overstated the Express accessor cost.
+- [ ] Keep loop regions in `--profile=compiler` builds, or mark the census where they
+      are off. The compiler-mode profile build plans no typed string loop regions, so
+      its census reported 75 per-character reads and no region entries per Express
+      request for header scanners that the production build already runs as typed
+      loops, and pointed at the wrong fix.
 
 ## Compiler acceptance policy
 

@@ -67,17 +67,28 @@ typedef struct MalStringUnitSpan {
     u32 length;
 } MalStringUnitSpan;
 
-/** The code units of a string a loop region reads; ropes decline. */
+/**
+ * A short rope, such as a header value assembled from a few parts, is flattened
+ * in place when a loop region enters: the copy costs about as much as a few reads
+ * through its leaves. A longer rope declines to the original loop, whose leaf cache
+ * reads one that repeated appends keep extending without recopying it per entry.
+ */
+#define MAL_STRING_UNIT_SPAN_FLATTEN_CODE_UNITS 256u
+
+/** Rope tail of `mal_string_unit_span`. Allocates but cannot collect. */
+bool mal_string_unit_span_rope(MalString *string, MalStringUnitSpan *span);
+
+/** The code units of a string a loop region reads, flattening a short rope. */
 static inline bool mal_string_unit_span(MalValue value, MalStringUnitSpan *span) {
     if (!mal_value_is_string(value)) return false;
-    const MalString *string = mal_value_to_string(value);
+    MalString *string = mal_value_to_string(value);
     const MalString *flat = string;
     usize offset = 0;
     if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
         flat = string->parent;
         offset = string->slice_offset;
     } else if (string->storage > MAL_STRING_STORAGE_DEPENDENT) {
-        return false;
+        return mal_string_unit_span_rope(string, span);
     }
     bool inline_units = flat->storage == MAL_STRING_STORAGE_INLINE;
     *span = (MalStringUnitSpan) {

@@ -152,10 +152,12 @@ const samples = [
 	"  ;￿",
 ];
 const sliced = "xx text/plain; charset=ascii yy".slice(3, -3);
-const rope = ["text/", "plain", "; ", "charset=", "ascii"].reduce(
-	(left, right) => left + right,
-);
-for (const sample of [...samples, sliced, rope]) {
+// A region flattens a short rope at entry and leaves a long one to the original loop.
+const concat = (...parts) => parts.reduce((left, right) => left + right);
+const rope = concat("text/", "plain", "; ", "charset=", "ascii");
+const utf16Rope = concat("été  plain text value", "; ☃=1 \u{1f600}");
+const longRope = concat("v".repeat(250), "; tail=", "w".repeat(20));
+for (const sample of [...samples, sliced, rope, utf16Rope, longRope]) {
 	const start = skipSpaces(sample, 0, sample.length);
 	lines.push(
 		[

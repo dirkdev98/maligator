@@ -1293,6 +1293,20 @@ MalCompletion mal_builtin_string_char_code_at_direct_in_bounds(
         vm, callee, this_value, args, arg_count);
 }
 
+bool mal_string_unit_span_rope(MalString *string, MalStringUnitSpan *span) {
+    if (string->storage != MAL_STRING_STORAGE_CONS ||
+        string->length > MAL_STRING_UNIT_SPAN_FLATTEN_CODE_UNITS) {
+        return false;
+    }
+    MalStringSegment segment = mal_string_flat_segment(string);
+    *span = (MalStringUnitSpan) {
+        .latin1 = segment.latin1 ? segment.latin1_units : nullptr,
+        .units = segment.latin1 ? nullptr : segment.utf16_units,
+        .length = string->length,
+    };
+    return true;
+}
+
 MalValue mal_builtin_string_char_code_at_rope_in_bounds(
     MalVm *vm, MalStringLeafReadCache *cache, MalValue this_value, usize position
 ) {
