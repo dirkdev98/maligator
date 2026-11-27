@@ -87,6 +87,7 @@ c.close_flush();
 check(lentDone, "callback close extends the loan until completion");
 
 const poisoned = c.CloseState();
+// oxlint-disable-next-line no-extend-native -- Proves the binding never reads through the prototype.
 Object.defineProperty(Array.prototype, "0", {
 	configurable: true,
 	get() {

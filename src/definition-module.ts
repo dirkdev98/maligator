@@ -351,6 +351,7 @@ export function evaluateDefinitionModule(
 	try {
 		// Direct eval gives trusted project definitions ordinary JS control flow and
 		// access to the CLI's host globals without a compile/link subprocess.
+		// oxlint-disable-next-line no-eval -- The CLI is built with runtime eval for this.
 		eval(`${output.join("")}\n//# sourceURL=${filePath}`);
 	} catch (error) {
 		const detail = (error as Error).stack ?? (error as Error).message;

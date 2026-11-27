@@ -1,0 +1,10 @@
+{
+	"jsPlugins": ["./src/index.ts"],
+	"rules": {
+		"maligator/monomorphic-objects": "error",
+		"maligator/no-delete-property": "error",
+		"no-eval": "error",
+		"no-extend-native": "error",
+		"no-new-func": "error"
+	}
+}

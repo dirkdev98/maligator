@@ -1,7 +1,7 @@
 {
 	"$schema": "./node_modules/oxlint/configuration_schema.json",
 	"plugins": ["eslint", "typescript", "import", "unicorn", "jsdoc"],
-	"jsPlugins": ["./packages/lint-rules/src/index.ts"],
+	"extends": ["./packages/lint-rules/recommended.json"],
 	"options": {
 		"typeAware": true,
 		"reportUnusedDisableDirectives": "error"
@@ -251,8 +251,7 @@
 				}
 			}
 		],
-		"unicorn/prefer-node-protocol": "error",
-		"maligator/monomorphic-objects": "error"
+		"unicorn/prefer-node-protocol": "error"
 	},
 	"overrides": [
 		{

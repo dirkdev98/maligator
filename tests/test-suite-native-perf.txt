@@ -95,4 +95,4 @@ tests/native/tiny-string-cache.test.ts
 tests/native/watched-method-rows.test.ts
 tests/native/wide-class-layout.test.ts
 tests/native/rest-forwarding.test.ts
-packages/lint-rules/tests/native/monomorphic-objects.test.ts
+packages/lint-rules/tests/native/examples.test.ts

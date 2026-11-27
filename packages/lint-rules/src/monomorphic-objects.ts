@@ -1,8 +1,7 @@
+import { accessedKey, recordBinding } from "./records.ts";
 import type { AnyNode, AstNode, Rule } from "./types.ts";
 
-type ObjectExpression = AstNode<"ObjectExpression">;
 type MemberExpression = AstNode<"MemberExpression">;
-type TypeNode = AstNode<"TSTypeAnnotation">["typeAnnotation"];
 
 const IDENTIFIER_NAME = /^[A-Za-z_$][\w$]*$/u;
 const LOGICAL_ASSIGNMENT = new Set(["&&=", "||=", "??="]);
@@ -19,94 +18,6 @@ const FUNCTION_BOUNDARIES = new Set([
 	"PropertyDefinition",
 	"StaticBlock",
 ]);
-
-function literalKey(node: AnyNode): string | undefined {
-	if (
-		node.type === "Literal" &&
-		(typeof node.value === "string" || typeof node.value === "number")
-	)
-		return String(node.value);
-	if (node.type === "TemplateLiteral" && node.expressions.length === 0)
-		return node.quasis[0]?.value.cooked ?? undefined;
-	return undefined;
-}
-
-/** The keys a literal defines, or undefined when a spread or computed key hides them. */
-function definedKeys(literal: ObjectExpression): Set<string> | undefined {
-	const keys = new Set<string>();
-	for (const property of literal.properties) {
-		if (property.type === "SpreadElement") return undefined;
-		const key =
-			!property.computed && property.key.type === "Identifier"
-				? property.key.name
-				: literalKey(property.key);
-		if (key === undefined) return undefined;
-		keys.add(key);
-	}
-	return keys;
-}
-
-function accessedKey(member: MemberExpression): string | undefined {
-	if (member.property.type === "PrivateIdentifier") return undefined;
-	return !member.computed && member.property.type === "Identifier"
-		? member.property.name
-		: literalKey(member.property);
-}
-
-const MODIFIER_TYPES = new Set(["Partial", "Readonly", "Required"]);
-
-/** Record and index-signature types announce a dictionary, whose keys vary by design. */
-function isDictionaryType(type: TypeNode): boolean {
-	switch (type.type) {
-		case "TSTypeReference": {
-			if (type.typeName.type !== "Identifier") return false;
-			if (type.typeName.name === "Record") return true;
-			const inner = type.typeArguments?.params[0];
-			return (
-				MODIFIER_TYPES.has(type.typeName.name) &&
-				inner !== undefined &&
-				isDictionaryType(inner)
-			);
-		}
-		case "TSTypeLiteral":
-			return type.members.some((member) => member.type === "TSIndexSignature");
-		case "TSMappedType":
-			return true;
-		case "TSUnionType":
-		case "TSIntersectionType":
-			return type.types.some(isDictionaryType);
-		default:
-			return false;
-	}
-}
-
-/** The object literal a declarator starts from, unless its type marks it a dictionary. */
-function recordLiteral(
-	declarator: AstNode<"VariableDeclarator">,
-): ObjectExpression | undefined {
-	if (declarator.id.type !== "Identifier") return undefined;
-	const annotation = declarator.id.typeAnnotation?.typeAnnotation;
-	if (annotation !== undefined && isDictionaryType(annotation)) return undefined;
-	let expression = declarator.init;
-	while (expression !== null) {
-		switch (expression.type) {
-			case "ObjectExpression":
-				return expression;
-			case "TSAsExpression":
-			case "TSSatisfiesExpression":
-				if (isDictionaryType(expression.typeAnnotation)) return undefined;
-				expression = expression.expression;
-				break;
-			case "TSNonNullExpression":
-			case "ParenthesizedExpression":
-				expression = expression.expression;
-				break;
-			default:
-				return undefined;
-		}
-	}
-	return undefined;
-}
 
 function isAddition(member: MemberExpression): boolean {
 	const parent = member.parent;
@@ -184,21 +95,16 @@ export const monomorphicObjects: Rule = {
 			initializeKey: "Initialize `{{key}}: undefined` in the object literal.",
 		},
 	},
-	create(context) {
+	createOnce(context) {
 		return {
 			VariableDeclarator(declarator) {
-				const literal = recordLiteral(declarator);
 				const home = declarator.parent.parent;
-				if (literal === undefined || home === null || !STATEMENT_LISTS.has(home.type))
+				const [declared] = context.sourceCode.getDeclaredVariables(declarator);
+				const record =
+					declared === undefined ? undefined : recordBinding(declarator, declared);
+				if (record === undefined || home === null || !STATEMENT_LISTS.has(home.type))
 					return;
-				const keys = definedKeys(literal);
-				const [variable] = context.sourceCode.getDeclaredVariables(declarator);
-				if (
-					keys === undefined ||
-					variable === undefined ||
-					variable.references.some((reference) => reference.isWrite() && !reference.init)
-				)
-					return;
+				const { variable, literal, keys } = record;
 				// A write after the key's first unconditional addition updates the key instead.
 				const unconditional = new Map<string, number>();
 				const conditional = new Map<string, MemberExpression>();
