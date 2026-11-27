@@ -133,11 +133,6 @@ static generated-code size and helper counts do not establish runtime cost.
       as `fn(req, res, next)`, `this.matchers[i](path)` and `next()` take runtime
       dispatch: about 18 calls per request in the in-process Express census.
 
-- [ ] Inline functions that own captured variables, or the part that runs before they
-      create closures. `capturedCount !== 0` rejects the callee, so Express's
-      `processParams` continuation is allocated on every call: the top allocation site,
-      258k allocations and 20 MiB for 30k requests.
-
 - [ ] Choose the collection guess for `get`, `set` and `has` calls from the receiver.
       When the name matches a collection method the compiler takes the first candidate,
       so script methods with those names, such as in qs, fail the guess on every call
