@@ -122,6 +122,12 @@ static generated-code size and helper counts do not establish runtime cost.
       performs. Scalar replacement only materializes at a `return`, so such a record
       is now allocated with its stores intact, and a returned field read stays boxed.
 
+- [ ] Keep the NaN-box tag thresholds in registers in dense-number loop regions. On the
+      i64-counter path, which canonical `i < array.length` loops take, clang
+      re-materializes `MAL_VALUE_STATIC - 1` and `MAL_VALUE_TAG_BASE - 1` for every
+      element's number check: 15 ARM64 instructions per element in a summing loop, where
+      the f64-counter path keeps them in registers and needs 14.
+
 - [ ] Dispatch callbacks stored in fields or passed on over the functions that reach
       them. Publishing a function makes its parameters opaque, so middleware calls such
       as `fn(req, res, next)`, `this.matchers[i](path)` and `next()` take runtime
@@ -252,13 +258,19 @@ Runtime eval may remove source closure without invalidating authority closure.
 An existing iterator cursor is not, by itself, permission to delete its language
 object. Retained loop experiments preserve effects, authoritative state and fallback.
 
-- [ ] Keep loops nested in `for...of`, `for...in` and `try` canonical. A loop with a
-      handler block or exceptional edge is not canonical, so it loses simplification,
-      induction variables, int32 counters, hoisting and the indexed-loop plan, and a
-      `for...of` body sits inside the iterator-close handler. That covers about 370
-      indexed and `while` loops nested in `for...of` bodies in `src`. Built-in Array,
-      String, Map and Set iterators are unobservable under locked primordials, so their
-      close handler can go; elsewhere, treat handler edges as loop exits.
+- [ ] Keep loops nested in `for...of`, `for...in` and `try` canonical where it pays. The
+      body of a `for...of` sits inside the iterator-close handler, so a nested loop has
+      handler edges and gets no induction or indexed-loop plan. Removing the handler is
+      sound where Core proves a fresh, private Array, String, Map or Set under locked
+      primordials, since such an iterator has no `return` to call; that cut a nested
+      summing loop from 95 to 78 retired instructions per element in a development
+      build. In production the non-canonical loop already ran a dense numeric region,
+      and canonical status gave it the indexed loop's code, one instruction per element
+      slower because of the tag-threshold item under compiled native output. A fresh private collection also
+      covered none of the loops in the JavaScript benchmarks or Express, which iterate
+      parameters and fields. Covering those needs a guarded loop copy without the
+      handler, so keep this for a workload whose nested loops gain from canonical
+      analysis beyond what the dense region gives.
 
 - [ ] Recognize induction variables that several back edges advance, as in a `while`
       loop with `continue`, and normalize reverse loops that start at `length - 1` with
