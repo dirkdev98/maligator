@@ -1218,6 +1218,9 @@ static MalValue mal_builtin_string_prototype_char_code_at(MalVm *vm, MalValue th
     return result;
 }
 
+const MalNativeFunctionCallback mal_builtin_string_char_code_at_callback =
+    mal_builtin_string_prototype_char_code_at;
+
 bool mal_builtin_string_char_code_at_try(
     MalVm *vm, MalValue callee, MalValue this_value,
     const MalValue *args, i32 arg_count,

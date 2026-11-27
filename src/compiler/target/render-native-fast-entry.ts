@@ -1478,30 +1478,43 @@ function fastInstruction(
 			return `if (!${probe}(vm, __fast_r${op.object}, &__fast_ic[${op.icIndex}], &__fast_r${op.dst})) goto __full;`;
 		}
 		case "LOAD_PROPERTY": {
-			if ((values.kind(op.object) & COMPILER_VALUE_KIND_OBJECT) === 0) return undefined;
+			const receiver = values.kind(op.object);
+			const objects = (receiver & COMPILER_VALUE_KIND_OBJECT) !== 0;
+			const strings = (receiver & COMPILER_VALUE_KIND_STRING) !== 0;
+			if (!objects && !strings) return undefined;
 			const failure = numbers(values, op.key);
 			if (failure === "true") return undefined;
 			const guard = failure === "false" ? "" : `${failure} || `;
-			const integral = values.isInt32(op.key) || integers.has(op.key);
-			const array = `MalArrayObject *const __array = mal_vm_as_array(__fast_r${op.object});`;
-			// A boxed key of unknown representation tests the int32 tag before any double.
-			if (
-				!integral &&
-				op.key >= 0 &&
-				!values.constants.has(op.key) &&
-				!values.cachedNumbers.has(op.key)
-			)
-				return `{ ${array} if (__array == nullptr || !mal_vm_array_leaf_get_value_index(__array, __fast_r${op.key}, &__fast_r${op.dst})) goto __full; }`;
-			const index = integral ? int32(values, op.key) : number(values, op.key);
-			const bound =
-				integral && (values.range(op.key)?.minimum ?? -1) < 0 ? `${index} < 0 || ` : "";
-			const probe = integral
-				? `mal_vm_array_leaf_get_proven_index(__array, (u32) ${index}, &__fast_r${op.dst})`
-				: `mal_vm_array_leaf_get_index(__array, ${index}, &__fast_r${op.dst})`;
-			return `{ ${array} if (__array == nullptr || ${guard}${bound}!${probe}) goto __full; }`;
+			// An index past the end reads String.prototype, so only an own code unit answers.
+			const character = `${guard}!mal_vm_string_try_get_index(vm, mal_value_to_string(__fast_r${op.object}), ${number(values, op.key)}, &__fast_r${op.dst})`;
+			if (!objects)
+				return compilerValueKindMaskIsSubset(receiver, COMPILER_VALUE_KIND_STRING)
+					? `if (${character}) goto __full;`
+					: `if (!mal_value_is_string(__fast_r${op.object}) || ${character}) goto __full;`;
+			return fastArrayElement(
+				op,
+				values,
+				guard,
+				integers,
+				strings
+					? `if (!mal_value_is_string(__fast_r${op.object}) || ${character}) goto __full;`
+					: "goto __full;",
+			);
 		}
-		case "BINARY":
-			return fastBinary(op, values);
+		case "BINARY": {
+			if (op.operator !== "instanceof" && op.operator !== "in")
+				return fastBinary(op, values);
+			const left = value(op.left);
+			const right = value(op.right);
+			// A primitive right operand always throws its TypeError.
+			if (
+				left === undefined ||
+				right === undefined ||
+				(values.kind(op.right) & COMPILER_VALUE_KIND_OBJECT) === 0
+			)
+				return undefined;
+			return `if (!${op.operator === "in" ? "mal_leaf_in" : "mal_leaf_instanceof"}(vm, ${left}, ${right}, &__fast_r${op.dst})) goto __full;`;
+		}
 		case "UNARY":
 			return fastUnary(op, values, ip);
 		case "MATH_UNARY_NUMBER":
@@ -1580,6 +1593,18 @@ function fastInstruction(
 				return callee === undefined || expression === undefined
 					? undefined
 					: `if (!mal_builtin_math_${kind}_callee_matches(MAL_MATH_${kind.toUpperCase()}_${operation.slice("Math.".length).toUpperCase()}, ${callee})) goto __full; ${expression}`;
+			}
+			if (
+				plan?.kind === "call" &&
+				plan.guardedBuiltinCall?.operation === "String.prototype.charCodeAt"
+			) {
+				const callee = value(op.callee);
+				const receiver = value(op.thisValue);
+				const position =
+					op.argumentCount === 0 ? "MAL_VALUE_UNDEFINED" : value(op.arguments[0]!);
+				return callee === undefined || receiver === undefined || position === undefined
+					? undefined
+					: `if (!mal_leaf_string_char_code_at(${callee}, ${receiver}, ${position}, &__fast_r${op.dst})) goto __full;`;
 			}
 			if (plan?.kind === "call" && plan.guardedBuiltinCall?.operation === "Object.is") {
 				const callee = value(op.callee);
@@ -1679,6 +1704,15 @@ function fastInstruction(
 					values,
 					value,
 				);
+			if (NUMBER_COERCIONS.has(op.operation))
+				return fastNumberCoercion(
+					op.operation,
+					op.arguments.slice(0, op.argumentCount),
+					op.dst,
+					ip,
+					values,
+					value,
+				);
 			if (op.operation !== "Object.is")
 				return fastMath(
 					op.operation,
@@ -1718,6 +1752,82 @@ function fastNumberPredicate(
 		input === undefined ? undefined : values.range(input),
 	);
 	return `__fast_r${dst} = mal_value_new_boolean(${expression});`;
+}
+
+/** An Array element read; `otherwise` answers every receiver that is not an Array. */
+function fastArrayElement(
+	op: Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY" }>,
+	values: FastNumbers,
+	guard: string,
+	integers: ReadonlySet<number>,
+	otherwise: string,
+): string {
+	const integral = values.isInt32(op.key) || integers.has(op.key);
+	const array = `MalArrayObject *const __array = mal_vm_as_array(__fast_r${op.object});`;
+	const element = (failure: string): string =>
+		otherwise === "goto __full;"
+			? `{ ${array} if (__array == nullptr || ${failure}) goto __full; }`
+			: `{ ${array} if (__array == nullptr) { ${otherwise} } else if (${failure}) goto __full; }`;
+	// A boxed key of unknown representation tests the int32 tag before any double.
+	if (
+		!integral &&
+		op.key >= 0 &&
+		!values.constants.has(op.key) &&
+		!values.cachedNumbers.has(op.key)
+	)
+		return element(
+			`!mal_vm_array_leaf_get_value_index(__array, __fast_r${op.key}, &__fast_r${op.dst})`,
+		);
+	const index = integral ? int32(values, op.key) : number(values, op.key);
+	const bound =
+		integral && (values.range(op.key)?.minimum ?? -1) < 0 ? `${index} < 0 || ` : "";
+	const probe = integral
+		? `mal_vm_array_leaf_get_proven_index(__array, (u32) ${index}, &__fast_r${op.dst})`
+		: `mal_vm_array_leaf_get_index(__array, ${index}, &__fast_r${op.dst})`;
+	return element(`${guard}${bound}!${probe}`);
+}
+
+const NUMBER_COERCIONS: ReadonlySet<string> = new Set(["isNaN", "isFinite", "Number"]);
+
+/**
+ * The global Number tests and `Number(value)` on a value ToNumber converts without
+ * calling user code or throwing; any other input restarts.
+ */
+function fastNumberCoercion(
+	operation: string,
+	args: ReadonlyArray<number>,
+	dst: number,
+	ip: number,
+	values: FastNumbers,
+	value: (operand: number) => string | undefined,
+): string | undefined {
+	const input = args[0];
+	let guard = "";
+	let numeric: string;
+	if (input === undefined) numeric = operation === "Number" ? "0.0" : '__builtin_nan("")';
+	else {
+		const boxed = value(input);
+		const kind = values.kind(input);
+		if (boxed === undefined || (kind & COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE) === 0)
+			return undefined;
+		if (compilerValueKindMaskIsSubset(kind, COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE))
+			numeric =
+				kind === COMPILER_VALUE_KIND_NUMBER && input >= 0
+					? number(values, input)
+					: nativePrimitiveNumberExpression(boxed, kind);
+		else {
+			numeric = `__number_${ip}`;
+			guard = `f64 ${numeric}; if (!mal_leaf_to_number(${boxed}, &${numeric})) goto __full; `;
+		}
+	}
+	switch (operation) {
+		case "isNaN":
+			return `${guard}__fast_r${dst} = mal_value_new_boolean(isnan(${numeric}));`;
+		case "isFinite":
+			return `${guard}__fast_r${dst} = mal_value_new_boolean(isfinite(${numeric}));`;
+		default:
+			return `${guard}${storeNumber(values, dst, numeric)}`;
+	}
 }
 
 function fastMath(

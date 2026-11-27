@@ -107,6 +107,11 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_vm_array_leaf_get_index",
 	"mal_vm_array_leaf_get_proven_index",
 	"mal_vm_array_leaf_get_value_index",
+	"mal_vm_string_try_get_index",
+	"mal_leaf_instanceof",
+	"mal_leaf_in",
+	"mal_leaf_to_number",
+	"mal_leaf_string_char_code_at",
 ]);
 
 const template = compileSemanticProgramToProgramImage(
@@ -2455,5 +2460,137 @@ it("compares a boxed Number with an int32 operand through its int32 tag first", 
 	);
 	expect(text).toContain(
 		"mal_value_is_int32(__fast_r0) ? (((i32) -8) < mal_value_to_i32(__fast_r0))",
+	);
+});
+
+describe("leaf operations that end Express fast paths", () => {
+	it.each(["instanceof", "in"] as const)(
+		"answers %s from the leaf helper and declines a primitive right operand",
+		(operator) => {
+			const lines = binaryEntry(operator, [
+				COMPILER_VALUE_KIND_TOP,
+				COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_NUMBER,
+			]);
+			expect(lines?.join("\n")).toContain(
+				`if (!${operator === "in" ? "mal_leaf_in" : "mal_leaf_instanceof"}(vm, __fast_r0, __fast_r1, &__fast_r2)) goto __full;`,
+			);
+			expect(unexpectedHelpers(lines!)).toEqual([]);
+			expect(
+				binaryEntry(operator, [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_NUMBER]),
+			).toBeUndefined();
+		},
+	);
+
+	function coercion(operation: string, kind: number) {
+		return fastEntry(
+			body([
+				{
+					opcode: "CALL_KNOWN",
+					dst: 2,
+					thisValue: -1,
+					argumentCount: 1,
+					arguments: [0],
+					operation,
+				} as unknown as BytecodeInstruction,
+				{ opcode: "RETURN", value: 2 },
+			]),
+			undefined,
+			true,
+			undefined,
+			[
+				{
+					registers: [0, 2],
+					inputOffset: 0,
+					inputKindMasks: [kind],
+					resultKindMasks: [COMPILER_VALUE_KIND_TOP],
+				},
+			],
+		);
+	}
+
+	it.each(["isNaN", "isFinite", "Number"])(
+		"converts %s's primitive argument and restarts on any other",
+		(operation) => {
+			const unknown = coercion(operation, COMPILER_VALUE_KIND_TOP);
+			expect(unknown?.join("\n")).toContain("if (!mal_leaf_to_number(__fast_r0, &");
+			expect(unexpectedHelpers(unknown!)).toEqual([]);
+			const text = coercion(operation, COMPILER_VALUE_KIND_STRING)?.join("\n");
+			expect(text).toContain("mal_ops_to_number(__fast_r0)");
+			expect(text).not.toContain("mal_leaf_to_number");
+			expect(coercion(operation, COMPILER_VALUE_KIND_OBJECT)).toBeUndefined();
+		},
+	);
+
+	it("reads a code unit through the guarded charCodeAt leaf", () => {
+		const lines = fastEntry(
+			body([
+				{ opcode: "LOAD_PROPERTY_STATIC", dst: 3, object: 0, stringIndex: 0, icIndex: 0 },
+				{
+					opcode: "CALL",
+					dst: 4,
+					callee: 3,
+					thisValue: 0,
+					argumentCount: 1,
+					arguments: [1],
+				} as unknown as BytecodeInstruction,
+				{ opcode: "RETURN", value: 4 },
+			]),
+			undefined,
+			true,
+			undefined,
+			[],
+			undefined,
+			[
+				undefined,
+				{
+					kind: "call",
+					guardedBuiltinCall: {
+						operation: "String.prototype.charCodeAt",
+						guard: {
+							dependencies: [{ kind: "epoch", family: "watched-methods" }],
+							obligations: ["fallback"],
+						},
+					},
+				},
+			],
+		);
+		expect(lines?.join("\n")).toContain(
+			"if (!mal_leaf_string_char_code_at(__fast_r3, __fast_r0, __fast_r1, &__fast_r4)) goto __full;",
+		);
+		expect(unexpectedHelpers(lines!)).toEqual([]);
+	});
+
+	it.each([
+		[COMPILER_VALUE_KIND_STRING, false, false],
+		[COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_UNDEFINED, true, false],
+		[COMPILER_VALUE_KIND_TOP, true, true],
+	])(
+		"reads an own code unit of a String receiver with kinds %i",
+		(kind, testsString, readsArrays) => {
+			const lines = fastEntry(
+				body([
+					{ opcode: "LOAD_PROPERTY", dst: 2, object: 0, key: 1, icIndex: 0 },
+					{ opcode: "RETURN", value: 2 },
+				]),
+				undefined,
+				true,
+				undefined,
+				[
+					{
+						registers: [0, 1, 2],
+						inputOffset: 0,
+						inputKindMasks: [kind, COMPILER_VALUE_KIND_NUMBER],
+						resultKindMasks: [COMPILER_VALUE_KIND_TOP],
+					},
+				],
+			);
+			const source = lines?.join("\n") ?? "";
+			expect(source).toContain(
+				"mal_vm_string_try_get_index(vm, mal_value_to_string(__fast_r0)",
+			);
+			expect(source.includes("mal_value_is_string(__fast_r0)")).toBe(testsString);
+			expect(source.includes("mal_vm_as_array(")).toBe(readsArrays);
+			expect(unexpectedHelpers(lines!)).toEqual([]);
+		},
 	);
 });

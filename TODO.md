@@ -183,18 +183,16 @@ static generated-code size and helper counts do not establish runtime cost.
       since guarded loop versioning needs a single exit. Expose the guarded field read
       and Number result to the loop consumer first; Express has no such hot loop.
 
-- [ ] Make the operations that end Express's leaf fast paths leaf code. On in-process
-      Express, 26 `_try` fast paths fail on nearly every call, and each has a real
-      exit that the workload never takes, so none can be dropped at compile time:
-      predicting branches statically saved 1% on Express but cost self-compile 49M
-      fast-path hits. The bail points are `instanceof` in `fresh` and `parseurl`
-      (about 27 attempts per request), `isNaN` on a string in `hasbody`, `charCodeAt`
-      and `str[i]` in header scanners, `in`, crypto calls and the `hasSubscribers`
-      accessor. A per-function counter that stops after 64 straight failures saves
-      1.5% instructions per request but costs JavaScript v2 0.4% for its check. Then
-      revisit admitting proven single targets past the specialization-plan budget,
-      which runs out about 260 of 2,101 opportunities into Express and keeps
-      `parseurl` and body-parser `read` on runtime dispatch.
+- [ ] Make the remaining operations that end Express's leaf fast paths leaf code: the
+      `hasSubscribers` accessor, `indexOf` and RegExp calls, and crypto calls, and
+      check whether the 64-instruction leaf limit, which `isstats` now exceeds, is set
+      right. Leaf `instanceof`, `in`, Number coercions, `charCodeAt` and `str[i]`
+      cut Express's fast-path misses from 865,644 to 297,465 per 10k requests; leaf
+      loops (capped at 128 iterations) made the header scanners succeed but cost about
+      2,400 instructions per request, so loops stay out. Then revisit admitting proven
+      single targets past the specialization-plan budget, which runs out about 260 of
+      2,101 opportunities into Express and keeps `parseurl` and body-parser `read` on
+      runtime dispatch.
 
 - [ ] Give methods stored as `F.prototype.name = function` guarded dispatch. In the
       in-process Express census, 211 calls per request stay on runtime dispatch, led by

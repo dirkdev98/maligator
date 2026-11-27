@@ -233,6 +233,7 @@ export const NATIVE_C_HEADER_LINES = [
 	'#include "builtin_uri.h"',
 	'#include "builtin_regexp.h"',
 	'#include "builtin_math.h"',
+	'#include "leaf_ops.h"',
 	// Native-C for-of lowering uses the iterator-record helpers.
 	'#include "builtin_iterator.h"',
 	// for-await lowering uses mal_vm_get_async_iterator.

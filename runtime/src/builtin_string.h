@@ -159,6 +159,9 @@ static inline __attribute__((always_inline)) MalValue mal_builtin_string_char_co
     return mal_builtin_string_char_code_at_cached_number_slow(vm, cache, this_value, position);
 }
 
+/** Identifies a callee as the unreplaced `String.prototype.charCodeAt`. */
+extern const MalNativeFunctionCallback mal_builtin_string_char_code_at_callback;
+
 // Hits cannot allocate or reenter; misses leave output untouched without coercion.
 bool mal_builtin_string_char_code_at_try(
     MalVm *vm, MalValue callee, MalValue this_value,
