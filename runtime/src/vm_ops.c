@@ -5360,57 +5360,10 @@ static MalValue mal_vm_binary_dispatch(MalVm *vm, MalBinaryOp op, MalValue left,
         case MAL_BIN_IN:
             return mal_vm_in_operator(vm, left, right);
         case MAL_BIN_INSTANCEOF: {
-            if (!mal_value_is_object(right)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Right-hand side of 'instanceof' is not an object");
-                return mal_value_new_undefined();
-            }
-
-            // Spec InstanceofOperator: a callable @@hasInstance method takes
-            // the decision (the default lives on Function.prototype).
-            MalKey has_instance_key = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_HAS_INSTANCE);
-            // %Function.prototype%'s @@hasInstance is non-writable and non-configurable,
-            // so a function inheriting straight from it without an own one uses it.
-            if ((right & MAL_VALUE_CLASS_MASK) == MAL_VALUE_CALLABLE) {
-                const MalObject *callable = mal_value_to_object(right);
-                if (mal_value_from_object(mal_object_prototype(callable)) ==
-                        vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE] &&
-                    !mal_object_get_own(callable, has_instance_key).present) {
-                    return mal_value_new_boolean(mal_vm_ordinary_has_instance(vm, right, left));
-                }
-            }
-            MalValue method;
-            if (!mal_vm_get_property(vm, right, has_instance_key, &method)) {
-                return mal_value_new_undefined();
-            }
-
-            // GetMethod: a @@hasInstance that is present (not undefined/null) but
-            // NOT callable is a TypeError — it does NOT silently fall through to
-            // OrdinaryHasInstance.
-            if (!mal_value_is_nil(method) && !mal_value_is_callable(method)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.hasInstance method is not callable");
-                return mal_value_new_undefined();
-            }
-
-            // %Function.prototype%'s @@hasInstance is non-writable and non-configurable,
-            // so reaching it decides by OrdinaryHasInstance without a call.
-            if (mal_value_is_heap_type(method, MAL_HEAP_NATIVE_FUNCTION_OBJECT) &&
-                ((const MalNativeFunctionObject *) mal_value_to_heap(method))->callback ==
-                    mal_builtin_function_prototype_has_instance) {
-                return mal_value_new_boolean(mal_vm_ordinary_has_instance(vm, right, left));
-            }
-            if (mal_value_is_callable(method)) {
-                MalCompletion completion = mal_vm_call_value(vm, method, right, &left, 1);
-                return completion.kind == MAL_COMPLETION_NORMAL
-                    ? mal_value_new_boolean(mal_value_is_truthy(completion.value))
-                    : mal_value_new_undefined();
-            }
-
-            if (!mal_value_is_callable(right)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Right-hand side of 'instanceof' is not callable");
-                return mal_value_new_undefined();
-            }
-
-            return mal_value_new_boolean(mal_vm_ordinary_has_instance(vm, right, left));
+            bool result = mal_vm_instanceof(vm, left, right);
+            return vm->completion.kind == MAL_COMPLETION_THROW
+                ? mal_value_new_undefined()
+                : mal_value_new_boolean(result);
         }
     }
 
@@ -6641,14 +6594,65 @@ bool mal_vm_delete_property(MalVm *vm, MalValue object_value, MalKey key) {
     return mal_object_delete_own(object, key);
 }
 
-bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value) {
-    // Bound functions defer to their wrapped target.
-    while (mal_value_is_bound_function_object(target)) {
-        target = mal_value_to_bound_function_object(target)->target;
+static bool mal_vm_is_default_has_instance(MalValue method) {
+    return mal_value_is_heap_type(method, MAL_HEAP_NATIVE_FUNCTION_OBJECT) &&
+        ((const MalNativeFunctionObject *) mal_value_to_heap(method))->callback ==
+            mal_builtin_function_prototype_has_instance;
+}
+
+bool mal_vm_instanceof(MalVm *vm, MalValue value, MalValue target) {
+    if (!mal_value_is_object(target)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Right-hand side of 'instanceof' is not an object");
+        return false;
     }
 
+    MalKey has_instance_key = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_HAS_INSTANCE);
+    const MalObject *function_prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    // OrdinaryHasInstance re-enters InstanceofOperator with a bound function's target,
+    // so a bind chain loops here instead of recursing.
+    while (true) {
+        // %Function.prototype%'s @@hasInstance is non-writable and non-configurable, so
+        // a callable inheriting straight from it without an own one uses it. Any other
+        // [[Prototype]], null included, takes the full GetMethod.
+        bool inherits_default = (target & MAL_VALUE_CLASS_MASK) == MAL_VALUE_CALLABLE &&
+            mal_object_prototype(mal_value_to_object(target)) == function_prototype &&
+            !mal_object_get_own(mal_value_to_object(target), has_instance_key).present;
+        if (!inherits_default) {
+            MalValue method;
+            if (!mal_vm_get_property(vm, target, has_instance_key, &method)) {
+                return false;
+            }
+            if (!mal_value_is_nil(method)) {
+                if (!mal_value_is_callable(method)) {
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.hasInstance method is not callable");
+                    return false;
+                }
+                // The intrinsic method is OrdinaryHasInstance, so reaching it through
+                // another chain decides without a call.
+                if (!mal_vm_is_default_has_instance(method)) {
+                    MalCompletion completion = mal_vm_call_value(vm, method, target, &value, 1);
+                    return completion.kind == MAL_COMPLETION_NORMAL &&
+                        mal_value_is_truthy(completion.value);
+                }
+            } else if (!mal_value_is_callable(target)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Right-hand side of 'instanceof' is not callable");
+                return false;
+            }
+        }
+        if (!mal_value_is_bound_function_object(target)) {
+            return mal_vm_ordinary_has_instance(vm, target, value);
+        }
+        target = mal_value_to_bound_function_object(target)->target;
+    }
+}
+
+bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value) {
     if (!mal_value_is_callable(target)) {
         return false;
+    }
+    if (mal_value_is_bound_function_object(target)) {
+        return mal_vm_instanceof(vm, value, mal_value_to_bound_function_object(target)->target);
     }
 
     // Non-object values answer false before the prototype read.
@@ -6684,13 +6688,17 @@ bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value) {
     // Walk value's prototype chain via [[GetPrototypeOf]] (proxy-aware): a proxy
     // link runs the getPrototypeOf trap, whose abrupt completion must propagate
     // (the caller observes vm->completion). value is already an object here.
-    MalObject *prototype = mal_value_to_object(prototype_value);
+    // A getter or Proxy may have returned the only reference to the prototype, and
+    // a trap can collect before the comparison, so the prototype stays rooted.
+    MalRootSpan span;
+    mal_gc_root(&span, &prototype_value, 1);
+    bool found = false;
     MalValue walk = value;
     while (true) {
         MalValue proto;
         if (mal_value_is_proxy_object(walk)) {
             if (!mal_proxy_traps.get_prototype_of(vm, mal_value_to_proxy_object(walk), &proto)) {
-                return false; // trap threw — leave the throw pending
+                break; // trap threw — leave the throw pending
             }
         } else {
             MalObject *next = mal_object_get_prototype(mal_value_to_object(walk));
@@ -6698,13 +6706,16 @@ bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value) {
         }
 
         if (!mal_value_is_object(proto)) {
-            return false;
+            break;
         }
-        if (mal_value_to_object(proto) == prototype) {
-            return true;
+        if (mal_value_to_object(proto) == mal_value_to_object(prototype_value)) {
+            found = true;
+            break;
         }
         walk = proto;
     }
+    mal_gc_unroot(&span);
+    return found;
 }
 
 bool mal_vm_is_constructor(MalVm *vm, MalValue value) {

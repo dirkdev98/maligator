@@ -693,10 +693,17 @@ static inline bool mal_local_string_builder_equals(
 }
 
 /**
- * Spec OrdinaryHasInstance: non-callable targets answer false, bound
- * functions unwrap to their target, then the value's prototype chain is
- * walked looking for target.prototype. Shared by the instanceof operator
- * and %Function.prototype%[Symbol.hasInstance].
+ * Spec InstanceofOperator(value, target): `value instanceof target`, deciding by
+ * target's @@hasInstance when it has one and by OrdinaryHasInstance otherwise.
+ * A throw is left in vm->completion and answers false.
+ */
+bool mal_vm_instanceof(MalVm *vm, MalValue value, MalValue target);
+
+/**
+ * Spec OrdinaryHasInstance: non-callable targets answer false, a bound function
+ * answers InstanceofOperator for its target (that target's own @@hasInstance
+ * included), then the value's prototype chain is walked looking for
+ * target.prototype. A throw is left in vm->completion and answers false.
  */
 bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value);
 
