@@ -116,7 +116,10 @@ export interface ModuleLinkage {
 	 * semantics; this marker only statically retains the native installer.
 	 * Undefined when these globals are unused or shadowed by locals. See {@link PROCESS_INSTALLER_SYMBOL}.
 	 */
-	hostProcess?: { installer: string; consoleHooks: boolean };
+	hostProcess?: { installer: string };
+
+	/** Whether calls through the global console may require Node's formatter. */
+	consoleHooks: boolean;
 
 	/** The free global `Buffer`, backed by the `node:buffer` module installer. */
 	hostBuffer?: { installer: string };
@@ -179,6 +182,7 @@ export function linkModules(
 		commonJsExportNames: () => [],
 		failedModules: new Map(),
 		hostProcess: undefined,
+		consoleHooks: false,
 		hostBuffer: undefined,
 	};
 
@@ -885,11 +889,10 @@ export function linkModules(
 		const envOnly = !observesGlobal && program.files.every(readsOnlyProcessEnv);
 		linkage.hostProcess = {
 			installer: envOnly ? PROCESS_ENV_INSTALLER : PROCESS_INSTALLER_SYMBOL,
-			consoleHooks:
-				envOnly &&
-				(members.names.has("console") || !program.files.every(logsOnlyStrings)),
 		};
 	}
+	linkage.consoleHooks =
+		unfollowed || members.names.has("console") || !program.files.every(logsOnlyStrings);
 	if (unfollowed || freeGlobalUsed("Buffer") || members.names.has("Buffer")) {
 		linkage.hostBuffer = { installer: BUFFER_INSTALLER_SYMBOL };
 	}

@@ -384,12 +384,12 @@ interface CoreFrontendContext {
 	 * `retained` becomes true when reachable compilation encounters it; program-image
 	 * then emits its slot-free installer manifest. Null otherwise.
 	 */
-	hostProcess: { installer: string; retained: boolean; consoleHooks: boolean } | null;
+	hostProcess: { installer: string; retained: boolean } | null;
 
 	/** Free global `Buffer`, installed by the same installer as `node:buffer`. */
 	hostBuffer: { installer: string; retained: boolean } | null;
 
-	/** Linked HOST_GLOBAL_INSTALLERS rows; a reachable read of one of their globals retains them. */
+	/** Slot-free installers retained by reachable reads of their globals. */
 	hostGlobals: Array<(typeof HOST_GLOBAL_INSTALLERS)[number] & { retained: boolean }>;
 
 	globalObjectReads: ReadonlyMap<ESTree.Identifier, string | null>;
@@ -1135,7 +1135,6 @@ export function constructSemanticProgramCore(
 						(closedGlobals ? linkage.hostProcess?.installer : undefined) ??
 						PROCESS_INSTALLER_SYMBOL,
 					retained: runtimeEval,
-					consoleHooks: closedGlobals && linkage.hostProcess?.consoleHooks === true,
 				}
 			: null;
 	program.hostBuffer =
@@ -1145,6 +1144,13 @@ export function constructSemanticProgramCore(
 	program.hostGlobals = HOST_GLOBAL_INSTALLERS.filter(
 		(host) => runtimeEval || linkage.hostGlobalInstallers.includes(host.installer),
 	).map((host) => ({ ...host, retained: runtimeEval }));
+	if (linkage.consoleHooks) {
+		program.hostGlobals.push({
+			installer: NODE_CONSOLE_HOOKS_INSTALLER,
+			globals: ["console"],
+			retained: false,
+		});
+	}
 	program.globalObjectReads = linkage.globalObjectReads;
 	program.nonRegExpStringCallees = linkage.nonRegExpStringCallees;
 	program.getBuiltinModuleBindings = new Set(
@@ -1568,13 +1574,9 @@ function selectHostExportInstallers(
 }
 
 function slotFreeHostInstallers(program: CoreFrontendContext): Array<string> {
-	const consoleHooks = program.hostProcess?.retained && program.hostProcess.consoleHooks;
 	return [program.hostProcess, program.hostBuffer, ...program.hostGlobals]
 		.flatMap((host) => (host?.retained === true ? [host.installer] : []))
-		.concat(
-			consoleHooks ? [NODE_CONSOLE_HOOKS_INSTALLER] : [],
-			program.nodeModuleInstaller ?? [],
-		);
+		.concat(program.nodeModuleInstaller ?? []);
 }
 
 /** Source-module cells can be supplied by an earlier image, including its private bindings. */
@@ -11908,21 +11910,6 @@ function compileExpression(
 			if (fn.classContext?.superThisStateBinding) {
 				return loadSharedSuperThis(program, fn, cursor, true);
 			}
-			// An arrow inherits `this` lexically: semantic analysis bound this node to
-			// an implicit `this` binding on the enclosing non-arrow function, captured
-			// through the closure env. Read it like any captured binding. (Unbound
-			// `this` — directly in a non-arrow function, or top-level — falls through.)
-			const thisBinding = fn.semanticFile.nodeToBinding.get(expression);
-			if (thisBinding?.implicit === "this") {
-				const location = getOrCreateBindingLocation(program, fn, thisBinding);
-				return loadRegisterFromLocation(fn, cursor.block, location);
-			}
-			const destination = nextCoreVariable(fn);
-			// Top-level `this` in a global *script* is globalThis in BOTH strict
-			// and sloppy mode (ScriptEvaluation binds globalThis regardless of
-			// strictness); only a module's top-level `this` is undefined. A DIRECT
-			// eval instead inherits the caller's `this` (threaded onto the eval
-			// entry frame), so its top-level `this` is a plain loadThis.
 			let scope = fn.semanticFile.nodeToScope.get(expression);
 			while (
 				scope &&
@@ -11934,13 +11921,33 @@ function compileExpression(
 			) {
 				scope = scope.parent ?? undefined;
 			}
+			const receiver = scope?.node;
+			// A sloppy call can expose the global console through its receiver, even
+			// inside a strict arrow that inherits that receiver.
 			if (
-				scope?.node.type === "Program" &&
+				(receiver?.type === "FunctionDeclaration" ||
+					receiver?.type === "FunctionExpression") &&
+				!functionStrict(fn.semanticFile, receiver)
+			) {
+				retainNodeConsoleHooks(program);
+			}
+			// Arrows capture the receiver from their enclosing activation.
+			const thisBinding = fn.semanticFile.nodeToBinding.get(expression);
+			if (thisBinding?.implicit === "this") {
+				const location = getOrCreateBindingLocation(program, fn, thisBinding);
+				return loadRegisterFromLocation(fn, cursor.block, location);
+			}
+			const destination = nextCoreVariable(fn);
+			// ScriptEvaluation binds top-level `this` to globalThis regardless of strictness.
+			// Direct eval inherits the caller's receiver and loads it from the frame.
+			if (
+				receiver?.type === "Program" &&
 				fn.semanticFile.type === "script" &&
 				!fn.semanticFile.commonjs &&
 				!program.evalDirect
 			) {
 				retainUnfollowedLanguageMembers(program);
+				retainNodeConsoleHooks(program);
 				cursor.block.emitter.emit({
 					type: "loadIntrinsic",
 					registers: [destination],
@@ -17444,6 +17451,12 @@ function retainUnfollowedLanguageMembers(program: CoreFrontendContext): void {
 function retainNodeErrorHooks(program: CoreFrontendContext): void {
 	if (program.semantic.graph?.execution?.target.platform !== "wasi")
 		program.languageInstallers.add(NODE_ERROR_HOOKS_INSTALLER);
+}
+
+function retainNodeConsoleHooks(program: CoreFrontendContext): void {
+	const graph = program.semantic.graph;
+	if (graph !== undefined && graph.execution?.target.platform !== "wasi")
+		program.languageInstallers.add(NODE_CONSOLE_HOOKS_INSTALLER);
 }
 
 /** Mark a reachable free Node global and keep it on globalThis storage. */

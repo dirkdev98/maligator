@@ -146,24 +146,24 @@ describe("language component retention", () => {
 	});
 
 	it.each([
-		`console.log(typeof RegExp);`,
-		`console.log(globalThis.RegExp.name);`,
-		`console.log(/x/);`,
-		`console.log("x".match("x"));`,
-		`console.log("x".matchAll("x"));`,
-		`console.log("x".search("x"));`,
-		`console.log("x".replace(separator, "y"));`,
-		`console.log("x".replaceAll(separator, "y"));`,
-		`console.log("x".split(separator));`,
-		`const replace = "x".replace; console.log(replace.call("x", separator, "y"));`,
+		`console.log("" + typeof RegExp);`,
+		`console.log("" + globalThis.RegExp.name);`,
+		`console.log("" + /x/);`,
+		`console.log("" + "x".match("x"));`,
+		`console.log("" + "x".matchAll("x"));`,
+		`console.log("" + "x".search("x"));`,
+		`console.log("" + "x".replace(separator, "y"));`,
+		`console.log("" + "x".replaceAll(separator, "y"));`,
+		`console.log("" + "x".split(separator));`,
+		`const replace = "x".replace; console.log("" + replace.call("x", separator, "y"));`,
 	])("retains only RegExp for %s", (source) => {
 		expect([...manifest(source, defaultConfig).keys()]).toEqual([REGEXP_INSTALLER]);
 	});
 
 	it.each([
-		`console.log("e\\u0301".normalize());`,
-		`console.log("e\\u0301"["normalize"]());`,
-		`const { normalize } = String.prototype; console.log(normalize.call("e\\u0301"));`,
+		`console.log("" + "e\\u0301".normalize());`,
+		`console.log("" + "e\\u0301"["normalize"]());`,
+		`const { normalize } = String.prototype; console.log("" + normalize.call("e\\u0301"));`,
 	])("retains only Unicode normalization for %s", (source) => {
 		expect([...manifest(source, defaultConfig).keys()]).toEqual([
 			UNICODE_NORMALIZATION_INSTALLER,
@@ -184,10 +184,10 @@ describe("language component retention", () => {
 	});
 
 	it.each([
-		`console.log("x".replace("x", "y"));`,
-		`console.log("x".replaceAll("x", "y"));`,
-		`console.log("x".split("x"));`,
-		`console.log(("x"?.split)("x"));`,
+		`console.log("" + "x".replace("x", "y"));`,
+		`console.log("" + "x".replaceAll("x", "y"));`,
+		`console.log("" + "x".split("x"));`,
+		`console.log("" + ("x"?.split)("x"));`,
 	])("omits both engines for %s", (source) => {
 		expect([...manifest(source, defaultConfig).keys()]).toEqual([]);
 	});
@@ -210,7 +210,7 @@ describe("language component retention", () => {
 
 describe("intrinsic family retention", () => {
 	it("selects Date for a named global read", () => {
-		const installs = manifest(`console.log(globalThis.Date.name);`, defaultConfig);
+		const installs = manifest(`console.log("" + globalThis.Date.name);`, defaultConfig);
 		expect([...installs.keys()]).toEqual([DATE_INSTALLER]);
 	});
 
@@ -288,7 +288,7 @@ describe("host surface installers", () => {
 			const installs = manifest(
 				`import { execution } from "maligator:process";
 import { join } from "node:path";
-if (execution.production) console.log(join("unused"));
+if (execution.production) console.log("" + join("unused"));
 ${tail}`,
 				defaultConfig,
 				{ execution: execution(["run", "main.mjs"]) },
@@ -328,11 +328,26 @@ ${tail}`,
 	it.each([
 		"Error.captureStackTrace({});",
 		"Error.prepareStackTrace = () => 'custom';",
-		"console.log(Error.stackTraceLimit);",
+		"console.log('' + Error.stackTraceLimit);",
 	])("selects Node's Error hooks without a personality for %s", (source) => {
 		expect([...manifest(source, defaultConfig).keys()]).toEqual([
 			NODE_ERROR_HOOKS_INSTALLER,
 		]);
+	});
+});
+
+describe("global console formatting retention", () => {
+	it.each([
+		["logging an object directly", `console.log({ message: "hello" });`],
+		[
+			"logging an object through a method alias",
+			`const { log } = globalThis.console; log({ message: "hello" });`,
+		],
+	])("keeps Node formatting without process when %s", (_name, source) => {
+		const installs = manifest(source, defaultConfig);
+		expect(installs.has(NODE_CONSOLE_HOOKS_INSTALLER)).toBe(true);
+		expect(installs.has(PROCESS_INSTALLER_SYMBOL)).toBe(false);
+		expect(installs.has(PROCESS_ENV_INSTALLER)).toBe(false);
 	});
 });
 
