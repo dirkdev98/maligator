@@ -367,6 +367,7 @@ export function coreGuardableCall(
 
 interface GuardedCallSplit {
 	readonly fallback: CoreBlockId;
+	readonly createBlock: () => CoreBlockId;
 	readonly append: (
 		destination: CoreBlockId,
 		opcode: string,
@@ -452,6 +453,7 @@ export function splitGuardedCall(
 	let current = block;
 	return {
 		fallback,
+		createBlock: create,
 		append: (destination, opcode, inputs, attributes = {}) => {
 			instructions++;
 			return editor.appendInstruction(destination, opcode, inputs, {

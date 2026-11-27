@@ -4936,8 +4936,18 @@ static inline __attribute__((always_inline)) bool mal_vm_probe_named_read(
 ) {
     *out = MAL_VALUE_UNDEFINED;
     MAL_PERF_COUNT(probe_read_attempts[1]);
-    if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT) ||
-        mal_value_to_object(receiver)->is_arguments) {
+    if (!mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
+        if (mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT) &&
+                vm->string_constant_atoms[string_index] == vm->heap.native_function_length_key) {
+            // Array length is an own data property even with a custom prototype.
+            *out = mal_value_from_u32(mal_value_to_array_object(receiver)->length);
+            MAL_PERF_COUNT(probe_read_hits[1]);
+            return true;
+        }
+        MAL_PERF_COUNT(probe_read_unsupported[1]);
+        return false;
+    }
+    if (mal_value_to_object(receiver)->is_arguments) {
         MAL_PERF_COUNT(probe_read_unsupported[1]);
         return false;
     }

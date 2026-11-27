@@ -65,6 +65,8 @@ import {
 	coreCalleeTargetsCallability,
 	coreCalleeTargetsSingleFunction,
 } from "./core-callee-targets.ts";
+import { planCoreCapturedPrefix } from "./core-captured-prefix-inline.ts";
+import type { CoreCapturedPrefix } from "./core-captured-prefix-inline.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CORE_CONDITIONAL_VALUE_KIND_ANALYSIS } from "./core-conditional-value-kinds.ts";
 import { coreConstructorSlotReserve } from "./core-constructor-layout.ts";
@@ -91,6 +93,7 @@ import {
 	coreBoundFunctionCall,
 	coreFunctionPrototypeCall,
 	coreGuardableCall,
+	splitGuardedCall,
 	expandCoreAppliedFunctionCall,
 	expandCoreBoundBindingCall,
 	expandCoreBoundFunctionCall,
@@ -3375,6 +3378,280 @@ export function discoverCoreCrossCallCandidates(
 	}
 }
 
+function expandCapturedPrefix(
+	program: CoreProgram,
+	candidate: CoreTransformCandidate,
+	prefix: CoreCapturedPrefix,
+	callback: InlineTarget,
+	creation: CoreInstructionId,
+	guarded: boolean,
+): AppliedTransform {
+	const { caller: callerId, site } = candidate;
+	const caller = program.function(callerId);
+	const target = program.function(candidate.targets[0]!);
+	const editor = CoreEditor.open(program, callerId);
+	const block = caller.instructionBlock(site);
+	const position = caller.instructionSourcePosition(site);
+	const result = materializeInstructionResults(caller, site)[0]!;
+	const resultRepresentation = caller.valueRepresentation(result);
+	const sourcePositions = inlineSourcePositions(
+		program,
+		editor,
+		target.id,
+		position,
+		prefix.instructions,
+		target,
+	);
+	const split = splitGuardedCall(caller, editor, site);
+	const entry = guarded
+		? split.test(
+				split.append(block, "guardFunctionIndex", [split.operands[0]!], {
+					functionIndex: target.id,
+				}),
+			)
+		: block;
+	const blocks = new Map<CoreBlockId, CoreBlockId>([[target.entry, entry]]);
+	for (const source of prefix.blocks)
+		if (source !== target.entry) blocks.set(source, split.createBlock());
+
+	const successor = (destination: CoreBlockId): CoreEdge => ({
+		block: destination,
+		arguments: [],
+	});
+	let introduced = 0;
+	const values = new Map<CoreValueId, CoreValueId>();
+	for (let i = 0; i < target.parameterCount; i++)
+		values.set(target.kernel.functionParameter(i), split.operands[2 + i]!);
+	const edge = (input: CoreEdge): CoreEdge =>
+		successor(blocks.get(input.block) ?? split.fallback);
+	let fastCall: CoreInstructionId | undefined;
+	const included = new Set(prefix.instructions);
+	for (const source of prefix.blocks) {
+		let output = blocks.get(source)!;
+		for (const instruction of target.bodyInstructionIds(source)) {
+			if (!included.has(instruction)) continue;
+			const opcode = target.instructionOpcodeName(instruction);
+			const inputs = materializeInstructionOperands(target, instruction).map((value) =>
+				values.get(value)!,
+			);
+			const results = materializeInstructionResults(target, instruction);
+			const attributes = target.instructionAttributes(instruction);
+			const sourcePosition = sourcePositions.get(instruction);
+			if (opcode === "loadPropertyStatic") {
+				const unusedKey = editor.appendInstruction(output, "createUndefined", [], {
+					sourcePosition,
+				}).outputs[0]!;
+				const [value, found] = editor.appendInstruction(
+					output,
+					"probeRead",
+					[inputs[0]!, unusedKey],
+					{
+						attributes: { readKind: "named", stringIndex: attributes.stringIndex },
+						outputRepresentations: ["boxed", "boolean"],
+						sourcePosition,
+					},
+				).outputs;
+				values.set(results[0]!, value!);
+				const hit = split.createBlock();
+				editor.setTerminator(output, {
+					kind: "branch",
+					condition: found!,
+					consequent: successor(hit),
+					alternate: successor(split.fallback),
+					sourcePosition,
+				});
+				output = hit;
+				introduced += 2;
+				continue;
+			}
+			const cloned = editor.appendInstruction(output, opcode, inputs, {
+				outputCount: results.length,
+				outputRepresentations: results.map((value) => target.valueRepresentation(value)),
+				attributes: coreUnscopedInstructionAttributes(attributes),
+				sourcePosition,
+			});
+			for (const [index, value] of results.entries())
+				values.set(value, cloned.outputs[index]!);
+			if (instruction === prefix.callback) fastCall = cloned.instruction;
+			introduced++;
+		}
+		const exit = coreTerminatorInput(target, target.blockTerminator(source));
+		if (exit.kind === "jump") {
+			editor.setTerminator(output, {
+				kind: "jump",
+				edge: edge(exit.edge),
+				sourcePosition: position,
+			});
+		} else if (exit.kind === "branch") {
+			editor.setTerminator(output, {
+				kind: "branch",
+				condition: values.get(exit.condition)!,
+				consequent: edge(exit.consequent),
+				alternate: edge(exit.alternate),
+				sourcePosition: position,
+			});
+		} else if (exit.kind === "return") {
+			let value = values.get(exit.value)!;
+			if (caller.valueRepresentation(value) !== resultRepresentation) {
+				value = editor.appendInstruction(output, "move", [value], {
+					outputRepresentations: [resultRepresentation],
+					sourcePosition: position,
+				}).outputs[0]!;
+				introduced++;
+			}
+			split.finish(output, value);
+		}
+	}
+	const applied = applyLinearInline(
+		program,
+		{ ...candidate, site: fastCall!, targets: [callback.function.id] },
+		editor,
+		callback,
+	);
+	if (applied === undefined)
+		throw new Error("Validated captured prefix callback could not inline");
+
+	// The unobserved fresh closure still binds the caller's environment on a miss.
+	editor.moveInstruction(creation, split.fallback, site);
+	editor.commit();
+	return {
+		instructionsIntroduced:
+			introduced + split.instructionsIntroduced() + applied.instructionsIntroduced,
+		blocksIntroduced: split.blocksIntroduced() + applied.blocksIntroduced,
+	};
+}
+
+function specializeCoreCapturedPrefixes(
+	program: CoreProgram,
+	summaries: CoreProgramSummaries,
+	service: CoreTransformCandidateService,
+	limits: CoreTransformBudgetLimits,
+	liveFunctions: ReadonlyArray<CoreFunctionId>,
+): {
+	readonly changed: ReadonlyArray<CoreFunctionId>;
+	readonly instructions: number;
+	readonly blocks: number;
+} {
+	const changed = new Set<CoreFunctionId>();
+	let instructions = 0;
+	let blocks = 0;
+	const prefixes = new Map<CoreFunctionId, CoreCapturedPrefix | undefined>();
+	for (const callerId of liveFunctions) {
+		const caller = program.function(callerId);
+		if (!caller.metadata.strict || caller.isAsync || caller.isGenerator) continue;
+		for (const site of summaries.targets.outgoing(callerId)) {
+			const target = site.targets.functions[0];
+			if (
+				target === undefined ||
+				site.targets.functions.length !== 1 ||
+				target === callerId ||
+				changed.has(target) ||
+				site.arguments === undefined ||
+				!caller.isInstructionLive(site.instruction) ||
+				!coreGuardableCall(caller, site.instruction)
+			)
+				continue;
+			const fn = program.function(target);
+			if (fn.metadata.capturedCount === 0 || site.arguments.length < fn.parameterCount)
+				continue;
+			if (!prefixes.has(target)) {
+				const prefix = planCoreCapturedPrefix(fn);
+				const recursive =
+					prefix !== undefined &&
+					summaries.targets
+						.outgoing(target)
+						.some((edge) => edge.targets.functions.includes(target));
+				prefixes.set(target, recursive ? undefined : prefix);
+			}
+			const prefix = prefixes.get(target);
+			if (prefix === undefined) continue;
+			const argument = site.arguments[prefix.callbackParameter]!;
+			const callbackTarget = coreDirectCreatedFunction(caller, argument);
+			if (
+				callbackTarget === undefined ||
+				callbackTarget === callerId ||
+				callbackTarget === target ||
+				changed.has(callbackTarget) ||
+				caller.valueUseCount(argument) !== 1
+			)
+				continue;
+			const callbackContext = directCaptureContext(
+				caller,
+				argument,
+				site.instruction,
+				callbackTarget,
+			);
+			if (callbackContext === undefined) continue;
+			const callbackArity = positionalArgumentCount(fn, prefix.callback);
+			if (callbackArity === undefined) continue;
+			const callback = inlineTarget(
+				program,
+				caller,
+				callbackTarget,
+				"call",
+				callbackContext,
+				undefined,
+				callbackArity,
+			);
+			const result = materializeInstructionResults(caller, site.instruction)[0]!;
+			const fastResult = materializeInstructionResults(fn, prefix.callback)[0]!;
+			if (
+				callback === undefined ||
+				!canBridgeInlineResult(
+					fn.valueRepresentation(fastResult),
+					caller.valueRepresentation(result),
+				) ||
+				callback.returnValues.some(
+					(value) =>
+						!canBridgeInlineResult(
+							callback.function.valueRepresentation(value),
+							fn.valueRepresentation(fastResult),
+						),
+				)
+			)
+				continue;
+			const cost =
+				prefix.instructions.length +
+				prefix.blocks.length +
+				2 * prefix.probes +
+				callback.instructions.length +
+				callback.blocks.length +
+				(site.open ? 1 : 0);
+			const candidate = {
+				kind: "inline",
+				caller: callerId,
+				site: site.instruction,
+				revision: caller.version("body"),
+				priorityClass: 1,
+				priorityScore: -cost,
+				targets: [target],
+				generatedCodeCost: cost,
+				compilerWorkCost: 2 * cost + callback.function.valueCapacity,
+				expansive: true,
+			} as const;
+			if (!service.consider(candidate)) continue;
+			const decline = service.admit(candidate, limits);
+			if (decline !== undefined) {
+				service.recordDeclined(decline);
+				continue;
+			}
+			const applied = expandCapturedPrefix(
+				program,
+				candidate,
+				prefix,
+				callback,
+				coreInstructionId(caller.kernel.valueDefinitionOwner(argument)),
+				site.open,
+			);
+			service.recordApplied(candidate);
+			instructions += applied.instructionsIntroduced;
+			blocks += applied.blocksIntroduced;
+			changed.add(callerId);
+		}
+	}
+	return { changed: [...changed], instructions, blocks };
+}
+
 function applyLinearInline(
 	program: CoreProgram,
 	candidate: CoreTransformCandidate,
@@ -6498,6 +6775,19 @@ export function runCoreCrossCallTransforms(
 			wildcardReverseCallerVisits += summaries.statistics.wildcardReverseCallerVisits;
 		}
 	};
+	const capturedPrefixes = specializeCoreCapturedPrefixes(
+		program,
+		summaries,
+		service,
+		phaseLimits,
+		flow.reachability.liveFunctions,
+	);
+	if (capturedPrefixes.changed.length > 0) {
+		refreshFlow();
+		instructionsIntroduced += capturedPrefixes.instructions;
+		blocksIntroduced += capturedPrefixes.blocks;
+	}
+
 	/*
 	 * Two waves cover the whole program. Each later wave revisits only the callers
 	 * whose transforms consumed budget in the wave before, where those transforms
@@ -6512,7 +6802,7 @@ export function runCoreCrossCallTransforms(
 		const exhausted = service.programBudgetExhaustionReason(phaseLimits);
 		if (
 			exhausted !== undefined &&
-			!(wave === 0 && specialized.length > 0) &&
+			!(wave === 0 && (specialized.length > 0 || capturedPrefixes.changed.length > 0)) &&
 			!(wave > 0 && exhausted === "generated-code-cost" && clones.size > 0)
 		)
 			break;
@@ -6599,7 +6889,7 @@ export function runCoreCrossCallTransforms(
 				: new Map<CoreFunctionId, ReadonlyArray<CoreValueKindFold>>();
 		const editors = new Map<CoreFunctionId, CoreEditor>();
 		const appliedCallers = new Set<CoreFunctionId>([
-			...(wave === 0 ? specialized : []),
+			...(wave === 0 ? [...specialized, ...capturedPrefixes.changed] : []),
 			...cloned,
 		]);
 		for (const functionId of appliedCallers)
