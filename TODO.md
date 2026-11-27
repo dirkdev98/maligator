@@ -142,10 +142,15 @@ static generated-code size and helper counts do not establish runtime cost.
       as `fn(req, res, next)`, `this.matchers[i](path)` and `next()` take runtime
       dispatch: about 18 calls per request in the in-process Express census.
 
-- [ ] Choose the collection guess for `get`, `set` and `has` calls from the receiver.
-      When the name matches a collection method the compiler takes the first candidate,
-      so script methods with those names, such as in qs, fail the guess on every call
-      and box their results: about 17 calls per Express request.
+- [ ] Give script `get`, `set` and `has` methods targets so they stop failing the
+      collection guess. The receiver's local kind now drops impossible guesses, but
+      on in-process Express 17.2 calls per request still fail it: 16.0 are Express's
+      own `app.set`, `this.get` and `this.set` (3.4 at `application.js:475`), whose
+      methods are assigned onto mixin objects and prototypes, so no target is known;
+      1.2 are qs `has` calls whose targets Core finds but the specialization-plan
+      budget excludes. Letting known script targets win over the name guess in call
+      emission changed no Express code, so this waits on the method-target entry
+      below and on that budget.
 
 - [ ] Recognize built-ins read through an alias, such as `var isArray = Array.isArray`,
       once a workload calls them in a hot path. A static cell proof that requires an
