@@ -1337,7 +1337,8 @@ describe("bounded Core cross-call transforms", () => {
 		expect(optimized).toBeDefined();
 		const captured = coreFunctionNamed(optimized!, "captured")!;
 		const counted = coreFunctionNamed(optimized!, "counted")!;
-		expect(coreOperations(captured).some(({ opcode }) => opcode === "call")).toBe(true);
+		// The closure reads the caller's own binding, which the inlined body takes directly.
+		expect(coreOperations(captured).some(({ opcode }) => opcode === "call")).toBe(false);
 		expect(coreOperations(captured).some(({ opcode }) => opcode === "loadCaptured")).toBe(
 			false,
 		);
@@ -2978,6 +2979,7 @@ describe("bounded Core cross-call transforms", () => {
 			function outer(value) {
 				function cycle(input) { while (input > 2) input /= 2; return input; }
 				function handled(input) { try { return +input; } catch { return 0; } }
+				globalThis.helpers = () => [cycle, handled];
 				return cycle(value) + handled(value);
 			}`,
 				"core-inline-rejected-graphs.js",

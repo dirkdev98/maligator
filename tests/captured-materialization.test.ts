@@ -65,6 +65,11 @@ function first(value) { return value > 0 ? second(value - 1) : 1; }
 function second(value) { return value > 0 ? first(value - 1) : 2; }
 `;
 
+const indirectHelpers = `
+function first(value) { return (() => second(value))(); }
+function second(value) { return value; }
+`;
+
 it.each([
 	{
 		name: "short-circuit fast return",
@@ -73,8 +78,18 @@ it.each([
 	},
 	{
 		name: "indirect closure observer",
-		body: `function first(value) { return (() => second(value))(); } function second(value) { return value; } if (!values) return 0; return first(values.length);`,
+		body: `${indirectHelpers} if (!values) return 0; return first(values.length);`,
 		admitted: true,
+	},
+	{
+		name: "indirect closure observer returned after the guard",
+		body: `${indirectHelpers} if (!values) return 0; return first;`,
+		admitted: true,
+	},
+	{
+		name: "indirect closure observer escapes before the guard",
+		body: `${indirectHelpers} globalThis.saved = first; if (!values) return 0; return first(values.length);`,
+		admitted: false,
 	},
 	{
 		name: "binding read before the guard",

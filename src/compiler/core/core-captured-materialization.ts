@@ -303,6 +303,10 @@ export function deferCapturedAllocations(
 		];
 		for (const group of groups) {
 			if (group.length === 0 || group.some((entry) => !entry.valid)) continue;
+			const fn = program.function(owner);
+			const origin = fn.instructionBlock(group[0]!.allocation);
+			if (group.some((entry) => fn.instructionBlock(entry.allocation) !== origin))
+				continue;
 			const internal = new Set(
 				group.flatMap((entry) => (entry.closure === undefined ? [] : [entry.closure])),
 			);
@@ -324,6 +328,7 @@ export function deferCapturedAllocations(
 			const pending = group.flatMap((entry) => [...entry.observers]);
 			const visited = new Set<CoreFunctionId>();
 			const demands = group.flatMap((entry) => entry.reads);
+			const moved = new Set(group.flatMap((entry) => [entry.allocation, entry.store]));
 			let valid = true;
 			while (pending.length > 0 && valid && visited.size < MAX_OBSERVERS) {
 				const observer = pending.pop()!;
@@ -341,20 +346,38 @@ export function deferCapturedAllocations(
 				}
 				// An indirect descendant can pass on this activation's environment without reading the slot.
 				for (const site of sites) {
-					if (site.caller === owner) demands.push(site.instruction);
-					else pending.push(site.caller);
+					if (site.caller !== owner) {
+						pending.push(site.caller);
+						continue;
+					}
+					const { instruction } = site;
+					if (moved.has(instruction)) continue;
+					const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+					if (
+						fn.instructionBlock(instruction) !== origin ||
+						fn.kernel.valueHandlerUseCount(value) !== 0
+					) {
+						demands.push(instruction);
+						continue;
+					}
+					// A closure created alongside the group captures the same activation after
+					// the move. Every use of its value must be dominated by the destination.
+					moved.add(instruction);
+					for (
+						let use = fn.kernel.valueFirstUse(value);
+						use >= 0;
+						use = fn.kernel.useNext(use)
+					) {
+						if (fn.kernel.useLive(use) !== 0)
+							demands.push(coreInstructionId(fn.kernel.useInstruction(use)));
+					}
 				}
 			}
 			if (!valid || pending.length > 0 || demands.length === 0) continue;
-			const fn = program.function(owner);
-			const origin = fn.instructionBlock(group[0]!.allocation);
-			if (group.some((entry) => fn.instructionBlock(entry.allocation) !== origin))
-				continue;
 			const target = destination(fn, origin, demands, compilation);
 			if (target === undefined) continue;
 			const editor = CoreEditor.open(program, owner);
 			const before = coreInstructionId(fn.kernel.blockFirstInstruction(target));
-			const moved = new Set(group.flatMap((entry) => [entry.allocation, entry.store]));
 			for (const instruction of [...fn.bodyInstructionIds(origin)])
 				if (moved.has(instruction)) editor.moveInstruction(instruction, target, before);
 			editor.commit();

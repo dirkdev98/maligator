@@ -1258,6 +1258,7 @@ function createScopesFromNode(
 	file: SemanticFile,
 	parentScope: Scope | null = null,
 ) {
+	const enclosingScope = parentScope;
 	// Handle "use strict" directives.
 	if (parentScope && "directive" in node && node.directive === "use strict") {
 		parentScope.strict = true;
@@ -1404,6 +1405,10 @@ function createScopesFromNode(
 	}
 
 	recurseAst(node, createScopesFromNode, file, parentScope);
+	// The declaration name resolves in the enclosing scope, including when it
+	// shares a binding with a parameter or shadows the implicit arguments object.
+	if (node.type === "FunctionDeclaration" && node.id !== null && enclosingScope !== null)
+		file.nodeToScope.set(node.id, enclosingScope);
 }
 
 function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
@@ -2019,6 +2024,17 @@ function resolveLexicalThisOwner(scope: Scope, allowProgram = false): Scope | nu
  * Based on usages of a binding, figure out where it is scoped to.
  */
 function calculateBindingScopedTo(file: SemanticFile) {
+	const withVisibleDeclarations = new Set<Binding>();
+	if (file.withDynamicNodes.size !== 0) {
+		for (const [node, binding] of file.nodeToBinding) {
+			if (node.type !== "FunctionDeclaration") continue;
+			if (binding.usageNodes.some((usage) => file.withDynamicNodes.has(usage)))
+				withVisibleDeclarations.add(binding);
+			const outer = binding.annexBVarBinding;
+			if (outer?.usageNodes.some((usage) => file.withDynamicNodes.has(usage)))
+				withVisibleDeclarations.add(outer);
+		}
+	}
 	const usageToDeclarationScopeCrossesFunction = (from: Scope, to: Scope) => {
 		if (from === to) {
 			return false;
@@ -2065,7 +2081,11 @@ function calculateBindingScopedTo(file: SemanticFile) {
 			return "global";
 		}
 
-		if (file.directEvalVisibleBindings.has(binding)) return "captured";
+		if (
+			file.directEvalVisibleBindings.has(binding) ||
+			withVisibleDeclarations.has(binding)
+		)
+			return "captured";
 
 		for (const usage of usageScopes) {
 			if (usageToDeclarationScopeCrossesFunction(usage, declarationScope)) {
