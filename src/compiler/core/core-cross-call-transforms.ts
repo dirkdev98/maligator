@@ -2037,17 +2037,47 @@ function offerFunctionCandidates(
 		const inLoop = loopFrequency > 1;
 		const exposure = loopFrequency;
 		const iteration = coreArrayIterationCall(program, fn, site.instruction);
-		const callback =
+		const createdCallback =
 			iteration === undefined
 				? undefined
 				: coreDirectCreatedFunction(fn, iteration.callback);
+		// A callback read from a binding's cell, module slot or parameter, such as a function
+		// declaration, has no local creation. A closed single target proves it always holds
+		// that function; any other writer leaves the targets open and the call generic.
+		const callback =
+			iteration === undefined
+				? undefined
+				: (createdCallback ??
+					coreCalleeTargetsSingleFunction(
+						summaries.targets.targets(functionId, iteration.callback),
+					));
 		if (iteration !== undefined && callback !== undefined && callback !== functionId) {
+			const captureContext =
+				createdCallback === undefined
+					? (ancestorCaptureContext(
+							program,
+							capturedCells(),
+							fn,
+							iteration.callback,
+							site.instruction,
+							callback,
+						) ??
+						singleActivationCaptureContext(
+							program,
+							singleActivations(),
+							fn,
+							iteration.callback,
+							site.instruction,
+							callback,
+						) ??
+						movedModuleFunction(fn, iteration.callback, site.instruction, callback))
+					: directCaptureContext(fn, iteration.callback, site.instruction, callback);
 			const inline = inlineTarget(
 				program,
 				fn,
 				callback,
 				"call",
-				directCaptureContext(fn, iteration.callback, site.instruction, callback),
+				captureContext,
 				undefined,
 				iteration.name === "reduce" || iteration.name === "reduceRight" ? 4 : 3,
 				"array-iteration",
@@ -4736,18 +4766,24 @@ function applyCandidate(
 			if (!fn.isInstructionLive(candidate.site)) return undefined;
 			const iteration = coreArrayIterationCall(program, fn, candidate.site);
 			const target = candidate.targets[0];
+			if (iteration === undefined || target === undefined) return undefined;
+			const created = coreDirectCreatedFunction(fn, iteration.callback) === target;
 			if (
-				iteration === undefined ||
-				target === undefined ||
-				coreDirectCreatedFunction(fn, iteration.callback) !== target
+				!created &&
+				coreCalleeTargetsSingleFunction(
+					summaries.targets.targets(candidate.caller, iteration.callback),
+				) !== target
 			)
 				return undefined;
-			const captureContext = directCaptureContext(
-				fn,
-				iteration.callback,
-				candidate.site,
-				target,
-			);
+			const captureContext = created
+				? directCaptureContext(fn, iteration.callback, candidate.site, target)
+				: applicationCaptureContext(
+						program,
+						fn,
+						iteration.callback,
+						candidate.site,
+						target,
+					);
 			const inline = inlineTarget(
 				program,
 				fn,
@@ -4810,6 +4846,7 @@ function applyCandidate(
 			// Once the fast invocation disappears, only the fallback needs the closure.
 			if (
 				(guarded || versioned !== undefined) &&
+				created &&
 				captureContext !== undefined &&
 				fn.valueUseCount(iteration.callback) === 1 &&
 				fn.kernel.valueHandlerUseCount(iteration.callback) === 0

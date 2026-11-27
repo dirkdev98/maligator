@@ -1530,6 +1530,57 @@ describe("bounded Core cross-call transforms", () => {
 		},
 	);
 
+	let declaredCallbacks: CoreProgram | undefined;
+	it.each([
+		{
+			binding: "a module slot",
+			caller: "moduleCallbacks",
+			method: "filter",
+			expanded: true,
+		},
+		{ binding: "a captured cell", caller: "captured", method: "map", expanded: true },
+		{
+			binding: "a capturing declaration",
+			caller: "capturing",
+			method: "map",
+			expanded: true,
+		},
+		{
+			binding: "a rebound module slot",
+			caller: "reassignedModule",
+			method: "map",
+			expanded: false,
+		},
+		{
+			binding: "a rebound captured cell",
+			caller: "reassignedCaptured",
+			method: "map",
+			expanded: false,
+		},
+	])(
+		"expands a declared Array callback read from $binding only while its binding holds one function",
+		({ caller, method, expanded }) => {
+			if (declaredCallbacks === undefined)
+				compileEntrypoint(resolve("tests/local/declared-array-callbacks.mjs"), {
+					buildConfig: resolveBuildConfig({}),
+					coreVerification: "per-pass",
+					afterCoreOptimization(program) {
+						declaredCallbacks = program;
+					},
+				});
+			const calls = coreOperations(coreFunctionNamed(declaredCallbacks!, caller)!).filter(
+				({ opcode, attributes }) =>
+					opcode === "call" &&
+					(attributes.knownBuiltinCall as { operation?: string } | undefined)
+						?.operation === `ArrayOrTypedArray.prototype.${method}`,
+			);
+			expect(calls).toHaveLength(1);
+			expect(calls[0]!.attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true).toBe(
+				expanded,
+			);
+		},
+	);
+
 	it("sinks one-shot captured callbacks into guarded fallbacks", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(

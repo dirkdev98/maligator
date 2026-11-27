@@ -32,6 +32,34 @@ it("inlines nonescaping captured callbacks without changing guarded fallbacks", 
 	}
 }, 600_000);
 
+it.each(["mjs", "cjs"])(
+	"matches Node for Array callbacks passed by their declaration's binding in .%s",
+	(extension) => {
+		const fixture = `tests/local/declared-array-callbacks.${extension}`;
+		const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+		const outDir = mkdtempSync(join(tmpdir(), "mal-declared-array-callbacks-"));
+		try {
+			const pair = buildBackendPairFromOneProgramImage({
+				fixture,
+				name: `declared-array-callbacks-${extension}`,
+				config: resolveBuildConfig({
+					engine: { primordials: "locked", eval: false, realms: false },
+				}),
+				outDir,
+			});
+			for (const binary of [pair.compiled, pair.interpreted]) {
+				expect(runToStdout(binary)).toBe(expected);
+				expect(runToStdout(binary, { env: STRESS_ENV, timeoutMs: 60_000 })).toBe(
+					expected,
+				);
+			}
+		} finally {
+			rmSync(outDir, { recursive: true, force: true });
+		}
+	},
+	600_000,
+);
+
 it("preserves activation-sensitive CommonJS helpers across strict callers", () => {
 	const fixture = "tests/local/captured-callback-inlining.cjs";
 	const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
