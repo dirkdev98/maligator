@@ -373,6 +373,18 @@ exception, rooting and mixed-execution contracts at their owning layer. Follow
 acceptance. Baseline replacement remains an explicit action. Keep detailed evidence
 and rejected experiment history outside this roadmap.
 
+## Lint rules
+
+`packages/lint-rules` reports costs the compiler cannot remove without changing what
+the program observes; each rule's native example proves its cost.
+
+- [ ] Consider Oxlint's `no-func-assign` and `no-class-assign` for the recommended
+      preset. A rebound function or class declaration leaves every call and callback
+      through it on generic dispatch, but a function-index guard could recover most
+      of that, so add them only if guarded inlining of open targets stays out.
+- [ ] Measure whether arrays with holes cost Maligator anything (`new Array(n)`,
+      `arr.length = n`, out-of-order writes) before adopting `unicorn/no-new-array`.
+
 # Runtime safety and allocation
 
 - [ ] Make `Array.prototype.shift` constant-time on dense arrays. It moves every
