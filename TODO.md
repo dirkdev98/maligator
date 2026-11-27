@@ -173,6 +173,18 @@ static generated-code size and helper counts do not establish runtime cost.
       since guarded loop versioning needs a single exit. Expose the guarded field read
       and Number result to the loop consumer first; Express has no such hot loop.
 
+- [ ] Find why guarded direct calls to proven single targets slow in-process Express.
+      Every specialization-plan skip there is `generated-code-cost`: the program
+      budget runs out about 260 of 2,101 opportunities in, and guarded calls score
+      last, so all 117 guarded sites stay on runtime dispatch, including `parseurl`
+      and body-parser `read` that CommonJS export cells resolve. Sending a call whose
+      single function is proven, with an open rest, down the budget-free exact-call
+      path removes 8.3 dispatches per request but retires 1.9% more instructions per
+      request (18 of 20 pairs worse); limiting it to non-callable rests still costs
+      1.6%. The emitted guard and direct call are cheap, and property-cache miss
+      counts shift between runs of one build, so start with an A/A build that only
+      moves heap layout.
+
 - [ ] Give methods stored as `F.prototype.name = function` guarded dispatch. In the
       in-process Express census, 211 calls per request stay on runtime dispatch, led by
       `layer.match` and `layer.handleRequest`. Method-name hints cover class methods
