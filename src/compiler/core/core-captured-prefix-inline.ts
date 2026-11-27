@@ -1,4 +1,3 @@
-import { coreInstructionOperands } from "./core-debug-view.ts";
 import { coreTerminatorInput } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreBlockId, CoreInstructionId } from "./core-ir.ts";
@@ -99,7 +98,9 @@ export function planCoreCapturedPrefix(
 				fn.instructionOpcodeName(instruction) === "call" &&
 				fn.valueUseCount(exit.value) === 1
 			) {
-				parameter = parameters.indexOf(coreInstructionOperands(fn, instruction)[0]!);
+				parameter = parameters.indexOf(
+					fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
+				);
 				if (parameter >= 0) call = instruction;
 			}
 		}
