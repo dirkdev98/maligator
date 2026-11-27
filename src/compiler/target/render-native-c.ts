@@ -11708,7 +11708,7 @@ class NativeInstructionEmission {
 		if (stringMethod !== undefined) {
 			const value = `guarded_builtin_${this.ip}`;
 			return [
-				`  MalValue ${value} = ${this.stringMethodCall(instruction, stringMethod, argsExpr)};`,
+				`  MalValue ${value} = ${this.profileCall("string", this.stringMethodCall(instruction, stringMethod, argsExpr))};`,
 				`  ${this.throwCheck()}`,
 				`  r${instruction.dst} = ${this.callValue(instruction.dst, value)};`,
 			];
