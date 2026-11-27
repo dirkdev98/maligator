@@ -11,8 +11,8 @@ const examples = path.join(import.meta.dirname, "../examples");
 const outDir = mkdtempSync(path.join(tmpdir(), "maligator-lint-examples-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
-// A shape example's driver runs this many rounds. A path taken on a quarter of them
-// is per-round work; the runtime's own startup takes it only a few times.
+// Hot examples exercise the measured sites roughly this many times. The thresholds
+// distinguish repeated work from the few hits during startup.
 const ROUNDS = 10_000;
 
 interface Run {
@@ -25,6 +25,9 @@ interface Run {
 	shapeMisses: number;
 	/** Shapes created after startup: one per new key path. */
 	shapeCreates: number;
+	compiledEntries: number;
+	arrayCallbackCalls: number;
+	tableLookupMisses: number;
 	/** Host installers the compiled image links. */
 	installers: Array<string>;
 }
@@ -63,6 +66,17 @@ function run(file: string): Run {
 			.map(ic)
 			.reduce((total, count) => total + count, 0),
 		shapeCreates: counter(result.stderr, "[perf-shape-transition-stats]", "creates"),
+		compiledEntries: counter(result.stderr, "[perf-call-cache-stats]", "compiled_enters"),
+		arrayCallbackCalls: counter(
+			result.stderr,
+			"[perf-array-stats]",
+			"iteration_exact_compiled_callback_calls",
+		),
+		tableLookupMisses: counter(
+			result.stderr,
+			"[perf-table-stats] role=object",
+			"lookup_misses",
+		),
 		installers: built.programImage.runtime.hostInstalls.map(({ installer }) => installer),
 	};
 }
@@ -84,6 +98,17 @@ function shapeGrowth(bad: Run, good: Run): void {
 	behavesLikeNode(bad);
 	expect(bad.shapeCreates).toBeGreaterThanOrEqual(ROUNDS / 4);
 	expect(good.shapeCreates).toBeLessThan(ROUNDS / 100);
+}
+
+function perRoundCost(
+	field: "compiledEntries" | "arrayCallbackCalls" | "tableLookupMisses",
+): (bad: Run, good: Run) => void {
+	return (bad, good) => {
+		behavesLikeNode(bad);
+		expect(bad.nodeStdout).toBe(good.nodeStdout);
+		expect(bad[field], field).toBeGreaterThanOrEqual(ROUNDS / 4);
+		expect(good[field], field).toBeLessThan(ROUNDS / 100);
+	};
 }
 
 /** The bad form links the complete process installer, which neither form needs. */
@@ -110,10 +135,13 @@ function differsFromNode(bad: Run): void {
 const costs: Record<string, (bad: Run, good: Run) => void> = {
 	"monomorphic-instances": shapeMisses,
 	"monomorphic-objects": shapeMisses,
+	"no-class-assign": perRoundCost("compiledEntries"),
 	"no-delete-property": shapeMisses,
 	"no-dynamic-global-access": extraInstallers,
+	"no-func-assign": perRoundCost("arrayCallbackCalls"),
 	"no-function-source": differsFromNode,
 	"no-primordial-mutation": rejectedAtRuntime,
+	"no-sparse-arrays": perRoundCost("tableLookupMisses"),
 	"prefer-map": shapeGrowth,
 	"strict-commonjs": extraInstallers,
 };

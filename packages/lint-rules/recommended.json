@@ -15,8 +15,10 @@
 		"maligator/no-function-source": "error",
 		"maligator/no-primordial-mutation": "error",
 		"maligator/strict-commonjs": "error",
+		"no-class-assign": "error",
 		"no-eval": "error",
 		"no-extend-native": "error",
+		"no-func-assign": "error",
 		"no-new-func": "error",
 		"no-restricted-imports": [
 			"error",
@@ -33,6 +35,7 @@
 				]
 			}
 		],
+		"no-sparse-arrays": "error",
 		"prefer-rest-params": "error",
 		"unicorn/prefer-global-this": "error"
 	}

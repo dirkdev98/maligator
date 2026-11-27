@@ -7,28 +7,28 @@ import { afterAll, describe, expect, it } from "vitest";
 import plugin from "../src/index.ts";
 
 const examples = path.join(import.meta.dirname, "examples");
+const preset = path.join(import.meta.dirname, "../recommended.json");
 const oxlint = path.join(
 	path.dirname(createRequire(import.meta.url).resolve("oxlint/package.json")),
 	"bin/oxlint",
 );
 const scratch = mkdtempSync(path.join(tmpdir(), "maligator-lint-examples-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+const config = path.join(scratch, "examples.json");
+writeFileSync(
+	config,
+	JSON.stringify({
+		extends: [preset],
+		categories: { correctness: "off" },
+		rules: { "maligator/prefer-map": "error" },
+	}),
+);
 
 interface OxlintReport {
-	diagnostics: Array<{ code: string; filename: string }>;
+	diagnostics: Array<{ code?: string; filename: string }>;
 }
 
-/** Lints one rule's examples through the CLI with only that rule enabled. */
 function lintExamples(rule: string): OxlintReport {
-	const config = path.join(scratch, `${rule}.json`);
-	writeFileSync(
-		config,
-		JSON.stringify({
-			jsPlugins: [path.join(import.meta.dirname, "../src/index.ts")],
-			categories: { correctness: "off" },
-			rules: { [`maligator/${rule}`]: "error" },
-		}),
-	);
 	const result = spawnSync(
 		process.execPath,
 		[oxlint, "-c", config, "--format", "json", path.join(examples, rule)],
@@ -39,12 +39,13 @@ function lintExamples(rule: string): OxlintReport {
 }
 
 describe("documented examples", () => {
-	for (const rule of Object.keys(plugin.rules)) {
+	const rules = new Set([...Object.keys(plugin.rules), ...readdirSync(examples)]);
+	for (const rule of rules) {
 		it(`flag every bad ${rule} example and none of the good ones`, () => {
 			const files = readdirSync(path.join(examples, rule));
 			const flagged = new Set(
 				lintExamples(rule)
-					.diagnostics.filter(({ code }) => code === `maligator(${rule})`)
+					.diagnostics.filter(({ code }) => code?.endsWith(`(${rule})`))
 					.map(({ filename }) => path.basename(filename)),
 			);
 			expect([...flagged].sort()).toEqual(

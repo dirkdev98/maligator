@@ -393,12 +393,10 @@ and rejected experiment history outside this roadmap.
 `packages/lint-rules` reports costs the compiler cannot remove without changing what
 the program observes; each rule's native example proves its cost.
 
-- [ ] Consider Oxlint's `no-func-assign` and `no-class-assign` for the recommended
-      preset. A rebound function or class declaration leaves every call and callback
-      through it on generic dispatch, but a function-index guard could recover most
-      of that, so add them only if guarded inlining of open targets stays out.
-- [ ] Measure whether arrays with holes cost Maligator anything (`new Array(n)`,
-      `arr.length = n`, out-of-order writes) before adopting `unicorn/no-new-array`.
+- [ ] Find a lint rule for length-preallocated arrays that keep holes. Filling
+      `new Array(n)` or `arr.length = n` in order stays dense and costs nothing, while
+      one retained hole adds about 8% to `for...of`; `unicorn/no-new-array` reports
+      the ordered fills too, 113 of them in this repository.
 - [ ] Cover function constructors in a rule like `monomorphic-instances`: a key that
       `F.prototype.m = function () { this.y = … }` adds after `function F()` ran.
       Finding the receiver's constructor needs receiver analysis, and the fix is an
@@ -409,6 +407,11 @@ the program observes; each rule's native example proves its cost.
 - [ ] Make `Array.prototype.shift` constant-time on dense arrays. It moves every
       remaining element down, so a queue drained with `shift()` costs quadratic time; a
       head offset in dense storage would keep the observable array unchanged.
+
+- [ ] Return an array to dense storage once its holes are filled. Filling a 2,048-element
+      array backwards crosses the dense-storage gap limit, and the array keeps its
+      sparse storage after every index holds a value: indexed reads, `forEach`, `map`
+      and `for...of` then retire 6.5x to 18.7x the instructions of an ascending fill.
 
 - [ ] Complete recoverable allocation failure for CELL, RAW, LOS, GC-internal,
       runtime-helper, and direct-native allocations. OOM must remain catchable without

@@ -24,8 +24,15 @@ and these Oxlint rules:
 - `import/no-dynamic-require` for `require()` and `import()`. A computed `require`
   throws at runtime, and a computed `import()` can only load modules the file also
   imports by a literal name.
+- `no-func-assign` and `no-class-assign`. Reassigning a declaration can prevent
+  calls, Array callbacks and constructors from being inlined. Keep the declaration
+  stable and use a separate `let` binding where the function or class can change.
 - `no-restricted-imports` for `vm` and `node:vm`. The default build cannot compile code
   at runtime, and `vm` contexts need `engine.realms`.
+- `no-sparse-arrays` for literal holes such as `[1, , 2]`. Reading or iterating a
+  hole looks for the missing index on the prototype chain. Use explicit `undefined`
+  for empty entries when their presence is immaterial; keep holes when code tests
+  for absent indices or relies on skipped callbacks.
 - `prefer-rest-params`. Any use of `arguments` beyond its length, a constant index or
   forwarding it allocates the object on every call and keeps the function from being
   inlined.
@@ -172,9 +179,10 @@ test fixtures:
 - `tests/native/examples.test.ts` compiles each pair with the default closed-world
   build and checks that the good form behaves like Node and the bad form pays the
   rule's cost: readers that miss their shape cache, shapes that grow with the data,
-  installers the program never reads, an error the default build raises, or output
-  that differs from Node. When a compiler change removes that cost, this test fails,
-  and the rule should be narrowed or removed.
+  calls that fail to inline, lookups for absent array indices, installers the program
+  never reads, an error the default build raises, or output that differs from Node.
+  When a compiler change removes that cost, this test fails, and the rule should be
+  narrowed or removed.
 - `tests/<rule>.test.ts` covers what the rule reports and skips, through Oxlint's
   `RuleTester`.
 
