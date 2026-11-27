@@ -8,6 +8,10 @@ import type {
 	CoreInstructionId,
 	CoreValueId,
 } from "./core-ir.ts";
+import {
+	observesCaptureEnvironment,
+	virtualizeIterationEnvironment,
+} from "./core-iteration-environment.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
 export interface CoreVirtualCaptureResult {
@@ -28,6 +32,16 @@ function operations(fn: CoreFunctionStore): ReadonlyArray<Operation> {
 			opcode: fn.instructionOpcodeName(id),
 		})),
 	);
+}
+
+function hasIterationEnvironment(fn: CoreFunctionStore): boolean {
+	const opcode = fn.registry.get("envCopy")?.id;
+	if (opcode === undefined) return false;
+	const capacity = fn.instructionCapacity;
+	for (let row = 0; row < capacity; row++) {
+		if (fn.kernel.instructionOpcode(coreInstructionId(row)) === opcode) return true;
+	}
+	return false;
 }
 
 function instructionOperand(
@@ -145,25 +159,41 @@ function reachesWithoutEnvironmentRebind(
 	return reachedTarget;
 }
 
-/** Virtualizes the one-slot per-iteration scope exposed by two-wave callback inlining. */
+/** Virtualizes per-iteration captures exposed by guarded callback inlining. */
 export function virtualizeGuardedCallbackEnvironment(
 	program: CoreProgram,
 	functionId: CoreFunctionId,
 	editor: CoreEditor,
 ): CoreVirtualCaptureResult | undefined {
 	const fn = program.function(functionId);
-	if (fn.isAsync || fn.isGenerator) return undefined;
+	if (fn.isAsync || fn.isGenerator || fn.metadata.mappedArguments) return undefined;
+	if (!hasIterationEnvironment(fn)) return undefined;
 	const all = operations(fn);
+	if (all.some(({ id }) => observesCaptureEnvironment(fn, id))) return undefined;
+	const local = virtualizeSingleSlotEnvironment(program, fn, editor, all);
+	if (local !== undefined) return local;
 	if (
-		all.some(
-			({ opcode }) =>
-				opcode === "createArgumentsObject" ||
-				opcode === "createPrivateNames" ||
-				opcode.startsWith("with"),
+		!all.some(
+			({ id, opcode }) =>
+				opcode === "call" &&
+				fn.instructionAttributes(id)[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true,
 		)
-	) {
+	)
 		return undefined;
-	}
+	const instructionsIntroduced = virtualizeIterationEnvironment(
+		program,
+		functionId,
+		editor,
+	);
+	return instructionsIntroduced === undefined ? undefined : { instructionsIntroduced };
+}
+
+function virtualizeSingleSlotEnvironment(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	editor: CoreEditor,
+	all: ReadonlyArray<Operation>,
+): CoreVirtualCaptureResult | undefined {
 	const pushes = all.filter(({ opcode }) => opcode === "envPush");
 	const copies = all.filter(({ opcode }) => opcode === "envCopy");
 	const pops = all.filter(({ opcode }) => opcode === "envPop");
@@ -230,10 +260,18 @@ export function virtualizeGuardedCallbackEnvironment(
 		return undefined;
 	}
 	const target = program.function(targetId);
-	if (target.isAsync || target.isGenerator || target.metadata.capturedCount !== 0) {
+	if (
+		target.isAsync ||
+		target.isGenerator ||
+		target.metadata.mappedArguments ||
+		target.metadata.capturedCount !== 0
+	) {
 		return undefined;
 	}
-	const targetCaptured = operations(target).filter(
+	const targetOperations = operations(target);
+	if (targetOperations.some(({ id }) => observesCaptureEnvironment(target, id)))
+		return undefined;
+	const targetCaptured = targetOperations.filter(
 		({ opcode }) => opcode === "loadCaptured" || opcode === "storeCaptured",
 	);
 	if (

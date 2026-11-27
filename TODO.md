@@ -406,12 +406,14 @@ distinct when measuring text work.
       generic `for...in` and entries-pair iteration. Use existing consumers and preserve
       protocol observation, identity and coercion order.
 
-- [ ] Reduce remaining no-capture closure and per-iteration capture
-      costs. Source-immutable leaf captures can copy values in open images; synthetic
-      iteration owners and mutually cyclic initializers still need per-creation snapshots before
-      owner elision.
-      Require a repeated consumer before widening capture creation. Preserve
-      closure and captured-object identity, TDZ,
+- [ ] Reduce remaining no-capture closure and per-iteration capture costs. A
+      per-iteration scope whose closures all feed inlined synchronous callbacks now
+      lives in SSA with a guarded fallback; scopes whose closures escape, are not
+      inlined, or sit behind an ambiguous handler still allocate every iteration.
+      Source-immutable leaf captures can copy values in open images; synthetic
+      iteration owners and mutually cyclic initializers still need per-creation
+      snapshots before owner elision. Require a repeated consumer before widening
+      capture creation. Preserve closure and captured-object identity, TDZ,
       exceptional initialization and mutation before extending the representation.
 
 - [ ] Bring node:stream and EventEmitter construction closer to Node. A constructed
