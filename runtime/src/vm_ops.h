@@ -2245,6 +2245,36 @@ static inline __attribute__((always_inline)) bool mal_vm_function_metadata_try_l
     return true;
 }
 
+static inline __attribute__((always_inline)) bool mal_vm_primitive_value_row_try_load(
+    const MalVm *vm, MalValue receiver, const MalInlineCache *ic, MalValue *out
+) {
+    if (!mal_vm_watched_row_current(vm, ic->watched_epoch)
+#if MAL_REALMS
+        || ic->realm != vm->current_realm
+#endif
+    ) {
+        return false;
+    }
+    const u8 kind = ic->prim_kind;
+    MalIntrinsic slot;
+    if (kind == MAL_PRIM_KIND_STRING) {
+        if (!mal_value_is_string(receiver)) return false;
+        slot = MAL_INTRINSIC_STRING_PROTOTYPE;
+    } else if (kind == MAL_PRIM_KIND_NUMBER) {
+        if (!mal_ops_is_number(receiver)) return false;
+        slot = MAL_INTRINSIC_NUMBER_PROTOTYPE;
+    } else {
+        if (mal_vm_primitive_method_kind(receiver) != kind) return false;
+        slot = mal_vm_primitive_method_proto_slot(kind);
+    }
+    if (ic->prototype != (const MalObject *) mal_value_to_heap(vm->intrinsics[slot])) {
+        return false;
+    }
+    *out = ic->value;
+    mal_perf_ic_load_primitive_hit();
+    return true;
+}
+
 /**
  * Protector/type-gated value and exotic-length entries. Fill sites admit only
  * VM-lifetime canonical string atoms, so identity is stable and a computed-key
@@ -2257,21 +2287,7 @@ static inline bool mal_vm_special_try_load(MalVm *vm, MalValue receiver, MalValu
         return false;
     }
     if (ic->mode == MAL_IC_MODE_PRIMITIVE_VALUE) {
-        if (!mal_vm_watched_row_current(vm, ic->watched_epoch) ||
-            mal_vm_primitive_method_kind(receiver) != ic->prim_kind
-#if MAL_REALMS
-            || ic->realm != vm->current_realm
-#endif
-        ) {
-            return false;
-        }
-        MalIntrinsic slot = mal_vm_primitive_method_proto_slot(ic->prim_kind);
-        if (ic->prototype != (const MalObject *) mal_value_to_heap(vm->intrinsics[slot])) {
-            return false;
-        }
-        *out = ic->value;
-        mal_perf_ic_load_primitive_hit();
-        return true;
+        return mal_vm_primitive_value_row_try_load(vm, receiver, ic, out);
     }
     if (ic->mode == MAL_IC_MODE_STRING_LENGTH && mal_value_is_string(receiver)) {
         *out = mal_value_from_i32((i32) mal_value_to_string(receiver)->length);

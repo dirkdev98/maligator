@@ -124,6 +124,46 @@ ok(
 	loadStringMethod("cache") === originalCharCodeAt,
 );
 
+const dictionary = { charCodeAt: ownMethod };
+Object.defineProperty(dictionary, "0", { value: 0 });
+for (let i = 0; i < rounds; i++) {
+	ok(
+		"the primitive site can cache dictionary data",
+		loadStringMethod(dictionary) === ownMethod,
+	);
+}
+delete dictionary.charCodeAt;
+ok("a deleted dictionary entry stays absent", loadStringMethod(dictionary) === undefined);
+
+const prototype = Object.create(null);
+const child = Object.assign(Object.create(prototype), { method: ownMethod });
+const sibling = Object.assign(Object.create(prototype), { method: originalCharCodeAt });
+for (let i = 0; i < rounds; i++) {
+	ok("the same site can cache absence", loadStringMethod(child) === undefined);
+}
+let inheritedGets = 0;
+Object.defineProperty(prototype, "charCodeAt", {
+	configurable: true,
+	get() {
+		inheritedGets++;
+		return this.method;
+	},
+});
+for (let i = 0; i < rounds; i++) {
+	ok("a new prototype getter receives the child", loadStringMethod(child) === ownMethod);
+	ok(
+		"the cached getter receives each receiver",
+		loadStringMethod(sibling) === originalCharCodeAt,
+	);
+}
+ok("the getter runs on every read", inheritedGets === rounds * 2);
+delete prototype.charCodeAt;
+for (let i = 0; i < rounds; i++) {
+	ok("a deleted prototype getter stays absent", loadStringMethod(child) === undefined);
+}
+Object.setPrototypeOf(child, { charCodeAt: ownMethod });
+ok("a replacement prototype invalidates absence", loadStringMethod(child) === ownMethod);
+
 let numberGets = 0;
 Object.defineProperty(Number.prototype, "toFixed", {
 	configurable: true,
