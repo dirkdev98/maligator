@@ -1,5 +1,8 @@
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { coreDirectCreatedFunction } from "./core-ir-call-targets.ts";
+import {
+	coreCommonJsRequiredModule,
+	coreDirectCreatedFunction,
+} from "./core-ir-call-targets.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreFunctionId, coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -327,7 +330,7 @@ export function coreInstanceMethodHints(
 		const opcode = fn.instructionOpcodeName(definition);
 		if (opcode === "createObjectShaped")
 			return literalMethods(fn, definition, functionValue);
-		const required = commonJsRequiredModule(fn, definition);
+		const required = coreCommonJsRequiredModule(fn, definition);
 		if (required !== undefined) return moduleExports(required);
 		const source =
 			opcode === "loadGlobal" || opcode === "loadCaptured"
@@ -349,27 +352,6 @@ export function coreInstanceMethodHints(
 			literalFunctions.set(key, targets);
 		}
 	return { toolchain: hints, application, literalFunctions, literalCells };
-}
-
-/** The module a `require` lowered to `__cjs_require(id)` evaluates. */
-function commonJsRequiredModule(
-	fn: CoreFunctionStore,
-	call: CoreInstructionId,
-): number | undefined {
-	if (fn.instructionOpcodeName(call) !== "call") return undefined;
-	const [callee, , id] = materializeInstructionOperands(fn, call);
-	const intrinsic = callee === undefined ? undefined : movedDefinition(fn, callee);
-	const constant = id === undefined ? undefined : movedDefinition(fn, id);
-	if (
-		intrinsic === undefined ||
-		constant === undefined ||
-		fn.instructionOpcodeName(intrinsic) !== "loadIntrinsic" ||
-		fn.instructionAttributes(intrinsic).intrinsic !== "__cjs_require" ||
-		fn.instructionOpcodeName(constant) !== "createNumber"
-	)
-		return undefined;
-	const value = fn.instructionAttributes(constant).value;
-	return typeof value === "number" ? value : undefined;
 }
 
 /**

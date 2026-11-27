@@ -42,6 +42,7 @@ import {
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreLocalCallSite } from "./core-ir-interprocedural-flow.ts";
 import { analyzeCoreInterproceduralValueFlow } from "./core-ir-interprocedural-flow.ts";
+import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type {
 	CoreBlockId,
 	CoreFunctionId,
@@ -74,6 +75,13 @@ type CoreFunctionPropertyId = number;
 class CoreGraphIdentityTable {
 	readonly #ids: Map<number, Map<number, Map<number, number>>>;
 	#next: number;
+	/**
+	 * CommonJS modules whose wrapper alone can write `module.exports`, by wrapper and
+	 * by module id. The solver binds them with the closed cells, before any local
+	 * analysis runs.
+	 */
+	commonJsExports: ReadonlyMap<CoreFunctionId, CoreCommonJsModuleExports> = new Map();
+	commonJsExportModules: ReadonlySet<number> = new Set();
 
 	constructor(previous?: CoreGraphIdentityTable) {
 		const previousIds = previous === undefined ? [] : [...previous.#ids];
@@ -223,6 +231,260 @@ function functionPropertyId(
 	stringIndex: number,
 ): CoreFunctionPropertyId {
 	return identities.intern(2, functionId, stringIndex);
+}
+
+// The value `require` returns for a CommonJS module: its `module.exports`.
+function commonJsExportCellId(
+	identities: CoreGraphIdentityTable,
+	moduleId: number,
+): CoreCellId {
+	return identities.intern(5, 0, moduleId);
+}
+
+/** The module a `require` lowered to `__cjs_require(id)` evaluates. */
+export function coreCommonJsRequiredModule(
+	fn: CoreFunctionStore,
+	call: CoreInstructionId,
+): number | undefined {
+	if (fn.instructionOpcodeName(call) !== "call") return undefined;
+	const callee = movedValueDefinition(fn, instructionOperand(fn, call, 0));
+	const id = movedValueDefinition(fn, instructionOperand(fn, call, 2));
+	if (
+		callee === undefined ||
+		id === undefined ||
+		fn.instructionOpcodeName(callee) !== "loadIntrinsic" ||
+		fn.instructionAttributes(callee).intrinsic !== "__cjs_require" ||
+		fn.instructionOpcodeName(id) !== "createNumber"
+	)
+		return undefined;
+	const value = fn.instructionAttributes(id).value;
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+		? value
+		: undefined;
+}
+
+function movedValueDefinition(
+	fn: CoreFunctionStore,
+	value: CoreValueId | undefined,
+	seen = new Set<CoreValueId>(),
+): CoreInstructionId | undefined {
+	if (
+		value === undefined ||
+		seen.has(value) ||
+		fn.kernel.valueDefinitionKind(value) !== 1
+	)
+		return undefined;
+	seen.add(value);
+	const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	return fn.instructionOpcodeName(definition) === "move"
+		? movedValueDefinition(fn, instructionOperand(fn, definition, 0), seen)
+		: definition;
+}
+
+interface CoreCommonJsModuleExports {
+	readonly module: number;
+	/** The wrapper's stores to `module.exports`. */
+	readonly writes: ReadonlySet<CoreInstructionId>;
+	/**
+	 * A `require` can return the initial exports object: the wrapper may finish
+	 * without a root write, or run code that can reach a `require` of this module
+	 * before its first one.
+	 */
+	readonly initialObservable: boolean;
+}
+
+// A sloppy wrapper's arguments object and argument reads reach `module` without
+// using the parameter value.
+const ARGUMENT_ALIASING_OPCODES = [
+	"callRestArguments",
+	"constructRestArguments",
+	"createArgumentsObject",
+	"createRestArguments",
+	"createRestArgumentsState",
+	"loadArgument",
+	"loadDynamicArgument",
+	"loadStaticArgument",
+] as const;
+
+const commonJsExportScans = new WeakMap<
+	CoreFunctionStore,
+	{
+		readonly bodyVersion: number;
+		readonly cfgVersion: number;
+		readonly exceptionFlowVersion: number;
+		readonly scan: Omit<CoreCommonJsModuleExports, "module"> | undefined;
+	}
+>();
+
+function stringConstantIs(program: CoreProgram, index: unknown, text: string): boolean {
+	if (typeof index !== "number") return false;
+	const units = program.stringConstants[index];
+	return (
+		units?.length === text.length &&
+		units.every((unit, position) => unit === text.charCodeAt(position))
+	);
+}
+
+// A static or constant-keyed property access named `exports`.
+function accessesExports(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): boolean {
+	const opcode = fn.instructionOpcodeName(instruction);
+	if (opcode === "loadPropertyStatic" || opcode === "storePropertyStatic")
+		return stringConstantIs(
+			program,
+			fn.instructionAttributes(instruction).stringIndex,
+			"exports",
+		);
+	if (opcode !== "loadProperty" && opcode !== "storeProperty") return false;
+	const key = movedValueDefinition(fn, instructionOperand(fn, instruction, 1));
+	return (
+		key !== undefined &&
+		fn.instructionOpcodeName(key) === "createString" &&
+		stringConstantIs(program, fn.instructionAttributes(key).stringIndex, "exports")
+	);
+}
+
+// The value operand of a root write that `accessesExports` admitted.
+function exportedValue(
+	fn: CoreFunctionStore,
+	write: CoreInstructionId,
+): CoreValueId | undefined {
+	return instructionOperand(
+		fn,
+		write,
+		fn.instructionOpcodeName(write) === "storeProperty" ? 2 : 1,
+	);
+}
+
+/**
+ * The runtime hands a CommonJS wrapper a fresh `module` object as its first
+ * argument and keeps no other reference user code can reach, so while the wrapper
+ * only reads and writes that object's own `exports` data property, its root writes
+ * are the only values `require` can return besides the initial exports object.
+ */
+function scanCommonJsModuleExports(
+	program: CoreProgram,
+	wrapper: CoreFunctionStore,
+): Omit<CoreCommonJsModuleExports, "module"> | undefined {
+	const cached = commonJsExportScans.get(wrapper);
+	if (
+		cached !== undefined &&
+		!wrapper.hasActiveEditor &&
+		cached.bodyVersion === wrapper.version("body") &&
+		cached.cfgVersion === wrapper.version("cfg") &&
+		cached.exceptionFlowVersion === wrapper.version("exceptionFlow")
+	)
+		return cached.scan;
+	const scan = analyzeCommonJsModuleExports(program, wrapper);
+	if (!wrapper.hasActiveEditor)
+		commonJsExportScans.set(wrapper, {
+			bodyVersion: wrapper.version("body"),
+			cfgVersion: wrapper.version("cfg"),
+			exceptionFlowVersion: wrapper.version("exceptionFlow"),
+			scan,
+		});
+	return scan;
+}
+
+function analyzeCommonJsModuleExports(
+	program: CoreProgram,
+	wrapper: CoreFunctionStore,
+): Omit<CoreCommonJsModuleExports, "module"> | undefined {
+	if (
+		wrapper.parameterCount < 1 ||
+		wrapper
+			.opcodeSites()
+			.hasAny(ARGUMENT_ALIASING_OPCODES.map((name) => wrapper.registry.require(name).id))
+	)
+		return undefined;
+	const kernel = wrapper.kernel;
+	const moduleValues = new Set<CoreValueId>();
+	const writes = new Set<CoreInstructionId>();
+	const pending = [kernel.functionParameter(0)];
+	while (pending.length > 0) {
+		const value = pending.pop()!;
+		if (moduleValues.has(value)) continue;
+		moduleValues.add(value);
+		if (kernel.valueHandlerUseCount(value) !== 0) return undefined;
+		for (let use = kernel.valueFirstUse(value); use >= 0; use = kernel.useNext(use)) {
+			if (kernel.useLive(use) === 0) continue;
+			const instruction = coreInstructionId(kernel.useInstruction(use));
+			if (wrapper.instructionKind(instruction) !== "operation") return undefined;
+			const opcode = wrapper.instructionOpcodeName(instruction);
+			const attributes = wrapper.instructionAttributes(instruction);
+			if (opcode === "move") {
+				pending.push(kernel.resultAt(kernel.instructionResultStart(instruction)));
+			} else if (
+				kernel.useOperand(use) === 0 &&
+				accessesExports(program, wrapper, instruction)
+			) {
+				if (opcode === "storePropertyStatic" || opcode === "storeProperty")
+					writes.add(instruction);
+			} else if (
+				!(
+					opcode === "typeofCompare" ||
+					(opcode === "unary" && attributes.operator === "typeof") ||
+					(opcode === "binary" &&
+						(attributes.operator === "===" || attributes.operator === "!=="))
+				)
+			)
+				return undefined;
+		}
+	}
+	if (writes.size === 0) return undefined;
+	return Object.freeze({
+		writes,
+		initialObservable: initialExportsObservable(program, wrapper, writes, moduleValues),
+	});
+}
+
+/**
+ * Whether a path from the wrapper's entry returns without a root write, or runs an
+ * operation that can call user code before reaching one. Without either, every
+ * `require` of the module, a circular one included, returns a root write's value.
+ */
+function initialExportsObservable(
+	program: CoreProgram,
+	wrapper: CoreFunctionStore,
+	writes: ReadonlySet<CoreInstructionId>,
+	moduleValues: ReadonlySet<CoreValueId>,
+): boolean {
+	const cfg = buildCoreControlFlow(program, wrapper.id, { exceptions: true });
+	const visited = new Set<CoreBlockId>();
+	const pending: Array<CoreBlockId> = [wrapper.entry];
+	while (pending.length > 0) {
+		const block = pending.pop()!;
+		if (visited.has(block)) continue;
+		visited.add(block);
+		let written = false;
+		for (
+			let row = wrapper.blockFirstInstruction(block);
+			row >= 0;
+			row = wrapper.kernel.instructionNext(row as CoreInstructionId)
+		) {
+			const instruction = row as CoreInstructionId;
+			if (writes.has(instruction)) {
+				written = true;
+				break;
+			}
+			if (wrapper.kernel.instructionOpcode(instruction) < 0) continue;
+			const effects = coreInstructionEffects(wrapper, instruction);
+			// The module object's own `exports` is a data property: reading it runs no code.
+			const ownExportsRead =
+				moduleValues.has(instructionOperand(wrapper, instruction, 0)!) &&
+				accessesExports(program, wrapper, instruction);
+			if ((effects.callsUserCode || effects.maySuspend) && !ownExportsRead) return true;
+		}
+		// A handler of the writing block may run after an exception from before the write.
+		if (written && wrapper.kernel.blockHandlerBlock(block) !== undefined) return true;
+		if (written) continue;
+		if (wrapper.instructionKind(wrapper.blockTerminator(block)) === "return") return true;
+		for (const edge of cfg.successors[block] ?? []) pending.push(cfg.edges.to(edge));
+	}
+	return false;
 }
 
 function instructionOperand(
@@ -840,6 +1102,8 @@ function collectFunctionCellAccesses(
 	const closes = new Set<CoreCellId>();
 	for (let index = 0; index < localTransfers.operationCount; index++) {
 		const instruction = localTransfers.operationAt(index);
+		const required = coreCommonJsRequiredModule(fn, instruction);
+		if (required !== undefined) reads.add(commonJsExportCellId(identities, required));
 		if (fn.instructionOpcodeName(instruction) !== "createFunction") continue;
 		const target = fn.instructionAttributes(instruction).functionIndex;
 		if (typeof target !== "number" || !program.hasFunction(target as CoreFunctionId))
@@ -971,6 +1235,7 @@ function analyzeFunctionTargets(
 		}
 		return true;
 	};
+	const requiredExports = new Map<CoreCellId, CoreCalleeTargets>();
 	const parameterInputs = new Map<CoreCellId, CoreCalleeTargets>();
 	for (let index = 0; index < fn.parameterCount; index++) {
 		const key = parameterCellId(identities, fn.id, index);
@@ -1167,6 +1432,12 @@ function analyzeFunctionTargets(
 				}
 				resultTargets =
 					builtinResultTargets(fn, instruction, inputTargets) ?? resultTargets;
+				const required = coreCommonJsRequiredModule(fn, instruction);
+				if (required !== undefined && identities.commonJsExportModules.has(required)) {
+					const key = commonJsExportCellId(identities, required);
+					resultTargets = cells.get(key) ?? CORE_CALLEE_TARGETS_BOTTOM;
+					requiredExports.set(key, resultTargets);
+				}
 			} else if (
 				fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer !== undefined ||
 				opcode === "callKnown"
@@ -1216,8 +1487,25 @@ function analyzeFunctionTargets(
 			open: coreCalleeTargetsAreOpen(targets),
 		});
 	});
-	const cellInputs = new Map<CoreCellId, CoreCalleeTargets>(parameterInputs);
+	const cellInputs = new Map<CoreCellId, CoreCalleeTargets>([
+		...parameterInputs,
+		...requiredExports,
+	]);
 	const cellWrites = new Map<CoreCellId, CoreCalleeTargets>();
+	const moduleExports = identities.commonJsExports.get(fn.id);
+	if (moduleExports !== undefined) {
+		let exported = CORE_CALLEE_TARGETS_BOTTOM;
+		for (const write of moduleExports.writes) {
+			if (!cfg.reachable.has(fn.instructionBlock(write))) continue;
+			const value = exportedValue(fn, write);
+			exported = joinCoreCalleeTargets(
+				exported,
+				value === undefined ? CORE_CALLEE_TARGETS_OPEN : values[value]!,
+			);
+		}
+		if (!coreCalleeTargetsIsBottom(exported))
+			cellWrites.set(commonJsExportCellId(identities, moduleExports.module), exported);
+	}
 	const writeParameters = (
 		target: CoreFunctionId,
 		argument: (index: number) => CoreCalleeTargets,
@@ -1488,6 +1776,23 @@ export const CORE_PROGRAM_FLOW_CALL_TARGET_SEMANTICS: CoreProgramFlowCallTargetS
 		}
 		for (const index of moduleVarGlobalSlots(context))
 			if (!shared.has(index)) cells.add(globalCellId(identities, index));
+		const commonJsExports = new Map<CoreFunctionId, CoreCommonJsModuleExports>();
+		for (const [module, wrapper] of (
+			context?.data.cjsModuleFunctionIndices ?? []
+		).entries()) {
+			if (!program.hasFunction(wrapper as CoreFunctionId)) continue;
+			const scan = scanCommonJsModuleExports(
+				program,
+				program.function(wrapper as CoreFunctionId),
+			);
+			if (scan === undefined) continue;
+			commonJsExports.set(wrapper as CoreFunctionId, { ...scan, module });
+			cells.add(commonJsExportCellId(identities, module));
+		}
+		identities.commonJsExports = commonJsExports;
+		identities.commonJsExportModules = new Set(
+			[...commonJsExports.values()].map((exports) => exports.module),
+		);
 		return cells;
 	},
 	initialCells(
@@ -1495,12 +1800,20 @@ export const CORE_PROGRAM_FLOW_CALL_TARGET_SEMANTICS: CoreProgramFlowCallTargetS
 		context: CoreCompilationContext | undefined,
 		identities: CoreGraphIdentityTable,
 	) {
-		return new Map(
+		const cells = new Map(
 			moduleVarGlobalSlots(context).map(
 				(index) =>
 					[globalCellId(identities, index), CORE_CALLEE_TARGETS_NON_CALLABLE] as const,
 			),
 		);
+		// The initial exports object is an ordinary object.
+		for (const { module, initialObservable } of identities.commonJsExports.values())
+			if (initialObservable)
+				cells.set(
+					commonJsExportCellId(identities, module),
+					CORE_CALLEE_TARGETS_NON_CALLABLE,
+				);
+		return cells;
 	},
 	analyzeLocal: analyzeFunctionTargets,
 	callSiteEqual,
