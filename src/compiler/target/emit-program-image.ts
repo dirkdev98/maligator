@@ -1749,6 +1749,7 @@ function emitProgramImageParts(
 					if (fn.trySymbol !== undefined)
 						lines.push(
 							`static bool ${fn.trySymbol}(${nativeFastTryParameterList(fn.tryAbi!)});`,
+							`static MalValue ${fn.symbol}_full${COMPILED_FUNCTION_DECLARATION};`,
 						);
 				}
 			}
@@ -1789,7 +1790,10 @@ function emitProgramImageParts(
 			if (fn !== null) {
 				if (fn.source.length > 0) lines.push(`MAL_DECLARE_COMPILED(${fn.symbol});`);
 				if (fn.trySymbol !== undefined)
-					lines.push(`bool ${fn.trySymbol}(${nativeFastTryParameterList(fn.tryAbi!)});`);
+					lines.push(
+						`bool ${fn.trySymbol}(${nativeFastTryParameterList(fn.tryAbi!)});`,
+						`MAL_DECLARE_COMPILED(${fn.symbol}_full);`,
+					);
 			}
 		}
 		for (const fn of compiled) {
@@ -2129,6 +2133,10 @@ function compiledFunctionDeclarations(
 									{
 										symbol: fn.trySymbol,
 										source: `bool ${fn.trySymbol}(${nativeFastTryParameterList(fn.tryAbi!)});`,
+									},
+									{
+										symbol: `${fn.symbol}_full`,
+										source: `MalValue ${fn.symbol}_full${COMPILED_FUNCTION_DECLARATION};`,
 									},
 								]),
 					],
@@ -3689,7 +3697,10 @@ function emitBatchUnits(
 				? [`${storage}MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`]
 				: []),
 			...(canonical && fn.trySymbol !== undefined
-				? [`${storage}bool ${fn.trySymbol}(${nativeFastTryParameterList(fn.tryAbi!)});`]
+				? [
+						`${storage}bool ${fn.trySymbol}(${nativeFastTryParameterList(fn.tryAbi!)});`,
+						`${storage}MalValue ${fn.symbol}_full${COMPILED_FUNCTION_DECLARATION};`,
+					]
 				: []),
 			...fn.directEntries.flatMap((entry) => [
 				`${storage}${directEntryDeclaration(entry)};`,

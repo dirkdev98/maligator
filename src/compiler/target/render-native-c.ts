@@ -5166,6 +5166,7 @@ function emitCompiledVariant(
 			: undefined,
 	);
 	const fullSymbol = `${symbol}_full`;
+	const fullLinkage = linkage === "static" ? "static " : "";
 	let fastSourceMap: ReadonlyArray<NativeSourceRange> = [];
 	let tryAbi: NativeFastTryAbi | undefined;
 	let probeLookups: Array<{ readonly ip: number; readonly target: number }> | undefined;
@@ -5318,16 +5319,14 @@ function emitCompiledVariant(
 				})
 			: undefined;
 	// The body declares its frame record first. A fast entry's wrapper dispatches before
-	// its fast body; a plain body does so itself.
-	const bodyDispatch = [
-		FRAME_RECORD_DECLARATION,
-		...(fastEntry === undefined ? ownDispatch : []),
-	];
+	// its fast body, and the body dispatches again because a call whose own fast-path
+	// attempt failed enters the body directly.
+	const bodyDispatch = [FRAME_RECORD_DECLARATION, ...ownDispatch];
 	const bodyOffset =
 		joinedCodeUnits([
 			fastEntry === undefined
 				? frameSignature
-				: `static ${NATIVE_ENTRY_ATTRIBUTES}MAL_COMPILED_FRAME __attribute__((noinline)) __attribute__((aligned(64))) ${resultType} ${fullSymbol}(${parameterList}) {`,
+				: `${fullLinkage}${NATIVE_ENTRY_ATTRIBUTES}MAL_COMPILED_FRAME __attribute__((noinline)) __attribute__((aligned(64))) ${resultType} ${fullSymbol}(${parameterList}) {`,
 			"#pragma STDC FP_CONTRACT OFF",
 			...bodyDispatch,
 			...rootMaskStatements.declarations,
@@ -5336,7 +5335,7 @@ function emitCompiledVariant(
 	const definition = split ?? [
 		fastEntry === undefined
 			? frameSignature
-			: `static ${NATIVE_ENTRY_ATTRIBUTES}MAL_COMPILED_FRAME __attribute__((noinline)) __attribute__((aligned(64))) ${resultType} ${fullSymbol}(${parameterList}) {`,
+			: `${fullLinkage}${NATIVE_ENTRY_ATTRIBUTES}MAL_COMPILED_FRAME __attribute__((noinline)) __attribute__((aligned(64))) ${resultType} ${fullSymbol}(${parameterList}) {`,
 		// Each JavaScript arithmetic operation rounds separately, including expression chains.
 		"#pragma STDC FP_CONTRACT OFF",
 		...bodyDispatch,
@@ -5356,7 +5355,7 @@ function emitCompiledVariant(
 			: compiledFrameDescriptor(
 					symbol,
 					fullSymbol,
-					`static ${resultType} ${fullSymbol}(${parameterList})`,
+					`${fullLinkage}${resultType} ${fullSymbol}(${parameterList})`,
 				)),
 		...definition,
 	];
@@ -14756,6 +14755,8 @@ class NativeInstructionEmission {
 		readonly argumentsExpression: string;
 		readonly environment: string;
 		readonly ordinary: string;
+		/** The canonical call's argument list, which `<target>_full` shares. */
+		readonly ordinaryArguments: string;
 		readonly mode: "direct" | "guarded";
 	}): Array<string> {
 		const {
@@ -14766,6 +14767,7 @@ class NativeInstructionEmission {
 			argumentsExpression: argsExpr,
 			environment,
 			ordinary,
+			ordinaryArguments,
 			mode,
 		} = input;
 		const resultKind = mode === "direct" ? "undefined" : undefined;
@@ -14816,11 +14818,16 @@ class NativeInstructionEmission {
 			...(abi.omitEnvironment ? [] : [environment]),
 			...(abi.result.kind === "boxed" ? [`&${value}`] : []),
 		].join(", ")})`;
-		// Fast success preserves the normal completion of generated calls.
+		// The canonical entry of a function with an exported fast path retries that path
+		// first, and a failed attempt fails again with the same inputs, so a miss enters the
+		// body behind it. Fast success preserves the normal completion of generated calls.
+		const full = `${this.context.relocation.reference(
+			`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}_full`,
+		)}(${ordinaryArguments})`;
 		const miss =
 			ordinaryThrowCheck === undefined
-				? `${value} = ${ordinary};`
-				: `{ ${value} = ${ordinary}; ${ordinaryThrowCheck} }`;
+				? `${value} = ${full};`
+				: `{ ${value} = ${full}; ${ordinaryThrowCheck} }`;
 		return [
 			`MalValue ${value}${reconstructed === undefined ? "" : ` = ${reconstructed}`};`,
 			`if (${guards.length === 0 ? "" : `${guards.join(" || ")} || `}!${call}) ${miss}`,
@@ -16015,7 +16022,8 @@ class NativeInstructionEmission {
 					const receiver = strict
 						? this.boxedOperand(instruction.thisValue)
 						: `mal_vm_callee_this(vm, &vm->runtime_image->functions[${this.context.relocation.functionIndex(target)}], ${this.boxedOperand(instruction.thisValue)})`;
-					const ordinary = `${this.context.relocation.reference(`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}`)}(vm, ${receiver}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee}, nullptr)`;
+					const ordinaryArguments = `vm, ${receiver}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee}, nullptr`;
+					const ordinary = `${this.context.relocation.reference(`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}`)}(${ordinaryArguments})`;
 					const invoke = this.compiledCallWithFastPath({
 						target:
 							strict &&
@@ -16029,6 +16037,7 @@ class NativeInstructionEmission {
 						argumentsExpression: argsExpr,
 						environment: `mal_value_to_function_object(${guardedCallee})->creation_env`,
 						ordinary,
+						ordinaryArguments,
 						mode: "guarded",
 					});
 					return [
@@ -16173,7 +16182,8 @@ class NativeInstructionEmission {
 					"applied",
 				);
 				const directValue = `__direct_value_${this.ip}`;
-				const ordinary = `${this.context.relocation.reference(`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}`)}(vm, ${thisArgument}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, ${directEnvironment}, ${directCallee}, nullptr)`;
+				const ordinaryArguments = `vm, ${thisArgument}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, ${directEnvironment}, ${directCallee}, nullptr`;
+				const ordinary = `${this.context.relocation.reference(`mal_compiled_${this.context.relocation.stem(target)}${this.suffix}`)}(${ordinaryArguments})`;
 				return [
 					`MalValue ${directCallee} = ${this.boxedOperand(instruction.callee)};`,
 					...functionDeclaration,
@@ -16188,6 +16198,7 @@ class NativeInstructionEmission {
 						argumentsExpression: argsExpr,
 						environment: directEnvironment,
 						ordinary,
+						ordinaryArguments,
 						// Value-producing helpers can have a preferred scalar dispatch.
 						mode: "direct",
 					}),

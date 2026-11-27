@@ -218,7 +218,9 @@ describe("native entry call overrides", () => {
 		const probe = source.indexOf("if (!mal_compiled_1_try(");
 		const end = source.indexOf("\n", probe);
 		expect(probe).toBeGreaterThan(0);
-		expect(source.slice(probe, end)).toContain(") { __direct_value_0 = mal_compiled_1(");
+		expect(source.slice(probe, end)).toContain(
+			") { __direct_value_0 = mal_compiled_1_full(",
+		);
 		expect(source.slice(probe, end)).toContain("if (MAL_THREW())");
 		const result = source.indexOf("r2 = __direct_value_0", end);
 		expect(result).toBeGreaterThan(end);
@@ -289,12 +291,12 @@ describe("native entry call overrides", () => {
 		["argument", { kind: "parameter", index: 0 }, "r1"],
 		["omitted argument", { kind: "parameter", index: 1 }, "MAL_VALUE_UNDEFINED"],
 	] as const)(
-		"reconstructs a guarded %s result and retains the ordinary miss result",
+		"reconstructs a guarded %s result and enters the full body on a miss",
 		(_name, result, value) => {
 			const source = emitFullCallProbe({ result });
 			expect(source).toContain(`MalValue __guarded_value_0_1 = ${value};`);
 			expect(source).toMatch(
-				/if \(!mal_compiled_1_try\(vm, [^\n]+creation_env\)\) __guarded_value_0_1 = mal_compiled_1\(/,
+				/if \(!mal_compiled_1_try\(vm, [^\n]+creation_env\)\) __guarded_value_0_1 = mal_compiled_1_full\(/,
 			);
 		},
 	);
@@ -363,7 +365,7 @@ describe("native entry call overrides", () => {
 			);
 			if (guard !== undefined)
 				expect(source).toContain(`${guard} || !mal_compiled_1_try(`);
-			expect(source).toContain("__direct_value_0 = mal_compiled_1(vm,");
+			expect(source).toContain("__direct_value_0 = mal_compiled_1_full(vm,");
 		},
 	);
 
