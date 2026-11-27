@@ -142,16 +142,6 @@ static generated-code size and helper counts do not establish runtime cost.
       as `fn(req, res, next)`, `this.matchers[i](path)` and `next()` take runtime
       dispatch: about 18 calls per request in the in-process Express census.
 
-- [ ] Give script `get`, `set` and `has` methods targets so they stop failing the
-      collection guess. The receiver's local kind now drops impossible guesses, but
-      on in-process Express 17.2 calls per request still fail it: 16.0 are Express's
-      own `app.set`, `this.get` and `this.set` (3.4 at `application.js:475`), whose
-      methods are assigned onto mixin objects and prototypes, so no target is known;
-      1.2 are qs `has` calls whose targets Core finds but the specialization-plan
-      budget excludes. Letting known script targets win over the name guess in call
-      emission changed no Express code, so this waits on the method-target entry
-      below and on that budget.
-
 - [ ] Recognize built-ins read through an alias, such as `var isArray = Array.isArray`,
       once a workload calls them in a hot path. A static cell proof that requires an
       initialized read and the same built-in at every visible write lets the existing
@@ -189,20 +179,21 @@ static generated-code size and helper counts do not establish runtime cost.
       right. Leaf `instanceof`, `in`, Number coercions, `charCodeAt` and `str[i]`
       cut Express's fast-path misses from 865,644 to 297,465 per 10k requests; leaf
       loops (capped at 128 iterations) made the header scanners succeed but cost about
-      2,400 instructions per request, so loops stay out. Then revisit admitting proven
-      single targets past the specialization-plan budget, which runs out about 260 of
-      2,101 opportunities into Express and keeps `parseurl` and body-parser `read` on
-      runtime dispatch.
+      2,400 instructions per request, so loops stay out.
 
-- [ ] Give methods stored as `F.prototype.name = function` guarded dispatch. In the
-      in-process Express census, 211 calls per request stay on runtime dispatch, led by
-      `layer.match` and `layer.handleRequest`. Method-name hints cover class methods
-      only, but hints alone are not enough: region selection admits a name guess only
-      in a loop, a small concise method or a hinted caller, and `matchLayer` and
-      `trim_prefix` have none. Pair the hints with letting a small function that its
-      caller invokes directly in a loop inherit that loop's weight, and keep names
-      that more than four prototypes share, such as codec `write`/`end`, from
-      dropping the guesses object literals give today.
+- [ ] Make a guarded call to a script method cheaper than generic dispatch before
+      widening its hints. Hints for methods assigned to prototypes and mixin objects,
+      `this.m()` calls between methods of one object and small functions a loop calls
+      directly reach the hot Express calls (`layer.match`, `app.set`, `res.get` and
+      `res.set`), and a sibling target can replace the collection guess for
+      `get`/`set`/`has`, cutting generic calls from 114.8 to 82.2 per request. Express
+      instructions do not move, because a guarded direct call still enters the
+      target's ordinary compiled entry with an argument array and saves only the
+      call-cache lookup, about 6 instructions, while the extra admissions grow the
+      native self-compiler's `__text` by 3%. The saving has to come from inlining
+      these small methods or giving them typed direct entries; the cross-call
+      transforms decline 882 of 964 such inline offers on the program budget.
+      `layer.handleRequest` in `trim_prefix` has no loop weight.
 
 - [ ] Admit iterator-cursor, entry-pair, enumeration-snapshot and indexed-loop plans in
       async functions and generators for loops that contain no `await` or `yield`. Each
