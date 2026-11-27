@@ -280,6 +280,7 @@ describe("Test262 VM image merger", () => {
 		const program = compile(`
 			(function () {
 				function count(value) { return arguments.length + value; }
+				globalThis.recount = () => count(0);
 				globalThis.count = count(1, 2, 3);
 				class Price { quote(r) { return r.x + (r.y > 0); } }
 				const price = new Price();
