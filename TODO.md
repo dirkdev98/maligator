@@ -489,7 +489,11 @@ distinct when measuring text work.
       Readable still costs about 5x Node and a Writable 3.5x, mostly option reads
       through `mal_vm_get_static` and per-object state allocation; `once` builds a
       native wrapper function with its own `listener` property, and a hot `emit` costs
-      about 3x Node in key conversion, the listener lookup and the generic call.
+      about 3x Node in key conversion, the listener lookup and the generic call. On
+      in-process Express, probing the literal-name row before building a key in
+      `mal_vm_get_static` skips only 4.4 key constructions per request, and a
+      shape-and-event listener row would hit 1.6 times; together they stayed within
+      noise, so the per-request stream cost sits elsewhere.
 
 - [ ] Bound a later-preheader array-initialization experiment to existing
       constant/dominance facts and initialization-region fixtures. Reproduce the original
