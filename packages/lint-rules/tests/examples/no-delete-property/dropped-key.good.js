@@ -1,6 +1,6 @@
-// Clearing `cached` keeps every entry in the shape its literal created.
+// Clearing `cached` keeps `id` in the slot its literal gave it.
 function entry(index) {
-	const result = { id: index, cached: index * 2 };
+	const result = { cached: index * 2, id: index };
 	if (index % 3 === 0) result.cached = undefined;
 	return result;
 }

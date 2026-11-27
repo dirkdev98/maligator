@@ -285,6 +285,12 @@
 			}
 		},
 		{
+			"files": ["scripts/**", "tests/**", "website/**"],
+			"rules": {
+				"maligator/no-dynamic-global-access": "off"
+			}
+		},
+		{
 			"files": ["website/docs/examples/*.ts"],
 			"rules": {
 				"no-console": "off"

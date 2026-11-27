@@ -128,6 +128,17 @@ static generated-code size and helper counts do not establish runtime cost.
       changed downstream scalar/effect decisions and runtime savings that repay
       Node/native analysis and generated-C cost.
 
+- [ ] Serve accessors from shape-guarded property loads. Own and inherited accessors
+      live outside shapes, so every read of one leaves the inline cache: in the
+      in-process Express census, `debug.enabled`, `app.router` and `req.fresh` account
+      for about 15 of the 28.6 shape-guard misses per request, all of them missing on
+      every execution.
+
+- [ ] Admit iterator-cursor, entry-pair, enumeration-snapshot and indexed-loop plans in
+      async functions and generators for loops that contain no `await` or `yield`. Each
+      plan rejects the whole function today, so a request handler's loops all take the
+      generic iterator path.
+
 - [ ] Keep keys that straight-line code adds after an object literal in the literal's
       allocation layout. Provenance marks any access to a key outside the literal
       as an escape, which drops the object's exact-slot and scalar-replacement proofs,

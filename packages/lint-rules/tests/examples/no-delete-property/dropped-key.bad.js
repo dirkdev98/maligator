@@ -1,7 +1,7 @@
-// Entries that drop `cached` take a new shape, so the reading loop meets entries
-// of two shapes.
+// Deleting `cached` moves `id` to another slot, so the reading loop meets
+// entries in two layouts.
 function entry(index) {
-	const result = { id: index, cached: index * 2 };
+	const result = { cached: index * 2, id: index };
 	if (index % 3 === 0) delete result.cached;
 	return result;
 }

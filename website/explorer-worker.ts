@@ -12,7 +12,7 @@ import type {
 } from "../src/explorer/protocol.ts";
 import { WasmEngine } from "../src/wasm-embedding.ts";
 
-const scope = self as unknown as DedicatedWorkerGlobalScope;
+const scope = globalThis as unknown as DedicatedWorkerGlobalScope;
 let engine: WasmEngine | undefined;
 let identity: string | undefined;
 let initializing = false;

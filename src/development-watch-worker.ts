@@ -1,8 +1,10 @@
 import type { TaskContext } from "maligator:workers";
 
-const mal = Reflect.get(globalThis, "mal") as unknown as {
-	_waitDevelopmentChange(directories: Array<string>, timeoutMs: number): void;
-};
+const mal = (
+	globalThis as unknown as {
+		mal: { _waitDevelopmentChange(directories: Array<string>, timeoutMs: number): void };
+	}
+).mal;
 
 /**
  * Block until a watched directory changes or the timeout passes. It runs on a

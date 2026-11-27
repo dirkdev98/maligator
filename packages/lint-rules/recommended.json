@@ -3,8 +3,11 @@
 	"rules": {
 		"maligator/monomorphic-objects": "error",
 		"maligator/no-delete-property": "error",
+		"maligator/no-dynamic-global-access": "error",
 		"no-eval": "error",
 		"no-extend-native": "error",
-		"no-new-func": "error"
+		"no-new-func": "error",
+		"prefer-rest-params": "error",
+		"unicorn/prefer-global-this": "error"
 	}
 }

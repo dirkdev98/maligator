@@ -1,54 +1,28 @@
 import { accessedKey, referencedRecord } from "./records.ts";
-import type { AnyNode, AstNode, Context, Rule } from "./types.ts";
+import type { Rule } from "./types.ts";
 
+// Integer keys live in an object's elements, not its shape.
 const ARRAY_INDEX = /^\d+$/u;
 
-/** Whether `this` at `node` is a class instance: in a method, constructor or field. */
-function instanceThis(node: AnyNode): boolean {
-	for (let parent = node.parent; parent !== null; parent = parent.parent) {
-		switch (parent.type) {
-			case "FunctionExpression":
-				return parent.parent.type === "MethodDefinition" && !parent.parent.static;
-			case "PropertyDefinition":
-				return !parent.static;
-			case "FunctionDeclaration":
-			case "StaticBlock":
-				return false;
-		}
-	}
-	return false;
-}
-
-/** How to name the object a delete targets, when it is a record or class instance. */
-function shapedObjectName(
-	context: Context,
-	node: AnyNode,
-	object: AstNode<"MemberExpression">["object"],
-): string | undefined {
-	if (object.type === "ThisExpression") return instanceThis(node) ? "this" : undefined;
-	if (object.type === "Identifier" && referencedRecord(context, object) !== undefined)
-		return object.name;
-	return undefined;
-}
-
 /**
- * Deleting a key gives the object a new shape: the runtime rebuilds it from the
- * remaining keys, and once a heap has created enough such shapes, a delete turns
- * the object into a dictionary. Objects with and without the key then reach the
- * same readers in different shapes. Whether the key exists is observable, so the
- * compiler cannot replace the delete itself. Records and class instances are
- * reported; other objects may be dictionaries, whose keys vary by design.
+ * The runtime rebuilds an object's shape without a deleted key, moving every key
+ * after it to a lower slot. Code that reads those later keys then meets the
+ * object in two layouts and falls back to the property cache, while reads of
+ * keys before it keep their slots. Whether a key exists is observable, so the
+ * compiler cannot replace the delete itself. Only records are reported, whose
+ * key order the literal fixes; other objects may be dictionaries, whose keys
+ * vary by design.
  */
 export const noDeleteProperty: Rule = {
 	meta: {
 		type: "suggestion",
 		docs: {
-			description: "Disallow deleting a fixed key from a record or class instance",
+			description: "Disallow deleting a key that other keys of a record follow",
 		},
 		hasSuggestions: true,
 		messages: {
 			deletedKey:
-				"Deleting `{{key}}` gives `{{object}}` a new shape, so code that reads these objects meets more than one shape. Assign `undefined` instead, or leave `{{key}}` out when the object is created.",
+				"Deleting `{{key}}` moves the keys `{{object}}` defines after it, so code that reads them meets two layouts. Assign `undefined` instead.",
 			assignUndefined: "Assign `undefined` to `{{key}}` instead.",
 		},
 	},
@@ -59,17 +33,20 @@ export const noDeleteProperty: Rule = {
 				if (
 					node.operator !== "delete" ||
 					member.type !== "MemberExpression" ||
-					member.optional
+					member.optional ||
+					member.object.type !== "Identifier"
 				)
 					return;
 				const key = accessedKey(member);
-				if (key === undefined || ARRAY_INDEX.test(key)) return;
-				const name = shapedObjectName(context, node, member.object);
-				if (name === undefined) return;
+				const keys = referencedRecord(context, member.object)?.keys;
+				if (key === undefined || keys === undefined || ARRAY_INDEX.test(key)) return;
+				const order = [...keys].filter((name) => !ARRAY_INDEX.test(name));
+				const position = order.indexOf(key);
+				if (position < 0 || position === order.length - 1) return;
 				context.report({
 					node,
 					messageId: "deletedKey",
-					data: { object: name, key },
+					data: { object: member.object.name, key },
 					suggest:
 						node.parent.type === "ExpressionStatement"
 							? [

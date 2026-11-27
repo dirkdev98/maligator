@@ -6,7 +6,7 @@ import type {
 import { testHostError } from "./host-protocol.mts";
 import type { TestHostEvent, TestHostRequest } from "./host-protocol.mts";
 
-const bridge = Reflect.get(globalThis, "mal") as unknown as NativeApplicationBridge;
+const bridge = (globalThis as unknown as { mal: NativeApplicationBridge }).mal;
 const images = new Map<number, object>();
 const applications = new Map<
 	number,

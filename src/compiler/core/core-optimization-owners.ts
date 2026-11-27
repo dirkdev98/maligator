@@ -120,16 +120,24 @@ export type CompilerOptimizationOwnerRuntimePhases = Readonly<
 	Partial<Record<keyof CompilerOptimizationOwnerPhases, CoreOptimizationRuntimeCounters>>
 >;
 
-function runtimeCounterReader(name: string): (() => number) | undefined {
-	const value = Reflect.get(globalThis, name) as unknown;
+interface RuntimeCounterGlobals {
+	readonly __mal_gc_allocated_bytes?: unknown;
+	readonly __mal_gc_collections?: unknown;
+}
+
+function runtimeCounterReader(value: unknown): (() => number) | undefined {
 	return typeof value === "function" ? (value as () => number) : undefined;
 }
 
 export function coreOptimizationRuntimeCounterReaders():
 	| CoreOptimizationRuntimeCounterReaders
 	| undefined {
-	const allocatedBytes = runtimeCounterReader("__mal_gc_allocated_bytes");
-	const collections = runtimeCounterReader("__mal_gc_collections");
+	const allocatedBytes = runtimeCounterReader(
+		(globalThis as RuntimeCounterGlobals).__mal_gc_allocated_bytes,
+	);
+	const collections = runtimeCounterReader(
+		(globalThis as RuntimeCounterGlobals).__mal_gc_collections,
+	);
 	if (allocatedBytes === undefined || collections === undefined) return undefined;
 	return Object.freeze({ allocatedBytes, collections });
 }

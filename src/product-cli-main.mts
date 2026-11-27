@@ -19,11 +19,15 @@ import { compilerProducerDigests } from "./product-assets.mts";
 import { createProductInstallation } from "./product-installation.mts";
 import { workerBudget } from "./worker-budget.ts";
 
-const mal = Reflect.get(globalThis, "mal") as unknown as NativeApplicationBridge & {
-	_spawnDevelopmentProcess(executablePath: string, args: Array<string>): number;
-	_killDevelopmentProcess(handle: number, force: boolean): void;
-	_developmentProcessStatus(handle: number): number | undefined;
-};
+const mal = (
+	globalThis as unknown as {
+		mal: NativeApplicationBridge & {
+			_spawnDevelopmentProcess(executablePath: string, args: Array<string>): number;
+			_killDevelopmentProcess(handle: number, force: boolean): void;
+			_developmentProcessStatus(handle: number): number | undefined;
+		};
+	}
+).mal;
 
 type DevelopmentWatchWorker = { waitForChange: typeof waitForChange };
 const developmentWatchEntry = createWorkerUrl<DevelopmentWatchWorker>(
