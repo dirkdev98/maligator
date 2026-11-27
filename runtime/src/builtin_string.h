@@ -465,6 +465,32 @@ bool mal_builtin_string_span_locale_case(
     MalValue locales, bool upper, MalValue *out
 );
 MalValue mal_builtin_string_case_known(MalVm *vm, MalString *string, bool upper, MalUnicodeLocale locale);
+
+typedef enum MalStringGuardedMethod {
+    MAL_STRING_GUARDED_TO_LOWER_CASE,
+    MAL_STRING_GUARDED_TO_UPPER_CASE,
+    MAL_STRING_GUARDED_INDEX_OF,
+    MAL_STRING_GUARDED_LAST_INDEX_OF,
+    MAL_STRING_GUARDED_INCLUDES,
+    MAL_STRING_GUARDED_STARTS_WITH,
+    MAL_STRING_GUARDED_ENDS_WITH,
+    MAL_STRING_GUARDED_SLICE,
+    MAL_STRING_GUARDED_SUBSTRING,
+    MAL_STRING_GUARDED_SUBSTR,
+} MalStringGuardedMethod;
+
+/**
+ * Call `callee` as `receiver.<method>(...args)` from a site that guessed this String
+ * builtin from the method name alone. The current realm's own builtin on a primitive
+ * string runs without a call frame; anything else, including a String wrapper object,
+ * takes the ordinary call with nothing observable before it. Returns the result, or
+ * undefined with a pending throw.
+ */
+MalValue mal_builtin_string_method_call(
+    MalVm *vm, MalStringGuardedMethod method, MalValue callee, MalValue receiver,
+    const MalValue *args, i32 arg_count
+);
+
 // Guard misses have no effects; admitted form conversion may re-enter, allocate or throw.
 bool mal_builtin_string_span_normalize(
     MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,

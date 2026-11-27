@@ -3098,6 +3098,82 @@ bool mal_builtin_string_span_case(
     return true;
 }
 
+// Positions other than numbers would run ToNumber, which only the ordinary call does, so
+// a false result has taken no observable step.
+static bool string_guarded_method_run(
+    MalVm *vm, MalStringGuardedMethod method, MalValue callee, MalValue receiver,
+    MalValue first, MalValue second, MalValue *out
+) {
+    MalString *string = mal_value_to_string(receiver);
+    switch (method) {
+        case MAL_STRING_GUARDED_TO_LOWER_CASE:
+        case MAL_STRING_GUARDED_TO_UPPER_CASE:
+            *out = mal_builtin_string_case_known(
+                vm, string, method == MAL_STRING_GUARDED_TO_UPPER_CASE, MAL_UNICODE_LOCALE_ROOT);
+            return true;
+        case MAL_STRING_GUARDED_INDEX_OF:
+        case MAL_STRING_GUARDED_LAST_INDEX_OF:
+        case MAL_STRING_GUARDED_INCLUDES:
+        case MAL_STRING_GUARDED_STARTS_WITH:
+        case MAL_STRING_GUARDED_ENDS_WITH:
+            return mal_builtin_string_span_search(
+                vm, callee, true, receiver, 0, mal_string_length(string), first, second,
+                (MalStringSearchOp) (method - MAL_STRING_GUARDED_INDEX_OF), out);
+        case MAL_STRING_GUARDED_SLICE:
+        case MAL_STRING_GUARDED_SUBSTRING:
+        case MAL_STRING_GUARDED_SUBSTR: {
+            if ((!mal_value_is_undefined(first) && !mal_ops_is_number(first)) ||
+                (!mal_value_is_undefined(second) && !mal_ops_is_number(second))) {
+                return false;
+            }
+            f64 start = mal_value_is_undefined(first) ? 0.0 : mal_ops_number_as_f64(first);
+            f64 end = mal_value_is_undefined(second) ? INFINITY : mal_ops_number_as_f64(second);
+            MalBuiltinRootedString root;
+            mal_builtin_string_root_init(&root, string);
+            *out = mal_builtin_string_range_numeric(vm, string, start, end,
+                method == MAL_STRING_GUARDED_SLICE ? MAL_STRING_RANGE_SLICE
+                : method == MAL_STRING_GUARDED_SUBSTRING ? MAL_STRING_RANGE_SUBSTRING
+                : MAL_STRING_RANGE_SUBSTR);
+            mal_builtin_string_root_dispose(&root);
+            return true;
+        }
+    }
+    return false;
+}
+
+MalValue mal_builtin_string_method_call(
+    MalVm *vm, MalStringGuardedMethod method, MalValue callee, MalValue receiver,
+    const MalValue *args, i32 arg_count
+) {
+    static const MalNativeFunctionCallback expected[] = {
+        [MAL_STRING_GUARDED_TO_LOWER_CASE] = mal_builtin_string_prototype_to_lower_case,
+        [MAL_STRING_GUARDED_TO_UPPER_CASE] = mal_builtin_string_prototype_to_upper_case,
+        [MAL_STRING_GUARDED_INDEX_OF] = mal_builtin_string_prototype_index_of,
+        [MAL_STRING_GUARDED_LAST_INDEX_OF] = mal_builtin_string_prototype_last_index_of,
+        [MAL_STRING_GUARDED_INCLUDES] = mal_builtin_string_prototype_includes,
+        [MAL_STRING_GUARDED_STARTS_WITH] = mal_builtin_string_prototype_starts_with,
+        [MAL_STRING_GUARDED_ENDS_WITH] = mal_builtin_string_prototype_ends_with,
+        [MAL_STRING_GUARDED_SLICE] = mal_builtin_string_prototype_slice,
+        [MAL_STRING_GUARDED_SUBSTRING] = mal_builtin_string_prototype_substring,
+        [MAL_STRING_GUARDED_SUBSTR] = mal_builtin_string_prototype_substr,
+    };
+    MalValue result;
+    if (mal_value_is_string(receiver) && mal_value_is_native_function_object(callee) &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) ==
+            expected[method] &&
+#if MAL_REALMS
+        // Another realm's builtin creates its errors and results in that realm.
+        mal_vm_callee_realm(vm, callee) == vm->current_realm &&
+#endif
+        string_guarded_method_run(
+            vm, method, callee, receiver, arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED,
+            arg_count > 1 ? args[1] : MAL_VALUE_UNDEFINED, &result)) {
+        return result;
+    }
+    MAL_PROFILE_SITE_EVENT(vm, vm->profile_current_site_id, MAL_PROFILE_SITE_FALLBACK, 1);
+    return mal_vm_call_cached_value(vm, callee, receiver, args, arg_count);
+}
+
 bool mal_builtin_string_span_locale_case(
     MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
     MalValue locales, bool upper, MalValue *out

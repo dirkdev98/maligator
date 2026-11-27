@@ -131,7 +131,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 483;
+export const COMPILER_ARTIFACT_VERSION = 484;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -349,6 +349,13 @@ const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
 	),
 	"Object.is",
 	"RegExp.prototype.test",
+	"String.prototype.toLowerCase",
+	"String.prototype.toUpperCase",
+	"String.prototype.indexOf",
+	"String.prototype.lastIndexOf",
+	"String.prototype.includes",
+	"String.prototype.startsWith",
+	"String.prototype.endsWith",
 ] as const;
 const ARRAY_ITERATION_CALLBACK_OPERATIONS: ReadonlySet<string> = new Set([
 	"Array.prototype.forEach",

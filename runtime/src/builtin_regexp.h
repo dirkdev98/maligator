@@ -75,6 +75,16 @@ bool mal_regexp_exec_capture_projection(
     MalValue *result_out
 );
 
+/**
+ * Call `callee` as `receiver.exec(...args)`. The current realm's own
+ * RegExp.prototype.exec on a RegExp object runs without a call frame; anything else
+ * takes the ordinary call with nothing observable before it. Returns the result, or
+ * undefined with a pending throw.
+ */
+MalValue mal_regexp_exec_call(
+    MalVm *vm, MalValue callee, MalValue receiver, const MalValue *args, i32 arg_count
+);
+
 /** Preserve the captured call while projecting a result observed only as null. */
 MalValue mal_regexp_exec_result_projection(
     MalVm *vm, MalValue callee, MalValue regexp, MalValue string

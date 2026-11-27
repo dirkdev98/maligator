@@ -990,6 +990,20 @@ const STRING_SPAN_RANGE_KERNELS: Readonly<Record<CoreStringSpanRangeOperation, s
 		valueOf: "VALUE_OF",
 	};
 
+/** Guarded call sites by operation, naming the runtime's MalStringGuardedMethod. */
+const STRING_GUARDED_METHODS: Readonly<Record<string, string>> = {
+	"String.prototype.toLowerCase": "TO_LOWER_CASE",
+	"String.prototype.toUpperCase": "TO_UPPER_CASE",
+	"String.prototype.indexOf": "INDEX_OF",
+	"String.prototype.lastIndexOf": "LAST_INDEX_OF",
+	"String.prototype.includes": "INCLUDES",
+	"String.prototype.startsWith": "STARTS_WITH",
+	"String.prototype.endsWith": "ENDS_WITH",
+	"String.prototype.slice": "SLICE",
+	"String.prototype.substring": "SUBSTRING",
+	"String.prototype.substr": "SUBSTR",
+};
+
 const STRING_CHARACTER_KERNELS: Readonly<Record<string, string>> = {
 	"String.prototype.at": "AT",
 	"String.prototype.charAt": "CHAR_AT",
@@ -11645,6 +11659,54 @@ class NativeInstructionEmission {
 		return this.context.callReturnPolls ? this.guardedCallPoll() : "";
 	}
 
+	/**
+	 * A call whose String method was guessed from its name. The runtime runs the builtin
+	 * for a primitive string receiver and makes the ordinary call for anything else.
+	 */
+	stringMethodCall(
+		instruction: Extract<BytecodeInstruction, { opcode: "CALL" }>,
+		method: string,
+		argsExpr: string,
+	): string {
+		return `mal_builtin_string_method_call(vm, MAL_STRING_GUARDED_${method}, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length})`;
+	}
+
+	/** The String method an Array search site also serves when its receiver may be a string. */
+	sharedStringMethod(
+		instruction: Extract<BytecodeInstruction, { opcode: "CALL" }>,
+		method: string,
+	): string | undefined {
+		const kind = this.operandKind(instruction.thisValue);
+		return kind === undefined || (kind & COMPILER_VALUE_KIND_STRING) !== 0
+			? method
+			: undefined;
+	}
+
+	/**
+	 * The miss path of an Array search. A primitive string skips the Array helper and
+	 * reaches the String builtin's call form, which makes the ordinary call for the rest.
+	 */
+	arraySearchFallback(
+		instruction: Extract<BytecodeInstruction, { opcode: "CALL" }>,
+		stringMethod: string | undefined,
+		argsExpr: string,
+	): ReadonlyArray<string> {
+		if (stringMethod !== undefined) {
+			const value = `guarded_builtin_${this.ip}`;
+			return [
+				`  MalValue ${value} = ${this.stringMethodCall(instruction, stringMethod, argsExpr)};`,
+				`  ${this.throwCheck()}`,
+				`  r${instruction.dst} = ${this.callValue(instruction.dst, value)};`,
+			];
+		}
+		const result = `call_result_${this.ip}`;
+		return [
+			`  MalCompletion ${result} = mal_vm_call_cached(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
+			`  if (${result}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
+			`  r${instruction.dst} = ${this.callValue(instruction.dst, `${result}.value`)};`,
+		];
+	}
+
 	guardedCallFallbackRootPublication(): ReadonlyArray<string> {
 		return (this.guardedCallFallbackText ??= [
 			...(this.context.guardedCallRootPublication
@@ -15298,6 +15360,44 @@ class NativeInstructionEmission {
 				this.callPoll(),
 			];
 		}
+		const stringMethod =
+			guardedBuiltinOperation === undefined
+				? undefined
+				: STRING_GUARDED_METHODS[guardedBuiltinOperation];
+		if (
+			(stringMethod !== undefined ||
+				guardedBuiltinOperation === "RegExp.prototype.exec") &&
+			this.context.nativeStringSpanAction === undefined &&
+			this.context.nativeRegExpExecProjectionAction === undefined
+		) {
+			nativeCallDecision(
+				this.context.profile,
+				this.ip,
+				"call.builtin-guarded",
+				"guarded",
+				"callee-identity-guard",
+			);
+			// The runtime checks the receiver and the loaded method and makes the ordinary
+			// call itself, so the site stays the size of a generic call.
+			const value = `guarded_builtin_${this.ip}`;
+			const call =
+				stringMethod === undefined
+					? this.profileCall(
+							"regexp",
+							`mal_regexp_exec_call(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`,
+						)
+					: this.profileCall(
+							"string",
+							this.stringMethodCall(instruction, stringMethod, argsExpr),
+						);
+			return [
+				...this.guardedCallFallbackRootPublication(),
+				`MalValue ${value} = ${call};`,
+				this.throwCheck(),
+				`r${instruction.dst} = ${callResult(value)};`,
+				this.callPoll(),
+			];
+		}
 		const dataViewAccess =
 			guardedBuiltinOperation === undefined
 				? undefined
@@ -15742,30 +15842,31 @@ class NativeInstructionEmission {
 		if (reverseIndex || vmCallProvesBuiltin(callPlan, "Array.prototype.indexOf")) {
 			const method = reverseIndex ? "last_index_of" : "index_of";
 			const value = `__${method}_${this.ip}`;
+			const stringMethod = this.sharedStringMethod(
+				instruction,
+				reverseIndex ? "LAST_INDEX_OF" : "INDEX_OF",
+			);
 			return [
 				`MalValue ${value};`,
-				`if (mal_builtin_array_${method}_try(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${args[0] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[0])}, ${args[1] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[1])}${reverseIndex ? `, ${args.length >= 2}` : ""}, &${value})) {`,
+				`if (${stringMethod === undefined ? "" : `!mal_value_is_string(${this.boxedOperand(instruction.thisValue)}) && `}mal_builtin_array_${method}_try(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${args[0] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[0])}, ${args[1] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[1])}${reverseIndex ? `, ${args.length >= 2}` : ""}, &${value})) {`,
 				`r${instruction.dst} = ${callResult(value)};`,
 				`} else {`,
 				...this.guardedCallFallbackRootPublication(),
-				`MalCompletion ${tmp} = mal_vm_call_cached(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
-				`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+				...this.arraySearchFallback(instruction, stringMethod, argsExpr),
 				`}`,
 				this.callPoll(),
 			];
 		}
 		if (vmCallProvesBuiltin(callPlan, "Array.prototype.includes")) {
 			const value = `__includes_${this.ip}`;
+			const stringMethod = this.sharedStringMethod(instruction, "INCLUDES");
 			return [
 				`bool ${value};`,
-				`if (mal_builtin_array_includes_try(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${args[0] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[0])}, ${args[1] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[1])}, &${value})) {`,
+				`if (${stringMethod === undefined ? "" : `!mal_value_is_string(${this.boxedOperand(instruction.thisValue)}) && `}mal_builtin_array_includes_try(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${args[0] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[0])}, ${args[1] === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(args[1])}, &${value})) {`,
 				this.storeBoolean(instruction.dst, value),
 				`} else {`,
 				...this.guardedCallFallbackRootPublication(),
-				`MalCompletion ${tmp} = mal_vm_call_cached(vm, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${this.onThrow()}`,
-				`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+				...this.arraySearchFallback(instruction, stringMethod, argsExpr),
 				`}`,
 				this.callPoll(),
 			];

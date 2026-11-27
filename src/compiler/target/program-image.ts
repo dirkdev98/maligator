@@ -219,6 +219,13 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"Array.prototype.includes",
 	"Array.prototype.indexOf",
 	"Array.prototype.lastIndexOf",
+	"String.prototype.toLowerCase",
+	"String.prototype.toUpperCase",
+	"String.prototype.indexOf",
+	"String.prototype.lastIndexOf",
+	"String.prototype.includes",
+	"String.prototype.startsWith",
+	"String.prototype.endsWith",
 ] as const;
 
 export type VmGuardedBuiltinOperation = (typeof VM_GUARDED_BUILTIN_OPERATIONS)[number];

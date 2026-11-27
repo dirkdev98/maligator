@@ -1686,6 +1686,33 @@ static bool regexp_is_own_builtin(
         ;
 }
 
+MalValue mal_regexp_exec_call(
+    MalVm *vm, MalValue callee, MalValue receiver, const MalValue *args, i32 arg_count
+) {
+    if (!regexp_is_own_builtin(vm, callee, regexp_proto_exec) ||
+        !mal_value_is_regexp_object(receiver)) {
+        MAL_PROFILE_SITE_EVENT(vm, vm->profile_current_site_id, MAL_PROFILE_SITE_FALLBACK, 1);
+        return mal_vm_call_cached_value(vm, callee, receiver, args, arg_count);
+    }
+    // From here on this is RegExp.prototype.exec's own algorithm: ToString of the
+    // argument, then RegExpBuiltinExec with its lastIndex reads and writes.
+    MalValue argument = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    MalCalleeRoots roots;
+    mal_gc_callee_roots_begin(&roots, receiver, mal_value_new_undefined(), callee, &argument, 1);
+    vm->gc_native_frames++;
+    MalValue result = mal_value_new_undefined();
+    MalString *subject;
+    if (mal_vm_to_string(vm, argument, &subject)) {
+        argument = mal_value_from_string(subject);
+        result = regexp_builtin_exec(
+            vm, mal_value_to_regexp_object(receiver), receiver, subject,
+            REGEXP_BUILTIN_EXEC_RESULT, false, nullptr);
+    }
+    vm->gc_native_frames--;
+    mal_gc_callee_roots_end(&roots);
+    return result;
+}
+
 static MalValue regexp_proto_test(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;

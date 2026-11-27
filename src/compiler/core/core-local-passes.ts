@@ -1116,10 +1116,43 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				namespace === undefined ||
 				candidate.receiver !== "none" ||
 				candidate.owner === namespace;
-			const candidates =
+			let receiverKindMask: number | undefined;
+			const receiverKinds = () =>
+				(receiverKindMask ??= (kinds ??= context.analysis(
+					CORE_LOCAL_VALUE_KIND_ANALYSIS,
+				)).kindMask(receiverRoot));
+			// A name that several prototypes share, such as `indexOf` or `get`, is guessed
+			// from the receiver's possible kinds. The guess only selects which builtin the
+			// native call site tests for; the call still checks the loaded method. Local
+			// kinds suffice: branch-refined kinds changed almost no guesses on the compiler's
+			// own source, for close to 1% more self-compile work.
+			const receiverCompatible = (candidate: (typeof builtinOperations)[number]) => {
+				switch (candidate.receiver) {
+					case "string":
+						return (receiverKinds() & COMPILER_VALUE_KIND_STRING) !== 0;
+					case "map":
+					case "set":
+					case "weak-map":
+					case "weak-set":
+						return (
+							(receiverKinds() & COMPILER_VALUE_KIND_OBJECT) !== 0 &&
+							!scriptObjectReceiver(fn, receiverRoot)
+						);
+					default:
+						return (
+							candidate.owner !== "Array.prototype" ||
+							(receiverKinds() & ~COMPILER_VALUE_KIND_STRING) !== 0
+						);
+				}
+			};
+			const kindCandidates =
 				namespace === undefined
 					? namedCandidates
 					: namedCandidates.filter(namespaceCompatible);
+			const candidates =
+				globalCall || kindCandidates.every((candidate) => candidate.receiver === "none")
+					? kindCandidates
+					: kindCandidates.filter(receiverCompatible);
 			const previousDescriptor =
 				typeof previousBuiltinOperation === "string"
 					? builtinOperationDescriptor(previousBuiltinOperation)
@@ -1165,6 +1198,14 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 				candidates.every((candidate) =>
 					candidate.lowerings.includes("guarded-native-collection"),
 				);
+			// A receiver that may be either keeps the Array guess, whose call site also
+			// tests for the String builtin.
+			const arrayOrStringCollision =
+				candidates.length === 2 &&
+				candidates.some((candidate) => candidate.receiver === "string") &&
+				candidates.some((candidate) => candidate.owner === "Array.prototype")
+					? candidates.find((candidate) => candidate.owner === "Array.prototype")
+					: undefined;
 			const descriptor =
 				candidates.length === 1
 					? candidates[0]
@@ -1174,7 +1215,7 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 							? callbackFamily
 							: compatibleCollectionCollision
 								? candidates[0]
-								: undefined;
+								: arrayOrStringCollision;
 			if (descriptor === undefined) continue;
 			if (descriptor.receiver === "boolean" && !booleanReceiver()) continue;
 			const exact = exactBuiltinCallDescriptor(descriptor.id);
@@ -1606,6 +1647,20 @@ function flippedComparison(operator: CoreAttributeValue): string | undefined {
 		default:
 			return undefined;
 	}
+}
+
+// Literals and functions are ordinary objects, never collections; their `get` is script code.
+function scriptObjectReceiver(fn: CoreFunctionStore, value: CoreValueId): boolean {
+	const definition = definingInstruction(fn, value);
+	if (definition === undefined) return false;
+	const opcode = fn.instructionOpcodeName(definition);
+	return (
+		opcode === "createObject" ||
+		opcode === "createObjectShaped" ||
+		opcode === "createArray" ||
+		opcode === "createFunction" ||
+		opcode === "createArgumentsObject"
+	);
 }
 
 function constructedCollectionReceiver(

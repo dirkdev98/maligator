@@ -36,7 +36,17 @@ describe("guarded dense Array search lowering", () => {
 						? "mal_builtin_array_index_of_try"
 						: "mal_builtin_array_last_index_of_try",
 			);
-			expect(out.c.source).toContain("mal_vm_call_cached");
+			// A receiver that may be a primitive string misses into String's call form,
+			// which makes the ordinary call for every other receiver.
+			expect(out.c.source).toContain(
+				`mal_builtin_string_method_call(vm, MAL_STRING_GUARDED_${
+					method === "includes"
+						? "INCLUDES"
+						: method === "indexOf"
+							? "INDEX_OF"
+							: "LAST_INDEX_OF"
+				}, `,
+			);
 			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
 				out.image,
 			);
