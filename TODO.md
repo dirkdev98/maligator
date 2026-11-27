@@ -166,11 +166,13 @@ static generated-code size and helper counts do not establish runtime cost.
       changed downstream scalar/effect decisions and runtime savings that repay
       Node/native analysis and generated-C cost.
 
-- [ ] Serve accessors from shape-guarded property loads. Own and inherited accessors
-      live outside shapes, so every read of one leaves the inline cache: in the
-      in-process Express census, `debug.enabled`, `app.router` and `req.fresh` account
-      for about 15 of the 28.6 shape-guard misses per request, all of them missing on
-      every execution.
+- [ ] Cache inherited getters for more than two receiver layouts. Own getters such as
+      `debug.enabled` and `app.router` already hit their getter rows; `req.fresh` reads
+      through four receiver shapes that share one prototype, and its two-layout row
+      refills about 0.2 times per request. A layout-keyed inherited-getter row removes
+      those refills, but on in-process Express the gain stayed within run noise
+      (−644 instructions per request, standard error 676), so wait for a workload
+      that reads inherited getters through many shapes.
 
 - [ ] Bring a guarded method inlined in a loop to the hand-inlined level. For
       `points[i].weight()` with `weight() { return this.x * 2 }`, the guarded inline
@@ -364,6 +366,11 @@ object. Retained loop experiments preserve effects, authoritative state and fall
       reason needed by a selected investigation, including stripped-artifact sidecars
       where necessary. Keep remarks consistent with emission and distinguish static
       opportunities from executed or sampled counts.
+
+- [ ] Count a property-load fallback in the compiler profile only after the shared
+      load helper's getter probe misses. The counter increments before that helper,
+      so the census reported getter-cache hits on `debug.enabled` and `app.router` as
+      misses on every execution, which overstated the Express accessor cost.
 
 ## Compiler acceptance policy
 
