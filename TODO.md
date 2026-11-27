@@ -134,6 +134,16 @@ static generated-code size and helper counts do not establish runtime cost.
       for about 15 of the 28.6 shape-guard misses per request, all of them missing on
       every execution.
 
+- [ ] Give methods stored as `F.prototype.name = function` guarded dispatch. In the
+      in-process Express census, 211 calls per request stay on runtime dispatch, led by
+      `layer.match` and `layer.handleRequest`. Method-name hints cover class methods
+      only, but hints alone are not enough: region selection admits a name guess only
+      in a loop, a small concise method or a hinted caller, and `matchLayer` and
+      `trim_prefix` have none. Pair the hints with letting a small function that its
+      caller invokes directly in a loop inherit that loop's weight, and keep names
+      that more than four prototypes share, such as codec `write`/`end`, from
+      dropping the guesses object literals give today.
+
 - [ ] Admit iterator-cursor, entry-pair, enumeration-snapshot and indexed-loop plans in
       async functions and generators for loops that contain no `await` or `yield`. Each
       plan rejects the whole function today, so a request handler's loops all take the
