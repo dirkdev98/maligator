@@ -114,6 +114,20 @@ export function readsGlobal(context: Context, node: AstNode<"Identifier">): bool
 	);
 }
 
+/** The unambiguous definition of a binding whose value is never reassigned. */
+export function stableDefinition(context: Context, node: AnyNode) {
+	if (node.type !== "Identifier") return undefined;
+	const scope = context.sourceCode.getScope(node);
+	const match = (use: (typeof scope.references)[number]) => use.identifier === node;
+	const binding = (scope.references.find(match) ?? scope.through.find(match))?.resolved;
+	if (
+		binding?.defs.length !== 1 ||
+		binding.references.some((use) => use.isWrite() && !use.init)
+	)
+		return undefined;
+	return binding.defs[0];
+}
+
 /** The key a member access names in its source: `a.key` or `a["key"]`. */
 export function staticPropertyName(
 	member: AstNode<"MemberExpression">,

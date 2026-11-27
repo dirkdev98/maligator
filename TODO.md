@@ -412,10 +412,6 @@ the program observes; each rule's native example proves its cost.
       `new Array(n)` or `arr.length = n` in order stays dense and costs nothing, while
       one retained hole adds about 8% to `for...of`; `unicorn/no-new-array` reports
       the ordered fills too, 113 of them in this repository.
-- [ ] Cover function constructors in a rule like `monomorphic-instances`: a key that
-      `F.prototype.m = function () { this.y = … }` adds after `function F()` ran.
-      Finding the receiver's constructor needs receiver analysis, and the fix is an
-      assignment in the constructor rather than a field declaration.
 
 # Runtime safety and allocation
 

@@ -12,6 +12,13 @@ function addedConditionally(output: string) {
 	};
 }
 
+function initializeInConstructor(output: string) {
+	return {
+		messageId: "addedOutsideConstructor",
+		suggestions: [{ messageId: "initializeInConstructor", output }],
+	};
+}
+
 new RuleTester().run("monomorphic-instances", monomorphicInstances, {
 	valid: [
 		{
@@ -64,11 +71,147 @@ new RuleTester().run("monomorphic-instances", monomorphicInstances, {
 			filename: "test.ts",
 		},
 		{
-			name: "a function constructor has no class field declaration to edit",
-			code: "function F() { this.x = 1; } F.prototype.setY = function () { this.y = 2; };",
+			name: "a prototype method updates a key initialized in both branches",
+			code: "function F(ready) { if (ready) this.x = 1; else this.x = 2; } F.prototype.update = function () { this.x = 3; };",
+		},
+		{
+			name: "an ordinary function with an unrelated same-name constructor keeps its own receiver",
+			code: "function F(flag) { if (flag) this.x = 1; } { function F() {} new F(); }",
+		},
+		{
+			name: "an ordinary callback in a prototype method has its own receiver",
+			code: "function F() {} F.prototype.update = function () { run(function () { this.x = 1; }); };",
+		},
+		{
+			name: "an arrow stored on a prototype captures the surrounding receiver",
+			code: "function F() {} F.prototype.update = () => { this.x = 1; };",
+		},
+		{
+			name: "borrowing one prototype method makes the constructor's receiver ambiguous",
+			code: "function F() {} F.prototype.update = function () { this.x = 1; }; F.prototype.read = function () {}; F.prototype.read.call(other);",
+		},
+		{
+			name: "a method alias can be applied to a different receiver",
+			code: "function F() {} F.prototype.update = function () { this.x = 1; }; const applyUpdate = F.prototype.update; applyUpdate.apply(other, []);",
+		},
+		{
+			name: "a reassigned function binding has an unknown constructor",
+			code: "function F(flag) { if (flag) this.x = 1; } F.prototype.update = function () { this.y = 1; }; F = other; new F();",
+		},
+		{
+			name: "a key defined by a descriptor is outside the rule",
+			code: 'function F() { Object.defineProperty(this, "x", { writable: true }); } F.prototype.update = function () { this.x = 1; };',
+		},
+		{
+			name: "computed writes in prototype methods are outside the rule",
+			code: 'function F() {} F.prototype.update = function (key) { this["y"] = 2; this[key] = 3; };',
+		},
+		{
+			name: "the constructor copies a key into every instance",
+			code: "function F() { Object.assign(this, { x: 0 }); } F.prototype.update = function () { this.x = 1; };",
+		},
+		{
+			name: "the constructor's own write and its initializer method cover both branches",
+			code: "function F(ready) { if (ready) this.x = 0; else this.init(); } F.prototype.init = function () { this.x = 1; };",
+		},
+		{
+			name: "writing to a prototype setter calls it instead of adding a key",
+			code: "function F() {} F.prototype = { set x(value) { use(value); }, update() { this.x = 1; } };",
+		},
+		{
+			name: "a visible ancestor's constructor initializes the prototype method's key",
+			code: 'const util = require("node:util"); function Base() { this.x = 0; } function Parent() { Base.call(this); } util.inherits(Parent, Base); function Child() { Parent.call(this); } Object.setPrototypeOf(Child.prototype, Parent.prototype); Child.prototype.update = function () { this.x = 1; };',
+		},
+		{
+			name: "an unresolved ancestor may have initialized the key",
+			code: 'import { inherits as link } from "node:util"; function Parent() {} link(Parent, imported.Parent); function Child() {} Object.setPrototypeOf(Child.prototype, Parent.prototype); Child.prototype.update = function () { this.x = 1; };',
+		},
+		{
+			name: "an inherited prototype method can be borrowed through the child prototype",
+			code: "function Base() {} Base.prototype.update = function () { this.x = 1; }; function Child() {} Object.setPrototypeOf(Child.prototype, Base.prototype); Child.prototype.update.call(other);",
+		},
+		{
+			name: "an exception before a write cannot return an instance without the key",
+			code: "function F(ready) { if (!ready) throw new Error(); this.x = 1; } F.prototype.update = function () { this.x = 2; };",
+		},
+		{
+			name: "a constructor can return a different object",
+			code: "function F(ready) { if (ready) this.x = 1; return {}; } new F();",
 		},
 	],
 	invalid: [
+		{
+			name: "a prototype function adds a new key even when borrowed by a known instance",
+			code: "function F() { this.x = 1; } F.prototype.update = function () { this.y = 2; }; const f = new F(); F.prototype.update.call(f);",
+			errors: [
+				initializeInConstructor(
+					"function F() { this.y = undefined; this.x = 1; } F.prototype.update = function () { this.y = 2; }; const f = new F(); F.prototype.update.call(f);",
+				),
+			],
+		},
+		{
+			name: "a prototype literal method captures the receiver in an arrow",
+			code: "const F = function () {}; F.prototype = { update() { run(() => { this.x = 1; }); } };",
+			errors: [
+				initializeInConstructor(
+					"const F = function () { this.x = undefined; }; F.prototype = { update() { run(() => { this.x = 1; }); } };",
+				),
+			],
+		},
+		{
+			name: "Object.assign installs a prototype method and the suggestion preserves directives",
+			code: 'function F() {\n\t"use strict"\n\tthis.x = 1;\n}\nObject.assign(F.prototype, { update() { this.y = 2; } });',
+			errors: [
+				initializeInConstructor(
+					'function F() {\n\t"use strict"\n\tthis.y = undefined;\n\tthis.x = 1;\n}\nObject.assign(F.prototype, { update() { this.y = 2; } });',
+				),
+			],
+		},
+		{
+			name: "a call with new identifies a constructor with a conditional write",
+			code: "function F(ready) { if (ready) this.x = 1; } new F(false);",
+			errors: [
+				initializeInConstructor(
+					"function F(ready) { this.x = undefined; if (ready) this.x = 1; } new F(false);",
+				),
+			],
+		},
+		{
+			name: "an early return can bypass a later constructor write",
+			code: "function F(ready) { if (!ready) return; this.x = 1; } new F(false);",
+			errors: [
+				initializeInConstructor(
+					"function F(ready) { this.x = undefined; if (!ready) return; this.x = 1; } new F(false);",
+				),
+			],
+		},
+		{
+			name: "a caught error can bypass the write in its assignment expression",
+			code: "function F() { try { this.x = read(); } catch { handle(); } } new F();",
+			errors: [
+				initializeInConstructor(
+					"function F() { this.x = undefined; try { this.x = read(); } catch { handle(); } } new F();",
+				),
+			],
+		},
+		{
+			name: "a visible parent does not hide a child-only key",
+			code: 'const { inherits } = require("util"); function Parent() { this.x = 1; } function Child() { Parent.call(this); } inherits(Child, Parent); Child.prototype.update = function () { this.x = 2; this.y = 3; };',
+			errors: [
+				initializeInConstructor(
+					'const { inherits } = require("util"); function Parent() { this.x = 1; } function Child() { this.y = undefined; Parent.call(this); } inherits(Child, Parent); Child.prototype.update = function () { this.x = 2; this.y = 3; };',
+				),
+			],
+		},
+		{
+			name: "a constructor parameter can shadow undefined",
+			code: "function F(undefined) { if (undefined) this.x = 1; } new F(false);",
+			errors: [
+				initializeInConstructor(
+					"function F(undefined) { this.x = void 0; if (undefined) this.x = 1; } new F(false);",
+				),
+			],
+		},
 		{
 			name: "an instance method adds a key",
 			code: "class C { static cache;\n\tload() { this.cache = 1; }\n}",

@@ -89,6 +89,7 @@ function behavesLikeNode(example: Run): void {
 /** Readers of the bad form miss their shape cache on a quarter of the rounds or more. */
 function shapeMisses(bad: Run, good: Run): void {
 	behavesLikeNode(bad);
+	expect(bad.nodeStdout).toBe(good.nodeStdout);
 	expect(bad.shapeMisses).toBeGreaterThanOrEqual(ROUNDS / 4);
 	expect(good.shapeMisses).toBeLessThan(ROUNDS / 100);
 }

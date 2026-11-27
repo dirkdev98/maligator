@@ -1,5 +1,6 @@
+import { functionInstanceVisitors } from "./function-instance-shapes.ts";
 import { accessedKey, literalKey } from "./records.ts";
-import { conditionalBranch, stripTypeSyntax } from "./syntax.ts";
+import { conditionalBranch, stableDefinition, stripTypeSyntax } from "./syntax.ts";
 import type { AnyNode, AstNode, Context, Rule } from "./types.ts";
 
 type Class = AstNode<"ClassDeclaration" | "ClassExpression">;
@@ -93,16 +94,7 @@ function classShape(body: ClassBody): InstanceShape {
 function localBase(context: Context, superClass: AnyNode): Class | undefined {
 	const expression = stripTypeSyntax(superClass);
 	if (expression.type === "ClassExpression") return expression;
-	if (expression.type !== "Identifier") return undefined;
-	const scope = context.sourceCode.getScope(expression);
-	const readsBase = (candidate: (typeof scope.references)[number]) =>
-		candidate.identifier === expression;
-	const reference = scope.references.find(readsBase) ?? scope.through.find(readsBase);
-	const binding = reference?.resolved;
-	if (binding === null || binding === undefined || binding.defs.length !== 1)
-		return undefined;
-	if (binding.references.some((use) => use.isWrite() && !use.init)) return undefined;
-	const definition = binding.defs[0];
+	const definition = stableDefinition(context, expression);
 	if (definition?.type === "ClassName" && definition.node.type === "ClassDeclaration")
 		return definition.node.declare ? undefined : definition.node;
 	if (definition?.type !== "Variable" || definition.node.type !== "VariableDeclarator")
@@ -194,22 +186,28 @@ export const monomorphicInstances: Rule = {
 		type: "suggestion",
 		docs: {
 			description:
-				"Require instance keys added on some paths only to be declared as fields",
+				"Require instance keys added on some paths only to be initialized on every instance",
 		},
 		hasSuggestions: true,
 		messages: {
 			addedConditionally:
 				"`this.{{key}}` can be added on some paths only, so instances of this class get different shapes. Declare `{{key}}` as a field.",
 			declareField: "Declare `{{key}}` as a class field.",
+			addedOutsideConstructor:
+				"`this.{{key}}` can be added on some paths only, so instances of this constructor get different shapes. Initialize `{{key}}` in the constructor.",
+			initializeInConstructor: "Initialize `{{key}}` in the constructor.",
 		},
 	},
 	createOnce(context) {
 		const shapes = new Map<ClassBody, InstanceShape>();
 		const writesByBranch = new Map<AnyNode, Set<string>>();
+		const functions = functionInstanceVisitors(context);
 		return {
+			...functions,
 			before() {
 				shapes.clear();
 				writesByBranch.clear();
+				return functions.before();
 			},
 			ClassBody(body) {
 				shapes.set(body, classShape(body));
@@ -253,6 +251,7 @@ export const monomorphicInstances: Rule = {
 					shape.candidates.set(key, member);
 			},
 			"Program:exit"() {
+				functions["Program:exit"]();
 				for (const [body, shape] of shapes) {
 					if (shape.candidates.size === 0 || shape.unknownFields) continue;
 					const inherited = inheritedKeys(context, body, shapes);

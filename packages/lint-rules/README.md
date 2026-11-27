@@ -48,13 +48,18 @@ objects they cannot see created.
 ### `maligator/monomorphic-instances`
 
 - **Reports** a public key first assigned in an instance method, accessor or callback,
-  or on some constructor paths only. Fields and keys initialized by a base class are
-  already accounted for. The rule skips computed writes and classes whose base it
-  cannot resolve in the file.
+  or on some constructor paths only. This covers classes and local functions used
+  with `new` or with functions defined on their prototype, including prototype
+  literals and `Object.assign`. Fields and keys initialized by a visible base are
+  accounted for. The rule skips computed writes and unresolved prototype chains.
+  For function constructors, it also skips keys installed with `Object.defineProperty`
+  and constructors whose binding is reassigned or whose prototype method has a visible
+  call with another receiver.
 - **Why:** instances that gain different keys have different shapes, so a property
   read that sees those instances has to handle multiple shapes at the same site.
-- **Instead,** declare the key as a class field, such as `estimated;`. The rule
-  suggests that edit.
+- **Instead,** declare a class field such as `estimated;`, or initialize the key
+  inside the function constructor with `this.estimated = undefined`. The rule
+  suggests the corresponding edit.
 - **Fine when** callers rely on a missing key, such as checking its presence with
   `in` or enumerating keys with `Object.keys`. Disable the rule at the write and
   say why.
