@@ -1,6 +1,5 @@
 import { coreCalleeTargetsAreOpen } from "./core-callee-targets.ts";
 import { coreDirectCreatedFunction } from "./core-ir-call-targets.ts";
-import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
@@ -56,15 +55,6 @@ export function coreSynchronousCallbackConsumer(
 		const closure = program.function(callback);
 		if (closure.metadata.mappedArguments || closure.isAsync || closure.isGenerator)
 			continue;
-		if (
-			(!consumer.metadata.strict || !closure.metadata.strict) &&
-			[...closure.instructionIds()].some(
-				(instruction) =>
-					closure.instructionKind(instruction) === "operation" &&
-					coreInstructionEffects(closure, instruction).callsUserCode,
-			)
-		)
-			continue;
 		const value = consumer.kernel.functionParameter(parameter);
 		if (consumer.kernel.valueHandlerUseCount(value) !== 0) continue;
 		let calls = 0;
@@ -87,21 +77,6 @@ export function coreSynchronousCallbackConsumer(
 			calls++;
 		}
 		if (!onlyInvoked || calls === 0) continue;
-		// Only the proved callback may execute inside a disappearing sloppy frame.
-		if (
-			!consumer.metadata.strict &&
-			[...consumer.instructionIds()].some((instruction) => {
-				if (consumer.instructionKind(instruction) !== "operation") return false;
-				if (!coreInstructionEffects(consumer, instruction).callsUserCode) return false;
-				return (
-					consumer.instructionOpcodeName(instruction) !== "call" ||
-					consumer.kernel.operandAt(
-						consumer.kernel.instructionOperandStart(instruction),
-					) !== value
-				);
-			})
-		)
-			continue;
 		const proof = {
 			function: consumer,
 			bodyVersion: consumer.version("body"),

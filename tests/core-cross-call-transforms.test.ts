@@ -2351,16 +2351,22 @@ describe("bounded Core cross-call transforms", () => {
 	});
 
 	it.each([false, true])(
-		"inlines mode-independent branches across strict caller=%s",
+		"inlines a callee of the other mode unless it stores, strict caller=%s",
 		(strictCaller) => {
 			const directory = mkdtempSync(join(tmpdir(), "mal-cjs-inline-mode-"));
 			try {
 				const entry = join(directory, "main.cjs");
+				const callee = strictCaller ? "" : '"use strict";';
+				const caller = strictCaller ? '"use strict";' : "";
 				writeFileSync(
 					entry,
-					`function choose(value) { ${strictCaller ? "" : '"use strict";'} return value ? 11 : 7; }
-			function hot(count) { ${strictCaller ? '"use strict";' : ""} let sum=0; for(let i=0;i<count;i++) sum+=choose(i); return sum; }
-			console.log(hot(10));`,
+					`function read(point) { ${callee} return point.x * 2; }
+			function write(point, value) { ${callee} point.x = value; }
+			function hot(points) { ${caller} let sum=0; for(let i=0;i<points.length;i++) sum+=read(points[i]); return sum; }
+			function fill(points) { ${caller} for(let i=0;i<points.length;i++) write(points[i], i); }
+			const points = [{ x: 1 }, { x: 2 }];
+			fill(points);
+			console.log(hot(points));`,
 				);
 				let optimized: CoreProgram | undefined;
 				compileEntrypoint(entry, {
@@ -2370,11 +2376,12 @@ describe("bounded Core cross-call transforms", () => {
 						optimized = program;
 					},
 				});
-				expect(
-					coreOperations(coreFunctionNamed(optimized!, "hot")!).some(
+				const calls = (name: string) =>
+					coreOperations(coreFunctionNamed(optimized!, name)!).some(
 						({ opcode }) => opcode === "call",
-					),
-				).toBe(false);
+					);
+				expect(calls("hot")).toBe(false);
+				expect(calls("fill")).toBe(true);
 			} finally {
 				rmSync(directory, { recursive: true, force: true });
 			}

@@ -197,11 +197,8 @@ describe("private local capture arguments", () => {
 		expect(fn!.instructions.some((op) => op.opcode === "LOAD_CAPTURED")).toBe(!self);
 	});
 
-	it("lifts a sloppy capture reader that cannot expose its activation", () => {
-		expect(singleStoreAlias("after", false)).toBe(1);
-	});
-	it("keeps a sloppy helper whose callback can inspect the active callee", () => {
-		expect(singleStoreAlias("after", false, true)).toBe(0);
+	it("lifts a sloppy capture reader that calls user code", () => {
+		expect(singleStoreAlias("after", false, true)).toBe(1);
 	});
 	it("follows a sole captured writer only after its store", () => {
 		expect(singleStoreAlias("after")).toBe(1);

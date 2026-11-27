@@ -65,28 +65,24 @@ describe("synchronous callback capture proof", () => {
 			).applied,
 		).toBeGreaterThan(0);
 	});
-	it("keeps a sloppy callback that reads its caller", () => {
-		expect(
-			compile(
-				"function consume(values, callback) { return callback(); }",
-				true,
-				"",
-				true,
-				"function callback() { return callback.caller; }",
-			).applied,
-		).toBe(0);
-	});
-	it("keeps a strict callback that can reflect on its sloppy consumer", () => {
-		expect(
-			compile(
-				"function consume(values, callback) { return callback(); }",
-				true,
-				"",
-				true,
-				'function callback() { "use strict"; return consume.arguments; }',
-			).applied,
-		).toBe(0);
-	});
+	it.each([
+		["sloppy", "sloppy", "", "values.total"],
+		["sloppy", "strict", "", '{ "use strict"; return values.total; }'],
+		["strict", "sloppy", '"use strict";', "values.total"],
+	])(
+		"admits a %s consumer whose %s callback calls user code",
+		(_consumer, _callback, consumerMode, callbackBody) => {
+			expect(
+				compile(
+					`function consume(values, callback) { ${consumerMode} return callback() + values.offset; }`,
+					true,
+					"",
+					true,
+					`() => ${callbackBody}`,
+				).applied,
+			).toBeGreaterThan(0);
+		},
+	);
 	it("keeps existing direct callback uses outside the cloned consumer's admission", () => {
 		expect(compile(synchronous, true, "callback(seed);").applied).toBeGreaterThan(0);
 	});

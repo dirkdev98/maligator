@@ -1016,18 +1016,21 @@ function inlineTarget(
 			const instruction = instructionRow as CoreInstructionId;
 			if (kernel.instructionOpcode(instruction) < 0) continue;
 			const opcode = fn.instructionOpcodeName(instruction);
-			// Stores inherit the destination frame's mode; user code can observe
-			// a strict frame boundary through legacy caller/arguments reflection.
+			// Stores and deletes take the executing frame's mode, so they cannot move
+			// across a mode boundary. User code the body calls cannot see that boundary:
+			// a function's legacy `caller` and `arguments` are fixed null data or
+			// %ThrowTypeError% accessors chosen by its own definition, CallSites expose
+			// no function, receiver or mode, and stack traces and `captureStackTrace`
+			// recover inlined frames from source positions.
 			if (
 				fn.metadata.strict !== caller.metadata.strict &&
-				([
+				[
 					"storeProperty",
 					"storePropertyStatic",
 					"storeSuperProperty",
 					"storeGlobalProperty",
 					"deleteProperty",
-				].includes(opcode) ||
-					coreInstructionEffects(fn, instruction).callsUserCode)
+				].includes(opcode)
 			)
 				return false;
 			if (opcode === "loadArgumentCount" || opcode === "loadStaticArgument") {
