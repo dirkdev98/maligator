@@ -18,7 +18,8 @@ export interface RecordBinding {
 
 const MODIFIER_TYPES = new Set(["Partial", "Readonly", "Required"]);
 
-function literalKey(node: AnyNode): string | undefined {
+/** The key a string or number literal or a template without substitutions names. */
+export function literalKey(node: AnyNode): string | undefined {
 	if (
 		node.type === "Literal" &&
 		(typeof node.value === "string" || typeof node.value === "number")

@@ -8,6 +8,7 @@
 				"esmodule": true
 			}
 		],
+		"maligator/monomorphic-instances": "error",
 		"maligator/monomorphic-objects": "error",
 		"maligator/no-delete-property": "error",
 		"maligator/no-dynamic-global-access": "error",

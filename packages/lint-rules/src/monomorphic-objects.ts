@@ -1,22 +1,15 @@
 import { accessedKey, recordBinding } from "./records.ts";
-import type { AnyNode, AstNode, Rule } from "./types.ts";
+import { conditionalBranch } from "./syntax.ts";
+import type { AstNode, Rule } from "./types.ts";
 
 type MemberExpression = AstNode<"MemberExpression">;
 
 const IDENTIFIER_NAME = /^[A-Za-z_$][\w$]*$/u;
-const LOGICAL_ASSIGNMENT = new Set(["&&=", "||=", "??="]);
 const STATEMENT_LISTS = new Set([
 	"Program",
 	"BlockStatement",
 	"StaticBlock",
 	"SwitchCase",
-]);
-const FUNCTION_BOUNDARIES = new Set([
-	"ArrowFunctionExpression",
-	"FunctionDeclaration",
-	"FunctionExpression",
-	"PropertyDefinition",
-	"StaticBlock",
 ]);
 
 function isAddition(member: MemberExpression): boolean {
@@ -25,49 +18,6 @@ function isAddition(member: MemberExpression): boolean {
 		(parent.type === "AssignmentExpression" && parent.left === member) ||
 		(parent.type === "UpdateExpression" && parent.argument === member)
 	);
-}
-
-/**
- * Whether `node` runs on some paths only after its object's declaration in the
- * statement list `home`. A key added in straight-line code gives every object
- * from the literal the same shape, so only branches, loops, `try` and callbacks
- * count.
- */
-function runsConditionally(node: AnyNode, home: AnyNode): boolean {
-	let child = node;
-	for (
-		let parent = node.parent;
-		parent !== home;
-		child = parent, parent = parent.parent
-	) {
-		if (parent === null || FUNCTION_BOUNDARIES.has(parent.type)) return true;
-		switch (parent.type) {
-			case "IfStatement":
-			case "ConditionalExpression":
-			case "SwitchCase":
-				if (child !== parent.test) return true;
-				break;
-			case "LogicalExpression":
-				if (child === parent.right) return true;
-				break;
-			case "AssignmentExpression":
-				if (child === parent.right && LOGICAL_ASSIGNMENT.has(parent.operator))
-					return true;
-				break;
-			case "ForStatement":
-				if (child === parent.body || child === parent.update) return true;
-				break;
-			case "ForInStatement":
-			case "ForOfStatement":
-			case "WhileStatement":
-				if (child === parent.body) return true;
-				break;
-			case "TryStatement":
-				if (child !== parent.finalizer) return true;
-				break;
-		}
-	}
-	return false;
 }
 
 function propertyText(key: string): string {
@@ -119,7 +69,7 @@ export const monomorphicObjects: Rule = {
 						continue;
 					const key = accessedKey(member);
 					if (key === undefined || keys.has(key)) continue;
-					if (runsConditionally(member, home)) {
+					if (conditionalBranch(member, home) !== undefined) {
 						const first = conditional.get(key);
 						if (first === undefined || member.start < first.start)
 							conditional.set(key, member);

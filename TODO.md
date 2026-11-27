@@ -396,6 +396,10 @@ the program observes; each rule's native example proves its cost.
       of that, so add them only if guarded inlining of open targets stays out.
 - [ ] Measure whether arrays with holes cost Maligator anything (`new Array(n)`,
       `arr.length = n`, out-of-order writes) before adopting `unicorn/no-new-array`.
+- [ ] Cover function constructors in a rule like `monomorphic-instances`: a key that
+      `F.prototype.m = function () { this.y = … }` adds after `function F()` ran.
+      Finding the receiver's constructor needs receiver analysis, and the fix is an
+      assignment in the constructor rather than a field declaration.
 
 # Runtime safety and allocation
 

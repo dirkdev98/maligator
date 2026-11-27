@@ -108,6 +108,7 @@ function differsFromNode(bad: Run): void {
 
 /** What each rule's bad examples cost and its good examples avoid. */
 const costs: Record<string, (bad: Run, good: Run) => void> = {
+	"monomorphic-instances": shapeMisses,
 	"monomorphic-objects": shapeMisses,
 	"no-delete-property": shapeMisses,
 	"no-dynamic-global-access": extraInstallers,

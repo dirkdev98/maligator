@@ -1,3 +1,4 @@
+import { monomorphicInstances } from "./monomorphic-instances.ts";
 import { monomorphicObjects } from "./monomorphic-objects.ts";
 import { noDeleteProperty } from "./no-delete-property.ts";
 import { noDynamicGlobalAccess } from "./no-dynamic-global-access.ts";
@@ -10,6 +11,7 @@ import { strictCommonjs } from "./strict-commonjs.ts";
 export default {
 	meta: { name: "maligator" },
 	rules: {
+		"monomorphic-instances": monomorphicInstances,
 		"monomorphic-objects": monomorphicObjects,
 		"no-delete-property": noDeleteProperty,
 		"no-dynamic-global-access": noDynamicGlobalAccess,

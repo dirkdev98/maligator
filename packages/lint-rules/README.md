@@ -34,9 +34,23 @@ and these Oxlint rules:
 
 ## Default rules
 
-The shape rules reason about records: locals created from an object literal without a
-spread. They skip dynamic keys and objects typed as a `Record` or with an index
-signature, since those are dictionaries, and objects they cannot see created.
+The record rules check locals created from an object literal without a spread. They
+skip dynamic keys, dictionaries typed as a `Record` or with an index signature, and
+objects they cannot see created.
+
+### `maligator/monomorphic-instances`
+
+- **Reports** a public key first assigned in an instance method, accessor or callback,
+  or on some constructor paths only. Fields and keys initialized by a base class are
+  already accounted for. The rule skips computed writes and classes whose base it
+  cannot resolve in the file.
+- **Why:** instances that gain different keys have different shapes, so a property
+  read that sees those instances has to handle multiple shapes at the same site.
+- **Instead,** declare the key as a class field, such as `estimated;`. The rule
+  suggests that edit.
+- **Fine when** callers rely on a missing key, such as checking its presence with
+  `in` or enumerating keys with `Object.keys`. Disable the rule at the write and
+  say why.
 
 ### `maligator/monomorphic-objects`
 
