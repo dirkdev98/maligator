@@ -5261,7 +5261,7 @@ export function analyzeNativeFastPaths(
 			region.kind !== "indexed-length-loop" &&
 			region.kind !== "array-values-iterator-cursor" &&
 			region.kind !== "iterator-result-virtualization" &&
-			region.kind !== "string-char-code-at-chain"
+			region.kind !== "string-method-chain"
 		) {
 			numericLoopBlocked.add(action.ip);
 			for (const ip of region.claimedIps) numericLoopBlocked.add(ip);

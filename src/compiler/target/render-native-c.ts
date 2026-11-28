@@ -336,9 +336,9 @@ interface NativeRegionTopology {
 	}>;
 	readonly numericFusionCandidates: ReadonlyArray<NativeNumericFusionCandidate>;
 	readonly indexedLengthLoopActionByIp: ReadonlyMap<number, IndexedLengthLoopAction>;
-	readonly nativeStringCharCodeAtChainActionByIp: ReadonlyMap<
+	readonly nativeStringMethodChainActionByIp: ReadonlyMap<
 		number,
-		NativeStringCharCodeAtChainAction
+		NativeStringMethodChainAction
 	>;
 	readonly nativeBuiltinCollectionCallChainActionByIp: ReadonlyMap<
 		number,
@@ -7420,13 +7420,10 @@ interface NativeStringSpanAction {
 	consumer?: NativeSpanConsumer;
 }
 
-type NativeStringCharCodeAtChain = Extract<
-	VmRegion,
-	{ kind: "string-char-code-at-chain" }
->;
+type NativeStringMethodChain = Extract<VmRegion, { kind: "string-method-chain" }>;
 
-interface NativeStringCharCodeAtChainAction {
-	readonly chain: NativeStringCharCodeAtChain;
+interface NativeStringMethodChainAction {
+	readonly chain: NativeStringMethodChain;
 	readonly role: "property" | "call";
 }
 
@@ -8133,9 +8130,9 @@ function analyzeNativeRegionTopology(
 			...(element === undefined ? {} : { element }),
 		});
 	}
-	const nativeStringCharCodeAtChainActionByIp = new Map<
+	const nativeStringMethodChainActionByIp = new Map<
 		number,
-		NativeStringCharCodeAtChainAction
+		NativeStringMethodChainAction
 	>();
 	const nativeBuiltinCollectionCallChainActionByIp = new Map<
 		number,
@@ -8143,15 +8140,15 @@ function analyzeNativeRegionTopology(
 	>();
 	for (const action of regionActions) {
 		const chain = specializations[action.regionIndex];
-		if (chain?.kind === "string-char-code-at-chain") {
+		if (chain?.kind === "string-method-chain") {
 			if (
 				(action.role !== "property" && action.role !== "call") ||
 				action.ip !== (action.role === "property" ? chain.propertyIp : chain.callIp) ||
-				nativeStringCharCodeAtChainActionByIp.has(action.ip)
+				nativeStringMethodChainActionByIp.has(action.ip)
 			) {
 				throw new Error("Duplicate String.charCodeAt chain action");
 			}
-			nativeStringCharCodeAtChainActionByIp.set(action.ip, {
+			nativeStringMethodChainActionByIp.set(action.ip, {
 				chain,
 				role: action.role,
 			});
@@ -8242,7 +8239,7 @@ function analyzeNativeRegionTopology(
 		regexpIteratorProjections,
 		numericFusionCandidates,
 		indexedLengthLoopActionByIp,
-		nativeStringCharCodeAtChainActionByIp,
+		nativeStringMethodChainActionByIp,
 		nativeBuiltinCollectionCallChainActionByIp,
 		nativeIteratorCursorActionByIp,
 		nativeIteratorResultVirtualizationActionByIp,
@@ -8407,7 +8404,7 @@ function emitBody(
 	const topology = analysis.regionTopology(specializations, regionActions);
 	const {
 		indexedLengthLoopActionByIp: allIndexedLengthLoopActions,
-		nativeStringCharCodeAtChainActionByIp,
+		nativeStringMethodChainActionByIp,
 		nativeBuiltinCollectionCallChainActionByIp,
 		nativeIteratorCursorActionByIp,
 		nativeIteratorResultVirtualizationActionByIp,
@@ -8897,9 +8894,9 @@ function emitBody(
 	const shapeSnapshots = new Set<number>();
 	const loopInstructions = bytecodeLoopInstructions(fn);
 	const invocationPreamble: Array<string> = [];
-	for (const action of nativeStringCharCodeAtChainActionByIp.values()) {
+	for (const action of nativeStringMethodChainActionByIp.values()) {
 		if (action.role !== "call") continue;
-		lines.push(`bool __string_char_code_at_${action.chain.callIp}_captured = false;`);
+		lines.push(`bool __string_method_${action.chain.callIp}_captured = false;`);
 	}
 	for (const action of nativeIteratorCursorActionByIp.values()) {
 		if (action.role !== "initialize") continue;
@@ -9020,7 +9017,7 @@ function emitBody(
 	}
 	if (
 		[...stringSplitCursorSites.values()].some((site) => !site.lockedIdentity) ||
-		[...nativeStringCharCodeAtChainActionByIp.values()].some(
+		[...nativeStringMethodChainActionByIp.values()].some(
 			(action) =>
 				action.role === "call" && action.chain.methodIdentity === "runtime-guarded",
 		) ||
@@ -9114,7 +9111,7 @@ function emitBody(
 		nativeRegExpExecProjectionActionByIp.has(ip) ||
 		nativeRegExpIteratorProjectionActionByIp.has(ip) ||
 		nativeStringSpanActionByIp.has(ip) ||
-		nativeStringCharCodeAtChainActionByIp.has(ip) ||
+		nativeStringMethodChainActionByIp.has(ip) ||
 		nativeBuiltinCollectionCallChainActionByIp.has(ip);
 	const nativeFastPaths = lowerNativeFastPaths(
 		fn,
@@ -9233,7 +9230,7 @@ function emitBody(
 						stringSplitTrimLengthSiteByIp,
 						nativeRegExpExecProjectionActionByIp,
 						nativeRegExpIteratorProjectionActionByIp,
-						nativeStringCharCodeAtChainActionByIp,
+						nativeStringMethodChainActionByIp,
 						nativeIteratorResultVirtualizationActionByIp,
 						nativeIteratorEntryPairVirtualizationActionByIp,
 						nativeArrayPairDestructureActionByIp,
@@ -9368,7 +9365,7 @@ function emitBody(
 		nativeRegExpExecProjectionAction: undefined,
 		nativeRegExpIteratorProjectionAction: undefined,
 		nativeStringSpanAction: undefined,
-		nativeStringCharCodeAtChainAction: undefined,
+		nativeStringMethodChainAction: undefined,
 		nativeBuiltinCollectionCallChainAction: undefined,
 		nativeIteratorCursorAction: undefined,
 		deferredIteratorCursor: false,
@@ -9569,10 +9566,7 @@ function emitBody(
 	);
 	registerActions("regexpLiteralAction", regexpLiteralActions);
 	registerActions("nativeStringSpanAction", nativeStringSpanActionByIp);
-	registerActions(
-		"nativeStringCharCodeAtChainAction",
-		nativeStringCharCodeAtChainActionByIp,
-	);
+	registerActions("nativeStringMethodChainAction", nativeStringMethodChainActionByIp);
 	registerActions(
 		"nativeBuiltinCollectionCallChainAction",
 		withExactCollectionReceivers(
@@ -10049,7 +10043,7 @@ function emitBody(
 				guardedCallPlan.directFunctionCall === undefined &&
 				guardedCallPlan.directCallbackFunctionIndex === undefined &&
 				!fieldCallSites.has(ip) &&
-				!nativeStringCharCodeAtChainActionByIp.has(ip) &&
+				!nativeStringMethodChainActionByIp.has(ip) &&
 				!nativeStringSplitCursorActionByIp.has(ip) &&
 				!nativeStringSplitProjectionActionByIp.has(ip) &&
 				!nativeRegExpExecProjectionActionByIp.has(ip) &&
@@ -10153,7 +10147,7 @@ function emitBody(
 				nativeRegExpExecProjectionActionByIp.get(ip) === undefined &&
 				nativeRegExpIteratorProjectionActionByIp.get(ip) === undefined &&
 				nativeStringSpanActionByIp.get(ip) === undefined &&
-				nativeStringCharCodeAtChainActionByIp.get(ip) === undefined &&
+				nativeStringMethodChainActionByIp.get(ip) === undefined &&
 				nativeBuiltinCollectionCallChainActionByIp.get(ip) === undefined &&
 				inactiveRootMask !== lastPublishedInactiveRootMask
 					? inactiveRootMask
@@ -10779,7 +10773,7 @@ interface NativeInstructionActions {
 	readonly nativeRegExpIteratorProjectionAction?: NativeRegExpIteratorProjectionAction;
 	readonly regexpLiteralAction?: NativeRegExpLiteralAction;
 	readonly nativeStringSpanAction?: NativeStringSpanAction;
-	readonly nativeStringCharCodeAtChainAction?: NativeStringCharCodeAtChainAction;
+	readonly nativeStringMethodChainAction?: NativeStringMethodChainAction;
 	readonly nativeBuiltinCollectionCallChainAction?: NativeBuiltinCollectionCallChainAction;
 	readonly nativeIteratorCursorAction?: NativeIteratorCursorAction;
 	readonly deferredIteratorCursor: boolean;
@@ -11693,6 +11687,116 @@ class NativeInstructionEmission {
 		return `mal_builtin_string_method_call(vm, MAL_STRING_GUARDED_${method}, ${this.boxedOperand(instruction.callee)}, ${this.boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length})`;
 	}
 
+	/**
+	 * The call a String method chain makes once its receiver is a primitive string. A
+	 * locked method runs the kernel its proven form uses, and arguments the kernel would
+	 * have to coerce take the builtin's complete algorithm. A watched method was loaded
+	 * by the capture, and the runtime still checks it before running the builtin.
+	 */
+	stringMethodChainCall(
+		instruction: Extract<BytecodeInstruction, { opcode: "CALL" }>,
+		chain: NativeStringMethodChain,
+		argsExpr: string,
+	): Array<string> {
+		const args = instruction.arguments;
+		const receiver = this.boxedOperand(instruction.thisValue);
+		const string = `mal_value_to_string(${receiver})`;
+		const result = `string_method_${this.ip}_value`;
+		const finish = (expression: string, throws: boolean): Array<string> => [
+			`MalValue ${result} = ${this.profileCall("string", expression)};`,
+			...(throws ? [this.throwCheck()] : []),
+			`r${instruction.dst} = ${this.callValue(instruction.dst, result)};`,
+			this.callPoll(),
+		];
+		if (chain.methodIdentity === "runtime-guarded")
+			return finish(
+				this.stringMethodCall(
+					instruction,
+					STRING_GUARDED_METHODS[chain.operation]!,
+					argsExpr,
+				),
+				true,
+			);
+		const index = knownOperationIndex(chain.operation)!;
+		const builtin = finish(
+			`mal_vm_call_known_native(vm, ${knownNativeEntries()[index]}, ${index}, ${receiver}, ${argsExpr}, ${args.length}, 0)`,
+			true,
+		);
+		const guarded = (
+			guard: string | undefined,
+			direct: ReadonlyArray<string>,
+		): Array<string> =>
+			guard === undefined
+				? [...direct]
+				: [
+						`if (${guard}) {`,
+						...direct.map((line) => `  ${line}`),
+						`} else {`,
+						...builtin.map((line) => `  ${line}`),
+						`}`,
+					];
+		const absent = (operand: number | undefined): boolean =>
+			operand === undefined || decodeVmValueOperand(operand).kind === "undefined";
+		const search = STRING_SEARCH_KERNELS[chain.operation];
+		const range = STRING_RANGE_KERNELS[chain.operation];
+		if (search !== undefined) {
+			const [needle, positionOperand] = args;
+			const position = absent(positionOperand)
+				? search[1]
+				: this.nativeNumberOperand(positionOperand!);
+			if (
+				needle !== undefined &&
+				position !== null &&
+				(decodeVmValueOperand(needle).kind === "string" || this.operandIsString(needle))
+			)
+				return finish(
+					`mal_builtin_string_search_strings(${string}, 0, mal_string_length(${string}), mal_value_to_string(${this.boxedOperand(needle)}), ${position}, MAL_STRING_SEARCH_${search[0]})`,
+					false,
+				);
+			// The span search coerces primitive arguments itself and refuses objects and
+			// symbols, whose conversion is observable, before taking any step.
+			const searched = `string_method_${this.ip}_search`;
+			const boxed = (operand: number | undefined) =>
+				operand === undefined ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(operand);
+			return [
+				`MalValue ${searched};`,
+				...guarded(
+					`mal_builtin_string_span_search(vm, MAL_VALUE_UNDEFINED, true, ${receiver}, 0, mal_string_length(${string}), ${boxed(needle)}, ${boxed(positionOperand)}, MAL_STRING_SEARCH_${search[0]}, &${searched})`,
+					[
+						this.throwCheck(),
+						`r${instruction.dst} = ${this.callValue(instruction.dst, searched)};`,
+						this.callPoll(),
+					],
+				),
+			];
+		}
+		if (range !== undefined) {
+			const guards: Array<string> = [];
+			const bound = (operand: number | undefined, fallback: string): string => {
+				if (absent(operand)) return fallback;
+				const number = this.nativeNumberOperand(operand!);
+				if (number !== null) return number;
+				const value = this.boxedOperand(operand!);
+				guards.push(`mal_ops_is_number(${value})`);
+				return `mal_ops_number_as_f64(${value})`;
+			};
+			const start = bound(args[0], "0.0");
+			const end = bound(args[1], "INFINITY");
+			return guarded(
+				guards.length === 0 ? undefined : guards.join(" && "),
+				finish(
+					`mal_builtin_string_range_numeric(vm, ${string}, ${start}, ${end}, MAL_STRING_RANGE_${range})`,
+					true,
+				),
+			);
+		}
+		// Case conversion takes no arguments; the root locale is what the builtin uses.
+		return finish(
+			`mal_builtin_string_case_known(vm, ${string}, ${chain.operation === "String.prototype.toUpperCase"}, MAL_UNICODE_LOCALE_ROOT)`,
+			true,
+		);
+	}
+
 	/** The String method an Array search site also serves when its receiver may be a string. */
 	sharedStringMethod(
 		instruction: Extract<BytecodeInstruction, { opcode: "CALL" }>,
@@ -11864,10 +11968,10 @@ class NativeInstructionEmission {
 		}
 		if (
 			instruction.opcode === "LOAD_PROPERTY_STATIC" &&
-			this.context.nativeStringCharCodeAtChainAction?.role === "property"
+			this.context.nativeStringMethodChainAction?.role === "property"
 		) {
-			const { chain } = this.context.nativeStringCharCodeAtChainAction;
-			const captured = `__string_char_code_at_${chain.callIp}_captured`;
+			const { chain } = this.context.nativeStringMethodChainAction;
+			const captured = `__string_method_${chain.callIp}_captured`;
 			const receiver = this.boxed(instruction.object);
 			const primitive =
 				this.reps[instruction.object] === "string"
@@ -11877,6 +11981,10 @@ class NativeInstructionEmission {
 				chain.methodIdentity === "authority-invariant"
 					? primitive
 					: `${primitive} && mal_vm_local_watched_primitive_value_try_load_static(vm, __watched_methods_epoch, MAL_PRIM_KIND_STRING, &${nativeBodyReference(this.context.resources, "propertyCache")}[${instruction.icIndex}], &r${instruction.dst})`;
+			const fallback = this.emitGenericInstruction() ?? [
+				`r${instruction.dst} = ${this.propertyLoadCall(receiver, `mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}])`, instruction.icIndex)};`,
+				this.throwCheck(),
+			];
 			return [
 				`${captured} = ${capture};`,
 				`if (${captured}) {`,
@@ -11884,8 +11992,7 @@ class NativeInstructionEmission {
 					? [`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`]
 					: []),
 				`} else {`,
-				`  r${instruction.dst} = ${this.propertyLoadCall(receiver, `mal_value_from_string(vm->string_constant_atoms[${this.context.relocation.stringIndex(instruction.stringIndex)}])`, instruction.icIndex)};`,
-				`  ${this.throwCheck()}`,
+				...fallback.map((line) => `  ${line}`),
 				`}`,
 			];
 		}
@@ -14971,9 +15078,22 @@ class NativeInstructionEmission {
 				this.callPoll(),
 			];
 		}
-		if (this.context.nativeStringCharCodeAtChainAction?.role === "call") {
-			const { chain } = this.context.nativeStringCharCodeAtChainAction;
-			const captured = `__string_char_code_at_${chain.callIp}_captured`;
+		if (this.context.nativeStringMethodChainAction?.role === "call") {
+			const { chain } = this.context.nativeStringMethodChainAction;
+			const captured = `__string_method_${chain.callIp}_captured`;
+			if (chain.operation !== "String.prototype.charCodeAt") {
+				const fallback = this.emitGenericInstruction();
+				if (fallback === null) return null;
+				return [
+					`if (${captured}) {`,
+					...this.stringMethodChainCall(instruction, chain, argsExpr).map(
+						(line) => `  ${line}`,
+					),
+					`} else {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			const boundedArgument =
 				args.length === 1 ? decodeVmValueOperand(args[0]!) : undefined;
 			const boundedPosition =
@@ -18424,6 +18544,21 @@ class NativeInstructionEmission {
 				return null;
 		}
 	}
+	/**
+	 * The loaded method a span consumer checks, or undefined when the String method is the
+	 * locked builtin: a known call names it, and a locked String method chain over the
+	 * call elided its load.
+	 */
+	spanCallCallee(
+		instruction: Extract<BytecodeInstruction, { opcode: "CALL" | "CALL_KNOWN" }>,
+	): string | undefined {
+		return instruction.opcode === "CALL" &&
+			this.context.nativeStringMethodChainAction?.chain.methodIdentity !==
+				"authority-invariant"
+			? this.boxedOperand(instruction.callee)
+			: undefined;
+	}
+
 	tryStringSpan(instruction: BytecodeInstruction): Array<string> | null | undefined {
 		if (this.context.nativeStringSpanAction !== undefined) {
 			const { site, role, consumer } = this.context.nativeStringSpanAction;
@@ -18458,7 +18593,7 @@ class NativeInstructionEmission {
 				];
 			};
 			const ordinary = this.emitGenericInstruction({
-				nativeStringCharCodeAtChainAction: this.context.nativeStringCharCodeAtChainAction,
+				nativeStringMethodChainAction: this.context.nativeStringMethodChainAction,
 				nativeRegExpExecProjectionAction: this.context.nativeRegExpExecProjectionAction,
 			});
 			if (ordinary === null) return null;
@@ -18566,11 +18701,9 @@ class NativeInstructionEmission {
 				(methodProperty !== undefined || role === "rangeProperty") &&
 				instruction.opcode === "LOAD_PROPERTY_STATIC"
 			) {
-				const chain = this.context.nativeStringCharCodeAtChainAction?.chain;
+				const chain = this.context.nativeStringMethodChainAction?.chain;
 				const captured =
-					chain === undefined
-						? undefined
-						: `__string_char_code_at_${chain.callIp}_captured`;
+					chain === undefined ? undefined : `__string_method_${chain.callIp}_captured`;
 				if (chain?.methodIdentity === "authority-invariant") {
 					// The chain elides its locked callee; its admission must survive coercing fallback.
 					projected = `${captured} = true; r${instruction.dst} = MAL_VALUE_UNDEFINED;`;
@@ -18641,8 +18774,8 @@ class NativeInstructionEmission {
 			) {
 				const result = `${prefix}_case_${this.ip}`;
 				declarations.push(`MalValue ${result};`);
-				const locked = instruction.opcode === "CALL_KNOWN";
-				guard += ` && mal_builtin_string_span_case(vm, ${locked ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${role === "toUpperCaseCall"}, &${result})`;
+				const callee = this.spanCallCallee(instruction);
+				guard += ` && mal_builtin_string_span_case(vm, ${callee ?? "MAL_VALUE_UNDEFINED"}, ${callee === undefined}, ${source}, ${prefix}_start, ${prefix}_end, ${role === "toUpperCaseCall"}, &${result})`;
 				projected = `${this.throwCheck()} r${instruction.dst} = ${this.callValue(instruction.dst, result)};`;
 			} else if (
 				role === "normalizeCall" &&
@@ -18714,15 +18847,12 @@ class NativeInstructionEmission {
 				if (operation === undefined)
 					throw new Error("Unknown string span character operation");
 				declarations.push(`MalValue ${result};`);
-				const locked =
-					instruction.opcode === "CALL_KNOWN" ||
-					this.context.nativeStringCharCodeAtChainAction?.chain.methodIdentity ===
-						"authority-invariant";
+				const callee = this.spanCallCallee(instruction);
 				const position =
 					instruction.arguments[0] === undefined
 						? "MAL_VALUE_UNDEFINED"
 						: this.boxedOperand(instruction.arguments[0]);
-				guard += ` && mal_builtin_string_span_character(vm, ${locked ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${position}, MAL_STRING_CHARACTER_${operation}, &${result})`;
+				guard += ` && mal_builtin_string_span_character(vm, ${callee ?? "MAL_VALUE_UNDEFINED"}, ${callee === undefined}, ${source}, ${prefix}_start, ${prefix}_end, ${position}, MAL_STRING_CHARACTER_${operation}, &${result})`;
 				projected = `r${instruction.dst} = ${this.callValue(instruction.dst, result)};`;
 			} else if (
 				searchCall !== undefined &&
@@ -18733,12 +18863,12 @@ class NativeInstructionEmission {
 				if (operation === undefined)
 					throw new Error("Unknown string span search operation");
 				declarations.push(`MalValue ${result};`);
-				const locked = instruction.opcode === "CALL_KNOWN";
+				const callee = this.spanCallCallee(instruction);
 				const argument = (index: number) =>
 					instruction.arguments[index] === undefined
 						? "MAL_VALUE_UNDEFINED"
 						: this.boxedOperand(instruction.arguments[index]);
-				guard += ` && mal_builtin_string_span_search(vm, ${locked ? "MAL_VALUE_UNDEFINED" : this.boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${argument(0)}, ${argument(1)}, MAL_STRING_SEARCH_${operation[0]}, &${result})`;
+				guard += ` && mal_builtin_string_span_search(vm, ${callee ?? "MAL_VALUE_UNDEFINED"}, ${callee === undefined}, ${source}, ${prefix}_start, ${prefix}_end, ${argument(0)}, ${argument(1)}, MAL_STRING_SEARCH_${operation[0]}, &${result})`;
 				const sourceKind =
 					site.parent !== undefined ? "nested" : (site.projection?.kind ?? "range");
 				projected = `${this.throwCheck()} MAL_PERF_COUNT(string_span_${sourceKind}_searches); r${instruction.dst} = ${this.callValue(instruction.dst, result)};`;

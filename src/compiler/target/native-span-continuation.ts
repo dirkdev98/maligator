@@ -49,9 +49,7 @@ export function selectNativeSpanContinuations(
 		return plans;
 	const materializingObservers = new Set(
 		native.specializations.flatMap((region) =>
-			region.kind === "string-char-code-at-chain"
-				? [region.propertyIp, region.callIp]
-				: [],
+			region.kind === "string-method-chain" ? [region.propertyIp, region.callIp] : [],
 		),
 	);
 	const children = native.specializations.filter(

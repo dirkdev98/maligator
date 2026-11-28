@@ -1,5 +1,6 @@
 import {
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_STRING,
 	compilerNumberFastPathInputKind,
 } from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
@@ -34,6 +35,8 @@ import {
 	CORE_STRING_SPAN_RANGE_METHODS,
 	coreStringSpanRangeAcceptsArgumentCount,
 	coreStringSpanMethodArgumentLimit,
+	CORE_STRING_METHOD_CHAIN_ARRAY_SEARCHES,
+	isCoreStringMethodChainOperation,
 } from "./core-ir-regions.ts";
 import type {
 	CoreStringSpanConsumer,
@@ -45,6 +48,7 @@ import type {
 	CoreCollectionBuiltinOperation,
 	CorePlanIteratorCursorKind,
 	CorePlanIteratorCursorProtocol,
+	CoreStringMethodChainOperation,
 } from "./core-ir-regions.ts";
 import { analyzeCoreValueClasses } from "./core-ir-value-classes.ts";
 import type { CoreValueClassAnalysis } from "./core-ir-value-classes.ts";
@@ -828,7 +832,7 @@ export type CoreLocalSpecializationCandidateKind =
 	| "string-span"
 	| "regexp-exec-projection"
 	| "regexp-iterator-projection"
-	| "string-char-code-at-chain"
+	| "string-method-chain"
 	| "builtin-collection-call-chain"
 	| CorePlanIteratorCursorKind
 	| "iterator-result-virtualization"
@@ -966,9 +970,10 @@ export interface CoreRegExpIteratorProjectionCandidate extends CoreLocalSpeciali
 	}>;
 }
 
-export interface CoreStringCharCodeAtCandidate extends CoreLocalSpecializationCandidateBase<"string-char-code-at-chain"> {
+export interface CoreStringMethodChainCandidate extends CoreLocalSpecializationCandidateBase<"string-method-chain"> {
 	readonly property: CoreInstructionId;
 	readonly call: CoreInstructionId;
+	readonly operation: CoreStringMethodChainOperation;
 	readonly bounded?: {
 		readonly length: CoreInstructionId;
 		readonly comparison: CoreInstructionId;
@@ -1071,7 +1076,7 @@ export type CoreLocalSpecializationCandidate =
 	| CoreStringSpanCandidate
 	| CoreRegExpExecProjectionCandidate
 	| CoreRegExpIteratorProjectionCandidate
-	| CoreStringCharCodeAtCandidate
+	| CoreStringMethodChainCandidate
 	| CoreBuiltinCollectionCallCandidate
 	| CoreIteratorCursorCandidate
 	| CoreIteratorResultVirtualizationCandidate
@@ -2394,23 +2399,110 @@ function lazySpecializationDetail<T>(
 	};
 }
 
-function stringCharCodeAtCandidates(
+/**
+ * The String method a guessed call site runs on a primitive string receiver. A site
+ * whose receiver may be an array or a string keeps the Array guess, and its call also
+ * tests for the String builtin.
+ */
+function stringMethodChainOperation(
+	fn: CoreFunctionStore,
+	call: CoreInstructionId,
+	valueKinds: () => CoreValueKindAnalysis,
+): CoreStringMethodChainOperation | undefined {
+	const guessed = knownBuiltinOperation(fn, call);
+	if (isCoreStringMethodChainOperation(guessed)) return guessed;
+	const shared = Object.entries(CORE_STRING_METHOD_CHAIN_ARRAY_SEARCHES).find(
+		([, search]) => search === guessed,
+	)?.[0] as CoreStringMethodChainOperation | undefined;
+	const receiver = instructionOperand(fn, call, 1);
+	return shared !== undefined &&
+		receiver !== undefined &&
+		(valueKinds().kindMask(receiver) & COMPILER_VALUE_KIND_STRING) !== 0
+		? shared
+		: undefined;
+}
+
+/**
+ * Values a span reads, directly or through a chain of String range calls. The native
+ * backend can keep each as a span over its own parent rather than a created string.
+ */
+function spanParentValues(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	roots: ReadonlyMap<CoreValueId, CoreValueId>,
+	index: CoreLocalFactIndex,
+	spans: ReadonlyArray<CoreStringSpanCandidate>,
+): ReadonlySet<CoreValueId> {
+	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
+	const rangeReceiver = (call: CoreInstructionId): CoreValueId | undefined => {
+		if (fn.instructionOpcodeName(call) === "callKnown") {
+			const operation = fn.instructionAttributes(call).operation;
+			return CORE_STRING_SPAN_RANGE_METHODS.some(
+				(method) => operation === `String.prototype.${method}`,
+			)
+				? instructionOperand(fn, call, 0)
+				: undefined;
+		}
+		const callee = instructionOperand(fn, call, 0);
+		const receiver = instructionOperand(fn, call, 1);
+		const property =
+			callee === undefined ? undefined : specializationDefinition(fn, roots, callee);
+		return receiver !== undefined &&
+			property !== undefined &&
+			CORE_STRING_SPAN_RANGE_METHODS.some((method) =>
+				staticPropertyNamed(program, fn, property, method),
+			) &&
+			root(instructionOperand(fn, property, 0)!) === root(receiver)
+			? receiver
+			: undefined;
+	};
+	const parents = new Set<CoreValueId>();
+	for (const span of spans) {
+		const receiver = rangeReceiver(span.call);
+		if (receiver !== undefined) parents.add(root(receiver));
+	}
+	const calls = [
+		...indexedOpcodeInstructions(fn, index, "call"),
+		...indexedOpcodeInstructions(fn, index, "callKnown"),
+	];
+	for (let grew = true; grew;) {
+		grew = false;
+		for (const call of calls) {
+			const result = instructionResult(fn, call, 0);
+			if (result === undefined || !parents.has(root(result))) continue;
+			const receiver = rangeReceiver(call);
+			if (receiver !== undefined && !parents.has(root(receiver))) {
+				parents.add(root(receiver));
+				grew = true;
+			}
+		}
+	}
+	return parents;
+}
+
+function stringMethodChainCandidates(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	loops: () => CoreLoopInductionAnalysis,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
 	index: CoreLocalFactIndex,
-): ReadonlyArray<CoreStringCharCodeAtCandidate> {
-	const candidates: Array<CoreStringCharCodeAtCandidate> = [];
+	valueKinds: () => CoreValueKindAnalysis,
+): ReadonlyArray<CoreStringMethodChainCandidate> {
+	const candidates: Array<CoreStringMethodChainCandidate> = [];
 	const root = (value: CoreValueId): CoreValueId => roots.get(value) ?? value;
 	for (const call of indexedOpcodeInstructions(fn, index, "call")) {
-		if (
-			fn.instructionKind(call) !== "operation" ||
-			(instructionOperandCount(fn, call) !== 2 && instructionOperandCount(fn, call) !== 3)
-		) {
-			continue;
-		}
+		if (fn.instructionKind(call) !== "operation") continue;
+		const operandCount = instructionOperandCount(fn, call);
+		const guessed = stringMethodChainOperation(fn, call, valueKinds);
+		// `charCodeAt` is matched by name, so a site without a guess still gets the chain.
+		const operation =
+			guessed === "String.prototype.charCodeAt" || guessed === undefined
+				? operandCount === 2 || operandCount === 3
+					? "String.prototype.charCodeAt"
+					: undefined
+				: guessed;
+		if (operation === undefined) continue;
 		const matched = exactPropertyCallCandidate(
 			program,
 			fn,
@@ -2418,13 +2510,14 @@ function stringCharCodeAtCandidates(
 			roots,
 			index,
 			call,
-			"charCodeAt",
+			operation.slice("String.prototype.".length),
 		);
 		if (matched === undefined) continue;
 		const getBounded = lazySpecializationDetail(program, fn, () => {
+			if (operation !== "String.prototype.charCodeAt") return undefined;
 			const receiver = instructionOperand(fn, call, 1);
 			const position = instructionOperand(fn, call, 2);
-			let bounded: CoreStringCharCodeAtCandidate["bounded"];
+			let bounded: CoreStringMethodChainCandidate["bounded"];
 			if (receiver !== undefined && position !== undefined) {
 				for (const induction of loops().inductions) {
 					const comparison = induction.comparison;
@@ -2482,15 +2575,16 @@ function stringCharCodeAtCandidates(
 			return bounded;
 		});
 		const instructions = Object.freeze([matched.property, call]);
-		const key = `string-char-code-at-chain:${fn.id}:${call}`;
+		const key = `string-method-chain:${fn.id}:${call}`;
 		candidates.push(
 			Object.freeze({
 				key,
-				kind: "string-char-code-at-chain",
+				kind: "string-method-chain",
 				function: fn.id,
 				root: call,
 				property: matched.property,
 				call,
+				operation,
 				get bounded() {
 					return getBounded();
 				},
@@ -5033,6 +5127,48 @@ function discoverCandidates(
 			}
 		}
 	}
+	const stringSplitCursors = requested("string-split-cursor")
+		? stringSplitCursorCandidates(program, fn, control, loops, roots, index)
+		: [];
+	const stringSplitProjections = requested("string-split-projection")
+		? coreStringSplitProjectionCandidates(program, fn, control, roots, index)
+		: [];
+	const stringSpans = requested("string-span")
+		? coreStringSpanCandidates(program, fn, control, roots, index)
+		: [];
+	const regexpExecProjections = requested("regexp-exec-projection")
+		? coreRegExpExecProjectionCandidates(program, fn, control, roots, index)
+		: [];
+	const regexpIteratorProjections = requested("regexp-iterator-projection")
+		? regexpIteratorProjectionCandidates(fn, control, roots, index)
+		: [];
+	// A String method chain claims the same property load and call as a projection over
+	// the method's result and would win some of them; the projection saves more. Range
+	// calls whose results lead into a span also stay free, so the native backend can keep
+	// each result as a span over its parent instead of creating the string.
+	const projectedInstructions = new Set<CoreInstructionId>(
+		[
+			...stringSplitCursors,
+			...stringSplitProjections,
+			...stringSpans,
+			...regexpExecProjections,
+			...regexpIteratorProjections,
+		].flatMap((candidate) => candidate.instructions),
+	);
+	const spanParents =
+		stringSpans.length === 0
+			? new Set<CoreValueId>()
+			: spanParentValues(program, fn, roots, index, stringSpans);
+	const spanParent = (candidate: CoreStringMethodChainCandidate): boolean => {
+		const result = instructionResult(fn, candidate.call, 0);
+		return (
+			CORE_STRING_SPAN_RANGE_METHODS.some(
+				(method) => candidate.operation === `String.prototype.${method}`,
+			) &&
+			result !== undefined &&
+			spanParents.has(roots.get(result) ?? result)
+		);
+	};
 	for (const candidate of [
 		...(requested("fresh-array-length")
 			? freshArrayLengthCandidates(program, fn, provenance(), control, roots, index)
@@ -5058,30 +5194,35 @@ function discoverCandidates(
 		...(requested("iterator-entry-pair-virtualization")
 			? iteratorEntryPairVirtualizationCandidates(fn, control, roots, index)
 			: []),
-		...(requested("string-char-code-at-chain")
-			? stringCharCodeAtCandidates(program, fn, control, loops, roots, index)
+		...(requested("string-method-chain")
+			? stringMethodChainCandidates(
+					program,
+					fn,
+					control,
+					loops,
+					roots,
+					index,
+					valueKinds,
+				).filter(
+					(candidate) =>
+						candidate.operation === "String.prototype.charCodeAt" ||
+						(candidate.instructions.every(
+							(instruction) => !projectedInstructions.has(instruction),
+						) &&
+							!spanParent(candidate)),
+				)
 			: []),
 		...(requested("function-call-chain")
 			? functionCallChainCandidates(program, fn, control, roots, index)
 			: []),
-		...(requested("string-split-cursor")
-			? stringSplitCursorCandidates(program, fn, control, loops, roots, index)
-			: []),
+		...stringSplitCursors,
 		...(requested("builtin-collection-call-chain")
 			? builtinCollectionCallCandidates(program, fn, control, roots, index, valueClasses)
 			: []),
-		...(requested("string-split-projection")
-			? coreStringSplitProjectionCandidates(program, fn, control, roots, index)
-			: []),
-		...(requested("string-span")
-			? coreStringSpanCandidates(program, fn, control, roots, index)
-			: []),
-		...(requested("regexp-exec-projection")
-			? coreRegExpExecProjectionCandidates(program, fn, control, roots, index)
-			: []),
-		...(requested("regexp-iterator-projection")
-			? regexpIteratorProjectionCandidates(fn, control, roots, index)
-			: []),
+		...stringSplitProjections,
+		...stringSpans,
+		...regexpExecProjections,
+		...regexpIteratorProjections,
 	]) {
 		addCandidate(candidate);
 	}

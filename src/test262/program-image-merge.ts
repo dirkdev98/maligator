@@ -255,7 +255,7 @@ function cloneRegion(region: VmRegion, base: RebaseBases): VmRegion {
 				innerStepIps: [...region.innerStepIps],
 				innerCloseIps: [...region.innerCloseIps],
 			};
-		case "string-char-code-at-chain":
+		case "string-method-chain":
 			return {
 				...cloneRegionEnvelope(region),
 				kind: region.kind,

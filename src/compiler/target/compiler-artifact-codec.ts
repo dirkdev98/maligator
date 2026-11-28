@@ -6,7 +6,10 @@ import type {
 	FfiViewArray,
 } from "../../build-config-values.ts";
 import { coreRegionStrategy } from "../core/core-ir-region-strategies.ts";
-import { CORE_STRING_SPAN_RANGE_METHODS } from "../core/core-ir-regions.ts";
+import {
+	CORE_STRING_METHOD_CHAIN_OPERATIONS,
+	CORE_STRING_SPAN_RANGE_METHODS,
+} from "../core/core-ir-regions.ts";
 import type {
 	CoreCollectionBuiltinOperation,
 	CorePropertyPlacement,
@@ -102,6 +105,7 @@ import {
 	vmRegExpProjectionLoadMatches,
 	vmRegionActionsAreCurrent,
 	vmGuardIsWorldInvariant,
+	vmStringMethodChainAdmitsCall,
 	VM_GUARDED_BUILTIN_OPERATIONS,
 	VM_NUMERIC_FUSION_GUARDS,
 } from "./program-image.ts";
@@ -131,7 +135,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 484;
+export const COMPILER_ARTIFACT_VERSION = 485;
 
 /** Direct entries of C library bindings, as `binding-unit.ts` names them. */
 const FOREIGN_CALL_SYMBOL = /^mal_ffi_direct\d+_\w+$/;
@@ -692,8 +696,8 @@ function stringSpanGuardMasks(
 	return { dependencyMask, obligationMask };
 }
 
-function stringCharCodeAtChainGuardMasks(
-	license: Extract<VmRegion, { kind: "string-char-code-at-chain" }>["license"],
+function stringMethodChainGuardMasks(
+	license: Extract<VmRegion, { kind: "string-method-chain" }>["license"],
 ): { dependencyMask: number; obligationMask: number } {
 	let dependencyMask = 0;
 	for (const dependency of license.guard.dependencies) {
@@ -703,7 +707,7 @@ function stringCharCodeAtChainGuardMasks(
 			dependencyMask |= 4;
 		} else {
 			throw new RangeError(
-				"program-image-codec: unsupported String.charCodeAt chain dependency",
+				"program-image-codec: unsupported String method chain dependency",
 			);
 		}
 	}
@@ -718,9 +722,7 @@ function stringCharCodeAtChainGuardMasks(
 		(dependencyMask !== 1 && dependencyMask !== 4) ||
 		obligationMask !== 1
 	) {
-		throw new RangeError(
-			"program-image-codec: invalid String.charCodeAt chain guard plan",
-		);
+		throw new RangeError("program-image-codec: invalid String method chain guard plan");
 	}
 	return { dependencyMask, obligationMask };
 }
@@ -3118,8 +3120,8 @@ function writeCompilerArtifact(
 								? regexpIteratorProjectionGuardMasks(region.license)
 								: region.kind === "string-span"
 									? stringSpanGuardMasks(region.license)
-									: region.kind === "string-char-code-at-chain"
-										? stringCharCodeAtChainGuardMasks(region.license)
+									: region.kind === "string-method-chain"
+										? stringMethodChainGuardMasks(region.license)
 										: region.kind === "builtin-collection-call-chain"
 											? builtinCollectionCallChainGuardMasks(region.license)
 											: region.kind === "iterator-entry-pair-virtualization"
@@ -3387,11 +3389,12 @@ function writeCompilerArtifact(
 						);
 					}
 					break;
-				case "string-char-code-at-chain":
+				case "string-method-chain":
 					w.i32(region.propertyIp);
 					w.i32(region.callIp);
+					w.u8(CORE_STRING_METHOD_CHAIN_OPERATIONS.indexOf(region.operation));
 					w.u8(region.methodIdentity === "authority-invariant" ? 1 : 0);
-					w.u8(region.runtimeGuard === "primitive-string-number-position" ? 1 : 0);
+					w.u8(region.runtimeGuard === "primitive-string-receiver" ? 1 : 0);
 					w.u8(region.evaluationOrder === "capture-property-before-arguments" ? 1 : 0);
 					w.i32(region.propertyIcIndex);
 					w.i32(region.callee);
@@ -3513,7 +3516,7 @@ function validateRegionEnvelope(
 		) ||
 		(region.kind !== "regexp-iterator-projection" &&
 			region.kind !== "string-span" &&
-			region.kind !== "string-char-code-at-chain" &&
+			region.kind !== "string-method-chain" &&
 			region.kind !== "builtin-collection-call-chain" &&
 			region.kind !== "iterator-entry-pair-virtualization" &&
 			region.kind !== "iterator-result-virtualization" &&
@@ -3582,13 +3585,8 @@ function validateRegion(
 		case "string-span":
 			validateStringSpanRegion(fn, region, stringConstants, nativeInstructions);
 			break;
-		case "string-char-code-at-chain":
-			validateStringCharCodeAtChainRegion(
-				fn,
-				region,
-				stringConstants,
-				nativeInstructions,
-			);
+		case "string-method-chain":
+			validateStringMethodChainRegion(fn, region, stringConstants, nativeInstructions);
 			break;
 		case "builtin-collection-call-chain":
 			validateBuiltinCollectionCallChainRegion(
@@ -4026,13 +4024,13 @@ function validateStringSpanRegion(
 		throw new RangeError("program-image-codec: invalid string-span authority");
 }
 
-function validateStringCharCodeAtChainRegion(
+function validateStringMethodChainRegion(
 	fn: BytecodeFunction,
-	region: Extract<VmRegion, { kind: "string-char-code-at-chain" }>,
+	region: Extract<VmRegion, { kind: "string-method-chain" }>,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
 ): void {
-	stringCharCodeAtChainGuardMasks(region.license);
+	stringMethodChainGuardMasks(region.license);
 	const property = fn.instructions[region.propertyIp];
 	const call = fn.instructions[region.callIp];
 	const callPlan = nativeCallPlanAt(nativeInstructions, region.callIp);
@@ -4050,7 +4048,7 @@ function validateStringCharCodeAtChainRegion(
 		}
 	}
 	if (
-		region.representation !== "primitive-string-code-unit" ||
+		region.representation !== "captured-string-method" ||
 		region.anchors.length !== 2 ||
 		region.anchors[0] !== region.propertyIp ||
 		region.anchors[1] !== region.callIp ||
@@ -4060,16 +4058,16 @@ function validateStringCharCodeAtChainRegion(
 		region.license.admission.anchorIp !== region.propertyIp ||
 		property?.opcode !== "LOAD_PROPERTY_STATIC" ||
 		String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !==
-			"charCodeAt" ||
+			region.operation.split(".").at(-1) ||
 		property.icIndex !== region.propertyIcIndex ||
 		call?.opcode !== "CALL" ||
-		callPlan?.guardedBuiltinCall?.operation !== "String.prototype.charCodeAt" ||
-		call.arguments.length > 1 ||
+		!vmStringMethodChainAdmitsCall(callPlan, region.operation) ||
+		(region.operation === "String.prototype.charCodeAt" && call.arguments.length > 1) ||
 		property.dst !== call.callee ||
 		property.object !== call.thisValue ||
 		region.propertyIp >= region.callIp ||
 		region.methodIdentity !== expectedMethodIdentity ||
-		region.runtimeGuard !== "primitive-string-number-position" ||
+		region.runtimeGuard !== "primitive-string-receiver" ||
 		region.evaluationOrder !== "capture-property-before-arguments" ||
 		region.callee !== call.callee ||
 		region.receiver !== call.thisValue ||
@@ -4079,7 +4077,7 @@ function validateStringCharCodeAtChainRegion(
 		activeHandlers.size !== region.controlFlow.exceptionalHandlerIps.length ||
 		region.controlFlow.exceptionalHandlerIps.some((ip) => !activeHandlers.has(ip))
 	) {
-		throw new RangeError("program-image-codec: invalid String.charCodeAt chain region");
+		throw new RangeError("program-image-codec: invalid String method chain region");
 	}
 }
 
@@ -5987,7 +5985,7 @@ function readCompilerArtifact(
 					materializationTag === 0 &&
 					dependencyMask === 0 &&
 					obligationMask === 1;
-				const stringCharCodeAtChainContract =
+				const stringMethodChainContract =
 					kindTag === 16 &&
 					representationTag === 16 &&
 					materializationTag === 0 &&
@@ -6039,7 +6037,7 @@ function readCompilerArtifact(
 						!stackObjectPlanContract &&
 						!numericFusionContract &&
 						!indexedLengthLoopContract &&
-						!stringCharCodeAtChainContract &&
+						!stringMethodChainContract &&
 						!iteratorCursorContract &&
 						!iteratorResultVirtualizationContract &&
 						!builtinCollectionCallChainContract &&
@@ -6746,6 +6744,7 @@ function readCompilerArtifact(
 				} else if (kindTag === 16) {
 					const propertyIp = r.i32();
 					const callIp = r.i32();
+					const operation = CORE_STRING_METHOD_CHAIN_OPERATIONS[r.u8()];
 					const methodIdentityTag = r.u8();
 					const runtimeGuardTag = r.u8();
 					const evaluationOrderTag = r.u8();
@@ -6754,16 +6753,17 @@ function readCompilerArtifact(
 					const receiver = r.i32();
 					const result = r.i32();
 					if (
+						operation === undefined ||
 						methodIdentityTag > 1 ||
 						runtimeGuardTag !== 1 ||
 						evaluationOrderTag !== 1
 					) {
 						throw new RangeError(
-							"program-image-codec: invalid String.charCodeAt chain header",
+							"program-image-codec: invalid String method chain header",
 						);
 					}
 					region = {
-						kind: "string-char-code-at-chain",
+						kind: "string-method-chain",
 						license: {
 							guard: {
 								dependencies:
@@ -6776,16 +6776,17 @@ function readCompilerArtifact(
 							materialization: "none",
 							admission,
 						},
-						representation: "primitive-string-code-unit",
+						representation: "captured-string-method",
 						anchors,
 						claimedIps,
 						controlFlow: { ordinaryBlockIps, exceptionalHandlerIps },
 						cost: { score, metadataOperations },
 						propertyIp,
 						callIp,
+						operation,
 						methodIdentity:
 							methodIdentityTag === 1 ? "authority-invariant" : "runtime-guarded",
-						runtimeGuard: "primitive-string-number-position",
+						runtimeGuard: "primitive-string-receiver",
 						evaluationOrder: "capture-property-before-arguments",
 						propertyIcIndex,
 						callee,

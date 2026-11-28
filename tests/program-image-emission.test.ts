@@ -4663,12 +4663,13 @@ describe("native update-expression representation", () => {
 		`;
 		const definition = lower(code);
 		const regions = specializations(definition).filter(
-			(region) => region.kind === "string-char-code-at-chain",
+			(region) => region.kind === "string-method-chain",
 		);
 		expect(regions).toHaveLength(1);
 		expect(regions[0]).toMatchObject({
-			representation: "primitive-string-code-unit",
-			runtimeGuard: "primitive-string-number-position",
+			operation: "String.prototype.charCodeAt",
+			representation: "captured-string-method",
+			runtimeGuard: "primitive-string-receiver",
 			evaluationOrder: "capture-property-before-arguments",
 			license: { admission: { mode: "capture" } },
 		});
@@ -4677,8 +4678,7 @@ describe("native update-expression representation", () => {
 		);
 		const output = emitProgramImage(definition, { compiled: true });
 		expect(output).toContain("mal_vm_local_watched_primitive_value_try_load_static");
-		expect(output).toContain("__string_char_code_at_");
-		expect(output).toContain("mal_vm_op_load_property_ic(vm,");
+		expect(output).toContain("mal_vm_property_try_load_static(vm,");
 		expect(output).toContain("mal_builtin_string_char_code_at_direct(vm, ");
 		expect(output).toContain(", 1);");
 
@@ -4697,7 +4697,7 @@ describe("native update-expression representation", () => {
 			"mal_vm_local_watched_primitive_value_try_load_static",
 		);
 		expect(lockedOutput).toContain("mal_builtin_string_char_code_at_known(vm,");
-		expect(lockedOutput).toContain("mal_vm_op_load_property_ic(vm,");
+		expect(lockedOutput).toContain("mal_vm_property_try_load_static(vm,");
 		expect(lockedOutput).not.toContain("mal_builtin_string_char_code_at_direct(vm, ");
 	});
 

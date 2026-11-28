@@ -29,7 +29,7 @@ export type CorePlanSpecializationKind =
 	| "regexp-exec-projection"
 	| "regexp-iterator-projection"
 	| "string-span"
-	| "string-char-code-at-chain"
+	| "string-method-chain"
 	| "builtin-collection-call-chain"
 	| "array-values-iterator-cursor"
 	| "string-iterator-cursor"
@@ -382,13 +382,52 @@ export interface CorePlanRegExpIteratorProjectionSpecialization extends CorePlan
 	};
 }
 
-export interface CorePlanStringCharCodeAtSpecialization extends CorePlanSpecializationBase<"string-char-code-at-chain"> {
-	readonly stringCharCodeAt: {
+/**
+ * String methods a call on a property load can run directly once the receiver is a
+ * primitive string, without loading the method: on a primitive string the load reaches
+ * the String.prototype data property that the builtin identity guard covers.
+ */
+export const CORE_STRING_METHOD_CHAIN_OPERATIONS = [
+	"String.prototype.charCodeAt",
+	"String.prototype.toLowerCase",
+	"String.prototype.toUpperCase",
+	"String.prototype.indexOf",
+	"String.prototype.lastIndexOf",
+	"String.prototype.includes",
+	"String.prototype.startsWith",
+	"String.prototype.endsWith",
+	"String.prototype.slice",
+	"String.prototype.substring",
+	"String.prototype.substr",
+] as const;
+
+export type CoreStringMethodChainOperation =
+	(typeof CORE_STRING_METHOD_CHAIN_OPERATIONS)[number];
+
+/** Array searches whose guessed call sites also test for the String method of the same name. */
+export const CORE_STRING_METHOD_CHAIN_ARRAY_SEARCHES = {
+	"String.prototype.indexOf": "Array.prototype.indexOf",
+	"String.prototype.lastIndexOf": "Array.prototype.lastIndexOf",
+	"String.prototype.includes": "Array.prototype.includes",
+} as const satisfies Partial<Record<CoreStringMethodChainOperation, string>>;
+
+export function isCoreStringMethodChainOperation(
+	operation: unknown,
+): operation is CoreStringMethodChainOperation {
+	return (CORE_STRING_METHOD_CHAIN_OPERATIONS as ReadonlyArray<unknown>).includes(
+		operation,
+	);
+}
+
+export interface CorePlanStringMethodChainSpecialization extends CorePlanSpecializationBase<"string-method-chain"> {
+	readonly stringMethodChain: {
 		readonly guard: CompilerGuardPlan;
 		readonly builtinCall: KnownBuiltinCall;
 		readonly property: CoreInstructionId;
 		readonly call: CoreInstructionId;
+		readonly operation: CoreStringMethodChainOperation;
 		readonly methodIdentity: CoreBuiltinIdentityDecision;
+		/** Only for `charCodeAt`: a loop bound proves the position is an in-bounds index. */
 		readonly bounded?: {
 			readonly length: CoreInstructionId;
 			readonly comparison: CoreInstructionId;
@@ -518,7 +557,7 @@ export type CorePlanSpecialization =
 	| CorePlanStringSpanSpecialization
 	| CorePlanRegExpExecProjectionSpecialization
 	| CorePlanRegExpIteratorProjectionSpecialization
-	| CorePlanStringCharCodeAtSpecialization
+	| CorePlanStringMethodChainSpecialization
 	| CorePlanBuiltinCollectionCallSpecialization
 	| CorePlanIteratorCursorSpecialization
 	| CorePlanIteratorResultVirtualizationSpecialization
@@ -948,9 +987,9 @@ export interface CoreAllocatedStringSpanRegion extends CoreAllocatedRegionEnvelo
 	}>;
 }
 
-export interface CoreAllocatedStringCharCodeAtChainRegion extends CoreAllocatedRegionEnvelope<
-	"string-char-code-at-chain",
-	"primitive-string-code-unit",
+export interface CoreAllocatedStringMethodChainRegion extends CoreAllocatedRegionEnvelope<
+	"string-method-chain",
+	"captured-string-method",
 	"none",
 	readonly [
 		Extract<CompilerInstruction, { type: "loadPropertyStatic" }>,
@@ -959,8 +998,9 @@ export interface CoreAllocatedStringCharCodeAtChainRegion extends CoreAllocatedR
 > {
 	readonly property: Extract<CompilerInstruction, { type: "loadPropertyStatic" }>;
 	readonly call: Extract<CompilerInstruction, { type: "call" }>;
+	readonly operation: CoreStringMethodChainOperation;
 	readonly methodIdentity: CoreBuiltinIdentityDecision;
-	readonly runtimeGuard: "primitive-string-number-position";
+	readonly runtimeGuard: "primitive-string-receiver";
 	readonly evaluationOrder: "capture-property-before-arguments";
 }
 
@@ -1260,7 +1300,7 @@ export type CoreAllocatedRegion =
 	| CoreAllocatedRegExpExecProjectionRegion
 	| CoreAllocatedRegExpIteratorProjectionRegion
 	| CoreAllocatedStackObjectPlanRegion
-	| CoreAllocatedStringCharCodeAtChainRegion
+	| CoreAllocatedStringMethodChainRegion
 	| CoreAllocatedStringIteratorCursorRegion
 	| CoreAllocatedStringSpanRegion
 	| CoreAllocatedStringSplitProjectionRegion

@@ -147,10 +147,10 @@ export const CORE_REGION_STRATEGIES = {
 		fallbackFrontier: "retained-instruction",
 		maximumClaims: 64,
 	},
-	"string-char-code-at-chain": {
+	"string-method-chain": {
 		artifactTag: 16,
 		family: "operation-chain",
-		representation: "primitive-string-code-unit",
+		representation: "captured-string-method",
 		composition: "exclusive",
 		correspondence: "operation-trace",
 		lifetime: "claimed-region",
@@ -307,7 +307,7 @@ const CORE_PLAN_ONLY_TARGET_STRATEGIES: ReadonlySet<string> = new Set([
 	"stack-object-plan",
 	"string-span",
 	"string-split-projection",
-	"string-char-code-at-chain",
+	"string-method-chain",
 	"builtin-collection-call-chain",
 	"array-values-iterator-cursor",
 	"string-iterator-cursor",

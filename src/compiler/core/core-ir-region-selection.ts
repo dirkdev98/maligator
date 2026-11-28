@@ -35,7 +35,10 @@ import {
 	coreGeneratedCodeOverheadCost,
 } from "./core-ir-generated-cost.ts";
 import type { CoreGeneratedCodeCostModel } from "./core-ir-generated-cost.ts";
-import { CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS } from "./core-ir-provenance.ts";
+import {
+	CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS,
+	discoverCoreLocalSpecializationCandidates,
+} from "./core-ir-provenance.ts";
 import type {
 	CoreIteratorCursorCandidate,
 	CoreLocalSpecializationCandidate,
@@ -205,6 +208,9 @@ function hasLocalSpecializationFeatures(
 		0
 	);
 }
+
+const STRING_METHOD_CHAIN_KINDS: ReadonlySet<CoreLocalSpecializationCandidate["kind"]> =
+	new Set(["string-method-chain"]);
 
 function isPendingDirectEntry(
 	candidate: PendingCandidate,
@@ -481,10 +487,10 @@ function pendingLocalCandidate(
 							candidate.call,
 							true,
 						)
-					: candidate.kind === "string-char-code-at-chain"
+					: candidate.kind === "string-method-chain"
 						? builtinPlanProof(
 								context,
-								"String.prototype.charCodeAt",
+								candidate.operation,
 								kind,
 								candidate.function,
 								candidate.call,
@@ -538,7 +544,7 @@ function pendingLocalCandidate(
 		(candidate.kind === "string-split-projection" ||
 			candidate.kind === "string-span" ||
 			candidate.kind === "regexp-exec-projection" ||
-			candidate.kind === "string-char-code-at-chain" ||
+			candidate.kind === "string-method-chain" ||
 			candidate.kind === "builtin-collection-call-chain") &&
 		builtin === undefined
 	)
@@ -588,9 +594,18 @@ function pendingLocalCandidate(
 		closes === undefined || closes.length === 0
 			? undefined
 			: coreGeneratedCodeOverheadCost({ stateSynchronizations: closes.length });
-	const generatedCodeCost =
-		cost.estimatedCStatements + (closeOverhead?.estimatedCStatements ?? 0);
-	const compilerWorkCost = cost.compileScore + (closeOverhead?.compileScore ?? 0);
+	// A String method chain only replaces the method load and dispatch, under a guard
+	// whose miss runs the ordinary call it keeps, so it spends no growth budget. A
+	// charCodeAt chain may also prove an in-bounds position, which costs a loop analysis.
+	const budgeted =
+		candidate.kind !== "string-method-chain" ||
+		candidate.operation === "String.prototype.charCodeAt";
+	const generatedCodeCost = budgeted
+		? cost.estimatedCStatements + (closeOverhead?.estimatedCStatements ?? 0)
+		: 0;
+	const compilerWorkCost = budgeted
+		? cost.compileScore + (closeOverhead?.compileScore ?? 0)
+		: 0;
 	// Observers and lenders still call C or user code. Counting them as savings can
 	// prefer a cold seed object over the hot loop result that replaces it.
 	const runtimeBenefit =
@@ -651,7 +666,7 @@ function pendingLocalCandidate(
 															candidate.doneBranch,
 															candidate.loads[0]!.instruction,
 														])
-													: candidate.kind === "string-char-code-at-chain" ||
+													: candidate.kind === "string-method-chain" ||
 														  candidate.kind === "builtin-collection-call-chain" ||
 														  candidate.kind === "function-call-chain"
 														? Object.freeze([candidate.property, candidate.call])
@@ -665,7 +680,7 @@ function pendingLocalCandidate(
 			candidate.kind === "string-split-cursor" ||
 			candidate.kind === "string-span" ||
 			candidate.kind === "regexp-iterator-projection" ||
-			candidate.kind === "string-char-code-at-chain" ||
+			candidate.kind === "string-method-chain" ||
 			candidate.kind === "builtin-collection-call-chain" ||
 			candidate.kind === "function-call-chain"
 				? candidate.exceptionalBlocks
@@ -678,7 +693,7 @@ function pendingLocalCandidate(
 					? (candidate.property ?? candidate.call)
 					: candidate.kind === "regexp-exec-projection"
 						? (candidate.property ?? candidate.call)
-						: candidate.kind === "string-char-code-at-chain" ||
+						: candidate.kind === "string-method-chain" ||
 							  candidate.kind === "builtin-collection-call-chain" ||
 							  candidate.kind === "function-call-chain"
 							? candidate.property
@@ -693,14 +708,14 @@ function pendingLocalCandidate(
 					: candidate.kind === "string-split-projection" ||
 						  candidate.kind === "string-span" ||
 						  candidate.kind === "regexp-exec-projection" ||
-						  candidate.kind === "string-char-code-at-chain" ||
+						  candidate.kind === "string-method-chain" ||
 						  candidate.kind === "builtin-collection-call-chain"
 						? builtin!.guard.dependencies
 						: Object.freeze([]);
 		const admission = Object.freeze({
 			anchor: admissionAnchor,
 			mode:
-				candidate.kind === "string-char-code-at-chain" ||
+				candidate.kind === "string-method-chain" ||
 				candidate.kind === "builtin-collection-call-chain" ||
 				candidate.kind === "iterator-entry-pair-virtualization" ||
 				candidate.kind === "function-call-chain"
@@ -1014,17 +1029,18 @@ function pendingLocalCandidate(
 																			loads: candidate.loads,
 																		}),
 																	}
-																: candidate.kind === "string-char-code-at-chain"
+																: candidate.kind === "string-method-chain"
 																	? {
 																			...common,
-																			kind: "string-char-code-at-chain",
-																			representation: "primitive-string-code-unit",
+																			kind: "string-method-chain",
+																			representation: "captured-string-method",
 																			composition: "exclusive",
-																			stringCharCodeAt: Object.freeze({
+																			stringMethodChain: Object.freeze({
 																				guard: builtin!.guard,
 																				builtinCall: builtin!.builtinCall,
 																				property: candidate.property,
 																				call: candidate.call,
+																				operation: candidate.operation,
 																				methodIdentity: builtin!.identity,
 																				...(candidate.bounded === undefined
 																					? {}
@@ -1107,7 +1123,7 @@ function pendingLocalCandidate(
 				!isIteratorCursorCandidate(candidate) &&
 				candidate.kind !== "numeric-fusion" &&
 				candidate.kind !== "builtin-collection-call-chain" &&
-				candidate.kind !== "string-char-code-at-chain" &&
+				candidate.kind !== "string-method-chain" &&
 				candidate.kind !== "iterator-entry-pair-virtualization",
 			...(!coreTargetSupportsSpecialization(kind)
 				? { unsupportedReason: "target-support" as const }
@@ -2799,6 +2815,47 @@ export function buildCoreOptimizationPlan(
 	const specializations: Array<CorePlanSpecialization> = [];
 	const directEntriesByFunction = new Map<CoreFunctionId, Array<CoreDirectEntryPlan>>();
 	const dispatchBudgets = new Map<CoreFunctionId, CoreTransformCandidate>();
+	// A function past the discovery budget still gets the String method chains that cost
+	// no budget; discovering only them scans the function's calls.
+	const selectStringMethodChains = (functionId: CoreFunctionId): void => {
+		const fn = program.function(functionId);
+		const cfg = analyses
+			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: functionId })
+			.exceptional();
+		const costModel = coreGeneratedCodeCostModel(fn, cfg);
+		for (const candidate of discoverCoreLocalSpecializationCandidates(
+			program,
+			functionId,
+			STRING_METHOD_CHAIN_KINDS,
+			options.context,
+		).candidates) {
+			const planned = pendingLocalCandidate(
+				program,
+				candidate,
+				cfg,
+				costModel,
+				options.context,
+			);
+			if (
+				planned === undefined ||
+				planned.budget.generatedCodeCost > 0 ||
+				planned.budget.compilerWorkCost > 0 ||
+				!service.consider(planned.budget)
+			)
+				continue;
+			increment(discoveredByKind, planned.budget.kind);
+			if (conflicts(planned.claims, claimed)) {
+				service.recordDeclined("overlap");
+				increment(declinedByPlanReason, "overlap");
+				continue;
+			}
+			service.recordApplied(planned.budget);
+			increment(selectedByKind, planned.budget.kind);
+			claim(planned.claims, claimed);
+			specializations.push(planned.materialize());
+			options.onMaterialize?.();
+		}
+	};
 	for (const opportunity of service.orderDiscovery(opportunities)) {
 		// A proven single target only replaces dispatch, so it neither grows code nor
 		// competes with speculative specializations for the program budget.
@@ -2837,6 +2894,7 @@ export function buildCoreOptimizationPlan(
 		if (reason !== undefined) {
 			discovery.skipped++;
 			increment(discovery.skippedByReason, reason);
+			if (opportunity.kind === "local") selectStringMethodChains(opportunity.caller);
 			continue;
 		}
 		service.recordDiscovery(cost);

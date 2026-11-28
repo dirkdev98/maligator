@@ -651,7 +651,7 @@ describe("late Core specialization plan", () => {
 			const admitted = generatedCode > 1;
 			expect(plan.statistics.considered).toBe(1);
 			expect(planSpecializations(plan).map(({ kind }) => kind)).toEqual(
-				admitted ? ["string-char-code-at-chain"] : [],
+				admitted ? ["string-method-chain"] : [],
 			);
 			expect(
 				report
@@ -667,9 +667,9 @@ describe("late Core specialization plan", () => {
 		const candidate = discoverCoreLocalSpecializationCandidates(
 			program,
 			functionId,
-			new Set(["string-char-code-at-chain"]),
+			new Set(["string-method-chain"]),
 		).candidates[0];
-		if (candidate?.kind !== "string-char-code-at-chain")
+		if (candidate?.kind !== "string-method-chain")
 			throw new Error("Expected charCodeAt candidate");
 		if (cached) expect(candidate.bounded).toBeUndefined();
 		const editor = CoreEditor.open(program, functionId);

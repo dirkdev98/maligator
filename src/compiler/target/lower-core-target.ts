@@ -1594,34 +1594,35 @@ function lowerCoreSpecializations(
 			continue;
 		}
 
-		if (kind === "string-char-code-at-chain") {
+		if (kind === "string-method-chain") {
 			const chain = coreSpecializationRecipePayloadAt(
 				recipeTable,
 				row,
-				"string-char-code-at-chain",
-				"stringCharCodeAt",
+				"string-method-chain",
+				"stringMethodChain",
 			);
 			const property = requireInstruction(chain.property);
 			const call = requireInstruction(chain.call);
 			if (property.type !== "loadPropertyStatic" || call.type !== "call") {
-				throw new Error(`Core String.charCodeAt plan ${id} lost its call`);
+				throw new Error(`Core String method chain ${id} lost its call`);
 			}
 			regions.push({
 				...envelope(row),
 				anchors: [property, call],
-				kind: "string-char-code-at-chain",
+				kind: "string-method-chain",
 				license: {
 					guard: chain.guard,
 					genericTwin: "retained",
 					materialization: "none",
 					admission: admission(row),
 				},
-				representation: "primitive-string-code-unit",
+				representation: "captured-string-method",
 				cost: { score: 12, metadataOperations: 2 },
 				property,
 				call,
+				operation: chain.operation,
 				methodIdentity: chain.methodIdentity,
-				runtimeGuard: "primitive-string-number-position",
+				runtimeGuard: "primitive-string-receiver",
 				evaluationOrder: "capture-property-before-arguments",
 			});
 			continue;
@@ -1972,17 +1973,20 @@ function prepareFunctionForTargets(
 				regexp.builtinCall as unknown as CoreAttributeValue,
 			);
 		}
-		if (kind === "string-char-code-at-chain") {
+		if (kind === "string-method-chain") {
 			const chain = coreSpecializationRecipePayloadAt(
 				recipeTable,
 				row,
-				"string-char-code-at-chain",
-				"stringCharCodeAt",
+				"string-method-chain",
+				"stringMethodChain",
 			);
-			plannedBuiltinCalls.set(
-				chain.call,
-				chain.builtinCall as unknown as CoreAttributeValue,
-			);
+			// Other methods keep the site's guess: its call lowering is the chain's fallback,
+			// and an Array search guess keeps its Array fast path there.
+			if (chain.operation === "String.prototype.charCodeAt")
+				plannedBuiltinCalls.set(
+					chain.call,
+					chain.builtinCall as unknown as CoreAttributeValue,
+				);
 			if (chain.bounded !== undefined) {
 				plannedDirectStringCharCodeAtPositions.set(chain.call, "inBounds");
 				plannedPrimitiveStringLengths.set(chain.bounded.length, true);

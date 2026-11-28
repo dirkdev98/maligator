@@ -451,7 +451,7 @@ function validBuiltinPlanGuard(
 		| "string-span"
 		| "regexp-exec-projection"
 		| "string-split-cursor"
-		| "string-char-code-at-chain"
+		| "string-method-chain"
 		| "builtin-collection-call-chain",
 	functionId: CoreFunctionId,
 	anchor: CoreInstructionId,
@@ -555,8 +555,8 @@ function specializationAdmissionDependencies(
 				return selection.regexpExecProjection.guard;
 			case "regexp-iterator-projection":
 				return selection.regexpIteratorProjection.guard;
-			case "string-char-code-at-chain":
-				return selection.stringCharCodeAt.guard;
+			case "string-method-chain":
+				return selection.stringMethodChain.guard;
 			case "builtin-collection-call-chain":
 				return selection.builtinCollectionCall.guard;
 			case "iterator-result-virtualization":
@@ -595,8 +595,8 @@ function specializationAdmissionAnchor(
 			return (
 				selection.regexpExecProjection.property ?? selection.regexpExecProjection.call
 			);
-		case "string-char-code-at-chain":
-			return selection.stringCharCodeAt.property;
+		case "string-method-chain":
+			return selection.stringMethodChain.property;
 		case "builtin-collection-call-chain":
 			return selection.builtinCollectionCall.property;
 		case "function-call-chain":
@@ -649,7 +649,7 @@ function verifySpecializationAdmission(
 		);
 	}
 	const expected =
-		selection.kind === "string-char-code-at-chain" ||
+		selection.kind === "string-method-chain" ||
 		selection.kind === "builtin-collection-call-chain" ||
 		selection.kind === "iterator-entry-pair-virtualization" ||
 		selection.kind === "function-call-chain"
@@ -1690,14 +1690,14 @@ function verifySpecialization(
 			fail(`${selection.id} has an invalid Function.call certificate`);
 		}
 	}
-	if (selection.kind === "string-char-code-at-chain") {
+	if (selection.kind === "string-method-chain") {
 		const candidate = localCandidate(
 			program,
 			localCandidates,
 			selection.function,
 			selection.id,
 		);
-		const chain = selection.stringCharCodeAt;
+		const chain = selection.stringMethodChain;
 		const expectedBlocks =
 			candidate?.instructions === undefined
 				? []
@@ -1709,12 +1709,15 @@ function verifySpecialization(
 						),
 					].sort((left, right) => left - right);
 		if (
-			candidate?.kind !== "string-char-code-at-chain" ||
+			candidate?.kind !== "string-method-chain" ||
 			selection.anchors.length !== 2 ||
 			selection.anchors[0] !== candidate.property ||
 			selection.anchors[1] !== candidate.call ||
 			chain.property !== candidate.property ||
 			chain.call !== candidate.call ||
+			chain.operation !== candidate.operation ||
+			(chain.bounded !== undefined &&
+				chain.operation !== "String.prototype.charCodeAt") ||
 			(chain.bounded === undefined) !== (candidate.bounded === undefined) ||
 			(chain.bounded !== undefined &&
 				(chain.bounded.length !== candidate.bounded?.length ||
@@ -1724,21 +1727,21 @@ function verifySpecialization(
 			!sameNumbers(selection.ordinaryBlocks, expectedBlocks) ||
 			!sameNumbers(selection.exceptionalBlocks, candidate.exceptionalBlocks) ||
 			selection.composition !== "exclusive" ||
-			selection.representation !== "primitive-string-code-unit" ||
+			selection.representation !== "captured-string-method" ||
 			selection.semanticProtectors.length !== 0 ||
 			selection.targetFunctions.length !== 0 ||
 			!validBuiltinPlanGuard(
 				chain.guard,
-				"string-char-code-at-chain",
+				"string-method-chain",
 				selection.function,
 				chain.call,
 				chain.methodIdentity,
 				false,
 				chain.builtinCall,
-				"String.prototype.charCodeAt",
+				chain.operation,
 			)
 		) {
-			fail(`${selection.id} has an invalid String.charCodeAt certificate`);
+			fail(`${selection.id} has an invalid String method chain certificate`);
 		}
 	}
 	if (selection.kind === "builtin-collection-call-chain") {

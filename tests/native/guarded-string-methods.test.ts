@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
+import { CORE_STRING_METHOD_CHAIN_OPERATIONS } from "../../src/compiler/core/core-ir-regions.ts";
 import {
 	buildBackendPairFromOneProgramImage,
 	runToStdout,
@@ -34,6 +35,16 @@ function guardedOperations(pair: BackendPairResult): ReadonlySet<string> {
 	);
 }
 
+function stringMethodChains(pair: BackendPairResult): ReadonlySet<string> {
+	return new Set(
+		pair.programImage.native.functions.flatMap((fn) =>
+			fn.specializations.flatMap((region) =>
+				region.kind === "string-method-chain" ? [region.operation] : [],
+			),
+		),
+	);
+}
+
 describe.each<{ primordials: "locked" | "mutable"; env: Record<string, string> }>([
 	{ primordials: "locked", env: {} },
 	{ primordials: "mutable", env: { GUARDED_STRING_PATCH: "1" } },
@@ -59,6 +70,13 @@ describe.each<{ primordials: "locked" | "mutable"; env: Record<string, string> }
 				"RegExp.prototype.exec",
 			])
 				expect(operations).toContain(operation);
+		});
+
+		it("runs each String method on a primitive string without loading the method", () => {
+			const chains = stringMethodChains(pair);
+			for (const operation of CORE_STRING_METHOD_CHAIN_OPERATIONS)
+				if (operation !== "String.prototype.charCodeAt")
+					expect(chains).toContain(operation);
 		});
 
 		it("matches Node on both backends", () => {

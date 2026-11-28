@@ -613,14 +613,14 @@ describe("span continuations from split projections", () => {
 		);
 		const native = image.native.functions[1]!;
 		const chain = native.specializations.find(
-			(region) => region.kind === "string-char-code-at-chain",
+			(region) => region.kind === "string-method-chain",
 		)!;
 		expect(chain.methodIdentity).toBe("authority-invariant");
 		const emitted = emitCompiledFunction(native, 1, "", false)!.source;
 		expect(emitted).toContain(
 			"mal_builtin_string_span_character(vm, MAL_VALUE_UNDEFINED, true,",
 		);
-		expect(emitted).toContain(`__string_char_code_at_${chain.callIp}_captured = true;`);
+		expect(emitted).toContain(`__string_method_${chain.callIp}_captured = true;`);
 	});
 	it("rejects omitted observers and a forged producer lifetime", () => {
 		const image = compile(body),

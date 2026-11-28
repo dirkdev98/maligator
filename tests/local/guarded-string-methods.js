@@ -44,8 +44,15 @@ const needle = {
 };
 const lookalike = {
 	toLowerCase: () => "own toLowerCase",
+	toUpperCase: () => "own toUpperCase",
 	indexOf: () => "own indexOf",
+	lastIndexOf: () => "own lastIndexOf",
+	includes: () => "own includes",
+	startsWith: () => "own startsWith",
+	endsWith: () => "own endsWith",
 	slice: () => "own slice",
+	substring: () => "own substring",
+	substr: () => "own substr",
 	exec: () => "own exec",
 };
 
@@ -57,6 +64,8 @@ for (let round = 0; round < 3; round++) {
 	show("lower String object", () => lower(new String("ABC")));
 	show("lower lookalike", () => lower(lookalike));
 	show("lower number", () => lower(12));
+	show("upper lookalike", () => upper(lookalike));
+	show("upper null receiver", () => upper(null));
 	show("indexOf string", () => find("text/html", "/"));
 	show("indexOf missing", () => find("text", "/"));
 	show("indexOf array", () => find(["a", "/", "b"], "/"));
@@ -72,12 +81,23 @@ for (let round = 0; round < 3; round++) {
 	show("lastIndexOf", () => findLast("abcabc", "b"));
 	show("lastIndexOf position", () => findLast("abcabc", "b", 3));
 	show("lastIndexOf array", () => findLast([1, 2, 1], 1));
+	show("lastIndexOf lookalike", () => findLast(lookalike, "x"));
+	show("lastIndexOf undefined receiver", () => findLast(undefined, "x"));
+	show("indexOf null receiver", () => find(null, "x"));
 	show("includes string", () => has("abc", "c"));
 	show("includes array", () => has([1, 2, 3], 2));
 	show("includes regexp", () => has("abc", /b/));
+	show("includes object needle", () => has("abc", needle));
+	show("includes lookalike", () => has(lookalike, "x"));
+	show("includes null receiver", () => has(null, "x"));
 	show("startsWith", () => starts("abc", "b", 1));
 	show("startsWith regexp", () => starts("abc", /a/));
+	show("startsWith object position", () => starts("abc", "b", position));
+	show("startsWith lookalike", () => starts(lookalike, "x"));
+	show("startsWith undefined receiver", () => starts(undefined, "x"));
 	show("endsWith", () => ends("abc", "b", 2));
+	show("endsWith lookalike", () => ends(lookalike, "x"));
+	show("endsWith null receiver", () => ends(null, "x"));
 	show("slice", () => cut("Content-Type", 0, 7));
 	show("slice negative", () => cut("Content-Type", -4));
 	show("slice from", () => cutFrom("abcdef", 2));
@@ -89,8 +109,13 @@ for (let round = 0; round < 3; round++) {
 	show("slice lookalike", () => cut(lookalike, 1, 2));
 	show("substring swapped", () => sub("abcdef", 4, 1));
 	show("substring infinite", () => sub("abcdef", 2, Infinity));
+	show("substring object position", () => sub("abcdef", position, 4));
+	show("substring lookalike", () => sub(lookalike, 1, 2));
+	show("substring undefined receiver", () => sub(undefined, 1, 2));
 	show("substr", () => substr("abcdef", -3, 2));
 	show("substr open", () => substr("abcdef", 2));
+	show("substr lookalike", () => substr(lookalike, 1, 2));
+	show("substr null receiver", () => substr(null, 1));
 	show("slice null receiver", () => cut(null, 1));
 	show("lower undefined receiver", () => lower(undefined));
 
@@ -148,8 +173,15 @@ for (let round = 0; round < 3; round++) {
 		String.prototype.toLowerCase = function () {
 			return `patched ${original.call(this)}`;
 		};
+		String.prototype.toUpperCase = () => "patched toUpperCase";
 		String.prototype.indexOf = () => "patched indexOf";
+		String.prototype.lastIndexOf = () => "patched lastIndexOf";
+		String.prototype.includes = () => "patched includes";
+		String.prototype.startsWith = () => "patched startsWith";
+		String.prototype.endsWith = () => "patched endsWith";
 		String.prototype.slice = () => "patched slice";
+		String.prototype.substring = () => "patched substring";
+		String.prototype.substr = () => "patched substr";
 		RegExp.prototype.exec = () => null;
 	}
 }

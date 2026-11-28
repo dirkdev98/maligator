@@ -95,8 +95,8 @@ function guardDependencies(
 			return selection.regexpExecProjection.guard.dependencies;
 		case "regexp-iterator-projection":
 			return selection.regexpIteratorProjection.guard.dependencies;
-		case "string-char-code-at-chain":
-			return selection.stringCharCodeAt.guard.dependencies;
+		case "string-method-chain":
+			return selection.stringMethodChain.guard.dependencies;
 		case "builtin-collection-call-chain":
 			return selection.builtinCollectionCall.guard.dependencies;
 		case "iterator-result-virtualization":

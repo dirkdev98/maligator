@@ -93,7 +93,7 @@ const RECIPE_KINDS = Object.freeze([
 	"regexp-exec-projection",
 	"regexp-iterator-projection",
 	"string-span",
-	"string-char-code-at-chain",
+	"string-method-chain",
 	"builtin-collection-call-chain",
 	"array-values-iterator-cursor",
 	"string-iterator-cursor",

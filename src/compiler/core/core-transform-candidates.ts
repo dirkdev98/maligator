@@ -24,7 +24,7 @@ export type CoreTransformKind =
 	| "string-span"
 	| "regexp-exec-projection"
 	| "regexp-iterator-projection"
-	| "string-char-code-at-chain"
+	| "string-method-chain"
 	| "builtin-collection-call-chain"
 	| "array-values-iterator-cursor"
 	| "string-iterator-cursor"
@@ -162,7 +162,7 @@ function transformKindCounts(): Record<CoreTransformKind, number> {
 		"string-span": 0,
 		"regexp-exec-projection": 0,
 		"regexp-iterator-projection": 0,
-		"string-char-code-at-chain": 0,
+		"string-method-chain": 0,
 		"builtin-collection-call-chain": 0,
 		"array-values-iterator-cursor": 0,
 		"string-iterator-cursor": 0,

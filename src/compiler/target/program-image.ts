@@ -1,9 +1,11 @@
 import type { FfiDirectEntry } from "../../build-config-values.ts";
 import type { CoreModuleInterface } from "../core/core-compilation.ts";
+import { CORE_STRING_METHOD_CHAIN_ARRAY_SEARCHES } from "../core/core-ir-regions.ts";
 import type {
 	CoreBuiltinIdentityDecision,
 	CoreCollectionBuiltinOperation,
 	CorePropertyPlacement,
+	CoreStringMethodChainOperation,
 	CoreStringSpanRangeOperation,
 	CoreRegExpProjectionSelector,
 } from "../core/core-ir-regions.ts";
@@ -675,15 +677,16 @@ export type VmStringSpanRegion = VmRegionEnvelope<
 	}>;
 };
 
-export type VmStringCharCodeAtChainRegion = VmRegionEnvelope<
-	"string-char-code-at-chain",
-	"primitive-string-code-unit",
+export type VmStringMethodChainRegion = VmRegionEnvelope<
+	"string-method-chain",
+	"captured-string-method",
 	"none"
 > & {
 	readonly propertyIp: number;
 	readonly callIp: number;
+	readonly operation: CoreStringMethodChainOperation;
 	readonly methodIdentity: CoreBuiltinIdentityDecision;
-	readonly runtimeGuard: "primitive-string-number-position";
+	readonly runtimeGuard: "primitive-string-receiver";
 	readonly evaluationOrder: "capture-property-before-arguments";
 	readonly propertyIcIndex: number;
 	readonly callee: number;
@@ -957,7 +960,7 @@ export type VmRegion =
 	| VmStringSpanRegion
 	| VmNumericFusionRegion
 	| VmStackObjectPlanRegion
-	| VmStringCharCodeAtChainRegion
+	| VmStringMethodChainRegion
 	| VmStringIteratorCursorRegion
 	| VmStringSplitProjectionRegion
 	| VmStringSplitCursorRegion
@@ -995,6 +998,31 @@ export function vmCallProvesBuiltin(
 		descriptor.lowerings.includes(requirements.lowering) &&
 		descriptor.result === requirements.result &&
 		descriptor.effects.join("\0") === requirements.effects.join("\0")
+	);
+}
+
+/**
+ * Whether a String method chain may claim a call. `charCodeAt` sites carry the chain's
+ * own builtin proof; any other site keeps its guess, which names the method or an Array
+ * search whose call also serves a String receiver.
+ */
+export function vmStringMethodChainAdmitsCall(
+	plan: Extract<NativeInstructionPlan, { kind: "call" }> | undefined,
+	operation: CoreStringMethodChainOperation,
+): boolean {
+	if (operation === "String.prototype.charCodeAt")
+		return vmCallProvesBuiltin(plan, operation, {
+			lowering: "guarded-primitive-string",
+			result: "number",
+			effects: ["coerce", "throw"],
+		});
+	const search: VmGuardedBuiltinOperation | undefined =
+		CORE_STRING_METHOD_CHAIN_ARRAY_SEARCHES[
+			operation as keyof typeof CORE_STRING_METHOD_CHAIN_ARRAY_SEARCHES
+		];
+	return (
+		vmCallProvesBuiltin(plan, operation) ||
+		(search !== undefined && vmCallProvesBuiltin(plan, search))
 	);
 }
 
@@ -1209,7 +1237,7 @@ export function vmRegionActions(
 					}
 				}
 				break;
-			case "string-char-code-at-chain":
+			case "string-method-chain":
 			case "builtin-collection-call-chain":
 				add(regionIndex, region.propertyIp, "property");
 				add(regionIndex, region.callIp, "call");
@@ -4670,7 +4698,7 @@ function lowerExecutionFunctionToNativePlan(
 			exceptionalHandlerIps.some((ip) => ip === undefined) ||
 			(region.kind !== "regexp-iterator-projection" &&
 				region.kind !== "string-span" &&
-				region.kind !== "string-char-code-at-chain" &&
+				region.kind !== "string-method-chain" &&
 				region.kind !== "builtin-collection-call-chain" &&
 				region.controlFlow.exceptionalBlocks.length !== 0) ||
 			!Number.isSafeInteger(region.cost.score) ||
@@ -5309,7 +5337,7 @@ function lowerExecutionFunctionToNativePlan(
 				regions.push(span);
 				break;
 			}
-			case "string-char-code-at-chain": {
+			case "string-method-chain": {
 				const propertyIp = instructionIndexByTargetInstruction.get(region.property);
 				const callIp = instructionIndexByTargetInstruction.get(region.call);
 				const propertyIcIndex = propertyCacheIndex(region.property);
@@ -5320,10 +5348,10 @@ function lowerExecutionFunctionToNativePlan(
 					: "runtime-guarded";
 				const payloadIps = new Set([propertyIp, callIp]);
 				if (
-					region.representation !== "primitive-string-code-unit" ||
+					region.representation !== "captured-string-method" ||
 					region.license.materialization !== "none" ||
 					region.license.admission.mode !== "capture" ||
-					region.runtimeGuard !== "primitive-string-number-position" ||
+					region.runtimeGuard !== "primitive-string-receiver" ||
 					region.evaluationOrder !== "capture-property-before-arguments" ||
 					region.methodIdentity !== expectedMethodIdentity ||
 					propertyIp === undefined ||
@@ -5331,21 +5359,17 @@ function lowerExecutionFunctionToNativePlan(
 					propertyIcIndex === undefined ||
 					property?.opcode !== "LOAD_PROPERTY_STATIC" ||
 					String.fromCharCode(...(stringConstants[property.stringIndex] ?? [])) !==
-						"charCodeAt" ||
+						region.operation.split(".").at(-1) ||
 					call?.opcode !== "CALL" ||
-					!vmCallProvesBuiltin(
+					!vmStringMethodChainAdmitsCall(
 						(() => {
 							const plan = nativePlanOf(call);
 							return plan?.kind === "call" ? plan : undefined;
 						})(),
-						"String.prototype.charCodeAt",
-						{
-							lowering: "guarded-primitive-string",
-							result: "number",
-							effects: ["coerce", "throw"],
-						},
+						region.operation,
 					) ||
-					call.arguments.length > 1 ||
+					(region.operation === "String.prototype.charCodeAt" &&
+						call.arguments.length > 1) ||
 					property.dst !== call.callee ||
 					property.object !== call.thisValue ||
 					resolvedAnchors.length !== 2 ||
@@ -5360,14 +5384,14 @@ function lowerExecutionFunctionToNativePlan(
 				}
 				for (const ip of resolvedClaimedIps) claimedRegionInstructions.add(ip);
 				regions.push({
-					kind: "string-char-code-at-chain",
+					kind: "string-method-chain",
 					license: {
 						guard,
 						genericTwin: "retained",
 						materialization: "none",
 						admission,
 					},
-					representation: "primitive-string-code-unit",
+					representation: "captured-string-method",
 					anchors: resolvedAnchors,
 					claimedIps: resolvedClaimedIps,
 					controlFlow: {
@@ -5377,8 +5401,9 @@ function lowerExecutionFunctionToNativePlan(
 					cost: region.cost,
 					propertyIp,
 					callIp,
+					operation: region.operation,
 					methodIdentity: region.methodIdentity,
-					runtimeGuard: "primitive-string-number-position",
+					runtimeGuard: "primitive-string-receiver",
 					evaluationOrder: "capture-property-before-arguments",
 					propertyIcIndex,
 					callee: call.callee,
