@@ -88,9 +88,9 @@ Discovers `*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}`. Ordinary runs i
 
 ## --feedback {#feedback}
 
-Available on `run`, `dev`, and `test`. Records what each executed property access saw into a JSON feedback file: the object shapes, an inline cache mode such as `inherited`, or `megamorphic` once a site saw more than four shapes or shapes it can't name. Sites are keyed by their source function and offset, so a later build can match them while the source is unchanged. Sites that never ran are absent.
+Available on `run`, `dev`, and `test`. Records what each executed property access saw into a JSON feedback file: the receivers' shapes and heap kind, an inline cache mode such as `inherited`, `dictionary` for receivers that keep their properties in a table, or `megamorphic` once a site saw more than four shapes. Every shape a site saw counts, not only the ones its cache still holds when the program ends. Sites are keyed by their source function, callbacks and module top-level code included, and their offset, so a later build can match them while the source is unchanged. Sites that never ran are absent.
 
-Each command records one unit: `run:<entry>`, `dev:<entry>`, or `test:*` for a whole test invocation. Recording a unit replaces its earlier entries and keeps every other unit's, so one file can collect several workloads. The file is deterministic: an identical run writes identical bytes. `dev` re-records its unit when each generation stops. `--feedback` cannot combine with `--profile`, and on `test` not with `--watch` or `--isolate`.
+Each command records one unit: `run:<entry>`, `dev:<entry>`, or `test:*` for a whole test invocation. Entries and modules are named relative to the project root, the directory of the build config, else the entry's nearest directory with a `package.json`, so a run from a subdirectory records the same unit. Recording a unit replaces its earlier entries and keeps every other unit's, so one file can collect several workloads. The file is deterministic: an identical run writes identical bytes. `dev` re-records its unit when each generation stops. `--feedback` cannot combine with `--profile`, and on `test` not with `--watch` or `--isolate`.
 
 ## --profile {#profile}
 

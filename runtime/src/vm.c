@@ -136,6 +136,7 @@ static void mal_vm_seed_function_known_own_slot_ics(
         MalValue key = mal_value_from_string(vm->string_constant_atoms[string_index]);
         mal_vm_seed_known_own_slot_ic(
             vm, &pool->sites[ic_index], key, candidate_count, &data[offset]);
+        MAL_FEEDBACK_OBSERVE_SEED(&pool->sites[ic_index]);
         offset += candidate_count * 3;
     }
 }

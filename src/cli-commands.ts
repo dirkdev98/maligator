@@ -100,6 +100,7 @@ import {
 	developmentFragmentUnits,
 } from "./development-fragments.ts";
 import { createDevelopmentSession } from "./development-session.ts";
+import { feedbackModuleKey, feedbackProjectRoot } from "./feedback/project.ts";
 import { feedbackDumpPath, recordFeedbackCapture } from "./feedback/record.ts";
 import { checkLibraries, formatFfiCheck } from "./ffi/check.ts";
 import { declarationsCurrent, generateDeclarations } from "./ffi/declarations.ts";
@@ -387,6 +388,7 @@ export interface BuildCommandResult {
 /** Plain data, so a result prepared by a compiler service can carry it. */
 interface FeedbackSources {
 	unit: string;
+	root: string;
 	entry: string;
 	execution: Execution;
 	wires: Array<string>;
@@ -850,17 +852,19 @@ function prepareCommandState(
 				? executionTarget(command.target)
 				: hostExecutionTarget(process.platform, process.arch),
 	});
-	const feedbackSources = (wires: Array<string>): { feedback?: FeedbackSources } =>
-		command.kind === "build" || command.feedback === undefined
-			? {}
-			: {
-					feedback: {
-						unit: `${command.kind}:${path.relative(process.cwd(), entrypointPath).split(path.sep).join("/")}`,
-						entry: entrypointPath,
-						execution,
-						wires,
-					},
-				};
+	const feedbackSources = (wires: Array<string>): { feedback?: FeedbackSources } => {
+		if (command.kind === "build" || command.feedback === undefined) return {};
+		const root = feedbackProjectRoot(entrypointPath, command.configPath);
+		return {
+			feedback: {
+				unit: `${command.kind}:${feedbackModuleKey(root, entrypointPath)}`,
+				root,
+				entry: entrypointPath,
+				execution,
+				wires,
+			},
+		};
+	};
 	const compilerDiagnostics = command.kind === "build" && command.internal.dumpCore;
 	const relocatable =
 		interpreted ||
@@ -1628,6 +1632,7 @@ function feedbackCapture(
 					dumpPath,
 					output,
 					unit: sources.unit,
+					root: sources.root,
 					wires: sources.wires,
 					sources: () =>
 						buildModuleGraph(sources.entry, {
@@ -2575,6 +2580,7 @@ async function executeIsolatedTests(
 				output: feedbackOutput,
 				// One unit per invocation until tests attribute sites to their files.
 				unit: "test:*",
+				root: feedbackProjectRoot(compiled.files[0]!, command.configPath),
 				wires: wirePaths,
 				sources: compiled.sourceGraph,
 				transformed: new Set(compiled.files),

@@ -1,12 +1,15 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import type { ESTree } from "meriyah";
 import { expect, test } from "vitest";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import { forEachEstreeChild } from "../src/compiler/frontend/estree-traversal.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
+import { collectSourceFunctionOrigins } from "../src/compiler/frontend/source-function-origins.ts";
 import {
 	compileConstructedCoreToProgramImage,
 	compileSemanticProgramToProgramImage,
@@ -15,6 +18,8 @@ import type { CompileCoreOptions } from "../src/compiler/pipeline/compile-core.t
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 import { prepareProfile } from "../src/profile-artifact.ts";
 import type { ProfileMetadata } from "../src/profile-artifact.ts";
+import { SourceProfileIdentities } from "../src/source-profile-identity.ts";
+import type { ProfileFunctionIdentity } from "../src/source-profile-identity.ts";
 
 function compile(
 	source: string,
@@ -231,19 +236,6 @@ test("class self-reference bindings survive earlier declarations", () => {
 	expect(after).toEqual(before);
 });
 
-test("computed and repeated class methods do not claim a unique source origin", () => {
-	const profile = publish(
-		compile(
-			'class Core { ["computed"]() { return 1; } repeated() { return 2; } repeated() { return 3; } } globalThis.Core = Core;',
-		).image,
-	);
-	const methods = profile.functions.filter((fn) =>
-		["computed", "repeated"].includes(fn.name),
-	);
-	expect(methods.length).toBeGreaterThanOrEqual(2);
-	expect(methods.every((fn) => fn.identity.status !== "known")).toBe(true);
-});
-
 test("moving a captured binding changes the revision without changing the reader's text", () => {
 	const outer =
 		"function outer() { return function read() { return x; }; } globalThis.saved = outer;";
@@ -333,36 +325,104 @@ test("publication uses the captured semantic snapshot rather than mutable fronte
 	}
 });
 
-test("anonymous callbacks and class expressions stay explicitly unmapped", () => {
-	const profile = publish(
-		compile("globalThis.saved = [() => 1, class Example { method() { return 1; } }];")
-			.image,
+/** Every source function's identity, keyed by its source text, and the module body's. */
+function sourceIdentities(source: string) {
+	const semantic = analyzeSourceAndRunSemanticAnalysis(
+		source,
+		"/project/app.js",
+		parseScript(source, { strict: false }),
 	);
-	expect(
-		profile.functions
-			.filter((fn) => fn.name === "method")
-			.map((fn) => fn.identity.status),
-	).toEqual(["unknown"]);
-	expect(
-		profile.functions.filter((fn) => fn.name === "<anonymous>").length,
-	).toBeGreaterThan(1);
-	expect(
-		profile.functions
-			.filter((fn) => fn.name === "<anonymous>")
-			.every((fn) => fn.identity.status === "unknown"),
-	).toBe(true);
+	const file = semantic.files[0]!;
+	const origins = collectSourceFunctionOrigins(semantic, {});
+	const identities = new SourceProfileIdentities();
+	const functions = new Map<string, ProfileFunctionIdentity>();
+	const visit = (node: ESTree.Node) => {
+		if (
+			node.type === "FunctionDeclaration" ||
+			node.type === "FunctionExpression" ||
+			node.type === "ArrowFunctionExpression"
+		) {
+			const origin = origins.get(file, node);
+			const text =
+				origin?.status === "captured"
+					? source.slice(origin.start, origin.end)
+					: `${node.loc?.start.line}:${node.loc?.start.column}`;
+			expect(functions.has(text), text).toBe(false);
+			functions.set(text, identities.functionIdentity(origin));
+		}
+		forEachEstreeChild(node, visit);
+	};
+	visit(file.ast);
+	return {
+		functions,
+		module: identities.functionIdentity(origins.get(file, file.ast)),
+	};
+}
+
+function knownIdentity(identity: ProfileFunctionIdentity | undefined) {
+	expect(identity?.status).toBe("known");
+	if (identity?.status !== "known") throw new Error("Missing known source identity");
+	return identity;
+}
+
+const positioned = `const app = { get(path, handler) { return handler; }, routes: [] };
+app.get("/a", (req) => req.a);
+app.get("/b", function (req) { return req.b; });
+new Promise((resolve) => resolve(1));
+exports.handle = function () { return 1; };
+app.routes[0] = () => 2;
+const routes = { list() { return 3; }, show: () => 4, nested: { deep: () => 5 }, get size() { return 6; } };
+const table = [() => 7, () => 8];
+function factory() { return function (next) { return next(9); }; }
+const twice = () => () => 10;
+class Base { ["computed"]() { return 11; } repeated() { return 12; } repeated() { return 13; } field = () => 14; }
+const Mixed = class { method() { return 15; } };
+(function () { return 16; })();
+globalThis.saved = [routes, table, factory, twice, Base, Mixed];
+`;
+
+test("functions in every syntactic position get distinct known identities", () => {
+	const { functions } = sourceIdentities(positioned);
+	const origins = [...functions.values()].map(
+		(identity) => knownIdentity(identity).origin,
+	);
+	expect(new Set(origins).size).toBe(functions.size);
 });
 
-test("repeated declaration origins remain ambiguous even when only one reaches the runtime", () => {
-	const profile = publish(
-		compile(
-			"function same() { return 1; } function same() { return 2; } globalThis.saved = same;",
-		).image,
+test("positioned identities survive unrelated earlier functions and callbacks", () => {
+	const before = sourceIdentities(positioned).functions;
+	const after = sourceIdentities(
+		`function noise() { return 0; }\nsetTimeout(() => 0);\n${positioned}`,
+	).functions;
+	after.delete("function noise() { return 0; }");
+	after.delete("() => 0");
+	expect(after).toEqual(before);
+});
+
+test("repeated roles are told apart by source order and keep the first's identity", () => {
+	const first = "function same() { return 1; }";
+	const second = "function same() { return 2; }";
+	const alone = sourceIdentities(`${first} globalThis.saved = same;`).functions;
+	const repeated = sourceIdentities(
+		`${first} ${second} globalThis.saved = same;`,
+	).functions;
+	expect(knownIdentity(repeated.get(second)).origin).not.toBe(
+		knownIdentity(repeated.get(first)).origin,
 	);
-	expect(profile.functions.find((fn) => fn.name === "same")?.identity).toEqual({
-		status: "ambiguous",
-		reason: "duplicate-declaration",
-	});
+	expect(repeated.get(first)).toEqual(alone.get(first));
+});
+
+test("module top-level code has an identity whose revision covers the whole module", () => {
+	const before = knownIdentity(sourceIdentities(positioned).module);
+	const after = knownIdentity(
+		sourceIdentities(positioned.replace("return 16;", "return 17;")).module,
+	);
+	expect(after.origin).toBe(before.origin);
+	expect(after.revision).not.toBe(before.revision);
+	const functionOrigins = [...sourceIdentities(positioned).functions.values()].map(
+		(identity) => knownIdentity(identity).origin,
+	);
+	expect(functionOrigins).not.toContain(before.origin);
 });
 
 test("shared source instances retain their origin without claiming a unique runtime match", () => {

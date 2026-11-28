@@ -2,7 +2,8 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import type { ESTree } from "meriyah";
 import { runSemanticAnalysisForGraph } from "../compiler/frontend/analyze-module-graph.ts";
 import { forEachEstreeChild } from "../compiler/frontend/estree-traversal.ts";
-import type { ModuleGraph, ModuleRecord } from "../compiler/frontend/module-graph.ts";
+import { linkModules } from "../compiler/frontend/linker.ts";
+import type { ModuleGraph } from "../compiler/frontend/module-graph.ts";
 import type { SemanticFile } from "../compiler/frontend/semantic-analysis.ts";
 import { collectSourceFunctionOrigins } from "../compiler/frontend/source-function-origins.ts";
 import type { SourceFunctionOrigins } from "../compiler/frontend/source-function-origins.ts";
@@ -10,9 +11,10 @@ import { feedbackPropertySites } from "../compiler/target/feedback-site-table.ts
 import type { FeedbackPropertySite } from "../compiler/target/feedback-site-table.ts";
 import { deserializeRuntimeImage } from "../compiler/target/program-image-codec.ts";
 import { SourceProfileIdentities } from "../source-profile-identity.ts";
-import { parseFeedbackDump } from "./dump.ts";
+import { feedbackSiteValue, parseFeedbackDump } from "./dump.ts";
 import type { FeedbackSiteValue } from "./dump.ts";
 import { combineSiteValues, writeFeedbackUnit } from "./feedback-file.ts";
+import { feedbackModuleKey } from "./project.ts";
 
 export interface FeedbackRecording {
 	/** The raw dump the runtime wrote under MAL_FEEDBACK_CAPTURE. */
@@ -21,6 +23,8 @@ export interface FeedbackRecording {
 	readonly wires: ReadonlyArray<string>;
 	readonly unit: string;
 	readonly output: string;
+	/** The directory module keys and unit names are relative to; see `feedbackProjectRoot`. */
+	readonly root: string;
 	/** The module graph whose records the images were compiled from. */
 	readonly sources: () => ModuleGraph;
 	/** Records compiled from transformed source, whose offsets no other build shares. */
@@ -66,13 +70,7 @@ function offsetOf(
 	return line === undefined ? undefined : line + position.column;
 }
 
-function indexSource(graph: ModuleGraph, record: ModuleRecord): SourceIndex {
-	const semantic = runSemanticAnalysisForGraph({
-		...graph,
-		modules: new Map([[record.path, record]]),
-		evaluationOrder: [record.path],
-	});
-	const file = semantic.files[0]!;
+function indexFile(file: SemanticFile, origins: SourceFunctionOrigins): SourceIndex {
 	const starts = lineStarts(file.contents);
 	const functions: Array<{ node: SourceFunction; start: number; end: number }> = [];
 	const visit = (node: ESTree.Node) => {
@@ -88,11 +86,26 @@ function indexSource(graph: ModuleGraph, record: ModuleRecord): SourceIndex {
 		forEachEstreeChild(node, visit);
 	};
 	visit(file.ast);
+	return { file, origins, lineStarts: starts, functions };
+}
+
+/**
+ * Analyze and link the whole program as a build does before it captures source
+ * origins, so imported bindings resolve to their exporters and the identities
+ * recorded here are the ones a build of the same sources computes.
+ */
+function indexProgram(
+	graph: ModuleGraph,
+	root: string,
+): { origins: SourceFunctionOrigins; files: ReadonlyMap<string, SemanticFile> } {
+	const semantic = runSemanticAnalysisForGraph(graph);
+	linkModules(semantic);
+	const moduleKeys = new Map(
+		semantic.files.map((file) => [file.path, feedbackModuleKey(root, file.path)]),
+	);
 	return {
-		file,
-		origins: collectSourceFunctionOrigins(semantic, {}),
-		lineStarts: starts,
-		functions,
+		origins: collectSourceFunctionOrigins(semantic, { moduleKeys }),
+		files: new Map(semantic.files.map((file) => [file.path, file])),
 	};
 }
 
@@ -125,22 +138,21 @@ export function recordFeedback(recording: FeedbackRecording): FeedbackRecordingS
 	}
 
 	let graph: ModuleGraph | undefined;
+	let program: ReturnType<typeof indexProgram> | undefined;
 	const indices = new Map<string, SourceIndex | undefined>();
-	const sourceIndex = (file: string): SourceIndex | undefined => {
-		if (indices.has(file)) return indices.get(file);
+	const sourceIndex = (modulePath: string): SourceIndex | undefined => {
+		if (indices.has(modulePath)) return indices.get(modulePath);
 		graph ??= recording.sources();
-		const record = graph.modules.get(file);
+		program ??= indexProgram(graph, recording.root);
+		const file = program.files.get(modulePath);
 		const index =
-			record === undefined ||
-			record.host !== undefined ||
-			record.external !== undefined ||
-			record.loadError !== undefined ||
+			file === undefined ||
 			// Toolchain modules such as the test runtime never reach an application build.
-			record.virtual === true ||
-			recording.transformed?.has(file) === true
+			graph.modules.get(modulePath)?.virtual === true ||
+			recording.transformed?.has(modulePath) === true
 				? undefined
-				: indexSource(graph, record);
-		indices.set(file, index);
+				: indexFile(file, program.origins);
+		indices.set(modulePath, index);
 		return index;
 	};
 
@@ -162,16 +174,16 @@ export function recordFeedback(recording: FeedbackRecording): FeedbackRecordingS
 			icCounts[recorded.functionIndex] !== recorded.propertyIcCount
 		)
 			continue;
-		for (const [icIndex, value] of recorded.sites) {
+		for (const [icIndex, observed] of recorded.sites) {
 			const site = sites.get(icIndex);
 			if (site === undefined) continue;
 			const index = sourceIndex(site.file);
 			if (index === undefined) continue;
 			const offset = offsetOf(index.lineStarts, site);
 			if (offset === undefined) continue;
-			const enclosing = enclosingFunction(index, offset);
-			if (enclosing === undefined) continue;
-			const origin = index.origins.get(index.file, enclosing.node);
+			// Sites outside every function belong to the module body.
+			const owner = enclosingFunction(index, offset)?.node ?? index.file.ast;
+			const origin = index.origins.get(index.file, owner);
 			const identity = identities.functionIdentity(origin);
 			if (identity.status !== "known" || origin?.status !== "captured") continue;
 			let fn = functions.get(identity.origin);
@@ -185,6 +197,7 @@ export function recordFeedback(recording: FeedbackRecording): FeedbackRecordingS
 				functions.set(identity.origin, fn);
 			}
 			const siteKey = `${offset - origin.start}:${site.op}:${site.key}`;
+			const value = feedbackSiteValue(observed);
 			const previous = fn.sites.get(siteKey);
 			fn.sites.set(
 				siteKey,
@@ -193,7 +206,7 @@ export function recordFeedback(recording: FeedbackRecording): FeedbackRecordingS
 		}
 	}
 
-	writeFeedbackUnit(recording.output, recording.unit, functions);
+	writeFeedbackUnit(recording.output, recording.unit, functions, recording.root);
 	let siteCount = 0;
 	for (const fn of functions.values()) siteCount += fn.sites.size;
 	return { functions: functions.size, sites: siteCount };

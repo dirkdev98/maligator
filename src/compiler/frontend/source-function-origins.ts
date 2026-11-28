@@ -22,7 +22,7 @@ interface SourceSnapshot {
 
 export type SourceFunctionOrigin =
 	| {
-			readonly status: "unknown" | "ambiguous";
+			readonly status: "unknown";
 			readonly reason: string;
 	  }
 	| {
@@ -33,7 +33,7 @@ export type SourceFunctionOrigin =
 			readonly start: number;
 			readonly end: number;
 			readonly strict: boolean;
-			readonly kind: SourceFunction["type"];
+			readonly kind: SourceFunction["type"] | "Program";
 			readonly async: boolean;
 			readonly generator: boolean;
 			readonly bindings: ReadonlyArray<string>;
@@ -62,12 +62,24 @@ export interface SourceCallSite {
 	readonly lowered: boolean;
 }
 
+/**
+ * A function or class named by its syntactic position inside its container: the
+ * nearest enclosing function or class, or the module. Siblings that share a role
+ * are told apart by their source order, so every name is unique within its module.
+ */
+interface NameNode {
+	readonly role: Role;
+	readonly container: NameNode | undefined;
+	path?: ReadonlyArray<Role>;
+}
+
+type Role = ReadonlyArray<unknown>;
+
 interface FunctionDraft {
 	readonly source: SourceSnapshot;
-	readonly declaration: string | undefined;
-	readonly path: ReadonlyArray<ReadonlyArray<string>> | undefined;
+	readonly name: NameNode;
 	readonly parent: FunctionDraft | undefined;
-	readonly node: SourceFunction;
+	readonly node: SourceFunction | ESTree.Program;
 	readonly start: number | undefined;
 	readonly end: number | undefined;
 	readonly strict: boolean;
@@ -80,9 +92,8 @@ interface FunctionDraft {
 }
 
 interface ClassContext {
-	readonly path: ReadonlyArray<ReadonlyArray<string>>;
-	readonly declaration: string;
-	readonly source: string;
+	readonly name: NameNode;
+	readonly source: string | undefined;
 }
 
 function isFunction(node: ESTree.Node): node is SourceFunction {
@@ -93,43 +104,152 @@ function isFunction(node: ESTree.Node): node is SourceFunction {
 	);
 }
 
-function declarationRole(
-	node: SourceFunction,
-	parent: ESTree.Node | undefined,
-): ReadonlyArray<string> | undefined {
-	if (node.type === "FunctionDeclaration" && node.id !== null) {
-		return ["declaration", node.id.name];
+/** `a.b.c`, `this.x` or `a["b"]`: an access path that names the same place in every edit. */
+function accessPath(node: ESTree.Node): string | undefined {
+	switch (node.type) {
+		case "Identifier":
+			return node.name;
+		case "ThisExpression":
+			return "this";
+		case "Super":
+			return "super";
+		case "MemberExpression": {
+			const object = accessPath(node.object);
+			if (object === undefined) return undefined;
+			const property = propertyName(node.property, node.computed);
+			return property === undefined ? undefined : `${object}.${property}`;
+		}
+		default:
+			return undefined;
 	}
-	if (parent?.type === "VariableDeclarator" && parent.id.type === "Identifier") {
-		return ["binding", parent.id.name];
-	}
-	if (parent?.type === "ExportDefaultDeclaration") return ["default-export"];
-	if (node.type === "FunctionExpression" && node.id !== null) {
-		return ["expression", node.id.name];
-	}
+}
+
+function propertyName(key: ESTree.Node | null, computed: boolean): string | undefined {
+	if (key === null) return undefined;
+	if (!computed && key.type === "Identifier") return key.name;
+	if (!computed && key.type === "PrivateIdentifier") return `#${key.name}`;
+	if (
+		key.type === "Literal" &&
+		(typeof key.value === "string" || typeof key.value === "number")
+	)
+		return JSON.stringify(String(key.value));
 	return undefined;
 }
 
-function methodRole(
-	node: SourceFunction,
-	parent: ESTree.Node | undefined,
-): ReadonlyArray<string> | undefined {
-	if (
-		parent?.type !== "MethodDefinition" ||
-		parent.value !== node ||
-		parent.computed ||
-		(parent.decorators?.length ?? 0) !== 0 ||
-		parent.key === null ||
-		(parent.key.type !== "Identifier" && parent.key.type !== "PrivateIdentifier")
-	)
-		return undefined;
-	return [
-		"method",
-		parent.static ? "static" : "instance",
-		parent.kind,
-		parent.key.type,
-		parent.key.name,
-	];
+/**
+ * Where the expression at `stack[index]` sits, described by its syntactic
+ * position: the binding, assignment target, property, element or call argument
+ * it initializes. Object literal and array positions include their own position.
+ */
+function positionRole(
+	stack: ReadonlyArray<ESTree.Node>,
+	index: number,
+): Role | undefined {
+	const node = stack[index]!;
+	const parent = stack[index - 1];
+	switch (parent?.type) {
+		case "VariableDeclarator":
+			return parent.init === node && parent.id.type === "Identifier"
+				? ["binding", parent.id.name]
+				: undefined;
+		case "AssignmentExpression":
+			return parent.right === node && parent.operator === "="
+				? ["assignment", accessPath(parent.left) ?? null]
+				: undefined;
+		case "Property":
+			return parent.value === node
+				? [
+						"property",
+						parent.method ? "method" : parent.kind,
+						propertyName(parent.key, parent.computed) ?? null,
+						positionRole(stack, index - 2) ?? null,
+					]
+				: undefined;
+		case "ArrayExpression":
+			return [
+				"element",
+				parent.elements.indexOf(node as ESTree.Expression),
+				positionRole(stack, index - 1) ?? null,
+			];
+		case "CallExpression":
+		case "NewExpression": {
+			const argument = parent.arguments.indexOf(node as ESTree.Expression);
+			return argument < 0
+				? undefined
+				: [
+						"argument",
+						parent.type === "NewExpression" ? "new" : "call",
+						accessPath(parent.callee) ?? null,
+						argument,
+					];
+		}
+		case "ReturnStatement":
+			return ["return"];
+		case "ArrowFunctionExpression":
+			return parent.body === node ? ["return"] : undefined;
+		default:
+			return undefined;
+	}
+}
+
+/** The role of the function or class at the top of `stack` within its container. */
+function nameRole(stack: ReadonlyArray<ESTree.Node>): Role {
+	const index = stack.length - 1;
+	const node = stack[index]!;
+	const parent = stack[index - 1];
+	if (node.type === "FunctionDeclaration" && node.id !== null)
+		return ["declaration", node.id.name];
+	if (node.type === "ClassDeclaration" && node.id !== null)
+		return ["class", node.id.name];
+	if (parent?.type === "MethodDefinition" && parent.value === node) {
+		const key = parent.key;
+		return key !== null &&
+			!parent.computed &&
+			(key.type === "Identifier" || key.type === "PrivateIdentifier")
+			? ["method", parent.static ? "static" : "instance", parent.kind, key.type, key.name]
+			: [
+					"method",
+					parent.static ? "static" : "instance",
+					parent.kind,
+					"key",
+					propertyName(key, parent.computed) ?? null,
+				];
+	}
+	if (parent?.type === "PropertyDefinition" && parent.value === node)
+		return [
+			"field",
+			parent.static ? "static" : "instance",
+			propertyName(parent.key, parent.computed) ?? null,
+		];
+	if (parent?.type === "VariableDeclarator" && parent.id.type === "Identifier")
+		return ["binding", parent.id.name];
+	if (parent?.type === "ExportDefaultDeclaration") return ["default-export"];
+	if (node.type === "FunctionExpression" && node.id !== null)
+		return ["expression", node.id.name];
+	if (node.type === "ClassExpression" && node.id !== null)
+		return ["class-expression", node.id.name];
+	return positionRole(stack, index) ?? ["anonymous"];
+}
+
+/**
+ * Resolve a module's names in pre-order, so containers resolve before their
+ * members. The first sibling with a role keeps it; later ones append their
+ * ordinal among the siblings that share it.
+ */
+function resolveNames(names: ReadonlyArray<NameNode>): void {
+	const seen = new Map<NameNode | undefined, Map<string, number>>();
+	for (const name of names) {
+		let roles = seen.get(name.container);
+		if (roles === undefined)
+			seen.set(name.container, (roles = new Map<string, number>()));
+		const text = JSON.stringify(name.role);
+		const ordinal = roles.get(text) ?? 0;
+		roles.set(text, ordinal + 1);
+		name.path = [
+			...(name.container?.path ?? []),
+			ordinal === 0 ? name.role : [...name.role, ["ordinal", ordinal]],
+		];
+	}
 }
 
 function lineOffsets(contents: string): ReadonlyArray<number> {
@@ -166,10 +286,10 @@ export function collectSourceFunctionOrigins(
 	options: SourceFunctionOriginOptions,
 ): SourceFunctionOrigins {
 	const drafts = new Map<SemanticFile, Map<ESTree.Node, FunctionDraft>>();
-	const candidates = new Map<string, number>();
 	const bindingRecords = new Map<
 		Binding,
 		{
+			file: SemanticFile;
 			owner: FunctionDraft | undefined;
 			key: string | undefined;
 			portability: "portable" | "checkout";
@@ -215,54 +335,50 @@ export function collectSourceFunctionOrigins(
 		const scopeNodes = new Set(file.scopes.map((scope) => scope.node));
 		drafts.set(file, functions);
 		scopes.push({ file, source, offsets, owners, classes });
+		const names: Array<NameNode> = [];
+		const stack: Array<ESTree.Node> = [];
+		// The module body owns the sites outside every function, also of a CommonJS
+		// module, whose wrapper function exists only after lowering.
+		const moduleBody: FunctionDraft = {
+			source,
+			name: { role: ["module"], container: undefined, path: [["module"]] },
+			parent: undefined,
+			node: file.ast,
+			start: 0,
+			end: source.contents.length,
+			strict: file.strict,
+			dynamic: file.evalDirect === true || file.hasDirectEval.has(file.ast),
+			references: new Set(),
+			async: false,
+			generator: false,
+		};
+		functions.set(file.ast, moduleBody);
 		const visit = (
 			node: ESTree.Node,
-			parent: ESTree.Node | undefined,
 			owner: FunctionDraft | undefined,
-			inClass: boolean,
+			container: NameNode | undefined,
 			classContext: ClassContext | undefined,
 		): void => {
+			stack.push(node);
 			if (node.type === "ClassDeclaration" || node.type === "ClassExpression") {
 				const start = sourceOffset(offsets, node.loc?.start);
 				const end = sourceOffset(offsets, node.loc?.end);
-				classContext =
-					node.type === "ClassDeclaration" &&
-					(parent?.type === "Program" ||
-						parent?.type === "ExportNamedDeclaration" ||
-						parent?.type === "ExportDefaultDeclaration") &&
-					node.id !== null &&
-					(node.decorators?.length ?? 0) === 0 &&
-					start !== undefined &&
-					end !== undefined
-						? {
-								path: [["class", node.id.name]],
-								declaration: JSON.stringify([source.moduleKey, ["class", node.id.name]]),
-								source: source.contents.slice(start, end),
-							}
-						: undefined;
+				container = { role: nameRole(stack), container };
+				names.push(container);
+				classContext = {
+					name: container,
+					source:
+						start === undefined || end === undefined
+							? undefined
+							: source.contents.slice(start, end),
+				};
 			}
 			if (isFunction(node)) {
-				const role =
-					classContext !== undefined && parent?.type === "MethodDefinition"
-						? methodRole(node, parent)
-						: declarationRole(node, parent);
-				const path =
-					role === undefined ||
-					(inClass &&
-						(classContext === undefined ||
-							(parent?.type !== "MethodDefinition" && owner?.path === undefined))) ||
-					(owner !== undefined && owner.path === undefined)
-						? undefined
-						: [...(owner?.path ?? classContext?.path ?? []), role];
-				const declaration =
-					path === undefined ? undefined : JSON.stringify([source.moduleKey, ...path]);
-				if (declaration !== undefined) {
-					candidates.set(declaration, (candidates.get(declaration) ?? 0) + 1);
-				}
+				container = { role: nameRole(stack), container };
+				names.push(container);
 				owner = {
 					source,
-					declaration,
-					path,
+					name: container,
 					parent: owner,
 					node,
 					start: sourceOffset(offsets, node.loc?.start),
@@ -315,19 +431,19 @@ export function collectSourceFunctionOrigins(
 				});
 			}
 			if (file.withDynamicNodes.has(node)) {
+				if (owner === undefined) moduleBody.dynamic = true;
 				for (let fn = owner; fn !== undefined; fn = fn.parent) fn.dynamic = true;
 			}
 			const binding = file.nodeToBinding.get(node);
 			if (binding !== undefined) {
+				moduleBody.references.add(binding);
 				for (let fn = owner; fn !== undefined; fn = fn.parent) fn.references.add(binding);
 			}
-			const insideClass =
-				inClass || node.type === "ClassDeclaration" || node.type === "ClassExpression";
-			forEachEstreeChild(node, (child) =>
-				visit(child, node, owner, insideClass, classContext),
-			);
+			forEachEstreeChild(node, (child) => visit(child, owner, container, classContext));
+			stack.pop();
 		};
-		visit(file.ast, undefined, undefined, false, undefined);
+		visit(file.ast, undefined, undefined, undefined);
+		resolveNames(names);
 	}
 
 	for (const { file, source, offsets, owners, classes } of scopes) {
@@ -343,21 +459,21 @@ export function collectSourceFunctionOrigins(
 						: scope.node === owner?.node.body
 							? "body"
 							: scope.node.type === "ClassDeclaration" && classContext !== undefined
-								? ["class", classContext.declaration]
+								? [
+										"class",
+										JSON.stringify([source.moduleKey, ...classContext.name.path!]),
+									]
 								: offset === undefined
 									? undefined
 									: [scope.node.type, offset - (owner?.start ?? 0)];
-			const knownOwner =
-				owners.has(scope.node) &&
-				scopeRole !== undefined &&
-				(owner === undefined ||
-					(owner.declaration !== undefined && candidates.get(owner.declaration) === 1));
+			const knownOwner = owners.has(scope.node) && scopeRole !== undefined;
 			let dynamic = false;
 			for (let parent: Scope | null = scope; parent !== null; parent = parent.parent) {
 				if (parent.dynamic === true) dynamic = true;
 			}
 			for (const binding of scope.bindings) {
 				bindingRecords.set(binding, {
+					file,
 					owner,
 					portability: source.portability,
 					key:
@@ -367,7 +483,9 @@ export function collectSourceFunctionOrigins(
 									source.portability,
 									source.goal,
 									source.commonjs,
-									owner?.declaration ?? null,
+									owner === undefined
+										? null
+										: JSON.stringify([source.moduleKey, ...owner.name.path!]),
 									scopeRole,
 									binding.name,
 									binding.kind,
@@ -412,38 +530,32 @@ export function collectSourceFunctionOrigins(
 			const draft = drafts.get(file)?.get(node);
 			if (draft === undefined) return undefined;
 			if (draft.origin !== undefined) return draft.origin;
-			const missing = (
-				status: "unknown" | "ambiguous",
-				reason: string,
-			): SourceFunctionOrigin => {
-				const origin = Object.freeze({ status, reason });
+			const missing = (reason: string): SourceFunctionOrigin => {
+				const origin = Object.freeze({ status: "unknown" as const, reason });
 				draft.origin = origin;
 				return origin;
 			};
-			if (draft.declaration === undefined)
-				return missing("unknown", "unsupported-lexical-owner");
 			for (
 				let parent: FunctionDraft | undefined = draft;
 				parent !== undefined;
 				parent = parent.parent
 			) {
-				if (
-					parent.declaration !== undefined &&
-					candidates.get(parent.declaration) !== 1
-				) {
-					return missing("ambiguous", "duplicate-declaration");
-				}
-				if (parent.dynamic) return missing("unknown", "dynamic-scope");
+				if (parent.dynamic) return missing("dynamic-scope");
 			}
 			if (draft.start === undefined || draft.end === undefined)
-				return missing("unknown", "missing-source-span");
+				return missing("missing-source-span");
 			const bindings: Array<string> = [];
 			let portability = draft.source.portability;
 			for (const binding of draft.references) {
 				const record = bindingRecords.get(binding);
-				if (isOwnedBy(record?.owner, draft)) continue;
-				if (record?.key === undefined)
-					return missing("unknown", "unmapped-binding-owner");
+				// The module body's source covers every binding its module declares.
+				if (
+					draft.node === file.ast
+						? record?.file === file
+						: isOwnedBy(record?.owner, draft)
+				)
+					continue;
+				if (record?.key === undefined) return missing("unmapped-binding-owner");
 				if (record.portability === "checkout") portability = "checkout";
 				bindings.push(record.key);
 			}
@@ -451,7 +563,7 @@ export function collectSourceFunctionOrigins(
 				status: "captured",
 				source: draft.source,
 				portability,
-				declaration: draft.declaration,
+				declaration: JSON.stringify([draft.source.moduleKey, ...draft.name.path!]),
 				start: draft.start,
 				end: draft.end,
 				strict: draft.strict,

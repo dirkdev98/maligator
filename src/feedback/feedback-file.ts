@@ -1,16 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { writeFileAtomically } from "../atomic-file.ts";
-import type { FeedbackSiteValue } from "./dump.ts";
+import type { FeedbackShape, FeedbackSiteValue } from "./dump.ts";
 
 export const FEEDBACK_FORMAT = "maligator-feedback-v1";
 const MAX_SHAPES = 4;
 
-type FeedbackEntry = { units: Array<number> } & (
-	| { shapes: Array<Array<string>> }
-	| { megamorphic: true }
-	| { mode: string }
-);
+type FeedbackEntry = { units: Array<number> } & FeedbackSiteValue;
 
 interface FeedbackFunction {
 	module: string;
@@ -34,55 +30,66 @@ export interface RecordedFunction {
 	readonly sites: ReadonlyMap<string, FeedbackSiteValue>;
 }
 
-function shapeText(shape: ReadonlyArray<string>): string {
+function shapeText(shape: FeedbackShape): string {
 	return JSON.stringify(shape);
+}
+
+function sortedShapes(shapes: Iterable<FeedbackShape>): Array<FeedbackShape> {
+	return [...shapes].sort((left, right) => {
+		const a = shapeText(left);
+		const b = shapeText(right);
+		return a < b ? -1 : a > b ? 1 : 0;
+	});
 }
 
 /**
  * Combine what several caches saw for one source site, as a reader combines
- * units: shapes union up to four; anything else that differs is megamorphic.
+ * units: the same mode and receiver kind union their shapes up to four; anything
+ * else that differs, a dictionary among them, is megamorphic.
  */
 export function combineSiteValues(
 	left: FeedbackSiteValue,
 	right: FeedbackSiteValue,
 ): FeedbackSiteValue {
 	if ("megamorphic" in left || "megamorphic" in right) return { megamorphic: true };
-	if ("mode" in left || "mode" in right) {
-		return "mode" in left && "mode" in right && left.mode === right.mode
-			? left
-			: { megamorphic: true };
-	}
-	const shapes = new Map<string, ReadonlyArray<string>>();
-	for (const shape of [...left.shapes, ...right.shapes])
+	if ("dictionary" in left || "dictionary" in right)
+		return "dictionary" in left && "dictionary" in right ? left : { megamorphic: true };
+	const mode = "mode" in left ? left.mode : undefined;
+	if (mode !== ("mode" in right ? right.mode : undefined) || left.kind !== right.kind)
+		return { megamorphic: true };
+	const shapes = new Map<string, FeedbackShape>();
+	for (const shape of [...(left.shapes ?? []), ...(right.shapes ?? [])])
 		shapes.set(shapeText(shape), shape);
-	return shapes.size > MAX_SHAPES
-		? { megamorphic: true }
-		: { shapes: [...shapes.values()] };
-}
-
-function valueText(value: FeedbackSiteValue): string {
-	if ("megamorphic" in value) return "megamorphic";
-	if ("mode" in value) return `mode:${value.mode}`;
-	return `shapes:${value.shapes.map(shapeText).sort().join(",")}`;
+	if (shapes.size > MAX_SHAPES) return { megamorphic: true };
+	const kind = left.kind === undefined ? {} : { kind: left.kind };
+	if (mode === undefined) return { shapes: [...shapes.values()], ...kind };
+	return {
+		mode,
+		...(shapes.size === 0 ? {} : { shapes: [...shapes.values()] }),
+		...kind,
+	};
 }
 
 function entryOf(units: Array<number>, value: FeedbackSiteValue): FeedbackEntry {
 	if ("megamorphic" in value) return { units, megamorphic: true };
-	if ("mode" in value) return { units, mode: value.mode };
-	const shapes = [...value.shapes]
-		.map((shape) => [...shape])
-		.sort((left, right) => {
-			const a = shapeText(left);
-			const b = shapeText(right);
-			return a < b ? -1 : a > b ? 1 : 0;
-		});
-	return { units, shapes };
+	if ("dictionary" in value) return { units, dictionary: true };
+	const kind = value.kind === undefined ? {} : { kind: value.kind };
+	if (!("mode" in value)) return { units, ...kind, shapes: sortedShapes(value.shapes) };
+	return {
+		units,
+		...kind,
+		mode: value.mode,
+		...(value.shapes === undefined ? {} : { shapes: sortedShapes(value.shapes) }),
+	};
+}
+
+function valueText(value: FeedbackSiteValue): string {
+	return JSON.stringify(entryOf([], value));
 }
 
 function valueOf(entry: FeedbackEntry): FeedbackSiteValue {
-	if ("megamorphic" in entry) return { megamorphic: true };
-	if ("mode" in entry) return { mode: entry.mode };
-	return { shapes: entry.shapes };
+	const { units: _units, ...value } = entry;
+	return value;
 }
 
 function readFeedbackFile(file: string): FeedbackFile | undefined {
@@ -116,7 +123,7 @@ export function writeFeedbackUnit(
 	file: string,
 	unit: string,
 	functions: ReadonlyMap<string, RecordedFunction>,
-	root = process.cwd(),
+	root: string,
 ): void {
 	const previous = readFeedbackFile(file);
 	const units = new Set(

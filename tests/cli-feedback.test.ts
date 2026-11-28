@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -10,7 +10,8 @@ const coldRunnerTimeoutMs = 300_000;
 const commandTimeoutMs = 60_000;
 
 // JSON.parse keeps every shape opaque to the compiler, so no cache row starts
-// seeded. Each `z` sits at another slot, so every shape misses the row.
+// seeded. Every shape `readZ` sees keeps `z` in its first slot, so after the
+// first one fills the row, the others hit through the slot without a miss.
 const SITES_SOURCE = `const parse = (text: string): any => JSON.parse(text);
 const narrow = process.argv[2] === "narrow";
 
@@ -30,21 +31,45 @@ function label(value: object): string {
 	return value.toString();
 }
 
+function tagOf(fn: any): number {
+	return fn.tag;
+}
+
+function lookup(table: Record<string, number>, key: string): number {
+	return table[key];
+}
+
 export function neverCalled(point: { w: number }): number {
 	return point.w;
 }
+
+const shapes = {
+	area(rect: { w: number; h: number }): number {
+		return rect.w * rect.h;
+	},
+};
+
+(readX as any).tag = 1;
+// More properties than a shape holds keep the table's own properties in a dictionary.
+const table: Record<string, number> = {};
+for (let index = 0; index < 300; index++) table[\`k\${index}\`] = index;
 
 let total = 0;
 for (let round = 0; round < 3; round++) {
 	total += readX(parse('{"x":1,"y":2}'));
 	total += readY(parse('{"x":1,"y":2}'));
 	if (!narrow) total += readY(parse('{"y":2,"x":1,"t":0}'));
-	for (const prefix of ['', '"a":0,', '"a":0,"b":0,', '"a":0,"b":0,"c":0,', '"a":0,"b":0,"c":0,"d":0,']) {
-		total += readZ(parse(\`{\${prefix}"z":1}\`));
+	for (const suffix of ['', ',"a":0', ',"b":0', ',"c":0', ',"d":0', ',"e":0']) {
+		total += readZ(parse(\`{"z":1\${suffix}}\`));
 	}
 	label(parse("{}"));
+	total += tagOf(readX);
+	total += lookup(table, \`k\${round}\`);
+	total += [1, 2].map((n) => parse(\`{"n":\${n}}\`).n).length;
+	total += shapes.area(parse('{"w":2,"h":3}'));
 }
-console.log(total);
+const top = parse('{"top":1}');
+console.log(total + top.top);
 `;
 
 interface FeedbackFile {
@@ -89,12 +114,10 @@ describe("maligator run --feedback", () => {
 		return JSON.parse(readFileSync(feedbackPath, "utf8")) as FeedbackFile;
 	}
 
-	/** The sites of the function declared as `name` in `entry`, by `op:key`. */
-	function sitesOf(file: FeedbackFile, entry: string, name: string) {
-		const start = SITES_SOURCE.indexOf(`function ${name}(`);
+	/** The sites of the function, or module body, starting at `start` in `entry`, by `op:key`. */
+	function sitesFrom(file: FeedbackFile, entry: string, start: number) {
 		const fn = Object.values(file.functions).find(
-			(candidate) =>
-				candidate.module === join(directory, entry) && candidate.start === start,
+			(candidate) => candidate.module === entry && candidate.start === start,
 		);
 		if (fn === undefined) return undefined;
 		return new Map(
@@ -108,12 +131,22 @@ describe("maligator run --feedback", () => {
 		);
 	}
 
+	function sitesAt(file: FeedbackFile, entry: string, marker: string) {
+		const start = SITES_SOURCE.indexOf(marker);
+		expect(start).toBeGreaterThanOrEqual(0);
+		return sitesFrom(file, entry, start);
+	}
+
+	const sitesOf = (file: FeedbackFile, entry: string, name: string) =>
+		sitesAt(file, entry, `function ${name}(`);
+
 	beforeAll(() => {
 		directory = mkdtempSync(join(tmpdir(), "mal-cli-feedback-"));
 		feedbackPath = join(directory, "feedback.json");
 		writeFileSync(join(directory, "package.json"), '{ "type": "module" }\n');
 		writeFileSync(join(directory, "sites.ts"), SITES_SOURCE);
 		writeFileSync(join(directory, "other.ts"), SITES_SOURCE);
+		mkdirSync(join(directory, "nested"));
 		first = invokeCli(
 			directory,
 			["run", "sites.ts", "--feedback", feedbackPath],
@@ -127,7 +160,7 @@ describe("maligator run --feedback", () => {
 		if (directory !== undefined) rmSync(directory, { recursive: true, force: true });
 	});
 
-	it("records the shapes, modes and megamorphic state of each executed property site", () => {
+	it("records the shapes each executed property site saw", () => {
 		expect(recorded.units).toEqual(["run:sites.ts"]);
 		expect(sitesOf(recorded, "sites.ts", "readX")).toEqual(
 			new Map([["get:x", [{ units: ["run:sites.ts"], shapes: [["x", "y"]] }]]]),
@@ -148,12 +181,49 @@ describe("maligator run --feedback", () => {
 				],
 			]),
 		);
+	});
+
+	it("counts the shapes that hit through the cached slot, up to megamorphic", () => {
 		expect(sitesOf(recorded, "sites.ts", "readZ")).toEqual(
 			new Map([["get:z", [{ units: ["run:sites.ts"], megamorphic: true }]]]),
 		);
+	});
+
+	it("records an inherited method site with its receiver shape", () => {
 		expect(sitesOf(recorded, "sites.ts", "label")).toEqual(
-			new Map([["get:toString", [{ units: ["run:sites.ts"], mode: "inherited" }]]]),
+			new Map([
+				["get:toString", [{ units: ["run:sites.ts"], mode: "inherited", shapes: [[]] }]],
+			]),
 		);
+	});
+
+	it("names a function receiver's kind and its keys' non-default attributes", () => {
+		expect(sitesOf(recorded, "sites.ts", "tagOf")?.get("get:tag")).toEqual([
+			{
+				units: ["run:sites.ts"],
+				kind: "function",
+				// Built-in function properties such as `name` are not writable.
+				shapes: [expect.arrayContaining(["tag", [expect.any(String), "c"]])],
+			},
+		]);
+	});
+
+	it("records a dictionary receiver as a dictionary site", () => {
+		expect(sitesOf(recorded, "sites.ts", "lookup")).toEqual(
+			new Map([["get:*", [{ units: ["run:sites.ts"], dictionary: true }]]]),
+		);
+	});
+
+	it("records anonymous callbacks, object literal methods and module top-level code", () => {
+		expect(sitesAt(recorded, "sites.ts", "(n) =>")?.get("get:n")).toEqual([
+			{ units: ["run:sites.ts"], shapes: [["n"]] },
+		]);
+		expect(sitesAt(recorded, "sites.ts", "(rect:")?.get("get:w")).toEqual([
+			{ units: ["run:sites.ts"], shapes: [["w", "h"]] },
+		]);
+		expect(sitesFrom(recorded, "sites.ts", 0)?.get("get:top")).toEqual([
+			{ units: ["run:sites.ts"], shapes: [["top"]] },
+		]);
 	});
 
 	it("leaves functions that never ran out of the file", () => {
@@ -163,6 +233,18 @@ describe("maligator run --feedback", () => {
 	it("writes identical bytes for an identical run", () => {
 		const before = readFileSync(feedbackPath, "utf8");
 		record("sites.ts");
+		expect(readFileSync(feedbackPath, "utf8")).toBe(before);
+	});
+
+	it("records the same unit and module keys from a subdirectory", () => {
+		const before = readFileSync(feedbackPath, "utf8");
+		const result = invokeCli(join(directory, "nested"), [
+			"run",
+			"../sites.ts",
+			"--feedback",
+			feedbackPath,
+		]);
+		expect(result.status, result.stderr).toBe(0);
 		expect(readFileSync(feedbackPath, "utf8")).toBe(before);
 	});
 
