@@ -164,10 +164,13 @@ static generated-code size and helper counts do not establish runtime cost.
 - [ ] Order program-wide specialization discovery by hotness or cost. The discovery
       budget skips about half of Express's functions for every local specialization.
 
-- [ ] Keep number-record regions over class-receiver field loads. An inlined method
-      reading `this.x * 2.5 + this.y` on a class-known receiver checks each field
-      separately and boxes the result, while the same body over generic inline caches
-      forms one region with f64 locals, so proving the class makes it slower.
+- [ ] Keep an inlined method's number result unboxed into its caller. An inlined
+      `this.x * 2.5 + this.y` on a class-known receiver boxes its result because the
+      inlined body's result check ends the region before the caller's `s +=`; letting
+      number-record regions admit class-slot fields by their class cell did not help,
+      and sharing one class-receiver check across loads was neutral on self-compile
+      (1,539 of 26,951 class sites reuse a check; most repeated receivers have a call
+      in between that may run JavaScript).
 
 - [ ] Sink a returned private record to the `await` an async generator's `return expr`
       performs. Scalar replacement only materializes at a `return`, so such a record
