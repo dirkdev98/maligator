@@ -139,7 +139,10 @@ static generated-code size and helper counts do not establish runtime cost.
       that create closures (19%), loops in guarded copies (14%), try/catch and size (7%).
       A consumer also needs hotness, which the feedback format doesn't record, and its
       own code budget. Inlining a constructor call currently drops the number fact of a
-      field read after it.
+      field read after it. Other consumers measured not worth building: guards per
+      property site from recorded shapes (ceiling under 0.7%), and moving never-run
+      regions out of hot functions from recorded coverage (-0.73% on self-compile; a
+      training run picks 92% of the same regions).
 
 - [ ] Extend the String method chain's guarded direct form to `re.test` on a
       const-bound regexp and to the guarded String sites it still misses (43 of 287 on
