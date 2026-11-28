@@ -294,7 +294,8 @@ static MalObjectStorage *mal_object_externalize(MalObject *object) {
 }
 
 static void mal_object_reserve_field_storage(MalObject *object, u32 capacity) {
-    assert(object->storage_kind == MAL_OBJECT_DEFERRED || mal_object_storage_is_borrowed(object));
+    assert(object->storage_kind == MAL_OBJECT_COMPACT ||
+        object->storage_kind == MAL_OBJECT_DEFERRED || mal_object_storage_is_borrowed(object));
     u32 count = object->shape->inline_count;
     assert(count <= capacity && count <= object->slot_capacity);
     MalObjectFieldStorage *storage = mal_heap_alloc_raw_profiled(
@@ -531,9 +532,9 @@ void mal_object_set_shaped_values(
     object->slot_capacity = (u8) count;
 }
 
-void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
+void mal_object_grow_slots_slow(MalObject *object, u32 old_count, u32 new_count) {
     assert(new_count <= MAL_SHAPE_MAX_INLINE_SLOTS);
-    if (new_count <= object->slot_capacity) return;
+    assert(new_count > object->slot_capacity);
     u32 inline_capacity = mal_object_inline_slot_capacity(object);
     if (new_count <= inline_capacity) {
         object->slot_capacity = (u8) inline_capacity;
@@ -559,15 +560,28 @@ void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
         return;
     }
 
-    MalValue *slots = mal_object_slots_alloc(capacity);
-    MalValue *old_slots = mal_object_fields(object);
-    for (u32 i = 0; i < old_count; ++i) {
-        slots[i] = old_slots[i];
-    }
     if (old_count > 0 && object->header.storage == MAL_HEAP_STORAGE_DYNAMIC) {
         mal_object_slot_grow_migrations++;
     }
-    mal_object_set_fields_pointer(object, slots);
+    bool embed_storage = object->storage_kind == MAL_OBJECT_COMPACT &&
+        sizeof(void *) + sizeof(MalValue) * inline_capacity >= sizeof(MalObjectStorage);
+    if (object->storage_kind == MAL_OBJECT_COMPACT && !embed_storage) {
+        mal_object_reserve_field_storage(object, capacity);
+        return;
+    }
+
+    MalValue *slots = mal_object_slots_alloc(capacity);
+    if (old_count != 0) {
+        memcpy(slots, mal_object_fields(object), sizeof(MalValue) * old_count);
+    }
+    if (embed_storage) {
+        // After copying the compact fields, their old space can hold the sidecar.
+        MalObject *prototype = mal_object_prototype(object);
+        object->storage_kind = MAL_OBJECT_EMBEDDED;
+        *mal_object_storage(object) = (MalObjectStorage) {.prototype = prototype, .fields = slots};
+    } else {
+        mal_object_set_fields_pointer(object, slots);
+    }
     object->slots_owned = true;
     mal_heap_cell_needs_finalizer(&object->header);
     object->slot_capacity = (u8) capacity;

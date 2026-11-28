@@ -31,11 +31,11 @@ typedef enum MalObjectStorageKind {
     MAL_OBJECT_DEFERRED,
 } MalObjectStorageKind;
 
-/** Ordinary cells keep their prototype and fields after this prefix. Embedded
- * exotic cells keep MalObjectStorage immediately after it; generalized ordinary
- * cells replace the prototype word with a pointer to separately owned storage.
- * Deferred exotic cells keep only that word until named properties need external
- * storage. Known-shape Arrays can borrow that storage from their own cell's tail. */
+/** Compact cells keep their prototype and fields after this prefix. Embedded
+ * storage starts after the prefix, including when a compact cell's former fields
+ * hold the sidecar. External storage uses that word for its sidecar pointer.
+ * Deferred exotics hold only their prototype there until they get named fields.
+ * Known-shape Arrays can borrow storage from their cell's tail. */
 typedef struct MalObject {
     MalHeapHeader header;
     /*
@@ -376,8 +376,17 @@ void mal_object_set_shaped_values(
     MalObject *object, MalShape *shape, const MalValue *values, u32 count
 );
 
-/** Grow shaped slot storage without reallocating coallocated managed cells. */
-void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count);
+__attribute__((noinline)) void mal_object_grow_slots_slow(
+    MalObject *object, u32 old_count, u32 new_count
+);
+
+/** Grow shaped slot storage without reallocating coallocated managed cells. The
+ * capacity check stays inline, since most calls already have room. */
+static inline void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
+    if (__builtin_expect(new_count > object->slot_capacity, 0)) {
+        mal_object_grow_slots_slow(object, old_count, new_count);
+    }
+}
 
 /** Release separately-owned slots and clear the object's slot state. */
 void mal_object_release_slots(MalObject *object);
