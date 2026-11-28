@@ -243,52 +243,58 @@ test("captures keep owned metadata when inputs and decoded views are mutated", (
 	}
 });
 
-test("metadata spanning several write chunks round-trips through its file", () => {
-	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-chunks-"));
-	try {
-		const sites = Array.from({ length: 200_000 }, (_, id): ProfileSite => {
-			const positionId = id % 3_001;
-			return {
-				id,
-				logicalId: `site-${id}`,
-				originId: `origin-${id}`,
-				instanceId: `site-${id}`,
-				regionId: `region-${positionId}`,
-				functionIndex: id % 5,
-				instructionIndex: id,
-				positionId,
-				file: `src/módulo-${positionId % 7}.js`,
-				line: positionId + 1,
-				column: id % 11,
-				operation: id % 2 === 0 ? "call" : "property",
-				inlineChain: [{ functionIndex: id % 5, positionId }],
+// Crossing the 8M-unit chunk boundary needs about 25 MB of metadata, which takes
+// several seconds to encode on a CI runner.
+test(
+	"metadata spanning several write chunks round-trips through its file",
+	{ timeout: 30_000 },
+	() => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-profile-chunks-"));
+		try {
+			const sites = Array.from({ length: 200_000 }, (_, id): ProfileSite => {
+				const positionId = id % 3_001;
+				return {
+					id,
+					logicalId: `site-${id}`,
+					originId: `origin-${id}`,
+					instanceId: `site-${id}`,
+					regionId: `region-${positionId}`,
+					functionIndex: id % 5,
+					instructionIndex: id,
+					positionId,
+					file: `src/módulo-${positionId % 7}.js`,
+					line: positionId + 1,
+					column: id % 11,
+					operation: id % 2 === 0 ? "call" : "property",
+					inlineChain: [{ functionIndex: id % 5, positionId }],
+				};
+			});
+			const metadata: ProfileMetadata = {
+				...prepared,
+				captureIdentity: undefined,
+				sites,
+				remarks: sites.map(({ id }) => ({
+					siteId: id,
+					phase: "lowering",
+					operation: "call",
+					code: id % 3 === 0 ? "call.generic" : "call.guarded",
+					outcome: "retained",
+				})),
 			};
-		});
-		const metadata: ProfileMetadata = {
-			...prepared,
-			captureIdentity: undefined,
-			sites,
-			remarks: sites.map(({ id }) => ({
-				siteId: id,
-				phase: "lowering",
-				operation: "call",
-				code: id % 3 === 0 ? "call.generic" : "call.guarded",
-				outcome: "retained",
-			})),
-		};
-		const file = path.join(directory, "metadata.jsonl");
-		const snapshot = PreparedProfile.fromMetadata(metadata);
-		snapshot.writeMetadata(file);
-		const restored = PreparedProfile.fromFile(file);
-		const decoded = restored.readMetadata();
-		expect(restored.captureIdentity).toBe(snapshot.captureIdentity);
-		expect(profileCaptureIdentity(decoded)).toBe(snapshot.captureIdentity);
-		expect(decoded.sites[123_457]).toEqual(sites[123_457]);
-		expect(decoded.remarks.at(-1)).toEqual(metadata.remarks.at(-1));
-	} finally {
-		rmSync(directory, { recursive: true, force: true });
-	}
-});
+			const file = path.join(directory, "metadata.jsonl");
+			const snapshot = PreparedProfile.fromMetadata(metadata);
+			snapshot.writeMetadata(file);
+			const restored = PreparedProfile.fromFile(file);
+			const decoded = restored.readMetadata();
+			expect(restored.captureIdentity).toBe(snapshot.captureIdentity);
+			expect(profileCaptureIdentity(decoded)).toBe(snapshot.captureIdentity);
+			expect(decoded.sites[123_457]).toEqual(sites[123_457]);
+			expect(decoded.remarks.at(-1)).toEqual(metadata.remarks.at(-1));
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	},
+);
 
 function profileIdentityBytes(): Uint8Array {
 	if (prepared.captureIdentity === undefined)
