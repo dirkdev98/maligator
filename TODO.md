@@ -118,6 +118,26 @@ Use representative compiled workloads to locate executed dispatch, allocation,
 property and collection costs. Keep field facts bounded and consumer-driven;
 static generated-code size and helper counts do not establish runtime cost.
 
+- [ ] Call class methods that the class cell already resolves directly, or inline
+      them. Self-compile loads the method through the class cell at about 15,000 call
+      sites, so the target is known, yet makes a generic call; only about 160 sites
+      call directly or inline. Estimated at 3% to 9% of self-compile's retired
+      instructions.
+
+- [ ] Give string builtins the guarded direct form `charCodeAt` has. On a receiver
+      the compiler can't prove is a string, `indexOf`, `slice` and `toLowerCase` take an
+      inline-cache load plus a guarded builtin call, 80 to 160 retired instructions more
+      per call than the direct form; about 2% of Express. Map `get`/Set `has` and
+      `re.test` on a const-bound regexp follow the same pattern.
+
+- [ ] Lower array `length` directly behind an array-kind guard; even a proven array
+      takes the generic path today.
+
+- [ ] Keep number-record regions over class-receiver field loads. An inlined method
+      reading `this.x * 2.5 + this.y` on a class-known receiver checks each field
+      separately and boxes the result, while the same body over generic inline caches
+      forms one region with f64 locals, so proving the class makes it slower.
+
 - [ ] Sink a returned private record to the `await` an async generator's `return expr`
       performs. Scalar replacement only materializes at a `return`, so such a record
       is now allocated with its stores intact, and a returned field read stays boxed.
@@ -369,6 +389,10 @@ object. Retained loop experiments preserve effects, authoritative state and fall
       native-C, interpreter, or runtime contracts inconsistent. Callback invocation
       semantics are owned by the callback work above, not a second descriptor set.
 
+- [ ] Building a file with `--print` and then building it normally fails with
+      `program-image-codec: truncated or corrupt buffer` when a function returns
+      `/b+c/.exec(str) !== null`; the same shape with `.test` works.
+
 ## Compiler measurement and diagnostics
 
 - [ ] Fill accounting gaps for the selected optimization in existing reports: ordinary
@@ -380,6 +404,12 @@ object. Retained loop experiments preserve effects, authoritative state and fall
       reason needed by a selected investigation, including stripped-artifact sidecars
       where necessary. Keep remarks consistent with emission and distinguish static
       opportunities from executed or sampled counts.
+
+- [ ] Make `--profile=compiler` work on self-compile. `PreparedProfile.fromMetadata`
+      (src/profile-artifact.ts) fails with `RangeError: Invalid string length`: the
+      metadata JSON is about 590M characters (`sites` alone 400M), over V8's string
+      limit, and finalize parses the same string again, so streaming only the write
+      is not enough.
 
 - [ ] Keep loop regions in `--profile=compiler` builds, or mark the census where they
       are off. The compiler-mode profile build plans no typed string loop regions, so
