@@ -118,11 +118,15 @@ Use representative compiled workloads to locate executed dispatch, allocation,
 property and collection costs. Keep field facts bounded and consumer-driven;
 static generated-code size and helper counts do not establish runtime cost.
 
-- [ ] Call class methods that the class cell already resolves directly, or inline
-      them. Self-compile loads the method through the class cell at about 15,000 call
-      sites, so the target is known, yet makes a generic call; only about 160 sites
-      call directly or inline. Estimated at 3% to 9% of self-compile's retired
-      instructions.
+- [ ] Inline more of self-compile's class-method calls. About 21,000 call sites load
+      the method through the class cell yet call generically: 7,600 valid guarded
+      candidates never get a turn because the region planner's code budget runs out
+      first, 10,500 sit outside loops in callers the small-method gate excludes, and
+      1,900 have more than four defining classes. Guarded direct calls alone don't pay:
+      `mal_vm_call_cached` already saves all but about 10 instructions per call, and
+      converting 354M calls made self-compile 0.5% slower with 3.6% more code. Inlining
+      saves 99 to 137 per call on small bodies, so the open question is which sites
+      deserve the budget.
 
 - [ ] Extend the String method chain's guarded direct form to Map `get`/Set `has`
       and `re.test` on a const-bound regexp, and to the guarded String sites it still
