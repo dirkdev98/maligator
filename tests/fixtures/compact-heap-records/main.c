@@ -58,6 +58,15 @@ static bool numeric_field_stores(MalVm *vm) {
     return ok;
 }
 
+/** Fields that outgrow the cell move to an owned RAW slot array or to the tail of the
+ * object's own sidecar. */
+static bool fields_moved_out_of_cell(MalObject *object) {
+    if (object->slots_owned) return true;
+    return object->storage_kind == MAL_OBJECT_EXTERNAL &&
+        mal_object_fields(object) ==
+            ((MalObjectFieldStorage *) mal_object_storage(object))->fields;
+}
+
 static bool growing_preserves_fields(MalVm *vm, u32 mode) {
     static MalString key_storage[4][MAL_SHAPE_MAX_INLINE_SLOTS];
     static u8 key_names[4][MAL_SHAPE_MAX_INLINE_SLOTS][64];
@@ -134,7 +143,7 @@ static bool growing_preserves_fields(MalVm *vm, u32 mode) {
             object->shape->inline_count == count + 1 &&
             object->slot_capacity >= count + 1 &&
             (fits_inline ? !object->slots_owned && mal_object_fields(object) == inline_fields
-                : object->slots_owned);
+                : fields_moved_out_of_cell(object));
         live[0] = mal_value_new_undefined();
         live[2] = mal_value_new_undefined();
         mal_gc_collect(vm);
