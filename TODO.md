@@ -124,11 +124,13 @@ static generated-code size and helper counts do not establish runtime cost.
       call directly or inline. Estimated at 3% to 9% of self-compile's retired
       instructions.
 
-- [ ] Give string builtins the guarded direct form `charCodeAt` has. On a receiver
-      the compiler can't prove is a string, `indexOf`, `slice` and `toLowerCase` take an
-      inline-cache load plus a guarded builtin call, 80 to 160 retired instructions more
-      per call than the direct form; about 2% of Express. Map `get`/Set `has` and
-      `re.test` on a const-bound regexp follow the same pattern.
+- [ ] Extend the String method chain's guarded direct form to Map `get`/Set `has`
+      and `re.test` on a const-bound regexp, and to the guarded String sites it still
+      misses (43 of 287 on Express: span exclusions, method loads in another block, and
+      loads with several uses).
+
+- [ ] Order program-wide specialization discovery by hotness or cost. The discovery
+      budget skips about half of Express's functions for every local specialization.
 
 - [ ] Lower array `length` directly behind an array-kind guard; even a proven array
       takes the generic path today.
