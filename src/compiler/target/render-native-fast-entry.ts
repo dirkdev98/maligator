@@ -134,6 +134,8 @@ export interface NativeFastEntryInput {
 	readonly prologue: ReadonlyArray<string>;
 	/** C expression for this function's property-cache row. */
 	readonly functionIndex: string;
+	/** The VM or closure already initialized this function's cache rows. */
+	readonly cachesReady?: boolean;
 	readonly functionTargetIndex: (index: number) => string;
 	readonly globalIndex: (index: number) => string;
 	readonly stringIndex: (index: number) => string;
@@ -447,7 +449,9 @@ export function renderNativeFastEntry(
 		...(loadsProperties
 			? [
 					`    MalInlineCache *const __fast_ic = vm->property_cache[${input.functionIndex}].sites;`,
-					"    if (__fast_ic == nullptr) goto __full;",
+					...(input.cachesReady === true
+						? []
+						: ["    if (__fast_ic == nullptr) goto __full;"]),
 				]
 			: []),
 		...(loadsCaptures ? input.capturePrologue.map((line) => `    ${line}`) : []),

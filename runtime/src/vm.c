@@ -1073,6 +1073,7 @@ MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
     MalRootSpan args_span;
     mal_gc_root(&args_span, args, countof(args));
     if (function->compiled != nullptr) {
+        mal_vm_ensure_function_caches(vm, function_index);
         function->compiled(
             vm, exports_value, args, 5, mal_value_new_undefined(), nullptr,
             mal_value_new_undefined(), nullptr
@@ -4531,6 +4532,7 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
     MalCompletion script_completion;
 
     if (entry->compiled != nullptr) {
+        mal_vm_ensure_function_caches(vm, entry_index);
         // Native-backend entry: invoke directly (no interpreter frame). It returns
         // the module completion value; a throw surfaces via vm->completion. Calls
         // it makes to interpreted functions push their own frames, so the value

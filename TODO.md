@@ -496,14 +496,16 @@ distinct when measuring text work.
       another fifth (about 50 per call, 146 calls per request), call sites a sixth.
       Leads: choose store and GC-barrier code by the stored value (inline field
       stores on cache hits, no barriers on a fresh scope's first stores, one isolate
-      lookup per call); a lighter function entry (static function index, caches
-      allocated with the closure, no argument unpacking for direct calls with
-      matching counts); inlining inherited-method lookups at the 697 call loads,
+      lookup per call); inlining inherited-method lookups at the 697 call loads,
       which costs about 0.9% generated code. A one-compare own-slot check that tagged
       non-slot rows shortened hits to 16 instructions and shrank generated code 6.6%,
       but Express and self-compile each retired about 0.65% more instructions. Take
       loop counts from production perf builds, since `--profile=compiler` plans no
-      loop regions.
+      loop regions. Two lighter-entry candidates stayed within image variation on
+      Express and JS v2: publishing the static function index in the frame
+      descriptor, and checking a sufficient argument count once for multi-parameter
+      bodies, which also grew Express generated code and added about three
+      instructions per short call.
 
 - [ ] Bound remaining String and traversal costs before extending specialization:
       the reused-RegExp receiver check and matcher call, trimmed slices, numeric

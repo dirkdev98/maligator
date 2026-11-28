@@ -1028,6 +1028,37 @@ function frameDescriptorName(symbol: string): string {
 	return `mal_frame_desc_${symbol}`;
 }
 
+function compiledCachePrologue(
+	resources: ReadonlySet<NativeBodyResource>,
+	functionIndex: string,
+	cachesReady: boolean,
+): Array<string> {
+	const property = resources.has("propertyCache")
+		? `vm->property_cache[${functionIndex}].sites`
+		: undefined;
+	const literals = resources.has("literalShapes")
+		? `vm->literal_shape_cache[${functionIndex}]`
+		: undefined;
+	const missing = cachesReady
+		? []
+		: [property, literals].flatMap((cache) =>
+				cache === undefined ? [] : [`${cache} == nullptr`],
+			);
+	return [
+		...(missing.length > 0
+			? [
+					`    if (__builtin_expect(${missing.join(" || ")}, 0)) {`,
+					`        mal_vm_ensure_function_caches(vm, ${functionIndex});`,
+					"    }",
+				]
+			: []),
+		...(property === undefined
+			? []
+			: [`    MalInlineCache *__property_ic = ${property};`]),
+		...(literals === undefined ? [] : [`    MalShape **__literal_shapes = ${literals};`]),
+	];
+}
+
 // A walk treats every activation of a frame-owning function as holding a live
 // record, so a body that calls out before entering its frame declares the record first.
 const FRAME_RECORD_DECLARATION = "    MalNativeFrame __frame_record;";
@@ -4151,6 +4182,7 @@ function emitCompiledVariant(
 	onFastTryLookup?: (target: number, resultKind?: "undefined") => void,
 	moduleWrapper = false,
 	seededPropertySites?: ReadonlySet<number>,
+	cachesReady = false,
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -4172,6 +4204,7 @@ function emitCompiledVariant(
 			strictCompiledTargets,
 			maxCodeUnits,
 			relocatable,
+			cachesReady,
 		);
 	}
 	if (directEntry !== undefined) validateNativeDirectEntry(fn, directEntry);
@@ -4913,31 +4946,13 @@ function emitCompiledVariant(
 	if (directEntry !== undefined && body.resources.has("newTarget")) {
 		lines.push(`    const MalValue new_target = MAL_VALUE_UNDEFINED;`);
 	}
-	if (body.resources.has("propertyCache") || body.resources.has("literalShapes")) {
-		const cacheMisses = [
-			body.resources.has("propertyCache")
-				? `vm->property_cache[${relocation.functionIndex(index)}].sites == nullptr`
-				: undefined,
-			body.resources.has("literalShapes")
-				? `vm->literal_shape_cache[${relocation.functionIndex(index)}] == nullptr`
-				: undefined,
-		].filter((condition) => condition !== undefined);
-		lines.push(
-			`    if (__builtin_expect(${cacheMisses.join(" || ")}, 0)) {`,
-			`        mal_vm_ensure_function_caches(vm, ${relocation.functionIndex(index)});`,
-			`    }`,
-		);
-	}
-	if (body.resources.has("propertyCache")) {
-		lines.push(
-			`    MalInlineCache *__property_ic = vm->property_cache[${relocation.functionIndex(index)}].sites;`,
-		);
-	}
-	if (body.resources.has("literalShapes")) {
-		lines.push(
-			`    MalShape **__literal_shapes = vm->literal_shape_cache[${relocation.functionIndex(index)}];`,
-		);
-	}
+	lines.push(
+		...compiledCachePrologue(
+			body.resources,
+			relocation.functionIndex(index),
+			cachesReady,
+		),
+	);
 
 	// Numeric/scalar and eligible private boxed registers are plain C locals.
 	// Continuously rooted values alias the frame; the shared r<i> spelling lets
@@ -5296,6 +5311,7 @@ function emitCompiledVariant(
 								]
 							: [],
 					functionIndex: relocation.functionIndex(index),
+					cachesReady,
 					functionTargetIndex: relocation.functionIndex,
 					globalIndex: (global) => relocation.globalIndex(global),
 					stringIndex: (string) => relocation.stringIndex(string),
@@ -5979,6 +5995,7 @@ export function createNativeFunctionRenderer(
 	onFastTryLookup?: (caller: number, target: number, resultKind?: "undefined") => void,
 	moduleWrappers: ReadonlySet<number> = new Set(),
 	seededPropertySites: ReadonlyMap<number, ReadonlySet<number>> = new Map(),
+	elidableClosureTargets?: ReadonlySet<number>,
 ): typeof emitCompiledFunction {
 	const analyses = new Map<
 		number,
@@ -6046,6 +6063,11 @@ export function createNativeFunctionRenderer(
 				: (target, resultKind) => onFastTryLookup(index, target, resultKind),
 			moduleWrappers.has(index),
 			seededPropertySites.get(index),
+			// Creating a closure prepares its definition's cache rows, so a body entered
+			// only through a materialized closure needs no allocation guard. Elided
+			// closures and relocated overlays can enter without one.
+			elidableClosureTargets?.has(index) === false &&
+				(relocatable === false || relocatable.relocation === undefined),
 		);
 	};
 }
@@ -6073,6 +6095,7 @@ function renderCompiledFunction(
 	onFastTryLookup?: (target: number, resultKind?: "undefined") => void,
 	moduleWrapper = false,
 	seededPropertySites?: ReadonlySet<number>,
+	cachesReady = false,
 ): CompiledFunction | null {
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
@@ -6097,6 +6120,7 @@ function renderCompiledFunction(
 		onFastTryLookup,
 		moduleWrapper,
 		seededPropertySites,
+		cachesReady,
 	);
 	if (canonical === null) return null;
 	const name = relocatable === false ? index : relocatable.symbolStem;
@@ -6888,6 +6912,7 @@ function emitResumableFunction(
 	strictCompiledTargets: ReadonlySet<number>,
 	maxCodeUnits: number,
 	relocatable: NativeRelocatableEmission | false = false,
+	cachesReady = false,
 ): CompiledFunction | null {
 	nativeFrameRootRegisters(fn, native);
 	native = nativeControlFlowContract(native, native.storage?.controlFlow);
@@ -7078,27 +7103,7 @@ function emitResumableFunction(
 			"    MalRootSpan __argument_roots;",
 			`    mal_gc_root(&__argument_roots, (MalValue *) args, entry_state == nullptr && (${retainArguments}) ? arg_count : 0);`,
 		);
-	if (body.resources.has("propertyCache") || body.resources.has("literalShapes")) {
-		const cacheMisses = [
-			body.resources.has("propertyCache")
-				? `vm->property_cache[${self}].sites == nullptr`
-				: undefined,
-			body.resources.has("literalShapes")
-				? `vm->literal_shape_cache[${self}] == nullptr`
-				: undefined,
-		].filter((condition) => condition !== undefined);
-		lines.push(
-			`    if (__builtin_expect(${cacheMisses.join(" || ")}, 0)) {`,
-			`        mal_vm_ensure_function_caches(vm, ${self});`,
-			`    }`,
-		);
-	}
-	if (body.resources.has("propertyCache")) {
-		lines.push(`    MalInlineCache *__property_ic = vm->property_cache[${self}].sites;`);
-	}
-	if (body.resources.has("literalShapes")) {
-		lines.push(`    MalShape **__literal_shapes = vm->literal_shape_cache[${self}];`);
-	}
+	lines.push(...compiledCachePrologue(body.resources, self, cachesReady));
 	lines.push(...resumablePreamble);
 
 	lines.push(`    MalValue __gc_slots[${totalSlots}];`);

@@ -1296,9 +1296,12 @@ function prepareNativeFunctionEmission(
 		sortKernelEntries,
 	} = plan;
 	const closureParticipation: Array<Array<string>> = [];
-	for (const [key, site] of closureSites)
+	const elidableClosureTargets = new Set<number>();
+	for (const [key, site] of closureSites) {
+		if (site.environment !== undefined) elidableClosureTargets.add(site.target);
 		for (const functionIndex of site.functions)
 			(closureParticipation[functionIndex] ??= []).push(key);
+	}
 	const cached: Array<
 		| {
 				readonly key: string;
@@ -1325,6 +1328,7 @@ function prepareNativeFunctionEmission(
 		},
 		new Set(image.runtime.cjsModuleFunctionIndices),
 		seededPropertySites,
+		elidableClosureTargets,
 	);
 	const strictCompiledTargets = new Set(
 		image.runtime.functions.flatMap((fn, index) => (fn.strict ? [index] : [])),

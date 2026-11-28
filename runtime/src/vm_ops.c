@@ -2272,6 +2272,12 @@ static __attribute__((noinline)) MalClosureMetadata *mal_vm_init_closure_metadat
     MalVm *vm, MalClosureMetadataPool *pool, usize page_index, usize slot,
     const MalFunction *definition
 ) {
+    if (definition->compiled != nullptr &&
+        (definition->property_ic_count > 0 || definition->literal_shape_count > 0)) {
+        // Later closures share the definition's rows, just as they share this metadata.
+        i32 function_index = (i32) (page_index * MAL_CLOSURE_METADATA_PAGE_SIZE + slot);
+        mal_vm_ensure_function_caches(vm, function_index);
+    }
     if (page_index >= pool->page_count) {
         usize count = ((usize) vm->function_capacity + MAL_CLOSURE_METADATA_PAGE_SIZE - 1)
             / MAL_CLOSURE_METADATA_PAGE_SIZE;

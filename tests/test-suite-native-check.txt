@@ -65,6 +65,7 @@ tests/native/native-fast-entry.test.ts
 tests/native/native-leaf-operations.test.ts
 tests/native/instanceof-shapes.test.ts
 tests/native/captured-number-cells.test.ts
+tests/native/function-entry-caches.test.ts
 tests/native/object-values-snapshot.test.ts
 tests/native/static-data-query.test.ts
 tests/native/static-primitive-operations.test.ts
